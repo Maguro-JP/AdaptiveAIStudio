@@ -1,0 +1,17 @@
+{
+  "name": "adaptive-ai-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "モデル非依存のAI開発基盤",
+  "engines": { "node": ">=22.6.0" },
+  "scripts": {
+    "chat": "node --experimental-strip-types --no-warnings src/cli/main.ts",
+    "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}

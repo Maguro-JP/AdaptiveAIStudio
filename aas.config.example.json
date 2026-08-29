@@ -1,0 +1,21 @@
+{
+  "providers": [
+    {
+      "id": "ollama",
+      "kind": "openai-compatible",
+      "baseUrl": "http://localhost:11434/v1",
+      "locality": "local",
+      "models": ["qwen2.5-coder:7b"]
+    },
+    {
+      "id": "lmstudio",
+      "kind": "openai-compatible",
+      "baseUrl": "http://localhost:1234/v1",
+      "locality": "local"
+    }
+  ],
+  "candidates": ["ollama:qwen2.5-coder:7b", "lmstudio:local-model"],
+  "system": "あなたは日本語で応答する開発支援アシスタントです。簡潔に、根拠とともに答えてください。",
+  "temperature": 0.2,
+  "maxTokens": 4096
+}

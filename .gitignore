@@ -1,0 +1,4 @@
+node_modules/
+aas.config.json
+.aas/
+*.log
