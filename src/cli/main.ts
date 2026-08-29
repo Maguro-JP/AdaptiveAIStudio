@@ -4,8 +4,8 @@
  * 目的は「動くこと」ではなく「止まらないこと」なので、
  * 応答したモデルを毎回明示し、フォールバックが起きたら必ず知らせる。
  */
-import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
+import { LineSource } from './input.ts';
 import { loadConfig } from '../config.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
 import { buildRegistry } from '../core/build.ts';
@@ -31,22 +31,6 @@ const HELP = `
   Ctrl-C         生成中なら中断、入力待ちなら終了
 `.trimEnd();
 
-/**
- * 入力を1行受け取る。標準入力が閉じている場合は undefined を返す。
- * パイプで流し込まれた入力が尽きたときに例外で落ちないようにする。
- */
-async function askOrExit(
-  rl: { question(q: string): Promise<string> },
-  prompt: string,
-): Promise<string | undefined> {
-  try {
-    return await rl.question(prompt);
-  } catch (e) {
-    if (e instanceof Error && /closed/i.test(e.message)) return undefined;
-    throw e;
-  }
-}
-
 async function main(): Promise<void> {
   const { config, source } = loadConfig();
   const registry = buildRegistry(config);
@@ -71,11 +55,11 @@ async function main(): Promise<void> {
   }
   console.log(c.dim('/help でコマンド一覧\n'));
 
-  const rl = createInterface({ input: stdin, output: stdout });
+  const rl = new LineSource(stdin, stdout);
   let generating: AbortController | undefined;
 
   // 生成中の Ctrl-C は中断のみ。入力待ちなら終了。
-  rl.on('SIGINT', () => {
+  rl.onSigint(() => {
     if (generating) {
       generating.abort();
       return;
@@ -85,7 +69,7 @@ async function main(): Promise<void> {
 
   try {
     for (;;) {
-      const input = await askOrExit(rl, c.cyan('> '));
+      const input = await rl.question(c.cyan('> '));
       if (input === undefined) break;
       const line = input.trim();
       if (line.length === 0) continue;

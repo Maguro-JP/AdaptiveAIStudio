@@ -4,8 +4,8 @@
  * ローカルモデルがファイルを読み、差分を出し、承認を経て書き込む。
  * 何時間かかってもよい。打ち切るのは「進捗が無いとき」だけ。
  */
-import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
+import { LineSource } from './input.ts';
 import { resolve } from 'node:path';
 import { loadConfig } from '../config.ts';
 import { buildRegistry } from '../core/build.ts';
@@ -19,6 +19,7 @@ import { inspectGit, describeGitState } from '../agent/git.ts';
 import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { startWarmPool } from '../core/warm-setup.ts';
+import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -49,22 +50,6 @@ function renderDiff(diff: string): string {
   }).join('\n');
 }
 
-/**
- * 入力を1行受け取る。標準入力が閉じている場合は undefined を返す。
- * パイプで流し込まれた入力が尽きたときに例外で落ちないようにする。
- */
-async function askOrExit(
-  rl: { question(q: string): Promise<string> },
-  prompt: string,
-): Promise<string | undefined> {
-  try {
-    return await rl.question(prompt);
-  } catch (e) {
-    if (e instanceof Error && /closed/i.test(e.message)) return undefined;
-    throw e;
-  }
-}
-
 async function main(): Promise<void> {
   const { config, source } = loadConfig();
   const registry = buildRegistry(config);
@@ -74,9 +59,9 @@ async function main(): Promise<void> {
   const root = resolve(agentCfg.root ?? process.cwd());
   const approval = agentCfg.approval ?? 'autoEdit';
 
-  const rl = createInterface({ input: stdin, output: stdout });
+  const rl = new LineSource(stdin, stdout);
   let generating: AbortController | undefined;
-  rl.on('SIGINT', () => { if (generating) generating.abort(); else rl.close(); });
+  rl.onSigint(() => { if (generating) generating.abort(); else rl.close(); });
 
   const approve = async (req: ApprovalRequest): Promise<boolean> => {
     if (approval === 'auto') return true;
@@ -88,7 +73,7 @@ async function main(): Promise<void> {
     } else {
       console.log('\n' + c.cyan(`  コマンド実行: ${req.command}`));
     }
-    const ans = await askOrExit(rl, c.yellow('  許可しますか？ [y/N] '));
+    const ans = await rl.question(c.yellow('  許可しますか？ [y/N] '));
     if (ans === undefined) return false; // 入力が無いなら許可しない
     const normalized = ans.trim().toLowerCase();
     return normalized === 'y' || normalized === 'yes';
@@ -100,6 +85,12 @@ async function main(): Promise<void> {
     console.error(c.red(`使えるモデルがありません: ${note}`));
     process.exit(1);
   }
+
+  // 状況把握を裏で始める。待たない。利用者が指示を考えている間に済ませる。
+  const prefetch = new Prefetcher(root, (e) => {
+    if (e.type === 'failed') process.stderr.write(c.dim(`  先読み失敗: ${e.task}\n`));
+  });
+  prefetch.start();
 
   // 使うモデルを先に温めておく。作業開始時の待ちをゼロにする。
   const runtime = buildRuntime(config, pilot.machine);
@@ -115,9 +106,17 @@ async function main(): Promise<void> {
     createRunCommandTool({ allowed: agentCfg.allowedCommands }),
   ];
 
-  const agent = new Agent(orchestrator, {
+  // 依頼のたびに、その時点で分かっている状況を作業者へ渡す。
+  // まだ構築中なら少しだけ待つ。モデルが調べ直すより速い。
+  const systemFor = async (): Promise<string> => {
+    const snap = await prefetch.snapshotWithin(3000);
+    const brief = snap ? describeSnapshot(snap) : '';
+    return brief ? `${SYSTEM}\n\n${brief}` : SYSTEM;
+  };
+
+  const makeAgent = async () => new Agent(orchestrator, {
     candidates,
-    system: SYSTEM,
+    system: await systemFor(),
     tools,
     root,
     maxTurns: agentCfg.maxTurns ?? 40,
@@ -149,13 +148,20 @@ async function main(): Promise<void> {
   } else if (warm.notes.length > 0) {
     console.log(c.dim(`  ${warm.notes[0]}`));
   }
+  const snap = prefetch.peek();
+  if (snap && snap.ready.length > 0) {
+    const parts = [`ファイル ${snap.files.length} 件`];
+    if (snap.kind) parts.unshift(snap.kind);
+    if (snap.commands.test) parts.push(`テスト: ${snap.commands.test}`);
+    console.log(c.green('  先読み完了: ') + c.dim(parts.join(' / ')));
+  }
   console.log(c.dim('作業を指示してください。/exit で終了。\n'));
 
   const history: ProviderMessage[] = [];
 
   try {
     for (;;) {
-      const answer = await askOrExit(rl, c.cyan('依頼> '));
+      const answer = await rl.question(c.cyan('依頼> '));
       if (answer === undefined) break;
       const line = answer.trim();
       if (!line) continue;
@@ -170,6 +176,12 @@ async function main(): Promise<void> {
         continue;
       }
       if (line === '/metrics') { console.log(pilot.metrics.report() + '\n'); continue; }
+      if (line === '/context') {
+        const s = await prefetch.snapshot();
+        console.log(s ? describeSnapshot(s) || c.dim('  先読みできる情報がありません。') : c.dim('  先読みは開始されていません。'));
+        console.log();
+        continue;
+      }
       if (line === '/warm') {
         const status = warm.pool?.status() ?? [];
         if (status.length === 0) console.log(c.dim('  常駐しているモデルはありません。\n'));
@@ -187,6 +199,7 @@ async function main(): Promise<void> {
       let answerChars = 0;
 
       try {
+        const agent = await makeAgent();
         for await (const ev of agent.run(history, generating.signal)) {
           switch (ev.type) {
             case 'thinking':
@@ -207,6 +220,8 @@ async function main(): Promise<void> {
               console.log(ev.isError
                 ? c.red(`    ✗ ${firstLine(ev.result)}`)
                 : c.dim(`    ✓ ${firstLine(ev.result)}`));
+              // ファイルが変わったら索引が古くなる。裏で作り直す。
+              if (!ev.isError && ev.call.name === 'write_file') prefetch.invalidate();
               break;
             case 'finished': {
               const secs = ((Date.now() - started) / 1000).toFixed(1);
