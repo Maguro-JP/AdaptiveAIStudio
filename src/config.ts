@@ -36,14 +36,30 @@ export interface AgentConfig {
   root?: string;
   /**
    * 承認の求め方。
-   *   ask      : 毎回聞く（既定）
-   *   autoEdit : ファイル書き込みは自動承認、コマンド実行のみ聞く
+   *   ask      : 毎回聞く
+   *   autoEdit : ファイル書き込みは自動承認、コマンド実行のみ聞く（既定）
    *   auto     : 全部自動（長時間の自律実行向け。gitでの巻き戻し前提）
+   *
+   * 自律実行が本題なので既定は autoEdit。
+   * 安全網は git であり、開始前に未コミット変更を警告する。
    */
   approval?: 'ask' | 'autoEdit' | 'auto';
   /** run_command で許可するコマンドの先頭語 */
   allowedCommands?: string[];
   maxTurns?: number;
+  /**
+   * レーン。同時にロードしておくモデルの単位。
+   * 並列度は「同時ロード数」ではなく「レーン内の同時タスク数」で稼ぐ。
+   */
+  lanes?: LaneSetting[];
+  /** 全レーン合計の同時実行上限。CPU/メモリの保護用。 */
+  maxTotalParallel?: number;
+}
+
+export interface LaneSetting {
+  id: string;
+  candidates: string[];
+  parallel: number;
 }
 
 export const DEFAULT_CONFIG: AasConfig = {
@@ -90,6 +106,7 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
     maxTokens: parsed.maxTokens ?? DEFAULT_CONFIG.maxTokens,
     agent: parsed.agent ?? {},
   };
+  if (config.agent?.lanes) validateLanes(config);
   validate(config);
   return { config, source: path };
 }
@@ -112,6 +129,20 @@ function validate(c: AasConfig): void {
         `candidates の "${cand}" に対応する provider "${providerId}" が有効になっていません。` +
         ' 設定で enabled: true にしてください。',
       );
+    }
+  }
+}
+
+function validateLanes(c: AasConfig): void {
+  const ids = new Set(enabledProviders(c).map((p) => p.id));
+  for (const lane of c.agent?.lanes ?? []) {
+    if (lane.parallel < 1) throw new Error(`lane "${lane.id}" の parallel は1以上にしてください。`);
+    if (lane.candidates.length === 0) throw new Error(`lane "${lane.id}" に candidates がありません。`);
+    for (const cand of lane.candidates) {
+      const providerId = cand.slice(0, cand.indexOf(':'));
+      if (!ids.has(providerId)) {
+        throw new Error(`lane "${lane.id}" の "${cand}" に対応する provider が有効ではありません。`);
+      }
     }
   }
 }

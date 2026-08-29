@@ -11,7 +11,8 @@
     "chat": "node --experimental-strip-types --no-warnings src/cli/main.ts",
     "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "agent": "node --experimental-strip-types --no-warnings src/cli/agent.ts"
+    "agent": "node --experimental-strip-types --no-warnings src/cli/agent.ts",
+    "team": "node --experimental-strip-types --no-warnings src/cli/team.ts"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

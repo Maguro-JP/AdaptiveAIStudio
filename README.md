@@ -83,6 +83,44 @@ npm run agent
   完了 (2.8s)
 ```
 
+**チーム（複数の作業者を並列で動かす）:**
+
+```
+npm run team -- tasks.json
+```
+
+```
+▶ auth    [coder]
+▶ session [coder]
+▶ logger  [cpu]
+✓ auth    (1.5s)
+✓ session (1.5s)
+▶ index   [coder]        ← auth と session の完了を待って開始
+✓ logger  (1.5s)
+✓ index   (1.4s)
+完了 4/4
+```
+
+`tasks.json` は今は手書き。P3 で PM が自動生成するようになる。
+
+```jsonc
+[
+  { "id": "auth",  "laneId": "coder", "writes": ["auth.ts"],  "instruction": "..." },
+  { "id": "index", "laneId": "coder", "writes": ["index.ts"],
+    "deps": ["auth"], "instruction": "..." }
+]
+```
+
+レーンは設定で決める。並列度は「同時ロードするモデル数」ではなく
+「同一モデルへ同時に流すタスク数」で稼ぐ。
+
+```jsonc
+{ "agent": { "lanes": [
+  { "id": "coder", "candidates": ["ollama:qwen2.5-coder:7b"], "parallel": 3 },
+  { "id": "cpu",   "candidates": ["ollama:qwen2.5:3b"],       "parallel": 2 }
+] } }
+```
+
 **チャットのみ:**
 
 ```
@@ -105,16 +143,22 @@ npm run chat
 | 制約 | 内容 |
 |---|---|
 | パス封じ込め | 作業ディレクトリの外は読めない・書けない |
-| 書き込み承認 | 差分を見せて `y` を得るまで書かない |
+| 書き込み承認 | 承認モードに従う。`ask` なら差分を見せて `y` を得るまで書かない |
+| Git確認 | 自動書き込み前に未コミット変更・非git環境を警告する |
+| 書き込みロック | 並列時、同じファイルを書く作業者は同時に走らせない |
 | コマンド許可リスト | `npm` `node` `git` など既知のコマンドのみ。危険な形は許可リストを通っても拒否 |
 | 堂々巡りの停止 | 同じ操作を3回繰り返したら止める |
 
 長時間の自律実行に切り替えたい場合は設定で承認モードを変える。
 
 ```jsonc
-{ "agent": { "approval": "autoEdit" } }  // 書き込みは自動、コマンドのみ確認
+{ "agent": { "approval": "ask" } }       // 毎回確認する
+{ "agent": { "approval": "autoEdit" } }  // 書き込みは自動、コマンドのみ確認（既定）
 { "agent": { "approval": "auto" } }      // 全自動（git管理下での利用を前提）
 ```
+
+既定は `autoEdit`。自律実行が本題なので、書き込みで毎回止めない。
+安全網は Git であり、**開始前に未コミットの変更を警告する**。
 
 ### チャットのコマンド
 
@@ -154,7 +198,7 @@ npm run typecheck
 | Claude (公式SDK) | 動作。**既定で無効**（ローカルが主） |
 | ファイル読み書き・コマンド実行（作業者1名） | 動作 |
 | 職能・部署への人材配置 | 未実装 |
-| 並列実行（レーン・スケジューラ） | 未実装 |
+| 並列実行（レーン・スケジューラ・書き込みロック） | 動作 |
 | 停滞ベースのタイムアウト（低速環境で殺されない） | 動作 |
 | 実行可能性プランナ（載らないモデルを遅く動かす） | 未実装 |
 | 指揮AI・サブエージェント | 未実装 |
@@ -168,6 +212,7 @@ npm run typecheck
 
 - [実現計画](docs/ROADMAP.md) — 到達目標と改訂フェーズ（**まずこちら**）
 - [組織設計](docs/ORGANIZATION.md) — 職能・部署・人材配置・並列実行の設計
+- [自前化とクラウド解禁の条件](docs/INDEPENDENCE.md) — 脱Ollama依存の段階計画と、クラウドを有効化する基準
 - [段階的劣化](docs/DEGRADATION.md) — 遅くても動かすための設計（実行可能性プランナ・編成スタイル）
 - [アーキテクチャ設計](docs/ARCHITECTURE.md) — 全体設計・Provider設計・保存データ設計・リスク
 

@@ -15,6 +15,7 @@ import { Agent } from '../agent/loop.ts';
 import type { ApprovalRequest } from '../agent/tools/types.ts';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool } from '../agent/tools/fs.ts';
 import { createRunCommandTool } from '../agent/tools/shell.ts';
+import { inspectGit, describeGitState } from '../agent/git.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -52,7 +53,7 @@ async function main(): Promise<void> {
 
   const agentCfg = config.agent ?? {};
   const root = resolve(agentCfg.root ?? process.cwd());
-  const approval = agentCfg.approval ?? 'ask';
+  const approval = agentCfg.approval ?? 'autoEdit';
 
   const rl = createInterface({ input: stdin, output: stdout });
   let generating: AbortController | undefined;
@@ -93,6 +94,12 @@ async function main(): Promise<void> {
   console.log(c.dim(`作業ディレクトリ: ${root}`));
   console.log(c.dim(`担当モデル: ${config.candidates.join(' → ')}`));
   console.log(c.dim(`承認モード: ${approval}`));
+
+  // 自動書き込みを行う前に、巻き戻せる状態かを必ず確認する
+  if (approval !== 'ask') {
+    const git = describeGitState(await inspectGit(root));
+    console.log(git.risky ? c.yellow(`  ${git.text}`) : c.dim(`  ${git.text}`));
+  }
   for (const p of registry.list()) {
     const h = await p.health();
     console.log(h.ok ? c.dim(`  ${p.id}: `) + c.green('接続OK')
