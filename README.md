@@ -105,7 +105,8 @@ npm run typecheck
 | ローカルLLM (Ollama / LM Studio / vLLM / llama.cpp) | 動作 |
 | Claude (公式SDK) | 動作 |
 | ファイル読み書き・コマンド実行 | 未実装 |
-| 役割ごとのモデル割り当て | 未実装 |
+| 職能・部署への人材配置 | 未実装 |
+| 並列実行（レーン・スケジューラ） | 未実装 |
 | 指揮AI・サブエージェント | 未実装 |
 | デスクトップUI・クリック起動 | 未実装 |
 
@@ -116,6 +117,7 @@ npm run typecheck
 ## ドキュメント
 
 - [実現計画](docs/ROADMAP.md) — 到達目標と改訂フェーズ（**まずこちら**）
+- [組織設計](docs/ORGANIZATION.md) — 職能・部署・人材配置・並列実行の設計
 - [アーキテクチャ設計](docs/ARCHITECTURE.md) — 全体設計・Provider設計・保存データ設計・リスク
 
 ## 動作想定環境
