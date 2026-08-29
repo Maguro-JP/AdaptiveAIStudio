@@ -6,11 +6,9 @@
  */
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
-import { loadConfig, type AasConfig } from '../config.ts';
-import { OpenAiCompatibleProvider } from '../providers/openai-compatible.ts';
-import { AnthropicProvider } from '../providers/anthropic.ts';
+import { loadConfig } from '../config.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
-import { ProviderRegistry } from '../core/registry.ts';
+import { buildRegistry } from '../core/build.ts';
 import { ChatOrchestrator } from '../core/orchestrator.ts';
 
 const c = {
@@ -20,25 +18,6 @@ const c = {
   red: (s: string) => `\x1b[31m${s}\x1b[0m`,
   green: (s: string) => `\x1b[32m${s}\x1b[0m`,
 };
-
-function buildRegistry(config: AasConfig): ProviderRegistry {
-  const registry = new ProviderRegistry();
-  for (const p of config.providers) {
-    const apiKey = p.apiKeyEnv ? process.env[p.apiKeyEnv] : undefined;
-    if (p.kind === 'anthropic') {
-      registry.register(new AnthropicProvider({ id: p.id, apiKey, fallbackModels: p.models }));
-    } else {
-      registry.register(new OpenAiCompatibleProvider({
-        id: p.id,
-        baseUrl: p.baseUrl!,
-        locality: p.locality,
-        apiKey,
-        fallbackModels: p.models,
-      }));
-    }
-  }
-  return registry;
-}
 
 const HELP = `
   /models        利用可能なモデルを一覧表示

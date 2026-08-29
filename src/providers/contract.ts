@@ -10,11 +10,29 @@ export type ProviderId = string;
 /** "ollama:qwen2.5-coder:7b" / "anthropic:claude-sonnet-4-5" 形式 */
 export type ModelId = string;
 
-export type Role = 'system' | 'user' | 'assistant';
+export type Role = 'system' | 'user' | 'assistant' | 'tool';
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  /** モデルが生成した引数。JSONとして妥当である保証はない。 */
+  args: unknown;
+}
 
 export interface ProviderMessage {
   role: Role;
   content: string;
+  /** assistant がツールを呼んだとき */
+  toolCalls?: ToolCall[];
+  /** role === 'tool' のとき、どの呼び出しへの結果か */
+  toolCallId?: string;
+}
+
+/** ツールの定義。JSON Schema はモデル側へそのまま渡す。 */
+export interface ToolSchema {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
 }
 
 export interface ProviderRequest {
@@ -23,14 +41,16 @@ export interface ProviderRequest {
   messages: ProviderMessage[];
   temperature?: number;
   maxTokens?: number;
+  tools?: ToolSchema[];
 }
 
 export type ProviderChunk =
   | { type: 'text'; delta: string }
+  | { type: 'toolCall'; call: ToolCall }
   | { type: 'usage'; inputTokens: number; outputTokens: number }
   | { type: 'done'; finishReason: FinishReason };
 
-export type FinishReason = 'stop' | 'length' | 'canceled' | 'unknown';
+export type FinishReason = 'stop' | 'length' | 'toolCalls' | 'canceled' | 'unknown';
 
 export interface ModelDescriptor {
   id: ModelId;

@@ -46,6 +46,10 @@ set ANTHROPIC_API_KEY=sk-ant-...
 
 ### 2. 設定する（任意）
 
+クラウド（Claude）は **既定で無効**。ローカルだけで完結する。
+使いたいときだけ `enabled: true` にする。
+
+
 ```
 cp aas.config.example.json aas.config.json
 ```
@@ -54,6 +58,32 @@ cp aas.config.example.json aas.config.json
 `candidates` は先頭から順に試され、利用制限や障害で使えなければ次へ自動で切り替わる。
 
 ### 3. 起動する
+
+**エージェント（作業者に実装させる）:**
+
+```
+npm run agent
+```
+
+```
+依頼> add関数のバグを直して
+  · read_file app.ts
+    ✓ 1	export function add(a: number, b: number): number {
+  · write_file app.ts
+
+  変更: app.ts
+  @@ -1,4 +1,4 @@
+   export function add(a: number, b: number): number {
+  -  return a - b;
+  +  return a + b;
+   }
+  許可しますか？ [y/N] y
+    ✓ 更新: app.ts（+1 -1）
+
+  完了 (2.8s)
+```
+
+**チャットのみ:**
 
 ```
 npm run chat
@@ -68,7 +98,25 @@ npm run chat
 応答の下に必ず「実際に答えたモデル」が出る。
 フォールバックが起きた場合は切替の理由も表示される。暗黙に劣化させないための仕様。
 
-### コマンド
+### 安全のしくみ
+
+エージェントは既定で以下に縛られている。
+
+| 制約 | 内容 |
+|---|---|
+| パス封じ込め | 作業ディレクトリの外は読めない・書けない |
+| 書き込み承認 | 差分を見せて `y` を得るまで書かない |
+| コマンド許可リスト | `npm` `node` `git` など既知のコマンドのみ。危険な形は許可リストを通っても拒否 |
+| 堂々巡りの停止 | 同じ操作を3回繰り返したら止める |
+
+長時間の自律実行に切り替えたい場合は設定で承認モードを変える。
+
+```jsonc
+{ "agent": { "approval": "autoEdit" } }  // 書き込みは自動、コマンドのみ確認
+{ "agent": { "approval": "auto" } }      // 全自動（git管理下での利用を前提）
+```
+
+### チャットのコマンド
 
 | コマンド | 説明 |
 |---|---|
@@ -103,8 +151,8 @@ npm run typecheck
 |---|---|
 | Provider層・正規化エラー・フォールバック・冷却 | 動作 |
 | ローカルLLM (Ollama / LM Studio / vLLM / llama.cpp) | 動作 |
-| Claude (公式SDK) | 動作 |
-| ファイル読み書き・コマンド実行 | 未実装 |
+| Claude (公式SDK) | 動作。**既定で無効**（ローカルが主） |
+| ファイル読み書き・コマンド実行（作業者1名） | 動作 |
 | 職能・部署への人材配置 | 未実装 |
 | 並列実行（レーン・スケジューラ） | 未実装 |
 | 停滞ベースのタイムアウト（低速環境で殺されない） | 動作 |

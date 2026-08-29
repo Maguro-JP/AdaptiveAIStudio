@@ -14,6 +14,11 @@ export interface ProviderConfig {
   /** 環境変数名。値そのものは書かない。 */
   apiKeyEnv?: string;
   models?: string[];
+  /**
+   * 既定は false。ローカルが主で、クラウドは「口だけ用意しておく」もの。
+   * 明示的に true にしない限り、登録も接続もしない。
+   */
+  enabled?: boolean;
 }
 
 export interface AasConfig {
@@ -23,6 +28,22 @@ export interface AasConfig {
   system?: string;
   temperature?: number;
   maxTokens?: number;
+  agent?: AgentConfig;
+}
+
+export interface AgentConfig {
+  /** 作業ディレクトリ。ここより外へは触らせない。既定はカレント。 */
+  root?: string;
+  /**
+   * 承認の求め方。
+   *   ask      : 毎回聞く（既定）
+   *   autoEdit : ファイル書き込みは自動承認、コマンド実行のみ聞く
+   *   auto     : 全部自動（長時間の自律実行向け。gitでの巻き戻し前提）
+   */
+  approval?: 'ask' | 'autoEdit' | 'auto';
+  /** run_command で許可するコマンドの先頭語 */
+  allowedCommands?: string[];
+  maxTurns?: number;
 }
 
 export const DEFAULT_CONFIG: AasConfig = {
@@ -33,6 +54,16 @@ export const DEFAULT_CONFIG: AasConfig = {
       baseUrl: 'http://localhost:11434/v1',
       locality: 'local',
       models: ['qwen2.5-coder:7b'],
+      enabled: true,
+    },
+    // クラウドは既定で無効。使いたいときだけ enabled を true にする。
+    {
+      id: 'claude',
+      kind: 'anthropic',
+      locality: 'cloud',
+      apiKeyEnv: 'ANTHROPIC_API_KEY',
+      models: ['claude-opus-5'],
+      enabled: false,
     },
   ],
   candidates: ['ollama:qwen2.5-coder:7b'],
@@ -57,6 +88,7 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
     system: parsed.system ?? DEFAULT_CONFIG.system,
     temperature: parsed.temperature ?? DEFAULT_CONFIG.temperature,
     maxTokens: parsed.maxTokens ?? DEFAULT_CONFIG.maxTokens,
+    agent: parsed.agent ?? {},
   };
   validate(config);
   return { config, source: path };
@@ -72,11 +104,19 @@ function validate(c: AasConfig): void {
       throw new Error(`未対応の provider kind です: ${p.kind} (${p.id})`);
     }
   }
-  const ids = new Set(c.providers.map((p) => p.id));
+  const ids = new Set(enabledProviders(c).map((p) => p.id));
   for (const cand of c.candidates) {
     const providerId = cand.slice(0, cand.indexOf(':'));
     if (!ids.has(providerId)) {
-      throw new Error(`candidates の "${cand}" に対応する provider "${providerId}" が定義されていません。`);
+      throw new Error(
+        `candidates の "${cand}" に対応する provider "${providerId}" が有効になっていません。` +
+        ' 設定で enabled: true にしてください。',
+      );
     }
   }
+}
+
+/** 有効なProviderだけを返す。enabled を省略した場合は有効とみなす。 */
+export function enabledProviders(c: AasConfig): ProviderConfig[] {
+  return c.providers.filter((p) => p.enabled !== false);
 }

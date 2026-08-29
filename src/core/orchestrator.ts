@@ -7,7 +7,7 @@
  *     出力途中で別モデルに切り替えると、文章が二重・不整合になるため。
  *   - どのモデルが答えたかは必ず呼び出し側へ通知する(暗黙の劣化を防ぐ)。
  */
-import type { ModelId, ProviderMessage } from '../providers/contract.ts';
+import type { ModelId, ProviderMessage, ToolCall, ToolSchema } from '../providers/contract.ts';
 import { ProviderError } from '../providers/errors.ts';
 import type { ProviderRegistry } from './registry.ts';
 
@@ -15,6 +15,7 @@ export type ChatEvent =
   | { type: 'attempt'; modelId: ModelId; attempt: number }
   | { type: 'fallback'; from: ModelId; to: ModelId; reason: string }
   | { type: 'text'; delta: string }
+  | { type: 'toolCall'; call: ToolCall }
   | { type: 'usage'; inputTokens: number; outputTokens: number }
   | { type: 'done'; modelId: ModelId; fallbackFrom?: ModelId }
   | { type: 'failed'; error: ProviderError };
@@ -25,6 +26,7 @@ export interface ChatInput {
   messages: ProviderMessage[];
   temperature?: number;
   maxTokens?: number;
+  tools?: ToolSchema[];
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -80,12 +82,18 @@ export class ChatOrchestrator {
         try {
           for await (const chunk of provider.chat(
             { model, system: input.system, messages: input.messages,
-              temperature: input.temperature, maxTokens: input.maxTokens },
+              temperature: input.temperature, maxTokens: input.maxTokens,
+              tools: input.tools },
             signal,
           )) {
             if (chunk.type === 'text') {
               emitted = true;
               yield { type: 'text', delta: chunk.delta };
+            } else if (chunk.type === 'toolCall') {
+              // ツール呼び出しも「出力済み」とみなす。
+              // ここで別モデルに切り替えると、呼び出しが二重に実行される。
+              emitted = true;
+              yield { type: 'toolCall', call: chunk.call };
             } else if (chunk.type === 'usage') {
               yield { type: 'usage', inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens };
             }
