@@ -17,6 +17,8 @@ import { readFileTool, listFilesTool, searchTextTool, writeFileTool } from '../a
 import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { inspectGit, describeGitState } from '../agent/git.ts';
 import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
+import { buildRuntime } from '../core/runtime-setup.ts';
+import { startWarmPool } from '../core/warm-setup.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -47,6 +49,22 @@ function renderDiff(diff: string): string {
   }).join('\n');
 }
 
+/**
+ * 入力を1行受け取る。標準入力が閉じている場合は undefined を返す。
+ * パイプで流し込まれた入力が尽きたときに例外で落ちないようにする。
+ */
+async function askOrExit(
+  rl: { question(q: string): Promise<string> },
+  prompt: string,
+): Promise<string | undefined> {
+  try {
+    return await rl.question(prompt);
+  } catch (e) {
+    if (e instanceof Error && /closed/i.test(e.message)) return undefined;
+    throw e;
+  }
+}
+
 async function main(): Promise<void> {
   const { config, source } = loadConfig();
   const registry = buildRegistry(config);
@@ -70,8 +88,10 @@ async function main(): Promise<void> {
     } else {
       console.log('\n' + c.cyan(`  コマンド実行: ${req.command}`));
     }
-    const ans = (await rl.question(c.yellow('  許可しますか？ [y/N] '))).trim().toLowerCase();
-    return ans === 'y' || ans === 'yes';
+    const ans = await askOrExit(rl, c.yellow('  許可しますか？ [y/N] '));
+    if (ans === undefined) return false; // 入力が無いなら許可しない
+    const normalized = ans.trim().toLowerCase();
+    return normalized === 'y' || normalized === 'yes';
   };
 
   const pilot = await setupAutopilot(config, registry);
@@ -80,6 +100,15 @@ async function main(): Promise<void> {
     console.error(c.red(`使えるモデルがありません: ${note}`));
     process.exit(1);
   }
+
+  // 使うモデルを先に温めておく。作業開始時の待ちをゼロにする。
+  const runtime = buildRuntime(config, pilot.machine);
+  const warm = await startWarmPool(config, runtime, pilot.machine, candidates, (e) => {
+    if (e.type === 'warming') process.stderr.write(c.dim(`  温め中: ${e.ref}...\n`));
+    else if (e.type === 'warm') process.stderr.write(c.dim(`  常駐: ${e.ref} (${e.loadSeconds}秒)\n`));
+    else if (e.type === 'failed') process.stderr.write(c.yellow(`  温め失敗: ${e.ref} (${e.error})\n`));
+    else if (e.type === 'evict') process.stderr.write(c.dim(`  解放: ${e.ref} (${e.reason})\n`));
+  });
 
   const tools = [
     readFileTool, listFilesTool, searchTextTool, writeFileTool,
@@ -115,13 +144,20 @@ async function main(): Promise<void> {
     console.log(h.ok ? c.dim(`  ${p.id}: `) + c.green('接続OK')
                      : c.dim(`  ${p.id}: `) + c.yellow(`接続不可 (${h.reason})`));
   }
+  if (warm.warmed.length > 0) {
+    console.log(c.green(`  常駐: ${warm.warmed.join(', ')}`) + c.dim(' — 待ちなしで開始できます'));
+  } else if (warm.notes.length > 0) {
+    console.log(c.dim(`  ${warm.notes[0]}`));
+  }
   console.log(c.dim('作業を指示してください。/exit で終了。\n'));
 
   const history: ProviderMessage[] = [];
 
   try {
     for (;;) {
-      const line = (await rl.question(c.cyan('依頼> '))).trim();
+      const answer = await askOrExit(rl, c.cyan('依頼> '));
+      if (answer === undefined) break;
+      const line = answer.trim();
       if (!line) continue;
       if (line === '/exit' || line === '/quit') break;
       if (line === '/new') { history.length = 0; console.log(c.dim('履歴を破棄しました。\n')); continue; }
@@ -134,6 +170,15 @@ async function main(): Promise<void> {
         continue;
       }
       if (line === '/metrics') { console.log(pilot.metrics.report() + '\n'); continue; }
+      if (line === '/warm') {
+        const status = warm.pool?.status() ?? [];
+        if (status.length === 0) console.log(c.dim('  常駐しているモデルはありません。\n'));
+        for (const s of status) {
+          console.log(`  ${s.ref} ${s.inUse ? c.green('使用中') : c.dim(`待機 ${s.idleSeconds}秒`)}`);
+        }
+        console.log();
+        continue;
+      }
 
       history.push({ role: 'user', content: line });
       generating = new AbortController();
@@ -190,6 +235,7 @@ async function main(): Promise<void> {
     }
   } finally {
     rl.close();
+    await warm.pool?.shutdown().catch(() => undefined);
   }
 }
 

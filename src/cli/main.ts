@@ -31,6 +31,22 @@ const HELP = `
   Ctrl-C         生成中なら中断、入力待ちなら終了
 `.trimEnd();
 
+/**
+ * 入力を1行受け取る。標準入力が閉じている場合は undefined を返す。
+ * パイプで流し込まれた入力が尽きたときに例外で落ちないようにする。
+ */
+async function askOrExit(
+  rl: { question(q: string): Promise<string> },
+  prompt: string,
+): Promise<string | undefined> {
+  try {
+    return await rl.question(prompt);
+  } catch (e) {
+    if (e instanceof Error && /closed/i.test(e.message)) return undefined;
+    throw e;
+  }
+}
+
 async function main(): Promise<void> {
   const { config, source } = loadConfig();
   const registry = buildRegistry(config);
@@ -69,7 +85,9 @@ async function main(): Promise<void> {
 
   try {
     for (;;) {
-      const line = (await rl.question(c.cyan('> '))).trim();
+      const input = await askOrExit(rl, c.cyan('> '));
+      if (input === undefined) break;
+      const line = input.trim();
       if (line.length === 0) continue;
 
       if (line.startsWith('/')) {

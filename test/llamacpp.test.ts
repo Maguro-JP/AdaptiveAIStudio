@@ -68,6 +68,16 @@ describe('実行計画', () => {
 });
 
 describe('起動と停止', () => {
+  test('commandArgs が command の直後に渡る（ラッパー経由の起動）', async () => {
+    const dir = await modelsDir(['a-7b.gguf']);
+    const rt = runtime(dir); started.push(rt);
+    // fake サーバは commandArgs 経由で起動されている。
+    // 渡っていなければ node が --model を解釈できず起動に失敗する。
+    const loaded = await rtEnsure(rt, dir, 'a-7b.gguf');
+    const res = await fetch(`${loaded.baseUrl}/models`);
+    assert.equal(res.ok, true);
+  });
+
   test('プランナの計算値が llama-server の引数として渡る', async () => {
     const dir = await modelsDir(['qwen2.5-coder-32b.gguf']);
     const rt = runtime(dir, { parallel: 2 });

@@ -48,6 +48,8 @@ export interface RuntimeConfig {
   kind?: 'ollama' | 'llamacpp';
   /** llamacpp: llama-server の実行パス */
   command?: string;
+  /** llamacpp: command の直後に付ける固定引数（ラッパースクリプト経由の起動用） */
+  commandArgs?: string[];
   /** llamacpp: GGUFファイルを置くディレクトリ */
   modelsDir?: string;
   /** llamacpp: 使用ポートの開始番号 */
@@ -55,6 +57,22 @@ export interface RuntimeConfig {
   /** llamacpp: レーンの並列度に合わせる */
   parallel?: number;
   desiredContext?: number;
+  /**
+   * 常時ロード。使う見込みのモデルを起動時に温めておき、
+   * 作業開始時の待ちをゼロにする。既定は有効。
+   * 空いているVRAMは節約ではなく損失なので、既定で使い切る。
+   */
+  warm?: WarmConfig;
+}
+
+export interface WarmConfig {
+  enabled?: boolean;
+  /** 起動時に温めるモデル。省略時は自動選択の上位を温める。 */
+  preload?: string[];
+  /** 同時常駐数の上限 */
+  maxResident?: number;
+  /** 常駐に使ってよいVRAM比率(0〜1)。既定 0.95 */
+  vramFraction?: number;
 }
 
 export interface AgentConfig {

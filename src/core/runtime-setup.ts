@@ -23,6 +23,7 @@ export function buildRuntime(
 
   return new LlamaCppRuntime({
     command: rc.command,
+    commandArgs: rc.commandArgs,
     modelsDir: rc.modelsDir ?? join(homedir(), '.aas', 'models'),
     machine,
     basePort: rc.basePort,
