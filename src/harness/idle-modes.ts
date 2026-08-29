@@ -95,8 +95,34 @@ export const whatif: IdleMode = {
   basePriority: 2,
 };
 
+/** REVIEW — 期をまたいだ変更をまとめて見る。「昨日の分」の確認。 */
+export const digest: IdleMode = {
+  id: 'digest',
+  codename: 'DIGEST',
+  name: '通し確認',
+  purpose: '前回からの変更をまとめて見直し、見落としが無いかを確かめる。',
+  precondition: () => true, // 日課として時間で起きるので、変化は前提にしない
+  cooldownMs: 30 * MINUTE,
+  cost: 2,
+  basePriority: 5,
+  dutyOnly: true,
+};
+
+/** AGENDA — この先の段取りを組む。 */
+export const agenda: IdleMode = {
+  id: 'agenda',
+  codename: 'AGENDA',
+  name: '段取り',
+  purpose: '溜まっている提案と残作業を見て、次に何から手を付けるべきかを整理する。',
+  precondition: () => true,
+  cooldownMs: 60 * MINUTE,
+  cost: 1,
+  basePriority: 6,
+  dutyOnly: true,
+};
+
 export const BUILTIN_IDLE_MODES: IdleMode[] = [
-  patrol, recon, retrospect, forecast, briefing, whatif,
+  patrol, recon, retrospect, forecast, briefing, whatif, digest, agenda,
 ];
 
 /** モードごとの依頼文。誰に何を考えさせるかがここで決まる。 */
@@ -107,6 +133,8 @@ export const MODE_ROLE: Record<string, string> = {
   retrospect: 'reviewer',
   forecast: 'planner',
   whatif: 'planner',
+  digest: 'reviewer',
+  agenda: 'planner',
 };
 
 export function promptFor(mode: IdleMode, context: string): string {
@@ -117,6 +145,8 @@ export function promptFor(mode: IdleMode, context: string): string {
     retrospect: '直近の変更を読み、急いで済ませた箇所や決め切れていない点を1つ挙げてください。',
     forecast: '今の作りのままだと次に何で困るかを、根拠とともに1つ挙げてください。',
     whatif: '今の作りとは別のやり方を1つ考え、利点と欠点を比べてください。',
+    digest: '前回の確認以降に入った変更を通しで見て、見落としがあれば1つ挙げてください。',
+    agenda: '未処理の提案と残作業を見て、次に何から手を付けるべきかを理由とともに1つ示してください。',
   };
   return [
     `[${mode.codename}] ${mode.purpose}`,

@@ -35,6 +35,14 @@ export interface IdleMode {
   cost: number;
   /** 実績が無いうちの優先度 */
   basePriority: number;
+  /**
+   * 日課からのみ起動する。
+   *
+   * 「前回分の確認」や「段取りの見直し」は、時間で起きるべきもので、
+   * 気が向いたときに勝手に始めるものではない。
+   * これを区別しないと、日課専用のモードが常時発火して予算を食う。
+   */
+  dutyOnly?: boolean;
 }
 
 export interface IdleContext {
@@ -67,6 +75,8 @@ export interface IdleBudget {
 
 export interface Decision {
   mode?: IdleMode;
+  /** 日課として選ばれた場合、そのID */
+  dutyId?: string;
   /** 選ばなかった場合の理由。黙って何もしないと、壊れているのか休んでいるのか分からない。 */
   reason: string;
 }
@@ -103,7 +113,15 @@ export class IdleScheduler {
    * 次に何を考えるかを選ぶ。
    * 選ばない判断も結果のうちなので、必ず理由を返す。
    */
-  async choose(ctx: Omit<IdleContext, 'lastRunAt'>): Promise<Decision> {
+  async choose(
+    ctx: Omit<IdleContext, 'lastRunAt'>,
+    /**
+     * 今日まだやっていない日課。
+     * 変化が無くてもやることがあるなら、そちらが先。
+     * 「今日まだ全検査を回していない」は、コードが変わっていなくても有効な情報。
+     */
+    dueDuties: Array<{ dutyId: string; modeId: string; codename: string; isCatchUp: boolean }> = [],
+  ): Promise<Decision> {
     const spent = this.spentThisHour(ctx.now);
     if (spent >= this.#budget.perHour) {
       return { reason: `この1時間の予算を使い切りました（${spent}/${this.#budget.perHour}）` };
@@ -114,8 +132,24 @@ export class IdleScheduler {
       return { reason: '未処理の提案が溜まっています。先にそちらを見てください' };
     }
 
+    // 日課が残っているなら、変化を待たずにそちらを進める
+    for (const duty of dueDuties) {
+      const mode = this.#modes.find((m) => m.id === duty.modeId);
+      if (!mode) continue;
+      if (spent + mode.cost > this.#budget.perHour) continue;
+      const stat = this.#stat(mode.id);
+      if (stat.lastRunAt !== undefined && ctx.now - stat.lastRunAt < mode.cooldownMs) continue;
+      return {
+        mode, dutyId: duty.dutyId,
+        reason: duty.isCatchUp
+          ? `${duty.codename} の前回分が残っています`
+          : `本日分の ${duty.codename} がまだです`,
+      };
+    }
+
     const candidates: Array<{ mode: IdleMode; score: number }> = [];
     for (const mode of this.#modes) {
+      if (mode.dutyOnly) continue; // 日課としてしか動かない
       const stat = this.#stat(mode.id);
       const full: IdleContext = { ...ctx, lastRunAt: stat.lastRunAt };
 

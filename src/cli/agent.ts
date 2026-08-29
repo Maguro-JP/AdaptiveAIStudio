@@ -32,6 +32,8 @@ import { RoleRegistry } from '../roles/registry.ts';
 import { runPanel, mergeFindings } from '../agent/panel.ts';
 import { IdleScheduler, formatIdleStats, type ModeStat } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES, MODE_ROLE, promptFor } from '../harness/idle-modes.ts';
+import { DutyRoster, formatDuties, type DutyRecord } from '../harness/duties.ts';
+import { BUILTIN_DUTIES } from '../harness/builtin-duties.ts';
 import { readFile as readJson, writeFile as writeJson } from 'node:fs/promises';
 import { buildSystemPrompt } from '../roles/role.ts';
 import { toolsFor } from '../roles/registry.ts';
@@ -310,6 +312,16 @@ async function main(): Promise<void> {
     idle.restore(JSON.parse(await readJson(idleStatePath, 'utf8')) as ModeStat[]);
   } catch { /* 記録が無いのは正常 */ }
 
+  // 日課。変化が無くてもやることを、時間で起こす。
+  const roster = new DutyRoster(BUILTIN_DUTIES);
+  const dutyStatePath = join(stateDir(), 'duties.json');
+  try {
+    roster.restore(JSON.parse(await readJson(dutyStatePath, 'utf8')) as DutyRecord[]);
+  } catch { /* 記録が無いのは正常 */ }
+  const saveDuties = () =>
+    writeJson(dutyStatePath, JSON.stringify(roster.records(), null, 2), 'utf8')
+      .catch(() => undefined);
+
   let lastChangeAt = Date.now();
   /** 提案がどの思考から出たかを覚える。採否が実績になる。 */
   const proposalOrigin = new Map<string, string>();
@@ -324,14 +336,22 @@ async function main(): Promise<void> {
   const think = async (): Promise<boolean> => {
     if (initCfg.enabled === false) return false;
 
-    const decision = await idle.choose({
-      lastChangeAt,
-      openProposals: proposals.open().length,
-      now: Date.now(),
-    });
+    const now = Date.now();
+    const due = roster.due(now).map((s) => ({
+      dutyId: s.duty.id, modeId: s.duty.modeId,
+      codename: s.duty.codename, isCatchUp: s.isCatchUp,
+    }));
+
+    const decision = await idle.choose(
+      { lastChangeAt, openProposals: proposals.open().length, now },
+      due,
+    );
     if (!decision.mode) return false;
 
     const mode = decision.mode;
+    if (decision.dutyId) {
+      process.stderr.write(c.dim(`\n  ${decision.reason}\n`));
+    }
     const role = roles.get(MODE_ROLE[mode.id] ?? 'scout') ?? roles.get('scout')!;
     idle.begin(mode, Date.now());
 
@@ -381,6 +401,13 @@ async function main(): Promise<void> {
     }
 
     if (mode.id === 'recon') proposals.markExamined(fingerprint);
+
+    // 日課として動いたなら、済んだことにする。
+    // 報告が無くても「確認した」ことに変わりはない。
+    if (decision.dutyId) {
+      roster.complete(decision.dutyId, Date.now());
+      await saveDuties();
+    }
 
     const parsed = parseProposal(text);
     idle.recordOutcome(mode.id, parsed !== undefined);
@@ -467,6 +494,23 @@ async function main(): Promise<void> {
         continue;
       }
       if (line === '/metrics') { console.log(pilot.metrics.report() + '\n'); continue; }
+      if (line === '/duties') {
+        console.log(formatDuties(roster.status(Date.now()), Date.now()));
+        const pending = roster.due(Date.now());
+        console.log(pending.length === 0
+          ? c.dim('\n  今やるべき日課はありません。\n')
+          : c.yellow(`\n  未了: ${pending.map((p) => p.duty.codename).join(', ')}\n`));
+        continue;
+      }
+      if (line.startsWith('/skip ')) {
+        const id = line.slice('/skip '.length).trim();
+        const target = roster.duties().find((d) => d.id === id || d.codename === id);
+        if (!target) { console.log(c.red(`  日課が見つかりません: ${id}\n`)); continue; }
+        roster.skip(target.id, Date.now());
+        await saveDuties();
+        console.log(c.dim(`  ${target.codename} を今期は流しました。\n`));
+        continue;
+      }
       if (line === '/idle') {
         console.log(formatIdleStats(idleModes, idle.stats()));
         console.log(c.dim(`\n  この1時間の消費: ${idle.spentThisHour(Date.now())} / ${initCfg.budgetPerHour ?? 12}`));
