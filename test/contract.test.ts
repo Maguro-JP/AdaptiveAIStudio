@@ -20,7 +20,8 @@ let provider: OpenAiCompatibleProvider;
 before(async () => {
   server = await startFakeServer({ kind: 'stream', text: 'こんにちは' });
   provider = new OpenAiCompatibleProvider({
-    id: 'fake', baseUrl: server.baseUrl, locality: 'local', requestTimeoutMs: 3000,
+    id: 'fake', baseUrl: server.baseUrl, locality: 'local',
+    firstTokenTimeoutMs: 3000, stallTimeoutMs: 3000,
   });
 });
 after(async () => { await server.close(); });
@@ -75,6 +76,19 @@ describe('Provider契約', () => {
   test('context超過は context_too_long に正規化される', async () => {
     server.setBehavior({ kind: 'status', status: 400, body: 'maximum context length exceeded' });
     assert.equal(((await collect().catch((e) => e)) as ProviderError).kind, 'context_too_long');
+  });
+
+  test('停滞が続けば timeout として打ち切られる（中断とは区別される）', async () => {
+    server.setBehavior({ kind: 'hang' });
+    const slow = new OpenAiCompatibleProvider({
+      id: 'slow', baseUrl: server.baseUrl, locality: 'local',
+      firstTokenTimeoutMs: 300, stallTimeoutMs: 300,
+    });
+    const err = await (async () => {
+      for await (const _ of slow.chat(REQ, new AbortController().signal)) { /* 来ない */ }
+    })().then(() => undefined, (e: unknown) => e);
+    assert.ok(err instanceof ProviderError);
+    assert.equal(err.kind, 'timeout');
   });
 
   test('AbortSignal で中断でき、canceled として区別される', async () => {

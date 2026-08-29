@@ -21,7 +21,18 @@ export interface OpenAiCompatibleOptions {
   locality: 'local' | 'cloud';
   /** APIがモデル一覧を返さない場合のフォールバック */
   fallbackModels?: string[];
-  requestTimeoutMs?: number;
+  /**
+   * 接続〜最初の1トークンまでの上限。既定10分。
+   * 巨大モデルのロードやディスクからの読み出しに数分かかることがあるため長い。
+   */
+  firstTokenTimeoutMs?: number;
+  /**
+   * トークンが1つも来ない状態が続いたときの上限。既定2分。
+   *
+   * 総時間ではなく「停滞時間」で打ち切るのが要点。
+   * 1トークン/秒でも生成が進んでいる限り、何時間でも待つ。
+   */
+  stallTimeoutMs?: number;
 }
 
 export class OpenAiCompatibleProvider implements ChatProvider {
@@ -30,7 +41,8 @@ export class OpenAiCompatibleProvider implements ChatProvider {
   readonly #baseUrl: string;
   readonly #apiKey?: string;
   readonly #fallbackModels: string[];
-  readonly #timeoutMs: number;
+  readonly #firstTokenTimeoutMs: number;
+  readonly #stallTimeoutMs: number;
 
   constructor(opts: OpenAiCompatibleOptions) {
     this.id = opts.id;
@@ -38,7 +50,8 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     this.#baseUrl = opts.baseUrl.replace(/\/$/, '');
     this.#apiKey = opts.apiKey;
     this.#fallbackModels = opts.fallbackModels ?? [];
-    this.#timeoutMs = opts.requestTimeoutMs ?? 300_000;
+    this.#firstTokenTimeoutMs = opts.firstTokenTimeoutMs ?? 600_000;
+    this.#stallTimeoutMs = opts.stallTimeoutMs ?? 120_000;
   }
 
   #headers(): Record<string, string> {
@@ -92,8 +105,17 @@ export class OpenAiCompatibleProvider implements ChatProvider {
       ? [{ role: 'system', content: req.system }, ...req.messages]
       : req.messages;
 
-    const timeout = AbortSignal.timeout(this.#timeoutMs);
-    const combined = AbortSignal.any([signal, timeout]);
+    // 総時間ではなく「停滞」で打ち切る。低速環境でも生成が進む限り待ち続ける。
+    const watchdog = new AbortController();
+    let stalled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const arm = (ms: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => { stalled = true; watchdog.abort(); }, ms);
+    };
+    arm(this.#firstTokenTimeoutMs);
+
+    const combined = AbortSignal.any([signal, watchdog.signal]);
 
     let res: Response;
     try {
@@ -111,8 +133,9 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         }),
       });
     } catch (e) {
-      // 中断が「利用者の Ctrl-C」か「タイムアウト」かを区別する
-      const kind = signal.aborted ? 'canceled' : kindFromThrown(e);
+      clearTimeout(timer);
+      // 中断が「利用者の Ctrl-C」か「停滞による打ち切り」かを区別する
+      const kind = signal.aborted ? 'canceled' : stalled ? 'timeout' : kindFromThrown(e);
       throw new ProviderError({
         kind, providerId: this.id, cause: e,
         message: `${this.id} への接続に失敗しました: ${describe(e)}`,
@@ -120,6 +143,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     }
 
     if (!res.ok || !res.body) {
+      clearTimeout(timer);
       const body = await res.text().catch(() => '');
       throw new ProviderError({
         kind: kindFromHttpStatus(res.status, body),
@@ -145,6 +169,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         const choice = parsed.choices?.[0];
         const delta = choice?.delta?.content;
         if (typeof delta === 'string' && delta.length > 0) {
+          arm(this.#stallTimeoutMs); // 生成が進んでいるので待ち直す
           yield { type: 'text', delta };
         }
         if (choice?.finish_reason === 'stop') finishReason = 'stop';
@@ -159,11 +184,15 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         }
       }
     } catch (e) {
-      const kind = signal.aborted ? 'canceled' : kindFromThrown(e);
+      const kind = signal.aborted ? 'canceled' : stalled ? 'timeout' : kindFromThrown(e);
       throw new ProviderError({
         kind, providerId: this.id, cause: e,
-        message: `${this.id} のストリームが中断されました: ${describe(e)}`,
+        message: stalled
+          ? `${this.id} が ${this.#stallTimeoutMs / 1000}秒 応答しませんでした（停滞）`
+          : `${this.id} のストリームが中断されました: ${describe(e)}`,
       });
+    } finally {
+      clearTimeout(timer);
     }
 
     yield { type: 'done', finishReason: signal.aborted ? 'canceled' : finishReason };
