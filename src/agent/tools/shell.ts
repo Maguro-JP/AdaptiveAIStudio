@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execCommand, tailOf } from '../shell-exec.ts';
 import { type Tool, ok, fail, requireString } from './types.ts';
 
 /**
@@ -65,46 +65,10 @@ export function createRunCommandTool(opts: {
   };
 }
 
-function runShell(command: string, cwd: string, timeoutMs: number, signal: AbortSignal) {
-  return new Promise<{ content: string; isError?: boolean }>((resolve) => {
-    const isWindows = process.platform === 'win32';
-    const child = isWindows
-      ? spawn(command, { cwd, shell: true })
-      : spawn('/bin/sh', ['-c', command], { cwd });
-
-    let out = '';
-    let done = false;
-    const finish = (result: { content: string; isError?: boolean }) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      signal.removeEventListener('abort', onAbort);
-      resolve(result);
-    };
-
-    const timer = setTimeout(() => {
-      child.kill();
-      finish(fail(`タイムアウト (${timeoutMs / 1000}秒): ${command}\n${tail(out)}`));
-    }, timeoutMs);
-
-    const onAbort = () => { child.kill(); finish(fail('中断されました。')); };
-    signal.addEventListener('abort', onAbort, { once: true });
-
-    const append = (buf: Buffer) => {
-      out += buf.toString();
-      if (out.length > 200_000) out = out.slice(-200_000); // 出力が暴走しても壊れない
-    };
-    child.stdout?.on('data', append);
-    child.stderr?.on('data', append);
-
-    child.on('error', (e) => finish(fail(`実行できません: ${e.message}`)));
-    child.on('close', (code) => {
-      const body = `終了コード: ${code}\n${tail(out) || '(出力なし)'}`;
-      finish(code === 0 ? ok(body) : { content: body, isError: true });
-    });
-  });
-}
-
-function tail(s: string, max = 8000): string {
-  return s.length > max ? `...(省略)\n${s.slice(-max)}` : s;
+async function runShell(command: string, cwd: string, timeoutMs: number, signal: AbortSignal) {
+  const r = await execCommand(command, cwd, timeoutMs, signal);
+  if (r.aborted) return fail('中断されました。');
+  if (r.timedOut) return fail(`タイムアウト (${timeoutMs / 1000}秒): ${command}\n${tailOf(r.output, 8000)}`);
+  const body = `終了コード: ${r.code}\n${tailOf(r.output, 8000) || '(出力なし)'}`;
+  return r.code === 0 ? ok(body) : { content: body, isError: true };
 }

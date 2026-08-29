@@ -20,6 +20,8 @@ import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { startWarmPool } from '../core/warm-setup.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
+import { verifyLoop, runVerification, type VerifyResult } from '../agent/verify.ts';
+import { snapshotTests } from '../agent/test-integrity.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -114,6 +116,15 @@ async function main(): Promise<void> {
     return brief ? `${SYSTEM}\n\n${brief}` : SYSTEM;
   };
 
+  const verifyCfg = agentCfg.verify ?? {};
+
+  /** 検証コマンドを決める。設定 > 先読みが検出したもの。 */
+  const verifyCommand = async (): Promise<string | undefined> => {
+    if (verifyCfg.command) return verifyCfg.command;
+    const snap = await prefetch.snapshotWithin(2000);
+    return snap?.commands.test;
+  };
+
   const makeAgent = async () => new Agent(orchestrator, {
     candidates,
     system: await systemFor(),
@@ -124,6 +135,73 @@ async function main(): Promise<void> {
     maxTokens: config.maxTokens,
     approve,
   });
+
+  /**
+   * 自己検証ループ。作業者に失敗内容を渡して直させ、通るまで繰り返す。
+   * 打ち切りは回数・時間・進捗の3つで、無人でも暴走しない。
+   */
+  const runVerify = async (
+    before: Awaited<ReturnType<typeof snapshotTests>>,
+    baseline: VerifyResult | undefined,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    const command = await verifyCommand();
+    if (!command) {
+      console.log(c.dim('  検証コマンドが分からないため、検証は行いません。\n'));
+      return;
+    }
+
+    const fix = async (feedback: string, sig: AbortSignal): Promise<void> => {
+      history.push({ role: 'user', content: feedback });
+      let text = '';
+      const agent = await makeAgent();
+      for await (const ev of agent.run(history, sig)) {
+        if (ev.type === 'thinking') { text += ev.delta; stdout.write(ev.delta); }
+        else if (ev.type === 'toolStart') console.log(c.dim(`  · ${ev.call.name} ${summarize(ev.call.args)}`));
+        else if (ev.type === 'toolEnd') {
+          console.log(ev.isError ? c.red(`    ✗ ${firstLine(ev.result)}`) : c.dim(`    ✓ ${firstLine(ev.result)}`));
+          if (!ev.isError && ev.call.name === 'write_file') prefetch.invalidate();
+        }
+      }
+      if (text) stdout.write('\n');
+    };
+
+    for await (const ev of verifyLoop(
+      {
+        command, root,
+        maxRounds: verifyCfg.maxRounds,
+        timeBudgetMs: verifyCfg.timeBudgetMs,
+        commandTimeoutMs: verifyCfg.commandTimeoutMs,
+      },
+      fix, signal, before, baseline,
+    )) {
+      switch (ev.type) {
+        case 'running':
+          console.log(c.dim(`  検証 ${ev.round}回目: ${ev.command}`));
+          break;
+        case 'passed':
+          console.log(c.green(`  ✓ 検証を通過しました`) + c.dim(` (${(ev.durationMs / 1000).toFixed(1)}s)\n`));
+          break;
+        case 'failed':
+          console.log(c.yellow(`  ✗ 検証に失敗（${ev.round}回目）`));
+          console.log(c.dim(ev.digest.split('\n').slice(-6).map((l) => `    ${l}`).join('\n')));
+          break;
+        case 'preexisting':
+          console.log(c.yellow('  この失敗は作業前から出ています。今回の作業が原因ではありません。'));
+          console.log(c.dim(ev.digest.split('\n').slice(-4).map((l) => `    ${l}`).join('\n')) + '\n');
+          break;
+        case 'tampered':
+          console.log(c.red(`  ✗ ${ev.reason}\n`));
+          break;
+        case 'fixing':
+          console.log(c.dim(`  修正させています...`));
+          break;
+        case 'giveUp':
+          console.log(c.yellow(`  検証を打ち切りました — ${ev.detail}\n`));
+          break;
+      }
+    }
+  };
 
   console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — agent (作業者1名)'));
   console.log(c.dim(`設定: ${source}`));
@@ -194,9 +272,31 @@ async function main(): Promise<void> {
 
       history.push({ role: 'user', content: line });
       generating = new AbortController();
+      // 作業前のテストの状態を控えておく。改ざん検出の基準になる。
+      const verifyOn = verifyCfg.enabled !== false;
+      const testsBefore = verifyOn
+        ? await snapshotTests(root).catch(() => undefined)
+        : undefined;
+
+      // 作業前の状態を控える。失敗の責任を切り分けるために要る。
+      let baseline: VerifyResult | undefined;
+      if (verifyOn && verifyCfg.baseline !== false) {
+        const cmd = await verifyCommand();
+        if (cmd) {
+          console.log(c.dim(`  作業前の状態を確認中: ${cmd}`));
+          baseline = await runVerification(
+            { command: cmd, root, commandTimeoutMs: verifyCfg.commandTimeoutMs },
+            generating.signal,
+          );
+          console.log(baseline.passed
+            ? c.dim('    通っています')
+            : c.yellow('    作業前から失敗しています'));
+        }
+      }
       const started = Date.now();
       let printedText = false;
       let answerChars = 0;
+      let finishedReason: string | undefined;
 
       try {
         const agent = await makeAgent();
@@ -240,9 +340,15 @@ async function main(): Promise<void> {
                 failed: c.red('失敗'),
               }[ev.reason];
               console.log(`\n  ${label}${ev.detail ? c.dim(` — ${ev.detail}`) : ''} ${c.dim(`(${secs}s)`)}\n`);
+              finishedReason = ev.reason;
               break;
             }
           }
+        }
+
+        // 書いて終わりにしない。テストを流し、失敗したら自分で直させる。
+        if (finishedReason === 'completed' && testsBefore) {
+          await runVerify(testsBefore, baseline, generating.signal);
         }
       } finally {
         generating = undefined;

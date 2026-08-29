@@ -98,6 +98,29 @@ export interface AgentConfig {
   lanes?: LaneSetting[];
   /** 全レーン合計の同時実行上限。CPU/メモリの保護用。 */
   maxTotalParallel?: number;
+  /**
+   * 自己検証ループ。作業後にテストを流し、失敗したら自分で直させる。
+   * ローカルは計算が無料なので、時間で品質を買える。既定は有効。
+   */
+  verify?: VerifyConfig;
+}
+
+export interface VerifyConfig {
+  enabled?: boolean;
+  /** 検証コマンド。省略時は先読みが検出したテストコマンドを使う。 */
+  command?: string;
+  /** 最大の往復回数。既定5 */
+  maxRounds?: number;
+  /** ループ全体の時間上限(ms)。既定60分 */
+  timeBudgetMs?: number;
+  /** 1回のテスト実行の上限(ms)。既定10分 */
+  commandTimeoutMs?: number;
+  /**
+   * 作業前にも検証を1回流し、元から壊れていたかを確かめる。既定は有効。
+   * これが無いと、既存の失敗をこの作業のせいにして無駄に回すことになる。
+   * テストが重い場合のみ false にする。
+   */
+  baseline?: boolean;
 }
 
 export interface LaneSetting {
