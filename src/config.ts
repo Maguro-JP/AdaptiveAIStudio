@@ -85,7 +85,7 @@ export interface HarnessConfig {
 
 export interface InitiativeConfig {
   /**
-   * 自発的な調査。待機中に自分で手がかりを探し、提案を溜める。
+   * 自発的な思考。待機中に自分で考え、提案を溜める。
    * 提案は溜めるだけで、実行はしない。既定は有効。
    */
   enabled?: boolean;
@@ -93,8 +93,15 @@ export interface InitiativeConfig {
   idleSeconds?: number;
   /** 1回の調査で扱う手がかりの数 */
   leadsPerCycle?: number;
-  /** 溜まった未処理の提案がこの数に達したら、それ以上は調べない */
+  /** 溜まった未処理の提案がこの数に達したら、それ以上は考えない */
   maxOpen?: number;
+  /**
+   * 1時間に使ってよい思考の総コスト。
+   * 計算は無料でも、読む側の集中力は有限なので上限を置く。
+   */
+  budgetPerHour?: number;
+  /** 使う思考モード。省略時は全部 */
+  modes?: string[];
 }
 
 export interface RuntimeConfig {

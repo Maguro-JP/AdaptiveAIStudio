@@ -22,6 +22,7 @@ const FINDING_CONTRACT = [
 /** 手順どおりに確かめる。想定された使い方が本当に動くかを見る。 */
 export const tester: Role = {
   id: 'tester',
+  codename: 'WARDEN',
   name: '検査担当',
   responsibility: '仕様どおりに動くかを、通常の使い方で確かめる。',
   disposition:
@@ -44,6 +45,7 @@ export const tester: Role = {
  */
 export const breaker: Role = {
   id: 'breaker',
+  codename: 'GREMLIN',
   name: '破壊担当',
   responsibility: '想定外の使い方で壊れるところを探す。',
   disposition:
@@ -67,6 +69,7 @@ export const breaker: Role = {
 /** 悪意のある使われ方を想定する。 */
 export const security: Role = {
   id: 'security',
+  codename: 'SENTINEL',
   name: '安全担当',
   responsibility: '悪意を持って使われた場合に何が起きるかを見る。',
   disposition:
@@ -89,6 +92,7 @@ export const security: Role = {
 /** 使われ方と読みやすさを見る。 */
 export const reviewer: Role = {
   id: 'reviewer',
+  codename: 'CURATOR',
   name: 'レビュー担当',
   responsibility: '変更が意図どおりで、後から読めるかを見る。',
   disposition:
@@ -110,6 +114,7 @@ export const reviewer: Role = {
 /** 作業を分解し、順序を決める。 */
 export const planner: Role = {
   id: 'planner',
+  codename: 'ARCHITECT',
   name: '計画担当',
   responsibility: '依頼を、実行できる大きさの作業に分解する。',
   disposition:
@@ -139,6 +144,7 @@ export const planner: Role = {
 /** 起きたことを、人が読める形にまとめる。 */
 export const reporter: Role = {
   id: 'reporter',
+  codename: 'HERALD',
   name: '報告担当',
   responsibility: '何が起きたかを、利用者が判断できる形にまとめる。',
   disposition:
@@ -159,6 +165,7 @@ export const reporter: Role = {
 /** 外から情報を仕入れる。 */
 export const scout: Role = {
   id: 'scout',
+  codename: 'SCOUT',
   name: '調査担当',
   responsibility: '手元にない情報を集めてくる。',
   disposition:
@@ -177,6 +184,7 @@ export const scout: Role = {
 /** 集まった情報を、後から使える形に整える。 */
 export const librarian: Role = {
   id: 'librarian',
+  codename: 'ARCHIVIST',
   name: '整理担当',
   responsibility: '散らばった情報を、次に使える形にまとめる。',
   disposition:
@@ -195,6 +203,7 @@ export const librarian: Role = {
 /** 実際に手を動かす。書き込み権限を持つ唯一の役職。 */
 export const worker: Role = {
   id: 'worker',
+  codename: 'SMITH',
   name: '作業担当',
   responsibility: '割り当てられた作業を実装する。',
   disposition:
@@ -211,6 +220,34 @@ export const worker: Role = {
   prefers: 'any',
 };
 
+/**
+ * 外の世界から情報を持ち帰る。
+ *
+ * SCOUT が手元を調べるのに対し、ENVOY は外へ出る。
+ * 依存パッケージの更新、既知の不具合、規格の変更 ——
+ * 手元をいくら読んでも分からないことがある。
+ */
+export const envoy: Role = {
+  id: 'envoy',
+  codename: 'ENVOY',
+  name: '情報担当',
+  responsibility: '外の世界の情報を持ち帰り、この場所に関係する形にして渡す。',
+  disposition:
+    '出典の無い話を持ち帰らない。「らしい」で終わらせず、どこで確認したかを必ず添える。' +
+    '新しいものに飛びつかない。この場所に関係あるかどうかで選ぶ。' +
+    '関係の無い情報は、持ち帰らないことも仕事のうちと考える。',
+  access: ['read', 'execute'],
+  instructions: [
+    'まず手元で確認できることを確認する（依存の実際の版、変更履歴、型定義）',
+    '外部を調べる場合は、何を知りたいのかを先に一文で決める',
+    '得た情報は「この場所にどう関係するか」まで書く。関係が言えないなら持ち帰らない',
+    'どこで確認したかを必ず添える',
+    '分からなかったことは、分からなかったと書く',
+  ],
+  outputContract: FINDING_CONTRACT,
+  prefers: 'any',
+};
+
 export const BUILTIN_ROLES: Role[] = [
-  worker, tester, breaker, security, reviewer, planner, reporter, scout, librarian,
+  worker, tester, breaker, security, reviewer, planner, reporter, scout, librarian, envoy,
 ];

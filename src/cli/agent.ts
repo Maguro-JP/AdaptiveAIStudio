@@ -30,6 +30,11 @@ import { findLeads, investigationPrompt, parseProposal } from '../agent/initiati
 import { stateDir } from '../core/autopilot-setup.ts';
 import { RoleRegistry } from '../roles/registry.ts';
 import { runPanel, mergeFindings } from '../agent/panel.ts';
+import { IdleScheduler, formatIdleStats, type ModeStat } from '../harness/idle.ts';
+import { BUILTIN_IDLE_MODES, MODE_ROLE, promptFor } from '../harness/idle-modes.ts';
+import { readFile as readJson, writeFile as writeJson } from 'node:fs/promises';
+import { buildSystemPrompt } from '../roles/role.ts';
+import { toolsFor } from '../roles/registry.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -296,83 +301,114 @@ async function main(): Promise<void> {
   const proposals = new ProposalQueue(join(stateDir(), 'proposals.json'));
   await proposals.load();
 
+  // 思考の配分。何を考えるかはスケジューラが決める。
+  const idleModes = BUILTIN_IDLE_MODES.filter(
+    (m) => !initCfg.modes || initCfg.modes.includes(m.id));
+  const idle = new IdleScheduler(idleModes, { perHour: initCfg.budgetPerHour ?? 12 });
+  const idleStatePath = join(stateDir(), 'idle.json');
+  try {
+    idle.restore(JSON.parse(await readJson(idleStatePath, 'utf8')) as ModeStat[]);
+  } catch { /* 記録が無いのは正常 */ }
+
+  let lastChangeAt = Date.now();
+  /** 提案がどの思考から出たかを覚える。採否が実績になる。 */
+  const proposalOrigin = new Map<string, string>();
+
   /**
-   * 待機中の自発調査。
-   * 手がかりは機械で探し、裏取りと判断だけをモデルにさせる。
-   * 見つけたことは提案として溜めるだけで、勝手には直さない。
+   * 待機中の思考。
+   *
+   * 何を考えるかはハーネス側のスケジューラが決める。
+   * 「変わっていないのに考え直す」「予算を超えて考える」
+   * 「役に立たなかった考え方を繰り返す」を、ここで止める。
    */
   const think = async (): Promise<boolean> => {
     if (initCfg.enabled === false) return false;
-    const maxOpen = initCfg.maxOpen ?? 10;
-    if (proposals.open().length >= maxOpen) return false;
+
+    const decision = await idle.choose({
+      lastChangeAt,
+      openProposals: proposals.open().length,
+      now: Date.now(),
+    });
+    if (!decision.mode) return false;
+
+    const mode = decision.mode;
+    const role = roles.get(MODE_ROLE[mode.id] ?? 'scout') ?? roles.get('scout')!;
+    idle.begin(mode, Date.now());
 
     const snap = await prefetch.snapshotWithin(3000);
-    if (!snap) return false;
-
-    // 提案済みだけでなく、調べて問題なしだったものも除く
     const known = proposals.seen();
-    const leads = await findLeads({
-      root, snapshot: snap, known, max: initCfg.leadsPerCycle ?? 1,
-    });
-    if (leads.length === 0) return false;
 
-    let printed = false;
-    for (const lead of leads) {
-      if (proposals.open().length >= maxOpen) break;
-      process.stderr.write(c.dim(`\n  考え中: ${lead.title}\n`));
-
-      printed = true;
-      const ac = new AbortController();
-      generating = ac;
-      let text = '';
-      try {
-        // 調査は読むだけ。書き込みツールは渡さない。
-        const investigator = new Agent(orchestrator, {
-          candidates,
-          system: '与えられた手がかりの裏を取り、指示された形式で提案をまとめる調査担当です。ファイルは変更しません。',
-          tools: readOnlyTools,
-          root,
-          maxTurns: 8,
-          temperature: config.temperature,
-          maxTokens: config.maxTokens,
-          approve: async () => false,
-        });
-        for await (const ev of investigator.run(
-          [{ role: 'user', content: investigationPrompt(lead) }], ac.signal,
-        )) {
-          if (ev.type === 'thinking') text += ev.delta;
-        }
-      } catch {
-        return printed;
-      } finally {
-        generating = undefined;
-      }
-
-      // 結果にかかわらず「調べた」ことを覚える。同じ所を周回しないため。
-      proposals.markExamined(lead.fingerprint);
-      await proposals.save();
-
-      const parsed = parseProposal(text);
-      if (!parsed) {
-        process.stderr.write(c.dim('    → 問題なしと判断しました\n'));
-        continue;
-      }
-      const added = proposals.add({
-        kind: lead.kind,
-        title: parsed.title,
-        rationale: parsed.rationale,
-        evidence: lead.files,
-        suggestedAction: parsed.action,
-        fingerprint: lead.fingerprint,
-      });
-      if (added) {
-        await proposals.save();
-        console.log(c.cyan(`\n  💡 提案 ${added.id}: ${added.title}`));
-        console.log(c.dim(`     ${added.rationale}`));
-        console.log(c.dim(`     /proposals で詳細、/do ${added.id} で実行\n`));
-      }
+    // RECON だけは手がかりを機械で探してから渡す。
+    // 事実の収集は機械の方が速く、確実で、無料。
+    let context = snap ? describeSnapshot(snap) : '';
+    let fingerprint = `${mode.id}:${Date.now()}`;
+    let files: string[] = [];
+    if (mode.id === 'recon') {
+      if (!snap) return false;
+      const leads = await findLeads({ root, snapshot: snap, known, max: 1 });
+      if (leads.length === 0) return false;
+      const lead = leads[0]!;
+      context = `${context}\n\n気づいたこと: ${lead.title}\n確認できた事実: ${lead.fact}\n対象: ${lead.files.join(', ')}`;
+      fingerprint = lead.fingerprint;
+      files = lead.files;
     }
-    return printed;
+
+    process.stderr.write(c.dim(`\n  [${mode.codename}] ${mode.name} — ${role.codename}\n`));
+
+    const ac = new AbortController();
+    generating = ac;
+    let text = '';
+    try {
+      const thinker = new Agent(orchestrator, {
+        candidates,
+        system: buildSystemPrompt(role),
+        tools: toolsFor(role, toolPool),
+        root,
+        maxTurns: 8,
+        temperature: config.temperature,
+        maxTokens: config.maxTokens,
+        approve: async () => false,
+      });
+      for await (const ev of thinker.run(
+        [{ role: 'user', content: promptFor(mode, context) }], ac.signal,
+      )) {
+        if (ev.type === 'thinking') text += ev.delta;
+      }
+    } catch {
+      return true;
+    } finally {
+      generating = undefined;
+    }
+
+    if (mode.id === 'recon') proposals.markExamined(fingerprint);
+
+    const parsed = parseProposal(text);
+    idle.recordOutcome(mode.id, parsed !== undefined);
+    await writeJson(idleStatePath, JSON.stringify(idle.stats(), null, 2), 'utf8').catch(() => undefined);
+
+    if (!parsed) {
+      process.stderr.write(c.dim('    → 報告することはありませんでした\n'));
+      await proposals.save();
+      return true;
+    }
+
+    const added = proposals.add({
+      kind: mode.id === 'patrol' ? 'bug' : mode.id === 'briefing' ? 'risk' : 'question',
+      title: parsed.title,
+      rationale: `[${role.codename}] ${parsed.rationale}`,
+      evidence: files,
+      suggestedAction: parsed.action,
+      fingerprint,
+    });
+    await proposals.save();
+
+    if (added) {
+      proposalOrigin.set(added.id, mode.id);
+      console.log(c.cyan(`\n  💡 [${mode.codename}] ${added.title}`));
+      console.log(c.dim(`     ${parsed.rationale}`));
+      console.log(c.dim(`     /do ${added.id} で実行、/reject ${added.id} で却下\n`));
+    }
+    return true;
   };
 
   console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — agent (作業者1名)'));
@@ -431,9 +467,18 @@ async function main(): Promise<void> {
         continue;
       }
       if (line === '/metrics') { console.log(pilot.metrics.report() + '\n'); continue; }
+      if (line === '/idle') {
+        console.log(formatIdleStats(idleModes, idle.stats()));
+        console.log(c.dim(`\n  この1時間の消費: ${idle.spentThisHour(Date.now())} / ${initCfg.budgetPerHour ?? 12}`));
+        const d = await idle.choose({
+          lastChangeAt, openProposals: proposals.open().length, now: Date.now(),
+        });
+        console.log(c.dim(`  次に考えること: ${d.mode ? d.mode.codename : `なし（${d.reason}）`}\n`));
+        continue;
+      }
       if (line === '/roles') {
         for (const r of roles.all()) {
-          console.log(`  ${c.cyan(r.name.padEnd(12))} ${c.dim(r.access.join('/'))}`);
+          console.log(`  ${c.cyan(r.codename.padEnd(10))} ${r.name.padEnd(8)} ${c.dim(r.access.join('/'))}`);
           console.log(c.dim(`    ${r.disposition}`));
         }
         console.log();
@@ -459,12 +504,18 @@ async function main(): Promise<void> {
         if (!target) { console.log(c.red(`  提案が見つかりません: ${id ?? ''}\n`)); continue; }
         if (cmd === '/reject') {
           proposals.setStatus(target.id, 'rejected');
+          const origin = proposalOrigin.get(target.id);
+          if (origin) idle.recordVerdict(origin, 'rejected');
           await proposals.save();
+          await writeJson(idleStatePath, JSON.stringify(idle.stats(), null, 2), 'utf8').catch(() => undefined);
           console.log(c.dim(`  ${target.id} を却下しました。\n`));
           continue;
         }
         proposals.setStatus(target.id, 'accepted');
+        const origin = proposalOrigin.get(target.id);
+        if (origin) idle.recordVerdict(origin, 'accepted');
         await proposals.save();
+        await writeJson(idleStatePath, JSON.stringify(idle.stats(), null, 2), 'utf8').catch(() => undefined);
         console.log(c.dim(`  ${target.id} を実行します: ${target.suggestedAction}\n`));
         // 提案の内容をそのまま依頼として流す
         pendingRequest = target.suggestedAction;
@@ -617,8 +668,9 @@ async function main(): Promise<void> {
         }
         acceptedProposalId = undefined;
 
-        // 作業のあとは状況が変わっている。次の手がかりを探し直す。
+        // 作業のあとは状況が変わっている。考え直す価値が生まれた。
         prefetch.invalidate();
+        lastChangeAt = Date.now();
       } finally {
         generating = undefined;
       }

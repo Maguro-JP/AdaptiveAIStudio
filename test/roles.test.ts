@@ -24,7 +24,7 @@ describe('役職の定義', () => {
   test('組み込みの役職が揃っている', () => {
     const r = new RoleRegistry();
     for (const id of ['worker', 'tester', 'breaker', 'security', 'reviewer',
-                      'planner', 'reporter', 'scout', 'librarian']) {
+                      'planner', 'reporter', 'scout', 'librarian', 'envoy']) {
       assert.ok(r.get(id), `${id} が登録されていない`);
     }
   });
@@ -44,6 +44,51 @@ describe('役職の定義', () => {
         `${role.id} の指示が少なすぎる（気質が行動に落ちていない）`);
       assert.ok(role.disposition.length > 20, `${role.id} の気質が薄い`);
     }
+  });
+});
+
+describe('呼び名', () => {
+  test('全員に英名がある', () => {
+    for (const r of BUILTIN_ROLES) {
+      assert.match(r.codename, /^[A-Z][A-Z-]+$/, `${r.id} の英名が無い`);
+    }
+  });
+
+  test('英名は重複しない', () => {
+    const names = BUILTIN_ROLES.map((r) => r.codename);
+    assert.equal(new Set(names).size, names.length);
+  });
+
+  test('システムプロンプトで英名を名乗る', () => {
+    assert.match(buildSystemPrompt(breaker), /GREMLIN/);
+  });
+
+  test('追加した役職にも英名が付く', () => {
+    const r = new RoleRegistry([{
+      id: 'perf', name: '性能担当', responsibility: 'x', disposition: 'y',
+      access: ['read'], instructions: ['a', 'b', 'c'],
+    }]);
+    assert.equal(r.get('perf')!.codename, 'PERF');
+  });
+});
+
+describe('情報担当', () => {
+  test('外を見る ENVOY と、手元を見る SCOUT を分けている', () => {
+    const r = new RoleRegistry();
+    const envoy = r.get('envoy')!;
+    const scout = r.get('scout')!;
+    assert.match(envoy.responsibility, /外の世界/);
+    assert.match(scout.responsibility, /手元にない/);
+  });
+
+  test('関係の無い情報を持ち帰らないことを明記している', () => {
+    const envoy = new RoleRegistry().get('envoy')!;
+    assert.ok(envoy.instructions.some((i) => i.includes('関係が言えないなら持ち帰らない')));
+  });
+
+  test('出典を求めている', () => {
+    const envoy = new RoleRegistry().get('envoy')!;
+    assert.match(envoy.disposition, /出典/);
   });
 });
 

@@ -18,6 +18,12 @@ export type ToolAccess = 'read' | 'write' | 'execute';
 
 export interface Role {
   id: string;
+  /**
+   * 呼び名。役職ではなく「その人」を指す名前。
+   * 肩書きで呼ぶと機能に見えるが、名前で呼ぶと人に見える。
+   * 社会として動かすなら、後者の方が正しい。
+   */
+  codename: string;
   name: string;
   /** 何をする人か */
   responsibility: string;
@@ -44,7 +50,7 @@ export interface Role {
 /** 役職からシステムプロンプトを組み立てる。 */
 export function buildSystemPrompt(role: Role): string {
   const lines = [
-    `あなたは「${role.name}」です。`,
+    `あなたは ${role.codename}（${role.name}）です。`,
     '',
     `## 責務`,
     role.responsibility,

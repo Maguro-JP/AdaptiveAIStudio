@@ -11,6 +11,7 @@ import type { Tool } from '../agent/tools/types.ts';
 
 export interface RoleOverride {
   id: string;
+  codename?: string;
   name?: string;
   responsibility?: string;
   disposition?: string;
@@ -51,6 +52,7 @@ export class RoleRegistry {
     }
     const merged: Role = {
       id: o.id,
+      codename: o.codename ?? base?.codename ?? o.id.toUpperCase(),
       name: o.name ?? base?.name ?? o.id,
       responsibility: o.responsibility ?? base?.responsibility ?? '',
       disposition: o.disposition ?? base?.disposition ?? '',
