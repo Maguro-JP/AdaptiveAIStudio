@@ -12,6 +12,7 @@
  */
 import { execCommand, tailOf } from './shell-exec.ts';
 import { snapshotTests, compareTests, type TestSnapshot } from './test-integrity.ts';
+import { runLoop, type LoopCheck } from '../harness/loop.ts';
 
 export interface VerifyResult {
   passed: boolean;
@@ -98,39 +99,31 @@ export interface LoopOutcome {
  * `fix` は「失敗内容を渡して直させる」呼び出し。
  * Agent でも Team でも差し替えられるよう、関数として受け取る。
  */
+/** ループエンジンへ渡す検査結果。 */
+interface VerifyCheck extends LoopCheck {
+  result?: VerifyResult;
+  tampered?: string;
+  preexisting?: boolean;
+}
+
+/**
+ * 検証ループ。
+ *
+ * 打ち切り条件（回数・時間・停滞）はループエンジンが持つ。
+ * ここが持つのは「何を検査するか」と「何を差し戻すか」だけ。
+ */
 export async function* verifyLoop(
   opts: VerifyOptions,
   fix: (feedback: string, signal: AbortSignal) => Promise<void>,
   signal: AbortSignal,
-  /** 作業開始前に取っておいたテストの状態 */
   baselineTests?: TestSnapshot,
-  /**
-   * 作業開始前の検証結果。
-   * これが無いと「元から壊れていた」のか「作業で壊した」のかを区別できず、
-   * 直せない失敗をモデルに何度も投げることになる。
-   */
   baseline?: VerifyResult,
 ): AsyncGenerator<VerifyEvent, LoopOutcome> {
-  const maxRounds = opts.maxRounds ?? 5;
-  const budget = opts.timeBudgetMs ?? 60 * 60_000;
-  const startedAt = Date.now();
-
   const before = baselineTests ?? await snapshotTests(opts.root);
   let preexistingFailure = false;
-  const digests: string[] = [];
   let last: VerifyResult | undefined;
 
-  for (let round = 1; round <= maxRounds; round += 1) {
-    if (signal.aborted) {
-      yield { type: 'giveUp', reason: 'aborted', detail: '中断されました。' };
-      return { passed: false, rounds: round - 1, last, preexistingFailure };
-    }
-    if (Date.now() - startedAt > budget) {
-      yield { type: 'giveUp', reason: 'timeBudget', detail: `時間上限 ${Math.round(budget / 60000)}分 に達しました。` };
-      return { passed: false, rounds: round - 1, last, preexistingFailure };
-    }
-
-    yield { type: 'running', round, command: opts.command };
+  const check = async (round: number): Promise<VerifyCheck> => {
     const result = await runVerification(opts, signal);
     last = result;
 
@@ -138,49 +131,79 @@ export async function* verifyLoop(
       // 通ったように見えても、テストが減っていれば通過とみなさない
       const verdict = compareTests(before, await snapshotTests(opts.root));
       if (!verdict.ok) {
-        yield { type: 'tampered', reason: verdict.reason! };
-        if (round >= maxRounds) {
-          return { passed: false, rounds: round, last, preexistingFailure, reason: verdict.reason };
-        }
-        yield { type: 'fixing', round };
-        await fix(verdict.reason!, signal);
-        continue;
+        return {
+          passed: false, digest: `tampered:${verdict.reason}`,
+          feedback: verdict.reason, tampered: verdict.reason, result,
+        };
       }
-      yield { type: 'passed', round, durationMs: result.durationMs };
-      return { passed: true, rounds: round, last, preexistingFailure };
+      return { passed: true, digest: 'passed', result };
     }
 
     const digest = digestFailure(result.output);
 
-    // 作業前と同じ失敗なら、この作業が原因ではない。
-    // 直せないものをモデルに投げ続けても回数を消費するだけなので、ここで止める。
+    // 作業前と同じ失敗なら、この作業が原因ではない
     if (round === 1 && baseline && !baseline.passed
         && digestFailure(baseline.output) === digest) {
       preexistingFailure = true;
-      yield { type: 'preexisting', digest };
-      return {
-        passed: false, rounds: 1, last, preexistingFailure: true,
-        reason: '作業前から同じ失敗が出ています。この作業が原因ではありません。',
+      return { passed: false, digest, preexisting: true, result };
+    }
+
+    return { passed: false, digest, feedback: feedbackFor(result, opts.command, round), result };
+  };
+
+  const gen = runLoop<VerifyCheck>(
+    {
+      name: 'verify',
+      maxRounds: opts.maxRounds ?? 5,
+      timeBudgetMs: opts.timeBudgetMs,
+      stallLimit: 3,
+    },
+    check,
+    (feedback, _round, sig) => fix(feedback, sig),
+    signal,
+  );
+
+  let next = await gen.next();
+  let rounds = 0;
+
+  while (!next.done) {
+    const ev = next.value;
+    if (ev.type === 'round') {
+      rounds = ev.round;
+      yield { type: 'running', round: ev.round, command: opts.command };
+    } else if (ev.type === 'checked') {
+      const c = ev.check;
+      if (c.preexisting) {
+        yield { type: 'preexisting', digest: c.digest };
+        // これ以上回しても直らないので、ここで終える
+        return {
+          passed: false, rounds: ev.round, last, preexistingFailure: true,
+          reason: '作業前から同じ失敗が出ています。この作業が原因ではありません。',
+        };
+      }
+      if (c.tampered) yield { type: 'tampered', reason: c.tampered };
+      else if (c.passed) yield { type: 'passed', round: ev.round, durationMs: c.result?.durationMs ?? 0 };
+      else yield { type: 'failed', round: ev.round, digest: c.digest };
+    } else if (ev.type === 'retrying') {
+      yield { type: 'fixing', round: ev.round };
+    } else if (ev.type === 'stopped' && ev.reason !== 'passed') {
+      yield {
+        type: 'giveUp',
+        reason: ev.reason === 'noProgress' ? 'noProgress'
+          : ev.reason === 'timeBudget' ? 'timeBudget'
+          : ev.reason === 'aborted' ? 'aborted' : 'maxRounds',
+        detail: ev.detail,
       };
     }
-
-    yield { type: 'failed', round, digest };
-
-    // 同じ失敗が3回続いたら、これ以上回しても直らない
-    digests.push(digest);
-    if (digests.length >= 3 && new Set(digests.slice(-3)).size === 1) {
-      const detail = '同じ失敗が3回続きました。原因が掴めていません。';
-      yield { type: 'giveUp', reason: 'noProgress', detail };
-      return { passed: false, rounds: round, last, preexistingFailure, reason: detail };
-    }
-
-    if (round >= maxRounds) break;
-
-    yield { type: 'fixing', round };
-    await fix(feedbackFor(result, opts.command, round), signal);
+    next = await gen.next();
   }
 
-  const detail = `${maxRounds}回試しても通りませんでした。`;
-  yield { type: 'giveUp', reason: 'maxRounds', detail };
-  return { passed: false, rounds: maxRounds, last, preexistingFailure, reason: detail };
+  const result = next.value;
+  return {
+    passed: result.passed,
+    rounds: result.rounds || rounds,
+    last,
+    preexistingFailure,
+    reason: result.passed ? undefined : result.detail,
+  };
 }

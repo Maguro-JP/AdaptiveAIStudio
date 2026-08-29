@@ -36,6 +36,22 @@ export interface AasConfig {
   maxTokens?: number;
   agent?: AgentConfig;
   runtime?: RuntimeConfig;
+  /** ハーネス規則。モデルの誤りを実行前に止める。 */
+  harness?: HarnessConfig;
+}
+
+export interface HarnessConfig {
+  enabled?: boolean;
+  /** 書き込みを禁じるパス（グロブ） */
+  protectedPaths?: string[];
+  /** 1つの依頼で書き換えられるファイル数の上限 */
+  maxFilesPerTask?: number;
+  /** 既存ファイルを読まずに上書きするのを禁じる。既定 true */
+  readBeforeWrite?: boolean;
+  /** 監査ログの出力先 */
+  auditLog?: string;
+  /** 検証を打ち切ったとき変更を巻き戻す。既定 false（gitが本来の安全網のため） */
+  rollbackOnGiveUp?: boolean;
 }
 
 export interface RuntimeConfig {
@@ -175,6 +191,7 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
     maxTokens: parsed.maxTokens ?? DEFAULT_CONFIG.maxTokens,
     agent: parsed.agent ?? {},
     runtime: parsed.runtime ?? {},
+    harness: parsed.harness ?? {},
   };
   if (config.agent?.lanes) validateLanes(config);
   validate(config);

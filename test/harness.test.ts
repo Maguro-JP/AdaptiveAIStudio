@@ -1,0 +1,281 @@
+/**
+ * ハーネスの検証。
+ * プロンプトでのお願いではなく、実行の手前で止まることを確かめる。
+ */
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Harness } from '../src/harness/harness.ts';
+import { AuditLog } from '../src/harness/audit.ts';
+import { Checkpoint } from '../src/harness/checkpoint.ts';
+import { minimatch } from '../src/harness/glob.ts';
+import {
+  workspaceBoundary, protectedPaths, testProtection, blastRadius,
+  readBeforeWrite, noRepeatedWrites, dangerousCommands, afterWriteHint,
+} from '../src/harness/builtin-rules.ts';
+import { readFileTool, writeFileTool } from '../src/agent/tools/fs.ts';
+import { createRunCommandTool } from '../src/agent/tools/shell.ts';
+import type { Rule } from '../src/harness/rules.ts';
+import type { ToolContext } from '../src/agent/tools/types.ts';
+
+async function project(files: Record<string, string> = {}): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'aas-harness-'));
+  for (const [name, content] of Object.entries(files)) {
+    const abs = join(root, name);
+    await mkdir(join(abs, '..'), { recursive: true });
+    await writeFile(abs, content);
+  }
+  return root;
+}
+
+function ctx(root: string): ToolContext {
+  return { root, signal: new AbortController().signal, approve: async () => true };
+}
+
+function harness(rules: Rule[], audit = new AuditLog()) {
+  return new Harness({ rules, audit });
+}
+
+describe('規則: 保護対象', () => {
+  test('保護されたファイルへの書き込みを止める', async () => {
+    const root = await project({ '.env': 'SECRET=1', 'src/a.ts': 'x' });
+    const h = harness([protectedPaths(['.env', '**/*.lock'])]);
+    const write = h.wrap(writeFileTool, () => '');
+
+    const blocked = await write.run({ path: '.env', content: 'SECRET=2' }, ctx(root));
+    assert.equal(blocked.isError, true);
+    assert.match(blocked.content, /BLOCKED by protected-paths/);
+    assert.equal(await readFile(join(root, '.env'), 'utf8'), 'SECRET=1', '書き換わってしまった');
+  });
+
+  test('保護対象でなければ通す', async () => {
+    const root = await project({ 'src/a.ts': 'x' });
+    const h = harness([protectedPaths(['.env'])]);
+    const write = h.wrap(writeFileTool, () => '');
+    const r = await write.run({ path: 'src/a.ts', content: 'y' }, ctx(root));
+    assert.notEqual(r.isError, true);
+  });
+
+  test('** が階層を跨いで一致する', () => {
+    assert.equal(minimatch('a/b/c.lock', '**/*.lock'), true);
+    assert.equal(minimatch('c.lock', '**/*.lock'), true);
+    assert.equal(minimatch('a/b/c.ts', '**/*.lock'), false);
+    assert.equal(minimatch('src/a.ts', 'src/*.ts'), true);
+    assert.equal(minimatch('src/x/a.ts', 'src/*.ts'), false);
+  });
+});
+
+describe('規則: テスト保護', () => {
+  test('テストを減らす書き込みを止める', async () => {
+    const root = await project({ 'a.test.ts': 'test("x",()=>{}); test("y",()=>{});' });
+    const h = harness([testProtection]);
+    const write = h.wrap(writeFileTool, () => '');
+
+    const r = await write.run({ path: 'a.test.ts', content: 'test("x",()=>{});' }, ctx(root));
+    assert.equal(r.isError, true);
+    assert.match(r.content, /テストが 2 件から 1 件/);
+    assert.match(await readFile(join(root, 'a.test.ts'), 'utf8'), /test\("y"/, '消えてしまった');
+  });
+
+  test('skip を増やす書き込みを止める', async () => {
+    const root = await project({ 'a.test.ts': 'test("x",()=>{});' });
+    const h = harness([testProtection]);
+    const write = h.wrap(writeFileTool, () => '');
+    const r = await write.run({ path: 'a.test.ts', content: 'test.skip("x",()=>{});' }, ctx(root));
+    assert.equal(r.isError, true);
+    assert.match(r.content, /skip/);
+  });
+
+  test('テストを増やすのは通す', async () => {
+    const root = await project({ 'a.test.ts': 'test("x",()=>{});' });
+    const h = harness([testProtection]);
+    const write = h.wrap(writeFileTool, () => '');
+    const r = await write.run(
+      { path: 'a.test.ts', content: 'test("x",()=>{}); test("z",()=>{});' }, ctx(root));
+    assert.notEqual(r.isError, true);
+  });
+
+  test('新規のテストファイルは通す', async () => {
+    const root = await project();
+    const h = harness([testProtection]);
+    const write = h.wrap(writeFileTool, () => '');
+    const r = await write.run({ path: 'new.test.ts', content: 'test("a",()=>{});' }, ctx(root));
+    assert.notEqual(r.isError, true);
+  });
+});
+
+describe('規則: 影響範囲', () => {
+  test('上限を超えるファイル数の書き換えを止める', async () => {
+    const root = await project();
+    const h = harness([blastRadius(2)]);
+    const write = h.wrap(writeFileTool, () => '');
+
+    assert.notEqual((await write.run({ path: 'a.ts', content: '1' }, ctx(root))).isError, true);
+    assert.notEqual((await write.run({ path: 'b.ts', content: '2' }, ctx(root))).isError, true);
+    const third = await write.run({ path: 'c.ts', content: '3' }, ctx(root));
+    assert.equal(third.isError, true);
+    assert.match(third.content, /2 件までです/);
+  });
+
+  test('既に触ったファイルの再編集は数えない', async () => {
+    const root = await project();
+    const h = harness([blastRadius(1)]);
+    const write = h.wrap(writeFileTool, () => '');
+    await write.run({ path: 'a.ts', content: '1' }, ctx(root));
+    const again = await write.run({ path: 'a.ts', content: '2' }, ctx(root));
+    assert.notEqual(again.isError, true);
+  });
+
+  test('依頼が変われば数え直す', async () => {
+    const root = await project();
+    const h = harness([blastRadius(1)]);
+    const write = h.wrap(writeFileTool, () => '');
+    await write.run({ path: 'a.ts', content: '1' }, ctx(root));
+    h.beginTask();
+    const next = await write.run({ path: 'b.ts', content: '2' }, ctx(root));
+    assert.notEqual(next.isError, true);
+  });
+});
+
+describe('規則: 読んでから書く', () => {
+  test('既存ファイルを読まずに上書きさせない', async () => {
+    const root = await project({ 'a.ts': 'original' });
+    const h = harness([readBeforeWrite]);
+    const write = h.wrap(writeFileTool, () => '');
+    const r = await write.run({ path: 'a.ts', content: 'replaced' }, ctx(root));
+    assert.equal(r.isError, true);
+    assert.match(r.content, /まだ読んでいません/);
+    assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'original');
+  });
+
+  test('読んだ後なら通す', async () => {
+    const root = await project({ 'a.ts': 'original' });
+    const h = harness([readBeforeWrite]);
+    const read = h.wrap(readFileTool, () => '');
+    const write = h.wrap(writeFileTool, () => '');
+    await read.run({ path: 'a.ts' }, ctx(root));
+    const r = await write.run({ path: 'a.ts', content: 'replaced' }, ctx(root));
+    assert.notEqual(r.isError, true);
+  });
+
+  test('新規作成は読まずに通す', async () => {
+    const root = await project();
+    const h = harness([readBeforeWrite]);
+    const write = h.wrap(writeFileTool, () => '');
+    assert.notEqual((await write.run({ path: 'new.ts', content: 'x' }, ctx(root))).isError, true);
+  });
+});
+
+describe('規則: その他', () => {
+  test('同じ内容の再書き込みを止める', async () => {
+    const root = await project();
+    const h = harness([noRepeatedWrites]);
+    const write = h.wrap(writeFileTool, () => '');
+    await write.run({ path: 'a.ts', content: 'same' }, ctx(root));
+    const again = await write.run({ path: 'a.ts', content: 'same' }, ctx(root));
+    assert.equal(again.isError, true);
+    assert.match(again.content, /同じ内容/);
+  });
+
+  test('作業ディレクトリの外を止める', async () => {
+    const root = await project();
+    const h = harness([workspaceBoundary]);
+    const write = h.wrap(writeFileTool, () => '');
+    const r = await write.run({ path: '../escape.ts', content: 'x' }, ctx(root));
+    assert.equal(r.isError, true);
+    assert.match(r.content, /BLOCKED by workspace-boundary/);
+  });
+
+  test('破壊的なコマンドを止める', async () => {
+    const root = await project();
+    const h = harness([dangerousCommands]);
+    const run = h.wrap(createRunCommandTool({ allowed: ['git', 'echo'] }), () => '');
+
+    const blocked = await run.run({ command: 'git reset --hard HEAD~5' }, ctx(root));
+    assert.equal(blocked.isError, true);
+    assert.match(blocked.content, /git の破壊的操作/);
+
+    const fine = await run.run({ command: 'echo hello' }, ctx(root));
+    assert.notEqual(fine.isError, true);
+  });
+
+  test('実行後に気づかせる情報を差し込める', async () => {
+    const root = await project();
+    const h = harness([afterWriteHint((p) => p.endsWith('.ts') ? '型検査を忘れずに' : undefined)]);
+    const write = h.wrap(writeFileTool, () => '');
+    const r = await write.run({ path: 'a.ts', content: 'x' }, ctx(root));
+    assert.match(r.content, /型検査を忘れずに/);
+  });
+});
+
+describe('監査ログ', () => {
+  test('止めた理由が記録される', async () => {
+    const root = await project({ '.env': 'x' });
+    const audit = new AuditLog();
+    const h = harness([protectedPaths(['.env'])], audit);
+    const write = h.wrap(writeFileTool, () => '');
+    await write.run({ path: '.env', content: 'y' }, ctx(root));
+
+    const denied = audit.entries().filter((e) => e.outcome === 'denied');
+    assert.equal(denied.length, 1);
+    assert.equal(denied[0]!.rule, 'protected-paths');
+    assert.equal(audit.summary().denied, 1);
+  });
+
+  test('規則ごとの発動回数を集計できる', async () => {
+    const root = await project();
+    const audit = new AuditLog();
+    const h = harness([blastRadius(1)], audit);
+    const write = h.wrap(writeFileTool, () => '');
+    await write.run({ path: 'a.ts', content: '1' }, ctx(root));
+    await write.run({ path: 'b.ts', content: '2' }, ctx(root));
+    await write.run({ path: 'c.ts', content: '3' }, ctx(root));
+    assert.equal(audit.summary().byRule.get('blast-radius'), 2);
+  });
+});
+
+describe('チェックポイント', () => {
+  test('変更を巻き戻せる', async () => {
+    const root = await project({ 'a.ts': 'original' });
+    const cp = new Checkpoint(root);
+    await cp.capture('a.ts');
+    await writeFile(join(root, 'a.ts'), 'modified');
+
+    const restored = await cp.restore();
+    assert.deepEqual(restored, ['a.ts']);
+    assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'original');
+  });
+
+  test('新規作成されたファイルは削除して戻す', async () => {
+    const root = await project();
+    const cp = new Checkpoint(root);
+    await cp.capture('new.ts');
+    await writeFile(join(root, 'new.ts'), 'created');
+
+    await cp.restore();
+    assert.equal(await readFile(join(root, 'new.ts'), 'utf8').catch(() => undefined), undefined);
+  });
+
+  test('commit すれば巻き戻さない', async () => {
+    const root = await project({ 'a.ts': 'original' });
+    const cp = new Checkpoint(root);
+    await cp.capture('a.ts');
+    await writeFile(join(root, 'a.ts'), 'modified');
+    cp.commit();
+    await cp.restore();
+    assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'modified');
+  });
+
+  test('同じファイルは最初の状態だけを控える', async () => {
+    const root = await project({ 'a.ts': 'v1' });
+    const cp = new Checkpoint(root);
+    await cp.capture('a.ts');
+    await writeFile(join(root, 'a.ts'), 'v2');
+    await cp.capture('a.ts');
+    await writeFile(join(root, 'a.ts'), 'v3');
+    await cp.restore();
+    assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'v1');
+  });
+});

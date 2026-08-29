@@ -22,6 +22,8 @@ import { startWarmPool } from '../core/warm-setup.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { verifyLoop, runVerification, type VerifyResult } from '../agent/verify.ts';
 import { snapshotTests } from '../agent/test-integrity.ts';
+import { buildHarness } from '../core/harness-setup.ts';
+import { Checkpoint } from '../harness/checkpoint.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -103,10 +105,22 @@ async function main(): Promise<void> {
     else if (e.type === 'evict') process.stderr.write(c.dim(`  解放: ${e.ref} (${e.reason})\n`));
   });
 
-  const tools = [
+  // ハーネス: 規則をツールの手前に挟む。
+  // モデルに守らせるのではなく、実行させないことで守る。
+  let currentInstruction = '';
+  const harness = buildHarness(config, (d) => {
+    if (d.outcome === 'denied') {
+      console.log(c.red(`    ⛔ ${d.rule}: ${d.reason ?? ''}`));
+    } else if (d.outcome === 'warned') {
+      console.log(c.yellow(`    ⚠ ${d.rule}: ${d.reason ?? ''}`));
+    }
+  });
+
+  const rawTools = [
     readFileTool, listFilesTool, searchTextTool, writeFileTool,
     createRunCommandTool({ allowed: agentCfg.allowedCommands }),
   ];
+  const tools = harness.wrapAll(rawTools, () => currentInstruction);
 
   // 依頼のたびに、その時点で分かっている状況を作業者へ渡す。
   // まだ構築中なら少しだけ待つ。モデルが調べ直すより速い。
@@ -117,6 +131,7 @@ async function main(): Promise<void> {
   };
 
   const verifyCfg = agentCfg.verify ?? {};
+  const harnessCfg = config.harness ?? {};
 
   /** 検証コマンドを決める。設定 > 先読みが検出したもの。 */
   const verifyCommand = async (): Promise<string | undefined> => {
@@ -144,11 +159,11 @@ async function main(): Promise<void> {
     before: Awaited<ReturnType<typeof snapshotTests>>,
     baseline: VerifyResult | undefined,
     signal: AbortSignal,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const command = await verifyCommand();
     if (!command) {
       console.log(c.dim('  検証コマンドが分からないため、検証は行いません。\n'));
-      return;
+      return true;
     }
 
     const fix = async (feedback: string, sig: AbortSignal): Promise<void> => {
@@ -166,6 +181,7 @@ async function main(): Promise<void> {
       if (text) stdout.write('\n');
     };
 
+    let passed = false;
     for await (const ev of verifyLoop(
       {
         command, root,
@@ -180,6 +196,7 @@ async function main(): Promise<void> {
           console.log(c.dim(`  検証 ${ev.round}回目: ${ev.command}`));
           break;
         case 'passed':
+          passed = true;
           console.log(c.green(`  ✓ 検証を通過しました`) + c.dim(` (${(ev.durationMs / 1000).toFixed(1)}s)\n`));
           break;
         case 'failed':
@@ -201,6 +218,7 @@ async function main(): Promise<void> {
           break;
       }
     }
+    return passed;
   };
 
   console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — agent (作業者1名)'));
@@ -254,6 +272,19 @@ async function main(): Promise<void> {
         continue;
       }
       if (line === '/metrics') { console.log(pilot.metrics.report() + '\n'); continue; }
+      if (line === '/rules') {
+        console.log(c.dim('  実行前に適用される規則:'));
+        for (const r of harness.rules()) console.log(`  ${c.cyan(r.name)} — ${c.dim(r.description)}`);
+        console.log();
+        continue;
+      }
+      if (line === '/audit') {
+        const s = harness.audit.summary();
+        console.log(`  許可 ${s.allowed} / 拒否 ${s.denied} / 警告 ${s.warned}`);
+        for (const [rule, n] of s.byRule) console.log(c.dim(`    ${rule}: ${n}回`));
+        console.log();
+        continue;
+      }
       if (line === '/context') {
         const s = await prefetch.snapshot();
         console.log(s ? describeSnapshot(s) || c.dim('  先読みできる情報がありません。') : c.dim('  先読みは開始されていません。'));
@@ -271,6 +302,9 @@ async function main(): Promise<void> {
       }
 
       history.push({ role: 'user', content: line });
+      currentInstruction = line;
+      harness.beginTask();
+      const checkpoint = new Checkpoint(root);
       generating = new AbortController();
       // 作業前のテストの状態を控えておく。改ざん検出の基準になる。
       const verifyOn = verifyCfg.enabled !== false;
@@ -313,9 +347,15 @@ async function main(): Promise<void> {
             case 'fallback':
               console.log(c.yellow(`  ⤷ ${ev.from} → ${ev.to} に切替`) + c.dim(` (${ev.reason})`));
               break;
-            case 'toolStart':
+            case 'toolStart': {
               console.log(c.dim(`  · ${ev.call.name} ${summarize(ev.call.args)}`));
+              // 書き込む前の状態を控える。打ち切ったときに戻せるように。
+              if (ev.call.name === 'write_file' && harnessCfg.rollbackOnGiveUp) {
+                const p = (ev.call.args as { path?: unknown }).path;
+                if (typeof p === 'string') await checkpoint.capture(p);
+              }
               break;
+            }
             case 'toolEnd':
               console.log(ev.isError
                 ? c.red(`    ✗ ${firstLine(ev.result)}`)
@@ -347,8 +387,17 @@ async function main(): Promise<void> {
         }
 
         // 書いて終わりにしない。テストを流し、失敗したら自分で直させる。
+        let verified = true;
         if (finishedReason === 'completed' && testsBefore) {
-          await runVerify(testsBefore, baseline, generating.signal);
+          verified = await runVerify(testsBefore, baseline, generating.signal);
+        }
+
+        // 打ち切った場合、中途半端な状態を残さない選択肢を持つ
+        if (!verified && harnessCfg.rollbackOnGiveUp && checkpoint.size > 0) {
+          const restored = await checkpoint.restore();
+          console.log(c.yellow(`  変更を巻き戻しました: ${restored.join(', ')}\n`));
+        } else {
+          checkpoint.commit();
         }
       } finally {
         generating = undefined;
