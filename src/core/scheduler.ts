@@ -71,6 +71,8 @@ export class Scheduler {
     const running = new Map<string, Promise<SchedulerEvent>>();
     const queue: SchedulerEvent[] = [];
     let inFlight = 0;
+    /** 直近に使ったレーン = 今ロードされているモデル。優先して使い続ける。 */
+    let lastLaneId: string | undefined;
 
     const ready = (t: Task): boolean => {
       if (outcomes.get(t.id)!.state !== 'pending') return false;
@@ -103,6 +105,7 @@ export class Scheduler {
       outcomes.get(t.id)!.state = 'running';
       const startedAt = Date.now();
       outcomes.get(t.id)!.startedAt = startedAt;
+      lastLaneId = t.laneId;
       inFlight += 1;
       queue.push({ type: 'start', taskId: t.id, laneId: t.laneId });
 
@@ -131,9 +134,21 @@ export class Scheduler {
     for (;;) {
       if (signal.aborted) break;
 
-      // 開始できるものを可能な限り開始する
+      // 開始できるものを可能な限り開始する。
+      // 既に動いているレーンのタスクを優先し、モデル切替の回数を減らす。
+      // 直列リレー（parallel:1 のレーンを渡り歩く）でも切替が最小になる。
+      const activeLanes = new Set(
+        [...running.keys()].map((id) => byId.get(id)?.laneId).filter((v): v is string => !!v),
+      );
+      // 走行中のレーン > 直前に使ったレーン（まだロード済み）> その他
+      const affinity = (laneId: string): number =>
+        activeLanes.has(laneId) ? 2 : laneId === lastLaneId ? 1 : 0;
+      const ordered = activeLanes.size === 0 && lastLaneId === undefined
+        ? tasks
+        : [...tasks].sort((a, b) => affinity(b.laneId) - affinity(a.laneId));
+
       let launched = false;
-      for (const t of tasks) {
+      for (const t of ordered) {
         if (inFlight >= this.#maxTotal) break;
         if (!ready(t)) {
           const reason = outcomes.get(t.id)!.state === 'pending' ? blockedForever(t) : undefined;

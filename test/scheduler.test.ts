@@ -161,3 +161,46 @@ describe('Scheduler', () => {
     assert.equal(outcomes.get('b')?.state, 'skipped');
   });
 });
+
+describe('実行スタイル', () => {
+  test('直列リレー（全レーン parallel:1）でも全タスクが完了する', async () => {
+    const sched = new Scheduler([
+      { id: 'big', candidates: ['local:32b'], parallel: 1 },
+      { id: 'small', candidates: ['local:7b'], parallel: 1 },
+    ], 1); // 全体でも1件ずつ = 完全な直列
+    let concurrent = 0, peak = 0;
+    const mk = (id: string, laneId: string): Task => ({
+      id, laneId,
+      async run() {
+        concurrent += 1; peak = Math.max(peak, concurrent);
+        await sleep(15);
+        concurrent -= 1;
+        return id;
+      },
+    });
+    const { outcomes } = await drain(sched, [
+      mk('a', 'big'), mk('b', 'small'), mk('c', 'big'), mk('d', 'small'),
+    ]);
+    assert.equal(peak, 1, '直列指定なのに並行した');
+    assert.equal([...outcomes.values()].filter((o) => o.state === 'done').length, 4);
+  });
+
+  test('同じレーンのタスクをまとめて流し、モデル切替を減らす', async () => {
+    const sched = new Scheduler([
+      { id: 'big', candidates: ['local:32b'], parallel: 1 },
+      { id: 'small', candidates: ['local:7b'], parallel: 1 },
+    ], 1);
+    const order: string[] = [];
+    const mk = (id: string, laneId: string): Task => ({
+      id, laneId,
+      async run() { order.push(laneId); await sleep(10); return id; },
+    });
+    // 交互に並べても、レーンごとにまとまって実行されることを期待する
+    await drain(sched, [
+      mk('a', 'big'), mk('b', 'small'), mk('c', 'big'), mk('d', 'small'),
+    ]);
+    let switches = 0;
+    for (let i = 1; i < order.length; i += 1) if (order[i] !== order[i - 1]) switches += 1;
+    assert.ok(switches <= 2, `レーン切替が多すぎる: ${switches}回 (${order.join('→')})`);
+  });
+});
