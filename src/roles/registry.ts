@@ -12,6 +12,11 @@ import type { Tool } from '../agent/tools/types.ts';
 export interface RoleOverride {
   id: string;
   codename?: string;
+  /** かつての呼び名。改名しても古い名前で引けるようにする。 */
+  formerly?: string[];
+  /** 仕事の引き継ぎ先。役職は消さず、指し先を示す。 */
+  succeededBy?: string[];
+  retired?: boolean;
   name?: string;
   responsibility?: string;
   disposition?: string;
@@ -25,14 +30,51 @@ export interface RoleOverride {
 
 export class RoleRegistry {
   readonly #roles = new Map<string, Role>();
+  /** 旧名 → 現在のID。改名しても設定と履歴の指し先を失わせない。 */
+  readonly #aliases = new Map<string, string>();
 
   constructor(extra: RoleOverride[] = []) {
     for (const r of BUILTIN_ROLES) this.#roles.set(r.id, r);
     for (const o of extra) this.#apply(o);
+    this.#buildAliases();
   }
 
+  /**
+   * 役職を引く。旧名でも引ける。
+   *
+   * 引き継ぎ済みの役職を引いた場合は、引き継ぎ先を返す。
+   * **いなくなったのではなく、担当が分かれただけ**なので、
+   * 呼べば誰かには繋がる。
+   */
   get(id: string): Role | undefined {
-    return this.#roles.get(id);
+    const direct = this.#roles.get(id) ?? this.#roles.get(this.#aliases.get(id) ?? '');
+    if (!direct) return undefined;
+    if (!direct.retired) return direct;
+
+    // 引き継ぎ先へ回す
+    for (const next of direct.succeededBy ?? []) {
+      const successor = this.get(next);
+      if (successor) return successor;
+    }
+    return direct;
+  }
+
+  /** 現役の役職だけ。引き継ぎ済みは新しい割り当てを受けない。 */
+  active(): Role[] {
+    return this.all().filter((r) => !r.retired);
+  }
+
+  /** 名簿に載っている全員。引き継ぎ済みも含む。消さないため。 */
+  roster(): Role[] {
+    return this.all();
+  }
+
+  #buildAliases(): void {
+    for (const role of this.#roles.values()) {
+      for (const old of role.formerly ?? []) {
+        if (!this.#roles.has(old)) this.#aliases.set(old, role.id);
+      }
+    }
   }
 
   all(): Role[] {
@@ -60,6 +102,9 @@ export class RoleRegistry {
       instructions: o.instructions ?? base?.instructions ?? [],
       outputContract: o.outputContract ?? base?.outputContract,
       prefers: o.prefers ?? base?.prefers ?? 'any',
+      formerly: o.formerly ?? base?.formerly,
+      succeededBy: o.succeededBy ?? base?.succeededBy,
+      retired: o.retired ?? base?.retired,
     };
     this.#roles.set(merged.id, merged);
   }

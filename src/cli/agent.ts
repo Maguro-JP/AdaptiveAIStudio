@@ -29,6 +29,7 @@ import { ProposalQueue, formatProposal } from '../agent/proposals.ts';
 import { findLeads, investigationPrompt, parseProposal } from '../agent/initiative.ts';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { RoleRegistry } from '../roles/registry.ts';
+import { RoleLedger, formatChanges } from '../roles/ledger.ts';
 import { runPanel, mergeFindings } from '../agent/panel.ts';
 import { IdleScheduler, formatIdleStats, type ModeStat } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES, MODE_ROLE, promptFor } from '../harness/idle-modes.ts';
@@ -239,6 +240,18 @@ async function main(): Promise<void> {
 
   // 人員。設定から気質を足したり上書きしたりできる。
   const roles = new RoleRegistry(config.roles ?? []);
+
+  // 名簿は消さない。変わったら必ず周知する。周知前に落ちても、次の起動で伝える。
+  const ledger = new RoleLedger(join(stateDir(), 'roles-ledger.json'));
+  await ledger.load();
+  ledger.sync(roles.roster());
+  const roleNews = ledger.pending();
+  if (roleNews.length > 0) {
+    console.log(c.yellow(formatChanges(roleNews)) + '\n');
+    ledger.markAnnounced();
+  }
+  await ledger.save();
+
   const panelCfg = config.panel ?? {};
 
   /** 権限に応じてツールを配る。持たせない権限は事故にならない。 */
@@ -521,9 +534,18 @@ async function main(): Promise<void> {
         continue;
       }
       if (line === '/roles') {
-        for (const r of roles.all()) {
+        for (const r of roles.active()) {
           console.log(`  ${c.cyan(r.codename.padEnd(10))} ${r.name.padEnd(8)} ${c.dim(r.access.join('/'))}`);
           console.log(c.dim(`    ${r.disposition}`));
+          if (r.formerly?.length) console.log(c.dim(`    旧称: ${r.formerly.join(', ')}`));
+        }
+        const retired = roles.roster().filter((r) => r.retired);
+        if (retired.length > 0) {
+          console.log(c.dim('\n  引き継ぎ済み（呼べば後任に繋がります）'));
+          for (const r of retired) {
+            const to = (r.succeededBy ?? []).map((id) => roles.get(id)?.codename ?? id);
+            console.log(c.dim(`  ${r.codename.padEnd(10)} → ${to.join(', ') || '(未設定)'}`));
+          }
         }
         console.log();
         continue;
