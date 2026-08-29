@@ -125,7 +125,12 @@ npm run team -- tasks.json
 [
   { "id": "auth",  "laneId": "coder", "writes": ["auth.ts"],  "instruction": "..." },
   { "id": "index", "laneId": "coder", "writes": ["index.ts"],
-    "deps": ["auth"], "instruction": "..." }
+    "deps": ["auth"], "instruction": "..." },
+
+  // 同じ作業を複数モデルへ同時に投げ、最初に完了したものを採用する。
+  // ローカルは計算が無料なので、遊ばせるより重ねて投げた方が速い。
+  { "id": "fix", "laneId": "coder", "writes": ["fix.ts"], "instruction": "...",
+    "raceWith": ["ollama:qwen2.5-coder:7b"] }
 ]
 ```
 
@@ -223,6 +228,8 @@ npm run typecheck
 | 実行可能性プランナ（載らないモデルの実行設定を計算） | 動作 |
 | 効率計算（期待実時間でモデルを選ぶ） | 動作 |
 | 自動操縦（設定不要でモデルを選び、裏で乗り換え） | 動作 |
+| 冗長実行（同じ作業を複数モデルへ同時投入し最速を採用） | 動作 |
+| 最良選択（複数の答えを採点して最良を採用） | 動作 |
 | マシン検出（GPU/VRAM/RAM） | 動作 |
 | 実測の蓄積（成功率・見逃し・実測速度） | 動作 |
 | llama.cpp 直接制御ランタイム | 未実装 |
@@ -237,6 +244,7 @@ npm run typecheck
 
 - [実現計画](docs/ROADMAP.md) — 到達目標と改訂フェーズ（**まずこちら**）
 - [組織設計](docs/ORGANIZATION.md) — 職能・部署・人材配置・並列実行の設計
+- [パフォーマンスで戦う](docs/PERFORMANCE.md) — 計算が無料な利点をどう使うか（**重要**）
 - [最も効率の良いモデル運用](docs/MODEL-EFFICIENCY.md) — 何を基準にモデルを選ぶか（**重要**）
 - [32B級を動かすには](docs/RUNNING-LARGE-MODELS.md) — メモリ計算・速度の根拠・MoE・並列と直列
 - [自前化とクラウド解禁の条件](docs/INDEPENDENCE.md) — 脱Ollama依存の段階計画と、クラウドを有効化する基準

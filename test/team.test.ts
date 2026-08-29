@@ -17,7 +17,7 @@ import { readFileTool, writeFileTool } from '../src/agent/tools/fs.ts';
  * 「そのファイルを書く → 報告する」を返す偽モデル。
  * 遅延を入れて並列性を観測できるようにする。
  */
-async function workerServer(delayMs: number) {
+async function workerServer(delayMs: number, opts: { perModelDelay?: Record<string, number>; failModels?: string[] } = {}) {
   let peak = 0;
   let active = 0;
   const server = createServer((req, res) => {
@@ -35,7 +35,15 @@ async function workerServer(delayMs: number) {
       const instruction = parsed.messages.find((m) => m.role === 'user')?.content ?? '';
       const target = /([a-z0-9_]+\.txt)/.exec(instruction)?.[1] ?? 'x.txt';
 
-      await new Promise((r) => setTimeout(r, delayMs));
+      const model = (JSON.parse(body) as { model?: string }).model ?? '';
+      const wait = opts.perModelDelay?.[model] ?? delayMs;
+      await new Promise((r) => setTimeout(r, wait));
+
+      if (opts.failModels?.includes(model)) {
+        active -= 1;
+        res.writeHead(500, { 'content-type': 'text/plain' });
+        return res.end('model broken');
+      }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       if (alreadyWrote) {
         res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: `${target} を作成しました。` } }] })}\n\n`);
@@ -59,8 +67,11 @@ async function workerServer(delayMs: number) {
   };
 }
 
-async function runTeam(items: WorkItem[], parallel: number) {
-  const server = await workerServer(60);
+async function runTeam(
+  items: WorkItem[], parallel: number,
+  serverOpts: { perModelDelay?: Record<string, number>; failModels?: string[] } = {},
+) {
+  const server = await workerServer(60, serverOpts);
   const root = await mkdtemp(join(tmpdir(), 'aas-team-'));
   await writeFile(join(root, 'seed.txt'), 'seed\n');
   try {
@@ -123,5 +134,43 @@ describe('チーム並列実行', () => {
         p.type === 'agent' && p.event.type === 'toolStart');
     assert.ok(toolEvents.some((p) => p.taskId === 't1'));
     assert.ok(toolEvents.some((p) => p.taskId === 't2'));
+  });
+});
+
+describe('冗長実行（同じ作業を複数モデルへ同時に投げる）', () => {
+  test('速い方の結果が採用される', async () => {
+    const { outcomes, progress, root } = await runTeam(
+      [{ id: 't1', laneId: 'coder', writes: ['a.txt'],
+         instruction: 'a.txt を作成してください。', raceWith: ['local:fast'] }],
+      2,
+      { perModelDelay: { m: 300, fast: 20 } },
+    );
+    assert.equal(outcomes.get('t1')?.state, 'done');
+    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'done:a.txt\n');
+
+    const winner = progress.find(
+      (p): p is Extract<TeamProgress, { type: 'race' }> =>
+        p.type === 'race' && p.event.type === 'winner');
+    assert.equal(winner?.event.type === 'winner' && winner.event.label, 'local:fast');
+  });
+
+  test('速い方が壊れていても、遅い方が拾って完了する', async () => {
+    const { outcomes } = await runTeam(
+      [{ id: 't1', laneId: 'coder', writes: ['a.txt'],
+         instruction: 'a.txt を作成してください。', raceWith: ['local:broken'] }],
+      2,
+      { perModelDelay: { m: 40, broken: 5 }, failModels: ['broken'] },
+    );
+    assert.equal(outcomes.get('t1')?.state, 'done', '片方の故障で全体が落ちている');
+  });
+
+  test('全部失敗すればタスクは失敗として扱われる', async () => {
+    const { outcomes } = await runTeam(
+      [{ id: 't1', laneId: 'coder', writes: ['a.txt'],
+         instruction: 'a.txt を作成してください。', raceWith: ['local:broken'] }],
+      2,
+      { failModels: ['m', 'broken'] },
+    );
+    assert.equal(outcomes.get('t1')?.state, 'failed');
   });
 });

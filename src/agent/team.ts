@@ -8,6 +8,7 @@ import type { ProviderMessage } from '../providers/contract.ts';
 import type { ChatOrchestrator } from '../core/orchestrator.ts';
 import { Scheduler, type LaneConfig, type Task, type TaskOutcome } from '../core/scheduler.ts';
 import { Agent, type AgentEvent } from './loop.ts';
+import { race, type Attempt, type RaceEvent } from './race.ts';
 import type { Tool, ApprovalRequest } from './tools/types.ts';
 
 export interface WorkItem {
@@ -18,6 +19,12 @@ export interface WorkItem {
   deps?: string[];
   /** 書き込む可能性のあるパス。重なる相手とは同時実行されない。 */
   writes?: string[];
+  /**
+   * 冗長実行に使う追加のモデル。
+   * 指定すると同じ作業を同時に走らせ、最初に完了したものを採用する。
+   * ローカルは計算が無料なので、遊ばせるくらいなら重ねて投げた方が速い。
+   */
+  raceWith?: string[];
 }
 
 export interface TeamEvent {
@@ -31,6 +38,7 @@ export type TeamProgress =
   | { type: 'taskEnd'; taskId: string; state: string; ms: number; error?: string }
   | { type: 'taskSkip'; taskId: string; reason: string }
   | { type: 'running'; taskIds: string[] }
+  | { type: 'race'; taskId: string; event: RaceEvent }
   | (TeamEvent & { type: 'agent' });
 
 export interface TeamOptions {
@@ -61,6 +69,43 @@ export class Team {
     this.#opts = opts;
   }
 
+  /** 1モデルで1件の作業を最後まで走らせる。冗長実行の1本ぶんでもある。 */
+  async #runOne(
+    item: WorkItem,
+    candidates: string[],
+    signal: AbortSignal,
+    push: (p: TeamProgress) => void,
+  ): Promise<WorkResult> {
+    const agent = new Agent(this.#orchestrator, {
+      candidates,
+      system: this.#opts.system,
+      tools: this.#opts.tools,
+      root: this.#opts.root,
+      maxTurns: this.#opts.maxTurns,
+      temperature: this.#opts.temperature,
+      maxTokens: this.#opts.maxTokens,
+      approve: this.#opts.approve,
+    });
+
+    const history: ProviderMessage[] = [{ role: 'user', content: item.instruction }];
+    let report = '';
+    let turns = 0;
+    let finished: (AgentEvent & { type: 'finished' }) | undefined;
+
+    for await (const ev of agent.run(history, signal)) {
+      push({ type: 'agent', taskId: item.id, laneId: item.laneId, event: ev });
+      if (ev.type === 'thinking') report += ev.delta;
+      else if (ev.type === 'turn') turns += 1;
+      else if (ev.type === 'finished') finished = ev;
+    }
+
+    if (!finished) throw new Error('作業が完了イベントを返しませんでした');
+    if (finished.reason !== 'completed') {
+      throw new Error(`${finished.reason}${finished.detail ? `: ${finished.detail}` : ''}`);
+    }
+    return { report: report.trim(), turns, finished };
+  }
+
   async *run(
     items: WorkItem[],
     signal: AbortSignal,
@@ -78,34 +123,26 @@ export class Team {
       deps: item.deps,
       writes: item.writes,
       run: async (ctx): Promise<WorkResult> => {
-        const agent = new Agent(this.#orchestrator, {
-          candidates: ctx.candidates,
-          system: this.#opts.system,
-          tools: this.#opts.tools,
-          root: this.#opts.root,
-          maxTurns: this.#opts.maxTurns,
-          temperature: this.#opts.temperature,
-          maxTokens: this.#opts.maxTokens,
-          approve: this.#opts.approve,
-        });
-
-        const history: ProviderMessage[] = [{ role: 'user', content: item.instruction }];
-        let report = '';
-        let turns = 0;
-        let finished: (AgentEvent & { type: 'finished' }) | undefined;
-
-        for await (const ev of agent.run(history, ctx.signal)) {
-          push({ type: 'agent', taskId: item.id, laneId: item.laneId, event: ev });
-          if (ev.type === 'thinking') report += ev.delta;
-          else if (ev.type === 'turn') turns += 1;
-          else if (ev.type === 'finished') finished = ev;
+        // 冗長実行の指定があれば、同じ作業を複数モデルへ同時に投げる
+        if (item.raceWith && item.raceWith.length > 0) {
+          const models = [ctx.candidates[0]!, ...item.raceWith];
+          const attempts: Attempt<WorkResult>[] = models.map((modelId) => ({
+            label: modelId,
+            run: (signal) => this.#runOne(item, [modelId], signal, push),
+          }));
+          const outcome = await race(
+            attempts,
+            (r) => r.finished.reason === 'completed',
+            ctx.signal,
+            (e) => push({ type: 'race', taskId: item.id, event: e }),
+          );
+          if (!outcome.winner) {
+            throw new Error(`全てのモデルが完了できませんでした (${models.join(', ')})`);
+          }
+          return outcome.winner.result;
         }
 
-        if (finished && finished.reason !== 'completed') {
-          // 失敗として扱い、依存タスクを走らせない
-          throw new Error(`${finished.reason}${finished.detail ? `: ${finished.detail}` : ''}`);
-        }
-        return { report: report.trim(), turns, finished: finished! };
+        return this.#runOne(item, ctx.candidates, ctx.signal, push);
       },
     }));
 
