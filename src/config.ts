@@ -7,8 +7,9 @@ import { resolve } from 'node:path';
 
 export interface ProviderConfig {
   id: string;
-  kind: 'openai-compatible';
-  baseUrl: string;
+  kind: 'openai-compatible' | 'anthropic';
+  /** openai-compatible のみ必須 */
+  baseUrl?: string;
   locality: 'local' | 'cloud';
   /** 環境変数名。値そのものは書かない。 */
   apiKeyEnv?: string;
@@ -65,10 +66,11 @@ function validate(c: AasConfig): void {
   if (c.providers.length === 0) throw new Error('providers が空です。');
   if (c.candidates.length === 0) throw new Error('candidates が空です。');
   for (const p of c.providers) {
-    if (p.kind !== 'openai-compatible') {
+    if (p.kind === 'openai-compatible') {
+      if (!p.baseUrl) throw new Error(`baseUrl が未設定です: ${p.id}`);
+    } else if (p.kind !== 'anthropic') {
       throw new Error(`未対応の provider kind です: ${p.kind} (${p.id})`);
     }
-    if (!p.baseUrl) throw new Error(`baseUrl が未設定です: ${p.id}`);
   }
   const ids = new Set(c.providers.map((p) => p.id));
   for (const cand of c.candidates) {

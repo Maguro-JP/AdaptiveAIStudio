@@ -25,7 +25,9 @@ Claudeが使えるときはClaudeを使い、制限・障害時にLocalLLMへ切
 
 Node.js 22.6以降のみ必要。ビルド不要・実行時依存ゼロ。
 
-### 1. ローカルLLMを起動する
+### 1. モデルを用意する
+
+**ローカル:**
 
 ```
 ollama serve
@@ -33,6 +35,14 @@ ollama pull qwen2.5-coder:7b
 ```
 
 RTX 4060 (VRAM 8GB) なら 7B の Q4 量子化が常用圏。14B以上は一部CPUに載る。
+
+**Claude (任意):**
+
+```
+set ANTHROPIC_API_KEY=sk-ant-...
+```
+
+設定しなければローカルのみで動作する。
 
 ### 2. 設定する（任意）
 
@@ -86,20 +96,27 @@ npm run typecheck
 
 ## 実装状況
 
-| Phase | 状態 |
-|---|---|
-| P1 ローカル実行 | チャット・モデル一覧・設定は動作。モデルDL/VRAM解放は未実装 |
-| P2 Provider層 | 契約・正規化エラー・Router・フォールバック・冷却まで完了。クラウドアダプタは未実装 |
-| P3 以降 | 未着手 |
+土台の配管（モデル交換とフォールバック）は動作する。
+**エージェント機能（ファイル編集・複数モデルの役割分担）は未着手。**
 
-現時点の実装は `openai-compatible` アダプタ1本。
-Ollama / LM Studio / vLLM / llama.cpp-server は `baseUrl` の設定だけで接続できる。
+| 機能 | 状態 |
+|---|---|
+| Provider層・正規化エラー・フォールバック・冷却 | 動作 |
+| ローカルLLM (Ollama / LM Studio / vLLM / llama.cpp) | 動作 |
+| Claude (公式SDK) | 動作 |
+| ファイル読み書き・コマンド実行 | 未実装 |
+| 役割ごとのモデル割り当て | 未実装 |
+| 指揮AI・サブエージェント | 未実装 |
+| デスクトップUI・クリック起動 | 未実装 |
+
+次に何を作るかは [docs/ROADMAP.md](docs/ROADMAP.md) を参照。
 
 ---
 
 ## ドキュメント
 
-- [アーキテクチャ設計](docs/ARCHITECTURE.md) — 全体設計・Provider設計・保存データ設計・Phase計画・リスク
+- [実現計画](docs/ROADMAP.md) — 到達目標と改訂フェーズ（**まずこちら**）
+- [アーキテクチャ設計](docs/ARCHITECTURE.md) — 全体設計・Provider設計・保存データ設計・リスク
 
 ## 動作想定環境
 
