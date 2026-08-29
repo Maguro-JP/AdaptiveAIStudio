@@ -11,10 +11,13 @@ import type { ToolCall } from '../providers/contract.ts';
 import type { Tool, ToolContext, ToolResult } from '../agent/tools/types.ts';
 import type { Rule, RuleContext } from './rules.ts';
 import { AuditLog } from './audit.ts';
+import type { HarnessMetrics } from './metrics.ts';
 
 export interface HarnessOptions {
   rules: Rule[];
   audit?: AuditLog;
+  /** ハーネス自身の効き具合を測る。良い規則と邪魔な規則を見分けるため。 */
+  metrics?: HarnessMetrics;
   onDecision?: (e: HarnessDecision) => void;
 }
 
@@ -28,12 +31,14 @@ export interface HarnessDecision {
 export class Harness {
   readonly #rules: Rule[];
   readonly #audit: AuditLog;
+  readonly #metrics?: HarnessMetrics;
   readonly #onDecision?: (e: HarnessDecision) => void;
   #history: ToolCall[] = [];
 
   constructor(opts: HarnessOptions) {
     this.#rules = opts.rules;
     this.#audit = opts.audit ?? new AuditLog();
+    this.#metrics = opts.metrics;
     this.#onDecision = opts.onDecision;
   }
 
@@ -41,9 +46,19 @@ export class Harness {
     return this.#audit;
   }
 
+  get metrics(): HarnessMetrics | undefined {
+    return this.#metrics;
+  }
+
   /** 依頼ごとに履歴を切る。規則は1つの依頼の中での積み重ねを見るため。 */
   beginTask(): void {
     this.#history = [];
+    this.#metrics?.beginTask();
+  }
+
+  /** 依頼の結末を伝える。拒否が誘導になったのか邪魔になったのかがここで決まる。 */
+  endTask(outcome: 'completed' | 'failed'): void {
+    this.#metrics?.endTask(outcome);
   }
 
   rules(): Array<{ name: string; description: string }> {
@@ -75,6 +90,7 @@ export class Harness {
               tool: call.name, outcome: 'denied',
               rule: rule.name, reason: decision.reason, summary: summarize(args),
             });
+            this.#metrics?.recordDenial(rule.name);
             this.#onDecision?.({ tool: call.name, outcome: 'denied', rule: rule.name, reason: decision.reason });
             // 例外にせず、モデルが読める形で返す。考え直させるのが目的。
             return { content: `BLOCKED by ${rule.name}: ${decision.reason}`, isError: true };
@@ -83,6 +99,7 @@ export class Harness {
             await this.#audit.record({
               tool: call.name, outcome: 'warned', rule: rule.name, reason: decision.note,
             });
+            this.#metrics?.recordWarning(rule.name);
             this.#onDecision?.({ tool: call.name, outcome: 'warned', rule: rule.name, reason: decision.note });
           }
         }

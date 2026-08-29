@@ -49,6 +49,50 @@ export class LineSource {
     this.#rl.on('SIGINT', handler);
   }
 
+  /** 溜まっている行があるか。待機中かどうかの判断に使う。 */
+  get hasPending(): boolean {
+    return this.#pending.length > 0;
+  }
+
+  /**
+   * 1行受け取る。待っている間に onIdle を呼ぶ。
+   *
+   * 待機中は計算資源が丸ごと空いている。
+   * ローカルでそこを遊ばせるのは損なので、考える時間に充てる。
+   */
+  async questionWhileIdle(
+    prompt: string,
+    idleMs: number,
+    onIdle: () => Promise<boolean>,
+  ): Promise<string | undefined> {
+    const queued = this.#pending.shift();
+    if (queued !== undefined) {
+      this.#output.write(prompt + queued + '\n');
+      return queued;
+    }
+    if (this.#closed) return undefined;
+
+    this.#output.write(prompt);
+    const line = new Promise<string | undefined>((resolve) => { this.#waiting = resolve; });
+
+    let settled = false;
+    line.then(() => { settled = true; });
+
+    for (;;) {
+      const timer = new Promise<'idle'>((r) => setTimeout(() => r('idle'), idleMs));
+      const winner = await Promise.race([line.then(() => 'line' as const), timer]);
+      if (winner === 'line') break;
+      if (settled) break;
+      const printed = await onIdle();
+      // 考えている間に入力が来ていたら、そちらを優先する
+      if (settled) break;
+      // 何も出力していないなら、プロンプトは出したままで良い。
+      // 毎回書き直すと画面が入力欄で埋まる。
+      if (printed) this.#output.write(prompt);
+    }
+    return line;
+  }
+
   /** 1行受け取る。入力が尽きていれば undefined。 */
   async question(prompt: string): Promise<string | undefined> {
     const queued = this.#pending.shift();

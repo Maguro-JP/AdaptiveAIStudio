@@ -6,7 +6,7 @@
  */
 import { stdin, stdout } from 'node:process';
 import { LineSource } from './input.ts';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
 import { loadConfig } from '../config.ts';
 import { buildRegistry } from '../core/build.ts';
 import { ChatOrchestrator } from '../core/orchestrator.ts';
@@ -24,6 +24,10 @@ import { verifyLoop, runVerification, type VerifyResult } from '../agent/verify.
 import { snapshotTests } from '../agent/test-integrity.ts';
 import { buildHarness } from '../core/harness-setup.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
+import { formatReport } from '../harness/metrics.ts';
+import { ProposalQueue, formatProposal } from '../agent/proposals.ts';
+import { findLeads, investigationPrompt, parseProposal } from '../agent/initiative.ts';
+import { stateDir } from '../core/autopilot-setup.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -108,7 +112,7 @@ async function main(): Promise<void> {
   // ハーネス: 規則をツールの手前に挟む。
   // モデルに守らせるのではなく、実行させないことで守る。
   let currentInstruction = '';
-  const harness = buildHarness(config, (d) => {
+  const harness = await buildHarness(config, (d) => {
     if (d.outcome === 'denied') {
       console.log(c.red(`    ⛔ ${d.rule}: ${d.reason ?? ''}`));
     } else if (d.outcome === 'warned') {
@@ -121,6 +125,9 @@ async function main(): Promise<void> {
     createRunCommandTool({ allowed: agentCfg.allowedCommands }),
   ];
   const tools = harness.wrapAll(rawTools, () => currentInstruction);
+  // 調査担当には書き込みを渡さない。権限が無ければ事故は起きない。
+  const readOnlyTools = harness.wrapAll(
+    [readFileTool, listFilesTool, searchTextTool], () => currentInstruction);
 
   // 依頼のたびに、その時点で分かっている状況を作業者へ渡す。
   // まだ構築中なら少しだけ待つ。モデルが調べ直すより速い。
@@ -221,6 +228,89 @@ async function main(): Promise<void> {
     return passed;
   };
 
+  const initCfg = config.initiative ?? {};
+  const proposals = new ProposalQueue(join(stateDir(), 'proposals.json'));
+  await proposals.load();
+
+  /**
+   * 待機中の自発調査。
+   * 手がかりは機械で探し、裏取りと判断だけをモデルにさせる。
+   * 見つけたことは提案として溜めるだけで、勝手には直さない。
+   */
+  const think = async (): Promise<boolean> => {
+    if (initCfg.enabled === false) return false;
+    const maxOpen = initCfg.maxOpen ?? 10;
+    if (proposals.open().length >= maxOpen) return false;
+
+    const snap = await prefetch.snapshotWithin(3000);
+    if (!snap) return false;
+
+    // 提案済みだけでなく、調べて問題なしだったものも除く
+    const known = proposals.seen();
+    const leads = await findLeads({
+      root, snapshot: snap, known, max: initCfg.leadsPerCycle ?? 1,
+    });
+    if (leads.length === 0) return false;
+
+    let printed = false;
+    for (const lead of leads) {
+      if (proposals.open().length >= maxOpen) break;
+      process.stderr.write(c.dim(`\n  考え中: ${lead.title}\n`));
+
+      printed = true;
+      const ac = new AbortController();
+      generating = ac;
+      let text = '';
+      try {
+        // 調査は読むだけ。書き込みツールは渡さない。
+        const investigator = new Agent(orchestrator, {
+          candidates,
+          system: '与えられた手がかりの裏を取り、指示された形式で提案をまとめる調査担当です。ファイルは変更しません。',
+          tools: readOnlyTools,
+          root,
+          maxTurns: 8,
+          temperature: config.temperature,
+          maxTokens: config.maxTokens,
+          approve: async () => false,
+        });
+        for await (const ev of investigator.run(
+          [{ role: 'user', content: investigationPrompt(lead) }], ac.signal,
+        )) {
+          if (ev.type === 'thinking') text += ev.delta;
+        }
+      } catch {
+        return printed;
+      } finally {
+        generating = undefined;
+      }
+
+      // 結果にかかわらず「調べた」ことを覚える。同じ所を周回しないため。
+      proposals.markExamined(lead.fingerprint);
+      await proposals.save();
+
+      const parsed = parseProposal(text);
+      if (!parsed) {
+        process.stderr.write(c.dim('    → 問題なしと判断しました\n'));
+        continue;
+      }
+      const added = proposals.add({
+        kind: lead.kind,
+        title: parsed.title,
+        rationale: parsed.rationale,
+        evidence: lead.files,
+        suggestedAction: parsed.action,
+        fingerprint: lead.fingerprint,
+      });
+      if (added) {
+        await proposals.save();
+        console.log(c.cyan(`\n  💡 提案 ${added.id}: ${added.title}`));
+        console.log(c.dim(`     ${added.rationale}`));
+        console.log(c.dim(`     /proposals で詳細、/do ${added.id} で実行\n`));
+      }
+    }
+    return printed;
+  };
+
   console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — agent (作業者1名)'));
   console.log(c.dim(`設定: ${source}`));
   console.log(c.dim(`作業ディレクトリ: ${root}`));
@@ -254,10 +344,15 @@ async function main(): Promise<void> {
   console.log(c.dim('作業を指示してください。/exit で終了。\n'));
 
   const history: ProviderMessage[] = [];
+  let pendingRequest: string | undefined;
+  let acceptedProposalId: string | undefined;
 
   try {
     for (;;) {
-      const answer = await rl.question(c.cyan('依頼> '));
+      const answer = initCfg.enabled === false
+        ? await rl.question(c.cyan('依頼> '))
+        : await rl.questionWhileIdle(
+            c.cyan('依頼> '), (initCfg.idleSeconds ?? 30) * 1000, think);
       if (answer === undefined) break;
       const line = answer.trim();
       if (!line) continue;
@@ -272,9 +367,41 @@ async function main(): Promise<void> {
         continue;
       }
       if (line === '/metrics') { console.log(pilot.metrics.report() + '\n'); continue; }
+      if (line === '/proposals') {
+        const open = proposals.open();
+        if (open.length === 0) console.log(c.dim('  未処理の提案はありません。\n'));
+        else {
+          for (const p of open) console.log(formatProposal(p, true) + '\n');
+        }
+        continue;
+      }
+      if (line === '/think') { await think(); continue; }
+      if (line.startsWith('/do ') || line.startsWith('/reject ')) {
+        const [cmd, id] = line.split(/\s+/);
+        const target = id ? proposals.find(id) : undefined;
+        if (!target) { console.log(c.red(`  提案が見つかりません: ${id ?? ''}\n`)); continue; }
+        if (cmd === '/reject') {
+          proposals.setStatus(target.id, 'rejected');
+          await proposals.save();
+          console.log(c.dim(`  ${target.id} を却下しました。\n`));
+          continue;
+        }
+        proposals.setStatus(target.id, 'accepted');
+        await proposals.save();
+        console.log(c.dim(`  ${target.id} を実行します: ${target.suggestedAction}\n`));
+        // 提案の内容をそのまま依頼として流す
+        pendingRequest = target.suggestedAction;
+        acceptedProposalId = target.id;
+      }
       if (line === '/rules') {
         console.log(c.dim('  実行前に適用される規則:'));
         for (const r of harness.rules()) console.log(`  ${c.cyan(r.name)} — ${c.dim(r.description)}`);
+        console.log();
+        continue;
+      }
+      if (line === '/harness') {
+        const report = harness.metrics?.report(harness.rules().map((r) => r.name));
+        console.log(report ? formatReport(report) : c.dim('  計測が有効ではありません。'));
         console.log();
         continue;
       }
@@ -301,8 +428,10 @@ async function main(): Promise<void> {
         continue;
       }
 
-      history.push({ role: 'user', content: line });
-      currentInstruction = line;
+      const request = pendingRequest ?? line;
+      pendingRequest = undefined;
+      history.push({ role: 'user', content: request });
+      currentInstruction = request;
       harness.beginTask();
       const checkpoint = new Checkpoint(root);
       generating = new AbortController();
@@ -399,6 +528,20 @@ async function main(): Promise<void> {
         } else {
           checkpoint.commit();
         }
+
+        // 拒否が誘導になったのか邪魔になったのか、結末で判定させる
+        const succeeded = finishedReason === 'completed' && verified;
+        harness.endTask(succeeded ? 'completed' : 'failed');
+        await harness.metrics?.save();
+
+        if (acceptedProposalId && succeeded) {
+          proposals.setStatus(acceptedProposalId, 'done');
+          await proposals.save();
+        }
+        acceptedProposalId = undefined;
+
+        // 作業のあとは状況が変わっている。次の手がかりを探し直す。
+        prefetch.invalidate();
       } finally {
         generating = undefined;
       }

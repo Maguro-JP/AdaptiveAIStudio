@@ -38,6 +38,8 @@ export interface AasConfig {
   runtime?: RuntimeConfig;
   /** ハーネス規則。モデルの誤りを実行前に止める。 */
   harness?: HarnessConfig;
+  /** 自発的な調査と提案 */
+  initiative?: InitiativeConfig;
 }
 
 export interface HarnessConfig {
@@ -52,6 +54,20 @@ export interface HarnessConfig {
   auditLog?: string;
   /** 検証を打ち切ったとき変更を巻き戻す。既定 false（gitが本来の安全網のため） */
   rollbackOnGiveUp?: boolean;
+}
+
+export interface InitiativeConfig {
+  /**
+   * 自発的な調査。待機中に自分で手がかりを探し、提案を溜める。
+   * 提案は溜めるだけで、実行はしない。既定は有効。
+   */
+  enabled?: boolean;
+  /** 入力が無いまま何秒経ったら考え始めるか。既定30秒 */
+  idleSeconds?: number;
+  /** 1回の調査で扱う手がかりの数 */
+  leadsPerCycle?: number;
+  /** 溜まった未処理の提案がこの数に達したら、それ以上は調べない */
+  maxOpen?: number;
 }
 
 export interface RuntimeConfig {
@@ -192,6 +208,7 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
     agent: parsed.agent ?? {},
     runtime: parsed.runtime ?? {},
     harness: parsed.harness ?? {},
+    initiative: parsed.initiative ?? {},
   };
   if (config.agent?.lanes) validateLanes(config);
   validate(config);

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { AasConfig } from '../config.ts';
 import { Harness, type HarnessDecision } from '../harness/harness.ts';
 import { AuditLog } from '../harness/audit.ts';
+import { HarnessMetrics } from '../harness/metrics.ts';
 import type { Rule } from '../harness/rules.ts';
 import {
   workspaceBoundary, protectedPaths, testProtection, blastRadius,
@@ -21,12 +22,14 @@ const DEFAULT_PROTECTED = [
   '**/id_rsa', '**/*.pem', '**/credentials*',
 ];
 
-export function buildHarness(
+export async function buildHarness(
   config: AasConfig,
   onDecision?: (e: HarnessDecision) => void,
-): Harness {
+): Promise<Harness> {
   const hc = config.harness ?? {};
   const audit = new AuditLog(hc.auditLog ?? join(stateDir(), 'audit.jsonl'));
+  const metrics = new HarnessMetrics(join(stateDir(), 'harness-metrics.json'));
+  await metrics.load();
 
   const rules: Rule[] = [];
   if (hc.enabled !== false) {
@@ -39,5 +42,5 @@ export function buildHarness(
     if (hc.maxFilesPerTask && hc.maxFilesPerTask > 0) rules.push(blastRadius(hc.maxFilesPerTask));
   }
 
-  return new Harness({ rules, audit, onDecision });
+  return new Harness({ rules, audit, metrics, onDecision });
 }
