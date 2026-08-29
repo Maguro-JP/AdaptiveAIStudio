@@ -69,7 +69,9 @@ export const DEFAULT_CONFIG: AasConfig = {
       kind: 'openai-compatible',
       baseUrl: 'http://localhost:11434/v1',
       locality: 'local',
-      models: ['qwen2.5-coder:7b'],
+      // ローカルには単価が無いので、節約のために弱いモデルを既定にしない。
+      // MoE は 30B級の質を 7B 並みの速度で出せるため、この環境の最適解。
+      models: ['qwen3:30b-a3b', 'qwen2.5-coder:7b'],
       enabled: true,
     },
     // クラウドは既定で無効。使いたいときだけ enabled を true にする。
@@ -82,7 +84,7 @@ export const DEFAULT_CONFIG: AasConfig = {
       enabled: false,
     },
   ],
-  candidates: ['ollama:qwen2.5-coder:7b'],
+  candidates: ['ollama:qwen3:30b-a3b', 'ollama:qwen2.5-coder:7b'],
   system: 'あなたは日本語で応答する開発支援アシスタントです。簡潔に、根拠とともに答えてください。',
   temperature: 0.2,
   maxTokens: 4096,

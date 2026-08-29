@@ -31,10 +31,14 @@ Node.js 22.6以降のみ必要。ビルド不要・実行時依存ゼロ。
 
 ```
 ollama serve
-ollama pull qwen2.5-coder:7b
+ollama pull qwen3:30b-a3b
 ```
 
-RTX 4060 (VRAM 8GB) なら 7B の Q4 量子化が常用圏。14B以上は一部CPUに載る。
+**7B を既定にしない。** ローカルにはトークン単価が無いので、
+節約のために弱いモデルを使う理由がない。
+RTX 4060 (8GB) では MoE の `qwen3:30b-a3b` が最適解
+（30B級の質を約33 tok/s で出せる）。詳細は
+[モデル運用](docs/MODEL-EFFICIENCY.md) と [32B級を動かすには](docs/RUNNING-LARGE-MODELS.md)。
 
 **Claude (任意):**
 
@@ -201,6 +205,8 @@ npm run typecheck
 | 並列実行（レーン・スケジューラ・書き込みロック） | 動作 |
 | 停滞ベースのタイムアウト（低速環境で殺されない） | 動作 |
 | 実行可能性プランナ（載らないモデルの実行設定を計算） | 動作 |
+| 効率計算（期待実時間でモデルを選ぶ） | 動作 |
+| 実測の蓄積（成功率・見逃し・実測速度） | 動作 |
 | llama.cpp 直接制御ランタイム | 未実装 |
 | 指揮AI・サブエージェント | 未実装 |
 | デスクトップUI・クリック起動 | 未実装 |
@@ -213,6 +219,7 @@ npm run typecheck
 
 - [実現計画](docs/ROADMAP.md) — 到達目標と改訂フェーズ（**まずこちら**）
 - [組織設計](docs/ORGANIZATION.md) — 職能・部署・人材配置・並列実行の設計
+- [最も効率の良いモデル運用](docs/MODEL-EFFICIENCY.md) — 何を基準にモデルを選ぶか（**重要**）
 - [32B級を動かすには](docs/RUNNING-LARGE-MODELS.md) — メモリ計算・速度の根拠・MoE・並列と直列
 - [自前化とクラウド解禁の条件](docs/INDEPENDENCE.md) — 脱Ollama依存の段階計画と、クラウドを有効化する基準
 - [段階的劣化](docs/DEGRADATION.md) — 遅くても動かすための設計（実行可能性プランナ・編成スタイル）
