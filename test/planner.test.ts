@@ -85,6 +85,16 @@ describe('実行可能性プランナ', () => {
     assert.ok(p.degradations.length > 0);
   });
 
+  test('劣化の記録は採用した設定のぶんだけ（試行過程を並べない）', () => {
+    // 量子化を2段下げて収まった場合、「Q3に下げた」と「IQ2に下げた」の
+    // 両方を並べると、実際より劣化が大きく見えてしまう
+    const small: MachineSpec = { ...machine, ramBytes: 16 * GB };
+    const p = planExecution({ model: KNOWN_MODELS['qwen2.5-coder:32b']!, machine: small });
+    const quantNotes = p.degradations.filter((d) => d.includes('量子化を'));
+    assert.equal(quantNotes.length, 1, `量子化の記録が重複している: ${quantNotes.join(' / ')}`);
+    assert.ok(quantNotes[0]!.includes(p.quant), '記録が採用した量子化と一致しない');
+  });
+
   test('GPUが無い環境でも速度0を返さない', () => {
     // vramBandwidth 0 で 0/0 の NaN を作り、速度0＝動かせないと誤判定していた
     const cpuOnly: MachineSpec = {

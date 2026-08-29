@@ -70,13 +70,12 @@ export function planExecution(req: PlanRequest): Plan {
     ? QUANT_LADDER.slice(QUANT_LADDER.indexOf(startQuant))
     : [startQuant];
 
-  const degradations: string[] = [];
-
   for (const quant of quants) {
-    if (quant !== startQuant) {
-      const note = `量子化を ${startQuant} → ${quant} に下げた`;
-      if (!degradations.includes(note)) degradations.push(note);
-    }
+    // 劣化の記録は採用した設定のぶんだけにする。
+    // 試して駄目だった段階まで並べると、実際より劣化が大きく見えてしまう。
+    const degradations: string[] = quant === startQuant
+      ? []
+      : [`量子化を ${startQuant} → ${quant} に下げた`];
     const model = { ...req.model, bitsPerWeight: QUANT_BITS[quant] };
 
     // context と KV量子化を、品質が落ちにくい順に試す
@@ -100,6 +99,7 @@ export function planExecution(req: PlanRequest): Plan {
 
   // ここまで来たら、RAMにも載らない。ディスクから mmap で実行する。
   const quant = quants.at(-1)!;
+  const finalDegradations = quant === startQuant ? [] : [`量子化を ${startQuant} → ${quant} に下げた`];
   const model = { ...req.model, bitsPerWeight: QUANT_BITS[quant] };
   const context = minContext;
   const tps = diskTps(model, machine);
@@ -115,7 +115,7 @@ export function planExecution(req: PlanRequest): Plan {
     estimatedTps: tps,
     vramUsedBytes: 0,
     ramUsedBytes: machine.ramBytes - RAM_RESERVED,
-    degradations: [...degradations, 'RAMに載らないためディスクから実行（非常に遅い）'],
+    degradations: [...finalDegradations, 'RAMに載らないためディスクから実行（非常に遅い）'],
     summary: summarize('diskMmap', model.id, quant, 0, model.layers, context, tps),
   };
 }

@@ -35,6 +35,26 @@ export interface AasConfig {
   temperature?: number;
   maxTokens?: number;
   agent?: AgentConfig;
+  runtime?: RuntimeConfig;
+}
+
+export interface RuntimeConfig {
+  /**
+   * ローカル推論の実行基盤。
+   *   ollama   : 安定。日常運用（既定）
+   *   llamacpp : 自前。オフロード層数を自分で決める。限界を攻める用途
+   * 両方を並存させ、片方が壊ってももう片方で動くようにする。
+   */
+  kind?: 'ollama' | 'llamacpp';
+  /** llamacpp: llama-server の実行パス */
+  command?: string;
+  /** llamacpp: GGUFファイルを置くディレクトリ */
+  modelsDir?: string;
+  /** llamacpp: 使用ポートの開始番号 */
+  basePort?: number;
+  /** llamacpp: レーンの並列度に合わせる */
+  parallel?: number;
+  desiredContext?: number;
 }
 
 export interface AgentConfig {
@@ -113,6 +133,7 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
     temperature: parsed.temperature ?? DEFAULT_CONFIG.temperature,
     maxTokens: parsed.maxTokens ?? DEFAULT_CONFIG.maxTokens,
     agent: parsed.agent ?? {},
+    runtime: parsed.runtime ?? {},
   };
   if (config.agent?.lanes) validateLanes(config);
   validate(config);
