@@ -16,6 +16,7 @@ import type { ApprovalRequest } from '../agent/tools/types.ts';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool } from '../agent/tools/fs.ts';
 import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { inspectGit, describeGitState } from '../agent/git.ts';
+import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -73,13 +74,20 @@ async function main(): Promise<void> {
     return ans === 'y' || ans === 'yes';
   };
 
+  const pilot = await setupAutopilot(config, registry);
+  const { candidates, note } = resolveCandidates(config, pilot);
+  if (candidates.length === 0) {
+    console.error(c.red(`使えるモデルがありません: ${note}`));
+    process.exit(1);
+  }
+
   const tools = [
     readFileTool, listFilesTool, searchTextTool, writeFileTool,
     createRunCommandTool({ allowed: agentCfg.allowedCommands }),
   ];
 
   const agent = new Agent(orchestrator, {
-    candidates: config.candidates,
+    candidates,
     system: SYSTEM,
     tools,
     root,
@@ -92,7 +100,9 @@ async function main(): Promise<void> {
   console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — agent (作業者1名)'));
   console.log(c.dim(`設定: ${source}`));
   console.log(c.dim(`作業ディレクトリ: ${root}`));
-  console.log(c.dim(`担当モデル: ${config.candidates.join(' → ')}`));
+  console.log(c.dim(`環境: ${pilot.machineText}`));
+  console.log(c.cyan(`担当モデル: ${candidates[0]}`));
+  console.log(c.dim(`  ${note}`));
   console.log(c.dim(`承認モード: ${approval}`));
 
   // 自動書き込みを行う前に、巻き戻せる状態かを必ず確認する
@@ -115,17 +125,28 @@ async function main(): Promise<void> {
       if (!line) continue;
       if (line === '/exit' || line === '/quit') break;
       if (line === '/new') { history.length = 0; console.log(c.dim('履歴を破棄しました。\n')); continue; }
+      if (line === '/models') {
+        for (const r of pilot.autopilot.explain()) {
+          const mark = r.modelId === candidates[0] ? c.green(' ←使用中') : '';
+          console.log(`  ${r.modelId}${mark}\n    ${c.dim(r.reason)} / 約${Math.round(r.expectedSeconds)}秒`);
+        }
+        console.log();
+        continue;
+      }
+      if (line === '/metrics') { console.log(pilot.metrics.report() + '\n'); continue; }
 
       history.push({ role: 'user', content: line });
       generating = new AbortController();
       const started = Date.now();
       let printedText = false;
+      let answerChars = 0;
 
       try {
         for await (const ev of agent.run(history, generating.signal)) {
           switch (ev.type) {
             case 'thinking':
               stdout.write(ev.delta);
+              answerChars += ev.delta.length;
               printedText = true;
               break;
             case 'turn':
@@ -144,6 +165,13 @@ async function main(): Promise<void> {
               break;
             case 'finished': {
               const secs = ((Date.now() - started) / 1000).toFixed(1);
+              // 実測を溜める。次回以降の自動選択がこれで変わる。
+              await pilot.autopilot.record({
+                modelId: candidates[0]!,
+                success: ev.reason === 'completed',
+                outputTokens: Math.round(answerChars / 3),
+                seconds: (Date.now() - started) / 1000,
+              });
               const label = {
                 completed: c.green('完了'),
                 maxTurns: c.yellow('ターン上限'),

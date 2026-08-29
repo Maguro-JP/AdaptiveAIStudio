@@ -16,6 +16,7 @@ import type { ApprovalRequest } from '../agent/tools/types.ts';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool } from '../agent/tools/fs.ts';
 import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { inspectGit, describeGitState } from '../agent/git.ts';
+import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -47,8 +48,17 @@ async function main(): Promise<void> {
   const root = resolve(agentCfg.root ?? process.cwd());
   const approval = agentCfg.approval ?? 'autoEdit';
 
+  const registry = buildRegistry(config);
+  const pilot = await setupAutopilot(config, registry);
+  const resolved = resolveCandidates(config, pilot);
+  if (resolved.candidates.length === 0) {
+    console.error(`使えるモデルがありません: ${resolved.note}`);
+    process.exit(1);
+  }
+
+  // レーン未指定なら、自動選択したモデル1本で並列2のレーンを作る
   const lanes = agentCfg.lanes ?? [
-    { id: 'default', candidates: config.candidates, parallel: 2 },
+    { id: 'default', candidates: resolved.candidates, parallel: 2 },
   ];
 
   const items = JSON.parse(await readFile(resolve(taskFile), 'utf8')) as WorkItem[];
@@ -75,7 +85,6 @@ async function main(): Promise<void> {
     return false;
   };
 
-  const registry = buildRegistry(config);
   const team = new Team(new ChatOrchestrator(registry), {
     lanes,
     system: SYSTEM,
@@ -92,8 +101,10 @@ async function main(): Promise<void> {
   console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — team (並列作業)'));
   console.log(c.dim(`設定: ${source}`));
   console.log(c.dim(`作業ディレクトリ: ${root}`));
+  console.log(c.dim(`環境: ${pilot.machineText}`));
+  if (!agentCfg.lanes) console.log(c.dim(`  ${resolved.note}`));
   for (const l of lanes) {
-    console.log(c.dim(`  レーン ${l.id}: ${l.candidates.join(' → ')} (並列 ${l.parallel})`));
+    console.log(c.dim(`  レーン ${l.id}: ${l.candidates[0]} (並列 ${l.parallel})`));
   }
   const git = describeGitState(await inspectGit(root));
   console.log(git.risky ? c.yellow(`  ${git.text}`) : c.dim(`  ${git.text}`));

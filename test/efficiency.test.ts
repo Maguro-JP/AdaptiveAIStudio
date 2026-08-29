@@ -190,6 +190,17 @@ describe('実測の蓄積', () => {
     assert.ok(s.measuredTps! > 20, `外れ値に引きずられすぎ: ${s.measuredTps}`);
   });
 
+  test('極端に短い試行は実測に混ぜない', () => {
+    // 一言で終わった応答から算出すると非現実的な tok/s になり判断が壊れる
+    const store = new MetricsStore('/dev/null');
+    store.record({ modelId: 'm', success: true, outputTokens: 12, seconds: 0.03 });
+    assert.equal(store.get('m')!.measuredTps, undefined);
+    assert.equal(store.get('m')!.successes, 1, '成功回数は数えるべき');
+
+    store.record({ modelId: 'm', success: true, outputTokens: 400, seconds: 10 });
+    assert.equal(store.get('m')!.measuredTps, 40);
+  });
+
   test('記録が無くても落ちない', async () => {
     const store = new MetricsStore('/nonexistent/path/metrics.json');
     await store.load();

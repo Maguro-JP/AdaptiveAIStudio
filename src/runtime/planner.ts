@@ -196,12 +196,22 @@ function estimateTps(model: ModelSpec, machine: MachineSpec, fit: Fit): number {
 
   const gpuBytes = total * gpuFraction;
   const cpuBytes = total * (1 - gpuFraction);
-  const seconds =
-    gpuBytes / machine.vramBandwidthBytesPerSec +
-    cpuBytes / machine.ramBandwidthBytesPerSec;
+
+  // GPUが無い環境では vramBandwidth が 0 になる。
+  // 0バイトを0帯域で割ると NaN になり、速度0＝「動かせない」と誤判定されるため、
+  // 読むバイト数が0の項は時間0として扱う。
+  const seconds = time(gpuBytes, machine.vramBandwidthBytesPerSec)
+                + time(cpuBytes, machine.ramBandwidthBytesPerSec);
 
   // 実効帯域は理論値の6〜7割程度しか出ない
-  return seconds > 0 ? round(1 / (seconds / 0.65)) : 0;
+  return Number.isFinite(seconds) && seconds > 0 ? round(1 / (seconds / 0.65)) : 0;
+}
+
+/** バイト数0なら時間0。帯域0で割って NaN を作らない。 */
+function time(bytes: number, bandwidth: number): number {
+  if (bytes <= 0) return 0;
+  if (bandwidth <= 0) return Number.POSITIVE_INFINITY;
+  return bytes / bandwidth;
 }
 
 function diskTps(model: ModelSpec, machine: MachineSpec): number {

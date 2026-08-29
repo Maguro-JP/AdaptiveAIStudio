@@ -58,13 +58,17 @@ export class MetricsStore {
     else cur.failures += 1;
     if (a.defect) cur.defects = (cur.defects ?? 0) + 1;
 
-    // 実測 tok/s は移動平均で更新する。1回の外れ値で振れないように。
-    if (a.seconds > 0 && a.outputTokens > 0) {
+    // 極端に短い試行は実測として使わない。
+    // 「変更不要です」の一言で終わった応答から算出すると、
+    // 非現実的な tok/s が記録され、以後の判断が壊れる。
+    const usable = a.seconds >= 1 && a.outputTokens >= 20;
+
+    if (usable) {
       const tps = a.outputTokens / a.seconds;
       cur.measuredTps = cur.measuredTps === undefined ? tps : cur.measuredTps * 0.7 + tps * 0.3;
       cur.measuredTps = Math.round(cur.measuredTps * 10) / 10;
     }
-    if (a.outputTokens > 0) {
+    if (usable) {
       cur.avgTokens = cur.avgTokens === undefined
         ? a.outputTokens
         : Math.round(cur.avgTokens * 0.7 + a.outputTokens * 0.3);

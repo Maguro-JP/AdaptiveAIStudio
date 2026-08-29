@@ -10,6 +10,7 @@ import { loadConfig } from '../config.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
 import { buildRegistry } from '../core/build.ts';
 import { ChatOrchestrator } from '../core/orchestrator.ts';
+import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -35,13 +36,16 @@ async function main(): Promise<void> {
   const registry = buildRegistry(config);
   const orchestrator = new ChatOrchestrator(registry);
 
-  let candidates = [...config.candidates];
+  const pilot = await setupAutopilot(config, registry);
+  const resolved = resolveCandidates(config, pilot);
+  let candidates = [...resolved.candidates];
   let system = config.system;
   const history: ProviderMessage[] = [];
 
   console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — chat (MVP)'));
   console.log(c.dim(`設定: ${source}`));
-  console.log(c.dim(`候補: ${candidates.join(' → ')}`));
+  console.log(c.dim(`環境: ${pilot.machineText}`));
+  console.log(c.cyan(`モデル: ${candidates[0] ?? '(なし)'}`) + c.dim(`  ${resolved.note}`));
 
   for (const p of registry.list()) {
     const h = await p.health();
@@ -82,8 +86,9 @@ async function main(): Promise<void> {
           continue;
         }
         if (cmd === '/auto') {
-          candidates = [...config.candidates];
-          console.log(c.dim(`候補: ${candidates.join(' → ')}`));
+          candidates = [...resolveCandidates(config, pilot).candidates];
+          console.log(c.dim(`環境: ${pilot.machineText}`));
+  console.log(c.cyan(`モデル: ${candidates[0] ?? '(なし)'}`) + c.dim(`  ${resolved.note}`));
           continue;
         }
         if (cmd === '/model') {

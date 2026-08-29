@@ -85,6 +85,19 @@ describe('実行可能性プランナ', () => {
     assert.ok(p.degradations.length > 0);
   });
 
+  test('GPUが無い環境でも速度0を返さない', () => {
+    // vramBandwidth 0 で 0/0 の NaN を作り、速度0＝動かせないと誤判定していた
+    const cpuOnly: MachineSpec = {
+      vramBytes: 0, ramBytes: 16 * GB,
+      ramBandwidthBytesPerSec: 45 * GB, vramBandwidthBytesPerSec: 0,
+      diskBandwidthBytesPerSec: 2 * GB,
+    };
+    const p = planExecution({ model: KNOWN_MODELS['qwen2.5-coder:7b']!, machine: cpuOnly });
+    assert.equal(p.placement, 'cpuOnly');
+    assert.ok(p.estimatedTps > 0, `GPUなしで速度0を返した: ${p.estimatedTps}`);
+    assert.ok(Number.isFinite(p.estimatedTps));
+  });
+
   test('待ち時間を人間が読める形で予告できる', () => {
     const p = planExecution({ model: KNOWN_MODELS['qwen2.5-coder:32b']!, machine });
     const d = estimateDuration(p, 1000);

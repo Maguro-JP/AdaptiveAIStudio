@@ -23,8 +23,14 @@ export interface ProviderConfig {
 
 export interface AasConfig {
   providers: ProviderConfig[];
-  /** 先頭から順に試す。前が使えなければ次へフォールバックする。 */
-  candidates: string[];
+  /**
+   * 使用モデルを固定したい場合のみ指定する。
+   * 省略すると自動操縦が、入っているモデルから最良を選び、
+   * 実測に応じて裏で乗り換える。既定はこちら。
+   *
+   * 明示指定は検証・比較目的のための機能であり、通常運用では不要。
+   */
+  candidates?: string[];
   system?: string;
   temperature?: number;
   maxTokens?: number;
@@ -84,7 +90,7 @@ export const DEFAULT_CONFIG: AasConfig = {
       enabled: false,
     },
   ],
-  candidates: ['ollama:qwen3:30b-a3b', 'ollama:qwen2.5-coder:7b'],
+  // candidates は既定で未指定。自動操縦に任せる。
   system: 'あなたは日本語で応答する開発支援アシスタントです。簡潔に、根拠とともに答えてください。',
   temperature: 0.2,
   maxTokens: 4096,
@@ -102,7 +108,7 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
   const parsed = JSON.parse(raw) as Partial<AasConfig>;
   const config: AasConfig = {
     providers: parsed.providers ?? DEFAULT_CONFIG.providers,
-    candidates: parsed.candidates ?? DEFAULT_CONFIG.candidates,
+    ...(parsed.candidates ? { candidates: parsed.candidates } : {}),
     system: parsed.system ?? DEFAULT_CONFIG.system,
     temperature: parsed.temperature ?? DEFAULT_CONFIG.temperature,
     maxTokens: parsed.maxTokens ?? DEFAULT_CONFIG.maxTokens,
@@ -115,7 +121,9 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
 
 function validate(c: AasConfig): void {
   if (c.providers.length === 0) throw new Error('providers が空です。');
-  if (c.candidates.length === 0) throw new Error('candidates が空です。');
+  if (c.candidates && c.candidates.length === 0) {
+    throw new Error('candidates を空配列にはできません。自動選択に任せるなら項目ごと省いてください。');
+  }
   for (const p of c.providers) {
     if (p.kind === 'openai-compatible') {
       if (!p.baseUrl) throw new Error(`baseUrl が未設定です: ${p.id}`);
@@ -124,7 +132,7 @@ function validate(c: AasConfig): void {
     }
   }
   const ids = new Set(enabledProviders(c).map((p) => p.id));
-  for (const cand of c.candidates) {
+  for (const cand of c.candidates ?? []) {
     const providerId = cand.slice(0, cand.indexOf(':'));
     if (!ids.has(providerId)) {
       throw new Error(
