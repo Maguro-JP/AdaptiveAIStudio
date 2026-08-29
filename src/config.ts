@@ -40,6 +40,33 @@ export interface AasConfig {
   harness?: HarnessConfig;
   /** 自発的な調査と提案 */
   initiative?: InitiativeConfig;
+  /**
+   * 人員。役職ごとの気質・権限を上書き・追加できる。
+   * 「こういう気質の担当がいたら拾えるはず」と思いついたときに、
+   * コードを触らず配属するための入口。
+   */
+  roles?: RoleOverrideConfig[];
+  /** 合議に参加させる役職 */
+  panel?: PanelConfig;
+}
+
+export interface RoleOverrideConfig {
+  id: string;
+  extends?: string;
+  name?: string;
+  responsibility?: string;
+  disposition?: string;
+  access?: Array<'read' | 'write' | 'execute'>;
+  instructions?: string[];
+  outputContract?: string;
+  prefers?: 'strong' | 'fast' | 'any';
+}
+
+export interface PanelConfig {
+  /** 既定で参加させる役職。省略時は検査・破壊・安全の3名 */
+  roles?: string[];
+  /** 同時に走らせる人数 */
+  parallel?: number;
 }
 
 export interface HarnessConfig {
@@ -209,6 +236,8 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
     runtime: parsed.runtime ?? {},
     harness: parsed.harness ?? {},
     initiative: parsed.initiative ?? {},
+    roles: parsed.roles ?? [],
+    panel: parsed.panel ?? {},
   };
   if (config.agent?.lanes) validateLanes(config);
   validate(config);

@@ -28,6 +28,8 @@ import { formatReport } from '../harness/metrics.ts';
 import { ProposalQueue, formatProposal } from '../agent/proposals.ts';
 import { findLeads, investigationPrompt, parseProposal } from '../agent/initiative.ts';
 import { stateDir } from '../core/autopilot-setup.ts';
+import { RoleRegistry } from '../roles/registry.ts';
+import { runPanel, mergeFindings } from '../agent/panel.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -228,6 +230,68 @@ async function main(): Promise<void> {
     return passed;
   };
 
+  // 人員。設定から気質を足したり上書きしたりできる。
+  const roles = new RoleRegistry(config.roles ?? []);
+  const panelCfg = config.panel ?? {};
+
+  /** 権限に応じてツールを配る。持たせない権限は事故にならない。 */
+  const toolPool = {
+    read: harness.wrapAll([readFileTool, listFilesTool, searchTextTool], () => currentInstruction),
+    write: harness.wrapAll([writeFileTool], () => currentInstruction),
+    execute: harness.wrapAll(
+      [createRunCommandTool({ allowed: agentCfg.allowedCommands })], () => currentInstruction),
+  };
+
+  /** 合議。気質の違う担当を同じ対象に当てる。 */
+  const runPanelOn = async (target: string): Promise<void> => {
+    const ids = panelCfg.roles ?? ['tester', 'breaker', 'security'];
+    const members = ids.map((id) => roles.get(id)).filter((r): r is NonNullable<typeof r> => !!r);
+    if (members.length === 0) {
+      console.log(c.red('  参加できる役職がありません。\n'));
+      return;
+    }
+    console.log(c.dim(`  合議: ${members.map((m) => m.name).join(' / ')}`));
+
+    const ac = new AbortController();
+    generating = ac;
+    const gen = runPanel(orchestrator, target, {
+      roles: members, candidates, root, toolPool,
+      parallel: panelCfg.parallel ?? 2,
+      temperature: config.temperature, maxTokens: config.maxTokens,
+    }, ac.signal);
+
+    try {
+      let next = await gen.next();
+      while (!next.done) {
+        const ev = next.value;
+        if (ev.type === 'assigned') console.log(c.dim(`  · ${ev.roleName} が確認中`));
+        else if (ev.type === 'noFinding') console.log(c.dim(`    ${ev.roleName}: 問題なし`));
+        else if (ev.type === 'failed') console.log(c.red(`    ${ev.roleId}: ${ev.error}`));
+        next = await gen.next();
+      }
+      const merged = mergeFindings(next.value);
+      if (merged.length === 0) {
+        console.log(c.green('  全員が問題なしと判断しました。\n'));
+      }
+      for (const f of merged) {
+        const also = f.alsoBy.length > 0 ? c.dim(`（${f.alsoBy.join('・')}も同意）`) : '';
+        const added = proposals.add({
+          kind: f.roleId === 'security' ? 'risk' : 'bug',
+          title: f.title, rationale: `[${f.roleName}] ${f.rationale}`,
+          evidence: [target], suggestedAction: f.action,
+          fingerprint: `panel:${f.title}`,
+        });
+        console.log(c.cyan(`  💡 [${f.roleName}] ${f.title}`) + also);
+        console.log(c.dim(`     ${f.rationale}`));
+        if (added) console.log(c.dim(`     → 提案 ${added.id} として登録しました`));
+      }
+      await proposals.save();
+      console.log();
+    } finally {
+      generating = undefined;
+    }
+  };
+
   const initCfg = config.initiative ?? {};
   const proposals = new ProposalQueue(join(stateDir(), 'proposals.json'));
   await proposals.load();
@@ -367,6 +431,19 @@ async function main(): Promise<void> {
         continue;
       }
       if (line === '/metrics') { console.log(pilot.metrics.report() + '\n'); continue; }
+      if (line === '/roles') {
+        for (const r of roles.all()) {
+          console.log(`  ${c.cyan(r.name.padEnd(12))} ${c.dim(r.access.join('/'))}`);
+          console.log(c.dim(`    ${r.disposition}`));
+        }
+        console.log();
+        continue;
+      }
+      if (line.startsWith('/panel')) {
+        const target = line.slice('/panel'.length).trim();
+        await runPanelOn(target || '直近の変更を見て、問題があれば指摘してください。');
+        continue;
+      }
       if (line === '/proposals') {
         const open = proposals.open();
         if (open.length === 0) console.log(c.dim('  未処理の提案はありません。\n'));
