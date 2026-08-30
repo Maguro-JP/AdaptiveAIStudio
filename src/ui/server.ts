@@ -16,6 +16,7 @@ import { join, dirname, extname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout } from './layout.ts';
+import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
 import { collectState } from './state.ts';
 import type { AasConfig } from '../config.ts';
 import { Session } from '../core/session.ts';
@@ -23,6 +24,8 @@ import type { ApprovalRequest } from '../agent/tools/types.ts';
 
 const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), 'web');
 const LAYOUT_PATH = () => join(stateDir(), 'layout.json');
+// 配置と見た目は分けて持つ。「配置はそのままで色だけ変えたい」が一番多いから。
+const THEME_PATH = () => join(stateDir(), 'theme.json');
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -43,6 +46,7 @@ export type UiEvent =
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string }
   | { type: 'plan'; items: unknown[] }
   | { type: 'stateChanged' }
+  | { type: 'themeChanged' }
   /** 対話の出来事。そのまま画面へ流す。 */
   | { type: 'session'; event: unknown }
   /** 承認待ち。答えが来るまで作業は止まっている。 */
@@ -212,6 +216,29 @@ export class UiServer {
       return send(res, 200, { ok: true });
     }
 
+    if (path === '/api/theme' && req.method === 'GET') {
+      const { theme, repairs } = await loadTheme();
+      return send(res, 200, {
+        theme, repairs, vars: toCssVars(theme), tokens: TOKENS,
+        themes: THEMES.map((t) => ({ id: t.id, name: t.name, scheme: t.scheme })),
+      });
+    }
+
+    if (path === '/api/theme' && req.method === 'PUT') {
+      const { theme, repairs } = repairTheme(await readBody(req));
+      await saveTheme(theme);
+      this.broadcast({ type: 'themeChanged' });
+      return send(res, 200, { theme, repairs, vars: toCssVars(theme) });
+    }
+
+    if (path === '/api/theme/preset' && req.method === 'POST') {
+      const body = await readBody(req) as { id?: string };
+      const theme = baseTheme(String(body?.id ?? ''));
+      await saveTheme(theme);
+      this.broadcast({ type: 'themeChanged' });
+      return send(res, 200, { theme, repairs: [], vars: toCssVars(theme) });
+    }
+
     if (path === '/api/state' && req.method === 'GET') {
       return send(res, 200, await collectState(this.#opts.config));
     }
@@ -282,6 +309,21 @@ export async function loadLayout(): Promise<{ layout: Layout; repairs: { detail:
     // まだ配置を決めていないだけ。既定から始める。
     return { layout: preset('command'), repairs: [] };
   }
+}
+
+export async function loadTheme(): Promise<{ theme: Theme; repairs: { detail: string }[] }> {
+  try {
+    return repairTheme(JSON.parse(await readFile(THEME_PATH(), 'utf8')));
+  } catch {
+    // まだ選んでいないだけ。既定から始める。
+    return { theme: baseTheme('slate'), repairs: [] };
+  }
+}
+
+export async function saveTheme(theme: Theme): Promise<void> {
+  const path = THEME_PATH();
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(theme, null, 2) + '\n', 'utf8');
 }
 
 export async function saveLayout(layout: Layout): Promise<void> {

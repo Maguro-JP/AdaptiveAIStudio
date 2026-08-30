@@ -11,6 +11,8 @@ const root = document.getElementById('editor');
 const $ = (id) => document.getElementById(id);
 
 let layout = null;
+let theme = null;
+let tokenNames = [];
 const stateHandlers = [];
 const eventHandlers = new Map();
 
@@ -140,7 +142,6 @@ function grip(node, index, box) {
 function render() {
   stateHandlers.length = 0;
   eventHandlers.clear();
-  document.documentElement.dataset.theme = layout.theme === 'auto' ? '' : layout.theme;
   document.documentElement.dataset.density = layout.density ?? 'comfortable';
   const panels = new Map(layout.panels.map((p) => [p.id, p]));
   const view = buildNode(layout.root, panels);
@@ -148,6 +149,110 @@ function render() {
   $('root').replaceChildren(view);
   if (lastState) for (const fn of stateHandlers) fn(lastState);
 }
+
+/* ---------- 見た目 ---------- */
+
+/** 受け取った値をそのまま根に差す。値は向こう側で検められている。 */
+function applyTheme(t, vars) {
+  theme = t;
+  const root = document.documentElement;
+  for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
+  root.dataset.scheme = t.scheme;
+  const sel = $('themes');
+  if (!sel) return;
+  // 自分でいじった色も一覧に残す。選び直したときに戻ってこられるように。
+  if (![...sel.options].some((o) => o.value === t.id)) {
+    const o = document.createElement('option');
+    o.value = t.id; o.textContent = t.name;
+    sel.append(o);
+  }
+  sel.value = t.id;
+}
+
+async function loadTheme() {
+  const r = await fetch('/api/theme').then((x) => x.json());
+  tokenNames = r.tokens;
+  const sel = $('themes');
+  sel.replaceChildren();
+  for (const t of r.themes) {
+    const o = document.createElement('option');
+    o.value = t.id; o.textContent = t.name;
+    sel.append(o);
+  }
+  applyTheme(r.theme, r.vars);
+  showRepairs(r.repairs);
+}
+
+$('themes').onchange = async (e) => {
+  const r = await fetch('/api/theme/preset', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: e.target.value }),
+  }).then((x) => x.json());
+  applyTheme(r.theme, r.vars);
+};
+
+/* 色をいじる。触っているそばから映る。気に入らなければ戻せる。 */
+const COLOR_TOKENS = new Set([
+  'bg', 'surface', 'surface2', 'line', 'text', 'dim', 'accent', 'accentText', 'good', 'warn', 'bad',
+]);
+const cssVarName = (t) => '--' + t.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`);
+
+$('editTheme').onclick = () => {
+  const before = structuredClone(theme);
+  const box = $('swatches');
+  box.replaceChildren();
+  $('themeRepairs').textContent = '';
+
+  const draft = structuredClone(theme);
+  for (const name of tokenNames) {
+    const value = draft.tokens[name] ?? '';
+    const label = document.createElement('label');
+    label.textContent = name;
+
+    const picker = document.createElement('input');
+    picker.type = COLOR_TOKENS.has(name) && /^#[0-9a-f]{6}$/i.test(value) ? 'color' : 'hidden';
+    picker.value = value;
+
+    const text = document.createElement('input');
+    text.type = 'text';
+    text.value = value;
+
+    const apply = (v) => {
+      draft.tokens[name] = v;
+      // 検めは向こう側がやる。ここでの見え方は下書きに過ぎない。
+      document.documentElement.style.setProperty(cssVarName(name), v);
+    };
+    picker.oninput = () => { text.value = picker.value; apply(picker.value); };
+    text.oninput = () => {
+      if (picker.type === 'color' && /^#[0-9a-f]{6}$/i.test(text.value)) picker.value = text.value;
+      apply(text.value);
+    };
+
+    box.append(label, picker, text);
+  }
+
+  $('themeEditor').returnValue = '';
+  $('themeEditor').showModal();
+  $('themeEditor').addEventListener('close', async function once() {
+    $('themeEditor').removeEventListener('close', once);
+    if ($('themeEditor').returnValue !== 'save') {
+      // 戻す。触っただけで決まってしまわないように。
+      const r = await fetch('/api/theme').then((x) => x.json());
+      applyTheme(r.theme, r.vars);
+      return;
+    }
+    const r = await fetch('/api/theme', {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...draft, base: before.id, id: 'custom', name: '自分の色' }),
+    }).then((x) => x.json());
+    applyTheme(r.theme, r.vars);
+    if (r.repairs?.length) {
+      // 受け取れなかった値は黙って捨てない。なぜ効かないのか分からなくなる。
+      $('themeRepairs').textContent = r.repairs.map((x) => `・${x.detail}`).join('\n');
+      $('themeEditor').showModal();
+    }
+  });
+};
 
 /* ---------- 出し入れ ---------- */
 
@@ -198,6 +303,7 @@ function listen() {
   src.onmessage = (m) => {
     const e = JSON.parse(m.data);
     if (e.type === 'stateChanged') return void refreshState();
+    if (e.type === 'themeChanged') return void loadTheme();
     for (const fn of eventHandlers.get(e.type) ?? []) fn(e);
   };
 }
@@ -239,6 +345,7 @@ $('presets').onchange = async (e) => {
   render();
 };
 
+await loadTheme();
 await load();
 await refreshState();
 listen();

@@ -88,6 +88,50 @@ describe('配置の受け渡し', () => {
   });
 });
 
+describe('見た目の受け渡し', () => {
+  test('最初は既定の見た目が返る', async () => {
+    const r = await json(await get('/api/theme'));
+    assert.ok(r.themes.length >= 2, '選べる見た目が少なすぎる');
+    assert.ok(r.vars['--bg'], '画面へ流す形になっていない');
+    assert.ok(r.tokens.includes('accent'));
+  });
+
+  test('CSS を抜け出す値は保存しない', async () => {
+    const r = await json(await put('/api/theme', {
+      base: 'slate', tokens: { accent: 'red; } body { display:none } .x{color:red' },
+    }));
+    assert.notEqual(r.theme.tokens.accent, 'red; } body { display:none } .x{color:red');
+    assert.ok(r.repairs.some((x: { detail: string }) => x.detail.includes('accent')));
+    // 流す形にも出ない
+    assert.ok(!String(r.vars['--accent'] ?? '').includes('}'));
+  });
+
+  test('変えたところだけ保存され、読み直しても残る', async () => {
+    await put('/api/theme', { base: 'slate', tokens: { accent: '#ff8800' } });
+    const again = await json(await get('/api/theme'));
+    assert.equal(again.theme.tokens.accent, '#ff8800');
+    assert.deepEqual(again.repairs, []);
+  });
+
+  test('用意された見た目に切り替えられる', async () => {
+    const r = await json(await post('/api/theme/preset', { id: 'cyber' }));
+    assert.equal(r.theme.id, 'cyber');
+    assert.equal(r.theme.scheme, 'dark');
+  });
+
+  test('知らない見た目を頼まれても既定に落ちる', async () => {
+    const r = await json(await post('/api/theme/preset', { id: '無い色' }));
+    assert.ok(r.theme.tokens.bg);
+  });
+
+  test('配置と見た目は別々に持つ（色を変えても配置は動かない）', async () => {
+    const before = await json(await get('/api/layout'));
+    await post('/api/theme/preset', { id: 'paper' });
+    const after = await json(await get('/api/layout'));
+    assert.deepEqual(after.layout, before.layout);
+  });
+});
+
 describe('材料', () => {
   test('人員と記憶が返る', async () => {
     const s = await json(await get('/api/state'));

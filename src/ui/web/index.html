@@ -11,12 +11,30 @@
   <header class="bar">
     <span class="brand">AdaptiveAIStudio</span>
     <span class="spacer"></span>
+    <select id="themes" title="見た目を選ぶ"></select>
     <select id="presets" title="配置を選ぶ"></select>
-    <button id="edit" title="配置を直接いじる">配置を編集</button>
+    <button id="edit" class="ghost" title="配置を直接いじる">配置</button>
+    <button id="editTheme" class="ghost" title="色をいじる">色</button>
     <span id="status" class="status">つないでいます…</span>
   </header>
 
   <main id="root" class="root"></main>
+
+  <dialog id="themeEditor">
+    <form method="dialog">
+      <h2>色と間合い</h2>
+      <p class="hint">
+        触っているそばから画面に映ります。土台を選んで、気になるところだけ変えてください。
+        色として読めない書き方は受け取りません。
+      </p>
+      <div id="swatches" class="swatches"></div>
+      <p id="themeRepairs" class="repairs"></p>
+      <menu>
+        <button value="cancel">戻す</button>
+        <button value="save" class="primary">保存</button>
+      </menu>
+    </form>
+  </dialog>
 
   <dialog id="editor">
     <form method="dialog">

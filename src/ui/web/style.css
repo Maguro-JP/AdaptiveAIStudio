@@ -1,89 +1,186 @@
 /*
- * 配置はデータ側で決まるので、ここに書くのは「見え方」だけ。
- * 色は一箇所にまとめる。好みで差し替えられるように。
+ * 見え方。色と間合いは全部 CSS 変数で、theme.ts から流し込まれる。
+ * ここに生の色を書かない。書いた瞬間、見た目の切り替えが効かなくなる。
+ *
+ * 狙いは「一日中見ていられること」。
+ * 目を引く色は、目を引かせたい一箇所だけに使う。
  */
 :root {
-  --bg: #14161a;
-  --panel: #1b1e24;
-  --line: #2a2f38;
-  --text: #dfe3ea;
-  --dim: #8b93a1;
-  --accent: #5aa9e6;
-  --warn: #e0b341;
-  --bad: #e06c75;
-  --good: #7fca88;
-  --gap: 8px;
-  --radius: 8px;
-  font-size: 14px;
+  /* 土台。実際の値は起動時に差し替えられる（これは差し替え前の保険） */
+  --bg: #0f1116;
+  --surface: #161922;
+  --surface2: #1c2029;
+  --line: #262b36;
+  --text: #dfe3ec;
+  --dim: #8e97a8;
+  --accent: #7aa2f7;
+  --accent-text: #0b0e14;
+  --good: #9ece6a;
+  --warn: #e0af68;
+  --bad: #f7768e;
+  --radius: 10px;
+  --gap: 10px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .35);
+  --font: ui-sans-serif, system-ui, 'Hiragino Sans', 'Noto Sans JP', sans-serif;
+  --font-mono: ui-monospace, Menlo, monospace;
+  --font-size: 14px;
+  --line-height: 1.55;
+
+  /* 間合いは一つの尺度から作る。ばらばらの数字を置かない。 */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+
+  color-scheme: dark;
+  font-size: var(--font-size);
 }
-:root[data-theme="light"] {
-  --bg: #f4f5f7; --panel: #fff; --line: #dfe2e8;
-  --text: #1d2027; --dim: #6b7280; --accent: #2f6fb0;
-}
-:root[data-density="compact"] { --gap: 4px; --radius: 5px; font-size: 13px; }
+:root[data-scheme="light"] { color-scheme: light; }
+:root[data-density="compact"] { --gap: 6px; --s1: 3px; --s2: 6px; --s3: 9px; --s4: 12px; }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
-  background: var(--bg); color: var(--text);
-  font-family: ui-sans-serif, "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
-  display: flex; flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: var(--line-height);
+  display: flex;
+  flex-direction: column;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* 巻物は細く。中身の邪魔をしない。 */
+* { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 99px; border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--dim); background-clip: content-box; }
+
+/* ---------- 上の帯 ---------- */
 
 .bar {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--panel);
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
 }
-.brand { font-weight: 600; letter-spacing: .02em; }
+.brand {
+  font-weight: 620;
+  letter-spacing: -.01em;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+}
+.brand::before {
+  content: "";
+  width: 8px; height: 8px; border-radius: 3px;
+  background: var(--accent);
+}
 .spacer { flex: 1; }
-.status { color: var(--dim); font-size: .85em; }
-.status.live::before { content: "● "; color: var(--good); }
-.status.down::before { content: "● "; color: var(--bad); }
-
-button, select {
-  background: var(--bg); color: var(--text);
-  border: 1px solid var(--line); border-radius: 6px;
-  padding: 4px 10px; font: inherit; cursor: pointer;
+.status { color: var(--dim); font-size: .82rem; display: flex; align-items: center; gap: 6px; }
+.status::before {
+  content: ""; width: 7px; height: 7px; border-radius: 99px;
+  background: var(--dim); flex: 0 0 auto;
 }
-button:hover, select:hover { border-color: var(--accent); }
-button.primary { background: var(--accent); color: #0b0d10; border-color: var(--accent); }
+.status.live::before { background: var(--good); }
+.status.down::before { background: var(--bad); }
+
+/* ---------- 押せるもの ---------- */
+
+button, select, input, textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface2);
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) - 3px);
+  padding: 5px 10px;
+  transition: border-color .12s ease, background-color .12s ease;
+}
+button, select { cursor: pointer; }
+button:hover, select:hover { border-color: var(--dim); }
+button:active { transform: translateY(.5px); }
+:where(button, select, input, textarea):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+button.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+  border-color: transparent;
+  font-weight: 560;
+}
+button:disabled { opacity: .45; cursor: default; }
+button.ghost { background: transparent; border-color: transparent; color: var(--dim); }
+button.ghost:hover { color: var(--text); background: var(--surface2); }
+
+/* ---------- 枠 ---------- */
 
 .root { flex: 1; min-height: 0; padding: var(--gap); }
 
 .split { display: flex; gap: var(--gap); min-width: 0; min-height: 0; height: 100%; }
 .split.column { flex-direction: column; }
 
-.grip { flex: 0 0 6px; cursor: col-resize; border-radius: 3px; }
+.grip { flex: 0 0 8px; border-radius: 99px; position: relative; cursor: col-resize; }
 .split.column > .grip { cursor: row-resize; }
-.grip:hover { background: var(--accent); }
+.grip::after {
+  content: ""; position: absolute; inset: 40% 3px;
+  border-radius: 99px; background: transparent; transition: background-color .12s ease;
+}
+.split.column > .grip::after { inset: 3px 40%; }
+.grip:hover::after { background: var(--accent); }
 
 .panel {
-  display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  min-width: 0; min-height: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
   overflow: hidden;
 }
 .panel > header {
-  display: flex; gap: 6px; align-items: center;
-  padding: 4px 8px; border-bottom: 1px solid var(--line);
-  font-size: .82em; color: var(--dim); letter-spacing: .04em;
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  padding: var(--s2) var(--s3);
+  color: var(--dim);
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
 }
-.panel > .body { flex: 1; overflow: auto; padding: 8px; min-height: 0; }
+.panel > .body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--s3);
+}
 
-.tabs > header { gap: 2px; }
+.tabs > header { padding: var(--s1) var(--s1) 0; gap: 2px; text-transform: none; letter-spacing: 0; }
 .tabs > header button {
   border: 0; background: transparent; color: var(--dim);
-  padding: 3px 8px; border-radius: 5px 5px 0 0; font-size: 1em;
+  padding: 5px 10px; border-radius: calc(var(--radius) - 4px);
+  font-size: .78rem; font-weight: 560; letter-spacing: .02em;
 }
-.tabs > header button[aria-selected="true"] { color: var(--text); background: var(--bg); }
+.tabs > header button:hover { color: var(--text); }
+.tabs > header button[aria-selected="true"] { color: var(--text); background: var(--surface2); }
+
+/* ---------- 一覧 ---------- */
 
 /*
- * 一覧の列は揃える。行ごとに幅が動くと、読むたびに目が探し直すことになる。
+ * 列は必ず揃える。行ごとに幅が動くと、読むたびに目が探し直すことになる。
  * 行の中の列を、一覧全体で共有する（subgrid）。
  */
 .rows {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr) max-content;
-  column-gap: 12px;
+  column-gap: var(--s3);
 }
 .rows[data-cols="2"] { grid-template-columns: max-content minmax(0, 1fr); }
 .row {
@@ -91,43 +188,111 @@ button.primary { background: var(--accent); color: #0b0d10; border-color: var(--
   grid-template-columns: subgrid;
   grid-column: 1 / -1;
   align-items: baseline;
-  padding: 3px 0;
-  border-bottom: 1px solid var(--line);
+  padding: 5px 6px;
+  margin: 0 -6px;
+  border-radius: calc(var(--radius) - 5px);
 }
-.row:last-child { border-bottom: 0; }
+.row:hover { background: var(--surface2); }
 /* 行の中身は、はみ出さずに詰める。列がずれるより、末尾が切れる方がまし。 */
 .row > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .key { color: var(--dim); }
-/* 数は右で揃える。桁が縦に並ぶ。 */
-.num { text-align: right; font-variant-numeric: tabular-nums; }
 .dim { color: var(--dim); }
 .warn { color: var(--warn); }
 .bad { color: var(--bad); }
 .good { color: var(--good); }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
-.empty { color: var(--dim); padding: 12px; text-align: center; }
+.mono { font-family: var(--font-mono); font-size: .86em; }
+/* 数は右で揃える。桁が縦に並ぶ。 */
+.num { text-align: right; font-variant-numeric: tabular-nums; }
 
-.chat { display: flex; flex-direction: column; height: 100%; }
-.chat .log { flex: 1; overflow: auto; }
-.chat form { display: flex; gap: 6px; padding-top: 6px; }
-.chat input { flex: 1; background: var(--bg); color: var(--text);
-  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; }
-
-dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line);
-  border-radius: 10px; width: min(760px, 92vw); }
-dialog h2 { margin: 0 0 4px; font-size: 1.05em; }
-.hint { color: var(--dim); font-size: .85em; margin: 0 0 8px; }
-textarea { width: 100%; height: 46vh; background: var(--bg); color: var(--text);
-  border: 1px solid var(--line); border-radius: 6px; padding: 8px;
-  font-family: ui-monospace, monospace; font-size: .88em; }
-.repairs { color: var(--warn); font-size: .85em; white-space: pre-wrap; }
-menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 8px 0 0; }
-
-.chat input:disabled { opacity: .6; }
-.ask { border: 1px solid var(--warn); border-radius: var(--radius); padding: 8px; margin: 6px 0; }
-.ask-menu { display: flex; gap: 6px; margin-top: 6px; }
-.diff {
-  max-height: 30vh; overflow: auto; margin: 6px 0 0; padding: 6px;
-  background: var(--bg); border-radius: 5px;
-  font-family: ui-monospace, monospace; font-size: .82em; white-space: pre;
+.empty {
+  color: var(--dim);
+  padding: var(--s4);
+  text-align: center;
+  font-size: .88rem;
 }
+
+/* ---------- 会話 ---------- */
+
+.chat { display: flex; flex-direction: column; height: 100%; gap: var(--s2); }
+.chat .log {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  scroll-behavior: smooth;
+}
+.chat .log > * { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 自分が書いた行だけは、はっきり分かるようにする。 */
+.chat .log > .key {
+  color: var(--text);
+  font-weight: 560;
+  border-left: 2px solid var(--accent);
+  padding-left: var(--s2);
+  margin: var(--s3) 0 var(--s1);
+}
+.chat form { display: flex; gap: var(--s2); flex: 0 0 auto; }
+.chat input { flex: 1; padding: 8px 12px; background: var(--surface2); }
+
+.ask {
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  background: var(--surface2);
+  padding: var(--s3);
+  margin: var(--s2) 0;
+}
+.ask-menu { display: flex; gap: var(--s2); margin-top: var(--s2); }
+.diff {
+  max-height: 30vh; overflow: auto;
+  margin: var(--s2) 0 0; padding: var(--s2);
+  background: var(--bg);
+  border-radius: calc(var(--radius) - 4px);
+  font-family: var(--font-mono); font-size: .8rem; line-height: 1.5;
+  white-space: pre;
+}
+
+/* ---------- 覆いかぶさるもの ---------- */
+
+dialog {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .4);
+  width: min(780px, 92vw);
+  padding: var(--s4);
+}
+dialog::backdrop { background: rgba(0, 0, 0, .5); backdrop-filter: blur(2px); }
+dialog h2 { margin: 0 0 var(--s1); font-size: 1rem; font-weight: 620; }
+.hint { color: var(--dim); font-size: .84rem; margin: 0 0 var(--s3); }
+textarea {
+  width: 100%; height: 46vh;
+  background: var(--bg);
+  font-family: var(--font-mono); font-size: .82rem; line-height: 1.55;
+  resize: vertical;
+}
+.repairs { color: var(--warn); font-size: .84rem; white-space: pre-wrap; margin: var(--s2) 0 0; }
+menu { display: flex; justify-content: flex-end; gap: var(--s2); padding: 0; margin: var(--s3) 0 0; }
+
+/* 動きを嫌う人には動かさない。 */
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; scroll-behavior: auto !important; }
+}
+
+/* ---------- 色をいじるところ ---------- */
+
+.swatches {
+  display: grid;
+  grid-template-columns: max-content max-content minmax(0, 1fr);
+  gap: var(--s1) var(--s3);
+  align-items: center;
+  max-height: 52vh;
+  overflow: auto;
+}
+.swatches label { color: var(--dim); font-size: .84rem; font-family: var(--font-mono); }
+.swatches input[type="color"] {
+  width: 34px; height: 26px; padding: 2px;
+  background: var(--surface2); cursor: pointer;
+}
+.swatches input[type="text"] { width: 100%; font-family: var(--font-mono); font-size: .82rem; }
