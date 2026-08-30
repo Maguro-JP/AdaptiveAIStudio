@@ -365,6 +365,8 @@ async function main(): Promise<void> {
         roleIds: roles.active().map((r) => r.id),
         fallbackRoleId: roles.get('worker') ? 'worker' : roles.active()[0]!.id,
         maxItems: 8,
+        // 誰が書き、誰が調べるだけかを渡す。二人目を付ける判断に要る。
+        access: Object.fromEntries(roles.active().map((r) => [r.id, r.access as string[]])),
       };
 
       // 前に分かっていること・駄目だったことを渡してから分解させる。

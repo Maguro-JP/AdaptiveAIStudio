@@ -48,7 +48,29 @@ export interface PmContext {
   fallbackRoleId: string;
   /** 分け過ぎを止める。細かすぎる分解は、一人でやるより遅い。 */
   maxItems?: number;
+  /**
+   * 役職ごとの権限。誰が書き、誰が調べるだけかを知るために要る。
+   * 省略すると二人目を付ける判断ができないので、その場合は付けない。
+   */
+  access?: Record<string, string[]>;
+  /**
+   * 一人に任せない。既定は有効。
+   * 書いたものは別の気質の担当が確かめ、調べたものは別の担当が裏を取る。
+   */
+  secondPass?: boolean;
 }
+
+/**
+ * 確かめる側。順に使うので、いつも同じ人が見ることにならない。
+ *
+ * 真面目な検査役だけでは足りない。
+ * 手順通りに試す人、わざと外れた使い方をする人、疑ってかかる人 ——
+ * 見えているものが違うので、回すほど拾える範囲が広がる。
+ */
+export const CHECK_ROLES = ['tester', 'breaker', 'reviewer', 'security'];
+
+/** 裏を取る側。調べた話を、別の角度から確かめる。 */
+export const CROSSCHECK_ROLES = ['librarian', 'reviewer', 'scout'];
 
 /** 分解の指示。形式を外すと直す手間が増えるので、形は厳しく指定する。 */
 export function planPrompt(request: string, ctx: PmContext): string {
@@ -177,6 +199,8 @@ export function repairPlan(raw: unknown, request: string, ctx: PmContext): WorkP
 
   breakCycles(items, repairs);
 
+  if (ctx.secondPass !== false) items = ensureSecondPass(items, ctx, repairs);
+
   // レーン割り当て。指定が無いものを順に配り、偏らせない。
   let next = 0;
   for (const item of items) {
@@ -204,6 +228,78 @@ export function repairPlan(raw: unknown, request: string, ctx: PmContext): WorkP
     items,
     repairs,
   };
+}
+
+
+/**
+ * 一人に任せない。
+ *
+ * モデルの数を増やす話ではない。
+ * **同じ対象に、違う気質が、複数回当たる**という話。
+ * 書いた本人は自分の書いたものを疑えないし、
+ * 一度調べただけの話は、まだ裏が取れていない。
+ *
+ * ここで足すのは、依頼には書かれていないが必ず要る工程。
+ * モデルに「検査も入れてね」と頼むのではなく、構造として必ず入るようにする。
+ * 頼むのは守られないことがあるが、構造は守られる。
+ */
+export function ensureSecondPass(
+  items: PlanItem[],
+  ctx: PmContext,
+  repairs: string[],
+): PlanItem[] {
+  const access = ctx.access;
+  if (!access) return items;
+
+  const known = new Set(ctx.roleIds);
+  const available = (list: string[]) => list.filter((r) => known.has(r));
+  const checkers = available(CHECK_ROLES);
+  const crosscheckers = available(CROSSCHECK_ROLES);
+
+  const added: PlanItem[] = [];
+  const ceiling = (ctx.maxItems ?? 8) * 2;
+  let turn = 0;
+
+  const hasFollower = (id: string, roleId: string, pool: string[]): boolean =>
+    items.some((o) => (o.deps ?? []).includes(id) && o.roleId !== roleId && pool.includes(o.roleId));
+
+  for (const item of items) {
+    if (items.length + added.length >= ceiling) break;
+
+    const writes = (item.writes ?? []).length > 0 || (access[item.roleId] ?? []).includes('write');
+    const gathers = !writes && (access[item.roleId] ?? []).includes('read');
+
+    const pool = writes ? checkers : gathers ? crosscheckers : [];
+    if (pool.length === 0) continue;
+    if (hasFollower(item.id, item.roleId, pool)) continue;
+
+    // 本人以外から選ぶ。順に回すので、いつも同じ人にならない。
+    const candidates = pool.filter((r) => r !== item.roleId);
+    if (candidates.length === 0) continue;
+    const roleId = candidates[turn % candidates.length]!;
+    turn += 1;
+
+    added.push({
+      id: `${item.id}_2`,
+      roleId,
+      laneId: undefined,
+      deps: [item.id],
+      writes: [],
+      instruction: writes
+        ? `${item.instruction}\n\nこの作業の結果を、実際に動かして確かめてください。`
+          + `書いた本人ではないので、書かれた意図ではなく、書かれたものを見てください。`
+          + `想定通りに動かない箇所があれば、どこがどう違うかを具体的に挙げてください。`
+        : `${item.instruction}\n\nこの調査の結果を、別の角度から確かめてください。`
+          + `同じ手順をなぞるのではなく、別の材料で裏を取ってください。`
+          + `食い違いがあれば、どちらが正しいかではなく、食い違っている事実を挙げてください。`,
+      why: writes ? '書いた本人以外が確かめる' : '一度だけの調査は裏が取れていない',
+    });
+  }
+
+  if (added.length > 0) {
+    repairs.push(`一人に任せないため、確かめる工程を ${added.length} 件足しました。`);
+  }
+  return [...items, ...added];
 }
 
 /**
