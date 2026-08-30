@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
-import { readFileTool, listFilesTool, searchTextTool, writeFileTool } from '../src/agent/tools/fs.ts';
+import { readFileTool, listFilesTool, searchTextTool, writeFileTool, matchLineEndings } from '../src/agent/tools/fs.ts';
 import { createRunCommandTool } from '../src/agent/tools/shell.ts';
 import { safeResolve } from '../src/agent/tools/paths.ts';
 import type { ToolContext } from '../src/agent/tools/types.ts';
@@ -131,5 +131,55 @@ describe('コマンド実行', () => {
     const r = await tool.run({ command: 'node -e "process.exit(3)"' }, ctx(root));
     assert.equal(r.isError, true);
     assert.match(r.content, /終了コード: 3/);
+  });
+});
+
+/**
+ * 改行の引き継ぎ。
+ *
+ * Windows で取ってきた木は CRLF のことがある。
+ * モデルは LF で書き戻すので、そのまま書くと
+ * 1行も直していないのにファイル全体が変更扱いになる。
+ * 差分を見て承認する仕組みなので、ここが崩れると承認の意味が消える。
+ */
+describe('改行の引き継ぎ', () => {
+  test('元が CRLF なら CRLF で書き戻す', () => {
+    const before = 'a\r\nb\r\nc\r\n';
+    assert.equal(matchLineEndings('a\nB\nc\n', before), 'a\r\nB\r\nc\r\n');
+  });
+
+  test('元が LF なら LF のまま', () => {
+    assert.equal(matchLineEndings('a\nB\n', 'a\nb\n'), 'a\nB\n');
+  });
+
+  test('新規のファイルは、渡されたまま', () => {
+    assert.equal(matchLineEndings('a\nb\n', ''), 'a\nb\n');
+  });
+
+  test('混ざっていれば多い方に寄せる', () => {
+    assert.equal(matchLineEndings('x\ny\n', 'a\r\nb\r\nc\n'), 'x\r\ny\r\n');
+    assert.equal(matchLineEndings('x\ny\n', 'a\nb\nc\r\n'), 'x\ny\n');
+  });
+
+  test('CRLF を渡されても、二重にはしない', () => {
+    assert.equal(matchLineEndings('a\r\nb\r\n', 'x\r\n'), 'a\r\nb\r\n');
+  });
+
+  test('CRLF のファイルに書いても「全行変更」にならない', async () => {
+    const root = await tempDir('aas-crlf-');
+    await writeFile(join(root, 'w.txt'), 'a\r\nb\r\nc\r\n');
+
+    // 中身は同じで改行だけ LF にして渡す = 何も変えていないのと同じ
+    const same = await writeFileTool.run(
+      { path: 'w.txt', content: 'a\nb\nc\n' }, ctx(root));
+    assert.match(same.content, /変更なし/, `全行変更として扱われている: ${same.content}`);
+
+    // 1行だけ直したときは、その1行だけが変わる
+    const one = await writeFileTool.run(
+      { path: 'w.txt', content: 'a\nB\nc\n' }, ctx(root));
+    assert.equal(one.isError, undefined, one.content);
+    assert.equal(await readFile(join(root, 'w.txt'), 'utf8'), 'a\r\nB\r\nc\r\n',
+      '改行が LF に置き換わっている');
+    assert.match(one.content, /\+1/, `1行だけの変更になっていない: ${one.content}`);
   });
 });
