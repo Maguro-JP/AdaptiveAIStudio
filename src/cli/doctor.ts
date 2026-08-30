@@ -10,6 +10,7 @@
 import { loadConfig, enabledProviders } from '../config.ts';
 import { MachineCache, describeMachine } from '../runtime/machine.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
+import { findInstalled } from '../runtime/llama-install.ts';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { join } from 'node:path';
 import { readdir } from 'node:fs/promises';
@@ -63,7 +64,7 @@ if (machine.vramBytes > 0) {
 
 /* ---------- モデルの置き場 ---------- */
 
-const runtime = buildRuntime(config, machine);
+const runtime = await buildRuntime(config, machine);
 let models: Awaited<ReturnType<typeof runtime.list>> = [];
 try {
   models = await runtime.list();
@@ -85,16 +86,31 @@ if (models.length > 0) {
     + '     そのあと `ollama pull qwen3:30b-a3b`（8GB VRAM ならこれが最適解）\n'
     + '\n'
     + '  B. llama.cpp（Ollama に依らない。GGUF を自分で置く）\n'
-    + '     llama-server を用意し、GGUF を1箇所に集めて、aas.config.json に:\n'
-    + '       "runtime": { "kind": "llamacpp",\n'
-    + '                    "command": "llama-server の場所",\n'
-    + '                    "modelsDir": "GGUF を置いた場所" }\n'
+    + '     `npm run llama` で llama-server をこちらが用意します（手で入れる必要はありません）。\n'
+    + '     あとは GGUF を1箇所に集めて、aas.config.json に:\n'
+    + '       "runtime": { "kind": "llamacpp", "modelsDir": "GGUF を置いた場所" }\n'
     + '     オフロードの計算は GGUF を直接読んで行います（docs/GGUF.md）。');
 } else {
   add('モデル', 'bad', `${config.runtime?.modelsDir ?? '(modelsDir 未設定)'} に GGUF がありません`,
     '.gguf ファイルを modelsDir に置いてください。\n'
     + `いまの modelsDir: ${config.runtime?.modelsDir ?? '未設定（aas.config.json で指定してください）'}`);
 }
+
+/* ---------- llama-server ---------- */
+
+// 借り物ではなく自前で持てているか。ここが空だと、
+// 誰かが入れたものに相乗りしている状態になる。
+const llamaPath = await findInstalled();
+if (llamaPath) {
+  add('llama-server', 'ok', llamaPath);
+} else if (config.runtime?.kind === 'llamacpp') {
+  add('llama-server', 'bad', 'まだ用意していません',
+    '`npm run llama` で取ってきます。\n'
+    + 'いまは PATH にある llama-server を探しますが、'
+    + 'それは他の道具（LM Studio など）が入れたもので、消されると動かなくなります。');
+}
+// runtime.kind が llamacpp でなく、用意もしていない場合は何も言わない。
+// 使っていないものが足りないのは、問題ではない。
 
 /* ---------- 繋ぎ先 ---------- */
 

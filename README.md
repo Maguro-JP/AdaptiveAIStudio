@@ -86,11 +86,22 @@ ollama pull qwen3:30b-a3b
 
 **B. llama.cpp** — Ollama に依らない。GGUF を自分で置く。
 
+llama-server は**この道具が自分で用意します**。手で入れる必要はありません。
+
+```
+npm run llama
+```
+
+公式のリリースから、この機械に合うもの（NVIDIA があれば CUDA 版）を選んで
+`~/.aas/bin` に置きます。置いたあと一度動かして、実際に起動できることまで確かめます。
+
 ```json
 { "runtime": { "kind": "llamacpp",
-               "command": "llama-server の場所",
                "modelsDir": "GGUF を置いた場所" } }
 ```
+
+`command` は書かなくて構いません。用意したものが自動で使われます。
+自分で入れた llama.cpp を使いたい場合だけ、`command` にその場所を書きます。
 
 B のとき、何層をGPUに載せるかは
 [GGUF を直接読んで](docs/GGUF.md)計算します。Ollama の申告に頼りません。

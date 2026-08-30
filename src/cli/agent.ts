@@ -100,7 +100,7 @@ async function main(): Promise<void> {
   prefetch.start();
 
   // 使うモデルを先に温めておく。作業開始時の待ちをゼロにする。
-  const runtime = buildRuntime(config, pilot.machine);
+  const runtime = await buildRuntime(config, pilot.machine);
   const warm = await startWarmPool(config, runtime, pilot.machine, candidates, (e) => {
     if (e.type === 'warming') process.stderr.write(c.dim(`  温め中: ${e.ref}...\n`));
     else if (e.type === 'warm') process.stderr.write(c.dim(`  常駐: ${e.ref} (${e.loadSeconds}秒)\n`));

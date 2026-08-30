@@ -8,6 +8,7 @@
  * llama-server は OpenAI互換APIを出すので、Provider層に変更は要らない。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { runtimeEnv } from './llama-env.ts';
 import { readdir, stat } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { planExecution, type Plan } from './planner.ts';
@@ -161,7 +162,12 @@ export class LlamaCppRuntime implements LocalRuntime {
     this.#opts.onLog?.(`起動: ${this.#opts.command} ${args.join(' ')}`);
     const startedAt = Date.now();
 
-    const child = spawn(this.#opts.command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    // 共有ライブラリは実行ファイルの隣にある。探す場所を明示しないと、
+    // 置いてあるのに「見つからない」で落ちる。
+    const child = spawn(this.#opts.command, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: runtimeEnv(this.#opts.command),
+    });
     let exited: { code: number | null; detail: string } | undefined;
     let stderrTail = '';
 
