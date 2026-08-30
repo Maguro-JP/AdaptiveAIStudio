@@ -43,6 +43,11 @@ export function describeGitState(state: GitState): { text: string; risky: boolea
   }
 }
 
+/** git を呼ぶ。更新の仕組みからも使う。 */
+export function runGit(args: string[], cwd: string): Promise<{ code: number; out: string }> {
+  return run('git', args, cwd);
+}
+
 function run(cmd: string, args: string[], cwd: string) {
   return new Promise<{ code: number; out: string }>((resolve) => {
     const child = spawn(cmd, args, { cwd });

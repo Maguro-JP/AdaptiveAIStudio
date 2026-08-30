@@ -27,6 +27,7 @@ import { RoleRegistry } from '../roles/registry.ts';
 import { RoleLedger, formatChanges } from '../roles/ledger.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { formatPlan } from '../agent/pm.ts';
+import { checkUpdate, applyUpdate, describeUpdate } from '../core/update.ts';
 import { formatReport as formatAcceptance } from '../agent/acceptance.ts';
 import { formatEntry } from '../memory/memory.ts';
 import { Session } from '../core/session.ts';
@@ -491,6 +492,18 @@ async function main(): Promise<void> {
         else {
           for (const p of open) console.log(formatProposal(p, true) + '\n');
         }
+        continue;
+      }
+      if (line === '/update' || line === '/update!') {
+        const status = await checkUpdate(root);
+        console.log(c.dim(`  ${describeUpdate(status)}\n`));
+        if (!status.can) continue;
+        if (line !== '/update!') {
+          console.log(c.dim('  取り込むなら /update! を実行してください。\n'));
+          continue;
+        }
+        const r = await applyUpdate(root);
+        console.log(r.ok ? c.green(`  ${r.message}\n`) : c.red(`  ${r.message}\n`));
         continue;
       }
       if (line === '/think') { await think(); continue; }

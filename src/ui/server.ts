@@ -15,6 +15,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname, extname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
+import { checkUpdate, applyUpdate } from '../core/update.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout } from './layout.ts';
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
 import { collectState } from './state.ts';
@@ -259,6 +260,20 @@ export class UiServer {
       // 採用したなら、その内容をそのまま依頼として流す。
       if (verdict === 'accepted' && !session.busy) void this.#drive(session, target.suggestedAction);
       return send(res, 200, { proposal: target });
+    }
+
+    // 更新は「見てから押す」の2段。押した瞬間に取ってくると、
+    // 何が入るのか分からないまま新しくなる。
+    if (path === '/api/update' && req.method === 'GET') {
+      return send(res, 200, await checkUpdate((await this.session()).root));
+    }
+
+    if (path === '/api/update' && req.method === 'POST') {
+      const session = await this.session();
+      // 作業中に足元のコードを入れ替えない。
+      if (session.busy) return send(res, 409, { error: 'いま作業中です。終わってから更新してください' });
+      const result = await applyUpdate(session.root);
+      return send(res, result.ok ? 200 : 409, result);
     }
 
     if (path === '/api/think' && req.method === 'POST') {
