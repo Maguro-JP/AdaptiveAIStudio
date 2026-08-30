@@ -36,6 +36,7 @@ import { snapshotTests } from '../agent/test-integrity.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
 import type { Harness } from '../harness/harness.ts';
 import { inspectGit } from '../agent/git.ts';
+import { diffStat } from '../agent/diff.ts';
 import type { LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
 
@@ -62,6 +63,8 @@ export type SessionEvent =
   /** 検証ループの様子。書いて終わりにしないための往復。 */
   | { type: 'verify'; event: VerifyEvent }
   | { type: 'rolledBack'; paths: string[] }
+  /** 書き換えの中身。何がどう変わったかは、文章より差分の方が速い。 */
+  | { type: 'diff'; path: string; diff: string; added: number; removed: number; created: boolean }
   /** 検証まで含めた、この依頼の結末。 */
   | { type: 'settled'; reason: string; verified: boolean; seconds: number; detail?: string }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string };
@@ -76,6 +79,7 @@ export type PlanEvent =
   | { type: 'taskSkip'; taskId: string; reason: string }
   | { type: 'running'; taskIds: string[] }
   | { type: 'work'; taskId: string; text: string; ok: boolean }
+  | { type: 'diff'; path: string; diff: string; added: number; removed: number; created: boolean }
   | { type: 'verifying'; command: string }
   | { type: 'baselineFailed' }
   | { type: 'accepted'; report: AcceptanceReport }
@@ -108,6 +112,8 @@ export class Session {
   readonly #history: ProviderMessage[] = [];
   #running?: AbortController;
   #instruction = '';
+  /** 書き込みの直前に作られた差分。承認の問い合わせを通り道にして拾う。 */
+  readonly #diffs = new Map<string, { diff: string; created: boolean }>();
 
   private constructor(init: {
     config: AasConfig; root: string; candidates: string[];
@@ -182,6 +188,25 @@ export class Session {
   }
 
   get busy(): boolean { return this.#running !== undefined; }
+
+  /**
+   * 承認の問い合わせを通り道にして、差分を拾っておく。
+   * 差分は道具の中で作られていて、承認以外に外へ出る道が無いため。
+   */
+  readonly #approve = async (req: ApprovalRequest): Promise<boolean> => {
+    if (req.kind === 'write') this.#diffs.set(req.path, { diff: req.diff, created: req.created });
+    return this.#opts.approve(req);
+  };
+
+  /** 直近の書き換えの差分。取り出したら手放す。 */
+  #takeDiff(path: string): { diff: string; created: boolean } | undefined {
+    const key = path.replace(/\\/g, '/').replace(/^\.\//, '');
+    for (const candidate of [path, key]) {
+      const found = this.#diffs.get(candidate);
+      if (found) { this.#diffs.delete(candidate); return found; }
+    }
+    return undefined;
+  }
 
   /** レーン。指定が無ければ候補から作る。空いている資源は節約ではなく損失。 */
   get lanes(): LaneConfig[] {
@@ -259,7 +284,7 @@ export class Session {
         temperature: this.config.temperature,
         maxTokens: this.config.maxTokens,
         maxTotalParallel: this.config.agent?.maxTotalParallel,
-        approve: this.#opts.approve,
+        approve: this.#approve,
         // 権限は役職から配る。調べるだけの担当は書き込む手段を持たない。
         assign: (roleId) => {
           const role = this.roles.get(roleId);
@@ -289,6 +314,8 @@ export class Session {
             type: 'work', taskId: ev.taskId, ok: !ev.event.isError,
             text: `${ev.event.call.name} ${summarize(ev.event.call.args)}`,
           };
+          const shown = this.#diffFor(ev.event.call.name, ev.event.call.args, ev.event.isError);
+          if (shown) yield shown;
         }
         next = await gen.next();
       }
@@ -431,12 +458,15 @@ export class Session {
               }
               yield { type: 'toolStart', name: ev.call.name, summary: summarize(ev.call.args) };
               break;
-            case 'toolEnd':
+            case 'toolEnd': {
               if (!ev.isError && ev.call.name === 'write_file') this.#prefetch.invalidate();
               yield {
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
               };
+              const shown = this.#diffFor(ev.call.name, ev.call.args, ev.isError);
+              if (shown) yield shown;
               break;
+            }
             case 'fallback':
               yield { type: 'fallback', from: ev.from, to: ev.to, reason: ev.reason };
               break;
@@ -477,6 +507,8 @@ export class Session {
               events.push({
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
               });
+              const shown = this.#diffFor(ev.call.name, ev.call.args, ev.isError);
+              if (shown) events.push(shown);
             }
           }
         };
@@ -535,6 +567,17 @@ export class Session {
     }
   }
 
+  /** 書き換えが通ったら、その差分を出来事にする。 */
+  #diffFor(name: string, args: unknown, isError: boolean): (SessionEvent & PlanEvent & { type: 'diff' }) | undefined {
+    if (isError || name !== 'write_file') return undefined;
+    const path = (args as { path?: unknown }).path;
+    if (typeof path !== 'string') return undefined;
+    const found = this.#takeDiff(path);
+    if (!found) return undefined;
+    const { added, removed } = diffStat(found.diff);
+    return { type: 'diff', path, diff: found.diff, added, removed, created: found.created };
+  }
+
   /** 一人で全部やる作業者。気質も権限も既定のもの。 */
   async #agent(): Promise<Agent> {
     return new Agent(this.orchestrator, {
@@ -545,7 +588,7 @@ export class Session {
       maxTurns: this.config.agent?.maxTurns ?? 40,
       temperature: this.config.temperature,
       maxTokens: this.config.maxTokens,
-      approve: this.#opts.approve,
+      approve: this.#approve,
     });
   }
 

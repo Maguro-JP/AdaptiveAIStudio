@@ -5,6 +5,8 @@
  * 増やすときに他を触らなくていいことが、いじりやすさになる。
  */
 
+import { renderDiff } from './diff.js';
+
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -35,139 +37,241 @@ function rows(items, render, columns = 3) {
 }
 
 export const PANELS = {
+  /**
+   * 会話。
+   *
+   * 端末の流れをそのまま写さない。それなら端末で足りる。
+   * 起きたことを**札**にして、種類ごとに形を変える。
+   * 道具の呼び出しは畳んでおき、書き換えは差分そのものを出す。
+   */
   conversation(body, ctx) {
     const wrap = el('div', 'chat');
     const log = el('div', 'log');
     const form = document.createElement('form');
-    const input = document.createElement('input');
-    input.placeholder = '指示を書く（/plan で分解して並列実行）';
-    const stop = el('button', '', '中断');
+    const field = el('div', 'field');
+    const input = document.createElement('textarea');
+    input.rows = 1;
+    input.placeholder = '指示を書く  （Enter で送る / Shift+Enter で改行 / 先頭に /plan で分解）';
+    const send = el('button', 'primary send', '送る');
+    const stop = el('button', 'ghost', '中断');
     stop.type = 'button';
     stop.disabled = true;
-    form.append(input, stop);
+    field.append(input, send);
+    form.append(field, stop);
     wrap.append(log, form);
     body.append(wrap);
 
-    const line = (cls, text) => {
-      const n = el('div', cls, text);
-      log.append(n);
-      log.scrollTop = log.scrollHeight;
-      return n;
+    // 下まで見ているときだけ追いかける。読んでいる途中で飛ばさない。
+    let pinned = true;
+    log.onscroll = () => {
+      pinned = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+      jump.hidden = pinned;
+    };
+    const jump = el('button', 'jump', '新しい動きへ ↓');
+    jump.hidden = true;
+    jump.onclick = () => { pinned = true; jump.hidden = true; log.scrollTop = log.scrollHeight; };
+    wrap.append(jump);
+    const follow = () => { if (pinned) log.scrollTop = log.scrollHeight; else jump.hidden = false; };
+
+    const add = (node) => { log.append(node); follow(); return node; };
+
+    /** 一言。種類で色が変わるだけの、いちばん軽い形。 */
+    const note = (cls, text) => add(el('div', `note ${cls}`, text));
+
+    /** 折り畳める札。開かなければ一行で済む。 */
+    const card = (icon, title, meta, cls = '') => {
+      const box = el('details', `card ${cls}`);
+      const head = el('summary', 'card-head');
+      head.append(el('span', 'card-icon', icon), el('span', 'card-title', title));
+      if (meta) head.append(el('span', 'card-meta', meta));
+      box.append(head);
+      const inner = el('div', 'card-body');
+      box.append(inner);
+      add(box);
+      return { box, head, body: inner };
     };
 
-    // 流れてくる本文は一つの行に足していく。途中で切らない。
     let stream = null;
     const append = (delta) => {
-      if (!stream) stream = line('', '');
+      if (!stream) stream = add(el('div', 'said'));
       stream.textContent += delta;
-      log.scrollTop = log.scrollHeight;
+      follow();
     };
 
-    form.onsubmit = async (e) => {
-      e.preventDefault();
+    /** いま動いている道具の札。結果が返ったら中身を差し込む。 */
+    const openTools = new Map();
+    const toolStart = (name, summary, taskId) => {
+      const c = card('▸', name, summary || '', 'tool running');
+      c.head.querySelector('.card-icon').textContent = '⋯';
+      if (taskId) c.head.append(el('span', 'chip', taskId));
+      openTools.set(`${taskId ?? ''}:${name}`, c);
+      return c;
+    };
+    const toolEnd = (name, ok, summary, taskId) => {
+      const key = `${taskId ?? ''}:${name}`;
+      const c = openTools.get(key) ?? card(ok ? '✓' : '✗', name, '', 'tool');
+      openTools.delete(key);
+      c.box.classList.remove('running');
+      c.box.classList.add(ok ? 'ok' : 'ng');
+      c.head.querySelector('.card-icon').textContent = ok ? '✓' : '✗';
+      c.body.append(el('pre', 'tool-out', summary));
+      if (!ok) c.box.open = true;
+      follow();
+    };
+
+    /** 書き換え。文章で説明するより、差分そのものを見せる方が速い。 */
+    const showDiff = (v) => {
+      const c = card('◈', v.path, `+${v.added} -${v.removed}`, 'diff-card');
+      c.head.classList.add(v.created ? 'created' : 'changed');
+      c.box.open = true;
+      c.body.append(renderDiff(v.diff));
+      follow();
+    };
+
+    const submit = async () => {
       const text = input.value.trim();
       if (!text) return;
       input.value = '';
+      input.style.height = '';
       stream = null;
-      line('key', `> ${text}`);
-      // 「/plan 〜」と書けば、分解して複数人で当たる。
+      add(el('div', 'asked', text));
       const isPlan = text.startsWith('/plan');
       const r = await fetch(isPlan ? '/api/plan' : '/api/send', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ text: isPlan ? text.slice('/plan'.length).trim() : text }),
       });
-      if (!r.ok) line('bad', (await r.json()).error ?? '送れませんでした');
+      if (!r.ok) note('bad', (await r.json()).error ?? '送れませんでした');
     };
 
+    form.onsubmit = (e) => { e.preventDefault(); void submit(); };
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); }
+    };
+    // 書いた分だけ伸びる。書きながら全体が見える。
+    input.oninput = () => {
+      input.style.height = 'auto';
+      input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
+    };
     stop.onclick = () => fetch('/api/abort', { method: 'POST' });
+    ctx.focusInput = () => input.focus();
 
     ctx.on('busy', (e) => {
       stop.disabled = !e.busy;
-      input.placeholder = e.busy ? '作業中…' : '指示を書く（/plan で分解して並列実行）';
-      if (!e.busy) stream = null;
+      send.disabled = e.busy;
+      wrap.classList.toggle('working', e.busy);
+      if (!e.busy) { stream = null; openTools.clear(); }
     });
 
     ctx.on('session', ({ event: v }) => {
       if (v.type === 'text') return append(v.delta);
       stream = null;
-      if (v.type === 'toolStart') line('dim mono', `· ${v.name} ${v.summary}`);
-      else if (v.type === 'toolEnd') line(v.ok ? 'dim mono' : 'bad mono', `  ${v.ok ? '✓' : '✗'} ${v.summary}`);
-      else if (v.type === 'fallback') line('warn', `⤷ ${v.from} → ${v.to}（${v.reason}）`);
-      else if (v.type === 'recalled') line('dim', v.text);
-      else if (v.type === 'log') line(v.level === 'error' ? 'bad' : 'warn', v.text);
+      if (v.type === 'toolStart') toolStart(v.name, v.summary);
+      else if (v.type === 'toolEnd') toolEnd(v.name, v.ok, v.summary);
+      else if (v.type === 'diff') showDiff(v);
+      else if (v.type === 'fallback') note('warn', `${v.from} → ${v.to} に切替（${v.reason}）`);
+      else if (v.type === 'recalled') {
+        const c = card('◔', '思い出したこと', '', 'recall');
+        c.body.append(el('pre', 'tool-out', v.text));
+      } else if (v.type === 'log') note(v.level === 'error' ? 'bad' : 'warn', v.text);
       else if (v.type === 'baseline') {
-        line('dim', `作業前の状態: ${v.command} → ${v.passed ? '通っています' : '作業前から失敗しています'}`);
-      } else if (v.type === 'rolledBack') {
-        line('warn', `変更を巻き戻しました: ${v.paths.join(', ')}`);
-      } else if (v.type === 'verify') {
-        const e = v.event;
-        if (e.type === 'running') line('dim', `検証 ${e.round}回目: ${e.command}`);
-        else if (e.type === 'passed') line('good', `✓ 検証を通過しました (${(e.durationMs / 1000).toFixed(1)}s)`);
-        else if (e.type === 'failed') {
-          line('warn', `✗ 検証に失敗（${e.round}回目）`);
-          line('dim mono', e.digest.split('\n').slice(-6).join('\n'));
-        } else if (e.type === 'preexisting') {
-          line('warn', 'この失敗は作業前から出ています。今回の作業が原因ではありません。');
-        } else if (e.type === 'tampered') line('bad', `✗ ${e.reason}`);
-        else if (e.type === 'fixing') line('dim', '修正させています…');
-        else if (e.type === 'giveUp') line('warn', `検証を打ち切りました — ${e.detail}`);
-      } else if (v.type === 'settled') {
-        const mark = v.reason === 'completed' && v.verified ? 'good' : 'warn';
-        line(mark, `${v.reason === 'completed' ? '完了' : v.reason}`
-          + `${v.verified ? '' : '（検証は通っていません）'} (${v.seconds.toFixed(1)}s)`);
-      } else if (v.type === 'finished' && v.reason !== 'completed') {
-        line('warn', `終了: ${v.reason}${v.detail ? ` — ${v.detail}` : ''}`);
+        note(v.passed ? 'dim' : 'warn',
+          v.passed ? `作業前の検査は通っています（${v.command}）` : `作業前から検査が失敗しています（${v.command}）`);
+      } else if (v.type === 'rolledBack') note('warn', `変更を巻き戻しました: ${v.paths.join(', ')}`);
+      else if (v.type === 'verify') showVerify(v.event);
+      else if (v.type === 'settled') {
+        const okAll = v.reason === 'completed' && v.verified;
+        add(el('div', `verdict ${okAll ? 'ok' : 'ng'}`,
+          `${okAll ? '完了' : v.reason === 'completed' ? '完了（検証は通っていません）' : v.reason}`
+          + ` · ${v.seconds.toFixed(1)}秒`));
       }
     });
+
+    const showVerify = (e) => {
+      if (e.type === 'running') note('dim', `検証 ${e.round}回目: ${e.command}`);
+      else if (e.type === 'passed') note('good', `検証を通過しました（${(e.durationMs / 1000).toFixed(1)}秒）`);
+      else if (e.type === 'failed') {
+        const c = card('✗', `検証に失敗（${e.round}回目）`, '', 'ng');
+        c.box.open = true;
+        c.body.append(el('pre', 'tool-out', e.digest.split('\n').slice(-12).join('\n')));
+      } else if (e.type === 'preexisting') {
+        note('warn', 'この失敗は作業前から出ています。今回の作業が原因ではありません。');
+      } else if (e.type === 'tampered') note('bad', e.reason);
+      else if (e.type === 'fixing') note('dim', '修正させています…');
+      else if (e.type === 'giveUp') note('warn', `検証を打ち切りました — ${e.detail}`);
+    };
 
     ctx.on('planEvent', ({ event: v }) => {
       stream = null;
       if (v.type === 'planned') {
-        line('key', `方針: ${v.plan.summary}`);
-        for (const t of v.plan.items) {
-          const wait = (t.deps ?? []).length > 0 ? ` ← ${t.deps.join(', ')} の後` : '（すぐ着手）';
-          line('dim', `  [${t.id}] ${t.roleId} @${t.laneId}${wait} ${t.instruction.split('\n')[0]}`);
-        }
-      } else if (v.type === 'planRepaired') line('warn', `計画を直しました: ${v.detail}`);
-      else if (v.type === 'baselineFailed') line('warn', '作業前から検査が失敗しています。切り分けて見ます。');
-      else if (v.type === 'taskStart') line('', `▶ ${v.taskId} 着手 @${v.laneId}`);
+        const c = card('◇', v.plan.summary, `${v.plan.items.length}件`, 'planned');
+        c.box.open = true;
+        c.body.append(rows(v.plan.items, (t) => {
+          const row = el('div', 'row');
+          row.append(
+            el('span', 'key mono', t.id),
+            el('span', '', t.instruction.split('\n')[0]),
+            el('span', 'chip', t.roleId),
+          );
+          return row;
+        }));
+      } else if (v.type === 'planRepaired') note('warn', `計画を直しました: ${v.detail}`);
+      else if (v.type === 'baselineFailed') note('warn', '作業前から検査が失敗しています。切り分けて見ます。');
+      else if (v.type === 'taskStart') note('dim', `▶ ${v.taskId} 着手 @${v.laneId}`);
       else if (v.type === 'taskEnd') {
-        line(v.state === 'done' ? 'good' : 'bad',
-          `${v.state === 'done' ? '✓' : '✗'} ${v.taskId} (${Math.round(v.ms / 1000)}s)${v.error ? ` ${v.error}` : ''}`);
-      } else if (v.type === 'taskSkip') line('warn', `− ${v.taskId} 未実施: ${v.reason}`);
-      else if (v.type === 'work') line(v.ok ? 'dim mono' : 'bad mono', `  [${v.taskId}] ${v.text}`);
-      else if (v.type === 'verifying') line('dim', `検査: ${v.command}`);
-      else if (v.type === 'accepted') {
-        const r = v.report;
-        const cls = r.verdict === 'accepted' ? 'good' : r.verdict === 'rejected' ? 'bad' : 'warn';
-        const label = { accepted: '受け取りました', needsHuman: '判断をお願いします', rejected: '受け取れません' };
-        line(cls, `検収: ${label[r.verdict] ?? r.verdict}`);
-        const done = r.members.filter((m) => m.state === 'done').length;
-        line('dim', `  作業: ${done}/${r.members.length}件完了 / 検査: ${r.verified} / 変更: ${r.changed.length}件`);
-        for (const f of r.changed.slice(0, 10)) line('dim mono', `    ${f}`);
-        if (r.concerns.length === 0) line('dim', '  指摘はありません。');
-        for (const con of r.concerns) {
-          line(con.severity === 'block' ? 'bad' : 'warn',
-            `  [${con.severity === 'block' ? '要対応' : '確認'}] ${con.reason}`);
-          for (const w of (con.where ?? []).slice(0, 5)) line('dim', `      ${w}`);
-        }
-      }
-      else if (v.type === 'recalled') line('dim', v.text);
-      else if (v.type === 'log') line('bad', v.text);
+        note(v.state === 'done' ? 'good' : 'bad',
+          `${v.state === 'done' ? '✓' : '✗'} ${v.taskId}（${Math.round(v.ms / 1000)}秒）${v.error ?? ''}`);
+      } else if (v.type === 'taskSkip') note('warn', `− ${v.taskId} 未実施: ${v.reason}`);
+      else if (v.type === 'work') toolEnd(v.text.split(' ')[0], v.ok, v.text, v.taskId);
+      else if (v.type === 'diff') showDiff(v);
+      else if (v.type === 'verifying') note('dim', `検査: ${v.command}`);
+      else if (v.type === 'recalled') {
+        const c = card('◔', '思い出したこと', '', 'recall');
+        c.body.append(el('pre', 'tool-out', v.text));
+      } else if (v.type === 'log') note('bad', v.text);
+      else if (v.type === 'accepted') showAcceptance(v.report);
     });
+
+    /** 検収。ここだけは畳まない。人が見る前提の一枚だから。 */
+    const showAcceptance = (r) => {
+      const label = { accepted: '受け取りました', needsHuman: '判断をお願いします', rejected: '受け取れません' };
+      const box = el('div', `acceptance ${r.verdict}`);
+      box.append(el('div', 'acceptance-head', `検収 — ${label[r.verdict] ?? r.verdict}`));
+      const done = r.members.filter((m) => m.state === 'done').length;
+      const stats = el('div', 'acceptance-stats');
+      stats.append(
+        el('span', '', `作業 ${done}/${r.members.length}`),
+        el('span', '', `検査 ${r.verified}`),
+        el('span', '', `変更 ${r.changed.length}件`),
+      );
+      box.append(stats);
+      if (r.changed.length > 0) {
+        box.append(rows(r.changed, (f) => {
+          const row = el('div', 'row');
+          row.append(el('span', 'key mono', f));
+          return row;
+        }, 2));
+      }
+      for (const con of r.concerns) {
+        const line = el('div', `concern ${con.severity}`);
+        line.append(el('span', 'chip', con.severity === 'block' ? '要対応' : '確認'), el('span', '', con.reason));
+        box.append(line);
+        for (const w of (con.where ?? []).slice(0, 5)) box.append(el('div', 'concern-where', w));
+      }
+      if (r.concerns.length === 0) box.append(el('div', 'dim', '指摘はありません。'));
+      add(box);
+    };
 
     // 承認。押されるまで、向こう側は止まって待っている。
     ctx.on('approval', (e) => {
-      const box = el('div', 'ask');
       const req = e.request;
       const what = req.kind === 'write' ? `${req.created ? '新規作成' : '変更'}: ${req.path}`
         : req.kind === 'command' ? `コマンド実行: ${req.command}`
         : `外部への問い合わせ: ${req.url}`;
-      box.append(el('div', 'warn', what));
-      if (req.kind === 'write' && req.diff) {
-        const pre = el('pre', 'diff', req.diff);
-        box.append(pre);
-      }
+      const box = el('div', 'ask');
+      box.append(el('div', 'ask-head', what));
+      if (req.kind === 'write' && req.diff) box.append(renderDiff(req.diff));
+      if (req.kind === 'network') box.append(el('div', 'dim', '取得のみ。資格情報は送りません。'));
+
       const yes = el('button', 'primary', '許可');
       const no = el('button', '', '拒否');
       const answer = (approved) => {
@@ -182,9 +286,7 @@ export const PANELS = {
       const menu = el('div', 'ask-menu');
       menu.append(yes, no);
       box.append(menu);
-      log.append(box);
-      log.scrollTop = log.scrollHeight;
-      // 別の口（端末など）で答えられたら、こちらは閉じる。
+      add(box);
       ctx.on('approvalDone', (d) => {
         if (d.id === e.id && box.querySelector('button')) {
           box.replaceChildren(el('div', 'dim', `${what} → ${d.approved ? '許可' : '拒否'}`));
@@ -332,6 +434,65 @@ export const PANELS = {
     });
   },
 
+  /**
+   * この対話で何を書き換えたか。
+   * 会話を遡らないと分からない、では見落とす。一箇所に集める。
+   */
+  changes(body, ctx) {
+    const files = new Map();
+
+    const draw = () => {
+      body.replaceChildren();
+      if (files.size === 0) {
+        return body.append(empty('まだ何も書き換えていません。'));
+      }
+      const list = [...files.values()].reverse();
+      const head = el('div', 'changes-head');
+      const added = list.reduce((n, f) => n + f.added, 0);
+      const removed = list.reduce((n, f) => n + f.removed, 0);
+      head.append(
+        el('span', 'dim', `${list.length} ファイル`),
+        el('span', 'good', `+${added}`),
+        el('span', 'bad', `-${removed}`),
+      );
+      body.append(head);
+
+      for (const f of list) {
+        const box = el('details', 'card diff-card');
+        const h = el('summary', 'card-head');
+        h.append(
+          el('span', 'card-icon', f.created ? '＋' : '◈'),
+          el('span', 'card-title mono', f.path),
+          el('span', 'card-meta', `+${f.added} -${f.removed}`),
+        );
+        box.append(h);
+        const inner = el('div', 'card-body');
+        let drawn = false;
+        // 開いたときに初めて描く。閉じたままの差分に手間をかけない。
+        box.ontoggle = () => {
+          if (box.open && !drawn) { inner.append(renderDiff(f.diff)); drawn = true; }
+        };
+        box.append(inner);
+        body.append(box);
+      }
+    };
+
+    draw();
+    const record = (v) => {
+      const prev = files.get(v.path);
+      files.set(v.path, {
+        path: v.path,
+        diff: v.diff,
+        added: v.added,
+        removed: v.removed,
+        created: prev?.created ?? v.created,
+      });
+      draw();
+    };
+    ctx.on('session', ({ event: v }) => { if (v.type === 'diff') record(v); });
+    ctx.on('planEvent', ({ event: v }) => { if (v.type === 'diff') record(v); });
+  },
+
   note(body, _ctx, spec) {
     body.append(el('div', 'dim', String(spec.options?.text ?? '（覚え書き）')));
   },
@@ -339,5 +500,6 @@ export const PANELS = {
 
 export const TITLES = {
   conversation: '会話', plan: '進行中', roster: '人員', memory: '記憶',
-  proposals: '提案', duties: '日課', models: 'モデル', log: '流れ', note: '覚え書き',
+  proposals: '提案', duties: '日課', models: 'モデル', changes: '変更',
+  log: '流れ', note: '覚え書き',
 };

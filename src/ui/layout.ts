@@ -25,6 +25,7 @@ export const PANEL_KINDS = [
   'proposals',     // 提案
   'duties',        // 日課
   'models',        // モデルと実測
+  'changes',       // この対話で変わったファイルと、その差分
   'log',           // 動いているものの流れ
   'note',          // 自由記述。壊れた配置の受け皿でもある
 ] as const;
@@ -84,7 +85,7 @@ export const PRESETS: Layout[] = [
           type: 'split', direction: 'column', sizes: [0.5, 0.5],
           children: [
             { type: 'panel', panel: 'plan' },
-            { type: 'tabs', panels: ['roster', 'memory', 'proposals'] },
+            { type: 'tabs', panels: ['changes', 'roster', 'memory', 'proposals'] },
           ],
         },
       ],
@@ -95,6 +96,7 @@ export const PRESETS: Layout[] = [
       panel('roster', 'roster'),
       panel('memory', 'memory'),
       panel('proposals', 'proposals'),
+      panel('changes', 'changes'),
     ],
     theme: 'auto',
     density: 'comfortable',

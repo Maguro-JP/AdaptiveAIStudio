@@ -214,43 +214,237 @@ button.ghost:hover { color: var(--text); background: var(--surface2); }
 
 /* ---------- 会話 ---------- */
 
-.chat { display: flex; flex-direction: column; height: 100%; gap: var(--s2); }
+/*
+ * 端末の流れをそのまま写さない。それなら端末で足りる。
+ * 起きたことを札にして、種類ごとに形を変える。
+ */
+.chat { display: flex; flex-direction: column; height: 100%; gap: var(--s3); position: relative; }
 .chat .log {
-  flex: 1;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex: 1; overflow: auto;
+  display: flex; flex-direction: column; gap: var(--s1);
   scroll-behavior: smooth;
 }
-.chat .log > * { white-space: pre-wrap; overflow-wrap: anywhere; }
-/* 自分が書いた行だけは、はっきり分かるようにする。 */
-.chat .log > .key {
-  color: var(--text);
-  font-weight: 560;
-  border-left: 2px solid var(--accent);
-  padding-left: var(--s2);
-  margin: var(--s3) 0 var(--s1);
+
+/* 頼んだこと。ここが話の区切りになるので、はっきり立てる。 */
+.asked {
+  align-self: flex-end;
+  max-width: min(80%, 60ch);
+  background: var(--accent);
+  color: var(--accent-text);
+  padding: 7px 12px;
+  border-radius: var(--radius) var(--radius) 3px var(--radius);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-top: var(--s3);
+  font-weight: 500;
 }
-.chat form { display: flex; gap: var(--s2); flex: 0 0 auto; }
-.chat input { flex: 1; padding: 8px 12px; background: var(--surface2); }
+/* 返ってきた言葉。読ませたいので、幅を絞って行間を広げる。 */
+.said {
+  max-width: 78ch;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 2px 0;
+  line-height: 1.7;
+}
+.note { color: var(--dim); font-size: .86rem; padding: 1px 0; }
+.note.good { color: var(--good); }
+.note.warn { color: var(--warn); }
+.note.bad { color: var(--bad); }
+.note.dim { color: var(--dim); }
+
+/* 結末。ここで一区切りついたことが、目で分かるように。 */
+.verdict {
+  margin: var(--s2) 0 var(--s3);
+  padding: 6px 12px;
+  border-radius: 99px;
+  align-self: flex-start;
+  font-size: .84rem; font-weight: 560;
+  border: 1px solid var(--line);
+}
+.verdict.ok { color: var(--good); border-color: color-mix(in oklab, var(--good) 45%, transparent); }
+.verdict.ng { color: var(--warn); border-color: color-mix(in oklab, var(--warn) 45%, transparent); }
+
+/* ---------- 札 ---------- */
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--surface2);
+  overflow: hidden;
+}
+.card + .card { margin-top: 2px; }
+.card-head {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 5px 10px;
+  cursor: pointer;
+  list-style: none;
+  font-size: .86rem;
+}
+.card-head::-webkit-details-marker { display: none; }
+.card-head:hover { background: color-mix(in oklab, var(--text) 5%, transparent); }
+.card-icon { flex: 0 0 auto; width: 1.1em; text-align: center; color: var(--dim); }
+.card-title { font-family: var(--font-mono); font-size: .84rem; }
+.card-meta { color: var(--dim); font-size: .8rem; margin-left: auto; font-variant-numeric: tabular-nums; }
+.card-body { padding: 0 10px 8px; }
+.card.ok .card-icon { color: var(--good); }
+.card.ng .card-icon { color: var(--bad); }
+.card.ng { border-color: color-mix(in oklab, var(--bad) 40%, var(--line)); }
+.card.running .card-icon { color: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.tool-out {
+  margin: 0; padding: var(--s2);
+  background: var(--bg); border-radius: 5px;
+  font-family: var(--font-mono); font-size: .78rem; line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  max-height: 40vh; overflow: auto;
+}
+.chip {
+  font-size: .72rem; padding: 1px 7px; border-radius: 99px;
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-family: var(--font-mono);
+}
+
+/* ---------- 差分 ---------- */
+
+.diff-file { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--bg); }
+.diff-file + .diff-file { margin-top: var(--s2); }
+.diff-head {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: 5px 8px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  font-size: .8rem;
+}
+.diff-path { color: var(--dim); }
+.diff-stat { display: flex; gap: 6px; margin-left: auto; font-variant-numeric: tabular-nums; }
+button.tiny { font-size: .74rem; padding: 2px 7px; }
+
+.diff-body { overflow: auto; max-height: 46vh; }
+.diff-lines { font-family: var(--font-mono); font-size: .78rem; line-height: 1.55; min-width: min-content; }
+.diff-row { display: flex; gap: 0; white-space: pre; }
+.diff-no {
+  flex: 0 0 auto; min-width: 3.2em; padding: 0 6px;
+  text-align: right; color: var(--dim); opacity: .6;
+  user-select: none;
+  border-right: 1px solid var(--line);
+}
+.diff-sign { flex: 0 0 auto; width: 1.4em; text-align: center; color: var(--dim); user-select: none; }
+.diff-text { padding-right: 10px; }
+
+/* 赤と緑。地に薄く敷いて、文字は読みやすいまま残す。 */
+.diff-row.add { background: color-mix(in oklab, var(--good) 14%, transparent); }
+.diff-row.add .diff-sign, .diff-row.add .diff-no { color: var(--good); opacity: .85; }
+.diff-row.del { background: color-mix(in oklab, var(--bad) 14%, transparent); }
+.diff-row.del .diff-sign, .diff-row.del .diff-no { color: var(--bad); opacity: .85; }
+.diff-row.blank { background: color-mix(in oklab, var(--dim) 7%, transparent); min-height: 1.55em; }
+.diff-row.folded {
+  color: var(--dim); font-size: .74rem; padding: 2px 10px;
+  background: color-mix(in oklab, var(--dim) 8%, transparent);
+  justify-content: center;
+}
+
+.diff-split { display: grid; grid-template-columns: 1fr 1fr; }
+.diff-split > :first-child { border-right: 1px solid var(--line); }
+
+.changes-head {
+  display: flex; gap: var(--s3); align-items: baseline;
+  padding-bottom: var(--s2); margin-bottom: var(--s2);
+  border-bottom: 1px solid var(--line);
+  font-size: .82rem; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 検収 ---------- */
+
+.acceptance {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--dim);
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--surface2);
+  padding: var(--s3);
+  margin: var(--s2) 0 var(--s3);
+}
+.acceptance.accepted { border-left-color: var(--good); }
+.acceptance.needsHuman { border-left-color: var(--warn); }
+.acceptance.rejected { border-left-color: var(--bad); }
+.acceptance-head { font-weight: 600; margin-bottom: var(--s1); }
+.acceptance-stats {
+  display: flex; gap: var(--s3); color: var(--dim);
+  font-size: .82rem; margin-bottom: var(--s2);
+  font-variant-numeric: tabular-nums;
+}
+.concern { display: flex; gap: var(--s2); align-items: baseline; padding: 2px 0; font-size: .88rem; }
+.concern.block .chip { background: color-mix(in oklab, var(--bad) 18%, transparent); color: var(--bad); }
+.concern.warn .chip { background: color-mix(in oklab, var(--warn) 18%, transparent); color: var(--warn); }
+.concern-where { color: var(--dim); font-size: .8rem; padding-left: var(--s4); font-family: var(--font-mono); }
+
+/* ---------- 承認 ---------- */
 
 .ask {
-  border: 1px solid var(--warn);
-  border-radius: var(--radius);
-  background: var(--surface2);
+  border: 1px solid color-mix(in oklab, var(--warn) 55%, var(--line));
+  border-radius: calc(var(--radius) - 2px);
+  background: color-mix(in oklab, var(--warn) 6%, var(--surface2));
   padding: var(--s3);
   margin: var(--s2) 0;
 }
-.ask-menu { display: flex; gap: var(--s2); margin-top: var(--s2); }
-.diff {
-  max-height: 30vh; overflow: auto;
-  margin: var(--s2) 0 0; padding: var(--s2);
-  background: var(--bg);
-  border-radius: calc(var(--radius) - 4px);
-  font-family: var(--font-mono); font-size: .8rem; line-height: 1.5;
-  white-space: pre;
+.ask-head { font-weight: 560; margin-bottom: var(--s2); }
+.ask-menu { display: flex; gap: var(--s2); margin-top: var(--s3); }
+
+/* ---------- 書くところ ---------- */
+
+.chat form { display: flex; gap: var(--s2); align-items: flex-end; flex: 0 0 auto; }
+.field {
+  flex: 1;
+  display: flex; align-items: flex-end; gap: var(--s2);
+  background: var(--surface2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px 4px 4px 12px;
+  transition: border-color .12s ease;
 }
+.field:focus-within { border-color: var(--accent); }
+.field textarea {
+  flex: 1; border: 0; background: transparent; padding: 6px 0;
+  resize: none; font-family: var(--font); font-size: 1rem;
+  max-height: 180px; height: auto; min-height: 2.1em;
+}
+.field textarea:focus-visible { outline: none; }
+.chat.working .field { border-color: color-mix(in oklab, var(--accent) 40%, var(--line)); }
+
+.jump {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: 64px; z-index: 2;
+  font-size: .78rem; padding: 4px 12px; border-radius: 99px;
+  background: var(--accent); color: var(--accent-text); border: 0;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
+}
+
+/* ---------- 下の帯 ---------- */
+
+.statusbar {
+  display: flex; align-items: center; gap: var(--s3);
+  padding: 3px var(--s3);
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--dim);
+  font-size: .74rem;
+}
+.sb.busy { color: var(--accent); }
+
+/* ---------- コマンド ---------- */
+
+#palette { padding: 0; width: min(560px, 92vw); top: 12vh; }
+#paletteInput {
+  width: 100%; border: 0; border-bottom: 1px solid var(--line);
+  border-radius: 0; padding: var(--s3) var(--s4); font-size: 1rem; background: transparent;
+}
+#paletteInput:focus-visible { outline: none; }
+.palette-list { max-height: 46vh; overflow: auto; padding: var(--s1); }
+.palette-row {
+  display: flex; justify-content: space-between; gap: var(--s3);
+  padding: 7px 12px; border-radius: 6px; cursor: pointer; font-size: .9rem;
+}
+.palette-row.on, .palette-row:hover { background: var(--surface2); }
 
 /* ---------- 覆いかぶさるもの ---------- */
 

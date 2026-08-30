@@ -17,6 +17,8 @@ const stateHandlers = [];
 const eventHandlers = new Map();
 
 const ctx = {
+  /** 会話の入力欄へ寄せる。差し替えられる。 */
+  focusInput: () => undefined,
   on(type, fn) {
     if (!eventHandlers.has(type)) eventHandlers.set(type, []);
     eventHandlers.get(type).push(fn);
@@ -57,17 +59,17 @@ function buildTabs(node, panels) {
   body.className = 'body';
   box.append(head, body);
 
-  const built = node.panels.map((id) => {
+  // 中身だけを取り出して持っておく。
+  // 一度移してしまうと元の枠からは辿れなくなるので、ここで押さえる。
+  const bodies = node.panels.map((id) => {
     const spec = panels.get(id);
-    return spec ? buildPanel(spec) : null;
+    return spec ? buildPanel(spec).querySelector('.body') : null;
   }).filter(Boolean);
 
   const show = (i) => {
-    body.replaceChildren();
-    const chosen = built[i];
+    const chosen = bodies[i];
     if (!chosen) return;
-    // 見出しは重ね置き側が持つので、中身だけを移す
-    body.append(chosen.querySelector('.body'));
+    body.replaceChildren(chosen);
     [...head.children].forEach((b, j) => b.setAttribute('aria-selected', String(j === i)));
     node.active = i;
   };
@@ -80,7 +82,7 @@ function buildTabs(node, panels) {
     head.append(b);
   });
 
-  show(Math.min(node.active ?? 0, built.length - 1));
+  show(Math.min(node.active ?? 0, bodies.length - 1));
   return box;
 }
 
@@ -291,6 +293,8 @@ function showRepairs(repairs) {
 async function refreshState() {
   try {
     lastState = await fetch('/api/state').then((x) => x.json());
+    const m = lastState.models?.[0];
+    $('sbModel').textContent = m?.modelId ?? m?.id ?? '—';
     for (const fn of stateHandlers) fn(lastState);
   } catch { /* 本体が止まっているだけ。画面は残す。 */ }
 }
@@ -302,6 +306,10 @@ function listen() {
   src.onerror = () => { status.textContent = '本体が止まっています'; status.className = 'status down'; };
   src.onmessage = (m) => {
     const e = JSON.parse(m.data);
+    if (e.type === 'busy') {
+      $('sbWork').textContent = e.busy ? '作業中…' : '待機中';
+      $('sbWork').classList.toggle('busy', e.busy);
+    }
     if (e.type === 'stateChanged') return void refreshState();
     if (e.type === 'themeChanged') return void loadTheme();
     for (const fn of eventHandlers.get(e.type) ?? []) fn(e);
@@ -344,6 +352,79 @@ $('presets').onchange = async (e) => {
   layout = r.layout;
   render();
 };
+
+/* ---------- コマンド ---------- */
+
+/**
+ * 何ができるかを、覚えていなくても引ける形にする。
+ * 隠し機能は無い機能と同じなので、全部ここに並べる。
+ */
+function commands() {
+  const list = [
+    { name: '入力へ移動', hint: 'Ctrl+/', run: () => ctx.focusInput() },
+    { name: '中断する', hint: '', run: () => fetch('/api/abort', { method: 'POST' }) },
+    { name: '配置を編集', hint: '', run: () => $('edit').click() },
+    { name: '色を編集', hint: '', run: () => $('editTheme').click() },
+  ];
+  for (const o of $('themes').options) {
+    list.push({ name: `見た目: ${o.textContent}`, hint: '', run: () => {
+      $('themes').value = o.value; $('themes').onchange({ target: $('themes') });
+    } });
+  }
+  for (const o of $('presets').options) {
+    list.push({ name: `配置: ${o.textContent}`, hint: '', run: () => {
+      $('presets').value = o.value; $('presets').onchange({ target: $('presets') });
+    } });
+  }
+  return list;
+}
+
+function openPalette() {
+  const dlg = $('palette');
+  const input = $('paletteInput');
+  const listBox = $('paletteList');
+  const all = commands();
+  let cursor = 0;
+  let shown = all;
+
+  const draw = () => {
+    listBox.replaceChildren();
+    shown.forEach((cmd, i) => {
+      const row = document.createElement('div');
+      row.className = `palette-row${i === cursor ? ' on' : ''}`;
+      const name = document.createElement('span');
+      name.textContent = cmd.name;
+      const hint = document.createElement('span');
+      hint.className = 'dim';
+      hint.textContent = cmd.hint;
+      row.append(name, hint);
+      row.onclick = () => { dlg.close(); cmd.run(); };
+      listBox.append(row);
+    });
+  };
+
+  input.value = '';
+  input.oninput = () => {
+    const q = input.value.trim().toLowerCase();
+    shown = q ? all.filter((c) => c.name.toLowerCase().includes(q)) : all;
+    cursor = 0;
+    draw();
+  };
+  input.onkeydown = (e) => {
+    if (e.key === 'ArrowDown') { cursor = Math.min(cursor + 1, shown.length - 1); draw(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { cursor = Math.max(cursor - 1, 0); draw(); e.preventDefault(); }
+    else if (e.key === 'Enter') { e.preventDefault(); const c = shown[cursor]; dlg.close(); c?.run(); }
+  };
+  draw();
+  dlg.showModal();
+  input.focus();
+}
+
+$('open').onclick = openPalette;
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openPalette(); }
+  else if ((e.ctrlKey || e.metaKey) && e.key === '/') { e.preventDefault(); ctx.focusInput(); }
+});
 
 await loadTheme();
 await load();
