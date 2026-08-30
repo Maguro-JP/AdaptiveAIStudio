@@ -11,13 +11,13 @@ import { spawn, type ChildProcess } from 'node:child_process';
  * その下の `node --test` などは生き残って走り続ける。
  * 時間上限を設けても効かなくなるので、必ず一群として止める。
  */
-function killTree(child: ChildProcess): void {
+function killTree(child: ChildProcess, platform: NodeJS.Platform = process.platform): void {
   const pid = child.pid;
   if (pid === undefined) return;
-  if (process.platform === 'win32') {
+  if (platform === 'win32') {
     // Windows には処理群が無いので、木をたどって落とす。
-    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
-      .on('error', () => child.kill());
+    const plan = killPlan(pid, platform);
+    spawn(plan.command, plan.args, { stdio: 'ignore' }).on('error', () => child.kill());
     return;
   }
   try {
@@ -28,6 +28,38 @@ function killTree(child: ChildProcess): void {
   } catch {
     child.kill();
   }
+}
+
+/**
+ * 止め方の組み立て。
+ *
+ * 分岐を関数として取り出しているのは、**Windows の側を試験するため**。
+ * 手元も CI も Linux だと、win32 の枝は一度も実行されないまま配られる。
+ * 実際に「Linux では通るが Windows では落ちる」を踏んだので、
+ * せめて組み立ての内容だけは、どちらの側も検査できるようにしておく。
+ */
+export function killPlan(pid: number, platform: NodeJS.Platform): { command: string; args: string[] } {
+  if (platform === 'win32') {
+    // /T で子孫ごと、/F で強制。これが無いと殻の下の本体が生き残る。
+    return { command: 'taskkill', args: ['/pid', String(pid), '/T', '/F'] };
+  }
+  return { command: 'kill', args: ['-TERM', String(-pid)] };
+}
+
+/**
+ * 起動の組み立て。こちらも同じ理由で取り出してある。
+ *
+ * Windows は殻を cmd.exe に任せる（shell: true）。
+ * それ以外は処理群を作って、上限で打ち切るときに
+ * 殻の下の本体まで一緒に止められるようにする。
+ */
+export function spawnPlan(command: string, platform: NodeJS.Platform): {
+  file: string; args: string[]; shell: boolean; detached: boolean;
+} {
+  if (platform === 'win32') {
+    return { file: command, args: [], shell: true, detached: false };
+  }
+  return { file: '/bin/sh', args: ['-c', command], shell: false, detached: true };
 }
 
 export interface ExecResult {
@@ -47,11 +79,10 @@ export function execCommand(
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     const startedAt = Date.now();
-    const isWindows = process.platform === 'win32';
-    const child = isWindows
-      ? spawn(command, { cwd, shell: true })
-      // 処理群を作る。上限で打ち切るとき、殻の下の本体まで止められるように。
-      : spawn('/bin/sh', ['-c', command], { cwd, detached: true });
+    const plan = spawnPlan(command, process.platform);
+    const child = plan.shell
+      ? spawn(plan.file, { cwd, shell: true })
+      : spawn(plan.file, plan.args, { cwd, detached: plan.detached });
 
     let out = '';
     let settled = false;
