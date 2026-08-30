@@ -253,6 +253,9 @@ async function main(): Promise<void> {
               + (ev.error ? ` ${c.red(ev.error)}` : ''));
             break;
           }
+          case 'handoff':
+            console.log(c.dim(`   ${ev.from.join(', ')} → ${ev.taskId} へ申し送り`));
+            break;
           case 'taskSkip':
             console.log(c.yellow(`  − ${ev.taskId} 未実施: ${ev.reason}`));
             break;

@@ -123,6 +123,9 @@ async function main(): Promise<void> {
           ? c.green(`✓ ${p.taskId}`) + c.dim(` (${(p.ms / 1000).toFixed(1)}s)`)
           : c.red(`✗ ${p.taskId}`) + c.dim(` ${p.error ?? ''}`));
         break;
+      case 'handoff':
+        console.log(c.dim(`   ${p.from.join(', ')} → ${p.taskId} へ申し送り`));
+        break;
       case 'taskSkip':
         console.log(c.yellow(`− ${p.taskId} skip`) + c.dim(` (${p.reason})`));
         break;

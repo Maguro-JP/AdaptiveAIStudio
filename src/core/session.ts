@@ -95,6 +95,8 @@ export type PlanEvent =
   | { type: 'taskStart'; taskId: string; laneId: string }
   | { type: 'taskEnd'; taskId: string; state: string; ms: number; error?: string }
   | { type: 'taskSkip'; taskId: string; reason: string }
+  /** 前の担当の成果を、次の担当へ渡した */
+  | { type: 'handoff'; taskId: string; from: string[] }
   | { type: 'running'; taskIds: string[] }
   | { type: 'work'; taskId: string; text: string; ok: boolean }
   | { type: 'diff'; path: string; diff: string; added: number; removed: number; created: boolean }
@@ -373,6 +375,7 @@ export class Session {
         else if (ev.type === 'taskEnd') {
           yield { type: 'taskEnd', taskId: ev.taskId, state: ev.state, ms: ev.ms, error: ev.error };
         } else if (ev.type === 'taskSkip') yield { type: 'taskSkip', taskId: ev.taskId, reason: ev.reason };
+        else if (ev.type === 'handoff') yield { type: 'handoff', taskId: ev.taskId, from: ev.from };
         else if (ev.type === 'running') yield { type: 'running', taskIds: ev.taskIds };
         else if (ev.type === 'agent' && ev.event.type === 'toolEnd') {
           if (!ev.event.isError && ev.event.call.name === 'write_file') {
