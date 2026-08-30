@@ -13,11 +13,15 @@ import { join } from 'node:path';
 import { GB } from '../runtime/spec.ts';
 import { readGguf } from '../runtime/gguf.ts';
 import { toModelSpec, formatGguf } from '../runtime/gguf-spec.ts';
+import { homedir } from 'node:os';
+import { installModel } from '../runtime/model-install.ts';
+import { lookupCatalog, formatCatalog, STARTER_ID } from '../runtime/model-catalog.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
   cyan: (s: string) => `\x1b[36m${s}\x1b[0m`,
   yellow: (s: string) => `\x1b[33m${s}\x1b[0m`,
+  green: (s: string) => `\x1b[32m${s}\x1b[0m`,
 };
 
 const { config } = loadConfig();
@@ -34,6 +38,50 @@ console.log(c.dim(`環境: ${describeMachine(machine)}\n`));
  * **本物で目視して確かめる手段**がどうしても要る。それがこれ。
  * 値がおかしければ、この出力をそのまま知らせてもらえば直せる。
  */
+/**
+ * --get: モデルを取ってくる。
+ *
+ * llama-server は自前で用意できるのに、動かす中身は
+ * 「手で落として置いてください」のままだった。片肺なので繋ぐ。
+ */
+if (process.argv.includes('--get') || process.argv.includes('--available')) {
+  const modelsDir = config.runtime?.modelsDir ?? join(homedir(), '.aas', 'models');
+
+  if (process.argv.includes('--available')) {
+    console.log(formatCatalog());
+    console.log(c.dim(`\n  置き場: ${modelsDir}`));
+    console.log(c.dim('  取ってくる: npm run models -- --get [名前]\n'));
+    process.exit(0);
+  }
+
+  const wanted = process.argv[process.argv.indexOf('--get') + 1];
+  const id = wanted && !wanted.startsWith('--') ? wanted : STARTER_ID;
+  const entry = lookupCatalog(id);
+  if (!entry) {
+    console.error(c.yellow(`知らないモデルです: ${id}`));
+    console.log(c.dim(`\n${formatCatalog()}\n`));
+    process.exit(1);
+  }
+
+  console.log(c.cyan(`  ${entry.id}`) + c.dim(` — ${entry.note}`));
+  console.log(c.dim(`  配布元: ${entry.repo}（${entry.license}）`));
+  console.log(c.dim(`  置き場: ${modelsDir}\n`));
+
+  try {
+    const r = await installModel({
+      entry, modelsDir, onProgress: (line) => console.log(c.dim(`  ${line}`)),
+    });
+    console.log(c.green(`\n  用意できました: ${r.path}`));
+    console.log(c.dim(`  ${(r.bytes / GB).toFixed(1)}GB\n`));
+    console.log(c.dim('  2つ目からは、同じ置き場に .gguf を入れるだけでも使えます。\n'));
+  } catch (e) {
+    console.error(c.yellow(`\n  取ってこられませんでした: ${e instanceof Error ? e.message : String(e)}\n`));
+    console.log(c.dim(`  手で入れる場合は、${modelsDir} に .gguf を置いてください。\n`));
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
 const inspectAt = process.argv.indexOf('--inspect');
 if (inspectAt !== -1) {
   const path = process.argv[inspectAt + 1];
@@ -58,7 +106,9 @@ const models = await runtime.list();
 if (models.length === 0) {
   console.log(c.yellow('モデルが見つかりません。'));
   console.log(c.dim(runtime.id === 'llamacpp'
-    ? '  GGUFファイルを modelsDir に置いてください。'
+    ? '  `npm run models -- --get` で取ってきます（まず動く軽いものが入ります）。\n'
+      + '  一覧は `npm run models -- --available`。\n'
+      + '  手持ちがあるなら、同じ置き場に .gguf を入れるだけでも使えます。'
     : '  Ollama が起動しているか確認してください。'));
   process.exit(0);
 }

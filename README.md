@@ -95,13 +95,23 @@ npm run llama
 公式のリリースから、この機械に合うもの（NVIDIA があれば CUDA 版）を選んで
 `~/.aas/bin` に置きます。置いたあと一度動かして、実際に起動できることまで確かめます。
 
+モデル（GGUF）も取ってこられます。
+
+```
+npm run models -- --get          # まず動く軽いもの（約1.1GB）
+npm run models -- --available    # 取ってこられるものの一覧
+```
+
+**2つ目からは、同じ置き場に `.gguf` を入れるだけ**でも使えます。
+一覧に無いものは、そうやって足してください。
+
 ```json
 { "runtime": { "kind": "llamacpp",
                "modelsDir": "GGUF を置いた場所" } }
 ```
 
 `command` は書かなくて構いません。用意したものが自動で使われます。
-自分で入れた llama.cpp を使いたい場合だけ、`command` にその場所を書きます。
+`modelsDir` も省略できます（既定は `~/.aas/models`）。
 
 B のとき、何層をGPUに載せるかは
 [GGUF を直接読んで](docs/GGUF.md)計算します。Ollama の申告に頼りません。

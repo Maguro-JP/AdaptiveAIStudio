@@ -92,8 +92,10 @@ if (models.length > 0) {
     + '     オフロードの計算は GGUF を直接読んで行います（docs/GGUF.md）。');
 } else {
   add('モデル', 'bad', `${config.runtime?.modelsDir ?? '(modelsDir 未設定)'} に GGUF がありません`,
-    '.gguf ファイルを modelsDir に置いてください。\n'
-    + `いまの modelsDir: ${config.runtime?.modelsDir ?? '未設定（aas.config.json で指定してください）'}`);
+    '`npm run models -- --get` で取ってきます（まず動く軽いものが入ります）。\n'
+    + '一覧は `npm run models -- --available`。\n'
+    + '手持ちがあるなら、同じ置き場に .gguf を入れるだけでも使えます。\n'
+    + `いまの置き場: ${config.runtime?.modelsDir ?? '未設定（既定は ~/.aas/models）'}`);
 }
 
 /* ---------- llama-server ---------- */
