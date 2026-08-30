@@ -15,6 +15,11 @@ import { join } from 'node:path';
 import { readdir } from 'node:fs/promises';
 import { padTo } from './width.ts';
 
+/** Windows と Unix でコマンドが違うものは、その環境のものを出す。 */
+const isWindows = process.platform === 'win32';
+const copyCmd = (from: string, to: string) =>
+  isWindows ? `copy ${from} ${to}` : `cp ${from} ${to}`;
+
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
   cyan: (s: string) => `\x1b[36m${s}\x1b[0m`,
@@ -50,7 +55,7 @@ add('Node.js', nodeOk ? 'ok' : 'bad', `v${process.versions.node}`,
 const { config, source } = loadConfig();
 add('設定', 'ok', source,
   source.includes('なし')
-    ? '既定のまま動きます。変えたくなったら `cp aas.config.example.json aas.config.json`。'
+    ? `既定のまま動きます。変えたくなったら \`${copyCmd('aas.config.example.json', 'aas.config.json')}\`。`
     : undefined);
 
 /* ---------- 機械 ---------- */
@@ -74,8 +79,8 @@ if (models.length > 0) {
 } else if (runtime.id === 'ollama') {
   add('モデル', 'bad', 'Ollama から一覧を取れません',
     'Ollama を入れて起動してください。\n'
-    + '      https://ollama.com からインストール → `ollama serve`\n'
-    + '      そのあと `ollama pull qwen3:30b-a3b`（8GB VRAM ならこれが最適解）');
+    + 'https://ollama.com からインストール → `ollama serve`\n'
+    + 'そのあと `ollama pull qwen3:30b-a3b`（8GB VRAM ならこれが最適解）');
 } else {
   add('モデル', 'bad', `${config.runtime?.modelsDir ?? '(modelsDir 未設定)'} に GGUF がありません`,
     'GGUF ファイルを modelsDir に置いてください。');
@@ -125,7 +130,12 @@ console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — doctor\n'));
 const mark = { ok: c.green('  ok  '), warn: c.yellow(' 注意 '), bad: c.red(' 未了 ') };
 for (const check of checks) {
   console.log(`${mark[check.level]} ${padTo(check.name, 16)}${c.dim(check.detail)}`);
-  if (check.fix) console.log(c.yellow(`       → ${check.fix}`));
+  if (check.fix) {
+    // 続きの行も、矢印の下に揃える。ぶら下がりが崩れると読みにくい。
+    const [head, ...rest] = check.fix.split('\n');
+    console.log(c.yellow(`       → ${head}`));
+    for (const line of rest) console.log(c.yellow(`         ${line}`));
+  }
 }
 
 const bad = checks.filter((x) => x.level === 'bad');

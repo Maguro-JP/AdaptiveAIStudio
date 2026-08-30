@@ -134,7 +134,7 @@ set ANTHROPIC_API_KEY=sk-ant-...
 
 
 ```
-cp aas.config.example.json aas.config.json
+cp aas.config.example.json aas.config.json      # Windows なら copy
 ```
 
 省略した場合は `ollama:qwen2.5-coder:7b` を既定として起動する。
