@@ -12,6 +12,7 @@ import type { GgufFile, GgufValue } from './gguf.ts';
 import { quantName } from './gguf.ts';
 import type { ModelSpec } from './spec.ts';
 import { QUANT_BITS, type QuantName } from './spec.ts';
+import { padTo } from '../cli/width.ts';
 
 /** 数として読める形なら数にする。読めないなら undefined。 */
 function num(v: GgufValue | undefined): number | undefined {
@@ -168,33 +169,6 @@ export function toModelSpec(file: GgufFile, id?: string): SpecResult {
   }
 
   return { spec, facts, missing, notes };
-}
-
-/**
- * 端末での見た目の幅。日本語は2つ分の幅を取る。
- * 文字数で揃えると、日本語の行だけずれる。
- */
-function displayWidth(text: string): number {
-  let w = 0;
-  for (const ch of text) {
-    const code = ch.codePointAt(0)!;
-    w += (code >= 0x1100 && (
-      code <= 0x115f
-      || (code >= 0x2e80 && code <= 0xa4cf)
-      || (code >= 0xac00 && code <= 0xd7a3)
-      || (code >= 0xf900 && code <= 0xfaff)
-      || (code >= 0xfe30 && code <= 0xfe6f)
-      || (code >= 0xff00 && code <= 0xff60)
-      || (code >= 0xffe0 && code <= 0xffe6)
-      || (code >= 0x20000 && code <= 0x3fffd)
-    )) ? 2 : 1;
-  }
-  return w;
-}
-
-/** 幅で揃える。文字数で揃えると、日本語の行だけずれる。 */
-function padTo(text: string, width: number): string {
-  return text + ' '.repeat(Math.max(1, width - displayWidth(text)));
 }
 
 /** 人が読む形。合っているかを目で確かめられることが、いまは何より大事。 */

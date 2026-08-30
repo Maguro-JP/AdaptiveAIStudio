@@ -8,6 +8,7 @@
     "node": ">=22.6.0"
   },
   "scripts": {
+    "doctor": "node --experimental-strip-types --no-warnings src/cli/doctor.ts",
     "chat": "node --experimental-strip-types --no-warnings src/cli/main.ts",
     "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
@@ -20,7 +21,7 @@
     "typescript": "^5.6.0",
     "@types/node": "^22.0.0"
   },
-  "dependencies": {
+  "optionalDependencies": {
     "@anthropic-ai/sdk": "^0.71.0"
   }
 }
