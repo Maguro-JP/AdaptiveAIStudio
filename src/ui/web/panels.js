@@ -24,18 +24,100 @@ export const PANELS = {
   conversation(body, ctx) {
     const wrap = el('div', 'chat');
     const log = el('div', 'log');
-    log.appendChild(el('div', 'dim',
-      'ここからの指示出しはまだ繋がっていません。いまは CLI（npm run agent）から動かしてください。'));
     const form = document.createElement('form');
     const input = document.createElement('input');
-    input.placeholder = '指示を書く（未接続）';
-    input.disabled = true;
-    form.append(input);
+    input.placeholder = '指示を書く（Enter で送る）';
+    const stop = el('button', '', '中断');
+    stop.type = 'button';
+    stop.disabled = true;
+    form.append(input, stop);
     wrap.append(log, form);
     body.append(wrap);
-    ctx.on('log', (e) => {
-      log.appendChild(el('div', e.level === 'error' ? 'bad' : e.level === 'warn' ? 'warn' : '', e.text));
+
+    const line = (cls, text) => {
+      const n = el('div', cls, text);
+      log.append(n);
       log.scrollTop = log.scrollHeight;
+      return n;
+    };
+
+    // 流れてくる本文は一つの行に足していく。途中で切らない。
+    let stream = null;
+    const append = (delta) => {
+      if (!stream) stream = line('', '');
+      stream.textContent += delta;
+      log.scrollTop = log.scrollHeight;
+    };
+
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+      stream = null;
+      line('key', `> ${text}`);
+      const r = await fetch('/api/send', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      if (!r.ok) line('bad', (await r.json()).error ?? '送れませんでした');
+    };
+
+    stop.onclick = () => fetch('/api/abort', { method: 'POST' });
+
+    ctx.on('busy', (e) => {
+      stop.disabled = !e.busy;
+      input.placeholder = e.busy ? '作業中…' : '指示を書く（Enter で送る）';
+      if (!e.busy) stream = null;
+    });
+
+    ctx.on('session', ({ event: v }) => {
+      if (v.type === 'text') return append(v.delta);
+      stream = null;
+      if (v.type === 'toolStart') line('dim mono', `· ${v.name} ${v.summary}`);
+      else if (v.type === 'toolEnd') line(v.ok ? 'dim mono' : 'bad mono', `  ${v.ok ? '✓' : '✗'} ${v.summary}`);
+      else if (v.type === 'fallback') line('warn', `⤷ ${v.from} → ${v.to}（${v.reason}）`);
+      else if (v.type === 'recalled') line('dim', v.text);
+      else if (v.type === 'log') line(v.level === 'error' ? 'bad' : 'warn', v.text);
+      else if (v.type === 'finished' && v.reason !== 'completed') {
+        line('warn', `終了: ${v.reason}${v.detail ? ` — ${v.detail}` : ''}`);
+      }
+    });
+
+    // 承認。押されるまで、向こう側は止まって待っている。
+    ctx.on('approval', (e) => {
+      const box = el('div', 'ask');
+      const req = e.request;
+      const what = req.kind === 'write' ? `${req.created ? '新規作成' : '変更'}: ${req.path}`
+        : req.kind === 'command' ? `コマンド実行: ${req.command}`
+        : `外部への問い合わせ: ${req.url}`;
+      box.append(el('div', 'warn', what));
+      if (req.kind === 'write' && req.diff) {
+        const pre = el('pre', 'diff', req.diff);
+        box.append(pre);
+      }
+      const yes = el('button', 'primary', '許可');
+      const no = el('button', '', '拒否');
+      const answer = (approved) => {
+        fetch('/api/approve', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id: e.id, approved }),
+        });
+        box.replaceChildren(el('div', approved ? 'good' : 'dim', `${what} → ${approved ? '許可' : '拒否'}`));
+      };
+      yes.onclick = () => answer(true);
+      no.onclick = () => answer(false);
+      const menu = el('div', 'ask-menu');
+      menu.append(yes, no);
+      box.append(menu);
+      log.append(box);
+      log.scrollTop = log.scrollHeight;
+      // 別の口（端末など）で答えられたら、こちらは閉じる。
+      ctx.on('approvalDone', (d) => {
+        if (d.id === e.id && box.querySelector('button')) {
+          box.replaceChildren(el('div', 'dim', `${what} → ${d.approved ? '許可' : '拒否'}`));
+        }
+      });
     });
   },
 

@@ -18,6 +18,8 @@ import { stateDir } from '../core/autopilot-setup.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout } from './layout.ts';
 import { collectState } from './state.ts';
 import type { AasConfig } from '../config.ts';
+import { Session } from '../core/session.ts';
+import type { ApprovalRequest } from '../agent/tools/types.ts';
 
 const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), 'web');
 const LAYOUT_PATH = () => join(stateDir(), 'layout.json');
@@ -40,13 +42,23 @@ export interface UiServerOptions {
 export type UiEvent =
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string }
   | { type: 'plan'; items: unknown[] }
-  | { type: 'stateChanged' };
+  | { type: 'stateChanged' }
+  /** 対話の出来事。そのまま画面へ流す。 */
+  | { type: 'session'; event: unknown }
+  /** 承認待ち。答えが来るまで作業は止まっている。 */
+  | { type: 'approval'; id: string; request: ApprovalRequest }
+  | { type: 'approvalDone'; id: string; approved: boolean }
+  | { type: 'busy'; busy: boolean };
 
 export class UiServer {
   readonly #opts: UiServerOptions;
   readonly #clients = new Set<ServerResponse>();
   #server?: ReturnType<typeof createServer>;
   #url = '';
+  #session?: Session;
+  /** 承認待ちの返事先。画面が答えるまで、ここで待っている。 */
+  readonly #pending = new Map<string, (ok: boolean) => void>();
+  #seq = 0;
 
   constructor(opts: UiServerOptions) {
     this.#opts = opts;
@@ -77,11 +89,55 @@ export class UiServer {
       server.once('error', reject);
       server.listen(port, host, resolve);
     });
-    this.#url = `http://${host}:${port}/`;
+    // 0 を渡すと空いている口を選ぶ。実際に決まった番号を使う。
+    const addr = server.address();
+    const actual = typeof addr === 'object' && addr ? addr.port : port;
+    this.#url = `http://${host}:${actual}/`;
     return this.#url;
   }
 
+  /**
+   * 対話の本体を用意する。
+   * 承認は画面へ投げて、答えが返るまで待つ。
+   * 誰も見ていない画面へ投げっぱなしにならないよう、待ち時間には上限を置く。
+   */
+  async session(): Promise<Session> {
+    if (this.#session) return this.#session;
+    this.#session = await Session.create(this.#opts.config, {
+      approve: (req) => this.#ask(req),
+      onLog: (level, text) => this.broadcast({ type: 'log', level, text }),
+    });
+    return this.#session;
+  }
+
+  #ask(req: ApprovalRequest): Promise<boolean> {
+    const approval = this.#opts.config.agent?.approval ?? 'autoEdit';
+    if (approval === 'auto') return Promise.resolve(true);
+    if (approval === 'autoEdit' && req.kind === 'write') return Promise.resolve(true);
+
+    const id = `a${++this.#seq}`;
+    return new Promise<boolean>((resolve) => {
+      let done = false;
+      const finish = (ok: boolean) => {
+        if (done) return;
+        done = true;
+        this.#pending.delete(id);
+        this.broadcast({ type: 'approvalDone', id, approved: ok });
+        resolve(ok);
+      };
+      this.#pending.set(id, finish);
+      this.broadcast({ type: 'approval', id, request: req });
+      // 誰も答えないまま待ち続けない。返事が無いことは、許可ではない。
+      const timer = setTimeout(() => finish(false), 10 * 60_000);
+      timer.unref?.();
+    });
+  }
+
   async stop(): Promise<void> {
+    // 待っている承認は、答えが無いまま終わる。許可はしない。
+    for (const finish of this.#pending.values()) finish(false);
+    this.#pending.clear();
+    await this.#session?.close().catch(() => undefined);
     for (const res of this.#clients) { try { res.end(); } catch { /* 切れている */ } }
     this.#clients.clear();
     await new Promise<void>((resolve) => this.#server?.close(() => resolve()) ?? resolve());
@@ -114,6 +170,33 @@ export class UiServer {
       return send(res, 200, { layout, repairs: [] });
     }
 
+    if (path === '/api/send' && req.method === 'POST') {
+      const body = await readBody(req) as { text?: string };
+      const text = typeof body?.text === 'string' ? body.text.trim() : '';
+      if (!text) return send(res, 400, { error: '指示が空です' });
+
+      const session = await this.session();
+      if (session.busy) return send(res, 409, { error: 'いま別の作業をしています' });
+
+      // 受け取ったことだけ先に返し、続きは出来事として流す。
+      send(res, 202, { accepted: true });
+      void this.#drive(session, text);
+      return;
+    }
+
+    if (path === '/api/abort' && req.method === 'POST') {
+      this.#session?.abort();
+      return send(res, 200, { ok: true });
+    }
+
+    if (path === '/api/approve' && req.method === 'POST') {
+      const body = await readBody(req) as { id?: string; approved?: boolean };
+      const resolveIt = this.#pending.get(String(body?.id ?? ''));
+      if (!resolveIt) return send(res, 404, { error: 'その承認は既に終わっています' });
+      resolveIt(body?.approved === true);
+      return send(res, 200, { ok: true });
+    }
+
     if (path === '/api/state' && req.method === 'GET') {
       return send(res, 200, await collectState(this.#opts.config));
     }
@@ -131,6 +214,21 @@ export class UiServer {
     }
 
     return this.#static(path, res);
+  }
+
+  async #drive(session: Session, text: string): Promise<void> {
+    this.broadcast({ type: 'busy', busy: true });
+    try {
+      for await (const event of session.send(text)) {
+        this.broadcast({ type: 'session', event });
+      }
+    } catch (e) {
+      this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
+    } finally {
+      this.broadcast({ type: 'busy', busy: false });
+      // 作業で記憶やファイルが動いている。画面の材料を取り直させる。
+      this.broadcast({ type: 'stateChanged' });
+    }
   }
 
   async #static(path: string, res: ServerResponse): Promise<void> {
