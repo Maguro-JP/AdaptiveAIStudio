@@ -68,7 +68,7 @@ export class Scheduler {
       tasks.map((t) => [t.id, { id: t.id, state: 'pending' as TaskState }]),
     );
     const lockedPaths = new Set<string>();
-    const running = new Map<string, Promise<SchedulerEvent>>();
+    const running = new Map<string, Promise<void>>();
     const queue: SchedulerEvent[] = [];
     let inFlight = 0;
     /** 直近に使ったレーン = 今ロードされているモデル。優先して使い続ける。 */
@@ -109,17 +109,20 @@ export class Scheduler {
       inFlight += 1;
       queue.push({ type: 'start', taskId: t.id, laneId: t.laneId });
 
+      // 完了イベントは戻り値ではなく queue に積む。
+      // Promise.race は勝った1本しか返さないため、
+      // 同時に終わった残りの完了が消えてしまうのを避ける。
       const p = lane
         .withSlot(() => t.run({ taskId: t.id, laneId: t.laneId, candidates: lane.config.candidates, signal }))
         .then(
-          (result): SchedulerEvent => {
+          (result): void => {
             outcomes.set(t.id, { id: t.id, state: 'done', result, startedAt, finishedAt: Date.now() });
-            return { type: 'end', taskId: t.id, state: 'done', ms: Date.now() - startedAt };
+            queue.push({ type: 'end', taskId: t.id, state: 'done', ms: Date.now() - startedAt });
           },
-          (e: unknown): SchedulerEvent => {
+          (e: unknown): void => {
             const error = e instanceof Error ? e.message : String(e);
             outcomes.set(t.id, { id: t.id, state: 'failed', error, startedAt, finishedAt: Date.now() });
-            return { type: 'end', taskId: t.id, state: 'failed', error, ms: Date.now() - startedAt };
+            queue.push({ type: 'end', taskId: t.id, state: 'failed', error, ms: Date.now() - startedAt });
           },
         )
         .finally(() => {
@@ -185,9 +188,13 @@ export class Scheduler {
       }
 
       if (running.size > 0) {
+        // 待つ対象は yield より前に確定させる。
+        // yield の間に全て終わると running が空になり、
+        // 空の Promise.race は永遠に解決しないため、そこで止まってしまう。
+        const waiting = [...running.values()];
         yield { type: 'idle', running: [...running.keys()] };
-        const ev = await Promise.race(running.values());
-        yield ev;
+        await Promise.race(waiting);
+        while (queue.length > 0) yield queue.shift()!;
       }
     }
 

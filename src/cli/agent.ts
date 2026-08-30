@@ -31,6 +31,8 @@ import { stateDir } from '../core/autopilot-setup.ts';
 import { RoleRegistry } from '../roles/registry.ts';
 import { RoleLedger, formatChanges } from '../roles/ledger.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
+import { decompose, formatPlan, toWorkItems } from '../agent/pm.ts';
+import { Team } from '../agent/team.ts';
 import { runPanel, mergeFindings } from '../agent/panel.ts';
 import { IdleScheduler, formatIdleStats, type ModeStat } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES, MODE_ROLE, promptFor } from '../harness/idle-modes.ts';
@@ -324,6 +326,90 @@ async function main(): Promise<void> {
     }
   };
 
+  /**
+   * レーン。指定が無ければ候補から作る。
+   * 空いている計算資源は節約ではなく損失なので、余っていれば並べる。
+   */
+  const lanes = agentCfg.lanes && agentCfg.lanes.length > 0
+    ? agentCfg.lanes
+    : [{ id: 'main', candidates, parallel: 2 }];
+
+  /**
+   * 依頼を分解して、複数の担当に同時に働いてもらう。
+   *
+   * 分解に失敗しても止まらない。最悪でも「一人で全部やる」に畳んで進む。
+   * 分解できないことは、作業をしない理由にならない。
+   */
+  const runPlanOn = async (request: string): Promise<void> => {
+    const ac = new AbortController();
+    generating = ac;
+    try {
+      const pmCtx = {
+        lanes,
+        roleIds: roles.active().map((r) => r.id),
+        fallbackRoleId: roles.get('worker') ? 'worker' : roles.active()[0]!.id,
+        maxItems: 8,
+      };
+
+      console.log(c.dim('  分解中…'));
+      const pm = decompose(orchestrator, request, { candidates, ctx: pmCtx }, ac.signal);
+      let step = await pm.next();
+      while (!step.done) {
+        const ev = step.value;
+        if (ev.type === 'repaired') console.log(c.yellow(`  計画を直しました: ${ev.detail}`));
+        step = await pm.next();
+      }
+      const plan = step.value;
+      console.log(formatPlan(plan) + '\n');
+
+      const team = new Team(orchestrator, {
+        lanes,
+        system: buildSystemPrompt(roles.get(pmCtx.fallbackRoleId)!),
+        tools: toolsFor(roles.get(pmCtx.fallbackRoleId)!, toolPool),
+        root,
+        maxTurns: agentCfg.maxTurns,
+        temperature: config.temperature,
+        maxTokens: config.maxTokens,
+        maxTotalParallel: agentCfg.maxTotalParallel,
+        approve,
+        // 権限は役職から配る。調べるだけの担当は書き込む手段を持たない。
+        assign: (roleId) => {
+          const role = roles.get(roleId);
+          if (!role) return undefined;
+          return { system: buildSystemPrompt(role), tools: toolsFor(role, toolPool) };
+        },
+      });
+
+      const gen = team.run(toWorkItems(plan), ac.signal);
+      let next = await gen.next();
+      while (!next.done) {
+        const ev = next.value;
+        if (ev.type === 'taskStart') console.log(c.cyan(`  ▶ ${ev.taskId} 着手 @${ev.laneId}`));
+        else if (ev.type === 'taskEnd') {
+          const mark = ev.state === 'done' ? c.green('✓') : c.red('✗');
+          console.log(`  ${mark} ${ev.taskId} (${Math.round(ev.ms / 1000)}s)${ev.error ? ` ${c.red(ev.error)}` : ''}`);
+        } else if (ev.type === 'taskSkip') console.log(c.yellow(`  − ${ev.taskId} 未実施: ${ev.reason}`));
+        else if (ev.type === 'running' && ev.taskIds.length > 1) {
+          console.log(c.dim(`    同時進行: ${ev.taskIds.join(', ')}`));
+        }
+        next = await gen.next();
+      }
+
+      const outcomes = next.value;
+      const done = [...outcomes.values()].filter((o) => o.state === 'done').length;
+      console.log(c.dim(`\n  ${done}/${outcomes.size} 件完了\n`));
+      for (const o of outcomes.values()) {
+        if (o.state !== 'done') continue;
+        const report = (o.result as { report?: string } | undefined)?.report;
+        if (report) console.log(`  [${o.id}] ${report.split('\n')[0]}`);
+      }
+      console.log();
+      lastChangeAt = Date.now();
+    } finally {
+      generating = undefined;
+    }
+  };
+
   const initCfg = config.initiative ?? {};
   const proposals = new ProposalQueue(join(stateDir(), 'proposals.json'));
   await proposals.load();
@@ -560,6 +646,12 @@ async function main(): Promise<void> {
           }
         }
         console.log();
+        continue;
+      }
+      if (line.startsWith('/plan')) {
+        const target = line.slice('/plan'.length).trim();
+        if (!target) { console.log(c.dim('  使い方: /plan <依頼>\n')); continue; }
+        await runPlanOn(target);
         continue;
       }
       if (line.startsWith('/panel')) {

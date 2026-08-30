@@ -25,6 +25,12 @@ export interface WorkItem {
    * ローカルは計算が無料なので、遊ばせるくらいなら重ねて投げた方が速い。
    */
   raceWith?: string[];
+  /**
+   * 担当させる役職。指定すると、その気質と権限で働く。
+   * 権限はプロンプトではなくツールの割り当てで決まるので、
+   * 調べるだけの担当は、そもそも書き込む手段を持たない。
+   */
+  roleId?: string;
 }
 
 export interface TeamEvent {
@@ -51,6 +57,11 @@ export interface TeamOptions {
   maxTokens?: number;
   maxTotalParallel?: number;
   approve(req: ApprovalRequest): Promise<boolean>;
+  /**
+   * 役職ごとの気質と権限を引く。
+   * 省略すると全員が同じ system と tools で働く（P2までの動き）。
+   */
+  assign?(roleId: string): { system: string; tools: Tool[] } | undefined;
 }
 
 export interface WorkResult {
@@ -76,10 +87,12 @@ export class Team {
     signal: AbortSignal,
     push: (p: TeamProgress) => void,
   ): Promise<WorkResult> {
+    // 役職が指定されていれば、その気質と権限で働かせる。
+    const assigned = item.roleId ? this.#opts.assign?.(item.roleId) : undefined;
     const agent = new Agent(this.#orchestrator, {
       candidates,
-      system: this.#opts.system,
-      tools: this.#opts.tools,
+      system: assigned?.system ?? this.#opts.system,
+      tools: assigned?.tools ?? this.#opts.tools,
       root: this.#opts.root,
       maxTurns: this.#opts.maxTurns,
       temperature: this.#opts.temperature,

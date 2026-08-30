@@ -1,22 +1,24 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { Scheduler, type Task, type TaskOutcome } from '../src/core/scheduler.ts';
+import { Scheduler, type Task, type TaskOutcome, type SchedulerEvent } from '../src/core/scheduler.ts';
 import { Semaphore } from '../src/core/lane.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function drain(
   sched: Scheduler, tasks: Task[],
-): Promise<{ outcomes: Map<string, TaskOutcome>; order: string[] }> {
+): Promise<{ outcomes: Map<string, TaskOutcome>; order: string[]; events: SchedulerEvent[] }> {
   const order: string[] = [];
+  const events: SchedulerEvent[] = [];
   const gen = sched.run(tasks, new AbortController().signal);
   let next = await gen.next();
   while (!next.done) {
     const ev = next.value;
+    events.push(ev);
     if (ev.type === 'start') order.push(ev.taskId);
     next = await gen.next();
   }
-  return { outcomes: next.value, order };
+  return { outcomes: next.value, order, events };
 }
 
 describe('Semaphore', () => {
@@ -202,5 +204,29 @@ describe('実行スタイル', () => {
     let switches = 0;
     for (let i = 1; i < order.length; i += 1) if (order[i] !== order[i - 1]) switches += 1;
     assert.ok(switches <= 2, `レーン切替が多すぎる: ${switches}回 (${order.join('→')})`);
+  });
+
+  test('即座に終わるタスクでも、依存の先へ進む（待ち合わせが空回りしない）', async () => {
+    // 待ち時間ゼロで終わると、待ち合わせを組む前に全部終わってしまう。
+    // そこで「誰も走っていないものを待つ」形になると、そこで永久に止まる。
+    const sched = new Scheduler([{ id: 'l', candidates: ['local:m'], parallel: 2 }]);
+    const tasks: Task[] = [
+      { id: 'a', laneId: 'l', deps: ['b'], async run() { return 'a'; } },
+      { id: 'b', laneId: 'l', async run() { return 'b'; } },
+    ];
+    const { outcomes } = await drain(sched, tasks);
+    assert.equal([...outcomes.values()].filter((o) => o.state === 'done').length, 2);
+  });
+
+  test('同時に終わった完了を取りこぼさない', async () => {
+    const sched = new Scheduler([{ id: 'l', candidates: ['local:m'], parallel: 5 }]);
+    const tasks: Task[] = Array.from({ length: 5 }, (_, i) => ({
+      id: `t${i}`, laneId: 'l',
+      async run() { await sleep(10); return i; },
+    }));
+    const { events, outcomes } = await drain(sched, tasks);
+    const ends = events.filter((e) => e.type === 'end');
+    assert.equal(ends.length, 5, `完了イベントが欠けた: ${ends.length}`);
+    assert.equal([...outcomes.values()].every((o) => o.state === 'done'), true);
   });
 });
