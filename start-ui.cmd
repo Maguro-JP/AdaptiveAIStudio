@@ -1,4 +1,4 @@
 @echo off
-rem ダブルクリックで画面を開くための入口。
+rem 画面だけを開きたいときの入口。中身は start.cmd に任せる。
 cd /d "%~dp0"
-npm run ui
+call start.cmd ui

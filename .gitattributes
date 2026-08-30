@@ -1,0 +1,5 @@
+# バッチファイルは CRLF で配る。
+# LF のままだと、cmd.exe が goto や括弧の塊を読み違えることがある。
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.sh  text eol=lf

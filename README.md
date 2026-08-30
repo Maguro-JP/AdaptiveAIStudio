@@ -16,7 +16,7 @@ Node.js 22.6 以降だけ用意すれば、**`npm install` は要りません**�
 ### 1. 取ってくる
 
 ```
-git clone -b claude/adaptive-ai-studio-architecture-y12imi https://github.com/Maguro-JP/AdaptiveAIStudio.git
+git clone https://github.com/Maguro-JP/AdaptiveAIStudio.git
 cd AdaptiveAIStudio
 ```
 
@@ -40,11 +40,31 @@ npm run doctor
 
 ### 3. 開く
 
+**`start.cmd`（Windows）/ `start.sh`（mac・Linux）をダブルクリック**します。
+やることを番号で選べます。
+
+```
+  AdaptiveAIStudio
+  ----------------------------------------
+   1  画面をひらく          （ふだんはこれ）
+   2  端末で作業させる
+   3  ただの相談
+   4  この環境を見てもらう
+   5  手元のモデルを見る
+   6  検査を回す
+   0  やめる
+```
+
+この窓は**失敗しても勝手に閉じません**。一瞬で閉じて何も分からない、が一番困るためです。
+番号を覚えたら `start.cmd ui` のように引数で直接指定できます。
+画面だけを開く `start-ui.cmd` / `start-ui.sh` も残してあります。
+
+打ち込む方が早ければ、こちらでも同じです。
+
 ```
 npm run ui
 ```
 
-`start-ui.sh` / `start-ui.cmd` をダブルクリックしても同じ。
 ブラウザが自動で開きます。
 
 **モデルがまだ無くても、画面は開きます。** 配置や色を触ったり、

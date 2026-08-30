@@ -1,4 +1,4 @@
 #!/bin/sh
-# ダブルクリックで画面を開くための入口。
+# 画面だけを開きたいときの入口。中身は start.sh に任せる。
 cd "$(dirname "$0")" || exit 1
-exec npm run ui
+exec ./start.sh ui

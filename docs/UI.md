@@ -102,7 +102,8 @@ AIに頼めばいい。`.aas/layout.json` はただのファイルなので、
 npm run ui
 ```
 
-`start-ui.sh` / `start-ui.cmd` をダブルクリックしても同じ。
+`start.cmd` / `start.sh` をダブルクリックして 1 を選んでも同じ
+（`start-ui.cmd` / `start-ui.sh` は画面だけを開く近道）。
 ブラウザは自動で開く（開けない環境なら場所だけ出す）。
 
 ## 見た目は着替えられる
