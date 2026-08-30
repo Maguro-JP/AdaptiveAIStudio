@@ -1,0 +1,50 @@
+# 検査を回す。
+#
+# Windows を入れているのが要点。
+# 「Linux では通るが Windows では落ちる」が実際に起きており
+# （殻の glob 展開、巨大な仮ファイル、パスの区切り）、
+# 手元が Windows でも、直す側が Linux なら気づけない。
+# 逆もまた同じなので、両方で回す。
+name: 検査
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # 1つ落ちても、残りの結果を見たい。
+      # どこまでが環境固有の問題かを切り分けるため。
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['22.x', '24.x']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # 実行時の依存はゼロなので、ここでは何も入れない。
+      # 入れてしまうと「入れなくても動く」が壊れても気づけない。
+      - name: 検査
+        run: npm test
+
+  typecheck:
+    name: 型検査
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      # 型検査にだけ TypeScript が要る。
+      - run: npm ci
+      - run: npm run typecheck
