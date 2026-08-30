@@ -15,7 +15,7 @@ import { pickModelFile, installModel, findModel } from '../src/runtime/model-ins
 import type { CatalogEntry } from '../src/runtime/model-catalog.ts';
 
 const ENTRY: CatalogEntry = {
-  id: 'test-model', repo: 'Owner/Test-GGUF', quant: 'q4_k_m',
+  id: 'test-model', repo: 'Owner/Test-GGUF', quant: 'q4_k_m', ollama: 'test:1b',
   approxGB: 0.1, note: '検査用', license: 'Apache-2.0',
 };
 

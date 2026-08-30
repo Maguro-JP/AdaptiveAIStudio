@@ -98,15 +98,16 @@ npm run llama
 公式のリリースから、この機械に合うもの（NVIDIA があれば CUDA 版）を選んで
 `~/.aas/bin` に置きます。置いたあと一度動かして、実際に起動できることまで確かめます。
 
-モデル（GGUF）も取ってこられます。
+モデルも取ってこられます。**A（Ollama）でも B（llama.cpp）でも同じ言い方**です。
 
 ```
 npm run models -- --get          # まず動く軽いもの（約1.1GB）
 npm run models -- --available    # 取ってこられるものの一覧
 ```
 
-**2つ目からは、同じ置き場に `.gguf` を入れるだけ**でも使えます。
-一覧に無いものは、そうやって足してください。
+- **A（Ollama）** — Ollama に頼みます。一覧に無いものは名前を直接渡せます（`--get gemma3:4b`）
+- **B（llama.cpp）** — GGUF を取ってきて置き場に入れます。
+  **2つ目からは、同じ置き場に `.gguf` を入れるだけ**でも使えます
 
 ```json
 { "runtime": { "kind": "llamacpp",
