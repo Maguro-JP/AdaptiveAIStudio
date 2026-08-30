@@ -143,16 +143,22 @@ export const writeFileTool: Tool = {
       created = true;
     }
 
-    if (before === content) return ok(`変更なし: ${p}`);
+    // 元の改行に合わせる。Windows で取ってきた木は CRLF のことがあり、
+    // モデルは LF で書き戻す。そのまま書くと**1行も直していないのに
+    // ファイル全体が変更扱い**になり、差分を見る意味がなくなる。
+    const written = matchLineEndings(content, before);
+
+    if (before === written) return ok(`変更なし: ${p}`);
 
     const display = toDisplayPath(ctx.root, abs);
-    const diff = unifiedDiff(display, before, content);
+    // 差分は LF に揃えて見せる。^M が全行に並ぶと読めない。
+    const diff = unifiedDiff(display, toLf(before), toLf(written));
     const approved = await ctx.approve({ kind: 'write', path: display, diff, created });
     if (!approved) return fail(`利用者が書き込みを拒否しました: ${p}`);
 
     try {
       await mkdir(dirname(abs), { recursive: true });
-      await writeFile(abs, content, 'utf8');
+      await writeFile(abs, written, 'utf8');
     } catch (e) {
       return fail(`書き込めません: ${p} (${describe(e)})`);
     }
@@ -176,4 +182,29 @@ async function walk(dir: string, root: string, out: string[], depth: number): Pr
 
 function describe(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * 元のファイルの改行に合わせる。
+ *
+ * Windows で取ってきた木は CRLF のことがあり、モデルは LF で書き戻す。
+ * そのまま書くと、1行も直していないのにファイル全体が変更扱いになる。
+ * 差分を見て承認する仕組みなので、これは致命的で、
+ * **利用者は毎回「全部書き換わった」ものを承認させられる**ことになる。
+ *
+ * 混ざっている場合は多い方に寄せる。元が空（新規）なら、そのまま。
+ */
+export function matchLineEndings(content: string, before: string): string {
+  if (before === '') return content;
+
+  const crlf = (before.match(/\r\n/g) ?? []).length;
+  const lf = (before.match(/\n/g) ?? []).length - crlf;
+  if (crlf === 0 || crlf < lf) return toLf(content);
+
+  return toLf(content).replace(/\n/g, '\r\n');
+}
+
+/** 改行を LF に揃える。比べるときと、差分を見せるときに使う。 */
+export function toLf(s: string): string {
+  return s.replace(/\r\n/g, '\n');
 }
