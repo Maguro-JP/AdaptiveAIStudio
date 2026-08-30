@@ -179,6 +179,8 @@ export const PANELS = {
           v.unknown ? (v.detail || `作業前の検査は確認できませんでした（${v.command}）`)
             : v.passed ? `作業前の検査は通っています（${again}）`
             : `作業前から検査が失敗しています（${again}）`);
+      } else if (v.type === 'salvaged') {
+        note('dim', `本文に書かれていた ${v.name} の呼び出しを拾いました`);
       } else if (v.type === 'rolledBack') note('warn', `変更を巻き戻しました: ${v.paths.join(', ')}`);
       else if (v.type === 'verify') showVerify(v.event);
       else if (v.type === 'settled') {

@@ -63,6 +63,8 @@ export const DEFAULT_SYSTEM = `あなたはソフトウェア開発の作業者�
 export type SessionEvent =
   | { type: 'text'; delta: string }
   | { type: 'toolStart'; name: string; summary: string }
+  /** 本文に紛れていた呼び出しを拾ったとき。直したことは黙らない。 */
+  | { type: 'salvaged'; name: string }
   | { type: 'toolEnd'; name: string; ok: boolean; summary: string }
   | { type: 'fallback'; from: string; to: string; reason: string }
   | { type: 'recalled'; text: string }
@@ -704,6 +706,9 @@ export class Session {
               answerChars += ev.delta.length;
               yield { type: 'text', delta: ev.delta };
               break;
+            case 'salvaged':
+              yield { type: 'salvaged', name: ev.name };
+              break;
             case 'toolStart':
               // 書き込む前の状態を控える。打ち切ったときに戻せるように。
               if (ev.call.name === 'write_file' && harnessCfg.rollbackOnGiveUp) {
@@ -750,6 +755,7 @@ export class Session {
           this.#history.push({ role: 'user', content: feedback });
           for await (const ev of (await this.#agent()).run(this.#history, sig)) {
             if (ev.type === 'thinking') events.push({ type: 'text', delta: ev.delta });
+            else if (ev.type === 'salvaged') events.push({ type: 'salvaged', name: ev.name });
             else if (ev.type === 'toolStart') {
               if (ev.call.name === 'write_file' && harnessCfg.rollbackOnGiveUp) {
                 const p = (ev.call.args as { path?: unknown }).path;

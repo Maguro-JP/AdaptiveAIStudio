@@ -568,6 +568,9 @@ async function main(): Promise<void> {
               stdout.write(ev.delta);
               printedText = true;
               break;
+            case 'salvaged':
+              console.log(c.dim(`  （本文に書かれていた ${ev.name} の呼び出しを拾いました）`));
+              break;
             case 'toolStart':
               flush();
               console.log(c.dim(`  · ${ev.name} ${ev.summary}`));

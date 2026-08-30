@@ -105,6 +105,34 @@ describe('エージェントループ', () => {
     assert.equal(finished.reason, 'completed');
   });
 
+  test('本文に書かれた呼び出しでも道具が動き、生の JSON は表に出ない', async () => {
+    // 1B級のモデルは、呼び出しの枠を使わず本文へ書いてしまうことがある。
+    const { events, root } = await runAgent([
+      { text: '直します。<tool_call>{"name":"write_file","arguments":'
+        + '{"path":"app.ts","content":"export const answer = 42;\n"}}</tool_call>' },
+      { text: '直しました。' },
+    ]);
+
+    const names = events.filter((e) => e.type === 'toolStart').map((e) => e.call.name);
+    assert.deepEqual(names, ['write_file'], '本文の呼び出しが道具として動いていない');
+    assert.equal(await readFile(join(root, 'app.ts'), 'utf8'), 'export const answer = 42;\n');
+
+    const shown = events.filter((e) => e.type === 'thinking').map((e) => e.delta).join('');
+    assert.equal(shown.includes('tool_call'), false, `生の JSON が画面へ出ている: ${shown}`);
+    assert.equal(shown.includes('{'), false, `生の JSON が画面へ出ている: ${shown}`);
+    assert.ok(shown.includes('直します。'), '本文まで消してしまっている');
+
+    assert.ok(events.some((e) => e.type === 'salvaged' && e.name === 'write_file'),
+      '拾ったことを黙っている');
+  });
+
+  test('呼び出しでない JSON は、そのまま本文として見せる', async () => {
+    const { events } = await runAgent([{ text: '既定は {"temperature": 0.2} です。' }]);
+    const shown = events.filter((e) => e.type === 'thinking').map((e) => e.delta).join('');
+    assert.equal(shown, '既定は {"temperature": 0.2} です。');
+    assert.equal(events.filter((e) => e.type === 'toolStart').length, 0);
+  });
+
   test('ツールを呼ばなければ即完了する', async () => {
     const { events } = await runAgent([{ text: 'すでに正しいので変更不要です。' }]);
     assert.equal(events.filter((e) => e.type === 'toolStart').length, 0);

@@ -10,10 +10,13 @@
 import type { ProviderMessage, ToolCall } from '../providers/contract.ts';
 import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
 import type { Tool, ToolContext, ApprovalRequest } from './tools/types.ts';
+import { ToolTextFilter } from './tool-text.ts';
 
 export type AgentEvent =
   | { type: 'thinking'; delta: string }
   | { type: 'toolStart'; call: ToolCall }
+  /** 本文に紛れていた呼び出しを拾ったとき。黙って直すと原因が追えない。 */
+  | { type: 'salvaged'; name: string }
   | { type: 'toolEnd'; call: ToolCall; result: string; isError: boolean }
   | { type: 'turn'; index: number; modelId?: string }
   | { type: 'fallback'; from: string; to: string; reason: string }
@@ -63,6 +66,9 @@ export class Agent {
       const calls: ToolCall[] = [];
       let modelId: string | undefined;
       let failure: string | undefined;
+      // 小さいモデルは、呼び出しを本文に書いてしまうことがある。
+      // 生の JSON を画面へ流さないよう、疑わしいところで一旦せき止める。
+      const filter = new ToolTextFilter();
 
       for await (const ev of this.#orchestrator.run(
         {
@@ -75,11 +81,27 @@ export class Agent {
         },
         signal,
       ) as AsyncGenerator<ChatEvent>) {
-        if (ev.type === 'text') { text += ev.delta; yield { type: 'thinking', delta: ev.delta }; }
+        if (ev.type === 'text') {
+          const shown = filter.push(ev.delta);
+          if (shown) { text += shown; yield { type: 'thinking', delta: shown }; }
+        }
         else if (ev.type === 'toolCall') calls.push(ev.call);
         else if (ev.type === 'fallback') yield { type: 'fallback', from: ev.from, to: ev.to, reason: ev.reason };
         else if (ev.type === 'done') modelId = ev.modelId;
         else if (ev.type === 'failed') failure = `${ev.error.kind}: ${ev.error.message}`;
+      }
+
+      // せき止めた分の始末。呼び出しが拾えたなら道具として扱い、
+      // 拾えなければ本文としてそのまま見せる（黙って消さない）。
+      if (calls.length > 0) {
+        const rest = filter.drain();
+        if (rest) { text += rest; yield { type: 'thinking', delta: rest }; }
+      } else {
+        const salvage = filter.end();
+        if (salvage.text) { text += salvage.text; yield { type: 'thinking', delta: salvage.text }; }
+        salvage.calls.forEach((c, i) => {
+          calls.push({ id: `salvaged-${turn}-${i}`, name: c.name, args: c.args });
+        });
       }
 
       if (failure) { yield { type: 'finished', reason: 'failed', detail: failure }; return; }
@@ -96,6 +118,7 @@ export class Agent {
 
       for (const call of calls) {
         if (signal.aborted) { yield { type: 'finished', reason: 'aborted' }; return; }
+        if (call.id.startsWith('salvaged-')) yield { type: 'salvaged', name: call.name };
         yield { type: 'toolStart', call };
 
         const tool = this.#tools.get(call.name);
