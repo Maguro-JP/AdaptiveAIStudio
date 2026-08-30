@@ -174,8 +174,11 @@ export const PANELS = {
         c.body.append(el('pre', 'tool-out', v.text));
       } else if (v.type === 'log') note(v.level === 'error' ? 'bad' : 'warn', v.text);
       else if (v.type === 'baseline') {
-        note(v.passed ? 'dim' : 'warn',
-          v.passed ? `作業前の検査は通っています（${v.command}）` : `作業前から検査が失敗しています（${v.command}）`);
+        const again = v.cached ? '確認済み・再実行なし' : v.command;
+        note(v.unknown ? 'warn' : v.passed ? 'dim' : 'warn',
+          v.unknown ? (v.detail || `作業前の検査は確認できませんでした（${v.command}）`)
+            : v.passed ? `作業前の検査は通っています（${again}）`
+            : `作業前から検査が失敗しています（${again}）`);
       } else if (v.type === 'rolledBack') note('warn', `変更を巻き戻しました: ${v.paths.join(', ')}`);
       else if (v.type === 'verify') showVerify(v.event);
       else if (v.type === 'settled') {

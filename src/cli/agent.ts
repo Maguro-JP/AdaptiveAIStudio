@@ -555,8 +555,14 @@ async function main(): Promise<void> {
               console.log(c.dim(ev.text.split('\n').map((l) => `  ${l}`).join('\n')));
               break;
             case 'baseline':
-              console.log(c.dim(`  作業前の状態を確認中: ${ev.command}`));
-              console.log(ev.passed ? c.dim('    通っています') : c.yellow('    作業前から失敗しています'));
+              console.log(c.dim(
+                ev.cached
+                  ? `  作業前の状態（確認済み・再実行なし）: ${ev.command}`
+                  : `  作業前の状態を確認中: ${ev.command}`));
+              console.log(
+                ev.unknown ? c.yellow(`    ${ev.detail ?? '確認できませんでした'}`)
+                  : ev.passed ? c.dim('    通っています')
+                  : c.yellow('    作業前から失敗しています'));
               break;
             case 'text':
               stdout.write(ev.delta);

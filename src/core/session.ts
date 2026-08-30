@@ -40,6 +40,7 @@ import { Team } from '../agent/team.ts';
 import { accept, changedBetween, type AcceptanceReport, type MemberReport } from '../agent/acceptance.ts';
 import { runVerification, verifyLoop, type VerifyEvent, type VerifyResult } from '../agent/verify.ts';
 import { snapshotTests } from '../agent/test-integrity.ts';
+import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
 import type { Harness } from '../harness/harness.ts';
 import { inspectGit } from '../agent/git.ts';
@@ -67,7 +68,14 @@ export type SessionEvent =
   | { type: 'recalled'; text: string }
   | { type: 'finished'; reason: string; detail?: string }
   /** 作業前の状態。今回の失敗と、前からの失敗を切り分けるために要る。 */
-  | { type: 'baseline'; command: string; passed: boolean }
+  | {
+      type: 'baseline'; command: string; passed: boolean;
+      /** 覚えていた結果を使ったか。毎回流さないことを画面に出すため。 */
+      cached?: boolean;
+      /** 時間切れなどで切り分けができないとき。passed は false になるが失敗ではない。 */
+      unknown?: boolean;
+      detail?: string;
+    }
   /** 検証ループの様子。書いて終わりにしないための往復。 */
   | { type: 'verify'; event: VerifyEvent }
   | { type: 'rolledBack'; paths: string[] }
@@ -142,6 +150,8 @@ export class Session {
   /** 提案がどの思考から出たか。採否をその思考の実績に返すために持つ。 */
   readonly #origin = new Map<string, string>();
   #lastChangeAt = Date.now();
+  /** 作業前検査。同じ命令なら一度しか流さない。 */
+  #baseline?: BaselineProbe;
 
   private constructor(init: {
     config: AasConfig; root: string; candidates: string[];
@@ -291,10 +301,13 @@ export class Session {
       const dirtyBefore = gitBefore.kind === 'dirty' ? gitBefore.changed : [];
 
       const command = await this.verifyCommand();
-      const baseline = command
-        ? await runVerification({ command, root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal)
+      // 作業前検査は切り分けのためだけのもの。切っても作業後の検査は残す。
+      const probed = command && verifyCfg.baseline !== false
+        ? await this.measureBaseline(command, ac.signal)
         : undefined;
-      const baselineFailed = baseline ? !baseline.passed : false;
+      const baseline = probed?.result;
+      // 「分からない」は失敗ではない。切り分けをやめるだけ。
+      const baselineFailed = probed?.status === 'failed';
       if (baselineFailed) yield { type: 'baselineFailed' };
 
       const active = this.roles.active();
@@ -601,6 +614,23 @@ export class Session {
   get lastChangeAt(): number { return this.#lastChangeAt; }
 
   /** 検査コマンド。設定 > 先読みが見つけたもの。 */
+  /** 作業前検査の実行役。設定を読んで一度だけ作る。 */
+  get baselineProbe(): BaselineProbe {
+    if (!this.#baseline) {
+      const cfg = this.config.agent?.verify ?? {};
+      this.#baseline = new BaselineProbe(this.root, {
+        ...(cfg.baselineTimeoutMs !== undefined ? { timeoutMs: cfg.baselineTimeoutMs } : {}),
+        ...(cfg.baselineMaxAgeMs !== undefined ? { maxAgeMs: cfg.baselineMaxAgeMs } : {}),
+      });
+    }
+    return this.#baseline;
+  }
+
+  /** 作業前の状態を得る。二度目からは覚えていた結果を返す。 */
+  async measureBaseline(command: string, signal: AbortSignal): Promise<BaselineOutcome> {
+    return this.baselineProbe.measure(command, signal);
+  }
+
   async verifyCommand(): Promise<string | undefined> {
     const configured = this.config.agent?.verify?.command;
     if (configured) return configured;
@@ -656,9 +686,15 @@ export class Session {
       let baseline: VerifyResult | undefined;
       const command = verifyOn ? await this.verifyCommand() : undefined;
       if (command && verifyCfg.baseline !== false) {
-        baseline = await runVerification(
-          { command, root: this.root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal);
-        yield { type: 'baseline', command, passed: baseline.passed };
+        const probed = await this.measureBaseline(command, ac.signal);
+        baseline = probed.result;
+        yield {
+          type: 'baseline', command,
+          passed: probed.status === 'passed',
+          cached: probed.cached,
+          ...(probed.status === 'unknown' ? { unknown: true } : {}),
+          ...(probed.reason !== undefined ? { detail: probed.reason } : {}),
+        };
       }
 
       const run = async function* (this: Session, agent: Agent): AsyncGenerator<SessionEvent> {

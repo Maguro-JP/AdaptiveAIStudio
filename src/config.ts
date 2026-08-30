@@ -200,8 +200,17 @@ export interface VerifyConfig {
    * 作業前にも検証を1回流し、元から壊れていたかを確かめる。既定は有効。
    * これが無いと、既存の失敗をこの作業のせいにして無駄に回すことになる。
    * テストが重い場合のみ false にする。
+   *
+   * 有効でも、同じ命令なら一度しか流さない（作業前の状態は作業では変わらない）。
    */
   baseline?: boolean;
+  /**
+   * 作業前検査だけの時間上限(ms)。既定2分。
+   * 全件が長い場合はここで切り上げ、「分からない」として扱う。
+   */
+  baselineTimeoutMs?: number;
+  /** 作業前検査の結果を覚えておく時間(ms)。既定30分。 */
+  baselineMaxAgeMs?: number;
 }
 
 export interface LaneSetting {

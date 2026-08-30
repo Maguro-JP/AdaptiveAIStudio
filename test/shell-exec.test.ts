@@ -1,0 +1,77 @@
+/**
+ * コマンド実行の検証。
+ * 上限で打ち切ったとき、殻の下の本体まで止まることを確かめる。
+ */
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, writeFile, rm, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { execCommand } from '../src/agent/shell-exec.ts';
+
+/** 打ち切られた後も生きていれば、印を書き足してしまう子。 */
+const SURVIVOR = `
+import { writeFileSync } from 'node:fs';
+setTimeout(() => writeFileSync(process.argv[2], 'survived'), 1500);
+setTimeout(() => {}, 30_000);
+`;
+
+describe('execCommand', () => {
+  test('時間上限で打ち切ると、その下の処理も止まる', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aas-exec-'));
+    try {
+      await writeFile(join(root, 'survivor.mjs'), SURVIVOR);
+      const marker = join(root, 'marker.txt');
+
+      const started = Date.now();
+      const r = await execCommand(
+        `node survivor.mjs ${JSON.stringify(marker)}`, root, 300, new AbortController().signal,
+      );
+      assert.equal(r.timedOut, true);
+      assert.ok(Date.now() - started < 10_000, '上限で戻ること');
+
+      // 打ち切った後も生きていれば、この間に印が書かれる。
+      await delay(2500);
+      assert.equal(
+        await readFile(marker, 'utf8').catch(() => null), null,
+        '打ち切った処理が生き残って走り続けている',
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('中断でも同じように止まる', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aas-exec-'));
+    try {
+      await writeFile(join(root, 'survivor.mjs'), SURVIVOR);
+      const marker = join(root, 'marker.txt');
+      const ac = new AbortController();
+      const run = execCommand(
+        `node survivor.mjs ${JSON.stringify(marker)}`, root, 30_000, ac.signal,
+      );
+      await delay(200);
+      ac.abort();
+      const r = await run;
+      assert.equal(r.aborted, true);
+
+      await delay(2500);
+      assert.equal(await readFile(marker, 'utf8').catch(() => null), null);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('通常の終了は今までどおり結果を返す', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aas-exec-'));
+    try {
+      const r = await execCommand('echo hello', root, 10_000, new AbortController().signal);
+      assert.equal(r.code, 0);
+      assert.equal(r.timedOut, false);
+      assert.match(r.output, /hello/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
