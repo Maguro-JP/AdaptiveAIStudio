@@ -26,9 +26,11 @@ describe('先読み', () => {
     const root = await project({ 'a.ts': 'x', 'src/b.ts': 'y' });
     const p = new Prefetcher(root);
 
-    const t = Date.now();
     p.start();
-    assert.ok(Date.now() - t < 10, 'start が待っている');
+    // 「待っていない」ことは、時間ではなく状態で見る。
+    // 経過時間で測ると、他の試験と並列に走ったときに
+    // 実装は正しいのに落ちる（この試験は実際にそれで落ちた）。
+    assert.equal(p.peek(), undefined, 'start が構築を待ってから戻っている');
 
     const snap = await p.snapshot();
     assert.ok(snap);
