@@ -132,6 +132,32 @@ npm run doctor
 
 ---
 
+## llama-server が起動しない
+
+`runtime.kind` を `llamacpp` にしているとき、llama.cpp が立ち上がらない場合。
+終了コードだけでは何も分からないので、**落ち方に見覚えがあれば次の一手まで出します**。
+
+```
+llama-server が起動に失敗しました (終了コード 1)
+gguf_init_from_file_impl: invalid magic characters: '...', expected 'GGUF'
+llama_model_load: error loading model: ...
+main: exiting due to model loading error
+
+→ そのファイルは GGUF ではありません。
+  途中で切れているか、別の形式です。取り直してください。
+```
+
+見分けているのは、共有ライブラリを見失った・GGUF でない・ファイルが無い・
+口（ポート）の取り合い・知らない指定・VRAM 不足・対応していない形式、の7通りです。
+
+このうち**5つは本物を実際に落として文字列を採ってあります**
+（`test/fixtures/llama/`）。VRAM 不足と対応形式の2つは再現できていないので、
+その見立てを出すときは「実物で確認できていません」と断ります。
+断定して誤った方向へ送るくらいなら、そう言う方がよいので。
+
+見覚えが無ければ「見覚えのある落ち方ではありませんでした」と言って、
+生の出力を出します。その出力を貼ってもらえれば、見分けを足します。
+
 ## Windows で `npm test` が落ちる
 
 Linux では全部通るのに Windows で落ちる場合、まず次の2つを疑う。
