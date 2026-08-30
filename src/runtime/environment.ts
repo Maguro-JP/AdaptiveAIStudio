@@ -51,6 +51,18 @@ function run(cmd: string, args: string[], timeoutMs = 5000): Promise<string | un
   });
 }
 
+/**
+ * nvidia-smi の頭書きから CUDA の版を読む。
+ *
+ * 出方が版によって違う。実機(RTX 4060 / Windows)では
+ *   CUDA Version: 13.0
+ *   CUDA UMD Version: 580.88
+ * のどちらも来る。片方しか拾えないと、入っているのに「不明」になる。
+ */
+export function parseCudaVersion(text: string): string | undefined {
+  return text.match(/CUDA(?:\s+\w+)?\s+Version:\s*([\d.]+)/)?.[1];
+}
+
 /** NVIDIA ドライバの版。CUDA が動くかどうかの、いちばん外側の条件。 */
 export async function nvidiaDriver(): Promise<{ driver: string; cuda?: string } | undefined> {
   const out = await run('nvidia-smi', [
@@ -62,7 +74,7 @@ export async function nvidiaDriver(): Promise<{ driver: string; cuda?: string } 
 
   // CUDA の版は別の出し方でしか取れない
   const full = await run('nvidia-smi', []);
-  const cuda = full?.match(/CUDA Version:\s*([\d.]+)/)?.[1];
+  const cuda = full ? parseCudaVersion(full) : undefined;
   return { driver, cuda };
 }
 
@@ -91,8 +103,9 @@ export async function inspectEnvironment(ctx: EnvContext): Promise<EnvIssue[]> {
 
   if (windows) {
     // 置き場のうち、モデルを読む側（ネイティブ）が触るところだけを見る。
+    // 作業ディレクトリは見ない。読むのは Node なので、全角でも問題なく動く
+    // （C:\Users\ｍ＠ｇｕｒｏ で正常動作を実機で確認済み）。
     const paths: Array<[string, string]> = [
-      ['作業ディレクトリ', ctx.root],
       ['モデルの置き場', ctx.modelsDir ?? ''],
       ['既定の Ollama 置き場', `${ctx.userProfile ?? process.env.USERPROFILE ?? ''}\\.ollama`],
     ];
@@ -121,14 +134,6 @@ export async function inspectEnvironment(ctx: EnvContext): Promise<EnvIssue[]> {
         detail: 'GPU は見つかっているのに、ドライバ側の情報が取れません',
         fix: 'NVIDIA ドライバを入れ直すか、再起動してください。'
           + 'CUDA を使う実行ファイルは、これが通らないと動きません。',
-      });
-    } else if (nv.cuda === undefined) {
-      issues.push({
-        level: 'warn',
-        title: 'CUDA の版を確認できません',
-        detail: `ドライバ ${nv.driver}`,
-        fix: 'ドライバは入っていますが CUDA の情報が出ていません。'
-          + 'GPU を使う実行ファイルが CPU 実行に落ちている可能性があります。',
       });
     }
   }

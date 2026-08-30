@@ -13,7 +13,7 @@ import { buildRuntime } from '../core/runtime-setup.ts';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { join } from 'node:path';
 import { readdir } from 'node:fs/promises';
-import { padTo } from './width.ts';
+import { formatChecks, summaryLine, type Check, type Level } from './doctor-view.ts';
 import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { resolve } from 'node:path';
 
@@ -29,16 +29,6 @@ const c = {
   yellow: (s: string) => `\x1b[33m${s}\x1b[0m`,
   red: (s: string) => `\x1b[31m${s}\x1b[0m`,
 };
-
-type Level = 'ok' | 'warn' | 'bad';
-
-interface Check {
-  name: string;
-  level: Level;
-  detail: string;
-  /** 足りないときに、次に打つ一手 */
-  fix?: string;
-}
 
 const checks: Check[] = [];
 const add = (name: string, level: Level, detail: string, fix?: string) =>
@@ -169,23 +159,15 @@ try {
 
 console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — doctor\n'));
 
-const mark = { ok: c.green('  ok  '), warn: c.yellow(' 注意 '), bad: c.red(' 未了 ') };
-for (const check of checks) {
-  console.log(`${mark[check.level]} ${padTo(check.name, 16)}${c.dim(check.detail)}`);
-  if (check.fix) {
-    // 続きの行も、矢印の下に揃える。ぶら下がりが崩れると読みにくい。
-    const [head, ...rest] = check.fix.split('\n');
-    console.log(c.yellow(`       → ${head}`));
-    for (const line of rest) console.log(c.yellow(`         ${line}`));
-  }
-}
+const style = {
+  mark: { ok: c.green('  ok  '), warn: c.yellow(' 注意 '), bad: c.red(' 未了 ') },
+  markWidth: 6,
+  dim: c.dim,
+  hint: c.yellow,
+  good: c.green,
+};
 
-const bad = checks.filter((x) => x.level === 'bad');
+for (const line of formatChecks(checks, style)) console.log(line);
 console.log();
-if (bad.length === 0) {
-  console.log(c.green('動かせます。') + c.dim('  npm run ui  で画面、 npm run agent  で端末。'));
-} else {
-  console.log(c.yellow(`${bad.length} 件かたづければ動きます。`)
-    + c.dim(' 画面（npm run ui）は、モデルが無くても開けます。'));
-}
+console.log(summaryLine(checks, style));
 console.log();

@@ -1,6 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { hasNonAscii, nonAsciiPart, inspectEnvironment } from '../src/runtime/environment.ts';
+import {
+  hasNonAscii, nonAsciiPart, inspectEnvironment, parseCudaVersion,
+} from '../src/runtime/environment.ts';
 
 describe('全角・日本語を含むパス', () => {
   test('見つける', () => {
@@ -48,9 +50,9 @@ describe('環境の見立て', () => {
     assert.ok(issues.some((i) => i.title.includes('モデルの置き場')));
   });
 
-  test('作業ディレクトリも見る', async () => {
-    const issues = await inspectEnvironment({ ...base, root: 'C:\\作業\\here' });
-    assert.ok(issues.some((i) => i.title.includes('作業ディレクトリ')));
+  test('作業ディレクトリは見ない。読むのは Node なので全角でも動く', async () => {
+    const issues = await inspectEnvironment({ ...base, root: 'C:\\Users\\ｍ＠ｇｕｒｏ\\work' });
+    assert.deepEqual(issues, [], '実機で正常動作している構成を「未了」にしてはいけない');
   });
 
   test('ASCII だけなら何も言わない', async () => {
@@ -74,7 +76,26 @@ describe('環境の見立て', () => {
     const issues = await inspectEnvironment({
       ...base, root: 'C:\\作業', modelsDir: 'D:\\モデル', userProfile: 'C:\\Users\\ｍ＠ｇｕｒｏ',
     });
-    assert.equal(issues.length, 3);
+    assert.equal(issues.length, 2, 'モデルの置き場と Ollama の置き場だけ');
     for (const i of issues) assert.ok(i.fix.length > 0, `${i.title} に一手が無い`);
+  });
+});
+
+describe('nvidia-smi の読み取り', () => {
+  const header = (line: string) => `Tue Aug 30 12:00:00 2026
++-----------------------------------------------------------------------------+
+| NVIDIA-SMI 580.88                 Driver Version: 580.88       ${line} |
++-----------------------------------------------------------------------------+`;
+
+  test('CUDA Version 形式を読む', () => {
+    assert.equal(parseCudaVersion(header('CUDA Version: 13.0')), '13.0');
+  });
+
+  test('CUDA UMD Version 形式も読む', () => {
+    assert.equal(parseCudaVersion(header('CUDA UMD Version: 580.88')), '580.88');
+  });
+
+  test('書いていなければ分からないとする', () => {
+    assert.equal(parseCudaVersion('Driver Version: 580.88'), undefined);
   });
 });
