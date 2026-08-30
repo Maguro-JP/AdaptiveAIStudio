@@ -1,0 +1,103 @@
+/*
+ * 配置はデータ側で決まるので、ここに書くのは「見え方」だけ。
+ * 色は一箇所にまとめる。好みで差し替えられるように。
+ */
+:root {
+  --bg: #14161a;
+  --panel: #1b1e24;
+  --line: #2a2f38;
+  --text: #dfe3ea;
+  --dim: #8b93a1;
+  --accent: #5aa9e6;
+  --warn: #e0b341;
+  --bad: #e06c75;
+  --good: #7fca88;
+  --gap: 8px;
+  --radius: 8px;
+  font-size: 14px;
+}
+:root[data-theme="light"] {
+  --bg: #f4f5f7; --panel: #fff; --line: #dfe2e8;
+  --text: #1d2027; --dim: #6b7280; --accent: #2f6fb0;
+}
+:root[data-density="compact"] { --gap: 4px; --radius: 5px; font-size: 13px; }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: ui-sans-serif, "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  display: flex; flex-direction: column;
+}
+
+.bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--panel);
+}
+.brand { font-weight: 600; letter-spacing: .02em; }
+.spacer { flex: 1; }
+.status { color: var(--dim); font-size: .85em; }
+.status.live::before { content: "● "; color: var(--good); }
+.status.down::before { content: "● "; color: var(--bad); }
+
+button, select {
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: 4px 10px; font: inherit; cursor: pointer;
+}
+button:hover, select:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #0b0d10; border-color: var(--accent); }
+
+.root { flex: 1; min-height: 0; padding: var(--gap); }
+
+.split { display: flex; gap: var(--gap); min-width: 0; min-height: 0; height: 100%; }
+.split.column { flex-direction: column; }
+
+.grip { flex: 0 0 6px; cursor: col-resize; border-radius: 3px; }
+.split.column > .grip { cursor: row-resize; }
+.grip:hover { background: var(--accent); }
+
+.panel {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  overflow: hidden;
+}
+.panel > header {
+  display: flex; gap: 6px; align-items: center;
+  padding: 4px 8px; border-bottom: 1px solid var(--line);
+  font-size: .82em; color: var(--dim); letter-spacing: .04em;
+}
+.panel > .body { flex: 1; overflow: auto; padding: 8px; min-height: 0; }
+
+.tabs > header { gap: 2px; }
+.tabs > header button {
+  border: 0; background: transparent; color: var(--dim);
+  padding: 3px 8px; border-radius: 5px 5px 0 0; font-size: 1em;
+}
+.tabs > header button[aria-selected="true"] { color: var(--text); background: var(--bg); }
+
+.row { display: flex; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); }
+.row:last-child { border-bottom: 0; }
+.key { color: var(--dim); flex: 0 0 auto; }
+.dim { color: var(--dim); }
+.warn { color: var(--warn); }
+.bad { color: var(--bad); }
+.good { color: var(--good); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
+.empty { color: var(--dim); padding: 12px; text-align: center; }
+
+.chat { display: flex; flex-direction: column; height: 100%; }
+.chat .log { flex: 1; overflow: auto; }
+.chat form { display: flex; gap: 6px; padding-top: 6px; }
+.chat input { flex: 1; background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; }
+
+dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 10px; width: min(760px, 92vw); }
+dialog h2 { margin: 0 0 4px; font-size: 1.05em; }
+.hint { color: var(--dim); font-size: .85em; margin: 0 0 8px; }
+textarea { width: 100%; height: 46vh; background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px; padding: 8px;
+  font-family: ui-monospace, monospace; font-size: .88em; }
+.repairs { color: var(--warn); font-size: .85em; white-space: pre-wrap; }
+menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 8px 0 0; }
