@@ -32,6 +32,7 @@ import { RoleRegistry } from '../roles/registry.ts';
 import { RoleLedger, formatChanges } from '../roles/ledger.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { decompose, formatPlan, toWorkItems } from '../agent/pm.ts';
+import { accept, formatReport as formatAcceptance, changedBetween, type MemberReport } from '../agent/acceptance.ts';
 import { Team } from '../agent/team.ts';
 import { runPanel, mergeFindings } from '../agent/panel.ts';
 import { IdleScheduler, formatIdleStats, type ModeStat } from '../harness/idle.ts';
@@ -343,6 +344,20 @@ async function main(): Promise<void> {
   const runPlanOn = async (request: string): Promise<void> => {
     const ac = new AbortController();
     generating = ac;
+    // 作業前の状態。あとで「今回何が変わったか」を出すために要る。
+    const gitBefore = await inspectGit(root);
+    const dirtyBefore = gitBefore.kind === 'dirty' ? gitBefore.changed : [];
+    const baseline = await (async () => {
+      const cmd = await verifyCommand();
+      if (!cmd) return undefined;
+      return runVerification({ command: cmd, root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal);
+    })();
+    const baselineFailed = baseline ? !baseline.passed : false;
+    if (baselineFailed) {
+      console.log(c.yellow('  作業前から検査が失敗しています。今回の作業の成否とは切り分けて見ます。'));
+    }
+    /** 実際に書き換えられたファイル。宣言ではなく、起きたことを見る。 */
+    const written = new Set<string>();
     try {
       const pmCtx = {
         lanes,
@@ -391,20 +406,58 @@ async function main(): Promise<void> {
         } else if (ev.type === 'taskSkip') console.log(c.yellow(`  − ${ev.taskId} 未実施: ${ev.reason}`));
         else if (ev.type === 'running' && ev.taskIds.length > 1) {
           console.log(c.dim(`    同時進行: ${ev.taskIds.join(', ')}`));
+        } else if (ev.type === 'agent' && ev.event.type === 'toolEnd' && !ev.event.isError) {
+          if (ev.event.call.name === 'write_file') {
+            const path = (ev.event.call.args as { path?: string }).path;
+            if (path) written.add(path.replace(/\\/g, '/').replace(/^\.\//, ''));
+            prefetch.invalidate();
+          }
         }
         next = await gen.next();
       }
 
       const outcomes = next.value;
-      const done = [...outcomes.values()].filter((o) => o.state === 'done').length;
-      console.log(c.dim(`\n  ${done}/${outcomes.size} 件完了\n`));
-      for (const o of outcomes.values()) {
-        if (o.state !== 'done') continue;
-        const report = (o.result as { report?: string } | undefined)?.report;
-        if (report) console.log(`  [${o.id}] ${report.split('\n')[0]}`);
-      }
-      console.log();
       lastChangeAt = Date.now();
+
+      // 検査。通らないものを人に見せない。
+      let verified: 'passed' | 'failed' | 'skipped' | 'preexisting' = 'skipped';
+      let verifyDetail: string | undefined;
+      const command = await verifyCommand();
+      if (command) {
+        console.log(c.dim(`  検査: ${command}`));
+        const r = await runVerification({ command, root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal);
+        if (r.passed) verified = 'passed';
+        else if (baselineFailed) { verified = 'preexisting'; verifyDetail = firstLine(r.output); }
+        else { verified = 'failed'; verifyDetail = r.output.split('\n').filter((l) => l.trim()).slice(-3).join(' / '); }
+      }
+
+      // 検収。五人ぶんの作業ログではなく、一枚にまとめて出す。
+      const roleOf = new Map(plan.items.map((t) => [t.id, t.roleId]));
+      const members: MemberReport[] = [...outcomes.values()].map((o) => ({
+        id: o.id,
+        roleId: roleOf.get(o.id) ?? '不明',
+        state: o.state === 'done' ? 'done' : o.state === 'failed' ? 'failed' : 'skipped',
+        ms: (o.finishedAt ?? 0) - (o.startedAt ?? 0),
+        report: (o.result as { report?: string } | undefined)?.report,
+        error: o.error,
+      }));
+
+      const gitAfter = await inspectGit(root);
+      const dirtyAfter = gitAfter.kind === 'dirty' ? gitAfter.changed : [];
+      const changed = [...new Set([...written, ...changedBetween(dirtyBefore, dirtyAfter)])].sort();
+
+      const report = accept({
+        request, summary: plan.summary, members, changed,
+        declared: [...new Set(plan.items.flatMap((t) => t.writes ?? []))],
+        verified, verifyDetail,
+      });
+
+      console.log();
+      const text = formatAcceptance(report);
+      console.log(report.verdict === 'accepted' ? c.green(text)
+        : report.verdict === 'rejected' ? c.red(text)
+        : c.yellow(text));
+      console.log();
     } finally {
       generating = undefined;
     }
