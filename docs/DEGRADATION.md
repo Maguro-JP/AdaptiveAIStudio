@@ -64,7 +64,7 @@ LM Studio が拒否するのは、この遅さを許容しない設計だから�
 ### 出力例
 
 ```
-qwen2.5-coder:32b-q4_K_M を選択
+qwen3:32b-q4_K_M を選択
 
   プラン: 部分オフロード
     GPU層数     : 27 / 65
@@ -140,7 +140,7 @@ qwen2.5-coder:32b-q4_K_M を選択
 ```jsonc
 {
   "style": "solo",
-  "staff": { "*": ["local:qwen2.5-coder:32b"] }
+  "staff": { "*": ["local:qwen3:32b"] }
 }
 ```
 
@@ -155,9 +155,9 @@ qwen2.5-coder:32b-q4_K_M を選択
 {
   "style": "swarm",
   "staff": {
-    "control": ["local:qwen2.5:14b"],
-    "impl.worker": ["local:qwen2.5-coder:7b"],
-    "qa.reviewer": ["local:qwen2.5-coder:7b"]
+    "control": ["local:qwen3:14b"],
+    "impl.worker": ["local:qwen3:8b"],
+    "qa.reviewer": ["local:qwen3:8b"]
   },
   "lanes": { "coder7b": { "parallel": 4 } }
 }

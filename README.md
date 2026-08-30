@@ -84,7 +84,7 @@ npm run ui
 
 ```
 ollama serve
-ollama pull qwen3:30b-a3b
+npm run models -- --get qwen3-coder:30b
 ```
 
 **B. llama.cpp** — Ollama に依らない。GGUF を自分で置く。
@@ -175,13 +175,13 @@ Claudeが使えるときはClaudeを使い、制限・障害時にLocalLLMへ切
 
 ```
 ollama serve
-ollama pull qwen3:30b-a3b
+npm run models -- --get qwen3-coder:30b
 ```
 
 **7B を既定にしない。** ローカルにはトークン単価が無いので、
 節約のために弱いモデルを使う理由がない。
-RTX 4060 (8GB) では MoE の `qwen3:30b-a3b` が最適解
-（30B級の質を約33 tok/s で出せる）。詳細は
+RTX 4060 (8GB) では MoE の `qwen3-coder:30b` が最適解
+（総30B・活性3.3B なので、VRAM に載りきらなくても実用速度が出る）。詳細は
 [モデル運用](docs/MODEL-EFFICIENCY.md) と [32B級を動かすには](docs/RUNNING-LARGE-MODELS.md)。
 
 **Claude (任意):**
@@ -199,7 +199,7 @@ set ANTHROPIC_API_KEY=sk-ant-...
 
 ```
 環境: NVIDIA GeForce RTX 4060 8GB / RAM 32GB
-担当モデル: ollama:qwen3:30b-a3b
+担当モデル: ollama:qwen3-coder:30b
   起動時の自動選択 — 33 tok/s で 36秒 / 成功率 65%(事前値) / 1件あたり約72秒
 ```
 
@@ -216,7 +216,7 @@ set ANTHROPIC_API_KEY=sk-ant-...
 cp aas.config.example.json aas.config.json      # Windows なら copy
 ```
 
-省略した場合は `ollama:qwen2.5-coder:7b` を既定として起動する。
+省略した場合は `ollama:qwen3-coder:30b` を既定として起動する。
 `candidates` は先頭から順に試され、利用制限や障害で使えなければ次へ自動で切り替わる。
 
 ### 起動する
@@ -274,7 +274,7 @@ npm run team -- tasks.json
   // 同じ作業を複数モデルへ同時に投げ、最初に完了したものを採用する。
   // ローカルは計算が無料なので、遊ばせるより重ねて投げた方が速い。
   { "id": "fix", "laneId": "coder", "writes": ["fix.ts"], "instruction": "...",
-    "raceWith": ["ollama:qwen2.5-coder:7b"] }
+    "raceWith": ["ollama:qwen3:8b"] }
 ]
 ```
 
@@ -283,8 +283,8 @@ npm run team -- tasks.json
 
 ```jsonc
 { "agent": { "lanes": [
-  { "id": "coder", "candidates": ["ollama:qwen2.5-coder:7b"], "parallel": 3 },
-  { "id": "cpu",   "candidates": ["ollama:qwen2.5:3b"],       "parallel": 2 }
+  { "id": "coder", "candidates": ["ollama:qwen3:8b"], "parallel": 3 },
+  { "id": "cpu",   "candidates": ["ollama:qwen3:4b"],       "parallel": 2 }
 ] } }
 ```
 
@@ -295,7 +295,7 @@ npm run models
 ```
 
 ```
-qwen2.5-coder-32b-q4_k_m.gguf (19.8GB)
+qwen3-32b-q4_k_m.gguf (19.8GB)
   部分オフロード (GPU 16/64層) / context 8192 / 約 3 tok/s
   VRAM 7.0GB / RAM 13.8GB
   1000トークンの応答: 約 6分
@@ -311,7 +311,7 @@ npm run chat
 ```
 > このコードのバグを指摘して
 ローカルモデルが応答しました。
-  — ollama:qwen2.5-coder:7b / 3.2s
+  — ollama:qwen3:8b / 3.2s
 ```
 
 応答の下に必ず「実際に答えたモデル」が出る。

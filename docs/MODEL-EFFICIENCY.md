@@ -100,7 +100,7 @@ VRAM 8GB では複数モデルを同時に載せられない。
 設定ファイルにモデルを書く必要はない。
 
 ```
-担当モデル: ollama:qwen3:30b-a3b
+担当モデル: ollama:qwen3-coder:30b
   起動時の自動選択 — 25 tok/s で 48秒 / 成功率 65%(事前値) / 見逃し 18% / 1件あたり約458秒
 ```
 
@@ -115,7 +115,7 @@ VRAM 8GB では複数モデルを同時に載せられない。
 { "providers": [ ... ] }
 
 // 検証用: 固定したいときだけ
-{ "candidates": ["ollama:qwen2.5-coder:7b"] }
+{ "candidates": ["ollama:qwen3:8b"] }
 ```
 
 ### 乗り換えの暴れを防ぐ
@@ -132,10 +132,10 @@ VRAM 8GB では複数モデルを同時に載せられない。
 
 | 優先 | モデル | 速度 | 理由 |
 |---|---|---|---|
-| **1** | qwen3:30b-a3b (MoE) | 33 tok/s | 30B級の質を7B並みの速度で出す。この環境の最適解 |
-| 2 | qwen2.5-coder:14b | 10 tok/s | MoEが使えない場合の現実的な線 |
-| 3 | qwen2.5-coder:32b | 3 tok/s | 質を最優先し、時間を許容する場合 |
-| 4 | qwen2.5-coder:7b | 41 tok/s | 速度が要る定型作業のみ |
+| **1** | qwen3-coder:30b (MoE) | 33 tok/s | 30B級の質を7B並みの速度で出す。この環境の最適解 |
+| 2 | qwen3:14b | 10 tok/s | MoEが使えない場合の現実的な線 |
+| 3 | qwen3:32b | 3 tok/s | 質を最優先し、時間を許容する場合 |
+| 4 | qwen3:8b | 41 tok/s | 速度が要る定型作業のみ |
 
 **7Bを既定にしない。** ローカルで7Bを既定にするのは、
 クラウドの節約癖をそのまま持ち込んでいるだけ。
@@ -165,9 +165,9 @@ VRAMが厳しい環境では、載せ替えの合計時間が利得を食い潰�
 
 ```
 モデル                        実測tok/s  成功率  試行  1件完了まで
-qwen3:30b-a3b                     31.2    82%    45  約48秒
-qwen2.5-coder:7b                  40.0    20%    10  約50秒
-qwen2.5-coder:32b                  3.1   100%    12  約155秒
+qwen3-coder:30b                     31.2    82%    45  約48秒
+qwen3:8b                  40.0    20%    10  約50秒
+qwen3:32b                  3.1   100%    12  約155秒
 ```
 
 十分な試行が溜まるまでは事前値と混ぜ、1回の失敗で判断が振れないようにする。
@@ -198,8 +198,8 @@ MoEのように1つで両立できる場合に限る。
 ```ts
 choose({
   candidates: [
-    { modelId: 'local:qwen3:30b-a3b', plan, stats, loaded: true },
-    { modelId: 'local:qwen2.5-coder:7b', plan, stats, loaded: false },
+    { modelId: 'local:qwen3-coder:30b', plan, stats, loaded: true },
+    { modelId: 'local:qwen3:8b', plan, stats, loaded: false },
   ],
   expectedTokens: 1200,
 });

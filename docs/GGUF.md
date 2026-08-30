@@ -54,8 +54,14 @@ KVキャッシュ量も、部分オフロードの層あたりバイト数も、
 だから目で確かめる手段を用意した。
 
 ```
-npm run models -- --inspect ~/models/qwen2.5-7b-instruct-q4_k_m.gguf
+npm run models -- --inspect <手元の .gguf>
 ```
+
+手元に GGUF が無ければ、`npm run models -- --get` で取ってこられる。
+
+以下は前の世代のモデルで出したときの例。
+**名前が古いのは承知のうえで、そのままにしてある** —
+層数や次元はその版の実際の値なので、名前だけ差し替えると数字が嘘になる。
 
 ```
 qwen2.5-7b-instruct-q4_k_m.gguf  (4.70 GB, GGUF v3)
