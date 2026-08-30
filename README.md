@@ -33,7 +33,7 @@ npm run doctor
  未了  モデル          Ollama から一覧を取れません
        → Ollama を入れて起動してください。
          https://ollama.com からインストール → `ollama serve`
-         そのあと `ollama pull qwen3:30b-a3b`（8GB VRAM ならこれが最適解）
+         そのあと `npm run models -- --get`
 ```
 
 **足りないものには、次に打つ一手が必ず付きます。** 駄目出しで終わらせません。
@@ -101,8 +101,16 @@ npm run llama
 モデルも取ってこられます。**A（Ollama）でも B（llama.cpp）でも同じ言い方**です。
 
 ```
-npm run models -- --get          # まず動く軽いもの（約1.1GB）
+npm run models -- --get          # まず動く軽いもの（qwen3:4b・約2.5GB）
 npm run models -- --available    # 取ってこられるものの一覧
+```
+
+**一覧に無い名前も、そのまま渡せます。**
+一覧は必ず古くなるので、載っているものしか取れない作りにはしていません。
+
+```
+npm run models -- --get qwen3-coder:30b        # Ollama の名前
+npm run models -- --get Qwen/Qwen3-8B-GGUF     # Hugging Face の置き場名
 ```
 
 - **A（Ollama）** — Ollama に頼みます。一覧に無いものは名前を直接渡せます（`--get gemma3:4b`）

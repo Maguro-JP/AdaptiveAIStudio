@@ -71,8 +71,31 @@ if (process.argv.includes('--get') || process.argv.includes('--available')) {
   const id = wanted && !wanted.startsWith('--') ? wanted : STARTER_ID;
   const entry = lookupCatalog(id);
 
-  // Ollama なら、一覧に無い名前もそのまま頼める。
-  // 向こうが知っている名前をこちらが制限する理由が無い。
+  // 一覧に無い名前も、そのまま渡せる。
+  // **この一覧は必ず古くなる**ので、載っているものしか取れない作りにすると、
+  // 表を書いた人（＝私）が直すまで新しいモデルが使えないことになる。
+  // llama.cpp なら Hugging Face の置き場名、Ollama ならあちらの名前。
+  if (!entry && runtime.id === 'llamacpp' && id.includes('/')) {
+    const quant = process.argv[process.argv.indexOf('--quant') + 1] ?? 'q4_k_m';
+    console.log(c.cyan(`  ${id}`) + c.dim(` — 一覧にはありませんが、そのまま取ってきます（${quant}）`));
+    try {
+      const r = await installModel({
+        entry: {
+          id, repo: id, quant, ollama: '', approxGB: 0,
+          note: '', license: '(配布元の表示を確認してください)',
+        },
+        modelsDir,
+        onProgress: (line) => console.log(c.dim(`  ${line}`)),
+      });
+      console.log(c.green(`\n  用意できました: ${r.path}`));
+      console.log(c.dim(`  ${(r.bytes / GB).toFixed(1)}GB\n`));
+    } catch (e) {
+      console.error(c.yellow(`\n  取ってこられませんでした: ${e instanceof Error ? e.message : String(e)}\n`));
+      process.exit(1);
+    }
+    process.exit(0);
+  }
+
   if (!entry && runtime.id !== 'llamacpp' && id.includes(':')) {
     console.log(c.cyan(`  ${id}`) + c.dim(' — 一覧にはありませんが、そのまま頼みます'));
     try {
@@ -90,6 +113,9 @@ if (process.argv.includes('--get') || process.argv.includes('--available')) {
 
   if (!entry) {
     console.error(c.yellow(`知らないモデルです: ${id}`));
+    console.log(c.dim(runtime.id === 'llamacpp'
+      ? '  Hugging Face の置き場名（例: Qwen/Qwen3-8B-GGUF）なら、そのまま渡せます。'
+      : '  Ollama の名前（例: qwen3-coder:30b）なら、そのまま渡せます。'));
     console.log(c.dim(`\n${formatCatalog(runtime.id === 'llamacpp' ? 'llamacpp' : 'ollama')}\n`));
     if (runtime.id !== 'llamacpp') {
       console.log(c.dim('  Ollama の名前をそのまま渡すこともできます（例: --get gemma3:4b）\n'));
