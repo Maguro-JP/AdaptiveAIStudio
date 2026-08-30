@@ -48,6 +48,8 @@ export interface AasConfig {
   roles?: RoleOverrideConfig[];
   /** 合議に参加させる役職 */
   panel?: PanelConfig;
+  /** 外部情報の取得。情報担当(ENVOY)だけが使う出口。 */
+  network?: NetworkConfig;
 }
 
 export interface RoleOverrideConfig {
@@ -56,10 +58,23 @@ export interface RoleOverrideConfig {
   name?: string;
   responsibility?: string;
   disposition?: string;
-  access?: Array<'read' | 'write' | 'execute'>;
+  access?: Array<'read' | 'write' | 'execute' | 'network'>;
   instructions?: string[];
   outputContract?: string;
   prefers?: 'strong' | 'fast' | 'any';
+}
+
+export interface NetworkConfig {
+  /**
+   * 既定は有効。ただし行き先は許可リストに限られ、繋がらなくても作業は止まらない。
+   * 完全に閉じたい場合のみ false にする。
+   */
+  enabled?: boolean;
+  /** 行き先の許可リスト。省略時は開発の判断に必要な公開情報のみ。 */
+  allowedHosts?: string[];
+  /** 1回の取得で読む上限（文字数） */
+  maxBytes?: number;
+  timeoutMs?: number;
 }
 
 export interface PanelConfig {

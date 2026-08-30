@@ -10,7 +10,9 @@ export interface ToolContext {
 
 export type ApprovalRequest =
   | { kind: 'write'; path: string; diff: string; created: boolean }
-  | { kind: 'command'; command: string };
+  | { kind: 'command'; command: string }
+  // 外へ出ることも承認の対象。持ち出しは無いが、行き先は見せる。
+  | { kind: 'network'; url: string };
 
 export interface ToolResult {
   /** モデルへ返す文字列。失敗も文字列で返し、例外は投げない。 */

@@ -30,6 +30,7 @@ import { findLeads, investigationPrompt, parseProposal } from '../agent/initiati
 import { stateDir } from '../core/autopilot-setup.ts';
 import { RoleRegistry } from '../roles/registry.ts';
 import { RoleLedger, formatChanges } from '../roles/ledger.ts';
+import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { runPanel, mergeFindings } from '../agent/panel.ts';
 import { IdleScheduler, formatIdleStats, type ModeStat } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES, MODE_ROLE, promptFor } from '../harness/idle-modes.ts';
@@ -88,8 +89,11 @@ async function main(): Promise<void> {
     if (req.kind === 'write') {
       console.log('\n' + c.cyan(`  ${req.created ? '新規作成' : '変更'}: ${req.path}`));
       console.log(req.diff ? renderDiff(req.diff) : c.dim('  (差分なし)'));
-    } else {
+    } else if (req.kind === 'command') {
       console.log('\n' + c.cyan(`  コマンド実行: ${req.command}`));
+    } else {
+      console.log('\n' + c.cyan(`  外部への問い合わせ: ${req.url}`));
+      console.log(c.dim('  取得のみ。資格情報は送りません。'));
     }
     const ans = await rl.question(c.yellow('  許可しますか？ [y/N] '));
     if (ans === undefined) return false; // 入力が無いなら許可しない
@@ -253,6 +257,7 @@ async function main(): Promise<void> {
   await ledger.save();
 
   const panelCfg = config.panel ?? {};
+  const netCfg = config.network ?? {};
 
   /** 権限に応じてツールを配る。持たせない権限は事故にならない。 */
   const toolPool = {
@@ -260,6 +265,13 @@ async function main(): Promise<void> {
     write: harness.wrapAll([writeFileTool], () => currentInstruction),
     execute: harness.wrapAll(
       [createRunCommandTool({ allowed: agentCfg.allowedCommands })], () => currentInstruction),
+    // 外へ出る口。閉じてもこの場所は動く。持っていない人は外に出られない。
+    network: netCfg.enabled === false ? [] : harness.wrapAll(
+      [createFetchUrlTool({
+        allowedHosts: netCfg.allowedHosts,
+        maxBytes: netCfg.maxBytes,
+        timeoutMs: netCfg.timeoutMs,
+      })], () => currentInstruction),
   };
 
   /** 合議。気質の違う担当を同じ対象に当てる。 */
