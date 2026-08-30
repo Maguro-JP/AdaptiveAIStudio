@@ -44,6 +44,7 @@ import { Checkpoint } from '../harness/checkpoint.ts';
 import type { Harness } from '../harness/harness.ts';
 import { inspectGit } from '../agent/git.ts';
 import { diffStat } from '../agent/diff.ts';
+import { inspectDependencies, describeDependencies } from '../agent/dependencies.ts';
 import type { LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
 
@@ -103,6 +104,11 @@ export interface SessionOptions {
   approve(req: ApprovalRequest): Promise<boolean>;
   /** 画面や端末へ流したいもの。省略可。 */
   onLog?(level: 'info' | 'warn' | 'error', text: string): void;
+  /**
+   * 暇なときの思考に、外を読むことを許すか。既定は許す。
+   * 完全に閉じたいときだけ false にする。
+   */
+  approveThinking?: boolean;
 }
 
 export class Session {
@@ -462,6 +468,14 @@ export class Session {
     let fingerprint = `${mode.id}:${Date.now()}`;
     let files: string[] = [];
 
+    // 外へ出る前に、手元を数えて渡す。
+    // 「何か新しい話は無いか」と漠然と出しても、雑音しか持ち帰らない。
+    // 「この依存のどれが古いか」なら、答えは一つに定まる。
+    if (mode.id === 'briefing') {
+      const deps = await inspectDependencies(this.root);
+      context = `${context}\n\n${describeDependencies(deps)}`;
+    }
+
     // RECON だけは手がかりを機械で探してから渡す。
     // 事実の収集は機械の方が速く、確実で、無料。
     if (mode.id === 'recon') {
@@ -494,8 +508,10 @@ export class Session {
         maxTurns: 8,
         temperature: this.config.temperature,
         maxTokens: this.config.maxTokens,
-        // 考えるだけ。手は動かさない。承認を求められたら断る。
-        approve: async () => false,
+        // 考えるだけ。手は動かさない。
+        // ただし外を**読む**ことは止めない。読むだけなら、この場所は変わらない。
+        // 止めるのは書き込みとコマンド。手を出すことと、調べることは違う。
+        approve: async (req) => req.kind === 'network' && this.#opts.approveThinking !== false,
       });
       for await (const ev of thinker.run(
         [{ role: 'user', content: promptFor(mode, context) }], ac.signal,
@@ -526,6 +542,14 @@ export class Session {
       await this.proposals.save();
       yield { type: 'noFinding', codename: mode.codename };
       return true;
+    }
+
+    // 外から持ち帰ったことは覚えておく。同じことを何度も訊きに行かないため。
+    if (mode.id === 'briefing') {
+      this.memory.remember({
+        kind: 'fact', title: parsed.title, detail: parsed.rationale, source: '外部',
+      });
+      await this.memory.save().catch(() => undefined);
     }
 
     const added = this.proposals.add({
