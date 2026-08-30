@@ -16,7 +16,8 @@
     "team": "node --experimental-strip-types --no-warnings src/cli/team.ts",
     "models": "node --experimental-strip-types --no-warnings src/cli/models.ts",
     "ui": "node --experimental-strip-types --no-warnings src/cli/ui.ts",
-    "update": "node --experimental-strip-types --no-warnings src/cli/update.ts"
+    "update": "node --experimental-strip-types --no-warnings src/cli/update.ts",
+    "llama": "node --experimental-strip-types --no-warnings src/cli/llama.ts"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

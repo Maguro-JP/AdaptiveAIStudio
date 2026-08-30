@@ -22,7 +22,7 @@ const c = {
 
 const { config } = loadConfig();
 const machine = await new MachineCache(join(stateDir(), 'machine.json')).get();
-const runtime = buildRuntime(config, machine);
+const runtime = await buildRuntime(config, machine);
 
 console.log(c.cyan('AdaptiveAIStudio') + c.dim(` — models (${runtime.id})`));
 console.log(c.dim(`環境: ${describeMachine(machine)}\n`));
