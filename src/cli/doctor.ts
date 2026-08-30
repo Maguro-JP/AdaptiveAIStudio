@@ -77,13 +77,25 @@ if (models.length > 0) {
   add('モデル', 'ok', `${models.length} 件: ${models.slice(0, 3).map((m) => m.ref).join(', ')}`
     + (models.length > 3 ? ' …' : ''));
 } else if (runtime.id === 'ollama') {
-  add('モデル', 'bad', 'Ollama から一覧を取れません',
-    'Ollama を入れて起動してください。\n'
-    + 'https://ollama.com からインストール → `ollama serve`\n'
-    + 'そのあと `ollama pull qwen3:30b-a3b`（8GB VRAM ならこれが最適解）');
+  // 動かす土台は選べる。Ollama は借り物で、そうでない道も用意してある。
+  // ここで片方しか案内しないと、必須のように見えてしまう。
+  add('モデル', 'bad', 'モデルを動かす土台がまだありません',
+    'どちらかを選んでください。\n'
+    + '\n'
+    + '  A. Ollama（手早い。まずはこちら）\n'
+    + '     https://ollama.com から入れて `ollama serve`\n'
+    + '     そのあと `ollama pull qwen3:30b-a3b`（8GB VRAM ならこれが最適解）\n'
+    + '\n'
+    + '  B. llama.cpp（Ollama に依らない。GGUF を自分で置く）\n'
+    + '     llama-server を用意し、GGUF を1箇所に集めて、aas.config.json に:\n'
+    + '       "runtime": { "kind": "llamacpp",\n'
+    + '                    "command": "llama-server の場所",\n'
+    + '                    "modelsDir": "GGUF を置いた場所" }\n'
+    + '     オフロードの計算は GGUF を直接読んで行います（docs/GGUF.md）。');
 } else {
   add('モデル', 'bad', `${config.runtime?.modelsDir ?? '(modelsDir 未設定)'} に GGUF がありません`,
-    'GGUF ファイルを modelsDir に置いてください。');
+    '.gguf ファイルを modelsDir に置いてください。\n'
+    + `いまの modelsDir: ${config.runtime?.modelsDir ?? '未設定（aas.config.json で指定してください）'}`);
 }
 
 /* ---------- 繋ぎ先 ---------- */
@@ -110,7 +122,13 @@ for (const p of enabledProviders(config)) {
     add(label, res.ok ? 'ok' : 'warn', `${p.baseUrl} — HTTP ${res.status}`);
   } catch (e) {
     add(label, 'bad', `${p.baseUrl} に繋がりません`,
-      p.id === 'ollama' ? '`ollama serve` が動いているか確認してください。' : undefined);
+      p.id === 'ollama'
+        ? (runtime.id === 'llamacpp'
+          // llamacpp を使うなら、Ollama の口は無効にしておいた方が静か。
+          ? 'llamacpp を使う設定になっています。Ollama は使わないなら、'
+            + 'aas.config.json の providers から ollama を消すか enabled: false にしてください。'
+          : '`ollama serve` が動いているか確認してください。')
+        : undefined);
   }
 }
 
