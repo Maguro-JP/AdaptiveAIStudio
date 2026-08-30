@@ -1,16 +1,27 @@
 {
   "name": "adaptive-ai-studio",
+  "version": "0.1.0",
   "private": true,
-  "version": "0.0.0",
-  "packageManager": "pnpm@10.33.0",
+  "type": "module",
+  "description": "モデル非依存のAI開発基盤",
+  "engines": {
+    "node": ">=22.6.0"
+  },
   "scripts": {
-    "typecheck": "tsc -b tsconfig.json",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "doctor": "node --experimental-strip-types --no-warnings src/cli/doctor.ts",
+    "chat": "node --experimental-strip-types --no-warnings src/cli/main.ts",
+    "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "agent": "node --experimental-strip-types --no-warnings src/cli/agent.ts",
+    "team": "node --experimental-strip-types --no-warnings src/cli/team.ts",
+    "models": "node --experimental-strip-types --no-warnings src/cli/models.ts",
+    "ui": "node --experimental-strip-types --no-warnings src/cli/ui.ts"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
-    "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/sdk": "^0.71.0"
   }
 }

@@ -1,7 +1,97 @@
 # AdaptiveAIStudio
 
+**LLMを動かす場所ではなく、AIが動く場所。**
+
 AIサービスの利用制限・障害・提供終了に開発が左右されない、
 個人向けの長期運用可能なAI開発基盤。
+
+依頼を待つだけでなく、待機中に自分で調べて提案する。
+実行するかは必ず利用者が決める。
+
+## はじめに（ここから）
+
+Node.js 22.6 以降だけ用意すれば、**`npm install` は要りません**。
+実行時の依存はゼロで、ビルドもありません。
+
+### 1. 取ってくる
+
+```
+git clone -b claude/adaptive-ai-studio-architecture-y12imi https://github.com/Maguro-JP/AdaptiveAIStudio.git
+cd AdaptiveAIStudio
+```
+
+### 2. いま何が足りないかを見る
+
+```
+npm run doctor
+```
+
+```
+  ok   Node.js         v22.22.2
+  ok   設定            既定値 (aas.config.json なし)
+  ok   この機械        NVIDIA GeForce RTX 4060 8GB / RAM 32GB
+ 未了  モデル          Ollama から一覧を取れません
+       → Ollama を入れて起動してください。
+         https://ollama.com からインストール → `ollama serve`
+         そのあと `ollama pull qwen3:30b-a3b`（8GB VRAM ならこれが最適解）
+```
+
+**足りないものには、次に打つ一手が必ず付きます。** 駄目出しで終わらせません。
+
+### 3. 開く
+
+```
+npm run ui
+```
+
+`start-ui.sh` / `start-ui.cmd` をダブルクリックしても同じ。
+ブラウザが自動で開きます。
+
+**モデルがまだ無くても、画面は開きます。** 配置や色を触ったり、
+人員や日課の一覧を眺めたりはできます。考えさせるにはモデルが要ります。
+
+### 4. モデルを動かす土台を選ぶ
+
+**どちらでも動きます。** 片方に縛られない作りにしてあります。
+
+**A. Ollama** — 手早い。まずはこちら。
+
+```
+ollama serve
+ollama pull qwen3:30b-a3b
+```
+
+**B. llama.cpp** — Ollama に依らない。GGUF を自分で置く。
+
+```json
+{ "runtime": { "kind": "llamacpp",
+               "command": "llama-server の場所",
+               "modelsDir": "GGUF を置いた場所" } }
+```
+
+B のとき、何層をGPUに載せるかは
+[GGUF を直接読んで](docs/GGUF.md)計算します。Ollama の申告に頼りません。
+
+どちらを選んでも、この場所から見えるものは変わりません
+（`LocalRuntime` という同じ形で扱っているため）。
+もう一度 `npm run doctor` が全部 ok になれば、画面から指示が出せます。
+
+> **なぜ「土台」が要るのか。**
+> モデルの重みを実際に計算する部分は、まだ自前で持っていません。
+> そこを自作するのは、CUDA カーネルから書くことになり、現実的ではありません。
+> 自前化の対象は「モデルをどう動かすか」の層であって、計算そのものではない。
+> 詳しくは [自前化とクラウド解禁の条件](docs/INDEPENDENCE.md)。
+
+### 5. 手元の GGUF を見る（任意）
+
+```
+npm run models -- --inspect <ファイル.gguf>
+```
+
+ファイルに書いてある層数・ヘッド数・量子化をそのまま表示します。
+詳細は [GGUF を直接読む](docs/GGUF.md)。
+
+---
 
 ## 目的
 
@@ -21,34 +111,329 @@ Claudeが使えるときはClaudeを使い、制限・障害時にLocalLLMへ切
 3. **交換可能性が最優先** — 新モデルはアダプタ追加のみで導入できる
 4. **ローカルファースト** — データは自分の手元に置き、クラウドは任意
 
-## ドキュメント
+## もう少し詳しく
 
-- [アーキテクチャ設計](docs/ARCHITECTURE.md) — 全体設計・Provider設計・保存データ設計・Phase計画・リスク
-- [ADR](docs/adr/) — 設計判断の記録
+### モデルを用意する
 
-## 現在の実装状況
+**ローカル:**
 
-Phase1〜2 の中核 (Provider契約・フォールバック・ルーティング) を実装済み。
-UI・永続化・Core Daemon は未着手。
-
-| パッケージ | 内容 |
-|---|---|
-| `packages/core` | Domain。外部I/Oゼロ。`ModelDescriptor` / `Conversation` / Ports |
-| `packages/providers/contract` | `ChatProvider` と正規化エラー `ProviderError` |
-| `packages/providers/openai-compatible` | Ollama / LM Studio / vLLM を1本で吸収するアダプタ |
-| `packages/application` | `ProviderRegistry` / `ModelRouter` / `FallbackPolicy` / `ChatOrchestrator` |
-| `tests/contract` | 全Provider共通の適合テスト |
-
-## 開発
-
-```bash
-pnpm install
-pnpm test         # 単体テスト + Provider適合テスト
-pnpm typecheck
+```
+ollama serve
+ollama pull qwen3:30b-a3b
 ```
 
-新しい Provider を追加するときは `tests/contract/chatProviderContract.ts` の
-適合テストを通すことが条件となる。
+**7B を既定にしない。** ローカルにはトークン単価が無いので、
+節約のために弱いモデルを使う理由がない。
+RTX 4060 (8GB) では MoE の `qwen3:30b-a3b` が最適解
+（30B級の質を約33 tok/s で出せる）。詳細は
+[モデル運用](docs/MODEL-EFFICIENCY.md) と [32B級を動かすには](docs/RUNNING-LARGE-MODELS.md)。
+
+**Claude (任意):**
+
+```
+set ANTHROPIC_API_KEY=sk-ant-...
+```
+
+設定しなければローカルのみで動作する。
+
+### 設定する（任意）
+
+**モデルの指定は不要。** 起動時にマシンと導入済みモデルを調べ、
+自動操縦が最良のものを選び、実測に応じて裏で乗り換える。
+
+```
+環境: NVIDIA GeForce RTX 4060 8GB / RAM 32GB
+担当モデル: ollama:qwen3:30b-a3b
+  起動時の自動選択 — 33 tok/s で 36秒 / 成功率 65%(事前値) / 1件あたり約72秒
+```
+
+`/models` で候補の順位と理由、`/metrics` で実測の蓄積を確認できる。
+
+モデルを固定したいのは比較検証をするときだけなので、
+`candidates` は書かなくてよい（書けば固定される）。
+
+クラウド（Claude）は **既定で無効**。ローカルだけで完結する。
+使いたいときだけ `enabled: true` にする。
+
+
+```
+cp aas.config.example.json aas.config.json      # Windows なら copy
+```
+
+省略した場合は `ollama:qwen2.5-coder:7b` を既定として起動する。
+`candidates` は先頭から順に試され、利用制限や障害で使えなければ次へ自動で切り替わる。
+
+### 起動する
+
+**エージェント（作業者に実装させる）:**
+
+```
+npm run agent
+```
+
+```
+依頼> add関数のバグを直して
+  · read_file app.ts
+    ✓ 1	export function add(a: number, b: number): number {
+  · write_file app.ts
+
+  変更: app.ts
+  @@ -1,4 +1,4 @@
+   export function add(a: number, b: number): number {
+  -  return a - b;
+  +  return a + b;
+   }
+  許可しますか？ [y/N] y
+    ✓ 更新: app.ts（+1 -1）
+
+  完了 (2.8s)
+```
+
+**チーム（複数の作業者を並列で動かす）:**
+
+```
+npm run team -- tasks.json
+```
+
+```
+▶ auth    [coder]
+▶ session [coder]
+▶ logger  [cpu]
+✓ auth    (1.5s)
+✓ session (1.5s)
+▶ index   [coder]        ← auth と session の完了を待って開始
+✓ logger  (1.5s)
+✓ index   (1.4s)
+完了 4/4
+```
+
+`tasks.json` は今は手書き。P3 で PM が自動生成するようになる。
+
+```jsonc
+[
+  { "id": "auth",  "laneId": "coder", "writes": ["auth.ts"],  "instruction": "..." },
+  { "id": "index", "laneId": "coder", "writes": ["index.ts"],
+    "deps": ["auth"], "instruction": "..." },
+
+  // 同じ作業を複数モデルへ同時に投げ、最初に完了したものを採用する。
+  // ローカルは計算が無料なので、遊ばせるより重ねて投げた方が速い。
+  { "id": "fix", "laneId": "coder", "writes": ["fix.ts"], "instruction": "...",
+    "raceWith": ["ollama:qwen2.5-coder:7b"] }
+]
+```
+
+レーンは設定で決める。並列度は「同時ロードするモデル数」ではなく
+「同一モデルへ同時に流すタスク数」で稼ぐ。
+
+```jsonc
+{ "agent": { "lanes": [
+  { "id": "coder", "candidates": ["ollama:qwen2.5-coder:7b"], "parallel": 3 },
+  { "id": "cpu",   "candidates": ["ollama:qwen2.5:3b"],       "parallel": 2 }
+] } }
+```
+
+**モデルの一覧と実行計画を見る:**
+
+```
+npm run models
+```
+
+```
+qwen2.5-coder-32b-q4_k_m.gguf (19.8GB)
+  部分オフロード (GPU 16/64層) / context 8192 / 約 3 tok/s
+  VRAM 7.0GB / RAM 13.8GB
+  1000トークンの応答: 約 6分
+  劣化: GPU層数を 16/64 に減らした
+```
+
+**チャットのみ:**
+
+```
+npm run chat
+```
+
+```
+> このコードのバグを指摘して
+ローカルモデルが応答しました。
+  — ollama:qwen2.5-coder:7b / 3.2s
+```
+
+応答の下に必ず「実際に答えたモデル」が出る。
+フォールバックが起きた場合は切替の理由も表示される。暗黙に劣化させないための仕様。
+
+### 自己検証ループ
+
+作業が終わるとテストを流し、失敗したら自分で直させ、通るまで繰り返す。
+検証コマンドは先読みが検出する（`npm test` など）。
+
+```
+作業前の状態を確認中: npm test
+検証 1回目: npm test
+✗ 検証に失敗（1回目）
+修正させています...
+検証 2回目: npm test
+✓ 検証を通過しました
+```
+
+```jsonc
+{ "agent": { "verify": {
+  "enabled": true,        // 既定
+  "command": "npm test",  // 省略時は自動検出
+  "maxRounds": 5,
+  "timeBudgetMs": 3600000,
+  "baseline": true        // 作業前にも流し、既存の失敗と区別する
+} } }
+```
+
+**テストを消して通すことは認められません。** 作業前後でテストの規模を比べ、
+削除・skip による減少があれば通過とみなしません。
+
+### 安全のしくみ
+
+**モデルにお願いするのではなく、実行の手前で止める。**
+詳細は [ハーネス設計](docs/HARNESS.md)。
+
+| 規則 | 止めるもの |
+|---|---|
+| `workspace-boundary` | 作業ディレクトリの外の読み書き |
+| `protected-paths` | `.env` / lockfile / `.git` / 鍵への書き込み |
+| `test-protection` | テストの削除・skip 化 |
+| `dangerous-commands` | `git reset --hard`、再帰削除、`curl \| sh` |
+| `read-before-write` | 既存ファイルを読まずに全文上書き |
+| `no-repeated-writes` | 同一内容の再書き込み |
+| `blast-radius` | 一度の依頼で上限を超える書き換え |
+
+拒否は例外ではなく、**次にどうすればよいかを添えてモデルへ返す**。
+止めるのではなく誘導するため。
+
+`/rules` で適用中の規則、`/audit` で発動回数を確認できる。
+
+このほか、承認モード（ask / autoEdit / auto）、Git状態の確認、
+並列時の書き込みロック、堂々巡りの停止が効いている。
+
+長時間の自律実行に切り替えたい場合は設定で承認モードを変える。
+
+```jsonc
+{ "agent": { "approval": "ask" } }       // 毎回確認する
+{ "agent": { "approval": "autoEdit" } }  // 書き込みは自動、コマンドのみ確認（既定）
+{ "agent": { "approval": "auto" } }      // 全自動（git管理下での利用を前提）
+```
+
+既定は `autoEdit`。自律実行が本題なので、書き込みで毎回止めない。
+安全網は Git であり、**開始前に未コミットの変更を警告する**。
+
+### チャットのコマンド
+
+| コマンド | 説明 |
+|---|---|
+| `/models` | 利用可能なモデル一覧 |
+| `/model <id>` | 使用モデルを固定 |
+| `/auto` | 固定を解除し設定の候補順に戻す |
+| `/health` | 各Providerの到達性と冷却状態 |
+| `/new` | 履歴を破棄 |
+| `/models` | 候補の順位と選択理由 |
+| `/metrics` | 実測の蓄積（成功率・実測速度） |
+| `/warm` | 常駐しているモデルの状態 |
+| `/context` | 先読みで把握している状況 |
+| `/proposals` | AIからの提案（未処理） |
+| `/do <id>` / `/reject <id>` | 提案を実行 / 却下 |
+| `/think` | いま考えさせる |
+| `/roles` | 配属されている役職と気質 |
+| `/idle` | 思考モードの実績と、次に考えること |
+| `/duties` | 日課の状態と次回 |
+| `/plan <依頼>` | 依頼を分解し、複数の担当に同時に働いてもらう |
+| `/memory [語]` | 覚えていることを見る |
+| `/remember <文>` | 覚えさせる（`決定: 〜` で方針として） |
+| `/panel [対象]` | 気質の違う担当に同時に見てもらう |
+| `/rules` / `/audit` / `/harness` | 規則の一覧・発動回数・効き具合 |
+| `/system <文>` | システムプロンプト差し替え |
+| `/exit` | 終了 |
+
+生成中の `Ctrl-C` は中断のみ。入力待ちでの `Ctrl-C` は終了。
+
+### テスト
+
+```
+npm test        # Provider契約テスト + フォールバック動作テスト
+npm run typecheck
+```
+
+`test/contract.test.ts` は全Provider共通の適合テスト。
+**新しいProviderを追加したら、このスイートを通すことを条件とする。**
+
+---
+
+## 実装状況
+
+土台の配管（モデル交換とフォールバック）は動作する。
+**エージェント機能（ファイル編集・複数モデルの役割分担）は未着手。**
+
+| 機能 | 状態 |
+|---|---|
+| Provider層・正規化エラー・フォールバック・冷却 | 動作 |
+| ローカルLLM (Ollama / LM Studio / vLLM / llama.cpp) | 動作 |
+| Claude (公式SDK) | 動作。**既定で無効**（ローカルが主） |
+| ファイル読み書き・コマンド実行（作業者1名） | 動作 |
+| 職能・部署への人材配置 | 未実装 |
+| 並列実行（レーン・スケジューラ・書き込みロック） | 動作 |
+| 停滞ベースのタイムアウト（低速環境で殺されない） | 動作 |
+| 実行可能性プランナ（載らないモデルの実行設定を計算） | 動作 |
+| 効率計算（期待実時間でモデルを選ぶ） | 動作 |
+| 自動操縦（設定不要でモデルを選び、裏で乗り換え） | 動作 |
+| 冗長実行（同じ作業を複数モデルへ同時投入し最速を採用） | 動作 |
+| 最良選択（複数の答えを採点して最良を採用） | 動作 |
+| マシン検出（GPU/VRAM/RAM） | 動作 |
+| 実測の蓄積（成功率・見逃し・実測速度） | 動作 |
+| llama.cpp 直接制御ランタイム（S1） | 動作 |
+| ランタイム切替（ollama / llamacpp） | 動作 |
+| 常時ロード（起動時に温めてロード待ちをゼロに） | 動作 |
+| 先読み（待機中に索引・git・テストコマンドを把握） | 動作 |
+| 自己検証ループ（テストが通るまで自分で直す） | 動作 |
+| ハーネス規則（誤った選択を実行前に拒否） | 動作 |
+| ループエンジン（打ち切り条件を構造で強制） | 動作 |
+| 監査ログ・チェックポイント | 動作 |
+| ハーネス計測（規則の効き具合を数字で見る） | 動作 |
+| 自発的な調査と提案（待機中に自分で考える） | 動作 |
+| 役職と気質（9名を配属、設定で追加可能） | 動作 |
+| 合議（気質の違う担当を同時に当てる） | 動作 |
+| 思考モード8種（巡回・見回り・振り返り・先読み・外部情報・別案・通し確認・段取り） | 動作 |
+| 日課（今日まだやっていないことを時間で起こす） | 動作 |
+| 思考の予算配分と実績評価 | 動作 |
+| 指揮AI・サブエージェント | 未実装 |
+| デスクトップUI・クリック起動 | 未実装 |
+
+次に何を作るかは [docs/ROADMAP.md](docs/ROADMAP.md) を参照。
+
+---
+
+
+## 既定は、この道具を使う人の希望
+
+設定で変えられることは大事だが、**既定値がその道具の思想**になる。
+「設定すれば直せる」は、直すまで毎回不便を配ることでもある。
+
+だからここでは、使う人が「こうであってほしい」と言ったことを、
+選択肢ではなく既定に置く。選べるようにするのは、その次の話。
+
+## ドキュメント
+
+- [実現計画](docs/ROADMAP.md) — 到達目標と改訂フェーズ（**まずこちら**）
+- [組織設計](docs/ORGANIZATION.md) — 職能・部署・人材配置・並列実行の設計
+- [画面](docs/UI.md) — 配置をデータで持つ。AIに頼んで模様替えできる（**重要**）
+- [対話の核](docs/CORE.md) — 入口（CLI・画面）から切り離した本体（**重要**）
+- [動かないとき](docs/TROUBLESHOOTING.md) — LM Studio でも動かない場合を含む
+- [記憶](docs/MEMORY.md) — 覚えていること。同じ失敗を繰り返さないための器（**重要**）
+- [人員](docs/ROLES.md) — 気質の違うAIを配属する仕組み（**重要**）
+- [IDLE](docs/IDLE.md) — 暇なら考える。ただし無駄には考えない（**重要**）
+- [自発性](docs/INITIATIVE.md) — AIが自分で考え、提案する仕組み（**重要**）
+- [ハーネス設計](docs/HARNESS.md) — モデルの誤りを実行前に止める仕組み（**重要**）
+- [パフォーマンスで戦う](docs/PERFORMANCE.md) — 計算が無料な利点をどう使うか（**重要**）
+- [最も効率の良いモデル運用](docs/MODEL-EFFICIENCY.md) — 何を基準にモデルを選ぶか（**重要**）
+- [GGUF を直接読む](docs/GGUF.md) — 名前からの推測をやめ、書いてある諸元を使う
+- [32B級を動かすには](docs/RUNNING-LARGE-MODELS.md) — メモリ計算・速度の根拠・MoE・並列と直列
+- [自前化とクラウド解禁の条件](docs/INDEPENDENCE.md) — 脱Ollama依存の段階計画と、クラウドを有効化する基準
+- [段階的劣化](docs/DEGRADATION.md) — 遅くても動かすための設計（実行可能性プランナ・編成スタイル）
+- [アーキテクチャ設計](docs/ARCHITECTURE.md) — 全体設計・Provider設計・保存データ設計・リスク
 
 ## 動作想定環境
 
