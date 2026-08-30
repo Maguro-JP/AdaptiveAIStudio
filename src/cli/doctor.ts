@@ -14,6 +14,8 @@ import { stateDir } from '../core/autopilot-setup.ts';
 import { join } from 'node:path';
 import { readdir } from 'node:fs/promises';
 import { padTo } from './width.ts';
+import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
+import { resolve } from 'node:path';
 
 /** Windows と Unix でコマンドが違うものは、その環境のものを出す。 */
 const isWindows = process.platform === 'win32';
@@ -62,6 +64,12 @@ add('設定', 'ok', source,
 
 const machine = await new MachineCache(join(stateDir(), 'machine.json')).get();
 add('この機械', 'ok', describeMachine(machine));
+
+// GPU が見えていても、ドライバ側が通っていなければ CUDA は使えない。
+if (machine.vramBytes > 0) {
+  const driver = await describeDriver();
+  if (driver) add('GPU ドライバ', 'ok', driver);
+}
 
 /* ---------- モデルの置き場 ---------- */
 
@@ -130,6 +138,22 @@ for (const p of enabledProviders(config)) {
           : '`ollama serve` が動いているか確認してください。')
         : undefined);
   }
+}
+
+/* ---------- 外側の詰まり ---------- */
+
+/*
+ * こちらの作りが正しくても、モデルを動かす層が詰まっていたら何も動かない。
+ * 「うちは悪くない」で終わらせず、外側も見に行く。
+ */
+const envIssues = await inspectEnvironment({
+  stateDir: stateDir(),
+  root: resolve(config.agent?.root ?? process.cwd()),
+  ...(config.runtime?.modelsDir ? { modelsDir: config.runtime.modelsDir } : {}),
+  hasGpu: machine.vramBytes > 0,
+});
+for (const issue of envIssues) {
+  add(issue.title, issue.level, issue.detail, issue.fix);
 }
 
 /* ---------- 保存先 ---------- */
