@@ -44,6 +44,7 @@ echo    4  この環境を見てもらう
 echo    5  手元のモデルを見る
 echo    6  検査を回す
 echo    7  新しくする
+echo    8  この機械で確かめる
 echo    0  やめる
 echo.
 set /p CHOICE="   番号を入れて Enter: "
@@ -55,6 +56,7 @@ if "%CHOICE%"=="4" set TASK=doctor
 if "%CHOICE%"=="5" set TASK=models
 if "%CHOICE%"=="6" set TASK=test
 if "%CHOICE%"=="7" set TASK=update
+if "%CHOICE%"=="8" set TASK=selftest
 if "%CHOICE%"=="0" exit /b 0
 if "%TASK%"=="" (
   echo   その番号はありません。
