@@ -359,6 +359,25 @@ $('presets').onchange = async (e) => {
 /* ---------- コマンド ---------- */
 
 /**
+ * 更新。押した瞬間に取ってくるのではなく、まず何が入るのかを見せる。
+ * 中身を見ずに新しくするのは、動いているものを賭けに出すのと同じ。
+ */
+async function checkForUpdate() {
+  const status = await (await fetch('/api/update')).json();
+  if (!status.can) {
+    alert(status.reason || '更新できません');
+    return;
+  }
+  const list = status.incoming.map((c) => `  ${c}`).join('\n');
+  if (!confirm(`${status.behind}件の変更があります。\n\n${list}\n\n取り込みますか？`)) return;
+
+  const result = await (await fetch('/api/update', { method: 'POST' })).json();
+  // 取り込んだ後は、動いているコードと置いてあるコードがズレている。
+  // ここで再起動せず、人に立ち上げ直してもらう。
+  alert(result.message || result.error || '更新しました');
+}
+
+/**
  * 何ができるかを、覚えていなくても引ける形にする。
  * 隠し機能は無い機能と同じなので、全部ここに並べる。
  */
@@ -367,6 +386,7 @@ function commands() {
     { name: '入力へ移動', hint: 'Ctrl+/', run: () => ctx.focusInput() },
     { name: '中断する', hint: '', run: () => fetch('/api/abort', { method: 'POST' }) },
     { name: 'いま考えさせる', hint: '', run: () => fetch('/api/think', { method: 'POST' }) },
+    { name: '更新を確認する', hint: '', run: () => checkForUpdate() },
     { name: '配置を編集', hint: '', run: () => $('edit').click() },
     { name: '色を編集', hint: '', run: () => $('editTheme').click() },
   ];

@@ -43,6 +43,7 @@ echo    3  ただの相談
 echo    4  この環境を見てもらう
 echo    5  手元のモデルを見る
 echo    6  検査を回す
+echo    7  新しくする
 echo    0  やめる
 echo.
 set /p CHOICE="   番号を入れて Enter: "
@@ -53,6 +54,7 @@ if "%CHOICE%"=="3" set TASK=chat
 if "%CHOICE%"=="4" set TASK=doctor
 if "%CHOICE%"=="5" set TASK=models
 if "%CHOICE%"=="6" set TASK=test
+if "%CHOICE%"=="7" set TASK=update
 if "%CHOICE%"=="0" exit /b 0
 if "%TASK%"=="" (
   echo   その番号はありません。
@@ -63,6 +65,18 @@ if "%TASK%"=="" (
 
 :run
 echo.
+
+rem 更新は、取り込んだあと立ち上げ直すところまでが一続き。
+rem 動いているコードと置いてあるコードがズレたまま使わせない。
+if not "%TASK%"=="update" goto normal
+call npm run update
+echo.
+set /p AGAIN="   立ち上げ直しますか？ [Y/n]: "
+if /i "%AGAIN%"=="n" exit /b 0
+"%~f0"
+exit /b %errorlevel%
+
+:normal
 call npm run %TASK%
 set CODE=%errorlevel%
 
