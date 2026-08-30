@@ -24,6 +24,31 @@ Claudeが使えるときはClaudeを使い、制限・障害時にLocalLLMへ切
 ## ドキュメント
 
 - [アーキテクチャ設計](docs/ARCHITECTURE.md) — 全体設計・Provider設計・保存データ設計・Phase計画・リスク
+- [ADR](docs/adr/) — 設計判断の記録
+
+## 現在の実装状況
+
+Phase1〜2 の中核 (Provider契約・フォールバック・ルーティング) を実装済み。
+UI・永続化・Core Daemon は未着手。
+
+| パッケージ | 内容 |
+|---|---|
+| `packages/core` | Domain。外部I/Oゼロ。`ModelDescriptor` / `Conversation` / Ports |
+| `packages/providers/contract` | `ChatProvider` と正規化エラー `ProviderError` |
+| `packages/providers/openai-compatible` | Ollama / LM Studio / vLLM を1本で吸収するアダプタ |
+| `packages/application` | `ProviderRegistry` / `ModelRouter` / `FallbackPolicy` / `ChatOrchestrator` |
+| `tests/contract` | 全Provider共通の適合テスト |
+
+## 開発
+
+```bash
+pnpm install
+pnpm test         # 単体テスト + Provider適合テスト
+pnpm typecheck
+```
+
+新しい Provider を追加するときは `tests/contract/chatProviderContract.ts` の
+適合テストを通すことが条件となる。
 
 ## 動作想定環境
 

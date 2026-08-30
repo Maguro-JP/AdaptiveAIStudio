@@ -1,0 +1,37 @@
+# 同梱の初期モデルカタログ。コードにモデル名を一切書かないための唯一の置き場。
+# 追加は 1 エントリの記述のみ。コード変更は不要。
+providers:
+  - id: ollama
+    kind: openai-compatible
+    locality: local
+    baseUrl: http://localhost:11434/v1
+
+  - id: anthropic
+    kind: anthropic
+    locality: cloud
+    apiKeyRef: secret://anthropic/api-key
+
+models:
+  - id: ollama:qwen2.5-coder:7b
+    providerId: ollama
+    displayName: Qwen2.5-Coder 7B (Q4_K_M)
+    family: qwen
+    locality: local
+    capabilities: { streaming: true, toolUse: false, vision: false, jsonMode: true, systemPrompt: true }
+    limits: { contextWindow: 32768, maxOutputTokens: 4096, estimatedVramGb: 5.5 }
+
+  - id: ollama:qwen2.5:14b
+    providerId: ollama
+    displayName: Qwen2.5 14B (Q4_K_M / 一部CPU)
+    family: qwen
+    locality: local
+    capabilities: { streaming: true, toolUse: false, vision: false, jsonMode: true, systemPrompt: true }
+    limits: { contextWindow: 32768, maxOutputTokens: 4096, estimatedVramGb: 9.0 }
+
+  - id: anthropic:claude-sonnet-5
+    providerId: anthropic
+    displayName: Claude Sonnet 5
+    family: claude
+    locality: cloud
+    capabilities: { streaming: true, toolUse: true, vision: true, jsonMode: true, systemPrompt: true }
+    limits: { contextWindow: 200000, maxOutputTokens: 8192 }
