@@ -490,3 +490,17 @@ menu { display: flex; justify-content: flex-end; gap: var(--s2); padding: 0; mar
   background: var(--surface2); cursor: pointer;
 }
 .swatches input[type="text"] { width: 100%; font-family: var(--font-mono); font-size: .82rem; }
+
+.proposal .card-title { font-family: var(--font); }
+.proposal-action {
+  margin: var(--s2) 0 0; padding: var(--s2);
+  background: var(--bg); border-radius: 5px;
+  font-family: var(--font-mono); font-size: .8rem;
+}
+.proposal-foot {
+  display: flex; align-items: center; gap: var(--s3);
+  margin-top: var(--s3); padding-top: var(--s2);
+  border-top: 1px solid var(--line);
+  font-size: .8rem;
+}
+.proposal-foot button { margin-left: auto; }

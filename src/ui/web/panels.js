@@ -261,6 +261,36 @@ export const PANELS = {
       add(box);
     };
 
+    // 暇なときに考えたこと。頼んでいないのに動いていることが、ここで見える。
+    ctx.on('thinkEvent', ({ event: v }) => {
+      if (v.type === 'chose') {
+        note('dim', `［${v.codename}］${v.name} — ${v.roleCodename}${v.isDuty ? `（${v.reason}）` : ''}`);
+      } else if (v.type === 'noFinding') {
+        note('dim', `［${v.codename}］報告することはありませんでした`);
+      } else if (v.type === 'proposal') {
+        const c = card('💡', v.proposal.title, v.codename, 'proposal');
+        c.box.open = true;
+        c.body.append(el('div', 'dim', v.proposal.rationale));
+        if (v.proposal.suggestedAction) {
+          c.body.append(el('div', 'proposal-action', v.proposal.suggestedAction));
+        }
+        const menu = el('div', 'ask-menu');
+        const yes = el('button', 'primary', 'やってもらう');
+        const no = el('button', '', '却下');
+        const decide = (verdict) => {
+          fetch('/api/proposal', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id: v.proposal.id, verdict }),
+          });
+          menu.replaceChildren(el('span', 'dim', verdict === 'accepted' ? '着手します…' : '却下しました'));
+        };
+        yes.onclick = () => decide('accepted');
+        no.onclick = () => decide('rejected');
+        menu.append(yes, no);
+        c.body.append(menu);
+      }
+    });
+
     // 承認。押されるまで、向こう側は止まって待っている。
     ctx.on('approval', (e) => {
       const req = e.request;
@@ -385,18 +415,65 @@ export const PANELS = {
     });
   },
 
+  /**
+   * 提案。
+   *
+   * 溜めるだけで、実行はしない。採るかどうかは人が決める。
+   * ここで押せることが、この場所を「勝手に動く道具」ではなくする。
+   */
   proposals(body, ctx) {
-    ctx.onState((s) => {
+    const KIND = { bug: '不具合', risk: '危うさ', question: '確認', idea: '思いつき' };
+
+    const draw = async () => {
+      const r = await fetch('/api/proposals').then((x) => x.json()).catch(() => null);
       body.replaceChildren();
-      const open = (s.proposals ?? []).filter((p) => p.state === 'open' || !p.state);
-      if (open.length === 0) return body.append(empty('未処理の提案はありません。'));
-      body.append(rows(open, (p) => {
-        const row = el('div', 'row');
-        row.append(el('span', 'key mono', p.id ?? ''), el('span', '', p.title ?? ''));
-        if (p.rationale) row.title = p.rationale;
-        return row;
-      }, 2));
-    });
+      if (!r) return body.append(empty('提案を読めませんでした。'));
+      if (r.open.length === 0) {
+        body.append(empty('未処理の提案はありません。'));
+      }
+      for (const p of r.open) {
+        const box = el('details', 'card proposal');
+        const head = el('summary', 'card-head');
+        head.append(
+          el('span', 'chip', KIND[p.kind] ?? p.kind),
+          el('span', 'card-title', p.title),
+          el('span', 'card-meta mono', p.id),
+        );
+        box.append(head);
+        const inner = el('div', 'card-body');
+        inner.append(el('div', 'dim', p.rationale));
+        if (p.suggestedAction) inner.append(el('div', 'proposal-action', p.suggestedAction));
+        const menu = el('div', 'ask-menu');
+        const yes = el('button', 'primary', 'やってもらう');
+        const no = el('button', '', '却下');
+        const decide = async (verdict) => {
+          menu.replaceChildren(el('span', 'dim', verdict === 'accepted' ? '着手します…' : '却下しました'));
+          await fetch('/api/proposal', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id: p.id, verdict }),
+          });
+          setTimeout(draw, 400);
+        };
+        yes.onclick = () => decide('accepted');
+        no.onclick = () => decide('rejected');
+        menu.append(yes, no);
+        inner.append(menu);
+        box.append(inner);
+        body.append(box);
+      }
+
+      const foot = el('div', 'proposal-foot');
+      foot.append(el('span', 'dim', `この1時間で考えた量 ${r.spent}`));
+      if (r.due.length > 0) foot.append(el('span', 'warn', `未了の日課: ${r.due.join(', ')}`));
+      const now = el('button', 'ghost tiny', 'いま考えさせる');
+      now.onclick = async () => { await fetch('/api/think', { method: 'POST' }); setTimeout(draw, 800); };
+      foot.append(now);
+      body.append(foot);
+    };
+
+    void draw();
+    ctx.onState(() => { void draw(); });
+    ctx.on('thinkEvent', ({ event: v }) => { if (v.type === 'proposal') void draw(); });
   },
 
   duties(body, ctx) {

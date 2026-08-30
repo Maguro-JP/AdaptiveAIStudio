@@ -24,6 +24,13 @@ import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall } from '../memory/memory.ts';
+import { ProposalQueue, type Proposal } from '../agent/proposals.ts';
+import { findLeads, investigationPrompt, parseProposal } from '../agent/initiative.ts';
+import { IdleScheduler, type ModeStat } from '../harness/idle.ts';
+import { BUILTIN_IDLE_MODES, MODE_ROLE, promptFor } from '../harness/idle-modes.ts';
+import { DutyRoster, type DutyRecord } from '../harness/duties.ts';
+import { BUILTIN_DUTIES } from '../harness/builtin-duties.ts';
+import { readFile as readJson, writeFile as writeJson } from 'node:fs/promises';
 import { RoleRegistry } from '../roles/registry.ts';
 import type { Tool, ApprovalRequest } from '../agent/tools/types.ts';
 import { toolsFor } from '../roles/registry.ts';
@@ -85,6 +92,12 @@ export type PlanEvent =
   | { type: 'accepted'; report: AcceptanceReport }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string };
 
+/** 暇なときに考えたことの流れ。 */
+export type ThinkEvent =
+  | { type: 'chose'; modeId: string; codename: string; name: string; roleCodename: string; reason: string; isDuty: boolean }
+  | { type: 'noFinding'; codename: string }
+  | { type: 'proposal'; proposal: Proposal; codename: string };
+
 export interface SessionOptions {
   /** 承認の訊き方。入口ごとに違う。 */
   approve(req: ApprovalRequest): Promise<boolean>;
@@ -97,6 +110,12 @@ export class Session {
   readonly root: string;
   readonly candidates: string[];
   readonly memory: Memory;
+  /** 溜まった提案。実行はしない。溜めて、人に選ばせる。 */
+  readonly proposals: ProposalQueue;
+  /** 何を考えるかの配分。無駄に考えないための仕組み。 */
+  readonly idle: IdleScheduler;
+  /** 日課。変化が無くてもやることを、時間で起こす。 */
+  readonly duties: DutyRoster;
   readonly roles: RoleRegistry;
   readonly orchestrator: ChatOrchestrator;
   readonly pilot: AutopilotBundle;
@@ -114,10 +133,14 @@ export class Session {
   #instruction = '';
   /** 書き込みの直前に作られた差分。承認の問い合わせを通り道にして拾う。 */
   readonly #diffs = new Map<string, { diff: string; created: boolean }>();
+  /** 提案がどの思考から出たか。採否をその思考の実績に返すために持つ。 */
+  readonly #origin = new Map<string, string>();
+  #lastChangeAt = Date.now();
 
   private constructor(init: {
     config: AasConfig; root: string; candidates: string[];
     memory: Memory; roles: RoleRegistry; orchestrator: ChatOrchestrator;
+    proposals: ProposalQueue; idle: IdleScheduler; duties: DutyRoster;
     pilot: AutopilotBundle; prefetch: Prefetcher; opts: SessionOptions;
     holder: { instruction: string };
     harness: Harness;
@@ -127,6 +150,9 @@ export class Session {
     this.root = init.root;
     this.candidates = init.candidates;
     this.memory = init.memory;
+    this.proposals = init.proposals;
+    this.idle = init.idle;
+    this.duties = init.duties;
     this.roles = init.roles;
     this.orchestrator = init.orchestrator;
     this.pilot = init.pilot;
@@ -179,10 +205,29 @@ export class Session {
     const memory = new Memory(join(stateDir(), 'memory.jsonl'));
     await memory.load();
 
+    const initCfg = config.initiative ?? {};
+    const proposals = new ProposalQueue(join(stateDir(), 'proposals.json'));
+    await proposals.load();
+
+    // 使う思考モードだけを配る。減らせば、その分だけ静かになる。
+    const idle = new IdleScheduler(
+      BUILTIN_IDLE_MODES.filter((m) => !initCfg.modes || initCfg.modes.includes(m.id)),
+      { perHour: initCfg.budgetPerHour ?? 12 },
+    );
+    try {
+      idle.restore(JSON.parse(await readJson(join(stateDir(), 'idle.json'), 'utf8')) as ModeStat[]);
+    } catch { /* 記録が無いのは正常 */ }
+
+    const duties = new DutyRoster(BUILTIN_DUTIES);
+    try {
+      duties.restore(JSON.parse(await readJson(join(stateDir(), 'duties.json'), 'utf8')) as DutyRecord[]);
+    } catch { /* 記録が無いのは正常 */ }
+
     const session = new Session({
       config, root, candidates, memory,
       roles: new RoleRegistry(config.roles ?? []),
       orchestrator, pilot, prefetch, opts, holder, toolPool, harness,
+      proposals, idle, duties,
     });
     return session;
   }
@@ -372,6 +417,7 @@ export class Session {
         source: 'plan',
       });
       this.memory.compact();
+      this.markChanged();
       return report;
     } catch (e) {
       yield { type: 'log', level: 'error', text: (e as Error).message };
@@ -381,6 +427,154 @@ export class Session {
       await this.memory.save().catch(() => undefined);
     }
   }
+
+  /**
+   * 暇なときの思考。
+   *
+   * 何を考えるかはハーネス側のスケジューラが決める。
+   * 「変わっていないのに考え直す」「予算を超えて考える」
+   * 「役に立たなかった考え方を繰り返す」を、そこで止める。
+   *
+   * 考えた結果は提案として溜めるだけで、実行はしない。
+   * 勝手に手を動かされるのと、勝手に考えてくれるのは、別の話。
+   */
+  async *think(): AsyncGenerator<ThinkEvent, boolean> {
+    if (this.config.initiative?.enabled === false) return false;
+    if (this.#running) return false;
+
+    const now = Date.now();
+    const due = this.duties.due(now).map((s) => ({
+      dutyId: s.duty.id, modeId: s.duty.modeId,
+      codename: s.duty.codename, isCatchUp: s.isCatchUp,
+    }));
+
+    const decision = await this.idle.choose(
+      { lastChangeAt: this.#lastChangeAt, openProposals: this.proposals.open().length, now },
+      due,
+    );
+    if (!decision.mode) return false;
+
+    const mode = decision.mode;
+    const role = this.roles.get(MODE_ROLE[mode.id] ?? 'scout') ?? this.roles.get('scout')!;
+    const snap = await this.#prefetch.snapshotWithin(3000);
+
+    let context = snap ? describeSnapshot(snap) : '';
+    let fingerprint = `${mode.id}:${Date.now()}`;
+    let files: string[] = [];
+
+    // RECON だけは手がかりを機械で探してから渡す。
+    // 事実の収集は機械の方が速く、確実で、無料。
+    if (mode.id === 'recon') {
+      if (!snap) return false;
+      const leads = await findLeads({
+        root: this.root, snapshot: snap, known: this.proposals.seen(), max: 1,
+      });
+      if (leads.length === 0) return false;
+      const lead = leads[0]!;
+      context = `${context}\n\n${investigationPrompt(lead)}`;
+      fingerprint = lead.fingerprint;
+      files = lead.files;
+    }
+
+    this.idle.begin(mode, Date.now());
+    yield {
+      type: 'chose', modeId: mode.id, codename: mode.codename, name: mode.name,
+      roleCodename: role.codename, reason: decision.reason, isDuty: !!decision.dutyId,
+    };
+
+    const ac = new AbortController();
+    this.#running = ac;
+    let text = '';
+    try {
+      const thinker = new Agent(this.orchestrator, {
+        candidates: this.candidates,
+        system: buildSystemPrompt(role),
+        tools: toolsFor(role, this.toolPool),
+        root: this.root,
+        maxTurns: 8,
+        temperature: this.config.temperature,
+        maxTokens: this.config.maxTokens,
+        // 考えるだけ。手は動かさない。承認を求められたら断る。
+        approve: async () => false,
+      });
+      for await (const ev of thinker.run(
+        [{ role: 'user', content: promptFor(mode, context) }], ac.signal,
+      )) {
+        if (ev.type === 'thinking') text += ev.delta;
+      }
+    } catch {
+      // 考えに失敗しても、この場所は止まらない。
+      return true;
+    } finally {
+      this.#running = undefined;
+    }
+
+    if (mode.id === 'recon') this.proposals.markExamined(fingerprint);
+
+    // 日課として動いたなら、済んだことにする。
+    // 報告が無くても「確認した」ことに変わりはない。
+    if (decision.dutyId) {
+      this.duties.complete(decision.dutyId, Date.now());
+      await this.saveAutonomy();
+    }
+
+    const parsed = parseProposal(text);
+    this.idle.recordOutcome(mode.id, parsed !== undefined);
+    await this.saveAutonomy();
+
+    if (!parsed) {
+      await this.proposals.save();
+      yield { type: 'noFinding', codename: mode.codename };
+      return true;
+    }
+
+    const added = this.proposals.add({
+      kind: mode.id === 'patrol' ? 'bug' : mode.id === 'briefing' ? 'risk' : 'question',
+      title: parsed.title,
+      rationale: `[${role.codename}] ${parsed.rationale}`,
+      evidence: files,
+      suggestedAction: parsed.action,
+      fingerprint,
+    });
+    await this.proposals.save();
+
+    if (added) {
+      // どの思考から出た提案かを覚える。採否がその思考の実績になる。
+      this.#origin.set(added.id, mode.id);
+      yield { type: 'proposal', proposal: added, codename: mode.codename };
+    }
+    return true;
+  }
+
+  /** 提案の採否。役に立ったかどうかが、次に何を考えるかを変える。 */
+  async decide(id: string, verdict: 'accepted' | 'rejected'): Promise<Proposal | undefined> {
+    const target = this.proposals.find(id);
+    if (!target) return undefined;
+    this.proposals.setStatus(target.id, verdict);
+    const origin = this.#origin.get(target.id);
+    if (origin) this.idle.recordVerdict(origin, verdict);
+    await this.proposals.save();
+    await this.saveAutonomy();
+    return target;
+  }
+
+  /** 提案を実行し終えたことにする。 */
+  async completeProposal(id: string): Promise<void> {
+    this.proposals.setStatus(id, 'done');
+    await this.proposals.save();
+  }
+
+  /** 思考の実績と日課の記録を残す。次の起動でも続きから考えられるように。 */
+  async saveAutonomy(): Promise<void> {
+    await writeJson(join(stateDir(), 'idle.json'),
+      JSON.stringify(this.idle.stats(), null, 2), 'utf8').catch(() => undefined);
+    await writeJson(join(stateDir(), 'duties.json'),
+      JSON.stringify(this.duties.records(), null, 2), 'utf8').catch(() => undefined);
+  }
+
+  /** 何かが変わった。考え直す価値が生まれたということ。 */
+  markChanged(at = Date.now()): void { this.#lastChangeAt = at; }
+  get lastChangeAt(): number { return this.#lastChangeAt; }
 
   /** 検査コマンド。設定 > 先読みが見つけたもの。 */
   async verifyCommand(): Promise<string | undefined> {
@@ -546,6 +740,7 @@ export class Session {
       this.#harness.endTask(succeeded ? 'completed' : 'failed');
       await this.#harness.metrics?.save();
       this.#prefetch.invalidate();
+      this.markChanged();
 
       yield {
         type: 'settled',
@@ -615,6 +810,7 @@ export class Session {
 
   async close(): Promise<void> {
     this.abort();
+    await this.saveAutonomy();
     this.memory.compact();
     await this.memory.save().catch(() => undefined);
   }

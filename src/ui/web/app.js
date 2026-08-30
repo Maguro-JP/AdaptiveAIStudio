@@ -312,6 +312,9 @@ function listen() {
     }
     if (e.type === 'stateChanged') return void refreshState();
     if (e.type === 'themeChanged') return void loadTheme();
+    if (e.type === 'thinkEvent') {
+      $('sbWork').textContent = e.event.type === 'chose' ? `考え中: ${e.event.codename}` : '待機中';
+    }
     for (const fn of eventHandlers.get(e.type) ?? []) fn(e);
   };
 }
@@ -363,6 +366,7 @@ function commands() {
   const list = [
     { name: '入力へ移動', hint: 'Ctrl+/', run: () => ctx.focusInput() },
     { name: '中断する', hint: '', run: () => fetch('/api/abort', { method: 'POST' }) },
+    { name: 'いま考えさせる', hint: '', run: () => fetch('/api/think', { method: 'POST' }) },
     { name: '配置を編集', hint: '', run: () => $('edit').click() },
     { name: '色を編集', hint: '', run: () => $('editTheme').click() },
   ];

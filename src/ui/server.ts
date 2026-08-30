@@ -54,7 +54,9 @@ export type UiEvent =
   | { type: 'approvalDone'; id: string; approved: boolean }
   | { type: 'busy'; busy: boolean }
   /** 分解して並列に働かせているときの出来事。 */
-  | { type: 'planEvent'; event: unknown };
+  | { type: 'planEvent'; event: unknown }
+  /** 暇なときに考えたこと。放っておいても動いていることが見える。 */
+  | { type: 'thinkEvent'; event: unknown };
 
 export class UiServer {
   readonly #opts: UiServerOptions;
@@ -62,6 +64,8 @@ export class UiServer {
   #server?: ReturnType<typeof createServer>;
   #url = '';
   #session?: Session;
+  #idleTimer?: ReturnType<typeof setInterval>;
+  #thinking = false;
   /** 承認待ちの返事先。画面が答えるまで、ここで待っている。 */
   readonly #pending = new Map<string, (ok: boolean) => void>();
   #seq = 0;
@@ -113,7 +117,37 @@ export class UiServer {
       approve: (req) => this.#ask(req),
       onLog: (level, text) => this.broadcast({ type: 'log', level, text }),
     });
+    this.#startThinking(this.#session);
     return this.#session;
+  }
+
+  /**
+   * 暇なら考える。
+   *
+   * 画面を開いたまま席を立っても、この場所は動き続ける。
+   * 何を考えるかも、考えてよいかも、核の中のスケジューラが決める。
+   * ここがやるのは「そろそろどうか」と声をかけることだけ。
+   */
+  #startThinking(session: Session): void {
+    const cfg = this.#opts.config.initiative ?? {};
+    if (cfg.enabled === false) return;
+    const every = Math.max(5, cfg.idleSeconds ?? 30) * 1000;
+
+    this.#idleTimer = setInterval(() => {
+      // 作業中は考えない。人の依頼が先。
+      if (session.busy || this.#thinking) return;
+      this.#thinking = true;
+      void (async () => {
+        try {
+          for await (const event of session.think()) {
+            this.broadcast({ type: 'thinkEvent', event });
+          }
+        } catch { /* 考えに失敗しても、この場所は止まらない */ } finally {
+          this.#thinking = false;
+        }
+      })();
+    }, every);
+    this.#idleTimer.unref?.();
   }
 
   #ask(req: ApprovalRequest): Promise<boolean> {
@@ -140,6 +174,7 @@ export class UiServer {
   }
 
   async stop(): Promise<void> {
+    if (this.#idleTimer) clearInterval(this.#idleTimer);
     // 待っている承認は、答えが無いまま終わる。許可はしない。
     for (const finish of this.#pending.values()) finish(false);
     this.#pending.clear();
@@ -200,6 +235,45 @@ export class UiServer {
 
       send(res, 202, { accepted: true });
       void this.#drivePlan(session, text);
+      return;
+    }
+
+    if (path === '/api/proposals' && req.method === 'GET') {
+      const session = await this.session();
+      return send(res, 200, {
+        open: session.proposals.open(),
+        duties: session.duties.status(Date.now()),
+        due: session.duties.due(Date.now()).map((d) => d.duty.codename),
+        idle: session.idle.stats(),
+        spent: session.idle.spentThisHour(Date.now()),
+      });
+    }
+
+    if (path === '/api/proposal' && req.method === 'POST') {
+      const body = await readBody(req) as { id?: string; verdict?: string };
+      const verdict = body?.verdict === 'rejected' ? 'rejected' as const : 'accepted' as const;
+      const session = await this.session();
+      const target = await session.decide(String(body?.id ?? ''), verdict);
+      if (!target) return send(res, 404, { error: 'その提案は見つかりません' });
+      this.broadcast({ type: 'stateChanged' });
+      // 採用したなら、その内容をそのまま依頼として流す。
+      if (verdict === 'accepted' && !session.busy) void this.#drive(session, target.suggestedAction);
+      return send(res, 200, { proposal: target });
+    }
+
+    if (path === '/api/think' && req.method === 'POST') {
+      const session = await this.session();
+      if (session.busy || this.#thinking) return send(res, 409, { error: 'いま別の作業をしています' });
+      send(res, 202, { accepted: true });
+      this.#thinking = true;
+      void (async () => {
+        try {
+          for await (const event of session.think()) this.broadcast({ type: 'thinkEvent', event });
+        } catch { /* 考えに失敗しても止まらない */ } finally {
+          this.#thinking = false;
+          this.broadcast({ type: 'stateChanged' });
+        }
+      })();
       return;
     }
 
