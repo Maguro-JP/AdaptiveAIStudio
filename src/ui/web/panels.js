@@ -225,6 +225,8 @@ export const PANELS = {
       else if (v.type === 'taskEnd') {
         note(v.state === 'done' ? 'good' : 'bad',
           `${v.state === 'done' ? '✓' : '✗'} ${v.taskId}（${Math.round(v.ms / 1000)}秒）${v.error ?? ''}`);
+      } else if (v.type === 'handoff') {
+        note('dim', `${v.from.join(', ')} → ${v.taskId} へ申し送り`);
       } else if (v.type === 'taskSkip') note('warn', `− ${v.taskId} 未実施: ${v.reason}`);
       else if (v.type === 'work') toolEnd(v.text.split(' ')[0], v.ok, v.text, v.taskId);
       else if (v.type === 'diff') showDiff(v);

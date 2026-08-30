@@ -43,6 +43,8 @@ export type TeamProgress =
   | { type: 'taskStart'; taskId: string; laneId: string }
   | { type: 'taskEnd'; taskId: string; state: string; ms: number; error?: string }
   | { type: 'taskSkip'; taskId: string; reason: string }
+  /** 前の担当からの引き継ぎを渡した。誰から誰へ流れたかを見えるようにする。 */
+  | { type: 'handoff'; taskId: string; from: string[] }
   | { type: 'running'; taskIds: string[] }
   | { type: 'race'; taskId: string; event: RaceEvent }
   | (TeamEvent & { type: 'agent' });
@@ -86,6 +88,8 @@ export class Team {
     candidates: string[],
     signal: AbortSignal,
     push: (p: TeamProgress) => void,
+    /** 先に終わった担当からの引き継ぎ。無ければ空。 */
+    handoff = '',
   ): Promise<WorkResult> {
     // 役職が指定されていれば、その気質と権限で働かせる。
     const assigned = item.roleId ? this.#opts.assign?.(item.roleId) : undefined;
@@ -100,7 +104,10 @@ export class Team {
       approve: this.#opts.approve,
     });
 
-    const history: ProviderMessage[] = [{ role: 'user', content: item.instruction }];
+    const history: ProviderMessage[] = [{
+      role: 'user',
+      content: handoff ? `${handoff}\n\n---\n\n${item.instruction}` : item.instruction,
+    }];
     let report = '';
     let turns = 0;
     let finished: (AgentEvent & { type: 'finished' }) | undefined;
@@ -130,18 +137,24 @@ export class Team {
     let wake: (() => void) | undefined;
     const push = (p: TeamProgress) => { inbox.push(p); wake?.(); wake = undefined; };
 
+    const byId = new Map(items.map((i) => [i.id, i]));
     const tasks: Task[] = items.map((item) => ({
       id: item.id,
       laneId: item.laneId,
       deps: item.deps,
       writes: item.writes,
       run: async (ctx): Promise<WorkResult> => {
+        // 前の担当が何を見つけたかを引き継ぐ。
+        // 依存を順番の制約としてしか使わないと、後の担当は
+        // 前の担当の成果を知らないまま、同じ調査をやり直すことになる。
+        const handoff = describeHandoff(ctx.dependencies, byId);
+
         // 冗長実行の指定があれば、同じ作業を複数モデルへ同時に投げる
         if (item.raceWith && item.raceWith.length > 0) {
           const models = [ctx.candidates[0]!, ...item.raceWith];
           const attempts: Attempt<WorkResult>[] = models.map((modelId) => ({
             label: modelId,
-            run: (signal) => this.#runOne(item, [modelId], signal, push),
+            run: (signal) => this.#runOne(item, [modelId], signal, push, handoff),
           }));
           const outcome = await race(
             attempts,
@@ -155,7 +168,8 @@ export class Team {
           return outcome.winner.result;
         }
 
-        return this.#runOne(item, ctx.candidates, ctx.signal, push);
+        if (handoff) push({ type: 'handoff', taskId: item.id, from: ctx.dependencies.map((d) => d.id) });
+        return this.#runOne(item, ctx.candidates, ctx.signal, push, handoff);
       },
     }));
 
@@ -189,4 +203,48 @@ export class Team {
     while (inbox.length > 0) yield inbox.shift()!;
     return outcomes!;
   }
+}
+
+/**
+ * 前の担当の成果を、次の担当への引き継ぎ文にまとめる。
+ *
+ * 会社で言えば、席を立つ前の申し送り。
+ * 「調べた結果はこうだった」を渡さずに次を始めさせるのは、
+ * 分担ではなく、ただの直列実行になってしまう。
+ *
+ * 渡すのは最終報告だけにする。作業中の思考まで流し込むと、
+ * 小さいモデルでは文脈が溢れて、肝心の指示が押し出される。
+ */
+export function describeHandoff(
+  dependencies: Array<TaskOutcome<unknown>>,
+  items: Map<string, WorkItem>,
+  maxCharsEach = 1500,
+): string {
+  const parts: string[] = [];
+  for (const dep of dependencies) {
+    const item = items.get(dep.id);
+    const what = item ? item.instruction.split('\n')[0]!.slice(0, 120) : dep.id;
+
+    if (dep.state === 'done') {
+      const report = (dep.result as WorkResult | undefined)?.report?.trim();
+      // 何も言い残していない担当もいる。その事実は伝えなくてよい。
+      if (!report) continue;
+      parts.push(`【${dep.id}】${what}\n${clip(report, maxCharsEach)}`);
+    } else {
+      // 失敗も引き継ぐ。同じ壁に後続がもう一度ぶつかるのは無駄。
+      parts.push(`【${dep.id}】${what}\n→ この作業は完了していません（${dep.error ?? dep.state}）。`);
+    }
+  }
+
+  if (parts.length === 0) return '';
+  return [
+    '先に終わった担当からの申し送りです。読んでから始めてください。',
+    '（同じ調査をやり直す必要はありません。書かれていないことは、確かめられていません）',
+    '',
+    ...parts,
+  ].join('\n');
+}
+
+function clip(s: string, max: number): string {
+  return s.length <= max ? s : `${s.slice(0, max)}\n…（以下省略）`;
 }

@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { OpenAiCompatibleProvider } from '../src/providers/openai-compatible.ts';
 import { ProviderRegistry } from '../src/core/registry.ts';
 import { ChatOrchestrator } from '../src/core/orchestrator.ts';
-import { Team, type WorkItem, type TeamProgress } from '../src/agent/team.ts';
+import { Team, describeHandoff, type WorkItem, type TeamProgress } from '../src/agent/team.ts';
 import { readFileTool, writeFileTool } from '../src/agent/tools/fs.ts';
 
 /**
@@ -20,6 +20,8 @@ import { readFileTool, writeFileTool } from '../src/agent/tools/fs.ts';
 async function workerServer(delayMs: number, opts: { perModelDelay?: Record<string, number>; failModels?: string[] } = {}) {
   let peak = 0;
   let active = 0;
+  /** 作業者が受け取った依頼文。申し送りが届いているかを見るため。 */
+  const asked: string[] = [];
   const server = createServer((req, res) => {
     if (req.url?.endsWith('/models')) {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -33,6 +35,7 @@ async function workerServer(delayMs: number, opts: { perModelDelay?: Record<stri
       const alreadyWrote = parsed.messages.some((m) => m.role === 'tool');
       // 依頼文は user メッセージ。system を拾わないよう role で絞る。
       const instruction = parsed.messages.find((m) => m.role === 'user')?.content ?? '';
+      if (!alreadyWrote) asked.push(instruction);
       const target = /([a-z0-9_]+\.txt)/.exec(instruction)?.[1] ?? 'x.txt';
 
       const model = (JSON.parse(body) as { model?: string }).model ?? '';
@@ -63,6 +66,7 @@ async function workerServer(delayMs: number, opts: { perModelDelay?: Record<stri
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     get peak() { return peak; },
+    get asked() { return asked; },
     close: () => new Promise<void>((r) => { server.closeAllConnections(); server.close(() => r()); }),
   };
 }
@@ -89,7 +93,7 @@ async function runTeam(
     const gen = team.run(items, new AbortController().signal);
     let next = await gen.next();
     while (!next.done) { progress.push(next.value); next = await gen.next(); }
-    return { outcomes: next.value, progress, root, peak: server.peak };
+    return { outcomes: next.value, progress, root, peak: server.peak, asked: server.asked };
   } finally {
     await server.close();
   }
@@ -172,5 +176,69 @@ describe('冗長実行（同じ作業を複数モデルへ同時に投げる）'
       { failModels: ['m', 'broken'] },
     );
     assert.equal(outcomes.get('t1')?.state, 'failed');
+  });
+});
+
+describe('申し送り', () => {
+  test('先に終わった担当の報告が、次の担当に届く', async () => {
+    const { asked, progress } = await runTeam(
+      [item('t1', 'a.txt'), item('t2', 'b.txt', ['t1'])], 2);
+
+    const second = asked.find((a) => a.includes('b.txt を作成してください'));
+    assert.ok(second, '2人目が依頼を受けていない');
+    assert.match(second, /申し送り/);
+    assert.match(second, /a\.txt を作成しました/, '前の担当の報告が届いていない');
+    assert.match(second, /【t1】/);
+
+    const handed = progress.filter((p) => p.type === 'handoff');
+    assert.equal(handed.length, 1, '申し送りが記録されていない');
+    assert.deepEqual(handed[0]!.from, ['t1']);
+  });
+
+  test('依存が無い担当には、余計なものを渡さない', async () => {
+    const { asked, progress } = await runTeam([item('t1', 'a.txt')], 1);
+    assert.equal(asked[0], 'a.txt を作成してください。');
+    assert.equal(progress.filter((p) => p.type === 'handoff').length, 0);
+  });
+});
+
+describe('申し送り文の組み立て', () => {
+  const items = new Map<string, WorkItem>([
+    ['t1', { id: 't1', laneId: 'l', instruction: '設計を調べる\n（詳細は略）' }],
+  ]);
+  const done = (report: string) => ({
+    id: 't1', state: 'done' as const, result: { report, turns: 1, finished: {} as never },
+  });
+
+  test('報告と、何の作業だったかを併せて渡す', () => {
+    const text = describeHandoff([done('層は3つに分かれています。')], items);
+    assert.match(text, /【t1】設計を調べる/);
+    assert.match(text, /層は3つに分かれています。/);
+  });
+
+  test('確かめられていないことは、確かめられていないと書く', () => {
+    const text = describeHandoff([done('調べました。')], items);
+    assert.match(text, /書かれていないことは、確かめられていません/);
+  });
+
+  test('失敗も引き継ぐ。同じ壁に後続がぶつからないように', () => {
+    const text = describeHandoff(
+      [{ id: 't1', state: 'failed', error: 'テストが通りません' }], items);
+    assert.match(text, /完了していません/);
+    assert.match(text, /テストが通りません/);
+  });
+
+  test('何も言い残していない担当は、申し送りに載せない', () => {
+    assert.equal(describeHandoff([done('   ')], items), '');
+  });
+
+  test('長すぎる報告は切り詰める。指示が押し出されるため', () => {
+    const text = describeHandoff([done('あ'.repeat(5000))], items, 100);
+    assert.ok(text.length < 400, `切り詰めていない: ${text.length}文字`);
+    assert.match(text, /以下省略/);
+  });
+
+  test('依存が無ければ空。何も足さない', () => {
+    assert.equal(describeHandoff([], items), '');
   });
 });

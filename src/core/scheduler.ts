@@ -23,6 +23,14 @@ export interface TaskRunContext {
   laneId: string;
   candidates: string[];
   signal: AbortSignal;
+  /**
+   * 依存していた作業の結果。deps に挙げた順で入る。
+   *
+   * 依存を「順番の制約」としてしか扱わないと、
+   * 後の担当は前の担当が何を見つけたのかを知らないまま始めることになる。
+   * それは分担ではなく、ただの直列実行。
+   */
+  dependencies: Array<TaskOutcome<unknown>>;
 }
 
 export type TaskState = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
@@ -113,7 +121,15 @@ export class Scheduler {
       // Promise.race は勝った1本しか返さないため、
       // 同時に終わった残りの完了が消えてしまうのを避ける。
       const p = lane
-        .withSlot(() => t.run({ taskId: t.id, laneId: t.laneId, candidates: lane.config.candidates, signal }))
+        .withSlot(() => t.run({
+          taskId: t.id,
+          laneId: t.laneId,
+          candidates: lane.config.candidates,
+          signal,
+          // 依存の結果は、開始が決まった時点のものを渡す。
+          // ここに来る時点で deps は全て終わっている。
+          dependencies: (t.deps ?? []).map((id) => outcomes.get(id)).filter((o): o is TaskOutcome => !!o),
+        }))
         .then(
           (result): void => {
             outcomes.set(t.id, { id: t.id, state: 'done', result, startedAt, finishedAt: Date.now() });
