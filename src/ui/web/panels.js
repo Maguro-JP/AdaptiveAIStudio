@@ -14,9 +14,23 @@ const el = (tag, cls, text) => {
 
 const empty = (text) => el('div', 'empty', text);
 
-function rows(items, render) {
+/**
+ * 一覧。
+ *
+ * 列は必ず揃える。行ごとに幅が動くと、読むたびに目が探し直すことになる。
+ * 揃えるのは好みではなく、読み取りの速さの問題。
+ * subgrid を使って、行の中の列を一覧全体で共有する。
+ */
+function rows(items, render, columns = 3) {
   const box = document.createElement('div');
-  for (const item of items) box.appendChild(render(item));
+  box.className = 'rows';
+  box.dataset.cols = String(columns);
+  for (const item of items) {
+    const row = render(item);
+    // 足りない列は空で埋める。埋めないと、次の行がずれる。
+    while (row.children.length < columns) row.appendChild(el('span'));
+    box.appendChild(row);
+  }
   return box;
 }
 
@@ -26,7 +40,7 @@ export const PANELS = {
     const log = el('div', 'log');
     const form = document.createElement('form');
     const input = document.createElement('input');
-    input.placeholder = '指示を書く（Enter で送る）';
+    input.placeholder = '指示を書く（/plan で分解して並列実行）';
     const stop = el('button', '', '中断');
     stop.type = 'button';
     stop.disabled = true;
@@ -56,9 +70,11 @@ export const PANELS = {
       input.value = '';
       stream = null;
       line('key', `> ${text}`);
-      const r = await fetch('/api/send', {
+      // 「/plan 〜」と書けば、分解して複数人で当たる。
+      const isPlan = text.startsWith('/plan');
+      const r = await fetch(isPlan ? '/api/plan' : '/api/send', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: isPlan ? text.slice('/plan'.length).trim() : text }),
       });
       if (!r.ok) line('bad', (await r.json()).error ?? '送れませんでした');
     };
@@ -67,7 +83,7 @@ export const PANELS = {
 
     ctx.on('busy', (e) => {
       stop.disabled = !e.busy;
-      input.placeholder = e.busy ? '作業中…' : '指示を書く（Enter で送る）';
+      input.placeholder = e.busy ? '作業中…' : '指示を書く（/plan で分解して並列実行）';
       if (!e.busy) stream = null;
     });
 
@@ -82,6 +98,42 @@ export const PANELS = {
       else if (v.type === 'finished' && v.reason !== 'completed') {
         line('warn', `終了: ${v.reason}${v.detail ? ` — ${v.detail}` : ''}`);
       }
+    });
+
+    ctx.on('planEvent', ({ event: v }) => {
+      stream = null;
+      if (v.type === 'planned') {
+        line('key', `方針: ${v.plan.summary}`);
+        for (const t of v.plan.items) {
+          const wait = (t.deps ?? []).length > 0 ? ` ← ${t.deps.join(', ')} の後` : '（すぐ着手）';
+          line('dim', `  [${t.id}] ${t.roleId} @${t.laneId}${wait} ${t.instruction.split('\n')[0]}`);
+        }
+      } else if (v.type === 'planRepaired') line('warn', `計画を直しました: ${v.detail}`);
+      else if (v.type === 'baselineFailed') line('warn', '作業前から検査が失敗しています。切り分けて見ます。');
+      else if (v.type === 'taskStart') line('', `▶ ${v.taskId} 着手 @${v.laneId}`);
+      else if (v.type === 'taskEnd') {
+        line(v.state === 'done' ? 'good' : 'bad',
+          `${v.state === 'done' ? '✓' : '✗'} ${v.taskId} (${Math.round(v.ms / 1000)}s)${v.error ? ` ${v.error}` : ''}`);
+      } else if (v.type === 'taskSkip') line('warn', `− ${v.taskId} 未実施: ${v.reason}`);
+      else if (v.type === 'work') line(v.ok ? 'dim mono' : 'bad mono', `  [${v.taskId}] ${v.text}`);
+      else if (v.type === 'verifying') line('dim', `検査: ${v.command}`);
+      else if (v.type === 'accepted') {
+        const r = v.report;
+        const cls = r.verdict === 'accepted' ? 'good' : r.verdict === 'rejected' ? 'bad' : 'warn';
+        const label = { accepted: '受け取りました', needsHuman: '判断をお願いします', rejected: '受け取れません' };
+        line(cls, `検収: ${label[r.verdict] ?? r.verdict}`);
+        const done = r.members.filter((m) => m.state === 'done').length;
+        line('dim', `  作業: ${done}/${r.members.length}件完了 / 検査: ${r.verified} / 変更: ${r.changed.length}件`);
+        for (const f of r.changed.slice(0, 10)) line('dim mono', `    ${f}`);
+        if (r.concerns.length === 0) line('dim', '  指摘はありません。');
+        for (const con of r.concerns) {
+          line(con.severity === 'block' ? 'bad' : 'warn',
+            `  [${con.severity === 'block' ? '要対応' : '確認'}] ${con.reason}`);
+          for (const w of (con.where ?? []).slice(0, 5)) line('dim', `      ${w}`);
+        }
+      }
+      else if (v.type === 'recalled') line('dim', v.text);
+      else if (v.type === 'log') line('bad', v.text);
     });
 
     // 承認。押されるまで、向こう側は止まって待っている。
@@ -122,18 +174,46 @@ export const PANELS = {
   },
 
   plan(body, ctx) {
-    const render = (items) => {
+    /** 進行中の件。状態は出来事から組み立てる。画面は覚えない。 */
+    let items = new Map();
+
+    const draw = () => {
       body.replaceChildren();
-      if (!items || items.length === 0) return body.append(empty('進行中の作業はありません。'));
-      body.append(rows(items, (t) => {
-        const r = el('div', 'row');
-        r.append(el('span', 'key mono', t.id ?? '?'), el('span', '', t.instruction ?? ''),
-          el('span', 'dim', t.roleId ?? ''));
-        return r;
+      if (items.size === 0) return body.append(empty('進行中の作業はありません。'));
+      body.append(rows([...items.values()], (t) => {
+        const row = el('div', 'row');
+        const mark = { running: '▶', done: '✓', failed: '✗', skipped: '−', waiting: '·' }[t.state];
+        const cls = t.state === 'done' ? 'good' : t.state === 'failed' ? 'bad'
+          : t.state === 'skipped' ? 'warn' : t.state === 'running' ? '' : 'dim';
+        row.append(
+          el('span', `key mono ${cls}`, `${mark} ${t.id}`),
+          el('span', t.state === 'waiting' ? 'dim' : '', t.instruction),
+          el('span', 'dim', t.roleId),
+        );
+        row.title = t.note ?? t.instruction;
+        return row;
       }));
     };
-    render(null);
-    ctx.on('plan', (e) => render(e.items));
+
+    draw();
+    ctx.on('planEvent', ({ event: v }) => {
+      if (v.type === 'planned') {
+        items = new Map(v.plan.items.map((t) => [t.id, {
+          id: t.id, roleId: t.roleId, state: 'waiting',
+          instruction: t.instruction.split('\n')[0],
+        }]));
+      } else if (v.type === 'taskStart') {
+        const t = items.get(v.taskId);
+        if (t) t.state = 'running';
+      } else if (v.type === 'taskEnd') {
+        const t = items.get(v.taskId);
+        if (t) { t.state = v.state === 'done' ? 'done' : 'failed'; t.note = v.error; }
+      } else if (v.type === 'taskSkip') {
+        const t = items.get(v.taskId);
+        if (t) { t.state = 'skipped'; t.note = v.reason; }
+      } else return;
+      draw();
+    });
   },
 
   roster(body, ctx) {
@@ -150,8 +230,12 @@ export const PANELS = {
       const gone = s.roles.filter((r) => r.retired);
       if (gone.length > 0) {
         body.append(el('div', 'dim', '引き継ぎ済み'));
-        body.append(rows(gone, (r) => el('div', 'row dim',
-          `${r.codename} → ${(r.succeededBy ?? []).join(', ') || '(未設定)'}`)));
+        body.append(rows(gone, (r) => {
+          const row = el('div', 'row dim');
+          row.append(el('span', 'key mono', r.codename),
+            el('span', '', `→ ${(r.succeededBy ?? []).join(', ') || '(未設定)'}`));
+          return row;
+        }, 2));
       }
     });
   },
@@ -168,10 +252,10 @@ export const PANELS = {
         const row = el('div', 'row');
         const trust = m.confirms >= 3 ? '確か' : m.confirms === 2 ? 'おそらく' : '一度だけ';
         row.append(
-          el('span', 'key', `[${LABEL[m.kind] ?? m.kind}/${trust}]`),
+          el('span', 'key', `${LABEL[m.kind] ?? m.kind} / ${trust}`),
           el('span', m.supersededBy ? 'dim' : '', m.title),
+          el('span', m.outcome === 'failed' ? 'bad' : 'dim', m.outcome === 'failed' ? '失敗' : ''),
         );
-        if (m.outcome === 'failed') row.append(el('span', 'bad', '失敗'));
         if (m.detail) row.title = m.detail;
         return row;
       }));
@@ -189,7 +273,7 @@ export const PANELS = {
         row.append(el('span', 'key mono', p.id ?? ''), el('span', '', p.title ?? ''));
         if (p.rationale) row.title = p.rationale;
         return row;
-      }));
+      }, 2));
     });
   },
 
@@ -202,7 +286,7 @@ export const PANELS = {
         const when = d.lastRunAt ? new Date(d.lastRunAt).toLocaleString('ja-JP') : '未実施';
         row.append(el('span', 'key mono', d.dutyId ?? d.id ?? ''), el('span', 'dim', when));
         return row;
-      }));
+      }, 2));
     });
   },
 
@@ -213,9 +297,9 @@ export const PANELS = {
       body.append(rows(s.models, (m) => {
         const row = el('div', 'row');
         const tps = typeof m.tokensPerSecond === 'number' ? `${m.tokensPerSecond.toFixed(1)} tok/s` : '';
-        row.append(el('span', 'key mono', m.modelId ?? m.id ?? ''), el('span', 'dim', tps));
+        row.append(el('span', 'key mono', m.modelId ?? m.id ?? ''), el('span', 'num dim', tps));
         return row;
-      }));
+      }, 2));
     });
   },
 

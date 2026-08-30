@@ -31,10 +31,10 @@ import { stateDir } from '../core/autopilot-setup.ts';
 import { RoleRegistry } from '../roles/registry.ts';
 import { RoleLedger, formatChanges } from '../roles/ledger.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
-import { decompose, formatPlan, toWorkItems } from '../agent/pm.ts';
-import { accept, formatReport as formatAcceptance, changedBetween, type MemberReport } from '../agent/acceptance.ts';
+import { formatPlan } from '../agent/pm.ts';
+import { formatReport as formatAcceptance } from '../agent/acceptance.ts';
 import { Memory, formatRecall, formatEntry } from '../memory/memory.ts';
-import { Team } from '../agent/team.ts';
+import { Session } from '../core/session.ts';
 import { runPanel, mergeFindings } from '../agent/panel.ts';
 import { IdleScheduler, formatIdleStats, type ModeStat } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES, MODE_ROLE, promptFor } from '../harness/idle-modes.ts';
@@ -342,151 +342,72 @@ async function main(): Promise<void> {
    * 分解に失敗しても止まらない。最悪でも「一人で全部やる」に畳んで進む。
    * 分解できないことは、作業をしない理由にならない。
    */
+  /**
+   * 依頼を分解して、複数の担当に同時に働いてもらう。
+   *
+   * 手順は核（Session）が持っている。ここは出来事を端末に描くだけ。
+   * 画面側も同じ核を見ているので、書き方が二つに割れることがない。
+   */
+  /**
+   * 核。分解と並列実行の手順はここが持つ。
+   * 使うときに初めて作る。使わない起動で余計な支度をしない。
+   */
+  let core: Session | undefined;
+  const getSession = async (): Promise<Session> => {
+    core ??= await Session.create(config, { approve });
+    return core;
+  };
+
   const runPlanOn = async (request: string): Promise<void> => {
+    const session = await getSession();
     const ac = new AbortController();
     generating = ac;
-    // 作業前の状態。あとで「今回何が変わったか」を出すために要る。
-    const gitBefore = await inspectGit(root);
-    const dirtyBefore = gitBefore.kind === 'dirty' ? gitBefore.changed : [];
-    const baseline = await (async () => {
-      const cmd = await verifyCommand();
-      if (!cmd) return undefined;
-      return runVerification({ command: cmd, root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal);
-    })();
-    const baselineFailed = baseline ? !baseline.passed : false;
-    if (baselineFailed) {
-      console.log(c.yellow('  作業前から検査が失敗しています。今回の作業の成否とは切り分けて見ます。'));
-    }
-    /** 実際に書き換えられたファイル。宣言ではなく、起きたことを見る。 */
-    const written = new Set<string>();
     try {
-      const pmCtx = {
-        lanes,
-        roleIds: roles.active().map((r) => r.id),
-        fallbackRoleId: roles.get('worker') ? 'worker' : roles.active()[0]!.id,
-        maxItems: 8,
-        // 誰が書き、誰が調べるだけかを渡す。二人目を付ける判断に要る。
-        access: Object.fromEntries(roles.active().map((r) => [r.id, r.access as string[]])),
-      };
-
-      // 前に分かっていること・駄目だったことを渡してから分解させる。
-      // これを渡さないから、同じ失敗を何度もやり直すことになる。
-      const known = recallFor(request);
-      if (known) console.log(c.dim(known.split('\n').map((l) => `  ${l}`).join('\n')));
-      const briefed = known ? `${request}\n\n${known}` : request;
-
-      console.log(c.dim('  分解中…'));
-      const pm = decompose(orchestrator, briefed, { candidates, ctx: pmCtx }, ac.signal);
-      let step = await pm.next();
-      while (!step.done) {
-        const ev = step.value;
-        if (ev.type === 'repaired') console.log(c.yellow(`  計画を直しました: ${ev.detail}`));
-        step = await pm.next();
-      }
-      const plan = step.value;
-      console.log(formatPlan(plan) + '\n');
-
-      const team = new Team(orchestrator, {
-        lanes,
-        system: buildSystemPrompt(roles.get(pmCtx.fallbackRoleId)!),
-        tools: toolsFor(roles.get(pmCtx.fallbackRoleId)!, toolPool),
-        root,
-        maxTurns: agentCfg.maxTurns,
-        temperature: config.temperature,
-        maxTokens: config.maxTokens,
-        maxTotalParallel: agentCfg.maxTotalParallel,
-        approve,
-        // 権限は役職から配る。調べるだけの担当は書き込む手段を持たない。
-        assign: (roleId) => {
-          const role = roles.get(roleId);
-          if (!role) return undefined;
-          return { system: buildSystemPrompt(role), tools: toolsFor(role, toolPool) };
-        },
-      });
-
-      const gen = team.run(toWorkItems(plan), ac.signal);
-      let next = await gen.next();
-      while (!next.done) {
-        const ev = next.value;
-        if (ev.type === 'taskStart') console.log(c.cyan(`  ▶ ${ev.taskId} 着手 @${ev.laneId}`));
-        else if (ev.type === 'taskEnd') {
-          const mark = ev.state === 'done' ? c.green('✓') : c.red('✗');
-          console.log(`  ${mark} ${ev.taskId} (${Math.round(ev.ms / 1000)}s)${ev.error ? ` ${c.red(ev.error)}` : ''}`);
-        } else if (ev.type === 'taskSkip') console.log(c.yellow(`  − ${ev.taskId} 未実施: ${ev.reason}`));
-        else if (ev.type === 'running' && ev.taskIds.length > 1) {
-          console.log(c.dim(`    同時進行: ${ev.taskIds.join(', ')}`));
-        } else if (ev.type === 'agent' && ev.event.type === 'toolEnd' && !ev.event.isError) {
-          if (ev.event.call.name === 'write_file') {
-            const path = (ev.event.call.args as { path?: string }).path;
-            if (path) written.add(path.replace(/\\/g, '/').replace(/^\.\//, ''));
-            prefetch.invalidate();
+      for await (const ev of session.plan(request)) {
+        switch (ev.type) {
+          case 'recalled':
+            console.log(c.dim(ev.text.split('\n').map((l) => `  ${l}`).join('\n')));
+            break;
+          case 'baselineFailed':
+            console.log(c.yellow('  作業前から検査が失敗しています。今回の作業の成否とは切り分けて見ます。'));
+            break;
+          case 'planRepaired':
+            console.log(c.yellow(`  計画を直しました: ${ev.detail}`));
+            break;
+          case 'planned':
+            console.log(formatPlan(ev.plan) + '\n');
+            break;
+          case 'taskStart':
+            console.log(c.cyan(`  ▶ ${ev.taskId} 着手 @${ev.laneId}`));
+            break;
+          case 'taskEnd': {
+            const mark = ev.state === 'done' ? c.green('✓') : c.red('✗');
+            console.log(`  ${mark} ${ev.taskId} (${Math.round(ev.ms / 1000)}s)`
+              + (ev.error ? ` ${c.red(ev.error)}` : ''));
+            break;
           }
+          case 'taskSkip':
+            console.log(c.yellow(`  − ${ev.taskId} 未実施: ${ev.reason}`));
+            break;
+          case 'running':
+            if (ev.taskIds.length > 1) console.log(c.dim(`    同時進行: ${ev.taskIds.join(', ')}`));
+            break;
+          case 'verifying':
+            console.log(c.dim(`  検査: ${ev.command}`));
+            break;
+          case 'accepted': {
+            const text = formatAcceptance(ev.report);
+            console.log('\n' + (ev.report.verdict === 'accepted' ? c.green(text)
+              : ev.report.verdict === 'rejected' ? c.red(text) : c.yellow(text)) + '\n');
+            break;
+          }
+          case 'log':
+            console.log(ev.level === 'error' ? c.red(`  ${ev.text}`) : c.yellow(`  ${ev.text}`));
+            break;
         }
-        next = await gen.next();
       }
-
-      const outcomes = next.value;
+      prefetch.invalidate();
       lastChangeAt = Date.now();
-
-      // 検査。通らないものを人に見せない。
-      let verified: 'passed' | 'failed' | 'skipped' | 'preexisting' = 'skipped';
-      let verifyDetail: string | undefined;
-      const command = await verifyCommand();
-      if (command) {
-        console.log(c.dim(`  検査: ${command}`));
-        const r = await runVerification({ command, root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal);
-        if (r.passed) verified = 'passed';
-        else if (baselineFailed) { verified = 'preexisting'; verifyDetail = firstLine(r.output); }
-        else { verified = 'failed'; verifyDetail = r.output.split('\n').filter((l) => l.trim()).slice(-3).join(' / '); }
-      }
-
-      // 検収。五人ぶんの作業ログではなく、一枚にまとめて出す。
-      const roleOf = new Map(plan.items.map((t) => [t.id, t.roleId]));
-      const members: MemberReport[] = [...outcomes.values()].map((o) => ({
-        id: o.id,
-        roleId: roleOf.get(o.id) ?? '不明',
-        state: o.state === 'done' ? 'done' : o.state === 'failed' ? 'failed' : 'skipped',
-        ms: (o.finishedAt ?? 0) - (o.startedAt ?? 0),
-        report: (o.result as { report?: string } | undefined)?.report,
-        error: o.error,
-      }));
-
-      const gitAfter = await inspectGit(root);
-      const dirtyAfter = gitAfter.kind === 'dirty' ? gitAfter.changed : [];
-      const changed = [...new Set([...written, ...changedBetween(dirtyBefore, dirtyAfter)])].sort();
-
-      const report = accept({
-        request, summary: plan.summary, members, changed,
-        declared: [...new Set(plan.items.flatMap((t) => t.writes ?? []))],
-        verified, verifyDetail,
-      });
-
-      console.log();
-      const text = formatAcceptance(report);
-      console.log(report.verdict === 'accepted' ? c.green(text)
-        : report.verdict === 'rejected' ? c.red(text)
-        : c.yellow(text));
-      console.log();
-
-      // 起きたことを覚える。同じ手を二度試さないため。
-      const noted = memory.remember({
-        kind: 'attempt',
-        title: request,
-        detail: [
-          plan.summary,
-          report.verdict === 'rejected'
-            ? `受け取れず: ${report.concerns.map((x) => x.reason).join(' / ')}`
-            : `${members.filter((m) => m.state === 'done').length}/${members.length}件完了、検査は${verified}`,
-        ].join(' — '),
-        tags: changed.slice(0, 5),
-        outcome: report.verdict === 'rejected' ? 'failed' : 'worked',
-        source: 'plan',
-      });
-      if (noted.reinforced) {
-        console.log(c.yellow(`  この依頼は ${noted.entry.confirms} 回目です。前回の結果も記憶にあります。\n`));
-      }
-      memory.compact();
-      await memory.save();
     } finally {
       generating = undefined;
     }

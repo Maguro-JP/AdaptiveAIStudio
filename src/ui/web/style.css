@@ -76,9 +76,30 @@ button.primary { background: var(--accent); color: #0b0d10; border-color: var(--
 }
 .tabs > header button[aria-selected="true"] { color: var(--text); background: var(--bg); }
 
-.row { display: flex; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); }
+/*
+ * 一覧の列は揃える。行ごとに幅が動くと、読むたびに目が探し直すことになる。
+ * 行の中の列を、一覧全体で共有する（subgrid）。
+ */
+.rows {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  column-gap: 12px;
+}
+.rows[data-cols="2"] { grid-template-columns: max-content minmax(0, 1fr); }
+.row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: baseline;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+}
 .row:last-child { border-bottom: 0; }
-.key { color: var(--dim); flex: 0 0 auto; }
+/* 行の中身は、はみ出さずに詰める。列がずれるより、末尾が切れる方がまし。 */
+.row > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.key { color: var(--dim); }
+/* 数は右で揃える。桁が縦に並ぶ。 */
+.num { text-align: right; font-variant-numeric: tabular-nums; }
 .dim { color: var(--dim); }
 .warn { color: var(--warn); }
 .bad { color: var(--bad); }

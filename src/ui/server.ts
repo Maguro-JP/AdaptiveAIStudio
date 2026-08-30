@@ -48,7 +48,9 @@ export type UiEvent =
   /** 承認待ち。答えが来るまで作業は止まっている。 */
   | { type: 'approval'; id: string; request: ApprovalRequest }
   | { type: 'approvalDone'; id: string; approved: boolean }
-  | { type: 'busy'; busy: boolean };
+  | { type: 'busy'; busy: boolean }
+  /** 分解して並列に働かせているときの出来事。 */
+  | { type: 'planEvent'; event: unknown };
 
 export class UiServer {
   readonly #opts: UiServerOptions;
@@ -184,6 +186,19 @@ export class UiServer {
       return;
     }
 
+    if (path === '/api/plan' && req.method === 'POST') {
+      const body = await readBody(req) as { text?: string };
+      const text = typeof body?.text === 'string' ? body.text.trim() : '';
+      if (!text) return send(res, 400, { error: '依頼が空です' });
+
+      const session = await this.session();
+      if (session.busy) return send(res, 409, { error: 'いま別の作業をしています' });
+
+      send(res, 202, { accepted: true });
+      void this.#drivePlan(session, text);
+      return;
+    }
+
     if (path === '/api/abort' && req.method === 'POST') {
       this.#session?.abort();
       return send(res, 200, { ok: true });
@@ -227,6 +242,20 @@ export class UiServer {
     } finally {
       this.broadcast({ type: 'busy', busy: false });
       // 作業で記憶やファイルが動いている。画面の材料を取り直させる。
+      this.broadcast({ type: 'stateChanged' });
+    }
+  }
+
+  async #drivePlan(session: Session, text: string): Promise<void> {
+    this.broadcast({ type: 'busy', busy: true });
+    try {
+      for await (const event of session.plan(text)) {
+        this.broadcast({ type: 'planEvent', event });
+      }
+    } catch (e) {
+      this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
+    } finally {
+      this.broadcast({ type: 'busy', busy: false });
       this.broadcast({ type: 'stateChanged' });
     }
   }
