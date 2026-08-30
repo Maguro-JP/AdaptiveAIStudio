@@ -31,7 +31,10 @@ import { buildSystemPrompt } from '../roles/role.ts';
 import { decompose, toWorkItems, type WorkPlan } from '../agent/pm.ts';
 import { Team } from '../agent/team.ts';
 import { accept, changedBetween, type AcceptanceReport, type MemberReport } from '../agent/acceptance.ts';
-import { runVerification } from '../agent/verify.ts';
+import { runVerification, verifyLoop, type VerifyEvent, type VerifyResult } from '../agent/verify.ts';
+import { snapshotTests } from '../agent/test-integrity.ts';
+import { Checkpoint } from '../harness/checkpoint.ts';
+import type { Harness } from '../harness/harness.ts';
 import { inspectGit } from '../agent/git.ts';
 import type { LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
@@ -54,6 +57,13 @@ export type SessionEvent =
   | { type: 'fallback'; from: string; to: string; reason: string }
   | { type: 'recalled'; text: string }
   | { type: 'finished'; reason: string; detail?: string }
+  /** 作業前の状態。今回の失敗と、前からの失敗を切り分けるために要る。 */
+  | { type: 'baseline'; command: string; passed: boolean }
+  /** 検証ループの様子。書いて終わりにしないための往復。 */
+  | { type: 'verify'; event: VerifyEvent }
+  | { type: 'rolledBack'; paths: string[] }
+  /** 検証まで含めた、この依頼の結末。 */
+  | { type: 'settled'; reason: string; verified: boolean; seconds: number; detail?: string }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string };
 
 /** 分解して並列に働かせるときの出来事。CLI も画面も、これを見て描く。 */
@@ -94,6 +104,7 @@ export class Session {
   readonly #prefetch: Prefetcher;
   /** ハーネスの規則へ「いま何を頼まれているか」を渡すための箱。 */
   readonly #holder: { instruction: string };
+  readonly #harness: Harness;
   readonly #history: ProviderMessage[] = [];
   #running?: AbortController;
   #instruction = '';
@@ -103,6 +114,7 @@ export class Session {
     memory: Memory; roles: RoleRegistry; orchestrator: ChatOrchestrator;
     pilot: AutopilotBundle; prefetch: Prefetcher; opts: SessionOptions;
     holder: { instruction: string };
+    harness: Harness;
     toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[] };
   }) {
     this.config = init.config;
@@ -121,6 +133,7 @@ export class Session {
     this.#prefetch = init.prefetch;
     this.#opts = init.opts;
     this.#holder = init.holder;
+    this.#harness = init.harness;
   }
 
   static async create(config: AasConfig, opts: SessionOptions): Promise<Session> {
@@ -163,7 +176,7 @@ export class Session {
     const session = new Session({
       config, root, candidates, memory,
       roles: new RoleRegistry(config.roles ?? []),
-      orchestrator, pilot, prefetch, opts, holder, toolPool,
+      orchestrator, pilot, prefetch, opts, holder, toolPool, harness,
     });
     return session;
   }
@@ -353,7 +366,13 @@ export class Session {
   /** いま動いているものを止める。止めても対話は続く。 */
   abort(): void { this.#running?.abort(); }
 
-  /** 指示を受けて、起きたことを順に返す。 */
+  /**
+   * 指示を受けて、起きたことを順に返す。
+   *
+   * 「書いて終わり」にしない。テストを流し、失敗したら自分で直させる。
+   * 計算が無料なローカルでは、この往復が**時間で品質を買う**手段になる。
+   * 打ち切ったときに中途半端な状態を残さないよう、書く前に控えも取る。
+   */
   async *send(instruction: string): AsyncGenerator<SessionEvent> {
     if (this.#running) {
       yield { type: 'log', level: 'warn', text: 'いま別の作業をしています。' };
@@ -363,6 +382,16 @@ export class Session {
     this.#running = ac;
     this.#instruction = instruction;
     this.#holder.instruction = instruction;
+
+    const verifyCfg = this.config.agent?.verify ?? {};
+    const harnessCfg = this.config.harness ?? {};
+    const started = Date.now();
+    const checkpoint = new Checkpoint(this.root);
+    this.#harness.beginTask();
+
+    let finishedReason: string | undefined;
+    let answerChars = 0;
+    let verified = true;
 
     try {
       // 関係することを思い出して添える。無関係なら何も足さない。
@@ -374,48 +403,150 @@ export class Session {
         content: recalled ? `${instruction}\n\n---\n${recalled}` : instruction,
       });
 
-      const agent = new Agent(this.orchestrator, {
-        candidates: this.candidates,
-        system: await this.#system(),
-        tools: this.#tools,
-        root: this.root,
-        maxTurns: this.config.agent?.maxTurns ?? 40,
-        temperature: this.config.temperature,
-        maxTokens: this.config.maxTokens,
-        approve: this.#opts.approve,
+      // 作業前のテストの状態。改ざん検出の基準になる。
+      const verifyOn = verifyCfg.enabled !== false;
+      const testsBefore = verifyOn ? await snapshotTests(this.root).catch(() => undefined) : undefined;
+
+      // 作業前の成否。今回の失敗と、前からの失敗を切り分けるために要る。
+      let baseline: VerifyResult | undefined;
+      const command = verifyOn ? await this.verifyCommand() : undefined;
+      if (command && verifyCfg.baseline !== false) {
+        baseline = await runVerification(
+          { command, root: this.root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal);
+        yield { type: 'baseline', command, passed: baseline.passed };
+      }
+
+      const run = async function* (this: Session, agent: Agent): AsyncGenerator<SessionEvent> {
+        for await (const ev of agent.run(this.#history, ac.signal)) {
+          switch (ev.type) {
+            case 'thinking':
+              answerChars += ev.delta.length;
+              yield { type: 'text', delta: ev.delta };
+              break;
+            case 'toolStart':
+              // 書き込む前の状態を控える。打ち切ったときに戻せるように。
+              if (ev.call.name === 'write_file' && harnessCfg.rollbackOnGiveUp) {
+                const p = (ev.call.args as { path?: unknown }).path;
+                if (typeof p === 'string') await checkpoint.capture(p);
+              }
+              yield { type: 'toolStart', name: ev.call.name, summary: summarize(ev.call.args) };
+              break;
+            case 'toolEnd':
+              if (!ev.isError && ev.call.name === 'write_file') this.#prefetch.invalidate();
+              yield {
+                type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
+              };
+              break;
+            case 'fallback':
+              yield { type: 'fallback', from: ev.from, to: ev.to, reason: ev.reason };
+              break;
+            case 'finished':
+              finishedReason = ev.reason;
+              yield { type: 'finished', reason: ev.reason, detail: ev.detail };
+              break;
+          }
+        }
+      }.bind(this);
+
+      yield* run(await this.#agent());
+
+      // 実測を溜める。次回以降の自動選択がこれで変わる。
+      await this.pilot.autopilot.record({
+        modelId: this.candidates[0]!,
+        success: finishedReason === 'completed',
+        outputTokens: Math.round(answerChars / 3),
+        seconds: (Date.now() - started) / 1000,
       });
 
-      for await (const ev of agent.run(this.#history, ac.signal)) {
-        switch (ev.type) {
-          case 'thinking':
-            yield { type: 'text', delta: ev.delta };
-            break;
-          case 'toolStart':
-            yield { type: 'toolStart', name: ev.call.name, summary: summarize(ev.call.args) };
-            break;
-          case 'toolEnd':
-            if (!ev.isError && ev.call.name === 'write_file') this.#prefetch.invalidate();
-            yield {
-              type: 'toolEnd', name: ev.call.name, ok: !ev.isError,
-              summary: firstLine(ev.result),
-            };
-            break;
-          case 'fallback':
-            yield { type: 'fallback', from: ev.from, to: ev.to, reason: ev.reason };
-            break;
-          case 'finished':
-            yield { type: 'finished', reason: ev.reason, detail: ev.detail };
-            break;
+      // 書いて終わりにしない。失敗したら、その内容を渡して直させる。
+      if (finishedReason === 'completed' && testsBefore && command) {
+        verified = false;
+        const events: SessionEvent[] = [];
+        const fix = async (feedback: string, sig: AbortSignal): Promise<void> => {
+          this.#history.push({ role: 'user', content: feedback });
+          for await (const ev of (await this.#agent()).run(this.#history, sig)) {
+            if (ev.type === 'thinking') events.push({ type: 'text', delta: ev.delta });
+            else if (ev.type === 'toolStart') {
+              if (ev.call.name === 'write_file' && harnessCfg.rollbackOnGiveUp) {
+                const p = (ev.call.args as { path?: unknown }).path;
+                if (typeof p === 'string') await checkpoint.capture(p);
+              }
+              events.push({ type: 'toolStart', name: ev.call.name, summary: summarize(ev.call.args) });
+            } else if (ev.type === 'toolEnd') {
+              if (!ev.isError && ev.call.name === 'write_file') this.#prefetch.invalidate();
+              events.push({
+                type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
+              });
+            }
+          }
+        };
+
+        const loop = verifyLoop(
+          {
+            command, root: this.root,
+            maxRounds: verifyCfg.maxRounds,
+            timeBudgetMs: verifyCfg.timeBudgetMs,
+            commandTimeoutMs: verifyCfg.commandTimeoutMs,
+          },
+          fix, ac.signal, testsBefore, baseline,
+        );
+        let step = await loop.next();
+        while (!step.done) {
+          const ev = step.value;
+          if (ev.type === 'passed' || ev.type === 'preexisting') verified = true;
+          yield { type: 'verify', event: ev };
+          // 直させている間に出たものも、そのまま見せる。黙って直させない。
+          while (events.length > 0) yield events.shift()!;
+          step = await loop.next();
         }
+        while (events.length > 0) yield events.shift()!;
       }
+
+      // 打ち切ったなら、中途半端な状態を残さない選択肢を持つ。
+      if (!verified && harnessCfg.rollbackOnGiveUp && checkpoint.size > 0) {
+        const paths = await checkpoint.restore();
+        yield { type: 'rolledBack', paths };
+      } else {
+        checkpoint.commit();
+      }
+
+      const succeeded = finishedReason === 'completed' && verified;
+      this.#harness.endTask(succeeded ? 'completed' : 'failed');
+      await this.#harness.metrics?.save();
+      this.#prefetch.invalidate();
+
+      yield {
+        type: 'settled',
+        reason: finishedReason ?? 'failed',
+        verified,
+        seconds: (Date.now() - started) / 1000,
+      };
     } catch (e) {
       // 一度の失敗で対話ごと終わらせない。次の指示は受けられる。
+      this.#harness.endTask('failed');
       yield { type: 'log', level: 'error', text: (e as Error).message };
-      yield { type: 'finished', reason: 'failed', detail: (e as Error).message };
+      yield {
+        type: 'settled', reason: 'failed', verified: false,
+        seconds: (Date.now() - started) / 1000, detail: (e as Error).message,
+      };
     } finally {
       this.#running = undefined;
       await this.memory.save().catch(() => undefined);
     }
+  }
+
+  /** 一人で全部やる作業者。気質も権限も既定のもの。 */
+  async #agent(): Promise<Agent> {
+    return new Agent(this.orchestrator, {
+      candidates: this.candidates,
+      system: await this.#system(),
+      tools: this.#tools,
+      root: this.root,
+      maxTurns: this.config.agent?.maxTurns ?? 40,
+      temperature: this.config.temperature,
+      maxTokens: this.config.maxTokens,
+      approve: this.#opts.approve,
+    });
   }
 
   #recall(text: string): string {
@@ -435,6 +566,9 @@ export class Session {
   }
 
   get instruction(): string { return this.#instruction; }
+
+  /** 話の続きを切る。覚えたことは消えない。忘れるのは、いま話していた流れだけ。 */
+  reset(): void { this.#history.length = 0; }
 
   async close(): Promise<void> {
     this.abort();

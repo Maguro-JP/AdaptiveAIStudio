@@ -95,7 +95,27 @@ export const PANELS = {
       else if (v.type === 'fallback') line('warn', `⤷ ${v.from} → ${v.to}（${v.reason}）`);
       else if (v.type === 'recalled') line('dim', v.text);
       else if (v.type === 'log') line(v.level === 'error' ? 'bad' : 'warn', v.text);
-      else if (v.type === 'finished' && v.reason !== 'completed') {
+      else if (v.type === 'baseline') {
+        line('dim', `作業前の状態: ${v.command} → ${v.passed ? '通っています' : '作業前から失敗しています'}`);
+      } else if (v.type === 'rolledBack') {
+        line('warn', `変更を巻き戻しました: ${v.paths.join(', ')}`);
+      } else if (v.type === 'verify') {
+        const e = v.event;
+        if (e.type === 'running') line('dim', `検証 ${e.round}回目: ${e.command}`);
+        else if (e.type === 'passed') line('good', `✓ 検証を通過しました (${(e.durationMs / 1000).toFixed(1)}s)`);
+        else if (e.type === 'failed') {
+          line('warn', `✗ 検証に失敗（${e.round}回目）`);
+          line('dim mono', e.digest.split('\n').slice(-6).join('\n'));
+        } else if (e.type === 'preexisting') {
+          line('warn', 'この失敗は作業前から出ています。今回の作業が原因ではありません。');
+        } else if (e.type === 'tampered') line('bad', `✗ ${e.reason}`);
+        else if (e.type === 'fixing') line('dim', '修正させています…');
+        else if (e.type === 'giveUp') line('warn', `検証を打ち切りました — ${e.detail}`);
+      } else if (v.type === 'settled') {
+        const mark = v.reason === 'completed' && v.verified ? 'good' : 'warn';
+        line(mark, `${v.reason === 'completed' ? '完了' : v.reason}`
+          + `${v.verified ? '' : '（検証は通っていません）'} (${v.seconds.toFixed(1)}s)`);
+      } else if (v.type === 'finished' && v.reason !== 'completed') {
         line('warn', `終了: ${v.reason}${v.detail ? ` — ${v.detail}` : ''}`);
       }
     });

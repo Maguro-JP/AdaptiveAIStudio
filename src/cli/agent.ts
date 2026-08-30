@@ -10,7 +10,6 @@ import { resolve, join } from 'node:path';
 import { loadConfig } from '../config.ts';
 import { buildRegistry } from '../core/build.ts';
 import { ChatOrchestrator } from '../core/orchestrator.ts';
-import type { ProviderMessage } from '../providers/contract.ts';
 import { Agent } from '../agent/loop.ts';
 import type { ApprovalRequest } from '../agent/tools/types.ts';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool } from '../agent/tools/fs.ts';
@@ -20,10 +19,8 @@ import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { startWarmPool } from '../core/warm-setup.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
-import { verifyLoop, runVerification, type VerifyResult } from '../agent/verify.ts';
-import { snapshotTests } from '../agent/test-integrity.ts';
+import type { VerifyEvent } from '../agent/verify.ts';
 import { buildHarness } from '../core/harness-setup.ts';
-import { Checkpoint } from '../harness/checkpoint.ts';
 import { formatReport } from '../harness/metrics.ts';
 import { ProposalQueue, formatProposal } from '../agent/proposals.ts';
 import { findLeads, investigationPrompt, parseProposal } from '../agent/initiative.ts';
@@ -51,17 +48,6 @@ const c = {
   red: (s: string) => `\x1b[31m${s}\x1b[0m`,
   green: (s: string) => `\x1b[32m${s}\x1b[0m`,
 };
-
-const SYSTEM = `あなたはソフトウェア開発の作業者です。与えられた作業ディレクトリで実際に手を動かします。
-
-守ること:
-- 推測でファイルを書かない。まず read_file / list_files / search_text で現状を確認する。
-- write_file には必ずファイルの全内容を渡す。一部だけ渡すと残りが消える。
-- 変更したら run_command でテストやビルドを実行し、結果を確認する。
-- 作業が終わったら、何をしたかを簡潔に日本語で報告する。ツールは呼ばない。
-- 分からないことは推測せず、質問して止まる。
-
-時間はいくらかかっても構わない。正確さを優先すること。`;
 
 function renderDiff(diff: string): string {
   return diff.split('\n').map((line) => {
@@ -138,113 +124,10 @@ async function main(): Promise<void> {
     }
   });
 
-  const rawTools = [
-    readFileTool, listFilesTool, searchTextTool, writeFileTool,
-    createRunCommandTool({ allowed: agentCfg.allowedCommands }),
-  ];
-  const tools = harness.wrapAll(rawTools, () => currentInstruction);
   // 調査担当には書き込みを渡さない。権限が無ければ事故は起きない。
   const readOnlyTools = harness.wrapAll(
     [readFileTool, listFilesTool, searchTextTool], () => currentInstruction);
 
-  // 依頼のたびに、その時点で分かっている状況を作業者へ渡す。
-  // まだ構築中なら少しだけ待つ。モデルが調べ直すより速い。
-  const systemFor = async (): Promise<string> => {
-    const snap = await prefetch.snapshotWithin(3000);
-    const brief = snap ? describeSnapshot(snap) : '';
-    return brief ? `${SYSTEM}\n\n${brief}` : SYSTEM;
-  };
-
-  const verifyCfg = agentCfg.verify ?? {};
-  const harnessCfg = config.harness ?? {};
-
-  /** 検証コマンドを決める。設定 > 先読みが検出したもの。 */
-  const verifyCommand = async (): Promise<string | undefined> => {
-    if (verifyCfg.command) return verifyCfg.command;
-    const snap = await prefetch.snapshotWithin(2000);
-    return snap?.commands.test;
-  };
-
-  const makeAgent = async () => new Agent(orchestrator, {
-    candidates,
-    system: await systemFor(),
-    tools,
-    root,
-    maxTurns: agentCfg.maxTurns ?? 40,
-    temperature: config.temperature,
-    maxTokens: config.maxTokens,
-    approve,
-  });
-
-  /**
-   * 自己検証ループ。作業者に失敗内容を渡して直させ、通るまで繰り返す。
-   * 打ち切りは回数・時間・進捗の3つで、無人でも暴走しない。
-   */
-  const runVerify = async (
-    before: Awaited<ReturnType<typeof snapshotTests>>,
-    baseline: VerifyResult | undefined,
-    signal: AbortSignal,
-  ): Promise<boolean> => {
-    const command = await verifyCommand();
-    if (!command) {
-      console.log(c.dim('  検証コマンドが分からないため、検証は行いません。\n'));
-      return true;
-    }
-
-    const fix = async (feedback: string, sig: AbortSignal): Promise<void> => {
-      history.push({ role: 'user', content: feedback });
-      let text = '';
-      const agent = await makeAgent();
-      for await (const ev of agent.run(history, sig)) {
-        if (ev.type === 'thinking') { text += ev.delta; stdout.write(ev.delta); }
-        else if (ev.type === 'toolStart') console.log(c.dim(`  · ${ev.call.name} ${summarize(ev.call.args)}`));
-        else if (ev.type === 'toolEnd') {
-          console.log(ev.isError ? c.red(`    ✗ ${firstLine(ev.result)}`) : c.dim(`    ✓ ${firstLine(ev.result)}`));
-          if (!ev.isError && ev.call.name === 'write_file') prefetch.invalidate();
-        }
-      }
-      if (text) stdout.write('\n');
-    };
-
-    let passed = false;
-    for await (const ev of verifyLoop(
-      {
-        command, root,
-        maxRounds: verifyCfg.maxRounds,
-        timeBudgetMs: verifyCfg.timeBudgetMs,
-        commandTimeoutMs: verifyCfg.commandTimeoutMs,
-      },
-      fix, signal, before, baseline,
-    )) {
-      switch (ev.type) {
-        case 'running':
-          console.log(c.dim(`  検証 ${ev.round}回目: ${ev.command}`));
-          break;
-        case 'passed':
-          passed = true;
-          console.log(c.green(`  ✓ 検証を通過しました`) + c.dim(` (${(ev.durationMs / 1000).toFixed(1)}s)\n`));
-          break;
-        case 'failed':
-          console.log(c.yellow(`  ✗ 検証に失敗（${ev.round}回目）`));
-          console.log(c.dim(ev.digest.split('\n').slice(-6).map((l) => `    ${l}`).join('\n')));
-          break;
-        case 'preexisting':
-          console.log(c.yellow('  この失敗は作業前から出ています。今回の作業が原因ではありません。'));
-          console.log(c.dim(ev.digest.split('\n').slice(-4).map((l) => `    ${l}`).join('\n')) + '\n');
-          break;
-        case 'tampered':
-          console.log(c.red(`  ✗ ${ev.reason}\n`));
-          break;
-        case 'fixing':
-          console.log(c.dim(`  修正させています...`));
-          break;
-        case 'giveUp':
-          console.log(c.yellow(`  検証を打ち切りました — ${ev.detail}\n`));
-          break;
-      }
-    }
-    return passed;
-  };
 
   // 人員。設定から気質を足したり上書きしたりできる。
   const roles = new RoleRegistry(config.roles ?? []);
@@ -601,7 +484,6 @@ async function main(): Promise<void> {
   }
   console.log(c.dim('作業を指示してください。/exit で終了。\n'));
 
-  const history: ProviderMessage[] = [];
   let pendingRequest: string | undefined;
   let acceptedProposalId: string | undefined;
 
@@ -615,7 +497,11 @@ async function main(): Promise<void> {
       const line = answer.trim();
       if (!line) continue;
       if (line === '/exit' || line === '/quit') break;
-      if (line === '/new') { history.length = 0; console.log(c.dim('履歴を破棄しました。\n')); continue; }
+      if (line === '/new') {
+        core?.reset();
+        console.log(c.dim('履歴を破棄しました。記憶は残ります。\n'));
+        continue;
+      }
       if (line === '/models') {
         for (const r of pilot.autopilot.explain()) {
           const mark = r.modelId === candidates[0] ? c.green(' ←使用中') : '';
@@ -782,121 +668,71 @@ async function main(): Promise<void> {
 
       const request = pendingRequest ?? line;
       pendingRequest = undefined;
-      // 依頼に関係することを思い出して添える。無関係なら何も足さない。
-      const recalled = recallFor(request);
-      history.push({
-        role: 'user',
-        content: recalled ? `${request}\n\n---\n${recalled}` : request,
-      });
-      currentInstruction = request;
-      harness.beginTask();
-      const checkpoint = new Checkpoint(root);
-      generating = new AbortController();
-      // 作業前のテストの状態を控えておく。改ざん検出の基準になる。
-      const verifyOn = verifyCfg.enabled !== false;
-      const testsBefore = verifyOn
-        ? await snapshotTests(root).catch(() => undefined)
-        : undefined;
 
-      // 作業前の状態を控える。失敗の責任を切り分けるために要る。
-      let baseline: VerifyResult | undefined;
-      if (verifyOn && verifyCfg.baseline !== false) {
-        const cmd = await verifyCommand();
-        if (cmd) {
-          console.log(c.dim(`  作業前の状態を確認中: ${cmd}`));
-          baseline = await runVerification(
-            { command: cmd, root, commandTimeoutMs: verifyCfg.commandTimeoutMs },
-            generating.signal,
-          );
-          console.log(baseline.passed
-            ? c.dim('    通っています')
-            : c.yellow('    作業前から失敗しています'));
-        }
-      }
-      const started = Date.now();
+      // 手順は核が持つ。ここは出来事を端末に描くだけ。
+      const session = await getSession();
+      generating = new AbortController();
       let printedText = false;
-      let answerChars = 0;
-      let finishedReason: string | undefined;
+      const flush = () => { if (printedText) { stdout.write('\n'); printedText = false; } };
 
       try {
-        const agent = await makeAgent();
-        for await (const ev of agent.run(history, generating.signal)) {
+        for await (const ev of session.send(request)) {
           switch (ev.type) {
-            case 'thinking':
+            case 'recalled':
+              console.log(c.dim(ev.text.split('\n').map((l) => `  ${l}`).join('\n')));
+              break;
+            case 'baseline':
+              console.log(c.dim(`  作業前の状態を確認中: ${ev.command}`));
+              console.log(ev.passed ? c.dim('    通っています') : c.yellow('    作業前から失敗しています'));
+              break;
+            case 'text':
               stdout.write(ev.delta);
-              answerChars += ev.delta.length;
               printedText = true;
               break;
-            case 'turn':
-              if (printedText) { stdout.write('\n'); printedText = false; }
+            case 'toolStart':
+              flush();
+              console.log(c.dim(`  · ${ev.name} ${ev.summary}`));
+              break;
+            case 'toolEnd':
+              console.log(ev.ok ? c.dim(`    ✓ ${ev.summary}`) : c.red(`    ✗ ${ev.summary}`));
               break;
             case 'fallback':
+              flush();
               console.log(c.yellow(`  ⤷ ${ev.from} → ${ev.to} に切替`) + c.dim(` (${ev.reason})`));
               break;
-            case 'toolStart': {
-              console.log(c.dim(`  · ${ev.call.name} ${summarize(ev.call.args)}`));
-              // 書き込む前の状態を控える。打ち切ったときに戻せるように。
-              if (ev.call.name === 'write_file' && harnessCfg.rollbackOnGiveUp) {
-                const p = (ev.call.args as { path?: unknown }).path;
-                if (typeof p === 'string') await checkpoint.capture(p);
-              }
-              break;
-            }
-            case 'toolEnd':
-              console.log(ev.isError
-                ? c.red(`    ✗ ${firstLine(ev.result)}`)
-                : c.dim(`    ✓ ${firstLine(ev.result)}`));
-              // ファイルが変わったら索引が古くなる。裏で作り直す。
-              if (!ev.isError && ev.call.name === 'write_file') prefetch.invalidate();
-              break;
             case 'finished': {
-              const secs = ((Date.now() - started) / 1000).toFixed(1);
-              // 実測を溜める。次回以降の自動選択がこれで変わる。
-              await pilot.autopilot.record({
-                modelId: candidates[0]!,
-                success: ev.reason === 'completed',
-                outputTokens: Math.round(answerChars / 3),
-                seconds: (Date.now() - started) / 1000,
-              });
+              flush();
               const label = {
                 completed: c.green('完了'),
                 maxTurns: c.yellow('ターン上限'),
                 noProgress: c.yellow('堂々巡りのため停止'),
                 aborted: c.dim('中断'),
                 failed: c.red('失敗'),
-              }[ev.reason];
-              console.log(`\n  ${label}${ev.detail ? c.dim(` — ${ev.detail}`) : ''} ${c.dim(`(${secs}s)`)}\n`);
-              finishedReason = ev.reason;
+              }[ev.reason] ?? ev.reason;
+              console.log(`\n  ${label}${ev.detail ? c.dim(` — ${ev.detail}`) : ''}`);
               break;
             }
+            case 'verify':
+              flush();
+              renderVerify(ev.event);
+              break;
+            case 'rolledBack':
+              console.log(c.yellow(`  変更を巻き戻しました: ${ev.paths.join(', ')}\n`));
+              break;
+            case 'settled':
+              console.log(c.dim(`  (${ev.seconds.toFixed(1)}s)\n`));
+              if (acceptedProposalId && ev.reason === 'completed' && ev.verified) {
+                proposals.setStatus(acceptedProposalId, 'done');
+                await proposals.save();
+              }
+              acceptedProposalId = undefined;
+              break;
+            case 'log':
+              flush();
+              console.log(ev.level === 'error' ? c.red(`  ${ev.text}`) : c.yellow(`  ${ev.text}`));
+              break;
           }
         }
-
-        // 書いて終わりにしない。テストを流し、失敗したら自分で直させる。
-        let verified = true;
-        if (finishedReason === 'completed' && testsBefore) {
-          verified = await runVerify(testsBefore, baseline, generating.signal);
-        }
-
-        // 打ち切った場合、中途半端な状態を残さない選択肢を持つ
-        if (!verified && harnessCfg.rollbackOnGiveUp && checkpoint.size > 0) {
-          const restored = await checkpoint.restore();
-          console.log(c.yellow(`  変更を巻き戻しました: ${restored.join(', ')}\n`));
-        } else {
-          checkpoint.commit();
-        }
-
-        // 拒否が誘導になったのか邪魔になったのか、結末で判定させる
-        const succeeded = finishedReason === 'completed' && verified;
-        harness.endTask(succeeded ? 'completed' : 'failed');
-        await harness.metrics?.save();
-
-        if (acceptedProposalId && succeeded) {
-          proposals.setStatus(acceptedProposalId, 'done');
-          await proposals.save();
-        }
-        acceptedProposalId = undefined;
-
         // 作業のあとは状況が変わっている。考え直す価値が生まれた。
         prefetch.invalidate();
         lastChangeAt = Date.now();
@@ -910,6 +746,35 @@ async function main(): Promise<void> {
     memory.compact();
     await memory.save().catch(() => undefined);
     await warm.pool?.shutdown().catch(() => undefined);
+  }
+}
+
+/** 検証ループの様子を端末に描く。判断はしない。描くだけ。 */
+function renderVerify(ev: VerifyEvent): void {
+  switch (ev.type) {
+    case 'running':
+      console.log(c.dim(`  検証 ${ev.round}回目: ${ev.command}`));
+      break;
+    case 'passed':
+      console.log(c.green('  ✓ 検証を通過しました') + c.dim(` (${(ev.durationMs / 1000).toFixed(1)}s)`));
+      break;
+    case 'failed':
+      console.log(c.yellow(`  ✗ 検証に失敗（${ev.round}回目）`));
+      console.log(c.dim(ev.digest.split('\n').slice(-6).map((l) => `    ${l}`).join('\n')));
+      break;
+    case 'preexisting':
+      console.log(c.yellow('  この失敗は作業前から出ています。今回の作業が原因ではありません。'));
+      console.log(c.dim(ev.digest.split('\n').slice(-4).map((l) => `    ${l}`).join('\n')));
+      break;
+    case 'tampered':
+      console.log(c.red(`  ✗ ${ev.reason}`));
+      break;
+    case 'fixing':
+      console.log(c.dim('  修正させています...'));
+      break;
+    case 'giveUp':
+      console.log(c.yellow(`  検証を打ち切りました — ${ev.detail}`));
+      break;
   }
 }
 

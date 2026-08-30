@@ -337,7 +337,7 @@ npm run typecheck
 - [実現計画](docs/ROADMAP.md) — 到達目標と改訂フェーズ（**まずこちら**）
 - [組織設計](docs/ORGANIZATION.md) — 職能・部署・人材配置・並列実行の設計
 - [画面](docs/UI.md) — 配置をデータで持つ。AIに頼んで模様替えできる（**重要**）
-- [対話の核](src/core/session.ts) — 入口（CLI・画面）から切り離した本体
+- [対話の核](docs/CORE.md) — 入口（CLI・画面）から切り離した本体（**重要**）
 - [記憶](docs/MEMORY.md) — 覚えていること。同じ失敗を繰り返さないための器（**重要**）
 - [人員](docs/ROLES.md) — 気質の違うAIを配属する仕組み（**重要**）
 - [IDLE](docs/IDLE.md) — 暇なら考える。ただし無駄には考えない（**重要**）
