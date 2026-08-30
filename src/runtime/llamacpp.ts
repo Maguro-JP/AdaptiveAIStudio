@@ -8,6 +8,7 @@
  * llama-server は OpenAI互換APIを出すので、Provider層に変更は要らない。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { describeFailure } from './llama-diagnosis.ts';
 import { readdir, stat } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { planExecution, type Plan } from './planner.ts';
@@ -224,9 +225,8 @@ export class LlamaCppRuntime implements LocalRuntime {
     for (;;) {
       const exited = exitedRef();
       if (exited) {
-        throw new Error(
-          `llama-server が起動に失敗しました (終了コード ${exited.code ?? '不明'})\n${exited.detail}`,
-        );
+        // 終了コードだけでは、人にできることが無い。見立てまで付ける。
+        throw new Error(describeFailure(exited.code, exited.detail));
       }
       if (signal?.aborted) throw new Error('起動が中断されました。');
       if (Date.now() > deadline) {
