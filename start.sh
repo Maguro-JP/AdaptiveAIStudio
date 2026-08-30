@@ -33,6 +33,7 @@ if [ -z "$task" ]; then
   echo "   4  この環境を見てもらう"
   echo "   5  手元のモデルを見る"
   echo "   6  検査を回す"
+  echo "   7  新しくする"
   echo "   0  やめる"
   echo
   printf "   番号を入れて Enter: "
@@ -44,10 +45,25 @@ if [ -z "$task" ]; then
     4) task=doctor ;;
     5) task=models ;;
     6) task=test ;;
+    7) task=update ;;
     0) exit 0 ;;
     *) echo "  その番号はありません。"; exit 1 ;;
   esac
 fi
 
 echo
+
+# 更新は、取り込んだあと立ち上げ直すところまでが一続き。
+# 動いているコードと置いてあるコードがズレたまま使わせない。
+if [ "$task" = "update" ]; then
+  npm run update || exit $?
+  echo
+  printf "   立ち上げ直しますか？ [Y/n]: "
+  read -r again
+  case "$again" in
+    [nN]*) exit 0 ;;
+    *) exec "$0" ;;
+  esac
+fi
+
 npm run "$task"
