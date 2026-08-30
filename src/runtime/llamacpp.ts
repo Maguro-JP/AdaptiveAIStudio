@@ -13,7 +13,9 @@ import { join, basename } from 'node:path';
 import { planExecution, type Plan } from './planner.ts';
 import { inferSpec } from './infer.ts';
 import { lookupModel } from './catalog.ts';
-import type { MachineSpec } from './spec.ts';
+import { readGguf } from './gguf.ts';
+import { toModelSpec } from './gguf-spec.ts';
+import type { MachineSpec, ModelSpec } from './spec.ts';
 import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.ts';
 
 export interface LlamaCppOptions {
@@ -51,6 +53,11 @@ export class LlamaCppRuntime implements LocalRuntime {
   readonly #opts: Required<Omit<LlamaCppOptions, 'onLog' | 'machine' | 'modelsDir'>> &
     Pick<LlamaCppOptions, 'onLog'> & { machine: MachineSpec; modelsDir: string };
   readonly #running = new Map<string, Running>();
+  /**
+   * ファイルから読み取った諸元。
+   * 名前からの推測より、書いてあるものの方が確か。
+   */
+  readonly #specs = new Map<string, ModelSpec>();
   #nextPort: number;
 
   constructor(opts: LlamaCppOptions) {
@@ -82,9 +89,40 @@ export class LlamaCppRuntime implements LocalRuntime {
       try {
         sizeBytes = (await stat(join(this.#opts.modelsDir, name))).size;
       } catch { /* 読めなくても一覧には出す */ }
+      // ファイルの先頭を読んで、書いてある諸元を取る。
+      // 読めなくても一覧からは落とさない。動かせるかどうかは別の話。
+      await this.#readSpec(name);
       out.push({ ref: name, sizeBytes });
     }
     return out;
+  }
+
+  /**
+   * GGUF から諸元を読む。
+   * 読めない・足りないときは覚えない。半端な値を残すより、
+   * 名前からの推測に落ちた方がまだ筋が通る。
+   */
+  async #readSpec(name: string): Promise<ModelSpec | undefined> {
+    const cached = this.#specs.get(name);
+    if (cached) return cached;
+    try {
+      const file = await readGguf(join(this.#opts.modelsDir, name));
+      const { spec, missing } = toModelSpec(file, basename(name, '.gguf'));
+      if (!spec) {
+        this.#opts.onLog?.(`${name}: 諸元を読み切れませんでした（${missing.join(' / ')}）。名前からの推測に落ちます。`);
+        return undefined;
+      }
+      this.#specs.set(name, spec);
+      return spec;
+    } catch (e) {
+      this.#opts.onLog?.(`${name}: GGUF を読めませんでした（${(e as Error).message}）。名前からの推測に落ちます。`);
+      return undefined;
+    }
+  }
+
+  /** 読み取れている諸元。一覧を取ったあとに埋まる。 */
+  specFor(ref: string): ModelSpec | undefined {
+    return this.#specs.get(ref);
   }
 
   loaded(): string[] {
@@ -93,8 +131,9 @@ export class LlamaCppRuntime implements LocalRuntime {
 
   /** プランナが計算した実行設定。起動前に利用者へ見せるためにも使う。 */
   planFor(ref: string): Plan | undefined {
+    // 書いてあるもの > 登録済みの諸元 > 名前からの推測、の順で信じる。
     const name = basename(ref, '.gguf');
-    const spec = lookupModel(name) ?? inferSpec(name);
+    const spec = this.#specs.get(ref) ?? lookupModel(name) ?? inferSpec(name);
     if (!spec) return undefined;
     return planExecution({
       model: spec,

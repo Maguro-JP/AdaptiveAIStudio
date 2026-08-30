@@ -345,6 +345,7 @@ npm run typecheck
 - [ハーネス設計](docs/HARNESS.md) — モデルの誤りを実行前に止める仕組み（**重要**）
 - [パフォーマンスで戦う](docs/PERFORMANCE.md) — 計算が無料な利点をどう使うか（**重要**）
 - [最も効率の良いモデル運用](docs/MODEL-EFFICIENCY.md) — 何を基準にモデルを選ぶか（**重要**）
+- [GGUF を直接読む](docs/GGUF.md) — 名前からの推測をやめ、書いてある諸元を使う
 - [32B級を動かすには](docs/RUNNING-LARGE-MODELS.md) — メモリ計算・速度の根拠・MoE・並列と直列
 - [自前化とクラウド解禁の条件](docs/INDEPENDENCE.md) — 脱Ollama依存の段階計画と、クラウドを有効化する基準
 - [段階的劣化](docs/DEGRADATION.md) — 遅くても動かすための設計（実行可能性プランナ・編成スタイル）
