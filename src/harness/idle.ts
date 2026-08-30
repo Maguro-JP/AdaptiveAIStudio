@@ -36,6 +36,16 @@ export interface IdleMode {
   /** 実績が無いうちの優先度 */
   basePriority: number;
   /**
+   * 何をきっかけに考えるか。
+   *
+   * change: 手元が変わったから考える（見回り・巡回検査・振り返り）
+   * time:   時間が経ったから考える（外部情報・先読み・別案）
+   *
+   * 一つの変更で change のモードが総出になるのを抑えるために要る。
+   * 既定は change。
+   */
+  triggeredBy?: 'change' | 'time';
+  /**
    * 日課からのみ起動する。
    *
    * 「前回分の確認」や「段取りの見直し」は、時間で起きるべきもので、
@@ -71,6 +81,21 @@ export interface ModeStat {
 export interface IdleBudget {
   /** 1時間あたりに使ってよい総コスト */
   perHour: number;
+  /**
+   * 前の思考から、次の思考までに空ける最短の間隔(ms)。
+   *
+   * 予算だけでは「1時間ぶんを最初の数分で使い切る」を止められない。
+   * 読む側にとっては、1時間に6回より、続けざまに6回の方がずっとうるさい。
+   * 既定10分。
+   */
+  minGapMs?: number;
+  /**
+   * 同じ変更について、change のモードで考えてよい回数。
+   *
+   * 一つの変更は見回り・巡回検査・振り返りの前提を同時に満たす。
+   * 全部を走らせても、見ているものはほぼ同じ。既定2回。
+   */
+  maxPerChange?: number;
 }
 
 export interface Decision {
@@ -89,6 +114,11 @@ export class IdleScheduler {
   #stats = new Map<IdleModeId, ModeStat>();
   /** 直近1時間に使ったコストの記録 */
   #spending: Array<{ at: number; cost: number }> = [];
+  /** 最後に何かを考えた時刻。モードを問わない。 */
+  #lastThoughtAt?: number;
+  /** いま数えている変更の時刻と、それについて考えた回数 */
+  #changeStamp?: number;
+  #thoughtsSinceChange = 0;
 
   constructor(modes: IdleMode[], budget: IdleBudget) {
     this.#modes = modes;
@@ -101,6 +131,19 @@ export class IdleScheduler {
 
   restore(stats: ModeStat[]): void {
     for (const s of stats) this.#stats.set(s.mode, s);
+    // 再起動しても間合いは引き継ぐ。立ち上げ直せば喋り出す、では意味がない。
+    const last = stats.map((s) => s.lastRunAt ?? 0).reduce((a, b) => Math.max(a, b), 0);
+    if (last > 0) this.#lastThoughtAt = last;
+  }
+
+  /** 次に考えてよくなる時刻。まだなら undefined。 */
+  nextAllowedAt(): number | undefined {
+    if (this.#lastThoughtAt === undefined) return undefined;
+    return this.#lastThoughtAt + this.#minGap();
+  }
+
+  #minGap(): number {
+    return this.#budget.minGapMs ?? 10 * 60_000;
   }
 
   /** 今どれだけ使ったか。予算の残りを見せるため。 */
@@ -126,6 +169,20 @@ export class IdleScheduler {
     if (spent >= this.#budget.perHour) {
       return { reason: `この1時間の予算を使い切りました（${spent}/${this.#budget.perHour}）` };
     }
+
+    // 間合い。予算が残っていても、続けざまには考えない。
+    const gap = this.#minGap();
+    if (this.#lastThoughtAt !== undefined && ctx.now - this.#lastThoughtAt < gap) {
+      const left = Math.ceil((gap - (ctx.now - this.#lastThoughtAt)) / 60_000);
+      return { reason: `さきほど考えたところです（あと約${left}分）` };
+    }
+
+    // 変更が変われば数え直す。同じ変更を何度も見に行かないため。
+    if (this.#changeStamp !== ctx.lastChangeAt) {
+      this.#changeStamp = ctx.lastChangeAt;
+      this.#thoughtsSinceChange = 0;
+    }
+    const changeSpent = this.#thoughtsSinceChange >= (this.#budget.maxPerChange ?? 2);
 
     // 未処理が溜まっているのに考え続けるのは、利用者を置き去りにしている
     if (ctx.openProposals >= 10) {
@@ -155,13 +212,19 @@ export class IdleScheduler {
 
       if (stat.lastRunAt !== undefined && ctx.now - stat.lastRunAt < mode.cooldownMs) continue;
       if (spent + mode.cost > this.#budget.perHour) continue;
+      // この変更については、もう十分に考えた
+      if (changeSpent && (mode.triggeredBy ?? 'change') === 'change') continue;
       if (!(await mode.precondition(full))) continue;
 
       candidates.push({ mode, score: this.#score(mode, stat) });
     }
 
     if (candidates.length === 0) {
-      return { reason: '今は考える意味のあることがありません' };
+      return {
+        reason: changeSpent
+          ? 'この変更については既に考えました。次の変更を待ちます'
+          : '今は考える意味のあることがありません',
+      };
     }
 
     candidates.sort((a, b) => b.score - a.score);
@@ -175,6 +238,8 @@ export class IdleScheduler {
     stat.lastRunAt = now;
     stat.spent += mode.cost;
     this.#spending.push({ at: now, cost: mode.cost });
+    this.#lastThoughtAt = now;
+    if ((mode.triggeredBy ?? 'change') === 'change') this.#thoughtsSinceChange += 1;
   }
 
   /** 提案を出したかどうか。出さなかったことも記録に残す。 */

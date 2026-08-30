@@ -42,6 +42,7 @@ export const patrol: IdleMode = {
 /** BRIEFING — 外の情報を取りに行く。ENVOY の担当。 */
 export const briefing: IdleMode = {
   id: 'briefing',
+  triggeredBy: 'time',
   codename: 'BRIEFING',
   name: '外部情報',
   purpose: '依存パッケージの更新や既知の不具合など、外の情報を取りに行く。',
@@ -69,11 +70,14 @@ export const retrospect: IdleMode = {
 /** FORECAST — これから起きそうなことを考える。 */
 export const forecast: IdleMode = {
   id: 'forecast',
+  triggeredBy: 'time',
   codename: 'FORECAST',
   name: '先読み',
   purpose: '今の作りのままだと、次に何で困りそうかを考える。',
-  precondition: (ctx) => ctx.lastRunAt === undefined || ctx.now - ctx.lastRunAt > 30 * MINUTE,
-  cooldownMs: 30 * MINUTE,
+  // 手元が変わっていないなら、先読みの結論も前回と同じになる。
+  // 30分ごとに繰り返すと、静かな時間の埋め草になってしまう。
+  precondition: (ctx) => ctx.lastRunAt === undefined || ctx.now - ctx.lastRunAt > 90 * MINUTE,
+  cooldownMs: 90 * MINUTE,
   cost: 2,
   basePriority: 3,
 };
@@ -82,15 +86,16 @@ export const forecast: IdleMode = {
  * WHATIF — 別の道を考える。
  *
  * 「あのとき別の作りにしていたら」は、後知恵ではなく設計の検算になる。
- * ただし始終やられると邪魔なので、間隔は長く取る。
+ * ただし始終やられると邪魔なので、間隔は長く取る（3時間）。
  */
 export const whatif: IdleMode = {
   id: 'whatif',
+  triggeredBy: 'time',
   codename: 'WHAT-IF',
   name: '別案',
   purpose: '今の作りとは別のやり方を考え、比べて利点と欠点を出す。',
-  precondition: (ctx) => ctx.lastRunAt === undefined || ctx.now - ctx.lastRunAt > 45 * MINUTE,
-  cooldownMs: 45 * MINUTE,
+  precondition: (ctx) => ctx.lastRunAt === undefined || ctx.now - ctx.lastRunAt > 3 * 60 * MINUTE,
+  cooldownMs: 3 * 60 * MINUTE,
   cost: 3,
   basePriority: 2,
 };

@@ -38,7 +38,7 @@ describe('考える意味があるか', () => {
     if (later.mode) s.begin(later.mode, NOW + 10 * MINUTE);
     const third = await s.choose(ctx({ now: NOW + 20 * MINUTE, lastChangeAt: NOW - MINUTE }));
     assert.equal(third.mode, undefined, '変わっていないのに考え直している');
-    assert.match(third.reason, /考える意味/);
+    assert.match(third.reason, /考える意味|既に考えました/);
   });
 
   test('冷却中は同じことを繰り返さない', async () => {
@@ -152,5 +152,81 @@ describe('記録', () => {
     const text = formatIdleStats(BUILTIN_IDLE_MODES, s.stats());
     assert.match(text, /RECON/);
     assert.match(text, /100%/);
+  });
+});
+
+describe('間合い', () => {
+  /** 待機のたびに choose を呼ぶ、実際の使われ方をなぞる。 */
+  async function idleFor(minutes: number, opts: { changeAt?: number } = {}) {
+    const s = scheduler(BUILTIN_IDLE_MODES, 100); // 予算では止めない。間合いだけを見る
+    const chosen: Array<{ at: number; codename: string }> = [];
+    for (let t = 0; t <= minutes * MINUTE; t += 30_000) { // 30秒ごと = 既定の待機間隔
+      const now = NOW + t;
+      const d = await s.choose({
+        lastChangeAt: opts.changeAt ?? NOW - MINUTE, openProposals: 0, now,
+      });
+      if (d.mode) { s.begin(d.mode, now); chosen.push({ at: t, codename: d.mode.codename }); }
+    }
+    return chosen;
+  }
+
+  test('一つの変更で、思考が続けざまに走らない', async () => {
+    const chosen = await idleFor(5);
+    assert.equal(chosen.length, 1, `5分で ${chosen.length}件 走っている: ${chosen.map((c) => c.codename)}`);
+  });
+
+  test('間隔を空けても、同じ変更については2回まで', async () => {
+    const chosen = await idleFor(120);
+    const codes = chosen.map((c) => c.codename);
+    // 予算を効かせない条件でも、2時間で5件（すべて10分以上あけて別の角度から）
+    assert.ok(chosen.length <= 5, `2時間で ${chosen.length}件: ${codes}`);
+    // 変更をきっかけにするもの（見回り・巡回検査・振り返り）は2回まで
+    const byChange = codes.filter((c) => ['RECON', 'PATROL', 'RETROSPECT'].includes(c));
+    assert.ok(byChange.length <= 2, `変更由来が ${byChange.length}件: ${codes}`);
+  });
+
+  test('思考と思考の間は、必ず既定の間隔だけ空く', async () => {
+    const chosen = await idleFor(180);
+    for (let i = 1; i < chosen.length; i += 1) {
+      const gap = chosen[i]!.at - chosen[i - 1]!.at;
+      assert.ok(gap >= 10 * MINUTE, `${chosen[i - 1]!.codename} → ${chosen[i]!.codename} が ${gap / MINUTE}分`);
+    }
+  });
+
+  test('新しい変更があれば、また考えてよい', async () => {
+    const s = scheduler([recon, patrol], 100);
+    const first = await s.choose(ctx());
+    s.begin(first.mode!, NOW);
+    const second = await s.choose(ctx({ now: NOW + 11 * MINUTE }));
+    s.begin(second.mode!, NOW + 11 * MINUTE);
+
+    // 同じ変更のままなら、3回目は無い
+    const third = await s.choose(ctx({ now: NOW + 22 * MINUTE }));
+    assert.equal(third.mode, undefined, third.reason);
+
+    // 手元が動いたら、また考える
+    const after = await s.choose(ctx({ now: NOW + 33 * MINUTE, lastChangeAt: NOW + 30 * MINUTE }));
+    assert.ok(after.mode, `新しい変更でも考えない: ${after.reason}`);
+  });
+
+  test('間合いの理由は、あと何分かまで言う', async () => {
+    const s = scheduler([recon], 100);
+    const first = await s.choose(ctx());
+    s.begin(first.mode!, NOW);
+    const next = await s.choose(ctx({ now: NOW + 2 * MINUTE }));
+    assert.equal(next.mode, undefined);
+    assert.match(next.reason, /あと約8分/);
+  });
+
+  test('立ち上げ直しても間合いは引き継ぐ', async () => {
+    const s = scheduler([recon, patrol], 100);
+    const first = await s.choose(ctx());
+    s.begin(first.mode!, NOW);
+
+    const restarted = scheduler([recon, patrol], 100);
+    restarted.restore(s.stats());
+    const soon = await restarted.choose(ctx({ now: NOW + MINUTE, lastChangeAt: NOW + 30_000 }));
+    assert.equal(soon.mode, undefined, '立ち上げ直すと喋り出してしまう');
+    assert.match(soon.reason, /さきほど考えた/);
   });
 });

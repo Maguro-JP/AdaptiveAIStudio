@@ -411,7 +411,12 @@ async function main(): Promise<void> {
         const d = await session.idle.choose({
           lastChangeAt, openProposals: session.proposals.open().length, now: Date.now(),
         });
-        console.log(c.dim(`  次に考えること: ${d.mode ? d.mode.codename : `なし（${d.reason}）`}\n`));
+        console.log(c.dim(`  次に考えること: ${d.mode ? d.mode.codename : `なし（${d.reason}）`}`));
+        const next = session.idle.nextAllowedAt();
+        if (next !== undefined && next > Date.now()) {
+          console.log(c.dim(`  次に考えてよくなるまで: 約${Math.ceil((next - Date.now()) / 60_000)}分`));
+        }
+        console.log();
         continue;
       }
       if (line === '/roles') {

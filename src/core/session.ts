@@ -230,7 +230,11 @@ export class Session {
     // 使う思考モードだけを配る。減らせば、その分だけ静かになる。
     const idle = new IdleScheduler(
       BUILTIN_IDLE_MODES.filter((m) => !initCfg.modes || initCfg.modes.includes(m.id)),
-      { perHour: initCfg.budgetPerHour ?? 12 },
+      {
+        perHour: initCfg.budgetPerHour ?? 12,
+        minGapMs: (initCfg.minGapMinutes ?? 10) * 60_000,
+        maxPerChange: initCfg.maxPerChange ?? 2,
+      },
     );
     try {
       idle.restore(JSON.parse(await readJson(join(stateDir(), 'idle.json'), 'utf8')) as ModeStat[]);
