@@ -4,8 +4,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { RoleLedger, formatChanges } from '../src/roles/ledger.ts';
 import { RoleRegistry } from '../src/roles/registry.ts';
@@ -90,7 +89,7 @@ describe('変更の検出', () => {
 
 describe('周知', () => {
   test('伝えるまで残る', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'aas-ledger-'));
+    const dir = await tempDir('aas-ledger-');
     const path = join(dir, 'roles.json');
 
     const first = new RoleLedger(path);

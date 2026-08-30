@@ -1,11 +1,10 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, truncate } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { readGguf, quantName, BadFormatError, TruncatedError } from '../src/runtime/gguf.ts';
-import {
-  extractFacts, toModelSpec, dominantQuant, bitsFor, formatGguf,
+import { extractFacts, toModelSpec, dominantQuant, bitsFor, formatGguf,
 } from '../src/runtime/gguf-spec.ts';
 
 /**
@@ -41,13 +40,16 @@ class GgufWriter {
 
 type Kv = [string, number, unknown];
 
-function build(opts: {
+interface BuildOpts {
   kvs: Kv[];
   tensors?: Array<{ name: string; dims: number[]; typeId: number }>;
   magic?: number;
   version?: number;
+  /** 見かけの大きさ。中身は作らず、末尾の位置だけを動かす。 */
   padTo?: number;
-}): Uint8Array {
+}
+
+function build(opts: BuildOpts): Uint8Array {
   const w = new GgufWriter();
   w.u32(opts.magic ?? 0x46554747);
   w.u32(opts.version ?? 3);
@@ -84,17 +86,25 @@ function build(opts: {
     w.u64(0);
   }
 
-  const head = w.bytes();
-  if (!opts.padTo || opts.padTo <= head.byteLength) return head;
-  const out = new Uint8Array(opts.padTo);
-  out.set(head, 0);
-  return out;
+  return w.bytes();
 }
 
-async function writeTmp(bytes: Uint8Array, name = 'model.gguf'): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'aas-gguf-'));
+/**
+ * 仮の GGUF を置く。
+ *
+ * `padTo` は「見かけの大きさ」。中身は作らず、末尾の位置だけを動かす。
+ * 読む側は頭だけを読み、大きさは stat で見るので、これで足りる。
+ * 4GB の 0 を本当に書くと、Windows では書き込みと走査で数分かかり、
+ * 並列で走る試験どうしがメモリとディスクを食い合って落ちる。
+ */
+async function writeTmp(source: Uint8Array | BuildOpts, name = 'model.gguf'): Promise<string> {
+  const bytes = source instanceof Uint8Array ? source : build(source);
+  const padTo = source instanceof Uint8Array ? undefined : source.padTo;
+
+  const dir = await tempDir('aas-gguf-');
   const path = join(dir, name);
   await writeFile(path, bytes);
+  if (padTo && padTo > bytes.byteLength) await truncate(path, padTo);
   return path;
 }
 
@@ -118,7 +128,7 @@ const BIG_TENSORS = [
 
 describe('読み取り', () => {
   test('書いてあることをそのまま返す', async () => {
-    const path = await writeTmp(build({ kvs: NORMAL, tensors: BIG_TENSORS }));
+    const path = await writeTmp({ kvs: NORMAL, tensors: BIG_TENSORS });
     const file = await readGguf(path);
     assert.equal(file.version, 3);
     assert.equal(file.metadata.get('general.architecture'), 'llama');
@@ -141,9 +151,9 @@ describe('読み取り', () => {
   });
 
   test('知らない型に出会ったら、そこで止めて理由を残す', async () => {
-    const path = await writeTmp(build({
+    const path = await writeTmp({
       kvs: [['general.architecture', 8, 'llama'], ['変な項目', 99, 0], ['llama.block_count', 4, 32]],
-    }));
+    });
     const file = await readGguf(path);
     assert.equal(file.metadata.get('general.architecture'), 'llama');
     assert.equal(file.metadata.has('llama.block_count'), false, '位置がずれたまま読み進めている');
@@ -158,14 +168,14 @@ describe('読み取り', () => {
   });
 
   test('知らない版でも、読めるところまで読む', async () => {
-    const path = await writeTmp(build({ kvs: NORMAL, version: 99 }));
+    const path = await writeTmp({ kvs: NORMAL, version: 99 });
     const file = await readGguf(path);
     assert.equal(file.metadata.get('llama.block_count'), 32);
     assert.ok(file.warnings.some((w) => w.includes('99')));
   });
 
   test('先頭しか読まないので、大きなファイルでも全部は抱えない', async () => {
-    const path = await writeTmp(build({ kvs: NORMAL, tensors: BIG_TENSORS, padTo: 4 * 1024 * 1024 }));
+    const path = await writeTmp({ kvs: NORMAL, tensors: BIG_TENSORS, padTo: 4 * 1024 * 1024 });
     const file = await readGguf(path, { headBytes: 4096 });
     assert.equal(file.fileBytes, 4 * 1024 * 1024);
     assert.equal(file.metadata.get('llama.block_count'), 32);
@@ -190,7 +200,7 @@ describe('量子化の名前', () => {
   });
 
   test('小さなテンソルは主な量子化の判定に混ぜない', async () => {
-    const path = await writeTmp(build({ kvs: NORMAL, tensors: BIG_TENSORS }));
+    const path = await writeTmp({ kvs: NORMAL, tensors: BIG_TENSORS });
     const file = await readGguf(path);
     // F32 の正規化係数が 1 件あるが、支配的なのは Q4_K
     assert.equal(dominantQuant(file), 'Q4_K');
@@ -199,9 +209,9 @@ describe('量子化の名前', () => {
 
 describe('諸元への解釈', () => {
   test('揃っていれば諸元になる', async () => {
-    const path = await writeTmp(build({
+    const path = await writeTmp({
       kvs: NORMAL, tensors: BIG_TENSORS, padTo: 4 * 1024 ** 3,
-    }));
+    });
     const file = await readGguf(path);
     const { spec, missing } = toModelSpec(file);
     assert.deepEqual(missing, []);
@@ -215,10 +225,10 @@ describe('諸元への解釈', () => {
   });
 
   test('足りなければ諸元を作らない。半端な値を渡さない', async () => {
-    const path = await writeTmp(build({
+    const path = await writeTmp({
       kvs: [['general.architecture', 8, 'llama'], ['llama.block_count', 4, 32]],
       tensors: BIG_TENSORS,
-    }));
+    });
     const file = await readGguf(path);
     const r = toModelSpec(file);
     assert.equal(r.spec, undefined);
@@ -227,7 +237,7 @@ describe('諸元への解釈', () => {
   });
 
   test('量子化が読めなければ諸元を作らない', async () => {
-    const path = await writeTmp(build({ kvs: NORMAL }));
+    const path = await writeTmp({ kvs: NORMAL });
     const file = await readGguf(path);
     const r = toModelSpec(file);
     assert.equal(r.spec, undefined);
@@ -236,7 +246,7 @@ describe('諸元への解釈', () => {
 
   test('GQA の指定が無ければ、そう断ってヘッド数を使う', async () => {
     const kvs = NORMAL.filter(([k]) => k !== 'llama.attention.head_count_kv');
-    const path = await writeTmp(build({ kvs, tensors: BIG_TENSORS, padTo: 1024 ** 3 }));
+    const path = await writeTmp({ kvs, tensors: BIG_TENSORS, padTo: 1024 ** 3 });
     const r = toModelSpec(await readGguf(path));
     assert.equal(r.spec!.kvHeads, 32);
     assert.ok(r.notes.some((n) => n.includes('head_count_kv')));
@@ -248,7 +258,7 @@ describe('諸元への解釈', () => {
       ['llama.expert_count', 4, 8],
       ['llama.expert_used_count', 4, 2],
     ];
-    const path = await writeTmp(build({ kvs, tensors: BIG_TENSORS, padTo: 4 * 1024 ** 3 }));
+    const path = await writeTmp({ kvs, tensors: BIG_TENSORS, padTo: 4 * 1024 ** 3 });
     const r = toModelSpec(await readGguf(path));
     assert.ok(r.spec!.activeParamsB);
     assert.ok(Math.abs(r.spec!.activeParamsB! - r.spec!.paramsB / 4) < 0.01);
@@ -256,7 +266,7 @@ describe('諸元への解釈', () => {
   });
 
   test('書いてあることを名前で引ける形にする', async () => {
-    const file = await readGguf(await writeTmp(build({ kvs: NORMAL })));
+    const file = await readGguf(await writeTmp({ kvs: NORMAL }));
     const f = extractFacts(file);
     assert.equal(f.architecture, 'llama');
     assert.equal(f.name, 'Test Llama 7B');
@@ -265,13 +275,13 @@ describe('諸元への解釈', () => {
   });
 
   test('アーキテクチャが違えば、そのキーで引く', async () => {
-    const path = await writeTmp(build({
+    const path = await writeTmp({
       kvs: [
         ['general.architecture', 8, 'qwen2'],
         ['qwen2.block_count', 4, 48],
         ['llama.block_count', 4, 99],
       ],
-    }));
+    });
     const f = extractFacts(await readGguf(path));
     assert.equal(f.layers, 48, '別のアーキテクチャの値を拾っている');
   });
@@ -279,9 +289,9 @@ describe('諸元への解釈', () => {
 
 describe('人が確かめるための表示', () => {
   test('読めた値と、諸元にできたかどうかが出る', async () => {
-    const path = await writeTmp(build({
+    const path = await writeTmp({
       kvs: NORMAL, tensors: BIG_TENSORS, padTo: 4 * 1024 ** 3,
-    }));
+    });
     const file = await readGguf(path);
     const out = formatGguf(file, toModelSpec(file));
     assert.ok(out.includes('llama'));
@@ -291,7 +301,7 @@ describe('人が確かめるための表示', () => {
   });
 
   test('作れなかったときは、何が足りないかを出す', async () => {
-    const file = await readGguf(await writeTmp(build({ kvs: NORMAL })));
+    const file = await readGguf(await writeTmp({ kvs: NORMAL }));
     const out = formatGguf(file, toModelSpec(file));
     assert.ok(out.includes('諸元にはできませんでした'));
     assert.ok(out.includes('足りない'));
@@ -299,7 +309,7 @@ describe('人が確かめるための表示', () => {
   });
 
   test('日本語の見出しでも列が揃う（文字数ではなく幅で揃える）', async () => {
-    const file = await readGguf(await writeTmp(build({ kvs: NORMAL })));
+    const file = await readGguf(await writeTmp({ kvs: NORMAL }));
     const out = formatGguf(file, toModelSpec(file));
     const width = (t: string) => [...t].reduce((n, ch) => {
       const c = ch.codePointAt(0)!;
@@ -312,9 +322,9 @@ describe('人が確かめるための表示', () => {
   });
 
   test('記載が無いところは (記載なし) と出る。埋めない', async () => {
-    const file = await readGguf(await writeTmp(build({
+    const file = await readGguf(await writeTmp({
       kvs: [['general.architecture', 8, 'llama']],
-    })));
+    }));
     const out = formatGguf(file, toModelSpec(file));
     assert.ok(out.includes('(記載なし)'));
   });

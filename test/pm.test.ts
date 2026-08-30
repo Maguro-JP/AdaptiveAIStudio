@@ -1,7 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  extractJson, repairPlan, breakCycles, normalizeWrite, toWorkItems, formatPlan,
+import { extractJson, repairPlan, breakCycles, normalizeWrite, toWorkItems, formatPlan,
   type PmContext, type PlanItem,
 } from '../src/agent/pm.ts';
 

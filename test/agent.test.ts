@@ -7,8 +7,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtemp, writeFile, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, readFile } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { OpenAiCompatibleProvider } from '../src/providers/openai-compatible.ts';
 import { ProviderRegistry } from '../src/core/registry.ts';
@@ -63,7 +63,7 @@ async function scriptedServer(script: Scripted[]) {
 
 async function runAgent(script: Scripted[], opts: { approve?: () => Promise<boolean> } = {}) {
   const server = await scriptedServer(script);
-  const root = await mkdtemp(join(tmpdir(), 'aas-agent-'));
+  const root = await tempDir('aas-agent-');
   await writeFile(join(root, 'app.ts'), 'export const answer = 41;\n');
   try {
     const registry = new ProviderRegistry();

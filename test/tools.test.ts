@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, mkdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, readFile, mkdir } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool } from '../src/agent/tools/fs.ts';
 import { createRunCommandTool } from '../src/agent/tools/shell.ts';
@@ -9,7 +9,7 @@ import { safeResolve } from '../src/agent/tools/paths.ts';
 import type { ToolContext } from '../src/agent/tools/types.ts';
 
 async function workspace(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'aas-'));
+  const root = await tempDir('aas-');
   await writeFile(join(root, 'app.ts'), 'export const answer = 41;\nconsole.log(answer);\n');
   await mkdir(join(root, 'node_modules'), { recursive: true });
   await writeFile(join(root, 'node_modules', 'junk.js'), 'noise');

@@ -354,9 +354,15 @@ npm run chat
 ### テスト
 
 ```
-npm test        # Provider契約テスト + フォールバック動作テスト
+npm test              # 全部
+npm test gguf env     # 名前に含むものだけ
 npm run typecheck
 ```
+
+走らせ役は `scripts/run-tests.mjs`。試験の並べ方（`test/*.test.ts` の展開）を
+殻に任せない。Windows の cmd.exe は `*` を展開しないため、
+`node --test test/*.test.ts` を npm から直に呼ぶと環境によって走らない。
+型を剥がす指定が要るかどうかの版差も、ここで吸収している。
 
 `test/contract.test.ts` は全Provider共通の適合テスト。
 **新しいProviderを追加したら、このスイートを通すことを条件とする。**

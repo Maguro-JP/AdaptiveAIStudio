@@ -1,7 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  repairTheme, baseTheme, isSafeValue, cssVarName, toCssVars,
+import { repairTheme, baseTheme, isSafeValue, cssVarName, toCssVars,
   THEMES, TOKENS, DEFAULT_THEME_ID,
 } from '../src/ui/theme.ts';
 

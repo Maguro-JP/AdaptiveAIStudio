@@ -1,10 +1,10 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  Memory, tokenize, normalizeTitle, formatRecall, formatEntry,
+import { Memory, tokenize, normalizeTitle, formatRecall, formatEntry,
 } from '../src/memory/memory.ts';
 
 const DAY = 86_400_000;
@@ -213,7 +213,7 @@ describe('刈り込み', () => {
 
 describe('保存', () => {
   test('保存して読み直すと、確認回数まで戻る', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'aas-mem-'));
+    const dir = await tempDir('aas-mem-');
     const path = join(dir, 'memory.jsonl');
     const a = new Memory(path);
     a.remember({ kind: 'decision', title: '決めたこと', tags: ['x'] });
@@ -228,7 +228,7 @@ describe('保存', () => {
   });
 
   test('1行壊れても記憶全体を失わない', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'aas-mem-'));
+    const dir = await tempDir('aas-mem-');
     const path = join(dir, 'memory.jsonl');
     const a = new Memory(path);
     a.remember({ kind: 'fact', title: '無事な記憶' });

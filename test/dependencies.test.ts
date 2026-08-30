@@ -1,12 +1,12 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { inspectDependencies, describeDependencies } from '../src/agent/dependencies.ts';
 
 async function make(files: Record<string, string>): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'aas-deps-'));
+  const dir = await tempDir('aas-deps-');
   for (const [path, body] of Object.entries(files)) {
     const full = join(dir, path);
     await mkdir(join(full, '..'), { recursive: true });

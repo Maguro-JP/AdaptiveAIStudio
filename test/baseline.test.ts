@@ -4,13 +4,13 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, rm } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { BaselineProbe } from '../src/agent/baseline.ts';
 
 async function project(files: Record<string, string>): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'aas-baseline-'));
+  const root = await tempDir('aas-baseline-');
   for (const [name, content] of Object.entries(files)) {
     await writeFile(join(root, name), content);
   }

@@ -4,8 +4,8 @@
  */
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LlamaCppRuntime } from '../src/runtime/llamacpp.ts';
@@ -17,7 +17,7 @@ const FAKE = join(here, 'fixtures', 'fake-llama-server.mjs');
 let portCursor = 19100;
 
 async function modelsDir(files: string[] = ['qwen2.5-coder-32b.gguf']): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'aas-models-'));
+  const dir = await tempDir('aas-models-');
   for (const f of files) await writeFile(join(dir, f), 'GGUF');
   return dir;
 }

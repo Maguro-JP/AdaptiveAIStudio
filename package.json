@@ -10,7 +10,7 @@
   "scripts": {
     "doctor": "node --experimental-strip-types --no-warnings src/cli/doctor.ts",
     "chat": "node --experimental-strip-types --no-warnings src/cli/main.ts",
-    "test": "node --experimental-strip-types --no-warnings --test test/*.test.ts",
+    "test": "node scripts/run-tests.mjs",
     "typecheck": "tsc --noEmit",
     "agent": "node --experimental-strip-types --no-warnings src/cli/agent.ts",
     "team": "node --experimental-strip-types --no-warnings src/cli/team.ts",

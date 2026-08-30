@@ -4,15 +4,15 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { Prefetcher, describeSnapshot, type PrefetchEvent } from '../src/agent/prefetch.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function project(files: Record<string, string> = {}): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'aas-pf-'));
+  const root = await tempDir('aas-pf-');
   for (const [name, content] of Object.entries(files)) {
     const abs = join(root, name);
     await mkdir(join(abs, '..'), { recursive: true });

@@ -1,7 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  hasNonAscii, nonAsciiPart, inspectEnvironment, parseCudaVersion,
+import { hasNonAscii, nonAsciiPart, inspectEnvironment, parseCudaVersion,
 } from '../src/runtime/environment.ts';
 
 describe('全角・日本語を含むパス', () => {

@@ -4,15 +4,14 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { Harness } from '../src/harness/harness.ts';
 import { AuditLog } from '../src/harness/audit.ts';
 import { Checkpoint } from '../src/harness/checkpoint.ts';
 import { minimatch } from '../src/harness/glob.ts';
-import {
-  workspaceBoundary, protectedPaths, testProtection, blastRadius,
+import { workspaceBoundary, protectedPaths, testProtection, blastRadius,
   readBeforeWrite, noRepeatedWrites, dangerousCommands, afterWriteHint,
 } from '../src/harness/builtin-rules.ts';
 import { readFileTool, writeFileTool } from '../src/agent/tools/fs.ts';
@@ -21,7 +20,7 @@ import type { Rule } from '../src/harness/rules.ts';
 import type { ToolContext } from '../src/agent/tools/types.ts';
 
 async function project(files: Record<string, string> = {}): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'aas-harness-'));
+  const root = await tempDir('aas-harness-');
   for (const [name, content] of Object.entries(files)) {
     const abs = join(root, name);
     await mkdir(join(abs, '..'), { recursive: true });

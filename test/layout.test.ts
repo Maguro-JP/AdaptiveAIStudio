@@ -1,7 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  repairLayout, preset, panelsInOrder, PRESETS, PANEL_KINDS, DEFAULT_LAYOUT_ID,
+import { repairLayout, preset, panelsInOrder, PRESETS, PANEL_KINDS, DEFAULT_LAYOUT_ID,
   type Layout,
 } from '../src/ui/layout.ts';
 

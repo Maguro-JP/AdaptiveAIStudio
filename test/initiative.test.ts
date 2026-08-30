@@ -4,15 +4,15 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { findLeads, investigationPrompt, parseProposal } from '../src/agent/initiative.ts';
 import { ProposalQueue, formatProposal } from '../src/agent/proposals.ts';
 import { Prefetcher } from '../src/agent/prefetch.ts';
 
 async function project(files: Record<string, string>): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'aas-init-'));
+  const root = await tempDir('aas-init-');
   for (const [name, content] of Object.entries(files)) {
     const abs = join(root, name);
     await mkdir(join(abs, '..'), { recursive: true });
@@ -170,7 +170,7 @@ describe('提案キュー', () => {
   });
 
   test('保存して読み直せる', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'aas-pq-'));
+    const dir = await tempDir('aas-pq-');
     const path = join(dir, 'proposals.json');
     const q = new ProposalQueue(path);
     q.add(sample('f1'));
@@ -254,7 +254,7 @@ describe('調べ直しの防止', () => {
   });
 
   test('調査済みの記録も保存される', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'aas-pq2-'));
+    const dir = await tempDir('aas-pq2-');
     const path = join(dir, 'proposals.json');
     const q = new ProposalQueue(path);
     q.markExamined('abc123');

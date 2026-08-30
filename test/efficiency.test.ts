@@ -4,8 +4,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { rank, choose, type Candidate } from '../src/runtime/efficiency.ts';
 import { MetricsStore } from '../src/runtime/metrics.ts';
@@ -165,7 +164,7 @@ describe('効率計算', () => {
 
 describe('実測の蓄積', () => {
   test('記録して読み直せる', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'aas-metrics-'));
+    const dir = await tempDir('aas-metrics-');
     const path = join(dir, 'metrics.json');
     const store = new MetricsStore(path);
     await store.load();

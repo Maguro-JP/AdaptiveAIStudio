@@ -1,7 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  createFetchUrlTool, checkHost, toText, HostNotAllowed, DEFAULT_ALLOWED_HOSTS,
+import { createFetchUrlTool, checkHost, toText, HostNotAllowed, DEFAULT_ALLOWED_HOSTS,
 } from '../src/agent/tools/network.ts';
 import type { ToolContext } from '../src/agent/tools/types.ts';
 

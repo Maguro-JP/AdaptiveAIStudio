@@ -1,11 +1,9 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { tempDir } from './tmp.ts';
 
 // 配置や記録の置き場を、試験専用の場所へ移してから読み込む。
-const dir = await mkdtemp(join(tmpdir(), 'aas-ui-'));
+const dir = await tempDir('aas-ui-');
 process.env.AAS_STATE_DIR = dir;
 
 const { UiServer } = await import('../src/ui/server.ts');

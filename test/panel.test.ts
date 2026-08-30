@@ -6,8 +6,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { OpenAiCompatibleProvider } from '../src/providers/openai-compatible.ts';
 import { ProviderRegistry } from '../src/core/registry.ts';
@@ -55,7 +55,7 @@ const proposal = (title: string, action = 'やること') =>
 
 async function panel(answers: Record<string, string>, roleIds: string[]) {
   const server = await roleAwareServer(answers);
-  const root = await mkdtemp(join(tmpdir(), 'aas-panel-'));
+  const root = await tempDir('aas-panel-');
   await writeFile(join(root, 'a.ts'), 'export const f = (x) => x.trim();');
   try {
     const registry = new ProviderRegistry();

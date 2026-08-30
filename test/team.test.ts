@@ -3,8 +3,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { mkdtemp, writeFile, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, readFile } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { OpenAiCompatibleProvider } from '../src/providers/openai-compatible.ts';
 import { ProviderRegistry } from '../src/core/registry.ts';
@@ -72,7 +72,7 @@ async function runTeam(
   serverOpts: { perModelDelay?: Record<string, number>; failModels?: string[] } = {},
 ) {
   const server = await workerServer(60, serverOpts);
-  const root = await mkdtemp(join(tmpdir(), 'aas-team-'));
+  const root = await tempDir('aas-team-');
   await writeFile(join(root, 'seed.txt'), 'seed\n');
   try {
     const registry = new ProviderRegistry();

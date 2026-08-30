@@ -4,16 +4,15 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, mkdir, rm, readFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile, mkdir, rm, readFile } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
-import {
-  verifyLoop, runVerification, digestFailure, feedbackFor, type VerifyEvent,
+import { verifyLoop, runVerification, digestFailure, feedbackFor, type VerifyEvent,
 } from '../src/agent/verify.ts';
 import { snapshotTests, compareTests } from '../src/agent/test-integrity.ts';
 
 async function project(files: Record<string, string>): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'aas-verify-'));
+  const root = await tempDir('aas-verify-');
   for (const [name, content] of Object.entries(files)) {
     const abs = join(root, name);
     await mkdir(join(abs, '..'), { recursive: true });

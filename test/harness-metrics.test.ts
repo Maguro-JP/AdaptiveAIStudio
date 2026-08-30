@@ -4,8 +4,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { HarnessMetrics, formatReport } from '../src/harness/metrics.ts';
 
@@ -93,7 +92,7 @@ describe('ハーネス計測', () => {
   });
 
   test('記録を保存して読み直せる', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'aas-hm-'));
+    const dir = await tempDir('aas-hm-');
     const path = join(dir, 'harness.json');
 
     const m = new HarnessMetrics(path);
