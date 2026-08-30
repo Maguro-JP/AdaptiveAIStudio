@@ -33,6 +33,7 @@ import { RoleLedger, formatChanges } from '../roles/ledger.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { decompose, formatPlan, toWorkItems } from '../agent/pm.ts';
 import { accept, formatReport as formatAcceptance, changedBetween, type MemberReport } from '../agent/acceptance.ts';
+import { Memory, formatRecall, formatEntry } from '../memory/memory.ts';
 import { Team } from '../agent/team.ts';
 import { runPanel, mergeFindings } from '../agent/panel.ts';
 import { IdleScheduler, formatIdleStats, type ModeStat } from '../harness/idle.ts';
@@ -366,8 +367,14 @@ async function main(): Promise<void> {
         maxItems: 8,
       };
 
+      // 前に分かっていること・駄目だったことを渡してから分解させる。
+      // これを渡さないから、同じ失敗を何度もやり直すことになる。
+      const known = recallFor(request);
+      if (known) console.log(c.dim(known.split('\n').map((l) => `  ${l}`).join('\n')));
+      const briefed = known ? `${request}\n\n${known}` : request;
+
       console.log(c.dim('  分解中…'));
-      const pm = decompose(orchestrator, request, { candidates, ctx: pmCtx }, ac.signal);
+      const pm = decompose(orchestrator, briefed, { candidates, ctx: pmCtx }, ac.signal);
       let step = await pm.next();
       while (!step.done) {
         const ev = step.value;
@@ -458,6 +465,26 @@ async function main(): Promise<void> {
         : report.verdict === 'rejected' ? c.red(text)
         : c.yellow(text));
       console.log();
+
+      // 起きたことを覚える。同じ手を二度試さないため。
+      const noted = memory.remember({
+        kind: 'attempt',
+        title: request,
+        detail: [
+          plan.summary,
+          report.verdict === 'rejected'
+            ? `受け取れず: ${report.concerns.map((x) => x.reason).join(' / ')}`
+            : `${members.filter((m) => m.state === 'done').length}/${members.length}件完了、検査は${verified}`,
+        ].join(' — '),
+        tags: changed.slice(0, 5),
+        outcome: report.verdict === 'rejected' ? 'failed' : 'worked',
+        source: 'plan',
+      });
+      if (noted.reinforced) {
+        console.log(c.yellow(`  この依頼は ${noted.entry.confirms} 回目です。前回の結果も記憶にあります。\n`));
+      }
+      memory.compact();
+      await memory.save();
     } finally {
       generating = undefined;
     }
@@ -466,6 +493,23 @@ async function main(): Promise<void> {
   const initCfg = config.initiative ?? {};
   const proposals = new ProposalQueue(join(stateDir(), 'proposals.json'));
   await proposals.load();
+
+  /**
+   * 記憶。起動のたびに何も覚えていないなら、それは道具であって住人ではない。
+   * 決めたこと・試して駄目だったこと・分かったこと・好みが、ここに残る。
+   */
+  const memory = new Memory(join(stateDir(), 'memory.jsonl'));
+  await memory.load();
+  if (memory.size > 0) console.log(c.dim(`  記憶: ${memory.size}件`));
+
+  /** 依頼に関係することを思い出す。無関係なものは出さない。 */
+  const recallFor = (text: string): string => {
+    const related = memory.recall(text, { limit: 6 });
+    const failed = memory.failedBefore(text, 2);
+    const merged = [...related];
+    for (const f of failed) if (!merged.some((e) => e.id === f.id)) merged.push(f);
+    return formatRecall(merged);
+  };
 
   // 思考の配分。何を考えるかはスケジューラが決める。
   const idleModes = BUILTIN_IDLE_MODES.filter(
@@ -701,6 +745,40 @@ async function main(): Promise<void> {
         console.log();
         continue;
       }
+      if (line.startsWith('/memory')) {
+        const q = line.slice('/memory'.length).trim();
+        const found = q ? memory.recall(q, { limit: 20, includeSuperseded: true }) : memory.all().slice(-20);
+        if (found.length === 0) {
+          console.log(c.dim(q ? `  「${q}」に関係する記憶はありません。\n` : '  まだ何も覚えていません。\n'));
+        } else {
+          for (const e of found) console.log(formatEntry(e));
+          console.log(c.dim(`  （全 ${memory.size} 件）\n`));
+        }
+        continue;
+      }
+      if (line.startsWith('/remember')) {
+        const body = line.slice('/remember'.length).trim();
+        if (!body) {
+          console.log(c.dim('  使い方: /remember <覚えること>  /remember 決定: <決めたこと>\n'));
+          continue;
+        }
+        // 「決定:」で始まれば決めたこととして扱う。決定は古くても効き続ける。
+        const m = body.match(/^(決定|決めた|方針)[:：]\s*(.+)$/s);
+        const r = memory.remember({
+          kind: m ? 'decision' : 'preference',
+          title: (m ? m[2]! : body).trim(),
+          source: '利用者',
+        });
+        console.log(r.reinforced
+          ? c.dim(`  覚えています（${r.entry.confirms}回目）: ${r.entry.title}\n`)
+          : c.green(`  覚えました: ${r.entry.title}\n`));
+        for (const conflict of r.conflicts) {
+          console.log(c.yellow(`  前にこう決めています: ${conflict.title}`));
+          console.log(c.dim(`    決め直すなら、そう言ってください（${conflict.id}）\n`));
+        }
+        await memory.save();
+        continue;
+      }
       if (line.startsWith('/plan')) {
         const target = line.slice('/plan'.length).trim();
         if (!target) { console.log(c.dim('  使い方: /plan <依頼>\n')); continue; }
@@ -781,7 +859,12 @@ async function main(): Promise<void> {
 
       const request = pendingRequest ?? line;
       pendingRequest = undefined;
-      history.push({ role: 'user', content: request });
+      // 依頼に関係することを思い出して添える。無関係なら何も足さない。
+      const recalled = recallFor(request);
+      history.push({
+        role: 'user',
+        content: recalled ? `${request}\n\n---\n${recalled}` : request,
+      });
       currentInstruction = request;
       harness.beginTask();
       const checkpoint = new Checkpoint(root);
@@ -900,6 +983,9 @@ async function main(): Promise<void> {
     }
   } finally {
     rl.close();
+    // 覚えたことは必ず残す。次の起動で思い出せなければ、記憶ではない。
+    memory.compact();
+    await memory.save().catch(() => undefined);
     await warm.pool?.shutdown().catch(() => undefined);
   }
 }
