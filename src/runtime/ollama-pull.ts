@@ -12,7 +12,7 @@
 export interface PullOptions {
   /** OpenAI 互換の口（.../v1）。native の口はここから導く。 */
   baseUrl: string;
-  /** 取ってくるモデル名（例: qwen2.5-coder:7b） */
+  /** 取ってくるモデル名（例: qwen3-coder:30b） */
   ref: string;
   onProgress?: (line: string) => void;
   fetchImpl?: typeof fetch;

@@ -1,14 +1,24 @@
 /**
  * 取ってこられるモデルの一覧。
  *
- * llama-server は自前で用意できるようになったが、**動かす中身が無かった**。
- * 「GGUF を手で落として置いてください」では、llama.cpp の道は
- * 実質「詳しい人向け」のままになる。
+ * **この表は必ず古くなる。** 実際、最初に書いたときは
+ * 私（書いた側）が知っている名前をそのまま並べた結果、
+ * 世代がまるごと1つ古いものが並んだ。
+ * だから、ここは「入口」であって「檻」ではないという作りにしてある。
  *
- * ここに書くのは「どこの、どの量子化を」までで、
- * **ファイル名は書かない**。配布側の名前は変わるし、
- * 分割されていることもある。決め打ちにすると静かに壊れるので、
+ *   ・一覧に無い名前も、そのまま渡せる（Ollama の名前、HF の置き場名）
+ *   ・つまり、この表が古くなっても、新しいものは使える
+ *   ・表は「最初の一歩をどこに置くか」だけを決める
+ *
+ * ここに書くのは「どこの、どの量子化を」までで、**ファイル名は書かない**。
+ * 配布側の名前は変わるし、分割されていることもある。
  * 名前は取ってくるときに一覧から選ぶ（model-install.ts）。
+ *
+ * 確認日: 2026-08-31（ollama.com/library と huggingface.co を検索で確認）。
+ * **次に触るときは、まず現行かどうかを調べること。**
+ * 一度目は「知っている名前」を書いて1世代古いものを並べ、
+ * 二度目は「知っている名前で検索して」確認した気になり、また古いままだった。
+ * 探すのではなく、確かめに行ってしまうと、持っている思い込みが強化されるだけになる。
  */
 
 export interface CatalogEntry {
@@ -19,13 +29,11 @@ export interface CatalogEntry {
   quant: string;
   /**
    * Ollama での名前。
-   * 同じモデルでも、配布の形が違うので名前が別になる。
-   * どちらの道でも同じ id で頼めるように、ここで対応を持つ。
+   * 同じモデルでも配布の形が違うので、名前が別になる。
    */
   ollama: string;
   /** おおよその大きさ。取る前に人へ伝えるため。 */
   approxGB: number;
-  /** どういうときに使うか */
   note: string;
   license: string;
 }
@@ -33,38 +41,40 @@ export interface CatalogEntry {
 /**
  * 最初の一つ。
  *
- * 小さいこと（すぐ落ちてくる）と、8GB VRAM でも余裕で載ることを優先している。
- * 賢さでは選んでいない。**まず動くところまで行けること**が目的で、
- * 賢いモデルはそのあと各自で足せばよい。
+ * 小さいこと（すぐ落ちてくる）を優先している。賢さでは選んでいない。
+ * **まず動くところまで行けること**が目的で、良いモデルはそのあと各自で足す。
  */
-export const STARTER_ID = 'qwen2.5-coder-1.5b';
+export const STARTER_ID = 'qwen3.5-4b';
 
 export const AVAILABLE_MODELS: CatalogEntry[] = [
   {
     id: STARTER_ID,
-    repo: 'Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF',
+    repo: 'unsloth/Qwen3.5-4B-GGUF',
     quant: 'q4_k_m',
-    ollama: 'qwen2.5-coder:1.5b',
-    approxGB: 1.1,
-    note: 'まず動かすための最小構成。軽い書き換えや読み取りなら通る。',
+    ollama: 'qwen3.5:4b',
+    approxGB: 2.5,
+    note: 'まず動かすための最小構成。軽い読み書きなら通る。',
     license: 'Apache-2.0',
   },
   {
-    id: 'qwen2.5-coder-7b',
-    repo: 'Qwen/Qwen2.5-Coder-7B-Instruct-GGUF',
+    id: 'qwen3.5-9b',
+    repo: 'unsloth/Qwen3.5-9B-GGUF',
     quant: 'q4_k_m',
-    ollama: 'qwen2.5-coder:7b',
-    approxGB: 4.7,
-    note: '実用の下限。8GB VRAM に載る。',
+    ollama: 'qwen3.5:9b',
+    approxGB: 6.6,
+    note: '8GB VRAM にそのまま載る。日常の作業はこれで足りる。',
     license: 'Apache-2.0',
   },
   {
-    id: 'qwen2.5-coder-14b',
-    repo: 'Qwen/Qwen2.5-Coder-14B-Instruct-GGUF',
+    // 総35B・活性3B の MoE。VRAM には載りきらないが、
+    // 1トークンあたり 3B しか使わないので、RAM へ逃がしても実用速度が出る。
+    // この道具の実行可能性プランナが、いちばん効く形。
+    id: 'qwen3.6-coding-35b',
+    repo: 'unsloth/Qwen3.6-35B-A3B-GGUF',
     quant: 'q4_k_m',
-    ollama: 'qwen2.5-coder:14b',
-    approxGB: 9.0,
-    note: '8GB VRAM には載りきらない。一部をCPUに逃がして動かす。',
+    ollama: 'qwen3.6:35b-a3b-coding-nvfp4',
+    approxGB: 22,
+    note: 'コード向けの本命。8GB VRAM + 32GB RAM なら、CPUへ逃がして動かせる。',
     license: 'Apache-2.0',
   },
 ];
@@ -76,7 +86,6 @@ export function lookupCatalog(id: string): CatalogEntry | undefined {
 /**
  * 人に見せる一覧。
  * 使っている道によって、実際に取ってくるものの名前が違う。
- * 出しておかないと、あとで一覧に出てこない名前が並んで混乱する。
  */
 export function formatCatalog(runtimeId: 'llamacpp' | 'ollama' = 'llamacpp'): string {
   const lines = ['取ってこられるモデル', ''];
@@ -86,5 +95,10 @@ export function formatCatalog(runtimeId: 'llamacpp' | 'ollama' = 'llamacpp'): st
     lines.push(`  ${' '.repeat(22)} ${m.note}`);
     lines.push(`  ${' '.repeat(22)} 実体: ${runtimeId === 'llamacpp' ? `${m.repo}（${m.quant}）` : m.ollama}`);
   }
+  lines.push('');
+  lines.push('  この一覧は古くなります。新しいものは名前を直接渡してください。');
+  lines.push(runtimeId === 'llamacpp'
+    ? '    npm run models -- --get Qwen/Qwen3-8B-GGUF     （置き場の名前をそのまま）'
+    : '    npm run models -- --get qwen3-coder:30b        （Ollama の名前をそのまま）');
   return lines.join('\n');
 }

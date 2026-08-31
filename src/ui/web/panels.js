@@ -303,11 +303,18 @@ export const PANELS = {
       const req = e.request;
       const what = req.kind === 'write' ? `${req.created ? '新規作成' : '変更'}: ${req.path}`
         : req.kind === 'command' ? `コマンド実行: ${req.command}`
+        : req.kind === 'deliberation' ? '協議: 重大な変更の申し出'
         : `外部への問い合わせ: ${req.url}`;
       const box = el('div', 'ask');
       box.append(el('div', 'ask-head', what));
       if (req.kind === 'write' && req.diff) box.append(renderDiff(req.diff));
       if (req.kind === 'network') box.append(el('div', 'dim', '取得のみ。資格情報は送りません。'));
+      // 協議は中身を読ませるためのもの。畳まずに全部出す。
+      if (req.kind === 'deliberation') {
+        for (const line of String(req.summary || '').split('\n')) {
+          box.append(el('div', 'dim', line));
+        }
+      }
 
       const yes = el('button', 'primary', '許可');
       const no = el('button', '', '拒否');
@@ -496,17 +503,100 @@ export const PANELS = {
     });
   },
 
+  /**
+   * モデル。実測を眺めるだけでなく、**ここで用意も乗り換えもできる**ようにする。
+   *
+   * 端末でしかできない状態だと、画面から使う人はモデルを持てない。
+   * ローカルで動かす以上、古いものを使い続ける理由が無いので、
+   * 「新しいのが出ています」も、押せば取ってこられる形で出す。
+   */
   models(body, ctx) {
-    ctx.onState((s) => {
-      body.replaceChildren();
-      if (!s.models || s.models.length === 0) return body.append(empty('まだ実測がありません。'));
-      body.append(rows(s.models, (m) => {
+    const status = el('div', 'stack');
+    const list = el('div', 'stack');
+    const store = el('div', 'stack');
+    body.append(status, list, store);
+
+    const draw = async () => {
+      let data;
+      try {
+        data = await (await fetch('/api/models')).json();
+      } catch {
+        status.replaceChildren(el('div', 'warn', 'モデルの状態を取れませんでした。'));
+        return;
+      }
+
+      status.replaceChildren();
+      const head = el('div', 'row');
+      head.append(el('span', 'key', '土台'), el('span', 'num mono', data.runtime ?? '不明'));
+      status.append(head);
+      if (data.runtime === 'llamacpp') {
         const row = el('div', 'row');
-        const tps = typeof m.tokensPerSecond === 'number' ? `${m.tokensPerSecond.toFixed(1)} tok/s` : '';
-        row.append(el('span', 'key mono', m.modelId ?? m.id ?? ''), el('span', 'num dim', tps));
-        return row;
-      }, 2));
-    });
+        row.append(
+          el('span', 'key', 'llama-server'),
+          el('span', `num mono ${data.llamaServer ? 'dim' : 'warn'}`,
+            data.llamaServer ? '用意済み' : '未用意（npm run llama）'),
+        );
+        status.append(row);
+      }
+
+      // 手元にあるもの
+      list.replaceChildren(el('div', 'dim', '手元のモデル'));
+      if (!data.installed || data.installed.length === 0) {
+        list.append(empty('まだありません。下から取ってこられます。'));
+      } else {
+        for (const m of data.installed) {
+          const row = el('div', 'row');
+          const size = m.sizeBytes ? `${(m.sizeBytes / 1024 ** 3).toFixed(1)}GB` : '';
+          row.append(el('span', 'key mono', m.ref), el('span', 'num dim', size));
+          list.append(row);
+        }
+      }
+
+      // 取ってこられるもの
+      store.replaceChildren(el('div', 'dim', '取ってくる'));
+      for (const m of data.catalog ?? []) {
+        const row = el('div', 'row');
+        const get = el('button', 'ghost', `${m.id}（約${m.approxGB}GB）`);
+        get.title = `${m.note}\n${m.ref}`;
+        get.onclick = async () => {
+          get.disabled = true;
+          get.textContent = `${m.id} を取得中…`;
+          const res = await fetch('/api/models/get', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id: m.id }),
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || '取ってこられませんでした');
+            get.disabled = false;
+            get.textContent = `${m.id}（約${m.approxGB}GB）`;
+          }
+        };
+        row.append(get);
+        store.append(row);
+      }
+
+      // 新しい世代が出ていないか
+      const check = el('button', 'ghost', '新しい世代を確認する');
+      check.onclick = async () => {
+        check.disabled = true;
+        check.textContent = '確認中…';
+        try {
+          const r = await (await fetch('/api/models/newer')).json();
+          const found = r.findings ?? [];
+          check.textContent = found.length === 0
+            ? '新しい世代はありません'
+            : found.map((f) => `${f.current} → ${f.found.join(', ')}`).join(' / ');
+        } catch {
+          check.textContent = '配布元に訊けませんでした';
+        }
+        check.disabled = false;
+      };
+      store.append(check);
+    };
+
+    void draw();
+    ctx.onState(() => { void draw(); });
   },
 
   log(body, ctx) {

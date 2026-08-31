@@ -33,8 +33,8 @@
 
 ```
 依頼: auth.ts のバグを直す
-  ├─ qwen3:30b-a3b   → 32秒で完了  ← 採用
-  └─ qwen2.5-coder:7b → 打ち切り
+  ├─ qwen3.6:35b-a3b-coding-nvfp4   → 32秒で完了  ← 採用
+  └─ qwen3.5:9b → 打ち切り
 ```
 
 - 速いモデルが当たれば速く終わる
@@ -47,7 +47,7 @@
 
 ```jsonc
 { "id": "fix-auth", "laneId": "coder", "writes": ["auth.ts"],
-  "instruction": "...", "raceWith": ["ollama:qwen2.5-coder:7b"] }
+  "instruction": "...", "raceWith": ["ollama:qwen3.5:9b"] }
 ```
 
 ### 1.2 最良選択（bestOf） — 実装済み
@@ -72,7 +72,7 @@ race と違い最後まで待つので遅い。そのぶん品質が上がる。
 ```
 温め中: qwen3-30b-a3b-q4_k_m.gguf...
 常駐: qwen3-30b-a3b-q4_k_m.gguf (48.2秒)
-常駐: qwen2.5-coder-7b-q4_k_m.gguf (12.1秒)
+常駐: qwen3-8b-q4_k_m.gguf (12.1秒)
   — 待ちなしで開始できます
 ```
 

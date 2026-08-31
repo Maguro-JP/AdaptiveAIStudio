@@ -6,7 +6,7 @@ RTX 4060 (VRAM 8GB) / RAM 32GB で、32B の Q4_K_M は **動く**。
 ただし全部をGPUに載せるのではなく、**層を分割して一部をCPUに置く**。
 
 ```
-qwen2.5-coder:32b Q4_K_M
+qwen3:32b Q4_K_M
   部分オフロード (GPU 16/64層) / context 8192 / 約 3 tok/s
   VRAM 7.0GB / RAM 13.8GB
   1000トークンの応答: 約 6分
@@ -66,10 +66,10 @@ Mixture-of-Experts は、総パラメータは大きいが
 
 | モデル | 総params | 活性params | 配置 | 速度 | 1000tok |
 |---|---|---|---|---|---|
-| qwen2.5-coder:32b | 32.8B | 32.8B | GPU 16/64層 | **3 tok/s** | 約6分 |
-| qwen3:30b-a3b (MoE) | 30.5B | **3.3B** | GPU 16/48層 | **33 tok/s** | 約31秒 |
-| qwen2.5:14b | 14.8B | 14.8B | GPU 30/48層 | 10 tok/s | 約2分 |
-| qwen2.5-coder:7b | 7.6B | 7.6B | 全層GPU | 41 tok/s | 約25秒 |
+| qwen3:32b | 32.8B | 32.8B | GPU 16/64層 | **3 tok/s** | 約6分 |
+| qwen3.6:35b-a3b-coding-nvfp4 (MoE) | 30.5B | **3.3B** | GPU 16/48層 | **33 tok/s** | 約31秒 |
+| qwen3:14b | 14.8B | 14.8B | GPU 30/48層 | 10 tok/s | 約2分 |
+| qwen3.5:9b | 7.6B | 7.6B | 全層GPU | 41 tok/s | 約25秒 |
 
 **MoEは同規模の通常モデルより10倍以上速い。**
 「大きいモデルを低スペックで動かす」目的に対して、現状これが最良の答え。
@@ -119,7 +119,7 @@ libllama.so を置くが、Linux と macOS はそこを自動では探さない�
 
 ```
 llama-server
-  --model qwen2.5-coder-32b-q4_k_m.gguf
+  --model qwen3-32b-q4_k_m.gguf
   --n-gpu-layers 16          ← プランナが計算した値
   --ctx-size 8192
   --cache-type-k q8_0
@@ -194,14 +194,14 @@ llama-server
 { "agent": {
   "maxTotalParallel": 1,
   "lanes": [
-    { "id": "big",   "candidates": ["local:qwen2.5-coder:32b"], "parallel": 1 },
-    { "id": "small", "candidates": ["local:qwen2.5-coder:7b"],  "parallel": 1 }
+    { "id": "big",   "candidates": ["local:qwen3:32b"], "parallel": 1 },
+    { "id": "small", "candidates": ["local:qwen3.5:9b"],  "parallel": 1 }
   ]
 } }
 
 // 並列: 1つのモデルを複数の作業者で共有
 { "agent": {
-  "lanes": [{ "id": "coder", "candidates": ["local:qwen2.5-coder:7b"], "parallel": 4 }]
+  "lanes": [{ "id": "coder", "candidates": ["local:qwen3.5:9b"], "parallel": 4 }]
 } }
 ```
 

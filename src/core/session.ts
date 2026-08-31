@@ -18,10 +18,13 @@ import { buildRegistry } from './build.ts';
 import { ChatOrchestrator } from './orchestrator.ts';
 import { setupAutopilot, resolveCandidates, stateDir, type AutopilotBundle } from './autopilot-setup.ts';
 import { buildHarness } from './harness-setup.ts';
+import { Forum } from '../harness/deliberation.ts';
 import { Agent } from '../agent/loop.ts';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool } from '../agent/tools/fs.ts';
 import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
+import { createDeliberateTool } from '../agent/tools/deliberate.ts';
+import { buildInspector } from './inspector-setup.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall } from '../memory/memory.ts';
 import { ProposalQueue, type Proposal } from '../agent/proposals.ts';
@@ -36,6 +39,7 @@ import type { Tool, ApprovalRequest } from '../agent/tools/types.ts';
 import { toolsFor } from '../roles/registry.ts';
 import { buildSystemPrompt } from '../roles/role.ts';
 import { decompose, toWorkItems, type WorkPlan } from '../agent/pm.ts';
+import { findNewerOllama, describeNewer } from '../runtime/model-updates.ts';
 import { Team } from '../agent/team.ts';
 import { accept, changedBetween, type AcceptanceReport, type MemberReport } from '../agent/acceptance.ts';
 import { runVerification, verifyLoop, type VerifyEvent, type VerifyResult } from '../agent/verify.ts';
@@ -145,6 +149,8 @@ export class Session {
   readonly #prefetch: Prefetcher;
   /** ハーネスの規則へ「いま何を頼まれているか」を渡すための箱。 */
   readonly #holder: { instruction: string };
+  /** 協議の場。依頼ごとに開き直す。 */
+  readonly #forum: Forum;
   readonly #harness: Harness;
   readonly #history: ProviderMessage[] = [];
   #running?: AbortController;
@@ -163,6 +169,7 @@ export class Session {
     proposals: ProposalQueue; idle: IdleScheduler; duties: DutyRoster;
     pilot: AutopilotBundle; prefetch: Prefetcher; opts: SessionOptions;
     holder: { instruction: string };
+    forum: Forum;
     harness: Harness;
     toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[] };
   }) {
@@ -185,6 +192,7 @@ export class Session {
     this.#prefetch = init.prefetch;
     this.#opts = init.opts;
     this.#holder = init.holder;
+    this.#forum = init.forum;
     this.#harness = init.harness;
   }
 
@@ -202,20 +210,30 @@ export class Session {
 
     // ハーネス。守らせるのではなく、実行させないことで守る。
     const holder = { instruction: '' };
+    // 協議の場。依頼ごとに開き直す（前の依頼で通した話を持ち越さない）。
+    const forum = new Forum();
     const harness = await buildHarness(config, (d) => {
       if (d.outcome === 'denied') log('error', `⛔ ${d.rule}: ${d.reason ?? ''}`);
       else if (d.outcome === 'warned') log('warn', `⚠ ${d.rule}: ${d.reason ?? ''}`);
-    });
+    }, forum);
 
     // 権限は「配らない」ことで守る。禁じる文言ではなく、手段の有無で決める。
     const netCfg = config.network ?? {};
     const wrap = (tools: Tool[]) => harness.wrapAll(tools, () => holder.instruction);
     const toolPool = {
       read: wrap([readFileTool, listFilesTool, searchTextTool]),
-      write: wrap([writeFileTool]),
+      write: wrap([writeFileTool, createDeliberateTool(forum)]),
       execute: wrap([createRunCommandTool({ allowed: agentCfg.allowedCommands })]),
       network: netCfg.enabled === false ? [] : wrap([createFetchUrlTool({
         allowedHosts: netCfg.allowedHosts, maxBytes: netCfg.maxBytes, timeoutMs: netCfg.timeoutMs,
+        // 関所の二段目。使えるモデルが無ければ置かれず、一段目だけで動く。
+        inspector: buildInspector(
+          orchestrator,
+          // 明示が無ければ候補を逆順にする。候補は強い順に並んでいるので、
+          // そのまま渡すと一番重いモデルが関所に立つ。ここは速さが要る。
+          netCfg.inspector?.candidates ?? [...candidates].reverse(),
+          netCfg.inspector ?? {},
+        ),
       })]),
     };
 
@@ -250,7 +268,7 @@ export class Session {
     const session = new Session({
       config, root, candidates, memory,
       roles: new RoleRegistry(config.roles ?? []),
-      orchestrator, pilot, prefetch, opts, holder, toolPool, harness,
+      orchestrator, pilot, prefetch, opts, holder, forum, toolPool, harness,
       proposals, idle, duties,
     });
     return session;
@@ -299,6 +317,8 @@ export class Session {
     const ac = new AbortController();
     this.#running = ac;
     this.#holder.instruction = request;
+    // 依頼が変われば協議もやり直し。前回通した話で今回の変更を通させない。
+    this.#forum.clear();
 
     try {
       const root = this.root;
@@ -498,6 +518,30 @@ export class Session {
       context = `${context}\n\n${describeDependencies(deps)}`;
     }
 
+    // UPKEEP は道具の側の話。BRIEFING（利用者の仕事の話）とは持ち場が違う。
+    // 混ぜると、利用者にとって必要な報告が道具の都合に押し出される。
+    if (mode.id === 'upkeep') {
+      // 人が思い出したときだけ確かめる作りでは、結局は古いまま使い続ける。
+      // 機械が定期的に見に行き、出ていたら提案として上げる。
+      try {
+        // 「provider:model」から model 側だけを取る。model にも : が入る。
+        const using = this.candidates
+          .filter((c) => c.startsWith('ollama:'))
+          .map((c) => c.slice('ollama:'.length));
+        const newer = using.length > 0 ? await findNewerOllama({ installed: using }) : [];
+        context = [
+          `いま使っているモデル: ${using.join(', ') || '(ローカルの指定なし)'}`,
+          '',
+          describeNewer(newer),
+        ].join('\n');
+      } catch (e) {
+        // 配布元へ行けないのは、この思考を止める理由にはならない。
+        // ただし「無かった」と混同させない。行けなかったと書く。
+        context = `配布元に訊けませんでした（${e instanceof Error ? e.message : String(e)}）。`
+          + '新しいものが無いのか、繋がらなかっただけなのかは分かりません。';
+      }
+    }
+
     // RECON だけは手がかりを機械で探してから渡す。
     // 事実の収集は機械の方が速く、確実で、無料。
     if (mode.id === 'recon') {
@@ -666,6 +710,7 @@ export class Session {
     this.#running = ac;
     this.#instruction = instruction;
     this.#holder.instruction = instruction;
+    this.#forum.clear();
 
     const verifyCfg = this.config.agent?.verify ?? {};
     const harnessCfg = this.config.harness ?? {};

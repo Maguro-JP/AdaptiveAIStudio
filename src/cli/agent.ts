@@ -68,7 +68,8 @@ async function main(): Promise<void> {
   rl.onSigint(() => { if (generating) generating.abort(); else rl.close(); });
 
   const approve = async (req: ApprovalRequest): Promise<boolean> => {
-    if (approval === 'auto') return true;
+    // 協議だけは自動承認から外す。人が読まない協議は、記録しか残らない。
+    if (approval === 'auto' && req.kind !== 'deliberation') return true;
     if (approval === 'autoEdit' && req.kind === 'write') return true;
 
     if (req.kind === 'write') {
@@ -76,6 +77,10 @@ async function main(): Promise<void> {
       console.log(req.diff ? renderDiff(req.diff) : c.dim('  (差分なし)'));
     } else if (req.kind === 'command') {
       console.log('\n' + c.cyan(`  コマンド実行: ${req.command}`));
+    } else if (req.kind === 'deliberation') {
+      // 重大な変更。ここは自動承認の対象にせず、必ず読ませる。
+      console.log('\n' + c.cyan('  協議: 重大な変更の申し出'));
+      for (const line of req.summary.split('\n')) console.log(c.dim(`  ${line}`));
     } else {
       console.log('\n' + c.cyan(`  外部への問い合わせ: ${req.url}`));
       console.log(c.dim('  取得のみ。資格情報は送りません。'));

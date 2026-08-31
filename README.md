@@ -33,7 +33,7 @@ npm run doctor
  未了  モデル          Ollama から一覧を取れません
        → Ollama を入れて起動してください。
          https://ollama.com からインストール → `ollama serve`
-         そのあと `ollama pull qwen3:30b-a3b`（8GB VRAM ならこれが最適解）
+         そのあと `npm run models -- --get`
 ```
 
 **足りないものには、次に打つ一手が必ず付きます。** 駄目出しで終わらせません。
@@ -84,7 +84,7 @@ npm run ui
 
 ```
 ollama serve
-ollama pull qwen3:30b-a3b
+npm run models -- --get qwen3.6:35b-a3b-coding-nvfp4
 ```
 
 **B. llama.cpp** — Ollama に依らない。GGUF を自分で置く。
@@ -101,8 +101,22 @@ npm run llama
 モデルも取ってこられます。**A（Ollama）でも B（llama.cpp）でも同じ言い方**です。
 
 ```
-npm run models -- --get          # まず動く軽いもの（約1.1GB）
+npm run models -- --get          # まず動く軽いもの（qwen3.5:4b・約2.5GB）
 npm run models -- --available    # 取ってこられるものの一覧
+```
+
+**一覧に無い名前も、そのまま渡せます。**
+一覧は必ず古くなるので、載っているものしか取れない作りにはしていません。
+
+新しい世代が出ていないかは、配布元に訊けます。
+
+```
+npm run models -- --new
+```
+
+```
+npm run models -- --get qwen3.6:35b-a3b-coding-nvfp4        # Ollama の名前
+npm run models -- --get Qwen/Qwen3-8B-GGUF     # Hugging Face の置き場名
 ```
 
 - **A（Ollama）** — Ollama に頼みます。一覧に無いものは名前を直接渡せます（`--get gemma3:4b`）
@@ -167,13 +181,13 @@ Claudeが使えるときはClaudeを使い、制限・障害時にLocalLLMへ切
 
 ```
 ollama serve
-ollama pull qwen3:30b-a3b
+npm run models -- --get qwen3.6:35b-a3b-coding-nvfp4
 ```
 
 **7B を既定にしない。** ローカルにはトークン単価が無いので、
 節約のために弱いモデルを使う理由がない。
-RTX 4060 (8GB) では MoE の `qwen3:30b-a3b` が最適解
-（30B級の質を約33 tok/s で出せる）。詳細は
+RTX 4060 (8GB) では MoE の `qwen3.6:35b-a3b-coding-nvfp4` が最適解
+（総30B・活性3.3B なので、VRAM に載りきらなくても実用速度が出る）。詳細は
 [モデル運用](docs/MODEL-EFFICIENCY.md) と [32B級を動かすには](docs/RUNNING-LARGE-MODELS.md)。
 
 **Claude (任意):**
@@ -191,7 +205,7 @@ set ANTHROPIC_API_KEY=sk-ant-...
 
 ```
 環境: NVIDIA GeForce RTX 4060 8GB / RAM 32GB
-担当モデル: ollama:qwen3:30b-a3b
+担当モデル: ollama:qwen3.6:35b-a3b-coding-nvfp4
   起動時の自動選択 — 33 tok/s で 36秒 / 成功率 65%(事前値) / 1件あたり約72秒
 ```
 
@@ -208,7 +222,7 @@ set ANTHROPIC_API_KEY=sk-ant-...
 cp aas.config.example.json aas.config.json      # Windows なら copy
 ```
 
-省略した場合は `ollama:qwen2.5-coder:7b` を既定として起動する。
+省略した場合は `ollama:qwen3.6:35b-a3b-coding-nvfp4` を既定として起動する。
 `candidates` は先頭から順に試され、利用制限や障害で使えなければ次へ自動で切り替わる。
 
 ### 起動する
@@ -266,7 +280,7 @@ npm run team -- tasks.json
   // 同じ作業を複数モデルへ同時に投げ、最初に完了したものを採用する。
   // ローカルは計算が無料なので、遊ばせるより重ねて投げた方が速い。
   { "id": "fix", "laneId": "coder", "writes": ["fix.ts"], "instruction": "...",
-    "raceWith": ["ollama:qwen2.5-coder:7b"] }
+    "raceWith": ["ollama:qwen3.5:9b"] }
 ]
 ```
 
@@ -275,8 +289,8 @@ npm run team -- tasks.json
 
 ```jsonc
 { "agent": { "lanes": [
-  { "id": "coder", "candidates": ["ollama:qwen2.5-coder:7b"], "parallel": 3 },
-  { "id": "cpu",   "candidates": ["ollama:qwen2.5:3b"],       "parallel": 2 }
+  { "id": "coder", "candidates": ["ollama:qwen3.5:9b"], "parallel": 3 },
+  { "id": "cpu",   "candidates": ["ollama:qwen3.5:4b"],       "parallel": 2 }
 ] } }
 ```
 
@@ -287,7 +301,7 @@ npm run models
 ```
 
 ```
-qwen2.5-coder-32b-q4_k_m.gguf (19.8GB)
+qwen3-32b-q4_k_m.gguf (19.8GB)
   部分オフロード (GPU 16/64層) / context 8192 / 約 3 tok/s
   VRAM 7.0GB / RAM 13.8GB
   1000トークンの応答: 約 6分
@@ -303,7 +317,7 @@ npm run chat
 ```
 > このコードのバグを指摘して
 ローカルモデルが応答しました。
-  — ollama:qwen2.5-coder:7b / 3.2s
+  — ollama:qwen3.5:9b / 3.2s
 ```
 
 応答の下に必ず「実際に答えたモデル」が出る。
@@ -350,6 +364,40 @@ npm run chat
 | `read-before-write` | 既存ファイルを読まずに全文上書き |
 | `no-repeated-writes` | 同一内容の再書き込み |
 | `blast-radius` | 一度の依頼で上限を超える書き換え |
+| `requires-deliberation` | 守りの仕掛けそのものへの変更、広がりすぎた書き換え（協議を通さない限り） |
+
+#### 検問所（出入りの検査）
+
+外部との出入りは、行き先の照合だけでなく**中身**を検める。
+
+| 方向 | 止めるもの |
+|---|---|
+| 持ち込み | 指示の上書き、役割の乗っ取り、内部情報の要求（＋見えない文字・道具の呼び出しは記録） |
+| 持ち出し | 秘密鍵、APIキー・トークン、資格情報を含む設定（＋手元の絶対パスは記録） |
+
+判定は当てはめで機械的に行う。「怪しいものは報告してください」とモデルに頼む形にすると、
+頼まれた側が見落とした時点で素通りするため。止めた場合、中身はモデルに渡さない。
+
+**二段目に検査官（`GATEKEEPER` / 関所担当）が立つ。** 持ち場が関所しかない役で、
+権限は空（読む・書く・外に出るのいずれもできない）。渡されるのは荷物の中身だけで、
+できるのは「通す」か「止める: 理由」を一行返すことだけ。会話も持たない。
+
+見張りと当事者を同じ人にしてはいけない。作業を進めている本体には *やり遂げたい仕事* があるので、
+通した方が前に進む。この役は通しても何も進まないので、判断が厳しい側へ倒れる。
+
+検査官が落ちている・間に合わないときの扱いは方向で分ける。
+持ち込みは通して記録に残し（二段目が落ちただけで一段目まで止めない）、
+**持ち出しは止める**（一度出たものは戻せない）。
+
+すり抜けは前提。止めた記録と通した記録の両方を残す。
+
+#### 協議（重大な変更）
+
+守りの仕掛けそのもの（`src/harness/**`、`harness-setup`、`paths`、`network`）への変更と、
+広範囲の書き換えは、`deliberate` で **何を変えるか / なぜ / 何に影響するか / どう戻すか / 対象**
+を先に出さない限り実行できない。禁止ではなく、判断を言葉として残させるための関所。
+
+協議は `approval: "auto"` でも自動承認しない。人が読まない協議は記録しか残らないため。
 
 拒否は例外ではなく、**次にどうすればよいかを添えてモデルへ返す**。
 止めるのではなく誘導するため。

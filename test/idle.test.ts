@@ -5,7 +5,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { IdleScheduler, formatIdleStats, type IdleMode } from '../src/harness/idle.ts';
-import { BUILTIN_IDLE_MODES, recon, patrol, whatif } from '../src/harness/idle-modes.ts';
+import {
+  BUILTIN_IDLE_MODES, recon, patrol, whatif, MODE_ROLE, promptFor,
+} from '../src/harness/idle-modes.ts';
 
 const NOW = 1_000_000_000;
 const MINUTE = 60_000;
@@ -178,8 +180,10 @@ describe('間合い', () => {
   test('間隔を空けても、同じ変更については2回まで', async () => {
     const chosen = await idleFor(120);
     const codes = chosen.map((c) => c.codename);
-    // 予算を効かせない条件でも、2時間で5件（すべて10分以上あけて別の角度から）
-    assert.ok(chosen.length <= 5, `2時間で ${chosen.length}件: ${codes}`);
+    // 予算を効かせない条件での上限。モードを足せばここも増えるが、
+    // **間合い（10分）と変更由来の上限（2回）が効いていること**が要点で、
+    // 件数そのものは目安。実際には予算（既定12/時）が先に効く。
+    assert.ok(chosen.length <= 7, `2時間で ${chosen.length}件: ${codes}`);
     // 変更をきっかけにするもの（見回り・巡回検査・振り返り）は2回まで
     const byChange = codes.filter((c) => ['RECON', 'PATROL', 'RETROSPECT'].includes(c));
     assert.ok(byChange.length <= 2, `変更由来が ${byChange.length}件: ${codes}`);
@@ -228,5 +232,42 @@ describe('間合い', () => {
     const soon = await restarted.choose(ctx({ now: NOW + MINUTE, lastChangeAt: NOW + 30_000 }));
     assert.equal(soon.mode, undefined, '立ち上げ直すと喋り出してしまう');
     assert.match(soon.reason, /さきほど考えた/);
+  });
+});
+
+/**
+ * 整備（UPKEEP）と外部情報（BRIEFING）の持ち場。
+ *
+ * 道具の都合（新しいモデルが出た）を BRIEFING に混ぜると、
+ * 利用者にとって必要な報告が押し出される。分かれていることを固定する。
+ */
+describe('整備と外部情報の持ち場', () => {
+  test('別のモードとして存在する', () => {
+    const ids = BUILTIN_IDLE_MODES.map((m) => m.id);
+    assert.ok(ids.includes('upkeep'), '整備がいない');
+    assert.ok(ids.includes('briefing'), '外部情報がいない');
+  });
+
+  test('担当する役職が違う', () => {
+    assert.equal(MODE_ROLE.upkeep, 'quartermaster');
+    assert.equal(MODE_ROLE.briefing, 'envoy');
+  });
+
+  test('外部情報の依頼文に、モデルの話を混ぜない', () => {
+    const text = promptFor(BUILTIN_IDLE_MODES.find((m) => m.id === 'briefing')!, '');
+    assert.doesNotMatch(text, /モデル/, '道具の都合が利用者向けの報告に混ざっている');
+  });
+
+  test('整備の依頼文は、動くかどうかを必ず言わせる', () => {
+    const text = promptFor(BUILTIN_IDLE_MODES.find((m) => m.id === 'upkeep')!, '');
+    assert.match(text, /この機械で動くか/);
+    assert.match(text, /新しいことは、それだけでは勧める理由になりません/);
+  });
+
+  test('整備は時間で起きる。手元が変わっても外の世界は変わらない', () => {
+    const upkeep = BUILTIN_IDLE_MODES.find((m) => m.id === 'upkeep')!;
+    assert.equal(upkeep.triggeredBy, 'time');
+    // モデルは時間単位では出ない。頻繁に見に行っても無駄。
+    assert.ok(upkeep.cooldownMs >= 12 * 60 * MINUTE, '見に行きすぎる');
   });
 });

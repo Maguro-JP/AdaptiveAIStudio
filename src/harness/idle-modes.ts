@@ -126,8 +126,31 @@ export const agenda: IdleMode = {
   dutyOnly: true,
 };
 
+/**
+ * UPKEEP — 道具そのものの手入れ。
+ *
+ * BRIEFING と**分けてある**。あちらは利用者の仕事に関する外の情報で、
+ * こちらは道具の側の話（使っているモデルより良いものが出ていないか）。
+ * 混ぜると、利用者にとって必要な報告が道具の都合に押し出される。
+ *
+ * 間隔は長い。モデルは時間単位では出ないので、頻繁に見に行っても無駄。
+ */
+export const upkeep: IdleMode = {
+  id: 'upkeep',
+  codename: 'UPKEEP',
+  name: '整備',
+  purpose: 'いま使っているモデルや実行基盤より良いものが出ていないかを確かめる。',
+  triggeredBy: 'time',
+  // 半日に一度で足りる。手元が変わっても、外の世界は変わらない。
+  precondition: (ctx) => ctx.lastRunAt === undefined || ctx.now - ctx.lastRunAt > 12 * 60 * MINUTE,
+  cooldownMs: 12 * 60 * MINUTE,
+  cost: 2,
+  // 出番は少ないが、当たったときの効きは大きい（乗り換えは全体に効く）。
+  basePriority: 4,
+};
+
 export const BUILTIN_IDLE_MODES: IdleMode[] = [
-  patrol, recon, retrospect, forecast, briefing, whatif, digest, agenda,
+  patrol, recon, retrospect, forecast, briefing, whatif, digest, agenda, upkeep,
 ];
 
 /** モードごとの依頼文。誰に何を考えさせるかがここで決まる。 */
@@ -135,6 +158,7 @@ export const MODE_ROLE: Record<string, string> = {
   recon: 'scout',
   patrol: 'tester',
   briefing: 'envoy',
+  upkeep: 'quartermaster',
   retrospect: 'reviewer',
   forecast: 'planner',
   whatif: 'planner',
@@ -156,6 +180,11 @@ export function promptFor(mode: IdleMode, context: string): string {
     whatif: '今の作りとは別のやり方を1つ考え、利点と欠点を比べてください。',
     digest: '前回の確認以降に入った変更を通しで見て、見落としがあれば1つ挙げてください。',
     agenda: '未処理の提案と残作業を見て、次に何から手を付けるべきかを理由とともに1つ示してください。',
+    upkeep:
+      'いま使っているモデルより良いものが出ていれば、1つだけ報告してください。'
+      + '大きさと活性パラメータから、この機械で動くかどうかを必ず併せて述べてください。'
+      + '動かないなら勧めないでください。新しいことは、それだけでは勧める理由になりません。'
+      + '出ていなければ「問題なし」とだけ答えてください。',
   };
   return [
     `[${mode.codename}] ${mode.purpose}`,

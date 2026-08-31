@@ -16,6 +16,14 @@ import { join, dirname, extname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { checkUpdate, applyUpdate } from '../core/update.ts';
+import { findInstalled } from '../runtime/llama-install.ts';
+import { findNewerOllama } from '../runtime/model-updates.ts';
+import { AVAILABLE_MODELS, lookupCatalog } from '../runtime/model-catalog.ts';
+import { installModel } from '../runtime/model-install.ts';
+import { buildRuntime } from '../core/runtime-setup.ts';
+import { MachineCache } from '../runtime/machine.ts';
+import type { LocalRuntime } from '../runtime/local-runtime.ts';
+import { pullModel } from '../runtime/ollama-pull.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout } from './layout.ts';
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
 import { collectState } from './state.ts';
@@ -67,6 +75,8 @@ export class UiServer {
   #session?: Session;
   #idleTimer?: ReturnType<typeof setInterval>;
   #thinking = false;
+  /** モデルの土台。要るときに一度だけ組み立てる。 */
+  #runtime?: LocalRuntime;
   /** 承認待ちの返事先。画面が答えるまで、ここで待っている。 */
   readonly #pending = new Map<string, (ok: boolean) => void>();
   #seq = 0;
@@ -153,7 +163,8 @@ export class UiServer {
 
   #ask(req: ApprovalRequest): Promise<boolean> {
     const approval = this.#opts.config.agent?.approval ?? 'autoEdit';
-    if (approval === 'auto') return Promise.resolve(true);
+    // 協議は自動承認の対象にしない。重大な変更は必ず人の目を通す。
+    if (approval === 'auto' && req.kind !== 'deliberation') return Promise.resolve(true);
     if (approval === 'autoEdit' && req.kind === 'write') return Promise.resolve(true);
 
     const id = `a${++this.#seq}`;
@@ -264,6 +275,50 @@ export class UiServer {
 
     // 更新は「見てから押す」の2段。押した瞬間に取ってくると、
     // 何が入るのか分からないまま新しくなる。
+    // モデルの面倒。端末でしかできない状態だと、
+    // 画面から使う人はモデルを用意することも乗り換えることもできない。
+    if (path === '/api/models' && req.method === 'GET') {
+      const session = await this.session();
+      const runtime = await this.#localRuntime();
+      const [installed, llama] = await Promise.all([
+        runtime.list().catch(() => []),
+        findInstalled(),
+      ]);
+      return send(res, 200, {
+        runtime: runtime.id,
+        installed: installed.map((m) => ({ ref: m.ref, sizeBytes: m.sizeBytes })),
+        llamaServer: llama ?? null,
+        catalog: AVAILABLE_MODELS.map((m) => ({
+          id: m.id, note: m.note, approxGB: m.approxGB,
+          ref: runtime.id === 'llamacpp' ? m.repo : m.ollama,
+        })),
+      });
+    }
+
+    if (path === '/api/models/newer' && req.method === 'GET') {
+      const session = await this.session();
+      const runtime = await this.#localRuntime();
+      const installed = (await runtime.list().catch(() => [])).map((m) => m.ref);
+      if (installed.length === 0) return send(res, 200, { findings: [] });
+      try {
+        return send(res, 200, { findings: await findNewerOllama({ installed }) });
+      } catch (e) {
+        return send(res, 502, { error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+
+    if (path === '/api/models/get' && req.method === 'POST') {
+      const session = await this.session();
+      if (session.busy) return send(res, 409, { error: 'いま作業中です。終わってからにしてください' });
+      const body = await readBody(req) as { id?: string };
+      const id = String(body?.id ?? '');
+      if (!id) return send(res, 400, { error: '名前がありません' });
+
+      // 数GBかかるので、待たせずに始めて、進み具合は流し込む。
+      void this.#fetchModel(session, id);
+      return send(res, 202, { started: id });
+    }
+
     if (path === '/api/update' && req.method === 'GET') {
       return send(res, 200, await checkUpdate((await this.session()).root));
     }
@@ -374,6 +429,52 @@ export class UiServer {
       this.broadcast({ type: 'busy', busy: false });
       this.broadcast({ type: 'stateChanged' });
     }
+  }
+
+  /** モデルの土台。画面から用意や乗り換えをするのに要る。 */
+  async #localRuntime(): Promise<LocalRuntime> {
+    if (this.#runtime) return this.#runtime;
+    const machine = await new MachineCache(join(stateDir(), 'machine.json')).get();
+    this.#runtime = await buildRuntime(this.#opts.config, machine);
+    return this.#runtime;
+  }
+
+  /**
+   * モデルを取ってくる。数GBかかるので、待たせずに進み具合を流す。
+   */
+  async #fetchModel(session: Session, id: string): Promise<void> {
+    const runtime = await this.#localRuntime();
+    const entry = lookupCatalog(id);
+    const log = (text: string) => this.broadcast({ type: 'log', level: 'info', text });
+
+    try {
+      if (runtime.id === 'llamacpp') {
+        const modelsDir = this.#opts.config.runtime?.modelsDir
+          ?? join(stateDir(), '..', 'models');
+        await installModel({
+          entry: entry ?? {
+            id, repo: id, quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '',
+          },
+          modelsDir,
+          onProgress: log,
+        });
+      } else {
+        await pullModel({
+          baseUrl: this.#opts.config.providers.find(
+            (p) => p.kind === 'openai-compatible' && p.locality === 'local',
+          )?.baseUrl ?? 'http://localhost:11434/v1',
+          ref: entry?.ollama ?? id,
+          onProgress: log,
+        });
+      }
+      log(`用意できました: ${id}`);
+    } catch (e) {
+      this.broadcast({
+        type: 'log', level: 'error',
+        text: `取ってこられませんでした: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+    this.broadcast({ type: 'stateChanged' });
   }
 
   async #static(path: string, res: ServerResponse): Promise<void> {

@@ -22,7 +22,7 @@ const c = {
 
 const HELP = `
   /models        利用可能なモデルを一覧表示
-  /model <id>    使用モデルを固定 (例: /model ollama:qwen2.5-coder:7b)
+  /model <id>    使用モデルを固定 (例: /model ollama:qwen3-coder:30b)
   /auto          モデル固定を解除し、設定の候補順に戻す
   /health        各Providerの到達性を確認
   /new           会話履歴を破棄して新しい会話を開始

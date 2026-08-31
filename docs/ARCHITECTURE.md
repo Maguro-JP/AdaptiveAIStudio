@@ -181,7 +181,7 @@ AdaptiveAIStudio/
 
 ```ts
 // packages/core/model/ModelDescriptor.ts
-type ModelId = string;          // "anthropic:claude-opus-5" / "local:qwen2.5-coder-14b"
+type ModelId = string;          // "anthropic:claude-opus-5" / "local:qwen3-14b"
 type ProviderId = string;       // "anthropic" / "ollama"
 
 interface ModelDescriptor {
