@@ -36,6 +36,7 @@ import type { Tool, ApprovalRequest } from '../agent/tools/types.ts';
 import { toolsFor } from '../roles/registry.ts';
 import { buildSystemPrompt } from '../roles/role.ts';
 import { decompose, toWorkItems, type WorkPlan } from '../agent/pm.ts';
+import { findNewerOllama, describeNewer } from '../runtime/model-updates.ts';
 import { Team } from '../agent/team.ts';
 import { accept, changedBetween, type AcceptanceReport, type MemberReport } from '../agent/acceptance.ts';
 import { runVerification, verifyLoop, type VerifyEvent, type VerifyResult } from '../agent/verify.ts';
@@ -496,6 +497,24 @@ export class Session {
     if (mode.id === 'briefing') {
       const deps = await inspectDependencies(this.root);
       context = `${context}\n\n${describeDependencies(deps)}`;
+
+      // 新しいモデルが出ていないかも、外の情報として拾う。
+      // ローカルで動かす以上、古いものを使い続ける理由が無い。
+      // ただし**人が思い出したときだけ**確かめる作りでは、結局は古いまま使い続ける。
+      // 機械が定期的に見に行き、出ていたら提案として上げる。
+      try {
+        // 「provider:model」から model 側だけを取る。model にも : が入る。
+        const using = this.candidates
+          .filter((c) => c.startsWith('ollama:'))
+          .map((c) => c.slice('ollama:'.length));
+        if (using.length > 0) {
+          const newer = await findNewerOllama({ installed: using });
+          if (newer.length > 0) context = `${context}\n\n${describeNewer(newer)}`;
+        }
+      } catch {
+        // 配布元へ行けないのは、この思考を止める理由にはならない。
+        // 手元で分かることだけで続ける。
+      }
     }
 
     // RECON だけは手がかりを機械で探してから渡す。
