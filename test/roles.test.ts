@@ -192,11 +192,12 @@ describe('整備担当と情報担当の持ち場', () => {
     assert.notEqual(q.id, e.id);
   });
 
-  test('整備担当は外へ出ない（出口は情報担当ひとつ）', () => {
-    // 役職が増えるたびに出口が増える作りにすると、出入りが見えなくなる。
+  test('整備担当は外へ出られるが、書き込みは持たない', () => {
+    // 出口を一つに絞る作りはやめた（経由させるぶん遅く、情報も落ちるため）。
+    // 守るのは「外から来たものが、そのまま書き込みに化けないこと」。
     const q = new RoleRegistry(BUILTIN_ROLES).get('quartermaster')!;
-    assert.ok(!q.access.includes('network'), '出口が増えている');
-    assert.ok(!q.access.includes('write'), '整備担当が書き込める');
+    assert.ok(q.access.includes('network'), '配布元を自分で確かめられない');
+    assert.ok(!q.access.includes('write'), '外に出て書ける役職になっている');
   });
 
   test('整備担当は利用者のコードに立ち入らない', () => {

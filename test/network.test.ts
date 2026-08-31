@@ -147,11 +147,34 @@ describe('fetch_url', () => {
   });
 });
 
+/**
+ * 外への出口の配り方。
+ *
+ * 以前は「外へ出られるのは情報担当ただ一人」にしていた。
+ * これは**やめた**。出口を一つに絞ると、外の情報が要る役が増えるたびに
+ * 情報担当を経由させることになり、agent を一段挟むぶん遅く、
+ * 途中で情報も落ちる。**制限のために性能を落とすなら、その制限に意味は無い。**
+ *
+ * 守るべきものは「出口の数」ではなく、**外から来たものが
+ * そのまま書き込みに化けないこと**だった。そこだけを条件にする。
+ */
 describe('権限の配り方', () => {
-  test('外へ出られるのは情報担当だけ', async () => {
+  test('外から取ってきて、そのまま書ける役職を作らない', async () => {
+    const { BUILTIN_ROLES } = await import('../src/roles/builtin.ts');
+    // 外の内容には、こちらを操ろうとするものが混ざり得る。
+    // 読んだ役がそのまま書けると、それが直接ファイルに届く。
+    const both = BUILTIN_ROLES
+      .filter((r) => r.access.includes('network') && r.access.includes('write'))
+      .map((r) => r.id);
+    assert.deepEqual(both, [], `外に出て書ける役職がいる: ${both.join(', ')}`);
+  });
+
+  test('外へ出る役職は、出ると分かる形で持つ', async () => {
     const { BUILTIN_ROLES } = await import('../src/roles/builtin.ts');
     const outward = BUILTIN_ROLES.filter((r) => r.access.includes('network')).map((r) => r.id);
-    assert.deepEqual(outward, ['envoy']);
+    // 一人に絞る必要は無い。ただし誰が出るかは、役職表を見れば分かること。
+    assert.ok(outward.length >= 1, '外へ出られる役職がいない');
+    assert.ok(outward.includes('envoy'), '情報担当が外へ出られない');
   });
 
   test('network を持たない役職には fetch_url が渡らない', async () => {
@@ -161,7 +184,7 @@ describe('権限の配り方', () => {
     const pool = { read: [], write: [], execute: [], network: [net] };
     for (const role of BUILTIN_ROLES) {
       const names = toolsFor(role, pool).map((t) => t.schema.name);
-      assert.equal(names.includes('fetch_url'), role.id === 'envoy', `${role.id}`);
+      assert.equal(names.includes('fetch_url'), role.access.includes('network'), `${role.id}`);
     }
   });
 });
