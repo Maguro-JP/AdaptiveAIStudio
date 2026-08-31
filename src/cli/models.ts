@@ -17,6 +17,7 @@ import { homedir } from 'node:os';
 import { installModel } from '../runtime/model-install.ts';
 import { lookupCatalog, formatCatalog, STARTER_ID } from '../runtime/model-catalog.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
+import { findNewerOllama, describeNewer } from '../runtime/model-updates.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -49,6 +50,31 @@ console.log(c.dim(`環境: ${describeMachine(machine)}\n`));
 function localBaseUrl(): string {
   return config.providers.find((p) => p.kind === 'openai-compatible' && p.locality === 'local')?.baseUrl
     ?? 'http://localhost:11434/v1';
+}
+
+/**
+ * --new: 新しい世代が出ていないかを配布元へ訊く。
+ *
+ * ローカルで動かす以上、古くて性能の低いものを使い続ける理由が無い。
+ * ただし乗り換えの起点が「カタログを書き換える」だけだと、
+ * 書いた人が古くなった時点で止まる。だから配布元に訊く。
+ */
+if (process.argv.includes('--new')) {
+  const installed = (await runtime.list()).map((m) => m.ref);
+  if (installed.length === 0) {
+    console.log(c.yellow('  手元にモデルがありません。まず npm run models -- --get\n'));
+    process.exit(0);
+  }
+  console.log(c.dim(`  手元: ${installed.join(', ')}\n`));
+  console.log(c.dim('  配布元に訊いています...'));
+  try {
+    const found = await findNewerOllama({ installed });
+    console.log(`\n${describeNewer(found)}\n`);
+  } catch (e) {
+    console.error(c.yellow(`  訊けませんでした: ${e instanceof Error ? e.message : String(e)}\n`));
+    process.exit(1);
+  }
+  process.exit(0);
 }
 
 if (process.argv.includes('--get') || process.argv.includes('--available')) {

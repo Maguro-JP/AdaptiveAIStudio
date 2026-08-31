@@ -108,6 +108,12 @@ npm run models -- --available    # 取ってこられるものの一覧
 **一覧に無い名前も、そのまま渡せます。**
 一覧は必ず古くなるので、載っているものしか取れない作りにはしていません。
 
+新しい世代が出ていないかは、配布元に訊けます。
+
+```
+npm run models -- --new
+```
+
 ```
 npm run models -- --get qwen3.6:35b-a3b-coding-nvfp4        # Ollama の名前
 npm run models -- --get Qwen/Qwen3-8B-GGUF     # Hugging Face の置き場名
