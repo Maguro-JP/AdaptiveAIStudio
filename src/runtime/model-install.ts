@@ -9,9 +9,22 @@
  * 大きいものは分割されている。取ってくるときに一覧から選ぶ。
  */
 import { mkdir, rename, rm, stat, open } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readGguf } from './gguf.ts';
 import type { CatalogEntry } from './model-catalog.ts';
+
+/**
+ * GGUF の既定の置き場。
+ *
+ * **一箇所に置く。** 同じ既定値を三箇所に書いていたため、
+ * doctor は「設定されていれば見る」形になり、設定していない人
+ * （＝ほとんどの人）の既定の置き場を検査から外していた。
+ * 既定こそ検査されるべきなので、名前を付けて共有する。
+ */
+export function defaultModelsDir(): string {
+  return process.env.AAS_MODELS_DIR ?? join(homedir(), '.aas', 'models');
+}
 
 const HF_API = 'https://huggingface.co/api/models';
 const HF_FILES = 'https://huggingface.co';

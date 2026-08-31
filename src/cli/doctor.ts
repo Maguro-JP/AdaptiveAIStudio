@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { readdir } from 'node:fs/promises';
 import { formatChecks, summaryLine, type Check, type Level } from './doctor-view.ts';
 import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
+import { defaultModelsDir } from '../runtime/model-install.ts';
 import { resolve } from 'node:path';
 
 /** Windows と Unix でコマンドが違うものは、その環境のものを出す。 */
@@ -92,11 +93,11 @@ if (models.length > 0) {
     + '       "runtime": { "kind": "llamacpp", "modelsDir": "GGUF を置いた場所" }\n'
     + '     オフロードの計算は GGUF を直接読んで行います（docs/GGUF.md）。');
 } else {
-  add('モデル', 'bad', `${config.runtime?.modelsDir ?? '(modelsDir 未設定)'} に GGUF がありません`,
+  add('モデル', 'bad', `${config.runtime?.modelsDir ?? defaultModelsDir()} に GGUF がありません`,
     '`npm run models -- --get` で取ってきます（まず動く軽いものが入ります）。\n'
     + '一覧は `npm run models -- --available`。\n'
     + '手持ちがあるなら、同じ置き場に .gguf を入れるだけでも使えます。\n'
-    + `いまの置き場: ${config.runtime?.modelsDir ?? '未設定（既定は ~/.aas/models）'}`);
+    + `いまの置き場: ${config.runtime?.modelsDir ?? `${defaultModelsDir()}（既定）`}`);
 }
 
 /* ---------- llama-server ---------- */
@@ -158,7 +159,9 @@ for (const p of enabledProviders(config)) {
 const envIssues = await inspectEnvironment({
   stateDir: stateDir(),
   root: resolve(config.agent?.root ?? process.cwd()),
-  ...(config.runtime?.modelsDir ? { modelsDir: config.runtime.modelsDir } : {}),
+  // 未設定でも既定の置き場を渡す。設定した人だけが検査されるのでは逆で、
+  // 既定のまま使っている人こそ、全角のユーザー名で詰まる。
+  modelsDir: config.runtime?.modelsDir ?? defaultModelsDir(),
   hasGpu: machine.vramBytes > 0,
 });
 for (const issue of envIssues) {

@@ -8,10 +8,11 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { homedir } from 'node:os';
 import { writeFile, stat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { pickModelFile, installModel, findModel } from '../src/runtime/model-install.ts';
+import { pickModelFile, installModel, findModel, defaultModelsDir } from '../src/runtime/model-install.ts';
 import type { CatalogEntry } from '../src/runtime/model-catalog.ts';
 
 const ENTRY: CatalogEntry = {
@@ -156,5 +157,25 @@ describe('モデルの取得', () => {
     assert.ok(lines.some((l) => l.includes('選びました')), lines.join(' / '));
     assert.ok(lines.some((l) => l.includes('確かめます')), lines.join(' / '));
     assert.ok(lines.some((l) => l.includes('置きました')), lines.join(' / '));
+  });
+});
+
+describe('既定の置き場', () => {
+  test('利用者のホームの下に置く', () => {
+    // ここが効いてくるのは Windows で利用者名が全角のとき。
+    // ホーム配下である以上、既定のままだと置き場にも全角が入る。
+    // だから doctor は「設定されていれば見る」ではなく、**既定も**見る必要がある。
+    delete process.env.AAS_MODELS_DIR;
+    assert.ok(defaultModelsDir().startsWith(homedir()),
+      `ホームの下でない: ${defaultModelsDir()}`);
+  });
+
+  test('環境変数で逃がせる（全角を避けるための出口）', () => {
+    process.env.AAS_MODELS_DIR = join('C:', 'ai', 'models');
+    try {
+      assert.equal(defaultModelsDir(), join('C:', 'ai', 'models'));
+    } finally {
+      delete process.env.AAS_MODELS_DIR;
+    }
   });
 });

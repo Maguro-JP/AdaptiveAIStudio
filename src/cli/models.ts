@@ -13,8 +13,7 @@ import { join } from 'node:path';
 import { GB } from '../runtime/spec.ts';
 import { readGguf } from '../runtime/gguf.ts';
 import { toModelSpec, formatGguf } from '../runtime/gguf-spec.ts';
-import { homedir } from 'node:os';
-import { installModel } from '../runtime/model-install.ts';
+import { installModel, defaultModelsDir } from '../runtime/model-install.ts';
 import { lookupCatalog, formatCatalog, STARTER_ID } from '../runtime/model-catalog.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
 import { findNewerOllama, describeNewer } from '../runtime/model-updates.ts';
@@ -78,7 +77,7 @@ if (process.argv.includes('--new')) {
 }
 
 if (process.argv.includes('--get') || process.argv.includes('--available')) {
-  const modelsDir = config.runtime?.modelsDir ?? join(homedir(), '.aas', 'models');
+  const modelsDir = config.runtime?.modelsDir ?? defaultModelsDir();
 
   if (process.argv.includes('--available')) {
     console.log(formatCatalog(runtime.id === 'llamacpp' ? 'llamacpp' : 'ollama'));

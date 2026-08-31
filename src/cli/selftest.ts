@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { detectMachine, describeMachine } from '../runtime/machine.ts';
 import { findInstalled, defaultBinDir } from '../runtime/llama-install.ts';
+import { defaultModelsDir } from '../runtime/model-install.ts';
 import { pickAsset } from '../runtime/llama-release.ts';
 import { loadConfig } from '../config.ts';
 import { padTo, displayWidth } from './width.ts';
@@ -79,7 +80,7 @@ add('配布物の選択', choice !== undefined,
 
 /* ---------- モデル ---------- */
 const { config } = loadConfig();
-const modelsDir = config.runtime?.modelsDir ?? join(defaultBinDir(), '..', 'models');
+const modelsDir = config.runtime?.modelsDir ?? defaultModelsDir();
 try {
   const { readdir } = await import('node:fs/promises');
   const ggufs = (await readdir(modelsDir)).filter((f) => f.toLowerCase().endsWith('.gguf'));
