@@ -303,11 +303,18 @@ export const PANELS = {
       const req = e.request;
       const what = req.kind === 'write' ? `${req.created ? '新規作成' : '変更'}: ${req.path}`
         : req.kind === 'command' ? `コマンド実行: ${req.command}`
+        : req.kind === 'deliberation' ? '協議: 重大な変更の申し出'
         : `外部への問い合わせ: ${req.url}`;
       const box = el('div', 'ask');
       box.append(el('div', 'ask-head', what));
       if (req.kind === 'write' && req.diff) box.append(renderDiff(req.diff));
       if (req.kind === 'network') box.append(el('div', 'dim', '取得のみ。資格情報は送りません。'));
+      // 協議は中身を読ませるためのもの。畳まずに全部出す。
+      if (req.kind === 'deliberation') {
+        for (const line of String(req.summary || '').split('\n')) {
+          box.append(el('div', 'dim', line));
+        }
+      }
 
       const yes = el('button', 'primary', '許可');
       const no = el('button', '', '拒否');

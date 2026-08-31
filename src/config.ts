@@ -90,6 +90,8 @@ export interface HarnessConfig {
   protectedPaths?: string[];
   /** 1つの依頼で書き換えられるファイル数の上限 */
   maxFilesPerTask?: number;
+  /** これ以上のファイル数を書き換えるなら協議を通す。既定 8 */
+  wideChangeFiles?: number;
   /** 既存ファイルを読まずに上書きするのを禁じる。既定 true */
   readBeforeWrite?: boolean;
   /** 監査ログの出力先 */

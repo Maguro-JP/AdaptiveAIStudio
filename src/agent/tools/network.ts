@@ -1,21 +1,24 @@
 /**
- * 外へ出るための唯一の出口。
+ * 外への出入口。
  *
  * ここは主義に反するように見えるが、そうではない。
  * この場所の主役はローカルで動く思考であって、外部サービスではない。
  * 外に出るのは「手元をいくら読んでも分からないこと」を確かめるときだけだ。
  * 依存の最新版、既知の不具合、規格の変更 —— 手元には答えが無い。
  *
- * だから出口は一つに絞り、次の三つを守る。
+ * 守るのは扉の数ではなく、通る物。出口を一つに絞っても中身を見ていないなら
+ * 遅くなるだけで安全にはならないので、ここでは次の四つを守る。
  *
  *   1. 行き先を決め打ちにする（許可リスト。既定はごく少数）
  *   2. 取ってくるだけにする（GET のみ。資格情報は一切送らない）
- *   3. 外れても止まらない（繋がらなければ「行けなかった」と返して先へ進む）
+ *   3. **出入りする中身を検問所（harness/gate）に通す**
+ *   4. 外れても止まらない（繋がらなければ「行けなかった」と返して先へ進む）
  *
- * 3 が特に重要。外部が落ちていることで手元の作業が止まるなら、
+ * 4 が特に重要。外部が落ちていることで手元の作業が止まるなら、
  * それは外部に依存しているのと同じことになる。
  */
 import { type Tool, ok, fail, requireString } from './types.ts';
+import { inspectInbound, inspectOutbound, describeVerdict } from '../../harness/gate.ts';
 
 /**
  * 既定の行き先。
@@ -110,6 +113,11 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
         return fail((e as Error).message);
       }
 
+      // 持ち出し検査。行き先だけでなく、こちらから書いて渡す文字列も検める。
+      // URL の問い合わせ部分に合言葉を貼り付けて外へ出す、という事故はこれで止まる。
+      const outbound = inspectOutbound(`${target}\n${requireString(args, 'purpose') ?? ''}`);
+      if (!outbound.passed) return fail(describeVerdict(outbound, 'outbound'));
+
       // 外へ出ることは書き込みと同じ重さで扱う。黙って出ていかせない。
       const approved = await ctx.approve({ kind: 'network', url: target.toString() });
       if (!approved) return fail(`外部への問い合わせは許可されませんでした: ${target}`);
@@ -128,14 +136,26 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
         const body = await res.text();
         const type = res.headers.get('content-type') ?? '';
         const text = toText(body, type);
+
+        // 持ち込み検査。ここを通る前の文字列は、誰が書いたものか分からない。
+        // 止めた場合は中身を渡さない。「危ないので気をつけて読んでください」と
+        // 添えて渡す形にすると、渡した時点で読まれてしまう。
+        const inbound = inspectInbound(text);
+        if (!inbound.passed) {
+          return fail(`出典: ${target}\n${describeVerdict(inbound, 'inbound')}`);
+        }
+        const notes = inbound.findings.length > 0
+          ? `${describeVerdict(inbound, 'inbound')}\n\n`
+          : '';
+
         const clipped = text.length > maxBytes
           ? text.slice(0, maxBytes) + `\n…（以降 ${text.length - maxBytes} 文字は省略）`
           : text;
         if (!res.ok) {
           // 失敗も情報。握り潰すと同じ場所へ何度も行く。
-          return ok(`出典: ${target}\n状態: ${res.status} ${res.statusText}\n\n${clipped}`);
+          return ok(`出典: ${target}\n状態: ${res.status} ${res.statusText}\n\n${notes}${clipped}`);
         }
-        return ok(`出典: ${target}\n\n${clipped}`);
+        return ok(`出典: ${target}\n\n${notes}${clipped}`);
       } catch (e) {
         // ここで例外を投げない。外が落ちていても手元の作業は続く。
         const reason = timer.signal.aborted ? `${timeoutMs}ms で応答が無い` : (e as Error).message;

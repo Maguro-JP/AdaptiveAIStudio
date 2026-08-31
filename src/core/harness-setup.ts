@@ -12,6 +12,7 @@ import {
   workspaceBoundary, protectedPaths, testProtection, blastRadius,
   readBeforeWrite, noRepeatedWrites, dangerousCommands,
 } from '../harness/builtin-rules.ts';
+import { type Forum, requiresDeliberation } from '../harness/deliberation.ts';
 import { stateDir } from './autopilot-setup.ts';
 
 /** 既定で保護するもの。触れて得より害が大きいファイル。 */
@@ -25,6 +26,8 @@ const DEFAULT_PROTECTED = [
 export async function buildHarness(
   config: AasConfig,
   onDecision?: (e: HarnessDecision) => void,
+  /** 協議の場。渡された場合のみ、重大な変更を協議なしに通さない規則が入る。 */
+  forum?: Forum,
 ): Promise<Harness> {
   const hc = config.harness ?? {};
   const audit = new AuditLog(hc.auditLog ?? join(stateDir(), 'audit.jsonl'));
@@ -40,6 +43,8 @@ export async function buildHarness(
     rules.push(noRepeatedWrites);
     if (hc.readBeforeWrite !== false) rules.push(readBeforeWrite);
     if (hc.maxFilesPerTask && hc.maxFilesPerTask > 0) rules.push(blastRadius(hc.maxFilesPerTask));
+    // 守りの仕掛けそのものへの変更と、広範囲の書き換えは協議を通す。
+    if (forum) rules.push(requiresDeliberation({ forum, wideChangeFiles: hc.wideChangeFiles }));
   }
 
   return new Harness({ rules, audit, metrics, onDecision });

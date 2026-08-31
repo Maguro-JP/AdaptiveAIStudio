@@ -163,7 +163,8 @@ export class UiServer {
 
   #ask(req: ApprovalRequest): Promise<boolean> {
     const approval = this.#opts.config.agent?.approval ?? 'autoEdit';
-    if (approval === 'auto') return Promise.resolve(true);
+    // 協議は自動承認の対象にしない。重大な変更は必ず人の目を通す。
+    if (approval === 'auto' && req.kind !== 'deliberation') return Promise.resolve(true);
     if (approval === 'autoEdit' && req.kind === 'write') return Promise.resolve(true);
 
     const id = `a${++this.#seq}`;

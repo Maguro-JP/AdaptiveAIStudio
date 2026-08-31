@@ -18,10 +18,12 @@ import { buildRegistry } from './build.ts';
 import { ChatOrchestrator } from './orchestrator.ts';
 import { setupAutopilot, resolveCandidates, stateDir, type AutopilotBundle } from './autopilot-setup.ts';
 import { buildHarness } from './harness-setup.ts';
+import { Forum } from '../harness/deliberation.ts';
 import { Agent } from '../agent/loop.ts';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool } from '../agent/tools/fs.ts';
 import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
+import { createDeliberateTool } from '../agent/tools/deliberate.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall } from '../memory/memory.ts';
 import { ProposalQueue, type Proposal } from '../agent/proposals.ts';
@@ -146,6 +148,8 @@ export class Session {
   readonly #prefetch: Prefetcher;
   /** ハーネスの規則へ「いま何を頼まれているか」を渡すための箱。 */
   readonly #holder: { instruction: string };
+  /** 協議の場。依頼ごとに開き直す。 */
+  readonly #forum: Forum;
   readonly #harness: Harness;
   readonly #history: ProviderMessage[] = [];
   #running?: AbortController;
@@ -164,6 +168,7 @@ export class Session {
     proposals: ProposalQueue; idle: IdleScheduler; duties: DutyRoster;
     pilot: AutopilotBundle; prefetch: Prefetcher; opts: SessionOptions;
     holder: { instruction: string };
+    forum: Forum;
     harness: Harness;
     toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[] };
   }) {
@@ -186,6 +191,7 @@ export class Session {
     this.#prefetch = init.prefetch;
     this.#opts = init.opts;
     this.#holder = init.holder;
+    this.#forum = init.forum;
     this.#harness = init.harness;
   }
 
@@ -203,17 +209,19 @@ export class Session {
 
     // ハーネス。守らせるのではなく、実行させないことで守る。
     const holder = { instruction: '' };
+    // 協議の場。依頼ごとに開き直す（前の依頼で通した話を持ち越さない）。
+    const forum = new Forum();
     const harness = await buildHarness(config, (d) => {
       if (d.outcome === 'denied') log('error', `⛔ ${d.rule}: ${d.reason ?? ''}`);
       else if (d.outcome === 'warned') log('warn', `⚠ ${d.rule}: ${d.reason ?? ''}`);
-    });
+    }, forum);
 
     // 権限は「配らない」ことで守る。禁じる文言ではなく、手段の有無で決める。
     const netCfg = config.network ?? {};
     const wrap = (tools: Tool[]) => harness.wrapAll(tools, () => holder.instruction);
     const toolPool = {
       read: wrap([readFileTool, listFilesTool, searchTextTool]),
-      write: wrap([writeFileTool]),
+      write: wrap([writeFileTool, createDeliberateTool(forum)]),
       execute: wrap([createRunCommandTool({ allowed: agentCfg.allowedCommands })]),
       network: netCfg.enabled === false ? [] : wrap([createFetchUrlTool({
         allowedHosts: netCfg.allowedHosts, maxBytes: netCfg.maxBytes, timeoutMs: netCfg.timeoutMs,
@@ -251,7 +259,7 @@ export class Session {
     const session = new Session({
       config, root, candidates, memory,
       roles: new RoleRegistry(config.roles ?? []),
-      orchestrator, pilot, prefetch, opts, holder, toolPool, harness,
+      orchestrator, pilot, prefetch, opts, holder, forum, toolPool, harness,
       proposals, idle, duties,
     });
     return session;
@@ -300,6 +308,8 @@ export class Session {
     const ac = new AbortController();
     this.#running = ac;
     this.#holder.instruction = request;
+    // 依頼が変われば協議もやり直し。前回通した話で今回の変更を通させない。
+    this.#forum.clear();
 
     try {
       const root = this.root;
@@ -691,6 +701,7 @@ export class Session {
     this.#running = ac;
     this.#instruction = instruction;
     this.#holder.instruction = instruction;
+    this.#forum.clear();
 
     const verifyCfg = this.config.agent?.verify ?? {};
     const harnessCfg = this.config.harness ?? {};
