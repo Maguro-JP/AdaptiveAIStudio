@@ -84,7 +84,7 @@ npm run ui
 
 ```
 ollama serve
-npm run models -- --get qwen3-coder:30b
+npm run models -- --get qwen3.6:35b-a3b-coding-nvfp4
 ```
 
 **B. llama.cpp** — Ollama に依らない。GGUF を自分で置く。
@@ -101,7 +101,7 @@ npm run llama
 モデルも取ってこられます。**A（Ollama）でも B（llama.cpp）でも同じ言い方**です。
 
 ```
-npm run models -- --get          # まず動く軽いもの（qwen3:4b・約2.5GB）
+npm run models -- --get          # まず動く軽いもの（qwen3.5:4b・約2.5GB）
 npm run models -- --available    # 取ってこられるものの一覧
 ```
 
@@ -109,7 +109,7 @@ npm run models -- --available    # 取ってこられるものの一覧
 一覧は必ず古くなるので、載っているものしか取れない作りにはしていません。
 
 ```
-npm run models -- --get qwen3-coder:30b        # Ollama の名前
+npm run models -- --get qwen3.6:35b-a3b-coding-nvfp4        # Ollama の名前
 npm run models -- --get Qwen/Qwen3-8B-GGUF     # Hugging Face の置き場名
 ```
 
@@ -175,12 +175,12 @@ Claudeが使えるときはClaudeを使い、制限・障害時にLocalLLMへ切
 
 ```
 ollama serve
-npm run models -- --get qwen3-coder:30b
+npm run models -- --get qwen3.6:35b-a3b-coding-nvfp4
 ```
 
 **7B を既定にしない。** ローカルにはトークン単価が無いので、
 節約のために弱いモデルを使う理由がない。
-RTX 4060 (8GB) では MoE の `qwen3-coder:30b` が最適解
+RTX 4060 (8GB) では MoE の `qwen3.6:35b-a3b-coding-nvfp4` が最適解
 （総30B・活性3.3B なので、VRAM に載りきらなくても実用速度が出る）。詳細は
 [モデル運用](docs/MODEL-EFFICIENCY.md) と [32B級を動かすには](docs/RUNNING-LARGE-MODELS.md)。
 
@@ -199,7 +199,7 @@ set ANTHROPIC_API_KEY=sk-ant-...
 
 ```
 環境: NVIDIA GeForce RTX 4060 8GB / RAM 32GB
-担当モデル: ollama:qwen3-coder:30b
+担当モデル: ollama:qwen3.6:35b-a3b-coding-nvfp4
   起動時の自動選択 — 33 tok/s で 36秒 / 成功率 65%(事前値) / 1件あたり約72秒
 ```
 
@@ -216,7 +216,7 @@ set ANTHROPIC_API_KEY=sk-ant-...
 cp aas.config.example.json aas.config.json      # Windows なら copy
 ```
 
-省略した場合は `ollama:qwen3-coder:30b` を既定として起動する。
+省略した場合は `ollama:qwen3.6:35b-a3b-coding-nvfp4` を既定として起動する。
 `candidates` は先頭から順に試され、利用制限や障害で使えなければ次へ自動で切り替わる。
 
 ### 起動する
@@ -274,7 +274,7 @@ npm run team -- tasks.json
   // 同じ作業を複数モデルへ同時に投げ、最初に完了したものを採用する。
   // ローカルは計算が無料なので、遊ばせるより重ねて投げた方が速い。
   { "id": "fix", "laneId": "coder", "writes": ["fix.ts"], "instruction": "...",
-    "raceWith": ["ollama:qwen3:8b"] }
+    "raceWith": ["ollama:qwen3.5:9b"] }
 ]
 ```
 
@@ -283,8 +283,8 @@ npm run team -- tasks.json
 
 ```jsonc
 { "agent": { "lanes": [
-  { "id": "coder", "candidates": ["ollama:qwen3:8b"], "parallel": 3 },
-  { "id": "cpu",   "candidates": ["ollama:qwen3:4b"],       "parallel": 2 }
+  { "id": "coder", "candidates": ["ollama:qwen3.5:9b"], "parallel": 3 },
+  { "id": "cpu",   "candidates": ["ollama:qwen3.5:4b"],       "parallel": 2 }
 ] } }
 ```
 
@@ -311,7 +311,7 @@ npm run chat
 ```
 > このコードのバグを指摘して
 ローカルモデルが応答しました。
-  — ollama:qwen3:8b / 3.2s
+  — ollama:qwen3.5:9b / 3.2s
 ```
 
 応答の下に必ず「実際に答えたモデル」が出る。

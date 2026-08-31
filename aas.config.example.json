@@ -12,10 +12,10 @@
       "kind": "openai-compatible",
       "baseUrl": "http://localhost:11434/v1",
       "locality": "local",
-      "models": ["qwen3:8b"]
+      "models": ["qwen3.5:9b"]
     }
   ],
-  "candidates": ["claude:claude-opus-5", "ollama:qwen3:8b"],
+  "candidates": ["claude:claude-opus-5", "ollama:qwen3.5:9b"],
   "system": "あなたは日本語で応答する開発支援アシスタントです。簡潔に、根拠とともに答えてください。",
   "temperature": 0.2,
   "maxTokens": 4096

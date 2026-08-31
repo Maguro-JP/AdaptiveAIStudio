@@ -14,18 +14,25 @@
 import { type ModelSpec, QUANT_BITS } from './spec.ts';
 
 export const KNOWN_MODELS: Record<string, ModelSpec> = {
-  'qwen3:4b': {
-    id: 'qwen3:4b',
+  // 諸元は GGUF から読むのが本筋（gguf-spec.ts）。
+  // ここの値は目安で、新しい世代ほど確度が低い。
+  'qwen3.5:4b': {
+    id: 'qwen3.5:4b',
     paramsB: 4.0, layers: 36, kvHeads: 8, headDim: 128,
     bitsPerWeight: QUANT_BITS.Q4_K_M,
   },
-  'qwen3:8b': {
-    id: 'qwen3:8b',
-    paramsB: 8.2, layers: 36, kvHeads: 8, headDim: 128,
+  'qwen3.5:9b': {
+    id: 'qwen3.5:9b',
+    paramsB: 9.0, layers: 40, kvHeads: 8, headDim: 128,
     bitsPerWeight: QUANT_BITS.Q4_K_M,
   },
-  // MoE: 総30Bだが1トークンあたり3.3Bしか使わない。
+  // MoE: 総35Bだが1トークンあたり3Bしか使わない。
   // VRAM に載りきらなくても、CPUへ逃がして実用速度が出る。
+  'qwen3.6:35b-a3b': {
+    id: 'qwen3.6:35b-a3b',
+    paramsB: 35.0, activeParamsB: 3.0, layers: 48, kvHeads: 4, headDim: 128,
+    bitsPerWeight: QUANT_BITS.Q4_K_M,
+  },
   'qwen3-coder:30b': {
     id: 'qwen3-coder:30b',
     paramsB: 30.5, activeParamsB: 3.3, layers: 48, kvHeads: 4, headDim: 128,

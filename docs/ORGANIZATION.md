@@ -110,8 +110,8 @@
     "control":      ["claude:claude-opus-5", "ollama:qwen3:14b"],
     "pm":           ["claude:claude-opus-5", "ollama:qwen3:14b"],
     "impl.lead":    ["ollama:qwen3:14b", "claude:claude-opus-5"],
-    "impl.worker":  ["ollama:qwen3:8b"],
-    "qa.reviewer":  ["ollama:qwen3:8b", "claude:claude-opus-5"],
+    "impl.worker":  ["ollama:qwen3.5:9b"],
+    "qa.reviewer":  ["ollama:qwen3.5:9b", "claude:claude-opus-5"],
     "design.worker":["ollama:llava:7b"]
   }
 }
@@ -140,7 +140,7 @@ VRAM追加消費はKVキャッシュ分だけで済む。
 レーン内は並列度を上げる。
 
 ```
-レーン1: qwen3:8b   (VRAM ~5.5GB)  並列4  ← impl.worker / qa.reviewer
+レーン1: qwen3.5:9b   (VRAM ~5.5GB)  並列4  ← impl.worker / qa.reviewer
 レーン2: CPU実行の小型モデル (RAM)          並列2  ← scribe / 単純な要約
 レーン3: クラウド (Claude)   (VRAM 0)       並列4  ← control / pm（使えるとき）
 ```

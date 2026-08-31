@@ -240,7 +240,7 @@ export const DEFAULT_CONFIG: AasConfig = {
       locality: 'local',
       // ローカルには単価が無いので、節約のために弱いモデルを既定にしない。
       // MoE は 30B級の質を 7B 並みの速度で出せるため、この環境の最適解。
-      models: ['qwen3-coder:30b', 'qwen3:8b'],
+      models: ['qwen3.6:35b-a3b-coding-nvfp4', 'qwen3.5:9b'],
       enabled: true,
     },
     // クラウドは既定で無効。使いたいときだけ enabled を true にする。

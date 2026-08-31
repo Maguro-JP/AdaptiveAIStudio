@@ -156,8 +156,8 @@ qwen3:32b-q4_K_M を選択
   "style": "swarm",
   "staff": {
     "control": ["local:qwen3:14b"],
-    "impl.worker": ["local:qwen3:8b"],
-    "qa.reviewer": ["local:qwen3:8b"]
+    "impl.worker": ["local:qwen3.5:9b"],
+    "qa.reviewer": ["local:qwen3.5:9b"]
   },
   "lanes": { "coder7b": { "parallel": 4 } }
 }

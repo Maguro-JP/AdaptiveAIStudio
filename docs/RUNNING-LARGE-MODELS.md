@@ -67,9 +67,9 @@ Mixture-of-Experts は、総パラメータは大きいが
 | モデル | 総params | 活性params | 配置 | 速度 | 1000tok |
 |---|---|---|---|---|---|
 | qwen3:32b | 32.8B | 32.8B | GPU 16/64層 | **3 tok/s** | 約6分 |
-| qwen3-coder:30b (MoE) | 30.5B | **3.3B** | GPU 16/48層 | **33 tok/s** | 約31秒 |
+| qwen3.6:35b-a3b-coding-nvfp4 (MoE) | 30.5B | **3.3B** | GPU 16/48層 | **33 tok/s** | 約31秒 |
 | qwen3:14b | 14.8B | 14.8B | GPU 30/48層 | 10 tok/s | 約2分 |
-| qwen3:8b | 7.6B | 7.6B | 全層GPU | 41 tok/s | 約25秒 |
+| qwen3.5:9b | 7.6B | 7.6B | 全層GPU | 41 tok/s | 約25秒 |
 
 **MoEは同規模の通常モデルより10倍以上速い。**
 「大きいモデルを低スペックで動かす」目的に対して、現状これが最良の答え。
@@ -195,13 +195,13 @@ llama-server
   "maxTotalParallel": 1,
   "lanes": [
     { "id": "big",   "candidates": ["local:qwen3:32b"], "parallel": 1 },
-    { "id": "small", "candidates": ["local:qwen3:8b"],  "parallel": 1 }
+    { "id": "small", "candidates": ["local:qwen3.5:9b"],  "parallel": 1 }
   ]
 } }
 
 // 並列: 1つのモデルを複数の作業者で共有
 { "agent": {
-  "lanes": [{ "id": "coder", "candidates": ["local:qwen3:8b"], "parallel": 4 }]
+  "lanes": [{ "id": "coder", "candidates": ["local:qwen3.5:9b"], "parallel": 4 }]
 } }
 ```
 

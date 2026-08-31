@@ -33,8 +33,8 @@
 
 ```
 依頼: auth.ts のバグを直す
-  ├─ qwen3-coder:30b   → 32秒で完了  ← 採用
-  └─ qwen3:8b → 打ち切り
+  ├─ qwen3.6:35b-a3b-coding-nvfp4   → 32秒で完了  ← 採用
+  └─ qwen3.5:9b → 打ち切り
 ```
 
 - 速いモデルが当たれば速く終わる
@@ -47,7 +47,7 @@
 
 ```jsonc
 { "id": "fix-auth", "laneId": "coder", "writes": ["auth.ts"],
-  "instruction": "...", "raceWith": ["ollama:qwen3:8b"] }
+  "instruction": "...", "raceWith": ["ollama:qwen3.5:9b"] }
 ```
 
 ### 1.2 最良選択（bestOf） — 実装済み

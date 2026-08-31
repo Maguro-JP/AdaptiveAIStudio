@@ -14,7 +14,11 @@
  * 配布側の名前は変わるし、分割されていることもある。
  * 名前は取ってくるときに一覧から選ぶ（model-install.ts）。
  *
- * 確認日: 2026-08-30。次に触るときは、まず現行かどうかを確かめること。
+ * 確認日: 2026-08-31（ollama.com/library と huggingface.co を検索で確認）。
+ * **次に触るときは、まず現行かどうかを調べること。**
+ * 一度目は「知っている名前」を書いて1世代古いものを並べ、
+ * 二度目は「知っている名前で検索して」確認した気になり、また古いままだった。
+ * 探すのではなく、確かめに行ってしまうと、持っている思い込みが強化されるだけになる。
  */
 
 export interface CatalogEntry {
@@ -40,36 +44,36 @@ export interface CatalogEntry {
  * 小さいこと（すぐ落ちてくる）を優先している。賢さでは選んでいない。
  * **まず動くところまで行けること**が目的で、良いモデルはそのあと各自で足す。
  */
-export const STARTER_ID = 'qwen3-4b';
+export const STARTER_ID = 'qwen3.5-4b';
 
 export const AVAILABLE_MODELS: CatalogEntry[] = [
   {
     id: STARTER_ID,
-    repo: 'Qwen/Qwen3-4B-GGUF',
+    repo: 'unsloth/Qwen3.5-4B-GGUF',
     quant: 'q4_k_m',
-    ollama: 'qwen3:4b',
+    ollama: 'qwen3.5:4b',
     approxGB: 2.5,
     note: 'まず動かすための最小構成。軽い読み書きなら通る。',
     license: 'Apache-2.0',
   },
   {
-    id: 'qwen3-8b',
-    repo: 'Qwen/Qwen3-8B-GGUF',
+    id: 'qwen3.5-9b',
+    repo: 'unsloth/Qwen3.5-9B-GGUF',
     quant: 'q4_k_m',
-    ollama: 'qwen3:8b',
-    approxGB: 5.0,
+    ollama: 'qwen3.5:9b',
+    approxGB: 6.6,
     note: '8GB VRAM にそのまま載る。日常の作業はこれで足りる。',
     license: 'Apache-2.0',
   },
   {
-    // 総30B・活性3.3B の MoE。VRAM には載りきらないが、
-    // 1トークンあたり 3.3B しか使わないので、RAM へ逃がしても実用速度が出る。
+    // 総35B・活性3B の MoE。VRAM には載りきらないが、
+    // 1トークンあたり 3B しか使わないので、RAM へ逃がしても実用速度が出る。
     // この道具の実行可能性プランナが、いちばん効く形。
-    id: 'qwen3-coder-30b',
-    repo: 'unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF',
+    id: 'qwen3.6-coding-35b',
+    repo: 'unsloth/Qwen3.6-35B-A3B-GGUF',
     quant: 'q4_k_m',
-    ollama: 'qwen3-coder:30b',
-    approxGB: 19,
+    ollama: 'qwen3.6:35b-a3b-coding-nvfp4',
+    approxGB: 22,
     note: 'コード向けの本命。8GB VRAM + 32GB RAM なら、CPUへ逃がして動かせる。',
     license: 'Apache-2.0',
   },
