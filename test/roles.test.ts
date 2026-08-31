@@ -174,3 +174,39 @@ describe('人員の追加', () => {
     assert.equal(r.get('broken'), undefined, '中途半端な役職を登録している');
   });
 });
+
+/**
+ * 整備担当（QUARTERMASTER）。
+ *
+ * 情報担当（ENVOY）と分けてある。あちらは利用者の仕事に関する外の情報、
+ * こちらは道具の側の話。混ぜると、利用者に必要な報告が
+ * 道具の都合に押し出される。分かれていることを検査で固定する。
+ */
+describe('整備担当と情報担当の持ち場', () => {
+  test('別の役職として存在する', () => {
+    const roles = new RoleRegistry(BUILTIN_ROLES);
+    const q = roles.get('quartermaster');
+    const e = roles.get('envoy');
+    assert.ok(q, '整備担当がいない');
+    assert.ok(e, '情報担当がいない');
+    assert.notEqual(q.id, e.id);
+  });
+
+  test('整備担当は外へ出ない（出口は情報担当ひとつ）', () => {
+    // 役職が増えるたびに出口が増える作りにすると、出入りが見えなくなる。
+    const q = new RoleRegistry(BUILTIN_ROLES).get('quartermaster')!;
+    assert.ok(!q.access.includes('network'), '出口が増えている');
+    assert.ok(!q.access.includes('write'), '整備担当が書き込める');
+  });
+
+  test('整備担当は利用者のコードに立ち入らない', () => {
+    const q = new RoleRegistry(BUILTIN_ROLES).get('quartermaster')!;
+    assert.match(q.disposition + q.instructions.join(''), /持ち場/);
+  });
+
+  test('新しさだけで勧めないことが、気質に書かれている', () => {
+    const q = new RoleRegistry(BUILTIN_ROLES).get('quartermaster')!;
+    assert.match(q.disposition, /新しさだけで勧めない/);
+    assert.match(q.instructions.join(' '), /動かない/);
+  });
+});

@@ -497,23 +497,29 @@ export class Session {
     if (mode.id === 'briefing') {
       const deps = await inspectDependencies(this.root);
       context = `${context}\n\n${describeDependencies(deps)}`;
+    }
 
-      // 新しいモデルが出ていないかも、外の情報として拾う。
-      // ローカルで動かす以上、古いものを使い続ける理由が無い。
-      // ただし**人が思い出したときだけ**確かめる作りでは、結局は古いまま使い続ける。
+    // UPKEEP は道具の側の話。BRIEFING（利用者の仕事の話）とは持ち場が違う。
+    // 混ぜると、利用者にとって必要な報告が道具の都合に押し出される。
+    if (mode.id === 'upkeep') {
+      // 人が思い出したときだけ確かめる作りでは、結局は古いまま使い続ける。
       // 機械が定期的に見に行き、出ていたら提案として上げる。
       try {
         // 「provider:model」から model 側だけを取る。model にも : が入る。
         const using = this.candidates
           .filter((c) => c.startsWith('ollama:'))
           .map((c) => c.slice('ollama:'.length));
-        if (using.length > 0) {
-          const newer = await findNewerOllama({ installed: using });
-          if (newer.length > 0) context = `${context}\n\n${describeNewer(newer)}`;
-        }
-      } catch {
+        const newer = using.length > 0 ? await findNewerOllama({ installed: using }) : [];
+        context = [
+          `いま使っているモデル: ${using.join(', ') || '(ローカルの指定なし)'}`,
+          '',
+          describeNewer(newer),
+        ].join('\n');
+      } catch (e) {
         // 配布元へ行けないのは、この思考を止める理由にはならない。
-        // 手元で分かることだけで続ける。
+        // ただし「無かった」と混同させない。行けなかったと書く。
+        context = `配布元に訊けませんでした（${e instanceof Error ? e.message : String(e)}）。`
+          + '新しいものが無いのか、繋がらなかっただけなのかは分かりません。';
       }
     }
 
