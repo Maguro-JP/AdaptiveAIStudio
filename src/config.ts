@@ -75,6 +75,22 @@ export interface NetworkConfig {
   /** 1回の取得で読む上限（文字数） */
   maxBytes?: number;
   timeoutMs?: number;
+  /**
+   * 関所に立つ検査官（二段目）。
+   * 当てはめ（一段目）で止まらなかったものを、道具を持たないモデルが検める。
+   */
+  inspector?: InspectorConfig;
+}
+
+export interface InspectorConfig {
+  /** 既定で有効。使えるモデルが無ければ自動で置かれない。 */
+  enabled?: boolean;
+  /** 検査官として使うモデル。省略時は候補の中で速いものを使う。 */
+  candidates?: string[];
+  /** 一件にかけてよい時間。既定8秒 */
+  timeoutMs?: number;
+  /** 検査官に渡す最大文字数。越えたら頭と尻を見る。既定12000 */
+  maxChars?: number;
 }
 
 export interface PanelConfig {

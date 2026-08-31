@@ -24,6 +24,7 @@ import { readFileTool, listFilesTool, searchTextTool, writeFileTool } from '../a
 import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { createDeliberateTool } from '../agent/tools/deliberate.ts';
+import { buildInspector } from './inspector-setup.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall } from '../memory/memory.ts';
 import { ProposalQueue, type Proposal } from '../agent/proposals.ts';
@@ -225,6 +226,14 @@ export class Session {
       execute: wrap([createRunCommandTool({ allowed: agentCfg.allowedCommands })]),
       network: netCfg.enabled === false ? [] : wrap([createFetchUrlTool({
         allowedHosts: netCfg.allowedHosts, maxBytes: netCfg.maxBytes, timeoutMs: netCfg.timeoutMs,
+        // 関所の二段目。使えるモデルが無ければ置かれず、一段目だけで動く。
+        inspector: buildInspector(
+          orchestrator,
+          // 明示が無ければ候補を逆順にする。候補は強い順に並んでいるので、
+          // そのまま渡すと一番重いモデルが関所に立つ。ここは速さが要る。
+          netCfg.inspector?.candidates ?? [...candidates].reverse(),
+          netCfg.inspector ?? {},
+        ),
       })]),
     };
 

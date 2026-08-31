@@ -19,6 +19,7 @@
  */
 import { type Tool, ok, fail, requireString } from './types.ts';
 import { inspectInbound, inspectOutbound, describeVerdict } from '../../harness/gate.ts';
+import { type Inspector, combine } from '../../harness/inspector.ts';
 
 /**
  * 既定の行き先。
@@ -40,6 +41,12 @@ export interface NetworkOptions {
   timeoutMs?: number;
   /** 差し替え可能にしておく。試験でも本物の外へは出ない。 */
   fetchImpl?: typeof fetch;
+  /**
+   * 関所に立つ検査官（二段目）。
+   * 当てはめで止まらなかったものだけが、ここへ回る。
+   * 置かなければ一段目だけで動く。
+   */
+  inspector?: Inspector;
 }
 
 export class HostNotAllowed extends Error {}
@@ -84,6 +91,7 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
   const maxBytes = opts.maxBytes ?? 60_000;
   const timeoutMs = opts.timeoutMs ?? 15_000;
   const doFetch = opts.fetchImpl ?? fetch;
+  const inspector = opts.inspector;
 
   return {
     schema: {
@@ -115,7 +123,11 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
 
       // 持ち出し検査。行き先だけでなく、こちらから書いて渡す文字列も検める。
       // URL の問い合わせ部分に合言葉を貼り付けて外へ出す、という事故はこれで止まる。
-      const outbound = inspectOutbound(`${target}\n${requireString(args, 'purpose') ?? ''}`);
+      const carry = `${target}\n${requireString(args, 'purpose') ?? ''}`;
+      let outbound = inspectOutbound(carry);
+      if (outbound.passed && inspector) {
+        outbound = combine(outbound, await inspector.inspect(carry, 'outbound', ctx.signal), 'outbound');
+      }
       if (!outbound.passed) return fail(describeVerdict(outbound, 'outbound'));
 
       // 外へ出ることは書き込みと同じ重さで扱う。黙って出ていかせない。
@@ -140,7 +152,10 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
         // 持ち込み検査。ここを通る前の文字列は、誰が書いたものか分からない。
         // 止めた場合は中身を渡さない。「危ないので気をつけて読んでください」と
         // 添えて渡す形にすると、渡した時点で読まれてしまう。
-        const inbound = inspectInbound(text);
+        let inbound = inspectInbound(text);
+        if (inbound.passed && inspector) {
+          inbound = combine(inbound, await inspector.inspect(text, 'inbound', ctx.signal), 'inbound');
+        }
         if (!inbound.passed) {
           return fail(`出典: ${target}\n${describeVerdict(inbound, 'inbound')}`);
         }
