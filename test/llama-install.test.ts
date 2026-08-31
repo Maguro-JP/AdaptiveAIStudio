@@ -11,13 +11,20 @@ import { readFile, stat, writeFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { install, findInstalled, listInstalled } from '../src/runtime/llama-install.ts';
+import { install, findInstalled, listInstalled, explainExitCode } from '../src/runtime/llama-install.ts';
 import type { Target } from '../src/runtime/llama-release.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const sampleZip = await readFile(join(here, 'fixtures', 'sample.zip'));
 
 const TARGET: Target = { platform: 'linux', arch: 'x64', hasNvidia: false };
+
+/**
+ * 動くかの確かめは差し替える。
+ * 配布物に本物の実行ファイルを入れられないので、ここで実際に起動させると
+ * 「置けたか」ではなく「作り物が動くか」を試すことになる。
+ */
+const runs = async () => ({ ok: true, detail: 'version b4585' });
 
 /** リリース一覧と配布物を返す、偽の口。 */
 function fakeFetch(opts: { assets?: string[]; zip?: Buffer; releaseStatus?: number; downloadStatus?: number } = {}) {
@@ -47,7 +54,7 @@ describe('llama-server の用意', () => {
     const binDir = await tempDir('aas-bin-');
     const { impl, calls } = fakeFetch();
 
-    const r = await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl });
+    const r = await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl, verify: runs });
 
     assert.equal(r.asset, 'llama-b4585-bin-ubuntu-x64.zip', '環境に合わない方を取っている');
     assert.ok(r.command.endsWith('llama-server'), r.command);
@@ -59,7 +66,7 @@ describe('llama-server の用意', () => {
     // 共有ライブラリは実行ファイルと同じ場所を見に行く。散らかすと動かない。
     const binDir = await tempDir('aas-bin-');
     const { impl } = fakeFetch();
-    const r = await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl });
+    const r = await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl, verify: runs });
 
     assert.equal(r.command, join(binDir, 'b4585', 'llama-server'));
     await stat(join(binDir, 'b4585', 'README.txt'));
@@ -68,7 +75,7 @@ describe('llama-server の用意', () => {
   test('実行できる状態で置く', async () => {
     const binDir = await tempDir('aas-bin-');
     const { impl } = fakeFetch();
-    const r = await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl });
+    const r = await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl, verify: runs });
     const mode = (await stat(r.command)).mode & 0o777;
     assert.ok((mode & 0o100) !== 0, `実行ビットが立っていない: ${mode.toString(8)}`);
   });
@@ -79,7 +86,7 @@ describe('llama-server の用意', () => {
     await writeFile(join(binDir, 'b4585', 'llama-server'), 'ある');
 
     const { impl, calls } = fakeFetch();
-    const r = await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl });
+    const r = await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl, verify: runs });
     assert.equal(calls.length, 0, '取得済みなのに取りに行っている');
     assert.ok(r.command.endsWith('llama-server'));
   });
@@ -121,9 +128,50 @@ describe('llama-server の用意', () => {
     const lines: string[] = [];
     await install({
       binDir, tag: 'b4585', target: TARGET,
-      fetchImpl: fakeFetch().impl, onProgress: (l) => lines.push(l),
+      fetchImpl: fakeFetch().impl, verify: runs, onProgress: (l) => lines.push(l),
     });
     assert.ok(lines.some((l) => l.includes('選びました')), lines.join(' / '));
     assert.ok(lines.some((l) => l.includes('置きました')), lines.join(' / '));
+  });
+
+  test('置けても動かなければ、残さずに断る', async () => {
+    const binDir = await tempDir('aas-bin-');
+    await assert.rejects(
+      install({
+        binDir, tag: 'b4585', target: TARGET, fetchImpl: fakeFetch().impl,
+        verify: async () => ({ ok: false, detail: '何も出力せず、終了コード 3221225781 で終わりました' }),
+      }),
+      /動きませんでした/,
+    );
+    // 動かない実行ファイルを置いたままにしない。次に困るのは使う人になる。
+    assert.equal(await findInstalled(binDir, 'b4585'), undefined, '動かないものを残している');
+  });
+
+  test('Windows の CUDA 版には、実行時ライブラリも取ってくる', async () => {
+    const binDir = await tempDir('aas-bin-');
+    const { impl, calls } = fakeFetch({
+      assets: ['llama-b4585-bin-win-cuda-cu12.4-x64.zip', 'cudart-llama-bin-win-cu12.4-x64.zip'],
+    });
+    await install({
+      binDir, tag: 'b4585', fetchImpl: impl, verify: runs,
+      target: { platform: 'win32', arch: 'x64', hasNvidia: true },
+    });
+    // 本体だけ取ってきても、Windows では起動しない。
+    assert.ok(calls.some((c) => c.includes('cudart-llama-bin-win-cu12.4-x64.zip')),
+      `実行時ライブラリを取りに行っていない: ${calls.join(' / ')}`);
+  });
+});
+
+describe('黙って落ちたときの見分け', () => {
+  test('DLL が見つからない番号を、そうと言う', () => {
+    assert.match(explainExitCode(3221225781), /DLL/);
+    assert.match(explainExitCode(3221225781), /cudart/);
+  });
+  test('版が合っていない番号も見分ける', () => {
+    assert.match(explainExitCode(3221225785), /版が合っていません/);
+  });
+  test('知らない番号には、当てずっぽうを言わない', () => {
+    assert.equal(explainExitCode(1), '');
+    assert.equal(explainExitCode(null), '');
   });
 });

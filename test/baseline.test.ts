@@ -5,7 +5,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, rm } from 'node:fs/promises';
-import { tempDir } from './tmp.ts';
+import { tempDir, cleanup } from './tmp.ts';
 import { join } from 'node:path';
 import { BaselineProbe } from '../src/agent/baseline.ts';
 
@@ -49,7 +49,7 @@ describe('BaselineProbe', () => {
       const { readFileSync } = await import('node:fs');
       assert.equal(readFileSync(join(root, 'count.txt'), 'utf8').trim(), '1');
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await cleanup(root);
     }
   });
 
@@ -66,7 +66,7 @@ describe('BaselineProbe', () => {
       const { readFileSync } = await import('node:fs');
       assert.equal(readFileSync(join(root, 'count.txt'), 'utf8').trim(), '1');
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await cleanup(root);
     }
   });
 
@@ -85,7 +85,7 @@ describe('BaselineProbe', () => {
       const { readFileSync } = await import('node:fs');
       assert.equal(readFileSync(join(root, 'count.txt'), 'utf8').trim(), '2');
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await cleanup(root);
     }
   });
 
@@ -109,7 +109,7 @@ describe('BaselineProbe', () => {
       assert.equal(again.cached, true);
       assert.equal(again.status, 'unknown');
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await cleanup(root);
     }
   });
 
@@ -123,7 +123,7 @@ describe('BaselineProbe', () => {
       assert.equal(outcome.result?.passed, false);
       assert.equal((await probe.measure('node fail.mjs', signal)).cached, true);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await cleanup(root);
     }
   });
 
@@ -138,7 +138,7 @@ describe('BaselineProbe', () => {
       assert.equal(probe.remembered('node counter.mjs'), undefined);
       assert.equal((await probe.measure('node counter.mjs', signal)).cached, false);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await cleanup(root);
     }
   });
 });

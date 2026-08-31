@@ -13,7 +13,7 @@ import { mkdir, writeFile, chmod, readdir, stat, rm } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
-import { pickAsset, PINNED_TAG, RELEASES_API, type Target } from './llama-release.ts';
+import { pickAsset, pickCudart, PINNED_TAG, RELEASES_API, type Target } from './llama-release.ts';
 import { unzip } from './unzip.ts';
 import { runtimeEnv } from './llama-env.ts';
 
@@ -27,6 +27,15 @@ export interface InstallOptions {
   onProgress?: (line: string) => void;
   /** 取得の口。試験では差し替える。 */
   fetchImpl?: typeof fetch;
+  /**
+   * 動くかの確かめ方。既定は実際に一度起動する。
+   *
+   * 試験では差し替える。本物の llama-server を配布物として用意できないので、
+   * 中身がただの文字列になる。Linux では execvp が ENOEXEC のとき /bin/sh へ
+   * 落ちるため偶然動いていたが、Windows にその救済は無く ENOENT になる。
+   * **偶然通っていたものは、通っていたとは言わない。**
+   */
+  verify?: (command: string, signal?: AbortSignal) => Promise<{ ok: boolean; detail: string }>;
   signal?: AbortSignal;
 }
 
@@ -114,6 +123,20 @@ export async function install(opts: InstallOptions): Promise<Installed> {
   const buf = Buffer.from(await dl.arrayBuffer());
   log(`取得しました: ${(buf.length / 1024 / 1024).toFixed(1)}MB`);
 
+  // CUDA 版は、それ単体では起動しない。実行時ライブラリを隣に置く。
+  // ここを省くと、置いた実行ファイルが何も言わずに終わる（Windows は
+  // DLL を解決できないと、標準エラーに何も出さずに落ちるため）。
+  const cudartName = pickCudart(assets.map((a) => a.name), choice.name);
+  let cudartBuf: Buffer | undefined;
+  if (cudartName) {
+    const ca = assets.find((a) => a.name === cudartName)!;
+    log(`CUDA の実行時ライブラリも取ってきます: ${cudartName}`);
+    const cd = await fetchImpl(ca.browser_download_url, { signal: opts.signal });
+    if (!cd.ok) throw new Error(`CUDA の実行時ライブラリを取ってこられませんでした (${cd.status})`);
+    cudartBuf = Buffer.from(await cd.arrayBuffer());
+    log(`取得しました: ${(cudartBuf.length / 1024 / 1024).toFixed(1)}MB`);
+  }
+
   try {
     log('展開します');
     const entries = unzip(buf);
@@ -139,13 +162,22 @@ export async function install(opts: InstallOptions): Promise<Installed> {
       throw new Error(`配布物に llama-server が入っていません。中身: ${names}`);
     }
 
+    // 実行時ライブラリも同じ場所へ平らに置く。実行ファイルは隣しか見ない。
+    if (cudartBuf) {
+      for (const e of unzip(cudartBuf)) {
+        const name = e.path.split('/').at(-1)!;
+        if (!name) continue;
+        await writeFile(join(dest, name), e.data);
+      }
+    }
+
     const command = (await findInstalled(binDir, tag))!;
 
     // 置けたことと動くことは別。実際に一度動かして確かめる。
     // 共有ライブラリを見つけられずに落ちる状態で「用意できました」と
     // 言ってしまうと、次に困るのは使う人になる。
     log('動くか確かめます');
-    const check = await tryRun(command, opts.signal);
+    const check = await (opts.verify ?? tryRun)(command, opts.signal);
     if (!check.ok) {
       throw new Error(`置きましたが動きませんでした:\n${check.detail}`);
     }
@@ -159,6 +191,21 @@ export async function install(opts: InstallOptions): Promise<Installed> {
   }
 }
 
+/**
+ * Windows の終了コードから、黙って落ちた理由を言う。
+ *
+ * この二つは、標準エラーに何も出ないまま起きる。番号を見ないと分からない。
+ */
+export function explainExitCode(code: number | null): string {
+  if (code === 3221225781) {  // 0xC0000135 STATUS_DLL_NOT_FOUND
+    return '\n  → 必要な DLL が隣にありません。CUDA 版なら実行時ライブラリ（cudart）が要ります。';
+  }
+  if (code === 3221225785) {  // 0xC0000139 STATUS_ENTRYPOINT_NOT_FOUND
+    return '\n  → DLL はありますが、版が合っていません。';
+  }
+  return '';
+}
+
 /** 一度だけ起動して、動くかを見る。 */
 async function tryRun(command: string, signal?: AbortSignal): Promise<{ ok: boolean; detail: string }> {
   return new Promise((resolve) => {
@@ -169,9 +216,16 @@ async function tryRun(command: string, signal?: AbortSignal): Promise<{ ok: bool
     child.on('error', (e) => resolve({ ok: false, detail: e.message }));
     // --version は版によって終了コードが違う。番号ではなく、
     // 「起動できて何か言えたか」で見る。
-    child.on('close', () => {
+    child.on('close', (code) => {
       const failed = /error while loading shared libraries|cannot open shared object|not a valid|is not recognized/i.test(out);
-      resolve({ ok: !failed && out.trim().length > 0, detail: out.trim() || '何も出力しませんでした' });
+      const text = out.trim();
+      resolve({
+        ok: !failed && text.length > 0,
+        // 「何も出力しませんでした」だけでは、次に何をすればいいか分からない。
+        // Windows は必要な DLL が無いと、何も言わずに特定の番号で落ちる。
+        // 番号を添えて、そこまで見分けられるようにする。
+        detail: text || `何も出力せず、終了コード ${code ?? '不明'} で終わりました${explainExitCode(code)}`,
+      });
     });
   });
 }

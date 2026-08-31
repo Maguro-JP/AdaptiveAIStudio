@@ -103,6 +103,34 @@ export function pickAsset(assets: string[], target: Target): Choice | undefined 
   return undefined;
 }
 
+/**
+ * CUDA 版に付いてくる相棒を探す。
+ *
+ * Windows の CUDA 版は、**それ単体では起動しない**。CUDA の実行時ライブラリ
+ * （cudart64_*.dll, cublas64_*.dll など）が実行ファイルの隣に要る。
+ * 無いと Windows は DLL を解決できずに即座に落ちる。**標準エラーには何も出ない**ので、
+ * 「置いたのに、何も言わずに終わる」という分かりにくい形になる。
+ *
+ * 配布側もそれを前提にしていて、cudart は別の zip として置かれている。
+ * 本体と同じ cu の版を選ぶ（cu12.4 の本体に cu11 の cudart を混ぜない）。
+ */
+export function pickCudart(assets: string[], chosen: string): string | undefined {
+  const lower = chosen.toLowerCase();
+  if (!lower.includes('win') || !lower.includes('cu')) return undefined;
+  // 本体の名前から cu の版を取る（cuda-cu12.4 → cu12.4）
+  const ver = /cu(\d+(?:\.\d+)?)/.exec(lower)?.[0];
+  if (!ver) return undefined;
+  const arch = lower.includes('arm64') ? 'arm64' : 'x64';
+  return assets
+    .filter((a) => {
+      const l = a.toLowerCase();
+      return l.startsWith('cudart') && l.endsWith('.zip')
+        && l.includes(ver) && l.includes(arch);
+    })
+    .sort()
+    .at(-1);
+}
+
 /** いま取ってくる版。上げるときは、ここだけを変える。 */
 export const PINNED_TAG = 'b4585';
 

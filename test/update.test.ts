@@ -83,7 +83,11 @@ describe('更新', () => {
     assert.equal(r.applied, 1);
     assert.equal(r.restartNeeded, true, '立ち上げ直しを促していない');
 
-    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), '新しい中身\n');
+    // 改行を直書きで比べない。Windows の git は core.autocrlf で
+    // 取り出すときに LF を CRLF へ変えるので、中身は同じでも一致しない。
+    // 確かめたいのは「新しくなったか」であって、改行の作法ではない。
+    const got = await readFile(join(root, 'a.txt'), 'utf8');
+    assert.equal(got.replace(/\r\n/g, '\n'), '新しい中身\n');
     assert.equal((await checkUpdate(root)).behind, 0);
   });
 

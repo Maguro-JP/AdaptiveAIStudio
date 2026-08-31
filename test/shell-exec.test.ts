@@ -5,7 +5,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, rm, readFile } from 'node:fs/promises';
-import { tempDir } from './tmp.ts';
+import { tempDir, cleanup } from './tmp.ts';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { execCommand, spawnPlan, killPlan } from '../src/agent/shell-exec.ts';
@@ -40,7 +40,7 @@ describe('execCommand', () => {
         '打ち切った処理が生き残って走り続けている',
       );
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await cleanup(root);
     }
   });
 
@@ -60,7 +60,7 @@ describe('execCommand', () => {
       await delay(2500);
       assert.equal(await readFile(marker, 'utf8').catch(() => null), null);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await cleanup(root);
     }
   });
 
@@ -72,7 +72,7 @@ describe('execCommand', () => {
       assert.equal(r.timedOut, false);
       assert.match(r.output, /hello/);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await cleanup(root);
     }
   });
 });
