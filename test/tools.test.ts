@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool, matchLineEndings } from '../src/agent/tools/fs.ts';
 import { createRunCommandTool } from '../src/agent/tools/shell.ts';
 import { safeResolve } from '../src/agent/tools/paths.ts';
@@ -27,7 +27,11 @@ describe('パス封じ込め', () => {
     assert.equal(safeResolve('/work', '/etc/passwd'), undefined);
   });
   test('内側は解決できる', () => {
-    assert.equal(safeResolve('/work', 'src/a.ts'), '/work/src/a.ts');
+    // 期待値を '/work/src/a.ts' と直書きすると Windows で落ちる。
+    // resolve が返すのは 'C:\\work\\src\\a.ts' で、区切り文字も接頭辞も環境のものになる。
+    // 確かめたいのは「根の下に繋がること」なので、期待値も環境の作法で組み立てる。
+    const root = resolve('/work');
+    assert.equal(safeResolve(root, 'src/a.ts'), join(root, 'src', 'a.ts'));
   });
   test('read_file は外部パスを拒否する', async () => {
     const root = await workspace();
