@@ -76,6 +76,14 @@ describe('llama-server の用意', () => {
     const binDir = await tempDir('aas-bin-');
     const { impl } = fakeFetch();
     const r = await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl, verify: runs });
+
+    // Windows に実行ビットは無い。動かせるかは拡張子で決まるので、
+    // ここで 0o100 を求めても、実装ではなく OS の作法を試すことになる。
+    // 実装側も chmod の失敗を握り潰している（意味を持たないため）。
+    if (process.platform === 'win32') {
+      assert.ok((await stat(r.command)).isFile(), '実行ファイルが置かれていない');
+      return;
+    }
     const mode = (await stat(r.command)).mode & 0o777;
     assert.ok((mode & 0o100) !== 0, `実行ビットが立っていない: ${mode.toString(8)}`);
   });
