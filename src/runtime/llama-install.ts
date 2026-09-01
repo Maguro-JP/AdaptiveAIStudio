@@ -10,7 +10,7 @@
  * 一度取ってくれば、あとは手元だけで動く。
  */
 import { mkdir, writeFile, chmod, readdir, stat, rm } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { spawn } from 'node:child_process';
 import { pickAsset, pickCudart, PINNED_TAG, RELEASES_API, type Target } from './llama-release.ts';
 import { explainExitCode } from './llama-diagnosis.ts';
@@ -53,9 +53,18 @@ export function defaultBinDir(): string {
   return binDir();
 }
 
+/**
+ * 探す名前。
+ *
+ * `.bin` を入れてあるのは、会社のクラウドドライブが **名前を見て** .exe を
+ * 落とすため（Z: で実測）。中身は同じで、名前だけが違う。
+ * 名前で動かない道具にしない。
+ */
+export const SERVER_NAMES = ['llama-server', 'llama-server.exe', 'llama-server.bin'] as const;
+
 /** すでに用意してあるか。あればその場所。 */
 export async function findInstalled(binDir = defaultBinDir(), tag = PINNED_TAG): Promise<string | undefined> {
-  for (const name of ['llama-server', 'llama-server.exe']) {
+  for (const name of SERVER_NAMES) {
     const p = join(binDir, tag, name);
     try {
       await stat(p);
@@ -149,13 +158,20 @@ export async function install(opts: InstallOptions): Promise<Installed> {
     for (const e of entries) {
       const name = e.path.split('/').at(-1)!;
       if (!name) continue;
-      const out = join(dest, name);
+      let out = join(dest, name);
       await mkdir(dirname(out), { recursive: true });
       await writeFile(out, e.data);
-      if (e.executable || /\.(exe|sh)$/i.test(name) || !name.includes('.')) {
+      // 置いたのに無いことがある。会社のクラウドドライブは .exe を
+      // **黙って落とす**（書けたように見えて、実際には残らない）。
+      // 名前を変えて置き直す。中身は同じなので、これで動く。
+      if (/\.exe$/i.test(name) && !(await stat(out).catch(() => undefined))) {
+        out = join(dest, name.replace(/\.exe$/i, '.bin'));
+        await writeFile(out, e.data);
+      }
+      if (e.executable || /\.(exe|bin|sh)$/i.test(name) || !name.includes('.')) {
         await chmod(out, 0o755).catch(() => { /* Windows では意味を持たない */ });
       }
-      if (name === 'llama-server' || name === 'llama-server.exe') found = true;
+      if (/^llama-server(\.(exe|bin))?$/i.test(basename(out))) found = true;
     }
 
     if (!found) {

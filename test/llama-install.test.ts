@@ -184,3 +184,20 @@ describe('黙って落ちたときの見分け', () => {
     assert.equal(explainExitCode(null), '');
   });
 });
+
+describe('.exe を置けない場所でも見つける', () => {
+  test('llama-server.bin も探す', async () => {
+    // 会社のクラウドドライブは名前を見て .exe を落とす（Z: で実測）。
+    // 中身は同じなので、名前で動かない道具にしない。
+    const { findInstalled, SERVER_NAMES } = await import('../src/runtime/llama-install.ts');
+    assert.ok(SERVER_NAMES.includes('llama-server.bin'), '.bin を探していない');
+
+    const bin = await tempDir('aas-bin-');
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { PINNED_TAG } = await import('../src/runtime/llama-release.ts');
+    await mkdir(join(bin, PINNED_TAG), { recursive: true });
+    await writeFile(join(bin, PINNED_TAG, 'llama-server.bin'), 'x');
+    assert.equal(await findInstalled(bin), join(bin, PINNED_TAG, 'llama-server.bin'));
+  });
+});
