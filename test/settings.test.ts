@@ -12,7 +12,9 @@ import { fileURLToPath } from 'node:url';
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { UiServer } from '../src/ui/server.ts';
-import { RUNTIME_KINDS, inspectModelsDir, DIR_NOTES } from '../src/ui/settings.ts';
+import {
+  RUNTIME_KINDS, inspectModelsDir, DIR_NOTES, ensureDefaultModelsDir,
+} from '../src/ui/settings.ts';
 import { loadConfig } from '../src/config.ts';
 import { installRoot } from '../src/core/home.ts';
 
@@ -162,5 +164,26 @@ describe('置き場を、保存する前に見る', () => {
       if (!note) continue;
       assert.ok(app.includes(`${sign}: '${note}'`), `画面に無いか、文が違う: ${sign}`);
     }
+  });
+});
+
+describe('既定の置き場は、無ければ作る', () => {
+  test('作って OK を返す', async () => {
+    const dir = join(await tempDir('aas-mk-'), 'models');
+    assert.equal(await inspectModelsDir(dir), 'MISSING');
+    assert.equal(await ensureDefaultModelsDir(dir), 'OK');
+    assert.equal(await inspectModelsDir(dir), 'OK');
+  });
+
+  test('既に在れば、そのまま OK', async () => {
+    const dir = await tempDir('aas-mk-');
+    assert.equal(await ensureDefaultModelsDir(dir), 'OK');
+  });
+
+  test('作れなければ、止めずに理由を返す', async () => {
+    // ファイルの下にフォルダは作れない。
+    const file = join(await tempDir('aas-mk-'), 'a.txt');
+    await writeFile(file, 'x');
+    assert.equal(await ensureDefaultModelsDir(join(file, 'models')), 'NOT_A_DIR');
   });
 });

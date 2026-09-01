@@ -5,7 +5,7 @@
  * 書き込めると、設定という顔をして道具の振る舞いを丸ごと差し替えられる。
  * 変えたい理由がはっきりしているものだけを、ここに挙げる。
  */
-import { readFile, writeFile, stat } from 'node:fs/promises';
+import { readFile, writeFile, stat, mkdir } from 'node:fs/promises';
 import { configPath } from '../config.ts';
 
 export const RUNTIME_KINDS = ['ollama', 'llamacpp', 'inproc'] as const;
@@ -70,7 +70,12 @@ export async function inspectModelsDir(dir: string): Promise<DirState> {
     const s = await stat(dir);
     return s.isDirectory() ? 'OK' : 'NOT_A_DIR';
   } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'MISSING' : 'UNREADABLE';
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return 'MISSING';
+    // 途中にファイルが挟まっている（C:\a.txt\models のような形）。
+    // 「読めません」ではなく「フォルダではない」が正しい。
+    if (code === 'ENOTDIR') return 'NOT_A_DIR';
+    return 'UNREADABLE';
   }
 }
 
@@ -80,3 +85,20 @@ export const DIR_NOTES: Record<DirState, string> = {
   NOT_A_DIR: 'それはフォルダではなくファイルです。フォルダを指してください。',
   UNREADABLE: 'その置き場は読めませんでした（権限か、繋がっていないドライブ）。',
 };
+
+/**
+ * 既定の置き場だけは、無ければ作る。
+ *
+ * 「GGUF を置くだけ」と言っておいて、**置く場所が無い**のはおかしい。
+ * ただし作るのは**こちらが決めた場所だけ**。利用者が打った場所は作らない
+ * （打ち間違いをそのまま作ると、間違ったフォルダが増えていく）。
+ * 作れなくても止めない。言うだけにする。
+ */
+export async function ensureDefaultModelsDir(dir: string): Promise<DirState> {
+  try {
+    await mkdir(dir, { recursive: true });
+    return 'OK';
+  } catch {
+    return inspectModelsDir(dir);
+  }
+}

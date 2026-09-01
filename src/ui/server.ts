@@ -36,7 +36,7 @@ import { TaskRunner } from './tasks.ts';
 import { listenOrExplain } from '../core/listen.ts';
 import {
   RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
-  inspectModelsDir,
+  inspectModelsDir, ensureDefaultModelsDir,
 } from './settings.ts';
 import { listGguf } from '../runtime/inproc.ts';
 import { Session } from '../core/session.ts';
@@ -526,7 +526,11 @@ export class UiServer {
       const kind = body?.kind;
       if (!isRuntimeKind(kind)) return send(res, 400, { error: 'そういう動かし方はありません' });
       const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
-      const dirState = await inspectModelsDir(dir);
+      // 打った場所は見るだけ。既定の場所は、無ければ作る。
+      // 「GGUF を置くだけ」と言っておいて置き場が無いのは、案内になっていない。
+      const dirState = dir
+        ? await inspectModelsDir(dir)
+        : await ensureDefaultModelsDir(modelsDir());
       const at = await saveRuntime(kind, dir);
       this.broadcast({ type: 'log', level: 'info', text: `設定を書きました: ${at}` });
       return send(res, 200, {
