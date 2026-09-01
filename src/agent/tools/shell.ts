@@ -49,9 +49,17 @@ export function createRunCommandTool(opts: {
       const command = requireString(args, 'command');
       if (!command) return fail('command が必要です。');
 
-      const head = command.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
-      if (!allowed.has(head)) {
-        return fail(`許可されていないコマンドです: ${head}（許可: ${[...allowed].join(', ')}）`);
+      // 先頭だけ見ると、`echo x && <何でも>` で防波堤が飾りになる。
+      // 繋いだ命令は**一つずつ**先頭を見る。中で別の命令を組み立てる形
+      // （$( ) と ` `）は、何が走るか読めないので通さない。
+      if (/\$\(|`/.test(command)) {
+        return fail(`中で別の命令を組み立てる形は実行しません: ${command}`);
+      }
+      for (const part of splitChain(command)) {
+        const head = part.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+        if (!allowed.has(head)) {
+          return fail(`許可されていないコマンドです: ${head}（許可: ${[...allowed].join(', ')}）`);
+        }
       }
       for (const pattern of DANGEROUS) {
         if (pattern.test(command)) return fail(`危険と判断したため実行しません: ${command}`);
@@ -63,6 +71,19 @@ export function createRunCommandTool(opts: {
       return runShell(command, ctx.root, timeoutMs, ctx.signal);
     },
   };
+}
+
+/**
+ * 繋いだ命令を、命令ごとに分ける。
+ *
+ * `&&` `||` `;` `|` `&` と改行で切る。`2>&1` の `&` は繋ぎではないので
+ * 切らない（`>` の直後の `&` は除く）。
+ */
+export function splitChain(command: string): string[] {
+  return command
+    .split(/\|\||&&|;|\n|\|(?!&)|(?<![>])&(?!&)/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
 }
 
 async function runShell(command: string, cwd: string, timeoutMs: number, signal: AbortSignal) {
