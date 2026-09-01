@@ -102,6 +102,27 @@ const PATTERNS: Pattern[] = [
   },
 ];
 
+/**
+ * 終了コードから、黙って落ちた理由を言う。
+ *
+ * 落ち方には、**何も言わずに終わる**ものがある。Windows で必要な DLL が
+ * 無いときがそれで、標準エラーには一文字も出ない。出力を見る当てはめは
+ * どれも当たらず、「上の出力が手がかりです」と言っても手がかりが無い。
+ *
+ * 番号だけが残る。だから番号も読む。
+ */
+export function explainExitCode(code: number | null): string {
+  if (code === 3221225781) {  // 0xC0000135 STATUS_DLL_NOT_FOUND
+    return '必要な DLL が隣にありません。CUDA 版なら実行時ライブラリ（cudart）が要ります。'
+      + '\n  npm run llama で入れ直すと、実行時ライブラリも一緒に取ってきます。';
+  }
+  if (code === 3221225785) {  // 0xC0000139 STATUS_ENTRYPOINT_NOT_FOUND
+    return 'DLL はありますが、版が合っていません。'
+      + '\n  別の場所にある古い DLL を先に見ている可能性があります。';
+  }
+  return '';
+}
+
 export function diagnose(output: string): Diagnosis {
   for (const p of PATTERNS) {
     if (p.match.test(output)) {
@@ -116,9 +137,19 @@ export function describeFailure(code: number | null, output: string): string {
   const head = `llama-server が起動に失敗しました (終了コード ${code ?? '不明'})`;
   const tail = output.trim();
 
+  // 出力に見覚えが無くても、番号で分かることがある。
+  const byCode = explainExitCode(code);
+
   if (!cause) {
-    return [head, tail, '', '見覚えのある落ち方ではありませんでした。上の出力が手がかりです。']
-      .filter((s) => s !== '').join('\n');
+    return [
+      head, tail, '',
+      ...(byCode
+        ? [`→ ${byCode}`]
+        : [tail
+          // 「上の出力が手がかりです」と言っても、出力が無いなら手がかりも無い。
+          ? '見覚えのある落ち方ではありませんでした。上の出力が手がかりです。'
+          : '何も出力せずに終わりました。見分けが付きません。']),
+    ].filter((s) => s !== '').join('\n');
   }
 
   return [

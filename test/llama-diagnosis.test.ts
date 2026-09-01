@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { diagnose, describeFailure } from '../src/runtime/llama-diagnosis.ts';
+import { diagnose, describeFailure, explainExitCode } from '../src/runtime/llama-diagnosis.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const load = (name: string) => readFile(join(here, 'fixtures', 'llama', `${name}.txt`), 'utf8');
@@ -102,5 +102,39 @@ describe('決め手の行が捨てられていないか', () => {
       const tail20 = out.trim().split('\n').slice(-20).join('\n');
       assert.match(diagnose(tail20).cause ?? '', expected);
     }
+  });
+});
+
+describe('黙って落ちたとき', () => {
+  // 出力を見る当てはめは、出力が無ければどれも当たらない。
+  // Windows で DLL が足りないと、標準エラーに一文字も出ないまま終わる。
+
+  test('出力が無くても、番号で分かるなら言う', () => {
+    const text = describeFailure(3221225781, '');
+    assert.match(text, /DLL/);
+    assert.match(text, /cudart/);
+    assert.match(text, /npm run llama/, '次の一手が無い');
+  });
+
+  test('版違いも見分ける', () => {
+    assert.match(describeFailure(3221225785, ''), /版が合っていません/);
+  });
+
+  test('出力も番号も手がかりにならなければ、そう言う', () => {
+    const text = describeFailure(1, '');
+    // 出力が無いのに「上の出力が手がかりです」と言わない。
+    assert.equal(text.includes('上の出力が手がかり'), false);
+    assert.match(text, /何も出力せずに終わりました/);
+  });
+
+  test('出力があるときは、これまでどおり出力を手がかりにする', () => {
+    const text = describeFailure(1, 'なにか見慣れない文言');
+    assert.match(text, /上の出力が手がかりです/);
+    assert.match(text, /なにか見慣れない文言/);
+  });
+
+  test('知らない番号に、当てずっぽうを言わない', () => {
+    assert.equal(explainExitCode(1), '');
+    assert.equal(explainExitCode(null), '');
   });
 });

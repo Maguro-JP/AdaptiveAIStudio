@@ -11,8 +11,9 @@ import { readFile, stat, writeFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { install, findInstalled, listInstalled, explainExitCode } from '../src/runtime/llama-install.ts';
+import { install, findInstalled, listInstalled } from '../src/runtime/llama-install.ts';
 import type { Target } from '../src/runtime/llama-release.ts';
+import { explainExitCode } from '../src/runtime/llama-diagnosis.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const sampleZip = await readFile(join(here, 'fixtures', 'sample.zip'));

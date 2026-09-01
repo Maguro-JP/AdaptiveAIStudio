@@ -14,6 +14,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { pickAsset, pickCudart, PINNED_TAG, RELEASES_API, type Target } from './llama-release.ts';
+import { explainExitCode } from './llama-diagnosis.ts';
 import { unzip } from './unzip.ts';
 import { runtimeEnv } from './llama-env.ts';
 
@@ -189,21 +190,6 @@ export async function install(opts: InstallOptions): Promise<Installed> {
     await rm(dest, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
     throw e;
   }
-}
-
-/**
- * Windows の終了コードから、黙って落ちた理由を言う。
- *
- * この二つは、標準エラーに何も出ないまま起きる。番号を見ないと分からない。
- */
-export function explainExitCode(code: number | null): string {
-  if (code === 3221225781) {  // 0xC0000135 STATUS_DLL_NOT_FOUND
-    return '\n  → 必要な DLL が隣にありません。CUDA 版なら実行時ライブラリ（cudart）が要ります。';
-  }
-  if (code === 3221225785) {  // 0xC0000139 STATUS_ENTRYPOINT_NOT_FOUND
-    return '\n  → DLL はありますが、版が合っていません。';
-  }
-  return '';
 }
 
 /** 一度だけ起動して、動くかを見る。 */
