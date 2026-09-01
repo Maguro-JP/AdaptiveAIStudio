@@ -145,3 +145,34 @@ describe('一覧に、名前をそのまま流し込まない', () => {
     assert.ok(html.includes('href="src/"'));
   });
 });
+
+describe('鍵や記録は、見る窓から出さない', () => {
+  test('.env と .git は 403', async () => {
+    const url = await serve(await site({ '.env': 'SECRET=1', 'index.html': 'x', '.git/config': 'x' }));
+    for (const path of ['.env', '.git/config', 'sub/../.env']) {
+      const r = await fetch(`${url}${path}`);
+      assert.equal(r.status, 403, `出てしまった: ${path}`);
+    }
+  });
+
+  test('ふつうの頁は出る（対）', async () => {
+    const url = await serve(await site({ 'index.html': 'ここ', 'a.txt': 'b' }));
+    assert.equal((await fetch(`${url}a.txt`)).status, 200);
+    assert.equal(await (await fetch(`${url}index.html`)).text().then((t) => t.includes('ここ')), true);
+  });
+
+  test('よその名前（Host）で来たら見せない', async () => {
+    // fetch は Host を差し替えさせてくれない（黙って落とす）。生の http で送る。
+    const url = new URL(await serve(await site({ 'index.html': 'x' })));
+    const { request } = await import('node:http');
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = request({
+        host: url.hostname, port: url.port, path: '/index.html', method: 'GET',
+        headers: { host: 'evil.example' },
+      }, (res) => { res.resume(); resolve(res.statusCode ?? 0); });
+      req.on('error', reject);
+      req.end();
+    });
+    assert.equal(status, 403);
+  });
+});

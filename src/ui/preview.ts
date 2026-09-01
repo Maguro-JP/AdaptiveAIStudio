@@ -17,6 +17,7 @@ import { watch, type FSWatcher } from 'node:fs';
 import { join, extname, relative, sep } from 'node:path';
 import { safeResolve } from '../agent/tools/paths.ts';
 import { listenOrExplain } from '../core/listen.ts';
+import { crossSiteReason } from './origin.ts';
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -182,7 +183,23 @@ export class PreviewServer {
       return;
     }
 
+    // DNS の付け替え（rebinding）よけ。よその名前で来た要求は、作業場を見せない。
+    // 作業場には .env のような、外へ出してはいけないものがある。
+    const refused = crossSiteReason(req.headers, req.method ?? 'GET');
+    if (refused) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end(refused);
+      return;
+    }
+
     const wanted = decodeURIComponent(url.pathname).replace(/^\/+/, '');
+    // 点で始まるもの（.env / .git / .ssh）は見せない。見る窓が要るのは
+    // 書いた頁であって、鍵や記録ではない。
+    if (wanted.split('/').some((seg) => seg.startsWith('.') && seg !== '.' )) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('点で始まるものは見せません');
+      return;
+    }
     const abs = wanted === '' ? this.#opts.root : safeResolve(this.#opts.root, wanted);
     if (!abs) {
       // 作業場の外。何があるかも言わない。
