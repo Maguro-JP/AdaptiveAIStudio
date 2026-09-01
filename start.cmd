@@ -131,9 +131,8 @@ echo   会社のクラウドドライブ（OneDrive・PassageDrive など）へ�
 echo   .exe だけが黙って落ちることがあります。書き込みが拒まれても、
 echo   展開する側は何も言わずに進みます。
 echo.
-echo   直し方: ZIP を C: の下に保存し直して、そこで展開してください。
-echo     例:  C:\Users\%USERNAME%\Desktop
-echo   右クリックから「すべて展開」で構いません。
+echo   .exe を置ける場所へ展開し直してください。
+echo   会社の決まりで置ける場所が無いときは、この機械では動きません。
 echo.
 pause
 exit /b 1
