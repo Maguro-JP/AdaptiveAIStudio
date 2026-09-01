@@ -413,3 +413,40 @@ describe('全角の利用者名でも、モデルは開ける場所へ置く', (
     assert.equal(isAsciiPath('C:\\ProgramData\\AdaptiveAIStudio'), true);
   });
 });
+
+describe('配布物の形のまま、この中で読む設定で通す', () => {
+  test('組み立てたものに GGUF を置いて doctor が通る', sourceOnly, async () => {
+    // 過去の不具合は、**配った形でだけ壊れる**ものに集まっている
+    // （入口が丸ごと死ぬ、置き場がずれる、繋ぎ先が埋まらない）。
+    // 作業コピーで通ることは、配った形で通ることの証明にならない。
+    const out = await tempDir('aas-dist-');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), nodeHere: true, version: 'dist-e2e' });
+
+    const { mkdir: mk, writeFile: wf } = await import('node:fs/promises');
+    const models = join(out, 'data', 'models');
+    await mk(models, { recursive: true });
+    await wf(join(models, 'qwen2.5-3b-instruct-q4_k_m.gguf'), 'x');
+    const cfg = join(out, 'aas.config.json');
+    await wf(cfg, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
+
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const run = promisify(execFile);
+    const got = await run(
+      process.execPath,
+      [join(out, 'app', 'scripts', 'run.mjs'), 'doctor'],
+      {
+        env: { ...process.env, AAS_HOME: join(out, 'data'), AAS_CONFIG: cfg, NO_COLOR: '1' },
+        timeout: 120_000,
+      },
+    ).catch((e: { stdout?: string; stderr?: string }) => e);
+    // eslint-disable-next-line no-control-regex
+    const text = `${got.stdout ?? ''}${got.stderr ?? ''}`.replace(/\x1b\[[0-9;]*m/g, '');
+
+    assert.match(text, /qwen2\.5-3b-instruct-q4_k_m\.gguf/, '置いた GGUF を見つけていない');
+    // 繋ぎ先はこちらで埋める。利用者に書かせない。
+    assert.match(text, /この中に立てます/, '繋ぎ先が埋まっていない');
+    assert.doesNotMatch(text, /モデルを動かす土台がまだありません/);
+  });
+});
