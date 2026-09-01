@@ -139,3 +139,47 @@ describe('口が塞がっていたら、そう言う', () => {
     }
   });
 });
+
+describe('同じものを二度読まない', () => {
+  test('読み込みの最中に二人目が来ても、読むのは一度', async () => {
+    const { dir, ref } = await withModel();
+    let loads = 0;
+    const load = async () => ({
+      getLlama: async () => ({
+        loadModel: async () => {
+          loads++;
+          // 本物は数GBを10〜60秒かけて読む。二人目はその間に来る。
+          await new Promise((r) => setTimeout(r, 60));
+          return { createContext: async () => ({ getSequence: () => ({}), dispose: async () => {} }) };
+        },
+      }),
+      LlamaChatSession: class { setChatHistory() {} async prompt() { return ''; } },
+    });
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
+    running.push(rt);
+    await Promise.all([rt.ensureLoaded(ref), rt.ensureLoaded(ref), rt.ensureLoaded(ref)]);
+    assert.equal(loads, 1, '同じものを何度も読んでいる（数GBが二重に載る）');
+    assert.deepEqual(rt.loaded(), [ref]);
+  });
+
+  test('読み込みに失敗したら、失敗を覚え込まない', async () => {
+    const { dir, ref } = await withModel();
+    let tries = 0;
+    const load = async () => ({
+      getLlama: async () => ({
+        loadModel: async () => {
+          tries++;
+          if (tries === 1) throw new Error('壊れています');
+          return { createContext: async () => ({ getSequence: () => ({}), dispose: async () => {} }) };
+        },
+      }),
+      LlamaChatSession: class { setChatHistory() {} async prompt() { return ''; } },
+    });
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
+    running.push(rt);
+    await assert.rejects(() => rt.ensureLoaded(ref));
+    // 済んだ失敗を返し続けると、置き直しても直らなくなる。
+    await rt.ensureLoaded(ref);
+    assert.equal(tries, 2);
+  });
+});

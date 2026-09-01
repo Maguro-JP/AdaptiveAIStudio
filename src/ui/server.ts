@@ -107,6 +107,15 @@ export class UiServer {
   #session?: Session;
   #idleTimer?: ReturnType<typeof setInterval>;
   #thinking = false;
+  /**
+   * 受け付けてから走り出すまでの間。
+   *
+   * `session.busy` を見てから実際に走り出すまでに、モデルの読み込みで
+   * 数十秒空くことがある。その間はまだ busy ではないので、二つ目の
+   * 依頼が**同じ関門を通り抜ける**。押しても何も起きないように見えて、
+   * 実は二つ走っている。見てから走り出すまでを、ここで塞ぐ。
+   */
+  #preparing = false;
   /** モデルの土台。要るときに一度だけ組み立てる。 */
   #runtime?: LocalRuntime;
   /** 承認待ちの返事先。画面が答えるまで、ここで待っている。 */
@@ -177,8 +186,8 @@ export class UiServer {
     const every = Math.max(5, cfg.idleSeconds ?? 30) * 1000;
 
     this.#idleTimer = setInterval(() => {
-      // 作業中は考えない。人の依頼が先。
-      if (session.busy || this.#thinking) return;
+      // 作業中は考えない。人の依頼が先。支度の最中も、人の依頼のうち。
+      if (this.#busyNow(session)) return;
       this.#thinking = true;
       void (async () => {
         try {
@@ -306,21 +315,26 @@ export class UiServer {
       if (!text && attached.length === 0) return send(res, 400, { error: '指示が空です' });
 
       const session = await this.session();
-      if (session.busy) return send(res, 409, { error: 'いま別の作業をしています' });
+      if (this.#busyNow(session)) return send(res, 409, { error: 'いま別の作業をしています' });
 
-      // **先に確かめる。**モデルが無いまま送ると、繋ぎ先を待ち続けて
-      // 画面は「考え中」のまま止まる。利用者からは固まったようにしか見えない。
-      const missing = await this.#readyToThink();
-      if (missing) return send(res, 503, { error: missing });
+      this.#preparing = true;
+      try {
+        // **先に確かめる。**モデルが無いまま送ると、繋ぎ先を待ち続けて
+        // 画面は「考え中」のまま止まる。利用者からは固まったようにしか見えない。
+        const missing = await this.#readyToThink();
+        if (missing) return send(res, 503, { error: missing });
 
-      // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
-      // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
-      const extra = attached.length > 0 ? await this.#attachments.describe(attached) : '';
-      const full = extra ? `${extra}\n\n${text}` : text;
+        // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
+        // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
+        const extra = attached.length > 0 ? await this.#attachments.describe(attached) : '';
+        const full = extra ? `${extra}\n\n${text}` : text;
 
-      // 受け取ったことだけ先に返し、続きは出来事として流す。
-      send(res, 202, { accepted: true });
-      void this.#drive(session, full);
+        // 受け取ったことだけ先に返し、続きは出来事として流す。
+        send(res, 202, { accepted: true });
+        void this.#drive(session, full);
+      } finally {
+        this.#preparing = false;
+      }
       return;
     }
 
@@ -330,15 +344,20 @@ export class UiServer {
       if (!text) return send(res, 400, { error: '依頼が空です' });
 
       const session = await this.session();
-      if (session.busy) return send(res, 409, { error: 'いま別の作業をしています' });
+      if (this.#busyNow(session)) return send(res, 409, { error: 'いま別の作業をしています' });
 
-      // **先に確かめる。**モデルが無いまま送ると、繋ぎ先を待ち続けて
-      // 画面は「考え中」のまま止まる。利用者からは固まったようにしか見えない。
-      const missing = await this.#readyToThink();
-      if (missing) return send(res, 503, { error: missing });
+      this.#preparing = true;
+      try {
+        // **先に確かめる。**モデルが無いまま送ると、繋ぎ先を待ち続けて
+        // 画面は「考え中」のまま止まる。利用者からは固まったようにしか見えない。
+        const missing = await this.#readyToThink();
+        if (missing) return send(res, 503, { error: missing });
 
-      send(res, 202, { accepted: true });
-      void this.#drivePlan(session, text);
+        send(res, 202, { accepted: true });
+        void this.#drivePlan(session, text);
+      } finally {
+        this.#preparing = false;
+      }
       return;
     }
 
@@ -361,7 +380,7 @@ export class UiServer {
       if (!target) return send(res, 404, { error: 'その提案は見つかりません' });
       this.broadcast({ type: 'stateChanged' });
       // 採用したなら、その内容をそのまま依頼として流す。
-      if (verdict === 'accepted' && !session.busy) void this.#drive(session, target.suggestedAction);
+      if (verdict === 'accepted' && !this.#busyNow(session)) void this.#drive(session, target.suggestedAction);
       return send(res, 200, { proposal: target });
     }
 
@@ -405,7 +424,7 @@ export class UiServer {
 
     if (path === '/api/models/get' && req.method === 'POST') {
       const session = await this.session();
-      if (session.busy) return send(res, 409, { error: 'いま作業中です。終わってからにしてください' });
+      if (this.#busyNow(session)) return send(res, 409, { error: 'いま作業中です。終わってからにしてください' });
       const body = await readBody(req) as { id?: string };
       const id = String(body?.id ?? '');
       if (!id) return send(res, 400, { error: '名前がありません' });
@@ -422,14 +441,14 @@ export class UiServer {
     if (path === '/api/update' && req.method === 'POST') {
       const session = await this.session();
       // 作業中に足元のコードを入れ替えない。
-      if (session.busy) return send(res, 409, { error: 'いま作業中です。終わってから更新してください' });
+      if (this.#busyNow(session)) return send(res, 409, { error: 'いま作業中です。終わってから更新してください' });
       const result = await applyUpdate(session.root);
       return send(res, result.ok ? 200 : 409, result);
     }
 
     if (path === '/api/think' && req.method === 'POST') {
       const session = await this.session();
-      if (session.busy || this.#thinking) return send(res, 409, { error: 'いま別の作業をしています' });
+      if (this.#busyNow(session)) return send(res, 409, { error: 'いま別の作業をしています' });
       send(res, 202, { accepted: true });
       this.#thinking = true;
       void (async () => {
@@ -582,6 +601,11 @@ export class UiServer {
    * 無いことを黙って待たない。**待っている間、利用者は何も分からない。**
    * 繋ぎ先の応答待ちは数十秒になることがあり、その間ずっと「考え中」になる。
    */
+  /** いま何かしているか。走り出す前の支度も「している」に数える。 */
+  #busyNow(session: Session): boolean {
+    return session.busy || this.#thinking || this.#preparing;
+  }
+
   async #readyToThink(): Promise<string | undefined> {
     const kind = this.#opts.config.runtime?.kind ?? 'ollama';
     try {

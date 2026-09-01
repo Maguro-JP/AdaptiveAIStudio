@@ -68,6 +68,15 @@ export class InProcRuntime implements LocalRuntime {
   #url = '';
   /** 読み込んだもの。ref ごとに一つ。 */
   readonly #sessions = new Map<string, Held>();
+  /**
+   * 読み込んでいる最中のもの。
+   *
+   * 数GBを10〜60秒かけて読む。その間に二人目が来ると、**同じものを
+   * もう一度読み始める**。二重に持つので、メモリが足りない機械では
+   * そこで落ちる。落ちなくても倍の時間待たされる。
+   * 二人目には、一人目の約束をそのまま渡す。
+   */
+  readonly #loading = new Map<string, Promise<Held>>();
 
   constructor(opts: InProcOptions) {
     this.#opts = opts;
@@ -84,28 +93,41 @@ export class InProcRuntime implements LocalRuntime {
   async ensureLoaded(ref: string): Promise<LoadedModel> {
     const began = Date.now();
     if (!this.#sessions.has(ref)) {
-      const lib = await this.#lib();
-      const llama = await lib.getLlama();
-      // 数GBを読むので、10〜60秒かかる。**黙って待たせない。**
-      // 進み具合を出さないと、また「固まった」に見える。
-      let last = -1;
-      const model = await llama.loadModel({
-        modelPath: join(this.#opts.modelsDir, ref),
-        onLoadProgress: (done: number) => {
-          const pct = Math.floor(done * 100);
-          // 1% ごとに言うと流れが埋まる。10% ごとに一度。
-          if (pct < last + 10) return;
-          last = pct;
-          this.#opts.onLog?.(`読み込み中 ${pct}%: ${ref}`);
-        },
-      });
-      const context = await model.createContext();
-      const session = new lib.LlamaChatSession({ contextSequence: context.getSequence() });
-      this.#sessions.set(ref, { context, session, turn: Promise.resolve() });
-      this.#opts.onLog?.(`読み込みました: ${ref}`);
+      let load = this.#loading.get(ref);
+      if (!load) {
+        load = this.#load(ref);
+        this.#loading.set(ref, load);
+        // 失敗したら覚えたままにしない。次に呼ばれたときに、
+        // 済んだ失敗をもう一度返すことになる。
+        load.catch(() => undefined).finally(() => { this.#loading.delete(ref); });
+      }
+      this.#sessions.set(ref, await load);
     }
     await this.#serve();
     return { baseUrl: this.#url, model: ref, loadSeconds: (Date.now() - began) / 1000 };
+  }
+
+  /** 実際に読む。**必ず #loading 越しに呼ぶ。** */
+  async #load(ref: string): Promise<Held> {
+    const lib = await this.#lib();
+    const llama = await lib.getLlama();
+    // 数GBを読むので、10〜60秒かかる。**黙って待たせない。**
+    // 進み具合を出さないと、また「固まった」に見える。
+    let last = -1;
+    const model = await llama.loadModel({
+      modelPath: join(this.#opts.modelsDir, ref),
+      onLoadProgress: (done: number) => {
+        const pct = Math.floor(done * 100);
+        // 1% ごとに言うと流れが埋まる。10% ごとに一度。
+        if (pct < last + 10) return;
+        last = pct;
+        this.#opts.onLog?.(`読み込み中 ${pct}%: ${ref}`);
+      },
+    });
+    const context = await model.createContext();
+    const session = new lib.LlamaChatSession({ contextSequence: context.getSequence() });
+    this.#opts.onLog?.(`読み込みました: ${ref}`);
+    return { context, session, turn: Promise.resolve() };
   }
 
   async unload(ref: string): Promise<void> {
