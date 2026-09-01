@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tempDir } from './tmp.ts';
-import { aasHome, stateDir, binDir, modelsDir, isPortable, installRoot } from '../src/core/home.ts';
+import { aasHome, stateDir, binDir, modelsDir, isPortable, installRoot, isAsciiPath, asciiModelsDir } from '../src/core/home.ts';
 import { lookup, toCommand } from '../scripts/run.mjs';
 
 /**
@@ -299,5 +299,35 @@ describe('CI が使えなくても、配布物は作れる', () => {
     for (const p of ['app/scripts/run-tests.mjs', 'app/test', 'app/src']) {
       assert.ok(await stat(join(out, ...p.split('/'))), `入っていない: ${p}`);
     }
+  });
+});
+
+describe('全角の利用者名でも、モデルは開ける場所へ置く', () => {
+  // 走らせる場所で結果が変わらないよう、環境は引数で渡す。
+  const env = { ProgramData: 'C:\\ProgramData' };
+
+  test('半角だけの根は、そのまま使う', () => {
+    assert.equal(asciiModelsDir('C:\\Users\\maguro\\.aas', env), undefined);
+  });
+
+  test('全角が混ざる根は、モデルだけ ProgramData へ逃がす', () => {
+    const got = asciiModelsDir('C:\\Users\\ｍ＠ｇｕｒｏ\\.aas', env);
+    assert.equal(got, join('C:\\ProgramData', 'AdaptiveAIStudio', 'models'));
+    assert.ok(isAsciiPath(got!), '逃がした先まで全角では意味がない');
+  });
+
+  test('逃がす先が無ければ、黙って動かさない', () => {
+    // 見つからないのに勝手な場所を作らない。C: 直下に作るのがいちばん困る。
+    assert.equal(asciiModelsDir('C:\\Users\\ｍ＠ｇｕｒｏ\\.aas', {}), undefined);
+  });
+
+  test('逃がす先自体が全角なら、逃がさない', () => {
+    assert.equal(asciiModelsDir('C:\\Users\\ｍ＠ｇｕｒｏ\\.aas', { ProgramData: 'D:\\データ' }), undefined);
+  });
+
+  test('プログラムと記録は逃がさない（割れるほうが分かりにくい）', () => {
+    // モデルだけが困る。他は全角の道でも読み書きできる。
+    assert.equal(isAsciiPath('C:\\Users\\ｍ＠ｇｕｒｏ'), false);
+    assert.equal(isAsciiPath('C:\\ProgramData\\AdaptiveAIStudio'), true);
   });
 });

@@ -118,8 +118,10 @@ export async function inspectEnvironment(ctx: EnvContext): Promise<EnvIssue[]> {
         fix: 'llama.cpp 系（LM Studio・Ollama の中身）は、'
           + 'モデルを開くときにこの種の文字を扱えないことがあります。\n'
           + 'ASCII だけの場所に移してください。例:\n'
-          + '  set OLLAMA_MODELS=C:\\ai\\ollama\n'
-          + '  （llama.cpp なら modelsDir を C:\\ai\\models などにする）\n'
+          + '  set OLLAMA_MODELS=%ProgramData%\\Ollama\n'
+          + '  （llama.cpp なら modelsDir を %ProgramData%\\AdaptiveAIStudio\\models にする）\n'
+          + '  ※ ProgramData は必ず半角英数字で、管理者権限が無くても書けます。\n'
+          + '     C: 直下にフォルダを作る必要はありません。\n'
           + 'これが LM Studio でモデルを読めない原因のことがあります。',
       });
     }

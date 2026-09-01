@@ -53,14 +53,22 @@ cmd.exe が塊をまとめて解釈する際に行が壊れ、断片をコマン
 根は `AAS_HOME` 一つで決まる（`src/core/home.ts`）。
 **入れた側が決めて渡す。**プログラムに「インストール済みか」を判断させない。
 
-| | 持ち運び版 | インストール版 |
-|---|---|---|
-| プログラム | フォルダの中 | `Program Files\AdaptiveAIStudio\` |
-| データ | 隣の `data\` | `ProgramData\AdaptiveAIStudio\` |
+| | 持ち運び版 | 利用者ごと（管理者権限なし） | 全体（インストーラ） |
+|---|---|---|---|
+| プログラム | フォルダの中 | `%LOCALAPPDATA%\Programs\AdaptiveAIStudio\` | `%ProgramFiles%\AdaptiveAIStudio\` |
+| データ | 隣の `data\` | 同じ場所の `data\` | `%ProgramData%\AdaptiveAIStudio\` |
+| モデル | 同上（全角なら逃がす） | 同上（全角なら逃がす） | 同上 |
 
-データを LocalAppData に置かないのは一点の理由による。
-そこは `C:\Users\<利用者名>\AppData\Local` で、**利用者名が全角だと
-llama.cpp がモデルを開けない**。ProgramData は必ず ASCII。
+**`C:` 直下にフォルダを作らない。**`C:\AAS` や `C:\ai` は、
+消し忘れて残る場所であり、汚してよい場所ではない。Windows が
+用意している置き場を使う（管理者権限が要らないのは LocalAppData\Programs、
+VS Code などが同じ場所に入る）。
+
+利用者名が全角だと `%LOCALAPPDATA%` も全角になる。困るのはモデルだけなので、
+**モデルだけ** `%ProgramData%\AdaptiveAIStudio\models` へ逃がす
+（`src/core/home.ts` の `asciiModelsDir`）。ProgramData は必ず ASCII で、
+管理者権限が無くても書ける。プログラムと記録は逃がさない
+（全角でも読み書きでき、置き場所が二つに割れるほうが分かりにくい）。
 
 ```
 AdaptiveAIStudio\

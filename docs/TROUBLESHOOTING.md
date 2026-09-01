@@ -46,32 +46,33 @@ llama.cpp 系は、モデルを開くときにワイド文字のAPIを通らな�
 未了  既定の Ollama 置き場に全角・日本語が入っています
       C:\Users\ｍ＠ｇｕｒｏ\.ollama  ← ｍ＠ｇｕｒｏ
       → ASCII だけの場所に移してください。例:
-          set OLLAMA_MODELS=C:\ai\ollama
+          set OLLAMA_MODELS=%ProgramData%\Ollama
 ```
 
 **直し方（Ollama）**
 
 ```
-setx OLLAMA_MODELS C:\ai\ollama
+setx OLLAMA_MODELS %ProgramData%\Ollama
 ```
 
 設定したらコマンドプロンプトを開き直して `ollama serve` から。
 既に落としたモデルは `C:\Users\...\.ollama\models` から
-`C:\ai\ollama\models` へ移せば、落とし直さずに済みます。
+`%ProgramData%\Ollama\models` へ移せば、落とし直さずに済みます。
 
 **直し方（LM Studio）**
 
-設定の Models Directory を `C:\ai\lmstudio` のような場所へ変更します。
+設定の Models Directory を `%ProgramData%\LMStudio` のような場所へ変更します。
 
 **直し方（この場所を llama.cpp で使う場合）**
 
 ```json
 { "runtime": { "kind": "llamacpp",
-               "command": "C:\\ai\\llama\\llama-server.exe",
-               "modelsDir": "C:\\ai\\models" } }
+               "command": "C:\\ProgramData\\AdaptiveAIStudio\\bin\\llama-server.exe",
+               "modelsDir": "C:\\ProgramData\\AdaptiveAIStudio\\models" } }
 ```
 
-`C:` 直下など、ASCII だけの場所に置きます。
+`%ProgramData%`（実体は `C:\ProgramData`）は必ず半角英数字で、
+管理者権限が無くても書けます。**`C:` 直下にフォルダを作らないでください。**
 
 **直し方（この道具が自分で取ってくるモデル）**
 
@@ -79,8 +80,13 @@ setx OLLAMA_MODELS C:\ai\ollama
 **利用者名が全角なら、この置き場も全角になります。**設定を書かずに逃がすなら:
 
 ```
-setx AAS_MODELS_DIR C:\ai\models
+setx AAS_MODELS_DIR %ProgramData%\AdaptiveAIStudio\models
 ```
+
+ただし、**この道具は設定していなくても自分で逃がします。**根が全角を含むときは、
+モデルだけ `%ProgramData%\AdaptiveAIStudio\models` に置きます
+（`src/core/home.ts` の `asciiModelsDir`）。上の設定は、置き場所を
+自分で決めたいときだけで構いません。
 
 **モデルを取ってくる前に**設定してください。数GB 落としてから開けないと
 分かるのが、いちばん無駄なので。`npm run doctor` は、設定していなくても

@@ -81,7 +81,42 @@ export function binDir(root?: string): string {
   return process.env.AAS_BIN_DIR ?? join(aasHome(root), 'bin');
 }
 
+/**
+ * 半角英数字だけで出来ている道か。
+ *
+ * llama.cpp は全角の混ざった道からモデルを開けない。
+ * 利用者名が全角だと `C:\\Users\\＜名前＞\\...` が全部これに当たる。
+ */
+export function isAsciiPath(path: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /^[\x20-\x7e]*$/.test(path);
+}
+
+/**
+ * モデルだけの逃げ道。
+ *
+ * 根が全角を含むとき、**モデルだけ** ASCII の確実な場所へ逃がす。
+ * ProgramData は必ず半角英数字で、管理者権限が無くても書ける。
+ *
+ * プログラムや記録は逃がさない。全角の道でも読み書きできるし、
+ * 置き場所が二つに割れるほうが分かりにくい。困るのはモデルだけ。
+ *
+ * @param home  いまの根
+ * @param env   環境（試験から渡せるようにしてある。走らせる場所で結果を変えないため）
+ */
+export function asciiModelsDir(
+  home: string,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  if (isAsciiPath(home)) return undefined;
+  const programData = env.ProgramData;
+  if (!programData || !isAsciiPath(programData)) return undefined;
+  return join(programData, 'AdaptiveAIStudio', 'models');
+}
+
 /** GGUF の置き場。 */
 export function modelsDir(root?: string): string {
-  return process.env.AAS_MODELS_DIR ?? join(aasHome(root), 'models');
+  if (process.env.AAS_MODELS_DIR) return process.env.AAS_MODELS_DIR;
+  const home = aasHome(root);
+  return asciiModelsDir(home) ?? join(home, 'models');
 }

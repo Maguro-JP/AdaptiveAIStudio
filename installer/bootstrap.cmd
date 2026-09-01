@@ -2,7 +2,11 @@
 rem ============================================================
 rem  AdaptiveAIStudio - set up on a machine with nothing installed
 rem
-rem  Usage: bootstrap.cmd C:\AAS
+rem  Usage: bootstrap.cmd [destination]
+rem  Default destination: %LOCALAPPDATA%\Programs\AdaptiveAIStudio
+rem  That is where Windows puts per-user programs (same place VS Code
+rem  installs itself without admin rights). Never dump a folder at the
+rem  root of C:.
 rem  Needs Windows 10+ only. curl and tar ship with Windows.
 rem  No git, no Node, no npm, no admin rights.
 rem
@@ -22,7 +26,7 @@ setlocal
 title AdaptiveAIStudio
 
 set "DEST=%~1"
-if "%DEST%"=="" set "DEST=%~dp0AdaptiveAIStudio"
+if "%DEST%"=="" set "DEST=%LOCALAPPDATA%\Programs\AdaptiveAIStudio"
 
 set "REPO=https://github.com/Maguro-JP/AdaptiveAIStudio"
 set "BRANCH=main"
@@ -34,12 +38,19 @@ echo   AdaptiveAIStudio を用意します
 echo   置き場所: %DEST%
 echo.
 
-rem Refuse full-width paths before downloading anything: llama.cpp
-rem cannot open models under them, and finding out later means
-rem re-downloading several GB.
+rem A full-width user name makes this path full-width too, and llama.cpp
+rem cannot open models from there. The app moves models alone to
+rem %ProgramData%\AdaptiveAIStudio\models in that case (see
+rem src/core/home.ts, asciiModelsDir). Nothing to refuse here.
 echo %DEST%| findstr /R "[^ -~]" >nul
-if not errorlevel 1 goto :fullwidth
+if not errorlevel 1 goto :noteFullwidth
+goto :checkTools
 
+:noteFullwidth
+echo   置き場所に全角が含まれています。モデルだけ ProgramData へ置きます。
+echo.
+
+:checkTools
 where curl >nul 2>nul
 if errorlevel 1 goto :noTools
 where tar >nul 2>nul
@@ -97,16 +108,6 @@ rem ============================================================
 rem  Messages only. Keeping them here is what lets the control flow
 rem  above stay ASCII.
 rem ============================================================
-
-:fullwidth
-echo   [止めました] 置き場所に全角や日本語が入っています。
-echo     %DEST%
-echo.
-echo   モデルを開く段で詰まります。半角英数字だけの場所を渡してください。
-echo     例:  bootstrap.cmd C:\AAS
-echo.
-pause
-exit /b 1
 
 :noTools
 echo   curl と tar が要ります。Windows 10 以降なら最初から入っています。
