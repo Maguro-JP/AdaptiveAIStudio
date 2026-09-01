@@ -85,7 +85,19 @@ export class InProcRuntime implements LocalRuntime {
     if (!this.#sessions.has(ref)) {
       const lib = await this.#lib();
       const llama = await lib.getLlama();
-      const model = await llama.loadModel({ modelPath: join(this.#opts.modelsDir, ref) });
+      // 数GBを読むので、10〜60秒かかる。**黙って待たせない。**
+      // 進み具合を出さないと、また「固まった」に見える。
+      let last = -1;
+      const model = await llama.loadModel({
+        modelPath: join(this.#opts.modelsDir, ref),
+        onLoadProgress: (done: number) => {
+          const pct = Math.floor(done * 100);
+          // 1% ごとに言うと流れが埋まる。10% ごとに一度。
+          if (pct < last + 10) return;
+          last = pct;
+          this.#opts.onLog?.(`読み込み中 ${pct}%: ${ref}`);
+        },
+      });
       const context = await model.createContext();
       const session = new lib.LlamaChatSession({ contextSequence: context.getSequence() });
       this.#sessions.set(ref, { context, session });

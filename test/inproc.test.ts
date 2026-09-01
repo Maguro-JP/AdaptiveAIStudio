@@ -265,3 +265,30 @@ describe('繋ぎ先を、利用者に書かせない', () => {
     delete process.env.AAS_CONFIG;
   });
 });
+
+describe('読み込みの進み具合を言う', () => {
+  test('黙って待たせない', async () => {
+    // 数GBを読むので 10〜60秒かかる。何も言わないと固まったように見える。
+    const dir = await tempDir('aas-prog-');
+    await writeFile(join(dir, 'm.gguf'), 'x');
+    const said: string[] = [];
+    const load = async () => ({
+      getLlama: async () => ({
+        loadModel: async (o: { onLoadProgress?: (d: number) => void }) => {
+          for (const d of [0, 0.05, 0.2, 0.55, 1]) o.onLoadProgress?.(d);
+          return { createContext: async () => ({ getSequence: () => ({}), dispose: async () => {} }) };
+        },
+      }),
+      LlamaChatSession: class { setChatHistory() {} async prompt() { return ''; } },
+    });
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load, onLog: (l) => said.push(l) });
+    await rt.ensureLoaded('m.gguf');
+    await rt.shutdown();
+
+    const pcts = said.filter((l) => l.includes('読み込み中'));
+    assert.ok(pcts.length >= 3, `進み具合が出ていない: ${said.join(' / ')}`);
+    // 細かすぎると流れが埋まる。5回すべては出さない。
+    assert.ok(pcts.length <= 4, `細かすぎる: ${pcts.join(' / ')}`);
+    assert.ok(said.some((l) => l.includes('読み込み中 100%')), '終わりまで言っていない');
+  });
+});

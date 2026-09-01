@@ -532,7 +532,11 @@ async function loadCfg() {
   if (!c.gguf?.length) {
     const e = document.createElement('div');
     e.className = 'empty';
-    e.textContent = 'ありません。.gguf を1つ置くと、ここに出ます。';
+    // ここで止まる人がいちばん多い。**次に何をすればいいかまで書く。**
+    e.textContent = 'ありません。上の置き場に .gguf を1つ入れると、ここに出ます。\n'
+      + '取ってくる先の例: https://huggingface.co/Qwen （名前に GGUF が付いたもの）\n'
+      + '迷ったら 3B の Q4_K_M（約2GB）。要約や下書きなら足ります。';
+    e.style.whiteSpace = 'pre-line';
     box.append(e);
     return;
   }
