@@ -15,7 +15,7 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { readFile, stat, readdir } from 'node:fs/promises';
 import { watch, type FSWatcher } from 'node:fs';
 import { join, extname, relative, sep } from 'node:path';
-import { safeResolve } from '../agent/tools/paths.ts';
+import { safeResolve, realSafeResolve } from '../agent/tools/paths.ts';
 import { listenOrExplain } from '../core/listen.ts';
 import { crossSiteReason } from './origin.ts';
 
@@ -200,7 +200,9 @@ export class PreviewServer {
       res.end('点で始まるものは見せません');
       return;
     }
-    const abs = wanted === '' ? this.#opts.root : safeResolve(this.#opts.root, wanted);
+    // 文字の上でなく、リンクを辿った実体で中かを決める。作業場の中の
+    // link -> /etc 一つで、見る窓から外が読めてしまう。
+    const abs = wanted === '' ? this.#opts.root : await realSafeResolve(this.#opts.root, wanted);
     if (!abs) {
       // 作業場の外。何があるかも言わない。
       res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });

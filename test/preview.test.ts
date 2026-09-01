@@ -176,3 +176,18 @@ describe('鍵や記録は、見る窓から出さない', () => {
     assert.equal(status, 403);
   });
 });
+
+describe('リンク越しにも外を見せない', () => {
+  test('外を指すリンクの先は 403 か 404', async () => {
+    const { symlink, writeFile: wf } = await import('node:fs/promises');
+    const { join: j } = await import('node:path');
+    const { tempDir } = await import('./tmp.ts');
+    const outside = await tempDir('aas-pv-out-');
+    await wf(j(outside, 'secret.txt'), 'S');
+    const root = await site({ 'index.html': 'x' });
+    try { await symlink(outside, j(root, 'link')); } catch { return; /* リンクを作れない機械 */ }
+    const url = await serve(root);
+    const r = await fetch(`${url}link/secret.txt`);
+    assert.ok(r.status === 403 || r.status === 404, `出てしまった: ${r.status}`);
+  });
+});
