@@ -26,6 +26,7 @@ export const PANEL_KINDS = [
   'duties',        // 日課
   'models',        // モデルと実測
   'changes',       // この対話で変わったファイルと、その差分
+  'preview',       // 作っているものを、その場で見る（HTML/CSS）
   'log',           // 動いているものの流れ
   'note',          // 自由記述。壊れた配置の受け皿でもある
 ] as const;

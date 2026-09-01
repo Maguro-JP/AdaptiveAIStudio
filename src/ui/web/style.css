@@ -621,3 +621,15 @@ menu { display: flex; justify-content: flex-end; gap: var(--s2); padding: 0; mar
     animation: none !important; transition: none !important;
   }
 }
+
+/* ---- 作っているものを見る ----------------------------------- */
+.preview-bar { display: flex; gap: 6px; padding: 6px; border-bottom: 1px solid var(--line); }
+.preview-addr {
+  flex: 1; min-width: 0; padding: 4px 8px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface2); color: var(--text); font-family: var(--font-mono);
+}
+.preview-hint { padding: 4px 8px; font-size: .88em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 中身は作りかけなので、地は白のまま出す。こちらの色を混ぜると、
+   出来上がりの見え方が分からなくなる。 */
+.preview-frame { flex: 1; width: 100%; border: 0; background: #fff; min-height: 0; }

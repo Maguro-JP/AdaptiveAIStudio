@@ -731,6 +731,66 @@ export const PANELS = {
     ctx.onState(() => { void draw(); });
   },
 
+  /**
+   * 作っているものを、その場で見る。
+   *
+   * 映すのは**別の口**（別ポート）で配られているもの。
+   * 同じ口から作業物を出すと、書いたページが操作用の API を叩けてしまう。
+   * そのうえで sandbox も付ける。出所が分かれていれば要らないはずだが、
+   * **守りは一枚だと外れたときに何も残らない。**
+   */
+  preview(body, ctx) {
+    const bar = el('div', 'preview-bar');
+    const addr = document.createElement('input');
+    addr.className = 'preview-addr';
+    addr.placeholder = '/ から始める（例: index.html）';
+    const reload = el('button', 'ghost icon', '⟳');
+    reload.type = 'button';
+    reload.title = '読み直す';
+    const open = el('button', 'ghost icon', '↗');
+    open.type = 'button';
+    open.title = '別の窓で開く';
+    bar.append(addr, reload, open);
+
+    const frame = document.createElement('iframe');
+    frame.className = 'preview-frame';
+    // 出所が分かれていても、こちらでも縛る。
+    frame.sandbox = 'allow-scripts allow-forms allow-popups allow-modals';
+    const hint = el('div', 'dim preview-hint', '作業場を読み込んでいます…');
+
+    body.append(bar, hint, frame);
+
+    let base = '';
+    const go = (path) => {
+      if (!base) return;
+      const p = (path ?? addr.value ?? '').replace(/^\/+/, '');
+      frame.src = base + p;
+    };
+
+    reload.onclick = () => {
+      // src を入れ直す。中身が別の出所なので、中の window は触れない。
+      const src = frame.src;
+      frame.src = 'about:blank';
+      setTimeout(() => { frame.src = src; }, 0);
+    };
+    open.onclick = () => { if (frame.src) window.open(frame.src, '_blank', 'noopener'); };
+    addr.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } };
+
+    void (async () => {
+      try {
+        const r = await fetch('/api/preview');
+        const info = await r.json();
+        if (!r.ok) throw new Error(info.error ?? '口を開けませんでした');
+        base = info.url;
+        hint.textContent = `${info.root}  →  ${info.url}`;
+        go('');
+      } catch (e) {
+        hint.className = 'bad preview-hint';
+        hint.textContent = `見る口を開けませんでした: ${e.message}`;
+      }
+    })();
+  },
+
   log(body, ctx) {
     body.append(el('div', 'dim', '動いているものがここに流れます。'));
     ctx.on('log', (e) => {

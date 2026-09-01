@@ -28,6 +28,7 @@ import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout } from './layou
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
 import { collectState } from './state.ts';
 import { Attachments, MAX_BYTES } from './attachments.ts';
+import { PreviewServer } from './preview.ts';
 import type { AasConfig } from '../config.ts';
 import { Session } from '../core/session.ts';
 import type { ApprovalRequest } from '../agent/tools/types.ts';
@@ -82,6 +83,8 @@ export class UiServer {
   readonly #pending = new Map<string, (ok: boolean) => void>();
   /** 渡されたファイルの預かり所。 */
   readonly #attachments = new Attachments();
+  /** 作っているものを見せる口。操作用とは**別の口**にする。 */
+  #preview?: PreviewServer;
   #seq = 0;
 
   constructor(opts: UiServerOptions) {
@@ -229,6 +232,17 @@ export class UiServer {
     // 渡されたファイルを預かる。
     // 中身はそのまま body に流す（多分割の解析器を持ち込まないため。
     // 名前は問い合わせ部分で渡す）。
+    // 見る口の場所。まだ立ち上げていなければ、ここで立ち上げる。
+    // 使わない人のために口を開けっぱなしにしない。
+    if (path === '/api/preview' && req.method === 'GET') {
+      const session = await this.session();
+      if (!this.#preview) {
+        this.#preview = new PreviewServer({ root: session.root });
+        await this.#preview.start();
+      }
+      return send(res, 200, { url: this.#preview.url, root: session.root });
+    }
+
     if (path === '/api/attach' && req.method === 'POST') {
       const name = url.searchParams.get('name') ?? 'file';
       const chunks: Buffer[] = [];
