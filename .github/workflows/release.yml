@@ -82,6 +82,11 @@ jobs:
           rm -rf node_modules/node-llama-cpp/llama
           du -sh node_modules
 
+      # ライブラリを入れた状態で検査を回す。作業コピーには入っていないので、
+      # **ここでしか確かめられないもの**がある（呼んでいる形が本物にあるか）。
+      - name: 検査を回す
+        run: node scripts/run-tests.mjs
+
       - name: Windows 用の Node を取ってくる（同梱する中身）
         run: curl -fL --retry 3 -o node.exe "https://nodejs.org/dist/${NODEVER}/win-x64/node.exe"
 
