@@ -8,9 +8,21 @@
  * `.git` の中は**守られていなかった**。守っているつもりで守れていないのが
  * いちばん悪い。
  */
-export function minimatch(path: string, pattern: string): boolean {
+export interface MatchOptions {
+  /**
+   * 大小を区別しない。
+   *
+   * Windows と macOS のファイルシステムは大小を区別しないので、`.ENV` と
+   * `.env` は**同じファイル**。区別して照合すると、`.ENV` に書けば `.env` の
+   * 守りをすり抜ける。どの機械で動かすかは呼ぶ側が決めて渡す
+   * （ここで platform を見ると、走らせる場所で検査の結果が変わる）。
+   */
+  nocase?: boolean;
+}
+
+export function minimatch(path: string, pattern: string, opts: MatchOptions = {}): boolean {
   const normalized = path.split('\\').join('/');
-  const re = new RegExp('^' + toRegex(pattern) + '$');
+  const re = new RegExp('^' + toRegex(pattern) + '$', opts.nocase ? 'i' : '');
   return re.test(normalized);
 }
 

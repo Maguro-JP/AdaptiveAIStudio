@@ -31,7 +31,7 @@ export const workspaceBoundary: Rule = {
  * 触ってはいけないファイルを守る。
  * 「.env を読んで直す」のような、善意で始まる事故を止める。
  */
-export function protectedPaths(patterns: string[]): Rule {
+export function protectedPaths(patterns: string[], opts: { nocase?: boolean } = {}): Rule {
   return {
     name: 'protected-paths',
     description: `保護対象への書き込みを禁じる: ${patterns.join(', ')}`,
@@ -40,7 +40,8 @@ export function protectedPaths(patterns: string[]): Rule {
       const path = argString(call, 'path');
       if (!path) return allow;
       const rel = normalize(ctx.root, path);
-      const hit = patterns.find((p) => minimatch(rel, p));
+      // 大小を区別しない機械では `.ENV` も `.env`。区別すると守りをすり抜ける。
+      const hit = patterns.find((p) => minimatch(rel, p, opts));
       return hit ? deny(`${rel} は保護されています（${hit}）。このファイルは変更できません。`) : allow;
     },
   };

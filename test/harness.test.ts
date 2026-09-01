@@ -49,6 +49,24 @@ describe('規則: 保護対象', () => {
     assert.equal(await readFile(join(root, '.env'), 'utf8'), 'SECRET=1', '書き換わってしまった');
   });
 
+  test('大小を区別しない機械では、.ENV も .env として止める', async () => {
+    // Windows と macOS では同じファイル。区別して照合すると、大文字で書けば
+    // 守りをすり抜ける。どの機械かは呼ぶ側が渡す（走らせる場所で結果を変えない）。
+    const root = await project({ '.env': 'SECRET=1' });
+    const h = harness([protectedPaths(['.env'], { nocase: true })]);
+    const write = h.wrap(writeFileTool, () => '');
+    const blocked = await write.run({ path: '.ENV', content: 'SECRET=2' }, ctx(root));
+    assert.equal(blocked.isError, true);
+  });
+
+  test('区別する機械では、.ENV は別のファイル（対）', async () => {
+    const root = await project({ '.env': 'SECRET=1' });
+    const h = harness([protectedPaths(['.env'])]);
+    const write = h.wrap(writeFileTool, () => '');
+    const r = await write.run({ path: '.ENV', content: 'x' }, ctx(root));
+    assert.notEqual(r.isError, true);
+  });
+
   test('保護対象でなければ通す', async () => {
     const root = await project({ 'src/a.ts': 'x' });
     const h = harness([protectedPaths(['.env'])]);

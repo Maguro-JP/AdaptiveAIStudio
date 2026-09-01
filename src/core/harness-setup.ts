@@ -37,7 +37,11 @@ export async function buildHarness(
   const rules: Rule[] = [];
   if (hc.enabled !== false) {
     rules.push(workspaceBoundary);
-    rules.push(protectedPaths([...DEFAULT_PROTECTED, ...(hc.protectedPaths ?? [])]));
+    // Windows と macOS は大小を区別しない。そこでは `.ENV` も `.env` として守る。
+    rules.push(protectedPaths(
+      [...DEFAULT_PROTECTED, ...(hc.protectedPaths ?? [])],
+      { nocase: process.platform !== 'linux' },
+    ));
     rules.push(testProtection);
     rules.push(dangerousCommands);
     rules.push(noRepeatedWrites);

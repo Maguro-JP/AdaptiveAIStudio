@@ -54,3 +54,13 @@ describe('保護パターンの照合', () => {
     assert.equal(minimatch('.git\\config', '.git/**'), true);
   });
 });
+
+describe('大小を区別しない機械の守り', () => {
+  test('nocase なら .ENV も .env', () => {
+    assert.equal(minimatch('.ENV', '.env', { nocase: true }), true);
+    assert.equal(minimatch('Secrets/Key.txt', 'secrets/**', { nocase: true }), true);
+  });
+  test('既定では区別する（対）。Linux では別のファイル', () => {
+    assert.equal(minimatch('.ENV', '.env'), false);
+  });
+});

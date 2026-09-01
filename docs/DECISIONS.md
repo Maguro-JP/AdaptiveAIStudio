@@ -634,6 +634,11 @@ llama-server の記録、inproc が受け取る本文まで）。`src/core/text.
 いま `.env` `.env.*` `.git/**` `**/id_rsa` `**/*.pem` `**/credentials*` が
 それぞれ当たることを、一つずつ検査に置いてある。
 
+**大小も同じ。**Windows と macOS のファイルシステムは大小を区別しないので、
+`.ENV` に書けば `.env` の守りをすり抜けていた。そこでは大小を見ずに当てる。
+どの機械かは `harness-setup` が `process.platform` で決めて渡す。照合の側で
+platform を見ると、走らせる場所で検査の結果が変わる。
+
 ---
 
 ## 2026-09-01  ファイルは UTF-8 と決めつけない
