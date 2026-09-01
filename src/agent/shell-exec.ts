@@ -3,7 +3,7 @@
  * ツール(run_command)と検証ループの両方から使う。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chunkReader } from '../core/text.ts';
+import { decodeText } from '../core/text.ts';
 
 /**
  * 実行中の一群を根ごと止める。
@@ -85,7 +85,16 @@ export function execCommand(
       ? spawn(plan.file, { cwd, shell: true })
       : spawn(plan.file, plan.args, { cwd, detached: plan.detached });
 
-    let out = '';
+    // 文字に直すのは**最後に一度**。cmd の出力は日本語の Windows では CP932 で
+    // 来るので、塊ごとに UTF-8 と決めて読むと丸ごと化ける。全部揃ってから
+    // UTF-8 か CP932 かを見る（src/core/text.ts の decodeText）。
+    const chunks: Buffer[] = [];
+    let held = 0;
+    const out = () => {
+      let text = decodeOutput(Buffer.concat(chunks));
+      if (text.length > maxOutputBytes) text = text.slice(-maxOutputBytes);
+      return text;
+    };
     let settled = false;
     const finish = (r: Omit<ExecResult, 'durationMs'>) => {
       if (settled) return;
@@ -97,26 +106,43 @@ export function execCommand(
 
     const timer = setTimeout(() => {
       killTree(child);
-      finish({ code: null, output: out, timedOut: true, aborted: false });
+      finish({ code: null, output: out(), timedOut: true, aborted: false });
     }, timeoutMs);
 
     const onAbort = () => {
       killTree(child);
-      finish({ code: null, output: out, timedOut: false, aborted: true });
+      finish({ code: null, output: out(), timedOut: false, aborted: true });
     };
     signal.addEventListener('abort', onAbort, { once: true });
 
-    const append = (read: (c: Buffer) => string) => (b: Buffer) => {
-      out += read(b);
-      // 出力が暴走しても壊れないよう、末尾だけ残す
-      if (out.length > maxOutputBytes) out = out.slice(-maxOutputBytes);
+    const append = (b: Buffer) => {
+      chunks.push(b);
+      held += b.length;
+      // 出力が暴走しても壊れないよう、末尾だけ残す。塊ごと落とす
+      // （途中で切ると文字の途中になる。頭の一文字は decodeOutput が拾う）。
+      while (held > maxOutputBytes * 2 && chunks.length > 1) held -= chunks.shift()!.length;
     };
-    child.stdout?.on('data', append(chunkReader()));
-    child.stderr?.on('data', append(chunkReader()));
+    child.stdout?.on('data', append);
+    child.stderr?.on('data', append);
 
-    child.on('error', (e) => finish({ code: null, output: `${out}\n${e.message}`, timedOut: false, aborted: false }));
-    child.on('close', (code) => finish({ code, output: out, timedOut: false, aborted: false }));
+    child.on('error', (e) => finish({ code: null, output: `${out()}\n${e.message}`, timedOut: false, aborted: false }));
+    child.on('close', (code) => finish({ code, output: out(), timedOut: false, aborted: false }));
   });
+}
+
+/**
+ * 集めた出力を文字にする。
+ *
+ * 末尾だけ残すときに塊ごと落としているので、先頭が文字の途中から
+ * 始まることがある。その1〜3バイトを捨てれば残りは読めるので、
+ * 化ける前に少しずらして試す。
+ */
+export function decodeOutput(raw: Buffer): string {
+  for (let skip = 0; skip <= 3 && skip < raw.length; skip++) {
+    const r = decodeText(raw.subarray(skip));
+    if (!r.lossy) return r.text;
+  }
+  return decodeText(raw).text;
 }
 
 /** 出力の末尾だけを残す。失敗の原因は末尾にあることが多い。 */

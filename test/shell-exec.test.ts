@@ -8,7 +8,7 @@ import { writeFile, rm, readFile } from 'node:fs/promises';
 import { tempDir, cleanup } from './tmp.ts';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { execCommand, spawnPlan, killPlan } from '../src/agent/shell-exec.ts';
+import { execCommand, spawnPlan, killPlan, decodeOutput } from '../src/agent/shell-exec.ts';
 
 /**
  * 打ち切られた後も生きていれば、印を書き足してしまう子。
@@ -116,5 +116,34 @@ describe('環境ごとの組み立て', () => {
     const p = killPlan(1234, 'linux');
     // 負の番号は「その処理群すべて」の意味。ここを正にすると殻しか死なない。
     assert.deepEqual(p.args, ['-TERM', '-1234']);
+  });
+});
+
+describe('cmd の出力が CP932 でも化けない', () => {
+  // Windows の cmd は日本語だと CP932 を吐く。ここでは同じバイト列を
+  // 1バイトずつ書く子を立てて、必ずその形にする。
+  test('CP932 の出力を、そのまま日本語で受け取る', async () => {
+    const root = await tempDir('aas-cp932-');
+    await writeFile(join(root, 'cp932.mjs'), `
+      const bytes = [0x82,0xa0,0x82,0xa2,0x82,0xa4,0x0d,0x0a]; // あいう\\r\\n
+      for (const b of bytes) process.stdout.write(Buffer.from([b]));
+    `);
+    const r = await execCommand('node cp932.mjs', root, 10_000, new AbortController().signal);
+    assert.equal(r.code, 0);
+    assert.match(r.output, /あいう/);
+    assert.doesNotMatch(r.output, /�/);
+  });
+
+  test('UTF-8 の出力は UTF-8 のまま（対）', async () => {
+    const root = await tempDir('aas-utf8-');
+    await writeFile(join(root, 'u.mjs'), `process.stdout.write('あいう\\n');`);
+    const r = await execCommand('node u.mjs', root, 10_000, new AbortController().signal);
+    assert.match(r.output, /あいう/);
+  });
+
+  test('末尾だけ残すとき、先頭の切れ端で全体を化けさせない', () => {
+    // 「あいう」の先頭1バイトを落とした形。頭だけ捨てて残りを読む。
+    const raw = Buffer.from('あいう', 'utf8').subarray(1);
+    assert.equal(decodeOutput(raw), 'いう');
   });
 });
