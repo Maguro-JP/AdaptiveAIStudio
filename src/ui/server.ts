@@ -11,7 +11,6 @@
  * 素の HTML と ES モジュールなら、組み立ての手順すら要らない。
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { spawn, type ChildProcess } from 'node:child_process';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname, extname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -33,6 +32,7 @@ import { collectState } from './state.ts';
 import { Attachments, MAX_BYTES } from './attachments.ts';
 import { PreviewServer } from './preview.ts';
 import { configPath, type AasConfig } from '../config.ts';
+import { TaskRunner } from './tasks.ts';
 import { listGguf } from '../runtime/inproc.ts';
 import { Session } from '../core/session.ts';
 import type { ApprovalRequest } from '../agent/tools/types.ts';
@@ -46,40 +46,6 @@ import type { ApprovalRequest } from '../agent/tools/types.ts';
  * ここに書いた名前だけを受け取る。package.json の scripts をそのまま
  * 実行できる作りにすると、書き換えた者が何でも走らせられる口になる。
  */
-/**
- * 端末むけの色指定を落とす。
- *
- * cli 側は端末に色を付ける。画面へそのまま流すと `[36m` が並んで読めない。
- * 出す側を全部直して回るより、**受ける側で一度だけ落とす**。
- */
-export function stripAnsi(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/\x1b\[[0-9;]*m/g, '');
-}
-
-/**
- * 画面から変えてよい設定。
- *
- * **設定ファイル全部を書けるようにしない。**画面から任意の JSON を
- * 書き込めると、設定という顔をして道具の振る舞いを丸ごと差し替えられる。
- * 変えたい理由がはっきりしているものだけを、ここに挙げる。
- */
-export const RUNTIME_KINDS = ['ollama', 'llamacpp', 'inproc'] as const;
-
-export const KIND_LABELS: Record<string, string> = {
-  ollama: 'Ollama — 別に立てたものへ繋ぐ',
-  llamacpp: 'llama.cpp — llama-server を起こす（実行ファイルが1つ増える）',
-  inproc: 'この中で読む — GGUF を置くだけ（実行ファイルは増えない）',
-};
-
-export const TASKS: Record<string, string> = {
-  doctor: 'この環境を見てもらう',
-  test: '検査を回す',
-  selftest: 'この機械で確かめる',
-  clean: '溜まったものを片づける',
-  models: '手元のモデルを見る',
-};
-
 const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), 'web');
 const LAYOUT_PATH = () => join(stateDir(), 'layout.json');
 // 配置と見た目は分けて持つ。「配置はそのままで色だけ変えたい」が一番多いから。
@@ -123,9 +89,15 @@ export class UiServer {
   readonly #opts: UiServerOptions;
   readonly #clients = new Set<ServerResponse>();
   #server?: ReturnType<typeof createServer>;
-  /** 点検は一度に一つ。並べて回すと、どちらの出力か分からなくなる。 */
-  #task?: ChildProcess;
-  #taskName = '';
+  /** 点検を回す係。状態（走っている子）はそちらが持つ。 */
+  readonly #tasks = new TaskRunner({
+    root: join(dirname(WEB_DIR), '..', '..'),
+    onEvent: (e) => {
+      this.broadcast(e.text !== undefined
+        ? { type: 'task', name: e.name, text: e.text }
+        : { type: 'taskDone', name: e.name, code: e.code ?? 1 });
+    },
+  });
   #url = '';
   #session?: Session;
   #idleTimer?: ReturnType<typeof setInterval>;
@@ -576,24 +548,19 @@ export class UiServer {
     }
 
     if (path === '/api/tasks' && req.method === 'GET') {
-      return send(res, 200, {
-        tasks: Object.entries(TASKS).map(([id, name]) => ({ id, name })),
-        running: this.#task ? this.#taskName : null,
-      });
+      return send(res, 200, { tasks: TaskRunner.list(), running: this.#tasks.running ?? null });
     }
 
     if (path === '/api/task' && req.method === 'POST') {
       const body = await readBody(req) as { name?: string };
       const name = String(body?.name ?? '');
-      if (!(name in TASKS)) return send(res, 400, { error: 'そういう点検はありません' });
-      if (this.#task) return send(res, 409, { error: `${this.#taskName} を回しています` });
-      void this.#runTask(name);
+      const refused = this.#tasks.start(name);
+      if (refused) return send(res, refused.includes('ありません') ? 400 : 409, { error: refused });
       return send(res, 200, { started: name });
     }
 
     if (path === '/api/task' && req.method === 'DELETE') {
-      this.#task?.kill();
-      return send(res, 200, { stopped: this.#taskName });
+      return send(res, 200, { stopped: this.#tasks.stop() ?? null });
     }
 
     if (path === '/api/state' && req.method === 'GET') {
@@ -652,34 +619,6 @@ export class UiServer {
     }
     return `${this.#opts.config.runtime?.modelsDir ?? modelsDir()} に GGUF がありません。\n`
       + '設定 → モデル に、いま見ている置き場が出ています。そこへ .gguf を1つ置いてください。';
-  }
-
-  /**
-   * 点検を1つ回す。出てきたものは、そのまま画面へ流す。
-   *
-   * 殻に渡さない。package.json の中身も読まない。
-   * ここで決めた名前を、そのまま src/cli/<名前>.ts として起こす。
-   */
-  async #runTask(name: string): Promise<void> {
-    const file = name === 'test'
-      ? join(dirname(WEB_DIR), '..', '..', 'scripts', 'run-tests.mjs')
-      : join(dirname(WEB_DIR), '..', 'cli', `${name}.ts`);
-    this.#taskName = name;
-    const child = spawn(process.execPath, ['--no-warnings', file], {
-      cwd: join(dirname(WEB_DIR), '..', '..'),
-      env: { ...process.env, NO_COLOR: '1' },
-    });
-    this.#task = child;
-    this.broadcast({ type: 'task', name, text: `— ${TASKS[name]} —\n` });
-    const on = (b: Buffer) => this.broadcast({ type: 'task', name, text: stripAnsi(b.toString()) });
-    child.stdout?.on('data', on);
-    child.stderr?.on('data', on);
-    child.on('error', (e) => this.broadcast({ type: 'task', name, text: `${e.message}\n` }));
-    child.on('close', (code) => {
-      this.#task = undefined;
-      this.#taskName = '';
-      this.broadcast({ type: 'taskDone', name, code: code ?? 1 });
-    });
   }
 
   async #drive(session: Session, text: string): Promise<void> {
