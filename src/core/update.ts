@@ -18,6 +18,7 @@
  * 落として立ち上げ直すのは、外側（start.cmd / start.sh）の仕事。
  */
 import { runGit, inspectGit } from '../agent/git.ts';
+import { isPortable, productRoot } from './home.ts';
 
 export interface UpdateStatus {
   /** 取ってこられる状態か */
@@ -42,14 +43,34 @@ export interface UpdateResult {
   restartNeeded: boolean;
 }
 
+/** 配布物の置き場。portable は常にここにある（docs/DECISIONS.md）。 */
+export const RELEASES_URL = 'https://github.com/Maguro-JP/AdaptiveAIStudio/releases/tag/portable';
+
+/**
+ * git の無い場所での、新しくする道。
+ *
+ * 会社の PC には git が無い。「git 管理下ではありません」で終わると、
+ * そこで止まる。ブラウザなら届くので、取ってくる先と入れ替え方を言う。
+ * **data/ は残す。**設定と記録はそこにあり、app/ を入れ替えても消えない作り。
+ */
+export function byHandUpdate(root: string): string {
+  return [
+    `新しい配布物をブラウザで取ってきて、app\\ だけ入れ替えてください: ${RELEASES_URL}`,
+    'data\\（設定・記録・モデル）はそのまま残します。',
+    `いまの版は VERSION に書いてあります（${productRoot(root)}）。`,
+  ].join('\n');
+}
+
 /** いま新しくなれるか。取ってくる前に、必ずこれを通す。 */
 export async function checkUpdate(root: string): Promise<UpdateStatus> {
   const state = await inspectGit(root);
-  if (state.kind === 'notRepo') {
-    return { can: false, behind: 0, ahead: 0, incoming: [], reason: 'git 管理下ではありません。更新は git clone した場所でのみできます' };
-  }
-  if (state.kind === 'unavailable') {
-    return { can: false, behind: 0, ahead: 0, incoming: [], reason: `git を確認できません（${state.reason}）` };
+  if (state.kind === 'notRepo' || state.kind === 'unavailable') {
+    const why = state.kind === 'notRepo' ? 'git 管理下ではありません' : `git を確認できません（${state.reason}）`;
+    // 配布物なら、git が無いのは当たり前。手で新しくする道を出す。
+    const reason = isPortable(root)
+      ? `${why}。\n${byHandUpdate(root)}`
+      : `${why}。更新は git clone した場所でのみできます`;
+    return { can: false, behind: 0, ahead: 0, incoming: [], reason };
   }
   if (state.kind === 'dirty') {
     // 未コミットの変更を巻き込むわけにはいかない。

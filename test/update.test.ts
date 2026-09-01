@@ -126,3 +126,28 @@ describe('更新', () => {
     assert.match(s.reason ?? '', /git 管理下ではありません/);
   });
 });
+
+describe('配布物では、手で新しくする道を言う', () => {
+  test('portable なら、取ってくる先と data を残すことを言う', async () => {
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tempDir } = await import('./tmp.ts');
+    const { checkUpdate, RELEASES_URL } = await import('../src/core/update.ts');
+    const product = await tempDir('aas-upd-portable-');
+    const app = join(product, 'app');
+    await mkdir(app, { recursive: true });
+    await writeFile(join(product, '.portable'), 'built 2026-09-01\n');
+    const s = await checkUpdate(app);
+    assert.equal(s.can, false);
+    assert.ok(s.reason?.includes(RELEASES_URL), `取ってくる先が無い: ${s.reason}`);
+    assert.match(s.reason ?? '', /data/);
+  });
+
+  test('portable でなければ、git clone の話のまま（対）', async () => {
+    const { tempDir } = await import('./tmp.ts');
+    const { checkUpdate, RELEASES_URL } = await import('../src/core/update.ts');
+    const s = await checkUpdate(await tempDir('aas-upd-plain-'));
+    assert.match(s.reason ?? '', /git clone/);
+    assert.ok(!s.reason?.includes(RELEASES_URL));
+  });
+});
