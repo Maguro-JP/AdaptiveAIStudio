@@ -3,7 +3,6 @@
  * 設定が無い状態から「使えるモデルを調べて最良を選ぶ」までを一括で行う。
  */
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import type { AasConfig } from '../config.ts';
 import type { ProviderRegistry } from './registry.ts';
 import { Autopilot } from '../runtime/autopilot.ts';
@@ -19,9 +18,9 @@ export interface AutopilotBundle {
   unavailable?: string;
 }
 
-export function stateDir(): string {
-  return process.env.AAS_STATE_DIR ?? join(homedir(), '.aas');
-}
+// 置き場所の決め方は home.ts に集めた。ここからも今までどおり呼べるようにしておく。
+import { stateDir } from './home.ts';
+export { stateDir };
 
 export async function setupAutopilot(
   config: AasConfig,

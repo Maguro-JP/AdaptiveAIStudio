@@ -9,9 +9,9 @@
  * 大きいものは分割されている。取ってくるときに一覧から選ぶ。
  */
 import { mkdir, rename, rm, stat, open } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readGguf } from './gguf.ts';
+import { modelsDir } from '../core/home.ts';
 import type { CatalogEntry } from './model-catalog.ts';
 
 /**
@@ -23,7 +23,7 @@ import type { CatalogEntry } from './model-catalog.ts';
  * 既定こそ検査されるべきなので、名前を付けて共有する。
  */
 export function defaultModelsDir(): string {
-  return process.env.AAS_MODELS_DIR ?? join(homedir(), '.aas', 'models');
+  return modelsDir();
 }
 
 const HF_API = 'https://huggingface.co/api/models';

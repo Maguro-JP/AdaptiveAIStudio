@@ -1,0 +1,68 @@
+/**
+ * 置き場所を、一箇所で決める。
+ *
+ * これまで `~/.aas` の下という既定が三箇所に散っていて、
+ * 逃がすための環境変数も別々だった（AAS_STATE_DIR / AAS_BIN_DIR / AAS_MODELS_DIR）。
+ * 置き場所を変えたい理由は毎回同じ**一つ**なのに、三つ設定させていた。
+ *
+ * 変えたい理由は次の三つで、どれも「根を移したい」だけ。
+ *
+ *   1. 利用者名が全角で、llama.cpp がモデルを開けない
+ *   2. インストール先を ASCII の決まった場所にしたい
+ *   3. 何も入れずに、フォルダごと持ち運びたい（会社の機械など）
+ *
+ * だから根を一つにする。個別の環境変数も残す（既に設定した人を壊さない）が、
+ * 新しく触るのは AAS_HOME だけでよい。
+ */
+import { homedir } from 'node:os';
+import { existsSync } from 'node:fs';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** この道具そのものが置かれている場所。 */
+export function installRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+}
+
+/**
+ * 持ち運び版か。
+ *
+ * 目印のファイルがあるかどうかで決める。環境変数ではなく**置かれ方**で決めるので、
+ * フォルダを渡すだけで持ち運びになる。受け取った側は何も設定しなくてよい。
+ */
+export function isPortable(root = installRoot()): boolean {
+  return existsSync(join(root, 'portable.txt'));
+}
+
+/**
+ * 根。ここから下に、記録も実行ファイルもモデルも置く。
+ *
+ * 決め方の順番。上から先に効く。
+ *   1. AAS_HOME（明示。インストーラはこれを書く）
+ *   2. portable.txt があれば、この道具の隣の aas-home
+ *   3. ~/.aas（これまでどおり）
+ */
+export function aasHome(): string {
+  const explicit = process.env.AAS_HOME;
+  if (explicit && explicit.trim().length > 0) return explicit;
+
+  const root = installRoot();
+  if (isPortable(root)) return join(root, 'aas-home');
+
+  return join(homedir(), '.aas');
+}
+
+/** 記録の置き場。 */
+export function stateDir(): string {
+  return process.env.AAS_STATE_DIR ?? aasHome();
+}
+
+/** llama-server の置き場。 */
+export function binDir(): string {
+  return process.env.AAS_BIN_DIR ?? join(aasHome(), 'bin');
+}
+
+/** GGUF の置き場。 */
+export function modelsDir(): string {
+  return process.env.AAS_MODELS_DIR ?? join(aasHome(), 'models');
+}

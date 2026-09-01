@@ -11,10 +11,10 @@
  */
 import { mkdir, writeFile, chmod, readdir, stat, rm } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { pickAsset, pickCudart, PINNED_TAG, RELEASES_API, type Target } from './llama-release.ts';
 import { explainExitCode } from './llama-diagnosis.ts';
+import { binDir } from '../core/home.ts';
 import { unzip } from './unzip.ts';
 import { runtimeEnv } from './llama-env.ts';
 
@@ -50,7 +50,7 @@ export interface Installed {
 }
 
 export function defaultBinDir(): string {
-  return process.env.AAS_BIN_DIR ?? join(homedir(), '.aas', 'bin');
+  return binDir();
 }
 
 /** すでに用意してあるか。あればその場所。 */
