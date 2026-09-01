@@ -34,6 +34,7 @@ import { PreviewServer } from './preview.ts';
 import { configPath, type AasConfig } from '../config.ts';
 import { TaskRunner } from './tasks.ts';
 import { listenOrExplain } from '../core/listen.ts';
+import { crossSiteReason } from './origin.ts';
 import {
   RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
   inspectModelsDir, ensureDefaultModelsDir, savedModelsDir,
@@ -253,6 +254,14 @@ export class UiServer {
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
+
+    // よその頁から叩かれた要求は、口に入る前に断る。中身は読まない。
+    if (path.startsWith('/api/')) {
+      const refused = crossSiteReason(req.headers, req.method ?? 'GET', {
+        ownHosts: this.#opts.host ? [this.#opts.host] : [],
+      });
+      if (refused) return send(res, 403, { error: refused });
+    }
 
     if (path === '/api/layout' && req.method === 'GET') {
       const { layout, repairs } = await loadLayout();

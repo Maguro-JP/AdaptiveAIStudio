@@ -197,3 +197,21 @@ describe('画面から立ち上げ直す', () => {
     } finally { await s.stop(); }
   });
 });
+
+describe('よその頁から口を叩かせない', () => {
+  test('Origin がよそなら、中身を読む前に断る', async () => {
+    const r = await fetch(base.replace(/\/$/, '') + '/api/send', {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain', origin: 'https://evil.example' },
+      body: JSON.stringify({ text: 'rm -rf /' }),
+    });
+    assert.equal(r.status, 403);
+  });
+
+  test('自分の頁からは通る（対）', async () => {
+    const r = await fetch(base.replace(/\/$/, '') + '/api/tasks', {
+      headers: { origin: base.replace(/\/$/, ''), 'sec-fetch-site': 'same-origin' },
+    });
+    assert.equal(r.status, 200);
+  });
+});
