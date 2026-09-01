@@ -219,3 +219,22 @@ describe('置ける中身と、描く関数が食い違わない', () => {
     }
   });
 });
+
+describe('色の見本は、差分を読む場所すべてに出す', () => {
+  test('会話・承認・変更のどれでも見本が出る', async () => {
+    // 「コーディング中に色を変えられると便利」が元の要望。
+    // **採否を決める承認の場で見えないのは、いちばん困る。**
+    // 一箇所だけに付けて満足していた（会話の差分だけだった）。
+    const { readFile } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = await readFile(join(here, '..', 'src', 'ui', 'web', 'panels.js'), 'utf8');
+
+    // 差分を描いている数だけ、見本を重ねている数がある。
+    const drawn = [...src.matchAll(/renderDiff\(/g)].length;
+    const decorated = [...src.matchAll(/decorate\(/g)].length;
+    assert.equal(decorated, drawn,
+      `差分を描く ${drawn} 箇所に対し、見本は ${decorated} 箇所。見落としがある`);
+  });
+});

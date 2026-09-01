@@ -450,7 +450,14 @@ export const PANELS = {
         : `外部への問い合わせ: ${req.url}`;
       const box = el('div', 'ask');
       box.append(el('div', 'ask-head', what));
-      if (req.kind === 'write' && req.diff) box.append(renderDiff(req.diff));
+      if (req.kind === 'write' && req.diff) {
+        // **採否を決める場所こそ、色が見えないと判断できない。**
+        // ここでは押しても何もしない（見るだけ）。承認の途中に
+        // 別の指示を差し込ませない。
+        const rendered = renderDiff(req.diff);
+        decorate(rendered);
+        box.append(rendered);
+      }
       if (req.kind === 'network') box.append(el('div', 'dim', '取得のみ。資格情報は送りません。'));
       // 協議は中身を読ませるためのもの。畳まずに全部出す。
       if (req.kind === 'deliberation') {
@@ -854,7 +861,13 @@ export const PANELS = {
         let drawn = false;
         // 開いたときに初めて描く。閉じたままの差分に手間をかけない。
         box.ontoggle = () => {
-          if (box.open && !drawn) { inner.append(renderDiff(f.diff)); drawn = true; }
+          if (box.open && !drawn) {
+            const rendered = renderDiff(f.diff);
+            // 書いてある色の隣に見本を出す。差分を読む場所は全部そうする。
+            decorate(rendered);
+            inner.append(rendered);
+            drawn = true;
+          }
         };
         box.append(inner);
         body.append(box);
