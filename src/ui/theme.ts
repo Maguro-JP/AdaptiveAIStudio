@@ -17,6 +17,7 @@ export const TOKENS = [
   'bg',        // 一番下の地
   'surface',   // 枠の地
   'surface2',  // 枠の中の一段沈んだ地
+  'surfaceSolid', // 透けない地。ブラウザ標準の部品（select の一覧など）用
   'line',      // 境目
   'text',      // 文字
   'dim',       // 控えめな文字
@@ -79,6 +80,7 @@ export const THEMES: Theme[] = [
     scheme: 'dark',
     tokens: {
       bg: '#0f1116', surface: '#161922', surface2: '#1c2029', line: '#262b36',
+      surfaceSolid: '#1c2029',
       text: '#dfe3ec', dim: '#8e97a8', accent: '#7aa2f7', accentText: '#0b0e14',
       good: '#9ece6a', warn: '#e0af68', bad: '#f7768e',
       radius: '10px', gap: '10px', shadow: '0 1px 2px rgba(0,0,0,.35)',
@@ -91,6 +93,7 @@ export const THEMES: Theme[] = [
     scheme: 'light',
     tokens: {
       bg: '#f3f4f7', surface: '#ffffff', surface2: '#f7f8fa', line: '#e2e5ec',
+      surfaceSolid: '#f7f8fa',
       text: '#1c2027', dim: '#69707e', accent: '#3b6fd4', accentText: '#ffffff',
       good: '#2e7d4f', warn: '#a86b12', bad: '#c0384a',
       radius: '10px', gap: '10px', shadow: '0 1px 2px rgba(16,24,40,.06)',
@@ -98,14 +101,31 @@ export const THEMES: Theme[] = [
     },
   },
   {
+    // 前の dusk は、茶色に灰色を混ぜた濁った色だった。
+    // 暖色にするなら濁らせない。橙をはっきり出し、地は黒に寄せる。
     id: 'dusk',
-    name: 'Dusk — 暖色寄りの夜向け',
+    name: 'Dusk — 橙',
     scheme: 'dark',
     tokens: {
-      bg: '#14110f', surface: '#1b1815', surface2: '#221e1a', line: '#302a24',
-      text: '#e8ddd0', dim: '#a2937f', accent: '#e0a15c', accentText: '#1a1512',
-      good: '#a3b565', warn: '#d9a441', bad: '#e07a5f',
-      radius: '10px', gap: '10px', shadow: '0 1px 2px rgba(0,0,0,.4)',
+      bg: '#120d0a', surface: '#1c1410', surface2: '#251a14', line: '#3d2a1e',
+      surfaceSolid: '#251a14',
+      text: '#f5e6d8', dim: '#b3907a', accent: '#ff8a3d', accentText: '#1a0d04',
+      good: '#8fbf6a', warn: '#ffc043', bad: '#ff6b52',
+      radius: '10px', gap: '10px', shadow: '0 2px 10px rgba(0,0,0,.5)',
+      font: SANS, fontMono: MONO, fontSize: '14px', lineHeight: '1.6',
+    },
+  },
+  {
+    // えんじ。橙より落ち着いた暖色が欲しいとき。
+    id: 'ember',
+    name: 'Ember — えんじ',
+    scheme: 'dark',
+    tokens: {
+      bg: '#120a0b', surface: '#1d1113', surface2: '#271619', line: '#43242a',
+      surfaceSolid: '#271619',
+      text: '#f3e2e0', dim: '#b8908f', accent: '#c8434a', accentText: '#fff1ef',
+      good: '#7fb069', warn: '#e0a233', bad: '#e0544f',
+      radius: '8px', gap: '10px', shadow: '0 2px 12px rgba(0,0,0,.55)',
       font: SANS, fontMono: MONO, fontSize: '14px', lineHeight: '1.6',
     },
   },
@@ -115,6 +135,7 @@ export const THEMES: Theme[] = [
     scheme: 'dark',
     tokens: {
       bg: '#04070e', surface: '#080e1a', surface2: '#0c1524', line: '#123049',
+      surfaceSolid: '#0c1524',
       text: '#d5f2ff', dim: '#5f8ba6', accent: '#22d3ee', accentText: '#02131a',
       good: '#34d399', warn: '#fbbf24', bad: '#fb7185',
       radius: '4px', gap: '8px', shadow: '0 0 0 1px rgba(34,211,238,.12), 0 0 18px rgba(34,211,238,.07)',
@@ -128,6 +149,7 @@ export const THEMES: Theme[] = [
     scheme: 'dark',
     tokens: {
       bg: '#0a0612', surface: '#120a1f', surface2: '#1a0f2b', line: '#33205c',
+      surfaceSolid: '#1a0f2b',
       text: '#f0e6ff', dim: '#9b7fc4', accent: '#f472b6', accentText: '#1a0512',
       good: '#4ade80', warn: '#fcd34d', bad: '#f87171',
       radius: '10px', gap: '10px',
@@ -143,6 +165,9 @@ export const THEMES: Theme[] = [
     tokens: {
       bg: '#0b1020', surface: 'rgba(148,163,184,.10)', surface2: 'rgba(148,163,184,.16)',
       line: 'rgba(203,213,225,.18)',
+      // 半透明の地を select に使うと、一覧が真っ白になって読めない
+      // （地の色をブラウザが解決できないため）。透けない色を別に持つ。
+      surfaceSolid: '#1b2437',
       text: '#e8edf7', dim: '#9aa6bd', accent: '#60a5fa', accentText: '#08111f',
       good: '#4ade80', warn: '#fbbf24', bad: '#fb7185',
       radius: '14px', gap: '12px', shadow: '0 8px 40px rgba(2,6,23,.55)',
@@ -156,6 +181,7 @@ export const THEMES: Theme[] = [
     scheme: 'dark',
     tokens: {
       bg: '#0b0f0b', surface: '#0f150f', surface2: '#131a13', line: '#1f2b1f',
+      surfaceSolid: '#131a13',
       text: '#8fdf8f', dim: '#4f7a4f', accent: '#a3e635', accentText: '#0b0f0b',
       good: '#a3e635', warn: '#facc15', bad: '#f87171',
       radius: '0px', gap: '6px', shadow: 'none',

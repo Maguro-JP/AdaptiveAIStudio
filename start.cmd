@@ -107,9 +107,16 @@ rem 依存は入れない。実行時の依存はゼロで、npm install は要�
 rem （型検査 npm run typecheck を使うときだけ、手動で入れる）
 
 rem --- 何をするか ------------------------------------------
+rem 引数で来たときは一度だけ動かして終わる（他から呼ばれる形）。
+rem 自分で選んだときは、終わってもここへ戻る。**一回で閉じない。**
 set "TASK=%~1"
-if not "%TASK%"=="" goto :run
+set "ONCE="
+if "%TASK%"=="" goto :menu
+set "ONCE=1"
+goto :run
 
+:menu
+set "TASK="
 echo.
 echo   AdaptiveAIStudio
 echo   ----------------------------------------
@@ -160,10 +167,15 @@ if not "%RUNNER%"=="direct" call "%NPM%" run %TASK%
 set "CODE=%errorlevel%"
 
 rem --- 終わり方 --------------------------------------------
-rem 正常に終わったときも窓を残す。すぐ閉じると、
-rem 最後に何が出ていたのかを読む間がない。
+rem 正常に終わったときも、何が出ていたか読む間を置く。
 echo.
 if not "%CODE%"=="0" echo   終了コード %CODE% で終わりました。上の内容が手がかりです。
+if defined ONCE goto :bye
+echo   ----------------------------------------
+pause
+goto :menu
+
+:bye
 pause
 endlocal
 exit /b %CODE%
@@ -246,7 +258,7 @@ echo.
 echo   その番号はありません。
 echo.
 pause
-exit /b 1
+goto :menu
 
 :quit
 endlocal

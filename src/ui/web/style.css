@@ -99,6 +99,17 @@ button, select, input, textarea {
   transition: border-color .12s ease, background-color .12s ease;
 }
 button, select { cursor: pointer; }
+
+/* ブラウザが自分で描く一覧（select を開いたときの中身）。
+   ここは CSS の重ね合わせが効かないので、**透けない色を直に渡す**。
+   glass のように地が半透明だと、ブラウザが色を解決できず真っ白になり、
+   白い文字と重なって何も見えなくなる（実機で見えないと言われた）。 */
+select { background-color: var(--surface-solid, var(--surface2)); }
+select option,
+select optgroup {
+  background-color: var(--surface-solid, var(--surface2));
+  color: var(--text);
+}
 button:hover, select:hover { border-color: var(--dim); }
 button:active { transform: translateY(.5px); }
 :where(button, select, input, textarea):focus-visible {
@@ -686,3 +697,20 @@ menu { display: flex; justify-content: flex-end; gap: var(--s2); padding: 0; mar
 .color-contrast.good { color: var(--good); }
 .color-contrast.warn { color: var(--warn); }
 .color-contrast.bad { color: var(--bad); }
+
+/* 点検の出力。端末の見た目のまま読めるようにする。 */
+.task-out {
+  margin: 0;
+  min-height: 8rem;
+  max-height: 100%;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--surface-solid, var(--surface2));
+  border: 1px solid var(--line);
+  border-radius: calc(var(--radius) - 3px);
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: .92em;
+  line-height: 1.5;
+}

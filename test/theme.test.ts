@@ -203,3 +203,25 @@ describe('効果', () => {
     }
   });
 });
+
+describe('ブラウザが自分で描く部品', () => {
+  test('どのテーマも、透けない地を持っている', async () => {
+    const { THEMES } = await import('../src/ui/theme.ts');
+    for (const t of THEMES) {
+      const solid = t.tokens.surfaceSolid;
+      assert.ok(solid, `${t.id} に surfaceSolid が無い`);
+      // 半透明だと、select の一覧が真っ白になって読めない。
+      assert.doesNotMatch(solid!, /rgba?\([^)]*,\s*0?\.\d+\s*\)/,
+        `${t.id} の surfaceSolid が透けている: ${solid}`);
+    }
+  });
+
+  test('一覧の地に、その色を使っている', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join } = await import('node:path');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const css = await readFile(join(here, '..', 'src', 'ui', 'web', 'style.css'), 'utf8');
+    assert.match(css, /select option[\s\S]*?--surface-solid/, 'option に透けない地を渡していない');
+  });
+});

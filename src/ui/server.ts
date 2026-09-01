@@ -11,6 +11,7 @@
  * 素の HTML と ES モジュールなら、組み立ての手順すら要らない。
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname, extname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +33,34 @@ import { PreviewServer } from './preview.ts';
 import type { AasConfig } from '../config.ts';
 import { Session } from '../core/session.ts';
 import type { ApprovalRequest } from '../agent/tools/types.ts';
+
+/**
+ * 画面から回せる点検。
+ *
+ * 立ち上げたあとは cmd の窓が塞がるので、そこでしか見られないものがあった。
+ * **窓は入口であって、道具ではない。**道具は画面側に置く。
+ *
+ * ここに書いた名前だけを受け取る。package.json の scripts をそのまま
+ * 実行できる作りにすると、書き換えた者が何でも走らせられる口になる。
+ */
+/**
+ * 端末むけの色指定を落とす。
+ *
+ * cli 側は端末に色を付ける。画面へそのまま流すと `[36m` が並んで読めない。
+ * 出す側を全部直して回るより、**受ける側で一度だけ落とす**。
+ */
+export function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+export const TASKS: Record<string, string> = {
+  doctor: 'この環境を見てもらう',
+  test: '検査を回す',
+  selftest: 'この機械で確かめる',
+  clean: '溜まったものを片づける',
+  models: '手元のモデルを見る',
+};
 
 const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), 'web');
 const LAYOUT_PATH = () => join(stateDir(), 'layout.json');
@@ -67,12 +96,18 @@ export type UiEvent =
   /** 分解して並列に働かせているときの出来事。 */
   | { type: 'planEvent'; event: unknown }
   /** 暇なときに考えたこと。放っておいても動いていることが見える。 */
-  | { type: 'thinkEvent'; event: unknown };
+  | { type: 'thinkEvent'; event: unknown }
+  /** 点検の出来事。cmd の窓でしか見られなかったものを、画面へ出す。 */
+  | { type: 'task'; name: string; text: string }
+  | { type: 'taskDone'; name: string; code: number };
 
 export class UiServer {
   readonly #opts: UiServerOptions;
   readonly #clients = new Set<ServerResponse>();
   #server?: ReturnType<typeof createServer>;
+  /** 点検は一度に一つ。並べて回すと、どちらの出力か分からなくなる。 */
+  #task?: ChildProcess;
+  #taskName = '';
   #url = '';
   #session?: Session;
   #idleTimer?: ReturnType<typeof setInterval>;
@@ -439,6 +474,27 @@ export class UiServer {
       return send(res, 200, { theme, repairs: [], vars: toCssVars(theme) });
     }
 
+    if (path === '/api/tasks' && req.method === 'GET') {
+      return send(res, 200, {
+        tasks: Object.entries(TASKS).map(([id, name]) => ({ id, name })),
+        running: this.#task ? this.#taskName : null,
+      });
+    }
+
+    if (path === '/api/task' && req.method === 'POST') {
+      const body = await readBody(req) as { name?: string };
+      const name = String(body?.name ?? '');
+      if (!(name in TASKS)) return send(res, 400, { error: 'そういう点検はありません' });
+      if (this.#task) return send(res, 409, { error: `${this.#taskName} を回しています` });
+      void this.#runTask(name);
+      return send(res, 200, { started: name });
+    }
+
+    if (path === '/api/task' && req.method === 'DELETE') {
+      this.#task?.kill();
+      return send(res, 200, { stopped: this.#taskName });
+    }
+
     if (path === '/api/state' && req.method === 'GET') {
       return send(res, 200, await collectState(this.#opts.config));
     }
@@ -456,6 +512,34 @@ export class UiServer {
     }
 
     return this.#static(path, res);
+  }
+
+  /**
+   * 点検を1つ回す。出てきたものは、そのまま画面へ流す。
+   *
+   * 殻に渡さない。package.json の中身も読まない。
+   * ここで決めた名前を、そのまま src/cli/<名前>.ts として起こす。
+   */
+  async #runTask(name: string): Promise<void> {
+    const file = name === 'test'
+      ? join(dirname(WEB_DIR), '..', '..', 'scripts', 'run-tests.mjs')
+      : join(dirname(WEB_DIR), '..', 'cli', `${name}.ts`);
+    this.#taskName = name;
+    const child = spawn(process.execPath, ['--no-warnings', file], {
+      cwd: join(dirname(WEB_DIR), '..', '..'),
+      env: { ...process.env, NO_COLOR: '1' },
+    });
+    this.#task = child;
+    this.broadcast({ type: 'task', name, text: `— ${TASKS[name]} —\n` });
+    const on = (b: Buffer) => this.broadcast({ type: 'task', name, text: stripAnsi(b.toString()) });
+    child.stdout?.on('data', on);
+    child.stderr?.on('data', on);
+    child.on('error', (e) => this.broadcast({ type: 'task', name, text: `${e.message}\n` }));
+    child.on('close', (code) => {
+      this.#task = undefined;
+      this.#taskName = '';
+      this.broadcast({ type: 'taskDone', name, code: code ?? 1 });
+    });
   }
 
   async #drive(session: Session, text: string): Promise<void> {

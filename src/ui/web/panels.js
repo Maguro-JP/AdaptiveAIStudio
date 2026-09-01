@@ -870,6 +870,65 @@ export const PANELS = {
     ctx.on('planEvent', ({ event: v }) => { if (v.type === 'diff') record(v); });
   },
 
+  /**
+   * 点検。
+   *
+   * cmd の窓は入口であって、道具ではない。立ち上げたあとに窓が塞がると、
+   * 見たいものが見られなくなる。**回すのも読むのも、ここでやる。**
+   */
+  checks(body, ctx) {
+    const bar = el('div', 'row wrap');
+    const out = el('pre', 'mono task-out');
+    const stop = el('button', 'ghost', '止める');
+    stop.type = 'button';
+    stop.disabled = true;
+    stop.onclick = () => { void fetch('/api/task', { method: 'DELETE' }); };
+
+    const buttons = [];
+    const busy = (on) => {
+      for (const b of buttons) b.disabled = on;
+      stop.disabled = !on;
+    };
+
+    void fetch('/api/tasks').then((r) => r.json()).then(({ tasks }) => {
+      for (const t of tasks ?? []) {
+        const b = el('button', '', t.name);
+        b.type = 'button';
+        b.onclick = async () => {
+          out.textContent = '';
+          busy(true);
+          const r = await fetch('/api/task', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ name: t.id }),
+          });
+          if (!r.ok) {
+            busy(false);
+            out.textContent = (await r.json().catch(() => ({}))).error ?? '始められませんでした';
+          }
+        };
+        buttons.push(b);
+        bar.append(b);
+      }
+      bar.append(stop);
+    });
+
+    body.append(bar, out);
+
+    ctx.on('task', (e) => {
+      out.append(document.createTextNode(e.text));
+      // 長く回るものがあるので、際限なく溜めない。
+      if (out.childNodes.length > 400) out.removeChild(out.firstChild);
+      out.scrollTop = out.scrollHeight;
+    });
+    ctx.on('taskDone', (e) => {
+      busy(false);
+      out.append(document.createTextNode(
+        e.code === 0 ? '\n— 終わりました —\n' : `\n— 終了コード ${e.code} —\n`));
+      out.scrollTop = out.scrollHeight;
+    });
+  },
+
   note(body, _ctx, spec) {
     body.append(el('div', 'dim', String(spec.options?.text ?? '（覚え書き）')));
   },
@@ -878,5 +937,5 @@ export const PANELS = {
 export const TITLES = {
   conversation: '会話', plan: '進行中', roster: '人員', memory: '記憶',
   proposals: '提案', duties: '日課', models: 'モデル', changes: '変更',
-  log: '流れ', note: '覚え書き',
+  log: '流れ', note: '覚え書き', checks: '点検',
 };
