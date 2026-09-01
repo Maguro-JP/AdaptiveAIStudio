@@ -21,6 +21,9 @@ export interface StubNode {
   placeholder: string;
   dataset: Record<string, string>;
   children: StubNode[];
+  readonly childNodes: StubNode[];
+  readonly firstChild: StubNode | undefined;
+  removeChild(child: StubNode): StubNode;
   onclick?: () => unknown;
   onchange?: (e: unknown) => unknown;
   append(...nodes: StubNode[]): void;
@@ -48,6 +51,15 @@ export function createNode(tagName: string): StubNode {
     append(...nodes) { node.children.push(...nodes); },
     appendChild(child) { node.children.push(child); return child; },
     replaceChildren(...nodes) { node.children = [...nodes]; },
+    // 本物では、文字だけの節は children に入らず childNodes にだけ入る。
+    // 板は溜まりすぎたぶんを childNodes で数えて捨てるので、同じ名前を持たせる。
+    get childNodes() { return node.children; },
+    get firstChild() { return node.children[0]; },
+    removeChild(child) {
+      const at = node.children.indexOf(child);
+      if (at >= 0) node.children.splice(at, 1);
+      return child;
+    },
     get text() {
       return [node.textContent, ...node.children.map((c) => c.text)].join(' ').trim();
     },
@@ -60,9 +72,20 @@ export function createNode(tagName: string): StubNode {
   return node;
 }
 
+/**
+ * 文字だけの節。板が append(document.createTextNode(...)) を使うため。
+ * 見た目は持たないので、textContent だけ持てばよい。
+ */
+export function createText(text: string): StubNode {
+  const node = createNode('#text');
+  node.textContent = text;
+  return node;
+}
+
 /** panels.js を読み込む前に、document を用意する。 */
 export function installDom(): void {
   (globalThis as unknown as { document: unknown }).document = {
     createElement: (tag: string) => createNode(tag),
+    createTextNode: (text: string) => createText(text),
   };
 }
