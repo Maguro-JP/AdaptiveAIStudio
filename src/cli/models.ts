@@ -14,6 +14,7 @@ import { GB } from '../runtime/spec.ts';
 import { readGguf } from '../runtime/gguf.ts';
 import { toModelSpec, formatGguf } from '../runtime/gguf-spec.ts';
 import { installModel, defaultModelsDir } from '../runtime/model-install.ts';
+import { usesGguf } from '../runtime/local-runtime.ts';
 import { lookupCatalog, formatCatalog, STARTER_ID } from '../runtime/model-catalog.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
 import { findNewerOllama, describeNewer } from '../runtime/model-updates.ts';
@@ -80,12 +81,12 @@ if (process.argv.includes('--get') || process.argv.includes('--available')) {
   const modelsDir = config.runtime?.modelsDir ?? defaultModelsDir();
 
   if (process.argv.includes('--available')) {
-    console.log(formatCatalog(runtime.id === 'llamacpp' ? 'llamacpp' : 'ollama'));
-    console.log(c.dim(runtime.id === 'llamacpp'
+    console.log(formatCatalog(usesGguf(runtime.id) ? 'llamacpp' : 'ollama'));
+    console.log(c.dim(usesGguf(runtime.id)
       ? `\n  置き場: ${modelsDir}`
       : '\n  置き場: Ollama が持っています'));
     console.log(c.dim('  取ってくる: npm run models -- --get [名前]'));
-    if (runtime.id !== 'llamacpp') {
+    if (!usesGguf(runtime.id)) {
       console.log(c.dim('  一覧に無いものは、Ollama の名前をそのまま渡せます（例: --get gemma3:4b）'));
     }
     console.log();
@@ -100,7 +101,7 @@ if (process.argv.includes('--get') || process.argv.includes('--available')) {
   // **この一覧は必ず古くなる**ので、載っているものしか取れない作りにすると、
   // 表を書いた人（＝私）が直すまで新しいモデルが使えないことになる。
   // llama.cpp なら Hugging Face の置き場名、Ollama ならあちらの名前。
-  if (!entry && runtime.id === 'llamacpp' && id.includes('/')) {
+  if (!entry && usesGguf(runtime.id) && id.includes('/')) {
     const quant = process.argv[process.argv.indexOf('--quant') + 1] ?? 'q4_k_m';
     console.log(c.cyan(`  ${id}`) + c.dim(` — 一覧にはありませんが、そのまま取ってきます（${quant}）`));
     try {
@@ -121,7 +122,7 @@ if (process.argv.includes('--get') || process.argv.includes('--available')) {
     process.exit(0);
   }
 
-  if (!entry && runtime.id !== 'llamacpp' && id.includes(':')) {
+  if (!entry && !usesGguf(runtime.id) && id.includes(':')) {
     console.log(c.cyan(`  ${id}`) + c.dim(' — 一覧にはありませんが、そのまま頼みます'));
     try {
       await pullModel({
@@ -138,11 +139,11 @@ if (process.argv.includes('--get') || process.argv.includes('--available')) {
 
   if (!entry) {
     console.error(c.yellow(`知らないモデルです: ${id}`));
-    console.log(c.dim(runtime.id === 'llamacpp'
+    console.log(c.dim(usesGguf(runtime.id)
       ? '  Hugging Face の置き場名（例: Qwen/Qwen3-8B-GGUF）なら、そのまま渡せます。'
       : '  Ollama の名前（例: qwen3-coder:30b）なら、そのまま渡せます。'));
-    console.log(c.dim(`\n${formatCatalog(runtime.id === 'llamacpp' ? 'llamacpp' : 'ollama')}\n`));
-    if (runtime.id !== 'llamacpp') {
+    console.log(c.dim(`\n${formatCatalog(usesGguf(runtime.id) ? 'llamacpp' : 'ollama')}\n`));
+    if (!usesGguf(runtime.id)) {
       console.log(c.dim('  Ollama の名前をそのまま渡すこともできます（例: --get gemma3:4b）\n'));
     }
     process.exit(1);
@@ -151,7 +152,7 @@ if (process.argv.includes('--get') || process.argv.includes('--available')) {
   console.log(c.cyan(`  ${entry.id}`) + c.dim(` — ${entry.note}`));
 
   // 道によって取ってくる先が違う。使う人が意識しなくて済むよう、こちらで振り分ける。
-  if (runtime.id !== 'llamacpp') {
+  if (!usesGguf(runtime.id)) {
     console.log(c.dim(`  Ollama に頼みます: ${entry.ollama}\n`));
     try {
       await pullModel({
@@ -208,7 +209,7 @@ if (inspectAt !== -1) {
 const models = await runtime.list();
 if (models.length === 0) {
   console.log(c.yellow('モデルが見つかりません。'));
-  console.log(c.dim(runtime.id === 'llamacpp'
+  console.log(c.dim(usesGguf(runtime.id)
     ? '  `npm run models -- --get` で取ってきます（まず動く軽いものが入ります）。\n'
       + '  一覧は `npm run models -- --available`。\n'
       + '  手持ちがあるなら、同じ置き場に .gguf を入れるだけでも使えます。'

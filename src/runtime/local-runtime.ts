@@ -37,3 +37,14 @@ export interface LocalRuntime {
   /** 現在ロード済みのref */
   loaded(): string[];
 }
+
+/**
+ * GGUF を自分で置く道か。
+ *
+ * llamacpp と inproc は、どちらも置き場の .gguf を読む。
+ * **どちらか一方だけを見る分岐を書かない。**片方を足したときに、
+ * 取ってくる先が Ollama のままになっていて気づかなかった。
+ */
+export function usesGguf(runtimeId: string): boolean {
+  return runtimeId === 'llamacpp' || runtimeId === 'inproc';
+}

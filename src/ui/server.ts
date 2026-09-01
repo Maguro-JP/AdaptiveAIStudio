@@ -25,7 +25,7 @@ import { AVAILABLE_MODELS, lookupCatalog } from '../runtime/model-catalog.ts';
 import { installModel } from '../runtime/model-install.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { MachineCache } from '../runtime/machine.ts';
-import type { LocalRuntime } from '../runtime/local-runtime.ts';
+import { usesGguf, type LocalRuntime } from '../runtime/local-runtime.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout } from './layout.ts';
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
@@ -728,14 +728,13 @@ export class UiServer {
     const log = (text: string) => this.broadcast({ type: 'log', level: 'info', text });
 
     try {
-      if (runtime.id === 'llamacpp') {
-        const modelsDir = this.#opts.config.runtime?.modelsDir
-          ?? join(stateDir(), '..', 'models');
+      if (usesGguf(runtime.id)) {
+        const dir = this.#opts.config.runtime?.modelsDir ?? modelsDir();
         await installModel({
           entry: entry ?? {
             id, repo: id, quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '',
           },
-          modelsDir,
+          modelsDir: dir,
           onProgress: log,
         });
       } else {

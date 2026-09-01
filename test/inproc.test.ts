@@ -292,3 +292,25 @@ describe('読み込みの進み具合を言う', () => {
     assert.ok(said.some((l) => l.includes('読み込み中 100%')), '終わりまで言っていない');
   });
 });
+
+describe('GGUF を置く道を、ひとまとめに見る', () => {
+  test('llamacpp と inproc は、どちらも GGUF の道', async () => {
+    // 片方だけを見る分岐を書くと、もう片方を足したときに置き去りになる。
+    // 実際に「モデルを取ってくる」が inproc のとき Ollama を叩いていた。
+    const { usesGguf } = await import('../src/runtime/local-runtime.ts');
+    assert.equal(usesGguf('llamacpp'), true);
+    assert.equal(usesGguf('inproc'), true);
+    assert.equal(usesGguf('ollama'), false);
+  });
+
+  test('どちらか一方だけを見る分岐が残っていない', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { installRoot } = await import('../src/core/home.ts');
+    for (const rel of [['src', 'cli', 'models.ts'], ['src', 'ui', 'server.ts']]) {
+      const src = await readFile(join(installRoot(), ...rel), 'utf8');
+      const bad = src.split('\n').filter((l) => /runtime\.id [!=]== 'llamacpp'/.test(l));
+      assert.deepEqual(bad, [], `${rel.join('/')} に片方だけの分岐が残っている`);
+    }
+  });
+});
