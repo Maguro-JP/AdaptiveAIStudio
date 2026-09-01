@@ -186,3 +186,31 @@ describe('既定の置き場', () => {
     }
   });
 });
+
+describe('届かなくても、手で取る道を言う', () => {
+  test('繋がらないときは、開く先と置く先を出す', async () => {
+    const modelsDir = await tempDir('aas-byhand-');
+    const dead = (async () => { throw new Error('fetch failed'); }) as unknown as typeof fetch;
+    await assert.rejects(
+      installModel({ entry: ENTRY, modelsDir, fetchImpl: dead }),
+      (e: Error) => e.message.includes(`https://huggingface.co/${ENTRY.repo}/tree/main`)
+        && e.message.includes(ENTRY.quant)
+        && e.message.includes(modelsDir),
+    );
+  });
+
+  test('断られたときも、同じ道を出す', async () => {
+    const modelsDir = await tempDir('aas-byhand-');
+    await assert.rejects(
+      installModel({ entry: ENTRY, modelsDir, fetchImpl: fakeFetch({ metaStatus: 403 }).impl }),
+      (e: Error) => e.message.includes('手で取るなら') && e.message.includes(modelsDir),
+    );
+  });
+
+  test('取れたときは、手で取る話をしない（対）', async () => {
+    const modelsDir = await tempDir('aas-byhand-');
+    const lines: string[] = [];
+    await installModel({ entry: ENTRY, modelsDir, fetchImpl: fakeFetch().impl, onProgress: (l) => lines.push(l) });
+    assert.ok(!lines.some((l) => l.includes('手で取るなら')));
+  });
+});

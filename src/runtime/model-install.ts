@@ -89,7 +89,18 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
   }
 
   log(`一覧を調べます: ${entry.repo}`);
-  const meta = await fetchImpl(`${HF_API}/${entry.repo}`, { signal: opts.signal });
+  let meta: Response;
+  try {
+    meta = await fetchImpl(`${HF_API}/${entry.repo}`, { signal: opts.signal });
+  } catch (e) {
+    if (opts.signal?.aborted) throw e;
+    // ここから先は届かない。**ブラウザなら届く**機械がある（会社の PC。
+    // 中継を通すのはブラウザだけ）。取れないと言って終わらず、手で取る道を出す。
+    throw new Error(
+      `配布元に繋がりません（${e instanceof Error ? e.message : String(e)}）。\n`
+      + byHand(entry, modelsDir),
+    );
+  }
   if (!meta.ok) {
     if (meta.status === 404) throw new Error(`配布元が見つかりません: ${entry.repo}`);
     // 403 は理由が複数ある。番号だけ出しても、次に何をすればいいか分からない。
@@ -98,7 +109,8 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
         `配布元に断られました (${meta.status})。次のどれかです。\n`
         + '  ・そのモデルが利用同意を求めている（配布元のページで同意すると取れます）\n'
         + '  ・回線側で huggingface.co が塞がれている\n'
-        + '  ・問い合わせ回数の上限（少し待つと戻ります）',
+        + '  ・問い合わせ回数の上限（少し待つと戻ります）\n'
+        + byHand(entry, modelsDir),
       );
     }
     throw new Error(`一覧を調べられませんでした (${meta.status})`);
@@ -123,10 +135,18 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
   const tmp = `${dest}.part`;
 
   log(`取ってきます（約${entry.approxGB}GB。回線によっては数十分かかります）`);
-  const res = await fetchImpl(`${HF_FILES}/${entry.repo}/resolve/main/${file}`, {
-    redirect: 'follow', signal: opts.signal,
-  });
-  if (!res.ok) throw new Error(`取ってこられませんでした (${res.status})`);
+  const direct = `${HF_FILES}/${entry.repo}/resolve/main/${file}`;
+  let res: Response;
+  try {
+    res = await fetchImpl(direct, { redirect: 'follow', signal: opts.signal });
+  } catch (e) {
+    if (opts.signal?.aborted) throw e;
+    throw new Error(
+      `取ってこられませんでした（${e instanceof Error ? e.message : String(e)}）。\n`
+      + byHand(entry, modelsDir, direct),
+    );
+  }
+  if (!res.ok) throw new Error(`取ってこられませんでした (${res.status})\n${byHand(entry, modelsDir, direct)}`);
 
   const total = Number(res.headers.get('content-length') ?? 0);
   const handle = await open(tmp, 'w');
@@ -167,6 +187,27 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
   await rename(tmp, dest);
   log(`置きました: ${dest}`);
   return { path: dest, file: dest.split(/[\\/]/).at(-1)!, bytes: written };
+}
+
+/**
+ * 手で取る道。
+ *
+ * この道具から届かなくても、ブラウザからなら届く機械がある。
+ * 「取れませんでした」で終わらせると、そこで止まる。開く先と置く先を、
+ * そのまま貼れる形で言う。直リンクが分かっていればそれを、
+ * 分かっていなければ一覧の頁と、探す目印（量子化の名前）を出す。
+ */
+export function byHand(entry: { repo: string; quant: string }, modelsDir: string, direct?: string): string {
+  const open = direct ?? `${HF_FILES}/${entry.repo}/tree/main`;
+  return [
+    '手で取るなら:',
+    `  1. ブラウザで開く: ${open}`,
+    direct
+      ? '  2. 落とす'
+      : `  2. 名前に ${entry.quant} が付く .gguf を1つ落とす（分割されたものは扱えません）`,
+    `  3. ここに置く: ${modelsDir}`,
+    '  置いたら「読み直す」を押してください。',
+  ].join('\n');
 }
 
 /** 応答を塊で読む。 */
