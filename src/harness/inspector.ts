@@ -106,6 +106,11 @@ function systemPrompt(direction: Direction, fence: string): string {
     '',
     '判断がつかないときは止める側にしてください。',
     '通しても何も進みませんし、止めても誰も困りません。',
+    '',
+    // 小さいモデルは、頼んでも考えを書き始めることがある。
+    // 禁じるより、書いてよいから最後に答えを置け、と言う方が守られる。
+    // 読む側も最後の行から見るので、ここが噛み合う。
+    'どうしても考えを書いてしまう場合は、**最後の行**に答えだけを置いてください。',
   ].join('\n');
 }
 
@@ -119,13 +124,86 @@ function sample(text: string, max: number): { text: string; sampled: boolean } {
   };
 }
 
-/** 検査官の答えを読む。読めなければ「分からない」。勝手に通さない。 */
+/**
+ * 思考の書き置きを落とす。
+ *
+ * いま勧めているモデル（Qwen3.5 系）は考えごとを `<think>` に書き出す。
+ * その中には「止めるべきか」「通す理由は無い」のような、
+ * **結論ではない文**が並ぶ。ここを判定として拾うと、
+ * 考えた形跡が答えを乗っ取ることになる。
+ */
+function stripThinking(raw: string): string {
+  return raw
+    .replace(/<think>[\s\S]*?<\/think>/gi, ' ')
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, ' ')
+    // 閉じ札が来ないまま切れることがある。開いたままなら、そこから先を捨てる。
+    .replace(/<think(?:ing)?>[\s\S]*$/i, ' ');
+  // 落とした結果が空でも、元へは戻さない。
+  // 「考えの途中しか無い」のは、結論がまだ出ていないということ。
+  // そこから拾えば、迷いをそのまま判定にしてしまう。「分からない」が正しい。
+}
+
+/** 飾りを外す。箇条書き、強調、鉤括弧、「判断:」のような前置き。 */
+function undecorate(line: string): string {
+  return line
+    .replace(/^[\s>*_#-]+/, '')
+    .replace(/[\s*_]+$/, '')
+    .replace(/^(?:判断|answer|verdict|結論|答え|回答)\s*[:：]\s*/i, '')
+    .replace(/^[「『"'\u201c\u2018]/, '')
+    .replace(/[」』"'\u201d\u2019]$/, '')
+    .trim();
+}
+
+/**
+ * 「通す」を打ち消している言い回しか。
+ *
+ * `通すべきではない` `通すことはできません` は、**止めろという意味**なのに
+ * 頭の二文字だけを見ると「通す」に当たる。ここを見落とすと、
+ * 止めろと言われたものを通してしまう。**最も避けたい間違い方**なので、
+ * 打ち消しの気配があれば、通したことにしない。
+ */
+function negated(rest: string): boolean {
+  return /な(い|く)|ませ|ぬ$|不可|禁止|避け|べきで(は)?な|わけに(は)?い?か/.test(rest);
+}
+
+/**
+ * 検査官の答えを読む。読めなければ「分からない」。**勝手に通さない。**
+ *
+ * 通す側は厳しく、止める側は緩く読む。
+ * 読み違えたときに、通してしまう方が高くつくため。
+ */
 export function readJudgement(raw: string): { judgement: Judgement; reason?: string } {
-  const line = raw.split('\n').map((l) => l.trim()).find((l) => /^(通す|止める)/.test(l));
-  if (!line) return { judgement: 'unknown' };
-  if (line.startsWith('通す')) return { judgement: 'pass' };
-  const reason = line.replace(/^止める\s*[:：]?\s*/, '').trim();
-  return { judgement: 'block', reason: reason.length > 0 ? reason : '理由の記載なし' };
+  const lines = stripThinking(raw).split(/\r?\n/).map(undecorate).filter((l) => l.length > 0);
+
+  // 後ろから見る。前置きしてから結論を書くモデルが多く、
+  // 途中に迷いを書いていても、最後の行が答えになっている。
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+
+    // 止める側。語尾は揺れる（止める・止めます・止めるべき）ので頭で見る。
+    if (/^止め/.test(line) || /^(block|blocked|reject|deny)\b/i.test(line)) {
+      const reason = line
+        .replace(/^止め\S*?\s*[:：]?\s*/, '')
+        .replace(/^(block|blocked|reject|deny)\S*\s*[:：]?\s*/i, '')
+        .trim();
+      return { judgement: 'block', reason: reason.length > 0 ? reason : '理由の記載なし' };
+    }
+
+    if (/^通/.test(line)) {
+      const rest = line.replace(/^通(?:す|し|せ)/, '');
+      // 打ち消していれば、通したことにしない。止めろの意味で書かれている。
+      if (negated(rest)) return { judgement: 'block', reason: line };
+      // 短く言い切っているものだけを通す。長い文は説明であって答えではない。
+      if (rest.replace(/[。．.!！、,\s]/g, '').length <= 8) return { judgement: 'pass' };
+      continue;
+    }
+
+    if (/^(pass|ok|allow)\b/i.test(line) && !/\bnot\b|n't/i.test(line)) {
+      return { judgement: 'pass' };
+    }
+  }
+
+  return { judgement: 'unknown' };
 }
 
 export class Inspector {

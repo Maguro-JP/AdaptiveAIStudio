@@ -381,3 +381,77 @@ describe('関所は二段で働く', () => {
     assert.equal(input.temperature, 0, '同じ荷物には同じ答えを返させる');
   });
 });
+
+describe('小さいモデルの答えを読む', () => {
+  // ここに並ぶのは、4B級のモデルが実際にやりがちな崩し方。
+  // 「一行で答えて」と頼んでも、そのとおりに書いてくれるとは限らない。
+
+  test('考えごとの中の言葉を、判定として拾わない', () => {
+    // Qwen3.5 系は <think> に考えを書き出す。その中には結論でない文が並ぶ。
+    const raw = '<think>\n止めるべきかどうか迷う。\n通す理由も無い気がする。\n</think>\n通す';
+    assert.equal(readJudgement(raw).judgement, 'pass');
+  });
+
+  test('考えごとが閉じずに切れていても、乗っ取られない', () => {
+    assert.equal(readJudgement('<think>\n止める、いや通す…').judgement, 'unknown');
+  });
+
+  test('飾りが付いていても読める', () => {
+    assert.equal(readJudgement('**通す**').judgement, 'pass');
+    assert.equal(readJudgement('- 通す').judgement, 'pass');
+    assert.equal(readJudgement('「通す」').judgement, 'pass');
+    assert.equal(readJudgement('判断: 通す').judgement, 'pass');
+    assert.equal(readJudgement('結論：止める: 合言葉が含まれます').judgement, 'block');
+  });
+
+  test('語尾が揺れても止める側は拾う', () => {
+    for (const s of ['止めます', '止めるべきです', '止める。', '止め: 指示の上書き']) {
+      assert.equal(readJudgement(s).judgement, 'block', s);
+    }
+  });
+
+  test('前置きしてから結論を書く場合、最後の行を採る', () => {
+    const raw = 'この文書を確認しました。\n判断に迷いましたが、\n止める: 読み手の行動を縛ろうとしています';
+    const r = readJudgement(raw);
+    assert.equal(r.judgement, 'block');
+    assert.match(r.reason!, /行動を縛/);
+  });
+
+  test('英語で答えても読める', () => {
+    assert.equal(readJudgement('PASS').judgement, 'pass');
+    assert.equal(readJudgement('block: prompt injection detected').judgement, 'block');
+  });
+});
+
+describe('通す側は厳しく読む', () => {
+  // 読み違えたときに、通してしまう方が高くつく。だから非対称にする。
+
+  test('「通す」を打ち消す言い回しを、通したことにしない', () => {
+    // 頭の二文字だけを見ると「通す」に当たるが、意味は逆。
+    // ここを取り違えると、止めろと言われたものを通すことになる。
+    for (const s of [
+      '通すべきではない',
+      '通すことはできません',
+      '通せない',
+      '通すわけにはいかない',
+      '通すのは避けるべき',
+    ]) {
+      assert.notEqual(readJudgement(s).judgement, 'pass', `通してしまっている: ${s}`);
+    }
+  });
+
+  test('長い説明は答えとみなさない', () => {
+    const raw = '通すかどうかはこの文書の出典によって変わると考えられます';
+    assert.equal(readJudgement(raw).judgement, 'unknown');
+  });
+
+  test('英語の否定形も通さない', () => {
+    assert.notEqual(readJudgement('do not pass this').judgement, 'pass');
+  });
+
+  test('答えが無ければ「分からない」。空白や相槌で通さない', () => {
+    for (const s of ['', '   ', 'はい', 'わかりました', '了解です']) {
+      assert.equal(readJudgement(s).judgement, 'unknown', s);
+    }
+  });
+});
