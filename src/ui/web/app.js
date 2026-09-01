@@ -554,6 +554,40 @@ async function loadCfg() {
   }
 }
 
+/** 取ってこられるものを並べる。一覧は必ず古くなるので、名前も直に打てる。 */
+async function loadCatalog() {
+  const d = await fetch('/api/models').then((r) => r.json()).catch(() => null);
+  const sel = $('cfgCatalog');
+  sel.replaceChildren();
+  for (const m of d?.catalog ?? []) {
+    const o = document.createElement('option');
+    o.value = m.ref ?? m.id;
+    o.textContent = `${m.id}（約${m.approxGB}GB・${m.note}）`;
+    sel.append(o);
+  }
+  if (sel.children.length === 0) {
+    const o = document.createElement('option');
+    o.value = '';
+    o.textContent = '一覧を取れませんでした';
+    sel.append(o);
+  }
+}
+
+$('cfgGet').onclick = async () => {
+  const id = $('cfgCatalog').value;
+  if (!id) { $('cfgGetNote').textContent = '名前がありません。'; return; }
+  const r = await fetch('/api/models/get', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id }),
+  });
+  const body = await r.json().catch(() => ({}));
+  // 数GBかかる。**終わるまで待たせない**ので、どこを見ればいいかを言う。
+  $('cfgGetNote').style.whiteSpace = 'pre-line';
+  $('cfgGetNote').textContent = r.ok
+    ? `取ってきています: ${id}\n進み具合は「流れ」の板に出ます。終わったら「読み直す」を押してください。`
+    : (body.error ?? '始められませんでした');
+};
+
 $('cfgReload').onclick = () => { void loadCfg(); };
 $('cfgSave').onclick = async () => {
   const r = await fetch('/api/config', {
@@ -613,7 +647,7 @@ async function openSettings(section = 'info') {
   showSection(section);
   await loadInfo();
   if (section === 'check') await loadChecks();
-  if (section === 'model') await loadCfg();
+  if (section === 'model') { await loadCfg(); await loadCatalog(); }
   $('settings').showModal();
 }
 
@@ -622,7 +656,7 @@ for (const b of $('settings').querySelectorAll('.tabs-lite button')) {
     showSection(b.dataset.sec);
     if (b.dataset.sec === 'check') await loadChecks();
     if (b.dataset.sec === 'info') await loadInfo();
-    if (b.dataset.sec === 'model') await loadCfg();
+    if (b.dataset.sec === 'model') { await loadCfg(); await loadCatalog(); }
   };
 }
 $('openSettings').onclick = () => { void openSettings(); };

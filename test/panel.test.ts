@@ -206,6 +206,11 @@ describe('置ける中身と、描く関数が食い違わない', () => {
     const app = await readFile(join(dir, 'app.js'), 'utf8');
 
     assert.match(html, /id="openSettings"/, '設定を開く口が無い');
+    // 画面から出来ることは、繋がっていて初めて意味がある。
+    for (const id of ['cfgKind', 'cfgModelsDir', 'cfgSave', 'cfgReload', 'cfgCatalog', 'cfgGet']) {
+      assert.match(html, new RegExp(`id="${id}"`), `${id} が無い`);
+      assert.match(app, new RegExp(`\\$\\('${id}'\\)`), `${id} が繋がっていない`);
+    }
     assert.match(app, /\$\('openSettings'\)\.onclick/, '開く口が繋がっていない');
     // 中の見出しと、中身の節が対応していること。
     for (const sec of ['info', 'look', 'place', 'model', 'check']) {
