@@ -33,6 +33,9 @@ async function fromMarker(): Promise<Version | undefined> {
     const id = (await readFile(join(dir, 'VERSION'), 'utf8').catch(() => ''))
       .split('\n')[0]?.trim();
     if (!id) continue;
+    // 作業コピーでは、書庫に焼き込む印がそのまま残っている。
+    // これを版として見せると、嘘の版を報告することになる。git に訊く。
+    if (id.startsWith('$Format:')) continue;
     const built = (await readFile(join(dir, '.portable'), 'utf8').catch(() => ''))
       .match(/built\s+(\S+)/)?.[1];
     return { id, from: '配布物の記録', ...(built ? { builtAt: built } : {}) };

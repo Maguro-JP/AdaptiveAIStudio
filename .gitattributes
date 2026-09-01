@@ -3,3 +3,8 @@
 *.cmd text eol=crlf
 *.bat text eol=crlf
 *.sh  text eol=lf
+
+# 配布用の書庫（GitHub の「Download ZIP」を含む）に、実際の版を焼き込む。
+# これが無いと、落とした人が「どの版か分からない」まま使うことになり、
+# 直したはずのものが直っていないように見える。
+VERSION export-subst

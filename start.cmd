@@ -53,6 +53,30 @@ if defined BUNDLED (
 for /f "tokens=*" %%v in ('"%NODE%" -v') do set NODEV=%%v
 echo   Node %NODEV%
 
+rem --- 版を確かめる ----------------------------------------
+rem 型を剥がしながら実行する仕組みを使うので、v22.6 以降が要る。
+rem 古いままだと、意味の分からない構文エラーが出るだけで、
+rem 「Node が古い」とは誰も気づけない。ここで止めて、そう言う。
+for /f "tokens=1,2 delims=v." %%a in ("%NODEV%") do (
+  set "NMAJOR=%%a"
+  set "NMINOR=%%b"
+)
+set "NODEOLD="
+if %NMAJOR% LSS 22 set NODEOLD=1
+if %NMAJOR% EQU 22 if %NMINOR% LSS 6 set NODEOLD=1
+if defined NODEOLD (
+  echo.
+  echo   この Node では動きません（%NODEV%）。v22.6 以降が要ります。
+  echo   型を剥がしながら実行する仕組みを使っているためです。
+  echo.
+  echo   直し方は二つ。
+  echo     ・https://nodejs.org から新しい版を入れる
+  echo     ・Node を同梱した版を使う（この PC には何も入りません）
+  echo.
+  pause
+  exit /b 1
+)
+
 rem 依存は入れない。実行時の依存はゼロで、npm install は要らない。
 rem （型検査 npm run typecheck を使うときだけ、手動で入れる）
 
