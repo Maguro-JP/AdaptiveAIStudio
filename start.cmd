@@ -40,9 +40,20 @@ if exist "%UP%\runtime\node.exe" set "BUNDLED=%UP%\runtime"
 rem 同梱版の目印はあるのに node.exe が無い、という形を先に見る。
 rem 会社のクラウドドライブ（OneDrive・PassageDrive など）へ展開すると、
 rem .exe だけが黙って落ちる。利用者は「同梱と言ったのに無い」としか見えない。
+set "NODEFILE=node.exe"
 if defined BUNDLED goto :bundled
+
+rem 会社のクラウドドライブは .exe を落とす。中身ではなく名前で落とすので、
+rem .bin なら置ける（Z: で実測。92,534,088 バイトそのまま書けた）。
+rem cmd.exe は PATHEXT に載っている拡張子をそのまま実行するので、
+rem 名前が違うだけで、呼び方は何も変わらない。
+if not exist "%UP%\runtime\node.bin" goto :noBin
+set "BUNDLED=%UP%\runtime"
+set "NODEFILE=node.bin"
+goto :bundled
+:noBin
+
 if not exist "%UP%\.portable" goto :noMarker
-if exist "%UP%\runtime\node.exe" goto :noMarker
 goto :exeStripped
 :noMarker
 if exist "%HERE%runtime\node.exe" set "BUNDLED=%HERE%runtime"
@@ -57,8 +68,14 @@ set "RUNNER=npm"
 goto :haveNode
 
 :bundled
-set "NODE=%BUNDLED%\node.exe"
+set "NODE=%BUNDLED%\%NODEFILE%"
 set "PATH=%BUNDLED%;%PATH%"
+rem .bin をそのまま呼ぶための一手。cmd.exe と、ここから起こす子の
+rem どちらにも効かせたいので、環境変数として渡す。
+if "%NODEFILE%"=="node.exe" goto :extDone
+set "PATHEXT=%PATHEXT%;.BIN"
+set "NODE=node"
+:extDone
 rem npm まで同梱していないことがある。無ければ package.json を
 rem 直接読んで動かす（scripts/run.mjs）。二重に書き写さないので、ずれない。
 set "NPM=npm"
@@ -122,7 +139,7 @@ if "%CHOICE%"=="9" set "TASK=clean"
 if "%CHOICE%"=="0" goto :quit
 if "%TASK%"=="" goto :exeStripped
 echo.
-echo   node.exe だけがありません（他のファイルは揃っています）。
+echo   node.exe も node.bin もありません（他のファイルは揃っています）。
 echo.
 echo   いまの置き場所:
 echo     %UP%

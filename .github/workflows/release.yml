@@ -85,10 +85,26 @@ jobs:
           echo "ZIP の中の runtime/node.exe = ${SIZE} bytes"
           test "$SIZE" -gt 40000000
 
+      # .exe を落とす場所（会社のクラウドドライブ）むけ。中身は同じで、
+      # Node の名前だけが node.bin。組み立て直すだけなので数秒で終わる。
+      - name: .exe を置けない場所むけも作る
+        run: |
+          node scripts/bundle.mjs --out dist2/AdaptiveAIStudio --node-exe node.exe \
+            --node-name node.bin --version "${{ steps.v.outputs.id }}"
+          SIZE=$(stat -c%s dist2/AdaptiveAIStudio/runtime/node.bin)
+          echo "runtime/node.bin = ${SIZE} bytes"
+          test "$SIZE" -gt 40000000
+          cd dist2 && zip -qr ../AdaptiveAIStudio-portable-nobin.zip AdaptiveAIStudio && cd ..
+          rm -rf verify2 && mkdir verify2
+          unzip -q AdaptiveAIStudio-portable-nobin.zip -d verify2
+          test "$(stat -c%s verify2/AdaptiveAIStudio/runtime/node.bin)" -gt 40000000
+
       - uses: actions/upload-artifact@v4
         with:
           name: AdaptiveAIStudio-portable-${{ steps.v.outputs.id }}
-          path: AdaptiveAIStudio-portable.zip
+          path: |
+            AdaptiveAIStudio-portable.zip
+            AdaptiveAIStudio-portable-nobin.zip
           retention-days: 30
 
       - name: 公開する
@@ -99,7 +115,9 @@ jobs:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'portable' }}
           name: ${{ github.ref_type == 'tag' && github.ref_name || 'portable (main)' }}
           prerelease: ${{ github.ref_type != 'tag' }}
-          files: AdaptiveAIStudio-portable.zip
+          files: |
+            AdaptiveAIStudio-portable.zip
+            AdaptiveAIStudio-portable-nobin.zip
 
   # ------------------------------------------------------------------
   # インストーラ。NSIS が要るので Windows でしか組めない（枠は2倍）。

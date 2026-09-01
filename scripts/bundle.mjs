@@ -11,6 +11,7 @@
  * 使い方:
  *   node scripts/bundle.mjs --out dist/aas-portable [--node-here]
  *                           [--node-zip x.zip | --node-exe node.exe]
+ *                           [--node-name node.bin]
  *                           [--src <中身のある場所>] [--version <版>]
  *
  * **--node-here がいちばん手軽。**いま自分を動かしている Node を
@@ -84,6 +85,14 @@ function arg(name, fallback) {
  */
 export async function bundle({
   out, nodeZip, nodeExe, nodeHere, srcRoot = root, version, log = () => {},
+  // 同梱する Node をどの名前で置くか。既定は node.exe（何も変わらない）。
+  //
+  // node.bin にできるようにしてあるのは、会社のクラウドドライブが
+  // **名前を見て** .exe を落とすため（Z: で実測。.bin なら 92,534,088
+  // バイトそのまま書けた）。中身は同じで、名前だけが違う。
+  // cmd.exe は PATHEXT に載っていれば拡張子を問わず実行するので、
+  // 呼ぶ側は何も変えなくてよい。
+  nodeName,
 }) {
   await rm(out, { recursive: true, force: true });
   const app = join(out, 'app');
@@ -150,7 +159,7 @@ export async function bundle({
     // scripts/run.mjs があるので困らない。
     await mkdir(join(out, 'runtime'), { recursive: true });
     // Windows は node.exe、それ以外は node。渡す先で押せる名前にする。
-    const name = exe.toLowerCase().endsWith('.exe') ? 'node.exe' : 'node';
+    const name = nodeName ?? (exe.toLowerCase().endsWith('.exe') ? 'node.exe' : 'node');
     const dest = join(out, 'runtime', name);
     await cp(exe, dest);
     // fs.cp の mode は「写し方」の指定で、権限ではない。権限は別に付ける。
@@ -183,6 +192,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     nodeZip: arg('--node-zip'),
     nodeExe: arg('--node-exe'),
     nodeHere: process.argv.includes('--node-here'),
+    nodeName: arg('--node-name'),
     ...(arg('--src') ? { srcRoot: resolve(arg('--src')) } : {}),
     version: arg('--version'),
     log: (l) => console.log(l),

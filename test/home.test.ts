@@ -243,6 +243,28 @@ describe('同梱した Node の置き場所', () => {
     assert.ok(await stat(join(out, 'runtime', 'node.exe')));
   });
 
+  test('名前を変えても入る（.exe を落とす場所むけ）', async () => {
+    // 会社のクラウドドライブは **名前を見て** .exe を落とす。
+    // 中身は同じで名前だけ違うものを置けるようにしてある。
+    const out = await tempDir('aas-bin-');
+    const fake = join(await tempDir('aas-fake-'), 'node.exe');
+    await writeFile(fake, 'dummy');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), nodeExe: fake, nodeName: 'node.bin', version: 'x' });
+    const { stat } = await import('node:fs/promises');
+    assert.ok(await stat(join(out, 'runtime', 'node.bin')));
+    // 既定は変えない。何も渡さなければ node.exe のまま。
+    const plain = await tempDir('aas-bin2-');
+    await bundle({ out: plain, srcRoot: installRoot(), nodeExe: fake, version: 'x' });
+    assert.ok(await stat(join(plain, 'runtime', 'node.exe')));
+  });
+
+  test('入口は、.exe が落とされた場所でも動く', sourceOnly, async () => {
+    const raw = cmd(await readFile(join(installRoot(), 'start.cmd')));
+    assert.match(raw, /%UP%\\runtime\\node\.bin/, '.bin を探していない');
+    assert.match(raw, /PATHEXT=%PATHEXT%;\.BIN/, 'PATHEXT に足していない');
+  });
+
   test('入口は、組み立てた場所を探しに行く', sourceOnly, async () => {
     const raw = cmd(await readFile(join(installRoot(), 'start.cmd')));
     // app\ の隣の runtime\ を見ていること。

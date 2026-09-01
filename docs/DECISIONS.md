@@ -220,3 +220,22 @@ Z:（PassageDrive / OneDrive）へ展開したところ、`runtime\node.exe` だ
 `start.cmd` は、この形（`.portable` はあるのに `runtime\node.exe` が無い）を
 見分けて、原因（クラウドドライブが .exe を落とした）を言う。
 直し方は環境によるので、こちらで決め打ちにしない。
+
+---
+
+## 2026-09-01  .exe は名前で落とされる。名前を変えれば置ける
+
+社用PCの Z:（PassageDrive）は、**中身ではなく名前を見て** .exe を落とす。
+実測: ZIP から取り出して `node.bin` として書いたら 92,534,088 バイト
+そのまま置けた。
+
+だから中身はそのままに、名前だけ変えたものを配る。
+
+- `npm run bundle -- --node-name node.bin` で作れる（既定は `node.exe`。
+  **何も渡さなければ、これまでと1バイトも変わらない**）
+- `start.cmd` は `.exe` を先に見て、無ければ `.bin` を見る
+- `.bin` のときは `PATHEXT` に `.BIN` を足す。cmd.exe は PATHEXT に
+  載っている拡張子をそのまま実行するので、呼ぶ側は何も変えない
+- `scripts/run.mjs` は `process.execPath` を使うので、元から名前に依らない
+
+**本番の道（.exe）には触っていない。**後ろに足しただけ。
