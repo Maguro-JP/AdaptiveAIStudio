@@ -79,7 +79,7 @@ describe('用意する道具', () => {
 
   test('用意用は、全角の混ざる置き場所を先に止める', async () => {
     // 後で分かると数GB落とし直しになるので、取ってくる前に止める。
-    const raw = await readFile(join(installRoot(), 'bootstrap.cmd'), 'utf8');
+    const raw = await readFile(join(installRoot(), 'installer', 'bootstrap.cmd'), 'utf8');
     assert.match(raw, /findstr \/R "\[\^ -~\]"/, '全角の検査が無い');
     const stopAt = raw.indexOf('findstr /R "[^ -~]"');
     const fetchAt = raw.indexOf('curl -fL');
@@ -87,7 +87,7 @@ describe('用意する道具', () => {
   });
 
   test('用意用は、git も npm も要求しない', async () => {
-    const raw = await readFile(join(installRoot(), 'bootstrap.cmd'), 'utf8');
+    const raw = await readFile(join(installRoot(), 'installer', 'bootstrap.cmd'), 'utf8');
     assert.equal(/\bgit \b/.test(raw), false, 'git を使っている');
     assert.equal(/\bnpm \b/.test(raw), false, 'npm を使っている');
   });
