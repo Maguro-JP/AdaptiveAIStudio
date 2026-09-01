@@ -44,11 +44,13 @@ async function sizeOf(path: string): Promise<number> {
 export async function findRemovable(opts: {
   keepTag: string;
   maxLogAgeMs?: number;
+  maxAttachmentAgeMs?: number;
   now?: number;
 } ): Promise<Removable[]> {
   const found: Removable[] = [];
   const now = opts.now ?? Date.now();
   const maxLogAge = opts.maxLogAgeMs ?? 30 * 24 * 60 * 60 * 1000;
+  const maxAttachmentAge = opts.maxAttachmentAgeMs ?? 24 * 60 * 60 * 1000;
 
   // 古い llama-server。使っている版だけ残す。
   for (const name of await readdir(binDir()).catch(() => [])) {
@@ -76,6 +78,16 @@ export async function findRemovable(opts: {
     if (!s || now - s.mtimeMs < maxLogAge) continue;
     const days = Math.floor((now - s.mtimeMs) / 86_400_000);
     found.push({ path, bytes: s.size, why: `${days}日前の記録` });
+  }
+
+  // 渡された添付。その依頼が終われば要らない。**ここに載せるまで、誰も
+  // 消していなかった**（sweep は書いてあったが、呼ぶ所が無かった）。
+  const attachments = join(stateDir(), 'attachments');
+  for (const name of await readdir(attachments).catch(() => [])) {
+    const path = join(attachments, name);
+    const s = await stat(path).catch(() => undefined);
+    if (!s || now - s.mtimeMs < maxAttachmentAge) continue;
+    found.push({ path, bytes: s.size, why: '前に渡した添付（1日以上前）' });
   }
 
   return found.sort((a, b) => b.bytes - a.bytes);

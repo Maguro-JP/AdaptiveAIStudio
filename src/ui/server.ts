@@ -170,6 +170,11 @@ export class UiServer {
     // 塞がっていたら、番号だけでなく**次の一手**まで言う。
     const actual = await listenOrExplain(server, { port, host, what: '画面' });
     this.#url = `http://${host}:${actual}/`;
+    // 前に渡された添付を片づける。その依頼が終われば要らない。
+    // 溜めない。消したら、消した量を言う（黙って消さない）。
+    void this.#attachments.sweep().then((freed) => {
+      if (freed > 0) this.broadcast({ type: 'log', level: 'info', text: `前の添付を片づけました（${Math.round(freed / 1024)} KB）` });
+    }).catch(() => undefined);
     return this.#url;
   }
 

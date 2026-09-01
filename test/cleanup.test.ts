@@ -67,3 +67,21 @@ describe('片づけるもの・片づけないもの', () => {
     assert.deepEqual(await findRemovable({ keepTag: 'b1' }), []);
   });
 });
+
+describe('前に渡した添付', () => {
+  test('1日より古いものは片づける対象。新しいものは残す（対）', async () => {
+    const { home } = await scratch();
+    const { join: j } = await import('node:path');
+    const { mkdir: mk, writeFile: wf, utimes } = await import('node:fs/promises');
+    const dir = j(home, 'attachments');
+    await mk(dir, { recursive: true });
+    await wf(j(dir, 'old-a.txt'), 'x');
+    await wf(j(dir, 'new-b.txt'), 'y');
+    const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    await utimes(j(dir, 'old-a.txt'), old, old);
+    const found = await findRemovable({ keepTag: 'b1' });
+    const names = found.map((f) => f.path.split(/[\\/]/).at(-1));
+    assert.ok(names.includes('old-a.txt'), '古い添付が対象に無い');
+    assert.ok(!names.includes('new-b.txt'), '新しい添付まで消そうとしている');
+  });
+});
