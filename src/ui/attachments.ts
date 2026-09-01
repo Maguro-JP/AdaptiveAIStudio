@@ -18,6 +18,7 @@ import { mkdir, writeFile, readFile, readdir, stat, rm } from 'node:fs/promises'
 import { join, extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { stateDir } from '../core/home.ts';
+import { decodeText, type TextEncodingName } from '../core/text.ts';
 
 export type AttachmentKind = 'text' | 'image' | 'binary';
 
@@ -29,6 +30,8 @@ export interface Attachment {
   /** 置いた場所 */
   path: string;
   at: number;
+  /** 文字ものの読み方。CP932 のときに、そう読んだと分かるように残す。 */
+  encoding?: TextEncodingName;
 }
 
 /** 中身を差し込んでよい大きさ。これを超えたら頭だけ入れる。 */
@@ -67,7 +70,9 @@ export function detectKind(name: string, data: Buffer): AttachmentKind {
   if (head.includes(0)) return 'binary';
 
   // 読めない字が多ければ、文字ものとは言わない。
-  const text = head.toString('utf8');
+  // ただし UTF-8 で読めないだけなら CP932 を試す。Excel の CSV がそれ。
+  const { text, lossy } = decodeText(head);
+  if (!lossy) return 'text';
   const broken = (text.match(/�/g) ?? []).length;
   return broken > head.length / 100 ? 'binary' : 'text';
 }
@@ -104,8 +109,10 @@ export class Attachments {
     const path = join(this.#dir, `${id}-${clean}`);
     await writeFile(path, data);
 
+    const kind = detectKind(clean, data);
     const item: Attachment = {
-      id, name: clean, bytes: data.length, kind: detectKind(clean, data), path, at: Date.now(),
+      id, name: clean, bytes: data.length, kind, path, at: Date.now(),
+      ...(kind === 'text' ? { encoding: decodeText(data).encoding } : {}),
     };
     this.#items.set(id, item);
     return item;
@@ -135,11 +142,14 @@ export class Attachments {
       if (!item) continue;
 
       if (item.kind === 'text') {
-        const raw = await readFile(item.path, 'utf8').catch(() => '');
+        const bytes = await readFile(item.path).catch(() => Buffer.alloc(0));
+        const { text: raw, encoding } = decodeText(bytes);
         const body = raw.length > MAX_INLINE_CHARS
           ? `${raw.slice(0, MAX_INLINE_CHARS)}\n…（以降 ${raw.length - MAX_INLINE_CHARS} 文字は省略）`
           : raw;
-        parts.push(`--- 添付: ${item.name} ---\n${body}\n--- ここまで ---`);
+        // CP932 として読んだなら、そう言う。黙って直すと、書き戻すときに困る。
+        const how = encoding === 'shift_jis' ? '（CP932 として読みました）' : '';
+        parts.push(`--- 添付: ${item.name}${how} ---\n${body}\n--- ここまで ---`);
       } else if (item.kind === 'image') {
         parts.push(opts.canSeeImages
           ? `--- 添付（画像）: ${item.name} — ${item.path} ---`

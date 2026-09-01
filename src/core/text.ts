@@ -43,3 +43,26 @@ export function lineReader(): { push: (chunk: Buffer | string) => string[]; flus
     },
   };
 }
+
+export type TextEncodingName = 'utf-8' | 'shift_jis';
+
+/**
+ * ファイルの中身を文字にする。UTF-8 でなければ CP932 も試す。
+ *
+ * この場所の利用者は日本語の Windows で使う。Excel が書いた CSV、
+ * 昔からのメモ帳、cmd の記録は **CP932** で来る。UTF-8 と決めつけて
+ * 読むと `�` の山になり、しかも「読めない形式」と誤って弾いていた。
+ * 渡したのに無視されたように見えるのが、いちばん困る。
+ *
+ * 順番: UTF-8（厳密） → CP932（厳密） → UTF-8（化けを許す）。
+ * 当てずっぽうで CP932 にはしない。UTF-8 として通るものは UTF-8。
+ */
+export function decodeText(data: Buffer): { text: string; encoding: TextEncodingName; lossy: boolean } {
+  try {
+    return { text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(data), encoding: 'utf-8', lossy: false };
+  } catch { /* UTF-8 ではない */ }
+  try {
+    return { text: new TextDecoder('shift_jis', { fatal: true }).decode(data), encoding: 'shift_jis', lossy: false };
+  } catch { /* CP932 でもない */ }
+  return { text: new TextDecoder('utf-8').decode(data), encoding: 'utf-8', lossy: true };
+}

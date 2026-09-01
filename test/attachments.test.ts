@@ -137,3 +137,33 @@ describe('溜めない', () => {
     assert.ok(s.get(item.id));
   });
 });
+
+describe('CP932 のファイルを、読めないと言わない', () => {
+  // Excel が書いた CSV の形。見出しと一行、CP932。
+  const csv = Buffer.from([
+    0x96, 0xbc, 0x91, 0x4f, 0x2c, 0x92, 0x6c, 0x0d, 0x0a, // 名前,値\r\n
+    0x82, 0xa0, 0x2c, 0x31, 0x0d, 0x0a,                    // あ,1\r\n
+  ]);
+
+  test('拡張子が無くても、文字ものと見る', () => {
+    assert.equal(detectKind('メモ', csv), 'text');
+  });
+
+  test('依頼に差し込むとき、化けずに入り、CP932 だったと分かる', async () => {
+    const box = new Attachments(await tempDir('aas-att-'));
+    const item = await box.add('list.csv', csv);
+    assert.equal(item.encoding, 'shift_jis');
+    const text = await box.describe([item.id]);
+    assert.match(text, /名前,値/);
+    assert.match(text, /あ,1/);
+    assert.match(text, /CP932 として読みました/);
+    assert.doesNotMatch(text, /�/);
+  });
+
+  test('UTF-8 のときは、余計な但し書きを付けない（対）', async () => {
+    const box = new Attachments(await tempDir('aas-att-'));
+    const item = await box.add('list.csv', Buffer.from('名前,値\nあ,1\n', 'utf8'));
+    assert.equal(item.encoding, 'utf-8');
+    assert.doesNotMatch(await box.describe([item.id]), /CP932/);
+  });
+});
