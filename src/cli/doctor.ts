@@ -151,6 +151,12 @@ for (const p of enabledProviders(config)) {
     }
     continue;
   }
+  // この中で読む道では、口はこのプログラムの中に立つ。**外から見に行っても
+  // 意味がない**（モデルを読むまで立たないので、必ず「繋がりません」になる）。
+  if (runtime.id === 'inproc' && p.locality === 'local') {
+    add(label, 'ok', `${p.baseUrl}（この中に立てます。別に用意するものはありません）`);
+    continue;
+  }
   try {
     const res = await fetch(`${p.baseUrl}/models`, { signal: AbortSignal.timeout(3000) });
     add(label, res.ok ? 'ok' : 'warn', `${p.baseUrl} — HTTP ${res.status}`);

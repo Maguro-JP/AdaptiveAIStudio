@@ -24,6 +24,17 @@ import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.ts';
 
+/**
+ * 待つ口。**決め打ちにする。**
+ *
+ * 空いている口を勝手に使うと、上の層（provider）が繋ぎ先を知る術がない。
+ * 設定に書こうにも、毎回変わるので書けない。だから決めておいて、
+ * 設定を読むところで同じ番号を入れる（src/config.ts）。
+ *
+ * 4174 は画面、4175/4176 は preview などに使う。離してある。
+ */
+export const INPROC_PORT = 4177;
+
 export interface InProcOptions {
   /** GGUF の置き場 */
   modelsDir: string;
@@ -114,7 +125,7 @@ export class InProcRuntime implements LocalRuntime {
     if (this.#server) return;
     this.#server = createServer((req, res) => { void this.#handle(req, res); });
     await new Promise<void>((resolve) => {
-      this.#server!.listen(this.#opts.port ?? 0, '127.0.0.1', resolve);
+      this.#server!.listen(this.#opts.port ?? INPROC_PORT, '127.0.0.1', resolve);
     });
     const addr = this.#server.address();
     const port = typeof addr === 'object' && addr ? addr.port : 0;

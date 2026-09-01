@@ -3,6 +3,7 @@
  * 探索順: 環境変数 AAS_CONFIG > ./aas.config.json > 既定値(Ollama)
  */
 import { readFileSync } from 'node:fs';
+import { INPROC_PORT } from './runtime/inproc.ts';
 import { resolve } from 'node:path';
 
 export interface ProviderConfig {
@@ -334,7 +335,10 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
 
   const parsed = JSON.parse(raw) as Partial<AasConfig>;
   const config: AasConfig = {
-    providers: parsed.providers ?? DEFAULT_CONFIG.providers,
+    // **既定をそのまま渡さない。**同じ物を返すと、あとで書き換えたときに
+    // 既定そのものが書き換わり、次に読んだ設定にも残る（実際に起きた。
+    // inproc の繋ぎ先を入れたら、別の設定を読んでも 4177 のままになった）。
+    providers: parsed.providers ?? structuredClone(DEFAULT_CONFIG.providers),
     ...(parsed.candidates ? { candidates: parsed.candidates } : {}),
     system: parsed.system ?? DEFAULT_CONFIG.system,
     temperature: parsed.temperature ?? DEFAULT_CONFIG.temperature,
@@ -348,8 +352,28 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
     mcp: parsed.mcp ?? {},
   };
   if (config.agent?.lanes) validateLanes(config);
+  wireInProc(config);
   validate(config);
   return { config, source: path };
+}
+
+/**
+ * この中で読む（inproc）ときの繋ぎ先を、こちらで埋める。
+ *
+ * 口はこのプログラムの中に立つので、**利用者が繋ぎ先を書く必要は無い**。
+ * 書かせると、番号を間違えたときに「繋がりません」とだけ出て終わる。
+ * 決め打ちの番号（INPROC_PORT）を、ここで入れておく。
+ */
+function wireInProc(c: AasConfig): void {
+  if (c.runtime?.kind !== 'inproc') return;
+  const url = `http://127.0.0.1:${c.runtime.basePort ?? INPROC_PORT}/v1`;
+  const local = c.providers.find((p) => p.kind === 'openai-compatible' && p.locality === 'local');
+  if (local) local.baseUrl = url;
+  else {
+    c.providers.push({
+      id: 'inproc', kind: 'openai-compatible', locality: 'local', baseUrl: url, enabled: true,
+    });
+  }
 }
 
 function validate(c: AasConfig): void {

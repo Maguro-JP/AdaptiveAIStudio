@@ -56,14 +56,22 @@ describe('doctor は、この中で読む道を知っている', () => {
     assert.match(text, /動かせます。/);
   });
 
-  test('使っていない Ollama を、不足として数えない', async () => {
-    // 使っていないものが繋がらないのは問題ではない。
-    // 未了に数えると「かたづける件数」が嘘になる。
+  test('繋ぎ先を、外へ見に行かない', async () => {
+    // 口はこのプログラムの中に立つ。外から見に行っても、モデルを読むまで
+    // 立たないので必ず「繋がりません」になる。**それは不足ではない。**
     const { home, models, config } = await scratch();
     await writeFile(join(models, 'm.gguf'), 'x');
     await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
-    assert.match(text, /繋がりません（使っていません）/);
+    assert.match(text, /この中に立てます/);
     assert.doesNotMatch(text, /件かたづければ動きます/);
+  });
+
+  test('llamacpp のときは、使っていない Ollama を不足として数えない', async () => {
+    const { home, models, config } = await scratch();
+    await writeFile(join(models, 'm.gguf'), 'x');
+    await writeFile(config, JSON.stringify({ runtime: { kind: 'llamacpp', modelsDir: models } }));
+    const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
+    assert.match(text, /繋がりません（使っていません）/);
   });
 });

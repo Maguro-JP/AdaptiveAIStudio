@@ -200,3 +200,43 @@ describe('上の層が呼ぶとおりに答える', () => {
     await rt.shutdown();
   });
 });
+
+describe('繋ぎ先を、利用者に書かせない', () => {
+  test('この中で読む設定なら、繋ぎ先はこちらで埋める', async () => {
+    // 口はこのプログラムの中に立つ。番号は毎回変わってはいけないし、
+    // 利用者に書かせると、間違えたときに「繋がりません」とだけ出て終わる。
+    const { loadConfig } = await import('../src/config.ts');
+    const { INPROC_PORT } = await import('../src/runtime/inproc.ts');
+    const dir = await tempDir('aas-wire-');
+    const at = join(dir, 'aas.config.json');
+    await writeFile(at, JSON.stringify({ runtime: { kind: 'inproc' } }));
+    process.env.AAS_CONFIG = at;
+    const { config } = loadConfig();
+    const local = config.providers.find((p) => p.locality === 'local');
+    assert.equal(local?.baseUrl, `http://127.0.0.1:${INPROC_PORT}/v1`);
+    delete process.env.AAS_CONFIG;
+  });
+
+  test('番号を決めているなら、そちらに合わせる', async () => {
+    const { loadConfig } = await import('../src/config.ts');
+    const dir = await tempDir('aas-wire2-');
+    const at = join(dir, 'aas.config.json');
+    await writeFile(at, JSON.stringify({ runtime: { kind: 'inproc', basePort: 4321 } }));
+    process.env.AAS_CONFIG = at;
+    const { config } = loadConfig();
+    assert.equal(config.providers.find((p) => p.locality === 'local')?.baseUrl,
+      'http://127.0.0.1:4321/v1');
+    delete process.env.AAS_CONFIG;
+  });
+
+  test('他の道では、繋ぎ先に触らない', async () => {
+    const { loadConfig } = await import('../src/config.ts');
+    const dir = await tempDir('aas-wire3-');
+    const at = join(dir, 'aas.config.json');
+    await writeFile(at, JSON.stringify({ runtime: { kind: 'ollama' } }));
+    process.env.AAS_CONFIG = at;
+    const { config } = loadConfig();
+    assert.match(config.providers.find((p) => p.locality === 'local')?.baseUrl ?? '', /11434/);
+    delete process.env.AAS_CONFIG;
+  });
+});
