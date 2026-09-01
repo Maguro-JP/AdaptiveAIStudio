@@ -19,6 +19,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
+# Releases へ置くので、書き込みが要る（既定は読むだけ）。
+# 無いと組み立ては通るのに、最後の公開だけが 403 で落ちる。
+permissions:
+  contents: write
+
 env:
   # 同梱する Node。型を剥がしながら実行するので v22.6 以降。
   NODEVER: v24.18.0
