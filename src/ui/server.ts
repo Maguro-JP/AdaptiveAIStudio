@@ -160,6 +160,7 @@ export class UiServer {
     const server = createServer((req, res) => {
       this.#handle(req, res).catch((e: unknown) => {
         // 画面の不具合で本体を落とさない。
+        if (e instanceof BodyTooLarge) return send(res, 413, { error: e.message });
         send(res, 500, { error: e instanceof Error ? e.message : String(e) });
       });
     });
@@ -806,9 +807,22 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(text);
 }
 
+/** JSON の本文の上限。添付は別の口（/api/attach）で、それ自身の上限を持つ。 */
+export const MAX_JSON_BODY = 16 * 1024 * 1024;
+
+export class BodyTooLarge extends Error {
+  constructor(limit: number) { super(`本文が大きすぎます（${Math.round(limit / 1024 / 1024)}MB まで）`); }
+}
+
 async function readBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
-  for await (const c of req) chunks.push(c as Buffer);
+  let total = 0;
+  for await (const c of req) {
+    total += (c as Buffer).length;
+    // 際限なく抱えない。上限を超えたら読むのをやめて断る。
+    if (total > MAX_JSON_BODY) { req.destroy(); throw new BodyTooLarge(MAX_JSON_BODY); }
+    chunks.push(c as Buffer);
+  }
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {

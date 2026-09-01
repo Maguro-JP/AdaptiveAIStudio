@@ -204,3 +204,18 @@ describe('モデルの口も、よそから叩かせない', () => {
     assert.equal((await ask(baseUrl, ref, 'x')).status, 200);
   });
 });
+
+describe('本文を際限なく抱えない', () => {
+  test('大きすぎる本文は 413', async () => {
+    const { dir, ref } = await withModel();
+    const { load } = slowLib(1);
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
+    running.push(rt);
+    const { baseUrl } = await rt.ensureLoaded(ref);
+    const r = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: ref, messages: [{ role: 'user', content: 'a'.repeat(17 * 1024 * 1024) }] }),
+    }).catch(() => undefined);
+    if (r) assert.equal(r.status, 413);
+  });
+});

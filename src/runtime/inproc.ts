@@ -202,12 +202,25 @@ export class InProcRuntime implements LocalRuntime {
       return;
     }
 
-    const raw = await new Promise<string>((resolve) => {
+    // 本文の上限。上の層が送るのは履歴の JSON で、数MB で十分。
+    const LIMIT = 16 * 1024 * 1024;
+    const raw = await new Promise<string | undefined>((resolve) => {
       let text = '';
+      let total = 0;
       const read = chunkReader();
-      req.on('data', (c: Buffer) => { text += read(c); });
+      req.on('data', (c: Buffer) => {
+        total += c.length;
+        // 際限なく抱えない。上限を超えたら読むのをやめて断る。
+        if (total > LIMIT) { req.destroy(); resolve(undefined); return; }
+        text += read(c);
+      });
       req.on('end', () => resolve(text));
     });
+    if (raw === undefined) {
+      res.writeHead(413, { 'content-type': 'application/json' });
+      res.end('{"error":{"message":"本文が大きすぎます"}}');
+      return;
+    }
     let body: ChatRequest;
     try {
       body = JSON.parse(raw || '{}') as ChatRequest;

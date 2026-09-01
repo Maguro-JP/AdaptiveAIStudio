@@ -215,3 +215,20 @@ describe('よその頁から口を叩かせない', () => {
     assert.equal(r.status, 200);
   });
 });
+
+describe('本文を際限なく抱えない', () => {
+  test('大きすぎる JSON は 413', async () => {
+    const { MAX_JSON_BODY } = await import('../src/ui/server.ts');
+    const big = JSON.stringify({ text: 'a'.repeat(MAX_JSON_BODY + 1024) });
+    const r = await fetch(base.replace(/\/$/, '') + '/api/send', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: big,
+    }).catch(() => undefined);
+    // 途中で切るので、fetch 側が先に落ちることもある。落ちなければ 413。
+    if (r) assert.equal(r.status, 413);
+  });
+
+  test('ふつうの大きさは受け取る（対）', async () => {
+    const r = await post('/api/send', { text: 'a'.repeat(100_000) });
+    assert.notEqual(r.status, 413);
+  });
+});
