@@ -62,14 +62,28 @@ jobs:
 
       - name: 確かめる（同梱した形のまま）
         run: |
-          test -f dist/AdaptiveAIStudio/runtime/node.exe
+          # 在るかどうかだけ見ない。空でも0バイトでも通ってしまう。
+          # 実際に test -f だけで通していて、利用者の手元に node.exe が
+          # 無いことに気づけなかった。
+          SIZE=$(stat -c%s dist/AdaptiveAIStudio/runtime/node.exe)
+          echo "runtime/node.exe = ${SIZE} bytes"
+          test "$SIZE" -gt 40000000
+          # 本物の Windows 実行ファイルか（MZ で始まる）。
+          head -c2 dist/AdaptiveAIStudio/runtime/node.exe | grep -q MZ
           test -f dist/AdaptiveAIStudio/AdaptiveAIStudio.cmd
           test -f dist/AdaptiveAIStudio/app/start.cmd
           # バッチが CP932 のまま入っているか。UTF-8 だと cmd.exe が行を壊す。
           ! iconv -f UTF-8 -t UTF-8 dist/AdaptiveAIStudio/app/start.cmd > /dev/null 2>&1
 
-      - name: まとめる
-        run: cd dist && zip -qr ../AdaptiveAIStudio-portable.zip AdaptiveAIStudio
+      - name: まとめたものを、開いて確かめる
+        run: |
+          cd dist && zip -qr ../AdaptiveAIStudio-portable.zip AdaptiveAIStudio && cd ..
+          # ZIP から取り出し直して見る。**まとめる前ではなく、後を見る。**
+          rm -rf verify && mkdir verify && unzip -q AdaptiveAIStudio-portable.zip -d verify
+          ls -l verify/AdaptiveAIStudio/runtime/
+          SIZE=$(stat -c%s verify/AdaptiveAIStudio/runtime/node.exe)
+          echo "ZIP の中の runtime/node.exe = ${SIZE} bytes"
+          test "$SIZE" -gt 40000000
 
       - uses: actions/upload-artifact@v4
         with:
