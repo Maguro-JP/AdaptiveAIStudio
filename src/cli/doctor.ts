@@ -148,7 +148,10 @@ if (runtime.id === 'inproc') {
     const { stat } = await import('node:fs/promises');
     const here = join(installRoot(), 'node_modules', 'node-llama-cpp');
     const installed = await stat(here).then(() => true, () => false);
-    add('モデルを読むもの', 'bad',
+    // 本体が無いのは止める。この機械むけの binary が無いだけなら**警告**。
+    // 配る先（Windows）には入っているので、ここで「動かない」と数えると
+    // 開発中も CI も、直しようのない未了を抱え続けることになる。
+    add('モデルを読むもの', installed ? 'warn' : 'bad',
       installed
         ? 'node-llama-cpp はあるが、この機械むけの binary がありません'
         : 'node-llama-cpp が入っていません',
