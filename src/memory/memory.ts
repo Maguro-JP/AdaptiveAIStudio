@@ -23,6 +23,7 @@
  */
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { jstDate } from '../core/clock.ts';
 
 export type MemoryKind =
   /** 決めたこと。方針・設計判断 */
@@ -352,7 +353,8 @@ export function formatRecall(entries: MemoryEntry[]): string {
 }
 
 export function formatEntry(e: MemoryEntry): string {
-  const when = new Date(e.seenAt).toISOString().slice(0, 10);
+  // UTC の日付を見せない。日本の朝 9 時まで昨日になる。
+  const when = jstDate(e.seenAt);
   const trust = e.confirms > 1 ? ` ×${e.confirms}` : '';
   const dead = e.supersededBy ? ' （決め直し済み）' : '';
   return `  ${e.id} [${KIND_LABEL[e.kind]}${trust}] ${when} ${e.title}${dead}`;

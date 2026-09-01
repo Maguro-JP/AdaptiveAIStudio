@@ -12,6 +12,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { productRoot, installRoot } from './home.ts';
+import { jstDate } from './clock.ts';
 
 export interface Version {
   /** 版。分からなければ undefined */
@@ -67,5 +68,7 @@ export async function currentVersion(): Promise<Version> {
 /** 人に見せる一行。 */
 export function describeVersion(v: Version): string {
   if (!v.id) return '分かりません（git の管理下でも配布物でもありません）';
-  return v.builtAt ? `${v.id}（${v.from}・${v.builtAt.slice(0, 10)} 組み立て）` : `${v.id}（${v.from}）`;
+  // 組み立てた日付も JST で見せる。UTC のままだと朝 9 時まで昨日。
+  const built = v.builtAt && !Number.isNaN(Date.parse(v.builtAt)) ? jstDate(v.builtAt) : v.builtAt?.slice(0, 10);
+  return built ? `${v.id}（${v.from}・${built} 組み立て）` : `${v.id}（${v.from}）`;
 }
