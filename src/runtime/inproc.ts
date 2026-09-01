@@ -100,7 +100,7 @@ export class InProcRuntime implements LocalRuntime {
       });
       const context = await model.createContext();
       const session = new lib.LlamaChatSession({ contextSequence: context.getSequence() });
-      this.#sessions.set(ref, { context, session });
+      this.#sessions.set(ref, { context, session, turn: Promise.resolve() });
       this.#opts.onLog?.(`読み込みました: ${ref}`);
     }
     await this.#serve();
@@ -136,12 +136,25 @@ export class InProcRuntime implements LocalRuntime {
   async #serve(): Promise<void> {
     if (this.#server) return;
     this.#server = createServer((req, res) => { void this.#handle(req, res); });
-    await new Promise<void>((resolve) => {
-      this.#server!.listen(this.#opts.port ?? INPROC_PORT, '127.0.0.1', resolve);
+    const port = this.#opts.port ?? INPROC_PORT;
+    // 口が塞がっていると listen は投げる。拾わないと**待ったまま返らない**。
+    // 二つ目を起こしたときに、黙って固まるのがいちばん困る。
+    await new Promise<void>((resolve, reject) => {
+      const failed = (e: NodeJS.ErrnoException) => {
+        this.#server = undefined;
+        reject(new Error(e.code === 'EADDRINUSE'
+          ? `口 ${port} は既に使われています。もう一つ立ち上がっていませんか。`
+          : `口 ${port} を開けませんでした: ${e.message}`));
+      };
+      this.#server!.once('error', failed);
+      this.#server!.listen(port, '127.0.0.1', () => {
+        this.#server!.off('error', failed);
+        resolve();
+      });
     });
     const addr = this.#server.address();
-    const port = typeof addr === 'object' && addr ? addr.port : 0;
-    this.#url = `http://127.0.0.1:${port}/v1`;
+    const bound = typeof addr === 'object' && addr ? addr.port : port;
+    this.#url = `http://127.0.0.1:${bound}/v1`;
   }
 
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -194,6 +207,38 @@ export class InProcRuntime implements LocalRuntime {
       return;
     }
 
+    // 前の依頼が終わってから始める。setChatHistory から prompt() まで、
+    // 途中で割り込まれてはいけない一続きなので、丸ごと順番待ちに入れる。
+    const mine = held.turn.then(
+      () => this.#answer(held!, ref, body, res),
+      () => this.#answer(held!, ref, body, res),
+    );
+    held.turn = mine.catch(() => undefined);
+    await mine;
+  }
+
+  /** 一人分の受け答え。**必ず順番待ちの中から呼ぶ。** */
+  async #answer(
+    held: Held, ref: string, body: ChatRequest, res: ServerResponse,
+  ): Promise<void> {
+    // 画面が「やめる」を押すと、上の層は fetch を切る。切れたら生成も止める。
+    // 止めないと、誰も読まない答えを作りながら次の人を待たせ続ける。
+    // 切れたことは**返す側**で分かる。req は本文を読み切った時点で
+    // 閉じることがあり、切断の合図には使えない（使って空振りした）。
+    const gone = new AbortController();
+    const onClose = () => gone.abort();
+    res.on('close', onClose);
+    try {
+      await this.#respond(held, ref, body, res, gone.signal);
+    } finally {
+      res.off('close', onClose);
+    }
+  }
+
+  async #respond(
+    held: Held, ref: string, body: ChatRequest,
+    res: ServerResponse, signal: AbortSignal,
+  ): Promise<void> {
     // 上の層は毎回すべての履歴を送ってくる。こちらは持ち越さず、
     // **渡されたものだけ**で組み直す。持ち越すと二重になる。
     const messages = body.messages ?? [];
@@ -203,7 +248,8 @@ export class InProcRuntime implements LocalRuntime {
     const asked = at >= 0 ? messages[at]!.content : '';
     held.session.setChatHistory(toHistory(messages.slice(0, Math.max(at, 0))));
 
-    const opts = {
+    const opts: PromptOptions = {
+      signal,
       ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
       ...(typeof body.max_tokens === 'number' ? { maxTokens: body.max_tokens } : {}),
     };
@@ -239,6 +285,8 @@ export class InProcRuntime implements LocalRuntime {
       });
       chunk({}, 'stop');
     } catch (e) {
+      // 切ったのは向こう。書き戻す先はもう無い。
+      if (signal.aborted) { res.end(); return; }
       // 途中で落ちたことを、黙って握り潰さない。
       chunk({ content: `\n[止まりました: ${(e as Error).message}]` }, 'stop');
     }
@@ -252,6 +300,8 @@ interface PromptOptions {
   temperature?: number;
   maxTokens?: number;
   onTextChunk?: (text: string) => void;
+  /** 画面が「やめる」を押したら、生成そのものを止める。 */
+  signal?: AbortSignal;
 }
 interface Held {
   context: { dispose?: () => Promise<void> };
@@ -259,6 +309,15 @@ interface Held {
     prompt: (text: string, opts?: PromptOptions) => Promise<string>;
     setChatHistory: (history: unknown[]) => void;
   };
+  /**
+   * 一つのモデルを、同時に二人で使わない約束。
+   *
+   * LlamaChatSession は履歴を**持っている**。答えている最中に別の依頼が
+   * setChatHistory を呼ぶと、いま答えているほうの足元が入れ替わる。
+   * 混ざった答えが返り、しかも落ちないので気づけない。
+   * 断らずに**並べる**（上の層は待てる。断られると諦めてしまう）。
+   */
+  turn: Promise<unknown>;
 }
 
 interface ChatMessage { role: string; content: string }
