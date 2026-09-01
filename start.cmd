@@ -37,6 +37,14 @@ for %%i in ("%~dp0..") do set "UP=%%~fi"
 
 set "BUNDLED="
 if exist "%UP%\runtime\node.exe" set "BUNDLED=%UP%\runtime"
+rem 同梱版の目印はあるのに node.exe が無い、という形を先に見る。
+rem 会社のクラウドドライブ（OneDrive・PassageDrive など）へ展開すると、
+rem .exe だけが黙って落ちる。利用者は「同梱と言ったのに無い」としか見えない。
+if defined BUNDLED goto :bundled
+if not exist "%UP%\.portable" goto :noMarker
+if exist "%UP%\runtime\node.exe" goto :noMarker
+goto :exeStripped
+:noMarker
 if exist "%HERE%runtime\node.exe" set "BUNDLED=%HERE%runtime"
 if exist "%HERE%node\node.exe" set "BUNDLED=%HERE%node"
 if defined BUNDLED goto :bundled
@@ -112,7 +120,25 @@ if "%CHOICE%"=="7" set "TASK=update"
 if "%CHOICE%"=="8" set "TASK=selftest"
 if "%CHOICE%"=="9" set "TASK=clean"
 if "%CHOICE%"=="0" goto :quit
-if "%TASK%"=="" goto :badChoice
+if "%TASK%"=="" goto :exeStripped
+echo.
+echo   node.exe だけがありません（他のファイルは揃っています）。
+echo.
+echo   いまの置き場所:
+echo     %UP%
+echo.
+echo   会社のクラウドドライブ（OneDrive・PassageDrive など）へ展開すると、
+echo   .exe だけが黙って落ちることがあります。書き込みが拒まれても、
+echo   展開する側は何も言わずに進みます。
+echo.
+echo   直し方: ZIP を C: の下に保存し直して、そこで展開してください。
+echo     例:  C:\Users\%USERNAME%\Desktop
+echo   右クリックから「すべて展開」で構いません。
+echo.
+pause
+exit /b 1
+
+:badChoice
 
 :run
 echo.
@@ -169,7 +195,6 @@ echo   ---- 探した場所 ----
 echo     %UP%\runtime\node.exe
 echo     %HERE%runtime\node.exe
 echo     %HERE%node\node.exe
-echo   同梱版のはずなのにここに出たときは、この4行ごと知らせてください。
 echo.
 pause
 exit /b 1
@@ -184,6 +209,24 @@ echo   ブラウザで次を落として、node.exe をここへ置いてくだ�
 echo     https://nodejs.org/dist/v24.18.0/win-x64/node.exe
 echo     置き場所:  %~dp0node\node.exe
 echo   こちらが先に使われます。入っている Node はそのままで構いません。
+echo.
+pause
+exit /b 1
+
+:exeStripped
+echo.
+echo   node.exe だけがありません（他のファイルは揃っています）。
+echo.
+echo   いまの置き場所:
+echo     %UP%
+echo.
+echo   会社のクラウドドライブ（OneDrive・PassageDrive など）へ展開すると、
+echo   .exe だけが黙って落ちることがあります。書き込みが拒まれても、
+echo   展開する側は何も言わずに進みます。
+echo.
+echo   直し方: ZIP を C: の下に保存し直して、そこで展開してください。
+echo     例:  C:\Users\%USERNAME%\Desktop
+echo   右クリックから「すべて展開」で構いません。
 echo.
 pause
 exit /b 1
