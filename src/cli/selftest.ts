@@ -49,11 +49,41 @@ try {
   const crlf = buf.includes(Buffer.from('\r\n'));
   const bom = buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf;
   const wantCrlf = process.platform === 'win32';
-  add('起動用', crlf === wantCrlf && !bom,
+  // 文字集合も見る。cmd.exe はバッチを console の文字集合で読むので、
+  // UTF-8 で置くと日本語が化けるだけでなく**行が壊れて断片が実行される**。
+  // 実際にそうなった。BOM の有無だけでは気づけない。
+  let utf8 = false;
+  if (wantCrlf) {
+    try {
+      new TextDecoder('utf-8', { fatal: true }).decode(buf);
+      utf8 = buf.some((b) => b >= 0x80); // ASCII だけなら、どちらでも同じ
+    } catch { utf8 = false; }
+  }
+  add('起動用', crlf === wantCrlf && !bom && !utf8,
     `${launcher}: 改行=${crlf ? 'CRLF' : 'LF'}（期待=${wantCrlf ? 'CRLF' : 'LF'}）`
-    + `${bom ? ' / BOM あり（cmd.exe が読み違えます）' : ''}`);
+    + `${bom ? ' / BOM あり（cmd.exe が読み違えます）' : ''}`
+    + `${utf8 ? ' / UTF-8（CP932 で置いてください。行が壊れます）' : ''}`);
 } catch (e) {
   add('起動用', false, `${launcher} を読めません: ${(e as Error).message}`);
+}
+
+/* ---------- この中で読む道 ---------- */
+
+// 実行ファイルを増やさずに GGUF を読む道。**この機械で本当に読めるか**は、
+// ここでしか分からない（配布物には入れてあるが、機械が違えば動かない）。
+try {
+  const lib = await import('node-llama-cpp') as { getLlama: () => Promise<unknown> };
+  add('この中で読む', true, 'node-llama-cpp を読み込めました（実行ファイルは増えません）');
+  try {
+    await lib.getLlama();
+    add('この中で読む（土台）', true, 'この機械むけの binary が動きました');
+  } catch (e) {
+    add('この中で読む（土台）', false,
+      `binary を動かせません: ${(e as Error).message.slice(0, 160)}`);
+  }
+} catch (e) {
+  add('この中で読む', undefined,
+    `node-llama-cpp がありません（${(e as Error).message.slice(0, 120)}）`);
 }
 
 /* ---------- llama-server ---------- */
