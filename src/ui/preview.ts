@@ -16,6 +16,7 @@ import { readFile, stat, readdir } from 'node:fs/promises';
 import { watch, type FSWatcher } from 'node:fs';
 import { join, extname, relative, sep } from 'node:path';
 import { safeResolve } from '../agent/tools/paths.ts';
+import { listenOrExplain } from '../core/listen.ts';
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -119,11 +120,8 @@ export class PreviewServer {
 
   async start(): Promise<string> {
     this.#server = createServer((req, res) => { void this.#handle(req, res); });
-    await new Promise<void>((resolve) => {
-      this.#server!.listen(this.#opts.port ?? 0, '127.0.0.1', resolve);
-    });
-    const addr = this.#server.address();
-    this.#port = typeof addr === 'object' && addr ? addr.port : 0;
+    // 既定は 0（空いている口）。番号を渡されたときは塞がりうる。
+    this.#port = await listenOrExplain(this.#server, { port: this.#opts.port ?? 0, what: '見る窓' });
 
     if (this.#opts.watch !== false) this.#startWatching();
     return this.url;

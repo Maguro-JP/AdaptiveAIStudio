@@ -33,6 +33,7 @@ import { Attachments, MAX_BYTES } from './attachments.ts';
 import { PreviewServer } from './preview.ts';
 import { configPath, type AasConfig } from '../config.ts';
 import { TaskRunner } from './tasks.ts';
+import { listenOrExplain } from '../core/listen.ts';
 import {
   RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
   inspectModelsDir,
@@ -141,13 +142,9 @@ export class UiServer {
     });
     this.#server = server;
 
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(port, host, resolve);
-    });
     // 0 を渡すと空いている口を選ぶ。実際に決まった番号を使う。
-    const addr = server.address();
-    const actual = typeof addr === 'object' && addr ? addr.port : port;
+    // 塞がっていたら、番号だけでなく**次の一手**まで言う。
+    const actual = await listenOrExplain(server, { port, host, what: '画面' });
     this.#url = `http://${host}:${actual}/`;
     return this.#url;
   }

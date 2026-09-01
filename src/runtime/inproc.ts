@@ -23,6 +23,7 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.ts';
+import { listenOrExplain } from '../core/listen.ts';
 
 /**
  * 待つ口。**決め打ちにする。**
@@ -137,23 +138,15 @@ export class InProcRuntime implements LocalRuntime {
     if (this.#server) return;
     this.#server = createServer((req, res) => { void this.#handle(req, res); });
     const port = this.#opts.port ?? INPROC_PORT;
-    // 口が塞がっていると listen は投げる。拾わないと**待ったまま返らない**。
-    // 二つ目を起こしたときに、黙って固まるのがいちばん困る。
-    await new Promise<void>((resolve, reject) => {
-      const failed = (e: NodeJS.ErrnoException) => {
-        this.#server = undefined;
-        reject(new Error(e.code === 'EADDRINUSE'
-          ? `口 ${port} は既に使われています。もう一つ立ち上がっていませんか。`
-          : `口 ${port} を開けませんでした: ${e.message}`));
-      };
-      this.#server!.once('error', failed);
-      this.#server!.listen(port, '127.0.0.1', () => {
-        this.#server!.off('error', failed);
-        resolve();
-      });
-    });
-    const addr = this.#server.address();
-    const bound = typeof addr === 'object' && addr ? addr.port : port;
+    let bound: number;
+    try {
+      bound = await listenOrExplain(this.#server, { port, what: 'モデル' });
+    } catch (e) {
+      // 開かなかった器を持ったままにしない。次に呼ばれたときに
+      // 「もう立てた」と勘違いして、空の宛先を返してしまう。
+      this.#server = undefined;
+      throw e;
+    }
     this.#url = `http://127.0.0.1:${bound}/v1`;
   }
 
