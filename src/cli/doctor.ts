@@ -138,12 +138,25 @@ if (llamaPath) {
 // この中で読む道は、ライブラリが要る。配布物には入っているが、
 // 作業コピーには入っていない。**動かす直前まで分からない**のが困るので、
 // ここで先に言う。
+/**
+ * 呼んでいる間だけ、向こうの console.warn を黙らせる。
+ *
+ * node-llama-cpp は binary が無いと「A prebuilt binary was not found」を
+ * console.warn に**直に**書く（logLevel を通らない。実測）。この出力は
+ * 利用者がそのまま貼るものなので、こちらの言葉で言い直す分だけを残す。
+ */
+async function quietly<T>(run: () => Promise<T>): Promise<T> {
+  const warn = console.warn;
+  console.warn = () => {};
+  try { return await run(); } finally { console.warn = warn; }
+}
+
 if (runtime.id === 'inproc') {
   const { stat } = await import('node:fs/promises');
   const here = join(installRoot(), 'node_modules', 'node-llama-cpp');
   const installed = await stat(here).then(() => true, () => false);
   const binPkg = `@node-llama-cpp/${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`;
-  let lib: { getLlama: (o?: { build?: 'never' }) => Promise<unknown> } | undefined;
+  let lib: { getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<unknown> } | undefined;
   try {
     lib = await import('node-llama-cpp') as typeof lib;
   } catch (e) {
@@ -162,7 +175,7 @@ if (runtime.id === 'inproc') {
   if (lib) {
     try {
       // 組み立てに走らせない。無いなら無いと、すぐ言わせる。
-      await lib.getLlama({ build: 'never' });
+      await quietly(() => lib.getLlama({ build: 'never', logLevel: 'error' }));
       add('モデルを読むもの', 'ok', 'node-llama-cpp（この機械むけの binary が動きます。実行ファイルは増えません）');
     } catch (e) {
       // 本体は読めるが、この機械むけの binary が無い。配る先（Windows）には

@@ -115,7 +115,9 @@ export class InProcRuntime implements LocalRuntime {
     // build: 'never' — 同梱の binary が無い・読めないとき、既定では
     // llama.cpp を GitHub から取ってきて手元で組もうとする（実測）。
     // 網の無い機械では固まり、あっても何十分もかかる。**組まずに、無いと言う。**
-    const llama = await lib.getLlama({ build: 'never' });
+    // logLevel: 'error' — 無いときに「prebuilt binary was not found」を何行も
+    // 表に出す。こちらの言葉で言い直すので、向こうの声は落とす。
+    const llama = await lib.getLlama({ build: 'never', logLevel: 'error' });
     // 数GBを読むので、10〜60秒かかる。**黙って待たせない。**
     // 進み具合を出さないと、また「固まった」に見える。
     let last = -1;
@@ -148,7 +150,7 @@ export class InProcRuntime implements LocalRuntime {
   }
 
   /** ライブラリ。無いときは、無いとだけ言う。黙って別のことをしない。 */
-  async #lib(): Promise<{ getLlama: (o?: { build?: 'never' }) => Promise<{ loadModel: (o: { modelPath: string }) => Promise<{ createContext: () => Promise<{ getSequence: () => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown }> {
+  async #lib(): Promise<{ getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string }) => Promise<{ createContext: () => Promise<{ getSequence: () => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown }> {
     const load = this.#opts.load ?? (() => import('node-llama-cpp'));
     try {
       return await load() as never;

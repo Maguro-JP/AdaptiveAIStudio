@@ -27,6 +27,9 @@ describe('見本の設定', () => {
       const { config } = loadConfig();
       assert.ok(isRuntimeKind(config.runtime?.kind), `土台が無い: ${String(config.runtime?.kind)}`);
       assert.equal(config.runtime?.modelsDir, undefined, '見本に置き場を決め打ちしない');
+      // 候補を決め打ちすると、inproc では Ollama の札（qwen3.5:9b）が GGUF と
+      // 合わず、毎回「無いので別ので答えます」と言う。既定（未指定）に任せる。
+      assert.equal(config.candidates, undefined, '見本に候補を決め打ちしない');
     });
   });
 

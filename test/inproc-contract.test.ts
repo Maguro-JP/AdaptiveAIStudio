@@ -81,5 +81,7 @@ describe('入っているなら、読み込めること', () => {
   test('build: never を受け付ける形が本物にある', onlyWithLib, async () => {
     // 無ければ既定で llama.cpp を取ってきて組みに行く。網の無い機械では固まる。
     assert.match(await d('bindings', 'getLlama.d.ts'), /build\?:.*"never"/);
+    // 向こうの声（prebuilt binary was not found）を落とす口。
+    assert.match(await d('bindings', 'getLlama.d.ts'), /logLevel\?:/);
   });
 });

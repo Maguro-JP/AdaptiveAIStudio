@@ -68,16 +68,29 @@ try {
   add('起動用', false, `${launcher} を読めません: ${(e as Error).message}`);
 }
 
+/**
+ * 呼んでいる間だけ、向こうの console.warn を黙らせる。
+ *
+ * node-llama-cpp は binary が無いと「A prebuilt binary was not found」を
+ * console.warn に**直に**書く（logLevel を通らない。実測）。この出力は
+ * 利用者がそのまま貼るものなので、こちらの言葉で言い直す分だけを残す。
+ */
+async function quietly<T>(run: () => Promise<T>): Promise<T> {
+  const warn = console.warn;
+  console.warn = () => {};
+  try { return await run(); } finally { console.warn = warn; }
+}
+
 /* ---------- この中で読む道 ---------- */
 
 // 実行ファイルを増やさずに GGUF を読む道。**この機械で本当に読めるか**は、
 // ここでしか分からない（配布物には入れてあるが、機械が違えば動かない）。
 try {
-  const lib = await import('node-llama-cpp') as { getLlama: (o?: { build?: 'never' }) => Promise<unknown> };
+  const lib = await import('node-llama-cpp') as { getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<unknown> };
   add('この中で読む', true, 'node-llama-cpp を読み込めました（実行ファイルは増えません）');
   try {
     // 組み立てに走らせない。無いなら無いと、すぐ言わせる。
-    await lib.getLlama({ build: 'never' });
+    await quietly(() => lib.getLlama({ build: 'never', logLevel: 'error' }));
     add('この中で読む（土台）', true, 'この機械むけの binary が動きました');
   } catch (e) {
     add('この中で読む（土台）', false,

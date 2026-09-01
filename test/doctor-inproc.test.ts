@@ -92,5 +92,7 @@ describe('doctor は「入っていない」と「壊れている」を分ける
     assert.doesNotMatch(text, /在るのに読み込めません/);
     // この機械むけの binary が在れば ok、無ければ warn。どちらかであること。
     assert.match(text, /この機械むけの binary (が動きます|がありません)/);
+    // 向こうの声（console.warn 直書き）を、貼る出力に混ぜない。
+    assert.doesNotMatch(text, /prebuilt binary/i, 'ライブラリの警告がそのまま出ている');
   });
 });
