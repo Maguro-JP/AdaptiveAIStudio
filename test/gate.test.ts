@@ -10,7 +10,7 @@ import { inspectInbound, inspectOutbound, describeVerdict } from '../src/harness
 import { Forum, isGuarded, validateProposal, requiresDeliberation } from '../src/harness/deliberation.ts';
 import { createDeliberateTool } from '../src/agent/tools/deliberate.ts';
 import { createFetchUrlTool } from '../src/agent/tools/network.ts';
-import { Inspector, combine, readJudgement } from '../src/harness/inspector.ts';
+import { Inspector, combine, readJudgement, describeReason, BLOCK_REASONS } from '../src/harness/inspector.ts';
 import type { ToolContext } from '../src/agent/tools/types.ts';
 import type { RuleContext } from '../src/harness/rules.ts';
 import type { ToolCall } from '../src/providers/contract.ts';
@@ -443,6 +443,67 @@ describe('通す側は厳しく読む', () => {
   test('答えが無ければ「分からない」。相槌で通さない', () => {
     for (const s of ['', '   ', 'Sure!', 'Understood.', 'はい', 'わかりました']) {
       assert.equal(readJudgement(s).judgement, 'unknown', s);
+    }
+  });
+});
+
+describe('中は符丁、側は日本語', () => {
+  // 内側は機械が照合しやすい形。画面に出るのは利用者の言葉。
+
+  test('決めた符丁は日本語に引き直される', () => {
+    assert.equal(describeReason('INSTRUCTION_OVERRIDE'), '読み手の指示を上書きしようとしています。');
+    assert.equal(describeReason('CREDENTIAL'), '鍵・合言葉・アクセストークンが含まれています。');
+  });
+
+  test('大文字小文字や飾りが揺れても引ける', () => {
+    for (const s of ['credential', ' Credential ', 'CREDENTIAL.', '`CREDENTIAL`']) {
+      assert.equal(describeReason(s), '鍵・合言葉・アクセストークンが含まれています。', s);
+    }
+  });
+
+  test('符丁から外れた答えも捨てない。検査官の言葉として残す', () => {
+    const text = describeReason('it just felt wrong');
+    assert.match(text, /検査官が止めました/);
+    assert.match(text, /検査官の言葉: it just felt wrong/);
+  });
+
+  test('理由が無くても、表示は日本語になる', () => {
+    assert.equal(describeReason(undefined), '検査官が止めました。');
+  });
+
+  test('画面に出る文に、検査官の英語がそのまま混ざらない', () => {
+    // 内側を英語にした結果、それが利用者の画面へ漏れるのは筋が違う。
+    const v = combine({ passed: true, findings: [] },
+      { judgement: 'block', reason: 'INSTRUCTION_OVERRIDE' }, 'inbound');
+    const text = describeVerdict(v, 'inbound');
+    assert.match(text, /読み手の指示を上書き/);
+    assert.equal(/INSTRUCTION_OVERRIDE/.test(text), false, '符丁が画面に出ている');
+  });
+
+  test('依頼文は符丁を並べて、そこから選ばせる', async () => {
+    let sent = { system: '', user: '' };
+    const spy = new Inspector({ judge: async (p) => { sent = p; return 'PASS'; } });
+    await spy.inspect('x', 'inbound');
+    for (const code of ['INSTRUCTION_OVERRIDE', 'ROLE_CHANGE', 'SECRET_REQUEST',
+      'COMMAND_INJECTION', 'BEHAVIOUR_BINDING']) {
+      assert.match(sent.system, new RegExp(code), `符丁が依頼文に無い: ${code}`);
+    }
+    assert.match(sent.system, /BLOCK: OTHER/, '当てはまらないときの逃げ道が無い');
+  });
+
+  test('持ち出しには持ち出しの符丁を並べる', async () => {
+    let sent = { system: '', user: '' };
+    const spy = new Inspector({ judge: async (p) => { sent = p; return 'PASS'; } });
+    await spy.inspect('x', 'outbound');
+    for (const code of ['CREDENTIAL', 'PERSONAL_DATA', 'UNPUBLISHED']) {
+      assert.match(sent.system, new RegExp(code), `符丁が依頼文に無い: ${code}`);
+    }
+  });
+
+  test('符丁の一覧と日本語は一対一', () => {
+    for (const [code, label] of Object.entries(BLOCK_REASONS)) {
+      assert.equal(describeReason(code), label, code);
+      assert.equal(/[A-Z_]{4,}/.test(label), false, `日本語に符丁が残っている: ${code}`);
     }
   });
 });
