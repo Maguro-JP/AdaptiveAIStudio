@@ -47,7 +47,7 @@ jobs:
       - name: 持ち運び版（zip）
         shell: bash
         run: |
-          cd installer && 7z a -tzip "../AdaptiveAIStudio-portable.zip" payload/* > /dev/null
+          cd installer && 7z a -tzip "../AdaptiveAIStudio-portable.zip" payload/. > /dev/null
 
       - name: インストーラ（setup.exe）
         shell: cmd

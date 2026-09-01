@@ -204,3 +204,39 @@ describe('CI は押すたびに回さない', () => {
     assert.equal(dowUtc, '1', 'JST の月曜にしたいなら UTC も月曜（0時なので日をまたがない）');
   });
 });
+
+describe('同梱した Node の置き場所', () => {
+  // 一度、三箇所で食い違った（start.cmd は app/node、bundle は runtime、
+  // bootstrap は node）。同梱したのに見つけられない状態だった。
+
+  test('組み立てると runtime に入る', async () => {
+    const out = await tempDir('aas-node-');
+    const fake = join(await tempDir('aas-fake-'), 'node.exe');
+    await writeFile(fake, 'dummy');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    const r = await bundle({ out, srcRoot: installRoot(), nodeExe: fake, version: 'x' });
+    assert.equal(r.bundledNode, true);
+    const { stat } = await import('node:fs/promises');
+    assert.ok(await stat(join(out, 'runtime', 'node.exe')));
+  });
+
+  test('入口は、組み立てた場所を探しに行く', async () => {
+    const raw = await readFile(join(installRoot(), 'start.cmd'), 'utf8');
+    // app\ の隣の runtime\ を見ていること。
+    assert.match(raw, /%~dp0\.\.\\runtime\\node\.exe/, '製品の形を見ていない');
+  });
+
+  test('用意用は、組み立て方を書き写さない', async () => {
+    // 書き写すと、配布物と食い違う。実際に一度そうなった。
+    const raw = await readFile(join(installRoot(), 'installer', 'bootstrap.cmd'), 'utf8');
+    assert.match(raw, /scripts\\bundle\.mjs/, '組み立て器を使っていない');
+    assert.match(raw, /--node-exe/);
+    assert.match(raw, /--src/);
+  });
+
+  test('用意用が置く場所と、入口が探す場所が同じ', async () => {
+    const boot = await readFile(join(installRoot(), 'installer', 'bootstrap.cmd'), 'utf8');
+    assert.match(boot, /%DEST%\\runtime\\node\.exe/, '確かめる場所がずれている');
+    assert.match(boot, /%DEST%\\app\\scripts\\run\.mjs/, '中身の場所がずれている');
+  });
+});

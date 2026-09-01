@@ -19,14 +19,21 @@ rem 何も入れられない場所では、これだけが頼りになる。
 set NODE=node
 set NPM=npm
 set RUNNER=npm
-if exist "%~dp0node\node.exe" (
-  set "NODE=%~dp0node\node.exe"
-  set "PATH=%~dp0node;%PATH%"
+rem 製品の形（app\ の隣の runtime\）を先に見る。
+rem 開発中は、この隣に node\ を置いても動く。
+set "BUNDLED="
+if exist "%~dp0..\runtime\node.exe" set "BUNDLED=%~dp0..\runtime"
+if exist "%~dp0runtime\node.exe"     set "BUNDLED=%~dp0runtime"
+if exist "%~dp0node\node.exe"        set "BUNDLED=%~dp0node"
+
+if defined BUNDLED (
+  set "NODE=%BUNDLED%\node.exe"
+  set "PATH=%BUNDLED%;%PATH%"
   echo   Node は同梱のものを使います
   rem npm まで同梱していないことがある。無ければ package.json を
   rem 直接読んで動かす（scripts/run.mjs）。二重に書き写さないので、ずれない。
-  if exist "%~dp0node\npm.cmd" (
-    set "NPM=%~dp0node\npm.cmd"
+  if exist "%BUNDLED%\npm.cmd" (
+    set "NPM=%BUNDLED%\npm.cmd"
   ) else (
     set RUNNER=direct
   )

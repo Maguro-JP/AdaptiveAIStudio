@@ -9,7 +9,8 @@
  *   ・Node 自体も同梱できる（--node-zip で渡す）
  *
  * 使い方:
- *   node scripts/bundle.mjs --out dist/aas-portable [--node-zip node-win-x64.zip]
+ *   node scripts/bundle.mjs --out dist/aas-portable [--node-zip x.zip | --node-exe node.exe]
+ *                           [--src <中身のある場所>] [--version <版>]
  *
  * Node の zip をここで落としに行かないのは、**組み立てと取得を分ける**ため。
  * 取得は網の繋がる場所（CI）でやり、ここは置く仕事だけをする。
@@ -77,7 +78,7 @@ function arg(name, fallback) {
  * tsconfig.json を同じ高さで見ることになる。どれを押せばいいか分からない。
  * **触ってよいものだけを表に出す。**
  */
-export async function bundle({ out, nodeZip, srcRoot = root, version, log = () => {} }) {
+export async function bundle({ out, nodeZip, nodeExe, srcRoot = root, version, log = () => {} }) {
   await rm(out, { recursive: true, force: true });
   const app = join(out, 'app');
   await mkdir(app, { recursive: true });
@@ -131,7 +132,13 @@ export async function bundle({ out, nodeZip, srcRoot = root, version, log = () =
     `built ${new Date().toISOString()}\r\n`, 'utf8');
   log('  置いた: .portable（持ち運びの目印）');
 
-  if (nodeZip) {
+  if (nodeExe) {
+    // 用意用（bootstrap）は node.exe だけを落とす。npm は付いてこないが、
+    // scripts/run.mjs があるので困らない。
+    await mkdir(join(out, 'runtime'), { recursive: true });
+    await cp(nodeExe, join(out, 'runtime', 'node.exe'));
+    log('  入れた: runtime/node.exe（同梱の Node）');
+  } else if (nodeZip) {
     await mkdir(join(out, 'runtime'), { recursive: true });
     // zip の中は node-vXX-win-x64/ の一階層下にある。平らに移す。
     const tmp = join(out, '.runtime-tmp');
@@ -143,18 +150,22 @@ export async function bundle({ out, nodeZip, srcRoot = root, version, log = () =
     await rm(tmp, { recursive: true, force: true });
     log(`  入れた: runtime（同梱の Node。${inner}）`);
   } else {
-    log('  Node は同梱していません（--node-zip で渡せます）');
+    log('  Node は同梱していません（--node-zip か --node-exe で渡せます）');
   }
 
   const pkg = JSON.parse(await readFile(join(srcRoot, 'package.json'), 'utf8'));
-  return { out, version: version ?? pkg.version, bundledNode: Boolean(nodeZip) };
+  return { out, version: version ?? pkg.version, bundledNode: Boolean(nodeZip || nodeExe) };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const out = resolve(root, arg('--out', 'dist/aas-portable'));
   console.log('持ち運び版を組み立てます');
   const r = await bundle({
-    out, nodeZip: arg('--node-zip'), version: arg('--version'),
+    out,
+    nodeZip: arg('--node-zip'),
+    nodeExe: arg('--node-exe'),
+    ...(arg('--src') ? { srcRoot: resolve(arg('--src')) } : {}),
+    version: arg('--version'),
     log: (l) => console.log(l),
   });
   console.log(`\n  できました: ${r.out}`);
