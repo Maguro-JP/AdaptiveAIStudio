@@ -146,12 +146,18 @@ rem ============================================================
 echo.
 echo   Node.js が見つかりません。
 echo.
-echo   直し方は二つあります。
-echo     1. https://nodejs.org/ から LTS 版を入れる
-echo     2. Node を同梱した版を使う（この PC には何も入りません）
+echo   この PC に入れられないときは、置くだけで動かせます。
+echo   ブラウザで次を落として、node.exe をここへ置いてください。
 echo.
-echo   2 の作り方: Node のある機械で  npm run bundle
-echo   出来た dist\AdaptiveAIStudio を、そのまま持ってくれば動きます。
+echo     https://nodejs.org/dist/v24.18.0/win-x64/node.exe
+echo.
+echo     置き場所:  %~dp0node\node.exe
+echo.
+echo   フォルダ node を作って、その中に入れるだけです。
+echo   インストールではないので、管理者権限も要りません。
+echo   要らなくなったら、このフォルダごと消せば跡形もなくなります。
+echo.
+echo   ふつうに入れられるなら、https://nodejs.org/ の LTS 版でも構いません。
 echo.
 pause
 exit /b 1
@@ -161,9 +167,11 @@ echo.
 echo   この Node では動きません（%NODEV%）。v22.6 以降が要ります。
 echo   型を剥がしながら実行する仕組みを使っているためです。
 echo.
-echo   直し方は二つあります。
-echo     1. https://nodejs.org/ から新しい版を入れる
-echo     2. Node を同梱した版を使う（この PC には何も入りません）
+echo   入れ直せないときは、置くだけで差し替えられます。
+echo   ブラウザで次を落として、node.exe をここへ置いてください。
+echo     https://nodejs.org/dist/v24.18.0/win-x64/node.exe
+echo     置き場所:  %~dp0node\node.exe
+echo   こちらが先に使われます。入っている Node はそのままで構いません。
 echo.
 pause
 exit /b 1

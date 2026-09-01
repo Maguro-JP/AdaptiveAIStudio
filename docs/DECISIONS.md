@@ -91,3 +91,18 @@ UTF-8 で置くと行が壊れて断片が実行される。BOM は 1 行目を�
 curl が 443 で timeout（21秒 × 4回）。ブラウザでは claude.ai が見えているので、
 **串（プロキシ）をブラウザだけが知っている**可能性がある。
 `netsh winhttp show proxy` で調べ、`set HTTPS_PROXY=...` を渡す道を用意した。
+
+---
+
+## 2026-09-01  社用PCでは、手で二つ落とす
+
+デスクトップアプリ（中身はブラウザ）は Windows のシステムのプロキシ設定を
+使うので繋がる。`curl` は使わないので繋がらない。**curl を通さない道にする。**
+
+1. GitHub の「Download ZIP」を落として、好きな場所に展開する
+2. `https://nodejs.org/dist/v24.18.0/win-x64/node.exe` を落として、
+   `start.cmd` の隣に `node\node.exe` として置く
+3. `start.cmd` を叩く
+
+インストールではない。管理者権限も要らない。フォルダごと消せば何も残らない。
+`start.cmd` は最初から `%~dp0node\node.exe` を見るので、これで見つかる。
