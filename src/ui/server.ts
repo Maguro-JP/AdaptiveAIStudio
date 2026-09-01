@@ -32,7 +32,8 @@ import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from '.
 import { collectState } from './state.ts';
 import { Attachments, MAX_BYTES } from './attachments.ts';
 import { PreviewServer } from './preview.ts';
-import type { AasConfig } from '../config.ts';
+import { configPath, type AasConfig } from '../config.ts';
+import { listGguf } from '../runtime/inproc.ts';
 import { Session } from '../core/session.ts';
 import type { ApprovalRequest } from '../agent/tools/types.ts';
 
@@ -55,6 +56,21 @@ export function stripAnsi(text: string): string {
   // eslint-disable-next-line no-control-regex
   return text.replace(/\x1b\[[0-9;]*m/g, '');
 }
+
+/**
+ * 画面から変えてよい設定。
+ *
+ * **設定ファイル全部を書けるようにしない。**画面から任意の JSON を
+ * 書き込めると、設定という顔をして道具の振る舞いを丸ごと差し替えられる。
+ * 変えたい理由がはっきりしているものだけを、ここに挙げる。
+ */
+export const RUNTIME_KINDS = ['ollama', 'llamacpp', 'inproc'] as const;
+
+export const KIND_LABELS: Record<string, string> = {
+  ollama: 'Ollama — 別に立てたものへ繋ぐ',
+  llamacpp: 'llama.cpp — llama-server を起こす（実行ファイルが1つ増える）',
+  inproc: 'この中で読む — GGUF を置くだけ（実行ファイルは増えない）',
+};
 
 export const TASKS: Record<string, string> = {
   doctor: 'この環境を見てもらう',
@@ -476,6 +492,55 @@ export class UiServer {
       return send(res, 200, { theme, repairs: [], vars: toCssVars(theme) });
     }
 
+    if (path === '/api/config' && req.method === 'GET') {
+      // **保存してあるもの**を読む。立ち上げたときのものを見せると、
+      // 保存した直後に古い値が出て「効いていない」ように見える。
+      const saved = await readConfigFile();
+      const active = this.#opts.config.runtime ?? {};
+      const kind = String(saved.kind ?? 'ollama');
+      const dir = String(saved.modelsDir ?? modelsDir());
+      return send(res, 200, {
+        path: configPath(),
+        kinds: RUNTIME_KINDS.map((id) => ({ id, name: KIND_LABELS[id] })),
+        kind,
+        modelsDir: dir,
+        // いま動いているもの。保存したものと違えば、立ち上げ直しが要る。
+        active: { kind: active.kind ?? 'ollama', modelsDir: active.modelsDir ?? modelsDir() },
+        restartNeeded: kind !== (active.kind ?? 'ollama')
+          || dir !== (active.modelsDir ?? modelsDir()),
+        // 置き場にある GGUF。「置いたのに認識しない」を画面で確かめられるように。
+        gguf: await listGguf(dir),
+      });
+    }
+
+    if (path === '/api/config' && req.method === 'PUT') {
+      const body = await readBody(req) as { kind?: string; modelsDir?: string };
+      const kind = String(body?.kind ?? '');
+      if (!(RUNTIME_KINDS as readonly string[]).includes(kind)) {
+        return send(res, 400, { error: 'そういう動かし方はありません' });
+      }
+      const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
+      const at = configPath();
+      // 既にあるものを読んで、**触ると決めたところだけ**書き換える。
+      // 丸ごと書き直すと、画面から見えない設定を消してしまう。
+      let current: Record<string, unknown> = {};
+      try {
+        current = JSON.parse(await readFile(at, 'utf8')) as Record<string, unknown>;
+      } catch { /* まだ無い */ }
+      const runtime = { ...(current.runtime as Record<string, unknown> ?? {}), kind };
+      if (dir) runtime.modelsDir = dir;
+      else delete runtime.modelsDir;
+      await writeFile(at, `${JSON.stringify({ ...current, runtime }, null, 2)}\n`, 'utf8');
+      this.broadcast({ type: 'log', level: 'info', text: `設定を書きました: ${at}` });
+      return send(res, 200, {
+        path: at,
+        saved: { kind, modelsDir: dir || null },
+        // 動かし方の切り替えは、立ち上げ直すまで効かない。黙って効いた顔をしない。
+        restartNeeded: kind !== (this.#opts.config.runtime?.kind ?? 'ollama')
+          || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir()),
+      });
+    }
+
     if (path === '/api/info' && req.method === 'GET') {
       // cmd の窓でしか見られなかったものを、画面から見られるようにする。
       // 版が分からないまま検証すると、古いものを新しいと思って確かめてしまう。
@@ -688,6 +753,16 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   const text = JSON.stringify(body);
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   res.end(text);
+}
+
+/** 保存してある設定の runtime だけを読む。無ければ空。 */
+async function readConfigFile(): Promise<Record<string, unknown>> {
+  try {
+    const raw = JSON.parse(await readFile(configPath(), 'utf8')) as Record<string, unknown>;
+    return (raw.runtime as Record<string, unknown>) ?? {};
+  } catch {
+    return {};
+  }
 }
 
 async function readBody(req: IncomingMessage): Promise<unknown> {

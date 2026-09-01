@@ -37,6 +37,7 @@
         <button type="button" data-sec="info" class="on">情報</button>
         <button type="button" data-sec="look">見た目</button>
         <button type="button" data-sec="place">配置</button>
+        <button type="button" data-sec="model">モデル</button>
         <button type="button" data-sec="check">点検</button>
       </div>
 
@@ -64,6 +65,27 @@
         </label>
         <p class="hint">板の並べ方そのものを書き換えるときは、こちら。</p>
         <button type="button" id="edit" class="ghost">配置を直接いじる</button>
+      </section>
+
+      <section data-sec="model" hidden>
+        <p class="hint">
+          どうやってモデルを動かすか。**切り替えたら立ち上げ直してください。**
+        </p>
+        <label class="field-row">
+          <span class="dim">動かし方</span>
+          <select id="cfgKind"></select>
+        </label>
+        <label class="field-row">
+          <span class="dim">GGUF の置き場</span>
+          <input id="cfgModelsDir" type="text" spellcheck="false" placeholder="既定のまま">
+        </label>
+        <div class="btnbar">
+          <button type="button" id="cfgSave" class="primary">保存</button>
+          <button type="button" id="cfgReload" class="ghost">読み直す</button>
+        </div>
+        <p id="cfgNote" class="repairs"></p>
+        <p class="hint">置き場にある GGUF</p>
+        <div id="cfgGguf" class="rows paths" data-cols="2"></div>
       </section>
 
       <section data-sec="check" hidden>

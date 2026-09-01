@@ -508,6 +508,64 @@ async function loadInfo() {
   }
 }
 
+/** いまの設定を読み出して、画面へ映す。 */
+async function loadCfg() {
+  const c = await fetch('/api/config').then((r) => r.json()).catch(() => null);
+  if (!c) return;
+  const sel = $('cfgKind');
+  sel.replaceChildren();
+  for (const k of c.kinds ?? []) {
+    const o = document.createElement('option');
+    o.value = k.id;
+    o.textContent = k.name;
+    if (k.id === c.kind) o.selected = true;
+    sel.append(o);
+  }
+  $('cfgModelsDir').value = c.modelsDir ?? '';
+  // 保存してあるものと、いま動いているものは別。黙って同じ顔をさせない。
+  $('cfgNote').textContent = c.restartNeeded
+    ? `保存済み。いま動いているのは「${c.active?.kind ?? '?'}」です。立ち上げ直すと切り替わります。`
+    : `設定ファイル: ${c.path}`;
+
+  const box = $('cfgGguf');
+  box.replaceChildren();
+  if (!c.gguf?.length) {
+    const e = document.createElement('div');
+    e.className = 'empty';
+    e.textContent = 'ありません。.gguf を1つ置くと、ここに出ます。';
+    box.append(e);
+    return;
+  }
+  for (const m of c.gguf) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const k = document.createElement('span');
+    k.className = 'mono';
+    k.textContent = m.ref;
+    const v = document.createElement('span');
+    v.className = 'dim mono';
+    v.textContent = m.sizeBytes ? `${(m.sizeBytes / 1024 ** 3).toFixed(1)} GB` : '';
+    row.append(k, v);
+    box.append(row);
+  }
+}
+
+$('cfgReload').onclick = () => { void loadCfg(); };
+$('cfgSave').onclick = async () => {
+  const r = await fetch('/api/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ kind: $('cfgKind').value, modelsDir: $('cfgModelsDir').value.trim() }),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) { $('cfgNote').textContent = body.error ?? '保存できませんでした'; return; }
+  // 黙って効いた顔をしない。切り替えは立ち上げ直すまで効かない。
+  $('cfgNote').textContent = body.restartNeeded
+    ? `保存しました。**立ち上げ直すと効きます。** ${body.path}`
+    : `保存しました。${body.path}`;
+  await loadCfg();
+};
+
 let checksReady = false;
 async function loadChecks() {
   if (checksReady) return;
@@ -551,6 +609,7 @@ async function openSettings(section = 'info') {
   showSection(section);
   await loadInfo();
   if (section === 'check') await loadChecks();
+  if (section === 'model') await loadCfg();
   $('settings').showModal();
 }
 
@@ -559,6 +618,7 @@ for (const b of $('settings').querySelectorAll('.tabs-lite button')) {
     showSection(b.dataset.sec);
     if (b.dataset.sec === 'check') await loadChecks();
     if (b.dataset.sec === 'info') await loadInfo();
+    if (b.dataset.sec === 'model') await loadCfg();
   };
 }
 $('openSettings').onclick = () => { void openSettings(); };

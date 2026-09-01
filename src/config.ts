@@ -313,8 +313,18 @@ export const DEFAULT_CONFIG: AasConfig = {
   maxTokens: 4096,
 };
 
+/**
+ * 設定ファイルの場所。読むときと書くときで違う場所を見ないようにする。
+ *
+ * 画面から設定を変えられるようにしたので、**読んだ場所へ書き戻す**必要がある。
+ * ここを二箇所に散らすと、書いたのに効かない、が起きる。
+ */
+export function configPath(cwd = process.cwd()): string {
+  return process.env.AAS_CONFIG ?? resolve(cwd, 'aas.config.json');
+}
+
 export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: string } {
-  const path = process.env.AAS_CONFIG ?? resolve(cwd, 'aas.config.json');
+  const path = configPath(cwd);
   let raw: string;
   try {
     raw = readFileSync(path, 'utf8');
