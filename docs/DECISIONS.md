@@ -28,7 +28,7 @@
 **「Node 不可」の意味**
 
 インストールが不可、という意味。フォルダに `node.exe` を置いて動かすのは
-インストールではない。`installer\bootstrap.cmd` と持ち運び版はこのために在る。
+インストールではない。`installer\bootstrap.cmd` とportableはこのために在る。
 
 **やらないこと**
 
@@ -47,7 +47,7 @@ Windows が用意している置き場を使う。
 |---|---|
 | 利用者ごと（管理者権限なし） | `%LOCALAPPDATA%\Programs\AdaptiveAIStudio\` |
 | 全体（インストーラ） | `%ProgramFiles%\AdaptiveAIStudio\` |
-| 持ち運び版 | 置いたフォルダの中だけ |
+| portable | 置いたフォルダの中だけ |
 
 利用者名が全角でも止めない。困るのはモデルだけなので、モデルだけ
 `%ProgramData%\AdaptiveAIStudio\models` へ逃がす（`src/core/home.ts` の `asciiModelsDir`）。
@@ -109,7 +109,7 @@ curl が 443 で timeout（21秒 × 4回）。ブラウザでは claude.ai が�
 
 ---
 
-## 2026-09-01  持ち運び版は Releases に常時置く
+## 2026-09-01  portable は Releases に常時置く
 
 「同梱してあります」と言いながら、Node の入った現物をどこにも置いていなかった。
 落とせないものを、あるかのように言わない。
@@ -137,32 +137,34 @@ curl が 443 で timeout（21秒 × 4回）。ブラウザでは claude.ai が�
   ・どの機械で、何分くらいか（Windows は2倍で数えられる）
   ・回さずに済む道があるか
 
-**回さずに済む道が先。**持ち運び版は `npm run bundle --node-here` で
+**回さずに済む道が先。**portable は `npm run bundle -- --node-here` で
 手元でも作れる（網も CI も要らない）。Actions が要るのは、
 利用者の手元に Node が無いときと、`setup.exe` を組むときだけ。
 
 ---
 
-## 2026-09-01  名前を一つにする
+## 2026-09-01  名前は英語。無理に日本語にしない
 
-同じものを四つの名前で呼んでいた（WindowsBundle / 配布物 / 持ち運び版 /
+同じものを四つの名前で呼んでいた（WindowsBundle / 配布物 / portable /
 portable）。利用者が「言ってることがめちゃくちゃ」になるのは当然だった。
 
 | 言葉 | 何を指すか |
 |---|---|
-| `npm run bundle` | **コマンド**。持ち運び版のフォルダを作る |
-| 持ち運び版 | **もの**。アプリ + node.exe が入ったフォルダ |
+| `npm run bundle` | **コマンド**。portableのフォルダを作る |
+| portable | **もの**。アプリ + node.exe が入ったフォルダ |
 | Releases | **置き場**。GitHub のダウンロード置き場 |
 | Actions | **実行環境**。GitHub 上でコマンドを走らせる場所 |
 | 検査 | `npm test` のこと。それを Actions で走らせるのが CI |
 
-以後、持ち運び版を他の名前で呼ばない。
+以後 `portable` とだけ呼ぶ。**無理に日本語に訳さない。**
+CLAUDE.md に「名前は普通のプログラムの作法（英語）」と書いた本人が、
+portable を「portable」に変えて不快にさせた。訳語を作らない。
 
 ## 2026-09-01  根を散らかさない
 
 利用者に「なんで GitHub こんな汚くなってるの」と言われた。
 
-- `node\` を消した。持ち運び版に node.exe が入っているので要らない。
+- `node\` を消した。portable に node.exe が入っているので要らない。
   そもそも一時しのぎで足したもので、置きっぱなしにしていた。
 - `start-ui.cmd` / `start-ui.sh` を消した。中身は `start.cmd ui` を
   呼ぶだけの4行。入口は一つでよい。
