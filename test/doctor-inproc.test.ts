@@ -75,3 +75,22 @@ describe('doctor は、この中で読む道を知っている', () => {
     assert.match(text, /繋がりません（使っていません）/);
   });
 });
+
+// describe の中では await できない。上で決めておく。
+const libDir = join(installRoot(), 'node_modules', 'node-llama-cpp');
+const hasLib = await import('node:fs/promises').then((fs) => fs.stat(libDir)).then(() => true, () => false);
+const onlyWithLib = { skip: hasLib ? false : 'node-llama-cpp が入っていません' };
+
+describe('doctor は「入っていない」と「壊れている」を分ける', () => {
+
+  test('本体が読めるなら「入っていません」とは言わない', onlyWithLib, async () => {
+    const { home, models, config } = await scratch();
+    await writeFile(join(models, 'a.gguf'), 'x');
+    await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
+    const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
+    assert.doesNotMatch(text, /node-llama-cpp が入っていません/);
+    assert.doesNotMatch(text, /在るのに読み込めません/);
+    // この機械むけの binary が在れば ok、無ければ warn。どちらかであること。
+    assert.match(text, /この機械むけの binary (が動きます|がありません)/);
+  });
+});

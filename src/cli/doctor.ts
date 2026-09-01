@@ -139,28 +139,41 @@ if (llamaPath) {
 // 作業コピーには入っていない。**動かす直前まで分からない**のが困るので、
 // ここで先に言う。
 if (runtime.id === 'inproc') {
+  const { stat } = await import('node:fs/promises');
+  const here = join(installRoot(), 'node_modules', 'node-llama-cpp');
+  const installed = await stat(here).then(() => true, () => false);
+  const binPkg = `@node-llama-cpp/${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`;
+  let lib: { getLlama: (o?: { build?: 'never' }) => Promise<unknown> } | undefined;
   try {
-    await import('node-llama-cpp');
-    add('モデルを読むもの', 'ok', 'node-llama-cpp（実行ファイルは増えません）');
+    lib = await import('node-llama-cpp') as typeof lib;
   } catch (e) {
-    // 入っていないのか、この機械むけの binary が無いのかを分ける。
-    // 「入っていません」と言われて npm install しても直らない、が起きる。
-    const { stat } = await import('node:fs/promises');
-    const here = join(installRoot(), 'node_modules', 'node-llama-cpp');
-    const installed = await stat(here).then(() => true, () => false);
-    // 本体が無いのは止める。この機械むけの binary が無いだけなら**警告**。
-    // 配る先（Windows）には入っているので、ここで「動かない」と数えると
-    // 開発中も CI も、直しようのない未了を抱え続けることになる。
-    add('モデルを読むもの', installed ? 'warn' : 'bad',
+    // 「入っていない」と「在るのに読み込めない」は別の話。後者を前者の顔で
+    // 言うと、配布物の欠けに気づけない（実際に、そう配った）。
+    add('モデルを読むもの', 'bad',
       installed
-        ? 'node-llama-cpp はあるが、この機械むけの binary がありません'
+        ? 'node-llama-cpp は在るのに読み込めません（欠けています）'
         : 'node-llama-cpp が入っていません',
       (installed
-        ? `${process.platform}-${process.arch} の分を入れてください:\n`
-          + `  npm install --no-save --omit=optional --ignore-scripts @node-llama-cpp/${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}\n`
-        : '配布物には入っています。作業コピーで使うときは:\n'
-          + '  npm install --no-save --omit=optional --ignore-scripts node-llama-cpp\n')
+        ? '配布物なら組み立てが壊れています。作業コピーなら入れ直してください:\n'
+        : '配布物には入っています。作業コピーで使うときは:\n')
+      + '  npm install --no-save --omit=optional --ignore-scripts node-llama-cpp\n'
       + `詳しくは docs/LOCAL-MODEL.md（${(e as Error).message.slice(0, 80)}）`);
+  }
+  if (lib) {
+    try {
+      // 組み立てに走らせない。無いなら無いと、すぐ言わせる。
+      await lib.getLlama({ build: 'never' });
+      add('モデルを読むもの', 'ok', 'node-llama-cpp（この機械むけの binary が動きます。実行ファイルは増えません）');
+    } catch (e) {
+      // 本体は読めるが、この機械むけの binary が無い。配る先（Windows）には
+      // 入っているので、ここで「動かない」と数えると開発中も CI も
+      // 直しようのない未了を抱え続ける。**警告**に留める。
+      add('モデルを読むもの', 'warn',
+        'node-llama-cpp はあるが、この機械むけの binary がありません',
+        `${process.platform}-${process.arch} の分を入れてください:\n`
+        + `  npm install --no-save --omit=optional --ignore-scripts ${binPkg}\n`
+        + `詳しくは docs/LOCAL-MODEL.md（${(e as Error).message.slice(0, 80)}）`);
+    }
   }
 }
 
