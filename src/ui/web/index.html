@@ -12,10 +12,7 @@
     <span class="brand">AdaptiveAIStudio</span>
     <span class="spacer"></span>
     <button id="open" class="ghost" title="コマンド (Ctrl+K)">⌘ コマンド</button>
-    <select id="themes" title="見た目を選ぶ"></select>
-    <select id="presets" title="配置を選ぶ"></select>
-    <button id="edit" class="ghost" title="配置を直接いじる">配置</button>
-    <button id="editTheme" class="ghost" title="色をいじる">色</button>
+    <button id="openSettings" class="ghost" title="設定 (Ctrl+,)">⚙ 設定</button>
     <span id="status" class="status">つないでいます…</span>
   </header>
 
@@ -31,6 +28,56 @@
   <dialog id="palette">
     <input id="paletteInput" type="text" placeholder="何をしますか？" autocomplete="off">
     <div id="paletteList" class="palette-list"></div>
+  </dialog>
+
+  <dialog id="settings" class="wide">
+    <form method="dialog">
+      <h2>設定</h2>
+      <div class="tabs-lite" role="tablist">
+        <button type="button" data-sec="info" class="on">情報</button>
+        <button type="button" data-sec="look">見た目</button>
+        <button type="button" data-sec="place">配置</button>
+        <button type="button" data-sec="check">点検</button>
+      </div>
+
+      <section data-sec="info">
+        <p class="hint">
+          いま何が動いているか。**版を先に見てください。**
+          古いものを新しいと思って確かめるのが、いちばん無駄になります。
+        </p>
+        <div id="infoRows" class="rows paths" data-cols="2"></div>
+      </section>
+
+      <section data-sec="look" hidden>
+        <label class="field-row">
+          <span class="dim">土台</span>
+          <select id="themes" title="見た目を選ぶ"></select>
+        </label>
+        <p class="hint">色と間合いを細かく変えるときは、こちら。</p>
+        <button type="button" id="editTheme" class="ghost">色をいじる</button>
+      </section>
+
+      <section data-sec="place" hidden>
+        <label class="field-row">
+          <span class="dim">型</span>
+          <select id="presets" title="配置を選ぶ"></select>
+        </label>
+        <p class="hint">板の並べ方そのものを書き換えるときは、こちら。</p>
+        <button type="button" id="edit" class="ghost">配置を直接いじる</button>
+      </section>
+
+      <section data-sec="check" hidden>
+        <p class="hint">
+          cmd の窓でしかできなかったものです。窓は入口であって、道具ではありません。
+        </p>
+        <div id="settingsChecks" class="btnbar"></div>
+        <pre id="settingsCheckOut" class="mono task-out"></pre>
+      </section>
+
+      <menu>
+        <button value="close" class="primary">閉じる</button>
+      </menu>
+    </form>
   </dialog>
 
   <dialog id="themeEditor">

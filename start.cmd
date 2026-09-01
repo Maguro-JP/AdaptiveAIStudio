@@ -5,6 +5,11 @@ rem
 rem  ダブルクリックで開く入口。npm を覚えていなくても始められる。
 rem  引数を付ければ、選ぶところは飛ばせる:  start.cmd ui
 rem
+rem  **この窓は入口であって、道具ではない。**
+rem  点検・モデル・片づけ・設定は画面の中にある。ここに並べると、
+rem  立ち上げたあとに窓が塞がって、見たいものが見られなくなる。
+rem  端末から直に呼びたいときのために、引数の道だけ残してある。
+rem
 rem  ■ このファイルは CP932 で保存する。UTF-8 にしない
 rem
 rem  cmd.exe はバッチを console の文字集合（日本語 Windows なら CP932）
@@ -120,29 +125,20 @@ set "TASK="
 echo.
 echo   AdaptiveAIStudio
 echo   ----------------------------------------
-echo    1  画面をひらく          （ふだんはこれ）
-echo    2  端末で作業させる
-echo    3  ただの相談
-echo    4  この環境を見てもらう
-echo    5  手元のモデルを見る
-echo    6  検査を回す
-echo    7  新しくする
-echo    8  この機械で確かめる
-echo    9  溜まったものを片づける
+echo    1  画面をひらく          （ふだんはこれだけ）
+echo    2  新しくする
+echo    3  困ったとき（この環境を見てもらう）
 echo    0  やめる
+echo.
+echo   点検・モデル・片づけ・設定は、画面の中にあります。
+echo   端末から直に呼ぶときは:  start.cmd doctor   のように渡してください。
 echo.
 set "CHOICE="
 set /p CHOICE="   番号を入れて Enter: "
 
 if "%CHOICE%"=="1" set "TASK=ui"
-if "%CHOICE%"=="2" set "TASK=agent"
-if "%CHOICE%"=="3" set "TASK=chat"
-if "%CHOICE%"=="4" set "TASK=doctor"
-if "%CHOICE%"=="5" set "TASK=models"
-if "%CHOICE%"=="6" set "TASK=test"
-if "%CHOICE%"=="7" set "TASK=update"
-if "%CHOICE%"=="8" set "TASK=selftest"
-if "%CHOICE%"=="9" set "TASK=clean"
+if "%CHOICE%"=="2" set "TASK=update"
+if "%CHOICE%"=="3" set "TASK=doctor"
 if "%CHOICE%"=="0" goto :quit
 if "%TASK%"=="" goto :badChoice
 

@@ -460,9 +460,113 @@ function openPalette() {
 }
 
 $('open').onclick = openPalette;
+
+/* ---------- 設定 ----------
+ *
+ * cmd の窓でしか見られなかったもの（版・置き場・環境）と、
+ * 見た目・配置・点検を、一つにまとめる。**探し回らせない。**
+ */
+function showSection(name) {
+  for (const b of $('settings').querySelectorAll('.tabs-lite button')) {
+    b.classList.toggle('on', b.dataset.sec === name);
+  }
+  for (const sec of $('settings').querySelectorAll('section[data-sec]')) {
+    sec.hidden = sec.dataset.sec !== name;
+  }
+}
+
+const INFO_LABELS = {
+  version: '版', node: 'Node', platform: 'この機械', portable: '持ち運び',
+  productRoot: 'プログラム', home: '置き場（根）', stateDir: '記録',
+  modelsDir: 'モデル', binDir: '実行ファイル', url: '画面',
+  runtime: 'モデルの土台', model: 'いまのモデル',
+};
+
+async function loadInfo() {
+  const info = await fetch('/api/info').then((r) => r.json()).catch(() => null);
+  const box = $('infoRows');
+  box.replaceChildren();
+  if (!info) {
+    box.append(Object.assign(document.createElement('div'), {
+      className: 'empty', textContent: '情報を取れませんでした。' }));
+    return;
+  }
+  for (const [key, label] of Object.entries(INFO_LABELS)) {
+    if (!(key in info)) continue;
+    const row = document.createElement('div');
+    row.className = 'row';
+    const k = document.createElement('span');
+    k.className = 'dim';
+    k.textContent = label;
+    const v = document.createElement('span');
+    v.className = 'mono';
+    v.textContent = typeof info[key] === 'boolean'
+      ? (info[key] ? 'はい' : 'いいえ')
+      : String(info[key]);
+    row.append(k, v);
+    box.append(row);
+  }
+}
+
+let checksReady = false;
+async function loadChecks() {
+  if (checksReady) return;
+  checksReady = true;
+  const bar = $('settingsChecks');
+  const out = $('settingsCheckOut');
+  const { tasks } = await fetch('/api/tasks').then((r) => r.json()).catch(() => ({ tasks: [] }));
+  const buttons = [];
+  for (const t of tasks ?? []) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = t.name;
+    b.onclick = async () => {
+      out.textContent = '';
+      for (const x of buttons) x.disabled = true;
+      const r = await fetch('/api/task', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: t.id }),
+      });
+      if (!r.ok) {
+        for (const x of buttons) x.disabled = false;
+        out.textContent = (await r.json().catch(() => ({}))).error ?? '始められませんでした';
+      }
+    };
+    buttons.push(b);
+    bar.append(b);
+  }
+  ctx.on('task', (e) => {
+    out.append(document.createTextNode(e.text));
+    out.scrollTop = out.scrollHeight;
+  });
+  ctx.on('taskDone', (e) => {
+    for (const x of buttons) x.disabled = false;
+    out.append(document.createTextNode(
+      e.code === 0 ? '\n— 終わりました —\n' : `\n— 終了コード ${e.code} —\n`));
+    out.scrollTop = out.scrollHeight;
+  });
+}
+
+async function openSettings(section = 'info') {
+  showSection(section);
+  await loadInfo();
+  if (section === 'check') await loadChecks();
+  $('settings').showModal();
+}
+
+for (const b of $('settings').querySelectorAll('.tabs-lite button')) {
+  b.onclick = async () => {
+    showSection(b.dataset.sec);
+    if (b.dataset.sec === 'check') await loadChecks();
+    if (b.dataset.sec === 'info') await loadInfo();
+  };
+}
+$('openSettings').onclick = () => { void openSettings(); };
+
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openPalette(); }
   else if ((e.ctrlKey || e.metaKey) && e.key === '/') { e.preventDefault(); ctx.focusInput(); }
+  else if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); void openSettings(); }
 });
 
 await loadTheme();

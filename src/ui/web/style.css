@@ -714,3 +714,33 @@ menu { display: flex; justify-content: flex-end; gap: var(--s2); padding: 0; mar
   font-size: .92em;
   line-height: 1.5;
 }
+
+/* ---------- 設定 ---------- */
+
+dialog.wide { width: min(46rem, 92vw); }
+
+/* 見出しの切り替え。板のタブと同じ見え方にすると、別物に見えない。 */
+.tabs-lite {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  margin: 0 0 var(--s3);
+}
+.tabs-lite button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--dim);
+  padding: 6px 12px;
+}
+.tabs-lite button.on { color: var(--text); border-bottom-color: var(--accent); }
+
+.btnbar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--s3); }
+
+.field-row { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s3); }
+.field-row select { flex: 1 1 auto; }
+
+/* 置き場は末尾まで読めないと意味がない。切らずに折る。 */
+.rows.paths .row > * { white-space: normal; word-break: break-all; }
+.rows.paths .row { align-items: start; }

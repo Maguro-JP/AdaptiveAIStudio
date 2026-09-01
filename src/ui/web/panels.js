@@ -877,7 +877,7 @@ export const PANELS = {
    * 見たいものが見られなくなる。**回すのも読むのも、ここでやる。**
    */
   checks(body, ctx) {
-    const bar = el('div', 'row wrap');
+    const bar = el('div', 'btnbar');
     const out = el('pre', 'mono task-out');
     const stop = el('button', 'ghost', '止める');
     stop.type = 'button';

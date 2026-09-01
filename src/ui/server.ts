@@ -16,6 +16,8 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname, extname, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
+import { aasHome, binDir, modelsDir, isPortable, productRoot } from '../core/home.ts';
+import { currentVersion, describeVersion } from '../core/version.ts';
 import { checkUpdate, applyUpdate } from '../core/update.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
 import { findNewerOllama } from '../runtime/model-updates.ts';
@@ -472,6 +474,26 @@ export class UiServer {
       await saveTheme(theme);
       this.broadcast({ type: 'themeChanged' });
       return send(res, 200, { theme, repairs: [], vars: toCssVars(theme) });
+    }
+
+    if (path === '/api/info' && req.method === 'GET') {
+      // cmd の窓でしか見られなかったものを、画面から見られるようにする。
+      // 版が分からないまま検証すると、古いものを新しいと思って確かめてしまう。
+      const v = await currentVersion();
+      return send(res, 200, {
+        version: describeVersion(v),
+        node: process.version,
+        platform: `${process.platform} ${process.arch}`,
+        portable: isPortable(),
+        productRoot: productRoot(),
+        home: aasHome(),
+        stateDir: stateDir(),
+        modelsDir: modelsDir(),
+        binDir: binDir(),
+        url: this.#url,
+        runtime: this.#opts.config.runtime?.kind ?? '未設定',
+        model: this.#opts.config.runtime?.model ?? '—',
+      });
     }
 
     if (path === '/api/tasks' && req.method === 'GET') {
