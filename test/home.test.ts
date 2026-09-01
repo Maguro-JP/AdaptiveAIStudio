@@ -9,9 +9,21 @@ import assert from 'node:assert/strict';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { writeFile, readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tempDir } from './tmp.ts';
 import { aasHome, stateDir, binDir, modelsDir, isPortable, installRoot } from '../src/core/home.ts';
 import { lookup, toCommand } from '../scripts/run.mjs';
+
+/**
+ * 作業場にしか無いものを見る試験の印。
+ *
+ * CI の設定も、用意用も、配布物には**入れるべきでない**。
+ * だから配布物の中で走らせると、確かめようがない。
+ * そこで落とすのは嘘（何も壊れていない）なので、飛ばしてそう言う。
+ */
+const sourceOnly = existsSync(join(installRoot(), '.github'))
+  ? {}
+  : { skip: '作業場にしか無いものを見る試験です（配布物では確かめられません）' };
 
 const KEYS = ['AAS_HOME', 'AAS_STATE_DIR', 'AAS_BIN_DIR', 'AAS_MODELS_DIR'];
 afterEach(() => { for (const k of KEYS) delete process.env[k]; });
@@ -68,7 +80,7 @@ describe('持ち運び版', () => {
 });
 
 describe('用意する道具', () => {
-  test('バッチは CRLF で配ると宣言してある', async () => {
+  test('バッチは CRLF で配ると宣言してある', sourceOnly, async () => {
     // LF のままだと cmd.exe が goto や括弧の塊を読み違える。
     // ただし**作業コピーのバイトを見てはいけない**。取り出すときに git が
     // 直すので、見る場所を間違えると走らせる環境で結果が変わる試験になる。
@@ -77,7 +89,7 @@ describe('用意する道具', () => {
     assert.match(raw, /^\*\.cmd\s+text\s+eol=crlf/m, 'cmd を CRLF で配る宣言が無い');
   });
 
-  test('用意用は、全角の混ざる置き場所を先に止める', async () => {
+  test('用意用は、全角の混ざる置き場所を先に止める', sourceOnly, async () => {
     // 後で分かると数GB落とし直しになるので、取ってくる前に止める。
     const raw = await readFile(join(installRoot(), 'installer', 'bootstrap.cmd'), 'utf8');
     assert.match(raw, /findstr \/R "\[\^ -~\]"/, '全角の検査が無い');
@@ -86,7 +98,7 @@ describe('用意する道具', () => {
     assert.ok(stopAt < fetchAt, '取ってきた後に検査している');
   });
 
-  test('用意用は、git も npm も要求しない', async () => {
+  test('用意用は、git も npm も要求しない', sourceOnly, async () => {
     const raw = await readFile(join(installRoot(), 'installer', 'bootstrap.cmd'), 'utf8');
     assert.equal(/\bgit \b/.test(raw), false, 'git を使っている');
     assert.equal(/\bnpm \b/.test(raw), false, 'npm を使っている');
@@ -156,28 +168,28 @@ describe('配布物の形', () => {
 });
 
 describe('CI の使い方', () => {
-  test('押すたびに配布物を組み立てない', async () => {
+  test('押すたびに配布物を組み立てない', sourceOnly, async () => {
     // Windows の枠は2倍で数えられる。前に使い切って1日検査できなくなった。
     const raw = await readFile(join(installRoot(), '.github', 'workflows', 'release.yml'), 'utf8');
     assert.equal(/^\s*branches:/m.test(raw), false, '枝への push で組み立てている');
     assert.match(raw, /tags:/, 'タグでしか回らない形になっていない');
   });
 
-  test('続けて押したら、前のものは打ち切る', async () => {
+  test('続けて押したら、前のものは打ち切る', sourceOnly, async () => {
     for (const f of ['ci.yml', 'release.yml']) {
       const raw = await readFile(join(installRoot(), '.github', 'workflows', f), 'utf8');
       assert.match(raw, /cancel-in-progress:\s*true/, `${f} に打ち切りが無い`);
     }
   });
 
-  test('文書だけの変更では検査を回さない', async () => {
+  test('文書だけの変更では検査を回さない', sourceOnly, async () => {
     const raw = await readFile(join(installRoot(), '.github', 'workflows', 'ci.yml'), 'utf8');
     assert.match(raw, /paths-ignore/);
   });
 });
 
 describe('CI は押すたびに回さない', () => {
-  test('push では回らない', async () => {
+  test('push では回らない', sourceOnly, async () => {
     // 1回あたりを安くしても、回数が減らなければ意味がない。
     // 直しを10回押せば10回回る、という作りが枠を使い切った元凶だった。
     const raw = await readFile(join(installRoot(), '.github', 'workflows', 'ci.yml'), 'utf8');
@@ -185,7 +197,7 @@ describe('CI は押すたびに回さない', () => {
     assert.equal(/^\s{2}push:/m.test(on), false, 'push で回る形になっている');
   });
 
-  test('PR と手動と週1回では回る', async () => {
+  test('PR と手動と週1回では回る', sourceOnly, async () => {
     const raw = await readFile(join(installRoot(), '.github', 'workflows', 'ci.yml'), 'utf8');
     const on = raw.slice(raw.indexOf('\non:'), raw.indexOf('\njobs:'));
     for (const trigger of ['pull_request:', 'workflow_dispatch:', 'schedule:']) {
@@ -193,7 +205,7 @@ describe('CI は押すたびに回さない', () => {
     }
   });
 
-  test('週1回の時刻は、JST で決めてから UTC に直してある', async () => {
+  test('週1回の時刻は、JST で決めてから UTC に直してある', sourceOnly, async () => {
     // JST の何時かを先に決めないと、1日ずれる（実際に一度ずらした）。
     const raw = await readFile(join(installRoot(), '.github', 'workflows', 'ci.yml'), 'utf8');
     const cron = /cron:\s*'([^']+)'/.exec(raw)?.[1];
@@ -220,13 +232,13 @@ describe('同梱した Node の置き場所', () => {
     assert.ok(await stat(join(out, 'runtime', 'node.exe')));
   });
 
-  test('入口は、組み立てた場所を探しに行く', async () => {
+  test('入口は、組み立てた場所を探しに行く', sourceOnly, async () => {
     const raw = await readFile(join(installRoot(), 'start.cmd'), 'utf8');
     // app\ の隣の runtime\ を見ていること。
     assert.match(raw, /%~dp0\.\.\\runtime\\node\.exe/, '製品の形を見ていない');
   });
 
-  test('用意用は、組み立て方を書き写さない', async () => {
+  test('用意用は、組み立て方を書き写さない', sourceOnly, async () => {
     // 書き写すと、配布物と食い違う。実際に一度そうなった。
     const raw = await readFile(join(installRoot(), 'installer', 'bootstrap.cmd'), 'utf8');
     assert.match(raw, /scripts\\bundle\.mjs/, '組み立て器を使っていない');
@@ -234,7 +246,7 @@ describe('同梱した Node の置き場所', () => {
     assert.match(raw, /--src/);
   });
 
-  test('用意用が置く場所と、入口が探す場所が同じ', async () => {
+  test('用意用が置く場所と、入口が探す場所が同じ', sourceOnly, async () => {
     const boot = await readFile(join(installRoot(), 'installer', 'bootstrap.cmd'), 'utf8');
     assert.match(boot, /%DEST%\\runtime\\node\.exe/, '確かめる場所がずれている');
     assert.match(boot, /%DEST%\\app\\scripts\\run\.mjs/, '中身の場所がずれている');
@@ -249,9 +261,35 @@ describe('落としてきたものでも、版が分かる', () => {
     assert.equal(v.id?.startsWith('$Format:'), false, `印をそのまま出している: ${v.id}`);
   });
 
-  test('書庫に版を焼き込む宣言がある', async () => {
+  test('書庫に版を焼き込む宣言がある', sourceOnly, async () => {
     // これが無いと、GitHub から落とした人は「どの版か分からない」まま使う。
     const raw = await readFile(join(installRoot(), '.gitattributes'), 'utf8');
     assert.match(raw, /^VERSION\s+export-subst/m);
+  });
+});
+
+describe('CI が使えなくても、配布物は作れる', () => {
+  test('いま動かしている Node ごと固められる', async () => {
+    // 枠を使い切ると何も確かめられなくなる、を避けるための道。
+    // 取ってこない（網が要らない）ので、CI にも外にも依存しない。
+    const out = await tempDir('aas-self-');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    const r = await bundle({ out, srcRoot: installRoot(), nodeHere: true, version: 'x' });
+    assert.equal(r.bundledNode, true);
+
+    const { readdir } = await import('node:fs/promises');
+    const runtime = await readdir(join(out, 'runtime'));
+    assert.ok(runtime.some((n) => n === 'node' || n === 'node.exe'), '同梱されていない');
+  });
+
+  test('固めたものだけで、検査を回せる形になっている', async () => {
+    // 持って行った先で確かめられないなら、持って行く意味がない。
+    const out = await tempDir('aas-self-');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'x' });
+    const { stat } = await import('node:fs/promises');
+    for (const p of ['app/scripts/run-tests.mjs', 'app/test', 'app/src']) {
+      assert.ok(await stat(join(out, ...p.split('/'))), `入っていない: ${p}`);
+    }
   });
 });

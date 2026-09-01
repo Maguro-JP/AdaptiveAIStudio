@@ -9,14 +9,18 @@
  *   ・Node 自体も同梱できる（--node-zip で渡す）
  *
  * 使い方:
- *   node scripts/bundle.mjs --out dist/aas-portable [--node-zip x.zip | --node-exe node.exe]
+ *   node scripts/bundle.mjs --out dist/aas-portable [--node-here]
+ *                           [--node-zip x.zip | --node-exe node.exe]
  *                           [--src <中身のある場所>] [--version <版>]
+ *
+ * **--node-here がいちばん手軽。**いま自分を動かしている Node を
+ * そのまま入れるので、取ってこなくてよい。網も CI も要らない。
  *
  * Node の zip をここで落としに行かないのは、**組み立てと取得を分ける**ため。
  * 取得は網の繋がる場所（CI）でやり、ここは置く仕事だけをする。
  * そうすると、この道具自体は網が無くても試せる。
  */
-import { cp, mkdir, writeFile, rm, readFile, stat } from 'node:fs/promises';
+import { cp, mkdir, writeFile, rm, readFile, stat, chmod } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,7 +82,9 @@ function arg(name, fallback) {
  * tsconfig.json を同じ高さで見ることになる。どれを押せばいいか分からない。
  * **触ってよいものだけを表に出す。**
  */
-export async function bundle({ out, nodeZip, nodeExe, srcRoot = root, version, log = () => {} }) {
+export async function bundle({
+  out, nodeZip, nodeExe, nodeHere, srcRoot = root, version, log = () => {},
+}) {
   await rm(out, { recursive: true, force: true });
   const app = join(out, 'app');
   await mkdir(app, { recursive: true });
@@ -132,12 +138,24 @@ export async function bundle({ out, nodeZip, nodeExe, srcRoot = root, version, l
     `built ${new Date().toISOString()}\r\n`, 'utf8');
   log('  置いた: .portable（持ち運びの目印）');
 
-  if (nodeExe) {
+  // いま自分を動かしている Node を、そのまま入れる。
+  // **これがいちばん確実で、いちばん安い。**取ってこなくてよいので
+  // 網も要らず、CI も要らない。手元で `npm run bundle` を叩けば終わる。
+  // ただし入るのはこの機械向けの Node なので、渡す先の OS が同じであること。
+  const selfExe = nodeHere ? process.execPath : undefined;
+  const exe = nodeExe ?? selfExe;
+
+  if (exe) {
     // 用意用（bootstrap）は node.exe だけを落とす。npm は付いてこないが、
     // scripts/run.mjs があるので困らない。
     await mkdir(join(out, 'runtime'), { recursive: true });
-    await cp(nodeExe, join(out, 'runtime', 'node.exe'));
-    log('  入れた: runtime/node.exe（同梱の Node）');
+    // Windows は node.exe、それ以外は node。渡す先で押せる名前にする。
+    const name = exe.toLowerCase().endsWith('.exe') ? 'node.exe' : 'node';
+    const dest = join(out, 'runtime', name);
+    await cp(exe, dest);
+    // fs.cp の mode は「写し方」の指定で、権限ではない。権限は別に付ける。
+    await chmod(dest, 0o755).catch(() => { /* Windows では意味を持たない */ });
+    log(`  入れた: runtime/${name}（同梱の Node${nodeHere ? '。いま動かしているもの' : ''}）`);
   } else if (nodeZip) {
     await mkdir(join(out, 'runtime'), { recursive: true });
     // zip の中は node-vXX-win-x64/ の一階層下にある。平らに移す。
@@ -150,11 +168,11 @@ export async function bundle({ out, nodeZip, nodeExe, srcRoot = root, version, l
     await rm(tmp, { recursive: true, force: true });
     log(`  入れた: runtime（同梱の Node。${inner}）`);
   } else {
-    log('  Node は同梱していません（--node-zip か --node-exe で渡せます）');
+    log('  Node は同梱していません（--node-here / --node-exe / --node-zip）');
   }
 
   const pkg = JSON.parse(await readFile(join(srcRoot, 'package.json'), 'utf8'));
-  return { out, version: version ?? pkg.version, bundledNode: Boolean(nodeZip || nodeExe) };
+  return { out, version: version ?? pkg.version, bundledNode: Boolean(nodeZip || exe) };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -164,6 +182,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     out,
     nodeZip: arg('--node-zip'),
     nodeExe: arg('--node-exe'),
+    nodeHere: process.argv.includes('--node-here'),
     ...(arg('--src') ? { srcRoot: resolve(arg('--src')) } : {}),
     version: arg('--version'),
     log: (l) => console.log(l),

@@ -19,7 +19,8 @@
     "update": "node --experimental-strip-types --no-warnings src/cli/update.ts",
     "llama": "node --experimental-strip-types --no-warnings src/cli/llama.ts",
     "selftest": "node --experimental-strip-types --no-warnings src/cli/selftest.ts",
-    "clean": "node --experimental-strip-types --no-warnings src/cli/clean.ts"
+    "clean": "node --experimental-strip-types --no-warnings src/cli/clean.ts",
+    "bundle": "node scripts/bundle.mjs --node-here --out dist/AdaptiveAIStudio"
   },
   "devDependencies": {
     "typescript": "^5.6.0",
