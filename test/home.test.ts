@@ -240,3 +240,18 @@ describe('同梱した Node の置き場所', () => {
     assert.match(boot, /%DEST%\\app\\scripts\\run\.mjs/, '中身の場所がずれている');
   });
 });
+
+describe('落としてきたものでも、版が分かる', () => {
+  test('作業コピーでは、焼き込みの印を版として見せない', async () => {
+    // $Format:%H$ のまま見せると、嘘の版を報告することになる。
+    const { currentVersion } = await import('../src/core/version.ts');
+    const v = await currentVersion();
+    assert.equal(v.id?.startsWith('$Format:'), false, `印をそのまま出している: ${v.id}`);
+  });
+
+  test('書庫に版を焼き込む宣言がある', async () => {
+    // これが無いと、GitHub から落とした人は「どの版か分からない」まま使う。
+    const raw = await readFile(join(installRoot(), '.gitattributes'), 'utf8');
+    assert.match(raw, /^VERSION\s+export-subst/m);
+  });
+});
