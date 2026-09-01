@@ -18,6 +18,30 @@ const el = (tag, cls, text) => {
 const empty = (text) => el('div', 'empty', text);
 
 /**
+ * 文の中の https:// を、押せる形にする。
+ *
+ * 「手で取るなら: ブラウザで開く: https://…」と出しても、写して貼らせるのでは
+ * 案内になっていない。**文字は文字のまま**入れる（HTML として流し込まない。
+ * 外から来た文が画面を書き換える口になる）。開く先は新しい窓。
+ */
+export function linkify(text) {
+  const frag = document.createDocumentFragment();
+  const re = /https?:\/\/[^\s<>"）」]+/g;
+  let at = 0;
+  for (const m of String(text).matchAll(re)) {
+    if (m.index > at) frag.append(document.createTextNode(text.slice(at, m.index)));
+    const a = el('a', 'link', m[0]);
+    a.href = m[0];
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    frag.append(a);
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) frag.append(document.createTextNode(text.slice(at)));
+  return frag;
+}
+
+/**
  * 一覧。
  *
  * 列は必ず揃える。行ごとに幅が動くと、読むたびに目が探し直すことになる。
@@ -195,7 +219,11 @@ export const PANELS = {
     const add = (node) => { log.append(node); follow(); return node; };
 
     /** 一言。種類で色が変わるだけの、いちばん軽い形。 */
-    const note = (cls, text) => add(el('div', `note ${cls}`, text));
+    const note = (cls, text) => {
+      const n = el('div', `note ${cls}`);
+      n.append(linkify(text ?? ''));
+      return add(n);
+    };
 
     /** 折り畳める札。開かなければ一行で済む。 */
     const card = (icon, title, meta, cls = '') => {
