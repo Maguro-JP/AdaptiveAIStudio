@@ -186,7 +186,15 @@ export const dangerousCommands: Rule = {
       [/\bnpm\s+publish\b/i, '公開'],
       [/>\s*\/dev\/(sd|nvme)/i, 'デバイスへの書き込み'],
       [/\bchmod\s+-R\s+777/i, '権限の全開放'],
-      [/\bcurl[^|]*\|\s*(ba)?sh/i, 'ダウンロードしたスクリプトの実行'],
+      [/\b(curl|wget)[^|]*\|\s*(ba)?sh/i, 'ダウンロードしたスクリプトの実行'],
+      // ここから Windows。この場所の利用者は Windows で使う。Unix の形だけ
+      // 見ていると、同じことを cmd と PowerShell で素通りさせる。
+      [/\b(rmdir|rd)\s+(\/s|-r)/i, '再帰削除'],
+      [/\bdel\s+(\/[a-z]\s+)*\/s\b/i, '再帰削除'],
+      [/\bRemove-Item\b[^|;]*-Recurse/i, '再帰削除'],
+      [/\b(iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^|]*\|\s*(iex|Invoke-Expression)/i, 'ダウンロードしたスクリプトの実行'],
+      [/\bformat\s+[a-z]:/i, 'ドライブの初期化'],
+      [/\b(diskpart|reg\s+delete|shutdown)\b/i, '機械そのものへの操作'],
     ];
     for (const [re, label] of patterns) {
       if (re.test(command)) {
