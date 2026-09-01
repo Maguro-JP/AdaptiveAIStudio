@@ -9,6 +9,7 @@
  * 見つけたら、次に打つ一手まで添える。
  */
 import { spawn } from 'node:child_process';
+import { chunkReader } from '../core/text.ts';
 
 export interface EnvIssue {
   level: 'warn' | 'bad';
@@ -45,7 +46,8 @@ function run(cmd: string, args: string[], timeoutMs = 5000): Promise<string | un
     }
     let out = '';
     const timer = setTimeout(() => { child.kill(); resolve(undefined); }, timeoutMs);
-    child.stdout?.on('data', (b: Buffer) => { out += b.toString(); });
+    const read = chunkReader();
+    child.stdout?.on('data', (b: Buffer) => { out += read(b); });
     child.on('error', () => { clearTimeout(timer); resolve(undefined); });
     child.on('close', (code) => { clearTimeout(timer); resolve(code === 0 ? out : undefined); });
   });

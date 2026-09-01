@@ -10,6 +10,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
+import { chunkReader } from '../core/text.ts';
 
 export const TASKS: Record<string, string> = {
   doctor: 'この環境を見てもらう',
@@ -94,9 +95,12 @@ export class TaskRunner {
     this.#name = name;
 
     this.#opts.onEvent({ name, text: `— ${TASKS[name]} —\n` });
-    const on = (b: Buffer) => this.#opts.onEvent({ name, text: stripAnsi(b.toString()) });
-    child.stdout?.on('data', on);
-    child.stderr?.on('data', on);
+    // 二つの流れに一つの読み手を使い回さない。持ち越しが混ざって両方化ける。
+    const on = (read: (c: Buffer) => string) => (b: Buffer) => {
+      this.#opts.onEvent({ name, text: stripAnsi(read(b)) });
+    };
+    child.stdout?.on('data', on(chunkReader()));
+    child.stderr?.on('data', on(chunkReader()));
     child.on('error', (e) => this.#opts.onEvent({ name, text: `${e.message}\n` }));
     child.on('close', (code) => {
       this.#child = undefined;

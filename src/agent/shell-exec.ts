@@ -3,6 +3,7 @@
  * ツール(run_command)と検証ループの両方から使う。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { chunkReader } from '../core/text.ts';
 
 /**
  * 実行中の一群を根ごと止める。
@@ -105,13 +106,13 @@ export function execCommand(
     };
     signal.addEventListener('abort', onAbort, { once: true });
 
-    const append = (b: Buffer) => {
-      out += b.toString();
+    const append = (read: (c: Buffer) => string) => (b: Buffer) => {
+      out += read(b);
       // 出力が暴走しても壊れないよう、末尾だけ残す
       if (out.length > maxOutputBytes) out = out.slice(-maxOutputBytes);
     };
-    child.stdout?.on('data', append);
-    child.stderr?.on('data', append);
+    child.stdout?.on('data', append(chunkReader()));
+    child.stderr?.on('data', append(chunkReader()));
 
     child.on('error', (e) => finish({ code: null, output: `${out}\n${e.message}`, timedOut: false, aborted: false }));
     child.on('close', (code) => finish({ code, output: out, timedOut: false, aborted: false }));

@@ -9,6 +9,7 @@ import { totalmem } from 'node:os';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { type MachineSpec, GB } from './spec.ts';
+import { chunkReader } from '../core/text.ts';
 
 export interface DetectedMachine extends MachineSpec {
   gpuName?: string;
@@ -81,7 +82,8 @@ function run(cmd: string, args: string[]): Promise<string | undefined> {
       return resolve(undefined);
     }
     let out = '';
-    child.stdout?.on('data', (b: Buffer) => { out += b.toString(); });
+    const read = chunkReader();
+    child.stdout?.on('data', (b: Buffer) => { out += read(b); });
     child.on('error', () => resolve(undefined));
     child.on('close', (code) => resolve(code === 0 ? out : undefined));
   });

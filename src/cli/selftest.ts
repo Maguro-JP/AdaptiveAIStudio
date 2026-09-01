@@ -22,6 +22,7 @@ import { defaultModelsDir } from '../runtime/model-install.ts';
 import { pickAsset } from '../runtime/llama-release.ts';
 import { loadConfig } from '../config.ts';
 import { padTo, displayWidth } from './width.ts';
+import { chunkReader } from '../core/text.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -158,9 +159,9 @@ function run(command: string, args: string[], cwd = process.cwd()): Promise<{ te
   return new Promise((resolve) => {
     let text = '';
     const child = spawn(command, args, { cwd });
-    const on = (b: Buffer) => { text += b.toString(); };
-    child.stdout?.on('data', on);
-    child.stderr?.on('data', on);
+    const on = (read: (c: Buffer) => string) => (b: Buffer) => { text += read(b); };
+    child.stdout?.on('data', on(chunkReader()));
+    child.stderr?.on('data', on(chunkReader()));
     child.on('error', (e) => resolve({ text: e.message }));
     child.on('close', () => resolve({ text }));
   });

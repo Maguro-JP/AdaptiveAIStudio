@@ -24,6 +24,7 @@ import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.ts';
 import { listenOrExplain } from '../core/listen.ts';
+import { chunkReader } from '../core/text.ts';
 
 /**
  * 待つ口。**決め打ちにする。**
@@ -191,7 +192,8 @@ export class InProcRuntime implements LocalRuntime {
 
     const raw = await new Promise<string>((resolve) => {
       let text = '';
-      req.on('data', (c: Buffer) => { text += c.toString(); });
+      const read = chunkReader();
+      req.on('data', (c: Buffer) => { text += read(c); });
       req.on('end', () => resolve(text));
     });
     let body: ChatRequest;

@@ -17,6 +17,7 @@ import { explainExitCode } from './llama-diagnosis.ts';
 import { binDir } from '../core/home.ts';
 import { unzip } from './unzip.ts';
 import { runtimeEnv } from './llama-env.ts';
+import { chunkReader } from '../core/text.ts';
 
 export interface InstallOptions {
   /** 置き場。既定は ~/.aas/bin */
@@ -213,8 +214,11 @@ async function tryRun(command: string, signal?: AbortSignal): Promise<{ ok: bool
   return new Promise((resolve) => {
     let out = '';
     const child = spawn(command, ['--version'], { env: runtimeEnv(command), signal });
-    child.stdout?.on('data', (b: Buffer) => { out += b.toString(); });
-    child.stderr?.on('data', (b: Buffer) => { out += b.toString(); });
+    // 流れごとに別の読み手。持ち越しを混ぜると、両方が化ける。
+    const readOut = chunkReader();
+    const readErr = chunkReader();
+    child.stdout?.on('data', (b: Buffer) => { out += readOut(b); });
+    child.stderr?.on('data', (b: Buffer) => { out += readErr(b); });
     child.on('error', (e) => resolve({ ok: false, detail: e.message }));
     // --version は版によって終了コードが違う。番号ではなく、
     // 「起動できて何か言えたか」で見る。

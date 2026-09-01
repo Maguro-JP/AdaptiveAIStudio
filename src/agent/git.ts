@@ -4,6 +4,7 @@
  * 巻き戻し先が無くなるため、開始前に必ず確認する。
  */
 import { spawn } from 'node:child_process';
+import { chunkReader } from '../core/text.ts';
 
 export type GitState =
   | { kind: 'clean'; branch: string }
@@ -52,9 +53,9 @@ function run(cmd: string, args: string[], cwd: string) {
   return new Promise<{ code: number; out: string }>((resolve) => {
     const child = spawn(cmd, args, { cwd });
     let out = '';
-    const append = (b: Buffer) => { out += b.toString(); };
-    child.stdout?.on('data', append);
-    child.stderr?.on('data', append);
+    const append = (read: (c: Buffer) => string) => (b: Buffer) => { out += read(b); };
+    child.stdout?.on('data', append(chunkReader()));
+    child.stderr?.on('data', append(chunkReader()));
     child.on('error', (e) => resolve({ code: -1, out: e.message }));
     child.on('close', (code) => resolve({ code: code ?? -1, out }));
   });

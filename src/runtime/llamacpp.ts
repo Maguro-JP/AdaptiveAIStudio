@@ -19,6 +19,7 @@ import { readGguf } from './gguf.ts';
 import { toModelSpec } from './gguf-spec.ts';
 import type { MachineSpec, ModelSpec } from './spec.ts';
 import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.ts';
+import { lineReader } from '../core/text.ts';
 
 export interface LlamaCppOptions {
   /** llama-server の実行パス */
@@ -172,13 +173,16 @@ export class LlamaCppRuntime implements LocalRuntime {
     let exited: { code: number | null; detail: string } | undefined;
     let stderrTail = '';
 
-    const capture = (b: Buffer) => {
-      const text = b.toString();
-      stderrTail = (stderrTail + text).slice(-4000);
-      for (const line of text.split('\n')) if (line.trim()) this.#opts.onLog?.(line.trim());
+    // 塊の切れ目は、文字の切れ目でも行の切れ目でもない。
+    // そのまま split すると、一行が二行に割れて流れに出る。
+    const capture = (lines: ReturnType<typeof lineReader>) => (b: Buffer) => {
+      for (const line of lines.push(b)) {
+        stderrTail = (stderrTail + line + '\n').slice(-4000);
+        if (line.trim()) this.#opts.onLog?.(line.trim());
+      }
     };
-    child.stdout?.on('data', capture);
-    child.stderr?.on('data', capture);
+    child.stdout?.on('data', capture(lineReader()));
+    child.stderr?.on('data', capture(lineReader()));
     child.on('error', (e) => { exited = { code: null, detail: e.message }; });
     child.on('exit', (code) => {
       // 末尾5行では足りない。llama.cpp は原因が何であれ最後は
