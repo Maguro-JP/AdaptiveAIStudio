@@ -184,7 +184,15 @@ export interface RuntimeConfig {
    *   llamacpp : 自前。オフロード層数を自分で決める。限界を攻める用途
    * 両方を並存させ、片方が壊ってももう片方で動くようにする。
    */
-  kind?: 'ollama' | 'llamacpp';
+  /**
+   * どうやってモデルを動かすか。
+   *   ollama    別に立てたものへ繋ぐ
+   *   llamacpp  llama-server を起こす（実行ファイルが一つ増える）
+   *   inproc    このプログラムの中で読む（増えるのはライブラリだけ）
+   *
+   * 実行ファイルを置けない機械では inproc だけが道になる。
+   */
+  kind?: 'ollama' | 'llamacpp' | 'inproc';
   /** llamacpp: llama-server の実行パス */
   command?: string;
   /** llamacpp: command の直後に付ける固定引数（ラッパースクリプト経由の起動用） */

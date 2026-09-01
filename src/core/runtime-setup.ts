@@ -4,9 +4,11 @@
  */
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { modelsDir } from './home.ts';
 import type { AasConfig } from '../config.ts';
 import type { LocalRuntime } from '../runtime/local-runtime.ts';
 import { LlamaCppRuntime } from '../runtime/llamacpp.ts';
+import { InProcRuntime } from '../runtime/inproc.ts';
 import { OllamaRuntime } from '../runtime/ollama.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
 import type { MachineSpec } from '../runtime/spec.ts';
@@ -17,6 +19,16 @@ export async function buildRuntime(
   onLog?: (line: string) => void,
 ): Promise<LocalRuntime> {
   const rc = config.runtime ?? {};
+
+  // このプログラムの中で読む。**二つ目の実行ファイルを置けない機械**では
+  // これだけが道になる。GGUF を置き場に入れておけば、それを読む。
+  if (rc.kind === 'inproc') {
+    return new InProcRuntime({
+      modelsDir: rc.modelsDir ?? modelsDir(),
+      ...(onLog ? { onLog } : {}),
+    });
+  }
+
   if (rc.kind !== 'llamacpp') {
     const ollama = config.providers.find((p) => p.kind === 'openai-compatible' && p.locality === 'local');
     return new OllamaRuntime({ baseUrl: ollama?.baseUrl });

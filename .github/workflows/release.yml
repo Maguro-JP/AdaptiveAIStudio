@@ -54,6 +54,33 @@ jobs:
       # 型検査に要るものだけ入れる。持ち運び先でも検査を回せるように同梱する。
       - run: npm ci --no-audit --no-fund
 
+      # モデルを中で読むためのライブラリ。**実行ファイルは増えない**
+      # （中身は .dll と .node だけ）。二つ目の実行ファイルを置けない
+      # 機械では、これだけが道になる。
+      #
+      # 配る相手は決まっているので、その分だけ入れる。
+      - name: モデルを読むライブラリを入れる（win-x64 の分だけ）
+        run: |
+          # --omit=optional で、全機械むけの binary を持ってこない。
+          # そのまま叩くと CUDA 版・mac 版・arm 版まで来て 1.1GB になる
+          # （--os / --cpu は効かなかった。試した）。
+          # --ignore-scripts が要る。付けないと postinstall が llama.cpp の
+          # ソースを取ってきて手元で組み、292MB 増える（Linux むけの物なので
+          # 配る相手には要らない）。
+          npm install --no-save --no-audit --no-fund --omit=optional \
+            --ignore-scripts node-llama-cpp
+          # 配る相手の分だけ、名指しで入れる。組み立てているのは Linux
+          # なので、--force が要る（入れる先が Windows のため）。
+          npm install --no-save --no-audit --no-fund --omit=optional --force \
+            --ignore-scripts @node-llama-cpp/win-x64
+          ls node_modules/@node-llama-cpp
+          test -d node_modules/@node-llama-cpp/win-x64
+          # 実行ファイルが増えないことが、この道の要点。0個であることを見る。
+          test "$(find node_modules/@node-llama-cpp -name '*.exe' | wc -l)" -eq 0
+          # 組んだ跡が残っていたら落とす（Linux むけなので配らない）。
+          rm -rf node_modules/node-llama-cpp/llama
+          du -sh node_modules
+
       - name: Windows 用の Node を取ってくる（同梱する中身）
         run: curl -fL --retry 3 -o node.exe "https://nodejs.org/dist/${NODEVER}/win-x64/node.exe"
 
