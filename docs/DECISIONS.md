@@ -364,3 +364,7 @@ NetVision の `backend/app/services/llm_inproc.py` に、答えがそのまま�
   Linux むけなので配る相手には要らない）→ `--ignore-scripts`
 
 結果、配布物は 42MB（node 抜き・実測）。`.exe` は0個。
+
+**インストーラ側にも同じものを入れる。**抜かすと「setup.exe だけ
+モデルを中で読めない」という食い違いになる。アンインストールは
+`RMDir /r "$INSTDIR\app"` が node_modules ごと消すので、そのままでよい。

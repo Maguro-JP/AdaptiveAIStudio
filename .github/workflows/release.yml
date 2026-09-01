@@ -168,6 +168,19 @@ jobs:
 
       - run: npm ci --no-audit --no-fund
 
+      # portable と同じものを入れる。ここを抜かすと **setup.exe だけ
+      # モデルを中で読めない**、という食い違いになる。
+      - name: モデルを読むライブラリを入れる（win-x64 の分だけ）
+        shell: bash
+        run: |
+          npm install --no-save --no-audit --no-fund --omit=optional \
+            --ignore-scripts node-llama-cpp
+          npm install --no-save --no-audit --no-fund --omit=optional --force \
+            --ignore-scripts @node-llama-cpp/win-x64
+          test -d node_modules/@node-llama-cpp/win-x64
+          test "$(find node_modules/@node-llama-cpp -name '*.exe' | wc -l)" -eq 0
+          rm -rf node_modules/node-llama-cpp/llama
+
       - name: Node を取ってくる（同梱用）
         shell: bash
         run: curl -fL --retry 3 -o node.exe "https://nodejs.org/dist/${NODEVER}/win-x64/node.exe"
