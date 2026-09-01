@@ -24,6 +24,7 @@ import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.ts';
 import { listenOrExplain } from '../core/listen.ts';
+import { crossSiteReason } from '../ui/origin.ts';
 import { chunkReader } from '../core/text.ts';
 
 /**
@@ -177,6 +178,14 @@ export class InProcRuntime implements LocalRuntime {
   }
 
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // 画面の口と同じ。よその頁・よその名前から叩かせない。
+    // 127.0.0.1 にしか開いていなくても、ブラウザは何処の頁からでも届く。
+    const refused = crossSiteReason(req.headers, req.method ?? 'GET');
+    if (refused) {
+      res.writeHead(403, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: refused } }));
+      return;
+    }
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     if (url.pathname.endsWith('/models')) {
       // 繋がるかの確認に使われる。読み込んでいるものを答える。

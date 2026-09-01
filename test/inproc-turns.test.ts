@@ -183,3 +183,24 @@ describe('同じものを二度読まない', () => {
     assert.equal(tries, 2);
   });
 });
+
+describe('モデルの口も、よそから叩かせない', () => {
+  test('Origin がよそなら断る', async () => {
+    const { dir, ref } = await withModel();
+    const { load } = slowLib(1);
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
+    running.push(rt);
+    const { baseUrl } = await rt.ensureLoaded(ref);
+    const r = await ask(baseUrl, ref, 'x', { headers: { 'content-type': 'text/plain', origin: 'https://evil.example' } });
+    assert.equal(r.status, 403);
+  });
+
+  test('何も付いていなければ通る（対）', async () => {
+    const { dir, ref } = await withModel();
+    const { load } = slowLib(1);
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
+    running.push(rt);
+    const { baseUrl } = await rt.ensureLoaded(ref);
+    assert.equal((await ask(baseUrl, ref, 'x')).status, 200);
+  });
+});
