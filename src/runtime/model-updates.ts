@@ -93,6 +93,24 @@ export async function findNewerOllama(opts: {
   return findings;
 }
 
+/**
+ * 配布元の名前として、受け取ってよい形か。
+ *
+ * ここは**外から来た文字列がそのまま手元へ入る**数少ない場所。
+ * Hugging Face の置き場名は誰でも作れるので、名前そのものに
+ * 何を書かれていてもおかしくない。持ち帰った名前は利用者に見せ、
+ * 整備担当（QUARTERMASTER）の目にも入る。
+ *
+ * ここでは**中身を疑うより、形を強制する**。
+ * 置き場名の形は決まっている（`namespace/name`、英数字と `.` `-` `_` だけ）ので、
+ * その形から外れたものは、名前ではない何かとして捨てられる。
+ * 当てはめで怪しい文言を探すより、こちらの方が漏れが無い。
+ */
+export function looksLikeRepoId(id: string): boolean {
+  if (id.length === 0 || id.length > 120) return false;
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id);
+}
+
 export interface HfModel {
   id: string;
   lastModified?: string;
@@ -125,6 +143,8 @@ export async function findRecentGguf(opts: {
   const json = await res.json() as Array<{ id?: string; lastModified?: string; downloads?: number }>;
   return (Array.isArray(json) ? json : [])
     .filter((m): m is HfModel => typeof m.id === 'string')
+    // 名前の形をしていないものは、名前ではない。持ち帰らない。
+    .filter((m) => looksLikeRepoId(m.id))
     .map((m) => ({ id: m.id, lastModified: m.lastModified, downloads: m.downloads }));
 }
 
