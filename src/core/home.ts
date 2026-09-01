@@ -19,9 +19,28 @@ import { existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** この道具そのものが置かれている場所。 */
+/** この道具の中身が置かれている場所（配布版では app/）。 */
 export function installRoot(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+}
+
+/**
+ * 製品としての根。利用者が見るフォルダ。
+ *
+ * 配布版はこういう形にしてある。開発中の作業場も、同じ関数で扱える。
+ *
+ *   AdaptiveAIStudio\        ← ここが返る
+ *     AdaptiveAIStudio.cmd    押せばいい入口
+ *     app\                   中身。触らなくてよい ← installRoot()
+ *     runtime\node.exe       同梱の Node
+ *     data\                  記録・モデル・実行ファイル
+ */
+export function productRoot(from = installRoot()): string {
+  // 目印は製品の根に置く。中身（app）の一つ上にあることもある。
+  if (existsSync(join(from, 'portable.txt'))) return from;
+  const up = resolve(from, '..');
+  if (existsSync(join(up, 'portable.txt'))) return up;
+  return from;
 }
 
 /**
@@ -30,8 +49,9 @@ export function installRoot(): string {
  * 目印のファイルがあるかどうかで決める。環境変数ではなく**置かれ方**で決めるので、
  * フォルダを渡すだけで持ち運びになる。受け取った側は何も設定しなくてよい。
  */
-export function isPortable(root = installRoot()): boolean {
-  return existsSync(join(root, 'portable.txt'));
+export function isPortable(from = installRoot()): boolean {
+  return existsSync(join(from, 'portable.txt'))
+    || existsSync(join(resolve(from, '..'), 'portable.txt'));
 }
 
 /**
@@ -46,7 +66,7 @@ export function aasHome(root = installRoot()): string {
   const explicit = process.env.AAS_HOME;
   if (explicit && explicit.trim().length > 0) return explicit;
 
-  if (isPortable(root)) return join(root, 'aas-home');
+  if (isPortable(root)) return join(productRoot(root), 'data');
 
   return join(homedir(), '.aas');
 }

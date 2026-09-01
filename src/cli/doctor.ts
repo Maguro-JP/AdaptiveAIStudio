@@ -17,6 +17,7 @@ import { readdir } from 'node:fs/promises';
 import { formatChecks, summaryLine, type Check, type Level } from './doctor-view.ts';
 import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
+import { currentVersion, describeVersion } from '../core/version.ts';
 import { resolve } from 'node:path';
 
 /** Windows と Unix でコマンドが違うものは、その環境のものを出す。 */
@@ -40,6 +41,9 @@ const add = (name: string, level: Level, detail: string, fix?: string) =>
 
 const [major, minor] = process.versions.node.split('.').map(Number);
 const nodeOk = (major ?? 0) > 22 || ((major ?? 0) === 22 && (minor ?? 0) >= 6);
+// 版を最初に出す。**貼ってもらった検査結果が、どの版のものか分からないと、
+// 直したはずのものが直っていないように見える。**実際に一度そうなった。
+add('版', 'ok', describeVersion(await currentVersion()));
 add('Node.js', nodeOk ? 'ok' : 'bad', `v${process.versions.node}`,
   nodeOk ? undefined
     : 'v22.6 以降が要ります（型を剥がしながら実行する機能を使うため）。https://nodejs.org から入れ直してください。');

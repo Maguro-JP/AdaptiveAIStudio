@@ -22,7 +22,12 @@ import { execFileSync } from 'node:child_process';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** 持ち運び版に入れるもの。入れないものではなく、**入れるものを挙げる**。 */
+/**
+ * 中身（app/ に入るもの）。入れないものではなく、**入れるものを挙げる**。
+ *
+ * 利用者が開いて意味の分かるもの（入口・使い方・記録）は app の外に出す。
+ * 開けた瞬間に「どれを押せばいいのか」が分かる形にするため。
+ */
 export const PAYLOAD = [
   'src',
   'scripts',
@@ -48,9 +53,25 @@ function arg(name, fallback) {
 }
 
 /** 中身を並べる。試験から呼べるように、副作用を out だけに閉じる。 */
-export async function bundle({ out, nodeZip, srcRoot = root, log = () => {} }) {
+/**
+ * 製品の形に組み立てる。
+ *
+ *   AdaptiveAIStudio\
+ *     AdaptiveAIStudio.cmd   押せばいい入口。これ以外は触らなくてよい
+ *     はじめに.txt           使い方（1枚）
+ *     app\                  中身
+ *     runtime\node.exe      同梱の Node
+ *     data\                 記録・モデル・実行ファイル（動かすと出来る）
+ *     portable.txt           持ち運びの目印。版もここに書く
+ *
+ * 開発中の作業場をそのまま渡すと、利用者は src と node_modules と
+ * tsconfig.json を同じ高さで見ることになる。どれを押せばいいか分からない。
+ * **触ってよいものだけを表に出す。**
+ */
+export async function bundle({ out, nodeZip, srcRoot = root, version, log = () => {} }) {
   await rm(out, { recursive: true, force: true });
-  await mkdir(out, { recursive: true });
+  const app = join(out, 'app');
+  await mkdir(app, { recursive: true });
 
   for (const item of PAYLOAD) {
     const from = join(srcRoot, item);
@@ -60,45 +81,77 @@ export async function bundle({ out, nodeZip, srcRoot = root, log = () => {} }) {
       log(`  ない: ${item}（飛ばします）`);
       continue;
     }
-    await cp(from, join(out, item), { recursive: true });
-    log(`  入れた: ${item}`);
+    await cp(from, join(app, item), { recursive: true });
+    log(`  入れた: app/${item}`);
   }
 
-  // 目印。これがあると、記録もモデルもこのフォルダの中に閉じる。
+  // 入口。押せばいいものが一つだけ表にある形にする。
+  await writeFile(join(out, 'AdaptiveAIStudio.cmd'),
+    ['@echo off', 'call "%~dp0app\\start.cmd" %*'].join('\r\n') + '\r\n', 'utf8');
+  log('  置いた: AdaptiveAIStudio.cmd（入口）');
+
+  await writeFile(join(out, 'はじめに.txt'),
+    [
+      'AdaptiveAIStudio',
+      '',
+      '  AdaptiveAIStudio.cmd をダブルクリックしてください。',
+      '',
+      'このフォルダについて',
+      '',
+      '  app        中身です。触らなくてかまいません。',
+      '  runtime    同梱の Node です。この機械には何も入れていません。',
+      '  data       記録・モデル・実行ファイルが入ります（動かすと出来ます）。',
+      '',
+      'この機械には何も残りません。このフォルダごと消せば、跡形もなくなります。',
+      '',
+      'いまの版は portable.txt に書いてあります。',
+      '新しくするときは、入口の「7 新しくする」を選んでください。',
+    ].join('\r\n') + '\r\n', 'utf8');
+  log('  置いた: はじめに.txt');
+
+  // 目印。これがあると、記録もモデルも data/ に閉じる。
+  // **版をここに書く。**配布物は git の管理下に無いので、
+  // 版が見えないと、古いものを新しいと思って確かめてしまう。
   await writeFile(join(out, 'portable.txt'),
     [
       'このフォルダは「持ち運び版」です。',
       '',
-      '記録・モデル・実行ファイルは、すべて隣の aas-home に入ります。',
+      `version: ${version ?? '(不明)'}`,
+      `built:   ${new Date().toISOString()}`,
+      '',
+      '記録・モデル・実行ファイルは、すべて data\\ に入ります。',
       'この機械には何も残りません。フォルダごと消せば、跡形もなくなります。',
       '',
-      '始め方: start.cmd をダブルクリック',
-    ].join('\n'), 'utf8');
-  log('  入れた: portable.txt（持ち運びの目印）');
+      '始め方: AdaptiveAIStudio.cmd をダブルクリック',
+    ].join('\r\n') + '\r\n', 'utf8');
+  log(`  置いた: portable.txt（目印と版 ${version ?? '不明'}）`);
 
   if (nodeZip) {
-    await mkdir(join(out, 'node'), { recursive: true });
+    await mkdir(join(out, 'runtime'), { recursive: true });
     // zip の中は node-vXX-win-x64/ の一階層下にある。平らに移す。
-    const tmp = join(out, '.node-tmp');
+    const tmp = join(out, '.runtime-tmp');
     await mkdir(tmp, { recursive: true });
     execFileSync('tar', ['-xf', nodeZip, '-C', tmp], { stdio: 'inherit' });
     const { readdir } = await import('node:fs/promises');
     const [inner] = await readdir(tmp);
-    await cp(join(tmp, inner), join(out, 'node'), { recursive: true });
+    await cp(join(tmp, inner), join(out, 'runtime'), { recursive: true });
     await rm(tmp, { recursive: true, force: true });
-    log(`  入れた: node（同梱。${inner}）`);
+    log(`  入れた: runtime（同梱の Node。${inner}）`);
   } else {
     log('  Node は同梱していません（--node-zip で渡せます）');
   }
 
   const pkg = JSON.parse(await readFile(join(srcRoot, 'package.json'), 'utf8'));
-  return { out, version: pkg.version, bundledNode: Boolean(nodeZip) };
+  return { out, version: version ?? pkg.version, bundledNode: Boolean(nodeZip) };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const out = resolve(root, arg('--out', 'dist/aas-portable'));
   console.log('持ち運び版を組み立てます');
-  const r = await bundle({ out, nodeZip: arg('--node-zip'), log: (l) => console.log(l) });
+  const r = await bundle({
+    out, nodeZip: arg('--node-zip'), version: arg('--version'),
+    log: (l) => console.log(l),
+  });
   console.log(`\n  できました: ${r.out}`);
   console.log(`  版: ${r.version} / Node 同梱: ${r.bundledNode ? 'あり' : 'なし'}`);
 }
