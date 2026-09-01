@@ -136,6 +136,20 @@ describe('バッチファイル', () => {
     }
   });
 
+  test('同じラベルを二つ置かない', async () => {
+    // 継ぎ足しを繰り返して :badChoice と :exeStripped が二重になった。
+    // cmd.exe は先に見つけたほうへ飛ぶので、後ろの中身は死ぬ。
+    // 落ちもせず、ただ黙って別の場所へ流れる。
+    for (const path of await batchFiles()) {
+      const labels = (await read(path)).split(/\r?\n/)
+        .filter((l) => /^:[A-Za-z]/.test(l))
+        .map((l) => l.trim().toLowerCase());
+      const seen = new Set<string>();
+      const dup = labels.filter((l) => (seen.has(l) ? true : (seen.add(l), false)));
+      assert.deepEqual(dup, [], `${path} に同じラベルが二つある: ${dup.join(', ')}`);
+    }
+  });
+
   test('この検査自体が、1行の括弧を見落とさない', () => {
     // 前の検査は行をまたぐ塊しか見ておらず、実際に壊れた形を見逃した。
     assert.equal(insideParens('where node || (echo みつかりません & pause)').length, 1);

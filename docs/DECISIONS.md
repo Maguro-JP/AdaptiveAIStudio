@@ -239,3 +239,14 @@ Z:（PassageDrive / OneDrive）へ展開したところ、`runtime\node.exe` だ
 - `scripts/run.mjs` は `process.execPath` を使うので、元から名前に依らない
 
 **本番の道（.exe）には触っていない。**後ろに足しただけ。
+
+---
+
+## 2026-09-01  バッチに文字列を継ぎ足さない
+
+`:badChoice` と `:exeStripped` が二重になっていた。`goto :badChoice` の行に
+置換が当たり、飛び先が増えていた。cmd.exe は先に見つけたほうへ飛ぶので、
+**落ちもせず、黙って別の場所へ流れる。**選んだ番号が違っても素通りしていた。
+
+- 継ぎ足しを重ねたら、書き直す。今回 `start.cmd` は1本書き直した。
+- 同じラベルが二つ無いことを `test/batch.test.ts` で見る。

@@ -5,60 +5,57 @@ rem
 rem  ダブルクリックで開く入口。npm を覚えていなくても始められる。
 rem  引数を付ければ、選ぶところは飛ばせる:  start.cmd ui
 rem
+rem  ■ このファイルは CP932 で保存する。UTF-8 にしない
+rem
+rem  cmd.exe はバッチを console の文字集合（日本語 Windows なら CP932）
+rem  として読む。UTF-8 で置くと日本語が化けるだけでなく行が壊れる。
+rem  BOM を付けても直らず、1 行目の @echo off まで効かなくなる。
+rem  chcp 65001 も要らない（ファイルも console も CP932 で揃うため）。
+rem
 rem  ■ 日本語を ( ) の中に書かない
 rem
 rem  cmd.exe は括弧の塊をまとめて解釈する。そこに多バイト文字が入ると
-rem  行が壊れ、**壊れた断片をコマンドとして実行する**。
-rem  実際にこうなった:
-rem      'de\' is not recognized as an internal or external command,
-rem      '□か、' is not recognized as an internal or external command,
-rem  だから分岐は goto で書き、日本語は括弧の外だけに置く。
-rem
-rem  先頭に BOM を付けてあるのも同じ理由。無いと cmd.exe は
-rem  この中身を console の文字集合（日本語 Windows なら CP932）として
-rem  読むので、UTF-8 の日本語が化ける。
+rem  行が壊れ、壊れた断片をコマンドとして実行する。
+rem  だから分岐は goto で書き、日本語はラベルの中だけに置く。
 rem
 rem  この窓は、失敗しても勝手に閉じない。
-rem  一瞬で閉じて何も分からない、が一番困るため。
 rem ============================================================
 setlocal
 cd /d "%~dp0"
 title AdaptiveAIStudio
 
 rem --- Node を探す -----------------------------------------
-rem 同梱していれば、そちらを使う。会社の機械のように
-rem 何も入れられない場所では、これだけが頼りになる。
-rem 製品の形（app\ の隣の runtime\）を先に見る。
 rem `..` を含んだまま探さない。割り当てドライブ（Z: など）や
 rem OneDrive の下だと、そのままでは見つけられないことがある。
-rem for %%i in ("...") do %%~fi で、実際の道に直してから見る。
 set "HERE=%~dp0"
 for %%i in ("%~dp0..") do set "UP=%%~fi"
 
 set "BUNDLED="
-if exist "%UP%\runtime\node.exe" set "BUNDLED=%UP%\runtime"
-rem 同梱版の目印はあるのに node.exe が無い、という形を先に見る。
-rem 会社のクラウドドライブ（OneDrive・PassageDrive など）へ展開すると、
-rem .exe だけが黙って落ちる。利用者は「同梱と言ったのに無い」としか見えない。
 set "NODEFILE=node.exe"
-if defined BUNDLED goto :bundled
 
-rem 会社のクラウドドライブは .exe を落とす。中身ではなく名前で落とすので、
+rem 製品の形（app\ の隣の runtime\）を先に見る。
+if not exist "%UP%\runtime\node.exe" goto :tryBin
+set "BUNDLED=%UP%\runtime"
+goto :bundled
+
+:tryBin
+rem 会社のクラウドドライブは、中身ではなく **名前を見て** .exe を落とす。
 rem .bin なら置ける（Z: で実測。92,534,088 バイトそのまま書けた）。
 rem cmd.exe は PATHEXT に載っている拡張子をそのまま実行するので、
 rem 名前が違うだけで、呼び方は何も変わらない。
-if not exist "%UP%\runtime\node.bin" goto :noBin
+if not exist "%UP%\runtime\node.bin" goto :tryHere
 set "BUNDLED=%UP%\runtime"
 set "NODEFILE=node.bin"
 goto :bundled
-:noBin
 
-if not exist "%UP%\.portable" goto :noMarker
-goto :exeStripped
-:noMarker
+:tryHere
 if exist "%HERE%runtime\node.exe" set "BUNDLED=%HERE%runtime"
 if exist "%HERE%node\node.exe" set "BUNDLED=%HERE%node"
 if defined BUNDLED goto :bundled
+
+rem 同梱版の目印はあるのに Node が無い、という形をここで見分ける。
+rem クラウドドライブが .exe を落としたときに起きる。
+if exist "%UP%\.portable" goto :exeStripped
 
 where node >nul 2>nul
 if errorlevel 1 goto :noNode
@@ -70,9 +67,8 @@ goto :haveNode
 :bundled
 set "NODE=%BUNDLED%\%NODEFILE%"
 set "PATH=%BUNDLED%;%PATH%"
-rem .bin をそのまま呼ぶための一手。cmd.exe と、ここから起こす子の
-rem どちらにも効かせたいので、環境変数として渡す。
 if "%NODEFILE%"=="node.exe" goto :extDone
+rem .bin をそのまま呼ぶための一手。子の cmd にも効かせたいので環境変数で渡す。
 set "PATHEXT=%PATHEXT%;.BIN"
 set "NODE=node"
 :extDone
@@ -87,7 +83,11 @@ set "RUNNER=npm"
 echo   Node は同梱のものを使います
 
 :haveNode
-for /f "tokens=*" %%v in ('"%NODE%" -v') do set "NODEV=%%v"
+set "NODEV="
+for /f "tokens=*" %%v in ('"%NODE%" -v 2^>nul') do set "NODEV=%%v"
+rem 版が取れないのは、動かせていないということ。ここで止めないと
+rem 「この Node では動きません（）」という、何も分からない表示になる。
+if not defined NODEV goto :nodeSilent
 echo   Node %NODEV%
 
 rem --- 版を確かめる ----------------------------------------
@@ -137,24 +137,7 @@ if "%CHOICE%"=="7" set "TASK=update"
 if "%CHOICE%"=="8" set "TASK=selftest"
 if "%CHOICE%"=="9" set "TASK=clean"
 if "%CHOICE%"=="0" goto :quit
-if "%TASK%"=="" goto :exeStripped
-echo.
-echo   node.exe も node.bin もありません（他のファイルは揃っています）。
-echo.
-echo   いまの置き場所:
-echo     %UP%
-echo.
-echo   会社のクラウドドライブ（OneDrive・PassageDrive など）へ展開すると、
-echo   .exe だけが黙って落ちることがあります。書き込みが拒まれても、
-echo   展開する側は何も言わずに進みます。
-echo.
-echo   .exe を置ける場所へ展開し直してください。
-echo   会社の決まりで置ける場所が無いときは、この機械では動きません。
-echo.
-pause
-exit /b 1
-
-:badChoice
+if "%TASK%"=="" goto :badChoice
 
 :run
 echo.
@@ -199,7 +182,7 @@ echo   ブラウザで次を落として、node.exe をここへ置いてくだ�
 echo.
 echo     https://nodejs.org/dist/v24.18.0/win-x64/node.exe
 echo.
-echo     置き場所:  %~dp0node\node.exe
+echo     置き場所:  %HERE%node\node.exe
 echo.
 echo   フォルダ node を作って、その中に入れるだけです。
 echo   インストールではないので、管理者権限も要りません。
@@ -209,6 +192,7 @@ echo   ふつうに入れられるなら、https://nodejs.org/ の LTS 版でも
 echo.
 echo   ---- 探した場所 ----
 echo     %UP%\runtime\node.exe
+echo     %UP%\runtime\node.bin
 echo     %HERE%runtime\node.exe
 echo     %HERE%node\node.exe
 echo.
@@ -223,7 +207,7 @@ echo.
 echo   入れ直せないときは、置くだけで差し替えられます。
 echo   ブラウザで次を落として、node.exe をここへ置いてください。
 echo     https://nodejs.org/dist/v24.18.0/win-x64/node.exe
-echo     置き場所:  %~dp0node\node.exe
+echo     置き場所:  %HERE%node\node.exe
 echo   こちらが先に使われます。入っている Node はそのままで構いません。
 echo.
 pause
@@ -231,7 +215,7 @@ exit /b 1
 
 :exeStripped
 echo.
-echo   node.exe だけがありません（他のファイルは揃っています）。
+echo   同梱の Node がありません（他のファイルは揃っています）。
 echo.
 echo   いまの置き場所:
 echo     %UP%
@@ -240,9 +224,19 @@ echo   会社のクラウドドライブ（OneDrive・PassageDrive など）へ�
 echo   .exe だけが黙って落ちることがあります。書き込みが拒まれても、
 echo   展開する側は何も言わずに進みます。
 echo.
-echo   直し方: ZIP を C: の下に保存し直して、そこで展開してください。
-echo     例:  C:\Users\%USERNAME%\Desktop
-echo   右クリックから「すべて展開」で構いません。
+echo   .exe を置ける場所へ展開し直すか、.exe を含まない版を使ってください。
+echo   後者は Node の名前が node.bin になっているだけで、中身は同じです。
+echo.
+pause
+exit /b 1
+
+:nodeSilent
+echo.
+echo   同梱の Node を動かせませんでした。
+echo     %BUNDLED%\%NODEFILE%
+echo.
+echo   会社の設定で実行が止められているか、ファイルが壊れています。
+echo   大きさを見てください（90MB 前後が正しい）。
 echo.
 pause
 exit /b 1
