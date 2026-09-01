@@ -337,7 +337,7 @@ export class UiServer {
 
       // **先に確かめる。**モデルが無いまま送ると、繋ぎ先を待ち続けて
       // 画面は「考え中」のまま止まる。利用者からは固まったようにしか見えない。
-      const missing = await this.#whyNoModel();
+      const missing = await this.#readyToThink();
       if (missing) return send(res, 503, { error: missing });
 
       // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
@@ -361,7 +361,7 @@ export class UiServer {
 
       // **先に確かめる。**モデルが無いまま送ると、繋ぎ先を待ち続けて
       // 画面は「考え中」のまま止まる。利用者からは固まったようにしか見えない。
-      const missing = await this.#whyNoModel();
+      const missing = await this.#readyToThink();
       if (missing) return send(res, 503, { error: missing });
 
       send(res, 202, { accepted: true });
@@ -621,12 +621,26 @@ export class UiServer {
    * 無いことを黙って待たない。**待っている間、利用者は何も分からない。**
    * 繋ぎ先の応答待ちは数十秒になることがあり、その間ずっと「考え中」になる。
    */
-  async #whyNoModel(): Promise<string | undefined> {
+  async #readyToThink(): Promise<string | undefined> {
     const kind = this.#opts.config.runtime?.kind ?? 'ollama';
     try {
       const runtime = await this.#localRuntime();
       const models = await runtime.list();
-      if (models.length > 0) return undefined;
+      if (models.length > 0) {
+        // この中で読む道では、**読むまで口が立たない。**
+        // 先に読ませておかないと、上の層は繋がらない先を叩くことになる。
+        if (runtime.id === 'inproc' && runtime.loaded().length === 0) {
+          const ref = models[0]!.ref;
+          this.broadcast({ type: 'log', level: 'info', text: `モデルを読み込んでいます: ${ref}` });
+          const began = Date.now();
+          await runtime.ensureLoaded(ref);
+          this.broadcast({
+            type: 'log', level: 'info',
+            text: `読み込みました: ${ref}（${((Date.now() - began) / 1000).toFixed(1)} 秒）`,
+          });
+        }
+        return undefined;
+      }
     } catch (e) {
       return `モデルの一覧を取れません（${kind}）: ${(e as Error).message}\n`
         + '設定 → モデル で、動かし方を選び直せます。';

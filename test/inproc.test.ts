@@ -77,7 +77,7 @@ describe('中で読む', () => {
     const dir = await tempDir('aas-inproc-');
     await writeFile(join(dir, 'm.gguf'), 'x');
     const { load } = fakeLib('はい');
-    const rt = new InProcRuntime({ modelsDir: dir, load });
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
     const loaded = await rt.ensureLoaded('m.gguf');
 
     // 外に出る口を増やさない。127.0.0.1 だけ。
@@ -102,11 +102,36 @@ describe('中で読む', () => {
     assert.deepEqual(rt.loaded(), []);
   });
 
-  test('読み込んでいないものは、そう言う', async () => {
+  test('名前が食い違っても、一つしか無いならそれで答える', async () => {
+    // 上の層が言ってくる名前は、候補の決め方によって GGUF の名前と
+    // 一致しないことがある。一つしか読んでいないなら、それで答える。
+    // ただし**黙って替えない**。替えたことは記録に出す。
     const dir = await tempDir('aas-inproc2-');
     await writeFile(join(dir, 'm.gguf'), 'x');
-    const rt = new InProcRuntime({ modelsDir: dir, load: fakeLib().load });
+    const said: string[] = [];
+    const rt = new InProcRuntime({
+      modelsDir: dir, port: 0, load: fakeLib('はい').load, onLog: (l) => said.push(l),
+    });
     const { baseUrl } = await rt.ensureLoaded('m.gguf');
+    const r = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'よその.gguf', stream: true, messages: [{ role: 'user', content: 'や' }] }),
+    });
+    assert.equal(r.status, 200);
+    assert.equal((await readStream(r)).text, 'はい');
+    assert.ok(said.some((l) => l.includes('よその.gguf')), '替えたことを言っていない');
+    await rt.shutdown();
+  });
+
+  test('読み込んでいなければ、そう言う', async () => {
+    const dir = await tempDir('aas-inproc3-');
+    await writeFile(join(dir, 'a.gguf'), 'x');
+    await writeFile(join(dir, 'b.gguf'), 'x');
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: fakeLib().load });
+    const { baseUrl } = await rt.ensureLoaded('a.gguf');
+    await rt.ensureLoaded('b.gguf');
+    // 二つ読んでいるので、どれを指しているか決められない。勝手に選ばない。
     const r = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -143,7 +168,7 @@ describe('上の層が呼ぶとおりに答える', () => {
     const dir = await tempDir('aas-hist-');
     await writeFile(join(dir, 'm.gguf'), 'x');
     const { load, spy } = fakeLib('ok');
-    const rt = new InProcRuntime({ modelsDir: dir, load });
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
     const { baseUrl } = await rt.ensureLoaded('m.gguf');
 
     await fetch(`${baseUrl}/chat/completions`, {
@@ -176,7 +201,7 @@ describe('上の層が呼ぶとおりに答える', () => {
     // provider は /models を叩いて生死を見る。404 を返すと死んで見える。
     const dir = await tempDir('aas-mdl-');
     await writeFile(join(dir, 'm.gguf'), 'x');
-    const rt = new InProcRuntime({ modelsDir: dir, load: fakeLib().load });
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: fakeLib().load });
     const { baseUrl } = await rt.ensureLoaded('m.gguf');
     const r = await fetch(`${baseUrl}/models`);
     assert.equal(r.status, 200);
@@ -188,7 +213,7 @@ describe('上の層が呼ぶとおりに答える', () => {
   test('stream: false なら、まとめて返す', async () => {
     const dir = await tempDir('aas-once-');
     await writeFile(join(dir, 'm.gguf'), 'x');
-    const rt = new InProcRuntime({ modelsDir: dir, load: fakeLib('まとめて').load });
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: fakeLib('まとめて').load });
     const { baseUrl } = await rt.ensureLoaded('m.gguf');
     const r = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',

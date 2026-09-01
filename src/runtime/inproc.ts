@@ -163,11 +163,22 @@ export class InProcRuntime implements LocalRuntime {
       return;
     }
 
-    const ref = body.model ?? this.loaded()[0] ?? '';
-    const held = this.#sessions.get(ref);
+    // 上の層が言ってくる名前は、候補の決め方によって GGUF の名前と
+    // 一致しないことがある。読んでいるものが一つしか無いなら、それを使う。
+    // **黙って替えない。**替えたことは記録に出す。
+    let ref = body.model ?? '';
+    let held = this.#sessions.get(ref);
+    if (!held && this.loaded().length === 1) {
+      const only = this.loaded()[0]!;
+      if (ref && ref !== only) this.#opts.onLog?.(`${ref} は無いので ${only} で答えます`);
+      ref = only;
+      held = this.#sessions.get(ref);
+    }
     if (!held) {
       res.writeHead(400, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: { message: `読み込んでいません: ${ref}` } }));
+      res.end(JSON.stringify({
+        error: { message: `読み込んでいません: ${body.model ?? '(名前なし)'}` },
+      }));
       return;
     }
 
