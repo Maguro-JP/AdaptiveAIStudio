@@ -272,3 +272,33 @@ describe('読めるかどうかは、好みの前の問題', () => {
     assert.deepEqual(thin, [], `押せるものの文字が読みにくい:\n  ${thin.join('\n  ')}`);
   });
 });
+
+describe('選べるものは、効くようになっている', () => {
+  test('効果の名前に、対応する見た目がある', async () => {
+    // 名前で選ばせる作りなので、CSS 側が無いと**選べるのに何も起きない**。
+    // 落ちないので気づけない。板の見出しが抜けていたのと同じ型。
+    const { EFFECTS } = await import('../src/ui/theme.ts');
+    const { readFile } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const css = await readFile(join(here, '..', 'src', 'ui', 'web', 'style.css'), 'utf8');
+
+    const missing = EFFECTS.filter((e) => !css.includes(`[data-fx~="${e}"]`));
+    assert.deepEqual(missing, [], `選べるのに何も起きない効果がある: ${missing.join(', ')}`);
+  });
+
+  test('CSS にあるのに選べない効果を、残さない', async () => {
+    // 逆も見る。CSS だけ書いて名前を足し忘れると、誰も使えない。
+    const { EFFECTS } = await import('../src/ui/theme.ts');
+    const { readFile } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const css = await readFile(join(here, '..', 'src', 'ui', 'web', 'style.css'), 'utf8');
+
+    const used = new Set([...css.matchAll(/\[data-fx~="([a-z]+)"\]/g)].map((m) => m[1]!));
+    const orphan = [...used].filter((e) => !(EFFECTS as readonly string[]).includes(e));
+    assert.deepEqual(orphan, [], `CSS にあるのに選べない: ${orphan.join(', ')}`);
+  });
+});
