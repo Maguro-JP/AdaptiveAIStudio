@@ -18,6 +18,7 @@ import { formatChecks, summaryLine, type Check, type Level } from './doctor-view
 import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
+import { installRoot } from '../core/home.ts';
 import { resolve } from 'node:path';
 
 /** Windows と Unix でコマンドが違うものは、その環境のものを出す。 */
@@ -131,6 +132,34 @@ if (llamaPath) {
 }
 // runtime.kind が llamacpp でなく、用意もしていない場合は何も言わない。
 // 使っていないものが足りないのは、問題ではない。
+
+/* ---------- モデルを読むライブラリ ---------- */
+
+// この中で読む道は、ライブラリが要る。配布物には入っているが、
+// 作業コピーには入っていない。**動かす直前まで分からない**のが困るので、
+// ここで先に言う。
+if (runtime.id === 'inproc') {
+  try {
+    await import('node-llama-cpp');
+    add('モデルを読むもの', 'ok', 'node-llama-cpp（実行ファイルは増えません）');
+  } catch (e) {
+    // 入っていないのか、この機械むけの binary が無いのかを分ける。
+    // 「入っていません」と言われて npm install しても直らない、が起きる。
+    const { stat } = await import('node:fs/promises');
+    const here = join(installRoot(), 'node_modules', 'node-llama-cpp');
+    const installed = await stat(here).then(() => true, () => false);
+    add('モデルを読むもの', 'bad',
+      installed
+        ? 'node-llama-cpp はあるが、この機械むけの binary がありません'
+        : 'node-llama-cpp が入っていません',
+      (installed
+        ? `${process.platform}-${process.arch} の分を入れてください:\n`
+          + `  npm install --no-save --omit=optional --ignore-scripts @node-llama-cpp/${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}\n`
+        : '配布物には入っています。作業コピーで使うときは:\n'
+          + '  npm install --no-save --omit=optional --ignore-scripts node-llama-cpp\n')
+      + `詳しくは docs/LOCAL-MODEL.md（${(e as Error).message.slice(0, 80)}）`);
+  }
+}
 
 /* ---------- 繋ぎ先 ---------- */
 
