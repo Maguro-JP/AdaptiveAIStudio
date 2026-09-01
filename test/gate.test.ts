@@ -528,3 +528,30 @@ describe('依頼文は英語で書く', () => {
     assert.match(sent.system, /keys, tokens, passwords/);
   });
 });
+
+describe('手元の場所は、書き方を変えても見つける', () => {
+  // 大小を問わないこと、ドライブが C: とは限らないことを確かめる。
+  // 元は `[Cc]:\Users\` の一形だけを見ていて、`c:\users\…` は素通りしていた。
+  const 漏れる = [
+    String.raw`C:\Users\maguro\Desktop\a.txt`,
+    String.raw`c:\users\maguro\a.txt`,
+    String.raw`Z:\Users\maguro\a.txt`,
+    '/home/user/x',
+    '/Users/maguro/x',
+  ];
+  for (const text of 漏れる) {
+    test(`知らせる: ${text}`, () => {
+      const v = inspectOutbound(text);
+      assert.ok(v.findings.some((f) => f.kind === '手元の場所'), '見落としている');
+      // 止めはしない。止めると、道の話が一切できなくなる。
+      assert.equal(v.passed, true);
+    });
+  }
+
+  const 漏れない = ['src/ui/server.ts', 'C:\\Program Files\\x', '/usr/local/bin/node'];
+  for (const text of 漏れない) {
+    test(`知らせない: ${text}`, () => {
+      assert.equal(inspectOutbound(text).findings.length, 0, '何でも知らせては使えない');
+    });
+  }
+});
