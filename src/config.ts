@@ -324,6 +324,19 @@ export function configPath(cwd = process.cwd()): string {
   return process.env.AAS_CONFIG ?? resolve(cwd, 'aas.config.json');
 }
 
+/**
+ * runtime の空欄を、無いものとして扱う。
+ *
+ * 画面や見本から `"modelsDir": ""` が入ることがある。空文字は nullish では
+ * ないので `?? 既定` を素通りし、置き場が「（空）」になる。
+ */
+function normalizeRuntime(raw: unknown): RuntimeConfig {
+  if (typeof raw !== 'object' || raw === null) return {};
+  const r = { ...(raw as Record<string, unknown>) };
+  if (typeof r.modelsDir === 'string' && r.modelsDir.trim() === '') delete r.modelsDir;
+  return r as RuntimeConfig;
+}
+
 export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: string } {
   const path = configPath(cwd);
   let raw: string;
@@ -344,7 +357,7 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
     temperature: parsed.temperature ?? DEFAULT_CONFIG.temperature,
     maxTokens: parsed.maxTokens ?? DEFAULT_CONFIG.maxTokens,
     agent: parsed.agent ?? {},
-    runtime: parsed.runtime ?? {},
+    runtime: normalizeRuntime(parsed.runtime),
     harness: parsed.harness ?? {},
     initiative: parsed.initiative ?? {},
     roles: parsed.roles ?? [],
