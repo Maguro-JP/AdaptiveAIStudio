@@ -190,3 +190,41 @@ describe('権限の配り方', () => {
     }
   });
 });
+
+describe('読み方', () => {
+  test('上限の先は読まない（何百MBでも抱えない）', async () => {
+    let pulls = 0;
+    let canceled = false;
+    const enc = new TextEncoder();
+    const endless = new ReadableStream<Uint8Array>({
+      pull(c) { pulls++; c.enqueue(enc.encode('a'.repeat(1024))); },
+      cancel() { canceled = true; },
+    });
+    const tool = createFetchUrlTool({
+      maxBytes: 100,
+      fetchImpl: (async () => new Response(endless, { status: 200, headers: { 'content-type': 'text/plain' } })) as unknown as typeof fetch,
+    });
+    const r = await tool.run({ url: 'https://registry.npmjs.org/x' }, ctx());
+    assert.ok(r.content.includes('省略'));
+    assert.ok(pulls < 20, `読みすぎている: ${pulls} 回`);
+    assert.equal(canceled, true, '残りを切っていない');
+  });
+
+  test('Shift_JIS の頁は、言われた通りに読む', async () => {
+    const sjis = Buffer.from([0x82, 0xa0, 0x82, 0xa2, 0x82, 0xa4]); // あいう
+    const tool = createFetchUrlTool({
+      fetchImpl: (async () => new Response(sjis, { status: 200, headers: { 'content-type': 'text/plain; charset=Shift_JIS' } })) as unknown as typeof fetch,
+    });
+    const r = await tool.run({ url: 'https://registry.npmjs.org/x' }, ctx());
+    assert.ok(r.content.includes('あいう'), r.content);
+    assert.ok(!r.content.includes('\ufffd'));
+  });
+
+  test('charset が無い UTF-8 は、そのまま（対）', async () => {
+    const tool = createFetchUrlTool({
+      fetchImpl: (async () => new Response('あいう', { status: 200, headers: { 'content-type': 'text/plain' } })) as unknown as typeof fetch,
+    });
+    const r = await tool.run({ url: 'https://registry.npmjs.org/x' }, ctx());
+    assert.ok(r.content.includes('あいう'));
+  });
+});

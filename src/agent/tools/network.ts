@@ -20,6 +20,7 @@
 import { type Tool, ok, fail, requireString } from './types.ts';
 import { inspectInbound, inspectOutbound, describeVerdict } from '../../harness/gate.ts';
 import { type Inspector, combine } from '../../harness/inspector.ts';
+import { decodeText } from '../../core/text.ts';
 
 /**
  * 既定の行き先。
@@ -71,6 +72,42 @@ export function checkHost(url: string, allowed: Set<string>): URL {
 }
 
 /** HTML から本文らしきものを取り出す。整形が目的ではなく、読める量に減らすのが目的。 */
+/** content-type の charset。無ければ undefined。 */
+export function charsetOf(contentType: string): string | undefined {
+  return /charset=["']?([^;"'\s]+)/i.exec(contentType)?.[1]?.toLowerCase();
+}
+
+/**
+ * 上限までしか読まない。残りは切る。
+ *
+ * 文字にするのは、揃ってから一度。塊ごとに直すと日本語が化ける。
+ * charset が言われていればそれで、無ければ UTF-8 → CP932 の順に試す。
+ */
+export async function readBounded(res: Response, limitBytes: number, contentType: string): Promise<string> {
+  const chunks: Uint8Array[] = [];
+  let held = 0;
+  const reader = res.body?.getReader();
+  if (reader) {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        held += value.byteLength;
+        if (held >= limitBytes) { await reader.cancel().catch(() => undefined); break; }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+  const raw = Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
+  const charset = charsetOf(contentType);
+  if (charset && charset !== 'utf-8' && charset !== 'utf8') {
+    try { return new TextDecoder(charset).decode(raw); } catch { /* 知らない名前。下へ */ }
+  }
+  return decodeText(raw).text;
+}
+
 export function toText(body: string, contentType: string): string {
   if (!/html/i.test(contentType)) return body;
   return body
@@ -145,8 +182,11 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
           headers: { accept: 'text/plain, application/json, text/html;q=0.8', 'user-agent': 'AdaptiveAIStudio' },
           signal: timer.signal,
         });
-        const body = await res.text();
         const type = res.headers.get('content-type') ?? '';
+        // 全部を読み切らない。上限の先は切ると決めているのに、切る前に
+        // 何百MB も抱えると、それだけで動かなくなる機械がある。
+        // 文字にするのは全部揃ってから。日本語の頁は Shift_JIS のことがある。
+        const body = await readBounded(res, maxBytes * 4, type);
         const text = toText(body, type);
 
         // 持ち込み検査。ここを通る前の文字列は、誰が書いたものか分からない。
