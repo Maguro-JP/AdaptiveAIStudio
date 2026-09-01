@@ -61,23 +61,24 @@ jobs:
       # 配る相手は決まっているので、その分だけ入れる。
       - name: モデルを読むライブラリを入れる（win-x64 の分だけ）
         run: |
-          # --omit=optional で、全機械むけの binary を持ってこない。
-          # そのまま叩くと CUDA 版・mac 版・arm 版まで来て 1.1GB になる
-          # （--os / --cpu は効かなかった。試した）。
-          # --ignore-scripts が要る。付けないと postinstall が llama.cpp の
-          # ソースを取ってきて手元で組み、292MB 増える（Linux むけの物なので
-          # 配る相手には要らない）。
-          npm install --no-save --no-audit --no-fund --omit=optional \
-            --ignore-scripts node-llama-cpp
-          # 配る相手の分だけ、名指しで入れる。組み立てているのは Linux
-          # なので、--force が要る（入れる先が Windows のため）。
-          npm install --no-save --no-audit --no-fund --omit=optional --force \
-            --ignore-scripts @node-llama-cpp/win-x64
-          ls node_modules/@node-llama-cpp
-          test -d node_modules/@node-llama-cpp/win-x64
+          # **一度に入れる。**二回に分けると、二回目が一回目の分を刈り取る
+          # （--no-save は package.json に残らないので「要らないもの」に見える）。
+          # 実際にそうなり、本体の無い配布物を配った。
+          #
+          # --omit=optional  全機械むけの binary を持ってこない（付けないと
+          #                  CUDA 版・mac 版・arm 版まで来て 1.1GB になる。
+          #                  --os / --cpu は効かない。試した）
+          # --force          組み立てているのは Linux、入れる先は Windows
+          # --ignore-scripts postinstall が llama.cpp を取ってきて手元で組む
+          #                  （+292MB。Linux むけなので配る相手には要らない）
+          npm install --no-save --no-audit --no-fund \
+            --omit=optional --force --ignore-scripts \
+            node-llama-cpp @node-llama-cpp/win-x64
+          # 在るかどうかだけ見ない。**本体と binary の両方**を見る。
+          test -f node_modules/node-llama-cpp/dist/index.js
+          test -f node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
           # 実行ファイルが増えないことが、この道の要点。0個であることを見る。
           test "$(find node_modules/@node-llama-cpp -name '*.exe' | wc -l)" -eq 0
-          # 組んだ跡が残っていたら落とす（Linux むけなので配らない）。
           rm -rf node_modules/node-llama-cpp/llama
           du -sh node_modules
 
@@ -99,6 +100,9 @@ jobs:
           head -c2 dist/AdaptiveAIStudio/runtime/node.exe | grep -q MZ
           test -f dist/AdaptiveAIStudio/AdaptiveAIStudio.cmd
           test -f dist/AdaptiveAIStudio/app/start.cmd
+          # モデルを読むライブラリ。本体が無いと、binary だけ入って動かない。
+          test -f dist/AdaptiveAIStudio/app/node_modules/node-llama-cpp/dist/index.js
+          test -f dist/AdaptiveAIStudio/app/node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
           # バッチが CP932 のまま入っているか。UTF-8 だと cmd.exe が行を壊す。
           ! iconv -f UTF-8 -t UTF-8 dist/AdaptiveAIStudio/app/start.cmd > /dev/null 2>&1
 
@@ -111,6 +115,10 @@ jobs:
           SIZE=$(stat -c%s verify/AdaptiveAIStudio/runtime/node.exe)
           echo "ZIP の中の runtime/node.exe = ${SIZE} bytes"
           test "$SIZE" -gt 40000000
+          test -f verify/AdaptiveAIStudio/app/node_modules/node-llama-cpp/dist/index.js
+          test -f verify/AdaptiveAIStudio/app/node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
+          echo "ZIP の中のライブラリ: あり"
+          ls -l AdaptiveAIStudio-portable.zip
 
       # .exe を置けない場所（会社のクラウドドライブ）むけ。中身は同じで、
       # Node の名前だけが node.bin。名前のとおり .exe が一つも入らない。
@@ -125,6 +133,10 @@ jobs:
           rm -rf verify2 && mkdir verify2
           unzip -q AdaptiveAIStudio-portable-noexe.zip -d verify2
           test "$(stat -c%s verify2/AdaptiveAIStudio/runtime/node.bin)" -gt 40000000
+          test -f verify2/AdaptiveAIStudio/app/node_modules/node-llama-cpp/dist/index.js
+          # 名前のとおり、.exe が一つも無いこと。
+          test "$(find verify2/AdaptiveAIStudio -name '*.exe' | wc -l)" -eq 0
+          ls -l AdaptiveAIStudio-portable-noexe.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -173,11 +185,12 @@ jobs:
       - name: モデルを読むライブラリを入れる（win-x64 の分だけ）
         shell: bash
         run: |
-          npm install --no-save --no-audit --no-fund --omit=optional \
-            --ignore-scripts node-llama-cpp
-          npm install --no-save --no-audit --no-fund --omit=optional --force \
-            --ignore-scripts @node-llama-cpp/win-x64
-          test -d node_modules/@node-llama-cpp/win-x64
+          # 一度に入れる（二回に分けると二回目が一回目を刈り取る）。
+          npm install --no-save --no-audit --no-fund \
+            --omit=optional --force --ignore-scripts \
+            node-llama-cpp @node-llama-cpp/win-x64
+          test -f node_modules/node-llama-cpp/dist/index.js
+          test -f node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
           test "$(find node_modules/@node-llama-cpp -name '*.exe' | wc -l)" -eq 0
           rm -rf node_modules/node-llama-cpp/llama
 

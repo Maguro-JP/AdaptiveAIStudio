@@ -368,3 +368,27 @@ NetVision の `backend/app/services/llm_inproc.py` に、答えがそのまま�
 **インストーラ側にも同じものを入れる。**抜かすと「setup.exe だけ
 モデルを中で読めない」という食い違いになる。アンインストールは
 `RMDir /r "$INSTDIR\app"` が node_modules ごと消すので、そのままでよい。
+
+---
+
+## 2026-09-01  --no-save は、二回に分けると刈り取られる
+
+配布物にライブラリを入れたつもりで、**本体の無いものを配った。**記録に出ていた。
+
+```
+added 116 packages, and removed 4 packages in 6s     ← node-llama-cpp 本体
+added 1 package, and removed 116 packages in 910ms   ← 二回目でそれが消えた
+```
+
+`--no-save` は package.json に残らないので、次の `npm install` から見ると
+「要らないもの」になる。**一度に入れる。**
+
+確認も甘かった。`@node-llama-cpp/win-x64` の有無と `.exe` の数しか見ておらず、
+**本体が消えたことに気づけなかった。**「在るかどうかだけを見ない」と一度書いた
+のに、別の場所で同じことをした。いまは
+
+- 本体（`node-llama-cpp/dist/index.js`）
+- binary（`@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node`）
+
+の**両方**を、組み立て後と ZIP から取り出し直した後の両方で見る。
+`-noexe.zip` は `.exe` が0個であることも見る。
