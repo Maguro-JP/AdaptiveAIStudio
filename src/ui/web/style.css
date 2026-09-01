@@ -541,3 +541,83 @@ menu { display: flex; justify-content: flex-end; gap: var(--s2); padding: 0; mar
 /* 拾っている間は分かるようにする。押しっぱなしに気づかないと困る。 */
 .icon.listening { color: var(--bad); animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: .35; } }
+
+/* ================================================================
+   効果
+   見た目の性格は、色だけでは決まらない。
+   ここに書いてあるものだけを、見た目が名前で選ぶ。
+   （設定から任意の CSS を流し込ませない。流し込みを許すと、
+     見た目の設定が画面を書き換える口になる）
+   ================================================================ */
+
+/* すりガラス。奥が透ける。板の色は半透明の前提。 */
+[data-fx~="glass"] .panel,
+[data-fx~="glass"] .card,
+[data-fx~="glass"] .field {
+  backdrop-filter: blur(18px) saturate(1.6);
+  -webkit-backdrop-filter: blur(18px) saturate(1.6);
+}
+[data-fx~="glass"] body,
+[data-fx~="glass"] .app {
+  background-image:
+    radial-gradient(60rem 40rem at 12% -10%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%),
+    radial-gradient(50rem 36rem at 92% 8%, color-mix(in srgb, var(--good) 16%, transparent), transparent 62%);
+  background-attachment: fixed;
+}
+
+/* 縁が光る。強くしすぎると読めなくなるので、縁だけに留める。 */
+[data-fx~="glow"] .panel:focus-within,
+[data-fx~="glow"] .field:focus-within {
+  box-shadow: 0 0 0 1px var(--accent), 0 0 22px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+[data-fx~="glow"] .primary {
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+[data-fx~="glow"] .panel-title { text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 45%, transparent); }
+
+/* 走査線。古い画面。動かさない（動くと読みづらい）。 */
+[data-fx~="scanlines"] .app::before {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 9;
+  background: repeating-linear-gradient(
+    to bottom, rgba(0,0,0,.18) 0 1px, transparent 1px 3px);
+  mix-blend-mode: multiply;
+}
+
+/* 地に方眼。奥行きが出る。 */
+[data-fx~="grid"] body {
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--line) 55%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--line) 55%, transparent) 1px, transparent 1px);
+  background-size: 32px 32px;
+  background-position: -1px -1px;
+}
+
+/* ざらつき。のっぺりした面を消す。画像を持たずに作る。 */
+[data-fx~="noise"] .app::after {
+  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 8; opacity: .035;
+  background-image: url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'>\
+<filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/></filter>\
+<rect width='120' height='120' filter='url(%23n)'/></svg>");
+}
+
+/* 角を落とさない。 */
+[data-fx~="sharp"] .panel,
+[data-fx~="sharp"] .card,
+[data-fx~="sharp"] .field,
+[data-fx~="sharp"] button { border-radius: 0 !important; }
+
+/* 板が浮いて見える。 */
+[data-fx~="depth"] .panel { box-shadow: var(--shadow), 0 18px 48px rgba(0,0,0,.4); }
+[data-fx~="depth"] .card:hover { transform: translateY(-1px); transition: transform .12s ease; }
+
+/* 全部を等幅に。 */
+[data-fx~="mono"], [data-fx~="mono"] button, [data-fx~="mono"] input,
+[data-fx~="mono"] textarea, [data-fx~="mono"] select { font-family: var(--font-mono) !important; }
+
+/* 動きを嫌う人には出さない。設定ではなく、環境の申告に従う。 */
+@media (prefers-reduced-motion: reduce) {
+  [data-fx] *, [data-fx] *::before, [data-fx] *::after {
+    animation: none !important; transition: none !important;
+  }
+}

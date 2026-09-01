@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { repairTheme, baseTheme, isSafeValue, cssVarName, toCssVars,
-  THEMES, TOKENS, DEFAULT_THEME_ID,
+  THEMES, TOKENS, DEFAULT_THEME_ID, EFFECTS,
 } from '../src/ui/theme.ts';
 
 describe('用意された見た目', () => {
@@ -154,5 +154,52 @@ describe('画面へ流す形', () => {
     const theme = baseTheme('slate');
     (theme.tokens as Record<string, string>).accent = 'red; } body{display:none}';
     assert.equal(toCssVars(theme)['--accent'], undefined);
+  });
+});
+
+describe('効果', () => {
+  test('用意した見た目には、性格が付いている', () => {
+    // 色だけでは見た目の性格は決まらない。
+    const withFx = THEMES.filter((t) => (t.effects ?? []).length > 0);
+    assert.ok(withFx.length >= 4, `効果の付いた見た目が少ない: ${withFx.length}`);
+  });
+
+  test('使う効果は、すべて用意されているものだけ', () => {
+    for (const t of THEMES) {
+      for (const fx of t.effects ?? []) {
+        assert.ok((EFFECTS as readonly string[]).includes(fx), `${t.id} に知らない効果: ${fx}`);
+      }
+    }
+  });
+
+  test('知らない効果は外す。任意の CSS を流し込ませない', () => {
+    // 流し込みを許すと、見た目の設定が画面を書き換える口になる。
+    const { theme, repairs } = repairTheme({
+      id: 'x', effects: ['glass', 'position:fixed;top:0', 'glow'],
+    });
+    assert.deepEqual(theme.effects, ['glass', 'glow']);
+    assert.ok(repairs.some((r) => r.detail.includes('知らない効果')));
+  });
+
+  test('同じ効果を重ねて書いても、一度だけ', () => {
+    const { theme } = repairTheme({ id: 'x', effects: ['glow', 'glow', 'glow'] });
+    assert.deepEqual(theme.effects, ['glow']);
+  });
+
+  test('効果は無くてもよい', () => {
+    const { theme } = repairTheme({ id: 'x', effects: [] });
+    assert.equal(theme.effects, undefined);
+  });
+
+  test('用意した効果には、必ず見た目の指定がある', async () => {
+    // 名前だけあって何も起きない効果は、選べるだけ無駄。
+    const { readFile } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const css = await readFile(join(here, '..', 'src', 'ui', 'web', 'style.css'), 'utf8');
+    for (const fx of EFFECTS) {
+      assert.ok(css.includes(`[data-fx~="${fx}"]`), `効果に見た目の指定が無い: ${fx}`);
+    }
   });
 });

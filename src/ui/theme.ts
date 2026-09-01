@@ -32,12 +32,34 @@ export const TOKENS = [
 export type TokenName = typeof TOKENS[number];
 export type Tokens = Partial<Record<TokenName, string>>;
 
+/**
+ * 効果。色と寸法だけでは、見た目の性格までは変えられない。
+ *
+ * **任意の CSS を流し込ませない。**こちらが用意したものから選ばせる。
+ * 流し込みを許すと、見た目の設定が画面を書き換える口になる。
+ * 名前で選ばせるなら、書けるのは「どれを使うか」だけになる。
+ */
+export const EFFECTS = [
+  'glass',      // すりガラス。奥が透ける
+  'glow',       // 縁が光る
+  'scanlines',  // 走査線。古い画面
+  'grid',       // 地に方眼
+  'noise',      // ざらつき。のっぺりを消す
+  'sharp',      // 角を落とさない
+  'depth',      // 影を強くして、板が浮いて見える
+  'mono',       // 全部を等幅にする
+] as const;
+
+export type EffectName = typeof EFFECTS[number];
+
 export interface Theme {
   id: string;
   name: string;
   /** 明暗。ブラウザの標準部品（入力欄や巻物）の色に効く。 */
   scheme: 'dark' | 'light';
   tokens: Tokens;
+  /** 重ねる効果。名前で選ぶ。CSS そのものは書かせない。 */
+  effects?: EffectName[];
 }
 
 const SANS = "'Inter', ui-sans-serif, system-ui, 'Hiragino Sans', 'Noto Sans JP', sans-serif";
@@ -98,6 +120,48 @@ export const THEMES: Theme[] = [
       radius: '4px', gap: '8px', shadow: '0 0 0 1px rgba(34,211,238,.12), 0 0 18px rgba(34,211,238,.07)',
       font: SANS, fontMono: MONO, fontSize: '13px', lineHeight: '1.5',
     },
+    effects: ['glow', 'grid', 'sharp'],
+  },
+  {
+    id: 'neon',
+    name: 'Neon — 夜の街',
+    scheme: 'dark',
+    tokens: {
+      bg: '#0a0612', surface: '#120a1f', surface2: '#1a0f2b', line: '#33205c',
+      text: '#f0e6ff', dim: '#9b7fc4', accent: '#f472b6', accentText: '#1a0512',
+      good: '#4ade80', warn: '#fcd34d', bad: '#f87171',
+      radius: '10px', gap: '10px',
+      shadow: '0 0 0 1px rgba(244,114,182,.18), 0 8px 32px rgba(168,85,247,.18)',
+      font: SANS, fontMono: MONO, fontSize: '13px', lineHeight: '1.55',
+    },
+    effects: ['glow', 'noise', 'depth'],
+  },
+  {
+    id: 'glass',
+    name: 'Glass — すりガラス',
+    scheme: 'dark',
+    tokens: {
+      bg: '#0b1020', surface: 'rgba(148,163,184,.10)', surface2: 'rgba(148,163,184,.16)',
+      line: 'rgba(203,213,225,.18)',
+      text: '#e8edf7', dim: '#9aa6bd', accent: '#60a5fa', accentText: '#08111f',
+      good: '#4ade80', warn: '#fbbf24', bad: '#fb7185',
+      radius: '14px', gap: '12px', shadow: '0 8px 40px rgba(2,6,23,.55)',
+      font: SANS, fontMono: MONO, fontSize: '13px', lineHeight: '1.6',
+    },
+    effects: ['glass', 'depth', 'noise'],
+  },
+  {
+    id: 'terminal',
+    name: 'Terminal — 古い端末',
+    scheme: 'dark',
+    tokens: {
+      bg: '#0b0f0b', surface: '#0f150f', surface2: '#131a13', line: '#1f2b1f',
+      text: '#8fdf8f', dim: '#4f7a4f', accent: '#a3e635', accentText: '#0b0f0b',
+      good: '#a3e635', warn: '#facc15', bad: '#f87171',
+      radius: '0px', gap: '6px', shadow: 'none',
+      font: MONO, fontMono: MONO, fontSize: '13px', lineHeight: '1.45',
+    },
+    effects: ['scanlines', 'sharp', 'mono', 'glow'],
   },
 ];
 
@@ -179,12 +243,24 @@ export function repairTheme(raw: unknown, fallbackId = DEFAULT_THEME_ID): {
 
   const scheme = o.scheme === 'light' || o.scheme === 'dark' ? o.scheme : base.scheme;
 
+  // 効果は、知っているものだけを通す。知らない名前は捨てて、そう言う。
+  const wanted = Array.isArray(o.effects) ? o.effects : base.effects ?? [];
+  const effects: EffectName[] = [];
+  for (const name of wanted) {
+    if (typeof name === 'string' && (EFFECTS as readonly string[]).includes(name)) {
+      if (!effects.includes(name as EffectName)) effects.push(name as EffectName);
+    } else {
+      note(`知らない効果なので外しました: ${String(name)}`);
+    }
+  }
+
   return {
     theme: {
       id: typeof o.id === 'string' && o.id.trim() ? o.id.trim() : base.id,
       name: typeof o.name === 'string' && o.name.trim() ? o.name.trim() : base.name,
       scheme,
       tokens,
+      ...(effects.length > 0 ? { effects } : {}),
     },
     repairs,
   };

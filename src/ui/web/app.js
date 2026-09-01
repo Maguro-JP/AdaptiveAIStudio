@@ -160,6 +160,8 @@ function applyTheme(t, vars) {
   const root = document.documentElement;
   for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
   root.dataset.scheme = t.scheme;
+  // 効果は名前で渡す。CSS 側が [data-fx~="…"] で拾う。
+  root.dataset.fx = (t.effects ?? []).join(' ');
   const sel = $('themes');
   if (!sel) return;
   // 自分でいじった色も一覧に残す。選び直したときに戻ってこられるように。
