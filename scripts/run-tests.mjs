@@ -47,6 +47,9 @@ function needsStripFlag(version) {
 const args = [
   '--no-warnings',
   ...(needsStripFlag(process.versions.node) ? ['--experimental-strip-types'] : []),
+  // 画面の JS を「まとまり」として読めるか確かめるのに要る。
+  // node --check ではモジュール固有の誤りを見落とす。
+  '--experimental-vm-modules',
   '--test',
   ...files,
 ];

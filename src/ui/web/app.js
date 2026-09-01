@@ -6,6 +6,7 @@
  * 仕切りを掴んで動かしたら配置に書き戻すことだけ。
  */
 import { PANELS, TITLES } from './panels.js';
+import { openPicker } from './color.js';
 
 const root = document.getElementById('editor');
 const $ = (id) => document.getElementById(id);
@@ -213,10 +214,6 @@ $('editTheme').onclick = () => {
     const label = document.createElement('label');
     label.textContent = name;
 
-    const picker = document.createElement('input');
-    picker.type = COLOR_TOKENS.has(name) && /^#[0-9a-f]{6}$/i.test(value) ? 'color' : 'hidden';
-    picker.value = value;
-
     const text = document.createElement('input');
     text.type = 'text';
     text.value = value;
@@ -226,13 +223,29 @@ $('editTheme').onclick = () => {
       // 検めは向こう側がやる。ここでの見え方は下書きに過ぎない。
       document.documentElement.style.setProperty(cssVarName(name), v);
     };
-    picker.oninput = () => { text.value = picker.value; apply(picker.value); };
-    text.oninput = () => {
-      if (picker.type === 'color' && /^#[0-9a-f]{6}$/i.test(text.value)) picker.value = text.value;
-      apply(text.value);
+
+    // 色の項目には見本を出す。押せば地図とつまみで選べる。
+    // ブラウザ標準の色選びは 16進6桁しか扱えず、rgba も hsl も渡せない。
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'color-swatch';
+    const isColor = COLOR_TOKENS.has(name);
+    if (!isColor) swatch.style.visibility = 'hidden';
+    const paint = (v) => { swatch.style.background = v; swatch.title = `${v} — 押すと開く`; };
+    paint(value);
+
+    swatch.onclick = () => {
+      openPicker(text.value, {
+        // 動かしている間も、その場で見えるようにする。
+        onChange: (hex) => { text.value = hex; paint(hex); apply(hex); },
+        onDone: (hex) => { text.value = hex; paint(hex); apply(hex); },
+        against: draft.tokens.bg ?? before.tokens.bg,
+      });
     };
 
-    box.append(label, picker, text);
+    text.oninput = () => { paint(text.value); apply(text.value); };
+
+    box.append(label, swatch, text);
   }
 
   $('themeEditor').returnValue = '';

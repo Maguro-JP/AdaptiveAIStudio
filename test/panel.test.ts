@@ -157,3 +157,22 @@ describe('所見のまとめ', () => {
     assert.deepEqual(merged[0]!.alsoBy, []);
   });
 });
+
+describe('画面の部品が、本当に読み込める形になっているか', () => {
+  // node --check は「まとまり」として見ないので、
+  // モジュールでしか出ない誤り（?? と || の混在など）を見落とす。
+  // 実際にそれで一度、画面がまるごと開かなくなった。
+  test('web の JS は、まとまりとして読める', async () => {
+    const { SourceTextModule } = await import('node:vm');
+    const { readFile, readdir } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'ui', 'web');
+
+    for (const name of await readdir(dir)) {
+      if (!name.endsWith('.js')) continue;
+      const source = await readFile(join(dir, name), 'utf8');
+      assert.doesNotThrow(() => new SourceTextModule(source), `読めない: ${name}`);
+    }
+  });
+});

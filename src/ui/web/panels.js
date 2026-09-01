@@ -6,6 +6,7 @@
  */
 
 import { renderDiff } from './diff.js';
+import { decorate } from './color.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -242,7 +243,17 @@ export const PANELS = {
       const c = card('◈', v.path, `+${v.added} -${v.removed}`, 'diff-card');
       c.head.classList.add(v.created ? 'created' : 'changed');
       c.box.open = true;
-      c.body.append(renderDiff(v.diff));
+      const rendered = renderDiff(v.diff);
+      // 書いてある色の隣に見本を出す。コードを読んでいる最中がいちばん要る。
+      decorate(rendered, {
+        onPick: (from, to) => {
+          // 押した結果は、そのまま指示にする。
+          // ここで直に書き換えると、承認も差分も通らずにファイルが変わる。
+          input.value = `${v.path} の ${from} を ${to} に変えて`;
+          input.focus();
+        },
+      });
+      c.body.append(rendered);
       follow();
     };
 

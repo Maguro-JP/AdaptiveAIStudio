@@ -633,3 +633,56 @@ menu { display: flex; justify-content: flex-end; gap: var(--s2); padding: 0; mar
 /* 中身は作りかけなので、地は白のまま出す。こちらの色を混ぜると、
    出来上がりの見え方が分からなくなる。 */
 .preview-frame { flex: 1; width: 100%; border: 0; background: #fff; min-height: 0; }
+
+/* ---- 色を選ぶ ------------------------------------------------- */
+.color-swatch {
+  width: 20px; height: 20px; flex: 0 0 auto;
+  border: 1px solid var(--line); border-radius: 4px;
+  cursor: pointer; padding: 0;
+  /* 透けている色が分かるよう、市松を敷く */
+  background-image:
+    linear-gradient(45deg, #8884 25%, transparent 25%, transparent 75%, #8884 75%),
+    linear-gradient(45deg, #8884 25%, transparent 25%, transparent 75%, #8884 75%);
+  background-size: 10px 10px; background-position: 0 0, 5px 5px;
+}
+.color-swatch.inline {
+  width: 11px; height: 11px; border-radius: 3px;
+  vertical-align: baseline; margin-right: 3px;
+}
+.color-picker {
+  border: 1px solid var(--line); border-radius: calc(var(--radius) * 2);
+  background: var(--surface); color: var(--text); padding: 14px; min-width: 280px;
+}
+.color-picker::backdrop { background: rgba(0,0,0,.45); }
+.color-swatch-big { height: 44px; border-radius: var(--radius); border: 1px solid var(--line); }
+.color-map {
+  position: relative; height: 150px; margin: 10px 0;
+  border-radius: var(--radius); border: 1px solid var(--line);
+  cursor: crosshair; touch-action: none;
+}
+.color-dot {
+  position: absolute; width: 12px; height: 12px; margin: -6px 0 0 -6px;
+  border: 2px solid #fff; border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.5); pointer-events: none;
+}
+.color-hue, .color-alpha { width: 100%; margin: 4px 0; }
+.color-hue {
+  appearance: none; height: 12px; border-radius: 6px;
+  background: linear-gradient(to right,
+    #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%);
+}
+.color-fields { display: grid; grid-template-columns: 1fr; gap: 4px; margin: 8px 0; }
+.color-field { display: flex; align-items: center; gap: 6px; }
+.color-field span { width: 3.2em; font-size: .85em; }
+.color-field input {
+  flex: 1; min-width: 0; padding: 3px 6px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--surface2); color: var(--text); font-family: var(--font-mono);
+}
+.color-field input.bad { border-color: var(--bad); }
+.color-palette { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+.color-foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.color-contrast { flex: 1; font-size: .85em; }
+.color-contrast.good { color: var(--good); }
+.color-contrast.warn { color: var(--warn); }
+.color-contrast.bad { color: var(--bad); }
