@@ -212,7 +212,9 @@ for (const p of enabledProviders(config)) {
   // この中で読む道では、口はこのプログラムの中に立つ。**外から見に行っても
   // 意味がない**（モデルを読むまで立たないので、必ず「繋がりません」になる）。
   if (runtime.id === 'inproc' && p.locality === 'local') {
-    add(label, 'ok', `${p.baseUrl}（この中に立てます。別に用意するものはありません）`);
+    // 札は設定の id（多くは "ollama"）だが、繋ぐ先は Ollama ではない。
+    // 「接続 (ollama)」と出ると、Ollama を入れなければと読まれる。
+    add('接続 (この中で読む)', 'ok', `${p.baseUrl}（この中に立てます。別に用意するものはありません）`);
     continue;
   }
   try {

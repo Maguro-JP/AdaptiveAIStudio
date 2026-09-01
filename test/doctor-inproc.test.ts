@@ -63,6 +63,9 @@ describe('doctor は、この中で読む道を知っている', () => {
     await writeFile(join(models, 'm.gguf'), 'x');
     await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
+    // 札が設定の id（ollama）のままだと「Ollama を入れなければ」と読まれる。
+    assert.match(text, /接続 \(この中で読む\)/);
+    assert.doesNotMatch(text, /接続 \(ollama\)/);
     assert.match(text, /この中に立てます/);
     assert.doesNotMatch(text, /件かたづければ動きます/);
   });
