@@ -42,27 +42,26 @@ export function isPortable(root = installRoot()): boolean {
  *   2. portable.txt があれば、この道具の隣の aas-home
  *   3. ~/.aas（これまでどおり）
  */
-export function aasHome(): string {
+export function aasHome(root = installRoot()): string {
   const explicit = process.env.AAS_HOME;
   if (explicit && explicit.trim().length > 0) return explicit;
 
-  const root = installRoot();
   if (isPortable(root)) return join(root, 'aas-home');
 
   return join(homedir(), '.aas');
 }
 
 /** 記録の置き場。 */
-export function stateDir(): string {
-  return process.env.AAS_STATE_DIR ?? aasHome();
+export function stateDir(root?: string): string {
+  return process.env.AAS_STATE_DIR ?? aasHome(root);
 }
 
 /** llama-server の置き場。 */
-export function binDir(): string {
-  return process.env.AAS_BIN_DIR ?? join(aasHome(), 'bin');
+export function binDir(root?: string): string {
+  return process.env.AAS_BIN_DIR ?? join(aasHome(root), 'bin');
 }
 
 /** GGUF の置き場。 */
-export function modelsDir(): string {
-  return process.env.AAS_MODELS_DIR ?? join(aasHome(), 'models');
+export function modelsDir(root?: string): string {
+  return process.env.AAS_MODELS_DIR ?? join(aasHome(root), 'models');
 }

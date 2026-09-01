@@ -166,8 +166,15 @@ describe('既定の置き場', () => {
     // ホーム配下である以上、既定のままだと置き場にも全角が入る。
     // だから doctor は「設定されていれば見る」ではなく、**既定も**見る必要がある。
     delete process.env.AAS_MODELS_DIR;
-    assert.ok(defaultModelsDir().startsWith(homedir()),
-      `ホームの下でない: ${defaultModelsDir()}`);
+    delete process.env.AAS_HOME;
+    // 持ち運び版の中で走らせると根が移るので、そこを固定してから見る。
+    process.env.AAS_HOME = join(homedir(), '.aas');
+    try {
+      assert.ok(defaultModelsDir().startsWith(homedir()),
+        `ホームの下でない: ${defaultModelsDir()}`);
+    } finally {
+      delete process.env.AAS_HOME;
+    }
   });
 
   test('環境変数で逃がせる（全角を避けるための出口）', () => {
