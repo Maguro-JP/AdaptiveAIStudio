@@ -531,6 +531,8 @@ async function loadCfg() {
   }
   $('cfgModelsDir').value = c.modelsDir ?? '';
   // 保存してあるものと、いま動いているものは別。黙って同じ顔をさせない。
+  // 立ち上げ直しが要るときだけ、そのボタンを出す。要らないのに出すと押される。
+  $('cfgRestart').hidden = !c.restartNeeded;
   const dirNote = DIR_NOTES[c.dirState] ?? '';
   $('cfgNote').textContent = (c.restartNeeded
     ? `保存済み。いま動いているのは「${c.active?.kind ?? '?'}」です。立ち上げ直すと切り替わります。`
@@ -600,6 +602,27 @@ $('cfgGet').onclick = async () => {
 };
 
 $('cfgReload').onclick = () => { void loadCfg(); };
+$('cfgRestart').onclick = async () => {
+  const note = $('cfgNote');
+  note.style.whiteSpace = 'pre-line';
+  const r = await fetch('/api/restart', { method: 'POST' });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) { note.textContent = body.error ?? '立ち上げ直せませんでした'; return; }
+  if (!body.relaunches) {
+    // 入口が起こし直してくれない（npm run ui など）。閉じることだけ伝える。
+    note.textContent = '止めました。この画面を閉じて、もう一度 start.cmd から開いてください。';
+    return;
+  }
+  note.textContent = '立ち上げ直しています。戻ってきたら、この頁を読み直します。';
+  // 止まって、起き上がるまで待つ。起きたら読み直す。
+  await new Promise((res) => setTimeout(res, 1500));
+  for (let i = 0; i < 60; i++) {
+    await new Promise((res) => setTimeout(res, 1000));
+    const ok = await fetch('/api/info', { cache: 'no-store' }).then((x) => x.ok).catch(() => false);
+    if (ok) { location.reload(); return; }
+  }
+  note.textContent = '1分待ちましたが戻ってきません。start.cmd の窓を見てください。';
+};
 $('cfgSave').onclick = async () => {
   const r = await fetch('/api/config', {
     method: 'PUT',

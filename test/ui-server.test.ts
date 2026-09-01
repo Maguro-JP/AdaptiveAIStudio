@@ -164,3 +164,36 @@ describe('見てから走り出すまでを塞ぐ', () => {
     assert.notEqual(r.status, 409, '一つしか来ていないのに断っている');
   });
 });
+
+describe('画面から立ち上げ直す', () => {
+  test('入口が起こし直せないときは、そう言って断る', async () => {
+    // この試験の server は onRestart を持たない。
+    const r = await post('/api/restart', {});
+    assert.equal(r.status, 501);
+  });
+
+  test('頼まれたら返事をしてから止める側を呼ぶ', async () => {
+    let called = 0;
+    const s = new UiServer({ config: DEFAULT_CONFIG, port: 0, relaunches: true, onRestart: () => { called++; } });
+    const b = await s.start();
+    try {
+      const r = await fetch(`${b}api/restart`, { method: 'POST' });
+      const body = await json(r);
+      assert.equal(r.status, 200);
+      assert.equal(body.relaunches, true);
+      // 返事の時点ではまだ呼ばない。押した側に返事が届く前に止めない。
+      assert.equal(called, 0);
+      await new Promise((res) => setTimeout(res, 400));
+      assert.equal(called, 1, '止める側が呼ばれていない');
+    } finally { await s.stop(); }
+  });
+
+  test('起こし直してもらえないなら、そう伝える（対）', async () => {
+    const s = new UiServer({ config: DEFAULT_CONFIG, port: 0, onRestart: () => {} });
+    const b = await s.start();
+    try {
+      const body = await json(await fetch(`${b}api/restart`, { method: 'POST' }));
+      assert.equal(body.relaunches, false);
+    } finally { await s.stop(); }
+  });
+});

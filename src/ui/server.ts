@@ -64,7 +64,20 @@ const TYPES: Record<string, string> = {
   '.svg': 'image/svg+xml',
 };
 
+/**
+ * 立ち上げ直したいときの終了コード。
+ *
+ * 画面から「立ち上げ直す」を押したら、この番号で終わる。start.cmd は
+ * この番号を見たら、もう一度同じものを起こす。番号は他の失敗と
+ * ぶつからないものにしてある（75 = 一時的な失敗、の慣例）。
+ */
+export const RESTART_EXIT = 75;
+
 export interface UiServerOptions {
+  /** 立ち上げ直しを頼まれたとき。止めて、RESTART_EXIT で終わる側が持つ。 */
+  onRestart?: () => void;
+  /** 入口（start.cmd）が起こし直してくれるか。画面の案内が変わる。 */
+  relaunches?: boolean;
   config: AasConfig;
   port?: number;
   host?: string;
@@ -562,6 +575,20 @@ export class UiServer {
         runtime: this.#opts.config.runtime?.kind ?? '未設定',
         model: this.#opts.config.runtime?.model ?? '—',
       });
+    }
+
+    if (path === '/api/restart' && req.method === 'POST') {
+      const session = this.#session;
+      if (session && this.#busyNow(session)) {
+        return send(res, 409, { error: 'いま作業中です。終わってから立ち上げ直してください' });
+      }
+      if (!this.#opts.onRestart) return send(res, 501, { error: 'この入口からは立ち上げ直せません' });
+      const relaunches = this.#opts.relaunches === true;
+      this.broadcast({ type: 'log', level: 'info', text: '立ち上げ直します' });
+      send(res, 200, { restarting: true, relaunches });
+      // 返事を出し切ってから止める。先に止めると、押した側に何も返らない。
+      setTimeout(() => this.#opts.onRestart?.(), 200).unref?.();
+      return;
     }
 
     if (path === '/api/tasks' && req.method === 'GET') {

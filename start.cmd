@@ -158,9 +158,12 @@ call "%~f0"
 exit /b %errorlevel%
 
 :normal
+rem 画面の「立ち上げ直す」は 75 で終わる。そのときは同じものをもう一度起こす。
+set "AAS_RELAUNCH=1"
 if "%RUNNER%"=="direct" call "%NODE%" scripts\run.mjs %TASK%
 if not "%RUNNER%"=="direct" call "%NPM%" run %TASK%
 set "CODE=%errorlevel%"
+if "%CODE%"=="75" goto :run
 
 rem --- 終わり方 --------------------------------------------
 rem 正常に終わったときも、何が出ていたか読む間を置く。
