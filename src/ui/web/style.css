@@ -504,3 +504,40 @@ menu { display: flex; justify-content: flex-end; gap: var(--s2); padding: 0; mar
   font-size: .8rem;
 }
 .proposal-foot button { margin-left: auto; }
+
+/* ---- 添付 ------------------------------------------------------
+   落とす・貼る・選ぶ、どれで渡しても同じ見え方にする。
+   渡したものが「渡っている」と分かることが要点。 */
+.attachments {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 6px 8px 0;
+}
+.attachment {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 6px 3px 8px;
+  border: 1px solid var(--line); border-radius: calc(var(--radius) * 2);
+  background: var(--surface2); font-size: .92em;
+}
+.attachment-name { max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-x {
+  border: 0; background: none; color: var(--dim); cursor: pointer;
+  font-size: 1.1em; line-height: 1; padding: 0 2px;
+}
+.attachment-x:hover { color: var(--bad); }
+.attachment.pending { opacity: .6; }
+
+/* 落とせることを、落とし始めてから見せる。ふだんは邪魔しない。 */
+.chat.dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.chat.dropping::after {
+  content: 'ここに落とす';
+  position: absolute; inset: auto 0 40% 0; text-align: center;
+  color: var(--accent); font-weight: 600; pointer-events: none;
+}
+.chat { position: relative; }
+
+.asked-file { color: var(--dim); font-size: .92em; margin-top: 2px; }
+
+.icon { padding: 0 8px; font-size: 1.05em; }
+/* 拾っている間は分かるようにする。押しっぱなしに気づかないと困る。 */
+.icon.listening { color: var(--bad); animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }

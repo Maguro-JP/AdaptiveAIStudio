@@ -27,6 +27,7 @@ import { pullModel } from '../runtime/ollama-pull.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout } from './layout.ts';
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
 import { collectState } from './state.ts';
+import { Attachments, MAX_BYTES } from './attachments.ts';
 import type { AasConfig } from '../config.ts';
 import { Session } from '../core/session.ts';
 import type { ApprovalRequest } from '../agent/tools/types.ts';
@@ -79,6 +80,8 @@ export class UiServer {
   #runtime?: LocalRuntime;
   /** 承認待ちの返事先。画面が答えるまで、ここで待っている。 */
   readonly #pending = new Map<string, (ok: boolean) => void>();
+  /** 渡されたファイルの預かり所。 */
+  readonly #attachments = new Attachments();
   #seq = 0;
 
   constructor(opts: UiServerOptions) {
@@ -223,17 +226,56 @@ export class UiServer {
       return send(res, 200, { layout, repairs: [] });
     }
 
+    // 渡されたファイルを預かる。
+    // 中身はそのまま body に流す（多分割の解析器を持ち込まないため。
+    // 名前は問い合わせ部分で渡す）。
+    if (path === '/api/attach' && req.method === 'POST') {
+      const name = url.searchParams.get('name') ?? 'file';
+      const chunks: Buffer[] = [];
+      let total = 0;
+      for await (const chunk of req) {
+        total += (chunk as Buffer).length;
+        // 上限を超えたら、最後まで受け取ってから断らない。読むのをやめる。
+        if (total > MAX_BYTES) {
+          req.destroy();
+          return send(res, 413, { error: `大きすぎます（${MAX_BYTES / 1024 / 1024}MB まで）` });
+        }
+        chunks.push(chunk as Buffer);
+      }
+      try {
+        const item = await this.#attachments.add(name, Buffer.concat(chunks));
+        return send(res, 200, {
+          id: item.id, name: item.name, bytes: item.bytes, kind: item.kind,
+        });
+      } catch (e) {
+        return send(res, 400, { error: (e as Error).message });
+      }
+    }
+
+    if (path === '/api/attach' && req.method === 'DELETE') {
+      const id = url.searchParams.get('id') ?? '';
+      return send(res, 200, { dropped: await this.#attachments.drop(id) });
+    }
+
     if (path === '/api/send' && req.method === 'POST') {
-      const body = await readBody(req) as { text?: string };
+      const body = await readBody(req) as { text?: string; attachments?: unknown };
       const text = typeof body?.text === 'string' ? body.text.trim() : '';
-      if (!text) return send(res, 400, { error: '指示が空です' });
+      const attached = Array.isArray(body?.attachments)
+        ? body.attachments.filter((a): a is string => typeof a === 'string')
+        : [];
+      if (!text && attached.length === 0) return send(res, 400, { error: '指示が空です' });
 
       const session = await this.session();
       if (session.busy) return send(res, 409, { error: 'いま別の作業をしています' });
 
+      // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
+      // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
+      const extra = attached.length > 0 ? await this.#attachments.describe(attached) : '';
+      const full = extra ? `${extra}\n\n${text}` : text;
+
       // 受け取ったことだけ先に返し、続きは出来事として流す。
       send(res, 202, { accepted: true });
-      void this.#drive(session, text);
+      void this.#drive(session, full);
       return;
     }
 

@@ -56,10 +56,128 @@ export const PANELS = {
     const stop = el('button', 'ghost', '中断');
     stop.type = 'button';
     stop.disabled = true;
-    field.append(input, send);
-    form.append(field, stop);
+
+    // 添付。落とす・貼る・選ぶ、どれでも渡せるようにする。
+    const clip = el('button', 'ghost icon', '📎');
+    clip.type = 'button';
+    clip.title = 'ファイルを添える（落としても貼り付けてもよい）';
+    const picker = document.createElement('input');
+    picker.type = 'file';
+    picker.multiple = true;
+    picker.style.display = 'none';
+
+    // 声。使えない環境では、そもそも出さない（押せないボタンは邪魔なだけ）。
+    const Recog = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    const mic = el('button', 'ghost icon', '🎤');
+    mic.type = 'button';
+    mic.title = Recog ? '声で入れる' : 'この環境では声を使えません';
+    if (!Recog) mic.style.display = 'none';
+
+    const tray = el('div', 'attachments');
+    tray.style.display = 'none';
+
+    field.append(input, clip, mic, send, picker);
+    form.append(tray, field, stop);
     wrap.append(log, form);
     body.append(wrap);
+
+    // ---- 添えたものを覚えておく -------------------------------
+    const attached = new Map();
+
+    const drawTray = () => {
+      tray.textContent = '';
+      tray.style.display = attached.size > 0 ? '' : 'none';
+      for (const [id, item] of attached) {
+        const chip = el('span', 'attachment');
+        const icon = item.kind === 'image' ? '🖼' : item.kind === 'binary' ? '📦' : '📄';
+        chip.append(el('span', 'attachment-icon', icon));
+        chip.append(el('span', 'attachment-name', item.name));
+        chip.append(el('span', 'dim', kb(item.bytes)));
+        const x = el('button', 'attachment-x', '×');
+        x.type = 'button';
+        x.title = '外す';
+        x.onclick = () => {
+          attached.delete(id);
+          drawTray();
+          void fetch(`/api/attach?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+        };
+        chip.append(x);
+        tray.append(chip);
+      }
+    };
+
+    const kb = (n) => (n >= 1024 * 1024
+      ? `${(n / 1024 / 1024).toFixed(1)}MB`
+      : `${Math.max(1, Math.round(n / 1024))}KB`);
+
+    /** 渡されたものを預ける。落とす・貼る・選ぶ、どの道でもここへ来る。 */
+    const take = async (files) => {
+      for (const file of files) {
+        const pending = el('span', 'attachment pending');
+        pending.textContent = `${file.name} を渡しています…`;
+        tray.style.display = '';
+        tray.append(pending);
+        try {
+          const r = await fetch(`/api/attach?name=${encodeURIComponent(file.name)}`, {
+            method: 'POST', body: file,
+          });
+          const item = await r.json();
+          if (!r.ok) throw new Error(item.error ?? '渡せませんでした');
+          attached.set(item.id, item);
+        } catch (e) {
+          note('bad', `${file.name}: ${e.message}`);
+        }
+        pending.remove();
+        drawTray();
+      }
+    };
+
+    clip.onclick = () => picker.click();
+    picker.onchange = () => { void take([...picker.files]); picker.value = ''; };
+
+    // 落とす。画面のどこに落としても受ける。狙わせない。
+    let dragDepth = 0;
+    wrap.ondragenter = (e) => { e.preventDefault(); dragDepth++; wrap.classList.add('dropping'); };
+    wrap.ondragover = (e) => { e.preventDefault(); };
+    wrap.ondragleave = () => { if (--dragDepth <= 0) wrap.classList.remove('dropping'); };
+    wrap.ondrop = (e) => {
+      e.preventDefault();
+      dragDepth = 0;
+      wrap.classList.remove('dropping');
+      if (e.dataTransfer?.files?.length) void take([...e.dataTransfer.files]);
+    };
+
+    // 貼り付け。画面の切り取りを直接貼れるのが要点。
+    input.onpaste = (e) => {
+      const files = [...(e.clipboardData?.files ?? [])];
+      if (files.length === 0) return; // ただの文字。そのまま貼らせる
+      e.preventDefault();
+      void take(files);
+    };
+
+    // ---- 声 ---------------------------------------------------
+    // 書き起こしの精度はブラウザ任せ。**入口だけ用意する。**
+    // 気に入らなければ、他の道具で書き起こして貼り付ければよい。
+    let listening;
+    mic.onclick = () => {
+      if (listening) { listening.stop(); return; }
+      const r = new Recog();
+      r.lang = 'ja-JP';
+      r.interimResults = true;
+      r.continuous = true;
+      const before = input.value;
+      r.onresult = (ev) => {
+        let said = '';
+        for (let i = 0; i < ev.results.length; i++) said += ev.results[i][0].transcript;
+        input.value = before ? `${before} ${said}` : said;
+        input.dispatchEvent(new Event('input'));
+      };
+      r.onerror = (ev) => { note('bad', `声を拾えませんでした: ${ev.error}`); };
+      r.onend = () => { listening = undefined; mic.classList.remove('listening'); };
+      r.start();
+      listening = r;
+      mic.classList.add('listening');
+    };
 
     // 下まで見ているときだけ追いかける。読んでいる途中で飛ばさない。
     let pinned = true;
@@ -130,15 +248,29 @@ export const PANELS = {
 
     const submit = async () => {
       const text = input.value.trim();
-      if (!text) return;
+      // 添えただけで送れる。「この画面を見て」だけで用が足りることがある。
+      if (!text && attached.size === 0) return;
       input.value = '';
       input.style.height = '';
       stream = null;
-      add(el('div', 'asked', text));
+
+      const asked = el('div', 'asked', text);
+      for (const item of attached.values()) {
+        asked.append(el('div', 'asked-file', `📎 ${item.name}`));
+      }
+      add(asked);
+
+      const ids = [...attached.keys()];
+      attached.clear();
+      drawTray();
+
       const isPlan = text.startsWith('/plan');
       const r = await fetch(isPlan ? '/api/plan' : '/api/send', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text: isPlan ? text.slice('/plan'.length).trim() : text }),
+        body: JSON.stringify({
+          text: isPlan ? text.slice('/plan'.length).trim() : text,
+          attachments: ids,
+        }),
       });
       if (!r.ok) note('bad', (await r.json()).error ?? '送れませんでした');
     };
