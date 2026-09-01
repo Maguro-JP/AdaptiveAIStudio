@@ -60,6 +60,27 @@ function pkgVersion(srcRoot) {
   } catch { return '0.0.0'; }
 }
 
+/**
+ * --version が無いときの版。
+ *
+ * package.json の `0.1.0` だけを書くと、**手元で組んだものが全部同じ版**になる。
+ * 直したはずの不具合が直っていないように見えたとき、どの中身で組んだかを
+ * 辿れない。git に訊けるなら、短い印と「未コミットの変更あり」まで足す。
+ * git に訊けない場所（配布物から配布物を組む等）では package.json の版だけ。
+ */
+export function guessVersion(srcRoot) {
+  const base = pkgVersion(srcRoot);
+  try {
+    const opts = { cwd: srcRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] };
+    const id = execFileSync('git', ['rev-parse', '--short', 'HEAD'], opts).trim();
+    if (!id) return base;
+    const dirty = execFileSync('git', ['status', '--porcelain'], opts).trim().length > 0;
+    return `${base}+${id}${dirty ? '（未コミットの変更あり）' : ''}`;
+  } catch {
+    return base;
+  }
+}
+
 function arg(name, fallback) {
   const i = process.argv.indexOf(name);
   return i >= 0 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--')
@@ -138,8 +159,9 @@ export async function bundle({
 
   // 版は独立した1ファイルにする。目印の中に混ぜると、読む側が
   // 目印を解釈しないと版が分からない。VERSION なら誰でも読める。
-  await writeFile(join(out, 'VERSION'), `${version ?? pkgVersion(srcRoot)}\r\n`, 'utf8');
-  log(`  置いた: VERSION（${version ?? '不明'}）`);
+  const stamped = version ?? guessVersion(srcRoot);
+  await writeFile(join(out, 'VERSION'), `${stamped}\r\n`, 'utf8');
+  log(`  置いた: VERSION（${stamped}）`);
 
   // 持ち運びの目印。中身は要らない（在ることだけが意味を持つ）。
   // 名前に点を付けて、利用者が消す対象に見えないようにする。
@@ -180,8 +202,7 @@ export async function bundle({
     log('  Node は同梱していません（--node-here / --node-exe / --node-zip）');
   }
 
-  const pkg = JSON.parse(await readFile(join(srcRoot, 'package.json'), 'utf8'));
-  return { out, version: version ?? pkg.version, bundledNode: Boolean(nodeZip || exe) };
+  return { out, version: stamped, bundledNode: Boolean(nodeZip || exe) };
 }
 
 // Windows では `file://` + argv[1] にすると一致しない。

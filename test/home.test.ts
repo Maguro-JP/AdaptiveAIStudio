@@ -166,6 +166,21 @@ describe('配布物の形', () => {
     assert.equal((await readFile(join(out, 'VERSION'), 'utf8')).trim(), 'test-2');
   });
 
+  test('版を渡さなくても、手元の印まで書く', async () => {
+    // 手元で組んだものが全部 0.1.0 では、どの中身で組んだか辿れない。
+    const { guessVersion } = await import('../scripts/bundle.mjs');
+    const v = guessVersion(installRoot());
+    // ここは git の作業コピー。package.json の版に短い印が付く。
+    assert.match(v, /^\d+\.\d+\.\d+\+[0-9a-f]{7,}/, `印が付いていない: ${v}`);
+  });
+
+  test('git に訊けない場所では、package.json の版だけ（対）', async () => {
+    const { guessVersion } = await import('../scripts/bundle.mjs');
+    const dir = await tempDir('aas-nogit-');
+    await writeFile(join(dir, 'package.json'), '{"version":"9.9.9"}');
+    assert.equal(guessVersion(dir), '9.9.9');
+  });
+
   test('data は app の外に出る', async () => {
     const out = await tempDir('aas-bundle-');
     const { bundle } = await import('../scripts/bundle.mjs');
