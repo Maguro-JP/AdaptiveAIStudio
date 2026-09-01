@@ -12,6 +12,7 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { UiServer, RUNTIME_KINDS } from '../src/ui/server.ts';
 import { loadConfig } from '../src/config.ts';
+import { installRoot } from '../src/core/home.ts';
 
 const servers: UiServer[] = [];
 afterEach(async () => {
@@ -95,5 +96,29 @@ describe('設定の口', () => {
     assert.equal(saved.system, 'これは残らなければならない');
     assert.equal(saved.runtime.desiredContext, 8192, '画面に無い設定を消した');
     assert.equal(saved.runtime.kind, 'inproc');
+  });
+});
+
+describe('モデルが無いまま送らせない', () => {
+  test('待たせずに、理由と次の一手を返す', async () => {
+    // 黙って待つと、画面は「考え中」のまま止まる。繋ぎ先の応答待ちは
+    // 数十秒になることがあり、その間ずっと固まったように見える。
+    const { url } = await start();
+    const r = await fetch(new URL('/api/send', url), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'こんにちは' }),
+    });
+    assert.equal(r.status, 503);
+    const body = await r.json() as { error: string };
+    assert.match(body.error, /モデルがまだありません/);
+    assert.match(body.error, /設定 → モデル/, '次の一手が書かれていない');
+  });
+
+  test('改行を潰さない', async () => {
+    // 次の一手を数行で書くので、一行に潰れると読めない。
+    const { readFile } = await import('node:fs/promises');
+    const css = await readFile(join(installRoot(), 'src', 'ui', 'web', 'style.css'), 'utf8');
+    assert.match(css, /\.note \{[^}]*white-space: pre-line/);
   });
 });

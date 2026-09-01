@@ -257,7 +257,9 @@ button.ghost:hover { color: var(--text); background: var(--surface2); }
   padding: 2px 0;
   line-height: 1.7;
 }
-.note { color: var(--dim); font-size: .86rem; padding: 1px 0; }
+/* 改行をそのまま出す。次の一手を数行で書くことがあり、
+   一行に潰れると「何をすればいいか」が読めなくなる。 */
+.note { color: var(--dim); font-size: .86rem; padding: 1px 0; white-space: pre-line; }
 .note.good { color: var(--good); }
 .note.warn { color: var(--warn); }
 .note.bad { color: var(--bad); }

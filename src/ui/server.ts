@@ -335,6 +335,11 @@ export class UiServer {
       const session = await this.session();
       if (session.busy) return send(res, 409, { error: 'いま別の作業をしています' });
 
+      // **先に確かめる。**モデルが無いまま送ると、繋ぎ先を待ち続けて
+      // 画面は「考え中」のまま止まる。利用者からは固まったようにしか見えない。
+      const missing = await this.#whyNoModel();
+      if (missing) return send(res, 503, { error: missing });
+
       // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
       // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
       const extra = attached.length > 0 ? await this.#attachments.describe(attached) : '';
@@ -353,6 +358,11 @@ export class UiServer {
 
       const session = await this.session();
       if (session.busy) return send(res, 409, { error: 'いま別の作業をしています' });
+
+      // **先に確かめる。**モデルが無いまま送ると、繋ぎ先を待ち続けて
+      // 画面は「考え中」のまま止まる。利用者からは固まったようにしか見えない。
+      const missing = await this.#whyNoModel();
+      if (missing) return send(res, 503, { error: missing });
 
       send(res, 202, { accepted: true });
       void this.#drivePlan(session, text);
@@ -599,6 +609,31 @@ export class UiServer {
     }
 
     return this.#static(path, res);
+  }
+
+  /**
+   * モデルが使えるか。使えないなら、その理由と次の一手を返す。
+   *
+   * 無いことを黙って待たない。**待っている間、利用者は何も分からない。**
+   * 繋ぎ先の応答待ちは数十秒になることがあり、その間ずっと「考え中」になる。
+   */
+  async #whyNoModel(): Promise<string | undefined> {
+    const kind = this.#opts.config.runtime?.kind ?? 'ollama';
+    try {
+      const runtime = await this.#localRuntime();
+      const models = await runtime.list();
+      if (models.length > 0) return undefined;
+    } catch (e) {
+      return `モデルの一覧を取れません（${kind}）: ${(e as Error).message}\n`
+        + '設定 → モデル で、動かし方を選び直せます。';
+    }
+    if (kind === 'ollama') {
+      return 'モデルがまだありません。\n'
+        + '設定 → モデル で「この中で読む」を選ぶと、GGUF を1つ置くだけで動きます。\n'
+        + 'Ollama を使うなら `ollama serve` を立ち上げてください。';
+    }
+    return `${this.#opts.config.runtime?.modelsDir ?? modelsDir()} に GGUF がありません。\n`
+      + '設定 → モデル に、いま見ている置き場が出ています。そこへ .gguf を1つ置いてください。';
   }
 
   /**
