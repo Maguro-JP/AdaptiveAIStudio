@@ -12,6 +12,10 @@
  * その口を**自分の中に立てる**。外に出る口は増えない（127.0.0.1 のみ）。
  * こうすると、上の層を一行も変えずに済む。
  *
+ * **上の層は必ず `stream: true` で呼ぶ**（src/providers/openai-compatible.ts）。
+ * 普通の JSON を返すと一度も動かない。だから SSE で返す。
+ * ここを合わせないまま「動くはず」と言いかけた。呼ぶ側を読んでから書く。
+ *
  * GGUF は同梱しない。数GBあり、数か月で新しいものが出る。
  * 置き場に置いてあるものを読むだけにする。
  */
@@ -51,7 +55,7 @@ export class InProcRuntime implements LocalRuntime {
   #server?: Server;
   #url = '';
   /** 読み込んだもの。ref ごとに一つ。 */
-  readonly #sessions = new Map<string, { context: unknown; session: unknown }>();
+  readonly #sessions = new Map<string, Held>();
 
   constructor(opts: InProcOptions) {
     this.#opts = opts;
@@ -81,8 +85,7 @@ export class InProcRuntime implements LocalRuntime {
   }
 
   async unload(ref: string): Promise<void> {
-    const held = this.#sessions.get(ref) as { context?: { dispose?: () => Promise<void> } } | undefined;
-    await held?.context?.dispose?.().catch(() => { /* すでに解けている */ });
+    await this.#sessions.get(ref)?.context.dispose?.().catch(() => { /* すでに解けている */ });
     this.#sessions.delete(ref);
   }
 
@@ -120,37 +123,131 @@ export class InProcRuntime implements LocalRuntime {
 
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (url.pathname.endsWith('/models')) {
+      // 繋がるかの確認に使われる。読み込んでいるものを答える。
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        object: 'list',
+        data: this.loaded().map((id) => ({ id, object: 'model' })),
+      }));
+      return;
+    }
     if (!url.pathname.endsWith('/chat/completions')) {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end('{"error":"そこはありません"}');
       return;
     }
+
     const raw = await new Promise<string>((resolve) => {
       let text = '';
       req.on('data', (c: Buffer) => { text += c.toString(); });
       req.on('end', () => resolve(text));
     });
-    let body: { model?: string; messages?: { role: string; content: string }[] };
+    let body: ChatRequest;
     try {
-      body = JSON.parse(raw || '{}') as typeof body;
+      body = JSON.parse(raw || '{}') as ChatRequest;
     } catch {
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end('{"error":"読めない中身です"}');
       return;
     }
+
     const ref = body.model ?? this.loaded()[0] ?? '';
-    const held = this.#sessions.get(ref) as { session: { prompt: (t: string) => Promise<string> } } | undefined;
+    const held = this.#sessions.get(ref);
     if (!held) {
       res.writeHead(400, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: `読み込んでいません: ${ref}` }));
+      res.end(JSON.stringify({ error: { message: `読み込んでいません: ${ref}` } }));
       return;
     }
-    const prompt = (body.messages ?? []).map((m) => m.content).join('\n\n');
-    const text = await held.session.prompt(prompt);
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({
-      id: 'inproc', object: 'chat.completion', model: ref,
-      choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
-    }));
+
+    // 上の層は毎回すべての履歴を送ってくる。こちらは持ち越さず、
+    // **渡されたものだけ**で組み直す。持ち越すと二重になる。
+    const messages = body.messages ?? [];
+    // いま訊いていること＝最後の user。それより前が履歴。
+    let at = messages.length - 1;
+    while (at >= 0 && messages[at]!.role !== 'user') at--;
+    const asked = at >= 0 ? messages[at]!.content : '';
+    held.session.setChatHistory(toHistory(messages.slice(0, Math.max(at, 0))));
+
+    const opts = {
+      ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
+      ...(typeof body.max_tokens === 'number' ? { maxTokens: body.max_tokens } : {}),
+    };
+
+    if (body.stream === false) {
+      const text = await held.session.prompt(asked, opts);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'inproc', object: 'chat.completion', model: ref,
+        choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+      }));
+      return;
+    }
+
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    const chunk = (delta: Record<string, unknown>, finish: string | null = null) => {
+      res.write(`data: ${JSON.stringify({
+        id: 'inproc', object: 'chat.completion.chunk', model: ref,
+        choices: [{ index: 0, delta, finish_reason: finish }],
+      })}\n\n`);
+    };
+    try {
+      chunk({ role: 'assistant' });
+      await held.session.prompt(asked, {
+        ...opts,
+        // 一気に返さず、出来た端から流す。長い返事のときに
+        // 「止まっている」ように見えるのが、いちばん困る。
+        onTextChunk: (text: string) => chunk({ content: text }),
+      });
+      chunk({}, 'stop');
+    } catch (e) {
+      // 途中で落ちたことを、黙って握り潰さない。
+      chunk({ content: `\n[止まりました: ${(e as Error).message}]` }, 'stop');
+    }
+    res.write('data: [DONE]\n\n');
+    res.end();
   }
+}
+
+/** ライブラリの、こちらが使う分だけの形。 */
+interface PromptOptions {
+  temperature?: number;
+  maxTokens?: number;
+  onTextChunk?: (text: string) => void;
+}
+interface Held {
+  context: { dispose?: () => Promise<void> };
+  session: {
+    prompt: (text: string, opts?: PromptOptions) => Promise<string>;
+    setChatHistory: (history: unknown[]) => void;
+  };
+}
+
+interface ChatMessage { role: string; content: string }
+interface ChatRequest {
+  model?: string;
+  messages?: ChatMessage[];
+  stream?: boolean;
+  temperature?: number;
+  max_tokens?: number;
+}
+
+/**
+ * OpenAI の形を、ライブラリの形に直す。
+ *
+ * 最後の user は履歴に入れない（それが「いま訊いていること」で、
+ * prompt() に渡すもの）。入れると同じことを二度言うことになる。
+ */
+export function toHistory(messages: ChatMessage[]): { type: string; text?: string; response?: string[] }[] {
+  const out: { type: string; text?: string; response?: string[] }[] = [];
+  for (const m of messages) {
+    if (m.role === 'system') out.push({ type: 'system', text: m.content });
+    else if (m.role === 'user') out.push({ type: 'user', text: m.content });
+    else if (m.role === 'assistant') out.push({ type: 'model', response: [m.content] });
+  }
+  return out;
 }
