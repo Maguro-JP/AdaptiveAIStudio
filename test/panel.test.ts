@@ -176,3 +176,41 @@ describe('画面の部品が、本当に読み込める形になっているか'
     }
   });
 });
+
+describe('置ける中身と、描く関数が食い違わない', () => {
+  // PANEL_KINDS に足して PANELS に足し忘れると、**その板だけ空になる**。
+  // 落ちないので気づけない。名前の対応も同じ理由で見る。
+  test('種類・描く関数・見出しが、全部そろっている', async () => {
+    const { PANEL_KINDS } = await import('../src/ui/layout.ts');
+    const { readFile } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = await readFile(join(here, '..', 'src', 'ui', 'web', 'panels.js'), 'utf8');
+
+    for (const kind of PANEL_KINDS) {
+      // `  name(body, ...` の形で並んでいる。
+      assert.match(src, new RegExp(`^\\s{2}${kind}\\(body`, 'm'), `描く関数が無い: ${kind}`);
+      assert.match(src, new RegExp(`${kind}: '`), `見出しが無い: ${kind}`);
+    }
+  });
+
+  test('画面の入口が、設定を開ける形になっている', async () => {
+    // 設定を畳んだので、開く口が無いと二度と辿り着けない。
+    const { readFile } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const dir = join(here, '..', 'src', 'ui', 'web');
+    const html = await readFile(join(dir, 'index.html'), 'utf8');
+    const app = await readFile(join(dir, 'app.js'), 'utf8');
+
+    assert.match(html, /id="openSettings"/, '設定を開く口が無い');
+    assert.match(app, /\$\('openSettings'\)\.onclick/, '開く口が繋がっていない');
+    // 中の見出しと、中身の節が対応していること。
+    for (const sec of ['info', 'look', 'place', 'model', 'check']) {
+      assert.match(html, new RegExp(`data-sec="${sec}"[^>]*>`), `見出しが無い: ${sec}`);
+      assert.match(html, new RegExp(`<section data-sec="${sec}"`), `中身が無い: ${sec}`);
+    }
+  });
+});

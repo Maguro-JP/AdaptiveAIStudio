@@ -944,5 +944,5 @@ export const PANELS = {
 export const TITLES = {
   conversation: '会話', plan: '進行中', roster: '人員', memory: '記憶',
   proposals: '提案', duties: '日課', models: 'モデル', changes: '変更',
-  log: '流れ', note: '覚え書き', checks: '点検',
+  log: '流れ', note: '覚え書き', checks: '点検', preview: '見る',
 };
