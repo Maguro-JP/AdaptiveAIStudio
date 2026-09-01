@@ -407,9 +407,13 @@ export class UiServer {
         runtime: runtime.id,
         installed: installed.map((m) => ({ ref: m.ref, sizeBytes: m.sizeBytes })),
         llamaServer: llama ?? null,
+        // どこを見ているか。「置いたのに出ない」を、画面の上で切り分けられる。
+        modelsDir: this.#opts.config.runtime?.modelsDir ?? modelsDir(),
         catalog: AVAILABLE_MODELS.map((m) => ({
           id: m.id, note: m.note, approxGB: m.approxGB,
-          ref: runtime.id === 'llamacpp' ? m.repo : m.ollama,
+          // GGUF を自分で置く道（llamacpp / inproc）では、置き場に入れる元を出す。
+          // Ollama の名前を出しても、そちらでは使えない。
+          ref: runtime.id === 'ollama' ? m.ollama : m.repo,
         })),
       });
     }

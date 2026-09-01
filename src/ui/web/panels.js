@@ -681,6 +681,13 @@ export const PANELS = {
         );
         status.append(row);
       }
+      // GGUF を自分で置く道では、どこを見ているかが分からないと詰む。
+      // 「置いたのに出ない」の切り分けが、この一行でつく。
+      if (data.runtime !== 'ollama' && data.modelsDir) {
+        const row = el('div', 'row');
+        row.append(el('span', 'key', '置き場'), el('span', 'num mono dim', data.modelsDir));
+        status.append(row);
+      }
 
       // 手元にあるもの
       list.replaceChildren(el('div', 'dim', '手元のモデル'));
