@@ -81,24 +81,36 @@ if (models.length > 0) {
   add('モデル', 'ok', `${models.length} 件: ${models.slice(0, 3).map((m) => m.ref).join(', ')}`
     + (models.length > 3 ? ' …' : ''));
 } else if (runtime.id === 'ollama') {
-  // 動かす土台は選べる。Ollama は借り物で、そうでない道も用意してある。
-  // ここで片方しか案内しないと、必須のように見えてしまう。
+  // 動かす土台は選べる。ここで片方しか案内しないと、必須のように見えてしまう。
+  // 並べる順は「増える実行ファイルが少ない順」。何も入れられない機械が
+  // いちばん困るので、そこで動くものを先に出す。
   add('モデル', 'bad', 'モデルを動かす土台がまだありません',
-    'どちらかを選んでください。\n'
+    'どれか一つを選んでください。\n'
     + '\n'
-    + '  A. Ollama（手早い。まずはこちら）\n'
+    + '  A. この中で読む（実行ファイルは増えません）\n'
+    + '     GGUF を1つ置いて、画面の 設定 → モデル で「この中で読む」を選ぶだけ。\n'
+    + '     設定ファイルに直接書くなら:\n'
+    + '       "runtime": { "kind": "inproc", "modelsDir": "GGUF を置いた場所" }\n'
+    + '     何も入れられない機械（会社の PC など）では、これだけが道になります。\n'
+    + '\n'
+    + '  B. Ollama（手早い。別に立てたものへ繋ぐ）\n'
     + '     https://ollama.com から入れて `ollama serve`\n'
     + '     そのあと `npm run models -- --get`（まず動く軽いものが入ります）\n'
     + '     一覧は `npm run models -- --available`。名前を直接渡すこともできます\n'
     + '\n'
-    + '  B. llama.cpp（Ollama に依らない。GGUF を自分で置く）\n'
-    + '     `npm run llama` で llama-server をこちらが用意します（手で入れる必要はありません）。\n'
-    + '     あとは GGUF を1箇所に集めて、aas.config.json に:\n'
+    + '  C. llama.cpp（速い。実行ファイルが1つ増えます）\n'
+    + '     `npm run llama` で llama-server をこちらが用意します。\n'
     + '       "runtime": { "kind": "llamacpp", "modelsDir": "GGUF を置いた場所" }\n'
     + '     オフロードの計算は GGUF を直接読んで行います（docs/GGUF.md）。');
 } else {
-  add('モデル', 'bad', `${config.runtime?.modelsDir ?? defaultModelsDir()} に GGUF がありません`,
-    '`npm run models -- --get` で取ってきます（まず動く軽いものが入ります）。\n'
+  const dir = config.runtime?.modelsDir ?? defaultModelsDir();
+  add('モデル', 'bad', `${dir} に GGUF がありません`,
+    (runtime.id === 'inproc'
+      ? 'この置き場に .gguf を1つ入れるだけで動きます。取ってくる先の例:\n'
+        + '  https://huggingface.co/Qwen （名前に GGUF が付いたもの）\n'
+        + '  迷ったら 3B の Q4_K_M（約2GB）。要約や下書きなら足ります。\n'
+      : '')
+    + '`npm run models -- --get` で取ってきます（まず動く軽いものが入ります）。\n'
     + '一覧は `npm run models -- --available`。\n'
     + '手持ちがあるなら、同じ置き場に .gguf を入れるだけでも使えます。\n'
     + `いまの置き場: ${config.runtime?.modelsDir ?? `${defaultModelsDir()}（既定）`}`);
@@ -143,12 +155,17 @@ for (const p of enabledProviders(config)) {
     const res = await fetch(`${p.baseUrl}/models`, { signal: AbortSignal.timeout(3000) });
     add(label, res.ok ? 'ok' : 'warn', `${p.baseUrl} — HTTP ${res.status}`);
   } catch (e) {
-    add(label, 'bad', `${p.baseUrl} に繋がりません`,
+    // **使っていないものが繋がらないのは、不足ではない。**
+    // inproc / llamacpp を選んでいるなら Ollama は使わないので、
+    // 未了として数えると「かたづける件数」が嘘になる。
+    const unused = p.id === 'ollama' && runtime.id !== 'ollama';
+    add(label, unused ? 'warn' : 'bad',
+      `${p.baseUrl} に繋がりません${unused ? '（使っていません）' : ''}`,
       p.id === 'ollama'
-        ? (runtime.id === 'llamacpp'
-          // llamacpp を使うなら、Ollama の口は無効にしておいた方が静か。
-          ? 'llamacpp を使う設定になっています。Ollama は使わないなら、'
-            + 'aas.config.json の providers から ollama を消すか enabled: false にしてください。'
+        ? (unused
+          ? `いまは ${runtime.id} で動かす設定なので、繋がらなくて構いません。\n`
+            + '黙らせたいときは、aas.config.json の providers から ollama を消すか '
+            + 'enabled: false にしてください。'
           : '`ollama serve` が動いているか確認してください。')
         : undefined);
   }
