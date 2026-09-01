@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { unifiedDiff, diffStat } from '../diff.ts';
-import { safeResolve, toDisplayPath } from './paths.ts';
+import { safeResolve, realSafeResolve, isSymlink, toDisplayPath } from './paths.ts';
 import { type Tool, type ToolContext, ok, fail, requireString } from './types.ts';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'target', '.venv']);
@@ -21,7 +21,8 @@ export const readFileTool: Tool = {
   async run(args, ctx) {
     const p = requireString(args, 'path');
     if (!p) return fail('path が必要です。');
-    const abs = safeResolve(ctx.root, p);
+    // リンクを辿った先まで見る。作業場の中のリンク一つで外が読めてしまう。
+    const abs = await realSafeResolve(ctx.root, p);
     if (!abs) return fail(`作業ディレクトリの外です: ${p}`);
     try {
       const info = await stat(abs);
@@ -93,7 +94,7 @@ export const searchTextTool: Tool = {
     for (const rel of files) {
       if (hits.length >= 100) break;
       if (ctx.signal.aborted) break;
-      const target = safeResolve(ctx.root, rel);
+      const target = await realSafeResolve(ctx.root, rel);
       if (!target) continue;
       try {
         const info = await stat(target);
@@ -132,8 +133,13 @@ export const writeFileTool: Tool = {
     if (!p) return fail('path が必要です。');
     if (content === undefined) return fail('content が必要です。');
 
-    const abs = safeResolve(ctx.root, p);
+    const abs = await realSafeResolve(ctx.root, p);
     if (!abs) return fail(`作業ディレクトリの外です: ${p}`);
+    // 書く先そのものがリンクなら書かない。`link -> .env` に書けば .env が
+    // 書き換わるのに、守り（protected-paths）は `link` しか見ていない。
+    if (await isSymlink(safeResolve(ctx.root, p) ?? abs)) {
+      return fail(`リンク越しには書きません: ${p}（実体を直接指定してください）`);
+    }
 
     let before = '';
     let created = false;

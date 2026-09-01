@@ -639,6 +639,12 @@ llama-server の記録、inproc が受け取る本文まで）。`src/core/text.
 どの機械かは `harness-setup` が `process.platform` で決めて渡す。照合の側で
 platform を見ると、走らせる場所で検査の結果が変わる。
 
+**リンクも同じ。**`safeResolve` は文字の上でしか見ていなかった。作業場の中に
+`link -> /etc` が一つあれば `link/passwd` は文字の上では中で、実体は外。
+`link -> .env` に書けば `.env` が書き換わるのに、守りは `link` しか見ない。
+モデルは `ln -s` を打てる。読む・探すは実体まで辿って中かを決め、
+書く先そのものがリンクなら書かない（`realSafeResolve` / `isSymlink`）。
+
 ---
 
 ## 2026-09-01  ファイルは UTF-8 と決めつけない
