@@ -207,7 +207,7 @@ describe('置ける中身と、描く関数が食い違わない', () => {
 
     assert.match(html, /id="openSettings"/, '設定を開く口が無い');
     // 画面から出来ることは、繋がっていて初めて意味がある。
-    for (const id of ['cfgKind', 'cfgModelsDir', 'cfgSave', 'cfgReload', 'cfgCatalog', 'cfgGet']) {
+    for (const id of ['cfgKind', 'cfgModelsDir', 'cfgSave', 'cfgReload', 'cfgRestart', 'cfgCatalog', 'cfgGet']) {
       assert.match(html, new RegExp(`id="${id}"`), `${id} が無い`);
       assert.match(app, new RegExp(`\\$\\('${id}'\\)`), `${id} が繋がっていない`);
     }

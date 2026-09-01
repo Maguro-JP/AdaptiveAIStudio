@@ -386,10 +386,18 @@ async function checkForUpdate() {
   const list = status.incoming.map((c) => `  ${c}`).join('\n');
   if (!confirm(`${status.behind}件の変更があります。\n\n${list}\n\n取り込みますか？`)) return;
 
-  const result = await (await fetch('/api/update', { method: 'POST' })).json();
+  const r = await fetch('/api/update', { method: 'POST' });
+  const result = await r.json();
   // 取り込んだ後は、動いているコードと置いてあるコードがズレている。
-  // ここで再起動せず、人に立ち上げ直してもらう。
-  alert(result.message || result.error || '更新しました');
+  // 黙って立ち上げ直さず、訊いてから。断られたら、ズレたまま使わせる
+  // のではなく、後で押せる場所（設定）を示す。
+  if (!r.ok) { alert(result.message || result.error || '更新できませんでした'); return; }
+  if (confirm(`${result.message || '更新しました'}\n\nいま立ち上げ直しますか？`)) {
+    await restartAndReload($('cfgNote'));
+  } else {
+    alert('設定の「立ち上げ直す」から、いつでも立ち上げ直せます。');
+    $('cfgRestart').hidden = false;
+  }
 }
 
 /**
@@ -602,8 +610,8 @@ $('cfgGet').onclick = async () => {
 };
 
 $('cfgReload').onclick = () => { void loadCfg(); };
-$('cfgRestart').onclick = async () => {
-  const note = $('cfgNote');
+/** 止めて、起き上がるまで待って、読み直す。設定の後と更新の後、どちらからも呼ぶ。 */
+async function restartAndReload(note) {
   note.style.whiteSpace = 'pre-line';
   const r = await fetch('/api/restart', { method: 'POST' });
   const body = await r.json().catch(() => ({}));
@@ -622,7 +630,9 @@ $('cfgRestart').onclick = async () => {
     if (ok) { location.reload(); return; }
   }
   note.textContent = '1分待ちましたが戻ってきません。start.cmd の窓を見てください。';
-};
+}
+
+$('cfgRestart').onclick = () => restartAndReload($('cfgNote'));
 $('cfgSave').onclick = async () => {
   const r = await fetch('/api/config', {
     method: 'PUT',
