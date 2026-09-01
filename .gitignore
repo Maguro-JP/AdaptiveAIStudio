@@ -7,3 +7,7 @@ tsconfig.tsbuildinfo
 # 組み立てた配布物。作れば済むので、管理下に置かない。
 # （一度これを入れて push を弾かれた。node を丸ごと抱えるため）
 dist/
+
+# 手で置いた Node。配らない（各自が落とす、または Releases の持ち運び版を使う）
+node/*
+!node/README.txt

@@ -1,8 +1,13 @@
 # 配布物を組み立てる。
 #
 # **押すたびには回さない。**印（タグ）を付けたときと、手で頼んだときだけ。
-# 組み立ては Windows の枠を使う（2倍で数えられる）ので、
-# 検査のたびに回すと、それだけで枠を食い潰す。
+#
+# 仕事を二つに割ってある。**持ち運び版に Windows は要らない。**
+# bundle.mjs は置くだけの仕事で、node.exe も落としてきて写すだけなので、
+# Linux で組める（枠は1倍）。Windows が要るのは NSIS で setup.exe を
+# 組むときだけなので、そちらはタグのときだけ回す。
+#
+# 前は全部を Windows で組んでいた。2倍の枠を、要らない仕事にも払っていた。
 name: 配布物
 
 on:
@@ -14,11 +19,76 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # 同梱する Node。型を剥がしながら実行するので v22.6 以降。
+  NODEVER: v24.18.0
+
 jobs:
-  build:
-    # インストーラの組み立てには NSIS が要る。
-    # Windows のランナーには最初から入っているので、ここで組む。
-    # こちら（開発側）は Linux なので、実機と同じ場所で組ませる方が確実。
+  # ------------------------------------------------------------------
+  # 持ち運び版。Node ごと入っているので、置くだけで動く。
+  # 何も入れられない機械（会社の PC など）で使う。
+  # ------------------------------------------------------------------
+  portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: 版を決める
+        id: v
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "id=${GITHUB_REF_NAME#v}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          else
+            echo "id=main-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 型検査に要るものだけ入れる。持ち運び先でも検査を回せるように同梱する。
+      - run: npm ci --no-audit --no-fund
+
+      - name: Windows 用の Node を取ってくる（同梱する中身）
+        run: curl -fL --retry 3 -o node.exe "https://nodejs.org/dist/${NODEVER}/win-x64/node.exe"
+
+      - name: 組み立てる
+        run: node scripts/bundle.mjs --out dist/AdaptiveAIStudio --node-exe node.exe --version "${{ steps.v.outputs.id }}"
+
+      - name: 確かめる（同梱した形のまま）
+        run: |
+          test -f dist/AdaptiveAIStudio/runtime/node.exe
+          test -f dist/AdaptiveAIStudio/AdaptiveAIStudio.cmd
+          test -f dist/AdaptiveAIStudio/app/start.cmd
+          # バッチが CP932 のまま入っているか。UTF-8 だと cmd.exe が行を壊す。
+          ! iconv -f UTF-8 -t UTF-8 dist/AdaptiveAIStudio/app/start.cmd > /dev/null 2>&1
+
+      - name: まとめる
+        run: cd dist && zip -qr ../AdaptiveAIStudio-portable.zip AdaptiveAIStudio
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AdaptiveAIStudio-portable-${{ steps.v.outputs.id }}
+          path: AdaptiveAIStudio-portable.zip
+          retention-days: 30
+
+      - name: 公開する
+        uses: softprops/action-gh-release@v2
+        with:
+          # タグが無いときも、動く現物を置いておく。落とせないものを
+          # 「同梱してあります」と言わないための場所。
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'portable' }}
+          name: ${{ github.ref_type == 'tag' && github.ref_name || '持ち運び版（main の最新）' }}
+          prerelease: ${{ github.ref_type != 'tag' }}
+          files: AdaptiveAIStudio-portable.zip
+
+  # ------------------------------------------------------------------
+  # インストーラ。NSIS が要るので Windows でしか組めない（枠は2倍）。
+  # だからタグのときだけ。
+  # ------------------------------------------------------------------
+  installer:
+    if: github.ref_type == 'tag'
+    needs: portable
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,22 +102,14 @@ jobs:
         shell: bash
         run: echo "id=${GITHUB_REF_NAME#v}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      # 型検査に要るものだけ入れる。持ち運び版に同梱するため。
       - run: npm ci --no-audit --no-fund
 
       - name: Node を取ってくる（同梱用）
         shell: bash
-        run: |
-          V=$(node -p "process.versions.node")
-          curl -fL --retry 3 -o node.zip "https://nodejs.org/dist/v${V}/node-v${V}-win-x64.zip"
+        run: curl -fL --retry 3 -o node.exe "https://nodejs.org/dist/${NODEVER}/win-x64/node.exe"
 
       - name: 組み立てる
-        run: node scripts/bundle.mjs --out installer/payload --node-zip node.zip --version "${{ steps.v.outputs.id }}"
-
-      - name: 持ち運び版（zip）
-        shell: bash
-        run: |
-          cd installer && 7z a -tzip "../AdaptiveAIStudio-portable.zip" payload/. > /dev/null
+        run: node scripts/bundle.mjs --out installer/payload --node-exe node.exe --version "${{ steps.v.outputs.id }}"
 
       - name: インストーラ（setup.exe）
         shell: cmd
@@ -59,16 +121,11 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: AdaptiveAIStudio-${{ steps.v.outputs.id }}
-          path: |
-            installer/AdaptiveAIStudio-Setup.exe
-            AdaptiveAIStudio-portable.zip
-          retention-days: 14
+          name: AdaptiveAIStudio-setup-${{ steps.v.outputs.id }}
+          path: installer/AdaptiveAIStudio-Setup.exe
+          retention-days: 30
 
-      - name: 公開する（タグのときだけ）
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: 公開する
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            installer/AdaptiveAIStudio-Setup.exe
-            AdaptiveAIStudio-portable.zip
+          files: installer/AdaptiveAIStudio-Setup.exe
