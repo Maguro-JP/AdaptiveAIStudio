@@ -21,6 +21,19 @@
 | 機械が読む合図 | `PASS` / `BLOCK: INSTRUCTION_OVERRIDE` / `PROPOSAL` / `title:` / `items` / `roleId` |
 | 人が読む中身 | 日本語の散文 |
 
+**基幹の部分に日本語を置かない。**日本語は注釈と、人に見せる文だけ。
+
+バッチファイルで実際に壊れた。`( )` の中に日本語を書いたところ、
+cmd.exe が塊をまとめて解釈する際に行が壊れ、断片をコマンドとして実行した。
+
+```
+'de\' is not recognized as an internal or external command,
+'□か、' is not recognized as an internal or external command,
+```
+
+分岐は `goto` で書き、日本語はラベルの中だけに置く。先頭に BOM も付ける
+（無いと cmd.exe は CP932 として読む）。`test/batch.test.ts` で止めている。
+
 モデルに何かを返させるときは、**語形が変化しない合図**を使う。
 日本語で `通す` / `止める` を返させていたとき、`通すべきではない` を
 「通す」と読んで**素通りさせていた**。理由も自由文にせず、決めた符丁から選ばせ、
