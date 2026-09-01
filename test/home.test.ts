@@ -228,6 +228,40 @@ describe('CI は押すたびに回さない', () => {
 /** バッチは CP932 で置いてある（cmd.exe がそう読むため）。合わせて読む。 */
 const cmd = (bytes: Uint8Array) => new TextDecoder('shift_jis').decode(bytes);
 
+describe('npm 無しの入口（scripts/run.mjs）', () => {
+  test('入口の判定に file:// を継ぎ足さない', async () => {
+    // Windows では argv[1] が Z:\...\run.mjs、import.meta.url は
+    // file:///Z:/.../run.mjs。`file://` + argv[1] では一致しないので、
+    // **中身が丸ごと動かない**。何も言わず終了コード0で終わるため
+    // 気づけない（実機でそうなった。画面が開かなかった）。
+    for (const name of ['run.mjs', 'bundle.mjs']) {
+      const src = await readFile(join(installRoot(), 'scripts', name), 'utf8');
+      assert.doesNotMatch(src, /`file:\/\/\$\{process\.argv\[1\]\}`/,
+        `scripts/${name} が file:// を継ぎ足している。pathToFileURL を使う`);
+      if (/process\.argv\[1\]/.test(src)) {
+        assert.match(src, /pathToFileURL\(process\.argv\[1\]\)\.href/,
+          `scripts/${name} が pathToFileURL を使っていない`);
+      }
+    }
+  });
+
+  test('入口として動く（中身が丸ごと死んでいないこと）', async () => {
+    // 静的な検査だけだと、入口そのものが無くなっても気づけない。
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const run = promisify(execFile);
+    const at = join(installRoot(), 'scripts', 'run.mjs');
+    await assert.rejects(
+      () => run(process.execPath, [at, 'そんな仕事はない']),
+      (e: { code?: number; stderr?: string }) => {
+        assert.equal(e.code, 2, '入口が動いていない');
+        assert.match(e.stderr ?? '', /そういう仕事はありません/);
+        return true;
+      },
+    );
+  });
+});
+
 describe('同梱した Node の置き場所', () => {
   // 一度、三箇所で食い違った（start.cmd は app/node、bundle は runtime、
   // bootstrap は node）。同梱したのに見つけられない状態だった。

@@ -250,3 +250,22 @@ Z:（PassageDrive / OneDrive）へ展開したところ、`runtime\node.exe` だ
 
 - 継ぎ足しを重ねたら、書き直す。今回 `start.cmd` は1本書き直した。
 - 同じラベルが二つ無いことを `test/batch.test.ts` で見る。
+
+---
+
+## 2026-09-01  file:// を文字列で継ぎ足さない
+
+`scripts/run.mjs` と `scripts/bundle.mjs` の入口が
+`import.meta.url === \`file://${process.argv[1]}\`` だった。
+
+Windows では `argv[1]` が `Z:\...\run.mjs`（円記号・ドライブ文字）、
+`import.meta.url` は `file:///Z:/.../run.mjs`。**一致しないので中身が
+丸ごと動かない。**何も言わず終了コード0で終わるため、失敗にも見えない。
+実機では「1 を選んでも画面が開かない」という形で出た。
+
+Linux では一致するので、こちらでは永久に気づけない。
+**走らせる場所で結果が変わる、の実例。**
+
+`pathToFileURL(process.argv[1]).href` を使う。
+`test/home.test.ts` で、文字列の継ぎ足しが無いことと、入口が実際に
+動くこと（そんな仕事はない → 終了コード2）の両方を見る。

@@ -24,7 +24,7 @@
 import { cp, mkdir, writeFile, rm, readFile, stat, chmod } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -184,7 +184,11 @@ export async function bundle({
   return { out, version: version ?? pkg.version, bundledNode: Boolean(nodeZip || exe) };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Windows では `file://` + argv[1] にすると一致しない。
+// argv[1] は Z:\...\run.mjs（円記号・ドライブ文字）、import.meta.url は
+// file:///Z:/.../run.mjs。**一致しないので、中身が丸ごと動かない。**
+// 何も言わずに終了コード0で終わるので、気づけない（実機でそうなった）。
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const out = resolve(root, arg('--out', 'dist/aas-portable'));
   console.log('持ち運び版を組み立てます');
   const r = await bundle({
