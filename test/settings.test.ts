@@ -13,7 +13,7 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { UiServer } from '../src/ui/server.ts';
 import {
-  RUNTIME_KINDS, inspectModelsDir, DIR_NOTES, ensureDefaultModelsDir,
+  RUNTIME_KINDS, inspectModelsDir, DIR_NOTES, ensureDefaultModelsDir, savedModelsDir, saveRuntime,
 } from '../src/ui/settings.ts';
 import { loadConfig } from '../src/config.ts';
 import { installRoot } from '../src/core/home.ts';
@@ -185,5 +185,33 @@ describe('既定の置き場は、無ければ作る', () => {
     const file = join(await tempDir('aas-mk-'), 'a.txt');
     await writeFile(file, 'x');
     assert.equal(await ensureDefaultModelsDir(join(file, 'models')), 'NOT_A_DIR');
+  });
+});
+
+describe('見せる置き場と、落とす置き場は同じ', () => {
+  // configPath は AAS_CONFIG があればそれを使う（この検査の上のほうで立てている）。
+  // cwd ではなく、そちらを差し替える。
+  async function withConfig<T>(run: (root: string) => Promise<T>): Promise<T> {
+    const root = await tempDir('aas-saved-');
+    const prev = process.env.AAS_CONFIG;
+    process.env.AAS_CONFIG = join(root, 'aas.config.json');
+    try { return await run(root); } finally {
+      if (prev === undefined) delete process.env.AAS_CONFIG; else process.env.AAS_CONFIG = prev;
+    }
+  }
+
+  test('保存してあれば、それ', async () => {
+    await withConfig(async (root) => {
+      const dir = join(root, 'ここ');
+      await saveRuntime('inproc', dir);
+      assert.equal(await savedModelsDir(), dir);
+    });
+  });
+
+  test('保存が無ければ、既定（対）', async () => {
+    await withConfig(async () => {
+      const { modelsDir } = await import('../src/core/home.ts');
+      assert.equal(await savedModelsDir(), modelsDir());
+    });
   });
 });

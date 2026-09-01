@@ -36,7 +36,7 @@ import { TaskRunner } from './tasks.ts';
 import { listenOrExplain } from '../core/listen.ts';
 import {
   RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
-  inspectModelsDir, ensureDefaultModelsDir,
+  inspectModelsDir, ensureDefaultModelsDir, savedModelsDir,
 } from './settings.ts';
 import { listGguf } from '../runtime/inproc.ts';
 import { Session } from '../core/session.ts';
@@ -517,7 +517,7 @@ export class UiServer {
       const saved = await readSavedRuntime();
       const active = this.#opts.config.runtime ?? {};
       const kind = String(saved.kind ?? 'ollama');
-      const dir = String(saved.modelsDir ?? modelsDir());
+      const dir = await savedModelsDir();
       return send(res, 200, {
         path: configPath(),
         kinds: RUNTIME_KINDS.map((id) => ({ id, name: KIND_LABELS[id] })),
@@ -717,7 +717,9 @@ export class UiServer {
 
     try {
       if (usesGguf(runtime.id)) {
-        const dir = this.#opts.config.runtime?.modelsDir ?? modelsDir();
+        // 画面の一覧と同じ場所へ落とす。動いている側の置き場に落とすと、
+        // 保存を変えた直後に「取ってきたのに出ない」になる。
+        const dir = await savedModelsDir();
         await installModel({
           entry: entry ?? {
             id, repo: id, quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '',

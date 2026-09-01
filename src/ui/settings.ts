@@ -7,6 +7,7 @@
  */
 import { readFile, writeFile, stat, mkdir } from 'node:fs/promises';
 import { configPath } from '../config.ts';
+import { modelsDir } from '../core/home.ts';
 
 export const RUNTIME_KINDS = ['ollama', 'llamacpp', 'inproc'] as const;
 
@@ -101,4 +102,17 @@ export async function ensureDefaultModelsDir(dir: string): Promise<DirState> {
   } catch {
     return inspectModelsDir(dir);
   }
+}
+
+/**
+ * いま「置き場」として見せている場所。
+ *
+ * 画面の一覧は**保存してある**置き場を読む。取ってくる先も同じでないと、
+ * 保存した直後に取ってきたものが古い置き場に落ち、「置いたのに出ない」になる。
+ * 見せる場所と落とす場所は、ここ一つで決める。
+ */
+export async function savedModelsDir(): Promise<string> {
+  const saved = await readSavedRuntime();
+  const dir = typeof saved.modelsDir === 'string' ? saved.modelsDir.trim() : '';
+  return dir || modelsDir();
 }
