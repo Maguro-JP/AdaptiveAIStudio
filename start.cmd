@@ -18,11 +18,18 @@ rem 同梱していれば、そちらを使う。会社の機械のように
 rem 何も入れられない場所では、これだけが頼りになる。
 set NODE=node
 set NPM=npm
+set RUNNER=npm
 if exist "%~dp0node\node.exe" (
   set "NODE=%~dp0node\node.exe"
-  set "NPM=%~dp0node\npm.cmd"
   set "PATH=%~dp0node;%PATH%"
   echo   Node は同梱のものを使います
+  rem npm まで同梱していないことがある。無ければ package.json を
+  rem 直接読んで動かす（scripts/run.mjs）。二重に書き写さないので、ずれない。
+  if exist "%~dp0node\npm.cmd" (
+    set "NPM=%~dp0node\npm.cmd"
+  ) else (
+    set RUNNER=direct
+  )
 ) else (
   where node >nul 2>nul
   if errorlevel 1 (
@@ -83,7 +90,7 @@ echo.
 rem 更新は、取り込んだあと立ち上げ直すところまでが一続き。
 rem 動いているコードと置いてあるコードがズレたまま使わせない。
 if not "%TASK%"=="update" goto normal
-call "%NPM%" run update
+if "%RUNNER%"=="direct" ( call "%NODE%" scripts/run.mjs update ) else ( call "%NPM%" run update )
 echo.
 set /p AGAIN="   立ち上げ直しますか？ [Y/n]: "
 if /i "%AGAIN%"=="n" exit /b 0
@@ -91,7 +98,11 @@ if /i "%AGAIN%"=="n" exit /b 0
 exit /b %errorlevel%
 
 :normal
-call "%NPM%" run %TASK%
+if "%RUNNER%"=="direct" (
+  call "%NODE%" scripts/run.mjs %TASK%
+) else (
+  call "%NPM%" run %TASK%
+)
 set CODE=%errorlevel%
 
 rem --- 終わり方 --------------------------------------------
