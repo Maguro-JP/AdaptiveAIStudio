@@ -69,6 +69,11 @@ const MONO = "ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, 'Noto Sans Mono'
 /**
  * 用意しておく見た目。
  *
+ * **文字と地の差は 4.5 以上にする。**一日中見る画面なので、
+ * 読めるかどうかは好みの前の問題。実際に測ったら4つ足りていなかった
+ * （paper の accent と warn、ember の accent、terminal の dim）。
+ * `test/theme.test.ts` が測って止める。
+ *
  * 既定は slate。作業中ずっと見ていられることだけを狙っている。
  * 地は真っ黒にしない。真っ黒は文字との差が強すぎて、長時間で目が疲れる。
  * 文字も真っ白にしない。同じ理由。
@@ -94,8 +99,8 @@ export const THEMES: Theme[] = [
     tokens: {
       bg: '#f3f4f7', surface: '#ffffff', surface2: '#f7f8fa', line: '#e2e5ec',
       surfaceSolid: '#f7f8fa',
-      text: '#1c2027', dim: '#69707e', accent: '#3b6fd4', accentText: '#ffffff',
-      good: '#2e7d4f', warn: '#a86b12', bad: '#c0384a',
+      text: '#1c2027', dim: '#69707e', accent: '#376cd3', accentText: '#ffffff',
+      good: '#2e7d4f', warn: '#9a6211', bad: '#c0384a',
       radius: '10px', gap: '10px', shadow: '0 1px 2px rgba(16,24,40,.06)',
       font: SANS, fontMono: MONO, fontSize: '14px', lineHeight: '1.55',
     },
@@ -123,7 +128,7 @@ export const THEMES: Theme[] = [
     tokens: {
       bg: '#120a0b', surface: '#1d1113', surface2: '#271619', line: '#43242a',
       surfaceSolid: '#271619',
-      text: '#f3e2e0', dim: '#b8908f', accent: '#c8434a', accentText: '#fff1ef',
+      text: '#f3e2e0', dim: '#b8908f', accent: '#d16368', accentText: '#1a0a0b',
       good: '#7fb069', warn: '#e0a233', bad: '#e0544f',
       radius: '8px', gap: '10px', shadow: '0 2px 12px rgba(0,0,0,.55)',
       font: SANS, fontMono: MONO, fontSize: '14px', lineHeight: '1.6',
@@ -182,7 +187,7 @@ export const THEMES: Theme[] = [
     tokens: {
       bg: '#0b0f0b', surface: '#0f150f', surface2: '#131a13', line: '#1f2b1f',
       surfaceSolid: '#131a13',
-      text: '#8fdf8f', dim: '#4f7a4f', accent: '#a3e635', accentText: '#0b0f0b',
+      text: '#8fdf8f', dim: '#5d905d', accent: '#a3e635', accentText: '#0b0f0b',
       good: '#a3e635', warn: '#facc15', bad: '#f87171',
       radius: '0px', gap: '6px', shadow: 'none',
       font: MONO, fontMono: MONO, fontSize: '13px', lineHeight: '1.45',

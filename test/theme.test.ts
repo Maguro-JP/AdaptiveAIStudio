@@ -225,3 +225,50 @@ describe('ブラウザが自分で描く部品', () => {
     assert.match(css, /select option[\s\S]*?--surface-solid/, 'option に透けない地を渡していない');
   });
 });
+
+describe('読めるかどうかは、好みの前の問題', () => {
+  test('文字と地の差が、どのテーマでも足りている', async () => {
+    // 一日中見る画面なので、読めることは好みより先に来る。
+    // 実際に測ったら4つ足りていなかった（paper の accent と warn、
+    // ember の accent、terminal の dim）。目で見て決めない。
+    const { THEMES } = await import('../src/ui/theme.ts');
+    const core = await import('../src/ui/web/color-core.js') as {
+      parse: (v: string) => { r: number; g: number; b: number; a: number } | undefined;
+      contrast: (a: unknown, b: unknown) => number;
+    };
+
+    const thin: string[] = [];
+    for (const t of THEMES) {
+      const k = t.tokens;
+      // 板の地（透けない色）の上で測る。半透明の上では測れない。
+      const bg = core.parse(k.surfaceSolid ?? k.bg ?? '');
+      assert.ok(bg, `${t.id} の地を読めない`);
+      for (const name of ['text', 'dim', 'accent', 'good', 'warn', 'bad'] as const) {
+        const c = core.parse(k[name] ?? '');
+        assert.ok(c, `${t.id} の ${name} を読めない`);
+        const ratio = core.contrast(c, bg);
+        if (ratio < 4.5) thin.push(`${t.id}.${name} = ${ratio.toFixed(2)}`);
+      }
+    }
+    assert.deepEqual(thin, [], `読みにくい組み合わせがある:\n  ${thin.join('\n  ')}`);
+  });
+
+  test('accent の上に載る文字も、読める', async () => {
+    // accent はボタンの地にもなる。その上の文字が読めないと、
+    // 「押せるもの」がいちばん読みにくい、という形になる。
+    const { THEMES } = await import('../src/ui/theme.ts');
+    const core = await import('../src/ui/web/color-core.js') as {
+      parse: (v: string) => unknown;
+      contrast: (a: unknown, b: unknown) => number;
+    };
+    const thin: string[] = [];
+    for (const t of THEMES) {
+      const on = core.parse(t.tokens.accentText ?? '');
+      const bg = core.parse(t.tokens.accent ?? '');
+      if (!on || !bg) continue;
+      const ratio = core.contrast(on, bg);
+      if (ratio < 4.5) thin.push(`${t.id} = ${ratio.toFixed(2)}`);
+    }
+    assert.deepEqual(thin, [], `押せるものの文字が読みにくい:\n  ${thin.join('\n  ')}`);
+  });
+});
