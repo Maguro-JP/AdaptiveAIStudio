@@ -9,6 +9,19 @@
  *
  * だから分岐は goto で書き、日本語は括弧の外（ラベルの中）だけに置く。
  * 制御の骨は ASCII、人に見せる文だけ日本語。
+ *
+ * 文字集合も同じ話。cmd.exe はバッチを console の文字集合（日本語 Windows
+ * なら CP932）で読む。UTF-8 で置くと、実機でこうなった。
+ *
+ *   >�き場所: C:\Users\...
+ *   '�き場所:' is not recognized as an internal or external command,
+ *
+ * BOM を付けても直らず、1 行目まで壊れて @echo off が効かなくなった。
+ *
+ *   '・ｿ@echo' は、内部コマンドまたは外部コマンド...認識されていません
+ *
+ * だから **CP932 で置き、BOM は付けない**（.gitattributes の
+ * working-tree-encoding で、記録は UTF-8 のまま取り出すときだけ変える）。
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -31,6 +44,10 @@ async function batchFiles(): Promise<string[]> {
 }
 
 const nonAscii = (s: string) => /[^\x00-\x7F]/.test(s);
+
+/** バッチは CP932 で置いてある。読むときも合わせる。 */
+const read2 = (bytes: Uint8Array) => new TextDecoder('shift_jis').decode(bytes);
+const read = async (path: string) => read2(await readFile(path));
 
 /**
  * 括弧の中に日本語があるか。
@@ -62,25 +79,37 @@ function insideParens(source: string): string[] {
 describe('バッチファイル', () => {
   test('括弧の中に日本語を置かない', async () => {
     for (const path of await batchFiles()) {
-      const source = await readFile(path, 'utf8');
+      const source = await read(path);
       const bad = insideParens(source);
       assert.deepEqual(bad, [], `${path} の括弧の中に日本語がある:\n  ${bad.join('\n  ')}`);
     }
   });
 
-  test('先頭に BOM を付ける', async () => {
-    // 無いと cmd.exe は console の文字集合（日本語 Windows なら CP932）で
-    // 読むので、UTF-8 の日本語が化ける。
+  test('BOM を付けない', async () => {
+    // 付けると 1 行目が壊れ、@echo off が効かなくなる。実機で確認済み。
     for (const path of await batchFiles()) {
       const head = (await readFile(path)).subarray(0, 3);
-      assert.deepEqual([...head], [0xef, 0xbb, 0xbf], `${path} に BOM が無い`);
+      assert.notDeepEqual([...head], [0xef, 0xbb, 0xbf], `${path} に BOM がある`);
+    }
+  });
+
+  test('UTF-8 で置かない（cmd.exe は console の文字集合で読む）', async () => {
+    for (const path of await batchFiles()) {
+      const bytes = await readFile(path);
+      if (!bytes.some((b) => b >= 0x80)) continue; // ASCII だけなら、どちらでも同じ
+      assert.throws(
+        () => new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+        `${path} が UTF-8 のまま。CP932 で置く（.gitattributes を見る）`,
+      );
+      // CP932 として読めること。読めない並びなら、置き方が壊れている。
+      assert.ok(!read2(bytes).includes('\ufffd'), `${path} を CP932 として読めない`);
     }
   });
 
   test('飛び先の無い goto を残さない', async () => {
     // 飛び先が無いと、その場で止まらずに先へ流れてしまう。
     for (const path of await batchFiles()) {
-      const source = await readFile(path, 'utf8');
+      const source = await read(path);
       // 注釈は外す。中の英文に goto と書いてあるのを拾ってしまう
       // （実際に「Use goto labels」を飛び先だと思って落ちた）。
       const lines = source.split(/\r?\n/)

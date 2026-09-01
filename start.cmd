@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 rem ============================================================
 rem  AdaptiveAIStudio 起動用
 rem
@@ -21,7 +21,6 @@ rem
 rem  この窓は、失敗しても勝手に閉じない。
 rem  一瞬で閉じて何も分からない、が一番困るため。
 rem ============================================================
-chcp 65001 >nul 2>nul
 setlocal
 cd /d "%~dp0"
 title AdaptiveAIStudio

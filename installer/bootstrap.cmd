@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 rem ============================================================
 rem  AdaptiveAIStudio - set up on a machine with nothing installed
 rem
@@ -21,7 +21,6 @@ rem  cmd.exe parses a block as one unit; multi-byte characters break it
 rem  and the fragments get executed as commands. Use goto labels, and
 rem  keep Japanese in label bodies only (those are messages for people).
 rem ============================================================
-chcp 65001 >nul 2>nul
 setlocal
 title AdaptiveAIStudio
 
