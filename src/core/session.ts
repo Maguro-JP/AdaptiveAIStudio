@@ -25,6 +25,8 @@ import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { createDeliberateTool } from '../agent/tools/deliberate.ts';
 import { buildInspector } from './inspector-setup.ts';
+import { startMcpServers } from './mcp-setup.ts';
+import { collectTools } from '../mcp/tools.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall } from '../memory/memory.ts';
 import { ProposalQueue, type Proposal } from '../agent/proposals.ts';
@@ -144,7 +146,7 @@ export class Session {
 
   readonly #tools: Tool[];
   /** 権限ごとのツール。役職に応じて配り分けるために持つ。 */
-  readonly toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[] };
+  readonly toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[]; mcp: Tool[] };
   readonly #opts: SessionOptions;
   readonly #prefetch: Prefetcher;
   /** ハーネスの規則へ「いま何を頼まれているか」を渡すための箱。 */
@@ -171,7 +173,7 @@ export class Session {
     holder: { instruction: string };
     forum: Forum;
     harness: Harness;
-    toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[] };
+    toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[]; mcp: Tool[] };
   }) {
     this.config = init.config;
     this.root = init.root;
@@ -187,7 +189,7 @@ export class Session {
     // 一人で全部やるときは、全ての権限を渡す。
     this.#tools = [
       ...init.toolPool.read, ...init.toolPool.write,
-      ...init.toolPool.execute, ...init.toolPool.network,
+      ...init.toolPool.execute, ...init.toolPool.network, ...init.toolPool.mcp,
     ];
     this.#prefetch = init.prefetch;
     this.#opts = init.opts;
@@ -217,8 +219,21 @@ export class Session {
       else if (d.outcome === 'warned') log('warn', `⚠ ${d.rule}: ${d.reason ?? ''}`);
     }, forum);
 
+    // 外の道具。立ち上がらない相手がいても、他は動く。
+    const mcpClients = await startMcpServers(config, log);
+
     // 権限は「配らない」ことで守る。禁じる文言ではなく、手段の有無で決める。
     const netCfg = config.network ?? {};
+
+    // 関所の二段目。外へ出るときも、外の道具から返るときも、同じ検査官を通す。
+    // 使えるモデルが無ければ置かれず、一段目（当てはめ）だけで動く。
+    const inspector = buildInspector(
+      orchestrator,
+      // 明示が無ければ候補を逆順にする。候補は強い順に並んでいるので、
+      // そのまま渡すと一番重いモデルが関所に立つ。ここは速さが要る。
+      netCfg.inspector?.candidates ?? [...candidates].reverse(),
+      netCfg.inspector ?? {},
+    );
     const wrap = (tools: Tool[]) => harness.wrapAll(tools, () => holder.instruction);
     const toolPool = {
       read: wrap([readFileTool, listFilesTool, searchTextTool]),
@@ -226,15 +241,11 @@ export class Session {
       execute: wrap([createRunCommandTool({ allowed: agentCfg.allowedCommands })]),
       network: netCfg.enabled === false ? [] : wrap([createFetchUrlTool({
         allowedHosts: netCfg.allowedHosts, maxBytes: netCfg.maxBytes, timeoutMs: netCfg.timeoutMs,
-        // 関所の二段目。使えるモデルが無ければ置かれず、一段目だけで動く。
-        inspector: buildInspector(
-          orchestrator,
-          // 明示が無ければ候補を逆順にする。候補は強い順に並んでいるので、
-          // そのまま渡すと一番重いモデルが関所に立つ。ここは速さが要る。
-          netCfg.inspector?.candidates ?? [...candidates].reverse(),
-          netCfg.inspector ?? {},
-        ),
+        inspector,
       })]),
+      // 外の道具。立ち上がった相手のぶんだけ増える。
+      // 繋がらない相手がいても、他は動く（全部を道連れにしない）。
+      mcp: wrap(collectTools(mcpClients, { inspector, timeoutMs: config.mcp?.timeoutMs })),
     };
 
     const prefetch = new Prefetcher(root, () => undefined);

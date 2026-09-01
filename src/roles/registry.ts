@@ -119,10 +119,10 @@ export class RoleRegistry {
  */
 export function toolsFor(
   role: Role,
-  pool: { read: Tool[]; write: Tool[]; execute: Tool[]; network?: Tool[] },
+  pool: { read: Tool[]; write: Tool[]; execute: Tool[]; network?: Tool[]; mcp?: Tool[] },
 ): Tool[] {
   const tools: Tool[] = [];
-  for (const access of ['read', 'write', 'execute', 'network'] as const) {
+  for (const access of ['read', 'write', 'execute', 'network', 'mcp'] as const) {
     if (role.access.includes(access)) tools.push(...(pool[access] ?? []));
   }
   return tools;

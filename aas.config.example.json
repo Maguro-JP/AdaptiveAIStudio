@@ -5,18 +5,41 @@
       "kind": "anthropic",
       "locality": "cloud",
       "apiKeyEnv": "ANTHROPIC_API_KEY",
-      "models": ["claude-opus-5"]
+      "models": [
+        "claude-opus-5"
+      ]
     },
     {
       "id": "ollama",
       "kind": "openai-compatible",
       "baseUrl": "http://localhost:11434/v1",
       "locality": "local",
-      "models": ["qwen3.5:9b"]
+      "models": [
+        "qwen3.5:9b"
+      ]
     }
   ],
-  "candidates": ["claude:claude-opus-5", "ollama:qwen3.5:9b"],
+  "candidates": [
+    "claude:claude-opus-5",
+    "ollama:qwen3.5:9b"
+  ],
   "system": "あなたは日本語で応答する開発支援アシスタントです。簡潔に、根拠とともに答えてください。",
   "temperature": 0.2,
-  "maxTokens": 4096
+  "maxTokens": 4096,
+  "mcp": {
+    "_": "外の道具。GitHub もここに一つ足すだけで繋がる。合言葉は envFrom で『名前』を書く（値は書かない）",
+    "servers": {
+      "github": {
+        "enabled": false,
+        "command": "npx",
+        "args": [
+          "-y",
+          "@modelcontextprotocol/server-github"
+        ],
+        "envFrom": {
+          "GITHUB_PERSONAL_ACCESS_TOKEN": "GITHUB_TOKEN"
+        }
+      }
+    }
+  }
 }

@@ -163,8 +163,10 @@ describe('権限の配り方', () => {
     const { BUILTIN_ROLES } = await import('../src/roles/builtin.ts');
     // 外の内容には、こちらを操ろうとするものが混ざり得る。
     // 読んだ役がそのまま書けると、それが直接ファイルに届く。
+    // 外へ出る道は network だけではない。外の道具（mcp）も同じ扱いにする。
     const both = BUILTIN_ROLES
-      .filter((r) => r.access.includes('network') && r.access.includes('write'))
+      .filter((r) => (r.access.includes('network') || r.access.includes('mcp'))
+        && r.access.includes('write'))
       .map((r) => r.id);
     assert.deepEqual(both, [], `外に出て書ける役職がいる: ${both.join(', ')}`);
   });

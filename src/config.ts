@@ -48,8 +48,36 @@ export interface AasConfig {
   roles?: RoleOverrideConfig[];
   /** 合議に参加させる役職 */
   panel?: PanelConfig;
-  /** 外部情報の取得。情報担当(ENVOY)だけが使う出口。 */
+  /** 外部情報の取得。 */
   network?: NetworkConfig;
+  /** 外の道具（MCP）。GitHub もここに一つ足すだけで繋がる。 */
+  mcp?: McpConfig;
+}
+
+export interface McpConfig {
+  /** 既定は有効。servers が空なら、そもそも何も立ち上がらない。 */
+  enabled?: boolean;
+  /**
+   * 繋ぐ相手。名前をこちらで決めて、道具の名前の頭に付ける。
+   *
+   * 合言葉は **envFrom で名前を書く**。設定ファイルに値そのものを書かせない。
+   *
+   *   "github": {
+   *     "command": "npx",
+   *     "args": ["-y", "@modelcontextprotocol/server-github"],
+   *     "envFrom": { "GITHUB_PERSONAL_ACCESS_TOKEN": "GITHUB_TOKEN" }
+   *   }
+   */
+  servers?: Record<string, {
+    command: string;
+    args?: string[];
+    envFrom?: Record<string, string>;
+    startupTimeoutMs?: number;
+    /** false にすると、設定を消さずに切っておける。 */
+    enabled?: boolean;
+  }>;
+  /** 1回の呼び出しの上限。既定60秒 */
+  timeoutMs?: number;
 }
 
 export interface RoleOverrideConfig {
@@ -58,7 +86,7 @@ export interface RoleOverrideConfig {
   name?: string;
   responsibility?: string;
   disposition?: string;
-  access?: Array<'read' | 'write' | 'execute' | 'network'>;
+  access?: Array<'read' | 'write' | 'execute' | 'network' | 'mcp'>;
   instructions?: string[];
   outputContract?: string;
   prefers?: 'strong' | 'fast' | 'any';
@@ -299,6 +327,7 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
     initiative: parsed.initiative ?? {},
     roles: parsed.roles ?? [],
     panel: parsed.panel ?? {},
+    mcp: parsed.mcp ?? {},
   };
   if (config.agent?.lanes) validateLanes(config);
   validate(config);

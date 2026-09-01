@@ -14,7 +14,7 @@
  *   権限   何ができるか（プロンプトではなくツールの割り当てで決める）
  */
 
-export type ToolAccess = 'read' | 'write' | 'execute' | 'network';
+export type ToolAccess = 'read' | 'write' | 'execute' | 'network' | 'mcp';
 
 export interface Role {
   id: string;
@@ -38,6 +38,7 @@ export interface Role {
    *   write   書き換える
    *   execute コマンドを実行する
    *   network 外の公開情報を取りに行く（許可した行き先のみ）
+   *   mcp     外の道具を動かす（GitHub など。繋いだ相手の道具だけ）
    */
   access: ToolAccess[];
   /** 具体的な指示。気質を行動に落とす。 */
