@@ -123,3 +123,25 @@ describe('一覧の見た目', () => {
     assert.ok(html.indexOf('a') < html.indexOf('z.txt'));
   });
 });
+
+describe('一覧に、名前をそのまま流し込まない', () => {
+  test('名前の中の < と " は文字として出る', () => {
+    const html = listing('/', [{ name: '"><script>alert(1)</script>', isDir: false }]);
+    assert.ok(!html.includes('<script>alert'), '名前が HTML として通っている');
+    assert.ok(html.includes('&lt;script&gt;'), '文字として出ていない');
+    // href も同じ。属性を閉じて外へ出させない。
+    assert.ok(!html.includes('href=""><'), 'href が閉じられている');
+  });
+
+  test('見出しの道も同じ', () => {
+    const html = listing('<b>x</b>', []);
+    assert.ok(!html.includes('<b>x</b>'));
+    assert.ok(html.includes('&lt;b&gt;x&lt;/b&gt;'));
+  });
+
+  test('ふつうの名前は、そのまま読める（対）', () => {
+    const html = listing('/', [{ name: 'メモ.md', isDir: false }, { name: 'src', isDir: true }]);
+    assert.ok(html.includes('📄 メモ.md'));
+    assert.ok(html.includes('href="src/"'));
+  });
+});

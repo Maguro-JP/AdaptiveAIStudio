@@ -73,18 +73,29 @@ export function inject(html: string): string {
 }
 
 /** 作業場の中の一覧を、そのまま見られる形にする。 */
+/** HTML に文字として入れる。名前は作業場のもの＝モデルや外から来たものが付けうる。 */
+export function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>
+  )[c]!);
+}
+
 export function listing(dir: string, entries: { name: string; isDir: boolean }[]): string {
+  // 名前をそのまま HTML に流し込まない。作業場のファイル名はモデルが付ける
+  // ことも、外から来たものが付けることもある。`"><script>` という名前の
+  // ファイル一つで、この頁が書き換えられる。
   const rows = entries
     .sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
-    .map((e) => `<li><a href="${e.name}${e.isDir ? '/' : ''}">${e.isDir ? '📁 ' : '📄 '}${e.name}</a></li>`)
+    .map((e) => `<li><a href="${encodeURIComponent(e.name)}${e.isDir ? '/' : ''}">${e.isDir ? '📁 ' : '📄 '}${escapeHtml(e.name)}</a></li>`)
     .join('\n');
-  return `<!doctype html><meta charset="utf-8"><title>${dir}</title>
+  const title = escapeHtml(dir);
+  return `<!doctype html><meta charset="utf-8"><title>${title}</title>
 <style>
  body{font:14px system-ui,sans-serif;margin:2rem;background:#0f1116;color:#dfe3ec}
  a{color:#7aa2f7;text-decoration:none} a:hover{text-decoration:underline}
  ul{list-style:none;padding:0;line-height:1.9} h1{font-size:1rem;color:#8e97a8;font-weight:500}
 </style>
-<h1>${dir}</h1><ul>${rows}</ul>${RELOAD_SNIPPET}`;
+<h1>${title}</h1><ul>${rows}</ul>${RELOAD_SNIPPET}`;
 }
 
 export interface PreviewOptions {
