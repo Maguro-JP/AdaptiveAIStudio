@@ -37,9 +37,9 @@ export function installRoot(): string {
  */
 export function productRoot(from = installRoot()): string {
   // 目印は製品の根に置く。中身（app）の一つ上にあることもある。
-  if (existsSync(join(from, 'portable.txt'))) return from;
+  if (existsSync(join(from, '.portable'))) return from;
   const up = resolve(from, '..');
-  if (existsSync(join(up, 'portable.txt'))) return up;
+  if (existsSync(join(up, '.portable'))) return up;
   return from;
 }
 
@@ -50,8 +50,8 @@ export function productRoot(from = installRoot()): string {
  * フォルダを渡すだけで持ち運びになる。受け取った側は何も設定しなくてよい。
  */
 export function isPortable(from = installRoot()): boolean {
-  return existsSync(join(from, 'portable.txt'))
-    || existsSync(join(resolve(from, '..'), 'portable.txt'));
+  return existsSync(join(from, '.portable'))
+    || existsSync(join(resolve(from, '..'), '.portable'));
 }
 
 /**
@@ -59,7 +59,7 @@ export function isPortable(from = installRoot()): boolean {
  *
  * 決め方の順番。上から先に効く。
  *   1. AAS_HOME（明示。インストーラはこれを書く）
- *   2. portable.txt があれば、この道具の隣の aas-home
+ *   2. .portable があれば、製品の根の下の data
  *   3. ~/.aas（これまでどおり）
  */
 export function aasHome(root = installRoot()): string {

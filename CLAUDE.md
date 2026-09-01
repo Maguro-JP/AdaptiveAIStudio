@@ -38,18 +38,44 @@
 ## 置き場所
 
 根は `AAS_HOME` 一つで決まる（`src/core/home.ts`）。
-配布物はこの形。開発中の作業場も同じ関数で扱える。
+**入れた側が決めて渡す。**プログラムに「インストール済みか」を判断させない。
+
+| | 持ち運び版 | インストール版 |
+|---|---|---|
+| プログラム | フォルダの中 | `Program Files\AdaptiveAIStudio\` |
+| データ | 隣の `data\` | `ProgramData\AdaptiveAIStudio\` |
+
+データを LocalAppData に置かないのは一点の理由による。
+そこは `C:\Users\<利用者名>\AppData\Local` で、**利用者名が全角だと
+llama.cpp がモデルを開けない**。ProgramData は必ず ASCII。
 
 ```
 AdaptiveAIStudio\
   AdaptiveAIStudio.cmd   押せばいい入口
+  README.txt  VERSION
   app\                   中身。利用者は触らない
   runtime\node.exe       同梱の Node
-  data\                  記録・モデル・実行ファイル
 ```
 
-Windows で利用者名が全角だと、llama.cpp がモデルを開けないことがある。
-**モデルを取ってくる前に**、置き場所が ASCII かを確かめる。
+**名前は普通のプログラムの作法（英語）、中身は利用者の言語（日本語）。**
+表に日本語のファイル名を置かない。
+
+## お金
+
+GitHub Actions の枠を一度使い切って、1日まるごと検査できなくなった。
+**Windows の枠は2倍で数えられる。**
+
+- 押すたびに全部回さない。組み合わせは2つ、型検査は相乗り
+- 続けて押したら前のものは打ち切る（`cancel-in-progress`）
+- 文書だけの変更では回さない（`paths-ignore`）
+- 配布物の組み立ては**タグを付けたときだけ**
+- 細かい修正はまとめて1回で push する
+
+## 溜めない
+
+使っているうちに増えるもの（古い llama-server、途中で切れた取得、古い記録）は
+`npm run clean` で片づける。**既定は見せるだけ。**消すのは `--yes` を付けたときだけで、
+消した量を必ず言う。黙って消すと、次に何かが無くなったときに疑う先が増える。
 
 ## 版
 

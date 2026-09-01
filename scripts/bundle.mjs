@@ -4,7 +4,7 @@
  * 何も入れられない機械（会社の PC など）で動かすための一式。
  * フォルダを置くだけで動き、外には何も残さない。
  *
- *   ・記録もモデルも実行ファイルも、このフォルダの中（portable.txt が目印）
+ *   ・設定も記録もモデルも、このフォルダの中（.portable が目印）
  *   ・実行時の依存はゼロなので node_modules は要らない
  *   ・Node 自体も同梱できる（--node-zip で渡す）
  *
@@ -16,6 +16,7 @@
  * そうすると、この道具自体は網が無くても試せる。
  */
 import { cp, mkdir, writeFile, rm, readFile, stat } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -46,6 +47,13 @@ export const PAYLOAD = [
   'node_modules',
 ];
 
+/** package.json の版。--version を渡さなかったときの控え。 */
+function pkgVersion(srcRoot) {
+  try {
+    return JSON.parse(readFileSync(join(srcRoot, 'package.json'), 'utf8')).version ?? '0.0.0';
+  } catch { return '0.0.0'; }
+}
+
 function arg(name, fallback) {
   const i = process.argv.indexOf(name);
   return i >= 0 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--')
@@ -58,11 +66,12 @@ function arg(name, fallback) {
  *
  *   AdaptiveAIStudio\
  *     AdaptiveAIStudio.cmd   押せばいい入口。これ以外は触らなくてよい
- *     はじめに.txt           使い方（1枚）
+ *     README.txt             使い方（1枚）
  *     app\                  中身
  *     runtime\node.exe      同梱の Node
  *     data\                 記録・モデル・実行ファイル（動かすと出来る）
- *     portable.txt           持ち運びの目印。版もここに書く
+ *     VERSION                どの版か
+ *     .portable              持ち運びの目印
  *
  * 開発中の作業場をそのまま渡すと、利用者は src と node_modules と
  * tsconfig.json を同じ高さで見ることになる。どれを押せばいいか分からない。
@@ -88,43 +97,39 @@ export async function bundle({ out, nodeZip, srcRoot = root, version, log = () =
   // 入口。押せばいいものが一つだけ表にある形にする。
   await writeFile(join(out, 'AdaptiveAIStudio.cmd'),
     ['@echo off', 'call "%~dp0app\\start.cmd" %*'].join('\r\n') + '\r\n', 'utf8');
-  log('  置いた: AdaptiveAIStudio.cmd（入口）');
+  log('  置いた: AdaptiveAIStudio.cmd');
 
-  await writeFile(join(out, 'はじめに.txt'),
+  // 名前は普通のプログラムの作法に合わせる（README / VERSION）。
+  // 中身は利用者の言語で書く。**名前は機械と慣習、中身は人。**
+  await writeFile(join(out, 'README.txt'),
     [
       'AdaptiveAIStudio',
       '',
       '  AdaptiveAIStudio.cmd をダブルクリックしてください。',
       '',
-      'このフォルダについて',
+      'フォルダの中身',
       '',
-      '  app        中身です。触らなくてかまいません。',
-      '  runtime    同梱の Node です。この機械には何も入れていません。',
-      '  data       記録・モデル・実行ファイルが入ります（動かすと出来ます）。',
+      '  app        プログラム本体です。触らなくてかまいません。',
+      '  runtime    同梱の Node です。この PC には何も入れていません。',
+      '  data       設定・記録・モデルが入ります（動かすと出来ます）。',
       '',
-      'この機械には何も残りません。このフォルダごと消せば、跡形もなくなります。',
+      'この PC には何も残りません。このフォルダごと削除すれば、跡形もなくなります。',
       '',
-      'いまの版は portable.txt に書いてあります。',
+      'いまの版は VERSION に書いてあります。',
       '新しくするときは、入口の「7 新しくする」を選んでください。',
     ].join('\r\n') + '\r\n', 'utf8');
-  log('  置いた: はじめに.txt');
+  log('  置いた: README.txt');
 
-  // 目印。これがあると、記録もモデルも data/ に閉じる。
-  // **版をここに書く。**配布物は git の管理下に無いので、
-  // 版が見えないと、古いものを新しいと思って確かめてしまう。
-  await writeFile(join(out, 'portable.txt'),
-    [
-      'このフォルダは「持ち運び版」です。',
-      '',
-      `version: ${version ?? '(不明)'}`,
-      `built:   ${new Date().toISOString()}`,
-      '',
-      '記録・モデル・実行ファイルは、すべて data\\ に入ります。',
-      'この機械には何も残りません。フォルダごと消せば、跡形もなくなります。',
-      '',
-      '始め方: AdaptiveAIStudio.cmd をダブルクリック',
-    ].join('\r\n') + '\r\n', 'utf8');
-  log(`  置いた: portable.txt（目印と版 ${version ?? '不明'}）`);
+  // 版は独立した1ファイルにする。目印の中に混ぜると、読む側が
+  // 目印を解釈しないと版が分からない。VERSION なら誰でも読める。
+  await writeFile(join(out, 'VERSION'), `${version ?? pkgVersion(srcRoot)}\r\n`, 'utf8');
+  log(`  置いた: VERSION（${version ?? '不明'}）`);
+
+  // 持ち運びの目印。中身は要らない（在ることだけが意味を持つ）。
+  // 名前に点を付けて、利用者が消す対象に見えないようにする。
+  await writeFile(join(out, '.portable'),
+    `built ${new Date().toISOString()}\r\n`, 'utf8');
+  log('  置いた: .portable（持ち運びの目印）');
 
   if (nodeZip) {
     await mkdir(join(out, 'runtime'), { recursive: true });

@@ -1,0 +1,74 @@
+# 配布物を組み立てる。
+#
+# **押すたびには回さない。**印（タグ）を付けたときと、手で頼んだときだけ。
+# 組み立ては Windows の枠を使う（2倍で数えられる）ので、
+# 検査のたびに回すと、それだけで枠を食い潰す。
+name: 配布物
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # インストーラの組み立てには NSIS が要る。
+    # Windows のランナーには最初から入っているので、ここで組む。
+    # こちら（開発側）は Linux なので、実機と同じ場所で組ませる方が確実。
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: 版を決める
+        id: v
+        shell: bash
+        run: echo "id=${GITHUB_REF_NAME#v}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # 型検査に要るものだけ入れる。持ち運び版に同梱するため。
+      - run: npm ci --no-audit --no-fund
+
+      - name: Node を取ってくる（同梱用）
+        shell: bash
+        run: |
+          V=$(node -p "process.versions.node")
+          curl -fL --retry 3 -o node.zip "https://nodejs.org/dist/v${V}/node-v${V}-win-x64.zip"
+
+      - name: 組み立てる
+        run: node scripts/bundle.mjs --out installer/payload --node-zip node.zip --version "${{ steps.v.outputs.id }}"
+
+      - name: 持ち運び版（zip）
+        shell: bash
+        run: |
+          cd installer && 7z a -tzip "../AdaptiveAIStudio-portable.zip" payload/* > /dev/null
+
+      - name: インストーラ（setup.exe）
+        shell: cmd
+        run: |
+          rem 持ち運びの目印は、入れる版には要らない。
+          rem 残すと、入れたのに data\ を自分の隣に作ってしまう。
+          del installer\payload\.portable
+          makensis /DVERSION=${{ steps.v.outputs.id }} installer\AdaptiveAIStudio.nsi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AdaptiveAIStudio-${{ steps.v.outputs.id }}
+          path: |
+            installer/AdaptiveAIStudio-Setup.exe
+            AdaptiveAIStudio-portable.zip
+          retention-days: 14
+
+      - name: 公開する（タグのときだけ）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            installer/AdaptiveAIStudio-Setup.exe
+            AdaptiveAIStudio-portable.zip

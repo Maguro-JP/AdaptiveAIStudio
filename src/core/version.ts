@@ -22,14 +22,20 @@ export interface Version {
   builtAt?: string;
 }
 
-/** 配布物の目印に書いてある版を読む。 */
+/**
+ * 配布物の VERSION を読む。
+ *
+ * 版を目印の中に混ぜていたが、それだと**読む側が目印の書式を
+ * 解釈しないと版が分からない**。VERSION なら、開けば書いてある。
+ */
 async function fromMarker(): Promise<Version | undefined> {
   for (const dir of [productRoot(), installRoot()]) {
-    const raw = await readFile(join(dir, 'portable.txt'), 'utf8').catch(() => undefined);
-    if (raw === undefined) continue;
-    const id = /^version:\s*(.+)$/m.exec(raw)?.[1]?.trim();
-    const builtAt = /^built:\s*(.+)$/m.exec(raw)?.[1]?.trim();
-    if (id && id !== '(不明)') return { id, from: '配布物の記録', ...(builtAt ? { builtAt } : {}) };
+    const id = (await readFile(join(dir, 'VERSION'), 'utf8').catch(() => ''))
+      .split('\n')[0]?.trim();
+    if (!id) continue;
+    const built = (await readFile(join(dir, '.portable'), 'utf8').catch(() => ''))
+      .match(/built\s+(\S+)/)?.[1];
+    return { id, from: '配布物の記録', ...(built ? { builtAt: built } : {}) };
   }
   return undefined;
 }

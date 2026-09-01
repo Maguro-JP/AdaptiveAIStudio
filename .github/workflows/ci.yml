@@ -2,28 +2,57 @@
 #
 # Windows を入れているのが要点。
 # 「Linux では通るが Windows では落ちる」が実際に起きており
-# （殻の glob 展開、巨大な仮ファイル、パスの区切り）、
+# （殻の glob 展開、巨大な仮ファイル、パスの区切り、実行ビット）、
 # 手元が Windows でも、直す側が Linux なら気づけない。
-# 逆もまた同じなので、両方で回す。
+#
+# ただし **Windows の枠は2倍で数えられる**。前に使い切って
+# 1日まるごと検査できなくなったので、既定は最小限にしてある。
+#
+#   ・後から push したら、走っている前のものは打ち切る
+#   ・組み合わせは2つだけ（下限の Node は Linux、Windows は現行の Node）
+#   ・型検査は独立した仕事にしない（仕事を1つ増やすと、それだけで1分課金される）
+#   ・文書だけの変更では回さない
+#
+# 全部の組み合わせを見たいときは、手で「full」を指定して回す。
 name: 検査
 
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**', '.gitignore', '.gitattributes']
   pull_request:
+    paths-ignore: ['**.md', 'docs/**', '.gitignore', '.gitattributes']
   workflow_dispatch:
+    inputs:
+      full:
+        description: '全部の組み合わせで回す'
+        type: boolean
+        default: false
+
+# 同じ枝に続けて push したら、前のものは打ち切る。
+# 途中の版が通ったかどうかは、結局いらない。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     name: ${{ matrix.os }} / Node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
     strategy:
-      # 1つ落ちても、残りの結果を見たい。
-      # どこまでが環境固有の問題かを切り分けるため。
       fail-fast: false
       matrix:
+        # 既定は2つ。下限の Node が Linux（安い方）で、
+        # Windows は実際に使う版で見る。落ちるのはいつも Windows 側なので、
+        # 減らすならこちらではなく Linux 側から減らす。
         os: [ubuntu-latest, windows-latest]
-        node: ['22.x', '24.x']
+        node: ['22.x']
+        include:
+          - os: windows-latest
+            node: '24.x'
+        exclude:
+          - os: windows-latest
+            node: '22.x'
 
     steps:
       - uses: actions/checkout@v4
@@ -37,14 +66,28 @@ jobs:
       - name: 検査
         run: npm test
 
-  typecheck:
-    name: 型検査
-    runs-on: ubuntu-latest
+      # 型検査だけは TypeScript が要る。独立した仕事にすると
+      # それだけで1分課金されるので、安い方の仕事に相乗りさせる。
+      - name: 型検査
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+
+  # 手で頼んだときだけ、残りの組み合わせも見る。
+  full:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}（全部）
+    if: inputs.full
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, node: '24.x' }
+          - { os: windows-latest, node: '22.x' }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22.x'
-      # 型検査にだけ TypeScript が要る。
-      - run: npm ci
-      - run: npm run typecheck
+          node-version: ${{ matrix.node }}
+      - run: npm test

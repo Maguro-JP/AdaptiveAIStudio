@@ -50,7 +50,7 @@ describe('根の決め方', () => {
 describe('持ち運び版', () => {
   test('目印があれば、隣に置く。環境変数は要らない', async () => {
     const root = await tempDir('aas-portable-');
-    await writeFile(join(root, 'portable.txt'), '');
+    await writeFile(join(root, '.portable'), '');
     assert.equal(isPortable(root), true);
   });
 
@@ -61,7 +61,7 @@ describe('持ち運び版', () => {
 
   test('AAS_HOME があれば、持ち運びより明示が勝つ', async () => {
     const root = await tempDir('aas-portable-');
-    await writeFile(join(root, 'portable.txt'), '');
+    await writeFile(join(root, '.portable'), '');
     process.env.AAS_HOME = join('C:', 'AAS');
     assert.equal(aasHome(root), join('C:', 'AAS'));
   });
@@ -124,5 +124,54 @@ describe('npm 無しで仕事を動かす', () => {
     for (const [name, script] of Object.entries(pkg.scripts as Record<string, string>)) {
       assert.ok(toCommand(script), `npm 無しでは動かせない仕事: ${name} → ${script}`);
     }
+  });
+});
+
+describe('配布物の形', () => {
+  test('利用者が最初に見るものは、普通の名前になっている', async () => {
+    const out = await tempDir('aas-bundle-');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-1' });
+
+    const { readdir } = await import('node:fs/promises');
+    const top = (await readdir(out)).sort();
+    // 日本語のファイル名を表に置かない。中身は日本語でよい。
+    assert.deepEqual(top, ['.portable', 'AdaptiveAIStudio.cmd', 'README.txt', 'VERSION', 'app']);
+  });
+
+  test('版は VERSION に、そのまま書いてある', async () => {
+    const out = await tempDir('aas-bundle-');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-2' });
+    assert.equal((await readFile(join(out, 'VERSION'), 'utf8')).trim(), 'test-2');
+  });
+
+  test('data は app の外に出る', async () => {
+    const out = await tempDir('aas-bundle-');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-3' });
+    // 中身（app）の中に記録が混ざると、更新のたびに巻き添えで消える。
+    assert.equal(aasHome(join(out, 'app')), join(out, 'data'));
+  });
+});
+
+describe('CI の使い方', () => {
+  test('押すたびに配布物を組み立てない', async () => {
+    // Windows の枠は2倍で数えられる。前に使い切って1日検査できなくなった。
+    const raw = await readFile(join(installRoot(), '.github', 'workflows', 'release.yml'), 'utf8');
+    assert.equal(/^\s*branches:/m.test(raw), false, '枝への push で組み立てている');
+    assert.match(raw, /tags:/, 'タグでしか回らない形になっていない');
+  });
+
+  test('続けて押したら、前のものは打ち切る', async () => {
+    for (const f of ['ci.yml', 'release.yml']) {
+      const raw = await readFile(join(installRoot(), '.github', 'workflows', f), 'utf8');
+      assert.match(raw, /cancel-in-progress:\s*true/, `${f} に打ち切りが無い`);
+    }
+  });
+
+  test('文書だけの変更では検査を回さない', async () => {
+    const raw = await readFile(join(installRoot(), '.github', 'workflows', 'ci.yml'), 'utf8');
+    assert.match(raw, /paths-ignore/);
   });
 });
