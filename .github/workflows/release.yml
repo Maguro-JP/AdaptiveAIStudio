@@ -79,7 +79,13 @@ jobs:
           test -f node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
           # 実行ファイルが増えないことが、この道の要点。0個であることを見る。
           test "$(find node_modules/@node-llama-cpp -name '*.exe' | wc -l)" -eq 0
-          rm -rf node_modules/node-llama-cpp/llama
+          # llama/ は llama.cpp の元（34MB）。ただし **JSON だけは import 時に読む**。
+          # 丸ごと消したら import できない配布物を出してしまった（実測）。
+          find node_modules/node-llama-cpp/llama -type f ! -name '*.json' -delete
+          find node_modules/node-llama-cpp/llama -type d -empty -delete
+          test -f node_modules/node-llama-cpp/llama/binariesGithubRelease.json
+          # 在るだけでなく、**読み込めること**を見る。ここで落ちた版を配った。
+          node -e "import('node-llama-cpp').then(() => console.log('import ok'))"
           du -sh node_modules
 
       # ライブラリを入れた状態で検査を回す。作業コピーには入っていないので、
@@ -197,7 +203,10 @@ jobs:
           test -f node_modules/node-llama-cpp/dist/index.js
           test -f node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
           test "$(find node_modules/@node-llama-cpp -name '*.exe' | wc -l)" -eq 0
-          rm -rf node_modules/node-llama-cpp/llama
+          find node_modules/node-llama-cpp/llama -type f ! -name '*.json' -delete
+          find node_modules/node-llama-cpp/llama -type d -empty -delete
+          test -f node_modules/node-llama-cpp/llama/binariesGithubRelease.json
+          node -e "import('node-llama-cpp').then(() => console.log('import ok'))"
 
       - name: Node を取ってくる（同梱用）
         shell: bash

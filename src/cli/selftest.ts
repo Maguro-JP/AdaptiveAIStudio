@@ -73,18 +73,26 @@ try {
 // 実行ファイルを増やさずに GGUF を読む道。**この機械で本当に読めるか**は、
 // ここでしか分からない（配布物には入れてあるが、機械が違えば動かない）。
 try {
-  const lib = await import('node-llama-cpp') as { getLlama: () => Promise<unknown> };
+  const lib = await import('node-llama-cpp') as { getLlama: (o?: { build?: 'never' }) => Promise<unknown> };
   add('この中で読む', true, 'node-llama-cpp を読み込めました（実行ファイルは増えません）');
   try {
-    await lib.getLlama();
+    // 組み立てに走らせない。無いなら無いと、すぐ言わせる。
+    await lib.getLlama({ build: 'never' });
     add('この中で読む（土台）', true, 'この機械むけの binary が動きました');
   } catch (e) {
     add('この中で読む（土台）', false,
-      `binary を動かせません: ${(e as Error).message.slice(0, 160)}`);
+      `この機械むけの binary がありません: ${(e as Error).message.slice(0, 160)}`);
   }
 } catch (e) {
-  add('この中で読む', undefined,
-    `node-llama-cpp がありません（${(e as Error).message.slice(0, 120)}）`);
+  const code = (e as NodeJS.ErrnoException).code;
+  // 「入っていない」と「入っているのに壊れている」は別の話。
+  // 後者を前者の顔で言っていて、配布物の欠けに気づけなかった。
+  if (code === 'ERR_MODULE_NOT_FOUND') {
+    add('この中で読む', undefined, 'node-llama-cpp が入っていません（配布物には入っています）');
+  } else {
+    add('この中で読む', false,
+      `node-llama-cpp は在るのに読み込めません（欠けています）: ${(e as Error).message.slice(0, 160)}`);
+  }
 }
 
 /* ---------- llama-server ---------- */

@@ -65,3 +65,21 @@ describe('node-llama-cpp との約束', () => {
     assert.deepEqual(found, [], '実行ファイルが混ざっている');
   });
 });
+
+describe('入っているなら、読み込めること', () => {
+  // dist/index.js が在るだけでは足りない。import の時点で llama/ の JSON を
+  // 読むので、そこを消した配布物は**在るのに読み込めない**。それを配った。
+  test('import が通る', onlyWithLib, async () => {
+    await import('node-llama-cpp');
+  });
+
+  test('import 時に読む JSON が残っている', onlyWithLib, async () => {
+    const at = join(installRoot(), 'node_modules', 'node-llama-cpp', 'llama', 'binariesGithubRelease.json');
+    await stat(at);
+  });
+
+  test('build: never を受け付ける形が本物にある', onlyWithLib, async () => {
+    // 無ければ既定で llama.cpp を取ってきて組みに行く。網の無い機械では固まる。
+    assert.match(await d('bindings', 'getLlama.d.ts'), /build\?:.*"never"/);
+  });
+});
