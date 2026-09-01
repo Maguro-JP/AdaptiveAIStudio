@@ -123,6 +123,19 @@ describe('バッチファイル', () => {
     }
   });
 
+  test('.. を含んだまま探さない', async () => {
+    // 実機（Z: の割り当てドライブ・OneDrive の下）で、同梱した
+    // runtime\node.exe を見つけられなかった。%~dp0..\ のまま
+    // if exist に渡していたのが原因。%%~fi で実際の道に直してから見る。
+    for (const path of await batchFiles()) {
+      const source = await read(path);
+      const bad = source.split(/\r?\n/)
+        .filter((l) => !l.trim().startsWith('rem '))
+        .filter((l) => /if\s+exist\s+"[^"]*\.\.[\\/]/i.test(l));
+      assert.deepEqual(bad, [], `${path} が .. のまま探している:\n  ${bad.join('\n  ')}`);
+    }
+  });
+
   test('この検査自体が、1行の括弧を見落とさない', () => {
     // 前の検査は行をまたぐ塊しか見ておらず、実際に壊れた形を見逃した。
     assert.equal(insideParens('where node || (echo みつかりません & pause)').length, 1);

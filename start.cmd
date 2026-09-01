@@ -29,10 +29,16 @@ rem --- Node を探す -----------------------------------------
 rem 同梱していれば、そちらを使う。会社の機械のように
 rem 何も入れられない場所では、これだけが頼りになる。
 rem 製品の形（app\ の隣の runtime\）を先に見る。
+rem `..` を含んだまま探さない。割り当てドライブ（Z: など）や
+rem OneDrive の下だと、そのままでは見つけられないことがある。
+rem for %%i in ("...") do %%~fi で、実際の道に直してから見る。
+set "HERE=%~dp0"
+for %%i in ("%~dp0..") do set "UP=%%~fi"
+
 set "BUNDLED="
-if exist "%~dp0..\runtime\node.exe" set "BUNDLED=%~dp0..\runtime"
-if exist "%~dp0runtime\node.exe" set "BUNDLED=%~dp0runtime"
-if exist "%~dp0node\node.exe" set "BUNDLED=%~dp0node"
+if exist "%UP%\runtime\node.exe" set "BUNDLED=%UP%\runtime"
+if exist "%HERE%runtime\node.exe" set "BUNDLED=%HERE%runtime"
+if exist "%HERE%node\node.exe" set "BUNDLED=%HERE%node"
 if defined BUNDLED goto :bundled
 
 where node >nul 2>nul
@@ -158,6 +164,12 @@ echo   インストールではないので、管理者権限も要りません�
 echo   要らなくなったら、このフォルダごと消せば跡形もなくなります。
 echo.
 echo   ふつうに入れられるなら、https://nodejs.org/ の LTS 版でも構いません。
+echo.
+echo   ---- 探した場所 ----
+echo     %UP%\runtime\node.exe
+echo     %HERE%runtime\node.exe
+echo     %HERE%node\node.exe
+echo   同梱版のはずなのにここに出たときは、この4行ごと知らせてください。
 echo.
 pause
 exit /b 1
