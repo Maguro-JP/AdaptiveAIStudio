@@ -175,3 +175,32 @@ describe('CI の使い方', () => {
     assert.match(raw, /paths-ignore/);
   });
 });
+
+describe('CI は押すたびに回さない', () => {
+  test('push では回らない', async () => {
+    // 1回あたりを安くしても、回数が減らなければ意味がない。
+    // 直しを10回押せば10回回る、という作りが枠を使い切った元凶だった。
+    const raw = await readFile(join(installRoot(), '.github', 'workflows', 'ci.yml'), 'utf8');
+    const on = raw.slice(raw.indexOf('\non:'), raw.indexOf('\njobs:'));
+    assert.equal(/^\s{2}push:/m.test(on), false, 'push で回る形になっている');
+  });
+
+  test('PR と手動と週1回では回る', async () => {
+    const raw = await readFile(join(installRoot(), '.github', 'workflows', 'ci.yml'), 'utf8');
+    const on = raw.slice(raw.indexOf('\non:'), raw.indexOf('\njobs:'));
+    for (const trigger of ['pull_request:', 'workflow_dispatch:', 'schedule:']) {
+      assert.match(on, new RegExp(trigger), `${trigger} が無い`);
+    }
+  });
+
+  test('週1回の時刻は、JST で決めてから UTC に直してある', async () => {
+    // JST の何時かを先に決めないと、1日ずれる（実際に一度ずらした）。
+    const raw = await readFile(join(installRoot(), '.github', 'workflows', 'ci.yml'), 'utf8');
+    const cron = /cron:\s*'([^']+)'/.exec(raw)?.[1];
+    assert.ok(cron, 'cron が無い');
+    const [, hourUtc, , , dowUtc] = cron!.split(' ');
+    // JST = UTC+9。月曜 09:00 JST → 月曜 00:00 UTC。
+    assert.equal(hourUtc, '0');
+    assert.equal(dowUtc, '1', 'JST の月曜にしたいなら UTC も月曜（0時なので日をまたがない）');
+  });
+});
