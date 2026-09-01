@@ -106,3 +106,19 @@ curl が 443 で timeout（21秒 × 4回）。ブラウザでは claude.ai が�
 
 インストールではない。管理者権限も要らない。フォルダごと消せば何も残らない。
 `start.cmd` は最初から `%~dp0node\node.exe` を見るので、これで見つかる。
+
+---
+
+## 2026-09-01  持ち運び版は Releases に常時置く
+
+「同梱してあります」と言いながら、Node の入った現物をどこにも置いていなかった。
+落とせないものを、あるかのように言わない。
+
+  https://github.com/Maguro-JP/AdaptiveAIStudio/releases/tag/portable
+
+`main` を更新して配布物を回すたび、この印（portable）の中身が差し替わる。
+組み立ては Linux（枠は1倍・約1分）。Windows を使うのは NSIS で
+`setup.exe` を組むときだけで、そちらはタグを付けたときのみ。
+
+`node.exe` は git に入れない（80MB がクローンのたびに付いてくる）。
+代わりに `node\` フォルダを置き、README.txt に落とし先だけ書いてある。
