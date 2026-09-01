@@ -245,6 +245,26 @@ describe('npm 無しの入口（scripts/run.mjs）', () => {
     }
   });
 
+  test('組み立てたものを、通しで動かせる', async () => {
+    // これが無かったのが根本。入口が死んでいても、部品の試験は全部通る。
+    // 実機では「1 を選んでも何も起きない」という形で出た。
+    const out = await tempDir('aas-e2e-');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), nodeHere: true, version: 'e2e' });
+
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const run = promisify(execFile);
+    const { stdout } = await run(
+      process.execPath,
+      [join(out, 'app', 'scripts', 'run.mjs'), 'doctor'],
+      { env: { ...process.env, AAS_HOME: join(out, 'data') }, timeout: 120_000 },
+    );
+    // 何か言っていること。黙って終わるのが、いちばん困る形。
+    assert.ok(stdout.includes('doctor'), `通しで動いていない:\n${stdout.slice(0, 400)}`);
+    assert.ok(stdout.includes('Node.js'), '中身が動いていない');
+  });
+
   test('入口として動く（中身が丸ごと死んでいないこと）', async () => {
     // 静的な検査だけだと、入口そのものが無くなっても気づけない。
     const { execFile } = await import('node:child_process');
