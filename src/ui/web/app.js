@@ -508,6 +508,14 @@ async function loadInfo() {
   }
 }
 
+/** 置き場の符丁を、人の言葉へ引き直す。基幹には符丁のまま置く。 */
+const DIR_NOTES = {
+  OK: '',
+  MISSING: 'その置き場はまだありません。作ってから .gguf を入れてください。',
+  NOT_A_DIR: 'それはフォルダではなくファイルです。フォルダを指してください。',
+  UNREADABLE: 'その置き場は読めませんでした（権限か、繋がっていないドライブ）。',
+};
+
 /** いまの設定を読み出して、画面へ映す。 */
 async function loadCfg() {
   const c = await fetch('/api/config').then((r) => r.json()).catch(() => null);
@@ -523,9 +531,11 @@ async function loadCfg() {
   }
   $('cfgModelsDir').value = c.modelsDir ?? '';
   // 保存してあるものと、いま動いているものは別。黙って同じ顔をさせない。
-  $('cfgNote').textContent = c.restartNeeded
+  const dirNote = DIR_NOTES[c.dirState] ?? '';
+  $('cfgNote').textContent = (c.restartNeeded
     ? `保存済み。いま動いているのは「${c.active?.kind ?? '?'}」です。立ち上げ直すと切り替わります。`
-    : `設定ファイル: ${c.path}`;
+    : `設定ファイル: ${c.path}`) + (dirNote ? `\n${dirNote}` : '');
+  $('cfgNote').style.whiteSpace = 'pre-line';
 
   const box = $('cfgGguf');
   box.replaceChildren();
@@ -533,7 +543,8 @@ async function loadCfg() {
     const e = document.createElement('div');
     e.className = 'empty';
     // ここで止まる人がいちばん多い。**次に何をすればいいかまで書く。**
-    e.textContent = 'ありません。上の置き場に .gguf を1つ入れると、ここに出ます。\n'
+    e.textContent = (DIR_NOTES[c.dirState] ? `${DIR_NOTES[c.dirState]}\n` : '')
+      + 'ありません。上の置き場に .gguf を1つ入れると、ここに出ます。\n'
       + '取ってくる先の例: https://huggingface.co/Qwen （名前に GGUF が付いたもの）\n'
       + '迷ったら 3B の Q4_K_M（約2GB）。要約や下書きなら足ります。';
     e.style.whiteSpace = 'pre-line';
@@ -598,9 +609,12 @@ $('cfgSave').onclick = async () => {
   const body = await r.json().catch(() => ({}));
   if (!r.ok) { $('cfgNote').textContent = body.error ?? '保存できませんでした'; return; }
   // 黙って効いた顔をしない。切り替えは立ち上げ直すまで効かない。
-  $('cfgNote').textContent = body.restartNeeded
+  // 置き場が無いまま保存できてしまう。保存できたことと、動くことは別。
+  const saveNote = DIR_NOTES[body.dirState] ?? '';
+  $('cfgNote').style.whiteSpace = 'pre-line';
+  $('cfgNote').textContent = (body.restartNeeded
     ? `保存しました。**立ち上げ直すと効きます。** ${body.path}`
-    : `保存しました。${body.path}`;
+    : `保存しました。${body.path}`) + (saveNote ? `\n${saveNote}` : '');
   await loadCfg();
 };
 

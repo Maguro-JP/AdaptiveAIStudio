@@ -7,11 +7,12 @@
  */
 import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { UiServer } from '../src/ui/server.ts';
-import { RUNTIME_KINDS } from '../src/ui/settings.ts';
+import { RUNTIME_KINDS, inspectModelsDir, DIR_NOTES } from '../src/ui/settings.ts';
 import { loadConfig } from '../src/config.ts';
 import { installRoot } from '../src/core/home.ts';
 
@@ -121,5 +122,45 @@ describe('モデルが無いまま送らせない', () => {
     const { readFile } = await import('node:fs/promises');
     const css = await readFile(join(installRoot(), 'src', 'ui', 'web', 'style.css'), 'utf8');
     assert.match(css, /\.note \{[^}]*white-space: pre-line/);
+  });
+});
+
+describe('置き場を、保存する前に見る', () => {
+  test('在るフォルダは OK', async () => {
+    const dir = await tempDir('aas-dir-');
+    assert.equal(await inspectModelsDir(dir), 'OK');
+  });
+
+  test('空文字は「既定を使う」であって、間違いではない', async () => {
+    assert.equal(await inspectModelsDir(''), 'OK');
+  });
+
+  test('無い置き場は MISSING（拒まずに言う）', async () => {
+    const dir = join(await tempDir('aas-dir-'), 'まだない');
+    assert.equal(await inspectModelsDir(dir), 'MISSING');
+  });
+
+  test('ファイルを指したら NOT_A_DIR', async () => {
+    const file = join(await tempDir('aas-dir-'), 'a.gguf');
+    await writeFile(file, 'x');
+    assert.equal(await inspectModelsDir(file), 'NOT_A_DIR');
+  });
+
+  test('どの符丁にも、人へ見せる文がある', () => {
+    // 符丁を足して DIR_NOTES に書き忘れると、画面が黙る。
+    for (const s of ['OK', 'MISSING', 'NOT_A_DIR', 'UNREADABLE'] as const) {
+      assert.equal(typeof DIR_NOTES[s], 'string');
+      if (s !== 'OK') assert.ok(DIR_NOTES[s].length > 0, `文が無い: ${s}`);
+    }
+  });
+
+  test('画面の側にも、同じ符丁が同じ文で置いてある', async () => {
+    // 基幹は符丁のまま。日本語は表示のときだけ。両方に置いた以上、ずれる。
+    const app = await readFile(
+      join(dirname(fileURLToPath(import.meta.url)), '../src/ui/web/app.js'), 'utf8');
+    for (const [sign, note] of Object.entries(DIR_NOTES)) {
+      if (!note) continue;
+      assert.ok(app.includes(`${sign}: '${note}'`), `画面に無いか、文が違う: ${sign}`);
+    }
   });
 });

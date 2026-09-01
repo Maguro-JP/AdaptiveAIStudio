@@ -35,6 +35,7 @@ import { configPath, type AasConfig } from '../config.ts';
 import { TaskRunner } from './tasks.ts';
 import {
   RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
+  inspectModelsDir,
 } from './settings.ts';
 import { listGguf } from '../runtime/inproc.ts';
 import { Session } from '../core/session.ts';
@@ -499,6 +500,8 @@ export class UiServer {
           || dir !== (active.modelsDir ?? modelsDir()),
         // 置き場にある GGUF。「置いたのに認識しない」を画面で確かめられるように。
         gguf: await listGguf(dir),
+        // GGUF が0件のとき、置き場そのものが無いのか、空なのかで打つ手が違う。
+        dirState: await inspectModelsDir(dir),
       });
     }
 
@@ -507,11 +510,14 @@ export class UiServer {
       const kind = body?.kind;
       if (!isRuntimeKind(kind)) return send(res, 400, { error: 'そういう動かし方はありません' });
       const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
+      const dirState = await inspectModelsDir(dir);
       const at = await saveRuntime(kind, dir);
       this.broadcast({ type: 'log', level: 'info', text: `設定を書きました: ${at}` });
       return send(res, 200, {
         path: at,
         saved: { kind, modelsDir: dir || null },
+        // 打ち間違えても保存はできる。だから**保存したときに言う。**
+        dirState,
         // 動かし方の切り替えは、立ち上げ直すまで効かない。黙って効いた顔をしない。
         restartNeeded: kind !== (this.#opts.config.runtime?.kind ?? 'ollama')
           || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir()),

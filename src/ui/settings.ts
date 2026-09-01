@@ -5,7 +5,7 @@
  * 書き込めると、設定という顔をして道具の振る舞いを丸ごと差し替えられる。
  * 変えたい理由がはっきりしているものだけを、ここに挙げる。
  */
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, stat } from 'node:fs/promises';
 import { configPath } from '../config.ts';
 
 export const RUNTIME_KINDS = ['ollama', 'llamacpp', 'inproc'] as const;
@@ -53,3 +53,30 @@ export async function saveRuntime(
   await writeFile(at, `${JSON.stringify({ ...current, runtime }, null, 2)}\n`, 'utf8');
   return at;
 }
+
+/** 置き場そのものの状態。語形の変わらない符丁で返し、表示のときに引き直す。 */
+export type DirState = 'OK' | 'MISSING' | 'NOT_A_DIR' | 'UNREADABLE';
+
+/**
+ * 置き場を、保存する前に見る。
+ *
+ * **打ち間違えた置き場を、黙って受け取らない。**保存はできてしまうので、
+ * 立ち上げ直すまで誰も気づかず、モデルが出ないことだけが残る。
+ * 拒みはしない（後から作る人がいる）。**言う。**
+ */
+export async function inspectModelsDir(dir: string): Promise<DirState> {
+  if (!dir) return 'OK'; // 既定の置き場を使う、という意味。見るところが無い
+  try {
+    const s = await stat(dir);
+    return s.isDirectory() ? 'OK' : 'NOT_A_DIR';
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? 'MISSING' : 'UNREADABLE';
+  }
+}
+
+export const DIR_NOTES: Record<DirState, string> = {
+  OK: '',
+  MISSING: 'その置き場はまだありません。作ってから .gguf を入れてください。',
+  NOT_A_DIR: 'それはフォルダではなくファイルです。フォルダを指してください。',
+  UNREADABLE: 'その置き場は読めませんでした（権限か、繋がっていないドライブ）。',
+};
