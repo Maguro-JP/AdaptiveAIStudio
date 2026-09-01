@@ -10,7 +10,8 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
-import { UiServer, RUNTIME_KINDS } from '../src/ui/server.ts';
+import { UiServer } from '../src/ui/server.ts';
+import { RUNTIME_KINDS } from '../src/ui/settings.ts';
 import { loadConfig } from '../src/config.ts';
 import { installRoot } from '../src/core/home.ts';
 

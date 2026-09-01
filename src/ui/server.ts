@@ -33,6 +33,9 @@ import { Attachments, MAX_BYTES } from './attachments.ts';
 import { PreviewServer } from './preview.ts';
 import { configPath, type AasConfig } from '../config.ts';
 import { TaskRunner } from './tasks.ts';
+import {
+  RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
+} from './settings.ts';
 import { listGguf } from '../runtime/inproc.ts';
 import { Session } from '../core/session.ts';
 import type { ApprovalRequest } from '../agent/tools/types.ts';
@@ -481,7 +484,7 @@ export class UiServer {
     if (path === '/api/config' && req.method === 'GET') {
       // **保存してあるもの**を読む。立ち上げたときのものを見せると、
       // 保存した直後に古い値が出て「効いていない」ように見える。
-      const saved = await readConfigFile();
+      const saved = await readSavedRuntime();
       const active = this.#opts.config.runtime ?? {};
       const kind = String(saved.kind ?? 'ollama');
       const dir = String(saved.modelsDir ?? modelsDir());
@@ -501,22 +504,10 @@ export class UiServer {
 
     if (path === '/api/config' && req.method === 'PUT') {
       const body = await readBody(req) as { kind?: string; modelsDir?: string };
-      const kind = String(body?.kind ?? '');
-      if (!(RUNTIME_KINDS as readonly string[]).includes(kind)) {
-        return send(res, 400, { error: 'そういう動かし方はありません' });
-      }
+      const kind = body?.kind;
+      if (!isRuntimeKind(kind)) return send(res, 400, { error: 'そういう動かし方はありません' });
       const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
-      const at = configPath();
-      // 既にあるものを読んで、**触ると決めたところだけ**書き換える。
-      // 丸ごと書き直すと、画面から見えない設定を消してしまう。
-      let current: Record<string, unknown> = {};
-      try {
-        current = JSON.parse(await readFile(at, 'utf8')) as Record<string, unknown>;
-      } catch { /* まだ無い */ }
-      const runtime = { ...(current.runtime as Record<string, unknown> ?? {}), kind };
-      if (dir) runtime.modelsDir = dir;
-      else delete runtime.modelsDir;
-      await writeFile(at, `${JSON.stringify({ ...current, runtime }, null, 2)}\n`, 'utf8');
+      const at = await saveRuntime(kind, dir);
       this.broadcast({ type: 'log', level: 'info', text: `設定を書きました: ${at}` });
       return send(res, 200, {
         path: at,
@@ -744,16 +735,6 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   const text = JSON.stringify(body);
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   res.end(text);
-}
-
-/** 保存してある設定の runtime だけを読む。無ければ空。 */
-async function readConfigFile(): Promise<Record<string, unknown>> {
-  try {
-    const raw = JSON.parse(await readFile(configPath(), 'utf8')) as Record<string, unknown>;
-    return (raw.runtime as Record<string, unknown>) ?? {};
-  } catch {
-    return {};
-  }
 }
 
 async function readBody(req: IncomingMessage): Promise<unknown> {
