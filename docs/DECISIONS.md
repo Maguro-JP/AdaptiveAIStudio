@@ -140,3 +140,33 @@ curl が 443 で timeout（21秒 × 4回）。ブラウザでは claude.ai が�
 **回さずに済む道が先。**持ち運び版は `npm run bundle --node-here` で
 手元でも作れる（網も CI も要らない）。Actions が要るのは、
 利用者の手元に Node が無いときと、`setup.exe` を組むときだけ。
+
+---
+
+## 2026-09-01  名前を一つにする
+
+同じものを四つの名前で呼んでいた（WindowsBundle / 配布物 / 持ち運び版 /
+portable）。利用者が「言ってることがめちゃくちゃ」になるのは当然だった。
+
+| 言葉 | 何を指すか |
+|---|---|
+| `npm run bundle` | **コマンド**。持ち運び版のフォルダを作る |
+| 持ち運び版 | **もの**。アプリ + node.exe が入ったフォルダ |
+| Releases | **置き場**。GitHub のダウンロード置き場 |
+| Actions | **実行環境**。GitHub 上でコマンドを走らせる場所 |
+| 検査 | `npm test` のこと。それを Actions で走らせるのが CI |
+
+以後、持ち運び版を他の名前で呼ばない。
+
+## 2026-09-01  根を散らかさない
+
+利用者に「なんで GitHub こんな汚くなってるの」と言われた。
+
+- `node\` を消した。持ち運び版に node.exe が入っているので要らない。
+  そもそも一時しのぎで足したもので、置きっぱなしにしていた。
+- `start-ui.cmd` / `start-ui.sh` を消した。中身は `start.cmd ui` を
+  呼ぶだけの4行。入口は一つでよい。
+
+根に置いてよいのは、入口（`start.cmd` / `start.sh`）と、
+道具が読む決まりもの（package.json・tsconfig.json・.gitattributes 等）と、
+人が最初に読むもの（README.md・CLAUDE.md・VERSION）だけ。
