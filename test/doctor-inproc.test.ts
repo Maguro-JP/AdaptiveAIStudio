@@ -24,7 +24,11 @@ async function runDoctor(env: Record<string, string>): Promise<string> {
   }).catch((e: { stdout?: string; stderr?: string }) => e);
   // 未了があると終了コードが立つ。中身は読めるので、そのまま使う。
   // eslint-disable-next-line no-control-regex
-  return `${out.stdout ?? ''}${out.stderr ?? ''}`.replace(/\x1b\[[0-9;]*m/g, '');
+  const text = `${out.stdout ?? ''}${out.stderr ?? ''}`.replace(/\x1b\[[0-9;]*m/g, '');
+  // 途中で落ちた出力を「通った」と読まない。締めの一行まで出ていること。
+  // 型のずれ（import 漏れ）で途中で落ちていても、文字の一致だけなら通ってしまう。
+  assert.match(text, /動かせます|かたづければ動きます/, `締めまで出ていない:\n${text.slice(-600)}`);
+  return text;
 }
 
 async function scratch(): Promise<{ home: string; models: string; config: string }> {
@@ -114,5 +118,26 @@ describe('doctor は、置いた GGUF の中身も見る', () => {
     await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     assert.doesNotMatch(text, /GGUF ではありません/);
+  });
+});
+
+describe('置き場を書いていない（既定）ときも、中身を見る', () => {
+  test('既定の置き場の GGUF でも、締めまで出る', async () => {
+    // config.runtime.modelsDir が無い経路。ここで既定の置き場を引く関数が
+    // 無い（import 漏れ）まま、検査は書いた置き場ばかりで通っていた。
+    const { home } = await scratch();
+    const { modelsDir } = await import('../src/core/home.ts');
+    const prevHome = process.env.AAS_HOME;
+    process.env.AAS_HOME = home;
+    try {
+      const dir = modelsDir();
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, 'page.gguf'), '<!doctype html>');
+    } finally { if (prevHome === undefined) delete process.env.AAS_HOME; else process.env.AAS_HOME = prevHome; }
+    const config = join(home, 'aas.config.json');
+    await mkdir(home, { recursive: true });
+    await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc' } }));
+    const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
+    assert.match(text, /page\.gguf は GGUF ではありません/);
   });
 });

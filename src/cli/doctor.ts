@@ -18,7 +18,7 @@ import { formatChecks, summaryLine, type Check, type Level } from './doctor-view
 import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
-import { installRoot, modelsDir } from '../core/home.ts';
+import { installRoot } from '../core/home.ts';
 import { resolve } from 'node:path';
 
 /** Windows と Unix でコマンドが違うものは、その環境のものを出す。 */
@@ -86,7 +86,7 @@ if (models.length > 0) {
   if (runtime.id === 'inproc') {
     const { looksLikeGguf, tooBigForRam } = await import('../runtime/inproc.ts');
     const { totalmem } = await import('node:os');
-    const dir = config.runtime?.modelsDir ?? modelsDir();
+    const dir = config.runtime?.modelsDir ?? defaultModelsDir();
     for (const m of models) {
       if (!(await looksLikeGguf(join(dir, m.ref)))) {
         add('モデル', 'warn', `${m.ref} は GGUF ではありません（先頭に印が無い。配布元の HTML の案内かも）`);
