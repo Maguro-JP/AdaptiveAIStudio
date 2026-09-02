@@ -314,3 +314,39 @@ describe('GGUF を置く道を、ひとまとめに見る', () => {
     }
   });
 });
+
+describe('名指しされた GGUF に切り替える', () => {
+  test('置き場に在る別の GGUF を頼まれたら、解いて読み替える', async () => {
+    const dir = await tempDir('aas-switch-');
+    await writeFile(join(dir, 'a.gguf'), 'x');
+    await writeFile(join(dir, 'b.gguf'), 'x');
+    const { load } = fakeLib('こんにちは');
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
+    try {
+      const { baseUrl } = await rt.ensureLoaded('a.gguf');
+      const r = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'b.gguf', messages: [{ role: 'user', content: 'x' }], stream: false }),
+      });
+      assert.equal(r.status, 200);
+      // 二つ同時に持たない。a は解かれ、b だけが残る。
+      assert.deepEqual(rt.loaded(), ['b.gguf']);
+    } finally { await rt.shutdown(); }
+  });
+
+  test('置き場に無い名前なら、読んでいる一つで答える（対）', async () => {
+    const dir = await tempDir('aas-switch-');
+    await writeFile(join(dir, 'a.gguf'), 'x');
+    const { load } = fakeLib('こんにちは');
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
+    try {
+      const { baseUrl } = await rt.ensureLoaded('a.gguf');
+      const r = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'zzz.gguf', messages: [{ role: 'user', content: 'x' }], stream: false }),
+      });
+      assert.equal(r.status, 200);
+      assert.deepEqual(rt.loaded(), ['a.gguf']);
+    } finally { await rt.shutdown(); }
+  });
+});

@@ -237,6 +237,26 @@ export class InProcRuntime implements LocalRuntime {
     // **黙って替えない。**替えたことは記録に出す。
     let ref = body.model ?? '';
     let held = this.#sessions.get(ref);
+    // 置き場に在る別の GGUF を名指しされたら、そちらへ切り替える。
+    // 二つ同時に持たない（数GBを二重に載せると足りない機械がある）。
+    // 候補の決め方が名前で選んでいるのに、常に最初の一つで答えるのはおかしい。
+    if (!held && ref && /\.gguf$/i.test(ref)) {
+      const have = (await this.list()).some((m) => m.ref === ref);
+      if (have) {
+        // 答えている最中のものを解かない。順番待ちが空くのを待ってから。
+        await Promise.all([...this.#sessions.values()].map((h) => h.turn.catch(() => undefined)));
+        for (const other of this.loaded()) {
+          this.#opts.onLog?.(`${other} を解いて ${ref} に切り替えます`);
+          await this.unload(other);
+        }
+        try {
+          await this.ensureLoaded(ref);
+          held = this.#sessions.get(ref);
+        } catch (e) {
+          this.#opts.onLog?.(`${ref} を読めませんでした: ${(e as Error).message}`);
+        }
+      }
+    }
     if (!held && this.loaded().length === 1) {
       const only = this.loaded()[0]!;
       if (ref && ref !== only) this.#opts.onLog?.(`${ref} は無いので ${only} で答えます`);
