@@ -379,3 +379,17 @@ describe('文脈の大きさを決めておく', () => {
     assert.deepEqual(seen, [{ contextSize: 32768 }]);
   });
 });
+
+describe('記憶に載らないものを読みに行かない', () => {
+  test('記憶より大きければ、そう言う', async () => {
+    const { tooBigForRam } = await import('../src/runtime/inproc.ts');
+    const GB = 1024 ** 3;
+    assert.match(tooBigForRam(30 * GB, 16 * GB) ?? '', /大きすぎます/);
+  });
+  test('載るなら何も言わない（対）', async () => {
+    const { tooBigForRam } = await import('../src/runtime/inproc.ts');
+    const GB = 1024 ** 3;
+    assert.equal(tooBigForRam(4 * GB, 16 * GB), undefined);
+    assert.equal(tooBigForRam(undefined, 16 * GB), undefined, '大きさが分からないものは止めない');
+  });
+});

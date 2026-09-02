@@ -71,6 +71,22 @@ export async function listGguf(dir: string): Promise<AvailableModel[]> {
   return out.sort((a, b) => a.ref.localeCompare(b.ref));
 }
 
+/**
+ * この機械の記憶に載るか。
+ *
+ * GGUF はほぼそのまま記憶に載る（量子化済みなので圧縮の余地は無い）。
+ * 記憶より大きいものを読みに行くと、落ちるか、何十分も固まる。
+ * 読む前に止めて、そう言う。少し余裕を見る（OS と文脈の分）。
+ */
+export function tooBigForRam(sizeBytes: number | undefined, ramBytes: number): string | undefined {
+  if (!sizeBytes || !ramBytes) return undefined;
+  const room = ramBytes * 0.85;
+  if (sizeBytes <= room) return undefined;
+  const gb = (n: number) => (n / 1024 ** 3).toFixed(1);
+  return `この機械の記憶（${gb(ramBytes)}GB）に対して大きすぎます（${gb(sizeBytes)}GB）。`
+    + '小さい量子化（Q4_K_M など）か、小さいモデルを置いてください。';
+}
+
 export class InProcRuntime implements LocalRuntime {
   readonly id = 'inproc';
   readonly #opts: InProcOptions;

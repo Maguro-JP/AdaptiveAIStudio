@@ -39,7 +39,8 @@ import {
   RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
   inspectModelsDir, ensureDefaultModelsDir, savedModelsDir,
 } from './settings.ts';
-import { listGguf } from '../runtime/inproc.ts';
+import { listGguf, tooBigForRam } from '../runtime/inproc.ts';
+import { totalmem } from 'node:os';
 import { Session } from '../core/session.ts';
 import type { ApprovalRequest } from '../agent/tools/types.ts';
 
@@ -712,7 +713,11 @@ export class UiServer {
           // 設定で決めた名前（runtime.model）が置き場に在れば、それ。無ければ最初の一つ。
           // 情報の板は runtime.model を「使うモデル」と見せているので、読む側も同じにする。
           const wanted = this.#opts.config.runtime?.model;
-          const ref = (wanted && models.find((m) => m.ref === wanted)?.ref) ?? models[0]!.ref;
+          const chosen = (wanted && models.find((m) => m.ref === wanted)) ?? models[0]!;
+          const ref = chosen.ref;
+          // 記憶に載らないものを読みに行かない。落ちるか、何十分も固まる。
+          const big = tooBigForRam(chosen.sizeBytes, totalmem());
+          if (big) return `${ref}: ${big}`;
           this.broadcast({ type: 'log', level: 'info', text: `モデルを読み込んでいます: ${ref}` });
           const began = Date.now();
           await runtime.ensureLoaded(ref);

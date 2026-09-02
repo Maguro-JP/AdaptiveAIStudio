@@ -263,3 +263,28 @@ describe('暇なときの一回分', () => {
     } finally { await s.stop(); }
   });
 });
+
+describe('記憶に載らない GGUF', () => {
+  test('送る前に止めて、理由を返す', async () => {
+    const { tempDir: td } = await import('./tmp.ts');
+    const { open } = await import('node:fs/promises');
+    const { join: j } = await import('node:path');
+    const models = await td('aas-huge-');
+    // 中身の無い（疎な）1TB。場所は食わない。大きさだけが本物。
+    const fh = await open(j(models, 'huge.gguf'), 'w');
+    await fh.truncate(1024 ** 4);
+    await fh.close();
+    const s = new UiServer({
+      config: { ...DEFAULT_CONFIG, runtime: { kind: 'inproc', modelsDir: models } } as typeof DEFAULT_CONFIG,
+      port: 0,
+    });
+    const b = (await s.start()).replace(/\/$/, '');
+    try {
+      const r = await fetch(`${b}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'x' }),
+      });
+      assert.equal(r.status, 503);
+      assert.match(((await r.json()) as { error: string }).error, /大きすぎます/);
+    } finally { await s.stop(); }
+  });
+});
