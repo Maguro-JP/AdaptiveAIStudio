@@ -316,6 +316,17 @@ describe('名前だけ .gguf の別物', () => {
       });
       assert.equal(r.status, 503);
       assert.match(((await r.json()) as { error: string }).error, /GGUF として読めません/);
+      // 一覧でも分かる。本物の印があるものには付かない（対）。
+      await wf(j(models, 'real.gguf'), 'GGUF');
+      const prev = process.env.AAS_CONFIG;
+      process.env.AAS_CONFIG = j(models, 'aas.config.json');
+      try {
+        await fetch(`${b}/api/config`, { method: 'PUT', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ kind: 'inproc', modelsDir: models }) });
+        const c = await (await fetch(`${b}/api/config`)).json() as { gguf: { ref: string; notGguf: boolean }[] };
+        assert.equal(c.gguf.find((g) => g.ref === 'page.gguf')?.notGguf, true);
+        assert.equal(c.gguf.find((g) => g.ref === 'real.gguf')?.notGguf, false);
+      } finally { if (prev === undefined) delete process.env.AAS_CONFIG; else process.env.AAS_CONFIG = prev; }
     } finally { await s.stop(); }
   });
 });

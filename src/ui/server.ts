@@ -585,7 +585,12 @@ export class UiServer {
           || dir !== (active.modelsDir ?? modelsDir()),
         // 置き場にある GGUF。「置いたのに認識しない」を画面で確かめられるように。
         // 記憶に載らないものは、載らないと添える。読む前に分かるように。
-        gguf: (await listGguf(dir)).map((m) => ({ ...m, tooBig: tooBigForRam(m.sizeBytes, totalmem()) ?? null })),
+        gguf: await Promise.all((await listGguf(dir)).map(async (m) => ({
+          ...m,
+          tooBig: tooBigForRam(m.sizeBytes, totalmem()) ?? null,
+          // 名前だけ .gguf の別物も、一覧で分かるように。
+          notGguf: !(await looksLikeGguf(join(dir, m.ref))),
+        }))),
         // GGUF が0件のとき、置き場そのものが無いのか、空なのかで打つ手が違う。
         dirState: await inspectModelsDir(dir),
       });

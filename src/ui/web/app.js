@@ -570,7 +570,8 @@ async function loadCfg() {
     const v = document.createElement('span');
     v.className = 'dim mono';
     v.textContent = (m.sizeBytes ? `${(m.sizeBytes / 1024 ** 3).toFixed(1)} GB` : '')
-      + (m.tooBig ? '　⚠ この機械の記憶に載りません' : '');
+      + (m.tooBig ? '　⚠ この機械の記憶に載りません' : '')
+      + (m.notGguf ? '　⚠ GGUF ではありません（中身が別物）' : '');
     // どれを使うかを、ここで決められる。決めなければ最初の一つ。
     const use = document.createElement('button');
     use.type = 'button';
