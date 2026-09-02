@@ -214,3 +214,13 @@ describe('届かなくても、手で取る道を言う', () => {
     assert.ok(!lines.some((l) => l.includes('手で取るなら')));
   });
 });
+
+describe('配布元の名前を、そのまま道にしない', () => {
+  test('\\ の区切りが混ざっていても、置き場の中に置く', async () => {
+    const modelsDir = await tempDir('aas-leaf-');
+    const impl = fakeFetch({ files: ['sub\\..\\..\\model-q4_k_m.gguf'] }).impl;
+    const r = await installModel({ entry: { ...ENTRY, quant: 'q4_k_m' }, modelsDir, fetchImpl: impl });
+    assert.ok(r.path.startsWith(modelsDir), `置き場の外: ${r.path}`);
+    assert.equal(r.file, 'model-q4_k_m.gguf');
+  });
+});

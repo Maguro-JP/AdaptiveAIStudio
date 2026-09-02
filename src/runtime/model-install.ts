@@ -130,7 +130,11 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
   log(`選びました: ${file}`);
 
   await mkdir(modelsDir, { recursive: true });
-  const dest = join(modelsDir, file.split('/').at(-1)!);
+  // 配布元の一覧から来た名前。区切りは / だけでなく \\ も見る（Windows では
+  // \\ が道として解釈され、置き場の外へ出る）。点だけの名前は置かない。
+  const leaf = file.split(/[\\/]/).at(-1) ?? '';
+  if (!leaf || leaf === '.' || leaf === '..') throw new Error(`置ける名前ではありません: ${file}`);
+  const dest = join(modelsDir, leaf);
   // 途中のものは別名で置く。中断されたものを「ある」と数えないため。
   const tmp = `${dest}.part`;
 
