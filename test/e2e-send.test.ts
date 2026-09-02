@@ -85,3 +85,28 @@ describe('送って、返事が戻る', () => {
     assert.ok(fake.requests >= 1, '相手に届いていない');
   });
 });
+
+describe('途中でやめる', () => {
+  test('相手が黙っていても、やめれば戻ってくる', async () => {
+    // 相手が返さない（hang）。やめる を押したら、待たされずに終わりが来ること。
+    fake.setBehavior({ kind: 'hang' });
+    try {
+      const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
+      const collecting = collect(done, 20_000);
+      await new Promise((r) => setTimeout(r, 200));
+      const r = await fetch(`${base}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: '黙る相手へ' }),
+      });
+      assert.equal(r.status, 202, await r.text());
+      await new Promise((r2) => setTimeout(r2, 800));
+      const began = Date.now();
+      assert.equal((await fetch(`${base}/api/abort`, { method: 'POST' })).status, 200);
+      const events = await collecting;
+      assert.ok(done(events), 'やめたのに終わりが来ない');
+      assert.ok(Date.now() - began < 10_000, `やめてから戻るまでが長い: ${Date.now() - began}ms`);
+    } finally {
+      fake.setBehavior({ kind: 'stream', text: 'こんにちは、世界' });
+    }
+  });
+});
