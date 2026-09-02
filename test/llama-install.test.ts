@@ -212,3 +212,32 @@ describe('書庫の項目名を、置く名前にする', () => {
     assert.equal(entryFileName('dir/'), undefined);
   });
 });
+
+describe('取れないときの言い方', () => {
+  test('合言葉が通らなければ（401）、無しで取り直す', async () => {
+    const binDir = await tempDir('aas-401-');
+    const seen: (string | undefined)[] = [];
+    const base = fakeFetch().impl;
+    const impl = (async (url: string | URL, init?: RequestInit) => {
+      const auth = (init?.headers as Record<string, string> | undefined)?.authorization;
+      if (String(url).includes('/releases/tags/')) {
+        seen.push(auth);
+        if (auth) return new Response('{"message":"Bad credentials"}', { status: 401 });
+      }
+      return base(url, init);
+    }) as unknown as typeof fetch;
+    const lines: string[] = [];
+    const r = await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl, verify: runs, token: 'ghp_broken', onProgress: (l) => lines.push(l) });
+    assert.ok(r.command, '取れていない');
+    assert.deepEqual(seen.map((a) => Boolean(a)), [true, false], '合言葉あり→無し の順で二度訊いていない');
+    assert.ok(lines.some((l) => l.includes('無しで取り直します')));
+  });
+
+  test('断られたら（403）、手で取る道を言う', async () => {
+    const binDir = await tempDir('aas-403-');
+    await assert.rejects(
+      install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: fakeFetch({ releaseStatus: 403 }).impl }),
+      (e: Error) => e.message.includes('手で取るなら') && e.message.includes('releases/tag/b4585') && e.message.includes(binDir),
+    );
+  });
+});

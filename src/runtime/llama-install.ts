@@ -29,6 +29,8 @@ export interface InstallOptions {
   onProgress?: (line: string) => void;
   /** 取得の口。試験では差し替える。 */
   fetchImpl?: typeof fetch;
+  /** GitHub の合言葉。無ければ環境（GITHUB_TOKEN / GH_TOKEN）。試験で差し替える */
+  token?: string;
   /**
    * 動くかの確かめ方。既定は実際に一度起動する。
    *
@@ -96,24 +98,39 @@ export async function install(opts: InstallOptions): Promise<Installed> {
 
   log(`リリースを調べます (${tag})`);
   // 合言葉があれば使う。無くても動くが、回数制限が緩くなる。
-  const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
-  const res = await fetchImpl(`${RELEASES_API}/tags/${tag}`, {
+  // 試験では差し替える。環境のものが勝つのは元のまま（外から渡されたものが先）。
+  const token = opts.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+  const ask = (withToken: boolean) => fetchImpl(`${RELEASES_API}/tags/${tag}`, {
     headers: {
       accept: 'application/vnd.github+json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      'user-agent': 'AdaptiveAIStudio',
+      ...(withToken && token ? { authorization: `Bearer ${token}` } : {}),
     },
     signal: opts.signal,
   });
+  let res: Response;
+  try {
+    res = await ask(true);
+    // 合言葉が通らない（期限切れ・別物）なら、無しで取り直す。リリースは
+    // 誰でも読めるので、壊れた合言葉のせいで取れない、をなくす。実際に起きた。
+    if (res.status === 401 && token) {
+      log('GITHUB_TOKEN が通らないので（401）、無しで取り直します');
+      res = await ask(false);
+    }
+  } catch (e) {
+    if (opts.signal?.aborted) throw e;
+    throw new Error(`配布元に繋がりません（${e instanceof Error ? e.message : String(e)}）。\n${llamaByHand(tag, binDir)}`);
+  }
   if (!res.ok) {
-    // 403/429 は回数制限。「ネットワークを確認」と言われても、
-    // 繋がっているので何をすればいいか分からない。
+    // 403/429 は回数制限か、回線が api.github.com を通していない。どちらも
+    // 「ネットワークを確認」では次の一手が分からない。手で取る道を出す。
     if (res.status === 403 || res.status === 429) {
       throw new Error(
-        'GitHub の問い合わせ回数の上限に当たりました（1時間あたり60回）。'
-        + '\n少し待つか、GITHUB_TOKEN を設定してから、もう一度実行してください。',
+        'GitHub に断られました（403/429）。問い合わせ回数の上限か、回線が api.github.com を通していません。'
+        + `\n${llamaByHand(tag, binDir)}`,
       );
     }
-    throw new Error(`リリースを調べられませんでした (${res.status})。ネットワークを確認してください。`);
+    throw new Error(`リリースを調べられませんでした (${res.status})。\n${llamaByHand(tag, binDir)}`);
   }
   const release = await res.json() as { assets?: Array<{ name: string; browser_download_url: string }> };
   const assets = release.assets ?? [];
@@ -248,6 +265,22 @@ export async function listInstalled(binDir = defaultBinDir()): Promise<string[]>
   }
 }
 
+
+/**
+ * 手で取る道。
+ *
+ * この道具から届かなくても、ブラウザからなら届く機械がある。
+ * 開く先（リリースの頁）と、置く先（bin\\<版>\\）を、そのまま貼れる形で言う。
+ */
+export function llamaByHand(tag: string, binDir: string): string {
+  return [
+    '手で取るなら:',
+    `  1. ブラウザで開く: https://github.com/ggml-org/llama.cpp/releases/tag/${tag}`,
+    '  2. この機械に合う zip を落とす（Windows なら llama-bin-win-avx2-x64.zip、NVIDIA なら cuda 付き）',
+    `  3. 展開した中身をここに置く: ${join(binDir, tag)}`,
+    '  （.exe が置けない場所では、llama-server.exe を llama-server.bin に名前を変えて置く）',
+  ].join('\n');
+}
 
 /**
  * 書庫の項目名から、置く名前だけを取り出す。

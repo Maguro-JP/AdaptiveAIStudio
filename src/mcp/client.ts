@@ -74,6 +74,20 @@ export function flatten(result: unknown): { text: string; isError: boolean } {
   return { text: parts.join('\n'), isError };
 }
 
+/**
+ * Windows では `npx` は `npx.cmd`。
+ *
+ * Node の spawn は PATHEXT を見ないので、`npx` と書くと Windows では
+ * ENOENT で立ち上がらない。拡張子の無い名前は cmd.exe 越しに起こす。
+ * 設定に `npx.cmd` と書かせない（他の機械で動かなくなる）。
+ */
+export function spawnPlan(command: string, platform: NodeJS.Platform): { command: string; shell: boolean } {
+  if (platform === 'win32' && !/\.[a-z0-9]+$/i.test(command) && !/[\\/]/.test(command)) {
+    return { command, shell: true };
+  }
+  return { command, shell: false };
+}
+
 export class McpClient {
   readonly name: string;
   readonly #spec: McpServerSpec;
@@ -119,10 +133,12 @@ export class McpClient {
     }
 
     try {
-      this.#child = spawn(this.#spec.command, this.#spec.args ?? [], {
+      const plan = spawnPlan(this.#spec.command, process.platform);
+      this.#child = spawn(plan.command, this.#spec.args ?? [], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env,
         signal,
+        ...(plan.shell ? { shell: true } : {}),
       });
     } catch (e) {
       this.#failure = `立ち上げられませんでした: ${(e as Error).message}`;

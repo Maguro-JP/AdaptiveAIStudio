@@ -159,6 +159,9 @@ exit /b %errorlevel%
 
 :normal
 rem 画面の「立ち上げ直す」は 75 で終わる。そのときは同じものをもう一度起こす。
+rem 回線の中継（HTTPS_PROXY 等）が環境にあれば、Node の fetch にも通す。
+rem 無ければ何も変わらない。効くかどうかは実機で未確認。
+set "NODE_USE_ENV_PROXY=1"
 set "AAS_RELAUNCH=1"
 if "%RUNNER%"=="direct" call "%NODE%" scripts\run.mjs %TASK%
 if not "%RUNNER%"=="direct" call "%NPM%" run %TASK%

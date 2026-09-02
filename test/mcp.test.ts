@@ -149,3 +149,13 @@ describe('立ち上げ', () => {
     assert.match(PROTOCOL_VERSION, /^\d{4}-\d{2}-\d{2}$/);
   });
 });
+
+describe('Windows では npx を cmd 越しに起こす', () => {
+  test('拡張子の無い名前は shell を通す。道や拡張子付きは通さない', async () => {
+    const { spawnPlan } = await import('../src/mcp/client.ts');
+    assert.deepEqual(spawnPlan('npx', 'win32'), { command: 'npx', shell: true });
+    assert.deepEqual(spawnPlan('npx.cmd', 'win32'), { command: 'npx.cmd', shell: false });
+    assert.deepEqual(spawnPlan('C:\\tools\\srv.exe', 'win32'), { command: 'C:\\tools\\srv.exe', shell: false });
+    assert.deepEqual(spawnPlan('npx', 'linux'), { command: 'npx', shell: false });
+  });
+});
