@@ -46,7 +46,7 @@ describe('見る板', () => {
     const frame = find(body, 'iframe');
     assert.ok(frame, '枠が無い');
     // 4174 は画面の口。そこと同じにならないこと。
-    assert.match(String(frame.src), /^http:\/\/127\.0\.0\.1:4176\//);
+    assert.match(String((frame as StubNode & { src?: unknown }).src), /^http:\/\/127\.0\.0\.1:4176\//);
   });
 
   test('枠の側でも縛る', async () => {
@@ -54,8 +54,9 @@ describe('見る板', () => {
     const frame = find(body, 'iframe');
     // 出所が分かれていても、こちらでも縛る。
     // allow-same-origin を入れると縛った意味が無くなる。
-    assert.match(String(frame!.sandbox), /allow-scripts/);
-    assert.doesNotMatch(String(frame!.sandbox), /allow-same-origin/);
+    const sandbox = String((frame as StubNode & { sandbox?: unknown }).sandbox);
+    assert.match(sandbox, /allow-scripts/);
+    assert.doesNotMatch(sandbox, /allow-same-origin/);
   });
 
   test('どこを見ているかを出す', async () => {

@@ -18,7 +18,7 @@ import { formatChecks, summaryLine, type Check, type Level } from './doctor-view
 import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
-import { installRoot } from '../core/home.ts';
+import { installRoot, modelsDir } from '../core/home.ts';
 import { resolve } from 'node:path';
 
 /** Windows と Unix でコマンドが違うものは、その環境のものを出す。 */

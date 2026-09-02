@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { installDom, type StubNode } from './dom-stub.ts';
 
 installDom();
-const { linkify } = await import('../src/ui/web/panels.js') as {
+const { linkify } = await import('../src/ui/web/panels.js') as unknown as {
   linkify: (text: string) => StubNode;
 };
 

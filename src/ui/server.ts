@@ -732,7 +732,7 @@ export class UiServer {
           // 設定で決めた名前（runtime.model）が置き場に在れば、それ。無ければ最初の一つ。
           // 情報の板は runtime.model を「使うモデル」と見せているので、読む側も同じにする。
           const wanted = this.#opts.config.runtime?.model;
-          const chosen = (wanted && models.find((m) => m.ref === wanted)) ?? models[0]!;
+          const chosen = (wanted ? models.find((m) => m.ref === wanted) : undefined) ?? models[0]!;
           const ref = chosen.ref;
           // 記憶に載らないものを読みに行かない。落ちるか、何十分も固まる。
           const big = tooBigForRam(chosen.sizeBytes, totalmem());

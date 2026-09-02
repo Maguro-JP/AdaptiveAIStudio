@@ -19,7 +19,7 @@ function headings(text: string): string[] {
   const found: string[] = [];
   for (const line of text.split('\n')) {
     const m = /^## (\d{4}-\d{2}-\d{2})\s+(.+?)\s*$/.exec(line);
-    if (m) found.push(m[2]);
+    if (m) found.push(m[2]!);
   }
   return found;
 }

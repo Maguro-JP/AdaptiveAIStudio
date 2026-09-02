@@ -37,7 +37,8 @@ describe('会話の板・添付', () => {
     // 落とす・貼る、どちらの口も繋がっていること。
     const found: StubNode[] = [];
     const walk = (n: StubNode) => {
-      if (n.ondrop || n.onpaste) found.push(n);
+      const h = n as StubNode & { ondrop?: unknown; onpaste?: unknown };
+      if (h.ondrop || h.onpaste) found.push(n);
       for (const c of n.children) walk(c);
     };
     walk(body);

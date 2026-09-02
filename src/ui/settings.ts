@@ -50,7 +50,7 @@ export async function saveRuntime(
   try {
     current = JSON.parse(await readFile(at, 'utf8')) as Record<string, unknown>;
   } catch { /* まだ無い */ }
-  const runtime = { ...(current.runtime as Record<string, unknown> ?? {}), kind };
+  const runtime: Record<string, unknown> = { ...(current.runtime as Record<string, unknown> ?? {}), kind };
   if (modelsDir) runtime.modelsDir = modelsDir;
   else delete runtime.modelsDir;
   if (model !== undefined) {

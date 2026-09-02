@@ -174,7 +174,7 @@ export class InProcRuntime implements LocalRuntime {
       },
     });
     const context = await model.createContext({ contextSize: this.#opts.contextSize ?? 8192 });
-    const session = new lib.LlamaChatSession({ contextSequence: context.getSequence() });
+    const session = new lib.LlamaChatSession({ contextSequence: context.getSequence() }) as Held['session'];
     this.#opts.onLog?.(`読み込みました: ${ref}`);
     return { context, session, turn: Promise.resolve() };
   }
@@ -192,7 +192,7 @@ export class InProcRuntime implements LocalRuntime {
   }
 
   /** ライブラリ。無いときは、無いとだけ言う。黙って別のことをしない。 */
-  async #lib(): Promise<{ getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string }) => Promise<{ createContext: (o?: { contextSize?: number }) => Promise<{ getSequence: () => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown }> {
+  async #lib(): Promise<{ getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string; onLoadProgress?: (done: number) => void }) => Promise<{ createContext: (o?: { contextSize?: number }) => Promise<{ getSequence: () => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown }> {
     const load = this.#opts.load ?? (() => import('node-llama-cpp'));
     try {
       return await load() as never;

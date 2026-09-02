@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { installDom, createNode, createText, type StubNode } from './dom-stub.ts';
 
 installDom();
+// @ts-expect-error 素の JS で、型は付けていない。
 const { decorate } = await import('../src/ui/web/color.js') as {
   decorate: (node: StubNode, opts?: { onPick?: (from: string, to: string) => void }) => void;
 };

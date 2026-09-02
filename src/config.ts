@@ -204,6 +204,8 @@ export interface RuntimeConfig {
   basePort?: number;
   /** 文脈の大きさ（トークン）。inproc のみ。既定 8192。広げるほど記憶を食う */
   contextSize?: number;
+  /** 使う GGUF の名前（置き場の中の名前）。無ければ最初の一つ */
+  model?: string;
   /** llamacpp: レーンの並列度に合わせる */
   parallel?: number;
   desiredContext?: number;
