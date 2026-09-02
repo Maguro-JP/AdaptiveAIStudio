@@ -33,7 +33,7 @@ function fakeFetch(opts: { assets?: string[]; zip?: Buffer; releaseStatus?: numb
   const impl = (async (url: string | URL) => {
     const u = String(url);
     calls.push(u);
-    if (u.includes('/releases/')) {
+    if (u.includes('/releases/tags/')) {
       if (opts.releaseStatus && opts.releaseStatus !== 200) {
         return new Response('no', { status: opts.releaseStatus });
       }
@@ -233,10 +233,21 @@ describe('取れないときの言い方', () => {
     assert.ok(lines.some((l) => l.includes('無しで取り直します')));
   });
 
-  test('断られたら（403）、手で取る道を言う', async () => {
+  test('一覧が断られても（403）、名前を当てて配布物を取りに行く', async () => {
+    // api.github.com は塞がれていても github.com の配布物は通る回線がある（実測）。
     const binDir = await tempDir('aas-403-');
+    const { impl, calls } = fakeFetch({ releaseStatus: 403 });
+    const lines: string[] = [];
+    const r = await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl, verify: runs, onProgress: (l) => lines.push(l) });
+    assert.ok(r.command);
+    assert.ok(lines.some((l) => l.includes('名前を当てて')));
+    assert.ok(calls.some((u) => u.includes('/releases/download/b4585/llama-b4585-bin-ubuntu-x64.zip')), calls.join('\n'));
+  });
+
+  test('配布物そのものも取れなければ、手で取る道を言う', async () => {
+    const binDir = await tempDir('aas-dl404-');
     await assert.rejects(
-      install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: fakeFetch({ releaseStatus: 403 }).impl }),
+      install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: fakeFetch({ releaseStatus: 403, downloadStatus: 404 }).impl }),
       (e: Error) => e.message.includes('手で取るなら') && e.message.includes('releases/tag/b4585') && e.message.includes(binDir),
     );
   });

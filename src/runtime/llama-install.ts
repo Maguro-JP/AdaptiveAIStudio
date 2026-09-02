@@ -108,32 +108,40 @@ export async function install(opts: InstallOptions): Promise<Installed> {
     },
     signal: opts.signal,
   });
-  let res: Response;
+  let assets: Array<{ name: string; browser_download_url: string }> = [];
+  let listed: string | undefined;
+  let missing = false;
   try {
-    res = await ask(true);
+    let res = await ask(true);
     // 合言葉が通らない（期限切れ・別物）なら、無しで取り直す。リリースは
     // 誰でも読めるので、壊れた合言葉のせいで取れない、をなくす。実際に起きた。
     if (res.status === 401 && token) {
       log('GITHUB_TOKEN が通らないので（401）、無しで取り直します');
       res = await ask(false);
     }
+    if (res.ok) {
+      const release = await res.json() as { assets?: Array<{ name: string; browser_download_url: string }> };
+      assets = release.assets ?? [];
+    } else if (res.status === 404) {
+      // 版そのものが無い。名前を当てても外れるだけなので、ここで止める。
+      missing = true;
+    } else {
+      listed = `一覧を取れませんでした (${res.status})`;
+      assets = [];
+    }
   } catch (e) {
     if (opts.signal?.aborted) throw e;
-    throw new Error(`配布元に繋がりません（${e instanceof Error ? e.message : String(e)}）。\n${llamaByHand(tag, binDir)}`);
+    listed = `一覧に繋がりません（${e instanceof Error ? e.message : String(e)}）`;
+    assets = [];
   }
-  if (!res.ok) {
-    // 403/429 は回数制限か、回線が api.github.com を通していない。どちらも
-    // 「ネットワークを確認」では次の一手が分からない。手で取る道を出す。
-    if (res.status === 403 || res.status === 429) {
-      throw new Error(
-        'GitHub に断られました（403/429）。問い合わせ回数の上限か、回線が api.github.com を通していません。'
-        + `\n${llamaByHand(tag, binDir)}`,
-      );
-    }
-    throw new Error(`リリースを調べられませんでした (${res.status})。\n${llamaByHand(tag, binDir)}`);
+  if (missing) throw new Error(`リリースを調べられませんでした (404)。版 ${tag} は無いようです`);
+  if (listed) {
+    // api.github.com は塞がれていても、github.com の配布物そのものは通る回線がある
+    // （この場所がそう。実測: 一覧は 403、配布物は 200）。名前の形は決まっている
+    // ので、一覧なしに当てて取りに行く。
+    log(`${listed}。名前を当てて取りに行きます`);
+    assets = guessAssets(tag);
   }
-  const release = await res.json() as { assets?: Array<{ name: string; browser_download_url: string }> };
-  const assets = release.assets ?? [];
 
   const choice = pickAsset(assets.map((a) => a.name), opts.target);
   if (!choice) {
@@ -146,8 +154,10 @@ export async function install(opts: InstallOptions): Promise<Installed> {
   log(`選びました: ${choice.name}（${choice.why}）`);
 
   log('取ってきます（数分かかることがあります）');
-  const dl = await fetchImpl(asset.browser_download_url, { signal: opts.signal });
-  if (!dl.ok) throw new Error(`取ってこられませんでした (${dl.status})`);
+  const dl = await fetchImpl(asset.browser_download_url, { signal: opts.signal }).catch((e: unknown) => {
+    throw new Error(`取ってこられませんでした（${e instanceof Error ? e.message : String(e)}）。\n${llamaByHand(tag, binDir)}`);
+  });
+  if (!dl.ok) throw new Error(`取ってこられませんでした (${dl.status})。\n${llamaByHand(tag, binDir)}`);
   const buf = Buffer.from(await dl.arrayBuffer());
   log(`取得しました: ${(buf.length / 1024 / 1024).toFixed(1)}MB`);
 
@@ -265,6 +275,27 @@ export async function listInstalled(binDir = defaultBinDir()): Promise<string[]>
   }
 }
 
+
+/**
+ * 一覧が取れないときに当てる名前。
+ *
+ * llama.cpp の配布物の名前は `llama-<版>-bin-<os>-<変種>-<cpu>.zip` で決まっている
+ * （b4585 で実測: win-avx2-x64 / win-cuda-cu12.4-x64 / ubuntu-x64 / macos-arm64 が 200）。
+ * 無い名前は 404 で返るだけなので、当てて外れても害は無い。
+ */
+export function guessAssets(tag: string): Array<{ name: string; browser_download_url: string }> {
+  const base = `https://github.com/ggml-org/llama.cpp/releases/download/${tag}/`;
+  const names = [
+    `llama-${tag}-bin-win-avx2-x64.zip`,
+    `llama-${tag}-bin-win-cuda-cu12.4-x64.zip`,
+    'cudart-llama-bin-win-cu12.4-x64.zip',
+    `llama-${tag}-bin-ubuntu-x64.zip`,
+    `llama-${tag}-bin-ubuntu-arm64.zip`,
+    `llama-${tag}-bin-macos-arm64.zip`,
+    `llama-${tag}-bin-macos-x64.zip`,
+  ];
+  return names.map((name) => ({ name, browser_download_url: base + name }));
+}
 
 /**
  * 手で取る道。
