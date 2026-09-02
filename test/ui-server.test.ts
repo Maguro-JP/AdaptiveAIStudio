@@ -297,3 +297,25 @@ describe('記憶に載らない GGUF', () => {
     } finally { await s.stop(); }
   });
 });
+
+describe('名前だけ .gguf の別物', () => {
+  test('先頭に印が無ければ、読みに行かずに理由を返す', async () => {
+    const { tempDir: td } = await import('./tmp.ts');
+    const { writeFile: wf } = await import('node:fs/promises');
+    const { join: j } = await import('node:path');
+    const models = await td('aas-notgguf-');
+    await wf(j(models, 'page.gguf'), '<!doctype html><title>Access denied</title>');
+    const s = new UiServer({
+      config: { ...DEFAULT_CONFIG, runtime: { kind: 'inproc', modelsDir: models } } as typeof DEFAULT_CONFIG,
+      port: 0,
+    });
+    const b = (await s.start()).replace(/\/$/, '');
+    try {
+      const r = await fetch(`${b}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'x' }),
+      });
+      assert.equal(r.status, 503);
+      assert.match(((await r.json()) as { error: string }).error, /GGUF として読めません/);
+    } finally { await s.stop(); }
+  });
+});

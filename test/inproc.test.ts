@@ -59,12 +59,12 @@ async function readStream(res: Response): Promise<{ text: string; done: boolean 
 describe('置き場の GGUF を見つける', () => {
   test('名前は問わない。拡張子だけで選ぶ', async () => {
     const dir = await tempDir('aas-gguf-');
-    await writeFile(join(dir, 'qwen2.5-3b-instruct-q4_k_m.gguf'), 'x');
+    await writeFile(join(dir, 'qwen2.5-3b-instruct-q4_k_m.gguf'), 'GGUF');
     await writeFile(join(dir, 'メモ.txt'), 'x');
     await mkdir(join(dir, 'sub'));
     const got = await listGguf(dir);
     assert.deepEqual(got.map((m) => m.ref), ['qwen2.5-3b-instruct-q4_k_m.gguf']);
-    assert.equal(got[0]!.sizeBytes, 1);
+    assert.equal(got[0]!.sizeBytes, 4);
   });
 
   test('置き場が無くても落ちない', async () => {
@@ -75,7 +75,7 @@ describe('置き場の GGUF を見つける', () => {
 describe('中で読む', () => {
   test('OpenAI 互換の口が、自分の中に立つ', async () => {
     const dir = await tempDir('aas-inproc-');
-    await writeFile(join(dir, 'm.gguf'), 'x');
+    await writeFile(join(dir, 'm.gguf'), 'GGUF');
     const { load } = fakeLib('はい');
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
     const loaded = await rt.ensureLoaded('m.gguf');
@@ -107,7 +107,7 @@ describe('中で読む', () => {
     // 一致しないことがある。一つしか読んでいないなら、それで答える。
     // ただし**黙って替えない**。替えたことは記録に出す。
     const dir = await tempDir('aas-inproc2-');
-    await writeFile(join(dir, 'm.gguf'), 'x');
+    await writeFile(join(dir, 'm.gguf'), 'GGUF');
     const said: string[] = [];
     const rt = new InProcRuntime({
       modelsDir: dir, port: 0, load: fakeLib('はい').load, onLog: (l) => said.push(l),
@@ -126,8 +126,8 @@ describe('中で読む', () => {
 
   test('読み込んでいなければ、そう言う', async () => {
     const dir = await tempDir('aas-inproc3-');
-    await writeFile(join(dir, 'a.gguf'), 'x');
-    await writeFile(join(dir, 'b.gguf'), 'x');
+    await writeFile(join(dir, 'a.gguf'), 'GGUF');
+    await writeFile(join(dir, 'b.gguf'), 'GGUF');
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: fakeLib().load });
     const { baseUrl } = await rt.ensureLoaded('a.gguf');
     await rt.ensureLoaded('b.gguf');
@@ -166,7 +166,7 @@ describe('上の層が呼ぶとおりに答える', () => {
     // 上の層は毎回すべての履歴を送ってくる。最後の user が「いま訊いて
     // いること」で、それを履歴にも入れると同じことを二度言うことになる。
     const dir = await tempDir('aas-hist-');
-    await writeFile(join(dir, 'm.gguf'), 'x');
+    await writeFile(join(dir, 'm.gguf'), 'GGUF');
     const { load, spy } = fakeLib('ok');
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
     const { baseUrl } = await rt.ensureLoaded('m.gguf');
@@ -200,7 +200,7 @@ describe('上の層が呼ぶとおりに答える', () => {
   test('繋がるかの確認に答える', async () => {
     // provider は /models を叩いて生死を見る。404 を返すと死んで見える。
     const dir = await tempDir('aas-mdl-');
-    await writeFile(join(dir, 'm.gguf'), 'x');
+    await writeFile(join(dir, 'm.gguf'), 'GGUF');
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: fakeLib().load });
     const { baseUrl } = await rt.ensureLoaded('m.gguf');
     const r = await fetch(`${baseUrl}/models`);
@@ -212,7 +212,7 @@ describe('上の層が呼ぶとおりに答える', () => {
 
   test('stream: false なら、まとめて返す', async () => {
     const dir = await tempDir('aas-once-');
-    await writeFile(join(dir, 'm.gguf'), 'x');
+    await writeFile(join(dir, 'm.gguf'), 'GGUF');
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: fakeLib('まとめて').load });
     const { baseUrl } = await rt.ensureLoaded('m.gguf');
     const r = await fetch(`${baseUrl}/chat/completions`, {
@@ -270,7 +270,7 @@ describe('読み込みの進み具合を言う', () => {
   test('黙って待たせない', async () => {
     // 数GBを読むので 10〜60秒かかる。何も言わないと固まったように見える。
     const dir = await tempDir('aas-prog-');
-    await writeFile(join(dir, 'm.gguf'), 'x');
+    await writeFile(join(dir, 'm.gguf'), 'GGUF');
     const said: string[] = [];
     const load = async () => ({
       getLlama: async () => ({
@@ -318,8 +318,8 @@ describe('GGUF を置く道を、ひとまとめに見る', () => {
 describe('名指しされた GGUF に切り替える', () => {
   test('置き場に在る別の GGUF を頼まれたら、解いて読み替える', async () => {
     const dir = await tempDir('aas-switch-');
-    await writeFile(join(dir, 'a.gguf'), 'x');
-    await writeFile(join(dir, 'b.gguf'), 'x');
+    await writeFile(join(dir, 'a.gguf'), 'GGUF');
+    await writeFile(join(dir, 'b.gguf'), 'GGUF');
     const { load } = fakeLib('こんにちは');
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
     try {
@@ -336,7 +336,7 @@ describe('名指しされた GGUF に切り替える', () => {
 
   test('置き場に無い名前なら、読んでいる一つで答える（対）', async () => {
     const dir = await tempDir('aas-switch-');
-    await writeFile(join(dir, 'a.gguf'), 'x');
+    await writeFile(join(dir, 'a.gguf'), 'GGUF');
     const { load } = fakeLib('こんにちは');
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
     try {
@@ -364,7 +364,7 @@ describe('文脈の大きさを決めておく', () => {
   }
   test('既定は 8192。auto に任せない', async () => {
     const dir = await tempDir('aas-ctx-');
-    await writeFile(join(dir, 'a.gguf'), 'x');
+    await writeFile(join(dir, 'a.gguf'), 'GGUF');
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
@@ -372,7 +372,7 @@ describe('文脈の大きさを決めておく', () => {
   });
   test('設定で広げられる（対）', async () => {
     const dir = await tempDir('aas-ctx-');
-    await writeFile(join(dir, 'a.gguf'), 'x');
+    await writeFile(join(dir, 'a.gguf'), 'GGUF');
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, contextSize: 32768, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }

@@ -27,7 +27,7 @@ async function start(): Promise<{ url: string; at: string; models: string }> {
   const dir = await tempDir('aas-cfg-');
   const models = join(dir, 'models');
   await mkdir(models, { recursive: true });
-  await writeFile(join(models, 'qwen2.5-3b-instruct-q4_k_m.gguf'), 'x');
+  await writeFile(join(models, 'qwen2.5-3b-instruct-q4_k_m.gguf'), 'GGUF');
   const at = join(dir, 'aas.config.json');
   process.env.AAS_CONFIG = at;
   process.env.AAS_HOME = join(dir, 'home');

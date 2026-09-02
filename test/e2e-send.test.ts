@@ -117,7 +117,7 @@ describe('この中で読む道でも、一往復が通る', () => {
     const { writeFile } = await import('node:fs/promises');
     const { createServer } = await import('node:http');
     const models = await tempDir('aas-e2e-gguf-');
-    await writeFile(join(models, 'a.gguf'), 'x');
+    await writeFile(join(models, 'a.gguf'), 'GGUF');
     const probe = createServer();
     await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
     const port = (probe.address() as { port: number }).port;
@@ -193,8 +193,8 @@ describe('設定で決めた GGUF を読む', () => {
     const { writeFile } = await import('node:fs/promises');
     const { createServer } = await import('node:http');
     const models = await tempDir('aas-e2e-pick-');
-    await writeFile(join(models, 'a.gguf'), 'x');
-    await writeFile(join(models, 'b.gguf'), 'x');
+    await writeFile(join(models, 'a.gguf'), 'GGUF');
+    await writeFile(join(models, 'b.gguf'), 'GGUF');
     const probe = createServer();
     await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
     const port = (probe.address() as { port: number }).port;

@@ -29,7 +29,7 @@ async function scratch(): Promise<{ home: string; models: string; bin: string }>
 describe('片づけるもの・片づけないもの', () => {
   test('GGUF は消さない', async () => {
     const { models } = await scratch();
-    await writeFile(join(models, 'qwen2.5-3b-instruct-q4_k_m.gguf'), 'x');
+    await writeFile(join(models, 'qwen2.5-3b-instruct-q4_k_m.gguf'), 'GGUF');
     await writeFile(join(models, 'よその.GGUF'), 'x');
     const found = await findRemovable({ keepTag: 'b9999' });
     assert.deepEqual(found.map((f) => f.path), [], 'モデルを消そうとしている');
@@ -38,7 +38,7 @@ describe('片づけるもの・片づけないもの', () => {
   test('途中で切れた取得は消す', async () => {
     const { models } = await scratch();
     await writeFile(join(models, 'm.gguf.part'), 'x');
-    await writeFile(join(models, 'm.gguf'), 'x');
+    await writeFile(join(models, 'm.gguf'), 'GGUF');
     const found = await findRemovable({ keepTag: 'b9999' });
     assert.deepEqual(found.map((f) => f.path), [join(models, 'm.gguf.part')]);
   });

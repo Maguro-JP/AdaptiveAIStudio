@@ -441,7 +441,7 @@ describe('配布物の形のまま、この中で読む設定で通す', () => {
     const { mkdir: mk, writeFile: wf } = await import('node:fs/promises');
     const models = join(out, 'data', 'models');
     await mk(models, { recursive: true });
-    await wf(join(models, 'qwen2.5-3b-instruct-q4_k_m.gguf'), 'x');
+    await wf(join(models, 'qwen2.5-3b-instruct-q4_k_m.gguf'), 'GGUF');
     const cfg = join(out, 'aas.config.json');
     await wf(cfg, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
 

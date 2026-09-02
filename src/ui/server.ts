@@ -39,7 +39,7 @@ import {
   RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
   inspectModelsDir, ensureDefaultModelsDir, savedModelsDir,
 } from './settings.ts';
-import { listGguf, tooBigForRam } from '../runtime/inproc.ts';
+import { listGguf, tooBigForRam, looksLikeGguf } from '../runtime/inproc.ts';
 import { totalmem } from 'node:os';
 import { Session } from '../core/session.ts';
 import type { ApprovalRequest } from '../agent/tools/types.ts';
@@ -719,6 +719,13 @@ export class UiServer {
           // 記憶に載らないものを読みに行かない。落ちるか、何十分も固まる。
           const big = tooBigForRam(chosen.sizeBytes, totalmem());
           if (big) return `${ref}: ${big}`;
+          // 名前だけ .gguf で中身が別物（配布元の HTML の案内など）を、読みに行かない。
+          // 一覧と同じ場所（動いている側の置き場）を見る。保存側を見ると、
+          // 立ち上げ直す前の設定とずれて「読めない」と嘘をつく。
+          if (!(await looksLikeGguf(join(this.#opts.config.runtime?.modelsDir ?? modelsDir(), ref)))) {
+            return `${ref} は GGUF として読めません（先頭に GGUF の印がありません）。`
+              + '配布元の同意頁の HTML を落としてしまった形が多いです。ブラウザで開き直して、本物を置いてください。';
+          }
           this.broadcast({ type: 'log', level: 'info', text: `モデルを読み込んでいます: ${ref}` });
           const began = Date.now();
           await runtime.ensureLoaded(ref);

@@ -33,7 +33,7 @@ async function freePort(): Promise<number> {
 describe('この中で読む土台', () => {
   test('設定の basePort に立つ', async () => {
     const dir = await tempDir('aas-rt-');
-    await writeFile(join(dir, 'a.gguf'), 'x');
+    await writeFile(join(dir, 'a.gguf'), 'GGUF');
     const port = await freePort();
     const rt = await buildRuntime(
       { ...DEFAULT_CONFIG, runtime: { kind: 'inproc', modelsDir: dir, basePort: port } },

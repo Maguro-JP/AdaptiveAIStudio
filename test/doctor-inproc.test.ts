@@ -49,7 +49,7 @@ describe('doctor は、この中で読む道を知っている', () => {
 
   test('GGUF を1つ置けば、それで通る', async () => {
     const { home, models, config } = await scratch();
-    await writeFile(join(models, 'qwen2.5-3b-instruct-q4_k_m.gguf'), 'x');
+    await writeFile(join(models, 'qwen2.5-3b-instruct-q4_k_m.gguf'), 'GGUF');
     await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     assert.match(text, /1 件: qwen2\.5-3b-instruct-q4_k_m\.gguf/);
@@ -60,7 +60,7 @@ describe('doctor は、この中で読む道を知っている', () => {
     // 口はこのプログラムの中に立つ。外から見に行っても、モデルを読むまで
     // 立たないので必ず「繋がりません」になる。**それは不足ではない。**
     const { home, models, config } = await scratch();
-    await writeFile(join(models, 'm.gguf'), 'x');
+    await writeFile(join(models, 'm.gguf'), 'GGUF');
     await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     // 札が設定の id（ollama）のままだと「Ollama を入れなければ」と読まれる。
@@ -72,7 +72,7 @@ describe('doctor は、この中で読む道を知っている', () => {
 
   test('llamacpp のときは、使っていない Ollama を不足として数えない', async () => {
     const { home, models, config } = await scratch();
-    await writeFile(join(models, 'm.gguf'), 'x');
+    await writeFile(join(models, 'm.gguf'), 'GGUF');
     await writeFile(config, JSON.stringify({ runtime: { kind: 'llamacpp', modelsDir: models } }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     assert.match(text, /繋がりません（使っていません）/);
@@ -88,7 +88,7 @@ describe('doctor は「入っていない」と「壊れている」を分ける
 
   test('本体が読めるなら「入っていません」とは言わない', onlyWithLib, async () => {
     const { home, models, config } = await scratch();
-    await writeFile(join(models, 'a.gguf'), 'x');
+    await writeFile(join(models, 'a.gguf'), 'GGUF');
     await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     assert.doesNotMatch(text, /node-llama-cpp が入っていません/);

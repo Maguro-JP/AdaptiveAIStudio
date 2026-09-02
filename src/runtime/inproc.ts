@@ -72,6 +72,24 @@ export async function listGguf(dir: string): Promise<AvailableModel[]> {
 }
 
 /**
+ * 先頭が GGUF の印か。
+ *
+ * 名前だけ .gguf で、中身が配布元の HTML の案内（同意が要る頁）だった、
+ * が実際に起きる形。読みに行くと向こうの言葉で落ちる。先に 4 バイト見る。
+ */
+export async function looksLikeGguf(path: string): Promise<boolean> {
+  const { open } = await import('node:fs/promises');
+  try {
+    const fh = await open(path, 'r');
+    try {
+      const buf = Buffer.alloc(4);
+      const { bytesRead } = await fh.read(buf, 0, 4, 0);
+      return bytesRead === 4 && buf.toString('latin1') === 'GGUF';
+    } finally { await fh.close(); }
+  } catch { return false; }
+}
+
+/**
  * この機械の記憶に載るか。
  *
  * GGUF はほぼそのまま記憶に載る（量子化済みなので圧縮の余地は無い）。
