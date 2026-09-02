@@ -632,7 +632,11 @@ export class UiServer {
         binDir: binDir(),
         url: this.#url,
         runtime: this.#opts.config.runtime?.kind ?? '未設定',
-        model: this.#opts.config.runtime?.model ?? '—',
+        // 決めていなくても、この中で読んでいるなら「いま読んでいるもの」を出す。
+        // 「—」だけだと、動いているのに何も無いように見える。
+        model: this.#opts.config.runtime?.model
+          ?? (this.#runtime?.id === 'inproc' ? this.#runtime.loaded()[0] : undefined)
+          ?? '—',
       });
     }
 

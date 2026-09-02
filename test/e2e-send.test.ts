@@ -180,6 +180,9 @@ describe('この中で読む道でも、一往復が通る', () => {
         .map((e) => (e as { event: { type?: string; delta?: string } }).event)
         .filter((ev) => ev.type === 'text').map((ev) => ev.delta ?? '').join('');
       assert.ok(text.includes('この中から'), `返事が流れていない: ${JSON.stringify(events).slice(0, 600)}`);
+      // 決めていなくても、情報には「いま読んでいるもの」が出る。
+      const info = await (await fetch(`${b2}/api/info`)).json() as { model?: string };
+      assert.equal(info.model, 'a.gguf');
     } finally { await s2.stop(); }
   });
 });
