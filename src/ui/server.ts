@@ -207,21 +207,48 @@ export class UiServer {
     if (cfg.enabled === false) return;
     const every = Math.max(5, cfg.idleSeconds ?? 30) * 1000;
 
-    this.#idleTimer = setInterval(() => {
-      // 作業中は考えない。人の依頼が先。支度の最中も、人の依頼のうち。
-      if (this.#busyNow(session)) return;
-      this.#thinking = true;
-      void (async () => {
-        try {
-          for await (const event of session.think()) {
-            this.broadcast({ type: 'thinkEvent', event });
-          }
-        } catch { /* 考えに失敗しても、この場所は止まらない */ } finally {
-          this.#thinking = false;
-        }
-      })();
-    }, every);
+    this.#idleTimer = setInterval(() => { void this.idleTick(session); }, every);
     this.#idleTimer.unref?.();
+  }
+
+  /** モデルが無くて考えられなかったとき、次に試すまで待つ間。 */
+  #idleHoldUntil = 0;
+
+  /**
+   * 暇なときの一回分。
+   *
+   * 何をしたかを符丁で返す（検査で見るため）。
+   *   BUSY     作業中か支度中。人の依頼が先
+   *   HELD     前にモデルが無かったので、しばらく試さない
+   *   MISSING  モデルが無い。次はしばらく試さない
+   *   THOUGHT  考えた（考えなかったことも含む。決めるのは中のスケジューラ）
+   *
+   * **考える前に、モデルの支度をする。**この中で読む道では、読むまで口が
+   * 立たない。支度せずに考えに行くと、30秒ごとに「繋がりません」を作る。
+   */
+  async idleTick(session: Session): Promise<'BUSY' | 'HELD' | 'MISSING' | 'THOUGHT'> {
+    // 作業中は考えない。人の依頼が先。支度の最中も、人の依頼のうち。
+    if (this.#busyNow(session)) return 'BUSY';
+    if (Date.now() < this.#idleHoldUntil) return 'HELD';
+    this.#preparing = true;
+    try {
+      const missing = await this.#readyToThink();
+      if (missing) {
+        // 10分は黙る。30秒ごとに同じことを言われても、置き場は変わらない。
+        this.#idleHoldUntil = Date.now() + 10 * 60_000;
+        return 'MISSING';
+      }
+      this.#thinking = true;
+      try {
+        for await (const event of session.think()) {
+          this.broadcast({ type: 'thinkEvent', event });
+        }
+      } catch { /* 考えに失敗しても、この場所は止まらない */ }
+      return 'THOUGHT';
+    } finally {
+      this.#thinking = false;
+      this.#preparing = false;
+    }
   }
 
   #ask(req: ApprovalRequest): Promise<boolean> {

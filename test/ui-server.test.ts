@@ -245,3 +245,21 @@ describe('使う GGUF を画面から決める', () => {
     assert.equal(c.model, 'b.gguf');
   });
 });
+
+describe('暇なときの一回分', () => {
+  test('モデルが無ければ MISSING、その後しばらくは HELD', async () => {
+    const { tempDir: td } = await import('./tmp.ts');
+    const models = await td('aas-idle-');
+    const s = new UiServer({
+      config: { ...DEFAULT_CONFIG, runtime: { kind: 'inproc', modelsDir: models } } as typeof DEFAULT_CONFIG,
+      port: 0,
+    });
+    await s.start();
+    try {
+      const session = await s.session();
+      assert.equal(await s.idleTick(session), 'MISSING');
+      // 30秒ごとに「置き場に無い」を作らない。
+      assert.equal(await s.idleTick(session), 'HELD');
+    } finally { await s.stop(); }
+  });
+});
