@@ -104,3 +104,18 @@ describe('点検を回す係', () => {
     assert.equal(stripAnsi('日本語はそのまま'), '日本語はそのまま');
   });
 });
+
+describe('旗が要る Node では、旗を付けて起こす', () => {
+  test('22.6 なら --experimental-strip-types を付ける', () => {
+    const { spawnFn, calls } = fakeSpawn();
+    const runner = new TaskRunner({ root: '/app', onEvent: () => {}, spawnFn, nodeVersion: 'v22.6.0' });
+    assert.equal(runner.start('doctor'), undefined);
+    assert.ok(calls[0]!.args.includes('--experimental-strip-types'), calls[0]!.args.join(' '));
+  });
+  test('24 なら付けない（対）', () => {
+    const { spawnFn, calls } = fakeSpawn();
+    const runner = new TaskRunner({ root: '/app', onEvent: () => {}, spawnFn, nodeVersion: 'v24.18.0' });
+    assert.equal(runner.start('doctor'), undefined);
+    assert.ok(!calls[0]!.args.includes('--experimental-strip-types'));
+  });
+});

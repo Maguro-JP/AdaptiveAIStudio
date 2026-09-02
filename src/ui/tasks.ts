@@ -11,6 +11,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { chunkReader } from '../core/text.ts';
+import { needsStripFlag } from '../core/node-flags.ts';
 
 export const TASKS: Record<string, string> = {
   doctor: 'この環境を見てもらう',
@@ -45,6 +46,8 @@ export interface TaskRunnerOptions {
   onEvent: (event: TaskEvent) => void;
   /** 起こし方。試験では差し替える。 */
   spawnFn?: typeof spawn;
+  /** 判断に使う Node の版。試験で差し替える。既定は動いている Node */
+  nodeVersion?: string;
 }
 
 /**
@@ -87,7 +90,11 @@ export class TaskRunner {
       : join(this.#opts.root, 'src', 'cli', `${name}.ts`);
 
     const start = this.#opts.spawnFn ?? spawn;
-    const child = start(process.execPath, ['--no-warnings', file], {
+    // 旗が要る Node（22.6〜22.17 など）では、付けないと .ts を起こせない。
+    // 画面の点検が「文法の誤り」で落ちて、何も分からない。
+    const flags = needsStripFlag(this.#opts.nodeVersion ?? process.versions.node)
+      ? ['--experimental-strip-types'] : [];
+    const child = start(process.execPath, [...flags, '--no-warnings', file], {
       cwd: this.#opts.root,
       env: { ...process.env, NO_COLOR: '1' },
     });
