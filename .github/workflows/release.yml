@@ -176,9 +176,15 @@ jobs:
   installer:
     if: github.ref_type == 'tag'
     needs: portable
-    runs-on: windows-latest
+    # windows-latest は 2025 の像になり、NSIS が入っていない（像の一覧に無い）。
+    # 2022 の像には NSIS 3.10 が入っている。無ければ choco で入れる（保険）。
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+
+      - name: NSIS が在るか見る（無ければ入れる）
+        shell: cmd
+        run: where makensis || choco install nsis -y --no-progress
 
       - uses: actions/setup-node@v4
         with:
