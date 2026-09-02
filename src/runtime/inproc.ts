@@ -45,6 +45,14 @@ export interface InProcOptions {
   port?: number;
   onLog?: (line: string) => void;
   /**
+   * 文脈の大きさ（トークン）。既定 8192。
+   *
+   * 既定の "auto" は、モデルが学習した長さ（32k〜128k）まで取りに行くことが
+   * あり、その分の記憶を最初から確保する。8GB の機械ではそれだけで足りなくなる。
+   * 会社の PC はそういう機械。決めておいて、要るなら設定で広げる。
+   */
+  contextSize?: number;
+  /**
    * ライブラリの読み込み。試験では差し替える。
    * **本物を配布物として用意できない**ので、ここを開けておく。
    */
@@ -131,7 +139,7 @@ export class InProcRuntime implements LocalRuntime {
         this.#opts.onLog?.(`読み込み中 ${pct}%: ${ref}`);
       },
     });
-    const context = await model.createContext();
+    const context = await model.createContext({ contextSize: this.#opts.contextSize ?? 8192 });
     const session = new lib.LlamaChatSession({ contextSequence: context.getSequence() });
     this.#opts.onLog?.(`読み込みました: ${ref}`);
     return { context, session, turn: Promise.resolve() };
@@ -150,7 +158,7 @@ export class InProcRuntime implements LocalRuntime {
   }
 
   /** ライブラリ。無いときは、無いとだけ言う。黙って別のことをしない。 */
-  async #lib(): Promise<{ getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string }) => Promise<{ createContext: () => Promise<{ getSequence: () => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown }> {
+  async #lib(): Promise<{ getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string }) => Promise<{ createContext: (o?: { contextSize?: number }) => Promise<{ getSequence: () => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown }> {
     const load = this.#opts.load ?? (() => import('node-llama-cpp'));
     try {
       return await load() as never;

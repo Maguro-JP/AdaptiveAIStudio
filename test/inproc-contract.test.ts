@@ -83,5 +83,7 @@ describe('入っているなら、読み込めること', () => {
     assert.match(await d('bindings', 'getLlama.d.ts'), /build\?:.*"never"/);
     // 向こうの声（prebuilt binary was not found）を落とす口。
     assert.match(await d('bindings', 'getLlama.d.ts'), /logLevel\?:/);
+    // 文脈の大きさを数で渡せること。auto に任せると 8GB の機械で足りなくなる。
+    assert.match(await d('evaluator', 'LlamaContext', 'types.d.ts'), /contextSize\?: "auto" \| number/);
   });
 });

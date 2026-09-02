@@ -34,6 +34,7 @@ export async function buildRuntime(
       // 設定の basePort を渡す。渡さないと、繋ぐ側（wireInProc）は basePort を
       // 向くのに、待つ側は既定の口に立ち、**永久に繋がらない**。
       ...(rc.basePort !== undefined ? { port: rc.basePort } : {}),
+      ...(rc.contextSize !== undefined ? { contextSize: rc.contextSize } : {}),
       ...(onLog ? { onLog } : {}),
       ...(hooks.inprocLoad ? { load: hooks.inprocLoad } : {}),
     });

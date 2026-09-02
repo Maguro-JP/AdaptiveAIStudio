@@ -350,3 +350,32 @@ describe('名指しされた GGUF に切り替える', () => {
     } finally { await rt.shutdown(); }
   });
 });
+
+describe('文脈の大きさを決めておく', () => {
+  async function libRecording(seen: unknown[]) {
+    return {
+      getLlama: async () => ({
+        loadModel: async () => ({
+          createContext: async (o?: unknown) => { seen.push(o); return { getSequence: () => ({}), dispose: async () => {} }; },
+        }),
+      }),
+      LlamaChatSession: class { setChatHistory() {} async prompt() { return ''; } },
+    };
+  }
+  test('既定は 8192。auto に任せない', async () => {
+    const dir = await tempDir('aas-ctx-');
+    await writeFile(join(dir, 'a.gguf'), 'x');
+    const seen: unknown[] = [];
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: () => libRecording(seen) });
+    try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
+    assert.deepEqual(seen, [{ contextSize: 8192 }]);
+  });
+  test('設定で広げられる（対）', async () => {
+    const dir = await tempDir('aas-ctx-');
+    await writeFile(join(dir, 'a.gguf'), 'x');
+    const seen: unknown[] = [];
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, contextSize: 32768, load: () => libRecording(seen) });
+    try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
+    assert.deepEqual(seen, [{ contextSize: 32768 }]);
+  });
+});

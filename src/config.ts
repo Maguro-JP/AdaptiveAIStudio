@@ -202,6 +202,8 @@ export interface RuntimeConfig {
   modelsDir?: string;
   /** llamacpp: 使用ポートの開始番号 */
   basePort?: number;
+  /** 文脈の大きさ（トークン）。inproc のみ。既定 8192。広げるほど記憶を食う */
+  contextSize?: number;
   /** llamacpp: レーンの並列度に合わせる */
   parallel?: number;
   desiredContext?: number;
