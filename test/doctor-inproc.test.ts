@@ -141,3 +141,31 @@ describe('置き場を書いていない（既定）ときも、中身を見る'
     assert.match(text, /page\.gguf は GGUF ではありません/);
   });
 });
+
+describe('外の道具（MCP）の支度を、doctor で見る', () => {
+  test('合言葉が無ければ名前だけ言い、あっても値は出さない', async () => {
+    const { home, models, config } = await scratch();
+    await writeFile(config, JSON.stringify({
+      runtime: { kind: 'inproc', modelsDir: models },
+      mcp: { servers: { github: { command: 'npx', args: ['-y', 'x'], envFrom: { GITHUB_PERSONAL_ACCESS_TOKEN: 'AAS_TEST_TOKEN' } } } },
+    }));
+    const missing = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
+    assert.match(missing, /外の道具 \(github\)/);
+    assert.match(missing, /合言葉が環境にありません: AAS_TEST_TOKEN/);
+    const present = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config, AAS_TEST_TOKEN: 'ghp_SECRET_VALUE_1234567890' });
+    assert.match(present, /合言葉 AAS_TEST_TOKEN あり/);
+    assert.doesNotMatch(present, /ghp_SECRET/, '値が出ている');
+  });
+  test('置き場の .env から読めれば、あり になる', async () => {
+    const { home, models, config } = await scratch();
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, '.env'), 'AAS_TEST_TOKEN2=ghp_FROM_FILE\n');
+    await writeFile(config, JSON.stringify({
+      runtime: { kind: 'inproc', modelsDir: models },
+      mcp: { servers: { github: { command: 'npx', envFrom: { GITHUB_PERSONAL_ACCESS_TOKEN: 'AAS_TEST_TOKEN2' } } } },
+    }));
+    const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
+    assert.match(text, /合言葉 AAS_TEST_TOKEN2 あり/);
+    assert.doesNotMatch(text, /ghp_FROM_FILE/);
+  });
+});

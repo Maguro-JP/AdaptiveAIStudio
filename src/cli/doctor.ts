@@ -205,6 +205,32 @@ if (runtime.id === 'inproc') {
   }
 }
 
+/* ---------- 外の道具（MCP） ---------- */
+
+// 繋がらない理由でいちばん多いのは、合言葉が無いこと。**値は出さない。**
+// 名前が環境にあるか（data/.env から読めたか）だけを言う。
+{
+  const servers = Object.entries(config.mcp?.servers ?? {});
+  if (servers.length === 0) {
+    add('外の道具', 'ok', '繋いでいません（設定の mcp.servers に足せます。GitHub もここ）');
+  }
+  for (const [name, spec] of servers) {
+    if (spec.enabled === false) {
+      add(`外の道具 (${name})`, 'ok', '設定はあるが enabled: false（使うなら true に）');
+      continue;
+    }
+    const wants = Object.entries(spec.envFrom ?? {});
+    const missing = wants.filter(([, from]) => process.env[from] === undefined).map(([, from]) => from);
+    if (missing.length > 0) {
+      add(`外の道具 (${name})`, 'warn', `合言葉が環境にありません: ${missing.join(', ')}`,
+        `置き場の .env に一行ずつ置いてください（例: ${missing[0]}=…）。値は設定ファイルに書きません。`);
+    } else {
+      add(`外の道具 (${name})`, 'ok', `${spec.command} ${(spec.args ?? []).join(' ')}`.trim()
+        + (wants.length > 0 ? `（合言葉 ${wants.map(([, f]) => f).join(', ')} あり）` : ''));
+    }
+  }
+}
+
 /* ---------- 繋ぎ先 ---------- */
 
 for (const p of enabledProviders(config)) {

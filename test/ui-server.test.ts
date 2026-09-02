@@ -358,3 +358,10 @@ describe('読まない画面に溜め続けない', () => {
     ac.abort(); await drain; stuck.destroy();
   });
 });
+
+describe('情報に、外の道具の繋がり具合が出る', () => {
+  test('mcp の行がある', async () => {
+    const info = await json(await get('/api/info'));
+    assert.equal(typeof info.mcp, 'string');
+  });
+});

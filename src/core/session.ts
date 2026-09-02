@@ -26,6 +26,7 @@ import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { createDeliberateTool } from '../agent/tools/deliberate.ts';
 import { buildInspector } from './inspector-setup.ts';
 import { startMcpServers } from './mcp-setup.ts';
+import type { McpClient } from '../mcp/client.ts';
 import { collectTools } from '../mcp/tools.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall } from '../memory/memory.ts';
@@ -147,6 +148,8 @@ export class Session {
   readonly #tools: Tool[];
   /** 権限ごとのツール。役職に応じて配り分けるために持つ。 */
   readonly toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[]; mcp: Tool[] };
+  /** 外の道具の繋がり具合。画面と doctor に見せるために持つ。 */
+  readonly mcpClients: readonly McpClient[];
   readonly #opts: SessionOptions;
   readonly #prefetch: Prefetcher;
   /** ハーネスの規則へ「いま何を頼まれているか」を渡すための箱。 */
@@ -174,6 +177,7 @@ export class Session {
     forum: Forum;
     harness: Harness;
     toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[]; mcp: Tool[] };
+    mcpClients: McpClient[];
   }) {
     this.config = init.config;
     this.root = init.root;
@@ -186,6 +190,7 @@ export class Session {
     this.orchestrator = init.orchestrator;
     this.pilot = init.pilot;
     this.toolPool = init.toolPool;
+    this.mcpClients = init.mcpClients;
     // 一人で全部やるときは、全ての権限を渡す。
     this.#tools = [
       ...init.toolPool.read, ...init.toolPool.write,
@@ -279,7 +284,7 @@ export class Session {
     const session = new Session({
       config, root, candidates, memory,
       roles: new RoleRegistry(config.roles ?? []),
-      orchestrator, pilot, prefetch, opts, holder, forum, toolPool, harness,
+      orchestrator, pilot, prefetch, opts, holder, forum, toolPool, harness, mcpClients,
       proposals, idle, duties,
     });
     return session;

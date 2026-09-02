@@ -5,6 +5,8 @@
 import { readFileSync } from 'node:fs';
 import { INPROC_PORT } from './runtime/inproc.ts';
 import { resolve } from 'node:path';
+import { loadEnvFile } from './core/env.ts';
+import { aasHome } from './core/home.ts';
 
 export interface ProviderConfig {
   id: string;
@@ -342,6 +344,9 @@ function normalizeRuntime(raw: unknown): RuntimeConfig {
 }
 
 export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: string } {
+  // 合言葉は置き場の .env から。設定には名前しか書かないので、値はここで揃える。
+  // 設定を読む所は一つなので、ここに置けばどの入口（画面・doctor・cli）でも同じ。
+  loadEnvFile(resolve(aasHome(), '.env'));
   const path = configPath(cwd);
   let raw: string;
   try {

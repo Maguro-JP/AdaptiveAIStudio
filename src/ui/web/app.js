@@ -487,7 +487,7 @@ const INFO_LABELS = {
   version: '版', node: 'Node', platform: 'この機械', portable: '持ち運び',
   productRoot: 'プログラム', home: '置き場（根）', stateDir: '記録',
   modelsDir: 'モデル', binDir: '実行ファイル', url: '画面',
-  runtime: 'モデルの土台', model: 'いまのモデル',
+  runtime: 'モデルの土台', model: 'いまのモデル', mcp: '外の道具',
 };
 
 async function loadInfo() {

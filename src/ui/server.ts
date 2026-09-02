@@ -33,6 +33,7 @@ import { Attachments, MAX_BYTES } from './attachments.ts';
 import { PreviewServer } from './preview.ts';
 import { configPath, type AasConfig } from '../config.ts';
 import { TaskRunner } from './tasks.ts';
+import { describeServers } from '../mcp/tools.ts';
 import { listenOrExplain } from '../core/listen.ts';
 import { crossSiteReason } from './origin.ts';
 import {
@@ -652,6 +653,10 @@ export class UiServer {
         binDir: binDir(),
         url: this.#url,
         runtime: this.#opts.config.runtime?.kind ?? '未設定',
+        // 外の道具（MCP）。繋がらなかったものを黙らせない。
+        mcp: this.#session
+          ? describeServers(this.#session.mcpClients)
+          : '（最初の依頼のときに立ち上がります）',
         // 決めていなくても、この中で読んでいるなら「いま読んでいるもの」を出す。
         // 「—」だけだと、動いているのに何も無いように見える。
         model: this.#opts.config.runtime?.model
