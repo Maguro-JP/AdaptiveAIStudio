@@ -79,6 +79,8 @@ export interface UiServerOptions {
   onRestart?: () => void;
   /** 入口（start.cmd）が起こし直してくれるか。画面の案内が変わる。 */
   relaunches?: boolean;
+  /** モデルを読むライブラリの差し替え。試験で使う。 */
+  inprocLoad?: () => Promise<unknown>;
   config: AasConfig;
   port?: number;
   host?: string;
@@ -252,6 +254,11 @@ export class UiServer {
     for (const finish of this.#pending.values()) finish(false);
     this.#pending.clear();
     await this.#session?.close().catch(() => undefined);
+    // 自分の中に立てた口（inproc）も閉じる。閉じないと、画面を止めても
+    // プロセスが生き続ける（検査が終わらないことで気づいた）。
+    const runtime = this.#runtime as { shutdown?: () => Promise<void> } | undefined;
+    await runtime?.shutdown?.().catch(() => undefined);
+    this.#runtime = undefined;
     for (const res of this.#clients) { try { res.end(); } catch { /* 切れている */ } }
     this.#clients.clear();
     await new Promise<void>((resolve) => this.#server?.close(() => resolve()) ?? resolve());
@@ -722,7 +729,8 @@ export class UiServer {
   async #localRuntime(): Promise<LocalRuntime> {
     if (this.#runtime) return this.#runtime;
     const machine = await new MachineCache(join(stateDir(), 'machine.json')).get();
-    this.#runtime = await buildRuntime(this.#opts.config, machine);
+    this.#runtime = await buildRuntime(this.#opts.config, machine, undefined,
+      this.#opts.inprocLoad ? { inprocLoad: this.#opts.inprocLoad } : {});
     return this.#runtime;
   }
 

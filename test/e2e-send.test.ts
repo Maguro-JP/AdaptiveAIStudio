@@ -110,3 +110,76 @@ describe('途中でやめる', () => {
     }
   });
 });
+
+describe('この中で読む道でも、一往復が通る', () => {
+  test('GGUF を置いた場所から読み、返事が流れる', async () => {
+    const { join } = await import('node:path');
+    const { writeFile } = await import('node:fs/promises');
+    const { createServer } = await import('node:http');
+    const models = await tempDir('aas-e2e-gguf-');
+    await writeFile(join(models, 'a.gguf'), 'x');
+    const probe = createServer();
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
+    const port = (probe.address() as { port: number }).port;
+    await new Promise<void>((r) => probe.close(() => r()));
+
+    const said = 'この中から、こんにちは';
+    const load = async () => ({
+      getLlama: async () => ({
+        loadModel: async () => ({ createContext: async () => ({ getSequence: () => ({}), dispose: async () => {} }) }),
+      }),
+      LlamaChatSession: class {
+        setChatHistory() {}
+        async prompt(_t: string, o: { onTextChunk?: (t: string) => void } = {}) {
+          for (const ch of [...said]) o.onTextChunk?.(ch);
+          return said;
+        }
+      },
+    });
+    const s2 = new UiServer({
+      port: 0,
+      inprocLoad: load,
+      config: {
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: `http://127.0.0.1:${port}/v1`, locality: 'local', models: ['a.gguf'] }],
+        candidates: ['local:a.gguf'],
+        runtime: { kind: 'inproc', modelsDir: models, basePort: port },
+      } as typeof DEFAULT_CONFIG,
+    });
+    const b2 = (await s2.start()).replace(/\/$/, '');
+    try {
+      const events: unknown[] = [];
+      const ac = new AbortController();
+      const res = await fetch(`${b2}/api/events`, { signal: ac.signal });
+      const reader = res.body!.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      const r = await fetch(`${b2}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'あいさつして' }),
+      });
+      assert.equal(r.status, 202, await r.text());
+      const deadline = Date.now() + 20_000;
+      let finished = false;
+      while (Date.now() < deadline && !finished) {
+        const { value } = await Promise.race([
+          reader.read(),
+          new Promise<{ value: undefined }>((r2) => setTimeout(() => r2({ value: undefined }), 500)),
+        ]);
+        if (value) buf += dec.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n\n')) !== -1) {
+          const chunk = buf.slice(0, nl); buf = buf.slice(nl + 2);
+          for (const line of chunk.split('\n')) if (line.startsWith('data: ')) { try { events.push(JSON.parse(line.slice(6))); } catch { /* 注釈 */ } }
+        }
+        finished = events.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
+      }
+      ac.abort();
+      const text = events
+        .filter((e) => (e as { type?: string }).type === 'session')
+        .map((e) => (e as { event: { type?: string; delta?: string } }).event)
+        .filter((ev) => ev.type === 'text').map((ev) => ev.delta ?? '').join('');
+      assert.ok(text.includes('この中から'), `返事が流れていない: ${JSON.stringify(events).slice(0, 600)}`);
+    } finally { await s2.stop(); }
+  });
+});

@@ -13,10 +13,16 @@ import { OllamaRuntime } from '../runtime/ollama.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
 import type { MachineSpec } from '../runtime/spec.ts';
 
+export interface RuntimeHooks {
+  /** モデルを読むライブラリの差し替え。試験で使う（本物は数GBの GGUF が要る）。 */
+  inprocLoad?: () => Promise<unknown>;
+}
+
 export async function buildRuntime(
   config: AasConfig,
   machine: MachineSpec,
   onLog?: (line: string) => void,
+  hooks: RuntimeHooks = {},
 ): Promise<LocalRuntime> {
   const rc = config.runtime ?? {};
 
@@ -25,7 +31,11 @@ export async function buildRuntime(
   if (rc.kind === 'inproc') {
     return new InProcRuntime({
       modelsDir: rc.modelsDir ?? modelsDir(),
+      // 設定の basePort を渡す。渡さないと、繋ぐ側（wireInProc）は basePort を
+      // 向くのに、待つ側は既定の口に立ち、**永久に繋がらない**。
+      ...(rc.basePort !== undefined ? { port: rc.basePort } : {}),
       ...(onLog ? { onLog } : {}),
+      ...(hooks.inprocLoad ? { load: hooks.inprocLoad } : {}),
     });
   }
 
