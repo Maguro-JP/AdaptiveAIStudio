@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
 import { installRoot } from '../src/core/home.ts';
+const LLAMA_LIB = 'node-llama-cpp'; // 型検査に解決させない（src/runtime/inproc.ts 参照）
 
 const DIST = join(installRoot(), 'node_modules', 'node-llama-cpp', 'dist');
 
@@ -70,7 +71,7 @@ describe('入っているなら、読み込めること', () => {
   // dist/index.js が在るだけでは足りない。import の時点で llama/ の JSON を
   // 読むので、そこを消した配布物は**在るのに読み込めない**。それを配った。
   test('import が通る', onlyWithLib, async () => {
-    await import('node-llama-cpp');
+    await import(LLAMA_LIB);
   });
 
   test('import 時に読む JSON が残っている', onlyWithLib, async () => {

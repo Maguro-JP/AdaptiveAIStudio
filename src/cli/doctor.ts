@@ -20,6 +20,7 @@ import { defaultModelsDir } from '../runtime/model-install.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { installRoot } from '../core/home.ts';
 import { resolve } from 'node:path';
+const LLAMA_LIB = 'node-llama-cpp'; // 型検査に解決させない（src/runtime/inproc.ts 参照）
 
 /** Windows と Unix でコマンドが違うものは、その環境のものを出す。 */
 const isWindows = process.platform === 'win32';
@@ -172,7 +173,7 @@ if (runtime.id === 'inproc') {
   const binPkg = `@node-llama-cpp/${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`;
   let lib: { getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<unknown> } | undefined;
   try {
-    lib = await import('node-llama-cpp') as typeof lib;
+    lib = await import(LLAMA_LIB) as typeof lib;
   } catch (e) {
     // 「入っていない」と「在るのに読み込めない」は別の話。後者を前者の顔で
     // 言うと、配布物の欠けに気づけない（実際に、そう配った）。

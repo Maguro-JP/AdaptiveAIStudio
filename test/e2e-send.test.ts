@@ -42,12 +42,18 @@ async function collect(until: (events: unknown[]) => boolean, ms = 20_000): Prom
   const dec = new TextDecoder();
   let buf = '';
   const deadline = Date.now() + ms;
+  // 読みかけの約束は捨てない。時計に負けた read() を捨てると、その後に届いた
+  // 塊がそちらに吸われて失われる。機械が重いときだけ起きて「終わりが来ない」に見えた。
+  let pending: Promise<{ done: boolean; value?: Uint8Array }> | undefined;
   try {
     while (Date.now() < deadline) {
-      const { done, value } = await Promise.race([
-        reader.read(),
-        new Promise<{ done: true; value: undefined }>((r) => setTimeout(() => r({ done: true, value: undefined }), 500)),
+      pending ??= reader.read();
+      const got = await Promise.race([
+        pending.then((r) => ({ ...r, fromRead: true as const })),
+        new Promise<{ done: false; value: undefined; fromRead: false }>((r) => setTimeout(() => r({ done: false, value: undefined, fromRead: false }), 500)),
       ]);
+      if (got.fromRead) pending = undefined;
+      const { done, value } = got;
       if (value) buf += dec.decode(value, { stream: true });
       let nl: number;
       while ((nl = buf.indexOf('\n\n')) !== -1) {
@@ -57,7 +63,7 @@ async function collect(until: (events: unknown[]) => boolean, ms = 20_000): Prom
         }
       }
       if (until(events)) break;
-      if (done && !value) continue;
+      if (done) break;
     }
   } finally { ac.abort(); }
   return events;
@@ -161,11 +167,15 @@ describe('この中で読む道でも、一往復が通る', () => {
       assert.equal(r.status, 202, await r.text());
       const deadline = Date.now() + 20_000;
       let finished = false;
+      let pending: Promise<{ done: boolean; value?: Uint8Array }> | undefined;
       while (Date.now() < deadline && !finished) {
-        const { value } = await Promise.race([
-          reader.read(),
-          new Promise<{ value: undefined }>((r2) => setTimeout(() => r2({ value: undefined }), 500)),
+        pending ??= reader.read();
+        const got = await Promise.race([
+          pending.then((r) => ({ value: r.value, fromRead: true as const })),
+          new Promise<{ value: undefined; fromRead: false }>((r2) => setTimeout(() => r2({ value: undefined, fromRead: false }), 500)),
         ]);
+        if (got.fromRead) pending = undefined;
+        const { value } = got;
         if (value) buf += dec.decode(value, { stream: true });
         let nl: number;
         while ((nl = buf.indexOf('\n\n')) !== -1) {

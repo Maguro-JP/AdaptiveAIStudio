@@ -23,6 +23,7 @@ import { pickAsset } from '../runtime/llama-release.ts';
 import { loadConfig } from '../config.ts';
 import { padTo, displayWidth } from './width.ts';
 import { chunkReader } from '../core/text.ts';
+const LLAMA_LIB = 'node-llama-cpp'; // 型検査に解決させない（src/runtime/inproc.ts 参照）
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -86,7 +87,7 @@ async function quietly<T>(run: () => Promise<T>): Promise<T> {
 // 実行ファイルを増やさずに GGUF を読む道。**この機械で本当に読めるか**は、
 // ここでしか分からない（配布物には入れてあるが、機械が違えば動かない）。
 try {
-  const lib = await import('node-llama-cpp') as { getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<unknown> };
+  const lib = await import(LLAMA_LIB) as { getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<unknown> };
   add('この中で読む', true, 'node-llama-cpp を読み込めました（実行ファイルは増えません）');
   try {
     // 組み立てに走らせない。無いなら無いと、すぐ言わせる。

@@ -26,6 +26,15 @@ import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.
 import { listenOrExplain } from '../core/listen.ts';
 import { crossSiteReason } from '../ui/origin.ts';
 import { chunkReader } from '../core/text.ts';
+/**
+ * ライブラリの名前。文字列の変数にしておく。
+ *
+ * 名前を直に書くと、型検査がその場で解決しに行き、入っていない場所
+ * （CI の npm ci、作業コピー）で「見つからない」と落ちる。実行時に
+ * 無いときは、無いと言う道が別にある。型検査には解決させない。
+ */
+const LLAMA_LIB = 'node-llama-cpp';
+
 
 /**
  * 待つ口。**決め打ちにする。**
@@ -193,7 +202,7 @@ export class InProcRuntime implements LocalRuntime {
 
   /** ライブラリ。無いときは、無いとだけ言う。黙って別のことをしない。 */
   async #lib(): Promise<{ getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string; onLoadProgress?: (done: number) => void }) => Promise<{ createContext: (o?: { contextSize?: number }) => Promise<{ getSequence: () => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown }> {
-    const load = this.#opts.load ?? (() => import('node-llama-cpp'));
+    const load = this.#opts.load ?? (() => import(LLAMA_LIB));
     try {
       return await load() as never;
     } catch (e) {
