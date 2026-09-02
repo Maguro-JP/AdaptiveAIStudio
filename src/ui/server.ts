@@ -584,7 +584,8 @@ export class UiServer {
         restartNeeded: kind !== (active.kind ?? 'ollama')
           || dir !== (active.modelsDir ?? modelsDir()),
         // 置き場にある GGUF。「置いたのに認識しない」を画面で確かめられるように。
-        gguf: await listGguf(dir),
+        // 記憶に載らないものは、載らないと添える。読む前に分かるように。
+        gguf: (await listGguf(dir)).map((m) => ({ ...m, tooBig: tooBigForRam(m.sizeBytes, totalmem()) ?? null })),
         // GGUF が0件のとき、置き場そのものが無いのか、空なのかで打つ手が違う。
         dirState: await inspectModelsDir(dir),
       });

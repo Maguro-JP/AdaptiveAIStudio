@@ -285,6 +285,15 @@ describe('記憶に載らない GGUF', () => {
       });
       assert.equal(r.status, 503);
       assert.match(((await r.json()) as { error: string }).error, /大きすぎます/);
+      // 置き場の一覧でも、読む前に分かる。
+      const prev = process.env.AAS_CONFIG;
+      process.env.AAS_CONFIG = j(models, 'aas.config.json');
+      try {
+        await (await fetch(`${b}/api/config`, { method: 'PUT', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ kind: 'inproc', modelsDir: models }) })).json();
+        const c = await (await fetch(`${b}/api/config`)).json() as { gguf: { ref: string; tooBig: string | null }[] };
+        assert.ok(c.gguf.find((g) => g.ref === 'huge.gguf')?.tooBig, '一覧に「載らない」が付いていない');
+      } finally { if (prev === undefined) delete process.env.AAS_CONFIG; else process.env.AAS_CONFIG = prev; }
     } finally { await s.stop(); }
   });
 });
