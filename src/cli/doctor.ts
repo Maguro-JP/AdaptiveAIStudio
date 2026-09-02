@@ -18,7 +18,7 @@ import { formatChecks, summaryLine, type Check, type Level } from './doctor-view
 import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
-import { installRoot } from '../core/home.ts';
+import { installRoot, isPortable } from '../core/home.ts';
 import { resolve } from 'node:path';
 const LLAMA_LIB = 'node-llama-cpp'; // 型検査に解決させない（src/runtime/inproc.ts 参照）
 
@@ -121,8 +121,11 @@ if (models.length > 0) {
         + '  https://huggingface.co/Qwen （名前に GGUF が付いたもの）\n'
         + '  迷ったら 3B の Q4_K_M（約2GB）。要約や下書きなら足ります。\n'
       : '')
-    + '`npm run models -- --get` で取ってきます（まず動く軽いものが入ります）。\n'
-    + '一覧は `npm run models -- --available`。\n'
+    // portable には npm が無い。無いものを打てと言わない。画面から取れる。
+    + (isPortable()
+      ? '画面（AdaptiveAIStudio.cmd）の 設定 → モデル から取ってこられます（まず動く軽いものが入ります）。\n'
+      : '`npm run models -- --get` で取ってきます（まず動く軽いものが入ります）。\n'
+        + '一覧は `npm run models -- --available`。\n')
     + '手持ちがあるなら、同じ置き場に .gguf を入れるだけでも使えます。\n'
     + `いまの置き場: ${config.runtime?.modelsDir ?? `${defaultModelsDir()}（既定）`}`);
 }
