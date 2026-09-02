@@ -584,7 +584,9 @@ export class UiServer {
       // 保存した直後に古い値が出て「効いていない」ように見える。
       const saved = await readSavedRuntime();
       const active = this.#opts.config.runtime ?? {};
-      const kind = String(saved.kind ?? 'ollama');
+      // 書いてあるものが無ければ、いま読み込んだ既定（設定が無ければ inproc）を見せる。
+      // ここだけ 'ollama' と決め打つと、既定で動いているものと画面の表示が食い違う。
+      const kind = String(saved.kind ?? this.#opts.config.runtime?.kind ?? 'ollama');
       const dir = await savedModelsDir();
       return send(res, 200, {
         path: configPath(),

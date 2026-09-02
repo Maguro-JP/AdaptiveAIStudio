@@ -43,7 +43,7 @@ describe('設定の口', () => {
       kinds: { id: string }[]; kind: string; gguf: { ref: string }[]; modelsDir: string;
     };
     assert.deepEqual(r.kinds.map((k) => k.id), [...RUNTIME_KINDS]);
-    assert.equal(r.kind, 'ollama');
+    assert.equal(r.kind, 'inproc'); // 設定が無いときの既定
     // 置き場を指していなくても、既定の置き場を答える（空にしない）。
     assert.ok(r.modelsDir.length > 0);
     void models;
@@ -68,8 +68,8 @@ describe('設定の口', () => {
     assert.equal(after.kind, 'inproc');
     assert.deepEqual(after.gguf.map((g) => g.ref), ['qwen2.5-3b-instruct-q4_k_m.gguf']);
     // いま動いているものは別。黙って効いた顔をしない。
-    assert.equal(after.active.kind, 'ollama');
-    assert.equal(after.restartNeeded, true);
+    assert.equal(after.active.kind, 'inproc'); // 設定が無いときの既定で動いている
+    assert.equal(after.restartNeeded, true); // 置き場が変わる
   });
 
   test('知らない動かし方は受け取らない', async () => {
@@ -115,7 +115,7 @@ describe('モデルが無いまま送らせない', () => {
     });
     assert.equal(r.status, 503);
     const body = await r.json() as { error: string };
-    assert.match(body.error, /モデルがまだありません/);
+    assert.match(body.error, /GGUF がありません|モデルがまだありません/);
     assert.match(body.error, /設定 → モデル/, '次の一手が書かれていない');
   });
 

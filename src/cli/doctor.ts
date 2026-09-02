@@ -7,7 +7,7 @@
  * 大事なのは、駄目出しで終わらせないこと。
  * 足りないものには**次に打つ一手**を必ず添える。
  */
-import { loadConfig, enabledProviders } from '../config.ts';
+import { loadConfig, enabledProviders, configPath } from '../config.ts';
 import { MachineCache, describeMachine } from '../runtime/machine.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
@@ -21,11 +21,6 @@ import { currentVersion, describeVersion } from '../core/version.ts';
 import { installRoot } from '../core/home.ts';
 import { resolve } from 'node:path';
 const LLAMA_LIB = 'node-llama-cpp'; // 型検査に解決させない（src/runtime/inproc.ts 参照）
-
-/** Windows と Unix でコマンドが違うものは、その環境のものを出す。 */
-const isWindows = process.platform === 'win32';
-const copyCmd = (from: string, to: string) =>
-  isWindows ? `copy ${from} ${to}` : `cp ${from} ${to}`;
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -55,7 +50,7 @@ add('Node.js', nodeOk ? 'ok' : 'bad', `v${process.versions.node}`,
 const { config, source } = loadConfig();
 add('設定', 'ok', source,
   source.includes('なし')
-    ? `既定のまま動きます。変えたくなったら \`${copyCmd('aas.config.example.json', 'aas.config.json')}\`。`
+    ? `既定のまま動きます（この中で読む）。変えるなら画面の「設定」から。ファイルで書くなら ${configPath()}`
     : undefined);
 
 /* ---------- 機械 ---------- */

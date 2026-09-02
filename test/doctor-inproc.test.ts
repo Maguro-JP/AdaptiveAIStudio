@@ -39,9 +39,20 @@ async function scratch(): Promise<{ home: string; models: string; config: string
 }
 
 describe('doctor は、この中で読む道を知っている', () => {
-  test('土台が無いときの案内に、実行ファイルの増えない道が出る', async () => {
+  test('設定が無ければ、この中で読むのが既定。置き場に GGUF を置けと言う', async () => {
+    // 既定が Ollama だった頃は、製品の形で何もしないと「Provider が起動しているか」で
+    // 止まっていた。二つ目の実行ファイルの要らない道を既定にする。
     const { home } = await scratch();
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: join(home, 'なし.json') });
+    assert.match(text, /既定値 \(aas\.config\.json なし/);
+    assert.match(text, /GGUF がありません/);
+    assert.match(text, /この中で読む/);
+  });
+
+  test('土台を決めていない設定の案内に、実行ファイルの増えない道が出る', async () => {
+    const { home, config } = await scratch();
+    await writeFile(config, JSON.stringify({ runtime: {} }));
+    const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     assert.match(text, /モデルを動かす土台がまだありません/);
     assert.match(text, /この中で読む（実行ファイルは増えません）/);
     assert.match(text, /"kind": "inproc"/);

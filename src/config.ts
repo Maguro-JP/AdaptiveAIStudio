@@ -1,8 +1,8 @@
 /**
  * 設定。モデル名・URL・APIキーはすべてここに集約し、コードには一切書かない。
- * 探索順: 環境変数 AAS_CONFIG > ./aas.config.json > 既定値(Ollama)
+ * 探索順: 環境変数 AAS_CONFIG > ./aas.config.json（在れば） > 置き場（AAS_HOME）の aas.config.json > 既定値（この中で読む）
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { INPROC_PORT } from './runtime/inproc.ts';
 import { resolve } from 'node:path';
 import { loadEnvFile } from './core/env.ts';
@@ -327,7 +327,13 @@ export const DEFAULT_CONFIG: AasConfig = {
  * ここを二箇所に散らすと、書いたのに効かない、が起きる。
  */
 export function configPath(cwd = process.cwd()): string {
-  return process.env.AAS_CONFIG ?? resolve(cwd, 'aas.config.json');
+  if (process.env.AAS_CONFIG) return process.env.AAS_CONFIG;
+  // 開発の場所（リポジトリ）には隣に置いてある。それを先に見る。
+  const beside = resolve(cwd, 'aas.config.json');
+  if (existsSync(beside)) return beside;
+  // 製品の形では、起動時の場所は app\ で、そこには置かない（更新で消える。
+  // インストール先は書けない）。**データの置き場**に置く。画面からの保存も同じ所へ。
+  return resolve(aasHome(), 'aas.config.json');
 }
 
 /**
@@ -352,7 +358,11 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
   try {
     raw = readFileSync(path, 'utf8');
   } catch {
-    return { config: DEFAULT_CONFIG, source: '既定値 (aas.config.json なし)' };
+    // 設定が無いときは、この中で読む。二つ目の実行ファイルも Ollama も要らない道が既定。
+    // （既定を Ollama にしていたので、製品の形で何もしないと「Provider が起動しているか」で止まっていた）
+    const config: AasConfig = { ...structuredClone(DEFAULT_CONFIG), runtime: { kind: 'inproc' } };
+    wireInProc(config);
+    return { config, source: `既定値 (aas.config.json なし。書くなら ${path})` };
   }
 
   const parsed = JSON.parse(raw) as Partial<AasConfig>;
