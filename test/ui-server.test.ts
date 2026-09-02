@@ -330,3 +330,31 @@ describe('名前だけ .gguf の別物', () => {
     } finally { await s.stop(); }
   });
 });
+
+describe('読まない画面に溜め続けない', () => {
+  test('読まない相手は切られ、読む相手は残る', async () => {
+    const { request } = await import('node:http');
+    const url = new URL(base);
+    // 読まない相手。応答を受け取っても一切読まない。
+    const stuck = await new Promise<import('node:http').IncomingMessage>((resolve, reject) => {
+      const req = request({ host: url.hostname, port: url.port, path: '/api/events' }, resolve);
+      req.on('error', reject); req.end();
+    });
+    stuck.pause();
+    // 読む相手。
+    const ac = new AbortController();
+    const reading = await fetch(`${base.replace(/\/$/, '')}/api/events`, { signal: ac.signal });
+    const reader = reading.body!.getReader();
+    const drain = (async () => { for (;;) { const { done } = await reader.read(); if (done) break; } })().catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 200));
+    const before = server.clientCount;
+    assert.ok(before >= 2);
+    // 溜め込ませる。4MB を優に超える量を流す。
+    const big = 'あ'.repeat(64 * 1024);
+    for (let i = 0; i < 200; i++) server.broadcast({ type: 'log', level: 'info', text: big });
+    await new Promise((r) => setTimeout(r, 300));
+    server.broadcast({ type: 'log', level: 'info', text: 'とどめ' });
+    assert.ok(server.clientCount < before, `読まない相手が切られていない: ${before} → ${server.clientCount}`);
+    ac.abort(); await drain; stuck.destroy();
+  });
+});

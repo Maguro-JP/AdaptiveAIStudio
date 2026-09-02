@@ -75,6 +75,9 @@ const TYPES: Record<string, string> = {
  */
 export const RESTART_EXIT = 75;
 
+/** 一つの画面に溜めてよい未送信の量。超えたら、その相手は読んでいない。 */
+export const MAX_CLIENT_BACKLOG = 4 * 1024 * 1024;
+
 export interface UiServerOptions {
   /** 立ち上げ直しを頼まれたとき。止めて、RESTART_EXIT で終わる側が持つ。 */
   onRestart?: () => void;
@@ -153,9 +156,19 @@ export class UiServer {
   broadcast(event: UiEvent): void {
     const line = `data: ${JSON.stringify(event)}\n\n`;
     for (const res of this.#clients) {
+      // 読まない相手に溜め続けない。閉じたタブや固まった頁があると、
+      // その分の出来事が本体の記憶に積み上がる。4MB 溜まったら切る。
+      if (res.writableLength > MAX_CLIENT_BACKLOG) {
+        this.#clients.delete(res);
+        try { res.destroy(); } catch { /* もう切れている */ }
+        continue;
+      }
       try { res.write(line); } catch { this.#clients.delete(res); }
     }
   }
+
+  /** 繋がっている画面の数。読まない相手を切ったことを検査で見るため。 */
+  get clientCount(): number { return this.#clients.size; }
 
   async start(): Promise<string> {
     const host = this.#opts.host ?? '127.0.0.1';
