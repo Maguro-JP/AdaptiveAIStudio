@@ -944,6 +944,9 @@ export class Session {
 
   async close(): Promise<void> {
     this.abort();
+    // 外の道具（子プロセス）を止める。止めないと、画面を閉じても
+    // npx や相手のサーバが残る（検査が終わらないことで気づいた）。
+    for (const c of this.mcpClients) c.stop();
     await this.saveAutonomy();
     this.memory.compact();
     await this.memory.save().catch(() => undefined);

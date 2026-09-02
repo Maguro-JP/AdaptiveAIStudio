@@ -241,3 +241,64 @@ describe('設定で決めた GGUF を読む', () => {
     } finally { await s3.stop(); }
   });
 });
+
+describe('外の道具（MCP）を、会話の中から実際に呼ぶ', () => {
+  test('模型が道具を呼び、結果が模型へ戻り、返事が流れる', async () => {
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const fixture = join(here, 'fixtures', 'dribble-mcp.mjs');
+    const fake2 = await startFakeServer({ kind: 'toolcall', name: 'echo__echo', args: { q: 'x' }, then: '道具から聞きました' });
+    const s4 = new UiServer({
+      port: 0,
+      config: {
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake2.baseUrl, locality: 'local', models: ['m'] }],
+        candidates: ['local:m'],
+        runtime: { kind: 'ollama' },
+        agent: { ...(DEFAULT_CONFIG as { agent?: object }).agent, approval: 'auto' },
+        mcp: { servers: { echo: { command: process.execPath, args: ['--experimental-strip-types', fixture], startupTimeoutMs: 30_000 } } },
+      } as typeof DEFAULT_CONFIG,
+    });
+    const b4 = (await s4.start()).replace(/\/$/, '');
+    try {
+      const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
+      // この検査の中だけで読む（上の collect は別の server を向いている）。
+      const events: unknown[] = [];
+      const ac = new AbortController();
+      const res = await fetch(`${b4}/api/events`, { signal: ac.signal });
+      const reader = res.body!.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      const r = await fetch(`${b4}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'echo を使って' }) });
+      assert.equal(r.status, 202, await r.text());
+      const deadline = Date.now() + 40_000;
+      let pending: Promise<{ done: boolean; value?: Uint8Array }> | undefined;
+      while (Date.now() < deadline && !done(events)) {
+        pending ??= reader.read();
+        const got = await Promise.race([
+          pending.then((x) => ({ value: x.value, fromRead: true as const })),
+          new Promise<{ value: undefined; fromRead: false }>((r2) => setTimeout(() => r2({ value: undefined, fromRead: false }), 500)),
+        ]);
+        if (got.fromRead) pending = undefined;
+        if (got.value) buf += dec.decode(got.value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n\n')) !== -1) {
+          const chunk = buf.slice(0, nl); buf = buf.slice(nl + 2);
+          for (const line of chunk.split('\n')) if (line.startsWith('data: ')) { try { events.push(JSON.parse(line.slice(6))); } catch { /* 注釈 */ } }
+        }
+      }
+      ac.abort();
+      const inner = events.filter((e) => (e as { type?: string }).type === 'session').map((e) => (e as { event: { type?: string; name?: string; ok?: boolean; delta?: string } }).event);
+      assert.ok(inner.some((ev) => ev.type === 'toolEnd' && ev.name === 'echo__echo' && ev.ok === true), `道具が呼ばれていない: ${JSON.stringify(inner).slice(0, 500)}`);
+      const text = inner.filter((ev) => ev.type === 'text').map((ev) => ev.delta ?? '').join('');
+      assert.ok(text.includes('道具から聞きました'), `道具の後の返事が無い: ${text}`);
+      // 道具の結果（fixture が返す「あいうえお…」）が、模型へ戻っていること。
+      // 二つ目の本文は検問所（二段目の検査官）の問い合わせのことがある。
+      // どの本文でもよいので、道具の結果が role: tool で戻っていること。
+      const second = { messages: fake2.bodies.flatMap((b) => (b as { messages?: { role?: string; content?: string }[] })?.messages ?? []) };
+      const shape = JSON.stringify(fake2.bodies.map((b) => ((b as { messages?: { role?: string; content?: unknown }[] })?.messages ?? []).map((m) => [m.role, String(m.content).slice(0, 60)])));
+      assert.ok(second?.messages?.some((m) => m.role === 'tool' && String(m.content).includes('あいうえお')), `道具の結果が模型へ戻っていない: ${shape}`);
+    } finally { await s4.stop(); await fake2.close(); }
+  });
+});
