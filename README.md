@@ -28,16 +28,15 @@ npm run doctor
 
 ```
   ok   Node.js         v22.22.2
-  ok   設定            既定値 (aas.config.json なし)
+  ok   設定            既定値 (aas.config.json なし。書くなら C:\ProgramData\AdaptiveAIStudio\aas.config.json)
   ok   この機械        NVIDIA GeForce RTX 4060 8GB / RAM 32GB
- 未了  モデル          モデルを動かす土台がまだありません
-       → どれか一つを選んでください。
-
-         A. この中で読む（実行ファイルは増えません）
-            GGUF を1つ置いて、画面の 設定 → モデル で選ぶだけ
-         B. Ollama（手早い。別に立てたものへ繋ぐ）
-         C. llama.cpp（速い。実行ファイルが1つ増えます）
+ 未了  モデル          C:\ProgramData\AdaptiveAIStudio\models に GGUF がありません
+       → この置き場に .gguf を1つ入れるだけで動きます。
 ```
+
+設定が無いときは **この中で読む（inproc）** が既定。実行ファイルは増えない。
+GGUF を1つ置き場に入れ、画面の 設定 → モデル で選べば動く。
+Ollama や llama.cpp（llama-server）に切り替えたいときだけ、設定を書く。
 
 **足りないものには、次に打つ一手が必ず付きます。** 駄目出しで終わらせません。
 
@@ -223,7 +222,9 @@ set ANTHROPIC_API_KEY=sk-ant-...
 cp aas.config.example.json aas.config.json      # Windows なら copy
 ```
 
-省略した場合は `ollama:qwen3.6:35b-a3b-coding-nvfp4` を既定として起動する。
+省略した場合は、この中で読む（inproc）土台で、置き場の GGUF を使って起動する。
+設定ファイルの場所は `AAS_CONFIG` > 隣の `aas.config.json` > データの置き場（`AAS_HOME`）の順。
+製品の形（portable・インストーラ）ではデータの置き場に置く。画面からの保存もそこへ書く。
 `candidates` は先頭から順に試され、利用制限や障害で使えなければ次へ自動で切り替わる。
 
 ### 起動する
