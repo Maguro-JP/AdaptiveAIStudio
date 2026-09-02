@@ -672,7 +672,10 @@ export class UiServer {
         // この中で読む道では、**読むまで口が立たない。**
         // 先に読ませておかないと、上の層は繋がらない先を叩くことになる。
         if (runtime.id === 'inproc' && runtime.loaded().length === 0) {
-          const ref = models[0]!.ref;
+          // 設定で決めた名前（runtime.model）が置き場に在れば、それ。無ければ最初の一つ。
+          // 情報の板は runtime.model を「使うモデル」と見せているので、読む側も同じにする。
+          const wanted = this.#opts.config.runtime?.model;
+          const ref = (wanted && models.find((m) => m.ref === wanted)?.ref) ?? models[0]!.ref;
           this.broadcast({ type: 'log', level: 'info', text: `モデルを読み込んでいます: ${ref}` });
           const began = Date.now();
           await runtime.ensureLoaded(ref);

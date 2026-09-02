@@ -183,3 +183,48 @@ describe('この中で読む道でも、一往復が通る', () => {
     } finally { await s2.stop(); }
   });
 });
+
+describe('設定で決めた GGUF を読む', () => {
+  test('runtime.model が置き場に在れば、最初の一つではなくそれを読む', async () => {
+    const { join } = await import('node:path');
+    const { writeFile } = await import('node:fs/promises');
+    const { createServer } = await import('node:http');
+    const models = await tempDir('aas-e2e-pick-');
+    await writeFile(join(models, 'a.gguf'), 'x');
+    await writeFile(join(models, 'b.gguf'), 'x');
+    const probe = createServer();
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
+    const port = (probe.address() as { port: number }).port;
+    await new Promise<void>((r) => probe.close(() => r()));
+    const loadedPaths: string[] = [];
+    const load = async () => ({
+      getLlama: async () => ({
+        loadModel: async (o: { modelPath: string }) => {
+          loadedPaths.push(o.modelPath);
+          return { createContext: async () => ({ getSequence: () => ({}), dispose: async () => {} }) };
+        },
+      }),
+      LlamaChatSession: class { setChatHistory() {} async prompt() { return 'x'; } },
+    });
+    const s3 = new UiServer({
+      port: 0, inprocLoad: load,
+      config: {
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: `http://127.0.0.1:${port}/v1`, locality: 'local', models: ['b.gguf'] }],
+        candidates: ['local:b.gguf'],
+        runtime: { kind: 'inproc', modelsDir: models, basePort: port, model: 'b.gguf' },
+      } as typeof DEFAULT_CONFIG,
+    });
+    const b3 = (await s3.start()).replace(/\/$/, '');
+    try {
+      const r = await fetch(`${b3}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'x' }),
+      });
+      assert.equal(r.status, 202, await r.text());
+      await new Promise((r2) => setTimeout(r2, 1500));
+      assert.ok(loadedPaths.some((p) => p.endsWith('b.gguf')), `b を読んでいない: ${loadedPaths.join(',')}`);
+      assert.ok(!loadedPaths.some((p) => p.endsWith('a.gguf')), `最初の一つを読んでしまった: ${loadedPaths.join(',')}`);
+    } finally { await s3.stop(); }
+  });
+});
