@@ -232,3 +232,16 @@ describe('本文を際限なく抱えない', () => {
     assert.notEqual(r.status, 413);
   });
 });
+
+describe('使う GGUF を画面から決める', () => {
+  test('名前に道を混ぜたものは断る', async () => {
+    const r = await put('/api/config', { kind: 'inproc', modelsDir: '', model: '../x.gguf' });
+    assert.equal(r.status, 400);
+  });
+  test('置き場の中の名前なら通り、読み出しに出る（対）', async () => {
+    const r = await put('/api/config', { kind: 'inproc', modelsDir: '', model: 'b.gguf' });
+    assert.equal(r.status, 200);
+    const c = await json(await get('/api/config'));
+    assert.equal(c.model, 'b.gguf');
+  });
+});

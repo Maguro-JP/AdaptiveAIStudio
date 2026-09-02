@@ -549,6 +549,8 @@ export class UiServer {
         kinds: RUNTIME_KINDS.map((id) => ({ id, name: KIND_LABELS[id] })),
         kind,
         modelsDir: dir,
+        // 使うと決めた GGUF。無ければ置き場の最初の一つを読む。
+        model: typeof saved.model === 'string' ? saved.model : null,
         // いま動いているもの。保存したものと違えば、立ち上げ直しが要る。
         active: { kind: active.kind ?? 'ollama', modelsDir: active.modelsDir ?? modelsDir() },
         restartNeeded: kind !== (active.kind ?? 'ollama')
@@ -561,25 +563,29 @@ export class UiServer {
     }
 
     if (path === '/api/config' && req.method === 'PUT') {
-      const body = await readBody(req) as { kind?: string; modelsDir?: string };
+      const body = await readBody(req) as { kind?: string; modelsDir?: string; model?: string };
       const kind = body?.kind;
       if (!isRuntimeKind(kind)) return send(res, 400, { error: 'そういう動かし方はありません' });
       const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
+      // 使う GGUF。名前に道を混ぜさせない（置き場の中の名前だけ）。
+      const model = typeof body?.model === 'string' ? body.model.trim() : undefined;
+      if (model && /[\\/]/.test(model)) return send(res, 400, { error: 'モデルは置き場の中の名前で指定してください' });
       // 打った場所は見るだけ。既定の場所は、無ければ作る。
       // 「GGUF を置くだけ」と言っておいて置き場が無いのは、案内になっていない。
       const dirState = dir
         ? await inspectModelsDir(dir)
         : await ensureDefaultModelsDir(modelsDir());
-      const at = await saveRuntime(kind, dir);
+      const at = await saveRuntime(kind, dir, model);
       this.broadcast({ type: 'log', level: 'info', text: `設定を書きました: ${at}` });
       return send(res, 200, {
         path: at,
-        saved: { kind, modelsDir: dir || null },
+        saved: { kind, modelsDir: dir || null, ...(model !== undefined ? { model: model || null } : {}) },
         // 打ち間違えても保存はできる。だから**保存したときに言う。**
         dirState,
         // 動かし方の切り替えは、立ち上げ直すまで効かない。黙って効いた顔をしない。
         restartNeeded: kind !== (this.#opts.config.runtime?.kind ?? 'ollama')
-          || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir()),
+          || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir())
+          || (model !== undefined && (model || undefined) !== this.#opts.config.runtime?.model),
       });
     }
 

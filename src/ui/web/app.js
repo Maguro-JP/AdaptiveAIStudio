@@ -570,7 +570,25 @@ async function loadCfg() {
     const v = document.createElement('span');
     v.className = 'dim mono';
     v.textContent = m.sizeBytes ? `${(m.sizeBytes / 1024 ** 3).toFixed(1)} GB` : '';
-    row.append(k, v);
+    // どれを使うかを、ここで決められる。決めなければ最初の一つ。
+    const use = document.createElement('button');
+    use.type = 'button';
+    use.className = 'ghost';
+    const chosen = c.model === m.ref;
+    use.textContent = chosen ? '使う（いまこれ）' : 'これを使う';
+    use.disabled = chosen;
+    use.onclick = async () => {
+      const r = await fetch('/api/config', {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: $('cfgKind').value, modelsDir: $('cfgModelsDir').value.trim(), model: m.ref }),
+      });
+      const body = await r.json().catch(() => ({}));
+      $('cfgNote').textContent = r.ok
+        ? (body.restartNeeded ? `${m.ref} を使います。立ち上げ直すと効きます。` : `${m.ref} を使います。`)
+        : (body.error ?? '保存できませんでした');
+      await loadCfg();
+    };
+    row.append(k, v, use);
     box.append(row);
   }
 }

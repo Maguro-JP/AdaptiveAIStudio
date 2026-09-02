@@ -42,6 +42,8 @@ export async function readSavedRuntime(): Promise<Record<string, unknown>> {
 export async function saveRuntime(
   kind: RuntimeKind,
   modelsDir: string,
+  /** 使う GGUF の名前。undefined なら触らない、空文字なら消す。 */
+  model?: string,
 ): Promise<string> {
   const at = configPath();
   let current: Record<string, unknown> = {};
@@ -51,6 +53,10 @@ export async function saveRuntime(
   const runtime = { ...(current.runtime as Record<string, unknown> ?? {}), kind };
   if (modelsDir) runtime.modelsDir = modelsDir;
   else delete runtime.modelsDir;
+  if (model !== undefined) {
+    if (model) runtime.model = model;
+    else delete runtime.model;
+  }
   await writeFile(at, `${JSON.stringify({ ...current, runtime }, null, 2)}\n`, 'utf8');
   return at;
 }

@@ -13,7 +13,7 @@ import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { UiServer } from '../src/ui/server.ts';
 import {
-  RUNTIME_KINDS, inspectModelsDir, DIR_NOTES, ensureDefaultModelsDir, savedModelsDir, saveRuntime,
+  RUNTIME_KINDS, inspectModelsDir, DIR_NOTES, ensureDefaultModelsDir, savedModelsDir, saveRuntime, readSavedRuntime,
 } from '../src/ui/settings.ts';
 import { loadConfig } from '../src/config.ts';
 import { installRoot } from '../src/core/home.ts';
@@ -213,5 +213,23 @@ describe('見せる置き場と、落とす置き場は同じ', () => {
       const { modelsDir } = await import('../src/core/home.ts');
       assert.equal(await savedModelsDir(), modelsDir());
     });
+  });
+});
+
+describe('使う GGUF を決める', () => {
+  test('保存して、読み出しに出る。空文字で消える', async () => {
+    const root = await tempDir('aas-model-');
+    const prev = process.env.AAS_CONFIG;
+    process.env.AAS_CONFIG = join(root, 'aas.config.json');
+    try {
+      await saveRuntime('inproc', '', 'b.gguf');
+      assert.equal((await readSavedRuntime()).model, 'b.gguf');
+      await saveRuntime('inproc', '');           // 触らない
+      assert.equal((await readSavedRuntime()).model, 'b.gguf');
+      await saveRuntime('inproc', '', '');       // 消す
+      assert.equal((await readSavedRuntime()).model, undefined);
+    } finally {
+      if (prev === undefined) delete process.env.AAS_CONFIG; else process.env.AAS_CONFIG = prev;
+    }
   });
 });
