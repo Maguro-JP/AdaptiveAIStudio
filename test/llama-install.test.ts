@@ -201,3 +201,14 @@ describe('.exe を置けない場所でも見つける', () => {
     assert.equal(await findInstalled(bin), join(bin, PINNED_TAG, 'llama-server.bin'));
   });
 });
+
+describe('書庫の項目名を、置く名前にする', () => {
+  test('区切りは / も \\ も見る。点だけの名前は置かない', async () => {
+    const { entryFileName } = await import('../src/runtime/llama-install.ts');
+    assert.equal(entryFileName('bin/llama-server.exe'), 'llama-server.exe');
+    assert.equal(entryFileName('a\\..\\..\\evil.dll'), 'evil.dll');
+    assert.equal(entryFileName('../../evil.dll'), 'evil.dll');
+    assert.equal(entryFileName('dir/..'), undefined);
+    assert.equal(entryFileName('dir/'), undefined);
+  });
+});

@@ -157,7 +157,7 @@ export async function install(opts: InstallOptions): Promise<Installed> {
     await mkdir(dest, { recursive: true });
     let found = false;
     for (const e of entries) {
-      const name = e.path.split('/').at(-1)!;
+      const name = entryFileName(e.path);
       if (!name) continue;
       let out = join(dest, name);
       await mkdir(dirname(out), { recursive: true });
@@ -246,4 +246,19 @@ export async function listInstalled(binDir = defaultBinDir()): Promise<string[]>
   } catch {
     return [];
   }
+}
+
+
+/**
+ * 書庫の項目名から、置く名前だけを取り出す。
+ *
+ * 散らかさないよう、どの階層にあっても平らに置く。区切りは `/` だけで
+ * なく `\\` も見る。`a\\..\\..\\x` という名前を `/` で切ると丸ごと一語になり、
+ * Windows ではそれが道として解釈されて、置き場の外へ出る。
+ * 点だけの名前（`.` `..`）は置かない。
+ */
+export function entryFileName(entryPath: string): string | undefined {
+  const name = entryPath.split(/[\\/]/).at(-1) ?? '';
+  if (!name || name === '.' || name === '..') return undefined;
+  return name;
 }
