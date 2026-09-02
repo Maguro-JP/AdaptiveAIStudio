@@ -99,3 +99,20 @@ describe('doctor は「入っていない」と「壊れている」を分ける
     assert.doesNotMatch(text, /prebuilt binary/i, 'ライブラリの警告がそのまま出ている');
   });
 });
+
+describe('doctor は、置いた GGUF の中身も見る', () => {
+  test('名前だけ .gguf の別物に印を付ける', async () => {
+    const { home, models, config } = await scratch();
+    await writeFile(join(models, 'page.gguf'), '<!doctype html>');
+    await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
+    const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
+    assert.match(text, /page\.gguf は GGUF ではありません/);
+  });
+  test('本物には付けない（対）', async () => {
+    const { home, models, config } = await scratch();
+    await writeFile(join(models, 'real.gguf'), 'GGUF');
+    await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
+    const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
+    assert.doesNotMatch(text, /GGUF ではありません/);
+  });
+});

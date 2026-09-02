@@ -81,6 +81,20 @@ try {
 if (models.length > 0) {
   add('モデル', 'ok', `${models.length} 件: ${models.slice(0, 3).map((m) => m.ref).join(', ')}`
     + (models.length > 3 ? ' …' : ''));
+  // 名前だけ .gguf の別物と、記憶に載らないものは、ここで言う。
+  // 送ってから 503 を見るより、貼る出力で先に分かるほうが早い。
+  if (runtime.id === 'inproc') {
+    const { looksLikeGguf, tooBigForRam } = await import('../runtime/inproc.ts');
+    const { totalmem } = await import('node:os');
+    const dir = config.runtime?.modelsDir ?? modelsDir();
+    for (const m of models) {
+      if (!(await looksLikeGguf(join(dir, m.ref)))) {
+        add('モデル', 'warn', `${m.ref} は GGUF ではありません（先頭に印が無い。配布元の HTML の案内かも）`);
+      }
+      const big = tooBigForRam(m.sizeBytes, totalmem());
+      if (big) add('モデル', 'warn', `${m.ref}: ${big}`);
+    }
+  }
 } else if (runtime.id === 'ollama') {
   // 動かす土台は選べる。ここで片方しか案内しないと、必須のように見えてしまう。
   // 並べる順は「増える実行ファイルが少ない順」。何も入れられない機械が
