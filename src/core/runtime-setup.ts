@@ -3,7 +3,6 @@
  * ollama と llamacpp を同じ LocalRuntime として扱い、設定で切り替える。
  */
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { modelsDir } from './home.ts';
 import type { AasConfig } from '../config.ts';
 import type { LocalRuntime } from '../runtime/local-runtime.ts';
@@ -52,7 +51,9 @@ export async function buildRuntime(
   return new LlamaCppRuntime({
     command,
     commandArgs: rc.commandArgs,
-    modelsDir: rc.modelsDir ?? join(homedir(), '.aas', 'models'),
+    // inproc・--get・設定画面・doctor と同じ置き場を見る。ここだけ ~/.aas/models を
+    // 見ていて、AAS_HOME が別の場所だと「取ってきたのに見つからない」になっていた。
+    modelsDir: rc.modelsDir ?? modelsDir(),
     machine,
     basePort: rc.basePort,
     parallel: rc.parallel,

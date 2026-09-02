@@ -8,7 +8,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { writeFile } from 'node:fs/promises';
+import { writeFile, mkdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tempDir } from './tmp.ts';
 import { buildRuntime } from '../src/core/runtime-setup.ts';
@@ -46,5 +46,27 @@ describe('この中で読む土台', () => {
       const { baseUrl } = await rt.ensureLoaded('a.gguf');
       assert.equal(new URL(baseUrl).port, String(port), '繋ぐ側と違う口に立っている');
     } finally { await rt.shutdown(); }
+  });
+});
+
+describe('置き場は一つ', () => {
+  test('llamacpp も --get・設定画面・doctor と同じ置き場を見る', async () => {
+    // ここだけ ~/.aas/models を見ていて、AAS_HOME が別の場所だと
+    // 「取ってきたのに『モデルが見つかりません』」になっていた。
+    const home = await tempDir('aas-home-');
+    await mkdir(join(home, 'models'));
+    await writeFile(join(home, 'models', 'a.gguf'), 'GGUF');
+    const saved = process.env.AAS_HOME;
+    process.env.AAS_HOME = home;
+    try {
+      const rt = await buildRuntime(
+        { ...DEFAULT_CONFIG, runtime: { kind: 'llamacpp', command: 'llama-server' } },
+        { gpuName: undefined, ramBytes: 0 } as never,
+      );
+      const refs = (await rt.list()).map((m) => m.ref);
+      assert.deepEqual(refs, ['a.gguf'], `AAS_HOME/models を見ていない: ${refs.join(',')}`);
+    } finally {
+      if (saved === undefined) delete process.env.AAS_HOME; else process.env.AAS_HOME = saved;
+    }
   });
 });
