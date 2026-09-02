@@ -148,6 +148,50 @@ export async function findRecentGguf(opts: {
     .map((m) => ({ id: m.id, lastModified: m.lastModified, downloads: m.downloads }));
 }
 
+/**
+ * GGUF の名前から、家族の名前を取り出す。
+ *
+ * `qwen2.5-3b-instruct-q4_k_m.gguf` → `qwen2.5`。量子化や大きさは家族ではない。
+ * 形が読めなければ undefined（知らない名前を当てずっぽうで問い合わせない）。
+ */
+export function ggufFamily(file: string): string | undefined {
+  const base = file.toLowerCase().replace(/\.gguf$/, '');
+  const m = /^([a-z]+[a-z-]*?)(\d+(?:\.\d+)?)(?=[-_.]|$)/.exec(base);
+  return m ? `${m[1]}${m[2]}` : undefined;
+}
+
+/**
+ * GGUF を置いている人に、次の世代を訊く。
+ *
+ * これまで Ollama の配布元に GGUF の**ファイル名**で訊いていた
+ * （`qwen2.5-3b-instruct-q4_k_m.gguf` という札は無いので、何も出ない）。
+ * こちらは Hugging Face に、次の世代の名前で GGUF を探す。
+ */
+export async function findNewerGguf(opts: {
+  installed: string[];
+  fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
+}): Promise<NewerFinding[]> {
+  const findings: NewerFinding[] = [];
+  const families = new Map<string, string>(); // 家族 → いま使っている名前（代表）
+  for (const file of opts.installed) {
+    const fam = ggufFamily(file);
+    if (fam && !families.has(fam)) families.set(fam, file);
+  }
+  for (const [family, current] of families) {
+    const found: string[] = [];
+    for (const next of nextFamilies(family)) {
+      const hits = await findRecentGguf({ query: next, limit: 5, fetchImpl: opts.fetchImpl, signal: opts.signal })
+        .catch(() => [] as HfModel[]);
+      // 名前に次の世代が入っているものだけ。検索は緩いので、こちらで締める。
+      const real = hits.filter((h) => h.id.toLowerCase().includes(next.toLowerCase()));
+      if (real.length > 0) found.push(real[0]!.id);
+    }
+    if (found.length > 0) findings.push({ current, found });
+  }
+  return findings;
+}
+
 /** 人に見せる形。 */
 export function describeNewer(findings: NewerFinding[]): string {
   if (findings.length === 0) return '新しい世代は見つかりませんでした。';

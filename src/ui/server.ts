@@ -19,7 +19,7 @@ import { aasHome, binDir, modelsDir, isPortable, productRoot } from '../core/hom
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { checkUpdate, applyUpdate } from '../core/update.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
-import { findNewerOllama } from '../runtime/model-updates.ts';
+import { findNewerOllama, findNewerGguf } from '../runtime/model-updates.ts';
 import { AVAILABLE_MODELS, lookupCatalog } from '../runtime/model-catalog.ts';
 import { installModel } from '../runtime/model-install.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
@@ -444,7 +444,11 @@ export class UiServer {
       const installed = (await runtime.list().catch(() => [])).map((m) => m.ref);
       if (installed.length === 0) return send(res, 200, { findings: [] });
       try {
-        return send(res, 200, { findings: await findNewerOllama({ installed }) });
+        // GGUF の名前で Ollama に訊いても、何も出ない。置き場に合わせて訊く先を変える。
+        const findings = usesGguf(runtime.id)
+          ? await findNewerGguf({ installed })
+          : await findNewerOllama({ installed });
+        return send(res, 200, { findings });
       } catch (e) {
         return send(res, 502, { error: e instanceof Error ? e.message : String(e) });
       }

@@ -173,3 +173,33 @@ describe('外から来た名前の検め', () => {
     assert.deepEqual(found.map((m) => m.id), ['Qwen/Qwen3.5-4B-GGUF']);
   });
 });
+
+describe('GGUF を置いている人にも、次の世代を言う', () => {
+  test('ファイル名から家族を取り出す', async () => {
+    const { ggufFamily } = await import('../src/runtime/model-updates.ts');
+    assert.equal(ggufFamily('qwen2.5-3b-instruct-q4_k_m.gguf'), 'qwen2.5');
+    assert.equal(ggufFamily('Llama-3.1-8B-Instruct-Q4_K_M.gguf'), 'llama-3.1');
+    assert.equal(ggufFamily('gemma3-4b-it-q4.gguf'), 'gemma3');
+    assert.equal(ggufFamily('model.gguf'), undefined, '形が読めないものを当てずっぽうで訊かない');
+  });
+
+  test('次の世代の GGUF が配布元にあれば、そう言う', async () => {
+    const { findNewerGguf } = await import('../src/runtime/model-updates.ts');
+    const asked: string[] = [];
+    const fetchImpl = (async (u: URL | string) => {
+      const q = new URL(String(u)).searchParams.get('search') ?? '';
+      asked.push(q);
+      const body = q === 'qwen3' ? [{ id: 'Qwen/Qwen3-4B-GGUF', downloads: 10 }] : [];
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as unknown as typeof fetch;
+    const f = await findNewerGguf({ installed: ['qwen2.5-3b-instruct-q4_k_m.gguf'], fetchImpl });
+    assert.deepEqual(f, [{ current: 'qwen2.5-3b-instruct-q4_k_m.gguf', found: ['Qwen/Qwen3-4B-GGUF'] }]);
+    assert.ok(asked.includes('qwen3'), `次の世代を訊いていない: ${asked.join(',')}`);
+  });
+
+  test('無ければ何も言わない（対）', async () => {
+    const { findNewerGguf } = await import('../src/runtime/model-updates.ts');
+    const fetchImpl = (async () => new Response('[]', { status: 200 })) as unknown as typeof fetch;
+    assert.deepEqual(await findNewerGguf({ installed: ['qwen2.5-3b-instruct-q4_k_m.gguf'], fetchImpl }), []);
+  });
+});
