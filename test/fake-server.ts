@@ -25,6 +25,18 @@ export interface FakeServer {
   close(): Promise<void>;
 }
 
+/**
+ * 道具を使い終えたあとの答えには、終わりの合図を付ける。
+ *
+ * 本物のモデルには決まり（system）で「やり終えたら TASK_DONE だけの行を
+ * 書く」と渡している。ここで付けないと、**決まりに従わないモデル**を
+ * 相手にした試験になり、押し戻しの側だけを見ることになる。
+ * 従うモデルが素直に終われることも、対で見る。
+ */
+function withDone(text: string): string {
+  return `${text}\nTASK_DONE\n`;
+}
+
 export async function startFakeServer(initial: Behavior): Promise<FakeServer> {
   let behavior = initial;
   const state = { requests: 0, bodies: [] as unknown[] };
@@ -57,7 +69,7 @@ export async function startFakeServer(initial: Behavior): Promise<FakeServer> {
         res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: behavior.name, arguments: JSON.stringify(behavior.args) } }] } }] })}\n\n`);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
       } else {
-        for (const ch of behavior.then) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: ch } }] })}\n\n`);
+        for (const ch of withDone(behavior.then)) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: ch } }] })}\n\n`);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
       }
       res.write('data: [DONE]\n\n');
@@ -75,7 +87,7 @@ export async function startFakeServer(initial: Behavior): Promise<FakeServer> {
         res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call_${done + 1}`, function: { name: next.name, arguments: JSON.stringify(next.args) } }] } }] })}\n\n`);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
       } else {
-        for (const ch of behavior.then) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: ch } }] })}\n\n`);
+        for (const ch of withDone(behavior.then)) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: ch } }] })}\n\n`);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
       }
       res.write('data: [DONE]\n\n');

@@ -383,6 +383,10 @@ export const PANELS = {
             : `作業前から検査が失敗しています（${again}）`);
       } else if (v.type === 'salvaged') {
         note('dim', `本文に書かれていた ${v.name} の呼び出しを拾いました`);
+      } else if (v.type === 'nudged') {
+        // **黙って押し戻さない。**何が起きているか分からないまま
+        // 往復が増えると、動きが遅いだけに見える。
+        note('dim', `途中で手が止まったので、続きを促しました（あと ${v.left} 回）`);
       } else if (v.type === 'rolledBack') note('warn', `変更を巻き戻しました: ${v.paths.join(', ')}`);
       else if (v.type === 'toolsFailed') {
         // **言葉より結果。**本文が「書き換えました」でも、止められていれば

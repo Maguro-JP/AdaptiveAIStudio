@@ -38,7 +38,10 @@ async function scriptedServer(script: Scripted[]) {
       turn += 1;
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       if ('text' in step) {
-        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: step.text } }] })}\n\n`);
+        // 決まり（system）に従うモデルとして振る舞う。終わりの合図を付ける。
+        // 付けないと、**決まりに従わないモデル**だけを相手にした試験になる。
+        const said = `${step.text}\nTASK_DONE\n`;
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: said } }] })}\n\n`);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
       } else {
         // 引数を2つに割って送り、分割組み立てを検証する
@@ -129,7 +132,9 @@ describe('エージェントループ', () => {
   test('呼び出しでない JSON は、そのまま本文として見せる', async () => {
     const { events } = await runAgent([{ text: '既定は {"temperature": 0.2} です。' }]);
     const shown = events.filter((e) => e.type === 'thinking').map((e) => e.delta).join('');
-    assert.equal(shown, '既定は {"temperature": 0.2} です。');
+    // 合図は抜いて見せる。合図の前の改行までは残る（本文の一部）。
+    assert.equal(shown.trimEnd(), '既定は {"temperature": 0.2} です。');
+    assert.ok(!shown.includes('TASK_DONE'), `合図を画面に出している: ${shown}`);
     assert.equal(events.filter((e) => e.type === 'toolStart').length, 0);
   });
 

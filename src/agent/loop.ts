@@ -11,12 +11,15 @@ import type { ProviderMessage, ToolCall } from '../providers/contract.ts';
 import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
 import type { Tool, ToolContext, ApprovalRequest } from './tools/types.ts';
 import { ToolTextFilter } from './tool-text.ts';
+import { DoneMark, DONE_MARK } from './done.ts';
 
 export type AgentEvent =
   | { type: 'thinking'; delta: string }
   | { type: 'toolStart'; call: ToolCall }
   /** 本文に紛れていた呼び出しを拾ったとき。黙って直すと原因が追えない。 */
   | { type: 'salvaged'; name: string }
+  /** 合図が無いまま手を止めたので、押し戻した。黙って押し戻さない。 */
+  | { type: 'nudged'; left: number }
   | { type: 'toolEnd'; call: ToolCall; result: string; isError: boolean }
   | { type: 'turn'; index: number; modelId?: string }
   | { type: 'fallback'; from: string; to: string; reason: string }
@@ -29,6 +32,14 @@ export interface AgentOptions {
   root: string;
   /** 上限。到達しても失敗ではなく、利用者に継続を尋ねるための区切り。 */
   maxTurns?: number;
+  /**
+   * 合図なしで手を止めたとき、何回まで押し戻すか。既定2回。
+   *
+   * 0 にすると、これまでどおり「道具を呼ばなかった＝終わった」になる。
+   * 押し戻しは只ではない（一往復ぶん余計に考えさせる）ので、
+   * 何度も繰り返さない。**動かないものは、動かないと言う。**
+   */
+  maxNudges?: number;
   temperature?: number;
   maxTokens?: number;
   approve(req: ApprovalRequest): Promise<boolean>;
@@ -50,6 +61,18 @@ export class Agent {
     signal: AbortSignal,
   ): AsyncGenerator<AgentEvent> {
     const maxTurns = this.#opts.maxTurns ?? 40;
+    const maxNudges = this.#opts.maxNudges ?? 2;
+    let nudges = 0;
+    /**
+     * この依頼のあいだに、道具を一度でも使ったか。
+     *
+     * 押し戻す相手を、これで絞る。**一度も道具を使っていないなら、
+     * それは訊かれて答えただけ**（「この関数は何ですか」）。答えが仕事なので、
+     * 押し戻しても意味がなく、往復を二度増やすだけになる。
+     * 道具を使った後で止まったなら、**作業の途中で降りた**可能性が高い。
+     * 自律で回らなくなるのは、いつもそこ。
+     */
+    let usedTools = false;
     const ctx: ToolContext = {
       root: this.#opts.root,
       signal,
@@ -69,6 +92,8 @@ export class Agent {
       // 小さいモデルは、呼び出しを本文に書いてしまうことがある。
       // 生の JSON を画面へ流さないよう、疑わしいところで一旦せき止める。
       const filter = new ToolTextFilter();
+      // 終わりの合図を、本文から抜く。画面に TASK_DONE を出さない。
+      const mark = new DoneMark();
 
       for await (const ev of this.#orchestrator.run(
         {
@@ -82,8 +107,11 @@ export class Agent {
         signal,
       ) as AsyncGenerator<ChatEvent>) {
         if (ev.type === 'text') {
-          const shown = filter.push(ev.delta);
-          if (shown) { text += shown; yield { type: 'thinking', delta: shown }; }
+          const passed = filter.push(ev.delta);
+          if (passed) {
+            const shown = mark.push(passed);
+            if (shown) { text += shown; yield { type: 'thinking', delta: shown }; }
+          }
         }
         else if (ev.type === 'toolCall') calls.push(ev.call);
         else if (ev.type === 'fallback') yield { type: 'fallback', from: ev.from, to: ev.to, reason: ev.reason };
@@ -94,15 +122,21 @@ export class Agent {
       // せき止めた分の始末。呼び出しが拾えたなら道具として扱い、
       // 拾えなければ本文としてそのまま見せる（黙って消さない）。
       if (calls.length > 0) {
-        const rest = filter.drain();
+        const rest = mark.push(filter.drain());
         if (rest) { text += rest; yield { type: 'thinking', delta: rest }; }
       } else {
         const salvage = filter.end();
-        if (salvage.text) { text += salvage.text; yield { type: 'thinking', delta: salvage.text }; }
+        const passed = mark.push(salvage.text);
+        if (passed) { text += passed; yield { type: 'thinking', delta: passed }; }
         salvage.calls.forEach((c, i) => {
           calls.push({ id: `salvaged-${turn}-${i}`, name: c.name, args: c.args });
         });
       }
+
+      // 抱えている分を吐き出す。ここで合図が確定する。
+      const tail = mark.end();
+      if (tail.text) { text += tail.text; yield { type: 'thinking', delta: tail.text }; }
+      const declaredDone = tail.done;
 
       if (failure) { yield { type: 'finished', reason: 'failed', detail: failure }; return; }
       yield { type: 'turn', index: turn, modelId };
@@ -113,8 +147,41 @@ export class Agent {
         ...(calls.length > 0 ? { toolCalls: calls } : {}),
       });
 
-      // ツールを呼ばなかった = 作業が終わったか、質問して止まった
-      if (calls.length === 0) { yield { type: 'finished', reason: 'completed' }; return; }
+      // 道具を呼ばずに止まった。**それだけでは「終わった」ではない。**
+      // 小さいモデルは作業の途中で手を止める。「次に書き換えます」と
+      // 言って返してくる。それを完了と読んでいたので、何もしていないのに
+      // 完了と出ていた。自律で回し続けられなかったのは、ここで降りていたから。
+      if (calls.length === 0) {
+        if (declaredDone || !usedTools || nudges >= maxNudges) {
+          // 合図が出た / 一度も道具を使っていない（＝答えただけ） /
+          // 押し戻しを使い切った。**動かないものは、動かないと言う。**
+          const stalled = !declaredDone && usedTools;
+          yield {
+            type: 'finished',
+            reason: stalled ? 'noProgress' : 'completed',
+            ...(stalled
+              ? { detail: `${DONE_MARK} が無いまま ${nudges} 回押し戻しましたが、動きませんでした。` }
+              : {}),
+          };
+          return;
+        }
+        nudges += 1;
+        yield { type: 'nudged', left: maxNudges - nudges };
+        // 押し戻す。**次の一手を求める。**「続けて」だけでは、また同じ返事が来る。
+        history.push({
+          role: 'user',
+          content:
+            `まだ ${DONE_MARK} がありません。\n`
+            + `やり終えているなら、${DONE_MARK} だけの行を書いてください。\n`
+            + '終わっていないなら、説明ではなく、次の一手を道具で実行してください。',
+        });
+        continue;
+      }
+
+      // 何か動いたので、押し戻しの残りを戻す。長い作業の途中で
+      // 使い切ってしまうと、そこから先が押し戻せない。
+      nudges = 0;
+      usedTools = true;
 
       for (const call of calls) {
         if (signal.aborted) { yield { type: 'finished', reason: 'aborted' }; return; }

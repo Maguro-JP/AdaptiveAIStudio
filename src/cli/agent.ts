@@ -598,6 +598,10 @@ async function main(): Promise<void> {
             case 'salvaged':
               console.log(c.dim(`  （本文に書かれていた ${ev.name} の呼び出しを拾いました）`));
               break;
+            case 'nudged':
+              flush();
+              console.log(c.dim(`  （途中で手が止まったので、続きを促しました。あと ${ev.left} 回）`));
+              break;
             case 'toolStart':
               flush();
               console.log(c.dim(`  · ${ev.name} ${ev.summary}`));

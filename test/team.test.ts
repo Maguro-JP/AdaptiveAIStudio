@@ -49,7 +49,8 @@ async function workerServer(delayMs: number, opts: { perModelDelay?: Record<stri
       }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       if (alreadyWrote) {
-        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: `${target} を作成しました。` } }] })}\n\n`);
+        // 決まりに従うモデルとして、終わりの合図まで書く。
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: `${target} を作成しました。\nTASK_DONE\n` } }] })}\n\n`);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
       } else {
         const args = JSON.stringify({ path: target, content: `done:${target}\n` });

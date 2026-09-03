@@ -73,6 +73,8 @@ export type SessionEvent =
   | { type: 'toolStart'; name: string; summary: string }
   /** 本文に紛れていた呼び出しを拾ったとき。直したことは黙らない。 */
   | { type: 'salvaged'; name: string }
+  /** 合図が無いまま手を止めたので、押し戻した。**黙って押し戻さない。** */
+  | { type: 'nudged'; left: number }
   | { type: 'toolEnd'; name: string; ok: boolean; summary: string }
   | { type: 'fallback'; from: string; to: string; reason: string }
   | { type: 'recalled'; text: string }
@@ -814,6 +816,9 @@ export class Session {
               break;
             case 'salvaged':
               yield { type: 'salvaged', name: ev.name };
+              break;
+            case 'nudged':
+              yield { type: 'nudged', left: ev.left };
               break;
             case 'toolStart':
               // 作業場を変える手前で、作業前の状態を控える。
