@@ -47,6 +47,17 @@ add('Node.js', nodeOk ? 'ok' : 'bad', `v${process.versions.node}`,
 
 /* ---------- 設定 ---------- */
 
+/**
+ * 打つ一手の書き方。**無いものを打てと言わない。**
+ *
+ * 配布物には npm が無い。入口（AdaptiveAIStudio.cmd）が package.json を
+ * そのまま読んで同じ仕事を動かすので、呼び方だけが違う。
+ */
+function how(task: string, args = ''): string {
+  if (isPortable()) return `AdaptiveAIStudio.cmd ${task}${args ? ` ${args}` : ''}`;
+  return `npm run ${task}${args ? ` -- ${args}` : ''}`;
+}
+
 const { config, source } = loadConfig();
 add('設定', 'ok', source,
   source.includes('なし')
@@ -106,11 +117,11 @@ if (models.length > 0) {
     + '\n'
     + '  B. Ollama（手早い。別に立てたものへ繋ぐ）\n'
     + '     https://ollama.com から入れて `ollama serve`\n'
-    + '     そのあと `npm run models -- --get`（まず動く軽いものが入ります）\n'
-    + '     一覧は `npm run models -- --available`。名前を直接渡すこともできます\n'
+    + `     そのあと \`${how('models', '--get')}\`（まず動く軽いものが入ります）\n`
+    + `     一覧は \`${how('models', '--available')}\`。名前を直接渡すこともできます\n`
     + '\n'
     + '  C. llama.cpp（速い。実行ファイルが1つ増えます）\n'
-    + '     `npm run llama` で llama-server をこちらが用意します。\n'
+    + `     \`${how('llama')}\` で llama-server をこちらが用意します。\n`
     + '       "runtime": { "kind": "llamacpp", "modelsDir": "GGUF を置いた場所" }\n'
     + '     オフロードの計算は GGUF を直接読んで行います（docs/GGUF.md）。');
 } else {
@@ -124,8 +135,8 @@ if (models.length > 0) {
     // portable には npm が無い。無いものを打てと言わない。画面から取れる。
     + (isPortable()
       ? '画面（AdaptiveAIStudio.cmd）の 設定 → モデル から取ってこられます（まず動く軽いものが入ります）。\n'
-      : '`npm run models -- --get` で取ってきます（まず動く軽いものが入ります）。\n'
-        + '一覧は `npm run models -- --available`。\n')
+      : `\`${how('models', '--get')}\` で取ってきます（まず動く軽いものが入ります）。\n`
+        + `一覧は \`${how('models', '--available')}\`。\n`)
     + '手持ちがあるなら、同じ置き場に .gguf を入れるだけでも使えます。\n'
     + `いまの置き場: ${config.runtime?.modelsDir ?? `${defaultModelsDir()}（既定）`}`);
 }
@@ -139,7 +150,7 @@ if (llamaPath) {
   add('llama-server', 'ok', llamaPath);
 } else if (config.runtime?.kind === 'llamacpp') {
   add('llama-server', 'bad', 'まだ用意していません',
-    '`npm run llama` で取ってきます。\n'
+    `\`${how('llama')}\` で取ってきます。\n`
     + 'いまは PATH にある llama-server を探しますが、'
     + 'それは他の道具（LM Studio など）が入れたもので、消されると動かなくなります。');
 }
@@ -179,10 +190,13 @@ if (runtime.id === 'inproc') {
       installed
         ? 'node-llama-cpp は在るのに読み込めません（欠けています）'
         : 'node-llama-cpp が入っていません',
-      (installed
-        ? '配布物なら組み立てが壊れています。作業コピーなら入れ直してください:\n'
-        : '配布物には入っています。作業コピーで使うときは:\n')
-      + '  npm install --no-save --omit=optional --ignore-scripts node-llama-cpp\n'
+      (isPortable()
+        ? '配布物の組み立てが壊れています。落とし直してください:\n'
+          + '  https://github.com/Maguro-JP/AdaptiveAIStudio/releases\n'
+        : (installed
+          ? '作業コピーなら入れ直してください:\n'
+          : '配布物には入っています。作業コピーで使うときは:\n')
+          + '  npm install --no-save --omit=optional --ignore-scripts node-llama-cpp\n')
       + `詳しくは docs/LOCAL-MODEL.md（${(e as Error).message.slice(0, 80)}）`);
   }
   if (lib) {
@@ -196,8 +210,13 @@ if (runtime.id === 'inproc') {
       // 直しようのない未了を抱え続ける。**警告**に留める。
       add('モデルを読むもの', 'warn',
         'node-llama-cpp はあるが、この機械むけの binary がありません',
-        `${process.platform}-${process.arch} の分を入れてください:\n`
-        + `  npm install --no-save --omit=optional --ignore-scripts ${binPkg}\n`
+        // 配布物には npm が無い。入れろと言っても打てない。
+        // 配るのは win-x64 むけなので、別の機械で開いたときにここへ来る。
+        (isPortable()
+          ? `この配布物は別の機械むけです（いまの機械: ${process.platform}-${process.arch}）。\n`
+            + 'その機械むけに組み直したものが要ります。\n'
+          : `${process.platform}-${process.arch} の分を入れてください:\n`
+            + `  npm install --no-save --omit=optional --ignore-scripts ${binPkg}\n`)
         + `詳しくは docs/LOCAL-MODEL.md（${(e as Error).message.slice(0, 80)}）`);
     }
   }
@@ -317,5 +336,8 @@ const style = {
 
 for (const line of formatChecks(checks, style)) console.log(line);
 console.log();
-console.log(summaryLine(checks, style));
+// 締めの一手も、この場所で打てる形で言う。
+console.log(summaryLine(checks, style, isPortable()
+  ? { ui: 'AdaptiveAIStudio.cmd' }
+  : { ui: how('ui'), agent: how('agent') }));
 console.log();

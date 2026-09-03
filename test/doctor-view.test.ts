@@ -68,15 +68,32 @@ describe('doctor の並べ方', () => {
     assert.equal(nameColumn([{ name: 'あ'.repeat(40), level: 'ok', detail: '' }]), 30);
   });
 
+  /** 開発の場所の呼び方。 */
+  const npmWay = { ui: 'npm run ui', agent: 'npm run agent' };
+
   test('未了が無ければ「動かせます」', () => {
     const ok: Check[] = [{ name: 'Node.js', level: 'ok', detail: 'v24' },
       { name: '接続', level: 'warn', detail: '遅いです' }];
-    assert.match(summaryLine(ok, plain), /動かせます/);
-    assert.doesNotMatch(summaryLine(ok, plain), /かたづければ/);
+    assert.match(summaryLine(ok, plain, npmWay), /動かせます/);
+    assert.doesNotMatch(summaryLine(ok, plain, npmWay), /かたづければ/);
+  });
+
+  test('打てない一手を出さない', () => {
+    // 配布物には npm が無い。npm run ui と言われても打てない（実際に出していた）。
+    const ok: Check[] = [{ name: 'Node.js', level: 'ok', detail: 'v24' }];
+    const ng: Check[] = [{ name: 'モデル', level: 'bad', detail: 'ありません' }];
+    const portable = { ui: 'AdaptiveAIStudio.cmd' };
+    for (const line of [summaryLine(ok, plain, portable), summaryLine(ng, plain, portable)]) {
+      assert.doesNotMatch(line, /npm/, line);
+      assert.match(line, /AdaptiveAIStudio\.cmd/, line);
+    }
+    // 端末の道が無いなら、その案内も出さない。
+    assert.doesNotMatch(summaryLine(ok, plain, portable), /端末/);
+    assert.match(summaryLine(ok, plain, npmWay), /端末/);
   });
 
   test('未了があれば件数を出す', () => {
     const ng: Check[] = [{ name: 'モデル', level: 'bad', detail: 'ありません' }];
-    assert.match(summaryLine(ng, plain), /1 件かたづければ/);
+    assert.match(summaryLine(ng, plain, npmWay), /1 件かたづければ/);
   });
 });

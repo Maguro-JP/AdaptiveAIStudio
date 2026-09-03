@@ -166,8 +166,9 @@ describe('配布物の形', () => {
     assert.equal((await readFile(join(out, 'VERSION'), 'utf8')).trim(), 'test-2');
   });
 
-  test('版を渡さなくても、手元の印まで書く', async () => {
+  test('版を渡さなくても、手元の印まで書く', sourceOnly, async () => {
     // 手元で組んだものが全部 0.1.0 では、どの中身で組んだか辿れない。
+    // git の作業コピーでしか確かめられない。配布物の中では落ちる（実際に落ちた）。
     const { guessVersion } = await import('../scripts/bundle.mjs');
     const v = guessVersion(installRoot());
     // ここは git の作業コピー。package.json の版に短い印が付く。

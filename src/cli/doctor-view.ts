@@ -70,15 +70,28 @@ export function formatChecks(checks: readonly Check[], style: ViewStyle): string
 }
 
 /**
+ * 起動の仕方。**呼ぶ側が決めて渡す。**
+ *
+ * 配布物には npm が無いので、`npm run ui` と書くと打てない一手になる。
+ * ここ（並べるだけの側）で環境を判断させない。
+ */
+export interface HowToStart {
+  /** 画面をひらく一手 */
+  ui: string;
+  /** 端末で動かす一手。配布物の入口には無いので、省ける */
+  agent?: string;
+}
+
+/**
  * 締めの一行。
  * 「N件かたづければ動きます」は、動かない項目(bad)があるときだけ。
  */
-export function summaryLine(checks: readonly Check[], style: ViewStyle): string {
+export function summaryLine(checks: readonly Check[], style: ViewStyle, how: HowToStart): string {
   const bad = checks.filter((x) => x.level === 'bad');
   if (bad.length === 0) {
     return style.good('動かせます。')
-      + style.dim('  npm run ui  で画面、 npm run agent  で端末。');
+      + style.dim(`  ${how.ui}  で画面${how.agent ? `、 ${how.agent}  で端末` : ''}。`);
   }
   return style.hint(`${bad.length} 件かたづければ動きます。`)
-    + style.dim(' 画面（npm run ui）は、モデルが無くても開けます。');
+    + style.dim(` 画面（${how.ui}）は、モデルが無くても開けます。`);
 }
