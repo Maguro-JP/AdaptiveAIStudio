@@ -16,6 +16,7 @@
  *   ・立ち上がらない相手がいても、他は動く。全部を道連れにしない
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { canRun } from '../core/which.ts';
 import { StringDecoder } from 'node:string_decoder';
 
 /**
@@ -130,6 +131,16 @@ export class McpClient {
       const value = process.env[from];
       // 無いなら渡さない。空文字を渡すと、相手が「設定済み」と誤認する。
       if (value !== undefined) env[key] = value;
+    }
+
+    // 立ち上げる前に、その命令が在るかを見る。
+    // 殻（shell: true）に渡すと、無い命令でも spawn は成功し、
+    // 「終了しました（コード 1）」だけが残る。**何が無いのかを言う。**
+    if (!canRun(this.#spec.command)) {
+      this.#failure = `その命令がありません: ${this.#spec.command}`
+        + (this.#spec.command === 'npx' || this.#spec.command === 'npm'
+          ? '（配布物には node だけが入っています）' : '');
+      return false;
     }
 
     try {

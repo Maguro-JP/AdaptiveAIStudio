@@ -19,6 +19,7 @@ import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { installRoot, isPortable } from '../core/home.ts';
+import { canRun } from '../core/which.ts';
 import { resolve } from 'node:path';
 const LLAMA_LIB = 'node-llama-cpp'; // 型検査に解決させない（src/runtime/inproc.ts 参照）
 
@@ -234,6 +235,16 @@ if (runtime.id === 'inproc') {
   for (const [name, spec] of servers) {
     if (spec.enabled === false) {
       add(`外の道具 (${name})`, 'ok', '設定はあるが enabled: false（使うなら true に）');
+      continue;
+    }
+    // 立ち上げる前に、その命令が在るかを見る。配布物には npm も npx も
+    // 入っていないので、設定に書けても動かない。**書いたのに何も起きない**を止める。
+    if (!canRun(spec.command)) {
+      add(`外の道具 (${name})`, 'warn', `その命令がありません: ${spec.command}`,
+        spec.command === 'npx' || spec.command === 'npm'
+          ? '配布物には node だけが入っています（npm と npx は入っていません）。\n'
+            + 'この道具は、Node と npm が入っている機械で使ってください。'
+          : 'PATH に無いか、名前が違います。道（フォルダ）から書くこともできます。');
       continue;
     }
     const wants = Object.entries(spec.envFrom ?? {});
