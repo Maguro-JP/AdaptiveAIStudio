@@ -357,16 +357,42 @@ export class InProcRuntime implements LocalRuntime {
     // 上の層は毎回すべての履歴を送ってくる。こちらは持ち越さず、
     // **渡されたものだけ**で組み直す。持ち越すと二重になる。
     const messages = body.messages ?? [];
-    // いま訊いていること＝最後の user。それより前が履歴。
-    let at = messages.length - 1;
-    while (at >= 0 && messages[at]!.role !== 'user') at--;
-    const asked = at >= 0 ? messages[at]!.content : '';
-    held.session.setChatHistory(toHistory(messages.slice(0, Math.max(at, 0))));
+    const last = messages[messages.length - 1];
+    // いちばん後ろが人の言葉なら、それが「いま訊いていること」。
+    // そうでない（道具の結果で終わっている）なら、訊くことは無い。
+    // **前の user を引っ張り出さない。**引っ張ると、道具を呼んだ跡ごと
+    // 履歴から落ちて、モデルは同じ道具をもう一度呼ぶ。
+    const fromUser = last?.role === 'user';
+    const asked = fromUser ? last.content : CONTINUE;
+    held.session.setChatHistory(toHistory(fromUser ? messages.slice(0, -1) : messages));
+
+    // 道具。**受け口の中で止めて、呼ぼうとしたことを持ち帰る。**
+    // ライブラリは受け口の返り値を答えとして続きを作るが、実際に道具を
+    // 動かすのは上の層（承認も検問所もそちらに在る）。ここでは動かさない。
+    const calls: { id: string; name: string; args: unknown }[] = [];
+    const stop = new AbortController();
+    const functions: Record<string, LibFunction> = {};
+    for (const t of body.tools ?? []) {
+      const name = t.function?.name;
+      if (!name) continue;
+      functions[name] = {
+        ...(t.function?.description ? { description: t.function.description } : {}),
+        ...(t.function?.parameters ? { params: t.function.parameters } : {}),
+        handler: (args: unknown) => {
+          calls.push({ id: `call_${calls.length}`, name, args: args ?? {} });
+          stop.abort();
+          return '';
+        },
+      };
+    }
+    const useTools = Object.keys(functions).length > 0;
 
     const opts: PromptOptions = {
-      signal,
+      signal: useTools ? AbortSignal.any([signal, stop.signal]) : signal,
       ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
       ...(typeof body.max_tokens === 'number' ? { maxTokens: body.max_tokens } : {}),
+      // 止めたときに投げられると、何を呼ぼうとしたのかが例外に化けて消える。
+      ...(useTools ? { functions, stopOnAbortSignal: true } : {}),
     };
 
     if (body.stream === false) {
@@ -374,7 +400,15 @@ export class InProcRuntime implements LocalRuntime {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
         id: 'inproc', object: 'chat.completion', model: ref,
-        choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }],
+        choices: [{
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: text,
+            ...(calls.length > 0 ? { tool_calls: calls.map(toWire) } : {}),
+          },
+          finish_reason: calls.length > 0 ? 'tool_calls' : 'stop',
+        }],
       }));
       return;
     }
@@ -398,9 +432,17 @@ export class InProcRuntime implements LocalRuntime {
         // 「止まっている」ように見えるのが、いちばん困る。
         onTextChunk: (text: string) => chunk({ content: text }),
       });
-      chunk({}, 'stop');
-    } catch (e) {
       // 切ったのは向こう。書き戻す先はもう無い。
+      // **投げずに返る道**（stopOnAbortSignal）を通ることがあるので、
+      // ここでも見る。見ていなかったので、やめた後に 'stop' を送っていた。
+      if (signal.aborted) { res.end(); return; }
+      if (calls.length > 0) {
+        calls.forEach((c, index) => chunk({ tool_calls: [{ index, ...toWire(c) }] }));
+        chunk({}, 'tool_calls');
+      } else {
+        chunk({}, 'stop');
+      }
+    } catch (e) {
       if (signal.aborted) { res.end(); return; }
       // 途中で落ちたことを、黙って握り潰さない。
       chunk({ content: `\n[止まりました: ${(e as Error).message}]` }, 'stop');
@@ -410,6 +452,19 @@ export class InProcRuntime implements LocalRuntime {
   }
 }
 
+/**
+ * 道具の結果で終わっているときに、代わりに渡す一言。
+ *
+ * ライブラリの prompt() は「人が言ったこと」を必ず要る。道具の結果は
+ * 履歴の側に畳んであるので、ここでは続きを促すだけにする。
+ */
+const CONTINUE = '道具の結果を踏まえて、続けてください。';
+
+/** 呼び出しを OpenAI の形に直す。 */
+function toWire(c: { id: string; name: string; args: unknown }): WireToolCall {
+  return { id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args ?? {}) } };
+}
+
 /** ライブラリの、こちらが使う分だけの形。 */
 interface PromptOptions {
   temperature?: number;
@@ -417,6 +472,22 @@ interface PromptOptions {
   onTextChunk?: (text: string) => void;
   /** 画面が「やめる」を押したら、生成そのものを止める。 */
   signal?: AbortSignal;
+  /** 道具の一覧。名前 → 説明・引数の形・受け口。 */
+  functions?: Record<string, LibFunction>;
+  /**
+   * 止められたときに、投げずに**そこまでを返す**。
+   *
+   * 道具を呼ばせるとき、こちらは受け口の中で止める。投げられると、
+   * 何を呼ぼうとしたのかが例外に化けて消える。
+   */
+  stopOnAbortSignal?: boolean;
+}
+
+/** ライブラリに渡す道具ひとつ。 */
+interface LibFunction {
+  description?: string;
+  params?: unknown;
+  handler: (args: unknown) => unknown;
 }
 interface Held {
   context: { dispose?: () => Promise<void> };
@@ -435,27 +506,95 @@ interface Held {
   turn: Promise<unknown>;
 }
 
-interface ChatMessage { role: string; content: string }
+/** OpenAI の形の、道具の呼び出し一つ。 */
+export interface WireToolCall {
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+}
+export interface ChatMessage {
+  role: string;
+  content: string;
+  /** assistant が呼ぼうとしたもの */
+  tool_calls?: WireToolCall[];
+  /** tool の返事が、どの呼び出しに対するものか */
+  tool_call_id?: string;
+}
+interface ToolSpec {
+  type?: string;
+  function?: { name?: string; description?: string; parameters?: unknown };
+}
 interface ChatRequest {
   model?: string;
   messages?: ChatMessage[];
   stream?: boolean;
   temperature?: number;
   max_tokens?: number;
+  /** 使ってよい道具。**無視していたので、GGUF だけでは何も出来なかった。** */
+  tools?: ToolSpec[];
+}
+
+/** ライブラリの履歴の一項目。 */
+export type HistoryItem =
+  | { type: 'system'; text: string }
+  | { type: 'user'; text: string }
+  | { type: 'model'; response: (string | ModelFunctionCall)[] };
+
+/** 履歴の中の、道具を呼んだ跡。 */
+export interface ModelFunctionCall {
+  type: 'functionCall';
+  name: string;
+  params: unknown;
+  result: unknown;
 }
 
 /**
  * OpenAI の形を、ライブラリの形に直す。
  *
- * 最後の user は履歴に入れない（それが「いま訊いていること」で、
- * prompt() に渡すもの）。入れると同じことを二度言うことになる。
+ * **道具のやりとりを落とさない。**ここまで assistant の中身だけを拾って
+ * いたので、何を呼んで何が返ったかが履歴から消えていた。消えると、モデルは
+ * 同じ道具をもう一度呼ぶ（同じところを延々と回る）。
+ *
+ * 呼び出しと結果は、OpenAI では二つの行に分かれて来る
+ * （assistant.tool_calls と、role:'tool' の行）。ライブラリは一つの塊で
+ * 持つので、id で結び直す。
  */
-export function toHistory(messages: ChatMessage[]): { type: string; text?: string; response?: string[] }[] {
-  const out: { type: string; text?: string; response?: string[] }[] = [];
+export function toHistory(messages: ChatMessage[]): HistoryItem[] {
+  // 先に結果を引けるようにしておく。結果は呼び出しより後ろに来る。
+  const results = new Map<string, string>();
   for (const m of messages) {
-    if (m.role === 'system') out.push({ type: 'system', text: m.content });
-    else if (m.role === 'user') out.push({ type: 'user', text: m.content });
-    else if (m.role === 'assistant') out.push({ type: 'model', response: [m.content] });
+    if (m.role === 'tool' && m.tool_call_id) results.set(m.tool_call_id, m.content);
+  }
+  const out: HistoryItem[] = [];
+  for (const m of messages) {
+    if (m.role === 'system') { out.push({ type: 'system', text: m.content }); continue; }
+    if (m.role === 'user') { out.push({ type: 'user', text: m.content }); continue; }
+    // 道具の返事は、呼び出しの側に畳んである。単独では置かない。
+    if (m.role === 'tool') continue;
+    if (m.role !== 'assistant') continue;
+    const response: (string | ModelFunctionCall)[] = [];
+    if (m.content) response.push(m.content);
+    for (const call of m.tool_calls ?? []) {
+      const name = call.function?.name;
+      if (!name) continue;
+      response.push({
+        type: 'functionCall',
+        name,
+        params: parseArgs(call.function?.arguments),
+        result: call.id !== undefined ? results.get(call.id) ?? '' : '',
+      });
+    }
+    // 空の返事は置かない（何も言わずに道具も呼んでいない行）。
+    if (response.length > 0) out.push({ type: 'model', response });
   }
   return out;
+}
+
+/**
+ * 引数の JSON。**壊れていても落とさない。**
+ * 小さいモデルは平気で壊れた JSON を出す。ここで落とすと会話ごと終わる。
+ */
+function parseArgs(raw: string | undefined): unknown {
+  if (!raw || !raw.trim()) return {};
+  try { return JSON.parse(raw); } catch { return { __raw: raw, __parseError: true }; }
 }

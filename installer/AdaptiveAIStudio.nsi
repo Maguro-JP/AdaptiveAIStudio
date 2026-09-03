@@ -51,6 +51,26 @@ Section "install"
   ; S-1-5-32-545 は Users 群の番号。日本語の Windows では名前が
   ; 「ユーザー」になるので、**名前ではなく番号で指す**。
   CreateDirectory "$COMMONPROGRAMDATA\${APP}"
+
+  ; モデルの置き場は、**入れるときに作る。**
+  ; 「GGUF を1つ置くだけ」と案内しておいて置き場が無いのでは、案内にならない。
+  ; 何を置くのかも、その場に書いておく（設定画面まで辿り着けない人がいる）。
+  CreateDirectory "$COMMONPROGRAMDATA\${APP}\models"
+  FileOpen $0 "$COMMONPROGRAMDATA\${APP}\models\README.txt" w
+  ; メモ帳が CP932 として読まないよう、先頭に印を書く。
+  FileWriteWord $0 65279
+  FileWriteUTF16LE $0 "このフォルダに .gguf のファイルを1つ置くと、${APP} がそれを読みます。$\r$\n"
+  FileWriteUTF16LE $0 "$\r$\n"
+  FileWriteUTF16LE $0 "取ってくる先の例:$\r$\n"
+  FileWriteUTF16LE $0 "  https://huggingface.co/Qwen （名前に GGUF が付いたもの）$\r$\n"
+  FileWriteUTF16LE $0 "$\r$\n"
+  FileWriteUTF16LE $0 "大きさの目安: 8GB の機械なら 3B〜4B の Q4_K_M（2GB 前後）。$\r$\n"
+  FileWriteUTF16LE $0 "記憶より大きいものは読めません。読む前に止めて、そう言います。$\r$\n"
+  FileWriteUTF16LE $0 "$\r$\n"
+  FileWriteUTF16LE $0 "置いたあと、${APP} を開き直すか、設定 → モデル で選び直してください。$\r$\n"
+  FileClose $0
+
+  ; 権限は、置き場を作ってから一度で付ける（/T で下まで）。
   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\${APP}" /grant *S-1-5-32-545:(OI)(CI)M /T'
 
   ; 入口。データの置き場をここで決めて渡す。
