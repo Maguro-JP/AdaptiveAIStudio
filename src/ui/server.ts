@@ -1160,8 +1160,15 @@ export class UiServer {
   async #localRuntime(): Promise<LocalRuntime> {
     if (this.#runtime) return this.#runtime;
     const machine = await new MachineCache(join(stateDir(), 'machine.json')).get();
-    this.#runtime = await buildRuntime(this.#opts.config, machine, undefined,
-      this.#opts.inprocLoad ? { inprocLoad: this.#opts.inprocLoad } : {});
+    // **土台の声を画面へ繋ぐ。**ここに undefined を渡していたので、
+    // 2GB を読む 30〜60秒のあいだ、画面には一行も出なかった。
+    // 待っているのか固まっているのかが分からない、いちばん困る形。
+    // 「合う道具の呼び方が見つからない」という警告も、ここで消えていた。
+    this.#runtime = await buildRuntime(
+      this.#opts.config, machine,
+      (text) => this.broadcast({ type: 'log', level: 'info', text }),
+      this.#opts.inprocLoad ? { inprocLoad: this.#opts.inprocLoad } : {},
+    );
     return this.#runtime;
   }
 

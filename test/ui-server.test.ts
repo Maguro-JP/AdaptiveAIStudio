@@ -380,3 +380,60 @@ describe('情報に、外の道具の繋がり具合が出る', () => {
     assert.equal(typeof info.mcp, 'string');
   });
 });
+
+describe('土台の声が、画面に届く', () => {
+  test('読み込みの進み具合と警告が、画面の流れに出る', async () => {
+    // ここに undefined を渡していたので、2GB を読む 30〜60秒のあいだ
+    // 画面には一行も出なかった。**待っているのか固まっているのかが分からない。**
+    // 「合う道具の呼び方が見つからない」という警告も、ここで消えていた。
+    const models = await tempDir('aas-log-');
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(join(models, 'm.gguf'), 'GGUF');
+
+    const s = new UiServer({
+      config: {
+        ...DEFAULT_CONFIG,
+        runtime: { kind: 'inproc', modelsDir: models, basePort: 0 },
+      },
+      port: 0,
+      // 本物は用意できない。**言うべきことを言う所まで**を見る。
+      inprocLoad: async () => ({
+        getLlama: async () => ({
+          loadModel: async (o: { onLoadProgress?: (d: number) => void }) => {
+            o.onLoadProgress?.(0.5);
+            return { createContext: async () => ({ getSequence: () => ({}), dispose: async () => {} }) };
+          },
+        }),
+        LlamaChatSession: class {
+          chatWrapper = { wrapperName: 'Llama2Chat' };
+          setChatHistory() {}
+          async prompt() { return ''; }
+        },
+      }),
+    });
+    const b = (await s.start()).replace(/\/$/, '');
+    const ac = new AbortController();
+    try {
+      const stream = await fetch(`${b}/api/events`, { signal: ac.signal });
+      const reader = stream.body!.getReader();
+      let seen = '';
+      const reading = (async () => {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          seen += new TextDecoder().decode(value);
+          if (seen.includes('当てずっぽう')) break;
+        }
+      })();
+      // 読ませる。ここで土台が立ち上がり、声が出る。
+      await fetch(`${b}/api/models`);
+      await fetch(`${b}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'やあ' }),
+      }).catch(() => undefined);
+      await Promise.race([reading, new Promise((r) => setTimeout(r, 8000))]);
+      assert.match(seen, /読み込み中 50%/, `進み具合が画面に出ていない: ${seen.slice(-300)}`);
+      assert.match(seen, /当てずっぽう/, `警告が画面に出ていない: ${seen.slice(-300)}`);
+    } finally { ac.abort(); await s.stop(); }
+  });
+});

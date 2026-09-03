@@ -184,21 +184,22 @@ jobs:
             AdaptiveAIStudio-portable-noexe.zip
 
   # ------------------------------------------------------------------
-  # インストーラ。NSIS が要るので Windows でしか組めない（枠は2倍）。
-  # だからタグのときだけ。
+  # インストーラ。**Linux で組む。**
+  #
+  # ここまで「NSIS は Windows でしか動かない」と思い込んで windows-2022 で
+  # 組んでいた。枠は2倍で数えられる。実際には makensis は Linux にもあり
+  # （apt の nsis）、同じ .nsi から同じ setup.exe が出る（手元で確かめた）。
+  # 枠は半分になる。手元では `npm run installer` で、枠を一度も払わずに組める。
   # ------------------------------------------------------------------
   installer:
     if: github.ref_type == 'tag' || startsWith(github.ref_name, 'release/v')
     needs: portable
-    # windows-latest は 2025 の像になり、NSIS が入っていない（像の一覧に無い）。
-    # 2022 の像には NSIS 3.10 が入っている。無ければ choco で入れる（保険）。
-    runs-on: windows-2022
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: NSIS が在るか見る（無ければ入れる）
-        shell: cmd
-        run: where makensis || choco install nsis -y --no-progress
+      - name: NSIS を入れる
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nsis
 
       - uses: actions/setup-node@v4
         with:
@@ -217,7 +218,6 @@ jobs:
       # portable と同じものを入れる。ここを抜かすと **setup.exe だけ
       # モデルを中で読めない**、という食い違いになる。
       - name: モデルを読むライブラリを入れる（win-x64 の分だけ）
-        shell: bash
         run: |
           # 一度に入れる（二回に分けると二回目が一回目を刈り取る）。
           npm install --no-save --no-audit --no-fund \
@@ -232,19 +232,27 @@ jobs:
           node -e "import('node-llama-cpp').then(() => console.log('import ok'))"
 
       - name: Node を取ってくる（同梱用）
-        shell: bash
         run: curl -fL --retry 3 -o node.exe "https://nodejs.org/dist/${NODEVER}/win-x64/node.exe"
 
       - name: 組み立てる
         run: node scripts/bundle.mjs --out installer/payload --node-exe node.exe --version "${{ steps.v.outputs.id }}"
 
       - name: インストーラ（setup.exe）
-        shell: cmd
         run: |
-          rem 持ち運びの目印は、入れる版には要らない。
-          rem 残すと、入れたのに data\ を自分の隣に作ってしまう。
-          del installer\payload\.portable
-          makensis /DVERSION=${{ steps.v.outputs.id }} installer\AdaptiveAIStudio.nsi
+          # 持ち運びの目印は、入れる版には要らない。
+          # 残すと、入れたのに data\ を自分の隣（Program Files）に作ってしまう。
+          rm -f installer/payload/.portable
+          # **`-D` で渡す。**Linux の makensis は `/VERSION` のような `/` 始まりを
+          # 「そういう名前のファイル」として読みに行く。
+          makensis -DVERSION=${{ steps.v.outputs.id }} installer/AdaptiveAIStudio.nsi
+          # 在るかどうかだけ見ない。組んだ後を開いて、入っているものを見る。
+          sudo apt-get install -y -qq p7zip-full
+          7z x -ox installer/AdaptiveAIStudio-Setup.exe > /dev/null
+          test "$(stat -c%s x/runtime/node.exe)" -gt 40000000
+          test -f x/app/node_modules/node-llama-cpp/dist/index.js
+          test -f x/app/node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
+          test ! -f x/.portable
+          ls -l installer/AdaptiveAIStudio-Setup.exe
 
       - uses: actions/upload-artifact@v4
         with:

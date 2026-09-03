@@ -114,6 +114,14 @@ export function tooBigForRam(sizeBytes: number | undefined, ramBytes: number): s
     + '小さい量子化（Q4_K_M など）か、小さいモデルを置いてください。';
 }
 
+/**
+ * 「合う型が見つからなかった」ときに落ちてくる先。
+ *
+ * ライブラリの既定の受け皿で、どのモデルでも一応動く。動くが、
+ * **道具の呼び方までは合っていない。**そこを黙らせない。
+ */
+const GUESSED_WRAPPERS = new Set(['General', 'Llama2Chat']);
+
 export class InProcRuntime implements LocalRuntime {
   readonly id = 'inproc';
   readonly #opts: InProcOptions;
@@ -141,6 +149,16 @@ export class InProcRuntime implements LocalRuntime {
 
   loaded(): string[] {
     return [...this.#sessions.keys()];
+  }
+
+  /**
+   * 読んだものの「道具の呼び方」。当てずっぽうなら、そう分かる形で返す。
+   * 画面と `doctor` から見る。**確かめる先が無いと、疑う先だけが増える。**
+   */
+  wrappers(): { ref: string; wrapper: string; guessed: boolean }[] {
+    return [...this.#sessions.entries()].map(([ref, h]) => ({
+      ref, wrapper: h.wrapper, guessed: GUESSED_WRAPPERS.has(h.wrapper),
+    }));
   }
 
   async ensureLoaded(ref: string): Promise<LoadedModel> {
@@ -184,8 +202,16 @@ export class InProcRuntime implements LocalRuntime {
     });
     const context = await model.createContext({ contextSize: this.#opts.contextSize ?? 8192 });
     const session = new lib.LlamaChatSession({ contextSequence: context.getSequence() }) as Held['session'];
-    this.#opts.onLog?.(`読み込みました: ${ref}`);
-    return { context, session, turn: Promise.resolve() };
+    const wrapper = session.chatWrapper?.wrapperName ?? '不明';
+    this.#opts.onLog?.(`読み込みました: ${ref}（道具の呼び方: ${wrapper}）`);
+    if (GUESSED_WRAPPERS.has(wrapper)) {
+      this.#opts.onLog?.(
+        `${ref} に合う道具の呼び方が分からず、当てずっぽうの型（${wrapper}）にしました。`
+        + 'このモデルは道具を一度も呼ばないかもしれません（会話はできます）。'
+        + '道具を使わせたいなら、Qwen など道具呼び出しを学んだモデルを置いてください。',
+      );
+    }
+    return { context, session, wrapper, turn: Promise.resolve() };
   }
 
   async unload(ref: string): Promise<void> {
@@ -396,7 +422,14 @@ export class InProcRuntime implements LocalRuntime {
     };
 
     if (body.stream === false) {
-      const text = await held.session.prompt(asked, opts);
+      // 道具を呼ぼうとして止めた道は、**投げて返ることがある**。
+      // そのときも、呼ぼうとしたことは持ち帰る（例外に化けさせない）。
+      let text = '';
+      try {
+        text = await held.session.prompt(asked, opts);
+      } catch (e) {
+        if (calls.length === 0) throw e;
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
         id: 'inproc', object: 'chat.completion', model: ref,
@@ -424,6 +457,12 @@ export class InProcRuntime implements LocalRuntime {
         choices: [{ index: 0, delta, finish_reason: finish }],
       })}\n\n`);
     };
+    /** 呼ぼうとした道具を流して終える。呼んでいなければ、ただ終える。 */
+    const finish = () => {
+      if (calls.length === 0) { chunk({}, 'stop'); return; }
+      calls.forEach((c, index) => chunk({ tool_calls: [{ index, ...toWire(c) }] }));
+      chunk({}, 'tool_calls');
+    };
     try {
       chunk({ role: 'assistant' });
       await held.session.prompt(asked, {
@@ -436,16 +475,16 @@ export class InProcRuntime implements LocalRuntime {
       // **投げずに返る道**（stopOnAbortSignal）を通ることがあるので、
       // ここでも見る。見ていなかったので、やめた後に 'stop' を送っていた。
       if (signal.aborted) { res.end(); return; }
-      if (calls.length > 0) {
-        calls.forEach((c, index) => chunk({ tool_calls: [{ index, ...toWire(c) }] }));
-        chunk({}, 'tool_calls');
-      } else {
-        chunk({}, 'stop');
-      }
+      finish();
     } catch (e) {
       if (signal.aborted) { res.end(); return; }
+      // **呼ぼうとした道具を、例外に化けさせない。**
+      // こちらは受け口の中で生成を止める。ライブラリがそれを「止められた」
+      // として投げてくると、何を呼ぼうとしたのかが消え、画面には
+      // 「止まりました」だけが出る。持っているなら、そちらを返す。
+      if (calls.length > 0) { finish(); }
       // 途中で落ちたことを、黙って握り潰さない。
-      chunk({ content: `\n[止まりました: ${(e as Error).message}]` }, 'stop');
+      else chunk({ content: `\n[止まりました: ${(e as Error).message}]` }, 'stop');
     }
     res.write('data: [DONE]\n\n');
     res.end();
@@ -491,9 +530,20 @@ interface LibFunction {
 }
 interface Held {
   context: { dispose?: () => Promise<void> };
+  /**
+   * ライブラリが選んだ「道具の呼び方」の型。
+   *
+   * ライブラリはモデルの中身から型を選ぶ。選び損ねると、当てずっぽうの型
+   * （Llama2Chat / General）に落ちる。落ちても**文法としては成立する**ので、
+   * 何も起きない。モデルはその呼び方を習っていないので、道具を一度も呼ばない。
+   * 画面からは「雑談しかしない」に見える。**見えるようにする。**
+   */
+  wrapper: string;
   session: {
     prompt: (text: string, opts?: PromptOptions) => Promise<string>;
     setChatHistory: (history: unknown[]) => void;
+    /** ライブラリが選んだ型。試験の差し替えには無いので、あってもなくてもよい。 */
+    chatWrapper?: { wrapperName?: string };
   };
   /**
    * 一つのモデルを、同時に二人で使わない約束。

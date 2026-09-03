@@ -18,11 +18,20 @@ import { InProcRuntime, toHistory, type ChatMessage } from '../src/runtime/inpro
 interface LibFn { description?: string; params?: unknown; handler: (a: unknown) => unknown }
 interface Seen { history: unknown[]; asked: string; functions?: Record<string, LibFn> }
 
+/** ライブラリが選んだ「道具の呼び方」の型。差し替えでも本物と同じ場所に置く。 */
+let wrapperName = 'QwenChatWrapper';
+
 /**
  * 本物の代わり。渡された道具のうち `wants` を、渡された引数で一度呼ぶ。
  * 本物と同じく、**受け口が止めたら、そこまでを返す**（投げない）。
  */
-function fakeLib(seen: Seen, wants?: { name: string; args: unknown }, said = '') {
+function fakeLib(
+  seen: Seen,
+  wants?: { name: string; args: unknown },
+  said = '',
+  /** 止められたときに投げる作り。本物がこちらだった場合に備える。 */
+  throws = false,
+) {
   return async () => ({
     getLlama: async () => ({
       loadModel: async () => ({
@@ -30,6 +39,7 @@ function fakeLib(seen: Seen, wants?: { name: string; args: unknown }, said = '')
       }),
     }),
     LlamaChatSession: class {
+      chatWrapper = { wrapperName };
       setChatHistory(h: unknown[]) { seen.history = h; }
       async prompt(text: string, o: {
         onTextChunk?: (t: string) => void;
@@ -47,6 +57,7 @@ function fakeLib(seen: Seen, wants?: { name: string; args: unknown }, said = '')
           // 受け口の中で止められたはず。本物はそこで生成をやめる。
           assert.equal(o.signal?.aborted, true, '受け口で止めたのに、止まっていない');
           assert.equal(o.stopOnAbortSignal, true, '止めると投げる設定のままになっている');
+          if (throws) throw new Error('AbortError');
         }
         return said;
       }
@@ -84,10 +95,12 @@ async function readStream(res: Response): Promise<{
   return { text, calls, finish };
 }
 
-async function serve(seen: Seen, wants?: { name: string; args: unknown }, said = '') {
+async function serve(
+  seen: Seen, wants?: { name: string; args: unknown }, said = '', throws = false,
+) {
   const dir = await tempDir('aas-tools-');
   await writeFile(join(dir, 'm.gguf'), 'GGUF');
-  const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: fakeLib(seen, wants, said) });
+  const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: fakeLib(seen, wants, said, throws) });
   const { baseUrl } = await rt.ensureLoaded('m.gguf');
   return { rt, baseUrl };
 }
@@ -142,6 +155,63 @@ describe('GGUF だけで道具を呼ぶ', () => {
       assert.equal(got.finish, 'stop');
       assert.deepEqual(got.calls, []);
       assert.equal(seen.functions, undefined, '道具を渡していないのに、渡している');
+    } finally { await rt.shutdown(); }
+  });
+
+  test('止めたときに投げてくる作りでも、呼び出しを落とさない', async () => {
+    // こちらは受け口の中で生成を止める。ライブラリがそれを「止められた」
+    // として投げてくると、**何を呼ぼうとしたのかが例外に化けて消える**。
+    // 画面には「止まりました」だけが出て、道具は一つも動かない。
+    const seen: Seen = { history: [], asked: '' };
+    const { rt, baseUrl } = await serve(seen, { name: 'read_file', args: { path: 'x' } }, '', true);
+    try {
+      const r = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'm.gguf', stream: true, tools: TOOLS,
+          messages: [{ role: 'user', content: 'x を読んで' }],
+        }),
+      });
+      const got = await readStream(r);
+      assert.equal(got.finish, 'tool_calls', `投げられた拍子に ${got.finish} になっている`);
+      assert.equal(got.calls[0]?.name, 'read_file');
+      assert.ok(!got.text.includes('止まりました'), `例外に化けている: ${got.text}`);
+    } finally { await rt.shutdown(); }
+  });
+
+  test('道具を呼んでいないのに落ちたら、そう言う（対）', async () => {
+    // 何でも道具の形で返す作りにすると、本当の故障が黙って消える。
+    const seen: Seen = { history: [], asked: '' };
+    const dir = await tempDir('aas-tools-err-');
+    await writeFile(join(dir, 'm.gguf'), 'GGUF');
+    const rt = new InProcRuntime({
+      modelsDir: dir, port: 0,
+      load: async () => ({
+        getLlama: async () => ({
+          loadModel: async () => ({
+            createContext: async () => ({ getSequence: () => ({}), dispose: async () => {} }),
+          }),
+        }),
+        LlamaChatSession: class {
+          setChatHistory(h: unknown[]) { seen.history = h; }
+          async prompt(): Promise<string> { throw new Error('記憶が足りません'); }
+        },
+      }),
+    });
+    try {
+      const { baseUrl } = await rt.ensureLoaded('m.gguf');
+      const r = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'm.gguf', stream: true, tools: TOOLS,
+          messages: [{ role: 'user', content: 'やあ' }],
+        }),
+      });
+      const got = await readStream(r);
+      assert.match(got.text, /記憶が足りません/, '落ちたことを握り潰している');
+      assert.equal(got.finish, 'stop');
     } finally { await rt.shutdown(); }
   });
 
@@ -222,5 +292,45 @@ describe('履歴の組み直し', () => {
 
   test('何も言っていない行は置かない', () => {
     assert.deepEqual(toHistory([{ role: 'assistant', content: '' }]), []);
+  });
+});
+
+describe('道具の呼び方が合っているか、言う', () => {
+  test('当てずっぽうの型に落ちたら、そう言う', async () => {
+    // ライブラリはモデルの中身から型を選ぶ。選び損ねると General /
+    // Llama2Chat に落ちる。**文法としては成立してしまう**ので、何も起きない。
+    // モデルはその呼び方を習っていないので、道具を一度も呼ばない。
+    // 画面からは「雑談しかしない」に見える。黙らせない。
+    const seen: Seen = { history: [], asked: '' };
+    const said: string[] = [];
+    const dir = await tempDir('aas-wrap-');
+    await writeFile(join(dir, 'm.gguf'), 'GGUF');
+    wrapperName = 'Llama2Chat';
+    const rt = new InProcRuntime({
+      modelsDir: dir, port: 0, load: fakeLib(seen), onLog: (l) => said.push(l),
+    });
+    try {
+      await rt.ensureLoaded('m.gguf');
+      assert.deepEqual(rt.wrappers(), [{ ref: 'm.gguf', wrapper: 'Llama2Chat', guessed: true }]);
+      assert.ok(said.some((l) => l.includes('当てずっぽう')), `言っていない: ${said.join(' / ')}`);
+    } finally { await rt.shutdown(); wrapperName = 'QwenChatWrapper'; }
+  });
+
+  test('合う型が見つかったら、騒がない（対）', async () => {
+    // 何にでも警告を出すと、出ているのが普通になって誰も読まなくなる。
+    const seen: Seen = { history: [], asked: '' };
+    const said: string[] = [];
+    const dir = await tempDir('aas-wrap2-');
+    await writeFile(join(dir, 'm.gguf'), 'GGUF');
+    const rt = new InProcRuntime({
+      modelsDir: dir, port: 0, load: fakeLib(seen), onLog: (l) => said.push(l),
+    });
+    try {
+      await rt.ensureLoaded('m.gguf');
+      assert.equal(rt.wrappers()[0]?.guessed, false);
+      assert.ok(!said.some((l) => l.includes('当てずっぽう')), `要らない警告を出している: ${said.join(' / ')}`);
+      // どの型で読んだかは、いつでも出す（確かめる先が無いと、疑う先が増える）。
+      assert.ok(said.some((l) => l.includes('QwenChatWrapper')), `型を言っていない: ${said.join(' / ')}`);
+    } finally { await rt.shutdown(); }
   });
 });
