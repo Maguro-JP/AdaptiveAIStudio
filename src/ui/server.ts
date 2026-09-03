@@ -11,6 +11,7 @@
  * 素の HTML と ES モジュールなら、組み立ての手順すら要らない。
  */
 import { listDir } from './files.ts';
+import { UnfinishedWork, resumePrompt, whyText } from '../core/unfinished.ts';
 import { Conversations, ID_SHAPE } from '../core/conversations.ts';
 import { writeEnvValue } from '../core/env.ts';
 import { canRun } from '../core/which.ts';
@@ -112,6 +113,8 @@ export type UiEvent =
   | { type: 'queue'; waiting: number }
   /** 会話の一覧が変わった。画面は取り直す。 */
   | { type: 'conversations' }
+  /** やり残しの控えが動いた。画面に取り直させる。 */
+  | { type: 'unfinished' }
   /** 暇なときの考えごと。送りは止めないが、動いていることは見せる。 */
   | { type: 'musing'; on: boolean }
   /** 分解して並列に働かせているときの出来事。 */
@@ -149,6 +152,14 @@ export class UiServer {
    * ここまでメモリの中だけだったので、立ち上げ直すと無かったことになっていた。
    */
   readonly #conversations = new Conversations(join(stateDir(), 'conversations'));
+  /**
+   * やり残し。**ファイルに残す。**窓を閉じても、機械を落としても残る。
+   * 記憶の中だけだと、いちばん続きが要るとき（長い作業の途中で落ちた）に
+   * きれいに消える。
+   */
+  readonly #unfinished = new UnfinishedWork(join(stateDir(), 'unfinished.jsonl'));
+  /** いま続きとして流しているやり残し。片づいたら外すために持つ。 */
+  #resuming?: string;
   /** いま話している会話。最初の依頼のときに決まる。 */
   #conversationId?: string;
   /** どこまで残したか。ここから先を足す。 */
@@ -324,6 +335,7 @@ export class UiServer {
    *
    * 何をしたかを符丁で返す（検査で見るため）。
    *   BUSY     作業中か支度中。人の依頼が先
+   *   RESUMED  やり残しの続きを始めた
    *   HELD     前にモデルが無かったので、しばらく試さない
    *   MISSING  モデルが無い。次はしばらく試さない
    *   THOUGHT  考えた（考えなかったことも含む。決めるのは中のスケジューラ）
@@ -331,12 +343,17 @@ export class UiServer {
    * **考える前に、モデルの支度をする。**この中で読む道では、読むまで口が
    * 立たない。支度せずに考えに行くと、30秒ごとに「繋がりません」を作る。
    */
-  async idleTick(session: Session): Promise<'BUSY' | 'HELD' | 'MISSING' | 'THOUGHT'> {
+  async idleTick(session: Session): Promise<'BUSY' | 'HELD' | 'MISSING' | 'THOUGHT' | 'RESUMED'> {
     // 作業中は考えない。人の依頼が先。支度の最中も、人の依頼のうち。
     if (this.#busyNow(session)) return 'BUSY';
     // **順番待ちがあるなら、暇ではない。**ここで考え始めると、
     // 待っている依頼が、その分だけ後ろへ押しやられる。
     if (this.#queue.length > 0) { void this.#maybeDrain(); return 'BUSY'; }
+
+    // **やり残しが先。**考えごとより、頼まれて終わっていない方が先。
+    // ここが無いと、40往復で切れた作業は、人が言い直すまで誰も続けない。
+    if (await this.#resumeUnfinished(session)) return 'RESUMED';
+
     if (Date.now() < this.#idleHoldUntil) return 'HELD';
     this.#preparing = true;
     try {
@@ -841,6 +858,31 @@ export class UiServer {
       return send(res, 200, { current: head.id, messages: [] });
     }
 
+    // やり残しの控え。**見えないところで動かさない。**
+    // 知らないうちに作業場が変わるのが、いちばん怖い。見えて、やめられること。
+    if (path === '/api/unfinished' && req.method === 'GET') {
+      const list = await this.#unfinished.list();
+      return send(res, 200, {
+        list: list.map((u) => ({
+          id: u.id,
+          request: u.request,
+          why: u.why,
+          whyText: whyText(u.why),
+          attempts: u.attempts,
+          nextAt: u.nextAt,
+          running: u.id === this.#resuming,
+        })),
+      });
+    }
+
+    if (path === '/api/unfinished' && req.method === 'DELETE') {
+      const id = url.searchParams.get('id') ?? '';
+      if (!id) return send(res, 400, { error: 'id がありません' });
+      await this.#unfinished.cancel(id);
+      this.broadcast({ type: 'unfinished' });
+      return send(res, 200, { canceled: id });
+    }
+
     if (path === '/api/conversations/select' && req.method === 'POST') {
       const body = await readBody(req) as { id?: unknown };
       const id = typeof body?.id === 'string' ? body.id : '';
@@ -1109,15 +1151,19 @@ export class UiServer {
       + '設定 → モデル に、いま見ている置き場が出ています。そこへ .gguf を1つ置いてください。';
   }
 
-  async #drive(session: Session, text: string): Promise<void> {
+  async #drive(session: Session, text: string, resuming?: string): Promise<void> {
     this.broadcast({ type: 'busy', busy: true });
+    // どう終わったか。**終わり方を見て、やり残しを控える。**
+    let settled: { reason: string; verified: boolean } | undefined;
     try {
       for await (const event of session.send(text)) {
+        if (event.type === 'settled') settled = { reason: event.reason, verified: event.verified };
         this.broadcast({ type: 'session', event });
       }
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
     } finally {
+      await this.#recordUnfinished(text, settled, resuming);
       // **残してから、次へ進む。**先に次を流すと、落ちたときに
       // その回のやりとりが消える。
       await this.#persist(session);
@@ -1125,6 +1171,108 @@ export class UiServer {
       // 作業で記憶やファイルが動いている。画面の材料を取り直させる。
       this.broadcast({ type: 'stateChanged' });
       await this.#drainQueue(session);
+    }
+  }
+
+  /**
+   * やり残しの続きを、こちらから始める。
+   *
+   * **これが「自律的に進める」の中身。**控えるだけでは、人が言い直すまで
+   * 動かない。手が空いた時点で、こちらから拾う。
+   *
+   * すぐには戻らない（`BACKOFF_MS`）。落ちた直後にそのまま戻すと、
+   * 同じところで同じように落ちて、枠と電気を使うだけになる。
+   *
+   * 一度に一つだけ。まとめて始めると、どれが動いているのか分からなくなる。
+   */
+  async #resumeUnfinished(session: Session): Promise<boolean> {
+    let item;
+    try {
+      item = await this.#unfinished.due();
+    } catch { return false; }
+    if (!item) return false;
+
+    // モデルが無ければ、続けようがない。控えはそのまま残す。
+    if (await this.#readyToThink()) {
+      this.#idleHoldUntil = Date.now() + 10 * 60_000;
+      return false;
+    }
+
+    // **黙って動き出さない。**知らないうちに作業場が変わるのが、いちばん怖い。
+    this.broadcast({
+      type: 'log', level: 'info',
+      text: `やり残しの続きを始めます（${item.attempts + 1} 回目）: ${item.request.split('\n')[0]?.slice(0, 60) ?? ''}`,
+    });
+    this.#resuming = item.id;
+    // 元の会話へ戻して続ける。別の会話で続けると、話が二つに割れる。
+    if (item.conversationId && item.conversationId !== this.#conversationId) {
+      const past = await this.#conversations.load(item.conversationId).catch(() => undefined);
+      if (past) {
+        this.#conversationId = item.conversationId;
+        this.#saved = past.length;
+        session.restore(past);
+        this.broadcast({ type: 'conversations' });
+      }
+    }
+    void this.#drive(session, resumePrompt(item), item.id)
+      .finally(() => { this.#resuming = undefined; });
+    return true;
+  }
+
+  /**
+   * やり残しを控える／片づける。
+   *
+   * ここまで、40往復で切れても、押し戻しても動かなくても、**そこで終わり**
+   * だった。次に人が同じことを言い直すまで、誰も続けない。
+   * 「自律的に進める」と言いながら、続きは人が覚えている前提だった。
+   *
+   * 覚えるのはこちらの仕事。
+   */
+  async #recordUnfinished(
+    text: string, settled: { reason: string; verified: boolean } | undefined, resuming?: string,
+  ): Promise<void> {
+    const done = settled?.reason === 'completed' && settled.verified;
+    try {
+      // 続きとして流したものが片づいたなら、控えから外す。
+      if (resuming && done) {
+        await this.#unfinished.done(resuming);
+        this.broadcast({ type: 'log', level: 'info', text: 'やり残しが片づきました' });
+        this.broadcast({ type: 'unfinished' });
+        return;
+      }
+      if (resuming) {
+        // まだ終わっていない。次はもっと後にする。
+        const { gaveUp, attempts } = await this.#unfinished.bump(resuming);
+        this.broadcast({
+          type: 'log', level: gaveUp ? 'warn' : 'info',
+          text: gaveUp
+            ? `${attempts} 回試しても終わらないので、やり残しを諦めました。手で見てください。`
+            : `やり残しは、しばらく置いてからまた試します（${attempts} 回目）`,
+        });
+        this.broadcast({ type: 'unfinished' });
+        return;
+      }
+      if (done || !settled) return;
+
+      const why = settled.reason === 'maxTurns' ? 'maxTurns'
+        : settled.reason === 'noProgress' ? 'noProgress'
+        : settled.reason === 'completed' ? 'unverified'
+        : 'failed';
+      const added = await this.#unfinished.add({
+        request: text,
+        why,
+        note: settled.reason,
+        ...(this.#conversationId ? { conversationId: this.#conversationId } : {}),
+      });
+      if (!added) return;
+      // **黙って控えない。**知らないうちに勝手に動き出すのがいちばん怖い。
+      this.broadcast({
+        type: 'log', level: 'info',
+        text: `終わっていないので、手が空いたら続きをやります（${whyText(why)}）`,
+      });
+      this.broadcast({ type: 'unfinished' });
+    } catch (e) {
+      this.broadcast({ type: 'log', level: 'error', text: `やり残しを控えられません: ${(e as Error).message}` });
     }
   }
 

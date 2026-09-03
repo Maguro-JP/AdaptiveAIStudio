@@ -380,6 +380,7 @@ function listen() {
       drawConversations();
     }
     if (e.type === 'conversations') void loadConversations();
+    if (e.type === 'unfinished') void loadUnfinished();
     if (e.type === 'musing' && !busyNow) {
       // 暇なときの考えごと。送りは止まらないので、待機中とは分けて言う。
       run.set(e.on ? 'musing' : 'idle', e.on ? '考えごと中（暇なとき）' : '待機中');
@@ -483,6 +484,46 @@ $('ghReload').onclick = () => { void loadMcp(); };
  */
 let conversations = { current: null, list: [] };
 let busyNow = false;
+
+/**
+ * やり残しを出す。
+ *
+ * **見えて、やめられること。**控えるだけなら覚え書きだが、こちらから
+ * 勝手に続きを始めるので、何が残っているかは常に見えていないといけない。
+ */
+async function loadUnfinished() {
+  let data;
+  try {
+    data = await fetch('/api/unfinished').then((x) => x.json());
+  } catch { return; }
+  const sec = $('unfinishedSec');
+  const box = $('sideUnfinished');
+  const list = data.list ?? [];
+  sec.hidden = list.length === 0;
+  box.textContent = '';
+  for (const u of list) {
+    const row = document.createElement('div');
+    row.className = 'side-row';
+
+    const label = document.createElement('button');
+    label.className = 'ghost row grow';
+    label.title = `${u.whyText}（${u.attempts} 回試しました）`;
+    label.textContent = (u.running ? '▶ ' : '') + u.request.split('\n')[0].slice(0, 40);
+    label.disabled = true;
+
+    const stop = document.createElement('button');
+    stop.className = 'ghost icon';
+    stop.title = 'これはもうやらない';
+    stop.textContent = '×';
+    stop.addEventListener('click', async () => {
+      await fetch(`/api/unfinished?id=${encodeURIComponent(u.id)}`, { method: 'DELETE' });
+      await loadUnfinished();
+    });
+
+    row.append(label, stop);
+    box.append(row);
+  }
+}
 
 async function loadConversations() {
   try {
@@ -1028,6 +1069,7 @@ await load();
 await refreshState();
 await loadFiles();
 await loadConversations();
+await loadUnfinished();
 // 開き直したときは、続きの会話をそのまま出す。空の画面から始めない。
 if (conversations.current) {
   try {

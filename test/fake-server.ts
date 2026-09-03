@@ -13,6 +13,13 @@ export type Behavior =
    * 実際に、読まずに書いて弾かれる形しか通していなかった。
    */
   | { kind: 'steps'; calls: Array<{ name: string; args: Record<string, unknown> }>; then: string }
+  /**
+   * 道具を呼んだあと、**終わりの合図を書かずに手を止める。**
+   *
+   * ローカルの小さいモデルが実際にする止まり方。「では、このあと直します」
+   * と言って返してくる。押し戻しても同じことを言う。
+   */
+  | { kind: 'stalls'; name: string; args: Record<string, unknown>; then: string }
   | { kind: 'status'; status: number; body?: string; retryAfter?: string }
   | { kind: 'hang' };
 
@@ -70,6 +77,23 @@ export async function startFakeServer(initial: Behavior): Promise<FakeServer> {
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
       } else {
         for (const ch of withDone(behavior.then)) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: ch } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
+      }
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
+    }
+
+    if (behavior.kind === 'stalls') {
+      const messages = (body as { messages?: { role?: string }[] } | undefined)?.messages ?? [];
+      const answered = messages.some((m) => m.role === 'tool');
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      if (!answered) {
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: behavior.name, arguments: JSON.stringify(behavior.args) } }] } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
+      } else {
+        // **合図を書かない。**押し戻されても、同じことを言う。
+        for (const ch of behavior.then) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: ch } }] })}\n\n`);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
       }
       res.write('data: [DONE]\n\n');
