@@ -238,7 +238,24 @@ button.ghost:hover { color: var(--text); background: var(--surface2); }
 
 /* ---------- 枠 ---------- */
 
-.root { flex: 1; min-height: 0; padding: var(--gap); }
+/*
+ * **縮めるようにしておく。**flex の子は、既定では中身より小さくならない。
+ * min-width を 0 にしていなかったので、窓を狭めると板が窓の外へ出て、
+ * 入力欄まで届かなくなっていた（720px で実測）。
+ */
+.root { flex: 1; min-width: 0; min-height: 0; padding: var(--gap); }
+
+/*
+ * 狭い窓では、横の板を重ねて出す。並べたままだと会話が潰れる。
+ * 畳んだときのつまみは板の外なので、狭くても開き直せる。
+ */
+@media (max-width: 860px) {
+  .side {
+    position: absolute; z-index: 5; top: 0; bottom: 0; left: 0;
+    box-shadow: var(--shadow), 8px 0 24px rgba(0, 0, 0, .35);
+  }
+  .shell { position: relative; }
+}
 
 .split { display: flex; gap: var(--gap); min-width: 0; min-height: 0; height: 100%; }
 .split.column { flex-direction: column; }
@@ -515,9 +532,15 @@ button.tiny { font-size: .74rem; padding: 2px 7px; }
 /* ---------- 書くところ ---------- */
 
 .chat form { display: flex; gap: var(--s2); align-items: flex-end; flex: 0 0 auto; }
+/*
+ * 入力欄。**狭くなったら、押すものを下の段へ折り返す。**
+ * 一行に並べたままだと、板が狭いときに入力欄が 147px まで潰れて、
+ * 何を書いているのか見えなくなる（1024px の窓で実測）。
+ */
 .field {
   flex: 1;
   display: flex; align-items: flex-end; gap: var(--s2);
+  flex-wrap: wrap;
   background: var(--surface2);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -526,7 +549,9 @@ button.tiny { font-size: .74rem; padding: 2px 7px; }
 }
 .field:focus-within { border-color: var(--accent); }
 .field textarea {
-  flex: 1; border: 0; background: transparent; padding: 6px 0;
+  /* 折り返しても潰れないよう、下限を決める。 */
+  flex: 1 1 14rem; min-width: 12rem;
+  border: 0; background: transparent; padding: 6px 0;
   resize: none; font-family: var(--font); font-size: 1rem;
   max-height: 180px; height: auto; min-height: 2.1em;
 }

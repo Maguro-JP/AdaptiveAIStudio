@@ -41,6 +41,15 @@ p.on('response', (r) => {
 await p.goto(url, { waitUntil: 'networkidle' });
 await p.waitForTimeout(800);
 
+/** 設定の板を閉じる。開いたままだと、後の確かめが全部その板に阻まれる。 */
+const closeSettings = async () => {
+  if (!(await p.locator('#settings').isVisible())) return;
+  await p.locator('#settings menu button[value="close"]').click({ timeout: 5000 }).catch(async () => {
+    await p.keyboard.press('Escape');
+  });
+  await p.waitForTimeout(400);
+};
+
 const check = async (name, fn) => {
   try { await fn(); } catch (e) { bad.push(`${name}: ${String(e.message ?? e).split('\n')[0]}`); }
 };
@@ -117,6 +126,78 @@ await check('送って返る', async () => {
   const log = await p.locator('.chat .log').innerText();
   if (!log.includes('掃除の確かめ')) throw new Error('送ったものが出ていない');
 });
+// 狭い窓。横の板と会話が重なって、押せなくなっていないか。
+await check('狭い窓（1024）', async () => {
+  await p.setViewportSize({ width: 1024, height: 768 });
+  await p.waitForTimeout(400);
+  const t = p.locator('.chat textarea');
+  if (!(await t.isVisible())) throw new Error('入力欄が見えない');
+  const box = await t.boundingBox();
+  if (!box || box.width < 200) throw new Error(`入力欄が潰れている: ${box?.width ?? 0}px`);
+  const send = await p.locator('.chat .send').boundingBox();
+  if (!send || send.width < 20) throw new Error('送るボタンが潰れている');
+});
+await check('もっと狭い窓（720）', async () => {
+  await p.setViewportSize({ width: 720, height: 720 });
+  await p.waitForTimeout(400);
+  const t = p.locator('.chat textarea');
+  if (!(await t.isVisible())) throw new Error('入力欄が見えない');
+  // 横に溢れていないか。溢れると、押したいものが画面の外へ出る。
+  const over = await p.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 2);
+  if (over) throw new Error('横に溢れている');
+  await p.setViewportSize({ width: 1440, height: 900 });
+  await p.waitForTimeout(300);
+});
+
+// 見た目の切り替え。選べるのに何も起きない、を作らない。
+await check('見た目を切り替える', async () => {
+  try {
+    await p.locator('#openSettings').click();
+    await p.waitForTimeout(700);
+    await p.locator('.tabs-lite button[data-sec="look"]').click();
+    await p.waitForTimeout(500);
+    const ids = await p.locator('#themes option').evaluateAll((els) => els.map((e) => e.value));
+    if (ids.length === 0) throw new Error('土台の選択肢が空');
+    // **いま選ばれているものを選び直しても、何も起きなくて当たり前。**別のものを選ぶ。
+    const now = await p.locator('#themes').inputValue();
+    const other = ids.find((v) => v !== now);
+    if (!other) throw new Error('選べる土台が一つしかない');
+    const before = await p.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    await p.selectOption('#themes', other);
+    await p.waitForTimeout(1000);
+    const after = await p.evaluate(() => getComputedStyle(document.body).backgroundColor);
+    if (before === after) throw new Error(`選んでも見た目が変わらない: ${now} → ${other}`);
+  } finally {
+    // **落ちても閉じる。**開いたままだと、後の確かめが全部その板に阻まれる。
+    await closeSettings();
+  }
+});
+
+// 配置の切り替え。板の並びが実際に変わるか。
+await check('配置を切り替える', async () => {
+  try {
+    await p.locator('#openSettings').click();
+    await p.waitForTimeout(700);
+    await p.locator('.tabs-lite button[data-sec="place"]').click();
+    await p.waitForTimeout(500);
+    const ids = await p.locator('#presets option').evaluateAll((els) => els.map((e) => e.value));
+    if (ids.length === 0) throw new Error('型の選択肢が空');
+    const now = await p.locator('#presets').inputValue();
+    const other = ids.find((v) => v !== now);
+    if (!other) throw new Error('選べる型が一つしかない');
+    const before = await p.locator('#root .panel').count();
+    await p.selectOption('#presets', other);
+    await p.waitForTimeout(1000);
+    const after = await p.locator('#root .panel').count();
+    if (after === 0) throw new Error('板が一つも無くなった');
+    if (before === after) throw new Error(`選んでも並びが変わらない: ${now} → ${other}`);
+  } finally {
+    await closeSettings();
+  }
+  // 会話の板は、どの並びでも要る。無いと何も打てない。
+  if (!(await p.locator('.chat textarea').isVisible())) throw new Error('会話の入力欄が消えた');
+});
+
 await check('作業場を開く', async () => {
   const dirs = p.locator('#sideFiles button');
   if (await dirs.count() === 0) throw new Error('作業場が空');
