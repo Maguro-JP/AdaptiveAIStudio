@@ -21,7 +21,8 @@
     "llama": "node --experimental-strip-types --no-warnings src/cli/llama.ts",
     "selftest": "node --experimental-strip-types --no-warnings src/cli/selftest.ts",
     "clean": "node --experimental-strip-types --no-warnings src/cli/clean.ts",
-    "bundle": "node scripts/bundle.mjs --node-here --out dist/AdaptiveAIStudio"
+    "bundle": "node scripts/bundle.mjs --node-here --out dist/AdaptiveAIStudio",
+    "sweep": "node scripts/sweep.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

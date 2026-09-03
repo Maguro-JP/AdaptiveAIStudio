@@ -520,10 +520,22 @@ function insertPath(path) {
   input.focus();
 }
 
-$('sideToggle').onclick = () => {
-  const side = $('side');
-  side.hidden = !side.hidden;
-};
+/**
+ * 横の板の開け閉め。
+ *
+ * **閉じたら開けない、を作らない。**つまみを板の中に置いていたので、
+ * 畳むと押すものごと消えて、二度と開けなかった（利用者から言われた）。
+ * 開き直すつまみは板の外にあり、畳んだときだけ出る。
+ */
+function showSide(on) {
+  $('side').hidden = !on;
+  $('sideOpen').hidden = on;
+  try { localStorage.setItem('aas.side', on ? '1' : '0'); } catch { /* 使えない環境もある */ }
+}
+$('sideToggle').onclick = () => showSide(false);
+$('sideOpen').onclick = () => showSide(true);
+// 前回どうしていたかを覚えておく。毎回畳み直させない。
+try { if (localStorage.getItem('aas.side') === '0') showSide(false); } catch { /* 同上 */ }
 
 /* ---------- 配置を直接いじる ---------- */
 
@@ -717,8 +729,15 @@ const DIR_NOTES = {
 
 /** いまの設定を読み出して、画面へ映す。 */
 async function loadCfg() {
-  const c = await fetch('/api/config').then((r) => r.json()).catch(() => null);
-  if (!c) return;
+  const c = await fetch('/api/config').then((r) => r.json()).catch((e) => ({ failed: String(e.message ?? e) }));
+  // **黙って空欄にしない。**選択肢が一つも無い画面を出されても、
+  // 利用者には何が起きたのか分からない（実際にそう出た）。
+  if (!c || c.failed || c.error) {
+    $('cfgNote').style.whiteSpace = 'pre-line';
+    $('cfgNote').textContent = `設定を読めませんでした。\n${c?.failed ?? c?.error ?? '理由が取れませんでした'}\n`
+      + '「点検」を開くと、どこで止まっているかが出ます。';
+    if (!c?.kinds?.length) return;
+  }
   const sel = $('cfgKind');
   sel.replaceChildren();
   for (const k of c.kinds ?? []) {

@@ -77,6 +77,15 @@ body {
 /* 畳んだとき。板ごと消すのではなく、幅だけ落とす（開き直すのが速い）。 */
 .side[hidden] { display: none; }
 
+/* 畳んだときのつまみ。板の外なので、消えない。 */
+.side-open {
+  flex: 0 0 auto; align-self: flex-start;
+  margin: var(--s2) 0 0 var(--s1);
+  padding: 6px 8px;
+  background: var(--surface); border-color: var(--line); color: var(--dim);
+}
+.side-open:hover { color: var(--text); }
+
 .side-top { display: flex; align-items: center; gap: var(--s2); }
 .side-top .brand { flex: 1; min-width: 0; font-size: .95rem; }
 

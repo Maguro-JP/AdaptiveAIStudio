@@ -699,64 +699,31 @@ export class UiServer {
     }
 
     if (path === '/api/config' && req.method === 'GET') {
-      // **保存してあるもの**を読む。立ち上げたときのものを見せると、
-      // 保存した直後に古い値が出て「効いていない」ように見える。
-      const saved = await readSavedRuntime();
-      const active = this.#opts.config.runtime ?? {};
-      // 書いてあるものが無ければ、いま読み込んだ既定（設定が無ければ inproc）を見せる。
-      // ここだけ 'ollama' と決め打つと、既定で動いているものと画面の表示が食い違う。
-      const kind = String(saved.kind ?? this.#opts.config.runtime?.kind ?? 'ollama');
-      const dir = await savedModelsDir();
-      return send(res, 200, {
-        path: configPath(),
-        kinds: RUNTIME_KINDS.map((id) => ({ id, name: KIND_LABELS[id] })),
-        kind,
-        modelsDir: dir,
-        // 使うと決めた GGUF。無ければ置き場の最初の一つを読む。
-        model: typeof saved.model === 'string' ? saved.model : null,
-        // いま動いているもの。保存したものと違えば、立ち上げ直しが要る。
-        active: { kind: active.kind ?? 'ollama', modelsDir: active.modelsDir ?? modelsDir() },
-        restartNeeded: kind !== (active.kind ?? 'ollama')
-          || dir !== (active.modelsDir ?? modelsDir()),
-        // 置き場にある GGUF。「置いたのに認識しない」を画面で確かめられるように。
-        // 記憶に載らないものは、載らないと添える。読む前に分かるように。
-        gguf: await Promise.all((await listGguf(dir)).map(async (m) => ({
-          ...m,
-          tooBig: tooBigForRam(m.sizeBytes, totalmem()) ?? null,
-          // 名前だけ .gguf の別物も、一覧で分かるように。
-          notGguf: !(await looksLikeGguf(join(dir, m.ref))),
-        }))),
-        // GGUF が0件のとき、置き場そのものが無いのか、空なのかで打つ手が違う。
-        dirState: await inspectModelsDir(dir),
-      });
+      // **ここで落ちない。**落ちると画面は何も言わずに空欄のまま出る。
+      // 利用者からは「選択肢が一つも無い」としか見えず、理由が分からない。
+      try {
+        return await this.#configView(res);
+      } catch (e) {
+        return send(res, 200, {
+          path: configPath(),
+          kinds: RUNTIME_KINDS.map((id) => ({ id, name: KIND_LABELS[id] })),
+          kind: this.#opts.config.runtime?.kind ?? 'ollama',
+          modelsDir: '',
+          model: null,
+          active: { kind: this.#opts.config.runtime?.kind ?? 'ollama', modelsDir: '' },
+          restartNeeded: false,
+          gguf: [],
+          dirState: 'OK',
+          error: `設定を読めませんでした: ${(e as Error).message}`,
+        });
+      }
     }
 
     if (path === '/api/config' && req.method === 'PUT') {
-      const body = await readBody(req) as { kind?: string; modelsDir?: string; model?: string };
-      const kind = body?.kind;
-      if (!isRuntimeKind(kind)) return send(res, 400, { error: 'そういう動かし方はありません' });
-      const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
-      // 使う GGUF。名前に道を混ぜさせない（置き場の中の名前だけ）。
-      const model = typeof body?.model === 'string' ? body.model.trim() : undefined;
-      if (model && /[\\/]/.test(model)) return send(res, 400, { error: 'モデルは置き場の中の名前で指定してください' });
-      // 打った場所は見るだけ。既定の場所は、無ければ作る。
-      // 「GGUF を置くだけ」と言っておいて置き場が無いのは、案内になっていない。
-      const dirState = dir
-        ? await inspectModelsDir(dir)
-        : await ensureDefaultModelsDir(modelsDir());
-      const at = await saveRuntime(kind, dir, model);
-      this.broadcast({ type: 'log', level: 'info', text: `設定を書きました: ${at}` });
-      return send(res, 200, {
-        path: at,
-        saved: { kind, modelsDir: dir || null, ...(model !== undefined ? { model: model || null } : {}) },
-        // 打ち間違えても保存はできる。だから**保存したときに言う。**
-        dirState,
-        // 動かし方の切り替えは、立ち上げ直すまで効かない。黙って効いた顔をしない。
-        restartNeeded: kind !== (this.#opts.config.runtime?.kind ?? 'ollama')
-          || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir())
-          || (model !== undefined && (model || undefined) !== this.#opts.config.runtime?.model),
-      });
+      return this.#saveConfig(req, res);
     }
+
+
 
     if (path === '/api/info' && req.method === 'GET') {
       // cmd の窓でしか見られなかったものを、画面から見られるようにする。
@@ -836,7 +803,11 @@ export class UiServer {
       const list = await this.#conversations.list();
       // 続きがあるなら、画面が開いた時点で決めておく。
       // 「どれを開いているのか」が空のままだと、消えたように見える。
-      if (!this.#conversationId && list.length > 0) await this.#currentConversation();
+      // **一覧を見ただけでは作らない。**作ると、開くたびに空の会話が増える。
+      if (!this.#conversationId && list.length > 0) {
+        this.#conversationId = list[0]!.id;
+        this.#saved = (await this.#conversations.load(this.#conversationId)).length;
+      }
       return send(res, 200, { current: this.#conversationId ?? null, list });
     }
 
@@ -844,6 +815,16 @@ export class UiServer {
       const session = this.#session;
       if (session && this.#busyNow(session)) {
         return send(res, 409, { error: 'いま作業中です。終わってから切り替えてください' });
+      }
+      // **空の会話を二つ作らない。**いま開いているものがまだ空なら、それが
+      // 「新しい会話」そのもの。押すたびに増えると、一覧が空の見出しで埋まる。
+      const current = this.#conversationId
+        ? await this.#conversations.head(this.#conversationId).catch(() => undefined)
+        : undefined;
+      if (current && current.messages === 0) {
+        this.#session?.reset();
+        this.#saved = 0;
+        return send(res, 200, { current: current.id, messages: [] });
       }
       const head = await this.#conversations.create();
       this.#conversationId = head.id;
@@ -919,6 +900,74 @@ export class UiServer {
    * 繋ぎ先の応答待ちは数十秒になることがあり、その間ずっと「考え中」になる。
    */
   /** いま何かしているか。走り出す前の支度も「している」に数える。 */
+
+  /**
+   * 設定の見え方を組み立てる。
+   *
+   * **落ちる所を一箇所にまとめる。**呼ぶ側が包めるようにしておかないと、
+   * 途中で落ちたときに画面が空欄のまま出て、理由が誰にも分からない。
+   */
+  async #configView(res: ServerResponse): Promise<void> {
+    // **保存してあるもの**を読む。立ち上げたときのものを見せると、
+    // 保存した直後に古い値が出て「効いていない」ように見える。
+    const saved = await readSavedRuntime();
+    const active = this.#opts.config.runtime ?? {};
+    // 書いてあるものが無ければ、いま読み込んだ既定（設定が無ければ inproc）を見せる。
+    // ここだけ 'ollama' と決め打つと、既定で動いているものと画面の表示が食い違う。
+    const kind = String(saved.kind ?? this.#opts.config.runtime?.kind ?? 'ollama');
+    const dir = await savedModelsDir();
+    return send(res, 200, {
+      path: configPath(),
+      kinds: RUNTIME_KINDS.map((id) => ({ id, name: KIND_LABELS[id] })),
+      kind,
+      modelsDir: dir,
+      // 使うと決めた GGUF。無ければ置き場の最初の一つを読む。
+      model: typeof saved.model === 'string' ? saved.model : null,
+      // いま動いているもの。保存したものと違えば、立ち上げ直しが要る。
+      active: { kind: active.kind ?? 'ollama', modelsDir: active.modelsDir ?? modelsDir() },
+      restartNeeded: kind !== (active.kind ?? 'ollama')
+        || dir !== (active.modelsDir ?? modelsDir()),
+      // 置き場にある GGUF。「置いたのに認識しない」を画面で確かめられるように。
+      // 記憶に載らないものは、載らないと添える。読む前に分かるように。
+      gguf: await Promise.all((await listGguf(dir)).map(async (m) => ({
+        ...m,
+        tooBig: tooBigForRam(m.sizeBytes, totalmem()) ?? null,
+        // 名前だけ .gguf の別物も、一覧で分かるように。
+        notGguf: !(await looksLikeGguf(join(dir, m.ref))),
+      }))),
+      // GGUF が0件のとき、置き場そのものが無いのか、空なのかで打つ手が違う。
+      dirState: await inspectModelsDir(dir),
+    });
+  }
+
+  /** 画面から設定を書き換える。 */
+  async #saveConfig(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const body = await readBody(req) as { kind?: string; modelsDir?: string; model?: string };
+    const kind = body?.kind;
+    if (!isRuntimeKind(kind)) return send(res, 400, { error: 'そういう動かし方はありません' });
+    const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
+    // 使う GGUF。名前に道を混ぜさせない（置き場の中の名前だけ）。
+    const model = typeof body?.model === 'string' ? body.model.trim() : undefined;
+    if (model && /[\\/]/.test(model)) return send(res, 400, { error: 'モデルは置き場の中の名前で指定してください' });
+    // 打った場所は見るだけ。既定の場所は、無ければ作る。
+    // 「GGUF を置くだけ」と言っておいて置き場が無いのは、案内になっていない。
+    const dirState = dir
+      ? await inspectModelsDir(dir)
+      : await ensureDefaultModelsDir(modelsDir());
+    const at = await saveRuntime(kind, dir, model);
+    this.broadcast({ type: 'log', level: 'info', text: `設定を書きました: ${at}` });
+    return send(res, 200, {
+      path: at,
+      saved: { kind, modelsDir: dir || null, ...(model !== undefined ? { model: model || null } : {}) },
+      // 打ち間違えても保存はできる。だから**保存したときに言う。**
+      dirState,
+      // 動かし方の切り替えは、立ち上げ直すまで効かない。黙って効いた顔をしない。
+      restartNeeded: kind !== (this.#opts.config.runtime?.kind ?? 'ollama')
+        || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir())
+        || (model !== undefined && (model || undefined) !== this.#opts.config.runtime?.model),
+    });
+  }
+
   /** いま使っている設定。検査から、同じ設定で立ち上げ直すのに要る。 */
   get config(): AasConfig { return this.#opts.config; }
 
