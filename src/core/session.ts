@@ -92,6 +92,11 @@ export type SessionEvent =
   | { type: 'diff'; path: string; diff: string; added: number; removed: number; created: boolean }
   /** 検証まで含めた、この依頼の結末。 */
   | { type: 'settled'; reason: string; verified: boolean; seconds: number; detail?: string }
+  /**
+   * 道具が弾かれたまま終わった。
+   * 本文が「やりました」でも、作業場は変わっていない。**言葉より結果を出す。**
+   */
+  | { type: 'toolsFailed'; names: string[] }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string };
 
 /** 分解して並列に働かせるときの出来事。CLI も画面も、これを見て描く。 */
@@ -786,6 +791,16 @@ export class Session {
       /** 作業場を変えうる道具か。触る前に、作業前の状態を控える。 */
       const changesFiles = (name: string): boolean => name === 'write_file' || name === 'run_command';
 
+      /*
+       * 効かなかった道具を数える。
+       *
+       * **「書き換えました」と言われても、書けているとは限らない。**
+       * 読む前に書こうとして規則に止められたのに、本文は「書き換えました」で、
+       * 画面は「完了」と出ていた（実測）。言葉ではなく、結果で判じる。
+       */
+      const failedTools: string[] = [];
+      let wroteSomething = false;
+
       const run = async function* (this: Session, agent: Agent): AsyncGenerator<SessionEvent> {
         for await (const ev of agent.run(this.#history, ac.signal)) {
           switch (ev.type) {
@@ -810,6 +825,9 @@ export class Session {
               yield { type: 'toolStart', name: ev.call.name, summary: summarize(ev.call.args) };
               break;
             case 'toolEnd': {
+              // 何が効いて何が効かなかったかを数える。**言葉ではなく、結果で見る。**
+              if (ev.isError) failedTools.push(ev.call.name);
+              else if (ev.call.name === 'write_file') wroteSomething = true;
               if (!ev.isError && ev.call.name === 'write_file') this.#prefetch.invalidate();
               yield {
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
@@ -838,6 +856,11 @@ export class Session {
         outputTokens: Math.round(answerChars / 3),
         seconds: (Date.now() - started) / 1000,
       });
+
+      // 道具が全部弾かれたのに、本文だけが「やりました」になっている形を見逃さない。
+      if (finishedReason === 'completed' && failedTools.length > 0 && !wroteSomething) {
+        yield { type: 'toolsFailed', names: [...new Set(failedTools)] };
+      }
 
       // 書いて終わりにしない。失敗したら、その内容を渡して直させる。
       if (finishedReason === 'completed' && testsBefore && command) {

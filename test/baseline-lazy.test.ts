@@ -57,6 +57,26 @@ async function ask(session: Session, text: string): Promise<string[]> {
   return seen;
 }
 
+describe('やったと言って、やっていない、を出す', () => {
+  test('道具が止められたら、完了の顔をさせない', async () => {
+    // 読む前に書こうとすると、規則が止める。それでもモデルは
+    // 「書き換えました」と言う。**言葉ではなく結果を出す。**
+    fake.setBehavior({
+      kind: 'toolcall',
+      name: 'write_file',
+      args: { path: 'src/a.txt', content: '勝手に書き換え\n' },
+      then: '書き換えました。',
+    });
+    const session = await Session.create(config(), { approve: () => Promise.resolve(true) });
+    try {
+      const seen = await ask(session, 'src/a.txt を書き換えて');
+      assert.ok(seen.includes('toolsFailed'), `止められたのに、そう言っていない: ${seen.join(',')}`);
+      // ファイルは変わっていないこと。
+      assert.equal(await readFile(join(root, 'src', 'a.txt'), 'utf8'), 'もとの中身\n');
+    } finally { await session.close(); }
+  });
+});
+
 describe('作業前検査は、触る直前まで流さない', () => {
   test('訊いただけなら、検査は流れない', async () => {
     fake.setBehavior({ kind: 'stream', text: 'これは説明です。' });
@@ -71,10 +91,13 @@ describe('作業前検査は、触る直前まで流さない', () => {
 
   test('書き換えるなら、触る直前に流れる（対）', async () => {
     // 「流さない」だけなら、常に流さない作りでも通ってしまう。対で見る。
+    // **読んでから書く。**規則がその並びを求めるので、そのとおりに動かす。
     fake.setBehavior({
-      kind: 'toolcall',
-      name: 'write_file',
-      args: { path: 'src/a.txt', content: '書き換えました\n' },
+      kind: 'steps',
+      calls: [
+        { name: 'read_file', args: { path: 'src/a.txt' } },
+        { name: 'write_file', args: { path: 'src/a.txt', content: '書き換えました\n' } },
+      ],
       then: '書き換えました。',
     });
     const session = await Session.create(config(), { approve: () => Promise.resolve(true) });
@@ -85,6 +108,10 @@ describe('作業前検査は、触る直前まで流さない', () => {
       assert.ok(seen.includes('baseline'), `作業前検査が出ていない: ${seen.join(',')}`);
       // 触る前に控えていること。控えが無いと、作業後の検査そのものが回らない。
       assert.ok(seen.includes('verify'), `作業後の検査が回っていない: ${seen.join(',')}`);
+      // **本当に書けたかを、ファイルで見る。**出来事だけを見ていたので、
+      // 規則に止められて何も変わっていないのに「完了」と出ていたのに気づけなかった。
+      assert.equal(await readFile(join(root, 'src', 'a.txt'), 'utf8'), '書き換えました\n');
+      assert.ok(!seen.includes('toolsFailed'), '書けたのに、通らなかったと言っている');
     } finally { await session.close(); }
   });
 });

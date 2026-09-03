@@ -384,7 +384,11 @@ export const PANELS = {
       } else if (v.type === 'salvaged') {
         note('dim', `本文に書かれていた ${v.name} の呼び出しを拾いました`);
       } else if (v.type === 'rolledBack') note('warn', `変更を巻き戻しました: ${v.paths.join(', ')}`);
-      else if (v.type === 'verify') showVerify(v.event);
+      else if (v.type === 'toolsFailed') {
+        // **言葉より結果。**本文が「書き換えました」でも、止められていれば
+        // 作業場は変わっていない。完了の顔をさせない。
+        note('bad', `道具が通りませんでした（${v.names.join(', ')}）。作業場は変わっていません。`);
+      } else if (v.type === 'verify') showVerify(v.event);
       else if (v.type === 'settled') {
         const okAll = v.reason === 'completed' && v.verified;
         add(el('div', `verdict ${okAll ? 'ok' : 'ng'}`,

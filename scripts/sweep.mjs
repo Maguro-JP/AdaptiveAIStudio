@@ -198,6 +198,41 @@ await check('配置を切り替える', async () => {
   if (!(await p.locator('.chat textarea').isVisible())) throw new Error('会話の入力欄が消えた');
 });
 
+// 添付。落とす・貼る・選ぶ、どれでも渡せると謳っているので、実際に渡す。
+await check('ファイルを添えて外す', async () => {
+  const picker = p.locator('.chat input[type="file"]');
+  await picker.setInputFiles({ name: 'メモ.txt', mimeType: 'text/plain', buffer: Buffer.from('中身です') });
+  await p.waitForTimeout(1200);
+  const tray = p.locator('.chat .attachments');
+  if (!(await tray.isVisible())) throw new Error('添えたものが出ない');
+  if (!(await tray.innerText()).includes('メモ.txt')) throw new Error('名前が出ない');
+  // 外せること。外せないと、間違えて添えたものを送るしかなくなる。
+  const drop = tray.locator('button').first();
+  if (await drop.count() === 0) throw new Error('外すものが無い');
+  await drop.click();
+  await p.waitForTimeout(600);
+  if (await tray.isVisible()) throw new Error('外しても残る');
+});
+
+// 中断。押せるのに効かない、を作らない。
+await check('中断できる', async () => {
+  const stop = p.locator('.chat form > button', { hasText: '中断' });
+  if (await stop.count() === 0) throw new Error('中断が無い');
+  // 動いていないときは押せない状態であること（押せて何も起きないのが、いちばん困る）
+  if (await stop.isEnabled()) throw new Error('動いていないのに中断が押せる');
+});
+
+// 立ち上げ直す。この入口は起こし直せないので、断る言葉が出ること。
+await check('立ち上げ直しは、できないならそう言う', async () => {
+  const r = await p.evaluate(async () => {
+    const res = await fetch('/api/restart', { method: 'POST' });
+    return { status: res.status, body: await res.text() };
+  });
+  if (r.status === 200) return; // 起こし直せる入口なら、それでよい
+  if (![409, 501].includes(r.status)) throw new Error(`思わぬ返事: ${r.status} ${r.body.slice(0, 80)}`);
+  if (!r.body.includes('error')) throw new Error('断る理由が無い');
+});
+
 await check('作業場を開く', async () => {
   const dirs = p.locator('#sideFiles button');
   if (await dirs.count() === 0) throw new Error('作業場が空');

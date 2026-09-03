@@ -6,6 +6,13 @@ export type Behavior =
   | { kind: 'stream'; text: string }
   /** 最初は道具を呼び、道具の結果が履歴に載って戻ってきたら then を答える。 */
   | { kind: 'toolcall'; name: string; args: Record<string, unknown>; then: string }
+  /**
+   * 道具を順に呼ぶ。呼び終えたら then を答える。
+   *
+   * 一つしか呼べないと、**読んでから書く**のような、規則が求める並びを試せない。
+   * 実際に、読まずに書いて弾かれる形しか通していなかった。
+   */
+  | { kind: 'steps'; calls: Array<{ name: string; args: Record<string, unknown> }>; then: string }
   | { kind: 'status'; status: number; body?: string; retryAfter?: string }
   | { kind: 'hang' };
 
@@ -48,6 +55,24 @@ export async function startFakeServer(initial: Behavior): Promise<FakeServer> {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       if (!answered) {
         res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: behavior.name, arguments: JSON.stringify(behavior.args) } }] } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
+      } else {
+        for (const ch of behavior.then) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: ch } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
+      }
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
+    }
+
+    if (behavior.kind === 'steps') {
+      const messages = (body as { messages?: { role?: string }[] } | undefined)?.messages ?? [];
+      // 返ってきた道具の結果の数＝いま何段目か。
+      const done = messages.filter((m) => m.role === 'tool').length;
+      const next = behavior.calls[done];
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      if (next) {
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `call_${done + 1}`, function: { name: next.name, arguments: JSON.stringify(next.args) } }] } }] })}\n\n`);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
       } else {
         for (const ch of behavior.then) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: ch } }] })}\n\n`);
