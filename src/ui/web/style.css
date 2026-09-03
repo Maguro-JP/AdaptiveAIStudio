@@ -56,7 +56,96 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 99px; border: 3px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background: var(--dim); background-clip: content-box; }
 
-/* ---------- 上の帯 ---------- */
+/* ---------- 横の板と、真ん中 ---------- */
+
+/*
+ * 左に横の板、右に中身。**会話は真ん中に寄せる。**
+ * 端から端まで伸びた文章は、目が行ったり来たりして読めない。
+ */
+.shell { flex: 1; display: flex; min-height: 0; }
+
+.side {
+  flex: 0 0 var(--side-w, 240px);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s2);
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+}
+/* 畳んだとき。板ごと消すのではなく、幅だけ落とす（開き直すのが速い）。 */
+.side[hidden] { display: none; }
+
+.side-top { display: flex; align-items: center; gap: var(--s2); }
+.side-top .brand { flex: 1; min-width: 0; font-size: .95rem; }
+
+/*
+ * いま動いているか。**いちばん上に、大きく。**
+ * 隅の小さな字だと、止まっているのか考えているのか分からない。
+ */
+.run {
+  display: flex; align-items: center; gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface2);
+  font-size: .84rem;
+}
+.run-dot { width: 9px; height: 9px; border-radius: 99px; background: var(--dim); flex: 0 0 auto; }
+.run-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-time { color: var(--dim); font-variant-numeric: tabular-nums; font-size: .78rem; }
+.run[data-state="busy"] { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.run[data-state="busy"] .run-dot { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+.run[data-state="down"] .run-dot { background: var(--bad); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+/* 動きを嫌う設定なら、点滅させない。 */
+@media (prefers-reduced-motion: reduce) { .run[data-state="busy"] .run-dot { animation: none; } }
+
+.queue {
+  padding: var(--s1) var(--s3);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--dim); font-size: .78rem;
+}
+
+.side-nav { display: flex; flex-direction: column; gap: 2px; }
+button.row {
+  display: flex; align-items: center; gap: var(--s2);
+  justify-content: flex-start; width: 100%;
+  padding: 6px var(--s2); font-size: .84rem;
+}
+
+.side-sec { display: flex; flex-direction: column; gap: var(--s1); min-height: 0; }
+.side-sec.grow { flex: 1; }
+.side-sec h3 {
+  margin: 0; padding: 0 var(--s2);
+  font-size: .68rem; font-weight: 600; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--dim);
+}
+.side-list { overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 1px; }
+.side-list button {
+  display: block;
+  width: 100%; text-align: left;
+  background: transparent; border-color: transparent; color: var(--dim);
+  padding: 3px var(--s2);
+  font-size: .82rem;
+  /* 行の高さを決める。決めないと字が上下で切れて、読めない塊になる。 */
+  line-height: 1.7;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.side-list button:hover { background: var(--surface2); color: var(--text); }
+.side-list button.on { background: var(--surface2); color: var(--text); }
+.side-list .empty { color: var(--dim); font-size: .78rem; padding: var(--s1) var(--s2); }
+
+.side-foot {
+  display: flex; flex-direction: column; gap: 2px;
+  padding-top: var(--s2); border-top: 1px solid var(--line);
+  font-size: .74rem;
+}
+.side-foot .sb { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 上の帯（いまは使っていない） ---------- */
 
 .bar {
   display: flex;
@@ -746,3 +835,13 @@ dialog.wide { width: min(46rem, 92vw); }
 /* 置き場は末尾まで読めないと意味がない。切らずに折る。 */
 .rows.paths .row > * { white-space: normal; word-break: break-all; }
 .rows.paths .row { align-items: start; }
+
+
+/* ---------- 会話は真ん中に ---------- */
+
+/*
+ * 端から端まで伸びた行は読めない。**一行の長さを決める。**
+ * 板が広いときだけ効き、狭いときは今までどおり全幅を使う。
+ */
+.chat .log > *,
+.chat > form { max-width: 62rem; margin-inline: auto; width: 100%; }

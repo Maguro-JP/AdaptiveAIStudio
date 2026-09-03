@@ -1,5 +1,6 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 
 // 配置や記録の置き場を、試験専用の場所へ移してから読み込む。
@@ -234,6 +235,20 @@ describe('本文を際限なく抱えない', () => {
 });
 
 describe('使う GGUF を画面から決める', () => {
+  /**
+   * **書き先を先に逃がす。**AAS_CONFIG を立てずに保存を呼ぶと、
+   * 走らせた場所の aas.config.json、つまり開発中の作業コピーに書き込む。
+   * 実際にそうなり、画面が使ってもいないモデル名を出し続けた。
+   */
+  let prev: string | undefined;
+  before(async () => {
+    prev = process.env.AAS_CONFIG;
+    process.env.AAS_CONFIG = join(await tempDir('aas-cfgw-'), 'aas.config.json');
+  });
+  after(() => {
+    if (prev === undefined) delete process.env.AAS_CONFIG; else process.env.AAS_CONFIG = prev;
+  });
+
   test('名前に道を混ぜたものは断る', async () => {
     const r = await put('/api/config', { kind: 'inproc', modelsDir: '', model: '../x.gguf' });
     assert.equal(r.status, 400);

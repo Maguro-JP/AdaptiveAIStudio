@@ -308,31 +308,135 @@ function showRepairs(repairs) {
 async function refreshState() {
   try {
     lastState = await fetch('/api/state').then((x) => x.json());
-    const m = lastState.models?.[0];
-    $('sbModel').textContent = m?.modelId ?? m?.id ?? '—';
     for (const fn of stateHandlers) fn(lastState);
   } catch { /* 本体が止まっているだけ。画面は残す。 */ }
+  try {
+    // **いま動かしているものを出す。**手元に入っているモデルの一覧の
+    // 先頭を出していたので、使ってもいない名前が出ていた（実際に出ていた）。
+    const info = await fetch('/api/info').then((x) => x.json());
+    $('sbModel').textContent = `${info.runtime} · ${info.model}`;
+    $('sbModel').title = `動かし方: ${info.runtime} / モデル: ${info.model}`;
+  } catch { /* 同上 */ }
 }
+
+/* ---------- いま動いているか ---------- */
+
+/*
+ * **止まっているのか動いているのかを、一目で分かるようにする。**
+ * 隅の小さな字では分からない、と言われた。横の板のいちばん上に置き、
+ * 経過した時間も出す（進んでいるのか固まっているのかは、時間で分かる）。
+ */
+const run = {
+  since: 0,
+  timer: 0,
+  set(state, text) {
+    const box = $('run');
+    box.dataset.state = state;
+    $('runText').textContent = text;
+    $('runStop').hidden = state !== 'busy';
+    $('sbWork').textContent = text;
+    $('sbWork').classList.toggle('busy', state === 'busy');
+    if (state === 'busy') {
+      if (!this.since) this.since = Date.now();
+      if (!this.timer) this.timer = setInterval(() => this.tick(), 1000);
+      this.tick();
+    } else {
+      clearInterval(this.timer);
+      this.timer = 0;
+      this.since = 0;
+      $('runTime').textContent = '';
+    }
+  },
+  tick() {
+    const sec = Math.floor((Date.now() - this.since) / 1000);
+    $('runTime').textContent = sec < 60 ? `${sec}秒` : `${Math.floor(sec / 60)}分${sec % 60}秒`;
+  },
+};
+
+$('runStop').onclick = () => fetch('/api/abort', { method: 'POST' });
 
 function listen() {
   const src = new EventSource('/api/events');
   const status = $('status');
-  src.onopen = () => { status.textContent = 'つながっています'; status.className = 'status live'; };
-  src.onerror = () => { status.textContent = '本体が止まっています'; status.className = 'status down'; };
+  src.onopen = () => {
+    status.textContent = 'つながっています';
+    status.className = 'status live';
+    if ($('run').dataset.state === 'down') run.set('idle', '待機中');
+  };
+  src.onerror = () => {
+    status.textContent = '本体が止まっています';
+    status.className = 'status down';
+    run.set('down', '本体が止まっています');
+  };
   src.onmessage = (m) => {
     const e = JSON.parse(m.data);
-    if (e.type === 'busy') {
-      $('sbWork').textContent = e.busy ? '作業中…' : '待機中';
-      $('sbWork').classList.toggle('busy', e.busy);
+    if (e.type === 'busy') run.set(e.busy ? 'busy' : 'idle', e.busy ? '作業中' : '待機中');
+    if (e.type === 'queue') {
+      const box = $('queue');
+      box.hidden = e.waiting === 0;
+      box.textContent = `順番待ち ${e.waiting} 件`;
     }
-    if (e.type === 'stateChanged') return void refreshState();
+    if (e.type === 'stateChanged') { void refreshState(); void loadFiles(filesAt); return; }
     if (e.type === 'themeChanged') return void loadTheme();
     if (e.type === 'thinkEvent') {
-      $('sbWork').textContent = e.event.type === 'chose' ? `考え中: ${e.event.codename}` : '待機中';
+      if (e.event.type === 'chose') run.set('busy', `考え中: ${e.event.codename}`);
     }
     for (const fn of eventHandlers.get(e.type) ?? []) fn(e);
   };
 }
+
+/* ---------- 横の板：作業場 ---------- */
+
+/*
+ * どこで何を触っているのかが見えないまま指示を書くのは、
+ * 暗い所で手探りをするのと同じ。一階層ずつ開く。
+ */
+let filesAt = '';
+
+async function loadFiles(at = '') {
+  const box = $('sideFiles');
+  try {
+    const r = await fetch(`/api/files?path=${encodeURIComponent(at)}`);
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.error ?? '読めませんでした');
+    filesAt = body.path;
+    $('filesHead').textContent = body.path ? `作業場 / ${body.path}` : '作業場';
+    box.textContent = '';
+
+    if (body.path) {
+      const up = document.createElement('button');
+      up.textContent = '‹ 上へ';
+      up.onclick = () => loadFiles(body.path.includes('/') ? body.path.slice(0, body.path.lastIndexOf('/')) : '');
+      box.append(up);
+    }
+    if (body.entries.length === 0) box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: '空です' }));
+    for (const entry of body.entries) {
+      const b = document.createElement('button');
+      b.textContent = `${entry.dir ? '📁' : '📄'} ${entry.name}`;
+      b.title = entry.path;
+      // フォルダは開く。ファイルは、入力欄へ道を差し込む
+      // （画面から中身を書き換えさせない。触るのは指示を通してだけ）。
+      b.onclick = () => (entry.dir ? loadFiles(entry.path) : insertPath(entry.path));
+      box.append(b);
+    }
+  } catch (e) {
+    box.textContent = '';
+    box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: String(e.message ?? e) }));
+  }
+}
+
+/** 押したファイルの道を、書きかけの指示に足す。 */
+function insertPath(path) {
+  const input = document.querySelector('.chat textarea');
+  if (!input) return;
+  input.value = input.value ? `${input.value.replace(/\s+$/, '')} ${path}` : `${path} `;
+  input.focus();
+}
+
+$('sideToggle').onclick = () => {
+  const side = $('side');
+  side.hidden = !side.hidden;
+};
 
 /* ---------- 配置を直接いじる ---------- */
 
@@ -737,5 +841,6 @@ window.addEventListener('keydown', (e) => {
 await loadTheme();
 await load();
 await refreshState();
+await loadFiles();
 listen();
 setInterval(refreshState, 5000);

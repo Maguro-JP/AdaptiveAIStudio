@@ -92,6 +92,43 @@ describe('送って、返事が戻る', () => {
   });
 });
 
+describe('動いている間に書いても、断らない', () => {
+  /**
+   * 突き返されるのがいちばん不快で、しかも書き直させることになる。
+   * 「終わったらこれをやって」と思って書いているので、預かって順に流す。
+   */
+  test('二つ目は順番待ちに積まれ、あとで流れる', async () => {
+    // 二往復ぶん（busy が false になるのを2回）待つ。
+    const twice = (evs: unknown[]) =>
+      evs.filter((e) => (e as { type?: string; busy?: boolean }).type === 'busy'
+        && (e as { busy?: boolean }).busy === false).length >= 2;
+    const collecting = collect(twice);
+    await new Promise((r) => setTimeout(r, 200));
+
+    const send = (text: string) => fetch(`${base}/api/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+
+    const before = fake.requests;
+    // 続けて二つ投げる。二つ目は、一つ目が動いている間に着く。
+    const [a, b] = await Promise.all([send('ひとつめ'), send('ふたつめ')]);
+    // 中身は一度しか読めない。先に読んでから、状態と一緒に見る。
+    const bodies = await Promise.all([a.json(), b.json()]) as Array<{ accepted?: boolean; queued?: number }>;
+    assert.equal(a.status, 202, JSON.stringify(bodies[0]));
+    assert.equal(b.status, 202, JSON.stringify(bodies[1]));
+    assert.ok(bodies.some((x) => x.queued === 1), `順番待ちに積まれていない: ${JSON.stringify(bodies)}`);
+
+    const events = await collecting;
+    assert.ok(twice(events), '二つ目が流れていない');
+    // 空になったことを、画面へ伝えている。
+    const queueEvents = events.filter((e) => (e as { type?: string }).type === 'queue') as Array<{ waiting: number }>;
+    assert.ok(queueEvents.some((e) => e.waiting === 1), '積んだことを言っていない');
+    assert.ok(queueEvents.some((e) => e.waiting === 0), '空になったことを言っていない');
+    assert.ok(fake.requests >= before + 2, `二回とも相手に届いていない: ${fake.requests - before}`);
+  });
+});
+
 describe('途中でやめる', () => {
   test('相手が黙っていても、やめれば戻ってくる', async () => {
     // 相手が返さない（hang）。やめる を押したら、待たされずに終わりが来ること。

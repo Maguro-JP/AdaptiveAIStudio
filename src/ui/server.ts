@@ -10,9 +10,10 @@
  * 数年で作法が変わるものに画面を預けたくない。
  * 素の HTML と ES モジュールなら、組み立ての手順すら要らない。
  */
+import { listDir } from './files.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join, dirname, extname, normalize } from 'node:path';
+import { join, dirname, extname, normalize, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { aasHome, binDir, modelsDir, isPortable, productRoot } from '../core/home.ts';
@@ -103,6 +104,8 @@ export type UiEvent =
   | { type: 'approval'; id: string; request: ApprovalRequest }
   | { type: 'approvalDone'; id: string; approved: boolean }
   | { type: 'busy'; busy: boolean }
+  /** 順番待ちの数。0 なら空。 */
+  | { type: 'queue'; waiting: number }
   /** 分解して並列に働かせているときの出来事。 */
   | { type: 'planEvent'; event: unknown }
   /** 暇なときに考えたこと。放っておいても動いていることが見える。 */
@@ -126,6 +129,13 @@ export class UiServer {
   });
   #url = '';
   #session?: Session;
+  /**
+   * 順番待ち。動いている間に書かれたものを、ここに積む。
+   *
+   * 断って書き直させない。利用者は「終わったらこれをやって」と
+   * 思って書いているので、預かって順に流すのが素直。
+   */
+  readonly #queue: Array<{ text: string; attached: string[] }> = [];
   #idleTimer?: ReturnType<typeof setInterval>;
   #thinking = false;
   /**
@@ -391,15 +401,29 @@ export class UiServer {
         : [];
       if (!text && attached.length === 0) return send(res, 400, { error: '指示が空です' });
 
+      // **モデルの有無を、いちばん先に見る。**
+      // 会話の土台を組む段でも候補を決めるので、モデルが無いと
+      // そこで落ちて 500 になる。利用者には「サーバの不具合」に見えるが、
+      // 実際は「まだ置いていない」だけ。順番を逆にすると、そう言えなくなる。
+      this.#preparing = true;
+      try {
+        const notReady = await this.#readyToThink();
+        if (notReady) return send(res, 503, { error: notReady });
+      } finally {
+        this.#preparing = false;
+      }
+
       const session = await this.session();
-      if (this.#busyNow(session)) return send(res, 409, { error: 'いま別の作業をしています' });
+      // **断らない。**書いたものを突き返されるのがいちばん不快で、
+      // しかも書き直させることになる。動いている間は順番に積む。
+      if (this.#busyNow(session)) {
+        this.#queue.push({ text, attached });
+        this.broadcast({ type: 'queue', waiting: this.#queue.length });
+        return send(res, 202, { queued: this.#queue.length });
+      }
 
       this.#preparing = true;
       try {
-        // **先に確かめる。**モデルが無いまま送ると、繋ぎ先を待ち続けて
-        // 画面は「考え中」のまま止まる。利用者からは固まったようにしか見えない。
-        const missing = await this.#readyToThink();
-        if (missing) return send(res, 503, { error: missing });
 
         // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
         // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
@@ -697,6 +721,21 @@ export class UiServer {
       return send(res, 200, { stopped: this.#tasks.stop() ?? null });
     }
 
+    // 作業場の中身。**横の板に出すため。**どこで何を触っているのかが
+    // 見えないまま指示を書くのは、暗い所で手探りをするのと同じ。
+    if (path === '/api/files' && req.method === 'GET') {
+      // **会話の土台を組まない。**組むとモデルの用意まで要ることになり、
+      // モデルが無い機械では、ただの一覧が 500 で返る。
+      const root = this.#workRoot();
+      const asked = url.searchParams.get('path') ?? '';
+      try {
+        const entries = await listDir(root, asked);
+        return send(res, 200, { root, path: asked, entries });
+      } catch (e) {
+        return send(res, 400, { error: (e as Error).message });
+      }
+    }
+
     if (path === '/api/state' && req.method === 'GET') {
       return send(res, 200, await collectState(this.#opts.config));
     }
@@ -723,6 +762,11 @@ export class UiServer {
    * 繋ぎ先の応答待ちは数十秒になることがあり、その間ずっと「考え中」になる。
    */
   /** いま何かしているか。走り出す前の支度も「している」に数える。 */
+  /** 作業場の根。会話の土台を組まずに知りたいときに使う。 */
+  #workRoot(): string {
+    return resolvePath(this.#opts.config.agent?.root ?? process.cwd());
+  }
+
   #busyNow(session: Session): boolean {
     return session.busy || this.#thinking || this.#preparing;
   }
@@ -786,7 +830,26 @@ export class UiServer {
       this.broadcast({ type: 'busy', busy: false });
       // 作業で記憶やファイルが動いている。画面の材料を取り直させる。
       this.broadcast({ type: 'stateChanged' });
+      await this.#drainQueue(session);
     }
+  }
+
+  /**
+   * 順番待ちを、前から1つ流す。
+   *
+   * **一度に1つだけ。**残りは、その仕事が終わったあとの `#drive` が続ける。
+   * ここで全部回すと、途中で中断されても止まらない。
+   */
+  async #drainQueue(session: Session): Promise<void> {
+    const next = this.#queue.shift();
+    this.broadcast({ type: 'queue', waiting: this.#queue.length });
+    if (!next) return;
+    const extra = next.attached.length > 0
+      ? await this.#attachments.describe(next.attached).catch(() => '')
+      : '';
+    const full = extra ? `${extra}\n\n${next.text}` : next.text;
+    this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
+    void this.#drive(session, full);
   }
 
   async #drivePlan(session: Session, text: string): Promise<void> {

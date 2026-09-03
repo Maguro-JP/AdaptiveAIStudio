@@ -11,7 +11,7 @@
  *   node scripts/run-tests.mjs            すべて
  *   node scripts/run-tests.mjs gguf env   名前に含むものだけ
  */
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -54,6 +54,27 @@ const args = [
   ...files,
 ];
 
+/**
+ * 試験が、作業コピーの設定を書き換えていないか。
+ *
+ * AAS_CONFIG を立て忘れた試験は、走らせた場所の `aas.config.json`、
+ * つまり**開発中の設定そのもの**に書き込む。実際に起き、画面が使ってもいない
+ * モデル名を出し続けた。落ちないので、出力を見ていても気づけない。
+ */
+const watched = join(root, 'aas.config.json');
+const before = existsSync(watched) ? readFileSync(watched, 'utf8') : null;
+
 const child = spawn(process.execPath, args, { cwd: root, stdio: 'inherit' });
 child.on('error', (e) => { console.error(e.message); process.exit(1); });
-child.on('close', (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
+child.on('close', (code, signal) => {
+  const after = existsSync(watched) ? readFileSync(watched, 'utf8') : null;
+  if (after !== before) {
+    console.error('\n試験が作業コピーの設定を書き換えました: aas.config.json');
+    console.error(before === null
+      ? '  無かったものが作られています。'
+      : '  中身が変わっています。');
+    console.error('  設定を書く試験は、先に AAS_CONFIG を仮の場所へ逃がしてください。');
+    process.exit(1);
+  }
+  process.exit(code ?? (signal ? 1 : 0));
+});
