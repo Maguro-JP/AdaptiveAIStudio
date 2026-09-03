@@ -13,6 +13,10 @@ name: build
 on:
   push:
     tags: ['v*']
+    # 印（タグ）と同じ意味の枝。この作業場からはタグを押せない（中継が黙って落とす。
+    # 実測）ので、release/v0.1.0 の枝を押すと、v0.1.0 の印を付けたのと同じに扱う。
+    # 印そのものは公開のときに GitHub 側で付く。
+    branches: ['release/v*']
   workflow_dispatch:
 
 concurrency:
@@ -45,8 +49,17 @@ jobs:
       - name: 版を決める
         id: v
         run: |
+          # tag=v0.1.0 なら正式版。空なら main の最新（portable という印に置く）。
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            echo "id=${GITHUB_REF_NAME#v}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            TAG="${GITHUB_REF_NAME}"
+          elif [ "${GITHUB_REF_NAME#release/}" != "${GITHUB_REF_NAME}" ]; then
+            TAG="${GITHUB_REF_NAME#release/}"
+          else
+            TAG=""
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if [ -n "${TAG}" ]; then
+            echo "id=${TAG#v}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           else
             echo "id=main-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
@@ -162,9 +175,10 @@ jobs:
         with:
           # タグが無いときも、動く現物を置いておく。落とせないものを
           # 「同梱してあります」と言わないための場所。
-          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || 'portable' }}
-          name: ${{ github.ref_type == 'tag' && github.ref_name || 'portable (main)' }}
-          prerelease: ${{ github.ref_type != 'tag' }}
+          tag_name: ${{ steps.v.outputs.tag || 'portable' }}
+          name: ${{ steps.v.outputs.tag || 'portable (main)' }}
+          prerelease: ${{ steps.v.outputs.tag == '' }}
+          target_commitish: ${{ github.sha }}
           files: |
             AdaptiveAIStudio-portable.zip
             AdaptiveAIStudio-portable-noexe.zip
@@ -174,7 +188,7 @@ jobs:
   # だからタグのときだけ。
   # ------------------------------------------------------------------
   installer:
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || startsWith(github.ref_name, 'release/v')
     needs: portable
     # windows-latest は 2025 の像になり、NSIS が入っていない（像の一覧に無い）。
     # 2022 の像には NSIS 3.10 が入っている。無ければ choco で入れる（保険）。
@@ -193,7 +207,10 @@ jobs:
       - name: 版を決める
         id: v
         shell: bash
-        run: echo "id=${GITHUB_REF_NAME#v}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        run: |
+          TAG="${GITHUB_REF_NAME#release/}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "id=${TAG#v}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - run: npm ci --no-audit --no-fund
 
@@ -238,4 +255,6 @@ jobs:
       - name: 公開する
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.v.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           files: installer/AdaptiveAIStudio-Setup.exe
