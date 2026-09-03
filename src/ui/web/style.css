@@ -890,3 +890,18 @@ dialog.wide { width: min(46rem, 92vw); }
  */
 .chat .log > *,
 .chat > form { max-width: 62rem; margin-inline: auto; width: 100%; }
+
+/*
+  段取りの一段。一段ずつ進むので、**どこまで来たかが見えないと
+  「止まっている」のと区別が付かない。**
+*/
+.side-step {
+  padding: 2px 8px 2px 18px;
+  font-size: 12px;
+  color: var(--dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.side-step.done { color: var(--ok, var(--dim)); }
+.side-step.blocked { color: var(--bad, var(--dim)); text-decoration: line-through; }

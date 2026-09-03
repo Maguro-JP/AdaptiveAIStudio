@@ -496,11 +496,40 @@ async function loadUnfinished() {
   try {
     data = await fetch('/api/unfinished').then((x) => x.json());
   } catch { return; }
+  let goals = { list: [], stride: {} };
+  try {
+    goals = await fetch('/api/goals').then((x) => x.json());
+  } catch { /* 段取りが読めなくても、やり残しは出す */ }
+
   const sec = $('unfinishedSec');
   const box = $('sideUnfinished');
   const list = data.list ?? [];
-  sec.hidden = list.length === 0;
+  sec.hidden = list.length === 0 && goals.list.length === 0;
   box.textContent = '';
+
+  // 段取り。**どこまで進んだかを出す。**一段ずつ進むので、見えないと
+  // 「止まっている」のか「一段ずつ進んでいる」のかが区別できない。
+  for (const g of goals.list) {
+    const head = document.createElement('div');
+    head.className = 'side-row';
+    const label = document.createElement('span');
+    label.className = 'grow';
+    label.textContent = `${g.request.split('\n')[0].slice(0, 24)}（${g.progress.done}/${g.progress.total}）`;
+    label.title = g.request;
+    head.append(label);
+    box.append(head);
+    for (const st of g.steps) {
+      if (st.state === 'split') continue; // 割られた段そのものは出さない
+      const row = document.createElement('div');
+      row.className = 'side-step';
+      const mark = st.state === 'done' ? '✓' : st.state === 'blocked' ? '×' : '·';
+      row.textContent = `${mark} ${st.instruction}`;
+      row.title = st.state === 'blocked' ? '手が付きませんでした' : st.instruction;
+      if (st.state === 'done') row.classList.add('done');
+      if (st.state === 'blocked') row.classList.add('blocked');
+      box.append(row);
+    }
+  }
   for (const u of list) {
     const row = document.createElement('div');
     row.className = 'side-row';

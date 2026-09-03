@@ -12,6 +12,9 @@
  */
 import { listDir } from './files.ts';
 import { UnfinishedWork, resumePrompt, whyText } from '../core/unfinished.ts';
+import { Goals, progressOf, isSettled } from '../core/goals.ts';
+import { StrideBook, strideText } from '../agent/stride.ts';
+import { decompose, stepPrompt } from '../agent/decompose.ts';
 import { Conversations, ID_SHAPE } from '../core/conversations.ts';
 import { writeEnvValue } from '../core/env.ts';
 import { canRun } from '../core/which.ts';
@@ -158,6 +161,12 @@ export class UiServer {
    * きれいに消える。
    */
   readonly #unfinished = new UnfinishedWork(join(stateDir(), 'unfinished.jsonl'));
+  /** 段取り。落ちた依頼を、歩ける大きさに割って一段ずつ進む。 */
+  readonly #goals = new Goals(join(stateDir(), 'goals.jsonl'));
+  /** そのモデルが実際にこなせた歩幅。**言い訳ではなく、通った跡で測る。** */
+  readonly #stride = new StrideBook(join(stateDir(), 'stride.json'));
+  /** いま進めている段。終わったときに結果を書き戻すために持つ。 */
+  #step?: { goalId: string; stepId: string; model: string };
   /** いま続きとして流しているやり残し。片づいたら外すために持つ。 */
   #resuming?: string;
   /** いま話している会話。最初の依頼のときに決まる。 */
@@ -864,6 +873,22 @@ export class UiServer {
       return send(res, 200, { current: head.id, messages: [] });
     }
 
+    // 段取り。**どこまで進んだかを、常に見えるところに置く。**
+    // 一段ずつ進むので、見えないと「止まっている」のか
+    // 「一段ずつ進んでいる」のかが区別できない。
+    if (path === '/api/goals' && req.method === 'GET') {
+      const list = await this.#goals.list();
+      return send(res, 200, {
+        list: list.map((g) => ({
+          id: g.id,
+          request: g.request,
+          progress: progressOf(g),
+          steps: g.steps.map((st) => ({ instruction: st.instruction, state: st.state, attempts: st.attempts })),
+        })),
+        stride: await this.#stride.all(),
+      });
+    }
+
     // やり残しの控え。**見えないところで動かさない。**
     // 知らないうちに作業場が変わるのが、いちばん怖い。見えて、やめられること。
     if (path === '/api/unfinished' && req.method === 'GET') {
@@ -1161,15 +1186,19 @@ export class UiServer {
     this.broadcast({ type: 'busy', busy: true });
     // どう終わったか。**終わり方を見て、やり残しを控える。**
     let settled: { reason: string; verified: boolean } | undefined;
+    // 道具が実際に動いたか。**一段の合否は、言葉ではなくここで見る。**
+    // 「では、このあと直します」と言っただけの回を「済んだ」と数えていた。
+    let didSomething = false;
     try {
       for await (const event of session.send(text)) {
         if (event.type === 'settled') settled = { reason: event.reason, verified: event.verified };
+        if (event.type === 'toolEnd' && event.ok) didSomething = true;
         this.broadcast({ type: 'session', event });
       }
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
     } finally {
-      await this.#recordUnfinished(text, settled, resuming);
+      await this.#recordUnfinished(text, settled, resuming, didSomething);
       // **残してから、次へ進む。**先に次を流すと、落ちたときに
       // その回のやりとりが消える。
       await this.#persist(session);
@@ -1210,6 +1239,14 @@ export class UiServer {
       text: `やり残しの続きを始めます（${item.attempts + 1} 回目）: ${item.request.split('\n')[0]?.slice(0, 60) ?? ''}`,
     });
     this.#resuming = item.id;
+
+    // **二度目からは、同じ大きさで挑まない。**
+    // 一度落ちたものを、もう一度そのまま渡しても通らない。歩ける大きさに
+    // 割って、一段ずつ進む。割り方は、そのモデルが実際にこなせた歩幅から決める。
+    if (item.attempts >= 1) {
+      const stepped = await this.#driveStep(session, item);
+      if (stepped) return true;
+    }
     // 元の会話へ戻して続ける。別の会話で続けると、話が二つに割れる。
     if (item.conversationId && item.conversationId !== this.#conversationId) {
       const past = await this.#conversations.load(item.conversationId).catch(() => undefined);
@@ -1226,6 +1263,119 @@ export class UiServer {
   }
 
   /**
+   * 段取りを立てて、**一段だけ**進める。
+   *
+   * ここが「その機械のそのモデルに合わせる」の実体。
+   *
+   *   「src を直して」          4B には大きすぎる。読んだだけで力尽きる
+   *   「src/a.ts の型を直して」 これなら通る
+   *
+   * 一度に一段。全部やらせない。一段ごとに通ったかを見て、
+   * 通れば次へ、落ちれば**もっと小さく割り直す**。
+   *
+   * 割れなかったら false を返す（**割れないことは、進めない理由にならない**。
+   * 呼ぶ側が、これまでどおり丸ごと渡す道へ落ちる）。
+   */
+  async #driveStep(session: Session, item: { id: string; request: string; note: string }): Promise<boolean> {
+    const model = session.candidates[0] ?? '(不明)';
+    const stride = await this.#stride.get(model, session.contextTokens);
+
+    let goal = (await this.#goals.list()).find((g) => g.request === item.request);
+    if (!goal) {
+      this.broadcast({
+        type: 'log', level: 'info',
+        text: `一度で通らなかったので、段に割ります（歩幅: ${strideText(stride.size)}）`,
+      });
+      const steps = await decompose(session.orchestrator, {
+        candidates: session.candidates,
+        request: item.request,
+        size: stride.size,
+        note: item.note,
+        signal: new AbortController().signal,
+      });
+      if (steps.length === 0) {
+        this.broadcast({ type: 'log', level: 'warn', text: '段に割れませんでした。丸ごと進めます。' });
+        return false;
+      }
+      goal = await this.#goals.open(item.request, steps);
+      this.broadcast({ type: 'unfinished' });
+    }
+
+    const step = await this.#goals.next(goal.id);
+    if (!step) {
+      // 全部片づいた（塞がったものも含めて、もう手を付けない）。
+      await this.#goals.close(goal.id);
+      const p = progressOf(goal);
+      this.broadcast({
+        type: 'log', level: p.blocked > 0 ? 'warn' : 'info',
+        text: p.blocked > 0
+          ? `段取りを終えました（済 ${p.done} / 手が付かなかった ${p.blocked}）`
+          : `段取りを終えました（済 ${p.done}）`,
+      });
+      return false;
+    }
+
+    const p = progressOf(goal);
+    this.broadcast({
+      type: 'log', level: 'info',
+      text: `一歩ずつ進めます（${p.done + 1}/${p.total}）: ${step.instruction}`,
+    });
+    this.#step = { goalId: goal.id, stepId: step.id, model };
+    void this.#drive(session, stepPrompt(item.request, step.instruction, p.done + 1, p.total), item.id)
+      .finally(() => { this.#resuming = undefined; this.#step = undefined; });
+    return true;
+  }
+
+  /**
+   * 一段ぶんの結果を書き戻す。**通った跡で歩幅を測る。**
+   */
+  async #settleStep(done: boolean, session: Session): Promise<void> {
+    const at = this.#step;
+    if (!at) return;
+    await this.#stride.record(at.model, session.contextTokens, done).catch(() => undefined);
+    if (done) {
+      await this.#goals.succeed(at.goalId, at.stepId);
+      this.broadcast({ type: 'unfinished' });
+      return;
+    }
+    const action = await this.#goals.fail(at.goalId, at.stepId);
+    if (action.do === 'retry') {
+      this.broadcast({ type: 'log', level: 'info', text: 'この一歩は通りませんでした。もう一度試します。' });
+    } else if (action.do === 'block') {
+      await this.#goals.block(at.goalId, at.stepId);
+      // **一段で全部を止めない。**止めると、独立して進められる残りまで道連れ。
+      this.broadcast({
+        type: 'log', level: 'warn',
+        text: 'この一歩は、割り直しても通りませんでした。ここは手が付かないものとして、次へ進みます。',
+      });
+    } else {
+      // **もっと小さく割り直す。**同じ大きさで挑み直しても通らない。
+      const goal = (await this.#goals.list()).find((g) => g.id === at.goalId);
+      const step = goal?.steps.find((s) => s.id === at.stepId);
+      if (!goal || !step) return;
+      const stride = await this.#stride.get(at.model, session.contextTokens);
+      this.broadcast({
+        type: 'log', level: 'info',
+        text: `この一歩が通らないので、もっと小さく割り直します（歩幅: ${strideText(stride.size)}）`,
+      });
+      const smaller = await decompose(session.orchestrator, {
+        candidates: session.candidates,
+        request: step.instruction,
+        size: stride.size,
+        note: '一度で通らなかった段です。もっと細かく割ってください。',
+        signal: new AbortController().signal,
+      });
+      if (smaller.length === 0) {
+        await this.#goals.block(at.goalId, at.stepId);
+        this.broadcast({ type: 'log', level: 'warn', text: '割り直せませんでした。次の段へ進みます。' });
+      } else {
+        await this.#goals.split(at.goalId, at.stepId, smaller);
+      }
+    }
+    this.broadcast({ type: 'unfinished' });
+  }
+
+  /**
    * やり残しを控える／片づける。
    *
    * ここまで、40往復で切れても、押し戻しても動かなくても、**そこで終わり**
@@ -1235,10 +1385,30 @@ export class UiServer {
    * 覚えるのはこちらの仕事。
    */
   async #recordUnfinished(
-    text: string, settled: { reason: string; verified: boolean } | undefined, resuming?: string,
+    text: string, settled: { reason: string; verified: boolean } | undefined,
+    resuming?: string, didSomething = true,
   ): Promise<void> {
     const done = settled?.reason === 'completed' && settled.verified;
     try {
+      // 一段ぶんを進めていたなら、その結果を先に書き戻す。
+      // **通った跡で歩幅を測る。**言い訳ではなく、通ったかどうかで。
+      const stepping = this.#step;
+      if (stepping) {
+        const session = this.#session;
+        // **一段は、道具が動いていなければ済んだことにしない。**
+        // 段は「やること」を渡している。喋っただけの回を済みにすると、
+        // 何もしていない段取りが、順調に進んだ顔で終わる。
+        if (session) await this.#settleStep(done && didSomething, session);
+        // **段取りの途中は、やり残しを閉じない。**まだ段が残っている。
+        // 次の段は、次の見回りで拾う。**間を置く**（詰めて回すと、
+        // 落ちているときに同じところを高速で叩き続ける）。
+        const mine = (await this.#goals.list()).find((g) => g.id === stepping.goalId);
+        if (resuming && mine && !isSettled(mine)) {
+          this.broadcast({ type: 'unfinished' });
+          return;
+        }
+      }
+
       // 続きとして流したものが片づいたなら、控えから外す。
       if (resuming && done) {
         await this.#unfinished.done(resuming);
