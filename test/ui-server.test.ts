@@ -437,3 +437,27 @@ describe('土台の声が、画面に届く', () => {
     } finally { ac.abort(); await s.stop(); }
   });
 });
+
+describe('作業場が無くても、開いた瞬間に赤を出さない', () => {
+  test('一覧を読むときに、無ければ作る', async () => {
+    // 入れた版の既定（根の下の work）は初回には無い。会話を始める前に
+    // 横の板が一覧を読むので、そこで「そんな場所は無い」が出る。
+    // **開いた瞬間に赤が出る**のが、いちばん印象が悪い。
+    const home = await tempDir('aas-first-');
+    const root = join(home, 'work');
+    const s = new UiServer({
+      config: { ...DEFAULT_CONFIG, agent: { root } },
+      port: 0,
+    });
+    const b = (await s.start()).replace(/\/$/, '');
+    try {
+      const r = await fetch(`${b}/api/files`);
+      // 中身は一度しか読めない。先に読んでから、それを使って言う。
+      const body = await r.text();
+      assert.equal(r.status, 200, `開いた瞬間に落ちている: ${body}`);
+      const j = JSON.parse(body) as { root: string; entries: unknown[] };
+      assert.equal(j.root, root);
+      assert.deepEqual(j.entries, []);
+    } finally { await s.stop(); }
+  });
+});

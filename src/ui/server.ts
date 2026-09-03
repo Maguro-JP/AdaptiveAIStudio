@@ -794,6 +794,10 @@ export class UiServer {
       const root = this.#workRoot();
       const asked = url.searchParams.get('path') ?? '';
       try {
+        // **無ければ作る。**入れた版の既定（根の下の work）は初回には無い。
+        // 会話を始める前に横の板が一覧を読むので、そこで
+        // 「そんな場所は無い」が出る。開いた瞬間に赤が出るのが、いちばん困る。
+        await mkdir(root, { recursive: true }).catch(() => { /* 作れないなら listDir が言う */ });
         const entries = await listDir(root, asked);
         return send(res, 200, { root, path: asked, entries });
       } catch (e) {
