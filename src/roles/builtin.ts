@@ -212,7 +212,8 @@ export const worker: Role = {
   access: ['read', 'write', 'execute'],
   instructions: [
     '先に read_file / search_text で現状を確認する',
-    'write_file には必ず全内容を渡す',
+    '直すときは edit_file を使う（find に、いまある文字列をそのまま渡す）',
+    'write_file は新しく作るときと、全部を書き換えるときだけ。全内容を渡す',
     '変更したらテストやビルドを実行して結果を見る',
     '終わったら何をしたかを簡潔に報告する',
     '分からないことは推測せず、質問して止まる',

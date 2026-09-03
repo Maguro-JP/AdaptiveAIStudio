@@ -14,7 +14,7 @@ import { buildRegistry } from '../core/build.ts';
 import { ChatOrchestrator } from '../core/orchestrator.ts';
 import { Team, type WorkItem } from '../agent/team.ts';
 import type { ApprovalRequest } from '../agent/tools/types.ts';
-import { readFileTool, listFilesTool, searchTextTool, writeFileTool } from '../agent/tools/fs.ts';
+import { readFileTool, listFilesTool, searchTextTool, writeFileTool, editFileTool } from '../agent/tools/fs.ts';
 import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { inspectGit, describeGitState } from '../agent/git.ts';
 import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
   const team = new Team(new ChatOrchestrator(registry), {
     lanes,
     system: SYSTEM,
-    tools: [readFileTool, listFilesTool, searchTextTool, writeFileTool,
+    tools: [readFileTool, listFilesTool, searchTextTool, writeFileTool, editFileTool,
             createRunCommandTool({ allowed: agentCfg.allowedCommands })],
     root,
     maxTurns: agentCfg.maxTurns ?? 40,

@@ -12,7 +12,7 @@ import { loadConfig } from '../config.ts';
 import { buildRegistry } from '../core/build.ts';
 import { ChatOrchestrator } from '../core/orchestrator.ts';
 import type { ApprovalRequest } from '../agent/tools/types.ts';
-import { readFileTool, listFilesTool, searchTextTool, writeFileTool } from '../agent/tools/fs.ts';
+import { readFileTool, listFilesTool, searchTextTool, writeFileTool, editFileTool } from '../agent/tools/fs.ts';
 import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { inspectGit, describeGitState } from '../agent/git.ts';
 import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
@@ -150,7 +150,7 @@ async function main(): Promise<void> {
   /** 権限に応じてツールを配る。持たせない権限は事故にならない。 */
   const toolPool = {
     read: harness.wrapAll([readFileTool, listFilesTool, searchTextTool], () => currentInstruction),
-    write: harness.wrapAll([writeFileTool], () => currentInstruction),
+    write: harness.wrapAll([writeFileTool, editFileTool], () => currentInstruction),
     execute: harness.wrapAll(
       [createRunCommandTool({ allowed: agentCfg.allowedCommands })], () => currentInstruction),
     // 外へ出る口。閉じてもこの場所は動く。持っていない人は外に出られない。

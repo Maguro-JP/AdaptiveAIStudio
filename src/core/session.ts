@@ -13,6 +13,7 @@
  * **訊かずに進めない**という一点だけは、ここが守る。
  */
 import { defaultWorkRoot } from './home.ts';
+import { isWriteTool } from '../agent/tools/write-kind.ts';
 import { resolve, join } from 'node:path';
 import type { AasConfig } from '../config.ts';
 import { buildRegistry } from './build.ts';
@@ -21,7 +22,7 @@ import { setupAutopilot, resolveCandidates, stateDir, type AutopilotBundle } fro
 import { buildHarness } from './harness-setup.ts';
 import { Forum } from '../harness/deliberation.ts';
 import { Agent } from '../agent/loop.ts';
-import { readFileTool, listFilesTool, searchTextTool, writeFileTool } from '../agent/tools/fs.ts';
+import { readFileTool, listFilesTool, searchTextTool, writeFileTool, editFileTool } from '../agent/tools/fs.ts';
 import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { createDeliberateTool } from '../agent/tools/deliberate.ts';
@@ -255,7 +256,7 @@ export class Session {
     const wrap = (tools: Tool[]) => harness.wrapAll(tools, () => holder.instruction);
     const toolPool = {
       read: wrap([readFileTool, listFilesTool, searchTextTool]),
-      write: wrap([writeFileTool, createDeliberateTool(forum)]),
+      write: wrap([writeFileTool, editFileTool, createDeliberateTool(forum)]),
       execute: wrap([createRunCommandTool({ allowed: agentCfg.allowedCommands })]),
       network: netCfg.enabled === false ? [] : wrap([createFetchUrlTool({
         allowedHosts: netCfg.allowedHosts, maxBytes: netCfg.maxBytes, timeoutMs: netCfg.timeoutMs,
@@ -427,7 +428,7 @@ export class Session {
         else if (ev.type === 'handoff') yield { type: 'handoff', taskId: ev.taskId, from: ev.from };
         else if (ev.type === 'running') yield { type: 'running', taskIds: ev.taskIds };
         else if (ev.type === 'agent' && ev.event.type === 'toolEnd') {
-          if (!ev.event.isError && ev.event.call.name === 'write_file') {
+          if (!ev.event.isError && isWriteTool(ev.event.call.name)) {
             const path = (ev.event.call.args as { path?: string }).path;
             if (path) written.add(path.replace(/\\/g, '/').replace(/^\.\//, ''));
             this.#prefetch.invalidate();
@@ -797,7 +798,7 @@ export class Session {
       };
 
       /** 作業場を変えうる道具か。触る前に、作業前の状態を控える。 */
-      const changesFiles = (name: string): boolean => name === 'write_file' || name === 'run_command';
+      const changesFiles = (name: string): boolean => isWriteTool(name) || name === 'run_command';
 
       /*
        * 効かなかった道具を数える。
@@ -832,7 +833,7 @@ export class Session {
                 while (beforeEvents.length > 0) yield beforeEvents.shift()!;
               }
               // 書き込む前の状態を控える。打ち切ったときに戻せるように。
-              if (ev.call.name === 'write_file' && harnessCfg.rollbackOnGiveUp) {
+              if (isWriteTool(ev.call.name) && harnessCfg.rollbackOnGiveUp) {
                 const p = (ev.call.args as { path?: unknown }).path;
                 if (typeof p === 'string') await checkpoint.capture(p);
               }
@@ -841,8 +842,8 @@ export class Session {
             case 'toolEnd': {
               // 何が効いて何が効かなかったかを数える。**言葉ではなく、結果で見る。**
               if (ev.isError) failedTools.push(ev.call.name);
-              else if (ev.call.name === 'write_file') wroteSomething = true;
-              if (!ev.isError && ev.call.name === 'write_file') this.#prefetch.invalidate();
+              else if (isWriteTool(ev.call.name)) wroteSomething = true;
+              if (!ev.isError && isWriteTool(ev.call.name)) this.#prefetch.invalidate();
               yield {
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
               };
@@ -886,13 +887,13 @@ export class Session {
             if (ev.type === 'thinking') events.push({ type: 'text', delta: ev.delta });
             else if (ev.type === 'salvaged') events.push({ type: 'salvaged', name: ev.name });
             else if (ev.type === 'toolStart') {
-              if (ev.call.name === 'write_file' && harnessCfg.rollbackOnGiveUp) {
+              if (isWriteTool(ev.call.name) && harnessCfg.rollbackOnGiveUp) {
                 const p = (ev.call.args as { path?: unknown }).path;
                 if (typeof p === 'string') await checkpoint.capture(p);
               }
               events.push({ type: 'toolStart', name: ev.call.name, summary: summarize(ev.call.args) });
             } else if (ev.type === 'toolEnd') {
-              if (!ev.isError && ev.call.name === 'write_file') this.#prefetch.invalidate();
+              if (!ev.isError && isWriteTool(ev.call.name)) this.#prefetch.invalidate();
               events.push({
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
               });
@@ -959,7 +960,7 @@ export class Session {
 
   /** 書き換えが通ったら、その差分を出来事にする。 */
   #diffFor(name: string, args: unknown, isError: boolean): (SessionEvent & PlanEvent & { type: 'diff' }) | undefined {
-    if (isError || name !== 'write_file') return undefined;
+    if (isError || !isWriteTool(name)) return undefined;
     const path = (args as { path?: unknown }).path;
     if (typeof path !== 'string') return undefined;
     const found = this.#takeDiff(path);

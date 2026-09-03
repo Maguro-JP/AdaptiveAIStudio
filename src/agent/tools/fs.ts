@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { unifiedDiff, diffStat } from '../diff.ts';
 import { safeResolve, realSafeResolve, isSymlink, toDisplayPath } from './paths.ts';
 import { type Tool, type ToolContext, ok, fail, requireString } from './types.ts';
+import { applyEdit } from './write-kind.ts';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'target', '.venv']);
 const MAX_READ_BYTES = 400_000;
@@ -141,36 +142,120 @@ export const writeFileTool: Tool = {
       return fail(`リンク越しには書きません: ${p}（実体を直接指定してください）`);
     }
 
-    let before = '';
-    let created = false;
-    try {
-      before = await readFile(abs, 'utf8');
-    } catch {
-      created = true;
+    return commit(ctx, abs, p, content);
+  },
+};
+
+/**
+ * 中身を書き込むところ。**書き換える道具は、必ずここを通す。**
+ *
+ * 承認・差分・改行の合わせ方が、道具ごとに散ると必ずずれる。
+ * 片方だけ承認を通さない、片方だけ CRLF を潰す、という形になる。
+ */
+async function commit(
+  ctx: ToolContext, abs: string, shown: string, content: string,
+): Promise<{ content: string; isError?: boolean }> {
+  let before = '';
+  let created = false;
+  try {
+    before = await readFile(abs, 'utf8');
+  } catch {
+    created = true;
+  }
+
+  // 元の改行に合わせる。Windows で取ってきた木は CRLF のことがあり、
+  // モデルは LF で書き戻す。そのまま書くと**1行も直していないのに
+  // ファイル全体が変更扱い**になり、差分を見る意味がなくなる。
+  const written = matchLineEndings(content, before);
+
+  if (before === written) return ok(`変更なし: ${shown}`);
+
+  const display = toDisplayPath(ctx.root, abs);
+  // 差分は LF に揃えて見せる。^M が全行に並ぶと読めない。
+  const diff = unifiedDiff(display, toLf(before), toLf(written));
+  const approved = await ctx.approve({ kind: 'write', path: display, diff, created });
+  if (!approved) return fail(`利用者が書き込みを拒否しました: ${shown}`);
+
+  try {
+    await mkdir(dirname(abs), { recursive: true });
+    await writeFile(abs, written, 'utf8');
+  } catch (e) {
+    return fail(`書き込めません: ${shown} (${describe(e)})`);
+  }
+
+  const { added, removed } = diffStat(diff);
+  return ok(created ? `作成: ${display}（${added}行）` : `更新: ${display}（+${added} -${removed}）`);
+}
+
+/**
+ * ファイルの一部だけを差し替える。
+ *
+ * **これが無いと、ローカルの小さいモデルではコーディングが成り立たない。**
+ * `write_file` は全文渡し。300行のファイルを1行直すために、300行を
+ * そっくり書き戻させることになる。4B の窓（8192）では出力だけで溢れるし、
+ * 溢れなくても途中で崩れて、**直していないところを壊す**。
+ *
+ * 当てる場所は、探す文字列で決める。行番号にしない。行番号は、
+ * 直した瞬間にずれる（モデルは読んだときの番号のまま次を指す）。
+ */
+export const editFileTool: Tool = {
+  schema: {
+    name: 'edit_file',
+    description:
+      'ファイルの一部を差し替える。find に「いまある文字列」、replace に「置き換えた後の文字列」を渡す。'
+      + '全文を書き直す必要はない。find は前後を少し含めて、file の中で一意になるようにすること。'
+      + '実行前に差分が利用者へ提示され、承認が要る。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '相対パス' },
+        find: { type: 'string', description: 'いまファイルにある文字列（そのまま一致するもの）' },
+        replace: { type: 'string', description: '置き換えた後の文字列' },
+        all: { type: 'boolean', description: '複数見つかったとき、全部置き換えるなら true（既定 false）' },
+      },
+      required: ['path', 'find', 'replace'],
+      additionalProperties: false,
+    },
+  },
+  async run(args, ctx) {
+    const p = requireString(args, 'path');
+    const find = typeof args.find === 'string' ? args.find : undefined;
+    const replace = typeof args.replace === 'string' ? args.replace : undefined;
+    if (!p) return fail('path が必要です。');
+    if (find === undefined) return fail('find が必要です。');
+    if (replace === undefined) return fail('replace が必要です。');
+    if (find.length === 0) return fail('find が空です。差し替える場所が決まりません。');
+
+    const abs = await realSafeResolve(ctx.root, p);
+    if (!abs) return fail(`作業ディレクトリの外です: ${p}`);
+    if (await isSymlink(safeResolve(ctx.root, p) ?? abs)) {
+      return fail(`リンク越しには書きません: ${p}（実体を直接指定してください）`);
     }
 
-    // 元の改行に合わせる。Windows で取ってきた木は CRLF のことがあり、
-    // モデルは LF で書き戻す。そのまま書くと**1行も直していないのに
-    // ファイル全体が変更扱い**になり、差分を見る意味がなくなる。
-    const written = matchLineEndings(content, before);
-
-    if (before === written) return ok(`変更なし: ${p}`);
-
-    const display = toDisplayPath(ctx.root, abs);
-    // 差分は LF に揃えて見せる。^M が全行に並ぶと読めない。
-    const diff = unifiedDiff(display, toLf(before), toLf(written));
-    const approved = await ctx.approve({ kind: 'write', path: display, diff, created });
-    if (!approved) return fail(`利用者が書き込みを拒否しました: ${p}`);
-
-    try {
-      await mkdir(dirname(abs), { recursive: true });
-      await writeFile(abs, written, 'utf8');
-    } catch (e) {
-      return fail(`書き込めません: ${p} (${describe(e)})`);
+    const before = await readFile(abs, 'utf8').catch(() => undefined);
+    if (before === undefined) {
+      return fail(`まだありません: ${p}（新しく作るなら write_file を使ってください）`);
     }
 
-    const { added, removed } = diffStat(diff);
-    return ok(created ? `作成: ${display}（${added}行）` : `更新: ${display}（+${added} -${removed}）`);
+    // モデルは LF で書いてくる。中身が CRLF だと、**そのままでは一致しない。**
+    // 「無い」と言われて、モデルは同じことを何度も試す。合わせてから探す。
+    const lfBefore = toLf(before);
+    const { text, hits } = applyEdit(lfBefore, toLf(find), toLf(replace), args.all === true);
+    if (hits === 0) {
+      return fail(
+        `見つかりません: ${p} の中に find の文字列がありません。`
+        + 'read_file で読み直して、そこにあるとおりの文字列を渡してください'
+        + '（空白や改行まで一致させる必要があります）。',
+      );
+    }
+    if (hits > 1 && args.all !== true) {
+      return fail(
+        `${hits} 箇所に当てはまります: ${p}。どこを直すのか決まりません。`
+        + 'find に前後を少し足して一意にするか、全部直すなら all を true にしてください。',
+      );
+    }
+
+    return commit(ctx, abs, p, text);
   },
 };
 

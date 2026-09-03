@@ -11,6 +11,7 @@
  * 言葉にできない変更は、たいてい本人も分かっていない。
  * 出せたなら通す。判断を奪うのではなく、判断を残させるための関所。
  */
+import { isWriteTool } from '../agent/tools/write-kind.ts';
 import { minimatch } from './glob.ts';
 import { type Rule, allow, deny, argString } from './rules.ts';
 import type { ToolCall } from '../providers/contract.ts';
@@ -123,7 +124,7 @@ export function requiresDeliberation(opts: DeliberationOptions): Rule {
     name: 'requires-deliberation',
     description: '重大な変更は、協議の記録なしに実行させない',
     pre(call, ctx) {
-      if (call.name !== 'write_file') return allow;
+      if (!isWriteTool(call.name)) return allow;
       const path = argString(call, 'path');
       if (!path) return allow;
 
@@ -151,7 +152,7 @@ export function requiresDeliberation(opts: DeliberationOptions): Rule {
 function countWritten(history: readonly ToolCall[]): Set<string> {
   const s = new Set<string>();
   for (const c of history) {
-    if (c.name !== 'write_file') continue;
+    if (!isWriteTool(c.name)) continue;
     const p = argString(c, 'path');
     if (p) s.add(p);
   }

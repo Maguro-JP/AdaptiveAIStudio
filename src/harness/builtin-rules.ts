@@ -4,6 +4,7 @@
  * それぞれ「モデルがやりがちな誤った選択」に対応している。
  * プロンプトで禁じるのではなく、実行の手前で止める。
  */
+import { isWriteTool, plannedContent } from '../agent/tools/write-kind.ts';
 import { readFile, stat } from 'node:fs/promises';
 import { relative, isAbsolute } from 'node:path';
 import { minimatch } from './glob.ts';
@@ -36,7 +37,7 @@ export function protectedPaths(patterns: string[], opts: { nocase?: boolean } = 
     name: 'protected-paths',
     description: `保護対象への書き込みを禁じる: ${patterns.join(', ')}`,
     pre(call, ctx) {
-      if (call.name !== 'write_file') return allow;
+      if (!isWriteTool(call.name)) return allow;
       const path = argString(call, 'path');
       if (!path) return allow;
       const rel = normalize(ctx.root, path);
@@ -57,9 +58,11 @@ export const testProtection: Rule = {
   name: 'test-protection',
   description: 'テストの削除・skip 化を書き込み前に止める',
   async pre(call, ctx) {
-    if (call.name !== 'write_file') return allow;
+    if (!isWriteTool(call.name)) return allow;
     const path = argString(call, 'path');
-    const content = argString(call, 'content');
+    // **当ててから見る。**edit_file は引数に「後の姿」が入っていない。
+    // 引数だけ見ていると、部分置換でテストを消すのを素通りさせる。
+    const content = await plannedContent(call.name, call.args, ctx.root);
     if (!path || content === undefined) return allow;
     if (!isTestFile(path)) return allow;
 
@@ -99,13 +102,13 @@ export function blastRadius(maxFiles: number): Rule {
     name: 'blast-radius',
     description: `1つの依頼で書き換えるファイルを ${maxFiles} 件までに制限する`,
     pre(call, ctx) {
-      if (call.name !== 'write_file') return allow;
+      if (!isWriteTool(call.name)) return allow;
       const path = argString(call, 'path');
       if (!path) return allow;
 
       const written = new Set(
         ctx.history
-          .filter((c) => c.name === 'write_file')
+          .filter((c) => isWriteTool(c.name))
           .map((c) => argString(c, 'path'))
           .filter((p): p is string => !!p),
       );
@@ -129,7 +132,7 @@ export const readBeforeWrite: Rule = {
   name: 'read-before-write',
   description: '既存ファイルを読まずに上書きさせない',
   async pre(call, ctx) {
-    if (call.name !== 'write_file') return allow;
+    if (!isWriteTool(call.name)) return allow;
     const path = argString(call, 'path');
     if (!path) return allow;
 
@@ -140,7 +143,7 @@ export const readBeforeWrite: Rule = {
 
     const sawIt = ctx.history.some((c) =>
       (c.name === 'read_file' && argString(c, 'path') === path) ||
-      (c.name === 'write_file' && argString(c, 'path') === path) ||
+      (isWriteTool(c.name) && argString(c, 'path') === path) ||
       c.name === 'search_text');
     if (sawIt) return allow;
 
@@ -159,11 +162,16 @@ export const noRepeatedWrites: Rule = {
   name: 'no-repeated-writes',
   description: '同一内容の書き込みの繰り返しを止める',
   pre(call, ctx) {
-    if (call.name !== 'write_file') return allow;
-    const signature = `${argString(call, 'path')}::${argString(call, 'content')}`;
+    if (!isWriteTool(call.name)) return allow;
+    // 同じ呼び出しかどうかは、**渡された引数そのもの**で見る。
+    // ここで当て直すと、当てるたびに中身が変わる（一度目で書き換わるので、
+    // 二度目は「見つからない」になる）。繰り返しを見るには引数の方が正しい。
+    const sign = (c: ToolCall) =>
+      `${c.name}::${argString(c, 'path')}::${argString(c, 'content')}`
+      + `::${argString(c, 'find')}::${argString(c, 'replace')}`;
+    const signature = sign(call);
     const repeats = ctx.history.filter((c) =>
-      c.name === 'write_file' &&
-      `${argString(c, 'path')}::${argString(c, 'content')}` === signature).length;
+      isWriteTool(c.name) && sign(c) === signature).length;
     return repeats >= 1
       ? deny('同じ内容を再度書こうとしています。別の方法を検討するか、行き詰まりを報告してください。')
       : allow;
@@ -215,7 +223,7 @@ export function afterWriteHint(hint: (path: string) => string | undefined): Rule
     name: 'after-write-hint',
     description: '書き込み直後に注意点を差し込む',
     post(call, result) {
-      if (call.name !== 'write_file') return ok;
+      if (!isWriteTool(call.name)) return ok;
       if (/^ERROR/.test(result)) return ok;
       const path = argString(call, 'path');
       const note = path ? hint(path) : undefined;
