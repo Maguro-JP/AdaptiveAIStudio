@@ -11,6 +11,7 @@
  * 素の HTML と ES モジュールなら、組み立ての手順すら要らない。
  */
 import { listDir } from './files.ts';
+import { Conversations, ID_SHAPE } from '../core/conversations.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname, extname, normalize, resolve as resolvePath } from 'node:path';
@@ -106,6 +107,10 @@ export type UiEvent =
   | { type: 'busy'; busy: boolean }
   /** 順番待ちの数。0 なら空。 */
   | { type: 'queue'; waiting: number }
+  /** 会話の一覧が変わった。画面は取り直す。 */
+  | { type: 'conversations' }
+  /** 暇なときの考えごと。送りは止めないが、動いていることは見せる。 */
+  | { type: 'musing'; on: boolean }
   /** 分解して並列に働かせているときの出来事。 */
   | { type: 'planEvent'; event: unknown }
   /** 暇なときに考えたこと。放っておいても動いていることが見える。 */
@@ -136,6 +141,15 @@ export class UiServer {
    * 思って書いているので、預かって順に流すのが素直。
    */
   readonly #queue: Array<{ text: string; attached: string[] }> = [];
+  /**
+   * 残してある会話。**窓を閉じても消えないように。**
+   * ここまでメモリの中だけだったので、立ち上げ直すと無かったことになっていた。
+   */
+  readonly #conversations = new Conversations(join(stateDir(), 'conversations'));
+  /** いま話している会話。最初の依頼のときに決まる。 */
+  #conversationId?: string;
+  /** どこまで残したか。ここから先を足す。 */
+  #saved = 0;
   #idleTimer?: ReturnType<typeof setInterval>;
   #thinking = false;
   /**
@@ -212,12 +226,65 @@ export class UiServer {
    */
   async session(): Promise<Session> {
     if (this.#session) return this.#session;
-    this.#session = await Session.create(this.#opts.config, {
+    this.#session = await Session.create(await this.#configForSession(), {
       approve: (req) => this.#ask(req),
       onLog: (level, text) => this.broadcast({ type: 'log', level, text }),
     });
+    // 続きから話す。**土台は作り直しても、話は続ける。**
+    if (this.#conversationId) {
+      const past = await this.#conversations.load(this.#conversationId);
+      this.#session.restore(past);
+      this.#saved = past.length;
+    }
     this.#startThinking(this.#session);
     return this.#session;
+  }
+
+  /**
+   * 会話の土台に渡す設定。
+   *
+   * この中で読む道では、**いま読んでいるものを、そのまま候補にする。**
+   * 名前から規模を当てる仕組みしか無いと、`tiny.gguf` のような名前で
+   * 「使えるモデルがありません」と言って 500 で止まる（実際に止まった）。
+   * 読めている以上、使えるかどうかを名前で決め直す必要はない。
+   */
+  async #configForSession(): Promise<AasConfig> {
+    const config = this.#opts.config;
+    if (config.candidates && config.candidates.length > 0) return config;
+    if ((config.runtime?.kind ?? 'ollama') !== 'inproc') return config;
+    const loaded = this.#runtime?.id === 'inproc' ? this.#runtime.loaded() : [];
+    const ref = loaded[0];
+    if (!ref) return config;
+    return { ...config, candidates: [ref] };
+  }
+
+  /** いま話している会話。まだ無ければ作る。 */
+  async #currentConversation(): Promise<string> {
+    if (!this.#conversationId) {
+      this.#conversationId = (await this.#conversations.create()).id;
+      this.#saved = 0;
+    }
+    return this.#conversationId;
+  }
+
+  /**
+   * 済んだ分を残す。
+   *
+   * **一往復ごとに書く。**終わりにまとめて書くと、途中で落ちたときに
+   * その回のやりとりが丸ごと消える。道具の呼び出しと結果も残す
+   * （続きを話すときに、その対応が要る）。
+   */
+  async #persist(session: Session): Promise<void> {
+    const id = await this.#currentConversation();
+    const fresh = session.history.slice(this.#saved);
+    if (fresh.length === 0) return;
+    await this.#conversations.append(id, fresh).catch((e: unknown) => {
+      this.broadcast({ type: 'log', level: 'error', text: `会話を残せませんでした: ${(e as Error).message}` });
+    });
+    this.#saved = session.history.length;
+    const firstAsked = fresh.find((m) => m.role === 'user');
+    if (firstAsked) await this.#conversations.titleIfUnset(id, firstAsked.content).catch(() => undefined);
+    this.broadcast({ type: 'conversations' });
   }
 
   /**
@@ -254,6 +321,9 @@ export class UiServer {
   async idleTick(session: Session): Promise<'BUSY' | 'HELD' | 'MISSING' | 'THOUGHT'> {
     // 作業中は考えない。人の依頼が先。支度の最中も、人の依頼のうち。
     if (this.#busyNow(session)) return 'BUSY';
+    // **順番待ちがあるなら、暇ではない。**ここで考え始めると、
+    // 待っている依頼が、その分だけ後ろへ押しやられる。
+    if (this.#queue.length > 0) { void this.#maybeDrain(); return 'BUSY'; }
     if (Date.now() < this.#idleHoldUntil) return 'HELD';
     this.#preparing = true;
     try {
@@ -264,6 +334,9 @@ export class UiServer {
         return 'MISSING';
       }
       this.#thinking = true;
+      // 暇なときの考えごとも、動いていることに変わりはない。**黙って動かない。**
+      // ただし送りは止めない（人の依頼はいつでも受ける）。
+      this.broadcast({ type: 'musing', on: true });
       try {
         for await (const event of session.think()) {
           this.broadcast({ type: 'thinkEvent', event });
@@ -273,7 +346,19 @@ export class UiServer {
     } finally {
       this.#thinking = false;
       this.#preparing = false;
+      this.broadcast({ type: 'musing', on: false });
+      // **手が空いたら、待っているものを流す。**
+      // ここを忘れると、考えごとの最中に来た依頼が、誰にも拾われない。
+      await this.#maybeDrain();
     }
+  }
+
+  /** 手が空いていて、待っているものがあれば流す。 */
+  async #maybeDrain(): Promise<void> {
+    const session = this.#session;
+    if (!session || this.#queue.length === 0) return;
+    if (this.#busyNow(session)) return;
+    await this.#drainQueue(session);
   }
 
   #ask(req: ApprovalRequest): Promise<boolean> {
@@ -736,6 +821,65 @@ export class UiServer {
       }
     }
 
+    // 会話。**残してあるものを出して、開き直せるようにする。**
+    if (path === '/api/conversations' && req.method === 'GET') {
+      const list = await this.#conversations.list();
+      return send(res, 200, { current: this.#conversationId ?? null, list });
+    }
+
+    if (path === '/api/conversations' && req.method === 'POST') {
+      const session = this.#session;
+      if (session && this.#busyNow(session)) {
+        return send(res, 409, { error: 'いま作業中です。終わってから切り替えてください' });
+      }
+      const head = await this.#conversations.create();
+      this.#conversationId = head.id;
+      this.#saved = 0;
+      this.#session?.reset();
+      this.broadcast({ type: 'conversations' });
+      return send(res, 200, { current: head.id, messages: [] });
+    }
+
+    if (path === '/api/conversations/select' && req.method === 'POST') {
+      const body = await readBody(req) as { id?: unknown };
+      const id = typeof body?.id === 'string' ? body.id : '';
+      if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
+      const session = this.#session;
+      if (session && this.#busyNow(session)) {
+        return send(res, 409, { error: 'いま作業中です。終わってから切り替えてください' });
+      }
+      const past = await this.#conversations.load(id);
+      this.#conversationId = id;
+      this.#saved = past.length;
+      // 土台があるなら、その場で積み直す。無ければ次に作るときに積む。
+      session?.restore(past);
+      this.broadcast({ type: 'conversations' });
+      return send(res, 200, { current: id, messages: past });
+    }
+
+    if (path === '/api/conversations' && req.method === 'DELETE') {
+      const id = url.searchParams.get('id') ?? '';
+      if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
+      const session = this.#session;
+      if (id === this.#conversationId && session && this.#busyNow(session)) {
+        return send(res, 409, { error: 'いま作業中です。終わってから消してください' });
+      }
+      await this.#conversations.remove(id);
+      if (id === this.#conversationId) {
+        this.#conversationId = undefined;
+        this.#saved = 0;
+        this.#session?.reset();
+      }
+      this.broadcast({ type: 'conversations' });
+      return send(res, 200, { removed: id });
+    }
+
+    if (path === '/api/conversations/messages' && req.method === 'GET') {
+      const id = url.searchParams.get('id') ?? '';
+      if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
+      return send(res, 200, { id, messages: await this.#conversations.load(id) });
+    }
+
     if (path === '/api/state' && req.method === 'GET') {
       return send(res, 200, await collectState(this.#opts.config));
     }
@@ -762,6 +906,9 @@ export class UiServer {
    * 繋ぎ先の応答待ちは数十秒になることがあり、その間ずっと「考え中」になる。
    */
   /** いま何かしているか。走り出す前の支度も「している」に数える。 */
+  /** いま使っている設定。検査から、同じ設定で立ち上げ直すのに要る。 */
+  get config(): AasConfig { return this.#opts.config; }
+
   /** 作業場の根。会話の土台を組まずに知りたいときに使う。 */
   #workRoot(): string {
     return resolvePath(this.#opts.config.agent?.root ?? process.cwd());
@@ -827,6 +974,9 @@ export class UiServer {
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
     } finally {
+      // **残してから、次へ進む。**先に次を流すと、落ちたときに
+      // その回のやりとりが消える。
+      await this.#persist(session);
       this.broadcast({ type: 'busy', busy: false });
       // 作業で記憶やファイルが動いている。画面の材料を取り直させる。
       this.broadcast({ type: 'stateChanged' });

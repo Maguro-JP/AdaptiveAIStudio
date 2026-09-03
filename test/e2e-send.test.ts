@@ -92,6 +92,55 @@ describe('送って、返事が戻る', () => {
   });
 });
 
+describe('会話は残る', () => {
+  /**
+   * ここまで、やりとりはメモリの中だけだった。窓を閉じれば消え、
+   * 横の板の「会話」は枠だけで中身が無かった。
+   * **立ち上げ直しても続きから話せる**ところまでを、ここで留める。
+   */
+  test('一往復すると一覧に出て、立ち上げ直しても残っている', async () => {
+    // 前の検査の続きに混ざらないよう、新しい会話から始める。
+    assert.equal((await fetch(`${base}/api/conversations`, { method: 'POST' })).status, 200);
+
+    const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
+    const collecting = collect(done);
+    await new Promise((r) => setTimeout(r, 200));
+    const r = await fetch(`${base}/api/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: '残ってほしい依頼' }),
+    });
+    assert.equal(r.status, 202, await r.text());
+    await collecting;
+
+    const listed = await (await fetch(`${base}/api/conversations`)).json() as {
+      current: string | null; list: Array<{ id: string; title: string; messages: number }>;
+    };
+    assert.equal(listed.list.length >= 1, true, '一覧に出ていない');
+    const head = listed.list.find((h) => h.id === listed.current);
+    assert.ok(head, 'いま話している会話が一覧に無い');
+    assert.equal(head.title, '残ってほしい依頼', '見出しが最初の依頼になっていない');
+    assert.ok(head.messages >= 2, `人の依頼と返事が数えられていない: ${head.messages}`);
+
+    // 中身。人が書いたものと、返ってきたものの両方が残っていること。
+    const back = await (await fetch(`${base}/api/conversations/messages?id=${head.id}`)).json() as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    assert.ok(back.messages.some((m) => m.role === 'user' && m.content.includes('残ってほしい依頼')));
+    assert.ok(back.messages.some((m) => m.role === 'assistant' && m.content.includes('こんにちは')),
+      `返事が残っていない: ${JSON.stringify(back.messages).slice(0, 300)}`);
+
+    // **立ち上げ直す。**同じ記録の置き場を見る別の本体から、同じものが見えること。
+    const again = new UiServer({ port: 0, config: server.config });
+    const url2 = (await again.start()).replace(/\/$/, '');
+    try {
+      const seen = await (await fetch(`${url2}/api/conversations`)).json() as {
+        list: Array<{ id: string; title: string }>;
+      };
+      assert.ok(seen.list.some((h) => h.id === head.id), '立ち上げ直したら消えている');
+    } finally { await again.stop(); }
+  });
+});
+
 describe('動いている間に書いても、断らない', () => {
   /**
    * 突き返されるのがいちばん不快で、しかも書き直させることになる。

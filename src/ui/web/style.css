@@ -97,6 +97,7 @@ body {
 .run-time { color: var(--dim); font-variant-numeric: tabular-nums; font-size: .78rem; }
 .run[data-state="busy"] { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
 .run[data-state="busy"] .run-dot { background: var(--accent); animation: pulse 1.1s ease-in-out infinite; }
+.run[data-state="musing"] .run-dot { background: var(--warn); animation: pulse 2.4s ease-in-out infinite; }
 .run[data-state="down"] .run-dot { background: var(--bad); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
 /* 動きを嫌う設定なら、点滅させない。 */
@@ -136,6 +137,16 @@ button.row {
 }
 .side-list button:hover { background: var(--surface2); color: var(--text); }
 .side-list button.on { background: var(--surface2); color: var(--text); }
+.side-row { display: flex; align-items: center; }
+.side-row > button:first-child { flex: 1; min-width: 0; }
+.side-row > .drop {
+  flex: 0 0 auto; width: 1.6rem; padding: 3px 0; text-align: center;
+  color: transparent;
+}
+/* 消す印は、その行に触れたときだけ出す。並んでいると押し間違える。 */
+.side-row:hover > .drop { color: var(--dim); }
+.side-row > .drop:hover { color: var(--bad); }
+
 .side-list .empty { color: var(--dim); font-size: .78rem; padding: var(--s1) var(--s2); }
 
 .side-foot {

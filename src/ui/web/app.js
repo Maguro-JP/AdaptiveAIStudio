@@ -20,6 +20,8 @@ const eventHandlers = new Map();
 const ctx = {
   /** 会話の入力欄へ寄せる。差し替えられる。 */
   focusInput: () => undefined,
+  /** 残してあるやりとりを並べ直す。会話の板が差し替える。 */
+  showHistory: () => undefined,
   on(type, fn) {
     if (!eventHandlers.has(type)) eventHandlers.set(type, []);
     eventHandlers.get(type).push(fn);
@@ -333,10 +335,11 @@ const run = {
     const box = $('run');
     box.dataset.state = state;
     $('runText').textContent = text;
+    // 中断できるのは、人の依頼を動かしているときだけ。
     $('runStop').hidden = state !== 'busy';
     $('sbWork').textContent = text;
     $('sbWork').classList.toggle('busy', state === 'busy');
-    if (state === 'busy') {
+    if (state === 'busy' || state === 'musing') {
       if (!this.since) this.since = Date.now();
       if (!this.timer) this.timer = setInterval(() => this.tick(), 1000);
       this.tick();
@@ -370,7 +373,17 @@ function listen() {
   };
   src.onmessage = (m) => {
     const e = JSON.parse(m.data);
-    if (e.type === 'busy') run.set(e.busy ? 'busy' : 'idle', e.busy ? '作業中' : '待機中');
+    if (e.type === 'busy') {
+      busyNow = e.busy;
+      run.set(e.busy ? 'busy' : 'idle', e.busy ? '作業中' : '待機中');
+      // 動いている間は切り替えさせない。切り替えると、返事が別の会話に混ざる。
+      drawConversations();
+    }
+    if (e.type === 'conversations') void loadConversations();
+    if (e.type === 'musing' && !busyNow) {
+      // 暇なときの考えごと。送りは止まらないので、待機中とは分けて言う。
+      run.set(e.on ? 'musing' : 'idle', e.on ? '考えごと中（暇なとき）' : '待機中');
+    }
     if (e.type === 'queue') {
       const box = $('queue');
       box.hidden = e.waiting === 0;
@@ -383,6 +396,80 @@ function listen() {
     }
     for (const fn of eventHandlers.get(e.type) ?? []) fn(e);
   };
+}
+
+/* ---------- 横の板：会話 ---------- */
+
+/*
+ * 残してある会話を出して、開き直せるようにする。
+ * ここまでメモリの中だけだったので、窓を閉じると消えていた。
+ */
+let conversations = { current: null, list: [] };
+let busyNow = false;
+
+async function loadConversations() {
+  try {
+    conversations = await fetch('/api/conversations').then((x) => x.json());
+  } catch { return; }
+  drawConversations();
+}
+
+function drawConversations() {
+  const box = $('sideSessions');
+  box.textContent = '';
+
+  const fresh = document.createElement('button');
+  fresh.textContent = '＋ 新しい会話';
+  fresh.disabled = busyNow;
+  fresh.onclick = async () => {
+    const r = await fetch('/api/conversations', { method: 'POST' });
+    const body = await r.json();
+    if (!r.ok) return void alert(body.error ?? '始められませんでした');
+    ctx.showHistory([]);
+    await loadConversations();
+  };
+  box.append(fresh);
+
+  if (conversations.list.length === 0) {
+    box.append(Object.assign(document.createElement('div'),
+      { className: 'empty', textContent: 'まだありません' }));
+    return;
+  }
+
+  for (const head of conversations.list) {
+    const row = document.createElement('div');
+    row.className = 'side-row';
+    const open = document.createElement('button');
+    open.textContent = head.title;
+    open.title = `${head.title}（${head.messages}）`;
+    open.className = head.id === conversations.current ? 'on' : '';
+    open.disabled = busyNow;
+    open.onclick = async () => {
+      const r = await fetch('/api/conversations/select', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: head.id }),
+      });
+      const body = await r.json();
+      if (!r.ok) return void alert(body.error ?? '開けませんでした');
+      ctx.showHistory(body.messages ?? []);
+      await loadConversations();
+    };
+    // 消すのは、押し間違えると取り返しがつかない。一度訊く。
+    const drop = document.createElement('button');
+    drop.className = 'drop';
+    drop.textContent = '×';
+    drop.title = '消す';
+    drop.disabled = busyNow;
+    drop.onclick = async () => {
+      if (!confirm(`「${head.title}」を消します。戻せません。`)) return;
+      const r = await fetch(`/api/conversations?id=${encodeURIComponent(head.id)}`, { method: 'DELETE' });
+      if (!r.ok) return void alert((await r.json()).error ?? '消せませんでした');
+      if (head.id === conversations.current) ctx.showHistory([]);
+      await loadConversations();
+    };
+    row.append(open, drop);
+    box.append(row);
+  }
 }
 
 /* ---------- 横の板：作業場 ---------- */
@@ -842,5 +929,6 @@ await loadTheme();
 await load();
 await refreshState();
 await loadFiles();
+await loadConversations();
 listen();
 setInterval(refreshState, 5000);

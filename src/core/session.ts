@@ -942,6 +942,26 @@ export class Session {
   /** 話の続きを切る。覚えたことは消えない。忘れるのは、いま話していた流れだけ。 */
   reset(): void { this.#history.length = 0; }
 
+  /**
+   * いままでのやりとり。**残す側が読む。**
+   *
+   * 中身は渡すが、外から書き換えさせない（読み取り専用で返す）。
+   * 書き換えを許すと、道具の呼び出しと結果の対応が崩れて、
+   * 次の一手でモデルが弾かれる。
+   */
+  get history(): readonly ProviderMessage[] { return this.#history; }
+
+  /**
+   * 続きから話す。残してあったやりとりを積み直す。
+   *
+   * **積む前に空にする。**足すだけにすると、会話を切り替えたときに
+   * 前の会話が下に残り、別の話が地続きに見える。
+   */
+  restore(messages: readonly ProviderMessage[]): void {
+    this.#history.length = 0;
+    this.#history.push(...messages);
+  }
+
   async close(): Promise<void> {
     this.abort();
     // 外の道具（子プロセス）を止める。止めないと、画面を閉じても

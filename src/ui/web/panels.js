@@ -326,6 +326,37 @@ export const PANELS = {
     stop.onclick = () => fetch('/api/abort', { method: 'POST' });
     ctx.focusInput = () => input.focus();
 
+    /**
+     * 残してあるやりとりを、そのまま並べ直す。
+     *
+     * 道具の呼び出しと結果は畳んで出す。開いたときに読みたいのは
+     * 「何を頼んで、何が返ったか」で、途中の呼び出しではない。
+     */
+    ctx.showHistory = (messages) => {
+      log.textContent = '';
+      stream = null;
+      openTools.clear();
+      for (const m of messages) {
+        if (m.role === 'user') { add(el('div', 'asked', m.content)); continue; }
+        if (m.role === 'assistant') {
+          if (m.content.trim()) add(el('div', 'said', m.content));
+          for (const call of m.toolCalls ?? []) {
+            const c = card('✓', call.name, '', 'tool');
+            c.box.open = false;
+          }
+          continue;
+        }
+        // 道具の結果。直前の札の中へ入れる。
+        if (m.role === 'tool') {
+          const last = log.lastElementChild;
+          if (last?.classList.contains('tool')) {
+            last.querySelector('.card-body')?.append(el('pre', 'tool-out', m.content));
+          }
+        }
+      }
+      follow();
+    };
+
     ctx.on('busy', (e) => {
       stop.disabled = !e.busy;
       send.disabled = e.busy;
