@@ -153,3 +153,46 @@ describe('やり残しを、こちらから拾う', () => {
     } finally { await s.stop(); await fake.close(); }
   });
 });
+
+describe('思いつきを切っても、頼まれたことは放り出さない', () => {
+  test('initiative を切っても、やり残しは拾う', async () => {
+    // 「勝手に考え始めないでほしい」と「頼んだことを途中で放り出してよい」は
+    // まったく別の話。ここを一つの栓にしていたので、思いつきを切った人は
+    // やり残しの拾い上げごと失っていた。
+    const state = await ownState('d');
+    const root = await tempDir('aas-resume-root4-');
+    const fake = await startFakeServer({
+      kind: 'stalls', name: 'list_files', args: { path: '.' }, then: 'このあと直します。',
+    });
+    const s = new UiServer({
+      config: { ...config(fake, root), initiative: { enabled: false } },
+      port: 0,
+    });
+    const base = (await s.start()).replace(/\/$/, '');
+    try {
+      const mine = await ask(base, 'test を直して');
+      const store = new UnfinishedWork(join(state, 'unfinished.jsonl'));
+      await store.bump(mine.id, Date.now() - 60 * 60_000);
+      fake.setBehavior({ kind: 'stream', text: '直しました。' });
+      const session = await s.session();
+      assert.equal(await s.idleTick(session), 'RESUMED', '思いつきを切ると、やり残しまで止まる');
+    } finally { await s.stop(); await fake.close(); }
+  });
+
+  test('思いつきの方は、切れている（対）', async () => {
+    // 切ったのに考え始めるなら、切れていない。
+    await ownState('e');
+    const root = await tempDir('aas-resume-root5-');
+    const fake = await startFakeServer({ kind: 'stream', text: 'はい' });
+    const s = new UiServer({
+      config: { ...config(fake, root), initiative: { enabled: false } },
+      port: 0,
+    });
+    await s.start();
+    try {
+      const session = await s.session();
+      // やり残しは無い。思いつきに進まず、そこで止まること。
+      assert.equal(await s.idleTick(session), 'HELD');
+    } finally { await s.stop(); await fake.close(); }
+  });
+});

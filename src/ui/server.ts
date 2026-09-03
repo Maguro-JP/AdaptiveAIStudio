@@ -320,7 +320,10 @@ export class UiServer {
    */
   #startThinking(session: Session): void {
     const cfg = this.#opts.config.initiative ?? {};
-    if (cfg.enabled === false) return;
+    // **思いつきを切っても、見回りは止めない。**
+    // 「勝手に考え始めないでほしい」と「頼んだことを途中で放り出してよい」は
+    // まったく別の話。ここを一つの栓にしていたので、思いつきを切った人は
+    // やり残しの拾い上げごと失っていた。考えるかどうかは、下で決める。
     const every = Math.max(5, cfg.idleSeconds ?? 30) * 1000;
 
     this.#idleTimer = setInterval(() => { void this.idleTick(session); }, every);
@@ -353,6 +356,9 @@ export class UiServer {
     // **やり残しが先。**考えごとより、頼まれて終わっていない方が先。
     // ここが無いと、40往復で切れた作業は、人が言い直すまで誰も続けない。
     if (await this.#resumeUnfinished(session)) return 'RESUMED';
+
+    // 思いつきはここで切る。やり残しの拾い上げは、その手前で済んでいる。
+    if ((this.#opts.config.initiative ?? {}).enabled === false) return 'HELD';
 
     if (Date.now() < this.#idleHoldUntil) return 'HELD';
     this.#preparing = true;
