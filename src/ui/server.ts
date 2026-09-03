@@ -231,11 +231,10 @@ export class UiServer {
       onLog: (level, text) => this.broadcast({ type: 'log', level, text }),
     });
     // 続きから話す。**土台は作り直しても、話は続ける。**
-    if (this.#conversationId) {
-      const past = await this.#conversations.load(this.#conversationId);
-      this.#session.restore(past);
-      this.#saved = past.length;
-    }
+    const id = await this.#currentConversation();
+    const past = await this.#conversations.load(id);
+    this.#session.restore(past);
+    this.#saved = past.length;
     this.#startThinking(this.#session);
     return this.#session;
   }
@@ -258,12 +257,23 @@ export class UiServer {
     return { ...config, candidates: [ref] };
   }
 
-  /** いま話している会話。まだ無ければ作る。 */
+  /**
+   * いま話している会話。
+   *
+   * 立ち上げ直した直後は、**いちばん新しいものを続きとして開く。**
+   * 毎回まっさらから始めると、閉じただけで話が消えたように見える。
+   * 一つも無ければ、そこで作る。
+   */
   async #currentConversation(): Promise<string> {
-    if (!this.#conversationId) {
-      this.#conversationId = (await this.#conversations.create()).id;
-      this.#saved = 0;
+    if (this.#conversationId) return this.#conversationId;
+    const [newest] = await this.#conversations.list();
+    if (newest) {
+      this.#conversationId = newest.id;
+      this.#saved = (await this.#conversations.load(newest.id)).length;
+      return this.#conversationId;
     }
+    this.#conversationId = (await this.#conversations.create()).id;
+    this.#saved = 0;
     return this.#conversationId;
   }
 
@@ -824,6 +834,9 @@ export class UiServer {
     // 会話。**残してあるものを出して、開き直せるようにする。**
     if (path === '/api/conversations' && req.method === 'GET') {
       const list = await this.#conversations.list();
+      // 続きがあるなら、画面が開いた時点で決めておく。
+      // 「どれを開いているのか」が空のままだと、消えたように見える。
+      if (!this.#conversationId && list.length > 0) await this.#currentConversation();
       return send(res, 200, { current: this.#conversationId ?? null, list });
     }
 

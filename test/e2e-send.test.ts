@@ -134,9 +134,12 @@ describe('会話は残る', () => {
     const url2 = (await again.start()).replace(/\/$/, '');
     try {
       const seen = await (await fetch(`${url2}/api/conversations`)).json() as {
-        list: Array<{ id: string; title: string }>;
+        current: string | null; list: Array<{ id: string; title: string }>;
       };
       assert.ok(seen.list.some((h) => h.id === head.id), '立ち上げ直したら消えている');
+      // **続きとして開いている。**まっさらから始まると、閉じただけで
+      // 話が消えたように見える。
+      assert.equal(seen.current, head.id, '続きの会話を開いていない');
     } finally { await again.stop(); }
   });
 });

@@ -930,5 +930,13 @@ await load();
 await refreshState();
 await loadFiles();
 await loadConversations();
+// 開き直したときは、続きの会話をそのまま出す。空の画面から始めない。
+if (conversations.current) {
+  try {
+    const body = await fetch(`/api/conversations/messages?id=${encodeURIComponent(conversations.current)}`)
+      .then((x) => x.json());
+    if (body.messages?.length) ctx.showHistory(body.messages);
+  } catch { /* 出せなくても、新しく書き始められる */ }
+}
 listen();
 setInterval(refreshState, 5000);
