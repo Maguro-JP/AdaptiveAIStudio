@@ -12,6 +12,7 @@ import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
 import type { Tool, ToolContext, ApprovalRequest } from './tools/types.ts';
 import { ToolTextFilter } from './tool-text.ts';
 import { DoneMark, DONE_MARK } from './done.ts';
+import { fitToWindow, charBudget } from './window.ts';
 
 export type AgentEvent =
   | { type: 'thinking'; delta: string }
@@ -20,6 +21,8 @@ export type AgentEvent =
   | { type: 'salvaged'; name: string }
   /** 合図が無いまま手を止めたので、押し戻した。黙って押し戻さない。 */
   | { type: 'nudged'; left: number }
+  /** 文脈に収まらないので、古い分を減らした。**黙って落とさない。** */
+  | { type: 'trimmed'; dropped: number }
   | { type: 'toolEnd'; call: ToolCall; result: string; isError: boolean }
   | { type: 'turn'; index: number; modelId?: string }
   | { type: 'fallback'; from: string; to: string; reason: string }
@@ -32,6 +35,13 @@ export interface AgentOptions {
   root: string;
   /** 上限。到達しても失敗ではなく、利用者に継続を尋ねるための区切り。 */
   maxTurns?: number;
+  /**
+   * 文脈の窓（トークン）。既定 8192（ローカルの既定と同じ）。
+   *
+   * 履歴がここに収まらないとき、**こちらで決めて刈る**。刈らないと
+   * ライブラリが古い方から黙って落とし、最初の依頼ごと消える。
+   */
+  contextTokens?: number;
   /**
    * 合図なしで手を止めたとき、何回まで押し戻すか。既定2回。
    *
@@ -73,6 +83,7 @@ export class Agent {
      * 自律で回らなくなるのは、いつもそこ。
      */
     let usedTools = false;
+    const budget = charBudget(this.#opts.contextTokens ?? 8192);
     const ctx: ToolContext = {
       root: this.#opts.root,
       signal,
@@ -95,11 +106,16 @@ export class Agent {
       // 終わりの合図を、本文から抜く。画面に TASK_DONE を出さない。
       const mark = new DoneMark();
 
+      const fitted = fitToWindow(history, budget);
+      if (fitted.trimmed) yield { type: 'trimmed', dropped: fitted.dropped };
+
       for await (const ev of this.#orchestrator.run(
         {
           candidates: this.#opts.candidates,
           system: this.#opts.system,
-          messages: history,
+          // **窓に収まる分だけ送る。元は変えない。**
+          // 元を刈ると、残してある会話まで欠ける。
+          messages: fitted.messages,
           temperature: this.#opts.temperature,
           maxTokens: this.#opts.maxTokens,
           tools: this.#opts.tools.map((t) => t.schema),

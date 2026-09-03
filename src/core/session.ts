@@ -75,6 +75,8 @@ export type SessionEvent =
   | { type: 'salvaged'; name: string }
   /** 合図が無いまま手を止めたので、押し戻した。**黙って押し戻さない。** */
   | { type: 'nudged'; left: number }
+  /** 文脈に収まらないので、古い分を減らした。**黙って落とさない。** */
+  | { type: 'trimmed'; dropped: number }
   | { type: 'toolEnd'; name: string; ok: boolean; summary: string }
   | { type: 'fallback'; from: string; to: string; reason: string }
   | { type: 'recalled'; text: string }
@@ -820,6 +822,9 @@ export class Session {
             case 'nudged':
               yield { type: 'nudged', left: ev.left };
               break;
+            case 'trimmed':
+              yield { type: 'trimmed', dropped: ev.dropped };
+              break;
             case 'toolStart':
               // 作業場を変える手前で、作業前の状態を控える。
               if (changesFiles(ev.call.name)) {
@@ -973,8 +978,24 @@ export class Session {
       maxTurns: this.config.agent?.maxTurns ?? 40,
       temperature: this.config.temperature,
       maxTokens: this.config.maxTokens,
+      // **実際に立てた窓を渡す。**渡さないと既定の 8192 で見積もるので、
+      // 狭い窓を広いと思って溢れさせるか、広い窓を狭いと思って刈りすぎる。
+      contextTokens: this.contextTokens,
       approve: this.#approve,
     });
+  }
+
+  /**
+   * いま使っているモデルの窓（トークン）。
+   *
+   * 中で読む道（inproc）は `runtime.contextSize`、llama-server は
+   * `runtime.desiredContext`。どちらも無ければ、ローカルの既定と同じ 8192。
+   * **大きい方に倒さない。**溢れたときは黙って古い方から落ちるので、
+   * 見誤るなら狭い側に倒す。
+   */
+  get contextTokens(): number {
+    const rc = this.config.runtime ?? {};
+    return rc.contextSize ?? rc.desiredContext ?? 8192;
   }
 
   #recall(text: string): string {
