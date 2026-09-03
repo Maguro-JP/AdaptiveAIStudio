@@ -12,6 +12,16 @@ export function bundle(opts: {
   srcRoot?: string;
   version?: string;
   log?: (line: string) => void;
-}): Promise<{ out: string; version: string; bundledNode: boolean }>;
+}): Promise<{
+  out: string;
+  version: string;
+  bundledNode: boolean;
+  /** 中でいちばん深いものの、根からの長さ */
+  deepest: number;
+}>;
+/** 中でいちばん深いものの、許す長さ。Windows の 260 文字に効く。 */
+export const DEPTH_BUDGET: number;
+/** 中でいちばん深いもの（根からの相対）。 */
+export function deepest(dir: string): Promise<{ rel: string; length: number }>;
 /** --version が無いときの版。git に訊けるなら短い印まで足す。 */
 export function guessVersion(srcRoot: string): string;

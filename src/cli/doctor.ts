@@ -18,8 +18,9 @@ import { formatChecks, summaryLine, type Check, type Level } from './doctor-view
 import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
-import { installRoot, isPortable } from '../core/home.ts';
+import { installRoot, isPortable, productRoot } from '../core/home.ts';
 import { canRun } from '../core/which.ts';
+import { deepestUnder, judgeRoom, WINDOWS_MAX_PATH } from '../core/pathroom.ts';
 import { resolve } from 'node:path';
 const LLAMA_LIB = 'node-llama-cpp'; // 型検査に解決させない（src/runtime/inproc.ts 参照）
 
@@ -220,6 +221,31 @@ if (runtime.id === 'inproc') {
             + `  npm install --no-save --omit=optional --ignore-scripts ${binPkg}\n`)
         + `詳しくは docs/LOCAL-MODEL.md（${(e as Error).message.slice(0, 80)}）`);
     }
+  }
+}
+
+/* ---------- 置き場所の深さ ---------- */
+
+// Windows だけの話。道の全体が 260 文字を超えると開けない。
+// **展開の時点で当たる**ので、こちらが動いていれば既に通っている。
+// それでも言うのは、いま何文字余っているかが分かれば、モデルを置く前に
+// 直せるため（モデルの名前は長い）。利用者の機械で実際に警告が出た。
+if (process.platform === 'win32') {
+  const where = isPortable() ? productRoot() : installRoot();
+  const deep = await deepestUnder(where);
+  const { level, room } = judgeRoom(where.length, deep.length);
+  const detail = `${where}（あと ${room} 文字）`;
+  if (level === 'bad') {
+    add('置き場所の深さ', 'bad', detail,
+      `Windows の上限（${WINDOWS_MAX_PATH} 文字）を ${-room} 文字超えています。\n`
+      + 'このフォルダごと、短い所へ移してください（例: Z:\\AdaptiveAIStudio）。\n'
+      + `いちばん深いもの: ${deep.rel}`);
+  } else if (level === 'warn') {
+    add('置き場所の深さ', 'warn', detail,
+      'モデル（.gguf）は名前が長いので、このままだと置けないことがあります。\n'
+      + 'このフォルダごと、短い所へ移すと直ります（例: Z:\\AdaptiveAIStudio）。');
+  } else {
+    add('置き場所の深さ', 'ok', detail);
   }
 }
 

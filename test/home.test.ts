@@ -159,6 +159,20 @@ describe('配布物の形', () => {
     assert.deepEqual(top, ['.portable', 'AdaptiveAIStudio.cmd', 'README.txt', 'VERSION', 'app']);
   });
 
+  test('中の道が深すぎるものを配らない', async () => {
+    // Windows は道の全体が 260 文字を超えると開けない。深いまま配ると、
+    // 利用者の展開が途中で止まる（実際に警告が出た）。**組むときにしか気づけない。**
+    const out = await tempDir('aas-bundle-');
+    const { bundle, DEPTH_BUDGET } = await import('../scripts/bundle.mjs');
+    const r = await bundle({ out, srcRoot: installRoot(), version: 'test-depth' });
+    assert.ok(r.deepest <= DEPTH_BUDGET, `深すぎます: ${r.deepest} > ${DEPTH_BUDGET}`);
+    // 置き場所に使える文字数を、README に書いてあること。
+    // 数字だけ合っていても、読む所に無ければ利用者には届かない。
+    const readme = await readFile(join(out, 'README.txt'), 'utf8');
+    const room = (260 - 1) - 1 - r.deepest;
+    assert.match(readme, new RegExp(`${room} 文字までにしてください`), readme.slice(0, 400));
+  });
+
   test('版は VERSION に、そのまま書いてある', async () => {
     const out = await tempDir('aas-bundle-');
     const { bundle } = await import('../scripts/bundle.mjs');

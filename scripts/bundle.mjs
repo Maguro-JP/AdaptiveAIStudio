@@ -21,7 +21,7 @@
  * 取得は網の繋がる場所（CI）でやり、ここは置く仕事だけをする。
  * そうすると、この道具自体は網が無くても試せる。
  */
-import { cp, mkdir, writeFile, rm, readFile, stat, chmod } from 'node:fs/promises';
+import { cp, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -52,6 +52,45 @@ export const PAYLOAD = [
   // npm install できないので、入れておく。中身は素の JS で、機械に依らない。
   'node_modules',
 ];
+
+/**
+ * 中でいちばん深いものの、許す長さ。
+ *
+ * Windows は道の全体が 260 文字を超えると開けない。配布物の中は
+ * `app/node_modules/node-llama-cpp/dist/...` が深く、150 文字ほどある。
+ * **展開先が長いと、展開の途中で警告が出て、途中までしか出てこない。**
+ * 利用者の機械で実際に出た。
+ *
+ * ここを超えたら組み立てを止める。**気づけるのは組むときだけ**で、
+ * 落ちるのは利用者の展開のときだから。
+ */
+export const DEPTH_BUDGET = 160;
+
+/** 中でいちばん深いもの（根からの相対）。 */
+export async function deepest(dir) {
+  let best = { rel: '', length: 0 };
+  for (const name of await readdir(dir, { recursive: true })) {
+    const rel = String(name);
+    if (rel.length > best.length) best = { rel, length: rel.length };
+  }
+  return best;
+}
+
+/**
+ * 要らないものを落とす。
+ *
+ * `.map` は、書いた側が元の行を辿るためのもの。動かすのには要らない。
+ * 610 個・4MB あり、クラウドドライブへ置くときの数としても効く。
+ */
+async function pruneMaps(dir, log) {
+  let n = 0;
+  for (const name of await readdir(dir, { recursive: true })) {
+    if (!String(name).endsWith('.map')) continue;
+    await unlink(join(dir, String(name)));
+    n += 1;
+  }
+  if (n > 0) log(`  落とした: ${n} 個の .map（動かすのには要りません）`);
+}
 
 /** package.json の版。--version を渡さなかったときの控え。 */
 function pkgVersion(srcRoot) {
@@ -131,10 +170,21 @@ export async function bundle({
     log(`  入れた: app/${item}`);
   }
 
+  const modules = join(app, 'node_modules');
+  try {
+    await stat(modules);
+    await pruneMaps(modules, log);
+  } catch { /* 入っていなければ何もしない */ }
+
   // 入口。押せばいいものが一つだけ表にある形にする。
   await writeFile(join(out, 'AdaptiveAIStudio.cmd'),
     ['@echo off', 'call "%~dp0app\\start.cmd" %*'].join('\r\n') + '\r\n', 'utf8');
   log('  置いた: AdaptiveAIStudio.cmd');
+
+  // 展開先に、あと何文字使えるか。**利用者が展開する前に読む所へ書く。**
+  // Windows は道の全体が 260 文字を超えると開けない。
+  const deep = await deepest(out);
+  const roomForFolder = (260 - 1) - 1 - deep.length;
 
   // 名前は普通のプログラムの作法に合わせる（README / VERSION）。
   // 中身は利用者の言語で書く。**名前は機械と慣習、中身は人。**
@@ -143,6 +193,22 @@ export async function bundle({
       'AdaptiveAIStudio',
       '',
       '  AdaptiveAIStudio.cmd をダブルクリックしてください。',
+      '',
+      '置く場所',
+      '',
+      `  この AdaptiveAIStudio フォルダの道は、${roomForFolder} 文字までにしてください。`,
+      '  Windows は道（パス）が 260 文字を超えると開けません。',
+      '  長い所へ展開すると、途中で警告が出て、途中までしか出てきません。',
+      '',
+      '    よい例   Z:\\AdaptiveAIStudio                （19 文字）',
+      '    だめな例 Z:\\…\\AdaptiveAIStudio-portable-noexe\\AdaptiveAIStudio',
+      '',
+      '  ZIP を右クリック→すべて展開 のとき、展開先の欄の後ろに',
+      '  ZIP と同じ名前のフォルダが足されます。それを消してください。',
+      '  二重になるだけで 49 文字使います。',
+      '',
+      '  展開したあとに、フォルダごと短い所へ移しても直ります。',
+      '  いま足りているかは、入口の「3 困ったとき」で見られます。',
       '',
       'フォルダの中身',
       '',
@@ -153,9 +219,9 @@ export async function bundle({
       'この PC には何も残りません。このフォルダごと削除すれば、跡形もなくなります。',
       '',
       'いまの版は VERSION に書いてあります。',
-      '新しくするときは、入口の「7 新しくする」を選んでください。',
+      '新しくするときは、入口の「2 新しくする」を選んでください。',
     ].join('\r\n') + '\r\n', 'utf8');
-  log('  置いた: README.txt');
+  log(`  置いた: README.txt（置き場所は ${roomForFolder} 文字まで）`);
 
   // 版は独立した1ファイルにする。目印の中に混ぜると、読む側が
   // 目印を解釈しないと版が分からない。VERSION なら誰でも読める。
@@ -202,7 +268,25 @@ export async function bundle({
     log('  Node は同梱していません（--node-here / --node-exe / --node-zip）');
   }
 
-  return { out, version: stamped, bundledNode: Boolean(nodeZip || exe) };
+  // **組んだあとに測る。**深さが伸びたことに気づけるのは、ここだけ。
+  // 落ちるのは利用者が展開するときで、そのときこちらは何も動いていない。
+  const final = await deepest(out);
+  if (final.length > DEPTH_BUDGET) {
+    throw new Error(
+      `中の道が深すぎます: ${final.length} 文字（許すのは ${DEPTH_BUDGET} まで）\n`
+      + `  ${final.rel}\n`
+      + 'Windows は道の全体が 260 文字を超えると開けません。'
+      + '深いまま配ると、利用者の展開が途中で止まります。',
+    );
+  }
+  log(`  いちばん深いもの: ${final.length} 文字（置き場所は ${(260 - 1) - 1 - final.length} 文字まで）`);
+
+  return {
+    out,
+    version: stamped,
+    bundledNode: Boolean(nodeZip || exe),
+    deepest: final.length,
+  };
 }
 
 // Windows では `file://` + argv[1] にすると一致しない。
@@ -224,4 +308,5 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   });
   console.log(`\n  できました: ${r.out}`);
   console.log(`  版: ${r.version} / Node 同梱: ${r.bundledNode ? 'あり' : 'なし'}`);
+  console.log(`  いちばん深いもの: ${r.deepest} 文字 / 置き場所に使えるのは ${(260 - 1) - 1 - r.deepest} 文字`);
 }
