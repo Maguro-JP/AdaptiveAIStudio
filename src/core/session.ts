@@ -748,24 +748,43 @@ export class Session {
         content: recalled ? `${instruction}\n\n---\n${recalled}` : instruction,
       });
 
-      // 作業前のテストの状態。改ざん検出の基準になる。
       const verifyOn = verifyCfg.enabled !== false;
-      const testsBefore = verifyOn ? await snapshotTests(this.root).catch(() => undefined) : undefined;
-
-      // 作業前の成否。今回の失敗と、前からの失敗を切り分けるために要る。
-      let baseline: VerifyResult | undefined;
       const command = verifyOn ? await this.verifyCommand() : undefined;
-      if (command && verifyCfg.baseline !== false) {
+
+      /*
+       * 作業前の状態（テストの控えと、作業前の成否）。
+       *
+       * **書き換えが起きるまで測らない。**毎回いちばん先に測っていたので、
+       * 「この関数は何をしていますか」と訊いただけで検査が丸ごと流れ、
+       * 数分ぶん画面が止まって見えた。利用者から「動いてるのか止まってるのか
+       * 分からない」と言われた実体がこれ。
+       *
+       * 測るのは、最初にファイルを触る直前。そこまでは作業場は変わっていないので、
+       * 「作業前」であることは変わらない。
+       */
+      let testsBefore: Awaited<ReturnType<typeof snapshotTests>> | undefined;
+      let baseline: VerifyResult | undefined;
+      let measured = false;
+      /** 測っている間に出た出来事。流れの順番を崩さないよう、外へ出して渡す。 */
+      const beforeEvents: SessionEvent[] = [];
+      const measureBefore = async (): Promise<void> => {
+        if (measured || !verifyOn) return;
+        measured = true;
+        testsBefore = await snapshotTests(this.root).catch(() => undefined);
+        if (!command || verifyCfg.baseline === false) return;
         const probed = await this.measureBaseline(command, ac.signal);
         baseline = probed.result;
-        yield {
+        beforeEvents.push({
           type: 'baseline', command,
           passed: probed.status === 'passed',
           cached: probed.cached,
           ...(probed.status === 'unknown' ? { unknown: true } : {}),
           ...(probed.reason !== undefined ? { detail: probed.reason } : {}),
-        };
-      }
+        });
+      };
+
+      /** 作業場を変えうる道具か。触る前に、作業前の状態を控える。 */
+      const changesFiles = (name: string): boolean => name === 'write_file' || name === 'run_command';
 
       const run = async function* (this: Session, agent: Agent): AsyncGenerator<SessionEvent> {
         for await (const ev of agent.run(this.#history, ac.signal)) {
@@ -778,6 +797,11 @@ export class Session {
               yield { type: 'salvaged', name: ev.name };
               break;
             case 'toolStart':
+              // 作業場を変える手前で、作業前の状態を控える。
+              if (changesFiles(ev.call.name)) {
+                await measureBefore();
+                while (beforeEvents.length > 0) yield beforeEvents.shift()!;
+              }
               // 書き込む前の状態を控える。打ち切ったときに戻せるように。
               if (ev.call.name === 'write_file' && harnessCfg.rollbackOnGiveUp) {
                 const p = (ev.call.args as { path?: unknown }).path;
