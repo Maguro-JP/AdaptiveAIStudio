@@ -12,6 +12,7 @@
  * 端末なら「y/N」、画面なら押しボタンになるが、
  * **訊かずに進めない**という一点だけは、ここが守る。
  */
+import { defaultWorkRoot } from './home.ts';
 import { resolve, join } from 'node:path';
 import type { AasConfig } from '../config.ts';
 import { buildRegistry } from './build.ts';
@@ -36,7 +37,7 @@ import { IdleScheduler, type ModeStat } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES, MODE_ROLE, promptFor } from '../harness/idle-modes.ts';
 import { DutyRoster, type DutyRecord } from '../harness/duties.ts';
 import { BUILTIN_DUTIES } from '../harness/builtin-duties.ts';
-import { readFile as readJson, writeFile as writeJson } from 'node:fs/promises';
+import { readFile as readJson, writeFile as writeJson, mkdir } from 'node:fs/promises';
 import { RoleRegistry } from '../roles/registry.ts';
 import type { Tool, ApprovalRequest } from '../agent/tools/types.ts';
 import { toolsFor } from '../roles/registry.ts';
@@ -210,7 +211,10 @@ export class Session {
 
   static async create(config: AasConfig, opts: SessionOptions): Promise<Session> {
     const agentCfg = config.agent ?? {};
-    const root = resolve(agentCfg.root ?? process.cwd());
+    const root = resolve(agentCfg.root ?? defaultWorkRoot());
+    // **無ければ作る。**入れた版の既定（根の下の work）は、初回には無い。
+    // 無いまま進むと、一覧も読み書きも「そんな場所は無い」で落ちる。
+    await mkdir(root, { recursive: true }).catch(() => { /* 作れないなら、使う所で言う */ });
 
     const registry = buildRegistry(config);
     const orchestrator = new ChatOrchestrator(registry);

@@ -20,7 +20,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname, extname, normalize, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
-import { aasHome, binDir, modelsDir, isPortable, productRoot } from '../core/home.ts';
+import { aasHome, binDir, modelsDir, isPortable, productRoot, defaultWorkRoot } from '../core/home.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { checkUpdate, applyUpdate } from '../core/update.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
@@ -1051,7 +1051,7 @@ export class UiServer {
 
   /** 作業場の根。会話の土台を組まずに知りたいときに使う。 */
   #workRoot(): string {
-    return resolvePath(this.#opts.config.agent?.root ?? process.cwd());
+    return resolvePath(this.#opts.config.agent?.root ?? defaultWorkRoot());
   }
 
   #busyNow(session: Session): boolean {

@@ -18,7 +18,7 @@ import { formatChecks, summaryLine, type Check, type Level } from './doctor-view
 import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
-import { installRoot, isPortable, productRoot } from '../core/home.ts';
+import { installRoot, isPortable, productRoot, defaultWorkRoot } from '../core/home.ts';
 import { canRun } from '../core/which.ts';
 import { deepestUnder, judgeRoom, WINDOWS_MAX_PATH } from '../core/pathroom.ts';
 import { resolve } from 'node:path';
@@ -340,7 +340,7 @@ for (const p of enabledProviders(config)) {
  */
 const envIssues = await inspectEnvironment({
   stateDir: stateDir(),
-  root: resolve(config.agent?.root ?? process.cwd()),
+  root: resolve(config.agent?.root ?? defaultWorkRoot()),
   // 未設定でも既定の置き場を渡す。設定した人だけが検査されるのでは逆で、
   // 既定のまま使っている人こそ、全角のユーザー名で詰まる。
   modelsDir: config.runtime?.modelsDir ?? defaultModelsDir(),

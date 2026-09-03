@@ -4,6 +4,7 @@
  * 作業指示書は今は手書きだが、P3 で PM が自動生成するようになる。
  * 形式はそのまま引き継ぐ。
  */
+import { defaultWorkRoot } from '../core/home.ts';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -45,7 +46,7 @@ async function main(): Promise<void> {
 
   const { config, source } = loadConfig();
   const agentCfg = config.agent ?? {};
-  const root = resolve(agentCfg.root ?? process.cwd());
+  const root = resolve(agentCfg.root ?? defaultWorkRoot());
   const approval = agentCfg.approval ?? 'autoEdit';
 
   const registry = buildRegistry(config);

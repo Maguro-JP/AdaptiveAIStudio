@@ -16,7 +16,7 @@
  */
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, sep, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** この道具の中身が置かれている場所（配布版では app/）。 */
@@ -69,6 +69,44 @@ export function aasHome(root = installRoot()): string {
   if (isPortable(root)) return join(productRoot(root), 'data');
 
   return join(homedir(), '.aas');
+}
+
+/**
+ * 作業場（コードを書き換える先）の既定。
+ *
+ * ここまで、決めずに「いま居る場所」（cwd）を使っていた。作業コピーから
+ * 動かすぶんには正しい。**入れた版では致命的になる。**
+ *
+ * 入れる版の入口は `app\start.cmd` で、そこは `cd /d "%~dp0"` する。
+ * つまり作業場が `%ProgramFiles%\AdaptiveAIStudio\app` になる。そこは
+ * 管理者権限が無いと書けない。**入れて、最初に何か書かせた瞬間に弾かれる。**
+ * 書けたら書けたで、プログラムのフォルダを汚す。どちらも困る。
+ *
+ * だから、いま居る場所が**プログラムの側**なら、そこは使わない。
+ * 根の下の `work` を使う（そこは入れた側が書けるようにしてある）。
+ *
+ * 設定に `agent.root` が書いてあれば、そちらが勝つ。ここは既定だけ。
+ */
+export function defaultWorkRoot(cwd = process.cwd(), root = installRoot()): string {
+  // **配られた形のときだけ効かせる。**作業コピーまで取り上げると、
+  // この道具で自分自身を直す使い方が壊れる（実際に壊して、巡回で捕まえた）。
+  if (!isDistributed(root)) return resolve(cwd);
+  const here = resolve(cwd);
+  const product = resolve(productRoot(root));
+  const inside = here === product || here.startsWith(product + sep);
+  if (!inside) return here;
+  return join(aasHome(root), 'work');
+}
+
+/**
+ * 配られた形か（作業コピーではないか）。
+ *
+ * 配布物は中身を必ず `app\` に入れる（scripts/bundle.mjs）。
+ * 作業コピーにその形は無い。**置かれ方で見分ける。**
+ * 環境変数で判じさせない（入れた側が決めて渡す、の裏返し）。
+ */
+export function isDistributed(root = installRoot()): boolean {
+  return basename(resolve(root)) === 'app' || isPortable(root);
 }
 
 /** 記録の置き場。 */

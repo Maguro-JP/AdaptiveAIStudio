@@ -4,6 +4,7 @@
  * ローカルモデルがファイルを読み、差分を出し、承認を経て書き込む。
  * 何時間かかってもよい。打ち切るのは「進捗が無いとき」だけ。
  */
+import { defaultWorkRoot } from '../core/home.ts';
 import { stdin, stdout } from 'node:process';
 import { LineSource } from './input.ts';
 import { resolve, join } from 'node:path';
@@ -60,7 +61,7 @@ async function main(): Promise<void> {
   const orchestrator = new ChatOrchestrator(registry);
 
   const agentCfg = config.agent ?? {};
-  const root = resolve(agentCfg.root ?? process.cwd());
+  const root = resolve(agentCfg.root ?? defaultWorkRoot());
   const approval = agentCfg.approval ?? 'autoEdit';
 
   const rl = new LineSource(stdin, stdout);
