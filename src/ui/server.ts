@@ -12,6 +12,9 @@
  */
 import { listDir } from './files.ts';
 import { Conversations, ID_SHAPE } from '../core/conversations.ts';
+import { writeEnvValue } from '../core/env.ts';
+import { canRun } from '../core/which.ts';
+import { saveMcpServer } from './settings.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname, extname, normalize, resolve as resolvePath } from 'node:path';
@@ -872,6 +875,81 @@ export class UiServer {
       const id = url.searchParams.get('id') ?? '';
       if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
       return send(res, 200, { id, messages: await this.#conversations.load(id) });
+    }
+
+    /*
+     * 外の道具（MCP）。GitHub をここから繋げるようにする。
+     *
+     * 合言葉は**置き場の .env** に書く（設定ファイルには名前だけ）。
+     * 値は返さない。**入っているかどうか**だけを返す。
+     */
+    if (path === '/api/mcp' && req.method === 'GET') {
+      const servers = Object.entries(this.#opts.config.mcp?.servers ?? {}).map(([name, spec]) => {
+        const client = this.#session?.mcpClients.find((c) => c.name === name);
+        const wants = Object.values(spec.envFrom ?? {});
+        return {
+          name,
+          command: `${spec.command} ${(spec.args ?? []).join(' ')}`.trim(),
+          enabled: spec.enabled !== false,
+          // 合言葉は名前だけ。値は決して出さない。
+          secrets: wants.map((from) => ({ name: from, set: process.env[from] !== undefined })),
+          canRun: canRun(spec.command),
+          running: client?.running ?? false,
+          tools: client?.tools.length ?? 0,
+          failure: client?.failure ?? null,
+          // **まだ試していない**のと、**試して駄目だった**のは違う。
+          // 一緒にすると「つながりませんでした（理由は不明）」になる（実際になった）。
+          tried: client !== undefined,
+        };
+      });
+      return send(res, 200, { servers, envPath: join(aasHome(), '.env') });
+    }
+
+    /** GitHub を繋ぐ。合言葉を置き場へ書き、設定に一つ足す。 */
+    if (path === '/api/mcp/github' && req.method === 'POST') {
+      const body = await readBody(req) as { token?: unknown; enabled?: unknown };
+      const token = typeof body?.token === 'string' ? body.token.trim() : '';
+      const enabled = body?.enabled !== false;
+      try {
+        if (token) await writeEnvValue(join(aasHome(), '.env'), 'GITHUB_TOKEN', token);
+        // 書いたものを、この場でも使えるようにする（立ち上げ直しを待たせない）。
+        if (token) process.env.GITHUB_TOKEN = token;
+        const at = await saveMcpServer('github', {
+          command: 'npx',
+          args: ['-y', '@modelcontextprotocol/server-github'],
+          envFrom: { GITHUB_PERSONAL_ACCESS_TOKEN: 'GITHUB_TOKEN' },
+          enabled,
+        });
+        // **いまの土台を畳む。**外の道具は土台を組むときに立ち上がるので、
+        // 畳まないと、繋いだのに次も繋がらない。会話は残してあるので続きから話せる。
+        const live = this.#session;
+        if (live && !this.#busyNow(live)) {
+          this.#session = undefined;
+          await live.close().catch(() => undefined);
+        }
+        // いま動いている設定にも入れる。次の依頼から使える。
+        this.#opts.config.mcp = {
+          ...this.#opts.config.mcp,
+          servers: {
+            ...this.#opts.config.mcp?.servers,
+            github: {
+              command: 'npx',
+              args: ['-y', '@modelcontextprotocol/server-github'],
+              envFrom: { GITHUB_PERSONAL_ACCESS_TOKEN: 'GITHUB_TOKEN' },
+              enabled,
+            },
+          },
+        };
+        return send(res, 200, {
+          path: at,
+          // **値は返さない。**入っているかどうかだけ。
+          tokenSet: process.env.GITHUB_TOKEN !== undefined,
+          canRun: canRun('npx'),
+          restartNeeded: this.#session !== undefined,
+        });
+      } catch (e) {
+        return send(res, 400, { error: (e as Error).message });
+      }
     }
 
     if (path === '/api/state' && req.method === 'GET') {

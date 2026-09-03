@@ -66,7 +66,7 @@ await check('板を畳む', async () => {
 
 // 設定：全部の頁を開いて、空欄が無いか
 await check('設定を開く', async () => { await p.locator('#openSettings').click(); await p.waitForTimeout(1200); });
-for (const sec of ['info', 'look', 'place', 'model', 'check']) {
+for (const sec of ['info', 'look', 'place', 'model', 'mcp', 'check']) {
   await check(`設定/${sec}`, async () => {
     await p.locator(`.tabs-lite button[data-sec="${sec}"]`).click();
     await p.waitForTimeout(900);
@@ -196,6 +196,28 @@ await check('配置を切り替える', async () => {
   }
   // 会話の板は、どの並びでも要る。無いと何も打てない。
   if (!(await p.locator('.chat textarea').isVisible())) throw new Error('会話の入力欄が消えた');
+});
+
+// 外の道具。合言葉を入れて繋ぎ、**値が画面に残らない**ことまで見る。
+await check('GitHub を繋ぐ', async () => {
+  try {
+    await p.locator('#openSettings').click();
+    await p.waitForTimeout(700);
+    await p.locator('.tabs-lite button[data-sec="mcp"]').click();
+    await p.waitForTimeout(600);
+    await p.locator('#ghToken').fill('ghp_sweep_dummy');
+    await p.locator('#ghSave').click();
+    await p.waitForTimeout(1500);
+    const note = await p.locator('#ghNote').innerText();
+    if (!note.includes('設定に書きました')) throw new Error(`繋げていない: ${note.slice(0, 80)}`);
+    // **入れた値を画面に残さない。**
+    if ((await p.locator('#ghToken').inputValue()) !== '') throw new Error('合言葉が入力欄に残っている');
+    const rows = await p.locator('#mcpRows').innerText();
+    if (!rows.includes('github')) throw new Error('一覧に出ていない');
+    if (rows.includes('ghp_sweep_dummy')) throw new Error('合言葉が画面に出ている');
+  } finally {
+    await closeSettings();
+  }
 });
 
 // 添付。落とす・貼る・選ぶ、どれでも渡せると謳っているので、実際に渡す。

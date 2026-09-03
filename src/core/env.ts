@@ -52,3 +52,40 @@ export function loadEnvFile(path: string, env: NodeJS.ProcessEnv = process.env):
   }
   return loaded;
 }
+
+/**
+ * 合言葉を1つ書き足す（同じ名前があれば差し替える）。
+ *
+ * **他の行を残す。**丸ごと書き直すと、手で書いた別の合言葉や注釈が消える。
+ * 値は返さないし、記録にも出さない（呼ぶ側で出させないため、名前だけ返す）。
+ *
+ * @returns 書いた名前
+ */
+export async function writeEnvValue(path: string, key: string, value: string): Promise<string> {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`合言葉の名前として使えません: ${key}`);
+  // 改行を混ぜられると、一行で別の合言葉を足せてしまう。
+  if (/[\r\n]/.test(value)) throw new Error('合言葉に改行は入れられません');
+
+  const { readFile, writeFile, mkdir } = await import('node:fs/promises');
+  const { dirname } = await import('node:path');
+  await mkdir(dirname(path), { recursive: true });
+  const before = await readFile(path, 'utf8').catch(() => '');
+  const lines = before.split(/\r?\n/);
+  const line = `${key}=${value}`;
+  let replaced = false;
+  const after = lines.map((raw) => {
+    const t = raw.trim();
+    if (t.startsWith('#')) return raw;
+    const eq = t.indexOf('=');
+    if (eq <= 0 || t.slice(0, eq).trim() !== key) return raw;
+    replaced = true;
+    return line;
+  });
+  if (!replaced) {
+    // 末尾の空行を増やさない。
+    while (after.length > 0 && after[after.length - 1]!.trim() === '') after.pop();
+    after.push(line);
+  }
+  await writeFile(path, `${after.filter((l, i) => !(l === '' && i === after.length)).join('\n')}\n`, 'utf8');
+  return key;
+}

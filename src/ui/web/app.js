@@ -398,6 +398,83 @@ function listen() {
   };
 }
 
+/* ---------- 外の道具（MCP） ---------- */
+
+/**
+ * 繋がり具合を出す。**合言葉の値は決して出さない。**
+ * 出すのは「入っているか」と「立ち上がったか」と「道具の数」だけ。
+ */
+async function loadMcp() {
+  const box = $('mcpRows');
+  box.replaceChildren();
+  let d;
+  try {
+    d = await fetch('/api/mcp').then((r) => r.json());
+  } catch (e) {
+    box.append(Object.assign(document.createElement('div'),
+      { className: 'empty', textContent: `繋がり具合を読めませんでした: ${e.message ?? e}` }));
+    return;
+  }
+  // 押した結果の表示を、読み直しで消さない。置き場は一覧の中に、行として出す
+  // （一覧は二列の格子なので、直の子に混ぜると列が崩れる）。
+  const where = document.createElement('div');
+  where.className = 'row';
+  const wk = document.createElement('span');
+  wk.className = 'dim';
+  wk.textContent = '合言葉の置き場';
+  const wv = document.createElement('span');
+  wv.className = 'mono';
+  wv.textContent = d.envPath;
+  where.append(wk, wv);
+  box.append(where);
+
+  if (!d.servers?.length) {
+    box.append(Object.assign(document.createElement('div'),
+      { className: 'empty', textContent: 'まだ繋いでいません。上で GitHub の合言葉を入れて「繋ぐ」を押してください。' }));
+    return;
+  }
+  for (const s of d.servers) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const k = document.createElement('span');
+    k.className = 'mono';
+    k.textContent = s.name;
+    const v = document.createElement('span');
+    const state = !s.enabled ? '切ってあります'
+      : !s.canRun ? `その命令がありません: ${s.command.split(' ')[0]}`
+      : s.running ? `つながっています（道具 ${s.tools} 件）`
+      : s.tried ? `つながりませんでした: ${s.failure ?? '理由は不明'}`
+      : '次の依頼のときに立ち上がります';
+    const secrets = (s.secrets ?? []).map((x) => `${x.name}: ${x.set ? 'あり' : 'まだ'}`).join(' / ');
+    v.textContent = secrets ? `${state}  ｜  ${secrets}` : state;
+    v.className = s.running ? 'good' : s.enabled ? 'dim' : 'dim';
+    row.append(k, v);
+    box.append(row);
+  }
+}
+
+$('ghSave').onclick = async () => {
+  const note = $('ghNote');
+  const token = $('ghToken').value.trim();
+  note.textContent = '繋いでいます…';
+  const r = await fetch('/api/mcp/github', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token, enabled: true }),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) { note.textContent = body.error ?? '繋げませんでした'; return; }
+  // **値は画面に残さない。**入れたら消す。
+  $('ghToken').value = '';
+  note.textContent = [
+    `設定に書きました: ${body.path}`,
+    body.tokenSet ? '合言葉: あり' : '合言葉: まだ（入れないと Bad credentials になります）',
+    body.canRun ? '' : 'この機械には npx がありません。Node と npm が入っている機械で使ってください。',
+    body.restartNeeded ? '次の依頼のときから使えます。' : '',
+  ].filter(Boolean).join('\n');
+  await loadMcp();
+};
+$('ghReload').onclick = () => { void loadMcp(); };
+
 /* ---------- 横の板：会話 ---------- */
 
 /*
@@ -925,6 +1002,7 @@ async function openSettings(section = 'info') {
   await loadInfo();
   if (section === 'check') await loadChecks();
   if (section === 'model') { await loadCfg(); await loadCatalog(); }
+  if (section === 'mcp') await loadMcp();
   $('settings').showModal();
 }
 
@@ -934,6 +1012,7 @@ for (const b of $('settings').querySelectorAll('.tabs-lite button')) {
     if (b.dataset.sec === 'check') await loadChecks();
     if (b.dataset.sec === 'info') await loadInfo();
     if (b.dataset.sec === 'model') { await loadCfg(); await loadCatalog(); }
+    if (b.dataset.sec === 'mcp') await loadMcp();
   };
 }
 $('openSettings').onclick = () => { void openSettings(); };

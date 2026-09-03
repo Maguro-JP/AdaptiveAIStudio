@@ -10,7 +10,7 @@
 <body>
   <div class="shell">
     <!--
-      畳んだときに開き直すためのつまみ。**板の外に置く。**
+      畳んだときに開き直すためのつまみ。板の外に置く。
       中に置いていたので、畳むと押すものごと消えて、二度と開けなかった。
     -->
     <button id="sideOpen" class="side-open" title="横の板を出す" hidden>›</button>
@@ -23,7 +23,7 @@
 
       <!--
         いま動いているのか、止まっているのか。
-        隅の小さな字では分からない。**いちばん上に、大きく置く。**
+        隅の小さな字では分からない。いちばん上に、大きく置く。
       -->
       <div id="run" class="run" data-state="idle">
         <span class="run-dot"></span>
@@ -76,12 +76,13 @@
         <button type="button" data-sec="look">見た目</button>
         <button type="button" data-sec="place">配置</button>
         <button type="button" data-sec="model">モデル</button>
+        <button type="button" data-sec="mcp">外の道具</button>
         <button type="button" data-sec="check">点検</button>
       </div>
 
       <section data-sec="info">
         <p class="hint">
-          いま何が動いているか。**版を先に見てください。**
+          いま何が動いているか。版を先に見てください。
           古いものを新しいと思って確かめるのが、いちばん無駄になります。
         </p>
         <div id="infoRows" class="rows paths" data-cols="2"></div>
@@ -107,7 +108,7 @@
 
       <section data-sec="model" hidden>
         <p class="hint">
-          どうやってモデルを動かすか。**切り替えたら立ち上げ直してください。**
+          どうやってモデルを動かすか。切り替えたら立ち上げ直してください。
         </p>
         <label class="field-row">
           <span class="dim">動かし方</span>
@@ -134,6 +135,24 @@
           <button type="button" id="cfgGet" class="ghost">取ってくる</button>
         </div>
         <p id="cfgGetNote" class="repairs"></p>
+      </section>
+
+      <section data-sec="mcp" hidden>
+        <p class="hint">
+          外の道具（MCP）。合言葉は、置き場の .env に入ります。
+          設定ファイルには名前しか書きません。画面にも値は出しません。
+        </p>
+        <label class="field-row">
+          <span class="dim">GitHub の合言葉</span>
+          <input id="ghToken" type="password" spellcheck="false" autocomplete="off"
+                 placeholder="ghp_… / github_pat_…">
+        </label>
+        <div class="btnbar">
+          <button type="button" id="ghSave" class="primary">繋ぐ</button>
+          <button type="button" id="ghReload" class="ghost">読み直す</button>
+        </div>
+        <p id="ghNote" class="repairs"></p>
+        <div id="mcpRows" class="rows paths" data-cols="2"></div>
       </section>
 
       <section data-sec="check" hidden>

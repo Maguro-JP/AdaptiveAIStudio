@@ -6,6 +6,7 @@
  * 変えたい理由がはっきりしているものだけを、ここに挙げる。
  */
 import { readFile, writeFile, stat, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { configPath } from '../config.ts';
 import { modelsDir } from '../core/home.ts';
 
@@ -121,4 +122,29 @@ export async function savedModelsDir(): Promise<string> {
   const saved = await readSavedRuntime();
   const dir = typeof saved.modelsDir === 'string' ? saved.modelsDir.trim() : '';
   return dir || modelsDir();
+}
+
+/**
+ * 外の道具（MCP）を1つ、設定に書き足す。
+ *
+ * **触ると決めたところだけを書き換える。**丸ごと書き直すと、
+ * 画面から見えない設定を消してしまう（runtime のときと同じ）。
+ * 合言葉は名前だけを書く。値は置き場の `.env` にある。
+ *
+ * @returns 書いた場所
+ */
+export async function saveMcpServer(
+  name: string,
+  spec: { command: string; args?: string[]; envFrom?: Record<string, string>; enabled?: boolean },
+): Promise<string> {
+  const at = configPath();
+  let current: Record<string, unknown> = {};
+  try {
+    current = JSON.parse(await readFile(at, 'utf8')) as Record<string, unknown>;
+  } catch { /* 無ければ、これが最初の一つ */ }
+  const mcp = (current.mcp ?? {}) as { servers?: Record<string, unknown> };
+  const servers = { ...(mcp.servers ?? {}), [name]: spec };
+  await mkdir(dirname(at), { recursive: true });
+  await writeFile(at, `${JSON.stringify({ ...current, mcp: { ...mcp, servers } }, null, 2)}\n`, 'utf8');
+  return at;
 }
