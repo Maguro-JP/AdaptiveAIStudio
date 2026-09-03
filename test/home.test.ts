@@ -194,7 +194,10 @@ describe('CI の使い方', () => {
   test('押すたびに配布物を組み立てない', sourceOnly, async () => {
     // Windows の枠は2倍で数えられる。前に使い切って1日検査できなくなった。
     const raw = await readFile(join(installRoot(), '.github', 'workflows', 'release.yml'), 'utf8');
-    assert.equal(/^\s*branches:/m.test(raw), false, '枝への push で組み立てている');
+    // 印（タグ）と、印と同じ意味の枝（release/v*）でだけ回す。main や普通の枝では回さない。
+    // release/v* を許すのは、作業場によってはタグを押せない（中継が落とす）ため。
+    const branches = [...raw.matchAll(/^\s*branches:\s*\[([^\]]*)\]/gm)].map((m) => (m[1] ?? "").trim());
+    assert.deepEqual(branches, ["'release/v*'"], '印以外の枝への push で組み立てている');
     assert.match(raw, /tags:/, 'タグでしか回らない形になっていない');
   });
 
