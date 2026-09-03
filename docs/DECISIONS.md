@@ -70,6 +70,7 @@
 - 繋ぎ先を、利用者に書かせない
 - 合言葉は置き場の .env に置く
 - 設定はデータの置き場に。無ければこの中で読む
+- 配布物は release/v* の枝でも組む
 
 ---
 
@@ -856,3 +857,31 @@ llamacpp の土台だけが `~/.aas/models` を見ていた。`--get` は `AAS_H
 
 Windows の実機で、インストール後に画面から保存して `%ProgramData%\AdaptiveAIStudio\aas.config.json`
 に書けること（icacls で Users に変更権限を付けてあるが、実測はまだ）。
+
+---
+
+## 2026-09-03  配布物は release/v* の枝でも組む
+
+**決めたこと**
+
+`release/v0.1.0` の枝を押すと、印 `v0.1.0` を付けたのと同じに扱って配布物を組み、
+Releases の `v0.1.0` に置く（印は公開のときに GitHub 側で付く）。
+普通の枝や main では組まない（試験で留めてある）。
+
+**なぜ**
+
+この作業場（Claude の遠隔の場）からは、印（タグ）の push を中継が黙って落とす
+（`Everything up-to-date` と出て届かない。実測）。枝は届く。
+
+**確かめたこと（2026-09-03 09:30 JST）**
+
+- run 12 が通り、`v0.1.0` に portable / portable-noexe / Setup.exe の三つが載った。
+- portable.zip を落として開き、node.exe（MZ、92MB）・node-llama-cpp 本体・win-x64 の
+  binary・`llama/*.json` が在ることと、その中から doctor が動くことを見た。
+- installer は `windows-2022` で組む。`windows-latest`（2025）には NSIS が無い（像の一覧に無い）。
+
+**残っているもの**
+
+- 古い `portable (main)` の prerelease（9/1、壊れていた組み立て）が Releases に残っている。
+  消すか作り直すかは、Actions を回すことになるので利用者に聞く。
+- Releases の本文（変更点）は空。書く口がこの場所に無い。
