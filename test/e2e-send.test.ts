@@ -144,6 +144,40 @@ describe('会話は残る', () => {
   });
 });
 
+describe('会話が続く', () => {
+  /**
+   * **二回目に、一回目のやりとりが渡っているか。**
+   * ここが繋がっていないと、毎回はじめましてになる。それは会話ではない。
+   * 相手に何を渡したか（届いた本文）で見る。
+   */
+  test('二回目の依頼に、一回目のやりとりが載っている', async () => {
+    assert.equal((await fetch(`${base}/api/conversations`, { method: 'POST' })).status, 200);
+    const send = async (text: string) => {
+      const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
+      const collecting = collect(done);
+      await new Promise((r) => setTimeout(r, 200));
+      const r = await fetch(`${base}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      assert.equal(r.status, 202, await r.text());
+      await collecting;
+    };
+
+    fake.bodies.length = 0;
+    await send('わたしの名前はマグロです');
+    await send('わたしの名前は？');
+
+    const last = fake.bodies.at(-1) as { messages?: Array<{ role: string; content: string }> };
+    const texts = (last.messages ?? []).map((m) => `${m.role}:${m.content}`);
+    assert.ok(texts.some((t) => t.includes('わたしの名前はマグロです')),
+      `一回目の依頼が渡っていない: ${JSON.stringify(texts).slice(0, 300)}`);
+    assert.ok(texts.some((t) => t.startsWith('assistant:') && t.includes('こんにちは')),
+      `一回目の返事が渡っていない: ${JSON.stringify(texts).slice(0, 300)}`);
+    assert.ok(texts.some((t) => t.includes('わたしの名前は？')), '二回目の依頼が渡っていない');
+  });
+});
+
 describe('動いている間に書いても、断らない', () => {
   /**
    * 突き返されるのがいちばん不快で、しかも書き直させることになる。
