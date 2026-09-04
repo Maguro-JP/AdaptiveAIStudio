@@ -481,3 +481,61 @@ describe('起こし直してもらえないなら、止めない', () => {
     } finally { await s.stop(); }
   });
 });
+
+describe('作業場は、保存したら効く', () => {
+  test('立ち上げ直さずに、その場で変わる', async () => {
+    // ここまで、設定ファイルに書き込むだけで**動いている側を直していなかった**。
+    // 保存したのに画面は古い作業場を見たまま、しかも立ち上げ直しが要るとも
+    // 言わない。「保存したのに変わらない」で終わる形だった。
+    const { mkdir: md, writeFile: wf } = await import('node:fs/promises');
+    const home = await tempDir('aas-wr-');
+    const proj = join(home, 'proj');
+    await md(proj, { recursive: true });
+    await wf(join(proj, 'mine.txt'), 'x');
+
+    const prev = process.env.AAS_CONFIG;
+    process.env.AAS_CONFIG = join(home, 'aas.config.json');
+    const s = new UiServer({ config: { ...DEFAULT_CONFIG }, port: 0 });
+    const b = (await s.start()).replace(/\/$/, '');
+    try {
+      const r = await fetch(`${b}/api/config`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'inproc', modelsDir: '', workRoot: proj }),
+      });
+      const body = await r.json() as { workRootNow?: string };
+      assert.equal(r.status, 200);
+      // **返事に、いまどこを見ているかが入っていること。**
+      // 入っていないと、効いたのかどうかを画面が確かめられない。
+      assert.equal(body.workRootNow, proj, `効いていない: ${JSON.stringify(body)}`);
+
+      // 立ち上げ直さずに、一覧が新しい作業場を指していること。
+      const files = await (await fetch(`${b}/api/files`)).json() as {
+        root: string; entries: { name: string }[];
+      };
+      assert.equal(files.root, proj, '保存したのに古い作業場を見ている');
+      assert.ok(files.entries.some((e) => e.name === 'mine.txt'), '中身が出ていない');
+    } finally {
+      await s.stop();
+      if (prev === undefined) delete process.env.AAS_CONFIG; else process.env.AAS_CONFIG = prev;
+    }
+  });
+
+  test('無い場所を打っても保存はできる。ただし言う（対）', async () => {
+    const home = await tempDir('aas-wr2-');
+    const prev = process.env.AAS_CONFIG;
+    process.env.AAS_CONFIG = join(home, 'aas.config.json');
+    const s = new UiServer({ config: { ...DEFAULT_CONFIG }, port: 0 });
+    const b = (await s.start()).replace(/\/$/, '');
+    try {
+      const r = await fetch(`${b}/api/config`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: 'inproc', modelsDir: '', workRoot: join(home, 'そんな場所は無い') }),
+      });
+      const body = await r.json() as { workNote?: string };
+      assert.match(body.workNote ?? '', /見つかりません/, '打ち間違いを黙って通している');
+    } finally {
+      await s.stop();
+      if (prev === undefined) delete process.env.AAS_CONFIG; else process.env.AAS_CONFIG = prev;
+    }
+  });
+});

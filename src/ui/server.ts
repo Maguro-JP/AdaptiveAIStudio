@@ -1126,12 +1126,38 @@ export class UiServer {
     // 作業場。**打った場所は見るだけ。**無い場所を打っても保存はできる
     // （打ち間違いは、保存したときに言う）。
     let workNote: string | undefined;
+    let workRestart = false;
     if (typeof body?.workRoot === 'string') {
       const want = body.workRoot.trim();
+      const before = this.#workRoot();
       await saveWorkRoot(want);
       if (want) {
         const ok = await stat(want).then((st) => st.isDirectory()).catch(() => false);
         if (!ok) workNote = `そこは見つかりません: ${want}（保存はしました）`;
+      }
+
+      // **いま動いている設定にも入れる。**
+      // ここまで、書き込むだけで動いている側を直していなかった。保存したのに
+      // 画面は古い作業場を見たまま、しかも立ち上げ直しが要るとも言わない。
+      // 「保存したのに変わらない」で終わる形だった。
+      const agent = { ...(this.#opts.config.agent ?? {}) };
+      if (want) agent.root = want;
+      else delete agent.root;
+      this.#opts.config.agent = agent;
+
+      if (this.#workRoot() !== before) {
+        // **いまの土台を畳む。**作業場は土台を組むときに決まるので、畳まないと
+        // 変えたのに道具は前の場所を触り続ける。会話は残してあるので続きから話せる。
+        const live = this.#session;
+        if (live && !this.#busyNow(live)) {
+          this.#session = undefined;
+          await live.close().catch(() => undefined);
+        } else if (live) {
+          // 作業中は畳めない。**黙って効いた顔をしない。**
+          workRestart = true;
+        }
+        this.broadcast({ type: 'log', level: 'info', text: `作業場を変えました: ${this.#workRoot()}` });
+        this.broadcast({ type: 'stateChanged' });
       }
     }
     this.broadcast({ type: 'log', level: 'info', text: `設定を書きました: ${at}` });
@@ -1141,8 +1167,12 @@ export class UiServer {
       // 打ち間違えても保存はできる。だから**保存したときに言う。**
       dirState,
       ...(workNote ? { workNote } : {}),
+      // いまどこを見ているか。**保存の返事に入れる。**入っていないと、
+      // 効いたのかどうかを画面が確かめられない。
+      workRootNow: this.#workRoot(),
       // 動かし方の切り替えは、立ち上げ直すまで効かない。黙って効いた顔をしない。
-      restartNeeded: kind !== (this.#opts.config.runtime?.kind ?? 'ollama')
+      restartNeeded: workRestart
+        || kind !== (this.#opts.config.runtime?.kind ?? 'ollama')
         || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir())
         || (model !== undefined && (model || undefined) !== this.#opts.config.runtime?.model),
     });
