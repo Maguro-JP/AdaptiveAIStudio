@@ -12,6 +12,7 @@
  * 端末なら「y/N」、画面なら押しボタンになるが、
  * **訊かずに進めない**という一点だけは、ここが守る。
  */
+import { findCodeTool } from '../agent/tools/find.ts';
 import { defaultWorkRoot } from './home.ts';
 import { isWriteTool } from '../agent/tools/write-kind.ts';
 import { resolve, join } from 'node:path';
@@ -255,7 +256,7 @@ export class Session {
     );
     const wrap = (tools: Tool[]) => harness.wrapAll(tools, () => holder.instruction);
     const toolPool = {
-      read: wrap([readFileTool, listFilesTool, searchTextTool]),
+      read: wrap([readFileTool, listFilesTool, searchTextTool, findCodeTool]),
       write: wrap([writeFileTool, editFileTool, createDeliberateTool(forum)]),
       execute: wrap([createRunCommandTool({ allowed: agentCfg.allowedCommands })]),
       network: netCfg.enabled === false ? [] : wrap([createFetchUrlTool({

@@ -211,7 +211,8 @@ export const worker: Role = {
     '担当範囲の外には手を出さない。他の担当が同時に作業しているため。',
   access: ['read', 'write', 'execute'],
   instructions: [
-    '先に read_file / search_text で現状を確認する',
+    'どこを直すか分からないときは、まず find_code で探す（日本語で訊いてよい）',
+    '場所が分かったら read_file で読む。search_text は正確な文字列を探すとき',
     '直すときは edit_file を使う（find に、いまある文字列をそのまま渡す）',
     'write_file は新しく作るときと、全部を書き換えるときだけ。全内容を渡す',
     '変更したらテストやビルドを実行して結果を見る',

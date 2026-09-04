@@ -4,6 +4,7 @@
  * 作業指示書は今は手書きだが、P3 で PM が自動生成するようになる。
  * 形式はそのまま引き継ぐ。
  */
+import { findCodeTool } from '../agent/tools/find.ts';
 import { defaultWorkRoot } from '../core/home.ts';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -89,7 +90,7 @@ async function main(): Promise<void> {
   const team = new Team(new ChatOrchestrator(registry), {
     lanes,
     system: SYSTEM,
-    tools: [readFileTool, listFilesTool, searchTextTool, writeFileTool, editFileTool,
+    tools: [readFileTool, listFilesTool, searchTextTool, findCodeTool, writeFileTool, editFileTool,
             createRunCommandTool({ allowed: agentCfg.allowedCommands })],
     root,
     maxTurns: agentCfg.maxTurns ?? 40,
