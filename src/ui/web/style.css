@@ -905,3 +905,14 @@ dialog.wide { width: min(46rem, 92vw); }
 }
 .side-step.done { color: var(--ok, var(--dim)); }
 .side-step.blocked { color: var(--bad, var(--dim)); text-decoration: line-through; }
+
+/*
+  空の作業場に置く案内。**何も言わない板を出さない。**
+  入れた直後はここが空で、何も出ないと壊れているようにしか見えない。
+*/
+.side-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dim);
+}

@@ -9,11 +9,19 @@ import { UiServer, RESTART_EXIT } from '../ui/server.ts';
 const { config } = loadConfig();
 const port = Number(process.env.AAS_UI_PORT ?? 4174);
 // AAS_RELAUNCH は start.cmd が付ける。付いていれば、RESTART_EXIT で終わると
-// 起こし直してもらえる。付いていなければ、終わるだけ（画面がそう案内する）。
+// 起こし直してもらえる。
+//
+// **付いていないなら、止める道そのものを渡さない。**
+// ここまでは、起こし直してもらえない場合でも onRestart を渡していた。
+// 「立ち上げ直す」を押すと、返事は `relaunches: false` なのに**プロセスは死ぬ**。
+// 誰も起こさないので二度と戻らず、画面には接続できない旨だけが残る。
+// 画面を押して回る仕掛けが、この形で実際に落ちた。
 const relaunches = process.env.AAS_RELAUNCH === '1';
 const server = new UiServer({
   config, port, relaunches,
-  onRestart: () => { void server.stop().then(() => process.exit(RESTART_EXIT)); },
+  ...(relaunches
+    ? { onRestart: () => { void server.stop().then(() => process.exit(RESTART_EXIT)); } }
+    : {}),
 });
 const url = await server.start();
 

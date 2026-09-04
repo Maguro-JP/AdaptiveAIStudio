@@ -461,3 +461,23 @@ describe('作業場が無くても、開いた瞬間に赤を出さない', () =
     } finally { await s.stop(); }
   });
 });
+
+describe('起こし直してもらえないなら、止めない', () => {
+  test('立ち上げ直しを押しても、口は生きている', async () => {
+    // ここまでは、起こし直してもらえない入口でも止めていた。返事は
+    // relaunches:false なのに**プロセスは死ぬ**。誰も起こさないので二度と
+    // 戻らず、画面には接続できない旨だけが残る。
+    const s = new UiServer({ config: DEFAULT_CONFIG, port: 0 });
+    const b = (await s.start()).replace(/\/$/, '');
+    try {
+      const r = await fetch(`${b}/api/restart`, { method: 'POST' });
+      assert.equal(r.status, 501);
+      const body = await r.json() as { error: string };
+      // 何をすればよいかまで言うこと。断るだけでは、次の一手が分からない。
+      assert.match(body.error, /開き直/);
+      // **まだ生きていること。**ここが要点。
+      const after = await fetch(`${b}/api/info`);
+      assert.equal(after.status, 200, '断ったのに死んでいる');
+    } finally { await s.stop(); }
+  });
+});

@@ -29,13 +29,19 @@ p.on('pageerror', (e) => bad.push(`落ちた: ${e.message}`));
 p.on('console', (m) => {
   if (m.type() !== 'error') return;
   if (noModel && m.text().includes('503')) return;
+  // 立ち上げ直せない入口の 501 は、正しい断り。
+  if (m.text().includes('501')) return;
   bad.push(`画面のエラー: ${m.text()}`);
 });
 p.on('response', (r) => {
   if (r.status() < 400) return;
+  const at = new URL(r.url()).pathname;
   // モデルを置いていない状態では、送りを断るのが正しい。
-  if (noModel && r.status() === 503 && new URL(r.url()).pathname === '/api/send') return;
-  bad.push(`${r.status()} ${new URL(r.url()).pathname}`);
+  if (noModel && r.status() === 503 && at === '/api/send') return;
+  // **起こし直してもらえない入口では、断るのが正しい。**
+  // ここで止めると誰も起こさず、二度と戻らない（実際にそうなっていた）。
+  if (r.status() === 501 && at === '/api/restart') return;
+  bad.push(`${r.status()} ${at}`);
 });
 
 await p.goto(url, { waitUntil: 'networkidle' });
@@ -257,9 +263,34 @@ await check('立ち上げ直しは、できないならそう言う', async () =
 
 await check('作業場を開く', async () => {
   const dirs = p.locator('#sideFiles button');
-  if (await dirs.count() === 0) throw new Error('作業場が空');
-  await dirs.first().click();
-  await p.waitForTimeout(600);
+  if (await dirs.count() > 0) {
+    await dirs.first().click();
+    await p.waitForTimeout(600);
+    return;
+  }
+  // **空でもよい。ただし黙るのは駄目。**
+  // 入れた直後は作業場が空になる（根の下の work）。そこで正しいが、
+  // 何も出ないと壊れているようにしか見えない。何の場所で、どう変えるかを言うこと。
+  const said = (await p.locator('#sideFiles').innerText()).trim();
+  if (said.length === 0) throw new Error('作業場が空なのに、何も言っていない');
+  if (!said.includes('設定')) throw new Error(`空だが、どう変えるかを言っていない: ${said.slice(0, 60)}`);
+});
+
+await check('作業場を選べる', async () => {
+  // **入れた版では、これが無いと何も始まらない。**
+  // 画面から選べないと、入れた人は aas.config.json を手で書くことになる。
+  try {
+    await p.locator('#openSettings').click();
+    await p.waitForTimeout(700);
+    await p.locator('.tabs-lite button[data-sec="model"]').click();
+    await p.waitForTimeout(700);
+    if (await p.locator('#cfgWorkRoot').count() === 0) throw new Error('作業場を打つ所が無い');
+    const now = (await p.locator('#cfgWorkNow').innerText()).trim();
+    if (!now.includes('いま見ている作業場')) throw new Error(`いまどこを見ているのかが出ていない: ${now}`);
+  } finally {
+    // **落ちても閉じる。**開いたままだと、後の確かめが全部その板に阻まれる。
+    await closeSettings();
+  }
 });
 
 if (shot) await p.screenshot({ path: shot, fullPage: false });

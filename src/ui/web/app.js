@@ -635,6 +635,17 @@ async function loadFiles(at = '') {
     if (!r.ok) throw new Error(body.error ?? '読めませんでした');
     filesAt = body.path;
     $('filesHead').textContent = body.path ? `作業場 / ${body.path}` : '作業場';
+    // **空のときに、何も言わない板を出さない。**入れた直後はここが空で、
+    // 何も出ないと壊れているようにしか見えない。何の場所で、どう変えるかを書く。
+    if (!body.path && (body.entries ?? []).length === 0) {
+      box.textContent = '';
+      const note = document.createElement('div');
+      note.className = 'side-empty';
+      note.textContent = 'ここは空です。直したいコードのある場所を、設定 → モデル の「作業場」で指してください。';
+      note.title = body.root ?? '';
+      box.append(note);
+      return;
+    }
     box.textContent = '';
 
     if (body.path) {
@@ -895,6 +906,8 @@ async function loadCfg() {
     sel.append(o);
   }
   $('cfgModelsDir').value = c.modelsDir ?? '';
+  $('cfgWorkRoot').value = c.workRoot ?? '';
+  $('cfgWorkNow').textContent = c.workRootNow ? `いま見ている作業場: ${c.workRootNow}` : '';
   // 保存してあるものと、いま動いているものは別。黙って同じ顔をさせない。
   // 立ち上げ直しが要るときだけ、そのボタンを出す。要らないのに出すと押される。
   $('cfgRestart').hidden = !c.restartNeeded;
@@ -1014,7 +1027,11 @@ $('cfgSave').onclick = async () => {
   const r = await fetch('/api/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ kind: $('cfgKind').value, modelsDir: $('cfgModelsDir').value.trim() }),
+    body: JSON.stringify({
+      kind: $('cfgKind').value,
+      modelsDir: $('cfgModelsDir').value.trim(),
+      workRoot: $('cfgWorkRoot').value.trim(),
+    }),
   });
   const body = await r.json().catch(() => ({}));
   if (!r.ok) { $('cfgNote').textContent = body.error ?? '保存できませんでした'; return; }
@@ -1023,9 +1040,13 @@ $('cfgSave').onclick = async () => {
   const saveNote = DIR_NOTES[body.dirState] ?? '';
   $('cfgNote').style.whiteSpace = 'pre-line';
   $('cfgNote').textContent = (body.restartNeeded
-    ? `保存しました。**立ち上げ直すと効きます。** ${body.path}`
-    : `保存しました。${body.path}`) + (saveNote ? `\n${saveNote}` : '');
+    ? `保存しました。立ち上げ直すと効きます。 ${body.path}`
+    : `保存しました。${body.path}`)
+    + (saveNote ? `\n${saveNote}` : '')
+    // 打ち間違えても保存はできる。**保存したときに言う。**
+    + (body.workNote ? `\n${body.workNote}` : '');
   await loadCfg();
+  await loadFiles();
 };
 
 let checksReady = false;

@@ -12,13 +12,14 @@
  */
 import { listDir } from './files.ts';
 import { UnfinishedWork, resumePrompt, whyText } from '../core/unfinished.ts';
+import { stat } from 'node:fs/promises';
 import { Goals, progressOf, isSettled } from '../core/goals.ts';
 import { StrideBook, strideText } from '../agent/stride.ts';
 import { decompose, stepPrompt } from '../agent/decompose.ts';
 import { Conversations, ID_SHAPE } from '../core/conversations.ts';
 import { writeEnvValue } from '../core/env.ts';
 import { canRun } from '../core/which.ts';
-import { saveMcpServer } from './settings.ts';
+import { saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname, extname, normalize, resolve as resolvePath } from 'node:path';
@@ -793,7 +794,13 @@ export class UiServer {
       if (session && this.#busyNow(session)) {
         return send(res, 409, { error: 'いま作業中です。終わってから立ち上げ直してください' });
       }
-      if (!this.#opts.onRestart) return send(res, 501, { error: 'この入口からは立ち上げ直せません' });
+      // 起こし直してもらえない入口では、**止めない**。止めると誰も起こさない。
+      if (!this.#opts.onRestart) {
+        return send(res, 501, {
+          error: 'この入口からは立ち上げ直せません。'
+            + '窓を閉じて、AdaptiveAIStudio を開き直してください。',
+        });
+      }
       const relaunches = this.#opts.relaunches === true;
       this.broadcast({ type: 'log', level: 'info', text: '立ち上げ直します' });
       send(res, 200, { restarting: true, relaunches });
@@ -1092,12 +1099,18 @@ export class UiServer {
       }))),
       // GGUF が0件のとき、置き場そのものが無いのか、空なのかで打つ手が違う。
       dirState: await inspectModelsDir(dir),
+      // 作業場。**入れた版では、これが無いと何も始まらない。**
+      // 書いてなければ既定（根の下の work）が出る。
+      workRoot: await savedWorkRoot(),
+      workRootNow: this.#workRoot(),
     });
   }
 
   /** 画面から設定を書き換える。 */
   async #saveConfig(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const body = await readBody(req) as { kind?: string; modelsDir?: string; model?: string };
+    const body = await readBody(req) as {
+      kind?: string; modelsDir?: string; model?: string; workRoot?: string;
+    };
     const kind = body?.kind;
     if (!isRuntimeKind(kind)) return send(res, 400, { error: 'そういう動かし方はありません' });
     const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
@@ -1110,12 +1123,24 @@ export class UiServer {
       ? await inspectModelsDir(dir)
       : await ensureDefaultModelsDir(modelsDir());
     const at = await saveRuntime(kind, dir, model);
+    // 作業場。**打った場所は見るだけ。**無い場所を打っても保存はできる
+    // （打ち間違いは、保存したときに言う）。
+    let workNote: string | undefined;
+    if (typeof body?.workRoot === 'string') {
+      const want = body.workRoot.trim();
+      await saveWorkRoot(want);
+      if (want) {
+        const ok = await stat(want).then((st) => st.isDirectory()).catch(() => false);
+        if (!ok) workNote = `そこは見つかりません: ${want}（保存はしました）`;
+      }
+    }
     this.broadcast({ type: 'log', level: 'info', text: `設定を書きました: ${at}` });
     return send(res, 200, {
       path: at,
       saved: { kind, modelsDir: dir || null, ...(model !== undefined ? { model: model || null } : {}) },
       // 打ち間違えても保存はできる。だから**保存したときに言う。**
       dirState,
+      ...(workNote ? { workNote } : {}),
       // 動かし方の切り替えは、立ち上げ直すまで効かない。黙って効いた顔をしない。
       restartNeeded: kind !== (this.#opts.config.runtime?.kind ?? 'ollama')
         || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir())

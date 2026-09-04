@@ -148,3 +148,35 @@ export async function saveMcpServer(
   await writeFile(at, `${JSON.stringify({ ...current, mcp: { ...mcp, servers } }, null, 2)}\n`, 'utf8');
   return at;
 }
+
+/**
+ * 作業場を書く。**入れた版では、これが無いと何も始まらない。**
+ *
+ * 入れて開くと、作業場は根の下の `work`（空）になる。そこで正しいのだが、
+ * **自分の仕事場を開く道が画面に無かった。**入れた人は `aas.config.json`
+ * を手で書くしかなく、それは「押せばいい入口」を用意した意味を消す。
+ *
+ * 空文字で消す（既定に戻る）。
+ */
+export async function saveWorkRoot(root: string): Promise<string> {
+  const at = configPath();
+  let current: Record<string, unknown> = {};
+  try {
+    current = JSON.parse(await readFile(at, 'utf8')) as Record<string, unknown>;
+  } catch { /* まだ無い */ }
+  const agent: Record<string, unknown> = { ...(current.agent as Record<string, unknown> ?? {}) };
+  if (root) agent.root = root;
+  else delete agent.root;
+  await writeFile(at, `${JSON.stringify({ ...current, agent }, null, 2)}\n`, 'utf8');
+  return at;
+}
+
+/** 書いてある作業場。無ければ空。 */
+export async function savedWorkRoot(): Promise<string> {
+  try {
+    const raw = JSON.parse(await readFile(configPath(), 'utf8')) as { agent?: { root?: unknown } };
+    return typeof raw.agent?.root === 'string' ? raw.agent.root : '';
+  } catch {
+    return '';
+  }
+}

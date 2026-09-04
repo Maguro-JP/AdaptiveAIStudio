@@ -128,6 +128,22 @@
           <span class="dim">GGUF の置き場</span>
           <input id="cfgModelsDir" type="text" spellcheck="false" placeholder="既定のまま">
         </label>
+
+        <!--
+          作業場。**入れた版では、これが無いと何も始まらない。**
+          入れて開くと作業場は根の下の work（空）になる。そこで正しいが、
+          自分の仕事場を開く道が画面に無かったので、入れた人は
+          aas.config.json を手で書くしかなかった。
+        -->
+        <p class="hint">
+          直してほしいコードが置いてある場所。空なら、この道具の置き場の下の
+          <code>work</code> を使います。
+        </p>
+        <label class="field-row">
+          <span class="dim">作業場</span>
+          <input id="cfgWorkRoot" type="text" spellcheck="false" placeholder="例: C:\Users\me\projects\myapp">
+        </label>
+        <p id="cfgWorkNow" class="hint mono"></p>
         <div class="btnbar">
           <button type="button" id="cfgSave" class="primary">保存</button>
           <button type="button" id="cfgReload" class="ghost">読み直す</button>
