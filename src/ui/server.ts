@@ -368,12 +368,18 @@ export class UiServer {
     if (await this.#resumeUnfinished(session)) return 'RESUMED';
 
     // 思いつきはここで切る。やり残しの拾い上げは、その手前で済んでいる。
-    if ((this.#opts.config.initiative ?? {}).enabled === false) return 'HELD';
+    //
+    // **既定は切る。**ローカルの小さいモデルでは、一回の思いつきが数分
+    // 機械を占有する。頼んでいない仕事にそれを使われると、頼んだ仕事が
+    // そのぶん待たされる。使いたい人が `initiative.enabled: true` で入れる。
+    if ((this.#opts.config.initiative ?? {}).enabled !== true) return 'HELD';
 
     if (Date.now() < this.#idleHoldUntil) return 'HELD';
     this.#preparing = true;
     try {
-      const missing = await this.#readyToThink();
+      // **読み込みは始めない。**頼まれてもいないのに数GBを読むと、
+      // 立ち上げて30秒後に機械が塞がる。
+      const missing = await this.#readyToThink(false);
       if (missing) {
         // 10分は黙る。30秒ごとに同じことを言われても、置き場は変わらない。
         this.#idleHoldUntil = Date.now() + 10 * 60_000;
@@ -1190,12 +1196,26 @@ export class UiServer {
     return session.busy || this.#thinking || this.#preparing;
   }
 
-  async #readyToThink(): Promise<string | undefined> {
+  /**
+   * 話せる状態か。話せないなら、その理由。
+   *
+   * `load: false` のときは、**読み込みを始めない。**
+   * 見回り（暇なときの一回分）から呼ぶときはこちら。
+   *
+   * ここまで、見回りからも読み込ませていた。数GBを読むあいだ機械は塞がり、
+   * **利用者が何も頼んでいないのに、立ち上げて30秒後に固まる。**
+   * 「起動したらずっとフリーズしている」の正体がこれ。
+   * 読むのは、頼まれたときだけでよい（`/api/send` が同じ道を通る）。
+   */
+  async #readyToThink(load = true): Promise<string | undefined> {
     const kind = this.#opts.config.runtime?.kind ?? 'ollama';
     try {
       const runtime = await this.#localRuntime();
       const models = await runtime.list();
       if (models.length > 0) {
+        if (runtime.id === 'inproc' && runtime.loaded().length === 0 && !load) {
+          return 'モデルをまだ読んでいません（頼まれたときに読みます）';
+        }
         // この中で読む道では、**読むまで口が立たない。**
         // 先に読ませておかないと、上の層は繋がらない先を叩くことになる。
         if (runtime.id === 'inproc' && runtime.loaded().length === 0) {
@@ -1282,8 +1302,9 @@ export class UiServer {
     } catch { return false; }
     if (!item) return false;
 
-    // モデルが無ければ、続けようがない。控えはそのまま残す。
-    if (await this.#readyToThink()) {
+    // モデルが無ければ（まだ読んでいない場合も含めて）、続けようがない。
+    // **ここでも読み込みは始めない。**控えはそのまま残る。
+    if (await this.#readyToThink(false)) {
       this.#idleHoldUntil = Date.now() + 10 * 60_000;
       return false;
     }

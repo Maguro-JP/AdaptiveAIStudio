@@ -186,7 +186,15 @@ export class InProcRuntime implements LocalRuntime {
     // 網の無い機械では固まり、あっても何十分もかかる。**組まずに、無いと言う。**
     // logLevel: 'error' — 無いときに「prebuilt binary was not found」を何行も
     // 表に出す。こちらの言葉で言い直すので、向こうの声は落とす。
-    const llama = await lib.getLlama({ build: 'never', logLevel: 'error' });
+    // gpu: false — **同梱しているのは CPU の binary だけ。**
+    // 既定（auto）だと cuda → vulkan → CPU の順に探しに行き、前の二つは
+    // 必ず空振りする。そのたびに
+    //   「A prebuilt binary was not found, falling back to using no GPU」
+    // が出る。利用者には**壊れているようにしか見えない**（実際に言われた）。
+    // 無いものを探させない。探さない分、立ち上がりも速い。
+    //
+    // GPU を使いたくなったら、そのときは binary を同梱してから、ここを開ける。
+    const llama = await lib.getLlama({ gpu: false, build: 'never', logLevel: 'error' });
     // 数GBを読むので、10〜60秒かかる。**黙って待たせない。**
     // 進み具合を出さないと、また「固まった」に見える。
     let last = -1;
@@ -227,7 +235,7 @@ export class InProcRuntime implements LocalRuntime {
   }
 
   /** ライブラリ。無いときは、無いとだけ言う。黙って別のことをしない。 */
-  async #lib(): Promise<{ getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string; onLoadProgress?: (done: number) => void }) => Promise<{ createContext: (o?: { contextSize?: number }) => Promise<{ getSequence: () => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown }> {
+  async #lib(): Promise<{ getLlama: (o?: { gpu?: false; build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string; onLoadProgress?: (done: number) => void }) => Promise<{ createContext: (o?: { contextSize?: number }) => Promise<{ getSequence: () => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown }> {
     const load = this.#opts.load ?? (() => import(LLAMA_LIB));
     try {
       return await load() as never;

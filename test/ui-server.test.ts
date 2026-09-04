@@ -262,11 +262,30 @@ describe('使う GGUF を画面から決める', () => {
 });
 
 describe('暇なときの一回分', () => {
-  test('モデルが無ければ MISSING、その後しばらくは HELD', async () => {
+  test('思いつきは既定で切れている（頼んでいない仕事に機械を使わない）', async () => {
+    // ローカルの小さいモデルでは、一回の思いつきが数分機械を占有する。
+    // 頼んだ仕事がそのぶん待たされる。**既定は切る。**
+    const { tempDir: td } = await import('./tmp.ts');
+    const models = await td('aas-idle0-');
+    const s = new UiServer({
+      config: { ...DEFAULT_CONFIG, runtime: { kind: 'inproc', modelsDir: models } } as typeof DEFAULT_CONFIG,
+      port: 0,
+    });
+    await s.start();
+    try {
+      assert.equal(await s.idleTick(await s.session()), 'HELD');
+    } finally { await s.stop(); }
+  });
+
+  test('入れた人だけ、モデルが無ければ MISSING、その後しばらくは HELD', async () => {
     const { tempDir: td } = await import('./tmp.ts');
     const models = await td('aas-idle-');
     const s = new UiServer({
-      config: { ...DEFAULT_CONFIG, runtime: { kind: 'inproc', modelsDir: models } } as typeof DEFAULT_CONFIG,
+      config: {
+        ...DEFAULT_CONFIG,
+        runtime: { kind: 'inproc', modelsDir: models },
+        initiative: { enabled: true },
+      } as typeof DEFAULT_CONFIG,
       port: 0,
     });
     await s.start();

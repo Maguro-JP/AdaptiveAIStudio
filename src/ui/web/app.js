@@ -337,8 +337,7 @@ const run = {
     $('runText').textContent = text;
     // 中断できるのは、人の依頼を動かしているときだけ。
     $('runStop').hidden = state !== 'busy';
-    $('sbWork').textContent = text;
-    $('sbWork').classList.toggle('busy', state === 'busy');
+    // 下の帯には出さない。**上と同じことを二度言わない。**
     if (state === 'busy' || state === 'musing') {
       if (!this.since) this.since = Date.now();
       if (!this.timer) this.timer = setInterval(() => this.tick(), 1000);
@@ -619,6 +618,32 @@ function drawConversations() {
   }
 }
 
+/**
+ * 作業場を変える。
+ *
+ * **ここが、作業場を決める場所。**設定の奥（モデルの頁）に置いていたので、
+ * 誰も辿り着けなかった。作業場を見ている、その場で変える。
+ */
+async function pickWorkRoot() {
+  const nowAt = $('workNow').textContent ?? '';
+  const want = window.prompt('直してほしいコードのある場所を打ってください。\n（空にすると既定へ戻ります）', nowAt);
+  if (want === null) return;
+  const r = await fetch('/api/config', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      kind: $('cfgKind')?.value || 'inproc',
+      modelsDir: $('cfgModelsDir')?.value?.trim() ?? '',
+      workRoot: want.trim(),
+    }),
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) { alert(body.error ?? '変えられませんでした'); return; }
+  // 打ち間違えても保存はできる。**そのときは言う。**
+  if (body.workNote) alert(body.workNote);
+  await loadFiles();
+}
+
 /* ---------- 横の板：作業場 ---------- */
 
 /*
@@ -635,6 +660,14 @@ async function loadFiles(at = '') {
     if (!r.ok) throw new Error(body.error ?? '読めませんでした');
     filesAt = body.path;
     $('filesHead').textContent = body.path ? `作業場 / ${body.path}` : '作業場';
+    // **いまどこを触っているのかを、常に出す。**
+    // これが見えないまま指示を書くのは、暗い所で手探りをするのと同じ。
+    const now = $('workNow');
+    // 長い道は**真ん中を省く**。頭（どのドライブか）と末尾（どのフォルダか）が
+    // 要るので、端を切ると分からなくなる。
+    const full = body.root ?? '';
+    now.textContent = full.length > 34 ? `${full.slice(0, 12)}…${full.slice(-20)}` : full;
+    now.title = full;
     // **空のときに、何も言わない板を出さない。**入れた直後はここが空で、
     // 何も出ないと壊れているようにしか見えない。何の場所で、どう変えるかを書く。
     if (!body.path && (body.entries ?? []).length === 0) {
@@ -828,7 +861,8 @@ function openPalette() {
   input.focus();
 }
 
-$('open').onclick = openPalette;
+// コマンドは入力欄の中に置いた（書く手の隣）。板の並びからは外した。
+window.aasOpenPalette = openPalette;
 
 /* ---------- 設定 ----------
  *
@@ -906,8 +940,7 @@ async function loadCfg() {
     sel.append(o);
   }
   $('cfgModelsDir').value = c.modelsDir ?? '';
-  $('cfgWorkRoot').value = c.workRoot ?? '';
-  $('cfgWorkNow').textContent = c.workRootNow ? `いま見ている作業場: ${c.workRootNow}` : '';
+  // 作業場は横の板で決める（設定の奥では誰も辿り着けなかった）。
   // 保存してあるものと、いま動いているものは別。黙って同じ顔をさせない。
   // 立ち上げ直しが要るときだけ、そのボタンを出す。要らないのに出すと押される。
   $('cfgRestart').hidden = !c.restartNeeded;
@@ -1030,7 +1063,6 @@ $('cfgSave').onclick = async () => {
     body: JSON.stringify({
       kind: $('cfgKind').value,
       modelsDir: $('cfgModelsDir').value.trim(),
-      workRoot: $('cfgWorkRoot').value.trim(),
     }),
   });
   const body = await r.json().catch(() => ({}));
@@ -1120,6 +1152,7 @@ await refreshState();
 await loadFiles();
 await loadConversations();
 await loadUnfinished();
+$('pickWork').onclick = () => { void pickWorkRoot(); };
 // 開き直したときは、続きの会話をそのまま出す。空の画面から始めない。
 if (conversations.current) {
   try {

@@ -78,9 +78,11 @@ export const PANELS = {
     input.rows = 1;
     input.placeholder = '指示を書く  （Enter で送る / Shift+Enter で改行 / 先頭に /plan で分解）';
     const send = el('button', 'primary send', '送る');
-    const stop = el('button', 'ghost', '中断');
+    // 動いていないときは、そもそも出さない。**押せないものは邪魔なだけ。**
+    const stop = el('button', 'ghost icon', '■');
     stop.type = 'button';
-    stop.disabled = true;
+    stop.title = '中断';
+    stop.hidden = true;
 
     // 添付。落とす・貼る・選ぶ、どれでも渡せるようにする。
     const clip = el('button', 'ghost icon', '📎');
@@ -98,11 +100,21 @@ export const PANELS = {
     mic.title = Recog ? '声で入れる' : 'この環境では声を使えません';
     if (!Recog) mic.style.display = 'none';
 
+    // コマンド。**送る所の隣に置く。**
+    // 横の板の並びに置いていたので、書いている手から遠かった。
+    // 使うのは「いま書いているとき」なので、書く所の隣に在るべきもの。
+    const cmd = el('button', 'ghost icon', '⌘');
+    cmd.type = 'button';
+    cmd.title = 'コマンド (Ctrl+K)';
+    cmd.onclick = () => window.aasOpenPalette?.();
+
     const tray = el('div', 'attachments');
     tray.style.display = 'none';
 
-    field.append(input, clip, mic, send, picker);
-    form.append(tray, field, stop);
+    // 中断も入力欄の中に置く。**外に浮かせない。**
+    // 送るの隣に在るのが自然で、離すと押し間違える。
+    field.append(input, clip, cmd, mic, stop, send, picker);
+    form.append(tray, field);
     wrap.append(log, form);
     body.append(wrap);
 
@@ -358,7 +370,7 @@ export const PANELS = {
     };
 
     ctx.on('busy', (e) => {
-      stop.disabled = !e.busy;
+      stop.hidden = !e.busy;
       send.disabled = e.busy;
       wrap.classList.toggle('working', e.busy);
       if (!e.busy) { stream = null; openTools.clear(); }
@@ -974,13 +986,13 @@ export const PANELS = {
     const out = el('pre', 'mono task-out');
     const stop = el('button', 'ghost', '止める');
     stop.type = 'button';
-    stop.disabled = true;
+    stop.hidden = true;
     stop.onclick = () => { void fetch('/api/task', { method: 'DELETE' }); };
 
     const buttons = [];
     const busy = (on) => {
       for (const b of buttons) b.disabled = on;
-      stop.disabled = !on;
+      stop.hidden = !on;
     };
 
     void fetch('/api/tasks').then((r) => r.json()).then(({ tasks }) => {

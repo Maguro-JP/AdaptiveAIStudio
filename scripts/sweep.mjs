@@ -102,7 +102,8 @@ await check('設定をもう一度開く', async () => {
 
 // コマンド板
 await check('コマンドを開いて閉じる', async () => {
-  await p.locator('#open').click();
+  // コマンドは入力欄の中（書く手の隣）。板の並びからは外した。
+  await p.locator('.chat .field button[title^="コマンド"]').click();
   await p.waitForTimeout(600);
   if (!(await p.locator('#palette').isVisible())) throw new Error('開かない');
   if ((await p.locator('#paletteList').innerText()).trim().length === 0) throw new Error('中身が空');
@@ -244,10 +245,30 @@ await check('ファイルを添えて外す', async () => {
 
 // 中断。押せるのに効かない、を作らない。
 await check('中断できる', async () => {
-  const stop = p.locator('.chat form > button', { hasText: '中断' });
+  // 中断も入力欄の中（送るの隣）。外に浮かせない。
+  const stop = p.locator('.chat .field button[title="中断"]');
   if (await stop.count() === 0) throw new Error('中断が無い');
-  // 動いていないときは押せない状態であること（押せて何も起きないのが、いちばん困る）
-  if (await stop.isEnabled()) throw new Error('動いていないのに中断が押せる');
+  // 動いていないときは、そもそも出ていないこと。
+  // **押せないものを出しておかない。**邪魔なだけで、押して何も起きないと戸惑う。
+  if (await stop.isVisible()) throw new Error('動いていないのに中断が出ている');
+});
+
+await check('空の区画を出さない', async () => {
+  // hidden は既定の display を消すだけなので、こちらで display: を当てている
+  // 要素では**素通りする**。実際に「やり残し」が空のまま出ていた。
+  for (const id of ['unfinishedSec', 'queue']) {
+    const box = p.locator(`#${id}`);
+    if (await box.count() === 0) continue;
+    const isHidden = await box.evaluate((e) => e.hasAttribute('hidden'));
+    if (isHidden && await box.isVisible()) throw new Error(`隠したはずが出ている: #${id}`);
+  }
+});
+
+await check('同じことを二度言わない', async () => {
+  // 「待機中」を板のいちばん上と下の帯の両方に出していた。
+  const said = (await p.locator('body').innerText()).split('\n').map((l) => l.trim());
+  const idle = said.filter((l) => l === '待機中').length;
+  if (idle > 1) throw new Error(`同じ表示が ${idle} 箇所に出ている`);
 });
 
 // 立ち上げ直す。この入口は起こし直せないので、断る言葉が出ること。
@@ -276,21 +297,24 @@ await check('作業場を開く', async () => {
   if (!said.includes('設定')) throw new Error(`空だが、どう変えるかを言っていない: ${said.slice(0, 60)}`);
 });
 
-await check('作業場を選べる', async () => {
-  // **入れた版では、これが無いと何も始まらない。**
-  // 画面から選べないと、入れた人は aas.config.json を手で書くことになる。
-  try {
-    await p.locator('#openSettings').click();
-    await p.waitForTimeout(700);
-    await p.locator('.tabs-lite button[data-sec="model"]').click();
-    await p.waitForTimeout(700);
-    if (await p.locator('#cfgWorkRoot').count() === 0) throw new Error('作業場を打つ所が無い');
-    const now = (await p.locator('#cfgWorkNow').innerText()).trim();
-    if (!now.includes('いま見ている作業場')) throw new Error(`いまどこを見ているのかが出ていない: ${now}`);
-  } finally {
-    // **落ちても閉じる。**開いたままだと、後の確かめが全部その板に阻まれる。
-    await closeSettings();
-  }
+await check('作業場は、作業場の所で変える', async () => {
+  // **その区画を操るものは、その区画に置く。**
+  // 設定の奥（モデルの頁）に置いていたので、誰も辿り着けなかった。
+  if (await p.locator('#pickWork').count() === 0) throw new Error('作業場を変えるつまみが無い');
+  if (!(await p.locator('#pickWork').isVisible())) throw new Error('つまみが見えない');
+  // いまどこを触っているかが、常に出ていること。
+  const now = (await p.locator('#workNow').innerText()).trim();
+  if (now.length === 0) throw new Error('いまどこを触っているのかが出ていない');
+});
+
+await check('コマンドと設定が、手の届く所に在る', async () => {
+  // コマンドは書く手の隣、設定は板のいちばん上（≡ の横）。
+  const cmd = p.locator('.chat .field button[title^="コマンド"]');
+  if (await cmd.count() === 0) throw new Error('コマンドが入力欄に無い');
+  const gear = p.locator('.side-top #openSettings');
+  if (await gear.count() === 0) throw new Error('設定が ≡ の横に無い');
+  // 板の途中の並びには置かない（会話や作業場と同じ重さに見える）。
+  if (await p.locator('.side-nav').count() > 0) throw new Error('板の途中の並びが残っている');
 });
 
 if (shot) await p.screenshot({ path: shot, fullPage: false });

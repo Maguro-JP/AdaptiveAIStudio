@@ -1,4 +1,14 @@
 /*
+  隠すと言ったら、隠す。
+
+  `hidden` は既定の `display` を消すだけなので、こちらで `display:` を
+  当てている要素（.side-sec は flex）では**素通りする**。
+  実際に「やり残し」が空のまま出ていた。10箇所で hidden を使っているので、
+  一箇所ずつ書くのではなく、ここで一度に効かせる。
+*/
+[hidden] { display: none !important; }
+
+/*
  * 見え方。色と間合いは全部 CSS 変数で、theme.ts から流し込まれる。
  * ここに生の色を書かない。書いた瞬間、見た目の切り替えが効かなくなる。
  *
@@ -915,4 +925,32 @@ dialog.wide { width: min(46rem, 92vw); }
   font-size: 12px;
   line-height: 1.5;
   color: var(--dim);
+}
+
+/*
+  区画の見出しの行。見出しの右に、その区画を操るつまみを置く。
+  **その区画を操るものは、その区画に置く。**設定の奥へ隠さない。
+*/
+.sec-head { display: flex; align-items: center; gap: var(--s2); }
+.sec-head h3 { flex: 1; min-width: 0; margin: 0; }
+.sec-head > button { opacity: .6; }
+.sec-head > button:hover { opacity: 1; }
+
+/*
+  いまどこを触っているか。**常に出す。**
+  これが見えないまま指示を書くのは、暗い所で手探りをするのと同じ。
+*/
+.side-path {
+  padding: 0 var(--s2) 4px;
+  font-size: 11px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /*
+    **rtl にしない。**末尾を残そうとして direction:rtl にしたら、
+    先頭の `/` が末尾へ回って `tmp/look2/proj/` になった（画面で見て気づいた）。
+    道は道のまま出す。長ければ、途中を省いたものを JS 側で作る。
+  */
+  direction: ltr;
 }

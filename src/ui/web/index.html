@@ -16,9 +16,14 @@
     <button id="sideOpen" class="side-open" title="横の板を出す" hidden>›</button>
 
     <aside id="side" class="side">
+      <!--
+        ≡ の横に歯車。**設定はここに在るもの。**
+        板の途中の並びに混ぜていたので、会話や作業場と同じ重さに見えて邪魔だった。
+      -->
       <div class="side-top">
-        <span class="brand">AdaptiveAIStudio</span>
         <button id="sideToggle" class="ghost icon" title="横の板を畳む">≡</button>
+        <span class="brand">AdaptiveAIStudio</span>
+        <button id="openSettings" class="ghost icon" title="設定 (Ctrl+,)">⚙</button>
       </div>
 
       <!--
@@ -32,11 +37,6 @@
         <button id="runStop" class="ghost icon" title="中断" hidden>■</button>
       </div>
       <div id="queue" class="queue" hidden></div>
-
-      <nav class="side-nav">
-        <button id="open" class="ghost row" title="コマンド (Ctrl+K)"><span>⌘</span>コマンド</button>
-        <button id="openSettings" class="ghost row" title="設定 (Ctrl+,)"><span>⚙</span>設定</button>
-      </nav>
 
       <!--
         やり残し。**見えないところで動かさない。**
@@ -53,8 +53,17 @@
         <div id="sideSessions" class="side-list"></div>
       </section>
 
+      <!--
+        作業場。**ここが、作業場を決める場所。**
+        設定の奥（モデルの頁）に置いていたので、誰も辿り着けなかった。
+        いま見ている場所を出し、その場で変えられるようにする。
+      -->
       <section class="side-sec grow">
-        <h3 id="filesHead">作業場</h3>
+        <div class="sec-head">
+          <h3 id="filesHead">作業場</h3>
+          <button id="pickWork" class="ghost icon" title="作業場を変える">📂</button>
+        </div>
+        <div id="workNow" class="side-path mono" title=""></div>
         <div id="sideFiles" class="side-list files"></div>
       </section>
 
@@ -67,8 +76,12 @@
     <main id="root" class="root"></main>
   </div>
 
+  <!--
+    下の帯。**上と同じことを言わない。**
+    「待機中」を板のいちばん上と下の両方に出していた（画面で見て気づいた）。
+    動いているかどうかは上の大きな表示が持つ。ここは覚え書きだけ。
+  -->
   <footer class="statusbar">
-    <span id="sbWork" class="sb">待機中</span>
     <span class="spacer"></span>
     <span class="sb dim">Ctrl+K でコマンド · Ctrl+/ で入力へ</span>
   </footer>
@@ -129,21 +142,6 @@
           <input id="cfgModelsDir" type="text" spellcheck="false" placeholder="既定のまま">
         </label>
 
-        <!--
-          作業場。**入れた版では、これが無いと何も始まらない。**
-          入れて開くと作業場は根の下の work（空）になる。そこで正しいが、
-          自分の仕事場を開く道が画面に無かったので、入れた人は
-          aas.config.json を手で書くしかなかった。
-        -->
-        <p class="hint">
-          直してほしいコードが置いてある場所。空なら、この道具の置き場の下の
-          <code>work</code> を使います。
-        </p>
-        <label class="field-row">
-          <span class="dim">作業場</span>
-          <input id="cfgWorkRoot" type="text" spellcheck="false" placeholder="例: C:\Users\me\projects\myapp">
-        </label>
-        <p id="cfgWorkNow" class="hint mono"></p>
         <div class="btnbar">
           <button type="button" id="cfgSave" class="primary">保存</button>
           <button type="button" id="cfgReload" class="ghost">読み直す</button>
