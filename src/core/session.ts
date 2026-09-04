@@ -98,7 +98,18 @@ export type SessionEvent =
   /** 書き換えの中身。何がどう変わったかは、文章より差分の方が速い。 */
   | { type: 'diff'; path: string; diff: string; added: number; removed: number; created: boolean }
   /** 検証まで含めた、この依頼の結末。 */
-  | { type: 'settled'; reason: string; verified: boolean; seconds: number; detail?: string }
+  /**
+   * 終わり。
+   *
+   * `verified` は「**確かめて、通った**」の意味だけに使う。
+   * 確かめていないときに true にしていたので、試験の無い作業場では
+   * 何もしていなくても「検証済み」になっていた（実際にそうなっていた）。
+   * どうだったかは `checked` で言う。
+   */
+  | {
+      type: 'settled'; reason: string; verified: boolean; seconds: number; detail?: string;
+      checked: 'passed' | 'failed' | 'preexisting' | 'notRun';
+    }
   /**
    * 道具が弾かれたまま終わった。
    * 本文が「やりました」でも、作業場は変わっていない。**言葉より結果を出す。**
@@ -753,7 +764,10 @@ export class Session {
 
     let finishedReason: string | undefined;
     let answerChars = 0;
-    let verified = true;
+    // 巻き戻すかどうか（従来の意味）。確かめて落ちたときだけ倒す。
+    let keep = true;
+    // 実際に確かめたか、どうだったか。**確かめていないことを、通ったと言わない。**
+    let checked: 'passed' | 'failed' | 'preexisting' | 'notRun' = 'notRun';
 
     try {
       // 関係することを思い出して添える。無関係なら何も足さない。
@@ -882,7 +896,7 @@ export class Session {
 
       // 書いて終わりにしない。失敗したら、その内容を渡して直させる。
       if (finishedReason === 'completed' && testsBefore && command) {
-        verified = false;
+        keep = false;
         const events: SessionEvent[] = [];
         const fix = async (feedback: string, sig: AbortSignal): Promise<void> => {
           this.#history.push({ role: 'user', content: feedback });
@@ -918,7 +932,11 @@ export class Session {
         let step = await loop.next();
         while (!step.done) {
           const ev = step.value;
-          if (ev.type === 'passed' || ev.type === 'preexisting') verified = true;
+          if (ev.type === 'passed') { keep = true; checked = 'passed'; }
+          // 元から落ちていたものは、この作業のせいにしない（巻き戻さない）。
+          // ただし**通ったとも言わない**。落ちているものは落ちている。
+          else if (ev.type === 'preexisting') { keep = true; checked = 'preexisting'; }
+          else if (ev.type === 'failed') checked = 'failed';
           yield { type: 'verify', event: ev };
           // 直させている間に出たものも、そのまま見せる。黙って直させない。
           while (events.length > 0) yield events.shift()!;
@@ -928,14 +946,14 @@ export class Session {
       }
 
       // 打ち切ったなら、中途半端な状態を残さない選択肢を持つ。
-      if (!verified && harnessCfg.rollbackOnGiveUp && checkpoint.size > 0) {
+      if (!keep && harnessCfg.rollbackOnGiveUp && checkpoint.size > 0) {
         const paths = await checkpoint.restore();
         yield { type: 'rolledBack', paths };
       } else {
         checkpoint.commit();
       }
 
-      const succeeded = finishedReason === 'completed' && verified;
+      const succeeded = finishedReason === 'completed' && keep;
       this.#harness.endTask(succeeded ? 'completed' : 'failed');
       await this.#harness.metrics?.save();
       this.#prefetch.invalidate();
@@ -944,7 +962,8 @@ export class Session {
       yield {
         type: 'settled',
         reason: finishedReason ?? 'failed',
-        verified,
+        verified: checked === 'passed',
+        checked,
         seconds: (Date.now() - started) / 1000,
       };
     } catch (e) {
@@ -952,7 +971,7 @@ export class Session {
       this.#harness.endTask('failed');
       yield { type: 'log', level: 'error', text: (e as Error).message };
       yield {
-        type: 'settled', reason: 'failed', verified: false,
+        type: 'settled', reason: 'failed', verified: false, checked,
         seconds: (Date.now() - started) / 1000, detail: (e as Error).message,
       };
     } finally {

@@ -412,10 +412,15 @@ export const PANELS = {
         note('bad', `道具が通りませんでした（${v.names.join(', ')}）。作業場は変わっていません。`);
       } else if (v.type === 'verify') showVerify(v.event);
       else if (v.type === 'settled') {
+        // **確かめていないことを、確かめた顔で出さない。**
+        // 試験の無い作業場では、何もしていなくても「完了」に見えていた。
         const okAll = v.reason === 'completed' && v.verified;
-        add(el('div', `verdict ${okAll ? 'ok' : 'ng'}`,
-          `${okAll ? '完了' : v.reason === 'completed' ? '完了（検証は通っていません）' : v.reason}`
-          + ` · ${v.seconds.toFixed(1)}秒`));
+        const how = v.reason !== 'completed' ? v.reason
+          : v.checked === 'passed' ? '完了（検証を通りました）'
+          : v.checked === 'failed' ? '完了（検証は通っていません）'
+          : v.checked === 'preexisting' ? '完了（元から落ちています）'
+          : '完了（検証していません）';
+        add(el('div', `verdict ${okAll ? 'ok' : 'ng'}`, `${how} · ${v.seconds.toFixed(1)}秒`));
       }
     });
 

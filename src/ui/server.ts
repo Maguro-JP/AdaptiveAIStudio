@@ -1318,13 +1318,15 @@ export class UiServer {
   async #drive(session: Session, text: string, resuming?: string): Promise<void> {
     this.broadcast({ type: 'busy', busy: true });
     // どう終わったか。**終わり方を見て、やり残しを控える。**
-    let settled: { reason: string; verified: boolean } | undefined;
+    let settled: { reason: string; verified: boolean; checked: string } | undefined;
     // 道具が実際に動いたか。**一段の合否は、言葉ではなくここで見る。**
     // 「では、このあと直します」と言っただけの回を「済んだ」と数えていた。
     let didSomething = false;
     try {
       for await (const event of session.send(text)) {
-        if (event.type === 'settled') settled = { reason: event.reason, verified: event.verified };
+        if (event.type === 'settled') {
+          settled = { reason: event.reason, verified: event.verified, checked: event.checked };
+        }
         if (event.type === 'toolEnd' && event.ok) didSomething = true;
         this.broadcast({ type: 'session', event });
       }
@@ -1550,10 +1552,13 @@ export class UiServer {
    * 覚えるのはこちらの仕事。
    */
   async #recordUnfinished(
-    text: string, settled: { reason: string; verified: boolean } | undefined,
+    text: string, settled: { reason: string; verified: boolean; checked: string } | undefined,
     resuming?: string, didSomething = true,
   ): Promise<void> {
-    const done = settled?.reason === 'completed' && settled.verified;
+    // **済んだかどうかは「確かめて落ちていないこと」で見る。**
+    // 「確かめて通った」を条件にすると、試験の無い作業場で
+    // 何をしても永久に済まない（実際にそうなった）。
+    const done = settled?.reason === 'completed' && settled.checked !== 'failed';
     try {
       // 一段ぶんを進めていたなら、その結果を先に書き戻す。
       // **通った跡で歩幅を測る。**言い訳ではなく、通ったかどうかで。

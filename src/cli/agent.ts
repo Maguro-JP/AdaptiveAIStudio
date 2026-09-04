@@ -641,7 +641,9 @@ async function main(): Promise<void> {
               break;
             case 'settled':
               console.log(c.dim(`  (${ev.seconds.toFixed(1)}s)\n`));
-              if (acceptedProposalId && ev.reason === 'completed' && ev.verified) {
+              // 確かめて落ちたときだけ、片付けない。
+              // （試験の無い作業場で、いつまでも残り続けるのを避ける）
+              if (acceptedProposalId && ev.reason === 'completed' && ev.checked !== 'failed') {
                 await session.completeProposal(acceptedProposalId);
               }
               acceptedProposalId = undefined;

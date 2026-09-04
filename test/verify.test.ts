@@ -272,3 +272,4 @@ describe('作業前からの失敗の切り分け', () => {
     assert.equal(fixes, 1);
   });
 });
+
