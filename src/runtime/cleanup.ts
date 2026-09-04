@@ -61,12 +61,17 @@ export async function findRemovable(opts: {
     found.push({ path, bytes: await sizeOf(path), why: `古い llama-server（いまは ${opts.keepTag}）` });
   }
 
-  // 途中で切れた取得。次に取り直すので、残しておく意味がない。
+  // 途中で切れた取得。**捨てると、続きから取れなくなる**（もう一度実行すれば
+  // 続きから取る作りにしてある）。それでも要らないなら片づけられるよう、
+  // 何を捨てることになるかを添える。
   for (const dir of [modelsDir(), binDir()]) {
     for (const name of await readdir(dir).catch(() => [])) {
       if (!/\.(part|partial|tmp)$/i.test(name)) continue;
       const path = join(dir, name);
-      found.push({ path, bytes: await sizeOf(path), why: '取得の途中で切れたもの' });
+      found.push({
+        path, bytes: await sizeOf(path),
+        why: '取得の途中で切れたもの（消すと、続きからではなく最初から取り直しになります）',
+      });
     }
   }
 

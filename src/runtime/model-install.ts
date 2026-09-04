@@ -138,43 +138,112 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
   // 途中のものは別名で置く。中断されたものを「ある」と数えないため。
   const tmp = `${dest}.part`;
 
+  // すでに途中まで取れているなら、**その続きから**。
+  // 数GBを落とす途中で切れることは普通にある。毎回ゼロからやり直させると、
+  // 回線の細い家では永久に終わらない。実際、切れると .part が残ったまま
+  // 次もゼロから始めていた（残骸だけが増える）。
+  const had = await stat(tmp).then((st) => st.size).catch(() => 0);
+  if (had > 0) log(`途中まで取れています（${human(had)}）。続きから取ります。`);
+
+  // 置き場に入るか、先に見る。数GB落とし切ってから「入りません」は遅い。
+  await checkRoom(modelsDir, entry.approxGB, log);
+
   log(`取ってきます（約${entry.approxGB}GB。回線によっては数十分かかります）`);
   const direct = `${HF_FILES}/${entry.repo}/resolve/main/${file}`;
+
+  // **黙り込んだら打ち切る。**相手が繋いだまま何も送らないことがある。
+  // 打ち切りが無かったので、そのまま永久に固まっていた（画面も止まったまま）。
+  const stallMs = 60_000;
+  const guard = new AbortController();
+  let stalled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { stalled = true; guard.abort(); }, stallMs);
+  };
+
   let res: Response;
+  const signals = opts.signal ? [opts.signal, guard.signal] : [guard.signal];
+  arm();
   try {
-    res = await fetchImpl(direct, { redirect: 'follow', signal: opts.signal });
+    res = await fetchImpl(direct, {
+      redirect: 'follow',
+      signal: AbortSignal.any(signals),
+      ...(had > 0 ? { headers: { range: `bytes=${had}-` } } : {}),
+    });
   } catch (e) {
+    clearTimeout(timer);
     if (opts.signal?.aborted) throw e;
     throw new Error(
-      `取ってこられませんでした（${e instanceof Error ? e.message : String(e)}）。\n`
-      + byHand(entry, modelsDir, direct),
+      stalled
+        ? `配布元が ${stallMs / 1000} 秒だまったままです。回線を確かめて、もう一度実行してください。\n`
+          + `（途中までは残してあります。続きから取ります）\n${byHand(entry, modelsDir, direct)}`
+        : `取ってこられませんでした（${describeNet(e)}）。\n${byHand(entry, modelsDir, direct)}`,
     );
   }
-  if (!res.ok) throw new Error(`取ってこられませんでした (${res.status})\n${byHand(entry, modelsDir, direct)}`);
+  // 206 なら続き、200 なら相手が続きに応じなかった（最初から取り直す）。
+  const resuming = had > 0 && res.status === 206;
+  if (had > 0 && res.status === 200) log('配布元が続きに応じないので、最初から取り直します。');
+  if (res.status === 416) {
+    // すでに全部取れている。中身を確かめる段へ進む。
+    log('すでに全部取れていました。');
+  } else if (!res.ok) {
+    clearTimeout(timer);
+    throw new Error(`取ってこられませんでした (${res.status})\n${byHand(entry, modelsDir, direct)}`);
+  }
 
-  const total = Number(res.headers.get('content-length') ?? 0);
-  const handle = await open(tmp, 'w');
-  let written = 0;
-  let lastShown = 0;
+  const part = Number(res.headers.get('content-length') ?? 0);
+  const total = resuming ? had + part : part;
+  const handle = await open(tmp, resuming ? 'r+' : 'w');
+  let written = resuming ? had : 0;
+  let lastAt = 0;
+  const began = Date.now();
+  const from = written;
 
   try {
-    // 全部をメモリに載せない。数GB を抱えると、それだけで動かなくなる機械がある。
-    for await (const chunk of streamOf(res)) {
-      await handle.write(chunk);
-      written += chunk.byteLength;
-      const pct = total > 0 ? Math.floor((written / total) * 100) : 0;
-      if (total > 0 && pct >= lastShown + 10) {
-        lastShown = pct;
-        log(`  ${pct}%（${(written / 1024 ** 3).toFixed(1)}GB / ${(total / 1024 ** 3).toFixed(1)}GB）`);
+    if (res.status !== 416) {
+      if (resuming) await handle.truncate(had);
+      for await (const chunk of streamOf(res)) {
+        await handle.write(chunk, 0, chunk.byteLength, written);
+        written += chunk.byteLength;
+        arm(); // 進んでいる。待ち直す
+        // **時計で出す。**10% ごとだと、5GB では 500MB ごと＝数十秒に一度しか
+        // 動かない。止まったようにしか見えない。
+        const now = Date.now();
+        if (now - lastAt >= 1500) {
+          lastAt = now;
+          const sec = (now - began) / 1000;
+          const rate = sec > 0 ? (written - from) / sec : 0;
+          const left = total > 0 && rate > 0 ? (total - written) / rate : 0;
+          log(
+            `  ${total > 0 ? `${Math.floor((written / total) * 100)}%  ` : ''}`
+            + `${human(written)}${total > 0 ? ` / ${human(total)}` : ''}`
+            + `  ${human(rate)}/秒${left > 0 ? `  残り ${mmss(left)}` : ''}`,
+          );
+        }
       }
     }
+  } catch (e) {
+    if (opts.signal?.aborted) throw e;
+    // **残しておく。**次は続きから取れる。消すと、また最初からになる。
+    throw new Error(
+      stalled
+        ? `配布元が ${stallMs / 1000} 秒だまったままです（${human(written)} まで取れています）。\n`
+          + 'もう一度実行すると、続きから取ります。'
+        : `途中で切れました（${human(written)} まで取れています）。\n`
+          + 'もう一度実行すると、続きから取ります。',
+    );
   } finally {
+    clearTimeout(timer);
     await handle.close();
   }
 
   if (total > 0 && written !== total) {
-    await rm(tmp, { force: true });
-    throw new Error(`途中で切れました（${written} / ${total} バイト）。もう一度実行してください。`);
+    // **消さない。**続きから取れる。
+    throw new Error(
+      `途中で切れました（${human(written)} / ${human(total)}）。\n`
+      + 'もう一度実行すると、続きから取ります。',
+    );
   }
 
   // 本物の GGUF か確かめてから、正式な名前にする。
@@ -223,5 +292,59 @@ async function* streamOf(res: Response): AsyncGenerator<Buffer> {
     const { done, value } = await reader.read();
     if (done) return;
     if (value) yield Buffer.from(value);
+  }
+}
+
+/** 人が読む大きさ。0.0GB とだけ出ていたので、桁に合わせる。 */
+export function human(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)}GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)}MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${Math.round(bytes)}B`;
+}
+
+/** 残り時間。 */
+export function mmss(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s >= 3600) return `${Math.floor(s / 3600)}時間${Math.floor((s % 3600) / 60)}分`;
+  if (s >= 60) return `${Math.floor(s / 60)}分${String(s % 60).padStart(2, '0')}秒`;
+  return `${s}秒`;
+}
+
+/** 網の失敗を、人の言葉で。`terminated` の一語では何も分からない。 */
+function describeNet(e: unknown): string {
+  const m = e instanceof Error ? e.message : String(e);
+  if (/terminated|aborted|ECONNRESET|socket hang up/i.test(m)) return '途中で切れました';
+  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(m)) return '配布元の名前を引けません（回線が繋がっていないようです）';
+  if (/ETIMEDOUT|timeout/i.test(m)) return '時間切れです';
+  if (/certificate|CERT_|self.signed/i.test(m)) return '証明書で断られました（会社の回線で起きます）';
+  return m;
+}
+
+/**
+ * 置き場に入るか。
+ *
+ * 数GB を落とし切ってから「入りません」では遅い。**先に見る。**
+ * 見られない機械（statfs が無い等）では、黙って通す。
+ */
+async function checkRoom(dir: string, approxGB: number, log: (l: string) => void): Promise<void> {
+  if (!approxGB) return;
+  try {
+    const { statfs } = await import('node:fs/promises');
+    await mkdir(dir, { recursive: true });
+    const fs = await statfs(dir);
+    const free = fs.bavail * fs.bsize;
+    const need = approxGB * 1024 ** 3 * 1.1; // 少し余裕を見る
+    if (free < need) {
+      throw new Error(
+        `置き場が足りません: ${dir}\n`
+        + `  空き ${human(free)} / 要る ${human(need)}\n`
+        + '別の置き場を選ぶか、空けてから、もう一度実行してください。',
+      );
+    }
+    log(`置き場の空き: ${human(free)}`);
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith('置き場が足りません')) throw e;
+    // 見られないなら、黙って通す。見られないことは、止める理由にならない。
   }
 }
