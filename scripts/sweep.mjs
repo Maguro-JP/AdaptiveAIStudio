@@ -11,7 +11,7 @@
  * --no-model はモデルを置いていない状態で回すとき。送りが 503 で断られるのが
  * 正しい振る舞いなので、それを不具合に数えない。
  *
- * 走らせるには playwright-core と Chromium が要る（配布物には入れない）。
+ * 走らせるには playwright-core と Chromium が要る（bundle には入れない）。
  */
 import { chromium } from 'playwright-core';
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));

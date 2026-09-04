@@ -34,7 +34,7 @@ export interface InstallOptions {
   /**
    * 動くかの確かめ方。既定は実際に一度起動する。
    *
-   * 試験では差し替える。本物の llama-server を配布物として用意できないので、
+   * 試験では差し替える。本物の llama-server をbundle として用意できないので、
    * 中身がただの文字列になる。Linux では execvp が ENOEXEC のとき /bin/sh へ
    * 落ちるため偶然動いていたが、Windows にその救済は無く ENOENT になる。
    * **偶然通っていたものは、通っていたとは言わない。**
@@ -47,7 +47,7 @@ export interface Installed {
   /** llama-server の場所 */
   command: string;
   tag: string;
-  /** 取ってきた配布物 */
+  /** 取ってきたbundle */
   asset: string;
   why: string;
 }
@@ -136,8 +136,8 @@ export async function install(opts: InstallOptions): Promise<Installed> {
   }
   if (missing) throw new Error(`リリースを調べられませんでした (404)。版 ${tag} は無いようです`);
   if (listed) {
-    // api.github.com は塞がれていても、github.com の配布物そのものは通る回線がある
-    // （この場所がそう。実測: 一覧は 403、配布物は 200）。名前の形は決まっている
+    // api.github.com は塞がれていても、github.com のbundleそのものは通る回線がある
+    // （この場所がそう。実測: 一覧は 403、bundle は 200）。名前の形は決まっている
     // ので、一覧なしに当てて取りに行く。
     log(`${listed}。名前を当てて取りに行きます`);
     assets = guessAssets(tag);
@@ -146,7 +146,7 @@ export async function install(opts: InstallOptions): Promise<Installed> {
   const choice = pickAsset(assets.map((a) => a.name), opts.target);
   if (!choice) {
     throw new Error(
-      `この環境（${opts.target.platform}/${opts.target.arch}）に合う配布物が見つかりません。`
+      `この環境（${opts.target.platform}/${opts.target.arch}）に合うものが見つかりません。`
       + `\n候補: ${assets.map((a) => a.name).join(', ') || '(なし)'}`,
     );
   }
@@ -178,7 +178,7 @@ export async function install(opts: InstallOptions): Promise<Installed> {
   try {
     log('展開します');
     const entries = unzip(buf);
-    // 配布物は build/bin/ の下に入っている。階層は捨てて平らに置く。
+    // bundle は build/bin/ の下に入っている。階層は捨てて平らに置く。
     // 実行ファイルは同じ場所にある共有ライブラリを見に行くため、
     // 散らかすと動かない。
     await mkdir(dest, { recursive: true });
@@ -204,7 +204,7 @@ export async function install(opts: InstallOptions): Promise<Installed> {
 
     if (!found) {
       const names = entries.map((e) => e.path).slice(0, 20).join(', ');
-      throw new Error(`配布物に llama-server が入っていません。中身: ${names}`);
+      throw new Error(`取ってきたものに llama-server が入っていません。中身: ${names}`);
     }
 
     // 実行時ライブラリも同じ場所へ平らに置く。実行ファイルは隣しか見ない。
@@ -279,7 +279,7 @@ export async function listInstalled(binDir = defaultBinDir()): Promise<string[]>
 /**
  * 一覧が取れないときに当てる名前。
  *
- * llama.cpp の配布物の名前は `llama-<版>-bin-<os>-<変種>-<cpu>.zip` で決まっている
+ * llama.cpp のbundle の名前は `llama-<版>-bin-<os>-<変種>-<cpu>.zip` で決まっている
  * （b4585 で実測: win-avx2-x64 / win-cuda-cu12.4-x64 / ubuntu-x64 / macos-arm64 が 200）。
  * 無い名前は 404 で返るだけなので、当てて外れても害は無い。
  */

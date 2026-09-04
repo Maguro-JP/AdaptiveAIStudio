@@ -12,6 +12,7 @@
  */
 import { listDir } from './files.ts';
 import { UnfinishedWork, resumePrompt, whyText } from '../core/unfinished.ts';
+import { githubLaunch } from '../core/github-mcp.ts';
 import { stat } from 'node:fs/promises';
 import { Goals, progressOf, isSettled } from '../core/goals.ts';
 import { StrideBook, strideText } from '../agent/stride.ts';
@@ -1040,9 +1041,14 @@ export class UiServer {
         if (token) await writeEnvValue(join(aasHome(), '.env'), 'GITHUB_TOKEN', token);
         // 書いたものを、この場でも使えるようにする（立ち上げ直しを待たせない）。
         if (token) process.env.GITHUB_TOKEN = token;
+        // **npx に頼らない。**npx は npm に付いてくるが、入れる版には node
+        // しか入っていない。`-y` は毎回ネットから取ってくるので、外へ出られない
+        // 機械では動かない。つまり「GitHub と繋ぐ」は口があるだけで、
+        // **一度も繋がらなかった。**同梱してあるなら、それを直に起こす。
+        const launch = githubLaunch();
         const at = await saveMcpServer('github', {
-          command: 'npx',
-          args: ['-y', '@modelcontextprotocol/server-github'],
+          command: launch.command,
+          args: launch.args,
           envFrom: { GITHUB_PERSONAL_ACCESS_TOKEN: 'GITHUB_TOKEN' },
           enabled,
         });
@@ -1059,8 +1065,8 @@ export class UiServer {
           servers: {
             ...this.#opts.config.mcp?.servers,
             github: {
-              command: 'npx',
-              args: ['-y', '@modelcontextprotocol/server-github'],
+              command: launch.command,
+              args: launch.args,
               envFrom: { GITHUB_PERSONAL_ACCESS_TOKEN: 'GITHUB_TOKEN' },
               enabled,
             },
@@ -1070,7 +1076,11 @@ export class UiServer {
           path: at,
           // **値は返さない。**入っているかどうかだけ。
           tokenSet: process.env.GITHUB_TOKEN !== undefined,
-          canRun: canRun('npx'),
+          // **起こせるかどうかを、そのまま返す。**
+          // npx が在るかを見ていたので、同梱してあっても「無い」と言い、
+          // 同梱していなくても npx さえ在れば「在る」と言っていた。
+          canRun: launch.why === undefined,
+          ...(launch.why ? { note: launch.why } : {}),
           restartNeeded: this.#session !== undefined,
         });
       } catch (e) {

@@ -1,7 +1,7 @@
 /**
  * いまどの版が動いているか。
  *
- * 配布物は git の管理下に無い。**版が見えないと、古いものを新しいと
+ * bundle は git の管理下に無い。**版が見えないと、古いものを新しいと
  * 思って確かめてしまう。**それをやると、直したはずの不具合が
  * 直っていないように見え、原因を探す時間がまるごと無駄になる。
  * （実際に一度、古い作業コピーで検査を回して、直った件が
@@ -18,13 +18,13 @@ export interface Version {
   /** 版。分からなければ undefined */
   id?: string;
   /** どこから分かったか。人に見せる。 */
-  from: '配布物の記録' | 'git' | '不明';
-  /** 組み立てた時刻（配布物のみ） */
+  from: 'bundle の記録' | 'git' | '不明';
+  /** 組み立てた時刻（bundle のみ） */
   builtAt?: string;
 }
 
 /**
- * 配布物の VERSION を読む。
+ * bundle の VERSION を読む。
  *
  * 版を目印の中に混ぜていたが、それだと**読む側が目印の書式を
  * 解釈しないと版が分からない**。VERSION なら、開けば書いてある。
@@ -39,7 +39,7 @@ async function fromMarker(): Promise<Version | undefined> {
     if (id.startsWith('$Format:')) continue;
     const built = (await readFile(join(dir, '.portable'), 'utf8').catch(() => ''))
       .match(/built\s+(\S+)/)?.[1];
-    return { id, from: '配布物の記録', ...(built ? { builtAt: built } : {}) };
+    return { id, from: 'bundle の記録', ...(built ? { builtAt: built } : {}) };
   }
   return undefined;
 }
@@ -67,7 +67,7 @@ export async function currentVersion(): Promise<Version> {
 
 /** 人に見せる一行。 */
 export function describeVersion(v: Version): string {
-  if (!v.id) return '分かりません（git の管理下でも配布物でもありません）';
+  if (!v.id) return '分かりません（git の管理下でもbundle でもありません）';
   // 組み立てた日付も JST で見せる。UTC のままだと朝 9 時まで昨日。
   const built = v.builtAt && !Number.isNaN(Date.parse(v.builtAt)) ? jstDate(v.builtAt) : v.builtAt?.slice(0, 10);
   return built ? `${v.id}（${v.from}・${built} 組み立て）` : `${v.id}（${v.from}）`;

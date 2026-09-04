@@ -85,7 +85,7 @@ async function quietly<T>(run: () => Promise<T>): Promise<T> {
 /* ---------- この中で読む道 ---------- */
 
 // 実行ファイルを増やさずに GGUF を読む道。**この機械で本当に読めるか**は、
-// ここでしか分からない（配布物には入れてあるが、機械が違えば動かない）。
+// ここでしか分からない（bundle には入れてあるが、機械が違えば動かない）。
 try {
   const lib = await import(LLAMA_LIB) as { getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<unknown> };
   add('この中で読む', true, 'node-llama-cpp を読み込めました（実行ファイルは増えません）');
@@ -100,9 +100,9 @@ try {
 } catch (e) {
   const code = (e as NodeJS.ErrnoException).code;
   // 「入っていない」と「入っているのに壊れている」は別の話。
-  // 後者を前者の顔で言っていて、配布物の欠けに気づけなかった。
+  // 後者を前者の顔で言っていて、bundle の欠けに気づけなかった。
   if (code === 'ERR_MODULE_NOT_FOUND') {
-    add('この中で読む', undefined, 'node-llama-cpp が入っていません（配布物には入っています）');
+    add('この中で読む', undefined, 'node-llama-cpp が入っていません（setup.exe や portable には入っています）');
   } else {
     add('この中で読む', false,
       `node-llama-cpp は在るのに読み込めません（欠けています）: ${(e as Error).message.slice(0, 160)}`);
@@ -128,7 +128,7 @@ const sample = [
   'llama-bin-macos-arm64.zip', 'llama-bin-macos-x64.zip',
 ];
 const choice = pickAsset(sample, { platform: process.platform, arch: process.arch, hasNvidia });
-add('配布物の選択', choice !== undefined,
+add('どれを使うかの選択', choice !== undefined,
   choice ? `${choice.why} → ${choice.name}` : 'この環境に合うものが選べません');
 
 /* ---------- モデル ---------- */

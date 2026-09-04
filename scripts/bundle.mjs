@@ -56,7 +56,7 @@ export const PAYLOAD = [
 /**
  * 中でいちばん深いものの、許す長さ。
  *
- * Windows は道の全体が 260 文字を超えると開けない。配布物の中は
+ * Windows は道の全体が 260 文字を超えると開けない。bundle の中は
  * `app/node_modules/node-llama-cpp/dist/...` が深く、150 文字ほどある。
  * **展開先が長いと、展開の途中で警告が出て、途中までしか出てこない。**
  * 利用者の機械で実際に出た。
@@ -105,7 +105,7 @@ function pkgVersion(srcRoot) {
  * package.json の `0.1.0` だけを書くと、**手元で組んだものが全部同じ版**になる。
  * 直したはずの不具合が直っていないように見えたとき、どの中身で組んだかを
  * 辿れない。git に訊けるなら、短い印と「未コミットの変更あり」まで足す。
- * git に訊けない場所（配布物から配布物を組む等）では package.json の版だけ。
+ * git に訊けない場所（bundleからbundle を組む等）では package.json の版だけ。
  */
 export function guessVersion(srcRoot) {
   const base = pkgVersion(srcRoot);

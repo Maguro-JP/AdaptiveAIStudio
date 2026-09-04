@@ -22,12 +22,12 @@ const TARGET: Target = { platform: 'linux', arch: 'x64', hasNvidia: false };
 
 /**
  * 動くかの確かめは差し替える。
- * 配布物に本物の実行ファイルを入れられないので、ここで実際に起動させると
+ * bundleに本物の実行ファイルを入れられないので、ここで実際に起動させると
  * 「置けたか」ではなく「作り物が動くか」を試すことになる。
  */
 const runs = async () => ({ ok: true, detail: 'version b4585' });
 
-/** リリース一覧と配布物を返す、偽の口。 */
+/** リリース一覧とbundle を返す、偽の口。 */
 function fakeFetch(opts: { assets?: string[]; zip?: Buffer; releaseStatus?: number; downloadStatus?: number } = {}) {
   const calls: string[] = [];
   const impl = (async (url: string | URL) => {
@@ -100,12 +100,12 @@ describe('llama-server の用意', () => {
     assert.ok(r.command.endsWith('llama-server'));
   });
 
-  test('合う配布物が無ければ、候補を並べて断る', async () => {
+  test('合うものが無ければ、候補を並べて断る', async () => {
     const binDir = await tempDir('aas-bin-');
     const { impl } = fakeFetch({ assets: ['llama-b4585-bin-macos-arm64.zip'] });
     await assert.rejects(
       install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl }),
-      /合う配布物が見つかりません[\s\S]*macos/);
+      /合うものが見つかりません[\s\S]*macos/);
   });
 
   test('中身に llama-server が無ければ、置かずに断る', async () => {
@@ -233,8 +233,8 @@ describe('取れないときの言い方', () => {
     assert.ok(lines.some((l) => l.includes('無しで取り直します')));
   });
 
-  test('一覧が断られても（403）、名前を当てて配布物を取りに行く', async () => {
-    // api.github.com は塞がれていても github.com の配布物は通る回線がある（実測）。
+  test('一覧が断られても（403）、名前を当ててbundle を取りに行く', async () => {
+    // api.github.com は塞がれていても github.com のbundle は通る回線がある（実測）。
     const binDir = await tempDir('aas-403-');
     const { impl, calls } = fakeFetch({ releaseStatus: 403 });
     const lines: string[] = [];
@@ -244,7 +244,7 @@ describe('取れないときの言い方', () => {
     assert.ok(calls.some((u) => u.includes('/releases/download/b4585/llama-b4585-bin-ubuntu-x64.zip')), calls.join('\n'));
   });
 
-  test('配布物そのものも取れなければ、手で取る道を言う', async () => {
+  test('bundleそのものも取れなければ、手で取る道を言う', async () => {
     const binDir = await tempDir('aas-dl404-');
     await assert.rejects(
       install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: fakeFetch({ releaseStatus: 403, downloadStatus: 404 }).impl }),

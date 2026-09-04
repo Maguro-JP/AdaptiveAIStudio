@@ -1,12 +1,12 @@
 /**
- * llama.cpp の配布物から、この機械に合うものを選ぶ。
+ * llama.cpp のbundleから、この機械に合うものを選ぶ。
  *
  * **他人の同梱物に相乗りしない。** これまでは `llama-server` が
  * PATH にある前提で、実質 LM Studio などが入れたものを使っていた。
  * それを消されたら動かなくなる作りは、道具として成立しない。
  *
  * 選ぶところだけを切り出してあるのは、**間違えやすいのがここ**だから。
- * 配布物の名前は版によって揺れる（cu12.2 → cu12.4、avx2 の有無など）。
+ * bundle の名前は版によって揺れる（cu12.2 → cu12.4、avx2 の有無など）。
  * 名前を決め打ちにすると、次の版で静かに壊れる。
  * だから「候補の一覧を受け取って、その中から選ぶ」形にして、
  * 名前の揺れは当てはめの強さで吸収する。
@@ -22,7 +22,7 @@ export interface Target {
 }
 
 export interface Choice {
-  /** 選んだ配布物の名前 */
+  /** 選んだbundle の名前 */
   name: string;
   /** なぜそれを選んだか。黙って選ぶと、外したときに追えない。 */
   why: string;
@@ -60,7 +60,7 @@ function rulesFor(t: Target): Rule[] {
       : [{ need: ['macos', 'x64'], why: 'macOS・Intel' }];
   }
 
-  // Linux。配布物は ubuntu 名義で出ている。
+  // Linux。bundle は ubuntu 名義で出ている。
   const cpu: Rule[] = [
     { need: ['ubuntu', 'x64'], avoid: ['cuda', 'hip', 'sycl', 'vulkan', 'arm64'], why: 'Linux・CPU' },
     { need: ['linux', 'x64'], avoid: ['cuda', 'hip', 'sycl', 'vulkan', 'arm64'], why: 'Linux・CPU' },

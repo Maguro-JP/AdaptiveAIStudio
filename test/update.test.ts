@@ -127,7 +127,7 @@ describe('更新', () => {
   });
 });
 
-describe('配布物では、手で新しくする道を言う', () => {
+describe('bundle では、手で新しくする道を言う', () => {
   test('portable なら、取ってくる先と data を残すことを言う', async () => {
     const { mkdir, writeFile } = await import('node:fs/promises');
     const { join } = await import('node:path');

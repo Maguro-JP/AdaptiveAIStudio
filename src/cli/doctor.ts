@@ -52,7 +52,7 @@ add('Node.js', nodeOk ? 'ok' : 'bad', `v${process.versions.node}`,
 /**
  * 打つ一手の書き方。**無いものを打てと言わない。**
  *
- * 配布物には npm が無い。入口（AdaptiveAIStudio.cmd）が package.json を
+ * bundle には npm が無い。入口（AdaptiveAIStudio.cmd）が package.json を
  * そのまま読んで同じ仕事を動かすので、呼び方だけが違う。
  */
 function how(task: string, args = ''): string {
@@ -161,7 +161,7 @@ if (llamaPath) {
 
 /* ---------- モデルを読むライブラリ ---------- */
 
-// この中で読む道は、ライブラリが要る。配布物には入っているが、
+// この中で読む道は、ライブラリが要る。bundle には入っているが、
 // 作業コピーには入っていない。**動かす直前まで分からない**のが困るので、
 // ここで先に言う。
 /**
@@ -187,17 +187,17 @@ if (runtime.id === 'inproc') {
     lib = await import(LLAMA_LIB) as typeof lib;
   } catch (e) {
     // 「入っていない」と「在るのに読み込めない」は別の話。後者を前者の顔で
-    // 言うと、配布物の欠けに気づけない（実際に、そう配った）。
+    // 言うと、bundle の欠けに気づけない（実際に、そう配った）。
     add('モデルを読むもの', 'bad',
       installed
         ? 'node-llama-cpp は在るのに読み込めません（欠けています）'
         : 'node-llama-cpp が入っていません',
       (isPortable()
-        ? '配布物の組み立てが壊れています。落とし直してください:\n'
+        ? '中身が壊れています。落とし直してください:\n'
           + '  https://github.com/Maguro-JP/AdaptiveAIStudio/releases\n'
         : (installed
           ? '作業コピーなら入れ直してください:\n'
-          : '配布物には入っています。作業コピーで使うときは:\n')
+          : 'setup.exe や portable には入っています。作業コピーで使うときは:\n')
           + '  npm install --no-save --omit=optional --ignore-scripts node-llama-cpp\n')
       + `詳しくは docs/LOCAL-MODEL.md（${(e as Error).message.slice(0, 80)}）`);
   }
@@ -212,10 +212,10 @@ if (runtime.id === 'inproc') {
       // 直しようのない未了を抱え続ける。**警告**に留める。
       add('モデルを読むもの', 'warn',
         'node-llama-cpp はあるが、この機械むけの binary がありません',
-        // 配布物には npm が無い。入れろと言っても打てない。
+        // bundle には npm が無い。入れろと言っても打てない。
         // 配るのは win-x64 むけなので、別の機械で開いたときにここへ来る。
         (isPortable()
-          ? `この配布物は別の機械むけです（いまの機械: ${process.platform}-${process.arch}）。\n`
+          ? `このbundle は別の機械むけです（いまの機械: ${process.platform}-${process.arch}）。\n`
             + 'その機械むけに組み直したものが要ります。\n'
           : `${process.platform}-${process.arch} の分を入れてください:\n`
             + `  npm install --no-save --omit=optional --ignore-scripts ${binPkg}\n`)
@@ -263,12 +263,12 @@ if (process.platform === 'win32') {
       add(`外の道具 (${name})`, 'ok', '設定はあるが enabled: false（使うなら true に）');
       continue;
     }
-    // 立ち上げる前に、その命令が在るかを見る。配布物には npm も npx も
+    // 立ち上げる前に、その命令が在るかを見る。bundle には npm も npx も
     // 入っていないので、設定に書けても動かない。**書いたのに何も起きない**を止める。
     if (!canRun(spec.command)) {
       add(`外の道具 (${name})`, 'warn', `その命令がありません: ${spec.command}`,
         spec.command === 'npx' || spec.command === 'npm'
-          ? '配布物には node だけが入っています（npm と npx は入っていません）。\n'
+          ? 'bundle には node だけが入っています（npm と npx は入っていません）。\n'
             + 'この道具は、Node と npm が入っている機械で使ってください。'
           : 'PATH に無いか、名前が違います。道（フォルダ）から書くこともできます。');
       continue;

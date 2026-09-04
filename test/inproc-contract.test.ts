@@ -69,7 +69,7 @@ describe('node-llama-cpp との約束', () => {
 
 describe('入っているなら、読み込めること', () => {
   // dist/index.js が在るだけでは足りない。import の時点で llama/ の JSON を
-  // 読むので、そこを消した配布物は**在るのに読み込めない**。それを配った。
+  // 読むので、そこを消したbundle は**在るのに読み込めない**。それを配った。
   test('import が通る', onlyWithLib, async () => {
     await import(LLAMA_LIB);
   });

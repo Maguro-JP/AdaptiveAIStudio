@@ -72,13 +72,13 @@ export function formatChecks(checks: readonly Check[], style: ViewStyle): string
 /**
  * 起動の仕方。**呼ぶ側が決めて渡す。**
  *
- * 配布物には npm が無いので、`npm run ui` と書くと打てない一手になる。
+ * bundle には npm が無いので、`npm run ui` と書くと打てない一手になる。
  * ここ（並べるだけの側）で環境を判断させない。
  */
 export interface HowToStart {
   /** 画面をひらく一手 */
   ui: string;
-  /** 端末で動かす一手。配布物の入口には無いので、省ける */
+  /** 端末で動かす一手。bundle の入口には無いので、省ける */
   agent?: string;
 }
 

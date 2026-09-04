@@ -84,9 +84,13 @@ jobs:
           # --force          組み立てているのは Linux、入れる先は Windows
           # --ignore-scripts postinstall が llama.cpp を取ってきて手元で組む
           #                  （+292MB。Linux むけなので配る相手には要らない）
+          # @modelcontextprotocol/server-github も一緒に。
+          # npx は npm に付いてくるが、入れる版には node しか入らない。
+          # 入れておかないと「GitHub と繋ぐ」は口があるだけで一度も繋がらない。
           npm install --no-save --no-audit --no-fund \
             --omit=optional --force --ignore-scripts \
-            node-llama-cpp @node-llama-cpp/win-x64
+            node-llama-cpp @node-llama-cpp/win-x64 \
+            @modelcontextprotocol/server-github
           # 在るかどうかだけ見ない。**本体と binary の両方**を見る。
           test -f node_modules/node-llama-cpp/dist/index.js
           test -f node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
@@ -99,6 +103,7 @@ jobs:
           test -f node_modules/node-llama-cpp/llama/binariesGithubRelease.json
           # 在るだけでなく、**読み込めること**を見る。ここで落ちた版を配った。
           node -e "import('node-llama-cpp').then(() => console.log('import ok'))"
+          test -f node_modules/@modelcontextprotocol/server-github/dist/index.js
           du -sh node_modules
 
       # ライブラリを入れた状態で検査を回す。作業コピーには入っていないので、
@@ -220,9 +225,13 @@ jobs:
       - name: モデルを読むライブラリを入れる（win-x64 の分だけ）
         run: |
           # 一度に入れる（二回に分けると二回目が一回目を刈り取る）。
+          # @modelcontextprotocol/server-github も一緒に。
+          # npx は npm に付いてくるが、入れる版には node しか入らない。
+          # 入れておかないと「GitHub と繋ぐ」は口があるだけで一度も繋がらない。
           npm install --no-save --no-audit --no-fund \
             --omit=optional --force --ignore-scripts \
-            node-llama-cpp @node-llama-cpp/win-x64
+            node-llama-cpp @node-llama-cpp/win-x64 \
+            @modelcontextprotocol/server-github
           test -f node_modules/node-llama-cpp/dist/index.js
           test -f node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
           test "$(find node_modules/@node-llama-cpp -name '*.exe' | wc -l)" -eq 0
@@ -230,6 +239,7 @@ jobs:
           find node_modules/node-llama-cpp/llama -type d -empty -delete
           test -f node_modules/node-llama-cpp/llama/binariesGithubRelease.json
           node -e "import('node-llama-cpp').then(() => console.log('import ok'))"
+          test -f node_modules/@modelcontextprotocol/server-github/dist/index.js
 
       - name: Node を取ってくる（同梱用）
         run: curl -fL --retry 3 -o node.exe "https://nodejs.org/dist/${NODEVER}/win-x64/node.exe"

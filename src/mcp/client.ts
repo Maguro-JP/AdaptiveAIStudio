@@ -139,7 +139,7 @@ export class McpClient {
     if (!canRun(this.#spec.command)) {
       this.#failure = `その命令がありません: ${this.#spec.command}`
         + (this.#spec.command === 'npx' || this.#spec.command === 'npm'
-          ? '（配布物には node だけが入っています）' : '');
+          ? '（bundle には node だけが入っています）' : '');
       return false;
     }
 

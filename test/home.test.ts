@@ -17,13 +17,13 @@ import { lookup, toCommand } from '../scripts/run.mjs';
 /**
  * 作業場にしか無いものを見る試験の印。
  *
- * CI の設定も、用意用も、配布物には**入れるべきでない**。
- * だから配布物の中で走らせると、確かめようがない。
+ * CI の設定も、用意用も、bundle には**入れるべきでない**。
+ * だからbundle の中で走らせると、確かめようがない。
  * そこで落とすのは嘘（何も壊れていない）なので、飛ばしてそう言う。
  */
 const sourceOnly = existsSync(join(installRoot(), '.github'))
   ? {}
-  : { skip: '作業場にしか無いものを見る試験です（配布物では確かめられません）' };
+  : { skip: '作業場にしか無いものを見る試験です（bundle では確かめられません）' };
 
 const KEYS = ['AAS_HOME', 'AAS_STATE_DIR', 'AAS_BIN_DIR', 'AAS_MODELS_DIR'];
 afterEach(() => { for (const k of KEYS) delete process.env[k]; });
@@ -147,7 +147,7 @@ describe('npm 無しで仕事を動かす', () => {
   });
 });
 
-describe('配布物の形', () => {
+describe('bundle の形', () => {
   test('利用者が最初に見るものは、普通の名前になっている', async () => {
     const out = await tempDir('aas-bundle-');
     const { bundle } = await import('../scripts/bundle.mjs');
@@ -182,7 +182,7 @@ describe('配布物の形', () => {
 
   test('版を渡さなくても、手元の印まで書く', sourceOnly, async () => {
     // 手元で組んだものが全部 0.1.0 では、どの中身で組んだか辿れない。
-    // git の作業コピーでしか確かめられない。配布物の中では落ちる（実際に落ちた）。
+    // git の作業コピーでしか確かめられない。bundle の中では落ちる（実際に落ちた）。
     const { guessVersion } = await import('../scripts/bundle.mjs');
     const v = guessVersion(installRoot());
     // ここは git の作業コピー。package.json の版に短い印が付く。
@@ -206,7 +206,7 @@ describe('配布物の形', () => {
 });
 
 describe('CI の使い方', () => {
-  test('押すたびに配布物を組み立てない', sourceOnly, async () => {
+  test('押すたびにbundle を組み立てない', sourceOnly, async () => {
     // Windows の枠は2倍で数えられる。前に使い切って1日検査できなくなった。
     const raw = await readFile(join(installRoot(), '.github', 'workflows', 'release.yml'), 'utf8');
     // 印（タグ）と、印と同じ意味の枝（release/v*）でだけ回す。main や普通の枝では回さない。
@@ -362,7 +362,7 @@ describe('同梱した Node の置き場所', () => {
   });
 
   test('用意用は、組み立て方を書き写さない', sourceOnly, async () => {
-    // 書き写すと、配布物と食い違う。実際に一度そうなった。
+    // 書き写すと、bundle と食い違う。実際に一度そうなった。
     const raw = cmd(await readFile(join(installRoot(), 'installer', 'bootstrap.cmd')));
     assert.match(raw, /scripts\\bundle\.mjs/, '組み立て器を使っていない');
     assert.match(raw, /--node-exe/);
@@ -391,7 +391,7 @@ describe('落としてきたものでも、版が分かる', () => {
   });
 });
 
-describe('CI が使えなくても、配布物は作れる', () => {
+describe('CI が使えなくても、bundle は作れる', () => {
   test('いま動かしている Node ごと固められる', async () => {
     // 枠を使い切ると何も確かめられなくなる、を避けるための道。
     // 取ってこない（網が要らない）ので、CI にも外にも依存しない。
@@ -447,7 +447,7 @@ describe('全角の利用者名でも、モデルは開ける場所へ置く', (
   });
 });
 
-describe('配布物の形のまま、この中で読む設定で通す', () => {
+describe('bundle の形のまま、この中で読む設定で通す', () => {
   test('組み立てたものに GGUF を置いて doctor が通る', sourceOnly, async () => {
     // 過去の不具合は、**配った形でだけ壊れる**ものに集まっている
     // （入口が丸ごと死ぬ、置き場がずれる、繋ぎ先が埋まらない）。

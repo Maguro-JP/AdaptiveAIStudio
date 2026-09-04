@@ -43,7 +43,7 @@ export interface UpdateResult {
   restartNeeded: boolean;
 }
 
-/** 配布物の置き場。portable は常にここにある（docs/DECISIONS.md）。 */
+/** bundle の置き場。portable は常にここにある（docs/DECISIONS.md）。 */
 export const RELEASES_URL = 'https://github.com/Maguro-JP/AdaptiveAIStudio/releases/tag/portable';
 
 /**
@@ -55,7 +55,7 @@ export const RELEASES_URL = 'https://github.com/Maguro-JP/AdaptiveAIStudio/relea
  */
 export function byHandUpdate(root: string): string {
   return [
-    `新しい配布物をブラウザで取ってきて、app\\ だけ入れ替えてください: ${RELEASES_URL}`,
+    `新しいbundle をブラウザで取ってきて、app\\ だけ入れ替えてください: ${RELEASES_URL}`,
     'data\\（設定・記録・モデル）はそのまま残します。',
     `いまの版は VERSION に書いてあります（${productRoot(root)}）。`,
   ].join('\n');
@@ -66,7 +66,7 @@ export async function checkUpdate(root: string): Promise<UpdateStatus> {
   const state = await inspectGit(root);
   if (state.kind === 'notRepo' || state.kind === 'unavailable') {
     const why = state.kind === 'notRepo' ? 'git 管理下ではありません' : `git を確認できません（${state.reason}）`;
-    // 配布物なら、git が無いのは当たり前。手で新しくする道を出す。
+    // bundleなら、git が無いのは当たり前。手で新しくする道を出す。
     const reason = isPortable(root)
       ? `${why}。\n${byHandUpdate(root)}`
       : `${why}。更新は git clone した場所でのみできます`;

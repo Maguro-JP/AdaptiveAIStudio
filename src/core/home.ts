@@ -101,7 +101,7 @@ export function defaultWorkRoot(cwd = process.cwd(), root = installRoot()): stri
 /**
  * 配られた形か（作業コピーではないか）。
  *
- * 配布物は中身を必ず `app\` に入れる（scripts/bundle.mjs）。
+ * bundle は中身を必ず `app\` に入れる（scripts/bundle.mjs）。
  * 作業コピーにその形は無い。**置かれ方で見分ける。**
  * 環境変数で判じさせない（入れた側が決めて渡す、の裏返し）。
  */

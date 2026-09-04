@@ -1,7 +1,7 @@
 /**
  * 命令が呼べるかを、立ち上げる前に見る。
  *
- * 配布物には npm も npx も入っていない。設定には書けてしまうので、
+ * bundle には npm も npx も入っていない。設定には書けてしまうので、
  * 「書いたのに何も起きない」になる。ここで見分けられることを留める。
  *
  * **走らせる場所で結果を変えない。**PATH も、在るかどうかの見方も渡す。
@@ -33,7 +33,7 @@ describe('その命令が呼べるか', () => {
     assert.equal(found, 'C:\\Program Files\\nodejs\\npx.CMD');
   });
 
-  test('配布物のように node だけなら、npx は見つからない', () => {
+  test('bundle のように node だけなら、npx は見つからない', () => {
     // ここが本題。node は同梱、npm と npx は入っていない。
     const env = {
       platform: 'win32' as const,

@@ -79,7 +79,7 @@ describe('doctor の並べ方', () => {
   });
 
   test('打てない一手を出さない', () => {
-    // 配布物には npm が無い。npm run ui と言われても打てない（実際に出していた）。
+    // bundle には npm が無い。npm run ui と言われても打てない（実際に出していた）。
     const ok: Check[] = [{ name: 'Node.js', level: 'ok', detail: 'v24' }];
     const ng: Check[] = [{ name: 'モデル', level: 'bad', detail: 'ありません' }];
     const portable = { ui: 'AdaptiveAIStudio.cmd' };

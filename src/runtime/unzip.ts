@@ -10,7 +10,7 @@
  * 実装しているのは zip の基本形だけ。
  *   ・格納方式は 0（無圧縮）と 8（deflate）
  *   ・zip64、暗号化、分割は扱わない
- * llama.cpp の配布物はこれで開ける。開けないものは、開けないと言う。
+ * llama.cpp のbundle はこれで開ける。開けないものは、開けないと言う。
  */
 import { inflateRawSync } from 'node:zlib';
 

@@ -60,10 +60,10 @@ describe('作業場の既定', () => {
   test('作業コピーは取り上げない（対）', async () => {
     // **ここで一度壊した。**作業コピーまでプログラム扱いにしたので、
     // この道具で自分自身を直す使い方が働かなくなった（巡回で捕まえた）。
-    // 配布物は中身を必ず app\ に入れる。作業コピーにその形は無い。
+    // bundle は中身を必ず app\ に入れる。作業コピーにその形は無い。
     const repo = await tempDir('aas-repo-');
     await mkdir(join(repo, 'src'), { recursive: true });
-    assert.equal(isDistributed(repo), false, '作業コピーを配布物と見ている');
+    assert.equal(isDistributed(repo), false, '作業コピーをbundle と見ている');
     assert.equal(defaultWorkRoot(repo, repo), repo);
   });
 

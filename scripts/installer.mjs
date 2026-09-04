@@ -5,7 +5,7 @@
  * Windows の枠は2倍で数えられるので、タグを付けたときだけに絞っていた。
  * ところが NSIS は Linux でも動く（makensis）。**枠を一度も払わずに組める。**
  *
- * これで、枠を使い切っても配布物が塞がらない。CI が要るのは、
+ * これで、枠を使い切ってもbundle が塞がらない。CI が要るのは、
  * 出来たものを Releases へ置くところだけになる。
  *
  * 使い方:
@@ -104,11 +104,15 @@ try {
     'install', '--no-save', '--no-audit', '--no-fund',
     '--omit=optional', '--force', '--ignore-scripts',
     'node-llama-cpp', '@node-llama-cpp/win-x64',
+    // npx は npm に付いてくるが、入れる版には node しか入らない。
+    // 入れておかないと「GitHub と繋ぐ」は口があるだけで一度も繋がらない。
+    '@modelcontextprotocol/server-github',
   ], work);
   mustBe(join(work, 'node_modules/node-llama-cpp/dist/index.js'));
+  mustBe(join(work, 'node_modules/@modelcontextprotocol/server-github/dist/index.js'));
   mustBe(join(work, 'node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node'), 1000);
   // llama/ は llama.cpp の元（34MB）。**JSON だけは import 時に読む。**
-  // 丸ごと消して、import できない配布物を出したことがある。
+  // 丸ごと消して、import できないbundle を出したことがある。
   execFileSync('bash', ['-c',
     `find ${JSON.stringify(join(work, 'node_modules/node-llama-cpp/llama'))} -type f ! -name '*.json' -delete;`
     + `find ${JSON.stringify(join(work, 'node_modules/node-llama-cpp/llama'))} -type d -empty -delete`,
@@ -152,6 +156,7 @@ try {
       ['モデルを読む本体', 'app/node_modules/node-llama-cpp/dist/index.js', 100],
       ['モデルを読む binary', 'app/node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node', 1000],
       ['中で読む口', 'app/src/runtime/inproc.ts', 100],
+      ['GitHub に繋ぐ道具', 'app/node_modules/@modelcontextprotocol/server-github/dist/index.js', 100],
     ]) {
       console.log(`  ${what}: ${human(mustBe(join(x, path), least))}`);
     }

@@ -63,7 +63,7 @@ export interface InProcOptions {
   contextSize?: number;
   /**
    * ライブラリの読み込み。試験では差し替える。
-   * **本物を配布物として用意できない**ので、ここを開けておく。
+   * **本物をbundle として用意できない**ので、ここを開けておく。
    */
   load?: () => Promise<unknown>;
 }
@@ -242,7 +242,7 @@ export class InProcRuntime implements LocalRuntime {
     } catch (e) {
       throw new Error(
         'モデルを読むライブラリ（node-llama-cpp）がありません。'
-        + `配布物には入っています。作業コピーで使うときは npm install してください。（${(e as Error).message}）`,
+        + `setup.exe や portable には入っています。作業コピーで使うときは npm install してください。（${(e as Error).message}）`,
       );
     }
   }

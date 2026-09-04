@@ -10,7 +10,7 @@
  * 「設定の選択肢が全部空」「畳んだら二度と開けない」を利用者に見つけさせた。
  * 検査を通したという言葉が、画面を押したことを含むようにする。
  *
- * 押して回るには playwright-core と Chromium が要る。無い場所（CI・配布物）では
+ * 押して回るには playwright-core と Chromium が要る。無い場所（CI・bundle）では
  * **飛ばして、そう言う。**黙って通すと、また押さずに「通った」と言うことになる。
  */
 import { spawnSync, spawn } from 'node:child_process';

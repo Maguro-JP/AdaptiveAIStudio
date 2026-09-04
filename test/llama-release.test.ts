@@ -1,7 +1,7 @@
 /**
- * この機械に合う配布物を選べるか。
+ * この機械に合うものを選べるか。
  *
- * 配布物の名前は版によって揺れる。実際に出回っている名前を並べて、
+ * bundle の名前は版によって揺れる。実際に出回っている名前を並べて、
  * 「揺れても選べること」と「絶対に選んではいけないものを選ばないこと」を見る。
  */
 import { test, describe } from 'node:test';
@@ -32,7 +32,7 @@ const target = (over: Partial<Target> = {}): Target => ({
   platform: 'win32', arch: 'x64', hasNvidia: false, ...over,
 });
 
-describe('配布物の選択', () => {
+describe('bundle の選択', () => {
   test('Windows・NVIDIA あり → CUDA 版', () => {
     const c = pickAsset(ASSETS, target({ hasNvidia: true }));
     assert.equal(c?.name, 'llama-b4585-bin-win-cuda-cu12.4-x64.zip');
