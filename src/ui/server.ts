@@ -1306,13 +1306,31 @@ export class UiServer {
       // 全部片づいた（塞がったものも含めて、もう手を付けない）。
       await this.#goals.close(goal.id);
       const p = progressOf(goal);
+      const stuck = goal.steps.filter((st) => st.state === 'blocked');
+      if (stuck.length === 0) {
+        this.broadcast({ type: 'log', level: 'info', text: `段取りを終えました（済 ${p.done}）` });
+        // 全部通った。やり残しとしても片づける。
+        await this.#unfinished.done(item.id);
+        this.broadcast({ type: 'unfinished' });
+        this.#resuming = undefined;
+        return true;
+      }
+
+      // **手が付かなかった段があるなら、丸ごと投げ直さない。**
+      // 割っても通らなかったものを、まとめて渡せば通る道理がない。
+      // ここで諦め、**何が出来て何が出来なかったかを言う**。
+      // 黙って消すと、頼んだことが消えたようにしか見えない。
+      await this.#unfinished.cancel(item.id);
       this.broadcast({
-        type: 'log', level: p.blocked > 0 ? 'warn' : 'info',
-        text: p.blocked > 0
-          ? `段取りを終えました（済 ${p.done} / 手が付かなかった ${p.blocked}）`
-          : `段取りを終えました（済 ${p.done}）`,
+        type: 'log', level: 'warn',
+        text: `${p.done} 段は出来ましたが、次の段は手が付きませんでした。ここで止めます。\n`
+          + stuck.map((st) => `  ・${st.instruction}`).join('\n')
+          + '\n割り直しても通らなかったので、大きさの問題ではありません。'
+          + '前提が足りないか、この作業場では出来ないことのようです。',
       });
-      return false;
+      this.broadcast({ type: 'unfinished' });
+      this.#resuming = undefined;
+      return true;
     }
 
     const p = progressOf(goal);

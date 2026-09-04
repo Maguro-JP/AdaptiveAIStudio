@@ -141,3 +141,65 @@ describe('二度目は、同じ大きさで挑まない', () => {
     } finally { await s.stop(); await fake.close(); }
   });
 });
+
+describe('段取りの終わり方', () => {
+  /** 段取りだけを直に組んで、終わりの筋を見る。 */
+  async function endWith(states: ('done' | 'blocked')[]) {
+    const state = await tempDir('aas-end-');
+    process.env.AAS_STATE_DIR = state;
+    const root = await tempDir('aas-end-root-');
+    const { Goals } = await import('../src/core/goals.ts');
+    const goals = new Goals(join(state, 'goals.jsonl'));
+    const store = new UnfinishedWork(join(state, 'unfinished.jsonl'));
+
+    const goal = await goals.open('src を直して', states.map((_, i) => `段${i}`));
+    for (const [i, st] of states.entries()) {
+      if (st === 'done') await goals.succeed(goal.id, goal.steps[i]!.id);
+      else await goals.block(goal.id, goal.steps[i]!.id);
+    }
+    const item = (await store.add({ request: 'src を直して', why: 'noProgress', note: 'x' }))!;
+    // 時が来たことにする。
+    await store.bump(item.id, Date.now() - 60 * 60_000);
+
+    const asked: string[] = [];
+    const fake = await fakeModel((t) => asked.push(t));
+    const s = new UiServer({
+      config: {
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'p', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
+        candidates: ['p:m'],
+        agent: { root, approval: 'auto' },
+      } as typeof DEFAULT_CONFIG,
+      port: 0,
+    });
+    const base = (await s.start()).replace(/\/$/, '');
+    const session = await s.session();
+    const tick = await s.idleTick(session);
+    return { s, fake, base, asked, tick, store, item };
+  }
+
+  test('全部通ったら、やり残しも片づく', async () => {
+    const r = await endWith(['done', 'done']);
+    try {
+      assert.equal(r.tick, 'RESUMED');
+      assert.deepEqual(await r.store.list(), [], 'やり残しが残っている');
+      // 丸ごと投げ直していないこと。
+      assert.ok(!r.asked.some((a) => a.includes('前回の続きです')), '丸ごと投げ直している');
+    } finally { await r.s.stop(); await r.fake.close(); }
+  });
+
+  test('手が付かなかった段があるなら、丸ごと投げ直さない', async () => {
+    // 割っても通らなかったものを、まとめて渡せば通る道理がない。
+    // ここで諦め、何が出来て何が出来なかったかを言う。
+    const r = await endWith(['done', 'blocked']);
+    try {
+      assert.equal(r.tick, 'RESUMED');
+      assert.ok(
+        !r.asked.some((a) => a.includes('前回の続きです')),
+        `通らないと分かっている道へ落ちている: ${JSON.stringify(r.asked)}`,
+      );
+      // 控えからも外れていること（際限なく蒸し返さない）。
+      assert.deepEqual(await r.store.list(), [], '諦めたのに控えが残っている');
+    } finally { await r.s.stop(); await r.fake.close(); }
+  });
+});
