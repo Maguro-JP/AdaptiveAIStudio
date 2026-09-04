@@ -41,6 +41,7 @@ import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout } from './layou
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
 import { collectState } from './state.ts';
 import { Attachments, MAX_BYTES } from './attachments.ts';
+import { expandMentions } from '../agent/mention.ts';
 import { PreviewServer } from './preview.ts';
 import { configPath, type AasConfig } from '../config.ts';
 import { TaskRunner } from './tasks.ts';
@@ -602,7 +603,13 @@ export class UiServer {
         // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
         // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
         const extra = attached.length > 0 ? await this.#attachments.describe(attached) : '';
-        const full = extra ? `${extra}\n\n${text}` : text;
+        // 指名（`@道`）は、送る側で開いて中身ごと渡す。
+        // 名前だけ渡すと、開かずに書き始めることがある。
+        const named = await expandMentions(text, this.#workRoot()).catch(() => ({ text, reads: [] }));
+        for (const r of named.reads) {
+          if (!r.ok) this.broadcast({ type: 'log', level: 'warn', text: `指名を読めません ${r.path}: ${r.body}` });
+        }
+        const full = extra ? `${extra}\n\n${named.text}` : named.text;
 
         // 受け取ったことだけ先に返し、続きは出来事として流す。
         send(res, 202, { accepted: true });
@@ -1636,7 +1643,8 @@ export class UiServer {
     const extra = next.attached.length > 0
       ? await this.#attachments.describe(next.attached).catch(() => '')
       : '';
-    const full = extra ? `${extra}\n\n${next.text}` : next.text;
+    const named = await expandMentions(next.text, this.#workRoot()).catch(() => ({ text: next.text, reads: [] }));
+    const full = extra ? `${extra}\n\n${named.text}` : named.text;
     this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
     void this.#drive(session, full);
   }

@@ -707,7 +707,10 @@ async function loadFiles(at = '') {
 function insertPath(path) {
   const input = document.querySelector('.chat textarea');
   if (!input) return;
-  input.value = input.value ? `${input.value.replace(/\s+$/, '')} ${path}` : `${path} `;
+  // **`@` を付ける。**印が付いていると、送るときに中身ごと渡る。
+  // 道の文字だけだと、開かずに書き始めることがある。
+  const at = `@${path}`;
+  input.value = input.value ? `${input.value.replace(/\s+$/, '')} ${at} ` : `${at} `;
   input.focus();
 }
 
