@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 // 画面側の素の JS をそのまま読む。画面で動くものと、試すものを同じにする。
-import { parseDiff, collapse } from '../src/ui/web/diff.js';
+import { parseDiff, collapse, splitHunkTexts } from '../src/ui/web/diff.js';
 
 const diff = [
   '--- a/greet.js',
@@ -87,5 +87,28 @@ describe('変わっていないところを畳む', () => {
   test('短い差分は畳まない', () => {
     const lines = [{ kind: 'same', text: 'a' }, { kind: 'add', text: 'b' }];
     assert.equal(collapse(lines as never, 3).some((l) => l.kind === 'folded'), false);
+  });
+});
+
+describe('塊ごとに割る（採否を分けるため）', () => {
+  const two = [
+    '--- a/a.ts', '+++ b/a.ts',
+    '@@ -1,3 +1,3 @@', ' a', '-b', '+B', ' c',
+    '@@ -20,3 +20,3 @@', ' x', '-y', '+Y', ' z',
+  ].join('\n');
+
+  test('塊の数だけ返る', () => {
+    assert.equal(splitHunkTexts(two).length, 2);
+  });
+
+  test('割ったものは、それぞれ単体の差分として読める', () => {
+    const [first, second] = splitHunkTexts(two);
+    assert.equal(parseDiff(first!.text)[0]?.path, 'a.ts');
+    assert.equal(parseDiff(first!.text)[0]?.added, 1);
+    assert.equal(parseDiff(second!.text)[0]?.lines.some((l) => l.text === 'Y'), true);
+  });
+
+  test('差分でなければ空', () => {
+    assert.deepEqual(splitHunkTexts('ただの文'), []);
   });
 });

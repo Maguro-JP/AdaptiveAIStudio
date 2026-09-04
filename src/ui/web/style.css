@@ -954,3 +954,7 @@ dialog.wide { width: min(46rem, 92vw); }
   */
   direction: ltr;
 }
+
+/* 塊ごとの採否。印と差分を縦に重ねる（横に並べると差分が潰れる）。 */
+.ask-hunk { margin: 6px 0; }
+.ask-hunk label { margin-left: 6px; cursor: pointer; }

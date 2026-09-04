@@ -55,7 +55,7 @@ import {
 import { listGguf, tooBigForRam, looksLikeGguf } from '../runtime/inproc.ts';
 import { totalmem } from 'node:os';
 import { Session } from '../core/session.ts';
-import type { ApprovalRequest } from '../agent/tools/types.ts';
+import type { ApprovalRequest, ApprovalAnswer } from '../agent/tools/types.ts';
 
 /**
  * 画面から回せる点検。
@@ -190,7 +190,7 @@ export class UiServer {
   /** モデルの土台。要るときに一度だけ組み立てる。 */
   #runtime?: LocalRuntime;
   /** 承認待ちの返事先。画面が答えるまで、ここで待っている。 */
-  readonly #pending = new Map<string, (ok: boolean) => void>();
+  readonly #pending = new Map<string, (ok: ApprovalAnswer) => void>();
   /** 渡されたファイルの預かり所。 */
   readonly #attachments = new Attachments();
   /** 作っているものを見せる口。操作用とは**別の口**にする。 */
@@ -445,20 +445,20 @@ export class UiServer {
     await this.#drainQueue(session);
   }
 
-  #ask(req: ApprovalRequest): Promise<boolean> {
+  #ask(req: ApprovalRequest): Promise<ApprovalAnswer> {
     const approval = this.#opts.config.agent?.approval ?? 'autoEdit';
     // 協議は自動承認の対象にしない。重大な変更は必ず人の目を通す。
     if (approval === 'auto' && req.kind !== 'deliberation') return Promise.resolve(true);
     if (approval === 'autoEdit' && req.kind === 'write') return Promise.resolve(true);
 
     const id = `a${++this.#seq}`;
-    return new Promise<boolean>((resolve) => {
+    return new Promise<ApprovalAnswer>((resolve) => {
       let done = false;
-      const finish = (ok: boolean) => {
+      const finish = (ok: ApprovalAnswer) => {
         if (done) return;
         done = true;
         this.#pending.delete(id);
-        this.broadcast({ type: 'approvalDone', id, approved: ok });
+        this.broadcast({ type: 'approvalDone', id, approved: ok !== false });
         resolve(ok);
       };
       this.#pending.set(id, finish);
@@ -754,10 +754,15 @@ export class UiServer {
     }
 
     if (path === '/api/approve' && req.method === 'POST') {
-      const body = await readBody(req) as { id?: string; approved?: boolean };
+      const body = await readBody(req) as { id?: string; approved?: boolean; hunks?: unknown };
       const resolveIt = this.#pending.get(String(body?.id ?? ''));
       if (!resolveIt) return send(res, 404, { error: 'その承認は既に終わっています' });
-      resolveIt(body?.approved === true);
+      // 一部だけ通すときは、通す塊の番号が来る。
+      const picked = Array.isArray(body?.hunks)
+        ? body.hunks.filter((n): n is number => typeof n === 'number')
+        : undefined;
+      if (body?.approved === true && picked && picked.length > 0) resolveIt({ hunks: picked });
+      else resolveIt(body?.approved === true);
       return send(res, 200, { ok: true });
     }
 

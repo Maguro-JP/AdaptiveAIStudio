@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { unifiedDiff, diffStat } from '../diff.ts';
+import { applyHunks, splitHunks } from '../hunks.ts';
 import { safeResolve, realSafeResolve, isSymlink, toDisplayPath } from './paths.ts';
 import { type Tool, type ToolContext, ok, fail, requireString } from './types.ts';
 import { applyEdit } from './write-kind.ts';
@@ -173,18 +174,36 @@ async function commit(
   const display = toDisplayPath(ctx.root, abs);
   // 差分は LF に揃えて見せる。^M が全行に並ぶと読めない。
   const diff = unifiedDiff(display, toLf(before), toLf(written));
-  const approved = await ctx.approve({ kind: 'write', path: display, diff, created });
-  if (!approved) return fail(`利用者が書き込みを拒否しました: ${shown}`);
+  const answer = await ctx.approve({ kind: 'write', path: display, diff, created });
+  if (answer === false) return fail(`利用者が書き込みを拒否しました: ${shown}`);
+
+  // **一部だけ通す。**通らなかった塊は、通らなかったとモデルへ返す。
+  // 黙って落とすと、直したつもりのまま次へ進んで、噛み合わなくなる。
+  let body = written;
+  let partial = '';
+  if (answer !== true) {
+    const all = splitHunks(diff);
+    const took = [...new Set(answer.hunks)].filter((i) => i >= 0 && i < all.length).sort((a, b) => a - b);
+    if (took.length === 0) return fail(`利用者が書き込みを拒否しました: ${shown}`);
+    const built = applyHunks(toLf(before), diff, took);
+    if (built === undefined) return fail(`選ばれた分だけを当てられません: ${shown}`);
+    body = matchLineEndings(built, before);
+    if (took.length < all.length) {
+      partial = `（${all.length} か所のうち ${took.length} か所だけ通りました。残りは通っていません）`;
+    }
+  }
+
+  if (body === before) return ok(`変更なし: ${shown}${partial}`);
 
   try {
     await mkdir(dirname(abs), { recursive: true });
-    await writeFile(abs, written, 'utf8');
+    await writeFile(abs, body, 'utf8');
   } catch (e) {
     return fail(`書き込めません: ${shown} (${describe(e)})`);
   }
 
-  const { added, removed } = diffStat(diff);
-  return ok(created ? `作成: ${display}（${added}行）` : `更新: ${display}（+${added} -${removed}）`);
+  const { added, removed } = diffStat(unifiedDiff(display, toLf(before), toLf(body)));
+  return ok((created ? `作成: ${display}（${added}行）` : `更新: ${display}（+${added} -${removed}）`) + partial);
 }
 
 /**

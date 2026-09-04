@@ -9,7 +9,7 @@
  */
 import type { ProviderMessage, ToolCall } from '../providers/contract.ts';
 import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
-import type { Tool, ToolContext, ApprovalRequest } from './tools/types.ts';
+import type { Tool, ToolContext, ApprovalRequest, ApprovalAnswer } from './tools/types.ts';
 import { ToolTextFilter } from './tool-text.ts';
 import { DoneMark, DONE_MARK } from './done.ts';
 import { fitToWindow, charBudget } from './window.ts';
@@ -52,7 +52,7 @@ export interface AgentOptions {
   maxNudges?: number;
   temperature?: number;
   maxTokens?: number;
-  approve(req: ApprovalRequest): Promise<boolean>;
+  approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
 }
 
 export class Agent {

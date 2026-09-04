@@ -17,3 +17,4 @@ export interface DiffFile {
 export function parseDiff(text: unknown): DiffFile[];
 export function collapse(lines: DiffLine[], context?: number): DiffLine[];
 export function renderDiff(text: string, opts?: { mode?: 'unified' | 'split' }): HTMLElement;
+export function splitHunkTexts(text: unknown): { header: string; text: string }[];

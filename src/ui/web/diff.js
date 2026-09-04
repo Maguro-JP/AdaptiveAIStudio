@@ -204,3 +204,28 @@ function split(file) {
   wrap.append(left, right);
   return wrap;
 }
+
+/**
+ * 差分を、塊ごとの差分へ割る。
+ *
+ * **全部通すか全部戻すか、にしないため。**3か所直したうちの1か所だけが
+ * 違うときに、直っている2か所ごと捨てさせない。
+ * 割ったものは、それぞれ単体の差分として `renderDiff` に渡せる。
+ */
+export function splitHunkTexts(text) {
+  const lines = String(text ?? '').split('\n');
+  const head = lines.filter((l) => l.startsWith('--- ') || l.startsWith('+++ '));
+  const out = [];
+  let now = null;
+  for (const line of lines) {
+    if (line.startsWith('@@')) {
+      if (now) out.push(now);
+      now = { header: line, lines: [line] };
+      continue;
+    }
+    if (!now) continue;
+    now.lines.push(line);
+  }
+  if (now) out.push(now);
+  return out.map((h) => ({ header: h.header, text: [...head, ...h.lines].join('\n') }));
+}

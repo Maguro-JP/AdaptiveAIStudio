@@ -5,7 +5,7 @@
  * 増やすときに他を触らなくていいことが、いじりやすさになる。
  */
 
-import { renderDiff } from './diff.js';
+import { renderDiff, splitHunkTexts } from './diff.js';
 import { decorate } from './color.js';
 
 const el = (tag, cls, text) => {
@@ -535,13 +535,34 @@ export const PANELS = {
         : `外部への問い合わせ: ${req.url}`;
       const box = el('div', 'ask');
       box.append(el('div', 'ask-head', what));
+      // 通す塊。2か所以上あるときだけ、選べるようにする。
+      const picks = [];
       if (req.kind === 'write' && req.diff) {
         // **採否を決める場所こそ、色が見えないと判断できない。**
         // ここでは押しても何もしない（見るだけ）。承認の途中に
         // 別の指示を差し込ませない。
-        const rendered = renderDiff(req.diff);
-        decorate(rendered);
-        box.append(rendered);
+        const parts = splitHunkTexts(req.diff);
+        if (parts.length > 1) {
+          parts.forEach((part, i) => {
+            const row = el('div', 'ask-hunk');
+            const tick = document.createElement('input');
+            tick.type = 'checkbox';
+            tick.checked = true;
+            tick.id = `${e.id}-h${i}`;
+            const label = el('label', 'dim', `この塊を通す（${i + 1}/${parts.length}）`);
+            label.htmlFor = tick.id;
+            row.append(tick, label);
+            const rendered = renderDiff(part.text);
+            decorate(rendered);
+            row.append(rendered);
+            box.append(row);
+            picks.push(tick);
+          });
+        } else {
+          const rendered = renderDiff(req.diff);
+          decorate(rendered);
+          box.append(rendered);
+        }
       }
       if (req.kind === 'network') box.append(el('div', 'dim', '取得のみ。資格情報は送りません。'));
       // 協議は中身を読ませるためのもの。畳まずに全部出す。
@@ -554,13 +575,23 @@ export const PANELS = {
       const yes = el('button', 'primary', '許可');
       const no = el('button', '', '拒否');
       const answer = (approved) => {
+        // 選ばれた塊。全部に印が付いていれば、そのまま全部通す。
+        const chosen = picks.map((t, i) => (t.checked ? i : -1)).filter((i) => i >= 0);
+        const partial = approved && picks.length > 0 && chosen.length < picks.length;
         fetch('/api/approve', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ id: e.id, approved }),
+          body: JSON.stringify({ id: e.id, approved, ...(partial ? { hunks: chosen } : {}) }),
         });
-        box.replaceChildren(el('div', approved ? 'good' : 'dim', `${what} → ${approved ? '許可' : '拒否'}`));
+        const said = !approved ? '拒否'
+          : partial ? `一部だけ許可（${chosen.length}/${picks.length}）`
+          : '許可';
+        box.replaceChildren(el('div', approved ? 'good' : 'dim', `${what} → ${said}`));
       };
-      yes.onclick = () => answer(true);
+      yes.onclick = () => {
+        // 印を全部外して「許可」は、拒否と同じ。何も通さない。
+        if (picks.length > 0 && picks.every((t) => !t.checked)) return answer(false);
+        answer(true);
+      };
       no.onclick = () => answer(false);
       const menu = el('div', 'ask-menu');
       menu.append(yes, no);

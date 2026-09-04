@@ -5,8 +5,17 @@ export interface ToolContext {
   root: string;
   signal: AbortSignal;
   /** 書き込み・実行の承認を求める。false なら実行しない。 */
-  approve(req: ApprovalRequest): Promise<boolean>;
+  approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
 }
+
+/**
+ * 承認の返事。
+ *
+ * `true`／`false` のほかに、**差分の一部だけ**を通せる（`hunks` は
+ * 通す塊の番号）。全部か無しかしか無いと、3つ直したうちの1つが違うだけで
+ * 直っている2つごと捨てることになる。
+ */
+export type ApprovalAnswer = boolean | { readonly hunks: readonly number[] };
 
 export type ApprovalRequest =
   | { kind: 'write'; path: string; diff: string; created: boolean }

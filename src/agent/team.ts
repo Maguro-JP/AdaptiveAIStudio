@@ -9,7 +9,7 @@ import type { ChatOrchestrator } from '../core/orchestrator.ts';
 import { Scheduler, type LaneConfig, type Task, type TaskOutcome } from '../core/scheduler.ts';
 import { Agent, type AgentEvent } from './loop.ts';
 import { race, type Attempt, type RaceEvent } from './race.ts';
-import type { Tool, ApprovalRequest } from './tools/types.ts';
+import type { Tool, ApprovalRequest, ApprovalAnswer } from './tools/types.ts';
 
 export interface WorkItem {
   id: string;
@@ -58,7 +58,7 @@ export interface TeamOptions {
   temperature?: number;
   maxTokens?: number;
   maxTotalParallel?: number;
-  approve(req: ApprovalRequest): Promise<boolean>;
+  approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
   /**
    * 役職ごとの気質と権限を引く。
    * 省略すると全員が同じ system と tools で働く（P2までの動き）。

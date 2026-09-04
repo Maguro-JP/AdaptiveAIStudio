@@ -41,7 +41,7 @@ import { DutyRoster, type DutyRecord } from '../harness/duties.ts';
 import { BUILTIN_DUTIES } from '../harness/builtin-duties.ts';
 import { readFile as readJson, writeFile as writeJson, mkdir } from 'node:fs/promises';
 import { RoleRegistry } from '../roles/registry.ts';
-import type { Tool, ApprovalRequest } from '../agent/tools/types.ts';
+import type { Tool, ApprovalRequest, ApprovalAnswer } from '../agent/tools/types.ts';
 import { toolsFor } from '../roles/registry.ts';
 import { buildSystemPrompt } from '../roles/role.ts';
 import { decompose, toWorkItems, type WorkPlan } from '../agent/pm.ts';
@@ -132,7 +132,7 @@ export type ThinkEvent =
 
 export interface SessionOptions {
   /** 承認の訊き方。入口ごとに違う。 */
-  approve(req: ApprovalRequest): Promise<boolean>;
+  approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
   /** 画面や端末へ流したいもの。省略可。 */
   onLog?(level: 'info' | 'warn' | 'error', text: string): void;
   /**
@@ -311,7 +311,7 @@ export class Session {
    * 承認の問い合わせを通り道にして、差分を拾っておく。
    * 差分は道具の中で作られていて、承認以外に外へ出る道が無いため。
    */
-  readonly #approve = async (req: ApprovalRequest): Promise<boolean> => {
+  readonly #approve = async (req: ApprovalRequest): Promise<ApprovalAnswer> => {
     if (req.kind === 'write') this.#diffs.set(req.path, { diff: req.diff, created: req.created });
     return this.#opts.approve(req);
   };
