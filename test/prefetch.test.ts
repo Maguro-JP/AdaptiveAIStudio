@@ -91,6 +91,47 @@ describe('先読み', () => {
     assert.equal(snap.commands.lint, undefined);
   });
 
+  test('錠を見て、その場の道具で打つ（pnpm の作業場で npm と打たない）', async () => {
+    for (const [lock, want] of [
+      ['pnpm-lock.yaml', 'pnpm test'],
+      ['yarn.lock', 'yarn test'],
+      ['bun.lockb', 'bun run test'],
+    ] as const) {
+      const root = await project({
+        'package.json': JSON.stringify({ scripts: { test: 'vitest' } }),
+        [lock]: '',
+      });
+      const p = new Prefetcher(root);
+      p.start();
+      const snap = (await p.snapshot())!;
+      assert.equal(snap.commands.test, want);
+    }
+  });
+
+  test('型を見る手も拾う（npm test は型を見ない）', async () => {
+    const root = await project({
+      'package.json': JSON.stringify({ scripts: { test: 'node --test', typecheck: 'tsc', check: 'npm run typecheck && npm test' } }),
+    });
+    const p = new Prefetcher(root);
+    p.start();
+    const snap = (await p.snapshot())!;
+    assert.equal(snap.commands.typecheck, 'npm run typecheck');
+    assert.equal(snap.commands.check, 'npm run check');
+  });
+
+  test('Python は、錠に合わせて前に付ける', async () => {
+    for (const [lock, want] of [
+      ['uv.lock', 'uv run pytest'],
+      ['poetry.lock', 'poetry run pytest'],
+    ] as const) {
+      const root = await project({ 'pyproject.toml': '', [lock]: '' });
+      const p = new Prefetcher(root);
+      p.start();
+      const snap = (await p.snapshot())!;
+      assert.equal(snap.commands.test, want);
+    }
+  });
+
   test('壊れた package.json でも他の検出は続く', async () => {
     const root = await project({ 'package.json': '{ broken', 'a.ts': 'x' });
     const p = new Prefetcher(root);

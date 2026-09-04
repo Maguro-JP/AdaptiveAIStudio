@@ -20,7 +20,7 @@ export interface ProjectSnapshot {
   recentFiles: Array<{ path: string; modifiedAt: number }>;
   git?: GitState;
   /** package.json 等から推定したテスト/ビルドコマンド */
-  commands: { test?: string; build?: string; lint?: string };
+  commands: { test?: string; build?: string; lint?: string; typecheck?: string; check?: string };
   /** 検出したプロジェクト種別 */
   kind?: string;
   builtAt: number;
@@ -164,8 +164,17 @@ export class Prefetcher {
     return { files, recent: stamps.slice(0, 15) };
   }
 
-  /** package.json などから、このプロジェクトの動かし方を推定する。 */
+  /**
+   * package.json などから、このプロジェクトの動かし方を推定する。
+   *
+   * **打ち方を間違えると、検証そのものが成り立たない。**
+   * pnpm の作業場で `npm test` と打てば、直っていても落ちる。
+   * 錠（lock ファイル）で、その場の道具を選ぶ。
+   */
   async #detectProject(): Promise<{ kind?: string; commands: ProjectSnapshot['commands'] }> {
+    const exists = async (name: string) =>
+      (await stat(join(this.#root, name)).catch(() => undefined)) !== undefined;
+
     const pkgRaw = await readFile(join(this.#root, 'package.json'), 'utf8').catch(() => undefined);
     if (pkgRaw) {
       let scripts: Record<string, unknown> = {};
@@ -173,22 +182,38 @@ export class Prefetcher {
         scripts = (JSON.parse(pkgRaw) as { scripts?: Record<string, unknown> }).scripts ?? {};
       } catch { /* 壊れた package.json でも他の検出は続ける */ }
       const has = (name: string) => typeof scripts[name] === 'string';
+
+      const pm = await exists('pnpm-lock.yaml') ? 'pnpm'
+        : await exists('yarn.lock') ? 'yarn'
+        : await exists('bun.lockb') || await exists('bun.lock') ? 'bun'
+        : 'npm';
+      // `test` だけ、どの道具も素で受ける。それ以外は `run` を挟む。
+      const run = (name: string) => (name === 'test' && pm !== 'bun' ? `${pm} test` : `${pm} run ${name}`);
+
       return {
         kind: 'Node.js',
         commands: {
-          ...(has('test') ? { test: 'npm test' } : {}),
-          ...(has('build') ? { build: 'npm run build' } : {}),
-          ...(has('lint') ? { lint: 'npm run lint' } : {}),
+          ...(has('test') ? { test: run('test') } : {}),
+          ...(has('build') ? { build: run('build') } : {}),
+          ...(has('lint') ? { lint: run('lint') } : {}),
+          ...(has('typecheck') ? { typecheck: run('typecheck') } : {}),
+          ...(has('check') ? { check: run('check') } : {}),
         },
       };
     }
 
-    const exists = async (name: string) =>
-      (await stat(join(this.#root, name)).catch(() => undefined)) !== undefined;
-
-    if (await exists('pyproject.toml')) return { kind: 'Python', commands: { test: 'pytest' } };
-    if (await exists('Cargo.toml')) return { kind: 'Rust', commands: { test: 'cargo test', build: 'cargo build' } };
-    if (await exists('go.mod')) return { kind: 'Go', commands: { test: 'go test ./...', build: 'go build ./...' } };
+    if (await exists('pyproject.toml')) {
+      const runner = await exists('uv.lock') ? 'uv run '
+        : await exists('poetry.lock') ? 'poetry run '
+        : '';
+      return { kind: 'Python', commands: { test: `${runner}pytest` } };
+    }
+    if (await exists('Cargo.toml')) {
+      return { kind: 'Rust', commands: { test: 'cargo test', build: 'cargo build', typecheck: 'cargo check' } };
+    }
+    if (await exists('go.mod')) {
+      return { kind: 'Go', commands: { test: 'go test ./...', build: 'go build ./...', typecheck: 'go vet ./...' } };
+    }
     return { commands: {} };
   }
 }
