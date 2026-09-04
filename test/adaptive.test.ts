@@ -203,3 +203,82 @@ describe('段取りの終わり方', () => {
     } finally { await r.s.stop(); await r.fake.close(); }
   });
 });
+
+describe('通った段の次は、待たずに次へ', () => {
+  test('一段ごとに見回りを待たない', async () => {
+    // 一段ごとに30秒待つと、10段の段取りで待ち時間だけ5分になる。
+    // 通った段の次は、そのまま次へ進むこと。
+    const state = await tempDir('aas-chain-');
+    process.env.AAS_STATE_DIR = state;
+    const root = await tempDir('aas-chain-root-');
+    const { Goals } = await import('../src/core/goals.ts');
+    const goals = new Goals(join(state, 'goals.jsonl'));
+    const store = new UnfinishedWork(join(state, 'unfinished.jsonl'));
+    await goals.open('src を直して', ['一段目', '二段目', '三段目']);
+    const item = (await store.add({ request: 'src を直して', why: 'noProgress', note: 'x' }))!;
+    await store.bump(item.id, Date.now() - 60 * 60_000);
+
+    // 道具を1つ呼んで、合図まで書く＝通る段。
+    const asked: string[] = [];
+    const server = createServer((req, res) => {
+      if (req.url?.endsWith('/models')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end('{"data":[{"id":"m"}]}');
+      }
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        const p = JSON.parse(body || '{}') as { messages: { role: string; content: string }[] };
+        const last = p.messages.at(-1)?.content ?? '';
+        asked.push(last);
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        // 直前が道具の結果なら、合図を書いて終わる。そうでなければ道具を呼ぶ。
+        if (p.messages.at(-1)?.role === 'tool') {
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'やりました。\nTASK_DONE\n' } }] })}\n\n`);
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
+        } else {
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'list_files', arguments: '{"path":"."}' } }] } }] })}\n\n`);
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
+        }
+        res.write('data: [DONE]\n\n');
+        res.end();
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const { port } = server.address() as AddressInfo;
+
+    const s = new UiServer({
+      config: {
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'p', kind: 'openai-compatible', baseUrl: `http://127.0.0.1:${port}/v1`, locality: 'local', models: ['m'] }],
+        candidates: ['p:m'],
+        agent: { root, approval: 'auto' },
+      } as typeof DEFAULT_CONFIG,
+      port: 0,
+    });
+    const base = (await s.start()).replace(/\/$/, '');
+    try {
+      const session = await s.session();
+      // **見回りは一度だけ。**あとは自分で次へ進むこと。
+      assert.equal(await s.idleTick(session), 'RESUMED');
+      for (let i = 0; i < 400; i += 1) {
+        const g = await (await fetch(`${base}/api/goals`)).json() as {
+          list: { steps: { state: string }[] }[];
+        };
+        const mine = g.list.find((x) => x.steps.length === 3);
+        if (!mine) break; // 全部済んで閉じた
+        if (mine.steps.every((st) => st.state === 'done')) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const asked3 = asked.filter((a) => a.includes('ほかの段には手を出さない'));
+      assert.ok(
+        asked3.some((a) => a.includes('三段目')),
+        `見回り一度で三段目まで行っていない: ${JSON.stringify(asked3.map((a) => a.slice(0, 40)))}`,
+      );
+    } finally {
+      await s.stop();
+      server.closeAllConnections();
+      await new Promise<void>((r) => { server.close(() => r()); });
+    }
+  });
+});

@@ -1345,6 +1345,19 @@ export class UiServer {
   }
 
   /**
+   * 通った段の次を、待たずに始める。
+   *
+   * **人の依頼が先。**作業中・支度中・順番待ちがあるなら、始めない
+   * （次の見回りが拾う）。
+   */
+  async #continueStep(session: Session, item: { id: string; request: string; note: string }): Promise<void> {
+    if (this.#busyNow(session) || this.#queue.length > 0) return;
+    this.#resuming = item.id;
+    const started = await this.#driveStep(session, item).catch(() => false);
+    if (!started) this.#resuming = undefined;
+  }
+
+  /**
    * 一段ぶんの結果を書き戻す。**通った跡で歩幅を測る。**
    */
   async #settleStep(done: boolean, session: Session): Promise<void> {
@@ -1418,11 +1431,29 @@ export class UiServer {
         // 何もしていない段取りが、順調に進んだ顔で終わる。
         if (session) await this.#settleStep(done && didSomething, session);
         // **段取りの途中は、やり残しを閉じない。**まだ段が残っている。
-        // 次の段は、次の見回りで拾う。**間を置く**（詰めて回すと、
-        // 落ちているときに同じところを高速で叩き続ける）。
         const mine = (await this.#goals.list()).find((g) => g.id === stepping.goalId);
         if (resuming && mine && !isSettled(mine)) {
           this.broadcast({ type: 'unfinished' });
+          // 通った段の次は、**待たずに次へ**。一段ごとに見回りを待つと、
+          // 10段の段取りで待ち時間だけ5分になる。
+          //
+          // 落ちた段のあとだけ間を置く（次の見回りに任せる）。詰めて回すと、
+          // 落ちているときに同じところを高速で叩き続けることになる。
+          //
+          // **人の依頼が先。**順番待ちがあるなら、そちらを先に流す
+          // （この直後に #drainQueue が回る）。
+          const goOn = done && didSomething && this.#queue.length === 0;
+          if (goOn) {
+            const session2 = this.#session;
+            const item = (await this.#unfinished.list()).find((u) => u.id === resuming);
+            if (session2 && item) {
+              // 立て続けに始めない。この回の後始末（順番待ちの掃き出しまで）を
+              // 終えてから。ここで直に呼ぶと、busy を下ろす前に次が立ち上がる。
+              // この回の後始末（順番待ちの掃き出しまで）が終わってから始める。
+              // 0 だと、busy を下ろし切る前に次が立ち上がって弾かれる。
+              setTimeout(() => { void this.#continueStep(session2, item); }, 100);
+            }
+          }
           return;
         }
       }
