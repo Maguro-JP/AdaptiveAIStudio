@@ -421,10 +421,22 @@ export class InProcRuntime implements LocalRuntime {
     }
     const useTools = Object.keys(functions).length > 0;
 
+    // **窓に対して、出せる長さを決め直す。**
+    //
+    // 上の層は既定で 4096 を送ってくる。窓も 4096 のとき、出力だけで窓を
+    // 使い切る。実際にそうなった。止まらずに 4096 まで書き続け、
+    // 溢れてライブラリが落ちる。CPU で動かすと、その間ずっと 100% を使う。
+    // **「打っても返事が来ない、機械が固まる」の正体がこれ。**
+    //
+    // 決まり（system）と履歴が入る場所を残す。残さないと、必ず溢れる。
+    const room = Math.max(256, Math.floor((this.#opts.contextSize ?? 8192) * 0.4));
+    const wanted = typeof body.max_tokens === 'number' ? body.max_tokens : room;
+    const capped = Math.min(wanted, room);
+
     const opts: PromptOptions = {
       signal: useTools ? AbortSignal.any([signal, stop.signal]) : signal,
       ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
-      ...(typeof body.max_tokens === 'number' ? { maxTokens: body.max_tokens } : {}),
+      maxTokens: capped,
       // 止めたときに投げられると、何を呼ぼうとしたのかが例外に化けて消える。
       ...(useTools ? { functions, stopOnAbortSignal: true } : {}),
     };
@@ -492,7 +504,10 @@ export class InProcRuntime implements LocalRuntime {
       // 「止まりました」だけが出る。持っているなら、そちらを返す。
       if (calls.length > 0) { finish(); }
       // 途中で落ちたことを、黙って握り潰さない。
-      else chunk({ content: `\n[止まりました: ${(e as Error).message}]` }, 'stop');
+      // **`stop` で終えない。**`stop` は「言い終えた」の意味なので、上の層は
+      // 成功として扱い、画面には「完了・検証済み」と出る。実際にそう出ていた。
+      // 落ちたものを完了と記録するのが、いちばん質が悪い。
+      else chunk({ content: `\n[止まりました: ${(e as Error).message}]` }, 'error');
     }
     res.write('data: [DONE]\n\n');
     res.end();

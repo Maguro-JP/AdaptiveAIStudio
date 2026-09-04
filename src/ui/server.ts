@@ -278,7 +278,37 @@ export class UiServer {
     const loaded = this.#runtime?.id === 'inproc' ? this.#runtime.loaded() : [];
     const ref = loaded[0];
     if (!ref) return config;
-    return { ...config, candidates: [ref] };
+
+    // **候補は `provider名:モデル名`。**名前だけを渡していたので、
+    // どの provider のことか決まらず「全Providerが未登録」で即座に落ちた。
+    // 画面には何も出ず、打っても返事が来ない。**それがこの穴。**
+    const local = config.providers.find(
+      (pr) => pr.kind === 'openai-compatible' && pr.locality === 'local',
+    );
+    if (!local) return config;
+    // 繋いだ先の一覧にも入れる。既定の名前（qwen3.6:35b… など）のままだと、
+    // 置いてある GGUF がどこにも無いことになる。
+    const providers = config.providers.map((pr) => (
+      pr === local ? { ...pr, models: [ref] } : pr
+    ));
+    return { ...config, providers, candidates: [`${local.id}:${ref}`] };
+  }
+
+  /**
+   * 候補の無い土台を抱えていたら、組み直す。
+   *
+   * モデルを読む前に土台が組まれると（画面を開いただけでも組まれる）、
+   * 候補が空のまま固定される。読み込んだ後も直らないので、
+   * **打っても打っても即座に「使えるモデルがありません」で終わる。**
+   */
+  async #rebuildIfCandidatesMissing(): Promise<void> {
+    const live = this.#session;
+    if (!live || live.candidates.length > 0) return;
+    if (this.#busyNow(live)) return;
+    const fixed = await this.#configForSession();
+    if (!fixed.candidates || fixed.candidates.length === 0) return;
+    this.#session = undefined;
+    await live.close().catch(() => undefined);
   }
 
   /**
@@ -549,6 +579,12 @@ export class UiServer {
       } finally {
         this.#preparing = false;
       }
+
+      // **読み込む前に組んだ土台を、抱えたままにしない。**
+      // 候補が決まる前に土台が組まれると、候補が空のまま固定される。
+      // 以後どれだけ打っても 0.01 秒で「使えるモデルがありません」で終わる。
+      // 画面には何も出ないので、固まったようにしか見えない。
+      await this.#rebuildIfCandidatesMissing();
 
       const session = await this.session();
       // **断らない。**書いたものを突き返されるのがいちばん不快で、

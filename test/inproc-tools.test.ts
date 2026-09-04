@@ -211,7 +211,9 @@ describe('GGUF だけで道具を呼ぶ', () => {
       });
       const got = await readStream(r);
       assert.match(got.text, /記憶が足りません/, '落ちたことを握り潰している');
-      assert.equal(got.finish, 'stop');
+      // **stop で終えない。**stop は「言い終えた」の意味で、上の層は
+      // 成功として扱う。落ちたものを完了と記録しない。
+      assert.equal(got.finish, 'error');
     } finally { await rt.shutdown(); }
   });
 
@@ -331,6 +333,80 @@ describe('道具の呼び方が合っているか、言う', () => {
       assert.ok(!said.some((l) => l.includes('当てずっぽう')), `要らない警告を出している: ${said.join(' / ')}`);
       // どの型で読んだかは、いつでも出す（確かめる先が無いと、疑う先が増える）。
       assert.ok(said.some((l) => l.includes('QwenChatWrapper')), `型を言っていない: ${said.join(' / ')}`);
+    } finally { await rt.shutdown(); }
+  });
+});
+
+describe('窓を出力で使い切らせない', () => {
+  test('上限は、窓に対して決め直す', async () => {
+    // 上の層は既定で 4096 を送ってくる。窓も 4096 のとき、出力だけで窓を
+    // 使い切る。**実際にそうなった。**止まらずに書き続け、溢れてライブラリが
+    // 落ちる。CPU で動かすと、その間ずっと 100% を使う。
+    // 「打っても返事が来ない、機械が固まる」の正体がこれ。
+    const seen: Seen = { history: [], asked: '' };
+    const dir = await tempDir('aas-cap-');
+    await writeFile(join(dir, 'm.gguf'), 'GGUF');
+    let got: number | undefined;
+    const rt = new InProcRuntime({
+      modelsDir: dir, port: 0, contextSize: 4096,
+      load: async () => ({
+        getLlama: async () => ({
+          loadModel: async () => ({
+            createContext: async () => ({ getSequence: () => ({}), dispose: async () => {} }),
+          }),
+        }),
+        LlamaChatSession: class {
+          chatWrapper = { wrapperName: 'QwenChatWrapper' };
+          setChatHistory(h: unknown[]) { seen.history = h; }
+          async prompt(_t: string, o: { maxTokens?: number } = {}) { got = o.maxTokens; return 'はい'; }
+        },
+      }),
+    });
+    try {
+      const { baseUrl } = await rt.ensureLoaded('m.gguf');
+      await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'm.gguf', stream: true, max_tokens: 4096,
+          messages: [{ role: 'user', content: 'やあ' }],
+        }),
+      });
+      assert.ok(got !== undefined, '上限を渡していない');
+      assert.ok(got < 4096, `窓ぶん全部を出力に使わせている: ${got}`);
+      assert.ok(got >= 256, `狭すぎて何も言えない: ${got}`);
+    } finally { await rt.shutdown(); }
+  });
+
+  test('落ちたときは stop で終えない', async () => {
+    // stop は「言い終えた」の意味。上の層は成功として扱い、画面には
+    // 「完了・検証済み」と出る。**落ちたものを完了と記録しない。**
+    const seen: Seen = { history: [], asked: '' };
+    const dir = await tempDir('aas-err-');
+    await writeFile(join(dir, 'm.gguf'), 'GGUF');
+    const rt = new InProcRuntime({
+      modelsDir: dir, port: 0,
+      load: async () => ({
+        getLlama: async () => ({
+          loadModel: async () => ({
+            createContext: async () => ({ getSequence: () => ({}), dispose: async () => {} }),
+          }),
+        }),
+        LlamaChatSession: class {
+          chatWrapper = { wrapperName: 'QwenChatWrapper' };
+          setChatHistory(h: unknown[]) { seen.history = h; }
+          async prompt(): Promise<string> { throw new Error('窓に入りません'); }
+        },
+      }),
+    });
+    try {
+      const { baseUrl } = await rt.ensureLoaded('m.gguf');
+      const r = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'm.gguf', stream: true, messages: [{ role: 'user', content: 'やあ' }] }),
+      });
+      const raw = await r.text();
+      assert.match(raw, /"finish_reason":"error"/, `落ちたのに stop で終えている: ${raw.slice(-200)}`);
+      assert.match(raw, /窓に入りません/, '理由を伝えていない');
     } finally { await rt.shutdown(); }
   });
 });

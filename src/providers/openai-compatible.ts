@@ -194,6 +194,15 @@ export class OpenAiCompatibleProvider implements ChatProvider {
           arm(this.#stallTimeoutMs);
         }
 
+        // **落ちたものを、成功として通さない。**
+        // 中で読む口は、生成が落ちたときに 'error' で終える。
+        // ここで拾わないと「完了・検証済み」として画面に出る。
+        if (choice?.finish_reason === 'error') {
+          throw new ProviderError({
+            kind: 'unavailable', providerId: this.id,
+            message: `${this.id} の生成が途中で落ちました`,
+          });
+        }
         if (choice?.finish_reason === 'stop') finishReason = 'stop';
         else if (choice?.finish_reason === 'length') finishReason = 'length';
         else if (choice?.finish_reason === 'tool_calls') finishReason = 'toolCalls';
