@@ -297,6 +297,19 @@ await check('作業場を開く', async () => {
   if (!said.includes('設定')) throw new Error(`空だが、どう変えるかを言っていない: ${said.slice(0, 60)}`);
 });
 
+await check('取ってくる先を、自分で打てる', async () => {
+  // カタログはこちらが書いた見当で、配布元の名前は変わる（消えることもある）。
+  // **打つ道が無いと、見当が外れた時点で利用者は詰む。**
+  try {
+    await p.locator('#openSettings').click();
+    await p.waitForTimeout(700);
+    await p.locator('.tabs-lite button[data-sec="model"]').click();
+    await p.waitForTimeout(700);
+    if (await p.locator('#cfgRepo').count() === 0) throw new Error('取ってくる先を打つ所が無い');
+    if (await p.locator('#cfgGetRepo').count() === 0) throw new Error('打ったものを取るつまみが無い');
+  } finally { await closeSettings(); }
+});
+
 await check('作業場は、作業場の所で変える', async () => {
   // **その区画を操るものは、その区画に置く。**
   // 設定の奥（モデルの頁）に置いていたので、誰も辿り着けなかった。

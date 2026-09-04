@@ -317,3 +317,61 @@ describe('数GBを、家の回線で取る', () => {
     assert.equal(mmss(7200), '2時間0分');
   });
 });
+
+describe('こちらの見当が外れても、詰まないこと', () => {
+  test('.gguf の URL を、そのまま渡せる', async () => {
+    // 配布元の名前の付け方は変わるし、こちらがカタログに書いた見当は外れる。
+    // **外れた時点で利用者が詰むのが、いちばん悪い。**
+    // ブラウザで見つけた場所を、そのまま貼れること。
+    const { createServer } = await import('node:http');
+    const SIZE = 1024 * 1024;
+    const srv = createServer((_req, res) => {
+      const head = Buffer.alloc(4); head.write('GGUF');
+      res.writeHead(200, { 'content-length': String(SIZE) });
+      res.end(Buffer.concat([head, Buffer.alloc(SIZE - 4)]));
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const { port } = srv.address() as import('node:net').AddressInfo;
+    const dir = await tempDir('aas-url-');
+    try {
+      const r = await installModel({
+        entry: {
+          id: 'x', repo: `http://127.0.0.1:${port}/a/b/resolve/main/my-q4_k_m.gguf`,
+          quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '',
+        },
+        modelsDir: dir,
+      });
+      assert.equal(r.file, 'my-q4_k_m.gguf');
+      assert.deepEqual(await readdir(dir), ['my-q4_k_m.gguf']);
+    } finally { srv.closeAllConnections(); await new Promise<void>((r) => { srv.close(() => r()); }); }
+  });
+
+  test('頁の URL を貼られたら、何を貼るのかを言う', async () => {
+    // 「ファイルではなく頁を貼る」は必ず起きる。断るだけでは次の一手が無い。
+    const dir = await tempDir('aas-url2-');
+    await assert.rejects(
+      installModel({
+        entry: {
+          id: 'x', repo: 'https://huggingface.co/a/b/tree/main',
+          quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '',
+        },
+        modelsDir: dir,
+      }),
+      /ファイルそのものの場所/,
+    );
+  });
+
+  test('名前が見つからないときは、探し方まで言う', async () => {
+    // カタログの名前は、こちらの見当。外れたときに「見つかりません」だけでは、
+    // そこで終わってしまう。
+    const dir = await tempDir('aas-url3-');
+    const notFound = (async () => new Response('{}', { status: 404 })) as unknown as typeof fetch;
+    await assert.rejects(
+      installModel({
+        entry: { id: 'x', repo: 'no/such', quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '' },
+        modelsDir: dir, fetchImpl: notFound,
+      }),
+      /取ってくる先/,
+    );
+  });
+});

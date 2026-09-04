@@ -88,6 +88,29 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
     return { path: already, file: already.split(/[\\/]/).at(-1)!, bytes: s.size };
   }
 
+  // **URL を直に渡せる。**配布元の名前の付け方は変わるし、こちらが書いた
+  // 見当は外れる。外れた時点で利用者が詰むのがいちばん悪い。
+  // ブラウザで見つけた .gguf の場所を、そのまま貼れるようにする。
+  const directUrl = /^https?:\/\//i.test(entry.repo) ? entry.repo : undefined;
+  if (directUrl) {
+    let leaf = '';
+    try {
+      leaf = decodeURIComponent(new URL(directUrl).pathname.split('/').at(-1) ?? '');
+    } catch {
+      throw new Error(`場所として読めません: ${directUrl}`);
+    }
+    if (!leaf.toLowerCase().endsWith('.gguf')) {
+      throw new Error(
+        `.gguf を指していません: ${leaf || directUrl}\n`
+        + '配布元の頁ではなく、ファイルそのものの場所を貼ってください\n'
+        + '（HuggingFace なら、ファイル名の横の download の先）。',
+      );
+    }
+    return await fetchInto({
+      url: directUrl, leaf, modelsDir, entry, fetchImpl, log, ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+  }
+
   log(`一覧を調べます: ${entry.repo}`);
   let meta: Response;
   try {
@@ -102,7 +125,16 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
     );
   }
   if (!meta.ok) {
-    if (meta.status === 404) throw new Error(`配布元が見つかりません: ${entry.repo}`);
+    if (meta.status === 404) {
+      // **名前が違うだけのことが多い。**次の一手を出さないと、そこで終わる。
+      throw new Error(
+        `配布元が見つかりません: ${entry.repo}\n`
+        + '名前が変わっているか、消えています。\n'
+        + `  1. ブラウザで探す: ${HF_FILES}/models?search=gguf\n`
+        + '  2. 見つけた置き場の名前（例 unsloth/Qwen2.5-7B-Instruct-GGUF）を\n'
+        + '     「取ってくる先」に打つ。.gguf の URL をそのまま貼っても取れます。',
+      );
+    }
     // 403 は理由が複数ある。番号だけ出しても、次に何をすればいいか分からない。
     if (meta.status === 401 || meta.status === 403) {
       throw new Error(
@@ -129,14 +161,27 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
   }
   log(`選びました: ${file}`);
 
-  await mkdir(modelsDir, { recursive: true });
   // 配布元の一覧から来た名前。区切りは / だけでなく \\ も見る（Windows では
   // \\ が道として解釈され、置き場の外へ出る）。点だけの名前は置かない。
   const leaf = file.split(/[\\/]/).at(-1) ?? '';
   if (!leaf || leaf === '.' || leaf === '..') throw new Error(`置ける名前ではありません: ${file}`);
+
+  return await fetchInto({
+    url: `${HF_FILES}/${entry.repo}/resolve/main/${file}`,
+    leaf, modelsDir, entry, fetchImpl, log, ...(opts.signal ? { signal: opts.signal } : {}),
+  });
+}
+
+/** 落とす本体。一覧から選んだときも、URL を直に渡されたときも、ここを通す。 */
+async function fetchInto(a: {
+  url: string; leaf: string; modelsDir: string; entry: CatalogEntry;
+  fetchImpl: typeof fetch; log: (l: string) => void; signal?: AbortSignal;
+}): Promise<InstalledModel> {
+  const { url, leaf, modelsDir, entry, fetchImpl, log } = a;
+  const opts = { signal: a.signal };
   const dest = join(modelsDir, leaf);
-  // 途中のものは別名で置く。中断されたものを「ある」と数えないため。
   const tmp = `${dest}.part`;
+  await mkdir(modelsDir, { recursive: true });
 
   // すでに途中まで取れているなら、**その続きから**。
   // 数GBを落とす途中で切れることは普通にある。毎回ゼロからやり直させると、
@@ -149,7 +194,6 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
   await checkRoom(modelsDir, entry.approxGB, log);
 
   log(`取ってきます（約${entry.approxGB}GB。回線によっては数十分かかります）`);
-  const direct = `${HF_FILES}/${entry.repo}/resolve/main/${file}`;
 
   // **黙り込んだら打ち切る。**相手が繋いだまま何も送らないことがある。
   // 打ち切りが無かったので、そのまま永久に固まっていた（画面も止まったまま）。
@@ -166,7 +210,7 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
   const signals = opts.signal ? [opts.signal, guard.signal] : [guard.signal];
   arm();
   try {
-    res = await fetchImpl(direct, {
+    res = await fetchImpl(url, {
       redirect: 'follow',
       signal: AbortSignal.any(signals),
       ...(had > 0 ? { headers: { range: `bytes=${had}-` } } : {}),
@@ -177,8 +221,8 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
     throw new Error(
       stalled
         ? `配布元が ${stallMs / 1000} 秒だまったままです。回線を確かめて、もう一度実行してください。\n`
-          + `（途中までは残してあります。続きから取ります）\n${byHand(entry, modelsDir, direct)}`
-        : `取ってこられませんでした（${describeNet(e)}）。\n${byHand(entry, modelsDir, direct)}`,
+          + `（途中までは残してあります。続きから取ります）\n${byHand(entry, modelsDir, url)}`
+        : `取ってこられませんでした（${describeNet(e)}）。\n${byHand(entry, modelsDir, url)}`,
     );
   }
   // 206 なら続き、200 なら相手が続きに応じなかった（最初から取り直す）。
@@ -189,7 +233,7 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
     log('すでに全部取れていました。');
   } else if (!res.ok) {
     clearTimeout(timer);
-    throw new Error(`取ってこられませんでした (${res.status})\n${byHand(entry, modelsDir, direct)}`);
+    throw new Error(`取ってこられませんでした (${res.status})\n${byHand(entry, modelsDir, url)}`);
   }
 
   const part = Number(res.headers.get('content-length') ?? 0);

@@ -1017,9 +1017,9 @@ async function loadCatalog() {
   }
 }
 
-$('cfgGet').onclick = async () => {
-  const id = $('cfgCatalog').value;
-  if (!id) { $('cfgGetNote').textContent = '名前がありません。'; return; }
+/** 取ってくる。名前でも URL でも、一覧からでも、同じ道を通す。 */
+async function getModel(id) {
+  if (!id) { $('cfgGetNote').textContent = '取ってくる先がありません。'; return; }
   const r = await fetch('/api/models/get', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ id }),
@@ -1030,7 +1030,10 @@ $('cfgGet').onclick = async () => {
   $('cfgGetNote').textContent = r.ok
     ? `取ってきています: ${id}\n進み具合は「流れ」の板に出ます。終わったら「読み直す」を押してください。`
     : (body.error ?? '始められませんでした');
-};
+}
+
+$('cfgGet').onclick = () => { void getModel($('cfgCatalog').value); };
+$('cfgGetRepo').onclick = () => { void getModel($('cfgRepo').value.trim()); };
 
 $('cfgReload').onclick = () => { void loadCfg(); };
 /** 止めて、起き上がるまで待って、読み直す。設定の後と更新の後、どちらからも呼ぶ。 */

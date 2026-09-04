@@ -153,9 +153,22 @@
 
         <p class="hint">
           取ってくる。数GBあるので時間がかかります。進み具合は「流れ」に出ます。
+          途中で切れても、もう一度押せば続きから取ります。
         </p>
+        <!--
+          **推測に依存させない。**下の一覧はこちらが書いた見当で、
+          配布元の名前は変わる（消えることもある）。名前を直に打てる道が
+          無いと、見当が外れた時点で利用者は詰む。
+        -->
+        <label class="field-row">
+          <span class="dim">取ってくる先</span>
+          <input id="cfgRepo" type="text" spellcheck="false"
+                 placeholder="例: unsloth/Qwen2.5-7B-Instruct-GGUF  または .gguf の URL">
+        </label>
         <div class="btnbar">
-          <select id="cfgCatalog" title="よく使うもの"></select>
+          <button type="button" id="cfgGetRepo" class="primary">これを取ってくる</button>
+          <span class="dim">または</span>
+          <select id="cfgCatalog" title="こちらが書いた見当（外れていることがあります）"></select>
           <button type="button" id="cfgGet" class="ghost">取ってくる</button>
         </div>
         <p id="cfgGetNote" class="repairs"></p>
