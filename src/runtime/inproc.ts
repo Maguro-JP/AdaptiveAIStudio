@@ -26,6 +26,8 @@ import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.
 import { listenOrExplain } from '../core/listen.ts';
 import { crossSiteReason } from '../ui/origin.ts';
 import { chunkReader } from '../core/text.ts';
+import { toolPrompt } from './tool-prompt.ts';
+import { extractToolCalls, ToolTextFilter } from '../agent/tool-text.ts';
 /**
  * ライブラリの名前。文字列の変数にしておく。
  *
@@ -215,8 +217,8 @@ export class InProcRuntime implements LocalRuntime {
     if (GUESSED_WRAPPERS.has(wrapper)) {
       this.#opts.onLog?.(
         `${ref} に合う道具の呼び方が分からず、当てずっぽうの型（${wrapper}）にしました。`
-        + 'このモデルは道具を一度も呼ばないかもしれません（会話はできます）。'
-        + '道具を使わせたいなら、Qwen など道具呼び出しを学んだモデルを置いてください。',
+        + '道具は本文で渡して、本文から拾います（型に頼りません）。'
+        + '守れないモデルもあるので、うまく呼べないときは道具呼び出しを学んだモデル（Qwen など）を置いてください。',
       );
     }
     return { context, session, wrapper, turn: Promise.resolve() };
@@ -406,7 +408,26 @@ export class InProcRuntime implements LocalRuntime {
     const calls: { id: string; name: string; args: unknown }[] = [];
     const stop = new AbortController();
     const functions: Record<string, LibFunction> = {};
-    for (const t of body.tools ?? []) {
+
+    // **型が当てずっぽうなら、道具は本文で渡す。**
+    // ライブラリ経由で渡しても、その型ではモデルに何も届かない。
+    // 届かないので一度も呼ばず、「動いているが何もしない」だけが残る。
+    const asText = GUESSED_WRAPPERS.has(held.wrapper) && (body.tools?.length ?? 0) > 0;
+    if (asText) {
+      const spec = (body.tools ?? []).flatMap((t) => (t.function?.name
+        ? [{
+            name: t.function.name,
+            ...(t.function.description ? { description: t.function.description } : {}),
+            ...(t.function.parameters ? { parameters: t.function.parameters } : {}),
+          }]
+        : []));
+      held.session.setChatHistory([
+        ...toHistory(fromUser ? messages.slice(0, -1) : messages),
+        { type: 'system', text: toolPrompt(spec) },
+      ]);
+    }
+
+    for (const t of asText ? [] : body.tools ?? []) {
       const name = t.function?.name;
       if (!name) continue;
       functions[name] = {
@@ -450,6 +471,12 @@ export class InProcRuntime implements LocalRuntime {
       } catch (e) {
         if (calls.length === 0) throw e;
       }
+      // 本文で渡したときは、本文から拾う。
+      if (asText) {
+        const salvaged = extractToolCalls(text);
+        text = salvaged.text;
+        salvaged.calls.forEach((c, i) => calls.push({ id: `call_${i}`, name: c.name, args: c.args }));
+      }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
         id: 'inproc', object: 'chat.completion', model: ref,
@@ -483,14 +510,25 @@ export class InProcRuntime implements LocalRuntime {
       calls.forEach((c, index) => chunk({ tool_calls: [{ index, ...toWire(c) }] }));
       chunk({}, 'tool_calls');
     };
+    // 呼び出しらしき記述は、確かめるまで流さない。
+    // 流してしまうと、画面に生の JSON が残る。
+    const filter = asText ? new ToolTextFilter() : undefined;
     try {
       chunk({ role: 'assistant' });
       await held.session.prompt(asked, {
         ...opts,
         // 一気に返さず、出来た端から流す。長い返事のときに
         // 「止まっている」ように見えるのが、いちばん困る。
-        onTextChunk: (text: string) => chunk({ content: text }),
+        onTextChunk: (text: string) => {
+          const show = filter ? filter.push(text) : text;
+          if (show) chunk({ content: show });
+        },
       });
+      if (filter) {
+        const salvaged = filter.end();
+        if (salvaged.text) chunk({ content: salvaged.text });
+        salvaged.calls.forEach((c, i) => calls.push({ id: `call_${i}`, name: c.name, args: c.args }));
+      }
       // 切ったのは向こう。書き戻す先はもう無い。
       // **投げずに返る道**（stopOnAbortSignal）を通ることがあるので、
       // ここでも見る。見ていなかったので、やめた後に 'stop' を送っていた。
@@ -502,6 +540,12 @@ export class InProcRuntime implements LocalRuntime {
       // こちらは受け口の中で生成を止める。ライブラリがそれを「止められた」
       // として投げてくると、何を呼ぼうとしたのかが消え、画面には
       // 「止まりました」だけが出る。持っているなら、そちらを返す。
+      if (filter) {
+        // 途中で落ちても、溜めた分を握り潰さない。
+        const salvaged = filter.end();
+        if (salvaged.text) chunk({ content: salvaged.text });
+        salvaged.calls.forEach((c, i) => calls.push({ id: `call_${i}`, name: c.name, args: c.args }));
+      }
       if (calls.length > 0) { finish(); }
       // 途中で落ちたことを、黙って握り潰さない。
       // **`stop` で終えない。**`stop` は「言い終えた」の意味なので、上の層は

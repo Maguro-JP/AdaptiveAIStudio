@@ -410,3 +410,93 @@ describe('窓を出力で使い切らせない', () => {
     } finally { await rt.shutdown(); }
   });
 });
+
+/**
+ * 型が当てずっぽうのとき、道具は**本文で**渡して、本文から拾う。
+ *
+ * ライブラリ経由で渡しても、その型ではモデルに何も届かない。届かないので
+ * 一度も呼ばず、「動いているが何もしない」だけが残る。いちばん質が悪い。
+ */
+describe('型が合わないモデルでも、道具を呼ばせる', () => {
+  test('道具はライブラリに渡さず、本文へ書いて渡す', async () => {
+    const seen: Seen = { history: [], asked: '' };
+    wrapperName = 'General';
+    const { rt, baseUrl } = await serve(seen, undefined, 'はい');
+    try {
+      await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'm.gguf', stream: false, tools: TOOLS,
+          messages: [{ role: 'user', content: 'a.ts を読んで' }],
+        }),
+      });
+      assert.equal(seen.functions, undefined, '届かない道を通そうとしている');
+      const text = JSON.stringify(seen.history);
+      assert.match(text, /read_file/, '道具の名前が本文に無い');
+      assert.match(text, /tool_call/, '返し方を教えていない');
+    } finally { await rt.shutdown(); wrapperName = 'QwenChatWrapper'; }
+  });
+
+  test('本文に書かれた呼び出しを、OpenAI の形にして返す', async () => {
+    const seen: Seen = { history: [], asked: '' };
+    wrapperName = 'General';
+    const said = '見てみます。<tool_call>{"name": "read_file", "arguments": {"path": "a.ts"}}</tool_call>';
+    const { rt, baseUrl } = await serve(seen, undefined, said);
+    try {
+      const r = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'm.gguf', stream: false, tools: TOOLS,
+          messages: [{ role: 'user', content: 'a.ts を読んで' }],
+        }),
+      });
+      const body = await r.json() as {
+        choices: { message: { content: string; tool_calls?: { function: { name: string; arguments: string } }[] };
+        finish_reason: string }[];
+      };
+      const choice = body.choices[0]!;
+      assert.equal(choice.finish_reason, 'tool_calls');
+      assert.equal(choice.message.tool_calls?.[0]?.function.name, 'read_file');
+      assert.deepEqual(JSON.parse(choice.message.tool_calls?.[0]?.function.arguments ?? '{}'), { path: 'a.ts' });
+      // 生の JSON を人に見せない。
+      assert.doesNotMatch(choice.message.content, /tool_call|arguments/);
+      assert.match(choice.message.content, /見てみます/);
+    } finally { await rt.shutdown(); wrapperName = 'QwenChatWrapper'; }
+  });
+
+  test('流しているときも、生の JSON を画面へ出さない', async () => {
+    const seen: Seen = { history: [], asked: '' };
+    wrapperName = 'General';
+    const said = 'では<tool_call>{"name": "read_file", "arguments": {"path": "a.ts"}}</tool_call>';
+    const { rt, baseUrl } = await serve(seen, undefined, said);
+    try {
+      const r = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'm.gguf', stream: true, tools: TOOLS,
+          messages: [{ role: 'user', content: 'a.ts を読んで' }],
+        }),
+      });
+      const got = await readStream(r);
+      assert.equal(got.finish, 'tool_calls');
+      assert.equal(got.calls[0]?.name, 'read_file');
+      assert.doesNotMatch(got.text, /tool_call|arguments/, `生の JSON が出た: ${got.text}`);
+    } finally { await rt.shutdown(); wrapperName = 'QwenChatWrapper'; }
+  });
+
+  test('型が合うモデルには、これまで通りライブラリ経由で渡す（対）', async () => {
+    const seen: Seen = { history: [], asked: '' };
+    const { rt, baseUrl } = await serve(seen, { name: 'read_file', args: { path: 'a.ts' } });
+    try {
+      await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'm.gguf', stream: false, tools: TOOLS,
+          messages: [{ role: 'user', content: 'a.ts を読んで' }],
+        }),
+      });
+      assert.ok(seen.functions?.read_file, '渡していない');
+      assert.doesNotMatch(JSON.stringify(seen.history), /tool_call/, '要らない説明を足している');
+    } finally { await rt.shutdown(); }
+  });
+});
