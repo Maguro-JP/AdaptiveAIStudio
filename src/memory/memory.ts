@@ -90,6 +90,13 @@ export interface RecallOptions {
   kinds?: MemoryKind[];
   /** 置き換えられた古い決定も含める */
   includeSuperseded?: boolean;
+  /**
+   * 「二度としないこと」を混ぜるか。既定は混ぜる。
+   *
+   * **決まり（system）の側で載せているときは、false にする。**
+   * 両方に載せると、同じ文が一往復に二度入る。狭い窓ほど効く。
+   */
+  lessons?: boolean;
 }
 
 /** 覚え直したときに何が起きたか。呼び出し側が周知に使う。 */
@@ -340,6 +347,7 @@ export class Memory {
     // **嫌がられたことは、話題に関係なく必ず混ぜる。**
     // 語が重ならないから外す、をやると、別の作業で同じ地雷を踏む。
     // 限度（limit）にも数えない。減らしてよい種類のものではない。
+    if (opts.lessons === false) return hits.filter((e) => e.kind !== 'displeasure');
     if (opts.kinds && !opts.kinds.includes('displeasure')) return hits;
     const must = this.displeasures();
     const rest = hits.filter((e) => e.kind !== 'displeasure');

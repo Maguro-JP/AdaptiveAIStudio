@@ -415,6 +415,8 @@ export class Session {
       };
 
       // 前に分かっていること・駄目だったことを渡してから分解させる。
+      // 段取りの側は、こちらの決まり（system）を通らない（進行役は別の決まりで動く）。
+      // なので「二度としないこと」は、こちらに載せる。
       const known = this.#recall(request);
       if (known) yield { type: 'recalled', text: known };
 
@@ -814,7 +816,9 @@ export class Session {
     try {
 
       // 関係することを思い出して添える。無関係なら何も足さない。
-      const recalled = this.#recall(instruction);
+      // **「二度としないこと」はここでは足さない。**決まり（system）が載せる。
+      // 両方に載せると、同じ文が一往復に二度入る（実際に八件ずつ二重に入っていた）。
+      const recalled = this.#recall(instruction, { lessons: false });
       if (recalled) yield { type: 'recalled', text: recalled };
 
       this.#history.push({
@@ -1188,8 +1192,8 @@ export class Session {
    * 控えないと、あとで「役に立ったのか」を書き戻せない。書き戻さないと、
    * 外れた覚えが永遠に効き続ける（使うほど雑音が増える）。
    */
-  #recall(text: string): string {
-    const related = this.memory.recall(text, { limit: 6 });
+  #recall(text: string, opts: { lessons?: boolean } = {}): string {
+    const related = this.memory.recall(text, { limit: 6, ...opts });
     const failed = this.memory.failedBefore(text, 2);
     const merged = [...related];
     for (const f of failed) if (!merged.some((e) => e.id === f.id)) merged.push(f);

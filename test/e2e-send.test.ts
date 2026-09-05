@@ -429,3 +429,37 @@ describe('外の道具（MCP）を、会話の中から実際に呼ぶ', () => {
     } finally { await s4.stop(); await fake2.close(); }
   });
 });
+
+describe('同じ学びを、一往復に二度入れない', () => {
+  /**
+   * 決まり（system）と思い出しの両方に載せていたので、八件ずつ二重に入っていた。
+   * 狭い窓のモデルほど効く（そのぶん、肝心の依頼が押し出される）。
+   *
+   * **届いた本文で数える。**こちらの積もりではなく、渡ったもので見る。
+   */
+  test('届いた本文の中で、同じ一行が二度出てこない', async () => {
+    assert.equal((await fetch(`${base}/api/conversations`, { method: 'POST' })).status, 200);
+    fake.bodies.length = 0;
+    const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy'
+      && (e as { busy?: boolean }).busy === false);
+    const collecting = collect(done);
+    await new Promise((r) => setTimeout(r, 200));
+    await fetch(`${base}/api/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: '足し算を直して' }),
+    });
+    await collecting;
+
+    const work = (fake.bodies as Array<{ messages?: Array<{ role: string; content: string }> }>)
+      .filter((b) => !(b.messages ?? []).some((m) => m.content.includes('指摘・不満・注意かどうか')));
+    assert.ok(work.length > 0, '作業の呼び出しが無い');
+    const sent = (work.at(-1)!.messages ?? []).map((m) => m.content).join('\n');
+
+    // 最初から持っている学びの一行を、そのまま数える。
+    const line = '確かめる仕事が利用者へ回る';
+    const times = sent.split(line).length - 1;
+    assert.ok(times <= 1, `同じ学びが ${times} 回入っている（一往復ぶんの本文 ${sent.length} 文字）`);
+    // 一度は入っていること（外しすぎて、学びが届かなくなっていないか）。
+    assert.equal(times, 1, `学びが届いていない（本文 ${sent.length} 文字）`);
+  });
+});

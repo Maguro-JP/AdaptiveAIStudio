@@ -370,16 +370,15 @@ describe('実走：嫌がられたことを、次から必ず持ち歩くか', (
       assert.match(lesson, /【次から】場面から書く/, `次の手が無い: ${lesson}`);
 
       // 2. まったく別の話題を頼む。**それでも持ち歩いているか。**
-      const events = await drive(base, '足し算が引き算になっています。直してください。');
-      const recalled = events
-        .filter((e) => (e as { type?: string }).type === 'session')
-        .map((e) => (e as { event: { type?: string; text?: string } }).event)
-        .filter((ev) => ev.type === 'recalled')
-        .map((ev) => ev.text ?? '')
-        .join('\n');
-      assert.match(recalled, /二度としないこと/, `別の話題では思い出していない: ${recalled.slice(0, 300)}`);
-      assert.match(recalled, /【次から】場面から書く/, `学びが載っていない: ${recalled.slice(0, 300)}`);
-      assert.doesNotMatch(recalled, /書けよ/, '原文を持ち回っている');
+      model.bodies.length = 0;
+      await drive(base, '足し算が引き算になっています。直してください。');
+
+      // **届いた本文で見る。**思い出しの出来事ではなく、モデルに渡ったもの。
+      const work = model.bodies.filter((t) => !t.includes('指摘・不満・注意かどうか'));
+      const sent = work.join('\n---\n');
+      assert.match(sent, /二度としないこと/, `別の話題では持ち歩いていない: ${sent.slice(0, 400)}`);
+      assert.match(sent, /【次から】場面から書く/, `学びが届いていない: ${sent.slice(0, 400)}`);
+      assert.doesNotMatch(sent, /書けよ/, '原文を持ち回っている');
     } finally {
       await server.stop();
       await model.close();

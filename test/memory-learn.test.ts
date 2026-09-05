@@ -165,3 +165,24 @@ describe('失敗は遠くまで、成功は近くだけ', () => {
     assert.ok(!left.includes('古い成功'), `成功が失敗より残っている: ${left.join(', ')}`);
   });
 });
+
+/**
+ * 同じ学びを、一往復に二度入れない。
+ *
+ * 決まり（system）と思い出しの両方に載せていたので、八件ずつ二重に入っていた。
+ * 狭い窓のモデルほど効く（そのぶん、肝心の依頼が押し出される）。
+ */
+describe('二度載せない', () => {
+  test('決まりの側で載せるときは、思い出しから外す', () => {
+    const m = new Memory();
+    m.seedLessons();
+    m.remember({ kind: 'fact', title: '設定は config.ts', detail: 'config.ts に書く' });
+
+    const withLessons = m.recall('設定');
+    const without = m.recall('設定', { lessons: false });
+    assert.ok(withLessons.some((e) => e.kind === 'displeasure'), '既定では載る');
+    assert.equal(without.some((e) => e.kind === 'displeasure'), false, '外したのに載っている');
+    // 他のものは、外しても残る。
+    assert.ok(without.some((e) => e.kind === 'fact'));
+  });
+});

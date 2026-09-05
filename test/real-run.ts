@@ -17,6 +17,8 @@ export interface RealModel {
   close(): Promise<void>;
   /** 何をしたか。順に見て、思った通りに動いたかを確かめる。 */
   readonly did: string[];
+  /** 届いた本文。**こちらの積もりではなく、渡ったもので見る。** */
+  readonly bodies: string[];
 }
 
 /**
@@ -26,6 +28,7 @@ export interface RealModel {
  */
 export async function startRealModel(want: { hint: string; from: string; to: string }): Promise<RealModel> {
   const did: string[] = [];
+  const bodies: string[] = [];
 
   const server: Server = createServer((req, res) => {
     if (req.url?.endsWith('/models')) {
@@ -36,9 +39,13 @@ export async function startRealModel(want: { hint: string; from: string; to: str
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
-      let body: { messages?: Wire[] } = {};
+      let body: { messages?: Wire[]; system?: string } = {};
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as typeof body; } catch { /* 空で続ける */ }
       const messages = body.messages ?? [];
+      bodies.push([
+        body.system ? `system:${body.system}` : '',
+        ...messages.map((m) => `${m.role ?? ''}:${m.content ?? ''}`),
+      ].filter(Boolean).join('\n'));
       const results = messages.filter((m) => m.role === 'tool').map((m) => m.content ?? '');
 
       res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -113,6 +120,7 @@ export async function startRealModel(want: { hint: string; from: string; to: str
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     did,
+    bodies,
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
 }
