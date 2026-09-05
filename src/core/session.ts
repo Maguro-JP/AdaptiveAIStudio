@@ -66,10 +66,8 @@ import type { LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
 import { fitByTokens } from '../agent/window.ts';
 import { ProjectRules } from '../agent/project-rules.ts';
-import { counterForGguf, type Counter } from '../agent/tokenizer.ts';
-import { readGguf } from '../runtime/gguf.ts';
-import { listGguf } from '../runtime/inproc.ts';
-import { modelsDir } from './home.ts';
+import type { Counter } from '../agent/tokenizer.ts';
+import { resolveCounting, type Counting } from './counting.ts';
 
 export const DEFAULT_SYSTEM = `あなたはソフトウェア開発の作業者です。与えられた作業ディレクトリで実際に手を動かします。
 
@@ -1124,39 +1122,17 @@ export class Session {
   async #count(): Promise<Counter | undefined> {
     if (this.#counterAsked) return this.#counter;
     this.#counterAsked = true;
-    const rc = this.config.runtime ?? {};
-    if (rc.kind !== 'inproc') return undefined;
-    const dir = rc.modelsDir ?? modelsDir();
-
-    /*
-     * どの GGUF を読んでいるか。
-     *
-     * **候補の名前からは引けない。**候補は ollama の名前などで並ぶことがあり、
-     * 実際に読むファイルとは別（これで一度、繋がっていないのに繋がった気で
-     * いた）。名前で分かるならそれを使い、分からなければ置き場を見る。
-     * 一つしか無いならそれ。**複数あって決められないときは、見積もりに戻る。**
-     * ここで当てずっぽうに一つ選ぶと、別のモデルの数え方で数えることになる。
-     */
-    const named = this.candidates.find((c) => /\.gguf$/i.test(c));
-    let file = named ? named.split(/[:\\/]/).pop() : undefined;
-    if (!file) {
-      const found = await listGguf(dir).catch(() => []);
-      if (found.length === 1) file = found[0]!.ref;
-    }
-    if (!file) return undefined;
-    this.#counter = await counterForGguf(join(dir, file), readGguf);
+    this.#counter = (await resolveCounting(this.config)).counter;
     return this.#counter;
   }
 
   /**
-   * いま、どちらで数えているか。
+   * いま、どちらで数えているか。**理由まで返す。**
    *
-   * **見えるようにしておく。**本物で数えているのか見積もりなのかは、
-   * 窓の勘定の精度そのもの。見えないと、切れ方がおかしいときに
-   * 「モデルが悪い」としか言えない。
+   * 見えないと、切れ方がおかしいときに「モデルが悪い」としか言えない。
    */
-  async counting(): Promise<'model' | 'estimate'> {
-    return (await this.#count()) ? 'model' : 'estimate';
+  async counting(): Promise<Counting> {
+    return resolveCounting(this.config);
   }
 
   /** 一人で全部やる作業者。気質も権限も既定のもの。 */

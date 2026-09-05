@@ -185,7 +185,7 @@ async function throughSession() {
       initiative: { enabled: false },
     }, { approve: () => Promise.resolve(true) });
     const how = await probe.counting();
-    if (how !== 'model') found.push(`本物の数え方に繋がっていない（${how}）`);
+    if (!how.counter) found.push(`本物の数え方に繋がっていない（${how.why}）`);
 
     // 学びが決まりに載っていること（土台を通っている証拠）。
     const state = await fetch(`${base}/api/state`).then((x) => x.json());

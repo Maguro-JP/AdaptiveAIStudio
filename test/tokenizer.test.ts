@@ -130,3 +130,54 @@ describe('窓の勘定に繋がっている', () => {
     assert.ok(greedy.content.includes('この先は'), '切ったことを言っていない');
   });
 });
+
+/**
+ * どう数えるかの決め方は、一箇所にだけ書く。
+ *
+ * 会話の土台と点検（doctor）で別々に決めていると、片方だけ直して食い違う。
+ * **見積もりに戻ったときは、戻った理由まで言う。**言わないと、
+ * 切れ方がおかしいときに「モデルが悪い」としか言えない。
+ */
+describe('数え方の決め方', () => {
+  test('この中で読む道でなければ、見積もり。理由も言う', async () => {
+    const { resolveCounting } = await import('../src/core/counting.ts');
+    const got = await resolveCounting({ runtime: { kind: 'ollama' } } as never);
+    assert.equal(got.counter, undefined);
+    assert.ok(got.why.includes('見積もり'), got.why);
+  });
+
+  test('GGUF が無ければ、見積もり', async () => {
+    const { resolveCounting } = await import('../src/core/counting.ts');
+    const { tempDir } = await import('./tmp.ts');
+    const dir = await tempDir('aas-counting-none-');
+    const got = await resolveCounting({ runtime: { kind: 'inproc', modelsDir: dir } } as never);
+    assert.equal(got.counter, undefined);
+    assert.ok(got.why.includes('ありません'), got.why);
+  });
+
+  test('**複数あって決められないときは、当てずっぽうに選ばない**', async () => {
+    // 別のモデルの数え方で数えるくらいなら、粗いほうがまだ読める。
+    const { resolveCounting } = await import('../src/core/counting.ts');
+    const { tempDir } = await import('./tmp.ts');
+    const { writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const dir = await tempDir('aas-counting-many-');
+    await writeFile(join(dir, 'a.gguf'), 'x');
+    await writeFile(join(dir, 'b.gguf'), 'x');
+    const got = await resolveCounting({ runtime: { kind: 'inproc', modelsDir: dir } } as never);
+    assert.equal(got.counter, undefined);
+    assert.ok(got.why.includes('2 個'), got.why);
+  });
+
+  test('読めない GGUF なら、見積もりに戻る（落ちない）', async () => {
+    const { resolveCounting } = await import('../src/core/counting.ts');
+    const { tempDir } = await import('./tmp.ts');
+    const { writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const dir = await tempDir('aas-counting-bad-');
+    await writeFile(join(dir, 'broken.gguf'), 'これは GGUF ではありません');
+    const got = await resolveCounting({ runtime: { kind: 'inproc', modelsDir: dir } } as never);
+    assert.equal(got.counter, undefined);
+    assert.ok(got.why.includes('broken.gguf'), got.why);
+  });
+});

@@ -81,15 +81,44 @@ export async function deepest(dir) {
  *
  * `.map` は、書いた側が元の行を辿るためのもの。動かすのには要らない。
  * 610 個・4MB あり、クラウドドライブへ置くときの数としても効く。
+ *
+ * 型の定義（`.d.ts`）と、抱えている試験用のもの（vitest など）も落とす。
+ * **動かすのに要らないうえ、道をいちばん深くしているのがこれ。**
+ * Windows の置き場所は 260 文字で、そのうち中身に使えるのは 107 文字しか
+ * 残らない（一番深いものが 153 文字あった）。深い所へ入れると、
+ * **入れた時点で失敗する。**
  */
-async function pruneMaps(dir, log) {
-  let n = 0;
+const DROP_DIRS = [
+  // node-llama-cpp が抱えている試験用のもの。動かすときには通らない。
+  'vitest', '@vitest', 'vite', '@vitest+mocker',
+  'tinybench', 'tinypool', 'tinyspy', 'chai', 'loupe', 'pathval',
+];
+
+function isDropDir(name) {
+  return DROP_DIRS.some((d) => name === d || name.startsWith(`${d}@`) || name.startsWith(`${d}+`));
+}
+
+async function pruneExtras(dir, log) {
+  let maps = 0;
+  let types = 0;
   for (const name of await readdir(dir, { recursive: true })) {
-    if (!String(name).endsWith('.map')) continue;
-    await unlink(join(dir, String(name)));
-    n += 1;
+    const rel = String(name);
+    if (rel.endsWith('.map')) { await unlink(join(dir, rel)); maps += 1; continue; }
+    if (/\.d\.(ts|cts|mts)$/.test(rel)) { await unlink(join(dir, rel)); types += 1; }
   }
-  if (n > 0) log(`  落とした: ${n} 個の .map（動かすのには要りません）`);
+  if (maps > 0) log(`  落とした: ${maps} 個の .map（動かすのには要りません）`);
+  if (types > 0) log(`  落とした: ${types} 個の型定義（動かすのには要りません）`);
+
+  // .pnpm の下に、試験用のものが丸ごと入っている。**そこが一番深い。**
+  // ここへ渡ってくる dir が app/node_modules そのもの。
+  const pnpm = join(dir, '.pnpm');
+  let packs = 0;
+  for (const name of await readdir(pnpm).catch(() => [])) {
+    if (!isDropDir(String(name).split('@')[0] || String(name)) && !isDropDir(String(name))) continue;
+    await rm(join(pnpm, String(name)), { recursive: true, force: true });
+    packs += 1;
+  }
+  if (packs > 0) log(`  落とした: ${packs} 個の試験用のもの（動かすのには要りません）`);
 }
 
 /** package.json の版。--version を渡さなかったときの控え。 */
@@ -171,10 +200,17 @@ export async function bundle({
   }
 
   const modules = join(app, 'node_modules');
-  try {
-    await stat(modules);
-    await pruneMaps(modules, log);
-  } catch { /* 入っていなければ何もしない */ }
+  // **握り潰さない。**片づけの中で転ぶと、黙って片づけごと止まる
+  // （実際にそうなって、落とすはずのものが全部残った）。無いのは正常、
+  // 転んだのは異常。分けて扱う。
+  if (await stat(modules).then(() => true).catch(() => false)) {
+    try {
+      await pruneExtras(modules, log);
+    } catch (e) {
+      log(`  片づけで転びました: ${e instanceof Error ? e.message : String(e)}`);
+      throw e;
+    }
+  }
 
   // 入口。押せばいいものが一つだけ表にある形にする。
   await writeFile(join(out, 'AdaptiveAIStudio.cmd'),

@@ -10,6 +10,7 @@
 import { loadConfig, enabledProviders, configPath } from '../config.ts';
 import { MachineCache, describeMachine } from '../runtime/machine.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
+import { resolveCounting } from '../core/counting.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { join } from 'node:path';
@@ -206,6 +207,19 @@ if (runtime.id === 'inproc') {
       // 組み立てに走らせない。無いなら無いと、すぐ言わせる。
       await quietly(() => lib.getLlama({ build: 'never', logLevel: 'error' }));
       add('モデルを読むもの', 'ok', 'node-llama-cpp（この機械むけの binary が動きます。実行ファイルは増えません）');
+      /*
+       * どう数えているか。
+       *
+       * 窓に何を残して何を落とすかは、全部この数え方の上に立っている。
+       * 本物なのか見積もりなのかが見えないと、切れ方がおかしいときに
+       * 「モデルが悪い」としか言えない。
+       */
+      const how = await resolveCounting(config).catch(() => undefined);
+      if (how) {
+        add('トークンの数え方', how.counter ? 'ok' : 'warn', how.why,
+          how.counter ? undefined
+            : '見積もりでも動きますが、日本語で外しやすく、外した分だけ切る位置がずれます。');
+      }
     } catch (e) {
       // 本体は読めるが、この機械むけの binary が無い。配る先（Windows）には
       // 入っているので、ここで「動かない」と数えると開発中も CI も
