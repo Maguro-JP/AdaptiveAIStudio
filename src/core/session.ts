@@ -796,11 +796,22 @@ export class Session {
     // 実際に確かめたか、どうだったか。**確かめていないことを、通ったと言わない。**
     let checked: 'passed' | 'failed' | 'preexisting' | 'notRun' = 'notRun';
 
+    /*
+     * 嫌がっていないかを見る材料は、**ここで押さえる。**
+     *
+     * 判じるのは、この回が終わってから（下の finally）。
+     * **先に判じると、利用者の依頼がその後ろに並ぶ。**
+     * 中で読む道は同じモデルへの呼び出しを順番待ちにするので、
+     * 判じ終わるまで返事が始まらない。「待たせない」は嘘だった。
+     *
+     * 場面（直前の指示）は、この回の記録で上書きされる前に取る。
+     */
+    const situation = {
+      when: this.#lastTurn?.instruction.trim().slice(0, 120),
+      did: this.#lastTurnSummary(),
+    };
+
     try {
-      // **まず、嫌がっていないかを見る。**
-      // 覚えるのは、こちらが答える前。答えてから覚えると、
-      // 落ちた回にそのまま流れて、覚え損ねる。
-      this.#noteDispleasure(instruction);
 
       // 関係することを思い出して添える。無関係なら何も足さない。
       const recalled = this.#recall(instruction);
@@ -1055,6 +1066,8 @@ export class Session {
     } finally {
       this.#running = undefined;
       await this.memory.save().catch(() => undefined);
+      // **この回が終わってから判じる。**待たせない、を本当にする。
+      void this.#judge(instruction, situation.when, situation.did);
     }
   }
 
@@ -1100,20 +1113,6 @@ export class Session {
   }
 
   /**
-   * 嫌がられていないかを見る。
-   *
-   * **一言ごとに、モデルに判じさせる。**合図（決め打ちの語）で選り分けない。
-   * 静かな指摘ほど落とすので、落とした分はそもそも学びに入らなかった。
-   *
-   * 判じるのは別の呼び出しにする（作業の窓を食わない）。返事も待たせない。
-   */
-  #noteDispleasure(text: string): void {
-    const did = this.#lastTurnSummary();
-    const when = this.#lastTurn?.instruction.trim().slice(0, 120);
-    void this.#judge(text, when, did);
-  }
-
-  /**
    * 指摘かどうかを判じて、そうなら覚える。
    *
    * **モデルが居ないときだけ**、合図で拾う網に落ちる。
@@ -1126,7 +1125,9 @@ export class Session {
     try {
       let text = '';
       for await (const ev of this.orchestrator.run({
-        candidates: this.candidates,
+        // **安いほうから使う。**判じるのは短い仕事なので、いちばん高いモデルを
+        // 毎回起こす理由がない（検問所と同じ選び方に揃える）。
+        candidates: [...this.candidates].reverse(),
         system: '指摘を受けた側として、何が悪かったのかを考える。決まった形だけを返す。',
         messages: [{ role: 'user', content: judgePrompt(said, when, did) }],
         temperature: 0.2,

@@ -149,7 +149,19 @@ describe('実走：壊れているものが、直って、その作業場の試�
       assert.equal(work.filter((n) => n === 'edit_file').length, 1, `二度直している: ${how}`);
       assert.ok(work.includes('read_file'), `読まずに直している: ${how}`);
       // **一言ごとに判じている。**合図で選り分けていない。
-      assert.ok(model.did.includes('judge:none'), `判じていない: ${model.did.join(' → ')}`);
+      // 判定は作業のあとに走るので、出てくるまで待つ（待たずに見ると素通りする）。
+      const until = Date.now() + 20_000;
+      while (!model.did.some((n) => n.startsWith('judge')) && Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      assert.ok(model.did.some((n) => n.startsWith('judge')),
+        `判じていない: ${model.did.join(' → ')}`);
+      // **judge は作業の後。**先に投げると、中で読む道では順番待ちになって、
+      // 利用者の依頼が判定の後ろに並ぶ（返事が始まらない）。
+      const firstJudge = model.did.findIndex((n) => n.startsWith('judge'));
+      const firstWork = model.did.findIndex((n) => !n.startsWith('judge'));
+      assert.ok(firstWork >= 0 && firstWork < firstJudge,
+        `判定が作業より先に走っている: ${model.did.join(' → ')}`);
 
       // **中身が直っているか。**ここが本題。
       const now = await readFile(join(root, 'src', 'math.js'), 'utf8');
