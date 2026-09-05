@@ -100,6 +100,14 @@ export interface UiServerOptions {
   relaunches?: boolean;
   /** モデルを読むライブラリの差し替え。試験で使う。 */
   inprocLoad?: () => Promise<unknown>;
+  /**
+   * モデルを取ってくるときの通信の差し替え。試験で使う。
+   *
+   * **画面から押して、落ちて、置かれて、使えるところまで**を通すのに要る。
+   * ここまで installModel 単体しか確かめておらず、**画面から押す道は
+   * 誰も通していなかった。**
+   */
+  modelFetch?: typeof fetch;
   config: AasConfig;
   port?: number;
   host?: string;
@@ -1838,15 +1846,20 @@ export class UiServer {
 
     try {
       if (usesGguf(runtime.id)) {
-        // 画面の一覧と同じ場所へ落とす。動いている側の置き場に落とすと、
-        // 保存を変えた直後に「取ってきたのに出ない」になる。
-        const dir = await savedModelsDir();
+        // **いま読んでいる側と同じ場所へ落とす。**
+        //
+        // 画面が保存した置き場（savedModelsDir）だけを見ていたので、
+        // 設定（runtime.modelsDir）に別の場所を書いてある機械では、
+        // **落とす先と読む先が割れる。**画面には「用意できました」と出るのに、
+        // 一覧にも出ず、使えない。動いている側が読む場所を先に見る。
+        const dir = this.#opts.config.runtime?.modelsDir ?? await savedModelsDir();
         await installModel({
           entry: entry ?? {
             id, repo: id, quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '',
           },
           modelsDir: dir,
           onProgress: log,
+          ...(this.#opts.modelFetch ? { fetchImpl: this.#opts.modelFetch } : {}),
         });
       } else {
         await pullModel({

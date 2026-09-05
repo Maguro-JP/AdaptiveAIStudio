@@ -132,7 +132,11 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
         + '名前が変わっているか、消えています。\n'
         + `  1. ブラウザで探す: ${HF_FILES}/models?search=gguf\n`
         + '  2. 見つけた置き場の名前（例 unsloth/Qwen2.5-7B-Instruct-GGUF）を\n'
-        + '     「取ってくる先」に打つ。.gguf の URL をそのまま貼っても取れます。',
+        + '     「取ってくる先」に打つ。.gguf の URL をそのまま貼っても取れます。\n'
+        // **いちばん確実な逃げ道を、必ず添える。**ブラウザで落として置くだけで動く。
+        // 会社の PC はこの道しかないうえ、名前が変わっているときも同じ道で済む。
+        + `  3. それが面倒なら、.gguf をブラウザで落として ${modelsDir} に置き、\n`
+        + '     「読み直す」を押すだけでも使えます。',
       );
     }
     // 403 は理由が複数ある。番号だけ出しても、次に何をすればいいか分からない。
@@ -145,7 +149,7 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
         + byHand(entry, modelsDir),
       );
     }
-    throw new Error(`一覧を調べられませんでした (${meta.status})`);
+    throw new Error(`一覧を調べられませんでした (${meta.status})\n${byHand(entry, modelsDir)}`);
   }
   const json = await meta.json() as { siblings?: Array<{ rfilename: string }> };
   const files = (json.siblings ?? []).map((s) => s.rfilename);
