@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
-import { InProcRuntime, listGguf, MAX_WINDOW } from '../src/runtime/inproc.ts';
+import { InProcRuntime, listGguf, MAX_WINDOW, fitWindow } from '../src/runtime/inproc.ts';
 
 /**
  * 本物の代わり。読んだことにして、決まった返事をする。
@@ -448,5 +448,55 @@ describe('記憶に載らないものを読みに行かない', () => {
     const GB = 1024 ** 3;
     assert.equal(tooBigForRam(4 * GB, 16 * GB), undefined);
     assert.equal(tooBigForRam(undefined, 16 * GB), undefined, '大きさが分からないものは止めない');
+  });
+});
+
+/**
+ * 窓は、そのまま記憶（KV）になる。
+ *
+ * **広げた分を数えずに広げない。**8B のモデルで 8k から 32k へ広げると、
+ * それだけで 3.4GB 増える（重み 5GB + KV 4.5GB = 9.5GB）。
+ * 16GB の機械では、他が何も動かなくなる。
+ */
+describe('窓を、この機械の記憶に合わせる', () => {
+  const GB = 1024 ** 3;
+  /** Qwen3 8B 相当（層36・埋め4096・頭32・KV頭8・重み5GB）。 */
+  const big = { trained: 32768, layers: 36, embedding: 4096, heads: 32, kvHeads: 8, weightBytes: 5 * GB };
+
+  test('余裕があれば、モデルの窓をそのまま使う', () => {
+    const got = fitWindow({ ...big, ramBytes: 64 * GB });
+    assert.equal(got.window, 32768);
+    assert.equal(got.why, undefined);
+  });
+
+  test('16GB なら、8B でもそのまま入る（狭めない）', () => {
+    // 重み 5GB + KV 4.8GB = 9.8GB。7 割（11.2GB）に収まる。
+    assert.equal(fitWindow({ ...big, ramBytes: 16 * GB }).window, 32768);
+  });
+
+  test('**足りなければ狭める。**しかも、なぜ狭めたかを言う', () => {
+    // 8GB の機械。重み 5GB を引くと、KV に使えるのは 0.6GB しか無い。
+    const got = fitWindow({ ...big, ramBytes: 8 * GB });
+    assert.ok(got.window < 32768, `狭めていない: ${got.window}`);
+    assert.ok(got.window >= 4096, `狭めすぎ: ${got.window}`);
+    assert.match(got.why ?? '', /狭めました/);
+    const perToken = 2 * 36 * (4096 / 32) * 8 * 2;
+    assert.ok(5 * GB + got.window * perToken <= 8 * GB * 0.7 + perToken * 4096,
+      `収まっていない: 窓 ${got.window}`);
+  });
+
+  test('狭くしすぎない（決まりだけで溢れる）', () => {
+    // 記憶が足りていない機械。ここで 0 にすると、何も動かない。
+    assert.equal(fitWindow({ ...big, ramBytes: 6 * GB }).window, 4096);
+  });
+
+  test('**諸元が読めないときは、狭めない**（読めないモデルほど不利、にしない）', () => {
+    const got = fitWindow({ trained: 32768, ramBytes: 4 * GB });
+    assert.equal(got.window, 32768);
+  });
+
+  test('モデルの窓より広げはしない', () => {
+    const got = fitWindow({ trained: 4096, layers: 4, embedding: 512, heads: 8, ramBytes: 64 * GB });
+    assert.equal(got.window, 4096);
   });
 });

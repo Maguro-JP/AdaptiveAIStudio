@@ -30,6 +30,7 @@ import { toolPrompt } from './tool-prompt.ts';
 import { extractToolCalls, ToolTextFilter } from '../agent/tool-text.ts';
 import { readGguf } from './gguf.ts';
 import { extractFacts } from './gguf-spec.ts';
+import { totalmem } from 'node:os';
 /**
  * ライブラリの名前。文字列の変数にしておく。
  *
@@ -116,6 +117,59 @@ export function tooBigForRam(sizeBytes: number | undefined, ramBytes: number): s
   const gb = (n: number) => (n / 1024 ** 3).toFixed(1);
   return `この機械の記憶（${gb(ramBytes)}GB）に対して大きすぎます（${gb(sizeBytes)}GB）。`
     + '小さい量子化（Q4_K_M など）か、小さいモデルを置いてください。';
+}
+
+/**
+ * 窓を、この機械の記憶に合わせて決める。
+ *
+ * **窓はそのまま記憶（KV）になる。**8B のモデルで窓を 8k から 32k へ広げると、
+ * それだけで 3.4GB 増える（重み 5GB + KV 4.5GB = 9.5GB）。
+ * 16GB の機械では、他が何も動かなくなる。
+ *
+ * 「機械が固まって、発熱して、煙をあげる」は実際に言われた形。
+ * 広げるのは良いが、**広げた分を数えずに広げない。**
+ *
+ * 数えられないとき（ファイルから諸元が読めないとき）は、**狭めない。**
+ * 分からないことを理由に絞ると、読めないモデルほど不利になる。
+ */
+export function fitWindow(opts: {
+  /** モデルが持っている窓 */
+  trained: number;
+  layers?: number;
+  embedding?: number;
+  heads?: number;
+  kvHeads?: number;
+  /** 重みの大きさ（ファイルの大きさでよい） */
+  weightBytes?: number;
+  ramBytes: number;
+  max?: number;
+  /** これより狭くはしない。狭すぎると、決まりだけで溢れる。 */
+  floor?: number;
+}): { window: number; why?: string } {
+  const want = Math.min(opts.trained, opts.max ?? MAX_WINDOW);
+  const floor = opts.floor ?? 4096;
+  const { layers, embedding, heads } = opts;
+  if (!layers || !embedding || !heads) return { window: want };
+
+  const headDim = Math.floor(embedding / heads);
+  const kvDim = headDim * (opts.kvHeads ?? heads);
+  // K と V、それぞれ 2 バイト（f16）。
+  const perToken = 2 * layers * kvDim * 2;
+  if (perToken <= 0) return { window: want };
+
+  // OS と、計算に使う分を残す。全部を当てにしない。
+  const budget = opts.ramBytes * 0.7 - (opts.weightBytes ?? 0);
+  const allowed = Math.floor(budget / perToken);
+  if (allowed >= want) return { window: want };
+
+  const window = Math.max(floor, Math.min(want, allowed));
+  const gb = (n: number) => (n / 1024 ** 3).toFixed(1);
+  return {
+    window,
+    why: `窓を ${want} から ${window} に狭めました`
+      + `（この機械の記憶 ${gb(opts.ramBytes)}GB に対して、`
+      + `窓 ${want} は ${gb(want * perToken)}GB を使います）`,
+  };
 }
 
 /**
@@ -250,12 +304,26 @@ export class InProcRuntime implements LocalRuntime {
   async #windowFor(ref: string): Promise<number> {
     if (this.#opts.contextSize) return this.#opts.contextSize;
     try {
-      const file = await readGguf(join(this.#opts.modelsDir, ref));
-      const trained = extractFacts(file).contextLength;
+      const at = join(this.#opts.modelsDir, ref);
+      const file = await readGguf(at);
+      const facts = extractFacts(file);
+      const trained = facts.contextLength;
       if (typeof trained === 'number' && trained >= 2048) {
-        const use = Math.min(trained, MAX_WINDOW);
-        this.#opts.onLog?.(`窓: ${use}（このモデルは ${trained} まで持っています）`);
-        return use;
+        const weightBytes = await stat(at).then((x) => x.size).catch(() => undefined);
+        // **広げた分を数える。**窓はそのまま記憶（KV）になる。
+        const fit = fitWindow({
+          trained,
+          ...(facts.layers !== undefined ? { layers: facts.layers } : {}),
+          ...(facts.embeddingLength !== undefined ? { embedding: facts.embeddingLength } : {}),
+          ...(facts.headCount !== undefined ? { heads: facts.headCount } : {}),
+          ...(facts.headCountKv !== undefined ? { kvHeads: facts.headCountKv } : {}),
+          ...(weightBytes !== undefined ? { weightBytes } : {}),
+          ramBytes: totalmem(),
+        });
+        this.#opts.onLog?.(fit.why
+          ? `窓: ${fit.window}（このモデルは ${trained} まで持っています）。${fit.why}`
+          : `窓: ${fit.window}（このモデルは ${trained} まで持っています）`);
+        return fit.window;
       }
     } catch {
       // 読めなくても止めない。既定へ落とす。
