@@ -35,8 +35,31 @@ interface Unit {
   chars: number;
 }
 
-/** 1文字あたりのトークンの目安。数え方は場所によって違うので、粗く見る。 */
-const CHARS_PER_TOKEN = 2.5;
+/**
+ * 文字数からトークン数を見積もる。
+ *
+ * **一つの係数で済ませない。**日本語と英語で、まったく違う。
+ *
+ *   英語   … 4文字ほどで1トークン
+ *   日本語 … 1文字でほぼ1トークン（漢字は1文字で1〜2）
+ *
+ * ここを 2.5 の一本値にしていたので、**日本語では2倍以上入ると
+ * 見積もっていた。**入らない分は窓から溢れ、途中で落ちる
+ * （画面には「打っても返事が来ない」として出る）。
+ *
+ * 正確に数えるには字句器が要るが、字句器はモデルごとに違う。
+ * ここでは**外す向きを決めて**粗く見る。**多めに数える**（溢れるより余る）。
+ */
+export function estimateTokens(text: string): number {
+  let cjk = 0;
+  let other = 0;
+  for (const ch of text) {
+    // 漢字・かな・カナ・全角記号。ここは1文字＝1トークンで数える。
+    if (/[\u3000-\u30FF\u3400-\u9FFF\uFF00-\uFFEF]/.test(ch)) cjk += 1;
+    else other += 1;
+  }
+  return Math.ceil(cjk + other / 4);
+}
 
 /** 道具の結果を縮めるときに、頭に残す長さ。 */
 const KEEP_HEAD = 400;
@@ -51,19 +74,22 @@ const KEEP_RECENT = 3;
  */
 const KEEP_LAST_RESORT = 1200;
 
-/** 窓（トークン）から、履歴に使ってよい文字数を決める。 */
-export function charBudget(contextTokens: number, reserveTokens = 1800): number {
-  // 決まり（system）・道具の説明・これから書く分を差し引く。
-  const left = Math.max(contextTokens - reserveTokens, 512);
-  return Math.floor(left * CHARS_PER_TOKEN);
+/**
+ * 窓（トークン）から、履歴に使ってよいトークン数を決める。
+ *
+ * 差し引くのは、決まり（system）・道具の説明・これから書く分。
+ * 決まりには「二度としないこと」も載るので、少なめには見ない。
+ */
+export function tokenBudget(contextTokens: number, reserveTokens = 2200): number {
+  return Math.max(contextTokens - reserveTokens, 512);
 }
 
-/** かさ。 */
+/** かさ（トークンの見積もり）。 */
 export function sizeOf(messages: readonly ProviderMessage[]): number {
   let n = 0;
   for (const m of messages) {
-    n += m.content.length;
-    for (const c of m.toolCalls ?? []) n += c.name.length + JSON.stringify(c.args ?? {}).length;
+    n += estimateTokens(m.content);
+    for (const c of m.toolCalls ?? []) n += estimateTokens(c.name + JSON.stringify(c.args ?? {}));
   }
   return n;
 }

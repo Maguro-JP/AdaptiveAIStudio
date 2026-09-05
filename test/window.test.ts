@@ -11,7 +11,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { fitToWindow, sizeOf, charBudget } from '../src/agent/window.ts';
+import { fitToWindow, sizeOf, tokenBudget, estimateTokens } from '../src/agent/window.ts';
 import type { ProviderMessage } from '../src/providers/contract.ts';
 
 /** 読んで書いて、を n 回。道具の結果は大きい（ファイルの中身なので）。 */
@@ -110,11 +110,44 @@ describe('窓に収める', () => {
     assert.ok(sizeOf(r.messages) < sizeOf(h) / 2, `減っていない: ${sizeOf(r.messages)}`);
   });
 
-  test('窓の大きさから、使ってよい文字数を決める', () => {
-    assert.ok(charBudget(8192) > 10_000, '8192 で1万字も使えないのはおかしい');
-    assert.ok(charBudget(8192) < 8192 * 2.5, '窓ぶん全部を履歴に使っている');
+  test('窓の大きさから、使ってよい分を決める', () => {
+    assert.ok(tokenBudget(8192) > 4000, '8192 の窓で半分も使えないのはおかしい');
+    assert.ok(tokenBudget(8192) < 8192, '窓ぶん全部を履歴に使っている');
     // 小さい窓でも 0 にしない（0 にすると何も送れず、必ず落ちる）。
-    assert.ok(charBudget(1024) > 0);
+    assert.ok(tokenBudget(1024) > 0);
+  });
+});
+
+/**
+ * 文字数からトークン数を見積もる。
+ *
+ * **一つの係数で済ませると、日本語で溢れる。**
+ * 2.5文字＝1トークンで数えていたので、日本語では2倍以上入ると見積もっていた。
+ * 入らない分は窓から溢れ、途中で落ちる（「打っても返事が来ない」の形）。
+ */
+describe('日本語と英語を、同じ係数で数えない', () => {
+  test('日本語は、ほぼ1文字1トークンで数える', () => {
+    const said = 'これは日本語の文です';
+    assert.ok(estimateTokens(said) >= said.length, `少なく見ている: ${estimateTokens(said)}`);
+  });
+
+  test('英語は、まとめて数える（多く見すぎない）', () => {
+    const said = 'this is an english sentence about files';
+    assert.ok(estimateTokens(said) < said.length / 2, `多く見すぎ: ${estimateTokens(said)}`);
+  });
+
+  test('**同じ長さでも、日本語のほうが重い**', () => {
+    const ja = 'あ'.repeat(100);
+    const en = 'a'.repeat(100);
+    assert.ok(estimateTokens(ja) > estimateTokens(en) * 3, `差が付いていない: ${estimateTokens(ja)} vs ${estimateTokens(en)}`);
+  });
+
+  test('空でも落ちない', () => {
+    assert.equal(estimateTokens(''), 0);
+  });
+
+  test('絵文字や記号でも数えられる', () => {
+    assert.ok(estimateTokens('📁 src/a.ts を読む') > 0);
   });
 });
 
@@ -195,7 +228,7 @@ describe('通しで、窓を超えないこと', () => {
       await new Promise<void>((r) => { server.close(() => r()); });
     }
 
-    const limit = charBudget(8192);
+    const limit = tokenBudget(8192);
     const over = sent.filter((n) => n > limit * 1.1);
     assert.deepEqual(over, [], `窓を超えたまま送っている: ${sent.join(', ')} / 上限 ${limit}`);
     assert.ok(!said.includes('最初の依頼が消えました'), '最初の依頼が落ちている');

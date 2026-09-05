@@ -12,7 +12,7 @@ import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
 import type { Tool, ToolContext, ApprovalRequest, ApprovalAnswer } from './tools/types.ts';
 import { ToolTextFilter } from './tool-text.ts';
 import { DoneMark, DONE_MARK } from './done.ts';
-import { fitToWindow, charBudget } from './window.ts';
+import { fitToWindow, tokenBudget } from './window.ts';
 
 export type AgentEvent =
   | { type: 'thinking'; delta: string }
@@ -83,7 +83,7 @@ export class Agent {
      * 自律で回らなくなるのは、いつもそこ。
      */
     let usedTools = false;
-    const budget = charBudget(this.#opts.contextTokens ?? 8192);
+    const budget = tokenBudget(this.#opts.contextTokens ?? 8192);
     const ctx: ToolContext = {
       root: this.#opts.root,
       signal,
