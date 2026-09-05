@@ -99,6 +99,29 @@ export function toolOutputBudget(contextTokens: number, share = 0.35): number {
   return Math.max(2000, Math.floor(tokenBudget(contextTokens) * share));
 }
 
+/**
+ * 入るだけ取る。
+ *
+ * **件数ではなく、長さで決める。**「新しい順に8件」のような数え方は、
+ * 一件の長さが変われば意味が変わる。窓が 4k のモデルでは 8 件で半分が埋まり、
+ * 32k のモデルでは 8 件では余る。
+ *
+ * 少なくとも `min` 件は返す（0 件にすると、そもそも効かなくなる）。
+ */
+export function fitByTokens<T>(
+  items: readonly T[], textOf: (x: T) => string, budgetTokens: number, min = 1,
+): T[] {
+  const out: T[] = [];
+  let used = 0;
+  for (const item of items) {
+    const cost = estimateTokens(textOf(item));
+    if (out.length >= min && used + cost > budgetTokens) break;
+    out.push(item);
+    used += cost;
+  }
+  return out;
+}
+
 /** かさ（トークンの見積もり）。 */
 export function sizeOf(messages: readonly ProviderMessage[]): number {
   let n = 0;

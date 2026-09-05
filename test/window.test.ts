@@ -11,7 +11,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { fitToWindow, sizeOf, tokenBudget, estimateTokens, toolOutputBudget } from '../src/agent/window.ts';
+import { fitToWindow, sizeOf, tokenBudget, estimateTokens, toolOutputBudget, fitByTokens } from '../src/agent/window.ts';
 import type { ProviderMessage } from '../src/providers/contract.ts';
 
 /** 読んで書いて、を n 回。道具の結果は大きい（ファイルの中身なので）。 */
@@ -283,5 +283,36 @@ describe('道具の返しを、窓に収める', () => {
     const got = await readFileTool.run({ path: 'big.ts' },
       { root, signal: new AbortController().signal, approve: async () => true });
     assert.ok(got.content.length > 60_000, `切っている: ${got.content.length}`);
+  });
+});
+
+/**
+ * 件数ではなく、長さで決める。
+ *
+ * 「新しい順に8件」のような数え方は、一件の長さが変われば意味が変わる。
+ * **窓が 4k のモデルでは 8 件で半分が埋まり、32k では 8 件では余る。**
+ */
+describe('入るだけ取る', () => {
+  const items = ['あ'.repeat(100), 'い'.repeat(100), 'う'.repeat(100), 'え'.repeat(100)];
+  const textOf = (x: string) => x;
+
+  test('入るところまで取る', () => {
+    assert.equal(fitByTokens(items, textOf, 250).length, 2);
+    assert.equal(fitByTokens(items, textOf, 1000).length, 4);
+  });
+
+  test('**0 件にはしない**（そもそも効かなくなる）', () => {
+    assert.equal(fitByTokens(items, textOf, 1).length, 1);
+    assert.equal(fitByTokens(items, textOf, 0, 2).length, 2);
+  });
+
+  test('日本語と英語で、入る件数が変わる', () => {
+    const en = ['a'.repeat(100), 'b'.repeat(100), 'c'.repeat(100), 'd'.repeat(100)];
+    assert.ok(fitByTokens(en, textOf, 250).length > fitByTokens(items, textOf, 250).length,
+      '同じ長さで同じ件数になっている（数え方が効いていない）');
+  });
+
+  test('空でも落ちない', () => {
+    assert.deepEqual(fitByTokens([], textOf, 100), []);
   });
 });

@@ -64,6 +64,7 @@ import { diffStat } from '../agent/diff.ts';
 import { inspectDependencies, describeDependencies } from '../agent/dependencies.ts';
 import type { LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
+import { fitByTokens } from '../agent/window.ts';
 
 export const DEFAULT_SYSTEM = `あなたはソフトウェア開発の作業者です。与えられた作業ディレクトリで実際に手を動かします。
 
@@ -1228,7 +1229,14 @@ export class Session {
    * 外れた覚えが永遠に効き続ける（使うほど雑音が増える）。
    */
   #recall(text: string, opts: { lessons?: boolean } = {}): string {
-    const related = this.memory.recall(text, { limit: 6, ...opts });
+    // **件数ではなく、長さで決める。**一件の長さは決まっていないので、
+    // 「6件」では窓が狭いモデルで押し出し、広いモデルで余らせる。
+    const related = fitByTokens(
+      this.memory.recall(text, { limit: 12, ...opts }),
+      (e) => `${e.title}${e.detail}`,
+      Math.floor(this.contextTokens * 0.10),
+      2,
+    );
     const failed = this.memory.failedBefore(text, 2);
     const merged = [...related];
     for (const f of failed) if (!merged.some((e) => e.id === f.id)) merged.push(f);
@@ -1265,7 +1273,13 @@ export class Session {
      * ここに置けば、どの回でも必ず目に入る。窓は食うが、
      * 同じ失敗を一度でも減らせるなら安い。
      */
-    const hated = this.memory.displeasures(8);
+    // 決まりに載せる分。**窓の 15% まで**（件数で切ると、長さで外す）。
+    const hated = fitByTokens(
+      this.memory.displeasures(12),
+      (e) => e.detail || e.title,
+      Math.floor(this.contextTokens * 0.15),
+      1,
+    );
     const never = hated.length === 0 ? '' : [
       '',
       '二度としないこと（前に同じことで止められています。話題が違っても効きます）:',
