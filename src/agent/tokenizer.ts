@@ -141,7 +141,14 @@ class BpeTokenizer implements Counter {
  * SPM（`llama`）の数え方。
  *
  * llama.cpp と同じ順で動かす。**点数のいちばん高い隣同士から繋ぐ。**
- * 空白は `▁` に置き換え、頭に一つ足す。繋げなかった字はバイトに落とす。
+ * 空白は `▁` に置き換え、頭に一つ足す。繋げなかった塊はバイトに落ちる。
+ *
+ * **素直に書くと、長い文で固まる。**毎回すべての隣を見て最大を探すと、
+ * 繋ぐ回数 × 隣の数で二乗になる。5万文字で 8.6 秒かかった（実測）。
+ * 道具の結果は数万文字になるので、数えるたびにそれだけ止まる。
+ *
+ * なので llama.cpp と同じ形にする。**繋げる候補を山（heap）に積んでおき、
+ * 繋いだところの周りだけ積み直す。**古くなった候補は取り出したときに捨てる。
  */
 class SpmTokenizer implements Counter {
   readonly #ids: Map<string, number>;
@@ -155,28 +162,105 @@ class SpmTokenizer implements Counter {
   count(text: string): number {
     if (text.length === 0) return 0;
     const body = `▁${text.replace(/ /g, '▁')}`;
-    // 字（コードポイント）ごとに割る。ここから繋いでいく。
-    let parts: string[] = [...body];
-    for (;;) {
-      let best = -Infinity;
-      let at = -1;
-      for (let i = 0; i + 1 < parts.length; i += 1) {
-        const id = this.#ids.get(parts[i]! + parts[i + 1]!);
-        if (id === undefined) continue;
-        const score = this.#scores[id] ?? 0;
-        if (at < 0 || score > best) { best = score; at = i; }
-      }
-      if (at < 0) break;
-      parts = [...parts.slice(0, at), parts[at]! + parts[at + 1]!, ...parts.slice(at + 2)];
+
+    // 字（コードポイント）ごとに並べ、前後を指しておく。繋いだら繋ぎ替える。
+    const parts = [...body];
+    const prev = new Int32Array(parts.length);
+    const next = new Int32Array(parts.length);
+    const alive = new Uint8Array(parts.length).fill(1);
+    for (let i = 0; i < parts.length; i += 1) {
+      prev[i] = i - 1;
+      next[i] = i + 1 < parts.length ? i + 1 : -1;
     }
+
+    const heap = new BigramHeap();
+    const offer = (left: number, right: number): void => {
+      if (left < 0 || right < 0) return;
+      const joined = parts[left]! + parts[right]!;
+      const id = this.#ids.get(joined);
+      if (id === undefined) return;
+      heap.push({ left, right, score: this.#scores[id] ?? 0, size: joined.length });
+    };
+    for (let i = 0; i + 1 < parts.length; i += 1) offer(i, i + 1);
+
+    for (;;) {
+      const top = heap.pop();
+      if (!top) break;
+      // 積んだ後に片方が繋がっていたら、その候補はもう無効。
+      if (!alive[top.left] || !alive[top.right]) continue;
+      if (next[top.left] !== top.right) continue;
+      if (parts[top.left]!.length + parts[top.right]!.length !== top.size) continue;
+
+      parts[top.left] = parts[top.left]! + parts[top.right]!;
+      alive[top.right] = 0;
+      const after = next[top.right]!;
+      next[top.left] = after;
+      if (after >= 0) prev[after] = top.left;
+
+      offer(prev[top.left]!, top.left);
+      offer(top.left, after);
+    }
+
     // 語彙に無い塊は、バイトに落ちる。**落ちた分だけ数が増える。**
     let n = 0;
-    for (const part of parts) {
-      if (this.#ids.has(part)) { n += 1; continue; }
-      n += Buffer.byteLength(part, 'utf8');
+    for (let i = 0; i >= 0; i = next[i]!) {
+      const part = parts[i]!;
+      if (this.#ids.has(part)) n += 1;
+      else n += Buffer.byteLength(part, 'utf8');
+      if (next[i] === -1) break;
     }
     return n;
   }
+}
+
+interface Bigram { left: number; right: number; score: number; size: number }
+
+/**
+ * 点数の高い順に取り出す山。
+ *
+ * **同じ点数なら、前にある方から。**ここを崩すと、llama.cpp と結果が変わる
+ * （どちらから繋ぐかで、残る形が変わる）。
+ */
+class BigramHeap {
+  readonly #items: Bigram[] = [];
+
+  push(item: Bigram): void {
+    const items = this.#items;
+    items.push(item);
+    let i = items.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (!before(items[i]!, items[parent]!)) break;
+      [items[i], items[parent]] = [items[parent]!, items[i]!];
+      i = parent;
+    }
+  }
+
+  pop(): Bigram | undefined {
+    const items = this.#items;
+    if (items.length === 0) return undefined;
+    const top = items[0]!;
+    const last = items.pop()!;
+    if (items.length === 0) return top;
+    items[0] = last;
+    let i = 0;
+    for (;;) {
+      const l = i * 2 + 1;
+      const r = l + 1;
+      let best = i;
+      if (l < items.length && before(items[l]!, items[best]!)) best = l;
+      if (r < items.length && before(items[r]!, items[best]!)) best = r;
+      if (best === i) break;
+      [items[i], items[best]] = [items[best]!, items[i]!];
+      i = best;
+    }
+    return top;
+  }
+}
+
+/** 先に取り出す方か。点数が高い方、同じなら前にある方。 */
+function before(a: Bigram, b: Bigram): boolean {
+  return a.score !== b.score ? a.score > b.score : a.left < b.left;
 }
 
 /**
