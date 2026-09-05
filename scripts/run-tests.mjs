@@ -74,15 +74,20 @@ const before = existsSync(watched) ? readFileSync(watched, 'utf8') : null;
  * 出力はそのまま流す（見ている人の見え方は変えない）。拾うだけ足す。
  */
 const failed = [];
+const outer = [];
 let rest = '';
 const collect = (chunk) => {
   const text = rest + chunk.toString('utf8');
   const lines = text.split('\n');
   rest = lines.pop() ?? '';
   for (const line of lines) {
-    const hit = /^\s*not ok \d+ - (.+)$/.exec(line);
-    // 束ね（suite）の行は、中の試験と二重になるので拾わない。
-    if (hit && !/subtest.*failed/.test(line)) failed.push(hit[1].trim());
+    const hit = /^(\s*)not ok \d+ - (.+)$/.exec(line);
+    if (!hit) continue;
+    // **束ね（suite）と中の試験を、二重に数えない。**
+    // 束ねは字下げが浅い側に出る（`not ok 40 - 一覧に上限を置く`）。
+    // 「1 subtest failed」は次の行にあるので、行だけ見ても分からない。
+    // 字下げのある方（中の試験）だけを拾い、一つも無ければ浅い方を拾う。
+    (hit[1].length > 0 ? failed : outer).push(hit[2].trim());
   }
 };
 
@@ -90,9 +95,10 @@ const child = spawn(process.execPath, args, { cwd: root, stdio: ['inherit', 'pip
 child.stdout.on('data', (c) => { process.stdout.write(c); collect(c); });
 child.on('error', (e) => { console.error(e.message); process.exit(1); });
 child.on('close', (code, signal) => {
-  if (failed.length > 0) {
-    console.error(`\n落ちた試験 ${failed.length} 件:`);
-    for (const name of failed) console.error(`  - ${name}`);
+  const names = failed.length > 0 ? failed : outer;
+  if (names.length > 0) {
+    console.error(`\n落ちた試験 ${names.length} 件:`);
+    for (const name of names) console.error(`  - ${name}`);
   }
   const after = existsSync(watched) ? readFileSync(watched, 'utf8') : null;
   if (after !== before) {
