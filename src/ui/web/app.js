@@ -861,6 +861,15 @@ function drawConversations() {
     row.append(open, drop);
     box.append(row);
   }
+
+  // **出していない分を、黙って隠さない。**古い会話は消えていない。
+  // 一覧に全部出すと、増えるほど開くのが重くなるので、新しい方から出す。
+  if (conversations.hidden > 0) {
+    box.append(Object.assign(document.createElement('div'), {
+      className: 'dim',
+      textContent: `ほかに ${conversations.hidden} 件（古いものは一覧に出していません。消えてはいません）`,
+    }));
+  }
 }
 
 /**

@@ -47,14 +47,44 @@ export function titleFrom(text: string): string {
   return line.length > TITLE_MAX ? `${line.slice(0, TITLE_MAX)}…` : line;
 }
 
-/** 新しい id。人が見ても順番が分かる形にしておく。 */
+/** 名前の末尾に使える幅。base36 の4桁。 */
+const TAIL_MAX = 36 ** 4 - 1;
+
+/** 直前に配った名前。**同じ秒の中で、順番が戻らないようにする。** */
+let lastId = '';
+
+/**
+ * 新しい id。人が見ても順番が分かる形にしておく。
+ *
+ * **同じ秒に二つ以上作られる。**時刻は秒までしか入っていないので、
+ * そこから先は末尾の乱数で決まる。つまり、続けて作った二つの並びが
+ * 逆になることがある。一覧は名前で並べているので、そのまま
+ * 「新しい順」が崩れた（120 件を続けて作ると、実際に順が入れ替わった）。
+ *
+ * だから、**前に配った名前より必ず後になる**ようにしてから返す。
+ * 乱数はそのまま使い、後ろへ回らないときだけ一つ進める。
+ */
 export function newId(now = new Date(), rand = Math.random): string {
   const p = (n: number, w = 2) => String(n).padStart(w, '0');
   const stamp = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}`
     + `-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
-  const tail = Math.floor(rand() * 36 ** 4).toString(36).padStart(4, '0');
-  return `c${stamp}-${tail}`;
+  let tail = Math.floor(rand() * (TAIL_MAX + 1));
+  const head = `c${stamp}-`;
+  if (lastId.startsWith(head)) {
+    const before = parseInt(lastId.slice(head.length), 36);
+    if (Number.isFinite(before) && tail <= before) tail = Math.min(before + 1, TAIL_MAX);
+  }
+  const id = `${head}${tail.toString(36).padStart(4, '0')}`;
+  if (id > lastId) lastId = id;
+  return id;
 }
+
+/**
+ * 一覧に出す上限。
+ *
+ * これより古いものは、消えてはいない（ファイルは残る）。出さないだけ。
+ */
+export const LIST_LIMIT = 100;
 
 export class Conversations {
   readonly #dir: string;
@@ -78,23 +108,45 @@ export class Conversations {
   }
 
   /** 新しいものが上。**空の会話も出す**（作った直後に消えると戸惑う）。 */
-  async list(): Promise<ConversationHead[]> {
+  /**
+   * 新しい順に。
+   *
+   * **全部は読まない。**一覧は開くたびに作るので、会話が増えるほど重くなる
+   * （540 件で 155ms、全部のファイルを開く）。誰も 540 件を辿らないので、
+   * 読むのも返すのも新しい方から `limit` 件で止める。
+   *
+   * 並べ替えの鍵は名前に入っている（`newId()` が時刻から作る）ので、
+   * 中身を読む前に順は決められる。**読む数そのものを減らす。**
+   */
+  async list(limit = LIST_LIMIT): Promise<ConversationHead[]> {
     let names: string[];
     try {
       names = await readdir(this.#dir);
     } catch {
       return []; // まだ一度も話していない。異常ではない。
     }
+    const ids = names
+      .filter((n) => n.endsWith('.jsonl'))
+      .map((n) => n.slice(0, -'.jsonl'.length))
+      .filter((id) => ID_SHAPE.test(id))
+      .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+
     const heads: ConversationHead[] = [];
-    for (const name of names) {
-      if (!name.endsWith('.jsonl')) continue;
-      const id = name.slice(0, -'.jsonl'.length);
-      if (!ID_SHAPE.test(id)) continue;
+    for (const id of ids) {
+      if (heads.length >= limit) break;
       const head = await this.head(id).catch(() => undefined);
       if (head) heads.push(head);
     }
     heads.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return heads;
+  }
+
+  /** 全部で何件あるか。一覧に出ていない分を言うために使う。 */
+  async count(): Promise<number> {
+    try {
+      const names = await readdir(this.#dir);
+      return names.filter((n) => n.endsWith('.jsonl') && ID_SHAPE.test(n.slice(0, -6))).length;
+    } catch { return 0; }
   }
 
   /** 見出しだけを読む。一覧では中身まで組み立てない。 */

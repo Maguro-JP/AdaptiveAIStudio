@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { Conversations, titleFrom, newId, ID_SHAPE } from '../src/core/conversations.ts';
+import { Conversations, titleFrom, newId, ID_SHAPE, LIST_LIMIT } from '../src/core/conversations.ts';
 
 async function store(): Promise<{ c: Conversations; dir: string }> {
   const dir = join(await tempDir('aas-conv-'), 'conversations');
@@ -120,5 +120,63 @@ describe('会話を残す', () => {
     await writeFile(join(dir, 'c20260101-000000-zzzz.jsonl'), '壊れています\n');
     const ids = (await c.list()).map((h) => h.id);
     assert.ok(ids.includes(ok.id), '読めるものまで消えている');
+  });
+});
+
+/**
+ * 一覧は、全部を読まない。
+ *
+ * 一覧は開くたびに作る。**会話が増えるほど重くなる**（540 件で 155ms、
+ * 全部のファイルを開いていた）。誰も 540 件を辿らない。
+ * 出さないだけで、**消えてはいない**。
+ */
+describe('一覧に上限を置く', () => {
+  test('新しい方から、上限まで', async () => {
+    const dir = await tempDir('aas-conv-cap-');
+    const c = new Conversations(join(dir, 'conv'));
+    const ids: string[] = [];
+    for (let i = 0; i < LIST_LIMIT + 20; i += 1) {
+      const head = await c.create();
+      ids.push(head.id);
+      await c.append(head.id, [{ role: 'user', content: `依頼${i}` }]);
+    }
+    const list = await c.list();
+    assert.equal(list.length, LIST_LIMIT, `上限が効いていない: ${list.length}`);
+    // 新しい方が残っていること。
+    assert.ok(list.some((h) => h.id === ids[ids.length - 1]), '新しいものが出ていない');
+    assert.ok(!list.some((h) => h.id === ids[0]), '古いものまで出している');
+  });
+
+  test('同じ秒に続けて作っても、順番が戻らない', () => {
+    // 秒までしか時刻が入らないので、末尾の乱数だけで並びが決まっていた。
+    const ids = Array.from({ length: 500 }, () => newId());
+    for (let i = 1; i < ids.length; i += 1) {
+      assert.ok(ids[i]! > ids[i - 1]!, `順が戻った: ${ids[i - 1]} → ${ids[i]}`);
+    }
+  });
+
+  test('**出していないだけで、消えてはいない**', async () => {
+    const dir = await tempDir('aas-conv-keep-');
+    const c = new Conversations(join(dir, 'conv'));
+    const first = await c.create();
+    await c.append(first.id, [{ role: 'user', content: '最初の話' }]);
+    for (let i = 0; i < LIST_LIMIT + 5; i += 1) {
+      const head = await c.create();
+      await c.append(head.id, [{ role: 'user', content: `依頼${i}` }]);
+    }
+    assert.equal(await c.count(), LIST_LIMIT + 6, '数え方が違う');
+    // 一覧に出ていなくても、開けば読める。
+    const back = await c.load(first.id);
+    assert.equal(back[0]?.content, '最初の話');
+  });
+
+  test('少ないうちは、そのまま全部出す', async () => {
+    const dir = await tempDir('aas-conv-few-');
+    const c = new Conversations(join(dir, 'conv'));
+    for (let i = 0; i < 3; i += 1) {
+      const head = await c.create();
+      await c.append(head.id, [{ role: 'user', content: `依頼${i}` }]);
+    }
+    assert.equal((await c.list()).length, 3);
   });
 });

@@ -923,7 +923,11 @@ export class UiServer {
         this.#conversationId = list[0]!.id;
         this.#saved = (await this.#conversations.load(this.#conversationId)).length;
       }
-      return send(res, 200, { current: this.#conversationId ?? null, list });
+      // **出していない分を、黙って隠さない。**古いものは消えていない。
+      const total = await this.#conversations.count();
+      return send(res, 200, {
+        current: this.#conversationId ?? null, list, total, hidden: Math.max(0, total - list.length),
+      });
     }
 
     if (path === '/api/conversations' && req.method === 'POST') {

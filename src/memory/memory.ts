@@ -517,7 +517,21 @@ export class Memory {
       const reach = carriesFar(e) ? 1.5 : 1;
       return (base * usefulness(e) + (e.helped ?? 0) * 0.5 - (e.misled ?? 0) * 0.5) * reach;
     };
-    rest.sort((a, b) => worth(b) - worth(a));
+    // **同じ重さのときに、何を残すかを決めておく。**
+    // ここを配列の並び任せにしていたので、同点になった瞬間に、
+    // どちらが残るかが「いつ走らせたか」で変わった（60日前の失敗と、
+    // たった今の分かったことが、ちょうど同じ重さになる場合がある）。
+    // 走らせる場所や時刻で結果が変わるものを、残しておかない。
+    const EVEN = 1e-6; // ミリ秒のずれで生まれる差は、差と見ない
+    rest.sort((a, b) => {
+      const d = worth(b) - worth(a);
+      if (Math.abs(d) > EVEN) return d;
+      // 同点なら、他所でも効く方（失敗・嫌がられたこと）を残す。
+      const reach = Number(carriesFar(b)) - Number(carriesFar(a));
+      if (reach !== 0) return reach;
+      if (b.seenAt !== a.seenAt) return b.seenAt - a.seenAt;
+      return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+    });
 
     const room = Math.max(0, max - keep.length);
     const dropped = rest.length - Math.min(rest.length, room);
