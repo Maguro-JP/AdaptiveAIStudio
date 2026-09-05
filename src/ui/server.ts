@@ -186,6 +186,16 @@ export class UiServer {
   #conversationId?: string;
   /** どこまで残したか。ここから先を足す。 */
   #saved = 0;
+
+  /**
+   * 続きから読むときに、後ろから読む量。
+   *
+   * 半年ひとつの会話を続けると 16MB になる。丸ごと読むと 137ms かかり、
+   * 10,800 通を抱えたまま動くことになるが、**窓に入るのは数十通**。
+   * 残りは読んでも刈られて捨てられる。窓がいちばん広い形（32k）でも
+   * 2MB あれば足りる。
+   */
+  static readonly RESTORE_TAIL = 2 * 1024 * 1024;
   #idleTimer?: ReturnType<typeof setInterval>;
   #thinking = false;
   /**
@@ -268,7 +278,7 @@ export class UiServer {
     });
     // 続きから話す。**土台は作り直しても、話は続ける。**
     const id = await this.#currentConversation();
-    const past = await this.#conversations.load(id);
+    const past = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
     this.#session.restore(past);
     this.#saved = past.length;
     this.#startThinking(this.#session);
@@ -341,7 +351,7 @@ export class UiServer {
     const [newest] = await this.#conversations.list();
     if (newest) {
       this.#conversationId = newest.id;
-      this.#saved = (await this.#conversations.load(newest.id)).length;
+      this.#saved = (await this.#conversations.load(newest.id, { tailBytes: UiServer.RESTORE_TAIL })).length;
       return this.#conversationId;
     }
     this.#conversationId = (await this.#conversations.create()).id;
@@ -929,7 +939,9 @@ export class UiServer {
       // **一覧を見ただけでは作らない。**作ると、開くたびに空の会話が増える。
       if (!this.#conversationId && list.length > 0) {
         this.#conversationId = list[0]!.id;
-        this.#saved = (await this.#conversations.load(this.#conversationId)).length;
+        this.#saved = (await this.#conversations.load(
+          this.#conversationId, { tailBytes: UiServer.RESTORE_TAIL },
+        )).length;
       }
       // **出していない分を、黙って隠さない。**古いものは消えていない。
       const total = await this.#conversations.count();
@@ -1010,7 +1022,7 @@ export class UiServer {
       if (session && this.#busyNow(session)) {
         return send(res, 409, { error: 'いま作業中です。終わってから切り替えてください' });
       }
-      const past = await this.#conversations.load(id);
+      const past = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
       this.#conversationId = id;
       this.#saved = past.length;
       // 土台があるなら、その場で積み直す。無ければ次に作るときに積む。
@@ -1039,7 +1051,10 @@ export class UiServer {
     if (path === '/api/conversations/messages' && req.method === 'GET') {
       const id = url.searchParams.get('id') ?? '';
       if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
-      return send(res, 200, { id, messages: await this.#conversations.load(id) });
+      // **画面へ 16MB を投げない。**丸ごと返すと、開いた瞬間に固まる
+      // （半年続けた会話で JSON が 5.5MB になった）。後ろから読む。
+      const shown = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
+      return send(res, 200, { id, messages: shown });
     }
 
     /*
@@ -1534,7 +1549,9 @@ export class UiServer {
     }
     // 元の会話へ戻して続ける。別の会話で続けると、話が二つに割れる。
     if (item.conversationId && item.conversationId !== this.#conversationId) {
-      const past = await this.#conversations.load(item.conversationId).catch(() => undefined);
+      const past = await this.#conversations
+        .load(item.conversationId, { tailBytes: UiServer.RESTORE_TAIL })
+        .catch(() => undefined);
       if (past) {
         this.#conversationId = item.conversationId;
         this.#saved = past.length;

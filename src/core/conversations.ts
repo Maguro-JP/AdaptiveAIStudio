@@ -231,11 +231,34 @@ export class Conversations {
     };
   }
 
-  /** やりとりを読む。**壊れた行は捨てて、読める分を返す。** */
-  async load(id: string): Promise<ProviderMessage[]> {
+  /**
+   * やりとりを読む。**壊れた行は捨てて、読める分を返す。**
+   *
+   * `tailBytes` を渡すと、**後ろからその分だけ**読む。
+   * 半年ひとつの会話を続けると 16MB になり、丸ごと読むと 137ms かかるうえ、
+   * 10,800 通を抱えたまま動くことになる。窓に入るのはそのうち数十通で、
+   * **残りは読んでも捨てるだけ。**
+   */
+  async load(id: string, opts: { tailBytes?: number } = {}): Promise<ProviderMessage[]> {
+    const path = this.#path(id);
     let raw: string;
     try {
-      raw = await readFile(this.#path(id), 'utf8');
+      if (opts.tailBytes === undefined) {
+        raw = await readFile(path, 'utf8');
+      } else {
+        const info = await stat(path);
+        const from = Math.max(0, info.size - opts.tailBytes);
+        const fh = await open(path, 'r');
+        try {
+          const buf = Buffer.alloc(info.size - from);
+          const { bytesRead } = await fh.read(buf, 0, buf.length, from);
+          const text = buf.subarray(0, bytesRead).toString('utf8');
+          // 頭は行の途中（字の途中のことも）から始まる。最初の改行まで捨てる。
+          raw = from > 0 ? text.slice(text.indexOf('\n') + 1) : text;
+        } finally {
+          await fh.close();
+        }
+      }
     } catch {
       return [];
     }
@@ -245,7 +268,7 @@ export class Conversations {
       const rec = parse(line);
       if (rec?.t === 'msg') out.push(rec.m);
     }
-    return out;
+    return trimDangling(out);
   }
 
   /** 足す。書いている最中に落ちても、そこまでは残る。 */
@@ -279,6 +302,20 @@ export class Conversations {
   async remove(id: string): Promise<void> {
     await rm(this.#path(id), { force: true });
   }
+}
+
+/**
+ * 頭に残った、宙に浮いた道具の結果を落とす。
+ *
+ * 後ろから読むと、**呼び出しが無いのに結果だけが在る**ことがある。
+ * OpenAI 互換の口はその形を受け取らずに落ちる。読めた分から作るときは、
+ * 最初のまともな始まり（人の発言）まで捨てる。
+ */
+function trimDangling(messages: ProviderMessage[]): ProviderMessage[] {
+  const at = messages.findIndex((m) => m.role === 'user' || m.role === 'assistant');
+  if (at <= 0) return messages;
+  // 先頭が道具の結果だけのときは、その塊ごと捨てる。
+  return messages[0]?.role === 'tool' ? messages.slice(at) : messages;
 }
 
 /** 最後が改行で終わっているか。無い＝途中で落ちた書き込みが残っている。 */

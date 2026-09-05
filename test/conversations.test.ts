@@ -264,3 +264,75 @@ describe('見出しは、頭だけ読む', () => {
     );
   });
 });
+
+/**
+ * 続きから読むときに、丸ごと読まない。
+ *
+ * 半年ひとつの会話を続けると 16MB・10,800 通になる。丸ごと読むと 137ms
+ * かかるうえ、その全部を抱えたまま動くことになる。**窓に入るのは数十通**で、
+ * 残りは読んでも刈られて捨てられる。画面へ返す JSON も 5.5MB になっていた。
+ */
+describe('後ろから読む', () => {
+  async function big(c: Conversations, id: string, rounds: number): Promise<void> {
+    const batch = [];
+    for (let i = 0; i < 20; i += 1) {
+      batch.push({ role: 'user' as const, content: `依頼${i}` });
+      batch.push({ role: 'tool' as const, content: '中身'.repeat(500), toolCallId: String(i) });
+      batch.push({ role: 'assistant' as const, content: `返事${i}` });
+    }
+    for (let r = 0; r < rounds; r += 1) await c.append(id, batch);
+  }
+
+  test('直近は必ず入る。**末尾が同じ**', async () => {
+    const { c } = await store();
+    const { id } = await c.create();
+    await big(c, id, 60);
+    const all = await c.load(id);
+    const tail = await c.load(id, { tailBytes: 256 * 1024 });
+    assert.ok(tail.length > 0 && tail.length < all.length, `切れていない: ${tail.length}/${all.length}`);
+    assert.deepEqual(tail.at(-1), all.at(-1), '直近が違う');
+    assert.deepEqual(tail.at(-5), all.at(-5), '直近が違う');
+  });
+
+  test('**呼び出しの無い道具の結果を、頭に残さない**', async () => {
+    // 後ろから読むと、呼び出しが無いのに結果だけが在ることがある。
+    // OpenAI 互換の口はその形を受け取らずに落ちる。
+    const { c } = await store();
+    const { id } = await c.create();
+    await big(c, id, 60);
+    // **実際に頭が道具の結果になる大きさで試す。**適当な大きさだと、
+    // たまたま人の発言から始まって、守りが無くても通ってしまう
+    // （最初に書いた検査がそれで、外しても落ちなかった）。
+    for (const kb of [51, 67, 134, 150, 217, 233, 300, 367, 383]) {
+      const tail = await c.load(id, { tailBytes: kb * 1024 });
+      assert.notEqual(tail[0]?.role, 'tool', `頭に宙に浮いた結果が残っている（${kb}KB）`);
+      assert.ok(tail.length > 0, `空になっている（${kb}KB）`);
+    }
+  });
+
+  test('小さい会話は、そのまま全部返る', async () => {
+    const { c } = await store();
+    const { id } = await c.create();
+    await c.append(id, [
+      { role: 'user', content: 'ひとつめ' },
+      { role: 'assistant', content: 'こたえ' },
+    ]);
+    const tail = await c.load(id, { tailBytes: 2 * 1024 * 1024 });
+    assert.deepEqual(tail.map((m) => m.content), ['ひとつめ', 'こたえ']);
+  });
+
+  test('**大きくなっても、かかる時間が比例して増えない**', async () => {
+    const { c } = await store();
+    const at = async (rounds: number): Promise<number> => {
+      const { id } = await c.create();
+      await big(c, id, rounds);
+      await c.load(id, { tailBytes: 256 * 1024 });
+      const t0 = process.hrtime.bigint();
+      await c.load(id, { tailBytes: 256 * 1024 });
+      return Number(process.hrtime.bigint() - t0) / 1e6;
+    };
+    const small = Math.max(await at(5), 0.5);
+    const large = await at(50);
+    assert.ok(large / small < 5, `10 倍の大きさで ${(large / small).toFixed(1)} 倍かかっている`);
+  });
+});
