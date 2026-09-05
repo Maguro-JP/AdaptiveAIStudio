@@ -385,3 +385,54 @@ describe('実走：嫌がられたことを、次から必ず持ち歩くか', (
     }
   });
 });
+
+describe('実走：判じられなかった回を、黙って消さない', () => {
+  test('読めない返しでも、合図で拾えるものは覚える', async () => {
+    const root = await brokenProject();
+    // 何を訊いても読めない返しをする相手。
+    const model = await startRealModel({ hint: '足し算', from: 'a - b', to: 'a + b', judge: 'unreadable' });
+    const server = new UiServer({
+      port: 0,
+      config: {
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: model.baseUrl, locality: 'local', models: ['real'] }],
+        candidates: ['local:real'],
+        runtime: { kind: 'ollama' },
+        agent: { root, approval: 'auto', verify: { enabled: false } },
+      } as typeof DEFAULT_CONFIG,
+    });
+    const base = (await server.start()).replace(/\/$/, '');
+
+    // 記録はこの試験の間で共通なので、**増えた分**で見る。
+    const learnedNow = async () => {
+      const state = await (await fetch(`${base}/api/state`)).json() as {
+        memory: { kind: string; detail: string; source?: string }[];
+      };
+      return state.memory.filter((m) => m.kind === 'displeasure' && m.source === 'user');
+    };
+
+    try {
+      const before = (await learnedNow()).length;
+      await fetch(`${base}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        // 合図の網に掛かる言い方（判じ手が読めないときの受け皿を見る）。
+        body: JSON.stringify({ text: 'まだ直っていない' }),
+      });
+      await new Promise((r) => setTimeout(r, 6000));
+
+      // **二度訊いている。**一度で諦めない。
+      const tries = model.did.filter((n) => n === 'judge:unreadable').length;
+      assert.ok(tries >= 2, `一度で諦めている: ${model.did.join(' → ')}`);
+
+      const after = await learnedNow();
+      assert.equal(after.length, before + 1,
+        `黙って消えている: ${JSON.stringify(after.map((m) => m.detail)).slice(0, 300)}`);
+      // 掴めていないことは、印で分かるようにする。
+      assert.ok(after.some((m) => m.detail.includes('未消化')),
+        `掴めていないのに、掴んだ顔をしている: ${JSON.stringify(after.map((m) => m.detail)).slice(0, 300)}`);
+    } finally {
+      await server.stop();
+      await model.close();
+    }
+  });
+});

@@ -36,8 +36,8 @@ import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall, betterDetail } from '../memory/memory.ts';
 import {
   senseDispleasure, DISPLEASURE_LABEL, lessonFrom, displeasureTitle,
-  judgePrompt, parseJudgement, lessonFromUnderstanding,
-  type DispleasureCode,
+  judgePrompt, judgeOutcome, lessonFromUnderstanding,
+  type DispleasureCode, type JudgeOutcome,
 } from '../memory/displeasure.ts';
 import { ProposalQueue, type Proposal } from '../agent/proposals.ts';
 import { findLeads, investigationPrompt, parseProposal } from '../agent/initiative.ts';
@@ -1123,6 +1123,36 @@ export class Session {
    * 判じ手が居ないのに黙って素通りさせると、いちばん覚えるべき回を落とす。
    */
   async #judge(said: string, when: string | undefined, did: string | undefined): Promise<void> {
+    // 一度読めなくても、そこで捨てない。**読めないのと、指摘が無いのは違う。**
+    for (let round = 1; round <= 2; round += 1) {
+      const got = await this.#askJudge(said, when, did);
+      if (got?.kind === 'none') return; // 指摘ではない、と答えた
+      if (got?.kind === 'complaint') {
+        const { judged } = got;
+        this.#keepLesson(judged.code, lessonFromUnderstanding(judged, did), judged.when);
+        this.#opts.onLog?.('warn',
+          `覚えました（二度としないこと）: ${judged.when} のときに、${judged.what}`);
+        return;
+      }
+      if (round === 1) continue; // 読めなかった。もう一度だけ訊く
+    }
+
+    // **二度読めなかった。**ここで黙ると、覚えるべき回を落とす。
+    // 合図の網に落として、掴めていないことは印で残す。
+    const sensed = senseDispleasure(said);
+    if (!sensed) {
+      this.#opts.onLog?.('info', '指摘かどうかを判じられませんでした（覚えていません）');
+      return;
+    }
+    this.#keepLesson(sensed.code, lessonFrom(sensed.code, when, did), when);
+    this.#opts.onLog?.('warn',
+      `覚えました（判じられなかったので、合図で拾いました）: ${DISPLEASURE_LABEL[sensed.code]}`);
+  }
+
+  /** 一度だけ訊く。落ちたら「読めなかった」として返す。 */
+  async #askJudge(
+    said: string, when: string | undefined, did: string | undefined,
+  ): Promise<JudgeOutcome | undefined> {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 90_000);
     timer.unref?.();
@@ -1138,17 +1168,9 @@ export class Session {
       }, ac.signal)) {
         if (ev.type === 'text') text += ev.delta;
       }
-      const judged = parseJudgement(text, when);
-      if (!judged) return; // 指摘ではない、と判じた
-      this.#keepLesson(judged.code, lessonFromUnderstanding(judged, did), judged.when);
-      this.#opts.onLog?.('warn',
-        `覚えました（二度としないこと）: ${judged.when} のときに、${judged.what}`);
+      return judgeOutcome(text, when);
     } catch {
-      const sensed = senseDispleasure(said);
-      if (!sensed) return;
-      this.#keepLesson(sensed.code, lessonFrom(sensed.code, when, did), when);
-      this.#opts.onLog?.('warn',
-        `覚えました（判じ手が居ないので、合図で拾いました）: ${DISPLEASURE_LABEL[sensed.code]}`);
+      return undefined; // 判じ手が居ない・落ちた
     } finally {
       clearTimeout(timer);
     }

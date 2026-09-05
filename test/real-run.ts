@@ -26,7 +26,9 @@ export interface RealModel {
  *
  * @param want  直したい中身。`from` を `to` に差し替えるところまで持っていく。
  */
-export async function startRealModel(want: { hint: string; from: string; to: string }): Promise<RealModel> {
+export async function startRealModel(
+  want: { hint: string; from: string; to: string; judge?: 'ok' | 'unreadable' },
+): Promise<RealModel> {
   const did: string[] = [];
   const bodies: string[] = [];
 
@@ -71,6 +73,11 @@ export async function startRealModel(want: { hint: string; from: string; to: str
       const asked = messages.filter((m) => m.role === 'user').map((m) => m.content ?? '').join('\n');
       if (/CODE:|指摘・不満・注意かどうか/.test(asked)) {
         // ふつうの依頼なら NONE。指摘なら五行。
+        // 読めない返しをする相手も作れる（黙って消えないかを見るため）。
+        if (want.judge === 'unreadable') {
+          did.push('judge:unreadable');
+          return talk('うーん、なんとも言えません');
+        }
         const plain = /足し算|直してください$/.test(asked) && !/書けよ|ベストか/.test(asked);
         did.push(plain ? 'judge:none' : 'judge:hit');
         return talk(plain ? 'NONE' : [

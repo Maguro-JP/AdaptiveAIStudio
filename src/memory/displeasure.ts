@@ -168,15 +168,37 @@ export interface Judged extends Understood {
  * 拾いすぎると「二度としないこと」が依頼の山になって、どれも効かなくなる。
  */
 export function parseJudgement(text: string, fallbackWhen?: string): Judged | undefined {
-  // **`NONE` を探さない。**`**NONE**` や「指摘ではありません。NONE」など、
-  // 書き方がいくらでもある。読めたかどうかで決める：
-  // 四行が揃わなければ、指摘ではなかったとして扱う（拾いすぎない側に倒す）。
+  const got = judgeOutcome(text, fallbackWhen);
+  return got.kind === 'complaint' ? got.judged : undefined;
+}
+
+/**
+ * 判じた結果。**三つに分ける。**
+ *
+ *   complaint  … 指摘だった
+ *   none       … 指摘ではない、と答えた
+ *   unreadable … 答えたが、読めない
+ *
+ * `none` と `unreadable` を一緒にしていたので、**読めない返しは黙って
+ * 消えていた**。指摘を落としたのか、指摘が無かったのかが区別できない。
+ * 区別が付かないものは、直しようがない。
+ */
+export type JudgeOutcome =
+  | { kind: 'complaint'; judged: Judged }
+  | { kind: 'none' }
+  | { kind: 'unreadable' };
+
+export function judgeOutcome(text: string, fallbackWhen?: string): JudgeOutcome {
   const understood = parseUnderstanding(text, fallbackWhen);
-  if (!understood) return undefined;
-  const m = /^[\s>*\-#・•]*\*{0,2}CODE\*{0,2}\s*[:：]\s*\*{0,2}\s*([A-Z_]+)/mi.exec(text);
-  const code = CODES.find((c) => c === m?.[1]?.toUpperCase());
-  // 符丁が読めないときは、いちばん弱いものにする。**強く決めつけない。**
-  return { ...understood, code: code ?? 'OFFENSIVE' };
+  if (understood) {
+    const m = /^[\s>*\-#・•]*\*{0,2}CODE\*{0,2}\s*[:：]\s*\*{0,2}\s*([A-Z_]+)/mi.exec(text);
+    const code = CODES.find((c) => c === m?.[1]?.toUpperCase());
+    // 符丁が読めないときは、いちばん弱いものにする。**強く決めつけない。**
+    return { kind: 'complaint', judged: { ...understood, code: code ?? 'OFFENSIVE' } };
+  }
+  // 飾りが付いていても `NONE` は `NONE`。
+  if (/(^|[^A-Z])NONE([^A-Z]|$)/i.test(text)) return { kind: 'none' };
+  return { kind: 'unreadable' };
 }
 
 /**

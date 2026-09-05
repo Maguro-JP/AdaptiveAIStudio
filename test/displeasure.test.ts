@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import {
   senseDispleasure, DISPLEASURE_LABEL, DISPLEASURE_RULE, lessonFrom, displeasureTitle,
   understandPrompt, parseUnderstanding, lessonFromUnderstanding,
-  judgePrompt, parseJudgement,
+  judgePrompt, parseJudgement, judgeOutcome,
 } from '../src/memory/displeasure.ts';
 import { Memory, formatRecall, betterDetail } from '../src/memory/memory.ts';
 import { BUILTIN_LESSONS, lessonLine } from '../src/memory/builtin-lessons.ts';
@@ -463,6 +463,32 @@ describe('崩れた返しでも読む', () => {
     // NONE の書き方を数え上げない。**四行が揃わなければ、指摘ではない。**
     for (const text of ['NONE', '**NONE**', 'これは指摘ではありません。NONE', 'ただの依頼です', '']) {
       assert.equal(parseJudgement(text), undefined, `覚えてしまう: ${text}`);
+    }
+  });
+});
+
+/**
+ * 読めないのと、指摘が無いのは違う。
+ *
+ * 一緒にしていたので、**読めない返しは黙って消えていた**。
+ * 指摘を落としたのか、指摘が無かったのかが区別できない。
+ * 区別が付かないものは、直しようがない。
+ */
+describe('三つに分ける', () => {
+  test('指摘なら complaint', () => {
+    const got = judgeOutcome(['CODE: STOP', 'WHEN: 場面', 'WHAT: したこと', 'NEXT: 次から'].join('\n'));
+    assert.equal(got.kind, 'complaint');
+  });
+
+  test('指摘でないと答えたら none', () => {
+    for (const text of ['NONE', '**NONE**', 'これは指摘ではありません。NONE']) {
+      assert.equal(judgeOutcome(text).kind, 'none', text);
+    }
+  });
+
+  test('**答えたが読めないときは unreadable**（none と混ぜない）', () => {
+    for (const text of ['よく分かりません', 'CODE: BROKEN', '', 'なんとも言えないですね']) {
+      assert.equal(judgeOutcome(text).kind, 'unreadable', `none に混ざっている: ${text}`);
     }
   });
 });
