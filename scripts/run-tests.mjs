@@ -64,9 +64,36 @@ const args = [
 const watched = join(root, 'aas.config.json');
 const before = existsSync(watched) ? readFileSync(watched, 'utf8') : null;
 
-const child = spawn(process.execPath, args, { cwd: root, stdio: 'inherit' });
+/*
+ * 落ちた試験の名前を、最後にまとめて出す。
+ *
+ * **一度だけ落ちて、名前が分からなかった。**出力は数百行あり、流し見では
+ * `not ok` を拾えない。揺れているものは滅多に落ちないので、落ちた回の記録が
+ * 取れないと、次に落ちるまで何も分からない。
+ *
+ * 出力はそのまま流す（見ている人の見え方は変えない）。拾うだけ足す。
+ */
+const failed = [];
+let rest = '';
+const collect = (chunk) => {
+  const text = rest + chunk.toString('utf8');
+  const lines = text.split('\n');
+  rest = lines.pop() ?? '';
+  for (const line of lines) {
+    const hit = /^\s*not ok \d+ - (.+)$/.exec(line);
+    // 束ね（suite）の行は、中の試験と二重になるので拾わない。
+    if (hit && !/subtest.*failed/.test(line)) failed.push(hit[1].trim());
+  }
+};
+
+const child = spawn(process.execPath, args, { cwd: root, stdio: ['inherit', 'pipe', 'inherit'] });
+child.stdout.on('data', (c) => { process.stdout.write(c); collect(c); });
 child.on('error', (e) => { console.error(e.message); process.exit(1); });
 child.on('close', (code, signal) => {
+  if (failed.length > 0) {
+    console.error(`\n落ちた試験 ${failed.length} 件:`);
+    for (const name of failed) console.error(`  - ${name}`);
+  }
   const after = existsSync(watched) ? readFileSync(watched, 'utf8') : null;
   if (after !== before) {
     console.error('\n試験が作業コピーの設定を書き換えました: aas.config.json');
