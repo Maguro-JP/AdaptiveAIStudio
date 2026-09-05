@@ -774,7 +774,19 @@ export class Session {
    * 計算が無料なローカルでは、この往復が**時間で品質を買う**手段になる。
    * 打ち切ったときに中途半端な状態を残さないよう、書く前に控えも取る。
    */
-  async *send(instruction: string): AsyncGenerator<SessionEvent> {
+  async *send(
+    instruction: string,
+    opts: {
+      /**
+       * 利用者が書いたものか。
+       *
+       * **こちらが組み立てた文を、利用者の言葉として判じない。**
+       * やり残しの続き・段取りの一歩・提案の実行は、どれもこちらが書いている。
+       * それを指摘として覚えると、**利用者が言っていないことを覚える**。
+       */
+      fromUser?: boolean;
+    } = {},
+  ): AsyncGenerator<SessionEvent> {
     if (this.#running) {
       yield { type: 'log', level: 'warn', text: 'いま別の作業をしています。' };
       return;
@@ -1071,7 +1083,8 @@ export class Session {
       this.#running = undefined;
       await this.memory.save().catch(() => undefined);
       // **この回が終わってから判じる。**待たせない、を本当にする。
-      void this.#judge(instruction, situation.when, situation.did);
+      // こちらが書いた文は判じない（利用者が言っていないことを覚えないため）。
+      if (opts.fromUser !== false) void this.#judge(instruction, situation.when, situation.did);
     }
   }
 

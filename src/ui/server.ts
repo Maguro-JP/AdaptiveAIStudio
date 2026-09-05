@@ -664,7 +664,10 @@ export class UiServer {
       if (!target) return send(res, 404, { error: 'その提案は見つかりません' });
       this.broadcast({ type: 'stateChanged' });
       // 採用したなら、その内容をそのまま依頼として流す。
-      if (verdict === 'accepted' && !this.#busyNow(session)) void this.#drive(session, target.suggestedAction);
+      // 提案の実行文は、モデルが書いたもの。利用者の言葉として判じない。
+      if (verdict === 'accepted' && !this.#busyNow(session)) {
+        void this.#drive(session, target.suggestedAction, undefined, { fromUser: false });
+      }
       return send(res, 200, { proposal: target });
     }
 
@@ -1429,7 +1432,10 @@ export class UiServer {
       + '設定 → モデル に、いま見ている置き場が出ています。そこへ .gguf を1つ置いてください。';
   }
 
-  async #drive(session: Session, text: string, resuming?: string): Promise<void> {
+  async #drive(
+    session: Session, text: string, resuming?: string,
+    opts: { fromUser?: boolean } = {},
+  ): Promise<void> {
     this.broadcast({ type: 'busy', busy: true });
     // どう終わったか。**終わり方を見て、やり残しを控える。**
     let settled: { reason: string; verified: boolean; checked: string } | undefined;
@@ -1437,7 +1443,7 @@ export class UiServer {
     // 「では、このあと直します」と言っただけの回を「済んだ」と数えていた。
     let didSomething = false;
     try {
-      for await (const event of session.send(text)) {
+      for await (const event of session.send(text, opts)) {
         if (event.type === 'settled') {
           settled = { reason: event.reason, verified: event.verified, checked: event.checked };
         }
@@ -1507,7 +1513,8 @@ export class UiServer {
         this.broadcast({ type: 'conversations' });
       }
     }
-    void this.#drive(session, resumePrompt(item), item.id)
+    // 続きの文はこちらが組み立てたもの。利用者の言葉として判じない。
+    void this.#drive(session, resumePrompt(item), item.id, { fromUser: false })
       .finally(() => { this.#resuming = undefined; });
     return true;
   }
@@ -1589,7 +1596,10 @@ export class UiServer {
       text: `一歩ずつ進めます（${p.done + 1}/${p.total}）: ${step.instruction}`,
     });
     this.#step = { goalId: goal.id, stepId: step.id, model };
-    void this.#drive(session, stepPrompt(item.request, step.instruction, p.done + 1, p.total), item.id)
+    void this.#drive(
+      session, stepPrompt(item.request, step.instruction, p.done + 1, p.total), item.id,
+      { fromUser: false },
+    )
       .finally(() => { this.#resuming = undefined; this.#step = undefined; });
     return true;
   }

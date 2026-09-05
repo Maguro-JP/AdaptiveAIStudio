@@ -436,3 +436,44 @@ describe('実走：判じられなかった回を、黙って消さない', () =
     }
   });
 });
+
+describe('実走：こちらが書いた文を、利用者の言葉として判じない', () => {
+  test('やり残しの続きでは、判じにいかない', async () => {
+    const root = await brokenProject();
+    const model = await startRealModel({ hint: '足し算', from: 'a - b', to: 'a + b' });
+    const server = new UiServer({
+      port: 0,
+      config: {
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: model.baseUrl, locality: 'local', models: ['real'] }],
+        candidates: ['local:real'],
+        runtime: { kind: 'ollama' },
+        agent: { root, approval: 'auto', verify: { enabled: false } },
+      } as typeof DEFAULT_CONFIG,
+    });
+    const base = (await server.start()).replace(/\/$/, '');
+
+    try {
+      // 利用者の一言では判じる（対）。
+      await drive(base, '足し算が引き算になっています。直してください。');
+      const until = Date.now() + 20_000;
+      while (!model.did.some((n) => n.startsWith('judge')) && Date.now() < until) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      const afterUser = model.did.filter((n) => n.startsWith('judge')).length;
+      assert.ok(afterUser >= 1, `利用者の一言を判じていない: ${model.did.join(' → ')}`);
+
+      // こちらが組み立てた続きでは、判じにいかない。
+      const session = await (server as unknown as { session(): Promise<{
+        send(text: string, o?: { fromUser?: boolean }): AsyncGenerator<unknown>;
+      }> }).session();
+      for await (const _ of session.send('やり残しの続きです', { fromUser: false })) { /* 流すだけ */ }
+      await new Promise((r) => setTimeout(r, 2500));
+      assert.equal(model.did.filter((n) => n.startsWith('judge')).length, afterUser,
+        `こちらの文を判じている: ${model.did.join(' → ')}`);
+    } finally {
+      await server.stop();
+      await model.close();
+    }
+  });
+});
