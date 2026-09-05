@@ -113,10 +113,24 @@ async function sweep() {
   }
 }
 
+/**
+ * 本物のモデルで、中で読む道を通す。
+ *
+ * **差し替えの試験は「差し替えが動く」ことしか言っていない。**
+ * ここまで、中で読む道は一度も本物で動かしていなかった。
+ * node-llama-cpp が無い場所では、script 側が自分で飛ばす。
+ */
+function realModel() {
+  console.log('\n== 本物のモデルで通す');
+  return run('本物のモデル', [join(root, 'scripts', 'real-model.mjs')]);
+}
+
 const typecheck = run('型検査', [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit']);
 if (typecheck !== 0) process.exit(typecheck);
 
 const tests = run('検査', [join(root, 'scripts', 'run-tests.mjs')]);
 if (tests !== 0) process.exit(tests);
 
-process.exit(await sweep());
+const swept = await sweep();
+if (swept !== 0) process.exit(swept);
+process.exit(realModel());
