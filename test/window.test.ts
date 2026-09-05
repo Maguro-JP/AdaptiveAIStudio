@@ -251,7 +251,23 @@ describe('道具の返しを、窓に収める', () => {
   });
 
   test('狭い窓でも、使い物にならない長さにはしない', () => {
-    assert.ok(toolOutputBudget(2048) >= 2000);
+    // **窓に対する割合で言う。**2000 の決め打ちで守っていたが、窓 2048 では
+    // 結果ひとつが履歴の取り分（1896）を超えていた。一度読んだ時点で溢れる。
+    // 狙い（短すぎて使い物にならないのを防ぐ）はそのまま、数え方を直す。
+    for (const w of [2048, 4096, 8192]) {
+      const budget = tokenBudget(w);
+      assert.ok(toolOutputBudget(w) >= budget * 0.3, `短すぎる: 窓 ${w}`);
+    }
+  });
+
+  test('**一つの結果が、会話ぜんぶより大きくならない**', () => {
+    for (const w of [2048, 4096, 8192, 32768]) {
+      const budget = tokenBudget(w);
+      assert.ok(
+        toolOutputBudget(w) <= budget * 0.5,
+        `結果ひとつが履歴の取り分を食っている: 窓 ${w}（${toolOutputBudget(w)} / ${budget}）`,
+      );
+    }
   });
 
   test('窓ぶん全部は使わない（依頼と履歴の分が要る）', () => {
@@ -335,23 +351,42 @@ describe('道具の説明を、狭い窓では削る', () => {
   });
 
   test('狭い窓では、一文目だけにする', () => {
-    const got = trimSchemas(schemas, 512);
+    // 二つの道具なら、窓 256（取り分 64）で一文目の段に落ちる。
+    // 丸ごとで 89、一文なら 37。取り分は窓の TOOL_SHARE。
+    const got = trimSchemas(schemas, 256);
     assert.equal(got[0]?.description, 'ファイルを読む。');
     assert.equal(got[1]?.description, '一部を差し替える。');
   });
 
   test('**一文目は残す**（何をする道具かが消えると、呼び分けができない）', () => {
-    for (const s of trimSchemas(schemas, 1)) {
-      assert.ok((s.description ?? '').length > 0, `説明が消えている: ${s.name}`);
+    // 実際に使われる窓（土台が作る窓の下限は 4096）では、必ず残る。
+    for (const w of [4096, 8192, 32768]) {
+      for (const s of trimSchemas(schemas, w)) {
+        assert.ok((s.description ?? '').length > 0, `説明が消えている: ${s.name}（窓 ${w}）`);
+      }
     }
+  });
+
+  test('それでも入らないほど狭ければ、名前と引数だけにする', () => {
+    /*
+     * **説明より、会話の場所を優先する。**
+     *
+     * 道具が九つある本物の並びでは、窓 2048 のとき、一文に切った説明だけで
+     * 窓の 38% を占めていた（実測）。依頼と履歴に 242 しか残らない。
+     * そこまで来たら説明は落として、名前と引数を残す。
+     * **正しく呼べるかどうかは、そこで決まる。**
+     */
+    const got = trimSchemas(schemas, 1);
+    assert.ok(got.every((s) => s.name.length > 0), '名前まで落としている');
+    assert.ok(got.every((s) => (s.description ?? '') === ''), '入らないのに残している');
   });
 
   test('一文しか無いものは、触らない', () => {
     const one = [{ name: 'x', description: 'これだけ。' }];
-    assert.deepEqual(trimSchemas(one, 1), one);
+    assert.deepEqual(trimSchemas(one, 4096), one);
   });
 
   test('説明が無くても落ちない', () => {
-    assert.deepEqual(trimSchemas([{ name: 'x' }], 1), [{ name: 'x' }]);
+    assert.deepEqual(trimSchemas([{ name: 'x' }], 4096), [{ name: 'x' }]);
   });
 });

@@ -90,7 +90,11 @@ const KEEP_LAST_RESORT = 1200;
  * 決まりには「二度としないこと」も載るので、少なめには見ない。
  */
 export function tokenBudget(contextTokens: number, reserveTokens = 2200): number {
-  return Math.max(contextTokens - reserveTokens, 512);
+  // **取り置きも窓に合わせる。**2200 の決め打ちは、窓 4096 では 54% になる。
+  // 依頼と履歴に 90 トークンしか残らなかった（実測）。広い窓のために選んだ
+  // 数字が、狭い窓では窓そのものを食う。**狭い窓ほど、この道具が要る場所。**
+  const reserve = Math.max(256, Math.min(reserveTokens, Math.floor(contextTokens * 0.25)));
+  return Math.max(contextTokens - reserve, 512);
 }
 
 /**
@@ -105,7 +109,11 @@ export function tokenBudget(contextTokens: number, reserveTokens = 2200): number
  * 文字数をそのままトークン数と見て安全側に倒す。
  */
 export function toolOutputBudget(contextTokens: number, share = 0.35): number {
-  return Math.max(2000, Math.floor(tokenBudget(contextTokens) * share));
+  const budget = tokenBudget(contextTokens);
+  // **一つの結果が、会話ぜんぶより大きくならないようにする。**
+  // 下限を 2000 の決め打ちにしていたので、窓 2048 では結果ひとつが
+  // 履歴の取り分（1896）を超えていた。一度読んだ時点で溢れる。
+  return Math.floor(Math.min(budget * 0.5, Math.max(2000, budget * share)));
 }
 
 /**
@@ -142,18 +150,54 @@ export function fitByTokens<T>(
  * ここを削ると呼び分けができなくなる。二文目以降は使い方の念押しなので、
  * 狭いときは落とす。**広い窓では落とさない**（説明は効くので）。
  */
+/**
+ * 道具の説明に使ってよい、窓の割合。
+ *
+ * 0.15 にしていたが、窓 4096 では 614 で、一文に切っても入らない（782）。
+ * 説明が丸ごと落ちて、**何をする道具かが分からなくなる**（呼び分けができない）。
+ * 前置き 25% + 道具 25% + 返事の取り置き 25% で、依頼と履歴に 25% 残る。
+ */
+export const TOOL_SHARE = 0.25;
+
 export function trimSchemas<T extends { name: string; description?: string }>(
-  schemas: readonly T[], contextTokens: number, share = 0.15,
+  schemas: readonly T[], contextTokens: number, share = TOOL_SHARE,
   count: Count = estimateTokens,
 ): T[] {
   const budget = Math.floor(contextTokens * share);
-  const total = schemas.reduce((n, x) => n + count(JSON.stringify(x)), 0);
-  if (total <= budget) return [...schemas];
-  return schemas.map((x) => {
+  const cost = (list: readonly T[]): number =>
+    list.reduce((n, x) => n + count(JSON.stringify(x)), 0);
+  if (cost(schemas) <= budget) return [...schemas];
+
+  /*
+   * **段を追って削る。**一段目で足りなければ、次の段へ。
+   *
+   * 一文に切るだけでは、狭い窓では足りない。窓 2048 では、切った後でも
+   * 説明だけで窓の 38% を占めていた（実測）。名前と引数は残す。
+   * そこが**正しく呼べるかどうか**に効く。説明は、無くても名前で分かる
+   * （`read_file` `edit_file`）。会話の場所が無くなる方が痛い。
+   */
+  const firstSentence = schemas.map((x) => {
     const text = x.description ?? '';
     const at = text.indexOf('。');
     if (at <= 0 || at + 1 >= text.length) return x;
     return { ...x, description: text.slice(0, at + 1) };
+  });
+  if (cost(firstSentence) <= budget) return firstSentence;
+
+  const noDescription = schemas.map((x) => {
+    const { description: _drop, ...rest } = x;
+    return rest as T;
+  });
+  if (cost(noDescription) <= budget) return noDescription;
+
+  // 引数の説明まで落とす。ここが底。名前と型は残す。
+  return noDescription.map((x) => {
+    const params = (x as { parameters?: { properties?: Record<string, { type?: unknown }> } }).parameters;
+    if (!params?.properties) return x;
+    const properties = Object.fromEntries(
+      Object.entries(params.properties).map(([k, v]) => [k, { type: v?.type }]),
+    );
+    return { ...x, parameters: { ...params, properties } } as T;
   });
 }
 
