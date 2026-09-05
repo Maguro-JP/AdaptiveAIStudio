@@ -20,6 +20,13 @@ export interface UiState {
   memory: MemoryEntry[];
   memorySize: number;
   proposals: unknown[];
+  /**
+   * 溜まりすぎて落とした提案の数。
+   *
+   * **落としたことを黙らない。**上限（200件）で古い方から落としているが、
+   * 数えているだけで、どこにも出していなかった。
+   */
+  proposalsDropped: number;
   duties: unknown[];
   models: unknown[];
 }
@@ -33,8 +40,20 @@ async function readJson<T>(path: string, fallback: T): Promise<T> {
   }
 }
 
+/** 提案の記録。古い形（配列そのまま）でも読めるようにしておく。 */
+async function readProposals(path: string): Promise<{ items: unknown[]; dropped: number }> {
+  const raw = await readJson<unknown>(path, []);
+  if (Array.isArray(raw)) return { items: raw, dropped: 0 };
+  const obj = raw as { items?: unknown; dropped?: unknown };
+  return {
+    items: Array.isArray(obj.items) ? obj.items : [],
+    dropped: typeof obj.dropped === 'number' ? obj.dropped : 0,
+  };
+}
+
 export async function collectState(config: AasConfig): Promise<UiState> {
   const dir = stateDir();
+  const proposals = await readProposals(join(dir, 'proposals.json'));
   const roles = new RoleRegistry(config.roles ?? []);
   const memory = new Memory(join(dir, 'memory.jsonl'));
   await memory.load();
@@ -47,7 +66,11 @@ export async function collectState(config: AasConfig): Promise<UiState> {
     })),
     memory: memory.all().slice(-60).reverse(),
     memorySize: memory.size,
-    proposals: await readJson<unknown[]>(join(dir, 'proposals.json'), []),
+    // **保存の形と読み方を合わせる。**`{items, examined, dropped}` で
+    // 書いてあるのに配列として読んでいたので、ここは常に「配列ではない何か」
+    // だった（画面は使っていなかったので気づかれなかった）。
+    proposals: proposals.items,
+    proposalsDropped: proposals.dropped,
     duties: await readJson<unknown[]>(join(dir, 'duties.json'), []),
     models: await readJson<unknown[]>(join(dir, 'metrics.json'), []),
   };

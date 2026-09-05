@@ -165,6 +165,9 @@ export class ProposalQueue {
       await writeFile(this.#path, JSON.stringify({
         items: this.#items,
         examined: [...this.#examined],
+        // **落とした数も残す。**数えているのに残していなかったので、
+        // 立ち上げ直すと「無かったこと」になっていた。
+        dropped: this.#dropped,
       }, null, 2), 'utf8');
     } catch {
       // 保存できなくても本体は止めない

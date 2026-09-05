@@ -556,7 +556,7 @@ export class Session {
         source: 'plan',
       });
       this.#gradeRecall(verified === 'passed' ? 'passed' : verified === 'failed' ? 'failed' : 'notRun');
-      this.memory.compact();
+      this.#compactMemory();
       this.markChanged();
       return report;
     } catch (e) {
@@ -1076,7 +1076,7 @@ export class Session {
           ...(checked === 'failed' ? { outcome: 'failed' as const } : {}),
           source: 'send',
         });
-        this.memory.compact();
+        this.#compactMemory();
       }
 
       const succeeded = finishedReason === 'completed' && keep;
@@ -1306,6 +1306,20 @@ export class Session {
   }
 
   /**
+   * 記憶を刈る。**落とした数を黙らない。**
+   *
+   * `compact()` は落とした数を返すのに、呼ぶ側が三箇所とも捨てていた。
+   * 忘れたことが誰にも見えないと、「前に言ったのに覚えていない」が
+   * 起きたときに、忘れたのか思い出せないのかを切り分けられない。
+   */
+  #compactMemory(): void {
+    const dropped = this.memory.compact();
+    if (dropped > 0) {
+      this.#opts.onLog?.('info', `記憶を ${dropped} 件、古い方から片づけました（${this.memory.size} 件になりました）`);
+    }
+  }
+
+  /**
    * いまモデルへ渡している前置き。
    *
    * **中に閉じ込めない。**窓のどれだけを前置きが食っているかは、
@@ -1429,7 +1443,7 @@ export class Session {
     // npx や相手のサーバが残る（検査が終わらないことで気づいた）。
     for (const c of this.mcpClients) c.stop();
     await this.saveAutonomy();
-    this.memory.compact();
+    this.#compactMemory();
     await this.memory.save().catch(() => undefined);
   }
 }
