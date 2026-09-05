@@ -1280,6 +1280,8 @@ export class UiServer {
     // ここだけ 'ollama' と決め打つと、既定で動いているものと画面の表示が食い違う。
     const kind = String(saved.kind ?? this.#opts.config.runtime?.kind ?? 'ollama');
     const dir = await savedModelsDir();
+    // いま実際に読まれている置き場。保存した方と違うことがある。
+    const liveDir = active.modelsDir ?? dir;
     return send(res, 200, {
       path: configPath(),
       kinds: RUNTIME_KINDS.map((id) => ({ id, name: KIND_LABELS[id] })),
@@ -1291,16 +1293,22 @@ export class UiServer {
       active: { kind: active.kind ?? 'ollama', modelsDir: active.modelsDir ?? modelsDir() },
       restartNeeded: kind !== (active.kind ?? 'ollama')
         || dir !== (active.modelsDir ?? modelsDir()),
-      // 置き場にある GGUF。「置いたのに認識しない」を画面で確かめられるように。
-      // 記憶に載らないものは、載らないと添える。読む前に分かるように。
-      gguf: await Promise.all((await listGguf(dir)).map(async (m) => ({
+      /*
+       * 置き場にある GGUF。「置いたのに認識しない」を画面で確かめるための一覧。
+       *
+       * **いま読まれている置き場を見る。**保存した方（まだ効いていない）を
+       * 見ていたので、設定に別の場所を書いてある機械では、取ってきたものが
+       * 一覧に出なかった。落とす先と一覧が割れると、
+       * 「用意できました」と出たのに使えない、になる。
+       */
+      gguf: await Promise.all((await listGguf(liveDir)).map(async (m) => ({
         ...m,
         tooBig: tooBigForRam(m.sizeBytes, totalmem()) ?? null,
         // 名前だけ .gguf の別物も、一覧で分かるように。
-        notGguf: !(await looksLikeGguf(join(dir, m.ref))),
+        notGguf: !(await looksLikeGguf(join(liveDir, m.ref))),
       }))),
       // GGUF が0件のとき、置き場そのものが無いのか、空なのかで打つ手が違う。
-      dirState: await inspectModelsDir(dir),
+      dirState: await inspectModelsDir(liveDir),
       // 作業場。**入れた版では、これが無いと何も始まらない。**
       // 書いてなければ既定（根の下の work）が出る。
       workRoot: await savedWorkRoot(),

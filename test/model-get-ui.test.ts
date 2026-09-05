@@ -96,7 +96,11 @@ async function press(id: string, hf: Awaited<ReturnType<typeof fakeHf>>, models:
     }
     ac.abort();
     for (const m of buf.matchAll(/"text":"((?:[^"\\]|\\.)*)"/g)) said.push(JSON.parse(`"${m[1]}"`));
-    return { status, said, done };
+    // 画面の「読み直す」が見に行く先。取ってきたものが、ここに出るはず。
+    const config = await fetch(`${base}/api/config`)
+      .then((x) => x.json() as Promise<{ gguf?: Array<{ ref?: string }> }>)
+      .catch(() => undefined);
+    return { status, said, done, config };
   } finally {
     await server.stop().catch(() => undefined);
     if (prev.home === undefined) delete process.env.AAS_HOME; else process.env.AAS_HOME = prev.home;
@@ -104,6 +108,56 @@ async function press(id: string, hf: Awaited<ReturnType<typeof fakeHf>>, models:
     if (prev.cfg === undefined) delete process.env.AAS_CONFIG; else process.env.AAS_CONFIG = prev.cfg;
   }
 }
+
+/**
+ * カタログの名前が古かったときの逃げ道。
+ *
+ * 配布元の名前の付け方は変わるし、こちらが書いた見当（AVAILABLE_MODELS）が
+ * 実在するかは**確かめられていない**。外れた時点で利用者が詰むのが
+ * いちばん悪い。**打ち込む道が本当に通るか**を、押して確かめる。
+ * ここまで、入力欄が在ることしか見ていなかった。
+ */
+describe('取ってくる先を、自分で打てる', () => {
+  test('カタログに無い名前でも取れる', async () => {
+    const models = await tempDir('aas-getui-repo-');
+    const hf = await fakeHf();
+    try {
+      const got = await press('だれかの/しらない-GGUF', hf, models);
+      assert.equal(got.status, 202, `受け取っていない: ${got.status}`);
+      assert.ok(got.done, `終わりの合図が来ない: ${got.said.join(' / ')}`);
+      const left = (await readdir(models)).filter((n) => n.endsWith('.gguf'));
+      assert.equal(left.length, 1, `置かれていない: ${JSON.stringify(await readdir(models))}`);
+    } finally { await hf.close(); }
+  });
+
+  test('.gguf の場所をそのまま貼っても取れる', async () => {
+    const models = await tempDir('aas-getui-url-');
+    const hf = await fakeHf();
+    try {
+      const got = await press('https://huggingface.co/x/y/resolve/main/model-Q4_K_M.gguf', hf, models);
+      assert.ok(got.done, `終わりの合図が来ない: ${got.said.join(' / ')}`);
+      assert.deepEqual(
+        (await readdir(models)).filter((n) => n.endsWith('.gguf')),
+        ['model-Q4_K_M.gguf'],
+        '貼った名前で置かれていない',
+      );
+    } finally { await hf.close(); }
+  });
+
+  test('**頁の場所を貼ったら、そう言う**', async () => {
+    // ファイルではなく配布元の頁を貼るのは、いちばんよくある間違い。
+    // 番号だけ返すと、何が悪いのか分からない。
+    const models = await tempDir('aas-getui-page-');
+    const hf = await fakeHf();
+    try {
+      const got = await press('https://huggingface.co/x/y', hf, models);
+      const bad = got.said.find((t) => t.includes('取ってこられませんでした'));
+      assert.ok(bad, got.said.join(' / '));
+      assert.ok(bad!.includes('.gguf'), `何を貼ればいいか言っていない: ${bad}`);
+      assert.equal((await readdir(models)).filter((n) => n.endsWith('.gguf')).length, 0);
+    } finally { await hf.close(); }
+  });
+});
 
 describe('画面から押して、モデルが置かれる', () => {
   test('押したら、落ちて、置き場に入る', async () => {
@@ -116,6 +170,12 @@ describe('画面から押して、モデルが置かれる', () => {
       const left = (await readdir(models)).filter((n) => n.endsWith('.gguf'));
       assert.equal(left.length, 1, `置かれていない: ${JSON.stringify(await readdir(models))}`);
       assert.ok(got.said.some((t) => t.includes('用意できました')), got.said.join(' / '));
+      // **置いただけで終わらせない。**「読み直す」が見に行く先に出ること。
+      // 出なければ、取ってきたのに使えないのと同じ。
+      assert.ok(
+        got.config?.gguf?.some((m) => m.ref?.endsWith('.gguf')),
+        `読み直しても出ない: ${JSON.stringify(got.config?.gguf)}`,
+      );
     } finally { await hf.close(); }
   });
 
