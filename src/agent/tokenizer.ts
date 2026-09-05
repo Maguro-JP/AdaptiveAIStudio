@@ -278,3 +278,35 @@ export function tokenizerFor(spec: VocabSpec): Counter | undefined {
   if (kind === 'llama' || kind === 'spm') return new SpmTokenizer(spec);
   return undefined;
 }
+
+/**
+ * 一度読んだ数え方を、置いておく。
+ *
+ * 語彙は数万件あるので、読むのも表を作るのも安くない。一往復ごとにやると、
+ * それだけで待たせる。**道で覚える。**同じファイルなら同じ数え方になるので、
+ * 何本のモデルを同時に動かしていても混ざらない（勝手に変わる状態を持たない）。
+ */
+const CACHED = new Map<string, Counter | undefined>();
+
+/**
+ * GGUF から、そのモデルの数え方を作る。
+ *
+ * 読めない・知らない数え方なら undefined。**そのときは見積もりに戻る。**
+ * ここで当てずっぽうを返すと、静かに全部の勘定がずれる。
+ */
+export async function counterForGguf(
+  path: string,
+  read: (p: string) => Promise<{ metadata: Map<string, unknown> }>,
+): Promise<Counter | undefined> {
+  const hit = CACHED.get(path);
+  if (hit !== undefined || CACHED.has(path)) return hit;
+  let made: Counter | undefined;
+  try {
+    const spec = vocabFrom((await read(path)).metadata);
+    made = spec ? tokenizerFor(spec) : undefined;
+  } catch {
+    made = undefined; // 読めないファイル。異常として投げない
+  }
+  CACHED.set(path, made);
+  return made;
+}

@@ -174,6 +174,19 @@ async function throughSession() {
     }
     ac.abort();
     if (!settled) found.push('一往復が終わらない（180秒）');
+    // **本物の数え方で数えていること。**繋がっていなければ、字句器は
+    // 作っただけで何もしていない（見積もりのまま切られる）。
+    const { Session } = await import(join(root, 'src', 'core', 'session.ts'));
+    const { DEFAULT_CONFIG: DC } = await import(join(root, 'src', 'config.ts'));
+    const probe = await Session.create({
+      ...DC,
+      runtime: { kind: 'inproc', modelsDir: models },
+      agent: { root: work, approval: 'auto' },
+      initiative: { enabled: false },
+    }, { approve: () => Promise.resolve(true) });
+    const how = await probe.counting();
+    if (how !== 'model') found.push(`本物の数え方に繋がっていない（${how}）`);
+
     // 学びが決まりに載っていること（土台を通っている証拠）。
     const state = await fetch(`${base}/api/state`).then((x) => x.json());
     const lessons = (state.memory ?? []).filter((m) => m.kind === 'displeasure');
@@ -196,4 +209,4 @@ if (bad.length > 0) {
   for (const b of bad) console.error(`- ${b}`);
   process.exit(1);
 }
-console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す・土台ごと一往復）');
+console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す・土台ごと一往復・本物の数え方）');

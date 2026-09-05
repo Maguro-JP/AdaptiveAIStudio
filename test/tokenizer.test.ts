@@ -82,3 +82,51 @@ describe('SPM の数え方', () => {
     assert.equal(tk.count(''), 0);
   });
 });
+
+/**
+ * 数え方を、窓の勘定に繋いだところ。
+ *
+ * **繋がっていなければ、字句器は作っただけで何もしていない。**
+ * ここでは繋ぎ目だけを見る（本物と同じ数になるかは conformance の側）。
+ */
+describe('窓の勘定に繋がっている', () => {
+  test('トークンで測って切る。文字数と混ぜない', async () => {
+    const { cutToTokens } = await import('../src/agent/window.ts');
+    // 1文字=1トークンと数える人。予算10なら10文字まで。
+    const one = (t: string) => [...t].length;
+    const text = Array.from({ length: 20 }, (_, i) => `行${i}`).join('\n');
+    const cut = cutToTokens(text, 10, one);
+    assert.ok(one(cut) <= 10, `予算を超えている: ${one(cut)}`);
+    // 行の途中では切らない。
+    assert.ok(!cut.endsWith('行'), `行の途中で切れている: ${JSON.stringify(cut)}`);
+    // 数え方が変われば、切れる量も変わる（混ぜていない証拠）。
+    const four = (t: string) => Math.ceil([...t].length / 4);
+    assert.ok(cutToTokens(text, 10, four).length > cut.length, '数え方を見ていない');
+  });
+
+  test('収まるものは切らない', async () => {
+    const { cutToTokens } = await import('../src/agent/window.ts');
+    assert.equal(cutToTokens('短い', 100), '短い');
+    assert.equal(cutToTokens('なんでも', 0), '', '予算0なら何も返さない');
+  });
+
+  test('道具の返しが、渡した数え方で切られる', async () => {
+    const { readFileTool } = await import('../src/agent/tools/fs.ts');
+    const { writeFile } = await import('node:fs/promises');
+    const { tempDir } = await import('./tmp.ts');
+    const { join } = await import('node:path');
+    const dir = await tempDir('aas-count-cut-');
+    await writeFile(join(dir, 'a.txt'), Array.from({ length: 400 }, (_, i) => `line ${i}`).join('\n'));
+
+    const base = { root: dir, signal: new AbortController().signal, contextTokens: 4096 };
+    // 1文字=1トークンと数える人の方が、たくさん食うので早く切れる。
+    const greedy = await readFileTool.run({ path: 'a.txt' }, {
+      ...base, count: (t: string) => [...t].length,
+    } as never);
+    const thrifty = await readFileTool.run({ path: 'a.txt' }, {
+      ...base, count: (t: string) => Math.ceil([...t].length / 4),
+    } as never);
+    assert.ok(greedy.content.length < thrifty.content.length, '数え方を見ていない');
+    assert.ok(greedy.content.includes('この先は'), '切ったことを言っていない');
+  });
+});

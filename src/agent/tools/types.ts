@@ -11,6 +11,13 @@ export interface ToolContext {
    * 窓を知らない呼び出し（試験や道具の直接利用）で中身が消える。
    */
   contextTokens?: number;
+  /**
+   * トークンの数え方。**そのモデルの本物の数え方**が分かっていれば渡る。
+   *
+   * 無ければ見積もり（`estimateTokens`）に戻る。見積もりは日本語で
+   * 外しやすく、外した分だけ切る位置がずれる。
+   */
+  count?: (text: string) => number;
   /** 書き込み・実行の承認を求める。false なら実行しない。 */
   approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
 }

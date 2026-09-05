@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { unifiedDiff, diffStat } from '../diff.ts';
-import { toolOutputBudget } from '../window.ts';
+import { toolOutputBudget, cutToTokens } from '../window.ts';
 import { applyHunks, splitHunks } from '../hunks.ts';
 import { safeResolve, realSafeResolve, isSymlink, toDisplayPath } from './paths.ts';
 import { type Tool, type ToolContext, ok, fail, requireString } from './types.ts';
@@ -37,10 +37,14 @@ export const readFileTool: Tool = {
       const numbered = text.split('\n').map((l, i) => `${i + 1}\t${l}`).join('\n');
       // **窓に収まる分だけ返す。**丸ごと返すと、一度読んだだけで溢れる。
       const budget = ctx.contextTokens ? toolOutputBudget(ctx.contextTokens) : undefined;
-      if (budget && numbered.length > budget) {
-        const shown = numbered.slice(0, budget);
-        const lines = shown.split('\n').length;
-        return ok(`${shown}\n…（${lines} 行目まで。この先は search_text か find_code で絞ってください）`);
+      if (budget !== undefined) {
+        // **トークンで測る。**ここまで、トークンの予算を文字数と突き合わせて
+        // いたので、日本語ではたまたま合い、英語では4分の1しか使えていなかった。
+        const shown = cutToTokens(numbered, budget, ctx.count);
+        if (shown.length < numbered.length) {
+          const lines = shown.split('\n').length;
+          return ok(`${shown}\n…（${lines} 行目まで。この先は search_text か find_code で絞ってください）`);
+        }
       }
       return ok(numbered);
     } catch (e) {

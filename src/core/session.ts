@@ -66,6 +66,10 @@ import type { LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
 import { fitByTokens } from '../agent/window.ts';
 import { ProjectRules } from '../agent/project-rules.ts';
+import { counterForGguf, type Counter } from '../agent/tokenizer.ts';
+import { readGguf } from '../runtime/gguf.ts';
+import { listGguf } from '../runtime/inproc.ts';
+import { modelsDir } from './home.ts';
 
 export const DEFAULT_SYSTEM = `あなたはソフトウェア開発の作業者です。与えられた作業ディレクトリで実際に手を動かします。
 
@@ -209,6 +213,12 @@ export class Session {
   #baseline?: BaselineProbe;
   /** 置き場の決まり（AGENTS.md など）。**人に貼り直させない。** */
   readonly #projectRules: ProjectRules;
+  /**
+   * そのモデルの本物の数え方。**無ければ見積もりに戻る。**
+   * 一度だけ引く（`undefined` と「まだ引いていない」を分ける）。
+   */
+  #counter?: Counter;
+  #counterAsked = false;
 
   private constructor(init: {
     config: AasConfig; root: string; candidates: string[];
@@ -1104,8 +1114,54 @@ export class Session {
     return { type: 'diff', path, diff: found.diff, added, removed, created: found.created };
   }
 
+  /**
+   * トークンの数え方。**そのモデルのファイルに書いてある通りに数える。**
+   *
+   * 中で読む道（inproc）は GGUF を名前で指すので、そこから引ける。
+   * 外のモデルや Ollama 越しでは分からないので、見積もりのまま。
+   * **分からないことを異常にしない。**
+   */
+  async #count(): Promise<Counter | undefined> {
+    if (this.#counterAsked) return this.#counter;
+    this.#counterAsked = true;
+    const rc = this.config.runtime ?? {};
+    if (rc.kind !== 'inproc') return undefined;
+    const dir = rc.modelsDir ?? modelsDir();
+
+    /*
+     * どの GGUF を読んでいるか。
+     *
+     * **候補の名前からは引けない。**候補は ollama の名前などで並ぶことがあり、
+     * 実際に読むファイルとは別（これで一度、繋がっていないのに繋がった気で
+     * いた）。名前で分かるならそれを使い、分からなければ置き場を見る。
+     * 一つしか無いならそれ。**複数あって決められないときは、見積もりに戻る。**
+     * ここで当てずっぽうに一つ選ぶと、別のモデルの数え方で数えることになる。
+     */
+    const named = this.candidates.find((c) => /\.gguf$/i.test(c));
+    let file = named ? named.split(/[:\\/]/).pop() : undefined;
+    if (!file) {
+      const found = await listGguf(dir).catch(() => []);
+      if (found.length === 1) file = found[0]!.ref;
+    }
+    if (!file) return undefined;
+    this.#counter = await counterForGguf(join(dir, file), readGguf);
+    return this.#counter;
+  }
+
+  /**
+   * いま、どちらで数えているか。
+   *
+   * **見えるようにしておく。**本物で数えているのか見積もりなのかは、
+   * 窓の勘定の精度そのもの。見えないと、切れ方がおかしいときに
+   * 「モデルが悪い」としか言えない。
+   */
+  async counting(): Promise<'model' | 'estimate'> {
+    return (await this.#count()) ? 'model' : 'estimate';
+  }
+
   /** 一人で全部やる作業者。気質も権限も既定のもの。 */
   async #agent(): Promise<Agent> {
+    const counter = await this.#count();
     return new Agent(this.orchestrator, {
       candidates: this.candidates,
       system: await this.#system(),
@@ -1117,6 +1173,7 @@ export class Session {
       // **実際に立てた窓を渡す。**渡さないと既定の 8192 で見積もるので、
       // 狭い窓を広いと思って溢れさせるか、広い窓を狭いと思って刈りすぎる。
       contextTokens: this.contextTokens,
+      ...(counter ? { count: (t: string) => counter.count(t) } : {}),
       approve: this.#approve,
     });
   }
@@ -1267,6 +1324,8 @@ export class Session {
   /** 依頼のたびに、その時点で分かっている状況を渡す。調べ直させるより速い。 */
   async #system(): Promise<string> {
     const base = this.config.system ?? DEFAULT_SYSTEM;
+    const counter = await this.#count();
+    const count = counter ? (t: string) => counter.count(t) : undefined;
     const snap = await this.#prefetch.snapshotWithin(3000);
     const brief = snap ? describeSnapshot(snap) : '';
 
@@ -1283,6 +1342,7 @@ export class Session {
       (e) => e.detail || e.title,
       Math.floor(this.contextTokens * 0.15),
       1,
+      count,
     );
     const never = hated.length === 0 ? '' : [
       '',
@@ -1298,7 +1358,7 @@ export class Session {
      * それが決まりなので読む。窓の 20% までに収める（長い決まり書き一つで
      * 依頼が押し出されるのを避ける）。
      */
-    const rules = await this.#projectRules.block(Math.floor(this.contextTokens * 0.20));
+    const rules = await this.#projectRules.block(Math.floor(this.contextTokens * 0.20), Date.now(), count);
 
     return [base, brief, rules, never].filter(Boolean).join('\n\n');
   }

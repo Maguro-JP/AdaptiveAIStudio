@@ -12,7 +12,7 @@ import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
 import type { Tool, ToolContext, ApprovalRequest, ApprovalAnswer } from './tools/types.ts';
 import { ToolTextFilter } from './tool-text.ts';
 import { DoneMark, DONE_MARK } from './done.ts';
-import { fitToWindow, tokenBudget, trimSchemas } from './window.ts';
+import { fitToWindow, tokenBudget, trimSchemas, type Count } from './window.ts';
 
 export type AgentEvent =
   | { type: 'thinking'; delta: string }
@@ -42,6 +42,11 @@ export interface AgentOptions {
    * ライブラリが古い方から黙って落とし、最初の依頼ごと消える。
    */
   contextTokens?: number;
+  /**
+   * トークンの数え方。**そのモデルの本物の数え方**が分かっていれば渡す。
+   * 無ければ見積もりに戻る（外のモデルには GGUF が無い）。
+   */
+  count?: Count;
   /**
    * 合図なしで手を止めたとき、何回まで押し戻すか。既定2回。
    *
@@ -91,6 +96,7 @@ export class Agent {
       // 道具の返しも窓に収める。読んだ時点で収めないと、刈る段では
       // 中身がほとんど残らない（直近の結果は 1200 字まで削られる）。
       ...(this.#opts.contextTokens !== undefined ? { contextTokens: this.#opts.contextTokens } : {}),
+      ...(this.#opts.count ? { count: this.#opts.count } : {}),
     };
 
     // 同じツールを同じ引数で繰り返すのは、モデルが行き詰まった兆候。
@@ -109,7 +115,7 @@ export class Agent {
       // 終わりの合図を、本文から抜く。画面に TASK_DONE を出さない。
       const mark = new DoneMark();
 
-      const fitted = fitToWindow(history, budget);
+      const fitted = fitToWindow(history, budget, this.#opts.count);
       if (fitted.trimmed) yield { type: 'trimmed', dropped: fitted.dropped };
 
       for await (const ev of this.#orchestrator.run(
@@ -124,7 +130,10 @@ export class Agent {
           // **狭い窓では、道具の説明を一文に削る。**説明だけで 1400 トークン
           // あり、4k の窓では 34% を占める。決まりと学びを足すと、
           // 肝心の依頼と履歴の場所が残らない。広い窓では削らない。
-          tools: trimSchemas(this.#opts.tools.map((t) => t.schema), this.#opts.contextTokens ?? 8192),
+          tools: trimSchemas(
+            this.#opts.tools.map((t) => t.schema), this.#opts.contextTokens ?? 8192, 0.15,
+            this.#opts.count,
+          ),
         },
         signal,
       ) as AsyncGenerator<ChatEvent>) {

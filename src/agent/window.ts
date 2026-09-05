@@ -50,6 +50,15 @@ interface Unit {
  * 正確に数えるには字句器が要るが、字句器はモデルごとに違う。
  * ここでは**外す向きを決めて**粗く見る。**多めに数える**（溢れるより余る）。
  */
+/**
+ * 数える人。
+ *
+ * 既定は見積もり（`estimateTokens`）。そのモデルの**本物の数え方**が
+ * 分かっているときは、そちらを渡す（`src/agent/tokenizer.ts`）。
+ * **渡ってこないことを異常にしない。**外のモデルには GGUF が無い。
+ */
+export type Count = (text: string) => number;
+
 export function estimateTokens(text: string): number {
   let cjk = 0;
   let other = 0;
@@ -110,11 +119,12 @@ export function toolOutputBudget(contextTokens: number, share = 0.35): number {
  */
 export function fitByTokens<T>(
   items: readonly T[], textOf: (x: T) => string, budgetTokens: number, min = 1,
+  count: Count = estimateTokens,
 ): T[] {
   const out: T[] = [];
   let used = 0;
   for (const item of items) {
-    const cost = estimateTokens(textOf(item));
+    const cost = count(textOf(item));
     if (out.length >= min && used + cost > budgetTokens) break;
     out.push(item);
     used += cost;
@@ -134,9 +144,10 @@ export function fitByTokens<T>(
  */
 export function trimSchemas<T extends { name: string; description?: string }>(
   schemas: readonly T[], contextTokens: number, share = 0.15,
+  count: Count = estimateTokens,
 ): T[] {
   const budget = Math.floor(contextTokens * share);
-  const total = schemas.reduce((n, x) => n + estimateTokens(JSON.stringify(x)), 0);
+  const total = schemas.reduce((n, x) => n + count(JSON.stringify(x)), 0);
   if (total <= budget) return [...schemas];
   return schemas.map((x) => {
     const text = x.description ?? '';
@@ -147,11 +158,38 @@ export function trimSchemas<T extends { name: string; description?: string }>(
 }
 
 /** かさ（トークンの見積もり）。 */
-export function sizeOf(messages: readonly ProviderMessage[]): number {
+/**
+ * トークンで測って、頭から入る分だけ切る。
+ *
+ * ここまで、道具の返しは**トークンの予算を文字数と突き合わせて**いた。
+ * 単位が違うので、日本語ではたまたま合い、英語では**4分の1しか使えて
+ * いなかった**（窓が余っているのに、読んだファイルが途中で切れる）。
+ *
+ * 数えるのは安くないので、頭から一文字ずつは試さない。**挟み撃ちで探す。**
+ * 行の切れ目に寄せる（途中で切ると、その行が別の意味になる）。
+ */
+export function cutToTokens(text: string, budget: number, count: Count = estimateTokens): string {
+  if (budget <= 0) return '';
+  if (count(text) <= budget) return text;
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (count(text.slice(0, mid)) <= budget) lo = mid;
+    else hi = mid - 1;
+  }
+  const cut = text.slice(0, lo);
+  const nl = cut.lastIndexOf('\n');
+  return nl > 0 ? cut.slice(0, nl) : cut;
+}
+
+export function sizeOf(
+  messages: readonly ProviderMessage[], count: Count = estimateTokens,
+): number {
   let n = 0;
   for (const m of messages) {
-    n += estimateTokens(m.content);
-    for (const c of m.toolCalls ?? []) n += estimateTokens(c.name + JSON.stringify(c.args ?? {}));
+    n += count(m.content);
+    for (const c of m.toolCalls ?? []) n += count(c.name + JSON.stringify(c.args ?? {}));
   }
   return n;
 }
@@ -164,12 +202,13 @@ export function sizeOf(messages: readonly ProviderMessage[]): number {
 export function fitToWindow(
   history: readonly ProviderMessage[],
   budget: number,
+  count: Count = estimateTokens,
 ): { messages: ProviderMessage[]; trimmed: boolean; dropped: number } {
-  if (sizeOf(history) <= budget) {
+  if (sizeOf(history, count) <= budget) {
     return { messages: [...history], trimmed: false, dropped: 0 };
   }
 
-  const units = toUnits(history);
+  const units = toUnits(history, count);
   // 最初の依頼は落とさない。直近も落とさない。
   const firstAt = units.findIndex((u) => u.messages[0]?.role === 'user');
   const keepFirst = firstAt >= 0 ? firstAt : 0;
@@ -185,7 +224,7 @@ export function fitToWindow(
       const cut = m.content.length - KEEP_HEAD;
       return { ...m, content: `${m.content.slice(0, KEEP_HEAD)}\n…（この先 ${cut} 字は、文脈に収まらないので省いています）` };
     });
-    u.chars = sizeOf(u.messages);
+    u.chars = sizeOf(u.messages, count);
   }
 
   // それでも溢れるなら、古い往復を丸ごと落とす。
@@ -208,7 +247,7 @@ export function fitToWindow(
         const cut = m.content.length - KEEP_LAST_RESORT;
         return { ...m, content: `${m.content.slice(0, KEEP_LAST_RESORT)}\n…（この先 ${cut} 字は、文脈に収まらないので省いています）` };
       });
-      u.chars = sizeOf(u.messages);
+      u.chars = sizeOf(u.messages, count);
     }
   }
 
@@ -238,11 +277,11 @@ function total(units: readonly Unit[]): number {
  *
  * 道具を呼んだ assistant には、その結果の tool を必ず連れて行かせる。
  */
-function toUnits(history: readonly ProviderMessage[]): Unit[] {
+function toUnits(history: readonly ProviderMessage[], count: Count = estimateTokens): Unit[] {
   const units: Unit[] = [];
   let current: ProviderMessage[] = [];
   const flush = () => {
-    if (current.length > 0) { units.push({ messages: current, chars: sizeOf(current) }); current = []; }
+    if (current.length > 0) { units.push({ messages: current, chars: sizeOf(current, count) }); current = []; }
   };
   for (const m of history) {
     if (m.role === 'tool') {

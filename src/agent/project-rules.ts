@@ -21,7 +21,7 @@
  */
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { estimateTokens } from './window.ts';
+import { estimateTokens, type Count } from './window.ts';
 
 /** 読みに行く名前。**上から順に。**先に見つかったものを上に置く。 */
 export const RULE_FILES = [
@@ -49,19 +49,21 @@ export interface ProjectRule {
  * 丸ごと載せると、長い `CLAUDE.md` 一つで窓が埋まる。**窓に合わせて切る。**
  * ここでは「窓の何割か」を渡してもらい、その中で頭から入るだけ入れる。
  */
-export function fitRules(rules: readonly ProjectRule[], budget: number): ProjectRule[] {
+export function fitRules(
+  rules: readonly ProjectRule[], budget: number, count: Count = estimateTokens,
+): ProjectRule[] {
   const out: ProjectRule[] = [];
   let left = budget;
   for (const rule of rules) {
     if (left <= 0) break;
-    const cost = estimateTokens(rule.text);
+    const cost = count(rule.text);
     if (cost <= left) {
       out.push(rule);
       left -= cost;
       continue;
     }
     // 入り切らないものは、頭から入る分だけ。途中で切れたことは隠さない。
-    const keep = cut(rule.text, left);
+    const keep = cut(rule.text, left, count);
     if (keep.length > 0) out.push({ ...rule, text: `${keep}\n…（長いので、ここまで）` });
     break;
   }
@@ -69,12 +71,12 @@ export function fitRules(rules: readonly ProjectRule[], budget: number): Project
 }
 
 /** 行の切れ目で切る。文の途中で切ると、決まりが逆の意味になることがある。 */
-function cut(text: string, budget: number): string {
+function cut(text: string, budget: number, count: Count = estimateTokens): string {
   const lines = text.split('\n');
   const kept: string[] = [];
   let left = budget;
   for (const line of lines) {
-    const cost = estimateTokens(`${line}\n`);
+    const cost = count(`${line}\n`);
     if (cost > left) break;
     kept.push(line);
     left -= cost;
@@ -164,7 +166,7 @@ export class ProjectRules {
   }
 
   /** いま効いている決まりを、窓に収まる形で。 */
-  async block(budget: number, now = Date.now()): Promise<string> {
-    return rulesBlock(fitRules(await this.all(now), budget));
+  async block(budget: number, now = Date.now(), count?: Count): Promise<string> {
+    return rulesBlock(fitRules(await this.all(now), budget, count));
   }
 }
