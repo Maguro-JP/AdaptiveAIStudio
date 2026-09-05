@@ -168,10 +168,12 @@ export interface Judged extends Understood {
  * 拾いすぎると「二度としないこと」が依頼の山になって、どれも効かなくなる。
  */
 export function parseJudgement(text: string, fallbackWhen?: string): Judged | undefined {
-  if (/^\s*NONE\s*$/im.test(text)) return undefined;
+  // **`NONE` を探さない。**`**NONE**` や「指摘ではありません。NONE」など、
+  // 書き方がいくらでもある。読めたかどうかで決める：
+  // 四行が揃わなければ、指摘ではなかったとして扱う（拾いすぎない側に倒す）。
   const understood = parseUnderstanding(text, fallbackWhen);
   if (!understood) return undefined;
-  const m = /^\s*CODE\s*[:：]\s*([A-Z_]+)/mi.exec(text);
+  const m = /^[\s>*\-#・•]*\*{0,2}CODE\*{0,2}\s*[:：]\s*\*{0,2}\s*([A-Z_]+)/mi.exec(text);
   const code = CODES.find((c) => c === m?.[1]?.toUpperCase());
   // 符丁が読めないときは、いちばん弱いものにする。**強く決めつけない。**
   return { ...understood, code: code ?? 'OFFENSIVE' };
@@ -236,8 +238,13 @@ export interface Understood {
  */
 export function parseUnderstanding(text: string, fallbackWhen?: string): Understood | undefined {
   const pick = (key: string): string | undefined => {
-    const m = new RegExp(`^\\s*${key}\\s*[:：]\\s*(.+?)\\s*$`, 'mi').exec(text);
-    const got = m?.[1]?.trim();
+    // **飾りを許す。**小さいモデルは `**WHAT:**` や `- WHAT:` をよく出す。
+    // 素の形しか読めなかったので、いちばんよく来る形を落としていた。
+    const m = new RegExp(
+      `^[\\s>*\\-#・•]*\\*{0,2}${key}\\*{0,2}\\s*[:：]\\s*(.+?)\\s*$`, 'mi',
+    ).exec(text);
+    // 端の飾りは、まとめて落とす。一段だけ剥がすと `** **中身**` が残る。
+    const got = m?.[1]?.replace(/^[\s*]+|[\s*]+$/g, '');
     return got && got.length > 1 ? got : undefined;
   };
   const what = pick('WHAT');

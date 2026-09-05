@@ -426,3 +426,43 @@ describe('一言ごとに、モデルが判じる', () => {
     }
   });
 });
+
+/**
+ * 小さいモデルの返しは、形が崩れる。
+ *
+ * **いちばんよく来る崩れ方（太字・箇条書き）を落としていた。**
+ * 落とすと、そもそも学びに入らない。しかも落ちたことに気づけない。
+ */
+describe('崩れた返しでも読む', () => {
+  const four = ['WHEN: 報告', 'WHAT: 確かめずに言った', 'WHY: 手間が回る', 'NEXT: 動かしてから言う'];
+
+  test('太字・箇条書き・囲み・全角コロン・前置き、どれでも読む', () => {
+    const shapes: [string, string][] = [
+      ['素直', ['CODE: BROKEN', ...four].join('\n')],
+      ['太字', ['**CODE:** BROKEN', ...four.map((l) => `**${l.replace(':', ':**')}`)].join('\n')],
+      ['箇条書き', ['- CODE: BROKEN', ...four.map((l) => `- ${l}`)].join('\n')],
+      ['囲み', ['```', 'CODE: BROKEN', ...four, '```'].join('\n')],
+      ['前置き', ['はい、考えました。', '', 'CODE: BROKEN', ...four, '', '以上です。'].join('\n')],
+      ['全角コロン', ['CODE：BROKEN', ...four.map((l) => l.replace(':', '：'))].join('\n')],
+    ];
+    for (const [name, text] of shapes) {
+      const got = parseJudgement(text);
+      assert.ok(got, `読めない: ${name}`);
+      assert.equal(got.code, 'BROKEN', `符丁を取り違えた: ${name} → ${got.code}`);
+      assert.equal(got.what, '確かめずに言った', `中身が崩れた: ${name} → ${got.what}`);
+    }
+  });
+
+  test('飾りは中身から外す（そのまま覚えに入れない）', () => {
+    const got = parseJudgement(['CODE: STOP', '**WHEN:** **報告のとき**', 'WHAT: **やった**', 'NEXT: **やめる**'].join('\n'));
+    assert.equal(got?.when, '報告のとき');
+    assert.equal(got?.what, 'やった');
+  });
+
+  test('指摘でないときは、どんな書き方でも覚えない', () => {
+    // NONE の書き方を数え上げない。**四行が揃わなければ、指摘ではない。**
+    for (const text of ['NONE', '**NONE**', 'これは指摘ではありません。NONE', 'ただの依頼です', '']) {
+      assert.equal(parseJudgement(text), undefined, `覚えてしまう: ${text}`);
+    }
+  });
+});
