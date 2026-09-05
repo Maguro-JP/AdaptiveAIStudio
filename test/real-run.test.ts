@@ -302,3 +302,52 @@ describe('実走：使うほど賢くなるか（添えた覚えに、結果が�
     }
   });
 });
+
+describe('実走：嫌がられたことを、次から必ず持ち歩くか', () => {
+  test('言われた回で覚え、話題の違う次の依頼にも載る', async () => {
+    const root = await brokenProject();
+    const model = await startRealModel({ hint: '足し算', from: 'a - b', to: 'a + b' });
+    const server = new UiServer({
+      port: 0,
+      config: {
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: model.baseUrl, locality: 'local', models: ['real'] }],
+        candidates: ['local:real'],
+        runtime: { kind: 'ollama' },
+        agent: { root, approval: 'auto', verify: { enabled: false } },
+      } as typeof DEFAULT_CONFIG,
+    });
+    const base = (await server.start()).replace(/\/$/, '');
+
+    try {
+      // 1. 嫌がる。**この回で覚えていないと、次に持ち歩けない。**
+      await fetch(`${base}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: '配布物って気持ち悪いから言わないで' }),
+      });
+      await new Promise((r) => setTimeout(r, 2000));
+
+      const state = await (await fetch(`${base}/api/state`)).json() as {
+        memory: { kind: string; title: string; detail: string }[];
+      };
+      const hated = state.memory.filter((m) => m.kind === 'displeasure');
+      assert.equal(hated.length, 1, `覚えていない: ${JSON.stringify(state.memory).slice(0, 300)}`);
+      // **言われた言葉が、そのまま残っていること。**言い換えると意味が消える。
+      assert.match(hated[0]!.detail, /配布物って気持ち悪い/);
+
+      // 2. まったく別の話題を頼む。**それでも持ち歩いているか。**
+      const events = await drive(base, '足し算が引き算になっています。直してください。');
+      const recalled = events
+        .filter((e) => (e as { type?: string }).type === 'session')
+        .map((e) => (e as { event: { type?: string; text?: string } }).event)
+        .filter((ev) => ev.type === 'recalled')
+        .map((ev) => ev.text ?? '')
+        .join('\n');
+      assert.match(recalled, /二度としないこと/, `別の話題では思い出していない: ${recalled.slice(0, 300)}`);
+      assert.match(recalled, /配布物って気持ち悪い/);
+    } finally {
+      await server.stop();
+      await model.close();
+    }
+  });
+});

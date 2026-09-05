@@ -43,7 +43,17 @@ export type MemoryKind =
   /** 利用者の好み・流儀 */
   | 'preference'
   /** 起きたこと。障害・事故 */
-  | 'incident';
+  | 'incident'
+  /**
+   * 嫌がられたこと。
+   *
+   * **これだけは、話題が違っても必ず思い出す。**語の重なりで引くと、
+   * 画面の不快は画面の作業のときしか出てこない。踏む地雷は、
+   * どの作業でも同じように踏む。
+   *
+   * **刈らない。**溜まっても数十件で、そのぶんの窓は払う価値がある。
+   */
+  | 'displeasure';
 
 export interface MemoryEntry {
   id: string;
@@ -262,6 +272,17 @@ export class Memory {
    * 確認回数を効かせるのは、「一度きりの思いつき」より
    * 「何度も確かめられたこと」を先に出すため。
    */
+  /**
+   * 嫌がられたこと。**新しい順に。**
+   * 話題に関係なく効くので、思い出すときは必ず先頭に付ける。
+   */
+  displeasures(limit = 12): MemoryEntry[] {
+    return this.#entries
+      .filter((e) => e.kind === 'displeasure')
+      .sort((a, b) => b.seenAt - a.seenAt)
+      .slice(0, limit);
+  }
+
   recall(query: string, opts: RecallOptions = {}): MemoryEntry[] {
     const now = Date.now();
     const q = new Set(tokenize(query));
@@ -289,7 +310,15 @@ export class Memory {
       .filter((x): x is { e: MemoryEntry; score: number } => !!x);
 
     scored.sort((a, b) => b.score - a.score || b.e.seenAt - a.e.seenAt);
-    return scored.slice(0, limit).map((x) => x.e);
+    const hits = scored.slice(0, limit).map((x) => x.e);
+
+    // **嫌がられたことは、話題に関係なく必ず混ぜる。**
+    // 語が重ならないから外す、をやると、別の作業で同じ地雷を踏む。
+    // 限度（limit）にも数えない。減らしてよい種類のものではない。
+    if (opts.kinds && !opts.kinds.includes('displeasure')) return hits;
+    const must = this.displeasures();
+    const rest = hits.filter((e) => e.kind !== 'displeasure');
+    return [...must, ...rest];
   }
 
   /**
@@ -372,10 +401,11 @@ export class Memory {
     if (this.#entries.length <= max) return 0;
     const now = opts.now ?? Date.now();
 
-    const keep = this.#entries.filter(
-      (e) => e.kind === 'decision' || e.kind === 'preference' || e.supersededBy);
-    const rest = this.#entries.filter(
-      (e) => !(e.kind === 'decision' || e.kind === 'preference' || e.supersededBy));
+    // **嫌がられたことは刈らない。**忘れた瞬間に、同じ地雷を踏む。
+    const isKeeper = (e: MemoryEntry) =>
+      e.kind === 'decision' || e.kind === 'preference' || e.kind === 'displeasure' || !!e.supersededBy;
+    const keep = this.#entries.filter(isKeeper);
+    const rest = this.#entries.filter((e) => !isKeeper(e));
 
     // **効いた実績を、新しさより重く見る。**
     // 新しさと確認回数だけで刈ると、「今日覚えたばかりの外れ」が残り、
@@ -401,6 +431,7 @@ const KIND_LABEL: Record<MemoryKind, string> = {
   fact: '分かったこと',
   preference: '好み',
   incident: '起きたこと',
+  displeasure: '嫌がられたこと',
 };
 
 /**
@@ -409,8 +440,24 @@ const KIND_LABEL: Record<MemoryKind, string> = {
  */
 export function formatRecall(entries: MemoryEntry[]): string {
   if (entries.length === 0) return '';
-  const lines = ['これまでに分かっていること:'];
-  for (const e of entries) {
+  const lines: string[] = [];
+
+  // **嫌がられたことを、いちばん先に置く。**後ろに置くと、長い話に
+  // 押されて末尾へ行き、取りこぼす。踏んではいけないものから読ませる。
+  const hated = entries.filter((e) => e.kind === 'displeasure');
+  if (hated.length > 0) {
+    lines.push('二度としないこと（利用者が嫌がったこと。話題が違っても効きます）:');
+    for (const e of hated) {
+      lines.push(`  ・${e.title}`);
+      if (e.detail) lines.push(`      利用者の言葉: ${e.detail.split('\n')[0]!.slice(0, 160)}`);
+    }
+    lines.push('');
+  }
+
+  const rest = entries.filter((e) => e.kind !== 'displeasure');
+  if (rest.length === 0) return lines.join('\n').trimEnd();
+  lines.push('これまでに分かっていること:');
+  for (const e of rest) {
     // 確度を明示する。一度きりの話を事実として扱わせないため。
     const trust = e.confirms >= 3 ? '確か' : e.confirms === 2 ? 'おそらく' : '一度だけ';
     const mark = e.outcome === 'failed' ? '（失敗した）' : e.outcome === 'worked' ? '（うまくいった）' : '';

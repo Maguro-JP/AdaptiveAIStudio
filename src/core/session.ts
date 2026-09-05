@@ -34,6 +34,7 @@ import type { McpClient } from '../mcp/client.ts';
 import { collectTools } from '../mcp/tools.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall } from '../memory/memory.ts';
+import { senseDispleasure, DISPLEASURE_LABEL } from '../memory/displeasure.ts';
 import { ProposalQueue, type Proposal } from '../agent/proposals.ts';
 import { findLeads, investigationPrompt, parseProposal } from '../agent/initiative.ts';
 import { IdleScheduler, type ModeStat } from '../harness/idle.ts';
@@ -782,6 +783,11 @@ export class Session {
     let checked: 'passed' | 'failed' | 'preexisting' | 'notRun' = 'notRun';
 
     try {
+      // **まず、嫌がっていないかを見る。**
+      // 覚えるのは、こちらが答える前。答えてから覚えると、
+      // 落ちた回にそのまま流れて、覚え損ねる。
+      this.#noteDispleasure(instruction);
+
       // 関係することを思い出して添える。無関係なら何も足さない。
       const recalled = this.#recall(instruction);
       if (recalled) yield { type: 'recalled', text: recalled };
@@ -1075,6 +1081,32 @@ export class Session {
   }
 
   /**
+   * 嫌がられたら、覚える。
+   *
+   * **失敗から学ぶほうが効く。**うまくいった手を覚えると出来ることが増えるが、
+   * 「その手しか取らない」ようにもなる。嫌がられたことを覚えると、
+   * 出来ることは減らずに、踏む地雷だけが減る。
+   *
+   * 言われた言葉は**そのまま残す。**言い換えると、何が嫌だったのかが消える。
+   */
+  #noteDispleasure(text: string): void {
+    const sensed = senseDispleasure(text);
+    if (!sensed) return;
+    const got = this.memory.remember({
+      kind: 'displeasure',
+      // 表題は符丁から引く（語形が変わらないもので持つ）。
+      title: `${DISPLEASURE_LABEL[sensed.code]}（${sensed.code}）`,
+      // 中身は利用者の言葉そのもの。ここを要約しない。
+      detail: text.trim().slice(0, 400),
+      tags: [sensed.code, sensed.cue],
+      source: 'user',
+    });
+    this.#opts.onLog?.('warn',
+      `覚えました（二度としないこと）: ${DISPLEASURE_LABEL[sensed.code]}${got.reinforced ? '（また同じことをしています）' : ''}`);
+    void this.memory.save().catch(() => undefined);
+  }
+
+  /**
    * 思い出して添える。**添えたものを控えておく。**
    *
    * 控えないと、あとで「役に立ったのか」を書き戻せない。書き戻さないと、
@@ -1110,7 +1142,23 @@ export class Session {
     const base = this.config.system ?? DEFAULT_SYSTEM;
     const snap = await this.#prefetch.snapshotWithin(3000);
     const brief = snap ? describeSnapshot(snap) : '';
-    return brief ? `${base}\n\n${brief}` : base;
+
+    /*
+     * **嫌がられたことは、決まりの側にも置く。**
+     *
+     * 思い出す仕組み（recall）は依頼の言葉から引くので、取りこぼしうる。
+     * ここに置けば、どの回でも必ず目に入る。窓は食うが、
+     * 同じ失敗を一度でも減らせるなら安い。
+     */
+    const hated = this.memory.displeasures(8);
+    const never = hated.length === 0 ? '' : [
+      '',
+      '二度としないこと（利用者が実際に嫌がったこと。話題が違っても効きます）:',
+      ...hated.map((e) => `- ${e.title}: ${e.detail.split('\n')[0]!.slice(0, 120)}`),
+      '同じことをもう一度すると、それまでの積み上げが無駄になります。時間をかけてよいので、繰り返さないこと。',
+    ].join('\n');
+
+    return [base, brief, never].filter(Boolean).join('\n\n');
   }
 
   get instruction(): string { return this.#instruction; }

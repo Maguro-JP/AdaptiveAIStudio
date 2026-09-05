@@ -680,12 +680,17 @@ export const PANELS = {
   memory(body, ctx) {
     const LABEL = {
       decision: '決めたこと', attempt: '試したこと', fact: '分かったこと',
-      preference: '好み', incident: '起きたこと',
+      preference: '好み', incident: '起きたこと', displeasure: '二度としないこと',
     };
     ctx.onState((s) => {
       body.replaceChildren();
       if (s.memory.length === 0) return body.append(empty('まだ何も覚えていません。'));
-      body.append(rows(s.memory, (m) => {
+      // **嫌がられたことを、いちばん上に。**これだけは話題に関係なく効く。
+      const sorted = [
+        ...s.memory.filter((m) => m.kind === 'displeasure'),
+        ...s.memory.filter((m) => m.kind !== 'displeasure'),
+      ];
+      body.append(rows(sorted, (m) => {
         const row = el('div', 'row');
         const trust = m.confirms >= 3 ? '確か' : m.confirms === 2 ? 'おそらく' : '一度だけ';
         // **効いたかどうかを出す。**出さないと、なぜ上に来るのかが分からない。
@@ -695,7 +700,8 @@ export const PANELS = {
           : misled > helped ? `外した ${misled}/${helped + misled}`
           : `効いた ${helped}/${helped + misled}`;
         row.append(
-          el('span', 'key', `${LABEL[m.kind] ?? m.kind} / ${trust}`),
+          el('span', m.kind === 'displeasure' ? 'key bad' : 'key',
+            m.kind === 'displeasure' ? `${LABEL[m.kind]} ×${m.confirms}` : `${LABEL[m.kind] ?? m.kind} / ${trust}`),
           el('span', m.supersededBy ? 'dim' : '', m.title),
           el('span', misled > helped ? 'bad' : 'good', worth),
         );
