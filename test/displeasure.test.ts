@@ -71,7 +71,7 @@ describe('思い出す', () => {
       kind: 'displeasure',
       title: '言い方や中身が不快だった（OFFENSIVE）',
       // **言われた言葉は残さない。**残すのは、次からどうするか。
-      detail: lessonFrom('OFFENSIVE', '使った道具: write_file / 確かめていない'),
+      detail: lessonFrom('OFFENSIVE', 'bundle の呼び方を書き直していたとき', '使った道具: write_file / 確かめていない'),
       tags: ['OFFENSIVE'],
     });
     m.remember({ kind: 'fact', title: '設定は config.ts', detail: 'config.ts に書く' });
@@ -136,8 +136,9 @@ describe('記録ではなく、学びにする', () => {
     }
   });
 
-  test('直前に何をしていたかが添う（符丁だけだと、次の手が変わらない）', () => {
-    const got = lessonFrom('BROKEN', '使った道具: write_file / 確かめていない');
+  test('場面と、直前にしたことが添う（符丁だけだと、次の手が変わらない）', () => {
+    const got = lessonFrom('BROKEN', 'Releases に出したあと', '使った道具: write_file / 確かめていない');
+    assert.match(got, /【場面】Releases に出したあと/);
     assert.match(got, /渡す前に、こちらで動かして確かめる/);
     assert.match(got, /このとき: 使った道具: write_file/);
   });
@@ -152,6 +153,7 @@ describe('記録ではなく、学びにする', () => {
     const got = lessonFrom('BROKEN');
     assert.match(got, new RegExp(DISPLEASURE_RULE.BROKEN));
     assert.doesNotMatch(got, /このとき/);
+    assert.doesNotMatch(got, /【場面】/);
   });
 });
 
@@ -164,48 +166,65 @@ describe('記録ではなく、学びにする', () => {
  * 意味と意図は、その場で考えるしかない。
  */
 describe('意味を汲む', () => {
-  test('問いに、こちらのしたことと、返し方の形が入る', () => {
-    const q = understandPrompt('配布物って気持ち悪いから言わないで', '使った道具: write_file');
+  test('問いに、場面・こちらのしたこと・返し方の形が入る', () => {
+    const q = understandPrompt('配布物って気持ち悪いから言わないで', 'Releases に出しておいて', '使った道具: write_file');
     assert.match(q, /配布物って気持ち悪い/, '元の言葉を渡していない');
+    assert.match(q, /直前の指示: Releases に出しておいて/, '何を頼まれていたかを渡していない');
     assert.match(q, /使った道具: write_file/, 'こちらが何をしたかを渡していない');
     // 語形の変わらない印で返させる。日本語で返させて取り違えた前科がある。
-    for (const key of ['WHAT', 'WHY', 'NEXT']) assert.match(q, new RegExp(key));
+    for (const key of ['WHEN', 'WHAT', 'WHY', 'NEXT']) assert.match(q, new RegExp(key));
   });
 
   test('分からないときは、分からないと渡す（作り話をさせない）', () => {
-    assert.match(understandPrompt('動かない'), /直前にこちらがしたこと: 分かりません/);
+    const q = understandPrompt('動かない');
+    assert.match(q, /直前の指示: （分かりません）/);
+    assert.match(q, /それに対してこちらがしたこと: （分かりません）/);
   });
 
-  test('三行を受け取る', () => {
+  test('四行を受け取る', () => {
     const got = parseUnderstanding([
+      'WHEN: 出来上がりを報告していたとき',
       'WHAT: 利用者が使っていない言い換えを持ち出した',
       'WHY: 自分の言葉を否定されたように感じる',
       'NEXT: 相手が使っている語のまま呼ぶ',
     ].join('\n'));
+    assert.equal(got?.when, '出来上がりを報告していたとき');
     assert.equal(got?.what, '利用者が使っていない言い換えを持ち出した');
     assert.equal(got?.next, '相手が使っている語のまま呼ぶ');
   });
 
+  test('**場面が無ければ、覚えにしない**（何をしても怒られた、にしない）', () => {
+    // 場面の無い戒めは「提案したら怒られた」「黙っていたら怒られた」になり、
+    // 相手が理不尽だという記録にしかならない。
+    const text = 'WHAT: 何かをした\nNEXT: 気をつける';
+    assert.equal(parseUnderstanding(text), undefined);
+    // こちらが場面を分かっているなら、それを使う。
+    assert.equal(parseUnderstanding(text, 'Releases に出したあと')?.when, 'Releases に出したあと');
+  });
+
   test('前置きが混ざっていても拾う（小さいモデルは必ず何か書く）', () => {
-    const got = parseUnderstanding('分かりました。\n\nWHAT: 確かめずに完了と言った\nNEXT: 動かしてから言う\n');
+    const got = parseUnderstanding(
+      '分かりました。\n\nWHEN: 報告するとき\nWHAT: 確かめずに完了と言った\nNEXT: 動かしてから言う\n');
     assert.equal(got?.what, '確かめずに完了と言った');
     assert.match(got?.why ?? '', /理由まで書かれていません/);
   });
 
   test('**足りないものは、埋めない**（考えていないのに考えた顔にしない）', () => {
-    assert.equal(parseUnderstanding('WHY: なんとなく'), undefined);
+    assert.equal(parseUnderstanding('WHY: なんとなく', '場面はある'), undefined);
     assert.equal(parseUnderstanding('よく分かりません'), undefined);
     assert.equal(parseUnderstanding(''), undefined);
   });
 
-  test('覚えの一行に、何が・なぜ・次からが入る', () => {
+  test('覚えの一行が、場面から始まる', () => {
     const line = lessonFromUnderstanding({
+      when: '直したものを報告するとき',
       what: '確かめずに完了と言った', why: '直っていないものを渡されると、確認の手間が相手へ回る',
       next: '動かしてから言う',
     }, '使った道具: write_file / 確かめていない');
+    assert.match(line, /^【場面】直したものを報告するとき/, line);
     assert.match(line, /確かめずに完了と言った/);
     assert.match(line, /確認の手間が相手へ回る/);
-    assert.match(line, /次から: 動かしてから言う/);
+    assert.match(line, /【次から】動かしてから言う/);
     assert.match(line, /このとき: 使った道具/);
     assert.doesNotMatch(line, /未消化/);
   });
@@ -239,27 +258,34 @@ describe('最初から持っている', () => {
     const text = formatRecall(m.recall('MCP の繋ぎ先を増やす'));
     assert.match(text, /^二度としないこと/);
     assert.match(text, /確かめていないときは、確かめていないと書く/);
+    assert.match(text, /【場面】/, '場面が載っていない');
   });
 
-  test('どれも、何が・なぜ・次からが揃っている', () => {
+  test('どれも、場面・したこと・なぜ・次からが揃っている', () => {
     for (const l of BUILTIN_LESSONS) {
       const line = lessonLine(l);
-      assert.match(line, /— .+ \/ 次から: /, `形が揃っていない: ${l.title}`);
+      assert.match(line, /^【場面】.+\/ 【したこと】.+ — .+\/ 【次から】/, `形が揃っていない: ${l.title}`);
+      assert.ok(l.when.length > 6, `場面が薄い: ${l.title}`);
       assert.ok(l.why.length > 10, `なぜ困るのかが薄い: ${l.title}`);
     }
+  });
+
+  test('**場面が、どれも違う**（何をしても怒られた、になっていない）', () => {
+    const whens = BUILTIN_LESSONS.map((l) => l.when);
+    assert.deepEqual([...new Set(whens)].length, whens.length, '同じ場面が並んでいる');
   });
 
   test('**こちらの行いとして書く**（相手の感情の記録にしない）', () => {
     // 「利用者が怒った」と書くと、それは相手の不満の記録になる。
     // 書くのは、こちらが何をしたか。直せるのはこちらの手だけ。
     for (const l of BUILTIN_LESSONS) {
-      assert.doesNotMatch(l.what, /利用者(が|は)[^。]*(怒|不満|不快|嫌|指摘)/,
-        `相手の反応を書いている: ${l.title} — ${l.what}`);
+      assert.doesNotMatch(l.did, /利用者(が|は)[^。]*(怒|不満|不快|嫌|指摘)/,
+        `相手の反応を書いている: ${l.title} — ${l.did}`);
       // 次の手は、悪かったことの言い直しでは意味がない。
       // 「〜しない」だけでも、次に何をするかが決まらない。
       assert.ok(l.next.length >= 12, `次の手が薄い: ${l.title}`);
-      assert.notEqual(l.next, l.what);
-      assert.ok(!l.what.includes(l.next), `次の手が、悪かったことの言い直しになっている: ${l.title}`);
+      assert.notEqual(l.next, l.did);
+      assert.ok(!l.did.includes(l.next), `次の手が、悪かったことの言い直しになっている: ${l.title}`);
     }
   });
 });

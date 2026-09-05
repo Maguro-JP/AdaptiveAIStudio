@@ -320,12 +320,19 @@ describe('実走：嫌がられたことを、次から必ず持ち歩くか', (
     const base = (await server.start()).replace(/\/$/, '');
 
     try {
+      // 0. 先に一つ頼む。**何の指示に対してだったか**を残すために要る。
+      await fetch(`${base}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'README に配布物の説明を足して' }),
+      });
+      await new Promise((r) => setTimeout(r, 2500));
+
       // 1. 嫌がる。**この回で覚えていないと、次に持ち歩けない。**
       await fetch(`${base}/api/send`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ text: '配布物って気持ち悪いから言わないで' }),
       });
-      await new Promise((r) => setTimeout(r, 2000));
+      await new Promise((r) => setTimeout(r, 2500));
 
       const state = await (await fetch(`${base}/api/state`)).json() as {
         memory: { kind: string; title: string; detail: string; source?: string }[];
@@ -338,9 +345,12 @@ describe('実走：嫌がられたことを、次から必ず持ち歩くか', (
       assert.doesNotMatch(lesson, /気持ち悪い/, `原文を残している: ${lesson}`);
       // **決め文句で済ませない。**その場で考えた中身が入っていること。
       assert.doesNotMatch(lesson, /未消化/, `考えずに決め文句で済ませている: ${lesson}`);
+      // **何の指示に対してだったかが要る。**無いと「何をしても怒られた」になる。
+      assert.match(lesson, /^【場面】/, `場面から書かれていない: ${lesson}`);
+      assert.match(lesson, /【したこと】/, `こちらが何をしたかが無い: ${lesson}`);
       assert.match(lesson, /言い換えを持ち出した/, `何が問題だったかが無い: ${lesson}`);
       assert.match(lesson, /否定されたように感じる/, `なぜ問題なのかが無い: ${lesson}`);
-      assert.match(lesson, /次から: 相手が使っている語のまま呼ぶ/, `次の手が無い: ${lesson}`);
+      assert.match(lesson, /【次から】相手が使っている語のまま呼ぶ/, `次の手が無い: ${lesson}`);
 
       // 2. まったく別の話題を頼む。**それでも持ち歩いているか。**
       const events = await drive(base, '足し算が引き算になっています。直してください。');
@@ -351,7 +361,7 @@ describe('実走：嫌がられたことを、次から必ず持ち歩くか', (
         .map((ev) => ev.text ?? '')
         .join('\n');
       assert.match(recalled, /二度としないこと/, `別の話題では思い出していない: ${recalled.slice(0, 300)}`);
-      assert.match(recalled, /次から: 相手が使っている語のまま呼ぶ/, `学びが載っていない: ${recalled.slice(0, 300)}`);
+      assert.match(recalled, /【次から】相手が使っている語のまま呼ぶ/, `学びが載っていない: ${recalled.slice(0, 300)}`);
       assert.doesNotMatch(recalled, /気持ち悪い/, '原文を持ち回っている');
     } finally {
       await server.stop();

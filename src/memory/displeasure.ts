@@ -141,21 +141,25 @@ export const DISPLEASURE_RULE: Record<DispleasureCode, string> = {
  * 返し方は**語形の変わらない印**で固定する。日本語で「通す」「止める」を
  * 返させたときに、語尾で取り違えた前科がある。
  */
-export function understandPrompt(said: string, did?: string): string {
+export function understandPrompt(said: string, when?: string, did?: string): string {
   return [
     '利用者が、いまの作業に不満を示しました。何が問題だったのかを考えてください。',
     '',
+    `直前の指示: ${when ?? '（分かりません）'}`,
+    `それに対してこちらがしたこと: ${did ?? '（分かりません）'}`,
     `利用者の言葉: ${said.trim().slice(0, 600)}`,
-    did ? `直前にこちらがしたこと: ${did}` : '直前にこちらがしたこと: 分かりません',
     '',
-    '次の三行だけを、この形で返してください。前置きも説明も要りません。',
-    'WHAT: 何が問題だったか（利用者の言葉ではなく、こちらの何が悪かったか）',
+    '次の四行だけを、この形で返してください。前置きも説明も要りません。',
+    'WHEN: どういう場面だったか（何を頼まれていたか）',
+    'WHAT: その場面で、こちらが何をしたのが悪かったか',
     'WHY: なぜそれが問題なのか（利用者にとって何が困るのか）',
-    'NEXT: 次から具体的にどう変えるか',
+    'NEXT: 同じ場面で、次からどうするか',
   ].join('\n');
 }
 
 export interface Understood {
+  /** どういう場面だったか。**これが無いと「何をしても怒られた」になる。** */
+  when: string;
   what: string;
   why: string;
   next: string;
@@ -167,24 +171,33 @@ export interface Understood {
  * **足りないものは、足りないと言う。**埋めて返すと、考えていないのに
  * 考えた顔の覚えが残る。それがいちばん質の悪い覚えになる。
  */
-export function parseUnderstanding(text: string): Understood | undefined {
+export function parseUnderstanding(text: string, fallbackWhen?: string): Understood | undefined {
   const pick = (key: string): string | undefined => {
     const m = new RegExp(`^\\s*${key}\\s*[:：]\\s*(.+?)\\s*$`, 'mi').exec(text);
     const got = m?.[1]?.trim();
     return got && got.length > 1 ? got : undefined;
   };
   const what = pick('WHAT');
-  const why = pick('WHY');
   const next = pick('NEXT');
   if (!what || !next) return undefined;
-  return { what, why: why ?? '（理由まで書かれていません）', next };
+  // 場面は、こちらでも分かっている。書かれていなければ、こちらのを使う。
+  const when = pick('WHEN') ?? fallbackWhen;
+  if (!when) return undefined;
+  return { when, what, why: pick('WHY') ?? '（理由まで書かれていません）', next };
 }
 
-/** 考えたものを、覚えの一行にする。 */
+/**
+ * 考えたものを、覚えの一行にする。
+ *
+ * **必ず場面から書く。**場面が無いと「提案したら怒られた」「黙っていたら
+ * 怒られた」が並ぶだけになる。それは学びではなく、
+ * **相手が理不尽だという記録**にしかならない。
+ */
 export function lessonFromUnderstanding(u: Understood, did?: string): string {
   return [
-    `${u.what} — ${u.why}`,
-    `次から: ${u.next}`,
+    `【場面】${u.when}`,
+    `【したこと】${u.what} — ${u.why}`,
+    `【次から】${u.next}`,
     did ? `（このとき: ${did}）` : '',
   ].filter(Boolean).join(' / ');
 }
@@ -195,9 +208,12 @@ export function lessonFromUnderstanding(u: Understood, did?: string): string {
  * **直前に何をしていたかを、必ず添える。**符丁だけだと「同じことを言わせた」
  * が並ぶだけで、次に何を変えればいいのかが分からない。
  */
-export function lessonFrom(code: DispleasureCode, did?: string): string {
+export function lessonFrom(code: DispleasureCode, when?: string, did?: string): string {
   // **考えられなかったときの受け皿。**決め文句なので、意味までは入っていない。
   // 入っていないことが分かるように、印を付けておく（消化できていない、と）。
-  const rule = `${DISPLEASURE_RULE[code]}【未消化: 何が嫌だったかまでは掴めていません】`;
-  return did ? `${rule}（このとき: ${did}）` : rule;
+  return [
+    when ? `【場面】${when}` : '',
+    `${DISPLEASURE_RULE[code]}【未消化: 何が嫌だったかまでは掴めていません】`,
+    did ? `（このとき: ${did}）` : '',
+  ].filter(Boolean).join(' / ');
 }

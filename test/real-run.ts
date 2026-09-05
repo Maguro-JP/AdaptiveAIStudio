@@ -65,6 +65,7 @@ export async function startRealModel(want: { hint: string; from: string; to: str
       if (/WHAT:|何が問題だったのか/.test(asked)) {
         did.push('understand');
         return talk([
+          'WHEN: 直したものを報告していたとき',
           'WHAT: 利用者が使っていない言い換えを持ち出した',
           'WHY: 自分の言葉を否定されたように感じる',
           'NEXT: 相手が使っている語のまま呼ぶ',

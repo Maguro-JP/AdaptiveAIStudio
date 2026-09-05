@@ -196,7 +196,7 @@ export class Session {
    * 嫌がられたときに「このとき何をしていたか」を添えるために持つ。
    * これが無いと、覚えが符丁の羅列になって、次の手が変わらない。
    */
-  #lastTurn?: { tools: string[]; changed: string[]; checked: string };
+  #lastTurn?: { instruction: string; tools: string[]; changed: string[]; checked: string };
   /** 書き込みの直前に作られた差分。承認の問い合わせを通り道にして拾う。 */
   readonly #diffs = new Map<string, { diff: string; created: boolean }>();
   /** 提案がどの思考から出たか。採否をその思考の実績に返すために持つ。 */
@@ -996,7 +996,7 @@ export class Session {
       // 添えた覚えに、結果を書き戻す。ここが「使うほど賢く」の要。
       this.#gradeRecall(checked);
       // 次に嫌がられたとき、「このとき何をしていたか」を言えるようにする。
-      this.#lastTurn = { tools: usedTools, changed: changedHere, checked };
+      this.#lastTurn = { instruction, tools: usedTools, changed: changedHere, checked };
 
       /*
        * この回のことを覚える。
@@ -1111,13 +1111,15 @@ export class Session {
     const sensed = senseDispleasure(text);
     if (!sensed) return;
     const did = this.#lastTurnSummary();
+    // **何の指示に対してだったか。**これが無いと「何をしても怒られた」になる。
+    const when = this.#lastTurn?.instruction.trim().slice(0, 120);
 
     // まず、決め文句で置いておく。**考える前に、覚えを落とさないため。**
     // このあと考えがまとまったら、同じ覚えを上書きする。
     const got = this.memory.remember({
       kind: 'displeasure',
       title: `${DISPLEASURE_LABEL[sensed.code]}（${sensed.code}）`,
-      detail: lessonFrom(sensed.code, did),
+      detail: lessonFrom(sensed.code, when, did),
       tags: [sensed.code],
       source: 'user',
     });
@@ -1127,7 +1129,7 @@ export class Session {
 
     // **意味と意図は、その場で考えないと残らない。**
     // 元の言葉はここでしか手に入らず、覚えには残さない。
-    void this.#understand(text, did, got.entry.id);
+    void this.#understand(text, when, did, got.entry.id);
   }
 
   /**
@@ -1136,7 +1138,9 @@ export class Session {
    * 決め文句を並べるのは、原文を並べるのと同じで**記録**にしかならない。
    * 考えられなかったときは「未消化」の印を残す。**考えた顔をさせない。**
    */
-  async #understand(said: string, did: string | undefined, id: string): Promise<void> {
+  async #understand(
+    said: string, when: string | undefined, did: string | undefined, id: string,
+  ): Promise<void> {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 60_000);
     timer.unref?.();
@@ -1145,19 +1149,20 @@ export class Session {
       for await (const ev of this.orchestrator.run({
         candidates: this.candidates,
         system: '指摘を受けた側として、何が悪かったのかを考える。決まった三行だけを返す。',
-        messages: [{ role: 'user', content: understandPrompt(said, did) }],
+        messages: [{ role: 'user', content: understandPrompt(said, when, did) }],
         temperature: 0.2,
       }, ac.signal)) {
         if (ev.type === 'text') text += ev.delta;
       }
-      const understood = parseUnderstanding(text);
+      const understood = parseUnderstanding(text, when);
       if (!understood) return; // 掴めなかった。決め文句のまま（未消化の印つき）で残す
       const entry = this.memory.all().find((e) => e.id === id);
       if (!entry) return;
       entry.detail = lessonFromUnderstanding(understood, did);
       this.memory.touch();
       await this.memory.save().catch(() => undefined);
-      this.#opts.onLog?.('info', `何が問題だったかを掴みました: ${understood.what}`);
+      this.#opts.onLog?.('info',
+        `何が問題だったかを掴みました: ${understood.when} のときに、${understood.what}`);
     } catch {
       // 考えられなくても、覚え自体は残っている。ここで止めない。
     } finally {
