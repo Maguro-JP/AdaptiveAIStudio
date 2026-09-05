@@ -12,10 +12,32 @@
 import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-/** 1つあたりの上限。これを超える分は頭だけ渡し、続きは道具で読ませる。 */
+/**
+ * 上限は、**窓から決める。**
+ *
+ * 固定の文字数にしていたので、全部で 64,000 文字まで差し込んでいた。
+ * 窓が 8k のモデルでは、**それだけで溢れる**（指名した中身は、いま書いた
+ * 依頼の一部なので、刈る側は落とせない。落とせないまま窓を超える）。
+ *
+ * 窓が分からないときの受け皿として、これまでの値を残す。
+ */
 export const MENTION_MAX_BYTES = 24_000;
-/** 全部で渡す上限。窓を指名だけで埋めない。 */
 export const MENTION_TOTAL_BYTES = 64_000;
+
+/** 窓のうち、指名した中身に使ってよい割合。残りは依頼と履歴と返事の分。 */
+const SHARE_OF_WINDOW = 0.35;
+
+/**
+ * 窓（トークン）から、指名に使ってよい文字数を決める。
+ *
+ * トークンではなく文字で返すのは、切り出しが文字単位のため。
+ * **多めに数える**（日本語は1文字1トークン）ので、切る側は安全に倒れる。
+ */
+export function mentionBudget(contextTokens: number): { each: number; total: number } {
+  const total = Math.max(400, Math.floor(contextTokens * SHARE_OF_WINDOW));
+  // 一つで全部を使い切らせない。二つ以上指名したときに、後ろが空になる。
+  return { each: Math.max(200, Math.floor(total * 0.6)), total };
+}
 
 /**
  * `@` で指名された道を拾う。
@@ -51,6 +73,8 @@ export interface MentionOpts {
   readonly statImpl?: (p: string) => Promise<{ isDirectory(): boolean; size: number }>;
   readonly maxBytes?: number;
   readonly totalBytes?: number;
+  /** いまの窓（トークン）。渡されたら、上限はここから決める。 */
+  readonly contextTokens?: number;
 }
 
 /**
@@ -66,8 +90,9 @@ export async function readMentions(
 ): Promise<MentionRead[]> {
   const rf = opts.readFileImpl ?? ((p: string) => readFile(p, 'utf8'));
   const st = opts.statImpl ?? ((p: string) => stat(p));
-  const each = opts.maxBytes ?? MENTION_MAX_BYTES;
-  const total = opts.totalBytes ?? MENTION_TOTAL_BYTES;
+  const fromWindow = opts.contextTokens ? mentionBudget(opts.contextTokens) : undefined;
+  const each = opts.maxBytes ?? fromWindow?.each ?? MENTION_MAX_BYTES;
+  const total = opts.totalBytes ?? fromWindow?.total ?? MENTION_TOTAL_BYTES;
 
   const out: MentionRead[] = [];
   let used = 0;

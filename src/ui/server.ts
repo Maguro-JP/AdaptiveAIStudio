@@ -613,7 +613,10 @@ export class UiServer {
         const extra = attached.length > 0 ? await this.#attachments.describe(attached) : '';
         // 指名（`@道`）は、送る側で開いて中身ごと渡す。
         // 名前だけ渡すと、開かずに書き始めることがある。
-        const named = await expandMentions(text, this.#workRoot()).catch(() => ({ text, reads: [] }));
+        // **上限は窓から決める。**固定の文字数だと、狭い窓では指名だけで溢れる。
+        const named = await expandMentions(text, this.#workRoot(), {
+          contextTokens: session.contextTokens,
+        }).catch(() => ({ text, reads: [] }));
         for (const r of named.reads) {
           if (!r.ok) this.broadcast({ type: 'log', level: 'warn', text: `指名を読めません ${r.path}: ${r.body}` });
         }
@@ -1783,7 +1786,9 @@ export class UiServer {
     const extra = next.attached.length > 0
       ? await this.#attachments.describe(next.attached).catch(() => '')
       : '';
-    const named = await expandMentions(next.text, this.#workRoot()).catch(() => ({ text: next.text, reads: [] }));
+    const named = await expandMentions(next.text, this.#workRoot(), {
+      contextTokens: session.contextTokens,
+    }).catch(() => ({ text: next.text, reads: [] }));
     const full = extra ? `${extra}\n\n${named.text}` : named.text;
     this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
     void this.#drive(session, full);
