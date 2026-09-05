@@ -11,7 +11,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { fitToWindow, sizeOf, tokenBudget, estimateTokens, toolOutputBudget, fitByTokens } from '../src/agent/window.ts';
+import { fitToWindow, sizeOf, tokenBudget, estimateTokens, toolOutputBudget, fitByTokens, trimSchemas } from '../src/agent/window.ts';
 import type { ProviderMessage } from '../src/providers/contract.ts';
 
 /** 読んで書いて、を n 回。道具の結果は大きい（ファイルの中身なので）。 */
@@ -314,5 +314,44 @@ describe('入るだけ取る', () => {
 
   test('空でも落ちない', () => {
     assert.deepEqual(fitByTokens([], textOf, 100), []);
+  });
+});
+
+/**
+ * 道具の説明も、窓に合わせる。
+ *
+ * 説明だけで 1400 トークンほどある。**窓が 4k のモデルでは 34%。**
+ * 決まりと学びを足すと、肝心の依頼と履歴の場所が残らない。
+ */
+describe('道具の説明を、狭い窓では削る', () => {
+  const schemas = [
+    { name: 'read_file', description: 'ファイルを読む。全部読むと窓が埋まるので、必要なところだけにすること。' },
+    { name: 'edit_file', description: '一部を差し替える。find は前後を含めて一意にすること。行番号は使わない。' },
+  ];
+
+  test('広い窓では、そのまま渡す（説明は効く）', () => {
+    const got = trimSchemas(schemas, 32768);
+    assert.deepEqual(got, schemas);
+  });
+
+  test('狭い窓では、一文目だけにする', () => {
+    const got = trimSchemas(schemas, 512);
+    assert.equal(got[0]?.description, 'ファイルを読む。');
+    assert.equal(got[1]?.description, '一部を差し替える。');
+  });
+
+  test('**一文目は残す**（何をする道具かが消えると、呼び分けができない）', () => {
+    for (const s of trimSchemas(schemas, 1)) {
+      assert.ok((s.description ?? '').length > 0, `説明が消えている: ${s.name}`);
+    }
+  });
+
+  test('一文しか無いものは、触らない', () => {
+    const one = [{ name: 'x', description: 'これだけ。' }];
+    assert.deepEqual(trimSchemas(one, 1), one);
+  });
+
+  test('説明が無くても落ちない', () => {
+    assert.deepEqual(trimSchemas([{ name: 'x' }], 1), [{ name: 'x' }]);
   });
 });

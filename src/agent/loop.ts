@@ -12,7 +12,7 @@ import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
 import type { Tool, ToolContext, ApprovalRequest, ApprovalAnswer } from './tools/types.ts';
 import { ToolTextFilter } from './tool-text.ts';
 import { DoneMark, DONE_MARK } from './done.ts';
-import { fitToWindow, tokenBudget } from './window.ts';
+import { fitToWindow, tokenBudget, trimSchemas } from './window.ts';
 
 export type AgentEvent =
   | { type: 'thinking'; delta: string }
@@ -121,7 +121,10 @@ export class Agent {
           messages: fitted.messages,
           temperature: this.#opts.temperature,
           maxTokens: this.#opts.maxTokens,
-          tools: this.#opts.tools.map((t) => t.schema),
+          // **狭い窓では、道具の説明を一文に削る。**説明だけで 1400 トークン
+          // あり、4k の窓では 34% を占める。決まりと学びを足すと、
+          // 肝心の依頼と履歴の場所が残らない。広い窓では削らない。
+          tools: trimSchemas(this.#opts.tools.map((t) => t.schema), this.#opts.contextTokens ?? 8192),
         },
         signal,
       ) as AsyncGenerator<ChatEvent>) {

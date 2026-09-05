@@ -122,6 +122,30 @@ export function fitByTokens<T>(
   return out;
 }
 
+/**
+ * 道具の説明を、窓に合わせて短くする。
+ *
+ * 道具の説明だけで 1400 トークンほどある。**窓が 4k のモデルでは 34%。**
+ * 決まりと学びを足すと、肝心の依頼と履歴の場所が残らない。
+ *
+ * 削るのは説明の**二文目から**。一文目は「何をする道具か」で、
+ * ここを削ると呼び分けができなくなる。二文目以降は使い方の念押しなので、
+ * 狭いときは落とす。**広い窓では落とさない**（説明は効くので）。
+ */
+export function trimSchemas<T extends { name: string; description?: string }>(
+  schemas: readonly T[], contextTokens: number, share = 0.15,
+): T[] {
+  const budget = Math.floor(contextTokens * share);
+  const total = schemas.reduce((n, x) => n + estimateTokens(JSON.stringify(x)), 0);
+  if (total <= budget) return [...schemas];
+  return schemas.map((x) => {
+    const text = x.description ?? '';
+    const at = text.indexOf('。');
+    if (at <= 0 || at + 1 >= text.length) return x;
+    return { ...x, description: text.slice(0, at + 1) };
+  });
+}
+
 /** かさ（トークンの見積もり）。 */
 export function sizeOf(messages: readonly ProviderMessage[]): number {
   let n = 0;
