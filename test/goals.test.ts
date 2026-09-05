@@ -136,3 +136,40 @@ describe('壊れても、読める分で進む', () => {
     assert.deepEqual(await g.list(), []);
   });
 });
+
+/**
+ * 提案を溜めすぎない。
+ *
+ * 提案は暇なときに勝手に増える。**上限が無かったので、放っておくと
+ * 際限なく溜まる**（500 件で 877KB。画面にも全部並ぶ）。
+ * 人が選べる数を超えたものは、見てもらえないのと同じ。
+ */
+describe('提案を溜めすぎない', () => {
+  const make = (i: number) => ({
+    kind: 'bug' as const, title: `見つけたもの${i}`, rationale: 'あ'.repeat(100),
+    evidence: [`src/a${i}.ts`], suggestedAction: 'なおす', fingerprint: `f${i}`,
+  });
+
+  test('上限を超えたら、それ以上は溜めない', async () => {
+    const { ProposalQueue, MAX_ITEMS } = await import('../src/agent/proposals.ts');
+    const q = new ProposalQueue();
+    for (let i = 0; i < MAX_ITEMS + 50; i += 1) q.add(make(i));
+    assert.equal(q.all().length, MAX_ITEMS, `上限が効いていない: ${q.all().length}`);
+  });
+
+  test('落とすのは古い方から（新しい方が、いまの状況に近い）', async () => {
+    const { ProposalQueue, MAX_ITEMS } = await import('../src/agent/proposals.ts');
+    const q = new ProposalQueue();
+    for (let i = 0; i < MAX_ITEMS + 10; i += 1) q.add(make(i));
+    const titles = q.all().map((p) => p.title);
+    assert.ok(!titles.includes('見つけたもの0'), '古いものが残っている');
+    assert.ok(titles.includes(`見つけたもの${MAX_ITEMS + 9}`), '新しいものが落ちている');
+  });
+
+  test('**落とした数を数えている**（黙って消さない）', async () => {
+    const { ProposalQueue, MAX_ITEMS } = await import('../src/agent/proposals.ts');
+    const q = new ProposalQueue();
+    for (let i = 0; i < MAX_ITEMS + 7; i += 1) q.add(make(i));
+    assert.equal(q.dropped, 7, `数えていない: ${q.dropped}`);
+  });
+});

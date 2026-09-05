@@ -13,7 +13,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import {
-  UnfinishedWork, resumePrompt, whyText, BACKOFF_MS, MAX_ATTEMPTS,
+  UnfinishedWork, resumePrompt, whyText, BACKOFF_MS, MAX_ATTEMPTS, MAX_OPEN,
 } from '../src/core/unfinished.ts';
 
 async function store(): Promise<{ w: UnfinishedWork; path: string }> {
@@ -131,5 +131,51 @@ describe('続きの頼み方', () => {
     for (const why of ['maxTurns', 'noProgress', 'unverified', 'failed'] as const) {
       assert.ok(whyText(why).length > 0, why);
     }
+  });
+});
+
+/**
+ * 溜めすぎない。
+ *
+ * やり残しは落ちるたびに増える。**上限が無かったので、放っておくと
+ * 際限なく溜まる**（500 件で 521KB。画面にも全部並ぶ）。
+ * 追記式なので、閉じたものの行も残り続け、読むたびに全部を解くことになる。
+ */
+describe('溜めすぎない', () => {
+  test('抱える数に上限がある', async () => {
+    const dir = await tempDir('aas-unf-cap-');
+    const u = new UnfinishedWork(join(dir, 'u.jsonl'));
+    for (let i = 0; i < MAX_OPEN + 20; i += 1) {
+      await u.add({ request: `やり残し${i}`, why: 'failed', note: 'x' });
+    }
+    const left = await u.list();
+    assert.equal(left.length, MAX_OPEN, `上限が効いていない: ${left.length}`);
+  });
+
+  test('落とすのは古い方から（新しい方が、いまの状況に近い）', async () => {
+    const dir = await tempDir('aas-unf-old-');
+    const u = new UnfinishedWork(join(dir, 'u.jsonl'));
+    for (let i = 0; i < MAX_OPEN + 5; i += 1) {
+      await u.add({ request: `やり残し${i}`, why: 'failed', note: 'x' });
+    }
+    const left = await u.list();
+    assert.ok(!left.some((x) => x.request === 'やり残し0'), '古いものが残っている');
+    assert.ok(left.some((x) => x.request === `やり残し${MAX_OPEN + 4}`), '新しいものが落ちている');
+  });
+
+  test('**記録そのものも畳む**（閉じた行が残り続けない）', async () => {
+    const { stat } = await import('node:fs/promises');
+    const dir = await tempDir('aas-unf-small-');
+    const at = join(dir, 'u.jsonl');
+    const u = new UnfinishedWork(at);
+    for (let i = 0; i < 400; i += 1) {
+      await u.add({ request: `やり残し${i}`, why: 'failed', note: 'う'.repeat(200) });
+    }
+    const size = (await stat(at)).size;
+    const live = (await u.list()).length;
+    // 生きている分に見合う大きさに収まっていること。
+    // 日本語は1文字3バイトなので、200字なら 600 バイト + 包みの分。
+    // 畳まないと 400 件ぶん（10,000 バイト/件）残る。
+    assert.ok(size < live * 2000, `畳んでいない: ${size} バイト / 生きている ${live} 件`);
   });
 });

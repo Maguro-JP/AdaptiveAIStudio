@@ -14,7 +14,7 @@
  * 一行ずつ足すだけで書く（会話の残し方と同じ）。丸ごと書き直すと、
  * 書いている最中に落ちたときに全部を失う。
  */
-import { readFile, appendFile, mkdir } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 
 /** なぜ終わっていないか。**符丁で持つ**（表示のときに日本語へ引き直す）。 */
@@ -51,6 +51,13 @@ type Line =
   | { t: 'add'; item: Unfinished }
   | { t: 'bump'; id: string; attempts: number; nextAt: number }
   | { t: 'close'; id: string; how: 'done' | 'gaveUp' | 'canceled' };
+
+/**
+ * 抱えてよい上限。
+ *
+ * 人が見て選べる数を超えたら、それは溜まっているだけで手が付かない。
+ */
+export const MAX_OPEN = 50;
 
 export class UnfinishedWork {
   readonly #path: string;
@@ -99,7 +106,45 @@ export class UnfinishedWork {
       createdAt: new Date(now).toISOString(),
     };
     await this.#append({ t: 'add', item: full });
+    await this.#prune();
     return full;
+  }
+
+  /**
+   * 溜めすぎない。
+   *
+   * やり残しは、落ちるたびに増える。**上限が無かったので、放っておくと
+   * 際限なく溜まる**（500 件で 521KB。画面にも全部並ぶ）。
+   * 古いものほど、もう状況が変わっていて、そのままでは通らない。
+   *
+   * 落とすのは**古い方から**。落としたことは黙らない（記録に残す）。
+   */
+  async #prune(max = MAX_OPEN): Promise<void> {
+    const all = await this.list();
+    if (all.length > max) {
+      for (const gone of all.slice(0, all.length - max)) {
+        // **諦めた**として閉じる。片づいた（done）と混ぜない。
+        await this.#append({ t: 'close', id: gone.id, how: 'gaveUp' });
+      }
+    }
+    await this.#compact(max);
+  }
+
+  /**
+   * 記録そのものを畳む。
+   *
+   * 追記式なので、**閉じたものの行も残り続ける。**生きているのが 50 件でも、
+   * ファイルは何百KBにもなる（実測で 542KB）。読むたびに全部を解くので、
+   * 増えるほど遅くなる。生きている分だけで書き直す。
+   */
+  async #compact(max: number): Promise<void> {
+    const raw = await readFile(this.#path, 'utf8').catch(() => '');
+    const lines = raw.split('\n').filter((l) => l.trim().length > 0).length;
+    if (lines <= Math.max(200, max * 4)) return;
+    const live = await this.list();
+    const body = live.map((item) => `${JSON.stringify({ t: 'add', item })}\n`).join('');
+    await mkdir(dirname(this.#path), { recursive: true });
+    await writeFile(this.#path, body, 'utf8');
   }
 
   /** いま手を付けてよいもの。**一つだけ返す**（一度に一つずつ進める）。 */

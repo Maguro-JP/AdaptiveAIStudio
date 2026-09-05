@@ -36,9 +36,17 @@ export interface Proposal {
   fingerprint: string;
 }
 
+/**
+ * 溜めてよい上限。
+ *
+ * 人が一覧で選べる数を超えたら、それは溜まっているだけで使われない。
+ */
+export const MAX_ITEMS = 200;
+
 export class ProposalQueue {
   readonly #path?: string;
   #items: Proposal[] = [];
+  #dropped = 0;
   /**
    * 調べ終えた手がかりの指紋。
    * 提案にならなかった（＝問題なしだった）ものも覚えておく。
@@ -112,8 +120,37 @@ export class ProposalQueue {
       createdAt: new Date().toISOString(),
     };
     this.#items.push(item);
+    this.#prune();
     return item;
   }
+
+  /**
+   * 溜めすぎない。
+   *
+   * 提案は暇なときに勝手に増える。**上限が無かったので、放っておくと
+   * 際限なく溜まる**（500 件で 877KB。画面にも全部並ぶ）。
+   * 人が選べる数を超えたものは、見てもらえないのと同じ。
+   *
+   * 落とすのは**片づいたものから**。開いているものは、古くても人の宿題なので
+   * 勝手に消さない。それでも超えるときだけ、開いているものの古い順に落とす。
+   */
+  #prune(max = MAX_ITEMS): void {
+    if (this.#items.length <= max) return;
+    const settled = this.#items.filter((x) => x.status !== 'open');
+    const open = this.#items.filter((x) => x.status === 'open');
+    // 片づいたものは、新しい方から少しだけ残す（何を採ったかの手がかり）。
+    const keepSettled = settled.slice(-Math.floor(max * 0.2));
+    const room = max - keepSettled.length;
+    // 開いているものは新しい方を残す。古いものは、たいてい状況が変わっている。
+    const keepOpen = open.slice(-room);
+    this.#items = [...keepSettled, ...keepOpen].sort(
+      (a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0),
+    );
+    this.#dropped += (settled.length - keepSettled.length) + (open.length - keepOpen.length);
+  }
+
+  /** 溜めすぎて落とした数。黙って消さないために持つ。 */
+  get dropped(): number { return this.#dropped; }
 
   setStatus(id: string, status: ProposalStatus): Proposal | undefined {
     const item = this.find(id);
