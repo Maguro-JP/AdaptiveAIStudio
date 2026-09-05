@@ -190,15 +190,31 @@ export function trimSchemas<T extends { name: string; description?: string }>(
   });
   if (cost(noDescription) <= budget) return noDescription;
 
-  // 引数の説明まで落とす。ここが底。名前と型は残す。
+  // 引数の説明まで落とす。ここが底。**説明だけを抜く。**
   return noDescription.map((x) => {
-    const params = (x as { parameters?: { properties?: Record<string, { type?: unknown }> } }).parameters;
-    if (!params?.properties) return x;
-    const properties = Object.fromEntries(
-      Object.entries(params.properties).map(([k, v]) => [k, { type: v?.type }]),
-    );
-    return { ...x, parameters: { ...params, properties } } as T;
+    const params = (x as { parameters?: unknown }).parameters;
+    if (params === undefined) return x;
+    return { ...x, parameters: stripDescriptions(params) } as T;
   });
+}
+
+/**
+ * 説明だけを、深いところまで抜く。
+ *
+ * **形は残す。**`{ type }` に組み直していたので、`enum` `items` `required`
+ * `default` が落ちていた。手元の道具は type と description しか持たないので
+ * 気づかないが、**MCP で外から来る道具は持っている。**落とすと、モデルは
+ * 通らない引数を作り、相手に断られる。減らしたいのは説明であって、形ではない。
+ */
+function stripDescriptions(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripDescriptions);
+  if (value === null || typeof value !== 'object') return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (k === 'description') continue;
+    out[k] = stripDescriptions(v);
+  }
+  return out;
 }
 
 /** かさ（トークンの見積もり）。 */

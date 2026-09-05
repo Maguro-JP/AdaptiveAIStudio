@@ -390,3 +390,43 @@ describe('道具の説明を、狭い窓では削る', () => {
     assert.deepEqual(trimSchemas([{ name: 'x' }], 4096), [{ name: 'x' }]);
   });
 });
+
+/**
+ * いちばん深く削るときも、**形は残す。**
+ *
+ * `{ type }` に組み直していたので、`enum` `items` `required` `default` が
+ * 落ちていた。手元の道具は type と description しか持たないので気づかない。
+ * **MCP で外から来る道具は持っている。**落とすと、モデルは通らない引数を
+ * 作り、相手に断られる。減らしたいのは説明であって、形ではない。
+ */
+describe('削っても、引数の形は壊さない', () => {
+  const mcpLike = [{
+    name: 'create_issue',
+    description: '課題を作る。題と本文が要る。ラベルは任意。',
+    parameters: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: '題' },
+        state: { type: 'string', enum: ['open', 'closed'], description: '状態' },
+        labels: { type: 'array', items: { type: 'string', description: 'ラベル' } },
+        depth: { type: 'number', default: 1, description: '深さ' },
+      },
+      required: ['title'],
+      additionalProperties: false,
+    },
+  }];
+
+  test('説明だけが消え、enum・items・required・default は残る', () => {
+    const got = trimSchemas(mcpLike, 1)[0] as typeof mcpLike[number];
+    const props = got.parameters.properties as Record<string, Record<string, unknown>>;
+    assert.equal(got.description, undefined, '道具の説明が残っている');
+    assert.equal(props.title!.description, undefined, '引数の説明が残っている');
+    assert.deepEqual(props.state!.enum, ['open', 'closed'], 'enum を落としている');
+    assert.deepEqual(props.labels!.items, { type: 'string' }, 'items を落としている');
+    assert.equal(props.depth!.default, 1, 'default を落としている');
+    assert.deepEqual(got.parameters.required, ['title'], 'required を落としている');
+    assert.equal(got.parameters.additionalProperties, false, 'additionalProperties を落としている');
+    // 型は当然残る。
+    assert.equal(props.title!.type, 'string');
+  });
+});

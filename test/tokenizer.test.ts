@@ -155,18 +155,42 @@ describe('数え方の決め方', () => {
     assert.ok(got.why.includes('ありません'), got.why);
   });
 
-  test('**複数あって決められないときは、当てずっぽうに選ばない**', async () => {
-    // 別のモデルの数え方で数えるくらいなら、粗いほうがまだ読める。
+  test('**複数あっても、土台が読むのと同じものを見る**', async () => {
+    /*
+     * 前は「決められないなら見積もりに戻す」にしていた。当てずっぽうに
+     * 選ぶくらいなら粗いほうがまし、という理屈で、それは**選び方が
+     * 決まっていなかったとき**は正しい。
+     *
+     * いまは決まっている。土台は「設定で決めた名前、無ければ置き場の
+     * 最初の一つ」を読む。**同じ順で見れば、当てずっぽうではない。**
+     * 二つ置いてあるだけで見積もりに落ちる方が損。
+     */
     const { resolveCounting } = await import('../src/core/counting.ts');
     const { tempDir } = await import('./tmp.ts');
-    const { writeFile } = await import('node:fs/promises');
+    const { execFileSync } = await import('node:child_process');
     const { join } = await import('node:path');
     const dir = await tempDir('aas-counting-many-');
-    await writeFile(join(dir, 'a.gguf'), 'x');
-    await writeFile(join(dir, 'b.gguf'), 'x');
+    for (const name of ['b.gguf', 'a.gguf']) {
+      execFileSync(process.execPath, ['scripts/tiny-gguf.mjs', join(dir, name)], { stdio: 'pipe' });
+    }
     const got = await resolveCounting({ runtime: { kind: 'inproc', modelsDir: dir } } as never);
-    assert.equal(got.counter, undefined);
-    assert.ok(got.why.includes('2 個'), got.why);
+    assert.ok(got.counter, `見積もりに落ちている: ${got.why}`);
+    assert.equal(got.file, 'a.gguf', '置き場の最初の一つを見ていない');
+  });
+
+  test('設定で名前が決まっていれば、そちらを見る', async () => {
+    const { resolveCounting } = await import('../src/core/counting.ts');
+    const { tempDir } = await import('./tmp.ts');
+    const { execFileSync } = await import('node:child_process');
+    const { join } = await import('node:path');
+    const dir = await tempDir('aas-counting-named-');
+    for (const name of ['a.gguf', 'b.gguf']) {
+      execFileSync(process.execPath, ['scripts/tiny-gguf.mjs', join(dir, name)], { stdio: 'pipe' });
+    }
+    const got = await resolveCounting(
+      { runtime: { kind: 'inproc', modelsDir: dir, model: 'b.gguf' } } as never,
+    );
+    assert.equal(got.file, 'b.gguf', '設定で決めた名前を見ていない');
   });
 
   test('読めない GGUF なら、見積もりに戻る（落ちない）', async () => {

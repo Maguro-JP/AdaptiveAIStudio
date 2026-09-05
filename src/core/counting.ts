@@ -35,15 +35,30 @@ export async function resolveCounting(config: AasConfig): Promise<Counting> {
   }
   const dir = rc.modelsDir ?? modelsDir();
 
-  // 候補の名前からは引けないことがある（ollama の名前で並ぶ）。
-  // 名前で分かるならそれを使い、分からなければ置き場を見る。
-  const named = (config.candidates ?? []).find((c) => /\.gguf$/i.test(c));
-  let file = named ? named.split(/[:\\/]/).pop() : undefined;
+  /*
+   * どの GGUF を読むか。**土台と同じ決め方をする。**
+   *
+   * 決め方が二つあると、別のモデルの数え方で数えることになる。
+   * 土台（`#readyToThink`）は「設定で決めた名前があればそれ、無ければ
+   * 置き場の最初の一つ」で選ぶ。ここも同じ順で見る。
+   *
+   * 候補（candidates）からは引かない。ollama の名前で並ぶことがあり、
+   * 実際に読むファイルとは別（これで一度、繋がっていないのに繋がった気で
+   * いた）。
+   */
+  const found = await listGguf(dir).catch(() => []);
+  const wanted = rc.model;
+  let file = wanted ? found.find((m) => m.ref === wanted)?.ref : undefined;
   if (!file) {
-    const found = await listGguf(dir).catch(() => []);
+    const named = (config.candidates ?? []).find((c) => /\.gguf$/i.test(c));
+    file = named ? named.split(/[:\\/]/).pop() : undefined;
+  }
+  if (!file) {
     if (found.length === 1) file = found[0]!.ref;
     else if (found.length > 1) {
-      return { why: `見積もり（GGUF が ${found.length} 個あって、どれを読むか決まりません）` };
+      // 土台は最初の一つを読む。**同じものを見る。**ここで諦めると、
+      // 二つ置いてあるだけで見積もりに落ちる。
+      file = found[0]!.ref;
     }
   }
   if (!file) return { why: '見積もり（GGUF がありません）' };
