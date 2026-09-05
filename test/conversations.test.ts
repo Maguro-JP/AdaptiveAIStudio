@@ -153,6 +153,20 @@ describe('一覧に上限を置く', () => {
     for (let i = 1; i < ids.length; i += 1) {
       assert.ok(ids[i]! > ids[i - 1]!, `順が戻った: ${ids[i - 1]} → ${ids[i]}`);
     }
+    assert.equal(new Set(ids).size, ids.length, '同じ名前を配っている');
+  });
+
+  test('末尾を使い切っても、同じ名前を配らない', () => {
+    // **一度これで会話が消えた。**使い切った後に同じ名前で頭打ちにしたので、
+    // 作るたびに同じファイルを上書きしていた（106 件作って 1 件しか残らない）。
+    const at = new Date(2026, 8, 3, 12, 0, 0);
+    const top = () => newId(at, () => 0.999999);
+    const ids = Array.from({ length: 50 }, top);
+    for (let i = 1; i < ids.length; i += 1) {
+      assert.ok(ids[i]! > ids[i - 1]!, `順が戻った: ${ids[i - 1]} → ${ids[i]}`);
+    }
+    assert.equal(new Set(ids).size, ids.length, '同じ名前を配っている');
+    for (const id of ids) assert.ok(ID_SHAPE.test(id), `形が違う: ${id}`);
   });
 
   test('**出していないだけで、消えてはいない**', async () => {

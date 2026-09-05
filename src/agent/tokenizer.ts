@@ -1,0 +1,196 @@
+/**
+ * 本物の数え方。**当てずっぽうをやめる。**
+ *
+ * ここまで、トークン数は係数で見積もっていた（日本語1文字=1、他4文字=1）。
+ * 窓に何を残して何を落とすかは、全部その見積もりの上に立っている。
+ * ずれれば、落としてはいけないものを落とす。そのときモデルは、依頼を
+ * 忘れた状態で答える。**画面からは「このモデルは馬鹿だ」に見える。**
+ *
+ * 数え方はモデルごとに違うが、**そのモデルのファイルの中に書いてある。**
+ * GGUF の `tokenizer.ggml.*` に、語彙も、点数も、繋ぎ方（merges）も入っている。
+ * 既に読んでいるのに、数を数えるだけに使っていた。使う。
+ *
+ * 外の物は足さない。llama.cpp が実際にやっていることを、そのまま書く。
+ *
+ * | `tokenizer.ggml.model` | やり方 |
+ * |---|---|
+ * | `llama` / `spm` | 点数の高い隣同士から繋いでいく。繋げない字はバイトに落とす |
+ * | `gpt2` / `bpe` | バイトを字に写して、merges の順に繋いでいく |
+ *
+ * **合わないものは「分からない」と返す。**推測で数えない。
+ * 分からないときは、これまでの見積もり（`estimateTokens`）に戻る。
+ */
+
+/** 数える人。**本物でも見積もりでも、呼ぶ側は同じ形で使う。** */
+export interface Counter {
+  count(text: string): number;
+}
+
+/** GGUF から取り出した、数えるのに要るものだけ。 */
+export interface VocabSpec {
+  /** `llama` `spm` `gpt2` `bpe` のいずれか。 */
+  model: string;
+  tokens: string[];
+  /** SPM で使う。語彙と同じ長さ。 */
+  scores?: number[];
+  /** GGUF の token_type。6 がバイト。 */
+  types?: number[];
+  /** BPE で使う。`"a b"` の形。 */
+  merges?: string[];
+}
+
+/** GGUF のメタデータから、数えるのに要るものを取り出す。 */
+export function vocabFrom(md: Map<string, unknown>): VocabSpec | undefined {
+  const model = md.get('tokenizer.ggml.model');
+  const tokens = md.get('tokenizer.ggml.tokens');
+  if (typeof model !== 'string' || !Array.isArray(tokens)) return undefined;
+  if (!tokens.every((t) => typeof t === 'string')) return undefined;
+  const scores = md.get('tokenizer.ggml.scores');
+  const types = md.get('tokenizer.ggml.token_type');
+  const merges = md.get('tokenizer.ggml.merges');
+  return {
+    model,
+    tokens: tokens as string[],
+    scores: numbers(scores),
+    types: numbers(types),
+    merges: Array.isArray(merges) && merges.every((m) => typeof m === 'string')
+      ? (merges as string[]) : undefined,
+  };
+}
+
+function numbers(v: unknown): number[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out: number[] = [];
+  for (const x of v) {
+    const n = typeof x === 'bigint' ? Number(x) : x;
+    if (typeof n !== 'number') return undefined;
+    out.push(n);
+  }
+  return out;
+}
+
+/**
+ * バイトを字に写す表（GPT-2 のもの）。
+ *
+ * バイトのままだと語彙に入れられないので、**目に見える字へ一対一で写す。**
+ * 空白は `Ġ`、改行は `Ċ` になる、あれ。
+ */
+function byteToUnicode(): Map<number, string> {
+  const bs: number[] = [];
+  for (let b = 0x21; b <= 0x7e; b += 1) bs.push(b);
+  for (let b = 0xa1; b <= 0xac; b += 1) bs.push(b);
+  for (let b = 0xae; b <= 0xff; b += 1) bs.push(b);
+  const cs = [...bs];
+  let n = 0;
+  for (let b = 0; b < 256; b += 1) {
+    if (!bs.includes(b)) { bs.push(b); cs.push(256 + n); n += 1; }
+  }
+  const map = new Map<number, string>();
+  bs.forEach((b, i) => map.set(b, String.fromCodePoint(cs[i]!)));
+  return map;
+}
+
+const BYTE_TO_UNICODE = byteToUnicode();
+
+/**
+ * 前もって切る所（GPT-2 のもの）。
+ *
+ * ここで切っておかないと、単語をまたいで繋がってしまう。
+ */
+const PRE_SPLIT = /'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+/gu;
+
+/** バイト単位の BPE。`gpt2` / `bpe` の数え方。 */
+class BpeTokenizer implements Counter {
+  readonly #rank: Map<string, number>;
+
+  constructor(spec: VocabSpec) {
+    this.#rank = new Map((spec.merges ?? []).map((m, i) => [m, i]));
+  }
+
+  count(text: string): number {
+    let n = 0;
+    for (const piece of text.match(PRE_SPLIT) ?? []) {
+      n += this.#pieces(piece).length;
+    }
+    return n;
+  }
+
+  /** 一区切りを、繋げるだけ繋いだ形にする。 */
+  #pieces(piece: string): string[] {
+    let parts: string[] = [];
+    for (const b of Buffer.from(piece, 'utf8')) parts.push(BYTE_TO_UNICODE.get(b) ?? '');
+    if (parts.length <= 1) return parts;
+
+    for (;;) {
+      let best = -1;
+      let at = -1;
+      for (let i = 0; i + 1 < parts.length; i += 1) {
+        const rank = this.#rank.get(`${parts[i]} ${parts[i + 1]}`);
+        if (rank === undefined) continue;
+        if (best < 0 || rank < best) { best = rank; at = i; }
+      }
+      if (at < 0) break;
+      parts = [...parts.slice(0, at), parts[at]! + parts[at + 1]!, ...parts.slice(at + 2)];
+    }
+    // 語彙に無いものは、これ以上割れない。数の上では1つと数える。
+    return parts;
+  }
+}
+
+/**
+ * SPM（`llama`）の数え方。
+ *
+ * llama.cpp と同じ順で動かす。**点数のいちばん高い隣同士から繋ぐ。**
+ * 空白は `▁` に置き換え、頭に一つ足す。繋げなかった字はバイトに落とす。
+ */
+class SpmTokenizer implements Counter {
+  readonly #ids: Map<string, number>;
+  readonly #scores: number[];
+
+  constructor(spec: VocabSpec) {
+    this.#ids = new Map(spec.tokens.map((t, i) => [t, i]));
+    this.#scores = spec.scores ?? spec.tokens.map(() => 0);
+  }
+
+  count(text: string): number {
+    if (text.length === 0) return 0;
+    const body = `▁${text.replace(/ /g, '▁')}`;
+    // 字（コードポイント）ごとに割る。ここから繋いでいく。
+    let parts: string[] = [...body];
+    for (;;) {
+      let best = -Infinity;
+      let at = -1;
+      for (let i = 0; i + 1 < parts.length; i += 1) {
+        const id = this.#ids.get(parts[i]! + parts[i + 1]!);
+        if (id === undefined) continue;
+        const score = this.#scores[id] ?? 0;
+        if (at < 0 || score > best) { best = score; at = i; }
+      }
+      if (at < 0) break;
+      parts = [...parts.slice(0, at), parts[at]! + parts[at + 1]!, ...parts.slice(at + 2)];
+    }
+    // 語彙に無い塊は、バイトに落ちる。**落ちた分だけ数が増える。**
+    let n = 0;
+    for (const part of parts) {
+      if (this.#ids.has(part)) { n += 1; continue; }
+      n += Buffer.byteLength(part, 'utf8');
+    }
+    return n;
+  }
+}
+
+/**
+ * そのモデルの数え方を作る。**分からないなら作らない。**
+ *
+ * 知らない `tokenizer.ggml.model` に出会ったら undefined を返す。
+ * ここで適当に BPE を当てると、静かに全部の数がずれる。
+ */
+export function tokenizerFor(spec: VocabSpec): Counter | undefined {
+  const kind = spec.model.toLowerCase();
+  if (kind === 'gpt2' || kind === 'bpe') {
+    if (!spec.merges || spec.merges.length === 0) return undefined;
+    return new BpeTokenizer(spec);
+  }
+  if (kind === 'llama' || kind === 'spm') return new SpmTokenizer(spec);
+  return undefined;
+}

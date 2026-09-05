@@ -125,6 +125,17 @@ function realModel() {
   return run('本物のモデル', [join(root, 'scripts', 'real-model.mjs')]);
 }
 
+/**
+ * 数え方が本物と同じか。
+ *
+ * 窓の勘定はここに乗っている。ずれると、落としてはいけないものを落とし、
+ * 「モデルが馬鹿だ」に見える。自分の実装を自分で確かめない。
+ */
+function tokenizer() {
+  console.log('\n== 数え方を、本物と突き合わせる');
+  return run('数え方', [join(root, 'scripts', 'tokenizer-conformance.mjs')]);
+}
+
 const typecheck = run('型検査', [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit']);
 if (typecheck !== 0) process.exit(typecheck);
 
@@ -133,4 +144,6 @@ if (tests !== 0) process.exit(tests);
 
 const swept = await sweep();
 if (swept !== 0) process.exit(swept);
+const counted = tokenizer();
+if (counted !== 0) process.exit(counted);
 process.exit(realModel());

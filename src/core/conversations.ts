@@ -50,8 +50,14 @@ export function titleFrom(text: string): string {
 /** 名前の末尾に使える幅。base36 の4桁。 */
 const TAIL_MAX = 36 ** 4 - 1;
 
-/** 直前に配った名前。**同じ秒の中で、順番が戻らないようにする。** */
-let lastId = '';
+/**
+ * 直前に配った名前を、秒ごとに覚えておく。
+ *
+ * **同じ秒の中でだけ効かせる。**秒が変われば時刻の側で順が決まるので、
+ * 前の秒のことは忘れてよい。
+ */
+let lastHead = '';
+let lastTail = '';
 
 /**
  * 新しい id。人が見ても順番が分かる形にしておく。
@@ -68,15 +74,31 @@ export function newId(now = new Date(), rand = Math.random): string {
   const p = (n: number, w = 2) => String(n).padStart(w, '0');
   const stamp = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}`
     + `-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
-  let tail = Math.floor(rand() * (TAIL_MAX + 1));
   const head = `c${stamp}-`;
-  if (lastId.startsWith(head)) {
-    const before = parseInt(lastId.slice(head.length), 36);
-    if (Number.isFinite(before) && tail <= before) tail = Math.min(before + 1, TAIL_MAX);
+  let tail = Math.floor(rand() * (TAIL_MAX + 1)).toString(36).padStart(4, '0');
+  if (head === lastHead && tail <= lastTail) tail = after(lastTail);
+  lastHead = head;
+  lastTail = tail;
+  return `${head}${tail}`;
+}
+
+/**
+ * その末尾の、次に来るもの。**必ず後になり、必ず別のものになる。**
+ *
+ * 4桁を使い切ったときに**同じ名前で頭打ちにしない。**一度そうしていて、
+ * 使い切った後に配る名前が全部同じになり、**会話が上書きで消えた**
+ * （試験では 106 件作って 1 件しか残らなかった）。順番が崩れるより悪い。
+ *
+ * 使い切ったら、後ろに桁を足す。`-` は数字より前に並ぶので、
+ * `zzzz` < `zzzz-0001` < `zzzz-0002` の順は保たれる。
+ */
+function after(tail: string): string {
+  const [base = '', over] = tail.split('-');
+  const next = over === undefined ? 1 : parseInt(over, 36) + 1;
+  if (base.length === 4 && parseInt(base, 36) < TAIL_MAX && over === undefined) {
+    return (parseInt(base, 36) + 1).toString(36).padStart(4, '0');
   }
-  const id = `${head}${tail.toString(36).padStart(4, '0')}`;
-  if (id > lastId) lastId = id;
-  return id;
+  return `${base}-${next.toString(36).padStart(4, '0')}`;
 }
 
 /**
