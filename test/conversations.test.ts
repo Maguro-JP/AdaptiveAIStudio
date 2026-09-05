@@ -194,3 +194,73 @@ describe('一覧に上限を置く', () => {
     assert.equal((await c.list()).length, 3);
   });
 });
+
+/**
+ * 一覧のために、ファイルを丸ごと読まない。
+ *
+ * 半年ひとつの会話を続けると 16.6MB になり、見出しを作るだけで 177ms
+ * かかっていた（読むだけで 90ms。数え方を速くしても効かない）。
+ * 一覧は最大 100 件読むので、**長く使うほど開けなくなる。**
+ *
+ * 正しく数える必要があるのは**小さいうちだけ**（空かどうかの判定）。
+ * 多い側は「たくさん」で足りる。
+ */
+describe('見出しは、頭だけ読む', () => {
+  /** 長い会話を作る。往復ごとに道具の結果を挟む。 */
+  async function long(c: Conversations, id: string, rounds: number): Promise<void> {
+    const batch = [];
+    for (let i = 0; i < 20; i += 1) {
+      batch.push({ role: 'user' as const, content: `依頼${i}` });
+      batch.push({ role: 'tool' as const, content: '中身'.repeat(500), toolCallId: String(i) });
+      batch.push({ role: 'assistant' as const, content: `返事${i}` });
+    }
+    for (let r = 0; r < rounds; r += 1) await c.append(id, batch);
+  }
+
+  test('小さいうちは、正確に数える', async () => {
+    const { c } = await store();
+    const { id } = await c.create();
+    await c.append(id, [
+      { role: 'user', content: 'ひとつめ' },
+      { role: 'assistant', content: '返事' },
+    ]);
+    const head = await c.head(id);
+    assert.equal(head.messages, 2);
+    assert.equal(head.more, undefined, '小さいのに数え切れていないと言っている');
+  });
+
+  test('**空の判定は、正確なまま**', async () => {
+    // ここが狂うと、押すたびに空の会話が増える（一覧が空の見出しで埋まる）。
+    const { c } = await store();
+    const { id } = await c.create();
+    assert.equal((await c.head(id)).messages, 0);
+  });
+
+  test('大きくなったら、数え切れていないと言う', async () => {
+    const { c } = await store();
+    const { id } = await c.create();
+    await long(c, id, 30);
+    const head = await c.head(id);
+    assert.equal(head.more, true, '全部読んでいる（または言っていない）');
+    assert.ok(head.messages > 0, '空だと言っている');
+    assert.equal(head.title, '新しい会話', '見出しが取れていない');
+  });
+
+  test('**大きくなっても、かかる時間が比例して増えない**', async () => {
+    const { c } = await store();
+    const at = async (rounds: number): Promise<number> => {
+      const { id } = await c.create();
+      await long(c, id, rounds);
+      await c.head(id); // 温めてから測る
+      const t0 = process.hrtime.bigint();
+      await c.head(id);
+      return Number(process.hrtime.bigint() - t0) / 1e6;
+    };
+    const small = Math.max(await at(5), 0.5);
+    const large = await at(50);
+    assert.ok(
+      large / small < 5,
+      `10 倍の大きさで ${(large / small).toFixed(1)} 倍かかっている（丸ごと読んでいる）`,
+    );
+  });
+});

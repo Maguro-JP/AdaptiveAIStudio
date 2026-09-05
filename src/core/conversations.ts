@@ -11,7 +11,7 @@
  * **足すだけで書く。**丸ごと書き直すと、書いている最中に落ちたときに
  * 全部を失う。行ごとなら、壊れた行を捨てるだけで残りは読める。
  */
-import { readdir, readFile, appendFile, writeFile, mkdir, rm, stat } from 'node:fs/promises';
+import { readdir, readFile, appendFile, writeFile, mkdir, rm, stat, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ProviderMessage } from '../providers/contract.ts';
 
@@ -24,7 +24,24 @@ export interface ConversationHead {
   updatedAt: string;
   /** やりとりの数。空の会話を見分けるのに使う */
   messages: number;
+  /**
+   * 数え切れていない（頭しか読んでいない）。
+   *
+   * **正しく数える必要があるのは、小さいうちだけ。**空かどうかの判定に
+   * 使うので、少ない側は正確でなければならない。多い側は「たくさん」で足りる。
+   */
+  more?: boolean;
 }
+
+/**
+ * 見出しを作るときに読む量。
+ *
+ * ここまで、一覧のために**ファイルを丸ごと読んでいた**。半年ひとつの会話を
+ * 続けると 16.6MB になり、1 件で 177ms。一覧は最大 100 件読むので、
+ * 長く使うほど開けなくなる（読むだけで 90ms を占めていた。数え方を
+ * 速くしても効かない。**読む量を減らすしかない**）。
+ */
+const HEAD_SCAN = 128 * 1024;
 
 interface MetaLine { t: 'meta'; id: string; title: string; createdAt: string }
 interface MsgLine { t: 'msg'; at: string; m: ProviderMessage }
@@ -174,7 +191,27 @@ export class Conversations {
   /** 見出しだけを読む。一覧では中身まで組み立てない。 */
   async head(id: string): Promise<ConversationHead> {
     const path = this.#path(id);
-    const [raw, info] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
+    const info = await stat(path);
+
+    // **頭だけ読む。**見出しは1行目に在り、数えるのが要るのは小さいうちだけ。
+    const fh = await open(path, 'r');
+    let raw: string;
+    let more = false;
+    try {
+      const buf = Buffer.alloc(Math.min(HEAD_SCAN, info.size));
+      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+      more = info.size > bytesRead;
+      let text = buf.subarray(0, bytesRead).toString('utf8');
+      // 途中で切れた行は捨てる（字の途中で切れていることもある）。
+      if (more) {
+        const at = text.lastIndexOf('\n');
+        text = at >= 0 ? text.slice(0, at) : '';
+      }
+      raw = text;
+    } finally {
+      await fh.close();
+    }
+
     const lines = raw.split('\n').filter((l) => l.trim().length > 0);
     let title = '新しい会話';
     let createdAt = info.birthtime.toISOString();
@@ -188,7 +225,10 @@ export class Conversations {
       if (rec.m.role === 'user') messages += 1;
       else if (rec.m.role === 'assistant' && rec.m.content.trim().length > 0) messages += 1;
     }
-    return { id, title, createdAt, updatedAt: info.mtime.toISOString(), messages };
+    return {
+      id, title, createdAt, updatedAt: info.mtime.toISOString(), messages,
+      ...(more ? { more: true } : {}),
+    };
   }
 
   /** やりとりを読む。**壊れた行は捨てて、読める分を返す。** */

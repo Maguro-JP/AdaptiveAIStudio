@@ -832,7 +832,8 @@ function drawConversations() {
     row.className = 'side-row';
     const open = document.createElement('button');
     open.textContent = head.title;
-    open.title = `${head.title}（${head.messages}）`;
+    // 数え切れていないときは、そう見せる（頭しか読んでいない）。
+    open.title = `${head.title}（${head.messages}${head.more ? '+' : ''}）`;
     open.className = head.id === conversations.current ? 'on' : '';
     open.disabled = busyNow;
     open.onclick = async () => {
