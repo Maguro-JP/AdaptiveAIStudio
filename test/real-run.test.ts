@@ -141,11 +141,15 @@ describe('実走：壊れているものが、直って、その作業場の試�
       // 段取りが、思った通りに進んだか。
       // **読む回数は決めない。**探し物の言葉は試験の側にも書いてあるので、
       // 上位に試験が来ることがある（実際に来た）。一発で当たる前提にしない。
-      const how = model.did.join(' → ');
-      assert.equal(model.did[0], 'find_code', `探すところから始めていない: ${how}`);
-      assert.equal(model.did[model.did.length - 1], 'edit_file', `直して終わっていない: ${how}`);
-      assert.equal(model.did.filter((n) => n === 'edit_file').length, 1, `二度直している: ${how}`);
-      assert.ok(model.did.includes('read_file'), `読まずに直している: ${how}`);
+      // 判じる呼び出しは別の道。作業の並びからは外して見る。
+      const work = model.did.filter((n) => !n.startsWith('judge'));
+      const how = work.join(' → ');
+      assert.equal(work[0], 'find_code', `探すところから始めていない: ${how}`);
+      assert.equal(work[work.length - 1], 'edit_file', `直して終わっていない: ${how}`);
+      assert.equal(work.filter((n) => n === 'edit_file').length, 1, `二度直している: ${how}`);
+      assert.ok(work.includes('read_file'), `読まずに直している: ${how}`);
+      // **一言ごとに判じている。**合図で選り分けていない。
+      assert.ok(model.did.includes('judge:none'), `判じていない: ${model.did.join(' → ')}`);
 
       // **中身が直っているか。**ここが本題。
       const now = await readFile(join(root, 'src', 'math.js'), 'utf8');
@@ -304,7 +308,7 @@ describe('実走：使うほど賢くなるか（添えた覚えに、結果が�
 });
 
 describe('実走：嫌がられたことを、次から必ず持ち歩くか', () => {
-  test('言われた回で覚え、話題の違う次の依頼にも載る', async () => {
+  test('合図の無い静かな指摘でも覚え、話題の違う次の依頼に載る', async () => {
     const root = await brokenProject();
     const model = await startRealModel({ hint: '足し算', from: 'a - b', to: 'a + b' });
     const server = new UiServer({
@@ -327,12 +331,13 @@ describe('実走：嫌がられたことを、次から必ず持ち歩くか', (
       });
       await new Promise((r) => setTimeout(r, 2500));
 
-      // 1. 嫌がる。**この回で覚えていないと、次に持ち歩けない。**
+      // 1. 指摘する。**合図（怒りの語）が一つも無い言い方にする。**
+      // 決め打ちの語で選り分けていたときは、これを丸ごと落としていた。
       await fetch(`${base}/api/send`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text: '配布物って気持ち悪いから言わないで' }),
+        body: JSON.stringify({ text: '何に対して行ったか書けよ' }),
       });
-      await new Promise((r) => setTimeout(r, 2500));
+      await new Promise((r) => setTimeout(r, 3000));
 
       const state = await (await fetch(`${base}/api/state`)).json() as {
         memory: { kind: string; title: string; detail: string; source?: string }[];
@@ -342,15 +347,15 @@ describe('実走：嫌がられたことを、次から必ず持ち歩くか', (
       assert.equal(learned.length, 1, `覚えていない: ${JSON.stringify(state.memory).slice(0, 400)}`);
       const lesson = learned[0]!.detail;
       // **言われた言葉は残さない。**残すのは、何が・なぜ・次からどうするか。
-      assert.doesNotMatch(lesson, /気持ち悪い/, `原文を残している: ${lesson}`);
+      assert.doesNotMatch(lesson, /書けよ/, `原文を残している: ${lesson}`);
       // **決め文句で済ませない。**その場で考えた中身が入っていること。
       assert.doesNotMatch(lesson, /未消化/, `考えずに決め文句で済ませている: ${lesson}`);
       // **何の指示に対してだったかが要る。**無いと「何をしても怒られた」になる。
       assert.match(lesson, /^【場面】/, `場面から書かれていない: ${lesson}`);
       assert.match(lesson, /【したこと】/, `こちらが何をしたかが無い: ${lesson}`);
-      assert.match(lesson, /言い換えを持ち出した/, `何が問題だったかが無い: ${lesson}`);
-      assert.match(lesson, /否定されたように感じる/, `なぜ問題なのかが無い: ${lesson}`);
-      assert.match(lesson, /【次から】相手が使っている語のまま呼ぶ/, `次の手が無い: ${lesson}`);
+      assert.match(lesson, /何に対しての話かを書かなかった/, `何が問題だったかが無い: ${lesson}`);
+      assert.match(lesson, /記録にしかならない/, `なぜ問題なのかが無い: ${lesson}`);
+      assert.match(lesson, /【次から】場面から書く/, `次の手が無い: ${lesson}`);
 
       // 2. まったく別の話題を頼む。**それでも持ち歩いているか。**
       const events = await drive(base, '足し算が引き算になっています。直してください。');
@@ -361,8 +366,8 @@ describe('実走：嫌がられたことを、次から必ず持ち歩くか', (
         .map((ev) => ev.text ?? '')
         .join('\n');
       assert.match(recalled, /二度としないこと/, `別の話題では思い出していない: ${recalled.slice(0, 300)}`);
-      assert.match(recalled, /【次から】相手が使っている語のまま呼ぶ/, `学びが載っていない: ${recalled.slice(0, 300)}`);
-      assert.doesNotMatch(recalled, /気持ち悪い/, '原文を持ち回っている');
+      assert.match(recalled, /【次から】場面から書く/, `学びが載っていない: ${recalled.slice(0, 300)}`);
+      assert.doesNotMatch(recalled, /書けよ/, '原文を持ち回っている');
     } finally {
       await server.stop();
       await model.close();

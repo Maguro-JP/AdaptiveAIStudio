@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import {
   senseDispleasure, DISPLEASURE_LABEL, DISPLEASURE_RULE, lessonFrom, displeasureTitle,
   understandPrompt, parseUnderstanding, lessonFromUnderstanding,
+  judgePrompt, parseJudgement,
 } from '../src/memory/displeasure.ts';
 import { Memory, formatRecall, betterDetail } from '../src/memory/memory.ts';
 import { BUILTIN_LESSONS, lessonLine } from '../src/memory/builtin-lessons.ts';
@@ -365,5 +366,63 @@ describe('あとから場面が分かったら、畳む', () => {
     assert.equal(got?.id, e.id);
     assert.match(got?.title ?? '', /繋ぎ先を増やすとき/);
     assert.equal(m.all().length, 1);
+  });
+});
+
+/**
+ * 判じるのは、合図ではなくモデル。
+ *
+ * 決め打ちの語で選り分けると、**静かな指摘ほど落とす**。
+ * 「何に対して行ったか書けよ」には怒りの語が一つも無いが、指摘そのもの。
+ * 落とした分は、そもそも学びに入らない。
+ */
+describe('一言ごとに、モデルが判じる', () => {
+  test('問いに、場面・したこと・言葉が入り、形が指定してある', () => {
+    const q = judgePrompt('何に対して行ったか書けよ', '覚えの書き方を直していた', '使った道具: write_file');
+    assert.match(q, /何に対して行ったか書けよ/);
+    assert.match(q, /直前の指示: 覚えの書き方を直していた/);
+    for (const key of ['CODE', 'WHEN', 'WHAT', 'WHY', 'NEXT', 'NONE']) {
+      assert.match(q, new RegExp(key), `${key} が指定されていない`);
+    }
+  });
+
+  test('指摘でないと判じたら、覚えない', () => {
+    assert.equal(parseJudgement('NONE'), undefined);
+    assert.equal(parseJudgement('  none  \n'), undefined);
+  });
+
+  test('迷った形（何も揃っていない）でも、覚えない', () => {
+    // 拾いすぎると「二度としないこと」が依頼の山になって、どれも効かなくなる。
+    assert.equal(parseJudgement('よく分かりません'), undefined);
+    assert.equal(parseJudgement('CODE: BROKEN'), undefined);
+  });
+
+  test('指摘なら、符丁と四行を受け取る', () => {
+    const got = parseJudgement([
+      'CODE: REPEATED',
+      'WHEN: 覚えの書き方を直していたとき',
+      'WHAT: 何に対しての話かを書かなかった',
+      'WHY: 何をしても怒られた、という記録にしかならない',
+      'NEXT: 場面から書く',
+    ].join('\n'));
+    assert.equal(got?.code, 'REPEATED');
+    assert.equal(got?.when, '覚えの書き方を直していたとき');
+    assert.equal(got?.next, '場面から書く');
+  });
+
+  test('符丁が読めないときは、強く決めつけない', () => {
+    const got = parseJudgement('WHEN: 場面\nWHAT: したこと\nNEXT: 次から');
+    assert.equal(got?.code, 'OFFENSIVE');
+  });
+
+  test('**合図では拾えない指摘が在る**（だからモデルに判じさせる）', () => {
+    // ここが、合図だけにしていたときの取りこぼし。
+    for (const said of [
+      '何に対して行ったか書けよ',
+      '本当に今の構成がベストか考えて',
+      'そのまま残すんじゃなくて、意味がわかるように残せ',
+    ]) {
+      assert.equal(senseDispleasure(said), undefined, `合図で拾えている: ${said}`);
+    }
   });
 });

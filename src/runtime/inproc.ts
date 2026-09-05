@@ -28,6 +28,8 @@ import { crossSiteReason } from '../ui/origin.ts';
 import { chunkReader } from '../core/text.ts';
 import { toolPrompt } from './tool-prompt.ts';
 import { extractToolCalls, ToolTextFilter } from '../agent/tool-text.ts';
+import { readGguf } from './gguf.ts';
+import { extractFacts } from './gguf-spec.ts';
 /**
  * ライブラリの名前。文字列の変数にしておく。
  *
@@ -124,6 +126,14 @@ export function tooBigForRam(sizeBytes: number | undefined, ramBytes: number): s
  */
 const GUESSED_WRAPPERS = new Set(['General', 'Llama2Chat']);
 
+/**
+ * 窓の上限。
+ *
+ * 窓はそのまま記憶（KV）の大きさになる。青天井にすると、
+ * 大きいモデルで機械が固まる（「打っても返事が来ない」に戻る）。
+ */
+export const MAX_WINDOW = 32_768;
+
 export class InProcRuntime implements LocalRuntime {
   readonly id = 'inproc';
   readonly #opts: InProcOptions;
@@ -210,7 +220,11 @@ export class InProcRuntime implements LocalRuntime {
         this.#opts.onLog?.(`読み込み中 ${pct}%: ${ref}`);
       },
     });
-    const context = await model.createContext({ contextSize: this.#opts.contextSize ?? 8192 });
+    // **窓は、モデルが持っているぶんを使う。**
+    // 8192 の決め打ちだったので、32k 使えるモデルでも 8k しか使えなかった。
+    // 覚えや決まりを載せると、それだけで埋まる。切り詰める前に、窓を広げる。
+    const contextSize = await this.#windowFor(ref);
+    const context = await model.createContext({ contextSize });
     const session = new lib.LlamaChatSession({ contextSequence: context.getSequence() }) as Held['session'];
     const wrapper = session.chatWrapper?.wrapperName ?? '不明';
     this.#opts.onLog?.(`読み込みました: ${ref}（道具の呼び方: ${wrapper}）`);
@@ -221,7 +235,32 @@ export class InProcRuntime implements LocalRuntime {
         + '守れないモデルもあるので、うまく呼べないときは道具呼び出しを学んだモデル（Qwen など）を置いてください。',
       );
     }
-    return { context, session, wrapper, turn: Promise.resolve() };
+    return { context, session, wrapper, window: contextSize, turn: Promise.resolve() };
+  }
+
+  /**
+   * このモデルで使う窓。
+   *
+   * 設定が在ればそれ。無ければ **GGUF に書いてある本来の窓**を読む。
+   * 読めなければ 8192（これまでと同じ）に落とす。
+   *
+   * 上限は置く。大きい窓は、そのぶん記憶（KV）を食う。機械が固まると
+   * 「打っても返事が来ない」に戻るので、青天井にはしない。
+   */
+  async #windowFor(ref: string): Promise<number> {
+    if (this.#opts.contextSize) return this.#opts.contextSize;
+    try {
+      const file = await readGguf(join(this.#opts.modelsDir, ref));
+      const trained = extractFacts(file).contextLength;
+      if (typeof trained === 'number' && trained >= 2048) {
+        const use = Math.min(trained, MAX_WINDOW);
+        this.#opts.onLog?.(`窓: ${use}（このモデルは ${trained} まで持っています）`);
+        return use;
+      }
+    } catch {
+      // 読めなくても止めない。既定へ落とす。
+    }
+    return 8192;
   }
 
   async unload(ref: string): Promise<void> {
@@ -450,7 +489,9 @@ export class InProcRuntime implements LocalRuntime {
     // **「打っても返事が来ない、機械が固まる」の正体がこれ。**
     //
     // 決まり（system）と履歴が入る場所を残す。残さないと、必ず溢れる。
-    const room = Math.max(256, Math.floor((this.#opts.contextSize ?? 8192) * 0.4));
+    // **実際に開いた窓で数える。**設定の値で数えていたので、モデルの窓が
+    // 広くても狭いつもりで刈っていた（逆に、狭いのに広いつもりで溢れる）。
+    const room = Math.max(256, Math.floor(held.window * 0.4));
     const wanted = typeof body.max_tokens === 'number' ? body.max_tokens : room;
     const capped = Math.min(wanted, room);
 
@@ -606,6 +647,8 @@ interface Held {
    * 画面からは「雑談しかしない」に見える。**見えるようにする。**
    */
   wrapper: string;
+  /** 実際に開いた窓。刈る量は、設定ではなくこちらで数える。 */
+  window: number;
   session: {
     prompt: (text: string, opts?: PromptOptions) => Promise<string>;
     setChatHistory: (history: unknown[]) => void;

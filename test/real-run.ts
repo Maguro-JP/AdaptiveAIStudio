@@ -59,16 +59,19 @@ export async function startRealModel(want: { hint: string; from: string; to: str
         res.end();
       };
 
-      // 何が問題だったかを訊かれたら、考えて三行で返す。
-      // **決まった形で返す相手**として振る舞う（本物の代わり）。
+      // 指摘かどうかを判じる問いには、決まった形で返す（本物の代わり）。
+      // **合図では拾えない言い方**を渡されても、指摘だと判じる相手にする。
       const asked = messages.filter((m) => m.role === 'user').map((m) => m.content ?? '').join('\n');
-      if (/WHAT:|何が問題だったのか/.test(asked)) {
-        did.push('understand');
-        return talk([
-          'WHEN: 直したものを報告していたとき',
-          'WHAT: 利用者が使っていない言い換えを持ち出した',
-          'WHY: 自分の言葉を否定されたように感じる',
-          'NEXT: 相手が使っている語のまま呼ぶ',
+      if (/CODE:|指摘・不満・注意かどうか/.test(asked)) {
+        // ふつうの依頼なら NONE。指摘なら五行。
+        const plain = /足し算|直してください$/.test(asked) && !/書けよ|ベストか/.test(asked);
+        did.push(plain ? 'judge:none' : 'judge:hit');
+        return talk(plain ? 'NONE' : [
+          'CODE: REPEATED',
+          'WHEN: 覚えの書き方を直していたとき',
+          'WHAT: 何に対しての話かを書かなかった',
+          'WHY: 何をしても怒られた、という記録にしかならない',
+          'NEXT: 場面から書く',
         ].join('\n'));
       }
 

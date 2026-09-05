@@ -36,7 +36,7 @@ import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall, betterDetail } from '../memory/memory.ts';
 import {
   senseDispleasure, DISPLEASURE_LABEL, lessonFrom, displeasureTitle,
-  understandPrompt, parseUnderstanding, lessonFromUnderstanding,
+  judgePrompt, parseJudgement, lessonFromUnderstanding,
   type DispleasureCode,
 } from '../memory/displeasure.ts';
 import { ProposalQueue, type Proposal } from '../agent/proposals.ts';
@@ -1100,81 +1100,67 @@ export class Session {
   }
 
   /**
-   * 嫌がられたら、覚える。
+   * 嫌がられていないかを見る。
    *
-   * **失敗から学ぶほうが効く。**うまくいった手を覚えると出来ることが増えるが、
-   * 「その手しか取らない」ようにもなる。嫌がられたことを覚えると、
-   * 出来ることは減らずに、踏む地雷だけが減る。
+   * **一言ごとに、モデルに判じさせる。**合図（決め打ちの語）で選り分けない。
+   * 静かな指摘ほど落とすので、落とした分はそもそも学びに入らなかった。
    *
-   * 言われた言葉は**そのまま残す。**言い換えると、何が嫌だったのかが消える。
+   * 判じるのは別の呼び出しにする（作業の窓を食わない）。返事も待たせない。
    */
   #noteDispleasure(text: string): void {
-    const sensed = senseDispleasure(text);
-    if (!sensed) return;
     const did = this.#lastTurnSummary();
-    // **何の指示に対してだったか。**これが無いと「何をしても怒られた」になる。
     const when = this.#lastTurn?.instruction.trim().slice(0, 120);
-
-    // まず、決め文句で置いておく。**考える前に、覚えを落とさないため。**
-    // このあと考えがまとまったら、同じ覚えを上書きする。
-    // **表題は場面ごとに分ける。**符丁だけを表題にしていたので、
-    // 場面の違う学びが一つに潰れ、古いほうから消えていた。
-    // 学べる数が符丁の数（6）で頭打ちになっていた。
-    const got = this.memory.remember({
-      kind: 'displeasure',
-      title: displeasureTitle(sensed.code, when),
-      detail: lessonFrom(sensed.code, when, did),
-      tags: [sensed.code],
-      source: 'user',
-    });
-    this.#opts.onLog?.('warn',
-      `覚えました（二度としないこと）: ${DISPLEASURE_LABEL[sensed.code]}${got.reinforced ? '（また同じことをしています）' : ''}`);
-    void this.memory.save().catch(() => undefined);
-
-    // **意味と意図は、その場で考えないと残らない。**
-    // 元の言葉はここでしか手に入らず、覚えには残さない。
-    void this.#understand(sensed.code, text, when, did, got.entry.id);
+    void this.#judge(text, when, did);
   }
 
   /**
-   * 何故そう言われたのかを考えて、覚えを書き直す。
+   * 指摘かどうかを判じて、そうなら覚える。
    *
-   * 決め文句を並べるのは、原文を並べるのと同じで**記録**にしかならない。
-   * 考えられなかったときは「未消化」の印を残す。**考えた顔をさせない。**
+   * **モデルが居ないときだけ**、合図で拾う網に落ちる。
+   * 判じ手が居ないのに黙って素通りさせると、いちばん覚えるべき回を落とす。
    */
-  async #understand(
-    code: DispleasureCode, said: string,
-    when: string | undefined, did: string | undefined, id: string,
-  ): Promise<void> {
+  async #judge(said: string, when: string | undefined, did: string | undefined): Promise<void> {
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort(), 60_000);
+    const timer = setTimeout(() => ac.abort(), 90_000);
     timer.unref?.();
     try {
       let text = '';
       for await (const ev of this.orchestrator.run({
         candidates: this.candidates,
-        system: '指摘を受けた側として、何が悪かったのかを考える。決まった三行だけを返す。',
-        messages: [{ role: 'user', content: understandPrompt(said, when, did) }],
+        system: '指摘を受けた側として、何が悪かったのかを考える。決まった形だけを返す。',
+        messages: [{ role: 'user', content: judgePrompt(said, when, did) }],
         temperature: 0.2,
       }, ac.signal)) {
         if (ev.type === 'text') text += ev.delta;
       }
-      const understood = parseUnderstanding(text, when);
-      if (!understood) return; // 掴めなかった。決め文句のまま（未消化の印つき）で残す
-      // 場面が分かったので、表題を付け直す。同じ場面の覚えが在れば、そちらへ畳む。
-      const entry = this.memory.relabel(id, displeasureTitle(code, understood.when));
-      if (!entry) return;
-      const line = lessonFromUnderstanding(understood, did);
-      if (betterDetail(line, entry.detail)) entry.detail = line;
-      this.memory.touch();
-      await this.memory.save().catch(() => undefined);
-      this.#opts.onLog?.('info',
-        `何が問題だったかを掴みました: ${understood.when} のときに、${understood.what}`);
+      const judged = parseJudgement(text, when);
+      if (!judged) return; // 指摘ではない、と判じた
+      this.#keepLesson(judged.code, lessonFromUnderstanding(judged, did), judged.when);
+      this.#opts.onLog?.('warn',
+        `覚えました（二度としないこと）: ${judged.when} のときに、${judged.what}`);
     } catch {
-      // 考えられなくても、覚え自体は残っている。ここで止めない。
+      const sensed = senseDispleasure(said);
+      if (!sensed) return;
+      this.#keepLesson(sensed.code, lessonFrom(sensed.code, when, did), when);
+      this.#opts.onLog?.('warn',
+        `覚えました（判じ手が居ないので、合図で拾いました）: ${DISPLEASURE_LABEL[sensed.code]}`);
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** 覚えを一つ置く。表題は場面ごとに分ける（符丁だけだと一つに潰れる）。 */
+  #keepLesson(code: DispleasureCode, detail: string, when: string | undefined): void {
+    const got = this.memory.remember({
+      kind: 'displeasure',
+      title: displeasureTitle(code, when),
+      detail,
+      tags: [code],
+      source: 'user',
+    });
+    if (betterDetail(detail, got.entry.detail)) got.entry.detail = detail;
+    this.memory.touch();
+    void this.memory.save().catch(() => undefined);
   }
 
   /**

@@ -128,6 +128,56 @@ export const DISPLEASURE_RULE: Record<DispleasureCode, string> = {
 };
 
 /**
+ * 一言ごとに、指摘かどうかを判じてもらう問い。
+ *
+ * **合図（決め打ちの語）で選り分けない。**静かな指摘ほど落とす。
+ * 「何に対して行ったか書けよ」には怒りの語が一つも無いが、指摘そのもの。
+ * 落とした分は、そもそも学びに入らない。
+ *
+ * 判じるのは**別の呼び出し**にする。作業の窓を食わないため。
+ * 返しは語形の変わらない印で固定する。
+ */
+export function judgePrompt(said: string, when?: string, did?: string): string {
+  return [
+    'いまの一言が、こちらへの指摘・不満・注意かどうかを判じてください。',
+    '',
+    `直前の指示: ${when ?? '（分かりません）'}`,
+    `それに対してこちらがしたこと: ${did ?? '（分かりません）'}`,
+    `利用者の言葉: ${said.trim().slice(0, 800)}`,
+    '',
+    'ただの依頼・質問・雑談なら、NONE とだけ返してください。',
+    '指摘なら、次の五行だけを返してください。前置きも説明も要りません。',
+    `CODE: ${CODES.join(' / ')} のどれか`,
+    'WHEN: どういう場面だったか（何を頼まれていたか）',
+    'WHAT: その場面で、こちらが何をしたのが悪かったか',
+    'WHY: なぜそれが問題なのか（利用者にとって何が困るのか）',
+    'NEXT: 同じ場面で、次からどうするか',
+  ].join('\n');
+}
+
+const CODES: DispleasureCode[] = ['REPEATED', 'BROKEN', 'STOP', 'STALLED', 'OFFENSIVE', 'ANGRY'];
+
+export interface Judged extends Understood {
+  code: DispleasureCode;
+}
+
+/**
+ * 判じた結果を受け取る。
+ *
+ * **指摘でないときは、何も返さない。**迷ったら覚えない。
+ * 拾いすぎると「二度としないこと」が依頼の山になって、どれも効かなくなる。
+ */
+export function parseJudgement(text: string, fallbackWhen?: string): Judged | undefined {
+  if (/^\s*NONE\s*$/im.test(text)) return undefined;
+  const understood = parseUnderstanding(text, fallbackWhen);
+  if (!understood) return undefined;
+  const m = /^\s*CODE\s*[:：]\s*([A-Z_]+)/mi.exec(text);
+  const code = CODES.find((c) => c === m?.[1]?.toUpperCase());
+  // 符丁が読めないときは、いちばん弱いものにする。**強く決めつけない。**
+  return { ...understood, code: code ?? 'OFFENSIVE' };
+}
+
+/**
  * 覚えの表題。
  *
  * **場面ごとに分ける。**符丁だけを表題にすると、場面の違う学びが
