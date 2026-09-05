@@ -22,6 +22,7 @@
 import { readdir, readFile, stat, mkdir, writeFile } from 'node:fs/promises';
 import { join, relative, sep, extname } from 'node:path';
 import { createHash } from 'node:crypto';
+import { Ignores } from './ignore.ts';
 
 /** 見に行かない場所。数が多く、開いても仕方がない。 */
 const SKIP = new Set([
@@ -163,7 +164,7 @@ export async function buildIndex(root: string): Promise<CodeIndex> {
   const files: FileEntry[] = [];
   let skipped = 0;
 
-  const walk = async (dir: string, depth: number): Promise<void> => {
+  const walk = async (dir: string, depth: number, ign: Ignores): Promise<void> => {
     if (depth > 12 || files.length >= MAX_FILES) return;
     let entries;
     try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
@@ -171,9 +172,13 @@ export async function buildIndex(root: string): Promise<CodeIndex> {
       if (files.length >= MAX_FILES) return;
       if (e.name.startsWith('.') && e.name !== '.github') continue;
       const full = join(dir, e.name);
+      // **その置き場が「見なくていい」と書いたものは、索引にも入れない。**
+      // 生成物が索引に入ると、窓を食ううえ、直す先を間違える。
+      const relHere = relative(root, full).split(sep).join('/');
+      if (ign.ignores(relHere, e.isDirectory())) continue;
       if (e.isDirectory()) {
         if (SKIP.has(e.name)) continue;
-        await walk(full, depth + 1);
+        await walk(full, depth + 1, await ign.enter(relHere));
         continue;
       }
       if (!e.isFile()) continue;
@@ -195,7 +200,7 @@ export async function buildIndex(root: string): Promise<CodeIndex> {
       });
     }
   };
-  await walk(root, 0);
+  await walk(root, 0, await Ignores.load(root));
   files.sort((a, b) => a.path.localeCompare(b.path));
   return { root, builtAt: new Date().toISOString(), files, skipped };
 }

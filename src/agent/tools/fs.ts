@@ -1,11 +1,12 @@
 import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { unifiedDiff, diffStat } from '../diff.ts';
 import { toolOutputBudget } from '../window.ts';
 import { applyHunks, splitHunks } from '../hunks.ts';
 import { safeResolve, realSafeResolve, isSymlink, toDisplayPath } from './paths.ts';
 import { type Tool, type ToolContext, ok, fail, requireString } from './types.ts';
 import { applyEdit } from './write-kind.ts';
+import { Ignores } from '../ignore.ts';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'target', '.venv']);
 const MAX_READ_BYTES = 400_000;
@@ -51,7 +52,7 @@ export const readFileTool: Tool = {
 export const listFilesTool: Tool = {
   schema: {
     name: 'list_files',
-    description: 'ディレクトリ配下のファイル一覧を返す。node_modules や .git は除外される。',
+    description: 'ディレクトリ配下のファイル一覧を返す。.gitignore に書かれたものと node_modules や .git は除外される。',
     parameters: {
       type: 'object',
       properties: {
@@ -66,7 +67,7 @@ export const listFilesTool: Tool = {
     if (!abs) return fail(`作業ディレクトリの外です: ${p}`);
     const found: string[] = [];
     try {
-      await walk(abs, ctx.root, found, 0);
+      await walk(abs, ctx.root, found, 0, await ignoresFor(ctx.root, p));
     } catch (e) {
       return fail(`一覧できません: ${p} (${describe(e)})`);
     }
@@ -80,7 +81,7 @@ export const listFilesTool: Tool = {
 export const searchTextTool: Tool = {
   schema: {
     name: 'search_text',
-    description: 'ファイル内容を文字列で検索し、該当箇所をファイル名:行番号つきで返す。',
+    description: 'ファイル内容を文字列で検索し、該当箇所をファイル名:行番号つきで返す。.gitignore に書かれたものは探さない。',
     parameters: {
       type: 'object',
       properties: {
@@ -99,7 +100,7 @@ export const searchTextTool: Tool = {
     if (!abs) return fail(`作業ディレクトリの外です: ${base}`);
 
     const files: string[] = [];
-    await walk(abs, ctx.root, files, 0).catch(() => undefined);
+    await walk(abs, ctx.root, files, 0, await ignoresFor(ctx.root, base)).catch(() => undefined);
     const hits: string[] = [];
     for (const rel of files) {
       if (hits.length >= 100) break;
@@ -286,16 +287,38 @@ export const editFileTool: Tool = {
   },
 };
 
-async function walk(dir: string, root: string, out: string[], depth: number): Promise<void> {
+async function walk(
+  dir: string, root: string, out: string[], depth: number, ign?: Ignores,
+): Promise<void> {
   if (depth > 12 || out.length >= 3000) return;
   const entries = await readdir(dir, { withFileTypes: true });
   for (const e of entries) {
     if (e.name.startsWith('.') && e.name !== '.github') continue;
     if (SKIP_DIRS.has(e.name)) continue;
     const abs = join(dir, e.name);
-    if (e.isDirectory()) await walk(abs, root, out, depth + 1);
+    // **その置き場が「見なくていい」と書いたものを見ない。**
+    const rel = relative(root, abs).split(sep).join('/');
+    if (ign?.ignores(rel, e.isDirectory())) continue;
+    if (e.isDirectory()) await walk(abs, root, out, depth + 1, await ign?.enter(rel));
     else if (e.isFile()) out.push(toDisplayPath(root, abs));
   }
+}
+
+/**
+ * その場所まで降りた状態の決まりを作る。
+ *
+ * 途中の階に置かれた `.gitignore` も効くので、根から順に降りて重ねる。
+ */
+async function ignoresFor(root: string, rel: string): Promise<Ignores> {
+  let ign = await Ignores.load(root);
+  if (rel === '.' || rel === '') return ign;
+  const parts = rel.split(/[\\/]/).filter((s) => s.length > 0 && s !== '.');
+  let here = '';
+  for (const part of parts) {
+    here = here ? `${here}/${part}` : part;
+    ign = await ign.enter(here);
+  }
+  return ign;
 }
 
 function describe(e: unknown): string {
