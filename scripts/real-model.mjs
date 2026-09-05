@@ -70,6 +70,45 @@ try {
   // 4. 型が分かるか（分からないなら、道具は本文で渡す道に落ちる）。
   const wrappers = rt.wrappers();
   if (wrappers.length !== 1) bad.push(`読み込んだモデルが数えられていない: ${JSON.stringify(wrappers)}`);
+  const guessed = wrappers[0]?.guessed === true;
+
+  // 5. 道具を渡したときに、道が選ばれているか。
+  //
+  //    型が当てずっぽうなら、**本文で渡す道**に落ちるはず。
+  //    そこが繋がっていないと、道具は一度も呼ばれない（画面からは
+  //    「動いているが何もしない」に見える）。本物で踏んでおく。
+  const withTools = await fetch(`${baseUrl}/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'tiny.gguf', stream: false, max_tokens: 8,
+      messages: [{ role: 'user', content: 'read a.ts' }],
+      tools: [{
+        type: 'function',
+        function: {
+          name: 'read_file',
+          description: 'ファイルを読む',
+          parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+        },
+      }],
+    }),
+  });
+  if (!withTools.ok) {
+    bad.push(`道具を渡すと落ちる: ${withTools.status} ${(await withTools.text()).slice(0, 200)}`);
+  } else {
+    const got = await withTools.json();
+    const choice = got?.choices?.[0];
+    if (!choice) bad.push(`道具を渡したときに返事が無い: ${JSON.stringify(got).slice(0, 200)}`);
+    // 乱数の重みなので、呼び出しは出ない。**落ちないこと**と、
+    // 生の JSON を人に見せていないことを見る。
+    else if (typeof choice.message?.content !== 'string') {
+      bad.push(`返事の形が違う: ${JSON.stringify(choice).slice(0, 200)}`);
+    } else if (/tool_call|"arguments"/.test(choice.message.content)) {
+      bad.push(`生の呼び出しが本文に出ている: ${choice.message.content.slice(0, 120)}`);
+    }
+  }
+  if (!guessed) {
+    console.log('（この模型の型は当てずっぽうではありませんでした。本文で渡す道は踏んでいません）');
+  }
 } catch (e) {
   bad.push(`落ちました: ${e.message}`);
 } finally {
@@ -82,4 +121,4 @@ if (bad.length > 0) {
   for (const b of bad) console.error(`- ${b}`);
   process.exit(1);
 }
-console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す）');
+console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す）');
