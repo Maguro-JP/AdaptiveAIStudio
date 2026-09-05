@@ -602,6 +602,22 @@ async function loadMcpCatalog() {
       { className: 'empty', textContent: `見本帳を読めませんでした: ${e.message ?? e}` }));
     return;
   }
+  // **元から入っているものを、先に言う。**
+  // 繋ぐ先に並べていたので、持っている機能を入れ直させることになっていた。
+  if (d.builtin?.length) {
+    const have = document.createElement('div');
+    have.className = 'mcp-builtin';
+    have.append(Object.assign(document.createElement('div'),
+      { className: 'mcp-name', textContent: '元から入っています（繋ぐ必要はありません）' }));
+    for (const b of d.builtin) {
+      const row = document.createElement('div');
+      row.className = 'dim';
+      row.textContent = `・${b.name} — ${b.about}`;
+      have.append(row);
+    }
+    box.append(have);
+  }
+
   for (const e of d.entries ?? []) {
     const card = document.createElement('div');
     card.className = 'mcp-card';
@@ -610,8 +626,9 @@ async function loadMcpCatalog() {
     head.className = 'mcp-head';
     head.append(Object.assign(document.createElement('span'), { className: 'mcp-name', textContent: e.name }));
     // **繋ぐ前に、繋がらない理由が分かるようにする。**
-    const tags = [[e.remote ? '遠く' : '手元', 'dim']];
+    const tags = [[e.remote ? '遠く（npm は要りません）' : '手元', 'dim']];
     if (e.needsNpx) tags.push(['npm が要る', 'warn']);
+    if (e.unverified) tags.push(['繋ぎ先は未確認', 'warn']);
     if (e.retired) tags.push(['廃止', 'bad']);
     if (e.connected) tags.push(['繋いであります', 'good']);
     for (const [text, cls] of tags) {
@@ -645,17 +662,13 @@ async function loadMcpCatalog() {
 
     const bar = document.createElement('div');
     bar.className = 'btnbar';
-    const go = document.createElement('button');
-    go.type = 'button';
-    go.className = 'primary';
-    go.textContent = e.connected ? '繋ぎ直す' : '繋ぐ';
-    go.onclick = async () => {
+    const connect = async (prefer) => {
       const secrets = {};
       for (const [env, input] of fields) if (input.value.trim()) secrets[env] = input.value.trim();
       $('ghNote').textContent = `${e.name} に繋いでいます…`;
       const r = await fetch('/api/mcp/connect', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: e.id, secrets }),
+        body: JSON.stringify({ id: e.id, secrets, ...(prefer ? { prefer } : {}) }),
       });
       const body = await r.json().catch(() => ({}));
       // **値は画面に残さない。**入れたら消す。
@@ -670,7 +683,23 @@ async function loadMcpCatalog() {
       await loadMcpCatalog();
       await loadMcp();
     };
+
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'primary';
+    go.textContent = e.connected ? '繋ぎ直す' : '繋ぐ';
+    go.onclick = () => connect();
     bar.append(go);
+
+    // 遠くが駄目だったときの逃げ道。**npm が要るので、そう書いておく。**
+    if (e.remote && e.hasLocal) {
+      const local = document.createElement('button');
+      local.type = 'button';
+      local.className = 'ghost';
+      local.textContent = '手元で動かす（npm が要ります）';
+      local.onclick = () => connect('local');
+      bar.append(local);
+    }
     if (e.connected) {
       const off = document.createElement('button');
       off.type = 'button';

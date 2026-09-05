@@ -21,6 +21,48 @@ export interface Secret {
   where?: string;
 }
 
+/**
+ * **元から入っているもの。**
+ *
+ * ここに在るものを「外から繋ぐもの」として並べていた。並べた結果、
+ * 自前で持っている機能を、わざわざ npm 経由で入れ直させることになっていた
+ * （しかも npm の無い機械では入らない）。
+ *
+ * 繋ぐ先ではなく「もう在る」と言うために持つ。
+ */
+export const BUILTIN = [
+  {
+    id: 'filesystem',
+    name: 'ファイルを読み書きする',
+    tools: ['read_file', 'list_files', 'search_text', 'find_code', 'write_file', 'edit_file'],
+    about: '作業場の外へは出さない。書き換えは承認と検問所を通る',
+  },
+  {
+    id: 'memory',
+    name: '覚えておく',
+    tools: ['（会話をまたいで、こちらから覚える）'],
+    about: '起きたことを控えて、関係するときに思い出して添える',
+  },
+  {
+    id: 'thinking',
+    name: '段に分けて進める',
+    tools: ['/plan', '（歩幅を測って割り直す）'],
+    about: '大きい依頼を分け、詰まったら小さく割り直す',
+  },
+  {
+    id: 'shell',
+    name: 'コマンドを動かす',
+    tools: ['run_command'],
+    about: '許した先頭語だけ。承認を通る',
+  },
+  {
+    id: 'web',
+    name: '頁を取ってくる',
+    tools: ['fetch_url'],
+    about: '行き先を見せて、返ってきたものは検問所を通す',
+  },
+] as const;
+
 export interface CatalogEntry {
   id: string;
   /** 表に出す名前。**訳さない。** */
@@ -39,6 +81,16 @@ export interface CatalogEntry {
   needsNpx?: boolean;
   /** 廃止されたもの。繋げはするが、そう言う。 */
   retired?: string;
+  /**
+   * 繋ぎ先を、こちらの見当で書いたもの。**確かめていない。**
+   * 網の外から確かめられないので、外れていることがある。黙って出さない。
+   */
+  unverified?: boolean;
+  /**
+   * 手元で動かす道（遠くが駄目なときの逃げ道）。
+   * `npx` が要るので、npm の無い機械では動かない。
+   */
+  local?: { command: string; args: string[]; needsNpx?: boolean; envFrom?: Record<string, string> };
   /** 引数に、作業場などを埋める必要があるか。 */
   wantsRoot?: boolean;
 }
@@ -67,41 +119,27 @@ export const CATALOG: CatalogEntry[] = [
     }],
   },
   {
-    id: 'filesystem',
-    name: 'Filesystem',
-    about: '決めた場所のファイルを読み書きする',
-    ...npx('@modelcontextprotocol/server-filesystem'),
-    wantsRoot: true,
-  },
-  {
-    id: 'memory',
-    name: 'Memory',
-    about: '覚えておく（知識のかたまりとして貯める）',
-    ...npx('@modelcontextprotocol/server-memory'),
-  },
-  {
-    id: 'sequential-thinking',
-    name: 'Sequential Thinking',
-    about: '考えを段に分けて進める',
-    ...npx('@modelcontextprotocol/server-sequential-thinking'),
-  },
-  {
     id: 'playwright',
     name: 'Playwright',
-    about: 'ブラウザを開いて、押して回る',
+    about: 'ブラウザを開いて、押して回る（遠くの口は無い。手元で動かす）',
     ...npx('@playwright/mcp@latest'),
   },
   {
     id: 'context7',
     name: 'Context7',
     about: 'ライブラリの、いまの説明書を引く',
-    ...npx('@upstash/context7-mcp'),
+    url: 'https://mcp.context7.com/mcp',
+    unverified: true,
+    local: { command: 'npx', args: ['-y', '@upstash/context7-mcp'], needsNpx: true },
   },
   {
     id: 'notion',
     name: 'Notion',
     about: 'Notion の頁を読み書きする',
-    ...npx('@notionhq/notion-mcp-server'),
+    url: 'https://mcp.notion.com/mcp',
+    unverified: true,
+    headersFrom: { Authorization: 'NOTION_TOKEN' },
+    local: { command: 'npx', args: ['-y', '@notionhq/notion-mcp-server'], needsNpx: true },
     envFrom: { NOTION_TOKEN: 'NOTION_TOKEN' },
     secrets: [{
       env: 'NOTION_TOKEN',
@@ -113,7 +151,10 @@ export const CATALOG: CatalogEntry[] = [
     id: 'sentry',
     name: 'Sentry',
     about: '起きている不具合を見る',
-    ...npx('@sentry/mcp-server'),
+    url: 'https://mcp.sentry.dev/mcp',
+    unverified: true,
+    headersFrom: { Authorization: 'SENTRY_TOKEN' },
+    local: { command: 'npx', args: ['-y', '@sentry/mcp-server'], needsNpx: true },
     envFrom: { SENTRY_ACCESS_TOKEN: 'SENTRY_TOKEN' },
     secrets: [{ env: 'SENTRY_TOKEN', about: 'Sentry の合言葉' }],
   },
@@ -121,7 +162,10 @@ export const CATALOG: CatalogEntry[] = [
     id: 'exa',
     name: 'Exa',
     about: '網を検索して、中身まで取ってくる',
-    ...npx('exa-mcp-server'),
+    url: 'https://mcp.exa.ai/mcp',
+    unverified: true,
+    headersFrom: { Authorization: 'EXA_API_KEY' },
+    local: { command: 'npx', args: ['-y', 'exa-mcp-server'], needsNpx: true },
     envFrom: { EXA_API_KEY: 'EXA_API_KEY' },
     secrets: [{ env: 'EXA_API_KEY', about: 'Exa の鍵', where: 'https://dashboard.exa.ai' }],
   },
@@ -150,22 +194,47 @@ export function findEntry(id: string): CatalogEntry | undefined {
     ?? CATALOG.find((e) => e.name.toLowerCase() === want);
 }
 
-/** 見本帳から、設定に書く形を作る。 */
-export function specFrom(entry: CatalogEntry, opts: { root?: string } = {}): {
+/**
+ * 見本帳から、設定に書く形を作る。
+ *
+ * **遠くを先に使う。**手元で動かす道は `npx` が要り、npm の無い機械では
+ * 動かない。遠くが駄目だったときのために残してあるだけ。
+ */
+export function specFrom(entry: CatalogEntry, opts: { root?: string; prefer?: 'remote' | 'local' } = {}): {
   command?: string; args?: string[]; url?: string;
   envFrom?: Record<string, string>; headersFrom?: Record<string, string>;
 } {
-  if (entry.url) {
+  const wantLocal = opts.prefer === 'local';
+  if (entry.url && !wantLocal) {
     return { url: entry.url, ...(entry.headersFrom ? { headersFrom: entry.headersFrom } : {}) };
+  }
+  const local = entry.local;
+  if (local) {
+    return {
+      command: local.command,
+      args: [...local.args, ...(entry.wantsRoot && opts.root ? [opts.root] : [])],
+      ...(entry.envFrom ? { envFrom: entry.envFrom } : {}),
+    };
+  }
+  if (!entry.command) {
+    // 手元の道が無いのに手元を頼まれたら、遠くで返す（何も返さないより良い）。
+    if (entry.url) return { url: entry.url, ...(entry.headersFrom ? { headersFrom: entry.headersFrom } : {}) };
+    return {};
   }
   const args = [...(entry.args ?? [])];
   // 場所を渡すものには、いまの作業場を入れる。**書かせない。**
   if (entry.wantsRoot && opts.root) args.push(opts.root);
   return {
-    command: entry.command ?? 'npx',
+    command: entry.command,
     args,
     ...(entry.envFrom ? { envFrom: entry.envFrom } : {}),
   };
+}
+
+/** その繋ぎ先で、npm（npx）が要るか。遠くで繋ぐなら要らない。 */
+export function needsNpx(entry: CatalogEntry, prefer?: 'remote' | 'local'): boolean {
+  if (entry.url && prefer !== 'local') return false;
+  return (entry.local?.needsNpx ?? entry.needsNpx) === true;
 }
 
 /** 足りていない合言葉。名前だけを返す（値は見ない）。 */

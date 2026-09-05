@@ -1019,3 +1019,9 @@ dialog.wide { width: min(46rem, 92vw); }
   border: 1px solid var(--line);
 }
 .mcp-card .field-row input { min-width: 0; }
+
+/* 元から入っているもの。繋ぐ先と混ぜない。 */
+.mcp-builtin {
+  border: 1px dashed var(--line); border-radius: var(--radius);
+  padding: 8px 10px; display: flex; flex-direction: column; gap: 2px;
+}

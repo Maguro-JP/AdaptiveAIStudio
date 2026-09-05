@@ -13,7 +13,7 @@
 import { listDir } from './files.ts';
 import { UnfinishedWork, resumePrompt, whyText } from '../core/unfinished.ts';
 import { githubLaunch } from '../core/github-mcp.ts';
-import { CATALOG, findEntry, specFrom } from '../mcp/catalog.ts';
+import { CATALOG, BUILTIN, findEntry, specFrom, needsNpx } from '../mcp/catalog.ts';
 import { connectService, disconnectService } from '../core/mcp-connect.ts';
 import { stat } from 'node:fs/promises';
 import { Goals, progressOf, isSettled } from '../core/goals.ts';
@@ -1057,12 +1057,17 @@ export class UiServer {
     if (path === '/api/mcp/catalog' && req.method === 'GET') {
       const have = this.#opts.config.mcp?.servers ?? {};
       return send(res, 200, {
+        // **元から入っているものは、繋ぐ先に並べない。**
+        // 並べると、自前で持っている機能を npm 経由で入れ直させることになる。
+        builtin: BUILTIN.map((b) => ({ id: b.id, name: b.name, about: b.about, tools: [...b.tools] })),
         entries: CATALOG.map((e) => ({
           id: e.id,
           name: e.name,
           about: e.about,
           remote: e.url !== undefined,
-          needsNpx: e.needsNpx === true,
+          hasLocal: e.local !== undefined || e.command !== undefined,
+          needsNpx: needsNpx(e),
+          unverified: e.unverified === true,
           retired: e.retired ?? null,
           connected: have[e.id] !== undefined,
           secrets: (e.secrets ?? []).map((sec) => ({
@@ -1080,7 +1085,9 @@ export class UiServer {
      * （置き場の .env に書く。設定にも画面にも、値は出さない）。
      */
     if (path === '/api/mcp/connect' && req.method === 'POST') {
-      const body = await readBody(req) as { id?: unknown; secrets?: unknown; enabled?: unknown };
+      const body = await readBody(req) as {
+        id?: unknown; secrets?: unknown; enabled?: unknown; prefer?: unknown;
+      };
       const entry = typeof body?.id === 'string' ? findEntry(body.id) : undefined;
       if (!entry) return send(res, 404, { error: `見本帳にありません: ${String(body?.id ?? '')}` });
 
@@ -1089,8 +1096,10 @@ export class UiServer {
       for (const [k, v] of Object.entries(given)) if (typeof v === 'string') secrets[k] = v;
 
       // 中身は会話からの道と同じものを使う。二つに書くと、片方だけ直る。
+      const prefer = body?.prefer === 'local' ? 'local' as const : undefined;
       const got = await connectService(entry.id, {
         root: this.#workRoot(), secrets, enabled: body?.enabled !== false,
+        ...(prefer ? { prefer } : {}),
       });
       if (!got.ok) return send(res, 400, { error: got.error ?? '繋げませんでした' });
 
@@ -1106,7 +1115,7 @@ export class UiServer {
         servers: {
           ...this.#opts.config.mcp?.servers,
           [entry.id]: {
-            ...specFrom(entry, { root: this.#workRoot() }),
+            ...specFrom(entry, { root: this.#workRoot(), ...(prefer ? { prefer } : {}) }),
             enabled: body?.enabled !== false,
           },
         },

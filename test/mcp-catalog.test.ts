@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { CATALOG, findEntry, specFrom, missingSecrets } from '../src/mcp/catalog.ts';
+import { CATALOG, BUILTIN, findEntry, specFrom, missingSecrets, needsNpx } from '../src/mcp/catalog.ts';
 import * as connectMod from '../src/core/mcp-connect.ts';
 
 describe('見本帳', () => {
@@ -50,8 +50,43 @@ describe('見本帳', () => {
   });
 
   test('場所が要る道具には、作業場を入れてやる（書かせない）', () => {
-    const spec = specFrom(findEntry('filesystem')!, { root: '/tmp/here' });
+    const spec = specFrom(
+      { id: 'x', name: 'x', about: 'x', command: 'npx', args: ['-y', 'p'], wantsRoot: true },
+      { root: '/tmp/here' },
+    );
     assert.equal(spec.args?.[spec.args.length - 1], '/tmp/here');
+  });
+
+  test('**元から在るものは、繋ぐ先に並べない**', () => {
+    // 自前で持っている機能を、npm 経由で入れ直させていた。
+    const outside = new Set(CATALOG.map((e) => e.id));
+    for (const b of BUILTIN) {
+      assert.equal(outside.has(b.id), false, `元から在るのに、繋ぐ先にも並んでいる: ${b.id}`);
+    }
+    assert.ok(BUILTIN.some((b) => b.id === 'filesystem'));
+    assert.ok(BUILTIN.some((b) => b.id === 'memory'));
+  });
+
+  test('遠くで繋げるものは、npm を要らないと言う', () => {
+    for (const e of CATALOG) {
+      if (!e.url) continue;
+      assert.equal(needsNpx(e), false, `${e.id}: 遠くで繋ぐのに npm が要ると言っている`);
+    }
+  });
+
+  test('遠くが駄目なときの逃げ道は、手元で動かす形になる', () => {
+    const e = findEntry('context7')!;
+    assert.equal(specFrom(e).url, 'https://mcp.context7.com/mcp');
+    const local = specFrom(e, { prefer: 'local' });
+    assert.equal(local.url, undefined);
+    assert.equal(local.command, 'npx');
+    assert.equal(needsNpx(e, 'local'), true);
+  });
+
+  test('確かめていない繋ぎ先は、そう印を持つ', () => {
+    // 網の外から確かめられないものが在る。黙って出さない。
+    assert.equal(findEntry('context7')?.unverified, true);
+    assert.equal(findEntry('github-local')?.unverified, undefined);
   });
 
   test('足りない合言葉を数える。空文字は「入っている」に数えない', () => {
@@ -95,6 +130,22 @@ describe('繋ぐ', () => {
     assert.deepEqual(got.missing.map((m) => m.env), ['GITHUB_TOKEN']);
   });
 
+  test('確かめていない繋ぎ先に繋いだら、確かめていないと言う', async () => {
+    const { connect } = await inBox();
+    const got = await connect.connectService('context7');
+    assert.equal(got.ok, true);
+    assert.ok(got.notes.some((n) => n.includes('確かめていません')), got.notes.join(' / '));
+  });
+
+  test('手元を選ぶと、手元で動かす形で書かれる', async () => {
+    const { home, connect } = await inBox();
+    const got = await connect.connectService('context7', { prefer: 'local' });
+    assert.equal(got.ok, true);
+    const written = await readFile(join(home, 'aas.config.json'), 'utf8');
+    assert.match(written, /context7-mcp/);
+    assert.doesNotMatch(written, /mcp\.context7\.com/);
+  });
+
   test('廃止されているものは、繋いでもそう言う', async () => {
     const { connect } = await inBox();
     const got = await connect.connectService('github-local', { secrets: { GITHUB_TOKEN: 'x' } });
@@ -111,12 +162,12 @@ describe('繋ぐ', () => {
 
   test('外すと、設定から消える', async () => {
     const { home, connect } = await inBox();
-    await connect.connectService('memory');
-    assert.match(await readFile(join(home, 'aas.config.json'), 'utf8'), /memory/);
-    const got = await connect.disconnectService('memory');
+    await connect.connectService('context7');
+    assert.match(await readFile(join(home, 'aas.config.json'), 'utf8'), /context7/);
+    const got = await connect.disconnectService('context7');
     assert.equal(got.ok, true);
     const after = JSON.parse(await readFile(join(home, 'aas.config.json'), 'utf8')) as
       { mcp?: { servers?: Record<string, unknown> } };
-    assert.equal(after.mcp?.servers?.memory, undefined);
+    assert.equal(after.mcp?.servers?.context7, undefined);
   });
 });

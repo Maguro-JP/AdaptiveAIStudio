@@ -8,7 +8,7 @@
  * 送った先（モデル）にも渡る。要るときは「これが要る」と言って、
  * 画面（設定 → 外の道具）で入れてもらう。
  */
-import { CATALOG, findEntry, missingSecrets } from '../../mcp/catalog.ts';
+import { CATALOG, BUILTIN, findEntry, missingSecrets, needsNpx } from '../../mcp/catalog.ts';
 import { connectService, disconnectService } from '../../core/mcp-connect.ts';
 import { type Tool, ok, fail, requireString } from './types.ts';
 
@@ -16,22 +16,29 @@ export const listServicesTool: Tool = {
   schema: {
     name: 'list_services',
     description:
-      '外の道具（MCP）として繋げる先の一覧。'
-      + '何と繋げるか分からないとき、繋ぐ前に、まずこれを見る。',
+      '元から入っている機能と、外に繋げる先の一覧。'
+      + '繋ぐ前に、まずこれを見る（持っているものを繋ぎ直さないため）。',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
   },
   async run() {
+    // **元から在るものを先に言う。**言わないと、持っている機能を
+    // わざわざ外から繋ぎ直そうとする。
+    const have = BUILTIN.map((b) => `- ${b.name}: ${b.about}（${b.tools.join(', ')}）`);
     const lines = CATALOG.map((e) => {
       const missing = missingSecrets(e).map((m) => m.env);
       const mark = [
-        e.url ? '遠く' : '手元',
-        ...(e.needsNpx ? ['npm が要る'] : []),
+        e.url ? '遠く（npm は要らない）' : '手元',
+        ...(needsNpx(e) ? ['npm が要る'] : []),
+        ...(e.unverified ? ['繋ぎ先は未確認'] : []),
         ...(e.retired ? ['廃止'] : []),
         ...(missing.length > 0 ? [`合言葉が要る: ${missing.join(', ')}`] : []),
       ].join(' / ');
       return `- ${e.id}（${e.name}）: ${e.about} [${mark}]`;
     });
-    return ok(['繋げる先:', ...lines].join('\n'));
+    return ok([
+      '元から入っているもの（繋ぐ必要はない）:', ...have,
+      '', '外に繋げる先:', ...lines,
+    ].join('\n'));
   },
 };
 

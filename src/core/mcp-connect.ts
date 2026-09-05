@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { aasHome } from './home.ts';
 import { writeEnvValue } from './env.ts';
 import { saveMcpServer, removeMcpServer } from '../ui/settings.ts';
-import { findEntry, specFrom, missingSecrets, CATALOG, type CatalogEntry } from '../mcp/catalog.ts';
+import { findEntry, specFrom, missingSecrets, needsNpx, CATALOG, type CatalogEntry } from '../mcp/catalog.ts';
 import { githubLaunch } from './github-mcp.ts';
 import { canRun } from './which.ts';
 
@@ -26,6 +26,11 @@ export interface ConnectResult {
 }
 
 export interface ConnectOptions {
+  /**
+   * どちらで繋ぐか。既定は遠く（npm が要らない）。
+   * 遠くが駄目だったときだけ `local`。
+   */
+  prefer?: 'remote' | 'local';
   /** 場所を渡す道具に入れる、いまの作業場。 */
   root?: string;
   /** 合言葉。名前 → 値。**渡された分だけ**置き場の .env に書く。 */
@@ -51,7 +56,7 @@ export async function connectService(id: string, opts: ConnectOptions = {}): Pro
     }
 
     const spec: Record<string, unknown> = {
-      ...specFrom(entry, opts.root ? { root: opts.root } : {}),
+      ...specFrom(entry, { ...(opts.root ? { root: opts.root } : {}), ...(opts.prefer ? { prefer: opts.prefer } : {}) }),
       enabled: opts.enabled !== false,
     };
     // 同梱してあるなら、そちらで起こす（npx の無い機械でも動く）。
@@ -64,7 +69,7 @@ export async function connectService(id: string, opts: ConnectOptions = {}): Pro
     return {
       ok: true, id: entry.id, path,
       missing: missingSecrets(entry).map((m) => ({ env: m.env, about: m.about, ...(m.where ? { where: m.where } : {}) })),
-      notes: notesFor(entry),
+      notes: notesFor(entry, opts.prefer),
       };
   } catch (e) {
     return { ok: false, missing: [], notes: [], error: (e as Error).message };
@@ -83,10 +88,15 @@ export async function disconnectService(id: string): Promise<ConnectResult> {
   }
 }
 
-function notesFor(entry: CatalogEntry): string[] {
+function notesFor(entry: CatalogEntry, prefer?: 'remote' | 'local'): string[] {
   const notes: string[] = [];
   if (entry.retired) notes.push(entry.retired);
-  if (entry.needsNpx && !canRun('npx')) {
+  // **確かめていないことは、確かめていないと言う。**
+  if (entry.unverified && prefer !== 'local') {
+    notes.push('この繋ぎ先はこちらの見当です（確かめていません）。'
+      + '繋がらなければ「手元で動かす」を試してください。');
+  }
+  if (needsNpx(entry, prefer) && !canRun('npx')) {
     notes.push('この道具は npx で立ち上げます。この機械には npm が入っていないので、動きません。');
   }
   return notes;
