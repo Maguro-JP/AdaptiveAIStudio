@@ -64,10 +64,18 @@ import { diffStat } from '../agent/diff.ts';
 import { inspectDependencies, describeDependencies } from '../agent/dependencies.ts';
 import type { LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
-import { fitByTokens } from '../agent/window.ts';
+import { fitByTokens, estimateTokens } from '../agent/window.ts';
 import { ProjectRules } from '../agent/project-rules.ts';
 import type { Counter } from '../agent/tokenizer.ts';
 import { resolveCounting, type Counting } from './counting.ts';
+
+/**
+ * 前置き（決まり・学び・様子・置き場の決まり）に使ってよい、窓の割合。
+ *
+ * **合計で決める。**載せるものごとに別々に割合を決めると、足したときに
+ * 窓の半分が消える（実際にそうなっていた）。
+ */
+export const SYSTEM_SHARE = 0.25;
 
 export const DEFAULT_SYSTEM = `あなたはソフトウェア開発の作業者です。与えられた作業ディレクトリで実際に手を動かします。
 
@@ -1297,26 +1305,55 @@ export class Session {
     // preexisting と notRun は、こちらの手柄でも失点でもない。動かさない。
   }
 
+  /**
+   * いまモデルへ渡している前置き。
+   *
+   * **中に閉じ込めない。**窓のどれだけを前置きが食っているかは、
+   * 狭い窓のモデルでは死活問題で、外から測れないと確かめようがない。
+   */
+  async systemPrompt(): Promise<string> {
+    return this.#system();
+  }
+
   /** 依頼のたびに、その時点で分かっている状況を渡す。調べ直させるより速い。 */
   async #system(): Promise<string> {
     const base = this.config.system ?? DEFAULT_SYSTEM;
     const counter = await this.#count();
     const count = counter ? (t: string) => counter.count(t) : undefined;
+    const size = count ?? estimateTokens;
     const snap = await this.#prefetch.snapshotWithin(3000);
-    const brief = snap ? describeSnapshot(snap) : '';
+
+    /*
+     * **前置き全体で、一つの予算にする。**
+     *
+     * ここまで、載せるものごとに窓の割合を別々に決めていた
+     * （学び 15%、置き場の決まり 20%、道具の説明 15%）。**合計を誰も
+     * 見ていない。**足すと窓の半分が、依頼と履歴の前に消える。
+     * 窓 4096 のモデルでは、それだけで 56%（実測）。
+     *
+     * 一つずつ見ると、どれも「窓に合わせて」いる。**合わせ方が独立
+     * だっただけで、これは前に六箇所直したのと同じ形。**
+     *
+     * だから、前置きは全体で `SYSTEM_SHARE` まで。中では**優先順に**取る。
+     * 決まり本体 → 嫌がられたこと → 作業場の様子 → 置き場の決まり。
+     * 入らないものは載せない（切り詰めるより、載せない方が読める）。
+     */
+    const budget = Math.floor(this.contextTokens * SYSTEM_SHARE);
+    let left = Math.max(0, budget - size(base));
 
     /*
      * **嫌がられたことは、決まりの側にも置く。**
      *
      * 思い出す仕組み（recall）は依頼の言葉から引くので、取りこぼしうる。
      * ここに置けば、どの回でも必ず目に入る。窓は食うが、
-     * 同じ失敗を一度でも減らせるなら安い。
+     * 同じ失敗を一度でも減らせるなら安い。**だから先に取る。**
      */
-    // 決まりに載せる分。**窓の 15% まで**（件数で切ると、長さで外す）。
     const hated = fitByTokens(
       this.memory.displeasures(12),
       (e) => e.detail || e.title,
-      Math.floor(this.contextTokens * 0.15),
+      Math.floor(left * 0.5),
+      // 窓が狭くても、一件は載せる。**ここを 0 にすると、狭い窓のモデルほど
+      // 同じ失敗を繰り返す。**いちばん要る所から削ることになる。
       1,
       count,
     );
@@ -1326,17 +1363,39 @@ export class Session {
       ...hated.map((e) => `- ${e.detail || e.title}`),
       '同じことをもう一度すると、それまでの積み上げが無駄になります。時間をかけてよいので、繰り返さないこと。',
     ].join('\n');
+    left = Math.max(0, left - size(never));
+
+    // 作業場の様子。**ここも数えていなかった。**大きな置き場ほど長くなる。
+    const rawBrief = snap ? describeSnapshot(snap) : '';
+    const brief = size(rawBrief) <= left ? rawBrief : '';
+    left = Math.max(0, left - size(brief));
 
     /*
      * **置き場の決まりを、頼むたびに貼り直させない。**
      *
      * `AGENTS.md` や `CLAUDE.md` を置いてある場所は多い。置いてあるなら、
-     * それが決まりなので読む。窓の 20% までに収める（長い決まり書き一つで
-     * 依頼が押し出されるのを避ける）。
+     * それが決まりなので読む。残った分だけ載せる。
      */
-    const rules = await this.#projectRules.block(Math.floor(this.contextTokens * 0.20), Date.now(), count);
+    const rules = await this.#projectRules.block(left, Date.now(), count);
 
-    return [base, brief, rules, never].filter(Boolean).join('\n\n');
+    /*
+     * **組み上げてから、もう一度測る。**
+     *
+     * 見出しや締めの一行（「二度としないこと…」など）は、中身の予算に
+     * 入っていない。一つずつは小さいが、足すと予算を超える（実測で 70〜100）。
+     * 予算に「だいたい収まる」では、狭い窓では効かない。
+     *
+     * 超えていたら、**要らない順に落とす。**削るのではなく落とす
+     * （途中で切れた決まりは、書いていないより悪いことがある）。
+     * 決まり本体と、学びの最後の一件は落とさない。
+     */
+    const parts = [base, brief, rules, never];
+    const drop = [2, 1]; // 置き場の決まり → 作業場の様子 の順に落とす
+    for (const at of drop) {
+      if (size(parts.filter(Boolean).join('\n\n')) <= budget) break;
+      parts[at] = '';
+    }
+    return parts.filter(Boolean).join('\n\n');
   }
 
   get instruction(): string { return this.#instruction; }
