@@ -18,6 +18,14 @@
  *   3. **矛盾は黙って飲み込まない**
  *      前と違うことを決めたなら、それは報告に値する出来事。
  *
+ *   4. **役に立ったかを見る**
+ *      思い出して添えた結果、その仕事が通ったのか、落ちたのか。
+ *      見ないと、**外れた覚えが永遠に効き続ける**。使うほど雑音が増える形で、
+ *      それは「使うほど馬鹿になる」。当たった覚えを上げ、外した覚えを下げる。
+ *
+ *      ただし**確かめていない回からは学ばない。**検証を回していない回の
+ *      「うまくいった気がする」で重みを動かすと、思い込みが固まるだけ。
+ *
  * 埋め込みも外部データベースも使わない。語の重なりと新しさと確認回数で十分に効く。
  * 動く条件を増やさないことも、止まらないための設計のうち。
  */
@@ -54,6 +62,12 @@ export interface MemoryEntry {
   outcome?: 'worked' | 'failed';
   /** どこで知ったか */
   source?: string;
+  /** 思い出して添えた回数。 */
+  used?: number;
+  /** 添えたあと、確かめて通った回数。 */
+  helped?: number;
+  /** 添えたあと、確かめて落ちた回数。 */
+  misled?: number;
   /** この決定が置き換えた古い決定 */
   supersedes?: string;
   /** 置き換えられた側に入る */
@@ -268,12 +282,42 @@ export class Memory {
         const trust = Math.log2(1 + e.confirms);
         // 決めたことと好みは、古くても効き続ける
         const weight = e.kind === 'decision' || e.kind === 'preference' ? 1.5 : 1;
-        return { e, score: (overlap * 2 + recency + trust) * weight };
+        // **役に立ったかで重みを変える。**当たった覚えは上へ、外した覚えは下へ。
+        // 一度も使っていないものは 1（下げも上げもしない）。
+        return { e, score: (overlap * 2 + recency + trust) * weight * usefulness(e) };
       })
       .filter((x): x is { e: MemoryEntry; score: number } => !!x);
 
     scored.sort((a, b) => b.score - a.score || b.e.seenAt - a.e.seenAt);
     return scored.slice(0, limit).map((x) => x.e);
+  }
+
+  /**
+   * 思い出して添えたことを控える。**添えた事実だけ**で、まだ良し悪しは付けない。
+   */
+  noteRecalled(ids: readonly string[]): void {
+    for (const id of ids) {
+      const e = this.#entries.find((x) => x.id === id);
+      if (!e) continue;
+      e.used = (e.used ?? 0) + 1;
+      this.#dirty = true;
+    }
+  }
+
+  /**
+   * 添えた結果を書き戻す。
+   *
+   * **確かめていない回では呼ばない。**呼ぶ側が `passed` / `failed` を
+   * 確かめてから渡す。確かめていない回で重みを動かすと、思い込みが固まる。
+   */
+  noteOutcome(ids: readonly string[], ok: boolean): void {
+    for (const id of ids) {
+      const e = this.#entries.find((x) => x.id === id);
+      if (!e) continue;
+      if (ok) e.helped = (e.helped ?? 0) + 1;
+      else e.misled = (e.misled ?? 0) + 1;
+      this.#dirty = true;
+    }
   }
 
   /**
@@ -284,6 +328,26 @@ export class Memory {
     return this.recall(approach, { kinds: ['attempt', 'incident'], limit: limit * 3 })
       .filter((e) => e.outcome !== 'worked')
       .slice(0, limit);
+  }
+
+  /**
+   * 忘れる。
+   *
+   * **人が消せない記憶は、溜まる一方になる。**外れた覚えは重みで下がるが、
+   * 「そもそも間違っている」と分かったものは、下げるのではなく消す。
+   * 消したかどうかを返す（黙って何もしない、を作らない）。
+   */
+  forget(id: string): boolean {
+    const before = this.#entries.length;
+    this.#entries = this.#entries.filter((e) => e.id !== id);
+    // 繋がりも切っておく。消した先を指したままにすると、履歴が辿れなくなる。
+    for (const e of this.#entries) {
+      if (e.supersedes === id) delete e.supersedes;
+      if (e.supersededBy === id) delete e.supersededBy;
+    }
+    const gone = this.#entries.length < before;
+    if (gone) this.#dirty = true;
+    return gone;
   }
 
   /** 決め直しの履歴を古い順に辿る。 */
@@ -313,11 +377,15 @@ export class Memory {
     const rest = this.#entries.filter(
       (e) => !(e.kind === 'decision' || e.kind === 'preference' || e.supersededBy));
 
-    rest.sort((a, b) => {
-      const va = Math.log2(1 + a.confirms) + 1 / (1 + (now - a.seenAt) / DAY / 30);
-      const vb = Math.log2(1 + b.confirms) + 1 / (1 + (now - b.seenAt) / DAY / 30);
-      return vb - va;
-    });
+    // **効いた実績を、新しさより重く見る。**
+    // 新しさと確認回数だけで刈ると、「今日覚えたばかりの外れ」が残り、
+    // 「半年前から何度も効いている当たり」が消える。それは、使うほど
+    // 手持ちが悪くなるということ。
+    const worth = (e: MemoryEntry): number => {
+      const base = Math.log2(1 + e.confirms) + 1 / (1 + (now - e.seenAt) / DAY / 30);
+      return base * usefulness(e) + (e.helped ?? 0) * 0.5 - (e.misled ?? 0) * 0.5;
+    };
+    rest.sort((a, b) => worth(b) - worth(a));
 
     const room = Math.max(0, max - keep.length);
     const dropped = rest.length - Math.min(rest.length, room);
@@ -358,4 +426,24 @@ export function formatEntry(e: MemoryEntry): string {
   const trust = e.confirms > 1 ? ` ×${e.confirms}` : '';
   const dead = e.supersededBy ? ' （決め直し済み）' : '';
   return `  ${e.id} [${KIND_LABEL[e.kind]}${trust}] ${when} ${e.title}${dead}`;
+}
+
+/**
+ * 役に立ち度。
+ *
+ * 添えたあと通った回数と、落ちた回数から出す。
+ * **一度や二度で決めつけない**（Laplace）。使っていないものは 1 のまま。
+ *
+ *   まだ使っていない        → 1.00
+ *   3回添えて3回通った      → 1.30
+ *   3回添えて3回落ちた      → 0.70
+ */
+export function usefulness(e: Pick<MemoryEntry, 'helped' | 'misled'>): number {
+  const helped = e.helped ?? 0;
+  const misled = e.misled ?? 0;
+  if (helped + misled === 0) return 1;
+  // 0.5 を真ん中にして、0.6〜1.4 の幅に収める。効きすぎると
+  // 一度の失敗で良い覚えが消える。
+  const rate = (helped + 1) / (helped + misled + 2);
+  return 0.6 + rate * 0.8;
 }

@@ -688,11 +688,29 @@ export const PANELS = {
       body.append(rows(s.memory, (m) => {
         const row = el('div', 'row');
         const trust = m.confirms >= 3 ? '確か' : m.confirms === 2 ? 'おそらく' : '一度だけ';
+        // **効いたかどうかを出す。**出さないと、なぜ上に来るのかが分からない。
+        const helped = m.helped ?? 0;
+        const misled = m.misled ?? 0;
+        const worth = helped + misled === 0 ? ''
+          : misled > helped ? `外した ${misled}/${helped + misled}`
+          : `効いた ${helped}/${helped + misled}`;
         row.append(
           el('span', 'key', `${LABEL[m.kind] ?? m.kind} / ${trust}`),
           el('span', m.supersededBy ? 'dim' : '', m.title),
-          el('span', m.outcome === 'failed' ? 'bad' : 'dim', m.outcome === 'failed' ? '失敗' : ''),
+          el('span', misled > helped ? 'bad' : 'good', worth),
         );
+        if (m.outcome === 'failed') row.append(el('span', 'bad', '失敗'));
+        // 覚え違いは、その場で消せる。消せないと溜まる一方になる。
+        const drop = el('button', 'ghost tiny', '忘れる');
+        drop.title = 'この覚えを消す';
+        drop.onclick = async () => {
+          const r = await fetch(`/api/memory?id=${encodeURIComponent(m.id)}`, { method: 'DELETE' });
+          if (!r.ok) {
+            const body = await r.json().catch(() => ({}));
+            alert(body.error ?? '消せませんでした');
+          }
+        };
+        row.append(drop);
         if (m.detail) row.title = m.detail;
         return row;
       }));

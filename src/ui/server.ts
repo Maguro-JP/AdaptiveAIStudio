@@ -1201,6 +1201,23 @@ export class UiServer {
       return send(res, 200, await collectState(this.#opts.config));
     }
 
+    /**
+     * 覚え違いを消す。
+     *
+     * **人が消せない記憶は、溜まる一方になる。**重みで下げるだけでは、
+     * 「そもそも間違っている」ものが残り続ける。
+     */
+    if (path === '/api/memory' && req.method === 'DELETE') {
+      const id = url.searchParams.get('id') ?? '';
+      const session = this.#session;
+      if (!session) return send(res, 409, { error: 'まだ土台がありません。一度何か送ってください' });
+      const gone = session.memory.forget(id);
+      if (!gone) return send(res, 404, { error: `その覚えはありません: ${id}` });
+      await session.memory.save().catch(() => undefined);
+      this.broadcast({ type: 'stateChanged' });
+      return send(res, 200, { id, forgotten: true });
+    }
+
     if (path === '/api/events') {
       res.writeHead(200, {
         'content-type': 'text/event-stream',

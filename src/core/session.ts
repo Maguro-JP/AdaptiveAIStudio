@@ -184,6 +184,8 @@ export class Session {
   readonly #history: ProviderMessage[] = [];
   #running?: AbortController;
   #instruction = '';
+  /** いま添えている覚え。結果が出たら、ここへ書き戻す。 */
+  #recalledIds: string[] = [];
   /** 書き込みの直前に作られた差分。承認の問い合わせを通り道にして拾う。 */
   readonly #diffs = new Map<string, { diff: string; created: boolean }>();
   /** 提案がどの思考から出たか。採否をその思考の実績に返すために持つ。 */
@@ -509,9 +511,13 @@ export class Session {
             : `${members.filter((m) => m.state === 'done').length}/${members.length}件完了、検査は${verified}`,
         ].join(' — '),
         tags: changed.slice(0, 5),
-        outcome: report.verdict === 'rejected' ? 'failed' : 'worked',
+        // **確かめて通ったときだけ「うまくいった」。**
+        // 受け取れたことと、動くことは別。ここを一緒にすると、
+        // 動かない手を「うまくいった手」として覚え続ける。
+        outcome: verified === 'passed' ? 'worked' : 'failed',
         source: 'plan',
       });
+      this.#gradeRecall(verified === 'passed' ? 'passed' : verified === 'failed' ? 'failed' : 'notRun');
       this.memory.compact();
       this.markChanged();
       return report;
@@ -832,6 +838,8 @@ export class Session {
        */
       const failedTools: string[] = [];
       let wroteSomething = false;
+      /** この回で触ったもの。覚えるときの手がかりにする。 */
+      const changedHere: string[] = [];
 
       const run = async function* (this: Session, agent: Agent): AsyncGenerator<SessionEvent> {
         for await (const ev of agent.run(this.#history, ac.signal)) {
@@ -865,7 +873,11 @@ export class Session {
             case 'toolEnd': {
               // 何が効いて何が効かなかったかを数える。**言葉ではなく、結果で見る。**
               if (ev.isError) failedTools.push(ev.call.name);
-              else if (isWriteTool(ev.call.name)) wroteSomething = true;
+              else if (isWriteTool(ev.call.name)) {
+                wroteSomething = true;
+                const at = (ev.call.args as { path?: unknown }).path;
+                if (typeof at === 'string' && !changedHere.includes(at)) changedHere.push(at);
+              }
               if (!ev.isError && isWriteTool(ev.call.name)) this.#prefetch.invalidate();
               yield {
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
@@ -959,6 +971,41 @@ export class Session {
         checkpoint.commit();
       }
 
+      // 添えた覚えに、結果を書き戻す。ここが「使うほど賢く」の要。
+      this.#gradeRecall(checked);
+
+      /*
+       * この回のことを覚える。
+       *
+       * **覚えていたのは、段取りを組んだ回だけだった。**普通の依頼では
+       * 何も残らないので、いくら使っても手持ちが増えない。それでは
+       * 「使うほど賢くなる」にならない。
+       *
+       * ただし**何でも覚えない。**
+       *   ・作業場が変わっていない回（訊いただけ）は覚えない。雑談で埋まる
+       *   ・確かめていない回に「うまくいった」と付けない。
+       *     付けると、動かない手を「うまくいった手」として覚え続ける
+       */
+      if (wroteSomething) {
+        this.memory.remember({
+          kind: 'attempt',
+          title: instruction,
+          detail: [
+            changedHere.length > 0 ? `触ったもの: ${changedHere.slice(0, 5).join(', ')}` : '',
+            checked === 'passed' ? '確かめて通った'
+              : checked === 'failed' ? '確かめたが通らなかった'
+              : checked === 'preexisting' ? '元から落ちていた'
+              : '確かめていない',
+          ].filter(Boolean).join(' — '),
+          tags: changedHere.slice(0, 5),
+          // **確かめた回だけ、良し悪しを付ける。**
+          ...(checked === 'passed' ? { outcome: 'worked' as const } : {}),
+          ...(checked === 'failed' ? { outcome: 'failed' as const } : {}),
+          source: 'send',
+        });
+        this.memory.compact();
+      }
+
       const succeeded = finishedReason === 'completed' && keep;
       this.#harness.endTask(succeeded ? 'completed' : 'failed');
       await this.#harness.metrics?.save();
@@ -1027,12 +1074,35 @@ export class Session {
     return rc.contextSize ?? rc.desiredContext ?? 8192;
   }
 
+  /**
+   * 思い出して添える。**添えたものを控えておく。**
+   *
+   * 控えないと、あとで「役に立ったのか」を書き戻せない。書き戻さないと、
+   * 外れた覚えが永遠に効き続ける（使うほど雑音が増える）。
+   */
   #recall(text: string): string {
     const related = this.memory.recall(text, { limit: 6 });
     const failed = this.memory.failedBefore(text, 2);
     const merged = [...related];
     for (const f of failed) if (!merged.some((e) => e.id === f.id)) merged.push(f);
+    this.#recalledIds = merged.map((e) => e.id);
+    this.memory.noteRecalled(this.#recalledIds);
     return formatRecall(merged);
+  }
+
+  /**
+   * 添えた覚えに、結果を書き戻す。
+   *
+   * **確かめた回だけ。**検証を回していない回の「うまくいった気がする」で
+   * 重みを動かすと、思い込みが固まるだけで、賢くはならない。
+   */
+  #gradeRecall(checked: 'passed' | 'failed' | 'preexisting' | 'notRun'): void {
+    const ids = this.#recalledIds;
+    this.#recalledIds = [];
+    if (ids.length === 0) return;
+    if (checked === 'passed') this.memory.noteOutcome(ids, true);
+    else if (checked === 'failed') this.memory.noteOutcome(ids, false);
+    // preexisting と notRun は、こちらの手柄でも失点でもない。動かさない。
   }
 
   /** 依頼のたびに、その時点で分かっている状況を渡す。調べ直させるより速い。 */

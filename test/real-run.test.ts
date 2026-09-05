@@ -256,3 +256,49 @@ describe('実走：直したあと、こちらで試験を回して「直った�
     }
   });
 });
+
+describe('実走：使うほど賢くなるか（添えた覚えに、結果が返るか）', () => {
+  test('確かめて通った回は、添えた覚えが「効いた」側に付く', async () => {
+    const root = await brokenProject();
+    const model = await startRealModel({ hint: '足し算', from: 'a - b', to: 'a + b' });
+    const server = new UiServer({
+      port: 0,
+      config: {
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: model.baseUrl, locality: 'local', models: ['real'] }],
+        candidates: ['local:real'],
+        runtime: { kind: 'ollama' },
+        agent: {
+          root, approval: 'auto',
+          verify: { enabled: true, command: `${process.execPath} --test test.js`, maxRounds: 1 },
+        },
+      } as typeof DEFAULT_CONFIG,
+    });
+    const base = (await server.start()).replace(/\/$/, '');
+
+    try {
+      // 先に一つ覚えさせる。次の依頼で、これが思い出されるようにする。
+      await fetch(`${base}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: '足し算のことは src/math.js に書いてあります' }),
+      });
+      await new Promise((r) => setTimeout(r, 1500));
+
+      await drive(base, '足し算が引き算になっています。直してください。', 120_000);
+
+      const state = await (await fetch(`${base}/api/state`)).json() as {
+        memory: { title: string; used?: number; helped?: number; misled?: number }[];
+      };
+      const touched = state.memory.filter((m) => (m.used ?? 0) > 0);
+      assert.ok(touched.length > 0, `添えた覚えが数えられていない: ${JSON.stringify(state.memory).slice(0, 300)}`);
+      // 通った回なので、「効いた」側に付いているはず。
+      assert.ok(touched.some((m) => (m.helped ?? 0) > 0),
+        `通ったのに、効いた側に付いていない: ${JSON.stringify(touched).slice(0, 300)}`);
+      assert.ok(touched.every((m) => (m.misled ?? 0) === 0),
+        `通ったのに、外した側に付いている: ${JSON.stringify(touched).slice(0, 300)}`);
+    } finally {
+      await server.stop();
+      await model.close();
+    }
+  });
+});
