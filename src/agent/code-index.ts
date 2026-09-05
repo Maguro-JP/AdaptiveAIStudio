@@ -41,8 +41,14 @@ const SOURCE = new Set([
 /** 一つのファイルが大きすぎるなら、索引には入れない。 */
 const MAX_FILE = 400_000;
 
-/** 索引に入れるファイル数の上限。大きな木で無限に時間を使わない。 */
-const MAX_FILES = 4000;
+/**
+ * 索引に入れるファイル数の上限。大きな木で無限に時間を使わない。
+ *
+ * **切ったことは必ず言う**（`capped`）。黙って切ると、入っていないものが
+ * 「無い」と返り、無いと言われた側はコードが無いのだと思う。
+ * 試験から差し替えられるようにしてある（本物の大きさを作るのは高い）。
+ */
+export const MAX_FILES = 4000;
 
 /** 索引に持つ「頭」の長さ。何のファイルかは、たいてい冒頭に書いてある。 */
 const HEAD_CHARS = 600;
@@ -86,6 +92,13 @@ export interface CodeIndex {
   files: FileEntry[];
   /** 大きすぎる等で入れなかった数。**黙って落とさない。** */
   skipped: number;
+  /**
+   * 上限に当たって、索引に入れなかったファイルの数。
+   *
+   * **黙って切らない。**入っていないものは「無い」と返る。無いと言われた側は
+   * コードが無いのだと思う。**静かに間違った答えを返すのが、いちばん悪い。**
+   */
+  capped?: number;
 }
 
 /**
@@ -160,16 +173,16 @@ const RESERVED = new Set([
 ]);
 
 /** 作業場を歩いて、索引を作る。 */
-export async function buildIndex(root: string): Promise<CodeIndex> {
+export async function buildIndex(root: string, max = MAX_FILES): Promise<CodeIndex> {
   const files: FileEntry[] = [];
   let skipped = 0;
 
   const walk = async (dir: string, depth: number, ign: Ignores): Promise<void> => {
-    if (depth > 12 || files.length >= MAX_FILES) return;
+    if (depth > 12 || files.length >= max) return;
     let entries;
     try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
-      if (files.length >= MAX_FILES) return;
+      if (files.length >= max) return;
       if (e.name.startsWith('.') && e.name !== '.github') continue;
       const full = join(dir, e.name);
       // **その置き場が「見なくていい」と書いたものは、索引にも入れない。**
@@ -202,7 +215,39 @@ export async function buildIndex(root: string): Promise<CodeIndex> {
   };
   await walk(root, 0, await Ignores.load(root));
   files.sort((a, b) => a.path.localeCompare(b.path));
-  return { root, builtAt: new Date().toISOString(), files, skipped };
+  // 上限で止めたなら、まだ残っている数を数えて言う（数えるだけなら安い）。
+  const capped = files.length >= max ? await countSource(root) - files.length : 0;
+  return {
+    root, builtAt: new Date().toISOString(), files, skipped,
+    ...(capped > 0 ? { capped } : {}),
+  };
+}
+
+/**
+ * 索引に入れうるファイルの数を数える。**中身は読まない。**
+ *
+ * 上限で切ったときに「あと何件あるか」を言うためだけに使う。
+ * 名前を見るだけなので、組むのに比べればずっと安い。
+ */
+async function countSource(root: string): Promise<number> {
+  let n = 0;
+  const walk = async (dir: string, depth: number, ign: Ignores): Promise<void> => {
+    if (depth > 12) return;
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith('.') && e.name !== '.github') continue;
+      const full = join(dir, e.name);
+      const rel = relative(root, full).split(sep).join('/');
+      if (ign.ignores(rel, e.isDirectory())) continue;
+      if (e.isDirectory()) {
+        if (SKIP.has(e.name)) continue;
+        await walk(full, depth + 1, await ign.enter(rel));
+      } else if (e.isFile() && SOURCE.has(extname(e.name).toLowerCase())) n += 1;
+    }
+  };
+  await walk(root, 0, await Ignores.load(root));
+  return n;
 }
 
 /** 当たったところ。**切り取って返す。** */
@@ -376,6 +421,14 @@ function dedupe(list: Symbol[]): Symbol[] {
  */
 export class IndexStore {
   readonly #dir: string;
+  /**
+   * いま持っている索引。**引くたびにディスクから読み直さない。**
+   *
+   * 4000 ファイルで 3.4MB ある。引くたびに読んで組み直すと、それだけで
+   * 100ms 近く払う。**探すところで払うと、直すところまで辿り着けない。**
+   */
+  #held?: CodeIndex;
+
   constructor(dir: string) { this.#dir = dir; }
 
   #path(root: string): string {
@@ -400,10 +453,14 @@ export class IndexStore {
    *
    * 触った跡（mtime）で見る。合っていれば、そのまま使う。
    */
-  async fresh(root: string, maxAgeMs = 5 * 60_000): Promise<CodeIndex> {
+  async fresh(root: string, maxAgeMs = 5 * 60_000, now = Date.now()): Promise<CodeIndex> {
+    const usable = (x: CodeIndex | undefined): x is CodeIndex =>
+      !!x && x.root === root && now - new Date(x.builtAt).getTime() < maxAgeMs;
+    if (usable(this.#held)) return this.#held;
     const had = await this.load(root);
-    if (had && Date.now() - new Date(had.builtAt).getTime() < maxAgeMs) return had;
+    if (usable(had)) { this.#held = had; return had; }
     const made = await buildIndex(root);
+    this.#held = made;
     await this.save(made).catch(() => undefined);
     return made;
   }

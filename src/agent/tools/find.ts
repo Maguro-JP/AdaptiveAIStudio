@@ -54,15 +54,28 @@ export const findCodeTool: Tool = {
       limit,
       read: (p) => import('node:fs/promises').then((fs) => fs.readFile(join(ctx.root, p), 'utf8')),
     });
+    /*
+     * **索引に入っていないものがあるなら、必ず言う。**
+     *
+     * 上限（4000 ファイル）で切られた分は「無い」と返る。無いと言われた側は
+     * コードが無いのだと思って、別のやり方を探しはじめる。
+     * **静かに間違った答えを返すのが、いちばん悪い。**
+     */
+    const notAll = index.capped
+      ? `\n（この置き場は大きいので、${index.files.length} ファイルまでしか見ていません。`
+        + `あと ${index.capped} ファイルあります。見つからないときは search_text も試してください）`
+      : '';
+
     if (hits.length === 0) {
       return ok(
         `見つかりません: ${query}\n`
         + `（${index.files.length} ファイルを見ました。言葉を変えるか、`
-        + 'search_text で正確な文字列を探してください）',
+        + 'search_text で正確な文字列を探してください）'
+        + notAll,
       );
     }
 
-    const lines: string[] = [`${hits.length} 件（${index.files.length} ファイル中）`];
+    const lines: string[] = [`${hits.length} 件（${index.files.length} ファイル中）${notAll}`];
     for (const h of hits) {
       lines.push('');
       lines.push(h.path);

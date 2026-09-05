@@ -143,3 +143,69 @@ describe('索引を覚える', () => {
     assert.equal(await new IndexStore(dir).load('/そんな場所'), undefined);
   });
 });
+
+/**
+ * 索引に入っていないものを、「無い」と言わない。
+ *
+ * 大きな置き場では上限（4000 ファイル）で切る。切ること自体はよいが、
+ * **黙って切ると、入っていないものが「無い」と返る。**無いと言われた側は
+ * コードが無いのだと思って、別のやり方を探しはじめる。
+ * **静かに間違った答えを返すのが、いちばん悪い。**
+ */
+describe('切ったことを、黙らない', () => {
+  async function tree(count: number): Promise<string> {
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const root = await tempDir('aas-capped-');
+    for (let i = 0; i < count; i += 1) {
+      const sub = join(root, `p${Math.floor(i / 20)}`);
+      await mkdir(sub, { recursive: true });
+      await writeFile(join(sub, `f${i}.ts`), `export function thing${i}() { return ${i}; }\n`);
+    }
+    return root;
+  }
+
+  test('上限に当たったら、あと何件あるかを言う', async () => {
+    const root = await tree(60);
+    const index = await buildIndex(root, 40);
+    assert.equal(index.files.length, 40);
+    assert.equal(index.capped, 20, `あと何件あるかを言っていない: ${index.capped}`);
+  });
+
+  test('全部入るなら、何も言わない（対）', async () => {
+    const root = await tree(10);
+    const index = await buildIndex(root, 40);
+    assert.equal(index.capped, undefined, '切っていないのに言っている');
+  });
+
+  test('**探す道具が、そのことを返事に書く**', async () => {
+    const { IndexStore } = await import('../src/agent/code-index.ts');
+    const root = await tree(60);
+    const index = await buildIndex(root, 40);
+
+    // 道具は記録の置き場から控えを引く。**そこへ置いてから呼ぶ。**
+    // （本物の上限は 4000。試験で 4000 ファイル作るのは高いので、
+    //   切れた索引を先に置いて、同じ道を通す）
+    const state = await tempDir('aas-capped-state-');
+    const prev = process.env.AAS_STATE_DIR;
+    process.env.AAS_STATE_DIR = state;
+    try {
+      await new IndexStore(join(state, 'index')).save(index);
+      const { findCodeTool } = await import('../src/agent/tools/find.ts');
+
+      // 見つかったときも、見つからなかったときも言う。
+      for (const query of ['thing1', 'まったく関係のない言葉']) {
+        const got = await findCodeTool.run(
+          { query },
+          { root, signal: new AbortController().signal, approve: () => Promise.resolve(true) } as never,
+        );
+        assert.ok(
+          got.content.includes('あと 20 ファイル'),
+          `切ったことを言っていない（${query}）: ${got.content.slice(0, 200)}`,
+        );
+      }
+    } finally {
+      if (prev === undefined) delete process.env.AAS_STATE_DIR;
+      else process.env.AAS_STATE_DIR = prev;
+    }
+  });
+});
