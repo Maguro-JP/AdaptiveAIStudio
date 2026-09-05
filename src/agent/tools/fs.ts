@@ -70,15 +70,21 @@ export const listFilesTool: Tool = {
     const abs = safeResolve(ctx.root, p);
     if (!abs) return fail(`作業ディレクトリの外です: ${p}`);
     const found: string[] = [];
+    const walked = { capped: false };
     try {
-      await walk(abs, ctx.root, found, 0, await ignoresFor(ctx.root, p));
+      await walk(abs, ctx.root, found, 0, await ignoresFor(ctx.root, p), walked);
     } catch (e) {
       return fail(`一覧できません: ${p} (${describe(e)})`);
     }
     if (found.length === 0) return ok('(ファイルなし)');
     const shown = found.slice(0, 300);
     const more = found.length > shown.length ? `\n... 他 ${found.length - shown.length} 件` : '';
-    return ok(shown.join('\n') + more);
+    // **見て回るのを途中でやめたことも言う。**「他 N 件」だけだと、
+    // その N が全部だと読める。
+    const stopped = walked.capped
+      ? `\n（ファイルが多いので ${WALK_FILES} 個までしか見ていません。path で絞ってください）`
+      : '';
+    return ok(shown.join('\n') + more + stopped);
   },
 };
 
@@ -104,26 +110,54 @@ export const searchTextTool: Tool = {
     if (!abs) return fail(`作業ディレクトリの外です: ${base}`);
 
     const files: string[] = [];
-    await walk(abs, ctx.root, files, 0, await ignoresFor(ctx.root, base)).catch(() => undefined);
+    const walked = { capped: false };
+    await walk(abs, ctx.root, files, 0, await ignoresFor(ctx.root, base), walked)
+      .catch(() => undefined);
+
+    /*
+     * **打ち切ったことを、必ず言う。**
+     *
+     * 100 件で止めていて、何も言っていなかった。呼び出し元を全部直したい
+     * ときに、モデルは 100 件で全部だと思う。**残りは直されないまま残る。**
+     * 直したつもりで壊れているのが、いちばん見つけにくい。
+     */
     const hits: string[] = [];
+    let capped = false;
+    let tooBig = 0;
     for (const rel of files) {
-      if (hits.length >= 100) break;
+      if (hits.length >= SEARCH_HITS) { capped = true; break; }
       if (ctx.signal.aborted) break;
       const target = await realSafeResolve(ctx.root, rel);
       if (!target) continue;
       try {
         const info = await stat(target);
-        if (info.size > MAX_READ_BYTES) continue;
+        // 大きすぎて見ていないファイルも、見ていないと言う。
+        if (info.size > MAX_READ_BYTES) { tooBig += 1; continue; }
         const text = await readFile(target, 'utf8');
         if (!text.includes(query)) continue;
         text.split('\n').forEach((line, i) => {
-          if (hits.length < 100 && line.includes(query)) {
-            hits.push(`${rel}:${i + 1}: ${line.trim().slice(0, 200)}`);
-          }
+          if (hits.length < SEARCH_HITS) {
+            if (line.includes(query)) hits.push(`${rel}:${i + 1}: ${line.trim().slice(0, 200)}`);
+          } else if (line.includes(query)) capped = true;
         });
       } catch { /* バイナリ等は読み飛ばす */ }
     }
-    return ok(hits.length > 0 ? hits.join('\n') : `該当なし: ${query}`);
+
+    const notes: string[] = [];
+    if (capped) {
+      notes.push(
+        `（${SEARCH_HITS} 件で打ち切りました。**これで全部ではありません。**`
+        + 'path を絞るか、query を長くして探し直してください）',
+      );
+    }
+    if (walked.capped) {
+      notes.push(`（ファイルが多いので ${WALK_FILES} 個までしか見ていません。path で絞ってください）`);
+    }
+    if (tooBig > 0) {
+      notes.push(`（大きすぎて見ていないファイルが ${tooBig} 個あります）`);
+    }
+    const tail = notes.length > 0 ? `\n${notes.join('\n')}` : '';
+    return ok(hits.length > 0 ? hits.join('\n') + tail : `該当なし: ${query}${tail}`);
   },
 };
 
@@ -301,10 +335,18 @@ export const editFileTool: Tool = {
   },
 };
 
+/** 一度に見て回るファイル数の上限。**当たったら言う。** */
+const WALK_FILES = 3000;
+
+/** 検索で返す当たりの上限。**当たったら言う。** */
+const SEARCH_HITS = 100;
+
 async function walk(
   dir: string, root: string, out: string[], depth: number, ign?: Ignores,
+  capped?: { capped: boolean },
 ): Promise<void> {
-  if (depth > 12 || out.length >= 3000) return;
+  if (out.length >= WALK_FILES) { if (capped) capped.capped = true; return; }
+  if (depth > 12) return;
   const entries = await readdir(dir, { withFileTypes: true });
   for (const e of entries) {
     if (e.name.startsWith('.') && e.name !== '.github') continue;
@@ -313,7 +355,7 @@ async function walk(
     // **その置き場が「見なくていい」と書いたものを見ない。**
     const rel = relative(root, abs).split(sep).join('/');
     if (ign?.ignores(rel, e.isDirectory())) continue;
-    if (e.isDirectory()) await walk(abs, root, out, depth + 1, await ign?.enter(rel));
+    if (e.isDirectory()) await walk(abs, root, out, depth + 1, await ign?.enter(rel), capped);
     else if (e.isFile()) out.push(toDisplayPath(root, abs));
   }
 }

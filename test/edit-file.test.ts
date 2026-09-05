@@ -280,3 +280,65 @@ describe('空白が違っても当てる', () => {
     assert.equal(planned, 'function f() {\n  const a = 2;\n}\n');
   });
 });
+
+/**
+ * 打ち切ったことを、黙らない。
+ *
+ * `search_text` は 100 件で止めていて、**何も言っていなかった**。
+ * 呼び出し元を全部直したいときに、モデルは 100 件で全部だと思う。
+ * **残りは直されないまま残る。**直したつもりで壊れているのが、いちばん
+ * 見つけにくい。索引で同じ形を見つけたので、ここも見た。
+ */
+describe('探す側も、打ち切りを黙らない', () => {
+  async function many(count: number, perFile = 1): Promise<string> {
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const root = await tempDir('aas-cap-search-');
+    for (let i = 0; i < count; i += 1) {
+      const sub = join(root, `p${Math.floor(i / 20)}`);
+      await mkdir(sub, { recursive: true });
+      await writeFile(
+        join(sub, `f${i}.ts`),
+        Array.from({ length: perFile }, (_, k) => `const 目印${i}_${k} = 1;`).join('\n') + '\n',
+      );
+    }
+    return root;
+  }
+
+  test('**100 件で打ち切ったら、そう言う**', async () => {
+    const { searchTextTool } = await import('../src/agent/tools/fs.ts');
+    const root = await many(150);
+    const got = await searchTextTool.run({ query: '目印' }, await ctxAt(root));
+    assert.ok(got.content.includes('打ち切りました'), `黙って切っている: ${got.content.slice(-200)}`);
+    assert.ok(got.content.includes('全部ではありません'), '全部だと読める言い方になっている');
+  });
+
+  test('全部入るときは、何も言わない（対）', async () => {
+    const { searchTextTool } = await import('../src/agent/tools/fs.ts');
+    const root = await many(5);
+    const got = await searchTextTool.run({ query: '目印' }, await ctxAt(root));
+    assert.ok(!got.content.includes('打ち切り'), `切っていないのに言っている: ${got.content}`);
+  });
+
+  test('一つのファイルの中で打ち切っても、そう言う', async () => {
+    // 当たりが一つのファイルに固まっている形。ファイル数では切れない。
+    const { searchTextTool } = await import('../src/agent/tools/fs.ts');
+    const root = await many(1, 150);
+    const got = await searchTextTool.run({ query: '目印' }, await ctxAt(root));
+    assert.ok(got.content.includes('打ち切りました'), `黙って切っている: ${got.content.slice(-200)}`);
+  });
+
+  test('大きすぎて見ていないものも言う', async () => {
+    const { searchTextTool } = await import('../src/agent/tools/fs.ts');
+    const { writeFile } = await import('node:fs/promises');
+    const root = await tempDir('aas-cap-big-');
+    await writeFile(join(root, 'small.ts'), 'const 目印 = 1;\n');
+    // MAX_READ_BYTES を超える大きさ。
+    await writeFile(join(root, 'huge.ts'), `const 目印 = 1;\n${'x'.repeat(600_000)}`);
+    const got = await searchTextTool.run({ query: '目印' }, await ctxAt(root));
+    assert.ok(got.content.includes('small.ts'), '見えるものが出ていない');
+    assert.ok(
+      got.content.includes('大きすぎて見ていない'),
+      `見ていないファイルを黙っている: ${got.content.slice(-200)}`,
+    );
+  });
+});
