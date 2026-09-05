@@ -177,3 +177,106 @@ describe('当てる部分だけを、単体で見る', () => {
     assert.deepEqual(applyEdit('abc', '', 'x', true), { text: 'abc', hits: 0 });
   });
 });
+
+/**
+ * 字下げと行末の空白が違っても当てる。
+ *
+ * **小さいモデルは、空白を一つ外す。**タブと空白を取り違える、字下げの段を
+ * 一つ間違える、行末の空白を落とす。中身は合っているのに完全一致では通らず、
+ * 「見つかりません」と返すとモデルは同じことを何度も試す。往復だけ増えて
+ * 何も直らない。**道具が脆いだけなのに、モデルが馬鹿に見える。**
+ *
+ * ただし**緩めるのは行の外側だけ。**行の並びと中身そのものは一致を求める。
+ * ここを緩めると、似た別の場所を書き換える。
+ */
+describe('空白が違っても当てる', () => {
+  test('字下げの段が違っても当たる', () => {
+    // 渡された方が**深い**ときは、完全一致では通らない（浅いときは、
+    // find が部分文字列になるので元から通る）。深い側がこの穴。
+    const before = 'function f() {\n  const a = 1;\n  return a;\n}\n';
+    const got = applyEdit(before, '    const a = 1;', '    const a = 2;', false);
+    assert.equal(got.hits, 1);
+    assert.equal(got.loose, true, 'ゆるく当てたことを言っていない');
+    // **ファイルの側の字下げに合わせる。**渡された 4 段で書かない。
+    assert.equal(got.text, 'function f() {\n  const a = 2;\n  return a;\n}\n');
+  });
+
+  test('タブと空白が違っても当たる', () => {
+    const before = 'if (x) {\n\treturn 1;\n}\n';
+    const got = applyEdit(before, '    return 1;', '    return 2;', false);
+    assert.equal(got.hits, 1);
+    assert.equal(got.text, 'if (x) {\n\treturn 2;\n}\n', 'ファイルのタブに合わせていない');
+  });
+
+  test('行末の空白が違っても当たる', () => {
+    // 渡された方に余分な行末の空白が付いているとき。ファイル側に付いて
+    // いるだけなら、find が部分文字列になるので元から通る。
+    const before = 'const a = 1;\nconst b = 2;\n';
+    const got = applyEdit(before, 'const a = 1;   ', 'const a = 9;', false);
+    assert.equal(got.hits, 1);
+    assert.equal(got.loose, true, 'ゆるく当てたことを言っていない');
+    assert.equal(got.text, 'const a = 9;\nconst b = 2;\n');
+  });
+
+  test('何行にもわたっても、相対の段は壊さない', () => {
+    const before = 'class A {\n  run() {\n    step1();\n    step2();\n  }\n}\n';
+    const got = applyEdit(
+      before,
+      'step1();\nstep2();',
+      'step1();\nif (ok) {\n  step2();\n}',
+      false,
+    );
+    assert.equal(got.hits, 1);
+    assert.equal(
+      got.text,
+      'class A {\n  run() {\n    step1();\n    if (ok) {\n      step2();\n    }\n  }\n}\n',
+    );
+  });
+
+  test('**完全一致が在るときは、そちらが勝つ**', () => {
+    // 元からの動きを変えない。ゆるい当て方は、完全一致が無いときだけ。
+    const before = '  const a = 1;\nconst a = 1;\n';
+    const got = applyEdit(before, 'const a = 1;\n', 'X\n', false);
+    assert.equal(got.loose, undefined, 'ゆるい方へ落ちている');
+  });
+
+  test('**中身が違えば当てない**', () => {
+    const before = 'const a = 1;\n';
+    assert.equal(applyEdit(before, 'const a = 2;', 'X', false).hits, 0);
+    // 行の数が違うものも当てない。
+    assert.equal(applyEdit(before, 'const a = 1;\nconst b = 2;', 'X', false).hits, 0);
+  });
+
+  test('ゆるくても、何箇所にも当たるなら止める', () => {
+    const before = '  same();\n\tsame();\n';
+    const got = applyEdit(before, 'same();', 'other();', false);
+    assert.equal(got.hits, 2);
+    assert.equal(got.text, before, '決まらないのに書き換えている');
+  });
+
+  test('ゆるくても、all なら全部当てる（対）', () => {
+    const before = '  same();\n\tsame();\n';
+    const got = applyEdit(before, 'same();', 'other();', true);
+    assert.equal(got.hits, 2);
+    assert.equal(got.text, '  other();\n\tother();\n', 'それぞれの字下げに合わせていない');
+  });
+
+  test('道具として使っても当たり、**黙って当てない**', async () => {
+    const { root, path } = await fixture('function f() {\n  const a = 1;\n}\n');
+    const r = await editFileTool.run(
+      { path, find: '    const a = 1;', replace: '    const a = 2;' }, await ctxAt(root),
+    );
+    assert.equal(r.isError, undefined, r.content);
+    assert.equal(await readFile(join(root, path), 'utf8'), 'function f() {\n  const a = 2;\n}\n');
+    assert.ok(r.content.includes('合わせて当てました'), `黙って当てている: ${r.content}`);
+  });
+
+  test('ゆるく当てた後の姿も、守りに渡る', async () => {
+    // 道具と検問所が別々に当てると、守りは違うものを見て素通りさせる。
+    const { root, path } = await fixture('function f() {\n  const a = 1;\n}\n');
+    const planned = await plannedContent(
+      'edit_file', { path, find: '    const a = 1;', replace: '    const a = 2;' }, root,
+    );
+    assert.equal(planned, 'function f() {\n  const a = 2;\n}\n');
+  });
+});
