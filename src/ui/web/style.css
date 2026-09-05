@@ -97,7 +97,12 @@ body {
 .side-open:hover { color: var(--text); }
 
 .side-top { display: flex; align-items: center; gap: var(--s2); }
-.side-top .brand { flex: 1; min-width: 0; font-size: .95rem; }
+.side-top .brand {
+  flex: 1; min-width: 0; font-size: .95rem;
+  /* **溢れさせない。**溢れると、右に並べた押しものの上へ字が乗る
+     （⊞ を足したときに実際に重なった）。 */
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /*
  * いま動いているか。**いちばん上に、大きく。**
@@ -958,3 +963,44 @@ dialog.wide { width: min(46rem, 92vw); }
 /* 塊ごとの採否。印と差分を縦に重ねる（横に並べると差分が潰れる）。 */
 .ask-hunk { margin: 6px 0; }
 .ask-hunk label { margin-left: 6px; cursor: pointer; }
+
+/* ---------- 板の出し入れと並べ替え ---------- */
+
+/* 見出しは掴む場所。掴めることが分かるようにする。 */
+.panel > header { display: flex; align-items: center; gap: 6px; cursor: grab; }
+.panel > header:active { cursor: grabbing; }
+.panel-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 閉じるは、普段は控えめに。触れたときにはっきりさせる。 */
+.panel-x {
+  flex: none; border: 0; background: none; color: var(--dim);
+  cursor: pointer; line-height: 1; padding: 0 4px; opacity: 0.5;
+}
+/*
+ * 束ねた見出しは、増えると横に溢れる。**溢れた分を切り落とさない。**
+ * 切ると、出したはずの板に辿り着けない（出す道を作った意味が無くなる）。
+ */
+.panel.tabs > header { overflow-x: auto; scrollbar-width: thin; }
+
+/* 束ねた見出しの中の × は、名前の隣に置く。下へ回ると二行になって汚い。 */
+.panel.tabs > header > button {
+  display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
+}
+.panel > header:hover .panel-x, .panel.tabs button:hover .panel-x { opacity: 1; }
+.panel-x:hover { color: var(--text); }
+
+/* 落とす先。**どこへ入るのかを、落とす前に見せる。** */
+.panel { position: relative; }
+.drop-hint {
+  position: absolute; inset: 0; pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border: 2px solid var(--accent); border-radius: 4px;
+}
+.drop-hint[data-where="left"] { right: 50%; }
+.drop-hint[data-where="right"] { left: 50%; }
+.drop-hint[data-where="top"] { bottom: 50%; }
+.drop-hint[data-where="bottom"] { top: 50%; }
+
+.view-list { display: flex; flex-direction: column; gap: 2px; margin: 8px 0; }
+.view-row { display: flex; align-items: center; gap: 8px; padding: 4px 2px; cursor: pointer; }
+.view-row:hover { background: var(--surface2); }

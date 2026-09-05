@@ -23,6 +23,7 @@
       <div class="side-top">
         <button id="sideToggle" class="ghost icon" title="横の板を畳む">≡</button>
         <span class="brand">AdaptiveAIStudio</span>
+        <button id="openView" class="ghost icon" title="表示するものを選ぶ">⊞</button>
         <button id="openSettings" class="ghost icon" title="設定 (Ctrl+,)">⚙</button>
       </div>
 
@@ -89,6 +90,19 @@
   <dialog id="palette">
     <input id="paletteInput" type="text" placeholder="何をしますか？" autocomplete="off">
     <div id="paletteList" class="palette-list"></div>
+  </dialog>
+
+  <!--
+    表示するもの。**板は、ここで出し入れする。**
+    並べ替えは見出しを掴んで動かす（設定を開かせない）。
+  -->
+  <dialog id="viewMenu">
+    <form method="dialog">
+      <h2>表示</h2>
+      <div id="viewList" class="view-list"></div>
+      <p class="hint">見出しを掴んで動かすと、並びが変わります。端に寄せると分かれ、真ん中に重ねると束になります。</p>
+      <div class="btnbar"><button class="primary">閉じる</button></div>
+    </form>
   </dialog>
 
   <dialog id="settings" class="wide">

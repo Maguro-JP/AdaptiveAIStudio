@@ -100,6 +100,65 @@ await check('設定をもう一度開く', async () => {
   await p.waitForTimeout(400);
 });
 
+// 表示：出す・閉じる・並べ替える。**押して確かめる。**
+await check('表示から板を出す', async () => {
+  const before = await p.locator('#root .panel').count();
+  await p.locator('#openView').click();
+  await p.waitForTimeout(500);
+  if (!(await p.locator('#viewMenu').isVisible())) throw new Error('開かない');
+  const rows = await p.locator('#viewList .view-row').count();
+  if (rows === 0) throw new Error('選べるものが無い');
+  // いま出ていないものを一つ出す。
+  const off = p.locator('#viewList .view-row').filter({ has: p.locator('input:not(:checked)') }).first();
+  if (await off.count() === 0) throw new Error('出ていないものが無い（数えられていない）');
+  const name = (await off.innerText()).trim();
+  await off.locator('input').click();
+  await p.waitForTimeout(700);
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(400);
+  const after = await p.locator('#root .panel').count();
+  const heads = await p.locator('#root .panel header, #root .panel.tabs header button').allInnerTexts();
+  if (!heads.some((h) => h.includes(name))) {
+    throw new Error(`出したものが画面に無い: ${name} / ${heads.join(',')}（板 ${before}→${after}）`);
+  }
+});
+
+await check('板を閉じる', async () => {
+  // 束ねてある板の見出しは、中の一枚ごとに × を持つ（直下には無い）。
+  // ここでは一枚ものの板を閉じる。
+  const xs = p.locator('#root .panel > header > .panel-x');
+  const before = await p.locator('#root .panel').count();
+  if (await xs.count() === 0) throw new Error('閉じるものが無い');
+  await xs.last().click();
+  await p.waitForTimeout(700);
+  if (await p.locator('#root .panel').count() >= before) throw new Error('閉じていない');
+});
+
+await check('掴んで並べ替える', async () => {
+  const heads = p.locator('#root .panel > header');
+  if (await heads.count() < 2) throw new Error('動かす相手が足りない');
+  const from = heads.first();
+  const to = heads.last();
+  // **形そのものを見る。**割れている数だけだと、抜いた分と足した分が
+  // 打ち消し合って「変わっていない」ように見える（実際にそう出た）。
+  const shapeBefore = await p.evaluate(() => fetch('/api/layout').then((r) => r.json()).then((j) => JSON.stringify(j.layout.root)));
+  // HTML の掴んで落とすは、手で組み立てて渡す。
+  await p.evaluate(() => {
+    const all = [...document.querySelectorAll('#root .panel')];
+    const a = all[0], b = all[all.length - 1];
+    const dt = new DataTransfer();
+    a.querySelector('header').dispatchEvent(new DragEvent('dragstart', { dataTransfer: dt, bubbles: true }));
+    const r = b.getBoundingClientRect();
+    const at = { clientX: r.left + r.width / 2, clientY: r.bottom - 4, dataTransfer: dt, bubbles: true };
+    b.dispatchEvent(new DragEvent('dragover', at));
+    b.dispatchEvent(new DragEvent('drop', at));
+  });
+  await p.waitForTimeout(900);
+  const shapeAfter = await p.evaluate(() => fetch('/api/layout').then((r) => r.json()).then((j) => JSON.stringify(j.layout.root)));
+  if (shapeAfter === shapeBefore) throw new Error('並びが変わっていない');
+  if (await p.locator('#root .panel').count() === 0) throw new Error('板が消えた');
+});
+
 // コマンド板
 await check('コマンドを開いて閉じる', async () => {
   // コマンドは入力欄の中（書く手の隣）。板の並びからは外した。

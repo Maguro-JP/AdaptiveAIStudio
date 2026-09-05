@@ -6,6 +6,7 @@
  * 仕切りを掴んで動かしたら配置に書き戻すことだけ。
  */
 import { PANELS, TITLES } from './panels.js';
+import { closePanel, openPanel, movePanel, panelsInUse } from './layout-ops.js';
 import { openPicker } from './color.js';
 
 const root = document.getElementById('editor');
@@ -37,10 +38,23 @@ function buildPanel(spec) {
   const box = document.createElement('section');
   box.className = 'panel';
   const head = document.createElement('header');
-  head.textContent = spec.title ?? TITLES[spec.kind] ?? spec.kind;
+  head.append(Object.assign(document.createElement('span'), {
+    className: 'panel-name',
+    textContent: spec.title ?? TITLES[spec.kind] ?? spec.kind,
+  }));
+  // **閉じる道を、その板の上に置く。**設定の奥にしか無いと、
+  // 邪魔なものを退けるのに設定を開くことになる。
+  const close = document.createElement('button');
+  close.className = 'panel-x';
+  close.textContent = '×';
+  close.title = '閉じる';
+  close.onclick = (e) => { e.stopPropagation(); apply(closePanel(layout, spec.id)); };
+  head.append(close);
+  draggableHead(head, spec.id);
   const body = document.createElement('div');
   body.className = 'body';
   box.append(head, body);
+  dropTarget(box, spec.id);
 
   const make = PANELS[spec.kind] ?? PANELS.note;
   try {
@@ -82,11 +96,129 @@ function buildTabs(node, panels) {
     const b = document.createElement('button');
     b.textContent = spec?.title ?? TITLES[spec?.kind] ?? id;
     b.onclick = () => show(i);
+    // 束ねてある一枚も、掴んで出せる／その場で閉じられる。
+    draggableHead(b, id);
+    const x = document.createElement('span');
+    x.className = 'panel-x';
+    x.textContent = '×';
+    x.title = '閉じる';
+    x.onclick = (e) => { e.stopPropagation(); apply(closePanel(layout, id)); };
+    b.append(x);
     head.append(b);
   });
 
   show(Math.min(node.active ?? 0, bodies.length - 1));
+  dropTarget(box, node.panels[Math.min(node.active ?? 0, node.panels.length - 1)] ?? node.panels[0]);
   return box;
+}
+
+/* ---------- 掴んで動かす ---------- */
+
+/** 見出しを掴めるようにする。 */
+function draggableHead(el, id) {
+  el.draggable = true;
+  el.addEventListener('dragstart', (e) => {
+    e.dataTransfer?.setData('text/aas-panel', id);
+    if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+  });
+}
+
+/**
+ * 落とす先。**どこへ入るのかを、落とす前に見せる。**
+ * 見せずに落とさせると、思っていない場所へ入って、戻し方が分からなくなる。
+ */
+function dropTarget(box, id) {
+  if (!id) return;
+  const hint = document.createElement('div');
+  hint.className = 'drop-hint';
+  hint.hidden = true;
+  box.append(hint);
+
+  const whereFrom = (e) => {
+    const r = box.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width;
+    const y = (e.clientY - r.top) / r.height;
+    // 真ん中は「重ねる」。端に寄せたぶんだけ、その向きへ割る。
+    const edge = 0.25;
+    if (x < edge && x <= y && x <= 1 - y) return 'left';
+    if (1 - x < edge && 1 - x <= y && 1 - x <= 1 - y) return 'right';
+    if (y < edge) return 'top';
+    if (1 - y < edge) return 'bottom';
+    return 'tab';
+  };
+
+  box.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer?.types.includes('text/aas-panel')) return;
+    e.preventDefault();
+    hint.hidden = false;
+    hint.dataset.where = whereFrom(e);
+  });
+  box.addEventListener('dragleave', (e) => {
+    if (e.target === box) hint.hidden = true;
+  });
+  box.addEventListener('drop', (e) => {
+    const moving = e.dataTransfer?.getData('text/aas-panel');
+    hint.hidden = true;
+    if (!moving) return;
+    e.preventDefault();
+    e.stopPropagation();
+    apply(movePanel(layout, moving, id, whereFrom(e)));
+  });
+}
+
+/** 組み替えた配置を、そのまま映して覚える。 */
+async function apply(next) {
+  if (!next || next === layout) return;
+  layout = next;
+  render();
+  // 向こう側で直されることがある。直された形で描き直す。
+  // 描き直さないと、画面と覚えている形がずれる。
+  const before = JSON.stringify(layout);
+  await save(next);
+  if (JSON.stringify(layout) !== before) render();
+}
+
+/**
+ * 表示するものを選ぶ。
+ *
+ * **ここが無いと、板を出す道が JSON しかない。**
+ * 出ているものに印を付け、押すたびに出し入れする。
+ */
+function openViewMenu() {
+  renderViewList();
+  const dlg = $('viewMenu');
+  if (!dlg.open) dlg.showModal();
+}
+
+/**
+ * 一覧を描き直すだけ。**開き直さない。**
+ * 出し入れの返事を待っている間に閉じられると、閉じた直後に開き直っていた
+ * （画面で見て気づいた）。閉じたものが勝手に戻るのは、故障に見える。
+ */
+function renderViewList() {
+  const box = $('viewList');
+  box.replaceChildren();
+  const shown = new Set(panelsInUse(layout.root));
+  const idsOf = (kind) => layout.panels.filter((p) => p.kind === kind && shown.has(p.id)).map((p) => p.id);
+
+  for (const [kind, name] of Object.entries(TITLES)) {
+    const ids = idsOf(kind);
+    const row = document.createElement('label');
+    row.className = 'view-row';
+    const tick = document.createElement('input');
+    tick.type = 'checkbox';
+    tick.checked = ids.length > 0;
+    tick.onchange = async () => {
+      // 同じ種類が複数出ていても、押した一度で全部は消さない。最後の一つを閉じる。
+      await apply(tick.checked ? openPanel(layout, kind) : closePanel(layout, ids[ids.length - 1]));
+      renderViewList();
+    };
+    row.append(tick, Object.assign(document.createElement('span'), { textContent: name }));
+    if (ids.length > 1) {
+      row.append(Object.assign(document.createElement('span'), { className: 'dim', textContent: ` ×${ids.length}` }));
+    }
+    box.append(row);
+  }
 }
 
 function buildNode(node, panels) {
@@ -1169,3 +1301,5 @@ if (conversations.current) {
 }
 listen();
 setInterval(refreshState, 5000);
+
+$('openView').onclick = () => openViewMenu();
