@@ -455,12 +455,18 @@ describe('同じ学びを、一往復に二度入れない', () => {
     assert.ok(work.length > 0, '作業の呼び出しが無い');
     const sent = (work.at(-1)!.messages ?? []).map((m) => m.content).join('\n');
 
-    // 最初から持っている学びの一行を、そのまま数える。
-    const line = '確かめる仕事が利用者へ回る';
-    const times = sent.split(line).length - 1;
-    assert.ok(times <= 1, `同じ学びが ${times} 回入っている（一往復ぶんの本文 ${sent.length} 文字）`);
-    // 一度は入っていること（外しすぎて、学びが届かなくなっていないか）。
-    assert.equal(times, 1, `学びが届いていない（本文 ${sent.length} 文字）`);
+    // **どれが載るかは決め打ちにしない。**決まりに載るのは新しい順に何件か。
+    // 見るのは「載っているものが二度出ていないこと」と「一つは載っていること」。
+    const state = await (await fetch(`${base}/api/state`)).json() as {
+      memory: { kind: string; detail: string }[];
+    };
+    const lessons = state.memory.filter((m) => m.kind === 'displeasure' && m.detail.length > 24);
+    assert.ok(lessons.length > 0, '学びが一つも無い');
+    const counts = lessons.map((m) => sent.split(m.detail.slice(0, 24)).length - 1);
+    assert.deepEqual(counts.filter((n) => n > 1), [],
+      `同じ学びが二度入っている（一往復ぶんの本文 ${sent.length} 文字）`);
+    assert.ok(counts.some((n) => n === 1),
+      `学びが一つも届いていない（本文 ${sent.length} 文字）`);
   });
 });
 

@@ -4,6 +4,13 @@ export interface ToolContext {
   /** 作業ディレクトリ。ここより外へは一切アクセスさせない。 */
   root: string;
   signal: AbortSignal;
+  /**
+   * いまの窓（トークン）。返す長さを決めるのに使う。
+   *
+   * **無ければ切らない。**分からないことを理由に切ると、
+   * 窓を知らない呼び出し（試験や道具の直接利用）で中身が消える。
+   */
+  contextTokens?: number;
   /** 書き込み・実行の承認を求める。false なら実行しない。 */
   approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
 }

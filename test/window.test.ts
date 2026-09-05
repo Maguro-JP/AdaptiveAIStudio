@@ -11,7 +11,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { fitToWindow, sizeOf, tokenBudget, estimateTokens } from '../src/agent/window.ts';
+import { fitToWindow, sizeOf, tokenBudget, estimateTokens, toolOutputBudget } from '../src/agent/window.ts';
 import type { ProviderMessage } from '../src/providers/contract.ts';
 
 /** 読んで書いて、を n 回。道具の結果は大きい（ファイルの中身なので）。 */
@@ -235,5 +235,53 @@ describe('通しで、窓を超えないこと', () => {
     assert.ok(events.includes('trimmed'), '刈ったことを言っていない');
     // 残してある履歴の方は、刈られていないこと（送る分だけを刈る）。
     assert.ok(history.length > 10, `元の履歴まで刈っている: ${history.length}`);
+  });
+});
+
+/**
+ * 道具の返しも、窓から決める。
+ *
+ * `read_file` は最大 40万字を丸ごと返していた。窓が 8k のモデルでは、
+ * **一度読んだだけで溢れる。**刈る側は後から縮められるが、
+ * そのときには中身がほとんど残らない（直近の結果は 1200 字まで削られる）。
+ */
+describe('道具の返しを、窓に収める', () => {
+  test('窓が広ければ、多く返してよい', () => {
+    assert.ok(toolOutputBudget(32768) > toolOutputBudget(8192));
+  });
+
+  test('狭い窓でも、使い物にならない長さにはしない', () => {
+    assert.ok(toolOutputBudget(2048) >= 2000);
+  });
+
+  test('窓ぶん全部は使わない（依頼と履歴の分が要る）', () => {
+    assert.ok(toolOutputBudget(8192) < 8192);
+  });
+
+  test('窓を渡すと、読んだ中身がそこで切れる', async () => {
+    const { readFileTool } = await import('../src/agent/tools/fs.ts');
+    const { tempDir } = await import('./tmp.ts');
+    const { writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const root = await tempDir('aas-read-');
+    await writeFile(join(root, 'big.ts'), 'あ'.repeat(60_000));
+
+    const ctx = { root, signal: new AbortController().signal, approve: async () => true };
+    const wide = await readFileTool.run({ path: 'big.ts' }, { ...ctx, contextTokens: 32768 });
+    const narrow = await readFileTool.run({ path: 'big.ts' }, { ...ctx, contextTokens: 4096 });
+    assert.ok(narrow.content.length < wide.content.length, '窓の広さで変わっていない');
+    assert.match(narrow.content, /search_text|find_code/, '続きの取り方を言っていない');
+  });
+
+  test('**窓が分からないときは切らない**（試験や直接の呼び出しで消さない）', async () => {
+    const { readFileTool } = await import('../src/agent/tools/fs.ts');
+    const { tempDir } = await import('./tmp.ts');
+    const { writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const root = await tempDir('aas-read-');
+    await writeFile(join(root, 'big.ts'), 'あ'.repeat(60_000));
+    const got = await readFileTool.run({ path: 'big.ts' },
+      { root, signal: new AbortController().signal, approve: async () => true });
+    assert.ok(got.content.length > 60_000, `切っている: ${got.content.length}`);
   });
 });

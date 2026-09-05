@@ -288,9 +288,13 @@ export class Memory {
    * 話題に関係なく効くので、思い出すときは必ず先頭に付ける。
    */
   displeasures(limit = 12): MemoryEntry[] {
+    // **同じ時刻のときの順を決めておく。**最初に入れる分は同じミリ秒で並ぶので、
+    // 時刻だけで並べると、どれが載るかが呼ぶたびに変わる（実際に変わった）。
+    // 決まらないと、載る中身が回ごとに入れ替わって、追いかけられない。
+    const order = (e: MemoryEntry): number => Number(e.id.replace(/^m/, '')) || 0;
     return this.#entries
       .filter((e) => e.kind === 'displeasure')
-      .sort((a, b) => b.seenAt - a.seenAt)
+      .sort((a, b) => b.seenAt - a.seenAt || order(b) - order(a))
       .slice(0, limit);
   }
 

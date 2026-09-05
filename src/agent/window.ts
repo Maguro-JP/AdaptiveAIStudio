@@ -84,6 +84,21 @@ export function tokenBudget(contextTokens: number, reserveTokens = 2200): number
   return Math.max(contextTokens - reserveTokens, 512);
 }
 
+/**
+ * 道具の返しに使ってよい長さ（文字）。
+ *
+ * **窓から決める。**`read_file` は最大 40万字を丸ごと返していた。
+ * 窓が 8k のモデルでは、一度読んだだけで溢れる。
+ * 刈る側は後から縮められるが、そのときには**中身がほとんど残らない**
+ * （直近の道具の結果は 1200 字まで削られる）。読む時点で収めておく。
+ *
+ * 文字で返すのは、切り出しが文字単位のため。日本語は1文字1トークンなので、
+ * 文字数をそのままトークン数と見て安全側に倒す。
+ */
+export function toolOutputBudget(contextTokens: number, share = 0.35): number {
+  return Math.max(2000, Math.floor(tokenBudget(contextTokens) * share));
+}
+
 /** かさ（トークンの見積もり）。 */
 export function sizeOf(messages: readonly ProviderMessage[]): number {
   let n = 0;

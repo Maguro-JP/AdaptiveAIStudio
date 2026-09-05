@@ -88,6 +88,9 @@ export class Agent {
       root: this.#opts.root,
       signal,
       approve: this.#opts.approve,
+      // 道具の返しも窓に収める。読んだ時点で収めないと、刈る段では
+      // 中身がほとんど残らない（直近の結果は 1200 字まで削られる）。
+      ...(this.#opts.contextTokens !== undefined ? { contextTokens: this.#opts.contextTokens } : {}),
     };
 
     // 同じツールを同じ引数で繰り返すのは、モデルが行き詰まった兆候。
