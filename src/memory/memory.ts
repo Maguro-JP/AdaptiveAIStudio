@@ -400,6 +400,9 @@ export class Memory {
     return gone;
   }
 
+  /** 中身を直に書き換えたときに呼ぶ。保存し忘れを防ぐ。 */
+  touch(): void { this.#dirty = true; }
+
   /** 決め直しの履歴を古い順に辿る。 */
   history(id: string): MemoryEntry[] {
     const chain: MemoryEntry[] = [];

@@ -332,11 +332,14 @@ describe('実走：嫌がられたことを、次から必ず持ち歩くか', (
       };
       const hated = state.memory.filter((m) => m.kind === 'displeasure');
       assert.equal(hated.length, 1, `覚えていない: ${JSON.stringify(state.memory).slice(0, 300)}`);
-      // **言われた言葉は残さない。**残すのは、次からどうするか。
-      // 原文を溜めるのは記録であって学びではないし、自分の不満を集めた
-      // 覚え書きを持たれて気分の良い相手はいない（実際に言われた）。
-      assert.doesNotMatch(hated[0]!.detail, /気持ち悪い/, `原文を残している: ${hated[0]!.detail}`);
-      assert.match(hated[0]!.detail, /押しつけない|言葉づかい/, hated[0]!.detail);
+      const lesson = hated[0]!.detail;
+      // **言われた言葉は残さない。**残すのは、何が・なぜ・次からどうするか。
+      assert.doesNotMatch(lesson, /気持ち悪い/, `原文を残している: ${lesson}`);
+      // **決め文句で済ませない。**その場で考えた中身が入っていること。
+      assert.doesNotMatch(lesson, /未消化/, `考えずに決め文句で済ませている: ${lesson}`);
+      assert.match(lesson, /言い換えを持ち出した/, `何が問題だったかが無い: ${lesson}`);
+      assert.match(lesson, /否定されたように感じる/, `なぜ問題なのかが無い: ${lesson}`);
+      assert.match(lesson, /次から: 相手が使っている語のまま呼ぶ/, `次の手が無い: ${lesson}`);
 
       // 2. まったく別の話題を頼む。**それでも持ち歩いているか。**
       const events = await drive(base, '足し算が引き算になっています。直してください。');
@@ -347,7 +350,7 @@ describe('実走：嫌がられたことを、次から必ず持ち歩くか', (
         .map((ev) => ev.text ?? '')
         .join('\n');
       assert.match(recalled, /二度としないこと/, `別の話題では思い出していない: ${recalled.slice(0, 300)}`);
-      assert.match(recalled, /言葉づかい/, `学びが載っていない: ${recalled.slice(0, 300)}`);
+      assert.match(recalled, /次から: 相手が使っている語のまま呼ぶ/, `学びが載っていない: ${recalled.slice(0, 300)}`);
       assert.doesNotMatch(recalled, /気持ち悪い/, '原文を持ち回っている');
     } finally {
       await server.stop();

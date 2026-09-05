@@ -128,12 +128,76 @@ export const DISPLEASURE_RULE: Record<DispleasureCode, string> = {
 };
 
 /**
+ * 何故そう言われたのかを、こちらで考えるための問い。
+ *
+ * **表の一行では、意味も意図も残らない。**符丁ごとの決め文句は、
+ * 「言われた言葉をそのまま残す」を「決まり文句をそのまま残す」に
+ * 置き換えただけで、**何が嫌だったのか**は同じように消えている
+ * （実際に、そう指摘された）。
+ *
+ * 考えるのは、その場でしかできない。あとから元の言葉は捨てるので、
+ * ここで汲み取れなかったものは、二度と戻らない。
+ *
+ * 返し方は**語形の変わらない印**で固定する。日本語で「通す」「止める」を
+ * 返させたときに、語尾で取り違えた前科がある。
+ */
+export function understandPrompt(said: string, did?: string): string {
+  return [
+    '利用者が、いまの作業に不満を示しました。何が問題だったのかを考えてください。',
+    '',
+    `利用者の言葉: ${said.trim().slice(0, 600)}`,
+    did ? `直前にこちらがしたこと: ${did}` : '直前にこちらがしたこと: 分かりません',
+    '',
+    '次の三行だけを、この形で返してください。前置きも説明も要りません。',
+    'WHAT: 何が問題だったか（利用者の言葉ではなく、こちらの何が悪かったか）',
+    'WHY: なぜそれが問題なのか（利用者にとって何が困るのか）',
+    'NEXT: 次から具体的にどう変えるか',
+  ].join('\n');
+}
+
+export interface Understood {
+  what: string;
+  why: string;
+  next: string;
+}
+
+/**
+ * 考えたものを受け取る。
+ *
+ * **足りないものは、足りないと言う。**埋めて返すと、考えていないのに
+ * 考えた顔の覚えが残る。それがいちばん質の悪い覚えになる。
+ */
+export function parseUnderstanding(text: string): Understood | undefined {
+  const pick = (key: string): string | undefined => {
+    const m = new RegExp(`^\\s*${key}\\s*[:：]\\s*(.+?)\\s*$`, 'mi').exec(text);
+    const got = m?.[1]?.trim();
+    return got && got.length > 1 ? got : undefined;
+  };
+  const what = pick('WHAT');
+  const why = pick('WHY');
+  const next = pick('NEXT');
+  if (!what || !next) return undefined;
+  return { what, why: why ?? '（理由まで書かれていません）', next };
+}
+
+/** 考えたものを、覚えの一行にする。 */
+export function lessonFromUnderstanding(u: Understood, did?: string): string {
+  return [
+    `${u.what} — ${u.why}`,
+    `次から: ${u.next}`,
+    did ? `（このとき: ${did}）` : '',
+  ].filter(Boolean).join(' / ');
+}
+
+/**
  * 学びを一行にする。
  *
  * **直前に何をしていたかを、必ず添える。**符丁だけだと「同じことを言わせた」
  * が並ぶだけで、次に何を変えればいいのかが分からない。
  */
 export function lessonFrom(code: DispleasureCode, did?: string): string {
-  const rule = DISPLEASURE_RULE[code];
+  // **考えられなかったときの受け皿。**決め文句なので、意味までは入っていない。
+  // 入っていないことが分かるように、印を付けておく（消化できていない、と）。
+  const rule = `${DISPLEASURE_RULE[code]}【未消化: 何が嫌だったかまでは掴めていません】`;
   return did ? `${rule}（このとき: ${did}）` : rule;
 }

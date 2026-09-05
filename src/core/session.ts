@@ -34,7 +34,10 @@ import type { McpClient } from '../mcp/client.ts';
 import { collectTools } from '../mcp/tools.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall } from '../memory/memory.ts';
-import { senseDispleasure, DISPLEASURE_LABEL, lessonFrom } from '../memory/displeasure.ts';
+import {
+  senseDispleasure, DISPLEASURE_LABEL, lessonFrom,
+  understandPrompt, parseUnderstanding, lessonFromUnderstanding,
+} from '../memory/displeasure.ts';
 import { ProposalQueue, type Proposal } from '../agent/proposals.ts';
 import { findLeads, investigationPrompt, parseProposal } from '../agent/initiative.ts';
 import { IdleScheduler, type ModeStat } from '../harness/idle.ts';
@@ -1104,18 +1107,59 @@ export class Session {
   #noteDispleasure(text: string): void {
     const sensed = senseDispleasure(text);
     if (!sensed) return;
+    const did = this.#lastTurnSummary();
+
+    // まず、決め文句で置いておく。**考える前に、覚えを落とさないため。**
+    // このあと考えがまとまったら、同じ覚えを上書きする。
     const got = this.memory.remember({
       kind: 'displeasure',
-      // 表題は符丁から引く（語形が変わらないもので持つ）。
       title: `${DISPLEASURE_LABEL[sensed.code]}（${sensed.code}）`,
-      // **言われた言葉は残さない。**残すのは、何故そうなったかと、次からどうするか。
-      detail: lessonFrom(sensed.code, this.#lastTurnSummary()),
+      detail: lessonFrom(sensed.code, did),
       tags: [sensed.code],
       source: 'user',
     });
     this.#opts.onLog?.('warn',
       `覚えました（二度としないこと）: ${DISPLEASURE_LABEL[sensed.code]}${got.reinforced ? '（また同じことをしています）' : ''}`);
     void this.memory.save().catch(() => undefined);
+
+    // **意味と意図は、その場で考えないと残らない。**
+    // 元の言葉はここでしか手に入らず、覚えには残さない。
+    void this.#understand(text, did, got.entry.id);
+  }
+
+  /**
+   * 何故そう言われたのかを考えて、覚えを書き直す。
+   *
+   * 決め文句を並べるのは、原文を並べるのと同じで**記録**にしかならない。
+   * 考えられなかったときは「未消化」の印を残す。**考えた顔をさせない。**
+   */
+  async #understand(said: string, did: string | undefined, id: string): Promise<void> {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 60_000);
+    timer.unref?.();
+    try {
+      let text = '';
+      for await (const ev of this.orchestrator.run({
+        candidates: this.candidates,
+        system: '指摘を受けた側として、何が悪かったのかを考える。決まった三行だけを返す。',
+        messages: [{ role: 'user', content: understandPrompt(said, did) }],
+        temperature: 0.2,
+      }, ac.signal)) {
+        if (ev.type === 'text') text += ev.delta;
+      }
+      const understood = parseUnderstanding(text);
+      if (!understood) return; // 掴めなかった。決め文句のまま（未消化の印つき）で残す
+      const entry = this.memory.all().find((e) => e.id === id);
+      if (!entry) return;
+      entry.detail = lessonFromUnderstanding(understood, did);
+      this.memory.touch();
+      await this.memory.save().catch(() => undefined);
+      this.#opts.onLog?.('info', `何が問題だったかを掴みました: ${understood.what}`);
+    } catch {
+      // 考えられなくても、覚え自体は残っている。ここで止めない。
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**

@@ -12,7 +12,10 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { senseDispleasure, DISPLEASURE_LABEL, DISPLEASURE_RULE, lessonFrom } from '../src/memory/displeasure.ts';
+import {
+  senseDispleasure, DISPLEASURE_LABEL, DISPLEASURE_RULE, lessonFrom,
+  understandPrompt, parseUnderstanding, lessonFromUnderstanding,
+} from '../src/memory/displeasure.ts';
 import { Memory, formatRecall } from '../src/memory/memory.ts';
 
 describe('拾う', () => {
@@ -138,7 +141,71 @@ describe('記録ではなく、学びにする', () => {
     assert.match(got, /このとき: 使った道具: write_file/);
   });
 
-  test('何をしていたか分からないときは、規則だけにする（作り話をしない）', () => {
-    assert.equal(lessonFrom('BROKEN'), DISPLEASURE_RULE.BROKEN);
+  test('**決め文句のままなら、未消化と分かる印を付ける**', () => {
+    // 決め文句を並べるのは、原文を並べるのと同じで記録にしかならない。
+    // 考えられなかったことを、考えた顔で残さない。
+    assert.match(lessonFrom('OFFENSIVE'), /未消化/);
+  });
+
+  test('何をしていたか分からないときは、そこを足さない（作り話をしない）', () => {
+    const got = lessonFrom('BROKEN');
+    assert.match(got, new RegExp(DISPLEASURE_RULE.BROKEN));
+    assert.doesNotMatch(got, /このとき/);
+  });
+});
+
+/**
+ * 何故そう言われたのかを、その場で考える。
+ *
+ * 原文をそのまま残すのをやめて、符丁ごとの決め文句に置き換えた。
+ * **それも同じことだった。**言われた言葉を決まり文句へ差し替えただけで、
+ * 何が嫌だったのかは同じように消えている（そう指摘された）。
+ * 意味と意図は、その場で考えるしかない。
+ */
+describe('意味を汲む', () => {
+  test('問いに、こちらのしたことと、返し方の形が入る', () => {
+    const q = understandPrompt('配布物って気持ち悪いから言わないで', '使った道具: write_file');
+    assert.match(q, /配布物って気持ち悪い/, '元の言葉を渡していない');
+    assert.match(q, /使った道具: write_file/, 'こちらが何をしたかを渡していない');
+    // 語形の変わらない印で返させる。日本語で返させて取り違えた前科がある。
+    for (const key of ['WHAT', 'WHY', 'NEXT']) assert.match(q, new RegExp(key));
+  });
+
+  test('分からないときは、分からないと渡す（作り話をさせない）', () => {
+    assert.match(understandPrompt('動かない'), /直前にこちらがしたこと: 分かりません/);
+  });
+
+  test('三行を受け取る', () => {
+    const got = parseUnderstanding([
+      'WHAT: 利用者が使っていない言い換えを持ち出した',
+      'WHY: 自分の言葉を否定されたように感じる',
+      'NEXT: 相手が使っている語のまま呼ぶ',
+    ].join('\n'));
+    assert.equal(got?.what, '利用者が使っていない言い換えを持ち出した');
+    assert.equal(got?.next, '相手が使っている語のまま呼ぶ');
+  });
+
+  test('前置きが混ざっていても拾う（小さいモデルは必ず何か書く）', () => {
+    const got = parseUnderstanding('分かりました。\n\nWHAT: 確かめずに完了と言った\nNEXT: 動かしてから言う\n');
+    assert.equal(got?.what, '確かめずに完了と言った');
+    assert.match(got?.why ?? '', /理由まで書かれていません/);
+  });
+
+  test('**足りないものは、埋めない**（考えていないのに考えた顔にしない）', () => {
+    assert.equal(parseUnderstanding('WHY: なんとなく'), undefined);
+    assert.equal(parseUnderstanding('よく分かりません'), undefined);
+    assert.equal(parseUnderstanding(''), undefined);
+  });
+
+  test('覚えの一行に、何が・なぜ・次からが入る', () => {
+    const line = lessonFromUnderstanding({
+      what: '確かめずに完了と言った', why: '直っていないものを渡されると、確認の手間が相手へ回る',
+      next: '動かしてから言う',
+    }, '使った道具: write_file / 確かめていない');
+    assert.match(line, /確かめずに完了と言った/);
+    assert.match(line, /確認の手間が相手へ回る/);
+    assert.match(line, /次から: 動かしてから言う/);
+    assert.match(line, /このとき: 使った道具/);
+    assert.doesNotMatch(line, /未消化/);
   });
 });

@@ -59,6 +59,18 @@ export async function startRealModel(want: { hint: string; from: string; to: str
         res.end();
       };
 
+      // 何が問題だったかを訊かれたら、考えて三行で返す。
+      // **決まった形で返す相手**として振る舞う（本物の代わり）。
+      const asked = messages.filter((m) => m.role === 'user').map((m) => m.content ?? '').join('\n');
+      if (/WHAT:|何が問題だったのか/.test(asked)) {
+        did.push('understand');
+        return talk([
+          'WHAT: 利用者が使っていない言い換えを持ち出した',
+          'WHY: 自分の言葉を否定されたように感じる',
+          'NEXT: 相手が使っている語のまま呼ぶ',
+        ].join('\n'));
+      }
+
       // 1. まず探す。どこを直すかは、こちらでは知らない。
       if (results.length === 0) return call('find_code', { query: want.hint });
 
