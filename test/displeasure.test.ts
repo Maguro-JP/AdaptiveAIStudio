@@ -17,6 +17,7 @@ import {
   understandPrompt, parseUnderstanding, lessonFromUnderstanding,
 } from '../src/memory/displeasure.ts';
 import { Memory, formatRecall } from '../src/memory/memory.ts';
+import { BUILTIN_LESSONS, lessonLine } from '../src/memory/builtin-lessons.ts';
 
 describe('拾う', () => {
   test('実際に言われたものを拾う', () => {
@@ -207,5 +208,58 @@ describe('意味を汲む', () => {
     assert.match(line, /次から: 動かしてから言う/);
     assert.match(line, /このとき: 使った道具/);
     assert.doesNotMatch(line, /未消化/);
+  });
+});
+
+/**
+ * 最初から持っている「二度としないこと」。
+ *
+ * ここまで利用者が指摘してきたことを、製品の側に入れておく。
+ * **入れた直後の何も知らない状態から、同じ地雷を踏み直させない。**
+ */
+describe('最初から持っている', () => {
+  test('入れると、二度としないことが載っている', () => {
+    const m = new Memory();
+    const added = m.seedLessons();
+    assert.ok(added >= 10, `少なすぎる: ${added}`);
+    assert.equal(m.all().every((e) => e.kind === 'displeasure'), true);
+  });
+
+  test('二度入れても、増えない（覚え直したものを潰さない）', () => {
+    const m = new Memory();
+    m.seedLessons();
+    const size = m.size;
+    assert.equal(m.seedLessons(), 0);
+    assert.equal(m.size, size);
+  });
+
+  test('話題に関係なく、最初から出てくる', () => {
+    const m = new Memory();
+    m.seedLessons();
+    const text = formatRecall(m.recall('MCP の繋ぎ先を増やす'));
+    assert.match(text, /^二度としないこと/);
+    assert.match(text, /確かめていないときは、確かめていないと書く/);
+  });
+
+  test('どれも、何が・なぜ・次からが揃っている', () => {
+    for (const l of BUILTIN_LESSONS) {
+      const line = lessonLine(l);
+      assert.match(line, /— .+ \/ 次から: /, `形が揃っていない: ${l.title}`);
+      assert.ok(l.why.length > 10, `なぜ困るのかが薄い: ${l.title}`);
+    }
+  });
+
+  test('**こちらの行いとして書く**（相手の感情の記録にしない）', () => {
+    // 「利用者が怒った」と書くと、それは相手の不満の記録になる。
+    // 書くのは、こちらが何をしたか。直せるのはこちらの手だけ。
+    for (const l of BUILTIN_LESSONS) {
+      assert.doesNotMatch(l.what, /利用者(が|は)[^。]*(怒|不満|不快|嫌|指摘)/,
+        `相手の反応を書いている: ${l.title} — ${l.what}`);
+      // 次の手は、悪かったことの言い直しでは意味がない。
+      // 「〜しない」だけでも、次に何をするかが決まらない。
+      assert.ok(l.next.length >= 12, `次の手が薄い: ${l.title}`);
+      assert.notEqual(l.next, l.what);
+      assert.ok(!l.what.includes(l.next), `次の手が、悪かったことの言い直しになっている: ${l.title}`);
+    }
   });
 });

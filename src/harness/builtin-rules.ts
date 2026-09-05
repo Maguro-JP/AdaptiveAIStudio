@@ -214,6 +214,65 @@ export const dangerousCommands: Rule = {
 };
 
 /**
+ * 自分を殺す命令を止める。
+ *
+ * `pkill -f node` のような形は、**動かしている自分にも当たる**。
+ * 当たると、その場で全部終わる。落ちたのか消したのかも分からず、
+ * 利用者からは「また止まった」に見える（実際に二度やった）。
+ *
+ * 止める相手は、控えた PID で名指しする。**当たり判定を文字列に任せない。**
+ */
+export const noSelfKill: Rule = {
+  name: 'no-self-kill',
+  description: '自分にも当たる止め方を防ぐ',
+  pre(call) {
+    if (call.name !== 'run_command') return allow;
+    const command = argString(call, 'command') ?? '';
+    // 文字列で相手を探して殺す形。ここに自分が入っていると、自分が死ぬ。
+    const wide = /\b(pkill|pgrep)\s+(-[a-z]*f|--full)\b|\bkillall\b|\btaskkill\b[^|]*\/(f|im)\b/i;
+    if (!wide.test(command)) return allow;
+    // 自分の命令行にも入っている語。これらを的にすると、自分に当たる。
+    const selfWords = /\b(node|npm|npx|deno|bun|python3?|sh|bash|cmd|powershell)\b|AdaptiveAIStudio|\.ts\b|\.mjs\b/i;
+    if (!selfWords.test(command)) return allow;
+    return deny(
+      `自分にも当たる止め方です: ${command}。`
+      + '控えておいた PID を名指しして止めてください（例: kill 12345）。'
+      + '文字列で探して殺すと、動かしているこちらごと落ちます。',
+    );
+  },
+};
+
+/**
+ * 断りなく CI を回さない。
+ *
+ * 実行の枠には実費がかかる。使い切ると、その日は何も確かめられなくなる
+ * （実際に一日潰した）。手元で確かめられることを、外で確かめない。
+ */
+export const noCiSpend: Rule = {
+  name: 'no-ci-spend',
+  description: '断りのない CI 実行を止める',
+  pre(call) {
+    if (call.name !== 'run_command') return allow;
+    const command = argString(call, 'command') ?? '';
+    const patterns: Array<[RegExp, string]> = [
+      [/\bgh\s+workflow\s+run\b/i, 'CI を手で回す'],
+      [/\bgh\s+run\s+(rerun|watch)\b/i, 'CI を回し直す'],
+      [/\bact\b\s+(-|push|pull_request)/i, 'CI をこの場で回す'],
+    ];
+    for (const [re, label] of patterns) {
+      if (re.test(command)) {
+        return deny(
+          `${label}のは、利用者に断ってからにしてください: ${command}。`
+          + '枠には実費がかかり、使い切るとその日は何も確かめられなくなります。'
+          + '手元で確かめられることは、手元で確かめてください。',
+        );
+      }
+    }
+    return allow;
+  },
+};
+
+/**
  * 変更後に、その場で気づける情報を差し込む。
  * 「書いた直後に型検査の結果を見せる」のような、
  * 後で分かることを早く分からせる仕掛け。

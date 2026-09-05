@@ -10,7 +10,7 @@ import { HarnessMetrics } from '../harness/metrics.ts';
 import type { Rule } from '../harness/rules.ts';
 import {
   workspaceBoundary, protectedPaths, testProtection, blastRadius,
-  readBeforeWrite, noRepeatedWrites, dangerousCommands,
+  readBeforeWrite, noRepeatedWrites, dangerousCommands, noSelfKill, noCiSpend,
 } from '../harness/builtin-rules.ts';
 import { type Forum, requiresDeliberation } from '../harness/deliberation.ts';
 import { stateDir } from './autopilot-setup.ts';
@@ -44,6 +44,9 @@ export async function buildHarness(
     ));
     rules.push(testProtection);
     rules.push(dangerousCommands);
+    // 自分を殺す止め方と、断りのない CI。どちらも実際にやった失敗。
+    rules.push(noSelfKill);
+    rules.push(noCiSpend);
     rules.push(noRepeatedWrites);
     if (hc.readBeforeWrite !== false) rules.push(readBeforeWrite);
     if (hc.maxFilesPerTask && hc.maxFilesPerTask > 0) rules.push(blastRadius(hc.maxFilesPerTask));

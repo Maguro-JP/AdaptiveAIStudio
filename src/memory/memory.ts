@@ -32,6 +32,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { jstDate } from '../core/clock.ts';
+import { BUILTIN_LESSONS, lessonLine } from './builtin-lessons.ts';
 
 export type MemoryKind =
   /** 決めたこと。方針・設計判断 */
@@ -400,6 +401,32 @@ export class Memory {
     return gone;
   }
 
+  /**
+   * 最初から持っている「二度としないこと」を入れる。
+   *
+   * **入れた直後の何も知らない状態から、同じ地雷を踏み直させない。**
+   * 既に在るものは触らない（覚え直した中身を、決め打ちで上書きしない）。
+   *
+   * @returns 入れた数
+   */
+  seedLessons(): number {
+    const have = new Set(this.#entries.filter((e) => e.kind === 'displeasure')
+      .map((e) => normalizeTitle(e.title)));
+    let added = 0;
+    for (const l of BUILTIN_LESSONS) {
+      if (have.has(normalizeTitle(l.title))) continue;
+      this.remember({
+        kind: 'displeasure',
+        title: l.title,
+        detail: lessonLine(l),
+        tags: ['builtin'],
+        source: 'builtin',
+      });
+      added += 1;
+    }
+    return added;
+  }
+
   /** 中身を直に書き換えたときに呼ぶ。保存し忘れを防ぐ。 */
   touch(): void { this.#dirty = true; }
 
@@ -458,7 +485,7 @@ const KIND_LABEL: Record<MemoryKind, string> = {
   fact: '分かったこと',
   preference: '好み',
   incident: '起きたこと',
-  displeasure: '嫌がられたこと',
+  displeasure: '二度としないこと',
 };
 
 /**

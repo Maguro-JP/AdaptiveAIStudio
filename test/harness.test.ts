@@ -13,6 +13,7 @@ import { Checkpoint } from '../src/harness/checkpoint.ts';
 import { minimatch } from '../src/harness/glob.ts';
 import { workspaceBoundary, protectedPaths, testProtection, blastRadius,
   readBeforeWrite, noRepeatedWrites, dangerousCommands, afterWriteHint,
+  noSelfKill, noCiSpend,
 } from '../src/harness/builtin-rules.ts';
 import { readFileTool, writeFileTool } from '../src/agent/tools/fs.ts';
 import { createRunCommandTool } from '../src/agent/tools/shell.ts';
@@ -316,5 +317,58 @@ describe('チェックポイント', () => {
     await writeFile(join(root, 'a.ts'), 'v3');
     await cp.restore();
     assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'v1');
+  });
+});
+
+/**
+ * 利用者に言われ続けてきたことを、規則として持つ。
+ *
+ * 文章で言い聞かせても守れなかったものは、**実行の手前で止める**。
+ * どちらもこちらが実際にやった失敗で、どちらも一度で済んでいない。
+ */
+describe('自分を殺す止め方', () => {
+  const call = (command: string) => ({ id: 'c1', name: 'run_command', args: { command } });
+
+  test('文字列で探して殺す形は、自分にも当たるので止める', async () => {
+    for (const command of [
+      'pkill -f node',
+      'pkill -f "ui.ts"',
+      'pkill --full AdaptiveAIStudio',
+      'killall node',
+      'taskkill /f /im node.exe',
+    ]) {
+      const got = await noSelfKill.pre!(call(command), {} as never);
+      assert.equal(got.kind, 'deny', `素通りした: ${command}`);
+      assert.match(got.kind === 'deny' ? got.reason : '', /PID/, '代わりの手を言っていない');
+    }
+  });
+
+  test('名指しで止めるのは通す（止められないと、それはそれで困る）', async () => {
+    for (const command of ['kill 12345', 'kill -9 999', 'taskkill /pid 4321']) {
+      assert.equal((await noSelfKill.pre!(call(command), {} as never)).kind, 'allow', command);
+    }
+  });
+
+  test('自分に当たらない相手なら通す', async () => {
+    const got = await noSelfKill.pre!(call('pkill -f llama-server'), {} as never);
+    assert.equal(got.kind, 'allow');
+  });
+});
+
+describe('断りなく CI を回さない', () => {
+  const call = (command: string) => ({ id: 'c1', name: 'run_command', args: { command } });
+
+  test('外の実行枠を使う形を止める', async () => {
+    for (const command of ['gh workflow run release.yml', 'gh run rerun 123', 'act push']) {
+      const got = await noCiSpend.pre!(call(command), {} as never);
+      assert.equal(got.kind, 'deny', `素通りした: ${command}`);
+      assert.match(got.kind === 'deny' ? got.reason : '', /実費|手元/);
+    }
+  });
+
+  test('様子を見るだけなら通す（見ないと直せない）', async () => {
+    for (const command of ['gh run list', 'gh run view 123 --log-failed']) {
+      assert.equal((await noCiSpend.pre!(call(command), {} as never)).kind, 'allow', command);
+    }
   });
 });

@@ -328,11 +328,12 @@ describe('実走：嫌がられたことを、次から必ず持ち歩くか', (
       await new Promise((r) => setTimeout(r, 2000));
 
       const state = await (await fetch(`${base}/api/state`)).json() as {
-        memory: { kind: string; title: string; detail: string }[];
+        memory: { kind: string; title: string; detail: string; source?: string }[];
       };
-      const hated = state.memory.filter((m) => m.kind === 'displeasure');
-      assert.equal(hated.length, 1, `覚えていない: ${JSON.stringify(state.memory).slice(0, 300)}`);
-      const lesson = hated[0]!.detail;
+      // 最初から持っているぶん（source: builtin）と、この場で覚えたぶんを分ける。
+      const learned = state.memory.filter((m) => m.kind === 'displeasure' && m.source === 'user');
+      assert.equal(learned.length, 1, `覚えていない: ${JSON.stringify(state.memory).slice(0, 400)}`);
+      const lesson = learned[0]!.detail;
       // **言われた言葉は残さない。**残すのは、何が・なぜ・次からどうするか。
       assert.doesNotMatch(lesson, /気持ち悪い/, `原文を残している: ${lesson}`);
       // **決め文句で済ませない。**その場で考えた中身が入っていること。
