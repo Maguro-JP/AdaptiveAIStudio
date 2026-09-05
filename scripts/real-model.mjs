@@ -116,9 +116,84 @@ try {
   rmSync(dir, { recursive: true, force: true });
 }
 
+/*
+ * 会話の土台ごと、一往復。
+ *
+ * ここまでの実走は、相手を差し替えたものだった。**本物のモデルで、
+ * 土台（決まり・学び・道具・刈り込み・判定）を通したことが一度も無い。**
+ * 返る文字は無意味でよい。**落ちないこと**と、道が繋がっていることを見る。
+ */
+async function throughSession() {
+  const { mkdtempSync, rmSync: rm } = await import('node:fs');
+  const home = mkdtempSync(join(tmpdir(), 'aas-real-home-'));
+  const models = mkdtempSync(join(tmpdir(), 'aas-real-models-'));
+  execFileSync(process.execPath, [join(root, 'scripts', 'tiny-gguf.mjs'), join(models, 'tiny.gguf')], { stdio: 'pipe' });
+  process.env.AAS_HOME = home;
+  process.env.AAS_STATE_DIR = join(home, 'state');
+  process.env.AAS_CONFIG = join(home, 'aas.config.json');
+
+  const { UiServer } = await import(join(root, 'src', 'ui', 'server.ts'));
+  const { DEFAULT_CONFIG } = await import(join(root, 'src', 'config.ts'));
+  const work = mkdtempSync(join(tmpdir(), 'aas-real-work-'));
+
+  const server = new UiServer({
+    port: 0,
+    config: {
+      ...DEFAULT_CONFIG,
+      runtime: { kind: 'inproc', modelsDir: models },
+      agent: { root: work, approval: 'auto', maxTurns: 2, verify: { enabled: false } },
+      initiative: { enabled: false },
+    },
+  });
+  const base = (await server.start()).replace(/\/$/, '');
+  const found = [];
+  try {
+    const r = await fetch(`${base}/api/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'こんにちは' }),
+    });
+    if (r.status !== 202) found.push(`送れない: ${r.status} ${await r.text()}`);
+
+    // 静かになるまで待つ（本物のモデルなので遅い）。
+    // **出来事の流れで見る。**`/api/state` は動いているかどうかを返さないので、
+    // それを当てにすると「待ったつもりで見ていない」ことになる。
+    const ac = new AbortController();
+    const events = await fetch(`${base}/api/events`, { signal: ac.signal });
+    const reader = events.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    let settled = false;
+    const until = Date.now() + 180_000;
+    while (Date.now() < until && !settled) {
+      const step = await Promise.race([
+        reader.read(),
+        new Promise((res) => setTimeout(() => res({ value: undefined }), 2000)),
+      ]);
+      if (step.value) buf += dec.decode(step.value, { stream: true });
+      settled = /"type":"busy","busy":false/.test(buf) || /"type":"settled"/.test(buf);
+    }
+    ac.abort();
+    if (!settled) found.push('一往復が終わらない（180秒）');
+    // 学びが決まりに載っていること（土台を通っている証拠）。
+    const state = await fetch(`${base}/api/state`).then((x) => x.json());
+    const lessons = (state.memory ?? []).filter((m) => m.kind === 'displeasure');
+    if (lessons.length === 0) found.push('二度としないことが入っていない（土台を通っていない）');
+  } catch (e) {
+    found.push(`落ちました: ${e.message}`);
+  } finally {
+    await server.stop().catch(() => undefined);
+    rm(home, { recursive: true, force: true });
+    rm(models, { recursive: true, force: true });
+    rm(work, { recursive: true, force: true });
+  }
+  return found;
+}
+
+bad.push(...await throughSession());
+
 if (bad.length > 0) {
   console.error(`見つかった不具合 ${bad.length} 件:`);
   for (const b of bad) console.error(`- ${b}`);
   process.exit(1);
 }
-console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す）');
+console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す・土台ごと一往復）');
