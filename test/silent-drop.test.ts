@@ -116,3 +116,54 @@ describe('やり残しを諦めたら、そう言う', () => {
     assert.deepEqual(u.takeDropped(), [], '同じものを二度出している');
   });
 });
+
+/**
+ * やり残しの名前が、ぶつからない。
+ *
+ * 時刻＋乱数2桁で作っていた。**同じミリ秒に二つ作ると、かなりの割合で
+ * ぶつかる**（50 件なら 6 割）。一覧は名前で引くので、ぶつかると
+ * **後のものが前のものを置き換える＝頼んだことが黙って消える。**
+ *
+ * 検査が時々落ちて気づいた。会話の名前で直したのと同じ穴。
+ */
+describe('やり残しの名前は、ぶつからない', () => {
+  test('**同じミリ秒・同じ乱数でも、必ず別の名前になる**', async () => {
+    // 乱数まかせで試すと、ぶつかるかどうかが運になる（40 件で 45%）。
+    // **必ずぶつかる乱数**（いつも同じ値）を渡して、それでも別になることを見る。
+    const { nextId } = await import('../src/core/unfinished.ts');
+    const at = 1_700_000_000_000;
+    const ids = Array.from({ length: 200 }, () => nextId(at, () => 0.5));
+    assert.equal(new Set(ids).size, ids.length, '同じ名前を配っている');
+    for (let i = 1; i < ids.length; i += 1) {
+      assert.ok(ids[i]! > ids[i - 1]!, `順が戻った: ${ids[i - 1]} → ${ids[i]}`);
+    }
+  });
+
+  test('同じミリ秒に続けて控えても、全部残る', async () => {
+    const { UnfinishedWork } = await import('../src/core/unfinished.ts');
+    const dir = await tempDir('aas-unfin-id-');
+    const u = new UnfinishedWork(join(dir, 'unfinished.jsonl'));
+    const at = 1_700_000_000_000;
+    for (let i = 0; i < 40; i += 1) {
+      await u.add({ request: `やり残し${i}`, why: 'maxTurns', note: 'x' }, at);
+    }
+    const list = await u.list();
+    assert.equal(list.length, 40, `消えている: ${list.length}/40`);
+    assert.equal(new Set(list.map((x) => x.id)).size, 40, '同じ名前を配っている');
+  });
+
+  test('名前は、後から作った方が後ろに並ぶ', async () => {
+    const { UnfinishedWork } = await import('../src/core/unfinished.ts');
+    const dir = await tempDir('aas-unfin-order-');
+    const u = new UnfinishedWork(join(dir, 'unfinished.jsonl'));
+    const at = 1_700_000_000_000;
+    const ids: string[] = [];
+    for (let i = 0; i < 30; i += 1) {
+      const got = await u.add({ request: `やり残し${i}`, why: 'maxTurns', note: 'x' }, at);
+      if (got) ids.push(got.id);
+    }
+    for (let i = 1; i < ids.length; i += 1) {
+      assert.ok(ids[i]! > ids[i - 1]!, `順が戻った: ${ids[i - 1]} → ${ids[i]}`);
+    }
+  });
+});

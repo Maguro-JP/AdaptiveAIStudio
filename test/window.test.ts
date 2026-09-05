@@ -470,20 +470,27 @@ describe('入り切らないものを、測らない', () => {
     assert.ok(many.trimmed, '刈ったと言っていない');
   });
 
-  test('**量を増やしても、かかる時間が比例して増えない**', () => {
+  test('**量を増やしても、測る回数が比例して増えない**', () => {
+    /*
+     * 時間の比で見ていたが、**元が 1ms 程度だと比は雑音になる**
+     * （10 倍の量で 5.1 倍、と出て落ちた。閾値は 5 倍）。
+     * 走らせる機械で結果が変わる試験を、自分で書いてしまっていた。
+     *
+     * 見たいのは「入り切らないものを測っていないか」。**測った回数を数える。**
+     * 数えるのは決まった手続きなので、機械が速かろうが遅かろうが同じ。
+     */
     const budget = tokenBudget(8192);
     const at = (rounds: number): number => {
-      const h = history(rounds);
-      fitToWindow(h.slice(0, 40), budget); // 温めてから測る
-      const t0 = process.hrtime.bigint();
-      fitToWindow(h, budget);
-      return Number(process.hrtime.bigint() - t0) / 1e6;
+      let calls = 0;
+      const count = (t: string): number => { calls += 1; return estimateTokens(t); };
+      fitToWindow(history(rounds), budget, count);
+      return calls;
     };
-    const small = Math.max(at(100), 0.5);
+    const small = at(100);
     const large = at(1000);
     assert.ok(
-      large / small < 5,
-      `10 倍の量で ${(large / small).toFixed(1)} 倍かかっている（全部を測っている）`,
+      large < small * 2,
+      `10 倍の量で ${(large / small).toFixed(1)} 倍測っている（全部を測っている）: ${small} → ${large}`,
     );
   });
 

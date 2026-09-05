@@ -246,22 +246,25 @@ describe('見出しは、頭だけ読む', () => {
     assert.equal(head.title, '新しい会話', '見出しが取れていない');
   });
 
-  test('**大きくなっても、かかる時間が比例して増えない**', async () => {
+  test('**大きくなっても、読む量が増えない**', async () => {
+    /*
+     * 時間の比で見ていたが、**元が 1ms 程度だと比は雑音になる**
+     * （10 倍の大きさで 5.1 倍、と出て落ちた。閾値は 5 倍）。
+     * 走らせる機械で結果が変わる試験を、自分で書いてしまっていた。
+     *
+     * 見たいのは「丸ごと読んでいないか」。頭 128KB しか読まないなら、
+     * **10 倍の大きさでも数えた往復は同じ**になる。時間を見ずに、そこを見る。
+     */
     const { c } = await store();
     const at = async (rounds: number): Promise<number> => {
       const { id } = await c.create();
       await long(c, id, rounds);
-      await c.head(id); // 温めてから測る
-      const t0 = process.hrtime.bigint();
-      await c.head(id);
-      return Number(process.hrtime.bigint() - t0) / 1e6;
+      return (await c.head(id)).messages;
     };
-    const small = Math.max(await at(5), 0.5);
-    const large = await at(50);
-    assert.ok(
-      large / small < 5,
-      `10 倍の大きさで ${(large / small).toFixed(1)} 倍かかっている（丸ごと読んでいる）`,
-    );
+    const small = await at(30);
+    const large = await at(300);
+    assert.ok(small > 0, '何も数えていない');
+    assert.equal(large, small, `丸ごと読んでいる（10 倍で ${large} / ${small}）`);
   });
 });
 
@@ -321,18 +324,17 @@ describe('後ろから読む', () => {
     assert.deepEqual(tail.map((m) => m.content), ['ひとつめ', 'こたえ']);
   });
 
-  test('**大きくなっても、かかる時間が比例して増えない**', async () => {
+  test('**大きくなっても、読む量が増えない**', async () => {
+    // 後ろから決まった量だけ読むなら、10 倍の大きさでも返る通数は同じ。
     const { c } = await store();
     const at = async (rounds: number): Promise<number> => {
       const { id } = await c.create();
       await big(c, id, rounds);
-      await c.load(id, { tailBytes: 256 * 1024 });
-      const t0 = process.hrtime.bigint();
-      await c.load(id, { tailBytes: 256 * 1024 });
-      return Number(process.hrtime.bigint() - t0) / 1e6;
+      return (await c.load(id, { tailBytes: 256 * 1024 })).length;
     };
-    const small = Math.max(await at(5), 0.5);
-    const large = await at(50);
-    assert.ok(large / small < 5, `10 倍の大きさで ${(large / small).toFixed(1)} 倍かかっている`);
+    const small = await at(30);
+    const large = await at(300);
+    assert.ok(small > 0, '何も返っていない');
+    assert.equal(large, small, `丸ごと読んでいる（10 倍で ${large} / ${small}）`);
   });
 });
