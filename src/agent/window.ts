@@ -264,6 +264,40 @@ export function fitToWindow(
   budget: number,
   count: Count = estimateTokens,
 ): { messages: ProviderMessage[]; trimmed: boolean; dropped: number } {
+  /*
+   * **入り切らないものを、測らない。**
+   *
+   * ここまで、毎回すべての履歴を数え直していた。半年ひとつの会話を続けると
+   * 14,400 通・16.6MB になり、**一往復あたり 1.2 秒**（本物の数え方なら
+   * 2.1 秒）を刈り込みだけに使っていた。残すのは 18 通なのに、16MB を測る。
+   *
+   * **使うほど遅くなる。**それは、使うほど馬鹿になるのと同じこと。
+   *
+   * 残すのは「最初の依頼」と「直近」だけ、と決まっている。だから、
+   * **後ろから見て、入る見込みの所で切ってから**本来の刈り込みへ渡す。
+   * 全部が入るときは何も変わらない（この足切りは効かない）。
+   */
+  const near = tailWithin(history, budget, count);
+  let cut = 0;
+  let work = history;
+  if (near.length < history.length) {
+    const first = firstRequest(history, count, budget);
+    work = [...first, ...near];
+    cut = history.length - work.length;
+  }
+  const got = fitCore(work, budget, count);
+  // 落とした数には、ここで先に切った分も足す。**黙って減らさない。**
+  return cut > 0
+    ? { ...got, trimmed: true, dropped: got.dropped + cut }
+    : got;
+}
+
+/** 本来の刈り込み。**入る見込みのものだけが渡ってくる。** */
+function fitCore(
+  history: readonly ProviderMessage[],
+  budget: number,
+  count: Count,
+): { messages: ProviderMessage[]; trimmed: boolean; dropped: number } {
   if (sizeOf(history, count) <= budget) {
     return { messages: [...history], trimmed: false, dropped: 0 };
   }
@@ -337,6 +371,41 @@ function total(units: readonly Unit[]): number {
  *
  * 道具を呼んだ assistant には、その結果の tool を必ず連れて行かせる。
  */
+/**
+ * 後ろから、予算の何倍かに収まるところまで。
+ *
+ * **切りすぎない。**刈り込みの本体は、道具の結果を縮めたり往復を落としたり
+ * するので、予算ちょうどで切ると縮めれば入るものまで捨てる。
+ * 余裕を持って多めに残し、判断は本体に任せる。
+ *
+ * 往復の切れ目（人の発言）で切る。道具の呼び出しと結果を割ると、
+ * 相手が形の違うものを受け取って落ちる。
+ */
+function tailWithin(
+  history: readonly ProviderMessage[], budget: number, count: Count,
+): ProviderMessage[] {
+  const room = budget * 4;
+  let used = 0;
+  let at = history.length;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    used += sizeOf([history[i]!], count);
+    if (used > room && history[i]!.role === 'user') break;
+    at = i;
+  }
+  return history.slice(at);
+}
+
+/** 最初の依頼（と、その一往復）。**何をしているのかが消えないように。** */
+function firstRequest(
+  history: readonly ProviderMessage[], count: Count, budget: number,
+): ProviderMessage[] {
+  const at = history.findIndex((m) => m.role === 'user');
+  if (at < 0) return [];
+  const one = [history[at]!];
+  // 長すぎる最初の依頼で予算を食い潰さない。入らないなら連れて行かない。
+  return sizeOf(one, count) <= budget * 0.5 ? one : [];
+}
+
 function toUnits(history: readonly ProviderMessage[], count: Count = estimateTokens): Unit[] {
   const units: Unit[] = [];
   let current: ProviderMessage[] = [];

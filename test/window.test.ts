@@ -430,3 +430,77 @@ describe('削っても、引数の形は壊さない', () => {
     assert.equal(props.title!.type, 'string');
   });
 });
+
+/**
+ * 使うほど遅くならない。
+ *
+ * 毎回すべての履歴を数え直していた。半年ひとつの会話を続けると
+ * 14,400 通・16.6MB になり、**一往復あたり 1.2 秒**（本物の数え方なら
+ * 2.1 秒）を刈り込みだけに使っていた（実測）。残すのは 18 通なのに、
+ * 16MB を測る。**使うほど遅くなるのは、使うほど馬鹿になるのと同じ。**
+ *
+ * ここは時間ではなく、**量を増やしたとき何倍になるか**で見る
+ * （走らせる機械で結果が変わる試験にしない）。
+ */
+describe('入り切らないものを、測らない', () => {
+  /** 一往復ぶん。道具の結果を挟んで、実際の形に近づける。 */
+  function round(i: number): ProviderMessage[] {
+    return [
+      { role: 'user', content: `依頼${i}: ${'長めの文章。'.repeat(20)}` },
+      { role: 'assistant', content: '', toolCalls: [{ id: String(i), name: 'read_file', args: {} }] },
+      { role: 'tool', content: 'ファイルの中身。'.repeat(100), toolCallId: String(i) },
+      { role: 'assistant', content: `返事${i}: ${'説明。'.repeat(20)}` },
+    ];
+  }
+  const history = (rounds: number): ProviderMessage[] =>
+    Array.from({ length: rounds }, (_, i) => round(i)).flat();
+
+  test('古い分がいくら増えても、残るものは変わらない', () => {
+    const budget = tokenBudget(8192);
+    const h20 = history(20);
+    const h400 = history(400);
+    const few = fitToWindow(h20, budget);
+    const many = fitToWindow(h400, budget);
+    // **直近は必ず残る。**それぞれの履歴の末尾と突き合わせる。
+    assert.equal(many.messages.at(-1)?.content, h400.at(-1)?.content, '直近が落ちている');
+    assert.equal(few.messages.at(-1)?.content, h20.at(-1)?.content, '直近が落ちている');
+    // 残る通数は、古い分が増えても変わらない（入る量で決まるので）。
+    assert.equal(many.messages.length, few.messages.length, `残る量が変わっている: ${many.messages.length} / ${few.messages.length}`);
+    assert.ok(many.dropped > few.dropped, '落とした数を数えていない');
+    assert.ok(many.trimmed, '刈ったと言っていない');
+  });
+
+  test('**量を増やしても、かかる時間が比例して増えない**', () => {
+    const budget = tokenBudget(8192);
+    const at = (rounds: number): number => {
+      const h = history(rounds);
+      fitToWindow(h.slice(0, 40), budget); // 温めてから測る
+      const t0 = process.hrtime.bigint();
+      fitToWindow(h, budget);
+      return Number(process.hrtime.bigint() - t0) / 1e6;
+    };
+    const small = Math.max(at(100), 0.5);
+    const large = at(1000);
+    assert.ok(
+      large / small < 5,
+      `10 倍の量で ${(large / small).toFixed(1)} 倍かかっている（全部を測っている）`,
+    );
+  });
+
+  test('全部が入るなら、何も切らない（対）', () => {
+    const h = history(2);
+    const got = fitToWindow(h, tokenBudget(32768));
+    assert.equal(got.trimmed, false, '入るのに刈っている');
+    assert.equal(got.dropped, 0);
+    assert.deepEqual(got.messages, h);
+  });
+
+  test('最初の依頼は、できるだけ残す', () => {
+    const got = fitToWindow(history(400), tokenBudget(8192));
+    assert.equal(
+      got.messages[0]?.content,
+      '依頼0: ' + '長めの文章。'.repeat(20),
+      '最初の依頼が消えている（何をしているのか分からなくなる）',
+    );
+  });
+});
