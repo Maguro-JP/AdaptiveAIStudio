@@ -130,7 +130,7 @@ describe('画面から押して、モデルが置かれる', () => {
       assert.ok(bad, got.said.join(' / '));
       // 次の一手が出ていること。**置き場に置くだけでよい**が一番確実。
       assert.ok(bad!.includes(models), `置き場を出していない: ${bad}`);
-      assert.ok(bad!.includes('読み直す'), `拾い方を出していない: ${bad}`);
+      assert.ok(bad!.includes("読み直す"), `拾い方を出していない: ${bad}`);
     } finally { await hf.close(); }
   });
 

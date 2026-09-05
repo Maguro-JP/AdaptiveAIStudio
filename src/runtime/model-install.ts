@@ -136,7 +136,7 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
         // **いちばん確実な逃げ道を、必ず添える。**ブラウザで落として置くだけで動く。
         // 会社の PC はこの道しかないうえ、名前が変わっているときも同じ道で済む。
         + `  3. それが面倒なら、.gguf をブラウザで落として ${modelsDir} に置き、\n`
-        + '     「読み直す」を押すだけでも使えます。',
+        + '     「置いたものを読み直す」を押すだけでも使えます。',
       );
     }
     // 403 は理由が複数ある。番号だけ出しても、次に何をすればいいか分からない。
@@ -327,7 +327,7 @@ export function byHand(entry: { repo: string; quant: string }, modelsDir: string
       ? '  2. 落とす'
       : `  2. 名前に ${entry.quant} が付く .gguf を1つ落とす（分割されたものは扱えません）`,
     `  3. ここに置く: ${modelsDir}`,
-    '  置いたら「読み直す」を押してください。',
+    '  置いたら、モデルの画面で「置いたものを読み直す」を押してください。',
   ].join('\n');
 }
 

@@ -841,6 +841,24 @@ export const PANELS = {
         status.append(row);
       }
 
+      /*
+       * 置いたものを拾い直す。
+       *
+       * **取ってこられなかったときの逃げ道がここ。**配布元の名前は変わるし、
+       * 会社の PC はブラウザでしか落とせない。落として置き場に入れたあと、
+       * 拾い直す手が無いと、立ち上げ直すまで出てこない。
+       * 案内の文（「読み直す」）が指しているのは、この押し場所。
+       */
+      const again = el('button', 'ghost', '⟳ 置いたものを読み直す');
+      again.type = 'button';
+      again.title = '置き場に自分で入れた .gguf を拾い直します';
+      again.onclick = async () => {
+        again.disabled = true;
+        again.textContent = '読み直しています…';
+        try { await draw(); } finally { /* draw が組み直すので、戻しは要らない */ }
+      };
+      status.append(again);
+
       // 手元にあるもの
       list.replaceChildren(el('div', 'dim', '手元のモデル'));
       if (!data.installed || data.installed.length === 0) {

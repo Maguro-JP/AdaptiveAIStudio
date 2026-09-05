@@ -28,6 +28,16 @@ const D = 32, FF = 64, LAYERS = 1, HEADS = 4;
  */
 const BPE = process.argv.includes('--bpe');
 
+/**
+ * モデル同梱の話し方（chat_template）を入れるか。
+ *
+ * **本物のモデルはこれを持っている。**持っていないと、こちらは型を
+ * 当てずっぽうで決め（`GUESSED_WRAPPERS`）、道具の呼び方も本文に書かせる
+ * 道へ落ちる。つまり**偽物でだけ通る道**をずっと試していたことになる。
+ * 本物で最初に通る道を、ここでも通せるようにする。
+ */
+const TEMPLATE = process.argv.includes('--chat-template');
+
 /** GPT-2 のバイト→字の写し。空白は Ġ、改行は Ċ になる、あれ。 */
 function byteToUnicode() {
   const bs = [];
@@ -123,6 +133,13 @@ kv('llama.vocab_size', 4, u32(VOCAB));
 kv('llama.rope.freq_base', 6, f32(10000));
 kv('tokenizer.ggml.unknown_token_id', 4, u32(0));
 kv('tokenizer.ggml.padding_token_id', 4, u32(0));
+if (TEMPLATE) {
+  // 本物（Qwen 等）と同じ形。role ごとに囲って、最後に助手の番を開ける。
+  kv('tokenizer.chat_template', 8, str(
+    "{% for m in messages %}<|im_start|>{{ m['role'] }}\n{{ m['content'] }}<|im_end|>\n{% endfor %}"
+    + '{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}',
+  ));
+}
 kv('tokenizer.ggml.add_bos_token', 7, Buffer.from([1]));
 kv('tokenizer.ggml.add_eos_token', 7, Buffer.from([0]));
 const kvCount = (parts.length - kvStart) / 3;

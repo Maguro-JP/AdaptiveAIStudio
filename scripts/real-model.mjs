@@ -109,6 +109,61 @@ try {
   if (!guessed) {
     console.log('（この模型の型は当てずっぽうではありませんでした。本文で渡す道は踏んでいません）');
   }
+
+  /*
+   * 6. **モデル同梱の話し方（chat_template）を持つ形。**
+   *
+   *    本物のモデルはこれを持っている。持っていると型が決まり
+   *    （当てずっぽうではなくなり）、道具は**本文ではなく素の道**で渡る。
+   *    つまりここまで踏んでいたのは**偽物でだけ通る道**だった。
+   *    本物で最初に通るのはこちらなので、ここも踏んでおく。
+   */
+  const tplDir = mkdtempSync(join(tmpdir(), 'aas-real-tpl-'));
+  const tplLogs = [];
+  const tplRt = new (await import(join(root, 'src', 'runtime', 'inproc.ts'))).InProcRuntime(
+    { modelsDir: tplDir, port: 0, onLog: (l) => tplLogs.push(l) },
+  );
+  try {
+    execFileSync(
+      process.execPath,
+      [join(root, 'scripts', 'tiny-gguf.mjs'), join(tplDir, 'tpl.gguf'), '--chat-template'],
+      { stdio: 'pipe' },
+    );
+    const { baseUrl: tplUrl } = await tplRt.ensureLoaded('tpl.gguf');
+    const how = tplRt.wrappers().find((w) => w.ref === 'tpl.gguf');
+    if (!how) bad.push('話し方の型が分からない');
+    else if (how.guessed) {
+      bad.push(`同梱の話し方を使っていない（${how.wrapper} で当てずっぽうのまま）`);
+    }
+    const r = await fetch(`${tplUrl}/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'tpl.gguf', stream: false, max_tokens: 8,
+        messages: [{ role: 'user', content: 'read a.ts' }],
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'read_file',
+            description: 'ファイルを読む',
+            parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+          },
+        }],
+      }),
+    });
+    if (!r.ok) bad.push(`同梱の話し方で道具を渡すと落ちる: ${r.status} ${(await r.text()).slice(0, 200)}`);
+    else {
+      const got = await r.json();
+      const msg = got?.choices?.[0]?.message;
+      if (typeof msg?.content !== 'string') {
+        bad.push(`同梱の話し方で返事の形が違う: ${JSON.stringify(got).slice(0, 200)}`);
+      } else if (/tool_call|"arguments"/.test(msg.content)) {
+        bad.push(`同梱の話し方で生の呼び出しが本文に出ている: ${msg.content.slice(0, 120)}`);
+      }
+    }
+  } finally {
+    await tplRt.shutdown();
+    rmSync(tplDir, { recursive: true, force: true });
+  }
 } catch (e) {
   bad.push(`落ちました: ${e.message}`);
 } finally {
@@ -209,4 +264,4 @@ if (bad.length > 0) {
   for (const b of bad) console.error(`- ${b}`);
   process.exit(1);
 }
-console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す・土台ごと一往復・本物の数え方）');
+console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す・同梱の話し方・土台ごと一往復・本物の数え方）');

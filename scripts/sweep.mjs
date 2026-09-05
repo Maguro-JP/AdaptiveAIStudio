@@ -377,6 +377,42 @@ await check('取ってくる先を、自分で打てる', async () => {
   } finally { await closeSettings(); }
 });
 
+await check('置いたものを読み直せる', async () => {
+  /*
+   * 取ってこられなかったときの逃げ道。
+   *
+   * 配布元の名前は変わるし、会社の PC はブラウザでしか落とせない。
+   * 落として置き場に入れたあと、拾い直す押し場所が要る。
+   * **案内の文がこの押し場所を指しているので、無ければ案内が嘘になる。**
+   * 実際に無いまま案内していた。
+   */
+  // 出ていなければ「表示」から出す。出ていれば、その板を前に出す。
+  const shown = async () => (await p.locator('#root .panel header, #root .panel.tabs header button')
+    .allInnerTexts()).some((h) => h.includes('モデル'));
+  if (!(await shown())) {
+    await p.locator('#openView').click();
+    await p.waitForTimeout(500);
+    const row = p.locator('#viewList .view-row').filter({ hasText: 'モデル' }).first();
+    if (await row.count() === 0) throw new Error('表示の一覧にモデルが無い');
+    await row.locator('input').click();
+    await p.waitForTimeout(700);
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(400);
+  }
+  // 束ねられているときは、その見出しを押して前に出す。
+  const tab = p.locator('#root .panel.tabs header button').filter({ hasText: 'モデル' });
+  if (await tab.count() > 0) { await tab.first().click(); await p.waitForTimeout(400); }
+  await p.waitForTimeout(1200);
+  const again = p.locator('button').filter({ hasText: '置いたものを読み直す' });
+  if (await again.count() === 0) throw new Error('置いたものを読み直す押し場所が無い');
+  await again.first().click();
+  await p.waitForTimeout(900);
+  // 押したあとも、押し場所が残っていること（一度きりにならない）。
+  if (await p.locator('button').filter({ hasText: '置いたものを読み直す' }).count() === 0) {
+    throw new Error('一度押すと消える');
+  }
+});
+
 await check('作業場は、作業場の所で変える', async () => {
   // **その区画を操るものは、その区画に置く。**
   // 設定の奥（モデルの頁）に置いていたので、誰も辿り着けなかった。
