@@ -470,10 +470,10 @@ export function formatRecall(entries: MemoryEntry[]): string {
   // 押されて末尾へ行き、取りこぼす。踏んではいけないものから読ませる。
   const hated = entries.filter((e) => e.kind === 'displeasure');
   if (hated.length > 0) {
-    lines.push('二度としないこと（利用者が嫌がったこと。話題が違っても効きます）:');
+    lines.push('二度としないこと（前に同じことで止められています。話題が違っても効きます）:');
     for (const e of hated) {
-      lines.push(`  ・${e.title}`);
-      if (e.detail) lines.push(`      利用者の言葉: ${e.detail.split('\n')[0]!.slice(0, 160)}`);
+      // **言われた言葉は出さない。**出すのは、次からどうするか。
+      lines.push(`  ・${e.detail || e.title}`);
     }
     lines.push('');
   }

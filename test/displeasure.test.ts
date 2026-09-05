@@ -12,7 +12,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { senseDispleasure, DISPLEASURE_LABEL } from '../src/memory/displeasure.ts';
+import { senseDispleasure, DISPLEASURE_LABEL, DISPLEASURE_RULE, lessonFrom } from '../src/memory/displeasure.ts';
 import { Memory, formatRecall } from '../src/memory/memory.ts';
 
 describe('拾う', () => {
@@ -65,8 +65,9 @@ describe('思い出す', () => {
     const m = new Memory();
     m.remember({
       kind: 'displeasure',
-      title: '言い方が不快だった（OFFENSIVE）',
-      detail: '配布物って気持ち悪いから言わないで',
+      title: '言い方や中身が不快だった（OFFENSIVE）',
+      // **言われた言葉は残さない。**残すのは、次からどうするか。
+      detail: lessonFrom('OFFENSIVE', '使った道具: write_file / 確かめていない'),
       tags: ['OFFENSIVE'],
     });
     m.remember({ kind: 'fact', title: '設定は config.ts', detail: 'config.ts に書く' });
@@ -94,10 +95,13 @@ describe('思い出す', () => {
     assert.ok(text.indexOf('二度としないこと') < text.indexOf('これまでに分かっていること'));
   });
 
-  test('利用者の言葉が、そのまま残っている', () => {
+  test('**言われた言葉は出さない。**出すのは、次からどうするか', () => {
+    // 原文を溜めるのは記録であって学びではない。しかも、自分の不満を集めた
+    // 覚え書きを持たれて気分の良い相手はいない（実際に言われた）。
     const m = withHate();
     const text = formatRecall(m.recall('なんでもいい'));
-    assert.match(text, /配布物って気持ち悪いから言わないで/);
+    assert.match(text, /相手の言葉づかいに合わせ/, text.slice(0, 200));
+    assert.match(text, /このとき: 使った道具/, '何をしていたときかが分からない');
   });
 });
 
@@ -117,5 +121,24 @@ describe('忘れない', () => {
     assert.equal(a.entry.id, b.entry.id);
     assert.equal(b.reinforced, true);
     assert.equal(b.entry.confirms, 2);
+  });
+});
+
+describe('記録ではなく、学びにする', () => {
+  test('符丁のどれにも、次からどうするかが書いてある', () => {
+    for (const code of Object.keys(DISPLEASURE_LABEL) as (keyof typeof DISPLEASURE_LABEL)[]) {
+      const rule = DISPLEASURE_RULE[code];
+      assert.ok(rule && rule.length > 10, `${code} に、次からどうするかが無い`);
+    }
+  });
+
+  test('直前に何をしていたかが添う（符丁だけだと、次の手が変わらない）', () => {
+    const got = lessonFrom('BROKEN', '使った道具: write_file / 確かめていない');
+    assert.match(got, /渡す前に、こちらで動かして確かめる/);
+    assert.match(got, /このとき: 使った道具: write_file/);
+  });
+
+  test('何をしていたか分からないときは、規則だけにする（作り話をしない）', () => {
+    assert.equal(lessonFrom('BROKEN'), DISPLEASURE_RULE.BROKEN);
   });
 });

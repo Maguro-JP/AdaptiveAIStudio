@@ -108,3 +108,32 @@ export const DISPLEASURE_LABEL: Record<DispleasureCode, string> = {
   OFFENSIVE: '言い方や中身が不快だった',
   ANGRY: '強く責められた',
 };
+
+/**
+ * 次からどうするか。
+ *
+ * **言われた言葉は残さない。**
+ *
+ * 原文を溜めるのは記録であって、学びではない。しかも、自分の不満を集めた
+ * 覚え書きを持たれて、気分の良い相手はいない（実際に言われた）。
+ * 残すのは「何故そうなったか」と「次からどうするか」だけにする。
+ */
+export const DISPLEASURE_RULE: Record<DispleasureCode, string> = {
+  REPEATED: '前に言われたことを、こちらが守れていない。言われる前に、決まりの側を見る',
+  BROKEN: '出来ていないものを渡した。渡す前に、こちらで動かして確かめる',
+  STOP: 'やめてほしいと言われたことをした。断られた道は、二度目を出さない',
+  STALLED: '止まっていることに、こちらから気づけていない。進み具合を自分で出す',
+  OFFENSIVE: '言い方か中身が不快だった。相手の言葉づかいに合わせ、押しつけない',
+  ANGRY: '積み重なって責められた。手前でいくつも取りこぼしている。仕切り直して原因を潰す',
+};
+
+/**
+ * 学びを一行にする。
+ *
+ * **直前に何をしていたかを、必ず添える。**符丁だけだと「同じことを言わせた」
+ * が並ぶだけで、次に何を変えればいいのかが分からない。
+ */
+export function lessonFrom(code: DispleasureCode, did?: string): string {
+  const rule = DISPLEASURE_RULE[code];
+  return did ? `${rule}（このとき: ${did}）` : rule;
+}

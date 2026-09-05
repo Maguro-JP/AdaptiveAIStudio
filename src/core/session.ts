@@ -34,7 +34,7 @@ import type { McpClient } from '../mcp/client.ts';
 import { collectTools } from '../mcp/tools.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall } from '../memory/memory.ts';
-import { senseDispleasure, DISPLEASURE_LABEL } from '../memory/displeasure.ts';
+import { senseDispleasure, DISPLEASURE_LABEL, lessonFrom } from '../memory/displeasure.ts';
 import { ProposalQueue, type Proposal } from '../agent/proposals.ts';
 import { findLeads, investigationPrompt, parseProposal } from '../agent/initiative.ts';
 import { IdleScheduler, type ModeStat } from '../harness/idle.ts';
@@ -187,6 +187,13 @@ export class Session {
   #instruction = '';
   /** いま添えている覚え。結果が出たら、ここへ書き戻す。 */
   #recalledIds: string[] = [];
+  /**
+   * 直前の回で何をしたか。
+   *
+   * 嫌がられたときに「このとき何をしていたか」を添えるために持つ。
+   * これが無いと、覚えが符丁の羅列になって、次の手が変わらない。
+   */
+  #lastTurn?: { tools: string[]; changed: string[]; checked: string };
   /** 書き込みの直前に作られた差分。承認の問い合わせを通り道にして拾う。 */
   readonly #diffs = new Map<string, { diff: string; created: boolean }>();
   /** 提案がどの思考から出たか。採否をその思考の実績に返すために持つ。 */
@@ -846,6 +853,8 @@ export class Session {
       let wroteSomething = false;
       /** この回で触ったもの。覚えるときの手がかりにする。 */
       const changedHere: string[] = [];
+      /** この回で使った道具。嫌がられたときに、何をしていたかを言うために持つ。 */
+      const usedTools: string[] = [];
 
       const run = async function* (this: Session, agent: Agent): AsyncGenerator<SessionEvent> {
         for await (const ev of agent.run(this.#history, ac.signal)) {
@@ -877,6 +886,7 @@ export class Session {
               yield { type: 'toolStart', name: ev.call.name, summary: summarize(ev.call.args) };
               break;
             case 'toolEnd': {
+              usedTools.push(ev.call.name);
               // 何が効いて何が効かなかったかを数える。**言葉ではなく、結果で見る。**
               if (ev.isError) failedTools.push(ev.call.name);
               else if (isWriteTool(ev.call.name)) {
@@ -979,6 +989,8 @@ export class Session {
 
       // 添えた覚えに、結果を書き戻す。ここが「使うほど賢く」の要。
       this.#gradeRecall(checked);
+      // 次に嫌がられたとき、「このとき何をしていたか」を言えるようにする。
+      this.#lastTurn = { tools: usedTools, changed: changedHere, checked };
 
       /*
        * この回のことを覚える。
@@ -1096,14 +1108,32 @@ export class Session {
       kind: 'displeasure',
       // 表題は符丁から引く（語形が変わらないもので持つ）。
       title: `${DISPLEASURE_LABEL[sensed.code]}（${sensed.code}）`,
-      // 中身は利用者の言葉そのもの。ここを要約しない。
-      detail: text.trim().slice(0, 400),
-      tags: [sensed.code, sensed.cue],
+      // **言われた言葉は残さない。**残すのは、何故そうなったかと、次からどうするか。
+      detail: lessonFrom(sensed.code, this.#lastTurnSummary()),
+      tags: [sensed.code],
       source: 'user',
     });
     this.#opts.onLog?.('warn',
       `覚えました（二度としないこと）: ${DISPLEASURE_LABEL[sensed.code]}${got.reinforced ? '（また同じことをしています）' : ''}`);
     void this.memory.save().catch(() => undefined);
+  }
+
+  /**
+   * 直前に何をしていたか。学びに添えるためだけに持つ。
+   *
+   * **符丁だけでは、次に何を変えればいいのか分からない。**
+   * 「同じことを言わせた」が並ぶだけの覚え書きは、学びではなく記録になる。
+   */
+  #lastTurnSummary(): string | undefined {
+    const last = this.#lastTurn;
+    if (!last) return undefined;
+    return [
+      last.tools.length > 0 ? `使った道具: ${[...new Set(last.tools)].slice(0, 4).join(', ')}` : '道具は使っていない',
+      last.changed.length > 0 ? `触ったもの: ${last.changed.slice(0, 3).join(', ')}` : '作業場は変えていない',
+      last.checked === 'passed' ? '確かめて通した'
+        : last.checked === 'failed' ? '確かめたが通らなかった'
+        : '確かめていない',
+    ].join(' / ');
   }
 
   /**
@@ -1153,8 +1183,8 @@ export class Session {
     const hated = this.memory.displeasures(8);
     const never = hated.length === 0 ? '' : [
       '',
-      '二度としないこと（利用者が実際に嫌がったこと。話題が違っても効きます）:',
-      ...hated.map((e) => `- ${e.title}: ${e.detail.split('\n')[0]!.slice(0, 120)}`),
+      '二度としないこと（前に同じことで止められています。話題が違っても効きます）:',
+      ...hated.map((e) => `- ${e.detail || e.title}`),
       '同じことをもう一度すると、それまでの積み上げが無駄になります。時間をかけてよいので、繰り返さないこと。',
     ].join('\n');
 
