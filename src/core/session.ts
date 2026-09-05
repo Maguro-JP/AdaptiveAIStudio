@@ -65,6 +65,7 @@ import { inspectDependencies, describeDependencies } from '../agent/dependencies
 import type { LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
 import { fitByTokens } from '../agent/window.ts';
+import { ProjectRules } from '../agent/project-rules.ts';
 
 export const DEFAULT_SYSTEM = `あなたはソフトウェア開発の作業者です。与えられた作業ディレクトリで実際に手を動かします。
 
@@ -206,6 +207,8 @@ export class Session {
   #lastChangeAt = Date.now();
   /** 作業前検査。同じ命令なら一度しか流さない。 */
   #baseline?: BaselineProbe;
+  /** 置き場の決まり（AGENTS.md など）。**人に貼り直させない。** */
+  readonly #projectRules: ProjectRules;
 
   private constructor(init: {
     config: AasConfig; root: string; candidates: string[];
@@ -220,6 +223,7 @@ export class Session {
   }) {
     this.config = init.config;
     this.root = init.root;
+    this.#projectRules = new ProjectRules(init.root);
     this.candidates = init.candidates;
     this.memory = init.memory;
     this.proposals = init.proposals;
@@ -1287,7 +1291,16 @@ export class Session {
       '同じことをもう一度すると、それまでの積み上げが無駄になります。時間をかけてよいので、繰り返さないこと。',
     ].join('\n');
 
-    return [base, brief, never].filter(Boolean).join('\n\n');
+    /*
+     * **置き場の決まりを、頼むたびに貼り直させない。**
+     *
+     * `AGENTS.md` や `CLAUDE.md` を置いてある場所は多い。置いてあるなら、
+     * それが決まりなので読む。窓の 20% までに収める（長い決まり書き一つで
+     * 依頼が押し出されるのを避ける）。
+     */
+    const rules = await this.#projectRules.block(Math.floor(this.contextTokens * 0.20));
+
+    return [base, brief, rules, never].filter(Boolean).join('\n\n');
   }
 
   get instruction(): string { return this.#instruction; }
