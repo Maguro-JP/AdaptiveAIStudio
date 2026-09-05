@@ -1798,6 +1798,16 @@ export class UiServer {
         note: settled.reason,
         ...(this.#conversationId ? { conversationId: this.#conversationId } : {}),
       });
+      // **溜めすぎて閉じた分も言う。**上限を超えると古い方から諦めるが、
+      // それが見えないと、頼んだことが黙って消えたようにしか見えない。
+      const dropped = this.#unfinished.takeDropped();
+      if (dropped.length > 0) {
+        this.broadcast({
+          type: 'log', level: 'warn',
+          text: `やり残しが溜まりすぎたので、古い方から ${dropped.length} 件を諦めました`
+            + `（${dropped.map((d) => d.request.split('\n')[0]!.slice(0, 30)).join(' / ')}）`,
+        });
+      }
       if (!added) return;
       // **黙って控えない。**知らないうちに勝手に動き出すのがいちばん怖い。
       this.broadcast({

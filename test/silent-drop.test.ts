@@ -79,3 +79,40 @@ describe('溜まりものを落としたら、そう言う', () => {
     assert.equal(m.size, 20);
   });
 });
+
+/**
+ * やり残しを諦めたことを、黙らない。
+ *
+ * 上限（50 件）を超えると古い方から諦めて閉じる。閉じること自体はよいが、
+ * **それが誰にも見えないと、頼んだことが黙って消えたようにしか見えない。**
+ * 何回試しても終わらなくて諦めたときは言っていたのに、溜まりすぎて
+ * 閉じたときは何も言っていなかった。
+ */
+describe('やり残しを諦めたら、そう言う', () => {
+  test('溜まりすぎて閉じた分を、取り出せる', async () => {
+    const { UnfinishedWork, MAX_OPEN } = await import('../src/core/unfinished.ts');
+    const dir = await tempDir('aas-unfin-');
+    const u = new UnfinishedWork(join(dir, 'unfinished.jsonl'));
+    for (let i = 0; i < MAX_OPEN; i += 1) {
+      await u.add({ request: `やり残し${i}`, why: 'maxTurns', note: '途中で切れました' });
+    }
+    assert.deepEqual(u.takeDropped(), [], 'まだ閉じていないのに閉じたと言っている');
+
+    await u.add({ request: 'あふれる分', why: 'maxTurns', note: '途中で切れました' });
+    const dropped = u.takeDropped();
+    assert.equal(dropped.length, 1, `閉じた分を出していない: ${dropped.length}`);
+    assert.equal(dropped[0]?.request, 'やり残し0', '古い方から閉じていない');
+    assert.equal((await u.list()).length, MAX_OPEN, '上限を守っていない');
+  });
+
+  test('取り出したら、二度は出さない', async () => {
+    const { UnfinishedWork, MAX_OPEN } = await import('../src/core/unfinished.ts');
+    const dir = await tempDir('aas-unfin2-');
+    const u = new UnfinishedWork(join(dir, 'unfinished.jsonl'));
+    for (let i = 0; i < MAX_OPEN + 1; i += 1) {
+      await u.add({ request: `やり残し${i}`, why: 'maxTurns', note: 'x' });
+    }
+    assert.equal(u.takeDropped().length, 1);
+    assert.deepEqual(u.takeDropped(), [], '同じものを二度出している');
+  });
+});

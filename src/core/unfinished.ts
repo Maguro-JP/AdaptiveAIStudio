@@ -92,6 +92,21 @@ export class UnfinishedWork {
   }
 
   /** 控える。**同じ依頼を二重に控えない。** */
+  /**
+   * 溜めすぎて閉じたもの。**黙って消さないために持つ。**
+   *
+   * 上限（50件）を超えると古い方から諦めて閉じるが、それが誰にも見えないと、
+   * **頼んだことが黙って消えたようにしか見えない。**
+   */
+  #dropped: Unfinished[] = [];
+
+  /** 溜めすぎて閉じたものを、一度だけ取り出す。 */
+  takeDropped(): Unfinished[] {
+    const got = this.#dropped;
+    this.#dropped = [];
+    return got;
+  }
+
   async add(
     item: Omit<Unfinished, 'id' | 'attempts' | 'nextAt' | 'createdAt'>,
     now = Date.now(),
@@ -106,7 +121,7 @@ export class UnfinishedWork {
       createdAt: new Date(now).toISOString(),
     };
     await this.#append({ t: 'add', item: full });
-    await this.#prune();
+    this.#dropped.push(...await this.#prune());
     return full;
   }
 
@@ -119,15 +134,15 @@ export class UnfinishedWork {
    *
    * 落とすのは**古い方から**。落としたことは黙らない（記録に残す）。
    */
-  async #prune(max = MAX_OPEN): Promise<void> {
+  async #prune(max = MAX_OPEN): Promise<Unfinished[]> {
     const all = await this.list();
-    if (all.length > max) {
-      for (const gone of all.slice(0, all.length - max)) {
-        // **諦めた**として閉じる。片づいた（done）と混ぜない。
-        await this.#append({ t: 'close', id: gone.id, how: 'gaveUp' });
-      }
+    const gone = all.length > max ? all.slice(0, all.length - max) : [];
+    for (const item of gone) {
+      // **諦めた**として閉じる。片づいた（done）と混ぜない。
+      await this.#append({ t: 'close', id: item.id, how: 'gaveUp' });
     }
     await this.#compact(max);
+    return gone;
   }
 
   /**
