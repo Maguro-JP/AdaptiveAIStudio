@@ -128,6 +128,19 @@ export const DISPLEASURE_RULE: Record<DispleasureCode, string> = {
 };
 
 /**
+ * 覚えの表題。
+ *
+ * **場面ごとに分ける。**符丁だけを表題にすると、場面の違う学びが
+ * 一つに潰れて、古いほうから消える（学べる数が符丁の数で頭打ちになる）。
+ * 同じ場面で同じ失敗をしたときだけ、重ねて数える。
+ */
+export function displeasureTitle(code: DispleasureCode, when?: string): string {
+  const label = DISPLEASURE_LABEL[code];
+  const where = (when ?? '').trim().replace(/\s+/g, ' ').slice(0, 40);
+  return where ? `${label}: ${where}` : `${label}（場面は未確認）`;
+}
+
+/**
  * 何故そう言われたのかを、こちらで考えるための問い。
  *
  * **表の一行では、意味も意図も残らない。**符丁ごとの決め文句は、

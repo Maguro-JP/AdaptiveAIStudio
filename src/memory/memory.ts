@@ -215,7 +215,10 @@ export class Memory {
       existing.confirms += 1;
       existing.seenAt = now;
       // 詳しい話が増えたなら受け取る。減らしはしない。
-      if (input.detail && input.detail.length > existing.detail.length) existing.detail = input.detail;
+      // **ただし、汲み取れた話は、長さに関係なく受け取る。**
+      // 長さだけで決めていたので、決め文句（未消化）のほうが長いと、
+      // 考えて掴んだ中身が捨てられていた。
+      if (input.detail && betterDetail(input.detail, existing.detail)) existing.detail = input.detail;
       for (const t of input.tags ?? []) if (!existing.tags.includes(t)) existing.tags.push(t);
       if (input.outcome) existing.outcome = input.outcome;
       this.#dirty = true;
@@ -427,6 +430,39 @@ export class Memory {
     return added;
   }
 
+  /**
+   * 表題を付け直す。同じ表題が既に在れば、そちらへ畳む。
+   *
+   * 覚えた時点では場面が分からないことがある（会話の最初など）。
+   * あとで場面が分かったときに、**同じ場面の覚えを二つに割らない**ために要る。
+   */
+  relabel(id: string, title: string): MemoryEntry | undefined {
+    const entry = this.#entries.find((e) => e.id === id);
+    if (!entry) return undefined;
+    const key = normalizeTitle(title);
+    if (normalizeTitle(entry.title) === key) return entry;
+
+    const other = this.#entries.find(
+      (e) => e.id !== id && e.kind === entry.kind && normalizeTitle(e.title) === key && !e.supersededBy,
+    );
+    if (!other) {
+      entry.title = title;
+      this.#dirty = true;
+      return entry;
+    }
+    // 同じ場面の覚えが既に在る。数え直して、良いほうの中身を残す。
+    other.confirms += entry.confirms;
+    other.seenAt = Math.max(other.seenAt, entry.seenAt);
+    other.used = (other.used ?? 0) + (entry.used ?? 0);
+    other.helped = (other.helped ?? 0) + (entry.helped ?? 0);
+    other.misled = (other.misled ?? 0) + (entry.misled ?? 0);
+    if (betterDetail(entry.detail, other.detail)) other.detail = entry.detail;
+    for (const t of entry.tags) if (!other.tags.includes(t)) other.tags.push(t);
+    this.#entries = this.#entries.filter((e) => e.id !== id);
+    this.#dirty = true;
+    return other;
+  }
+
   /** 中身を直に書き換えたときに呼ぶ。保存し忘れを防ぐ。 */
   touch(): void { this.#dirty = true; }
 
@@ -566,4 +602,19 @@ export function carriesFar(e: Pick<MemoryEntry, 'kind' | 'outcome'>): boolean {
  */
 export function transfersOnlyNearby(e: Pick<MemoryEntry, 'kind' | 'outcome'>): boolean {
   return e.outcome === 'worked';
+}
+
+/**
+ * どちらの中身を残すか。
+ *
+ * **汲み取れた話を、決め文句で上書きしない。**長さだけで決めていたので、
+ * 「未消化」の決め文句のほうが長いと、考えて掴んだ中身が捨てられていた。
+ */
+export function betterDetail(next: string, current: string): boolean {
+  if (!next) return false;
+  if (!current) return true;
+  const rawNext = next.includes('未消化');
+  const rawCurrent = current.includes('未消化');
+  if (rawNext !== rawCurrent) return rawCurrent; // 汲み取れたほうを採る
+  return next.length > current.length;
 }

@@ -13,10 +13,10 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  senseDispleasure, DISPLEASURE_LABEL, DISPLEASURE_RULE, lessonFrom,
+  senseDispleasure, DISPLEASURE_LABEL, DISPLEASURE_RULE, lessonFrom, displeasureTitle,
   understandPrompt, parseUnderstanding, lessonFromUnderstanding,
 } from '../src/memory/displeasure.ts';
-import { Memory, formatRecall } from '../src/memory/memory.ts';
+import { Memory, formatRecall, betterDetail } from '../src/memory/memory.ts';
 import { BUILTIN_LESSONS, lessonLine } from '../src/memory/builtin-lessons.ts';
 
 describe('拾う', () => {
@@ -287,5 +287,83 @@ describe('最初から持っている', () => {
       assert.notEqual(l.next, l.did);
       assert.ok(!l.did.includes(l.next), `次の手が、悪かったことの言い直しになっている: ${l.title}`);
     }
+  });
+});
+
+/**
+ * **学べる数が、符丁の数で頭打ちにならないこと。**
+ *
+ * 表題を符丁だけにしていたので、場面の違う学びが一つに潰れ、
+ * 古いほうから消えていた（実際に三つ入れて一つになった）。
+ * 学ぶほど手持ちが減る作りで、「使うほど賢くなる」の正反対だった。
+ */
+describe('場面ごとに、別の覚えにする', () => {
+  const put = (m: Memory, when: string, detail: string) => m.remember({
+    kind: 'displeasure', title: displeasureTitle('REPEATED', when), detail, tags: ['REPEATED'],
+  });
+
+  test('場面が違えば、別の覚えとして残る', () => {
+    const m = new Memory();
+    put(m, '日本語で返す話', '【場面】日本語で返す話 / 【したこと】英語に戻した');
+    put(m, '記憶の設計の話', '【場面】記憶の設計の話 / 【したこと】原文を残した');
+    put(m, '覚えの書き方', '【場面】覚えの書き方 / 【したこと】場面を書かなかった');
+    assert.equal(m.all().filter((e) => e.kind === 'displeasure').length, 3);
+  });
+
+  test('同じ場面で繰り返したら、重ねて数える', () => {
+    const m = new Memory();
+    put(m, '日本語で返す話', 'a');
+    const again = put(m, '日本語で返す話', 'ab');
+    assert.equal(m.all().length, 1);
+    assert.equal(again.entry.confirms, 2);
+  });
+
+  test('場面が分からないうちは、そう置いておく', () => {
+    assert.match(displeasureTitle('BROKEN'), /場面は未確認/);
+  });
+});
+
+describe('汲み取れた話を、決め文句で潰さない', () => {
+  test('未消化のほうが長くても、掴んだ中身を残す', () => {
+    // 長さだけで決めていたので、決め文句のほうが長いと中身が捨てられていた。
+    const understood = '【場面】報告 / 【したこと】確かめずに言った';
+    const canned = lessonFrom('BROKEN', '報告するとき', '使った道具: write_file / 触ったもの: a.ts / 確かめていない');
+    assert.ok(canned.length > understood.length, '前提が崩れている（決め文句のほうが短い）');
+    assert.equal(betterDetail(understood, canned), true);
+    assert.equal(betterDetail(canned, understood), false);
+  });
+
+  test('どちらも汲み取れているなら、詳しいほうを残す', () => {
+    assert.equal(betterDetail('あああああ', 'あああ'), true);
+    assert.equal(betterDetail('あああ', 'あああああ'), false);
+  });
+});
+
+describe('あとから場面が分かったら、畳む', () => {
+  test('同じ場面の覚えが在れば、一つにまとまる', () => {
+    const m = new Memory();
+    const first = m.remember({
+      kind: 'displeasure', title: displeasureTitle('BROKEN', '報告するとき'), detail: '掴んだ話',
+    }).entry;
+    const later = m.remember({
+      kind: 'displeasure', title: displeasureTitle('BROKEN'), detail: '【未消化】決め文句',
+    }).entry;
+    assert.equal(m.all().length, 2);
+
+    const merged = m.relabel(later.id, displeasureTitle('BROKEN', '報告するとき'));
+    assert.equal(merged?.id, first.id);
+    assert.equal(m.all().length, 1);
+    assert.equal(merged?.confirms, 2);
+    // 掴んだ話のほうが残る。
+    assert.equal(merged?.detail, '掴んだ話');
+  });
+
+  test('同じ場面が無ければ、付け直すだけ', () => {
+    const m = new Memory();
+    const e = m.remember({ kind: 'displeasure', title: displeasureTitle('STOP'), detail: 'x' }).entry;
+    const got = m.relabel(e.id, displeasureTitle('STOP', '繋ぎ先を増やすとき'));
+    assert.equal(got?.id, e.id);
+    assert.match(got?.title ?? '', /繋ぎ先を増やすとき/);
+    assert.equal(m.all().length, 1);
   });
 });

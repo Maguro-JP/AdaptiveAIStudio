@@ -33,10 +33,11 @@ import { startMcpServers } from './mcp-setup.ts';
 import type { McpClient } from '../mcp/client.ts';
 import { collectTools } from '../mcp/tools.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
-import { Memory, formatRecall } from '../memory/memory.ts';
+import { Memory, formatRecall, betterDetail } from '../memory/memory.ts';
 import {
-  senseDispleasure, DISPLEASURE_LABEL, lessonFrom,
+  senseDispleasure, DISPLEASURE_LABEL, lessonFrom, displeasureTitle,
   understandPrompt, parseUnderstanding, lessonFromUnderstanding,
+  type DispleasureCode,
 } from '../memory/displeasure.ts';
 import { ProposalQueue, type Proposal } from '../agent/proposals.ts';
 import { findLeads, investigationPrompt, parseProposal } from '../agent/initiative.ts';
@@ -1116,9 +1117,12 @@ export class Session {
 
     // まず、決め文句で置いておく。**考える前に、覚えを落とさないため。**
     // このあと考えがまとまったら、同じ覚えを上書きする。
+    // **表題は場面ごとに分ける。**符丁だけを表題にしていたので、
+    // 場面の違う学びが一つに潰れ、古いほうから消えていた。
+    // 学べる数が符丁の数（6）で頭打ちになっていた。
     const got = this.memory.remember({
       kind: 'displeasure',
-      title: `${DISPLEASURE_LABEL[sensed.code]}（${sensed.code}）`,
+      title: displeasureTitle(sensed.code, when),
       detail: lessonFrom(sensed.code, when, did),
       tags: [sensed.code],
       source: 'user',
@@ -1129,7 +1133,7 @@ export class Session {
 
     // **意味と意図は、その場で考えないと残らない。**
     // 元の言葉はここでしか手に入らず、覚えには残さない。
-    void this.#understand(text, when, did, got.entry.id);
+    void this.#understand(sensed.code, text, when, did, got.entry.id);
   }
 
   /**
@@ -1139,7 +1143,8 @@ export class Session {
    * 考えられなかったときは「未消化」の印を残す。**考えた顔をさせない。**
    */
   async #understand(
-    said: string, when: string | undefined, did: string | undefined, id: string,
+    code: DispleasureCode, said: string,
+    when: string | undefined, did: string | undefined, id: string,
   ): Promise<void> {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 60_000);
@@ -1156,9 +1161,11 @@ export class Session {
       }
       const understood = parseUnderstanding(text, when);
       if (!understood) return; // 掴めなかった。決め文句のまま（未消化の印つき）で残す
-      const entry = this.memory.all().find((e) => e.id === id);
+      // 場面が分かったので、表題を付け直す。同じ場面の覚えが在れば、そちらへ畳む。
+      const entry = this.memory.relabel(id, displeasureTitle(code, understood.when));
       if (!entry) return;
-      entry.detail = lessonFromUnderstanding(understood, did);
+      const line = lessonFromUnderstanding(understood, did);
+      if (betterDetail(line, entry.detail)) entry.detail = line;
       this.memory.touch();
       await this.memory.save().catch(() => undefined);
       this.#opts.onLog?.('info',
