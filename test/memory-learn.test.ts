@@ -100,3 +100,68 @@ describe('刈るとき、外れから先に落とす', () => {
     assert.ok(!left.includes('新しい外れ'), `新しい外れが残っている: ${left.join(', ')}`);
   });
 });
+
+/**
+ * 成功と失敗を、同じ引き方にしない。
+ *
+ * 利用者の言葉をそのまま置く。
+ *
+ * > 成功は他では使えないことが殆どだけど、失敗は他でも効く
+ *
+ * うまくいった手は、その場の事情込みで成り立っている。持ち出すと外れるうえに
+ * 「その手しか取らない」を作る。やってはいけない形は、場所に依らない。
+ */
+describe('失敗は遠くまで、成功は近くだけ', () => {
+  /** 同じ一語だけが掠る、成功と失敗。 */
+  function pair(): { m: Memory; win: string; lose: string } {
+    const m = new Memory();
+    const win = m.remember({
+      kind: 'attempt', title: '認証の実装', detail: 'セッションを cookie に載せた',
+      outcome: 'worked', tags: ['src/auth.ts'],
+    }).entry.id;
+    const lose = m.remember({
+      kind: 'attempt', title: '認証の実装', detail: '同期で書いたら固まった',
+      outcome: 'failed', tags: ['src/auth.ts'],
+    }).entry.id;
+    return { m, win, lose };
+  }
+
+  test('掠っただけの話題には、失敗だけが出る', () => {
+    const { m, lose } = pair();
+    // 「認証」だけが重なる、別の場所の作業。
+    const got = m.recall('認証').map((e) => e.id);
+    assert.deepEqual(got, [lose], `成功が別の場所へ流れ出ている: ${got.join(',')}`);
+  });
+
+  test('同じ場所なら、成功も出る（触ったものが一致する）', () => {
+    const { m, win, lose } = pair();
+    const got = m.recall('src/auth.ts を直す').map((e) => e.id);
+    assert.ok(got.includes(win), `同じ場所なのに成功が出ない: ${got.join(',')}`);
+    assert.ok(got.includes(lose));
+  });
+
+  test('近いことの証拠が二つあれば、成功も出る', () => {
+    const { m, win } = pair();
+    assert.ok(m.recall('認証の実装').map((e) => e.id).includes(win));
+  });
+
+  test('同じ重なりなら、失敗が先に出る', () => {
+    const { m, lose } = pair();
+    assert.equal(m.recall('認証の実装')[0]?.id, lose);
+  });
+
+  test('刈るときも、失敗を長く持つ', () => {
+    const m = new Memory();
+    const now = Date.now();
+    for (const [title, outcome] of [['古い成功', 'worked'], ['古い失敗', 'failed']] as const) {
+      const e = m.remember({ kind: 'attempt', title, detail: title, outcome }).entry;
+      e.at = now - 60 * 86_400_000;
+      e.seenAt = e.at;
+    }
+    for (let i = 0; i < 20; i += 1) m.remember({ kind: 'fact', title: `埋め草${i}`, detail: 'x' });
+    m.compact({ max: 12, now });
+    const left = m.all().map((e) => e.title);
+    assert.ok(left.includes('古い失敗'), `失敗を先に捨てている: ${left.join(', ')}`);
+    assert.ok(!left.includes('古い成功'), `成功が失敗より残っている: ${left.join(', ')}`);
+  });
+});

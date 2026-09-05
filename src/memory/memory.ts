@@ -292,20 +292,41 @@ export class Memory {
       .filter((e) => (opts.includeSuperseded ? true : !e.supersededBy))
       .filter((e) => (opts.kinds ? opts.kinds.includes(e.kind) : true))
       .map((e) => {
-        const words = new Set([...tokenize(e.title), ...tokenize(e.detail), ...e.tags.map((t) => t.toLowerCase())]);
+        // 触ったものも語に割る。`src/auth.ts` を丸ごと一語で持つと、
+        // 「src/auth.ts を直す」と書いても重ならない（区切りで割れるため）。
+        const words = new Set([
+          ...tokenize(e.title), ...tokenize(e.detail),
+          ...e.tags.map((t) => t.toLowerCase()), ...e.tags.flatMap((t) => tokenize(t)),
+        ]);
         let overlap = 0;
         for (const t of q) if (words.has(t)) overlap += 1;
         // 話題が全く重ならないものは思い出さない。雑音になるだけ。
         if (overlap === 0 && q.size > 0) return undefined;
 
+        /*
+         * **成功と失敗を、同じ引き方にしない。**
+         *
+         *   成功は、その場の事情込みで成り立っている。他所へ持ち出すと外れる。
+         *   失敗は、やってはいけない形なので、場所が変わっても効く。
+         *
+         * だから成功には**近いことの証拠**を要求し（語が二つ以上重なるか、
+         * 触ったものが同じか）、失敗は一つ掠っただけでも拾う。
+         * ここを対称にしていたので、うまくいった手が別の場所へ流れ出て、
+         * 「その手しか取らない」を作っていた。
+         */
+        const sameGround = overlap >= 2 || e.tags.some((t) => q.has(t.toLowerCase()));
+        if (transfersOnlyNearby(e) && q.size > 0 && !sameGround) return undefined;
+
         const ageDays = (now - e.seenAt) / DAY;
         const recency = 1 / (1 + ageDays / 30);
         const trust = Math.log2(1 + e.confirms);
         // 決めたことと好みは、古くても効き続ける
-        const weight = e.kind === 'decision' || e.kind === 'preference' ? 1.5 : 1;
+        const kindWeight = e.kind === 'decision' || e.kind === 'preference' ? 1.5 : 1;
+        // 失敗は、遠くまで効く。同じ重なりなら、こちらを先に出す。
+        const reach = carriesFar(e) ? 1.4 : 1;
         // **役に立ったかで重みを変える。**当たった覚えは上へ、外した覚えは下へ。
         // 一度も使っていないものは 1（下げも上げもしない）。
-        return { e, score: (overlap * 2 + recency + trust) * weight * usefulness(e) };
+        return { e, score: (overlap * 2 + recency + trust) * kindWeight * reach * usefulness(e) };
       })
       .filter((x): x is { e: MemoryEntry; score: number } => !!x);
 
@@ -413,7 +434,10 @@ export class Memory {
     // 手持ちが悪くなるということ。
     const worth = (e: MemoryEntry): number => {
       const base = Math.log2(1 + e.confirms) + 1 / (1 + (now - e.seenAt) / DAY / 30);
-      return base * usefulness(e) + (e.helped ?? 0) * 0.5 - (e.misled ?? 0) * 0.5;
+      // **失敗は長く持つ。**他所でも効くものを、その場限りのものと同じ速さで
+      // 捨てない。うまくいった手は、その場の事情ごと古くなる。
+      const reach = carriesFar(e) ? 1.5 : 1;
+      return (base * usefulness(e) + (e.helped ?? 0) * 0.5 - (e.misled ?? 0) * 0.5) * reach;
     };
     rest.sort((a, b) => worth(b) - worth(a));
 
@@ -493,4 +517,23 @@ export function usefulness(e: Pick<MemoryEntry, 'helped' | 'misled'>): number {
   // 一度の失敗で良い覚えが消える。
   const rate = (helped + 1) / (helped + misled + 2);
   return 0.6 + rate * 0.8;
+}
+
+/**
+ * 他所でも効くもの。
+ *
+ * 「やってはいけない形」は場所に依らない。だから遠くまで持っていく。
+ */
+export function carriesFar(e: Pick<MemoryEntry, 'kind' | 'outcome'>): boolean {
+  return e.kind === 'displeasure' || e.kind === 'incident' || e.outcome === 'failed';
+}
+
+/**
+ * 近くでしか効かないもの。
+ *
+ * うまくいった手は、その場の事情込みで成り立っている。
+ * 別の場所へ持ち出すと、たいてい外れる（しかも「その手しか取らない」を作る）。
+ */
+export function transfersOnlyNearby(e: Pick<MemoryEntry, 'kind' | 'outcome'>): boolean {
+  return e.outcome === 'worked';
 }
