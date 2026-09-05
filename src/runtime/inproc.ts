@@ -221,6 +221,17 @@ export class InProcRuntime implements LocalRuntime {
    * 読んだものの「道具の呼び方」。当てずっぽうなら、そう分かる形で返す。
    * 画面と `doctor` から見る。**確かめる先が無いと、疑う先だけが増える。**
    */
+  /**
+   * 実際に開いた窓。
+   *
+   * **開く側と、見積もる側が別の数字を持たない。**上の層は設定から
+   * 見積もっていたので、狭められたときは溢れ（返事が来なくなる）、
+   * 広げたときは刈りすぎる（窓を余らせる）。
+   */
+  windowOf(ref: string): number | undefined {
+    return this.#sessions.get(ref)?.window;
+  }
+
   wrappers(): { ref: string; wrapper: string; guessed: boolean }[] {
     return [...this.#sessions.entries()].map(([ref, h]) => ({
       ref, wrapper: h.wrapper, guessed: GUESSED_WRAPPERS.has(h.wrapper),

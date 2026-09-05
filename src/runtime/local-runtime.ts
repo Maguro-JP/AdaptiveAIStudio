@@ -36,6 +36,13 @@ export interface LocalRuntime {
   shutdown(): Promise<void>;
   /** 現在ロード済みのref */
   loaded(): string[];
+  /**
+   * 実際に開いた窓（トークン）。分からない道では省略してよい。
+   *
+   * **開く側と、見積もる側が別の数字を持たないため。**上の層が設定から
+   * 見積もると、狭められたときは溢れ、広げたときは刈りすぎる。
+   */
+  windowOf?(ref: string): number | undefined;
 }
 
 /**

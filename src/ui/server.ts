@@ -295,7 +295,13 @@ export class UiServer {
     const providers = config.providers.map((pr) => (
       pr === local ? { ...pr, models: [ref] } : pr
     ));
-    return { ...config, providers, candidates: [`${local.id}:${ref}`] };
+    // **実際に開いた窓を渡す。**設定から見積もらせない。
+    // 狭められたときは溢れ（返事が来なくなる）、広げたときは刈りすぎる。
+    const window = this.#runtime?.windowOf?.(ref);
+    const runtime = window
+      ? { ...config.runtime, kind: 'inproc' as const, contextSize: window }
+      : config.runtime;
+    return { ...config, providers, candidates: [`${local.id}:${ref}`], runtime };
   }
 
   /**

@@ -463,3 +463,63 @@ describe('同じ学びを、一往復に二度入れない', () => {
     assert.equal(times, 1, `学びが届いていない（本文 ${sent.length} 文字）`);
   });
 });
+
+describe('窓は、開いた側の数字を使う', () => {
+  /**
+   * **開く側と、見積もる側が別の数字を持たない。**
+   * 設定から見積もっていたので、機械に合わせて狭めたときは溢れ
+   * （返事が来なくなる）、モデルに合わせて広げたときは刈りすぎていた。
+   */
+  test('中で読む道が開いた窓が、そのまま土台へ渡る', async () => {
+    const { join } = await import('node:path');
+    const { writeFile } = await import('node:fs/promises');
+    const { createServer } = await import('node:http');
+    const { ggufHead } = await import('./gguf-head.ts');
+    const models = await tempDir('aas-win-');
+    // **ファイル側と設定を食い違わせる。**一致させると、直したかどうかが
+    // 見分けられない（設定のままでも通ってしまう）。
+    await writeFile(join(models, 'a.gguf'), ggufHead({
+      'general.architecture': 'qwen3', 'qwen3.context_length': 16384,
+    }));
+    const probe = createServer();
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
+    const port = (probe.address() as { port: number }).port;
+    await new Promise<void>((r) => probe.close(() => r()));
+
+    const load = async () => ({
+      getLlama: async () => ({
+        loadModel: async () => ({
+          createContext: async () => ({ getSequence: () => ({}), dispose: async () => {} }),
+        }),
+      }),
+      LlamaChatSession: class {
+        setChatHistory() {}
+        async prompt() { return 'はい'; }
+      },
+    });
+    const s2 = new UiServer({
+      port: 0,
+      inprocLoad: load,
+      config: {
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: `http://127.0.0.1:${port}/v1`, locality: 'local', models: ['a.gguf'] }],
+        // 設定には窓を書かない。開く側がファイルから読む。
+        runtime: { kind: 'inproc', modelsDir: models, basePort: port },
+      } as typeof DEFAULT_CONFIG,
+    });
+    const b2 = (await s2.start()).replace(/\/$/, '');
+    try {
+      // 送ると、そこで初めてモデルが読み込まれる（読む前に窓は決まらない）。
+      const r = await fetch(`${b2}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'あいさつして' }),
+      });
+      assert.equal(r.status, 202, await r.text());
+      await new Promise((res) => setTimeout(res, 1500));
+
+      const live = await (s2 as unknown as { session(): Promise<{ contextTokens: number }> }).session();
+      // 既定の 8192 ではなく、ファイルに書いてある 16384 が渡ること。
+      assert.equal(live.contextTokens, 16384, '開いた窓が土台へ渡っていない');
+    } finally { await s2.stop(); }
+  });
+});
