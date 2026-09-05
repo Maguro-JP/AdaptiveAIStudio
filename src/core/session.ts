@@ -13,6 +13,7 @@
  * **訊かずに進めない**という一点だけは、ここが守る。
  */
 import { findCodeTool } from '../agent/tools/find.ts';
+import { listServicesTool, connectServiceTool, disconnectServiceTool } from '../agent/tools/services.ts';
 import { defaultWorkRoot } from './home.ts';
 import { isWriteTool } from '../agent/tools/write-kind.ts';
 import { resolve, join } from 'node:path';
@@ -276,7 +277,12 @@ export class Session {
       })]),
       // 外の道具。立ち上がった相手のぶんだけ増える。
       // 繋がらない相手がいても、他は動く（全部を道連れにしない）。
-      mcp: wrap(collectTools(mcpClients, { inspector, timeoutMs: config.mcp?.timeoutMs })),
+      // 繋ぐ・外すも、ここに置く。**外の道具の話は、外の道具の側で完結させる。**
+      // 繋ぐのは承認を通す（協議は自動では通らない）。
+      mcp: wrap([
+        listServicesTool, connectServiceTool, disconnectServiceTool,
+        ...collectTools(mcpClients, { inspector, timeoutMs: config.mcp?.timeoutMs }),
+      ]),
     };
 
     const prefetch = new Prefetcher(root, () => undefined);

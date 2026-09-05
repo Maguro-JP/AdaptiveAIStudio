@@ -585,27 +585,111 @@ async function loadMcp() {
   }
 }
 
-$('ghSave').onclick = async () => {
-  const note = $('ghNote');
-  const token = $('ghToken').value.trim();
-  note.textContent = '繋いでいます…';
-  const r = await fetch('/api/mcp/github', {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ token, enabled: true }),
-  });
-  const body = await r.json().catch(() => ({}));
-  if (!r.ok) { note.textContent = body.error ?? '繋げませんでした'; return; }
-  // **値は画面に残さない。**入れたら消す。
-  $('ghToken').value = '';
-  note.textContent = [
-    `設定に書きました: ${body.path}`,
-    body.tokenSet ? '合言葉: あり' : '合言葉: まだ（入れないと Bad credentials になります）',
-    body.canRun ? '' : 'この機械には npx がありません。Node と npm が入っている機械で使ってください。',
-    body.restartNeeded ? '次の依頼のときから使えます。' : '',
-  ].filter(Boolean).join('\n');
-  await loadMcp();
-};
-$('ghReload').onclick = () => { void loadMcp(); };
+/**
+ * 繋げる先の見本帳。
+ *
+ * **名前を一つ押せば繋がる。**要るものだけを訊く（合言葉が要るものは、それだけ）。
+ * 値は入れたらすぐ消す。画面にも設定にも残さない。
+ */
+async function loadMcpCatalog() {
+  const box = $('mcpCatalog');
+  box.replaceChildren();
+  let d;
+  try {
+    d = await fetch('/api/mcp/catalog').then((r) => r.json());
+  } catch (e) {
+    box.append(Object.assign(document.createElement('div'),
+      { className: 'empty', textContent: `見本帳を読めませんでした: ${e.message ?? e}` }));
+    return;
+  }
+  for (const e of d.entries ?? []) {
+    const card = document.createElement('div');
+    card.className = 'mcp-card';
+
+    const head = document.createElement('div');
+    head.className = 'mcp-head';
+    head.append(Object.assign(document.createElement('span'), { className: 'mcp-name', textContent: e.name }));
+    // **繋ぐ前に、繋がらない理由が分かるようにする。**
+    const tags = [[e.remote ? '遠く' : '手元', 'dim']];
+    if (e.needsNpx) tags.push(['npm が要る', 'warn']);
+    if (e.retired) tags.push(['廃止', 'bad']);
+    if (e.connected) tags.push(['繋いであります', 'good']);
+    for (const [text, cls] of tags) {
+      head.append(Object.assign(document.createElement('span'), { className: `tag ${cls}`, textContent: text }));
+    }
+    card.append(head);
+    card.append(Object.assign(document.createElement('div'), { className: 'dim', textContent: e.about }));
+    if (e.retired) card.append(Object.assign(document.createElement('div'), { className: 'warn', textContent: e.retired }));
+
+    // 要る合言葉。**入っているかどうかだけを言う。値は出さない。**
+    const fields = [];
+    for (const sec of e.secrets ?? []) {
+      const row = document.createElement('label');
+      row.className = 'field-row';
+      const name = document.createElement('span');
+      name.className = 'dim';
+      name.textContent = `${sec.about}${sec.set ? '（入っています）' : ''}`;
+      const input = document.createElement('input');
+      input.type = 'password';
+      input.spellcheck = false;
+      input.autocomplete = 'off';
+      input.placeholder = sec.set ? '入れ直すときだけ' : sec.where ?? sec.env;
+      row.append(name, input);
+      card.append(row);
+      if (sec.where) {
+        card.append(Object.assign(document.createElement('div'),
+          { className: 'dim mono', textContent: sec.where }));
+      }
+      fields.push([sec.env, input]);
+    }
+
+    const bar = document.createElement('div');
+    bar.className = 'btnbar';
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'primary';
+    go.textContent = e.connected ? '繋ぎ直す' : '繋ぐ';
+    go.onclick = async () => {
+      const secrets = {};
+      for (const [env, input] of fields) if (input.value.trim()) secrets[env] = input.value.trim();
+      $('ghNote').textContent = `${e.name} に繋いでいます…`;
+      const r = await fetch('/api/mcp/connect', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: e.id, secrets }),
+      });
+      const body = await r.json().catch(() => ({}));
+      // **値は画面に残さない。**入れたら消す。
+      for (const [, input] of fields) input.value = '';
+      if (!r.ok) { $('ghNote').textContent = body.error ?? '繋げませんでした'; return; }
+      $('ghNote').textContent = [
+        `${e.name} を設定に書きました: ${body.path}`,
+        ...(body.missing ?? []).map((m) => `まだ要ります: ${m.about}（${m.env}）`),
+        ...(body.notes ?? []),
+        '次の依頼のときから使えます。',
+      ].join('\n');
+      await loadMcpCatalog();
+      await loadMcp();
+    };
+    bar.append(go);
+    if (e.connected) {
+      const off = document.createElement('button');
+      off.type = 'button';
+      off.className = 'ghost';
+      off.textContent = '外す';
+      off.onclick = async () => {
+        await fetch(`/api/mcp/connect?id=${encodeURIComponent(e.id)}`, { method: 'DELETE' });
+        $('ghNote').textContent = `${e.name} を外しました。`;
+        await loadMcpCatalog();
+        await loadMcp();
+      };
+      bar.append(off);
+    }
+    card.append(bar);
+    box.append(card);
+  }
+}
+
+$('ghReload').onclick = () => { void loadMcpCatalog(); void loadMcp(); };
 
 /* ---------- 横の板：会話 ---------- */
 
@@ -1263,7 +1347,7 @@ async function openSettings(section = 'info') {
   await loadInfo();
   if (section === 'check') await loadChecks();
   if (section === 'model') { await loadCfg(); await loadCatalog(); }
-  if (section === 'mcp') await loadMcp();
+  if (section === 'mcp') { await loadMcpCatalog(); await loadMcp(); }
   $('settings').showModal();
 }
 
@@ -1273,7 +1357,7 @@ for (const b of $('settings').querySelectorAll('.tabs-lite button')) {
     if (b.dataset.sec === 'check') await loadChecks();
     if (b.dataset.sec === 'info') await loadInfo();
     if (b.dataset.sec === 'model') { await loadCfg(); await loadCatalog(); }
-    if (b.dataset.sec === 'mcp') await loadMcp();
+    if (b.dataset.sec === 'mcp') { await loadMcpCatalog(); await loadMcp(); }
   };
 }
 $('openSettings').onclick = () => { void openSettings(); };

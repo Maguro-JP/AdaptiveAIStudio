@@ -135,7 +135,10 @@ export async function savedModelsDir(): Promise<string> {
  */
 export async function saveMcpServer(
   name: string,
-  spec: { command: string; args?: string[]; envFrom?: Record<string, string>; enabled?: boolean },
+  spec: {
+    command?: string; args?: string[]; url?: string;
+    envFrom?: Record<string, string>; headersFrom?: Record<string, string>; enabled?: boolean;
+  },
 ): Promise<string> {
   const at = configPath();
   let current: Record<string, unknown> = {};
@@ -144,6 +147,26 @@ export async function saveMcpServer(
   } catch { /* 無ければ、これが最初の一つ */ }
   const mcp = (current.mcp ?? {}) as { servers?: Record<string, unknown> };
   const servers = { ...(mcp.servers ?? {}), [name]: spec };
+  await mkdir(dirname(at), { recursive: true });
+  await writeFile(at, `${JSON.stringify({ ...current, mcp: { ...mcp, servers } }, null, 2)}\n`, 'utf8');
+  return at;
+}
+
+/**
+ * 繋いだものを外す。
+ *
+ * **合言葉は消さない。**繋ぎ直すたびに打ち直させることになる。
+ * 消したいときは置き場の .env を直に触ってもらう（そこに在ると言ってある）。
+ */
+export async function removeMcpServer(name: string): Promise<string> {
+  const at = configPath();
+  let current: Record<string, unknown> = {};
+  try {
+    current = JSON.parse(await readFile(at, 'utf8')) as Record<string, unknown>;
+  } catch { return at; }
+  const mcp = (current.mcp ?? {}) as { servers?: Record<string, unknown> };
+  const servers = { ...(mcp.servers ?? {}) };
+  delete servers[name];
   await mkdir(dirname(at), { recursive: true });
   await writeFile(at, `${JSON.stringify({ ...current, mcp: { ...mcp, servers } }, null, 2)}\n`, 'utf8');
   return at;

@@ -13,6 +13,8 @@
 import { listDir } from './files.ts';
 import { UnfinishedWork, resumePrompt, whyText } from '../core/unfinished.ts';
 import { githubLaunch } from '../core/github-mcp.ts';
+import { CATALOG, findEntry, specFrom } from '../mcp/catalog.ts';
+import { connectService, disconnectService } from '../core/mcp-connect.ts';
 import { stat } from 'node:fs/promises';
 import { Goals, progressOf, isSettled } from '../core/goals.ts';
 import { StrideBook, strideText } from '../agent/stride.ts';
@@ -1026,13 +1028,17 @@ export class UiServer {
       const servers = Object.entries(this.#opts.config.mcp?.servers ?? {}).map(([name, spec]) => {
         const client = this.#session?.mcpClients.find((c) => c.name === name);
         const wants = Object.values(spec.envFrom ?? {});
+        // 遠くに繋ぐものは、見出しの名前も「要る合言葉」に数える。
+        const heads = Object.values(spec.headersFrom ?? {});
         return {
           name,
-          command: `${spec.command} ${(spec.args ?? []).join(' ')}`.trim(),
+          command: spec.url ?? `${spec.command ?? ''} ${(spec.args ?? []).join(' ')}`.trim(),
+          remote: spec.url !== undefined,
           enabled: spec.enabled !== false,
           // 合言葉は名前だけ。値は決して出さない。
-          secrets: wants.map((from) => ({ name: from, set: process.env[from] !== undefined })),
-          canRun: canRun(spec.command),
+          secrets: [...wants, ...heads].map((from) => ({ name: from, set: process.env[from] !== undefined })),
+          // 遠くに繋ぐものは、立ち上げるものが要らない。
+          canRun: spec.url !== undefined || (spec.command !== undefined && canRun(spec.command)),
           running: client?.running ?? false,
           tools: client?.tools.length ?? 0,
           failure: client?.failure ?? null,
@@ -1042,6 +1048,88 @@ export class UiServer {
         };
       });
       return send(res, 200, { servers, envPath: join(aasHome(), '.env') });
+    }
+
+    /**
+     * 繋ぎ先の見本帳。**形が決まっているものは、こちらが持っておく。**
+     * 値は返さない（要る合言葉の名前と、入っているかどうかだけ）。
+     */
+    if (path === '/api/mcp/catalog' && req.method === 'GET') {
+      const have = this.#opts.config.mcp?.servers ?? {};
+      return send(res, 200, {
+        entries: CATALOG.map((e) => ({
+          id: e.id,
+          name: e.name,
+          about: e.about,
+          remote: e.url !== undefined,
+          needsNpx: e.needsNpx === true,
+          retired: e.retired ?? null,
+          connected: have[e.id] !== undefined,
+          secrets: (e.secrets ?? []).map((sec) => ({
+            env: sec.env, about: sec.about, where: sec.where ?? null,
+            set: (process.env[sec.env] ?? '').trim() !== '',
+          })),
+        })),
+      });
+    }
+
+    /**
+     * 見本帳から一つ繋ぐ。
+     *
+     * 名前を一つ言えば繋がる。合言葉が要るものは、それだけ受け取る
+     * （置き場の .env に書く。設定にも画面にも、値は出さない）。
+     */
+    if (path === '/api/mcp/connect' && req.method === 'POST') {
+      const body = await readBody(req) as { id?: unknown; secrets?: unknown; enabled?: unknown };
+      const entry = typeof body?.id === 'string' ? findEntry(body.id) : undefined;
+      if (!entry) return send(res, 404, { error: `見本帳にありません: ${String(body?.id ?? '')}` });
+
+      const given = (body?.secrets ?? {}) as Record<string, unknown>;
+      const secrets: Record<string, string> = {};
+      for (const [k, v] of Object.entries(given)) if (typeof v === 'string') secrets[k] = v;
+
+      // 中身は会話からの道と同じものを使う。二つに書くと、片方だけ直る。
+      const got = await connectService(entry.id, {
+        root: this.#workRoot(), secrets, enabled: body?.enabled !== false,
+      });
+      if (!got.ok) return send(res, 400, { error: got.error ?? '繋げませんでした' });
+
+      // **いまの土台を畳む。**外の道具は土台を組むときに立ち上がるので、
+      // 畳まないと、繋いだのに次も繋がらない。会話は残してある。
+      const live = this.#session;
+      if (live && !this.#busyNow(live)) {
+        this.#session = undefined;
+        await live.close().catch(() => undefined);
+      }
+      this.#opts.config.mcp = {
+        ...this.#opts.config.mcp,
+        servers: {
+          ...this.#opts.config.mcp?.servers,
+          [entry.id]: {
+            ...specFrom(entry, { root: this.#workRoot() }),
+            enabled: body?.enabled !== false,
+          },
+        },
+      };
+      return send(res, 200, {
+        id: got.id, path: got.path, missing: got.missing, notes: got.notes,
+      });
+    }
+
+    /** 繋いだものを外す。設定から消すだけで、合言葉は残す。 */
+    if (path === '/api/mcp/connect' && req.method === 'DELETE') {
+      const id = url.searchParams.get('id') ?? '';
+      const servers = { ...this.#opts.config.mcp?.servers };
+      if (!servers[id]) return send(res, 404, { error: `繋いでいません: ${id}` });
+      delete servers[id];
+      await disconnectService(id);
+      const live = this.#session;
+      if (live && !this.#busyNow(live)) {
+        this.#session = undefined;
+        await live.close().catch(() => undefined);
+      }
+      this.#opts.config.mcp = { ...this.#opts.config.mcp, servers };
+      return send(res, 200, { id, removed: true });
     }
 
     /** GitHub を繋ぐ。合言葉を置き場へ書き、設定に一つ足す。 */

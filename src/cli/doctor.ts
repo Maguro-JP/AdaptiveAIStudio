@@ -263,6 +263,16 @@ if (process.platform === 'win32') {
       add(`外の道具 (${name})`, 'ok', '設定はあるが enabled: false（使うなら true に）');
       continue;
     }
+    // 遠くに繋ぐものは、立ち上げるものが無い。ここで見るのは手元のものだけ。
+    if (spec.url) {
+      add(`外の道具 (${name})`, 'ok', `遠くに繋ぎます: ${spec.url}`);
+      continue;
+    }
+    if (!spec.command) {
+      add(`外の道具 (${name})`, 'warn', '立ち上げるものも、繋ぎ先も書かれていません',
+        'command か url のどちらかが要ります。');
+      continue;
+    }
     // 立ち上げる前に、その命令が在るかを見る。bundle には npm も npx も
     // 入っていないので、設定に書けても動かない。**書いたのに何も起きない**を止める。
     if (!canRun(spec.command)) {

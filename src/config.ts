@@ -72,9 +72,17 @@ export interface McpConfig {
    *   }
    */
   servers?: Record<string, {
-    command: string;
+    /** 手元で立ち上げるとき。 */
+    command?: string;
     args?: string[];
+    /**
+     * 遠くに繋ぐとき（Streamable HTTP）。
+     * いま主要なところは、ほとんどこちら。
+     */
+    url?: string;
     envFrom?: Record<string, string>;
+    /** 付ける見出し。**値ではなく名前で書く。** */
+    headersFrom?: Record<string, string>;
     startupTimeoutMs?: number;
     /** false にすると、設定を消さずに切っておける。 */
     enabled?: boolean;

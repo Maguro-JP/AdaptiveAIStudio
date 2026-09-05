@@ -265,22 +265,30 @@ await check('配置を切り替える', async () => {
 });
 
 // 外の道具。合言葉を入れて繋ぎ、**値が画面に残らない**ことまで見る。
-await check('GitHub を繋ぐ', async () => {
+await check('見本帳から GitHub を繋ぐ', async () => {
   try {
     await p.locator('#openSettings').click();
     await p.waitForTimeout(700);
     await p.locator('.tabs-lite button[data-sec="mcp"]').click();
-    await p.waitForTimeout(600);
-    await p.locator('#ghToken').fill('ghp_sweep_dummy');
-    await p.locator('#ghSave').click();
-    await p.waitForTimeout(1500);
+    await p.waitForTimeout(900);
+    const cards = await p.locator('#mcpCatalog .mcp-card').count();
+    if (cards === 0) throw new Error('見本帳が空');
+    const card = p.locator('#mcpCatalog .mcp-card').filter({ hasText: 'GitHub' }).first();
+    const field = card.locator('input[type="password"]').first();
+    await field.fill('ghp_sweep_dummy');
+    await card.locator('button.primary').click();
+    await p.waitForTimeout(1800);
     const note = await p.locator('#ghNote').innerText();
-    if (!note.includes('設定に書きました')) throw new Error(`繋げていない: ${note.slice(0, 80)}`);
+    if (!note.includes('設定に書きました')) throw new Error(`繋げていない: ${note.slice(0, 100)}`);
     // **入れた値を画面に残さない。**
-    if ((await p.locator('#ghToken').inputValue()) !== '') throw new Error('合言葉が入力欄に残っている');
+    const left = await card.locator('input[type="password"]').first().inputValue();
+    if (left !== '') throw new Error('合言葉が入力欄に残っている');
     const rows = await p.locator('#mcpRows').innerText();
     if (!rows.includes('github')) throw new Error('一覧に出ていない');
     if (rows.includes('ghp_sweep_dummy')) throw new Error('合言葉が画面に出ている');
+    if ((await p.locator('#mcpCatalog').innerText()).includes('ghp_sweep_dummy')) {
+      throw new Error('合言葉が見本帳に出ている');
+    }
   } finally {
     await closeSettings();
   }

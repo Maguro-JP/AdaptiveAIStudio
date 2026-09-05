@@ -193,16 +193,16 @@
           外の道具（MCP）。合言葉は、置き場の .env に入ります。
           設定ファイルには名前しか書きません。画面にも値は出しません。
         </p>
-        <label class="field-row">
-          <span class="dim">GitHub の合言葉</span>
-          <input id="ghToken" type="password" spellcheck="false" autocomplete="off"
-                 placeholder="ghp_… / github_pat_…">
-        </label>
+        <!--
+          繋げる先の見本帳。**形が決まっているものは、こちらが持っておく。**
+          命令や引数を人に書かせない。要るのは合言葉だけ。
+        -->
+        <div id="mcpCatalog" class="mcp-catalog"></div>
+        <p id="ghNote" class="repairs"></p>
         <div class="btnbar">
-          <button type="button" id="ghSave" class="primary">繋ぐ</button>
           <button type="button" id="ghReload" class="ghost">読み直す</button>
         </div>
-        <p id="ghNote" class="repairs"></p>
+        <p class="hint">いま繋がっているもの</p>
         <div id="mcpRows" class="rows paths" data-cols="2"></div>
       </section>
 

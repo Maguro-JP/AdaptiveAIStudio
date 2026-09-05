@@ -1004,3 +1004,18 @@ dialog.wide { width: min(46rem, 92vw); }
 .view-list { display: flex; flex-direction: column; gap: 2px; margin: 8px 0; }
 .view-row { display: flex; align-items: center; gap: 8px; padding: 4px 2px; cursor: pointer; }
 .view-row:hover { background: var(--surface2); }
+
+/* 繋げる先の見本帳。一つずつ、押せば繋がる形で並べる。 */
+.mcp-catalog { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+.mcp-card {
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 8px 10px; background: var(--surface2);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.mcp-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mcp-name { font-weight: 600; }
+.mcp-card .tag {
+  font-size: .72rem; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--line);
+}
+.mcp-card .field-row input { min-width: 0; }

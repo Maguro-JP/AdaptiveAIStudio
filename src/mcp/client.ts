@@ -32,9 +32,27 @@ const MAX_LINE_BYTES = 8 * 1024 * 1024;
 export const PROTOCOL_VERSION = '2025-06-18';
 
 export interface McpServerSpec {
-  /** 立ち上げるもの */
-  command: string;
+  /**
+   * 立ち上げるもの（手元で動かすとき）。
+   * `url` を書いたときは使わない。
+   */
+  command?: string;
   args?: string[];
+  /**
+   * 遠くの相手（Streamable HTTP）。
+   *
+   * **いま主要なところは、ほとんどこちら。**手元で動かす形（stdio）だけだと、
+   * `npx` の無い機械では一つも繋がらない。ここが在ると、node だけで繋がる。
+   */
+  url?: string;
+  /**
+   * 付ける見出し（ヘッダ）。**値ではなく名前で書く。**
+   *
+   *   "headersFrom": { "Authorization": "NOTION_TOKEN" }
+   *
+   * 値は環境から取る。`Bearer ` は、付いていなければこちらで付ける。
+   */
+  headersFrom?: Record<string, string>;
   /**
    * 渡す環境変数。**値ではなく名前で書く。**
    * 設定ファイルに合言葉そのものを書かせない。
@@ -93,6 +111,8 @@ export class McpClient {
   readonly name: string;
   readonly #spec: McpServerSpec;
   #child?: ChildProcess;
+  /** 遠くの相手のときの、繋ぎの控え。 */
+  #http?: { url: string; headers: Record<string, string>; session?: string; open: boolean };
   #buffer = '';
   /**
    * 届いた塊を文字に直すもの。
@@ -108,6 +128,7 @@ export class McpClient {
   #serverVersion?: string;
   /** 立ち上げに失敗した理由。使う側が「なぜ無いのか」を言えるように残す。 */
   #failure?: string;
+  #abort?: AbortSignal;
 
   constructor(name: string, spec: McpServerSpec) {
     this.name = name;
@@ -116,7 +137,13 @@ export class McpClient {
 
   get tools(): readonly McpToolSpec[] { return this.#tools; }
   get failure(): string | undefined { return this.#failure; }
-  get running(): boolean { return this.#child !== undefined && this.#child.exitCode === null; }
+  get running(): boolean {
+    if (this.#http) return this.#http.open;
+    return this.#child !== undefined && this.#child.exitCode === null;
+  }
+
+  /** 手元で立ち上げる相手か、遠くの相手か。 */
+  get remote(): boolean { return this.#spec.url !== undefined; }
   get serverVersion(): string | undefined { return this.#serverVersion; }
 
   /** 立ち上げて、道具の一覧まで取る。失敗しても投げない。 */
@@ -126,6 +153,14 @@ export class McpClient {
     this.#failure = undefined;
     this.#buffer = '';
     this.#decoder = new StringDecoder('utf8');
+    // 遠くの相手は、立ち上げるものが無い。繋いで、名乗るところから。
+    if (this.#spec.url) return this.#startRemote(signal);
+
+    if (!this.#spec.command) {
+      this.#failure = '立ち上げるものも、繋ぎ先も書かれていません';
+      return false;
+    }
+
     const env: Record<string, string> = { ...process.env as Record<string, string> };
     for (const [key, from] of Object.entries(this.#spec.envFrom ?? {})) {
       const value = process.env[from];
@@ -205,6 +240,19 @@ export class McpClient {
   }
 
   stop(): void {
+    if (this.#http) {
+      const http = this.#http;
+      http.open = false;
+      // 相手側の控えも落としてもらう。返事は待たない（切るだけ）。
+      if (http.session) {
+        void fetch(http.url, {
+          method: 'DELETE',
+          headers: { ...http.headers, 'mcp-session-id': http.session },
+        }).catch(() => undefined);
+      }
+      this.#http = undefined;
+      return;
+    }
     this.#child?.kill();
     this.#child = undefined;
   }
@@ -256,8 +304,118 @@ export class McpClient {
   }
 
   #send(payload: unknown): void {
+    if (this.#http) { void this.#post(payload); return; }
     // 行区切りなので、中に改行を入れない。
     this.#child?.stdin?.write(`${JSON.stringify(payload)}\n`);
+  }
+
+  /**
+   * 遠くの相手に繋ぐ。
+   *
+   * 立ち上げるものが無いので、失敗するのは**繋がらない**ときだけ。
+   * そのときも投げない（一つ繋がらないだけで、他の道具まで止めない）。
+   */
+  async #startRemote(signal?: AbortSignal): Promise<boolean> {
+    const headers: Record<string, string> = {};
+    for (const [name, from] of Object.entries(this.#spec.headersFrom ?? {})) {
+      const value = process.env[from];
+      if (value === undefined) continue;
+      // 合言葉は、そのまま渡すと通らない相手が多い。付いていなければ付ける。
+      headers[name] = name.toLowerCase() === 'authorization' && !/^\S+\s/.test(value)
+        ? `Bearer ${value}`
+        : value;
+    }
+    this.#http = { url: this.#spec.url!, headers, open: true };
+    this.#abort = signal;
+
+    const timeout = this.#spec.startupTimeoutMs ?? 10_000;
+    try {
+      const init = await this.#call('initialize', {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: 'AdaptiveAIStudio', version: '0.1.0' },
+      }, timeout) as { protocolVersion?: string };
+      this.#serverVersion = init?.protocolVersion;
+      this.#notify('notifications/initialized', {});
+      const listed = await this.#call('tools/list', {}, timeout) as { tools?: McpToolSpec[] };
+      this.#tools = (listed?.tools ?? []).filter((t) => typeof t?.name === 'string');
+      return true;
+    } catch (e) {
+      this.#failure = (e as Error).message;
+      this.#http.open = false;
+      return false;
+    }
+  }
+
+  /**
+   * 一つ送って、返ってきたものを、同じ読み口へ流す。
+   *
+   * 相手は JSON でも、流れ（SSE）でも返してくる。どちらも同じ形に均す。
+   */
+  async #post(payload: unknown): Promise<void> {
+    const http = this.#http;
+    if (!http) return;
+    let res: Response;
+    try {
+      res = await fetch(http.url, {
+        method: 'POST',
+        headers: {
+          ...http.headers,
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          ...(http.session ? { 'mcp-session-id': http.session } : {}),
+        },
+        body: JSON.stringify(payload),
+        ...(this.#abort ? { signal: this.#abort } : {}),
+      });
+    } catch (e) {
+      this.#fail(`繋がりません: ${(e as Error).message}`);
+      return;
+    }
+    // 繋ぎの名前をもらったら、以後は付けて出す。付けないと毎回名乗り直しになる。
+    const sid = res.headers.get('mcp-session-id');
+    if (sid) http.session = sid;
+
+    if (res.status === 202 || res.status === 204) return; // 知らせだけ。返事は無い
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      this.#fail(`${res.status} ${res.statusText}${body ? `: ${body.slice(0, 300)}` : ''}`);
+      return;
+    }
+
+    const type = res.headers.get('content-type') ?? '';
+    if (type.includes('text/event-stream')) {
+      await this.#readEvents(res);
+      return;
+    }
+    const text = await res.text();
+    for (const one of splitMessages(text)) this.#onData(`${one}\n`);
+  }
+
+  /** 流れ（SSE）を読む。`data:` の行だけを拾う。 */
+  async #readEvents(res: Response): Promise<void> {
+    const body = res.body;
+    if (!body) return;
+    const reader = body.getReader();
+    const dec = new StringDecoder('utf8');
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.write(Buffer.from(value));
+      let at: number;
+      while ((at = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, at).trimEnd();
+        buf = buf.slice(at + 1);
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === '[DONE]') continue;
+        for (const one of splitMessages(data)) this.#onData(`${one}\n`);
+      }
+      // 待っているものが無くなったら、そこで切り上げる。
+      // 相手は流れを開いたままにすることがあり、待つと止まって見える。
+      if (this.#pending.size === 0) { void reader.cancel().catch(() => undefined); break; }
+    }
   }
 
   #notify(method: string, params: unknown): void {
@@ -279,5 +437,24 @@ export class McpClient {
       });
       this.#send({ jsonrpc: '2.0', id, method, params });
     });
+  }
+}
+
+/**
+ * 返ってきたものを、一つずつの JSON にほどく。
+ *
+ * 相手は一つで返すことも、まとめて（配列で）返すこともある。
+ * ほどかないと、まとめて返された回だけ**全部落とす**ことになる。
+ */
+function splitMessages(text: string): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (Array.isArray(parsed)) return parsed.map((x) => JSON.stringify(x));
+    return [JSON.stringify(parsed)];
+  } catch {
+    // 読めないものは、そのまま渡して読み口の側で捨てさせる。
+    return [trimmed];
   }
 }
