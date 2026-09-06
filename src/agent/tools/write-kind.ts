@@ -59,9 +59,17 @@ export async function plannedContent(
  * 数を返さないと、「一箇所のつもりが十箇所変わっていた」を止められない。
  * 小さいモデルは短い断片を渡してくるので、これは実際に起きる。
  */
+/**
+ * 当て方。**どう当てたかを、必ず返す。**
+ *
+ * 緩く当てたのに黙っていると、渡した文字列が正しかったのだと思い込んだまま、
+ * 次も同じ形で渡してくる。どこまで譲ったかは、その場で言う。
+ */
+export type EditHow = 'exact' | 'loose' | 'anchor';
+
 export function applyEdit(
   before: string, find: string, replace: string, all: boolean,
-): { text: string; hits: number; loose?: boolean } {
+): { text: string; hits: number; loose?: boolean; how?: EditHow } {
   if (find.length === 0) return { text: before, hits: 0 };
   let hits = 0;
   let at = 0;
@@ -73,9 +81,70 @@ export function applyEdit(
   }
   if (hits > 0) {
     if (!all && hits > 1) return { text: before, hits };
-    return { text: all ? before.split(find).join(replace) : before.replace(find, replace), hits };
+    return {
+      text: all ? before.split(find).join(replace) : before.replace(find, replace),
+      hits, how: 'exact',
+    };
   }
-  return looseEdit(before, find, replace, all);
+  const loose = looseEdit(before, find, replace, all);
+  if (loose.hits > 0) return loose;
+  return anchorEdit(before, find, replace, all);
+}
+
+/**
+ * **両端で当てる。**
+ *
+ * 小さいモデルは、長い塊を渡すときに真ん中を書き崩す。注釈を一行落とす、
+ * 空行を入れる、途中を「…」で省く。行の並びが一致しないので、緩く当てる方でも
+ * 通らない。「見つかりません」と返すと、モデルは同じことを何度も試して、
+ * 往復だけ増えて何も直らない。
+ *
+ * Cline が同じところで同じ手を使っている（block anchor matching）。
+ * **最初と最後の行だけで場所を決める。**そのうえで、
+ *
+ *   ・行数が食い違いすぎるものは当てない（±2行まで）
+ *   ・真ん中が半分も合っていないものは当てない
+ *
+ * **真ん中を見ずに置き換えるのは危ない。**渡された塊に無い行まで消える。
+ * だから、当てたら必ず「両端で当てた」と言う（戻せるようにもしてある）。
+ */
+function anchorEdit(
+  before: string, find: string, replace: string, all: boolean,
+): { text: string; hits: number; loose?: boolean; how?: EditHow } {
+  const want = trimEnds(find.split('\n')).filter((l) => l.trim().length > 0);
+  // 三行に満たないものは、両端がほとんど中身そのもの。緩めても当たらない。
+  if (want.length < 3) return { text: before, hits: 0 };
+
+  const lines = before.split('\n');
+  const head = want[0]!.trim();
+  const tail = want[want.length - 1]!.trim();
+  const span = trimEnds(find.split('\n')).length;
+  const middle = want.slice(1, -1).map((l) => l.trim());
+
+  const found: Array<{ from: number; to: number }> = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (lines[i]!.trim() !== head) continue;
+    for (let k = -2; k <= 2; k += 1) {
+      const end = i + span - 1 + k;
+      if (end <= i || end >= lines.length) continue;
+      if (lines[end]!.trim() !== tail) continue;
+      // 真ん中が半分も合っていないなら、別の場所とみなす。
+      const inside = lines.slice(i + 1, end).map((l) => l.trim()).filter((l) => l.length > 0);
+      const same = middle.filter((m) => inside.includes(m)).length;
+      if (middle.length > 0 && same * 2 < middle.length) continue;
+      found.push({ from: i, to: end });
+      break;
+    }
+  }
+  if (found.length === 0) return { text: before, hits: 0 };
+  if (!all && found.length > 1) return { text: before, hits: found.length, loose: true, how: 'anchor' };
+
+  const out = [...lines];
+  for (const { from, to } of [...found].reverse()) {
+    const shifted = reindent(replace.split('\n'), indentOf(want[0]!), indentOf(lines[from]!));
+    out.splice(from, to - from + 1, ...shifted);
+  }
+  return { text: out.join('\n'), hits: found.length, loose: true, how: 'anchor' };
 }
 
 /**
@@ -94,7 +163,7 @@ export function applyEdit(
  */
 function looseEdit(
   before: string, find: string, replace: string, all: boolean,
-): { text: string; hits: number; loose?: boolean } {
+): { text: string; hits: number; loose?: boolean; how?: EditHow } {
   const lines = before.split('\n');
   const want = trimEnds(find.split('\n'));
   if (want.length === 0) return { text: before, hits: 0 };
@@ -111,7 +180,7 @@ function looseEdit(
     if (same) at.push(i);
   }
   if (at.length === 0) return { text: before, hits: 0 };
-  if (!all && at.length > 1) return { text: before, hits: at.length, loose: true };
+  if (!all && at.length > 1) return { text: before, hits: at.length, loose: true, how: 'loose' };
 
   // **ファイルの側の字下げに合わせる。**渡ってきた字下げをそのまま書くと、
   // 段のずれたコードが入る（見た目で気づけない壊し方）。
@@ -120,7 +189,7 @@ function looseEdit(
     const shifted = reindent(replace.split('\n'), indentOf(want[0]!), indentOf(lines[start]!));
     out.splice(start, wantKeys.length, ...shifted);
   }
-  return { text: out.join('\n'), hits: at.length, loose: true };
+  return { text: out.join('\n'), hits: at.length, loose: true, how: 'loose' };
 }
 
 /** 前後の空行を落とす。渡し方の癖であって、探したい中身ではない。 */

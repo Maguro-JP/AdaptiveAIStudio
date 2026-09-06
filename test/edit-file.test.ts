@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { editFileTool } from '../src/agent/tools/fs.ts';
+import { editFileTool, readFileTool } from '../src/agent/tools/fs.ts';
 import { isWriteTool, applyEdit, plannedContent } from '../src/agent/tools/write-kind.ts';
 import { protectedPaths, readBeforeWrite, testProtection } from '../src/harness/builtin-rules.ts';
 import type { ToolContext } from '../src/agent/tools/types.ts';
@@ -161,20 +161,26 @@ describe('守りをすり抜けさせない', () => {
 });
 
 describe('当てる部分だけを、単体で見る', () => {
+  /** 見たいのは中身と数。**どう当てたか（how）まで縛らない**（増えるたびに落ちる）。 */
+  const got = (before: string, find: string, replace: string, all: boolean) => {
+    const r = applyEdit(before, find, replace, all);
+    return { text: r.text, hits: r.hits };
+  };
+
   test('数を返す。返さないと、多重に当たったのを止められない', () => {
-    assert.deepEqual(applyEdit('aXaXa', 'X', 'Y', false), { text: 'aXaXa', hits: 2 });
-    assert.deepEqual(applyEdit('aXaXa', 'X', 'Y', true), { text: 'aYaYa', hits: 2 });
-    assert.deepEqual(applyEdit('aXa', 'X', 'Y', false), { text: 'aYa', hits: 1 });
-    assert.deepEqual(applyEdit('aaa', 'X', 'Y', false), { text: 'aaa', hits: 0 });
+    assert.deepEqual(got('aXaXa', 'X', 'Y', false), { text: 'aXaXa', hits: 2 });
+    assert.deepEqual(got('aXaXa', 'X', 'Y', true), { text: 'aYaYa', hits: 2 });
+    assert.deepEqual(got('aXa', 'X', 'Y', false), { text: 'aYa', hits: 1 });
+    assert.deepEqual(got('aaa', 'X', 'Y', false), { text: 'aaa', hits: 0 });
   });
 
   test('置き換える先に find と同じ文字が入っていても、増殖しない', () => {
     // `a` を `aa` にするような形。素朴に回すと無限に増える。
-    assert.deepEqual(applyEdit('a b a', 'a', 'aa', true), { text: 'aa b aa', hits: 2 });
+    assert.deepEqual(got('a b a', 'a', 'aa', true), { text: 'aa b aa', hits: 2 });
   });
 
   test('空の find は何もしない', () => {
-    assert.deepEqual(applyEdit('abc', '', 'x', true), { text: 'abc', hits: 0 });
+    assert.deepEqual(got('abc', '', 'x', true), { text: 'abc', hits: 0 });
   });
 });
 
@@ -340,5 +346,73 @@ describe('探す側も、打ち切りを黙らない', () => {
       got.content.includes('大きすぎて見ていない'),
       `見ていないファイルを黙っている: ${got.content.slice(-200)}`,
     );
+  });
+});
+
+describe('両端で当てる', () => {
+  const FILE = [
+    'export function add(a, b) {',
+    '  // 足し算をする。',
+    '  const sum = a + b;',
+    '  return sum;',
+    '}',
+    '',
+  ].join('\n');
+  const REPLACE = 'export function add(a, b) {\n  return a + b;\n}';
+
+  /**
+   * **小さいモデルは、長い塊の真ん中を書き崩す。**注釈を落とす、空行を入れる、
+   * 途中を省く。完全一致でも、字下げを見ない当て方でも通らない。
+   * 「見つかりません」と返すと、同じことを何度も試して往復だけ増える。
+   * Cline が同じところで同じ手（block anchor matching）を使っている。
+   */
+  test('**真ん中を書き崩されても、両端が合えば当たる**', () => {
+    const got = applyEdit(FILE, 'export function add(a, b) {\n  const sum = a + b;\n  return sum;\n}', REPLACE, false);
+    assert.equal(got.hits, 1);
+    assert.equal(got.how, 'anchor');
+    assert.match(got.text, /return a \+ b;/);
+    assert.doesNotMatch(got.text, /const sum/, '古い中身が残っている');
+  });
+
+  test('**真ん中がでっち上げなら、当てない**', () => {
+    // 両端だけ見て置き換えると、渡された塊に無い行まで消える。
+    const got = applyEdit(FILE, 'export function add(a, b) {\n  const x = 1;\n  const y = 2;\n  return 9;\n}', REPLACE, false);
+    assert.equal(got.hits, 0, '中身が違うのに当てている');
+    assert.equal(got.text, FILE);
+  });
+
+  test('両端が違えば、当てない', () => {
+    const got = applyEdit(FILE, 'function nothing() {\n  const a = 1;\n  return a;\n}', REPLACE, false);
+    assert.equal(got.hits, 0);
+  });
+
+  test('短い塊には使わない（両端がほとんど中身そのもの）', () => {
+    const got = applyEdit(FILE, 'const sum = a - b;\nreturn sum;', REPLACE, false);
+    assert.equal(got.hits, 0);
+  });
+
+  test('完全に一致するときは、そちらを使う', () => {
+    const got = applyEdit(FILE, '  const sum = a + b;', '  const sum = a - b;', false);
+    assert.equal(got.how, 'exact');
+  });
+
+  test('**両端で当てたことを、黙らない**', async () => {
+    const root = await tempDir('aas-anchor-');
+    await writeFile(join(root, 'math.js'), FILE, 'utf8');
+    const ctx = {
+      root, signal: new AbortController().signal,
+      approve: async () => true,
+    } as unknown as Parameters<typeof editFileTool.run>[1];
+    // **読んでから書く。**規則がその並びを求める。
+    await readFileTool.run({ path: 'math.js' }, ctx);
+    const got = await editFileTool.run({
+      path: 'math.js',
+      find: 'export function add(a, b) {\n  const sum = a + b;\n  return sum;\n}',
+      replace: REPLACE,
+    }, ctx);
+    assert.ok(!got.isError, got.content);
+    assert.match(got.content, /最初と最後の行だけが一致/,
+      `どう当てたかを言っていない: ${got.content}`);
+    assert.match(await readFile(join(root, 'math.js'), 'utf8'), /return a \+ b;/);
   });
 });

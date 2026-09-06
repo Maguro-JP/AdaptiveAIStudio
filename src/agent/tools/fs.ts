@@ -310,7 +310,7 @@ export const editFileTool: Tool = {
     // モデルは LF で書いてくる。中身が CRLF だと、**そのままでは一致しない。**
     // 「無い」と言われて、モデルは同じことを何度も試す。合わせてから探す。
     const lfBefore = toLf(before);
-    const { text, hits, loose } = applyEdit(lfBefore, toLf(find), toLf(replace), args.all === true);
+    const { text, hits, loose, how } = applyEdit(lfBefore, toLf(find), toLf(replace), args.all === true);
     if (hits === 0) {
       return fail(
         `見つかりません: ${p} の中に find の文字列がありません。`
@@ -329,11 +329,15 @@ export const editFileTool: Tool = {
     // こちらで合わせた、と分かるようにする。黙って当てると、渡した文字列が
     // 正しかったのだと思い込んだまま、次も同じ形で渡してくる。
     const got = await commit(ctx, abs, p, text);
+    // **どう譲って当てたかを、必ず言う。**黙って当てると、渡した文字列が
+    // 正しかったのだと思い込んだまま、次も同じ形で渡してくる。
     if (loose && !got.isError) {
-      return {
-        ...got,
-        content: `${got.content}\n（字下げか行末の空白が違っていたので、ファイルの側に合わせて当てました）`,
-      };
+      const note = how === 'anchor'
+        ? '（最初と最後の行だけが一致したので、その間を丸ごと置き換えました。'
+          + '**渡された find の真ん中は、ファイルの中身と違っていました。**'
+          + '意図と違っていたら、read_file で読み直して確かめてください）'
+        : '（字下げか行末の空白が違っていたので、ファイルの側に合わせて当てました）';
+      return { ...got, content: `${got.content}\n${note}` };
     }
     return got;
   },
