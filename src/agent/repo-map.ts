@@ -40,6 +40,13 @@ export interface MapEntry {
   name: string;
   /** 並べるための点。大きいほど先に出す。 */
   score: number;
+  /**
+   * 名前が無いファイルに添える一言。
+   *
+   * 試験・画面・入口・記録には、外へ出す名前が一つも無い。
+   * 名前で示せないので、**何が書いてあるか**で示す。
+   */
+  note?: string;
 }
 
 /** 減衰。PageRank の作法どおり 0.85。 */
@@ -162,7 +169,22 @@ export function rankedEntries(index: CodeIndex, seed: Map<number, number> = new 
   index.files.forEach((f, i) => {
     const share = rank[i] ?? 0;
     const tops = f.symbols.filter((s) => s.exported);
-    if (share <= 0 || tops.length === 0) return;
+    if (share <= 0) return;
+    /*
+     * **外へ出す名前が一つも無いファイルも、道だけは載せる。**
+     *
+     * 試験・画面（app.js / style.css / index.html）・入口（cli）・記録（.md）が
+     * これに当たる。名前が無いという理由で外していたが、**直す先としては
+     * これらがいちばん多い**。この置き場の履歴 200 commit で測ったところ、
+     * 直した先の 58% が、地図に載りようが無いファイルだった。
+     * 載らないものは、どれだけ並べ方を良くしても当たらない。
+     *
+     * 名前で示せないので、索引が持っている冒頭（`head`）を一言に切って添える。
+     */
+    if (tops.length === 0) {
+      out.push({ path: f.path, line: 0, name: '', score: share, note: noteOf(f.head) });
+      return;
+    }
     // そのファイルの中の重み。外から呼ばれている数で割る。
     const weights = tops.map((s) => 1 + (g.callers.get(s.name) ?? 0));
     const sum = weights.reduce((a, b) => a + b, 0);
@@ -265,6 +287,25 @@ function rareBits(bits: readonly string[], index: CodeIndex): string[] {
   });
 }
 
+/**
+ * 冒頭を、一言に切る。
+ *
+ * 索引の `head` は注釈の冒頭なので、記号や飾りが混ざる。人が読んで
+ * 何のファイルか分かる長さだけ残す。**長くしない**（地図の場所は狭い）。
+ */
+function noteOf(head: string): string {
+  const text = head
+    .replace(/^[\s*/#=-]+/, '')
+    .replace(/[*`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text.length === 0) return '';
+  // 最初の句点まで。無ければ 40 文字で切る。
+  const stop = text.indexOf('。');
+  const cut = stop > 0 && stop <= 40 ? text.slice(0, stop) : text.slice(0, 40);
+  return cut.trim();
+}
+
 /** 助詞ばかりの断片。どのファイルにも在るので、当たっても何も分からない。 */
 const PARTICLES = new Set([
   'した', 'して', 'する', 'され', 'れる', 'ている', 'てい', 'いる', 'ます', 'から',
@@ -296,7 +337,11 @@ export function renderMap(
   let used = count(head);
   let left = 0;
   for (const [path, defs] of byFile) {
-    const block = `${path}\n${defs.map((d) => `  ${d.line}: ${d.name}`).join('\n')}\n`;
+    // 名前を出していないファイルは、道と一言だけ。行番号を書く先が無い。
+    const first = defs[0]!;
+    const block = first.name === ''
+      ? `${path}${first.note ? `  — ${first.note}` : ''}\n`
+      : `${path}\n${defs.map((d) => `  ${d.line}: ${d.name}`).join('\n')}\n`;
     const cost = count(block);
     if (used + cost > budget.chars) { left += 1; continue; }
     used += cost;
@@ -324,16 +369,6 @@ export function covers(map: string, index: CodeIndex, seed: Map<number, number>)
   const wanted = [...seed.entries()]
     .filter(([, w]) => w >= 2)
     .sort((a, b) => b[1] - a[1])
-    /*
-     * **地図に載りようが無いファイルを、載っていないと言わない。**
-     *
-     * 地図に出るのは外へ出している名前だけなので、試験のように
-     * `export` を持たないファイルはどう作り直しても載らない。
-     * それを欲しがると、**毎往復かならず作り直す**ことになり、
-     * 覚えておく意味がなくなる（7 往復で 7 回。実測）。
-     * 直前に触ったファイルを起点にしてから出た。試験は直すたびに触るので。
-     */
-    .filter(([i]) => index.files[i]?.symbols.some((sym) => sym.exported))
     .slice(0, 5)
     .map(([i]) => index.files[i]?.path)
     .filter((p): p is string => !!p);

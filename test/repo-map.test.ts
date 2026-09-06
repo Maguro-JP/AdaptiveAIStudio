@@ -134,6 +134,40 @@ describe('渡せる形にする', () => {
   });
 });
 
+describe('名前を出していないファイルも、地図に載せる', () => {
+  /**
+   * 試験・画面・入口・記録には、外へ出す名前が一つも無い。名前が無いという
+   * 理由で外していたが、**直す先としてはこれらがいちばん多い**。
+   * この置き場の履歴 200 commit で測ったところ、直した先の 58% が
+   * 地図に載りようが無いファイルだった（`scripts/bench.mjs`）。
+   * 載らないものは、どれだけ並べ方を良くしても当たらない。
+   */
+  test('**外へ出す名前が無くても、道は載る**', async () => {
+    const root = await project();
+    await writeFile(join(root, 'src', 'core.test.ts'),
+      "// 背骨を確かめる。\nimport { heartbeat } from './core.ts';\n"
+      + 'function check() { return heartbeat(); }\n', 'utf8');
+    const index = await buildIndex(root);
+    const map = renderMap(rankedEntries(index, seedFrom(index, '', [], ['src/core.test.ts'])), { chars: 100_000 });
+    assert.match(map, /core\.test\.ts/, '直す先としていちばん多いものが載らない');
+  });
+
+  test('名前が無いファイルには、何のファイルかを添える', async () => {
+    const root = await project();
+    await writeFile(join(root, 'src', 'core.test.ts'),
+      '// 背骨を確かめる。\nfunction check() { return 1; }\n', 'utf8');
+    const index = await buildIndex(root);
+    const map = renderMap(rankedEntries(index, seedFrom(index, '', [], ['src/core.test.ts'])), { chars: 100_000 });
+    assert.match(map, /core\.test\.ts.*背骨を確かめる/, '道だけでは何のファイルか分からない');
+  });
+
+  test('名前が在るファイルは、いままでどおり名前で出す（対）', async () => {
+    const index = await buildIndex(await project());
+    const map = renderMap(rankedEntries(index), { chars: 100_000 });
+    assert.match(map, /src\/core\.ts\n {2}\d+: heartbeat/);
+  });
+});
+
 describe('前と同じで済むなら、地図を作り直さない', () => {
   /**
    * 前置きが一文字でも変われば、相手（llama.cpp / ollama）はそこから先を
@@ -159,19 +193,6 @@ describe('前と同じで済むなら、地図を作り直さない', () => {
     const index = await buildIndex(await project());
     const map = renderMap(rankedEntries(index), { chars: 100_000 });
     assert.equal(covers(map, index, seedFrom(index, 'まったく関係のない話')), true);
-  });
-
-  test('**載りようが無いファイルを欲しがらない**', async () => {
-    const root = await project();
-    // 試験のファイル。外へ出す名前が一つも無いので、地図には決して載らない。
-    await writeFile(join(root, 'src', 'core.test.ts'),
-      "import { heartbeat } from './core.ts';\nfunction check() { return heartbeat(); }\n", 'utf8');
-    const index = await buildIndex(root);
-    const map = renderMap(rankedEntries(index), { chars: 100_000 });
-    assert.doesNotMatch(map, /core\.test\.ts/, 'この試験の前提が崩れている');
-    // それを直した直後。作り直しても載らないので、作り直しても意味が無い。
-    assert.equal(covers(map, index, seedFrom(index, '', [], ['src/core.test.ts'])), true,
-      '毎往復かならず作り直すことになる（覚えておく意味が無くなる）');
   });
 
   test('地図がまだ無いなら、作る', async () => {
