@@ -143,6 +143,54 @@ describe('bundle では、手で新しくする道を言う', () => {
     assert.match(s.reason ?? '', /data/);
   });
 
+  /**
+   * **その場で上書きさせない。**上書きすると、新しい方が動かなかったときに
+   * 戻る先が無い。NetVision が同じところで「新しい ZIP は別のフォルダへ展開し、
+   * 古いフォルダは消さずに残す。問題がないことを確かめてから消す」と書いていて、
+   * そちらが正しい。
+   *
+   * ただし置き場の作りが違う。向こうはデータがアプリの外（`~/.netvision`）に
+   * あるので、どちらのフォルダから起動しても同じものが見える。**こちらは
+   * `data\` がフォルダの中**なので、そのまま真似ると新しい方が空で立ち上がる。
+   * だから `data\` を移す一手が要る。ここが抜けると、設定と記録が消えたように見える。
+   */
+  test('**戻せる形で案内する（別のフォルダ・古いのを残す・data を移す）**', async () => {
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tempDir } = await import('./tmp.ts');
+    const { checkUpdate } = await import('../src/core/update.ts');
+    const product = await tempDir('aas-upd-back-');
+    const app = join(product, 'app');
+    await mkdir(app, { recursive: true });
+    await writeFile(join(product, '.portable'), 'built 2026-09-01\n');
+    const reason = (await checkUpdate(app)).reason ?? '';
+
+    assert.match(reason, /別のフォルダ/, `上書きさせようとしている: ${reason}`);
+    assert.match(reason, /消さない/, `古いフォルダを残すと言っていない: ${reason}`);
+    assert.match(reason, /data\\.*(移す|移し)/s, `data を移す一手が抜けている: ${reason}`);
+    assert.match(reason, /戻すとき/, `戻し方を言っていない: ${reason}`);
+  });
+
+  /**
+   * 版を控えないと「入れ替えたつもりで古いまま動いていた」に気づけない
+   * （ここで実際にやった）。控えろと言うだけでなく、その場に出す。
+   */
+  test('**いまの版を、その場に出す**', async () => {
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tempDir } = await import('./tmp.ts');
+    const { byHandUpdate } = await import('../src/core/update.ts');
+    const product = await tempDir('aas-upd-ver-');
+    await mkdir(join(product, 'app'), { recursive: true });
+    await writeFile(join(product, '.portable'), 'x\n');
+
+    const withVersion = byHandUpdate(product, '0.3.0+abc1234');
+    assert.match(withVersion, /いまの版: 0\.3\.0\+abc1234/, withVersion);
+    assert.match(withVersion, /控え/, `控える理由を言っていない: ${withVersion}`);
+    // 版が分からないときも、行き止まりにしない。
+    assert.match(byHandUpdate(product), /VERSION/);
+  });
+
   test('portable でなければ、git clone の話のまま（対）', async () => {
     const { tempDir } = await import('./tmp.ts');
     const { checkUpdate, RELEASES_URL } = await import('../src/core/update.ts');

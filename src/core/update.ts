@@ -19,6 +19,7 @@
  */
 import { runGit, inspectGit } from '../agent/git.ts';
 import { isPortable, productRoot } from './home.ts';
+import { currentVersion, describeVersion } from './version.ts';
 
 export interface UpdateStatus {
   /** 取ってこられる状態か */
@@ -51,13 +52,35 @@ export const RELEASES_URL = 'https://github.com/Maguro-JP/AdaptiveAIStudio/relea
  *
  * 会社の PC には git が無い。「git 管理下ではありません」で終わると、
  * そこで止まる。ブラウザなら届くので、取ってくる先と入れ替え方を言う。
- * **data/ は残す。**設定と記録はそこにあり、app/ を入れ替えても消えない作り。
+ *
+ * **その場で `app\` を上書きさせない。**上書きすると、新しい方が動かなかった
+ * ときに戻る先が無い。NetVision が同じところで「新しい ZIP は別のフォルダへ
+ * 展開する。古いフォルダは消さずに残す。問題がないことを確かめてから消す」と
+ * 書いていて、そちらが正しい。
+ *
+ * ただし置き場の作りが違う。向こうはデータが `~/.netvision`（アプリの外）に
+ * あるので、どちらのフォルダから起動しても同じものが見える。**こちらは
+ * `data\` がフォルダの中**なので、そのまま真似ると新しい方が空で立ち上がる。
+ * だから `data\` を移す一手を挟む。
+ *
+ * 版も一緒に出す。控えていないと「入れ替えたつもりで古いまま動いていた」に
+ * 気づけない（ここで実際にやった）。
  */
-export function byHandUpdate(root: string): string {
+export function byHandUpdate(root: string, version?: string): string {
   return [
-    `新しいbundle をブラウザで取ってきて、app\\ だけ入れ替えてください: ${RELEASES_URL}`,
-    'data\\（設定・記録・モデル）はそのまま残します。',
-    `いまの版は VERSION に書いてあります（${productRoot(root)}）。`,
+    '新しいbundle をブラウザで取ってきて、入れ替えてください。',
+    `  1. 取ってくる: ${RELEASES_URL}`,
+    '  2. いまとは別のフォルダに展開する。いまのフォルダは消さない',
+    '     （新しい方で困ったら、古い方を押せば戻せます）',
+    `  3. いまの data\\（設定・記録・モデル）を、新しいフォルダへ移す`,
+    '     — モデルは大きいので、コピーではなく移す方が速いです',
+    '  4. 新しいフォルダの AdaptiveAIStudio.cmd を押す',
+    '  5. 版が変わったことを確かめてから、古いフォルダを消す',
+    '',
+    version
+      ? `いまの版: ${version}  ← 控えてください。控えないと「入れ替えたつもりで古いまま」に気づけません`
+      : `いまの版は VERSION に書いてあります（${productRoot(root)}）。`,
+    '戻すときは、data\\ を古いフォルダへ移し直して、そちらを押してください。',
   ].join('\n');
 }
 
@@ -68,7 +91,7 @@ export async function checkUpdate(root: string): Promise<UpdateStatus> {
     const why = state.kind === 'notRepo' ? 'git 管理下ではありません' : `git を確認できません（${state.reason}）`;
     // bundleなら、git が無いのは当たり前。手で新しくする道を出す。
     const reason = isPortable(root)
-      ? `${why}。\n${byHandUpdate(root)}`
+      ? `${why}。\n${byHandUpdate(root, describeVersion(await currentVersion()))}`
       : `${why}。更新は git clone した場所でのみできます`;
     return { can: false, behind: 0, ahead: 0, incoming: [], reason };
   }
