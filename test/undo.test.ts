@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { UndoStore, MAX_POINTS } from '../src/core/undo.ts';
+import { UndoStore, MAX_POINTS, MAX_POINT_BYTES, RECENT_PATHS } from '../src/core/undo.ts';
 
 async function store(): Promise<{ root: string; undo: UndoStore }> {
   const root = await tempDir('aas-undo-');
@@ -137,5 +137,58 @@ describe('戻す', () => {
     assert.ok(point);
     const done = await undo.restore(point.id);
     assert.deepEqual(done?.paths, [], '作業場の外へ書き戻している');
+  });
+});
+
+describe('直近で触ったファイルを覚える', () => {
+  /**
+   * 戻すためではなく、**次にどこを見せるか**を決めるために持つ。
+   * 地図の起点になる（`repo-map.test.ts`）。
+   */
+  test('新しい順に並ぶ', async () => {
+    const { undo } = await store();
+    await undo.begin('直して');
+    undo.capture('a.ts', 'x');
+    undo.capture('b.ts', 'y');
+    assert.deepEqual([...undo.recent()], ['b.ts', 'a.ts']);
+  });
+
+  test('同じファイルを二度触ったら、新しい方の位置になる（二つ並べない）', async () => {
+    const { undo } = await store();
+    await undo.begin('直して');
+    undo.capture('a.ts', 'x');
+    undo.capture('b.ts', 'y');
+    await undo.end();
+    await undo.begin('もう一度');
+    undo.capture('a.ts', 'z');
+    assert.deepEqual([...undo.recent()], ['a.ts', 'b.ts']);
+  });
+
+  test('一往復を越えても残る（次の依頼のためのものなので）', async () => {
+    const { undo } = await store();
+    await undo.begin('直して');
+    undo.capture('a.ts', 'x');
+    await undo.end();
+    await undo.begin('次');
+    assert.deepEqual([...undo.recent()], ['a.ts']);
+  });
+
+  test('溜め込まない', async () => {
+    const { undo } = await store();
+    await undo.begin('直して');
+    for (let i = 0; i < RECENT_PATHS + 5; i += 1) undo.capture(`f${i}.ts`, 'x');
+    assert.equal(undo.recent().length, RECENT_PATHS);
+    assert.equal(undo.recent()[0], `f${RECENT_PATHS + 4}.ts`);
+  });
+
+  test('**大きすぎて控えられなかったものも、触ったことは覚える**', async () => {
+    const { undo } = await store();
+    await undo.begin('直して');
+    undo.capture('huge.ts', 'x'.repeat(MAX_POINT_BYTES + 1));
+    undo.capture('small.ts', 'x');
+    await undo.end();
+    assert.deepEqual(undo.takeSkipped(), ['huge.ts'], '控えなかったことを言っていない');
+    assert.ok(undo.recent().includes('huge.ts'),
+      '戻せないことと、いま作業しているかどうかを混ぜている');
   });
 });

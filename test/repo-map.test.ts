@@ -166,3 +166,38 @@ describe('前と同じで済むなら、地図を作り直さない', () => {
     assert.equal(covers('', index, seedFrom(index, 'heartbeat')), false);
   });
 });
+
+describe('直前に書き換えたファイルを、起点にする', () => {
+  /**
+   * ファイル名の出ない依頼（「まだ落ちる」「そこ直して」）が普通にある。
+   * 語からは起点が一つも立たないので、素の並びが出て、**いま直している
+   * ファイルが載らない**。Cursor が近くの編集を手がかりにしているのを見て入れた。
+   */
+  test('**名前の出ない依頼でも、直していたファイルが上に来る**', async () => {
+    const index = await buildIndex(await project());
+    const plain = rankedEntries(index, seedFrom(index, 'まだ落ちる'))
+      .slice(0, 3).map((e) => e.path);
+    assert.ok(!plain.some((p) => p.endsWith('leaf.ts')),
+      `起点が無くても leaf が上に来ている（この試験が確かめられない）: ${plain.join(', ')}`);
+
+    const withEdit = rankedEntries(index, seedFrom(index, 'まだ落ちる', [], ['src/leaf.ts']))
+      .slice(0, 3).map((e) => e.path);
+    assert.ok(withEdit.some((p) => p.endsWith('leaf.ts')),
+      `直していたファイルが上に来ていない: ${withEdit.join(', ')}`);
+  });
+
+  test('新しく触ったものほど、強い', async () => {
+    const index = await buildIndex(await project());
+    const seed = seedFrom(index, '', [], ['src/leaf.ts', 'src/a.ts']);
+    const at = (p: string) => index.files.findIndex((f) => f.path === p);
+    assert.ok((seed.get(at('src/leaf.ts')) ?? 0) > (seed.get(at('src/a.ts')) ?? 0),
+      '十往復前に触ったものが、いま触ったものと同じ重さになっている');
+  });
+
+  test('触っていなければ、何も変わらない（対）', async () => {
+    const index = await buildIndex(await project());
+    const before = rankedEntries(index, seedFrom(index, 'heartbeat')).map((e) => e.name);
+    const after = rankedEntries(index, seedFrom(index, 'heartbeat', [], [])).map((e) => e.name);
+    assert.deepEqual(after, before);
+  });
+});

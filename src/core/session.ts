@@ -1527,7 +1527,8 @@ export class Session {
       const index = await indexStore.fresh(this.root);
       if (index.files.length === 0) return '';
       const seed = seedFrom(index, this.#instruction, this.#history
-        .flatMap((m) => (typeof m.content === 'string' ? m.content.match(/[\w./-]+\.[a-z]{1,4}/g) ?? [] : [])));
+        .flatMap((m) => (typeof m.content === 'string' ? m.content.match(/[\w./-]+\.[a-z]{1,4}/g) ?? [] : [])),
+        this.undo.recent());
       const held = this.#map;
       if (held && held.builtAt === index.builtAt && covers(held.text, index, seed)) return held.text;
 

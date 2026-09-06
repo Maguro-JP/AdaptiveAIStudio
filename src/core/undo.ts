@@ -55,12 +55,29 @@ export const MAX_POINTS = 30;
  */
 export const MAX_POINT_BYTES = 8 * 1024 * 1024;
 
+/**
+ * 「直近で触った」として覚えておくファイルの数。
+ *
+ * 地図の起点にするためのものなので、多くしても効かない（地図に載る数の方が
+ * 先に尽きる）。少なすぎると、少し前に直したファイルが起点から外れる。
+ */
+export const RECENT_PATHS = 12;
+
 export class UndoStore {
   readonly #root: string;
   readonly #dir: string;
   #open: { id: string; at: number; request: string; files: Map<string, Saved>; bytes: number; skipped: string[] } | undefined;
   /** 大きすぎて控えられなかったもの。黙って落とさないために持つ。 */
   #skipped: string[] = [];
+  /**
+   * 直近で書き換えたファイル（新しい順）。
+   *
+   * 戻すためではなく、**次にどこを見せるか**を決めるために持つ。
+   * いま直しているファイルは、次の依頼でもほぼ確実に要る。
+   * `list()` を読みに行かないのは、依頼のたびに 30 件の JSON を
+   * 開くことになるため（画面は待たされる）。
+   */
+  #recent: string[] = [];
 
   constructor(root: string, dir: string) {
     this.#root = root;
@@ -96,10 +113,12 @@ export class UndoStore {
     const size = previous?.length ?? 0;
     if (open.bytes + size > MAX_POINT_BYTES) {
       open.skipped.push(relPath);
+      this.#note(relPath);
       return;
     }
     open.bytes += size;
     open.files.set(relPath, { path: relPath, content: previous });
+    this.#note(relPath);
   }
 
   /** いまの一往復を閉じて、戻り先として残す。何も触っていなければ残さない。 */
@@ -128,6 +147,21 @@ export class UndoStore {
     const out = this.#skipped;
     this.#skipped = [];
     return out;
+  }
+
+  /**
+   * 直近で書き換えたファイル。新しい順、上限 `RECENT_PATHS` 件。
+   *
+   * 控えられなかったもの（大きすぎたファイル）も、**触ったことは確か**なので
+   * ここには入れる。戻せるかどうかと、いま作業しているかどうかは別の話。
+   */
+  recent(): readonly string[] { return this.#recent; }
+
+  #note(relPath: string): void {
+    const at = this.#recent.indexOf(relPath);
+    if (at >= 0) this.#recent.splice(at, 1);
+    this.#recent.unshift(relPath);
+    if (this.#recent.length > RECENT_PATHS) this.#recent.length = RECENT_PATHS;
   }
 
   /** 戻り先の一覧。新しい順。 */

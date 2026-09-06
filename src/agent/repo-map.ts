@@ -180,7 +180,12 @@ export function rankedEntries(index: CodeIndex, seed: Map<number, number> = new 
  * **道の一部でも当てる。**「server を直して」で `src/ui/server.ts` に
  * 当たらないと、起点として役に立たない。
  */
-export function seedFrom(index: CodeIndex, text: string, files: readonly string[] = []): Map<number, number> {
+export function seedFrom(
+  index: CodeIndex,
+  text: string,
+  files: readonly string[] = [],
+  edited: readonly string[] = [],
+): Map<number, number> {
   const seed = new Map<number, number>();
   const words = new Set(
     (text.toLowerCase().match(/[a-z_$][\w$./-]{2,}/g) ?? []).map((w) => w.replace(/[.,]+$/, '')),
@@ -196,8 +201,19 @@ export function seedFrom(index: CodeIndex, text: string, files: readonly string[
   index.files.forEach((f, i) => {
     let w = 0;
     const low = f.path.toLowerCase();
-    // 話に出たファイルは、いちばん強い起点。
+    // 話に出たファイルは、強い起点。
     if (files.includes(f.path)) w += 8;
+    /*
+     * **直前に書き換えたファイルは、いちばん強い起点。**
+     *
+     * Cursor が近くの編集を手がかりにしているのを見て入れた。
+     * 話に出た名前より強くするのは、話に出るのは「読んだだけ」も含むのに対し、
+     * 書き換えたのは**そこを直している最中**だから。次の依頼（「まだ落ちる」
+     * 「そこ直して」）にはファイル名が出てこないことの方が多い。
+     * 新しいものほど強い（同じ 12 件でも、いま触ったものと十往復前は違う）。
+     */
+    const fresh = edited.indexOf(f.path);
+    if (fresh >= 0) w += 12 - fresh * (6 / Math.max(1, edited.length));
     for (const word of words) {
       if (word.includes('/') ? low.includes(word) : low.includes(`/${word}`) || low.endsWith(word)) w += 3;
     }
