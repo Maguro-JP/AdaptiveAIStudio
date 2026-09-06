@@ -324,6 +324,16 @@ export function covers(map: string, index: CodeIndex, seed: Map<number, number>)
   const wanted = [...seed.entries()]
     .filter(([, w]) => w >= 2)
     .sort((a, b) => b[1] - a[1])
+    /*
+     * **地図に載りようが無いファイルを、載っていないと言わない。**
+     *
+     * 地図に出るのは外へ出している名前だけなので、試験のように
+     * `export` を持たないファイルはどう作り直しても載らない。
+     * それを欲しがると、**毎往復かならず作り直す**ことになり、
+     * 覚えておく意味がなくなる（7 往復で 7 回。実測）。
+     * 直前に触ったファイルを起点にしてから出た。試験は直すたびに触るので。
+     */
+    .filter(([i]) => index.files[i]?.symbols.some((sym) => sym.exported))
     .slice(0, 5)
     .map(([i]) => index.files[i]?.path)
     .filter((p): p is string => !!p);

@@ -161,6 +161,19 @@ describe('前と同じで済むなら、地図を作り直さない', () => {
     assert.equal(covers(map, index, seedFrom(index, 'まったく関係のない話')), true);
   });
 
+  test('**載りようが無いファイルを欲しがらない**', async () => {
+    const root = await project();
+    // 試験のファイル。外へ出す名前が一つも無いので、地図には決して載らない。
+    await writeFile(join(root, 'src', 'core.test.ts'),
+      "import { heartbeat } from './core.ts';\nfunction check() { return heartbeat(); }\n", 'utf8');
+    const index = await buildIndex(root);
+    const map = renderMap(rankedEntries(index), { chars: 100_000 });
+    assert.doesNotMatch(map, /core\.test\.ts/, 'この試験の前提が崩れている');
+    // それを直した直後。作り直しても載らないので、作り直しても意味が無い。
+    assert.equal(covers(map, index, seedFrom(index, '', [], ['src/core.test.ts'])), true,
+      '毎往復かならず作り直すことになる（覚えておく意味が無くなる）');
+  });
+
   test('地図がまだ無いなら、作る', async () => {
     const index = await buildIndex(await project());
     assert.equal(covers('', index, seedFrom(index, 'heartbeat')), false);
