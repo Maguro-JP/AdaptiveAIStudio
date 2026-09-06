@@ -290,7 +290,28 @@ export class InProcRuntime implements LocalRuntime {
     // 覚えや決まりを載せると、それだけで埋まる。切り詰める前に、窓を広げる。
     const contextSize = await this.#windowFor(ref);
     const context = await model.createContext({ contextSize });
-    const session = new lib.LlamaChatSession({ contextSequence: context.getSequence() }) as Held['session'];
+    /*
+     * **直しは、渡した中身をそのまま書き戻すことが多い。**
+     *
+     * `edit_file` は、ファイルの中身を渡して、その中の文字列を find/replace に
+     * 書かせる。出てくるトークンの多くは、**入力に既に在る**。
+     * そこを当てにいくのが token predictor（prompt lookup）で、当たった分は
+     * まとめて確かめられるので、その回数ぶん速くなる。
+     *
+     * ライブラリ自身が用途に「modifying code」を挙げていて、
+     * **出力そのものは変わらない**（当てが外れれば普通に生成し直す）と
+     * 書いてある。速さだけが変わる。
+     *
+     * 無い版のライブラリでも動くようにする。**速さの工夫なので、
+     * 無ければ無いで進む。**ただし黙らない（効いていないのに効いている
+     * と思われると、遅い理由を別の所に探すことになる）。
+     */
+    const predictor = lib.InputLookupTokenPredictor
+      ? new lib.InputLookupTokenPredictor()
+      : undefined;
+    if (!predictor) this.#opts.onLog?.('先読み（token predictor）が使えない版です。速さの工夫だけ効きません。');
+    const sequence = context.getSequence(predictor ? { tokenPredictor: predictor } : undefined);
+    const session = new lib.LlamaChatSession({ contextSequence: sequence }) as Held['session'];
     const wrapper = session.chatWrapper?.wrapperName ?? '不明';
     this.#opts.onLog?.(`読み込みました: ${ref}（道具の呼び方: ${wrapper}）`);
     if (GUESSED_WRAPPERS.has(wrapper)) {
@@ -355,7 +376,8 @@ export class InProcRuntime implements LocalRuntime {
   }
 
   /** ライブラリ。無いときは、無いとだけ言う。黙って別のことをしない。 */
-  async #lib(): Promise<{ getLlama: (o?: { gpu?: false; build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string; onLoadProgress?: (done: number) => void }) => Promise<{ createContext: (o?: { contextSize?: number }) => Promise<{ getSequence: () => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown }> {
+  async #lib(): Promise<{ getLlama: (o?: { gpu?: false; build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string; onLoadProgress?: (done: number) => void }) => Promise<{ createContext: (o?: { contextSize?: number }) => Promise<{ getSequence: (o?: { tokenPredictor?: unknown }) => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown;
+    InputLookupTokenPredictor?: new () => unknown }> {
     const load = this.#opts.load ?? (() => import(LLAMA_LIB));
     try {
       return await load() as never;

@@ -168,6 +168,8 @@ try {
   bad.push(`落ちました: ${e.message}`);
 } finally {
   await rt.shutdown();
+  // **消す前に確かめる。**tiny.gguf はここで消える。
+  bad.push(...await predictorKeepsOutput());
   rmSync(dir, { recursive: true, force: true });
 }
 
@@ -257,6 +259,49 @@ async function throughSession() {
   return found;
 }
 
+/**
+ * 先読み（token predictor）を付けても、出てくるものが変わらないこと。
+ *
+ * 直しは、渡した中身をそのまま書き戻すことが多い（`edit_file`）。
+ * 出てくるトークンの多くは入力に既に在るので、そこを当てにいくと
+ * その分まとめて確かめられて速くなる。ライブラリも用途に
+ * 「modifying code」を挙げている。
+ *
+ * **速くなることは、ここでは確かめられない**（当てが効くほどの中身を
+ * 持たない模型なので）。確かめるのは**出力が変わらないこと**。
+ * ここが変われば、速さのための工夫が答えを変えていることになる。
+ */
+async function predictorKeepsOutput() {
+  const found = [];
+  const lib = await import('node-llama-cpp');
+  if (!lib.InputLookupTokenPredictor) return ['先読み（InputLookupTokenPredictor）が無い版です'];
+  const llama = await lib.getLlama({ gpu: false, build: 'never', logLevel: 'error' });
+  const loaded = await llama.loadModel({ modelPath: model });
+
+  const say = async (withPredictor) => {
+    const context = await loaded.createContext({ contextSize: 512 });
+    const seq = context.getSequence(
+      withPredictor ? { tokenPredictor: new lib.InputLookupTokenPredictor() } : undefined,
+    );
+    const session = new lib.LlamaChatSession({ contextSequence: seq });
+    const out = await session.prompt(
+      'export function add(a, b) { return a + b; } これを引き算にして',
+      { temperature: 0, maxTokens: 48 },
+    );
+    const stats = seq.tokenPredictions;
+    await context.dispose();
+    return { out, stats };
+  };
+
+  const off = await say(false);
+  const on = await say(true);
+  if (off.out !== on.out) found.push('先読みを付けると出力が変わる（速さの工夫が答えを変えている）');
+  // 当てにいってすらいないなら、繋がっていない。
+  const tried = (on.stats?.validated ?? 0) + (on.stats?.refuted ?? 0);
+  if (tried === 0) found.push(`先読みが働いていない: ${JSON.stringify(on.stats)}`);
+  return found;
+}
+
 bad.push(...await throughSession());
 
 if (bad.length > 0) {
@@ -264,4 +309,4 @@ if (bad.length > 0) {
   for (const b of bad) console.error(`- ${b}`);
   process.exit(1);
 }
-console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す・同梱の話し方・土台ごと一往復・本物の数え方）');
+console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す・同梱の話し方・土台ごと一往復・本物の数え方・先読みで答えが変わらない）');
