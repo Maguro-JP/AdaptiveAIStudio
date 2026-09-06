@@ -9,6 +9,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDir } from './tmp.ts';
 import { startFakeServer, type FakeServer } from './fake-server.ts';
+import { until } from './until.ts';
 
 process.env.AAS_STATE_DIR = await tempDir('aas-e2e-');
 const { UiServer } = await import('../src/ui/server.ts');
@@ -33,11 +34,25 @@ before(async () => {
 });
 after(async () => { await server.stop(); await fake.close(); });
 
+/**
+ * collect() の流れが繋がったところ。
+ *
+ * **決め打ちで 200ms 待っていた。**繋がる前に送ると出来事を取りこぼし、
+ * 機械が混んでいるときだけ「終わりが来ない」になる。数を見て当てるのではなく、
+ * **繋いだ当人に知らせてもらう**。collect() は待たずに呼ぶので、
+ * この約束は呼んだ時点で作られている必要がある（最初の await より前）。
+ */
+let opened: Promise<void> = Promise.resolve();
+
 /** 流れを読んで、条件を満たすまで出来事を溜める。 */
 async function collect(until: (events: unknown[]) => boolean, ms = 20_000): Promise<unknown[]> {
+  let ready!: () => void;
+  opened = new Promise<void>((r) => { ready = r; });
   const events: unknown[] = [];
   const ac = new AbortController();
   const res = await fetch(`${base}/api/events`, { signal: ac.signal });
+  // ここまで返っているなら、土台は既にこの相手を控えている。
+  ready();
   const reader = res.body!.getReader();
   const dec = new TextDecoder();
   let buf = '';
@@ -73,7 +88,7 @@ describe('送って、返事が戻る', () => {
   test('一往復が通る', async () => {
     const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
     const collecting = collect(done);
-    await new Promise((r) => setTimeout(r, 200));
+    await opened;
     const r = await fetch(`${base}/api/send`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: 'あいさつして' }),
@@ -104,7 +119,7 @@ describe('会話は残る', () => {
 
     const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
     const collecting = collect(done);
-    await new Promise((r) => setTimeout(r, 200));
+    await opened;
     const r = await fetch(`${base}/api/send`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: '残ってほしい依頼' }),
@@ -154,8 +169,8 @@ describe('会話が続く', () => {
     assert.equal((await fetch(`${base}/api/conversations`, { method: 'POST' })).status, 200);
     const send = async (text: string) => {
       const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
-      const collecting = collect(done);
-      await new Promise((r) => setTimeout(r, 200));
+        const collecting = collect(done);
+      await opened;
       const r = await fetch(`${base}/api/send`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -193,7 +208,7 @@ describe('動いている間に書いても、断らない', () => {
       evs.filter((e) => (e as { type?: string; busy?: boolean }).type === 'busy'
         && (e as { busy?: boolean }).busy === false).length >= 2;
     const collecting = collect(twice);
-    await new Promise((r) => setTimeout(r, 200));
+    await opened;
 
     const send = (text: string) => fetch(`${base}/api/send`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -225,14 +240,16 @@ describe('途中でやめる', () => {
     fake.setBehavior({ kind: 'hang' });
     try {
       const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
-      const collecting = collect(done, 20_000);
-      await new Promise((r) => setTimeout(r, 200));
+        const collecting = collect(done, 20_000);
+      await opened;
       const r = await fetch(`${base}/api/send`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ text: '黙る相手へ' }),
       });
       assert.equal(r.status, 202, await r.text());
-      await new Promise((r2) => setTimeout(r2, 800));
+      // 相手（黙る側）へ届いてから押す。決め打ちで待つと、届く前に押して
+      // 「押さなくても戻ってきた」を見ていることがある。
+      await until(() => fake.requests > 0, '黙る相手まで届く');
       const began = Date.now();
       assert.equal((await fetch(`${base}/api/abort`, { method: 'POST' })).status, 200);
       const events = await collecting;
@@ -449,7 +466,7 @@ describe('同じ学びを、一往復に二度入れない', () => {
     const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy'
       && (e as { busy?: boolean }).busy === false);
     const collecting = collect(done);
-    await new Promise((r) => setTimeout(r, 200));
+    await opened;
     await fetch(`${base}/api/send`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: '足し算を直して' }),

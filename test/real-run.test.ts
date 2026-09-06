@@ -21,6 +21,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tempDir } from './tmp.ts';
 import { startRealModel } from './real-run.ts';
+import { until } from './until.ts';
 
 process.env.AAS_STATE_DIR ??= await tempDir('aas-real-');
 const { UiServer } = await import('../src/ui/server.ts');
@@ -71,7 +72,15 @@ async function projectTestPasses(root: string): Promise<boolean> {
 }
 
 /** 出来事を、静かになるまで溜める。 */
-async function drive(base: string, text: string, ms = 90_000): Promise<unknown[]> {
+/**
+ * 一往復を、**終わりが来るまで**回す。
+ *
+ * `fresh` を偽にすると会話を作り直さない。続きとして頼みたいときに使う。
+ * ここを決め打ちの待ち（`setTimeout(2500)`）で書いていたところが幾つかあった。
+ * 機械が混んでいれば足りず、空いていれば無駄に待つ。どちらも、
+ * 走らせる場所で結果が変わる。
+ */
+async function drive(base: string, text: string, ms = 90_000, { fresh = true } = {}): Promise<unknown[]> {
   const events: unknown[] = [];
   const ac = new AbortController();
   const res = await fetch(`${base}/api/events`, { signal: ac.signal });
@@ -82,7 +91,7 @@ async function drive(base: string, text: string, ms = 90_000): Promise<unknown[]
   // **前の会話を引きずらない。**記録は残る作りなので、
   // 立ち上げ直しても前のやりとり（道具の結果を含む）が載ってくる。
   // 製品としてはそれでよいが、ここでは一件ずつ独立に見たい。
-  await fetch(`${base}/api/conversations`, { method: 'POST' });
+  if (fresh) await fetch(`${base}/api/conversations`, { method: 'POST' });
 
   const sent = await fetch(`${base}/api/send`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -294,11 +303,7 @@ describe('実走：使うほど賢くなるか（添えた覚えに、結果が�
 
     try {
       // 先に一つ覚えさせる。次の依頼で、これが思い出されるようにする。
-      await fetch(`${base}/api/send`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text: '足し算のことは src/math.js に書いてあります' }),
-      });
-      await new Promise((r) => setTimeout(r, 1500));
+      await drive(base, '足し算のことは src/math.js に書いてあります', 60_000);
 
       await drive(base, '足し算が引き算になっています。直してください。', 120_000);
 
@@ -337,19 +342,11 @@ describe('実走：嫌がられたことを、次から必ず持ち歩くか', (
 
     try {
       // 0. 先に一つ頼む。**何の指示に対してだったか**を残すために要る。
-      await fetch(`${base}/api/send`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text: 'README に配布物の説明を足して' }),
-      });
-      await new Promise((r) => setTimeout(r, 2500));
+      await drive(base, 'README に配布物の説明を足して', 60_000);
 
       // 1. 指摘する。**合図（怒りの語）が一つも無い言い方にする。**
       // 決め打ちの語で選り分けていたときは、これを丸ごと落としていた。
-      await fetch(`${base}/api/send`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ text: '何に対して行ったか書けよ' }),
-      });
-      await new Promise((r) => setTimeout(r, 3000));
+      await drive(base, '何に対して行ったか書けよ', 60_000, { fresh: false });
 
       const state = await (await fetch(`${base}/api/state`)).json() as {
         memory: { kind: string; title: string; detail: string; source?: string }[];
@@ -418,7 +415,9 @@ describe('実走：判じられなかった回を、黙って消さない', () =
         // 合図の網に掛かる言い方（判じ手が読めないときの受け皿を見る）。
         body: JSON.stringify({ text: 'まだ直っていない' }),
       });
-      await new Promise((r) => setTimeout(r, 6000));
+      // **決め打ちで待たない。**訊き直しが済むまで見る。
+      await until(async () => model.did.filter((n) => n === 'judge:unreadable').length >= 2
+        && (await learnedNow()).length > before, '二度訊いて、覚えるところまで', { timeoutMs: 60_000 });
 
       // **二度訊いている。**一度で諦めない。
       const tries = model.did.filter((n) => n === 'judge:unreadable').length;
