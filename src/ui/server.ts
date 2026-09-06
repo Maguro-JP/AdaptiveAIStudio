@@ -131,6 +131,8 @@ export type UiEvent =
   | { type: 'conversations' }
   /** やり残しの控えが動いた。画面に取り直させる。 */
   | { type: 'unfinished' }
+  /** 戻り先が増えた・減った。画面の一覧を取り直させる。 */
+  | { type: 'undo' }
   /** 暇なときの考えごと。送りは止めないが、動いていることは見せる。 */
   | { type: 'musing'; on: boolean }
   /** 分解して並列に働かせているときの出来事。 */
@@ -1004,6 +1006,40 @@ export class UiServer {
       return send(res, 200, { canceled: id });
     }
 
+    /*
+     * 戻せるようにする。
+     *
+     * **手元の小さいモデルは、間違った直しを当てる。**そのとき利用者に
+     * できることが「自分で書き戻す」しか無いなら、任せられない。
+     * git があってもコミット前は戻せないし、社用PCには git が無い。
+     */
+    if (path === '/api/undo' && req.method === 'GET') {
+      const session = await this.session();
+      return send(res, 200, { list: await session.undo.list() });
+    }
+
+    if (path === '/api/undo' && req.method === 'POST') {
+      const body = await readBody(req) as { id?: unknown };
+      const id = typeof body?.id === 'string' ? body.id : '';
+      if (!id) return send(res, 400, { error: 'id がありません' });
+      const session = await this.session();
+      // 動いている最中に戻すと、書いている途中のものと噛み合わない。
+      if (this.#busyNow(session)) {
+        return send(res, 409, { error: 'いま作業中です。終わってから戻してください' });
+      }
+      const done = await session.undo.restore(id);
+      if (!done) return send(res, 404, { error: 'その戻り先はもうありません' });
+      session.markChanged();
+      this.broadcast({
+        type: 'log', level: 'info',
+        text: done.points > 1
+          ? `${done.paths.length} 件のファイルを戻しました（${done.points} 回ぶん）: ${done.paths.join(', ')}`
+          : `${done.paths.length} 件のファイルを戻しました: ${done.paths.join(', ')}`,
+      });
+      this.broadcast({ type: 'undo' });
+      return send(res, 200, { paths: done.paths, points: done.points });
+    }
+
     if (path === '/api/conversations/select' && req.method === 'POST') {
       const body = await readBody(req) as { id?: unknown };
       const id = typeof body?.id === 'string' ? body.id : '';
@@ -1488,6 +1524,17 @@ export class UiServer {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
     } finally {
       await this.#recordUnfinished(text, settled, resuming, didSomething);
+      // 戻り先が増えたことを画面へ。**触ったのに出ていないと、
+      // 戻せることに気づけない。**
+      this.broadcast({ type: 'undo' });
+      // 大きすぎて控えられなかったものは言う。戻せると思って戻せない、をなくす。
+      const skipped = session.undo.takeSkipped();
+      if (skipped.length > 0) {
+        this.broadcast({
+          type: 'log', level: 'warn',
+          text: `大きすぎるので控えていません（戻せません）: ${skipped.join(', ')}`,
+        });
+      }
       // **残してから、次へ進む。**先に次を流すと、落ちたときに
       // その回のやりとりが消える。
       await this.#persist(session);

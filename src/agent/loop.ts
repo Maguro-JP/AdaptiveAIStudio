@@ -58,6 +58,8 @@ export interface AgentOptions {
   temperature?: number;
   maxTokens?: number;
   approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
+  /** 書き込む直前の控え。**戻せるようにするため**、書く道具から呼ばれる。 */
+  beforeWrite?(relPath: string, previous: string | undefined): void;
 }
 
 export class Agent {
@@ -93,6 +95,7 @@ export class Agent {
       root: this.#opts.root,
       signal,
       approve: this.#opts.approve,
+      ...(this.#opts.beforeWrite ? { beforeWrite: this.#opts.beforeWrite } : {}),
       // 道具の返しも窓に収める。読んだ時点で収めないと、刈る段では
       // 中身がほとんど残らない（直近の結果は 1200 字まで削られる）。
       ...(this.#opts.contextTokens !== undefined ? { contextTokens: this.#opts.contextTokens } : {}),

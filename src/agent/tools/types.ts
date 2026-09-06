@@ -20,6 +20,14 @@ export interface ToolContext {
   count?: (text: string) => number;
   /** 書き込み・実行の承認を求める。false なら実行しない。 */
   approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
+  /**
+   * 書き込む直前に呼ばれる。**戻せるようにするための控え。**
+   *
+   * `previous` は書き換える前の中身（無かったファイルは undefined）。
+   * 書く側が既に読んでいるものを渡すので、二度読まない。
+   * 承認が通り、実際に中身が変わるときだけ呼ぶ。
+   */
+  beforeWrite?(relPath: string, previous: string | undefined): void;
 }
 
 /**

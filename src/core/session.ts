@@ -58,6 +58,7 @@ import { runVerification, verifyLoop, type VerifyEvent, type VerifyResult } from
 import { snapshotTests } from '../agent/test-integrity.ts';
 import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
+import { UndoStore } from './undo.ts';
 import type { Harness } from '../harness/harness.ts';
 import { inspectGit } from '../agent/git.ts';
 import { diffStat } from '../agent/diff.ts';
@@ -174,6 +175,14 @@ export interface SessionOptions {
 export class Session {
   readonly config: AasConfig;
   readonly root: string;
+  /**
+   * 終わった後に、人が自分の判断で戻すための控え。
+   *
+   * 一往復の中の巻き戻し（`Checkpoint`）とは別。あちらは確かめて落ちたときに
+   * 自動で戻して、終われば捨てる。**間違った直しを当てられたときに、
+   * 利用者にできることが「自分で書き戻す」しか無い**のでは任せられない。
+   */
+  readonly undo: UndoStore;
   readonly candidates: string[];
   readonly memory: Memory;
   /** 溜まった提案。実行はしない。溜めて、人に選ばせる。 */
@@ -239,6 +248,7 @@ export class Session {
   }) {
     this.config = init.config;
     this.root = init.root;
+    this.undo = new UndoStore(init.root, join(stateDir(), 'undo'));
     this.#projectRules = new ProjectRules(init.root);
     this.candidates = init.candidates;
     this.memory = init.memory;
@@ -402,6 +412,8 @@ export class Session {
     }
     const ac = new AbortController();
     this.#running = ac;
+    // 段取りでもファイルを触る。**戻せるのは送り口だけ、にしない。**
+    await this.undo.begin(request);
     this.#holder.instruction = request;
     // 依頼が変われば協議もやり直し。前回通した話で今回の変更を通させない。
     this.#forum.clear();
@@ -465,6 +477,7 @@ export class Session {
         maxTokens: this.config.maxTokens,
         maxTotalParallel: this.config.agent?.maxTotalParallel,
         approve: this.#approve,
+        beforeWrite: (path, previous) => this.undo.capture(path, previous),
         // 権限は役職から配る。調べるだけの担当は書き込む手段を持たない。
         assign: (roleId) => {
           const role = this.roles.get(roleId);
@@ -564,6 +577,7 @@ export class Session {
       return undefined;
     } finally {
       this.#running = undefined;
+      await this.undo.end().catch(() => undefined);
       await this.memory.save().catch(() => undefined);
     }
   }
@@ -817,6 +831,8 @@ export class Session {
     this.#instruction = instruction;
     this.#holder.instruction = instruction;
     this.#forum.clear();
+    // **この一往復で触ったものを、後から戻せるようにする。**
+    await this.undo.begin(instruction);
 
     const verifyCfg = this.config.agent?.verify ?? {};
     const harnessCfg = this.config.harness ?? {};
@@ -1102,6 +1118,8 @@ export class Session {
       };
     } finally {
       this.#running = undefined;
+      // **この一往復ぶんを、戻り先として残す。**触っていなければ残らない。
+      await this.undo.end().catch(() => undefined);
       await this.memory.save().catch(() => undefined);
       // **この回が終わってから判じる。**待たせない、を本当にする。
       // こちらが書いた文は判じない（利用者が言っていないことを覚えないため）。
@@ -1159,6 +1177,7 @@ export class Session {
       contextTokens: this.contextTokens,
       ...(counter ? { count: (t: string) => counter.count(t) } : {}),
       approve: this.#approve,
+      beforeWrite: (path, previous) => this.undo.capture(path, previous),
     });
   }
 

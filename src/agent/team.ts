@@ -59,6 +59,8 @@ export interface TeamOptions {
   maxTokens?: number;
   maxTotalParallel?: number;
   approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
+  /** 書き込む直前の控え。**戻せるようにするため**、書く道具から呼ばれる。 */
+  beforeWrite?(relPath: string, previous: string | undefined): void;
   /**
    * 役職ごとの気質と権限を引く。
    * 省略すると全員が同じ system と tools で働く（P2までの動き）。
@@ -102,6 +104,7 @@ export class Team {
       temperature: this.#opts.temperature,
       maxTokens: this.#opts.maxTokens,
       approve: this.#opts.approve,
+      ...(this.#opts.beforeWrite ? { beforeWrite: this.#opts.beforeWrite } : {}),
     });
 
     const history: ProviderMessage[] = [{

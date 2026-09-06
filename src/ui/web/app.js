@@ -512,6 +512,7 @@ function listen() {
     }
     if (e.type === 'conversations') void loadConversations();
     if (e.type === 'unfinished') void loadUnfinished();
+    if (e.type === 'undo') void loadUndo();
     if (e.type === 'musing' && !busyNow) {
       // 暇なときの考えごと。送りは止まらないので、待機中とは分けて言う。
       run.set(e.on ? 'musing' : 'idle', e.on ? '考えごと中（暇なとき）' : '待機中');
@@ -796,6 +797,64 @@ async function loadUnfinished() {
     row.append(label, stop);
     box.append(row);
   }
+}
+
+/**
+ * 戻せるところを出す。
+ *
+ * **手元の小さいモデルは、間違った直しを当てる。**そのとき利用者にできることが
+ * 「自分で書き戻す」しか無いなら、任せられない。git があってもコミット前は
+ * 戻せないし、社用PC には git が無い。
+ *
+ * 一つだけ戻すのではなく、**そこまで戻す**。後の直しが上に乗っているので、
+ * 途中だけ古い状態にすると、どこにも無かった形になる。押す前にそう言う。
+ */
+async function loadUndo() {
+  let data;
+  try {
+    data = await fetch('/api/undo').then((x) => x.json());
+  } catch { return; }
+  const list = data.list ?? [];
+  const sec = $('undoSec');
+  const box = $('sideUndo');
+  sec.hidden = list.length === 0;
+  box.textContent = '';
+
+  list.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'side-row';
+
+    const label = document.createElement('span');
+    label.className = 'grow';
+    const when = new Date(p.at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+    label.textContent = `${when} ${p.request.slice(0, 28)}`;
+    label.title = `${p.request}\n触ったファイル:\n${p.paths.join('\n')}`;
+
+    const back = document.createElement('button');
+    back.className = 'ghost icon';
+    back.title = i === 0
+      ? `ここまで戻す（${p.paths.length} 件）`
+      : `ここまで戻す（この後の ${i} 回ぶんも一緒に戻ります）`;
+    back.textContent = '↶';
+    back.addEventListener('click', async () => {
+      const also = i === 0 ? '' : `\nこの後の ${i} 回ぶんの直しも一緒に戻ります。`;
+      if (!confirm(`${p.paths.length} 件のファイルを戻します。${also}\n\n${p.paths.join('\n')}`)) return;
+      back.disabled = true;
+      try {
+        const r = await fetch('/api/undo', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id: p.id }),
+        });
+        if (!r.ok) alert((await r.json()).error ?? '戻せませんでした');
+      } finally {
+        back.disabled = false;
+        await loadUndo();
+      }
+    });
+
+    row.append(label, back);
+    box.append(row);
+  });
 }
 
 async function loadConversations() {
@@ -1413,6 +1472,7 @@ await refreshState();
 await loadFiles();
 await loadConversations();
 await loadUnfinished();
+await loadUndo();
 $('pickWork').onclick = () => { void pickWorkRoot(); };
 // 開き直したときは、続きの会話をそのまま出す。空の画面から始めない。
 if (conversations.current) {

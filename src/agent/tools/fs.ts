@@ -242,6 +242,10 @@ async function commit(
 
   if (body === before) return ok(`変更なし: ${shown}${partial}`);
 
+  // **書き換える直前に控える。**ここを通らない書き込みは無いので、
+  // 戻せないものが生まれない。
+  ctx.beforeWrite?.(display, created ? undefined : before);
+
   try {
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, body, 'utf8');
