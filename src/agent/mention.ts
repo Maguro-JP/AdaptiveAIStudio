@@ -24,8 +24,14 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 export const MENTION_MAX_BYTES = 24_000;
 export const MENTION_TOTAL_BYTES = 64_000;
 
-/** 窓のうち、指名した中身に使ってよい割合。残りは依頼と履歴と返事の分。 */
-const SHARE_OF_WINDOW = 0.35;
+/**
+ * 窓のうち、**依頼に差し込む中身**に使ってよい割合。残りは依頼と履歴と返事の分。
+ *
+ * 指名（`@道`）と添付で分け合う。別々に 0.35 を取ると合計 0.7 になり、
+ * 決まりの取り分（0.25）と足して窓を越える。**取り分は一つにして、
+ * 先に使った分を引く**（`src/ui/server.ts` の送り口）。
+ */
+export const SHARE_OF_WINDOW = 0.35;
 
 /**
  * 窓（トークン）から、指名に使ってよい文字数を決める。

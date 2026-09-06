@@ -34,7 +34,15 @@ export interface Attachment {
   encoding?: TextEncodingName;
 }
 
-/** 中身を差し込んでよい大きさ。これを超えたら頭だけ入れる。 */
+/**
+ * 中身を差し込んでよい大きさ。**窓が分からないときの受け皿**として残す。
+ *
+ * 固定の値しか無かったので、窓 4096 の相手に 40,052 文字を渡していた
+ * （実測。日本語は概ね 1文字 1トークンなので、窓のおよそ 10 倍）。
+ * 5 件付けると 200,268 文字、49 倍。添付は依頼の一部なので**刈る側は
+ * 落とせない**。指名（`@道`）は窓から決める形に直してあったのに、
+ * 添付だけ取り残されていた。
+ */
 export const MAX_INLINE_CHARS = 40_000;
 /** 1つあたりの上限。これより大きいものは受け取らない。 */
 export const MAX_BYTES = 25 * 1024 * 1024;
@@ -145,20 +153,33 @@ export class Attachments {
    * 文字ものは中身をそのまま。絵とその他は、在ることと場所だけ。
    * **読めないものの中身を渡さない。** 場所を食うだけで、何の助けにもならない。
    */
-  async describe(ids: string[], opts: { canSeeImages?: boolean } = {}): Promise<string> {
+  async describe(
+    ids: string[],
+    opts: { canSeeImages?: boolean; chars?: { each: number; total: number } } = {},
+  ): Promise<string> {
+    const each = opts.chars?.each ?? MAX_INLINE_CHARS;
+    const total = opts.chars?.total ?? Number.MAX_SAFE_INTEGER;
+    let used = 0;
     const parts: string[] = [];
+    // **入らなかったものを黙らせない。**添えたのに無視されたように見える。
+    let leftOut = 0;
     for (const id of ids) {
       const item = this.#items.get(id);
       if (!item) continue;
+      if (used >= total) { leftOut += 1; continue; }
 
       if (item.kind === 'text') {
         const bytes = await readFile(item.path).catch(() => Buffer.alloc(0));
         const { text: raw, encoding } = decodeText(bytes);
-        const body = raw.length > MAX_INLINE_CHARS
-          ? `${raw.slice(0, MAX_INLINE_CHARS)}\n…（以降 ${raw.length - MAX_INLINE_CHARS} 文字は省略）`
-          : raw;
         // CP932 として読んだなら、そう言う。黙って直すと、書き戻すときに困る。
         const how = encoding === 'shift_jis' ? '（CP932 として読みました）' : '';
+        // 囲みの分も窓を食う。**中身だけ数えて収まったつもりにならない。**
+        const frame = `--- 添付: ${item.name}${how} ---\n\n--- ここまで ---\n\n`.length;
+        // **一つで全部を使い切らせない。**複数付けたときに、後ろが空になる。
+        const room = Math.max(0, Math.min(each, total - used - frame));
+        const body = raw.length > room
+          ? `${raw.slice(0, room)}\n…（以降 ${raw.length - room} 文字は省略。窓に収まらないので切りました）`
+          : raw;
         parts.push(`--- 添付: ${item.name}${how} ---\n${body}\n--- ここまで ---`);
       } else if (item.kind === 'image') {
         parts.push(opts.canSeeImages
@@ -172,6 +193,10 @@ export class Attachments {
           + `置き場所: ${item.path}`,
         );
       }
+      used = parts.join('\n\n').length;
+    }
+    if (leftOut > 0) {
+      parts.push(`--- 添付 ${leftOut} 件は、窓に収まらないので入れていません ---`);
     }
     return parts.join('\n\n');
   }

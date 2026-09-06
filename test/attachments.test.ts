@@ -5,7 +5,8 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { Attachments, detectKind, safeName, MAX_BYTES } from '../src/ui/attachments.ts';
+import { Attachments, detectKind, safeName, MAX_BYTES, MAX_INLINE_CHARS } from '../src/ui/attachments.ts';
+import { mentionBudget } from '../src/agent/mention.ts';
 
 const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 
@@ -187,5 +188,61 @@ describe('添付の名前', () => {
     assert.equal(box.list().length, 2);
     assert.equal(box.get(first.id)?.name, 'one.txt');
     assert.equal(box.get(second.id)?.name, 'two.txt');
+  });
+});
+
+describe('窓に合わせて切る', () => {
+  const big = 'あ'.repeat(60_000);
+  /** 窓 4096（手元で動く小さいモデルの並び）での取り分。 */
+  const narrow = mentionBudget(4096);
+  const wide = mentionBudget(16852);
+
+  /**
+   * 差し込む中身は固定の 40,000 文字までで、**窓を見ていなかった**。
+   * 窓 4096 の相手に 40,052 文字を渡していた（実測。日本語は概ね
+   * 1文字1トークンなので、窓のおよそ 10 倍）。5 件なら 200,268 文字で 49 倍。
+   * 添付は依頼の一部なので、**刈る側は落とせない**。
+   */
+  test('**窓が狭ければ、添付も短くなる**', async () => {
+    const box = new Attachments(await tempDir('aas-att-win-'));
+    const item = await box.add('log.txt', Buffer.from(big, 'utf8'));
+
+    const small = await box.describe([item.id], { chars: narrow });
+    const large = await box.describe([item.id], { chars: wide });
+
+    assert.ok(small.length < narrow.total * 1.2,
+      `窓 4096 に収まっていない: ${small.length} 文字（取り分 ${narrow.total}）`);
+    assert.ok(large.length > small.length * 2,
+      `窓が広いのに増えていない: ${small.length} → ${large.length}`);
+    assert.ok(large.length < wide.total * 1.2,
+      `窓 16852 に収まっていない: ${large.length} 文字（取り分 ${wide.total}）`);
+  });
+
+  test('**何件付けても、合計が取り分を大きく超えない**', async () => {
+    const box = new Attachments(await tempDir('aas-att-many-'));
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      ids.push((await box.add(`log${i}.txt`, Buffer.from(big, 'utf8'))).id);
+    }
+    const text = await box.describe(ids, { chars: narrow });
+    assert.ok(text.length < narrow.total * 1.2,
+      `件数ぶん膨らんでいる: ${text.length} 文字（取り分 ${narrow.total}）`);
+  });
+
+  test('入らなかった添付を、黙って落とさない', async () => {
+    const box = new Attachments(await tempDir('aas-att-left-'));
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      ids.push((await box.add(`log${i}.txt`, Buffer.from(big, 'utf8'))).id);
+    }
+    const text = await box.describe(ids, { chars: narrow });
+    assert.match(text, /件は、窓に収まらないので入れていません/);
+  });
+
+  test('窓を渡さなければ、これまでどおり（受け皿）', async () => {
+    const box = new Attachments(await tempDir('aas-att-old-'));
+    const item = await box.add('log.txt', Buffer.from(big, 'utf8'));
+    const text = await box.describe([item.id]);
+    assert.ok(text.length > MAX_INLINE_CHARS, `受け皿まで縮んでいる: ${text.length}`);
   });
 });

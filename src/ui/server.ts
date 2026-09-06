@@ -43,7 +43,7 @@ import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout } from './layou
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
 import { collectState } from './state.ts';
 import { Attachments, MAX_BYTES } from './attachments.ts';
-import { expandMentions } from '../agent/mention.ts';
+import { expandMentions, mentionBudget } from '../agent/mention.ts';
 import { PreviewServer } from './preview.ts';
 import { configPath, type AasConfig } from '../config.ts';
 import { TaskRunner } from './tasks.ts';
@@ -628,17 +628,7 @@ export class UiServer {
 
         // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
         // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
-        const extra = attached.length > 0 ? await this.#attachments.describe(attached) : '';
-        // 指名（`@道`）は、送る側で開いて中身ごと渡す。
-        // 名前だけ渡すと、開かずに書き始めることがある。
-        // **上限は窓から決める。**固定の文字数だと、狭い窓では指名だけで溢れる。
-        const named = await expandMentions(text, this.#workRoot(), {
-          contextTokens: session.contextTokens,
-        }).catch(() => ({ text, reads: [] }));
-        for (const r of named.reads) {
-          if (!r.ok) this.broadcast({ type: 'log', level: 'warn', text: `指名を読めません ${r.path}: ${r.body}` });
-        }
-        const full = extra ? `${extra}\n\n${named.text}` : named.text;
+        const full = await this.#compose(session, text, attached);
 
         // 受け取ったことだけ先に返し、続きは出来事として流す。
         send(res, 202, { accepted: true });
@@ -1821,6 +1811,35 @@ export class UiServer {
   }
 
   /**
+   * 送るものを組み立てる。添付を前に、指名を開いた依頼を後ろに。
+   *
+   * **上限は窓から決める。**固定の文字数だと、狭い窓では添付だけで溢れる
+   * （窓 4096 の相手に 40,052 文字を渡していた。5 件なら 200,268 文字で 49 倍）。
+   * 添付も指名も依頼の一部で、**刈る側は落とせない**。
+   *
+   * 取り分は一つで、添付が使った分を指名から引く。別々に取ると、
+   * 合計を誰も見ていないことになる。
+   *
+   * ここに寄せているのは、**同じ組み立てが二か所にあった**ため。
+   * 窓から決める形に直したとき、送り口だけ直して順番待ちの方が
+   * 取り残されていた。
+   */
+  async #compose(session: Session, text: string, attached: string[]): Promise<string> {
+    const room = mentionBudget(session.contextTokens);
+    const extra = attached.length > 0
+      ? await this.#attachments.describe(attached, { chars: room }).catch(() => '')
+      : '';
+    const named = await expandMentions(text, this.#workRoot(), {
+      contextTokens: session.contextTokens,
+      totalBytes: Math.max(400, room.total - extra.length),
+    }).catch(() => ({ text, reads: [] }));
+    for (const r of named.reads) {
+      if (!r.ok) this.broadcast({ type: 'log', level: 'warn', text: `指名を読めません ${r.path}: ${r.body}` });
+    }
+    return extra ? `${extra}\n\n${named.text}` : named.text;
+  }
+
+  /**
    * 順番待ちを、前から1つ流す。
    *
    * **一度に1つだけ。**残りは、その仕事が終わったあとの `#drive` が続ける。
@@ -1830,13 +1849,7 @@ export class UiServer {
     const next = this.#queue.shift();
     this.broadcast({ type: 'queue', waiting: this.#queue.length });
     if (!next) return;
-    const extra = next.attached.length > 0
-      ? await this.#attachments.describe(next.attached).catch(() => '')
-      : '';
-    const named = await expandMentions(next.text, this.#workRoot(), {
-      contextTokens: session.contextTokens,
-    }).catch(() => ({ text: next.text, reads: [] }));
-    const full = extra ? `${extra}\n\n${named.text}` : named.text;
+    const full = await this.#compose(session, next.text, next.attached);
     this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
     void this.#drive(session, full);
   }
