@@ -167,6 +167,19 @@ export class ProjectRules {
 
   /** いま効いている決まりを、窓に収まる形で。 */
   async block(budget: number, now = Date.now(), count?: Count): Promise<string> {
-    return rulesBlock(fitRules(await this.all(now), budget, count));
+    const c = count ?? estimateTokens;
+    const rules = await this.all(now);
+    if (rules.length === 0 || budget <= 0) return '';
+    /*
+     * **囲みの分も窓を食う。**見出し・区切り・締めの二文で 100 前後ある。
+     * 中身だけ数えていたので、132 と渡されて 237 返していた（実測）。
+     * 渡した側は残りが在ると思って次を組むので、**後ろに置いたものが
+     * 丸ごと落ちる**（作業場の地図が、どの窓でも 0 になった）。
+     */
+    const frame = c(rulesBlock([{ ...rules[0]!, text: '' }]));
+    const made = rulesBlock(fitRules(rules, Math.max(0, budget - frame), c));
+    // 組み上げてから、もう一度測る。超えていたら載せない
+    // （途中で切れた決まりは、書いていないより悪いことがある）。
+    return c(made) <= budget ? made : '';
   }
 }

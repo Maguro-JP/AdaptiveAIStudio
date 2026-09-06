@@ -59,6 +59,8 @@ import { snapshotTests } from '../agent/test-integrity.ts';
 import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
 import { UndoStore } from './undo.ts';
+import { rankedEntries, renderMap, seedFrom } from '../agent/repo-map.ts';
+import { indexStore } from '../agent/tools/find.ts';
 import type { Harness } from '../harness/harness.ts';
 import { inspectGit } from '../agent/git.ts';
 import { diffStat } from '../agent/diff.ts';
@@ -1409,7 +1411,34 @@ export class Session {
      * `AGENTS.md` や `CLAUDE.md` を置いてある場所は多い。置いてあるなら、
      * それが決まりなので読む。残った分だけ載せる。
      */
-    const rules = await this.#projectRules.block(left, Date.now(), count);
+    /*
+     * **残りを、置き場の決まりと地図で分ける。**
+     *
+     * 先に来たものから満たすと、後ろは必ず空になる。実際、決まりに全部
+     * 渡していたので、地図の取り分は窓 4096 でも 16852 でも 0 だった（実測）。
+     * 「窓に合わせて」いても、**順に取れば後ろには何も残らない**。
+     * これは前に何度も直したのと同じ形。
+     *
+     * 決まりは利用者が書いたものなので先に取るが、取り切らせない。
+     * 地図は、探し回る往復を丸ごと減らす。1000 字の地図が、
+     * 見当違いのファイルを三枚開くより安い。
+     */
+    const forRules = Math.floor(left * 0.6);
+    const rules = await this.#projectRules.block(forRules, Date.now(), count);
+    left = Math.max(0, left - size(rules));
+
+    /*
+     * **作業場の地図。どこに何が在るかを、先に渡す。**
+     *
+     * これが無いと、モデルは何も知らないところから始める。`list_files` で
+     * 歩き、`search_text` で総当たりし、見当違いのファイルを何枚も開く。
+     * **探すところで窓を使い切って、直すところまで辿り着かない。**
+     * 手元の小さいモデルでは、ここが効く。
+     *
+     * 何を載せるかは、いま頼まれていることで変える（`seedFrom`）。
+     * 残った分だけ。入らなければ載せない。
+     */
+    const map = await this.#repoMap(left, count);
 
     /*
      * **組み上げてから、もう一度測る。**
@@ -1422,13 +1451,39 @@ export class Session {
      * （途中で切れた決まりは、書いていないより悪いことがある）。
      * 決まり本体と、学びの最後の一件は落とさない。
      */
-    const parts = [base, brief, rules, never];
-    const drop = [2, 1]; // 置き場の決まり → 作業場の様子 の順に落とす
+    const parts = [base, brief, rules, map, never];
+    // 地図 → 置き場の決まり → 作業場の様子 の順に落とす。
+    const drop = [3, 2, 1];
     for (const at of drop) {
       if (size(parts.filter(Boolean).join('\n\n')) <= budget) break;
       parts[at] = '';
     }
     return parts.filter(Boolean).join('\n\n');
+  }
+
+  /**
+   * 作業場の地図を、渡せる形で作る。
+   *
+   * 索引は先読みが持っているものを使う（**ここで組み直さない**。
+   * 4000 ファイルで数秒かかる）。まだ無いなら、地図は出さない。
+   * 出せないことを黙るのではなく、出せるようになってから出す
+   * （最初の一往復だけ地図が無い。二回目からは在る）。
+   */
+  async #repoMap(left: number, count?: (t: string) => number): Promise<string> {
+    if (left <= 0) return '';
+    try {
+      // 索引は `find_code` と同じものを使う（二つ持つと、同じ木を二度歩く）。
+      // 覚えているものが在れば、それをそのまま使う。無ければ組む
+      // （このあとの `find_code` もそれを使うので、払いは一度きり）。
+      const index = await indexStore.fresh(this.root);
+      if (index.files.length === 0) return '';
+      const seed = seedFrom(index, this.#instruction, this.#history
+        .flatMap((m) => (typeof m.content === 'string' ? m.content.match(/[\w./-]+\.[a-z]{1,4}/g) ?? [] : [])));
+      const entries = rankedEntries(index, seed);
+      // トークンではなく文字で切る（切り出しが文字単位のため）。**多めに数える。**
+      const chars = count ? left : left * 2;
+      return renderMap(entries, { chars }, count);
+    } catch { return ''; }
   }
 
   get instruction(): string { return this.#instruction; }

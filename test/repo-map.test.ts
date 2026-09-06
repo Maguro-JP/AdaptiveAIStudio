@@ -1,0 +1,133 @@
+/**
+ * 作業場の地図。
+ *
+ * **どこに何が在るかを先に渡す。**これが無いと、モデルは総当たりで探し、
+ * 探すところで窓を使い切って、直すところまで辿り着かない。
+ *
+ * ここで見るのは「上位に何が来るか」。並べ方が壊れると、
+ * **地図が在るのに役に立たない**という、いちばん気づきにくい壊れ方になる。
+ */
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tempDir } from './tmp.ts';
+import { buildIndex, refsIn, importedFromPackages, isExportedDecl } from '../src/agent/code-index.ts';
+import { rankedEntries, seedFrom, renderMap, graphOf, pageRank } from '../src/agent/repo-map.ts';
+
+/** 背骨（core）が一つ在り、そこを何枚もが呼んでいる作業場。 */
+async function project(): Promise<string> {
+  const root = await tempDir('aas-map-');
+  await mkdir(join(root, 'src'), { recursive: true });
+  await writeFile(join(root, 'src', 'core.ts'),
+    'export function heartbeat(): number { return 1; }\n'
+    + 'export class Engine { start() { return heartbeat(); } }\n'
+    + 'function hidden() { return 2; }\n', 'utf8');
+  await writeFile(join(root, 'src', 'leaf.ts'),
+    'export function onlyHere(): number { return 3; }\n', 'utf8');
+  for (const n of ['a', 'b', 'c', 'd']) {
+    await writeFile(join(root, 'src', `${n}.ts`),
+      `import { heartbeat, Engine } from './core.ts';\n`
+      + `export function use${n.toUpperCase()}() { return heartbeat() + new Engine().start(); }\n`, 'utf8');
+  }
+  return root;
+}
+
+describe('呼ばれている数で並べる', () => {
+  test('**何枚もから呼ばれているものが、上に来る**', async () => {
+    const index = await buildIndex(await project());
+    const top = rankedEntries(index).slice(0, 3).map((e) => e.name);
+    assert.ok(top.includes('heartbeat') || top.includes('Engine'),
+      `背骨が上に来ていない: ${top.join(', ')}`);
+    const leafAt = rankedEntries(index).findIndex((e) => e.name === 'onlyHere');
+    const coreAt = rankedEntries(index).findIndex((e) => e.name === 'heartbeat');
+    assert.ok(coreAt < leafAt, `一度も呼ばれない方が上に来ている: ${coreAt} vs ${leafAt}`);
+  });
+
+  test('外に出していない名前は、地図に載せない', async () => {
+    const index = await buildIndex(await project());
+    const names = rankedEntries(index).map((e) => e.name);
+    assert.ok(!names.includes('hidden'), '中だけの関数が載っている');
+  });
+
+  test('**`.` の後ろは、呼び出しとして数えない**', () => {
+    // `arr.push(x)` の push は、誰かが定義した push を呼んでいるのではない。
+    // 数えていたときは、地図の上位が push / path / split で埋まった。
+    assert.ok(!refsIn('const a = []; a.push(value);').includes('push'));
+    assert.ok(refsIn('heartbeat();').includes('heartbeat'));
+  });
+
+  test('**外から入れた名前は、この置き場の誰かを指していない**', () => {
+    const got = importedFromPackages(
+      "import { describe, test } from 'node:test';\nimport { local } from './near.ts';\n",
+    );
+    assert.ok(got.has('describe'));
+    assert.ok(got.has('test'));
+    assert.ok(!got.has('local'), '相対の道から入れたものまで外扱いしている');
+    assert.ok(!refsIn("import { describe } from 'node:test';\ndescribe('x');").includes('describe'));
+  });
+
+  test('外に出しているかを見分ける', () => {
+    assert.equal(isExportedDecl('export function a() {'), true);
+    assert.equal(isExportedDecl('function a() {'), false);
+    assert.equal(isExportedDecl('  #private() {'), false);
+    assert.equal(isExportedDecl('pub fn go() {'), true);
+    assert.equal(isExportedDecl('func Exported() {'), true);
+    assert.equal(isExportedDecl('func hidden() {'), false);
+  });
+});
+
+describe('いま頼まれていることで、地図が変わる', () => {
+  test('**名前を出せば、その周りが上に来る**', async () => {
+    const index = await buildIndex(await project());
+    const plain = rankedEntries(index).findIndex((e) => e.name === 'onlyHere');
+    const asked = rankedEntries(index, seedFrom(index, 'onlyHere を直したい'))
+      .findIndex((e) => e.name === 'onlyHere');
+    assert.ok(asked < plain, `頼んだのに上がっていない: ${plain} → ${asked}`);
+  });
+
+  test('起点が無ければ、素の並びに戻る（落ちない）', async () => {
+    const index = await buildIndex(await project());
+    const seed = seedFrom(index, 'まったく関係のない話');
+    assert.deepEqual(
+      rankedEntries(index, seed).slice(0, 3).map((e) => e.name),
+      rankedEntries(index).slice(0, 3).map((e) => e.name),
+    );
+  });
+});
+
+describe('点の配り方', () => {
+  test('**合計が 1 から落ちない（行き止まりの分を捨てない）**', async () => {
+    const index = await buildIndex(await project());
+    const rank = pageRank(graphOf(index));
+    const sum = rank.reduce((a, b) => a + b, 0);
+    assert.ok(Math.abs(sum - 1) < 0.01, `合計が 1 から離れている: ${sum}`);
+  });
+
+  test('ファイルが無ければ、空を返す（落ちない）', () => {
+    const empty = { root: '/x', builtAt: '', files: [], skipped: 0 };
+    assert.deepEqual(pageRank(graphOf(empty)), []);
+    assert.deepEqual(rankedEntries(empty), []);
+  });
+});
+
+describe('渡せる形にする', () => {
+  test('**入り切らない分は、載せずに「載せていない」と言う**', async () => {
+    const index = await buildIndex(await project());
+    const entries = rankedEntries(index);
+    const small = renderMap(entries, { chars: 120 });
+    assert.ok(small.length <= 120 + 80, `取り分を大きく超えている: ${small.length}`);
+    assert.match(small, /載せていません/);
+  });
+
+  test('全部入るなら、但し書きは付けない', async () => {
+    const index = await buildIndex(await project());
+    const all = renderMap(rankedEntries(index), { chars: 100_000 });
+    assert.doesNotMatch(all, /載せていません/);
+    assert.match(all, /heartbeat/);
+  });
+
+  test('何も無ければ、空（見出しだけを渡さない）', () => {
+    assert.equal(renderMap([], { chars: 1000 }), '');
+  });
+});

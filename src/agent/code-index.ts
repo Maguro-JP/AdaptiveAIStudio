@@ -71,12 +71,50 @@ const NOTE_CHARS = 2400;
  */
 const PROSE = new Set(['.md', '.txt', '.json', '.yml', '.yaml', '.toml']);
 
-export interface Symbol { name: string; line: number }
+export interface Symbol {
+  name: string;
+  line: number;
+  /**
+   * **地図に載せてよい名前か。**
+   *
+   * 関数・クラス・型・メソッド、および export した定数。
+   * 関数の中の `const buf = ...` のような一時の名前は落とす。
+   * 探すとき（`search_text` の代わり）には一時の名前も要るので、索引からは
+   * 消さず、印だけ付ける。実際に印を付けずに地図を作ったら、
+   * **上位が `push` `buf` `out` で埋まった。**
+   */
+  top?: boolean;
+  /**
+   * **外から使える名前か。**
+   *
+   * 他のファイルから参照されうるのは、これだけ。ファイルの中だけの
+   * 補助関数（`function describe(e)` のような）まで繋ぐと、
+   * `node:fs` から入れた `stat` や、試験の `describe` が、たまたま同じ名前の
+   * 私的な関数への参照として数えられる。**上位がその手の名前で埋まった**
+   * ので、繋ぐのは外に出しているものだけにした。
+   */
+  exported?: boolean;
+}
+
+/**
+ * ファイルの中で**使われている**名前。
+ *
+ * 定義（`symbols`）だけでは、どのファイルが大事かを決められない。
+ * 「どこから呼ばれているか」が要る。**呼ばれている数が多いものほど、
+ * そのコードの背骨**で、先に見せる価値がある。
+ *
+ * 数え上げではなく**在るかどうか**にしてある。同じ行を百回書いた
+ * ファイルが、他のファイル百個から呼ばれているのと同じ重みになるのは
+ * おかしい。
+ */
+export type Refs = string[];
 export interface FileEntry {
   path: string;
   size: number;
   mtimeMs: number;
   symbols: Symbol[];
+  /** この中で使われている名前（定義ではなく、呼んでいる側）。 */
+  refs?: Refs;
   /**
    * ファイルの頭。**そのファイルが何をするものか**が、たいていここに在る。
    *
@@ -147,6 +185,40 @@ export function digestOf(text: string): string {
   return `${head} ${notes.join(' ')}`.replace(/\s+/g, ' ').slice(0, HEAD_CHARS + NOTE_CHARS);
 }
 
+/**
+ * その行が、**地図に載せる値打ちのある定義**か。
+ *
+ * 関数・クラス・型・メソッドの宣言、または export した定数。
+ * 中で使うだけの `const` は落とす（そこに用のある人はいない）。
+ */
+export function isTopDecl(line: string): boolean {
+  if (/^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s/.test(line)) return true;
+  if (/^\s*(?:export\s+)?(?:abstract\s+)?class\s/.test(line)) return true;
+  if (/^\s*(?:export\s+)?(?:interface|type|enum)\s/.test(line)) return true;
+  if (/^\s*(?:async\s+)?def\s|^\s*class\s/.test(line)) return true;
+  if (/^func\s|^type\s/.test(line)) return true;
+  if (/^\s*(?:pub\s+)?(?:async\s+)?fn\s|^\s*(?:pub\s+)?(?:struct|enum|trait)\s/.test(line)) return true;
+  // クラスの中のメソッド。深く入り込んだものは、たいてい中の細工。
+  if (/^\s{2,4}(?:async\s+)?(?:static\s+)?[#a-zA-Z_$][\w$]*\s*\([^)]*\)\s*[:{]/.test(line)) return true;
+  // export した定数は、外から使うために置いてある。
+  if (/^export\s+(?:const|let|var)\s/.test(line)) return true;
+  return false;
+}
+
+/**
+ * その行が、**外から使える定義**か。
+ *
+ * 他のファイルから参照されうるのはこれだけ。中だけの補助は、名前が
+ * ぶつかっても偶然でしかない。
+ */
+export function isExportedDecl(line: string): boolean {
+  if (/^\s*export\s/.test(line)) return true;                       // TS / JS
+  if (/^\s*(?:async\s+)?def\s|^class\s/.test(line)) return true;    // Python（頭に在れば外から入れられる）
+  if (/^func\s+(?:\([^)]*\)\s*)?[A-Z]|^type\s+[A-Z]/.test(line)) return true; // Go（大文字が公開）
+  if (/^\s*pub\s/.test(line)) return true;                          // Rust
+  return false;
+}
+
 /** 一行から名前を拾う。 */
 export function symbolsIn(line: string): string[] {
   const out: string[] = [];
@@ -158,6 +230,92 @@ export function symbolsIn(line: string): string[] {
   }
   return out;
 }
+
+/**
+ * ファイルの中で使われている名前を拾う。
+ *
+ * **注釈と文字列は外す。**日本語の注釈が多い置き場なので、そのままだと
+ * 語ではないものまで名前として拾う。完全な構文解析はしない（tree-sitter を
+ * 入れると実行時の依存が増える。ここは依存ゼロで通す）。
+ * 取りこぼしはあるが、**どこから呼ばれているか**の傾きが分かればよい。
+ *
+ * 同じ名前を何度書いても一度と数える。同じ行を百回書いたファイルが、
+ * 百個のファイルから呼ばれているのと同じ重みになるのはおかしい。
+ *
+ * **`.` の後ろは拾わない。**`arr.push(x)` の `push` は、どこかのファイルが
+ * 定義した `push` を呼んでいるのではない。拾っていたときは、地図の上位が
+ * `push` `path` `split` で埋まった（実測）。誰の物か分からない名前は、
+ * 繋がりの手がかりにならない。
+ */
+export function refsIn(text: string): Refs {
+  const stripped = text
+    // 行の注釈と塊の注釈。文字列も落とす（中の語は名前ではない）。
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+    .replace(/^\s*#[^\n]*/gm, ' ')
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, ' ')
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, ' ')
+    .replace(/`(?:[^`\\]|\\.)*`/g, ' ');
+  const outside = importedFromPackages(text);
+  const seen = new Set<string>();
+  for (const m of stripped.matchAll(/(^|[^\w$.])([A-Za-z_$][\w$]*)/g)) {
+    const name = m[2]!;
+    // 一文字は雑音。予約語も外す。
+    if (name.length < 3 || RESERVED.has(name) || COMMON.has(name)) continue;
+    // **外から入れた名前は、この置き場の誰かを指してはいない。**
+    if (outside.has(name)) continue;
+    seen.add(name);
+    if (seen.size >= 800) break;
+  }
+  return [...seen];
+}
+
+/**
+ * 外（package や node: の中）から入れている名前。
+ *
+ * `import { describe } from 'node:test'` と書いたファイルの `describe` は、
+ * この置き場の誰かの `describe` ではない。除かずに数えていたとき、
+ * **地図のいちばん上が `cleanup.ts` の私的な `describe` になった**（実測）。
+ * 相対の道（`./` `../`）から入れたものは、この置き場の中なので残す。
+ */
+export function importedFromPackages(text: string): Set<string> {
+  const out = new Set<string>();
+  const add = (names: string | undefined): void => {
+    for (const part of (names ?? '').split(',')) {
+      const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+      if (name && /^[A-Za-z_$][\w$]*$/.test(name)) out.add(name);
+    }
+  };
+  for (const m of text.matchAll(/import\s+([^;'"]*?)\s*from\s*['"]([^'"]+)['"]/g)) {
+    const spec = m[2] ?? '';
+    if (spec.startsWith('.') || spec.startsWith('/')) continue;
+    const clause = m[1] ?? '';
+    add(/\{([^}]*)\}/.exec(clause)?.[1]);
+    // `import x from 'pkg'` / `import * as x from 'pkg'`
+    const bare = clause.replace(/\{[^}]*\}/g, '').replace(/\*\s*as\s*/g, '').trim();
+    add(bare);
+  }
+  // Python の `from x import a, b`（相対は `.` で始まる）
+  for (const m of text.matchAll(/^\s*from\s+([\w.]+)\s+import\s+([^\n#]+)/gm)) {
+    if ((m[1] ?? '').startsWith('.')) continue;
+    add(m[2]);
+  }
+  return out;
+}
+
+/**
+ * どこにでも在る語。**在っても何も分からない**ので、繋がりとして数えない。
+ * 拾うと、すべてのファイルがすべてのファイルと繋がってしまう。
+ */
+const COMMON = new Set([
+  'true', 'false', 'null', 'undefined', 'this', 'self', 'super', 'void',
+  'import', 'export', 'from', 'default', 'async', 'await', 'yield',
+  'string', 'number', 'boolean', 'object', 'any', 'unknown', 'never',
+  'public', 'private', 'protected', 'static', 'readonly', 'abstract',
+  'interface', 'type', 'enum', 'struct', 'trait', 'impl', 'fn', 'def',
+  'throw', 'finally', 'break', 'continue', 'case', 'delete', 'instanceof',
+  'and', 'not', 'the', 'for', 'with', 'pub', 'use', 'mod', 'package',
+]);
 
 /** `  async foo(a, b) {` から `foo` を取る。 */
 function nameOfMethod(line: string): string | undefined {
@@ -205,10 +363,19 @@ export async function buildIndex(root: string, max = MAX_FILES): Promise<CodeInd
       const symbols: Symbol[] = [];
       text.split('\n').forEach((line, i) => {
         if (symbols.length >= 200) return;
-        for (const name of symbolsIn(line)) symbols.push({ name, line: i + 1 });
+        const top = isTopDecl(line);
+        const exported = top && isExportedDecl(line);
+        for (const name of symbolsIn(line)) {
+          symbols.push({
+            name, line: i + 1,
+            ...(top ? { top: true } : {}),
+            ...(exported ? { exported: true } : {}),
+          });
+        }
       });
       files.push({
         path: rel, size: info.size, mtimeMs: info.mtimeMs, symbols,
+        refs: refsIn(text),
         head: digestOf(text),
       });
     }

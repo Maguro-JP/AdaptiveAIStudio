@@ -119,3 +119,29 @@ describe('置いただけで、モデルに届く', () => {
     } finally { await fake.close(); }
   });
 });
+
+describe('渡された取り分を、超えない', () => {
+  /**
+   * 見出し・区切り・締めの二文で 100 前後ある。中身だけ数えていたので、
+   * **132 と渡されて 237 返していた**（実測）。渡した側は残りが在ると思って
+   * 次を組むので、後ろに置いたもの（作業場の地図）が、どの窓でも丸ごと
+   * 落ちていた。**超えたことは誰にも見えない**のが、この形のたちの悪さ。
+   */
+  test('**囲みを入れても、渡された分に収まる**', async () => {
+    const root = await tempDir('aas-rules-budget-');
+    await writeFile(join(root, 'AGENTS.md'), `${'この置き場の決まり。\n'.repeat(200)}`, 'utf8');
+    const rules = new ProjectRules(root);
+
+    for (const budget of [40, 132, 400, 1200]) {
+      const block = await rules.block(budget);
+      assert.ok(estimateTokens(block) <= budget,
+        `取り分 ${budget} に対して ${estimateTokens(block)} 返している`);
+    }
+  });
+
+  test('取り分が 0 なら、何も返さない', async () => {
+    const root = await tempDir('aas-rules-zero-');
+    await writeFile(join(root, 'AGENTS.md'), '決まり\n', 'utf8');
+    assert.equal(await new ProjectRules(root).block(0), '');
+  });
+});

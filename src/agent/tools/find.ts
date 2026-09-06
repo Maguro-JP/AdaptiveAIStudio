@@ -14,8 +14,14 @@ import { IndexStore, type CodeIndex } from '../code-index.ts';
 import { searchIndex } from '../code-index.ts';
 import { type Tool, ok, fail, requireString } from './types.ts';
 
-/** 索引の置き場。作業場ごとに持つ。 */
-const store = new IndexStore(join(stateDir(), 'index'));
+/**
+ * 索引の置き場。作業場ごとに持つ。
+ *
+ * **一つだけ持つ。**地図（`repo-map.ts`）も同じものを見る。二つ持つと、
+ * 同じ木を二度歩いて、同じものを二度覚えることになる。
+ */
+export const indexStore = new IndexStore(join(stateDir(), 'index'));
+const store = indexStore;
 
 export const findCodeTool: Tool = {
   schema: {
