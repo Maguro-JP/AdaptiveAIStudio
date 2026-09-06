@@ -152,3 +152,35 @@ describe('動かないものを先、変わるものを後ろ', () => {
     assert.ok(neverAt < mapAt, `学びより先に地図が来ている: ${neverAt} vs ${mapAt}`);
   });
 });
+
+describe('狭い窓では、後から足したものを先に捨てる', () => {
+  /**
+   * 地図に取り分を作るために、残りを 6:4 で分けた。そのとき
+   * **窓 4096 で、利用者が書いた決まりが丸ごと落ちた**（実測で ○ → ×）。
+   *
+   * 利用者が `AGENTS.md` や `CLAUDE.md` に書いたものは、こちらが後から足した
+   * 地図より重い。しかも囲みだけで 100 前後あるので、半端な取り分を渡すと
+   * 「何も載らない」に倒れる。**狭いときに捨てるのは、後から足した方。**
+   */
+  test('**窓が狭くても、置き場の決まりは載る**', async () => {
+    const root = await tempDir('aas-narrow-rules-');
+    await writeFile(join(root, 'AGENTS.md'),
+      'この置き場の決まり。\n- 日本語で書く\n- 検査を消さない\n'.repeat(6), 'utf8');
+    await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'src', 'core.ts'), 'export function heartbeat() { return 1; }\n', 'utf8');
+
+    const prompt = await systemAt(4096, root);
+    assert.match(prompt, /この置き場の決まり/, `決まりが落ちている:\n${prompt.slice(0, 400)}`);
+  });
+
+  test('窓が広ければ、決まりと地図の両方が載る（対）', async () => {
+    const root = await tempDir('aas-wide-both-');
+    await writeFile(join(root, 'AGENTS.md'), 'この置き場の決まり。\n- 日本語で書く\n', 'utf8');
+    await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'src', 'core.ts'), 'export function heartbeat() { return 1; }\n', 'utf8');
+
+    const prompt = await systemAt(32_000, root);
+    assert.match(prompt, /この置き場の決まり/);
+    assert.match(prompt, /作業場の地図/);
+  });
+});

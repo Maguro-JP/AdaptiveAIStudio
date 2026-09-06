@@ -458,3 +458,44 @@ describe('当たらなかったときに、いちばん近い場所を見せる'
     assert.equal(nearestTo(FILE, 'const sum = a + b;\nzzz1\nzzz2\nzzz3'), undefined);
   });
 });
+
+describe('当て方を足しても、正しい渡し方を壊さない', () => {
+  /**
+   * 当て方を二つ足した（字下げを見ない／両端で当てる）。**足した性質だけを
+   * 見て終わると、元から在った性質を壊す。**
+   *
+   * 元から在ったのは「find がそのまま在るなら、素直に置き換えたのと同じ」。
+   * 入力はこちらで選ばず、種を固定した無作為でぶつける。
+   */
+  test('**そのまま在る find は、素直な置き換えと同じ結果になる**', () => {
+    let seed = 20260906;
+    const rnd = (): number => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    const pick = <T,>(xs: T[]): T => xs[Math.floor(rnd() * xs.length)]!;
+    const LINES = [
+      'export function add(a, b) {', '  const sum = a + b;', '  return sum;', '}', '',
+      'class Thing {', '  run() {', '    return 1;', '  }', '}',
+      '// 注釈', '  // 中の注釈', 'const x = 1;', '\tconst y = 2;', '  ',
+    ];
+
+    let checked = 0;
+    for (let i = 0; i < 1500; i += 1) {
+      const n = 3 + Math.floor(rnd() * 12);
+      const lines = Array.from({ length: n }, () => pick(LINES));
+      const file = lines.join('\n');
+      const from = Math.floor(rnd() * n);
+      const len = 1 + Math.floor(rnd() * Math.min(4, n - from));
+      const find = lines.slice(from, from + len).join('\n');
+      if (find.trim().length === 0) continue;
+      // 一意に在るものだけを見る（複数当たるのは、そもそも断る仕様）。
+      if (file.indexOf(find) !== file.lastIndexOf(find)) continue;
+
+      const got = applyEdit(file, find, 'REPLACED', false);
+      assert.equal(got.hits, 1, `そのまま在るのに当たらない: ${JSON.stringify(find)}`);
+      assert.equal(got.text, file.replace(find, 'REPLACED'),
+        `素直な置き換えと違う: ${JSON.stringify({ find, how: got.how })}`);
+      checked += 1;
+    }
+    // 数が少なすぎると「たまたま通った」になる。
+    assert.ok(checked > 500, `試した数が少なすぎる: ${checked}`);
+  });
+});
