@@ -161,6 +161,31 @@ describe('名前を出していないファイルも、地図に載せる', () =
     assert.match(map, /core\.test\.ts.*背骨を確かめる/, '道だけでは何のファイルか分からない');
   });
 
+  test('**起点が立っても、呼ばれていないファイルを消さない**', async () => {
+    const root = await project();
+    // どこからも呼ばれず、外へ出す名前も無い。記録・設定・画面がこの形。
+    await writeFile(join(root, 'src', 'notes.test.ts'),
+      '// 決めごとの控え。\nfunction memo() { return 1; }\n', 'utf8');
+    const index = await buildIndex(root);
+    // 起点は別の所（heartbeat）に立てる。**そこで消えてはいけない。**
+    const seeded = rankedEntries(index, seedFrom(index, 'heartbeat を直したい'));
+    assert.ok(seeded.some((e) => e.path.endsWith('notes.test.ts')),
+      '起点を立てた途端、呼ばれていないファイルが並びから丸ごと消えている');
+  });
+
+  test('置くのは末尾。点の付いたものより前に出さない（対）', async () => {
+    const root = await project();
+    await writeFile(join(root, 'src', 'notes.test.ts'),
+      '// 決めごとの控え。\nfunction memo() { return 1; }\n', 'utf8');
+    const index = await buildIndex(root);
+    const all = rankedEntries(index, seedFrom(index, 'heartbeat を直したい'));
+    const zero = all.findIndex((e) => e.score <= 0);
+    assert.ok(zero > 0, '点の付いたものが一つも無い（この試験が確かめられない）');
+    // ここから先に、点の付いたものが混ざっていない。
+    assert.ok(all.slice(zero).every((e) => e.score <= 0),
+      '点の付いていないものが、付いているものより前に出ている');
+  });
+
   test('名前が在るファイルは、いままでどおり名前で出す（対）', async () => {
     const index = await buildIndex(await project());
     const map = renderMap(rankedEntries(index), { chars: 100_000 });
