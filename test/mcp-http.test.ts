@@ -11,6 +11,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import { McpClient } from '../src/mcp/client.ts';
+import { until } from './until.ts';
 
 interface Seen { headers: Record<string, string | undefined>[]; deleted: boolean }
 
@@ -124,13 +125,16 @@ describe('遠くの相手に繋ぐ', () => {
 
   test('切るときは、相手の控えも落としてもらう', async () => {
     const s = await startServer();
-    const c = new McpClient('remote', { url: s.url });
-    await c.start();
-    c.stop();
-    assert.equal(c.running, false);
-    await new Promise((r) => setTimeout(r, 200));
-    assert.equal(s.seen.deleted, true);
-    await s.close();
+    try {
+      const c = new McpClient('remote', { url: s.url });
+      await c.start();
+      c.stop();
+      assert.equal(c.running, false);
+      // **決め打ちで待たない。**落ちるまで見る。
+      // 落ちなかったときも、必ず相手を閉じてから抜ける（開いたままだと
+      // 試験の走り自体が終わらなくなる）。
+      await until(() => s.seen.deleted, '相手の控えが落ちる', { timeoutMs: 10_000 });
+    } finally { await s.close(); }
   });
 
   test('断られたら、理由をそのまま持つ（黙って繋がらない、を作らない）', async () => {

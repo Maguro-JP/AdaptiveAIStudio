@@ -12,6 +12,7 @@ import { writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tempDir } from './tmp.ts';
 import { InProcRuntime } from '../src/runtime/inproc.ts';
+import { until } from './until.ts';
 
 const running: InProcRuntime[] = [];
 afterEach(async () => { for (const r of running.splice(0)) await r.shutdown(); });
@@ -101,8 +102,8 @@ describe('やめたら、止める', () => {
     await new Promise((r) => setTimeout(r, 40));
     stop.abort();
     await call.then((r) => r.text()).catch(() => '');
-    // 切ったことが生成まで届くのに、少し要る。
-    await new Promise((r) => setTimeout(r, 120));
+    // 切ったことが生成まで届くのに、少し要る。**決め打ちで待たない。**
+    await until(() => state.aborted >= 1, '切ったことが生成まで届く');
     assert.equal(state.aborted, 1, '切ったのに生成が回り続けている');
   });
 
