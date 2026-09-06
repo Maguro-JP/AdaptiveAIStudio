@@ -47,6 +47,8 @@ export class ProposalQueue {
   readonly #path?: string;
   #items: Proposal[] = [];
   #dropped = 0;
+  /** 配った番号の数。**減らさない。**刈っても後戻りしない。 */
+  #issued = 0;
   /**
    * 調べ終えた手がかりの指紋。
    * 提案にならなかった（＝問題なしだった）ものも覚えておく。
@@ -73,6 +75,12 @@ export class ProposalQueue {
       this.#items = [];
       this.#examined = new Set();
     }
+    // 読み込んだ後も、**既にある番号の続きから**配る。件数から決めていたので、
+    // 刈って抜けた番号をもう一度配っていた。
+    this.#issued = this.#items.reduce((max, x) => {
+      const n = /^p(\d+)$/.exec(x.id);
+      return n ? Math.max(max, Number(n[1])) : max;
+    }, 0);
   }
 
   markExamined(fingerprint: string): void {
@@ -115,13 +123,28 @@ export class ProposalQueue {
 
     const item: Proposal = {
       ...p,
-      id: `p${(this.#items.length + 1).toString().padStart(3, '0')}`,
+      id: this.#nextId(),
       status: 'open',
       createdAt: new Date().toISOString(),
     };
     this.#items.push(item);
     this.#prune();
     return item;
+  }
+
+  /**
+   * 次の番号。
+   *
+   * **件数から決めていたので、刈った後に同じ番号を配っていた**
+   * （200 件のうち 49 件が同じ名前。p201 が繰り返し出る）。
+   * 同じ番号があると、採用も却下も、狙った提案とは別のものに当たる。
+   */
+  #nextId(): string {
+    for (;;) {
+      this.#issued += 1;
+      const id = `p${this.#issued.toString().padStart(3, '0')}`;
+      if (!this.#items.some((x) => x.id === id)) return id;
+    }
   }
 
   /**

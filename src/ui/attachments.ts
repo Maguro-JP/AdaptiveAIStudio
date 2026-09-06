@@ -88,9 +88,13 @@ export function safeName(name: string): string {
 export class Attachments {
   readonly #dir: string;
   readonly #items = new Map<string, Attachment>();
+  readonly #id: () => string;
 
-  constructor(dir = join(stateDir(), 'attachments')) {
+  constructor(dir = join(stateDir(), 'attachments'), opts: { id?: () => string } = {}) {
     this.#dir = dir;
+    // 名前の作り手を差し替えられるようにしてあるのは、**ぶつかったときに
+    // どうなるかを検査で見るため**。ぶつからないことを祈る検査は書けない。
+    this.#id = opts.id ?? (() => randomUUID().slice(0, 8));
   }
 
   get dir(): string { return this.#dir; }
@@ -104,7 +108,13 @@ export class Attachments {
       );
     }
     await mkdir(this.#dir, { recursive: true });
-    const id = randomUUID().slice(0, 8);
+    // 8桁に切り詰めているので、ぶつかりうる。ぶつかったまま入れると、
+    // **先にあった添付が地図から消え、ファイルだけが残る**。空くまで引き直す。
+    let id = this.#id();
+    for (let tries = 0; this.#items.has(id); tries += 1) {
+      if (tries > 100) throw new Error('添付の名前が決まりません');
+      id = this.#id();
+    }
     const clean = safeName(name);
     const path = join(this.#dir, `${id}-${clean}`);
     await writeFile(path, data);

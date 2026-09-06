@@ -182,7 +182,14 @@ export class Memory {
         })
         // 1行壊れても記憶全体を失わない。JSONL にしているのはこのため。
         .filter((e): e is MemoryEntry => !!e && typeof e.id === 'string');
-      this.#seq = this.#entries.length;
+      // **件数ではなく、いちばん大きい番号から続ける。**
+      // 刈り込みで途中が抜けると（m1, m3 が残るなど）件数は 2 になり、
+      // 次に配る番号が m3 になって**既にあるものとぶつかる**。
+      // ぶつかると supersedes の繋ぎ先と、忘れる先が壊れる。
+      this.#seq = this.#entries.reduce((max, e) => {
+        const n = /^m(\d+)$/.exec(e.id);
+        return n ? Math.max(max, Number(n[1])) : max;
+      }, 0);
     } catch {
       this.#entries = [];
     }

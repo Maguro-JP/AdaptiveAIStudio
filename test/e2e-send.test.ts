@@ -362,7 +362,13 @@ describe('設定で決めた GGUF を読む', () => {
         body: JSON.stringify({ text: 'x' }),
       });
       assert.equal(r.status, 202, await r.text());
-      await new Promise((r2) => setTimeout(r2, 1500));
+      // **決め打ちで待たない。**1.5 秒で待っていたら、試験を全部まとめて
+      // 走らせたときだけ落ちた（機械が混んでいて間に合わない）。
+      // 走らせる場所で結果が変わる検査になっていたので、届くまで見る。
+      const until = Date.now() + 30_000;
+      while (Date.now() < until && loadedPaths.length === 0) {
+        await new Promise((r2) => setTimeout(r2, 25));
+      }
       assert.ok(loadedPaths.some((p) => p.endsWith('b.gguf')), `b を読んでいない: ${loadedPaths.join(',')}`);
       assert.ok(!loadedPaths.some((p) => p.endsWith('a.gguf')), `最初の一つを読んでしまった: ${loadedPaths.join(',')}`);
     } finally { await s3.stop(); }

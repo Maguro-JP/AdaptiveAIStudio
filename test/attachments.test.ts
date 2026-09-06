@@ -167,3 +167,25 @@ describe('CP932 のファイルを、読めないと言わない', () => {
     assert.doesNotMatch(await box.describe([item.id]), /CP932/);
   });
 });
+
+describe('添付の名前', () => {
+  /**
+   * 名前は UUID を8桁に切って作っている。切っている以上ぶつかりうる。
+   * ぶつかったまま入れると、**先にあった添付が地図から消え、
+   * ファイルだけが置き場所に残る**。乱数まかせでは検査にならないので、
+   * 名前の作り手を差し替えて、必ずぶつかる形で見る。
+   */
+  test('**名前がぶつかっても、先にあった添付を消さない**', async () => {
+    const ids = ['aaaaaaaa', 'aaaaaaaa', 'bbbbbbbb'];
+    let i = 0;
+    const box = new Attachments(await tempDir('aas-att-'), { id: () => ids[i++] ?? 'zzzzzzzz' });
+
+    const first = await box.add('one.txt', Buffer.from('ひとつ目', 'utf8'));
+    const second = await box.add('two.txt', Buffer.from('ふたつ目', 'utf8'));
+
+    assert.notEqual(first.id, second.id);
+    assert.equal(box.list().length, 2);
+    assert.equal(box.get(first.id)?.name, 'one.txt');
+    assert.equal(box.get(second.id)?.name, 'two.txt');
+  });
+});

@@ -167,3 +167,59 @@ describe('やり残しの名前は、ぶつからない', () => {
     }
   });
 });
+
+describe('提案の名前', () => {
+  const seed = (n: number) => ({
+    kind: 'cleanup' as const,
+    title: `思いつき ${n}`,
+    rationale: 'r',
+    evidence: [],
+    suggestedAction: 'a',
+    fingerprint: `f${n}`,
+  });
+
+  /**
+   * 番号を「件数 + 1」で配っていた。上限で刈ると件数が減るので、
+   * **一度配った番号をもう一度配る**。実測で 200 件のうち 49 件が同じ名前
+   * （p201 が繰り返し出る）。同じ名前があると、採用も却下も、
+   * 狙った提案とは別のものに当たる。
+   */
+  test('**刈った後も、同じ名前を配らない**', async () => {
+    const { ProposalQueue } = await import('../src/agent/proposals.ts');
+    const box = new ProposalQueue();
+    for (let i = 0; i < 300; i += 1) box.add(seed(i));
+    const ids = box.all().map((x) => x.id);
+    assert.equal(new Set(ids).size, ids.length, `同じ名前を配っている: ${ids.length - new Set(ids).size} 件`);
+  });
+
+  test('採用や却下が、別の提案に当たらない', async () => {
+    const { ProposalQueue } = await import('../src/agent/proposals.ts');
+    const box = new ProposalQueue();
+    for (let i = 0; i < 300; i += 1) box.add(seed(i));
+    const target = box.all()[box.all().length - 1]!;
+    box.setStatus(target.id, 'accepted');
+    const accepted = box.all().filter((x) => x.status === 'accepted');
+    assert.equal(accepted.length, 1, `一つ選んだのに ${accepted.length} 件が動いた`);
+    assert.equal(accepted[0]!.title, target.title);
+  });
+
+  test('読み込んだ後も、番号が続く', async () => {
+    const { ProposalQueue } = await import('../src/agent/proposals.ts');
+    const dir = await tempDir('aas-prop-id-');
+    const path = join(dir, 'proposals.json');
+    // 刈った後の姿。番号が飛んでいて、件数と最大の番号が食い違う。
+    await writeFile(path, JSON.stringify({
+      items: [
+        { ...seed(1), id: 'p001', status: 'open', createdAt: '2026-01-01T00:00:00.000Z' },
+        { ...seed(9), id: 'p009', status: 'open', createdAt: '2026-01-02T00:00:00.000Z' },
+      ],
+      examined: [],
+    }), 'utf8');
+
+    const box = new ProposalQueue(path);
+    await box.load();
+    const added = box.add(seed(42));
+    assert.ok(added);
+    assert.equal(added.id, 'p010', `番号が戻っている: ${added.id}`);
+  });
+});

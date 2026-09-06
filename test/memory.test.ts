@@ -291,3 +291,50 @@ describe('表記の揺れ', () => {
     assert.equal(normalizeTitle('設定は JSON で書く。'), normalizeTitle('設定はJSONで書く'));
   });
 });
+
+describe('番号', () => {
+  /**
+   * 刈り込みで途中の番号が抜けたあと、読み込み直して覚えると、
+   * **既にあるものと同じ番号を配っていた。**件数から続きを決めていたため。
+   * 同じ番号があると、決め直しの繋ぎ先も、忘れる先も、当たる相手が変わる。
+   */
+  test('**途中が抜けた後も、同じ番号を配らない**', async () => {
+    const dir = await tempDir('aas-mem-seq-');
+    const path = join(dir, 'memory.jsonl');
+
+    const first = new Memory(path);
+    for (let i = 0; i < 5; i += 1) first.remember({ kind: 'fact', title: `事実 ${i}` });
+    await first.save();
+
+    // 途中を落とす（刈り込みの後の姿）
+    const lines = (await readFile(path, 'utf8')).trim().split('\n');
+    await writeFile(path, `${[lines[0], lines[2]].join('\n')}\n`);
+
+    const memory = new Memory(path);
+    await memory.load();
+    assert.deepEqual(memory.all().map((e) => e.id), ['m1', 'm3']);
+
+    memory.remember({ kind: 'fact', title: '新しい事実' });
+    const ids = memory.all().map((e) => e.id);
+    assert.equal(new Set(ids).size, ids.length, `同じ番号を配っている: ${ids.join(', ')}`);
+  });
+
+  test('番号が続くので、決め直しが別のものに当たらない', async () => {
+    const dir = await tempDir('aas-mem-seq2-');
+    const path = join(dir, 'memory.jsonl');
+
+    const first = new Memory(path);
+    for (let i = 0; i < 4; i += 1) first.remember({ kind: 'decision', title: `決めごと ${i}` });
+    await first.save();
+    const lines = (await readFile(path, 'utf8')).trim().split('\n');
+    await writeFile(path, `${[lines[0], lines[2]].join('\n')}\n`);
+
+    const memory = new Memory(path);
+    await memory.load();
+    const added = memory.remember({ kind: 'decision', title: 'あとから決めたこと' });
+    // 新しいものが、残っていた m3 の番号を横取りしていない。
+    assert.notEqual(added.entry.id, 'm3');
+    assert.equal(memory.all().filter((e) => e.id === 'm3').length, 1);
+    assert.equal(memory.all().find((e) => e.id === 'm3')?.title, '決めごと 2');
+  });
+});

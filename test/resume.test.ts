@@ -147,7 +147,20 @@ describe('やり残しを、こちらから拾う', () => {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ text: 'この関数は何ですか' }),
       });
-      await new Promise((r) => setTimeout(r, 1500));
+      // **決め打ちで待たない。**待ちが短いと「まだ控えられていないだけ」を
+      // 「控えていない」と読んでしまい、壊れていても通る。
+      // 答えが会話に載るまで待ってから、控えの数を見る。
+      const until = Date.now() + 30_000;
+      for (;;) {
+        const list = await (await fetch(`${base}/api/conversations`)).json() as { list?: { id: string }[] };
+        const id = list.list?.[0]?.id;
+        if (id) {
+          const msgs = await (await fetch(`${base}/api/conversations/messages?id=${id}`)).json() as { messages?: { role?: string }[] };
+          if ((msgs.messages ?? []).some((m) => m.role === 'assistant')) break;
+        }
+        if (Date.now() >= until) assert.fail('答えが返ってこない');
+        await new Promise((r) => setTimeout(r, 50));
+      }
       const after = (await (await fetch(`${base}/api/unfinished`)).json() as { list: unknown[] }).list.length;
       assert.equal(after, before, '終わったものまで控えている');
     } finally { await s.stop(); await fake.close(); }
