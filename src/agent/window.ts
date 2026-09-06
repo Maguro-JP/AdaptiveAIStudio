@@ -280,16 +280,26 @@ export function fitToWindow(
   const near = tailWithin(history, budget, count);
   let cut = 0;
   let work = history;
+  let cutPaths: string[] = [];
   if (near.length < history.length) {
     const first = firstRequest(history, count, budget);
     work = [...first, ...near];
     cut = history.length - work.length;
+    /*
+     * **ここで落とした分にも、印を付ける。**
+     *
+     * 数は返していたが、**モデルへ渡す並びには何も残していなかった**。
+     * 道具を使わない往復が続くと、この速い道だけで落ちる。実測で
+     * 22 往復が印も無く消えていた。落ちた側から見ると、最初の依頼の次が
+     * いきなり最新になっていて、間に何があったのか分からない。
+     *
+     * 道を拾うのは、末尾に近い方から少しだけ（ここは「測らない」ための道で、
+     * 全部を舐めると速さの意味が無くなる）。
+     */
+    const gone = history.slice(first.length, history.length - near.length);
+    cutPaths = pathsIn(gone.slice(-SCAN_FOR_PATHS));
   }
-  const got = fitCore(work, budget, count);
-  // 落とした数には、ここで先に切った分も足す。**黙って減らさない。**
-  return cut > 0
-    ? { ...got, trimmed: true, dropped: got.dropped + cut }
-    : got;
+  return fitCore(work, budget, count, cut, cutPaths);
 }
 
 /** 本来の刈り込み。**入る見込みのものだけが渡ってくる。** */
@@ -297,8 +307,10 @@ function fitCore(
   history: readonly ProviderMessage[],
   budget: number,
   count: Count,
+  already = 0,
+  alreadyPaths: readonly string[] = [],
 ): { messages: ProviderMessage[]; trimmed: boolean; dropped: number } {
-  if (sizeOf(history, count) <= budget) {
+  if (sizeOf(history, count) <= budget && already === 0) {
     return { messages: [...history], trimmed: false, dropped: 0 };
   }
 
@@ -322,9 +334,16 @@ function fitCore(
   }
 
   // それでも溢れるなら、古い往復を丸ごと落とす。
+  // **どのファイルを触ったかだけは、落とす前に控える。**数だけ残しても、
+  // モデルは同じ所をもう一度読みに行く（Claude Code の compaction が
+  // 「どのファイルで作業しているか」を残しているのと同じ理由）。
   let dropped = 0;
+  const touched: string[] = [...alreadyPaths];
   let at = keepFirst + 1;
   while (total(units) > budget && at < recentFrom - dropped) {
+    for (const path of pathsIn(units[at]!.messages)) {
+      if (!touched.includes(path)) touched.push(path);
+    }
     units.splice(at, 1);
     dropped += 1;
   }
@@ -349,15 +368,38 @@ function fitCore(
   for (const [i, u] of units.entries()) {
     out.push(...u.messages);
     // 落とした場所に、落としたと書く。**黙って落とさない。**
-    if (dropped > 0 && i === keepFirst) {
+    if (dropped + already > 0 && i === keepFirst) {
       out.push({
         role: 'user',
-        content: `（このあと ${dropped} 往復ぶんは、文脈に収まらないので省いています。`
+        content: `（このあと ${dropped + already} 往復ぶんは、文脈に収まらないので省いています。`
+          + (touched.length > 0 ? `そこで触ったのは ${touched.slice(0, 5).join('、')} です。` : '')
           + '必要なら、もう一度読み直してください。）',
       });
     }
   }
-  return { messages: out, trimmed: shrunk || dropped > 0, dropped };
+  return { messages: out, trimmed: shrunk || dropped + already > 0, dropped: dropped + already };
+}
+
+/**
+ * 落とす往復から、触ったファイルの道を拾う。
+ *
+ * 道具の引数（`{"path":"src/x.ts"}`）から取る。**数だけ残しても、
+ * モデルは同じ所をもう一度読みに行く。**どこを触ったかが分かれば、
+ * 読み直すにしても当てが付く。
+ */
+const SCAN_FOR_PATHS = 200;
+
+function pathsIn(messages: readonly ProviderMessage[]): string[] {
+  const out: string[] = [];
+  for (const m of messages) {
+    for (const call of m.toolCalls ?? []) {
+      // 引数は JSON として妥当とは限らない（モデルが作る）。触って落ちない形で読む。
+      const args = call.args as { path?: unknown } | undefined;
+      const path = typeof args?.path === 'string' ? args.path : undefined;
+      if (path && path.length <= 120 && !out.includes(path)) out.push(path);
+    }
+  }
+  return out;
 }
 
 function total(units: readonly Unit[]): number {

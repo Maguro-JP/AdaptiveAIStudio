@@ -511,3 +511,51 @@ describe('入り切らないものを、測らない', () => {
     );
   });
 });
+
+describe('落とした往復の、触ったファイルを残す', () => {
+  /**
+   * 落とした場所に「N 往復ぶん省いた」とは書いていた。**数だけ残しても、
+   * モデルは同じ所をもう一度読みに行く。**どこを触ったかが分かれば、
+   * 読み直すにしても当てが付く。
+   *
+   * Claude Code の compaction が「どのファイルで作業しているか」を残しているのを
+   * 見て取り込んだ。向こうはモデルを呼んで要約するが、**ここでは呼ばない**
+   * （手元の小さいモデルに、要約のために一往復払わせない）。道具の引数から
+   * 道を拾うだけなので、ただで済む。
+   */
+  const longHistory = (): ProviderMessage[] => {
+    const big = 'あ'.repeat(4000);
+    const out: ProviderMessage[] = [{ role: 'user', content: '直して' }];
+    for (let i = 0; i < 12; i += 1) {
+      out.push({ role: 'assistant', content: '', toolCalls: [{ id: `c${i}`, name: 'read_file', args: { path: `src/file${i}.ts` } }] });
+      out.push({ role: 'tool', toolCallId: `c${i}`, content: big });
+    }
+    out.push({ role: 'user', content: 'つづき' });
+    return out;
+  };
+
+  test('**印に、触ったファイルが載る**', () => {
+    const got = fitToWindow(longHistory(), 800);
+    assert.ok(got.dropped > 0, '落ちていない');
+    const mark = got.messages.find((m) => m.content.includes('省いています'));
+    assert.ok(mark, '印そのものが無い');
+    assert.match(mark.content, /src\/file0\.ts/, `触ったファイルが載っていない: ${mark.content}`);
+  });
+
+  test('**印が長くなりすぎない（5件まで）**', () => {
+    const mark = fitToWindow(longHistory(), 800).messages.find((m) => m.content.includes('省いています'));
+    const names = (mark?.content.match(/src\/file\d+\.ts/g) ?? []).length;
+    assert.ok(names > 0 && names <= 5, `件数がおかしい: ${names}`);
+  });
+
+  test('道具を呼んでいない往復では、余計なことを書かない（対）', () => {
+    const out: ProviderMessage[] = [{ role: 'user', content: '直して' }];
+    for (let i = 0; i < 12; i += 1) {
+      out.push({ role: 'assistant', content: 'あ'.repeat(4000) });
+      out.push({ role: 'user', content: 'つづけて' });
+    }
+    const mark = fitToWindow(out, 800).messages.find((m) => m.content.includes('省いています'));
+    assert.ok(mark, '印そのものが無い');
+    assert.doesNotMatch(mark.content, /触ったのは/, `触っていないのに書いている: ${mark.content}`);
+  });
+});
