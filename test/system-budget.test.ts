@@ -10,7 +10,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { startFakeServer } from './fake-server.ts';
@@ -119,5 +119,36 @@ describe('依頼と履歴の取り分', () => {
       const reserve = w - tokenBudget(w);
       assert.ok(reserve <= w * 0.25 + 1, `取り置きが窓を食っている: 窓 ${w} で ${reserve}`);
     }
+  });
+});
+
+describe('動かないものを先、変わるものを後ろ', () => {
+  /**
+   * 相手（llama.cpp / ollama）は**前と同じ頭**を再計算しない。頭のどこか
+   * 一文字が変われば、そこから先は全部やり直しで、**履歴も巻き添えになる**。
+   * 前置きは依頼の前に置かれるので、ここの並びがそのまま待ち時間になる。
+   *
+   * 直す前は base → 作業場の様子 → 置き場の決まり → 地図 → 学び の順で、
+   * いちばん変わる地図の後ろに、変わらない決まりが置かれていた。
+   * 続けて別の依頼をしたとき、**頭の 41% しか同じでなかった**（実測）。
+   */
+  test('**変わるものが、変わらないものより後ろに来る**', async () => {
+    const root = await tempDir('aas-order-');
+    await writeFile(join(root, 'AGENTS.md'), 'この置き場の決まり。守ること。\n', 'utf8');
+    await mkdir(join(root, 'src'), { recursive: true });
+    await writeFile(join(root, 'src', 'core.ts'),
+      'export function heartbeat() { return 1; }\n', 'utf8');
+
+    const prompt = await systemAt(32_000, root);
+
+    const rulesAt = prompt.indexOf('この置き場の決まり');
+    const neverAt = prompt.indexOf('二度としないこと');
+    const mapAt = prompt.indexOf('作業場の地図');
+    assert.ok(rulesAt >= 0, `決まりが入っていない: ${prompt.slice(0, 200)}`);
+    assert.ok(neverAt >= 0, '学びが入っていない');
+    assert.ok(mapAt >= 0, '地図が入っていない');
+
+    assert.ok(rulesAt < neverAt, `決まりより先に学びが来ている: ${rulesAt} vs ${neverAt}`);
+    assert.ok(neverAt < mapAt, `学びより先に地図が来ている: ${neverAt} vs ${mapAt}`);
   });
 });

@@ -348,11 +348,21 @@ describe('実走：嫌がられたことを、次から必ず持ち歩くか', (
       // 決め打ちの語で選り分けていたときは、これを丸ごと落としていた。
       await drive(base, '何に対して行ったか書けよ', 60_000, { fresh: false });
 
-      const state = await (await fetch(`${base}/api/state`)).json() as {
-        memory: { kind: string; title: string; detail: string; source?: string }[];
-      };
-      // 最初から持っているぶん（source: builtin）と、この場で覚えたぶんを分ける。
-      const learned = state.memory.filter((m) => m.kind === 'displeasure' && m.source === 'user');
+      /*
+       * **判じるのは一往復の後ろで走る。**「待たせない」を本当にするために、
+       * 返事を返してから判じている（`#judge` は待たずに投げてある）。
+       * だから、返事が終わった時点ではまだ覚えていない。
+       *
+       * ここを待たずに見ていたので、**全部まとめて走らせて機械が混んだときだけ
+       * 落ちた**。決め打ちで待つのではなく、載るまで見る。
+       */
+      let state = { memory: [] as { kind: string; title: string; detail: string; source?: string }[] };
+      const learnedNow = () => state.memory.filter((m) => m.kind === 'displeasure' && m.source === 'user');
+      await until(async () => {
+        state = await (await fetch(`${base}/api/state`)).json() as typeof state;
+        return learnedNow().length > 0;
+      }, '静かな指摘を覚える', { timeoutMs: 60_000 });
+      const learned = learnedNow();
       assert.equal(learned.length, 1, `覚えていない: ${JSON.stringify(state.memory).slice(0, 400)}`);
       const lesson = learned[0]!.detail;
       // **言われた言葉は残さない。**残すのは、何が・なぜ・次からどうするか。

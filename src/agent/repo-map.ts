@@ -292,3 +292,25 @@ export function renderMap(
     : '';
   return head + lines.join('') + tail;
 }
+
+/**
+ * いまの地図で、**探している所が足りているか。**
+ *
+ * 足りているなら作り直さない（前置きが変わると、相手は履歴まで計算し直す）。
+ * 足りていないなら作り直す。載っていない地図を使い回しても、探し回る往復が
+ * 増えるだけで、計算し直すより高くつく。
+ *
+ * 見るのは「起点として強く立ったファイルが、地図に載っているか」。
+ * 起点が一つも立っていないなら、いまの地図のままでよい。
+ */
+export function covers(map: string, index: CodeIndex, seed: Map<number, number>): boolean {
+  if (map.length === 0) return false;
+  const wanted = [...seed.entries()]
+    .filter(([, w]) => w >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([i]) => index.files[i]?.path)
+    .filter((p): p is string => !!p);
+  if (wanted.length === 0) return true;
+  return wanted.every((p) => map.includes(p));
+}

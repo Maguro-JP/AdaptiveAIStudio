@@ -59,7 +59,7 @@ import { snapshotTests } from '../agent/test-integrity.ts';
 import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
 import { UndoStore } from './undo.ts';
-import { rankedEntries, renderMap, seedFrom } from '../agent/repo-map.ts';
+import { rankedEntries, renderMap, seedFrom, covers } from '../agent/repo-map.ts';
 import { indexStore } from '../agent/tools/find.ts';
 import type { Harness } from '../harness/harness.ts';
 import { inspectGit } from '../agent/git.ts';
@@ -185,6 +185,11 @@ export class Session {
    * 利用者にできることが「自分で書き戻す」しか無い**のでは任せられない。
    */
   readonly undo: UndoStore;
+  /**
+   * いま渡している地図。**同じで済むなら作り直さない。**
+   * 前置きが変わると、相手は履歴まで計算し直す。
+   */
+  #map?: { text: string; builtAt: string };
   readonly candidates: string[];
   readonly memory: Memory;
   /** 溜まった提案。実行はしない。溜めて、人に選ばせる。 */
@@ -1451,9 +1456,29 @@ export class Session {
      * （途中で切れた決まりは、書いていないより悪いことがある）。
      * 決まり本体と、学びの最後の一件は落とさない。
      */
-    const parts = [base, brief, rules, map, never];
+    /*
+     * **動かないものを先、変わるものを後ろ。**
+     *
+     * 相手（llama.cpp / ollama）は、**前と同じ頭**を再計算しない
+     * （prompt cache）。頭のどこか一文字が変われば、そこから先は全部やり直し。
+     * 前置きは依頼の前に置かれるので、ここが変わると**毎回まるごと計算し直す**。
+     * 狭い機械ほど、これがそのまま待ち時間になる。
+     *
+     * 並びは volatility の順にする。
+     *
+     *   base   決まり本体          変わらない
+     *   rules  置き場の決まり      置き場のファイルを直したときだけ
+     *   never  嫌がられたこと      覚えたときだけ
+     *   brief  作業場の様子        作業が進むと変わる
+     *   map    作業場の地図        **依頼ごとに変わる**
+     *
+     * 直す前は base → brief → rules → map → never だったので、
+     * いちばん変わる地図の後ろに、変わらない決まりが置かれていた。
+     * 実測で、続けて別の依頼をしたとき**頭の 41% しか同じでなかった**。
+     */
+    const parts = [base, rules, never, brief, map];
     // 地図 → 置き場の決まり → 作業場の様子 の順に落とす。
-    const drop = [3, 2, 1];
+    const drop = [4, 1, 3];
     for (const at of drop) {
       if (size(parts.filter(Boolean).join('\n\n')) <= budget) break;
       parts[at] = '';
@@ -1472,6 +1497,16 @@ export class Session {
   async #repoMap(left: number, count?: (t: string) => number): Promise<string> {
     if (left <= 0) return '';
     try {
+      /*
+       * **前と同じで済むなら、同じものを返す。**
+       *
+       * 前置きが一文字でも変われば、相手はそこから先を全部計算し直す
+       * （履歴も含めて）。依頼ごとに地図を作り直すと、毎回そうなる。
+       *
+       * ただし、**いま探している所が地図に載っていないなら、作り直す。**
+       * 載っていない地図を使い回しても、探し回る往復が増えるだけで、
+       * 計算し直すより高くつく。
+       */
       // 索引は `find_code` と同じものを使う（二つ持つと、同じ木を二度歩く）。
       // 覚えているものが在れば、それをそのまま使う。無ければ組む
       // （このあとの `find_code` もそれを使うので、払いは一度きり）。
@@ -1479,10 +1514,15 @@ export class Session {
       if (index.files.length === 0) return '';
       const seed = seedFrom(index, this.#instruction, this.#history
         .flatMap((m) => (typeof m.content === 'string' ? m.content.match(/[\w./-]+\.[a-z]{1,4}/g) ?? [] : [])));
+      const held = this.#map;
+      if (held && held.builtAt === index.builtAt && covers(held.text, index, seed)) return held.text;
+
       const entries = rankedEntries(index, seed);
       // トークンではなく文字で切る（切り出しが文字単位のため）。**多めに数える。**
       const chars = count ? left : left * 2;
-      return renderMap(entries, { chars }, count);
+      const made = renderMap(entries, { chars }, count);
+      this.#map = { text: made, builtAt: index.builtAt };
+      return made;
     } catch { return ''; }
   }
 

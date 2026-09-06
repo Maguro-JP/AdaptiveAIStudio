@@ -13,7 +13,9 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { buildIndex, refsIn, importedFromPackages, isExportedDecl } from '../src/agent/code-index.ts';
-import { rankedEntries, seedFrom, renderMap, graphOf, pageRank } from '../src/agent/repo-map.ts';
+import {
+  rankedEntries, seedFrom, renderMap, graphOf, pageRank, covers,
+} from '../src/agent/repo-map.ts';
 
 /** 背骨（core）が一つ在り、そこを何枚もが呼んでいる作業場。 */
 async function project(): Promise<string> {
@@ -129,5 +131,38 @@ describe('渡せる形にする', () => {
 
   test('何も無ければ、空（見出しだけを渡さない）', () => {
     assert.equal(renderMap([], { chars: 1000 }), '');
+  });
+});
+
+describe('前と同じで済むなら、地図を作り直さない', () => {
+  /**
+   * 前置きが一文字でも変われば、相手（llama.cpp / ollama）はそこから先を
+   * **履歴まで含めて**計算し直す。依頼ごとに地図を作り直すと、毎回そうなる。
+   * 狭い機械ほど、それがそのまま待ち時間になる。
+   */
+  test('**いま探している所が載っているなら、そのままでよい**', async () => {
+    const index = await buildIndex(await project());
+    const map = renderMap(rankedEntries(index), { chars: 100_000 });
+    assert.match(map, /core\.ts/);
+    assert.equal(covers(map, index, seedFrom(index, 'heartbeat を直したい')), true);
+  });
+
+  test('**載っていない所を指したら、作り直す**', async () => {
+    const index = await buildIndex(await project());
+    // core.ts だけが載る、狭い地図。
+    const narrow = renderMap(rankedEntries(index, seedFrom(index, 'heartbeat')), { chars: 90 });
+    assert.doesNotMatch(narrow, /leaf\.ts/);
+    assert.equal(covers(narrow, index, seedFrom(index, 'onlyHere を直したい')), false);
+  });
+
+  test('起点が立たないなら、そのままでよい（作り直す理由が無い）', async () => {
+    const index = await buildIndex(await project());
+    const map = renderMap(rankedEntries(index), { chars: 100_000 });
+    assert.equal(covers(map, index, seedFrom(index, 'まったく関係のない話')), true);
+  });
+
+  test('地図がまだ無いなら、作る', async () => {
+    const index = await buildIndex(await project());
+    assert.equal(covers('', index, seedFrom(index, 'heartbeat')), false);
   });
 });
