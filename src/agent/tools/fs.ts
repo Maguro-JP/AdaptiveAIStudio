@@ -5,7 +5,7 @@ import { toolOutputBudget, cutToTokens } from '../window.ts';
 import { applyHunks, splitHunks } from '../hunks.ts';
 import { safeResolve, realSafeResolve, isSymlink, toDisplayPath } from './paths.ts';
 import { type Tool, type ToolContext, ok, fail, requireString } from './types.ts';
-import { applyEdit } from './write-kind.ts';
+import { applyEdit, nearestTo } from './write-kind.ts';
 import { Ignores } from '../ignore.ts';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'target', '.venv']);
@@ -312,10 +312,15 @@ export const editFileTool: Tool = {
     const lfBefore = toLf(before);
     const { text, hits, loose, how } = applyEdit(lfBefore, toLf(find), toLf(replace), args.all === true);
     if (hits === 0) {
+      // **いちばん近い場所を、その場で見せる。**「読み直してください」だけだと
+      // 一往復まるごと払ううえ、ファイル全体が窓に入り、それでも次も外す。
+      const near = nearestTo(lfBefore, toLf(find));
       return fail(
-        `見つかりません: ${p} の中に find の文字列がありません。`
-        + 'read_file で読み直して、そこにあるとおりの文字列を渡してください'
-        + '（空白や改行まで一致させる必要があります）。',
+        `見つかりません: ${p} の中に find の文字列がありません。\n`
+        + (near ? `${near}\n` : '')
+        + 'ここにあるとおりの文字列を find に渡し直してください'
+        + '（空白や改行まで一致させる必要があります）。'
+        + (near ? '' : ' 見当が付かなければ read_file で読み直してください。'),
       );
     }
     if (hits > 1 && args.all !== true) {

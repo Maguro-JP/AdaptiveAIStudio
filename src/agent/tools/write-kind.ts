@@ -192,6 +192,44 @@ function looseEdit(
   return { text: out.join('\n'), hits: at.length, loose: true, how: 'loose' };
 }
 
+/**
+ * 当たらなかったとき、**いちばん近い場所を、そのまま見せる。**
+ *
+ * ここまでは「read_file で読み直してください」と返していた。
+ * 読み直しは一往復まるごと払ううえ、ファイル全体が窓に入る。**次も外す。**
+ *
+ * Roo Code が、当たらなかった塊のいちばん近い場所を、似ている度合いと一緒に
+ * 返している。同じ考えを取り込む。ここで見せてしまえば、モデルは
+ * その場で直せる（往復が一つ減る）。
+ *
+ * 近いものが無いとき（どの窓とも重ならない）は、何も返さない。
+ * **でたらめな場所を「近いところです」と見せる方が悪い。**
+ */
+export function nearestTo(before: string, find: string, show = 8): string | undefined {
+  const want = trimEnds(find.split('\n')).map((l) => l.trim()).filter((l) => l.length > 0);
+  if (want.length === 0) return undefined;
+  const lines = before.split('\n');
+  const span = Math.max(want.length, 1);
+
+  let best = { at: -1, hit: 0 };
+  for (let i = 0; i + 1 <= lines.length; i += 1) {
+    const inside = lines.slice(i, i + span).map((l) => l.trim());
+    let hit = 0;
+    for (const w of want) if (inside.includes(w)) hit += 1;
+    if (hit > best.hit) best = { at: i, hit };
+  }
+  // 半分も重なっていないなら、近いとは言わない。
+  if (best.at < 0 || best.hit * 2 < want.length) return undefined;
+
+  const from = Math.max(0, best.at - 1);
+  const to = Math.min(lines.length, best.at + span + 1);
+  const body = lines.slice(from, to)
+    .map((l, k) => `${String(from + k + 1).padStart(5)}: ${l}`)
+    .slice(0, show)
+    .join('\n');
+  return `いちばん近いのはここです（${want.length} 行のうち ${best.hit} 行が一致）:\n${body}`;
+}
+
 /** 前後の空行を落とす。渡し方の癖であって、探したい中身ではない。 */
 function trimEnds(lines: string[]): string[] {
   let from = 0;

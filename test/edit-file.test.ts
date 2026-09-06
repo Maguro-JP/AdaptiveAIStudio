@@ -16,7 +16,7 @@ import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { editFileTool, readFileTool } from '../src/agent/tools/fs.ts';
-import { isWriteTool, applyEdit, plannedContent } from '../src/agent/tools/write-kind.ts';
+import { isWriteTool, applyEdit, plannedContent, nearestTo } from '../src/agent/tools/write-kind.ts';
 import { protectedPaths, readBeforeWrite, testProtection } from '../src/harness/builtin-rules.ts';
 import type { ToolContext } from '../src/agent/tools/types.ts';
 
@@ -414,5 +414,47 @@ describe('両端で当てる', () => {
     assert.match(got.content, /最初と最後の行だけが一致/,
       `どう当てたかを言っていない: ${got.content}`);
     assert.match(await readFile(join(root, 'math.js'), 'utf8'), /return a \+ b;/);
+  });
+});
+
+describe('当たらなかったときに、いちばん近い場所を見せる', () => {
+  const FILE = [
+    'function add(a, b) {',
+    '  const sum = a + b;',
+    '  return sum;',
+    '}',
+  ].join('\n');
+
+  /**
+   * ここまでは「read_file で読み直してください」とだけ返していた。
+   * 読み直しは**一往復まるごと**払ううえ、ファイル全体が窓に入る。
+   * それでも次も外す（何が違うのか分からないまま書き直すので）。
+   * Roo Code が、当たらなかった塊のいちばん近い場所を返している。同じ手を取る。
+   */
+  test('**近い場所を、行番号付きでその場で返す**', async () => {
+    const root = await tempDir('aas-near-');
+    await writeFile(join(root, 'math.js'), FILE, 'utf8');
+    const ctx = {
+      root, signal: new AbortController().signal, approve: async () => true,
+    } as unknown as Parameters<typeof editFileTool.run>[1];
+    await readFileTool.run({ path: 'math.js' }, ctx);
+
+    const got = await editFileTool.run({
+      path: 'math.js',
+      find: 'function add(a, b) {\n  const total = a + b;\n  return total;\n}',
+      replace: 'x',
+    }, ctx);
+    assert.ok(got.isError);
+    assert.match(got.content, /いちばん近いのはここです/, got.content);
+    assert.match(got.content, /const sum = a \+ b;/, `中身を見せていない: ${got.content}`);
+    assert.match(got.content, /\s2:/, `行番号を付けていない: ${got.content}`);
+  });
+
+  test('**近いものが無ければ、でたらめを見せない**', () => {
+    assert.equal(nearestTo(FILE, 'class Zebra {\n  fly() {}\n}'), undefined);
+  });
+
+  test('半分も重なっていなければ、近いとは言わない', () => {
+    assert.equal(nearestTo(FILE, 'const sum = a + b;\nzzz1\nzzz2\nzzz3'), undefined);
   });
 });
