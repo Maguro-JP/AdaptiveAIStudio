@@ -59,6 +59,14 @@ export function loadEnvFile(path: string, env: NodeJS.ProcessEnv = process.env):
  * **他の行を残す。**丸ごと書き直すと、手で書いた別の合言葉や注釈が消える。
  * 値は返さないし、記録にも出さない（呼ぶ側で出させないため、名前だけ返す）。
  *
+ * **本人しか読めない権限で置く。**ここに入るのは GITHUB_TOKEN のような
+ * 合言葉そのもの。既定のまま書くと 644（同じ機械の他の利用者が読める）に
+ * なっていた。鍵をどこに置くかで守れる範囲が決まる、という話の入口で、
+ * いちばん安いのがここ。
+ *
+ * Windows では権限の考え方が違うので、この一手はほぼ効かない（読み取り専用の
+ * 印を触るだけ）。**効かない所で落とさない**ように、失敗しても進む。
+ *
  * @returns 書いた名前
  */
 export async function writeEnvValue(path: string, key: string, value: string): Promise<string> {
@@ -66,7 +74,7 @@ export async function writeEnvValue(path: string, key: string, value: string): P
   // 改行を混ぜられると、一行で別の合言葉を足せてしまう。
   if (/[\r\n]/.test(value)) throw new Error('合言葉に改行は入れられません');
 
-  const { readFile, writeFile, mkdir } = await import('node:fs/promises');
+  const { readFile, writeFile, mkdir, chmod } = await import('node:fs/promises');
   const { dirname } = await import('node:path');
   await mkdir(dirname(path), { recursive: true });
   const before = await readFile(path, 'utf8').catch(() => '');
@@ -86,6 +94,8 @@ export async function writeEnvValue(path: string, key: string, value: string): P
     while (after.length > 0 && after[after.length - 1]!.trim() === '') after.pop();
     after.push(line);
   }
-  await writeFile(path, `${after.filter((l, i) => !(l === '' && i === after.length)).join('\n')}\n`, 'utf8');
+  // 作るときの権限。既に在るファイルには効かないので、下で付け直す。
+  await writeFile(path, `${after.filter((l, i) => !(l === '' && i === after.length)).join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
+  await chmod(path, 0o600).catch(() => { /* Windows では効かない。落とさない */ });
   return key;
 }

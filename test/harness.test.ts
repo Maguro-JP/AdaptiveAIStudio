@@ -425,6 +425,18 @@ describe('外へ出た先を、記録に残す', () => {
     assert.doesNotMatch(got.summary ?? '', /これは URL ではない/);
   });
 
+  /**
+   * **記録にファイルの中身を残さない。**記録そのものが漏れ口になる。
+   * `docs/DATA-PROTECTION.md` は、置き場の中で `audit.jsonl` だけ「重みが低い」と
+   * 書いている。その前提がここ。中身を残し始めたら、その一行が嘘になる。
+   */
+  test('**記録に、書いた中身そのものを残さない**', async () => {
+    const secret = 'PASSWORD_IN_THE_FILE_12345';
+    const got = await recordFor('write_file', { path: 'a.txt', content: `x\n${secret}\ny` });
+    assert.doesNotMatch(JSON.stringify(got), new RegExp(secret), `中身が記録に残っている: ${JSON.stringify(got)}`);
+    assert.equal(got?.summary, 'a.txt', `道すら残っていない: ${JSON.stringify(got)}`);
+  });
+
   test('これまでの記録（道・命令）は変わらない', async () => {
     assert.equal((await recordFor('read_file', { path: 'src/a.ts' }))?.summary, 'src/a.ts');
     assert.equal((await recordFor('run_command', { command: 'npm test' }))?.summary, 'npm test');

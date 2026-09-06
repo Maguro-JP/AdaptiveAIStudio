@@ -38,3 +38,60 @@ describe('合言葉を書き足す', () => {
     await assert.rejects(writeEnvValue(p, '1A', 'x'), /使えません/);
   });
 });
+
+describe('合言葉のファイルは、本人しか読めないようにする', () => {
+  /**
+   * ここに入るのは `GITHUB_TOKEN` のような合言葉そのもの。既定のまま書くと
+   * **644（同じ機械の他の利用者が読める）** になっていた。実測して直した。
+   *
+   * NetVision の `docs/DATA_PROTECTION.md` が「鍵をどこに置くかで守れる範囲が
+   * 決まる」と書いていて、そのいちばん安い一手がここ。
+   *
+   * Windows では権限の考え方が違って、この一手はほぼ効かない。**効かない所で
+   * 落とさない**ことと、効く所で効いていることを、それぞれ見る。
+   */
+  test('**新しく作るとき、600 で置く**', async () => {
+    const { writeEnvValue } = await import('../src/core/env.ts');
+    const { stat } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tempDir } = await import('./tmp.ts');
+    const path = join(await tempDir('aas-env-perm-'), '.env');
+
+    await writeEnvValue(path, 'GITHUB_TOKEN', 'ghp_dummy');
+    const info = await stat(path);
+    if (process.platform === 'win32') {
+      // 権限の作りが違うので、ここでは中身が置けたことだけを見る。
+      assert.ok(info.size > 0);
+      return;
+    }
+    assert.equal((info.mode & 0o777).toString(8), '600', '他の利用者が読める権限で置いている');
+  });
+
+  test('**既にあるファイルにも、付け直す**', async () => {
+    const { writeEnvValue } = await import('../src/core/env.ts');
+    const { writeFile, stat, chmod } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tempDir } = await import('./tmp.ts');
+    const path = join(await tempDir('aas-env-perm2-'), '.env');
+    await writeFile(path, 'OTHER=1\n', 'utf8');
+    await chmod(path, 0o644);
+
+    await writeEnvValue(path, 'GITHUB_TOKEN', 'ghp_dummy');
+    if (process.platform === 'win32') return;
+    assert.equal(((await stat(path)).mode & 0o777).toString(8), '600',
+      '前からあったファイルの権限が緩いまま');
+  });
+
+  test('前からあった行は残る（対）', async () => {
+    const { writeEnvValue } = await import('../src/core/env.ts');
+    const { writeFile, readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tempDir } = await import('./tmp.ts');
+    const path = join(await tempDir('aas-env-perm3-'), '.env');
+    await writeFile(path, '# 手で書いた注釈\nOTHER=1\n', 'utf8');
+    await writeEnvValue(path, 'GITHUB_TOKEN', 'ghp_dummy');
+    const text = await readFile(path, 'utf8');
+    assert.match(text, /# 手で書いた注釈/);
+    assert.match(text, /OTHER=1/);
+  });
+});
