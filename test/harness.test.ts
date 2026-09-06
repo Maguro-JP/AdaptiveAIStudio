@@ -372,3 +372,61 @@ describe('断りなく CI を回さない', () => {
     }
   });
 });
+
+describe('外へ出た先を、記録に残す', () => {
+  const fake = (name: string) => ({
+    schema: {
+      name, description: '',
+      parameters: { type: 'object', properties: {}, required: [], additionalProperties: false },
+    },
+    run: async () => ({ content: 'ok' }),
+  });
+  const ctx = { root: '/tmp', signal: new AbortController().signal, approve: async () => true } as never;
+
+  const recordFor = async (name: string, args: Record<string, unknown>) => {
+    const h = new Harness({ rules: [] });
+    h.beginTask();
+    await h.wrap(fake(name) as never, () => '').run(args, ctx);
+    return h.audit.entries()[0];
+  };
+
+  /**
+   * ファイルを読めば道が残り、命令を走らせれば命令が残るのに、
+   * **外へ出るときだけ記録が空**だった（`summarize` が `url` を見ていない）。
+   * 後から「どこへ出たのか」を辿れない。外へ出る道こそ、残す値打ちがある。
+   *
+   * NetVision が、外へ出すときに「いつ・どの作法で・どこへ・何文字送ったか」を
+   * 残していて、**送った中身は残さない**（記録そのものが漏れ口になるため）と
+   * 書いてあるのを見て取り込んだ。
+   */
+  test('**どこへ出たかが残る**', async () => {
+    const got = await recordFor('fetch_url', { url: 'https://example.com/docs/guide' });
+    assert.match(got?.summary ?? '', /example\.com\/docs\/guide/, `どこへ出たか残っていない: ${JSON.stringify(got)}`);
+  });
+
+  /**
+   * ただし URL をそのまま残さない。`?token=…` のように**問い合わせの部分に
+   * 合言葉が入る**ことがある。記録そのものが漏れ口になっては元も子もない。
+   */
+  test('**合言葉は記録しない。落としたことは書く**', async () => {
+    const got = await recordFor('fetch_url', { url: 'https://example.com/x?token=SECRET_VALUE' });
+    assert.doesNotMatch(got?.summary ?? '', /SECRET_VALUE/, `合言葉が記録に残っている: ${got?.summary}`);
+    assert.match(got?.summary ?? '', /記録しません/, `落としたことを黙っている: ${got?.summary}`);
+  });
+
+  test('利用者名と合言葉が URL に入っていても残さない', async () => {
+    const got = await recordFor('fetch_url', { url: 'https://user:PASSWORD@example.com/x' });
+    assert.doesNotMatch(got?.summary ?? '', /PASSWORD/, got?.summary ?? '');
+  });
+
+  test('読めない URL でも落ちない', async () => {
+    const got = await recordFor('fetch_url', { url: 'これは URL ではない' });
+    assert.ok(got, '記録そのものが無い');
+    assert.doesNotMatch(got.summary ?? '', /これは URL ではない/);
+  });
+
+  test('これまでの記録（道・命令）は変わらない', async () => {
+    assert.equal((await recordFor('read_file', { path: 'src/a.ts' }))?.summary, 'src/a.ts');
+    assert.equal((await recordFor('run_command', { command: 'npm test' }))?.summary, 'npm test');
+  });
+});

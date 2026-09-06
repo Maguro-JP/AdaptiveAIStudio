@@ -1970,9 +1970,22 @@ export class UiServer {
       }
       log(`用意できました: ${id}`);
     } catch (e) {
+      /*
+       * **行き止まりにしない。**
+       *
+       * ここまでは「取ってこられませんでした: …」で終わりだった。
+       * 一覧の名前は**版が上がると変わる**（`unsloth/Qwen3.5-4B-GGUF` の
+       * ような個別の名前を持っている以上、いつか必ず腐る）。腐った日に
+       * 利用者にできることが無いと、そこで詰まる。
+       *
+       * この作りは元から「GGUF を1つ置くだけ」で動く。落とせなかったときは、
+       * **選び方と置き場所**を言う。名前を覚えてもらうのではなく、
+       * 選び方を覚えてもらえば、名前が変わっても困らない。
+       */
+      // **一つの文にする。**二つに分けると、読む側は下の行を見落とす。
       this.broadcast({
         type: 'log', level: 'error',
-        text: `取ってこられませんでした: ${e instanceof Error ? e.message : String(e)}`,
+        text: `取ってこられませんでした: ${e instanceof Error ? e.message : String(e)}\n${byHand(modelsDir())}`,
       });
     }
     this.broadcast({ type: 'stateChanged' });
@@ -2050,4 +2063,22 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   } catch {
     return undefined; // 直す側が既定に落としてくれる
   }
+}
+
+/**
+ * 手で置く道を案内する。
+ *
+ * 一覧の名前は版が上がると変わるので、**名前ではなく選び方**を渡す。
+ * NetVision が同じ理由で個別のファイル名を書かず、選び方だけ書いている
+ * （「版が上がると名前が変わるので、個別のファイル名は書きません」）。
+ */
+export function byHand(dir: string): string {
+  return [
+    '名前は版が上がると変わります。手で置くこともできます（GGUF を1つ置くだけです）。',
+    '  ・落とす先: https://huggingface.co/Qwen （名前に GGUF が付いたもの）',
+    '  ・大きさ: 軽い読み書きなら 3B〜4B、コードを書かせるなら 7B 以上',
+    '  ・量子化: 迷ったら Q4_K_M（品質と大きさの釣り合いが良い）',
+    `  ・置き場所: ${dir}`,
+    '  置いたら、設定の画面から選べます。',
+  ].join('\n');
 }

@@ -205,3 +205,29 @@ describe('画面から押して、モデルが置かれる', () => {
     } finally { await hf.close(); }
   });
 });
+
+describe('取ってこられなかったときに、行き止まりにしない', () => {
+  /**
+   * 一覧の名前は**版が上がると変わる**（`unsloth/Qwen3.5-4B-GGUF` のような
+   * 個別の名前を持っている以上、いつか必ず腐る）。腐った日に利用者にできる
+   * ことが無いと、そこで詰まる。
+   *
+   * この作りは元から「GGUF を1つ置くだけ」で動く。落とせなかったときは、
+   * **選び方と置き場所**を言う。名前を覚えてもらうのではなく、選び方を
+   * 覚えてもらえば、名前が変わっても困らない。
+   * NetVision が同じ理由で個別のファイル名を書かず、選び方だけ書いている。
+   */
+  test('**落とせなかったら、手で置く道を案内する**', async () => {
+    // 一覧を返す口が 404。名前が腐った日と同じ形。
+    const hf = await fakeHf({ listStatus: 404 });
+    const models = await tempDir('aas-getui-models-');
+    try {
+      const { said } = await press('qwen3.5-4b', hf, models);
+      const all = said.join('\n');
+      assert.match(all, /取ってこられませんでした/, all.slice(-300));
+      assert.match(all, /手で置く/, `手で置く道を案内していない: ${all.slice(-400)}`);
+      assert.match(all, /Q4_K_M/, `選び方を言っていない: ${all.slice(-400)}`);
+      assert.match(all, /置き場所:/, `どこへ置くのか言っていない: ${all.slice(-400)}`);
+    } finally { await hf.close(); }
+  });
+});

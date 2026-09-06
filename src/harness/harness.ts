@@ -137,7 +137,34 @@ export class Harness {
   }
 }
 
+/**
+ * 記録に残す要約。**全文は残さない。**
+ *
+ * `url` を見ていなかったので、**外へ出るときだけ記録が空**だった。
+ * ファイルを読めば道が残り、命令を走らせれば命令が残るのに、
+ * 外へ出た先だけ何も残らない。後から「どこへ出たのか」を辿れない。
+ *
+ * ただし、URL はそのまま残さない。`?token=…` のように、**問い合わせの
+ * 部分に合言葉が入る**ことがある。記録そのものが漏れ口になっては元も子もない。
+ * 残すのは「どこへ」（宛先と道）だけで、問い合わせと合言葉は落とす。
+ * 落としたことは書く（黙って削らない）。
+ */
 function summarize(args: Record<string, unknown>): string {
+  if (typeof args.url === 'string') return whereTo(args.url);
   const key = ['path', 'command', 'query'].find((k) => typeof args[k] === 'string');
   return key ? String(args[key]).slice(0, 120) : '';
+}
+
+/** 宛先と道だけにする。読めない形なら、印だけ残して中身は残さない。 */
+function whereTo(url: string): string {
+  try {
+    const at = new URL(url);
+    const hidden: string[] = [];
+    if (at.search) hidden.push('問い合わせ');
+    if (at.username || at.password) hidden.push('合言葉');
+    const where = `${at.protocol}//${at.host}${at.pathname}`.slice(0, 120);
+    return hidden.length > 0 ? `${where}（${hidden.join('と')}は記録しません）` : where;
+  } catch {
+    return '（読めない URL）';
+  }
 }
