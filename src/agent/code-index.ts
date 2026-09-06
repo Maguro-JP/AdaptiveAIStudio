@@ -472,13 +472,22 @@ export function terms(query: string): string[] {
  *
  * 名前が当たったものを上に出す（「どこで定義されているか」がいちばん要る）。
  */
-export async function searchIndex(
-  index: CodeIndex, query: string, opts: { limit?: number; read?: (p: string) => Promise<string> } = {},
-): Promise<Hit[]> {
+/**
+ * 依頼と、どのファイルがどれだけ近いか。**探す道具と地図で、同じ付け方を使う。**
+ *
+ * ここを切り出す前は、探す道具（`searchIndex`）と地図の起点（`seedFrom`）が
+ * **別々の当て方**を持っていた。地図の側は日本語を二文字ずつに割って冒頭と
+ * 突き合わせるだけの、弱いものだった。同じことを二通りに書くと、良いほうの
+ * 直しがもう片方に届かない。
+ *
+ * 付け方は三方向。名前・道・中身。珍しい語ほど重く（idf）、何度も出るほど
+ * 重く（頭打ちあり）、**多くの語に当たったものほど重く**する。
+ */
+export function scoreFiles(index: CodeIndex, query: string): Map<number, { score: number; symbols: Symbol[] }> {
+  const out = new Map<number, { score: number; symbols: Symbol[] }>();
   const words = terms(query);
-  if (words.length === 0) return [];
+  if (words.length === 0) return out;
   const lower = words.map((w) => w.toLowerCase());
-  const read = opts.read ?? ((p: string) => readFile(join(index.root, p), 'utf8'));
 
   // **語の珍しさで重みを付ける。**
   //
@@ -498,8 +507,7 @@ export async function searchIndex(
     weight.set(w, Math.log((n + 1) / (df + 1)));
   }
 
-  const scored: Hit[] = [];
-  for (const f of index.files) {
+  index.files.forEach((f, fi) => {
     let score = 0;
     const hitSymbols: Symbol[] = [];
     const path = f.path.toLowerCase();
@@ -524,14 +532,34 @@ export async function searchIndex(
       }
       if (hit) covered.add(w);
     }
-    if (score === 0) continue;
+    if (score === 0) return;
     // 多くの語に当たる方が確か。一語で何度も当たるより。
     score *= covered.size;
     // 散文は下げる。読み物として要るが、直す先ではない。
     if (PROSE.has(extname(f.path).toLowerCase())) score /= 3;
+    out.set(fi, { score, symbols: hitSymbols });
+  });
+  return out;
+}
+
+/**
+ * 当てる。**名前・道・中身の三方向から点を付ける。**
+ *
+ * 名前が当たったものを上に出す（「どこで定義されているか」がいちばん要る）。
+ */
+export async function searchIndex(
+  index: CodeIndex, query: string, opts: { limit?: number; read?: (p: string) => Promise<string> } = {},
+): Promise<Hit[]> {
+  const words = terms(query);
+  if (words.length === 0) return [];
+  const lower = words.map((w) => w.toLowerCase());
+  const read = opts.read ?? ((p: string) => readFile(join(index.root, p), 'utf8'));
+
+  const scored: Hit[] = [];
+  for (const [fi, { score, symbols }] of scoreFiles(index, query)) {
     scored.push({
-      path: f.path, score: Math.round(score * 10) / 10,
-      symbols: dedupe(hitSymbols).slice(0, 6), lines: [],
+      path: index.files[fi]!.path, score: Math.round(score * 10) / 10,
+      symbols: dedupe(symbols).slice(0, 6), lines: [],
     });
   }
 

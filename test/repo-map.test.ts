@@ -220,6 +220,53 @@ describe('前と同じで済むなら、地図を作り直さない', () => {
     assert.equal(covers(map, index, seedFrom(index, 'まったく関係のない話')), true);
   });
 
+  test('**短い依頼が続いても、毎往復は作り直さない**', async () => {
+    const root = await project();
+    const index = await buildIndex(root);
+    /*
+     * 「そこ」「もう一度」のような短い依頼が続く形。ここで毎回作り直すと、
+     * 相手は前置きから先を履歴ごと計算し直すので、狭い機械ほど待たされる。
+     * 二度この形で壊した（起点の目盛りを変えたとき、探す道具の当て方を
+     * 重ねたとき）。どちらも試験は全部通っていた。
+     */
+    const turns = ['heartbeat を直したい', 'まだ落ちる', 'そこ', 'もう一度', 'まだ'];
+    const edited = ['src/core.ts'];
+    let held = '';
+    let built = 0;
+    for (const text of turns) {
+      const strong = seedFrom(index, text, [], edited, { search: false });
+      if (held && covers(held, index, strong)) continue;
+      held = renderMap(rankedEntries(index, seedFrom(index, text, [], edited)), { chars: 4000 });
+      built += 1;
+    }
+    assert.ok(built < turns.length,
+      `${turns.length} 往復で ${built} 回 作り直している（覚えておく意味が無い）`);
+  });
+
+  test('**薄く当たっただけのファイルを、地図に要求しない**', async () => {
+    const root = await project();
+    // 道にも名前にも出てこない語が、注釈にだけ在るファイル。
+    await writeFile(join(root, 'src', 'leaf.ts'),
+      '// telemetry counter\nexport function onlyHere(): number { return 3; }\n', 'utf8');
+    const index = await buildIndex(root);
+    const text = 'telemetry を直したい';
+
+    // 並べるときは効く。ここは当ててよい。
+    const loose = seedFrom(index, text);
+    const at = index.files.findIndex((f) => f.path === 'src/leaf.ts');
+    assert.ok((loose.get(at) ?? 0) > 0, 'この試験の前提が崩れている（薄くも当たっていない）');
+
+    // **判断には使わない。**使うと「そこ」「もう一度」で毎往復作り直す。
+    const strong = seedFrom(index, text, [], [], { search: false });
+    assert.ok((strong.get(at) ?? 0) < 3,
+      '薄く当たっただけのものを、言い切れる印として数えている');
+    // leaf.ts が載っていない地図でも、作り直しを求めない。
+    const narrow = renderMap(rankedEntries(index, seedFrom(index, 'heartbeat')), { chars: 90 });
+    assert.doesNotMatch(narrow, /leaf\.ts/);
+    assert.equal(covers(narrow, index, strong), true,
+      '薄く当たっただけのものを地図に要求している（毎往復かならず作り直す）');
+  });
+
   test('地図がまだ無いなら、作る', async () => {
     const index = await buildIndex(await project());
     assert.equal(covers('', index, seedFrom(index, 'heartbeat')), false);

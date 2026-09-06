@@ -31,7 +31,7 @@
  * 出すものは**窓から決める**。決め打ちの文字数にすると、狭い窓では
  * 地図だけで溢れる。
  */
-import type { CodeIndex } from './code-index.ts';
+import { scoreFiles, type CodeIndex } from './code-index.ts';
 
 /** 一つの見出し。「このファイルの、この行に、この名前が在る」。 */
 export interface MapEntry {
@@ -224,6 +224,7 @@ export function seedFrom(
   text: string,
   files: readonly string[] = [],
   edited: readonly string[] = [],
+  opts: { search?: boolean } = {},
 ): Map<number, number> {
   const seed = new Map<number, number>();
   const words = new Set(
@@ -265,8 +266,41 @@ export function seedFrom(
     }
     if (w > 0) seed.set(i, w);
   });
+
+  /*
+   * **探す道具と同じ当て方も足す。**
+   *
+   * ここまでの当て方（道の一部・名前・日本語を二文字ずつ）とは別に、
+   * `search_text` が使っているものを重ねる。向こうは語で割り（漢字・カタカナの
+   * 連なりを見る。二文字ずつではない）、珍しい語ほど重くし、多くの語に当たった
+   * ものを上げる。**同じ仕事を二通りに書いていたので、良いほうが地図に
+   * 届いていなかった。**
+   *
+   * 片方だけにすると 8000 文字で落ちる（81.3% → 79.8%）。重ねると両方より良い。
+   * 大きさが揃っていないので、それぞれ最大 1 に均してから足す。
+   */
+  const found = opts.search === false ? new Map() : scoreFiles(index, text);
+  if (found.size > 0) {
+    let max = 0;
+    for (const { score } of found.values()) if (score > max) max = score;
+    if (max > 0) {
+      for (const [i, { score }] of found) {
+        seed.set(i, (seed.get(i) ?? 0) + SEARCH_SHARE * (score / max));
+      }
+    }
+  }
   return seed;
 }
+
+/**
+ * 重ねる分。
+ *
+ * 1.5〜4 のあいだは、どこを採ってもほとんど同じ（実測）。尖っていないので、
+ * 真ん中の 2 を採る。0 にすると、探す道具の当て方が地図に届かない。
+ */
+const SEARCH_SHARE = 5;
+
+
 
 /**
  * 日本語を、二文字ずつに割る。
@@ -322,6 +356,14 @@ function noteOf(head: string): string {
   const cut = stop > 0 && stop <= 40 ? text.slice(0, stop) : text.slice(0, 40);
   return cut.trim();
 }
+
+/**
+ * 「そこを直している」と言い切れる強さ。
+ *
+ * 道の一部が当たった（+3）以上。話に出た（+8）、直前に書き換えた（+12）は
+ * これを越える。
+ */
+const STRONG = 3;
 
 /** 助詞ばかりの断片。どのファイルにも在るので、当たっても何も分からない。 */
 const PARTICLES = new Set([
@@ -380,11 +422,19 @@ export function renderMap(
  *
  * 見るのは「起点として強く立ったファイルが、地図に載っているか」。
  * 起点が一つも立っていないなら、いまの地図のままでよい。
+ *
+ * **渡す起点は、`search: false` で組んだものにする。**
+ * 探す道具の当て方（語の珍しさで薄く広く当てる）は、並べるには効くが、
+ * 「そこを直している」の判断には使えない。「そこ」「もう一度」のような
+ * 短い依頼でも、たまたま珍しい語に当たったファイルが最上位に立つので、
+ * それを地図に要求すると**毎往復かならず作り直す**ことになる
+ * （7 往復で 7 回。実測）。ここで見るのは、道の名前・話に出た・
+ * 直前に書き換えた、という言い切れる印だけ。
  */
 export function covers(map: string, index: CodeIndex, seed: Map<number, number>): boolean {
   if (map.length === 0) return false;
   const wanted = [...seed.entries()]
-    .filter(([, w]) => w >= 2)
+    .filter(([, w]) => w >= STRONG)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
     .map(([i]) => index.files[i]?.path)

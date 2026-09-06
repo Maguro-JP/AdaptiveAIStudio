@@ -1530,7 +1530,10 @@ export class Session {
         .flatMap((m) => (typeof m.content === 'string' ? m.content.match(/[\w./-]+\.[a-z]{1,4}/g) ?? [] : [])),
         this.undo.recent());
       const held = this.#map;
-      if (held && held.builtAt === index.builtAt && covers(held.text, index, seed)) return held.text;
+      // 覚えているものを使ってよいかは、**言い切れる印だけ**で決める
+      // （`covers` の注釈）。探す道具の当て方は、並べるには効くが判断には使えない。
+      const strong = seedFrom(index, this.#instruction, [], this.undo.recent(), { search: false });
+      if (held && held.builtAt === index.builtAt && covers(held.text, index, strong)) return held.text;
 
       const entries = rankedEntries(index, seed);
       // トークンではなく文字で切る（切り出しが文字単位のため）。**多めに数える。**
