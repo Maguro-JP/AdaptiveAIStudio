@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
+import { bundledGithubServer } from '../src/core/github-mcp.ts';
 
 const home = await tempDir('aas-ghcfg-');
 process.env.AAS_HOME = home;
@@ -59,8 +60,18 @@ describe('画面から GitHub を繋ぐ', () => {
     // 設定には名前だけ。値は書かない。
     const cfg = await readFile(join(home, 'aas.config.json'), 'utf8');
     assert.ok(!cfg.includes('ghp_dummy_value'), '設定に合言葉そのものを書いている');
-    const parsed = JSON.parse(cfg) as { mcp: { servers: Record<string, { command: string; envFrom: Record<string, string> }> } };
-    assert.equal(parsed.mcp.servers.github?.command, 'npx');
+    const parsed = JSON.parse(cfg) as {
+      mcp: { servers: Record<string, { command: string; args: string[]; envFrom: Record<string, string> }> };
+    };
+    // **`npx` と決め打ちにしない。**道具が入っている機械（CI・bundle）では
+    // 同梱の Node で直に起こすのが正しい姿で、そこで落ちる検査になっていた。
+    // 走らせる場所ではなく、**入っているかどうか**で期待する形を決める。
+    const bundled = bundledGithubServer();
+    assert.equal(parsed.mcp.servers.github?.command, bundled ? process.execPath : 'npx');
+    assert.deepEqual(
+      parsed.mcp.servers.github?.args,
+      bundled ? [bundled] : ['-y', '@modelcontextprotocol/server-github'],
+    );
     assert.equal(parsed.mcp.servers.github?.envFrom.GITHUB_PERSONAL_ACCESS_TOKEN, 'GITHUB_TOKEN');
   });
 

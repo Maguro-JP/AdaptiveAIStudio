@@ -42,7 +42,11 @@ export interface McpLaunch {
 export function githubLaunch(
   opts: { bundled?: string | undefined; hasNpx?: boolean; node?: string } = {},
 ): McpLaunch {
-  const bundled = opts.bundled !== undefined ? opts.bundled : bundledGithubServer();
+  // **「無い」と渡されたら、無いものとして扱う。**
+  // `!== undefined` で見ていたので、`{ bundled: undefined }` と渡しても
+  // 置き場を探しに行き、**渡した側の言い分を無視**していた。
+  // そのせいで、道具が入っている機械（CI・bundle）でだけ答えが変わった。
+  const bundled = 'bundled' in opts ? opts.bundled : bundledGithubServer();
   if (bundled) {
     // 同梱の Node で起こす。PATH の Node に頼らない（入っていない機械がある）。
     return { command: opts.node ?? process.execPath, args: [bundled] };
