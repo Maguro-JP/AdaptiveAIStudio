@@ -163,6 +163,15 @@ button.row {
 .side-list button.on { background: var(--surface2); color: var(--text); }
 .side-row { display: flex; align-items: center; }
 .side-row > button:first-child { flex: 1; min-width: 0; }
+/*
+ * 一覧の行に置く押す印（× や ↶）は、幅を取らない。
+ *
+ * `.side-list button { width: 100% }` が印の方にも効いて、印が行を占め、
+ * 説明が「0」の一文字まで潰れた。**画面を見て直した。**
+ * 試験は通っていて、見るまで気づけなかった。
+ */
+.side-row > button.icon { flex: 0 0 auto; width: auto; }
+
 .side-row > .drop {
   flex: 0 0 auto; width: 1.6rem; padding: 3px 0; text-align: center;
   color: transparent;

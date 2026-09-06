@@ -824,11 +824,14 @@ async function loadUndo() {
     const row = document.createElement('div');
     row.className = 'side-row';
 
-    const label = document.createElement('span');
-    label.className = 'grow';
+    // **一行に収める。**span で置いたら三行に折れて、押す印が浮いた（見て直した）。
+    // 一覧の行は button に切り詰めの決まりが掛かっているので、それに合わせる。
+    const label = document.createElement('button');
+    label.className = 'ghost row grow';
+    label.disabled = true;
     const when = new Date(p.at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
-    label.textContent = `${when} ${p.request.slice(0, 28)}`;
-    label.title = `${p.request}\n触ったファイル:\n${p.paths.join('\n')}`;
+    label.textContent = `${when} ${p.request}`;
+    label.title = `${p.request}\n触ったファイル（${p.paths.length} 件）:\n${p.paths.join('\n')}`;
 
     const back = document.createElement('button');
     back.className = 'ghost icon';
