@@ -865,6 +865,9 @@ export class UiServer {
         model: this.#opts.config.runtime?.model
           ?? (this.#runtime?.id === 'inproc' ? this.#runtime.loaded()[0] : undefined)
           ?? '—',
+        // **なぜそれなのかも出す。**速い方へ勝手に乗り換える作りなので、
+        // 名前だけ出しても「いつのまにか変わっている」に見える。
+        why: this.#session?.modelReason ?? '',
       });
     }
 

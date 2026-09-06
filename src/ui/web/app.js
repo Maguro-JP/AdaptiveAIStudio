@@ -449,7 +449,10 @@ async function refreshState() {
     // 先頭を出していたので、使ってもいない名前が出ていた（実際に出ていた）。
     const info = await fetch('/api/info').then((x) => x.json());
     $('sbModel').textContent = `${info.runtime} · ${info.model}`;
-    $('sbModel').title = `動かし方: ${info.runtime} / モデル: ${info.model}`;
+    // **なぜそれなのかも出す。**名前だけだと「いつのまにか変わっている」に見える。
+    $('sbModel').title = info.why
+      ? `動かし方: ${info.runtime} / モデル: ${info.model}\nなぜ: ${info.why}`
+      : `動かし方: ${info.runtime} / モデル: ${info.model}`;
   } catch { /* 同上 */ }
 }
 

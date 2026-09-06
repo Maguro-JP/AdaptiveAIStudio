@@ -552,3 +552,52 @@ describe('窓は、開いた側の数字を使う', () => {
     } finally { await s2.stop(); }
   });
 });
+
+describe('黙って選ばない', () => {
+  /**
+   * 何のモデルを選んだかと、**なぜそれなのか**は既に手元にあった
+   * （`resolveCandidates` の note）のに、**モデルが無いときのエラー文にしか
+   * 使っていなかった**。選べたときは捨てていたので、利用者から見ると
+   * 「いつのまにか、この名前で動いている」。速い方へ勝手に乗り換える作りなので、
+   * なおさら理由が要る。
+   *
+   * 「黙って切らない・黙って落とさない」と同じことで、**選ぶのも黙らない**。
+   * AIOS の Router が、どの経路を選んでも必ず一言で理由を返しているのを見て取り込んだ。
+   */
+  test('**なぜそのモデルなのかが、画面から引ける**', async () => {
+    const info = await (await fetch(`${base}/api/info`)).json() as { why?: string; model: string };
+    assert.ok(info.why, `理由を返していない: ${JSON.stringify(info)}`);
+    assert.match(info.why, /固定|速|秒|自動/, `理由になっていない: ${info.why}`);
+  });
+
+  test('**選んだことを、流れにも出す**', async () => {
+    // 立ち上げ直して、最初に出る一行を見る。
+    const fake2 = await startFakeServer({ kind: 'stream', text: 'はい' });
+    const said: string[] = [];
+    const s2 = new UiServer({
+      port: 0,
+      config: {
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake2.baseUrl, locality: 'local', models: ['m'] }],
+        candidates: ['local:m'],
+        runtime: { kind: 'ollama' },
+      } as typeof DEFAULT_CONFIG,
+    });
+    const b2 = (await s2.start()).replace(/\/$/, '');
+    try {
+      const ac2 = new AbortController();
+      void (async () => {
+        const ev = await fetch(`${b2}/api/events`, { signal: ac2.signal });
+        const rd = ev.body!.getReader(); const dc = new TextDecoder();
+        for (;;) { const { done, value } = await rd.read(); if (done) break; if (value) said.push(dc.decode(value, { stream: true })); }
+      })().catch(() => undefined);
+      await fetch(`${b2}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'こんにちは' }),
+      });
+      await until(() => said.join('').includes('モデルを'), 'モデルを選んだことを言う', { timeoutMs: 40_000 });
+      assert.match(said.join(''), /モデルを local:m にしました/, said.join('').slice(-300));
+      ac2.abort();
+    } finally { await s2.stop(); await fake2.close(); }
+  });
+});

@@ -185,6 +185,8 @@ export class Session {
    * 利用者にできることが「自分で書き戻す」しか無い**のでは任せられない。
    */
   readonly undo: UndoStore;
+  /** なぜいまのモデルなのか。画面に出すために持つ（黙って選ばない）。 */
+  readonly modelReason: string;
   /**
    * いま渡している地図。**同じで済むなら作り直さない。**
    * 前置きが変わると、相手は履歴まで計算し直す。
@@ -243,7 +245,7 @@ export class Session {
   #counterAsked = false;
 
   private constructor(init: {
-    config: AasConfig; root: string; candidates: string[];
+    config: AasConfig; root: string; candidates: string[]; modelReason: string;
     memory: Memory; roles: RoleRegistry; orchestrator: ChatOrchestrator;
     proposals: ProposalQueue; idle: IdleScheduler; duties: DutyRoster;
     pilot: AutopilotBundle; prefetch: Prefetcher; opts: SessionOptions;
@@ -254,6 +256,7 @@ export class Session {
     mcpClients: McpClient[];
   }) {
     this.config = init.config;
+    this.modelReason = init.modelReason;
     this.root = init.root;
     this.undo = new UndoStore(init.root, join(stateDir(), 'undo'));
     this.#projectRules = new ProjectRules(init.root);
@@ -291,6 +294,17 @@ export class Session {
     const pilot = await setupAutopilot(config, registry);
     const { candidates, note } = resolveCandidates(config, pilot);
     if (candidates.length === 0) throw new Error(`使えるモデルがありません: ${note}`);
+    /*
+     * **黙って選ばない。**
+     *
+     * 何を選んだかと、なぜそれなのかは、既に手元にある（`note`）のに、
+     * **モデルが無いときのエラー文にしか使っていなかった**。選べたときは
+     * 捨てていたので、利用者から見ると「いつのまにか、この名前で動いている」。
+     * 速い方へ勝手に乗り換える作りなので、なおさら理由が要る。
+     *
+     * 「黙って切らない・黙って落とさない」と同じことで、**選ぶのも黙らない**。
+     */
+    opts.onLog?.('info', `モデルを ${candidates[0]} にしました（${note}）`);
 
     const log = (level: 'info' | 'warn' | 'error', text: string) => opts.onLog?.(level, text);
 
@@ -369,7 +383,7 @@ export class Session {
     } catch { /* 記録が無いのは正常 */ }
 
     const session = new Session({
-      config, root, candidates, memory,
+      config, root, candidates, modelReason: note, memory,
       roles: new RoleRegistry(config.roles ?? []),
       orchestrator, pilot, prefetch, opts, holder, forum, toolPool, harness, mcpClients,
       proposals, idle, duties,
