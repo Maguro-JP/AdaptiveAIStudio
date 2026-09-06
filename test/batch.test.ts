@@ -158,3 +158,75 @@ describe('バッチファイル', () => {
     assert.equal(insideParens('rem これは注釈なので (日本語) でよい').length, 0);
   });
 });
+
+describe('入口は、ZIP の中から押されたときを受け止める', () => {
+  /**
+   * Windows は ZIP を**フォルダとして開けてしまう**。そこで .cmd を押すと、
+   * Windows は**その1ファイルだけ**を temp へ出して走らせるので、隣にある
+   * はずの `app\` も `runtime\` も無い。受け止めが無いと
+   * 「指定されたパスが見つかりません」が一瞬映って窓が閉じ、
+   * **何が起きたか誰にも分からない**。
+   *
+   * NetVision も同じところで「ZIP をダブルクリックして開いた中身から直接
+   * 起動しても動きません。必ず『すべて展開』で取り出してから使ってください」と
+   * 書いている。ここは Windows が無いと踏めないので、検査で押さえる。
+   */
+  const launcher = async (): Promise<string> => {
+    const { readFile } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+    // CP932 で置いてある。読むときも CP932 として読む。
+    const raw = await readFile(join(root, 'launcher.cmd'));
+    return new TextDecoder('shift_jis').decode(raw);
+  };
+
+  test('**app が無ければ、何をすればいいか言ってから止まる**', async () => {
+    const text = await launcher();
+    const at = text.indexOf('if exist "%~dp0app\\start.cmd" goto :run');
+    assert.ok(at >= 0, `app の有無を見ていない:\n${text}`);
+    const before = text.slice(0, at);
+    const after = text.slice(at);
+    // 見る前に呼びに行っていないこと。
+    assert.doesNotMatch(before, /call /, '確かめる前に呼びに行っている');
+    assert.match(after, /すべて展開/, `どうすればいいか言っていない:\n${after}`);
+    assert.match(after, /pause/, '止まらずに窓が閉じる');
+    // `goto :run` ではなく、飛び先のラベル（行頭の :run）と比べる。
+    assert.ok(after.indexOf('pause') < after.indexOf('\r\n:run'), '案内の後で止まっていない');
+  });
+
+  test('書き込める場所へ置くことも言う', async () => {
+    assert.match(await launcher(), /Program Files/);
+  });
+
+  test('CP932 で置いてある（UTF-8 だと cmd.exe が行を壊す）', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const raw = await readFile(join(root, 'launcher.cmd'));
+    // UTF-8 として読めてしまうなら、CP932 ではない。
+    let utf8Ok = true;
+    try { new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch { utf8Ok = false; }
+    assert.equal(utf8Ok, false, 'UTF-8 で置かれている');
+    assert.doesNotMatch(new TextDecoder('shift_jis').decode(raw), /\uFFFD/, 'CP932 として読めない');
+  });
+
+  test('bundle に、この入口がそのまま入る', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const { tempDir } = await import('./tmp.ts');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const out = join(await tempDir('aas-launcher-'), 'AdaptiveAIStudio');
+    await bundle({ out, srcRoot: root, version: '0.0.0-test' });
+    const made = await readFile(join(out, 'AdaptiveAIStudio.cmd'));
+    const src = await readFile(join(root, 'launcher.cmd'));
+    // **バイト列をそのまま突き合わせない。**違ったときに千行出て、
+    // 何が違うのか読めなくなる（実際にそうなった）。長さと中身の印で見る。
+    const { createHash } = await import('node:crypto');
+    const mark = (b: Buffer) => `${b.length}バイト / ${createHash('sha256').update(b).digest('hex').slice(0, 12)}`;
+    assert.equal(mark(made), mark(src), '入口が組み立て直されている（CP932 が壊れる）');
+  });
+});

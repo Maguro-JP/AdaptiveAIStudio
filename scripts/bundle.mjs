@@ -21,7 +21,7 @@
  * 取得は網の繋がる場所（CI）でやり、ここは置く仕事だけをする。
  * そうすると、この道具自体は網が無くても試せる。
  */
-import { cp, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink } from 'node:fs/promises';
+import { cp, copyFile, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -212,9 +212,23 @@ export async function bundle({
     }
   }
 
-  // 入口。押せばいいものが一つだけ表にある形にする。
-  await writeFile(join(out, 'AdaptiveAIStudio.cmd'),
-    ['@echo off', 'call "%~dp0app\\start.cmd" %*'].join('\r\n') + '\r\n', 'utf8');
+  /*
+   * 入口。押せばいいものが一つだけ表にある形にする。
+   *
+   * **ZIP の中から押されたときを受け止める。**Windows は ZIP をフォルダとして
+   * 開けてしまう。そこで .cmd を押すと、Windows は**その1ファイルだけ**を
+   * temp へ出して走らせるので、隣にあるはずの app\ も runtime\ も無い。
+   * 受け止めが無いと「指定されたパスが見つかりません」が一瞬映って窓が閉じる。
+   * **何が起きたか誰にも分からない。**NetVision も同じところで
+   * 「ZIP をダブルクリックして開いた中身から直接起動しても動きません。
+   * 必ず『すべて展開』で取り出してから使ってください」と書いている。
+   *
+   * 中身は CP932 で置く。UTF-8 だと cmd.exe が行を壊す（docs/DECISIONS.md）。
+   * 分岐は goto で書き、日本語は括弧の外に置く。
+   */
+  // 元は `launcher.cmd`（CP932 で置いてある）。ここで組み立てない。
+  // 組み立てると Node からは CP932 で書けず、日本語が壊れる。
+  await copyFile(join(srcRoot, 'launcher.cmd'), join(out, 'AdaptiveAIStudio.cmd'));
   log('  置いた: AdaptiveAIStudio.cmd');
 
   // 展開先に、あと何文字使えるか。**利用者が展開する前に読む所へ書く。**
