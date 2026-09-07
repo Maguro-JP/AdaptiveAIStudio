@@ -10,7 +10,7 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import {
-  readProjectRules, fitRules, rulesBlock, ProjectRules, RULE_FILES,
+  readProjectRules, fitRules, fitRulesWithDropped, rulesBlock, ProjectRules, RULE_FILES,
 } from '../src/agent/project-rules.ts';
 import { estimateTokens } from '../src/agent/window.ts';
 
@@ -143,5 +143,82 @@ describe('渡された取り分を、超えない', () => {
     const root = await tempDir('aas-rules-zero-');
     await writeFile(join(root, 'AGENTS.md'), '決まり\n', 'utf8');
     assert.equal(await new ProjectRules(root).block(0), '');
+  });
+});
+
+/**
+ * 決まりがコンテキストウィンドウに入らないとき、**どこまで渡ったかを分かるようにする。**
+ *
+ * ここは行の切れ目で頭から詰めるだけだった。`## ` の見出しを跨いで切るので、
+ * **途中の節が半分だけ渡り、その後ろは丸ごと消える。**残るのは
+ * 「…（長いので、ここまで）」の一行だけで、何が消えたかは誰にも分からない。
+ *
+ * この CLAUDE.md（11 節）で実測すると、コンテキストウィンドウ 8192 では 2 節しか渡っていない。
+ * 「push では CI を回さない」も「C: 直下にフォルダを作らない」も、
+ * **一度もモデルに届いていなかった。**
+ */
+describe('入り切らない決まりを、名前で返す', () => {
+  const rule = (text: string) => [{ path: 'CLAUDE.md', text, at: 0 }];
+  const doc = [
+    '# 見出し',
+    '',
+    '## さいしょ',
+    'あ'.repeat(100),
+    '',
+    '## つぎ',
+    'い'.repeat(100),
+    '',
+    '## さいご',
+    'う'.repeat(100),
+  ].join('\n');
+  // 文字数ではなく、その場で数えた値で比べる（見積もりの係数に依らない）。
+  const chars = (t: string): number => t.length;
+
+  test('**入るものは入り、入らないものは名前で返る**', () => {
+    const got = fitRulesWithDropped(rule(doc), 200, chars);
+    assert.equal(got.kept.length, 1, '何も入っていない');
+    assert.ok(got.kept[0]!.text.includes('さいしょ'), '頭から入っていない');
+    assert.ok(got.dropped.length > 0, '落としたのに、何も言っていない');
+    assert.ok(got.dropped.some((d) => d.includes('さいご')), `名前が出ていない: ${got.dropped.join(',')}`);
+  });
+
+  test('**節の途中で切らない**', () => {
+    // 半分だけ渡ると、決まりが逆の意味になることがある。
+    const got = fitRulesWithDropped(rule(doc), 200, chars);
+    const text = got.kept[0]?.text ?? '';
+    for (const head of ['さいしょ', 'つぎ', 'さいご']) {
+      if (!text.includes(head)) continue;
+      assert.ok(text.includes('あ'.repeat(100)) || !text.includes('## さいしょ'),
+        '見出しだけ入って中身が切れている');
+    }
+    assert.ok(!text.includes('（長いので、ここまで）'), '途中で切っている');
+  });
+
+  test('**上から順に入れる。小さい節を先に入れない**', () => {
+    /*
+     * 一度、入らない節を飛ばして次を試す形にした。予算は埋まるが、
+     * 大きくて大事な節が落ち、小さくてどうでもいい節が入る。
+     * 実際にコンテキストウィンドウ 4096 で「## 前提（勝手に変えない）」が落ちて「## 時刻」が入った。
+     * 書いた人は大事なものを上に置くので、並びを崩す方が悪い。
+     */
+    const uneven = ['# 見出し', '', '## おおきい', 'あ'.repeat(300), '', '## ちいさい', 'い'].join('\n');
+    const got = fitRulesWithDropped(rule(uneven), 120, chars);
+    const text = got.kept[0]?.text ?? '';
+    assert.ok(!text.includes('ちいさい'),
+      `大きい節を飛ばして、小さい節を入れている: ${JSON.stringify(text)}`);
+  });
+
+  test('全部入るなら、何も落とさない（対）', () => {
+    const got = fitRulesWithDropped(rule(doc), 10_000, chars);
+    assert.deepEqual(got.dropped, []);
+    assert.equal(got.kept.length, 1);
+    assert.ok(got.kept[0]!.text.includes('さいご'), '全部入るはずが入っていない');
+  });
+
+  test('`fitRules` は今までどおり返す（対）', () => {
+    // 呼んでいる側を壊さない。
+    const got = fitRules(rule(doc), 10_000, chars);
+    assert.equal(got.length, 1);
+    assert.ok(got[0]!.text.includes('さいご'));
   });
 });

@@ -52,22 +52,51 @@ export interface ProjectRule {
 export function fitRules(
   rules: readonly ProjectRule[], budget: number, count: Count = estimateTokens,
 ): ProjectRule[] {
-  const out: ProjectRule[] = [];
+  return fitRulesWithDropped(rules, budget, count).kept;
+}
+
+/**
+ * 収まる分だけ入れて、**入らなかった見出しを名前で返す。**
+ *
+ * ここは行の切れ目で頭から詰めるだけだった。`## ` の見出しを跨いで切るので、
+ * **途中の節が半分だけ渡り、その後ろは丸ごと消える。**しかも残るのは
+ * 「…（長いので、ここまで）」の一行だけで、何が消えたかは誰にも分からない。
+ *
+ * 実測（この CLAUDE.md、11 節）:
+ *
+ *   コンテキストウィンドウ 4096 →  1 節
+ *   窓  8192 →  3 節
+ *   コンテキストウィンドウ 16384 →  6 節
+ *   コンテキストウィンドウ 32768 → 11 節
+ *
+ * 手元の小さいモデルは 8192 前後になるので、**「push では CI を回さない」
+ * 「C: 直下にフォルダを作らない」「実行時の依存はゼロ」あたりは、一度も
+ * 渡っていなかった。**利用者が何度も言った決まりが、届いていない。
+ *
+ * だから**節の単位で入れる**。半端に切らない。そして入らなかった節は
+ * 名前で返して、モデルにも人にも見せる。
+ */
+export function fitRulesWithDropped(
+  rules: readonly ProjectRule[], budget: number, count: Count = estimateTokens,
+): { kept: ProjectRule[]; dropped: string[] } {
+  const kept: ProjectRule[] = [];
+  const dropped: string[] = [];
   let left = budget;
   for (const rule of rules) {
-    if (left <= 0) break;
     const cost = count(rule.text);
-    if (cost <= left) {
-      out.push(rule);
+    if (cost <= left && left > 0) {
+      kept.push(rule);
       left -= cost;
       continue;
     }
-    // 入り切らないものは、頭から入る分だけ。途中で切れたことは隠さない。
-    const keep = cut(rule.text, left, count);
-    if (keep.length > 0) out.push({ ...rule, text: `${keep}\n…（長いので、ここまで）` });
-    break;
+    const { text, missing } = fitSections(rule.text, left, count);
+    if (text.length > 0) {
+      kept.push({ ...rule, text });
+      left -= count(text);
+    }
+    for (const m of missing) dropped.push(`${rule.path} の ${m}`);
   }
-  return out;
+  return { kept, dropped };
 }
 
 /** 行の切れ目で切る。文の途中で切ると、決まりが逆の意味になることがある。 */
@@ -82,6 +111,66 @@ function cut(text: string, budget: number, count: Count = estimateTokens): strin
     left -= cost;
   }
   return kept.join('\n').trimEnd();
+}
+
+/** 見出し（`## `）で切り分ける。頭の、見出しの前にある分も一つに数える。 */
+function sections(text: string): Array<{ head: string; text: string }> {
+  const out: Array<{ head: string; text: string }> = [];
+  let head = '(はじめ)';
+  let lines: string[] = [];
+  const flush = (): void => {
+    const body = lines.join('\n').trim();
+    if (body.length > 0) out.push({ head, text: body });
+  };
+  for (const line of text.split('\n')) {
+    if (/^#{1,3} /.test(line)) {
+      flush();
+      head = line.trim();
+      lines = [line];
+      continue;
+    }
+    lines.push(line);
+  }
+  flush();
+  return out;
+}
+
+/**
+ * 節の単位で、**上から順に、入らなくなったところで止める。**
+ *
+ * 一度、入らない節を飛ばして次を試す形にした。予算は埋まるが、
+ * **大きくて大事な節が落ち、小さくてどうでもいい節が入る。**
+ * 実際にコンテキストウィンドウ 4096 で「## 前提（勝手に変えない）」が落ちて
+ * 「## 時刻」が入った。書いた人は大事なものを上に置くので、
+ * **並びを崩す方が悪い。**
+ *
+ * 入らなかったものは全部名前で返す。呼ぶ側が人に見せる。
+ */
+function fitSections(
+  text: string, budget: number, count: Count = estimateTokens,
+): { text: string; missing: string[] } {
+  const parts = sections(text);
+  /*
+   * 見出しが無いファイルは、節に割れない。**丸ごと落とすより、頭から入る
+   * 分だけ入れる方がよい**（切ったとは言う）。節で入れる形にしたとき、
+   * ここを落としてしまい、元からあったテストが捕まえた。
+   */
+  if (parts.length <= 1) {
+    const keep = cut(text, budget, count);
+    return keep.length > 0
+      ? { text: `${keep}\n…（長いので、ここまで）`, missing: [] }
+      : { text: '', missing: parts.map((p) => p.head) };
+  }
+  const kept: string[] = [];
+  let left = budget;
+  let at = 0;
+  for (; at < parts.length; at += 1) {
+    const cost = count(`${parts[at]!.text}\n\n`);
+    if (cost > left) break;
+    kept.push(parts[at]!.text);
+    left -= cost;
+  }
+  return { text: kept.join('\n\n'), missing: parts.slice(at).map((p) => p.head) };
 }
 
 /**
@@ -163,6 +252,20 @@ export class ProjectRules {
     this.#checkedAt = now;
     this.#cached = await readProjectRules(this.#root);
     return this.#cached;
+  }
+
+  /** いま効いている決まりを、コンテキストウィンドウに収まる形で。入らなかった見出しも返す。 */
+  async blockWithDropped(
+    budget: number, now = Date.now(), count?: Count,
+  ): Promise<{ text: string; dropped: string[] }> {
+    const c = count ?? estimateTokens;
+    const rules = await this.all(now);
+    if (rules.length === 0 || budget <= 0) return { text: '', dropped: [] };
+    const frame = c(rulesBlock([{ ...rules[0]!, text: '' }]));
+    const { kept, dropped } = fitRulesWithDropped(rules, Math.max(0, budget - frame), c);
+    const made = rulesBlock(kept);
+    if (c(made) > budget) return { text: '', dropped: rules.map((r) => r.path) };
+    return { text: made, dropped };
   }
 
   /** いま効いている決まりを、窓に収まる形で。 */

@@ -93,7 +93,7 @@ export const HATED_SHARE = 0.2;
 /**
  * 地図のために取り置く割合と、取り置きを始める予算。
  *
- * 置き場の決まりは残りを全部取るので、取り置かないと地図は窓 32768 まで
+ * 置き場の決まりは残りを全部取るので、取り置かないと地図はコンテキストウィンドウ 32768 まで
  * 一度も載らなかった（実測）。ここは**利用者が書いた決まりの末尾を削って、
  * こちらが作った地図を載せる**という取り引きなので、いちばん小さく取る。
  *
@@ -1457,6 +1457,19 @@ export class Session {
     return this.#system();
   }
 
+  /**
+   * システムプロンプトに入り切らなかったもの。
+   *
+   * **ここまで、`#lastDropped` は書かれるだけで一度も読まれていなかった。**
+   * すぐ上に「黙って落とさない」と書いてあるのに、読む道が無い。
+   * 決まりが半分しか渡っていないことを、誰も知る手立てが無かった。
+   *
+   * 呼ぶ側（画面・CLI）が、そのまま人に見せられる形で返す。
+   */
+  droppedFromSystem(): readonly string[] {
+    return this.#lastDropped;
+  }
+
   /** 依頼のたびに、その時点で分かっている状況を渡す。調べ直させるより速い。 */
   async #system(): Promise<string> {
     const base = this.config.system ?? DEFAULT_SYSTEM;
@@ -1471,7 +1484,7 @@ export class Session {
      * ここまで、載せるものごとに窓の割合を別々に決めていた
      * （学び 15%、置き場の決まり 20%、道具の説明 15%）。**合計を誰も
      * 見ていない。**足すと窓の半分が、依頼と履歴の前に消える。
-     * 窓 4096 のモデルでは、それだけで 56%（実測）。
+     * コンテキストウィンドウ 4096 のモデルでは、それだけで 56%（実測）。
      *
      * 一つずつ見ると、どれも「窓に合わせて」いる。**合わせ方が独立
      * だっただけで、これは前に六箇所直したのと同じ形。**
@@ -1519,12 +1532,27 @@ export class Session {
      * 作業場の様子はこちらが毎回作り直せる。前の並びは、
      * 添字を手で書いていたことによる取りこぼしだったと考えている。
      */
+    /** 決まりのうち、窓に入らなかった見出し。**黙って落とさない。** */
+    const missingRules: string[] = [];
     const { text, dropped } = await fitParts([
       { name: '決まり本体', priority: 100, required: true, render: () => base },
       {
-        name: '置き場の決まり',
+        name: 'リポジトリの決まり',
         priority: 60,
-        render: (left) => this.#projectRules.block(left, Date.now(), count),
+        /*
+         * **入らなかった見出しを、拾っておく。**
+         *
+         * ここは丸ごと落ちたことしか分からなかった。実際には**節の途中で
+         * 切れて、後ろの節が全部消えて**いた。コンテキストウィンドウ 8192（手元の小さいモデルで
+         * ふつうの大きさ）では、11 節のうち 3 節しか渡っていない。
+         * 「push では CI を回さない」も「C: 直下にフォルダを作らない」も、
+         * 一度もモデルに届いていなかった。
+         */
+        render: async (left) => {
+          const got = await this.#projectRules.blockWithDropped(left, Date.now(), count);
+          for (const d of got.dropped) missingRules.push(d);
+          return got.text;
+        },
       },
       {
         name: '嫌がられたこと',
@@ -1574,7 +1602,7 @@ export class Session {
         priority: 20,
         /*
          * **取り置く。**置き場の決まりは残りを全部取るので、これが無いと
-         * 地図は窓 32768 まで一度も載らなかった（実測）。
+         * 地図はコンテキストウィンドウ 32768 まで一度も載らなかった（実測）。
          * 狭い窓では取り置かない（取り置くと、決まりの側が落ちる）。
          */
         atLeast: budget >= MAP_FROM ? Math.floor(budget * MAP_SHARE) : 0,
@@ -1590,8 +1618,24 @@ export class Session {
       },
     ], budget, size);
 
-    // **黙って落とさない。**何が入らなかったかは、残す側が知る必要がある。
-    if (dropped.length > 0) this.#lastDropped = dropped;
+    /*
+     * **黙って落とさない。**
+     *
+     * ここは `#lastDropped` に入れるだけで、**どこからも読まれていなかった。**
+     * コメントにそう書いてあるのに、実装が無い。決まりが半分しか渡って
+     * いないことを、誰も知る手立てが無かった。
+     */
+    const now = [...dropped, ...missingRules];
+    /*
+     * **変わったときだけ言う。**毎回言うと同じ行で記録が埋まり、
+     * 埋まったものは読まれなくなる（それは黙っているのと同じ）。
+     */
+    if (now.join('\n') !== this.#lastDropped.join('\n') && now.length > 0) {
+      this.#opts.onLog?.('warn',
+        `決まりがコンテキストウィンドウに入り切らないので、${now.length} 件をモデルへ渡していません: ${now.join(' / ')}`
+        + '（前に書いてある節から入ります。大事なものを上へ動かすか、コンテキストウィンドウの広いモデルにしてください）');
+    }
+    this.#lastDropped = now;
     return text;
   }
 
