@@ -17,9 +17,21 @@ const LLAMA_LIB = 'node-llama-cpp'; // 型検査に解決させない（src/runt
 
 const DIST = join(installRoot(), 'node_modules', 'node-llama-cpp', 'dist');
 
-/** 入っていない場所（作業コピーの既定）では飛ばす。 */
-const has = await stat(DIST).then(() => true, () => false);
-const onlyWithLib = { skip: has ? false : 'node-llama-cpp が入っていません' };
+/*
+ * 入っていない場所（作業コピーの既定）では飛ばす。
+ *
+ * **`dist/` が在るかだけを見ていた。**組んだものは `dist/` ごと入るが、
+ * 型宣言（`.d.ts`）は落とす。飛ばす側にも回らず、読みに行って
+ * 「そんなファイルは無い」で落ちた（組んだものの中で回して出た。3 件）。
+ *
+ * ここで見たいのは本物の宣言なので、**宣言そのものが在るか**で決める。
+ * 組んだものの中では、ライブラリは組んだ時点で固まっていて、ずれようが
+ * ないので、確かめる意味も無い。
+ */
+const has = await stat(join(DIST, 'index.d.ts')).then(() => true, () => false);
+const onlyWithLib = {
+  skip: has ? false : 'node-llama-cpp の型宣言がありません（組んだものには入りません）',
+};
 
 async function d(...parts: string[]): Promise<string> {
   return readFile(join(DIST, ...parts), 'utf8');
