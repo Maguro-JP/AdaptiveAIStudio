@@ -228,7 +228,9 @@ async function commit(
   // 黙って落とすと、直したつもりのまま次へ進んで、噛み合わなくなる。
   let body = written;
   let partial = '';
-  if (answer !== true) {
+  // `'all'`（この依頼のあいだは訊かない）は、ここまで来ない形にしてある
+  // （画面の側で `true` に直す）。それでも、来たら通す側として扱う。
+  if (answer !== true && answer !== 'all') {
     const all = splitHunks(diff);
     const took = [...new Set(answer.hunks)].filter((i) => i >= 0 && i < all.length).sort((a, b) => a - b);
     if (took.length === 0) return fail(`利用者が書き込みを拒否しました: ${shown}`);

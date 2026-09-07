@@ -579,15 +579,28 @@ export const PANELS = {
 
       const yes = el('button', 'primary', '許可');
       const no = el('button', '', '拒否');
-      const answer = (approved) => {
+      /*
+       * **5 ファイル直すと 5 回訊かれる。**1 回目で中身を見て納得している
+       * のに、残り 4 回も同じ手を動かすことになる。人はそこで中身を見ずに
+       * 押すようになり、承認そのものが形だけになる。
+       *
+       * 書き込みのときだけ出す。コマンドも、外へ出るのも、協議も、毎回訊く。
+       */
+      const all = req.kind === 'write' ? el('button', '', 'この依頼は以降訊かない') : null;
+      const answer = (approved, everything) => {
         // 選ばれた塊。全部に印が付いていれば、そのまま全部通す。
         const chosen = picks.map((t, i) => (t.checked ? i : -1)).filter((i) => i >= 0);
-        const partial = approved && picks.length > 0 && chosen.length < picks.length;
+        const partial = approved && !everything && picks.length > 0 && chosen.length < picks.length;
         fetch('/api/approve', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ id: e.id, approved, ...(partial ? { hunks: chosen } : {}) }),
+          body: JSON.stringify({
+            id: e.id, approved,
+            ...(partial ? { hunks: chosen } : {}),
+            ...(everything ? { all: true } : {}),
+          }),
         });
         const said = !approved ? '拒否'
+          : everything ? '許可（この依頼は以降訊かない）'
           : partial ? `一部だけ許可（${chosen.length}/${picks.length}）`
           : '許可';
         box.replaceChildren(el('div', approved ? 'good' : 'dim', `${what} → ${said}`));
@@ -598,8 +611,10 @@ export const PANELS = {
         answer(true);
       };
       no.onclick = () => answer(false);
+      if (all) all.onclick = () => answer(true, true);
       const menu = el('div', 'ask-menu');
       menu.append(yes, no);
+      if (all) menu.append(all);
       box.append(menu);
       add(box);
       ctx.on('approvalDone', (d) => {

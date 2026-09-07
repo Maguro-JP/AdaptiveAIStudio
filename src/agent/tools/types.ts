@@ -37,7 +37,20 @@ export interface ToolContext {
  * 通す塊の番号）。全部か無しかしか無いと、3つ直したうちの1つが違うだけで
  * 直っている2つごと捨てることになる。
  */
-export type ApprovalAnswer = boolean | { readonly hunks: readonly number[] };
+export type ApprovalAnswer =
+  | boolean
+  | { readonly hunks: readonly number[] }
+  /**
+   * これを通し、**この依頼のあいだは、書き込みをもう訊かない。**
+   *
+   * 5 ファイル直すと 5 回訊かれる。1 回目で中身を見て納得しているのに、
+   * 残り 4 回も同じ手を動かすことになる。人はそこで**中身を見ずに押す**
+   * ようになり、承認そのものが形だけになる。
+   *
+   * 効くのはその依頼のあいだだけ。次の依頼では、また訊く。
+   * 関所（ハーネス）は素通りしないし、戻り先も今までどおり残る。
+   */
+  | 'all';
 
 export type ApprovalRequest =
   | { kind: 'write'; path: string; diff: string; created: boolean }

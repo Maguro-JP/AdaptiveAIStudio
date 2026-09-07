@@ -518,11 +518,35 @@ export class UiServer {
     await this.#drainQueue(session);
   }
 
+  /**
+   * この依頼のあいだ、書き込みをもう訊かない。
+   *
+   * 一度「残りも全部通す」と答えたら、その依頼が終わるまで立つ。
+   * **依頼が変わったら倒す**（`#drive` の頭）。次の依頼まで持ち越さない。
+   */
+  #allWrites = false;
+
   #ask(req: ApprovalRequest): Promise<ApprovalAnswer> {
     const approval = this.#opts.config.agent?.approval ?? 'autoEdit';
     // 協議は自動承認の対象にしない。重大な変更は必ず人の目を通す。
     if (approval === 'auto' && req.kind !== 'deliberation') return Promise.resolve(true);
     if (approval === 'autoEdit' && req.kind === 'write') return Promise.resolve(true);
+    /*
+     * **一度そう言われたら、同じ依頼のあいだは訊き直さない。**
+     *
+     * 5 ファイル直すと 5 回訊かれる。1 回目で中身を見て納得しているのに、
+     * 残り 4 回も同じ手を動かすことになる。人はそこで中身を見ずに押す
+     * ようになり、承認そのものが形だけになる。
+     *
+     * 効くのは書き込みだけ。コマンドも、外へ出るのも、協議も、毎回訊く。
+     */
+    if (req.kind === 'write' && this.#allWrites) {
+      this.broadcast({
+        type: 'log', level: 'info',
+        text: `${req.path} を書きました（この依頼のあいだは訊かない、を選んでいます）`,
+      });
+      return Promise.resolve(true);
+    }
 
     const id = `a${++this.#seq}`;
     return new Promise<ApprovalAnswer>((resolve) => {
@@ -530,6 +554,8 @@ export class UiServer {
       const finish = (ok: ApprovalAnswer) => {
         if (done) return;
         done = true;
+        // 「残りも全部」を受け取ったら、ここで旗を立てる。返す答えは通常の許可。
+        if (ok === 'all') { this.#allWrites = true; ok = true; }
         this.#pending.delete(id);
         this.broadcast({ type: 'approvalDone', id, approved: ok !== false });
         resolve(ok);
@@ -844,14 +870,16 @@ export class UiServer {
     }
 
     if (path === '/api/approve' && req.method === 'POST') {
-      const body = await readBody(req) as { id?: string; approved?: boolean; hunks?: unknown };
+      const body = await readBody(req) as { id?: string; approved?: boolean; hunks?: unknown; all?: boolean };
       const resolveIt = this.#pending.get(String(body?.id ?? ''));
       if (!resolveIt) return send(res, 404, { error: 'その承認は既に終わっています' });
       // 一部だけ通すときは、通す塊の番号が来る。
       const picked = Array.isArray(body?.hunks)
         ? body.hunks.filter((n): n is number => typeof n === 'number')
         : undefined;
-      if (body?.approved === true && picked && picked.length > 0) resolveIt({ hunks: picked });
+      // 「この依頼のあいだは訊かない」。書き込みだけに効く。
+      if (body?.approved === true && (body as { all?: unknown }).all === true) resolveIt('all');
+      else if (body?.approved === true && picked && picked.length > 0) resolveIt({ hunks: picked });
       else resolveIt(body?.approved === true);
       return send(res, 200, { ok: true });
     }
@@ -1633,6 +1661,9 @@ export class UiServer {
     session: Session, text: string, resuming?: string,
     opts: { fromUser?: boolean } = {},
   ): Promise<void> {
+    // **依頼をまたいで持ち越さない。**「この依頼のあいだは訊かない」は、
+    // その依頼のあいだだけ。次の依頼では、また訊く。
+    this.#allWrites = false;
     this.broadcast({ type: 'busy', busy: true });
     // どう終わったか。**終わり方を見て、やり残しを控える。**
     let settled: { reason: string; verified: boolean; checked: string } | undefined;
