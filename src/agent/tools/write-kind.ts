@@ -168,17 +168,35 @@ function anchorEdit(
   const found: Array<{ from: number; to: number }> = [];
   for (let i = 0; i < lines.length; i += 1) {
     if (lines[i]!.trim() !== head) continue;
+    /*
+     * **いちばん合う終わりを選ぶ。最初に見つかった終わりではなく。**
+     *
+     * ここは k を -2 から順に見て、最初に当たったところで打ち切っていた。
+     * 終わりの行は `}` や `);` のような、どこにでもある行になりやすい。
+     * そのため**本当の終わりより 2 行手前**で止まり、残りの行が置き去りに
+     * なる。しかも当たったことになるので何も言わない。
+     * 履歴 400 commit で測ると、真ん中に空行を入れた形・数行を省いた形の
+     * 失敗は**全部これ**だった（それぞれ 43 件・53 件）。
+     *
+     * 渡された行数（span）は、真ん中を崩された分だけずれている。だから
+     * 行数は当てにせず、**真ん中がいちばん多く一致する終わり**を採る。
+     * 同じだけ合うなら、渡された行数に近い方。
+     */
+    let best: { to: number; same: number; off: number } | undefined;
     for (let k = -2; k <= 2; k += 1) {
       const end = i + span - 1 + k;
       if (end <= i || end >= lines.length) continue;
       if (lines[end]!.trim() !== tail) continue;
-      // 真ん中が半分も合っていないなら、別の場所とみなす。
       const inside = lines.slice(i + 1, end).map((l) => l.trim()).filter((l) => l.length > 0);
       const same = middle.filter((m) => inside.includes(m)).length;
+      // 真ん中が半分も合っていないなら、別の場所とみなす。
       if (middle.length > 0 && same * 2 < middle.length) continue;
-      found.push({ from: i, to: end });
-      break;
+      const off = Math.abs(k);
+      if (!best || same > best.same || (same === best.same && off < best.off)) {
+        best = { to: end, same, off };
+      }
     }
+    if (best) found.push({ from: i, to: best.to });
   }
   if (found.length === 0) return { text: before, hits: 0 };
   if (!all && found.length > 1) return { text: before, hits: found.length, loose: true, how: 'anchor' };

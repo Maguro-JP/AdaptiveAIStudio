@@ -142,7 +142,14 @@ const DAMAGE = {
   },
   注釈落ち: (s) => {
     const lines = s.split('\n');
-    const at = lines.findIndex((l, i) => i > 0 && i < lines.length - 1 && /^\s*(\/\/|\*|\/\*)/.test(l));
+    /*
+     * **塊の切れ目は落とさない。**`/**` を落とすと、探す塊そのものが別のものに
+     * なる。落とした後の find は**ファイルの中に本当に在る**ので、こちらはそこへ
+     * 正しく当てる。それを「外した」と数えると、直しようのないものを不具合と
+     * して数えることになる（実際に数えていた）。落とすのは注釈の中身の行だけ。
+     */
+    const at = lines.findIndex((l, i) => i > 0 && i < lines.length - 1
+      && /^\s*(\/\/|\*)\s*\S/.test(l) && !/^\s*(\/\*|\*\/)/.test(l));
     if (at < 0) return undefined;
     lines.splice(at, 1);
     return lines.join('\n');

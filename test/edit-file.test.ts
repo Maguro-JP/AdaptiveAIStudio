@@ -593,3 +593,40 @@ describe('崩れた find でも、正しい所へ正しく当てる', () => {
     assert.equal(got.text, "const re = /y/.source + '$&';\n");
   });
 });
+
+describe('両端で当てるとき、いちばん合う終わりを選ぶ', () => {
+  /**
+   * 終わりの行は `}` や `);` のような、どこにでもある行になりやすい。
+   * 最初に当たったところで打ち切ると、**本当の終わりより手前**で止まり、
+   * 残りの行が置き去りになる。しかも当たったことになるので何も言わない。
+   *
+   * 履歴 400 commit で測ると、真ん中に空行を入れた形・数行を省いた形の
+   * 失敗は**全部これ**だった（別物になったのが 43 件・53 件）。
+   */
+  test('**手前の `}` で打ち切らない**', () => {
+    const before = [
+      'function f() {',
+      '  if (a) {',
+      '    one();',
+      '  }',
+      '  two();',
+      '  three();',
+      '}',
+      '',
+    ].join('\n');
+    // 真ん中を一行省いて渡す（`two();` を落とす）。行数は本物より 1 少ない。
+    const find = ['function f() {', '  if (a) {', '    one();', '  }', '  three();', '}'].join('\n');
+    const got = applyEdit(before, find, 'function f() {\n  done();\n}', false);
+    assert.equal(got.hits, 1);
+    assert.equal(got.how, 'anchor');
+    assert.equal(got.text, 'function f() {\n  done();\n}\n',
+      `手前の } で打ち切って、置き去りが出ている: ${JSON.stringify(got.text)}`);
+  });
+
+  test('真ん中が合わない所へは、当てない（対）', () => {
+    // 緩めた分だけ、よその場所へ当たりやすくなる。半分の決まりは残す。
+    const before = 'function f() {\n  aaa();\n  bbb();\n  ccc();\n}\n';
+    const got = applyEdit(before, 'function f() {\n  xxx();\n  yyy();\n  zzz();\n}', 'X', false);
+    assert.equal(got.hits, 0, '中身が違うのに当てている');
+  });
+});
