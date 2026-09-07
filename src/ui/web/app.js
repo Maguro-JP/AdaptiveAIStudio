@@ -7,6 +7,7 @@
  */
 import { PANELS, TITLES } from './panels.js';
 import { closePanel, openPanel, movePanel, panelsInUse } from './layout-ops.js';
+import { doingText } from './doing.js';
 import { openPicker } from './color.js';
 
 const root = document.getElementById('editor');
@@ -492,6 +493,7 @@ const run = {
 
 $('runStop').onclick = () => fetch('/api/abort', { method: 'POST' });
 
+
 function listen() {
   const src = new EventSource('/api/events');
   const status = $('status');
@@ -529,6 +531,12 @@ function listen() {
     if (e.type === 'themeChanged') return void loadTheme();
     if (e.type === 'thinkEvent') {
       if (e.event.type === 'chose') run.set('busy', `考え中: ${e.event.codename}`);
+    }
+    // いま触っているものを、上の帯に出す。終わったら「作業中」へ戻す
+    // （**「読んでいます」のまま止まって見えるのが、いちばん困る**）。
+    if (e.type === 'session' && busyNow) {
+      if (e.event.type === 'toolStart') run.set('busy', doingText(e.event.name, e.event.summary));
+      if (e.event.type === 'toolEnd') run.set('busy', '作業中');
     }
     for (const fn of eventHandlers.get(e.type) ?? []) fn(e);
   };

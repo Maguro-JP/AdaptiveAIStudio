@@ -1763,7 +1763,9 @@ export class Session {
 function summarize(args: unknown): string {
   if (typeof args !== 'object' || args === null) return '';
   const o = args as Record<string, unknown>;
-  const key = ['path', 'command', 'query', 'url'].find((k) => typeof o[k] === 'string');
+  // `name` は find_symbol（名前で引く）が使う。**足したツールの引数を
+  // ここに足し忘れると、画面にはツールの名前しか出ない。**
+  const key = ['path', 'command', 'query', 'url', 'name'].find((k) => typeof o[k] === 'string');
   return key ? String(o[key]).slice(0, 100) : '';
 }
 
