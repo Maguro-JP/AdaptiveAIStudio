@@ -30,6 +30,7 @@ import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { createDeliberateTool } from '../agent/tools/deliberate.ts';
 import { buildInspector } from './inspector-setup.ts';
 import { startMcpServers } from './mcp-setup.ts';
+import { loadJournals, type Journals } from './journals.ts';
 import type { McpClient } from '../mcp/client.ts';
 import { collectTools } from '../mcp/tools.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
@@ -204,6 +205,13 @@ export interface SessionOptions {
    * 完全に閉じたいときだけ false にする。
    */
   approveThinking?: boolean;
+  /**
+   * 溜めておくもの（提案・当番・暇の配分）。
+   *
+   * **既に読んであるなら渡す。**画面は、これを読むためだけにセッションを
+   * 作っていた。渡せば作らずに済み、二つ持って食い違うこともない。
+   */
+  journals?: Journals;
 }
 
 export class Session {
@@ -421,27 +429,16 @@ export class Session {
     // ここまで指摘されてきたことを、最初から持たせておく。
     if (memory.seedLessons() > 0) await memory.save().catch(() => undefined);
 
-    const initCfg = config.initiative ?? {};
-    const proposals = new ProposalQueue(join(stateDir(), 'proposals.json'));
-    await proposals.load();
-
-    // 使う思考モードだけを配る。減らせば、その分だけ静かになる。
-    const idle = new IdleScheduler(
-      BUILTIN_IDLE_MODES.filter((m) => !initCfg.modes || initCfg.modes.includes(m.id)),
-      {
-        perHour: initCfg.budgetPerHour ?? 12,
-        minGapMs: (initCfg.minGapMinutes ?? 10) * 60_000,
-        maxPerChange: initCfg.maxPerChange ?? 2,
-      },
-    );
-    try {
-      idle.restore(JSON.parse(await readJson(join(stateDir(), 'idle.json'), 'utf8')) as ModeStat[]);
-    } catch { /* 記録が無いのは正常 */ }
-
-    const duties = new DutyRoster(BUILTIN_DUTIES);
-    try {
-      duties.restore(JSON.parse(await readJson(join(stateDir(), 'duties.json'), 'utf8')) as DutyRecord[]);
-    } catch { /* 記録が無いのは正常 */ }
+    /*
+     * 溜めておくもの（提案・当番・暇の配分）。
+     *
+     * **渡されたらそれを使う。**画面はこれを読むためだけに、ここまで
+     * セッションを作っていた。作ると、モデルの一覧を取り・MCP の相手を
+     * 起こし・先読みを始め・記憶を読み込む。**利用者は何も頼んでいない。**
+     * 呼ぶ側が先に読んでおけるようにして（`loadJournals`）、二つ持たない
+     * ように、ここでは渡されたものを使う。
+     */
+    const { proposals, idle, duties } = opts.journals ?? await loadJournals(config);
 
     const session = new Session({
       config, root, candidates, modelReason: note, memory,

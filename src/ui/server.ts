@@ -20,6 +20,8 @@ import { Goals, progressOf, isSettled } from '../core/goals.ts';
 import { StrideBook, strideText } from '../agent/stride.ts';
 import { decompose, stepPrompt } from '../agent/decompose.ts';
 import { Conversations, ID_SHAPE } from '../core/conversations.ts';
+import { loadJournals, type Journals } from '../core/journals.ts';
+import { UndoStore } from '../core/undo.ts';
 import { writeEnvValue } from '../core/env.ts';
 import { canRun } from '../core/which.ts';
 import { saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
@@ -272,9 +274,34 @@ export class UiServer {
    * 承認は画面へ投げて、答えが返るまで待つ。
    * 誰も見ていない画面へ投げっぱなしにならないよう、待ち時間には上限を置く。
    */
+  /**
+   * 溜めておくもの（提案・当番・暇の配分）。**セッションより先に持つ。**
+   *
+   * 画面はこれを読むためだけに `session()` を呼んでいた。呼ぶと、モデルの
+   * 一覧を取り・MCP の相手を起こし・先読みを始め・記憶を読み込む。
+   * **利用者は画面を開いただけで、何も頼んでいない。**
+   * MCP の相手が立ち上がらなければ 1 台につき最大 20 秒、その間この
+   * やりとりを受ける入口が全部止まる。
+   */
+  #journals?: Journals;
+
+  async journals(): Promise<Journals> {
+    // セッションが在るなら、そちらと同じものを使う（二つ持つと食い違う）。
+    if (this.#session) {
+      return {
+        proposals: this.#session.proposals,
+        idle: this.#session.idle,
+        duties: this.#session.duties,
+      };
+    }
+    this.#journals ??= await loadJournals(this.#opts.config);
+    return this.#journals;
+  }
+
   async session(): Promise<Session> {
     if (this.#session) return this.#session;
     this.#session = await Session.create(await this.#configForSession(), {
+      journals: await this.journals(),
       approve: (req) => this.#ask(req),
       onLog: (level, text) => this.broadcast({ type: 'log', level, text }),
     });
@@ -554,12 +581,13 @@ export class UiServer {
     // 見る口の場所。まだ立ち上げていなければ、ここで立ち上げる。
     // 使わない人のために口を開けっぱなしにしない。
     if (path === '/api/preview' && req.method === 'GET') {
-      const session = await this.session();
+      // **作業場の根を知るためだけに、セッションを作らない。**
+      const root = this.#workRoot();
       if (!this.#preview) {
-        this.#preview = new PreviewServer({ root: session.root });
+        this.#preview = new PreviewServer({ root });
         await this.#preview.start();
       }
-      return send(res, 200, { url: this.#preview.url, root: session.root });
+      return send(res, 200, { url: this.#preview.url, root });
     }
 
     if (path === '/api/attach' && req.method === 'POST') {
@@ -665,13 +693,15 @@ export class UiServer {
     }
 
     if (path === '/api/proposals' && req.method === 'GET') {
-      const session = await this.session();
+      // **ここでセッションを作らない。**画面が開いた直後に読む所で、
+      // 中身はどれもファイルから読めるもの。モデルは要らない。
+      const { proposals, duties, idle } = await this.journals();
       return send(res, 200, {
-        open: session.proposals.open(),
-        duties: session.duties.status(Date.now()),
-        due: session.duties.due(Date.now()).map((d) => d.duty.codename),
-        idle: session.idle.stats(),
-        spent: session.idle.spentThisHour(Date.now()),
+        open: proposals.open(),
+        duties: duties.status(Date.now()),
+        due: duties.due(Date.now()).map((d) => d.duty.codename),
+        idle: idle.stats(),
+        spent: idle.spentThisHour(Date.now()),
       });
     }
 
@@ -746,8 +776,12 @@ export class UiServer {
     }
 
     if (path === '/api/models/get' && req.method === 'POST') {
-      const session = await this.session();
-      if (this.#busyNow(session)) return send(res, 409, { error: 'いま作業中です。終わってからにしてください' });
+      // **セッションが無いなら、何も動いていない。**取ってくるために作らない。
+      const live = this.#session;
+      if (live && this.#busyNow(live)) {
+        return send(res, 409, { error: 'いま作業中です。終わってからにしてください' });
+      }
+      const session = live ?? await this.session();
       const body = await readBody(req) as { id?: string };
       const id = String(body?.id ?? '');
       if (!id) return send(res, 400, { error: '名前がありません' });
@@ -758,7 +792,8 @@ export class UiServer {
     }
 
     if (path === '/api/update' && req.method === 'GET') {
-      return send(res, 200, await checkUpdate((await this.session()).root));
+      // 新しい版が出ていないか見るだけ。**セッションは要らない。**
+      return send(res, 200, await checkUpdate(this.#workRoot()));
     }
 
     if (path === '/api/update' && req.method === 'POST') {
@@ -1038,8 +1073,10 @@ export class UiServer {
      * git があってもコミット前は戻せないし、社用PCには git が無い。
      */
     if (path === '/api/undo' && req.method === 'GET') {
-      const session = await this.session();
-      return send(res, 200, { list: await session.undo.list() });
+      // 戻せるものの一覧は、ファイルから読める。**セッションは要らない。**
+      // ここは画面が開いた直後に読む所（横の一覧に出る）。
+      const undo = this.#session?.undo ?? new UndoStore(this.#workRoot(), join(stateDir(), 'undo'));
+      return send(res, 200, { list: await undo.list() });
     }
 
     if (path === '/api/undo' && req.method === 'POST') {
