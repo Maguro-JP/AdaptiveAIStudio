@@ -4,7 +4,7 @@
  * ローカルモデルがファイルを読み、差分を出し、承認を経て書き込む。
  * 何時間かかってもよい。打ち切るのは「進捗が無いとき」だけ。
  */
-import { findCodeTool } from '../agent/tools/find.ts';
+import { findCodeTool, findSymbolTool } from '../agent/tools/find.ts';
 import { defaultWorkRoot } from '../core/home.ts';
 import { stdin, stdout } from 'node:process';
 import { LineSource } from './input.ts';
@@ -150,7 +150,7 @@ async function main(): Promise<void> {
 
   /** 権限に応じてツールを配る。持たせない権限は事故にならない。 */
   const toolPool = {
-    read: harness.wrapAll([readFileTool, listFilesTool, searchTextTool, findCodeTool], () => currentInstruction),
+    read: harness.wrapAll([readFileTool, listFilesTool, searchTextTool, findCodeTool, findSymbolTool], () => currentInstruction),
     write: harness.wrapAll([writeFileTool, editFileTool], () => currentInstruction),
     execute: harness.wrapAll(
       [createRunCommandTool({ allowed: agentCfg.allowedCommands })], () => currentInstruction),

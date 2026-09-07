@@ -418,6 +418,95 @@ async function countSource(root: string): Promise<number> {
 }
 
 /** 当たったところ。**切り取って返す。** */
+/** コードのファイルか。文章（`.md` など）は、呼んでいる側に数えない。 */
+function isCodePath(path: string): boolean {
+  return /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|json|py|go|rs|java|kt|rb|php|cs|c|h|cc|cpp|hpp|swift|sh|bash|zsh|sql|vue|svelte)$/i
+    .test(path);
+}
+
+/** 名前で引いた結果。 */
+export interface SymbolLookup {
+  /** どこで宣言されているか。 */
+  defined: { path: string; line: number; exported: boolean }[];
+  /** その名前を使っているファイル（宣言している所は除く）。 */
+  used: string[];
+  /** 見つからなかったとき、綴りの近いもの。 */
+  near: string[];
+}
+
+/**
+ * 名前を、そのまま引く。
+ *
+ * `find_code` は言葉から当てる道で、**名前がもう分かっているときには
+ * 遠回り**になる。関数名が分かっているのに、点数の高い順に 8 ファイル
+ * 読まされて、その中に無ければ諦める——実際にそうなる。
+ *
+ * 索引には名前と行が既に入っているので、引くだけで済む。
+ * 大文字小文字は、まず厳密に。当たらなければ落として当てる（`ok` と `OK`）。
+ * それでも無ければ、**綴りの近いものを出す。**「無い」で終わると、
+ * 打ち間違いなのか本当に無いのかが分からない。
+ */
+export function lookupSymbol(index: CodeIndex, name: string): SymbolLookup {
+  const wanted = name.trim();
+  if (wanted === '') return { defined: [], used: [], near: [] };
+
+  const pick = (eq: (a: string) => boolean): SymbolLookup['defined'] => {
+    const out: SymbolLookup['defined'] = [];
+    for (const f of index.files) {
+      for (const sym of f.symbols) {
+        if (!eq(sym.name)) continue;
+        out.push({ path: f.path, line: sym.line, exported: sym.exported === true });
+      }
+    }
+    return out;
+  };
+
+  let defined = pick((a) => a === wanted);
+  const lower = wanted.toLowerCase();
+  if (defined.length === 0) defined = pick((a) => a.toLowerCase() === lower);
+
+  const definedIn = new Set(defined.map((d) => d.path));
+  const used: string[] = [];
+  for (const f of index.files) {
+    if (definedIn.has(f.path)) continue;
+    // **文章に出てくるのは「使っている」ではない。**索引には `.md` も入って
+    // いるので、そのままだと決めごとの文書が使用箇所として並ぶ（実際に
+    // `docs/DECISIONS.md` が出た）。呼んでいる側だけを返す。
+    if (!isCodePath(f.path)) continue;
+    if ((f.refs ?? []).some((r) => r === wanted || r.toLowerCase() === lower)) used.push(f.path);
+  }
+
+  /*
+   * 近い名前。
+   *
+   * 最初は「含む」だけで見ていた。**短い名前が何にでも当たる。**
+   * `loadConfg` と打ったのに出たのは `load, on, lo` で、肝心の
+   * `loadConfig` は出なかった（含む関係に無いため）。打ち間違いの多くは
+   * 一文字足りない・多い・入れ替わりなので、**頭からどこまで同じか**で見る。
+   */
+  const near: string[] = [];
+  if (defined.length === 0) {
+    const scored = new Map<string, number>();
+    for (const f of index.files) {
+      for (const sym of f.symbols) {
+        const a = sym.name.toLowerCase();
+        if (Math.abs(a.length - lower.length) > 3) continue;
+        let same = 0;
+        while (same < a.length && same < lower.length && a[same] === lower[same]) same += 1;
+        if (same < Math.max(3, Math.floor(lower.length * 0.5))) continue;
+        const best = scored.get(sym.name);
+        if (best === undefined || same > best) scored.set(sym.name, same);
+      }
+    }
+    near.push(...[...scored.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([n]) => n));
+  }
+
+  // 宣言は、外に出しているものを先に。呼ぶ側が知りたいのはたいていそちら。
+  defined.sort((a, b) => (a.exported === b.exported ? a.path.localeCompare(b.path) : a.exported ? -1 : 1));
+  used.sort();
+  return { defined, used, near };
+}
+
 export interface Hit {
   path: string;
   /** 点。高いほど確からしい */
