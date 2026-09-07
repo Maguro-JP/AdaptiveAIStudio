@@ -367,6 +367,43 @@ function normalizeRuntime(raw: unknown): RuntimeConfig {
   return r as RuntimeConfig;
 }
 
+/**
+ * 設定の中身を読む。**壊れていたら、どこがどう壊れているかを言う。**
+ *
+ * ここは `JSON.parse` を直に呼んでいた。設定は手で書ける（`aas.config.json`）
+ * ので、閉じ忘れや末尾のコンマは普通に起きる。そのとき出ていたのは
+ *
+ *   SyntaxError: Expected double-quoted property name in JSON at position 33
+ *     at JSON.parse (<anonymous>) ...
+ *
+ * という Node のスタックだけ。**どのファイルの話かも書いていない。**
+ * しかも落ちるのは、設定を読むところ——つまり `doctor`（困ったときに見る
+ * もの）も、画面も、同じ所で死ぬ。**直しに行く手段まで一緒に塞がる。**
+ * 「モデルが一つ無いだけで画面じゅうが 500 になる」と同じ形。
+ *
+ * ファイルの場所・何行目・その行そのもの・次の一手を出す。
+ */
+export class ConfigBroken extends Error {}
+
+export function parseConfigText(raw: string, path: string): Partial<AasConfig> {
+  try {
+    return JSON.parse(raw) as Partial<AasConfig>;
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    const at = /position (\d+)/.exec(why);
+    const lines = raw.slice(0, at ? Number(at[1]) : raw.length).split('\n');
+    const lineNo = lines.length;
+    const line = raw.split('\n')[lineNo - 1] ?? '';
+    throw new ConfigBroken(
+      `設定を読めません: ${path}\n`
+      + `  ${lineNo} 行目のあたり: ${line.trim().slice(0, 80)}\n`
+      + `  （${why}）\n`
+      + '  よくあるのは、末尾のコンマと、閉じ忘れです。\n'
+      + '  直せないときは、このファイルを消せば既定で動きます（設定は画面からやり直せます）。',
+    );
+  }
+}
+
 export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: string } {
   // 合言葉は置き場の .env から。設定には名前しか書かないので、値はここで揃える。
   // 設定を読む所は一つなので、ここに置けばどの入口（画面・doctor・cli）でも同じ。
@@ -383,7 +420,7 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
     return { config, source: `既定値 (aas.config.json なし。書くなら ${path})` };
   }
 
-  const parsed = JSON.parse(raw) as Partial<AasConfig>;
+  const parsed = parseConfigText(raw, path);
   const config: AasConfig = {
     // **既定をそのまま渡さない。**同じ物を返すと、あとで書き換えたときに
     // 既定そのものが書き換わり、次に読んだ設定にも残る（実際に起きた。

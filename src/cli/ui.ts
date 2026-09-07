@@ -3,11 +3,31 @@
  * 起動は一手で済ませたいので、待つ・開く・止めるをここに閉じ込める。
  */
 import { spawn } from 'node:child_process';
-import { loadConfig } from '../config.ts';
+import { loadConfig, ConfigBroken, DEFAULT_CONFIG } from '../config.ts';
 import { UiServer, RESTART_EXIT } from '../ui/server.ts';
 import { openerFor } from '../core/opener.ts';
 
-const { config } = loadConfig();
+/*
+ * **設定が壊れていても、画面は開ける。**
+ *
+ * ここは `loadConfig()` を直に呼んでいたので、`aas.config.json` に末尾の
+ * コンマが一つあるだけで、画面はそもそも立ち上がらなかった。**設定を
+ * 直しに行く手段まで、同時に塞がる。**モデルが無いと画面じゅうが 500 に
+ * なっていたのと同じ形。
+ *
+ * 既定で開いて、何が壊れているかを出す。直すのは画面の「設定」から。
+ */
+let config: ReturnType<typeof loadConfig>['config'];
+let broken: string | undefined;
+try {
+  config = loadConfig().config;
+} catch (e) {
+  if (!(e instanceof ConfigBroken)) throw e;
+  broken = e.message;
+  config = { ...structuredClone(DEFAULT_CONFIG), runtime: { kind: 'inproc' } };
+  console.log(`\n${broken}\n`);
+  console.log('  既定のまま開きます。上の場所を直すか、消してください。\n');
+}
 const port = Number(process.env.AAS_UI_PORT ?? 4174);
 // AAS_RELAUNCH は start.cmd が付ける。付いていれば、RESTART_EXIT で終わると
 // 起こし直してもらえる。

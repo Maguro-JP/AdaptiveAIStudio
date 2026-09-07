@@ -7,7 +7,7 @@
  * 大事なのは、駄目出しで終わらせないこと。
  * 足りないものには**次に打つ一手**を必ず添える。
  */
-import { loadConfig, enabledProviders, configPath } from '../config.ts';
+import { loadConfig, ConfigBroken, enabledProviders, configPath } from '../config.ts';
 import { MachineCache, describeMachine } from '../runtime/machine.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { resolveCounting } from '../core/counting.ts';
@@ -62,7 +62,23 @@ function how(task: string, args = ''): string {
   return `npm run ${task}${args ? ` -- ${args}` : ''}`;
 }
 
-const { config, source } = loadConfig();
+/*
+ * **ここで死なない。**設定が壊れていると `loadConfig` は投げる。doctor は
+ * 困ったときに見るものなので、ここで Node のスタックを出して終わると、
+ * **何が起きているかを見に来た人が、何も見られずに終わる。**
+ * 壊れていることを一行で言って、そこで止める（続けても、以降の行は
+ * 全部でたらめになる）。
+ */
+let loaded: ReturnType<typeof loadConfig>;
+try {
+  loaded = loadConfig();
+} catch (e) {
+  if (!(e instanceof ConfigBroken)) throw e;
+  console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — doctor\n'));
+  console.log(c.red(e.message));
+  process.exit(1);
+}
+const { config, source } = loaded;
 add('設定', 'ok', source,
   source.includes('なし')
     ? `既定のまま動きます（この中で読む）。変えるなら画面の「設定」から。ファイルで書くなら ${configPath()}`
