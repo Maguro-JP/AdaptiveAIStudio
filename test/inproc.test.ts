@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
-import { InProcRuntime, listGguf, chooseModel, MAX_WINDOW, fitWindow } from '../src/runtime/inproc.ts';
+import { InProcRuntime, listGguf, chooseModel, MAX_WINDOW, SAFE_WINDOW, fitWindow } from '../src/runtime/inproc.ts';
 import { ggufHead } from './gguf-head.ts';
 
 /**
@@ -363,10 +363,15 @@ describe('文脈の大きさを決めておく', () => {
       LlamaChatSession: class { setChatHistory() {} async prompt() { return ''; } },
     };
   }
-  test('**モデルが持っている窓を読んで使う**', async () => {
+  test('**諸元が揃っていれば、モデルが持っている窓を使う**', async () => {
     const dir = await tempDir('aas-ctx-');
     await writeFile(join(dir, 'a.gguf'), ggufHead({
-      'general.architecture': 'qwen3', 'qwen3.context_length': 32768,
+      'general.architecture': 'qwen3',
+      'qwen3.context_length': 32768,
+      'qwen3.block_count': 4,
+      'qwen3.embedding_length': 512,
+      'qwen3.attention.head_count': 8,
+      'qwen3.attention.head_count_kv': 2,
     }));
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: () => libRecording(seen) });
@@ -374,10 +379,28 @@ describe('文脈の大きさを決めておく', () => {
     assert.deepEqual(seen, [{ contextSize: 32768 }]);
   });
 
+  test('**窓の値しか読めなければ、広げない**', async () => {
+    // 層数や head 数の鍵は、アーキテクチャごとに名前が違う。読めないことがある。
+    const dir = await tempDir('aas-ctx-');
+    await writeFile(join(dir, 'a.gguf'), ggufHead({
+      'general.architecture': 'qwen3', 'qwen3.context_length': 32768,
+    }));
+    const seen: unknown[] = [];
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: () => libRecording(seen) });
+    try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
+    assert.deepEqual(seen, [{ contextSize: SAFE_WINDOW }],
+      '記憶を数えられないのに広げている');
+  });
+
   test('大きすぎる窓は、上限で止める（記憶を食い切らせない）', async () => {
     const dir = await tempDir('aas-ctx-');
     await writeFile(join(dir, 'a.gguf'), ggufHead({
-      'general.architecture': 'llama', 'llama.context_length': 1_048_576,
+      'general.architecture': 'llama',
+      'llama.context_length': 1_048_576,
+      'llama.block_count': 4,
+      'llama.embedding_length': 512,
+      'llama.attention.head_count': 8,
+      'llama.attention.head_count_kv': 2,
     }));
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: () => libRecording(seen) });
@@ -467,9 +490,18 @@ describe('窓を、この機械の記憶に合わせる', () => {
     assert.equal(fitWindow({ ...big, ramBytes: 6 * GB }).window, 4096);
   });
 
-  test('**諸元が読めないときは、狭めない**（読めないモデルほど不利、にしない）', () => {
+  /*
+   * ここは「読めないモデルほど不利にしない」として、諸元が読めないときに
+   * `trained` をそのまま通していた。**判断を覆した。**
+   *
+   * KV の大きさを計算できないだけで、KV が要らなくなるわけではない。
+   * 上の例は 4GB の機械に 32768 を渡していて、そのまま読ませれば
+   * 追い出しが起きて読み込みが終わらない。
+   */
+  test('**諸元が読めないときは、広げない**（記憶を数えられないので）', () => {
     const got = fitWindow({ trained: 32768, ramBytes: 4 * GB });
-    assert.equal(got.window, 32768);
+    assert.equal(got.window, SAFE_WINDOW, `記憶を数えずに広げている: ${got.window}`);
+    assert.match(got.why ?? '', /読めない/);
   });
 
   test('モデルの窓より広げはしない', () => {
@@ -525,5 +557,46 @@ describe('どの GGUF を読むか', () => {
 
   test('一つも無ければ、選ばない', () => {
     assert.equal(chooseModel([], ram), undefined);
+  });
+});
+
+describe('諸元が読めないとき、窓を広げない', () => {
+  /**
+   * `contextLength` だけ読めて層数や head 数が読めない GGUF は珍しくない
+   * （アーキテクチャごとに鍵の名前が違う）。そのとき **32768 を記憶の勘定
+   * なしで渡していた**。8B なら KV だけで +4.5GB。重みと合わせて 16GB の
+   * 機械の容量を越え、追い出しが始まって読み込みが終わらなくなる。
+   *
+   * GGUF がまったく読めないときは 8192 に落ちるのに、半端に読めたときだけ
+   * 無防備、という食い違いでもあった。
+   */
+  const GB = 1024 ** 3;
+
+  test('**層数が読めなければ、広げない**', () => {
+    const got = fitWindow({ trained: 32768, ramBytes: 16 * GB, weightBytes: 8 * GB });
+    assert.equal(got.window, SAFE_WINDOW, `記憶を数えずに広げている: ${got.window}`);
+    assert.match(got.why ?? '', /読めない/, 'なぜ狭めたかを言っていない');
+  });
+
+  test('モデルの窓がもともと狭ければ、そのまま', () => {
+    const got = fitWindow({ trained: 4096, ramBytes: 16 * GB });
+    assert.equal(got.window, 4096);
+    assert.equal(got.why, undefined, '狭めていないのに理由を言っている');
+  });
+
+  test('諸元が揃っていれば、今までどおり計算する（対）', () => {
+    const got = fitWindow({
+      trained: 32768, layers: 32, embedding: 4096, heads: 32, kvHeads: 8,
+      weightBytes: 4 * GB, ramBytes: 64 * GB,
+    });
+    assert.equal(got.window, 32768, '余裕がある機械なのに狭めている');
+  });
+
+  test('諸元が揃っていて記憶が足りなければ、そこで狭める（対）', () => {
+    const got = fitWindow({
+      trained: 32768, layers: 32, embedding: 4096, heads: 32, kvHeads: 32,
+      weightBytes: 8 * GB, ramBytes: 16 * GB,
+    });
+    assert.ok(got.window < 32768, `記憶が足りないのに広げている: ${got.window}`);
   });
 });

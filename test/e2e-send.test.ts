@@ -507,8 +507,15 @@ describe('窓は、開いた側の数字を使う', () => {
     const models = await tempDir('aas-win-');
     // **ファイル側と設定を食い違わせる。**一致させると、直したかどうかが
     // 見分けられない（設定のままでも通ってしまう）。
+    // 諸元も揃えて置く。揃っていないと、記憶に載るかを数えられないので
+    // 安全な側（SAFE_WINDOW）へ落ちる。ここで見たいのはそこではない。
     await writeFile(join(models, 'a.gguf'), ggufHead({
-      'general.architecture': 'qwen3', 'qwen3.context_length': 16384,
+      'general.architecture': 'qwen3',
+      'qwen3.context_length': 16384,
+      'qwen3.block_count': 4,
+      'qwen3.embedding_length': 512,
+      'qwen3.attention.head_count': 8,
+      'qwen3.attention.head_count_kv': 2,
     }));
     const probe = createServer();
     await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));

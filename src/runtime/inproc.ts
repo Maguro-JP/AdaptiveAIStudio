@@ -161,8 +161,19 @@ export function chooseModel(
  * 「機械が固まって、発熱して、煙をあげる」は実際に言われた形。
  * 広げるのは良いが、**広げた分を数えずに広げない。**
  *
- * 数えられないとき（ファイルから諸元が読めないとき）は、**狭めない。**
- * 分からないことを理由に絞ると、読めないモデルほど不利になる。
+ * **数えられないときは、広げない。**
+ *
+ * ここは「分からないことを理由に絞ると、読めないモデルほど不利になる」として、
+ * 諸元が読めないときに `trained` をそのまま通していた。だが KV の大きさが
+ * 計算できないだけで、KV が要らなくなるわけではない。`contextLength` だけ
+ * 読めて層数や head 数が読めない GGUF は珍しくなく（アーキテクチャごとに
+ * 鍵の名前が違う）、そのとき **32768 を記憶の勘定なしで渡していた。**
+ *
+ * 8B のモデルなら KV だけで +4.5GB。重みと合わせて 16GB の機械の容量を越え、
+ * 追い出しが始まって読み込みが終わらなくなる。
+ *
+ * GGUF がまったく読めないときは 8192 へ落としているのに、半端に読めたときだけ
+ * 無防備、という食い違いでもあった。**分からないなら、安全な側に置く。**
  */
 export function fitWindow(opts: {
   /** モデルが持っている窓 */
@@ -177,11 +188,23 @@ export function fitWindow(opts: {
   max?: number;
   /** これより狭くはしない。狭すぎると、決まりだけで溢れる。 */
   floor?: number;
+  /** 諸元が読めないときに、これ以上は広げない。 */
+  unknownCap?: number;
 }): { window: number; why?: string } {
   const want = Math.min(opts.trained, opts.max ?? MAX_WINDOW);
   const floor = opts.floor ?? 4096;
   const { layers, embedding, heads } = opts;
-  if (!layers || !embedding || !heads) return { window: want };
+  if (!layers || !embedding || !heads) {
+    // KV の大きさを計算できない。**広げない。**
+    const safe = Math.min(want, opts.unknownCap ?? SAFE_WINDOW);
+    if (safe >= want) return { window: want };
+    return {
+      window: safe,
+      why: 'このモデルの諸元（層数・head 数）が読めないので、記憶に載るかを'
+        + `計算できません。安全な ${safe} にしています。`
+        + '設定 → モデル で広げられます。',
+    };
+  }
 
   const headDim = Math.floor(embedding / heads);
   const kvDim = headDim * (opts.kvHeads ?? heads);
@@ -219,6 +242,14 @@ const GUESSED_WRAPPERS = new Set(['General', 'Llama2Chat']);
  * 大きいモデルで機械が固まる（「打っても返事が来ない」に戻る）。
  */
 export const MAX_WINDOW = 32_768;
+
+/**
+ * 記憶に載るかを計算できないときの上限。
+ *
+ * GGUF がまったく読めないときに落とす先（8192）と揃える。
+ * **分からないときの振る舞いを、二通りにしない。**
+ */
+export const SAFE_WINDOW = 8192;
 
 export class InProcRuntime implements LocalRuntime {
   readonly id = 'inproc';
