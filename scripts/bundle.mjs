@@ -22,7 +22,7 @@
  * そうすると、この道具自体は網が無くても試せる。
  */
 import { cp, copyFile, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -193,6 +193,25 @@ function pkgVersion(srcRoot) {
  * 辿れない。git に訊けるなら、短い印と「未コミットの変更あり」まで足す。
  * git に訊けない場所（bundleからbundle を組む等）では package.json の版だけ。
  */
+/**
+ * 押せばいい入口の、元のファイル。
+ *
+ * 開発中は `launcher.cmd`。**組んだものの中では `AdaptiveAIStudio.cmd` に
+ * 名前が変わっていて、しかも一つ上の階にある。**`launcher.cmd` だけを見て
+ * いたので、組んだものの中からもう一度組もうとすると「そんなファイルは
+ * 無い」で落ちた。組んだものの中でテストを回すと、これだけで 12 件落ちる
+ * （実測。この形は前にも一度作っている）。
+ *
+ * 中身は同じものなので、在る方を使う。
+ */
+export function launcherIn(srcRoot) {
+  const here = join(srcRoot, 'launcher.cmd');
+  if (existsSync(here)) return here;
+  const shipped = join(srcRoot, '..', 'AdaptiveAIStudio.cmd');
+  if (existsSync(shipped)) return shipped;
+  return here; // 無いなら、無いと言って落ちる方が分かりやすい
+}
+
 export function guessVersion(srcRoot) {
   const base = pkgVersion(srcRoot);
   try {
@@ -301,7 +320,7 @@ export async function bundle({
    */
   // 元は `launcher.cmd`（CP932 で置いてある）。ここで組み立てない。
   // 組み立てると Node からは CP932 で書けず、日本語が壊れる。
-  await copyFile(join(srcRoot, 'launcher.cmd'), join(out, 'AdaptiveAIStudio.cmd'));
+  await copyFile(launcherIn(srcRoot), join(out, 'AdaptiveAIStudio.cmd'));
   log('  置いた: AdaptiveAIStudio.cmd');
 
   // 展開先に、あと何文字使えるか。**利用者が展開する前に読む所へ書く。**

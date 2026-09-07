@@ -28,6 +28,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { installRoot } from '../src/core/home.ts';
+import { launcherIn } from '../scripts/bundle.mjs';
 
 /** 配っているバッチを全部集める。増えたものも自動で対象になる。 */
 async function batchFiles(): Promise<string[]> {
@@ -177,7 +178,7 @@ describe('入口は、ZIP の中から押されたときを受け止める', () 
     const { fileURLToPath } = await import('node:url');
     const root = join(dirname(fileURLToPath(import.meta.url)), '..');
     // CP932 で置いてある。読むときも CP932 として読む。
-    const raw = await readFile(join(root, 'launcher.cmd'));
+    const raw = await readFile(launcherIn(root));
     return new TextDecoder('shift_jis').decode(raw);
   };
 
@@ -204,7 +205,7 @@ describe('入口は、ZIP の中から押されたときを受け止める', () 
     const { join, dirname } = await import('node:path');
     const { fileURLToPath } = await import('node:url');
     const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-    const raw = await readFile(join(root, 'launcher.cmd'));
+    const raw = await readFile(launcherIn(root));
     // UTF-8 として読めてしまうなら、CP932 ではない。
     let utf8Ok = true;
     try { new TextDecoder('utf-8', { fatal: true }).decode(raw); } catch { utf8Ok = false; }
@@ -222,7 +223,7 @@ describe('入口は、ZIP の中から押されたときを受け止める', () 
     const out = join(await tempDir('aas-launcher-'), 'AdaptiveAIStudio');
     await bundle({ out, srcRoot: root, version: '0.0.0-test' });
     const made = await readFile(join(out, 'AdaptiveAIStudio.cmd'));
-    const src = await readFile(join(root, 'launcher.cmd'));
+    const src = await readFile(launcherIn(root));
     // **バイト列をそのまま突き合わせない。**違ったときに千行出て、
     // 何が違うのか読めなくなる（実際にそうなった）。長さと中身の印で見る。
     const { createHash } = await import('node:crypto');

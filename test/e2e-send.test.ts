@@ -414,6 +414,41 @@ describe('外の道具（MCP）を、会話の中から実際に呼ぶ', () => {
     try {
       const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
       // この検査の中だけで読む（上の collect は別の server を向いている）。
+      /*
+       * **一度呼びかけてから、繋がるのを待って、本番を送る。**
+       *
+       * 外の MCP サーバーは「頼まれるまで起こさない」（画面を開いただけでは何も
+       * 起こさない。`test/no-work-unasked.test.ts`）。起こすのはセッションを
+       * 作るときで、それは最初の送信のとき。しかも**待たずに**起こす。
+       * だから最初の1ターンには、ツールがまだ無いことがある——そう決めてある。
+       *
+       * ここはそれを知らずに、一度目の送信でツールが呼ばれることにしていた。
+       * 手元では立ち上がりが速いので通っていたが、**組んだものの中で回すと
+       * 落ちた**。わざと 1.5 秒遅らせる相手にすると、手元でも同じように落ちる
+       * （確かめた）。走らせる場所で結果が変わる形になっていた。
+       *
+       * 利用者も、二度目からはツールが在る状態で打つ。ここもそう書く。
+       */
+      await fetch(`${b4}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: 'はじめまして' }),
+      });
+      await until(async () => {
+        // `tools` は**数**（配列ではない）。ここを配列だと思って書いて、
+        // いつまでも繋がらないことにしてしまった。
+        const list = await fetch(`${b4}/api/mcp`).then((x) => x.json()) as
+          { servers?: Array<{ name?: string; tools?: number }> };
+        return (list.servers ?? []).some((sv) => sv.name === 'echo' && (sv.tools ?? 0) > 0);
+      }, 'echo が繋がる', { timeoutMs: 40_000 });
+      await until(async () => {
+        const st = await fetch(`${b4}/api/state`).then((x) => x.json()) as { busy?: boolean };
+        return st.busy !== true;
+      }, '一度目が終わる', { timeoutMs: 40_000 });
+      // 一度目のやりとりを、話に残さない。**残すと相手が「もうツールは
+      // 呼んだ」と読む**（作りものの相手は role: tool の有無で切り替える）。
+      await fetch(`${b4}/api/conversations`, { method: 'POST' });
+      fake2.bodies.length = 0;
+      // 出来事を読み始めるのは**ここから**。一度目のぶんを混ぜない。
       const events: unknown[] = [];
       const ac = new AbortController();
       const res = await fetch(`${b4}/api/events`, { signal: ac.signal });
