@@ -230,3 +230,55 @@ describe('入口は、ZIP の中から押されたときを受け止める', () 
     assert.equal(mark(made), mark(src), '入口が組み立て直されている（CP932 が壊れる）');
   });
 });
+
+/**
+ * 入っている Node を、探す前に諦めない。
+ *
+ * `start.cmd` は `.portable` のファイルがあると、**`where node` を一度も試さず**
+ * 「同梱の Node がありません。クラウドドライブが .exe を落としたのでは」
+ * と言って止まっていた。
+ *
+ * Node を同梱していない版を Windows で動かしてもらったら、そこで止まった。
+ * その機械には Node が入っている。案内が的外れなうえ、**使えるものが在るのに
+ * 使わない。**
+ *
+ * ## ここで見られること・見られないこと
+ *
+ * `.cmd` は Windows でしか走らないので、**振る舞いは確かめられない。**
+ * 見られるのは並び順だけ。弱いが、この不具合はこの形でしか入らないので、
+ * ここで止める。**本当に動くかは Windows で動かすまで分からない。**
+ */
+describe('入っている Node を、探す前に諦めない', () => {
+  test('**`.portable` から、そのまま諦めへ飛ばない**', async () => {
+    const text = await readFile(join(installRoot(), 'start.cmd'), 'latin1');
+    // CP932 でも ASCII の部分はそのまま読める。制御の骨は ASCII で書いてある。
+    const lines = text.split(/\r?\n/);
+    const at = lines.findIndex((l) => /\.portable/.test(l) && /goto\s+:exeStripped/i.test(l));
+    assert.equal(at, -1,
+      `.portable を見た時点で諦めている（${at + 1} 行目）。先に where node を試すこと`);
+  });
+
+  test('**諦める前に、`where node` を試している**', async () => {
+    const text = await readFile(join(installRoot(), 'start.cmd'), 'latin1');
+    const lines = text.split(/\r?\n/);
+    const looked = lines.findIndex((l) => /where\s+node/i.test(l));
+    const giveUp = lines.findIndex((l) => /^:exeStripped/i.test(l));
+    assert.ok(looked >= 0, 'where node を一度も書いていない');
+    assert.ok(giveUp >= 0, 'この確かめの前提が崩れている（:exeStripped が無い）');
+    assert.ok(looked < giveUp,
+      `諦める所（${giveUp + 1} 行目）より後で探している（${looked + 1} 行目）`);
+  });
+
+  test('入っている Node も無いときの案内に、入れ方がある（対）', async () => {
+    // 「.exe が落とされたのでは」だけだと、Node を入れれば済む人が詰む。
+    const text = await readFile(join(installRoot(), 'start.cmd'), 'latin1');
+    /*
+     * **ラベルの方を探す。**`indexOf` だと、先に出てくる `goto :exeStripped`
+     * に当たって、案内の中身を一文字も見ないまま通る（実際にそうなった）。
+     */
+    const at = text.search(/^:exeStripped/m);
+    assert.ok(at >= 0, ':exeStripped のラベルが無い');
+    const block = text.slice(at);
+    assert.match(block, /nodejs\.org/, '入れ方を書いていない');
+  });
+});

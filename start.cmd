@@ -58,16 +58,28 @@ if exist "%HERE%runtime\node.exe" set "BUNDLED=%HERE%runtime"
 if exist "%HERE%node\node.exe" set "BUNDLED=%HERE%node"
 if defined BUNDLED goto :bundled
 
-rem 同梱版の目印はあるのに Node が無い、という形をここで見分ける。
+rem 同梱版の目印はあるのに Node が無い、という形をここで覚えておく。
 rem クラウドドライブが .exe を落としたときに起きる。
-if exist "%UP%\.portable" goto :exeStripped
+rem
+rem ただし、ここで止めない。**入っている Node を一度も探さずに諦めていた。**
+rem 実際に、Node を同梱していない版を渡したら、Node が入っている機械で
+rem 「.exe が落とされたのでは」と言って止まった。案内が的外れなうえ、
+rem 使える Node が在るのに使わない。探してから決める。
+set "STRIPPED="
+if exist "%UP%\.portable" set "STRIPPED=1"
 
 where node >nul 2>nul
-if errorlevel 1 goto :noNode
+if errorlevel 1 goto :noBundledNode
 set "NODE=node"
 set "NPM=npm"
 set "RUNNER=npm"
+if defined STRIPPED echo   同梱の Node はありませんが、この機械の Node を使います
 goto :haveNode
+
+:noBundledNode
+rem 入っている Node も無い。ここで初めて、何が起きたのかを言う。
+if defined STRIPPED goto :exeStripped
+goto :noNode
 
 :bundled
 set "NODE=%BUNDLED%\%NODEFILE%"
@@ -238,8 +250,13 @@ echo   会社のクラウドドライブ（OneDrive・PassageDrive など）へ�
 echo   .exe だけが黙って落ちることがあります。書き込みが拒まれても、
 echo   展開する側は何も言わずに進みます。
 echo.
-echo   .exe を置ける場所へ展開し直すか、.exe を含まない版を使ってください。
-echo   後者は Node の名前が node.bin になっているだけで、中身は同じです。
+echo   この機械には Node も入っていません。どちらかで動きます。
+echo.
+echo     1. Node 22.6 以降を入れる       https://nodejs.org
+echo     2. .exe を置ける場所へ展開し直す
+echo.
+echo   会社のクラウドドライブなら、.exe を含まない版も使えます。
+echo   Node の名前が node.bin になっているだけで、中身は同じです。
 echo.
 pause
 exit /b 1
