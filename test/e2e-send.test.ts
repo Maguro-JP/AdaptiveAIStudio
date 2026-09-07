@@ -180,7 +180,7 @@ describe('会話が続く', () => {
     };
 
     fake.bodies.length = 0;
-    await send('わたしの名前はマグロです');
+    await send('わたしの名前はテスト太郎です');
     await send('わたしの名前は？');
 
     // **作業の呼び出しを見る。**判じる呼び出し（別口）が後ろに来るので、
@@ -189,7 +189,7 @@ describe('会話が続く', () => {
       .filter((b) => !(b.messages ?? []).some((m) => m.content.includes('指摘・不満・注意かどうか')));
     const last = work.at(-1)!;
     const texts = (last.messages ?? []).map((m) => `${m.role}:${m.content}`);
-    assert.ok(texts.some((t) => t.includes('わたしの名前はマグロです')),
+    assert.ok(texts.some((t) => t.includes('わたしの名前はテスト太郎です')),
       `一回目の依頼が渡っていない: ${JSON.stringify(texts).slice(0, 300)}`);
     assert.ok(texts.some((t) => t.startsWith('assistant:') && t.includes('こんにちは')),
       `一回目の返事が渡っていない: ${JSON.stringify(texts).slice(0, 300)}`);

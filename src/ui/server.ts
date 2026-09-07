@@ -2000,7 +2000,7 @@ export class UiServer {
    *
    * **押した場所に結果を出すために持つ。**ここまで、失敗はログの板へ
    * 流すだけだった。押したのはモデルの板なので、**押した本人には何も
-   * 見えない。**押しても永久に何も起きない、と受け取られる（実際にそう言われた）。
+   * 見えない。**押しても永久に何も起きないように見える。**
    */
   #fetching: { id: string; state: 'running' | 'done' | 'failed'; message: string } | undefined;
 
