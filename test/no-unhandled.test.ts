@@ -8,6 +8,8 @@
  * 画面の口（`UiServer` の `createServer`）は受けていたが、待たずに走らせる
  * 側（`#drive`・見回り・順番待ち・プレビュー・モデルの口）は受けていなかった。
  *
+ * `scripts` も同じ。sweep が落ちると、何を見ていたのかも残らない。
+ *
  * ここは走らせて出す種類のものではないので、書き方で止める。
  */
 import { test } from 'node:test';
@@ -15,18 +17,18 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-function tsFiles(dir: string, out: string[] = []): string[] {
+function sources(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir)) {
     const p = join(dir, e);
-    if (statSync(p).isDirectory()) tsFiles(p, out);
-    else if (p.endsWith('.ts')) out.push(p);
+    if (statSync(p).isDirectory()) sources(p, out);
+    else if (p.endsWith('.ts') || p.endsWith('.mjs')) out.push(p);
   }
   return out;
 }
 
 test('待たずに走らせるものに、受け手がある', () => {
   const bad: string[] = [];
-  for (const file of tsFiles('src')) {
+  for (const file of [...sources('src'), ...sources('scripts')]) {
     const text = readFileSync(file, 'utf8');
     const lines = text.split('\n');
     lines.forEach((line, i) => {

@@ -213,7 +213,9 @@ await check('会話を消す', async () => {
   const name = (await row.locator('button').first().innerText()).trim();
   // 消すのは訊いてくる。訊かれなければ、それ自体が不具合。
   let asked = false;
-  const answer = (d) => { asked = true; void d.accept(); };
+  // 受け手を置く。閉じかけの頁で accept が失敗すると、拾い手が居ないまま
+  // sweep ごと落ちて、何を見ていたのかも分からなくなる。
+  const answer = (d) => { asked = true; void d.accept().catch(() => undefined); };
   p.on('dialog', answer);
   try {
     await row.locator('button.drop').click();
