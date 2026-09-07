@@ -695,7 +695,16 @@ export class UiServer {
     // モデルの面倒。端末でしかできない状態だと、
     // 画面から使う人はモデルを用意することも乗り換えることもできない。
     if (path === '/api/models' && req.method === 'GET') {
-      const session = await this.session();
+      /*
+       * **ここで session を作らない。**
+       *
+       * `session()` は、使えるモデルが一つも無いと投げる。この板は
+       * **モデルが無いときにこそ開く板**なので、そこで 500 を返していた。
+       * しかも session は、この先で一度も使っていなかった。
+       *
+       * 今までは、繋がらない Ollama の名前が「モデルがある」ことにして
+       * いたので、この道が通らなかった。名前を消したら出てきた。
+       */
       const runtime = await this.#localRuntime();
       const [installed, llama] = await Promise.all([
         runtime.list().catch(() => []),

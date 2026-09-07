@@ -75,6 +75,23 @@ describe('設定の場所', () => {
       'ollama という名前が残っている');
   });
 
+  /**
+   * `listModels()` は一覧が取れないとき、**設定に書いてある名前で続行する。**
+   * 既定の項目には Ollama 向けの名前（`qwen3.5:9b` など）が書いてあるので、
+   * 口がまだ立っていない一瞬にそれが起きると、実在しないモデルが候補になり、
+   * 送るたびに繋がらない相手を叩き続けることになる。
+   */
+  test('**Ollama 向けのモデル名を持ち越さない**', async () => {
+    const cwd = await tempDir('aas-models-');
+    const home = await tempDir('aas-home4-');
+    delete process.env.AAS_CONFIG;
+    process.env.AAS_HOME = home;
+    const { config } = loadConfig(cwd);
+    const local = config.providers.find((p) => p.kind === 'openai-compatible' && p.locality === 'local');
+    assert.equal(local?.models, undefined,
+      `この中で読む道に、Ollama の名前が残っている: ${JSON.stringify(local?.models)}`);
+  });
+
   test('自分で名前を付けているなら、触らない（対）', async () => {
     const cwd = await tempDir('aas-keep-');
     const home = await tempDir('aas-home3-');

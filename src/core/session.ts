@@ -226,6 +226,20 @@ export class Session {
   /** 前置きに入り切らなかったもの。**黙って落とさない**ために持つ。 */
   #lastDropped: string[] = [];
   readonly candidates: string[];
+
+  /**
+   * モデルが要る仕事の手前で、無いことを言う。無ければ `undefined`。
+   *
+   * 土台は候補が空でも作る（作らないと画面が丸ごと 500 になる）。
+   * そのぶん、**モデルを実際に使う三箇所（送る・段取る・考えごと）で
+   * こちらから断る**。ここを抜くと、候補の先頭を掴む所で
+   * `undefined` のまま繋ぎ先を叩きに行く。
+   */
+  get noModel(): string | undefined {
+    if (this.candidates.length > 0) return undefined;
+    return `使えるモデルがありません: ${this.modelReason}`;
+  }
+
   readonly memory: Memory;
   /** 溜まった提案。実行はしない。溜めて、人に選ばせる。 */
   readonly proposals: ProposalQueue;
@@ -326,7 +340,20 @@ export class Session {
     const orchestrator = new ChatOrchestrator(registry);
     const pilot = await setupAutopilot(config, registry);
     const { candidates, note } = resolveCandidates(config, pilot);
-    if (candidates.length === 0) throw new Error(`使えるモデルがありません: ${note}`);
+    /*
+     * **モデルが無いことを、ここで投げない。**
+     *
+     * ここは `throw` していた。土台を作るのは画面のほとんどの入口
+     * （提案・当番・戻す・会話の一覧）なので、**GGUF が一つ無いだけで、
+     * 画面じゅうが 500 になる。**設定を開くことすらできない。
+     * つまり「モデルが無い」を直しに行く手段まで、同時に塞いでいた。
+     * 実際にそうなって、利用者は設定画面を開けなかった。
+     *
+     * モデルが要るのは、送る・段取る・考えごとの三つだけ。
+     * **要る所で断る。**ここでは候補が空のまま進み、理由を持っておく
+     * （`modelReason`）。画面はそれを読んで、何が足りないかを出せる。
+     */
+    if (candidates.length === 0) opts.onLog?.('warn', `使えるモデルがありません: ${note}`);
     /*
      * **黙って選ばない。**
      *
@@ -337,7 +364,7 @@ export class Session {
      *
      * 「黙って切らない・黙って落とさない」と同じことで、**選ぶのも黙らない**。
      */
-    opts.onLog?.('info', `モデルを ${candidates[0]} にしました（${note}）`);
+    if (candidates.length > 0) opts.onLog?.('info', `モデルを ${candidates[0]} にしました（${note}）`);
 
     const log = (level: 'info' | 'warn' | 'error', text: string) => opts.onLog?.(level, text);
 
@@ -460,6 +487,10 @@ export class Session {
    * CLI も画面も、出てくる出来事を見て描くだけにする。
    */
   async *plan(request: string): AsyncGenerator<PlanEvent, AcceptanceReport | undefined> {
+    if (this.noModel) {
+      yield { type: 'log', level: 'error', text: this.noModel };
+      return undefined;
+    }
     if (this.#running) {
       yield { type: 'log', level: 'warn', text: 'いま別の作業をしています。' };
       return undefined;
@@ -647,6 +678,9 @@ export class Session {
    * 勝手に手を動かされるのと、勝手に考えてくれるのは、別の話。
    */
   async *think(): AsyncGenerator<ThinkEvent, boolean> {
+    // 考えごとは黙って諦める。モデルが無いことは画面が既に出している。
+    // ここで毎周言うと、同じ一行で記録が埋まる。
+    if (this.noModel) return false;
     if (this.config.initiative?.enabled === false) return false;
     if (this.#running) return false;
 
@@ -876,6 +910,11 @@ export class Session {
       fromUser?: boolean;
     } = {},
   ): AsyncGenerator<SessionEvent> {
+    if (this.noModel) {
+      yield { type: 'log', level: 'error', text: this.noModel };
+      yield { type: 'finished', reason: 'error', detail: this.noModel };
+      return;
+    }
     if (this.#running) {
       yield { type: 'log', level: 'warn', text: 'いま別の作業をしています。' };
       return;

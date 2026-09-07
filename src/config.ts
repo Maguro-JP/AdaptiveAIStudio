@@ -429,7 +429,24 @@ function wireInProc(c: AasConfig): void {
    * 利用者が自分で名前を付けているなら、それは触らない。
    * 付け替えるのは、こちらが既定として置いた `ollama` のときだけ。
    */
-  if (local.id === 'ollama') local.id = 'inproc';
+  if (local.id === 'ollama') {
+    local.id = 'inproc';
+    /*
+     * **Ollama 向けのモデル名を持ち越さない。**
+     *
+     * 既定の項目には `qwen3.6:35b-a3b-coding-nvfp4` と `qwen3.5:9b` が
+     * 書いてある。これは Ollama の名前で、この中で読む道には存在しない。
+     *
+     * `listModels()` は一覧が取れないとき、**設定に書いてある名前で続行する。**
+     * 口がまだ立っていない一瞬にそれが起きると、実在しないモデルが候補になり、
+     * 送るたびに繋がらない相手を叩き続けることになる。
+     * 実際に、画面にはこの2つが候補として出ていた。
+     *
+     * この中で読む道では、口が自分の保存先の .gguf を答える。
+     * **こちらで名前を書いておく必要は無い。**
+     */
+    delete local.models;
+  }
 }
 
 function validate(c: AasConfig): void {
