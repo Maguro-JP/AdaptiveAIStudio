@@ -50,7 +50,7 @@ const CEILING: Record<string, number> = {
   地図: 89,
   起点: 37,
   取り置き: 11,
-  置き場: 278,
+  置き場: 277,
   道具: 415,
 };
 

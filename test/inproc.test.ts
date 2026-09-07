@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
-import { InProcRuntime, listGguf, MAX_WINDOW, fitWindow } from '../src/runtime/inproc.ts';
+import { InProcRuntime, listGguf, chooseModel, MAX_WINDOW, fitWindow } from '../src/runtime/inproc.ts';
 import { ggufHead } from './gguf-head.ts';
 
 /**
@@ -475,5 +475,55 @@ describe('窓を、この機械の記憶に合わせる', () => {
   test('モデルの窓より広げはしない', () => {
     const got = fitWindow({ trained: 4096, layers: 4, embedding: 512, heads: 8, ramBytes: 64 * GB });
     assert.equal(got.window, 4096);
+  });
+});
+
+describe('どの GGUF を読むか', () => {
+  /**
+   * ここは名前で並べた先頭を無条件で選んでいた。検証用に大小いくつも
+   * 置いてある保存先では、**たまたま名前が前に来た大きいほう**が選ばれる。
+   * 記憶に辛うじて載る大きさだと、追い出しが起きて読み込みが終わらない。
+   * 小さいものが同じフォルダに在っても見なかった。
+   */
+  const GB = 1024 ** 3;
+  const ram = 16 * GB;
+
+  test('**名前の順ではなく、記憶に載るものを選ぶ**', () => {
+    // 名前は a が先。だが 14GB は 16GB の機械には載らない（0.85 で 13.6GB まで）。
+    const got = chooseModel([
+      { ref: 'a-big.gguf', sizeBytes: 14 * GB },
+      { ref: 'z-small.gguf', sizeBytes: 2 * GB },
+    ], ram);
+    assert.equal(got?.chosen.ref, 'z-small.gguf');
+    assert.equal(got?.fits, true);
+  });
+
+  test('載るものが複数あれば、大きいほうを選ぶ', () => {
+    const got = chooseModel([
+      { ref: 'small.gguf', sizeBytes: 2 * GB },
+      { ref: 'mid.gguf', sizeBytes: 8 * GB },
+    ], ram);
+    assert.equal(got?.chosen.ref, 'mid.gguf');
+  });
+
+  test('設定で名指しされていれば、それを使う（対）', () => {
+    const got = chooseModel([
+      { ref: 'small.gguf', sizeBytes: 2 * GB },
+      { ref: 'mid.gguf', sizeBytes: 8 * GB },
+    ], ram, 'small.gguf');
+    assert.equal(got?.chosen.ref, 'small.gguf');
+  });
+
+  test('どれも載らないなら、載らないと言う', () => {
+    const got = chooseModel([
+      { ref: 'huge.gguf', sizeBytes: 40 * GB },
+      { ref: 'big.gguf', sizeBytes: 30 * GB },
+    ], ram);
+    assert.equal(got?.fits, false);
+    assert.equal(got?.chosen.ref, 'big.gguf', 'いちばん小さいものを指していない');
+  });
+
+  test('一つも無ければ、選ばない', () => {
+    assert.equal(chooseModel([], ram), undefined);
   });
 });

@@ -120,6 +120,38 @@ export function tooBigForRam(sizeBytes: number | undefined, ramBytes: number): s
 }
 
 /**
+ * どの GGUF を読むか決める。
+ *
+ * **名前の順で先頭を掴まない。**`listGguf` は名前で並べるので、そのまま
+ * 先頭を取ると、検証用に大小いくつも置いてある保存先では、**たまたま名前が
+ * 前に来た大きいほう**が選ばれる。記憶に辛うじて載る大きさだと、
+ * 追い出しが起きて読み込みが何十分も終わらない。**小さいものが同じ
+ * フォルダに在っても見ない。**
+ *
+ * 決め方:
+ *   1. 設定で名指しされているものが在れば、それ（利用者が決めたものが最優先）
+ *   2. 記憶に載るもののうち、**いちばん大きいもの**（賢い方が良い）
+ *   3. どれも載らないなら、いちばん小さいものを返して、載らないと言わせる
+ */
+export function chooseModel(
+  models: readonly AvailableModel[],
+  ramBytes: number,
+  wanted?: string,
+): { chosen: AvailableModel; fits: boolean } | undefined {
+  if (models.length === 0) return undefined;
+  const named = wanted ? models.find((m) => m.ref === wanted) : undefined;
+  if (named) return { chosen: named, fits: !tooBigForRam(named.sizeBytes, ramBytes) };
+
+  const fitting = models.filter((m) => !tooBigForRam(m.sizeBytes, ramBytes));
+  if (fitting.length > 0) {
+    const chosen = fitting.reduce((a, b) => ((b.sizeBytes ?? 0) > (a.sizeBytes ?? 0) ? b : a));
+    return { chosen, fits: true };
+  }
+  const smallest = models.reduce((a, b) => ((b.sizeBytes ?? 0) < (a.sizeBytes ?? 0) ? b : a));
+  return { chosen: smallest, fits: false };
+}
+
+/**
  * 窓を、この機械の記憶に合わせて決める。
  *
  * **窓はそのまま記憶（KV）になる。**8B のモデルで窓を 8k から 32k へ広げると、

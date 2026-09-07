@@ -54,7 +54,7 @@ import {
   RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
   inspectModelsDir, ensureDefaultModelsDir, savedModelsDir,
 } from './settings.ts';
-import { listGguf, tooBigForRam, looksLikeGguf } from '../runtime/inproc.ts';
+import { listGguf, chooseModel, tooBigForRam, looksLikeGguf } from '../runtime/inproc.ts';
 import { totalmem } from 'node:os';
 import { Session } from '../core/session.ts';
 import type { ApprovalRequest, ApprovalAnswer } from '../agent/tools/types.ts';
@@ -1477,14 +1477,27 @@ export class UiServer {
         // この中で読む道では、**読むまで口が立たない。**
         // 先に読ませておかないと、上の層は繋がらない先を叩くことになる。
         if (runtime.id === 'inproc' && runtime.loaded().length === 0) {
-          // 設定で決めた名前（runtime.model）が置き場に在れば、それ。無ければ最初の一つ。
-          // 情報の板は runtime.model を「使うモデル」と見せているので、読む側も同じにする。
+          /*
+           * **名前の順で先頭を掴まない。**
+           *
+           * ここは `models[0]`（名前で並べた先頭）を無条件で選んでいた。
+           * 検証用に大小いくつも置いてある保存先では、たまたま名前が前に
+           * 来た大きいほうが選ばれる。記憶に辛うじて載る大きさだと、
+           * 追い出しが起きて読み込みが終わらない。**小さいものが同じ
+           * フォルダに在っても見なかった。**
+           */
           const wanted = this.#opts.config.runtime?.model;
-          const chosen = (wanted ? models.find((m) => m.ref === wanted) : undefined) ?? models[0]!;
-          const ref = chosen.ref;
+          const picked = chooseModel(models, totalmem(), wanted);
+          if (!picked) return undefined;
+          const ref = picked.chosen.ref;
           // 記憶に載らないものを読みに行かない。落ちるか、何十分も固まる。
-          const big = tooBigForRam(chosen.sizeBytes, totalmem());
-          if (big) return `${ref}: ${big}`;
+          if (!picked.fits) {
+            const big = tooBigForRam(picked.chosen.sizeBytes, totalmem());
+            const others = models.length > 1
+              ? `\nこの保存先には ${models.length} 個ありますが、どれも載りません。`
+              : '';
+            return `${ref}: ${big ?? '記憶に載りません。'}${others}`;
+          }
           // 名前だけ .gguf で中身が別物（配布元の HTML の案内など）を、読みに行かない。
           // 一覧と同じ場所（動いている側の置き場）を見る。保存側を見ると、
           // 立ち上げ直す前の設定とずれて「読めない」と嘘をつく。
