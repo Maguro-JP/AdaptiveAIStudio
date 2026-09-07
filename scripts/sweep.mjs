@@ -170,10 +170,53 @@ await check('コマンドを開いて閉じる', async () => {
   await p.waitForTimeout(400);
 });
 
-// 会話：新しい会話 → 送る → 一覧に出る
+// 会話：開く → 新しい会話 → 消す。**押した結果まで見る。**
+//
+// ここは「一番上のつまみを押す」だけだった。押して何が起きたかを見ていない
+// ので、押しても何も起きない形をそのまま通していた。実際に利用者から
+// 「会話が消せない」「新規で会話が開けない」と言われている。
+const convRows = () => p.locator('#sideSessions .side-row');
+
+await check('会話を開く', async () => {
+  if (await convRows().count() === 0) throw new Error('一覧が空（溜めた状態で押していない）');
+  const row = convRows().last();
+  const name = (await row.locator('button').first().innerText()).trim();
+  await row.locator('button').first().click();
+  await p.waitForTimeout(800);
+  // 選ばれている印が、押したものに付くこと。
+  const on = await p.locator('#sideSessions .side-row button.on').first().innerText().catch(() => '');
+  if (on.trim() !== name) throw new Error(`押したものが選ばれていない: ${name} / ${on.trim()}`);
+});
+
 await check('新しい会話', async () => {
-  await p.locator('#sideSessions button').first().click();
-  await p.waitForTimeout(600);
+  const before = await convRows().count();
+  await p.locator('#sideSessions > button').first().click();
+  await p.waitForTimeout(900);
+  const after = await convRows().count();
+  // 増えるか、使い回したと言うか。**どちらも起きないなら、押し損。**
+  const reused = await p.locator('#convNote').isVisible().catch(() => false);
+  if (after <= before && !reused) {
+    throw new Error(`押しても増えず、何も言われない（${before} → ${after}）`);
+  }
+});
+
+await check('会話を消す', async () => {
+  const before = await convRows().count();
+  if (before === 0) throw new Error('消す相手がいない');
+  const row = convRows().last();
+  const name = (await row.locator('button').first().innerText()).trim();
+  // 消すのは訊いてくる。訊かれなければ、それ自体が不具合。
+  let asked = false;
+  const answer = (d) => { asked = true; void d.accept(); };
+  p.on('dialog', answer);
+  try {
+    await row.locator('button.drop').click();
+    await p.waitForTimeout(1200);
+  } finally { p.off('dialog', answer); }
+  if (!asked) throw new Error('確かめずに消している');
+  const names = await p.locator('#sideSessions .side-row button').allInnerTexts();
+  if (names.map((s) => s.trim()).includes(name)) throw new Error(`消えていない: ${name}`);
+  if (await convRows().count() >= before) throw new Error('数が減っていない');
 });
 await check('送って返る', async () => {
   if (noModel) {

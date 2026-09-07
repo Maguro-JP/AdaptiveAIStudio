@@ -728,7 +728,8 @@ export class UiServer {
     }
 
     if (path === '/api/models/newer' && req.method === 'GET') {
-      const session = await this.session();
+      // ここでも session を作らない。使っていないうえに、作ると外の道具まで
+      // 立ち上がる。**新しい版が出ていないか訊くだけで、そこまでしない。**
       const runtime = await this.#localRuntime();
       const installed = (await runtime.list().catch(() => [])).map((m) => m.ref);
       if (installed.length === 0) return send(res, 200, { findings: [] });

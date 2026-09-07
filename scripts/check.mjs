@@ -89,6 +89,26 @@ async function sweep() {
       files: [{ path: 'src/a.txt', content: '' }],
     }));
   }
+  /*
+   * 会話も溜めておく。
+   *
+   * ここまで、押して回るときの一覧は**必ず空**だった。空の一覧では
+   * 「開く」も「消す」も押す相手がいないので、**素通りしていた。**
+   * 利用者からは「会話が消せない」「新規で会話が開けない」と言われた。
+   * その二つを、こちらでは一度も押していなかったことになる。
+   */
+  const convDir = join(home, 'conversations');
+  mkdirSync(convDir, { recursive: true });
+  for (let i = 0; i < 3; i += 1) {
+    const id = `c20260101-00000${i}-000${i}`;
+    const at = new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString();
+    writeFileSync(join(convDir, `${id}.jsonl`), [
+      JSON.stringify({ t: 'meta', id, title: `検査のために作った会話 ${i}`, createdAt: at }),
+      JSON.stringify({ t: 'msg', at, m: { role: 'user', content: `確かめ ${i}` } }),
+      JSON.stringify({ t: 'msg', at, m: { role: 'assistant', content: `はい ${i}` } }),
+    ].join('\n') + '\n');
+  }
+
   const port = await freePort();
   const ui = spawn(process.execPath, [
     '--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', 'ui.ts'),
