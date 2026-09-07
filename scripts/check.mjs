@@ -20,6 +20,7 @@ import { mkdtempSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { describeNotChecked } from './not-checked.mjs';
+import { findBrowser } from './find-browser.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -42,15 +43,18 @@ async function freePort() {
   return port;
 }
 
-/** 押して回る道具が使えるか。使えないなら、その理由。 */
+/**
+ * 押して回るものが使えるか。使えないなら、その理由。
+ *
+ * ブラウザの場所を決め打っていた（この機械にしか無い道）。**Windows で
+ * 回すと、押して回る部分だけが静かに飛ぶ。**配る先で回したときに限って、
+ * いちばん壊れやすい所を見ないことになる。Edge は Windows に必ず在る。
+ */
 function sweepReady() {
-  const browser = process.env.AAS_SWEEP_BROWSER
-    ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
   if (!existsSync(join(root, 'node_modules', 'playwright-core'))) {
     return { ok: false, why: 'playwright-core が入っていません' };
   }
-  if (!existsSync(browser)) return { ok: false, why: `ブラウザがありません: ${browser}` };
-  return { ok: true, browser };
+  return findBrowser({ platform: process.platform, env: process.env, exists: existsSync });
 }
 
 /**
@@ -150,7 +154,7 @@ async function sweep() {
 
     return run('押して回る', [
       join(root, 'scripts', 'sweep.mjs'), `http://127.0.0.1:${port}/`, '--no-model',
-    ]);
+    ], { ...process.env, AAS_SWEEP_BROWSER: ready.browser });
   } finally {
     ui.kill('SIGKILL');
   }

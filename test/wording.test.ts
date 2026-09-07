@@ -51,7 +51,7 @@ const CEILING: Record<string, number> = {
   起点: 37,
   取り置き: 11,
   置き場: 277,
-  道具: 415,
+  道具: 414,
 };
 
 const LOOK_IN = ['src', 'scripts', 'test'];

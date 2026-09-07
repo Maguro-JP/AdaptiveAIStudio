@@ -14,6 +14,8 @@
  * 走らせるには playwright-core と Chromium が要る（bundle には入れない）。
  */
 import { chromium } from 'playwright-core';
+import { existsSync } from 'node:fs';
+import { findBrowser } from './find-browser.mjs';
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const noModel = process.argv.includes('--no-model');
 const url = args[0];
@@ -22,7 +24,11 @@ if (!url) {
   console.error('使い方: node scripts/sweep.mjs <画面のURL> [撮る先.png] [--no-model]');
   process.exit(2);
 }
-const b = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+// ブラウザの場所を決め打たない（この機械にしか無い道だった）。
+// Windows なら Edge、mac なら Chrome を探す。`AAS_SWEEP_BROWSER` が最優先。
+const picked = findBrowser({ platform: process.platform, env: process.env, exists: existsSync });
+if (!picked.ok) { console.error(picked.why); process.exit(2); }
+const b = await chromium.launch({ executablePath: picked.browser });
 const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
 const bad = [];
 p.on('pageerror', (e) => bad.push(`落ちた: ${e.message}`));

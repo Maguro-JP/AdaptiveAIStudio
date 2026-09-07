@@ -23,6 +23,9 @@ import { pickAsset } from '../runtime/llama-release.ts';
 import { loadConfig } from '../config.ts';
 import { padTo, displayWidth } from './width.ts';
 import { chunkReader } from '../core/text.ts';
+import { saveReport, tellWhereItWent } from './report-file.ts';
+import { productRoot } from '../core/home.ts';
+import { stateDir } from '../core/autopilot-setup.ts';
 const LLAMA_LIB = 'node-llama-cpp'; // 型検査に解決させない（src/runtime/inproc.ts 参照）
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -157,22 +160,31 @@ add('検査', passed, `${seconds}秒 / ${counts}件通過${passed ? '' : ' — �
 const mark = (ok: boolean | undefined) => (ok === undefined ? '—' : ok ? 'ok' : 'NG');
 // 日本語は2つ分の幅を取る。文字数で揃えると、日本語の行だけずれる。
 const nameWidth = Math.max(...results.map((r) => displayWidth(r.name))) + 2;
-console.log('```');
-console.log('AdaptiveAIStudio — selftest');
-console.log('');
+const body = ['AdaptiveAIStudio — selftest', ''];
 for (const r of results) {
-  console.log(`${padTo(mark(r.ok), 5)}${padTo(r.name, nameWidth)}${r.detail}`);
+  body.push(`${padTo(mark(r.ok), 5)}${padTo(r.name, nameWidth)}${r.detail}`);
 }
 if (!passed) {
-  console.log('');
-  console.log('検査の失敗部分:');
+  body.push('');
+  body.push('検査の失敗部分:');
   for (const line of test.text.split('\n').filter((l) => l.startsWith('not ok')).slice(0, 10)) {
-    console.log(`  ${line}`);
+    body.push(`  ${line}`);
   }
 }
 console.log('```');
+for (const line of body) console.log(line);
+console.log('```');
 console.log('');
-console.log('この内容をそのまま貼ってください。');
+/*
+ * **貼らせない。ファイルを一つ出す。**
+ *
+ * ここは「この内容をそのまま貼ってください」で終わっていた。cmd の画面から
+ * 文字を拾うのは Windows ではとても面倒で（右クリック→範囲選択→Enter、
+ * 途中で切れる）、結局「試す係をやってください」と同じになる。
+ */
+for (const line of tellWhereItWent(
+  await saveReport('selftest', body.join('\n'), [productRoot(), stateDir()]),
+)) console.log(line);
 
 const bad = results.filter((r) => r.ok === false).length;
 process.exit(bad > 0 ? 1 : 0);

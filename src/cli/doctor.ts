@@ -21,6 +21,7 @@ import { defaultModelsDir } from '../runtime/model-install.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { installRoot, isPortable, productRoot, defaultWorkRoot } from '../core/home.ts';
 import { canRun } from '../core/which.ts';
+import { saveReport, tellWhereItWent } from './report-file.ts';
 import { deepestUnder, judgeRoom, WINDOWS_MAX_PATH } from '../core/pathroom.ts';
 import { resolve } from 'node:path';
 const LLAMA_LIB = 'node-llama-cpp'; // 型検査に解決させない（src/runtime/inproc.ts 参照）
@@ -401,4 +402,31 @@ console.log();
 console.log(summaryLine(checks, style, isPortable()
   ? { ui: 'AdaptiveAIStudio.cmd' }
   : { ui: how('ui'), agent: how('agent') }));
+console.log();
+
+/*
+ * **同じものを、ファイルにも残す。**
+ *
+ * ここは画面に出して終わりだった。開発は Linux、使うのは Windows なので、
+ * こちらで確かめられないことは必ず残る。そこまでは仕方がない。
+ *
+ * 仕方がなくないのは、**その先を利用者の手作業にしていた**こと。
+ * cmd の画面から文字を拾うのは Windows ではとても面倒で（右クリック→範囲
+ * 選択→Enter、途中で切れる）、結局「試す係をやってください」と同じになる。
+ *
+ * 押した場所の隣に置く。**探させない。**そこへ書けないとき
+ * （Program Files に入れた形）だけ、記録の保存先へ逃がす。
+ */
+const flat = [
+  'AdaptiveAIStudio — doctor',
+  '',
+  ...formatChecks(checks, {
+    mark: { ok: '  ok  ', warn: ' 注意 ', bad: ' 未了 ' },
+    markWidth: 6,
+    dim: (t: string) => t, hint: (t: string) => t, good: (t: string) => t,
+  }),
+].join('\n');
+for (const line of tellWhereItWent(
+  await saveReport('doctor', flat, [productRoot(), stateDir()]),
+)) console.log(`  ${line}`);
 console.log();
