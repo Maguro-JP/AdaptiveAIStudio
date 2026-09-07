@@ -15,7 +15,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// **走らせる場所で結果が変わらないようにする。**相対の道で読んでいたので、
+// 別の場所から走らせると「そんなファイルは無い」で落ちた（実際に落とした）。
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 function sources(dir: string, out: string[] = []): string[] {
   for (const e of readdirSync(dir)) {
@@ -28,7 +33,7 @@ function sources(dir: string, out: string[] = []): string[] {
 
 test('待たずに走らせるものに、受け手がある', () => {
   const bad: string[] = [];
-  for (const file of [...sources('src'), ...sources('scripts')]) {
+  for (const file of [...sources(join(root, 'src')), ...sources(join(root, 'scripts'))]) {
     const text = readFileSync(file, 'utf8');
     const lines = text.split('\n');
     lines.forEach((line, i) => {
@@ -37,7 +42,7 @@ test('待たずに走らせるものに、受け手がある', () => {
       // 受け手は、同じ行か、続く数行に付く（`.then(...).catch(...)`）。
       const near = lines.slice(i, i + 12).join('\n');
       if (near.includes('.catch(')) return;
-      bad.push(`${file}:${i + 1}  ${line.trim()}`);
+      bad.push(`${file.slice(root.length + 1)}:${i + 1}  ${line.trim()}`);
     });
   }
   assert.deepEqual(bad, [], `拾い手が居ません。落ちるとプロセスごと消えます:\n  ${bad.join('\n  ')}`);

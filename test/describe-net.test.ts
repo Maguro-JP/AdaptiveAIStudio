@@ -10,7 +10,13 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describeNet } from '../src/runtime/net-why.ts';
+
+// **走らせる場所で結果が変わらないようにする。**相対の道で読んでいたので、
+// 別の場所から走らせると「そんなファイルは無い」で落ちた（実際に落とした）。
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** 本物の fetch の失敗。繋ぐ先が居ない口へ出して作る。 */
 async function realFailure(url: string): Promise<unknown> {
@@ -54,7 +60,7 @@ test('外へ出て失敗した所は、どれもこの関数を通る', async ()
   ];
   const bad: string[] = [];
   for (const f of files) {
-    const src = await readFile(f, 'utf8');
+    const src = await readFile(join(root, f), 'utf8');
     src.split('\n').forEach((line, i) => {
       // 網の失敗を人へ見せている行に、生の文がそのまま入っていないか。
       if (!/繋がりません|取ってこられませんでした|訊けませんでした|一覧に/.test(line)) return;
