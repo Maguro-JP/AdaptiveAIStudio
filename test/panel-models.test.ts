@@ -115,3 +115,40 @@ describe('モデルの板', () => {
     assert.match(body.text, /取れませんでした/);
   });
 });
+
+describe('取ってこられなかったことを、押した場所に出す', () => {
+  /**
+   * 失敗はログの板へ流すだけだった。押したのはモデルの板なので、
+   * ログの板を開いていない人には**何も見えない**。押しても永久に何も
+   * 起きないように見え、実際にそう言われた。
+   */
+  test('**失敗した理由が、この板に出る**', async () => {
+    const { body } = await draw({
+      '/api/models': {
+        ...ANSWER,
+        fetching: {
+          id: 'qwen3.5-4b',
+          state: 'failed',
+          message: '取ってこられませんでした: 配布元に断られました (403)。',
+        },
+      },
+    });
+    assert.match(body.text, /取ってこられませんでした/, '押した板に理由が出ていない');
+    assert.match(body.text, /403/);
+  });
+
+  test('取っている最中も出る', async () => {
+    const { body } = await draw({
+      '/api/models': {
+        ...ANSWER,
+        fetching: { id: 'qwen3.5-4b', state: 'running', message: '一覧を調べます' },
+      },
+    });
+    assert.match(body.text, /取得中/, '進んでいることが出ていない');
+  });
+
+  test('何も取っていなければ、何も出さない（対）', async () => {
+    const { body } = await draw({ '/api/models': { ...ANSWER, fetching: null } });
+    assert.doesNotMatch(body.text, /取ってこられませんでした|取得中/);
+  });
+});

@@ -707,6 +707,8 @@ export class UiServer {
         llamaServer: llama ?? null,
         // どこを見ているか。「置いたのに出ない」を、画面の上で切り分けられる。
         modelsDir: this.#opts.config.runtime?.modelsDir ?? modelsDir(),
+        // 取ってきている最中か、失敗したか。**押した板に出すために返す。**
+        fetching: this.#fetching ?? null,
         catalog: AVAILABLE_MODELS.map((m) => ({
           id: m.id, note: m.note, approxGB: m.approxGB,
           // GGUF を自分で置く道（llamacpp / inproc）では、置き場に入れる元を出す。
@@ -1945,10 +1947,25 @@ export class UiServer {
   /**
    * モデルを取ってくる。数GBかかるので、待たせずに進み具合を流す。
    */
+  /**
+   * いま取ってきているもの、または最後に失敗したもの。
+   *
+   * **押した場所に結果を出すために持つ。**ここまで、失敗はログの板へ
+   * 流すだけだった。押したのはモデルの板なので、**押した本人には何も
+   * 見えない。**押しても永久に何も起きない、と受け取られる（実際にそう言われた）。
+   */
+  #fetching: { id: string; state: 'running' | 'done' | 'failed'; message: string } | undefined;
+
   async #fetchModel(session: Session, id: string): Promise<void> {
     const runtime = await this.#localRuntime();
     const entry = lookupCatalog(id);
-    const log = (text: string) => this.broadcast({ type: 'log', level: 'info', text });
+    const log = (text: string) => {
+      this.#fetching = { id, state: 'running', message: text };
+      this.broadcast({ type: 'log', level: 'info', text });
+      this.broadcast({ type: 'stateChanged' });
+    };
+    this.#fetching = { id, state: 'running', message: '始めます…' };
+    this.broadcast({ type: 'stateChanged' });
 
     try {
       if (usesGguf(runtime.id)) {
@@ -1976,7 +1993,8 @@ export class UiServer {
           onProgress: log,
         });
       }
-      log(`用意できました: ${id}`);
+      this.#fetching = { id, state: 'done', message: `用意できました: ${id}` };
+      this.broadcast({ type: 'log', level: 'info', text: `用意できました: ${id}` });
     } catch (e) {
       /*
        * **行き止まりにしない。**
@@ -1991,10 +2009,10 @@ export class UiServer {
        * 選び方を覚えてもらえば、名前が変わっても困らない。
        */
       // **一つの文にする。**二つに分けると、読む側は下の行を見落とす。
-      this.broadcast({
-        type: 'log', level: 'error',
-        text: `取ってこられませんでした: ${e instanceof Error ? e.message : String(e)}\n${byHand(modelsDir())}`,
-      });
+      const text = `取ってこられませんでした: ${e instanceof Error ? e.message : String(e)}\n${byHand(modelsDir())}`;
+      // 押した板にも残す。ログの板は閉じていることがある。
+      this.#fetching = { id, state: 'failed', message: text };
+      this.broadcast({ type: 'log', level: 'error', text });
     }
     this.broadcast({ type: 'stateChanged' });
   }

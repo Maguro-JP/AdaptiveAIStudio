@@ -460,6 +460,44 @@ describe('土台の声が、画面に届く', () => {
   });
 });
 
+describe('取ってこられなかったことを、押した場所へ返す', () => {
+  /**
+   * 失敗はログの板へ流すだけだった。押したのはモデルの板なので、
+   * ログの板を開いていない人には**何も見えない**。押しても永久に何も
+   * 起きないように見え、実際にそう言われた。
+   * 画面が押した場所に出せるよう、`/api/models` が状態も返す。
+   */
+  test('**失敗したら、/api/models が理由を返す**', async () => {
+    const models = await tempDir('aas-fetchfail-');
+    const s = new UiServer({
+      config: { ...DEFAULT_CONFIG, runtime: { kind: 'inproc', modelsDir: models, basePort: 0 } },
+      port: 0,
+      // 取ってくる先が断る。**そこで終わらせない。**
+      modelFetch: (async () => new Response('no', { status: 403 })) as unknown as typeof fetch,
+    });
+    const b = (await s.start()).replace(/\/$/, '');
+    try {
+      const before = await (await fetch(`${b}/api/models`)).json() as { fetching: unknown };
+      assert.equal(before.fetching, null, '何もしていないのに、何か言っている');
+
+      await fetch(`${b}/api/models/get`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: 'qwen3.5-4b' }),
+      });
+      let got: { state: string; message: string } | null = null;
+      await until(async () => {
+        const r = await (await fetch(`${b}/api/models`)).json() as {
+          fetching: { state: string; message: string } | null;
+        };
+        got = r.fetching;
+        return got?.state === 'failed';
+      }, '取ってこられなかったことが /api/models に出る', { timeoutMs: 15_000 });
+      assert.match(got!.message, /取ってこられませんでした/,
+        `押した板に出せる形で返っていない: ${got!.message}`);
+    } finally { await s.stop(); }
+  });
+});
+
 describe('作業場が無くても、開いた瞬間に赤を出さない', () => {
   test('一覧を読むときに、無ければ作る', async () => {
     // 入れた版の既定（根の下の work）は初回には無い。会話を始める前に

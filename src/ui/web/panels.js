@@ -874,6 +874,27 @@ export const PANELS = {
 
       // 取ってこられるもの
       store.replaceChildren(el('div', 'dim', '取ってくる'));
+      /*
+       * **押した結果を、押した場所に出す。**
+       *
+       * ここまで、失敗はログの板へ流すだけだった。押したのはこの板なので、
+       * ログの板を開いていない人には**何も見えない**。押しても永久に
+       * 何も起きないように見え、実際にそう言われた。
+       * 403（同意が要る・回線で塞がれている・回数上限）も、ここに出る。
+       *
+       * **一覧の下ではなく、上に出す。**下に置いたら板の外へはみ出して、
+       * 結局読めなかった（画面を見て直した）。
+       */
+      const fetching = data.fetching;
+      if (fetching) {
+        const box = el('div', fetching.state === 'failed' ? 'bad' : 'dim');
+        box.style.whiteSpace = 'pre-wrap';
+        box.textContent = fetching.state === 'running'
+          ? `${fetching.id} を取得中… ${fetching.message}`
+          : fetching.message;
+        store.append(box);
+      }
+
       for (const m of data.catalog ?? []) {
         const row = el('div', 'row');
         const get = el('button', 'ghost', `${m.id}（約${m.approxGB}GB）`);
