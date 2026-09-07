@@ -414,6 +414,31 @@ try {
   add('記録の置き場', 'ok', `${stateDir()}（まだ空。初回起動で作られます）`);
 }
 
+/*
+ * **そこへ書けるかを、実際に書いて確かめる。**
+ *
+ * ここは「在るか」しか見ていなかった。読めるだけの場所（読み取り専用で
+ * 配られたフォルダ、権限の足りない `%ProgramData%`、会社のクラウド
+ * ドライブ）でも ok と出る。**会話も、戻り先も、設定も、何ひとつ残らない
+ * のに、こちらは緑を出す。**気づくのは、閉じて開き直して全部消えたとき。
+ *
+ * 権限の形は機械ごとに違うので、読んで判断しない。一度書いて、消す。
+ */
+{
+  const { writeFile, unlink, mkdir: mkdirp } = await import('node:fs/promises');
+  const probe = join(stateDir(), '.write-probe');
+  try {
+    await mkdirp(stateDir(), { recursive: true });
+    await writeFile(probe, 'x');
+    await unlink(probe);
+    add('書き込み', 'ok', `${stateDir()} へ書けます`);
+  } catch (e) {
+    add('書き込み', 'bad', `${stateDir()} へ書けません（${(e as Error).message}）`,
+      '会話も、戻り先も、設定も残りません。書ける場所を AAS_HOME に指し直すか、'
+      + 'そのフォルダの権限を直してください。');
+  }
+}
+
 /* ---------- 出す ---------- */
 
 console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — doctor\n'));

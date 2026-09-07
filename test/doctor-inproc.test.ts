@@ -216,3 +216,47 @@ describe('読めないモデルしか無いとき', () => {
     assert.ok(!/動かせます/.test(got.out), `動かせると言っている: ${got.out.slice(-600)}`);
   });
 });
+
+/**
+ * 「在る」を「書ける」として言わない。
+ *
+ * 記録の保存先は、在るかどうかしか見ていなかった。読めるだけの場所
+ * （読み取り専用で配られたフォルダ、権限の足りない `%ProgramData%`、
+ * 会社のクラウドドライブ）でも ok と出る。**会話も、戻り先も、設定も、
+ * 何ひとつ残らないのに緑が出る。**気づくのは、閉じて開き直して
+ * 全部消えたとき。一度書いて、消して、確かめる。
+ */
+describe('記録の保存先へ書けないとき', () => {
+  test('未了として出す', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { execFile } = await import('node:child_process');
+    const { fileURLToPath } = await import('node:url');
+    const { tempDir } = await import('./tmp.ts');
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+    const home = await tempDir('aas-nowrite-');
+    /*
+     * **権限で塞がない。**このテストを root で走らせると、読み取り専用の
+     * フォルダにも書けてしまい、通ってしまう（実際にそうなった）。
+     * 保存先と同じ名前のファイルを置いて、フォルダを作れなくする。
+     * これなら誰で走らせても同じ。
+     */
+    const state = join(home, 'state');
+    await writeFile(state, '');
+
+    const got = await new Promise<{ out: string }>((ok) => {
+      execFile(
+        process.execPath,
+        ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', 'doctor.ts')],
+        {
+          env: { ...process.env, AAS_HOME: home, AAS_STATE_DIR: state },
+          encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
+        },
+        (_e, stdout, stderr) => ok({ out: `${stdout}${stderr}` }),
+      );
+    });
+    assert.match(got.out, /へ書けません/, `言っていない: ${got.out.slice(-600)}`);
+    assert.ok(!/動かせます/.test(got.out), `動かせると言っている: ${got.out.slice(-600)}`);
+  });
+});
