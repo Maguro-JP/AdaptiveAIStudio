@@ -98,6 +98,63 @@ function isDropDir(name) {
   return DROP_DIRS.some((d) => name === d || name.startsWith(`${d}@`) || name.startsWith(`${d}+`));
 }
 
+/**
+ * 入れた Node の入れ物の名前から、配る先を読む。
+ *
+ * `node-v22.22.2-win-x64` → `win-x64`。**読めなければ決めない。**
+ * ここは渡された zip の**ファイル名**から読んでいた。名前を変えて渡すと
+ * 外れ、Windows むけに組んだのに `win-x64` を消して Linux のものを残した。
+ * 当て推量が外れると、**動かないものが黙って出ていく。**
+ */
+export function targetFromNodeDir(name) {
+  return /-(win|darwin|linux)-(x64|arm64|armv7l)$/.exec(name)?.slice(1).join('-');
+}
+
+/**
+ * 配る先で使わないものを落とす。
+ *
+ * **入れっぱなしだった。**`@node-llama-cpp` は走らせる場所ごとに別の
+ * パッケージで入る（linux の CUDA・Vulkan・arm、win、mac …）。開発機は
+ * Linux なので、Windows むけに組んでも**Linux の binary が全部入る**。
+ * 実測 707MB のうち、Windows に要るのは 46MB だけだった。
+ *
+ * typescript と playwright-core も、組んだものを動かすのには使わない
+ * （型を見るのと画面を触るのは開発の側の話）。
+ *
+ * @param {string} target 配る先。`win-x64` のような形。
+ */
+export async function pruneForTarget(dir, target, log) {
+  let freed = 0;
+  const size = async (at) => {
+    let total = 0;
+    for (const name of await readdir(at, { recursive: true }).catch(() => [])) {
+      total += await stat(join(at, String(name))).then((s) => s.size).catch(() => 0);
+    }
+    return total;
+  };
+
+  // 走らせる場所ごとの binary。**配る先のものだけ残す。**
+  const perPlatform = join(dir, '@node-llama-cpp');
+  for (const name of await readdir(perPlatform).catch(() => [])) {
+    const at = String(name);
+    if (at === target || at.startsWith(`${target}-`)) continue;
+    freed += await size(join(perPlatform, at));
+    await rm(join(perPlatform, at), { recursive: true, force: true });
+    log(`  落とした: @node-llama-cpp/${at}（配る先は ${target}）`);
+  }
+
+  // 開発でしか使わないもの。
+  for (const name of ['typescript', 'playwright-core', '@types']) {
+    const at = join(dir, name);
+    if (!(await stat(at).then(() => true).catch(() => false))) continue;
+    freed += await size(at);
+    await rm(at, { recursive: true, force: true });
+    log(`  落とした: ${name}（組んだものを動かすのには使いません）`);
+  }
+
+  if (freed > 0) log(`  空いた: ${(freed / 1024 / 1024).toFixed(0)} MB`);
+}
+
 async function pruneExtras(dir, log) {
   let maps = 0;
   let types = 0;
@@ -174,6 +231,14 @@ function arg(name, fallback) {
  */
 export async function bundle({
   out, nodeZip, nodeExe, nodeHere, srcRoot = root, version, log = () => {},
+  /*
+   * 配る先。`win-x64` のような形。
+   *
+   * ここが無かったので、**走らせる場所ごとの binary を全部入れていた**。
+   * Windows むけに組んでも Linux の CUDA まで入って 930MB になる。
+   * 渡した zip の名前から読み取れるなら、そこから決める。
+   */
+  target,
   // 同梱する Node をどの名前で置くか。既定は node.exe（何も変わらない）。
   //
   // node.bin にできるようにしてあるのは、会社のクラウドドライブが
@@ -198,6 +263,14 @@ export async function bundle({
     await cp(from, join(app, item), { recursive: true });
     log(`  入れた: app/${item}`);
   }
+
+  /*
+   * 配る先を決める。
+   *
+   * 明示が無ければ、渡された Node の zip の名前から読む
+   * （`node-v22.22.2-win-x64.zip` → `win-x64`）。それも無ければ、
+   * いま走らせている場所。**推測できないときに黙って全部入れない。**
+   */
 
   const modules = join(app, 'node_modules');
   // **握り潰さない。**片づけの中で転ぶと、黙って片づけごと止まる
@@ -292,6 +365,8 @@ export async function bundle({
   const selfExe = nodeHere ? process.execPath : undefined;
   const exe = nodeExe ?? selfExe;
 
+  /** 配る先。同梱した Node から決まる。決まらなければ undefined。 */
+  let from;
   if (exe) {
     // 用意用（bootstrap）は node.exe だけを落とす。npm は付いてこないが、
     // scripts/run.mjs があるので困らない。
@@ -308,14 +383,63 @@ export async function bundle({
     // zip の中は node-vXX-win-x64/ の一階層下にある。平らに移す。
     const tmp = join(out, '.runtime-tmp');
     await mkdir(tmp, { recursive: true });
-    execFileSync('tar', ['-xf', nodeZip, '-C', tmp], { stdio: 'inherit' });
+    /*
+     * **`tar` に zip を渡さない。**
+     *
+     * Windows の tar（bsdtar）は zip を読めるが、Linux の GNU tar は読めない。
+     * ここは tar 決め打ちだったので、**Linux で組もうとすると必ず落ちた**
+     * （`This does not look like a tar archive`）。開発は Linux なので、
+     * Windows むけの持ち出しをここで組む道が、そもそも塞がっていた。
+     *
+     * 自前の unzip を使う（`src/runtime/unzip.ts`。実行時の依存はゼロ）。
+     */
+    const { unzip } = await import(new URL('../src/runtime/unzip.ts', import.meta.url).href);
+    const { readFile: readZip, writeFile: writeOut, mkdir: mkdirOut, chmod: chmodOut } =
+      await import('node:fs/promises');
+    for (const entry of unzip(await readZip(nodeZip))) {
+      const at = join(tmp, entry.path);
+      if (entry.path.endsWith('/')) { await mkdirOut(at, { recursive: true }); continue; }
+      await mkdirOut(dirname(at), { recursive: true });
+      await writeOut(at, entry.data);
+      // zip は実行の許可を持っている。落とすと、取り出した node が動かない。
+      if (entry.executable) await chmodOut(at, 0o755).catch(() => undefined);
+    }
     const { readdir } = await import('node:fs/promises');
     const [inner] = await readdir(tmp);
     await cp(join(tmp, inner), join(out, 'runtime'), { recursive: true });
     await rm(tmp, { recursive: true, force: true });
     log(`  入れた: runtime（同梱の Node。${inner}）`);
+    /*
+     * **配る先は、入れた Node そのものから決める。**
+     *
+     * 最初は渡された zip の**ファイル名**から読んでいた。名前を変えて渡したら
+     * 外れ、Windows むけに組んだのに `win-x64` の binary を消して Linux の
+     * ものを残した。**当て推量が外れると、黙って壊れたものが出ていく。**
+     * 取り出した中の名前（`node-v22.22.2-win-x64`）は、中身そのもの。
+     */
+    from = targetFromNodeDir(String(inner));
   } else {
     log('  Node は同梱していません（--node-here / --node-exe / --node-zip）');
+  }
+
+  /*
+   * 走らせる場所ごとの binary を、配る先のぶんだけ残す。
+   *
+   * **入れっぱなしだった。**開発機は Linux なので、Windows むけに組んでも
+   * Linux の CUDA まで入って 930MB になっていた。
+   *
+   * 配る先が決まらないときは**落とさない**。当て推量で消すと、要るものを
+   * 消したものが黙って出ていく（実際に win-x64 を消した）。
+   */
+  const shipTo = target ?? from
+    ?? ((nodeHere || nodeExe)
+      ? `${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`
+      : undefined);
+  if (shipTo) {
+    log(`  配る先: ${shipTo}`);
+    await pruneForTarget(join(app, 'node_modules'), shipTo, log);
+  } else {
+    log('  配る先が分かりません（--target を渡してください）。走らせる場所ごとのものは、そのまま入れます');
   }
 
   // **組んだあとに測る。**深さが伸びたことに気づけるのは、ここだけ。
@@ -352,6 +476,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     nodeExe: arg('--node-exe'),
     nodeHere: process.argv.includes('--node-here'),
     nodeName: arg('--node-name'),
+    target: arg('--target'),
     ...(arg('--src') ? { srcRoot: resolve(arg('--src')) } : {}),
     version: arg('--version'),
     log: (l) => console.log(l),
