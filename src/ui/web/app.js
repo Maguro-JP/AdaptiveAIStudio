@@ -557,7 +557,7 @@ async function loadMcp() {
   where.className = 'row';
   const wk = document.createElement('span');
   wk.className = 'dim';
-  wk.textContent = '合言葉の置き場';
+  wk.textContent = 'APIキーの保存先';
   const wv = document.createElement('span');
   wv.className = 'mono';
   wv.textContent = d.envPath;
@@ -823,7 +823,19 @@ async function loadUndo() {
   sec.hidden = list.length === 0;
   box.textContent = '';
 
-  list.forEach((p, i) => {
+  /*
+   * **少しだけ出す。**
+   *
+   * 全部出していたら、30 件が横の並びを丸ごと占領して、その下の「会話」と
+   * 「作業場」が画面の外へ押し出された。押せないので、**在るのに無いのと
+   * 同じ**になっていた。`scripts/sweep.mjs` で押して回って見つけた
+   * （試験は全部通っていた）。
+   *
+   * 戻すのは、たいてい直後の一件か二件。古いものは畳んでおく。
+   */
+  const shown = undoOpen ? list : list.slice(0, UNDO_SHOWN);
+
+  shown.forEach((p, i) => {
     const row = document.createElement('div');
     row.className = 'side-row';
 
@@ -861,7 +873,22 @@ async function loadUndo() {
     row.append(label, back);
     box.append(row);
   });
+
+  // 隠したぶんは、**黙って隠さない。**何件あるかを言って、押せば出す。
+  if (list.length > UNDO_SHOWN) {
+    const more = document.createElement('button');
+    more.className = 'ghost';
+    more.textContent = undoOpen
+      ? '少なく表示'
+      : `ほかに ${list.length - UNDO_SHOWN} 件`;
+    more.addEventListener('click', () => { undoOpen = !undoOpen; void loadUndo(); });
+    box.append(more);
+  }
 }
+
+/** 畳んでいるときに出す数。戻すのは、たいてい直後の一件か二件。 */
+const UNDO_SHOWN = 3;
+let undoOpen = false;
 
 async function loadConversations() {
   try {
@@ -883,6 +910,17 @@ function drawConversations() {
     if (!r.ok) return void alert(body.error ?? '始められませんでした');
     ctx.showHistory([]);
     await loadConversations();
+    // **押した結果を見せる。**いまの会話がまだ空なら、それをそのまま使う
+    // （空の会話を二つ作らない）。黙って同じ画面に戻ると、押しても何も
+    // 起きないように見える。実際に「新規で会話が開けない」と言われた。
+    if (body.reused) {
+      const note = $('convNote');
+      if (note) {
+        note.textContent = 'いまの会話がまだ空です。このまま書き始められます。';
+        note.hidden = false;
+        setTimeout(() => { note.hidden = true; }, 4000);
+      }
+    }
   };
   box.append(fresh);
 
@@ -979,7 +1017,7 @@ async function loadFiles(at = '') {
     const body = await r.json();
     if (!r.ok) throw new Error(body.error ?? '読めませんでした');
     filesAt = body.path;
-    $('filesHead').textContent = body.path ? `作業場 / ${body.path}` : '作業場';
+    $('filesHead').textContent = body.path ? `ファイル / ${body.path}` : 'ファイル';
     // **いまどこを触っているのかを、常に出す。**
     // これが見えないまま指示を書くのは、暗い所で手探りをするのと同じ。
     const now = $('workNow');
@@ -994,7 +1032,7 @@ async function loadFiles(at = '') {
       box.textContent = '';
       const note = document.createElement('div');
       note.className = 'side-empty';
-      note.textContent = 'ここは空です。直したいコードのある場所を、設定 → モデル の「作業場」で指してください。';
+      note.textContent = 'ここは空です。直したいコードのあるフォルダを、設定 → モデル の「フォルダ」で指してください。';
       note.title = body.root ?? '';
       box.append(note);
       return;
@@ -1203,9 +1241,9 @@ function showSection(name) {
 
 const INFO_LABELS = {
   version: '版', node: 'Node', platform: 'この機械', portable: '持ち運び',
-  productRoot: 'プログラム', home: '置き場（根）', stateDir: '記録',
+  productRoot: 'プログラム', home: '保存先（ルート）', stateDir: '記録の保存先',
   modelsDir: 'モデル', binDir: '実行ファイル', url: '画面',
-  runtime: 'モデルの土台', model: 'いまのモデル', mcp: '外の道具',
+  runtime: 'ランタイム', model: 'いまのモデル', mcp: '外部ツール（MCP）',
 };
 
 async function loadInfo() {
@@ -1237,9 +1275,9 @@ async function loadInfo() {
 /** 置き場の符丁を、人の言葉へ引き直す。基幹には符丁のまま置く。 */
 const DIR_NOTES = {
   OK: '',
-  MISSING: 'その置き場はまだありません。作ってから .gguf を入れてください。',
+  MISSING: 'そのフォルダはまだありません。作ってから .gguf を入れてください。',
   NOT_A_DIR: 'それはフォルダではなくファイルです。フォルダを指してください。',
-  UNREADABLE: 'その置き場は読めませんでした（権限か、繋がっていないドライブ）。',
+  UNREADABLE: 'そのフォルダは読めませんでした（権限か、繋がっていないドライブ）。',
 };
 
 /** いまの設定を読み出して、画面へ映す。 */
@@ -1280,7 +1318,7 @@ async function loadCfg() {
     e.className = 'empty';
     // ここで止まる人がいちばん多い。**次に何をすればいいかまで書く。**
     e.textContent = (DIR_NOTES[c.dirState] ? `${DIR_NOTES[c.dirState]}\n` : '')
-      + 'ありません。上の置き場に .gguf を1つ入れると、ここに出ます。\n'
+      + 'ありません。上のフォルダに .gguf を1つ入れると、ここに出ます。\n'
       + '取ってくる先の例: https://huggingface.co/Qwen （名前に GGUF が付いたもの）\n'
       + '迷ったら 3B の Q4_K_M（約2GB）。要約や下書きなら足ります。';
     e.style.whiteSpace = 'pre-line';

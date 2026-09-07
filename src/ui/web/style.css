@@ -149,6 +149,14 @@ button.row {
   text-transform: uppercase; color: var(--dim);
 }
 .side-list { overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 1px; }
+/*
+ * 「戻す」は伸ばさない。
+ *
+ * 件数が増えると横の並びを占領して、下の「会話」と「作業場」が画面の外へ
+ * 出た。押せないので、在るのに無いのと同じになる。**押して回って見つけた。**
+ * 出す数は app.js 側でも絞っているが、こちらは最後の止め。
+ */
+#sideUndo { max-height: 30vh; flex: 0 0 auto; }
 .side-list button {
   display: block;
   width: 100%; text-align: left;

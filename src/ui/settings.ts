@@ -89,9 +89,9 @@ export async function inspectModelsDir(dir: string): Promise<DirState> {
 
 export const DIR_NOTES: Record<DirState, string> = {
   OK: '',
-  MISSING: 'その置き場はまだありません。作ってから .gguf を入れてください。',
+  MISSING: 'そのフォルダはまだありません。作ってから .gguf を入れてください。',
   NOT_A_DIR: 'それはフォルダではなくファイルです。フォルダを指してください。',
-  UNREADABLE: 'その置き場は読めませんでした（権限か、繋がっていないドライブ）。',
+  UNREADABLE: 'そのフォルダは読めませんでした（権限か、繋がっていないドライブ）。',
 };
 
 /**

@@ -67,7 +67,7 @@ describe('点検の板', () => {
     const { body } = await draw();
     assert.ok(button(body, 'この環境を見てもらう'), 'doctor のボタンが無い');
     assert.ok(button(body, '検査を回す'), '検査のボタンが無い');
-    assert.equal(TITLES.checks, '点検');
+    assert.equal(TITLES.checks, '診断');
   });
 
   test('押すと、その名前で頼む', async () => {

@@ -38,7 +38,7 @@ function find(body: StubNode, tag: string): StubNode | undefined {
 
 describe('見る板', () => {
   test('見出しがある', () => {
-    assert.equal(TITLES.preview, '見る');
+    assert.equal(TITLES.preview, 'プレビュー');
   });
 
   test('別の口から出す。こちらの画面と同じ出所にしない', async () => {

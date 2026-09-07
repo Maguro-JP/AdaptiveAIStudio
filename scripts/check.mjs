@@ -16,7 +16,7 @@
 import { spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdtempSync, existsSync } from 'node:fs';
+import { mkdtempSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 
@@ -67,6 +67,28 @@ async function sweep() {
   console.log('\n== 画面を押して回る');
 
   const home = mkdtempSync(join(tmpdir(), 'aas-check-'));
+  /*
+   * **使い込んだ状態を作ってから押す。**
+   *
+   * ここはまっさらな置き場で立ち上げていたので、溜まってから出る崩れが
+   * 一度も再現しなかった。実際に「戻す」の一覧が 30 件並んで横の並びを占領し、
+   * その下の「会話」と「作業場」が画面の外へ出た。押せないので、機能が
+   * 在っても無いのと同じになる。**利用者が先に見つけた。**
+   *
+   * 溜まるものは、溜めた状態で押す。
+   */
+  const undoDir = join(home, 'undo');
+  mkdirSync(undoDir, { recursive: true });
+  for (let i = 0; i < 30; i += 1) {
+    const id = `u-check-${i}`;
+    writeFileSync(join(undoDir, `${id}.json`), JSON.stringify({
+      id,
+      at: Date.now() - i * 60_000,
+      request: `src/a.txt を書き換えて（検査のために作ったもの ${i}）`,
+      paths: ['src/a.txt'],
+      files: [{ path: 'src/a.txt', content: '' }],
+    }));
+  }
   const port = await freePort();
   const ui = spawn(process.execPath, [
     '--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', 'ui.ts'),

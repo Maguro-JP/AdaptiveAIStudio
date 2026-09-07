@@ -958,7 +958,15 @@ export class UiServer {
       if (current && current.messages === 0) {
         this.#session?.reset();
         this.#saved = 0;
-        return send(res, 200, { current: current.id, messages: [] });
+        /*
+         * **使い回したことを、言う。**
+         *
+         * ここは 200 を返すだけだったので、画面では何も起きなかった。
+         * 押しても増えず、選ばれているものも変わらないので、
+         * **利用者からは「押しても新しい会話が開けない」に見える。**
+         * しかも初回は必ず空なので、最初に触ったときに必ずそう見える。
+         */
+        return send(res, 200, { current: current.id, messages: [], reused: true });
       }
       const head = await this.#conversations.create();
       this.#conversationId = head.id;

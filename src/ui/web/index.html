@@ -62,6 +62,10 @@
       <section class="side-sec">
         <h3>会話</h3>
         <div id="sideSessions" class="side-list"></div>
+        <!--
+          押した結果を出す場所。押しても何も起きないように見える、をなくす。
+        -->
+        <div id="convNote" class="dim" hidden></div>
       </section>
 
       <!--
@@ -71,8 +75,8 @@
       -->
       <section class="side-sec grow">
         <div class="sec-head">
-          <h3 id="filesHead">作業場</h3>
-          <button id="pickWork" class="ghost icon" title="作業場を変える">📂</button>
+          <h3 id="filesHead">ファイル</h3>
+          <button id="pickWork" class="ghost icon" title="フォルダを変える">📂</button>
         </div>
         <div id="workNow" class="side-path mono" title=""></div>
         <div id="sideFiles" class="side-list files"></div>
@@ -124,7 +128,7 @@
         <button type="button" data-sec="place">配置</button>
         <button type="button" data-sec="model">モデル</button>
         <button type="button" data-sec="mcp">外の道具</button>
-        <button type="button" data-sec="check">点検</button>
+        <button type="button" data-sec="check">診断</button>
       </div>
 
       <section data-sec="info">
@@ -137,7 +141,7 @@
 
       <section data-sec="look" hidden>
         <label class="field-row">
-          <span class="dim">土台</span>
+          <span class="dim">ランタイム</span>
           <select id="themes" title="見た目を選ぶ"></select>
         </label>
         <p class="hint">色と間合いを細かく変えるときは、こちら。</p>
@@ -234,7 +238,7 @@
     <form method="dialog">
       <h2>色と間合い</h2>
       <p class="hint">
-        触っているそばから画面に映ります。土台を選んで、気になるところだけ変えてください。
+        触っているそばから画面に映ります。ベースを選んで、気になるところだけ変えてください。
         色として読めない書き方は受け取りません。
       </p>
       <div id="swatches" class="swatches"></div>

@@ -47,6 +47,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { buildIndex } from '../src/agent/code-index.ts';
 import { rankedEntries, seedFrom, renderMap } from '../src/agent/repo-map.ts';
+import { rerankByBody, rerankShare } from '../src/agent/rerank.ts';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const arg = (name, fallback) => {
@@ -137,7 +138,11 @@ const flat = rankedEntries(index);
 const ways = {
   '名前の順': () => plain,
   '呼ばれている数': () => flat,
-  'いま（依頼で起点）': (c) => rankedEntries(index, seedFrom(index, c.subject)),
+  // 本番と同じ道を通す。**上位だけ本文を読んで並べ直す（rerank）ところまで含める。**
+  'いま（依頼で起点）': async (c) => rankedEntries(
+    index,
+    await rerankByBody(index, c.subject, seedFrom(index, c.subject), rerankShare(CHARS)),
+  ),
 };
 
 /*
@@ -161,15 +166,21 @@ console.log(K > 0 ? `見方: 上位 ${K} 件に入ったか` : `見方: ${CHARS}
 console.log('');
 console.log(`${pad('並べ方', 22)}${pad('全部', 10)}名前が出ていないものだけ`);
 for (const [name, way] of Object.entries(ways)) {
-  const score = (rows) => rows.reduce((a, c) => a + hit(way(c), c.want), 0) / rows.length;
-  console.log(`${pad(name, 22)}${pad(`${(score(list) * 100).toFixed(1)}%`, 10)}${(score(bare) * 100).toFixed(1)}%`);
+  const score = async (rows) => {
+    let sum = 0;
+    for (const c of rows) sum += hit(await way(c), c.want);
+    return sum / rows.length;
+  };
+  const all = await score(list);
+  const nameless = await score(bare);
+  console.log(`${pad(name, 22)}${pad(`${(all * 100).toFixed(1)}%`, 10)}${(nameless * 100).toFixed(1)}%`);
 }
 
 if (process.argv.includes('--kind')) {
   const seen = {};
   const got = {};
   for (const c of list) {
-    const entries = ways['いま（依頼で起点）'](c);
+    const entries = await ways['いま（依頼で起点）'](c);
     const map = K > 0 ? entries.slice(0, K).map((e) => e.path).join('\n') : renderMap(entries, { chars: CHARS });
     for (const w of c.want) {
       const k = kindOf(w);

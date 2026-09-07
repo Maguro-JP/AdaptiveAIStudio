@@ -50,9 +50,9 @@ async function draw(answers: Record<string, unknown> = {}) {
 }
 
 describe('モデルの板', () => {
-  test('土台と手元のモデルを出す', async () => {
+  test('ランタイムと手元のモデルを出す', async () => {
     const { body } = await draw();
-    assert.match(body.text, /土台/);
+    assert.match(body.text, /ランタイム/);
     assert.match(body.text, /ollama/);
     assert.match(body.text, /qwen3\.5:9b/, '手元のモデルが出ていない');
     assert.match(body.text, /6\.6GB/, '大きさが出ていない');

@@ -60,6 +60,7 @@ import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
 import { UndoStore } from './undo.ts';
 import { fitParts } from './prompt-budget.ts';
+import { rerankByBody, rerankShare } from '../agent/rerank.ts';
 import { rankedEntries, renderMap, seedFrom, covers } from '../agent/repo-map.ts';
 import { indexStore } from '../agent/tools/find.ts';
 import type { Harness } from '../harness/harness.ts';
@@ -1553,30 +1554,43 @@ export class Session {
       /*
        * **前と同じで済むなら、同じものを返す。**
        *
-       * 前置きが一文字でも変われば、相手はそこから先を全部計算し直す
-       * （履歴も含めて）。依頼ごとに地図を作り直すと、毎回そうなる。
+       * システムプロンプトが一文字でも変われば、モデルはそこから先を全部
+       * 計算し直す（prompt cache が効かなくなる。会話の履歴も含めて）。
+       * 依頼ごとに repo map を作り直すと、毎回それが起きる。
        *
-       * ただし、**いま探している所が地図に載っていないなら、作り直す。**
-       * 載っていない地図を使い回しても、探し回る往復が増えるだけで、
+       * ただし、**いま探しているファイルが repo map に無いなら、作り直す。**
+       * 無いものを使い回しても、モデルが探し回るやりとりが増えるだけで、
        * 計算し直すより高くつく。
        */
-      // 索引は `find_code` と同じものを使う（二つ持つと、同じ木を二度歩く）。
-      // 覚えているものが在れば、それをそのまま使う。無ければ組む
-      // （このあとの `find_code` もそれを使うので、払いは一度きり）。
+      // 索引は `find_code` と同じものを使う（二つ持つと、同じディレクトリを
+      // 二度歩くことになる）。作ってあれば、それをそのまま使う。
+      // 無ければ組む（このあとの `find_code` もそれを使うので、払いは一度きり）。
       const index = await indexStore.fresh(this.root);
       if (index.files.length === 0) return '';
       const seed = seedFrom(index, this.#instruction, this.#history
         .flatMap((m) => (typeof m.content === 'string' ? m.content.match(/[\w./-]+\.[a-z]{1,4}/g) ?? [] : [])),
         this.undo.recent());
       const held = this.#map;
-      // 覚えているものを使ってよいかは、**言い切れる印だけ**で決める
-      // （`covers` の注釈）。探す道具の当て方は、並べるには効くが判断には使えない。
+      // 作ってあるものを使ってよいかは、**確かな手がかりだけ**で決める
+      // （`covers` のコメント）。検索の点の付け方は、並べるには効くが、
+      // 「そのファイルを直している」の判断には使えない。
       const strong = seedFrom(index, this.#instruction, [], this.undo.recent(), { search: false });
       if (held && held.builtAt === index.builtAt && covers(held.text, index, strong)) return held.text;
 
-      const entries = rankedEntries(index, seed);
       // トークンではなく文字で切る（切り出しが文字単位のため）。**多めに数える。**
       const chars = count ? left : left * 2;
+      /*
+       * **上位の候補だけ本文を読んで、並べ直す（rerank）。**
+       *
+       * `scoreFiles` は索引の head（冒頭とコメント）しか見ていないので、
+       * 本文にだけ答えがあるファイルが沈む。repo map に入らなかった 209 件の
+       * うち 56 件（27%）がこれだった（実測）。
+       *
+       * 効かせ方は repo map の予算で決める。数件しか見せられないときほど
+       * 上位の精度が効き、ほとんど見せられるなら並べ直しても入れ替わるだけ。
+       */
+      const ranked = await rerankByBody(index, this.#instruction, seed, rerankShare(chars));
+      const entries = rankedEntries(index, ranked);
       const made = renderMap(entries, { chars }, count);
       this.#map = { text: made, builtAt: index.builtAt };
       return made;

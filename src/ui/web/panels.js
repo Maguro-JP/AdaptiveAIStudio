@@ -409,7 +409,7 @@ export const PANELS = {
       else if (v.type === 'toolsFailed') {
         // **言葉より結果。**本文が「書き換えました」でも、止められていれば
         // 作業場は変わっていない。完了の顔をさせない。
-        note('bad', `道具が通りませんでした（${v.names.join(', ')}）。作業場は変わっていません。`);
+        note('bad', `ツールが通りませんでした（${v.names.join(', ')}）。ファイルは変わっていません。`);
       } else if (v.type === 'verify') showVerify(v.event);
       else if (v.type === 'settled') {
         // **確かめていないことを、確かめた顔で出さない。**
@@ -822,7 +822,7 @@ export const PANELS = {
 
       status.replaceChildren();
       const head = el('div', 'row');
-      head.append(el('span', 'key', '土台'), el('span', 'num mono', data.runtime ?? '不明'));
+      head.append(el('span', 'key', 'ランタイム'), el('span', 'num mono', data.runtime ?? '不明'));
       status.append(head);
       if (data.runtime === 'llamacpp') {
         const row = el('div', 'row');
@@ -837,7 +837,7 @@ export const PANELS = {
       // 「置いたのに出ない」の切り分けが、この一行でつく。
       if (data.runtime !== 'ollama' && data.modelsDir) {
         const row = el('div', 'row');
-        row.append(el('span', 'key', '置き場'), el('span', 'num mono dim', data.modelsDir));
+        row.append(el('span', 'key', '保存先'), el('span', 'num mono dim', data.modelsDir));
         status.append(row);
       }
 
@@ -851,7 +851,7 @@ export const PANELS = {
        */
       const again = el('button', 'ghost', '⟳ 置いたものを読み直す');
       again.type = 'button';
-      again.title = '置き場に自分で入れた .gguf を拾い直します';
+      again.title = '保存先に自分で入れた .gguf を拾い直します';
       again.onclick = async () => {
         again.disabled = true;
         again.textContent = '読み直しています…';
@@ -944,7 +944,7 @@ export const PANELS = {
     frame.className = 'preview-frame';
     // 出所が分かれていても、こちらでも縛る。
     frame.sandbox = 'allow-scripts allow-forms allow-popups allow-modals';
-    const hint = el('div', 'dim preview-hint', '作業場を読み込んでいます…');
+    const hint = el('div', 'dim preview-hint', 'ファイルを読み込んでいます…');
 
     body.append(bar, hint, frame);
 
@@ -1117,8 +1117,26 @@ export const PANELS = {
   },
 };
 
+/*
+ * 画面に出す名前。
+ *
+ * **こちらで作った言葉を置かない。**「人員」「土台」「作業場」「流れ」は
+ * このプロジェクトの中でだけ通じる言い方で、初めて見た人には何の画面か
+ * 分からない。利用者から「何だよ作業場って」「なんだよ人員って」と言われた。
+ *
+ * 普通のアプリで使われている言葉にする。迷ったら、説明が要らない方を選ぶ。
+ */
 export const TITLES = {
-  conversation: '会話', plan: '進行中', roster: '人員', memory: '記憶',
-  proposals: '提案', duties: '日課', models: 'モデル', changes: '変更',
-  log: '流れ', note: '覚え書き', checks: '点検', preview: '見る',
+  conversation: 'チャット',
+  plan: '実行中のタスク',
+  roster: 'ロール',
+  memory: 'メモリ',
+  proposals: '提案',
+  duties: '定期実行',
+  models: 'モデル',
+  changes: '変更したファイル',
+  log: 'ログ',
+  note: 'メモ',
+  checks: '診断',
+  preview: 'プレビュー',
 };
