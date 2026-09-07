@@ -466,7 +466,7 @@ export class Session {
 
     const session = new Session({
       config, root, candidates, modelReason: note, memory,
-      roles: new RoleRegistry(config.roles ?? []),
+      roles: new RoleRegistry(config.roles ?? [], (t) => log('warn', t)),
       orchestrator, pilot, prefetch, opts, holder, forum, toolPool, harness, mcpClients,
       proposals, idle, duties,
     });

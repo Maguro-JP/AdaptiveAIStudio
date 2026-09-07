@@ -28,16 +28,42 @@ export interface RoleOverride {
   extends?: string;
 }
 
+/**
+ * 外へ出る道と、書き込みを、同じ役職に持たせない。
+ *
+ * **決まりとして書いてあるのに、どこも見ていなかった。**設定から足す役職は
+ * `access` をそのまま受け取るので、`['write', 'network']` と書けば通った。
+ * それは、外から入ってきたものをそのままリポジトリへ書ける形で、
+ * 検問所を置いた意味が無くなる。
+ *
+ * 落とすのは `write` の方。外へ出る道を取り上げると、その役職が何のために
+ * 居るのか分からなくなる。**黙って落とさない。**何を落としたかを返す。
+ */
+export function dropWriteIfOutbound(access: readonly ToolAccess[]): {
+  access: ToolAccess[]; dropped: boolean;
+} {
+  const outbound = access.includes('network') || access.includes('mcp');
+  if (!outbound || !access.includes('write')) return { access: [...access], dropped: false };
+  return { access: access.filter((a) => a !== 'write'), dropped: true };
+}
+
 export class RoleRegistry {
   readonly #roles = new Map<string, Role>();
   /** 旧名 → 現在のID。改名しても設定と履歴の指し先を失わせない。 */
   readonly #aliases = new Map<string, string>();
 
-  constructor(extra: RoleOverride[] = []) {
+  /** 落とした権限。何を落としたかを、使う側が言えるように残す。 */
+  readonly #dropped: string[] = [];
+
+  constructor(extra: RoleOverride[] = [], onLog?: (text: string) => void) {
     for (const r of BUILTIN_ROLES) this.#roles.set(r.id, r);
     for (const o of extra) this.#apply(o);
     this.#buildAliases();
+    for (const said of this.#dropped) onLog?.(said);
   }
+
+  /** 外へ出る道があるので write を落とした役職。無ければ空。 */
+  get droppedWrite(): readonly string[] { return this.#dropped; }
 
   /**
    * 役職を引く。旧名でも引ける。
@@ -98,7 +124,7 @@ export class RoleRegistry {
       name: o.name ?? base?.name ?? o.id,
       responsibility: o.responsibility ?? base?.responsibility ?? '',
       disposition: o.disposition ?? base?.disposition ?? '',
-      access: o.access ?? base?.access ?? ['read'],
+      access: [],
       instructions: o.instructions ?? base?.instructions ?? [],
       outputContract: o.outputContract ?? base?.outputContract,
       prefers: o.prefers ?? base?.prefers ?? 'any',
@@ -106,7 +132,15 @@ export class RoleRegistry {
       succeededBy: o.succeededBy ?? base?.succeededBy,
       retired: o.retired ?? base?.retired,
     };
-    this.#roles.set(merged.id, merged);
+    const want = o.access ?? base?.access ?? ['read'];
+    const { access, dropped } = dropWriteIfOutbound(want);
+    if (dropped) {
+      this.#dropped.push(
+        `${merged.id}: 外へ出る道があるので write を外しました`
+        + '（外から入ってきたものを、そのままリポジトリへ書けてしまうため）',
+      );
+    }
+    this.#roles.set(merged.id, { ...merged, access });
   }
 }
 
