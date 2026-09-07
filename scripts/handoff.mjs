@@ -20,7 +20,8 @@
  * 4分かけると、渡すこと自体をやめる。**
  */
 import { execFileSync } from 'node:child_process';
-import { hostname } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
+import { mkdtempSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { branchFor, pickToTake, whyNotSend, whyNotTake, jst } from './handoff-plan.mjs';
@@ -133,20 +134,45 @@ try {
 const stop = whyNotSend({ branch, dirty, ahead });
 if (stop) { console.log(stop); process.exit(0); }
 
+console.log(`${mine} へ送ります。`);
+
+/*
+ * **いま居るブランチには、一切触らない。**
+ *
+ * ここは `git add -A && git commit` していた。main に居れば main に
+ * 「確かめていません」というコミットが載る。**実際に載せて、そのまま
+ * push した**（39e651a）。しかも `whyNotSend` に「main を wip の代わりに
+ * しない」と書いておきながら、中身は何もしない空の `if` だった。
+ *
+ * 止めるのではなく、触らない形にする。
+ *
+ *   ・一時的な index に HEAD を読み込み、そこへ作業中のものを載せる
+ *   ・`commit-tree` でコミットを作る（HEAD は動かない）
+ *   ・その sha を wip/ へ push する
+ *
+ * 利用者の index も working tree も、送る前と後で**同じまま**。
+ */
+let send = 'HEAD';
 if (dirty) {
-  gitLoud('add', '-A');
+  const tmpIndex = join(mkdtempSync(join(tmpdir(), 'aas-handoff-')), 'index');
+  const withTmp = (...a) => execFileSync('git', a, {
+    cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, GIT_INDEX_FILE: tmpIndex },
+  }).trim();
+  withTmp('read-tree', 'HEAD');
+  withTmp('add', '-A', '.');
+  const tree = withTmp('write-tree');
   const when = jst(new Date().toISOString());
   // **確かめていないことを、コミットの文にも書く。**取り込む側が見る。
-  gitLoud('commit', '-m',
+  send = withTmp('commit-tree', tree, '-p', 'HEAD', '-m',
     `作業中（${mine} / ${when}）\n\n`
     + '渡すために作ったコミットです。確かめていません。\n'
     + '取り込んだ側で npm run check を通してください。');
 }
 
-console.log(`${mine} へ送ります。`);
 // 自分の作業を置くだけのブランチなので、上書きしてよい。ただし
 // **知らない間に進んでいたら止める**（--force-with-lease）。
-gitLoud('push', '--force-with-lease', 'origin', `HEAD:refs/heads/${mine}`);
+gitLoud('push', '--force-with-lease', 'origin', `${send}:refs/heads/${mine}`);
 console.log('');
 console.log('送りました。もう片方では:');
 console.log('  npm run handoff -- --take');

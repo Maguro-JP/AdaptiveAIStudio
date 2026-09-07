@@ -128,6 +128,35 @@ describe('片方で書いて、もう片方で受け取る', () => {
     assert.equal(await readFile(join(local, 'z.txt'), 'utf8'), 'z\n');
   });
 
+  test('**いま居るブランチに、コミットを作らない**', async () => {
+    /*
+     * ここは `git add -A && git commit` していた。main に居れば main に
+     * 「確かめていません」というコミットが載る。**実際に載せて push した**
+     * （39e651a）。しかも決め方の側に「main を wip の代わりにしない」と
+     * 書いておきながら、中身は何もしない空の `if` だった。
+     *
+     * 送っても、いまのブランチも index も working tree も動かないこと。
+     */
+    const { cloud, local } = await twoMachines();
+    await writeFile(join(cloud, 'まだ途中.txt'), '書きかけ\n', 'utf8');
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: cloud, encoding: 'utf8' }).stdout.trim();
+    const before = spawnSync('git', ['status', '--porcelain'], { cwd: cloud, encoding: 'utf8' }).stdout;
+
+    const sent = run(cloud, 'cloud');
+    assert.equal(sent.code, 0, sent.out);
+
+    const after = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: cloud, encoding: 'utf8' }).stdout.trim();
+    assert.equal(after, head, 'いま居るブランチにコミットを作っている');
+    const still = spawnSync('git', ['status', '--porcelain'], { cwd: cloud, encoding: 'utf8' }).stdout;
+    assert.equal(still, before, `書きかけの状態を変えている: ${still}`);
+    assert.match(still, /\?\?/, 'この確かめの前提が崩れている（書きかけが無い）');
+
+    // それでも、中身は向こうへ渡っていること。
+    const took = run(local, 'local', ['--take']);
+    assert.equal(took.code, 0, took.out);
+    assert.equal(await readFile(join(local, 'まだ途中.txt'), 'utf8'), '書きかけ\n');
+  });
+
   test('渡されていなければ、そう言う', async () => {
     const { local } = await twoMachines();
     const took = run(local, 'local', ['--take']);

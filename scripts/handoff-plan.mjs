@@ -72,15 +72,18 @@ export function pickToTake(how) {
 /**
  * 送る前に、止めるべきか。
  *
- * **main を wip の代わりにしない。**送るのは作業中のもので、確かめていない。
- * 取り違えると、確かめていないものが main に載る。
+ * **ここに「main を wip の代わりにしない」と書いておきながら、中身は
+ * 何もしない空の `if` だった。**書いた意図が実装されていないので、
+ * 送るたびに、いま居るブランチに「確かめていません」というコミットが
+ * 載った。実際に main の履歴へ入れてしまった（39e651a）。
+ *
+ * 直し方は止めることではなく、**そもそも今のブランチに触らない**こと
+ * （`handoff.mjs` を参照。一時的な index に読み込んで commit-tree で作り、
+ * HEAD は動かさない）。だからここは、渡すものが在るかだけを見る。
  *
  * @param {{ branch: string; dirty: boolean; ahead: number }} state
  */
 export function whyNotSend(state) {
-  if (!state.branch.startsWith('wip/') && state.branch !== 'main') {
-    // main 以外のブランチで作業しているのは普通。止めない。
-  }
   if (!state.dirty && state.ahead === 0) return '渡すものがありません（変更も、未 push のコミットも無し）';
   return undefined;
 }
