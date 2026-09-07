@@ -45,11 +45,37 @@ export async function plannedContent(
   if (name !== 'edit_file') return undefined;
 
   const path = writePath(args);
-  if (!path || typeof a.find !== 'string' || typeof a.replace !== 'string') return undefined;
+  if (!path) return undefined;
   const abs = safeResolve(root, path);
   if (!abs) return undefined;
   const before = await readFile(abs, 'utf8').catch(() => undefined);
   if (before === undefined) return undefined;
+
+  /*
+   * **並べて渡された直しも、当ててから見る。**
+   *
+   * ここは `find` / `replace` の一組しか見ていなかった。`edits` に並べて
+   * 渡す道を足したとき、この関数は `undefined` を返す。規則は
+   * 「後の姿が分からないなら通す」と書いてあるので、**素通りする。**
+   * 部分置換でテストを消すのを止める規則が、名前を一つ増やしただけで
+   * 効かなくなる。ツールを足すときに、いちばん起きやすい形。
+   */
+  const raw = (args as { edits?: unknown }).edits;
+  if (Array.isArray(raw)) {
+    let text = before;
+    for (const e of raw) {
+      const one = e as { find?: unknown; replace?: unknown; all?: unknown };
+      if (typeof one?.find !== 'string' || typeof one?.replace !== 'string') return undefined;
+      const got = applyEdit(text, one.find, one.replace, one.all === true);
+      // 当たらないものが混じっていたら、後の姿は決まらない。
+      // **決まらないものを「これが後の姿だ」として渡さない。**
+      if (got.hits === 0) return undefined;
+      text = got.text;
+    }
+    return text;
+  }
+
+  if (typeof a.find !== 'string' || typeof a.replace !== 'string') return undefined;
   return applyEdit(before, a.find, a.replace, a.all === true).text;
 }
 

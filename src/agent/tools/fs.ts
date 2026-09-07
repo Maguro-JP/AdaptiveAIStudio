@@ -270,12 +270,44 @@ async function commit(
  * 当てる場所は、探す文字列で決める。行番号にしない。行番号は、
  * 直した瞬間にずれる（モデルは読んだときの番号のまま次を指す）。
  */
+/**
+ * 渡された直しを、並びとして受け取る。
+ *
+ * 一つだけのとき（`find` / `replace`）と、並べたとき（`edits`）の両方を
+ * 受ける。**どちらも無いときは、そう言う。**片方だけ渡されたときも同じ。
+ * 文字で理由を返し、通ったときだけ並びを返す。
+ */
+function parseEdits(
+  args: Record<string, unknown>,
+): { find: string; replace: string; all?: boolean }[] | string {
+  const raw = args.edits;
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) return 'edits が空です。直すところがありません。';
+    const out: { find: string; replace: string; all?: boolean }[] = [];
+    for (const [i, e] of raw.entries()) {
+      const one = e as { find?: unknown; replace?: unknown; all?: unknown };
+      if (typeof one?.find !== 'string') return `edits[${i}].find が必要です。`;
+      if (typeof one?.replace !== 'string') return `edits[${i}].replace が必要です。`;
+      if (one.find.length === 0) return `edits[${i}].find が空です。置き換える場所が決まりません。`;
+      out.push({ find: one.find, replace: one.replace, ...(one.all === true ? { all: true } : {}) });
+    }
+    return out;
+  }
+  const find = typeof args.find === 'string' ? args.find : undefined;
+  const replace = typeof args.replace === 'string' ? args.replace : undefined;
+  if (find === undefined) return 'find が必要です。';
+  if (replace === undefined) return 'replace が必要です。';
+  if (find.length === 0) return 'find が空です。差し替える場所が決まりません。';
+  return [{ find, replace, ...(args.all === true ? { all: true } : {}) }];
+}
+
 export const editFileTool: Tool = {
   schema: {
     name: 'edit_file',
     description:
       'ファイルの一部を差し替える。find に「いまある文字列」、replace に「置き換えた後の文字列」を渡す。'
       + '全文を書き直す必要はない。find は前後を少し含めて、file の中で一意になるようにすること。'
+      + '同じファイルの複数箇所を直すときは edits に並べて一度に渡す（訊かれるのも書くのも一度で済む）。'
       + '実行前に差分が利用者へ提示され、承認が要る。',
     parameters: {
       type: 'object',
@@ -284,19 +316,44 @@ export const editFileTool: Tool = {
         find: { type: 'string', description: 'いまファイルにある文字列（そのまま一致するもの）' },
         replace: { type: 'string', description: '置き換えた後の文字列' },
         all: { type: 'boolean', description: '複数見つかったとき、全部置き換えるなら true（既定 false）' },
+        edits: {
+          type: 'array',
+          description:
+            '複数箇所をまとめて直すとき。上から順に当てる。'
+            + '一つでも当たらなければ、何も書かない（半分だけ直った形にしない）。',
+          items: {
+            type: 'object',
+            properties: {
+              find: { type: 'string' },
+              replace: { type: 'string' },
+              all: { type: 'boolean' },
+            },
+            required: ['find', 'replace'],
+            additionalProperties: false,
+          },
+        },
       },
-      required: ['path', 'find', 'replace'],
+      required: ['path'],
       additionalProperties: false,
     },
   },
   async run(args, ctx) {
     const p = requireString(args, 'path');
-    const find = typeof args.find === 'string' ? args.find : undefined;
-    const replace = typeof args.replace === 'string' ? args.replace : undefined;
     if (!p) return fail('path が必要です。');
-    if (find === undefined) return fail('find が必要です。');
-    if (replace === undefined) return fail('replace が必要です。');
-    if (find.length === 0) return fail('find が空です。差し替える場所が決まりません。');
+
+    /*
+     * **同じファイルの直しを、一度で当てる。**
+     *
+     * ここは find/replace を一つずつしか受けなかった。5 か所直すなら 5 回
+     * 呼ぶことになり、そのたびに差分が出て、そのたびに訊かれ、そのたびに
+     * 書き込む。**戻り先も 5 つに割れる**ので、一つの直しとして戻せない。
+     *
+     * 並べて渡せるようにした。**一つでも当たらなければ、何も書かない。**
+     * 半分だけ直った形は、直っていないより悪い（次に読んだとき、どこまで
+     * 進んだのか分からない）。
+     */
+    const list = parseEdits(args);
+    if (typeof list === 'string') return fail(list);
 
     const abs = await realSafeResolve(ctx.root, p);
     if (!abs) return fail(`作業ディレクトリの外です: ${p}`);
@@ -312,24 +369,36 @@ export const editFileTool: Tool = {
     // モデルは LF で書いてくる。中身が CRLF だと、**そのままでは一致しない。**
     // 「無い」と言われて、モデルは同じことを何度も試す。合わせてから探す。
     const lfBefore = toLf(before);
-    const { text, hits, loose, how } = applyEdit(lfBefore, toLf(find), toLf(replace), args.all === true);
-    if (hits === 0) {
-      // **いちばん近い場所を、その場で見せる。**「読み直してください」だけだと
-      // 一往復まるごと払ううえ、ファイル全体が窓に入り、それでも次も外す。
-      const near = nearestTo(lfBefore, toLf(find));
-      return fail(
-        `見つかりません: ${p} の中に find の文字列がありません。\n`
-        + (near ? `${near}\n` : '')
-        + 'ここにあるとおりの文字列を find に渡し直してください'
-        + '（空白や改行まで一致させる必要があります）。'
-        + (near ? '' : ' 見当が付かなければ read_file で読み直してください。'),
-      );
-    }
-    if (hits > 1 && args.all !== true) {
-      return fail(
-        `${hits} 箇所に当てはまります: ${p}。どこを直すのか決まりません。`
-        + 'find に前後を少し足して一意にするか、全部直すなら all を true にしてください。',
-      );
+    let text = lfBefore;
+    let loose = false;
+    let how: string | undefined;
+    for (const [i, e] of list.entries()) {
+      // 何番目かは、二つ以上あるときだけ言う。一つのときに「1 つ目」と
+      // 言われても、どれのことか分からない。
+      const which = list.length > 1 ? `（${i + 1} つ目）` : '';
+      const got = applyEdit(text, toLf(e.find), toLf(e.replace), e.all === true);
+      if (got.hits === 0) {
+        // **いちばん近い場所を、その場で見せる。**「読み直してください」だけだと
+        // 一往復まるごと払ううえ、ファイル全体が窓に入り、それでも次も外す。
+        const near = nearestTo(text, toLf(e.find));
+        return fail(
+          `見つかりません${which}: ${p} の中に find の文字列がありません。\n`
+          + (near ? `${near}\n` : '')
+          + 'ここにあるとおりの文字列を find に渡し直してください'
+          + '（空白や改行まで一致させる必要があります）。'
+          + (near ? '' : ' 見当が付かなければ read_file で読み直してください。')
+          + (list.length > 1 ? '\n**何も書いていません。**並べたもの全部を渡し直してください。' : ''),
+        );
+      }
+      if (got.hits > 1 && e.all !== true) {
+        return fail(
+          `${got.hits} 箇所に当てはまります${which}: ${p}。どこを直すのか決まりません。`
+          + 'find に前後を少し足して一意にするか、全部直すなら all を true にしてください。'
+          + (list.length > 1 ? '\n**何も書いていません。**' : ''),
+        );
+      }
+      text = got.text;
+      if (got.loose) { loose = true; how = got.how; }
     }
 
     // **ゆるく当てたことは黙らない。**字下げや行末の空白が違っていたので

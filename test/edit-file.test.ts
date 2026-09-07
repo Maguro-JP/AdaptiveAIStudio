@@ -630,3 +630,65 @@ describe('両端で当てるとき、いちばん合う終わりを選ぶ', () =
     assert.equal(got.hits, 0, '中身が違うのに当てている');
   });
 });
+
+/**
+ * 同じファイルの複数箇所を、一度で当てる。
+ *
+ * ここは find/replace を一つずつしか受けなかった。5 か所直すなら 5 回
+ * 呼ぶことになり、そのたびに差分が出て、そのたびに訊かれ、そのたびに
+ * 書き込む。**戻り先も 5 つに割れる**ので、一つの直しとして戻せない。
+ *
+ * そして、**足すこと自体が危ない**。守りの規則は「後の姿」を
+ * `plannedContent` から取る。`edits` を見られないままだと `undefined` が
+ * 返り、規則は「分からないなら通す」なので**素通りする**。ここでも見る。
+ */
+describe('まとめて当てる', () => {
+  test('並べた分が、上から順に当たる', async () => {
+    const { root, path } = await fixture('あ\nい\nう\n');
+    const r = await editFileTool.run({
+      path,
+      edits: [
+        { find: 'あ', replace: 'A' },
+        { find: 'う', replace: 'C' },
+      ],
+    }, await ctxAt(root));
+    assert.ok(!r.isError, r.content);
+    assert.equal(await readFile(join(root, path), 'utf8'), 'A\nい\nC\n');
+  });
+
+  test('**一つでも当たらなければ、何も書かない**', async () => {
+    // 半分だけ直った形は、直っていないより悪い。次に読んだとき、
+    // どこまで進んだのか分からない。
+    const { root, path } = await fixture('あ\nい\nう\n');
+    const r = await editFileTool.run({
+      path,
+      edits: [
+        { find: 'あ', replace: 'A' },
+        { find: '無い文字列', replace: 'X' },
+      ],
+    }, await ctxAt(root));
+    assert.ok(r.isError, '当たらないのに通っている');
+    assert.match(r.content, /2 つ目/, `何番目かを言っていない: ${r.content}`);
+    assert.equal(await readFile(join(root, path), 'utf8'), 'あ\nい\nう\n',
+      '半分だけ書き換わっている');
+  });
+
+  test('後の姿が、守りの規則から見える（素通りさせない）', async () => {
+    const { root } = await fixture('x');
+    await writeFile(join(root, 'a.test.ts'),
+      "test('ひとつ', () => {});\ntest('ふたつ', () => {});\n");
+    const planned = await plannedContent('edit_file', {
+      path: 'a.test.ts',
+      edits: [{ find: "test('ふたつ', () => {});\n", replace: '' }],
+    }, root);
+    assert.notEqual(planned, undefined, '後の姿が見えていない（規則が素通りする）');
+    assert.ok(!planned!.includes('ふたつ'), planned);
+  });
+
+  test('一つだけのときの言い方は、変わらない（対）', async () => {
+    const { root, path } = await fixture('あ\nい\n');
+    const r = await editFileTool.run({ path, find: '無い', replace: 'X' }, await ctxAt(root));
+    assert.ok(r.isError);
+    assert.ok(!/つ目/.test(r.content), `一つなのに番号を言っている: ${r.content}`);
+  });
+});
