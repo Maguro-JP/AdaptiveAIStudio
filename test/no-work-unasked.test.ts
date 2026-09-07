@@ -21,6 +21,7 @@ import assert from 'node:assert/strict';
 import { writeFile, mkdir, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
+import { until } from './until.ts';
 
 process.env.AAS_STATE_DIR = await tempDir('aas-unasked-state-');
 const { UiServer } = await import('../src/ui/server.ts');
@@ -104,6 +105,70 @@ describe('画面を開いただけでは、何も起こさない', () => {
       body: JSON.stringify({ id: 'u-ない' }),
     });
     assert.ok([200, 404, 409].includes(r.status), `思わぬ返事: ${r.status}`);
-    assert.equal(await woke(), true, '頼まれたのに、外の相手を起こしていない');
+    /*
+     * **起きるまで見る。**外の相手は待たずに起こす形にしたので、
+     * 返事が返った時点ではまだ立ち上がっていないことがある。
+     * ここで決め打ちの待ちを書くと、機械の混み具合で結果が変わる。
+     */
+    await until(woke, '頼まれたのに、外の相手を起こしていない', { timeoutMs: 20_000 });
+  });
+});
+
+/**
+ * 外の相手（MCP）が黙っていても、待たない。
+ *
+ * `Session.create` は、外の相手が全部繋がるまで待っていた。1台につき
+ * 最大20秒（初期化と一覧で各10秒）。その間、**最初の送信が受け付けられない。**
+ * 実測 10061 ms → 61 ms。
+ *
+ * ここも速さでは見ない。**繋がる前に返ってくるか**で見る。
+ * 待つ作りなら、下の相手（初期化に一切答えない）で 10 分返ってこない。
+ */
+describe('外の相手を待たない', () => {
+  test('**繋がる前に、先へ進む**', { timeout: 30_000 }, async () => {
+    const { startMcpServers } = await import('../src/core/mcp-setup.ts');
+    const dir = await tempDir('aas-mute-');
+    const mute = join(dir, 'mute.mjs');
+    /*
+     * 立ち上がるが、初期化に一切答えない相手。
+     *
+     * **20秒で自分から終わる。**待つ作りに戻したとき、こちらから
+     * 止めに行けない（起こした本人がまだ返ってこないので手が届かない）。
+     * 終わらない子が残ると、テストが落ちる代わりに**走り自体が
+     * 終わらなくなる**。相手の側で終わるようにしておく。
+     */
+    await writeFile(mute,
+      'setInterval(() => {}, 1000);\n'
+      + 'setTimeout(() => process.exit(0), 20_000);\n', 'utf8');
+
+    const clients = await Promise.race([
+      startMcpServers({
+        mcp: {
+          servers: {
+            // **10分待つ設定。**待つ作りなら、ここで返ってこない。
+            だんまり: { command: process.execPath, args: [mute], startupTimeoutMs: 600_000 },
+          },
+        },
+      } as never),
+      // 上限を付けて、きれいに落とす。付けないと、落ちる代わりに
+      // **テストの走り自体が終わらなくなる**（開いたものを閉じられない）。
+      new Promise<undefined>((r) => { setTimeout(() => r(undefined), 15_000).unref?.(); }),
+    ]);
+
+    try {
+      assert.ok(clients, '繋がるまで待っている（15秒経っても返ってこない）');
+      assert.equal(clients.length, 1, '起こしていない');
+      /*
+       * **起こしてはいる。ただし繋がるのは待っていない。**
+       *
+       * `running` は子が生きているかなので、起こした直後に true になる。
+       * 見たいのは**使えるツールが揃ったか**なので、そちらで見る。
+       */
+      assert.equal(clients[0]!.tools.length, 0,
+        'この確かめの前提が崩れている（繋がってツールまで揃ってしまった）');
+    } finally {
+      // 立ち上げた子を、必ず片づける。残すとテストの走りが終わらない。
+      for (const c of clients ?? []) c.stop();
+    }
   });
 });

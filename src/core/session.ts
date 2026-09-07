@@ -260,7 +260,19 @@ export class Session {
   readonly orchestrator: ChatOrchestrator;
   readonly pilot: AutopilotBundle;
 
-  readonly #tools: Tool[];
+  /**
+   * いま渡せるツール。一人で全部やるので、全ての権限を渡す。
+   *
+   * **その場で組み立てる。**一度作って持っていたので、後から繋がった
+   * 外の相手のツールが、立ち上げ直すまで使えなかった。外の相手は
+   * 待たずに起こす形にしたので、**繋がるのは必ず後になる。**
+   */
+  get #tools(): Tool[] {
+    return [
+      ...this.toolPool.read, ...this.toolPool.write,
+      ...this.toolPool.execute, ...this.toolPool.network, ...this.toolPool.mcp,
+    ];
+  }
   /** 権限ごとのツール。役職に応じて配り分けるために持つ。 */
   readonly toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[]; mcp: Tool[] };
   /** 外の道具の繋がり具合。画面と doctor に見せるために持つ。 */
@@ -326,11 +338,6 @@ export class Session {
     this.pilot = init.pilot;
     this.toolPool = init.toolPool;
     this.mcpClients = init.mcpClients;
-    // 一人で全部やるときは、全ての権限を渡す。
-    this.#tools = [
-      ...init.toolPool.read, ...init.toolPool.write,
-      ...init.toolPool.execute, ...init.toolPool.network, ...init.toolPool.mcp,
-    ];
     this.#prefetch = init.prefetch;
     this.#opts = init.opts;
     this.#holder = init.holder;
@@ -386,8 +393,16 @@ export class Session {
       else if (d.outcome === 'warned') log('warn', `⚠ ${d.rule}: ${d.reason ?? ''}`);
     }, forum);
 
-    // 外の道具。立ち上がらない相手がいても、他は動く。
-    const mcpClients = await startMcpServers(config, log);
+    /*
+     * 外のツール。**立ち上がるのを待たない。**
+     *
+     * ここは全部が繋がるまで待っていた。1台につき最大20秒。その間
+     * `Session.create` が止まり、**最初の送信がそのぶん待たされる。**
+     * 起こすだけ起こして先へ進み、繋がった時点でツールを足す（下の `refresh`）。
+     * 最初の1ターンに間に合わなければ、その1ターンだけツールが少ない。
+     */
+    let refresh = (): void => { /* ツールの入れ物が出来るまでは、何もしない */ };
+    const mcpClients = await startMcpServers(config, log, () => refresh());
 
     // 権限は「配らない」ことで守る。禁じる文言ではなく、手段の有無で決める。
     const netCfg = config.network ?? {};
@@ -418,6 +433,14 @@ export class Session {
         listServicesTool, connectServiceTool, disconnectServiceTool,
         ...collectTools(mcpClients, { inspector, timeoutMs: config.mcp?.timeoutMs }),
       ]),
+    };
+
+    // 繋がったら、そのぶんを入れ直す。**次のターンから使える。**
+    refresh = () => {
+      toolPool.mcp = wrap([
+        listServicesTool, connectServiceTool, disconnectServiceTool,
+        ...collectTools(mcpClients, { inspector, timeoutMs: config.mcp?.timeoutMs }),
+      ]);
     };
 
     const prefetch = new Prefetcher(root, () => undefined);

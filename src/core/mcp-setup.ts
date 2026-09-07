@@ -1,9 +1,13 @@
 /**
- * 外の道具を立ち上げる。
+ * 外の相手（MCP）を起こす。**待たない。**
  *
- * **全部を道連れにしない。**一つが立ち上がらなくても、他は使える。
- * そして、立ち上がらなかったことを黙らせない。道具が出てこない理由が
- * 「設定していない」のか「落ちた」のかは、使う側にとってまるで違う。
+ * ここは全部が繋がるまで待っていた。1台につき最大20秒（初期化と一覧で
+ * 各10秒）。その間 `Session.create` が止まり、**最初の送信がそのぶん
+ * 待たされる。**利用者は何も悪いことをしていない。相手が黙っているだけ。
+ *
+ * 起こすのは始めるが、待つのはやめる。繋がった相手のツールは、
+ * 繋がった時点で足す（`onReady`）。最初の1ターンに間に合わなければ、
+ * その1ターンだけツールが少ない。**待たせるよりよい。**
  */
 import type { AasConfig } from '../config.ts';
 import { McpClient } from '../mcp/client.ts';
@@ -11,6 +15,7 @@ import { McpClient } from '../mcp/client.ts';
 export async function startMcpServers(
   config: AasConfig,
   log?: (level: 'info' | 'warn', text: string) => void,
+  onReady?: () => void,
 ): Promise<McpClient[]> {
   const cfg = config.mcp ?? {};
   if (cfg.enabled === false) return [];
@@ -20,12 +25,17 @@ export async function startMcpServers(
 
   const clients = entries.map(([name, spec]) => new McpClient(name, spec));
 
-  // 並べて立ち上げる。順に待つと、遅い相手のぶんだけ起動が遅くなる。
-  await Promise.all(clients.map(async (c) => {
-    const okay = await c.start();
-    if (okay) log?.('info', `外の道具に繋がりました: ${c.name}（${c.tools.length} 件）`);
-    else log?.('warn', `外の道具に繋がりませんでした: ${c.name} — ${c.failure ?? '理由は不明'}`);
-  }));
+  // 起こすだけ起こして、**待たずに返す。**
+  for (const c of clients) {
+    void c.start().then((okay) => {
+      if (okay) {
+        log?.('info', `外のツールに繋がりました: ${c.name}（${c.tools.length} 件）`);
+        onReady?.();
+      } else {
+        log?.('warn', `外のツールに繋がりませんでした: ${c.name} — ${c.failure ?? '理由は不明'}`);
+      }
+    }).catch(() => undefined);
+  }
 
   return clients;
 }
