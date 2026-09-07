@@ -102,3 +102,21 @@ export function formatCatalog(runtimeId: 'llamacpp' | 'ollama' = 'llamacpp'): st
     : '    npm run models -- --get qwen3-coder:30b        （Ollama の名前をそのまま）');
   return lines.join('\n');
 }
+
+/**
+ * カタログに載っている家族の名前（`qwen3.5` など）。
+ *
+ * **何も入っていないときの、訊く手がかり。**入れた直後は一つも入って
+ * いないので、そこで黙ると「最初の一つ」がこの表のまま固定される。
+ * この表は手で書いたもので、必ず古くなる（上に書いたとおり、実際に
+ * 二度古かった）。**古くなったことに気づく道を、表の外に置く。**
+ */
+export function catalogFamilies(): string[] {
+  const out = new Set<string>();
+  for (const m of AVAILABLE_MODELS) {
+    // `qwen3.5:4b` → `qwen3.5`。大きさの札は家族ではない。
+    const at = m.ollama.indexOf(':');
+    out.add(at < 0 ? m.ollama : m.ollama.slice(0, at));
+  }
+  return [...out];
+}

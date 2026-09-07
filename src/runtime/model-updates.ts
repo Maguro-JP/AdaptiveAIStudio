@@ -205,3 +205,38 @@ export function describeNewer(findings: NewerFinding[]): string {
   lines.push('    大きさと活性パラメータを見てから選んでください（npm run models）。');
   return lines.join('\n');
 }
+
+/**
+ * 使っている道に合わせて、次の世代を訊く。
+ *
+ * **ここは `ollama:` で始まる候補だけを見ていた。**中で読む道（inproc）や
+ * llama.cpp を使っていると候補は `inproc:Foo.gguf` の形なので、一件も
+ * 当たらない。つまり**新しい世代を見に行く仕組みが、この構成では一度も
+ * 動いていなかった**。作ってはあるのに、繋がっていなかった。
+ *
+ * 名前の頭で判じない。**どの道を使っているかは、設定が知っている。**
+ *
+ * 入っているものが無いときは、カタログの家族から訊く。入れた直後は
+ * 何も入っていないので、そこで黙ると**最初の一つが古いまま固定される**。
+ * カタログは手で書いた表なので、必ず古くなる（そう書いてある）。
+ * 古くなったことに気づく道を、表の外に置く。
+ */
+export async function findNewerFor(opts: {
+  runtimeKind: string;
+  installed: string[];
+  /** 何も入っていないときに訊く家族。ふつうはカタログから渡す。 */
+  seed?: string[];
+  fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
+}): Promise<NewerFinding[]> {
+  const gguf = opts.runtimeKind === 'inproc' || opts.runtimeKind === 'llamacpp';
+  // `provider:model` で渡ってきたら、model の側だけ見る（model にも : が入る）。
+  const bare = opts.installed.map((r) => {
+    const at = r.indexOf(':');
+    return at < 0 ? r : r.slice(at + 1);
+  }).filter((r) => r.length > 0);
+  const installed = bare.length > 0 ? bare : (opts.seed ?? []);
+  if (installed.length === 0) return [];
+  const ask = gguf ? findNewerGguf : findNewerOllama;
+  return ask({ installed, ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}), ...(opts.signal ? { signal: opts.signal } : {}) });
+}

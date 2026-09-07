@@ -51,7 +51,8 @@ import type { Tool, ApprovalRequest, ApprovalAnswer } from '../agent/tools/types
 import { toolsFor } from '../roles/registry.ts';
 import { buildSystemPrompt } from '../roles/role.ts';
 import { decompose, toWorkItems, type WorkPlan } from '../agent/pm.ts';
-import { findNewerOllama, describeNewer } from '../runtime/model-updates.ts';
+import { findNewerFor, describeNewer } from '../runtime/model-updates.ts';
+import { catalogFamilies } from '../runtime/model-catalog.ts';
 import { Team } from '../agent/team.ts';
 import { accept, changedBetween, type AcceptanceReport, type MemberReport } from '../agent/acceptance.ts';
 import { runVerification, verifyLoop, type VerifyEvent, type VerifyResult } from '../agent/verify.ts';
@@ -718,11 +719,26 @@ export class Session {
       // 人が思い出したときだけ確かめる作りでは、結局は古いまま使い続ける。
       // 機械が定期的に見に行き、出ていたら提案として上げる。
       try {
-        // 「provider:model」から model 側だけを取る。model にも : が入る。
-        const using = this.candidates
-          .filter((c) => c.startsWith('ollama:'))
-          .map((c) => c.slice('ollama:'.length));
-        const newer = using.length > 0 ? await findNewerOllama({ installed: using }) : [];
+        /*
+         * **名前の頭で、使っている道を判じない。**
+         *
+         * ここは `ollama:` で始まる候補だけを見ていた。中で読む道（inproc）
+         * では候補が `inproc:Foo.gguf` の形なので、一件も当たらない。
+         * つまり**この構成では、新しい世代を一度も見に行っていなかった**。
+         * 作ってはあるのに、繋がっていなかった。
+         *
+         * 何も入っていないときは、カタログの家族から訊く。入れた直後は
+         * 何も入っていないので、そこで黙ると最初の一つが古いまま固定される。
+         */
+        const using = this.candidates.map((c) => {
+          const at = c.indexOf(':');
+          return at < 0 ? c : c.slice(at + 1);
+        });
+        const newer = await findNewerFor({
+          runtimeKind: this.config.runtime?.kind ?? 'ollama',
+          installed: using,
+          seed: catalogFamilies(),
+        });
         context = [
           `いま使っているモデル: ${using.join(', ') || '(ローカルの指定なし)'}`,
           '',

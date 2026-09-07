@@ -59,6 +59,17 @@ export interface ModelDescriptor {
   displayName: string;
   locality: 'local' | 'cloud';
   contextWindow?: number;
+  /**
+   * 相手に「在る」と言われたものか。
+   *
+   * 一覧が取れないとき、設定に書いてある名前で進む道がある（`/v1/models` を
+   * 持たない相手が居るため）。そのとき **`false`**。
+   *
+   * ここを持たせないと、**書いてあるだけの名前が「入っている」ことになる。**
+   * 実際に、既定の設定にあった Ollama 向けの2つが画面に候補として並び、
+   * 送るたびに存在しない相手を叩いていた。
+   */
+  verified?: boolean;
 }
 
 export type HealthStatus =

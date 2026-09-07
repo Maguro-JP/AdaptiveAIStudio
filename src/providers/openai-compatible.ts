@@ -92,28 +92,45 @@ export class OpenAiCompatibleProvider implements ChatProvider {
   }
 
   async listModels(): Promise<ModelDescriptor[]> {
-    const toDescriptor = (model: string): ModelDescriptor => ({
+    const toDescriptor = (model: string, verified: boolean): ModelDescriptor => ({
       id: `${this.id}:${model}`,
       providerId: this.id,
       model,
       displayName: model,
       locality: this.locality,
+      verified,
     });
+    /*
+     * **一覧が取れなかったことを、取れたことにしない。**
+     *
+     * ここは設定に書いてある名前をそのまま返していた。返ってきた側からは
+     * 相手が「在る」と言ったのか、こちらが書いておいただけなのかが
+     * 区別できない。**書いてあるだけの名前が「入っている」ことになる。**
+     *
+     * 実際にそうなった。既定の設定にあった Ollama 向けの2つが画面に候補
+     * として並び、送るたびに存在しない相手を叩いていた。しかもその名前は
+     * 世代ごと古くなるので、**放っておくと必ずそうなる。**
+     *
+     * 控えは残す（`/v1/models` を持たない相手が居る）。ただし
+     * `verified: false` を付けて、確かめていないことを持ち回らせる。
+     */
+    const guessed = (): ModelDescriptor[] => this.#fallbackModels.map((m) => toDescriptor(m, false));
 
     try {
       const res = await fetch(`${this.#baseUrl}/models`, {
         headers: this.#headers(),
         signal: AbortSignal.timeout(5_000),
       });
-      if (!res.ok) return this.#fallbackModels.map(toDescriptor);
+      if (!res.ok) return guessed();
       const json = (await res.json()) as { data?: Array<{ id?: unknown }> };
       const ids = (json.data ?? [])
         .map((m) => m.id)
         .filter((v): v is string => typeof v === 'string');
-      return (ids.length > 0 ? ids : this.#fallbackModels).map(toDescriptor);
+      if (ids.length === 0) return guessed();
+      return ids.map((m) => toDescriptor(m, true));
     } catch {
-      // 一覧が取れないことは致命的ではない。設定値で続行する。
-      return this.#fallbackModels.map(toDescriptor);
+      // 一覧が取れないことは致命的ではない。設定値で続行する。ただし黙らない。
+      return guessed();
     }
   }
 
