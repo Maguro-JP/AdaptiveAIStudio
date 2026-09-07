@@ -23,11 +23,25 @@ const DEFAULT_PROTECTED = [
   '**/id_rsa', '**/*.pem', '**/credentials*',
 ];
 
+/**
+ * 大小を区別しないファイルシステムか。
+ *
+ * Windows と macOS は区別しないので、そこでは `.ENV` も `.env` として守る。
+ * **`process.platform` を直に見ない。**直に見ると、Linux で走らせている限り
+ * Windows 側の枝が一度も通らず、配ってから初めて動く。渡せる形にして、
+ * どの OS ぶんもここで試せるようにする（`test/harness-setup.test.ts`）。
+ */
+export function caseBlind(platform: NodeJS.Platform): boolean {
+  return platform !== 'linux';
+}
+
 export async function buildHarness(
   config: AasConfig,
   onDecision?: (e: HarnessDecision) => void,
   /** 協議の場。渡された場合のみ、重大な変更を協議なしに通さない規則が入る。 */
   forum?: Forum,
+  /** どの OS として組むか。既定はいま動いている OS。試験のために渡せる。 */
+  platform: NodeJS.Platform = process.platform,
 ): Promise<Harness> {
   const hc = config.harness ?? {};
   const audit = new AuditLog(hc.auditLog ?? join(stateDir(), 'audit.jsonl'));
@@ -40,7 +54,7 @@ export async function buildHarness(
     // Windows と macOS は大小を区別しない。そこでは `.ENV` も `.env` として守る。
     rules.push(protectedPaths(
       [...DEFAULT_PROTECTED, ...(hc.protectedPaths ?? [])],
-      { nocase: process.platform !== 'linux' },
+      { nocase: caseBlind(platform) },
     ));
     rules.push(testProtection);
     rules.push(dangerousCommands);
