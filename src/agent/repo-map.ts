@@ -351,11 +351,42 @@ function noteOf(head: string): string {
     .replace(/\s+/g, ' ')
     .trim();
   if (text.length === 0) return '';
-  // 最初の句点まで。無ければ 40 文字で切る。
-  const stop = text.indexOf('。');
-  const cut = stop > 0 && stop <= 40 ? text.slice(0, stop) : text.slice(0, 40);
-  return cut.trim();
+  /*
+   * **中身がそのまま出るものには、何も添えない。**
+   *
+   * JSON には散文が無いので、冒頭を切ると
+   * `{ "name": "adaptive-ai-studio", "version` が出る。何のファイルかは
+   * 道の名前で既に分かっているので、これは狭い地図の場所を捨てているだけ。
+   * 目で見て気づいた（数字には出ない）。
+   */
+  if (/^[{[]/.test(text)) return '';
+  /*
+   * **一言で切る。**題のあとに見出しが続くと
+   * `組織設計 — …として動かす ## 0. 肩書きではなく気質` のように、
+   * 途中で切れた見出しが混ざる。題のあとの区切りで止める。
+   */
+  let cut = text;
+  for (const stop of ['。', ' ## ', ' # ', ' > ', ' ## ']) {
+    const at = cut.indexOf(stop);
+    if (at > 0) cut = cut.slice(0, at);
+  }
+  if (cut.length <= NOTE_LIMIT) return cut.trim();
+  /*
+   * 切るときは、切れ端を残さない。
+   * 「…決めごと セッショ」の「セッショ」が出ると、読む側は続きを探す。
+   * 区切りまで戻す。戻しすぎるくらいなら、そのまま切る。
+   */
+  const short = cut.slice(0, NOTE_LIMIT);
+  let back = short.length;
+  for (const mark of [' ', '、', '，']) {
+    const at = short.lastIndexOf(mark);
+    if (at > NOTE_LIMIT * 0.6) back = Math.min(back, at);
+  }
+  return short.slice(0, back).trim();
 }
+
+/** 一言の長さ。地図の場所は狭い。**長くしない。** */
+const NOTE_LIMIT = 40;
 
 /**
  * 「そこを直している」と言い切れる強さ。

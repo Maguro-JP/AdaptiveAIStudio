@@ -186,6 +186,46 @@ describe('名前を出していないファイルも、地図に載せる', () =
       '点の付いていないものが、付いているものより前に出ている');
   });
 
+  test('**中身がそのまま出るものには、何も添えない**', async () => {
+    const root = await project();
+    await writeFile(join(root, 'thing.json'), '{ "name": "adaptive", "version": "0.3.0" }\n', 'utf8');
+    const index = await buildIndex(root);
+    const map = renderMap(rankedEntries(index, seedFrom(index, '', [], ['thing.json'])), { chars: 100_000 });
+    assert.match(map, /thing\.json/, 'この試験の前提が崩れている');
+    assert.doesNotMatch(map, /thing\.json.*\{/, '狭い地図に JSON の中身を貼っている');
+  });
+
+  test('題のあとの見出しを、一言に混ぜない', async () => {
+    const root = await project();
+    await writeFile(join(root, 'guide.md'),
+      '# 組織設計\n\n## 0. 肩書きではなく気質\n\n役職を担当と読まない。\n', 'utf8');
+    const index = await buildIndex(root);
+    const map = renderMap(rankedEntries(index, seedFrom(index, '', [], ['guide.md'])), { chars: 100_000 });
+    assert.match(map, /guide\.md {2}— 組織設計\n/, `見出しが混ざっている:\n${map.split('\n').filter((l) => l.includes('guide.md')).join('\n')}`);
+  });
+
+  test('切るときに、区切りまで戻す', async () => {
+    const root = await project();
+    // 区切りが後ろ寄り（40 文字の 6 割より後）。ここは戻して切れ端を残さない。
+    await writeFile(join(root, 'late.md'),
+      '# ああああああああああああああああああああああああああああああああ いいいいいいいい\n', 'utf8');
+    const index = await buildIndex(root);
+    const map = renderMap(rankedEntries(index, seedFrom(index, '', [], ['late.md'])), { chars: 100_000 });
+    const line = (map.split('\n').find((l) => l.startsWith('late.md')) ?? '').trim();
+    assert.ok(!line.includes('い'), `切れ端が残っている: ${line}`);
+  });
+
+  test('戻しすぎるくらいなら、そのまま切る（対）', async () => {
+    const root = await project();
+    // 区切りが前寄り。ここで戻すと、一言のほとんどが消える。
+    await writeFile(join(root, 'early.md'),
+      '# ああああ いいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいいい\n', 'utf8');
+    const index = await buildIndex(root);
+    const map = renderMap(rankedEntries(index, seedFrom(index, '', [], ['early.md'])), { chars: 100_000 });
+    const line = (map.split('\n').find((l) => l.startsWith('early.md')) ?? '').trim();
+    assert.ok(line.length > 20, `戻しすぎて、一言がほとんど消えている: ${line}`);
+  });
+
   test('名前が在るファイルは、いままでどおり名前で出す（対）', async () => {
     const index = await buildIndex(await project());
     const map = renderMap(rankedEntries(index), { chars: 100_000 });

@@ -40,6 +40,7 @@
  *   --commits  さかのぼる commit の数
  *   --chars    地図に使える文字数（窓の広さに相当）
  *   --k        0 なら地図に載ったかで見る。1以上なら上位 k 件で見る
+ *   --kind     正解の種類ごとに分けて出す
  */
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -90,6 +91,22 @@ function cases(index) {
     out.push({ subject: subject ?? '', want });
   }
   return { list: out, skipped };
+}
+
+/**
+ * 正解の種類。**まとめた一つの数字だけを見ない。**
+ *
+ * この置き場は、直すたびに `docs/DECISIONS.md` を書く決まりになっている。
+ * それは「どこを直すか」ではなく**決まりごと**で、しかも決まり自体は前置きに
+ * 既に入っている。地図がそこを指す必要は無いのに、正解に数えると
+ * まとめた数字だけが下がる。分けて出せば、それが見える。
+ */
+function kindOf(path) {
+  if (/^(docs\/|CLAUDE\.md|README|.*\.md$)/.test(path)) return '記録';
+  if (/^(package|tsconfig|\.github|.*\.json$|.*\.ya?ml$)/.test(path)) return '設定';
+  if (/^test\/|\.test\.|\.spec\./.test(path)) return '試験';
+  if (/^scripts\//.test(path)) return '道具';
+  return 'コード';
 }
 
 /** 道の名前で並べるだけ。地図というものが無かったときの下限。 */
@@ -146,4 +163,28 @@ console.log(`${pad('並べ方', 22)}${pad('全部', 10)}名前が出ていない
 for (const [name, way] of Object.entries(ways)) {
   const score = (rows) => rows.reduce((a, c) => a + hit(way(c), c.want), 0) / rows.length;
   console.log(`${pad(name, 22)}${pad(`${(score(list) * 100).toFixed(1)}%`, 10)}${(score(bare) * 100).toFixed(1)}%`);
+}
+
+if (process.argv.includes('--kind')) {
+  const seen = {};
+  const got = {};
+  for (const c of list) {
+    const entries = ways['いま（依頼で起点）'](c);
+    const map = K > 0 ? entries.slice(0, K).map((e) => e.path).join('\n') : renderMap(entries, { chars: CHARS });
+    for (const w of c.want) {
+      const k = kindOf(w);
+      seen[k] = (seen[k] ?? 0) + 1;
+      if (map.includes(w)) got[k] = (got[k] ?? 0) + 1;
+    }
+  }
+  console.log('');
+  console.log('正解の種類ごと（いま）:');
+  let work = 0;
+  let workAll = 0;
+  for (const k of Object.keys(seen).sort((a, b) => seen[b] - seen[a])) {
+    const g = got[k] ?? 0;
+    console.log(`  ${pad(k, 8)}${pad(`${g}/${seen[k]}`, 10)}${(g / seen[k] * 100).toFixed(1)}%`);
+    if (k !== '記録' && k !== '設定') { work += g; workAll += seen[k]; }
+  }
+  console.log(`  ${pad('（直す先だけ）', 18)}${(work / workAll * 100).toFixed(1)}%`);
 }
