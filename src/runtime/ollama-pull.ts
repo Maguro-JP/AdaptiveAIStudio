@@ -9,6 +9,8 @@
  * 置き場も、二重取得を避ける仕組みも、あちらが持っている。
  */
 
+import { describeNet } from './net-why.ts';
+
 export interface PullOptions {
   /** OpenAI 互換の口（.../v1）。native の口はここから導く。 */
   baseUrl: string;
@@ -48,7 +50,7 @@ export async function pullModel(opts: PullOptions): Promise<void> {
     throw new Error(
       `Ollama に繋がりません（${url}）。\n`
       + '`ollama serve` が動いているか確認してください。'
-      + `\n（元の理由: ${e instanceof Error ? e.message : String(e)}）`,
+      + `\n（元の理由: ${describeNet(e)}）`,
     );
   }
 

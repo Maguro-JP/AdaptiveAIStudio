@@ -75,6 +75,7 @@ import { fitByTokens, estimateTokens } from '../agent/window.ts';
 import { ProjectRules } from '../agent/project-rules.ts';
 import type { Counter } from '../agent/tokenizer.ts';
 import { resolveCounting, type Counting } from './counting.ts';
+import { describeNet } from '../runtime/net-why.ts';
 
 /**
  * 前置き（決まり・学び・様子・置き場の決まり）に使ってよい、窓の割合。
@@ -767,7 +768,7 @@ export class Session {
       } catch (e) {
         // 配布元へ行けないのは、この思考を止める理由にはならない。
         // ただし「無かった」と混同させない。行けなかったと書く。
-        context = `配布元に訊けませんでした（${e instanceof Error ? e.message : String(e)}）。`
+        context = `配布元に訊けませんでした（${describeNet(e)}）。`
           + '新しいものが無いのか、繋がらなかっただけなのかは分かりません。';
       }
     }

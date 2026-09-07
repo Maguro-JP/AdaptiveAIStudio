@@ -10,7 +10,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { describeNet } from '../src/runtime/model-install.ts';
+import { describeNet } from '../src/runtime/net-why.ts';
 
 /** 本物の fetch の失敗。繋ぐ先が居ない口へ出して作る。 */
 async function realFailure(url: string): Promise<unknown> {
@@ -40,15 +40,29 @@ test('本物の失敗でも、fetch failed のままにしない', async () => {
   assert.notEqual(said, 'fetch failed', `そのままです: ${said}`);
 });
 
-test('最初に当たる呼び出しも、この関数を通る', async () => {
-  // 会社の回線で最初に落ちるのは配布元の一覧を引くところ。そこだけが
-  // 生の文をそのまま出していた（`fetch failed`）。
+test('外へ出て失敗した所は、どれもこの関数を通る', async () => {
+  /*
+   * 会社の回線で最初に落ちるのは配布元の一覧を引くところ。そこだけが
+   * 生の文をそのまま出していた（`fetch failed`）。直したあとで数えたら、
+   * 同じ形が llama-server・Ollama・新しい版の確認にも残っていた。
+   * **一つ直して終わりにしない。**
+   */
   const { readFile } = await import('node:fs/promises');
-  const src = await readFile('src/runtime/model-install.ts', 'utf8');
-  const at = src.indexOf('配布元に繋がりません');
-  assert.ok(at >= 0, 'この確かめの前提が崩れている（その文が無い）');
-  assert.match(src.slice(at, at + 120), /describeNet\(/,
-    '生の文をそのまま出しています');
+  const files = [
+    'src/runtime/model-install.ts', 'src/runtime/llama-install.ts',
+    'src/runtime/ollama-pull.ts', 'src/runtime/model-updates.ts',
+  ];
+  const bad: string[] = [];
+  for (const f of files) {
+    const src = await readFile(f, 'utf8');
+    src.split('\n').forEach((line, i) => {
+      // 網の失敗を人へ見せている行に、生の文がそのまま入っていないか。
+      if (!/繋がりません|取ってこられませんでした|訊けませんでした|一覧に/.test(line)) return;
+      if (!/e instanceof Error \? e\.message/.test(line)) return;
+      bad.push(`${f}:${i + 1}  ${line.trim()}`);
+    });
+  }
+  assert.deepEqual(bad, [], `生の文をそのまま出しています:\n  ${bad.join('\n  ')}`);
 });
 
 test('分からないものは、分かったふりをしない', () => {

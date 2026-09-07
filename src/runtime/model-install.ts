@@ -10,6 +10,7 @@
  */
 import { mkdir, rename, rm, stat, open } from 'node:fs/promises';
 import { join } from 'node:path';
+import { describeNet } from './net-why.ts';
 import { readGguf } from './gguf.ts';
 import { modelsDir } from '../core/home.ts';
 import type { CatalogEntry } from './model-catalog.ts';
@@ -366,31 +367,6 @@ export function mmss(seconds: number): string {
   return `${s}秒`;
 }
 
-/**
- * 網の失敗を、人の言葉で。`terminated` の一語では何も分からない。
- *
- * **`cause` まで見る。**Node の fetch は、本当の理由を `cause` に隠して
- * `fetch failed` だけを投げる。上の文だけを見ていたので、会社の回線で
- * 出るのは `fetch failed` の一語だった。証明書で断られたのか、名前が
- * 引けないのかで打つ手はまるで違うのに、どちらとも分からない。
- */
-export function describeNet(e: unknown): string {
-  const chain: string[] = [];
-  for (let at: unknown = e, depth = 0; at instanceof Error && depth < 5; depth += 1) {
-    chain.push(at.message);
-    const code = (at as { code?: unknown }).code;
-    if (typeof code === 'string') chain.push(code);
-    at = (at as { cause?: unknown }).cause;
-  }
-  const m = chain.join(' / ') || String(e);
-  if (/terminated|aborted|ECONNRESET|socket hang up/i.test(m)) return '途中で切れました';
-  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(m)) return '配布元の名前を引けません（回線が繋がっていないようです）';
-  if (/ETIMEDOUT|timeout/i.test(m)) return '時間切れです';
-  if (/certificate|CERT_|self.signed/i.test(m)) return '証明書で断られました（会社の回線で起きます）';
-  if (/ECONNREFUSED/i.test(m)) return '繋ぐ先に断られました';
-  if (/EPROTO|SSL|TLS/i.test(m)) return '暗号化のやりとりで断られました（会社の回線で起きます）';
-  return m;
-}
 
 /**
  * 置き場に入るか。

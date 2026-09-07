@@ -18,6 +18,7 @@ import { binDir } from '../core/home.ts';
 import { unzip } from './unzip.ts';
 import { runtimeEnv } from './llama-env.ts';
 import { chunkReader } from '../core/text.ts';
+import { describeNet } from './net-why.ts';
 
 export interface InstallOptions {
   /** 置き場。既定は ~/.aas/bin */
@@ -131,7 +132,7 @@ export async function install(opts: InstallOptions): Promise<Installed> {
     }
   } catch (e) {
     if (opts.signal?.aborted) throw e;
-    listed = `一覧に繋がりません（${e instanceof Error ? e.message : String(e)}）`;
+    listed = `一覧に繋がりません（${describeNet(e)}）`;
     assets = [];
   }
   if (missing) throw new Error(`リリースを調べられませんでした (404)。版 ${tag} は無いようです`);
@@ -155,7 +156,7 @@ export async function install(opts: InstallOptions): Promise<Installed> {
 
   log('取ってきます（数分かかることがあります）');
   const dl = await fetchImpl(asset.browser_download_url, { signal: opts.signal }).catch((e: unknown) => {
-    throw new Error(`取ってこられませんでした（${e instanceof Error ? e.message : String(e)}）。\n${llamaByHand(tag, binDir)}`);
+    throw new Error(`取ってこられませんでした（${describeNet(e)}）。\n${llamaByHand(tag, binDir)}`);
   });
   if (!dl.ok) throw new Error(`取ってこられませんでした (${dl.status})。\n${llamaByHand(tag, binDir)}`);
   const buf = Buffer.from(await dl.arrayBuffer());
