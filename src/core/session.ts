@@ -1252,7 +1252,14 @@ export class Session {
       await this.memory.save().catch(() => undefined);
       // **この回が終わってから判じる。**待たせない、を本当にする。
       // こちらが書いた文は判じない（利用者が言っていないことを覚えないため）。
-      if (opts.fromUser !== false) void this.#judge(instruction, situation.when, situation.did);
+      // 待たない代わりに、**拾い手を置く。**置かないと、判じるところで
+      // 一度失敗しただけでプロセスごと落ちる。
+      if (opts.fromUser !== false) {
+        void this.#judge(instruction, situation.when, situation.did)
+          .catch((e: unknown) => {
+            this.#opts.onLog?.('warn', `判じられませんでした: ${e instanceof Error ? e.message : String(e)}`);
+          });
+      }
     }
   }
 

@@ -455,7 +455,17 @@ export class InProcRuntime implements LocalRuntime {
   /** OpenAI 互換の口を、自分の中に立てる。外へは出さない。 */
   async #serve(): Promise<void> {
     if (this.#server) return;
-    this.#server = createServer((req, res) => { void this.#handle(req, res); });
+    this.#server = createServer((req, res) => {
+      // **拾い手のない例外で、プロセスごと落とさない。**`void` で投げっぱなし
+      // にしていたので、一つの要求が失敗しただけで全体が消えた。
+      this.#handle(req, res).catch((e: unknown) => {
+        const why = e instanceof Error ? e.message : String(e);
+        try {
+          if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: why } }));
+        } catch { /* もう切れている */ }
+      });
+    });
     const port = this.#opts.port ?? INPROC_PORT;
     let bound: number;
     try {

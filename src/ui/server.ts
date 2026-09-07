@@ -227,6 +227,24 @@ export class UiServer {
 
   get url(): string { return this.#url; }
 
+  /**
+   * 待たずに走らせるものを、受け止める。
+   *
+   * **`void this.#drive(...)` と書いていた。**返事を待たない代わりに、
+   * そこで例外が出たときの受け手も居ない。Node は拾い手のない例外で
+   * プロセスごと落とすので、**書き込みが一度失敗しただけで画面が消える。**
+   * `#drive` の中の `finally`（やり残しの控え・保存）は try の外なので、
+   * 保存が失敗すれば必ずここへ抜けてくる。
+   *
+   * 落とさず、黙らせもしない。画面に理由を出して、走り続ける。
+   */
+  #bg(work: Promise<unknown>, what: string): void {
+    void work.catch((e: unknown) => {
+      const why = e instanceof Error ? e.message : String(e);
+      this.broadcast({ type: 'log', level: 'error', text: `${what}: ${why}` });
+    });
+  }
+
   /** 画面へ流す。誰も見ていなくても落ちない。 */
   broadcast(event: UiEvent): void {
     const line = `data: ${JSON.stringify(event)}\n\n`;
@@ -423,7 +441,7 @@ export class UiServer {
     // やり残しの拾い上げごと失っていた。考えるかどうかは、下で決める。
     const every = Math.max(5, cfg.idleSeconds ?? 30) * 1000;
 
-    this.#idleTimer = setInterval(() => { void this.idleTick(session); }, every);
+    this.#idleTimer = setInterval(() => { this.#bg(this.idleTick(session), '手すきの見回りが落ちました'); }, every);
     this.#idleTimer.unref?.();
   }
 
@@ -448,7 +466,7 @@ export class UiServer {
     if (this.#busyNow(session)) return 'BUSY';
     // **順番待ちがあるなら、暇ではない。**ここで考え始めると、
     // 待っている依頼が、その分だけ後ろへ押しやられる。
-    if (this.#queue.length > 0) { void this.#maybeDrain(); return 'BUSY'; }
+    if (this.#queue.length > 0) { this.#bg(this.#maybeDrain(), '順番待ちの取り出しが落ちました'); return 'BUSY'; }
 
     // **やり残しが先。**考えごとより、頼まれて終わっていない方が先。
     // ここが無いと、40往復で切れた作業は、人が言い直すまで誰も続けない。
@@ -662,7 +680,7 @@ export class UiServer {
 
         // 受け取ったことだけ先に返し、続きは出来事として流す。
         send(res, 202, { accepted: true });
-        void this.#drive(session, full);
+        this.#bg(this.#drive(session, full), '依頼の実行が落ちました');
       } finally {
         this.#preparing = false;
       }
@@ -685,7 +703,7 @@ export class UiServer {
         if (missing) return send(res, 503, { error: missing });
 
         send(res, 202, { accepted: true });
-        void this.#drivePlan(session, text);
+        this.#bg(this.#drivePlan(session, text), '段取りが落ちました');
       } finally {
         this.#preparing = false;
       }
@@ -715,7 +733,7 @@ export class UiServer {
       // 採用したなら、その内容をそのまま依頼として流す。
       // 提案の実行文は、モデルが書いたもの。利用者の言葉として判じない。
       if (verdict === 'accepted' && !this.#busyNow(session)) {
-        void this.#drive(session, target.suggestedAction, undefined, { fromUser: false });
+        this.#bg(this.#drive(session, target.suggestedAction, undefined, { fromUser: false }), '提案の実行が落ちました');
       }
       return send(res, 200, { proposal: target });
     }
@@ -787,7 +805,7 @@ export class UiServer {
       if (!id) return send(res, 400, { error: '名前がありません' });
 
       // 数GBかかるので、待たせずに始めて、進み具合は流し込む。
-      void this.#fetchModel(session, id);
+      this.#bg(this.#fetchModel(session, id), 'モデルの取得が落ちました');
       return send(res, 202, { started: id });
     }
 
@@ -1706,8 +1724,11 @@ export class UiServer {
       }
     }
     // 続きの文はこちらが組み立てたもの。利用者の言葉として判じない。
-    void this.#drive(session, resumePrompt(item), item.id, { fromUser: false })
-      .finally(() => { this.#resuming = undefined; });
+    this.#bg(
+      this.#drive(session, resumePrompt(item), item.id, { fromUser: false })
+        .finally(() => { this.#resuming = undefined; }),
+      'やり残しの続きが落ちました',
+    );
     return true;
   }
 
@@ -1788,11 +1809,14 @@ export class UiServer {
       text: `一歩ずつ進めます（${p.done + 1}/${p.total}）: ${step.instruction}`,
     });
     this.#step = { goalId: goal.id, stepId: step.id, model };
-    void this.#drive(
-      session, stepPrompt(item.request, step.instruction, p.done + 1, p.total), item.id,
-      { fromUser: false },
-    )
-      .finally(() => { this.#resuming = undefined; this.#step = undefined; });
+    this.#bg(
+      this.#drive(
+        session, stepPrompt(item.request, step.instruction, p.done + 1, p.total), item.id,
+        { fromUser: false },
+      )
+        .finally(() => { this.#resuming = undefined; this.#step = undefined; }),
+      '一歩ずつの実行が落ちました',
+    );
     return true;
   }
 
@@ -1906,7 +1930,7 @@ export class UiServer {
               // 終えてから。ここで直に呼ぶと、busy を下ろす前に次が立ち上がる。
               // この回の後始末（順番待ちの掃き出しまで）が終わってから始める。
               // 0 だと、busy を下ろし切る前に次が立ち上がって弾かれる。
-              setTimeout(() => { void this.#continueStep(session2, item); }, 100);
+              setTimeout(() => { this.#bg(this.#continueStep(session2, item), '次の段が落ちました'); }, 100);
             }
           }
           return;
@@ -2007,7 +2031,7 @@ export class UiServer {
     if (!next) return;
     const full = await this.#compose(session, next.text, next.attached);
     this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
-    void this.#drive(session, full);
+    this.#bg(this.#drive(session, full), '順番待ちの実行が落ちました');
   }
 
   async #drivePlan(session: Session, text: string): Promise<void> {

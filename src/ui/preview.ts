@@ -131,7 +131,17 @@ export class PreviewServer {
   get url(): string { return `http://127.0.0.1:${this.#port}/`; }
 
   async start(): Promise<string> {
-    this.#server = createServer((req, res) => { void this.#handle(req, res); });
+    this.#server = createServer((req, res) => {
+      // **拾い手のない例外で、プロセスごと落とさない。**`void` で投げっぱなし
+      // にしていたので、一つの要求が失敗しただけで全体が消えた。
+      this.#handle(req, res).catch((e: unknown) => {
+        const why = e instanceof Error ? e.message : String(e);
+        try {
+          if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: why } }));
+        } catch { /* もう切れている */ }
+      });
+    });
     // 既定は 0（空いている口）。番号を渡されたときは塞がりうる。
     this.#port = await listenOrExplain(this.#server, { port: this.#opts.port ?? 0, what: '見る窓' });
 

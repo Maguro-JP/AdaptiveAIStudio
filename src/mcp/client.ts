@@ -304,7 +304,14 @@ export class McpClient {
   }
 
   #send(payload: unknown): void {
-    if (this.#http) { void this.#post(payload); return; }
+    if (this.#http) {
+      // 送れなかったことは、待っている呼び出しの側で（上限で）分かる。
+      // ここで投げっぱなしにすると、拾い手が居ないままプロセスが落ちる。
+      void this.#post(payload).catch((e: unknown) => {
+        this.#fail(`送れませんでした: ${e instanceof Error ? e.message : String(e)}`);
+      });
+      return;
+    }
     // 行区切りなので、中に改行を入れない。
     this.#child?.stdin?.write(`${JSON.stringify(payload)}\n`);
   }

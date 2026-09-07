@@ -21,7 +21,7 @@ const relaunches = process.env.AAS_RELAUNCH === '1';
 const server = new UiServer({
   config, port, relaunches,
   ...(relaunches
-    ? { onRestart: () => { void server.stop().then(() => process.exit(RESTART_EXIT)); } }
+    ? { onRestart: () => { void server.stop().catch(() => undefined).then(() => process.exit(RESTART_EXIT)); } }
     : {}),
 });
 const url = await server.start();
@@ -38,6 +38,8 @@ if (process.env.AAS_UI_NO_OPEN !== '1') {
   }).unref();
 }
 
-const stop = () => { void server.stop().then(() => process.exit(0)); };
+// 片づけに失敗しても、終わることは終わる。ここで例外を拾わないと、
+// **Ctrl-C が効かないまま残る。**
+const stop = () => { void server.stop().catch(() => undefined).then(() => process.exit(0)); };
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
