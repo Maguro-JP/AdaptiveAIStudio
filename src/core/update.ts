@@ -45,7 +45,18 @@ export interface UpdateResult {
 }
 
 /** bundle の置き場。portable は常にここにある（docs/DECISIONS.md）。 */
-export const RELEASES_URL = 'https://github.com/Maguro-JP/AdaptiveAIStudio/releases/tag/portable';
+/**
+ * 手で新しくするときの、取ってくる先。
+ *
+ * **`releases/tag/portable` を指していた。**このタグは、タグを付けずに手で
+ * 組んだときにしか差し替わらない。タグを付けた回は、その版の方へ公開される。
+ * つまり `portable` は放っておくほど古くなるタグで、実際に最新の版より
+ * 5 日古かった（v0.3.0 が 09-06、portable は 09-01）。
+ *
+ * 手で入れ替える人は、いちばん新しいものが要る。GitHub が最新へ回してくれる
+ * `releases/latest` を指す。
+ */
+export const RELEASES_URL = 'https://github.com/Maguro-JP/AdaptiveAIStudio/releases/latest';
 
 /**
  * git の無い場所での、新しくする道。
@@ -70,6 +81,8 @@ export function byHandUpdate(root: string, version?: string): string {
   return [
     '新しいbundle をブラウザで取ってきて、入れ替えてください。',
     `  1. 取ってくる: ${RELEASES_URL}`,
+    '     — 会社のクラウドドライブ（Z: など）へ置くなら、名前に noexe と',
+    '       付いている方を取ってください。.exe が一つも入っていません',
     '  2. いまとは別のフォルダに展開する。いまのフォルダは消さない',
     '     （新しい方で困ったら、古い方を押せば戻せます）',
     `  3. いまの data\\（設定・記録・モデル）を、新しいフォルダへ移す`,

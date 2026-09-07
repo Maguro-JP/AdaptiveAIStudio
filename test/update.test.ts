@@ -143,6 +143,26 @@ describe('bundle では、手で新しくする道を言う', () => {
     assert.match(s.reason ?? '', /data/);
   });
 
+  test('**放っておくほど古くなるタグを指さない**', async () => {
+    /*
+     * `releases/tag/portable` を指していた。このタグはタグを付けずに手で組んだ
+     * ときにしか差し替わらない（タグを付けた回は、その版の方へ公開される）。
+     * 実際に最新の版より 5 日古かった。手で入れ替える人は、いちばん新しいものが
+     * 要る。GitHub が回してくれる `releases/latest` を指す。
+     */
+    const { RELEASES_URL } = await import('../src/core/update.ts');
+    assert.ok(!RELEASES_URL.includes('/tag/'),
+      `決め打ちのタグを指しています: ${RELEASES_URL}`);
+    assert.match(RELEASES_URL, /\/releases\/latest$/);
+  });
+
+  test('**.exe を置けない場所むけが、どれかを言う**', async () => {
+    // 会社のクラウドドライブは .exe を名前で落とす。noexe の方を取らないと、
+    // 展開した時点で Node が消える。取ってくる案内で言わないと気づけない。
+    const { byHandUpdate } = await import('../src/core/update.ts');
+    assert.match(byHandUpdate('/tmp/x'), /noexe/);
+  });
+
   /**
    * **その場で上書きさせない。**上書きすると、新しい方が動かなかったときに
    * 戻る先が無い。NetVision が同じところで「新しい ZIP は別のフォルダへ展開し、
