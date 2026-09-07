@@ -305,7 +305,7 @@ export class UiServer {
 
     // **候補は `provider名:モデル名`。**名前だけを渡していたので、
     // どの provider のことか決まらず「全Providerが未登録」で即座に落ちた。
-    // 画面には何も出ず、打っても返事が来ない。**それがこの穴。**
+    // 画面には何も出ず、打っても返事が来ない。**それがこの不具合。**
     const local = config.providers.find(
       (pr) => pr.kind === 'openai-compatible' && pr.locality === 'local',
     );

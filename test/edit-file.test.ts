@@ -198,7 +198,7 @@ describe('当てる部分だけを、単体で見る', () => {
 describe('空白が違っても当てる', () => {
   test('字下げの段が違っても当たる', () => {
     // 渡された方が**深い**ときは、完全一致では通らない（浅いときは、
-    // find が部分文字列になるので元から通る）。深い側がこの穴。
+    // find が部分文字列になるので元から通る）。深い側がこの不具合。
     const before = 'function f() {\n  const a = 1;\n  return a;\n}\n';
     const got = applyEdit(before, '    const a = 1;', '    const a = 2;', false);
     assert.equal(got.hits, 1);

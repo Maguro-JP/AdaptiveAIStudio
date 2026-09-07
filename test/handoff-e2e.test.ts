@@ -6,29 +6,34 @@
  *
  *   ・`refs/remotes/origin/wip/cloud` から名前を取るとき `wip/` を二重に
  *     付けていた（`wip/wip/cloud`）。取り込みがその名前で落ちる
- *   ・`origin/<枝>` がまだ無いとき（クローン直後）に、数を数える所で落ちる
+ *   ・`origin/<ブランチ>` がまだ無いとき（クローン直後）に、数を数える所で落ちる
  *
  * どちらも git を叩かないと出ない。**叩くところまでを検査にする。**
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { writeFile, mkdir, readFile } from 'node:fs/promises';
+import { writeFile, mkdir, readFile, copyFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from './tmp.ts';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const handoff = join(root, 'scripts', 'handoff.mjs');
 
 const git = (args: string[], cwd: string): void => {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
 };
 
-/** その名前の機械として、渡す道を動かす。 */
+/**
+ * その名前の機械として、渡す道を動かす。
+ *
+ * **その作業コピーの中に置いたものを呼ぶ。**渡す道は自分の置かれた場所から
+ * リポジトリを決めるので（`check.mjs` と同じ）、外から呼ぶとこちらの
+ * リポジトリを触ってしまう。
+ */
 const run = (cwd: string, name: string, args: string[] = []): { out: string; code: number } => {
-  const r = spawnSync(process.execPath, [handoff, ...args], {
+  const r = spawnSync(process.execPath, [join(cwd, 'scripts', 'handoff.mjs'), ...args], {
     cwd, encoding: 'utf8', env: { ...process.env, AAS_HANDOFF_NAME: name },
   });
   return { out: `${r.stdout}${r.stderr}`, code: r.status ?? 1 };
@@ -47,6 +52,9 @@ async function twoMachines(): Promise<{ origin: string; cloud: string; local: st
   git(['config', 'user.name', 'test'], cloud);
   // 渡す道そのものを、作業コピーの中へ置く（本番と同じ形で呼ぶ）。
   await mkdir(join(cloud, 'scripts'), { recursive: true });
+  for (const f of ['handoff.mjs', 'handoff-plan.mjs']) {
+    await copyFile(join(root, 'scripts', f), join(cloud, 'scripts', f));
+  }
   await writeFile(join(cloud, 'はじめ.txt'), '元の中身\n', 'utf8');
   git(['add', '-A'], cloud);
   git(['commit', '-qm', '最初'], cloud);
@@ -73,7 +81,7 @@ describe('片方で書いて、もう片方で受け取る', () => {
     assert.equal(await readFile(join(local, 'あたらしい.txt'), 'utf8'), 'クラウドで書いた\n');
   });
 
-  test('**枝の名前を、二重にしない**', async () => {
+  test('**ブランチの名前を、二重にしない**', async () => {
     // `wip/wip/cloud` になっていた。取り込みがその名前で落ちる。
     const { cloud, local } = await twoMachines();
     await writeFile(join(cloud, 'x.txt'), 'x\n', 'utf8');
@@ -99,6 +107,25 @@ describe('片方で書いて、もう片方で受け取る', () => {
     const took = run(local, 'local', ['--take']);
     assert.equal(took.code, 1, '書きかけなのに取り込んでいる');
     assert.match(took.out, /書きかけ/);
+  });
+
+  test('**まだ押していないブランチでも、送れる**', async () => {
+    /*
+     * `origin/<ブランチ>` がまだ無いとき、数を数える所で落ちていた。
+     * 手元でブランチを切って作業する形（`git checkout -b`）では普通に起きる。
+     * **決め方だけの検査では出ない。**git を叩かないと出ない。
+     */
+    const { cloud, local } = await twoMachines();
+    git(['checkout', '-q', '-b', 'まだ押していないブランチ'], cloud);
+    await writeFile(join(cloud, 'z.txt'), 'z\n', 'utf8');
+
+    const sent = run(cloud, 'cloud');
+    assert.equal(sent.code, 0, `まだ押していないブランチで落ちている: ${sent.out}`);
+    assert.match(sent.out, /wip\/cloud/);
+
+    const took = run(local, 'local', ['--take']);
+    assert.equal(took.code, 0, took.out);
+    assert.equal(await readFile(join(local, 'z.txt'), 'utf8'), 'z\n');
   });
 
   test('渡されていなければ、そう言う', async () => {

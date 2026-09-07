@@ -2,7 +2,7 @@
  * どの OS でも、ここで試す。
  *
  * `process.platform` を直に見ていたので、Linux で走らせている限り
- * Windows と macOS の枝が一度も通らなかった。**配ってから初めて動く**形で、
+ * Windows と macOS の分岐が一度も通らなかった。**配ってから初めて動く**形で、
  * 「こちらでは動くが向こうでは動かない」の温床になる。
  */
 import { test, describe } from 'node:test';
@@ -27,7 +27,7 @@ describe('ブラウザを開く命令', () => {
 describe('大小を区別しないファイルシステムか', () => {
   /**
    * ここが違うと、守る対象が OS で変わる。Windows では `.ENV` も `.env` として
-   * 守るが、その枝は Linux では一度も通らなかった。
+   * 守るが、その分岐は Linux では一度も通らなかった。
    */
   test('Windows と macOS は区別しない', () => {
     assert.equal(caseBlind('win32'), true);
@@ -40,7 +40,7 @@ describe('大小を区別しないファイルシステムか', () => {
 
 describe('Windows として組んだ検問所を、Linux で試す', () => {
   /**
-   * ここは配るまで一度も通らない枝だった。**守りすぎても困る。**
+   * ここは配るまで一度も通らない分岐だった。**守りすぎても困る。**
    * 広く当たりすぎると、Windows でだけ普通のファイルが書けなくなる。
    */
   const guard = (platform: NodeJS.Platform) => new Harness({

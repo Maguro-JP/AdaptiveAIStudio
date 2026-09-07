@@ -28,7 +28,7 @@ const DEFAULT_PROTECTED = [
  *
  * Windows と macOS は区別しないので、そこでは `.ENV` も `.env` として守る。
  * **`process.platform` を直に見ない。**直に見ると、Linux で走らせている限り
- * Windows 側の枝が一度も通らず、配ってから初めて動く。渡せる形にして、
+ * Windows 側の分岐が一度も通らず、配ってから初めて動く。渡せる形にして、
  * どの OS ぶんもここで試せるようにする（`test/harness-setup.test.ts`）。
  */
 export function caseBlind(platform: NodeJS.Platform): boolean {

@@ -8,7 +8,7 @@
  *
  * Windows には Edge が必ず入っている。Chrome も多い。探せばよい。
  *
- * OS の枝は、**この機械で試せる形にする**（`src/core/opener.ts` と同じ）。
+ * OS の分岐は、**この機械で試せる形にする**（`src/core/opener.ts` と同じ）。
  * `process.platform` を関数の中で直に見ない。渡してもらう。
  */
 

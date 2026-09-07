@@ -5,7 +5,7 @@
  * Windows で `npm run check` を回すと、押して回る部分だけが静かに飛ぶ。
  * つまり**配る先で回したときに限って、いちばん壊れやすい所を見ない**。
  *
- * OS の枝は、この機械で試せる形にする（`test/os-branch.test.ts` と同じ考え）。
+ * OS の分岐は、この機械で試せる形にする（`test/os-branch.test.ts` と同じ考え）。
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';

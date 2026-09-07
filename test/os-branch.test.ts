@@ -1,8 +1,8 @@
 /**
  * OS で振る舞いを変えるなら、**渡せる形にする。**
  *
- * `process.platform` を関数の中で直に読むと、その枝は開発している OS でしか
- * 通らない。Windows むけの枝は、配ってから初めて動くことになる。
+ * `process.platform` を関数の中で直に読むと、その分岐は開発している OS でしか
+ * 通らない。Windows むけの分岐は、配ってから初めて動くことになる。
  * 「こちらでは動くが向こうでは動かない」は、ここから生まれる。
  *
  * 直に読んでよいのは**入口だけ**。入口が読んで、下へ渡す。下は渡された
@@ -43,7 +43,7 @@ const ALLOWED = new Set([
  */
 const AS_DEFAULT = /=\s*process\.platform|\?\?\s*process\.platform|:\s*process\.platform|,\s*process\.platform\s*\)|\(\s*process\.platform\s*\)/;
 
-/** コメントの中の言及は、枝ではない。 */
+/** コメントの中の言及は、分岐ではない。 */
 const COMMENT = /^\s*(\/\/|\*|\/\*)/;
 
 async function sources(dir: string, out: string[] = []): Promise<string[]> {
@@ -55,7 +55,7 @@ async function sources(dir: string, out: string[] = []): Promise<string[]> {
   return out;
 }
 
-describe('OS の枝を、この機械で試せる形にしておく', () => {
+describe('OS の分岐を、この機械で試せる形にしておく', () => {
   test('**関数の中で process.platform を直に読まない**', async () => {
     const bad: string[] = [];
     for (const file of await sources(join(root, 'src'))) {
@@ -64,7 +64,7 @@ describe('OS の枝を、この機械で試せる形にしておく', () => {
       const text = await readFile(file, 'utf8');
       text.split('\n').forEach((line, i) => {
         if (!line.includes('process.platform')) return;
-        if (COMMENT.test(line)) return; // コメントは枝ではない
+        if (COMMENT.test(line)) return; // コメントは分岐ではない
         if (AS_DEFAULT.test(line)) return; // 渡せる形になっている
         bad.push(`${rel}:${i + 1}  ${line.trim().slice(0, 80)}`);
       });

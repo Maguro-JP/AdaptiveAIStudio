@@ -2,7 +2,7 @@
  * ローカルとクラウドの間で、作業中のものを渡す。**その決め方だけ。**
  *
  * git を叩くところ（`handoff.mjs`）とは分けてある。**走らせないと出ない
- * 判断は、検査にかけられない。**枝の名前の付け方も、どれを取り込むかも、
+ * 判断は、検査にかけられない。**ブランチの名前の付け方も、どれを取り込むかも、
  * ここで決めて、ここで確かめる。
  *
  * ## なぜ要るか
@@ -11,14 +11,14 @@
  * **同時には触れないし、片方の作業はもう片方から見えない。**
  * 渡す道が無いので、同じ作業を二度やることになる。
  *
- * git はもともとこれをやるための物なので、**ローカルを枝として扱う**。
+ * git はもともとこれをやるための物なので、**ローカルをブランチとして扱う**。
  * 機械ごとに `wip/<名前>` を持ち、送る・取る、の二つだけにする。
  */
 
 /**
- * この機械の枝の名前。
+ * この機械のブランチの名前。
  *
- * git の枝に使えない字を落とす。名前が決まらないと渡す先が決まらないので、
+ * git のブランチに使えない字を落とす。名前が決まらないと渡す先が決まらないので、
  * **必ず何かを返す。**
  *
  * @param {{ platform: string; hostname: string; env?: Record<string, string | undefined> }} how
@@ -30,7 +30,7 @@ export function branchFor(how) {
     : `${how.platform}-${how.hostname}`;
   const safe = raw
     .toLowerCase()
-    // git の枝に使えない字と、紛らわしい字を `-` にする。
+    // git のブランチに使えない字と、紛らわしい字を `-` にする。
     .replace(/[^a-z0-9._-]+/g, '-')
     .replace(/^[-.]+|[-.]+$/g, '')
     .slice(0, 60);
@@ -40,7 +40,7 @@ export function branchFor(how) {
 /**
  * 取り込む相手を決める。
  *
- * **自分の枝は取り込まない。**一つしか無ければそれ。複数あるなら決めない
+ * **自分のブランチは取り込まない。**一つしか無ければそれ。複数あるなら決めない
  * （こちらで選ぶと、意図しない方を取り込んで作業が消える）。
  *
  * @param {{ branches: Array<{ name: string; at: string }>; mine: string; want?: string }} how
@@ -56,7 +56,7 @@ export function pickToTake(how) {
     return {
       ok: false,
       why: others.some((b) => b.name === how.mine)
-        ? `${how.want} は自分の枝です`
+        ? `${how.want} は自分のブランチです`
         : `${how.want} が見つかりません`,
       choices,
     };
@@ -79,7 +79,7 @@ export function pickToTake(how) {
  */
 export function whyNotSend(state) {
   if (!state.branch.startsWith('wip/') && state.branch !== 'main') {
-    // main 以外の枝で作業しているのは普通。止めない。
+    // main 以外のブランチで作業しているのは普通。止めない。
   }
   if (!state.dirty && state.ahead === 0) return '渡すものがありません（変更も、未 push のコミットも無し）';
   return undefined;

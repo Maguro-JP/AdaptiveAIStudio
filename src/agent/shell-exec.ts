@@ -35,7 +35,7 @@ function killTree(child: ChildProcess, platform: NodeJS.Platform = process.platf
  * 止め方の組み立て。
  *
  * 分岐を関数として取り出しているのは、**Windows の側を試験するため**。
- * 手元も CI も Linux だと、win32 の枝は一度も実行されないまま配られる。
+ * 手元も CI も Linux だと、win32 の分岐は一度も実行されないまま配られる。
  * 実際に「Linux では通るが Windows では落ちる」を踏んだので、
  * せめて組み立ての内容だけは、どちらの側も検査できるようにしておく。
  */
