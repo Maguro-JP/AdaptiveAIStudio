@@ -19,6 +19,7 @@ import { dirname, join } from 'node:path';
 import { mkdtempSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
+import { describeNotChecked } from './not-checked.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -184,8 +185,28 @@ if (typecheck !== 0) process.exit(typecheck);
 const tests = run('検査', [join(root, 'scripts', 'run-tests.mjs')]);
 if (tests !== 0) process.exit(tests);
 
+const ready = sweepReady();
 const swept = await sweep();
 if (swept !== 0) process.exit(swept);
 const counted = tokenizer();
 if (counted !== 0) process.exit(counted);
-process.exit(realModel());
+const real = realModel();
+if (real !== 0) process.exit(real);
+
+/*
+ * **確かめていないことを、通ったときにこそ言う。**
+ *
+ * 中身は `scripts/not-checked.mjs`。走らせないと出ない文章は書いたことに
+ * ならないので、**そのものを検査にかけられる形**にして外に出してある。
+ */
+let head = '';
+try {
+  head = spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8' })
+    .stdout.trim();
+} catch { /* git が無い場所でも出す */ }
+console.log(`\n${describeNotChecked({
+  platform: process.platform,
+  sweep: ready.ok ? 'ran' : ready.why,
+  realModel: existsSync(join(root, 'node_modules', 'node-llama-cpp')),
+}, head)}`);
+process.exit(0);
