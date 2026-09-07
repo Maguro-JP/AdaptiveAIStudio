@@ -1513,11 +1513,22 @@ export class UiServer {
             this.broadcast({
               type: 'log', level: 'error', text: `読み込めませんでした: ${ref}`,
             });
-            return `${ref} を読み込めませんでした。\n`
-              + '**ファイルが途中までしか落ちていない**ことが多いです。'
-              + '大きさを配布元と見比べて、違っていたら消して取り直してください。\n'
-              + `保存先: ${this.#opts.config.runtime?.modelsDir ?? modelsDir()}\n`
-              + `（中で出た文: ${detail.slice(0, 200)}）`;
+            /*
+             * **理由を、こちらで決めつけない。**
+             *
+             * 最初は「ファイルが途中までしか落ちていない」と決め打ちで
+             * 書いていた。ライブラリ（node-llama-cpp）が読めないときにも
+             * そう出るので、**嘘になる。**読む側は在るファイルを消しに行く。
+             * 中で出た理由が既に具体的なら、それをそのまま先に出す。
+             */
+            const looksLikeFile = /gguf|magic|size|out of range|unexpected|parse/i.test(detail);
+            const hint = looksLikeFile
+              ? '**ファイルが途中までしか落ちていない**ことが多いです。'
+                + '大きさを配布元と見比べて、違っていたら消して取り直してください。'
+              : 'モデルのファイルではなく、**読む側**で止まっています。'
+                + '設定 → モデル で、動かし方を選び直すこともできます。';
+            return `${ref} を読み込めませんでした。\n${detail.slice(0, 300)}\n${hint}\n`
+              + `保存先: ${this.#opts.config.runtime?.modelsDir ?? modelsDir()}`;
           }
           this.broadcast({
             type: 'log', level: 'info',
