@@ -281,4 +281,19 @@ describe('入っている Node を、探す前に諦めない', () => {
     const block = text.slice(at);
     assert.match(block, /nodejs\.org/, '入れ方を書いていない');
   });
+
+  test('**動かせなかったのがどの Node かで、言うことを変える**', async () => {
+    /*
+     * `-v` が返らないときに「同梱の Node を動かせませんでした」と決めつけて
+     * いた。PATH の node が動かないとき（版を選んでいない nvm など）にも
+     * 同じ文が出て、パスは空のまま `\node.exe` と表示される。
+     * 案内が的外れなうえ、何を見ればいいかも分からない。
+     */
+    const text = await readFile(join(installRoot(), 'start.cmd'), 'latin1');
+    const at = text.search(/^:nodeSilent/m);
+    assert.ok(at >= 0, ':nodeSilent のラベルが無い');
+    const block = text.slice(at);
+    assert.match(block.split(/\r?\n/).slice(0, 12).join('\n'), /if\s+defined\s+BUNDLED/i,
+      '同梱かどうかを見ないまま、同梱のせいにしている');
+  });
 });

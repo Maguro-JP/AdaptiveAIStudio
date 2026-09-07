@@ -262,6 +262,27 @@ pause
 exit /b 1
 
 :nodeSilent
+rem どの Node を動かせなかったのかで、言うことが違う。同梱のものと
+rem 決めつけて「大きさを見てください」と言っていたが、PATH の node が
+rem 動かないときにも同じ文が出た。しかもパスは空の `\node.exe` に
+rem なる。案内が的外れなうえ、何を見ればいいかも分からない。
+if defined BUNDLED goto :bundledSilent
+echo.
+echo   この機械の Node を動かせませんでした。
+echo.
+echo   where node では見つかりましたが、-v が返りません。
+echo   版を選んでいない nvm など、名前だけが残っている形で起きます。
+echo.
+echo   端末で node -v を試してください。同じように返らないはずです。
+echo   直せないときは、置くだけで差し替えられます。
+echo     https://nodejs.org/dist/v24.18.0/win-x64/node.exe
+echo     ここへ:  %HERE%node\node.exe
+echo   こちらが先に使われます。
+echo.
+pause
+exit /b 1
+
+:bundledSilent
 echo.
 echo   同梱の Node を動かせませんでした。
 echo     %BUNDLED%\%NODEFILE%
