@@ -71,24 +71,67 @@ export function applyEdit(
   before: string, find: string, replace: string, all: boolean,
 ): { text: string; hits: number; loose?: boolean; how?: EditHow } {
   if (find.length === 0) return { text: before, hits: 0 };
-  let hits = 0;
+
+  const found = positionsOf(before, find);
+  /*
+   * **行の途中から当てない。**
+   *
+   * `indexOf` は行の切れ目を見ない。モデルが字下げを一つ落とすと、
+   * 崩れた `find` が**本物の行の途中と一致する**（`  * 付け替える` は
+   * `   * 付け替える` の一部）。そこへ置き換えると、消し損ねた空白が
+   * 頭に残って一段ずれる。しかも「完全に一致した」ことになるので、
+   * こちらは何も言わない。**モデルは直ったと思って先へ進む。**
+   *
+   * 複数行を渡してきたなら、行の頭から始まっているはず。そうでない
+   * 当たりは、下の緩い当て（行で見る）に回す。
+   *
+   * 一行だけの `find` は、行の途中でよい（名前の付け替えなど）。
+   */
+  const aligned = find.includes('\n')
+    ? found.filter((at) => at === 0 || before[at - 1] === '\n')
+    : found;
+  if (aligned.length > 0) return spliceAt(before, aligned, find.length, replace, all);
+
+  const loose = looseEdit(before, find, replace, all);
+  if (loose.hits > 0) return loose;
+  const anchor = anchorEdit(before, find, replace, all);
+  if (anchor.hits > 0) return anchor;
+
+  // 行で見る道も駄目だったときの、最後の手。行の途中から始まる完全一致。
+  // ここまで来ているなら、行として読める形ではなかったということ
+  // （`foo(a,\n  b)` のような、式の途中から渡された塊）。
+  if (found.length > 0) return spliceAt(before, found, find.length, replace, all);
+  return { text: before, hits: 0 };
+}
+
+/** 当たった位置を全部。重なりは数えない。 */
+function positionsOf(before: string, find: string): number[] {
+  const out: number[] = [];
   let at = 0;
   for (;;) {
     const found = before.indexOf(find, at);
-    if (found < 0) break;
-    hits += 1;
+    if (found < 0) return out;
+    out.push(found);
     at = found + find.length;
   }
-  if (hits > 0) {
-    if (!all && hits > 1) return { text: before, hits };
-    return {
-      text: all ? before.split(find).join(replace) : before.replace(find, replace),
-      hits, how: 'exact',
-    };
+}
+
+/**
+ * その位置に流し込む。
+ *
+ * `String.replace` を使わない。置き換える側に `$&` や `$1` が入っていると
+ * **置換の指定として読まれる**（コードや正規表現を書き換えるときに実際に
+ * 混ざる）。位置が分かっているので、切って繋ぐ。
+ */
+function spliceAt(
+  before: string, at: number[], width: number, replace: string, all: boolean,
+): { text: string; hits: number; how?: EditHow } {
+  if (!all && at.length > 1) return { text: before, hits: at.length };
+  let text = before;
+  for (const pos of [...at].reverse()) {
+    text = text.slice(0, pos) + replace + text.slice(pos + width);
   }
-  const loose = looseEdit(before, find, replace, all);
-  if (loose.hits > 0) return loose;
-  return anchorEdit(before, find, replace, all);
+  return { text, hits: at.length, how: 'exact' };
 }
 
 /**
@@ -111,7 +154,8 @@ export function applyEdit(
 function anchorEdit(
   before: string, find: string, replace: string, all: boolean,
 ): { text: string; hits: number; loose?: boolean; how?: EditHow } {
-  const want = trimEnds(find.split('\n')).filter((l) => l.trim().length > 0);
+  const cut = cutEnds(find.split('\n'));
+  const want = cut.lines.filter((l) => l.trim().length > 0);
   // 三行に満たないものは、両端がほとんど中身そのもの。緩めても当たらない。
   if (want.length < 3) return { text: before, hits: 0 };
 
@@ -139,9 +183,12 @@ function anchorEdit(
   if (found.length === 0) return { text: before, hits: 0 };
   if (!all && found.length > 1) return { text: before, hits: found.length, loose: true, how: 'anchor' };
 
+  const put = fitReplace(replace.split('\n'), cut.head, cut.tail);
   const out = [...lines];
   for (const { from, to } of [...found].reverse()) {
-    const shifted = reindent(replace.split('\n'), indentOf(want[0]!), indentOf(lines[from]!));
+    const shifted = sameFrame(put, indentOf(want[0]!), indentOf(lines[from]!))
+      ? reindent(put, indentOf(want[0]!), indentOf(lines[from]!))
+      : put;
     out.splice(from, to - from + 1, ...shifted);
   }
   return { text: out.join('\n'), hits: found.length, loose: true, how: 'anchor' };
@@ -165,7 +212,8 @@ function looseEdit(
   before: string, find: string, replace: string, all: boolean,
 ): { text: string; hits: number; loose?: boolean; how?: EditHow } {
   const lines = before.split('\n');
-  const want = trimEnds(find.split('\n'));
+  const cut = cutEnds(find.split('\n'));
+  const want = cut.lines;
   if (want.length === 0) return { text: before, hits: 0 };
 
   const key = (line: string): string => line.trim();
@@ -184,9 +232,13 @@ function looseEdit(
 
   // **ファイルの側の字下げに合わせる。**渡ってきた字下げをそのまま書くと、
   // 段のずれたコードが入る（見た目で気づけない壊し方）。
+  // ただし寄せるのは、`replace` が `find` と同じ枠で書かれているときだけ。
+  const put = fitReplace(replace.split('\n'), cut.head, cut.tail);
   const out = [...lines];
   for (const start of [...at].reverse()) {
-    const shifted = reindent(replace.split('\n'), indentOf(want[0]!), indentOf(lines[start]!));
+    const shifted = sameFrame(put, indentOf(want[0]!), indentOf(lines[start]!))
+      ? reindent(put, indentOf(want[0]!), indentOf(lines[start]!))
+      : put;
     out.splice(start, wantKeys.length, ...shifted);
   }
   return { text: out.join('\n'), hits: at.length, loose: true, how: 'loose' };
@@ -232,10 +284,38 @@ export function nearestTo(before: string, find: string, show = 8): string | unde
 
 /** 前後の空行を落とす。渡し方の癖であって、探したい中身ではない。 */
 function trimEnds(lines: string[]): string[] {
+  return cutEnds(lines).lines;
+}
+
+/**
+ * 前後の空行を落として、**何行落としたかも返す。**
+ *
+ * 落とした数が要るのは、`replace` の側を揃えるため（`fitReplace`）。
+ */
+function cutEnds(lines: string[]): { lines: string[]; head: number; tail: number } {
   let from = 0;
   let to = lines.length;
   while (from < to && lines[from]!.trim().length === 0) from += 1;
   while (to > from && lines[to - 1]!.trim().length === 0) to -= 1;
+  return { lines: lines.slice(from, to), head: from, tail: lines.length - to };
+}
+
+/**
+ * 置き換える側を、探した側の切り方に揃える。
+ *
+ * **探すときだけ端の空行を落としていた。**`find` の前後の空行は「落として
+ * 探す」ので、その空行はファイルに残ったまま。なのに `replace` は落とさずに
+ * そのまま流し込んでいたので、**空行が二重に入った**（履歴 400 commit で
+ * 実測、これだけで数百件）。落とした数だけ、こちらからも落とす。
+ *
+ * 空行を**足したい**編集は壊さない。`find` が落とした数までしか削らないので、
+ * `find` に端の空行が無ければ（普通はこれ）何もしない。
+ */
+function fitReplace(lines: string[], head: number, tail: number): string[] {
+  let from = 0;
+  let to = lines.length;
+  while (from < to && head > 0 && lines[from]!.trim().length === 0) { from += 1; head -= 1; }
+  while (to > from && tail > 0 && lines[to - 1]!.trim().length === 0) { to -= 1; tail -= 1; }
   return lines.slice(from, to);
 }
 
@@ -255,4 +335,27 @@ function reindent(lines: string[], from: string, to: string): string[] {
     if (line.trim().length === 0) return line;
     return line.startsWith(from) ? to + line.slice(from.length) : line;
   });
+}
+
+/**
+ * `replace` を、ファイルの字下げへ寄せてよいか。
+ *
+ * **寄せるのは、`replace` が `find` と同じ枠で書かれているときだけ。**
+ *
+ * ここは無条件に寄せていた。`find` の先頭行の字下げ（＝モデルが間違えた側）を
+ * 「置き換える側もこの字下げで書かれている」と決めつけて、`replace` の
+ * 全部の行から取り除いていた。**モデルは `find` だけ書き崩して、`replace` は
+ * ファイルの通りに書いてくることがある**（読んだものを写すので、そちらは合う）。
+ * そのとき `replace` は丸ごと一段ずれる。しかも当たったことになるので、
+ * **モデルは直ったと思って先へ進む。**履歴 400 commit で測ると、
+ * 字下げを一行崩しただけで 928 件中 839 件がこれだった。
+ *
+ * 見分け方は、`replace` の最初の中身の行が、どちらの字下げに揃っているか。
+ * `find` と同じならモデルの枠。違うなら、既にファイルの側に合っている。
+ */
+function sameFrame(replace: string[], findIndent: string, fileIndent: string): boolean {
+  if (findIndent === fileIndent) return false; // 寄せる先が同じ。何もしなくてよい
+  const first = replace.find((l) => l.trim().length > 0);
+  if (first === undefined) return false;
+  return indentOf(first) === findIndent;
 }

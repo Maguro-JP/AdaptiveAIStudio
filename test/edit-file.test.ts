@@ -499,3 +499,97 @@ describe('当て方を足しても、正しい渡し方を壊さない', () => {
     assert.ok(checked > 500, `試した数が少なすぎる: ${checked}`);
   });
 });
+
+/**
+ * モデルの崩し方に、当て負けない。
+ *
+ * ここは `scripts/bench-edit.mjs` で測ったところ。git の履歴 400 commit の
+ * hunk 2087 件に、実際に見た崩れ方（字下げ・行末・注釈落ち・空行・省略）を
+ * 与えて、**利用者が実際に書いた結果と同じになるか**で見た。
+ *
+ *   崩し方      直す前    直した後
+ *   そのまま     99.8%    100.0%
+ *   字下げ        9.6%    100.0%
+ *   行末         79.3%    100.0%
+ *   注釈落ち      67.0%     79.2%
+ *   空行入り      73.9%     93.3%
+ *   省略         67.4%     88.9%
+ *
+ * 落ちていたのは三つ。ここではその三つを、いちばん小さい形で押さえる。
+ */
+describe('崩れた find でも、正しい所へ正しく当てる', () => {
+  test('**行の途中から当てない**', () => {
+    /*
+     * 字下げを一つ落として渡されると、崩れた find が**本物の行の途中と
+     * 完全一致する**（`  * b` は `   * b` の一部）。そこへ置き換えると、
+     * 消し損ねた空白が頭に残って一段ずれる。しかも「完全に一致した」ので
+     * 何も言わない。**モデルは直ったと思って先へ進む。**
+     */
+    const before = '   * a\n   * b\n   */\n';
+    const got = applyEdit(before, '  * b\n   */', '   * B\n   */', false);
+    assert.equal(got.hits, 1);
+    assert.equal(got.text, '   * a\n   * B\n   */\n',
+      `行の途中に当てて、字下げがずれている: ${JSON.stringify(got.text)}`);
+  });
+
+  test('一行だけなら、行の途中でよい（対）', () => {
+    // 名前の付け替えは行の途中に当たる。そこまで断ると使えない。
+    const before = 'const total = countOf(x) + countOf(y);\n';
+    const got = applyEdit(before, 'countOf', 'sizeOf', true);
+    assert.equal(got.hits, 2);
+    assert.equal(got.text, 'const total = sizeOf(x) + sizeOf(y);\n');
+  });
+
+  test('**replace がファイルの字下げで書かれているなら、寄せ直さない**', () => {
+    /*
+     * モデルは find だけ書き崩して、replace はファイルの通りに書いてくる
+     * ことがある（読んだものを写すので、そちらは合う）。それを
+     * 「find と同じ枠で書かれている」と決めつけて寄せると、replace が
+     * 丸ごと一段ずれる。履歴で測ると 928 件中 839 件がこれだった。
+     */
+    const before = 'class A {\n    run() {\n      go();\n    }\n}\n';
+    // find の先頭行だけ字下げを崩す（2段）。replace はファイルどおり（4段）。
+    const got = applyEdit(before, '  run() {\n      go();\n    }', '    run() {\n      stop();\n    }', false);
+    assert.equal(got.hits, 1);
+    assert.equal(got.text, 'class A {\n    run() {\n      stop();\n    }\n}\n',
+      `replace を寄せ直して段がずれている: ${JSON.stringify(got.text)}`);
+  });
+
+  test('モデルの枠で書かれているなら、寄せる（対）', () => {
+    // find も replace も同じ（間違った）字下げで書かれているとき。
+    // ここは寄せないと、段のずれたコードが入る。
+    const before = 'function f() {\n  const a = 1;\n}\n';
+    const got = applyEdit(before, '    const a = 1;', '    const a = 2;', false);
+    assert.equal(got.hits, 1);
+    assert.equal(got.text, 'function f() {\n  const a = 2;\n}\n');
+  });
+
+  test('**端の空行を、二重に入れない**', () => {
+    /*
+     * find の前後の空行は「落として探す」ので、その空行はファイルに残る。
+     * なのに replace は落とさずに流し込んでいたので、空行が二重になった。
+     */
+    const before = 'a();\n\n  b();\n\nc();\n';
+    // 行末の空白を混ぜて、完全一致では通らない形にする（緩い当てに落とす）。
+    const got = applyEdit(before, '\n  b();  \n', '\n  B();\n', false);
+    assert.equal(got.hits, 1);
+    assert.equal(got.text, 'a();\n\n  B();\n\nc();\n',
+      `空行が増えている: ${JSON.stringify(got.text)}`);
+  });
+
+  test('空行を足したい編集は、壊さない（対）', () => {
+    // find に端の空行が無ければ、こちらからは何も削らない。
+    const before = 'a();\nb();\n';
+    const got = applyEdit(before, 'a();', 'a();\n', false);
+    assert.equal(got.hits, 1);
+    assert.equal(got.text, 'a();\n\nb();\n');
+  });
+
+  test('置き換える側の $ を、置換の指定として読まない', () => {
+    // String.replace は $& や $1 を特別扱いする。正規表現を書き換えるとき、
+    // これが混ざる。切って繋ぐ形にしたので、そのまま入る。
+    const before = 'const re = /x/;\n';
+    const got = applyEdit(before, '/x/', "/y/.source + '$&'", false);
+    assert.equal(got.text, "const re = /y/.source + '$&';\n");
+  });
+});
