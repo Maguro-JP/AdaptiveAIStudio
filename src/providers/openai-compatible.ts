@@ -48,6 +48,15 @@ export interface OpenAiCompatibleOptions {
    * 1トークン/秒でも生成が進んでいる限り、何時間でも待つ。
    */
   stallTimeoutMs?: number;
+  /**
+   * **モデル一覧と生存確認の上限。既定2秒。**
+   *
+   * 生成の上限と分ける。ここは相手が居るかを見るだけで、返るものは
+   * 小さい。5秒で固定していたので、繋ぎ先が黙って落とす形（LAN の
+   * 向こう、塞がれた口）だと `Session.create` が毎回5秒止まり、
+   * **最初の送信がそのぶん待たされた。**拒否が返る相手なら即返る。
+   */
+  listTimeoutMs?: number;
 }
 
 export class OpenAiCompatibleProvider implements ChatProvider {
@@ -59,6 +68,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
   readonly #firstTokenTimeoutMs: number;
   readonly #connectTimeoutMs: number;
   readonly #stallTimeoutMs: number;
+  readonly #listTimeoutMs: number;
 
   constructor(opts: OpenAiCompatibleOptions) {
     this.id = opts.id;
@@ -69,6 +79,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     this.#firstTokenTimeoutMs = opts.firstTokenTimeoutMs ?? 600_000;
     this.#connectTimeoutMs = opts.connectTimeoutMs ?? 10_000;
     this.#stallTimeoutMs = opts.stallTimeoutMs ?? 120_000;
+    this.#listTimeoutMs = opts.listTimeoutMs ?? 2_000;
   }
 
   #headers(): Record<string, string> {
@@ -81,7 +92,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     try {
       const res = await fetch(`${this.#baseUrl}/models`, {
         headers: this.#headers(),
-        signal: AbortSignal.timeout(5_000),
+        signal: AbortSignal.timeout(this.#listTimeoutMs),
       });
       if (!res.ok) return { ok: false, reason: `HTTP ${res.status}` };
       return { ok: true };
@@ -119,7 +130,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     try {
       const res = await fetch(`${this.#baseUrl}/models`, {
         headers: this.#headers(),
-        signal: AbortSignal.timeout(5_000),
+        signal: AbortSignal.timeout(this.#listTimeoutMs),
       });
       if (!res.ok) return guessed();
       const json = (await res.json()) as { data?: Array<{ id?: unknown }> };

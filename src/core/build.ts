@@ -17,6 +17,7 @@ export function buildRegistry(config: AasConfig): ProviderRegistry {
         locality: p.locality,
         apiKey,
         fallbackModels: p.models,
+        ...(p.listTimeoutMs !== undefined ? { listTimeoutMs: p.listTimeoutMs } : {}),
       }));
     }
   }
