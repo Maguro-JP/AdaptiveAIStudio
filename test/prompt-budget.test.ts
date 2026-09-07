@@ -108,3 +108,57 @@ describe('区切りの分も数える', () => {
     assert.equal(count(text), 5);
   });
 });
+
+describe('取り過ぎさせない・取り置く', () => {
+  /**
+   * 「残りの半分」のような決め打ちを部品の中に書くと、優先で決めたはずの
+   * 取り分が部品ごとの都合で決まる。嫌がられたことが実際にそうで、
+   * 窓 16852 の予算の 27% を一人で取っていた。
+   */
+  test('**上限を越えて渡さない**', async () => {
+    let got = -1;
+    await fitParts([
+      { name: 'よくばり', priority: 90, atMost: 10, render: (l) => { got = l; return ''; } },
+    ], 100, count);
+    assert.equal(got, 10);
+  });
+
+  test('上限が無ければ、残りを全部渡す（対）', async () => {
+    let got = -1;
+    await fitParts([
+      { name: 'ふつう', priority: 90, render: (l) => { got = l; return ''; } },
+    ], 100, count);
+    assert.equal(got, 100);
+  });
+
+  test('**後ろのぶんを取り置く。優先が高くても取り切らせない**', async () => {
+    let first = -1;
+    await fitParts([
+      { name: 'さき', priority: 90, render: (l) => { first = l; return ''; } },
+      { name: 'あと', priority: 10, atLeast: 30, render: () => '' },
+    ], 100, count);
+    assert.equal(first, 70, '取り置いた分まで、前の部品に渡している');
+  });
+
+  test('取り置きは約束であって、割り当てではない', async () => {
+    // 前が取り置き分しか残さなくても、後ろが要らなければ次へ回る。
+    let last = -1;
+    await fitParts([
+      { name: 'さき', priority: 90, render: () => 'x'.repeat(70) },
+      { name: 'なか', priority: 50, atLeast: 30, render: () => '' },
+      { name: 'あと', priority: 10, render: (l) => { last = l; return ''; } },
+    ], 100, count);
+    assert.equal(last, 30, '使わなかった取り置きが、後ろへ回っていない');
+  });
+
+  test('取り置きは、優先の高い方から順に効く（対）', async () => {
+    const seen: number[] = [];
+    await fitParts([
+      { name: 'いち', priority: 90, render: (l) => { seen.push(l); return 'x'.repeat(10); } },
+      { name: 'に', priority: 50, atLeast: 20, render: (l) => { seen.push(l); return 'x'.repeat(10); } },
+      { name: 'さん', priority: 10, atLeast: 30, render: (l) => { seen.push(l); return ''; } },
+    ], 100, count);
+    // いち: 100 - (20+30) = 50 / に: 90 - 30 = 60 / さん: 80
+    assert.deepEqual(seen, [50, 60, 80]);
+  });
+});

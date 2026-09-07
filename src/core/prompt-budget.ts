@@ -23,6 +23,7 @@
  * ## 取り方
  *
  * 1. **優先の高い順に、要るだけ取らせる。**残りを次へ渡す
+ *    （`atMost` で取り過ぎを止め、`atLeast` で後ろのぶんを取り置く）
  * 2. 並べる場所の順に組み立てる
  * 3. 組み上げた全体を測り、超えていたら**優先の低い方から丸ごと落とす**
  *
@@ -48,6 +49,22 @@ export interface Part {
   render: (budget: number) => string | Promise<string>;
   /** 予算を超えても落とさない。決まり本体のような、無いと話にならないもの。 */
   required?: boolean;
+  /**
+   * これ以上は取らせない。
+   *
+   * **取れるだけ取る部品が、後ろを飢えさせる。**「残りの半分」のような
+   * 決め打ちを部品の中に書くと、優先で決めたはずの取り分が、部品ごとの
+   * 都合で決まってしまう。上限はここに書く。
+   */
+  atMost?: number;
+  /**
+   * ここまでは残しておく。
+   *
+   * 優先の高い部品に渡す予算から、あらかじめ差し引く。これが無いと、
+   * 上の部品が取り切ったあとに 0 しか回らない（窓 16852 で、地図が
+   * ちょうどそうなっていた。実測）。
+   */
+  atLeast?: number;
 }
 
 export interface Fitted {
@@ -78,8 +95,20 @@ export async function fitParts(
   const order = parts.map((_, i) => i)
     .sort((a, b) => (parts[b]!.priority - parts[a]!.priority) || (a - b));
   let left = Math.max(0, budget);
-  for (const i of order) {
-    const made = await parts[i]!.render(left);
+  for (const [k, i] of order.entries()) {
+    /*
+     * **後ろのために取り置く。**
+     *
+     * まだ取っていない部品の `atLeast` を足して、その分は渡さない。
+     * これが無いと、優先の高い部品が取り切ったあと 0 しか回らない。
+     * 取り置きは約束であって、割り当てではない（要らなければ次へ回る）。
+     */
+    let reserved = 0;
+    for (const j of order.slice(k + 1)) reserved += parts[j]!.atLeast ?? 0;
+    let give = Math.max(0, left - reserved);
+    const cap = parts[i]!.atMost;
+    if (cap !== undefined) give = Math.min(give, cap);
+    const made = await parts[i]!.render(give);
     text[i] = made;
     left = Math.max(0, left - count(made));
   }

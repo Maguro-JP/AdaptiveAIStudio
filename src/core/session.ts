@@ -81,6 +81,35 @@ import { resolveCounting, type Counting } from './counting.ts';
  */
 export const SYSTEM_SHARE = 0.25;
 
+/**
+ * 嫌がられたことに渡す、前置き予算の上限。
+ *
+ * 同じ失敗を繰り返すのがいちばん高くつくので多めに取るが、**一人で取り切らせない。**
+ */
+export const HATED_SHARE = 0.2;
+
+/**
+ * 地図のために取り置く割合と、取り置きを始める予算。
+ *
+ * 置き場の決まりは残りを全部取るので、取り置かないと地図は窓 32768 まで
+ * 一度も載らなかった（実測）。ここは**利用者が書いた決まりの末尾を削って、
+ * こちらが作った地図を載せる**という取り引きなので、いちばん小さく取る。
+ *
+ *   取り置き  地図      当たる   決まりの損（窓 16852）
+ *   0         0 文字     0%      —
+ *   0.05    631 文字   約37%     5%
+ *   0.10   1052 文字   約42%    12%
+ *   0.15   1428 文字   約46%    19%
+ *
+ * 0.05 で膝。そこから先は決まりを削る割に伸びない。地図が無いとモデルは
+ * 総当たりで探すので、**小さくても在る方が効く**（当たる割合は
+ * `scripts/bench.mjs` で測ったもの）。
+ *
+ * 狭い窓（予算 `MAP_FROM` 未満）では取り置かない。取り置くと決まりの側が落ちる。
+ */
+export const MAP_SHARE = 0.05;
+export const MAP_FROM = 2000;
+
 export const DEFAULT_SYSTEM = `あなたはソフトウェア開発の作業者です。与えられた作業ディレクトリで実際に手を動かします。
 
 守ること:
@@ -1444,6 +1473,9 @@ export class Session {
       {
         name: '嫌がられたこと',
         priority: 80,
+        // **取れるだけ取らせない。**ここは 12 件あると 1142 になり、窓 16852 の
+        // 予算 4213 の 27% を一人で取っていた（実測）。上限は外に書く。
+        atMost: Math.floor(budget * HATED_SHARE),
         /*
          * **嫌がられたことは、決まりの側にも置く。**
          *
@@ -1459,7 +1491,7 @@ export class Session {
           const hated = fitByTokens(
             this.memory.displeasures(12),
             (e) => e.detail || e.title,
-            Math.floor(left * 0.5),
+            left,
             1,
             count,
           );
@@ -1484,6 +1516,12 @@ export class Session {
       {
         name: '作業場の地図',
         priority: 20,
+        /*
+         * **取り置く。**置き場の決まりは残りを全部取るので、これが無いと
+         * 地図は窓 32768 まで一度も載らなかった（実測）。
+         * 狭い窓では取り置かない（取り置くと、決まりの側が落ちる）。
+         */
+        atLeast: budget >= MAP_FROM ? Math.floor(budget * MAP_SHARE) : 0,
         /*
          * **どこに何が在るかを、先に渡す。**
          *
