@@ -56,4 +56,38 @@ describe('設定の場所', () => {
     assert.ok(source.includes('なし'), source); // doctor はこの語で「無い」を見分ける
     assert.ok(source.includes(join(home, 'aas.config.json')), source); // 書く先を言う
   });
+
+  /**
+   * ここは URL だけ書き換えて、名前（`ollama`）をそのままにしていた。
+   * **中身は inproc なのに名前は ollama** なので、モデルの名前が
+   * `ollama:...` になり、失敗すると「ollama への接続に失敗しました」と出る。
+   * Ollama を使っていない人が、Ollama を疑うことになる。
+   */
+  test('**この中で読むときは、名前も inproc にする**', async () => {
+    const cwd = await tempDir('aas-name-');
+    const home = await tempDir('aas-home2-');
+    delete process.env.AAS_CONFIG;
+    process.env.AAS_HOME = home;
+    const { config } = loadConfig(cwd);
+    const local = config.providers.find((p) => p.kind === 'openai-compatible' && p.locality === 'local');
+    assert.equal(local?.id, 'inproc', 'Ollama を使っていないのに ollama と名乗っている');
+    assert.ok(!config.providers.some((p) => p.id === 'ollama'),
+      'ollama という名前が残っている');
+  });
+
+  test('自分で名前を付けているなら、触らない（対）', async () => {
+    const cwd = await tempDir('aas-keep-');
+    const home = await tempDir('aas-home3-');
+    process.env.AAS_HOME = home;
+    const at = join(home, 'aas.config.json');
+    await writeFile(at, JSON.stringify({
+      runtime: { kind: 'inproc' },
+      providers: [{ id: 'わたしの土台', kind: 'openai-compatible', locality: 'local', baseUrl: 'http://x/v1' }],
+    }));
+    process.env.AAS_CONFIG = at;
+    const { config } = loadConfig(cwd);
+    const local = config.providers.find((p) => p.kind === 'openai-compatible' && p.locality === 'local');
+    assert.equal(local?.id, 'わたしの土台', '利用者が付けた名前を書き換えている');
+    assert.equal(local?.baseUrl, `http://127.0.0.1:${INPROC_PORT}/v1`, '繋ぎ先は埋める');
+  });
 });

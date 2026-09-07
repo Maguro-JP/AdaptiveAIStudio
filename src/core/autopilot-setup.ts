@@ -36,8 +36,16 @@ export async function setupAutopilot(
   autopilot.register(models);
 
   const local = models.filter((m) => m.locality === 'local');
+  /*
+   * **Ollama を決め打ちで名指ししない。**
+   *
+   * ここは動かし方に関係なく「Ollama が起動しているか確認してください」と
+   * 言っていた。Ollama を使っていない人には、見当違いの案内になる。
+   */
   const unavailable = local.length === 0
-    ? 'ローカルモデルが見つかりません（Ollama が起動しているか確認してください）'
+    ? (config.runtime?.kind === 'ollama'
+        ? 'ローカルモデルが見つかりません（Ollama が起動しているか確認してください）'
+        : 'ローカルモデルが見つかりません（設定 → モデル で、保存先に .gguf があるか見てください）')
     : autopilot.knownCount === 0
       ? 'モデル名から規模を判定できませんでした'
       : undefined;

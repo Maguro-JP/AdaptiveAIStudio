@@ -407,13 +407,29 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
 function wireInProc(c: AasConfig): void {
   if (c.runtime?.kind !== 'inproc') return;
   const url = `http://127.0.0.1:${c.runtime.basePort ?? INPROC_PORT}/v1`;
-  const local = c.providers.find((p) => p.kind === 'openai-compatible' && p.locality === 'local');
-  if (local) local.baseUrl = url;
-  else {
+  const at = c.providers.findIndex((p) => p.kind === 'openai-compatible' && p.locality === 'local');
+  if (at < 0) {
     c.providers.push({
       id: 'inproc', kind: 'openai-compatible', locality: 'local', baseUrl: url, enabled: true,
     });
+    return;
   }
+  const local = c.providers[at]!;
+  local.baseUrl = url;
+  /*
+   * **名前も付け替える。**
+   *
+   * ここは URL だけ書き換えていた。既定でそこに居るのは `id: 'ollama'` なので、
+   * **中身は inproc なのに名前は ollama のまま**になる。
+   *
+   * 名前は下流のすべてに出る。モデルの名前は `ollama:...` になり、
+   * 失敗したときは「ollama への接続に失敗しました」と出る。Ollama を
+   * 使っていない人が、Ollama を疑うことになる。実際にそうなった。
+   *
+   * 利用者が自分で名前を付けているなら、それは触らない。
+   * 付け替えるのは、こちらが既定として置いた `ollama` のときだけ。
+   */
+  if (local.id === 'ollama') local.id = 'inproc';
 }
 
 function validate(c: AasConfig): void {
