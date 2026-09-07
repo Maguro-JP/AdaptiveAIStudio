@@ -114,12 +114,26 @@ if (models.length > 0) {
     const { looksLikeGguf, tooBigForRam } = await import('../runtime/inproc.ts');
     const { totalmem } = await import('node:os');
     const dir = config.runtime?.modelsDir ?? defaultModelsDir();
+    let usable = 0;
     for (const m of models) {
-      if (!(await looksLikeGguf(join(dir, m.ref)))) {
-        add('モデル', 'warn', `${m.ref} は GGUF ではありません（先頭に印が無い。配布元の HTML の案内かも）`);
-      }
+      if (await looksLikeGguf(join(dir, m.ref))) usable += 1;
+      else add('モデル', 'warn', `${m.ref} は GGUF ではありません（先頭に印が無い。配布元の HTML の案内かも）`);
       const big = tooBigForRam(m.sizeBytes, totalmem());
       if (big) add('モデル', 'warn', `${m.ref}: ${big}`);
+    }
+    /*
+     * **一つも読めないなら「動かせます」と言わない。**
+     *
+     * 一件ずつは 注意 で出していたが、締めの一行は 未了（bad）の数だけを
+     * 見る。だから全部読めなくても「動かせます」と出ていた。実際に送ると
+     * 503 で断られる。**立ち上がることを、使えることとして言っていた。**
+     * 置いてある数ではなく、**使える数**で決める。
+     */
+    if (usable === 0) {
+      add('モデル', 'bad',
+        `${models.length} 件ありますが、どれも GGUF として読めません`,
+        '配布元の同意頁の HTML を落とした形が多いです。ブラウザで開き直して、'
+        + `本物を ${dir} へ置いてください。`);
     }
   }
 } else if (runtime.id === 'ollama') {

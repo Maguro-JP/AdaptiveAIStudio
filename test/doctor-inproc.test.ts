@@ -180,3 +180,39 @@ describe('外の道具（MCP）の支度を、doctor で見る', () => {
     assert.doesNotMatch(text, /ghp_FROM_FILE/);
   });
 });
+
+/**
+ * 置いてあることを、使えることとして言わない。
+ *
+ * `.gguf` という名前のファイルが在れば「1 件」と数えていた。中身が GGUF で
+ * なくても、締めの一行は「動かせます」だった。**実際に送ると 503 で断られる。**
+ * 起動できたことを使えることとして言う、といういつもの形を、こちら側でも
+ * やっていた。置いてある数ではなく、**使える数**で決める。
+ */
+describe('読めないモデルしか無いとき', () => {
+  test('「動かせます」と言わない', async () => {
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { execFile } = await import('node:child_process');
+    const { dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const { tempDir } = await import('./tmp.ts');
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+    const home = await tempDir('aas-badgguf-');
+    await mkdir(join(home, 'models'), { recursive: true });
+    // 名前だけ .gguf。中身は配布元の同意頁の HTML、という形がいちばん多い。
+    await writeFile(join(home, 'models', 'nope.gguf'), '<!doctype html><html>同意してください</html>');
+
+    const got = await new Promise<{ out: string }>((ok) => {
+      execFile(
+        process.execPath,
+        ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', 'doctor.ts')],
+        { env: { ...process.env, AAS_HOME: home }, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+        (_e, stdout, stderr) => ok({ out: `${stdout}${stderr}` }),
+      );
+    });
+    assert.match(got.out, /どれも GGUF として読めません/, `言っていない: ${got.out.slice(-600)}`);
+    assert.ok(!/動かせます/.test(got.out), `動かせると言っている: ${got.out.slice(-600)}`);
+  });
+});
