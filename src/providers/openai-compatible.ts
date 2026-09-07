@@ -27,6 +27,21 @@ export interface OpenAiCompatibleOptions {
    */
   firstTokenTimeoutMs?: number;
   /**
+   * **繋がるまでの上限。既定10秒。**
+   *
+   * 上の10分と分ける。10分は「モデルが最初の1トークンを返すまで」の猶予で、
+   * **繋がらない相手を待つための時間ではない。**
+   *
+   * 分けていなかったので、動いていない ollama を叩いたとき、1回の試行が
+   * 10分待たされた。`unavailable` は 2 回まで再試行するので 1 候補で 30 分、
+   * 候補が 2 つで **62 分**。画面には failed 1847.6秒 と出た。
+   * 応答のない相手に対して、Windows は長く待つ（拒否が返らない）。
+   *
+   * 返事の頭（ヘッダ）さえ来れば、そこから先は上の10分に切り替える。
+   * 繋がってさえいれば、遅いモデルはいくらでも待つ。
+   */
+  connectTimeoutMs?: number;
+  /**
    * トークンが1つも来ない状態が続いたときの上限。既定2分。
    *
    * 総時間ではなく「停滞時間」で打ち切るのが要点。
@@ -42,6 +57,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
   readonly #apiKey?: string;
   readonly #fallbackModels: string[];
   readonly #firstTokenTimeoutMs: number;
+  readonly #connectTimeoutMs: number;
   readonly #stallTimeoutMs: number;
 
   constructor(opts: OpenAiCompatibleOptions) {
@@ -51,6 +67,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     this.#apiKey = opts.apiKey;
     this.#fallbackModels = opts.fallbackModels ?? [];
     this.#firstTokenTimeoutMs = opts.firstTokenTimeoutMs ?? 600_000;
+    this.#connectTimeoutMs = opts.connectTimeoutMs ?? 10_000;
     this.#stallTimeoutMs = opts.stallTimeoutMs ?? 120_000;
   }
 
@@ -114,7 +131,8 @@ export class OpenAiCompatibleProvider implements ChatProvider {
       clearTimeout(timer);
       timer = setTimeout(() => { stalled = true; watchdog.abort(); }, ms);
     };
-    arm(this.#firstTokenTimeoutMs);
+    // **繋がるまでは短く待つ。**繋がってから、最初の1トークンまでを長く待つ。
+    arm(this.#connectTimeoutMs);
 
     const combined = AbortSignal.any([signal, watchdog.signal]);
 
@@ -151,6 +169,13 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         message: `${this.id} への接続に失敗しました: ${describe(e)}`,
       });
     }
+
+    /*
+     * ここまで来たら、繋がっている。**ここから先は長く待つ。**
+     * 返事の頭（ヘッダ）は来たので、あとはモデルが最初の1トークンを
+     * 返すまでの話。巨大なモデルの読み込みで数分かかることがある。
+     */
+    arm(this.#firstTokenTimeoutMs);
 
     if (!res.ok || !res.body) {
       clearTimeout(timer);
