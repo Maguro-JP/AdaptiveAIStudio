@@ -59,6 +59,7 @@ import { snapshotTests } from '../agent/test-integrity.ts';
 import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
 import { UndoStore } from './undo.ts';
+import { fitParts } from './prompt-budget.ts';
 import { rankedEntries, renderMap, seedFrom, covers } from '../agent/repo-map.ts';
 import { indexStore } from '../agent/tools/find.ts';
 import type { Harness } from '../harness/harness.ts';
@@ -192,6 +193,8 @@ export class Session {
    * 前置きが変わると、相手は履歴まで計算し直す。
    */
   #map?: { text: string; builtAt: string };
+  /** 前置きに入り切らなかったもの。**黙って落とさない**ために持つ。 */
+  #lastDropped: string[] = [];
   readonly candidates: string[];
   readonly memory: Memory;
   /** 溜まった提案。実行はしない。溜めて、人に選ばせる。 */
@@ -1393,92 +1396,14 @@ export class Session {
      * 入らないものは載せない（切り詰めるより、載せない方が読める）。
      */
     const budget = Math.floor(this.contextTokens * SYSTEM_SHARE);
-    let left = Math.max(0, budget - size(base));
 
     /*
-     * **嫌がられたことは、決まりの側にも置く。**
+     * **並べる場所と、残す優先を、別々に持つ。**
      *
-     * 思い出す仕組み（recall）は依頼の言葉から引くので、取りこぼしうる。
-     * ここに置けば、どの回でも必ず目に入る。窓は食うが、
-     * 同じ失敗を一度でも減らせるなら安い。**だから先に取る。**
-     */
-    const hated = fitByTokens(
-      this.memory.displeasures(12),
-      (e) => e.detail || e.title,
-      Math.floor(left * 0.5),
-      // 窓が狭くても、一件は載せる。**ここを 0 にすると、狭い窓のモデルほど
-      // 同じ失敗を繰り返す。**いちばん要る所から削ることになる。
-      1,
-      count,
-    );
-    const never = hated.length === 0 ? '' : [
-      '',
-      '二度としないこと（前に同じことで止められています。話題が違っても効きます）:',
-      ...hated.map((e) => `- ${e.detail || e.title}`),
-      '同じことをもう一度すると、それまでの積み上げが無駄になります。時間をかけてよいので、繰り返さないこと。',
-    ].join('\n');
-    left = Math.max(0, left - size(never));
-
-    // 作業場の様子。**ここも数えていなかった。**大きな置き場ほど長くなる。
-    const rawBrief = snap ? describeSnapshot(snap) : '';
-    const brief = size(rawBrief) <= left ? rawBrief : '';
-    left = Math.max(0, left - size(brief));
-
-    /*
-     * **置き場の決まりを、頼むたびに貼り直させない。**
-     *
-     * `AGENTS.md` や `CLAUDE.md` を置いてある場所は多い。置いてあるなら、
-     * それが決まりなので読む。残った分だけ載せる。
-     */
-    /*
-     * **決まりが先。地図は、残ったぶんだけ。**
-     *
-     * 一度、残りを 6:4 で分ける形にした。地図に取り分を作るためだったが、
-     * **窓 4096 で決まりが丸ごと落ちた**（実測。○ → ×）。
-     * 利用者が `AGENTS.md` や `CLAUDE.md` に書いたものは、こちらが後から
-     * 足した地図より重い。しかも囲みだけで 100 前後あるので、
-     * 半端な取り分を渡すと「何も載らない」に倒れる。
-     *
-     * だから順は戻す。決まりは要るだけ取り、地図はその残り。
-     * 窓が広ければ両方載る（16852 で 決まり 1461 / 地図 567）。
-     * 狭ければ決まりだけになる。**狭いときに捨てるのは、後から足した方。**
-     */
-    const rules = await this.#projectRules.block(left, Date.now(), count);
-    left = Math.max(0, left - size(rules));
-
-    /*
-     * **作業場の地図。どこに何が在るかを、先に渡す。**
-     *
-     * これが無いと、モデルは何も知らないところから始める。`list_files` で
-     * 歩き、`search_text` で総当たりし、見当違いのファイルを何枚も開く。
-     * **探すところで窓を使い切って、直すところまで辿り着かない。**
-     * 手元の小さいモデルでは、ここが効く。
-     *
-     * 何を載せるかは、いま頼まれていることで変える（`seedFrom`）。
-     * 残った分だけ。入らなければ載せない。
-     */
-    const map = await this.#repoMap(left, count);
-
-    /*
-     * **組み上げてから、もう一度測る。**
-     *
-     * 見出しや締めの一行（「二度としないこと…」など）は、中身の予算に
-     * 入っていない。一つずつは小さいが、足すと予算を超える（実測で 70〜100）。
-     * 予算に「だいたい収まる」では、狭い窓では効かない。
-     *
-     * 超えていたら、**要らない順に落とす。**削るのではなく落とす
-     * （途中で切れた決まりは、書いていないより悪いことがある）。
-     * 決まり本体と、学びの最後の一件は落とさない。
-     */
-    /*
-     * **動かないものを先、変わるものを後ろ。**
-     *
-     * 相手（llama.cpp / ollama）は、**前と同じ頭**を再計算しない
-     * （prompt cache）。頭のどこか一文字が変われば、そこから先は全部やり直し。
-     * 前置きは依頼の前に置かれるので、ここが変わると**毎回まるごと計算し直す**。
-     * 狭い機械ほど、これがそのまま待ち時間になる。
-     *
-     * 並びは volatility の順にする。
+     * 並び（この配列の順）は、相手に計算し直させないための順。
+     * 動かないものを先、変わるものを後ろに置く。相手（llama.cpp / ollama）は
+     * 前と同じ頭を再計算しないので、頭の一文字が変わると、そこから先を
+     * 毎回まるごと計算し直すことになる。狭い機械ほど、それが待ち時間になる。
      *
      *   base   決まり本体          変わらない
      *   rules  置き場の決まり      置き場のファイルを直したときだけ
@@ -1486,18 +1411,94 @@ export class Session {
      *   brief  作業場の様子        作業が進むと変わる
      *   map    作業場の地図        **依頼ごとに変わる**
      *
-     * 直す前は base → brief → rules → map → never だったので、
-     * いちばん変わる地図の後ろに、変わらない決まりが置かれていた。
-     * 実測で、続けて別の依頼をしたとき**頭の 41% しか同じでなかった**。
+     * 優先（`priority`）は、狭いときに何を残すか。**別の理由で決まる。**
+     * 直す前はこの二つが同じもので、捨てる順を `parts` の添字で手書きして
+     * いた（`const drop = [4, 1, 3]`）。並べ替えれば黙って違うものを指す。
+     *
+     * 優先を決めた理由:
+     *   決まり本体   落とさない。無いと話にならない
+     *   嫌がられた   同じ失敗を繰り返すのがいちばん高くつく
+     *   置き場の決まり 利用者が書いたもの。こちらが後から足した地図より重い
+     *   作業場の様子  小さい。置き場の決まりより先に取らせる
+     *   地図         後から足したもの。**狭いときに捨てるのはこちら**
+     *
+     * 作業場の様子を置き場の決まりより上に置くのは、**直す前と同じ取り順に
+     * するため**。置き場の決まりは残りを全部取るので、後ろに回すと様子が
+     * 必ず 0 になる（窓 16852 で、地図まで落ちた。実測）。様子は数十で、
+     * 決まりを削るほどのものではない。
+     *
+     * なお、捨てる順は直す前と一つ変わる。前は手書きの並びで
+     * 「地図 → 置き場の決まり → 作業場の様子」の順に捨てていた。
+     * いまは優先の低い方からなので「地図 → 作業場の様子 → 置き場の決まり」。
+     * **こちらが正しい。**置き場の決まりは利用者が書いたもので、
+     * 作業場の様子はこちらが毎回作り直せる。前の並びは、
+     * 添字を手で書いていたことによる取りこぼしだったと考えている。
      */
-    const parts = [base, rules, never, brief, map];
-    // 地図 → 置き場の決まり → 作業場の様子 の順に落とす。
-    const drop = [4, 1, 3];
-    for (const at of drop) {
-      if (size(parts.filter(Boolean).join('\n\n')) <= budget) break;
-      parts[at] = '';
-    }
-    return parts.filter(Boolean).join('\n\n');
+    const { text, dropped } = await fitParts([
+      { name: '決まり本体', priority: 100, required: true, render: () => base },
+      {
+        name: '置き場の決まり',
+        priority: 60,
+        render: (left) => this.#projectRules.block(left, Date.now(), count),
+      },
+      {
+        name: '嫌がられたこと',
+        priority: 80,
+        /*
+         * **嫌がられたことは、決まりの側にも置く。**
+         *
+         * 思い出す仕組み（recall）は依頼の言葉から引くので、取りこぼしうる。
+         * ここに置けば、どの回でも必ず目に入る。窓は食うが、同じ失敗を
+         * 一度でも減らせるなら安い。
+         *
+         * 取るのは残りの半分まで。**窓が狭くても一件は載せる**
+         * （ここを 0 にすると、狭い窓のモデルほど同じ失敗を繰り返す。
+         * いちばん要る所から削ることになる）。
+         */
+        render: (left) => {
+          const hated = fitByTokens(
+            this.memory.displeasures(12),
+            (e) => e.detail || e.title,
+            Math.floor(left * 0.5),
+            1,
+            count,
+          );
+          if (hated.length === 0) return '';
+          return [
+            '',
+            '二度としないこと（前に同じことで止められています。話題が違っても効きます）:',
+            ...hated.map((e) => `- ${e.detail || e.title}`),
+            '同じことをもう一度すると、それまでの積み上げが無駄になります。時間をかけてよいので、繰り返さないこと。',
+          ].join('\n');
+        },
+      },
+      {
+        name: '作業場の様子',
+        priority: 70,
+        // 大きな置き場ほど長くなる。**入らなければ載せない**（切り詰めない）。
+        render: (left) => {
+          const raw = snap ? describeSnapshot(snap) : '';
+          return size(raw) <= left ? raw : '';
+        },
+      },
+      {
+        name: '作業場の地図',
+        priority: 20,
+        /*
+         * **どこに何が在るかを、先に渡す。**
+         *
+         * これが無いと、モデルは何も知らないところから始める。`list_files` で
+         * 歩き、`search_text` で総当たりし、見当違いのファイルを何枚も開く。
+         * 探すところで窓を使い切って、直すところまで辿り着かない。
+         * 手元の小さいモデルでは、ここが効く。
+         */
+        render: (left) => this.#repoMap(left, count),
+      },
+    ], budget, size);
+
+    // **黙って落とさない。**何が入らなかったかは、残す側が知る必要がある。
+    if (dropped.length > 0) this.#lastDropped = dropped;
+    return text;
   }
 
   /**
