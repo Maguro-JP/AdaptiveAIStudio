@@ -1494,7 +1494,31 @@ export class UiServer {
           }
           this.broadcast({ type: 'log', level: 'info', text: `モデルを読み込んでいます: ${ref}` });
           const began = Date.now();
-          await runtime.ensureLoaded(ref);
+          /*
+           * **読み込みの失敗を、一覧の失敗と混ぜない。**
+           *
+           * ここは外側の catch に落ちていたので、読み込めなかったときに
+           * 「モデルの一覧を取れません」と出ていた。一覧は取れている。
+           * しかも node-llama-cpp の中の文がそのまま出るので
+           * （`The value of "size" is out of range ... Received 7_810_759_...`）、
+           * 読んだ人には何をすればいいのか分からない。
+           *
+           * 実際に、**「モデルを読み込んでいます」から先へ進まないまま
+           * 返事が来ない**という形で当たった。
+           */
+          try {
+            await runtime.ensureLoaded(ref);
+          } catch (e) {
+            const detail = e instanceof Error ? e.message : String(e);
+            this.broadcast({
+              type: 'log', level: 'error', text: `読み込めませんでした: ${ref}`,
+            });
+            return `${ref} を読み込めませんでした。\n`
+              + '**ファイルが途中までしか落ちていない**ことが多いです。'
+              + '大きさを配布元と見比べて、違っていたら消して取り直してください。\n'
+              + `保存先: ${this.#opts.config.runtime?.modelsDir ?? modelsDir()}\n`
+              + `（中で出た文: ${detail.slice(0, 200)}）`;
+          }
           this.broadcast({
             type: 'log', level: 'info',
             text: `読み込みました: ${ref}（${((Date.now() - began) / 1000).toFixed(1)} 秒）`,
