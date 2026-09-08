@@ -23,6 +23,8 @@ const eventHandlers = new Map();
 const ctx = {
   /** 会話の入力欄へ寄せる。差し替えられる。 */
   focusInput: () => undefined,
+  /** 入力欄の先頭に文字を置く（/plan など）。チャットのパネルが繋ぐ。 */
+  prefill: () => undefined,
   /** 残してあるやりとりを並べ直す。会話の板が差し替える。 */
   showHistory: () => undefined,
   on(type, fn) {
@@ -1302,6 +1304,7 @@ async function checkForUpdate() {
 function commands() {
   const list = [
     { name: '入力へ移動', hint: 'Ctrl+/', run: () => ctx.focusInput() },
+    { name: '分解して進める', hint: '/plan を先頭に付けて送る', run: () => ctx.prefill('/plan ') },
     { name: '中断する', hint: '', run: () => fetch('/api/abort', { method: 'POST' }) },
     { name: 'いま考えさせる', hint: '', run: () => fetch('/api/think', { method: 'POST' }) },
     { name: '更新を確認する', hint: '', run: () => checkForUpdate() },

@@ -79,7 +79,8 @@ export const PANELS = {
     const field = el('div', 'field');
     const input = document.createElement('textarea');
     input.rows = 1;
-    input.placeholder = '指示を書く  （Enter で送る / Shift+Enter で改行 / 先頭に /plan で分解）';
+    // 狭い画面で切れない長さにする。/plan の案内は ⌘ の一覧にある。
+    input.placeholder = '指示を書く（Enter で送る・Shift+Enter で改行）';
     const send = el('button', 'primary send', '送る');
     // 動いていないときは、そもそも出さない。**押せないものは邪魔なだけ。**
     const stop = el('button', 'ghost icon', '■');
@@ -377,6 +378,11 @@ export const PANELS = {
     };
     stop.onclick = () => fetch('/api/abort', { method: 'POST' });
     ctx.focusInput = () => input.focus();
+    ctx.prefill = (head) => {
+      if (!input.value.startsWith(head)) input.value = head + input.value;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    };
 
     /**
      * 残してあるやりとりを、そのまま並べ直す。

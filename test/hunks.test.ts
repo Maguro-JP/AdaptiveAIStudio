@@ -82,3 +82,12 @@ describe('書き込みは、通った塊だけ', () => {
     assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), after);
   });
 });
+
+test('終わりの改行を、空の一行として数えない', () => {
+  // 「console.log(1);\n」を書いて「+2 -0、2 行目が空」と出ていた。
+  const d = unifiedDiff('hello.js', '', 'console.log(1);\n');
+  const added = d.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
+  assert.deepEqual(added, ['+console.log(1);']);
+  // 終わりの改行の有無だけの違いは、行の違いとしては出ない（承認に出す用なので、それでよい）。
+  assert.equal(unifiedDiff('a.txt', 'x', 'x\n'), '');
+});

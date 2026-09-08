@@ -8,8 +8,11 @@ export function unifiedDiff(
   after: string,
   context = 3,
 ): string {
-  const a = before === '' ? [] : before.split('\n');
-  const b = after.split('\n');
+  // 終わりの改行を、空の一行として数えない。「console.log(1);\n」を書くと
+  // 「+2 -0」で 2 行目が空、と出ていた。行は改行で区切られるものであって、
+  // 終わりの改行の後ろに行は無い。
+  const a = lines(before);
+  const b = lines(after);
   const ops = diffLines(a, b);
 
   const hunks: string[] = [];
@@ -91,4 +94,10 @@ export function diffStat(diff: string): { added: number; removed: number } {
     else if (line.startsWith('-') && !line.startsWith('---')) removed += 1;
   }
   return { added, removed };
+}
+
+/** 行に分ける。終わりの改行は一つだけ落とす（空の一行にしない）。 */
+function lines(text: string): string[] {
+  if (text === '') return [];
+  return (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n');
 }
