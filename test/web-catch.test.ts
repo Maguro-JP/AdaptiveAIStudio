@@ -21,8 +21,23 @@ import { fileURLToPath } from 'node:url';
 // **走らせる場所で結果が変わらないように、根から辿る。**
 const web = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'ui', 'web');
 
-/** いま受け手が無いもの。**この数を超えない。** */
-const CEILING = 27;
+/** いま受け手が無いもの。**この数を超えない。**（2026-09-08 に 27 から 0 まで下げた） */
+const CEILING = 0;
+
+/** `at` の位置が、閉じていない `try {` の中にあるか。 */
+function inTry(src: string, at: number): boolean {
+  let depth = 0;
+  for (let i = at - 1; i >= 0; i--) {
+    const c = src[i];
+    if (c === '}') depth++;
+    else if (c === '{') {
+      if (depth > 0) { depth--; continue; }
+      // 閉じられていない `{`。その手前が `try` なら、中に居る。
+      if (/\btry\s*$/.test(src.slice(Math.max(0, i - 8), i))) return true;
+    }
+  }
+  return false;
+}
 
 function unguarded(): string[] {
   const found: string[] = [];
@@ -31,9 +46,11 @@ function unguarded(): string[] {
     for (const m of src.matchAll(/await fetch\(/g)) {
       const at = m.index ?? 0;
       const stmt = src.slice(at, src.indexOf(';', at) + 1);
-      const before = src.slice(Math.max(0, at - 400), at);
       // その場に `.catch(` があるか、`try {` の中にいるか。
-      if (stmt.includes('.catch(') || /try\s*\{[^}]*$/.test(before)) continue;
+      // **括弧を数える。**`[^}]*$` で見ていたときは、`try {` と `fetch` の
+      // 間に `{ ... }`（引数の組み立てなど）が一つでもあると、中に居るのに
+      // 「外に居る」と読んでいた。
+      if (stmt.includes('.catch(') || inTry(src, at)) continue;
       found.push(`${file}:${src.slice(0, at).split('\n').length}`);
     }
   }

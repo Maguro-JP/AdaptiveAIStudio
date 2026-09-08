@@ -58,6 +58,44 @@ function showCrash(what, detail, tone = 'bad') {
   box.textContent = `${what}: ${detail}（押すと消えます）`;
 }
 
+/*
+ * 画面から本体へ訊く。**繋がらなかったときの受け手を、必ず通す。**
+ *
+ * `fetch(...)` をそのまま待つと、繋がらないときの例外が呼び出しの外へ
+ * 落ちる。落ちた先には受け手が居ないので、**画面には何も出ない。**押しても
+ * 何も起きない・空欄のまま、に見える。出方は違っても、元はこれ一つ。
+ *
+ * 返るのは `undefined` か、読めた中身。呼ぶ側は `undefined` を見て帰る。
+ * 何が起きたかは、ここで画面に出してある。
+ */
+async function ask(path, opts, what) {
+  let r;
+  try {
+    r = await fetch(path, { ...(opts ?? {}), signal: opts?.signal ?? AbortSignal.timeout(30000) });
+  } catch (e) {
+    showCrash(what ?? '繋がりませんでした', `${path}（${e?.message ?? e}）`);
+    return undefined;
+  }
+  const body = await r.json().catch(() => ({}));
+  return { ok: r.ok, status: r.status, body };
+}
+
+async function askJson(path, opts, what) {
+  let r;
+  try {
+    r = await fetch(path, { ...(opts ?? {}), signal: opts?.signal ?? AbortSignal.timeout(30000) });
+  } catch (e) {
+    showCrash(what ?? '繋がりませんでした', `${path}（${e?.message ?? e}）`);
+    return undefined;
+  }
+  try {
+    return await r.json();
+  } catch (e) {
+    showCrash(what ?? '読めませんでした', `${path}（${r.status}・${e?.message ?? e}）`);
+    return undefined;
+  }
+}
+
 window.addEventListener('unhandledrejection', (e) => {
   showCrash('途中で止まりました', e.reason?.message ?? String(e.reason));
 });
@@ -342,7 +380,8 @@ function applyTheme(t, vars) {
 }
 
 async function loadTheme() {
-  const r = await fetch('/api/theme').then((x) => x.json());
+  const r = await askJson('/api/theme', undefined, '色を読めませんでした');
+  if (!r) return;
   tokenNames = r.tokens;
   const sel = $('themes');
   sel.replaceChildren();
@@ -356,10 +395,11 @@ async function loadTheme() {
 }
 
 $('themes').onchange = async (e) => {
-  const r = await fetch('/api/theme/preset', {
+  const r = await askJson('/api/theme/preset', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ id: e.target.value }),
-  }).then((x) => x.json());
+  }, '色を変えられませんでした');
+  if (!r) return;
   applyTheme(r.theme, r.vars);
 };
 
@@ -421,14 +461,15 @@ $('editTheme').onclick = () => {
     $('themeEditor').removeEventListener('close', once);
     if ($('themeEditor').returnValue !== 'save') {
       // 戻す。触っただけで決まってしまわないように。
-      const r = await fetch('/api/theme').then((x) => x.json());
-      applyTheme(r.theme, r.vars);
+      const r = await askJson('/api/theme', undefined, '色を戻せませんでした');
+      if (r) applyTheme(r.theme, r.vars);
       return;
     }
-    const r = await fetch('/api/theme', {
+    const r = await askJson('/api/theme', {
       method: 'PUT', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ...draft, base: before.id, id: 'custom', name: '自分の色' }),
-    }).then((x) => x.json());
+    }, '色を保存できませんでした');
+    if (!r) return;
     applyTheme(r.theme, r.vars);
     if (r.repairs?.length) {
       // 受け取れなかった値は黙って捨てない。なぜ効かないのか分からなくなる。
@@ -441,7 +482,8 @@ $('editTheme').onclick = () => {
 /* ---------- 出し入れ ---------- */
 
 async function load() {
-  const r = await fetch('/api/layout').then((x) => x.json());
+  const r = await askJson('/api/layout', undefined, '配置を読めませんでした');
+  if (!r) return;
   layout = r.layout;
   showRepairs(r.repairs);
   const sel = $('presets');
@@ -456,10 +498,11 @@ async function load() {
 }
 
 async function save(next) {
-  const r = await fetch('/api/layout', {
+  const r = await askJson('/api/layout', {
     method: 'PUT', headers: { 'content-type': 'application/json' },
     body: JSON.stringify(next),
-  }).then((x) => x.json());
+  }, '配置を保存できませんでした');
+  if (!r) return undefined;
   layout = r.layout;
   showRepairs(r.repairs);
   return r;
@@ -710,13 +753,14 @@ async function loadMcpCatalog() {
       const secrets = {};
       for (const [env, input] of fields) if (input.value.trim()) secrets[env] = input.value.trim();
       $('ghNote').textContent = `${e.name} に繋いでいます…`;
-      const r = await fetch('/api/mcp/connect', {
+      const r = await ask('/api/mcp/connect', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id: e.id, secrets, ...(prefer ? { prefer } : {}) }),
-      });
-      const body = await r.json().catch(() => ({}));
+      }, `${e.name} に繋げませんでした`);
       // **値は画面に残さない。**入れたら消す。
       for (const [, input] of fields) input.value = '';
+      if (!r) { $('ghNote').textContent = '繋げませんでした'; return; }
+      const body = r.body;
       if (!r.ok) { $('ghNote').textContent = body.error ?? '繋げませんでした'; return; }
       $('ghNote').textContent = [
         `${e.name} を設定に書きました: ${body.path}`,
@@ -750,7 +794,9 @@ async function loadMcpCatalog() {
       off.className = 'ghost';
       off.textContent = '外す';
       off.onclick = async () => {
-        await fetch(`/api/mcp/connect?id=${encodeURIComponent(e.id)}`, { method: 'DELETE' });
+        const off1 = await ask(`/api/mcp/connect?id=${encodeURIComponent(e.id)}`,
+          { method: 'DELETE' }, `${e.name} を外せませんでした`);
+        if (!off1) return;
         $('ghNote').textContent = `${e.name} を外しました。`;
         await loadMcpCatalog();
         await loadMcp();
@@ -833,7 +879,9 @@ async function loadUnfinished() {
     stop.title = 'これはもうやらない';
     stop.textContent = '×';
     stop.addEventListener('click', async () => {
-      await fetch(`/api/unfinished?id=${encodeURIComponent(u.id)}`, { method: 'DELETE' });
+      const done = await ask(`/api/unfinished?id=${encodeURIComponent(u.id)}`,
+        { method: 'DELETE' }, 'やり残しを消せませんでした');
+      if (!done) return;
       await loadUnfinished();
     });
 
@@ -945,9 +993,9 @@ function drawConversations() {
   fresh.textContent = '＋ 新しい会話';
   fresh.disabled = busyNow;
   fresh.onclick = async () => {
-    const r = await fetch('/api/conversations', { method: 'POST' });
-    const body = await r.json();
-    if (!r.ok) return void alert(body.error ?? '始められませんでした');
+    const r = await ask('/api/conversations', { method: 'POST' }, '始められませんでした');
+    if (!r) return;
+    if (!r.ok) return void alert(r.body.error ?? '始められませんでした');
     ctx.showHistory([]);
     await loadConversations();
     // **押した結果を見せる。**トップに戻っただけなので、画面は空になる。
@@ -977,13 +1025,13 @@ function drawConversations() {
     open.className = head.id === conversations.current ? 'on' : '';
     open.disabled = busyNow;
     open.onclick = async () => {
-      const r = await fetch('/api/conversations/select', {
+      const r = await ask('/api/conversations/select', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id: head.id }),
-      });
-      const body = await r.json();
-      if (!r.ok) return void alert(body.error ?? '開けませんでした');
-      ctx.showHistory(body.messages ?? []);
+      }, '開けませんでした');
+      if (!r) return;
+      if (!r.ok) return void alert(r.body.error ?? '開けませんでした');
+      ctx.showHistory(r.body.messages ?? []);
       await loadConversations();
     };
     /*
@@ -1001,11 +1049,12 @@ function drawConversations() {
     label.onclick = async () => {
       const want = window.prompt('この会話の名前', head.title);
       if (want === null) return;
-      const r = await fetch('/api/conversations/title', {
+      const r = await ask('/api/conversations/title', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id: head.id, title: want }),
-      });
-      if (!r.ok) return void alert((await r.json()).error ?? '変えられませんでした');
+      }, '名前を変えられませんでした');
+      if (!r) return;
+      if (!r.ok) return void alert(r.body.error ?? '変えられませんでした');
       await loadConversations();
     };
     // 消すのは、押し間違えると取り返しがつかない。一度訊く。
@@ -1016,8 +1065,10 @@ function drawConversations() {
     drop.disabled = busyNow;
     drop.onclick = async () => {
       if (!confirm(`「${head.title}」を消します。戻せません。`)) return;
-      const r = await fetch(`/api/conversations?id=${encodeURIComponent(head.id)}`, { method: 'DELETE' });
-      if (!r.ok) return void alert((await r.json()).error ?? '消せませんでした');
+      const r = await ask(`/api/conversations?id=${encodeURIComponent(head.id)}`,
+        { method: 'DELETE' }, '消せませんでした');
+      if (!r) return;
+      if (!r.ok) return void alert(r.body.error ?? '消せませんでした');
       if (head.id === conversations.current) ctx.showHistory([]);
       await loadConversations();
     };
@@ -1045,7 +1096,7 @@ async function pickWorkRoot() {
   const nowAt = $('workNow').textContent ?? '';
   const want = window.prompt('直してほしいコードのある場所を打ってください。\n（空にすると既定へ戻ります）', nowAt);
   if (want === null) return;
-  const r = await fetch('/api/config', {
+  const r = await ask('/api/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1053,8 +1104,9 @@ async function pickWorkRoot() {
       modelsDir: $('cfgModelsDir')?.value?.trim() ?? '',
       workRoot: want.trim(),
     }),
-  });
-  const body = await r.json().catch(() => ({}));
+  }, 'フォルダを変えられませんでした');
+  if (!r) return;
+  const body = r.body;
   if (!r.ok) { alert(body.error ?? '変えられませんでした'); return; }
   // 打ち間違えても保存はできる。**そのときは言う。**
   if (body.workNote) alert(body.workNote);
@@ -1187,10 +1239,11 @@ $('editor').addEventListener('close', async () => {
 });
 
 $('presets').onchange = async (e) => {
-  const r = await fetch('/api/layout/preset', {
+  const r = await askJson('/api/layout/preset', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ id: e.target.value }),
-  }).then((x) => x.json());
+  }, '配置を変えられませんでした');
+  if (!r) return;
   layout = r.layout;
   render();
 };
@@ -1202,7 +1255,8 @@ $('presets').onchange = async (e) => {
  * 中身を見ずに新しくするのは、動いているものを賭けに出すのと同じ。
  */
 async function checkForUpdate() {
-  const status = await (await fetch('/api/update')).json();
+  const status = await askJson('/api/update', undefined, '更新を見に行けませんでした');
+  if (!status) return;
   if (!status.can) {
     alert(status.reason || '更新できません');
     return;
@@ -1210,8 +1264,9 @@ async function checkForUpdate() {
   const list = status.incoming.map((c) => `  ${c}`).join('\n');
   if (!confirm(`${status.behind}件の変更があります。\n\n${list}\n\n取り込みますか？`)) return;
 
-  const r = await fetch('/api/update', { method: 'POST' });
-  const result = await r.json();
+  const r = await ask('/api/update', { method: 'POST' }, '更新できませんでした');
+  if (!r) return;
+  const result = r.body;
   // 取り込んだ後は、動いているコードと置いてあるコードがズレている。
   // 黙って立ち上げ直さず、訊いてから。断られたら、ズレたまま使わせる
   // のではなく、後で押せる場所（設定）を示す。
@@ -1433,11 +1488,12 @@ async function loadCfg() {
     use.textContent = chosen ? '使う（いまこれ）' : 'これを使う';
     use.disabled = chosen;
     use.onclick = async () => {
-      const r = await fetch('/api/config', {
+      const r = await ask('/api/config', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kind: $('cfgKind').value, modelsDir: $('cfgModelsDir').value.trim(), model: m.ref }),
-      });
-      const body = await r.json().catch(() => ({}));
+      }, '保存できませんでした');
+      if (!r) return;
+      const body = r.body;
       $('cfgNote').textContent = r.ok
         ? (body.restartNeeded ? `${m.ref} を使います。立ち上げ直すと効きます。` : `${m.ref} を使います。`)
         : (body.error ?? '保存できませんでした');
@@ -1470,11 +1526,12 @@ async function loadCatalog() {
 /** 取ってくる。名前でも URL でも、一覧からでも、同じ道を通す。 */
 async function getModel(id) {
   if (!id) { $('cfgGetNote').textContent = '取ってくる先がありません。'; return; }
-  const r = await fetch('/api/models/get', {
+  const r = await ask('/api/models/get', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ id }),
-  });
-  const body = await r.json().catch(() => ({}));
+  }, '取ってこられませんでした');
+  if (!r) return;
+  const body = r.body;
   // 数GBかかる。**終わるまで待たせない**ので、どこを見ればいいかを言う。
   $('cfgGetNote').style.whiteSpace = 'pre-line';
   $('cfgGetNote').textContent = r.ok
@@ -1489,8 +1546,9 @@ $('cfgReload').onclick = () => { void loadCfg(); };
 /** 止めて、起き上がるまで待って、読み直す。設定の後と更新の後、どちらからも呼ぶ。 */
 async function restartAndReload(note) {
   note.style.whiteSpace = 'pre-line';
-  const r = await fetch('/api/restart', { method: 'POST' });
-  const body = await r.json().catch(() => ({}));
+  const r = await ask('/api/restart', { method: 'POST' }, '立ち上げ直せませんでした');
+  if (!r) { note.textContent = '立ち上げ直せませんでした'; return; }
+  const body = r.body;
   if (!r.ok) { note.textContent = body.error ?? '立ち上げ直せませんでした'; return; }
   if (!body.relaunches) {
     // 入口が起こし直してくれない（npm run ui など）。閉じることだけ伝える。
@@ -1510,15 +1568,16 @@ async function restartAndReload(note) {
 
 $('cfgRestart').onclick = () => restartAndReload($('cfgNote'));
 $('cfgSave').onclick = async () => {
-  const r = await fetch('/api/config', {
+  const r = await ask('/api/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       kind: $('cfgKind').value,
       modelsDir: $('cfgModelsDir').value.trim(),
     }),
-  });
-  const body = await r.json().catch(() => ({}));
+  }, '保存できませんでした');
+  if (!r) { $('cfgNote').textContent = '保存できませんでした'; return; }
+  const body = r.body;
   if (!r.ok) { $('cfgNote').textContent = body.error ?? '保存できませんでした'; return; }
   // 黙って効いた顔をしない。切り替えは立ち上げ直すまで効かない。
   // 置き場が無いまま保存できてしまう。保存できたことと、動くことは別。
@@ -1549,13 +1608,13 @@ async function loadChecks() {
     b.onclick = async () => {
       out.textContent = '';
       for (const x of buttons) x.disabled = true;
-      const r = await fetch('/api/task', {
+      const r = await ask('/api/task', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: t.id }),
-      });
-      if (!r.ok) {
+      }, '始められませんでした');
+      if (!r || !r.ok) {
         for (const x of buttons) x.disabled = false;
-        out.textContent = (await r.json().catch(() => ({}))).error ?? '始められませんでした';
+        out.textContent = r?.body?.error ?? '始められませんでした';
       }
     };
     buttons.push(b);

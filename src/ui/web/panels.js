@@ -752,10 +752,14 @@ export const PANELS = {
         const drop = el('button', 'ghost tiny', '忘れる');
         drop.title = 'この覚えを消す';
         drop.onclick = async () => {
-          const r = await fetch(`/api/memory?id=${encodeURIComponent(m.id)}`, { method: 'DELETE' });
-          if (!r.ok) {
-            const body = await r.json().catch(() => ({}));
-            alert(body.error ?? '消せませんでした');
+          try {
+            const r = await fetch(`/api/memory?id=${encodeURIComponent(m.id)}`, { method: 'DELETE' });
+            if (!r.ok) {
+              const body = await r.json().catch(() => ({}));
+              alert(body.error ?? '消せませんでした');
+            }
+          } catch (e) {
+            alert(`消せませんでした（${e?.message ?? e}）`);
           }
         };
         row.append(drop);
@@ -799,10 +803,15 @@ export const PANELS = {
         const no = el('button', '', '却下');
         const decide = async (verdict) => {
           menu.replaceChildren(el('span', 'dim', verdict === 'accepted' ? '着手します…' : '却下しました'));
-          await fetch('/api/proposal', {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: p.id, verdict }),
-          });
+          try {
+            await fetch('/api/proposal', {
+              method: 'POST', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ id: p.id, verdict }),
+            });
+          } catch (e) {
+            menu.replaceChildren(el('span', 'warn', `伝えられませんでした（${e?.message ?? e}）`));
+            return;
+          }
           setTimeout(draw, 400);
         };
         yes.onclick = () => decide('accepted');
@@ -817,7 +826,15 @@ export const PANELS = {
       foot.append(el('span', 'dim', `この1時間で考えた量 ${r.spent}`));
       if (r.due.length > 0) foot.append(el('span', 'warn', `未了の日課: ${r.due.join(', ')}`));
       const now = el('button', 'ghost tiny', 'いま考えさせる');
-      now.onclick = async () => { await fetch('/api/think', { method: 'POST' }); setTimeout(draw, 800); };
+      now.onclick = async () => {
+        try {
+          await fetch('/api/think', { method: 'POST' });
+        } catch (e) {
+          note('bad', `考えさせられませんでした（${e?.message ?? e}）`);
+          return;
+        }
+        setTimeout(draw, 800);
+      };
       foot.append(now);
       body.append(foot);
     };
@@ -944,10 +961,18 @@ export const PANELS = {
         get.onclick = async () => {
           get.disabled = true;
           get.textContent = `${m.id} を取得中…`;
-          const res = await fetch('/api/models/get', {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: m.id }),
-          });
+          let res;
+          try {
+            res = await fetch('/api/models/get', {
+              method: 'POST', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ id: m.id }),
+            });
+          } catch (e) {
+            alert(`取ってこられませんでした（${e?.message ?? e}）`);
+            get.disabled = false;
+            get.textContent = `${m.id}（約${m.approxGB}GB）`;
+            return;
+          }
           if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             alert(err.error || '取ってこられませんでした');
@@ -1143,11 +1168,18 @@ export const PANELS = {
         b.onclick = async () => {
           out.textContent = '';
           busy(true);
-          const r = await fetch('/api/task', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ name: t.id }),
-          });
+          let r;
+          try {
+            r = await fetch('/api/task', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ name: t.id }),
+            });
+          } catch (e) {
+            busy(false);
+            out.textContent = `始められませんでした（${e?.message ?? e}）`;
+            return;
+          }
           if (!r.ok) {
             busy(false);
             out.textContent = (await r.json().catch(() => ({}))).error ?? '始められませんでした';
