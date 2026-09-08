@@ -9,6 +9,7 @@ import { renderDiff, splitHunkTexts } from './diff.js';
 import { decorate } from './color.js';
 import { verdictText, slowNote } from './verdict.js';
 import { renderMarkdown } from './markdown.js';
+import { isSendKey, isPlainEnter } from './keys.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -366,7 +367,8 @@ export const PANELS = {
 
     form.onsubmit = (e) => { e.preventDefault(); void submit(); };
     input.onkeydown = (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); }
+      // 日本語入力の変換を確定する Enter では送らない（keys.js）。
+      if (isSendKey(e)) { e.preventDefault(); void submit(); }
     };
     // 書いた分だけ伸びる。書きながら全体が見える。
     input.oninput = () => {
@@ -1059,7 +1061,7 @@ export const PANELS = {
       setTimeout(() => { frame.src = src; }, 0);
     };
     open.onclick = () => { if (frame.src) window.open(frame.src, '_blank', 'noopener'); };
-    addr.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } };
+    addr.onkeydown = (e) => { if (isPlainEnter(e)) { e.preventDefault(); go(); } };
 
     void (async () => {
       try {

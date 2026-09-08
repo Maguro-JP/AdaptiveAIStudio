@@ -8,6 +8,7 @@
 import { PANELS, TITLES } from './panels.js';
 import { closePanel, openPanel, movePanel, panelsInUse } from './layout-ops.js';
 import { doingText } from './doing.js';
+import { isPlainEnter } from './keys.js';
 import { openPicker } from './color.js';
 
 const root = document.getElementById('editor');
@@ -1354,7 +1355,7 @@ function openPalette() {
   input.onkeydown = (e) => {
     if (e.key === 'ArrowDown') { cursor = Math.min(cursor + 1, shown.length - 1); draw(); e.preventDefault(); }
     else if (e.key === 'ArrowUp') { cursor = Math.max(cursor - 1, 0); draw(); e.preventDefault(); }
-    else if (e.key === 'Enter') { e.preventDefault(); const c = shown[cursor]; dlg.close(); c?.run(); }
+    else if (isPlainEnter(e)) { e.preventDefault(); const c = shown[cursor]; dlg.close(); c?.run(); }
   };
   draw();
   dlg.showModal();
