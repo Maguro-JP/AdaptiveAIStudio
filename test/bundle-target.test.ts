@@ -84,3 +84,47 @@ describe('配る先のものだけを残す', () => {
     assert.equal(targetFromNodeDir('なにこれ'), undefined);
   });
 });
+
+/**
+ * `--node-exe` のとき、組んでいる機械の側を配る先にしていた。
+ *
+ * `--node-here` なら、いま動かしている Node がそのまま入るので、配る先は
+ * この機械でよい。**`--node-exe` は違う。**渡されたのは別の機械むけの Node で、
+ * そこが配る先。ここを一緒くたにしていたので、Linux で `--node-exe node.exe`
+ * と組むと配る先が `linux-x64` になり、**`win-x64` を落として Linux の binary
+ * だけを残した。**Windows で開いてもモデルを読めない。実測 811MB のうち、
+ * win-x64 は 1 バイトも入っていなかった。
+ */
+describe('配る先を、渡された Node から決める', () => {
+  test('MZ で始まるものは Windows', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { guessTarget } = await import('../scripts/bundle.mjs');
+    const { tempDir } = await import('./tmp.ts');
+    const dir = await tempDir('aas-target-');
+    const exe = join(dir, 'node.exe');
+    await writeFile(exe, Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03]));
+    assert.equal(await guessTarget({ nodeExe: exe }), 'win-x64');
+  });
+
+  test('**読めないものは、決めない**', async () => {
+    // 当て推量で消すと、要るものを消したものが黙って出ていく。
+    const { writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { guessTarget } = await import('../scripts/bundle.mjs');
+    const { tempDir } = await import('./tmp.ts');
+    const dir = await tempDir('aas-target2-');
+    const odd = join(dir, 'node.bin');
+    await writeFile(odd, 'これは実行ファイルではありません');
+    assert.equal(await guessTarget({ nodeExe: odd }), undefined);
+    assert.equal(await guessTarget({ nodeExe: join(dir, '無い') }), undefined);
+    assert.equal(await guessTarget({}), undefined);
+  });
+
+  test('--node-here は、この機械（対）', async () => {
+    // ここだけは当て推量ではない。いま動かしている Node がそのまま入る。
+    const { guessTarget } = await import('../scripts/bundle.mjs');
+    const got = await guessTarget({ nodeHere: true });
+    assert.equal(got, `${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`);
+  });
+});

@@ -3472,3 +3472,32 @@ SyntaxError: Expected double-quoted property name in JSON at position 33
 `test/doctor-inproc.test.ts` と `test/listen.test.ts`。それぞれ、逃がしたことを
 言う所と、見分けて受け止める所を外すと落ちることを確かめた。
 **どちらも Windows では動かしていない**（全角の道は環境変数で作った）。
+
+## Windows むけに組むと、Windows の binary が消えていた
+
+手元で Windows むけの bundle を組んで、中身を数えたら **811MB** あった。
+前に組んだときは 238MB だったので、開いて見た。
+
+`@node-llama-cpp` の中身が `linux-x64` `linux-x64-cuda` `linux-x64-cuda-ext`
+`linux-x64-vulkan` の四つで、**`win-x64` が 1 バイトも入っていなかった。**
+Windows で開いても、モデルを読むところが動かない。
+
+配る先の決め方に穴があった。
+
+- `--node-here` … いま動かしている Node がそのまま入る。配る先はこの機械
+- `--node-zip`  … 取り出した中の名前（node-v24.18.0-win-x64）から読む
+- `--node-exe`  … **決め手が無いので、組んでいる機械の側にしていた**
+
+三つ目が誤り。渡されたのは別の機械むけの Node で、そこが配る先。
+Linux で `--node-exe node.exe` と組むと配る先が `linux-x64` になり、
+**`win-x64` を落として Linux のものを残す。**しかも release のワークフローも、
+bootstrap.cmd も、この形で組んでいる。
+
+渡された実行ファイルの先頭を見て決める（MZ なら Windows、ELF なら Linux）。
+読めなければ**落とさない**。当て推量で消すと、黙って壊れたものが出ていく
+——同じことを、ファイル名から読んでいた頃にも一度やっている。
+
+直したあと、同じ手順で 811MB → **225MB**、残ったのは `win-x64` だけ。
+`test/bundle-target.test.ts`。MZ を見る所を外すと落ちることを確かめた。
+
+**Windows では動かしていない。**確かめたのは、中に何が入っているかまで。

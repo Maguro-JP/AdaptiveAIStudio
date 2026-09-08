@@ -23,6 +23,8 @@ export function bundle(opts: {
 export const DEPTH_BUDGET: number;
 /** 中でいちばん深いもの（根からの相対）。 */
 export function deepest(dir: string): Promise<{ rel: string; length: number }>;
+/** 配る先を、分かる範囲で決める。分からなければ undefined（当て推量はしない）。 */
+export function guessTarget(how: { nodeHere?: boolean; nodeExe?: string }): Promise<string | undefined>;
 /** 押せばいい入口の元のファイル。開発中は launcher.cmd、組んだものの中では一つ上の AdaptiveAIStudio.cmd。 */
 export function launcherIn(srcRoot: string): string;
 /** --version が無いときの版。git に訊けるなら短い印まで足す。 */

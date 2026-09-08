@@ -111,6 +111,31 @@ export function targetFromNodeDir(name) {
 }
 
 /**
+ * 配る先を、分かる範囲で決める。分からなければ `undefined`。
+ *
+ * ・`--node-here`  … いま動かしている Node が入る。この機械が配る先
+ * ・`--node-exe`   … 渡された実行ファイルの先頭を見る（`MZ` なら Windows）
+ *
+ * **当て推量はしない。**外れると、要るものを消したものが黙って出ていく。
+ */
+export async function guessTarget({ nodeHere, nodeExe }) {
+  if (nodeHere) {
+    return `${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`;
+  }
+  if (!nodeExe) return undefined;
+  const head = await readFile(nodeExe).then((b) => b.subarray(0, 4)).catch(() => undefined);
+  if (!head) return undefined;
+  // Windows の実行ファイルは MZ で始まる。arch までは読まないので x64 と見る
+  // （配っているのは win-x64 だけ。増えたら --target を渡す）。
+  if (head[0] === 0x4d && head[1] === 0x5a) return 'win-x64';
+  // ELF（Linux）は 0x7f "ELF"。これはこの機械と同じ形なので、そのまま。
+  if (head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46) {
+    return `linux-${process.arch}`;
+  }
+  return undefined;
+}
+
+/**
  * 配る先で使わないものを落とす。
  *
  * **入れっぱなしだった。**`@node-llama-cpp` は走らせる場所ごとに別の
@@ -450,10 +475,20 @@ export async function bundle({
    * 配る先が決まらないときは**落とさない**。当て推量で消すと、要るものを
    * 消したものが黙って出ていく（実際に win-x64 を消した）。
    */
-  const shipTo = target ?? from
-    ?? ((nodeHere || nodeExe)
-      ? `${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`
-      : undefined);
+  /*
+   * **`--node-exe` のとき、組んでいる機械の側を配る先にしていた。**
+   *
+   * `--node-here` なら、いま動かしている Node がそのまま入るので、配る先は
+   * この機械でよい。**`--node-exe` は違う。**渡されたのは別の機械むけの
+   * Node で、そこが配る先。ここを一緒くたにしていたので、Linux で
+   * `--node-exe node.exe` と組むと**配る先が linux-x64 になり、`win-x64` を
+   * 落として Linux の binary だけを残した。**Windows で開いてもモデルを
+   * 読めない。実測 811MB のうち、win-x64 は 1 バイトも入っていなかった。
+   *
+   * 渡された実行ファイルの先頭を見れば分かる（`MZ` なら Windows）。
+   * 読めなければ**落とさない**。当て推量で消すと、黙って壊れたものが出ていく。
+   */
+  const shipTo = target ?? from ?? await guessTarget({ nodeHere, nodeExe });
   if (shipTo) {
     log(`  配る先: ${shipTo}`);
     await pruneForTarget(join(app, 'node_modules'), shipTo, log);
