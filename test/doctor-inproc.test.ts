@@ -303,3 +303,44 @@ describe('根に全角が混ざっているとき', () => {
     assert.ok(!/逃がしています/.test(plain), `半角なのに出ている: ${plain.slice(-300)}`);
   });
 });
+
+/**
+ * 「無い」と「そこが無い」を分ける。
+ *
+ * その場所が丸ごと無いときも「GGUF がありません」と言っていた。打ち間違えた
+ * 道を渡したときに出るのがこれなので、**GGUF を探しに行かせてしまう。**
+ * 探しても見つからない——そこは初めから無いので。
+ */
+describe('モデルの保存先そのものが無いとき', () => {
+  test('「そこが見つかりません」と言う', async () => {
+    const { mkdir } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { execFile } = await import('node:child_process');
+    const { fileURLToPath } = await import('node:url');
+    const { tempDir } = await import('./tmp.ts');
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const home = await tempDir('aas-nodir-');
+
+    const run = (models: string) => new Promise<string>((ok) => {
+      execFile(
+        process.execPath,
+        ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', 'doctor.ts')],
+        {
+          env: { ...process.env, AAS_HOME: home, AAS_MODELS_DIR: models },
+          encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
+        },
+        (_e, stdout, stderr) => ok(`${stdout}${stderr}`),
+      );
+    });
+
+    const missing = await run(join(home, 'どこにも無い', 'models'));
+    assert.match(missing, /が見つかりません/, `言っていない: ${missing.slice(-400)}`);
+    assert.ok(!/に GGUF がありません/.test(missing), 'GGUF を探しに行かせている');
+
+    // **在るけれど空、のときは今までどおり（対）。**分けた意味が無くなる。
+    const empty = join(home, 'models');
+    await mkdir(empty, { recursive: true });
+    const there = await run(empty);
+    assert.match(there, /に GGUF がありません/, `言い方が変わっている: ${there.slice(-400)}`);
+  });
+});

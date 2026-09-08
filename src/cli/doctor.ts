@@ -160,7 +160,21 @@ if (models.length > 0) {
     + '     オフロードの計算は GGUF を直接読んで行います（docs/GGUF.md）。');
 } else {
   const dir = config.runtime?.modelsDir ?? defaultModelsDir();
-  add('モデル', 'bad', `${dir} に GGUF がありません`,
+  /*
+   * **「無い」と「そこが無い」を分ける。**
+   *
+   * ここは、その場所が丸ごと無いときも「GGUF がありません」と言っていた。
+   * 打ち間違えた道を渡したときに出るのがこれなので、**GGUF を探しに
+   * 行かせてしまう。**探しても見つからない——そこは初めから無いので。
+   */
+  const { stat: statDir } = await import('node:fs/promises');
+  const there = await statDir(dir).then((st) => st.isDirectory(), () => false);
+  if (!there) {
+    add('モデル', 'bad', `${dir} が見つかりません`,
+      'その場所が在りません（打ち間違い、または消えています）。'
+      + '画面の 設定 → モデル で、いま見ている場所を確かめてください。'
+      + `いまの設定は ${config.runtime?.modelsDir ? '設定ファイルの modelsDir' : '既定'} です。`);
+  } else add('モデル', 'bad', `${dir} に GGUF がありません`,
     (runtime.id === 'inproc'
       ? 'この置き場に .gguf を1つ入れるだけで動きます。取ってくる先の例:\n'
         + '  https://huggingface.co/Qwen （名前に GGUF が付いたもの）\n'
