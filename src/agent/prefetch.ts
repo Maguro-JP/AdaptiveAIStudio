@@ -12,6 +12,7 @@ import { readdir, stat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { inspectGit, type GitState } from './git.ts';
 import { toDisplayPath } from './tools/paths.ts';
+import { canRun } from '../core/which.ts';
 
 export interface ProjectSnapshot {
   /** ファイル一覧（作業ディレクトリからの相対パス） */
@@ -187,17 +188,17 @@ export class Prefetcher {
         : await exists('yarn.lock') ? 'yarn'
         : await exists('bun.lockb') || await exists('bun.lock') ? 'bun'
         : 'npm';
-      // `test` だけ、どの道具も素で受ける。それ以外は `run` を挟む。
-      const run = (name: string) => (name === 'test' && pm !== 'bun' ? `${pm} test` : `${pm} run ${name}`);
+      const run = (name: string) => scriptCommand(pm, name, scripts, canRun);
 
+      const put = (name: string) => {
+        if (!has(name)) return {};
+        const cmd = run(name);
+        return cmd ? { [name]: cmd } : {};
+      };
       return {
         kind: 'Node.js',
         commands: {
-          ...(has('test') ? { test: run('test') } : {}),
-          ...(has('build') ? { build: run('build') } : {}),
-          ...(has('lint') ? { lint: run('lint') } : {}),
-          ...(has('typecheck') ? { typecheck: run('typecheck') } : {}),
-          ...(has('check') ? { check: run('check') } : {}),
+          ...put('test'), ...put('build'), ...put('lint'), ...put('typecheck'), ...put('check'),
         },
       };
     }
@@ -246,4 +247,30 @@ export function describeSnapshot(s: ProjectSnapshot): string {
 
   lines.push('', 'この情報は既に取得済みです。同じことを調べ直す必要はありません。');
   return lines.join('\n');
+}
+
+/*
+ * その仕事を、この機械でどう打つか。
+ *
+ * **配ったものには npm が入っていない**（同梱しているのは node だけ）。
+ * それでも `npm test` と組み立てていたので、配った先では
+ * **作業前の控えも、書いたあとの検証も、一度も回らない。**
+ * 「書いて終わりにしない」が AdaptiveAIStudio の中心なのに、そこが黙って抜けていた。
+ *
+ * npm が呼べないときは、package.json に書いてある中身をそのまま打つ。
+ * `node …` で始まるものはそれで動く（入口が runtime を PATH に足している）。
+ * それも無理なら**打ち方を返さない**。打てない命令を返すと、落ちたのが
+ * 「直っていないから」なのか「打てなかったから」なのか、区別できなくなる。
+ */
+export function scriptCommand(
+  pm: string,
+  name: string,
+  scripts: Record<string, unknown>,
+  can: (command: string) => boolean,
+): string | undefined {
+  // `test` だけ、どの道具も素で受ける。それ以外は `run` を挟む。
+  if (can(pm)) return name === 'test' && pm !== 'bun' ? `${pm} test` : `${pm} run ${name}`;
+  const body = scripts[name];
+  if (typeof body !== 'string') return undefined;
+  return /^node\s/.test(body.trim()) && can('node') ? body.trim() : undefined;
 }

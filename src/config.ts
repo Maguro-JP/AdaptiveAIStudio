@@ -471,7 +471,7 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
  * 書かせると、番号を間違えたときに「繋がりません」とだけ出て終わる。
  * 決め打ちの番号（INPROC_PORT）を、ここで入れておく。
  */
-function wireInProc(c: AasConfig): void {
+export function wireInProc(c: AasConfig): void {
   if (c.runtime?.kind !== 'inproc') return;
   const url = `http://127.0.0.1:${c.runtime.basePort ?? INPROC_PORT}/v1`;
   const at = c.providers.findIndex((p) => p.kind === 'openai-compatible' && p.locality === 'local');

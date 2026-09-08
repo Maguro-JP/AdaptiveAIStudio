@@ -9,6 +9,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { until } from './until.ts';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -261,15 +262,20 @@ describe('通った段の次は、待たずに次へ', () => {
       const session = await s.session();
       // **見回りは一度だけ。**あとは自分で次へ進むこと。
       assert.equal(await s.idleTick(session), 'RESUMED');
-      for (let i = 0; i < 400; i += 1) {
+      /*
+       * **回数で待たない。**400 回 × 50ms＝20 秒で切っていたので、
+       * この機械では通り、**配る先（Windows）では落ちた**。落ちたのは
+       * 遅かっただけで、待たずに次へ進んでいないことの証拠ではない。
+       * 起きるまで見る／上限で諦める、に直す。
+       */
+      await until(async () => {
         const g = await (await fetch(`${base}/api/goals`)).json() as {
           list: { steps: { state: string }[] }[];
         };
         const mine = g.list.find((x) => x.steps.length === 3);
-        if (!mine) break; // 全部済んで閉じた
-        if (mine.steps.every((st) => st.state === 'done')) break;
-        await new Promise((r) => setTimeout(r, 50));
-      }
+        if (!mine) return true; // 全部済んで閉じた
+        return mine.steps.every((st) => st.state === 'done');
+      }, '三段とも済む', { timeoutMs: 180_000, everyMs: 50 });
       const asked3 = asked.filter((a) => a.includes('ほかの段には手を出さない'));
       assert.ok(
         asked3.some((a) => a.includes('三段目')),

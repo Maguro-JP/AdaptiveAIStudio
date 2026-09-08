@@ -52,6 +52,38 @@ const LLAMA_LIB = 'node-llama-cpp';
  */
 export const INPROC_PORT = 4177;
 
+/**
+ * その口が空いているか。空いていなければ、次を探す。
+ *
+ * **決まった口を取り合わない。**もう一つ立ち上がっていたり、前のものが
+ * 残っていたりすると、モデルの口（4177）が埋まる。そのとき出るのは
+ * 「既に使われています」で、押した人には**モデルが読めない**としか見えない。
+ * この機械で三度踏んだ。空いているものを選べば起きない。
+ *
+ * 探すのは近い番号から。**0（何でもよい）にしない。**繋ぐ側は設定から
+ * 番号を組み立てるので、ここで決めた番号を設定へ書き戻す必要がある。
+ */
+export async function freePortFrom(
+  preferred: number,
+  tries = 20,
+  listen: (port: number) => Promise<boolean> = probe,
+): Promise<number | undefined> {
+  for (let i = 0; i < tries; i += 1) {
+    if (await listen(preferred + i)) return preferred + i;
+  }
+  return undefined;
+}
+
+/** その口で待てるかを、実際に開いて確かめる。開いたら閉じる。 */
+async function probe(port: number): Promise<boolean> {
+  const { createServer } = await import('node:net');
+  return await new Promise<boolean>((ok) => {
+    const s = createServer();
+    s.once('error', () => ok(false));
+    s.listen(port, '127.0.0.1', () => { s.close(() => ok(true)); });
+  });
+}
+
 export interface InProcOptions {
   /** GGUF の置き場 */
   modelsDir: string;

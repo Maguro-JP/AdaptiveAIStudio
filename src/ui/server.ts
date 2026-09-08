@@ -47,7 +47,7 @@ import { collectState } from './state.ts';
 import { Attachments, MAX_BYTES } from './attachments.ts';
 import { expandMentions, mentionBudget } from '../agent/mention.ts';
 import { PreviewServer } from './preview.ts';
-import { configPath, type AasConfig } from '../config.ts';
+import { configPath, wireInProc, type AasConfig } from '../config.ts';
 import { TaskRunner } from './tasks.ts';
 import { describeServers } from '../mcp/tools.ts';
 import { listenOrExplain } from '../core/listen.ts';
@@ -56,7 +56,9 @@ import {
   RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
   inspectModelsDir, ensureDefaultModelsDir, savedModelsDir,
 } from './settings.ts';
-import { listGguf, chooseModel, tooBigForRam, looksLikeGguf } from '../runtime/inproc.ts';
+import {
+  listGguf, chooseModel, tooBigForRam, looksLikeGguf, freePortFrom, INPROC_PORT,
+} from '../runtime/inproc.ts';
 import { totalmem } from 'node:os';
 import { Session } from '../core/session.ts';
 import type { ApprovalRequest, ApprovalAnswer } from '../agent/tools/types.ts';
@@ -279,12 +281,37 @@ export class UiServer {
     // 塞がっていたら、番号だけでなく**次の一手**まで言う。
     const actual = await listenOrExplain(server, { port, host, what: '画面' });
     this.#url = `http://${host}:${actual}/`;
+    await this.#pickInProcPort();
     // 前に渡された添付を片づける。その依頼が終われば要らない。
     // 溜めない。消したら、消した量を言う（黙って消さない）。
     void this.#attachments.sweep().then((freed) => {
       if (freed > 0) this.broadcast({ type: 'log', level: 'info', text: `前の添付を片づけました（${Math.round(freed / 1024)} KB）` });
     }).catch(() => undefined);
     return this.#url;
+  }
+
+  /**
+   * モデルの口を、**始める前に決める。**
+   *
+   * この中で読む道は 4177 で待つ。もう一つ立ち上がっていたり、前のものが
+   * 残っていたりすると埋まっていて、**モデルを読むところで初めて失敗する。**
+   * 押した人には「モデルが読めない」としか見えない（この機械で三度踏んだ）。
+   *
+   * 空いている番号をここで選び、**設定へ書き戻す。**繋ぐ側は設定から
+   * 組み立てるので、書き戻さないと待つ側と繋ぐ側が別の番号を向く。
+   */
+  async #pickInProcPort(): Promise<void> {
+    const rc = this.#opts.config.runtime;
+    if (rc?.kind !== 'inproc') return;
+    const preferred = rc.basePort ?? INPROC_PORT;
+    const free = await freePortFrom(preferred);
+    if (free === undefined || free === preferred) return;
+    rc.basePort = free;
+    wireInProc(this.#opts.config);
+    this.broadcast({
+      type: 'log', level: 'info',
+      text: `モデルの口 ${preferred} が埋まっていたので、${free} で待ちます`,
+    });
   }
 
   /**
@@ -915,7 +942,16 @@ export class UiServer {
     if (path === '/api/ready' && req.method === 'GET') {
       const missing = await this.#readyToThink(false).catch(
         (e: unknown) => `見に行けませんでした: ${(e as Error).message}`);
-      return send(res, 200, { ready: !missing, why: missing ?? '' });
+      /*
+       * **「まだ読んでいない」は、使えないことではない。**
+       *
+       * モデルは頼まれたときに読む（立ち上げた直後に数GBを読むと、何も
+       * 頼んでいないのに機械が塞がる）。その状態をここで「まだ話せません」
+       * として出していたので、**モデルを置いてある機械でも、開くたびに
+       * 使えないと言われる。**言われた側は、置いたはずのものを疑いに行く。
+       */
+      const notReady = missing === NOT_LOADED_YET ? undefined : missing;
+      return send(res, 200, { ready: !notReady, why: notReady ?? '' });
     }
 
     if (path === '/api/config' && req.method === 'GET') {
@@ -1616,7 +1652,7 @@ export class UiServer {
       const models = await runtime.list();
       if (models.length > 0) {
         if (runtime.id === 'inproc' && runtime.loaded().length === 0 && !load) {
-          return 'モデルをまだ読んでいません（頼まれたときに読みます）';
+          return NOT_LOADED_YET;
         }
         // この中で読む道では、**読むまで口が立たない。**
         // 先に読ませておかないと、上の層は繋がらない先を叩くことになる。
@@ -2283,6 +2319,14 @@ export class BodyTooLarge extends Error {
  * 逆（linux の `/home/...` を Windows で）は絶対の道として扱われるので、
  * 名前になってしまうこちら側だけを止める。
  */
+/**
+ * まだ読んでいないだけ、を表す合図。
+ *
+ * 「無い」と「まだ読んでいない」は別。**同じ顔で出すと、置いてある人にも
+ * 「使えません」と言うことになる。**文面の一致で判じないよう、名前で持つ。
+ */
+const NOT_LOADED_YET = 'モデルをまだ読んでいません（頼まれたときに読みます）';
+
 export function foreignPath(p: string | undefined): boolean {
   if (typeof p !== 'string' || p.length === 0) return false;
   return process.platform !== 'win32' && /^[A-Za-z]:[\\/]/.test(p);

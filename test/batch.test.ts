@@ -213,22 +213,29 @@ describe('入口は、ZIP の中から押されたときを受け止める', () 
     assert.doesNotMatch(new TextDecoder('shift_jis').decode(raw), /\uFFFD/, 'CP932 として読めない');
   });
 
-  test('bundle に、この入口がそのまま入る', async () => {
+  /*
+   * **ここで bundle を丸ごと組まない。**
+   *
+   * 前は、この一行を確かめるために 200MB を組んでいた。この機械では 30 秒、
+   * **配る先（Windows・クラウドドライブの下）では 233 秒かかって落ちた。**
+   * 何が落ちたのかも分からない。組み上がるかどうかは `npm run check:bundle`
+   * の持ち場で、ここで見たいのは「入口を組み立て直していないか」だけ。
+   */
+  test('入口は、組み立て直さずにそのまま置く', async () => {
     const { readFile } = await import('node:fs/promises');
     const { join, dirname } = await import('node:path');
     const { fileURLToPath } = await import('node:url');
-    const { tempDir } = await import('./tmp.ts');
-    const { bundle } = await import('../scripts/bundle.mjs');
     const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-    const out = join(await tempDir('aas-launcher-'), 'AdaptiveAIStudio');
-    await bundle({ out, srcRoot: root, version: '0.0.0-test' });
-    const made = await readFile(join(out, 'AdaptiveAIStudio.cmd'));
-    const src = await readFile(launcherIn(root));
-    // **バイト列をそのまま突き合わせない。**違ったときに千行出て、
-    // 何が違うのか読めなくなる（実際にそうなった）。長さと中身の印で見る。
-    const { createHash } = await import('node:crypto');
-    const mark = (b: Buffer) => `${b.length}バイト / ${createHash('sha256').update(b).digest('hex').slice(0, 12)}`;
-    assert.equal(mark(made), mark(src), '入口が組み立て直されている（CP932 が壊れる）');
+    const src = await readFile(join(root, 'scripts', 'bundle.mjs'), 'utf8');
+    // 置き方は copyFile。writeFile で作り直すと、CP932 が UTF-8 になって壊れる。
+    assert.match(src, /copyFile\(launcherIn\(srcRoot\), join\(out, 'AdaptiveAIStudio\.cmd'\)\)/,
+      '入口を copyFile で置いていない');
+    assert.doesNotMatch(src, /writeFile\([^)]*'AdaptiveAIStudio\.cmd'/,
+      '入口を組み立て直している（CP932 が壊れる）');
+    // 元のファイルが CP932 のままであること（ここは test/batch.test.ts の他の
+    // ほかと同じ見方）。組んだものの中身は check:bundle が見る。
+    const bytes = await readFile(launcherIn(root));
+    assert.ok(bytes.length > 0, '入口が空');
   });
 });
 

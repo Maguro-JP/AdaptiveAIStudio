@@ -18,6 +18,9 @@
 import { UiServer } from '../src/ui/server.ts';
 import { loadConfig } from '../src/config.ts';
 
+/** 答えを待つ上限。モデルを読むところから始まるので、短くしない。 */
+const ANSWER_WAIT = 240_000;
+
 const results = [];
 let bad = 0;
 
@@ -55,7 +58,9 @@ try {
     if (!r.ok) throw new Error(`${r.status}`);
     const body = await r.json();
     ready = body.ready === true;
-    return ready ? 'モデルまで用意できています' : `まだ話せません（${(body.why ?? '').split('\n')[0]}）`;
+    return ready
+      ? 'モデルは用意できています（読むのは頼まれたとき）'
+      : `まだ話せません（${(body.why ?? '').split('\n')[0]}）`;
   });
 
   await check('設定が返る', async () => {
@@ -101,13 +106,50 @@ try {
     const body = await r.json().catch(() => ({}));
     if (ready) {
       if (r.status !== 202) throw new Error(`受け取られない: ${r.status} ${body.error ?? ''}`);
-      return '受け取りました（答えが返るまでは、ここでは見ていません）';
+      return '受け取りました';
     }
     // モデルが無いなら、断られるのが正しい。**黙って落ちないこと**が要点。
     if (r.status !== 503) throw new Error(`断り方が違う: ${r.status}`);
     if (!body.error) throw new Error('断ったのに理由が無い');
     return `正しく断りました（${body.error.split('\n')[0]}）`;
   });
+  /*
+   * **受け取ったところで止めない。**返ってくるまでを見る。
+   *
+   * 「立ち上がった」を「使える」として報告して、開いた先で壊れているのが
+   * 見つかる、を繰り返した。送って、返って、終わるところまでを一続きで見る。
+   * モデルを読むのに時間がかかるので、上限を置いて、届かなければそう言う。
+   */
+  if (ready) {
+    await check('返ってくる', async () => {
+      const began = Date.now();
+      const events = await fetch(`${base}/api/events`, { signal: AbortSignal.timeout(ANSWER_WAIT) });
+      const reader = events.body.getReader();
+      const dec = new TextDecoder();
+      let text = '';
+      let done = false;
+      let raw = '';
+      try {
+        while (!done && Date.now() - began < ANSWER_WAIT) {
+          const { value, done: end } = await reader.read();
+          if (end) break;
+          raw += dec.decode(value, { stream: true });
+          const parts = raw.split('\n');
+          raw = parts.pop() ?? '';
+          for (const line of parts) {
+            if (!line.startsWith('data:')) continue;
+            const v = JSON.parse(line.slice(5).trim());
+            if (v.type === 'session' && v.event?.type === 'text') text += v.event.delta ?? '';
+            if (v.type === 'busy' && v.busy === false && text.length > 0) done = true;
+          }
+        }
+      } finally { await reader.cancel().catch(() => undefined); }
+      if (!done && text.length === 0) {
+        throw new Error(`${Math.round(ANSWER_WAIT / 1000)} 秒待っても、何も返ってきません`);
+      }
+      return `${text.length} 文字返りました（${Math.round((Date.now() - began) / 1000)} 秒）`;
+    });
+  }
 } finally {
   await server.stop().catch(() => undefined);
 }
@@ -119,5 +161,5 @@ if (bad > 0) {
   process.exit(1);
 }
 console.log(ready
-  ? '  通りました。ここで見たのは、送りを受け取る所までです（答えの中身は見ていません）。'
+  ? '  通りました。送って、返るところまで見ています（答えの中身は見ていません）。'
   : '  通りました。モデルはまだ置いていないので、そこは「無い」と言えることまでの確認です。');
