@@ -47,6 +47,42 @@ console.log('\n== その中で、全部のテストを回す');
 const app = join(out, 'app');
 await run(node, [join(app, 'scripts', 'run-tests.mjs')], { cwd: app });
 
+/*
+ * ここから、**組んだものを実際に起こして触る。**
+ *
+ * 試験が通ることと、開いて使えることは別。開いても何も出ない、を
+ * 配ってから見つけてもらっていたので、ここで起こして押すところまでやる。
+ */
+console.log('\n== その中の画面を起こして、通す');
+const ui = spawn(node, [join(app, 'scripts', 'run.mjs'), 'ui'], {
+  cwd: app, stdio: ['ignore', 'pipe', 'inherit'],
+});
+let url = '';
+try {
+  url = await new Promise((ok, ng) => {
+    const wait = setTimeout(() => ng(new Error('画面が出てきません')), 60_000);
+    let seen = '';
+    ui.stdout.on('data', (b) => {
+      seen += String(b);
+      const m = /(http:\/\/127\.0\.0\.1:\d+\/?)/.exec(seen);
+      if (m) { clearTimeout(wait); ok(m[1]); }
+    });
+    ui.on('exit', (c) => { clearTimeout(wait); ng(new Error(`画面が ${c} で終わりました`)); });
+  });
+  console.log(`  画面: ${url}`);
+
+  console.log('\n== 起こした画面に、smoke を通す');
+  await run(node, [join(app, 'scripts', 'smoke.mjs')], { cwd: app });
+
+  console.log('\n== 起こした画面に、sweep を通す');
+  // sweep は Chromium が要る。無い機械では回せないので、そのときはそう言う。
+  // **黙って飛ばさない。**通ったのか、やらなかったのかが分からなくなる。
+  await run(process.execPath, [join(root, 'scripts', 'sweep.mjs'), url, '--no-model'], { cwd: root })
+    .catch((e) => { throw new Error(`sweep が通りませんでした: ${e.message}`); });
+} finally {
+  ui.kill();
+}
+
 console.log('\n== 配る形のまま通りました');
 console.log(`  組んだ場所: ${out}`);
 console.log('  ここで確かめたのは、この機械むけに組んだ中身までです。');

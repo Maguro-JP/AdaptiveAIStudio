@@ -183,8 +183,21 @@ await check('コマンドを開いて閉じる', async () => {
 // 「会話が消せない」「新規で会話が開けない」と言われている。
 const convRows = () => p.locator('#sideSessions .side-row');
 
+/*
+ * **まだ何も話していない機械では、会話は一つも無い。**
+ *
+ * 開いた直後はどれも開いていない（トップ）。最初の一言が来たときに会話が
+ * できる。ここを「一覧が空なら不具合」と書いていたので、配る形をそのまま
+ * 起こして押したときに、正しい姿を不具合として数えていた。
+ *
+ * 空のときは、**空だと分かる形で出ているか**を見る。
+ */
 await check('会話を開く', async () => {
-  if (await convRows().count() === 0) throw new Error('一覧が空（溜めた状態で押していない）');
+  if (await convRows().count() === 0) {
+    const empty = await p.locator('#sideSessions .empty').innerText().catch(() => '');
+    if (!empty.trim()) throw new Error('一覧が空なのに、空だと言っていない');
+    return;
+  }
   const row = convRows().last();
   const name = (await row.locator('button').first().innerText()).trim();
   await row.locator('button').first().click();
@@ -206,9 +219,25 @@ await check('新しい会話', async () => {
   }
 });
 
+await check('会話の名前を変える', async () => {
+  if (await convRows().count() === 0) return;
+  const row = convRows().last();
+  const before = (await row.locator('button').first().innerText()).trim();
+  const want = `${before}#`;
+  const answer = (d) => { void d.accept(want).catch(() => undefined); };
+  p.on('dialog', answer);
+  try {
+    await row.locator('button.rename').click();
+    await p.waitForTimeout(1000);
+  } finally { p.off('dialog', answer); }
+  const names = (await p.locator('#sideSessions .side-row button').allInnerTexts()).map((x) => x.trim());
+  if (!names.includes(want)) throw new Error(`変えた名前が出ていない: ${want} / ${names.join(', ')}`);
+});
+
 await check('会話を消す', async () => {
   const before = await convRows().count();
-  if (before === 0) throw new Error('消す相手がいない');
+  // 何も話していないなら、消す相手も居ない。それは正しい姿。
+  if (before === 0) return;
   const row = convRows().last();
   const name = (await row.locator('button').first().innerText()).trim();
   // 消すのは訊いてくる。訊かれなければ、それ自体が不具合。
