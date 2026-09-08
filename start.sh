@@ -35,6 +35,7 @@ if [ -z "$task" ]; then
   echo "   6  検査を回す"
   echo "   7  新しくする"
   echo "   8  この機械で確かめる"
+  echo "   9  動くか確かめる"
   echo "   0  やめる"
   echo
   printf "   番号を入れて Enter: "
@@ -48,6 +49,7 @@ if [ -z "$task" ]; then
     6) task=test ;;
     7) task=update ;;
     8) task=selftest ;;
+    9) task=smoke ;;
     0) exit 0 ;;
     *) echo "  その番号はありません。"; exit 1 ;;
   esac

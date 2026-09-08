@@ -298,3 +298,31 @@ describe('入っている Node を、探す前に諦めない', () => {
       '同梱かどうかを見ないまま、同梱のせいにしている');
   });
 });
+
+describe('入口の番号', () => {
+  /**
+   * **押しても何も起きない番号を、並べない。**
+   *
+   * 番号と仕事の対応は入口（`start.cmd` / `start.sh`）に、仕事の中身は
+   * `package.json` に書いてある。二箇所に分かれているので、片方だけ足すと
+   * 「番号はあるのに何も起きない」になる。押した人には理由が分からない。
+   */
+  test('番号から呼ばれる仕事が、package.json にある', async () => {
+    const root = installRoot();
+    const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    const cmd = await readFile(join(root, 'start.cmd'), 'utf8');
+    const sh = await readFile(join(root, 'start.sh'), 'utf8');
+
+    const tasks = [
+      ...[...cmd.matchAll(/CHOICE%"=="\d"\s+set\s+"TASK=(\w+)"/g)].map((m) => `start.cmd:${m[1]}`),
+      ...[...sh.matchAll(/^\s*\d\)\s*task=(\w+)\s*;;/gm)].map((m) => `start.sh:${m[1]}`),
+    ];
+    assert.ok(tasks.length >= 4, `番号の対応が読めていません: ${tasks.length}`);
+    for (const t of tasks) {
+      const name = t.split(':')[1]!;
+      assert.ok(pkg.scripts[name], `${t} は package.json に無い仕事です`);
+    }
+  });
+});

@@ -23,6 +23,7 @@
     "clean": "node --experimental-strip-types --no-warnings src/cli/clean.ts",
     "bundle": "node scripts/bundle.mjs --node-here --out dist/AdaptiveAIStudio",
     "check:bundle": "node scripts/check-bundle.mjs",
+    "smoke": "node --experimental-strip-types --no-warnings scripts/smoke.mjs",
     "installer": "node scripts/installer.mjs",
     "sweep": "node scripts/sweep.mjs",
     "real-model": "node scripts/real-model.mjs",
