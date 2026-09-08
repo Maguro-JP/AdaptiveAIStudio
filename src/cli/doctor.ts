@@ -133,6 +133,29 @@ try {
 if (models.length > 0) {
   add('モデル', 'ok', `${models.length} 件: ${models.slice(0, 3).map((m) => m.ref).join(', ')}`
     + (models.length > 3 ? ' …' : ''));
+  /*
+   * **どれを読むのかを、送る前に出す。**
+   *
+   * ここは何件あるかしか出していなかった。選ぶのは送ったときで、選び方は
+   * 見えない。GPU の無い機械で大きい方を掴むと、最初の送信で何分も待つ
+   * ことになるのに、その前に分かる手がかりがどこにも無かった。
+   */
+  if (runtime.id === 'inproc' && models.length > 1) {
+    const { chooseModel } = await import('../runtime/inproc.ts');
+    const { totalmem: ram } = await import('node:os');
+    const picked = chooseModel(models, ram(), config.runtime?.model, {
+      hasGpu: machine.gpuName !== undefined,
+    });
+    if (picked) {
+      const why = config.runtime?.model
+        ? '設定で決めてあります'
+        : machine.gpuName
+          ? 'GPU があるので、載るもののうち大きい方'
+          : 'GPU が無いので、載るもののうち小さい方（大きいほど待ちます）';
+      add('読むモデル', 'ok', `${picked.chosen.ref}（${why}）`,
+        config.runtime?.model ? undefined : '別のものを使うなら 設定 → モデル で選べます。');
+    }
+  }
   // 名前だけ .gguf の別物と、記憶に載らないものは、ここで言う。
   // 送ってから 503 を見るより、貼る出力で先に分かるほうが早い。
   if (runtime.id === 'inproc') {

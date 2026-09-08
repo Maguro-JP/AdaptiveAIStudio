@@ -162,13 +162,21 @@ export function tooBigForRam(sizeBytes: number | undefined, ramBytes: number): s
  *
  * 決め方:
  *   1. 設定で名指しされているものが在れば、それ（利用者が決めたものが最優先）
- *   2. 記憶に載るもののうち、**いちばん大きいもの**（賢い方が良い）
- *   3. どれも載らないなら、いちばん小さいものを返して、載らないと言わせる
+ *   2. GPU が在るなら、載るもののうち**いちばん大きいもの**（賢い方が良い）
+ *   3. GPU が無いなら、載るもののうち**いちばん小さいもの**（速い方が良い）
+ *   4. どれも載らないなら、いちばん小さいものを返して、載らないと言わせる
+ *
+ * **「載る」を「良い」と読んでいた。**GPU の無い機械では、大きいほど
+ * 読み込みも生成も遅くなるだけで、賢さは待ち時間で相殺されるどころか、
+ * **返ってこないのと同じになる。**8B・4.7GB を CPU に載せると、最初の
+ * 送信で何分も待つ（そのあいだ画面は何も言わない、が今日の出発点だった）。
+ * 選ぶ口は設定に在るので、**大きい方を使いたい人は、そこで選べる。**
  */
 export function chooseModel(
   models: readonly AvailableModel[],
   ramBytes: number,
   wanted?: string,
+  opts: { hasGpu?: boolean } = {},
 ): { chosen: AvailableModel; fits: boolean } | undefined {
   if (models.length === 0) return undefined;
   const named = wanted ? models.find((m) => m.ref === wanted) : undefined;
@@ -176,8 +184,10 @@ export function chooseModel(
 
   const fitting = models.filter((m) => !tooBigForRam(m.sizeBytes, ramBytes));
   if (fitting.length > 0) {
-    const chosen = fitting.reduce((a, b) => ((b.sizeBytes ?? 0) > (a.sizeBytes ?? 0) ? b : a));
-    return { chosen, fits: true };
+    const size = (m: AvailableModel) => m.sizeBytes ?? 0;
+    const smallest = fitting.reduce((a, b) => (size(b) < size(a) ? b : a));
+    const largest = fitting.reduce((a, b) => (size(b) > size(a) ? b : a));
+    return { chosen: opts.hasGpu === false ? smallest : largest, fits: true };
   }
   const smallest = models.reduce((a, b) => ((b.sizeBytes ?? 0) < (a.sizeBytes ?? 0) ? b : a));
   return { chosen: smallest, fits: false };

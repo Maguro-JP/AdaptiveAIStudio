@@ -530,11 +530,35 @@ describe('どの GGUF を読むか', () => {
     assert.equal(got?.fits, true);
   });
 
-  test('載るものが複数あれば、大きいほうを選ぶ', () => {
+  test('GPU が在るなら、載るもののうち大きいほうを選ぶ', () => {
     const got = chooseModel([
       { ref: 'small.gguf', sizeBytes: 2 * GB },
       { ref: 'mid.gguf', sizeBytes: 8 * GB },
-    ], ram);
+    ], ram, undefined, { hasGpu: true });
+    assert.equal(got?.chosen.ref, 'mid.gguf');
+  });
+
+  /*
+   * **「載る」を「良い」と読んでいた。**
+   *
+   * GPU の無い機械で 8B・4.7GB を選ぶと、最初の送信で何分も待つ。
+   * 賢さは待ち時間で相殺されるどころか、返ってこないのと変わらない。
+   * 同じフォルダに 2B が在るのに、大きい方を掴んでいた（実機でそうなった）。
+   */
+  test('GPU が無いなら、載るもののうち小さいほうを選ぶ', () => {
+    const got = chooseModel([
+      { ref: 'small.gguf', sizeBytes: 2 * GB },
+      { ref: 'mid.gguf', sizeBytes: 8 * GB },
+    ], ram, undefined, { hasGpu: false });
+    assert.equal(got?.chosen.ref, 'small.gguf');
+    assert.equal(got?.fits, true);
+  });
+
+  test('GPU が無くても、名指しがあればそちら（利用者が決めたものが最優先）', () => {
+    const got = chooseModel([
+      { ref: 'small.gguf', sizeBytes: 2 * GB },
+      { ref: 'mid.gguf', sizeBytes: 8 * GB },
+    ], ram, 'mid.gguf', { hasGpu: false });
     assert.equal(got?.chosen.ref, 'mid.gguf');
   });
 

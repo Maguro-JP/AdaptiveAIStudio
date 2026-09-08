@@ -1667,7 +1667,18 @@ export class UiServer {
            * フォルダに在っても見なかった。**
            */
           const wanted = this.#opts.config.runtime?.model;
-          const picked = chooseModel(models, totalmem(), wanted);
+          /*
+           * **GPU が無いなら、小さい方を選ぶ。**
+           *
+           * ここは「載るもののうち、いちばん大きいもの」を選んでいた。
+           * GPU の無い機械では、大きいほど読み込みも生成も遅いだけで、
+           * 最初の送信で何分も待つことになる（返ってこないのと変わらない）。
+           * 大きい方を使いたいときは、設定 → モデル で選べる。
+           */
+          const machine = await new MachineCache(join(stateDir(), 'machine.json')).get();
+          const picked = chooseModel(models, totalmem(), wanted, {
+            hasGpu: machine.gpuName !== undefined,
+          });
           if (!picked) return undefined;
           const ref = picked.chosen.ref;
           // 記憶に載らないものを読みに行かない。落ちるか、何十分も固まる。
@@ -1685,8 +1696,28 @@ export class UiServer {
             return `${ref} は GGUF として読めません（先頭に GGUF の印がありません）。`
               + '配布元の同意頁の HTML を落としてしまった形が多いです。ブラウザで開き直して、本物を置いてください。';
           }
-          this.broadcast({ type: 'log', level: 'info', text: `モデルを読み込んでいます: ${ref}` });
+          const gb = ((picked.chosen.sizeBytes ?? 0) / 1024 ** 3).toFixed(1);
+          this.broadcast({
+            type: 'log', level: 'info',
+            text: `モデルを読み込んでいます: ${ref}（${gb}GB`
+              + `${machine.gpuName ? '' : '・この機械は GPU なしなので、初回は時間がかかります'}）`,
+          });
           const began = Date.now();
+          /*
+           * **読んでいる間、黙らない。**
+           *
+           * ここは読み終わるまで一行も出さなかった。数GBを CPU へ載せる間、
+           * 画面は「待機中」のまま何も言わない。**押した人には、送ったのに
+           * 無視されたようにしか見えない**（実機でそうなった）。
+           * 何%まで読めたかは下の層から取れないので、**経っている時間を出す。**
+           */
+          const ticking = setInterval(() => {
+            this.broadcast({
+              type: 'log', level: 'info',
+              text: `まだ読み込んでいます: ${ref}（${Math.round((Date.now() - began) / 1000)} 秒）`,
+            });
+          }, 10_000);
+          ticking.unref?.();
           /*
            * **読み込みの失敗を、一覧の失敗と混ぜない。**
            *
@@ -1702,6 +1733,7 @@ export class UiServer {
           try {
             await runtime.ensureLoaded(ref);
           } catch (e) {
+            clearInterval(ticking);
             const detail = e instanceof Error ? e.message : String(e);
             this.broadcast({
               type: 'log', level: 'error', text: `読み込めませんでした: ${ref}`,
@@ -1723,6 +1755,7 @@ export class UiServer {
             return `${ref} を読み込めませんでした。\n${detail.slice(0, 300)}\n${hint}\n`
               + `保存先: ${this.#opts.config.runtime?.modelsDir ?? modelsDir()}`;
           }
+          clearInterval(ticking);
           this.broadcast({
             type: 'log', level: 'info',
             text: `読み込みました: ${ref}（${((Date.now() - began) / 1000).toFixed(1)} 秒）`,
