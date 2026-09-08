@@ -19,7 +19,7 @@ import { formatChecks, summaryLine, type Check, type Level } from './doctor-view
 import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
-import { installRoot, isPortable, productRoot, defaultWorkRoot } from '../core/home.ts';
+import { installRoot, isPortable, productRoot, defaultWorkRoot, aasHome, asciiModelsDir } from '../core/home.ts';
 import { canRun } from '../core/which.ts';
 import { saveReport, tellWhereItWent } from './report-file.ts';
 import { deepestUnder, judgeRoom, WINDOWS_MAX_PATH } from '../core/pathroom.ts';
@@ -173,6 +173,26 @@ if (models.length > 0) {
         + `一覧は \`${how('models', '--available')}\`。\n`)
     + '手持ちがあるなら、同じ置き場に .gguf を入れるだけでも使えます。\n'
     + `いまの置き場: ${config.runtime?.modelsDir ?? `${defaultModelsDir()}（既定）`}`);
+}
+
+/*
+ * **黙って別の場所へ置かない。**
+ *
+ * 利用者名が全角だと、根も全角になる。llama.cpp は全角の混ざった道から
+ * モデルを開けないので、**モデルだけ** `%ProgramData%` へ逃がしている
+ * （`src/core/home.ts` の `asciiModelsDir`）。
+ *
+ * 逃がしていること自体は、どこにも出ていなかった。使う側から見ると
+ * **モデルだけ、置いたはずの場所と違う所に居る。**理由が分からないまま
+ * 「なぜここに置かれるのか」を探すことになる。逃がしたなら、そう言う。
+ */
+const escaped = asciiModelsDir(aasHome());
+if (escaped) {
+  add('モデルの保存先', 'ok', `${escaped}（逃がしています）`,
+    `いまの根（${aasHome()}）に全角が混ざっています。`
+    + 'モデルを読むところが、全角の混ざった道からファイルを開けません。'
+    + 'モデルだけ ProgramData へ逃がしています（半角で、管理者権限も要りません）。'
+    + '設定と記録は根のままです。');
 }
 
 /* ---------- llama-server ---------- */

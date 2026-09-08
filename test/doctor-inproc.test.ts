@@ -260,3 +260,46 @@ describe('記録の保存先へ書けないとき', () => {
     assert.ok(!/動かせます/.test(got.out), `動かせると言っている: ${got.out.slice(-600)}`);
   });
 });
+
+/**
+ * 黙って別の場所へ置かない。
+ *
+ * 利用者名が全角だと根も全角になる。モデルを読むところが全角の混ざった道から
+ * ファイルを開けないので、**モデルだけ** ProgramData へ逃がしている。
+ * その**逃がしていること自体が、どこにも出ていなかった。**使う側から見ると
+ * モデルだけ置いたはずの場所と違う所に居て、理由が分からない。
+ */
+describe('根に全角が混ざっているとき', () => {
+  test('モデルを逃がしたことを、言う', async () => {
+    const { mkdir } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { execFile } = await import('node:child_process');
+    const { fileURLToPath } = await import('node:url');
+    const { tempDir } = await import('./tmp.ts');
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+    const base = await tempDir('aas-zenkaku-');
+    const home = join(base, '全角の利用者');
+    const programData = join(base, 'pd');
+    await mkdir(home, { recursive: true });
+    await mkdir(programData, { recursive: true });
+
+    const run = (env: Record<string, string>) => new Promise<string>((ok) => {
+      execFile(
+        process.execPath,
+        ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', 'doctor.ts')],
+        { env: { ...process.env, ...env }, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+        (_e, stdout, stderr) => ok(`${stdout}${stderr}`),
+      );
+    });
+
+    const said = await run({ AAS_HOME: home, ProgramData: programData });
+    assert.match(said, /逃がしています/, `逃がしたことを言っていない: ${said.slice(-500)}`);
+    assert.match(said, /全角/, '理由を言っていない');
+
+    // **半角のときは出さない（対）。**いつも出ていると、出ていること自体が
+    // 合図にならない。
+    const plain = await run({ AAS_HOME: programData, ProgramData: programData });
+    assert.ok(!/逃がしています/.test(plain), `半角なのに出ている: ${plain.slice(-300)}`);
+  });
+});

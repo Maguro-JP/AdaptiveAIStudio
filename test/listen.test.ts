@@ -66,3 +66,43 @@ describe('口を開ける', () => {
     assert.doesNotMatch(msg, /もう一つ/, '違う理由に、塞がりの説明を付けない');
   });
 });
+
+/**
+ * 口が開けないことを、Node のスタックで見せない。
+ *
+ * 画面を二度立ち上げただけで、利用者の目に入るのは 6 行の英語の呼び出し
+ * 履歴だった。肝心の一行はその中に埋もれる。**壊れたのではなく、もう一つ
+ * 立ち上がっているだけ**なので、その一行だけ出して終わる。
+ */
+describe('口が開けなかったとき', () => {
+  test('見分けられる形で投げる', async () => {
+    const { createServer } = await import('node:http');
+    const { listenOrExplain, CannotListen } = await import('../src/core/listen.ts');
+    const a = createServer();
+    const port = await listenOrExplain(a, { port: 0, what: '画面' });
+    const b = createServer();
+    try {
+      await listenOrExplain(b, { port, what: '画面' });
+      assert.fail('二つ目が開けてしまった（この確かめの前提が崩れている）');
+    } catch (e) {
+      // ここが普通の Error のままだと、呼ぶ側は見分けられず、
+      // スタックごと出すしかなくなる。
+      assert.ok(e instanceof CannotListen, `見分けられない: ${String(e)}`);
+      assert.match((e as Error).message, /既に使われています/);
+    } finally {
+      // **開いたものを閉じてから抜ける。**閉じないと走り自体が終わらない。
+      await new Promise<void>((ok) => a.close(() => ok()));
+      b.close();
+    }
+  });
+
+  test('画面の入口が、それを受け止めている', async () => {
+    // 受け止めていないと、二度押しただけでスタックが出る。
+    const { readFile } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const src = await readFile(join(root, 'src', 'cli', 'ui.ts'), 'utf8');
+    assert.match(src, /instanceof CannotListen/, '受け止めていません');
+  });
+});

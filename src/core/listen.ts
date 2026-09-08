@@ -35,11 +35,20 @@ export function listenMessage(where: ListenWhere, e: NodeJS.ErrnoException): str
   return `${where.what}の口 ${where.port} を開けませんでした: ${e.message}`;
 }
 
+/**
+ * 口が開けなかったこと。
+ *
+ * **これを普通の例外にしていたので、Node のスタックが出た。**画面を二度
+ * 立ち上げただけで、利用者の目に入るのは 6 行の英語の呼び出し履歴。
+ * 肝心の一行はその中に埋もれる。受け止める側が見分けられるようにする。
+ */
+export class CannotListen extends Error {}
+
 /** 開けて、決まった番号を返す。開かなければ理由を持って投げる。 */
 export async function listenOrExplain(server: Server, where: ListenWhere): Promise<number> {
   const host = where.host ?? '127.0.0.1';
   await new Promise<void>((resolve, reject) => {
-    const failed = (e: NodeJS.ErrnoException) => reject(new Error(listenMessage(where, e)));
+    const failed = (e: NodeJS.ErrnoException) => reject(new CannotListen(listenMessage(where, e)));
     server.once('error', failed);
     server.listen(where.port, host, () => {
       server.off('error', failed);

@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { loadConfig, ConfigBroken, DEFAULT_CONFIG } from '../config.ts';
 import { UiServer, RESTART_EXIT } from '../ui/server.ts';
 import { openerFor } from '../core/opener.ts';
+import { CannotListen } from '../core/listen.ts';
 
 /*
  * **設定が壊れていても、画面は開ける。**
@@ -44,7 +45,19 @@ const server = new UiServer({
     ? { onRestart: () => { void server.stop().catch(() => undefined).then(() => process.exit(RESTART_EXIT)); } }
     : {}),
 });
-const url = await server.start();
+/*
+ * **口が開けないことは、壊れたことではない。**もう一つ立ち上がっている
+ * だけ、ということが多い。ここで受け止めないと、二度押しただけで
+ * Node のスタックが出る。理由の一行だけを出して終わる。
+ */
+let url: string;
+try {
+  url = await server.start();
+} catch (e) {
+  if (!(e instanceof CannotListen)) throw e;
+  console.log(`\n  ${e.message}\n`);
+  process.exit(1);
+}
 
 console.log(`  AdaptiveAIStudio — ${url}`);
 console.log('  Ctrl-C で終了します。\n');
