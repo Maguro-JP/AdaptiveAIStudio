@@ -655,3 +655,21 @@ describe('開いた時点で、使えるかを言う', () => {
     assert.ok(app.includes("fetch('/api/ready'"), '開いた時点で訊いていない');
   });
 });
+
+describe('その機械のものでない道', () => {
+  /**
+   * Windows の `C:\...` を linux で `resolve` すると、絶対の道ではなく
+   * **そういう名前のフォルダ**になる。「無ければ作る」がそこで効いて、
+   * いま居る所に `C:\Users\...` という名前のフォルダが出来た（実際に作った）。
+   */
+  test('作業場に別の機械の道が書いてあったら、作らずに言う', async () => {
+    const { foreignPath } = await import('../src/ui/server.ts');
+    // linux で走らせているとき。Windows で走らせているなら、これは正しい道。
+    assert.equal(foreignPath('C:\\Users\\x\\work'), process.platform !== 'win32');
+    assert.equal(foreignPath('Z:/work'), process.platform !== 'win32');
+    // この機械の道は、止めない。
+    assert.equal(foreignPath('/home/x/work'), false);
+    assert.equal(foreignPath('work'), false);
+    assert.equal(foreignPath(undefined), false);
+  });
+});

@@ -1020,6 +1020,20 @@ export class UiServer {
       const root = this.#workRoot();
       const asked = url.searchParams.get('path') ?? '';
       try {
+        /*
+         * **その機械のものでない道を、名前として作らない。**
+         *
+         * `C:\\Users\\...` のような Windows の道を linux で `resolve` すると、
+         * 絶対の道ではなく**そういう名前のフォルダ**になる。無ければ作る、が
+         * ここで効いて、いま居る所に `C:\\Users\\...` という名前のフォルダが
+         * 出来た（実際に作った）。作った本人にも、何が起きたか分からない。
+         */
+        if (foreignPath(this.#opts.config.agent?.root)) {
+          return send(res, 400, {
+            error: `作業場に、この機械のものでない道が書かれています: ${this.#opts.config.agent?.root}\n`
+              + '設定の agent.root を、この機械の道に直してください。',
+          });
+        }
         // **無ければ作る。**入れた版の既定（根の下の work）は初回には無い。
         // 会話を始める前に横の板が一覧を読むので、そこで
         // 「そんな場所は無い」が出る。開いた瞬間に赤が出るのが、いちばん困る。
@@ -2260,6 +2274,18 @@ export const MAX_JSON_BODY = 16 * 1024 * 1024;
 
 export class BodyTooLarge extends Error {
   constructor(limit: number) { super(`本文が大きすぎます（${Math.round(limit / 1024 / 1024)}MB まで）`); }
+}
+
+/**
+ * その道が、いま動いている機械のものでないか。
+ *
+ * Windows の `C:\\...` を linux で使うと、絶対の道ではなく**名前**になる。
+ * 逆（linux の `/home/...` を Windows で）は絶対の道として扱われるので、
+ * 名前になってしまうこちら側だけを止める。
+ */
+export function foreignPath(p: string | undefined): boolean {
+  if (typeof p !== 'string' || p.length === 0) return false;
+  return process.platform !== 'win32' && /^[A-Za-z]:[\\/]/.test(p);
 }
 
 async function readBody(req: IncomingMessage): Promise<unknown> {

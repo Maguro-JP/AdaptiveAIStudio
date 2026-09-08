@@ -252,6 +252,25 @@ step('モデルを読むものを確かめます（初回は少し待ちます�
  * console.warn に**直に**書く（logLevel を通らない。実測）。この出力は
  * 利用者がそのまま貼るものなので、こちらの言葉で言い直す分だけを残す。
  */
+/*
+ * 長くかかっているものを、**かかっている最中に言う。**
+ *
+ * ここは返ってくるまで何も出ない。手元では一瞬で返るが、繋がっていない
+ * ドライブや、必要になるまで実体を持たない置き方では何十秒もかかる。
+ * その間、押した人には止まったようにしか見えない。
+ *
+ * 待つのはやめない（読み込みを途中で切ると、結果が嘘になる）。
+ * **かかっていることだけを出す。**
+ */
+async function saying<T>(what: string, run: () => Promise<T>): Promise<T> {
+  const began = Date.now();
+  const timer = setInterval(() => {
+    process.stdout.write(c.dim(`  … ${what}（${Math.round((Date.now() - began) / 1000)} 秒）\n`));
+  }, 10_000);
+  timer.unref?.();
+  try { return await run(); } finally { clearInterval(timer); }
+}
+
 async function quietly<T>(run: () => Promise<T>): Promise<T> {
   const warn = console.warn;
   console.warn = () => {};
@@ -265,7 +284,7 @@ if (runtime.id === 'inproc') {
   const binPkg = `@node-llama-cpp/${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`;
   let lib: { getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<unknown> } | undefined;
   try {
-    lib = await import(LLAMA_LIB) as typeof lib;
+    lib = await saying('まだ読んでいます', () => import(LLAMA_LIB)) as typeof lib;
   } catch (e) {
     // 「入っていない」と「在るのに読み込めない」は別の話。後者を前者の顔で
     // 言うと、bundle の欠けに気づけない（実際に、そう配った）。
@@ -285,7 +304,8 @@ if (runtime.id === 'inproc') {
   if (lib) {
     try {
       // 組み立てに走らせない。無いなら無いと、すぐ言わせる。
-      await quietly(() => lib.getLlama({ build: 'never', logLevel: 'error' }));
+      await saying('この機械むけの binary を調べています',
+        () => quietly(() => lib.getLlama({ build: 'never', logLevel: 'error' })));
       add('モデルを読むもの', 'ok', 'node-llama-cpp（この機械むけの binary が動きます。実行ファイルは増えません）');
       /*
        * どう数えているか。
