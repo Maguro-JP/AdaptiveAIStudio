@@ -123,7 +123,7 @@ VRAM 8GB でモデルを増やす方向は行き止まりになるため。
 
 ### 3.4 起動はクリック1回
 
-配布形態は Tauri のインストーラ(`.msi`)。
+配布形態は NSIS のインストーラ（`AdaptiveAIStudio-Setup.exe`）と portable の ZIP。
 
 - インストールするとスタートメニュー / デスクトップにアイコンが出る
 - 起動すると Core Daemon が常駐し、UIが開く

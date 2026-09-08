@@ -8,6 +8,7 @@
 import { renderDiff, splitHunkTexts } from './diff.js';
 import { decorate } from './color.js';
 import { verdictText, slowNote } from './verdict.js';
+import { renderMarkdown } from './markdown.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -251,10 +252,19 @@ export const PANELS = {
       return { box, head, body: inner };
     };
 
+    /** 答えの一塊。素の文を持ち、届くたびに読める形へ組み直す。 */
+    const said = (text) => {
+      const box = el('div', 'said');
+      box.replaceChildren(renderMarkdown(text, document));
+      return box;
+    };
     let stream = null;
+    let streamText = '';
     const append = (delta) => {
-      if (!stream) stream = add(el('div', 'said'));
-      stream.textContent += delta;
+      if (!stream) { stream = add(el('div', 'said')); streamText = ''; }
+      streamText += delta;
+      // 囲いが閉じていなくても、そこまでをコードとして出す（流れている途中）。
+      stream.replaceChildren(renderMarkdown(streamText, document));
       follow();
     };
 
@@ -379,7 +389,7 @@ export const PANELS = {
       for (const m of messages) {
         if (m.role === 'user') { add(el('div', 'asked', m.content)); continue; }
         if (m.role === 'assistant') {
-          if (m.content.trim()) add(el('div', 'said', m.content));
+          if (m.content.trim()) add(said(m.content));
           for (const call of m.toolCalls ?? []) {
             const c = card('✓', call.name, '', 'tool');
             c.box.open = false;
