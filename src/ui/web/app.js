@@ -33,6 +33,37 @@ const ctx = {
 
 let lastState = null;
 
+/*
+ * **画面が黙って死ぬのを、ここで受け止める。**
+ *
+ * 同じ壊れ方を何度も出した。読み込みや送信の途中で例外が出ると、
+ * 落ちるのは呼び出しの外（`void f()`）なので、画面には何も出ない。
+ * 出るのは開発者用の記録だけで、使っている側からは無反応にしか見えない。
+ * 一つずつ受け手を足しても、次に書いたところでまた同じ形になる。
+ *
+ * 拾い手のいない例外を、最後にここで拾って**必ず目に見える形で出す**。
+ * これは受け手を書かなくてよいという話ではない（`web-catch.test.ts` が
+ * 受け手の無い呼び出しの数を数えていて、増やせない）。最後の網。
+ */
+function showCrash(what, detail) {
+  let box = document.getElementById('crashNote');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'crashNote';
+    box.className = 'crash-note';
+    box.onclick = () => { box.remove(); };
+    document.body.append(box);
+  }
+  box.textContent = `${what}: ${detail}（押すと消えます）`;
+}
+
+window.addEventListener('unhandledrejection', (e) => {
+  showCrash('途中で止まりました', e.reason?.message ?? String(e.reason));
+});
+window.addEventListener('error', (e) => {
+  showCrash('画面の中で落ちました', e.message ?? String(e.error));
+});
+
 /* ---------- 組み立て ---------- */
 
 function buildPanel(spec) {
