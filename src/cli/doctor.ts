@@ -38,7 +38,27 @@ const checks: Check[] = [];
 const add = (name: string, level: Level, detail: string, fix?: string) =>
   checks.push({ name, level, detail, fix });
 
+/*
+ * **いま何を見ているかを、その場で出す。**
+ *
+ * ここは全部の行を溜めてから、最後に一度だけ表を出していた。**途中の一つが
+ * 止まると、何も出ない。**画面には空行と入力待ちのカーソルだけが残り、
+ * 動いているのか死んでいるのかも分からない。
+ *
+ * しかもこれは「困ったとき」に押すもので、**押す人はもう困っている。**
+ * そこで無反応になるのがいちばん悪い。
+ *
+ * 実際に、配った先（Windows・OneDrive の下）で、押しても何も出ない形に
+ * なった。溜める前に、これから見るものを一行ずつ出す。
+ */
+const step = (what: string): void => {
+  process.stdout.write(c.dim(`  … ${what}\n`));
+};
+
 /* ---------- 実行環境 ---------- */
+
+// **最初の一行を、いちばん先に出す。**押した人が「動いている」と分かる。
+console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — doctor\n'));
 
 const [major, minor] = process.versions.node.split('.').map(Number);
 const nodeOk = (major ?? 0) > 22 || ((major ?? 0) === 22 && (minor ?? 0) >= 6);
@@ -50,6 +70,8 @@ add('Node.js', nodeOk ? 'ok' : 'bad', `v${process.versions.node}`,
     : 'v22.6 以降が要ります（型を剥がしながら実行する機能を使うため）。https://nodejs.org から入れ直してください。');
 
 /* ---------- 設定 ---------- */
+
+step('設定を読みます');
 
 /**
  * 打つ一手の書き方。**無いものを打てと言わない。**
@@ -74,7 +96,6 @@ try {
   loaded = loadConfig();
 } catch (e) {
   if (!(e instanceof ConfigBroken)) throw e;
-  console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — doctor\n'));
   console.log(c.red(e.message));
   process.exit(1);
 }
@@ -86,6 +107,8 @@ add('設定', 'ok', source,
 
 /* ---------- 機械 ---------- */
 
+step('この機械を調べます');
+
 const machine = await new MachineCache(join(stateDir(), 'machine.json')).get();
 add('この機械', 'ok', describeMachine(machine));
 
@@ -96,6 +119,8 @@ if (machine.vramBytes > 0) {
 }
 
 /* ---------- モデルの置き場 ---------- */
+
+step('モデルを数えます');
 
 const runtime = await buildRuntime(config, machine);
 let models: Awaited<ReturnType<typeof runtime.list>> = [];
@@ -197,6 +222,8 @@ if (escaped) {
 
 /* ---------- llama-server ---------- */
 
+step('llama-server を探します');
+
 // 借り物ではなく自前で持てているか。ここが空だと、
 // 誰かが入れたものに相乗りしている状態になる。
 const llamaPath = await findInstalled();
@@ -212,6 +239,8 @@ if (llamaPath) {
 // 使っていないものが足りないのは、問題ではない。
 
 /* ---------- モデルを読むライブラリ ---------- */
+
+step('モデルを読むものを確かめます（初回は少し待ちます）');
 
 // この中で読む道は、ライブラリが要る。bundle には入っているが、
 // 作業コピーには入っていない。**動かす直前まで分からない**のが困るので、
@@ -291,6 +320,8 @@ if (runtime.id === 'inproc') {
 
 /* ---------- 置き場所の深さ ---------- */
 
+step('道の深さを測ります');
+
 // Windows だけの話。道の全体が 260 文字を超えると開けない。
 // **展開の時点で当たる**ので、こちらが動いていれば既に通っている。
 // それでも言うのは、いま何文字余っているかが分かれば、モデルを置く前に
@@ -315,6 +346,8 @@ if (process.platform === 'win32') {
 }
 
 /* ---------- 外の道具（MCP） ---------- */
+
+step('外のツールを見ます');
 
 // 繋がらない理由でいちばん多いのは、合言葉が無いこと。**値は出さない。**
 // 名前が環境にあるか（data/.env から読めたか）だけを言う。
@@ -361,6 +394,8 @@ if (process.platform === 'win32') {
 }
 
 /* ---------- 繋ぎ先 ---------- */
+
+step('繋ぎ先を見ます');
 
 for (const p of enabledProviders(config)) {
   const label = `接続 (${p.id})`;
@@ -409,6 +444,8 @@ for (const p of enabledProviders(config)) {
 
 /* ---------- 外側の詰まり ---------- */
 
+step('外側の詰まりを見ます');
+
 /*
  * こちらの作りが正しくても、モデルを動かす層が詰まっていたら何も動かない。
  * 「うちは悪くない」で終わらせず、外側も見に行く。
@@ -426,6 +463,8 @@ for (const issue of envIssues) {
 }
 
 /* ---------- 保存先 ---------- */
+
+step('保存先を確かめます');
 
 try {
   const files = await readdir(stateDir());
@@ -461,7 +500,7 @@ try {
 
 /* ---------- 出す ---------- */
 
-console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — doctor\n'));
+console.log('');
 
 const style = {
   mark: { ok: c.green('  ok  '), warn: c.yellow(' 注意 '), bad: c.red(' 未了 ') },
