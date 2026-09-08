@@ -24,6 +24,7 @@ import { loadJournals, type Journals } from '../core/journals.ts';
 import { UndoStore } from '../core/undo.ts';
 import { unifiedDiff, diffStat } from '../agent/diff.ts';
 import { revertLines, type RevertPick } from '../agent/hunks.ts';
+import { buildCompletionInput, cleanCompletion } from '../core/completion.ts';
 import { writeEnvValue } from '../core/env.ts';
 import { canRun } from '../core/which.ts';
 import { saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
@@ -1117,6 +1118,51 @@ export class UiServer {
     }
 
     /*
+     * Tab 補完。
+     *
+     * エディタで手が止まったら、前後を渡して続きを数行もらう。
+     * **読み込んでいないモデルを、補完のために読みに行かない**（数GBを
+     * 読むのに何分もかかる。それは頼まれたときにやる）。作業中も出さない
+     * （同じモデルを取り合う）。一度に一つだけ。上限で諦めて、そこまでを返す。
+     */
+    if (path === '/api/complete' && req.method === 'POST') {
+      const body = await readBody(req) as { path?: unknown; prefix?: unknown; suffix?: unknown };
+      const asked = typeof body?.path === 'string' ? body.path : '';
+      const prefix = typeof body?.prefix === 'string' ? body.prefix : '';
+      const suffix = typeof body?.suffix === 'string' ? body.suffix : '';
+      if (!asked) return send(res, 400, { error: 'path が要ります' });
+      const missing = await this.#readyToThink(false).catch((e: unknown) => `見に行けませんでした: ${(e as Error).message}`);
+      if (missing) return send(res, 200, { text: '', why: missing === NOT_LOADED_YET ? 'モデルをまだ読んでいません（一度話しかけると読みます）' : missing });
+      const session = await this.session();
+      if (this.#busyNow(session)) return send(res, 200, { text: '', why: '作業中です' });
+      if (this.#completing) return send(res, 200, { text: '', why: '前の補完を待っています' });
+      this.#completing = true;
+      const ac = new AbortController();
+      const giveUp = setTimeout(() => ac.abort(), UiServer.COMPLETE_WAIT_MS);
+      let raw = '';
+      let model = '';
+      try {
+        const input = buildCompletionInput(asked, prefix, suffix);
+        for await (const ev of session.orchestrator.run({
+          candidates: session.candidates, system: input.system, messages: input.messages,
+          temperature: 0, maxTokens: 96,
+        }, ac.signal)) {
+          if (ev.type === 'text') raw += ev.delta;
+          else if (ev.type === 'done') model = ev.modelId;
+          else if (ev.type === 'failed') return send(res, 200, { text: '', why: ev.error.message });
+          // 空行が来たら、そこで切って待たない。
+          if (/\n\s*\n/.test(raw)) ac.abort();
+        }
+      } catch (e) {
+        if (!ac.signal.aborted) return send(res, 200, { text: '', why: (e as Error).message });
+      } finally {
+        clearTimeout(giveUp);
+        this.#completing = false;
+      }
+      return send(res, 200, { text: cleanCompletion(prefix, raw), model });
+    }
+
+    /*
      * 当てた変更を、塊ごと・行ごとに戻す。
      *
      * 「戻す」は 1 ターンまるごとしか戻せなかった。半分は良くて半分は要らない、
@@ -1574,6 +1620,9 @@ export class UiServer {
    */
   /** 保存先を読む。上限を過ぎたら、読めた分で返す（`slow`）。 */
   static readonly DIR_WAIT_MS = 4000;
+  /** 補完を待つ上限。これを超えたら、そこまでを返す（無ければ空）。 */
+  static readonly COMPLETE_WAIT_MS = 8000;
+  #completing = false;
 
   async #readModelsDir(liveDir: string): Promise<{
     gguf: unknown[]; dirState: string; slow: boolean;

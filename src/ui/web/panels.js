@@ -1284,7 +1284,12 @@ export const PANELS = {
     area.className = 'editor-area mono';
     area.spellcheck = false;
     area.disabled = true;
-    wrap.append(head, area);
+    // Tab 補完の灰色。欄の裏に同じ字組みで置き、カーソルまでを透明に、
+    // 続きを灰色に描く。欄そのものは透けさせる。
+    const stage = el('div', 'editor-stage');
+    const ghost = el('pre', 'editor-ghost mono');
+    stage.append(ghost, area);
+    wrap.append(head, stage);
     body.append(wrap);
 
     let path = '';
@@ -1346,15 +1351,86 @@ export const PANELS = {
     save.onclick = () => { void store(); };
     // Ctrl+S はこの欄に手があるときだけ。ブラウザの「ページを保存」を出さない。
     area.onkeydown = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); void store(); }
-      // Tab で欄から抜けない。コードを書く場所なので、Tab は字。
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); void store(); return; }
+      // Ctrl+Space で、待たずに補完を頼む。
+      if ((e.ctrlKey || e.metaKey) && e.key === ' ') { e.preventDefault(); void askCompletion(); return; }
+      if (e.key === 'Escape' && suggestion) { e.preventDefault(); clearGhost(); refresh(); return; }
+      // Tab で欄から抜けない。灰色が出ていればそれを入れ、無ければ字。
       if (e.key === 'Tab') {
         e.preventDefault();
+        if (acceptGhost()) return;
         const { selectionStart: a, selectionEnd: b } = area;
         area.setRangeText('  ', a, b, 'end');
         refresh();
       }
     };
+
+    /* ---- Tab 補完 ----
+     * 手が止まって少し経ったら、前後を渡して続きをもらう。灰色で見せて、
+     * Tab で入れる。Esc か、何か打てば消える。行の途中（右に字がある所）
+     * では出さない。灰色と実物が重なって読めなくなる。
+     */
+    let suggestion = '';
+    let pending = 0;
+    let asking = null;
+    const clearGhost = () => { suggestion = ''; ghost.textContent = ''; };
+    const drawGhost = () => {
+      if (!suggestion) return clearGhost();
+      const at = area.selectionStart;
+      ghost.replaceChildren(
+        Object.assign(document.createElement('span'), { className: 'ghost-before', textContent: area.value.slice(0, at) }),
+        Object.assign(document.createElement('span'), { className: 'ghost-text', textContent: suggestion }),
+      );
+      ghost.scrollTop = area.scrollTop; ghost.scrollLeft = area.scrollLeft;
+    };
+    const askCompletion = async () => {
+      if (!path || area.disabled) return;
+      const at = area.selectionStart;
+      if (at !== area.selectionEnd) return;
+      const rest = area.value.slice(at, area.value.indexOf('\n', at) < 0 ? undefined : area.value.indexOf('\n', at));
+      if (rest.trim() !== '') return; // 行の途中では出さない
+      if (asking) asking.abort();
+      const ac = new AbortController();
+      asking = ac;
+      const prefix = area.value.slice(0, at);
+      const suffix = area.value.slice(at);
+      state.textContent = '補完を考えています…';
+      let r;
+      try {
+        r = await fetch('/api/complete', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path, prefix, suffix }),
+          signal: AbortSignal.any([ac.signal, AbortSignal.timeout(15000)]),
+        });
+      } catch (e) {
+        if (!ac.signal.aborted) state.textContent = `補完できませんでした（${e.message ?? e}）`;
+        return;
+      }
+      if (ac.signal.aborted) return;
+      const j = await r.json().catch(() => ({}));
+      // 訊いている間に打っていたら、古い答えは捨てる。
+      if (area.selectionStart !== at || area.value.slice(0, at) !== prefix) return;
+      if (!j.text) { refresh(); if (j.why) state.textContent = `補完なし（${j.why}）`; return; }
+      suggestion = j.text;
+      drawGhost();
+      state.textContent = 'Tab で入れる・Esc で消す';
+    };
+    const scheduleCompletion = () => {
+      clearTimeout(pending);
+      pending = setTimeout(() => { void askCompletion(); }, 700);
+    };
+    const acceptGhost = () => {
+      if (!suggestion) return false;
+      const at = area.selectionStart;
+      area.setRangeText(suggestion, at, at, 'end');
+      clearGhost();
+      refresh();
+      return true;
+    };
+    area.addEventListener('input', () => { clearGhost(); scheduleCompletion(); });
+    area.addEventListener('scroll', () => { ghost.scrollTop = area.scrollTop; ghost.scrollLeft = area.scrollLeft; });
+    area.addEventListener('click', clearGhost);
+    ctx.acceptGhost = acceptGhost;
 
     ctx.openFile = (p) => { void open(p); };
     // モデルが書き換えたら、開いているものは読み直す（直している最中は上書きしない）。
