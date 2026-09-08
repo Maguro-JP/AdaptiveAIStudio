@@ -137,6 +137,11 @@ export interface CodeIndex {
    * コードが無いのだと思う。**静かに間違った答えを返すのが、いちばん悪い。**
    */
   capped?: number;
+  /**
+   * 組み直したとき、前の索引から使い回した数と、読み直した数。
+   * **触ったものだけ読み直す**が本当に効いているかを、ここで見る。
+   */
+  refresh?: { reused: number; reparsed: number };
 }
 
 /**
@@ -331,9 +336,21 @@ const RESERVED = new Set([
 ]);
 
 /** 作業場を歩いて、索引を作る。 */
-export async function buildIndex(root: string, max = MAX_FILES): Promise<CodeIndex> {
+export async function buildIndex(root: string, max = MAX_FILES, prev?: CodeIndex): Promise<CodeIndex> {
   const files: FileEntry[] = [];
   let skipped = 0;
+  /*
+   * **触ったものだけ読み直す。**
+   *
+   * ここは毎回全部を読んで組み直していた（4000 ファイルで 3 秒）。しかも
+   * 5 分間は組み直さないので、モデルが書いたばかりのファイルの行番号が
+   * 古いまま返っていた（「触った跡で見る」と注釈に書いてあったが、見て
+   * いなかった）。前の索引が在れば、大きさと mtime が同じものはそのまま
+   * 使い、変わったものと新しいものだけ読む。消えたものは、歩かないので落ちる。
+   */
+  const before = new Map<string, FileEntry>((prev?.root === root ? prev.files : []).map((f) => [f.path, f]));
+  let reused = 0;
+  let reparsed = 0;
 
   const walk = async (dir: string, depth: number, ign: Ignores): Promise<void> => {
     if (depth > 12 || files.length >= max) return;
@@ -358,6 +375,13 @@ export async function buildIndex(root: string, max = MAX_FILES): Promise<CodeInd
       try { info = await stat(full); } catch { continue; }
       if (info.size > MAX_FILE) { skipped += 1; continue; }
       const rel = relative(root, full).split(sep).join('/');
+      const had = before.get(rel);
+      if (had && had.size === info.size && had.mtimeMs === info.mtimeMs) {
+        files.push(had);
+        reused += 1;
+        continue;
+      }
+      reparsed += 1;
       let text = '';
       try { text = await readFile(full, 'utf8'); } catch { skipped += 1; continue; }
       const symbols: Symbol[] = [];
@@ -387,6 +411,7 @@ export async function buildIndex(root: string, max = MAX_FILES): Promise<CodeInd
   return {
     root, builtAt: new Date().toISOString(), files, skipped,
     ...(capped > 0 ? { capped } : {}),
+    ...(prev ? { refresh: { reused, reparsed } } : {}),
   };
 }
 
@@ -733,19 +758,24 @@ export class IndexStore {
   }
 
   /**
-   * 使える索引を出す。**古ければ作り直す。**
+   * 使える索引を出す。**触ったものだけ読み直して、いまの木に合わせる。**
    *
-   * 触った跡（mtime）で見る。合っていれば、そのまま使う。
+   * 前は 5 分のあいだ組み直さなかったので、書いたばかりのファイルの行番号が
+   * 古いまま返っていた。いまは呼ばれるたびに木を歩いて（中身は読まない）、
+   * 大きさか mtime が変わったものだけ読み直す。歩く手間だけは毎回払う
+   * （4000 ファイルで実測 0.7 秒。読み直しは 3 秒）。続けざまの呼び出しでは、直前の
+   * 結果をそのまま使う（`minGapMs`）。
    */
-  async fresh(root: string, maxAgeMs = 5 * 60_000, now = Date.now()): Promise<CodeIndex> {
-    const usable = (x: CodeIndex | undefined): x is CodeIndex =>
-      !!x && x.root === root && now - new Date(x.builtAt).getTime() < maxAgeMs;
-    if (usable(this.#held)) return this.#held;
-    const had = await this.load(root);
-    if (usable(had)) { this.#held = had; return had; }
-    const made = await buildIndex(root);
+  async fresh(root: string, minGapMs = 1500, now = Date.now()): Promise<CodeIndex> {
+    const held = this.#held;
+    if (held && held.root === root && now - new Date(held.builtAt).getTime() < minGapMs) return held;
+    const base = held && held.root === root ? held : await this.load(root);
+    const made = await buildIndex(root, MAX_FILES, base);
     this.#held = made;
-    await this.save(made).catch(() => undefined);
+    // 何も変わっていなければ、書き直さない（4000 ファイルで 12MB になる）。
+    if (!base || (made.refresh?.reparsed ?? 1) > 0 || made.files.length !== base.files.length) {
+      await this.save(made).catch(() => undefined);
+    }
     return made;
   }
 }

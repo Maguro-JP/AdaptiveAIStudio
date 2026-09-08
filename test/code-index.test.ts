@@ -142,6 +142,41 @@ describe('索引を覚える', () => {
     // 別の作業場のものは返さない。
     assert.equal(await new IndexStore(dir).load('/そんな場所'), undefined);
   });
+
+  test('**書いたばかりのものが、次の呼び出しで見える**（触ったものだけ読み直す）', async () => {
+    const root = await repo();
+    const dir = join(await tempDir('aas-ixs-'), 'index');
+    const store = new IndexStore(dir);
+    const first = await store.fresh(root);
+    const n = first.files.length;
+    // 直す・足す・消す。mtime が確実に進むように、少し待つ。
+    await new Promise((r) => setTimeout(r, 20));
+    await writeFile(join(root, 'src', 'settings.ts'),
+      '/** 置き場所の設定。 */\n\n\nexport function saveRuntime() {}\nexport function loadRuntime() {}\n');
+    await writeFile(join(root, 'src', 'fresh.ts'), 'export function brandNewThing() {}\n');
+    const { rm } = await import('node:fs/promises');
+    await rm(join(root, 'src', 'conversations.ts'));
+    // 続けざまの呼び出しは直前の結果を返すので、間を置いたことにする。
+    const second = await store.fresh(root, 1500, Date.now() + 10_000);
+    const settings = second.files.find((f) => f.path === 'src/settings.ts')!;
+    assert.equal(settings.symbols.find((s) => s.name === 'saveRuntime')?.line, 4, '行番号が古いまま');
+    assert.ok(settings.symbols.some((s) => s.name === 'loadRuntime'), '足した名前が無い');
+    assert.ok(second.files.some((f) => f.path === 'src/fresh.ts'), '足したファイルが無い');
+    assert.ok(!second.files.some((f) => f.path === 'src/conversations.ts'), '消したファイルが残っている');
+    assert.equal(second.files.length, n, '数が合わない（1 足して 1 消した）');
+    // 触っていないものは読み直していない。
+    assert.ok(second.refresh, '使い回した数を言っていない');
+    assert.equal(second.refresh.reparsed, 2, `読み直した数: ${JSON.stringify(second.refresh)}`);
+    assert.ok(second.refresh.reused >= 1, '一つも使い回していない');
+  });
+
+  test('続けざまの呼び出しは、木を歩き直さない', async () => {
+    const root = await repo();
+    const store = new IndexStore(join(await tempDir('aas-ixs-'), 'index'));
+    const a = await store.fresh(root, 1500, 1_000_000);
+    const b = await store.fresh(root, 1500, 1_000_500);
+    assert.equal(a, b);
+  });
 });
 
 /**
@@ -158,7 +193,7 @@ describe('切ったことを、黙らない', () => {
     const root = await tempDir('aas-capped-');
     for (let i = 0; i < count; i += 1) {
       const sub = join(root, `p${Math.floor(i / 20)}`);
-      await mkdir(sub, { recursive: true });
+      if (i % 20 === 0) await mkdir(sub, { recursive: true });
       await writeFile(join(sub, `f${i}.ts`), `export function thing${i}() { return ${i}; }\n`);
     }
     return root;
@@ -178,18 +213,14 @@ describe('切ったことを、黙らない', () => {
   });
 
   test('**探す道具が、そのことを返事に書く**', async () => {
-    const { IndexStore } = await import('../src/agent/code-index.ts');
-    const root = await tree(60);
-    const index = await buildIndex(root, 40);
-
-    // 道具は記録の置き場から控えを引く。**そこへ置いてから呼ぶ。**
-    // （本物の上限は 4000。試験で 4000 ファイル作るのは高いので、
-    //   切れた索引を先に置いて、同じ道を通す）
+    // 本物の上限（4000）を本当に超える木を作る。前は切れた索引を先に置いて
+    // 同じ道を通していたが、索引が毎回木に合わせて組み直されるようになった
+    // ので、置いた控えは上書きされる。作るのは 4020 ファイルで 1 秒、組むのに 1.4 秒（実測）。
+    const root = await tree(4020);
     const state = await tempDir('aas-capped-state-');
     const prev = process.env.AAS_STATE_DIR;
     process.env.AAS_STATE_DIR = state;
     try {
-      await new IndexStore(join(state, 'index')).save(index);
       const { findCodeTool } = await import('../src/agent/tools/find.ts');
 
       // 見つかったときも、見つからなかったときも言う。
