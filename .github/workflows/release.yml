@@ -149,17 +149,16 @@ jobs:
           echo "ZIP の中のライブラリ: あり"
           ls -l AdaptiveAIStudio-portable.zip
 
-      # **組んだものの中で、テストを回す。**
+      # **ここで「組んだものの中でテストを回す」ことはできない。**
       #
-      # 手元（作業コピー）で通ることは、組んだものの中で通ることを意味しない。
-      # 実際に回したら 17 件落ちた。入口のファイル名が変わる・型宣言が入らない・
-      # 立ち上がりの速さが違う、が原因。組む前のテストでは出ない。
+      # 手元で回して 17 件落ちたので、同じことを CI でもやろうとして
+      # `../runtime/node scripts/run-tests.mjs` を足した。**動かない。**
+      # ここで組んでいるのは Windows むけで、中に入っているのは
+      # `runtime/node.exe`。ubuntu の runner では、名前も違えば実行もできない。
+      # 足した本人が、その仕事が何を組んでいるかを見ていなかった。
       #
-      # linux で組むので枠は1倍。タグを付けたときだけ回る。
-      - name: 組んだものの中で、テストを回す
-        run: |
-          cd dist/AdaptiveAIStudio/app
-          ../runtime/node scripts/run-tests.mjs
+      # 手元で確かめるときは `--node-here` で組めば、その中で回せる
+      # （`npm run bundle -- --out ... --node-here`）。
 
       # .exe を置けない場所（会社のクラウドドライブ）むけ。中身は同じで、
       # Node の名前だけが node.bin。名前のとおり .exe が一つも入らない。
