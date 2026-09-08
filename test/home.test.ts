@@ -159,6 +159,17 @@ describe('npm 無しで仕事を動かす', () => {
  */
 const built = new Map<string, Promise<{ out: string; result: Awaited<ReturnType<typeof import('../scripts/bundle.mjs')['bundle']>> }>>();
 
+/** 渡す偽の node.exe。中身は見ないので、一つを使い回す。 */
+let fakeNodeExe: Promise<string> | undefined;
+function fakeNode(): Promise<string> {
+  fakeNodeExe ??= (async () => {
+    const at = join(await tempDir('aas-fake-'), 'node.exe');
+    await writeFile(at, 'dummy');
+    return at;
+  })();
+  return fakeNodeExe;
+}
+
 function sharedBundle(
   key: string,
   opts: { nodeHere?: boolean; nodeExe?: string; nodeName?: string; version: string },
@@ -339,11 +350,7 @@ describe('同梱した Node の置き場所', () => {
   // bootstrap は node）。同梱したのに見つけられない状態だった。
 
   test('組み立てると runtime に入る', async () => {
-    const out = await tempDir('aas-node-');
-    const fake = join(await tempDir('aas-fake-'), 'node.exe');
-    await writeFile(fake, 'dummy');
-    const { bundle } = await import('../scripts/bundle.mjs');
-    const r = await bundle({ out, srcRoot: installRoot(), nodeExe: fake, version: 'x' });
+    const { out, result: r } = await sharedBundle('exe', { nodeExe: await fakeNode(), version: 'x' });
     assert.equal(r.bundledNode, true);
     const { stat } = await import('node:fs/promises');
     assert.ok(await stat(join(out, 'runtime', 'node.exe')));
@@ -352,16 +359,12 @@ describe('同梱した Node の置き場所', () => {
   test('名前を変えても入る（.exe を落とす場所むけ）', async () => {
     // 会社のクラウドドライブは **名前を見て** .exe を落とす。
     // 中身は同じで名前だけ違うものを置けるようにしてある。
-    const out = await tempDir('aas-bin-');
-    const fake = join(await tempDir('aas-fake-'), 'node.exe');
-    await writeFile(fake, 'dummy');
-    const { bundle } = await import('../scripts/bundle.mjs');
-    await bundle({ out, srcRoot: installRoot(), nodeExe: fake, nodeName: 'node.bin', version: 'x' });
+    const fake = await fakeNode();
+    const { out } = await sharedBundle('exe-bin', { nodeExe: fake, nodeName: 'node.bin', version: 'x' });
     const { stat } = await import('node:fs/promises');
     assert.ok(await stat(join(out, 'runtime', 'node.bin')));
     // 既定は変えない。何も渡さなければ node.exe のまま。
-    const plain = await tempDir('aas-bin2-');
-    await bundle({ out: plain, srcRoot: installRoot(), nodeExe: fake, version: 'x' });
+    const { out: plain } = await sharedBundle('exe', { nodeExe: fake, version: 'x' });
     assert.ok(await stat(join(plain, 'runtime', 'node.exe')));
   });
 

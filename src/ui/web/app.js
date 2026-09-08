@@ -590,6 +590,21 @@ function listen() {
       // 動いている間は切り替えさせない。切り替えると、返事が別の会話に混ざる。
       drawConversations();
     }
+    /*
+     * **読み込みの進み具合を、いつも見える所に出す。**
+     *
+     * 進み具合（10% ごと）は前から出していたが、出す先が「流れ」だけ
+     * だった。**そこを開いていない人には、何も出ていないのと同じ。**
+     * 数GBを読む間ずっと「待機中」と出ていたので、送ったのに無視された
+     * ようにしか見えない（実機でそうなった）。
+     *
+     * 上の帯は畳んでも消えない。読み込みの間は、そこに出す。
+     */
+    if (e.type === 'log' && typeof e.text === 'string') {
+      const loading = /^(読み込み中 \d+%|モデルを読み込んでいます|まだ読み込んでいます)/.exec(e.text);
+      if (loading) run.set('busy', e.text.split('（')[0]);
+      if (/^読み込みました/.test(e.text) && !busyNow) run.set('idle', '待機中');
+    }
     if (e.type === 'conversations') void loadConversations();
     if (e.type === 'unfinished') void loadUnfinished();
     if (e.type === 'undo') void loadUndo();

@@ -33,3 +33,19 @@ test('モデルの頁は、二つの読み込みを直列に待たない', () =>
   assert.ok(!/await\s+loadCfg\(\);\s*await\s+loadCatalog\(\)/.test(app),
     'loadCfg を待ってから loadCatalog を読んでいる');
 });
+
+/**
+ * 読み込みの進み具合を、いつも見える所に出す。
+ *
+ * 進み具合（10% ごと）は前から出していた。出す先が「流れ」だけだったので、
+ * **そこを開いていない人には、何も出ていないのと同じ。**数GBを読む間ずっと
+ * 「待機中」と出ていて、送ったのに無視されたようにしか見えなかった。
+ */
+test('読み込み中の行を、上の帯へ出す', () => {
+  const src = readFileSync(join(root, 'src/ui/web/app.js'), 'utf8');
+  // 出来事を受け取る所で、読み込みの行を拾って帯へ渡していること。
+  assert.ok(src.includes('まだ読み込んでいます'), '読み込みの行を拾っていない');
+  const at = src.indexOf('まだ読み込んでいます');
+  assert.ok(at > 0);
+  assert.match(src.slice(at, at + 200), /run\.set\('busy'/, '帯へ渡していない');
+});
