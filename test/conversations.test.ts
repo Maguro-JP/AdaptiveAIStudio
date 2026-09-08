@@ -256,7 +256,7 @@ describe('見出しは、頭だけ読む', () => {
   test('大きくなったら、数え切れていないと言う', async () => {
     const { c } = await store();
     const { id } = await c.create();
-    await long(c, id, 30);
+    await long(c, id, 5);
     const head = await c.head(id);
     assert.equal(head.more, true, '全部読んでいる（または言っていない）');
     assert.ok(head.messages > 0, '空だと言っている');
@@ -278,8 +278,14 @@ describe('見出しは、頭だけ読む', () => {
       await long(c, id, rounds);
       return (await c.head(id)).messages;
     };
-    const small = await at(30);
-    const large = await at(300);
+    /*
+     * **10 倍の比だけが要る。**大きさそのものは要らない。
+     * 30 と 300 で作っていたので、この 2 件だけで 36 秒かかっていた
+     * （配る先ではもっと遅い。**押せない形にしていた**）。
+     * 頭 128KB を超えるのは 2 往復ぶんで足りるので、5 と 50 で同じことが見える。
+     */
+    const small = await at(5);
+    const large = await at(50);
     assert.ok(small > 0, '何も数えていない');
     assert.equal(large, small, `丸ごと読んでいる（10 倍で ${large} / ${small}）`);
   });
@@ -306,7 +312,7 @@ describe('後ろから読む', () => {
   test('直近は必ず入る。**末尾が同じ**', async () => {
     const { c } = await store();
     const { id } = await c.create();
-    await big(c, id, 60);
+    await big(c, id, 10);
     const all = await c.load(id);
     const tail = await c.load(id, { tailBytes: 256 * 1024 });
     assert.ok(tail.length > 0 && tail.length < all.length, `切れていない: ${tail.length}/${all.length}`);
@@ -319,7 +325,7 @@ describe('後ろから読む', () => {
     // OpenAI 互換の口はその形を受け取らずに落ちる。
     const { c } = await store();
     const { id } = await c.create();
-    await big(c, id, 60);
+    await big(c, id, 10);
     // **実際に頭が道具の結果になる大きさで試す。**適当な大きさだと、
     // たまたま人の発言から始まって、守りが無くても通ってしまう
     // （最初に書いた検査がそれで、外しても落ちなかった）。
@@ -349,8 +355,14 @@ describe('後ろから読む', () => {
       await big(c, id, rounds);
       return (await c.load(id, { tailBytes: 256 * 1024 })).length;
     };
-    const small = await at(30);
-    const large = await at(300);
+    /*
+     * **10 倍の比だけが要る。**大きさそのものは要らない。
+     * 30 と 300 で作っていたので、この 2 件だけで 36 秒かかっていた
+     * （配る先ではもっと遅い。**押せない形にしていた**）。
+     * 頭 128KB を超えるのは 2 往復ぶんで足りるので、5 と 50 で同じことが見える。
+     */
+    const small = await at(5);
+    const large = await at(50);
     assert.ok(small > 0, '何も返っていない');
     assert.equal(large, small, `丸ごと読んでいる（10 倍で ${large} / ${small}）`);
   });

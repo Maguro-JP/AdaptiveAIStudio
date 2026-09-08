@@ -147,11 +147,37 @@ describe('npm 無しで仕事を動かす', () => {
   });
 });
 
+/*
+ * **200MB を、試験ごとに組み直さない。**
+ *
+ * ここは bundle を 11 回組んでいた。この機械で 105 秒のうち大半がこれで、
+ * 配る先（Windows・クラウドドライブの下）では 1 件で 233 秒かかって落ちた。
+ * **入口の 6 番を、押せない形にしていたのは、この作り。**
+ *
+ * 同じ組み方のものは一度だけ組んで、読む側で使い回す。
+ * 組み方（渡す条件）が違うものだけ、別に組む。
+ */
+const built = new Map<string, Promise<{ out: string; result: Awaited<ReturnType<typeof import('../scripts/bundle.mjs')['bundle']>> }>>();
+
+function sharedBundle(
+  key: string,
+  opts: { nodeHere?: boolean; nodeExe?: string; nodeName?: string; version: string },
+): Promise<{ out: string; result: Awaited<ReturnType<typeof import('../scripts/bundle.mjs')['bundle']>> }> {
+  const had = built.get(key);
+  if (had) return had;
+  const making = (async () => {
+    const out = await tempDir(`aas-bundle-${key}-`);
+    const { bundle } = await import('../scripts/bundle.mjs');
+    const result = await bundle({ out, srcRoot: installRoot(), ...opts });
+    return { out, result };
+  })();
+  built.set(key, making);
+  return making;
+}
+
 describe('bundle の形', () => {
   test('利用者が最初に見るものは、普通の名前になっている', async () => {
-    const out = await tempDir('aas-bundle-');
-    const { bundle } = await import('../scripts/bundle.mjs');
-    await bundle({ out, srcRoot: installRoot(), version: 'test-1' });
+    const { out } = await sharedBundle('plain', { version: 'test-plain' });
 
     const { readdir } = await import('node:fs/promises');
     const top = (await readdir(out)).sort();
@@ -162,9 +188,8 @@ describe('bundle の形', () => {
   test('中の道が深すぎるものを配らない', async () => {
     // Windows は道の全体が 260 文字を超えると開けない。深いまま配ると、
     // 利用者の展開が途中で止まる（実際に警告が出た）。**組むときにしか気づけない。**
-    const out = await tempDir('aas-bundle-');
-    const { bundle, DEPTH_BUDGET } = await import('../scripts/bundle.mjs');
-    const r = await bundle({ out, srcRoot: installRoot(), version: 'test-depth' });
+    const { DEPTH_BUDGET } = await import('../scripts/bundle.mjs');
+    const { out, result: r } = await sharedBundle('plain', { version: 'test-plain' });
     assert.ok(r.deepest <= DEPTH_BUDGET, `深すぎます: ${r.deepest} > ${DEPTH_BUDGET}`);
     // 置き場所に使える文字数を、README に書いてあること。
     // 数字だけ合っていても、読む所に無ければ利用者には届かない。
@@ -174,10 +199,8 @@ describe('bundle の形', () => {
   });
 
   test('版は VERSION に、そのまま書いてある', async () => {
-    const out = await tempDir('aas-bundle-');
-    const { bundle } = await import('../scripts/bundle.mjs');
-    await bundle({ out, srcRoot: installRoot(), version: 'test-2' });
-    assert.equal((await readFile(join(out, 'VERSION'), 'utf8')).trim(), 'test-2');
+    const { out } = await sharedBundle('plain', { version: 'test-plain' });
+    assert.equal((await readFile(join(out, 'VERSION'), 'utf8')).trim(), 'test-plain');
   });
 
   test('版を渡さなくても、手元の印まで書く', sourceOnly, async () => {
@@ -197,9 +220,7 @@ describe('bundle の形', () => {
   });
 
   test('data は app の外に出る', async () => {
-    const out = await tempDir('aas-bundle-');
-    const { bundle } = await import('../scripts/bundle.mjs');
-    await bundle({ out, srcRoot: installRoot(), version: 'test-3' });
+    const { out } = await sharedBundle('plain', { version: 'test-plain' });
     // 中身（app）の中に記録が混ざると、更新のたびに巻き添えで消える。
     assert.equal(aasHome(join(out, 'app')), join(out, 'data'));
   });
@@ -281,9 +302,7 @@ describe('npm 無しの入口（scripts/run.mjs）', () => {
   test('組み立てたものを、通しで動かせる', async () => {
     // これが無かったのが根本。入口が死んでいても、部品の試験は全部通る。
     // 実機では「1 を選んでも何も起きない」という形で出た。
-    const out = await tempDir('aas-e2e-');
-    const { bundle } = await import('../scripts/bundle.mjs');
-    await bundle({ out, srcRoot: installRoot(), nodeHere: true, version: 'e2e' });
+    const { out } = await sharedBundle('here', { nodeHere: true, version: 'here' });
 
     const { execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');
@@ -395,9 +414,7 @@ describe('CI が使えなくても、bundle は作れる', () => {
   test('いま動かしている Node ごと固められる', async () => {
     // 枠を使い切ると何も確かめられなくなる、を避けるための道。
     // 取ってこない（網が要らない）ので、CI にも外にも依存しない。
-    const out = await tempDir('aas-self-');
-    const { bundle } = await import('../scripts/bundle.mjs');
-    const r = await bundle({ out, srcRoot: installRoot(), nodeHere: true, version: 'x' });
+    const { out, result: r } = await sharedBundle('here', { nodeHere: true, version: 'here' });
     assert.equal(r.bundledNode, true);
 
     const { readdir } = await import('node:fs/promises');
@@ -407,9 +424,7 @@ describe('CI が使えなくても、bundle は作れる', () => {
 
   test('固めたものだけで、検査を回せる形になっている', async () => {
     // 持って行った先で確かめられないなら、持って行く意味がない。
-    const out = await tempDir('aas-self-');
-    const { bundle } = await import('../scripts/bundle.mjs');
-    await bundle({ out, srcRoot: installRoot(), version: 'x' });
+    const { out } = await sharedBundle('plain', { version: 'test-plain' });
     const { stat } = await import('node:fs/promises');
     for (const p of ['app/scripts/run-tests.mjs', 'app/test', 'app/src']) {
       assert.ok(await stat(join(out, ...p.split('/'))), `入っていない: ${p}`);
@@ -452,9 +467,7 @@ describe('bundle の形のまま、この中で読む設定で通す', () => {
     // 過去の不具合は、**配った形でだけ壊れる**ものに集まっている
     // （入口が丸ごと死ぬ、置き場がずれる、繋ぎ先が埋まらない）。
     // 作業コピーで通ることは、配った形で通ることの証明にならない。
-    const out = await tempDir('aas-dist-');
-    const { bundle } = await import('../scripts/bundle.mjs');
-    await bundle({ out, srcRoot: installRoot(), nodeHere: true, version: 'dist-e2e' });
+    const { out } = await sharedBundle('here', { nodeHere: true, version: 'here' });
 
     const { mkdir: mk, writeFile: wf } = await import('node:fs/promises');
     const models = join(out, 'data', 'models');
