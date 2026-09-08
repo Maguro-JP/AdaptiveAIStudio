@@ -40,12 +40,15 @@ const MAX_FILES = 3000;
 export class Prefetcher {
   readonly #root: string;
   readonly #onEvent?: (e: PrefetchEvent) => void;
+  /** その命令が呼べるか。走らせる機械に依らせたくない試験のために、渡してもらう。 */
+  readonly #can: (command: string) => boolean;
   #inFlight?: Promise<ProjectSnapshot>;
   #snapshot?: ProjectSnapshot;
 
-  constructor(root: string, onEvent?: (e: PrefetchEvent) => void) {
+  constructor(root: string, onEvent?: (e: PrefetchEvent) => void, can: (command: string) => boolean = canRun) {
     this.#root = root;
     this.#onEvent = onEvent;
+    this.#can = can;
   }
 
   /** 裏で走らせる。待たない。 */
@@ -188,7 +191,7 @@ export class Prefetcher {
         : await exists('yarn.lock') ? 'yarn'
         : await exists('bun.lockb') || await exists('bun.lock') ? 'bun'
         : 'npm';
-      const run = (name: string) => scriptCommand(pm, name, scripts, canRun);
+      const run = (name: string) => scriptCommand(pm, name, scripts, this.#can);
 
       const put = (name: string) => {
         if (!has(name)) return {};

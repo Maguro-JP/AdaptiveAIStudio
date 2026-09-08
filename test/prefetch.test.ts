@@ -24,7 +24,7 @@ async function project(files: Record<string, string> = {}): Promise<string> {
 describe('先読み', () => {
   test('起動直後は待たずに戻り、裏で構築される', async () => {
     const root = await project({ 'a.ts': 'x', 'src/b.ts': 'y' });
-    const p = new Prefetcher(root);
+    const p = new Prefetcher(root, undefined, () => true);
 
     p.start();
     // 「待っていない」ことは、時間ではなく状態で見る。
@@ -40,7 +40,7 @@ describe('先読み', () => {
 
   test('完了後の取得は即座に返る', async () => {
     const root = await project({ 'a.ts': 'x' });
-    const p = new Prefetcher(root);
+    const p = new Prefetcher(root, undefined, () => true);
     p.start();
     await p.snapshot();
 
@@ -52,7 +52,7 @@ describe('先読み', () => {
 
   test('peek は完了前なら undefined を返す（待たない）', async () => {
     const root = await project({ 'a.ts': 'x' });
-    const p = new Prefetcher(root);
+    const p = new Prefetcher(root, undefined, () => true);
     assert.equal(p.peek(), undefined);
     p.start();
     await p.snapshot();
@@ -61,7 +61,7 @@ describe('先読み', () => {
 
   test('start していなければ snapshot は undefined', async () => {
     const root = await project();
-    assert.equal(await new Prefetcher(root).snapshot(), undefined);
+    assert.equal(await new Prefetcher(root, undefined, () => true).snapshot(), undefined);
   });
 
   test('node_modules などは索引しない', async () => {
@@ -70,7 +70,7 @@ describe('先読み', () => {
       'node_modules/junk.js': 'noise',
       'dist/out.js': 'built',
     });
-    const p = new Prefetcher(root);
+    const p = new Prefetcher(root, undefined, () => true);
     p.start();
     const snap = (await p.snapshot())!;
     assert.ok(snap.files.includes('a.ts'));
@@ -82,7 +82,7 @@ describe('先読み', () => {
     const root = await project({
       'package.json': JSON.stringify({ scripts: { test: 'vitest', build: 'tsc' } }),
     });
-    const p = new Prefetcher(root);
+    const p = new Prefetcher(root, undefined, () => true);
     p.start();
     const snap = (await p.snapshot())!;
     assert.equal(snap.kind, 'Node.js');
@@ -101,7 +101,8 @@ describe('先読み', () => {
         'package.json': JSON.stringify({ scripts: { test: 'vitest' } }),
         [lock]: '',
       });
-      const p = new Prefetcher(root);
+      // 呼べるかどうかは渡す。runner に pnpm が入っているかで結果が変わらないように。
+      const p = new Prefetcher(root, undefined, () => true);
       p.start();
       const snap = (await p.snapshot())!;
       assert.equal(snap.commands.test, want);
@@ -112,7 +113,7 @@ describe('先読み', () => {
     const root = await project({
       'package.json': JSON.stringify({ scripts: { test: 'node --test', typecheck: 'tsc', check: 'npm run typecheck && npm test' } }),
     });
-    const p = new Prefetcher(root);
+    const p = new Prefetcher(root, undefined, () => true);
     p.start();
     const snap = (await p.snapshot())!;
     assert.equal(snap.commands.typecheck, 'npm run typecheck');
@@ -125,7 +126,7 @@ describe('先読み', () => {
       ['poetry.lock', 'poetry run pytest'],
     ] as const) {
       const root = await project({ 'pyproject.toml': '', [lock]: '' });
-      const p = new Prefetcher(root);
+      const p = new Prefetcher(root, undefined, () => true);
       p.start();
       const snap = (await p.snapshot())!;
       assert.equal(snap.commands.test, want);
@@ -134,7 +135,7 @@ describe('先読み', () => {
 
   test('壊れた package.json でも他の検出は続く', async () => {
     const root = await project({ 'package.json': '{ broken', 'a.ts': 'x' });
-    const p = new Prefetcher(root);
+    const p = new Prefetcher(root, undefined, () => true);
     p.start();
     const snap = (await p.snapshot())!;
     assert.equal(snap.kind, 'Node.js');
@@ -148,7 +149,7 @@ describe('先読み', () => {
       ['pyproject.toml', 'Python', 'pytest'],
     ] as const) {
       const root = await project({ [file]: '' });
-      const p = new Prefetcher(root);
+      const p = new Prefetcher(root, undefined, () => true);
       p.start();
       const snap = (await p.snapshot())!;
       assert.equal(snap.kind, kind);
@@ -161,14 +162,14 @@ describe('先読み', () => {
     await sleep(20);
     await writeFile(join(root, 'new.ts'), 'y');
 
-    const p = new Prefetcher(root);
+    const p = new Prefetcher(root, undefined, () => true);
     p.start();
     const snap = (await p.snapshot())!;
     assert.equal(snap.recentFiles[0]?.path, 'new.ts');
   });
 
   test('読めないディレクトリでも落ちず、空の結果を返す', async () => {
-    const p = new Prefetcher('/nonexistent/project');
+    const p = new Prefetcher('/nonexistent/project', undefined, () => true);
     p.start();
     const snap = await p.snapshot();
     assert.ok(snap, '先読みの失敗で undefined になっている');
@@ -177,7 +178,7 @@ describe('先読み', () => {
 
   test('invalidate すると作り直される', async () => {
     const root = await project({ 'a.ts': 'x' });
-    const p = new Prefetcher(root);
+    const p = new Prefetcher(root, undefined, () => true);
     p.start();
     const first = (await p.snapshot())!;
 
@@ -192,7 +193,7 @@ describe('先読み', () => {
   test('進捗イベントが届く', async () => {
     const root = await project({ 'a.ts': 'x' });
     const events: PrefetchEvent[] = [];
-    const p = new Prefetcher(root, (e) => events.push(e));
+    const p = new Prefetcher(root, (e) => events.push(e), () => true);
     p.start();
     await p.snapshot();
     assert.ok(events.some((e) => e.type === 'start' && e.task === 'index'));
@@ -206,7 +207,7 @@ describe('要約', () => {
       'package.json': JSON.stringify({ scripts: { test: 'vitest' } }),
       'src/app.ts': 'x',
     });
-    const p = new Prefetcher(root);
+    const p = new Prefetcher(root, undefined, () => true);
     p.start();
     const text = describeSnapshot((await p.snapshot())!);
 
@@ -226,7 +227,7 @@ describe('要約', () => {
 describe('上限つきの待機', () => {
   test('構築中でも完成すれば返る', async () => {
     const root = await project({ 'a.ts': 'x' });
-    const p = new Prefetcher(root);
+    const p = new Prefetcher(root, undefined, () => true);
     p.start();
     // peek はまだ undefined でも、少し待てば取れる
     assert.equal(p.peek(), undefined);
@@ -237,7 +238,7 @@ describe('上限つきの待機', () => {
 
   test('上限を超えたら諦める（依頼を待たせない）', async () => {
     const root = await project({ 'a.ts': 'x' });
-    const p = new Prefetcher(root);
+    const p = new Prefetcher(root, undefined, () => true);
     p.start();
     const t = Date.now();
     await p.snapshotWithin(1);
@@ -246,7 +247,7 @@ describe('上限つきの待機', () => {
 
   test('諦めた後も裏で構築は続き、次回は使える', async () => {
     const root = await project({ 'a.ts': 'x' });
-    const p = new Prefetcher(root);
+    const p = new Prefetcher(root, undefined, () => true);
     p.start();
     await p.snapshotWithin(1);
     const later = await p.snapshotWithin(3000);
@@ -256,7 +257,7 @@ describe('上限つきの待機', () => {
   test('start していなければ待たずに undefined', async () => {
     const root = await project();
     const t = Date.now();
-    assert.equal(await new Prefetcher(root).snapshotWithin(5000), undefined);
+    assert.equal(await new Prefetcher(root, undefined, () => true).snapshotWithin(5000), undefined);
     assert.ok(Date.now() - t < 50);
   });
 });

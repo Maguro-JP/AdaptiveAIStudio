@@ -22,7 +22,7 @@ async function project(files: Record<string, string>): Promise<string> {
 }
 
 async function snapshotOf(root: string) {
-  const p = new Prefetcher(root);
+  const p = new Prefetcher(root, undefined, () => true);
   p.start();
   return (await p.snapshot())!;
 }

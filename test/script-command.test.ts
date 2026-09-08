@@ -44,3 +44,36 @@ describe('打ち方を決める', () => {
     assert.equal(scriptCommand('npm', 'lint', scripts, (c) => c === 'node'), undefined);
   });
 });
+
+/**
+ * 試験の中で、走らせている機械に「入っているか」を聞かない。
+ *
+ * `Prefetcher` が canRun をそのまま呼んでいたので、pnpm が入っている機械では
+ * 通り、入っていない機械（CI の runner）では落ちた。**同じコードで結果が変わる。**
+ * 呼べるかどうかは渡す。
+ */
+describe('打ち方の試験は、機械に依らない', () => {
+  test('試験の中の Prefetcher は、呼べるかどうかを渡している', async () => {
+    const { readdir, readFile } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const bare: string[] = [];
+    for (const name of await readdir(dir)) {
+      if (!name.endsWith('.ts') || name === 'script-command.test.ts') continue; // 自分の中の文字列を数えない
+      const src = await readFile(join(dir, name), 'utf8');
+      // 呼び出しは1行で書かれている。丸括弧の深さ 0 のカンマだけを数える。
+      for (const m of src.matchAll(/new Prefetcher\((.*)$/gm)) {
+        const line = m[1] ?? '';
+        let depth = 0, commas = 0;
+        for (const ch of line) {
+          if (ch === '(') depth++;
+          else if (ch === ')') { if (depth === 0) break; depth--; }
+          else if (ch === ',' && depth === 0) commas++;
+        }
+        if (commas < 2) bare.push(`${name}: new Prefetcher(${line}`);
+      }
+    }
+    assert.deepEqual(bare, [], `呼べるかどうかを渡していない:\n${bare.join('\n')}`);
+  });
+});
