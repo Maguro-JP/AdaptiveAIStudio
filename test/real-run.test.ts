@@ -227,9 +227,13 @@ describe('実走：直したあと、こちらで試験を回して「直った�
 
       // **通ったと言っているか。**ここが本題。
       const settled = inner.find((ev) => ev.type === 'settled') as
-        { verified?: boolean; detail?: string } | undefined;
+        { verified?: boolean; detail?: string; model?: string; outputTokens?: number; tps?: number } | undefined;
       assert.ok(settled, '終わりを記録していない');
       assert.equal(settled.verified, true, `通っていないのに通ったと言っている / 逆: ${JSON.stringify(settled)}`);
+      // **どのモデルが答えたかを、結末に添えているか。**遅い理由を見せるための足場。
+      assert.equal(settled.model, 'local:real', `答えたモデルが載っていない: ${JSON.stringify(settled)}`);
+      assert.ok((settled.outputTokens ?? 0) > 0, '出した量が載っていない');
+      if (settled.tps !== undefined) assert.ok(settled.tps > 0, `速さがおかしい: ${settled.tps}`);
 
       // 言っているだけでないことを、外から確かめる。
       assert.equal(await projectTestPasses(root), true, '製品は通ったと言うが、実際は通らない');

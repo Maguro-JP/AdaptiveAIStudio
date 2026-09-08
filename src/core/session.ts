@@ -164,6 +164,15 @@ export type SessionEvent =
   | {
       type: 'settled'; reason: string; verified: boolean; seconds: number; detail?: string;
       checked: 'passed' | 'failed' | 'preexisting' | 'notRun';
+      /** 答えたモデル。切り替わっていれば、切り替わった先。 */
+      model: string;
+      /** 出した量の見積もり（文字数から。本文だけで、ツールの呼び出しは数えない）。 */
+      outputTokens: number;
+      /**
+       * 実測の速さ（tok/s、見積もり）。**遅い理由を、その場で見せる。**
+       * 一言で終わった回は数えない（非現実的な値になる。metrics と同じ線）。
+       */
+      tps?: number;
     }
   /**
    * 道具が弾かれたまま終わった。
@@ -972,6 +981,8 @@ export class Session {
 
     let finishedReason: string | undefined;
     let answerChars = 0;
+    /** 答えたモデル。途中で切り替わったら、その先を覚える。 */
+    let modelUsed = this.candidates[0] ?? '';
     // 巻き戻すかどうか（従来の意味）。確かめて落ちたときだけ倒す。
     let keep = true;
     // 実際に確かめたか、どうだったか。**確かめていないことを、通ったと言わない。**
@@ -1104,6 +1115,7 @@ export class Session {
               break;
             }
             case 'fallback':
+              modelUsed = ev.to;
               yield { type: 'fallback', from: ev.from, to: ev.to, reason: ev.reason };
               break;
             case 'finished':
@@ -1237,6 +1249,7 @@ export class Session {
         verified: checked === 'passed',
         checked,
         seconds: (Date.now() - started) / 1000,
+        ...speedOf(modelUsed, answerChars, (Date.now() - started) / 1000),
       };
     } catch (e) {
       // 一度の失敗で対話ごと終わらせない。次の指示は受けられる。
@@ -1245,6 +1258,7 @@ export class Session {
       yield {
         type: 'settled', reason: 'failed', verified: false, checked,
         seconds: (Date.now() - started) / 1000, detail: (e as Error).message,
+        ...speedOf(modelUsed, answerChars, (Date.now() - started) / 1000),
       };
     } finally {
       this.#running = undefined;
@@ -1771,4 +1785,19 @@ function summarize(args: unknown): string {
 
 function firstLine(text: string): string {
   return (text.split('\n')[0] ?? '').slice(0, 160);
+}
+
+/**
+ * 1ターンの速さ。**遅い理由を、答えのすぐ下に出すために持つ。**
+ *
+ * 8B を CPU で読んでいて一言に 3 分かかっていたとき、画面には「待機中」と
+ * 秒数しか無く、モデルが大きすぎるのか、壊れているのかが分からなかった。
+ * 数え方は metrics と同じ（文字数 / 3、1 秒未満か 20 トークン未満は数えない）。
+ */
+export function speedOf(model: string, chars: number, seconds: number): { model: string; outputTokens: number; tps?: number } {
+  const outputTokens = Math.round(chars / 3);
+  const usable = seconds >= 1 && outputTokens >= 20;
+  return usable
+    ? { model, outputTokens, tps: Math.round((outputTokens / seconds) * 10) / 10 }
+    : { model, outputTokens };
 }

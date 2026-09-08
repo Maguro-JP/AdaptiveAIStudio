@@ -7,6 +7,7 @@
 
 import { renderDiff, splitHunkTexts } from './diff.js';
 import { decorate } from './color.js';
+import { verdictText, slowNote } from './verdict.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -442,12 +443,10 @@ export const PANELS = {
         // **確かめていないことを、確かめた顔で出さない。**
         // 試験の無い作業場では、何もしていなくても「完了」に見えていた。
         const okAll = v.reason === 'completed' && v.verified;
-        const how = v.reason !== 'completed' ? v.reason
-          : v.checked === 'passed' ? '完了（検証を通りました）'
-          : v.checked === 'failed' ? '完了（検証は通っていません）'
-          : v.checked === 'preexisting' ? '完了（元から落ちています）'
-          : '完了（検証していません）';
-        add(el('div', `verdict ${okAll ? 'ok' : 'ng'}`, `${how} · ${v.seconds.toFixed(1)}秒`));
+        add(el('div', `verdict ${okAll ? 'ok' : 'ng'}`, verdictText(v)));
+        // **遅い理由を、その場で言う。**設定の奥の数字は誰も見ない。
+        const slow = slowNote(v);
+        if (slow) note('warn', slow);
       }
     });
 

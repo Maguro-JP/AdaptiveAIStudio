@@ -639,8 +639,13 @@ async function main(): Promise<void> {
             case 'rolledBack':
               console.log(c.yellow(`  変更を巻き戻しました: ${ev.paths.join(', ')}\n`));
               break;
-            case 'settled':
-              console.log(c.dim(`  (${ev.seconds.toFixed(1)}s)\n`));
+            case 'settled': {
+              // 画面と同じく、どのモデルがどれだけの速さだったかを添える。
+              const speed = typeof ev.tps === 'number' ? ` · ${ev.model} · 約 ${ev.tps} tok/s` : ev.model ? ` · ${ev.model}` : '';
+              console.log(c.dim(`  (${ev.seconds.toFixed(1)}s${speed})\n`));
+              if (typeof ev.tps === 'number' && ev.tps < 3) {
+                console.log(c.yellow(`  遅いです（約 ${ev.tps} tok/s）。このモデルはこの機械には大きすぎるかもしれません。\n`));
+              }
               // 確かめて落ちたときだけ、片付けない。
               // （試験の無い作業場で、いつまでも残り続けるのを避ける）
               if (acceptedProposalId && ev.reason === 'completed' && ev.checked !== 'failed') {
@@ -648,6 +653,7 @@ async function main(): Promise<void> {
               }
               acceptedProposalId = undefined;
               break;
+            }
             case 'log':
               flush();
               console.log(ev.level === 'error' ? c.red(`  ${ev.text}`) : c.yellow(`  ${ev.text}`));
