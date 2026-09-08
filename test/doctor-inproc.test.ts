@@ -49,9 +49,24 @@ describe('doctor は、この中で読む道を知っている', () => {
     assert.match(text, /この中で読む/);
   });
 
-  test('土台を決めていない設定の案内に、実行ファイルの増えない道が出る', async () => {
+  test('動かし方を書いていない設定でも、この中で読む道になる', async () => {
+    /*
+     * 前は、ここで Ollama 扱いになっていた（設定が無いときは inproc なのに、
+     * ファイルが在って書いていないときだけ別の道）。Ollama を入れていない
+     * 機械では、モデルを取ってくる所も `ollama pull` へ行って必ず失敗し、
+     * **GGUF を1つ置けば動く道に辿り着けない。**
+     */
     const { home, config } = await scratch();
     await writeFile(config, JSON.stringify({ runtime: {} }));
+    const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
+    assert.match(text, /GGUF がありません/);
+    assert.doesNotMatch(text, /Ollama を入れて/, 'Ollama を入れろと言っている');
+  });
+
+  test('Ollama と書いてあって何も無いときは、両方の道を案内する', async () => {
+    // 選べることを、片方だけ出して必須のように見せない。
+    const { home, config } = await scratch();
+    await writeFile(config, JSON.stringify({ runtime: { kind: 'ollama' } }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     assert.match(text, /モデルを動かす土台がまだありません/);
     assert.match(text, /この中で読む（実行ファイルは増えません）/);

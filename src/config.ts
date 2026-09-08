@@ -367,6 +367,26 @@ function normalizeRuntime(raw: unknown): RuntimeConfig {
   return r as RuntimeConfig;
 }
 
+/*
+ * 動かし方を書いていないときは、**設定が無いときと同じ道にする。**
+ *
+ * 設定ファイルが無ければ「この中で読む（inproc）」が既定。ところが、
+ * ファイルは在るのに `runtime` を書いていないときは `{}` になり、以後
+ * `?? 'ollama'` で Ollama 扱いになっていた。**同じ「書いていない」なのに、
+ * ファイルの有無で行き先が変わる。**
+ *
+ * Ollama 扱いになると、モデルを取ってくる所も `ollama pull` へ行く。
+ * 入れていない機械では必ず「Ollama に繋がりません」で終わり、
+ * **GGUF を1つ置けば動く道があることに辿り着けない。**（実際にそうなった）
+ *
+ * ここで決めるのは、**読んだ設定の中身**だけ。土台を組む側
+ * （`buildRuntime`）は触らない。渡された設定をそのまま使う所が多く、
+ * そこを変えると「書いていない＝Ollama」を前提にした道まで巻き込む。
+ */
+function withDefaultKind(runtime: RuntimeConfig): RuntimeConfig {
+  return runtime.kind ? runtime : { ...runtime, kind: 'inproc' };
+}
+
 /**
  * 設定の中身を読む。**壊れていたら、どこがどう壊れているかを言う。**
  *
@@ -431,7 +451,7 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
     temperature: parsed.temperature ?? DEFAULT_CONFIG.temperature,
     maxTokens: parsed.maxTokens ?? DEFAULT_CONFIG.maxTokens,
     agent: parsed.agent ?? {},
-    runtime: normalizeRuntime(parsed.runtime),
+    runtime: withDefaultKind(normalizeRuntime(parsed.runtime)),
     harness: parsed.harness ?? {},
     initiative: parsed.initiative ?? {},
     roles: parsed.roles ?? [],

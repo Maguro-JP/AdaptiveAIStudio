@@ -73,6 +73,16 @@ try {
     return undefined;
   });
 
+  await check('取ってくる先の一覧が出る', async () => {
+    // 空の選択肢を出していた（設定 → モデルの「取ってくる」）。空だと、
+    // モデルを持っていない人はそこで詰む。名前を直に打つ道は別にある。
+    const r = await get('/api/models');
+    if (!r.ok) throw new Error(`${r.status}`);
+    const body = await r.json();
+    if (!Array.isArray(body.catalog) || body.catalog.length === 0) throw new Error('一覧が空');
+    return `${body.catalog.length} 件`;
+  });
+
   await check('会話が作れる', async () => {
     const made = await fetch(`${base}/api/conversations`, { method: 'POST' });
     if (!made.ok) throw new Error(`作れない: ${made.status}`);

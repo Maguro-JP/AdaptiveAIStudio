@@ -17,7 +17,7 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseConfigText, ConfigBroken } from '../src/config.ts';
+import { parseConfigText, ConfigBroken, loadConfig } from '../src/config.ts';
 import { tempDir } from './tmp.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -62,5 +62,28 @@ describe('壊れた設定', () => {
     assert.match(got.out, /設定を読めません/, `理由が出ていない: ${got.out.slice(0, 300)}`);
     // **スタックを見せない。**読む人には何も分からず、次の一手も出てこない。
     assert.ok(!/at JSON\.parse|node:internal/.test(got.out), `スタックが出ている: ${got.out.slice(0, 400)}`);
+  });
+});
+
+describe('動かし方を書いていないとき', () => {
+  /**
+   * 設定ファイルが無ければ「この中で読む（inproc）」が既定。ところが、
+   * ファイルは在るのに `runtime` を書いていないときだけ Ollama 扱いに
+   * なっていた。**同じ「書いていない」なのに、ファイルの有無で行き先が
+   * 変わる。**Ollama を入れていない機械では、モデルを取ってくる所も
+   * `ollama pull` へ行き、必ず「繋がりません」で終わる。
+   */
+  test('設定はあるが runtime が無いとき、この中で読む', async () => {
+    const dir = await tempDir('aas-cfg-kind-');
+    await writeFile(join(dir, 'aas.config.json'), JSON.stringify({ temperature: 0.3 }), 'utf8');
+    const { config } = loadConfig(dir);
+    assert.equal(config.runtime?.kind, 'inproc', '書いていないのに Ollama になっている');
+  });
+
+  test('書いてあるものは、そのまま使う', async () => {
+    const dir = await tempDir('aas-cfg-kind2-');
+    await writeFile(join(dir, 'aas.config.json'),
+      JSON.stringify({ runtime: { kind: 'ollama' } }), 'utf8');
+    assert.equal(loadConfig(dir).config.runtime?.kind, 'ollama');
   });
 });
