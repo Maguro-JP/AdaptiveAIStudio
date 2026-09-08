@@ -1048,7 +1048,12 @@ dialog.wide { width: min(46rem, 92vw); }
 
 /* 拾い手のいない例外を、必ず目に見える所へ出す（app.js の showCrash）。 */
 .crash-note {
-  position: fixed; left: 50%; transform: translateX(-50%); bottom: var(--s3);
+  /*
+   * **下に出さない。**下は入力欄と、添えたものの並ぶ所。ここへ浮かせたら
+   * 添えたものを外す押しボタンに被り、押せなくなった（sweep で見つけた）。
+   * 知らせを足したせいで、元から出来ていたことが出来なくなっている。
+   */
+  position: fixed; left: 50%; transform: translateX(-50%); top: var(--s3);
   z-index: 9999; max-width: min(46rem, 92vw);
   padding: var(--s2) var(--s3); border-radius: var(--radius);
   background: var(--bad); color: #fff; font-size: .82rem; cursor: pointer;
