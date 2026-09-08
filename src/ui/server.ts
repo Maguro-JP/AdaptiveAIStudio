@@ -10,7 +10,7 @@
  * 数年で作法が変わるものに画面を預けたくない。
  * 素の HTML と ES モジュールなら、組み立ての手順すら要らない。
  */
-import { listDir } from './files.ts';
+import { listDir, resolveInside } from './files.ts';
 import { UnfinishedWork, resumePrompt, whyText } from '../core/unfinished.ts';
 import { githubLaunch } from '../core/github-mcp.ts';
 import { CATALOG, BUILTIN, findEntry, specFrom, needsNpx } from '../mcp/catalog.ts';
@@ -22,12 +22,13 @@ import { decompose, stepPrompt } from '../agent/decompose.ts';
 import { Conversations, ID_SHAPE } from '../core/conversations.ts';
 import { loadJournals, type Journals } from '../core/journals.ts';
 import { UndoStore } from '../core/undo.ts';
+import { unifiedDiff, diffStat } from '../agent/diff.ts';
 import { writeEnvValue } from '../core/env.ts';
 import { canRun } from '../core/which.ts';
 import { saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join, dirname, extname, normalize, resolve as resolvePath } from 'node:path';
+import { join, dirname, extname, normalize, resolve as resolvePath, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { aasHome, binDir, modelsDir, isPortable, productRoot, defaultWorkRoot } from '../core/home.ts';
@@ -1065,6 +1066,67 @@ export class UiServer {
 
     // 作業場の中身。**横の板に出すため。**どこで何を触っているのかが
     // 見えないまま指示を書くのは、暗い所で手探りをするのと同じ。
+    /*
+     * 画面の中でファイルを開いて、直して、保存する。
+     *
+     * ここまでは「ファイルは指示を通してだけ触る」と決めていた。触るのは
+     * モデルで、人は見るだけ、という作りは、**直したい一行のために依頼を
+     * 書かせる。**Cursor はその場で直せる。並べて劣る所を、そのまま残さない。
+     *
+     * 手で直したものも、モデルが直したものと同じ扱いにする。戻り先に残し、
+     * 差分を「変更したファイル」へ出す。
+     */
+    if (path === '/api/file' && req.method === 'GET') {
+      const asked = url.searchParams.get('path') ?? '';
+      const real = await resolveInside(this.#workRoot(), asked);
+      if (!real) {
+        // 中を指しているが無い（404）のと、外を指している（400）のは別のこと。
+        const lexical = relative(this.#workRoot(), resolvePath(this.#workRoot(), asked));
+        const inside = asked !== '' && !isAbsolute(asked) && !lexical.startsWith('..') && !isAbsolute(lexical);
+        return inside
+          ? send(res, 404, { error: 'そのファイルはありません' })
+          : send(res, 400, { error: '作業場の外は開けません' });
+      }
+      const info = await stat(real).catch(() => undefined);
+      if (!info || !info.isFile()) return send(res, 404, { error: 'そのファイルはありません' });
+      if (info.size > EDIT_MAX_BYTES) {
+        return send(res, 413, { error: `大きすぎて画面では開けません（${Math.round(info.size / 1024)} KB。上限 ${EDIT_MAX_BYTES / 1024} KB）` });
+      }
+      const bytes = await readFile(real);
+      // 途中に NUL があるものは文字のファイルではない。開いても壊すだけ。
+      if (bytes.subarray(0, 8192).includes(0)) return send(res, 415, { error: '文字のファイルではないので、画面では開けません' });
+      return send(res, 200, { path: asked, content: bytes.toString('utf8'), bytes: info.size });
+    }
+
+    if (path === '/api/file' && req.method === 'PUT') {
+      const body = await readBody(req) as { path?: unknown; content?: unknown };
+      const asked = typeof body?.path === 'string' ? body.path : '';
+      const content = typeof body?.content === 'string' ? body.content : undefined;
+      if (!asked || content === undefined) return send(res, 400, { error: 'path と content が要ります' });
+      const real = await resolveInside(this.#workRoot(), asked);
+      if (!real) return send(res, 400, { error: '作業場の外には書けません' });
+      const session = this.#session;
+      if (session && this.#busyNow(session)) {
+        return send(res, 409, { error: 'いま作業中です。終わってから保存してください' });
+      }
+      const before = await readFile(real, 'utf8').catch(() => undefined);
+      if (before === content) return send(res, 200, { saved: false, path: asked });
+      // 戻せるようにする。モデルの直しと同じ所に、同じ形で残す。
+      const undo = session?.undo ?? new UndoStore(this.#workRoot(), join(stateDir(), 'undo'));
+      await undo.begin(`手で直した: ${asked}`);
+      undo.capture(asked, before);
+      await writeFile(real, content, 'utf8');
+      await undo.end().catch(() => undefined);
+      session?.markChanged();
+      const diff = unifiedDiff(asked, before ?? '', content);
+      const { added, removed } = diffStat(diff);
+      // 「変更したファイル」へ。モデルが書いたときと同じ出来事にする。
+      this.broadcast({ type: 'session', event: { type: 'diff', path: asked, diff, added, removed, created: before === undefined } });
+      this.broadcast({ type: 'undo' });
+      this.broadcast({ type: 'stateChanged' });
+      return send(res, 200, { saved: true, path: asked, added, removed });
+    }
+
     if (path === '/api/files' && req.method === 'GET') {
       // **会話の土台を組まない。**組むとモデルの用意まで要ることになり、
       // モデルが無い機械では、ただの一覧が 500 で返る。
@@ -2382,6 +2444,8 @@ export class BodyTooLarge extends Error {
  * 「無い」と「まだ読んでいない」は別。**同じ顔で出すと、置いてある人にも
  * 「使えません」と言うことになる。**文面の一致で判じないよう、名前で持つ。
  */
+/** 画面で開くファイルの上限。これより大きいものは、画面のエディタでは扱わない。 */
+const EDIT_MAX_BYTES = 2 * 1024 * 1024;
 const NOT_LOADED_YET = 'モデルをまだ読んでいません（頼まれたときに読みます）';
 
 export function foreignPath(p: string | undefined): boolean {

@@ -27,6 +27,8 @@ const ctx = {
   prefill: () => undefined,
   /** 残してあるやりとりを並べ直す。会話の板が差し替える。 */
   showHistory: () => undefined,
+  /** ファイルをエディタで開く。エディタのパネルが繋ぐ。 */
+  openFile: () => undefined,
   on(type, fn) {
     if (!eventHandlers.has(type)) eventHandlers.set(type, []);
     eventHandlers.get(type).push(fn);
@@ -1189,10 +1191,19 @@ async function loadFiles(at = '') {
       const b = document.createElement('button');
       b.textContent = `${entry.dir ? '📁' : '📄'} ${entry.name}`;
       b.title = entry.path;
-      // フォルダは開く。ファイルは、入力欄へ道を差し込む
-      // （画面から中身を書き換えさせない。触るのは指示を通してだけ）。
-      b.onclick = () => (entry.dir ? loadFiles(entry.path) : insertPath(entry.path));
-      box.append(b);
+      // フォルダは開く。ファイルはエディタで開く（その場で直せる）。
+      // 依頼に添えたいときは、隣の @ を押す。
+      b.onclick = () => (entry.dir ? loadFiles(entry.path) : openInEditor(entry.path));
+      if (entry.dir) { box.append(b); continue; }
+      const row = document.createElement('div');
+      row.className = 'side-row';
+      const at = document.createElement('button');
+      at.className = 'icon file-at';
+      at.textContent = '@';
+      at.title = '依頼に添える（中身ごと渡る）';
+      at.onclick = () => insertPath(entry.path);
+      row.append(b, at);
+      box.append(row);
     }
   } catch (e) {
     box.textContent = '';
@@ -1201,6 +1212,19 @@ async function loadFiles(at = '') {
 }
 
 /** 押したファイルの道を、書きかけの指示に足す。 */
+/**
+ * エディタで開く。出ていなければ出してから開く。
+ *
+ * 出す口が「表示するもの」の一覧だけだと、ファイルを押しても何も起きない
+ * ように見える。押した人が最初に見るのはここなので、ここで出す。
+ */
+async function openInEditor(path) {
+  const shown = new Set(panelsInUse(layout.root));
+  const has = layout.panels.some((p) => p.kind === 'editor' && shown.has(p.id));
+  if (!has) await apply(openPanel(layout, 'editor'));
+  ctx.openFile(path);
+}
+
 function insertPath(path) {
   const input = document.querySelector('.chat textarea');
   if (!input) return;

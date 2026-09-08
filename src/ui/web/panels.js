@@ -1227,6 +1227,105 @@ export const PANELS = {
   note(body, _ctx, spec) {
     body.append(el('div', 'dim', String(spec.options?.text ?? '（覚え書き）')));
   },
+
+  /**
+   * エディタ。
+   *
+   * ここまでは、ファイルは指示を通してだけ触る作りだった。直したい一行の
+   * ために依頼を書かせるのは、Cursor と並べて明らかに劣る。横の一覧から
+   * 開いて、直して、Ctrl+S で保存する。保存したものは戻り先に残り、
+   * 「変更したファイル」にも載る（本体側がそう扱う）。
+   */
+  editor(body, ctx) {
+    const wrap = el('div', 'editor');
+    const head = el('div', 'editor-head');
+    const name = el('span', 'mono editor-name', '（横の一覧からファイルを選ぶ）');
+    const state = el('span', 'dim editor-state', '');
+    const save = el('button', 'primary', '保存');
+    save.disabled = true;
+    head.append(name, state, save);
+    const area = document.createElement('textarea');
+    area.className = 'editor-area mono';
+    area.spellcheck = false;
+    area.disabled = true;
+    wrap.append(head, area);
+    body.append(wrap);
+
+    let path = '';
+    let loaded = '';
+    const dirty = () => area.value !== loaded;
+    const refresh = () => {
+      save.disabled = !path || !dirty();
+      state.textContent = !path ? '' : dirty() ? '直しています（Ctrl+S で保存）' : '保存してあります';
+    };
+    area.oninput = refresh;
+
+    const open = async (p) => {
+      let r;
+      try {
+        r = await fetch(`/api/file?path=${encodeURIComponent(p)}`, { signal: AbortSignal.timeout(20000) });
+      } catch (e) {
+        name.textContent = p;
+        state.textContent = `開けませんでした（${e.message ?? e}）`;
+        return;
+      }
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        name.textContent = p;
+        state.textContent = j.error ?? '開けませんでした';
+        area.value = ''; area.disabled = true; path = ''; loaded = '';
+        save.disabled = true;
+        return;
+      }
+      path = p; loaded = j.content;
+      name.textContent = p;
+      area.value = loaded; area.disabled = false;
+      refresh();
+      area.focus();
+    };
+
+    const store = async () => {
+      if (!path || !dirty()) return;
+      save.disabled = true;
+      state.textContent = '保存しています…';
+      let r;
+      try {
+        r = await fetch('/api/file', {
+          method: 'PUT', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path, content: area.value }),
+          signal: AbortSignal.timeout(20000),
+        });
+      } catch (e) {
+        // 繋がらなかったときに黙ると、書いたものが消えたように見える。欄は残す。
+        state.textContent = `保存できませんでした（${e.message ?? e}）`;
+        save.disabled = false;
+        return;
+      }
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { state.textContent = j.error ?? '保存できませんでした'; save.disabled = false; return; }
+      loaded = area.value;
+      refresh();
+      state.textContent = `保存しました（+${j.added ?? 0} -${j.removed ?? 0}）`;
+    };
+    save.onclick = () => { void store(); };
+    // Ctrl+S はこの欄に手があるときだけ。ブラウザの「ページを保存」を出さない。
+    area.onkeydown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); void store(); }
+      // Tab で欄から抜けない。コードを書く場所なので、Tab は字。
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const { selectionStart: a, selectionEnd: b } = area;
+        area.setRangeText('  ', a, b, 'end');
+        refresh();
+      }
+    };
+
+    ctx.openFile = (p) => { void open(p); };
+    // モデルが書き換えたら、開いているものは読み直す（直している最中は上書きしない）。
+    ctx.on('session', ({ event: v }) => {
+      if (v.type === 'diff' && v.path === path && !dirty()) void open(path);
+    });
+  },
 };
 
 /*
@@ -1251,4 +1350,5 @@ export const TITLES = {
   note: 'メモ',
   checks: '診断',
   preview: 'プレビュー',
+  editor: 'エディタ',
 };
