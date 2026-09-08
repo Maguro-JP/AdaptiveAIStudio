@@ -1,10 +1,13 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { tempDir } from './tmp.ts';
 import { until } from './until.ts';
 
 // 配置や記録の置き場を、試験専用の場所へ移してから読み込む。
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const dir = await tempDir('aas-ui-');
 process.env.AAS_STATE_DIR = dir;
 
@@ -629,5 +632,26 @@ describe('会話の入口', () => {
     assert.equal(r.status, 200);
     assert.equal((await json(r)).title, '見出しを直す');
     assert.equal((await store.head(head.id)).title, '見出しを直す');
+  });
+});
+
+describe('開いた時点で、使えるかを言う', () => {
+  /**
+   * モデルが無い機械では、書いて、送って、はじめて「まだ使えません」と
+   * 返っていた。開いた時点で訊けるようにする。**読み込みは始めない。**
+   */
+  test('/api/ready が、話せない理由を返す', async () => {
+    const r = await get('/api/ready');
+    assert.equal(r.status, 200);
+    const body = await json(r);
+    assert.equal(typeof body.ready, 'boolean');
+    // ここの機械にはモデルを置いていないので、理由が出るのが正しい。
+    assert.equal(body.ready, false, 'モデルが無いのに話せることになっている');
+    assert.ok(body.why.length > 0, '話せないのに理由が空');
+  });
+
+  test('画面は、開いた時点でそれを訊きに行く', () => {
+    const app = readFileSync(join(root, 'src/ui/web/app.js'), 'utf8');
+    assert.ok(app.includes("fetch('/api/ready'"), '開いた時点で訊いていない');
   });
 });

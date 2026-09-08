@@ -905,6 +905,19 @@ export class UiServer {
       return send(res, 200, { theme, repairs: [], vars: toCssVars(theme) });
     }
 
+    /*
+     * 話せる状態か。**開いた時点で訊けるようにする。**
+     *
+     * ここまで、モデルが無い機械では、送って初めて 503 の一行が返っていた。
+     * 開いた人からは、書いて、送って、はじめて「まだ使えません」と分かる。
+     * 開いた時点で手を引く。読み込みは始めない（頼まれるまで起こさない）。
+     */
+    if (path === '/api/ready' && req.method === 'GET') {
+      const missing = await this.#readyToThink(false).catch(
+        (e: unknown) => `見に行けませんでした: ${(e as Error).message}`);
+      return send(res, 200, { ready: !missing, why: missing ?? '' });
+    }
+
     if (path === '/api/config' && req.method === 'GET') {
       // **ここで落ちない。**落ちると画面は何も言わずに空欄のまま出る。
       // 利用者からは「選択肢が一つも無い」としか見えず、理由が分からない。

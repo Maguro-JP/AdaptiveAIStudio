@@ -45,7 +45,7 @@ let lastState = null;
  * これは受け手を書かなくてよいという話ではない（`web-catch.test.ts` が
  * 受け手の無い呼び出しの数を数えていて、増やせない）。最後の網。
  */
-function showCrash(what, detail) {
+function showCrash(what, detail, tone = 'bad') {
   let box = document.getElementById('crashNote');
   if (!box) {
     box = document.createElement('div');
@@ -54,6 +54,7 @@ function showCrash(what, detail) {
     box.onclick = () => { box.remove(); };
     document.body.append(box);
   }
+  box.className = `crash-note ${tone}`;
   box.textContent = `${what}: ${detail}（押すと消えます）`;
 }
 
@@ -1625,6 +1626,22 @@ if (conversations.current) {
     if (body.messages?.length) ctx.showHistory(body.messages);
   } catch { /* 出せなくても、新しく書き始められる */ }
 }
+/*
+ * **開いた時点で、使える状態かを言う。**
+ *
+ * モデルが無い機械では、書いて、送って、はじめて「まだ使えません」と
+ * 返っていた。開いた人からは、何をすればいいのか分からないまま
+ * 送る手間だけが無駄になる。開いた時点で、次に打つ一手まで出す。
+ */
+async function tellIfNotReady() {
+  const r = await fetch('/api/ready', { signal: AbortSignal.timeout(20000) })
+    .then((x) => x.json())
+    .catch((e) => ({ ready: false, why: `見に行けませんでした（${e.message ?? e}）` }));
+  if (r.ready) return;
+  showCrash('まだ話せません', `${r.why}　⚙ 設定 → モデル で決められます`, 'warn');
+}
+void tellIfNotReady();
+
 listen();
 setInterval(refreshState, 5000);
 

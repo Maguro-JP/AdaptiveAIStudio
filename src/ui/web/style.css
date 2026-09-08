@@ -1054,3 +1054,5 @@ dialog.wide { width: min(46rem, 92vw); }
   background: var(--bad); color: #fff; font-size: .82rem; cursor: pointer;
   box-shadow: 0 6px 24px rgb(0 0 0 / .35);
 }
+/* 使えない状態の知らせは、落ちたときと同じ赤にしない。 */
+.crash-note.warn { background: var(--warn, #e0af68); color: #1a1b26; }
