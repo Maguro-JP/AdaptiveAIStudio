@@ -974,3 +974,36 @@ function parseArgs(raw: string | undefined): unknown {
   if (!raw || !raw.trim()) return {};
   try { return JSON.parse(raw); } catch { return { __raw: raw, __parseError: true }; }
 }
+
+/**
+ * 開いた時点の、先の一言。
+ *
+ * GPU の無い機械で大きなモデルを読むと、最初の答えに何分もかかる。
+ * それを**送ってから**知らせていたので、送った人には無視されたようにしか
+ * 見えなかった（実機でそうなった）。開いた時点で、どれを読むか・どれだけ
+ * 待つか・小さいものが在るかを言う。読み込みは始めない。
+ */
+export const HEAVY_ON_CPU_BYTES = 3 * 1024 ** 3;
+
+export function headsUp(
+  models: readonly AvailableModel[],
+  ramBytes: number,
+  wanted: string | undefined,
+  hasGpu: boolean,
+): string | undefined {
+  if (hasGpu) return undefined;
+  // 選び方は本番と同じにする（GPU なしなら小さい方）。違う選び方で脅さない。
+  const picked = chooseModel(models, ramBytes, wanted, { hasGpu });
+  if (!picked || !picked.fits) return undefined;
+  const size = picked.chosen.sizeBytes ?? 0;
+  if (size < HEAVY_ON_CPU_BYTES) return undefined;
+  // 1GB 未満は MB で言う（「0.0GB」は無いのと同じに読める）。
+  const gb = (n: number) => (n < 1024 ** 3 ? `${Math.round(n / 1024 ** 2)}MB` : `${(n / 1024 ** 3).toFixed(1)}GB`);
+  const smaller = models
+    .filter((m) => m.ref !== picked.chosen.ref && (m.sizeBytes ?? 0) < size && !tooBigForRam(m.sizeBytes, ramBytes))
+    .sort((a, b) => (a.sizeBytes ?? 0) - (b.sizeBytes ?? 0))[0];
+  const alt = smaller
+    ? `小さいものもあります: ${smaller.ref}（${gb(smaller.sizeBytes ?? 0)}）。⚙ 設定 → モデル で選べます。`
+    : '';
+  return `${picked.chosen.ref}（${gb(size)}）を GPU なしで読みます。最初の答えまで数分かかることがあります。${alt}`;
+}

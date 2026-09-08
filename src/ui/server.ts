@@ -57,7 +57,7 @@ import {
   inspectModelsDir, ensureDefaultModelsDir, savedModelsDir,
 } from './settings.ts';
 import {
-  listGguf, chooseModel, tooBigForRam, looksLikeGguf, freePortFrom, INPROC_PORT,
+  listGguf, chooseModel, tooBigForRam, looksLikeGguf, freePortFrom, INPROC_PORT, headsUp,
 } from '../runtime/inproc.ts';
 import { totalmem } from 'node:os';
 import { Session } from '../core/session.ts';
@@ -951,7 +951,9 @@ export class UiServer {
        * 使えないと言われる。**言われた側は、置いたはずのものを疑いに行く。
        */
       const notReady = missing === NOT_LOADED_YET ? undefined : missing;
-      return send(res, 200, { ready: !notReady, why: notReady ?? '' });
+      // 読む前に、どれをどれだけ待って読むかを言う（GPU なしで大きいときだけ）。
+      const heads = missing === NOT_LOADED_YET ? await this.#headsUp().catch(() => undefined) : undefined;
+      return send(res, 200, { ready: !notReady, why: notReady ?? '', heads: heads ?? '' });
     }
 
     if (path === '/api/config' && req.method === 'GET') {
@@ -1645,6 +1647,15 @@ export class UiServer {
    * 「起動したらずっとフリーズしている」の正体がこれ。
    * 読むのは、頼まれたときだけでよい（`/api/send` が同じ道を通る）。
    */
+  /** 開いた時点の先の一言。中身は `headsUp`。ここは材料を揃えるだけ。 */
+  async #headsUp(): Promise<string | undefined> {
+    const runtime = await this.#localRuntime();
+    if (runtime.id !== 'inproc') return undefined;
+    const models = await runtime.list();
+    const machine = await new MachineCache(join(stateDir(), 'machine.json')).get();
+    return headsUp(models, totalmem(), this.#opts.config.runtime?.model, machine.gpuName !== undefined);
+  }
+
   async #readyToThink(load = true): Promise<string | undefined> {
     const kind = this.#opts.config.runtime?.kind ?? 'ollama';
     try {

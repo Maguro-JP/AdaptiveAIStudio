@@ -1711,7 +1711,11 @@ async function tellIfNotReady() {
   const r = await fetch('/api/ready', { signal: AbortSignal.timeout(20000) })
     .then((x) => x.json())
     .catch((e) => ({ ready: false, why: `見に行けませんでした（${e.message ?? e}）` }));
-  if (r.ready) return;
+  if (r.ready) {
+    // 話せるが、待たされそうなら先に言う（GPU なしで大きいモデルのとき）。
+    if (r.heads) showCrash('先に一つ', r.heads, 'warn');
+    return;
+  }
   showCrash('まだ話せません', `${r.why}　⚙ 設定 → モデル で決められます`, 'warn');
 }
 void tellIfNotReady();

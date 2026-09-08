@@ -648,6 +648,13 @@ describe('開いた時点で、使えるかを言う', () => {
     // ここの機械にはモデルを置いていないので、理由が出るのが正しい。
     assert.equal(body.ready, false, 'モデルが無いのに話せることになっている');
     assert.ok(body.why.length > 0, '話せないのに理由が空');
+    // 先の一言の口が在ること。中身は機械（GPU の有無）で変わるので、ここでは見ない。
+    assert.equal(typeof body.heads, 'string', '先の一言の口が無い');
+  });
+
+  test('画面は、先の一言を出す', () => {
+    const app = readFileSync(join(root, 'src/ui/web/app.js'), 'utf8');
+    assert.ok(app.includes('r.heads'), '先の一言を受け取っていない');
   });
 
   test('画面は、開いた時点でそれを訊きに行く', () => {
