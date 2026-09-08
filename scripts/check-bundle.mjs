@@ -106,7 +106,34 @@ try {
   await run(process.execPath, [join(root, 'scripts', 'sweep.mjs'), url], { cwd: root })
     .catch((e) => { throw new Error(`sweep が通りませんでした: ${e.message}`); });
 } finally {
-  ui.kill();
+  /*
+   * 止めて、**止まったことまで見る。**
+   *
+   * kill() して終わりにしていたので、画面が止まらないと、この確かめ自体が
+   * 終わらなかった（通ったと出したあと、いつまでも戻ってこない）。
+   * 止まらないのは製品の不具合なので、それを落ちる形で出す。
+   */
+  const gone = await new Promise((ok) => {
+    if (ui.exitCode !== null || ui.signalCode !== null) return ok(true);
+    const wait = setTimeout(() => ok(false), 10_000);
+    ui.once('exit', () => { clearTimeout(wait); ok(true); });
+    ui.kill();
+  });
+  if (!gone) {
+    ui.kill('SIGKILL');
+    console.error('\n画面が止めても 10 秒で終わりませんでした（止まらないのは不具合です）');
+    process.exitCode = 1;
+  }
+  // 入口だけが死んで本体が残る形を見る。止めたあとも口が答えるなら、残っている。
+  if (url) {
+    const alive = await fetch(url, { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
+    if (alive) {
+      console.error(`\n止めたのに、画面がまだ答えます: ${url}（本体が親無しで残っています）`);
+      process.exitCode = 1;
+    }
+  }
+  // 残った本体が握っていると、この確かめが終わらない。手放す。
+  ui.stdout?.destroy();
 }
 
 console.log('\n== 配る形のまま通りました');

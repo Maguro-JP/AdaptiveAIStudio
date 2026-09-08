@@ -31,12 +31,20 @@ if (!picked.ok) { console.error(picked.why); process.exit(2); }
 const b = await chromium.launch({ executablePath: picked.browser });
 const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
 const bad = [];
+/*
+ * 断られるのを見に行っている間は、断りを不具合に数えない。
+ *
+ * 立ち上げ直しの確かめは 409（作業中）も 501（起こし直せない入口）も
+ * 「正しい断り」として通すのに、下の聞き耳は 409 を不具合に積んでいた。
+ * 手すきの見回りが走っていると作業中になるので、**走らせるたびに結果が
+ * 変わる**（一度通って、次に落ちた）。
+ */
+let expectingRefusal = false;
 p.on('pageerror', (e) => bad.push(`落ちた: ${e.message}`));
 p.on('console', (m) => {
   if (m.type() !== 'error') return;
   if (noModel && m.text().includes('503')) return;
-  // 立ち上げ直せない入口の 501 は、正しい断り。
-  if (m.text().includes('501')) return;
+  if (expectingRefusal && /\b(409|501)\b/.test(m.text())) return;
   bad.push(`画面のエラー: ${m.text()}`);
 });
 p.on('response', (r) => {
@@ -44,9 +52,9 @@ p.on('response', (r) => {
   const at = new URL(r.url()).pathname;
   // モデルを置いていない状態では、送りを断るのが正しい。
   if (noModel && r.status() === 503 && at === '/api/send') return;
-  // **起こし直してもらえない入口では、断るのが正しい。**
+  // **起こし直してもらえない入口では、断るのが正しい。**作業中の 409 も同じ。
   // ここで止めると誰も起こさず、二度と戻らない（実際にそうなっていた）。
-  if (r.status() === 501 && at === '/api/restart') return;
+  if (expectingRefusal && [409, 501].includes(r.status()) && at === '/api/restart') return;
   bad.push(`${r.status()} ${at}`);
 });
 
@@ -420,10 +428,14 @@ await check('同じことを二度言わない', async () => {
 
 // 立ち上げ直す。この入口は起こし直せないので、断る言葉が出ること。
 await check('立ち上げ直しは、できないならそう言う', async () => {
+  expectingRefusal = true;
   const r = await p.evaluate(async () => {
     const res = await fetch('/api/restart', { method: 'POST' });
     return { status: res.status, body: await res.text() };
   });
+  // 断りの知らせは少し遅れて届く。届き切ってから聞き耳を戻す。
+  await p.waitForTimeout(300);
+  expectingRefusal = false;
   if (r.status === 200) return; // 起こし直せる入口なら、それでよい
   if (![409, 501].includes(r.status)) throw new Error(`思わぬ返事: ${r.status} ${r.body.slice(0, 80)}`);
   if (!r.body.includes('error')) throw new Error('断る理由が無い');

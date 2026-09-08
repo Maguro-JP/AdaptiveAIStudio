@@ -73,6 +73,22 @@ if (process.env.AAS_UI_NO_OPEN !== '1') {
 
 // 片づけに失敗しても、終わることは終わる。ここで例外を拾わないと、
 // **Ctrl-C が効かないまま残る。**
-const stop = () => { void server.stop().catch(() => undefined).then(() => process.exit(0)); };
+//
+// 片づけが終わらなくても、終わる。**上限で諦める。**読み込んだモデルを
+// 抱えたまま止まらないと、閉じたつもりの画面の裏で数GBを掴み続ける。
+// 何を待っていたかは server.stop が言う。
+const STOP_WAIT_MS = 5000;
+let stopping = false;
+const stop = () => {
+  if (stopping) { console.log('  もう一度押されたので、そのまま終わります。'); process.exit(0); }
+  stopping = true;
+  console.log('  止めています…');
+  const giveUp = setTimeout(() => {
+    console.log(`  片づけが ${STOP_WAIT_MS / 1000} 秒で終わらないので、そのまま終わります。`);
+    process.exit(0);
+  }, STOP_WAIT_MS);
+  giveUp.unref?.();
+  void server.stop((line) => console.log(`  ${line}`)).catch(() => undefined).then(() => process.exit(0));
+};
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);

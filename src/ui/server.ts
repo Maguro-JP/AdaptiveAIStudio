@@ -593,20 +593,33 @@ export class UiServer {
     });
   }
 
-  async stop(): Promise<void> {
+  /**
+   * 止める。
+   *
+   * **どの段で時間がかかったかを言う。**止まらないときに黙っていると、
+   * 「Ctrl-C が効かない」としか見えない（check:bundle が最後で固まって、
+   * 何を待っているのか分からなかった）。2 秒を超えた段だけ名前を出す。
+   */
+  async stop(say: (line: string) => void = () => undefined): Promise<void> {
     if (this.#idleTimer) clearInterval(this.#idleTimer);
     // 待っている承認は、答えが無いまま終わる。許可はしない。
     for (const finish of this.#pending.values()) finish(false);
     this.#pending.clear();
-    await this.#session?.close().catch(() => undefined);
+    const timed = async (what: string, run: () => Promise<unknown>) => {
+      const began = Date.now();
+      await run().catch(() => undefined);
+      const took = Date.now() - began;
+      if (took > 2000) say(`${what}に ${(took / 1000).toFixed(1)} 秒かかりました`);
+    };
+    await timed('会話を閉じるの', async () => this.#session?.close());
     // 自分の中に立てた口（inproc）も閉じる。閉じないと、画面を止めても
     // プロセスが生き続ける（検査が終わらないことで気づいた）。
     const runtime = this.#runtime as { shutdown?: () => Promise<void> } | undefined;
-    await runtime?.shutdown?.().catch(() => undefined);
+    await timed('モデルを降ろすの', async () => runtime?.shutdown?.());
     this.#runtime = undefined;
     for (const res of this.#clients) { try { res.end(); } catch { /* 切れている */ } }
     this.#clients.clear();
-    await new Promise<void>((resolve) => this.#server?.close(() => resolve()) ?? resolve());
+    await timed('口を閉じるの', () => new Promise<void>((resolve) => this.#server?.close(() => resolve()) ?? resolve()));
   }
 
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {

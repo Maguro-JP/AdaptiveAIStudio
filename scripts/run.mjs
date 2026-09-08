@@ -62,5 +62,20 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     process.exit(2);
   }
   const child = spawn(process.execPath, [...args, ...rest], { stdio: 'inherit', cwd: root });
+  forwardSignals(child, process);
   child.on('exit', (code) => process.exit(code ?? 1));
+}
+
+/**
+ * 止める合図を、子へ渡す。
+ *
+ * ここは入口で、本体は子。合図（Ctrl-C や kill）はこの入口に来て、
+ * **入口だけが死に、本体が親無しで生き続けていた**（check:bundle で
+ * 画面を止めたつもりが、画面は答え続け、確かめ自体が終わらなかった）。
+ * 合図を子へ渡して、子が終わるのを待つ。
+ */
+export function forwardSignals(child, proc) {
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    proc.on(sig, () => { child.kill(sig); });
+  }
 }
