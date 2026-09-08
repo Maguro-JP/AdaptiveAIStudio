@@ -180,12 +180,15 @@ button.row {
  */
 .side-row > button.icon { flex: 0 0 auto; width: auto; }
 
+.side-row > .rename,
 .side-row > .drop {
   flex: 0 0 auto; width: 1.6rem; padding: 3px 0; text-align: center;
   color: transparent;
 }
 /* 消す印は、その行に触れたときだけ出す。並んでいると押し間違える。 */
+.side-row:hover > .rename,
 .side-row:hover > .drop { color: var(--dim); }
+.side-row > .rename:hover { color: var(--accent); }
 .side-row > .drop:hover { color: var(--bad); }
 
 .side-list .empty { color: var(--dim); font-size: .78rem; padding: var(--s1) var(--s2); }

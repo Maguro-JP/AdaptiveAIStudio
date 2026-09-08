@@ -37,6 +37,23 @@ describe('会話を残す', () => {
     assert.equal((await c.head(id)).title, 'llama-server を用意して');
   });
 
+  test('名前を付け替えられる。中身は消えない', async () => {
+    // 見出しは最初の依頼から自動で付くだけで、直す口が無かった。
+    // 消して作り直す以外に手が無く、消せば話も消える。
+    const { c } = await store();
+    const { id } = await c.create();
+    await c.append(id, [{ role: 'user', content: 'こんにちは' }]);
+    await c.titleIfUnset(id, 'こんにちは');
+    assert.equal(await c.rename(id, '  bundle の  欠け  '), 'bundle の 欠け');
+    assert.equal((await c.head(id)).title, 'bundle の 欠け');
+    assert.deepEqual((await c.load(id)).map((m) => m.content), ['こんにちは']);
+    // 空にしたら、自動で付く側へ戻す。
+    assert.equal(await c.rename(id, '   '), '新しい会話');
+    assert.equal((await c.head(id)).title, '新しい会話');
+    // 長い名前は、一覧に収まる長さで切る。
+    assert.equal((await c.rename(id, 'あ'.repeat(60))).length, 41);
+  });
+
   test('長い依頼は切る', () => {
     assert.equal(titleFrom('あ'.repeat(80)).length, 41, '切っていない');
     assert.equal(titleFrom('\n\n  二行目が中身  \n'), '二行目が中身');

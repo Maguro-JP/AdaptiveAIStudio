@@ -316,14 +316,41 @@ export const PANELS = {
       drawTray();
 
       const isPlan = text.startsWith('/plan');
-      const r = await fetch(isPlan ? '/api/plan' : '/api/send', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          text: isPlan ? text.slice('/plan'.length).trim() : text,
-          attachments: ids,
-        }),
-      });
-      if (!r.ok) note('bad', (await r.json()).error ?? '送れませんでした');
+      /*
+       * **送れなかったことを、画面に出す。**
+       *
+       * ここは投げっぱなしで、`fetch` 自体が失敗したときの受け手が無かった。
+       * 落ちるのは呼び出しの外（`void submit()`）なので、**画面には自分が
+       * 書いた分だけが残って、何も返らない。**送ったのに無視されたようにしか
+       * 見えないし、何を直せばいいかも分からない。
+       */
+      /*
+       * 受け取ったことが返るまで、しばらく何も出ない（モデルを読むあいだは
+       * 長い）。**黙ったままにしない。**送ったのに何も起きないように見える。
+       */
+      const slow = setTimeout(() => {
+        note('dim', 'まだ返事がありません。モデルを読んでいるところかもしれません（「流れ」に出ます）。');
+      }, 10000);
+      let r;
+      try {
+        r = await fetch(isPlan ? '/api/plan' : '/api/send', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            text: isPlan ? text.slice('/plan'.length).trim() : text,
+            attachments: ids,
+          }),
+        });
+      } catch (e) {
+        note('bad', `送れませんでした（${e?.message ?? e}）。`
+          + '本体が落ちているかもしれません。画面を開き直してください。');
+        return;
+      } finally {
+        clearTimeout(slow);
+      }
+      if (!r.ok) {
+        const why = await r.json().catch(() => ({}));
+        note('bad', why.error ?? `送れませんでした（${r.status}）`);
+      }
     };
 
     form.onsubmit = (e) => { e.preventDefault(); void submit(); };

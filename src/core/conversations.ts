@@ -298,6 +298,29 @@ export class Conversations {
     await writeFile(this.#path(id), lines.join('\n'), 'utf8');
   }
 
+  /**
+   * 見出しを付け替える。**利用者が決めた名前は、あとから上書きしない。**
+   *
+   * 見出しは最初の依頼から自動で付くだけで、直す口が無かった。中身と合わない
+   * 名前が並んでも、消して作り直す以外に手が無い。
+   *
+   * 空にされたら、自動で付く側へ戻す（`新しい会話` に戻すと、次の依頼で
+   * また自動の見出しが付く）。
+   */
+  async rename(id: string, title: string): Promise<string> {
+    const raw = await readFile(this.#path(id), 'utf8');
+    const lines = raw.split('\n');
+    const first = parse(lines[0] ?? '');
+    if (first?.t !== 'meta') throw new Error('会話の見出しが読めません');
+    const trimmed = title.replace(/\s+/g, ' ').trim();
+    const next = trimmed.length === 0
+      ? '新しい会話'
+      : (trimmed.length > TITLE_MAX ? `${trimmed.slice(0, TITLE_MAX)}…` : trimmed);
+    lines[0] = JSON.stringify({ ...first, title: next } satisfies MetaLine);
+    await writeFile(this.#path(id), lines.join('\n'), 'utf8');
+    return next;
+  }
+
   /** 消す。無いものを消しても落ちない。 */
   async remove(id: string): Promise<void> {
     await rm(this.#path(id), { force: true });

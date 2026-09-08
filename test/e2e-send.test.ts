@@ -152,9 +152,16 @@ describe('会話は残る', () => {
         current: string | null; list: Array<{ id: string; title: string }>;
       };
       assert.ok(seen.list.some((h) => h.id === head.id), '立ち上げ直したら消えている');
-      // **続きとして開いている。**まっさらから始まると、閉じただけで
-      // 話が消えたように見える。
-      assert.equal(seen.current, head.id, '続きの会話を開いていない');
+      // **開いた直後はトップ。**どれも開いていない。前は勝手にいちばん
+      // 新しいものを開いていたので、話しかけると古い話の続きになった。
+      // 続きから話したいときは、一覧から開く（消えてはいない）。
+      assert.equal(seen.current, null, '開いた直後に会話を勝手に開いている');
+      const back2 = await (await fetch(`${url2}/api/conversations/select`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: head.id }),
+      })).json() as { current: string; messages: unknown[] };
+      assert.equal(back2.current, head.id, '一覧から開けない');
+      assert.ok(back2.messages.length >= 2, '開いても中身が戻らない');
     } finally { await again.stop(); }
   });
 });

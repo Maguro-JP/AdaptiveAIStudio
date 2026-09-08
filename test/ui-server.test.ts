@@ -599,3 +599,35 @@ describe('作業場は、保存したら効く', () => {
     }
   });
 });
+
+describe('会話の入口', () => {
+  /**
+   * **開いた直後はトップ。**どれも開いていない状態から書き始めると、
+   * その一言のために会話ができる。前は勝手にいちばん新しいものを開いて
+   * いたので、別の話を始める場所がどこにも無かった。
+   */
+  test('「新しい会話」はトップへ戻る。押しただけでは増やさない', async () => {
+    const before = await json(await get('/api/conversations'));
+    const r = await post('/api/conversations', {});
+    assert.equal(r.status, 200);
+    assert.equal((await json(r)).current, null, 'トップに戻っていない');
+    const after = await json(await get('/api/conversations'));
+    assert.equal(after.current, null, 'トップなのに開いている');
+    assert.equal(after.total, before.total, '押しただけで会話が増えている');
+  });
+
+  test('名前を付け替えられる', async () => {
+    // 見出しを直す口が無く、消して作り直す以外に手が無かった。
+    const made = await json(await post('/api/conversations/title', { id: 'ない', title: 'x' }));
+    assert.ok(made.error, '無い会話でも通っている');
+
+    // 実物を一つ作ってから付け替える。
+    const { Conversations } = await import('../src/core/conversations.ts');
+    const store = new Conversations(join(dir, 'conversations'));
+    const head = await store.create();
+    const r = await post('/api/conversations/title', { id: head.id, title: '見出しを直す' });
+    assert.equal(r.status, 200);
+    assert.equal((await json(r)).title, '見出しを直す');
+    assert.equal((await store.head(head.id)).title, '見出しを直す');
+  });
+});

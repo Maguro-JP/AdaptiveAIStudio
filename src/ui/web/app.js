@@ -918,16 +918,13 @@ function drawConversations() {
     if (!r.ok) return void alert(body.error ?? '始められませんでした');
     ctx.showHistory([]);
     await loadConversations();
-    // **押した結果を見せる。**いまの会話がまだ空なら、それをそのまま使う
-    // （空の会話を二つ作らない）。黙って同じ画面に戻ると、押しても何も
-    // 起きないように見える。
-    if (body.reused) {
-      const note = $('convNote');
-      if (note) {
-        note.textContent = 'いまの会話がまだ空です。このまま書き始められます。';
-        note.hidden = false;
-        setTimeout(() => { note.hidden = true; }, 4000);
-      }
+    // **押した結果を見せる。**トップに戻っただけなので、画面は空になる。
+    // 何も言わないと「押しても何も起きない」に見える。
+    const note = $('convNote');
+    if (note) {
+      note.textContent = '書き始めると、新しい会話になります。';
+      note.hidden = false;
+      setTimeout(() => { note.hidden = true; }, 4000);
     }
   };
   box.append(fresh);
@@ -957,6 +954,28 @@ function drawConversations() {
       ctx.showHistory(body.messages ?? []);
       await loadConversations();
     };
+    /*
+     * **名前を付け替えられるようにする。**
+     *
+     * 見出しは最初の依頼から自動で付くだけだった。話が進むほど中身と
+     * ずれるが、直す口が無いので、消して作り直すしかない。
+     * 消せば話も消えるので、実際には直せない。
+     */
+    const label = document.createElement('button');
+    label.className = 'rename';
+    label.textContent = '✎';
+    label.title = '名前を変える';
+    label.disabled = busyNow;
+    label.onclick = async () => {
+      const want = window.prompt('この会話の名前', head.title);
+      if (want === null) return;
+      const r = await fetch('/api/conversations/title', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: head.id, title: want }),
+      });
+      if (!r.ok) return void alert((await r.json()).error ?? '変えられませんでした');
+      await loadConversations();
+    };
     // 消すのは、押し間違えると取り返しがつかない。一度訊く。
     const drop = document.createElement('button');
     drop.className = 'drop';
@@ -970,7 +989,7 @@ function drawConversations() {
       if (head.id === conversations.current) ctx.showHistory([]);
       await loadConversations();
     };
-    row.append(open, drop);
+    row.append(open, label, drop);
     box.append(row);
   }
 
@@ -1038,10 +1057,20 @@ async function loadFiles(at = '') {
     // 何も出ないと壊れているようにしか見えない。何の場所で、どう変えるかを書く。
     if (!body.path && (body.entries ?? []).length === 0) {
       box.textContent = '';
-      const note = document.createElement('div');
+      /*
+       * **無い場所を案内しない。**
+       *
+       * ここは「設定 → モデル の『フォルダ』で指す」と書いていた。
+       * その頁に「フォルダ」は無い（作業場を変える口は、ここの 📂）。
+       * 言われたとおりに開いた人は、無いものを探すことになる。
+       *
+       * 押せる形にして、その場で変えられるようにする。
+       */
+      const note = document.createElement('button');
       note.className = 'side-empty';
-      note.textContent = 'ここは空です。直したいコードのあるフォルダを、設定 → モデル の「フォルダ」で指してください。';
+      note.textContent = 'ここは空です。直したいコードのあるフォルダを選んでください（上の 📂 でも変えられます）。';
       note.title = body.root ?? '';
+      note.onclick = () => { void pickWorkRoot(); };
       box.append(note);
       return;
     }
@@ -1286,18 +1315,38 @@ const DIR_NOTES = {
   MISSING: 'そのフォルダはまだありません。作ってから .gguf を入れてください。',
   NOT_A_DIR: 'それはフォルダではなくファイルです。フォルダを指してください。',
   UNREADABLE: 'そのフォルダは読めませんでした（権限か、繋がっていないドライブ）。',
+  // 読むのに時間がかかって、待つのをやめた。空だと言い切らない。
+  SLOW: 'そのフォルダを読むのに時間がかかっています（繋がっていないドライブか、'
+    + '必要になるまで実体を持たない置き方かもしれません）。「読み直す」で、もう一度見に行きます。',
 };
 
 /** いまの設定を読み出して、画面へ映す。 */
 async function loadCfg() {
-  const c = await fetch('/api/config').then((r) => r.json()).catch((e) => ({ failed: String(e.message ?? e) }));
+  // 返ってくるまでの間、空欄のまま黙らない。**読んでいることを出す。**
+  $('cfgNote').style.whiteSpace = 'pre-line';
+  $('cfgNote').textContent = '読んでいます…';
+  // **返らない口で、黙って待ち続けない。**繋がっていないドライブを読みに
+  // 行くと、応答そのものが返らないことがある。上限で切って、理由を出す。
+  const c = await fetch('/api/config', { signal: AbortSignal.timeout(15000) }).then((r) => r.json()).catch((e) => ({ failed: String(e.message ?? e) }));
   // **黙って空欄にしない。**選択肢が一つも無い画面を出されても、
   // 利用者には何が起きたのか分からない（実際にそう出た）。
   if (!c || c.failed || c.error) {
     $('cfgNote').style.whiteSpace = 'pre-line';
     $('cfgNote').textContent = `設定を読めませんでした。\n${c?.failed ?? c?.error ?? '理由が取れませんでした'}\n`
       + '「点検」を開くと、どこで止まっているかが出ます。';
-    if (!c?.kinds?.length) return;
+    if (!c?.kinds?.length) {
+      /*
+       * **空の選択肢を出したまま帰らない。**
+       *
+       * ここは黙って return していたので、動かし方の欄が空のまま残った。
+       * 空の select は「選べるものが無い」のか「読めていない」のかが
+       * 見分けられない。読めていないことを、その欄自体に出す。
+       */
+      const sel0 = $('cfgKind');
+      sel0.replaceChildren(Object.assign(document.createElement('option'),
+        { value: '', textContent: '（読めませんでした。「読み直す」を押してください）' }));
+      return;
+    }
   }
   const sel = $('cfgKind');
   sel.replaceChildren();
@@ -1492,22 +1541,33 @@ async function loadChecks() {
   });
 }
 
+/*
+ * **開いてから埋める。埋まるのを待って開かない。**
+ *
+ * ここは読み終えてから設定を出していた。一つでも返ってこないと、
+ * **設定は出るのに中身が全部空になる**（動かし方の一覧まで空になり、
+ * 何も選べない。実際にそう出た）。しかも順に待つので、前のものが
+ * 返らなければ後のものは読みに行きもしない。
+ *
+ * 出すのが先。中身は別々に、返ったものから埋める。
+ */
+function fillSection(name) {
+  if (name === 'check') return void loadChecks();
+  if (name === 'info') return void loadInfo();
+  if (name === 'model') { void loadCfg(); void loadCatalog(); return; }
+  if (name === 'mcp') { void loadMcpCatalog(); void loadMcp(); }
+}
+
 async function openSettings(section = 'info') {
   showSection(section);
-  await loadInfo();
-  if (section === 'check') await loadChecks();
-  if (section === 'model') { await loadCfg(); await loadCatalog(); }
-  if (section === 'mcp') { await loadMcpCatalog(); await loadMcp(); }
   $('settings').showModal();
+  fillSection(section);
 }
 
 for (const b of $('settings').querySelectorAll('.tabs-lite button')) {
-  b.onclick = async () => {
+  b.onclick = () => {
     showSection(b.dataset.sec);
-    if (b.dataset.sec === 'check') await loadChecks();
-    if (b.dataset.sec === 'info') await loadInfo();
-    if (b.dataset.sec === 'model') { await loadCfg(); await loadCatalog(); }
-    if (b.dataset.sec === 'mcp') { await loadMcpCatalog(); await loadMcp(); }
+    fillSection(b.dataset.sec);
   };
 }
 $('openSettings').onclick = () => { void openSettings(); };

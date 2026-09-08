@@ -389,18 +389,16 @@ export class UiServer {
   /**
    * いま話している会話。
    *
-   * 立ち上げ直した直後は、**いちばん新しいものを続きとして開く。**
-   * 毎回まっさらから始めると、閉じただけで話が消えたように見える。
-   * 一つも無ければ、そこで作る。
+   * **開いた直後は、どれも開いていない（トップ）。**書き始めた時点で、
+   * その一言のために新しい会話ができる。
+   *
+   * 前は、立ち上げ直すといちばん新しいものを勝手に続きとして開いていた。
+   * 話しかけると、意図しない古い話の続きとして繋がる。**別の話を始める
+   * ための場所が、どこにも無かった。**（横の一覧に古いものは並んでいるので、
+   * 続きから話したいときは、そこから開く）
    */
   async #currentConversation(): Promise<string> {
     if (this.#conversationId) return this.#conversationId;
-    const [newest] = await this.#conversations.list();
-    if (newest) {
-      this.#conversationId = newest.id;
-      this.#saved = (await this.#conversations.load(newest.id, { tailBytes: UiServer.RESTORE_TAIL })).length;
-      return this.#conversationId;
-    }
     this.#conversationId = (await this.#conversations.create()).id;
     this.#saved = 0;
     return this.#conversationId;
@@ -1023,15 +1021,8 @@ export class UiServer {
     // 会話。**残してあるものを出して、開き直せるようにする。**
     if (path === '/api/conversations' && req.method === 'GET') {
       const list = await this.#conversations.list();
-      // 続きがあるなら、画面が開いた時点で決めておく。
-      // 「どれを開いているのか」が空のままだと、消えたように見える。
-      // **一覧を見ただけでは作らない。**作ると、開くたびに空の会話が増える。
-      if (!this.#conversationId && list.length > 0) {
-        this.#conversationId = list[0]!.id;
-        this.#saved = (await this.#conversations.load(
-          this.#conversationId, { tailBytes: UiServer.RESTORE_TAIL },
-        )).length;
-      }
+      // **一覧を見ただけでは作らないし、勝手に開きもしない。**
+      // どれも開いていない状態がトップで、そこから書けば新しい会話になる。
       // **出していない分を、黙って隠さない。**古いものは消えていない。
       const total = await this.#conversations.count();
       return send(res, 200, {
@@ -1044,30 +1035,18 @@ export class UiServer {
       if (session && this.#busyNow(session)) {
         return send(res, 409, { error: 'いま作業中です。終わってから切り替えてください' });
       }
-      // **空の会話を二つ作らない。**いま開いているものがまだ空なら、それが
-      // 「新しい会話」そのもの。押すたびに増えると、一覧が空の見出しで埋まる。
-      const current = this.#conversationId
-        ? await this.#conversations.head(this.#conversationId).catch(() => undefined)
-        : undefined;
-      if (current && current.messages === 0) {
-        this.#session?.reset();
-        this.#saved = 0;
-        /*
-         * **使い回したことを、言う。**
-         *
-         * ここは 200 を返すだけだったので、画面では何も起きなかった。
-         * 押しても増えず、選ばれているものも変わらないので、
-         * **利用者からは「押しても新しい会話が開けない」に見える。**
-         * しかも初回は必ず空なので、最初に触ったときに必ずそう見える。
-         */
-        return send(res, 200, { current: current.id, messages: [], reused: true });
-      }
-      const head = await this.#conversations.create();
-      this.#conversationId = head.id;
+      /*
+       * **「新しい会話」は、トップへ戻ること。**ここでは作らない。
+       *
+       * 押すたびに作っていたので、書かずに閉じた分だけ空の見出しが並んだ。
+       * 会話が要るのは最初の一言が来たときで、そこで作れば見出しも
+       * その一言から付く（`#currentConversation`）。
+       */
+      this.#conversationId = undefined;
       this.#saved = 0;
       this.#session?.reset();
       this.broadcast({ type: 'conversations' });
-      return send(res, 200, { current: head.id, messages: [] });
+      return send(res, 200, { current: null, messages: [] });
     }
 
     // 段取り。**どこまで進んだかを、常に見えるところに置く。**
@@ -1162,6 +1141,19 @@ export class UiServer {
       session?.restore(past);
       this.broadcast({ type: 'conversations' });
       return send(res, 200, { current: id, messages: past });
+    }
+
+    // 見出しを付け替える。**消して作り直させない。**
+    if (path === '/api/conversations/title' && req.method === 'POST') {
+      const body = await readBody(req) as { id?: unknown; title?: unknown };
+      const id = typeof body?.id === 'string' ? body.id : '';
+      if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
+      if (typeof body?.title !== 'string') return send(res, 400, { error: '見出しがありません' });
+      const renamed = await this.#conversations.rename(id, body.title)
+        .then((t) => ({ title: t }), (e: unknown) => ({ error: (e as Error).message }));
+      if ('error' in renamed) return send(res, 400, renamed);
+      this.broadcast({ type: 'conversations' });
+      return send(res, 200, { id, title: renamed.title });
     }
 
     if (path === '/api/conversations' && req.method === 'DELETE') {
@@ -1419,6 +1411,33 @@ export class UiServer {
    * **落ちる所を一箇所にまとめる。**呼ぶ側が包めるようにしておかないと、
    * 途中で落ちたときに画面が空欄のまま出て、理由が誰にも分からない。
    */
+  /** 保存先を読む。上限を過ぎたら、読めた分で返す（`slow`）。 */
+  static readonly DIR_WAIT_MS = 4000;
+
+  async #readModelsDir(liveDir: string): Promise<{
+    gguf: unknown[]; dirState: string; slow: boolean;
+  }> {
+    const read = (async () => ({
+      gguf: await Promise.all((await listGguf(liveDir)).map(async (m) => ({
+        ...m,
+        tooBig: tooBigForRam(m.sizeBytes, totalmem()) ?? null,
+        // 名前だけ .gguf の別物も、一覧で分かるように。
+        notGguf: !(await looksLikeGguf(join(liveDir, m.ref))),
+      }))),
+      // GGUF が0件のとき、置き場そのものが無いのか、空なのかで打つ手が違う。
+      dirState: await inspectModelsDir(liveDir),
+      slow: false,
+    }))();
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<{ gguf: unknown[]; dirState: string; slow: boolean }>((ok) => {
+      timer = setTimeout(() => ok({ gguf: [], dirState: 'SLOW', slow: true }), UiServer.DIR_WAIT_MS);
+      timer.unref?.();
+    });
+    // 読み切れなかった側は捨てる。落ちても、この応答を巻き込ませない。
+    read.catch(() => undefined);
+    return await Promise.race([read, late]).finally(() => clearTimeout(timer));
+  }
+
   async #configView(res: ServerResponse): Promise<void> {
     // **保存してあるもの**を読む。立ち上げたときのものを見せると、
     // 保存した直後に古い値が出て「効いていない」ように見える。
@@ -1449,14 +1468,18 @@ export class UiServer {
        * 一覧に出なかった。落とす先と一覧が割れると、
        * 「用意できました」と出たのに使えない、になる。
        */
-      gguf: await Promise.all((await listGguf(liveDir)).map(async (m) => ({
-        ...m,
-        tooBig: tooBigForRam(m.sizeBytes, totalmem()) ?? null,
-        // 名前だけ .gguf の別物も、一覧で分かるように。
-        notGguf: !(await looksLikeGguf(join(liveDir, m.ref))),
-      }))),
-      // GGUF が0件のとき、置き場そのものが無いのか、空なのかで打つ手が違う。
-      dirState: await inspectModelsDir(liveDir),
+      /*
+       * **保存先を読むのに、いつまでも待たない。**
+       *
+       * ここは保存先の中を一つずつ開いて中身まで見る（`looksLikeGguf`）。
+       * 手元の SSD なら一瞬だが、繋がっていないドライブや、必要になるまで
+       * 実体を持たない置き方（OneDrive など）だと、返ってこないことがある。
+       * その間この応答が出ないので、**画面は選択肢が一つも無いまま止まる**
+       * （動かし方の一覧まで空になる。実際にそう出た）。
+       *
+       * 待つのをやめて、読めた分だけ返す。読み切れなかったことは `slow` で言う。
+       */
+      ...(await this.#readModelsDir(liveDir)),
       // 作業場。**入れた版では、これが無いと何も始まらない。**
       // 書いてなければ既定（根の下の work）が出る。
       workRoot: await savedWorkRoot(),
