@@ -20,6 +20,9 @@ export function parseDiff(text) {
   let file = null;
   let oldNo = 0;
   let newNo = 0;
+  // 何番目の塊の、何行目か。戻すときに本体へ言うため。
+  let hunk = -1;
+  let at = 0;
 
   for (const raw of String(text ?? '').split('\n')) {
     if (raw.startsWith('--- ')) {
@@ -34,21 +37,23 @@ export function parseDiff(text) {
       const m = raw.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
       oldNo = m ? Number(m[1]) : 1;
       newNo = m ? Number(m[2]) : 1;
+      hunk += 1; at = 0;
       if (file && file.lines.length > 0) file.lines.push({ kind: 'gap' });
+      if (file) file.lines.push({ kind: 'hunk', hunk });
       continue;
     }
     if (!file) continue;
 
     if (raw.startsWith('+')) {
-      file.lines.push({ kind: 'add', newNo: newNo++, text: raw.slice(1) });
+      file.lines.push({ kind: 'add', newNo: newNo++, text: raw.slice(1), hunk, at: at++ });
       file.added += 1;
     } else if (raw.startsWith('-')) {
-      file.lines.push({ kind: 'del', oldNo: oldNo++, text: raw.slice(1) });
+      file.lines.push({ kind: 'del', oldNo: oldNo++, text: raw.slice(1), hunk, at: at++ });
       file.removed += 1;
     } else if (raw.startsWith('\\')) {
       // 「改行が無い」の注記。行としては数えない。
     } else {
-      file.lines.push({ kind: 'same', oldNo: oldNo++, newNo: newNo++, text: raw.replace(/^ /, '') });
+      file.lines.push({ kind: 'same', oldNo: oldNo++, newNo: newNo++, text: raw.replace(/^ /, ''), hunk, at: at++ });
     }
   }
   return files;
@@ -61,7 +66,7 @@ export function parseDiff(text) {
 export function collapse(lines, context = CONTEXT) {
   const keep = new Array(lines.length).fill(false);
   lines.forEach((l, i) => {
-    if (l.kind === 'add' || l.kind === 'del' || l.kind === 'gap') {
+    if (l.kind === 'add' || l.kind === 'del' || l.kind === 'gap' || l.kind === 'hunk') {
       for (let j = Math.max(0, i - context); j <= Math.min(lines.length - 1, i + context); j += 1) {
         keep[j] = true;
       }
@@ -124,11 +129,11 @@ export function renderDiff(text, opts = {}) {
     toggle.onclick = () => {
       mode = mode === 'unified' ? 'split' : 'unified';
       toggle.textContent = mode === 'unified' ? '左右で見る' : '1本で見る';
-      body.replaceChildren(mode === 'unified' ? unified(file) : split(file));
+      body.replaceChildren(mode === 'unified' ? unified(file, opts) : split(file));
     };
     head.append(toggle, copy);
 
-    body.append(mode === 'unified' ? unified(file) : split(file));
+    body.append(mode === 'unified' ? unified(file, opts) : split(file));
     card.append(head, body);
     box.append(card);
   }
@@ -139,18 +144,38 @@ function gutter(value) {
   return el('span', 'diff-no', value === undefined ? '' : String(value));
 }
 
-function unified(file) {
+/**
+ * 1 本で描く。`opts.onRevert(picks)` が渡されていれば、当てた変更を
+ * **塊ごと・行ごとに戻す**押しボタンを添える（Cursor の Reject に当たる）。
+ */
+function unified(file, opts = {}) {
   const table = el('div', 'diff-lines');
+  const revert = typeof opts.onRevert === 'function' ? opts.onRevert : null;
   for (const l of collapse(file.lines)) {
     if (l.kind === 'folded') {
       table.append(el('div', 'diff-row folded', `⋯ ${l.count} 行`));
       continue;
     }
     if (l.kind === 'gap') continue;
+    if (l.kind === 'hunk') {
+      if (!revert) continue;
+      const row = el('div', 'diff-row hunk');
+      const b = el('button', 'ghost tiny revert-hunk', 'この塊を戻す');
+      b.onclick = () => revert([{ hunk: l.hunk }]);
+      row.append(b);
+      table.append(row);
+      continue;
+    }
     const row = el('div', `diff-row ${l.kind}`);
     row.append(gutter(l.oldNo), gutter(l.newNo));
     row.append(el('span', 'diff-sign', l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '));
     row.append(el('span', 'diff-text', l.text));
+    if (revert && l.kind !== 'same') {
+      const b = el('button', 'ghost tiny revert-line', '戻す');
+      b.title = 'この行だけ戻す';
+      b.onclick = () => revert([{ hunk: l.hunk, lines: [l.at] }]);
+      row.append(b);
+    }
     table.append(row);
   }
   return table;
@@ -182,7 +207,7 @@ function split(file) {
       i += 1;
       continue;
     }
-    if (l.kind === 'gap') { i += 1; continue; }
+    if (l.kind === 'gap' || l.kind === 'hunk') { i += 1; continue; }
     if (l.kind === 'same') {
       pushRow(left, l, 'same');
       pushRow(right, l, 'same');

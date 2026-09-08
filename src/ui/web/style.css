@@ -1089,3 +1089,9 @@ dialog.wide { width: min(46rem, 92vw); }
 /* 一覧の行の @（依頼に添える）。印は幅を取らない（.side-row > button.icon）。 */
 .file-at { font-size: .8rem; padding: 3px 6px; opacity: .6; }
 .side-row:hover .file-at { opacity: 1; }
+
+/* 差分の札から、塊ごと・行ごとに戻す。押す印は行に手を置いたときだけ出す。 */
+.diff-row.hunk { padding: 2px 0; background: transparent; }
+.revert-line { margin-left: auto; opacity: 0; font-size: .7rem; padding: 0 6px; }
+.diff-row:hover .revert-line { opacity: .9; }
+.revert-hunk { font-size: .7rem; padding: 0 8px; }

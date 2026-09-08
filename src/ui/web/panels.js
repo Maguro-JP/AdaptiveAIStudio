@@ -296,7 +296,8 @@ export const PANELS = {
       const c = card('◈', v.path, `+${v.added} -${v.removed}`, 'diff-card');
       c.head.classList.add(v.created ? 'created' : 'changed');
       c.box.open = true;
-      const rendered = renderDiff(v.diff);
+      // 当てた変更を、塊ごと・行ごとに戻せる（Cursor の Reject）。
+      const rendered = renderDiff(v.diff, { onRevert: (picks) => revertPicks(v, picks, c.body) });
       // 書いてある色の隣に見本を出す。コードを読んでいる最中がいちばん要る。
       decorate(rendered, {
         onPick: (from, to) => {
@@ -308,6 +309,24 @@ export const PANELS = {
       });
       c.body.append(rendered);
       follow();
+    };
+
+    /** 差分の札から、塊・行を戻す。戻したあとの差分は本体が流すので、ここでは結果だけ言う。 */
+    const revertPicks = async (v, picks, into) => {
+      let r;
+      try {
+        r = await fetch('/api/revert', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: v.path, diff: v.diff, picks }),
+          signal: AbortSignal.timeout(20000),
+        });
+      } catch (e) {
+        into.append(el('div', 'note bad', `戻せませんでした（${e.message ?? e}）`));
+        return;
+      }
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { into.append(el('div', 'note warn', j.error ?? '戻せませんでした')); return; }
+      into.append(el('div', 'note dim', j.reverted ? `戻しました（+${j.added} -${j.removed}）` : '戻すものはありませんでした'));
     };
 
     const submit = async () => {
@@ -1099,6 +1118,23 @@ export const PANELS = {
    */
   changes(body, ctx) {
     const files = new Map();
+    /** 塊・行を戻す。結果だけ言う（戻したあとの差分は本体が流す）。 */
+    const revert = async (f, picks, into) => {
+      let r;
+      try {
+        r = await fetch('/api/revert', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path: f.path, diff: f.diff, picks }),
+          signal: AbortSignal.timeout(20000),
+        });
+      } catch (e) {
+        into.append(el('div', 'note bad', `戻せませんでした（${e.message ?? e}）`));
+        return;
+      }
+      const j = await r.json().catch(() => ({}));
+      into.append(el('div', r.ok ? 'note dim' : 'note warn',
+        r.ok ? (j.reverted ? `戻しました（+${j.added} -${j.removed}）` : '戻すものはありませんでした') : (j.error ?? '戻せませんでした')));
+    };
 
     const draw = () => {
       body.replaceChildren();
@@ -1130,7 +1166,7 @@ export const PANELS = {
         // 開いたときに初めて描く。閉じたままの差分に手間をかけない。
         box.ontoggle = () => {
           if (box.open && !drawn) {
-            const rendered = renderDiff(f.diff);
+            const rendered = renderDiff(f.diff, { onRevert: (picks) => revert(f, picks, inner) });
             // 書いてある色の隣に見本を出す。差分を読む場所は全部そうする。
             decorate(rendered);
             inner.append(rendered);

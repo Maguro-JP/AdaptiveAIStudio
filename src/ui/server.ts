@@ -23,6 +23,7 @@ import { Conversations, ID_SHAPE } from '../core/conversations.ts';
 import { loadJournals, type Journals } from '../core/journals.ts';
 import { UndoStore } from '../core/undo.ts';
 import { unifiedDiff, diffStat } from '../agent/diff.ts';
+import { revertLines, type RevertPick } from '../agent/hunks.ts';
 import { writeEnvValue } from '../core/env.ts';
 import { canRun } from '../core/which.ts';
 import { saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
@@ -1111,20 +1112,40 @@ export class UiServer {
       }
       const before = await readFile(real, 'utf8').catch(() => undefined);
       if (before === content) return send(res, 200, { saved: false, path: asked });
-      // 戻せるようにする。モデルの直しと同じ所に、同じ形で残す。
-      const undo = session?.undo ?? new UndoStore(this.#workRoot(), join(stateDir(), 'undo'));
-      await undo.begin(`手で直した: ${asked}`);
-      undo.capture(asked, before);
-      await writeFile(real, content, 'utf8');
-      await undo.end().catch(() => undefined);
-      session?.markChanged();
-      const diff = unifiedDiff(asked, before ?? '', content);
-      const { added, removed } = diffStat(diff);
-      // 「変更したファイル」へ。モデルが書いたときと同じ出来事にする。
-      this.broadcast({ type: 'session', event: { type: 'diff', path: asked, diff, added, removed, created: before === undefined } });
-      this.broadcast({ type: 'undo' });
-      this.broadcast({ type: 'stateChanged' });
+      const { added, removed } = await this.#writeByHand(asked, real, before, content, `手で直した: ${asked}`);
       return send(res, 200, { saved: true, path: asked, added, removed });
+    }
+
+    /*
+     * 当てた変更を、塊ごと・行ごとに戻す。
+     *
+     * 「戻す」は 1 ターンまるごとしか戻せなかった。半分は良くて半分は要らない、
+     * が扱えない。Cursor は当てたあとに Reject できる。差分の札から、
+     * その塊・その行だけを戻す。
+     */
+    if (path === '/api/revert' && req.method === 'POST') {
+      const body = await readBody(req) as { path?: unknown; diff?: unknown; picks?: unknown };
+      const asked = typeof body?.path === 'string' ? body.path : '';
+      const diff = typeof body?.diff === 'string' ? body.diff : '';
+      const picks = Array.isArray(body?.picks)
+        ? body.picks.filter((p): p is RevertPick => typeof p === 'object' && p !== null && typeof (p as { hunk?: unknown }).hunk === 'number')
+        : [];
+      if (!asked || !diff || picks.length === 0) return send(res, 400, { error: 'path・diff・picks が要ります' });
+      const real = await resolveInside(this.#workRoot(), asked);
+      if (!real) return send(res, 400, { error: '作業場の外には書けません' });
+      const session = this.#session;
+      if (session && this.#busyNow(session)) {
+        return send(res, 409, { error: 'いま作業中です。終わってから戻してください' });
+      }
+      const current = await readFile(real, 'utf8').catch(() => undefined);
+      if (current === undefined) return send(res, 404, { error: 'そのファイルはもうありません' });
+      const after = revertLines(current, diff, picks);
+      if (after === undefined) {
+        return send(res, 409, { error: 'その後に中身が変わっているので、この差分では戻せません（エディタで直してください）' });
+      }
+      if (after === current) return send(res, 200, { reverted: false, path: asked });
+      const { added, removed } = await this.#writeByHand(asked, real, current, after, `戻した: ${asked}`);
+      return send(res, 200, { reverted: true, path: asked, added, removed });
     }
 
     if (path === '/api/files' && req.method === 'GET') {
@@ -1722,6 +1743,28 @@ export class UiServer {
    * 「起動したらずっとフリーズしている」の正体がこれ。
    * 読むのは、頼まれたときだけでよい（`/api/send` が同じ道を通る）。
    */
+  /**
+   * 人の手で書く（エディタの保存・塊や行の戻し）。
+   *
+   * モデルの直しと同じ扱いにする。戻り先に残し、差分を「変更したファイル」と
+   * 会話へ流す。ここを通らずに書くと、戻せない直しができる。
+   */
+  async #writeByHand(asked: string, real: string, before: string | undefined, content: string, request: string): Promise<{ added: number; removed: number }> {
+    const session = this.#session;
+    const undo = session?.undo ?? new UndoStore(this.#workRoot(), join(stateDir(), 'undo'));
+    await undo.begin(request);
+    undo.capture(asked, before);
+    await writeFile(real, content, 'utf8');
+    await undo.end().catch(() => undefined);
+    session?.markChanged();
+    const diff = unifiedDiff(asked, before ?? '', content);
+    const { added, removed } = diffStat(diff);
+    this.broadcast({ type: 'session', event: { type: 'diff', path: asked, diff, added, removed, created: before === undefined } });
+    this.broadcast({ type: 'undo' });
+    this.broadcast({ type: 'stateChanged' });
+    return { added, removed };
+  }
+
   /** 開いた時点の先の一言。中身は `headsUp`。ここは材料を揃えるだけ。 */
   async #headsUp(): Promise<string | undefined> {
     const runtime = await this.#localRuntime();

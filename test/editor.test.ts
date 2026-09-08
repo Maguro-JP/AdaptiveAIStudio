@@ -114,6 +114,38 @@ describe('保存する', () => {
   });
 });
 
+describe('当てた変更を、塊ごと・行ごとに戻す', () => {
+  const post = (p: string, body: unknown) => fetch(base + p, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  test('差分の一行だけ戻す', async () => {
+    // a.txt はいま one / TWO / three。差分（one/two → one/TWO/three）の +three だけ戻す。
+    const { unifiedDiff } = await import('../src/agent/diff.ts');
+    const diff = unifiedDiff('a.txt', 'one\ntwo\n', 'one\nTWO\nthree\n');
+    const { splitHunks } = await import('../src/agent/hunks.ts');
+    const at = splitHunks(diff)[0]!.lines.indexOf('+three');
+    assert.ok(at >= 0);
+    const r = await post('/api/revert', { path: 'a.txt', diff, picks: [{ hunk: 0, lines: [at] }] });
+    const j = await json(r);
+    assert.equal(r.status, 200, JSON.stringify(j));
+    assert.equal(j.reverted, true);
+    assert.equal(await readFile(join(work, 'a.txt'), 'utf8'), 'one\nTWO\n');
+    // 戻したことも、戻り先に残る。
+    const undo = await json(await get('/api/undo'));
+    assert.ok(undo.list.some((u: { request: string }) => u.request.startsWith('戻した: a.txt')), JSON.stringify(undo.list));
+  });
+  test('その後に変わっていれば、壊さずに断る', async () => {
+    const { unifiedDiff } = await import('../src/agent/diff.ts');
+    const stale = unifiedDiff('a.txt', 'one\ntwo\n', 'one\nTWO\nthree\n');
+    const r = await post('/api/revert', { path: 'a.txt', diff: stale, picks: [{ hunk: 0 }] });
+    assert.equal(r.status, 409);
+    assert.equal(await readFile(join(work, 'a.txt'), 'utf8'), 'one\nTWO\n');
+  });
+  test('材料が足りなければ 400', async () => {
+    assert.equal((await post('/api/revert', { path: 'a.txt' })).status, 400);
+  });
+});
+
 describe('画面', () => {
   test('横の一覧のファイルは、エディタで開く（依頼に添えるのは @）', () => {
     const app = readFileSync(join(here, '../src/ui/web/app.js'), 'utf8');

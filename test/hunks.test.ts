@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { unifiedDiff } from '../src/agent/diff.ts';
 import { splitHunks, applyHunks } from '../src/agent/hunks.ts';
+import * as hunksApi from '../src/agent/hunks.ts';
 import { writeFileTool } from '../src/agent/tools/fs.ts';
 import type { ToolContext, ApprovalAnswer } from '../src/agent/tools/types.ts';
 
@@ -90,4 +91,43 @@ test('終わりの改行を、空の一行として数えない', () => {
   assert.deepEqual(added, ['+console.log(1);']);
   // 終わりの改行の有無だけの違いは、行の違いとしては出ない（承認に出す用なので、それでよい）。
   assert.equal(unifiedDiff('a.txt', 'x', 'x\n'), '');
+});
+
+describe('当てたあとから、塊ごと・行ごとに戻す', () => {
+  const before = 'a\nb\nc\nd\ne\nf\ng\nh\n';
+  const after = 'a\nB\nc\nd\ne\nf\nG\nG2\nh\n';
+  const diff = unifiedDiff('x.txt', before, after, 1);
+
+  test('塊ごと戻す', () => {
+    const { revertLines, splitHunks } = hunksApi;
+    assert.equal(splitHunks(diff).length, 2, `塊が 2 つでない:\n${diff}`);
+    assert.equal(revertLines(after, diff, [{ hunk: 0 }]), 'a\nb\nc\nd\ne\nf\nG\nG2\nh\n');
+    assert.equal(revertLines(after, diff, [{ hunk: 1 }]), 'a\nB\nc\nd\ne\nf\ng\nh\n');
+    assert.equal(revertLines(after, diff, [{ hunk: 0 }, { hunk: 1 }]), before);
+  });
+
+  test('**行ごとに戻す**（塊の中の一行だけ）', () => {
+    const { revertLines, splitHunks } = hunksApi;
+    const h1 = splitHunks(diff)[1]!;
+    // 2 つ目の塊は「-g / +G / +G2」。G2 だけ戻す。
+    const g2 = h1.lines.findIndex((l) => l === '+G2');
+    assert.ok(g2 >= 0, h1.lines.join('|'));
+    assert.equal(revertLines(after, diff, [{ hunk: 1, lines: [g2] }]), 'a\nB\nc\nd\ne\nf\nG\nh\n');
+    // -g だけ戻す（g を復活させ、G と G2 は残る）。
+    const g = h1.lines.findIndex((l) => l === '-g');
+    assert.equal(revertLines(after, diff, [{ hunk: 1, lines: [g] }]), 'a\nB\nc\nd\ne\nf\ng\nG\nG2\nh\n');
+  });
+
+  test('その後に変わっていれば、当てない（壊さない）', () => {
+    const { revertLines } = hunksApi;
+    assert.equal(revertLines(after.replace('G2', 'changed'), diff, [{ hunk: 1 }]), undefined);
+    assert.equal(revertLines(after, diff, [{ hunk: 5 }]), undefined);
+    assert.equal(revertLines(after, diff, [{ hunk: 1, lines: [99] }]), undefined);
+  });
+
+  test('新しく作ったファイルを全部戻すと、空になる', () => {
+    const { revertLines } = hunksApi;
+    const made = unifiedDiff('n.txt', '', 'x\ny\n');
+    assert.equal(revertLines('x\ny\n', made, [{ hunk: 0 }]), '');
+  });
 });
