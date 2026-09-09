@@ -70,8 +70,17 @@ const closeSettings = async () => {
   await p.waitForTimeout(400);
 };
 
+/*
+ * 落ちたときは、その瞬間の画面を残す（AAS_SWEEP_SHOTS にフォルダを渡したとき）。
+ * 「locator.click: Timeout」だけでは、何が被さっていたのか分からない。
+ */
+let failShot = 0;
 const check = async (name, fn) => {
-  try { await fn(); } catch (e) { bad.push(`${name}: ${String(e.message ?? e).split('\n')[0]}`); }
+  try { await fn(); } catch (e) {
+    bad.push(`${name}: ${String(e.message ?? e).split('\n')[0]}`);
+    const dir = process.env.AAS_SWEEP_SHOTS;
+    if (dir) await p.screenshot({ path: `${dir}/sweep-${++failShot}.png` }).catch(() => undefined);
+  }
 };
 
 // 横の板：畳んで、開き直せるか
@@ -140,7 +149,9 @@ await check('表示から板を出す', async () => {
 await check('板を閉じる', async () => {
   // 束ねてある板の見出しは、中の一枚ごとに × を持つ（直下には無い）。
   // ここでは一枚ものの板を閉じる。
-  const xs = p.locator('#root .panel > header > .panel-x');
+  // **会話のパネルは閉じない。**後の確かめが全部そこで打つ。既定の配置（エディタが
+  // 真ん中）では、最後の一枚ものが会話になり、閉じたあとに何も打てなくなった。
+  const xs = p.locator('#root .panel:not(.tabs)').filter({ hasNot: p.locator('.chat') }).locator(':scope > header > .panel-x');
   const before = await p.locator('#root .panel').count();
   if (await xs.count() === 0) throw new Error('閉じるものが無い');
   await xs.last().click();
@@ -340,11 +351,14 @@ await check('配置を切り替える', async () => {
     const now = await p.locator('#presets').inputValue();
     const other = ids.find((v) => v !== now);
     if (!other) throw new Error('選べる型が一つしかない');
-    const before = await p.locator('#root .panel').count();
+    // **形そのものを見る。**パネルの数だけだと、数が同じで並びだけ違う二つの型
+    // （エディタ中心と会話中心）を「変わっていない」と読む（実際にそう出た）。
+    const shape = () => p.evaluate(() => fetch('/api/layout').then((r) => r.json()).then((j) => JSON.stringify(j.layout.root)));
+    const before = await shape();
     await p.selectOption('#presets', other);
     await p.waitForTimeout(1000);
-    const after = await p.locator('#root .panel').count();
-    if (after === 0) throw new Error('板が一つも無くなった');
+    const after = await shape();
+    if (await p.locator('#root .panel').count() === 0) throw new Error('板が一つも無くなった');
     if (before === after) throw new Error(`選んでも並びが変わらない: ${now} → ${other}`);
   } finally {
     await closeSettings();

@@ -1057,9 +1057,9 @@ dialog.wide { width: min(46rem, 92vw); }
    * 添えたものを外す押しボタンに被り、押せなくなった（sweep で見つけた）。
    * 知らせを足したせいで、元から出来ていたことが出来なくなっている。
    */
-  position: fixed; left: 50%; transform: translateX(-50%); top: var(--s3);
-  z-index: 9999; max-width: min(46rem, 92vw);
-  padding: var(--s2) var(--s3); border-radius: var(--radius);
+  /* 浮かせない。流れの中の一段として、中身を押し下げる。何にも被らない。 */
+  flex: 0 0 auto; width: 100%; box-sizing: border-box;
+  padding: var(--s2) var(--s3); border-radius: 0;
   background: var(--bad); color: #fff; font-size: .82rem; cursor: pointer;
   box-shadow: 0 6px 24px rgb(0 0 0 / .35);
 }

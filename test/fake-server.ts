@@ -4,6 +4,12 @@ import type { AddressInfo } from 'node:net';
 
 export type Behavior =
   | { kind: 'stream'; text: string }
+  /**
+   * 頼まれた文の最後の行を「答え: …」として、少し遅れて返す。
+   * どの会話への答えかを見分けたいとき（手が一つで口が複数）に使う。
+   * 指摘かどうかの問いには NONE と即答する。
+   */
+  | { kind: 'echo'; delayMs?: number }
   /** 最初は道具を呼び、道具の結果が履歴に載って戻ってきたら then を答える。 */
   | { kind: 'toolcall'; name: string; args: Record<string, unknown>; then: string }
   /**
@@ -124,6 +130,22 @@ export async function startFakeServer(initial: Behavior): Promise<FakeServer> {
       if (behavior.retryAfter) headers['retry-after'] = behavior.retryAfter;
       res.writeHead(behavior.status, headers);
       res.end(behavior.body ?? 'error');
+      return;
+    }
+
+    if (behavior.kind === 'echo') {
+      const messages = (body as { messages?: { role?: string; content?: string }[] } | undefined)?.messages ?? [];
+      const asked = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+      const judge = /指摘・不満・注意かどうか|CODE:/.test(asked);
+      const text = judge ? 'NONE' : `答え: ${asked.trim().split('\n').pop() ?? ''}`;
+      const wait = judge ? 0 : (behavior.delayMs ?? 0);
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      setTimeout(() => {
+        for (const ch of text) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: ch } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
+        res.write('data: [DONE]\n\n');
+        res.end();
+      }, wait);
       return;
     }
 

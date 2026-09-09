@@ -44,7 +44,7 @@ import { buildRuntime } from '../core/runtime-setup.ts';
 import { MachineCache } from '../runtime/machine.ts';
 import { usesGguf, type LocalRuntime } from '../runtime/local-runtime.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
-import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout } from './layout.ts';
+import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout, DEFAULT_LAYOUT_ID } from './layout.ts';
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
 import { collectState } from './state.ts';
 import { Attachments, MAX_BYTES } from './attachments.ts';
@@ -127,11 +127,11 @@ export type UiEvent =
   | { type: 'stateChanged' }
   | { type: 'themeChanged' }
   /** 対話の出来事。そのまま画面へ流す。 */
-  | { type: 'session'; event: unknown }
+  | { type: 'session'; event: unknown; conversationId?: string }
   /** 承認待ち。答えが来るまで作業は止まっている。 */
   | { type: 'approval'; id: string; request: ApprovalRequest }
   | { type: 'approvalDone'; id: string; approved: boolean }
-  | { type: 'busy'; busy: boolean }
+  | { type: 'busy'; busy: boolean; conversationId?: string }
   /** 順番待ちの数。0 なら空。 */
   | { type: 'queue'; waiting: number }
   /** 会話の一覧が変わった。画面は取り直す。 */
@@ -171,7 +171,7 @@ export class UiServer {
    * 断って書き直させない。利用者は「終わったらこれをやって」と
    * 思って書いているので、預かって順に流すのが素直。
    */
-  readonly #queue: Array<{ text: string; attached: string[] }> = [];
+  readonly #queue: Array<{ text: string; attached: string[]; conversationId: string }> = [];
   /**
    * 残してある会話。**窓を閉じても消えないように。**
    * ここまでメモリの中だけだったので、立ち上げ直すと無かったことになっていた。
@@ -192,7 +192,19 @@ export class UiServer {
   /** いま続きとして流しているやり残し。片づいたら外すために持つ。 */
   #resuming?: string;
   /** いま話している会話。最初の依頼のときに決まる。 */
+  /** 画面が見ている会話。動いている会話とは別に持つ。 */
   #conversationId?: string;
+  /**
+   * いま本体（session）の履歴に載っている会話。
+   *
+   * 見ている会話と、動いている会話を分けた。前は一つの id しか無く、動いて
+   * いる間は別の会話へ切り替えられなかった（「終わってから」と断っていた）。
+   * 手が一つしか無いのは、使う側からすると有り得ない。
+   * 履歴の載せ替えは、手が空いているときにだけやる。
+   */
+  #loadedId?: string;
+  /** いま動いている会話。動いていなければ undefined。 */
+  #runningId?: string;
   /** どこまで残したか。ここから先を足す。 */
   #saved = 0;
 
@@ -357,6 +369,7 @@ export class UiServer {
     const id = await this.#currentConversation();
     const past = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
     this.#session.restore(past);
+    this.#loadedId = id;
     this.#saved = past.length;
     this.#startThinking(this.#session);
     return this.#session;
@@ -430,8 +443,19 @@ export class UiServer {
   async #currentConversation(): Promise<string> {
     if (this.#conversationId) return this.#conversationId;
     this.#conversationId = (await this.#conversations.create()).id;
-    this.#saved = 0;
     return this.#conversationId;
+  }
+
+  /**
+   * 本体の履歴に、その会話を載せる。**手が空いているときにだけ呼ぶ。**
+   * 既に載っていれば何もしない。
+   */
+  async #loadInto(session: Session, id: string): Promise<void> {
+    if (this.#loadedId === id) return;
+    const past = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
+    session.restore(past);
+    this.#loadedId = id;
+    this.#saved = past.length;
   }
 
   /**
@@ -442,7 +466,10 @@ export class UiServer {
    * （続きを話すときに、その対応が要る）。
    */
   async #persist(session: Session): Promise<void> {
-    const id = await this.#currentConversation();
+    // 残す先は、**本体に載っている会話**。画面が見ている会話ではない
+    // （動いている間に別の会話を見に行けるので、二つは別）。
+    const id = this.#loadedId ?? await this.#currentConversation();
+    this.#loadedId = id;
     const fresh = session.history.slice(this.#saved);
     if (fresh.length === 0) return;
     await this.#conversations.append(id, fresh).catch((e: unknown) => {
@@ -730,23 +757,30 @@ export class UiServer {
       await this.#rebuildIfCandidatesMissing();
 
       const session = await this.session();
+      // どの会話への依頼か。トップからなら、ここで新しい会話ができる。
+      // 見出しは**送った時点で**最初の一言から付ける。答えが返るまで
+      // 「新しい会話」のまま並ぶと、どれがどれか分からない。
+      const conversationId = await this.#currentConversation();
+      if (text) await this.#conversations.titleIfUnset(conversationId, text).catch(() => undefined);
+      this.broadcast({ type: 'conversations' });
       // **断らない。**書いたものを突き返されるのがいちばん不快で、
       // しかも書き直させることになる。動いている間は順番に積む。
+      // 別の会話への依頼も積める（手が一つでも、口は会話ごと）。
       if (this.#busyNow(session)) {
-        this.#queue.push({ text, attached });
+        this.#queue.push({ text, attached, conversationId });
         this.broadcast({ type: 'queue', waiting: this.#queue.length });
-        return send(res, 202, { queued: this.#queue.length });
+        return send(res, 202, { queued: this.#queue.length, conversationId });
       }
 
       this.#preparing = true;
       try {
-
+        await this.#loadInto(session, conversationId);
         // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
         // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
         const full = await this.#compose(session, text, attached);
 
         // 受け取ったことだけ先に返し、続きは出来事として流す。
-        send(res, 202, { accepted: true });
+        send(res, 202, { accepted: true, conversationId });
         this.#bg(this.#drive(session, full), '依頼の実行が落ちました');
       } finally {
         this.#preparing = false;
@@ -1233,15 +1267,13 @@ export class UiServer {
       // **出していない分を、黙って隠さない。**古いものは消えていない。
       const total = await this.#conversations.count();
       return send(res, 200, {
-        current: this.#conversationId ?? null, list, total, hidden: Math.max(0, total - list.length),
+        current: this.#conversationId ?? null, running: this.#runningId ?? null,
+        list, total, hidden: Math.max(0, total - list.length),
       });
     }
 
     if (path === '/api/conversations' && req.method === 'POST') {
       const session = this.#session;
-      if (session && this.#busyNow(session)) {
-        return send(res, 409, { error: 'いま作業中です。終わってから切り替えてください' });
-      }
       /*
        * **「新しい会話」は、トップへ戻ること。**ここでは作らない。
        *
@@ -1250,10 +1282,14 @@ export class UiServer {
        * その一言から付く（`#currentConversation`）。
        */
       this.#conversationId = undefined;
-      this.#saved = 0;
-      this.#session?.reset();
+      // 動いている間は本体に触らない（見ている所だけトップへ）。
+      if (session && !this.#busyNow(session)) {
+        session.reset();
+        this.#loadedId = undefined;
+        this.#saved = 0;
+      }
       this.broadcast({ type: 'conversations' });
-      return send(res, 200, { current: null, messages: [] });
+      return send(res, 200, { current: null, messages: [], running: this.#runningId ?? null });
     }
 
     // 段取り。**どこまで進んだかを、常に見えるところに置く。**
@@ -1338,16 +1374,17 @@ export class UiServer {
       const id = typeof body?.id === 'string' ? body.id : '';
       if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
       const session = this.#session;
-      if (session && this.#busyNow(session)) {
-        return send(res, 409, { error: 'いま作業中です。終わってから切り替えてください' });
-      }
       const past = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
+      // **動いている間も切り替えられる。**見るだけなら本体には触らない。
+      // 手が空いているなら、その場で本体にも載せる。
       this.#conversationId = id;
-      this.#saved = past.length;
-      // 土台があるなら、その場で積み直す。無ければ次に作るときに積む。
-      session?.restore(past);
+      if (session && !this.#busyNow(session)) {
+        session.restore(past);
+        this.#loadedId = id;
+        this.#saved = past.length;
+      }
       this.broadcast({ type: 'conversations' });
-      return send(res, 200, { current: id, messages: past });
+      return send(res, 200, { current: id, messages: past, running: this.#runningId ?? null });
     }
 
     // 見出しを付け替える。**消して作り直させない。**
@@ -1961,7 +1998,10 @@ export class UiServer {
     // **依頼をまたいで持ち越さない。**「この依頼のあいだは訊かない」は、
     // その依頼のあいだだけ。次の依頼では、また訊く。
     this.#allWrites = false;
-    this.broadcast({ type: 'busy', busy: true });
+    // 動いている会話。出来事に添えて流す。画面は、見ている会話のものだけを描く。
+    const conversationId = this.#loadedId;
+    this.#runningId = conversationId;
+    this.broadcast({ type: 'busy', busy: true, conversationId });
     // どう終わったか。**終わり方を見て、やり残しを控える。**
     let settled: { reason: string; verified: boolean; checked: string } | undefined;
     // 道具が実際に動いたか。**一段の合否は、言葉ではなくここで見る。**
@@ -1973,7 +2013,7 @@ export class UiServer {
           settled = { reason: event.reason, verified: event.verified, checked: event.checked };
         }
         if (event.type === 'toolEnd' && event.ok) didSomething = true;
-        this.broadcast({ type: 'session', event });
+        this.broadcast({ type: 'session', event, conversationId });
       }
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
@@ -1993,7 +2033,8 @@ export class UiServer {
       // **残してから、次へ進む。**先に次を流すと、落ちたときに
       // その回のやりとりが消える。
       await this.#persist(session);
-      this.broadcast({ type: 'busy', busy: false });
+      this.#runningId = undefined;
+      this.broadcast({ type: 'busy', busy: false, conversationId });
       // 作業で記憶やファイルが動いている。画面の材料を取り直させる。
       this.broadcast({ type: 'stateChanged' });
       await this.#drainQueue(session);
@@ -2357,6 +2398,7 @@ export class UiServer {
     const next = this.#queue.shift();
     this.broadcast({ type: 'queue', waiting: this.#queue.length });
     if (!next) return;
+    await this.#loadInto(session, next.conversationId);
     const full = await this.#compose(session, next.text, next.attached);
     this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
     this.#bg(this.#drive(session, full), '順番待ちの実行が落ちました');
@@ -2485,7 +2527,9 @@ export async function loadLayout(): Promise<{ layout: Layout; repairs: { detail:
     return repairLayout(JSON.parse(await readFile(LAYOUT_PATH(), 'utf8')));
   } catch {
     // まだ配置を決めていないだけ。既定から始める。
-    return { layout: preset('command'), repairs: [] };
+    // 何も無い（入れた直後）なら、既定の配置。名前を決め打ちにしていて、
+    // 既定を Cursor の形に変えたあとも、入れた直後だけ古い形が出ていた。
+    return { layout: preset(DEFAULT_LAYOUT_ID), repairs: [] };
   }
 }
 

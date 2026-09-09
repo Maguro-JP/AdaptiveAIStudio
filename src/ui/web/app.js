@@ -57,7 +57,10 @@ function showCrash(what, detail, tone = 'bad') {
     box.id = 'crashNote';
     box.className = 'crash-note';
     box.onclick = () => { box.remove(); };
-    document.body.append(box);
+    // **被せない。**浮かせると、その下の押しボタン（パネルの ×、添えたものを外す ×）が
+    // 押せなくなる（二度そうなった）。上の帯として流れの中に置き、中身を押し下げる。
+    const shell = document.querySelector('.shell');
+    if (shell) shell.before(box); else document.body.append(box);
   }
   box.className = `crash-note ${tone}`;
   box.textContent = `${what}: ${detail}（押すと消えます）`;
@@ -633,6 +636,18 @@ function listen() {
       if (e.event.type === 'toolStart') run.set('busy', doingText(e.event.name, e.event.summary));
       if (e.event.type === 'toolEnd') run.set('busy', '作業中');
     }
+    /*
+     * **見ている会話の出来事だけを描く。**
+     *
+     * 動いている間も別の会話を見に行ける。そのとき、動いている会話の答えが
+     * 見ている会話へ流れ込むと、話が混ざる。会話の名前が添えてある出来事は、
+     * 見ている会話のものだけ通す。他の会話のものは、横の一覧の「動いています」で分かる。
+     */
+    if ((e.type === 'session' || e.type === 'busy') && e.conversationId
+      && conversations && conversations.current && e.conversationId !== conversations.current) {
+      if (e.type === 'busy' && !e.busy) void loadConversations();
+      return;
+    }
     for (const fn of eventHandlers.get(e.type) ?? []) fn(e);
   };
 }
@@ -1035,7 +1050,11 @@ function drawConversations() {
     // 数え切れていないときは、そう見せる（頭しか読んでいない）。
     open.title = `${head.title}（${head.messages}${head.more ? '+' : ''}）`;
     open.className = head.id === conversations.current ? 'on' : '';
-    open.disabled = busyNow;
+    // 動いている会話には ● を付ける。**動いている間も切り替えられる**ので、押せる。
+    if (head.id === conversations.running) {
+      open.textContent = `● ${head.title}`;
+      open.title += '（動いています）';
+    }
     open.onclick = async () => {
       const r = await ask('/api/conversations/select', {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1057,7 +1076,6 @@ function drawConversations() {
     label.className = 'rename';
     label.textContent = '✎';
     label.title = '名前を変える';
-    label.disabled = busyNow;
     label.onclick = async () => {
       const want = window.prompt('この会話の名前', head.title);
       if (want === null) return;
