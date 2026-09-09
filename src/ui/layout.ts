@@ -69,6 +69,69 @@ const panel = (id: string, kind: PanelKind, title?: string): PanelSpec => ({ id,
  * 好みが違う以上、一つでは足りない。ここから選んで、そこから直していく。
  */
 export const PRESETS: Layout[] = [
+  /*
+   * 先行例に合わせた二つ。
+   *
+   * Cursor（VS Code の形）: 左にファイル、**真ん中にエディタ**、右に AI の会話。
+   * 直すのが主で、会話は横から手伝う。
+   * Claude Code / Codex: **真ん中に会話**、差分やファイルは横。頼むのが主で、
+   * 直った結果を横で見る。
+   *
+   * どちらが正しいかは使い方で変わる。一つに決めず、切り替えられるようにする。
+   * エディタを束の中の小さな札に入れていたのは、どちらの形でもない。
+   */
+  {
+    id: 'cursor',
+    name: 'エディタ中心 — Cursor の形（真ん中にエディタ、右に会話）',
+    root: {
+      type: 'split', direction: 'row', sizes: [0.62, 0.38],
+      children: [
+        { type: 'panel', panel: 'editor' },
+        {
+          type: 'split', direction: 'column', sizes: [0.68, 0.32],
+          children: [
+            { type: 'panel', panel: 'chat' },
+            { type: 'tabs', panels: ['changes', 'plan', 'checks'] },
+          ],
+        },
+      ],
+    },
+    panels: [
+      panel('editor', 'editor'),
+      panel('chat', 'conversation'),
+      panel('changes', 'changes'),
+      panel('plan', 'plan'),
+      panel('checks', 'checks'),
+    ],
+    theme: 'auto',
+    density: 'comfortable',
+  },
+  {
+    id: 'chat',
+    name: '会話中心 — Claude Code / Codex の形（真ん中に会話、右にエディタと差分）',
+    root: {
+      type: 'split', direction: 'row', sizes: [0.55, 0.45],
+      children: [
+        { type: 'panel', panel: 'chat' },
+        {
+          type: 'split', direction: 'column', sizes: [0.6, 0.4],
+          children: [
+            { type: 'panel', panel: 'editor' },
+            { type: 'tabs', panels: ['changes', 'plan', 'checks'] },
+          ],
+        },
+      ],
+    },
+    panels: [
+      panel('chat', 'conversation'),
+      panel('editor', 'editor'),
+      panel('changes', 'changes'),
+      panel('plan', 'plan'),
+      panel('checks', 'checks'),
+    ],
+    theme: 'auto',
+    density: 'comfortable',
+  },
   {
     id: 'focus',
     name: '集中 — 会話だけ',
@@ -137,7 +200,8 @@ export const PRESETS: Layout[] = [
   },
 ];
 
-export const DEFAULT_LAYOUT_ID = 'command';
+// 既定は Cursor の形。直すのが主な使い方で、エディタが真ん中に要る。
+export const DEFAULT_LAYOUT_ID = 'cursor';
 
 export function preset(id: string): Layout {
   const found = PRESETS.find((p) => p.id === id) ?? PRESETS.find((p) => p.id === DEFAULT_LAYOUT_ID)!;

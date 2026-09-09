@@ -8,6 +8,7 @@ import type { AasConfig } from '../config.ts';
 import type { LocalRuntime } from '../runtime/local-runtime.ts';
 import { LlamaCppRuntime } from '../runtime/llamacpp.ts';
 import { InProcRuntime } from '../runtime/inproc.ts';
+import { InProcHost } from '../runtime/inproc-host-client.ts';
 import { OllamaRuntime } from '../runtime/ollama.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
 import type { MachineSpec } from '../runtime/spec.ts';
@@ -28,6 +29,22 @@ export async function buildRuntime(
   // このプログラムの中で読む。**二つ目の実行ファイルを置けない機械**では
   // これだけが道になる。GGUF を置き場に入れておけば、それを読む。
   if (rc.kind === 'inproc') {
+    /*
+     * **モデルは別のプロセスで動かす。**
+     *
+     * 同じプロセスで回すと、CPU で数GBを読んでいる間、画面の口まで固まる
+     * （打っても返らず、フリーズにしか見えない。実機でそうなった）。
+     * 裏でやることは裏でやる。試験で偽のライブラリを渡すときだけ、
+     * 同じプロセスで読む（子に偽物を渡す道は別にある）。
+     */
+    if (!hooks.inprocLoad) {
+      return new InProcHost({
+        modelsDir: rc.modelsDir ?? modelsDir(),
+        ...(rc.basePort !== undefined ? { port: rc.basePort } : {}),
+        ...(rc.contextSize !== undefined ? { contextSize: rc.contextSize } : {}),
+        ...(onLog ? { onLog } : {}),
+      });
+    }
     return new InProcRuntime({
       modelsDir: rc.modelsDir ?? modelsDir(),
       // 設定の basePort を渡す。渡さないと、繋ぐ側（wireInProc）は basePort を

@@ -436,7 +436,9 @@ export const PANELS = {
 
     ctx.on('busy', (e) => {
       stop.hidden = !e.busy;
-      send.disabled = e.busy;
+      // **入力を止めない。**動いている間に送ったものは順番に積まれる（本体が 202 で受ける）。
+      // 押せなくすると、書いたものを持ったまま待たされる。それがいちばん不快。
+      send.disabled = false;
       wrap.classList.toggle('working', e.busy);
       if (!e.busy) { stream = null; openTools.clear(); }
     });

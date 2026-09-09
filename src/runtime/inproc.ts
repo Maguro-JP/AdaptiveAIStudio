@@ -103,6 +103,14 @@ export interface InProcOptions {
    * **本物をbundle として用意できない**ので、ここを開けておく。
    */
   load?: () => Promise<unknown>;
+  /**
+   * 別のプロセス（inproc-host）で動かすときの、操作の口を開けるか。
+   * `/control/*` で一覧・読み込み・降ろす・止めるを受ける。
+   * 画面のプロセスは、これ越しにしかモデルに触らない。
+   */
+  control?: boolean;
+  /** `/control/shutdown` で止めたあとに呼ぶ（別のプロセスなら、ここで終わる）。 */
+  onExit?: () => void;
 }
 
 /** 置き場にある GGUF。名前は問わない。 */
@@ -318,6 +326,12 @@ export class InProcRuntime implements LocalRuntime {
     return listGguf(this.#opts.modelsDir);
   }
 
+  /** 口を先に立てる（読み込みはしない）。別のプロセスで動かすときの入口。 */
+  async serve(): Promise<string> {
+    await this.#serve();
+    return this.#url;
+  }
+
   loaded(): string[] {
     return [...this.#sessions.keys()];
   }
@@ -468,6 +482,49 @@ export class InProcRuntime implements LocalRuntime {
     return 8192;
   }
 
+  /**
+   * 操作の口。別のプロセスから、一覧・読み込み・降ろす・止める。
+   * 画面のプロセスが CPU に食われて固まらないよう、モデルはこちらで動かす。
+   */
+  async #control(url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const reply = (code: number, body: unknown) => {
+      res.writeHead(code, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(body));
+    };
+    const readJson = async (): Promise<Record<string, unknown>> => {
+      const chunks: Buffer[] = [];
+      for await (const c of req) chunks.push(c as Buffer);
+      try { return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as Record<string, unknown>; } catch { return {}; }
+    };
+    const op = url.pathname.slice('/control/'.length);
+    try {
+      if (op === 'list') return reply(200, await this.list());
+      if (op === 'loaded') return reply(200, this.loaded());
+      if (op === 'wrappers') return reply(200, this.wrappers());
+      if (op === 'load' && req.method === 'POST') {
+        const { ref } = await readJson();
+        if (typeof ref !== 'string') return reply(400, { error: 'ref が要ります' });
+        const got = await this.ensureLoaded(ref);
+        return reply(200, { ...got, window: this.windowOf(ref) ?? null });
+      }
+      if (op === 'unload' && req.method === 'POST') {
+        const { ref } = await readJson();
+        if (typeof ref !== 'string') return reply(400, { error: 'ref が要ります' });
+        await this.unload(ref);
+        return reply(200, { ok: true });
+      }
+      if (op === 'shutdown' && req.method === 'POST') {
+        reply(200, { ok: true });
+        // 返事を出し切ってから止める。
+        setTimeout(() => { void this.shutdown().then(() => this.#opts.onExit?.()); }, 50).unref?.();
+        return;
+      }
+      return reply(404, { error: 'そこはありません' });
+    } catch (e) {
+      return reply(500, { error: (e as Error).message });
+    }
+  }
+
   async unload(ref: string): Promise<void> {
     await this.#sessions.get(ref)?.context.dispose?.().catch(() => { /* すでに解けている */ });
     this.#sessions.delete(ref);
@@ -531,6 +588,7 @@ export class InProcRuntime implements LocalRuntime {
       return;
     }
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (this.#opts.control && url.pathname.startsWith('/control/')) return this.#control(url, req, res);
     if (url.pathname.endsWith('/models')) {
       // 繋がるかの確認に使われる。読み込んでいるものを答える。
       res.writeHead(200, { 'content-type': 'application/json' });

@@ -998,6 +998,15 @@ async function loadUndo() {
 const UNDO_SHOWN = 3;
 let undoOpen = false;
 
+/** トップへ戻る。何も開いていない画面。そこで書き始めると、新しい会話になる。 */
+async function goTop() {
+  const r = await ask('/api/conversations', { method: 'POST' }, 'トップへ戻れませんでした');
+  if (!r) return;
+  if (!r.ok) return void showCrash('トップへ戻れません', r.body.error ?? '', 'warn');
+  ctx.showHistory([]);
+  await loadConversations();
+}
+
 async function loadConversations() {
   try {
     conversations = await fetch('/api/conversations').then((x) => x.json());
@@ -1009,25 +1018,8 @@ function drawConversations() {
   const box = $('sideSessions');
   box.textContent = '';
 
-  const fresh = document.createElement('button');
-  fresh.textContent = '＋ 新しい会話';
-  fresh.disabled = busyNow;
-  fresh.onclick = async () => {
-    const r = await ask('/api/conversations', { method: 'POST' }, '始められませんでした');
-    if (!r) return;
-    if (!r.ok) return void alert(r.body.error ?? '始められませんでした');
-    ctx.showHistory([]);
-    await loadConversations();
-    // **押した結果を見せる。**トップに戻っただけなので、画面は空になる。
-    // 何も言わないと「押しても何も起きない」に見える。
-    const note = $('convNote');
-    if (note) {
-      note.textContent = '書き始めると、新しい会話になります。';
-      note.hidden = false;
-      setTimeout(() => { note.hidden = true; }, 4000);
-    }
-  };
-  box.append(fresh);
+  // 「新しい会話」の押しボタンは置かない。**トップ（何も開いていない画面）で
+  // 書き始めれば新しい会話になる。**トップへは名前（左上）を押して戻る。
 
   if (conversations.list.length === 0) {
     box.append(Object.assign(document.createElement('div'),
@@ -1752,3 +1744,8 @@ listen();
 setInterval(refreshState, 5000);
 
 $('openView').onclick = () => openViewMenu();
+// 名前を押すとトップへ。普通のチャットの作法（左上の名前が入口）に合わせる。
+for (const b of document.querySelectorAll('.brand')) {
+  b.title = 'トップへ（ここで書き始めると新しい会話）';
+  b.onclick = () => { void goTop(); };
+}

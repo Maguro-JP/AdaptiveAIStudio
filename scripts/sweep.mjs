@@ -215,16 +215,17 @@ await check('会話を開く', async () => {
   if (on.trim() !== name) throw new Error(`押したものが選ばれていない: ${name} / ${on.trim()}`);
 });
 
-await check('新しい会話', async () => {
+await check('トップへ戻る（名前を押す）', async () => {
+  // 「新しい会話」の押しボタンは置かない。トップで書き始めれば新しい会話になる。
+  // 名前（左上）を押すとトップへ戻る。**押しても会話は増えない**（空の会話が
+  // 増えるように見えるのが嫌がられた）。
   const before = await convRows().count();
-  await p.locator('#sideSessions > button').first().click();
-  await p.waitForTimeout(900);
+  await p.locator('.brand').first().click();
+  await p.waitForTimeout(600);
   const after = await convRows().count();
-  // 増えるか、使い回したと言うか。**どちらも起きないなら、押し損。**
-  const reused = await p.locator('#convNote').isVisible().catch(() => false);
-  if (after <= before && !reused) {
-    throw new Error(`押しても増えず、何も言われない（${before} → ${after}）`);
-  }
+  if (after !== before) throw new Error(`名前を押しただけで会話が増減した（${before} → ${after}）`);
+  const state = await p.evaluate(async () => (await (await fetch('/api/conversations')).json()).current);
+  if (state !== null) throw new Error(`トップに戻っていない（current=${state}）`);
 });
 
 await check('会話の名前を変える', async () => {

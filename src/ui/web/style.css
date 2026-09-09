@@ -576,7 +576,9 @@ button.tiny { font-size: .74rem; padding: 2px 7px; }
 .field {
   flex: 1;
   display: flex; align-items: flex-end; gap: var(--s2);
-  flex-wrap: wrap;
+  /* 折り返さない。右に会話を置く配置（幅 380px）で「送る」が二段目に落ちた。
+     欄が縮む方を選ぶ。 */
+  flex-wrap: nowrap;
   background: var(--surface2);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -586,7 +588,7 @@ button.tiny { font-size: .74rem; padding: 2px 7px; }
 .field:focus-within { border-color: var(--accent); }
 .field textarea {
   /* 折り返しても潰れないよう、下限を決める。 */
-  flex: 1 1 14rem; min-width: 12rem;
+  flex: 1 1 8rem; min-width: 6rem;
   border: 0; background: transparent; padding: 6px 0;
   resize: none; font-family: var(--font); font-size: 1rem;
   max-height: 180px; height: auto; min-height: 2.1em;
@@ -1119,3 +1121,7 @@ dialog.wide { width: min(46rem, 92vw); }
  */
 .panel.tabs > .body { overflow: hidden; display: flex; flex-direction: column; }
 .panel.tabs > .body > .body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0; }
+
+/* 左上の名前は、トップへの入口。押せることが分かる形に。 */
+.brand { cursor: pointer; }
+.brand:hover { color: var(--text); }
