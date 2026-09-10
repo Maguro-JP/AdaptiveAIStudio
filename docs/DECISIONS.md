@@ -134,6 +134,7 @@
 - 既定は「この中で読む」。Ollama と llama.cpp は速さ重視の人の道（利用者が決めた）
 - 地元の口は冷やさない。モデルのプロセスが落ちたら、落ちたと言って次の送信で読み直す
 - 動いている会話へ戻ったら、途中までを写す。トップでは何も描かない
+- CI の artifact には上げない。置く先は Releases の一つだけ
 
 ---
 
@@ -3752,3 +3753,15 @@ sweep は、落ちた瞬間の画面を残せるようにした（`AAS_SWEEP_SHO
   送った直後だけは、本体から自分の会話の名前を受け取るまで通す
 - 確かめたのは Chromium と、一文字ずつ流す偽の相手（`trickleMs`）。
   戻る・開き直す・トップから積む、の三通り
+
+## 2026-09-10  CI の artifact には上げない。置く先は Releases の一つだけ
+
+- release.yml が bundle と setup.exe を artifact にも上げ、30 日残していた。
+  どの job も download していない（Releases へは直に置いている）。写しを残す
+  だけで、Actions の storage 0.5GB を使い切った（39 個・2.8GB、`/actions/artifacts` で数えた）
+- storage は GB×月で数えるので、消えるまで毎日食う。上げるのをやめた
+- 残っている分は期限（30 日）まで自分では消えない。この作業場のトークンでは
+  消せない（DELETE が 403）ので、`cleanup-artifacts.yml`（手動、既定は見せるだけ）
+  で消す。回すのは断ってから
+- 分（minutes）は別の枠。release 一回で portable と setup.exe の二つの job が回る。
+  今日は二回出したので、同じ日に二度出さない

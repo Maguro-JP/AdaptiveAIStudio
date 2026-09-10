@@ -178,14 +178,9 @@ jobs:
           test "$(find verify2/AdaptiveAIStudio -name '*.exe' | wc -l)" -eq 0
           ls -l AdaptiveAIStudio-portable-noexe.zip
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: AdaptiveAIStudio-portable-${{ steps.v.outputs.id }}
-          path: |
-            AdaptiveAIStudio-portable.zip
-            AdaptiveAIStudio-portable-noexe.zip
-          retention-days: 30
-
+      # artifact には上げない。Releases に置くものと同じ写しを 30 日残していて、
+      # どの job も download していなかった。Actions の storage（0.5GB）を
+      # それだけで使い切った（39 個・2.8GB）。置く先は Releases の一つだけ。
       - name: 公開する
         uses: softprops/action-gh-release@v2
         with:
@@ -275,12 +270,7 @@ jobs:
           test ! -f x/.portable
           ls -l installer/AdaptiveAIStudio-Setup.exe
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: AdaptiveAIStudio-setup-${{ steps.v.outputs.id }}
-          path: installer/AdaptiveAIStudio-Setup.exe
-          retention-days: 30
-
+      # artifact には上げない（上と同じ理由）。
       - name: 公開する
         uses: softprops/action-gh-release@v2
         with:
