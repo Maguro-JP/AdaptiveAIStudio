@@ -620,6 +620,22 @@ function listen() {
       const loading = /^(読み込み中 \d+%|モデルを読み込んでいます|まだ読み込んでいます)/.exec(e.text);
       if (loading) run.set('busy', e.text.split('（')[0]);
       if (/^読み込みました/.test(e.text) && !busyNow) run.set('idle', '待機中');
+      // 読み込めなかったときも戻す。戻さないと「読み込んでいます」のまま止まる
+      // （読み込み中に子が消えたとき、実際にそうなった）。
+      if (/^読み込めませんでした/.test(e.text) && !busyNow) run.set('idle', '待機中');
+      /*
+       * **モデルのプロセスが落ちたことを、見える所に出す。**
+       *
+       * 流れ（log）のパネルは、既定の配置には無い。そこにしか出さないと、
+       * 会話には「ストリームが中断されました」だけが残って、何が起きたか
+       * 分からない。上の帯は次の状態ですぐ上書きされる。知らせに出して、
+       * 読み直せたら下げる。
+       */
+      if (/^モデルのプロセスが落ちました/.test(e.text)) showCrash('モデルが落ちました', e.text, 'warn');
+      if (/^読み込みました/.test(e.text)) {
+        const box = document.getElementById('crashNote');
+        if (box && box.textContent.startsWith('モデルが落ちました')) box.remove();
+      }
     }
     if (e.type === 'conversations') void loadConversations();
     if (e.type === 'unfinished') void loadUnfinished();

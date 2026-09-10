@@ -52,6 +52,43 @@ describe('別のプロセスで読む', () => {
     }
   });
 
+  test('**子が途中で死んでも、次の頼みで起こし直す**（落ちたと言い、止めたときは黙る）', async () => {
+    const dir = await tempDir('aas-host3-');
+    await writeFile(join(dir, 'a.gguf'), 'GGUF');
+    const said: string[] = [];
+    const host = new InProcHost({ modelsDir: dir, port: 0, lib: fakeLib, onLog: (l) => said.push(l) });
+    try {
+      await host.ensureLoaded('a.gguf');
+      const pid1 = host.pid()!;
+      assert.ok(pid1);
+      // 記憶が尽きて消えたのと同じ形。こちらは何も知らされない。
+      process.kill(pid1, 'SIGKILL');
+      await until(() => host.pid() === undefined, '子の終わりに気づく', { timeoutMs: 8000 });
+      // 読んだものは消えている、と言えること。送る手前の「空なら読む」がここを見る。
+      assert.deepEqual(host.loaded(), [], '落ちたのに読んだままになっている');
+      const fell = said.filter((l) => l.startsWith('モデルのプロセスが落ちました'));
+      assert.equal(fell.length, 1, `落ちたと言っていない: ${said.join(' | ')}`);
+      assert.ok(fell[0]!.includes('次の送信で読み直します'), fell[0]);
+      // 次の頼みで、別の子が立って読み直す。
+      const got = await host.ensureLoaded('a.gguf');
+      const pid2 = host.pid();
+      assert.ok(pid2 && pid2 !== pid1, '起こし直していない');
+      assert.deepEqual(host.loaded(), ['a.gguf']);
+      const r = await fetch(`${got.baseUrl}/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'a.gguf', messages: [{ role: 'user', content: 'hi' }], stream: true }),
+      });
+      assert.equal(r.status, 200);
+      assert.ok((await r.text()).includes('別'), '起こし直した子が答えない');
+      // こちらから止めたときは、落ちたのではない。言わない。
+      await host.shutdown();
+      await until(() => !alive(pid2), '子が終わる', { timeoutMs: 8000 });
+      assert.equal(said.filter((l) => l.startsWith('モデルのプロセスが落ちました')).length, 1, `止めたのに落ちたと言った: ${said.join(' | ')}`);
+    } finally {
+      await host.shutdown().catch(() => undefined);
+    }
+  });
+
   test('**親が居なくなったら、子は自分で終わる**（親無しで残らない）', async () => {
     const dir = await tempDir('aas-host2-');
     const entry = join(here, '../src/runtime/inproc-host.ts');

@@ -48,6 +48,8 @@ export class InProcHost implements LocalRuntime {
   #url?: Promise<string>;
   #loaded: string[] = [];
   #windows = new Map<string, number>();
+  /** こちらから止めている最中。そのときの終わりは「落ちた」ではない。 */
+  #stopping = false;
 
   constructor(opts: InProcHostOptions) { this.#opts = opts; }
 
@@ -57,6 +59,8 @@ export class InProcHost implements LocalRuntime {
     this.#url = new Promise<string>((ok, ng) => {
       const child = spawn(process.execPath, hostArgs(this.#opts), { stdio: ['pipe', 'pipe', 'pipe'] });
       this.#child = child;
+      // 新しい子。前の止めは、この子には関係ない。
+      this.#stopping = false;
       const wait = setTimeout(() => ng(new Error('モデルのプロセスが立ち上がりません（上限で諦めました）')), this.#opts.startWaitMs ?? 30_000);
       let buf = '';
       let got = false;
@@ -73,13 +77,25 @@ export class InProcHost implements LocalRuntime {
       });
       let err = '';
       child.stderr?.on('data', (b: Buffer) => { err += b.toString('utf8'); if (err.length > 4000) err = err.slice(-4000); });
-      child.on('exit', (code) => {
+      child.on('exit', (code, signal) => {
         clearTimeout(wait);
         this.#child = undefined;
         this.#url = undefined;
         this.#loaded = [];
-        if (!got) ng(new Error(`モデルのプロセスが ${code} で終わりました:\n${err.trim() || '（何も言っていません）'}`));
-        else this.#opts.onLog?.(`モデルのプロセスが終わりました（${code}）${err.trim() ? `:\n${err.trim()}` : ''}`);
+        if (!got) { ng(new Error(`モデルのプロセスが ${code} で終わりました:\n${err.trim() || '（何も言っていません）'}`)); return; }
+        /*
+         * **落ちたことを、落ちたと言う。**
+         *
+         * ここは「終わりました（null）」としか言っていなかった。数GBを CPU で
+         * 回している途中に記憶が尽きて子が消えると、画面には「ストリームが
+         * 中断されました」だけが出て、何が起きたか分からない。
+         * 読み込んだものは消えているが、**次の送信で読み直す**（`loaded()` が
+         * 空なので、送る手前で読みに行く）。それも言う。
+         * こちらから止めたときは、落ちたのではない。黙る。
+         */
+        if (this.#stopping) return;
+        const how = signal ?? code ?? '理由不明';
+        this.#opts.onLog?.(`モデルのプロセスが落ちました（${how}）。次の送信で読み直します${err.trim() ? `:\n${err.trim()}` : ''}`);
       });
       child.on('error', (e) => { clearTimeout(wait); ng(e); });
     });
@@ -129,11 +145,14 @@ export class InProcHost implements LocalRuntime {
     const child = this.#child;
     if (!child) return;
     const gone = new Promise<void>((ok) => child.once('exit', () => ok()));
+    this.#stopping = true;
     await this.#call('shutdown', {}).catch(() => undefined);
     const wait = new Promise<'late'>((ok) => setTimeout(() => ok('late'), 5000).unref?.());
     if (await Promise.race([gone.then(() => 'gone' as const), wait]) === 'late') child.kill('SIGKILL');
     this.#child = undefined;
     this.#url = undefined;
     this.#loaded = [];
+    // #stopping はここで戻さない。返事が無くて殺したとき、exit はこの後に来る。
+    // 戻してしまうと、自分で殺したものを「落ちた」と言う。次に起こすときに戻す。
   }
 }

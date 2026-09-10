@@ -69,6 +69,28 @@ describe('ChatOrchestrator', () => {
     }
   });
 
+  test('**地元の口は、落ちても冷やさない**（次の送信で読み直せば使えるので）', async () => {
+    // 子プロセスが消えたのと同じ形: 繋がるが、途中で落ちる（HTTP 503）。
+    const local = await startFakeServer({ kind: 'status', status: 503, body: 'gone' });
+    const cloud = await startFakeServer({ kind: 'status', status: 503, body: 'gone' });
+    try {
+      const registry = new ProviderRegistry();
+      registry.register(new OpenAiCompatibleProvider({ id: 'inproc', baseUrl: local.baseUrl, locality: 'local' }));
+      registry.register(new OpenAiCompatibleProvider({ id: 'cloud', baseUrl: cloud.baseUrl, locality: 'cloud' }));
+      const events = await drain(new ChatOrchestrator(registry).run(
+        { candidates: ['inproc:m', 'cloud:m'], messages: [{ role: 'user', content: 'hi' }] },
+        new AbortController().signal,
+      ));
+      assert.equal(events.at(-1)?.type, 'failed');
+      // 地元は、次の送信でそのまま候補に残る。雲は、これまで通り冷やす。
+      assert.equal(registry.isAvailable('inproc'), true, '地元の口を冷やしている。読み直せても 5 分使えない');
+      assert.equal(registry.isAvailable('cloud'), false, '雲の口を冷やしていない');
+    } finally {
+      await local.close();
+      await cloud.close();
+    }
+  });
+
   test('全候補が使えない場合は failed で終わる', async () => {
     const registry = new ProviderRegistry();
     const events = await drain(new ChatOrchestrator(registry).run(

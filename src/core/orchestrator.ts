@@ -111,7 +111,16 @@ export class ChatOrchestrator {
 
           if (err.kind === 'canceled') return;
 
-          this.#registry.cooldown(provider.id, err.rule.cooldownMs);
+          /*
+           * **地元の口は冷やさない。**
+           *
+           * 冷却は、外の口（雲）の割当てを守り、その間に別の口へ逃がすためのもの。
+           * この機械の中の口（inproc の子プロセス、Ollama）では意味が違う。
+           * 落ちた原因は子が消えたことで、それは**次の送信で読み直す**と直る。
+           * ここで 5 分冷やすと、読み直せているのに「利用できるモデルがありません」で
+           * 0.0 秒で終わり続ける（子を殺して確かめた）。逃がす先も、たいてい無い。
+           */
+          if (provider.locality !== 'local') this.#registry.cooldown(provider.id, err.rule.cooldownMs);
           lastError = err;
 
           // 出力開始後の切替は文章を壊すので、ここで打ち切る。
