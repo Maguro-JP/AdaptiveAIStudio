@@ -41,6 +41,25 @@ export function hostArgs(opts: InProcHostOptions): string[] {
   return args;
 }
 
+/**
+ * 子の終わり方を、人の言葉に直す。
+ *
+ * 「落ちました（3221225477）」では、次に何をすればいいか分からない。
+ * 数GBを CPU で回している途中に消える原因は、ほとんど記憶が尽きたこと。
+ * linux では SIGKILL（OOM killer）、Windows では中で確保に失敗して abort（3）か
+ * 0xC0000409（STATUS_STACK_BUFFER_OVERRUN、実際は fail-fast）や
+ * 0xC0000005（アクセス違反）で消える。当てずっぽうで断定はしない。「多い」と言う。
+ */
+export function explainExit(code: number | null, signal: string | null): string {
+  const how = signal ?? code ?? '理由不明';
+  const oom = signal === 'SIGKILL' || code === 137 || code === 3 || code === 0xC0000409 || code === -1073740791;
+  if (oom) return `${how}。記憶が尽きて止められた形が多いです。小さいモデルか、狭いコンテキストウィンドウ（contextSize）にしてください`;
+  if (code === 0xC0000005 || code === -1073741819 || signal === 'SIGSEGV') {
+    return `${how}。読む側（node-llama-cpp）が落ちました。モデルのファイルが途中までしか無いか、この機械の CPU に合わない版のことがあります`;
+  }
+  return String(how);
+}
+
 export class InProcHost implements LocalRuntime {
   readonly id = 'inproc';
   readonly #opts: InProcHostOptions;
@@ -94,8 +113,7 @@ export class InProcHost implements LocalRuntime {
          * こちらから止めたときは、落ちたのではない。黙る。
          */
         if (this.#stopping) return;
-        const how = signal ?? code ?? '理由不明';
-        this.#opts.onLog?.(`モデルのプロセスが落ちました（${how}）。次の送信で読み直します${err.trim() ? `:\n${err.trim()}` : ''}`);
+        this.#opts.onLog?.(`モデルのプロセスが落ちました（${explainExit(code, signal)}）。次の送信で読み直します${err.trim() ? `:\n${err.trim()}` : ''}`);
       });
       child.on('error', (e) => { clearTimeout(wait); ng(e); });
     });

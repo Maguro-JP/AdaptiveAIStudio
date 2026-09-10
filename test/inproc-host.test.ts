@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { tempDir } from './tmp.ts';
 import { until } from './until.ts';
-import { InProcHost, hostArgs } from '../src/runtime/inproc-host-client.ts';
+import { InProcHost, hostArgs, explainExit } from '../src/runtime/inproc-host-client.ts';
 import { INPROC_PORT } from '../src/runtime/inproc.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -69,6 +69,8 @@ describe('別のプロセスで読む', () => {
       const fell = said.filter((l) => l.startsWith('モデルのプロセスが落ちました'));
       assert.equal(fell.length, 1, `落ちたと言っていない: ${said.join(' | ')}`);
       assert.ok(fell[0]!.includes('次の送信で読み直します'), fell[0]);
+      // 殺された形（SIGKILL）は、記憶が尽きたときと同じ見え方。次の一手を添える。
+      assert.ok(fell[0]!.includes('記憶が尽きて'), `次の一手が無い: ${fell[0]}`);
       // 次の頼みで、別の子が立って読み直す。
       const got = await host.ensureLoaded('a.gguf');
       const pid2 = host.pid();
@@ -111,5 +113,26 @@ describe('子に渡す口', () => {
     const args = hostArgs({ modelsDir: '/m' });
     assert.equal(args[args.indexOf('--port') + 1], String(INPROC_PORT));
     assert.equal(hostArgs({ modelsDir: '/m', port: 5000 })[hostArgs({ modelsDir: '/m', port: 5000 }).indexOf('--port') + 1], '5000');
+  });
+});
+
+
+describe('子の終わり方を、人の言葉に直す', () => {
+  test('記憶が尽きた形（SIGKILL / 137 / abort の 3 / Windows の fail-fast）には次の一手を添える', () => {
+    for (const [code, signal] of [[null, 'SIGKILL'], [137, null], [3, null], [0xC0000409, null], [-1073740791, null]] as const) {
+      const said = explainExit(code, signal);
+      assert.ok(said.includes('記憶が尽きて'), `${code}/${signal}: ${said}`);
+      assert.ok(said.includes('小さいモデル'), said);
+    }
+  });
+  test('アクセス違反（0xC0000005 / SIGSEGV）は読む側の話だと言う', () => {
+    for (const [code, signal] of [[0xC0000005, null], [-1073741819, null], [null, 'SIGSEGV']] as const) {
+      assert.ok(explainExit(code, signal).includes('読む側'), `${code}/${signal}`);
+    }
+  });
+  test('知らない終わり方は、そのまま出す（決めつけない）', () => {
+    assert.equal(explainExit(1, null), '1');
+    assert.equal(explainExit(null, 'SIGTERM'), 'SIGTERM');
+    assert.equal(explainExit(null, null), '理由不明');
   });
 });
