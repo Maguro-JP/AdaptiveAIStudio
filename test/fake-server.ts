@@ -9,7 +9,7 @@ export type Behavior =
    * どの会話への答えかを見分けたいとき（手が一つで口が複数）に使う。
    * 指摘かどうかの問いには NONE と即答する。
    */
-  | { kind: 'echo'; delayMs?: number }
+  | { kind: 'echo'; delayMs?: number; /** 一文字ずつ、この間隔で流す（途中までを見る試験のため） */ trickleMs?: number }
   /** 最初は道具を呼び、道具の結果が履歴に載って戻ってきたら then を答える。 */
   | { kind: 'toolcall'; name: string; args: Record<string, unknown>; then: string }
   /**
@@ -140,11 +140,18 @@ export async function startFakeServer(initial: Behavior): Promise<FakeServer> {
       const text = judge ? 'NONE' : `答え: ${asked.trim().split('\n').pop() ?? ''}`;
       const wait = judge ? 0 : (behavior.delayMs ?? 0);
       res.writeHead(200, { 'content-type': 'text/event-stream' });
-      setTimeout(() => {
-        for (const ch of text) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: ch } }] })}\n\n`);
+      const finish = () => {
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
         res.write('data: [DONE]\n\n');
         res.end();
+      };
+      const chunk = (ch: string) => res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: ch } }] })}\n\n`);
+      const trickle = judge ? 0 : (behavior.trickleMs ?? 0);
+      setTimeout(() => {
+        if (!trickle) { for (const ch of text) chunk(ch); finish(); return; }
+        const chars = [...text];
+        const tick = () => { const ch = chars.shift(); if (ch === undefined) return finish(); chunk(ch); setTimeout(tick, trickle); };
+        tick();
       }, wait);
       return;
     }

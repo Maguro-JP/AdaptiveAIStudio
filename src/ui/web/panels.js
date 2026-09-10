@@ -364,6 +364,7 @@ export const PANELS = {
         note('dim', 'まだ返事がありません。モデルを読んでいるところかもしれません（「流れ」に出ます）。');
       }, 10000);
       let r;
+      ctx.sending?.();
       try {
         r = await fetch(isPlan ? '/api/plan' : '/api/send', {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -373,16 +374,17 @@ export const PANELS = {
           }),
         });
       } catch (e) {
+        ctx.adopt?.(null);
         note('bad', `送れませんでした（${e?.message ?? e}）。`
           + '本体が落ちているかもしれません。画面を開き直してください。');
         return;
       } finally {
         clearTimeout(slow);
       }
-      if (!r.ok) {
-        const why = await r.json().catch(() => ({}));
-        note('bad', why.error ?? `送れませんでした（${r.status}）`);
-      }
+      const body = await r.json().catch(() => ({}));
+      // トップから送ったなら、ここで自分の会話の名前が決まる。以後はその会話を見る。
+      ctx.adopt?.(body.conversationId ?? null);
+      if (!r.ok) note('bad', body.error ?? `送れませんでした（${r.status}）`);
     };
 
     form.onsubmit = (e) => { e.preventDefault(); void submit(); };
@@ -432,6 +434,20 @@ export const PANELS = {
         }
       }
       follow();
+    };
+
+    /**
+     * 動いている会話へ戻ったとき、途中までを写す。
+     *
+     * 離れていた間の出来事は描いていない（見ている会話のものしか通さない）。
+     * 本体が持っている「ここまで」を、頼んだ文と一緒に出し、続きはそのまま流す。
+     */
+    ctx.showInFlight = (f) => {
+      add(el('div', 'asked', f.asked));
+      stream = null;
+      if (f.text) append(f.text);
+      wrap.classList.add('working');
+      stop.hidden = false;
     };
 
     ctx.on('busy', (e) => {

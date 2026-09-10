@@ -667,10 +667,16 @@ function listen() {
      * 見ている会話へ流れ込むと、話が混ざる。会話の名前が添えてある出来事は、
      * 見ている会話のものだけ通す。他の会話のものは、横の一覧の「動いています」で分かる。
      */
-    if ((e.type === 'session' || e.type === 'busy') && e.conversationId
-      && conversations && conversations.current && e.conversationId !== conversations.current) {
+    if ((e.type === 'session' || e.type === 'busy') && e.conversationId && conversations
+      && (conversations.current ? e.conversationId !== conversations.current : !sendingFromTop)) {
       if (e.type === 'busy' && !e.busy) void loadConversations();
       return;
+    }
+    if (e.type === 'busy' && !e.busy && e.conversationId) copiedUpTo.delete(e.conversationId);
+    // 戻ったときに写した分は、もう描いてある。
+    if (e.type === 'session' && typeof e.seq === 'number' && e.conversationId) {
+      const upTo = copiedUpTo.get(e.conversationId);
+      if (upTo !== undefined && e.seq <= upTo) return;
     }
     for (const fn of eventHandlers.get(e.type) ?? []) fn(e);
   };
@@ -876,6 +882,19 @@ $('ghReload').onclick = () => { void loadMcpCatalog(); void loadMcp(); };
  * ここまでメモリの中だけだったので、窓を閉じると消えていた。
  */
 let conversations = { current: null, list: [] };
+// 動いている会話へ戻ったとき、写した分の番号。これ以下の出来事は二度描かない。
+const copiedUpTo = new Map();
+/*
+ * **トップに居るときは、動いている会話の出来事を描かない。**
+ *
+ * トップ（どの会話も見ていない）では「見ている会話と違う」の比べようが無く、
+ * 動いている会話の答えが空の会話へ流れ込んでいた（Chromium で見えた）。
+ * 送った直後だけは別で、自分の会話の名前を本体から受け取るまでの間、
+ * 出来事はまだ名前を知らない自分の会話のもの。そこだけ通す。
+ */
+let sendingFromTop = false;
+ctx.sending = () => { sendingFromTop = !conversations.current; };
+ctx.adopt = (id) => { if (id) conversations.current = id; sendingFromTop = false; };
 let busyNow = false;
 
 /**
@@ -1087,6 +1106,12 @@ function drawConversations() {
       if (!r) return;
       if (!r.ok) return void alert(r.body.error ?? '開けませんでした');
       ctx.showHistory(r.body.messages ?? []);
+      if (r.body.inFlight) {
+        // 動いている会話へ戻った。途中までを写し、続きの出来事を通す。
+        conversations.current = head.id;
+        copiedUpTo.set(head.id, r.body.inFlight.seq);
+        ctx.showInFlight(r.body.inFlight);
+      }
       await loadConversations();
     };
     /*
@@ -1759,7 +1784,12 @@ if (conversations.current) {
   try {
     const body = await fetch(`/api/conversations/messages?id=${encodeURIComponent(conversations.current)}`)
       .then((x) => x.json());
-    if (body.messages?.length) ctx.showHistory(body.messages);
+    if (body.messages?.length || body.inFlight) ctx.showHistory(body.messages ?? []);
+    // 動いている最中に開き直しても、途中までは見える。
+    if (body.inFlight) {
+      copiedUpTo.set(conversations.current, body.inFlight.seq);
+      ctx.showInFlight(body.inFlight);
+    }
   } catch { /* 出せなくても、新しく書き始められる */ }
 }
 /*

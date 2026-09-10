@@ -127,7 +127,7 @@ export type UiEvent =
   | { type: 'stateChanged' }
   | { type: 'themeChanged' }
   /** 対話の出来事。そのまま画面へ流す。 */
-  | { type: 'session'; event: unknown; conversationId?: string }
+  | { type: 'session'; event: unknown; conversationId?: string; seq?: number }
   /** 承認待ち。答えが来るまで作業は止まっている。 */
   | { type: 'approval'; id: string; request: ApprovalRequest }
   | { type: 'approvalDone'; id: string; approved: boolean }
@@ -205,6 +205,16 @@ export class UiServer {
   #loadedId?: string;
   /** いま動いている会話。動いていなければ undefined。 */
   #runningId?: string;
+  /**
+   * 動いている一言の、ここまで。
+   *
+   * 動いている間に別の会話を見て戻ってくると、途中までの答えが**無かった**。
+   * 出来事は見ている会話のものしか描かないので、離れていた間の分が消える。
+   * 終わるまで「hi」だけが並び、終わった瞬間に答えが出る。
+   * 戻ったとき（と、開き直したとき）にここを写す。`seq` は写した分と、
+   * その後に流れてくる分を二度描かないための番号。
+   */
+  #inFlight?: { conversationId: string | undefined; asked: string; text: string; seq: number };
   /** どこまで残したか。ここから先を足す。 */
   #saved = 0;
 
@@ -419,6 +429,12 @@ export class UiServer {
    * 候補が空のまま固定される。読み込んだ後も直らないので、
    * **打っても打っても即座に「使えるモデルがありません」で終わる。**
    */
+  /** この会話で動いている一言の、ここまで。動いていなければ null。 */
+  #inFlightFor(id: string): { asked: string; text: string; seq: number } | null {
+    const f = this.#inFlight;
+    return f && f.conversationId === id ? { asked: f.asked, text: f.text, seq: f.seq } : null;
+  }
+
   async #rebuildIfCandidatesMissing(): Promise<void> {
     const live = this.#session;
     if (!live || live.candidates.length > 0) return;
@@ -1402,7 +1418,7 @@ export class UiServer {
         this.#saved = past.length;
       }
       this.broadcast({ type: 'conversations' });
-      return send(res, 200, { current: id, messages: past, running: this.#runningId ?? null });
+      return send(res, 200, { current: id, messages: past, running: this.#runningId ?? null, inFlight: this.#inFlightFor(id) });
     }
 
     // 見出しを付け替える。**消して作り直させない。**
@@ -1441,7 +1457,7 @@ export class UiServer {
       // **画面へ 16MB を投げない。**丸ごと返すと、開いた瞬間に固まる
       // （半年続けた会話で JSON が 5.5MB になった）。後ろから読む。
       const shown = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
-      return send(res, 200, { id, messages: shown });
+      return send(res, 200, { id, messages: shown, inFlight: this.#inFlightFor(id) });
     }
 
     /*
@@ -2019,6 +2035,7 @@ export class UiServer {
     // 動いている会話。出来事に添えて流す。画面は、見ている会話のものだけを描く。
     const conversationId = this.#loadedId;
     this.#runningId = conversationId;
+    this.#inFlight = { conversationId, asked: text, text: '', seq: 0 };
     this.broadcast({ type: 'busy', busy: true, conversationId });
     // どう終わったか。**終わり方を見て、やり残しを控える。**
     let settled: { reason: string; verified: boolean; checked: string } | undefined;
@@ -2031,11 +2048,17 @@ export class UiServer {
           settled = { reason: event.reason, verified: event.verified, checked: event.checked };
         }
         if (event.type === 'toolEnd' && event.ok) didSomething = true;
-        this.broadcast({ type: 'session', event, conversationId });
+        let seq: number | undefined;
+        if (event.type === 'text' && this.#inFlight) {
+          this.#inFlight.text += event.delta;
+          seq = ++this.#inFlight.seq;
+        }
+        this.broadcast({ type: 'session', event, conversationId, ...(seq !== undefined ? { seq } : {}) });
       }
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
     } finally {
+      this.#inFlight = undefined;
       await this.#recordUnfinished(text, settled, resuming, didSomething);
       // 戻り先が増えたことを画面へ。**触ったのに出ていないと、
       // 戻せることに気づけない。**
