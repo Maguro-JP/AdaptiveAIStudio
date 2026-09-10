@@ -650,6 +650,15 @@ describe('開いた時点で、使えるかを言う', () => {
     assert.ok(body.why.length > 0, '話せないのに理由が空');
     // 先の一言の口が在ること。中身は機械（GPU の有無）で変わるので、ここでは見ない。
     assert.equal(typeof body.heads, 'string', '先の一言の口が無い');
+    // **初めて開いた人が、その場で使い始められる**ように、最初の一つを取ってこられると言う。
+    assert.equal(body.canFetch?.id, 'qwen3.5-4b', `最初の一つを返していない: ${JSON.stringify(body.canFetch)}`);
+    assert.equal(typeof body.canFetch?.approxGB, 'number');
+  });
+
+  test('画面は、最初の一つを一押しで取ってこられる形で出す', () => {
+    const app = readFileSync(join(root, 'src/ui/web/app.js'), 'utf8');
+    assert.ok(app.includes('canFetch'), '最初の一つを受け取っていない');
+    assert.ok(app.includes("'/api/models/get'"), '取ってくる口を叩いていない');
   });
 
   test('画面は、先の一言を出す', () => {

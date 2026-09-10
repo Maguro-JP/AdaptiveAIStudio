@@ -1060,6 +1060,8 @@ dialog.wide { width: min(46rem, 92vw); }
   /* 浮かせない。流れの中の一段として、中身を押し下げる。何にも被らない。 */
   flex: 0 0 auto; width: 100%; box-sizing: border-box;
   padding: var(--s2) var(--s3); border-radius: 0;
+  /* 手順が書いてあるときは、行を保つ。一つの塊になると読めない。 */
+  white-space: pre-line;
   background: var(--bad); color: #fff; font-size: .82rem; cursor: pointer;
   box-shadow: 0 6px 24px rgb(0 0 0 / .35);
 }
@@ -1125,3 +1127,6 @@ dialog.wide { width: min(46rem, 92vw); }
 /* 左上の名前は、トップへの入口。押せることが分かる形に。 */
 .brand { cursor: pointer; }
 .brand:hover { color: var(--text); }
+
+/* 知らせの中の、次の一手。 */
+.crash-action { margin-left: var(--s2); font-size: .8rem; padding: 2px 10px; }

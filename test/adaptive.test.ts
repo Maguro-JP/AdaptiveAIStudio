@@ -76,6 +76,7 @@ describe('二度目は、同じ大きさで挑まない', () => {
       config: {
         ...DEFAULT_CONFIG,
         providers: [{ id: 'p', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
+        runtime: { kind: 'ollama' }, // 偽の相手（openai 互換）へ繋ぐ。既定（inproc）だと GGUF を探しに行く
         candidates: ['p:m'],
         agent: { root, approval: 'auto' },
       } as typeof DEFAULT_CONFIG,
@@ -168,6 +169,7 @@ describe('段取りの終わり方', () => {
       config: {
         ...DEFAULT_CONFIG,
         providers: [{ id: 'p', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
+        runtime: { kind: 'ollama' }, // 偽の相手（openai 互換）へ繋ぐ。既定（inproc）だと GGUF を探しに行く
         candidates: ['p:m'],
         agent: { root, approval: 'auto' },
       } as typeof DEFAULT_CONFIG,
@@ -252,6 +254,7 @@ describe('通った段の次は、待たずに次へ', () => {
       config: {
         ...DEFAULT_CONFIG,
         providers: [{ id: 'p', kind: 'openai-compatible', baseUrl: `http://127.0.0.1:${port}/v1`, locality: 'local', models: ['m'] }],
+        runtime: { kind: 'ollama' }, // 偽の相手（openai 互換）へ繋ぐ。既定（inproc）だと GGUF を探しに行く
         candidates: ['p:m'],
         agent: { root, approval: 'auto' },
       } as typeof DEFAULT_CONFIG,

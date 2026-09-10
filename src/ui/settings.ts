@@ -10,14 +10,22 @@ import { dirname } from 'node:path';
 import { configPath } from '../config.ts';
 import { modelsDir } from '../core/home.ts';
 
-export const RUNTIME_KINDS = ['ollama', 'llamacpp', 'inproc'] as const;
+/**
+ * 動かし方。**先頭が既定。**
+ *
+ * 「この中で読む」は、何も入れずに GGUF を一つ置くだけで動く。初めて開いた人は
+ * これで使い始める。Ollama と llama.cpp は速さを取りたい人が自分で選ぶもの
+ * （別のものを入れる手間と引き換え。いまはそちらの方が速く、安定している）。
+ * 最後には「この中で読む」も同じだけ安定させて、負荷も下げる。
+ */
+export const RUNTIME_KINDS = ['inproc', 'ollama', 'llamacpp'] as const;
 
 export type RuntimeKind = typeof RUNTIME_KINDS[number];
 
 export const KIND_LABELS: Record<string, string> = {
-  ollama: 'Ollama — 別に立てたものへ繋ぐ',
-  llamacpp: 'llama.cpp — llama-server を起こす（実行ファイルが1つ増える）',
-  inproc: 'この中で読む — GGUF を置くだけ（実行ファイルは増えない）',
+  inproc: 'この中で読む（既定） — GGUF を置くだけ。何も入れなくて動く',
+  ollama: 'Ollama（速さ重視） — 別に入れた Ollama へ繋ぐ',
+  llamacpp: 'llama.cpp（速さ重視） — llama-server を起こす。実行ファイルが1つ増える',
 };
 
 export function isRuntimeKind(value: unknown): value is RuntimeKind {

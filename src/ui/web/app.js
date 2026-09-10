@@ -50,13 +50,13 @@ let lastState = null;
  * これは受け手を書かなくてよいという話ではない（`web-catch.test.ts` が
  * 受け手の無い呼び出しの数を数えていて、増やせない）。最後の網。
  */
-function showCrash(what, detail, tone = 'bad') {
+function showCrash(what, detail, tone = 'bad', action) {
   let box = document.getElementById('crashNote');
   if (!box) {
     box = document.createElement('div');
     box.id = 'crashNote';
     box.className = 'crash-note';
-    box.onclick = () => { box.remove(); };
+    box.onclick = (e) => { if (e.target.tagName !== 'BUTTON') box.remove(); };
     // **被せない。**浮かせると、その下の押しボタン（パネルの ×、添えたものを外す ×）が
     // 押せなくなる（二度そうなった）。上の帯として流れの中に置き、中身を押し下げる。
     const shell = document.querySelector('.shell');
@@ -64,6 +64,14 @@ function showCrash(what, detail, tone = 'bad') {
   }
   box.className = `crash-note ${tone}`;
   box.textContent = `${what}: ${detail}（押すと消えます）`;
+  // 次の一手を、その場で押せるようにする（「設定で決めて」だけにしない）。
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'crash-action';
+    b.textContent = action.label;
+    b.onclick = (e) => { e.stopPropagation(); void action.run(b); };
+    box.append(' ', b);
+  }
 }
 
 /*
@@ -625,7 +633,7 @@ function listen() {
       box.hidden = e.waiting === 0;
       box.textContent = `順番待ち ${e.waiting} 件`;
     }
-    if (e.type === 'stateChanged') { void refreshState(); void loadFiles(filesAt); return; }
+    if (e.type === 'stateChanged') { void refreshState(); void loadFiles(filesAt); void tellIfNotReady(); return; }
     if (e.type === 'themeChanged') return void loadTheme();
     if (e.type === 'thinkEvent') {
       if (e.event.type === 'chose') run.set('busy', `考え中: ${e.event.codename}`);
@@ -1750,8 +1758,37 @@ async function tellIfNotReady() {
     .then((x) => x.json())
     .catch((e) => ({ ready: false, why: `見に行けませんでした（${e.message ?? e}）` }));
   if (r.ready) {
+    // 話せるようになったなら、「まだ話せません」は下げる（取ってき終わったとき）。
+    const box = document.getElementById('crashNote');
+    if (box && box.textContent.startsWith('まだ話せません')) box.remove();
     // 話せるが、待たされそうなら先に言う（GPU なしで大きいモデルのとき）。
     if (r.heads) showCrash('先に一つ', r.heads, 'warn');
+    return;
+  }
+  /*
+   * **初めて開いた人が、その場で使い始められるようにする。**
+   *
+   * 既定は「この中で読む」で、GGUF が無ければ話せない。本体が「最初の一つ」を
+   * 返してきたら、一押しで取ってくる。取ってきている間は進み具合が流れ、
+   * 終われば話せるようになる（stateChanged で見直す）。
+   */
+  const f = r.canFetch;
+  if (f) {
+    const label = f.fetching ? '取ってきています…（進み具合はログに出ます）' : `小さいモデル（約${f.approxGB}GB）を取ってくる`;
+    // 取ってこられなかったときは、その理由をここに出す（ログを開かせない）。
+    const why = f.failed ? `${r.why}\n${f.failed}` : r.why;
+    showCrash('まだ話せません', why, 'warn', {
+      label,
+      run: async (btn) => {
+        btn.disabled = true;
+        btn.textContent = '取ってきています…（進み具合はログに出ます）';
+        const got = await ask('/api/models/get', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ id: f.id }),
+        }, '取ってこられませんでした');
+        if (!got || !got.ok) { btn.disabled = false; btn.textContent = got?.body?.error ?? '取ってこられませんでした'; }
+      },
+    });
     return;
   }
   showCrash('まだ話せません', `${r.why}　⚙ 設定 → モデル で決められます`, 'warn');

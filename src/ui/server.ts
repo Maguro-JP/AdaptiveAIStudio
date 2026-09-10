@@ -38,7 +38,7 @@ import { currentVersion, describeVersion } from '../core/version.ts';
 import { checkUpdate, applyUpdate } from '../core/update.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
 import { findNewerOllama, findNewerGguf } from '../runtime/model-updates.ts';
-import { AVAILABLE_MODELS, lookupCatalog } from '../runtime/model-catalog.ts';
+import { AVAILABLE_MODELS, lookupCatalog, STARTER_ID } from '../runtime/model-catalog.ts';
 import { installModel } from '../runtime/model-install.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { MachineCache } from '../runtime/machine.ts';
@@ -386,7 +386,7 @@ export class UiServer {
   async #configForSession(): Promise<AasConfig> {
     const config = this.#opts.config;
     if (config.candidates && config.candidates.length > 0) return config;
-    if ((config.runtime?.kind ?? 'ollama') !== 'inproc') return config;
+    if ((config.runtime?.kind ?? 'inproc') !== 'inproc') return config;
     const loaded = this.#runtime?.id === 'inproc' ? this.#runtime.loaded() : [];
     const ref = loaded[0];
     if (!ref) return config;
@@ -1003,7 +1003,25 @@ export class UiServer {
       const notReady = missing === NOT_LOADED_YET ? undefined : missing;
       // 読む前に、どれをどれだけ待って読むかを言う（GPU なしで大きいときだけ）。
       const heads = missing === NOT_LOADED_YET ? await this.#headsUp().catch(() => undefined) : undefined;
-      return send(res, 200, { ready: !notReady, why: notReady ?? '', heads: heads ?? '' });
+      /*
+       * **初めて開いた人が、その場で使い始められるようにする。**
+       *
+       * 既定は「この中で読む」で、GGUF が一つも無ければ話せない。
+       * 「設定 → モデル で決めてください」と言うだけでは、何を置けばいいか
+       * 分からない。取ってこられるもの（最初の一つ）を一緒に返し、
+       * 画面は一押しで取ってこられる形で出す。
+       */
+      const kindNow = this.#opts.config.runtime?.kind ?? 'inproc';
+      const starter = lookupCatalog(STARTER_ID);
+      const canFetch = notReady && kindNow === 'inproc' && starter
+        ? {
+          id: starter.id, approxGB: starter.approxGB,
+          fetching: this.#fetching?.state === 'running',
+          // 取ってこられなかったなら、その理由と置き方も一緒に。ログを開かなくても分かるように。
+          failed: this.#fetching?.state === 'failed' ? this.#fetching.message : '',
+        }
+        : null;
+      return send(res, 200, { ready: !notReady, why: notReady ?? '', heads: heads ?? '', canFetch });
     }
 
     if (path === '/api/config' && req.method === 'GET') {
@@ -1015,10 +1033,10 @@ export class UiServer {
         return send(res, 200, {
           path: configPath(),
           kinds: RUNTIME_KINDS.map((id) => ({ id, name: KIND_LABELS[id] })),
-          kind: this.#opts.config.runtime?.kind ?? 'ollama',
+          kind: this.#opts.config.runtime?.kind ?? 'inproc',
           modelsDir: '',
           model: null,
-          active: { kind: this.#opts.config.runtime?.kind ?? 'ollama', modelsDir: '' },
+          active: { kind: this.#opts.config.runtime?.kind ?? 'inproc', modelsDir: '' },
           restartNeeded: false,
           gguf: [],
           dirState: 'OK',
@@ -1692,7 +1710,7 @@ export class UiServer {
     const active = this.#opts.config.runtime ?? {};
     // 書いてあるものが無ければ、いま読み込んだ既定（設定が無ければ inproc）を見せる。
     // ここだけ 'ollama' と決め打つと、既定で動いているものと画面の表示が食い違う。
-    const kind = String(saved.kind ?? this.#opts.config.runtime?.kind ?? 'ollama');
+    const kind = String(saved.kind ?? this.#opts.config.runtime?.kind ?? 'inproc');
     const dir = await savedModelsDir();
     // いま実際に読まれている置き場。保存した方と違うことがある。
     const liveDir = active.modelsDir ?? dir;
@@ -1704,8 +1722,8 @@ export class UiServer {
       // 使うと決めた GGUF。無ければ置き場の最初の一つを読む。
       model: typeof saved.model === 'string' ? saved.model : null,
       // いま動いているもの。保存したものと違えば、立ち上げ直しが要る。
-      active: { kind: active.kind ?? 'ollama', modelsDir: active.modelsDir ?? modelsDir() },
-      restartNeeded: kind !== (active.kind ?? 'ollama')
+      active: { kind: active.kind ?? 'inproc', modelsDir: active.modelsDir ?? modelsDir() },
+      restartNeeded: kind !== (active.kind ?? 'inproc')
         || dir !== (active.modelsDir ?? modelsDir()),
       /*
        * 置き場にある GGUF。「置いたのに認識しない」を画面で確かめるための一覧。
@@ -1800,7 +1818,7 @@ export class UiServer {
       workRootNow: this.#workRoot(),
       // 動かし方の切り替えは、立ち上げ直すまで効かない。黙って効いた顔をしない。
       restartNeeded: workRestart
-        || kind !== (this.#opts.config.runtime?.kind ?? 'ollama')
+        || kind !== (this.#opts.config.runtime?.kind ?? 'inproc')
         || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir())
         || (model !== undefined && (model || undefined) !== this.#opts.config.runtime?.model),
     });
@@ -1861,7 +1879,7 @@ export class UiServer {
   }
 
   async #readyToThink(load = true): Promise<string | undefined> {
-    const kind = this.#opts.config.runtime?.kind ?? 'ollama';
+    const kind = this.#opts.config.runtime?.kind ?? 'inproc';
     try {
       const runtime = await this.#localRuntime();
       const models = await runtime.list();

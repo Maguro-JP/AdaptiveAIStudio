@@ -25,10 +25,13 @@ export async function buildRuntime(
   hooks: RuntimeHooks = {},
 ): Promise<LocalRuntime> {
   const rc = config.runtime ?? {};
+  // **既定は「この中で読む」。**書いていなければ inproc。Ollama や llama.cpp は
+  // 速さを取りたい人が自分で選ぶもの（別のものを入れる手間と引き換え）。
+  const kind = rc.kind ?? 'inproc';
 
   // このプログラムの中で読む。**二つ目の実行ファイルを置けない機械**では
   // これだけが道になる。GGUF を置き場に入れておけば、それを読む。
-  if (rc.kind === 'inproc') {
+  if (kind === 'inproc') {
     /*
      * **モデルは別のプロセスで動かす。**
      *
@@ -56,7 +59,7 @@ export async function buildRuntime(
     });
   }
 
-  if (rc.kind !== 'llamacpp') {
+  if (kind !== 'llamacpp') {
     const ollama = config.providers.find((p) => p.kind === 'openai-compatible' && p.locality === 'local');
     return new OllamaRuntime({ baseUrl: ollama?.baseUrl });
   }

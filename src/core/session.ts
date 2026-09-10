@@ -765,7 +765,7 @@ export class Session {
           return at < 0 ? c : c.slice(at + 1);
         });
         const newer = await findNewerFor({
-          runtimeKind: this.config.runtime?.kind ?? 'ollama',
+          runtimeKind: this.config.runtime?.kind ?? 'inproc',
           installed: using,
           seed: catalogFamilies(),
         });

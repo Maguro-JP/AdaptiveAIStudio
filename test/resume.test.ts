@@ -39,6 +39,7 @@ function config(fake: FakeServer, root: string) {
   return {
     ...DEFAULT_CONFIG,
     providers: [{ id: 'p', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
+        runtime: { kind: 'ollama' }, // 偽の相手（openai 互換）へ繋ぐ。既定（inproc）だと GGUF を探しに行く
     candidates: ['p:m'],
     agent: { root, approval: 'auto' },
   } as typeof DEFAULT_CONFIG;
