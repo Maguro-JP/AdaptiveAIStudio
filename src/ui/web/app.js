@@ -541,6 +541,8 @@ async function refreshState() {
     // 先頭を出していたので、使ってもいない名前が出ていた（実際に出ていた）。
     const info = await fetch('/api/info').then((x) => x.json());
     $('sbModel').textContent = `${info.runtime} · ${info.model}`;
+    // 起動時の読み込みの最中に画面を開いたとき。読み始めの合図は、繋ぐ前に流れている。
+    if (info.loading && !busyNow) run.set('busy', `モデルを読み込んでいます: ${info.loading.ref}`);
     // **なぜそれなのかも出す。**名前だけだと「いつのまにか変わっている」に見える。
     $('sbModel').title = info.why
       ? `動かし方: ${info.runtime} / モデル: ${info.model}\nなぜ: ${info.why}`
@@ -585,6 +587,14 @@ const run = {
 $('runStop').onclick = () => fetch('/api/abort', { method: 'POST' });
 
 
+/**
+ * 送ってから最初の一文字が来るまで。モデルが入力を読んでいる（CPU では分単位）。
+ * 横の帯は狭い。**入り切る長さで言う。**「返事を待っています（…）」は途中で切れた。
+ */
+const WAITING_REPLY = '入力を読んでいます';
+/** この依頼で、最初の一文字がもう来たか。 */
+let wroteYet = false;
+
 function listen() {
   const src = new EventSource('/api/events');
   const status = $('status');
@@ -602,7 +612,10 @@ function listen() {
     const e = JSON.parse(m.data);
     if (e.type === 'busy') {
       busyNow = e.busy;
-      run.set(e.busy ? 'busy' : 'idle', e.busy ? '作業中' : '待機中');
+      wroteYet = false;
+      // **何を待っているかを出す。**「作業中」だけだと、固まっているのか
+      // 入力を読んでいるのか分からない。CPU では入力を読むだけで分単位かかる。
+      run.set(e.busy ? 'busy' : 'idle', e.busy ? WAITING_REPLY : '待機中');
       // 動いている間は切り替えさせない。切り替えると、返事が別の会話に混ざる。
       drawConversations();
     }
@@ -619,7 +632,9 @@ function listen() {
     if (e.type === 'log' && typeof e.text === 'string') {
       const loading = /^(読み込み中 \d+%|モデルを読み込んでいます|まだ読み込んでいます)/.exec(e.text);
       if (loading) run.set('busy', e.text.split('（')[0]);
-      if (/^読み込みました/.test(e.text) && !busyNow) run.set('idle', '待機中');
+      // 読み終えたあと、答えの最中なら「入力を読んでいる」に戻す。
+      // 戻さないと「読み込み中 90%」のまま止まって見える。
+      if (/^読み込みました/.test(e.text)) run.set(busyNow ? 'busy' : 'idle', busyNow ? WAITING_REPLY : '待機中');
       // 読み込めなかったときも戻す。戻さないと「読み込んでいます」のまま止まる
       // （読み込み中に子が消えたとき、実際にそうなった）。
       if (/^読み込めませんでした/.test(e.text) && !busyNow) run.set('idle', '待機中');
@@ -658,8 +673,10 @@ function listen() {
     // いま触っているものを、上の帯に出す。終わったら「作業中」へ戻す
     // （**「読んでいます」のまま止まって見えるのが、いちばん困る**）。
     if (e.type === 'session' && busyNow) {
+      if (e.event.type === 'text' && !wroteYet) { wroteYet = true; run.set('busy', '書いています'); }
       if (e.event.type === 'toolStart') run.set('busy', doingText(e.event.name, e.event.summary));
-      if (e.event.type === 'toolEnd') run.set('busy', '作業中');
+      // ツールの結果を読んで、次の一言を待つ。
+      if (e.event.type === 'toolEnd') { wroteYet = false; run.set('busy', WAITING_REPLY); }
     }
     /*
      * **見ている会話の出来事だけを描く。**

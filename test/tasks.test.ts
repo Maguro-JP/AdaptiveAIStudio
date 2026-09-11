@@ -146,3 +146,31 @@ describe('旗が要る Node では、旗を付けて起こす', () => {
     assert.ok(!calls[0]!.args.includes('--experimental-strip-types'));
   });
 });
+
+describe('点検の子は CPU を譲る', () => {
+  test('下げた優先度が、子の側から見える', async () => {
+    const { lowerPriority } = await import('../src/ui/tasks.ts');
+    const { spawn } = await import('node:child_process');
+    // 合図が来るまで待ってから、自分の優先度を言う子。
+    // 待たせないと、下げる前に言い終えることがある。
+    const child = spawn(process.execPath, ['-e',
+      "process.stdin.once('data', () => { console.log(require('node:os').getPriority()); process.exit(0); })"]);
+    let out = '';
+    child.stdout.on('data', (b: Buffer) => { out += b.toString(); });
+    const done = new Promise<void>((r) => child.on('close', () => r()));
+    const lowered = lowerPriority(child.pid);
+    child.stdin.write('go\n');
+    await done;
+    if (!lowered) {
+      // 下げられない環境（権限）。点検は回るが、譲れてはいない。
+      assert.notEqual(out.trim(), '10');
+      return;
+    }
+    assert.equal(out.trim(), '10', `子から見た優先度: ${out.trim()}`);
+  });
+
+  test('pid が無ければ、下げたと言わない（対）', async () => {
+    const { lowerPriority } = await import('../src/ui/tasks.ts');
+    assert.equal(lowerPriority(undefined), false);
+  });
+});

@@ -14,6 +14,7 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { chunkReader } from '../core/text.ts';
 import { needsStripFlag } from '../core/node-flags.ts';
 import { stamp } from '../cli/report-file.ts';
+import { setPriority } from 'node:os';
 
 export const TASKS: Record<string, string> = {
   doctor: 'この環境を見てもらう',
@@ -22,6 +23,26 @@ export const TASKS: Record<string, string> = {
   clean: '溜まったものを片づける',
   models: '手元のモデルを見る',
 };
+
+/**
+ * 点検の子プロセスを、後ろに下げる。
+ *
+ * 診断（テスト・doctor）は CPU を全部使う。同じ機械でモデルが答えている
+ * 最中に回すと、モデルの側が止まって「返事が来ない」になる（CPU は一つ）。
+ * 点検は待てるが、返事は待てない。**点検の側が譲る。**
+ *
+ * 10 は Windows では BELOW_NORMAL、linux/mac では nice 10。
+ * 下げられない環境（権限）でも点検は回す。下げたかどうかだけ返す。
+ */
+export function lowerPriority(pid: number | undefined): boolean {
+  if (!pid) return false;
+  try {
+    setPriority(pid, 10);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** 出力を残す上限。テストは数千行になるが、それでも数 MB には届かない。 */
 const KEEP_BYTES = 8 * 1024 * 1024;
@@ -110,6 +131,8 @@ export class TaskRunner {
     });
     this.#child = child;
     this.#name = name;
+    // モデルが答えている最中に回しても、モデルの側を止めない。
+    lowerPriority(child.pid);
 
     this.#opts.onEvent({ name, text: `— ${TASKS[name]} —\n` });
     const kept: string[] = [];

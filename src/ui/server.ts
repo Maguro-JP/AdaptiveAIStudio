@@ -256,6 +256,41 @@ export class UiServer {
    * （テストの走りが終わらないことで見つけた）。
    */
   #stopped = false;
+
+  /**
+   * 起動したときに始めた読み込み。
+   *
+   * 送るときに読み始めると、最初の送信で数分待つ（CPU で本物を読むと
+   * それだけかかる）。**起動したら裏で読んでおく。**その間も画面は使える。
+   * 送りが来たらこれを待ってから答える。二重には読まない。
+   */
+  #preloading?: Promise<void>;
+  /** いま読んでいるモデル。画面が後から繋いでも「読んでいる」と出せるように持つ。 */
+  #loading?: { ref: string; began: number };
+
+  /**
+   * 裏でモデルを読んでおく（常時ロード）。
+   *
+   * `runtime.warm.enabled: false` なら読まない。この中で読む道（inproc）だけ。
+   * 読めなかった理由は流れに出し、送ったときにもう一度、会話に出る。
+   */
+  async preload(): Promise<void> {
+    if (this.#opts.config.runtime?.warm?.enabled === false) return;
+    if ((this.#opts.config.runtime?.kind ?? 'inproc') !== 'inproc') return;
+    if (this.#preloading) return this.#preloading;
+    const run = this.#readyToThink(true)
+      .then((notReady) => {
+        if (notReady && notReady !== NOT_LOADED_YET) {
+          this.broadcast({ type: 'log', level: 'warn', text: `先に読んでおけませんでした: ${notReady.split('\n')[0]}` });
+        }
+      })
+      .catch((e: unknown) => {
+        this.broadcast({ type: 'log', level: 'warn', text: `先に読んでおけませんでした: ${e instanceof Error ? e.message : String(e)}` });
+      })
+      .finally(() => { this.#preloading = undefined; });
+    this.#preloading = run;
+    return run;
+  }
   /** モデルの土台。要るときに一度だけ組み立てる。 */
   #runtime?: LocalRuntime;
   /** 承認待ちの返事先。画面が答えるまで、ここで待っている。 */
@@ -1162,6 +1197,11 @@ export class UiServer {
       const v = await currentVersion();
       return send(res, 200, {
         version: describeVersion(v),
+        // 読んでいる最中なら、その名前と経った秒数。画面はこれを帯に出す。
+        // 流れの合図だけだと、繋ぐ前に流れた分は見えない（起動時の読み込みで実際にそうなる）。
+        ...(this.#loading
+          ? { loading: { ref: this.#loading.ref, seconds: Math.round((Date.now() - this.#loading.began) / 1000) } }
+          : {}),
         node: process.version,
         platform: `${process.platform} ${process.arch}`,
         portable: isPortable(),
@@ -1233,6 +1273,12 @@ export class UiServer {
       const name = String(body?.name ?? '');
       const refused = this.#tasks.start(name);
       if (refused) return send(res, refused.includes('ありません') ? 400 : 409, { error: refused });
+      // モデルが答えている最中に回すと、どちらも遅くなる（CPU は一つ）。
+      // 診断の側は CPU を譲る（tasks.ts）。黙って遅くなるより、そう言う。
+      const live = this.#session;
+      if ((live && this.#busyNow(live)) || this.#preloading) {
+        this.broadcast({ type: 'task', name, text: '（モデルが動いている最中です。診断は CPU を譲るので、いつもより時間がかかります）\n' });
+      }
       return send(res, 200, { started: name });
     }
 
@@ -2037,6 +2083,9 @@ export class UiServer {
 
   async #readyToThink(load = true): Promise<string | undefined> {
     const kind = this.#opts.config.runtime?.kind ?? 'inproc';
+    // 起動時の読み込みが走っているなら、それを待つ。**二重に読まない。**
+    // 待ったあとは、読めていればそのまま通り、読めていなければここで読み直す。
+    if (load && this.#preloading) await this.#preloading.catch(() => undefined);
     try {
       const runtime = await this.#localRuntime();
       const models = await runtime.list();
@@ -2119,9 +2168,11 @@ export class UiServer {
            * 実際に、**「モデルを読み込んでいます」から先へ進まないまま
            * 返事が来ない**という形で当たった。
            */
+          this.#loading = { ref, began };
           try {
             await runtime.ensureLoaded(ref);
           } catch (e) {
+            this.#loading = undefined;
             clearInterval(ticking);
             const detail = e instanceof Error ? e.message : String(e);
             this.broadcast({
@@ -2144,6 +2195,7 @@ export class UiServer {
             return `${ref} を読み込めませんでした。\n${detail.slice(0, 300)}\n${hint}\n`
               + `保存先: ${this.#opts.config.runtime?.modelsDir ?? modelsDir()}`;
           }
+          this.#loading = undefined;
           clearInterval(ticking);
           this.broadcast({
             type: 'log', level: 'info',
