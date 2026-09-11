@@ -1305,8 +1305,9 @@ export const PANELS = {
 
     ctx.on('task', (e) => {
       out.append(document.createTextNode(e.text));
-      // 長く回るものがあるので、際限なく溜めない。
-      if (out.childNodes.length > 400) out.removeChild(out.firstChild);
+      // 際限なくは溜めない。ただし 400 ではテスト（数千行）の前半が消えて、
+      // どこで落ちたか読めなかった（Windows で実際にそうなった）。
+      if (out.childNodes.length > 20000) out.removeChild(out.firstChild);
       out.scrollTop = out.scrollHeight;
     });
     ctx.on('taskDone', (e) => {
