@@ -11,6 +11,7 @@ import { loadConfig, ConfigBroken, enabledProviders, configPath } from '../confi
 import { MachineCache, describeMachine } from '../runtime/machine.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { resolveCounting } from '../core/counting.ts';
+import { modelsDirNote, programDirNote } from './doctor-paths.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { join } from 'node:path';
@@ -128,6 +129,13 @@ try {
   models = await runtime.list();
 } catch (e) {
   add('モデル', 'bad', `一覧を取れません: ${(e as Error).message}`);
+}
+
+// モデルのフォルダが同期フォルダの中なら、遅い理由はモデルではなくそこかもしれない。
+// GGUF がまだ無くても言う。置く前に分かるほうがよい。
+if (runtime.id === 'inproc') {
+  const synced = modelsDirNote(config.runtime?.modelsDir ?? defaultModelsDir());
+  if (synced) add('モデルのフォルダ', 'warn', synced.text, synced.hint);
 }
 
 if (models.length > 0) {
@@ -298,6 +306,12 @@ async function quietly<T>(run: () => Promise<T>): Promise<T> {
   const warn = console.warn;
   console.warn = () => {};
   try { return await run(); } finally { console.warn = warn; }
+}
+
+{
+  // プログラムのフォルダも見る。OneDrive の中だと、立ち上がりが遅い理由がそこにある。
+  const synced = programDirNote(installRoot());
+  if (synced) add('プログラムのフォルダ', 'warn', synced.text, synced.hint);
 }
 
 if (runtime.id === 'inproc') {
