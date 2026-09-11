@@ -1782,7 +1782,11 @@ export class UiServer {
       // 使うと決めた GGUF。無ければ置き場の最初の一つを読む。
       model: typeof saved.model === 'string' ? saved.model : null,
       // いま動いているもの。保存したものと違えば、立ち上げ直しが要る。
-      active: { kind: active.kind ?? 'inproc', modelsDir: active.modelsDir ?? modelsDir() },
+      active: {
+        kind: active.kind ?? 'inproc', modelsDir: active.modelsDir ?? modelsDir(),
+        // いま使っているモデル。保存した方（model）と違うことがある（選んだ直後・自動で選んだとき）。
+        model: active.model ?? (this.#runtime?.id === 'inproc' ? this.#runtime.loaded()[0] : undefined) ?? null,
+      },
       restartNeeded: kind !== (active.kind ?? 'inproc')
         || dir !== (active.modelsDir ?? modelsDir()),
       /*
@@ -1866,6 +1870,38 @@ export class UiServer {
         this.broadcast({ type: 'stateChanged' });
       }
     }
+    /*
+     * **選んだモデルは、その場で効かせる。**
+     *
+     * ここまで「これを使う」は設定ファイルに書くだけで、動いている側には
+     * 入れず、読んでいるものも降ろさなかった。画面は前のモデルを出したまま
+     * 「立ち上げ直すと効きます」と言う。作業場を変えたときは既にその場で
+     * 効かせているのに、モデルだけ違っていた（Windows で実際にそうなった）。
+     * 動かし方とモデルのフォルダが同じなら、いま読んでいるものを降ろし、セッションを畳んで、
+     * 次の送信で選んだものを読む。作業中は畳めないので、そのときだけ立ち上げ直しを言う。
+     */
+    let modelRestart = false;
+    const rcNow = this.#opts.config.runtime ?? {};
+    const sameRuntime = kind === (rcNow.kind ?? 'inproc') && (dir || modelsDir()) === (rcNow.modelsDir ?? modelsDir());
+    if (model !== undefined && sameRuntime && (model || undefined) !== rcNow.model) {
+      const live = this.#session;
+      if (live && this.#busyNow(live)) {
+        modelRestart = true;
+      } else {
+        this.#opts.config.runtime = { ...rcNow, ...(model ? { model } : {}) };
+        if (!model) delete this.#opts.config.runtime.model;
+        const runtime = this.#runtime;
+        if (runtime?.id === 'inproc') {
+          for (const ref of runtime.loaded()) await runtime.unload(ref).catch(() => undefined);
+        }
+        if (live) {
+          this.#session = undefined;
+          await live.close().catch(() => undefined);
+        }
+        this.broadcast({ type: 'log', level: 'info', text: model ? `モデルを ${model} にしました。次の送信で読みます` : 'モデルの指定を外しました。次の送信で選び直します' });
+        this.broadcast({ type: 'stateChanged' });
+      }
+    }
     this.broadcast({ type: 'log', level: 'info', text: `設定を書きました: ${at}` });
     return send(res, 200, {
       path: at,
@@ -1877,10 +1913,9 @@ export class UiServer {
       // 効いたのかどうかを画面が確かめられない。
       workRootNow: this.#workRoot(),
       // 動かし方の切り替えは、立ち上げ直すまで効かない。黙って効いた顔をしない。
-      restartNeeded: workRestart
+      restartNeeded: workRestart || modelRestart
         || kind !== (this.#opts.config.runtime?.kind ?? 'inproc')
-        || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir())
-        || (model !== undefined && (model || undefined) !== this.#opts.config.runtime?.model),
+        || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir()),
     });
   }
 

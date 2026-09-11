@@ -1586,7 +1586,8 @@ async function loadCfg() {
     const use = document.createElement('button');
     use.type = 'button';
     use.className = 'ghost';
-    const chosen = c.model === m.ref;
+    // 「いまこれ」は、保存したものではなく**いま使っているもの**。
+    const chosen = (c.active?.model ?? c.model) === m.ref;
     use.textContent = chosen ? '使う（いまこれ）' : 'これを使う';
     use.disabled = chosen;
     use.onclick = async () => {
@@ -1596,10 +1597,12 @@ async function loadCfg() {
       }, '保存できませんでした');
       if (!r) return;
       const body = r.body;
-      $('cfgNote').textContent = r.ok
-        ? (body.restartNeeded ? `${m.ref} を使います。立ち上げ直すと効きます。` : `${m.ref} を使います。`)
-        : (body.error ?? '保存できませんでした');
+      // 一覧を読み直してから言う。先に言うと、読み直しが知らせを上書きする。
       await loadCfg();
+      void refreshState();
+      $('cfgNote').textContent = r.ok
+        ? (body.restartNeeded ? `${m.ref} を使います。いまは作業中なので、終わってから立ち上げ直すと効きます。` : `${m.ref} を使います。次の送信で読みます。`)
+        : (body.error ?? '保存できませんでした');
     };
     row.append(k, v, use);
     box.append(row);
