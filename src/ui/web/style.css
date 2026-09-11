@@ -1130,3 +1130,9 @@ dialog.wide { width: min(46rem, 92vw); }
 
 /* 知らせの中の、次の一手。 */
 .crash-action { margin-left: var(--s2); font-size: .8rem; padding: 2px 10px; }
+
+/* 診断の実行中／終わった、の一行。出力の上に常に見える。 */
+.task-status { padding: 4px 8px; font-size: 12px; }
+.task-status.warn { color: var(--warn, #e0b34a); }
+.task-status.good { color: var(--good, #6fcf97); }
+.task-status.bad { color: var(--bad, #ef6b6b); }

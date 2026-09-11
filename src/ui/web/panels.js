@@ -494,7 +494,12 @@ export const PANELS = {
         // 作業場は変わっていない。完了の顔をさせない。
         note('bad', `ツールが通りませんでした（${v.names.join(', ')}）。ファイルは変わっていません。`);
       } else if (v.type === 'verify') showVerify(v.event);
-      else if (v.type === 'settled') {
+      else if (v.type === 'finished' && v.reason === 'failed' && v.detail) {
+        // **落ちた理由を会話に出す。**「failed · 32.5秒」だけでは、次に何を
+        // すればいいか分からない（実機でそうなった）。理由は流れ（log）に
+        // しか出ていなかったが、既定の配置にそのパネルは無い。
+        note('bad', `落ちました: ${v.detail}`);
+      } else if (v.type === 'settled') {
         // **確かめていないことを、確かめた顔で出さない。**
         // 試験の無い作業場では、何もしていなくても「完了」に見えていた。
         const okAll = v.reason === 'completed' && v.verified;
@@ -1239,6 +1244,7 @@ export const PANELS = {
         b.onclick = async () => {
           out.textContent = '';
           busy(true);
+          running(t.name);
           let r;
           try {
             r = await fetch('/api/task', {
@@ -1248,11 +1254,13 @@ export const PANELS = {
             });
           } catch (e) {
             busy(false);
+            finished(-1);
             out.textContent = `始められませんでした（${e?.message ?? e}）`;
             return;
           }
           if (!r.ok) {
             busy(false);
+            finished(-1);
             out.textContent = (await r.json().catch(() => ({}))).error ?? '始められませんでした';
           }
         };
@@ -1262,7 +1270,35 @@ export const PANELS = {
       bar.append(stop);
     });
 
-    body.append(bar, out);
+    /*
+     * **動いているか終わったかを、見て分かるようにする。**
+     *
+     * 出力が止まると、回っているのか終わったのかが分からなかった（実機でそうなった）。
+     * 押した時点で「実行中: 名前（秒）」を出して秒を進め、終わったらその行を
+     * 「終わりました（秒）」に置き換える。出力の末尾ではなく、常に見える一行に出す。
+     */
+    const status = el('div', 'task-status dim');
+    let tick = 0;
+    let began = 0;
+    let runningName = '';
+    const running = (name) => {
+      runningName = name;
+      began = Date.now();
+      status.className = 'task-status warn';
+      const draw = () => { status.textContent = `⏳ 実行中: ${runningName}（${Math.floor((Date.now() - began) / 1000)} 秒）`; };
+      draw();
+      clearInterval(tick);
+      tick = setInterval(draw, 1000);
+    };
+    const finished = (code) => {
+      clearInterval(tick);
+      const sec = Math.floor((Date.now() - began) / 1000);
+      status.className = `task-status ${code === 0 ? 'good' : 'bad'}`;
+      status.textContent = code === 0
+        ? `✓ 終わりました: ${runningName}（${sec} 秒）`
+        : `✗ 終了コード ${code}: ${runningName}（${sec} 秒）`;
+    };
+    body.append(bar, status, out);
 
     ctx.on('task', (e) => {
       out.append(document.createTextNode(e.text));
@@ -1272,6 +1308,7 @@ export const PANELS = {
     });
     ctx.on('taskDone', (e) => {
       busy(false);
+      finished(e.code);
       out.append(document.createTextNode(
         e.code === 0 ? '\n— 終わりました —\n' : `\n— 終了コード ${e.code} —\n`));
       out.scrollTop = out.scrollHeight;
