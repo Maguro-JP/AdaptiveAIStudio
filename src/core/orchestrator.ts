@@ -128,11 +128,20 @@ export class ChatOrchestrator {
             yield { type: 'failed', error: err };
             return;
           }
-          if (!err.rule.fallback && attempt >= err.rule.retries) {
+          /*
+           * **地元の口の「時間切れ」は、やり直さない。**
+           *
+           * 雲なら、時間切れは向こうの混み具合で、少し待てば通る。
+           * この機械の中の口では、時間切れは**この機械が遅い**という意味で、
+           * 同じことをもう一度頼めば同じだけ待つ。しかも子は前の依頼を
+           * まだ抱えていて、やり直しはその後ろに並ぶ。3 回並んで 3 回落ちた。
+           */
+          const retries = provider.locality === 'local' && err.kind === 'timeout' ? 0 : err.rule.retries;
+          if (!err.rule.fallback && attempt >= retries) {
             yield { type: 'failed', error: err };
             return;
           }
-          if (attempt < err.rule.retries) {
+          if (attempt < retries) {
             const wait = err.retryAfterMs ?? 500 * 2 ** attempt;
             attempt += 1;
             await sleep(wait);

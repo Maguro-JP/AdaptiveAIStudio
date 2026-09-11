@@ -619,8 +619,10 @@ button.tiny { font-size: .74rem; padding: 2px 7px; }
 /* ---------- コマンド ---------- */
 
 #palette { padding: 0; width: min(560px, 92vw); top: 12vh; }
+.palette-head { display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+#paletteClose { margin-right: var(--s2); }
 #paletteInput {
-  width: 100%; border: 0; border-bottom: 1px solid var(--line);
+  flex: 1; min-width: 0; border: 0;
   border-radius: 0; padding: var(--s3) var(--s4); font-size: 1rem; background: transparent;
 }
 #paletteInput:focus-visible { outline: none; }

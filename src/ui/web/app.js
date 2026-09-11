@@ -1400,12 +1400,9 @@ async function commands() {
   add('いま考えさせる', '暇なときの考えごとを今やる', () => fetch('/api/think', { method: 'POST' }).catch(() => undefined));
   add('入力へ移動', 'Ctrl+/', () => ctx.focusInput());
 
-  // ファイル
+  // ファイル。**一つ一つのファイルは並べない。**
+  // 数百並べると、コマンドがその中に沈む。ファイルはファイルのパネルで開く。
   add('作業場を選ぶ', '直したいコードのあるフォルダ', () => pickWorkRoot());
-  const files = await json(`/api/files?path=${encodeURIComponent(filesAt)}`);
-  for (const e of (files?.entries ?? []).filter((x) => !x.dir).slice(0, 300)) {
-    add(`ファイルを開く: ${e.name}`, e.path, () => openInEditor(e.path));
-  }
 
   // モデル
   const cfg = await json('/api/config');
@@ -1439,17 +1436,10 @@ async function commands() {
     });
   }
 
-  // 設定
+  // 設定は設定で。**コマンドの一覧に、設定の項目を混ぜない。**
+  // 見た目や配置の選択肢を並べたら、コマンドが埋もれて探せなくなった。
   add('設定を開く', '', () => openSettings());
   add('更新を確認する', '', () => checkForUpdate());
-  add('設定: 配置を編集', '', () => $('edit').click());
-  add('設定: 色を編集', '', () => $('editTheme').click());
-  for (const o of $('themes').options) {
-    add(`設定: 見た目: ${o.textContent}`, '', () => { $('themes').value = o.value; $('themes').onchange({ target: $('themes') }); });
-  }
-  for (const o of $('presets').options) {
-    add(`設定: 配置: ${o.textContent}`, '', () => { $('presets').value = o.value; $('presets').onchange({ target: $('presets') }); });
-  }
   return list;
 }
 
@@ -1489,6 +1479,7 @@ async function openPalette() {
     else if (e.key === 'ArrowUp') { cursor = Math.max(cursor - 1, 0); draw(); e.preventDefault(); }
     else if (isPlainEnter(e)) { e.preventDefault(); const c = shown[cursor]; dlg.close(); c?.run(); }
   };
+  $('paletteClose').onclick = () => dlg.close();
   draw();
   dlg.showModal();
   input.focus();

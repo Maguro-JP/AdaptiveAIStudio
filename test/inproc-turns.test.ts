@@ -220,3 +220,45 @@ describe('本文を際限なく抱えない', () => {
     if (r) assert.equal(r.status, 413);
   });
 });
+
+describe('並んでいる間も、繋がったことは先に返す', () => {
+  test('前の返事が長くても、二人目のヘッダはすぐ来る', async () => {
+    const { dir, ref } = await withModel();
+    // 一人目の返事に 30 文字 × 40ms = 1.2 秒。二人目はその後ろに並ぶ。
+    const { load } = slowLib(40);
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
+    running.push(rt);
+    const { baseUrl } = await rt.ensureLoaded(ref);
+
+    const first = ask(baseUrl, ref, 'あ'.repeat(30));
+    await new Promise((r) => setTimeout(r, 50));
+    const t0 = Date.now();
+    const second = await ask(baseUrl, ref, 'い');
+    const waited = Date.now() - t0;
+    assert.equal(second.status, 200);
+    // 上の層はヘッダを 10 秒で見切る。並ぶ時間（1 秒超）より前に返っていること。
+    assert.ok(waited < 800, `ヘッダが並び終わるまで返っていない（${waited}ms）`);
+    const [a, b] = await Promise.all([first.then((r) => r.text()), second.text()]);
+    assert.match(a, /data: \[DONE\]/);
+    assert.match(b, /data: \[DONE\]/);
+  });
+
+  test('並んでいる間に切られた依頼は、始めない', async () => {
+    const { dir, ref } = await withModel();
+    const { load, state } = slowLib(20);
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
+    running.push(rt);
+    const { baseUrl } = await rt.ensureLoaded(ref);
+
+    const first = ask(baseUrl, ref, 'あ'.repeat(20));
+    await new Promise((r) => setTimeout(r, 30));
+    const stop = new AbortController();
+    const second = ask(baseUrl, ref, 'い', { signal: stop.signal });
+    await second; // ヘッダは来る
+    stop.abort();
+    await first.then((r) => r.text());
+    // 一人目が終わったあと、二人目が始まっていないこと。
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(state.started, 1, '切られた依頼を始めている（誰も読まない答えを作る）');
+  });
+});

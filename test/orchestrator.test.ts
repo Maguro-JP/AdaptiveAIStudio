@@ -91,6 +91,27 @@ describe('ChatOrchestrator', () => {
     }
   });
 
+  test('**地元の口の時間切れは、やり直さない**（同じだけ待って同じ理由で落ちるので）', async () => {
+    const local = await startFakeServer({ kind: 'hang' });
+    const cloud = await startFakeServer({ kind: 'hang' });
+    try {
+      const registry = new ProviderRegistry();
+      registry.register(new OpenAiCompatibleProvider({ id: 'inproc', baseUrl: local.baseUrl, locality: 'local', connectTimeoutMs: 50 }));
+      registry.register(new OpenAiCompatibleProvider({ id: 'cloud', baseUrl: cloud.baseUrl, locality: 'cloud', connectTimeoutMs: 50 }));
+      const events = await drain(new ChatOrchestrator(registry).run(
+        { candidates: ['inproc:m', 'cloud:m'], messages: [{ role: 'user', content: 'hi' }] },
+        new AbortController().signal,
+      ));
+      assert.equal(events.at(-1)?.type, 'failed');
+      assert.equal(local.requests, 1, '地元の口の時間切れをやり直している（3 回並んで 3 回落ちる）');
+      // 雲は、これまで通り 3 回まで試す（対）。
+      assert.equal(cloud.requests, 3, '雲の口の再試行まで消えている');
+    } finally {
+      await local.close();
+      await cloud.close();
+    }
+  });
+
   test('全候補が使えない場合は failed で終わる', async () => {
     const registry = new ProviderRegistry();
     const events = await drain(new ChatOrchestrator(registry).run(

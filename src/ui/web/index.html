@@ -102,7 +102,10 @@
   </footer>
 
   <dialog id="palette">
-    <input id="paletteInput" type="text" placeholder="何をしますか？" autocomplete="off">
+    <div class="palette-head">
+      <input id="paletteInput" type="text" placeholder="コマンドを探す" autocomplete="off">
+      <button id="paletteClose" class="icon" type="button" title="閉じる（Esc）" aria-label="閉じる">✕</button>
+    </div>
     <div id="paletteList" class="palette-list"></div>
   </dialog>
 

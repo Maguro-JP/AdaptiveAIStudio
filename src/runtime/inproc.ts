@@ -671,6 +671,24 @@ export class InProcRuntime implements LocalRuntime {
       return;
     }
 
+    /*
+     * **繋がったことを、先に返す。**
+     *
+     * 上の層は、ヘッダが来るまでを 10 秒で見切る（接続の失敗と区別が
+     * つかないため）。順番待ちの間ヘッダを返さずにいると、前の返事が
+     * 長いだけで「接続に失敗」になり、しかも再試行が同じ列に並んで
+     * 3 回とも同じ理由で落ちる（33.7 秒 = 10 秒 × 3 回、と実際に出た）。
+     * ヘッダを返してから並ぶ。そこから先は、上の層が長く待ってくれる。
+     */
+    if (body.stream !== false) {
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      });
+      res.write(': queued\n\n');
+    }
+
     // 前の依頼が終わってから始める。setChatHistory から prompt() まで、
     // 途中で割り込まれてはいけない一続きなので、丸ごと順番待ちに入れる。
     const mine = held.turn.then(
@@ -693,6 +711,9 @@ export class InProcRuntime implements LocalRuntime {
     const onClose = () => gone.abort();
     res.on('close', onClose);
     try {
+      // 並んでいる間に切られた依頼は、始めない。誰も読まない答えを
+      // 作りながら、次の人を待たせることになる。
+      if (res.destroyed || res.writableEnded) return;
       await this.#respond(held, ref, body, res, gone.signal);
     } finally {
       res.off('close', onClose);
@@ -792,7 +813,7 @@ export class InProcRuntime implements LocalRuntime {
         text = salvaged.text;
         salvaged.calls.forEach((c, i) => calls.push({ id: `call_${i}`, name: c.name, args: c.args }));
       }
-      res.writeHead(200, { 'content-type': 'application/json' });
+      if (!res.headersSent) res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
         id: 'inproc', object: 'chat.completion', model: ref,
         choices: [{
@@ -808,11 +829,13 @@ export class InProcRuntime implements LocalRuntime {
       return;
     }
 
-    res.writeHead(200, {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache',
-      connection: 'keep-alive',
-    });
+    if (!res.headersSent) {
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      });
+    }
     const chunk = (delta: Record<string, unknown>, finish: string | null = null) => {
       res.write(`data: ${JSON.stringify({
         id: 'inproc', object: 'chat.completion.chunk', model: ref,
@@ -828,6 +851,11 @@ export class InProcRuntime implements LocalRuntime {
     // 呼び出しらしき記述は、確かめるまで流さない。
     // 流してしまうと、画面に生の JSON が残る。
     const filter = asText ? new ToolTextFilter() : undefined;
+    // **最初の 1 トークンまでの時間を測る。**
+    // CPU では、入力を読む（prompt evaluation）だけで分単位かかる。
+    // その間、画面には何も出ない。「遅い」のがどこかを、記録で分かるようにする。
+    const started = Date.now();
+    let firstAt = 0;
     try {
       chunk({ role: 'assistant' });
       await held.session.prompt(asked, {
@@ -835,6 +863,12 @@ export class InProcRuntime implements LocalRuntime {
         // 一気に返さず、出来た端から流す。長い返事のときに
         // 「止まっている」ように見えるのが、いちばん困る。
         onTextChunk: (text: string) => {
+          if (!firstAt) {
+            firstAt = Date.now();
+            const seen = held.session.sequence?.nextTokenIndex;
+            this.#opts.onLog?.(`最初の 1 トークンまで ${((firstAt - started) / 1000).toFixed(1)} 秒`
+              + (typeof seen === 'number' ? `（入力 ${seen} トークン）` : ''));
+          }
           const show = filter ? filter.push(text) : text;
           if (show) chunk({ content: show });
         },
@@ -928,6 +962,8 @@ interface Held {
     setChatHistory: (history: unknown[]) => void;
     /** ライブラリが選んだ型。試験の差し替えには無いので、あってもなくてもよい。 */
     chatWrapper?: { wrapperName?: string };
+    /** 読み終えた入力の数。試験のモックには無い。 */
+    sequence?: { nextTokenIndex?: number };
   };
   /**
    * 一つのモデルを、同時に二人で使わない約束。
