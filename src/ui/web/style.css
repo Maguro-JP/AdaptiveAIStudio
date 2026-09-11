@@ -567,7 +567,8 @@ button.tiny { font-size: .74rem; padding: 2px 7px; }
 
 /* ---------- 書くところ ---------- */
 
-.chat form { display: flex; gap: var(--s2); align-items: flex-end; flex: 0 0 auto; }
+.chat form { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: flex-end; flex: 0 0 auto; }
+.chat form .slash-list, .chat form .attachments { flex: 1 0 100%; }
 /*
  * 入力欄。**狭くなったら、押すものを下の段へ折り返す。**
  * 一行に並べたままだと、板が狭いときに入力欄が 147px まで潰れて、
@@ -617,6 +618,14 @@ button.tiny { font-size: .74rem; padding: 2px 7px; }
 .sb.busy { color: var(--accent); }
 
 /* ---------- コマンド ---------- */
+
+.slash-list {
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface);
+  padding: var(--s1); max-height: 40vh; overflow: auto; font-size: .88rem;
+}
+.slash-row { display: flex; gap: var(--s3); padding: 5px 10px; border-radius: 6px; cursor: pointer; }
+.slash-row .mono { min-width: 7em; }
+.slash-row.on, .slash-row:hover { background: var(--surface2); }
 
 #palette { padding: 0; width: min(560px, 92vw); top: 12vh; }
 .palette-head { display: flex; align-items: center; border-bottom: 1px solid var(--line); }

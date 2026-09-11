@@ -115,10 +115,56 @@ export const PANELS = {
     const tray = el('div', 'attachments');
     tray.style.display = 'none';
 
+    /*
+     * 打ち込みのコマンド。先頭が `/` のあいだ、合う名前を入力欄の上に出す。
+     * 一覧は本体から取る（組み込みと、作業場の skill）。`/plan` はこちらの道。
+     */
+    const slash = el('div', 'slash-list');
+    slash.hidden = true;
+    let slashCursor = 0;
+    let slashShown = [];
+    let known = null;
+    const fetchCommands = async () => {
+      if (known) return known;
+      const r = await fetch('/api/commands', { signal: AbortSignal.timeout(5000) }).catch(() => null);
+      const j = r?.ok ? await r.json().catch(() => null) : null;
+      known = [{ name: 'plan', description: '分解して、一段ずつ進める', source: 'builtin' }, ...(j?.commands ?? [])];
+      return known;
+    };
+    const drawSlash = () => {
+      slash.replaceChildren();
+      slash.hidden = slashShown.length === 0;
+      slashShown.forEach((c, i) => {
+        const row = el('div', `slash-row${i === slashCursor ? ' on' : ''}`);
+        row.append(el('span', 'mono', `/${c.name}`), el('span', 'dim', c.description + (c.source === 'skill' ? '（skill）' : '')));
+        row.onmousedown = (e) => { e.preventDefault(); pickSlash(c); };
+        slash.append(row);
+      });
+    };
+    const pickSlash = (c) => {
+      const rest = input.value.replace(/^\/\S*/, '');
+      input.value = `/${c.name} ${rest.trimStart()}`;
+      slashShown = [];
+      drawSlash();
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    };
+    const updateSlash = async () => {
+      const m = /^\/([A-Za-z0-9_-]*)$/.exec(input.value);
+      if (!m) { slashShown = []; drawSlash(); return; }
+      const q = m[1].toLowerCase();
+      const all = await fetchCommands();
+      slashShown = all.filter((c) => c.name.toLowerCase().startsWith(q));
+      slashCursor = 0;
+      drawSlash();
+    };
+    // 作業場が変わったら、skill も変わる。次に `/` を打ったときに読み直す。
+    ctx.forgetCommands = () => { known = null; };
+
     // 中断も入力欄の中に置く。**外に浮かせない。**
     // 送るの隣に在るのが自然で、離すと押し間違える。
     field.append(input, clip, cmd, mic, stop, send, picker);
-    form.append(tray, field);
+    form.append(slash, tray, field);
     wrap.append(log, form);
     body.append(wrap);
 
@@ -389,6 +435,12 @@ export const PANELS = {
 
     form.onsubmit = (e) => { e.preventDefault(); void submit(); };
     input.onkeydown = (e) => {
+      if (!slash.hidden && slashShown.length > 0) {
+        if (e.key === 'ArrowDown') { slashCursor = Math.min(slashCursor + 1, slashShown.length - 1); drawSlash(); e.preventDefault(); return; }
+        if (e.key === 'ArrowUp') { slashCursor = Math.max(slashCursor - 1, 0); drawSlash(); e.preventDefault(); return; }
+        if (e.key === 'Tab' || isSendKey(e)) { e.preventDefault(); pickSlash(slashShown[slashCursor]); return; }
+        if (e.key === 'Escape') { slashShown = []; drawSlash(); e.preventDefault(); return; }
+      }
       // 日本語入力の変換を確定する Enter では送らない（keys.js）。
       if (isSendKey(e)) { e.preventDefault(); void submit(); }
     };
@@ -396,13 +448,16 @@ export const PANELS = {
     input.oninput = () => {
       input.style.height = 'auto';
       input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
+      void updateSlash();
     };
+    input.onblur = () => { slashShown = []; drawSlash(); };
     stop.onclick = () => fetch('/api/abort', { method: 'POST' });
     ctx.focusInput = () => input.focus();
     ctx.prefill = (head) => {
       if (!input.value.startsWith(head)) input.value = head + input.value;
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
+      void updateSlash();
     };
 
     /**

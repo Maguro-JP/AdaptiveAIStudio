@@ -50,6 +50,7 @@ import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from '.
 import { collectState } from './state.ts';
 import { Attachments, MAX_BYTES } from './attachments.ts';
 import { expandMentions, mentionBudget } from '../agent/mention.ts';
+import { expandCommand, listCommands } from '../agent/commands.ts';
 import { PreviewServer } from './preview.ts';
 import { configPath, wireInProc, type AasConfig } from '../config.ts';
 import { TaskRunner } from './tasks.ts';
@@ -242,6 +243,14 @@ export class UiServer {
    * 実は二つ走っている。見てから走り出すまでを、ここで塞ぐ。
    */
   #preparing = false;
+  /**
+   * 止めたあとは、裏で動いていたものがセッションを作り直さない。
+   *
+   * 読み込みの最中に止めると、読み終えた側が `session()` から新しい
+   * セッション（inproc の口）を立てて、止めたはずのプロセスが生き続けた
+   * （テストの走りが終わらないことで見つけた）。
+   */
+  #stopped = false;
   /** モデルの土台。要るときに一度だけ組み立てる。 */
   #runtime?: LocalRuntime;
   /** 承認待ちの返事先。画面が答えるまで、ここで待っている。 */
@@ -382,6 +391,7 @@ export class UiServer {
 
   async session(): Promise<Session> {
     if (this.#session) return this.#session;
+    if (this.#stopped) throw new Error('止めています');
     this.#session = await Session.create(await this.#configForSession(), {
       journals: await this.journals(),
       approve: (req) => this.#ask(req),
@@ -690,6 +700,7 @@ export class UiServer {
    * 何を待っているのか分からなかった）。2 秒を超えた段だけ名前を出す。
    */
   async stop(say: (line: string) => void = () => undefined): Promise<void> {
+    this.#stopped = true;
     if (this.#idleTimer) clearInterval(this.#idleTimer);
     // 待っている承認は、答えが無いまま終わる。許可はしない。
     for (const finish of this.#pending.values()) finish(false);
@@ -708,6 +719,9 @@ export class UiServer {
     this.#runtime = undefined;
     for (const res of this.#clients) { try { res.end(); } catch { /* 切れている */ } }
     this.#clients.clear();
+    // 開いたままの繋ぎ（keep-alive）も切る。close() は新しい繋ぎを断るだけで、
+    // 残っている繋ぎが終わるまで返らない。
+    this.#server?.closeAllConnections?.();
     await timed('口を閉じるの', () => new Promise<void>((resolve) => this.#server?.close(() => resolve()) ?? resolve()));
   }
 
@@ -791,11 +805,25 @@ export class UiServer {
 
     if (path === '/api/send' && req.method === 'POST') {
       const body = await readBody(req) as { text?: string; attachments?: unknown };
-      const text = typeof body?.text === 'string' ? body.text.trim() : '';
+      const typed = typeof body?.text === 'string' ? body.text.trim() : '';
       const attached = Array.isArray(body?.attachments)
         ? body.attachments.filter((a): a is string => typeof a === 'string')
         : [];
-      if (!text && attached.length === 0) return send(res, 400, { error: '指示が空です' });
+      if (!typed && attached.length === 0) return send(res, 400, { error: '指示が空です' });
+
+      // 打ち込みのコマンド（/fix …）と作業場の skill。指示に置き換えてから送る。
+      // 知らない名前は送らない。打ち間違いを、そのままモデルに渡さない。
+      const expanded = await expandCommand(typed, this.#workRoot());
+      if (expanded.kind === 'unknown') {
+        return send(res, 400, {
+          error: `コマンドがありません: /${expanded.name}（使えるのは ${expanded.known.map((n) => `/${n}`).join(' ')}）`,
+        });
+      }
+      const text = expanded.text;
+      if (expanded.kind === 'command') {
+        const where = expanded.command.source === 'skill' ? `（${expanded.command.path}）` : '';
+        this.broadcast({ type: 'log', level: 'info', text: `/${expanded.command.name} を使います${where}` });
+      }
 
       // **モデルの有無を、いちばん先に見る。**
       // 会話の土台を組む段でも候補を決めるので、モデルが無いと
@@ -824,7 +852,7 @@ export class UiServer {
       // 見出しは**送った時点で**最初の一言から付ける。答えが返るまで
       // 「新しい会話」のまま並ぶと、どれがどれか分からない。
       const conversationId = await this.#currentConversation();
-      if (text) await this.#conversations.titleIfUnset(conversationId, text).catch(() => undefined);
+      if (typed) await this.#conversations.titleIfUnset(conversationId, typed).catch(() => undefined);
       this.broadcast({ type: 'conversations' });
       // **断らない。**書いたものを突き返されるのがいちばん不快で、
       // しかも書き直させることになる。動いている間は順番に積む。
@@ -1172,6 +1200,13 @@ export class UiServer {
       // 返事を出し切ってから止める。先に止めると、押した側に何も返らない。
       setTimeout(() => this.#opts.onRestart?.(), 200).unref?.();
       return;
+    }
+
+    if (path === '/api/commands' && req.method === 'GET') {
+      const list = await listCommands(this.#workRoot());
+      return send(res, 200, {
+        commands: list.map((c) => ({ name: c.name, description: c.description, source: c.source, ...(c.path ? { path: c.path } : {}) })),
+      });
     }
 
     if (path === '/api/tasks' && req.method === 'GET') {
@@ -2552,6 +2587,7 @@ export class UiServer {
   /** モデルの土台。画面から用意や乗り換えをするのに要る。 */
   async #localRuntime(): Promise<LocalRuntime> {
     if (this.#runtime) return this.#runtime;
+    if (this.#stopped) throw new Error('止めています');
     const machine = await new MachineCache(join(stateDir(), 'machine.json')).get();
     // **土台の声を画面へ繋ぐ。**ここに undefined を渡していたので、
     // 2GB を読む 30〜60秒のあいだ、画面には一行も出なかった。

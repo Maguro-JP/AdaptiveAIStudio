@@ -262,3 +262,34 @@ describe('並んでいる間も、繋がったことは先に返す', () => {
     assert.equal(state.started, 1, '切られた依頼を始めている（誰も読まない答えを作る）');
   });
 });
+
+describe('降ろしたあとに、口を立て直さない', () => {
+  test('読み込みの途中で降ろしたら、読み終えても口を開かない', async () => {
+    const { dir, ref } = await withModel();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    const load = async () => ({
+      getLlama: async () => ({
+        loadModel: async () => {
+          await gate; // 降ろされるまで読み終えない
+          return { createContext: async () => ({ getSequence: () => ({}), dispose: async () => {} }) };
+        },
+      }),
+      LlamaChatSession: class { setChatHistory() {} async prompt() { return ''; } },
+    });
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
+    const servers = () => process.getActiveResourcesInfo().filter((x) => x === 'TCPServerWrap').length;
+    const before = servers();
+    const loading = rt.ensureLoaded(ref);
+    await rt.shutdown();
+    release();
+    try {
+      await assert.rejects(loading, /止めています/);
+      assert.equal(rt.loaded().length, 0, '降ろしたのに載っている');
+      assert.equal(servers(), before, '降ろしたあとに口が開いている（プロセスが終わらない）');
+    } finally {
+      // 壊れていたら口が開いている。閉じてから抜ける（閉じないと走りが終わらない）。
+      await rt.shutdown();
+    }
+  });
+});

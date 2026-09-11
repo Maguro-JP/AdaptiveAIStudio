@@ -308,6 +308,8 @@ export class InProcRuntime implements LocalRuntime {
   #url = '';
   /** 読み込んだもの。ref ごとに一つ。 */
   readonly #sessions = new Map<string, Held>();
+  /** 降ろしたあと。読み込みの途中だったものが口を立て直さないためのフラグ。 */
+  #down = false;
   /**
    * 読み込んでいる最中のもの。
    *
@@ -368,8 +370,16 @@ export class InProcRuntime implements LocalRuntime {
         // 済んだ失敗をもう一度返すことになる。
         load.catch(() => undefined).finally(() => { this.#loading.delete(ref); });
       }
-      this.#sessions.set(ref, await load);
+      const held = await load;
+      // 読んでいる最中に降ろされた。**読み終えた側が口を立て直さない。**
+      // 立て直すと、止めたはずのプロセスが口を開いたまま生き続ける。
+      if (this.#down) {
+        await held.context.dispose?.().catch(() => undefined);
+        throw new Error('止めています');
+      }
+      this.#sessions.set(ref, held);
     }
+    if (this.#down) throw new Error('止めています');
     await this.#serve();
     return { baseUrl: this.#url, model: ref, loadSeconds: (Date.now() - began) / 1000 };
   }
@@ -531,6 +541,7 @@ export class InProcRuntime implements LocalRuntime {
   }
 
   async shutdown(): Promise<void> {
+    this.#down = true;
     for (const ref of this.loaded()) await this.unload(ref);
     this.#server?.close();
     this.#server = undefined;

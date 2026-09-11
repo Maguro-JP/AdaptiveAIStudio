@@ -649,7 +649,7 @@ function listen() {
       box.hidden = e.waiting === 0;
       box.textContent = `順番待ち ${e.waiting} 件`;
     }
-    if (e.type === 'stateChanged') { void refreshState(); void loadFiles(filesAt); void tellIfNotReady(); return; }
+    if (e.type === 'stateChanged') { void refreshState(); void loadFiles(filesAt); void tellIfNotReady(); ctx.forgetCommands?.(); return; }
     if (e.type === 'themeChanged') return void loadTheme();
     if (e.type === 'thinkEvent') {
       if (e.event.type === 'chose') run.set('busy', `考え中: ${e.event.codename}`);
@@ -1395,7 +1395,12 @@ async function commands() {
 
   // 会話
   add('新しい会話（トップへ）', '', () => goTop());
-  add('分解して進める', '/plan を先頭に付けて送る', () => ctx.prefill('/plan '));
+  add('/plan', '分解して、一段ずつ進める', () => ctx.prefill('/plan '));
+  // 打ち込みのコマンドと、作業場の skill。選ぶと入力欄に `/名前 ` が入る。
+  const cmds = await json('/api/commands');
+  for (const c of cmds?.commands ?? []) {
+    add(`/${c.name}`, c.description + (c.source === 'skill' ? `（skill: ${c.path}）` : ''), () => ctx.prefill(`/${c.name} `));
+  }
   add('中断する', '動いている依頼を止める', () => fetch('/api/abort', { method: 'POST' }).catch(() => undefined));
   add('いま考えさせる', '暇なときの考えごとを今やる', () => fetch('/api/think', { method: 'POST' }).catch(() => undefined));
   add('入力へ移動', 'Ctrl+/', () => ctx.focusInput());
