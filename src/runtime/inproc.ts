@@ -805,6 +805,16 @@ export class InProcRuntime implements LocalRuntime {
       signal: useTools ? AbortSignal.any([signal, stop.signal]) : signal,
       ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
       maxTokens: capped,
+      /*
+       * **考えごと（<think>）をさせない。**
+       *
+       * Qwen3 は答える前に考えごとを書く。ライブラリの既定はその予算が
+       * コンテキストウィンドウの 75%（32k なら 24k トークン）で、しかも考えごとは onTextChunk に
+       * 流れてこない。CPU の機械で「1+1=」に 18 分かけて、画面には一文字も
+       * 出ず、出力 0 で「完了」と出た（実機の記録）。
+       * 考えごとは GPU の無い機械では払えない。答えだけ書かせる。
+       */
+      budgets: { thoughtTokens: 0 },
       // 止めたときに投げられると、何を呼ぼうとしたのかが例外に化けて消える。
       ...(useTools ? { functions, stopOnAbortSignal: true } : {}),
     };
@@ -869,17 +879,23 @@ export class InProcRuntime implements LocalRuntime {
     let firstAt = 0;
     try {
       chunk({ role: 'assistant' });
+      let thought = 0;
       await held.session.prompt(asked, {
         ...opts,
-        // 一気に返さず、出来た端から流す。長い返事のときに
-        // 「止まっている」ように見えるのが、いちばん困る。
-        onTextChunk: (text: string) => {
+        // 考えごとの分も含めて、最初の 1 トークンを測る。本文だけ見ていると、
+        // 考えごとの間は「何も出ていない」としか分からない。
+        onResponseChunk: (c) => {
           if (!firstAt) {
             firstAt = Date.now();
             const seen = held.session.sequence?.nextTokenIndex;
             this.#opts.onLog?.(`最初の 1 トークンまで ${((firstAt - started) / 1000).toFixed(1)} 秒`
               + (typeof seen === 'number' ? `（入力 ${seen} トークン）` : ''));
           }
+          if (c.type === 'segment' && c.segmentType === 'thought') thought += c.text.length;
+        },
+        // 一気に返さず、出来た端から流す。長い返事のときに
+        // 「止まっている」ように見えるのが、いちばん困る。
+        onTextChunk: (text: string) => {
           const show = filter ? filter.push(text) : text;
           if (show) chunk({ content: show });
         },
@@ -893,6 +909,7 @@ export class InProcRuntime implements LocalRuntime {
       // **投げずに返る道**（stopOnAbortSignal）を通ることがあるので、
       // ここでも見る。見ていなかったので、やめた後に 'stop' を送っていた。
       if (signal.aborted) { res.end(); return; }
+      if (thought > 0) this.#opts.onLog?.(`考えごとに ${thought} 文字使いました（答えには出しません）`);
       finish();
     } catch (e) {
       if (signal.aborted) { res.end(); return; }
@@ -936,6 +953,10 @@ interface PromptOptions {
   temperature?: number;
   maxTokens?: number;
   onTextChunk?: (text: string) => void;
+  /** 本文でも考えごとでも、出た端から来る。最初の 1 トークンの時間はこちらで測る。 */
+  onResponseChunk?: (chunk: { type?: string; segmentType?: string; text: string }) => void;
+  /** 考えごと（<think>）などに使ってよいトークン数。0 で書かせない。 */
+  budgets?: { thoughtTokens?: number };
   /** 画面が「やめる」を押したら、生成そのものを止める。 */
   signal?: AbortSignal;
   /** 道具の一覧。名前 → 説明・引数の形・受け口。 */

@@ -171,31 +171,36 @@ describe('上の層が呼ぶとおりに答える', () => {
     const { load, spy } = fakeLib('ok');
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
     const { baseUrl } = await rt.ensureLoaded('m.gguf');
+    // 落ちても口を閉じる。閉じないと、落ちる代わりに走りが終わらなくなる。
+    try {
+      await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'm.gguf', stream: true, temperature: 0.2, max_tokens: 128,
+          messages: [
+            { role: 'system', content: '日本語で答える' },
+            { role: 'user', content: '一つめ' },
+            { role: 'assistant', content: 'はい' },
+            { role: 'user', content: 'ふたつめ' },
+          ],
+        }),
+      }).then(readStream);
 
-    await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: 'm.gguf', stream: true, temperature: 0.2, max_tokens: 128,
-        messages: [
-          { role: 'system', content: '日本語で答える' },
-          { role: 'user', content: '一つめ' },
-          { role: 'assistant', content: 'はい' },
-          { role: 'user', content: 'ふたつめ' },
-        ],
-      }),
-    }).then(readStream);
-
-    assert.equal(spy.asked, 'ふたつめ');
-    assert.deepEqual(spy.history, [
-      { type: 'system', text: '日本語で答える' },
-      { type: 'user', text: '一つめ' },
-      { type: 'model', response: ['はい'] },
-    ]);
-    // 設定した値を捨てない。
-    assert.equal(spy.opts.temperature, 0.2);
-    assert.equal(spy.opts.maxTokens, 128);
-    await rt.shutdown();
+      assert.equal(spy.asked, 'ふたつめ');
+      assert.deepEqual(spy.history, [
+        { type: 'system', text: '日本語で答える' },
+        { type: 'user', text: '一つめ' },
+        { type: 'model', response: ['はい'] },
+      ]);
+      // 設定した値を捨てない。
+      assert.equal(spy.opts.temperature, 0.2);
+      assert.equal(spy.opts.maxTokens, 128);
+      // 考えごとをさせない。CPU で 18 分考えて何も出さなかった（実機）。
+      assert.deepEqual(spy.opts.budgets, { thoughtTokens: 0 }, '考えごとの予算を切っていない');
+    } finally {
+      await rt.shutdown();
+    }
   });
 
   test('繋がるかの確認に答える', async () => {
