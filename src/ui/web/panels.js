@@ -1289,6 +1289,9 @@ export const PANELS = {
       draw();
       clearInterval(tick);
       tick = setInterval(draw, 1000);
+      // 試験（Node の中で画面を組む）では、このタイマーが走りを生かし続けて
+      // 終わらなくなった（pre-push が止まった）。ブラウザでは unref は無い。
+      tick.unref?.();
     };
     const finished = (code) => {
       clearInterval(tick);
