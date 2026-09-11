@@ -435,10 +435,41 @@ export class UiServer {
     return f && f.conversationId === id ? { asked: f.asked, text: f.text, seq: f.seq } : null;
   }
 
+  /**
+   * 受け取ったあとの続き。読んでいなければ読み、セッションを組み直し、走らせる。
+   * 読んでいる間は #preparing で「手が塞がっている」ことにする（次の送信は積まれる）。
+   */
+  async #loadThenDrive(text: string, attached: string[], conversationId: string): Promise<void> {
+    this.#preparing = true;
+    try {
+      const notReady = await this.#readyToThink();
+      if (notReady) {
+        // 会話にも出す。流れ（log）のパネルは既定の配置に無い。
+        this.broadcast({ type: 'log', level: 'error', text: notReady });
+        this.broadcast({ type: 'session', event: { type: 'log', level: 'error', text: notReady }, conversationId });
+        this.broadcast({ type: 'stateChanged' });
+        return;
+      }
+      // **読み込む前に組んだセッションを、抱えたままにしない。**
+      // 候補が決まる前に組まれると、候補が空のまま固定される。
+      // 以後どれだけ打っても 0.01 秒で「使えるモデルがありません」で終わる。
+      await this.#rebuildIfCandidatesMissing();
+      const session = await this.session();
+      await this.#loadInto(session, conversationId);
+      // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
+      // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
+      const full = await this.#compose(session, text, attached);
+      this.#bg(this.#drive(session, full), '依頼の実行が落ちました');
+    } finally {
+      this.#preparing = false;
+    }
+  }
+
   async #rebuildIfCandidatesMissing(): Promise<void> {
     const live = this.#session;
     if (!live || live.candidates.length > 0) return;
-    if (this.#busyNow(live)) return;
+    // 走っている・考えている間は組み直さない（#preparing は読んでいるだけなので構わない）。
+    if (live.busy || this.#thinking) return;
     const fixed = await this.#configForSession();
     if (!fixed.candidates || fixed.candidates.length === 0) return;
     this.#session = undefined;
@@ -758,21 +789,25 @@ export class UiServer {
       // 会話の土台を組む段でも候補を決めるので、モデルが無いと
       // そこで落ちて 500 になる。利用者には「サーバの不具合」に見えるが、
       // 実際は「まだ置いていない」だけ。順番を逆にすると、そう言えなくなる。
+      /*
+       * **読み込みを待たせない。**
+       *
+       * ここは返事を返す前にモデルを読んでいた（`#readyToThink()`）。CPU で本物を
+       * 読むと分単位かかり、送った側は 60 秒で時間切れになる（Windows の smoke で
+       * 「送ったときの返り方」が落ちた）。読まないと分からないこと（GGUF が無い、
+       * 載らない、別物）だけは先に見て 503 で断り、読むこと自体は受け取ってから
+       * 裏でやる。進み具合は流れに出て、読めなければ会話に理由が出る。
+       */
       this.#preparing = true;
+      let mustLoad = false;
       try {
-        const notReady = await this.#readyToThink();
-        if (notReady) return send(res, 503, { error: notReady });
+        const notReady = await this.#readyToThink(false);
+        if (notReady && notReady !== NOT_LOADED_YET) return send(res, 503, { error: notReady });
+        mustLoad = notReady === NOT_LOADED_YET;
       } finally {
         this.#preparing = false;
       }
 
-      // **読み込む前に組んだ土台を、抱えたままにしない。**
-      // 候補が決まる前に土台が組まれると、候補が空のまま固定される。
-      // 以後どれだけ打っても 0.01 秒で「使えるモデルがありません」で終わる。
-      // 画面には何も出ないので、固まったようにしか見えない。
-      await this.#rebuildIfCandidatesMissing();
-
-      const session = await this.session();
       // どの会話への依頼か。トップからなら、ここで新しい会話ができる。
       // 見出しは**送った時点で**最初の一言から付ける。答えが返るまで
       // 「新しい会話」のまま並ぶと、どれがどれか分からない。
@@ -782,21 +817,30 @@ export class UiServer {
       // **断らない。**書いたものを突き返されるのがいちばん不快で、
       // しかも書き直させることになる。動いている間は順番に積む。
       // 別の会話への依頼も積める（手が一つでも、口は会話ごと）。
-      if (this.#busyNow(session)) {
+      const live = this.#session;
+      if (live && this.#busyNow(live)) {
         this.#queue.push({ text, attached, conversationId });
         this.broadcast({ type: 'queue', waiting: this.#queue.length });
         return send(res, 202, { queued: this.#queue.length, conversationId });
       }
 
+      if (mustLoad) {
+        // 受け取ったことだけ先に返し、読み込みと答えは出来事として流す。
+        send(res, 202, { accepted: true, conversationId, loading: true });
+        this.#bg(this.#loadThenDrive(text, attached, conversationId), '依頼の実行が落ちました');
+        return;
+      }
+
       this.#preparing = true;
       try {
+        await this.#rebuildIfCandidatesMissing();
+        const session = await this.session();
         await this.#loadInto(session, conversationId);
         // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
         // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
         const full = await this.#compose(session, text, attached);
-
         // 受け取ったことだけ先に返し、続きは出来事として流す。
-        send(res, 202, { accepted: true, conversationId });
+        send(res, 202, { accepted: true, conversationId, loading: false });
         this.#bg(this.#drive(session, full), '依頼の実行が落ちました');
       } finally {
         this.#preparing = false;
@@ -1900,9 +1944,6 @@ export class UiServer {
       const runtime = await this.#localRuntime();
       const models = await runtime.list();
       if (models.length > 0) {
-        if (runtime.id === 'inproc' && runtime.loaded().length === 0 && !load) {
-          return NOT_LOADED_YET;
-        }
         // この中で読む道では、**読むまで口が立たない。**
         // 先に読ませておかないと、上の層は繋がらない先を叩くことになる。
         if (runtime.id === 'inproc' && runtime.loaded().length === 0) {
@@ -1945,6 +1986,8 @@ export class UiServer {
             return `${ref} は GGUF として読めません（先頭に GGUF の印がありません）。`
               + '配布元の同意頁の HTML を落としてしまった形が多いです。ブラウザで開き直して、本物を置いてください。';
           }
+          // 読まずに分かることはここまで。読むのは頼まれたときだけ。
+          if (!load) return NOT_LOADED_YET;
           const gb = ((picked.chosen.sizeBytes ?? 0) / 1024 ** 3).toFixed(1);
           this.broadcast({
             type: 'log', level: 'info',

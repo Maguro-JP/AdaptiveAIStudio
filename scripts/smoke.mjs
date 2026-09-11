@@ -19,7 +19,8 @@ import { UiServer } from '../src/ui/server.ts';
 import { loadConfig } from '../src/config.ts';
 
 /** 答えを待つ上限。モデルを読むところから始まるので、短くしない。 */
-const ANSWER_WAIT = 240_000;
+// CPU で本物を読むと、読み込みだけで数分かかる。待っている間は進み具合を出す。
+const ANSWER_WAIT = 600_000;
 
 const results = [];
 let bad = 0;
@@ -140,6 +141,10 @@ try {
             if (!line.startsWith('data:')) continue;
             const v = JSON.parse(line.slice(5).trim());
             if (v.type === 'session' && v.event?.type === 'text') text += v.event.delta ?? '';
+            if (v.type === 'log' && /^(読み込み中|モデルを読み込んでいます|まだ読み込んでいます|読み込みました|読み込めませんでした|モデルのプロセスが落ちました)/.test(v.text ?? '')) {
+              console.log(`       ${v.text.split('\n')[0]}`);
+            }
+            if (v.type === 'session' && v.event?.type === 'log' && v.event.level === 'error') throw new Error(v.event.text);
             if (v.type === 'busy' && v.busy === false && text.length > 0) done = true;
           }
         }
