@@ -35,6 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { aasHome, binDir, modelsDir, isPortable, productRoot, defaultWorkRoot } from '../core/home.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
+import { LogFile } from '../core/logfile.ts';
 import { checkUpdate, applyUpdate } from '../core/update.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
 import { findNewerOllama, findNewerGguf } from '../runtime/model-updates.ts';
@@ -155,8 +156,11 @@ export class UiServer {
   readonly #clients = new Set<ServerResponse>();
   #server?: ReturnType<typeof createServer>;
   /** 点検を回す係。状態（走っている子）はそちらが持つ。 */
+  /** 記録をファイルにも残す。困ったときの報告に、ここから直近を入れる。 */
+  readonly #logFile = new LogFile(join(stateDir(), 'logs', 'ui.log'));
   readonly #tasks = new TaskRunner({
     root: join(dirname(WEB_DIR), '..', '..'),
+    reportsDir: join(stateDir(), 'reports'),
     onEvent: (e) => {
       this.broadcast(e.text !== undefined
         ? { type: 'task', name: e.name, text: e.text }
@@ -274,6 +278,14 @@ export class UiServer {
 
   /** 画面へ流す。誰も見ていなくても落ちない。 */
   broadcast(event: UiEvent): void {
+    // 画面に流すものの一部を、ファイルにも残す（記録・会話の終わり・落ちた理由）。
+    if (event.type === 'log') void this.#logFile.append(`[${event.level}] ${event.text}`).catch(() => undefined);
+    else if (event.type === 'session') {
+      const ev = event.event as { type?: string };
+      if (ev.type === 'log' || ev.type === 'settled' || ev.type === 'finished') {
+        void this.#logFile.append(`[session ${ev.type}] ${JSON.stringify(event.event).slice(0, 2000)}`).catch(() => undefined);
+      }
+    }
     const line = `data: ${JSON.stringify(event)}\n\n`;
     for (const res of this.#clients) {
       // 読まない相手に溜め続けない。閉じたタブや固まった頁があると、

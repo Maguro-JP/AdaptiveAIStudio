@@ -58,7 +58,10 @@ export async function saveReport(
 ): Promise<Saved> {
   const file = `${name}-${stamp()}.txt`;
   let last = '';
-  for (const dir of dirs) {
+  // 置く先を外から決められる。テストが doctor を回すと、プログラムの隣に
+  // 報告が撒かれて利用者に送られてきた（実際にそうなった）。テストは temp を渡す。
+  const ordered = process.env.AAS_REPORT_DIR ? [process.env.AAS_REPORT_DIR, ...dirs] : dirs;
+  for (const dir of ordered) {
     const at = join(dir, file);
     try {
       await mkdir(dir, { recursive: true });

@@ -48,11 +48,11 @@ describe('点検を回す係', () => {
     // 環境ごとの差（殻の glob 展開、型剥がしの要否）をそこへ閉じ込めてある。
     const { runner, calls } = make();
     runner.start('test');
-    assert.match(calls[0]!.args[1]!, /scripts\/run-tests\.mjs$/);
+    assert.match(calls[0]!.args[1]!, /scripts[\\/]run-tests\.mjs$/);
 
     const { runner: r2, calls: c2 } = make();
     r2.start('doctor');
-    assert.match(c2[0]!.args[1]!, /src\/cli\/doctor\.ts$/);
+    assert.match(c2[0]!.args[1]!, /src[\\/]cli[\\/]doctor\.ts$/);
   });
 
   test('一度に一つだけ', () => {
@@ -91,6 +91,33 @@ describe('点検を回す係', () => {
     // 回していなければ、何もしない。
     const { runner: r2 } = make();
     assert.equal(r2.stop(), undefined);
+  });
+
+  test('**出力をファイルに残す**（画面は捨てるし、閉じれば消える）', async () => {
+    const { tempDir } = await import('./tmp.ts');
+    const { readFile, readdir } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const dir = await tempDir('aas-reports-');
+    const said: TaskEvent[] = [];
+    const { spawnFn, children } = fakeSpawn();
+    const runner = new TaskRunner({ root: '/app', onEvent: (e) => said.push(e), spawnFn, reportsDir: dir });
+    runner.start('test');
+    children[0]!.stdout.emit('data', Buffer.from('ok 1 - a\n'));
+    children[0]!.stderr.emit('data', Buffer.from('not ok 2 - b\n'));
+    children[0]!.emit('close', 1);
+    const { until } = await import('./until.ts');
+    await until(() => said.some((e) => e.code !== undefined), '終わる', { timeoutMs: 5000 });
+    const files = (await readdir(dir)).filter((f) => f.startsWith('test-'));
+    assert.equal(files.length, 1, `残っていない: ${JSON.stringify(files)}`);
+    const body = await readFile(join(dir, files[0]!), 'utf8');
+    assert.ok(body.includes('ok 1 - a') && body.includes('not ok 2 - b'), body);
+    assert.ok(body.includes('終了コード 1'), body);
+    // どこへ置いたかを、流れにも言う。
+    assert.ok(said.some((e) => e.text?.includes('残しました:')), JSON.stringify(said));
+    // 終わりの合図は、置いた後。
+    const doneAt = said.findIndex((e) => e.code !== undefined);
+    const toldAt = said.findIndex((e) => e.text?.includes('残しました:'));
+    assert.ok(toldAt < doneAt, '置く前に終わったと言っている');
   });
 
   test('一覧は、名前と見出しの組で出す', () => {

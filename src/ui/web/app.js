@@ -1383,35 +1383,81 @@ async function checkForUpdate() {
 /**
  * 何ができるかを、覚えていなくても引ける形にする。
  * 隠し機能は無い機能と同じなので、全部ここに並べる。
+ *
+ * **並べるのは動作。**ここは見た目と配置の切り替えが大半で、押した人には
+ * 設定の一覧にしか見えなかった（実機でそうなった）。会話・ファイル・モデル・
+ * 診断の順に、その場でやることを前に置く。見た目と配置は末尾に「設定:」と付けて残す。
  */
-function commands() {
-  const list = [
-    { name: '入力へ移動', hint: 'Ctrl+/', run: () => ctx.focusInput() },
-    { name: '分解して進める', hint: '/plan を先頭に付けて送る', run: () => ctx.prefill('/plan ') },
-    { name: '中断する', hint: '', run: () => fetch('/api/abort', { method: 'POST' }) },
-    { name: 'いま考えさせる', hint: '', run: () => fetch('/api/think', { method: 'POST' }) },
-    { name: '更新を確認する', hint: '', run: () => checkForUpdate() },
-    { name: '配置を編集', hint: '', run: () => $('edit').click() },
-    { name: '色を編集', hint: '', run: () => $('editTheme').click() },
-  ];
+async function commands() {
+  const list = [];
+  const add = (name, hint, run) => list.push({ name, hint, run });
+  const json = async (path) => { try { const r = await fetch(path, { signal: AbortSignal.timeout(5000) }); return r.ok ? await r.json() : null; } catch { return null; } };
+
+  // 会話
+  add('新しい会話（トップへ）', '', () => goTop());
+  add('分解して進める', '/plan を先頭に付けて送る', () => ctx.prefill('/plan '));
+  add('中断する', '動いている依頼を止める', () => fetch('/api/abort', { method: 'POST' }).catch(() => undefined));
+  add('いま考えさせる', '暇なときの考えごとを今やる', () => fetch('/api/think', { method: 'POST' }).catch(() => undefined));
+  add('入力へ移動', 'Ctrl+/', () => ctx.focusInput());
+
+  // ファイル
+  add('作業場を選ぶ', '直したいコードのあるフォルダ', () => pickWorkRoot());
+  const files = await json(`/api/files?path=${encodeURIComponent(filesAt)}`);
+  for (const e of (files?.entries ?? []).filter((x) => !x.dir).slice(0, 300)) {
+    add(`ファイルを開く: ${e.name}`, e.path, () => openInEditor(e.path));
+  }
+
+  // モデル
+  const cfg = await json('/api/config');
+  const now = cfg?.active?.model ?? cfg?.model;
+  for (const g of cfg?.gguf ?? []) {
+    if (g.ref === now || g.notGguf) continue;
+    add(`モデルを切り替える: ${g.ref}`, g.tooBig ? '（この機械には載りません）' : `${((g.sizeBytes ?? 0) / 1024 ** 3).toFixed(1)} GB`, async () => {
+      const r = await ask('/api/config', {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: cfg.kind, modelsDir: cfg.modelsDir ?? '', model: g.ref }),
+      }, '切り替えられませんでした');
+      if (!r) return;
+      if (!r.ok) return void showCrash('切り替えられません', r.body.error ?? '', 'warn');
+      showCrash('モデル', r.body.restartNeeded ? `${g.ref} を使います。いまは作業中なので、終わってから立ち上げ直すと効きます。` : `${g.ref} を使います。次の送信で読みます。`, 'warn');
+      void refreshState();
+    });
+  }
+  add('モデルを取ってくる・選ぶ', '設定 → モデル', () => openSettings('model'));
+
+  // 診断（点検のパネルの押しボタンと同じものを押す。出力はそのパネルに出る）
+  const tasks = await json('/api/tasks');
+  for (const t of tasks?.tasks ?? []) {
+    add(`診断: ${t.name}`, '', async () => {
+      const shown = new Set(panelsInUse(layout.root));
+      if (!layout.panels.some((p) => p.kind === 'checks' && shown.has(p.id))) await apply(openPanel(layout, 'checks'));
+      // タブの中にあるときは、その見出しを押して表に出す（表に出ていない中身は画面に無い）。
+      const tab = [...document.querySelectorAll('.panel.tabs > header > button')].find((b) => b.childNodes[0]?.textContent === '診断');
+      if (tab) tab.click();
+      const btn = [...document.querySelectorAll('.panel button')].find((b) => b.textContent === t.name);
+      if (btn) btn.click(); else showCrash('診断', '押す場所が見つかりませんでした。診断のパネルから押してください。', 'warn');
+    });
+  }
+
+  // 設定
+  add('設定を開く', '', () => openSettings());
+  add('更新を確認する', '', () => checkForUpdate());
+  add('設定: 配置を編集', '', () => $('edit').click());
+  add('設定: 色を編集', '', () => $('editTheme').click());
   for (const o of $('themes').options) {
-    list.push({ name: `見た目: ${o.textContent}`, hint: '', run: () => {
-      $('themes').value = o.value; $('themes').onchange({ target: $('themes') });
-    } });
+    add(`設定: 見た目: ${o.textContent}`, '', () => { $('themes').value = o.value; $('themes').onchange({ target: $('themes') }); });
   }
   for (const o of $('presets').options) {
-    list.push({ name: `配置: ${o.textContent}`, hint: '', run: () => {
-      $('presets').value = o.value; $('presets').onchange({ target: $('presets') });
-    } });
+    add(`設定: 配置: ${o.textContent}`, '', () => { $('presets').value = o.value; $('presets').onchange({ target: $('presets') }); });
   }
   return list;
 }
 
-function openPalette() {
+async function openPalette() {
   const dlg = $('palette');
   const input = $('paletteInput');
   const listBox = $('paletteList');
-  const all = commands();
+  const all = await commands();
   let cursor = 0;
   let shown = all;
 
@@ -1769,7 +1815,7 @@ for (const b of $('settings').querySelectorAll('.tabs-lite button')) {
 $('openSettings').onclick = () => { void openSettings(); };
 
 window.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openPalette(); }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); void openPalette(); }
   else if ((e.ctrlKey || e.metaKey) && e.key === '/') { e.preventDefault(); ctx.focusInput(); }
   else if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); void openSettings(); }
 });

@@ -8,6 +8,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
@@ -19,7 +20,8 @@ async function runDoctor(env: Record<string, string>): Promise<string> {
   const run = promisify(execFile);
   const at = join(installRoot(), 'src', 'cli', 'doctor.ts');
   const out = await run(process.execPath, ['--no-warnings', at], {
-    env: { ...process.env, ...env, NO_COLOR: '1' },
+    // 報告をプログラムの隣に撒かない（実際に撒いて、利用者に送られてきた）。
+    env: { ...process.env, AAS_REPORT_DIR: join(tmpdir(), 'aas-doc-reports'), ...env, NO_COLOR: '1' },
     timeout: 120_000,
   }).catch((e: { stdout?: string; stderr?: string }) => e);
   // 未了があると終了コードが立つ。中身は読めるので、そのまま使う。

@@ -1301,7 +1301,8 @@ export const PANELS = {
         ? `✓ 終わりました: ${runningName}（${sec} 秒）`
         : `✗ 終了コード ${code}: ${runningName}（${sec} 秒）`;
     };
-    body.append(bar, status, out);
+    const hint = el('div', 'dim', '困ったときは「困ったときの報告を一つにまとめる」を押して、出来たファイルを一つ送ってください。');
+    body.append(bar, hint, status, out);
 
     ctx.on('task', (e) => {
       out.append(document.createTextNode(e.text));

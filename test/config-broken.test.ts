@@ -51,7 +51,7 @@ describe('壊れた設定', () => {
       execFile(
         process.execPath,
         ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', 'doctor.ts')],
-        { env: { ...process.env, AAS_HOME: home }, encoding: 'utf8' },
+        { env: { ...process.env, AAS_HOME: home, AAS_REPORT_DIR: home }, encoding: 'utf8' },
         (err, stdout, stderr) => ok({
           code: (err as { code?: number } | null)?.code ?? 0,
           out: `${stdout}${stderr}`,

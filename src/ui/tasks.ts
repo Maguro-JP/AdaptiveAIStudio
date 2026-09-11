@@ -9,9 +9,11 @@
  * 口になるため。殻にも渡さない。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { writeFile, mkdir } from 'node:fs/promises';
 import { chunkReader } from '../core/text.ts';
 import { needsStripFlag } from '../core/node-flags.ts';
+import { stamp } from '../cli/report-file.ts';
 
 export const TASKS: Record<string, string> = {
   doctor: 'この環境を見てもらう',
@@ -19,7 +21,11 @@ export const TASKS: Record<string, string> = {
   selftest: 'この機械で確かめる',
   clean: '溜まったものを片づける',
   models: '手元のモデルを見る',
+  report: '困ったときの報告を一つにまとめる',
 };
+
+/** 出力を残す上限。テストは数千行になるが、それでも数 MB には届かない。 */
+const KEEP_BYTES = 8 * 1024 * 1024;
 
 /**
  * 端末むけの色指定を落とす。
@@ -48,6 +54,11 @@ export interface TaskRunnerOptions {
   spawnFn?: typeof spawn;
   /** 判断に使う Node の版。試験で差し替える。既定は動いている Node */
   nodeVersion?: string;
+  /**
+   * 出力を残すフォルダ。渡せば、回すたびに `<名前>-<時刻>.txt` を置く。
+   * 画面は古い行を捨てるし、閉じれば消える。困ったときに送るものは、ここから拾う。
+   */
+  reportsDir?: string;
 }
 
 /**
@@ -102,9 +113,18 @@ export class TaskRunner {
     this.#name = name;
 
     this.#opts.onEvent({ name, text: `— ${TASKS[name]} —\n` });
+    const kept: string[] = [];
+    let keptBytes = 0;
+    const keep = (text: string) => {
+      if (keptBytes > KEEP_BYTES) return;
+      kept.push(text);
+      keptBytes += text.length;
+    };
     // 二つの流れに一つの読み手を使い回さない。持ち越しが混ざって両方化ける。
     const on = (read: (c: Buffer) => string) => (b: Buffer) => {
-      this.#opts.onEvent({ name, text: stripAnsi(read(b)) });
+      const text = stripAnsi(read(b));
+      keep(text);
+      this.#opts.onEvent({ name, text });
     };
     child.stdout?.on('data', on(chunkReader()));
     child.stderr?.on('data', on(chunkReader()));
@@ -112,9 +132,26 @@ export class TaskRunner {
     child.on('close', (code) => {
       this.#child = undefined;
       this.#name = '';
-      this.#opts.onEvent({ name, code: code ?? 1 });
+      const finish = () => this.#opts.onEvent({ name, code: code ?? 1 });
+      const dir = this.#opts.reportsDir;
+      // 自分の報告は自分で置く（report / doctor / selftest）。ここで二重に置かない。
+      if (!dir || name === 'report' || name === 'doctor' || name === 'selftest') { finish(); return; }
+      const at = join(dir, `${name}-${stamp()}.txt`);
+      const body = `${kept.join('')}${keptBytes > KEEP_BYTES ? '\n（長すぎるので途中までです）\n' : ''}\n— 終了コード ${code ?? 1} —\n`;
+      void this.#save(name, at, body).catch(() => undefined).finally(finish);
     });
     return undefined;
+  }
+
+  /** 出力を置く。置けたか置けなかったかを、流れに言う。 */
+  async #save(name: string, at: string, body: string): Promise<void> {
+    try {
+      await mkdir(dirname(at), { recursive: true });
+      await writeFile(at, body, 'utf8');
+      this.#opts.onEvent({ name, text: `\n残しました: ${at}\n` });
+    } catch (e) {
+      this.#opts.onEvent({ name, text: `\n（残せませんでした: ${(e as Error).message}）\n` });
+    }
   }
 
   /** 止める。回していなければ何もしない。 */
