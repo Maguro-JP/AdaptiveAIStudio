@@ -1118,6 +1118,13 @@ export class Session {
               modelUsed = ev.to;
               yield { type: 'fallback', from: ev.from, to: ev.to, reason: ev.reason };
               break;
+            case 'retry':
+              // 流れと記録（ui.log）に残す。落ちるまでの秒数の内訳がここで分かる。
+              yield {
+                type: 'log', level: 'warn',
+                text: `やり直します（${ev.attempt + 1} 回目、${Math.round(ev.elapsedMs / 1000)} 秒経過）: ${ev.modelId}`,
+              };
+              break;
             case 'finished':
               finishedReason = ev.reason;
               yield { type: 'finished', reason: ev.reason, detail: ev.detail };

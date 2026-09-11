@@ -26,6 +26,8 @@ export type AgentEvent =
   | { type: 'toolEnd'; call: ToolCall; result: string; isError: boolean }
   | { type: 'turn'; index: number; modelId?: string }
   | { type: 'fallback'; from: string; to: string; reason: string }
+  /** 同じモデルにやり直した。黙ってやり直すと、落ちるまでの秒数の内訳が追えない。 */
+  | { type: 'retry'; attempt: number; modelId: string; elapsedMs: number }
   | { type: 'finished'; reason: 'completed' | 'maxTurns' | 'noProgress' | 'aborted' | 'failed'; detail?: string };
 
 export interface AgentOptions {
@@ -121,6 +123,10 @@ export class Agent {
       const fitted = fitToWindow(history, budget, this.#opts.count);
       if (fitted.trimmed) yield { type: 'trimmed', dropped: fitted.dropped };
 
+      // 落ちたときに「何秒目で、何回目か」を言えるように。
+      // 337 秒で落ちたと言われても、内訳が無いと切り分けられない。
+      const began = Date.now();
+      const elapsedSec = () => Math.round((Date.now() - began) / 1000);
       for await (const ev of this.#orchestrator.run(
         {
           candidates: this.#opts.candidates,
@@ -149,8 +155,11 @@ export class Agent {
         }
         else if (ev.type === 'toolCall') calls.push(ev.call);
         else if (ev.type === 'fallback') yield { type: 'fallback', from: ev.from, to: ev.to, reason: ev.reason };
+        else if (ev.type === 'attempt' && ev.attempt > 0) {
+          yield { type: 'retry', attempt: ev.attempt, modelId: ev.modelId, elapsedMs: Date.now() - began };
+        }
         else if (ev.type === 'done') modelId = ev.modelId;
-        else if (ev.type === 'failed') failure = `${ev.error.kind}: ${ev.error.message}`;
+        else if (ev.type === 'failed') failure = `${ev.error.kind}: ${ev.error.message}（${elapsedSec()} 秒）`;
       }
 
       // せき止めた分の始末。呼び出しが拾えたなら道具として扱い、
