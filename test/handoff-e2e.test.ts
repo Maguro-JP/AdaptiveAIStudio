@@ -18,6 +18,11 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from './tmp.ts';
 
+// git の無い機械（配った形の Windows）では、このテストは飛ばす。git を使う機能そのものが無いので。
+import { spawnSync as __spawnSync } from 'node:child_process';
+const GIT_OK = __spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
+const onlyWithGit = { skip: GIT_OK ? false : 'この機械には git が無い' };
+
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const git = (args: string[], cwd: string): void => {
@@ -68,7 +73,7 @@ async function twoMachines(): Promise<{ origin: string; cloud: string; local: st
 }
 
 describe('片方で書いて、もう片方で受け取る', () => {
-  test('**書いたものが、そのまま渡る**', async () => {
+  test('**書いたものが、そのまま渡る**', onlyWithGit, async () => {
     const { cloud, local } = await twoMachines();
     await writeFile(join(cloud, 'あたらしい.txt'), 'クラウドで書いた\n', 'utf8');
 
@@ -81,7 +86,7 @@ describe('片方で書いて、もう片方で受け取る', () => {
     assert.equal(await readFile(join(local, 'あたらしい.txt'), 'utf8'), 'クラウドで書いた\n');
   });
 
-  test('**ブランチの名前を、二重にしない**', async () => {
+  test('**ブランチの名前を、二重にしない**', onlyWithGit, async () => {
     // `wip/wip/cloud` になっていた。取り込みがその名前で落ちる。
     const { cloud, local } = await twoMachines();
     await writeFile(join(cloud, 'x.txt'), 'x\n', 'utf8');
@@ -91,14 +96,14 @@ describe('片方で書いて、もう片方で受け取る', () => {
     assert.doesNotMatch(listed.out, /wip\/wip/, `名前が二重になっている: ${listed.out}`);
   });
 
-  test('渡すものが無ければ、何もしない（対）', async () => {
+  test('渡すものが無ければ、何もしない（対）', onlyWithGit, async () => {
     const { cloud } = await twoMachines();
     const sent = run(cloud, 'cloud');
     assert.equal(sent.code, 0, sent.out);
     assert.match(sent.out, /渡すものがありません/);
   });
 
-  test('**書きかけの上には、取り込ませない**', async () => {
+  test('**書きかけの上には、取り込ませない**', onlyWithGit, async () => {
     const { cloud, local } = await twoMachines();
     await writeFile(join(cloud, 'y.txt'), 'y\n', 'utf8');
     run(cloud, 'cloud');
@@ -109,7 +114,7 @@ describe('片方で書いて、もう片方で受け取る', () => {
     assert.match(took.out, /書きかけ/);
   });
 
-  test('**まだ押していないブランチでも、送れる**', async () => {
+  test('**まだ押していないブランチでも、送れる**', onlyWithGit, async () => {
     /*
      * `origin/<ブランチ>` がまだ無いとき、数を数える所で落ちていた。
      * 手元でブランチを切って作業する形（`git checkout -b`）では普通に起きる。
@@ -128,7 +133,7 @@ describe('片方で書いて、もう片方で受け取る', () => {
     assert.equal(await readFile(join(local, 'z.txt'), 'utf8'), 'z\n');
   });
 
-  test('**いま居るブランチに、コミットを作らない**', async () => {
+  test('**いま居るブランチに、コミットを作らない**', onlyWithGit, async () => {
     /*
      * ここは `git add -A && git commit` していた。main に居れば main に
      * 「確かめていません」というコミットが載る。**実際に載せて push した**
@@ -157,14 +162,14 @@ describe('片方で書いて、もう片方で受け取る', () => {
     assert.equal(await readFile(join(local, 'まだ途中.txt'), 'utf8'), '書きかけ\n');
   });
 
-  test('渡されていなければ、そう言う', async () => {
+  test('渡されていなければ、そう言う', onlyWithGit, async () => {
     const { local } = await twoMachines();
     const took = run(local, 'local', ['--take']);
     assert.equal(took.code, 1);
     assert.match(took.out, /渡されているものがありません/);
   });
 
-  test('ぶつかったら、次の一手を言う（スタックを出さない）', async () => {
+  test('ぶつかったら、次の一手を言う（スタックを出さない）', onlyWithGit, async () => {
     const { cloud, local } = await twoMachines();
     // 両方で同じファイルの同じ所を触る。
     await writeFile(join(cloud, 'はじめ.txt'), 'クラウドの言い分\n', 'utf8');

@@ -10,6 +10,15 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
+
+/** リンクを作れない機械（Windows の一般権限）では、そのテストは飛ばす。 */
+async function canLink(): Promise<boolean> {
+  const d = await tempDir('aas-files-link-');
+  await writeFile(join(d, 'a'), 'x');
+  try { await symlink(join(d, 'a'), join(d, 'b')); return true; } catch { return false; }
+}
+const linkable = await canLink();
+const onlyWithLinks = { skip: linkable ? false : 'この機械ではリンクを作れない' };
 import { listDir, insideRoot, MAX_ENTRIES } from '../src/ui/files.ts';
 
 /** 作業場を1つ作る。 */
@@ -51,7 +60,7 @@ describe('作業場の一覧', () => {
     }
   });
 
-  test('リンクで外へ出る道も止める', async () => {
+  test('リンクで外へ出る道も止める', onlyWithLinks, async () => {
     // 文字の上では中に見えるが、辿ると外。実体を解いてから比べる。
     const root = await workRoot();
     const outside = await tempDir('aas-outside-');
@@ -61,7 +70,7 @@ describe('作業場の一覧', () => {
     await assert.rejects(listDir(root, 'link'), /作業場の外/);
   });
 
-  test('中のリンクは通す（対）', async () => {
+  test('中のリンクは通す（対）', onlyWithLinks, async () => {
     // 何でも止めるのでは、作業場の中の普通の作りが使えなくなる。
     const root = await workRoot();
     await symlink(join(root, 'src'), join(root, 'src-link'));

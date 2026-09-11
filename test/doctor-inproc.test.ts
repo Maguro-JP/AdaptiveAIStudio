@@ -22,7 +22,8 @@ async function runDoctor(env: Record<string, string>): Promise<string> {
   const out = await run(process.execPath, ['--no-warnings', at], {
     // 報告をプログラムの隣に撒かない（実際に撒いて、利用者に送られてきた）。
     env: { ...process.env, AAS_REPORT_DIR: join(tmpdir(), 'aas-doc-reports'), ...env, NO_COLOR: '1' },
-    timeout: 120_000,
+    // CPU だけの Windows では、読むものの確かめだけで 60 秒を超えた（実測）。
+    timeout: 300_000,
   }).catch((e: { stdout?: string; stderr?: string }) => e);
   // 未了があると終了コードが立つ。中身は読めるので、そのまま使う。
   // eslint-disable-next-line no-control-regex
@@ -175,7 +176,7 @@ describe('外の道具（MCP）の支度を、doctor で見る', () => {
     const { home, models, config } = await scratch();
     await writeFile(config, JSON.stringify({
       runtime: { kind: 'inproc', modelsDir: models },
-      mcp: { servers: { github: { command: 'npx', args: ['-y', 'x'], envFrom: { GITHUB_PERSONAL_ACCESS_TOKEN: 'AAS_TEST_TOKEN' } } } },
+      mcp: { servers: { github: { command: process.execPath, args: ['-e', '0'], envFrom: { GITHUB_PERSONAL_ACCESS_TOKEN: 'AAS_TEST_TOKEN' } } } },
     }));
     const missing = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     assert.match(missing, /外の道具 \(github\)/);
@@ -190,7 +191,7 @@ describe('外の道具（MCP）の支度を、doctor で見る', () => {
     await writeFile(join(home, '.env'), 'AAS_TEST_TOKEN2=ghp_FROM_FILE\n');
     await writeFile(config, JSON.stringify({
       runtime: { kind: 'inproc', modelsDir: models },
-      mcp: { servers: { github: { command: 'npx', envFrom: { GITHUB_PERSONAL_ACCESS_TOKEN: 'AAS_TEST_TOKEN2' } } } },
+      mcp: { servers: { github: { command: process.execPath, envFrom: { GITHUB_PERSONAL_ACCESS_TOKEN: 'AAS_TEST_TOKEN2' } } } },
     }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     assert.match(text, /合言葉 AAS_TEST_TOKEN2 あり/);

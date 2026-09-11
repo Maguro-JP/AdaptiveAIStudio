@@ -303,14 +303,16 @@ describe('暇なときの一回分', () => {
 });
 
 describe('記憶に載らない GGUF', () => {
-  test('送る前に止めて、理由を返す', async () => {
+  test('送る前に止めて、理由を返す', async (t) => {
     const { tempDir: td } = await import('./tmp.ts');
     const { open } = await import('node:fs/promises');
     const { join: j } = await import('node:path');
     const models = await td('aas-huge-');
     // 中身の無い（疎な）1TB。場所は食わない。大きさだけが本物。
     const fh = await open(j(models, 'huge.gguf'), 'w');
-    await fh.truncate(1024 ** 4);
+    // 疎なファイルを作れないフォルダ（OneDrive の同期フォルダなど）では ENOSPC で落ちる。
+    // そこではこのテストは飛ばす（大きさの話であって、フォルダの話ではない）。
+    try { await fh.truncate(1024 ** 4); } catch (e) { await fh.close(); t.skip(`疎なファイルを作れない: ${(e as Error).message}`); return; }
     await fh.close();
     const s = new UiServer({
       config: { ...DEFAULT_CONFIG, runtime: { kind: 'inproc', modelsDir: models } } as typeof DEFAULT_CONFIG,
@@ -641,7 +643,17 @@ describe('開いた時点で、使えるかを言う', () => {
    * 返っていた。開いた時点で訊けるようにする。**読み込みは始めない。**
    */
   test('/api/ready が、話せない理由を返す', async () => {
-    const r = await get('/api/ready');
+    // **この機械のモデルを見ない。**既定のフォルダを見ていたので、GGUF を置いてある
+    // 機械（利用者の Windows）では「話せる」になって落ちた。空のフォルダで訊く。
+    const { tempDir: td } = await import('./tmp.ts');
+    const empty = await td('aas-ready-empty-');
+    const s = new UiServer({
+      config: { ...DEFAULT_CONFIG, runtime: { kind: 'inproc', modelsDir: empty } } as typeof DEFAULT_CONFIG,
+      port: 0,
+    });
+    const b = (await s.start()).replace(/\/$/, '');
+    const r = await fetch(`${b}/api/ready`).finally(() => undefined);
+    await s.stop();
     assert.equal(r.status, 200);
     const body = await json(r);
     assert.equal(typeof body.ready, 'boolean');

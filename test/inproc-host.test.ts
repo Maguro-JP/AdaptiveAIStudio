@@ -70,7 +70,8 @@ describe('別のプロセスで読む', () => {
       assert.equal(fell.length, 1, `落ちたと言っていない: ${said.join(' | ')}`);
       assert.ok(fell[0]!.includes('次の送信で読み直します'), fell[0]);
       // 殺された形（SIGKILL）は、記憶が尽きたときと同じ見え方。次の一手を添える。
-      assert.ok(fell[0]!.includes('記憶が尽きて'), `次の一手が無い: ${fell[0]}`);
+      // Windows は殺しても信号名が付かず終了コード 1 で終わる（実測）ので、そこでは見ない。
+      if (process.platform !== 'win32') assert.ok(fell[0]!.includes('記憶が尽きて'), `次の一手が無い: ${fell[0]}`);
       // 次の頼みで、別の子が立って読み直す。
       const got = await host.ensureLoaded('a.gguf');
       const pid2 = host.pid();

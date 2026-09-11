@@ -13,6 +13,11 @@ import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { checkUpdate, applyUpdate, describeUpdate } from '../src/core/update.ts';
 
+// git の無い機械（配った形の Windows）では、このテストは飛ばす。git を使う機能そのものが無いので。
+import { spawnSync as __spawnSync } from 'node:child_process';
+const GIT_OK = __spawnSync('git', ['--version'], { encoding: 'utf8' }).status === 0;
+const onlyWithGit = { skip: GIT_OK ? false : 'この機械には git が無い' };
+
 function git(args: string[], cwd: string): Promise<number> {
   return new Promise((resolve) => {
     const c = spawn('git', args, { cwd, stdio: 'ignore' });
@@ -54,7 +59,7 @@ async function pair() {
 }
 
 describe('更新', () => {
-  test('新しいものが無ければ、最新だと言う', async () => {
+  test('新しいものが無ければ、最新だと言う', onlyWithGit, async () => {
     const { root } = await pair();
     const s = await checkUpdate(root);
     assert.equal(s.behind, 0);
@@ -62,7 +67,7 @@ describe('更新', () => {
     assert.match(s.reason ?? '', /最新/);
   });
 
-  test('新しいものがあれば、件数と見出しを見せる', async () => {
+  test('新しいものがあれば、件数と見出しを見せる', onlyWithGit, async () => {
     const { root, advance } = await pair();
     await advance('二つ目の変更');
 
@@ -74,7 +79,7 @@ describe('更新', () => {
     assert.match(describeUpdate(s), /1件の変更があります/);
   });
 
-  test('取ってくると、実際に新しくなる', async () => {
+  test('取ってくると、実際に新しくなる', onlyWithGit, async () => {
     const { root, advance } = await pair();
     await advance('新しい中身');
 
@@ -91,7 +96,7 @@ describe('更新', () => {
     assert.equal((await checkUpdate(root)).behind, 0);
   });
 
-  test('未コミットの変更があるときは、取ってこない', async () => {
+  test('未コミットの変更があるときは、取ってこない', onlyWithGit, async () => {
     const { root, advance } = await pair();
     await advance('向こうの変更');
     await writeFile(join(root, 'a.txt'), '手元でいじった\n');
@@ -105,7 +110,7 @@ describe('更新', () => {
     assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), '手元でいじった\n', '手元の変更が失われた');
   });
 
-  test('こちらにしか無い変更があるときは、早送りしない', async () => {
+  test('こちらにしか無い変更があるときは、早送りしない', onlyWithGit, async () => {
     const { root, advance } = await pair();
     await advance('向こうの変更');
     await writeFile(join(root, 'b.txt'), 'こちらの変更\n');
@@ -118,7 +123,7 @@ describe('更新', () => {
     assert.equal((await applyUpdate(root)).ok, false);
   });
 
-  test('git 管理下でなければ、そう言って断る', async () => {
+  test('git 管理下でなければ、そう言って断る', onlyWithGit, async () => {
     const dir = await tempDir('aas-nogit-');
     await mkdir(join(dir, 'sub'), { recursive: true });
     const s = await checkUpdate(join(dir, 'sub'));
@@ -128,7 +133,7 @@ describe('更新', () => {
 });
 
 describe('bundle では、手で新しくする道を言う', () => {
-  test('portable なら、取ってくる先と data を残すことを言う', async () => {
+  test('portable なら、取ってくる先と data を残すことを言う', onlyWithGit, async () => {
     const { mkdir, writeFile } = await import('node:fs/promises');
     const { join } = await import('node:path');
     const { tempDir } = await import('./tmp.ts');
@@ -143,7 +148,7 @@ describe('bundle では、手で新しくする道を言う', () => {
     assert.match(s.reason ?? '', /data/);
   });
 
-  test('**放っておくほど古くなるタグを指さない**', async () => {
+  test('**放っておくほど古くなるタグを指さない**', onlyWithGit, async () => {
     /*
      * `releases/tag/portable` を指していた。このタグはタグを付けずに手で組んだ
      * ときにしか差し替わらない（タグを付けた回は、その版の方へ公開される）。
@@ -156,7 +161,7 @@ describe('bundle では、手で新しくする道を言う', () => {
     assert.match(RELEASES_URL, /\/releases\/latest$/);
   });
 
-  test('**.exe を置けない場所むけが、どれかを言う**', async () => {
+  test('**.exe を置けない場所むけが、どれかを言う**', onlyWithGit, async () => {
     // 会社のクラウドドライブは .exe を名前で落とす。noexe の方を取らないと、
     // 展開した時点で Node が消える。取ってくる案内で言わないと気づけない。
     const { byHandUpdate } = await import('../src/core/update.ts');
@@ -174,7 +179,7 @@ describe('bundle では、手で新しくする道を言う', () => {
    * `data\` がフォルダの中**なので、そのまま真似ると新しい方が空で立ち上がる。
    * だから `data\` を移す一手が要る。ここが抜けると、設定と記録が消えたように見える。
    */
-  test('**戻せる形で案内する（別のフォルダ・古いのを残す・data を移す）**', async () => {
+  test('**戻せる形で案内する（別のフォルダ・古いのを残す・data を移す）**', onlyWithGit, async () => {
     const { mkdir, writeFile } = await import('node:fs/promises');
     const { join } = await import('node:path');
     const { tempDir } = await import('./tmp.ts');
@@ -195,7 +200,7 @@ describe('bundle では、手で新しくする道を言う', () => {
    * 版を控えないと「入れ替えたつもりで古いまま動いていた」に気づけない
    * （ここで実際にやった）。控えろと言うだけでなく、その場に出す。
    */
-  test('**いまの版を、その場に出す**', async () => {
+  test('**いまの版を、その場に出す**', onlyWithGit, async () => {
     const { mkdir, writeFile } = await import('node:fs/promises');
     const { join } = await import('node:path');
     const { tempDir } = await import('./tmp.ts');
@@ -211,7 +216,7 @@ describe('bundle では、手で新しくする道を言う', () => {
     assert.match(byHandUpdate(product), /VERSION/);
   });
 
-  test('portable でなければ、git clone の話のまま（対）', async () => {
+  test('portable でなければ、git clone の話のまま（対）', onlyWithGit, async () => {
     const { tempDir } = await import('./tmp.ts');
     const { checkUpdate, RELEASES_URL } = await import('../src/core/update.ts');
     const s = await checkUpdate(await tempDir('aas-upd-plain-'));

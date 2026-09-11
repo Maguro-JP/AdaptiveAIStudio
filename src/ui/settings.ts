@@ -115,6 +115,14 @@ export async function ensureDefaultModelsDir(dir: string): Promise<DirState> {
     await mkdir(dir, { recursive: true });
     return 'OK';
   } catch {
+    // ファイルの下にフォルダは作れない。linux は ENOTDIR で分かるが、Windows は
+    // ENOENT で返すので「無い」に見える。親を遡って、ファイルに当たれば NOT_A_DIR。
+    let at = dirname(dir);
+    for (let i = 0; i < 64 && at !== dirname(at); i++) {
+      const st = await stat(at).catch(() => undefined);
+      if (st) { if (!st.isDirectory()) return 'NOT_A_DIR'; break; }
+      at = dirname(at);
+    }
     return inspectModelsDir(dir);
   }
 }
