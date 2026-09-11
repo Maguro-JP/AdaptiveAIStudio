@@ -21,7 +21,6 @@ export const TASKS: Record<string, string> = {
   selftest: 'この機械で確かめる',
   clean: '溜まったものを片づける',
   models: '手元のモデルを見る',
-  report: '困ったときの報告を一つにまとめる',
 };
 
 /** 出力を残す上限。テストは数千行になるが、それでも数 MB には届かない。 */
@@ -134,8 +133,8 @@ export class TaskRunner {
       this.#name = '';
       const finish = () => this.#opts.onEvent({ name, code: code ?? 1 });
       const dir = this.#opts.reportsDir;
-      // 自分の報告は自分で置く（report / doctor / selftest）。ここで二重に置かない。
-      if (!dir || name === 'report' || name === 'doctor' || name === 'selftest') { finish(); return; }
+      // 自分の報告は自分で置く（doctor / selftest）。ここで二重に置かない。
+      if (!dir || name === 'doctor' || name === 'selftest') { finish(); return; }
       const at = join(dir, `${name}-${stamp()}.txt`);
       const body = `${kept.join('')}${keptBytes > KEEP_BYTES ? '\n（長すぎるので途中までです）\n' : ''}\n— 終了コード ${code ?? 1} —\n`;
       void this.#save(name, at, body).catch(() => undefined).finally(finish);

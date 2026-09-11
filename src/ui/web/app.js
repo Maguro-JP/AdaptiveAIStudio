@@ -649,6 +649,7 @@ function listen() {
       box.hidden = e.waiting === 0;
       box.textContent = `順番待ち ${e.waiting} 件`;
     }
+    if (e.type === 'report') { void showReport(); return; }
     if (e.type === 'stateChanged') { void refreshState(); void loadFiles(filesAt); void tellIfNotReady(); ctx.forgetCommands?.(); return; }
     if (e.type === 'themeChanged') return void loadTheme();
     if (e.type === 'thinkEvent') {
@@ -1444,6 +1445,7 @@ async function commands() {
   // 設定は設定で。**コマンドの一覧に、設定の項目を混ぜない。**
   // 見た目や配置の選択肢を並べたら、コマンドが埋もれて探せなくなった。
   add('設定を開く', '', () => openSettings());
+  add('サポート用レポートを作る', '困ったときに送る一つのファイル', async () => { await openSettings('info'); $('makeReport').click(); });
   add('更新を確認する', '', () => checkForUpdate());
   return list;
 }
@@ -1791,10 +1793,43 @@ async function loadChecks() {
  */
 function fillSection(name) {
   if (name === 'check') return void loadChecks();
-  if (name === 'info') return void loadInfo();
+  if (name === 'info') { void loadInfo(); void showReport(); return; }
   if (name === 'model') { void loadCfg(); void loadCatalog(); return; }
   if (name === 'mcp') { void loadMcpCatalog(); void loadMcp(); }
 }
+
+/* ---------- サポート用レポート ----------
+ *
+ * 押した所に結果を出す。出来るまで 1〜2 分かかるので、本体の合図（report）と
+ * 取りに行く（GET /api/report）の両方で追う。合図を取りこぼしても止まらない。
+ */
+async function showReport() {
+  const r = await fetch('/api/report').then((x) => x.json()).catch(() => null);
+  const rep = r?.report;
+  const status = $('reportStatus');
+  const path = $('reportPath');
+  $('makeReport').disabled = rep?.state === 'running';
+  if (!rep) { status.textContent = ''; path.hidden = true; return; }
+  status.textContent = rep.message;
+  status.className = rep.state === 'failed' ? 'bad' : rep.state === 'done' ? 'good' : 'dim';
+  path.hidden = rep.state !== 'done';
+  if (rep.state === 'done') path.textContent = rep.path;
+  return rep.state;
+}
+
+let reportWatch = null;
+async function makeReport() {
+  const r = await ask('/api/report', { method: 'POST' }, 'まとめを始められませんでした');
+  if (!r) return;
+  if (!r.ok) return void showCrash('サポート用レポート', r.body.error ?? '', 'warn');
+  await showReport();
+  clearInterval(reportWatch);
+  reportWatch = setInterval(async () => {
+    const state = await showReport();
+    if (state !== 'running') clearInterval(reportWatch);
+  }, 2000);
+}
+$('makeReport').onclick = () => void makeReport();
 
 async function openSettings(section = 'info') {
   showSection(section);

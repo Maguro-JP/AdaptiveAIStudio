@@ -1356,7 +1356,7 @@ export const PANELS = {
         ? `✓ 終わりました: ${runningName}（${sec} 秒）`
         : `✗ 終了コード ${code}: ${runningName}（${sec} 秒）`;
     };
-    const hint = el('div', 'dim', '困ったときは「困ったときの報告を一つにまとめる」を押して、出来たファイルを一つ送ってください。');
+    const hint = el('div', 'dim', '困ったときは ⚙ → 情報 の「サポート用レポートを作る」を押して、出来たファイルを一つ送ってください。');
     body.append(bar, hint, status, out);
 
     ctx.on('task', (e) => {

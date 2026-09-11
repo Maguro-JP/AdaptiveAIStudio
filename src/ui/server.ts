@@ -51,6 +51,8 @@ import { collectState } from './state.ts';
 import { Attachments, MAX_BYTES } from './attachments.ts';
 import { expandMentions, mentionBudget } from '../agent/mention.ts';
 import { expandCommand, listCommands } from '../agent/commands.ts';
+import { buildReport } from '../cli/report.ts';
+import { saveReport } from '../cli/report-file.ts';
 import { PreviewServer } from './preview.ts';
 import { configPath, wireInProc, type AasConfig } from '../config.ts';
 import { TaskRunner } from './tasks.ts';
@@ -117,6 +119,8 @@ export interface UiServerOptions {
    * 誰も通していなかった。**
    */
   modelFetch?: typeof fetch;
+  /** 困ったときの報告の中身を作る係のモック。試験で使う（本物は doctor を回して分単位）。 */
+  buildReport?: () => Promise<string>;
   config: AasConfig;
   port?: number;
   host?: string;
@@ -125,6 +129,7 @@ export interface UiServerOptions {
 /** 画面へ流す出来事。CLI 側から呼んで、動いているものを見せる。 */
 export type UiEvent =
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string }
+  | { type: 'report'; state: 'running' | 'done' | 'failed' }
   | { type: 'plan'; items: unknown[] }
   | { type: 'stateChanged' }
   | { type: 'themeChanged' }
@@ -1200,6 +1205,16 @@ export class UiServer {
       // 返事を出し切ってから止める。先に止めると、押した側に何も返らない。
       setTimeout(() => this.#opts.onRestart?.(), 200).unref?.();
       return;
+    }
+
+    if (path === '/api/report' && req.method === 'GET') {
+      return send(res, 200, { report: this.#report ?? null });
+    }
+
+    if (path === '/api/report' && req.method === 'POST') {
+      if (this.#report?.state === 'running') return send(res, 409, { error: 'いま、まとめています' });
+      this.#bg(this.#makeReport(), '報告のまとめが落ちました');
+      return send(res, 202, { started: true });
     }
 
     if (path === '/api/commands' && req.method === 'GET') {
@@ -2612,6 +2627,35 @@ export class UiServer {
    * 見えない。**押しても永久に何も起きないように見える。**
    */
   #fetching: { id: string; state: 'running' | 'done' | 'failed'; message: string } | undefined;
+
+  /**
+   * 困ったときの報告。**押した所に結果を出すために持つ。**
+   *
+   * 診断の一覧に混ぜていたが、あれは点検を回す所で、報告を作る所ではない。
+   * ⚙ の「情報」に一つのボタンとして置き、出来たファイルの場所をそこに出す。
+   */
+  #report: { state: 'running' | 'done' | 'failed'; path?: string; message: string; began: number } | undefined;
+
+  async #makeReport(): Promise<void> {
+    const began = Date.now();
+    this.#report = { state: 'running', message: 'まとめています（doctor を回すので 1〜2 分かかります）', began };
+    this.broadcast({ type: 'report', state: 'running' });
+    try {
+      const root = join(dirname(WEB_DIR), '..', '..');
+      const body = await (this.#opts.buildReport ?? (() => buildReport({
+        root, state: stateDir(), home: aasHome(),
+        models: this.#opts.config.runtime?.modelsDir ?? modelsDir(),
+      })))();
+      const saved = await saveReport('report', body, [join(stateDir(), 'reports'), root]);
+      const sec = Math.round((Date.now() - began) / 1000);
+      this.#report = saved.path
+        ? { state: 'done', path: saved.path, message: `出来ました（${sec} 秒）。このファイルを一つ送ってください。`, began }
+        : { state: 'failed', message: `ファイルに残せませんでした（${saved.why}）`, began };
+    } catch (e) {
+      this.#report = { state: 'failed', message: `まとめられませんでした: ${e instanceof Error ? e.message : String(e)}`, began };
+    }
+    this.broadcast({ type: 'report', state: this.#report.state });
+  }
 
   async #fetchModel(session: Session, id: string): Promise<void> {
     const runtime = await this.#localRuntime();
