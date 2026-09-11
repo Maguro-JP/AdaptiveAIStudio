@@ -454,6 +454,11 @@ npm run chat
 | `/remember <文>` | 覚えさせる（`決定: 〜` で方針として） |
 | `/panel [対象]` | 気質の違う担当に同時に見てもらう |
 | `/rules` / `/audit` / `/harness` | 規則の一覧・発動回数・効き具合 |
+
+画面（`npm run ui`）では、`/plan` に加えて `/fix` `/review` `/test` `/explain` `/refactor` と、
+作業場の `.claude/skills/<name>/SKILL.md` を `/名前` で呼べる（入力欄の先頭で `/` を打つと候補が出る）。
+困ったときは `⚙ 設定 → 情報` の「サポート用レポートを作る」で出来た一つのファイルを送る。
+詳しくは [docs/UI.md](docs/UI.md)。
 | `/system <文>` | システムプロンプト差し替え |
 | `/exit` | 終了 |
 
