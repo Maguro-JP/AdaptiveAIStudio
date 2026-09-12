@@ -38,6 +38,50 @@ const BPE = process.argv.includes('--bpe');
  */
 const TEMPLATE = process.argv.includes('--chat-template');
 
+/**
+ * 考えごと（<think>）をする模型を組むか。
+ *
+ * **ここが無いと、実機で 18 分止まる形を手元で一度も再現できない。**
+ * モックと素の tiny.gguf は考えごとをしないので、Qwen3 が答える前に
+ * <think> を延々書いて本文 0 で「完了」になる形（0.11.2 が直した形）を、
+ * 配る前に確かめられなかった。
+ *
+ * 乱数の重みでは、モデルが自分から <think> を出すことは仕込めない。
+ * そこで chat_template で **生成の頭から考えごとに入れる**（下の
+ * THINK_TEMPLATE。助手の番を <think> で開けておく）。ライブラリはこれを
+ * openOnResponseStart として読むので、出てくるトークンは全部考えごとに入る。
+ *
+ * **本物の Qwen3 とは、ここだけ違う。**本物はモデルが自分で <think> を
+ * 出す。この模型は template で頭から開ける。**予算（thoughtTokens）の
+ * 効き方は同じ経路**（LlamaChat の handleBudgetTriggers、segmentType 'thought'）
+ * なので、「考えごとで本文が空になる／予算 0 で答えが出る」という
+ * 壊れ方と直し方は、ここで確かめられる。モデルが <think> を出すという
+ * 判断そのものは、ここでは再現していない。
+ *
+ * SPM のときだけ。特殊トークンを 1 トークンで引けるよう vocab に足す。
+ */
+const THINKS = process.argv.includes('--thinks');
+
+/**
+ * 考えごとの模型に足す特殊トークン。
+ * chat_template の適用でこれらが 1 トークンに引けないと、C++ 側で落ちる。
+ */
+const THINK_SPECIAL = ['<think>', '</think>', '<|im_start|>', '<|im_end|>', 'assistant', 'user', 'system'];
+
+/**
+ * 考えごとの模型の chat_template。
+ *
+ * 助手の番を `<think>\n` で開けておく（openOnResponseStart になる）。
+ * reasoning_content を持つ履歴は `<think>…</think>` で囲む。この二つが
+ * 揃っていないと、ライブラリは考えごとの型を抜き出せない。
+ */
+const THINK_TEMPLATE =
+  "{% for m in messages %}<|im_start|>{{ m['role'] }}\n"
+  + "{% if m['role']=='assistant' and m['reasoning_content'] is defined %}"
+  + "<think>\n{{ m['reasoning_content'] }}\n</think>\n\n{% endif %}"
+  + "{{ m['content'] }}<|im_end|>\n{% endfor %}"
+  + "{% if add_generation_prompt %}<|im_start|>assistant\n<think>\n{% endif %}";
+
 /** GPT-2 のバイト→字の写し。空白は Ġ、改行は Ċ になる、あれ。 */
 function byteToUnicode() {
   const bs = [];
@@ -72,6 +116,9 @@ if (BPE) {
   for (const t of ['\u2581', '\u2581t', 'he', '\u2581the', 'ab', 'abc', 'ef']) NAMES.push(t);
   for (let i = 0; i < 16; i += 1) NAMES.push(`t${i}`);
 }
+/** \u8003\u3048\u3054\u3068\u306e\u7279\u6b8a\u30c8\u30fc\u30af\u30f3\u306f\u3001SPM \u306e\u3068\u304d\u3060\u3051\u672b\u5c3e\u306b\u8db3\u3059\uff08BPE \u3067\u306f\u4f7f\u308f\u306a\u3044\uff09\u3002 */
+const specialStart = NAMES.length;
+if (THINKS && !BPE) for (const s of THINK_SPECIAL) NAMES.push(s);
 const VOCAB = NAMES.length;
 const parts = [];
 const u32 = (n) => { const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0); return b; };
@@ -85,7 +132,9 @@ const tokens = NAMES.map((n) => str(n));
 /** 0=通常 1=通常 2=未知 3=制御 6=バイト */
 const types = BPE
   ? NAMES.map(() => 1)
-  : NAMES.map((n, i) => (i < 3 ? 3 : /^<0x/.test(n) ? 6 : 1));
+  // 4 = USER_DEFINED。考えごとの特殊トークンは、これにしないと部分一致で
+  // 分解され、chat_template の適用で 1 トークンに引けずに落ちる。
+  : NAMES.map((n, i) => (i < 3 ? 3 : /^<0x/.test(n) ? 6 : i >= specialStart ? 4 : 1));
 /** SPM は点数で繋ぐ順を決める。**後ろほど高く**して、長いものを優先させる。 */
 const scores = NAMES.map((n, i) => (BPE ? 0 : i));
 
@@ -133,7 +182,10 @@ kv('llama.vocab_size', 4, u32(VOCAB));
 kv('llama.rope.freq_base', 6, f32(10000));
 kv('tokenizer.ggml.unknown_token_id', 4, u32(0));
 kv('tokenizer.ggml.padding_token_id', 4, u32(0));
-if (TEMPLATE) {
+if (THINKS) {
+  // 考えごとをする模型。助手の番を <think> で開けておく。
+  kv('tokenizer.chat_template', 8, str(THINK_TEMPLATE));
+} else if (TEMPLATE) {
   // 本物（Qwen 等）と同じ形。role ごとに囲って、最後に助手の番を開ける。
   kv('tokenizer.chat_template', 8, str(
     "{% for m in messages %}<|im_start|>{{ m['role'] }}\n{{ m['content'] }}<|im_end|>\n{% endfor %}"

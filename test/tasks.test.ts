@@ -20,7 +20,9 @@ function fakeSpawn() {
       stdout: new EventEmitter(),
       stderr: new EventEmitter(),
       killed: false,
-      kill() { this.killed = true; },
+      // 本物は kill のあと close を出す（信号で終わると code は null）。
+      // ここで出さないと、止めたのに「まだ回している」ままに見える。
+      kill() { this.killed = true; (this as unknown as EventEmitter).emit('close', null); },
     });
     children.push(child);
     return child;
@@ -55,12 +57,20 @@ describe('点検を回す係', () => {
     assert.match(c2[0]!.args[1]!, /src[\\/]cli[\\/]doctor\.ts$/);
   });
 
-  test('一度に一つだけ', () => {
+  test('同じものは二重に回さない。別のものは並べて回す', () => {
+    // ここまでは「一度に一つだけ」で、doctor を回している間は test も回せなかった。
+    // 診断は CPU を分け合うが、片方が終わるまで待たされないほうがよい。
+    // 同じ名前は二重に回さない（出力が混ざるだけ）。別の名前は並べる。
     const said: TaskEvent[] = [];
     const { runner } = make(said);
-    runner.start('doctor');
-    assert.equal(runner.running, 'doctor');
-    assert.match(runner.start('test') ?? '', /doctor を回しています/);
+    assert.equal(runner.start('doctor'), undefined);
+    assert.deepEqual(runner.running, ['doctor']);
+    // 同じものは断る。
+    assert.match(runner.start('doctor') ?? '', /既に回しています/);
+    // 別のものは並ぶ。
+    assert.equal(runner.start('test'), undefined, '別の点検を並べられない');
+    assert.deepEqual(runner.running.sort(), ['doctor', 'test']);
+    assert.equal(runner.isRunning('test'), true);
   });
 
   test('出てきたものを流し、終わりを言う', () => {
@@ -73,7 +83,19 @@ describe('点検を回す係', () => {
     // 端末むけの色は落として渡す。画面に [32m が並ぶと読めない。
     assert.ok(said.some((e) => e.text === ' ok  Node\n'), JSON.stringify(said));
     assert.deepEqual(said.at(-1), { name: 'doctor', code: 0 });
-    assert.equal(runner.running, undefined, '終わったのに回しているままになっている');
+    assert.deepEqual(runner.running, [], '終わったのに回しているままになっている');
+  });
+
+  test('片方が終わっても、もう片方は回り続ける', () => {
+    // 並べたとき、一本の終わりで他を巻き込まない。
+    const said: TaskEvent[] = [];
+    const { runner, children } = make(said);
+    runner.start('doctor');
+    runner.start('test');
+    // doctor（children[0]）だけ終わる。
+    children[0]!.emit('close', 0);
+    assert.deepEqual(runner.running, ['test'], 'doctor の終わりで test まで消えた');
+    assert.equal(runner.isRunning('test'), true);
   });
 
   test('終了コードを、そのまま伝える', () => {
@@ -87,10 +109,15 @@ describe('点検を回す係', () => {
   test('止めたときは、止めたものの名前を返す', () => {
     const { runner } = make();
     runner.start('doctor');
-    assert.equal(runner.stop(), 'doctor');
+    runner.start('test');
+    // 名前を渡せば、それだけ止める。
+    assert.deepEqual(runner.stop('doctor'), ['doctor']);
+    assert.deepEqual(runner.running, ['test'], 'doctor だけ止めるはずが test まで止まった');
+    // 渡さなければ、残り全部。
+    assert.deepEqual(runner.stop(), ['test']);
     // 回していなければ、何もしない。
     const { runner: r2 } = make();
-    assert.equal(r2.stop(), undefined);
+    assert.deepEqual(r2.stop(), []);
   });
 
   test('**出力をファイルに残す**（画面は捨てるし、閉じれば消える）', async () => {

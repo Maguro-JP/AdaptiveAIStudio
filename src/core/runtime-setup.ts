@@ -45,6 +45,8 @@ export async function buildRuntime(
         modelsDir: rc.modelsDir ?? modelsDir(),
         ...(rc.basePort !== undefined ? { port: rc.basePort } : {}),
         ...(rc.contextSize !== undefined ? { contextSize: rc.contextSize } : {}),
+        // 並列に持つ本数。設定 runtime.parallel。無ければ inproc の既定に任せる。
+        ...(rc.parallel !== undefined ? { sequences: rc.parallel } : {}),
         ...(onLog ? { onLog } : {}),
       });
     }
@@ -54,6 +56,7 @@ export async function buildRuntime(
       // 向くのに、待つ側は既定の口に立ち、**永久に繋がらない**。
       ...(rc.basePort !== undefined ? { port: rc.basePort } : {}),
       ...(rc.contextSize !== undefined ? { contextSize: rc.contextSize } : {}),
+      ...(rc.parallel !== undefined ? { sequences: rc.parallel } : {}),
       ...(onLog ? { onLog } : {}),
       ...(hooks.inprocLoad ? { load: hooks.inprocLoad } : {}),
     });

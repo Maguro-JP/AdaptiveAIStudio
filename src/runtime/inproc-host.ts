@@ -26,6 +26,7 @@ if (!modelsDir) {
 }
 const port = Number(arg('--port') ?? '0');
 const contextSize = arg('--context-size');
+const sequences = arg('--sequences');
 const lib = arg('--lib');
 
 const say = (line: Record<string, unknown>) => { process.stdout.write(`${JSON.stringify(line)}\n`); };
@@ -44,6 +45,7 @@ const runtime = new InProcRuntime({
   modelsDir,
   port: Number.isFinite(port) ? port : 0,
   ...(contextSize ? { contextSize: Number(contextSize) } : {}),
+  ...(sequences ? { sequences: Number(sequences) } : {}),
   ...(lib ? { load: () => import(pathToFileURL(lib).href).then((m) => (m as { load?: () => Promise<unknown> }).load?.() ?? m) } : {}),
   control: true,
   onLog: (line) => say({ log: line }),

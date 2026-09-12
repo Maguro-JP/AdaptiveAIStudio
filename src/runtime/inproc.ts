@@ -104,6 +104,18 @@ export interface InProcOptions {
    */
   load?: () => Promise<unknown>;
   /**
+   * 並列に持つ sequence の本数。会話ごとに一本使うので、これが
+   * 「同時に何人に答えられるか」になる。既定 `DEFAULT_SEQUENCES`。
+   *
+   * **速くはならない。止まらなくなるだけ。**CPU は分け合うので、
+   * 二人に同時に答えても一人あたりは遅くなる。狙いは「一人が長く考えて
+   * いる間、もう一人が待たされない」こと。
+   *
+   * KV は本数ぶん要る。コンテキストウィンドウ × 本数 が記憶に収まるよう、`fitWindow` が
+   * 数えてコンテキストウィンドウを狭める（諸元が読めないときは 1 本に留める）。
+   */
+  sequences?: number;
+  /**
    * 別のプロセス（inproc-host）で動かすときの、操作の口を開けるか。
    * `/control/*` で一覧・読み込み・降ろす・止めるを受ける。
    * 画面のプロセスは、これ越しにしかモデルに触らない。
@@ -240,40 +252,77 @@ export function fitWindow(opts: {
   floor?: number;
   /** 諸元が読めないときに、これ以上は広げない。 */
   unknownCap?: number;
-}): { window: number; why?: string } {
+  /**
+   * 並列に持つ sequence の本数（既定 1）。KV は本数ぶん要る。
+   * コンテキストウィンドウ × 本数 が記憶に収まるよう、まずコンテキストウィンドウを狭め、それでも足りなければ本数を減らす。
+   */
+  sequences?: number;
+}): { window: number; sequences: number; why?: string } {
   const want = Math.min(opts.trained, opts.max ?? MAX_WINDOW);
   const floor = opts.floor ?? 4096;
+  const wanted = Math.max(1, Math.floor(opts.sequences ?? 1));
   const { layers, embedding, heads } = opts;
-  if (!layers || !embedding || !heads) {
-    // KV の大きさを計算できない。**広げない。**
+  // 一トークンあたりの KV（バイト）。K と V、それぞれ 2 バイト（f16）。
+  // **諸元が欠けていても、0 でも、計算できない。**`head_count_kv` が
+  // 「無い（undefined）」なら heads で代えられるが、「0 として書いてある」
+  // （壊れた・読み違えた GGUF）なら代えない（`?? ` は 0 を素通しする）。
+  // embedding < heads でも headDim が 0 になる。どれも perToken を 0 にする。
+  const headDim = (layers && embedding && heads) ? Math.floor(embedding / heads) : 0;
+  const kvDim = headDim * (opts.kvHeads || heads || 0);
+  const perToken = 2 * (layers ?? 0) * kvDim * 2;
+  if (perToken <= 0) {
+    // **KV の大きさを計算できない。広げない。並列もしない。**
+    // 数えられないコンテキストウィンドウを N 倍にするのは、数えずに広げるのと同じ
+    // （壊れた GGUF で 32768 × 2 本を記憶の勘定なしに開き、機械が固まる）。
     const safe = Math.min(want, opts.unknownCap ?? SAFE_WINDOW);
-    if (safe >= want) return { window: want };
-    return {
-      window: safe,
-      why: 'このモデルの諸元（層数・head 数）が読めないので、記憶に載るかを'
-        + `計算できません。安全な ${safe} にしています。`
-        + '設定 → モデル で広げられます。',
-    };
+    const narrowed = safe < want;
+    const noParallel = wanted > 1;
+    if (!narrowed && !noParallel) return { window: want, sequences: 1 };
+    const why = [
+      narrowed
+        ? 'このモデルの諸元（層数・head 数）が読めないので、記憶に載るかを'
+          + `計算できません。安全な ${safe} にしています。`
+        : '',
+      noParallel
+        ? 'このモデルの諸元が読めないので、KV を数えられません。並列は 1 本にしています。'
+        : '',
+      '設定 → モデル で広げられます。',
+    ].filter(Boolean).join('');
+    return { window: safe, sequences: 1, why };
   }
-
-  const headDim = Math.floor(embedding / heads);
-  const kvDim = headDim * (opts.kvHeads ?? heads);
-  // K と V、それぞれ 2 バイト（f16）。
-  const perToken = 2 * layers * kvDim * 2;
-  if (perToken <= 0) return { window: want };
 
   // OS と、計算に使う分を残す。全部を当てにしない。
   const budget = opts.ramBytes * 0.7 - (opts.weightBytes ?? 0);
-  const allowed = Math.floor(budget / perToken);
-  if (allowed >= want) return { window: want };
-
-  const window = Math.max(floor, Math.min(want, allowed));
+  // 全 sequence ぶんで使えるトークンの総数。コンテキストウィンドウ × 本数 が、ここに収まる。
+  const maxTotal = Math.floor(budget / perToken);
   const gb = (n: number) => (n / 1024 ** 3).toFixed(1);
+
+  // コンテキストウィンドウ × 本数 が収まるなら、そのまま。
+  if (want * wanted <= maxTotal) return { window: want, sequences: wanted };
+
+  // 収まらない。**まずコンテキストウィンドウを狭める**（並列は保つ）。
+  const perLane = Math.floor(maxTotal / wanted);
+  if (perLane >= floor) {
+    return {
+      window: perLane,
+      sequences: wanted,
+      why: `コンテキストウィンドウを ${want} から ${perLane} に狭めました`
+        + `（この機械の記憶 ${gb(opts.ramBytes)}GB に、コンテキストウィンドウ × 並列 ${wanted} 本を収めるため）`,
+    };
+  }
+  // floor でも wanted 本は載らない。**並列を減らす。**
+  // **モデルのコンテキストウィンドウ（trained）を超えない。**floor は下限だが、trained が floor より
+  // 狭いモデル（2048〜4095）では、floor をそのまま返すと trained を超え、
+  // 記憶の勘定も超える。so want で最後に頭を抑える（`want` は trained 由来）。
+  const seq = Math.max(1, Math.floor(maxTotal / floor));
+  const window = Math.min(want, Math.max(floor, Math.floor(maxTotal / seq)));
   return {
     window,
+    sequences: seq,
     why: `窓を ${want} から ${window} に狭めました`
+      + (seq < wanted ? `。並列も ${wanted} 本から ${seq} 本に減らしました` : '')
       + `（この機械の記憶 ${gb(opts.ramBytes)}GB に対して、`
-      + `窓 ${want} は ${gb(want * perToken)}GB を使います）`,
+      + `コンテキストウィンドウ ${want} × 並列 ${wanted} 本は入りません）`,
   };
 }
 
@@ -300,6 +349,19 @@ export const MAX_WINDOW = 32_768;
  * **分からないときの振る舞いを、二通りにしない。**
  */
 export const SAFE_WINDOW = 8192;
+
+/**
+ * 並列に持つ sequence の既定の本数。
+ *
+ * **1 本だと、同時に一人にしか答えられない**（それが直したかった形）。
+ * 2 本にすると、一人が長く考えている間、もう一人の依頼が待たされない。
+ *
+ * ここを増やすほど、コンテキストウィンドウ（一会話が覚えていられる長さ）は狭くなる
+ * （KV は本数ぶん要り、記憶は決まっているため）。16GB・CPU の機械で
+ * いくつが良いかは実機で測る。設定 `runtime.parallel` で変えられる。
+ * **速さのための数ではない。**CPU は分け合うので、増やすと一人あたりは遅くなる。
+ */
+export const DEFAULT_SEQUENCES = 2;
 
 export class InProcRuntime implements LocalRuntime {
   readonly id = 'inproc';
@@ -417,8 +479,11 @@ export class InProcRuntime implements LocalRuntime {
     // **窓は、モデルが持っているぶんを使う。**
     // 8192 の決め打ちだったので、32k 使えるモデルでも 8k しか使えなかった。
     // 覚えや決まりを載せると、それだけで埋まる。切り詰める前に、窓を広げる。
-    const contextSize = await this.#windowFor(ref);
-    const context = await model.createContext({ contextSize });
+    //
+    // **並列に持つ本数（sequences）も、ここで決まる。**KV は本数ぶん要るので、
+    // コンテキストウィンドウ × 本数 が記憶に収まるよう #windowFor（fitWindow）が数えてある。
+    const { window: contextSize, sequences } = await this.#windowFor(ref);
+    const context = await model.createContext({ contextSize, sequences });
     /*
      * **直しは、渡した中身をそのまま書き戻すことが多い。**
      *
@@ -435,14 +500,25 @@ export class InProcRuntime implements LocalRuntime {
      * 無ければ無いで進む。**ただし黙らない（効いていないのに効いている
      * と思われると、遅い理由を別の所に探すことになる）。
      */
-    const predictor = lib.InputLookupTokenPredictor
-      ? new lib.InputLookupTokenPredictor()
-      : undefined;
-    if (!predictor) this.#opts.onLog?.('先読み（token predictor）が使えない版です。速さの工夫だけ効きません。');
-    const sequence = context.getSequence(predictor ? { tokenPredictor: predictor } : undefined);
-    const session = new lib.LlamaChatSession({ contextSequence: sequence }) as Held['session'];
-    const wrapper = session.chatWrapper?.wrapperName ?? '不明';
-    this.#opts.onLog?.(`読み込みました: ${ref}（道具の呼び方: ${wrapper}）`);
+    const hasPredictor = Boolean(lib.InputLookupTokenPredictor);
+    if (!hasPredictor) this.#opts.onLog?.('先読み（token predictor）が使えない版です。速さの工夫だけ効きません。');
+    /*
+     * **会話ごとに一本、sequence と LlamaChatSession を持つ。**
+     *
+     * ここが「同時に一人にしか答えられない」を直した本体。node-llama-cpp は
+     * 一つの context から sequences 本の sequence を取れて、llama.cpp が同じ
+     * batch に載せて並列に評価する。LlamaChatSession は履歴を持つので、一本を
+     * 二人で使うと混ざる。だから **本数ぶん別々に持ち**、依頼ごとに空いた一本を
+     * 貸す（LanePool）。先読みは一本ごとに一つ（sequence ごとに状態を持つ）。
+     */
+    const lanes: ChatLane[] = [];
+    for (let i = 0; i < sequences; i += 1) {
+      const predictor = lib.InputLookupTokenPredictor ? new lib.InputLookupTokenPredictor() : undefined;
+      const sequence = context.getSequence(predictor ? { tokenPredictor: predictor } : undefined);
+      lanes.push(new lib.LlamaChatSession({ contextSequence: sequence }) as ChatLane);
+    }
+    const wrapper = lanes[0]!.chatWrapper?.wrapperName ?? '不明';
+    this.#opts.onLog?.(`読み込みました: ${ref}（道具の呼び方: ${wrapper}、並列 ${sequences} 本）`);
     if (GUESSED_WRAPPERS.has(wrapper)) {
       this.#opts.onLog?.(
         `${ref} に合う道具の呼び方が分からず、当てずっぽうの型（${wrapper}）にしました。`
@@ -450,20 +526,31 @@ export class InProcRuntime implements LocalRuntime {
         + '守れないモデルもあるので、うまく呼べないときは道具呼び出しを学んだモデル（Qwen など）を置いてください。',
       );
     }
-    return { context, session, wrapper, window: contextSize, turn: Promise.resolve() };
+    return { context, wrapper, window: contextSize, lanes: new LanePool(lanes) };
+  }
+
+  /** 並列に持ちたい本数。設定が無ければ既定。 */
+  #wantedSequences(): number {
+    return Math.max(1, Math.floor(this.#opts.sequences ?? DEFAULT_SEQUENCES));
   }
 
   /**
-   * このモデルで使う窓。
+   * このモデルで使うコンテキストウィンドウと、並列に持つ本数。
    *
-   * 設定が在ればそれ。無ければ **GGUF に書いてある本来の窓**を読む。
-   * 読めなければ 8192（これまでと同じ）に落とす。
+   * 設定が在ればそれ（本数はそのまま honor する。コンテキストウィンドウは利用者が決めたので）。
+   * 無ければ **GGUF に書いてある本来のコンテキストウィンドウ**を読み、コンテキストウィンドウ × 本数 が記憶に収まるよう
+   * 数える（fitWindow）。読めなければ 8192・1 本（諸元を数えられないので広げない）。
    *
    * 上限は置く。大きい窓は、そのぶん記憶（KV）を食う。機械が固まると
    * 「打っても返事が来ない」に戻るので、青天井にはしない。
    */
-  async #windowFor(ref: string): Promise<number> {
-    if (this.#opts.contextSize) return this.#opts.contextSize;
+  async #windowFor(ref: string): Promise<{ window: number; sequences: number }> {
+    const wanted = this.#wantedSequences();
+    if (this.#opts.contextSize) {
+      // コンテキストウィンドウは利用者が決めた。本数はそのまま。KV は数えないが、本人の選択。
+      if (wanted > 1) this.#opts.onLog?.(`コンテキストウィンドウ ${this.#opts.contextSize} × 並列 ${wanted} 本（設定のコンテキストウィンドウをそのまま使います）`);
+      return { window: this.#opts.contextSize, sequences: wanted };
+    }
     try {
       const at = join(this.#opts.modelsDir, ref);
       const file = await readGguf(at);
@@ -471,7 +558,7 @@ export class InProcRuntime implements LocalRuntime {
       const trained = facts.contextLength;
       if (typeof trained === 'number' && trained >= 2048) {
         const weightBytes = await stat(at).then((x) => x.size).catch(() => undefined);
-        // **広げた分を数える。**窓はそのまま記憶（KV）になる。
+        // **広げた分を数える。**コンテキストウィンドウはそのまま記憶（KV）になる。並列の本数ぶんも。
         const fit = fitWindow({
           trained,
           ...(facts.layers !== undefined ? { layers: facts.layers } : {}),
@@ -480,16 +567,18 @@ export class InProcRuntime implements LocalRuntime {
           ...(facts.headCountKv !== undefined ? { kvHeads: facts.headCountKv } : {}),
           ...(weightBytes !== undefined ? { weightBytes } : {}),
           ramBytes: totalmem(),
+          sequences: wanted,
         });
         this.#opts.onLog?.(fit.why
-          ? `窓: ${fit.window}（このモデルは ${trained} まで持っています）。${fit.why}`
-          : `窓: ${fit.window}（このモデルは ${trained} まで持っています）`);
-        return fit.window;
+          ? `コンテキストウィンドウ: ${fit.window}・並列 ${fit.sequences} 本（このモデルは ${trained} まで持っています）。${fit.why}`
+          : `コンテキストウィンドウ: ${fit.window}・並列 ${fit.sequences} 本（このモデルは ${trained} まで持っています）`);
+        return { window: fit.window, sequences: fit.sequences };
       }
     } catch {
       // 読めなくても止めない。既定へ落とす。
     }
-    return 8192;
+    // 諸元が読めない → KV を数えられない → 広げず、並列もしない。
+    return { window: 8192, sequences: 1 };
   }
 
   /**
@@ -549,7 +638,7 @@ export class InProcRuntime implements LocalRuntime {
   }
 
   /** ライブラリ。無いときは、無いとだけ言う。黙って別のことをしない。 */
-  async #lib(): Promise<{ getLlama: (o?: { gpu?: false; build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string; onLoadProgress?: (done: number) => void }) => Promise<{ createContext: (o?: { contextSize?: number }) => Promise<{ getSequence: (o?: { tokenPredictor?: unknown }) => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown;
+  async #lib(): Promise<{ getLlama: (o?: { gpu?: false; build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string; onLoadProgress?: (done: number) => void }) => Promise<{ createContext: (o?: { contextSize?: number; sequences?: number }) => Promise<{ getSequence: (o?: { tokenPredictor?: unknown }) => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown;
     InputLookupTokenPredictor?: new () => unknown }> {
     const load = this.#opts.load ?? (() => import(LLAMA_LIB));
     try {
@@ -654,8 +743,8 @@ export class InProcRuntime implements LocalRuntime {
     if (!held && ref && /\.gguf$/i.test(ref)) {
       const have = (await this.list()).some((m) => m.ref === ref);
       if (have) {
-        // 答えている最中のものを解かない。順番待ちが空くのを待ってから。
-        await Promise.all([...this.#sessions.values()].map((h) => h.turn.catch(() => undefined)));
+        // 答えている最中のものを解かない。全部の口が空くのを待ってから。
+        await Promise.all([...this.#sessions.values()].map((h) => h.lanes.whenAllIdle()));
         for (const other of this.loaded()) {
           this.#opts.onLog?.(`${other} を解いて ${ref} に切り替えます`);
           await this.unload(other);
@@ -700,39 +789,31 @@ export class InProcRuntime implements LocalRuntime {
       res.write(': queued\n\n');
     }
 
-    // 前の依頼が終わってから始める。setChatHistory から prompt() まで、
-    // 途中で割り込まれてはいけない一続きなので、丸ごと順番待ちに入れる。
-    const mine = held.turn.then(
-      () => this.#answer(held!, ref, body, res),
-      () => this.#answer(held!, ref, body, res),
-    );
-    held.turn = mine.catch(() => undefined);
-    await mine;
-  }
-
-  /** 一人分の受け答え。**必ず順番待ちの中から呼ぶ。** */
-  async #answer(
-    held: Held, ref: string, body: ChatRequest, res: ServerResponse,
-  ): Promise<void> {
     // 画面が「やめる」を押すと、上の層は fetch を切る。切れたら生成も止める。
-    // 止めないと、誰も読まない答えを作りながら次の人を待たせ続ける。
+    // 止めないと、誰も読まない答えを作りながら口を塞ぎ続ける。
     // 切れたことは**返す側**で分かる。req は本文を読み切った時点で
     // 閉じることがあり、切断の合図には使えない（使って空振りした）。
     const gone = new AbortController();
     const onClose = () => gone.abort();
     res.on('close', onClose);
+    // **空いている口（lane）を一本借りる。**空いていなければ、空くまで待つ。
+    // 一本ごとに別の LlamaChatSession なので、二人が同じ履歴を混ぜ合わない。
+    // 全部塞がっていても、ヘッダは既に返してあるので上の層は待てる。
+    // 待っている間に切られたら（gone）、借りずに戻る。
+    const lane = await held.lanes.acquire(gone.signal);
     try {
       // 並んでいる間に切られた依頼は、始めない。誰も読まない答えを
-      // 作りながら、次の人を待たせることになる。
-      if (res.destroyed || res.writableEnded) return;
-      await this.#respond(held, ref, body, res, gone.signal);
+      // 作りながら、口を塞ぐことになる。
+      if (!lane || res.destroyed || res.writableEnded) return;
+      await this.#respond(held, lane, ref, body, res, gone.signal);
     } finally {
       res.off('close', onClose);
+      if (lane) held.lanes.release(lane);
     }
   }
 
   async #respond(
-    held: Held, ref: string, body: ChatRequest,
+    held: Held, lane: ChatLane, ref: string, body: ChatRequest,
     res: ServerResponse, signal: AbortSignal,
   ): Promise<void> {
     // 上の層は毎回すべての履歴を送ってくる。こちらは持ち越さず、
@@ -745,7 +826,7 @@ export class InProcRuntime implements LocalRuntime {
     // 履歴から落ちて、モデルは同じ道具をもう一度呼ぶ。
     const fromUser = last?.role === 'user';
     const asked = fromUser ? last.content : CONTINUE;
-    held.session.setChatHistory(toHistory(fromUser ? messages.slice(0, -1) : messages));
+    lane.setChatHistory(toHistory(fromUser ? messages.slice(0, -1) : messages));
 
     // 道具。**受け口の中で止めて、呼ぼうとしたことを持ち帰る。**
     // ライブラリは受け口の返り値を答えとして続きを作るが、実際に道具を
@@ -766,7 +847,7 @@ export class InProcRuntime implements LocalRuntime {
             ...(t.function.parameters ? { parameters: t.function.parameters } : {}),
           }]
         : []));
-      held.session.setChatHistory([
+      lane.setChatHistory([
         ...toHistory(fromUser ? messages.slice(0, -1) : messages),
         { type: 'system', text: toolPrompt(spec) },
       ]);
@@ -824,7 +905,7 @@ export class InProcRuntime implements LocalRuntime {
       // そのときも、呼ぼうとしたことは持ち帰る（例外に化けさせない）。
       let text = '';
       try {
-        text = await held.session.prompt(asked, opts);
+        text = await lane.prompt(asked, opts);
       } catch (e) {
         if (calls.length === 0) throw e;
       }
@@ -880,14 +961,14 @@ export class InProcRuntime implements LocalRuntime {
     try {
       chunk({ role: 'assistant' });
       let thought = 0;
-      await held.session.prompt(asked, {
+      await lane.prompt(asked, {
         ...opts,
         // 考えごとの分も含めて、最初の 1 トークンを測る。本文だけ見ていると、
         // 考えごとの間は「何も出ていない」としか分からない。
         onResponseChunk: (c) => {
           if (!firstAt) {
             firstAt = Date.now();
-            const seen = held.session.sequence?.nextTokenIndex;
+            const seen = lane.sequence?.nextTokenIndex;
             this.#opts.onLog?.(`最初の 1 トークンまで ${((firstAt - started) / 1000).toFixed(1)} 秒`
               + (typeof seen === 'number' ? `（入力 ${seen} トークン）` : ''));
           }
@@ -976,6 +1057,84 @@ interface LibFunction {
   params?: unknown;
   handler: (args: unknown) => unknown;
 }
+/**
+ * 一本の口（会話一つに一本貸す）。中身は LlamaChatSession。
+ *
+ * LlamaChatSession は履歴を**持っている**。答えている最中に別の依頼が
+ * setChatHistory を呼ぶと、いま答えているほうの足元が入れ替わる。
+ * 混ざった答えが返り、しかも落ちないので気づけない。だから **一本ずつ
+ * 別に持ち**、依頼ごとに空いた一本を貸して、返すまで他へ回さない（LanePool）。
+ */
+export interface ChatLane {
+  prompt: (text: string, opts?: PromptOptions) => Promise<string>;
+  setChatHistory: (history: unknown[]) => void;
+  /** ライブラリが選んだ型。試験の差し替えには無いので、あってもなくてもよい。 */
+  chatWrapper?: { wrapperName?: string };
+  /** 読み終えた入力の数。試験のモックには無い。 */
+  sequence?: { nextTokenIndex?: number };
+}
+
+/**
+ * 口の貸し出し。**空いた一本を貸し、無ければ空くまで待つ。**
+ *
+ * 断らずに待たせる（上の層は待てる。断られると諦めてしまう）。
+ * 待っている間に依頼が切られたら（signal）、貸さずに返す。
+ */
+export class LanePool {
+  readonly #all: ChatLane[];
+  readonly #free: ChatLane[];
+  readonly #waiters: Array<(lane: ChatLane) => void> = [];
+  readonly #idleWaiters: Array<() => void> = [];
+
+  constructor(lanes: ChatLane[]) {
+    this.#all = lanes;
+    this.#free = [...lanes];
+  }
+
+  /** 何本あるか。 */
+  get size(): number { return this.#all.length; }
+  /** いま貸し出している本数。 */
+  get busy(): number { return this.#all.length - this.#free.length; }
+
+  /**
+   * 空いた一本を借りる。無ければ空くまで待つ。
+   * 待っている間に signal が上がったら、`undefined` を返す（借りない）。
+   */
+  acquire(signal?: AbortSignal): Promise<ChatLane | undefined> {
+    const free = this.#free.pop();
+    if (free) return Promise.resolve(free);
+    if (signal?.aborted) return Promise.resolve(undefined);
+    return new Promise<ChatLane | undefined>((resolve) => {
+      const give = (lane: ChatLane): void => { cleanup(); resolve(lane); };
+      const drop = (): void => {
+        const at = this.#waiters.indexOf(give);
+        if (at >= 0) this.#waiters.splice(at, 1);
+        cleanup();
+        resolve(undefined);
+      };
+      const cleanup = (): void => signal?.removeEventListener('abort', drop);
+      this.#waiters.push(give);
+      signal?.addEventListener('abort', drop, { once: true });
+    });
+  }
+
+  /** 借りた一本を返す。待っている人がいれば、その人へ回す。 */
+  release(lane: ChatLane): void {
+    const next = this.#waiters.shift();
+    if (next) { next(lane); return; }
+    this.#free.push(lane);
+    if (this.#free.length === this.#all.length) {
+      for (const done of this.#idleWaiters.splice(0)) done();
+    }
+  }
+
+  /** 全部の口が空くまで待つ。降ろす前・切り替える前に呼ぶ。 */
+  whenAllIdle(): Promise<void> {
+    if (this.#free.length === this.#all.length) return Promise.resolve();
+    return new Promise<void>((resolve) => this.#idleWaiters.push(resolve));
+  }
+}
+
 interface Held {
   context: { dispose?: () => Promise<void> };
   /**
@@ -989,23 +1148,8 @@ interface Held {
   wrapper: string;
   /** 実際に開いた窓。刈る量は、設定ではなくこちらで数える。 */
   window: number;
-  session: {
-    prompt: (text: string, opts?: PromptOptions) => Promise<string>;
-    setChatHistory: (history: unknown[]) => void;
-    /** ライブラリが選んだ型。試験の差し替えには無いので、あってもなくてもよい。 */
-    chatWrapper?: { wrapperName?: string };
-    /** 読み終えた入力の数。試験のモックには無い。 */
-    sequence?: { nextTokenIndex?: number };
-  };
-  /**
-   * 一つのモデルを、同時に二人で使わない約束。
-   *
-   * LlamaChatSession は履歴を**持っている**。答えている最中に別の依頼が
-   * setChatHistory を呼ぶと、いま答えているほうの足元が入れ替わる。
-   * 混ざった答えが返り、しかも落ちないので気づけない。
-   * 断らずに**並べる**（上の層は待てる。断られると諦めてしまう）。
-   */
-  turn: Promise<unknown>;
+  /** 会話ごとに貸す口。ここが「同時に何人に答えられるか」を決める。 */
+  lanes: LanePool;
 }
 
 /** OpenAI の形の、道具の呼び出し一つ。 */

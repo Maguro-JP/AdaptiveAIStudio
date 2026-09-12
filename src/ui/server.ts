@@ -1265,7 +1265,8 @@ export class UiServer {
     }
 
     if (path === '/api/tasks' && req.method === 'GET') {
-      return send(res, 200, { tasks: TaskRunner.list(), running: this.#tasks.running ?? null });
+      // running は動いているものの名前の一覧（同じ名前は二重に回さない）。
+      return send(res, 200, { tasks: TaskRunner.list(), running: this.#tasks.running });
     }
 
     if (path === '/api/task' && req.method === 'POST') {
@@ -1283,7 +1284,9 @@ export class UiServer {
     }
 
     if (path === '/api/task' && req.method === 'DELETE') {
-      return send(res, 200, { stopped: this.#tasks.stop() ?? null });
+      // 名前を渡せばそれだけ止める。渡さなければ全部（今までどおり）。
+      const name = url.searchParams.get('name');
+      return send(res, 200, { stopped: this.#tasks.stop(name ?? undefined) });
     }
 
     // 作業場の中身。**横の板に出すため。**どこで何を触っているのかが

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
-import { InProcRuntime, listGguf, chooseModel, MAX_WINDOW, SAFE_WINDOW, fitWindow } from '../src/runtime/inproc.ts';
+import { InProcRuntime, listGguf, chooseModel, MAX_WINDOW, SAFE_WINDOW, fitWindow, DEFAULT_SEQUENCES } from '../src/runtime/inproc.ts';
 import { ggufHead } from './gguf-head.ts';
 
 /**
@@ -381,7 +381,7 @@ describe('文脈の大きさを決めておく', () => {
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
-    assert.deepEqual(seen, [{ contextSize: 32768 }]);
+    assert.deepEqual(seen, [{ contextSize: 32768, sequences: DEFAULT_SEQUENCES }]);
   });
 
   test('**窓の値しか読めなければ、広げない**', async () => {
@@ -393,7 +393,7 @@ describe('文脈の大きさを決めておく', () => {
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
-    assert.deepEqual(seen, [{ contextSize: SAFE_WINDOW }],
+    assert.deepEqual(seen, [{ contextSize: SAFE_WINDOW, sequences: 1 }],
       '記憶を数えられないのに広げている');
   });
 
@@ -410,7 +410,7 @@ describe('文脈の大きさを決めておく', () => {
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
-    assert.deepEqual(seen, [{ contextSize: MAX_WINDOW }]);
+    assert.deepEqual(seen, [{ contextSize: MAX_WINDOW, sequences: DEFAULT_SEQUENCES }]);
   });
 
   test('設定が在れば、そちらが勝つ', async () => {
@@ -421,7 +421,7 @@ describe('文脈の大きさを決めておく', () => {
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, contextSize: 4096, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
-    assert.deepEqual(seen, [{ contextSize: 4096 }]);
+    assert.deepEqual(seen, [{ contextSize: 4096, sequences: DEFAULT_SEQUENCES }]);
   });
 
   test('読めないファイルなら、既定に落とす', async () => {
@@ -430,7 +430,7 @@ describe('文脈の大きさを決めておく', () => {
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
-    assert.deepEqual(seen, [{ contextSize: 8192 }]);
+    assert.deepEqual(seen, [{ contextSize: 8192, sequences: 1 }]);
   });
   test('設定で広げられる（対）', async () => {
     const dir = await tempDir('aas-ctx-');
@@ -438,7 +438,7 @@ describe('文脈の大きさを決めておく', () => {
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, contextSize: 32768, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
-    assert.deepEqual(seen, [{ contextSize: 32768 }]);
+    assert.deepEqual(seen, [{ contextSize: 32768, sequences: DEFAULT_SEQUENCES }]);
   });
 });
 
@@ -512,6 +512,65 @@ describe('窓を、この機械の記憶に合わせる', () => {
   test('モデルの窓より広げはしない', () => {
     const got = fitWindow({ trained: 4096, layers: 4, embedding: 512, heads: 8, ramBytes: 64 * GB });
     assert.equal(got.window, 4096);
+  });
+
+  /*
+   * **KV を数えられないなら、並列で N 倍しない。**
+   *
+   * head_count_kv が「0 として書いてある」壊れた／読み違えた GGUF や、
+   * embedding < heads だと、一トークンあたりの KV が 0 に潰れて数えられない。
+   * ここで本数（sequences）をそのまま通すと、32768 × N 本を記憶の勘定なしに
+   * 開いて機械が固まる。**数えられないときは 1 本・安全なコンテキストウィンドウに落とす。**
+   */
+  test('**head_count_kv=0 は heads と同じに扱う（0 を素通しして KV を 0 にしない）**', () => {
+    // `?? ` だと 0 を素通しして kvDim が 0 になり、KV を数えられないまま
+    // 並列で N 倍していた。0（壊れた GGUF）は heads で代えて、数えられる形にする。
+    const zero = fitWindow({
+      trained: 32768, layers: 32, embedding: 4096, heads: 32, kvHeads: 0,
+      ramBytes: 16 * GB, sequences: 4,
+    });
+    const fallback = fitWindow({
+      trained: 32768, layers: 32, embedding: 4096, heads: 32, kvHeads: 32,
+      ramBytes: 16 * GB, sequences: 4,
+    });
+    assert.deepEqual(zero, fallback, '0 を heads と同じに扱っていない');
+    // 数えた上で、コンテキストウィンドウ × 本数 が記憶に収まっている（青天井で N 倍していない）。
+    const perToken = 2 * 32 * (4096 / 32) * 32 * 2;
+    assert.ok(zero.window * zero.sequences * perToken <= 16 * GB * 0.7,
+      `記憶を数えずに N 倍している: コンテキストウィンドウ ${zero.window} × ${zero.sequences} 本`);
+  });
+
+  test('embedding < heads でも、N 倍しない（headDim が 0 に潰れる）', () => {
+    const got = fitWindow({
+      trained: 32768, layers: 32, embedding: 4, heads: 32,
+      ramBytes: 16 * GB, sequences: 3,
+    });
+    assert.equal(got.sequences, 1);
+    assert.ok(got.window <= SAFE_WINDOW);
+  });
+
+  test('**モデルのコンテキストウィンドウが floor より狭いとき、floor で超えさせない**', () => {
+    // trained 2048 のモデルを、記憶がきついので並列を減らす道へ入れる。
+    // floor(4096) をそのまま返すと trained(2048) を超え、記憶の勘定も超える。
+    const got = fitWindow({
+      trained: 2048, layers: 1, embedding: 64, heads: 1,
+      ramBytes: 1_097_143, sequences: 2,
+    });
+    assert.ok(got.window <= 2048, `モデルのコンテキストウィンドウ（2048）を超えている: ${got.window}`);
+    // 記憶にも収まっている（コンテキストウィンドウ × 本数 が、数えた総量を超えない）。
+    const perToken = 2 * 1 * 64 * 2;
+    const maxTotal = Math.floor(1_097_143 * 0.7 / perToken);
+    assert.ok(got.window * got.sequences <= maxTotal,
+      `記憶を超えている: コンテキストウィンドウ ${got.window} × ${got.sequences} 本 > ${maxTotal}`);
+  });
+
+  test('諸元が揃っていて 0 でなければ、今までどおり並列を通す（対）', () => {
+    const got = fitWindow({
+      trained: 32768, layers: 4, embedding: 512, heads: 8, kvHeads: 2,
+      ramBytes: 64 * GB, sequences: 2,
+    });
+    assert.equal(got.sequences, 2, '数えられるのに並列を落としている');
+    assert.equal(got.window, 32768);
   });
 });
 

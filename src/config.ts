@@ -226,7 +226,13 @@ export interface RuntimeConfig {
   contextSize?: number;
   /** 使う GGUF の名前（置き場の中の名前）。無ければ最初の一つ */
   model?: string;
-  /** llamacpp: レーンの並列度に合わせる */
+  /**
+   * 同時に何本の生成を並べるか。
+   * - inproc: 会話ごとに一本貸す sequence の本数（既定 `DEFAULT_SEQUENCES`）。
+   *   増やすほどコンテキストウィンドウ（一会話が覚えていられる長さ）は狭くなる（KV を分け合うため）。
+   *   速さのための数ではない。CPU は分け合うので、増やすと一人あたりは遅くなる。
+   * - llamacpp: レーンの並列度に合わせる。
+   */
   parallel?: number;
   desiredContext?: number;
   /**

@@ -82,23 +82,32 @@ export interface TaskRunnerOptions {
 }
 
 /**
- * 一度に一つだけ回す。
+ * 点検を回す。**同じものは二重に回さない。別のものは並べて回す。**
  *
- * 並べて回すと、どちらの出力か分からなくなる。分けて見せる作りにするより、
- * 一つに絞るほうが、読む側の負担が小さい。
+ * ここまで子は一つだけで、doctor を回している間は test も回せなかった。
+ * 診断は CPU を分け合うので速くはならないが、**片方が終わるまで待たされない**。
+ * 出てくるものはどれも `name` を添えて流すので、画面は名前で仕分けられる。
+ *
+ * **同じ名前を二度**は断る（同じ点検を二本走らせても、出力が混ざるだけで
+ * 何も得しない）。名前ごとに一本まで。
  */
 export class TaskRunner {
   readonly #opts: TaskRunnerOptions;
-  #child?: ChildProcess;
-  #name = '';
+  /** 名前 → 動いている子。名前ごとに一本まで。 */
+  readonly #children = new Map<string, ChildProcess>();
 
   constructor(opts: TaskRunnerOptions) {
     this.#opts = opts;
   }
 
-  /** いま回しているものの名前。回していなければ undefined。 */
-  get running(): string | undefined {
-    return this.#child ? this.#name : undefined;
+  /** いま回しているものの名前。無ければ空。 */
+  get running(): string[] {
+    return [...this.#children.keys()];
+  }
+
+  /** その点検が動いているか。 */
+  isRunning(name: string): boolean {
+    return this.#children.has(name);
   }
 
   /** 一覧。画面に並べるためのもの。 */
@@ -107,12 +116,12 @@ export class TaskRunner {
   }
 
   /**
-   * 回す。受け取れない名前と、二重の呼び出しは、理由を返して何もしない。
-   * 戻り値が undefined なら始まった。
+   * 回す。受け取れない名前と、**同じ名前の二重**は、理由を返して何もしない。
+   * 別の名前は、動いていても並べて始める。戻り値が undefined なら始まった。
    */
   start(name: string): string | undefined {
     if (!(name in TASKS)) return 'そういう点検はありません';
-    if (this.#child) return `${this.#name} を回しています`;
+    if (this.#children.has(name)) return `${name} は既に回しています`;
 
     // 決めた名前を、そのまま src/cli/<名前>.ts として起こす。
     // 検査だけは走らせ役が別にいる（環境ごとの差をそこへ閉じ込めてある）。
@@ -127,11 +136,17 @@ export class TaskRunner {
       ? ['--experimental-strip-types'] : [];
     const child = start(process.execPath, [...flags, '--no-warnings', file], {
       cwd: this.#opts.root,
-      env: { ...process.env, NO_COLOR: '1' },
+      // doctor / selftest は自分で報告を置く。置き先を state/reports に揃えると、
+      // サポート用レポートが直近の doctor を使い回せる（毎回 1〜2 分回さない）。
+      env: {
+        ...process.env,
+        NO_COLOR: '1',
+        ...(this.#opts.reportsDir ? { AAS_REPORT_DIR: this.#opts.reportsDir } : {}),
+      },
     });
-    this.#child = child;
-    this.#name = name;
+    this.#children.set(name, child);
     // モデルが答えている最中に回しても、モデルの側を止めない。
+    // 二本並べても、どちらも譲る（CPU をモデルに残す）。
     lowerPriority(child.pid);
 
     this.#opts.onEvent({ name, text: `— ${TASKS[name]} —\n` });
@@ -152,8 +167,7 @@ export class TaskRunner {
     child.stderr?.on('data', on(chunkReader()));
     child.on('error', (e) => this.#opts.onEvent({ name, text: `${e.message}\n` }));
     child.on('close', (code) => {
-      this.#child = undefined;
-      this.#name = '';
+      this.#children.delete(name);
       const finish = () => this.#opts.onEvent({ name, code: code ?? 1 });
       const dir = this.#opts.reportsDir;
       // 自分の報告は自分で置く（doctor / selftest）。ここで二重に置かない。
@@ -176,10 +190,19 @@ export class TaskRunner {
     }
   }
 
-  /** 止める。回していなければ何もしない。 */
-  stop(): string | undefined {
+  /**
+   * 止める。名前を渡せばそれだけ、渡さなければ全部。
+   * 止めたものの名前を返す（回していなければ空）。
+   */
+  stop(name?: string): string[] {
+    if (name !== undefined) {
+      const child = this.#children.get(name);
+      if (!child) return [];
+      child.kill();
+      return [name];
+    }
     const was = this.running;
-    this.#child?.kill();
+    for (const child of this.#children.values()) child.kill();
     return was;
   }
 }

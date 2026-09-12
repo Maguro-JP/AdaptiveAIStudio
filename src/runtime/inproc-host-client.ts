@@ -14,6 +14,8 @@ export interface InProcHostOptions {
   modelsDir: string;
   port?: number;
   contextSize?: number;
+  /** 並列に持つ sequence の本数（会話ごとに一本）。子へそのまま渡す。 */
+  sequences?: number;
   onLog?: (line: string) => void;
   /** 試験用。子に読ませる偽のライブラリ（モジュールの道）。 */
   lib?: string;
@@ -37,6 +39,7 @@ export function hostArgs(opts: InProcHostOptions): string[] {
   const args = ['--experimental-strip-types', '--no-warnings', entry, '--models-dir', opts.modelsDir,
     '--port', String(opts.port ?? INPROC_PORT)];
   if (opts.contextSize !== undefined) args.push('--context-size', String(opts.contextSize));
+  if (opts.sequences !== undefined) args.push('--sequences', String(opts.sequences));
   if (opts.lib) args.push('--lib', opts.lib);
   return args;
 }

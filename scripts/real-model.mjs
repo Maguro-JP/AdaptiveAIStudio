@@ -38,9 +38,9 @@ const bad = [];
 try {
   const { baseUrl } = await rt.ensureLoaded('tiny.gguf');
 
-  // 1. 窓は、ファイルに書いてあるぶんを使っているか。
-  if (!logs.some((l) => l.includes('窓: 2048'))) {
-    bad.push(`窓を読んでいない: ${logs.join(' / ')}`);
+  // 1. コンテキストウィンドウは、ファイルに書いてあるぶんを使っているか。
+  if (!logs.some((l) => l.includes('コンテキストウィンドウ: 2048'))) {
+    bad.push(`コンテキストウィンドウを読んでいない: ${logs.join(' / ')}`);
   }
 
   // 2. 一往復（まとめて返す道）。
@@ -302,11 +302,126 @@ async function predictorKeepsOutput() {
   return found;
 }
 
+/*
+ * 考えごと（<think>）をする模型で、実機の壊れ方と直し方を再現する。
+ *
+ * **ここが無いと、実機で 18 分止まる形を手元で一度も再現できない。**
+ * 素の tiny.gguf は考えごとをしないので、Qwen3 が答える前に <think> を延々
+ * 書いて本文 0 で「完了」になる形（0.11.2 が直した形）を確かめられなかった。
+ *
+ * 見るのは二つ:
+ *   1. 予算をかけないと、本文が空で考えごとだけになる（＝壊れている形）。
+ *      画面には onTextChunk が一度も来ないので、17 分「入力を読んでいます」に見える。
+ *   2. inproc は予算 0（thoughtTokens: 0）を渡すので、考えごとが即閉じて
+ *      本文が流れる（＝直っている形）。流して返す道で、content が来ることを見る。
+ *
+ * 本物の Qwen3 とはここだけ違う（本物はモデルが自分で <think> を出す。この
+ * 模型は chat_template で頭から開ける）。**予算の効き方は同じ経路**なので、
+ * 壊れ方と直し方はここで確かめられる。
+ */
+async function thinkingBudget() {
+  const found = [];
+  const dir = mkdtempSync(join(tmpdir(), 'aas-think-'));
+  const at = join(dir, 'think.gguf');
+  execFileSync(process.execPath, [join(root, 'scripts', 'tiny-gguf.mjs'), at, '--thinks'], { stdio: 'pipe' });
+
+  // 1. この模型が「考えごとをする」ことを、素のライブラリで確かめる。
+  //    予算をかけないと、本文が空で考えごとだけになる。ここが崩れていたら、
+  //    以下の「直った形」も意味を持たない（何も再現していないことになる）。
+  const lib = await import('node-llama-cpp');
+  const llama = await lib.getLlama({ gpu: false, build: 'never', logLevel: 'error' });
+  const model = await llama.loadModel({ modelPath: at });
+  try {
+    const ctx = await model.createContext({ contextSize: 512 });
+    const session = new lib.LlamaChatSession({ contextSequence: ctx.getSequence() });
+    let textLen = 0;
+    let thought = 0;
+    await session.prompt('hi', {
+      maxTokens: 24, temperature: 0,
+      onResponseChunk: (c) => { if (c.type === 'segment' && c.segmentType === 'thought') thought += c.text.length; },
+      onTextChunk: (t) => { textLen += t.length; },
+    });
+    if (!(textLen === 0 && thought > 0)) {
+      found.push(`考えごとの模型になっていない（予算なしで 本文 ${textLen} 文字 / 考えごと ${thought} 文字）。`
+        + '本文が空で考えごとだけ、を作れていないので、実機の壊れ方を再現できていない');
+    }
+    await ctx.dispose();
+  } finally {
+    await model.dispose?.();
+  }
+
+  // 2. inproc（予算 0）を通すと、流して返す道で content が来る。
+  const rt = new InProcRuntime({ modelsDir: dir, port: 0 });
+  try {
+    const { baseUrl } = await rt.ensureLoaded('think.gguf');
+    const r = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'think.gguf', stream: true, max_tokens: 24, messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    const raw = await r.text();
+    // content の delta が一つでも来ていること。考えごとで埋まると、ここが空になる。
+    const gotContent = raw.split('\n')
+      .filter((l) => l.startsWith('data: ') && !l.includes('[DONE]'))
+      .map((l) => { try { return JSON.parse(l.slice(6)); } catch { return undefined; } })
+      .some((o) => typeof o?.choices?.[0]?.delta?.content === 'string' && o.choices[0].delta.content.length > 0);
+    if (!gotContent) {
+      found.push(`inproc が考えごとの模型で本文を流さない。予算 0（thoughtTokens: 0）が効いていない: ${raw.slice(0, 200)}`);
+    }
+  } finally {
+    await rt.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return found;
+}
+
+/*
+ * **本物のライブラリで、二つの会話に同時に答える。**
+ *
+ * sequence を N 本取って、それぞれに LlamaChatSession を持たせる道が、
+ * 本物の node-llama-cpp で通ることを見る。モックの試験（inproc-parallel）
+ * では「並ぶ」ことは見たが、本物のライブラリが sequences:N と getSequence を
+ * N 回受けて、二つ同時に評価するところは、ここでしか踏めない。
+ *
+ * tiny.gguf は諸元が読めるので、既定で 2 本持つ。二つ同時に投げて、
+ * 両方に返事が流れて終わることを見る（乱数の重みなので中身は問わない）。
+ */
+async function throughParallel() {
+  const found = [];
+  const dir = mkdtempSync(join(tmpdir(), 'aas-par-'));
+  execFileSync(process.execPath, [join(root, 'scripts', 'tiny-gguf.mjs'), join(dir, 'tiny.gguf')], { stdio: 'pipe' });
+  const logs = [];
+  const rt = new InProcRuntime({ modelsDir: dir, port: 0, onLog: (l) => logs.push(l) });
+  try {
+    const { baseUrl } = await rt.ensureLoaded('tiny.gguf');
+    // 本物のライブラリが、本当に 2 本の sequence を取れたこと。
+    if (!logs.some((l) => /並列 2 本/.test(l))) {
+      found.push(`並列 2 本を持てていない: ${logs.filter((l) => l.includes('読み込みました')).join(' / ')}`);
+    }
+    const ask = () => fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'tiny.gguf', stream: true, max_tokens: 12, messages: [{ role: 'user', content: 'hi' }] }),
+    }).then((r) => r.text());
+    const [a, b] = await Promise.all([ask(), ask()]);
+    for (const [who, raw] of [['一つ目', a], ['二つ目', b]]) {
+      if (!raw.includes('data: ')) found.push(`${who}が SSE になっていない`);
+      if (!raw.includes('[DONE]')) found.push(`${who}が終わっていない`);
+    }
+  } catch (e) {
+    found.push(`落ちました: ${e.message}`);
+  } finally {
+    await rt.shutdown();
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return found;
+}
+
 bad.push(...await throughSession());
+bad.push(...await thinkingBudget());
+bad.push(...await throughParallel());
 
 if (bad.length > 0) {
   console.error(`見つかった不具合 ${bad.length} 件:`);
   for (const b of bad) console.error(`- ${b}`);
   process.exit(1);
 }
-console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す・同梱の話し方・土台ごと一往復・本物の数え方・先読みで答えが変わらない）');
+console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す・同梱の話し方・土台ごと一往復・本物の数え方・先読みで答えが変わらない・考えごとの予算・二つ同時）');
