@@ -10,6 +10,7 @@ import { decorate } from './color.js';
 import { verdictText, slowNote } from './verdict.js';
 import { renderMarkdown } from './markdown.js';
 import { isSendKey, isPlainEnter } from './keys.js';
+import { pathActions } from './paths.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -1010,7 +1011,9 @@ export const PANELS = {
       // 「置いたのに出ない」の切り分けが、この一行でつく。
       if (data.runtime !== 'ollama' && data.modelsDir) {
         const row = el('div', 'row');
-        row.append(el('span', 'key', '保存先'), el('span', 'num mono dim', data.modelsDir));
+        const where = el('span', 'num mono dim wrap', data.modelsDir);
+        where.append(pathActions(data.modelsDir));
+        row.append(el('span', 'key', '保存先'), where);
         status.append(row);
       }
 
@@ -1040,7 +1043,10 @@ export const PANELS = {
         for (const m of data.installed) {
           const row = el('div', 'row');
           const size = m.sizeBytes ? `${(m.sizeBytes / 1024 ** 3).toFixed(1)}GB` : '';
-          row.append(el('span', 'key mono', m.ref), el('span', 'num dim', size));
+          const name = el('span', `key mono${m.path ? ' wrap' : ''}`, m.ref);
+          // モデルの道。どこに在るかを、開いて・コピーして確かめられる。
+          if (m.path) name.append(pathActions(m.path));
+          row.append(name, el('span', 'num dim', size));
           list.append(row);
         }
       }
@@ -1181,13 +1187,97 @@ export const PANELS = {
     })();
   },
 
+  /*
+   * **過去分は本体が持っている。**
+   *
+   * 行を DOM にしか持っていなかったので、配置を変える・パネルを出し入れする・
+   * 設定を閉じる（描き直す）たびに全部消えた。既定の配置にこのパネルは無いので、
+   * 後から開いても空だった（実機でそうなった）。開いたら本体（/api/logs）から
+   * 取り直し、届く分は番号（seq）で重ねない。取り直している間に届いた分は、
+   * 順を崩さないよう、取り終えてから流す。
+   */
   log(body, ctx) {
     body.append(el('div', 'dim', '動いているものがここに流れます。'));
-    ctx.on('log', (e) => {
-      body.appendChild(el('div', e.level === 'error' ? 'bad mono' : e.level === 'warn' ? 'warn mono' : 'mono', e.text));
+    const line = (e) => el('div', `log-line mono${e.level === 'error' ? ' bad' : e.level === 'warn' ? ' warn' : ''}`, e.text);
+    let upTo = -1;
+    const show = (e) => {
+      if (typeof e.seq === 'number') {
+        if (e.seq <= upTo) return;
+        upTo = e.seq;
+      }
+      body.appendChild(line(e));
       while (body.childNodes.length > 500) body.removeChild(body.firstChild);
       body.scrollTop = body.scrollHeight;
-    });
+    };
+    let ready = false;
+    const pending = [];
+    ctx.on('log', (e) => { if (ready) show(e); else pending.push(e); });
+    (async () => {
+      try {
+        const { lines } = await (await fetch('/api/logs')).json();
+        for (const l of lines) show(l);
+      } catch { /* 取れなければ、これから来る分だけ */ }
+      ready = true;
+      for (const e of pending) show(e);
+      pending.length = 0;
+    })();
+  },
+
+  /*
+   * 裏で動いているもの。**流れではなく、いまの状態だけ。**
+   *
+   * 取得の進み具合は 1.5 秒ごとに記録へ流れていて、記録が埋まって読めなかった（実機）。
+   * ここは仕事ごとに一行、最新の状態と進み具合だけを出し、終わったものはそう出す。
+   * 本体は状態が変わったときに全部を流してくる（jobs）。経った秒だけは、こちらの時計で進める。
+   */
+  jobs(body, ctx) {
+    const list = el('div', 'jobs');
+    body.append(list);
+    let jobs = [];
+    const elapsed = (iso) => {
+      const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+      return s >= 60 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${s} 秒`;
+    };
+    const draw = () => {
+      list.replaceChildren();
+      if (jobs.length === 0) { list.append(empty('裏で動いているものはありません。')); return; }
+      for (const j of jobs) {
+        const row = el('div', `job ${j.state}`);
+        const head = el('div', 'job-head');
+        head.append(
+          el('span', 'job-mark', j.state === 'running' ? '⏳' : j.state === 'done' ? '✓' : '✗'),
+          el('span', 'job-title', j.title),
+        );
+        if (j.state === 'running' && j.startedAt) head.append(el('span', 'job-elapsed dim', `${elapsed(j.startedAt)} 経過`));
+        row.append(head);
+        if (j.progress && typeof j.progress.pct === 'number') {
+          const bar = el('div', 'job-bar');
+          const fill = el('div', 'job-fill');
+          fill.style.width = `${Math.max(0, Math.min(100, j.progress.pct))}%`;
+          bar.append(fill);
+          row.append(bar);
+        }
+        if (j.detail) {
+          const d = el('div', `job-detail mono ${j.state === 'failed' ? 'bad' : 'dim'}`, j.detail);
+          d.style.whiteSpace = 'pre-wrap';
+          row.append(d);
+        }
+        list.append(row);
+      }
+    };
+    ctx.on('jobs', (e) => { jobs = Array.isArray(e.jobs) ? e.jobs : []; draw(); });
+    const tick = setInterval(() => {
+      // 外された（描き直しで捨てられた）パネルの時計を、回し続けない。
+      if (!body.isConnected) { clearInterval(tick); return; }
+      if (jobs.some((j) => j.state === 'running')) draw();
+    }, 1000);
+    (async () => {
+      try {
+        const got = await (await fetch('/api/jobs')).json();
+        jobs = Array.isArray(got.jobs) ? got.jobs : [];
+      } catch { /* 取れなければ空。変わったときに流れてくる */ }
+      draw();
+    })();
   },
 
   /**
@@ -1600,6 +1690,7 @@ export const TITLES = {
   models: 'モデル',
   changes: '変更したファイル',
   log: 'ログ',
+  jobs: '裏の仕事',
   note: 'メモ',
   checks: '診断',
   preview: 'プレビュー',

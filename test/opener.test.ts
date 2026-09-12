@@ -7,7 +7,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { openerFor } from '../src/core/opener.ts';
+import { openerFor, revealCommand } from '../src/core/opener.ts';
 import { caseBlind } from '../src/core/harness-setup.ts';
 import { Harness } from '../src/harness/harness.ts';
 import { protectedPaths } from '../src/harness/builtin-rules.ts';
@@ -21,6 +21,21 @@ describe('ブラウザを開く命令', () => {
   test('Linux', () => { assert.equal(openerFor('linux'), 'xdg-open'); });
   test('知らない OS でも、何かは返す（黙って undefined を渡さない）', () => {
     assert.equal(typeof openerFor('freebsd' as NodeJS.Platform), 'string');
+  });
+});
+
+describe('ファイルやフォルダを OS で開いて見せる命令', () => {
+  test('Windows: ファイルは選んだ状態で、フォルダはそのまま', () => {
+    assert.deepEqual(revealCommand('win32', 'C:\\work\\a.txt', false), { command: 'explorer', args: ['/select,C:\\work\\a.txt'] });
+    assert.deepEqual(revealCommand('win32', 'C:\\work', true), { command: 'explorer', args: ['C:\\work'] });
+  });
+  test('macOS: ファイルは -R で、フォルダはそのまま', () => {
+    assert.deepEqual(revealCommand('darwin', '/w/a.txt', false), { command: 'open', args: ['-R', '/w/a.txt'] });
+    assert.deepEqual(revealCommand('darwin', '/w', true), { command: 'open', args: ['/w'] });
+  });
+  test('Linux: ファイルなら、その在るフォルダを開く', () => {
+    assert.deepEqual(revealCommand('linux', '/w/a.txt', false), { command: 'xdg-open', args: ['/w'] });
+    assert.deepEqual(revealCommand('linux', '/w', true), { command: 'xdg-open', args: ['/w'] });
   });
 });
 

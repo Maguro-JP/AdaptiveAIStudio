@@ -30,10 +30,28 @@ export function defaultModelsDir(): string {
 const HF_API = 'https://huggingface.co/api/models';
 const HF_FILES = 'https://huggingface.co';
 
+/** 取ってきている最中の、いまの状態。数字のまま渡す（画面が並べ替えて出す）。 */
+export interface FetchStatus {
+  /** 0〜100。全体の大きさが分からなければ無い。 */
+  pct?: number;
+  doneBytes: number;
+  totalBytes?: number;
+  bytesPerSec: number;
+  etaSec?: number;
+}
+
 export interface ModelInstallOptions {
   entry: CatalogEntry;
   modelsDir: string;
+  /** 節目の一言（一覧を調べる・選んだ・置いた など）。 */
   onProgress?: (line: string) => void;
+  /**
+   * 進み具合。**渡されたら、進み具合は onProgress に流さない。**
+   *
+   * 1.5 秒ごとの行が記録に流れ、記録が埋まって読めなかった（実機）。
+   * 画面は最新の状態だけを出せばよい。端末（CLI）は渡さないので、今までどおり行で出る。
+   */
+  onStatus?: (status: FetchStatus) => void;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
 }
@@ -108,7 +126,9 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
       );
     }
     return await fetchInto({
-      url: directUrl, leaf, modelsDir, entry, fetchImpl, log, ...(opts.signal ? { signal: opts.signal } : {}),
+      url: directUrl, leaf, modelsDir, entry, fetchImpl, log,
+      ...(opts.onStatus ? { status: opts.onStatus } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
   }
 
@@ -180,16 +200,18 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
 
   return await fetchInto({
     url: `${HF_FILES}/${entry.repo}/resolve/main/${file}`,
-    leaf, modelsDir, entry, fetchImpl, log, ...(opts.signal ? { signal: opts.signal } : {}),
+    leaf, modelsDir, entry, fetchImpl, log,
+    ...(opts.onStatus ? { status: opts.onStatus } : {}),
+    ...(opts.signal ? { signal: opts.signal } : {}),
   });
 }
 
 /** 落とす本体。一覧から選んだときも、URL を直に渡されたときも、ここを通す。 */
 async function fetchInto(a: {
   url: string; leaf: string; modelsDir: string; entry: CatalogEntry;
-  fetchImpl: typeof fetch; log: (l: string) => void; signal?: AbortSignal;
+  fetchImpl: typeof fetch; log: (l: string) => void; status?: (s: FetchStatus) => void; signal?: AbortSignal;
 }): Promise<InstalledModel> {
-  const { url, leaf, modelsDir, entry, fetchImpl, log } = a;
+  const { url, leaf, modelsDir, entry, fetchImpl, log, status } = a;
   const opts = { signal: a.signal };
   const dest = join(modelsDir, leaf);
   const tmp = `${dest}.part`;
@@ -271,11 +293,13 @@ async function fetchInto(a: {
           const sec = (now - began) / 1000;
           const rate = sec > 0 ? (written - from) / sec : 0;
           const left = total > 0 && rate > 0 ? (total - written) / rate : 0;
-          log(
-            `  ${total > 0 ? `${Math.floor((written / total) * 100)}%  ` : ''}`
-            + `${human(written)}${total > 0 ? ` / ${human(total)}` : ''}`
-            + `  ${human(rate)}/秒${left > 0 ? `  残り ${mmss(left)}` : ''}`,
-          );
+          const now_: FetchStatus = {
+            ...(total > 0 ? { pct: Math.floor((written / total) * 100), totalBytes: total } : {}),
+            doneBytes: written, bytesPerSec: rate, ...(left > 0 ? { etaSec: left } : {}),
+          };
+          // 状態を受ける側が居れば、そちらだけ。行として流すと記録が埋まる。
+          if (status) status(now_);
+          else log(`  ${describeFetch(now_)}`);
         }
       }
     }
@@ -352,6 +376,13 @@ async function* streamOf(res: Response): AsyncGenerator<Buffer> {
 }
 
 /** 人が読む大きさ。0.0GB とだけ出ていたので、桁に合わせる。 */
+/** 進み具合を一行にする。端末の行と、画面の最新の一言で、同じ形。 */
+export function describeFetch(s: FetchStatus): string {
+  return `${s.pct !== undefined ? `${s.pct}%  ` : ''}`
+    + `${human(s.doneBytes)}${s.totalBytes !== undefined ? ` / ${human(s.totalBytes)}` : ''}`
+    + `  ${human(s.bytesPerSec)}/秒${s.etaSec !== undefined ? `  残り ${mmss(s.etaSec)}` : ''}`;
+}
+
 export function human(bytes: number): string {
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)}GB`;
   if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)}MB`;

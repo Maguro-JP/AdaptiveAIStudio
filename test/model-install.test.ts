@@ -87,6 +87,32 @@ describe('モデルの取得', () => {
     assert.ok(calls.some((c) => c.includes('/resolve/main/test-q4_k_m.gguf')), calls.join(' '));
   });
 
+  /*
+   * 進み具合は、行として流さず、状態（数字）で渡せる。
+   * 1.5 秒ごとの行が記録に流れ、記録が埋まって読めなかった（実機）。
+   * 画面は最新の状態だけを出せばよい。端末は今までどおり行で出る（対）。
+   */
+  test('onStatus を渡せば、進み具合は数字で来て、行には流れない', async () => {
+    const modelsDir = await tempDir('aas-models-');
+    const lines: string[] = [];
+    const statuses: Array<{ pct?: number; doneBytes: number; totalBytes?: number; bytesPerSec: number }> = [];
+    await installModel({ entry: ENTRY, modelsDir, fetchImpl: fakeFetch().impl, onProgress: (l) => lines.push(l), onStatus: (s) => statuses.push(s) });
+    assert.ok(statuses.length >= 1, '状態が一度も来ない');
+    const last = statuses[statuses.length - 1]!;
+    assert.equal(last.doneBytes, tinyGguf().length);
+    assert.equal(last.totalBytes, tinyGguf().length);
+    assert.equal(last.pct, 100);
+    assert.ok(lines.every((l) => !/\d+%/.test(l)), `行にも流れている: ${lines.join(' | ')}`);
+    assert.ok(lines.some((l) => l.includes('置きました')), '節目の行は残す');
+  });
+
+  test('onStatus が無ければ、今までどおり行で出る（対）', async () => {
+    const modelsDir = await tempDir('aas-models-');
+    const lines: string[] = [];
+    await installModel({ entry: ENTRY, modelsDir, fetchImpl: fakeFetch().impl, onProgress: (l) => lines.push(l) });
+    assert.ok(lines.some((l) => /\d+%/.test(l)), `行に進み具合が無い: ${lines.join(' | ')}`);
+  });
+
   test('途中のものを残さない', async () => {
     const modelsDir = await tempDir('aas-models-');
     await installModel({ entry: ENTRY, modelsDir, fetchImpl: fakeFetch().impl });

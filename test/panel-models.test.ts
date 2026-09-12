@@ -20,6 +20,7 @@ const { PANELS } = await import('../src/ui/web/panels.js') as {
 const ANSWER = {
   runtime: 'ollama',
   installed: [{ ref: 'qwen3.5:9b', sizeBytes: 6.6 * 1024 ** 3 }],
+  modelsDir: '/models',
   llamaServer: null,
   catalog: [
     { id: 'qwen3.5-4b', note: '最小構成', approxGB: 2.5, ref: 'qwen3.5:4b' },
@@ -48,6 +49,31 @@ async function draw(answers: Record<string, unknown> = {}) {
   await new Promise((r) => setTimeout(r, 20));
   return { body, calls };
 }
+
+describe('モデルの道は、開ける・コピーできる', () => {
+  test('道が返っていれば、名前の隣に「開く」「コピー」が出て、開くは /api/open に道を渡す', async () => {
+    const { body, calls } = await draw({
+      '/api/models': { ...ANSWER, runtime: 'inproc', installed: [{ ref: 'a.gguf', sizeBytes: 1024 ** 3, path: '/models/a.gguf' }] },
+      '/api/open': { opened: '/models/a.gguf' },
+    });
+    const opens = body.buttons().filter((b) => b.textContent === '開く');
+    // 保存先の分と、モデル一つの分。
+    assert.ok(opens.length >= 2, `開くが ${opens.length} 個`);
+    const forModel = opens.find((b) => b.title.includes('/models/a.gguf'));
+    assert.ok(forModel, '開くの先がモデルの道ではない');
+    await forModel!.onclick!();
+    await new Promise((r) => setTimeout(r, 5));
+    const posted = calls.find((c) => c.url.includes('/api/open'));
+    assert.ok(posted, '/api/open を叩いていない');
+    assert.deepEqual(posted!.body, { path: '/models/a.gguf' });
+  });
+
+  test('道が無い（Ollama）なら、モデルの隣には出さない（対）', async () => {
+    const { body } = await draw();
+    const opens = body.buttons().filter((b) => b.textContent === '開く');
+    assert.ok(opens.every((b) => !b.title.includes('qwen3.5:9b')), 'Ollama の名前に開くを付けている');
+  });
+});
 
 describe('モデルの板', () => {
   test('ランタイムと手元のモデルを出す', async () => {

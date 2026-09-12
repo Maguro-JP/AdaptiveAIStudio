@@ -366,6 +366,8 @@ describe('名前だけ .gguf の別物', () => {
         const c = await (await fetch(`${b}/api/config`)).json() as { gguf: { ref: string; notGguf: boolean }[] };
         assert.equal(c.gguf.find((g) => g.ref === 'page.gguf')?.notGguf, true);
         assert.equal(c.gguf.find((g) => g.ref === 'real.gguf')?.notGguf, false);
+        // 絶対の道も返す（画面で開く・コピーするため）。
+        assert.equal((c.gguf.find((g) => g.ref === 'real.gguf') as { path?: string })?.path, j(models, 'real.gguf'));
       } finally { if (prev === undefined) delete process.env.AAS_CONFIG; else process.env.AAS_CONFIG = prev; }
     } finally { await s.stop(); }
   });

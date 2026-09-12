@@ -523,3 +523,37 @@ describe('bundle の形のまま、この中で読む設定で通す', () => {
     assert.doesNotMatch(text, /モデルを動かす土台がまだありません/);
   });
 });
+
+/**
+ * インストール版でも版が言える。
+ *
+ * bundle は VERSION を製品の根（app の親）に置く。setup.exe はそこから `.portable`
+ * だけを消して入れる（残すと data\ が Program Files の隣に出来る）。根の見つけ方が
+ * `.portable` 頼みだったので、インストール版では VERSION を見に行かず
+ * 「分かりません（git の管理下でもbundle でもありません）」と出ていた（実機の doctor）。
+ */
+describe('インストール版（.portable 無し、中身が app\\）でも版が読める', () => {
+  test('app の親の VERSION を読む', async () => {
+    const { currentVersion, describeVersion } = await import('../src/core/version.ts');
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const root = await tempDir('aas-installed-');
+    await mkdir(join(root, 'app'), { recursive: true });
+    await writeFile(join(root, 'VERSION'), '0.12.0-abc1234\r\n', 'utf8');
+    const v = await currentVersion(join(root, 'app'));
+    assert.equal(v.id, '0.12.0-abc1234');
+    assert.equal(v.from, 'bundle の記録');
+    assert.equal(v.builtAt, undefined, '.portable が無いので組み立て時刻は分からない');
+    assert.match(describeVersion(v), /^0\.12\.0-abc1234（bundle の記録）$/);
+  });
+
+  test('中身が app\\ でなければ、親の VERSION は見ない（対）', async () => {
+    // クローンが、たまたま VERSION を置いた親の下に在っても、それを版と言わない。
+    const { currentVersion } = await import('../src/core/version.ts');
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const root = await tempDir('aas-notapp-');
+    await mkdir(join(root, 'work'), { recursive: true });
+    await writeFile(join(root, 'VERSION'), '9.9.9-nope\r\n', 'utf8');
+    const v = await currentVersion(join(root, 'work'));
+    assert.notEqual(v.id, '9.9.9-nope');
+  });
+});

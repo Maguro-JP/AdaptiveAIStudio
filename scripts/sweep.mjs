@@ -339,6 +339,85 @@ await check('見た目を切り替える', async () => {
   }
 });
 
+/*
+ * ログのパネルは、開き直しても切り替えても消えない。
+ *
+ * 行を DOM にしか持っていなかったので、描き直しのたびに全部消えた（実機）。
+ * 過去分は本体が持ち、パネルは開いたとき取り直す。ここでは、開いた時点で過去分が
+ * 出ること、描き直し（表示の出し入れ）のあとも残ることを見る。
+ */
+await check('ログのパネルは切り替えで消えない', async () => {
+  const have = await p.evaluate(() => fetch('/api/logs').then((r) => r.json()).then((j) => j.lines.length));
+  if (have === 0) throw new Error('本体に記録が一行も無い');
+  const showFromView = async (title) => {
+    await p.locator('#openView').click();
+    await p.waitForTimeout(500);
+    const row = p.locator('#viewList .view-row').filter({ hasText: title }).first();
+    if (await row.count() === 0) throw new Error(`表示の一覧に ${title} が無い`);
+    await row.locator('input').click();
+    await p.waitForTimeout(700);
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(400);
+  };
+  const logShown = async () => (await p.locator('#root .panel header, #root .panel.tabs header button')
+    .allInnerTexts()).some((h) => h.includes('ログ'));
+  if (!(await logShown())) await showFromView('ログ');
+  const tab = p.locator('#root .panel.tabs header button').filter({ hasText: 'ログ' });
+  if (await tab.count() > 0) { await tab.first().click(); await p.waitForTimeout(400); }
+  await p.waitForTimeout(1000);
+  const before = await p.locator('#root .log-line').count();
+  if (before === 0) throw new Error(`開いた時点で過去分が出ない（本体には ${have} 行）`);
+  // 描き直す（別のパネルを出す）。ログの行が残っていること。
+  await showFromView('メモ');
+  await p.waitForTimeout(1000);
+  if (await tab.count() > 0) { await tab.first().click(); await p.waitForTimeout(400); }
+  const after = await p.locator('#root .log-line').count();
+  if (after < before) throw new Error(`描き直しで消えた: ${before} → ${after}`);
+});
+
+// 裏の仕事のパネル。流れではなく、いまの状態だけが並ぶ（空なら空と言う）。
+await check('裏の仕事のパネルが出る', async () => {
+  const shownJobs = async () => (await p.locator('#root .panel header, #root .panel.tabs header button')
+    .allInnerTexts()).some((h) => h.includes('裏の仕事'));
+  if (!(await shownJobs())) {
+    await p.locator('#openView').click();
+    await p.waitForTimeout(500);
+    const row = p.locator('#viewList .view-row').filter({ hasText: '裏の仕事' }).first();
+    if (await row.count() === 0) throw new Error('表示の一覧に裏の仕事が無い');
+    await row.locator('input').click();
+    await p.waitForTimeout(700);
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(400);
+  }
+  const tab = p.locator('#root .panel.tabs header button').filter({ hasText: '裏の仕事' });
+  if (await tab.count() > 0) { await tab.first().click(); await p.waitForTimeout(400); }
+  await p.waitForTimeout(800);
+  const jobs = await p.locator('#root .jobs').count();
+  if (jobs === 0) throw new Error('裏の仕事の中身が無い');
+  const text = (await p.locator('#root .jobs').first().innerText()).trim();
+  if (!text) throw new Error('空なのに空と言わない');
+});
+
+// 道の隣に「開く」「コピー」が在る。読めるだけの道は、打ち直すしかなかった。
+await check('道の隣に開く・コピーが在る', async () => {
+  try {
+    await p.locator('#openSettings').click();
+    await p.waitForTimeout(700);
+    await p.locator('.tabs-lite button[data-sec="info"]').click();
+    await p.waitForTimeout(600);
+    const n = await p.locator('#infoRows .path-actions button').count();
+    if (n < 6) throw new Error(`情報の道に押し場所が足りない: ${n}`);
+    // コピーは押しても外へ出ない。押して、文言が変わる（できた・できない、どちらでも言う）。
+    const copy = p.locator('#infoRows .path-actions button').filter({ hasText: 'コピー' }).first();
+    await copy.click();
+    await p.waitForTimeout(300);
+    const said = (await copy.innerText()).trim();
+    if (said === 'コピー') throw new Error('押しても何も言わない');
+  } finally {
+    await closeSettings();
+  }
+});
+
 // 配置の切り替え。板の並びが実際に変わるか。
 await check('配置を切り替える', async () => {
   try {

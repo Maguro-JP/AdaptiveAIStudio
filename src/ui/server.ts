@@ -29,21 +29,24 @@ import { writeEnvValue } from '../core/env.ts';
 import { canRun } from '../core/which.ts';
 import { saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { revealCommand } from '../core/opener.ts';
 import { join, dirname, extname, normalize, resolve as resolvePath, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
-import { aasHome, binDir, modelsDir, isPortable, productRoot, defaultWorkRoot } from '../core/home.ts';
+import { aasHome, binDir, modelsDir, isPortable, productRoot, installRoot, defaultWorkRoot } from '../core/home.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { LogFile } from '../core/logfile.ts';
 import { checkUpdate, applyUpdate } from '../core/update.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
 import { findNewerOllama, findNewerGguf } from '../runtime/model-updates.ts';
 import { AVAILABLE_MODELS, lookupCatalog, STARTER_ID } from '../runtime/model-catalog.ts';
-import { installModel } from '../runtime/model-install.ts';
+import { installModel, describeFetch, type FetchStatus } from '../runtime/model-install.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { MachineCache } from '../runtime/machine.ts';
 import { usesGguf, type LocalRuntime } from '../runtime/local-runtime.ts';
+import { realSafeResolve } from '../agent/tools/paths.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout, DEFAULT_LAYOUT_ID } from './layout.ts';
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
@@ -105,6 +108,16 @@ export const RESTART_EXIT = 75;
 /** 一つの画面に溜めてよい未送信の量。超えたら、その相手は読んでいない。 */
 export const MAX_CLIENT_BACKLOG = 4 * 1024 * 1024;
 
+/**
+ * 本体が持っておく記録の行数。画面は開いたときにここから取り直す。
+ *
+ * 行を画面の DOM にしか持っていなかったので、配置を変える・パネルを出し入れする・
+ * 設定を閉じる（描き直す）たびに全部消えた。既定の配置にログのパネルは無いので、
+ * 後から開いても空だった（実機でそうなった）。ファイル（ui.log）には在るが、
+ * 画面はそこを読まない。**本体が最近の分を持ち、画面はそれを取り直す。**
+ */
+export const RECENT_LOGS = 500;
+
 export interface UiServerOptions {
   /** 立ち上げ直しを頼まれたとき。止めて、RESTART_EXIT で終わる側が持つ。 */
   onRestart?: () => void;
@@ -122,6 +135,8 @@ export interface UiServerOptions {
   modelFetch?: typeof fetch;
   /** 困ったときの報告の中身を作る係のモック。試験で使う（本物は doctor を回して分単位）。 */
   buildReport?: () => Promise<string>;
+  /** OS でファイルやフォルダを見せる係。試験でモックにできる（本物は explorer / open / xdg-open）。 */
+  opener?: (command: string, args: string[]) => Promise<void>;
   config: AasConfig;
   port?: number;
   host?: string;
@@ -129,7 +144,8 @@ export interface UiServerOptions {
 
 /** 画面へ流す出来事。CLI 側から呼んで、動いているものを見せる。 */
 export type UiEvent =
-  | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string }
+  /** 記録の一行。seq は本体が振る（過去分の取り直しと、届いた分を重ねないため）。 */
+  | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string; seq?: number; at?: string }
   | { type: 'report'; state: 'running' | 'done' | 'failed' }
   | { type: 'plan'; items: unknown[] }
   | { type: 'stateChanged' }
@@ -156,11 +172,34 @@ export type UiEvent =
   | { type: 'thinkEvent'; event: unknown }
   /** 点検の出来事。cmd の窓でしか見られなかったものを、画面へ出す。 */
   | { type: 'task'; name: string; text: string }
-  | { type: 'taskDone'; name: string; code: number };
+  | { type: 'taskDone'; name: string; code: number }
+  /** 裏で動いているものの、いまの状態（流れではなく、状態そのもの）。 */
+  | { type: 'jobs'; jobs: Job[] };
+
+/**
+ * 裏で動いているもの一つ。**最新の状態だけ。**
+ *
+ * 取得の進み具合は 1.5 秒ごとに記録へ流れていて、記録が埋まって読めなかった（実機）。
+ * 仕事ごとに一つの状態を持ち、変わったときに全部を流す。画面は並べるだけ。
+ */
+export interface Job {
+  kind: 'fetch' | 'load' | 'task' | 'report' | 'resume';
+  id: string;
+  title: string;
+  state: 'running' | 'done' | 'failed';
+  /** 最新の一言。 */
+  detail: string;
+  /** 始めた時刻（ISO）。経った秒は画面が数える。 */
+  startedAt?: string;
+  progress?: { pct: number };
+}
 
 export class UiServer {
   readonly #opts: UiServerOptions;
   readonly #clients = new Set<ServerResponse>();
+  /** 最近の記録。画面が開き直したときに取り直す分。`RECENT_LOGS` 行まで。 */
+  readonly #recentLogs: Array<{ seq: number; level: 'info' | 'warn' | 'error'; text: string; at: string }> = [];
+  #logSeq = 0;
   #server?: ReturnType<typeof createServer>;
   /** 点検を回す係。状態（走っている子）はそちらが持つ。 */
   /** 記録をファイルにも残す。困ったときの報告に、ここから直近を入れる。 */
@@ -172,6 +211,7 @@ export class UiServer {
       this.broadcast(e.text !== undefined
         ? { type: 'task', name: e.name, text: e.text }
         : { type: 'taskDone', name: e.name, code: e.code ?? 1 });
+      if (e.text === undefined) this.#jobsChanged();
     },
   });
   #url = '';
@@ -329,8 +369,15 @@ export class UiServer {
   /** 画面へ流す。誰も見ていなくても落ちない。 */
   broadcast(event: UiEvent): void {
     // 画面に流すものの一部を、ファイルにも残す（記録・会話の終わり・落ちた理由）。
-    if (event.type === 'log') void this.#logFile.append(`[${event.level}] ${event.text}`).catch(() => undefined);
-    else if (event.type === 'session') {
+    if (event.type === 'log') {
+      void this.#logFile.append(`[${event.level}] ${event.text}`).catch(() => undefined);
+      // 番号を振って持っておく。画面は開いたとき取り直し、届いた分は番号で重ねない。
+      const seq = ++this.#logSeq;
+      const kept = { seq, level: event.level, text: event.text, at: new Date().toISOString() };
+      this.#recentLogs.push(kept);
+      if (this.#recentLogs.length > RECENT_LOGS) this.#recentLogs.splice(0, this.#recentLogs.length - RECENT_LOGS);
+      event = { ...event, seq, at: kept.at };
+    } else if (event.type === 'session') {
       const ev = event.event as { type?: string };
       if (ev.type === 'log' || ev.type === 'settled' || ev.type === 'finished') {
         void this.#logFile.append(`[session ${ev.type}] ${JSON.stringify(event.event).slice(0, 2000)}`).catch(() => undefined);
@@ -1000,12 +1047,14 @@ export class UiServer {
         runtime.list().catch(() => []),
         findInstalled(),
       ]);
+      const dir = this.#opts.config.runtime?.modelsDir ?? modelsDir();
       return send(res, 200, {
         runtime: runtime.id,
-        installed: installed.map((m) => ({ ref: m.ref, sizeBytes: m.sizeBytes })),
+        // GGUF を置く道では、絶対の道も返す。画面で開く・コピーするため（Ollama にはファイルが無い）。
+        installed: installed.map((m) => ({ ref: m.ref, sizeBytes: m.sizeBytes, ...(usesGguf(runtime.id) ? { path: join(dir, m.ref) } : {}) })),
         llamaServer: llama ?? null,
         // どこを見ているか。「置いたのに出ない」を、画面の上で切り分けられる。
-        modelsDir: this.#opts.config.runtime?.modelsDir ?? modelsDir(),
+        modelsDir: dir,
         // 取ってきている最中か、失敗したか。**押した板に出すために返す。**
         fetching: this.#fetching ?? null,
         catalog: AVAILABLE_MODELS.map((m) => ({
@@ -1158,6 +1207,8 @@ export class UiServer {
         ? {
           id: starter.id, approxGB: starter.approxGB,
           fetching: this.#fetching?.state === 'running',
+          // 取ってきている最中なら、最新の一言も。押しボタンにそのまま出す。
+          message: this.#fetching?.state === 'running' ? this.#fetching.message : '',
           // 取ってこられなかったなら、その理由と置き方も一緒に。ログを開かなくても分かるように。
           failed: this.#fetching?.state === 'failed' ? this.#fetching.message : '',
         }
@@ -1265,6 +1316,17 @@ export class UiServer {
       });
     }
 
+    if (path === '/api/jobs' && req.method === 'GET') {
+      // 裏で動いているもの。開いた瞬間に、いまの状態が分かる（流れを遡らない）。
+      return send(res, 200, { jobs: this.#jobs() });
+    }
+
+    if (path === '/api/logs' && req.method === 'GET') {
+      // 最近の記録。画面のログのパネルが開いたときに取り直す。`after` より新しい分だけも取れる。
+      const after = Number(url.searchParams.get('after') ?? '0');
+      return send(res, 200, { lines: this.#recentLogs.filter((l) => l.seq > after) });
+    }
+
     if (path === '/api/tasks' && req.method === 'GET') {
       // running は動いているものの名前の一覧（同じ名前は二重に回さない）。
       return send(res, 200, { tasks: TaskRunner.list(), running: this.#tasks.running });
@@ -1275,6 +1337,7 @@ export class UiServer {
       const name = String(body?.name ?? '');
       const refused = this.#tasks.start(name);
       if (refused) return send(res, refused.includes('ありません') ? 400 : 409, { error: refused });
+      this.#jobsChanged();
       // モデルが答えている最中に回すと、どちらも遅くなる（CPU は一つ）。
       // 診断の側は CPU を譲る（tasks.ts）。黙って遅くなるより、そう言う。
       const live = this.#session;
@@ -1329,7 +1392,14 @@ export class UiServer {
       const asked = typeof body?.path === 'string' ? body.path : '';
       const content = typeof body?.content === 'string' ? body.content : undefined;
       if (!asked || content === undefined) return send(res, 400, { error: 'path と content が要ります' });
-      const real = await resolveInside(this.#workRoot(), asked);
+      /*
+       * **まだ無いファイルも書ける。**
+       *
+       * `resolveInside` は実体（realpath）で比べるので、まだ無い道は必ず「外」になり、
+       * 新しいファイルを保存すると「作業場の外には書けません」と嘘を言っていた。
+       * 無い道は、在る所まで遡って実体を見る（`realSafeResolve`。モデル側の write_file と同じ）。
+       */
+      const real = await this.#writablePath(asked);
       if (!real) return send(res, 400, { error: '作業場の外には書けません' });
       const session = this.#session;
       if (session && this.#busyNow(session)) {
@@ -1416,6 +1486,76 @@ export class UiServer {
       if (after === current) return send(res, 200, { reverted: false, path: asked });
       const { added, removed } = await this.#writeByHand(asked, real, current, after, `戻した: ${asked}`);
       return send(res, 200, { reverted: true, path: asked, added, removed });
+    }
+
+    /*
+     * 道を OS で開く。
+     *
+     * 画面に道は出ていたが、開いて確かめる手が無く、打ち直すか貼り直すかしか
+     * 無かった。開けるのは**このプログラムが使っている場所の中**だけ（作業場・モデル・
+     * 記録・プログラム）。外の道を渡されても開かない（画面の口は、よその頁から
+     * 叩けないようにしてあるが、それでも何でも開く口は作らない）。
+     */
+    if (path === '/api/open' && req.method === 'POST') {
+      const body = await readBody(req) as { path?: unknown };
+      const asked = typeof body?.path === 'string' ? body.path.trim() : '';
+      if (!asked) return send(res, 400, { error: 'path が要ります' });
+      if (foreignPath(asked) || !isAbsolute(asked)) return send(res, 400, { error: `この機械の絶対の道だけ開けます: ${asked}` });
+      let real: string;
+      try { real = await realpath(asked); } catch { return send(res, 404, { error: `ありません: ${asked}` }); }
+      const roots = await Promise.all([
+        this.#workRoot(), this.#opts.config.runtime?.modelsDir ?? modelsDir(), stateDir(), aasHome(), productRoot(), installRoot(),
+      ].map((r) => realpath(r).catch(() => undefined)));
+      const within = (root: string) => {
+        const rel = relative(root, real);
+        return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+      };
+      if (!roots.some((r) => r !== undefined && within(r))) {
+        return send(res, 403, { error: '開けるのは、このプログラムが使っている場所（作業場・モデル・記録・プログラム）の中だけです' });
+      }
+      const isDir = (await stat(real)).isDirectory();
+      const { command, args } = revealCommand(process.platform, real, isDir);
+      if (!this.#opts.opener && !canRun(command)) {
+        return send(res, 501, { error: `この機械には開く命令（${command}）がありません。道をコピーして、手で開いてください` });
+      }
+      try {
+        await (this.#opts.opener ?? revealWithOs)(command, args);
+      } catch (e) {
+        return send(res, 500, { error: `開けませんでした: ${(e as Error).message}` });
+      }
+      return send(res, 200, { opened: real, dir: isDir });
+    }
+
+    /*
+     * 横の一覧から、ファイル・フォルダを作る。
+     *
+     * 作る道が無かった。エディタで新しい名前を保存しても「作業場の外」と断られ、
+     * 画面からは一つも作れなかった。ファイルは空で作って、戻り先（undo）に
+     * 「元々無かった」と控える（戻せば消える）。フォルダは戻り先に載らない
+     * （空のフォルダを消すだけなので、消し方は普通のファイル操作に任せる）。
+     */
+    if (path === '/api/files/new' && req.method === 'POST') {
+      const body = await readBody(req) as { path?: unknown; kind?: unknown };
+      const asked = typeof body?.path === 'string' ? body.path.trim().replace(/\\/g, '/') : '';
+      const kind = body?.kind === 'dir' ? 'dir' : body?.kind === 'file' ? 'file' : undefined;
+      if (!asked || !kind) return send(res, 400, { error: 'path と kind（file か dir）が要ります' });
+      if (asked.split('/').some((seg) => seg === '' || seg === '.' || seg === '..')) {
+        return send(res, 400, { error: `その名前では作れません: ${asked}` });
+      }
+      const real = await this.#writablePath(asked);
+      if (!real) return send(res, 400, { error: '作業場の外には作れません' });
+      const session = this.#session;
+      if (session && this.#busyNow(session)) {
+        return send(res, 409, { error: 'いま作業中です。終わってから作ってください' });
+      }
+      if (await stat(real).then(() => true, () => false)) return send(res, 409, { error: `既にあります: ${asked}` });
+      if (kind === 'dir') {
+        await mkdir(real, { recursive: true });
+        this.broadcast({ type: 'stateChanged' });
+        return send(res, 200, { created: asked, kind });
+      }
+      await this.#writeByHand(asked, real, undefined, '', `作った: ${asked}`);
+      return send(res, 200, { created: asked, kind });
     }
 
     if (path === '/api/files' && req.method === 'GET') {
@@ -1857,6 +1997,8 @@ export class UiServer {
     const read = (async () => ({
       gguf: await Promise.all((await listGguf(liveDir)).map(async (m) => ({
         ...m,
+        // 絶対の道。画面で開く・コピーするため。
+        path: join(liveDir, m.ref),
         tooBig: tooBigForRam(m.sizeBytes, totalmem()) ?? null,
         // 名前だけ .gguf の別物も、一覧で分かるように。
         notGguf: !(await looksLikeGguf(join(liveDir, m.ref))),
@@ -2060,11 +2202,23 @@ export class UiServer {
    * モデルの直しと同じ扱いにする。戻り先に残し、差分を「変更したファイル」と
    * 会話へ流す。ここを通らずに書くと、戻せない直しができる。
    */
+  /**
+   * 画面から書く先。在れば実体で、無ければ在る所まで遡った実体で、作業場の中かを見る。
+   * 外・リンク越しの外・絶対の道は undefined。
+   */
+  async #writablePath(asked: string): Promise<string | undefined> {
+    if (isAbsolute(asked) || foreignPath(asked)) return undefined;
+    const root = this.#workRoot();
+    return (await resolveInside(root, asked)) ?? await realSafeResolve(root, asked);
+  }
+
   async #writeByHand(asked: string, real: string, before: string | undefined, content: string, request: string): Promise<{ added: number; removed: number }> {
     const session = this.#session;
     const undo = session?.undo ?? new UndoStore(this.#workRoot(), join(stateDir(), 'undo'));
     await undo.begin(request);
     undo.capture(asked, before);
+    // 無い階層ごと作る（新しいファイルは、無いフォルダの中に置きたいことが多い）。
+    await mkdir(dirname(real), { recursive: true });
     await writeFile(real, content, 'utf8');
     await undo.end().catch(() => undefined);
     session?.markChanged();
@@ -2193,10 +2347,12 @@ export class UiServer {
            * 返事が来ない**という形で当たった。
            */
           this.#loading = { ref, began };
+          this.#jobsChanged();
           try {
             await runtime.ensureLoaded(ref);
           } catch (e) {
             this.#loading = undefined;
+            this.#jobsChanged();
             clearInterval(ticking);
             const detail = e instanceof Error ? e.message : String(e);
             this.broadcast({
@@ -2220,6 +2376,7 @@ export class UiServer {
               + `保存先: ${this.#opts.config.runtime?.modelsDir ?? modelsDir()}`;
           }
           this.#loading = undefined;
+          this.#jobsChanged();
           clearInterval(ticking);
           this.broadcast({
             type: 'log', level: 'info',
@@ -2702,7 +2859,7 @@ export class UiServer {
    * 流すだけだった。押したのはモデルの板なので、**押した本人には何も
    * 見えない。**押しても永久に何も起きないように見える。**
    */
-  #fetching: { id: string; state: 'running' | 'done' | 'failed'; message: string } | undefined;
+  #fetching: { id: string; state: 'running' | 'done' | 'failed'; message: string; began: number; progress?: FetchStatus } | undefined;
 
   /**
    * 困ったときの報告。**押した所に結果を出すために持つ。**
@@ -2716,6 +2873,7 @@ export class UiServer {
     const began = Date.now();
     this.#report = { state: 'running', message: 'まとめています（doctor を回すので 1〜2 分かかります）', began };
     this.broadcast({ type: 'report', state: 'running' });
+    this.#jobsChanged();
     try {
       const root = join(dirname(WEB_DIR), '..', '..');
       const body = await (this.#opts.buildReport ?? (() => buildReport({
@@ -2731,18 +2889,63 @@ export class UiServer {
       this.#report = { state: 'failed', message: `まとめられませんでした: ${e instanceof Error ? e.message : String(e)}`, began };
     }
     this.broadcast({ type: 'report', state: this.#report.state });
+    this.#jobsChanged();
+  }
+
+  /** 裏で動いているものの、いまの状態。 */
+  #jobs(): Job[] {
+    const jobs: Job[] = [];
+    const f = this.#fetching;
+    if (f) {
+      jobs.push({
+        kind: 'fetch', id: f.id, title: `モデルを取ってくる: ${f.id}`, state: f.state, detail: f.message,
+        startedAt: new Date(f.began).toISOString(),
+        ...(f.progress?.pct !== undefined ? { progress: { pct: f.progress.pct } } : {}),
+      });
+    }
+    const l = this.#loading;
+    if (l) {
+      jobs.push({ kind: 'load', id: l.ref, title: `モデルを読み込む: ${l.ref}`, state: 'running', detail: '読み込んでいます', startedAt: new Date(l.began).toISOString() });
+    }
+    for (const name of this.#tasks.running) {
+      const began = this.#tasks.startedAt(name);
+      jobs.push({
+        kind: 'task', id: name, title: `点検: ${TaskRunner.list().find((t) => t.id === name)?.name ?? name}`,
+        state: 'running', detail: '回しています', ...(began ? { startedAt: new Date(began).toISOString() } : {}),
+      });
+    }
+    const r = this.#report;
+    if (r) jobs.push({ kind: 'report', id: 'report', title: 'サポート用レポート', state: r.state, detail: r.message, startedAt: new Date(r.began).toISOString() });
+    if (this.#resuming) jobs.push({ kind: 'resume', id: this.#resuming, title: 'やり残しの続き', state: 'running', detail: this.#resuming });
+    return jobs;
+  }
+
+  /** 裏の仕事の状態が変わった。全部を流す（画面は差分を追わず、並べ直すだけ）。 */
+  #jobsChanged(): void {
+    this.broadcast({ type: 'jobs', jobs: this.#jobs() });
   }
 
   async #fetchModel(session: Session, id: string): Promise<void> {
     const runtime = await this.#localRuntime();
     const entry = lookupCatalog(id);
+    const began = Date.now();
+    /*
+     * **節目だけを記録に流す。**進み具合は状態（#fetching）として持ち、裏の仕事の
+     * 一覧へ流す。1.5 秒ごとの行を記録と stateChanged で撒いていたので、記録が
+     * 埋まって読めず、開いている全部の画面がそのたびに描き直していた（実機）。
+     */
     const log = (text: string) => {
-      this.#fetching = { id, state: 'running', message: text };
+      this.#fetching = { id, state: 'running', message: text, began };
       this.broadcast({ type: 'log', level: 'info', text });
-      this.broadcast({ type: 'stateChanged' });
+      this.#jobsChanged();
     };
-    this.#fetching = { id, state: 'running', message: '始めます…' };
+    const status = (s: FetchStatus) => {
+      this.#fetching = { id, state: 'running', message: describeFetch(s), began, progress: s };
+      this.#jobsChanged();
+    };
+    this.#fetching = { id, state: 'running', message: '始めます…', began };
     this.broadcast({ type: 'stateChanged' });
+    this.#jobsChanged();
 
     try {
       if (usesGguf(runtime.id)) {
@@ -2759,6 +2962,7 @@ export class UiServer {
           },
           modelsDir: dir,
           onProgress: log,
+          onStatus: status,
           ...(this.#opts.modelFetch ? { fetchImpl: this.#opts.modelFetch } : {}),
         });
       } else {
@@ -2770,7 +2974,7 @@ export class UiServer {
           onProgress: log,
         });
       }
-      this.#fetching = { id, state: 'done', message: `用意できました: ${id}` };
+      this.#fetching = { id, state: 'done', message: `用意できました: ${id}`, began };
       this.broadcast({ type: 'log', level: 'info', text: `用意できました: ${id}` });
     } catch (e) {
       /*
@@ -2788,10 +2992,11 @@ export class UiServer {
       // **一つの文にする。**二つに分けると、読む側は下の行を見落とす。
       const text = `取ってこられませんでした: ${e instanceof Error ? e.message : String(e)}\n${byHand(modelsDir())}`;
       // 押した板にも残す。ログの板は閉じていることがある。
-      this.#fetching = { id, state: 'failed', message: text };
+      this.#fetching = { id, state: 'failed', message: text, began };
       this.broadcast({ type: 'log', level: 'error', text });
     }
     this.broadcast({ type: 'stateChanged' });
+    this.#jobsChanged();
   }
 
   async #static(path: string, res: ServerResponse): Promise<void> {
@@ -2870,6 +3075,15 @@ export class BodyTooLarge extends Error {
 /** 画面で開くファイルの上限。これより大きいものは、画面のエディタでは扱わない。 */
 const EDIT_MAX_BYTES = 2 * 1024 * 1024;
 const NOT_LOADED_YET = 'モデルをまだ読んでいません（頼まれたときに読みます）';
+
+/** OS で開いて見せる。起こしたら手を離す（閉じるまで待たない）。 */
+function revealWithOs(command: string, args: string[]): Promise<void> {
+  return new Promise((ok, ng) => {
+    const child = spawn(command, args, { stdio: 'ignore', detached: true });
+    child.once('error', ng);
+    child.once('spawn', () => { child.unref(); ok(); });
+  });
+}
 
 export function foreignPath(p: string | undefined): boolean {
   if (typeof p !== 'string' || p.length === 0) return false;

@@ -95,6 +95,8 @@ export class TaskRunner {
   readonly #opts: TaskRunnerOptions;
   /** 名前 → 動いている子。名前ごとに一本まで。 */
   readonly #children = new Map<string, ChildProcess>();
+  /** 名前 → 始めた時刻。裏の仕事の一覧で「何秒経った」を出すため。 */
+  readonly #startedAt = new Map<string, number>();
 
   constructor(opts: TaskRunnerOptions) {
     this.#opts = opts;
@@ -108,6 +110,11 @@ export class TaskRunner {
   /** その点検が動いているか。 */
   isRunning(name: string): boolean {
     return this.#children.has(name);
+  }
+
+  /** いつ始めたか（ms）。動いていなければ undefined。 */
+  startedAt(name: string): number | undefined {
+    return this.#children.has(name) ? this.#startedAt.get(name) : undefined;
   }
 
   /** 一覧。画面に並べるためのもの。 */
@@ -145,6 +152,7 @@ export class TaskRunner {
       },
     });
     this.#children.set(name, child);
+    this.#startedAt.set(name, Date.now());
     // モデルが答えている最中に回しても、モデルの側を止めない。
     // 二本並べても、どちらも譲る（CPU をモデルに残す）。
     lowerPriority(child.pid);
