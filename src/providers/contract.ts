@@ -38,7 +38,7 @@ export interface ToolSchema {
 /**
  * 依頼の優先度。**数が小さいほど先に口を借りる。**
  *
- * 表に出す名前は利用者の言葉（`PRIORITY_LABEL`）。中は数だけで持つ
+ * 表に出すときは利用者の言葉を使う（`PRIORITY_LABEL`。まだ出している場所は無い）。中は数だけで持つ
  * （語形が変わらない合図。HTTP でも `x-aas-priority: 0` のように数で送る）。
  *
  * - 最優先・優先: 取り分を持つ。空いた口は上から順にこちらへ回る
@@ -48,13 +48,14 @@ export interface ToolSchema {
  */
 export const Priority = { top: 0, preferred: 1, high: 2, normal: 3, low: 4 } as const;
 export type Priority = (typeof Priority)[keyof typeof Priority];
-/** 表に出す名前。利用者の言葉をそのまま使う（訳語を作らない）。 */
+/** 表に出すときの名前。利用者の言葉をそのまま使う（訳語を作らない）。まだ出している場所は無い。 */
 export const PRIORITY_LABEL: Record<Priority, string> = { 0: '最優先', 1: '優先', 2: '高', 3: '中', 4: '低' };
 /** 何も言われなければ「中」。上に待ち手が居れば待つ側。 */
 export const DEFAULT_PRIORITY: Priority = Priority.normal;
 /**
  * 優先度を運ぶ HTTP ヘッダ。本文に足す道を選ばなかったのは、知らない項目を
- * 断る OpenAI 互換の相手が居るため。知らないヘッダは、どの相手も読み飛ばす。
+ * 断る OpenAI 互換の相手が居るため。知らないヘッダは読み飛ばされるはずだが、
+ * **確かめたのは inproc だけ**（Ollama / llama-server / 雲の中継では試していない）。
  */
 export const PRIORITY_HEADER = 'x-aas-priority';
 /** ヘッダから読む。無い・読めない・範囲外は既定（中）。 */

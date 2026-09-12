@@ -124,6 +124,8 @@ export interface InProcOptions {
   control?: boolean;
   /** `/control/shutdown` で止めたあとに呼ぶ（別のプロセスなら、ここで終わる）。 */
   onExit?: () => void;
+  /** 列で待つ間の `: queued` の間隔。既定 `QUEUE_HEARTBEAT_MS`。テストで短くする。 */
+  queueHeartbeatMs?: number;
 }
 
 /** 置き場にある GGUF。名前は問わない。 */
@@ -363,6 +365,12 @@ export const SAFE_WINDOW = 8192;
  * **速さのための数ではない。**CPU は分け合うので、増やすと一人あたりは遅くなる。
  */
 export const DEFAULT_SEQUENCES = 2;
+/**
+ * 列で待っている間、何 ms ごとに `: queued` を打つか。
+ * 上の層は最初のトークンまでの上限（10 分）を数えているが、**並んでいる時間は停滞ではない**。
+ * 打ち続ければ、上の層は待ちを延ばせる（`openai-compatible.ts`）。
+ */
+export const QUEUE_HEARTBEAT_MS = 15_000;
 
 export class InProcRuntime implements LocalRuntime {
   readonly id = 'inproc';
@@ -755,8 +763,10 @@ export class InProcRuntime implements LocalRuntime {
     if (!held && ref && /\.gguf$/i.test(ref)) {
       const have = (await this.list()).some((m) => m.ref === ref);
       if (have) {
-        // 答えている最中のものを解かない。全部の口が空くのを待ってから。
-        await Promise.all([...this.#sessions.values()].map((h) => h.lanes.whenAllIdle()));
+        // 答えている最中のものを解かない。**以後は貸さず、並んでいる人は断り**、
+        // 出ている分が戻るのを待つ。「空くのを待つ」だけだと、返った口をその場で
+        // 次の待ち手へ渡し、その口の上で context を解くことになる（敵対レビューで見つけた）。
+        await Promise.all([...this.#sessions.values()].map((h) => h.lanes.close()));
         for (const other of this.loaded()) {
           this.#opts.onLog?.(`${other} を解いて ${ref} に切り替えます`);
           await this.unload(other);
@@ -815,16 +825,50 @@ export class InProcRuntime implements LocalRuntime {
     // 優先度はヘッダで受ける（`x-aas-priority: 0〜4`）。無ければ中。
     // 上（最優先・優先）が待っていれば、高・中・低はその後ろ。
     const priority = toPriority(req.headers[PRIORITY_HEADER]);
-    const lane = await held.lanes.acquire({ signal: gone.signal, priority });
+    // 列で待つ間は `: queued` を打ち続ける。上の層の「最初のトークンまで 10 分」を、
+    // 並んでいる時間で使い切らせないため（並んでいるのは停滞ではない）。
+    const streaming = body.stream !== false;
+    const beat = streaming
+      ? setInterval(() => { if (!res.writableEnded) res.write(': queued\n\n'); },
+        this.#opts.queueHeartbeatMs ?? QUEUE_HEARTBEAT_MS)
+      : undefined;
+    let lane: ChatLane | undefined;
+    try {
+      lane = await held.lanes.acquire({ signal: gone.signal, priority });
+    } finally {
+      if (beat) clearInterval(beat);
+    }
     try {
       // 並んでいる間に切られた依頼は、始めない。誰も読まない答えを
       // 作りながら、口を塞ぐことになる。
-      if (!lane || res.destroyed || res.writableEnded) return;
+      if (res.destroyed || res.writableEnded) return;
+      if (!lane) {
+        // 借りられなかった（切り替えで口を閉じた）。**黙って放置しない。**
+        // 放置すると上の層は 10 分の停滞で落とし、やり直しもしない。
+        // 落ちたと分かる形で閉じれば、上の層は unavailable としてやり直す。
+        this.#refuse(res, streaming, ref);
+        return;
+      }
+      if (streaming) res.write(': started\n\n');
       await this.#respond(held, lane, ref, body, res, gone.signal);
     } finally {
       res.off('close', onClose);
       if (lane) held.lanes.release(lane);
     }
+  }
+
+  /** 口を借りられなかった依頼を、落ちたと分かる形で閉じる。 */
+  #refuse(res: ServerResponse, streaming: boolean, ref: string): void {
+    if (streaming) {
+      res.write(`data: ${JSON.stringify({
+        id: 'inproc', object: 'chat.completion.chunk', model: ref,
+        choices: [{ index: 0, delta: {}, finish_reason: 'error' }],
+      })}\n\n`);
+      res.end('data: [DONE]\n\n');
+      return;
+    }
+    res.writeHead(503, { 'content-type': 'application/json' });
+    res.end('{"error":{"message":"切り替えています"}}');
   }
 
   async #respond(
@@ -1089,12 +1133,6 @@ export interface ChatLane {
   sequence?: { nextTokenIndex?: number };
 }
 
-/**
- * 口の貸し出し。**空いた一本を貸し、無ければ空くまで待つ。**
- *
- * 断らずに待たせる（上の層は待てる。断られると諦めてしまう）。
- * 待っている間に依頼が切られたら（signal）、貸さずに返す。
- */
 /** ここから下（高・中・低）は取り分 0。上に待ち手が居ないときだけ借りる。 */
 const OPPORTUNISTIC: Priority = Priority.high;
 
@@ -1103,8 +1141,16 @@ interface Waiter {
   /** 来た順。同じ級の中では、先に来た人から。 */
   seq: number;
   give: (lane: ChatLane) => void;
+  /** 貸さずに返す（切られた・閉じた）。 */
+  drop: () => void;
 }
 
+/**
+ * 口の貸し出し。**空いた一本を上から順に貸し、無ければ空くまで待つ。**
+ *
+ * 断らずに待たせる（上の層は待てる。断られると諦めてしまう）。
+ * 待っている間に依頼が切られたら（signal）、貸さずに返す。
+ */
 export class LanePool {
   readonly #all: ChatLane[];
   readonly #free: ChatLane[];
@@ -1115,6 +1161,8 @@ export class LanePool {
   readonly #lentTo = new Map<ChatLane, Priority>();
   /** 高・中・低が今いくつ借りているか。上のために空ける本数と突き合わせる。 */
   #lowHeld = 0;
+  /** close() のあと。以後は貸さない。 */
+  #closed = false;
   /**
    * これまでに口を返した回数。**「今この場で動いているぶんが片づくまで」を
    * 数で測る**ために持つ。全部空くのを待つと、次々に依頼が来るあいだ
@@ -1165,7 +1213,7 @@ export class LanePool {
   acquire(
     { signal, priority = DEFAULT_PRIORITY }: { signal?: AbortSignal; priority?: Priority } = {},
   ): Promise<ChatLane | undefined> {
-    if (signal?.aborted) return Promise.resolve(undefined);
+    if (this.#closed || signal?.aborted) return Promise.resolve(undefined);
     if (this.#free.length > 0 && this.#allowed(priority)) {
       return Promise.resolve(this.#lend(this.#free.pop()!, priority));
     }
@@ -1174,19 +1222,19 @@ export class LanePool {
         rank: priority,
         seq: this.#seq++,
         give: (lane) => { cleanup(); resolve(lane); },
+        drop: () => { cleanup(); resolve(undefined); },
       };
-      const drop = (): void => {
+      const onAbort = (): void => {
         const at = this.#waiters.indexOf(waiter);
         if (at >= 0) this.#waiters.splice(at, 1);
-        cleanup();
-        resolve(undefined);
+        waiter.drop();
       };
-      const cleanup = (): void => signal?.removeEventListener('abort', drop);
+      const cleanup = (): void => signal?.removeEventListener('abort', onAbort);
       // 級の小さい順、同じ級なら来た順。後ろから見て、自分より級の大きい人を越える。
       let at = this.#waiters.length;
       while (at > 0 && this.#waiters[at - 1]!.rank > priority) at -= 1;
       this.#waiters.splice(at, 0, waiter);
-      signal?.addEventListener('abort', drop, { once: true });
+      signal?.addEventListener('abort', onAbort, { once: true });
     });
   }
 
@@ -1205,13 +1253,27 @@ export class LanePool {
       if (this.#released >= w.target) { w.resolve(); return false; }
       return true;
     });
-    const at = this.#waiters.findIndex((w) => this.#allowed(w.rank));
+    // 閉じたあとは誰にも渡さない（待ち手は close() で全員返してある）。
+    const at = this.#closed ? -1 : this.#waiters.findIndex((w) => this.#allowed(w.rank));
     if (at >= 0) {
       const [next] = this.#waiters.splice(at, 1);
       next!.give(this.#lend(lane, next!.rank));
       return;
     }
     this.#free.push(lane);
+  }
+
+  /**
+   * **以後は貸さない。**並んでいる人は全員 `undefined` で返し（断る）、
+   * いま出ている分が戻るのを待つ。降ろす・切り替える前に呼ぶ。
+   *
+   * `whenAllIdle` だけでは足りない。返った口をその場で次の待ち手へ渡すので、
+   * 待っていた側が「片づいた」と受け取った直後に、その口の上で context を解くことになる。
+   */
+  close(): Promise<void> {
+    this.#closed = true;
+    for (const w of this.#waiters.splice(0)) w.drop();
+    return this.whenAllIdle();
   }
 
   /**

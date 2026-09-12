@@ -573,7 +573,8 @@ export class Session {
       const pm = decompose(
         this.orchestrator,
         known ? `${request}\n\n${known}` : request,
-        { candidates: this.candidates, ctx: pmCtx },
+        // 利用者が押して待っている。直前の判じ（中）の後ろに並ばせない。
+        { candidates: this.candidates, ctx: pmCtx, priority: Priority.top },
         ac.signal,
       );
       let step = await pm.next();

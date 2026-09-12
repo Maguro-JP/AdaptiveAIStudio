@@ -11,6 +11,7 @@
  * どうしても直せなければ「一人で全部やる」一件に畳んで進める。
  * 分解できないことは、作業をしない理由にならない。
  */
+import type { Priority } from '../providers/contract.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
 import type { ChatOrchestrator } from '../core/orchestrator.ts';
 import type { WorkItem } from './team.ts';
@@ -370,6 +371,8 @@ export async function* decompose(
     ctx: PmContext;
     temperature?: number;
     maxTokens?: number;
+    /** 口を借りる優先度。利用者が押して待っているなら最優先で渡す。 */
+    priority?: Priority;
   },
   signal: AbortSignal,
 ): AsyncGenerator<PmEvent, WorkPlan> {
@@ -387,6 +390,7 @@ export async function* decompose(
         // 分解は発想ではなく整理。揺らす必要がない。
         temperature: opts.temperature ?? 0.1,
         maxTokens: opts.maxTokens,
+        ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
       },
       signal,
     )) {

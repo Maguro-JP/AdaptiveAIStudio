@@ -10,6 +10,7 @@
  *
  * node-llama-cpp が無い場所では飛ばす（bundle には入っていない）。
  */
+import { PRIORITY_HEADER, Priority } from '../src/providers/contract.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -399,7 +400,7 @@ async function throughParallel() {
     }
     // 二つの会話（最優先）。既定の中だと、上のために半分を空けるので並ばない。
     const ask = () => fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-aas-priority': '0' },
+      method: 'POST', headers: { 'content-type': 'application/json', [PRIORITY_HEADER]: String(Priority.top) },
       body: JSON.stringify({ model: 'tiny.gguf', stream: true, max_tokens: 12, messages: [{ role: 'user', content: 'hi' }] }),
     }).then((r) => r.text());
     const [a, b] = await Promise.all([ask(), ask()]);

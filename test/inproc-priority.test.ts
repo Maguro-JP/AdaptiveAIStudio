@@ -110,7 +110,16 @@ describe('優先度: 高・中・低は取り分 0', () => {
     // 一人目の中が返して、はじめて二人目へ。
     pool.release(a!);
     await until(() => b.got.done, '取り分が空いたら中の二人目へ', { timeoutMs: 5_000 });
+    // **手渡しで受けた口も取り分に数える。**数えないと、三人目の中が空いた口を借りて
+    // 上のぶんが消える（敵対レビューで、数えなくても全部通ることが見つかった）。
+    assert.equal(pool.lowHeld, 1, '手渡しで受けた口が取り分に数えられていない');
+    const c = tryAcquire(pool, Priority.normal);
+    await settle();
+    assert.equal(c.got.done, false, '手渡しの直後に、三人目の中が上のぶんを借りた');
+    assert.equal(pool.busy, 1);
     pool.release(b.got.lane!);
+    await until(() => c.got.done, '二人目が返して三人目へ', { timeoutMs: 5_000 });
+    pool.release(c.got.lane!);
     assert.equal(pool.busy, 0);
     assert.equal(pool.lowHeld, 0, '高・中・低の数が戻っていない');
   });
@@ -121,6 +130,26 @@ describe('優先度: 高・中・低は取り分 0', () => {
     const a = await pool.acquire({ priority: Priority.low });
     assert.ok(a, '一本だけなのに低が借りられない');
     pool.release(a!);
+  });
+
+  test('取り分は本数から決まる（4 本: 中は 2 本まで。3 本目は待つ。最優先はその場）', async () => {
+    // 2 本だけで見ると「常に 1 本」と区別が付かない（敵対レビューで見つかった）。
+    const pool = new LanePool([lane(), lane(), lane(), lane()]);
+    assert.equal(pool.reserve, 2);
+    const a = await pool.acquire({ priority: Priority.normal });
+    const b = await pool.acquire({ priority: Priority.normal });
+    assert.ok(a && b, '中が 2 本まで借りられない');
+    assert.equal(pool.lowHeld, 2);
+    const c = tryAcquire(pool, Priority.normal);
+    await settle();
+    assert.equal(c.got.done, false, '中が 3 本目を借りた（取り分は 2）');
+    const top = tryAcquire(pool, Priority.top);
+    await settle();
+    assert.equal(top.got.done, true, '空きがあるのに最優先が待った');
+    pool.release(a!);
+    await until(() => c.got.done, '中が返せば 3 人目の中へ', { timeoutMs: 5_000 });
+    pool.release(b!); pool.release(c.got.lane!); pool.release(top.got.lane!);
+    assert.equal(pool.busy, 0); assert.equal(pool.lowHeld, 0);
   });
 
   test('空ける本数は本数の半分（切り上げ）', () => {
@@ -197,6 +226,27 @@ describe('優先度: 元から守っていたこと', () => {
     await until(() => idled, 'whenAllIdle が返る', { timeoutMs: 5_000 });
     await until(() => w.got.done, '待ち手が受け取る', { timeoutMs: 5_000 });
     pool.release(w.got.lane!);
+  });
+});
+
+describe('優先度: 閉じる（切り替え・降ろす前）', () => {
+  test('close() は、以後貸さず、並んでいる人を断り、出ている分が戻るのを待つ', async () => {
+    // 「空くのを待つ」だけだと、返った口をその場で待ち手へ渡し、その口の上で解くことになる。
+    const pool = new LanePool([lane(), lane()]);
+    const a = await pool.acquire({ priority: Priority.normal });
+    const b = tryAcquire(pool, Priority.normal); // 取り分待ち
+    await settle();
+    assert.equal(b.got.done, false);
+    let closed = false;
+    void pool.close().then(() => { closed = true; });
+    await until(() => b.got.done, '並んでいた人は断られる', { timeoutMs: 5_000 });
+    assert.equal(b.got.lane, undefined, '閉じたのに貸した');
+    assert.equal(closed, false, '出ている分が戻る前に閉じ終えた');
+    // 閉じたあとの依頼は、最優先でも借りない。
+    assert.equal(await pool.acquire({ priority: Priority.top }), undefined, '閉じたのに貸した');
+    pool.release(a!);
+    await until(() => closed, '出ている分が戻れば閉じ終える', { timeoutMs: 5_000 });
+    assert.equal(pool.busy, 0); assert.equal(pool.lowHeld, 0);
   });
 });
 
@@ -278,7 +328,7 @@ describe('優先度: 通しで（inproc の入口から）', () => {
     try {
       // 一人目（低）が口を取って、門の前で止まる。
       const first = ask('first', '4');
-      await until(() => state.started.includes('first'), '一人目が始まる', { timeoutMs: 5_000 });
+      await until(() => state.started.includes('first'), '一人目が始まる');
       // 二人目（低）が並ぶ。ヘッダが返った時点で列に入っている（入口は先にヘッダを返す）。
       const second = ask('second', '4');
       await second.then(() => {}, () => {});
@@ -287,16 +337,130 @@ describe('優先度: 通しで（inproc の入口から）', () => {
       await third.then(() => {}, () => {});
       // 一人目を通す。次に始まるのは三人目（最優先）。
       open('first');
-      await until(() => state.started.includes('third'), '最優先が始まる', { timeoutMs: 5_000 });
+      await until(() => state.started.includes('third'), '最優先が始まる');
       assert.equal(state.started.includes('second'), false, '低が最優先より先に始まった');
       open('third');
-      await until(() => state.started.includes('second'), 'そのあと低', { timeoutMs: 5_000 });
+      await until(() => state.started.includes('second'), 'そのあと低');
       open('second');
       const texts = await Promise.all([first, second, third].map((p) => p.then((r) => r.text())));
       for (const t of texts) assert.match(t, /data: \[DONE\]/);
       assert.deepEqual(state.started, ['first', 'third', 'second']);
     } finally {
       for (const open of state.gates.values()) open();
+      ac.abort();
+    }
+  });
+
+  test('**切り替えは、並んでいる人を断り、生成中の口の上では解かない**', async () => {
+    // 口 2 本・中 2 件（A が生成中、B は取り分待ち）のとき、別の GGUF を名指しした S が来る。
+    // 「空くのを待つ」だけだと、A が返した口をその場で B へ渡し、その直後に解く。
+    const dir = await tempDir('aas-prio-');
+    await writeFile(join(dir, 'a.gguf'), 'x');
+    await writeFile(join(dir, 'b.gguf'), 'x');
+    const events: string[] = [];
+    const gates = new Map<string, () => void>();
+    const opened = new Map<string, Promise<void>>();
+    const gate = (t: string) => {
+      let p = opened.get(t);
+      if (!p) { p = new Promise<void>((r) => gates.set(t, r)); opened.set(t, p); }
+      return p;
+    };
+    const open = (t: string) => { void gate(t); gates.get(t)!(); };
+    const load = async () => ({
+      getLlama: async () => ({
+        loadModel: async () => ({
+          createContext: async () => ({
+            getSequence: () => ({}),
+            dispose: async () => { events.push('dispose'); },
+          }),
+        }),
+      }),
+      LlamaChatSession: class {
+        setChatHistory() {}
+        async prompt(text: string, o: { onTextChunk?: (t: string) => void } = {}) {
+          events.push(`start:${text}`);
+          await gate(text);
+          events.push(`end:${text}`);
+          o.onTextChunk?.(text);
+          return text;
+        }
+      },
+    });
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load, sequences: 2, contextSize: 4096 });
+    running.push(rt);
+    const { baseUrl } = await rt.ensureLoaded('a.gguf');
+    const ac = new AbortController();
+    // 断られたはずの B が終わらない壊れ方で永久に待たない（上限で諦める）。
+    const ask = (model: string, text: string) => fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: text }] }),
+      signal: AbortSignal.any([ac.signal, AbortSignal.timeout(10_000)]),
+    });
+    try {
+      const a = ask('a.gguf', 'A');
+      await until(() => events.includes('start:A'), 'A が始まる');
+      const b = ask('a.gguf', 'B');
+      await b.then(() => {}, () => {});             // ヘッダが返った＝取り分待ちに入った
+      const s = ask('b.gguf', 'S');                  // 切り替え。A が返るまで待つ
+      // S のヘッダは切り替えが終わるまで返らないので、待たない。
+      // 「B が断られた」＝ S が切り替えに入って口を閉じた、を同期点にする。
+      const bText = await b.then((r) => r.text());
+      assert.match(bText, /"finish_reason":"error"/, '断られた B が、落ちたと分かる形で閉じていない');
+      assert.match(bText, /data: \[DONE\]/);
+      assert.equal(events.includes('start:B'), false, '断ったはずの B が始まった');
+      open('A');
+      await until(() => events.includes('start:S'), '切り替えた先で S が始まる');
+      // B は始まらず、A が終わってから解き、その後で S。
+      assert.deepEqual(events, ['start:A', 'end:A', 'dispose', 'start:S']);
+      open('S');
+      const aText = await a.then((r) => r.text());
+      const sText = await s.then((r) => r.text());
+      assert.match(aText, /: started/); assert.match(sText, /data: \[DONE\]/);
+    } finally {
+      for (const r of gates.values()) r();
+      ac.abort();
+    }
+  });
+
+  test('**並んでいる間は鼓動（: queued）を打ち続け、借りたら started を流す**', async () => {
+    const dir = await tempDir('aas-prio-');
+    const ref = 'a.gguf';
+    await writeFile(join(dir, ref), 'x');
+    const { load, state, open } = gatedLib();
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load, sequences: 1, contextSize: 4096, queueHeartbeatMs: 10 });
+    running.push(rt);
+    const { baseUrl } = await rt.ensureLoaded(ref);
+    const ac = new AbortController();
+    const ask = (text: string) => fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: ref, messages: [{ role: 'user', content: text }] }),
+      signal: ac.signal,
+    });
+    try {
+      const a = ask('A');
+      await until(() => state.started.includes('A'), 'A が始まる');
+      const bRes = await ask('B');                   // 口が無いので並ぶ
+      const reader = bRes.body!.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      const pump = (async () => {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+        }
+      })();
+      // 最初の `: queued` に続いて、鼓動が二つ以上（時間ではなく、来るまで見る）。
+      await until(() => buf.split(': queued').length - 1 >= 3, '並んでいる間、鼓動が続く');
+      assert.equal(buf.includes(': started'), false, '借りていないのに started が出た');
+      open('A');
+      await until(() => buf.includes(': started'), '借りたら started');
+      open('B');
+      await pump;
+      assert.match(buf, /data: \[DONE\]/);
+      assert.match(await a.then((r) => r.text()), /: started/);
+    } finally {
+      for (const r of state.gates.values()) r();
       ac.abort();
     }
   });
@@ -313,6 +477,8 @@ describe('優先度: 通しで（inproc の入口から）', () => {
     const raw = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: ref, messages: [{ role: 'user', content: 'plain' }] }),
+      // 中が借りられない壊れ方で永久に待たない（敵対レビューで見つかった）。
+      signal: AbortSignal.timeout(5_000),
     }).then((r) => r.text());
     assert.match(raw, /data: \[DONE\]/);
   });

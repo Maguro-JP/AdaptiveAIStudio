@@ -145,7 +145,7 @@ export interface InspectorConfig {
 export interface PanelConfig {
   /** 既定で参加させる役職。省略時は検査・破壊・安全の3名 */
   roles?: string[];
-  /** 同時に走らせる人数 */
+  /** 同時に走らせる人数。inproc の口は優先度「中」で借りるので、取り分（本数 − 半分切り上げ）を超えた分は口を待つ。既定の 2 本なら一人ずつ。 */
   parallel?: number;
 }
 

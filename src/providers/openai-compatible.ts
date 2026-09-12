@@ -224,8 +224,20 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     let finishReason: 'stop' | 'length' | 'toolCalls' | 'unknown' = 'unknown';
     // ツール呼び出しは複数チャンクに分割して届く。index ごとに組み立てる。
     const pending = new Map<number, { id: string; name: string; args: string }>();
+    // **並んでいる間は停滞ではない。**inproc は口が空くのを待つ間 `: queued` を打ち続け、
+    // 借りたら `: started` を流す。注釈行は data ではないので下の読みには出ないが、
+    // 最初のトークンが来るまでは、届いたバイトそのものを「生きている」合図として待ちを延ばす。
+    // 来なければ、これまでどおり 10 分で落とす。
+    let firstToken = false;
+    const firstTokenTimeoutMs = this.#firstTokenTimeoutMs;
+    const alive = res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+      transform(bytes, controller) {
+        if (!firstToken) arm(firstTokenTimeoutMs);
+        controller.enqueue(bytes);
+      },
+    }));
     try {
-      for await (const data of readSseLines(res.body)) {
+      for await (const data of readSseLines(alive)) {
         if (data === '[DONE]') break;
         if (!data) continue;
 
@@ -239,6 +251,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         const choice = parsed.choices?.[0];
         const delta = choice?.delta?.content;
         if (typeof delta === 'string' && delta.length > 0) {
+          firstToken = true;
           arm(this.#stallTimeoutMs); // 生成が進んでいるので待ち直す
           yield { type: 'text', delta };
         }
@@ -249,6 +262,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
           if (tc.function?.name) slot.name += tc.function.name;
           if (tc.function?.arguments) slot.args += tc.function.arguments;
           pending.set(idx, slot);
+          firstToken = true;
           arm(this.#stallTimeoutMs);
         }
 
