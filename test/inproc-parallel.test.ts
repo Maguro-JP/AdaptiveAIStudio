@@ -18,7 +18,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
-import { InProcRuntime } from '../src/runtime/inproc.ts';
+import { InProcRuntime, LanePool, type ChatLane } from '../src/runtime/inproc.ts';
 import { until } from './until.ts';
 
 const running: InProcRuntime[] = [];
@@ -113,6 +113,29 @@ describe('会話ごとに口を分けて並列に答える', () => {
     assert.equal(state.started, 2, '二つとも答えていない');
     assert.match(a, /data: \[DONE\]/);
     assert.match(b, /data: \[DONE\]/);
+  });
+
+  test('**切り替えの待ち（whenAllIdle）は、依頼が続いても返る**', async () => {
+    // 「全部の口が空く」を待つと、返した口がすぐ次の待ち手へ回るので、
+    // 依頼が続くあいだ `#free` が満ちず、切り替えが永久に固まる。
+    // **呼んだ時点で出ている本数ぶん、返るのを待つ**（以後の依頼は待たない）。
+    const lane = (): ChatLane => ({ prompt: async () => '', setChatHistory: () => {} });
+    const pool = new LanePool([lane(), lane()]);
+    const a = await pool.acquire();
+    const b = await pool.acquire();
+    assert.ok(a && b, '2 本借りられていない');
+    // 後ろに二人待たせる（返した口はこの二人へ回る＝ #free は満ちない）。
+    const w1 = pool.acquire();
+    const w2 = pool.acquire();
+    let idled = false;
+    void pool.whenAllIdle().then(() => { idled = true; });
+    // いま出ている 2 本を返す。待ち手が受け取るので、まだ 2 本出たまま。
+    pool.release(a!);
+    pool.release(b!);
+    await until(() => idled, 'whenAllIdle が返る（口が満ちるのを待たない）');
+    assert.equal(pool.busy, 2, '待ち手が受け取って、まだ出ているのが正しい');
+    // 後片付け（待ち手が受け取った口を返す）。
+    (await w1)!; (await w2)!;
   });
 
   test('本数を超えた分は、空くのを待つ（断らない）', async () => {

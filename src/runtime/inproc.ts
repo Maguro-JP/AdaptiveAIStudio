@@ -704,6 +704,17 @@ export class InProcRuntime implements LocalRuntime {
       return;
     }
 
+    // **降ろしている最中は、新しい依頼を始めない。**
+    // 読み込みの入口（ensureLoaded）は #down を見るが、既に読んであるモデルへの
+    // 依頼はそこを通らない。止めている最中に来た依頼をそのまま prompt に流すと、
+    // 解いている最中の context の上で生成することになり、ライブラリ（C++）ごと
+    // 落ちうる（JS の try では拾えない）。断る。
+    if (this.#down) {
+      res.writeHead(503, { 'content-type': 'application/json' });
+      res.end('{"error":{"message":"止めています"}}');
+      return;
+    }
+
     // 本文の上限。上の層が送るのは履歴の JSON で、数MB で十分。
     const LIMIT = 16 * 1024 * 1024;
     const raw = await new Promise<string | undefined>((resolve) => {
@@ -1084,7 +1095,14 @@ export class LanePool {
   readonly #all: ChatLane[];
   readonly #free: ChatLane[];
   readonly #waiters: Array<(lane: ChatLane) => void> = [];
-  readonly #idleWaiters: Array<() => void> = [];
+  /**
+   * これまでに口を返した回数。**「今この場で動いているぶんが片づくまで」を
+   * 数で測る**ために持つ。全部空くのを待つと、次々に依頼が来るあいだ
+   * `#free` が一度も満ちず、`whenAllIdle` が永久に返らない（切り替えが固まる）。
+   */
+  #released = 0;
+  /** いま動いているぶんが片づくのを待っている人（`target` 回まで返るのを待つ）。 */
+  #drainWaiters: Array<{ target: number; resolve: () => void }> = [];
 
   constructor(lanes: ChatLane[]) {
     this.#all = lanes;
@@ -1120,18 +1138,29 @@ export class LanePool {
 
   /** 借りた一本を返す。待っている人がいれば、その人へ回す。 */
   release(lane: ChatLane): void {
+    // **一本返るたびに数える。**待っている切り替えは、この数で「片づいた」を見る。
+    this.#released += 1;
+    this.#drainWaiters = this.#drainWaiters.filter((w) => {
+      if (this.#released >= w.target) { w.resolve(); return false; }
+      return true;
+    });
     const next = this.#waiters.shift();
     if (next) { next(lane); return; }
     this.#free.push(lane);
-    if (this.#free.length === this.#all.length) {
-      for (const done of this.#idleWaiters.splice(0)) done();
-    }
   }
 
-  /** 全部の口が空くまで待つ。降ろす前・切り替える前に呼ぶ。 */
+  /**
+   * **いま動いているぶんが片づくまで**待つ。降ろす前・切り替える前に呼ぶ。
+   *
+   * 「全部の口が空く」を待つと、次々に依頼が来るあいだ永久に返らない
+   * （返した口がすぐ次の待ち手へ回り、`#free` が満ちない）。そこで
+   * **呼んだ時点で出ている本数ぶん、返るのを待つ**。以後に来た依頼は待たない。
+   */
   whenAllIdle(): Promise<void> {
-    if (this.#free.length === this.#all.length) return Promise.resolve();
-    return new Promise<void>((resolve) => this.#idleWaiters.push(resolve));
+    const outstanding = this.#all.length - this.#free.length;
+    if (outstanding === 0) return Promise.resolve();
+    const target = this.#released + outstanding;
+    return new Promise<void>((resolve) => this.#drainWaiters.push({ target, resolve }));
   }
 }
 

@@ -3984,6 +3984,17 @@ sweep は、落ちた瞬間の画面を残せるようにした（`AAS_SWEEP_SHO
   （`scripts/real-model.mjs` の「二つ同時」）。差し替えでは、二本で maxConcurrent=2、
   一本なら 1、本数を超えた分は待つ（`test/inproc-parallel.test.ts`）
 - 確かめていない: 本物の GGUF（Qwen3 など）で N=2 の KV が 16GB に載るか。実機で測る
+- 敵対レビュー（workflow）で見つけて直した、並列がらみの危うさ 3 点:
+  - fitWindow の一トークンあたり KV が 0 に潰れる形（head_count_kv=0 を `??` が
+    素通し／embedding<heads で headDim=0）で、記憶の勘定なしに N 倍していた。
+    perToken を guard の前に計算し、0 なら「数えられない」扱いで 1 本・安全な窓に。
+    kvHeads の 0 は heads で代える（`??`→`||`）
+  - 並列を減らす枝で、trained が floor より狭いモデル（2048〜4095）に floor を返し、
+    モデルの窓を超えていた。`Math.min(want, Math.max(floor, …))` で trained を超えさせない
+  - LanePool.whenAllIdle が「全部の口が空く」を待ち、依頼が続くと永久に返らなかった
+    （切り替えが固まる）。**呼んだ時点で出ている本数ぶん返るのを待つ**形に直した
+  - 降ろしている最中の依頼を #handle が #down で断るようにした（解いている context で
+    生成して C++ ごと落ちるのを防ぐ）。どれも試験を足し、わざと戻して落ちることを見た
 
 ## 2026-09-12  考えごと（<think>）をする模型を、手元で組めるようにした
 
