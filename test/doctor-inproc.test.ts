@@ -86,7 +86,11 @@ describe('doctor は、この中で読む道を知っている', () => {
     await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     assert.match(text, /1 件: qwen2\.5-3b-instruct-q4_k_m\.gguf/);
-    assert.match(text, /動かせます。/);
+    // 「動かせます」は、モデルを読むライブラリ（node-llama-cpp）が在って初めて言える。
+    // 素の npm ci（bundle 前）では入っていないので、doctor は正しく「入れてください」と言う。
+    // ここを決め打つと、ライブラリの無い CI で必ず落ちる（実際に落ちた）。
+    if (hasLib) assert.match(text, /動かせます。/);
+    else assert.match(text, /node-llama-cpp が入っていません/);
   });
 
   test('繋ぎ先を、外へ見に行かない', async () => {
@@ -97,10 +101,14 @@ describe('doctor は、この中で読む道を知っている', () => {
     await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     // 札が設定の id（ollama）のままだと「Ollama を入れなければ」と読まれる。
+    // ここは接続の札が inproc で、口がこの中に立つこと。ライブラリの有無に依らない。
     assert.match(text, /接続 \(この中で読む\)/);
     assert.doesNotMatch(text, /接続 \(ollama\)/);
     assert.match(text, /この中に立てます/);
-    assert.doesNotMatch(text, /件かたづければ動きます/);
+    // ライブラリが在れば不足ゼロで「動かせます」。無い環境では node-llama-cpp が
+    // 唯一の不足として挙がる（外を見に行った結果ではない）。
+    if (hasLib) assert.doesNotMatch(text, /件かたづければ動きます/);
+    else assert.match(text, /node-llama-cpp が入っていません/);
   });
 
   test('llamacpp のときは、使っていない Ollama を不足として数えない', async () => {
