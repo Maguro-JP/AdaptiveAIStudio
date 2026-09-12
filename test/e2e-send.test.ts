@@ -419,7 +419,18 @@ describe('外の道具（MCP）を、会話の中から実際に呼ぶ', () => {
     });
     const b4 = (await s4.start()).replace(/\/$/, '');
     try {
-      const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
+      /*
+       * **終わりは、この会話の終わりだけを見る。**
+       *
+       * ここは会話を問わず `busy: false` を見ていた。一度目の後片付け
+       * （settled と busy: false）は、こちらが読み始めた直後に届くことが
+       * ある。そうなると二度目を送る前に「終わった」と読んで、
+       * 出来事を一つも拾わないまま抜ける。実際にそれで落ちた
+       * （拾えたのは一度目の settled だけ・0.132 秒・3 トークン）。
+       * 走らせる速さで結果が変わる形なので、会話の名前で分ける。
+       */
+      const forId = (evs: unknown[], id: string) => evs.filter((e) => (e as { conversationId?: string }).conversationId === id);
+      const done = (evs: unknown[], id: string) => forId(evs, id).some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
       // この検査の中だけで読む（上の collect は別の server を向いている）。
       /*
        * **一度呼びかけてから、繋がるのを待って、本番を送る。**
@@ -463,10 +474,13 @@ describe('外の道具（MCP）を、会話の中から実際に呼ぶ', () => {
       const dec = new TextDecoder();
       let buf = '';
       const r = await fetch(`${b4}/api/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: 'echo を使って' }) });
-      assert.equal(r.status, 202, await r.text());
+      const sent = await r.json() as { conversationId?: string; error?: string };
+      assert.equal(r.status, 202, JSON.stringify(sent));
+      const mine = sent.conversationId;
+      assert.ok(mine, '会話の名前が返っていない');
       const deadline = Date.now() + 40_000;
       let pending: Promise<{ done: boolean; value?: Uint8Array }> | undefined;
-      while (Date.now() < deadline && !done(events)) {
+      while (Date.now() < deadline && !done(events, mine)) {
         pending ??= reader.read();
         const got = await Promise.race([
           pending.then((x) => ({ value: x.value, fromRead: true as const })),
@@ -481,7 +495,7 @@ describe('外の道具（MCP）を、会話の中から実際に呼ぶ', () => {
         }
       }
       ac.abort();
-      const inner = events.filter((e) => (e as { type?: string }).type === 'session').map((e) => (e as { event: { type?: string; name?: string; ok?: boolean; delta?: string } }).event);
+      const inner = forId(events, mine).filter((e) => (e as { type?: string }).type === 'session').map((e) => (e as { event: { type?: string; name?: string; ok?: boolean; delta?: string } }).event);
       assert.ok(inner.some((ev) => ev.type === 'toolEnd' && ev.name === 'echo__echo' && ev.ok === true), `道具が呼ばれていない: ${JSON.stringify(inner).slice(0, 500)}`);
       const text = inner.filter((ev) => ev.type === 'text').map((ev) => ev.delta ?? '').join('');
       assert.ok(text.includes('道具から聞きました'), `道具の後の返事が無い: ${text}`);
