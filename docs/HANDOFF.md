@@ -7,10 +7,10 @@
 
 | | |
 |---|---|
-| main | `67aa9eb` / 版 0.11.2 |
+| 版 | 0.11.2（`package.json`。main の先頭は `git log -1` で見る） |
 | release | v0.11.2 まで出ている（portable / portable-noexe / Setup.exe の3点） |
 | 作業ツリー | clean。未 push なし。open の PR なし |
-| テスト | `npm run check:bundle` が通る（2079 pass / 23 skip / 0 fail） |
+| テスト | `npm run check:bundle` が通る（落ちているものは無い。飛ばしているものが 23 件） |
 
 `npm run check` の終わりが「確かめていないこと」の一覧を出す（`scripts/not-checked.mjs`）。
 **そこに並んでいるものは、一つも確かめられていない。**
