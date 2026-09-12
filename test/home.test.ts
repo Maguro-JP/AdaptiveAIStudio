@@ -266,7 +266,9 @@ describe('CI の使い方', () => {
    * 在るかどうかは `test -f` で組んだ後に見る（入れたつもりで欠けていた形を配ったことがある）。
    */
   test('配布物には CPU・CUDA・Vulkan の三つの binary を入れ、組んだ後に在ることを見る', sourceOnly, async () => {
-    const raw = await readFile(join(installRoot(), '.github', 'workflows', 'release.yml'), 'utf8');
+    // Windows の checkout は CRLF になる。行の続き（`\\` の直後）を LF で探すと、
+    // 一行目で切れて「入れていない」と嘘を言う（Windows の CI で実際にそう落ちた）。
+    const raw = (await readFile(join(installRoot(), '.github', 'workflows', 'release.yml'), 'utf8')).replace(/\r\n/g, '\n');
     const installs = raw.match(/npm install[^\n]*\n(?:\s+[^\n]*\\\n)*[^\n]*/g) ?? [];
     assert.ok(installs.length >= 2, `入れる所が ${installs.length} か所しか無い（portable と setup.exe）`);
     for (const step of installs) {
