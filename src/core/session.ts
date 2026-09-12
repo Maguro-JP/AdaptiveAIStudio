@@ -12,6 +12,7 @@
  * 端末なら「y/N」、画面なら押しボタンになるが、
  * **訊かずに進めない**という一点だけは、ここが守る。
  */
+import { Priority } from '../providers/contract.ts';
 import { findCodeTool, findSymbolTool } from '../agent/tools/find.ts';
 import { listServicesTool, connectServiceTool, disconnectServiceTool } from '../agent/tools/services.ts';
 import { defaultWorkRoot } from './home.ts';
@@ -1330,6 +1331,8 @@ export class Session {
       maxTurns: this.config.agent?.maxTurns ?? 40,
       temperature: this.config.temperature,
       maxTokens: this.config.maxTokens,
+      // **本番の会話は最優先。**裏の仕事（役職・判じ・補完）より先に口を借りる。
+      priority: Priority.top,
       // **実際に立てた窓を渡す。**渡さないと既定の 8192 で見積もるので、
       // 狭い窓を広いと思って溢れさせるか、広い窓を狭いと思って刈りすぎる。
       contextTokens: this.contextTokens,

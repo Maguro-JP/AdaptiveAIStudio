@@ -12,6 +12,9 @@
  * 本数は #windowFor で決まる。読めない GGUF だと KV を数えられず 1 本に
  * 落ちるので（安全側）、ここではコンテキストウィンドウを設定で渡して（contextSize）、狙った
  * 本数をそのまま持たせる。
+ *
+ * 送るのは**本番の会話（最優先）**として。既定の「中」は上のために半分を
+ * 空けるので、二つ送っても並ばない（それは `inproc-priority.test.ts` で見る）。
  */
 import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,6 +22,7 @@ import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { InProcRuntime, LanePool, type ChatLane } from '../src/runtime/inproc.ts';
+import { Priority } from '../src/providers/contract.ts';
 import { until } from './until.ts';
 
 const running: InProcRuntime[] = [];
@@ -70,7 +74,7 @@ function countingLib(ms: number) {
 function ask(url: string, ref: string, text: string): Promise<string> {
   return fetch(`${url}/chat/completions`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', 'x-aas-priority': '0' },
     body: JSON.stringify({ model: ref, messages: [{ role: 'user', content: text }] }),
   }).then((r) => r.text());
 }
@@ -121,12 +125,13 @@ describe('会話ごとに口を分けて並列に答える', () => {
     // **呼んだ時点で出ている本数ぶん、返るのを待つ**（以後の依頼は待たない）。
     const lane = (): ChatLane => ({ prompt: async () => '', setChatHistory: () => {} });
     const pool = new LanePool([lane(), lane()]);
-    const a = await pool.acquire();
-    const b = await pool.acquire();
+    // 本番の会話（最優先）として借りる。既定の中は上のために半分を空けるので 2 本は借りられない。
+    const a = await pool.acquire({ priority: Priority.top });
+    const b = await pool.acquire({ priority: Priority.top });
     assert.ok(a && b, '2 本借りられていない');
     // 後ろに二人待たせる（返した口はこの二人へ回る＝ #free は満ちない）。
-    const w1 = pool.acquire();
-    const w2 = pool.acquire();
+    const w1 = pool.acquire({ priority: Priority.top });
+    const w2 = pool.acquire({ priority: Priority.top });
     let idled = false;
     void pool.whenAllIdle().then(() => { idled = true; });
     // いま出ている 2 本を返す。待ち手が受け取るので、まだ 2 本出たまま。

@@ -35,6 +35,39 @@ export interface ToolSchema {
   parameters: Record<string, unknown>;
 }
 
+/**
+ * 依頼の優先度。**数が小さいほど先に口を借りる。**
+ *
+ * 表に出す名前は利用者の言葉（`PRIORITY_LABEL`）。中は数だけで持つ
+ * （語形が変わらない合図。HTTP でも `x-aas-priority: 0` のように数で送る）。
+ *
+ * - 最優先・優先: 取り分を持つ。空いた口は上から順にこちらへ回る
+ * - 高・中・低: 取り分 0。**上に待ち手が居ないときだけ**口を借りる。
+ *   口が 2 本以上あるときは、半分（切り上げ）を上のために空けておく
+ *   （inproc の `LanePool`。本数で決まり、設定ではない）
+ */
+export const Priority = { top: 0, preferred: 1, high: 2, normal: 3, low: 4 } as const;
+export type Priority = (typeof Priority)[keyof typeof Priority];
+/** 表に出す名前。利用者の言葉をそのまま使う（訳語を作らない）。 */
+export const PRIORITY_LABEL: Record<Priority, string> = { 0: '最優先', 1: '優先', 2: '高', 3: '中', 4: '低' };
+/** 何も言われなければ「中」。上に待ち手が居れば待つ側。 */
+export const DEFAULT_PRIORITY: Priority = Priority.normal;
+/**
+ * 優先度を運ぶ HTTP ヘッダ。本文に足す道を選ばなかったのは、知らない項目を
+ * 断る OpenAI 互換の相手が居るため。知らないヘッダは、どの相手も読み飛ばす。
+ */
+export const PRIORITY_HEADER = 'x-aas-priority';
+/** ヘッダから読む。無い・読めない・範囲外は既定（中）。 */
+export function toPriority(value: unknown): Priority {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (raw === undefined || raw === null) return DEFAULT_PRIORITY;
+  const text = String(raw).trim();
+  // 受けるのは 0〜4 の一文字だけ。`Number('')` は 0（最優先）、`Number('0x1')` は 1 に
+  // なるので、数に直す前に形で見る。
+  if (!/^[0-4]$/.test(text)) return DEFAULT_PRIORITY;
+  return Number(text) as Priority;
+}
+
 export interface ProviderRequest {
   model: string; // Provider内部でのモデル名(ModelIdからprefixを除いたもの)
   system?: string;
@@ -42,6 +75,8 @@ export interface ProviderRequest {
   temperature?: number;
   maxTokens?: number;
   tools?: ToolSchema[];
+  /** 優先度。無ければ既定（中）。inproc の口の貸し出し順に効く。外の相手（雲）は見ない。 */
+  priority?: Priority;
 }
 
 export type ProviderChunk =

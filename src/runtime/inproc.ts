@@ -31,6 +31,7 @@ import { extractToolCalls, ToolTextFilter } from '../agent/tool-text.ts';
 import { readGguf } from './gguf.ts';
 import { extractFacts } from './gguf-spec.ts';
 import { totalmem } from 'node:os';
+import { DEFAULT_PRIORITY, Priority, PRIORITY_HEADER, toPriority } from '../providers/contract.ts';
 /**
  * ライブラリの名前。文字列の変数にしておく。
  *
@@ -811,7 +812,10 @@ export class InProcRuntime implements LocalRuntime {
     // 一本ごとに別の LlamaChatSession なので、二人が同じ履歴を混ぜ合わない。
     // 全部塞がっていても、ヘッダは既に返してあるので上の層は待てる。
     // 待っている間に切られたら（gone）、借りずに戻る。
-    const lane = await held.lanes.acquire(gone.signal);
+    // 優先度はヘッダで受ける（`x-aas-priority: 0〜4`）。無ければ中。
+    // 上（最優先・優先）が待っていれば、高・中・低はその後ろ。
+    const priority = toPriority(req.headers[PRIORITY_HEADER]);
+    const lane = await held.lanes.acquire({ signal: gone.signal, priority });
     try {
       // 並んでいる間に切られた依頼は、始めない。誰も読まない答えを
       // 作りながら、口を塞ぐことになる。
@@ -1091,10 +1095,26 @@ export interface ChatLane {
  * 断らずに待たせる（上の層は待てる。断られると諦めてしまう）。
  * 待っている間に依頼が切られたら（signal）、貸さずに返す。
  */
+/** ここから下（高・中・低）は取り分 0。上に待ち手が居ないときだけ借りる。 */
+const OPPORTUNISTIC: Priority = Priority.high;
+
+interface Waiter {
+  rank: Priority;
+  /** 来た順。同じ級の中では、先に来た人から。 */
+  seq: number;
+  give: (lane: ChatLane) => void;
+}
+
 export class LanePool {
   readonly #all: ChatLane[];
   readonly #free: ChatLane[];
-  readonly #waiters: Array<(lane: ChatLane) => void> = [];
+  /** 待ち手。**級（数が小さいほど先）、同じ級なら来た順**で並べて持つ。 */
+  readonly #waiters: Waiter[] = [];
+  #seq = 0;
+  /** 貸している口が、どの級に貸したものか。返るときに取り分の数を戻すため。 */
+  readonly #lentTo = new Map<ChatLane, Priority>();
+  /** 高・中・低が今いくつ借りているか。上のために空ける本数と突き合わせる。 */
+  #lowHeld = 0;
   /**
    * これまでに口を返した回数。**「今この場で動いているぶんが片づくまで」を
    * 数で測る**ために持つ。全部空くのを待つと、次々に依頼が来るあいだ
@@ -1113,39 +1133,84 @@ export class LanePool {
   get size(): number { return this.#all.length; }
   /** いま貸し出している本数。 */
   get busy(): number { return this.#all.length - this.#free.length; }
+  /** 高・中・低が今いくつ借りているか。 */
+  get lowHeld(): number { return this.#lowHeld; }
+  /**
+   * 上（最優先・優先）のために空けておく本数。**本数で決まる。設定ではない。**
+   *
+   * 2 本以上なら半分（切り上げ）。高・中・低は残りを借りる。
+   * 1 本しか無ければ 0（空けると、高・中・低が永久に借りられない）。
+   */
+  get reserve(): number { return this.#all.length >= 2 ? Math.ceil(this.#all.length / 2) : 0; }
+
+  /** この級が、いま一本借りてよいか。上は常に。高・中・低は取り分の内なら。 */
+  #allowed(rank: Priority): boolean {
+    if (rank < OPPORTUNISTIC) return true;
+    return this.#lowHeld < this.#all.length - this.reserve;
+  }
+
+  #lend(lane: ChatLane, rank: Priority): ChatLane {
+    this.#lentTo.set(lane, rank);
+    if (rank >= OPPORTUNISTIC) this.#lowHeld += 1;
+    return lane;
+  }
 
   /**
-   * 空いた一本を借りる。無ければ空くまで待つ。
-   * 待っている間に signal が上がったら、`undefined` を返す（借りない）。
+   * 一本借りる。無ければ空くまで待つ。**上から順に回る。**
+   *
+   * 空いているのに借りられないのは、高・中・低が上のぶんを残しているとき
+   * （その場合も待つ。断らない）。待っている間に signal が上がったら、
+   * `undefined` を返す（借りない）。
    */
-  acquire(signal?: AbortSignal): Promise<ChatLane | undefined> {
-    const free = this.#free.pop();
-    if (free) return Promise.resolve(free);
+  acquire(
+    { signal, priority = DEFAULT_PRIORITY }: { signal?: AbortSignal; priority?: Priority } = {},
+  ): Promise<ChatLane | undefined> {
     if (signal?.aborted) return Promise.resolve(undefined);
+    if (this.#free.length > 0 && this.#allowed(priority)) {
+      return Promise.resolve(this.#lend(this.#free.pop()!, priority));
+    }
     return new Promise<ChatLane | undefined>((resolve) => {
-      const give = (lane: ChatLane): void => { cleanup(); resolve(lane); };
+      const waiter: Waiter = {
+        rank: priority,
+        seq: this.#seq++,
+        give: (lane) => { cleanup(); resolve(lane); },
+      };
       const drop = (): void => {
-        const at = this.#waiters.indexOf(give);
+        const at = this.#waiters.indexOf(waiter);
         if (at >= 0) this.#waiters.splice(at, 1);
         cleanup();
         resolve(undefined);
       };
       const cleanup = (): void => signal?.removeEventListener('abort', drop);
-      this.#waiters.push(give);
+      // 級の小さい順、同じ級なら来た順。後ろから見て、自分より級の大きい人を越える。
+      let at = this.#waiters.length;
+      while (at > 0 && this.#waiters[at - 1]!.rank > priority) at -= 1;
+      this.#waiters.splice(at, 0, waiter);
       signal?.addEventListener('abort', drop, { once: true });
     });
   }
 
-  /** 借りた一本を返す。待っている人がいれば、その人へ回す。 */
+  /**
+   * 借りた一本を返す。**上から順に見て、いま借りてよい最初の人へ回す。**
+   * 高・中・低しか待っておらず、その取り分が塞がっていれば、誰にも渡さず
+   * 空けておく（上が来たら、その場で渡せるように）。
+   */
   release(lane: ChatLane): void {
+    const rank = this.#lentTo.get(lane);
+    this.#lentTo.delete(lane);
+    if (rank !== undefined && rank >= OPPORTUNISTIC) this.#lowHeld -= 1;
     // **一本返るたびに数える。**待っている切り替えは、この数で「片づいた」を見る。
     this.#released += 1;
     this.#drainWaiters = this.#drainWaiters.filter((w) => {
       if (this.#released >= w.target) { w.resolve(); return false; }
       return true;
     });
-    const next = this.#waiters.shift();
-    if (next) { next(lane); return; }
+    const at = this.#waiters.findIndex((w) => this.#allowed(w.rank));
+    if (at >= 0) {
+      const [next] = this.#waiters.splice(at, 1);
+      next!.give(this.#lend(lane, next!.rank));
+      return;
+    }
     this.#free.push(lane);
   }
 

@@ -231,6 +231,7 @@ export interface RuntimeConfig {
    * - inproc: 会話ごとに一本貸す sequence の本数（既定 `DEFAULT_SEQUENCES`）。
    *   増やすほどコンテキストウィンドウ（一会話が覚えていられる長さ）は狭くなる（KV を分け合うため）。
    *   速さのための数ではない。CPU は分け合うので、増やすと一人あたりは遅くなる。
+   *   2 本以上なら、半分（切り上げ）は最優先・優先のために空けておく（高・中・低は残りを使う）。
    * - llamacpp: レーンの並列度に合わせる。
    */
   parallel?: number;

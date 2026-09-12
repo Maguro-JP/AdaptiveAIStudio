@@ -7,6 +7,7 @@
  * 「何時間かかっても自律的に進める」ため、
  * 打ち切りは時間ではなく「進捗が無いこと」で判断する。
  */
+import type { Priority } from '../providers/contract.ts';
 import type { ProviderMessage, ToolCall } from '../providers/contract.ts';
 import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
 import type { Tool, ToolContext, ApprovalRequest, ApprovalAnswer } from './tools/types.ts';
@@ -59,6 +60,11 @@ export interface AgentOptions {
   maxNudges?: number;
   temperature?: number;
   maxTokens?: number;
+  /**
+   * 口を借りる優先度。作る側が決めて渡す（本番の会話は最優先、役職は既定の中）。
+   * 同じ Agent を本番と裏の両方が使うので、ここに決め打ちしない。
+   */
+  priority?: Priority;
   approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
   /** 書き込む直前の控え。**戻せるようにするため**、書く道具から呼ばれる。 */
   beforeWrite?(relPath: string, previous: string | undefined): void;
@@ -136,6 +142,7 @@ export class Agent {
           messages: fitted.messages,
           temperature: this.#opts.temperature,
           maxTokens: this.#opts.maxTokens,
+          ...(this.#opts.priority !== undefined ? { priority: this.#opts.priority } : {}),
           // **狭い窓では、道具の説明を一文に削る。**説明だけで 1400 トークン
           // あり、4k の窓では 34% を占める。決まりと学びを足すと、
           // 肝心の依頼と履歴の場所が残らない。広い窓では削らない。

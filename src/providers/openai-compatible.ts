@@ -5,6 +5,7 @@
  * および将来のOpenAI互換サービスへ接続できる。
  * 「特定サービスの終了に依存しない」ことの実体的な担保がこれ。
  */
+import { PRIORITY_HEADER } from './contract.ts';
 import type {
   ChatProvider, HealthStatus, ModelDescriptor,
   ProviderChunk, ProviderMessage, ProviderRequest, ToolCall,
@@ -168,7 +169,11 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     try {
       res = await fetch(`${this.#baseUrl}/chat/completions`, {
         method: 'POST',
-        headers: this.#headers(),
+        // 優先度はヘッダで運ぶ。本文に足すと、知らない項目を断る相手が居る。
+        headers: {
+          ...this.#headers(),
+          ...(req.priority !== undefined ? { [PRIORITY_HEADER]: String(req.priority) } : {}),
+        },
         signal: combined,
         body: JSON.stringify({
           model: req.model,

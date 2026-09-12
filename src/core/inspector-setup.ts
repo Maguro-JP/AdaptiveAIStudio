@@ -5,7 +5,7 @@
  * 「関所に一番強いモデルを置く」は、体感を落とすわりに得るものが小さい。
  */
 import { ChatOrchestrator } from './orchestrator.ts';
-import type { ModelId } from '../providers/contract.ts';
+import { Priority, type ModelId } from '../providers/contract.ts';
 import { Inspector, type Judge } from '../harness/inspector.ts';
 
 /**
@@ -28,6 +28,8 @@ export function createModelJudge(
       temperature: 0,
       // 一行しか要らない。長く書かせると、そのぶん遅くなるだけ。
       maxTokens: 200,
+      // 会話の途中で呼ばれる（答えを出す道の上に居る）。本番の次、裏の仕事より先。
+      priority: Priority.preferred,
       // tools は渡さない。検査官は道具を持たない。
     }, signal)) {
       if (ev.type === 'text') out += ev.delta;

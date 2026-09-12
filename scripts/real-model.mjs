@@ -397,8 +397,9 @@ async function throughParallel() {
     if (!logs.some((l) => /並列 2 本/.test(l))) {
       found.push(`並列 2 本を持てていない: ${logs.filter((l) => l.includes('読み込みました')).join(' / ')}`);
     }
+    // 二つの会話（最優先）。既定の中だと、上のために半分を空けるので並ばない。
     const ask = () => fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-aas-priority': '0' },
       body: JSON.stringify({ model: 'tiny.gguf', stream: true, max_tokens: 12, messages: [{ role: 'user', content: 'hi' }] }),
     }).then((r) => r.text());
     const [a, b] = await Promise.all([ask(), ask()]);
