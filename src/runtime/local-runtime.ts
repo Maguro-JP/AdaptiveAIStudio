@@ -4,6 +4,7 @@
  * Ollama と llama.cpp を同じ形で扱い、設定で切り替えられるようにする。
  * どちらにも依存しないことが目的（片方が壊れても、もう片方で動く）。
  */
+import type { Backend } from './inproc.ts';
 import type { Plan } from './planner.ts';
 
 export interface LoadedModel {
@@ -43,6 +44,13 @@ export interface LocalRuntime {
    * 見積もると、狭められたときは溢れ、広げたときは刈りすぎる。
    */
   windowOf?(ref: string): number | undefined;
+  /**
+   * 読む側が実際に使う backend（GPU か CPU か、VRAM はいくつか）。inproc だけ。
+   *
+   * **選ぶ側はこれを見る。**nvidia-smi に GPU が見えるかどうかで決めると、
+   * 読む側が CPU で回っているのに「GPU が在るから大きい方」を選ぶ（実機でそうなった）。
+   */
+  backend?(): Promise<Backend>;
 }
 
 /**

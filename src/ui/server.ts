@@ -64,7 +64,8 @@ import {
   inspectModelsDir, ensureDefaultModelsDir, savedModelsDir,
 } from './settings.ts';
 import {
-  listGguf, chooseModel, tooBigForRam, looksLikeGguf, freePortFrom, INPROC_PORT, headsUp,
+  listGguf, chooseModel, tooBigForRam, looksLikeGguf, freePortFrom, INPROC_PORT, headsUp, CHOICE_WHY,
+  type Backend,
 } from '../runtime/inproc.ts';
 import { totalmem } from 'node:os';
 import { Session } from '../core/session.ts';
@@ -2081,7 +2082,23 @@ export class UiServer {
     if (runtime.id !== 'inproc') return undefined;
     const models = await runtime.list();
     const machine = await new MachineCache(join(stateDir(), 'machine.json')).get();
-    return headsUp(models, totalmem(), this.#opts.config.runtime?.model, machine.gpuName !== undefined);
+    const backend = await this.#backendOf(runtime);
+    return headsUp(models, totalmem(), this.#opts.config.runtime?.model, {
+      hasGpu: backend ? backend.gpu !== false : machine.gpuName !== undefined,
+      ...(backend?.vramBytes ? { vramBytes: backend.vramBytes } : {}),
+      ...(machine.gpuName !== undefined ? { seenGpu: machine.gpuName } : {}),
+    });
+  }
+
+  /**
+   * 読む側が実際に使う backend。**nvidia-smi に見えるかどうかでは決めない。**
+   * 見えているのに CPU で回り、大きい方を選んで記憶を使い切った（実機）。
+   * 取れなければ undefined（呼ぶ側が nvidia-smi の結果で代える）。
+   * 起こせない・ライブラリが無い、はここで断らない。断るのは読むときの口。
+   */
+  async #backendOf(runtime: LocalRuntime): Promise<Backend | undefined> {
+    if (!runtime.backend) return undefined;
+    return runtime.backend().catch(() => undefined);
   }
 
   async #readyToThink(load = true): Promise<string | undefined> {
@@ -2115,8 +2132,12 @@ export class UiServer {
            * 大きい方を使いたいときは、設定 → モデル で選べる。
            */
           const machine = await new MachineCache(join(stateDir(), 'machine.json')).get();
+          // **読む側が実際に使う backend と VRAM で選ぶ。**nvidia-smi に見えるだけでは
+          // GPU で読むとは限らず、VRAM を数えないと載り切らないものを選ぶ。
+          const backend = await this.#backendOf(runtime);
+          const hasGpu = backend ? backend.gpu !== false : machine.gpuName !== undefined;
           const picked = chooseModel(models, totalmem(), wanted, {
-            hasGpu: machine.gpuName !== undefined,
+            hasGpu, ...(backend?.vramBytes ? { vramBytes: backend.vramBytes } : {}),
           });
           if (!picked) return undefined;
           const ref = picked.chosen.ref;
@@ -2140,8 +2161,8 @@ export class UiServer {
           const gb = ((picked.chosen.sizeBytes ?? 0) / 1024 ** 3).toFixed(1);
           this.broadcast({
             type: 'log', level: 'info',
-            text: `モデルを読み込んでいます: ${ref}（${gb}GB`
-              + `${machine.gpuName ? '' : '・この機械は GPU なしなので、初回は時間がかかります'}）`,
+            text: `モデルを読み込んでいます: ${ref}（${gb}GB・${CHOICE_WHY[picked.why]}`
+              + `${hasGpu ? '' : '・GPU を使わないので、初回は時間がかかります'}）`,
           });
           const began = Date.now();
           /*

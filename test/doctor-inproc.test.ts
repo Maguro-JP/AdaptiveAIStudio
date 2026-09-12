@@ -134,10 +134,28 @@ describe('doctor は「入っていない」と「壊れている」を分ける
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     assert.doesNotMatch(text, /node-llama-cpp が入っていません/);
     assert.doesNotMatch(text, /在るのに読み込めません/);
-    // この機械むけの binary が在れば ok、無ければ warn。どちらかであること。
-    assert.match(text, /この機械むけの binary (が動きます|がありません)/);
+    // この機械むけの binary が在れば「何で読むか」が出る。無ければ「がありません」。どちらかであること。
+    assert.match(text, /node-llama-cpp。(GPU|CPU) で読みます|この機械むけの binary がありません/);
     // 向こうの声（console.warn 直書き）を、貼る出力に混ぜない。
     assert.doesNotMatch(text, /prebuilt binary/i, 'ライブラリの警告がそのまま出ている');
+  });
+});
+
+describe('doctor は、どれを読むかを、読む側の backend が分かってから言う', () => {
+  /*
+   * nvidia-smi に見える GPU で決めていたので、CPU で読んでいるのに「GPU があるので
+   * 大きい方」と言い、その通りに大きい方を掴んで答えなかった（実機）。
+   * ここ（GPU の無い機械、または binary の無い CI）では、小さい方になる。
+   */
+  test('GPU で読めないなら、載るもののうち小さい方', async () => {
+    const { home, models, config } = await scratch();
+    await writeFile(join(models, 'big.gguf'), Buffer.concat([Buffer.from('GGUF'), Buffer.alloc(4 * 1024 * 1024)]));
+    await writeFile(join(models, 'small.gguf'), 'GGUF');
+    await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
+    const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
+    assert.match(text, /読むモデル\s+small\.gguf（GPU が無いので、載るもののうち小さい方/, text.slice(-1500));
+    // 何で読むかは「モデルを読むもの」に出る（ライブラリが無い CI では「入っていません」）。
+    assert.match(text, /モデルを読むもの\s+node-llama-cpp。(GPU|CPU) で読みます|node-llama-cpp が入っていません/);
   });
 });
 

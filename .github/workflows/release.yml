@@ -72,7 +72,7 @@ jobs:
       # 機械では、これだけが道になる。
       #
       # 配る相手は決まっているので、その分だけ入れる。
-      - name: モデルを読むライブラリを入れる（win-x64 の分だけ）
+      - name: モデルを読むライブラリを入れる（win-x64 の CPU・CUDA・Vulkan の分）
         run: |
           # **一度に入れる。**二回に分けると、二回目が一回目の分を刈り取る
           # （--no-save は package.json に残らないので「要らないもの」に見える）。
@@ -87,13 +87,21 @@ jobs:
           # @modelcontextprotocol/server-github も一緒に。
           # npx は npm に付いてくるが、入れる版には node しか入らない。
           # 入れておかないと「GitHub と繋ぐ」は口があるだけで一度も繋がらない。
+          #
+          # **GPU 用の binary（cuda・vulkan）も入れる。**CPU の分だけだった間、
+          # RTX の機械でも CPU で回り、記憶を使い切って答えなかった。
+          # 大きさは cuda 171MB・vulkan 99MB（展開後）。.exe は一つも増えない。
+          # 読む側は cuda → vulkan → CPU の順に動くものを使う（src/runtime/inproc.ts）。
           npm install --no-save --no-audit --no-fund \
             --omit=optional --force --ignore-scripts \
             node-llama-cpp @node-llama-cpp/win-x64 \
+            @node-llama-cpp/win-x64-cuda @node-llama-cpp/win-x64-vulkan \
             @modelcontextprotocol/server-github
           # 在るかどうかだけ見ない。**本体と binary の両方**を見る。
           test -f node_modules/node-llama-cpp/dist/index.js
           test -f node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
+          test -f node_modules/@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/ggml-cuda.dll
+          test -f node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/ggml-vulkan.dll
           # 実行ファイルが増えないことが、この道の要点。0個であることを見る。
           test "$(find node_modules/@node-llama-cpp -name '*.exe' | wc -l)" -eq 0
           # llama/ は llama.cpp の元（34MB）。ただし **JSON だけは import 時に読む**。
@@ -132,6 +140,8 @@ jobs:
           # モデルを読むライブラリ。本体が無いと、binary だけ入って動かない。
           test -f dist/AdaptiveAIStudio/app/node_modules/node-llama-cpp/dist/index.js
           test -f dist/AdaptiveAIStudio/app/node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
+          test -f dist/AdaptiveAIStudio/app/node_modules/@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/llama-addon.node
+          test -f dist/AdaptiveAIStudio/app/node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/llama-addon.node
           # バッチが CP932 のまま入っているか。UTF-8 だと cmd.exe が行を壊す。
           ! iconv -f UTF-8 -t UTF-8 dist/AdaptiveAIStudio/app/start.cmd > /dev/null 2>&1
 
@@ -146,6 +156,8 @@ jobs:
           test "$SIZE" -gt 40000000
           test -f verify/AdaptiveAIStudio/app/node_modules/node-llama-cpp/dist/index.js
           test -f verify/AdaptiveAIStudio/app/node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
+          test -f verify/AdaptiveAIStudio/app/node_modules/@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/llama-addon.node
+          test -f verify/AdaptiveAIStudio/app/node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/llama-addon.node
           echo "ZIP の中のライブラリ: あり"
           ls -l AdaptiveAIStudio-portable.zip
 
@@ -228,18 +240,21 @@ jobs:
 
       # portable と同じものを入れる。ここを抜かすと **setup.exe だけ
       # モデルを中で読めない**、という食い違いになる。
-      - name: モデルを読むライブラリを入れる（win-x64 の分だけ）
+      - name: モデルを読むライブラリを入れる（win-x64 の CPU・CUDA・Vulkan の分）
         run: |
-          # 一度に入れる（二回に分けると二回目が一回目を刈り取る）。
+          # 一度に入れる（二回に分けると二回目が一回目を刈り取る）。portable と同じ三つ。
           # @modelcontextprotocol/server-github も一緒に。
           # npx は npm に付いてくるが、入れる版には node しか入らない。
           # 入れておかないと「GitHub と繋ぐ」は口があるだけで一度も繋がらない。
           npm install --no-save --no-audit --no-fund \
             --omit=optional --force --ignore-scripts \
             node-llama-cpp @node-llama-cpp/win-x64 \
+            @node-llama-cpp/win-x64-cuda @node-llama-cpp/win-x64-vulkan \
             @modelcontextprotocol/server-github
           test -f node_modules/node-llama-cpp/dist/index.js
           test -f node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
+          test -f node_modules/@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/ggml-cuda.dll
+          test -f node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/ggml-vulkan.dll
           test "$(find node_modules/@node-llama-cpp -name '*.exe' | wc -l)" -eq 0
           find node_modules/node-llama-cpp/llama -type f ! -name '*.json' -delete
           find node_modules/node-llama-cpp/llama -type d -empty -delete
@@ -267,6 +282,8 @@ jobs:
           test "$(stat -c%s x/runtime/node.exe)" -gt 40000000
           test -f x/app/node_modules/node-llama-cpp/dist/index.js
           test -f x/app/node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
+          test -f x/app/node_modules/@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/llama-addon.node
+          test -f x/app/node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/llama-addon.node
           test ! -f x/.portable
           ls -l installer/AdaptiveAIStudio-Setup.exe
 

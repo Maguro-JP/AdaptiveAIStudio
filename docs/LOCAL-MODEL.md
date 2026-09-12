@@ -72,9 +72,20 @@ GGUF は同梱しません。数GBあり、数か月で新しいものが出ま�
 
 ## 速さについて
 
-`inproc` は CPU で動きます。GPU を使う `llamacpp` より遅くなります。
-自宅の機械のように速さが要るところでは `llamacpp`、何も入れられない
-機械では `inproc`、と使い分けてください。設定を変えるだけで切り替わります。
+`inproc` は GPU が在れば GPU で動きます（CUDA → Vulkan → CPU の順に、動くものを
+使います。配布物に CUDA と Vulkan の binary が入っています。実行ファイルは増えません）。
+何で動いているかは、記録の「GPU で読みます」「CPU で読みます」の行と、
+`doctor` の「モデルを読むもの」に出ます。GPU が見えているのに CPU になっているときは、
+その理由も同じ行に出ます。
+
+NVIDIA の機械では、ふつうは Vulkan で動きます。CUDA は CUDA Toolkit の runtime DLL
+（`cudart64_12.dll`・`cublas64_12.dll`）が PATH に在るときだけ試されます（読む側の
+node-llama-cpp がそう探します）。Toolkit を入れていない機械では CUDA の binary は
+使われず、Vulkan になります。
+
+モデルは、VRAM に丸ごと載るもののうち大きい方が自動で選ばれます。VRAM に載り切らない
+モデルは、載る分だけ GPU に置き、残りが CPU で動くので遅くなります（そのときは開いた
+時点でそう言います）。GPU を使いたくないときは設定 `runtime.gpu` を `off` にします。
 
 ## 確かめる
 

@@ -224,6 +224,12 @@ export interface RuntimeConfig {
   basePort?: number;
   /** 文脈の大きさ（トークン）。inproc のみ。既定 8192。広げるほど記憶を食う */
   contextSize?: number;
+  /**
+   * GPU を使うか。inproc のみ。既定 auto（cuda → vulkan → CPU の順に、動くものを使う）。
+   * off は CPU だけ。GPU の道で落ちるときの逃げ道。使ったものは記録の
+   * 「GPU で読みます / CPU で読みます」の行と doctor に出る。
+   */
+  gpu?: 'auto' | 'cuda' | 'vulkan' | 'off';
   /** 使う GGUF の名前（置き場の中の名前）。無ければ最初の一つ */
   model?: string;
   /**

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
-import { InProcRuntime, listGguf, chooseModel, MAX_WINDOW, SAFE_WINDOW, fitWindow, DEFAULT_SEQUENCES } from '../src/runtime/inproc.ts';
+import { InProcRuntime, listGguf, chooseModel, MAX_WINDOW, SAFE_WINDOW, fitWindow, DEFAULT_SEQUENCES, fitsVram, VRAM_SHARE } from '../src/runtime/inproc.ts';
 import { ggufHead } from './gguf-head.ts';
 
 /**
@@ -594,12 +594,54 @@ describe('どの GGUF を読むか', () => {
     assert.equal(got?.fits, true);
   });
 
-  test('GPU が在るなら、載るもののうち大きいほうを選ぶ', () => {
+  test('GPU が在って VRAM が分からないなら、載るもののうち大きいほうを選ぶ', () => {
     const got = chooseModel([
       { ref: 'small.gguf', sizeBytes: 2 * GB },
       { ref: 'mid.gguf', sizeBytes: 8 * GB },
     ], ram, undefined, { hasGpu: true });
     assert.equal(got?.chosen.ref, 'mid.gguf');
+    assert.equal(got?.why, 'largest');
+  });
+
+  /*
+   * **VRAM を数えていなかった。**8GB の GPU に 20GB のモデルを選び、載らない分が
+   * CPU に溢れて、記憶を使い切って答えなかった（実機）。丸ごと載るもののうち大きい方。
+   */
+  test('**GPU で VRAM が分かるなら、VRAM に丸ごと載るもののうち大きいほうを選ぶ**', () => {
+    const got = chooseModel([
+      { ref: 'small.gguf', sizeBytes: 2 * GB },
+      { ref: 'mid.gguf', sizeBytes: 5 * GB },
+      { ref: 'huge.gguf', sizeBytes: 20 * GB },
+    ], 32 * GB, undefined, { hasGpu: true, vramBytes: 8 * GB });
+    assert.equal(got?.chosen.ref, 'mid.gguf', '20GB は 8GB の VRAM に載らない');
+    assert.equal(got?.why, 'gpu-largest-in-vram');
+    assert.equal(got?.fits, true);
+  });
+
+  test('VRAM に丸ごと載るものが無ければ、小さいほう（溢れる量が少ないほど速い）', () => {
+    const got = chooseModel([
+      { ref: 'big.gguf', sizeBytes: 10 * GB },
+      { ref: 'huge.gguf', sizeBytes: 20 * GB },
+    ], 32 * GB, undefined, { hasGpu: true, vramBytes: 8 * GB });
+    assert.equal(got?.chosen.ref, 'big.gguf');
+    assert.equal(got?.why, 'gpu-none-in-vram');
+  });
+
+  test('VRAM で選ぶときも、記憶に載らないものは選ばない（対）', () => {
+    // 40GB は 32GB の記憶に載らない。VRAM の勘定に入れる前に落ちる。
+    const got = chooseModel([
+      { ref: 'small.gguf', sizeBytes: 2 * GB },
+      { ref: 'huge.gguf', sizeBytes: 40 * GB },
+    ], 32 * GB, undefined, { hasGpu: true, vramBytes: 64 * GB });
+    assert.equal(got?.chosen.ref, 'small.gguf');
+  });
+
+  test('VRAM に載るかは、八割で見る（KV と作業領域のぶんを空ける）', () => {
+    assert.equal(VRAM_SHARE, 0.8);
+    assert.equal(fitsVram(6.4 * GB, 8 * GB), true);
+    assert.equal(fitsVram(6.4 * GB + 1, 8 * GB), false);
+    assert.equal(fitsVram(undefined, 8 * GB), false, '大きさが分からないものは載るとは言わない');
+    assert.equal(fitsVram(1 * GB, 0), false, 'VRAM が無ければ載らない');
   });
 
   /*
@@ -616,6 +658,7 @@ describe('どの GGUF を読むか', () => {
     ], ram, undefined, { hasGpu: false });
     assert.equal(got?.chosen.ref, 'small.gguf');
     assert.equal(got?.fits, true);
+    assert.equal(got?.why, 'cpu-smallest');
   });
 
   test('GPU が無くても、名指しがあればそちら（利用者が決めたものが最優先）', () => {
@@ -624,6 +667,7 @@ describe('どの GGUF を読むか', () => {
       { ref: 'mid.gguf', sizeBytes: 8 * GB },
     ], ram, 'mid.gguf', { hasGpu: false });
     assert.equal(got?.chosen.ref, 'mid.gguf');
+    assert.equal(got?.why, 'named');
   });
 
   test('設定で名指しされていれば、それを使う（対）', () => {
@@ -641,6 +685,7 @@ describe('どの GGUF を読むか', () => {
     ], ram);
     assert.equal(got?.fits, false);
     assert.equal(got?.chosen.ref, 'big.gguf', 'いちばん小さいものを指していない');
+    assert.equal(got?.why, 'none-fits-ram');
   });
 
   test('一つも無ければ、選ばない', () => {

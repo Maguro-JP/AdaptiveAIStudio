@@ -259,6 +259,30 @@ describe('CI の使い方', () => {
     const raw = await readFile(join(installRoot(), '.github', 'workflows', 'ci.yml'), 'utf8');
     assert.match(raw, /paths-ignore/);
   });
+
+  /*
+   * **配布物に GPU 用の binary を入れる。**CPU の分だけだった間、RTX の機械でも
+   * CPU で回り、記憶を使い切って答えなかった。portable と setup.exe の両方に。
+   * 在るかどうかは `test -f` で組んだ後に見る（入れたつもりで欠けていた形を配ったことがある）。
+   */
+  test('配布物には CPU・CUDA・Vulkan の三つの binary を入れ、組んだ後に在ることを見る', sourceOnly, async () => {
+    const raw = await readFile(join(installRoot(), '.github', 'workflows', 'release.yml'), 'utf8');
+    const installs = raw.match(/npm install[^\n]*\n(?:\s+[^\n]*\\\n)*[^\n]*/g) ?? [];
+    assert.ok(installs.length >= 2, `入れる所が ${installs.length} か所しか無い（portable と setup.exe）`);
+    for (const step of installs) {
+      for (const pkg of ['@node-llama-cpp/win-x64', '@node-llama-cpp/win-x64-cuda', '@node-llama-cpp/win-x64-vulkan']) {
+        assert.ok(step.includes(pkg), `${pkg} を入れていない:\n${step}`);
+      }
+    }
+    for (const dll of ['win-x64-cuda/bins/win-x64-cuda/ggml-cuda.dll', 'win-x64-vulkan/bins/win-x64-vulkan/ggml-vulkan.dll']) {
+      assert.ok(raw.includes(`test -f node_modules/@node-llama-cpp/${dll}`), `${dll} が在ることを見ていない`);
+    }
+    // 組んだ後（zip・setup.exe の中）も見る。
+    assert.ok((raw.match(/win-x64-cuda\/bins\/win-x64-cuda\/llama-addon\.node/g) ?? []).length >= 3, '組んだ後の中身を見ていない');
+    const installer = await readFile(join(installRoot(), 'scripts', 'installer.mjs'), 'utf8');
+    assert.ok(installer.includes('@node-llama-cpp/win-x64-cuda') && installer.includes('@node-llama-cpp/win-x64-vulkan'),
+      '手元で組む installer.mjs が GPU 用を入れていない');
+  });
 });
 
 describe('CI は押すたびに回さない', () => {

@@ -98,12 +98,15 @@ try {
   console.log('\n== 型検査に要るものを入れる');
   run('npm', ['ci', '--no-audit', '--no-fund'], work);
 
-  console.log('\n== モデルを読むライブラリ（win-x64 の分だけ）');
+  console.log('\n== モデルを読むライブラリ（win-x64 の CPU・CUDA・Vulkan の分）');
   // **一度に入れる。**二回に分けると、二回目が一回目の分を刈り取る。
+  // GPU 用の binary も入れる（release.yml と同じ三つ）。CPU の分だけだと、
+  // RTX の機械でも CPU で回る。
   run('npm', [
     'install', '--no-save', '--no-audit', '--no-fund',
     '--omit=optional', '--force', '--ignore-scripts',
     'node-llama-cpp', '@node-llama-cpp/win-x64',
+    '@node-llama-cpp/win-x64-cuda', '@node-llama-cpp/win-x64-vulkan',
     // npx は npm に付いてくるが、入れる版には node しか入らない。
     // 入れておかないと「GitHub と繋ぐ」は口があるだけで一度も繋がらない。
     '@modelcontextprotocol/server-github',
@@ -111,6 +114,8 @@ try {
   mustBe(join(work, 'node_modules/node-llama-cpp/dist/index.js'));
   mustBe(join(work, 'node_modules/@modelcontextprotocol/server-github/dist/index.js'));
   mustBe(join(work, 'node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node'), 1000);
+  mustBe(join(work, 'node_modules/@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/ggml-cuda.dll'), 1000);
+  mustBe(join(work, 'node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/ggml-vulkan.dll'), 1000);
   // llama/ は llama.cpp の元（34MB）。**JSON だけは import 時に読む。**
   // 丸ごと消して、import できないbundle を出したことがある。
   execFileSync('bash', ['-c',
@@ -155,6 +160,8 @@ try {
       ['入口', 'app/start.cmd', 100],
       ['モデルを読む本体', 'app/node_modules/node-llama-cpp/dist/index.js', 100],
       ['モデルを読む binary', 'app/node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node', 1000],
+      ['モデルを読む binary（CUDA）', 'app/node_modules/@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/ggml-cuda.dll', 1000],
+      ['モデルを読む binary（Vulkan）', 'app/node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/ggml-vulkan.dll', 1000],
       ['中で読む口', 'app/src/runtime/inproc.ts', 100],
       ['GitHub に繋ぐ道具', 'app/node_modules/@modelcontextprotocol/server-github/dist/index.js', 100],
     ]) {

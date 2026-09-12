@@ -47,6 +47,9 @@ export async function buildRuntime(
         ...(rc.contextSize !== undefined ? { contextSize: rc.contextSize } : {}),
         // 並列に持つ本数。設定 runtime.parallel。無ければ inproc の既定に任せる。
         ...(rc.parallel !== undefined ? { sequences: rc.parallel } : {}),
+        ...(rc.gpu !== undefined ? { gpu: rc.gpu } : {}),
+        // nvidia-smi に見えているか。CPU になったとき、理由を言い当てるのに使う。
+        gpuSeen: machine.vramBytes > 0,
         ...(onLog ? { onLog } : {}),
       });
     }
@@ -57,6 +60,8 @@ export async function buildRuntime(
       ...(rc.basePort !== undefined ? { port: rc.basePort } : {}),
       ...(rc.contextSize !== undefined ? { contextSize: rc.contextSize } : {}),
       ...(rc.parallel !== undefined ? { sequences: rc.parallel } : {}),
+      ...(rc.gpu !== undefined ? { gpu: rc.gpu } : {}),
+      gpuSeen: machine.vramBytes > 0,
       ...(onLog ? { onLog } : {}),
       ...(hooks.inprocLoad ? { load: hooks.inprocLoad } : {}),
     });

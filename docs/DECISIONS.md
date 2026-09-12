@@ -156,6 +156,7 @@
 - サポート用レポートは、直近の doctor が新しければ使い回す
 - 画面の本体を会話ごとに分ける（並列の残り。土台の選択なので、方針を出して止める）
 - 並列の口に優先度を付ける（上から順。高・中・低は取り分 0）
+- GPU 用の binary を同梱し、読む側が実際に使う backend と VRAM で選ぶ（gpu: false を置き換え）
 
 ---
 
@@ -4106,3 +4107,45 @@ sweep は、落ちた瞬間の画面を残せるようにした（`AAS_SWEEP_SHO
   priority）
 - 確かめていない（追記）: Ollama / llama-server / 雲の中継が `x-aas-priority` を読み飛ばすこと
   （inproc 以外へも送るが、試したのは inproc だけ）。実機で Ollama に一度送って通れば消す
+
+## 2026-09-12  GPU 用の binary を同梱し、読む側が実際に使う backend と VRAM で選ぶ（gpu: false を置き換え）
+
+- 実機（RTX 4060 8GB・RAM 32GB）で、4B でも答えなかった。GPU は使われず、RAM だけが 100%。
+  原因は三つとも設計の側: release.yml が `@node-llama-cpp/win-x64`（CPU）だけを入れていた、
+  inproc が `gpu: false` で読んでいた、選ぶ側が nvidia-smi に GPU が見えると「載るもののうち
+  大きい方」を掴んでいた（VRAM を数えない）。結果、20GB のモデルを CPU に載せて記憶を使い切った。
+- 置き換え済み: 「同梱しているのは CPU の binary だけなので、探させない（gpu: false）」。
+  CPU 版だけを入れた理由（全機械むけを入れると 1.1GB）は残し、**配る先の GPU 用だけ**を足す。
+  cuda 171MB・vulkan 99MB（展開後）。.exe は増えない（`test -f` で両方を見る。release.yml・installer.mjs）
+- inproc は `gpu: 'auto'`（cuda → vulkan → CPU）。向こうが console.warn に直に書く fallback の
+  声は `probeBackend` が黙らせて拾い、**一行**にする（「GPU で読みます: CUDA（名前、VRAM）」
+  「CPU で読みます（理由）」）。理由は符丁（`BackendReason`: off / no-binary / load-failed / no-gpu）
+  で持ち、表示で日本語に引き直す。runtime・doctor・画面が同じ行を出す（触る場所:
+  `src/runtime/inproc.ts` の `describeBackend`）
+- 選ぶ側（`chooseModel`）は **読む側の backend**（`LocalRuntime.backend()`、子には
+  `/control/backend`）と VRAM で決める。GPU なら「VRAM の 8 割に丸ごと載るもののうち大きい方」、
+  載るものが無ければ小さい方。なぜそれかは符丁（`ChoiceReason`）で返し、`CHOICE_WHY` で
+  日本語にする。nvidia-smi の結果は、backend が取れないときの控えにだけ使う
+- KV を数える器は、重みが在る場所。丸ごと VRAM に載るなら KV も VRAM で数える
+  （`fitWindow` の `ramBytes` に VRAM を渡す）。RAM で数えると 8GB の GPU に 32GB ぶんの窓を
+  開けようとする
+- 先の一言（`headsUp`）は、GPU が見えているのに使えていないときは大きさに関わらず言う。
+  VRAM に載り切らないものを読むときは、遅くなることと、載るものが在ればそれを言う
+- 一回の答えごとに tok/s を記録に出す（入力の秒・tok/s、出力の秒・tok/s。`describeSpeed`）。
+  「遅い」が読む側か書く側か、記録だけで分かるようにする
+- 設定 `runtime.gpu`（auto / cuda / vulkan / off）を足した。off は前の形（CPU だけ）で、
+  GPU の道で落ちるときの逃げ道。必須ではない
+- 選ばなかった案: 選ぶ側だけ直して binary は CPU のまま → GPU の機械で小さい方を CPU で
+  回すだけで、根は残る。`contextSize: { max }` で向こうに VRAM へ合わせさせる → こちらの
+  数え方（fitWindow）と二重になり、どちらが効いたか分からなくなる
+- 確かめていない: 実機（Windows・RTX）で CUDA の binary が読めること、4B が GPU で答えること。
+  ここ（Linux・GPU 無し）では GGUF を取ってこられず（中継が 403）、差し替えのテストと
+  Linux の CPU で確かめた分まで
+- 追記（確かめたこと）: node-llama-cpp 3.20.0 の auto は、CUDA を「nvml.dll と CUDA Toolkit の
+  runtime（cudart64_12.dll・cublas64_12.dll）が PATH に在るとき」だけ試す（`detectAvailableComputeLayers`）。
+  Toolkit の無い機械では cuda の binary は使われず、Vulkan（vulkan-1.dll、ドライバに同梱）になる。
+  cuda の binary（171MB）はそれでも同梱する。Toolkit を入れれば CUDA になる道を残すため。
+  外すなら release.yml と installer.mjs の二つの install 行と `test/home.test.ts`。
+  この機械（Linux・GPU 無し・libvulkan だけ在る）では Vulkan を試して落ちてから CPU になるので、
+  向こうの「Failed to load」を「ドライバが古い」と言い直していた。nvidia-smi に見えていない
+  機械では理由を「GPU が無い」に畳む（`probeBackend` の `gpuSeen`）

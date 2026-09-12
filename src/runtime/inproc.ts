@@ -41,6 +41,130 @@ import { DEFAULT_PRIORITY, Priority, PRIORITY_HEADER, toPriority } from '../prov
  */
 const LLAMA_LIB = 'node-llama-cpp';
 
+/**
+ * GPU を使うか。
+ *   auto    cuda → vulkan → CPU の順に、動くものを使う（既定）
+ *   cuda / vulkan  それだけを試す（動かなければ CPU に落ちず、無いと言う）
+ *   off     CPU だけ。前の形。GPU の道で落ちるときの逃げ道として残す
+ */
+export type GpuMode = 'auto' | 'cuda' | 'vulkan' | 'off';
+
+/**
+ * 実際にモデルを動かしている側。`getLlama` が選んだもの。
+ *
+ * **nvidia-smi に GPU が見えることと、読む側が GPU を使うことは別。**
+ * 見えているのに CPU で回し、記憶を使い切って答えない、が実機で起きた
+ * （GPU 用の binary を同梱せず、gpu: false で読んでいた）。使っているものを
+ * ここに持ち、記録・doctor・選ぶ側の全部がこれを見る。
+ */
+export interface Backend {
+  /** false なら CPU。 */
+  gpu: false | 'cuda' | 'vulkan' | 'metal';
+  /** GPU の名前。CPU なら空。 */
+  devices: string[];
+  /** VRAM の総量。CPU なら 0。 */
+  vramBytes: number;
+  /** CPU になった理由。GPU を使えているときは無い。 */
+  reason?: BackendReason;
+}
+export type BackendReason = 'off' | 'no-binary' | 'load-failed' | 'no-gpu';
+
+/** 人に見せる言葉。合図（`BackendReason`）は変えず、ここで引き直す。 */
+export const BACKEND_REASON: Record<BackendReason, string> = {
+  off: '設定 runtime.gpu が off',
+  'no-binary': 'GPU 用の binary が入っていません',
+  'load-failed': 'GPU 用の binary は在りますが、この機械では読めませんでした。ドライバが古い形が多いです',
+  'no-gpu': '使える GPU が見つかりませんでした',
+};
+
+/**
+ * 読む側が GPU を探すのに要るもの。doctor の案内と docs で同じ文を使う。
+ *
+ * ライブラリは CUDA を「NVIDIA のドライバ（nvml.dll）と CUDA Toolkit の runtime
+ * （cudart64_12.dll・cublas64_12.dll）が PATH に在るとき」だけ試す。Vulkan は
+ * vulkan-1.dll（NVIDIA のドライバに入っている）。どちらも無ければ、GPU が
+ * 見えていても探さずに CPU になる（実装: node-llama-cpp の detectAvailableComputeLayers）。
+ */
+export const GPU_NEEDS = 'Vulkan は vulkan-1.dll（NVIDIA のドライバに入っています）、'
+  + 'CUDA は CUDA Toolkit の runtime DLL（cudart64_12.dll・cublas64_12.dll）が PATH に要ります。';
+
+/** 記録・doctor に出す一行。同じ文をそれぞれが組まない。 */
+export function describeBackend(b: Backend): string {
+  if (b.gpu) {
+    const name = b.devices.length > 0 ? b.devices.join(', ') : 'GPU';
+    const vram = b.vramBytes > 0 ? `、VRAM ${(b.vramBytes / 1024 ** 3).toFixed(1)}GB` : '';
+    return `GPU で読みます: ${b.gpu === 'cuda' ? 'CUDA' : b.gpu === 'vulkan' ? 'Vulkan' : b.gpu}（${name}${vram}）`;
+  }
+  return `CPU で読みます（${BACKEND_REASON[b.reason ?? 'no-gpu']}）`;
+}
+
+/** ライブラリの、こちらが使う分だけの形（`getLlama` が返すもの）。 */
+export interface LlamaLike {
+  loadModel: (o: { modelPath: string; onLoadProgress?: (done: number) => void }) => Promise<{
+    createContext: (o?: { contextSize?: number; sequences?: number }) => Promise<{
+      getSequence: (o?: { tokenPredictor?: unknown }) => unknown; dispose?: () => Promise<void>;
+    }>;
+    /** GPU に載せた層の数。試験のモックには無い。 */
+    gpuLayers?: number;
+    fileInsights?: { totalLayers?: number };
+  }>;
+  /** 使っている backend。false なら CPU。試験のモックには無い（＝CPU）。 */
+  gpu?: false | 'cuda' | 'vulkan' | 'metal';
+  getGpuDeviceNames?: () => Promise<string[]>;
+  getVramState?: () => Promise<{ total: number; used: number; free: number }>;
+}
+export interface LlamaLib {
+  getLlama: (o?: { gpu?: false | 'auto' | 'cuda' | 'vulkan'; build?: 'never'; logLevel?: 'error' }) => Promise<LlamaLike>;
+  LlamaChatSession: new (o: { contextSequence: unknown }) => unknown;
+  InputLookupTokenPredictor?: new () => unknown;
+}
+
+/**
+ * backend を決めて、何を使ったかを持ち帰る。runtime と doctor が同じ道を通る。
+ *
+ * ライブラリは、GPU 用の binary が無い・読めないときに **console.warn / console.error へ直に**
+ * 「A prebuilt binary was not found, falling back to …」と何行も書く（logLevel を通らない。実測）。
+ * 利用者にはそのまま貼られ、壊れているようにしか見えない。黙らせて拾い、こちらの言葉で
+ * **一行**にする。拾った文から理由（無い／読めない）を引く。
+ */
+export async function probeBackend(
+  lib: LlamaLib, mode: GpuMode = 'auto',
+  opts: {
+    /**
+     * nvidia-smi に GPU が見えているか。見えていない機械では、向こうが何と言おうと
+     * 理由は「GPU が無い」（libvulkan だけ在る機械で Vulkan を試して落ちた声を、
+     * 「ドライバが古い」と言い直していた。無いものは無い）。分からなければ渡さない。
+     */
+    gpuSeen?: boolean;
+  } = {},
+): Promise<{ llama: LlamaLike; backend: Backend }> {
+  const heard: string[] = [];
+  const llama = await quietly(heard, () => lib.getLlama({ gpu: mode === 'off' ? false : mode, build: 'never', logLevel: 'error' }));
+  const gpu = llama.gpu ?? false;
+  if (!gpu) {
+    const said = heard.join('\n');
+    const reason: BackendReason = mode === 'off' ? 'off'
+      : opts.gpuSeen === false ? 'no-gpu'
+        : /not found/i.test(said) ? 'no-binary'
+          : /not compatible|failed to load/i.test(said) ? 'load-failed'
+            : 'no-gpu';
+    return { llama, backend: { gpu: false, devices: [], vramBytes: 0, reason } };
+  }
+  const devices = await llama.getGpuDeviceNames?.().catch(() => [] as string[]) ?? [];
+  const vram = await llama.getVramState?.().catch(() => undefined);
+  return { llama, backend: { gpu, devices, vramBytes: vram?.total ?? 0 } };
+}
+
+/** 呼んでいる間だけ、向こうの console.warn / console.error を拾って黙らせる。 */
+async function quietly<T>(into: string[], run: () => Promise<T>): Promise<T> {
+  const warn = console.warn;
+  const error = console.error;
+  const keep = (...args: unknown[]) => { into.push(args.map(String).join(' ')); };
+  console.warn = keep;
+  console.error = keep;
+  try { return await run(); } finally { console.warn = warn; console.error = error; }
+}
+
 
 /**
  * 待つ口。**決め打ちにする。**
@@ -126,6 +250,10 @@ export interface InProcOptions {
   onExit?: () => void;
   /** 列で待つ間の `: queued` の間隔。既定 `QUEUE_HEARTBEAT_MS`。テストで短くする。 */
   queueHeartbeatMs?: number;
+  /** GPU を使うか。既定 'auto'。設定 `runtime.gpu`。 */
+  gpu?: GpuMode;
+  /** nvidia-smi に GPU が見えているか（`detectMachine`）。CPU になった理由を言い当てるのに使う。 */
+  gpuSeen?: boolean;
 }
 
 /** 置き場にある GGUF。名前は問わない。 */
@@ -199,21 +327,60 @@ export function chooseModel(
   models: readonly AvailableModel[],
   ramBytes: number,
   wanted?: string,
-  opts: { hasGpu?: boolean } = {},
-): { chosen: AvailableModel; fits: boolean } | undefined {
+  opts: { hasGpu?: boolean; vramBytes?: number } = {},
+): { chosen: AvailableModel; fits: boolean; why: ChoiceReason } | undefined {
   if (models.length === 0) return undefined;
   const named = wanted ? models.find((m) => m.ref === wanted) : undefined;
-  if (named) return { chosen: named, fits: !tooBigForRam(named.sizeBytes, ramBytes) };
+  if (named) return { chosen: named, fits: !tooBigForRam(named.sizeBytes, ramBytes), why: 'named' };
 
   const fitting = models.filter((m) => !tooBigForRam(m.sizeBytes, ramBytes));
   if (fitting.length > 0) {
     const size = (m: AvailableModel) => m.sizeBytes ?? 0;
     const smallest = fitting.reduce((a, b) => (size(b) < size(a) ? b : a));
     const largest = fitting.reduce((a, b) => (size(b) > size(a) ? b : a));
-    return { chosen: opts.hasGpu === false ? smallest : largest, fits: true };
+    if (opts.hasGpu === false) return { chosen: smallest, fits: true, why: 'cpu-smallest' };
+    /*
+     * **VRAM に丸ごと載るもののうち、大きい方。**
+     *
+     * 「GPU が在るなら大きい方」は、VRAM を数えていなかった。8GB の GPU に
+     * 20GB のモデルを選び、載らない分が CPU に溢れて、記憶を使い切って
+     * 答えなくなった（実機）。丸ごと載るものが無ければ、小さい方
+     * （溢れる量が少ないほど速い）。
+     */
+    if (opts.hasGpu && opts.vramBytes) {
+      const onGpu = fitting.filter((m) => fitsVram(m.sizeBytes, opts.vramBytes));
+      if (onGpu.length > 0) {
+        return { chosen: onGpu.reduce((a, b) => (size(b) > size(a) ? b : a)), fits: true, why: 'gpu-largest-in-vram' };
+      }
+      return { chosen: smallest, fits: true, why: 'gpu-none-in-vram' };
+    }
+    return { chosen: largest, fits: true, why: 'largest' };
   }
   const smallest = models.reduce((a, b) => ((b.sizeBytes ?? 0) < (a.sizeBytes ?? 0) ? b : a));
-  return { chosen: smallest, fits: false };
+  return { chosen: smallest, fits: false, why: 'none-fits-ram' };
+}
+
+/** なぜそれを選んだか。表示は `CHOICE_WHY` で引き直す。 */
+export type ChoiceReason =
+  | 'named' | 'gpu-largest-in-vram' | 'gpu-none-in-vram' | 'largest' | 'cpu-smallest' | 'none-fits-ram';
+
+export const CHOICE_WHY: Record<ChoiceReason, string> = {
+  named: '設定で決めてあります',
+  'gpu-largest-in-vram': 'VRAM に丸ごと載るもののうち大きい方',
+  'gpu-none-in-vram': 'VRAM に丸ごと載るものが無いので、載るもののうち小さい方（大きいほど CPU に溢れて遅くなります）',
+  largest: 'GPU があるので、載るもののうち大きい方',
+  'cpu-smallest': 'GPU が無いので、載るもののうち小さい方（大きいほど待ちます）',
+  'none-fits-ram': 'どれも記憶に載りません',
+};
+
+/**
+ * 重みが VRAM に丸ごと載るか。KV と計算の作業領域のぶん、二割は空けておく。
+ * 載り切らない分は CPU に置かれ、そこが速さを決めてしまう。
+ */
+export const VRAM_SHARE = 0.8;
+export function fitsVram(sizeBytes: number | undefined, vramBytes: number | undefined): boolean {
+  if (!sizeBytes || !vramBytes) return false;
+  return sizeBytes <= vramBytes * VRAM_SHARE;
 }
 
 /**
@@ -390,6 +557,11 @@ export class InProcRuntime implements LocalRuntime {
    * 二人目には、一人目の約束をそのまま渡す。
    */
   readonly #loading = new Map<string, Promise<Held>>();
+  /**
+   * ライブラリの本体（`getLlama` の結果）と、選ばれた backend。**一度だけ作る。**
+   * モデルごとに作ると、backend の初期化（CUDA なら数秒）を毎回やり直す。
+   */
+  #llama?: Promise<{ llama: LlamaLike; backend: Backend }>;
 
   constructor(opts: InProcOptions) {
     this.#opts = opts;
@@ -430,6 +602,30 @@ export class InProcRuntime implements LocalRuntime {
     }));
   }
 
+  /**
+   * 実際に使う backend。**読む前に分かる**（ライブラリを起こすだけで、モデルは読まない）。
+   * 選ぶ側はこれを見る。nvidia-smi に見えるかどうかでは決めない。
+   */
+  async backend(): Promise<Backend> {
+    return (await this.#llamaInstance()).backend;
+  }
+
+  #llamaInstance(): Promise<{ llama: LlamaLike; backend: Backend }> {
+    if (!this.#llama) {
+      const made = (async () => {
+        const lib = await this.#lib();
+        const got = await probeBackend(lib, this.#opts.gpu ?? 'auto',
+          this.#opts.gpuSeen !== undefined ? { gpuSeen: this.#opts.gpuSeen } : {});
+        this.#opts.onLog?.(describeBackend(got.backend));
+        return got;
+      })();
+      // 失敗を覚えたままにしない。次に呼ばれたときに、済んだ失敗をもう一度返すことになる。
+      made.catch(() => { if (this.#llama === made) this.#llama = undefined; });
+      this.#llama = made;
+    }
+    return this.#llama;
+  }
+
   async ensureLoaded(ref: string): Promise<LoadedModel> {
     const began = Date.now();
     if (!this.#sessions.has(ref)) {
@@ -458,20 +654,18 @@ export class InProcRuntime implements LocalRuntime {
   /** 実際に読む。**必ず #loading 越しに呼ぶ。** */
   async #load(ref: string): Promise<Held> {
     const lib = await this.#lib();
-    // build: 'never' — 同梱の binary が無い・読めないとき、既定では
-    // llama.cpp を GitHub から取ってきて手元で組もうとする（実測）。
-    // 網の無い機械では固まり、あっても何十分もかかる。**組まずに、無いと言う。**
-    // logLevel: 'error' — 無いときに「prebuilt binary was not found」を何行も
-    // 表に出す。こちらの言葉で言い直すので、向こうの声は落とす。
-    // gpu: false — **同梱しているのは CPU の binary だけ。**
-    // 既定（auto）だと cuda → vulkan → CPU の順に探しに行き、前の二つは
-    // 必ず空振りする。そのたびに
-    //   「A prebuilt binary was not found, falling back to using no GPU」
-    // が出る。利用者には**壊れているようにしか見えない**（実際に言われた）。
-    // 無いものを探させない。探さない分、立ち上がりも速い。
-    //
-    // GPU を使いたくなったら、そのときは binary を同梱してから、ここを開ける。
-    const llama = await lib.getLlama({ gpu: false, build: 'never', logLevel: 'error' });
+    /*
+     * build: 'never' — 同梱の binary が無い・読めないとき、既定では
+     * llama.cpp を GitHub から取ってきて手元で組もうとする（実測）。
+     * 網の無い機械では固まり、あっても何十分もかかる。**組まずに、無いと言う。**
+     *
+     * gpu は既定 'auto'（cuda → vulkan → CPU）。**ここは gpu: false で読んでいた。**
+     * 「同梱しているのは CPU の binary だけだから、探させない」という理由だったが、
+     * その結果 RTX の機械でも CPU で回り、記憶を使い切って答えなかった（実機）。
+     * いまは GPU 用の binary も同梱する（release.yml）。探すときの向こうの声は
+     * probeBackend が拾って、こちらの一行（describeBackend）にする。
+     */
+    const { llama, backend } = await this.#llamaInstance();
     // 数GBを読むので、10〜60秒かかる。**黙って待たせない。**
     // 進み具合を出さないと、また「固まった」に見える。
     let last = -1;
@@ -491,7 +685,15 @@ export class InProcRuntime implements LocalRuntime {
     //
     // **並列に持つ本数（sequences）も、ここで決まる。**KV は本数ぶん要るので、
     // コンテキストウィンドウ × 本数 が記憶に収まるよう #windowFor（fitWindow）が数えてある。
-    const { window: contextSize, sequences } = await this.#windowFor(ref);
+    // GPU に何層載ったか。**載り切らなかったときは、それが遅い理由。**言わないと、
+    // 「GPU で読んでいるのに遅い」の原因を別の所に探すことになる。
+    if (backend.gpu && typeof model.gpuLayers === 'number') {
+      const total = model.fileInsights?.totalLayers;
+      this.#opts.onLog?.(typeof total === 'number' && model.gpuLayers < total
+        ? `GPU に ${model.gpuLayers}/${total} 層を載せました（載り切らない分は CPU で動くので、遅くなります）`
+        : `GPU に ${model.gpuLayers}${typeof total === 'number' ? `/${total}` : ''} 層を載せました`);
+    }
+    const { window: contextSize, sequences } = await this.#windowFor(ref, backend);
     const context = await model.createContext({ contextSize, sequences });
     /*
      * **直しは、渡した中身をそのまま書き戻すことが多い。**
@@ -553,7 +755,7 @@ export class InProcRuntime implements LocalRuntime {
    * 上限は置く。大きい窓は、そのぶん記憶（KV）を食う。機械が固まると
    * 「打っても返事が来ない」に戻るので、青天井にはしない。
    */
-  async #windowFor(ref: string): Promise<{ window: number; sequences: number }> {
+  async #windowFor(ref: string, backend: Backend): Promise<{ window: number; sequences: number }> {
     const wanted = this.#wantedSequences();
     if (this.#opts.contextSize) {
       // コンテキストウィンドウは利用者が決めた。本数はそのまま。KV は数えないが、本人の選択。
@@ -567,6 +769,9 @@ export class InProcRuntime implements LocalRuntime {
       const trained = facts.contextLength;
       if (typeof trained === 'number' && trained >= 2048) {
         const weightBytes = await stat(at).then((x) => x.size).catch(() => undefined);
+        // **KV を数える器は、重みが在る場所。**丸ごと VRAM に載るなら KV も VRAM に置かれる。
+        // RAM（32GB）で数えると、8GB の GPU に 32GB ぶんのコンテキストウィンドウを開けようとして落ちる。
+        const onVram = Boolean(backend.gpu) && fitsVram(weightBytes, backend.vramBytes);
         // **広げた分を数える。**コンテキストウィンドウはそのまま記憶（KV）になる。並列の本数ぶんも。
         const fit = fitWindow({
           trained,
@@ -575,12 +780,13 @@ export class InProcRuntime implements LocalRuntime {
           ...(facts.headCount !== undefined ? { heads: facts.headCount } : {}),
           ...(facts.headCountKv !== undefined ? { kvHeads: facts.headCountKv } : {}),
           ...(weightBytes !== undefined ? { weightBytes } : {}),
-          ramBytes: totalmem(),
+          ramBytes: onVram ? backend.vramBytes : totalmem(),
           sequences: wanted,
         });
+        const where = onVram ? `。KV は VRAM（${(backend.vramBytes / 1024 ** 3).toFixed(1)}GB）で数えました` : '';
         this.#opts.onLog?.(fit.why
-          ? `コンテキストウィンドウ: ${fit.window}・並列 ${fit.sequences} 本（このモデルは ${trained} まで持っています）。${fit.why}`
-          : `コンテキストウィンドウ: ${fit.window}・並列 ${fit.sequences} 本（このモデルは ${trained} まで持っています）`);
+          ? `コンテキストウィンドウ: ${fit.window}・並列 ${fit.sequences} 本（このモデルは ${trained} まで持っています）。${fit.why}${where}`
+          : `コンテキストウィンドウ: ${fit.window}・並列 ${fit.sequences} 本（このモデルは ${trained} まで持っています）${where}`);
         return { window: fit.window, sequences: fit.sequences };
       }
     } catch {
@@ -609,6 +815,7 @@ export class InProcRuntime implements LocalRuntime {
       if (op === 'list') return reply(200, await this.list());
       if (op === 'loaded') return reply(200, this.loaded());
       if (op === 'wrappers') return reply(200, this.wrappers());
+      if (op === 'backend') return reply(200, await this.backend());
       if (op === 'load' && req.method === 'POST') {
         const { ref } = await readJson();
         if (typeof ref !== 'string') return reply(400, { error: 'ref が要ります' });
@@ -647,8 +854,7 @@ export class InProcRuntime implements LocalRuntime {
   }
 
   /** ライブラリ。無いときは、無いとだけ言う。黙って別のことをしない。 */
-  async #lib(): Promise<{ getLlama: (o?: { gpu?: false; build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string; onLoadProgress?: (done: number) => void }) => Promise<{ createContext: (o?: { contextSize?: number; sequences?: number }) => Promise<{ getSequence: (o?: { tokenPredictor?: unknown }) => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown;
-    InputLookupTokenPredictor?: new () => unknown }> {
+  async #lib(): Promise<LlamaLib> {
     const load = this.#opts.load ?? (() => import(LLAMA_LIB));
     try {
       return await load() as never;
@@ -1017,6 +1223,21 @@ export class InProcRuntime implements LocalRuntime {
     // その間、画面には何も出ない。「遅い」のがどこかを、記録で分かるようにする。
     const started = Date.now();
     let firstAt = 0;
+    let seen: number | undefined;
+    let generated = 0;
+    /*
+     * **入力を読んでいる間も、黙らない。**
+     *
+     * ここは最初のトークンまで一バイトも書かなかった。Node の fetch（undici）は
+     * 本文の無音が 300 秒続くと切る（実測 300.9 秒、`TypeError: terminated`）。
+     * 上の層の「最初のトークンまで 10 分」は、その手前で切られて一度も効いて
+     * いなかった。CPU で 2887 トークンを読むのに 1298 秒かかった実機では、
+     * 308 / 619 / 930 秒の三回ともここで切れ、「やり直します」を繰り返して落ちた。
+     * 並んでいる間の `: queued` と同じ間隔で `: working` を打つ。上の層は
+     * 最初のトークン前に届いたバイトで待ちを延ばす（読んでいるのは停滞ではない）。
+     */
+    const working = setInterval(() => { if (!res.writableEnded) res.write(': working\n\n'); },
+      this.#opts.queueHeartbeatMs ?? QUEUE_HEARTBEAT_MS);
     try {
       chunk({ role: 'assistant' });
       let thought = 0;
@@ -1026,11 +1247,13 @@ export class InProcRuntime implements LocalRuntime {
         // 考えごとの間は「何も出ていない」としか分からない。
         onResponseChunk: (c) => {
           if (!firstAt) {
+            clearInterval(working);
             firstAt = Date.now();
-            const seen = lane.sequence?.nextTokenIndex;
+            seen = lane.sequence?.nextTokenIndex;
             this.#opts.onLog?.(`最初の 1 トークンまで ${((firstAt - started) / 1000).toFixed(1)} 秒`
               + (typeof seen === 'number' ? `（入力 ${seen} トークン）` : ''));
           }
+          generated += c.tokens?.length ?? 0;
           if (c.type === 'segment' && c.segmentType === 'thought') thought += c.text.length;
         },
         // 一気に返さず、出来た端から流す。長い返事のときに
@@ -1050,6 +1273,9 @@ export class InProcRuntime implements LocalRuntime {
       // ここでも見る。見ていなかったので、やめた後に 'stop' を送っていた。
       if (signal.aborted) { res.end(); return; }
       if (thought > 0) this.#opts.onLog?.(`考えごとに ${thought} 文字使いました（答えには出しません）`);
+      // **速さを数字で残す。**「遅い」が、読む側（入力）なのか書く側（出力）なのか、
+      // GPU が効いているのか、記録だけで分かるようにする。
+      this.#opts.onLog?.(describeSpeed({ started, firstAt, ended: Date.now(), seen, generated }));
       finish();
     } catch (e) {
       if (signal.aborted) { res.end(); return; }
@@ -1069,6 +1295,8 @@ export class InProcRuntime implements LocalRuntime {
       // 成功として扱い、画面には「完了・検証済み」と出る。実際にそう出ていた。
       // 落ちたものを完了と記録するのが、いちばん質が悪い。
       else chunk({ content: `\n[止まりました: ${(e as Error).message}]` }, 'error');
+    } finally {
+      clearInterval(working);
     }
     res.write('data: [DONE]\n\n');
     res.end();
@@ -1093,8 +1321,8 @@ interface PromptOptions {
   temperature?: number;
   maxTokens?: number;
   onTextChunk?: (text: string) => void;
-  /** 本文でも考えごとでも、出た端から来る。最初の 1 トークンの時間はこちらで測る。 */
-  onResponseChunk?: (chunk: { type?: string; segmentType?: string; text: string }) => void;
+  /** 本文でも考えごとでも、出た端から来る。最初の 1 トークンの時間と tok/s はこちらで測る。 */
+  onResponseChunk?: (chunk: { type?: string; segmentType?: string; text: string; tokens?: unknown[] }) => void;
   /** 考えごと（<think>）などに使ってよいトークン数。0 で書かせない。 */
   budgets?: { thoughtTokens?: number };
   /** 画面が「やめる」を押したら、生成そのものを止める。 */
@@ -1411,25 +1639,72 @@ function parseArgs(raw: string | undefined): unknown {
  */
 export const HEAVY_ON_CPU_BYTES = 3 * 1024 ** 3;
 
+/** 先の一言を組むのに要る、この機械の事情。 */
+export interface HeadsUpContext {
+  /** 読む側が実際に GPU を使うか（`Backend.gpu`）。nvidia-smi の結果ではない。 */
+  hasGpu: boolean;
+  /** VRAM の総量。GPU を使うときだけ。 */
+  vramBytes?: number;
+  /** nvidia-smi に見えている GPU の名前。読む側が使えていないときに、そう言うため。 */
+  seenGpu?: string;
+}
+
 export function headsUp(
   models: readonly AvailableModel[],
   ramBytes: number,
   wanted: string | undefined,
-  hasGpu: boolean,
+  on: HeadsUpContext,
 ): string | undefined {
-  if (hasGpu) return undefined;
-  // 選び方は本番と同じにする（GPU なしなら小さい方）。違う選び方で脅さない。
-  const picked = chooseModel(models, ramBytes, wanted, { hasGpu });
-  if (!picked || !picked.fits) return undefined;
-  const size = picked.chosen.sizeBytes ?? 0;
-  if (size < HEAVY_ON_CPU_BYTES) return undefined;
   // 1GB 未満は MB で言う（「0.0GB」は無いのと同じに読める）。
   const gb = (n: number) => (n < 1024 ** 3 ? `${Math.round(n / 1024 ** 2)}MB` : `${(n / 1024 ** 3).toFixed(1)}GB`);
+  // 選び方は本番と同じにする。違う選び方で脅さない。
+  const picked = chooseModel(models, ramBytes, wanted, { hasGpu: on.hasGpu, vramBytes: on.vramBytes });
+  if (on.hasGpu) {
+    // GPU で読む。丸ごと VRAM に載るなら、言うことは無い。
+    // 載り切らないなら、遅くなることと、載るものが在るなら在ることを言う。
+    if (!on.vramBytes || !picked || !picked.fits) return undefined;
+    const size = picked.chosen.sizeBytes ?? 0;
+    if (fitsVram(size, on.vramBytes)) return undefined;
+    const inVram = models
+      .filter((m) => m.ref !== picked.chosen.ref && fitsVram(m.sizeBytes, on.vramBytes))
+      .sort((a, b) => (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0))[0];
+    const alt = inVram
+      ? `VRAM に丸ごと載るものもあります: ${inVram.ref}（${gb(inVram.sizeBytes ?? 0)}）。⚙ 設定 → モデル で選べます。`
+      : '';
+    return `${picked.chosen.ref}（${gb(size)}）は VRAM（${gb(on.vramBytes)}）に丸ごとは載りません。`
+      + `載る分だけ GPU に置き、残りは CPU で動くので遅くなります。${alt}`;
+  }
+  // **GPU が見えているのに使えていない**は、大きさに関わらず言う。
+  // 黙っていると、遅い理由を機械の性能に探すことになる（実機で、そう探した）。
+  const unused = on.seenGpu
+    ? `GPU（${on.seenGpu}）は見えていますが、読む側が使えていません（理由は記録の「CPU で読みます」の行に出ています）。`
+    : '';
+  if (!picked || !picked.fits) return unused || undefined;
+  const size = picked.chosen.sizeBytes ?? 0;
+  if (size < HEAVY_ON_CPU_BYTES) return unused || undefined;
   const smaller = models
     .filter((m) => m.ref !== picked.chosen.ref && (m.sizeBytes ?? 0) < size && !tooBigForRam(m.sizeBytes, ramBytes))
     .sort((a, b) => (a.sizeBytes ?? 0) - (b.sizeBytes ?? 0))[0];
   const alt = smaller
     ? `小さいものもあります: ${smaller.ref}（${gb(smaller.sizeBytes ?? 0)}）。⚙ 設定 → モデル で選べます。`
     : '';
-  return `${picked.chosen.ref}（${gb(size)}）を GPU なしで読みます。最初の答えまで数分かかることがあります。${alt}`;
+  return `${unused}${picked.chosen.ref}（${gb(size)}）を GPU なしで読みます。最初の答えまで数分かかることがあります。${alt}`;
+}
+
+/**
+ * 一回の答えの速さを、一行にする。
+ *
+ * 「遅い」だけでは直せない。入力を読む側（prompt evaluation）が遅いのか、
+ * 書く側（generation）が遅いのかで、打つ手が違う（前者はコンテキストウィンドウ、後者は GPU と量子化）。
+ */
+export function describeSpeed(t: {
+  started: number; firstAt: number; ended: number; seen?: number; generated: number;
+}): string {
+  const sec = (ms: number) => Math.max(ms, 1) / 1000;
+  const rate = (n: number, ms: number) => (n / sec(ms)).toFixed(1);
+  const input = t.firstAt && typeof t.seen === 'number'
+    ? `入力 ${t.seen} トークン（${sec(t.firstAt - t.started).toFixed(1)} 秒・${rate(t.seen, t.firstAt - t.started)} tok/s）`
+    : `最初の 1 トークンまで ${sec((t.firstAt || t.ended) - t.started).toFixed(1)} 秒`;
+  const outMs = t.firstAt ? t.ended - t.firstAt : 0;
+  return `答えました: ${input}、出力 ${t.generated} トークン（${sec(outMs).toFixed(1)} 秒・${rate(t.generated, outMs)} tok/s）`;
 }

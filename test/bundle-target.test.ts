@@ -20,7 +20,7 @@ import { pruneForTarget, targetFromNodeDir } from '../scripts/bundle.mjs';
 
 const PLATFORMS = [
   'linux-arm64', 'linux-armv7l', 'linux-x64', 'linux-x64-cuda',
-  'linux-x64-cuda-ext', 'linux-x64-vulkan', 'win-x64', 'mac-arm64',
+  'linux-x64-cuda-ext', 'linux-x64-vulkan', 'win-x64', 'win-x64-cuda', 'win-x64-vulkan', 'mac-arm64',
 ];
 
 async function modules(): Promise<string> {
@@ -39,11 +39,13 @@ async function modules(): Promise<string> {
 }
 
 describe('配る先のものだけを残す', () => {
-  test('**Windows むけなら、win-x64 が残る**', async () => {
+  test('**Windows むけなら、win-x64 と、その GPU 用（cuda・vulkan）が残る**', async () => {
+    // GPU 用は `win-x64-` で始まる別のパッケージ。CPU の分だけ残すと、
+    // RTX の機械でも CPU で回る（実機でそうなった）。
     const dir = await modules();
     await pruneForTarget(dir, 'win-x64', () => {});
     const left = (await readdir(join(dir, '@node-llama-cpp'))).sort();
-    assert.deepEqual(left, ['win-x64'], `残ったもの: ${left.join(',')}`);
+    assert.deepEqual(left, ['win-x64', 'win-x64-cuda', 'win-x64-vulkan'], `残ったもの: ${left.join(',')}`);
   });
 
   test('**配る先そのものを、消さない**', async () => {
