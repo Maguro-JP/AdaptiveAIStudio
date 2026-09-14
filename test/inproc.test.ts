@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
-import { InProcRuntime, listGguf, chooseModel, MAX_WINDOW, SAFE_WINDOW, fitWindow } from '../src/runtime/inproc.ts';
+import { InProcRuntime, listGguf, chooseModel, MAX_WINDOW, SAFE_WINDOW, fitWindow, DEFAULT_SEQUENCES, fitsVram, VRAM_SHARE } from '../src/runtime/inproc.ts';
 import { ggufHead } from './gguf-head.ts';
 
 /**
@@ -381,7 +381,7 @@ describe('文脈の大きさを決めておく', () => {
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
-    assert.deepEqual(seen, [{ contextSize: 32768 }]);
+    assert.deepEqual(seen, [{ contextSize: 32768, sequences: DEFAULT_SEQUENCES }]);
   });
 
   test('**窓の値しか読めなければ、広げない**', async () => {
@@ -393,7 +393,7 @@ describe('文脈の大きさを決めておく', () => {
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
-    assert.deepEqual(seen, [{ contextSize: SAFE_WINDOW }],
+    assert.deepEqual(seen, [{ contextSize: SAFE_WINDOW, sequences: 1 }],
       '記憶を数えられないのに広げている');
   });
 
@@ -410,7 +410,7 @@ describe('文脈の大きさを決めておく', () => {
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
-    assert.deepEqual(seen, [{ contextSize: MAX_WINDOW }]);
+    assert.deepEqual(seen, [{ contextSize: MAX_WINDOW, sequences: DEFAULT_SEQUENCES }]);
   });
 
   test('設定が在れば、そちらが勝つ', async () => {
@@ -421,7 +421,7 @@ describe('文脈の大きさを決めておく', () => {
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, contextSize: 4096, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
-    assert.deepEqual(seen, [{ contextSize: 4096 }]);
+    assert.deepEqual(seen, [{ contextSize: 4096, sequences: DEFAULT_SEQUENCES }]);
   });
 
   test('読めないファイルなら、既定に落とす', async () => {
@@ -430,7 +430,7 @@ describe('文脈の大きさを決めておく', () => {
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
-    assert.deepEqual(seen, [{ contextSize: 8192 }]);
+    assert.deepEqual(seen, [{ contextSize: 8192, sequences: 1 }]);
   });
   test('設定で広げられる（対）', async () => {
     const dir = await tempDir('aas-ctx-');
@@ -438,7 +438,7 @@ describe('文脈の大きさを決めておく', () => {
     const seen: unknown[] = [];
     const rt = new InProcRuntime({ modelsDir: dir, port: 0, contextSize: 32768, load: () => libRecording(seen) });
     try { await rt.ensureLoaded('a.gguf'); } finally { await rt.shutdown(); }
-    assert.deepEqual(seen, [{ contextSize: 32768 }]);
+    assert.deepEqual(seen, [{ contextSize: 32768, sequences: DEFAULT_SEQUENCES }]);
   });
 });
 
@@ -513,6 +513,65 @@ describe('窓を、この機械の記憶に合わせる', () => {
     const got = fitWindow({ trained: 4096, layers: 4, embedding: 512, heads: 8, ramBytes: 64 * GB });
     assert.equal(got.window, 4096);
   });
+
+  /*
+   * **KV を数えられないなら、並列で N 倍しない。**
+   *
+   * head_count_kv が「0 として書いてある」壊れた／読み違えた GGUF や、
+   * embedding < heads だと、一トークンあたりの KV が 0 に潰れて数えられない。
+   * ここで本数（sequences）をそのまま通すと、32768 × N 本を記憶の勘定なしに
+   * 開いて機械が固まる。**数えられないときは 1 本・安全なコンテキストウィンドウに落とす。**
+   */
+  test('**head_count_kv=0 は heads と同じに扱う（0 を素通しして KV を 0 にしない）**', () => {
+    // `?? ` だと 0 を素通しして kvDim が 0 になり、KV を数えられないまま
+    // 並列で N 倍していた。0（壊れた GGUF）は heads で代えて、数えられる形にする。
+    const zero = fitWindow({
+      trained: 32768, layers: 32, embedding: 4096, heads: 32, kvHeads: 0,
+      ramBytes: 16 * GB, sequences: 4,
+    });
+    const fallback = fitWindow({
+      trained: 32768, layers: 32, embedding: 4096, heads: 32, kvHeads: 32,
+      ramBytes: 16 * GB, sequences: 4,
+    });
+    assert.deepEqual(zero, fallback, '0 を heads と同じに扱っていない');
+    // 数えた上で、コンテキストウィンドウ × 本数 が記憶に収まっている（青天井で N 倍していない）。
+    const perToken = 2 * 32 * (4096 / 32) * 32 * 2;
+    assert.ok(zero.window * zero.sequences * perToken <= 16 * GB * 0.7,
+      `記憶を数えずに N 倍している: コンテキストウィンドウ ${zero.window} × ${zero.sequences} 本`);
+  });
+
+  test('embedding < heads でも、N 倍しない（headDim が 0 に潰れる）', () => {
+    const got = fitWindow({
+      trained: 32768, layers: 32, embedding: 4, heads: 32,
+      ramBytes: 16 * GB, sequences: 3,
+    });
+    assert.equal(got.sequences, 1);
+    assert.ok(got.window <= SAFE_WINDOW);
+  });
+
+  test('**モデルのコンテキストウィンドウが floor より狭いとき、floor で超えさせない**', () => {
+    // trained 2048 のモデルを、記憶がきついので並列を減らす道へ入れる。
+    // floor(4096) をそのまま返すと trained(2048) を超え、記憶の勘定も超える。
+    const got = fitWindow({
+      trained: 2048, layers: 1, embedding: 64, heads: 1,
+      ramBytes: 1_097_143, sequences: 2,
+    });
+    assert.ok(got.window <= 2048, `モデルのコンテキストウィンドウ（2048）を超えている: ${got.window}`);
+    // 記憶にも収まっている（コンテキストウィンドウ × 本数 が、数えた総量を超えない）。
+    const perToken = 2 * 1 * 64 * 2;
+    const maxTotal = Math.floor(1_097_143 * 0.7 / perToken);
+    assert.ok(got.window * got.sequences <= maxTotal,
+      `記憶を超えている: コンテキストウィンドウ ${got.window} × ${got.sequences} 本 > ${maxTotal}`);
+  });
+
+  test('諸元が揃っていて 0 でなければ、今までどおり並列を通す（対）', () => {
+    const got = fitWindow({
+      trained: 32768, layers: 4, embedding: 512, heads: 8, kvHeads: 2,
+      ramBytes: 64 * GB, sequences: 2,
+    });
+    assert.equal(got.sequences, 2, '数えられるのに並列を落としている');
+    assert.equal(got.window, 32768);
+  });
 });
 
 describe('どの GGUF を読むか', () => {
@@ -535,12 +594,54 @@ describe('どの GGUF を読むか', () => {
     assert.equal(got?.fits, true);
   });
 
-  test('GPU が在るなら、載るもののうち大きいほうを選ぶ', () => {
+  test('GPU が在って VRAM が分からないなら、載るもののうち大きいほうを選ぶ', () => {
     const got = chooseModel([
       { ref: 'small.gguf', sizeBytes: 2 * GB },
       { ref: 'mid.gguf', sizeBytes: 8 * GB },
     ], ram, undefined, { hasGpu: true });
     assert.equal(got?.chosen.ref, 'mid.gguf');
+    assert.equal(got?.why, 'largest');
+  });
+
+  /*
+   * **VRAM を数えていなかった。**8GB の GPU に 20GB のモデルを選び、載らない分が
+   * CPU に溢れて、記憶を使い切って答えなかった（実機）。丸ごと載るもののうち大きい方。
+   */
+  test('**GPU で VRAM が分かるなら、VRAM に丸ごと載るもののうち大きいほうを選ぶ**', () => {
+    const got = chooseModel([
+      { ref: 'small.gguf', sizeBytes: 2 * GB },
+      { ref: 'mid.gguf', sizeBytes: 5 * GB },
+      { ref: 'huge.gguf', sizeBytes: 20 * GB },
+    ], 32 * GB, undefined, { hasGpu: true, vramBytes: 8 * GB });
+    assert.equal(got?.chosen.ref, 'mid.gguf', '20GB は 8GB の VRAM に載らない');
+    assert.equal(got?.why, 'gpu-largest-in-vram');
+    assert.equal(got?.fits, true);
+  });
+
+  test('VRAM に丸ごと載るものが無ければ、小さいほう（溢れる量が少ないほど速い）', () => {
+    const got = chooseModel([
+      { ref: 'big.gguf', sizeBytes: 10 * GB },
+      { ref: 'huge.gguf', sizeBytes: 20 * GB },
+    ], 32 * GB, undefined, { hasGpu: true, vramBytes: 8 * GB });
+    assert.equal(got?.chosen.ref, 'big.gguf');
+    assert.equal(got?.why, 'gpu-none-in-vram');
+  });
+
+  test('VRAM で選ぶときも、記憶に載らないものは選ばない（対）', () => {
+    // 40GB は 32GB の記憶に載らない。VRAM の勘定に入れる前に落ちる。
+    const got = chooseModel([
+      { ref: 'small.gguf', sizeBytes: 2 * GB },
+      { ref: 'huge.gguf', sizeBytes: 40 * GB },
+    ], 32 * GB, undefined, { hasGpu: true, vramBytes: 64 * GB });
+    assert.equal(got?.chosen.ref, 'small.gguf');
+  });
+
+  test('VRAM に載るかは、八割で見る（KV と作業領域のぶんを空ける）', () => {
+    assert.equal(VRAM_SHARE, 0.8);
+    assert.equal(fitsVram(6.4 * GB, 8 * GB), true);
+    assert.equal(fitsVram(6.4 * GB + 1, 8 * GB), false);
+    assert.equal(fitsVram(undefined, 8 * GB), false, '大きさが分からないものは載るとは言わない');
+    assert.equal(fitsVram(1 * GB, 0), false, 'VRAM が無ければ載らない');
   });
 
   /*
@@ -557,6 +658,7 @@ describe('どの GGUF を読むか', () => {
     ], ram, undefined, { hasGpu: false });
     assert.equal(got?.chosen.ref, 'small.gguf');
     assert.equal(got?.fits, true);
+    assert.equal(got?.why, 'cpu-smallest');
   });
 
   test('GPU が無くても、名指しがあればそちら（利用者が決めたものが最優先）', () => {
@@ -565,6 +667,7 @@ describe('どの GGUF を読むか', () => {
       { ref: 'mid.gguf', sizeBytes: 8 * GB },
     ], ram, 'mid.gguf', { hasGpu: false });
     assert.equal(got?.chosen.ref, 'mid.gguf');
+    assert.equal(got?.why, 'named');
   });
 
   test('設定で名指しされていれば、それを使う（対）', () => {
@@ -582,6 +685,7 @@ describe('どの GGUF を読むか', () => {
     ], ram);
     assert.equal(got?.fits, false);
     assert.equal(got?.chosen.ref, 'big.gguf', 'いちばん小さいものを指していない');
+    assert.equal(got?.why, 'none-fits-ram');
   });
 
   test('一つも無ければ、選ばない', () => {

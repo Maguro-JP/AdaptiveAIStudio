@@ -7,10 +7,10 @@
 
 | | |
 |---|---|
-| 版 | 0.11.2（`package.json`。main の先頭は `git log -1` で見る） |
-| release | v0.11.2 まで出ている（portable / portable-noexe / Setup.exe の3点） |
-| 作業ツリー | clean。未 push なし。open の PR なし |
-| テスト | `npm run check:bundle` が通る（落ちているものは無い。飛ばしているものが 23 件） |
+| 版 | 0.12.0（`package.json`。main の先頭は `git log -1` で見る） |
+| release | v0.11.2 まで出ている（portable / portable-noexe / Setup.exe の3点）。0.12.0 はまだ組んでいない |
+| 作業ツリー | 0.12.0 の並列化を push した枝がある（`git log -1`・PR を見る） |
+| テスト | 手元で `npm test`（型は別に `npm run typecheck`）。`npm run check:bundle` は push の前に回す |
 
 `npm run check` の終わりが「確かめていないこと」の一覧を出す（`scripts/not-checked.mjs`）。
 **そこに並んでいるものは、一つも確かめられていない。**
@@ -39,53 +39,55 @@
 
 ## いちばん大きな残り: 並列とバックグラウンド
 
-**いまは、モデルに対して同時に一つしか頼めない。** 起動時の読み込みだけ裏に回した
-（0.11.0）。「読み込みながら画面を触る」は出来るが、「二つの会話に同時に答える」は
-出来ない。直列にしている場所は、次の 4 つ。
+直列にしていた 4 つのうち、**3 つは 0.12.0 で直した**。残るのは 2（画面の本体）で、
+これは土台の選択なので、方針を出して利用者の指示を待っている。
 
-### 1. モデルの sequence が 1 本だけ（ここが本丸）
+### 1. モデルの sequence が 1 本だけ（本丸） → 直した（0.12.0）
 
-`src/runtime/inproc.ts:421-442` で、context を作って `getSequence()` を**一度だけ**
-呼び、`LlamaChatSession` を一つ持っている。以後 `held.turn` で順番待ちにしている
-（`LlamaChatSession` は履歴を持つので、一つを二人で使うと混ざる）。
+会話ごとに sequence と `LlamaChatSession` を一本ずつ持ち、依頼ごとに空いた一本を貸す
+（`LanePool`、`src/runtime/inproc.ts`）。本数は `runtime.parallel`、既定
+`DEFAULT_SEQUENCES = 2`。`fitWindow` に `sequences` を入れて、窓 × 本数 が記憶に
+収まるよう数える（諸元が読めないときは 1 本）。詳しくは `docs/DECISIONS.md` の
+2026-09-12。**速くはならない。止まらなくなるだけ。**
 
-node-llama-cpp は、これを並べられる:
+**実機で測ること: 本物の GGUF（Qwen3 など）で N=2 の KV が 16GB に載るか。**
+載らないなら `runtime.parallel` を 1 に下げる（設定）。CPU は分け合うので、
+本数を増やすほど一人あたりは遅くなる。
 
-```
-model.createContext({ contextSize, sequences: N })  // N 本
-context.getSequence()                               // N 回まで取れる
-```
+**優先度（同じ 0.12.0）。**依頼に 最優先 / 優先 / 高 / 中 / 低 を持たせ、空いた口を
+上から順に貸す。高・中・低は取り分 0（上に待ち手が居ないときだけ）。2 本以上なら
+半分を上のために空ける（`LanePool.reserve`）。本番の会話＝最優先、検問所＝優先、
+それ以外＝中。HTTP ヘッダ `x-aas-priority: 0〜4`。**役職・合議は中なので既定 2 本では
+一人ずつ**（二人同時なら `runtime.parallel` を 4 に）。詳しくは `docs/DECISIONS.md` の
+2026-09-12「並列の口に優先度を付ける」。
 
-ライブラリ側の説明（`node_modules/node-llama-cpp/dist/evaluator/LlamaContext/types.d.ts:9-18`）:
-各 sequence は別々の生成で、**同じ batch に載せて並列に評価される**。
-`context.sequencesLeft` で残りが分かる。
+### 2. 画面の側が、一つの Session を見ている（残り・土台の選択）
 
-つまり、会話ごとに sequence と `LlamaChatSession` を持てば、本当に並列になる。
-**ただし KV は sequence ごとに要る。**コンテキストウィンドウ 32768 × N 本ぶんの記憶が
-要るので、16GB・CPU の機械で N がいくつまで載るかは**実機で測るしかない**。
-`fitWindow`（`src/runtime/inproc.ts:228`）が 1 本ぶんで計算しているので、
-N を掛けて考え直すことになる。CPU は 12 本なので、N を増やせば 1 本あたりは遅くなる。
-**速くはならない。止まらなくなるだけ。**そこを取り違えないこと。
+`src/ui/server.ts` の `#session` が一つ。`#busyNow()` が動いていれば `#queue` に積む。
+`Session` は履歴を一つしか持てず、`send()` は `#running` で同時実行を断る。
+モデルの口は並列になった（上）が、**画面の本体はまだ一会話ずつ**。
 
-### 2. 画面の側が、一つの Session を見ている
+会話ごとに `Session` を丸ごと作ると、MCP の子プロセスと記憶が本数ぶん増え、16GB では
+載らない。記憶の save が重なると、ファイルの書き込みが混ざって壊れ得る（過去に会話が
+上書きで消えた形）。**手元で忠実に再現できない**（本物のモデルも、並行会話の記憶の
+混ざりも起こせない）。壊すと利用者のデータが失われるので、当てずっぽうで入れない。
 
-`src/ui/server.ts` の `#session` が一つ。`#busyNow()` が `session.busy || #thinking ||
-#preparing` を見て、動いていれば `#queue` に積む（`:901`）。
-`/api/send`、`/api/plan`、暇なときの考えごと、やり残しの再開が、全部この一つを奪い合う。
+勧める形（`docs/DECISIONS.md` 2026-09-12 の末尾）: `Session` を「共有の作業場」と
+「会話ごとの状態」に割り、画面は共有を一つ持ち、会話ごとの走者を `runtime.parallel`
+本まで動かす。混ざってはいけない共有（Memory.save は錠・harness の holder は依頼ごと・
+Forum は会話ごと）を先に塞ぎ、再現の場（差し替えの provider で二会話を並行させ、
+履歴が混ざらないことを試験で担保）を先に作ってから直す。`src/core/session.ts` を読んでから。
 
-会話ごとに Session を持てるようにするのが筋だが、Session は記憶・harness・作業場を
-抱えているので、**どこまでを会話ごとにするか**を先に決める必要がある。
-`docs/ARCHITECTURE.md` と `src/core/session.ts` を読んでから。
+### 3. 診断（TaskRunner）が子プロセス 1 つ → 直した（0.12.0）
 
-### 3. 診断（TaskRunner）が子プロセス 1 つ
+名前ごとに子を持つ（`src/ui/tasks.ts`）。同じ名前は二重に断り、別の名前は並べる。
+画面（`panels.js` の checks）は点検ごとに状態行を持ち、出力を見出しで仕分ける。
 
-`src/ui/tasks.ts:132` の `#child` が 1 つ。同時に 2 つ回せない。
-0.11.0 で優先度だけ下げた（`lowerPriority`。Windows で BELOW_NORMAL が効くかは未確認）。
+### 4. サポート用レポートの doctor が直列 → 直した（0.12.0）
 
-### 4. サポート用レポートの doctor が直列
-
-`src/cli/report.ts` が doctor を子プロセスで回して待つ（実機で 1〜2 分）。
-直近の doctor の出力を使い回せば、押してすぐ出せる。まだやっていない。
+直近の doctor（`state/reports/doctor-*.txt`）が 10 分以内なら使い回す（`src/cli/report.ts`）。
+古ければ回す。doctor / selftest の置き先を `state/reports` に揃えた（TaskRunner が
+子へ `AAS_REPORT_DIR` を渡す）。
 
 ## 直近で直したこと（0.9.1 〜 0.11.2）
 
@@ -98,6 +100,7 @@ N を掛けて考え直すことになる。CPU は 12 本なので、N を増�
 | 0.11.0 | 起動したら裏でモデルを読む（`UiServer.preload()`）。診断の子プロセスの優先度を下げる。帯に「モデルを読み込んでいます → 入力を読んでいます → 書いています」を出す |
 | 0.11.1 | やり直しを黙ってしない（何回目か・何秒経ったかを流れと `ui.log` に出す） |
 | 0.11.2 | **考えごと（`<think>`）を書かせない**（`budgets: { thoughtTokens: 0 }`）。本文が空のまま止まったら「完了」と言わない |
+| 0.12.0 | **モデルの口を会話ごとに並列に**（sequence を N 本・`LanePool`、既定 2、`fitWindow` に本数）。診断（TaskRunner）を名前ごとに並べて回す。サポート用レポートは直近の doctor を使い回す。考えごとをする模型を手元で組めるように（`tiny-gguf.mjs --thinks`）。口に優先度（最優先/優先/高/中/低。上から順、高・中・低は取り分 0、2 本以上なら半分を上に空ける）。残る直列は 2（画面の本体）だけ |
 
 ### 0.11.2 が直した形（実機の記録から）
 

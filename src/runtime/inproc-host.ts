@@ -8,10 +8,10 @@
  * 裏でやることは裏でやる。画面のプロセスは、この子へ HTTP で頼むだけにする。
  * 子は親が消えたら（stdin が閉じたら）自分で終わる。親無しで残らない。
  *
- * 使い方: node --experimental-strip-types inproc-host.ts --models-dir <dir> [--port N] [--context-size N] [--lib <path>]
+ * 使い方: node --experimental-strip-types inproc-host.ts --models-dir <dir> [--port N] [--context-size N] [--sequences N] [--gpu auto|cuda|vulkan|off] [--gpu-seen 0|1] [--lib <path>]
  * 立ち上がると stdout に {"url": "..."} を一行出す。以後、記録は {"log": "..."} で流す。
  */
-import { InProcRuntime } from './inproc.ts';
+import { InProcRuntime, type GpuMode } from './inproc.ts';
 import { pathToFileURL } from 'node:url';
 
 function arg(name: string): string | undefined {
@@ -26,6 +26,9 @@ if (!modelsDir) {
 }
 const port = Number(arg('--port') ?? '0');
 const contextSize = arg('--context-size');
+const sequences = arg('--sequences');
+const gpu = arg('--gpu');
+const gpuSeen = arg('--gpu-seen');
 const lib = arg('--lib');
 
 const say = (line: Record<string, unknown>) => { process.stdout.write(`${JSON.stringify(line)}\n`); };
@@ -44,6 +47,9 @@ const runtime = new InProcRuntime({
   modelsDir,
   port: Number.isFinite(port) ? port : 0,
   ...(contextSize ? { contextSize: Number(contextSize) } : {}),
+  ...(sequences ? { sequences: Number(sequences) } : {}),
+  ...(gpu ? { gpu: gpu as GpuMode } : {}),
+  ...(gpuSeen ? { gpuSeen: gpuSeen === '1' } : {}),
   ...(lib ? { load: () => import(pathToFileURL(lib).href).then((m) => (m as { load?: () => Promise<unknown> }).load?.() ?? m) } : {}),
   control: true,
   onLog: (line) => say({ log: line }),

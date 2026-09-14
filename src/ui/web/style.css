@@ -269,6 +269,20 @@ button.primary {
 }
 button:disabled { opacity: .45; cursor: default; }
 button.ghost { background: transparent; border-color: transparent; color: var(--dim); }
+/* 裏の仕事。仕事ごとに一つ、いまの状態だけ。 */
+.jobs { display: flex; flex-direction: column; gap: var(--s2); }
+.job { padding: var(--s2); border-radius: var(--radius); background: var(--surface2); }
+.job-head { display: flex; gap: var(--s2); align-items: baseline; }
+.job-title { flex: 1 1 auto; }
+.job-elapsed { font-size: 11px; }
+.job-bar { height: 6px; margin-top: 4px; border-radius: 3px; background: var(--surface); overflow: hidden; }
+.job-fill { height: 100%; background: var(--accent, #d33); }
+.job.done .job-mark { color: var(--good, #2a6); }
+.job.failed .job-mark { color: var(--bad); }
+.job-detail { margin-top: 4px; font-size: 11px; }
+/* 道の隣の「開く」「コピー」。道そのものより目立たせない。 */
+.path-actions { display: inline-flex; gap: 2px; margin-left: 6px; vertical-align: baseline; }
+.path-actions button.tiny { padding: 0 5px; font-size: 10px; line-height: 1.6; min-height: 0; height: auto; white-space: nowrap; flex: none; }
 button.ghost:hover { color: var(--text); background: var(--surface2); }
 
 /* ---------- 枠 ---------- */
@@ -368,6 +382,8 @@ button.ghost:hover { color: var(--text); background: var(--surface2); }
 .row:hover { background: var(--surface2); }
 /* 行の中身は、はみ出さずに詰める。列がずれるより、末尾が切れる方がまし。 */
 .row > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 道と、その隣の「開く」「コピー」を持つ欄は折り返す。切ると押し場所ごと消える。 */
+.row > .wrap { white-space: normal; word-break: break-all; }
 
 .key { color: var(--dim); }
 .dim { color: var(--dim); }
@@ -983,9 +999,9 @@ dialog.wide { width: min(46rem, 92vw); }
   padding: 0 var(--s2) 4px;
   font-size: 11px;
   color: var(--dim);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
   /*
     **rtl にしない。**末尾を残そうとして direction:rtl にしたら、
     先頭の `/` が末尾へ回って `tmp/look2/proj/` になった（画面で見て気づいた）。
@@ -993,6 +1009,7 @@ dialog.wide { width: min(46rem, 92vw); }
   */
   direction: ltr;
 }
+.side-path .side-path-text { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 塊ごとの採否。印と差分を縦に重ねる（横に並べると差分が潰れる）。 */
 .ask-hunk { margin: 6px 0; }

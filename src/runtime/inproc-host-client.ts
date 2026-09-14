@@ -8,12 +8,18 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.ts';
-import { listGguf, INPROC_PORT } from './inproc.ts';
+import { listGguf, INPROC_PORT, type Backend, type GpuMode } from './inproc.ts';
 
 export interface InProcHostOptions {
   modelsDir: string;
   port?: number;
   contextSize?: number;
+  /** 並列に持つ sequence の本数（会話ごとに一本）。子へそのまま渡す。 */
+  sequences?: number;
+  /** GPU を使うか。子へそのまま渡す。既定 auto。 */
+  gpu?: GpuMode;
+  /** nvidia-smi に GPU が見えているか。子へそのまま渡す。 */
+  gpuSeen?: boolean;
   onLog?: (line: string) => void;
   /** 試験用。子に読ませる偽のライブラリ（モジュールの道）。 */
   lib?: string;
@@ -37,6 +43,9 @@ export function hostArgs(opts: InProcHostOptions): string[] {
   const args = ['--experimental-strip-types', '--no-warnings', entry, '--models-dir', opts.modelsDir,
     '--port', String(opts.port ?? INPROC_PORT)];
   if (opts.contextSize !== undefined) args.push('--context-size', String(opts.contextSize));
+  if (opts.sequences !== undefined) args.push('--sequences', String(opts.sequences));
+  if (opts.gpu !== undefined) args.push('--gpu', opts.gpu);
+  if (opts.gpuSeen !== undefined) args.push('--gpu-seen', opts.gpuSeen ? '1' : '0');
   if (opts.lib) args.push('--lib', opts.lib);
   return args;
 }
@@ -144,6 +153,12 @@ export class InProcHost implements LocalRuntime {
   loaded(): string[] { return this.#loaded; }
   windowOf(ref: string): number | undefined { return this.#windows.get(ref); }
   wrappers(): Promise<{ ref: string; wrapper: string; guessed: boolean }[]> { return this.#call('wrappers'); }
+  /**
+   * 読む側が実際に使う backend。子を起こす（ライブラリを起こすだけで、モデルは読まない）。
+   * 一覧と違い、ここは起こしてよい。読む前に選ぶ側が見るもので、起動時の読み込みが
+   * どのみち子を起こす。
+   */
+  backend(): Promise<Backend> { return this.#call('backend'); }
 
   async ensureLoaded(ref: string): Promise<LoadedModel> {
     const got = await this.#call<LoadedModel & { window?: number | null }>('load', { ref });

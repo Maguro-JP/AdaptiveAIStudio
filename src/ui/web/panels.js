@@ -10,6 +10,7 @@ import { decorate } from './color.js';
 import { verdictText, slowNote } from './verdict.js';
 import { renderMarkdown } from './markdown.js';
 import { isSendKey, isPlainEnter } from './keys.js';
+import { pathActions } from './paths.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -1010,7 +1011,9 @@ export const PANELS = {
       // 「置いたのに出ない」の切り分けが、この一行でつく。
       if (data.runtime !== 'ollama' && data.modelsDir) {
         const row = el('div', 'row');
-        row.append(el('span', 'key', '保存先'), el('span', 'num mono dim', data.modelsDir));
+        const where = el('span', 'num mono dim wrap', data.modelsDir);
+        where.append(pathActions(data.modelsDir));
+        row.append(el('span', 'key', '保存先'), where);
         status.append(row);
       }
 
@@ -1040,7 +1043,10 @@ export const PANELS = {
         for (const m of data.installed) {
           const row = el('div', 'row');
           const size = m.sizeBytes ? `${(m.sizeBytes / 1024 ** 3).toFixed(1)}GB` : '';
-          row.append(el('span', 'key mono', m.ref), el('span', 'num dim', size));
+          const name = el('span', `key mono${m.path ? ' wrap' : ''}`, m.ref);
+          // モデルの道。どこに在るかを、開いて・コピーして確かめられる。
+          if (m.path) name.append(pathActions(m.path));
+          row.append(name, el('span', 'num dim', size));
           list.append(row);
         }
       }
@@ -1181,13 +1187,97 @@ export const PANELS = {
     })();
   },
 
+  /*
+   * **過去分は本体が持っている。**
+   *
+   * 行を DOM にしか持っていなかったので、配置を変える・パネルを出し入れする・
+   * 設定を閉じる（描き直す）たびに全部消えた。既定の配置にこのパネルは無いので、
+   * 後から開いても空だった（実機でそうなった）。開いたら本体（/api/logs）から
+   * 取り直し、届く分は番号（seq）で重ねない。取り直している間に届いた分は、
+   * 順を崩さないよう、取り終えてから流す。
+   */
   log(body, ctx) {
     body.append(el('div', 'dim', '動いているものがここに流れます。'));
-    ctx.on('log', (e) => {
-      body.appendChild(el('div', e.level === 'error' ? 'bad mono' : e.level === 'warn' ? 'warn mono' : 'mono', e.text));
+    const line = (e) => el('div', `log-line mono${e.level === 'error' ? ' bad' : e.level === 'warn' ? ' warn' : ''}`, e.text);
+    let upTo = -1;
+    const show = (e) => {
+      if (typeof e.seq === 'number') {
+        if (e.seq <= upTo) return;
+        upTo = e.seq;
+      }
+      body.appendChild(line(e));
       while (body.childNodes.length > 500) body.removeChild(body.firstChild);
       body.scrollTop = body.scrollHeight;
-    });
+    };
+    let ready = false;
+    const pending = [];
+    ctx.on('log', (e) => { if (ready) show(e); else pending.push(e); });
+    (async () => {
+      try {
+        const { lines } = await (await fetch('/api/logs')).json();
+        for (const l of lines) show(l);
+      } catch { /* 取れなければ、これから来る分だけ */ }
+      ready = true;
+      for (const e of pending) show(e);
+      pending.length = 0;
+    })();
+  },
+
+  /*
+   * 裏で動いているもの。**流れではなく、いまの状態だけ。**
+   *
+   * 取得の進み具合は 1.5 秒ごとに記録へ流れていて、記録が埋まって読めなかった（実機）。
+   * ここは仕事ごとに一行、最新の状態と進み具合だけを出し、終わったものはそう出す。
+   * 本体は状態が変わったときに全部を流してくる（jobs）。経った秒だけは、こちらの時計で進める。
+   */
+  jobs(body, ctx) {
+    const list = el('div', 'jobs');
+    body.append(list);
+    let jobs = [];
+    const elapsed = (iso) => {
+      const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+      return s >= 60 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${s} 秒`;
+    };
+    const draw = () => {
+      list.replaceChildren();
+      if (jobs.length === 0) { list.append(empty('裏で動いているものはありません。')); return; }
+      for (const j of jobs) {
+        const row = el('div', `job ${j.state}`);
+        const head = el('div', 'job-head');
+        head.append(
+          el('span', 'job-mark', j.state === 'running' ? '⏳' : j.state === 'done' ? '✓' : '✗'),
+          el('span', 'job-title', j.title),
+        );
+        if (j.state === 'running' && j.startedAt) head.append(el('span', 'job-elapsed dim', `${elapsed(j.startedAt)} 経過`));
+        row.append(head);
+        if (j.progress && typeof j.progress.pct === 'number') {
+          const bar = el('div', 'job-bar');
+          const fill = el('div', 'job-fill');
+          fill.style.width = `${Math.max(0, Math.min(100, j.progress.pct))}%`;
+          bar.append(fill);
+          row.append(bar);
+        }
+        if (j.detail) {
+          const d = el('div', `job-detail mono ${j.state === 'failed' ? 'bad' : 'dim'}`, j.detail);
+          d.style.whiteSpace = 'pre-wrap';
+          row.append(d);
+        }
+        list.append(row);
+      }
+    };
+    ctx.on('jobs', (e) => { jobs = Array.isArray(e.jobs) ? e.jobs : []; draw(); });
+    const tick = setInterval(() => {
+      // 外された（描き直しで捨てられた）パネルの時計を、回し続けない。
+      if (!body.isConnected) { clearInterval(tick); return; }
+      if (jobs.some((j) => j.state === 'running')) draw();
+    }, 1000);
+    (async () => {
+      try {
+        const got = await (await fetch('/api/jobs')).json();
+        jobs = Array.isArray(got.jobs) ? got.jobs : [];
+      } catch { /* 取れなければ空。変わったときに流れてくる */ }
+      draw();
+    })();
   },
 
   /**
@@ -1281,25 +1371,87 @@ export const PANELS = {
   checks(body, ctx) {
     const bar = el('div', 'btnbar');
     const out = el('pre', 'mono task-out');
+    // 点検ごとの状態行（実行中 → 終わり）を、ここに並べる。
+    const statuses = el('div', 'task-statuses');
     const stop = el('button', 'ghost', '止める');
     stop.type = 'button';
     stop.hidden = true;
+    // 名前を渡さなければ、全部止める（今までどおり）。
     stop.onclick = () => { void fetch('/api/task', { method: 'DELETE' }); };
 
-    const buttons = [];
-    const busy = (on) => {
-      for (const b of buttons) b.disabled = on;
-      stop.hidden = !on;
+    // **同じ点検は二重に回さない。別の点検は並べて回せる。**
+    // 押した点検のボタンだけを止め、他は押せるままにする。
+    const running = new Set();
+    const buttonById = new Map();
+    const displayOf = new Map();
+    const syncStop = () => { stop.hidden = running.size === 0; };
+
+    /*
+     * 出力は一つの箱に混ぜて出す。**どの点検の行か**を、切り替わりで見出しに出す。
+     * 本体は点検の頭で「— 見出し —」を流すので、それが来たときは重ねて出さない。
+     */
+    let lastShown = '';
+    const show = (name, text) => {
+      const isHeader = /^— .* —\n$/.test(text);
+      if (name !== lastShown && !isHeader) {
+        out.append(document.createTextNode(`\n— ${displayOf.get(name) ?? name} —\n`));
+      }
+      lastShown = name;
+      out.append(document.createTextNode(text));
+      // 際限なくは溜めない。ただし 400 ではテスト（数千行）の前半が消えて、
+      // どこで落ちたか読めなかった（Windows で実際にそうなった）。
+      if (out.childNodes.length > 20000) out.removeChild(out.firstChild);
+      out.scrollTop = out.scrollHeight;
+    };
+
+    /*
+     * **動いているか終わったかを、見て分かるようにする。**点検ごとに一行持ち、
+     * 押した時点で「実行中: 名前（秒）」を出して秒を進め、終わったら
+     * 「終わりました（秒）」に置き換える。二本並べても、それぞれの行が動く。
+     */
+    const statusEl = new Map();
+    const ticks = new Map();
+    const began = new Map();
+    const lineFor = (name) => {
+      let s = statusEl.get(name);
+      if (!s) { s = el('div', 'task-status'); statuses.append(s); statusEl.set(name, s); }
+      return s;
+    };
+    const startStatus = (name) => {
+      const s = lineFor(name);
+      began.set(name, Date.now());
+      s.className = 'task-status warn';
+      const draw = () => { s.textContent = `⏳ 実行中: ${displayOf.get(name) ?? name}（${Math.floor((Date.now() - (began.get(name) ?? Date.now())) / 1000)} 秒）`; };
+      draw();
+      clearInterval(ticks.get(name));
+      const t = setInterval(draw, 1000);
+      // 試験（Node の中で画面を組む）では、このタイマーが走りを生かし続けて
+      // 終わらなくなった（pre-push が止まった）。ブラウザでは unref は無い。
+      t.unref?.();
+      ticks.set(name, t);
+    };
+    const doneStatus = (name, code) => {
+      clearInterval(ticks.get(name));
+      const s = statusEl.get(name);
+      if (!s) return;
+      const sec = Math.floor((Date.now() - (began.get(name) ?? Date.now())) / 1000);
+      s.className = `task-status ${code === 0 ? 'good' : 'bad'}`;
+      s.textContent = code === 0
+        ? `✓ 終わりました: ${displayOf.get(name) ?? name}（${sec} 秒）`
+        : `✗ 終了コード ${code}: ${displayOf.get(name) ?? name}（${sec} 秒）`;
     };
 
     void fetch('/api/tasks').then((r) => r.json()).then(({ tasks }) => {
       for (const t of tasks ?? []) {
+        displayOf.set(t.id, t.name);
         const b = el('button', '', t.name);
         b.type = 'button';
         b.onclick = async () => {
-          out.textContent = '';
-          busy(true);
-          running(t.name);
+          if (running.has(t.id)) return; // 二重に押しても、二重には回さない
+          b.disabled = true;
+          running.add(t.id);
+          syncStop();
+          startStatus(t.id);
           let r;
           try {
             r = await fetch('/api/task', {
@@ -1308,70 +1460,34 @@ export const PANELS = {
               body: JSON.stringify({ name: t.id }),
             });
           } catch (e) {
-            busy(false);
-            finished(-1);
-            out.textContent = `始められませんでした（${e?.message ?? e}）`;
+            running.delete(t.id); b.disabled = false; syncStop();
+            doneStatus(t.id, -1);
+            show(t.id, `始められませんでした（${e?.message ?? e}）\n`);
             return;
           }
           if (!r.ok) {
-            busy(false);
-            finished(-1);
-            out.textContent = (await r.json().catch(() => ({}))).error ?? '始められませんでした';
+            running.delete(t.id); b.disabled = false; syncStop();
+            doneStatus(t.id, -1);
+            show(t.id, `${(await r.json().catch(() => ({}))).error ?? '始められませんでした'}\n`);
           }
         };
-        buttons.push(b);
+        buttonById.set(t.id, b);
         bar.append(b);
       }
       bar.append(stop);
     });
 
-    /*
-     * **動いているか終わったかを、見て分かるようにする。**
-     *
-     * 出力が止まると、回っているのか終わったのかが分からなかった（実機でそうなった）。
-     * 押した時点で「実行中: 名前（秒）」を出して秒を進め、終わったらその行を
-     * 「終わりました（秒）」に置き換える。出力の末尾ではなく、常に見える一行に出す。
-     */
-    const status = el('div', 'task-status dim');
-    let tick = 0;
-    let began = 0;
-    let runningName = '';
-    const running = (name) => {
-      runningName = name;
-      began = Date.now();
-      status.className = 'task-status warn';
-      const draw = () => { status.textContent = `⏳ 実行中: ${runningName}（${Math.floor((Date.now() - began) / 1000)} 秒）`; };
-      draw();
-      clearInterval(tick);
-      tick = setInterval(draw, 1000);
-      // 試験（Node の中で画面を組む）では、このタイマーが走りを生かし続けて
-      // 終わらなくなった（pre-push が止まった）。ブラウザでは unref は無い。
-      tick.unref?.();
-    };
-    const finished = (code) => {
-      clearInterval(tick);
-      const sec = Math.floor((Date.now() - began) / 1000);
-      status.className = `task-status ${code === 0 ? 'good' : 'bad'}`;
-      status.textContent = code === 0
-        ? `✓ 終わりました: ${runningName}（${sec} 秒）`
-        : `✗ 終了コード ${code}: ${runningName}（${sec} 秒）`;
-    };
     const hint = el('div', 'dim', '困ったときは ⚙ → 情報 の「サポート用レポートを作る」を押して、出来たファイルを一つ送ってください。');
-    body.append(bar, hint, status, out);
+    body.append(bar, hint, statuses, out);
 
-    ctx.on('task', (e) => {
-      out.append(document.createTextNode(e.text));
-      // 際限なくは溜めない。ただし 400 ではテスト（数千行）の前半が消えて、
-      // どこで落ちたか読めなかった（Windows で実際にそうなった）。
-      if (out.childNodes.length > 20000) out.removeChild(out.firstChild);
-      out.scrollTop = out.scrollHeight;
-    });
+    ctx.on('task', (e) => { show(e.name, e.text); });
     ctx.on('taskDone', (e) => {
-      busy(false);
-      finished(e.code);
-      out.append(document.createTextNode(
-        e.code === 0 ? '\n— 終わりました —\n' : `\n— 終了コード ${e.code} —\n`));
-      out.scrollTop = out.scrollHeight;
+      running.delete(e.name);
+      const b = buttonById.get(e.name);
+      if (b) b.disabled = false;
+      syncStop();
+      doneStatus(e.name, e.code);
+      show(e.name, e.code === 0 ? '— 終わりました —\n' : `— 終了コード ${e.code} —\n`);
     });
   },
 
@@ -1574,6 +1690,7 @@ export const TITLES = {
   models: 'モデル',
   changes: '変更したファイル',
   log: 'ログ',
+  jobs: '裏の仕事',
   note: 'メモ',
   checks: '診断',
   preview: 'プレビュー',

@@ -7,7 +7,7 @@
  *     出力途中で別モデルに切り替えると、文章が二重・不整合になるため。
  *   - どのモデルが答えたかは必ず呼び出し側へ通知する(暗黙の劣化を防ぐ)。
  */
-import type { ModelId, ProviderMessage, ToolCall, ToolSchema } from '../providers/contract.ts';
+import type { ModelId, Priority, ProviderMessage, ToolCall, ToolSchema } from '../providers/contract.ts';
 import { ProviderError } from '../providers/errors.ts';
 import type { ProviderRegistry } from './registry.ts';
 
@@ -27,6 +27,8 @@ export interface ChatInput {
   temperature?: number;
   maxTokens?: number;
   tools?: ToolSchema[];
+  /** 優先度。無ければ provider へ渡さない（既定は受ける側が決める）。 */
+  priority?: Priority;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -83,7 +85,8 @@ export class ChatOrchestrator {
           for await (const chunk of provider.chat(
             { model, system: input.system, messages: input.messages,
               temperature: input.temperature, maxTokens: input.maxTokens,
-              tools: input.tools },
+              tools: input.tools,
+              ...(input.priority !== undefined ? { priority: input.priority } : {}) },
             signal,
           )) {
             if (chunk.type === 'text') {

@@ -4,6 +4,7 @@
  * 目的は「動くこと」ではなく「止まらないこと」なので、
  * 応答したモデルを毎回明示し、フォールバックが起きたら必ず知らせる。
  */
+import { Priority } from '../providers/contract.ts';
 import { stdin, stdout } from 'node:process';
 import { LineSource } from './input.ts';
 import { loadConfig } from '../config.ts';
@@ -135,7 +136,9 @@ async function main(): Promise<void> {
       try {
         for await (const ev of orchestrator.run(
           { candidates, system, messages: history,
-            temperature: config.temperature, maxTokens: config.maxTokens },
+            temperature: config.temperature, maxTokens: config.maxTokens,
+            // 端末の前に人が居る。最優先。
+            priority: Priority.top },
           generating.signal,
         )) {
           switch (ev.type) {

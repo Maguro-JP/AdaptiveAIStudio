@@ -6,6 +6,7 @@
  * 仕切りを掴んで動かしたら配置に書き戻すことだけ。
  */
 import { PANELS, TITLES } from './panels.js';
+import { pathActions } from './paths.js';
 import { closePanel, openPanel, movePanel, panelsInUse } from './layout-ops.js';
 import { doingText } from './doing.js';
 import { isPlainEnter } from './keys.js';
@@ -665,6 +666,8 @@ function listen() {
       box.textContent = `順番待ち ${e.waiting} 件`;
     }
     if (e.type === 'report') { void showReport(); return; }
+    // 裏の仕事の状態。設定 → モデル の一言と「まだ話せません」の押しボタンにも、最新を出す。
+    if (e.type === 'jobs') noteJobs(e.jobs);
     if (e.type === 'stateChanged') { void refreshState(); void loadFiles(filesAt); void tellIfNotReady(); ctx.forgetCommands?.(); return; }
     if (e.type === 'themeChanged') return void loadTheme();
     if (e.type === 'thinkEvent') {
@@ -1232,8 +1235,14 @@ async function loadFiles(at = '') {
     // 長い道は**真ん中を省く**。頭（どのドライブか）と末尾（どのフォルダか）が
     // 要るので、端を切ると分からなくなる。
     const full = body.root ?? '';
-    now.textContent = full.length > 34 ? `${full.slice(0, 12)}…${full.slice(-20)}` : full;
+    // 道は省いた形で一行に、隣に「開く」「コピー」。道の箱そのものを nowrap にすると
+    // 押し場所まで切れて見えない（画面で見て直した）。
+    const shown = document.createElement('span');
+    shown.className = 'side-path-text';
+    shown.textContent = full.length > 34 ? `${full.slice(0, 12)}…${full.slice(-20)}` : full;
+    now.replaceChildren(shown);
     now.title = full;
+    if (full) now.append(pathActions(full));
     // **空のときに、何も言わない板を出さない。**入れた直後はここが空で、
     // 何も出ないと壊れているようにしか見えない。何の場所で、どう変えるかを書く。
     if (!body.path && (body.entries ?? []).length === 0) {
@@ -1554,10 +1563,15 @@ async function loadInfo() {
     v.textContent = typeof info[key] === 'boolean'
       ? (info[key] ? 'はい' : 'いいえ')
       : String(info[key]);
+    // 道は、開ける・コピーできる形で出す。読めるだけでは、打ち直すしかない。
+    if (INFO_PATH_KEYS.has(key) && typeof info[key] === 'string') v.append(pathActions(info[key]));
     row.append(k, v);
     box.append(row);
   }
 }
+
+/** 情報のうち、道であるもの。 */
+const INFO_PATH_KEYS = new Set(['productRoot', 'home', 'stateDir', 'modelsDir', 'binDir']);
 
 /** 置き場の符丁を、人の言葉へ引き直す。基幹には符丁のまま置く。 */
 const DIR_NOTES = {
@@ -1613,10 +1627,16 @@ async function loadCfg() {
   // 立ち上げ直しが要るときだけ、そのボタンを出す。要らないのに出すと押される。
   $('cfgRestart').hidden = !c.restartNeeded;
   const dirNote = DIR_NOTES[c.dirState] ?? '';
-  $('cfgNote').textContent = (c.restartNeeded
-    ? `保存済み。いま動いているのは「${c.active?.kind ?? '?'}」です。立ち上げ直すと切り替わります。`
-    : `設定ファイル: ${c.path}`) + (dirNote ? `\n${dirNote}` : '');
-  $('cfgNote').style.whiteSpace = 'pre-line';
+  {
+    const note = $('cfgNote');
+    note.replaceChildren(document.createTextNode(c.restartNeeded
+      ? `保存済み。いま動いているのは「${c.active?.kind ?? '?'}」です。立ち上げ直すと切り替わります。`
+      : `設定ファイル: ${c.path}`));
+    // 道の隣に「開く」「コピー」。道の直後に置く（注意書きの後ろだと、何の道か分からない）。
+    if (!c.restartNeeded && c.path) note.append(pathActions(c.path));
+    if (dirNote) note.append(document.createTextNode(`\n${dirNote}`));
+    note.style.whiteSpace = 'pre-line';
+  }
 
   const box = $('cfgGguf');
   box.replaceChildren();
@@ -1638,6 +1658,8 @@ async function loadCfg() {
     const k = document.createElement('span');
     k.className = 'mono';
     k.textContent = m.ref;
+    // モデルの道。どこに在るかを、開いて・コピーして確かめられる。
+    if (m.path) k.append(pathActions(m.path));
     const v = document.createElement('span');
     v.className = 'dim mono';
     v.textContent = (m.sizeBytes ? `${(m.sizeBytes / 1024 ** 3).toFixed(1)} GB` : '')
@@ -1701,8 +1723,32 @@ async function getModel(id) {
   // 数GBかかる。**終わるまで待たせない**ので、どこを見ればいいかを言う。
   $('cfgGetNote').style.whiteSpace = 'pre-line';
   $('cfgGetNote').textContent = r.ok
-    ? `取ってきています: ${id}\n進み具合は「流れ」の板に出ます。終わったら「読み直す」を押してください。`
+    ? `取ってきています: ${id}\n進み具合はここと「裏の仕事」に出ます。`
     : (body.error ?? '始められませんでした');
+}
+
+/**
+ * 裏の仕事の最新を、押した場所に出す。
+ *
+ * 取得の進み具合は記録に 1.5 秒ごとに流れるだけで、押した設定の頁は「流れの板を
+ * 見てください」の固定文のままだった。最新の一言を、押した所と「まだ話せません」の
+ * 押しボタンに出す。仕事が終わったら、次に押すもの（読み直す）を言う。
+ */
+function noteJobs(jobs) {
+  const fetching = (jobs ?? []).find((j) => j.kind === 'fetch');
+  if (!fetching) return;
+  const note = $('cfgGetNote');
+  if (note) {
+    note.style.whiteSpace = 'pre-line';
+    note.className = `repairs${fetching.state === 'failed' ? ' bad' : ''}`;
+    note.textContent = fetching.state === 'running'
+      ? `取ってきています: ${fetching.id}\n${fetching.detail}`
+      : fetching.state === 'done'
+        ? `${fetching.detail}\n「読み直す」を押すと一覧に出ます。`
+        : fetching.detail;
+  }
+  const btn = document.querySelector('#crashNote .crash-action');
+  if (btn && fetching.state === 'running') btn.textContent = `取ってきています… ${fetching.detail}`;
 }
 
 $('cfgGet').onclick = () => { void getModel($('cfgCatalog').value); };
@@ -1830,7 +1876,7 @@ async function showReport() {
   status.textContent = rep.message;
   status.className = rep.state === 'failed' ? 'bad' : rep.state === 'done' ? 'good' : 'dim';
   path.hidden = rep.state !== 'done';
-  if (rep.state === 'done') path.textContent = rep.path;
+  if (rep.state === 'done') { path.textContent = rep.path; path.append(pathActions(rep.path)); }
   return rep.state;
 }
 
@@ -1876,6 +1922,31 @@ await loadConversations();
 await loadUnfinished();
 await loadUndo();
 $('pickWork').onclick = () => { void pickWorkRoot(); };
+
+/**
+ * 横の一覧から作る。**いま見ている場所の中に**作る（別の場所に作られると探すことになる）。
+ * ファイルは空で作って、そのままエディタで開く。作り直しは戻り先（↶）から。
+ */
+async function makeEntry(kind) {
+  const where = filesAt ? `${filesAt}/` : '';
+  const name = window.prompt(kind === 'dir'
+    ? `作るフォルダの名前（${where || '作業場'} の中に作ります）`
+    : `作るファイルの名前（${where || '作業場'} の中に作ります）`);
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const path = `${where}${trimmed}`;
+  const r = await ask('/api/files/new', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, kind }),
+  }, '作れませんでした');
+  if (!r) return;
+  if (!r.ok) { alert(r.body.error ?? '作れませんでした'); return; }
+  await loadFiles(filesAt);
+  if (kind === 'file') await openInEditor(path);
+}
+$('newFile').onclick = () => { void makeEntry('file'); };
+$('newDir').onclick = () => { void makeEntry('dir'); };
 // 開き直したときは、続きの会話をそのまま出す。空の画面から始めない。
 if (conversations.current) {
   try {
@@ -1917,14 +1988,14 @@ async function tellIfNotReady() {
    */
   const f = r.canFetch;
   if (f) {
-    const label = f.fetching ? '取ってきています…（進み具合はログに出ます）' : `小さいモデル（約${f.approxGB}GB）を取ってくる`;
+    const label = f.fetching ? `取ってきています… ${f.message || ''}`.trim() : `小さいモデル（約${f.approxGB}GB）を取ってくる`;
     // 取ってこられなかったときは、その理由をここに出す（ログを開かせない）。
     const why = f.failed ? `${r.why}\n${f.failed}` : r.why;
     showCrash('まだ話せません', why, 'warn', {
       label,
       run: async (btn) => {
         btn.disabled = true;
-        btn.textContent = '取ってきています…（進み具合はログに出ます）';
+        btn.textContent = '取ってきています…';
         const got = await ask('/api/models/get', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ id: f.id }),
@@ -1937,6 +2008,8 @@ async function tellIfNotReady() {
   showCrash('まだ話せません', `${r.why}　⚙ 設定 → モデル で決められます`, 'warn');
 }
 void tellIfNotReady();
+// 開いた時点で裏の仕事が動いていれば、その最新を押した場所に出す（合図は繋ぐ前に流れている）。
+void fetch('/api/jobs').then((r) => r.json()).then((j) => noteJobs(j.jobs)).catch(() => undefined);
 
 listen();
 setInterval(refreshState, 5000);

@@ -86,7 +86,11 @@ describe('doctor は、この中で読む道を知っている', () => {
     await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     assert.match(text, /1 件: qwen2\.5-3b-instruct-q4_k_m\.gguf/);
-    assert.match(text, /動かせます。/);
+    // 「動かせます」は、モデルを読むライブラリ（node-llama-cpp）が在って初めて言える。
+    // 素の npm ci（bundle 前）では入っていないので、doctor は正しく「入れてください」と言う。
+    // ここを決め打つと、ライブラリの無い CI で必ず落ちる（実際に落ちた）。
+    if (hasLib) assert.match(text, /動かせます。/);
+    else assert.match(text, /node-llama-cpp が入っていません/);
   });
 
   test('繋ぎ先を、外へ見に行かない', async () => {
@@ -97,10 +101,14 @@ describe('doctor は、この中で読む道を知っている', () => {
     await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     // 札が設定の id（ollama）のままだと「Ollama を入れなければ」と読まれる。
+    // ここは接続の札が inproc で、口がこの中に立つこと。ライブラリの有無に依らない。
     assert.match(text, /接続 \(この中で読む\)/);
     assert.doesNotMatch(text, /接続 \(ollama\)/);
     assert.match(text, /この中に立てます/);
-    assert.doesNotMatch(text, /件かたづければ動きます/);
+    // ライブラリが在れば不足ゼロで「動かせます」。無い環境では node-llama-cpp が
+    // 唯一の不足として挙がる（外を見に行った結果ではない）。
+    if (hasLib) assert.doesNotMatch(text, /件かたづければ動きます/);
+    else assert.match(text, /node-llama-cpp が入っていません/);
   });
 
   test('llamacpp のときは、使っていない Ollama を不足として数えない', async () => {
@@ -126,10 +134,28 @@ describe('doctor は「入っていない」と「壊れている」を分ける
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     assert.doesNotMatch(text, /node-llama-cpp が入っていません/);
     assert.doesNotMatch(text, /在るのに読み込めません/);
-    // この機械むけの binary が在れば ok、無ければ warn。どちらかであること。
-    assert.match(text, /この機械むけの binary (が動きます|がありません)/);
+    // この機械むけの binary が在れば「何で読むか」が出る。無ければ「がありません」。どちらかであること。
+    assert.match(text, /node-llama-cpp。(GPU|CPU) で読みます|この機械むけの binary がありません/);
     // 向こうの声（console.warn 直書き）を、貼る出力に混ぜない。
     assert.doesNotMatch(text, /prebuilt binary/i, 'ライブラリの警告がそのまま出ている');
+  });
+});
+
+describe('doctor は、どれを読むかを、読む側の backend が分かってから言う', () => {
+  /*
+   * nvidia-smi に見える GPU で決めていたので、CPU で読んでいるのに「GPU があるので
+   * 大きい方」と言い、その通りに大きい方を掴んで答えなかった（実機）。
+   * ここ（GPU の無い機械、または binary の無い CI）では、小さい方になる。
+   */
+  test('GPU で読めないなら、載るもののうち小さい方', async () => {
+    const { home, models, config } = await scratch();
+    await writeFile(join(models, 'big.gguf'), Buffer.concat([Buffer.from('GGUF'), Buffer.alloc(4 * 1024 * 1024)]));
+    await writeFile(join(models, 'small.gguf'), 'GGUF');
+    await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
+    const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
+    assert.match(text, /読むモデル\s+small\.gguf（GPU が無いので、載るもののうち小さい方/, text.slice(-1500));
+    // 何で読むかは「モデルを読むもの」に出る（ライブラリが無い CI では「入っていません」）。
+    assert.match(text, /モデルを読むもの\s+node-llama-cpp。(GPU|CPU) で読みます|node-llama-cpp が入っていません/);
   });
 });
 

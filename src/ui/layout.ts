@@ -28,6 +28,7 @@ export const PANEL_KINDS = [
   'changes',       // この対話で変わったファイルと、その差分
   'preview',       // 作っているものを、その場で見る（HTML/CSS）
   'log',           // 動いているものの流れ
+  'jobs',          // 裏で動いているもの（取得・読み込み・点検・報告）の、いまの状態だけ
   'checks',        // 点検（doctor・検査・片づけ）。cmd の窓でしかできなかったもの
   'note',          // 自由記述。壊れた配置の受け皿でもある
   'editor',        // ファイルを開いて、その場で直して保存する
@@ -91,7 +92,7 @@ export const PRESETS: Layout[] = [
           type: 'split', direction: 'column', sizes: [0.68, 0.32],
           children: [
             { type: 'panel', panel: 'chat' },
-            { type: 'tabs', panels: ['changes', 'plan', 'checks'] },
+            { type: 'tabs', panels: ['changes', 'plan', 'checks', 'jobs'] },
           ],
         },
       ],
@@ -102,6 +103,7 @@ export const PRESETS: Layout[] = [
       panel('changes', 'changes'),
       panel('plan', 'plan'),
       panel('checks', 'checks'),
+      panel('jobs', 'jobs'),
     ],
     theme: 'auto',
     density: 'comfortable',
@@ -117,7 +119,7 @@ export const PRESETS: Layout[] = [
           type: 'split', direction: 'column', sizes: [0.6, 0.4],
           children: [
             { type: 'panel', panel: 'editor' },
-            { type: 'tabs', panels: ['changes', 'plan', 'checks'] },
+            { type: 'tabs', panels: ['changes', 'plan', 'checks', 'jobs'] },
           ],
         },
       ],
@@ -128,6 +130,7 @@ export const PRESETS: Layout[] = [
       panel('changes', 'changes'),
       panel('plan', 'plan'),
       panel('checks', 'checks'),
+      panel('jobs', 'jobs'),
     ],
     theme: 'auto',
     density: 'comfortable',
@@ -181,7 +184,7 @@ export const PRESETS: Layout[] = [
         {
           type: 'split', direction: 'row', sizes: [0.34, 0.33, 0.33],
           children: [
-            { type: 'panel', panel: 'log' },
+            { type: 'tabs', panels: ['jobs', 'log'] },
             { type: 'panel', panel: 'models' },
             { type: 'panel', panel: 'duties' },
           ],
@@ -191,6 +194,7 @@ export const PRESETS: Layout[] = [
     panels: [
       panel('chat', 'conversation'),
       panel('plan', 'plan'),
+      panel('jobs', 'jobs'),
       panel('log', 'log'),
       panel('models', 'models'),
       panel('duties', 'duties'),

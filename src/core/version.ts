@@ -10,8 +10,8 @@
  * だから、どの置かれ方でも版が言えるようにする。
  */
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { productRoot, installRoot } from './home.ts';
+import { join, resolve } from 'node:path';
+import { productRoot, installRoot, isDistributed } from './home.ts';
 import { jstDate } from './clock.ts';
 
 export interface Version {
@@ -29,8 +29,18 @@ export interface Version {
  * 版を目印の中に混ぜていたが、それだと**読む側が目印の書式を
  * 解釈しないと版が分からない**。VERSION なら、開けば書いてある。
  */
-async function fromMarker(): Promise<Version | undefined> {
-  for (const dir of [productRoot(), installRoot()]) {
+async function fromMarker(root = installRoot()): Promise<Version | undefined> {
+  /*
+   * **インストール版は `.portable` を消してある。**bundle は VERSION を製品の根
+   * （app の親）に置き、setup.exe はそこから `.portable` だけを消して入れる
+   * （残すと data\ が Program Files の隣に出来る）。ところが根の見つけ方が
+   * `.portable` 頼みだったので、インストール版では VERSION の在る場所を見に行かず、
+   * 「分かりません（git の管理下でもbundle でもありません）」と出ていた（実機）。
+   * 配られた形（中身が app\）なら、`.portable` の有無に関わらず一つ上も見る。
+   */
+  const dirs = [productRoot(root), root];
+  if (isDistributed(root)) dirs.push(resolve(root, '..'));
+  for (const dir of [...new Set(dirs)]) {
     const id = (await readFile(join(dir, 'VERSION'), 'utf8').catch(() => ''))
       .split('\n')[0]?.trim();
     if (!id) continue;
@@ -45,24 +55,24 @@ async function fromMarker(): Promise<Version | undefined> {
 }
 
 /** 作業コピーなら git に訊く。 */
-async function fromGit(): Promise<Version | undefined> {
+async function fromGit(root = installRoot()): Promise<Version | undefined> {
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const run = promisify(execFile);
   try {
-    const { stdout } = await run('git', ['rev-parse', '--short', 'HEAD'], { cwd: installRoot() });
+    const { stdout } = await run('git', ['rev-parse', '--short', 'HEAD'], { cwd: root });
     const id = stdout.trim();
     if (!id) return undefined;
     // 汚れていれば、そう言う。「この版で確かめた」と言えなくなるため。
-    const { stdout: dirty } = await run('git', ['status', '--porcelain'], { cwd: installRoot() });
+    const { stdout: dirty } = await run('git', ['status', '--porcelain'], { cwd: root });
     return { id: dirty.trim().length > 0 ? `${id}（未コミットの変更あり）` : id, from: 'git' };
   } catch {
     return undefined;
   }
 }
 
-export async function currentVersion(): Promise<Version> {
-  return (await fromMarker()) ?? (await fromGit()) ?? { from: '不明' };
+export async function currentVersion(root = installRoot()): Promise<Version> {
+  return (await fromMarker(root)) ?? (await fromGit(root)) ?? { from: '不明' };
 }
 
 /** 人に見せる一行。 */

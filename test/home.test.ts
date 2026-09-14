@@ -259,6 +259,32 @@ describe('CI の使い方', () => {
     const raw = await readFile(join(installRoot(), '.github', 'workflows', 'ci.yml'), 'utf8');
     assert.match(raw, /paths-ignore/);
   });
+
+  /*
+   * **配布物に GPU 用の binary を入れる。**CPU の分だけだった間、RTX の機械でも
+   * CPU で回り、記憶を使い切って答えなかった。portable と setup.exe の両方に。
+   * 在るかどうかは `test -f` で組んだ後に見る（入れたつもりで欠けていた形を配ったことがある）。
+   */
+  test('配布物には CPU・CUDA・Vulkan の三つの binary を入れ、組んだ後に在ることを見る', sourceOnly, async () => {
+    // Windows の checkout は CRLF になる。行の続き（`\\` の直後）を LF で探すと、
+    // 一行目で切れて「入れていない」と嘘を言う（Windows の CI で実際にそう落ちた）。
+    const raw = (await readFile(join(installRoot(), '.github', 'workflows', 'release.yml'), 'utf8')).replace(/\r\n/g, '\n');
+    const installs = raw.match(/npm install[^\n]*\n(?:\s+[^\n]*\\\n)*[^\n]*/g) ?? [];
+    assert.ok(installs.length >= 2, `入れる所が ${installs.length} か所しか無い（portable と setup.exe）`);
+    for (const step of installs) {
+      for (const pkg of ['@node-llama-cpp/win-x64', '@node-llama-cpp/win-x64-cuda', '@node-llama-cpp/win-x64-vulkan']) {
+        assert.ok(step.includes(pkg), `${pkg} を入れていない:\n${step}`);
+      }
+    }
+    for (const dll of ['win-x64-cuda/bins/win-x64-cuda/ggml-cuda.dll', 'win-x64-vulkan/bins/win-x64-vulkan/ggml-vulkan.dll']) {
+      assert.ok(raw.includes(`test -f node_modules/@node-llama-cpp/${dll}`), `${dll} が在ることを見ていない`);
+    }
+    // 組んだ後（zip・setup.exe の中）も見る。
+    assert.ok((raw.match(/win-x64-cuda\/bins\/win-x64-cuda\/llama-addon\.node/g) ?? []).length >= 3, '組んだ後の中身を見ていない');
+    const installer = await readFile(join(installRoot(), 'scripts', 'installer.mjs'), 'utf8');
+    assert.ok(installer.includes('@node-llama-cpp/win-x64-cuda') && installer.includes('@node-llama-cpp/win-x64-vulkan'),
+      '手元で組む installer.mjs が GPU 用を入れていない');
+  });
 });
 
 describe('CI は押すたびに回さない', () => {
@@ -497,5 +523,39 @@ describe('bundle の形のまま、この中で読む設定で通す', () => {
     // 繋ぎ先はこちらで埋める。利用者に書かせない。
     assert.match(text, /この中に立てます/, '繋ぎ先が埋まっていない');
     assert.doesNotMatch(text, /モデルを動かす土台がまだありません/);
+  });
+});
+
+/**
+ * インストール版でも版が言える。
+ *
+ * bundle は VERSION を製品の根（app の親）に置く。setup.exe はそこから `.portable`
+ * だけを消して入れる（残すと data\ が Program Files の隣に出来る）。根の見つけ方が
+ * `.portable` 頼みだったので、インストール版では VERSION を見に行かず
+ * 「分かりません（git の管理下でもbundle でもありません）」と出ていた（実機の doctor）。
+ */
+describe('インストール版（.portable 無し、中身が app\\）でも版が読める', () => {
+  test('app の親の VERSION を読む', async () => {
+    const { currentVersion, describeVersion } = await import('../src/core/version.ts');
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const root = await tempDir('aas-installed-');
+    await mkdir(join(root, 'app'), { recursive: true });
+    await writeFile(join(root, 'VERSION'), '0.12.0-abc1234\r\n', 'utf8');
+    const v = await currentVersion(join(root, 'app'));
+    assert.equal(v.id, '0.12.0-abc1234');
+    assert.equal(v.from, 'bundle の記録');
+    assert.equal(v.builtAt, undefined, '.portable が無いので組み立て時刻は分からない');
+    assert.match(describeVersion(v), /^0\.12\.0-abc1234（bundle の記録）$/);
+  });
+
+  test('中身が app\\ でなければ、親の VERSION は見ない（対）', async () => {
+    // クローンが、たまたま VERSION を置いた親の下に在っても、それを版と言わない。
+    const { currentVersion } = await import('../src/core/version.ts');
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const root = await tempDir('aas-notapp-');
+    await mkdir(join(root, 'work'), { recursive: true });
+    await writeFile(join(root, 'VERSION'), '9.9.9-nope\r\n', 'utf8');
+    const v = await currentVersion(join(root, 'work'));
+    assert.notEqual(v.id, '9.9.9-nope');
   });
 });

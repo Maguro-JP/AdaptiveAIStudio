@@ -40,6 +40,37 @@ async function tailOf(path: string, lines: number): Promise<string> {
   return (all.length > lines ? `（先頭 ${all.length - lines} 行は省きました）\n` : '') + cut.join('\n');
 }
 
+/**
+ * 直近の doctor は、新しければ使い回す。
+ *
+ * doctor は実機で 1〜2 分かかる。サポート用レポートを押すたびに回すと、
+ * その間ずっと待たせる。直近に回した結果が新しければ、それを使う。
+ * 古ければ回す（機械の様子が変わっているかもしれないので）。
+ */
+export const DOCTOR_REUSE_MS = 10 * 60_000;
+
+async function recentDoctor(
+  dirs: string[], maxAgeMs: number, now = Date.now(),
+): Promise<{ text: string; ageMs: number; file: string } | undefined> {
+  let best: { file: string; mtime: number } | undefined;
+  for (const dir of dirs) {
+    const names = await readdir(dir).catch(() => [] as string[]);
+    for (const f of names) {
+      // doctor-YYYYMMDD-HHMM.txt。自分（report-）や他の点検は見ない。
+      if (!/^doctor-\d{8}-\d{4}\.txt$/.test(f)) continue;
+      const at = join(dir, f);
+      const st = await stat(at).catch(() => undefined);
+      if (!st) continue;
+      if (!best || st.mtimeMs > best.mtime) best = { file: at, mtime: st.mtimeMs };
+    }
+  }
+  if (!best) return undefined;
+  const ageMs = now - best.mtime;
+  if (ageMs > maxAgeMs) return undefined;
+  const text = await readFile(best.file, 'utf8').catch(() => undefined);
+  return text === undefined ? undefined : { text, ageMs, file: best.file };
+}
+
 /** 直近の点検の結果。reports/ の中で、名前ごとにいちばん新しいもの。 */
 async function latestReports(dir: string): Promise<{ name: string; file: string }[]> {
   const names = await readdir(dir).catch(() => [] as string[]);
@@ -71,6 +102,8 @@ function runDoctor(root: string, env: NodeJS.ProcessEnv, timeoutMs: number): Pro
 export async function buildReport(opts: {
   root: string; state: string; home: string; models: string;
   doctor?: (root: string) => Promise<string>;
+  /** 直近の doctor をどれだけ古くまで使い回すか。既定 `DOCTOR_REUSE_MS`。 */
+  doctorMaxAgeMs?: number;
 }): Promise<string> {
   const parts: string[] = [];
   const section = (title: string, body: string) => { parts.push(`## ${title}`, '', body.trimEnd(), ''); };
@@ -97,9 +130,23 @@ export async function buildReport(opts: {
     ? models.map((m) => `${m.ref}  ${((m.sizeBytes ?? 0) / 1024 ** 3).toFixed(2)} GB`).join('\n')
     : '（GGUF はありません）');
 
-  say('… doctor を回します（この機械では 1〜2 分かかります）');
-  const doctor = await (opts.doctor ?? ((root) => runDoctor(root, { ...process.env, AAS_REPORT_DIR: join(opts.state, 'reports') }, 240_000)))(opts.root);
-  section('doctor', doctor);
+  // 直近の doctor が新しければ、使い回す（毎回 1〜2 分待たせない）。
+  const reuseMs = opts.doctorMaxAgeMs ?? DOCTOR_REUSE_MS;
+  const cached = await recentDoctor([join(opts.state, 'reports'), opts.state], reuseMs);
+  let doctorBody: string;
+  if (cached) {
+    const min = Math.round(cached.ageMs / 60_000);
+    say(`… 直近の doctor（${min} 分前）を使い回します（押してすぐ出すため）`);
+    doctorBody = `直近の doctor（${min} 分前・${cached.file}）を使い回しました。`
+      + '押してすぐ出すため、その場では回していません。'
+      + '新しく見たいときは、診断 → 「この環境を見てもらう」を回してから、もう一度作ってください。'
+      + `\n\n${cached.text}`;
+  } else {
+    say('… doctor を回します（この機械では 1〜2 分かかります）');
+    const out = await (opts.doctor ?? ((root) => runDoctor(root, { ...process.env, AAS_REPORT_DIR: join(opts.state, 'reports') }, 240_000)))(opts.root);
+    doctorBody = `その場で doctor を回しました。\n\n${out}`;
+  }
+  section('doctor', doctorBody);
 
   section('直近の記録（logs/ui.log の末尾）', await tailOf(join(opts.state, 'logs', 'ui.log'), 400));
   section('直近の操作（audit.jsonl の末尾）', await tailOf(join(opts.state, 'audit.jsonl'), 50));

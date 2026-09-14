@@ -145,7 +145,7 @@ export interface InspectorConfig {
 export interface PanelConfig {
   /** 既定で参加させる役職。省略時は検査・破壊・安全の3名 */
   roles?: string[];
-  /** 同時に走らせる人数 */
+  /** 同時に走らせる人数。inproc の口は優先度「中」で借りるので、取り分（本数 − 半分切り上げ）を超えた分は口を待つ。既定の 2 本なら一人ずつ。 */
   parallel?: number;
 }
 
@@ -224,9 +224,22 @@ export interface RuntimeConfig {
   basePort?: number;
   /** 文脈の大きさ（トークン）。inproc のみ。既定 8192。広げるほど記憶を食う */
   contextSize?: number;
+  /**
+   * GPU を使うか。inproc のみ。既定 auto（cuda → vulkan → CPU の順に、動くものを使う）。
+   * off は CPU だけ。GPU の道で落ちるときの逃げ道。使ったものは記録の
+   * 「GPU で読みます / CPU で読みます」の行と doctor に出る。
+   */
+  gpu?: 'auto' | 'cuda' | 'vulkan' | 'off';
   /** 使う GGUF の名前（置き場の中の名前）。無ければ最初の一つ */
   model?: string;
-  /** llamacpp: レーンの並列度に合わせる */
+  /**
+   * 同時に何本の生成を並べるか。
+   * - inproc: 会話ごとに一本貸す sequence の本数（既定 `DEFAULT_SEQUENCES`）。
+   *   増やすほどコンテキストウィンドウ（一会話が覚えていられる長さ）は狭くなる（KV を分け合うため）。
+   *   速さのための数ではない。CPU は分け合うので、増やすと一人あたりは遅くなる。
+   *   2 本以上なら、半分（切り上げ）は最優先・優先のために空けておく（高・中・低は残りを使う）。
+   * - llamacpp: レーンの並列度に合わせる。
+   */
   parallel?: number;
   desiredContext?: number;
   /**

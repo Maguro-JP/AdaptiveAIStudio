@@ -24,7 +24,9 @@
   "maxTokens": 4096,
   "runtime": {
     "_": "モデルを動かす土台。inproc = この中で読む（GGUF を置くだけ。実行ファイルは増えない）/ ollama = 別に立てたものへ繋ぐ / llamacpp = llama-server を起こす。置き場を変えるなら modelsDir に道を書く（書かなければ既定の data\\models）",
-    "kind": "inproc"
+    "kind": "inproc",
+    "_gpu": "GPU を使うか。auto（既定。CUDA → Vulkan → CPU の順に動くものを使う）/ cuda / vulkan / off（CPU だけ）。使ったものは記録と doctor に出る",
+    "_parallel": "同時に何人に答えるか（inproc の sequence の本数）。既定 2。増やすほど一会話の窓は狭くなる（記憶を分け合う）。速くはならない、待たされなくなるだけ。2本以上なら半分は最優先・優先のために空けておき、高・中・低は残りを使う。役職・合議・裏の思考は中なので、2〜3本なら一人ずつ、二人同時なら 4。16GB・CPU で載る本数はモデルによる"
   },
   "mcp": {
     "_": "外の道具。GitHub もここに一つ足すだけで繋がる。合言葉は envFrom で『名前』を書く（値は書かない）",

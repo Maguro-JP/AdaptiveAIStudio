@@ -293,3 +293,34 @@ describe('降ろしたあとに、口を立て直さない', () => {
     }
   });
 });
+
+describe('降ろしている最中は、新しい依頼を始めない', () => {
+  test('止めている間に来た依頼は、断る（解いている context で生成しない）', async () => {
+    // 読んであるモデルへの依頼は ensureLoaded を通らないので、#down を見る所が
+    // 別に要る。見ないと、解いている最中の context の上で生成し、C++ ごと落ちうる。
+    const { dir, ref } = await withModel();
+    // 降ろすときの dispose を、こちらの合図まで待たせる。その間 #down は立ち、
+    // 口（server）はまだ開いている＝止めている最中の隙を作れる。
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    const load = async () => ({
+      getLlama: async () => ({
+        loadModel: async () => ({
+          createContext: async () => ({ getSequence: () => ({}), dispose: async () => { await gate; } }),
+        }),
+      }),
+      LlamaChatSession: class { setChatHistory() {} async prompt() { return 'ok'; } },
+    });
+    const rt = new InProcRuntime({ modelsDir: dir, port: 0, load });
+    const { baseUrl } = await rt.ensureLoaded(ref);
+    // 止め始める（#down が立ち、unload の dispose が gate で止まる）。server は開いたまま。
+    const stopping = rt.shutdown();
+    try {
+      const r = await ask(baseUrl, ref, 'いま送る');
+      assert.equal(r.status, 503, '止めている最中なのに受け付けた');
+    } finally {
+      release();       // dispose を進めて、shutdown を終わらせる
+      await stopping;
+    }
+  });
+});

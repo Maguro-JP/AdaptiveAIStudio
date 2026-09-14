@@ -11,3 +11,6 @@ dist/
 # doctor / selftest が残す報告。押した場所の隣に出るので、git には入れない。
 doctor-*.txt
 selftest-*.txt
+
+# 作業中の生のメモ。git には入れない（docs/DECISIONS.md へ整えて移す）。
+.worklog/

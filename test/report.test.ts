@@ -46,6 +46,38 @@ describe('困ったときの報告', () => {
     assert.ok(!body.includes('古い'), '古い点検の結果を入れている');
   });
 
+  test('直近の doctor が新しければ、使い回す（毎回 1〜2 分回さない）', async () => {
+    const dir = await tempDir('aas-report-reuse-');
+    const reports = join(dir, 'reports');
+    await mkdir(reports, { recursive: true });
+    await writeFile(join(reports, 'doctor-20260912-1200.txt'), 'CACHED-DOCTOR よい状態です\n');
+    let ran = false;
+    const body = await buildReport({
+      root: dir, state: dir, home, models: join(dir, 'models'),
+      doctor: async () => { ran = true; return 'FRESH-RUN'; },
+    });
+    assert.equal(ran, false, '新しい doctor があるのに回している');
+    assert.ok(body.includes('CACHED-DOCTOR'), '使い回した中身が入っていない');
+    assert.ok(body.includes('使い回しました'), '使い回したと言っていない');
+    assert.ok(!body.includes('FRESH-RUN'), '使い回すはずが回している');
+  });
+
+  test('直近の doctor が古ければ、その場で回す（対）', async () => {
+    const dir = await tempDir('aas-report-stale-');
+    const reports = join(dir, 'reports');
+    await mkdir(reports, { recursive: true });
+    await writeFile(join(reports, 'doctor-20260912-1200.txt'), 'CACHED-DOCTOR\n');
+    let ran = false;
+    const body = await buildReport({
+      root: dir, state: dir, home, models: join(dir, 'models'),
+      doctorMaxAgeMs: 0, // どんな控えも「古い」扱いにする
+      doctor: async () => { ran = true; return 'FRESH-RUN その場で回した'; },
+    });
+    assert.equal(ran, true, '古い doctor しかないのに回していない');
+    assert.ok(body.includes('FRESH-RUN'), '回した結果が入っていない');
+    assert.ok(body.includes('その場で doctor を回しました'), '回したと言っていない');
+  });
+
   test('置く先を AAS_REPORT_DIR で変えられる（テストがプログラムの隣に撒かないため）', async () => {
     const dir = await tempDir('aas-report-dir-');
     const prev = process.env.AAS_REPORT_DIR;

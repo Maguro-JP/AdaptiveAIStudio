@@ -31,6 +31,7 @@ import { extractToolCalls, ToolTextFilter } from '../agent/tool-text.ts';
 import { readGguf } from './gguf.ts';
 import { extractFacts } from './gguf-spec.ts';
 import { totalmem } from 'node:os';
+import { DEFAULT_PRIORITY, Priority, PRIORITY_HEADER, toPriority } from '../providers/contract.ts';
 /**
  * ライブラリの名前。文字列の変数にしておく。
  *
@@ -39,6 +40,130 @@ import { totalmem } from 'node:os';
  * 無いときは、無いと言う道が別にある。型検査には解決させない。
  */
 const LLAMA_LIB = 'node-llama-cpp';
+
+/**
+ * GPU を使うか。
+ *   auto    cuda → vulkan → CPU の順に、動くものを使う（既定）
+ *   cuda / vulkan  それだけを試す（動かなければ CPU に落ちず、無いと言う）
+ *   off     CPU だけ。前の形。GPU の道で落ちるときの逃げ道として残す
+ */
+export type GpuMode = 'auto' | 'cuda' | 'vulkan' | 'off';
+
+/**
+ * 実際にモデルを動かしている側。`getLlama` が選んだもの。
+ *
+ * **nvidia-smi に GPU が見えることと、読む側が GPU を使うことは別。**
+ * 見えているのに CPU で回し、記憶を使い切って答えない、が実機で起きた
+ * （GPU 用の binary を同梱せず、gpu: false で読んでいた）。使っているものを
+ * ここに持ち、記録・doctor・選ぶ側の全部がこれを見る。
+ */
+export interface Backend {
+  /** false なら CPU。 */
+  gpu: false | 'cuda' | 'vulkan' | 'metal';
+  /** GPU の名前。CPU なら空。 */
+  devices: string[];
+  /** VRAM の総量。CPU なら 0。 */
+  vramBytes: number;
+  /** CPU になった理由。GPU を使えているときは無い。 */
+  reason?: BackendReason;
+}
+export type BackendReason = 'off' | 'no-binary' | 'load-failed' | 'no-gpu';
+
+/** 人に見せる言葉。合図（`BackendReason`）は変えず、ここで引き直す。 */
+export const BACKEND_REASON: Record<BackendReason, string> = {
+  off: '設定 runtime.gpu が off',
+  'no-binary': 'GPU 用の binary が入っていません',
+  'load-failed': 'GPU 用の binary は在りますが、この機械では読めませんでした。ドライバが古い形が多いです',
+  'no-gpu': '使える GPU が見つかりませんでした',
+};
+
+/**
+ * 読む側が GPU を探すのに要るもの。doctor の案内と docs で同じ文を使う。
+ *
+ * ライブラリは CUDA を「NVIDIA のドライバ（nvml.dll）と CUDA Toolkit の runtime
+ * （cudart64_12.dll・cublas64_12.dll）が PATH に在るとき」だけ試す。Vulkan は
+ * vulkan-1.dll（NVIDIA のドライバに入っている）。どちらも無ければ、GPU が
+ * 見えていても探さずに CPU になる（実装: node-llama-cpp の detectAvailableComputeLayers）。
+ */
+export const GPU_NEEDS = 'Vulkan は vulkan-1.dll（NVIDIA のドライバに入っています）、'
+  + 'CUDA は CUDA Toolkit の runtime DLL（cudart64_12.dll・cublas64_12.dll）が PATH に要ります。';
+
+/** 記録・doctor に出す一行。同じ文をそれぞれが組まない。 */
+export function describeBackend(b: Backend): string {
+  if (b.gpu) {
+    const name = b.devices.length > 0 ? b.devices.join(', ') : 'GPU';
+    const vram = b.vramBytes > 0 ? `、VRAM ${(b.vramBytes / 1024 ** 3).toFixed(1)}GB` : '';
+    return `GPU で読みます: ${b.gpu === 'cuda' ? 'CUDA' : b.gpu === 'vulkan' ? 'Vulkan' : b.gpu}（${name}${vram}）`;
+  }
+  return `CPU で読みます（${BACKEND_REASON[b.reason ?? 'no-gpu']}）`;
+}
+
+/** ライブラリの、こちらが使う分だけの形（`getLlama` が返すもの）。 */
+export interface LlamaLike {
+  loadModel: (o: { modelPath: string; onLoadProgress?: (done: number) => void }) => Promise<{
+    createContext: (o?: { contextSize?: number; sequences?: number }) => Promise<{
+      getSequence: (o?: { tokenPredictor?: unknown }) => unknown; dispose?: () => Promise<void>;
+    }>;
+    /** GPU に載せた層の数。試験のモックには無い。 */
+    gpuLayers?: number;
+    fileInsights?: { totalLayers?: number };
+  }>;
+  /** 使っている backend。false なら CPU。試験のモックには無い（＝CPU）。 */
+  gpu?: false | 'cuda' | 'vulkan' | 'metal';
+  getGpuDeviceNames?: () => Promise<string[]>;
+  getVramState?: () => Promise<{ total: number; used: number; free: number }>;
+}
+export interface LlamaLib {
+  getLlama: (o?: { gpu?: false | 'auto' | 'cuda' | 'vulkan'; build?: 'never'; logLevel?: 'error' }) => Promise<LlamaLike>;
+  LlamaChatSession: new (o: { contextSequence: unknown }) => unknown;
+  InputLookupTokenPredictor?: new () => unknown;
+}
+
+/**
+ * backend を決めて、何を使ったかを持ち帰る。runtime と doctor が同じ道を通る。
+ *
+ * ライブラリは、GPU 用の binary が無い・読めないときに **console.warn / console.error へ直に**
+ * 「A prebuilt binary was not found, falling back to …」と何行も書く（logLevel を通らない。実測）。
+ * 利用者にはそのまま貼られ、壊れているようにしか見えない。黙らせて拾い、こちらの言葉で
+ * **一行**にする。拾った文から理由（無い／読めない）を引く。
+ */
+export async function probeBackend(
+  lib: LlamaLib, mode: GpuMode = 'auto',
+  opts: {
+    /**
+     * nvidia-smi に GPU が見えているか。見えていない機械では、向こうが何と言おうと
+     * 理由は「GPU が無い」（libvulkan だけ在る機械で Vulkan を試して落ちた声を、
+     * 「ドライバが古い」と言い直していた。無いものは無い）。分からなければ渡さない。
+     */
+    gpuSeen?: boolean;
+  } = {},
+): Promise<{ llama: LlamaLike; backend: Backend }> {
+  const heard: string[] = [];
+  const llama = await quietly(heard, () => lib.getLlama({ gpu: mode === 'off' ? false : mode, build: 'never', logLevel: 'error' }));
+  const gpu = llama.gpu ?? false;
+  if (!gpu) {
+    const said = heard.join('\n');
+    const reason: BackendReason = mode === 'off' ? 'off'
+      : opts.gpuSeen === false ? 'no-gpu'
+        : /not found/i.test(said) ? 'no-binary'
+          : /not compatible|failed to load/i.test(said) ? 'load-failed'
+            : 'no-gpu';
+    return { llama, backend: { gpu: false, devices: [], vramBytes: 0, reason } };
+  }
+  const devices = await llama.getGpuDeviceNames?.().catch(() => [] as string[]) ?? [];
+  const vram = await llama.getVramState?.().catch(() => undefined);
+  return { llama, backend: { gpu, devices, vramBytes: vram?.total ?? 0 } };
+}
+
+/** 呼んでいる間だけ、向こうの console.warn / console.error を拾って黙らせる。 */
+async function quietly<T>(into: string[], run: () => Promise<T>): Promise<T> {
+  const warn = console.warn;
+  const error = console.error;
+  const keep = (...args: unknown[]) => { into.push(args.map(String).join(' ')); };
+  console.warn = keep;
+  console.error = keep;
+  try { return await run(); } finally { console.warn = warn; console.error = error; }
+}
 
 
 /**
@@ -104,6 +229,18 @@ export interface InProcOptions {
    */
   load?: () => Promise<unknown>;
   /**
+   * 並列に持つ sequence の本数。会話ごとに一本使うので、これが
+   * 「同時に何人に答えられるか」になる。既定 `DEFAULT_SEQUENCES`。
+   *
+   * **速くはならない。止まらなくなるだけ。**CPU は分け合うので、
+   * 二人に同時に答えても一人あたりは遅くなる。狙いは「一人が長く考えて
+   * いる間、もう一人が待たされない」こと。
+   *
+   * KV は本数ぶん要る。コンテキストウィンドウ × 本数 が記憶に収まるよう、`fitWindow` が
+   * 数えてコンテキストウィンドウを狭める（諸元が読めないときは 1 本に留める）。
+   */
+  sequences?: number;
+  /**
    * 別のプロセス（inproc-host）で動かすときの、操作の口を開けるか。
    * `/control/*` で一覧・読み込み・降ろす・止めるを受ける。
    * 画面のプロセスは、これ越しにしかモデルに触らない。
@@ -111,6 +248,12 @@ export interface InProcOptions {
   control?: boolean;
   /** `/control/shutdown` で止めたあとに呼ぶ（別のプロセスなら、ここで終わる）。 */
   onExit?: () => void;
+  /** 列で待つ間の `: queued` の間隔。既定 `QUEUE_HEARTBEAT_MS`。テストで短くする。 */
+  queueHeartbeatMs?: number;
+  /** GPU を使うか。既定 'auto'。設定 `runtime.gpu`。 */
+  gpu?: GpuMode;
+  /** nvidia-smi に GPU が見えているか（`detectMachine`）。CPU になった理由を言い当てるのに使う。 */
+  gpuSeen?: boolean;
 }
 
 /** 置き場にある GGUF。名前は問わない。 */
@@ -184,21 +327,60 @@ export function chooseModel(
   models: readonly AvailableModel[],
   ramBytes: number,
   wanted?: string,
-  opts: { hasGpu?: boolean } = {},
-): { chosen: AvailableModel; fits: boolean } | undefined {
+  opts: { hasGpu?: boolean; vramBytes?: number } = {},
+): { chosen: AvailableModel; fits: boolean; why: ChoiceReason } | undefined {
   if (models.length === 0) return undefined;
   const named = wanted ? models.find((m) => m.ref === wanted) : undefined;
-  if (named) return { chosen: named, fits: !tooBigForRam(named.sizeBytes, ramBytes) };
+  if (named) return { chosen: named, fits: !tooBigForRam(named.sizeBytes, ramBytes), why: 'named' };
 
   const fitting = models.filter((m) => !tooBigForRam(m.sizeBytes, ramBytes));
   if (fitting.length > 0) {
     const size = (m: AvailableModel) => m.sizeBytes ?? 0;
     const smallest = fitting.reduce((a, b) => (size(b) < size(a) ? b : a));
     const largest = fitting.reduce((a, b) => (size(b) > size(a) ? b : a));
-    return { chosen: opts.hasGpu === false ? smallest : largest, fits: true };
+    if (opts.hasGpu === false) return { chosen: smallest, fits: true, why: 'cpu-smallest' };
+    /*
+     * **VRAM に丸ごと載るもののうち、大きい方。**
+     *
+     * 「GPU が在るなら大きい方」は、VRAM を数えていなかった。8GB の GPU に
+     * 20GB のモデルを選び、載らない分が CPU に溢れて、記憶を使い切って
+     * 答えなくなった（実機）。丸ごと載るものが無ければ、小さい方
+     * （溢れる量が少ないほど速い）。
+     */
+    if (opts.hasGpu && opts.vramBytes) {
+      const onGpu = fitting.filter((m) => fitsVram(m.sizeBytes, opts.vramBytes));
+      if (onGpu.length > 0) {
+        return { chosen: onGpu.reduce((a, b) => (size(b) > size(a) ? b : a)), fits: true, why: 'gpu-largest-in-vram' };
+      }
+      return { chosen: smallest, fits: true, why: 'gpu-none-in-vram' };
+    }
+    return { chosen: largest, fits: true, why: 'largest' };
   }
   const smallest = models.reduce((a, b) => ((b.sizeBytes ?? 0) < (a.sizeBytes ?? 0) ? b : a));
-  return { chosen: smallest, fits: false };
+  return { chosen: smallest, fits: false, why: 'none-fits-ram' };
+}
+
+/** なぜそれを選んだか。表示は `CHOICE_WHY` で引き直す。 */
+export type ChoiceReason =
+  | 'named' | 'gpu-largest-in-vram' | 'gpu-none-in-vram' | 'largest' | 'cpu-smallest' | 'none-fits-ram';
+
+export const CHOICE_WHY: Record<ChoiceReason, string> = {
+  named: '設定で決めてあります',
+  'gpu-largest-in-vram': 'VRAM に丸ごと載るもののうち大きい方',
+  'gpu-none-in-vram': 'VRAM に丸ごと載るものが無いので、載るもののうち小さい方（大きいほど CPU に溢れて遅くなります）',
+  largest: 'GPU があるので、載るもののうち大きい方',
+  'cpu-smallest': 'GPU が無いので、載るもののうち小さい方（大きいほど待ちます）',
+  'none-fits-ram': 'どれも記憶に載りません',
+};
+
+/**
+ * 重みが VRAM に丸ごと載るか。KV と計算の作業領域のぶん、二割は空けておく。
+ * 載り切らない分は CPU に置かれ、そこが速さを決めてしまう。
+ */
+export const VRAM_SHARE = 0.8;
+export function fitsVram(sizeBytes: number | undefined, vramBytes: number | undefined): boolean {
+  if (!sizeBytes || !vramBytes) return false;
+  return sizeBytes <= vramBytes * VRAM_SHARE;
 }
 
 /**
@@ -240,40 +422,77 @@ export function fitWindow(opts: {
   floor?: number;
   /** 諸元が読めないときに、これ以上は広げない。 */
   unknownCap?: number;
-}): { window: number; why?: string } {
+  /**
+   * 並列に持つ sequence の本数（既定 1）。KV は本数ぶん要る。
+   * コンテキストウィンドウ × 本数 が記憶に収まるよう、まずコンテキストウィンドウを狭め、それでも足りなければ本数を減らす。
+   */
+  sequences?: number;
+}): { window: number; sequences: number; why?: string } {
   const want = Math.min(opts.trained, opts.max ?? MAX_WINDOW);
   const floor = opts.floor ?? 4096;
+  const wanted = Math.max(1, Math.floor(opts.sequences ?? 1));
   const { layers, embedding, heads } = opts;
-  if (!layers || !embedding || !heads) {
-    // KV の大きさを計算できない。**広げない。**
+  // 一トークンあたりの KV（バイト）。K と V、それぞれ 2 バイト（f16）。
+  // **諸元が欠けていても、0 でも、計算できない。**`head_count_kv` が
+  // 「無い（undefined）」なら heads で代えられるが、「0 として書いてある」
+  // （壊れた・読み違えた GGUF）なら代えない（`?? ` は 0 を素通しする）。
+  // embedding < heads でも headDim が 0 になる。どれも perToken を 0 にする。
+  const headDim = (layers && embedding && heads) ? Math.floor(embedding / heads) : 0;
+  const kvDim = headDim * (opts.kvHeads || heads || 0);
+  const perToken = 2 * (layers ?? 0) * kvDim * 2;
+  if (perToken <= 0) {
+    // **KV の大きさを計算できない。広げない。並列もしない。**
+    // 数えられないコンテキストウィンドウを N 倍にするのは、数えずに広げるのと同じ
+    // （壊れた GGUF で 32768 × 2 本を記憶の勘定なしに開き、機械が固まる）。
     const safe = Math.min(want, opts.unknownCap ?? SAFE_WINDOW);
-    if (safe >= want) return { window: want };
-    return {
-      window: safe,
-      why: 'このモデルの諸元（層数・head 数）が読めないので、記憶に載るかを'
-        + `計算できません。安全な ${safe} にしています。`
-        + '設定 → モデル で広げられます。',
-    };
+    const narrowed = safe < want;
+    const noParallel = wanted > 1;
+    if (!narrowed && !noParallel) return { window: want, sequences: 1 };
+    const why = [
+      narrowed
+        ? 'このモデルの諸元（層数・head 数）が読めないので、記憶に載るかを'
+          + `計算できません。安全な ${safe} にしています。`
+        : '',
+      noParallel
+        ? 'このモデルの諸元が読めないので、KV を数えられません。並列は 1 本にしています。'
+        : '',
+      '設定 → モデル で広げられます。',
+    ].filter(Boolean).join('');
+    return { window: safe, sequences: 1, why };
   }
-
-  const headDim = Math.floor(embedding / heads);
-  const kvDim = headDim * (opts.kvHeads ?? heads);
-  // K と V、それぞれ 2 バイト（f16）。
-  const perToken = 2 * layers * kvDim * 2;
-  if (perToken <= 0) return { window: want };
 
   // OS と、計算に使う分を残す。全部を当てにしない。
   const budget = opts.ramBytes * 0.7 - (opts.weightBytes ?? 0);
-  const allowed = Math.floor(budget / perToken);
-  if (allowed >= want) return { window: want };
-
-  const window = Math.max(floor, Math.min(want, allowed));
+  // 全 sequence ぶんで使えるトークンの総数。コンテキストウィンドウ × 本数 が、ここに収まる。
+  const maxTotal = Math.floor(budget / perToken);
   const gb = (n: number) => (n / 1024 ** 3).toFixed(1);
+
+  // コンテキストウィンドウ × 本数 が収まるなら、そのまま。
+  if (want * wanted <= maxTotal) return { window: want, sequences: wanted };
+
+  // 収まらない。**まずコンテキストウィンドウを狭める**（並列は保つ）。
+  const perLane = Math.floor(maxTotal / wanted);
+  if (perLane >= floor) {
+    return {
+      window: perLane,
+      sequences: wanted,
+      why: `コンテキストウィンドウを ${want} から ${perLane} に狭めました`
+        + `（この機械の記憶 ${gb(opts.ramBytes)}GB に、コンテキストウィンドウ × 並列 ${wanted} 本を収めるため）`,
+    };
+  }
+  // floor でも wanted 本は載らない。**並列を減らす。**
+  // **モデルのコンテキストウィンドウ（trained）を超えない。**floor は下限だが、trained が floor より
+  // 狭いモデル（2048〜4095）では、floor をそのまま返すと trained を超え、
+  // 記憶の勘定も超える。so want で最後に頭を抑える（`want` は trained 由来）。
+  const seq = Math.max(1, Math.floor(maxTotal / floor));
+  const window = Math.min(want, Math.max(floor, Math.floor(maxTotal / seq)));
   return {
     window,
+    sequences: seq,
     why: `窓を ${want} から ${window} に狭めました`
+      + (seq < wanted ? `。並列も ${wanted} 本から ${seq} 本に減らしました` : '')
       + `（この機械の記憶 ${gb(opts.ramBytes)}GB に対して、`
-      + `窓 ${want} は ${gb(want * perToken)}GB を使います）`,
+      + `コンテキストウィンドウ ${want} × 並列 ${wanted} 本は入りません）`,
   };
 }
 
@@ -301,6 +520,25 @@ export const MAX_WINDOW = 32_768;
  */
 export const SAFE_WINDOW = 8192;
 
+/**
+ * 並列に持つ sequence の既定の本数。
+ *
+ * **1 本だと、同時に一人にしか答えられない**（それが直したかった形）。
+ * 2 本にすると、一人が長く考えている間、もう一人の依頼が待たされない。
+ *
+ * ここを増やすほど、コンテキストウィンドウ（一会話が覚えていられる長さ）は狭くなる
+ * （KV は本数ぶん要り、記憶は決まっているため）。16GB・CPU の機械で
+ * いくつが良いかは実機で測る。設定 `runtime.parallel` で変えられる。
+ * **速さのための数ではない。**CPU は分け合うので、増やすと一人あたりは遅くなる。
+ */
+export const DEFAULT_SEQUENCES = 2;
+/**
+ * 列で待っている間、何 ms ごとに `: queued` を打つか。
+ * 上の層は最初のトークンまでの上限（10 分）を数えているが、**並んでいる時間は停滞ではない**。
+ * 打ち続ければ、上の層は待ちを延ばせる（`openai-compatible.ts`）。
+ */
+export const QUEUE_HEARTBEAT_MS = 15_000;
+
 export class InProcRuntime implements LocalRuntime {
   readonly id = 'inproc';
   readonly #opts: InProcOptions;
@@ -319,6 +557,11 @@ export class InProcRuntime implements LocalRuntime {
    * 二人目には、一人目の約束をそのまま渡す。
    */
   readonly #loading = new Map<string, Promise<Held>>();
+  /**
+   * ライブラリの本体（`getLlama` の結果）と、選ばれた backend。**一度だけ作る。**
+   * モデルごとに作ると、backend の初期化（CUDA なら数秒）を毎回やり直す。
+   */
+  #llama?: Promise<{ llama: LlamaLike; backend: Backend }>;
 
   constructor(opts: InProcOptions) {
     this.#opts = opts;
@@ -359,6 +602,30 @@ export class InProcRuntime implements LocalRuntime {
     }));
   }
 
+  /**
+   * 実際に使う backend。**読む前に分かる**（ライブラリを起こすだけで、モデルは読まない）。
+   * 選ぶ側はこれを見る。nvidia-smi に見えるかどうかでは決めない。
+   */
+  async backend(): Promise<Backend> {
+    return (await this.#llamaInstance()).backend;
+  }
+
+  #llamaInstance(): Promise<{ llama: LlamaLike; backend: Backend }> {
+    if (!this.#llama) {
+      const made = (async () => {
+        const lib = await this.#lib();
+        const got = await probeBackend(lib, this.#opts.gpu ?? 'auto',
+          this.#opts.gpuSeen !== undefined ? { gpuSeen: this.#opts.gpuSeen } : {});
+        this.#opts.onLog?.(describeBackend(got.backend));
+        return got;
+      })();
+      // 失敗を覚えたままにしない。次に呼ばれたときに、済んだ失敗をもう一度返すことになる。
+      made.catch(() => { if (this.#llama === made) this.#llama = undefined; });
+      this.#llama = made;
+    }
+    return this.#llama;
+  }
+
   async ensureLoaded(ref: string): Promise<LoadedModel> {
     const began = Date.now();
     if (!this.#sessions.has(ref)) {
@@ -387,20 +654,18 @@ export class InProcRuntime implements LocalRuntime {
   /** 実際に読む。**必ず #loading 越しに呼ぶ。** */
   async #load(ref: string): Promise<Held> {
     const lib = await this.#lib();
-    // build: 'never' — 同梱の binary が無い・読めないとき、既定では
-    // llama.cpp を GitHub から取ってきて手元で組もうとする（実測）。
-    // 網の無い機械では固まり、あっても何十分もかかる。**組まずに、無いと言う。**
-    // logLevel: 'error' — 無いときに「prebuilt binary was not found」を何行も
-    // 表に出す。こちらの言葉で言い直すので、向こうの声は落とす。
-    // gpu: false — **同梱しているのは CPU の binary だけ。**
-    // 既定（auto）だと cuda → vulkan → CPU の順に探しに行き、前の二つは
-    // 必ず空振りする。そのたびに
-    //   「A prebuilt binary was not found, falling back to using no GPU」
-    // が出る。利用者には**壊れているようにしか見えない**（実際に言われた）。
-    // 無いものを探させない。探さない分、立ち上がりも速い。
-    //
-    // GPU を使いたくなったら、そのときは binary を同梱してから、ここを開ける。
-    const llama = await lib.getLlama({ gpu: false, build: 'never', logLevel: 'error' });
+    /*
+     * build: 'never' — 同梱の binary が無い・読めないとき、既定では
+     * llama.cpp を GitHub から取ってきて手元で組もうとする（実測）。
+     * 網の無い機械では固まり、あっても何十分もかかる。**組まずに、無いと言う。**
+     *
+     * gpu は既定 'auto'（cuda → vulkan → CPU）。**ここは gpu: false で読んでいた。**
+     * 「同梱しているのは CPU の binary だけだから、探させない」という理由だったが、
+     * その結果 RTX の機械でも CPU で回り、記憶を使い切って答えなかった（実機）。
+     * いまは GPU 用の binary も同梱する（release.yml）。探すときの向こうの声は
+     * probeBackend が拾って、こちらの一行（describeBackend）にする。
+     */
+    const { llama, backend } = await this.#llamaInstance();
     // 数GBを読むので、10〜60秒かかる。**黙って待たせない。**
     // 進み具合を出さないと、また「固まった」に見える。
     let last = -1;
@@ -417,8 +682,19 @@ export class InProcRuntime implements LocalRuntime {
     // **窓は、モデルが持っているぶんを使う。**
     // 8192 の決め打ちだったので、32k 使えるモデルでも 8k しか使えなかった。
     // 覚えや決まりを載せると、それだけで埋まる。切り詰める前に、窓を広げる。
-    const contextSize = await this.#windowFor(ref);
-    const context = await model.createContext({ contextSize });
+    //
+    // **並列に持つ本数（sequences）も、ここで決まる。**KV は本数ぶん要るので、
+    // コンテキストウィンドウ × 本数 が記憶に収まるよう #windowFor（fitWindow）が数えてある。
+    // GPU に何層載ったか。**載り切らなかったときは、それが遅い理由。**言わないと、
+    // 「GPU で読んでいるのに遅い」の原因を別の所に探すことになる。
+    if (backend.gpu && typeof model.gpuLayers === 'number') {
+      const total = model.fileInsights?.totalLayers;
+      this.#opts.onLog?.(typeof total === 'number' && model.gpuLayers < total
+        ? `GPU に ${model.gpuLayers}/${total} 層を載せました（載り切らない分は CPU で動くので、遅くなります）`
+        : `GPU に ${model.gpuLayers}${typeof total === 'number' ? `/${total}` : ''} 層を載せました`);
+    }
+    const { window: contextSize, sequences } = await this.#windowFor(ref, backend);
+    const context = await model.createContext({ contextSize, sequences });
     /*
      * **直しは、渡した中身をそのまま書き戻すことが多い。**
      *
@@ -435,14 +711,25 @@ export class InProcRuntime implements LocalRuntime {
      * 無ければ無いで進む。**ただし黙らない（効いていないのに効いている
      * と思われると、遅い理由を別の所に探すことになる）。
      */
-    const predictor = lib.InputLookupTokenPredictor
-      ? new lib.InputLookupTokenPredictor()
-      : undefined;
-    if (!predictor) this.#opts.onLog?.('先読み（token predictor）が使えない版です。速さの工夫だけ効きません。');
-    const sequence = context.getSequence(predictor ? { tokenPredictor: predictor } : undefined);
-    const session = new lib.LlamaChatSession({ contextSequence: sequence }) as Held['session'];
-    const wrapper = session.chatWrapper?.wrapperName ?? '不明';
-    this.#opts.onLog?.(`読み込みました: ${ref}（道具の呼び方: ${wrapper}）`);
+    const hasPredictor = Boolean(lib.InputLookupTokenPredictor);
+    if (!hasPredictor) this.#opts.onLog?.('先読み（token predictor）が使えない版です。速さの工夫だけ効きません。');
+    /*
+     * **会話ごとに一本、sequence と LlamaChatSession を持つ。**
+     *
+     * ここが「同時に一人にしか答えられない」を直した本体。node-llama-cpp は
+     * 一つの context から sequences 本の sequence を取れて、llama.cpp が同じ
+     * batch に載せて並列に評価する。LlamaChatSession は履歴を持つので、一本を
+     * 二人で使うと混ざる。だから **本数ぶん別々に持ち**、依頼ごとに空いた一本を
+     * 貸す（LanePool）。先読みは一本ごとに一つ（sequence ごとに状態を持つ）。
+     */
+    const lanes: ChatLane[] = [];
+    for (let i = 0; i < sequences; i += 1) {
+      const predictor = lib.InputLookupTokenPredictor ? new lib.InputLookupTokenPredictor() : undefined;
+      const sequence = context.getSequence(predictor ? { tokenPredictor: predictor } : undefined);
+      lanes.push(new lib.LlamaChatSession({ contextSequence: sequence }) as ChatLane);
+    }
+    const wrapper = lanes[0]!.chatWrapper?.wrapperName ?? '不明';
+    this.#opts.onLog?.(`読み込みました: ${ref}（道具の呼び方: ${wrapper}、並列 ${sequences} 本）`);
     if (GUESSED_WRAPPERS.has(wrapper)) {
       this.#opts.onLog?.(
         `${ref} に合う道具の呼び方が分からず、当てずっぽうの型（${wrapper}）にしました。`
@@ -450,20 +737,31 @@ export class InProcRuntime implements LocalRuntime {
         + '守れないモデルもあるので、うまく呼べないときは道具呼び出しを学んだモデル（Qwen など）を置いてください。',
       );
     }
-    return { context, session, wrapper, window: contextSize, turn: Promise.resolve() };
+    return { context, wrapper, window: contextSize, lanes: new LanePool(lanes) };
+  }
+
+  /** 並列に持ちたい本数。設定が無ければ既定。 */
+  #wantedSequences(): number {
+    return Math.max(1, Math.floor(this.#opts.sequences ?? DEFAULT_SEQUENCES));
   }
 
   /**
-   * このモデルで使う窓。
+   * このモデルで使うコンテキストウィンドウと、並列に持つ本数。
    *
-   * 設定が在ればそれ。無ければ **GGUF に書いてある本来の窓**を読む。
-   * 読めなければ 8192（これまでと同じ）に落とす。
+   * 設定が在ればそれ（本数はそのまま honor する。コンテキストウィンドウは利用者が決めたので）。
+   * 無ければ **GGUF に書いてある本来のコンテキストウィンドウ**を読み、コンテキストウィンドウ × 本数 が記憶に収まるよう
+   * 数える（fitWindow）。読めなければ 8192・1 本（諸元を数えられないので広げない）。
    *
    * 上限は置く。大きい窓は、そのぶん記憶（KV）を食う。機械が固まると
    * 「打っても返事が来ない」に戻るので、青天井にはしない。
    */
-  async #windowFor(ref: string): Promise<number> {
-    if (this.#opts.contextSize) return this.#opts.contextSize;
+  async #windowFor(ref: string, backend: Backend): Promise<{ window: number; sequences: number }> {
+    const wanted = this.#wantedSequences();
+    if (this.#opts.contextSize) {
+      // コンテキストウィンドウは利用者が決めた。本数はそのまま。KV は数えないが、本人の選択。
+      if (wanted > 1) this.#opts.onLog?.(`コンテキストウィンドウ ${this.#opts.contextSize} × 並列 ${wanted} 本（設定のコンテキストウィンドウをそのまま使います）`);
+      return { window: this.#opts.contextSize, sequences: wanted };
+    }
     try {
       const at = join(this.#opts.modelsDir, ref);
       const file = await readGguf(at);
@@ -471,7 +769,10 @@ export class InProcRuntime implements LocalRuntime {
       const trained = facts.contextLength;
       if (typeof trained === 'number' && trained >= 2048) {
         const weightBytes = await stat(at).then((x) => x.size).catch(() => undefined);
-        // **広げた分を数える。**窓はそのまま記憶（KV）になる。
+        // **KV を数える器は、重みが在る場所。**丸ごと VRAM に載るなら KV も VRAM に置かれる。
+        // RAM（32GB）で数えると、8GB の GPU に 32GB ぶんのコンテキストウィンドウを開けようとして落ちる。
+        const onVram = Boolean(backend.gpu) && fitsVram(weightBytes, backend.vramBytes);
+        // **広げた分を数える。**コンテキストウィンドウはそのまま記憶（KV）になる。並列の本数ぶんも。
         const fit = fitWindow({
           trained,
           ...(facts.layers !== undefined ? { layers: facts.layers } : {}),
@@ -479,17 +780,20 @@ export class InProcRuntime implements LocalRuntime {
           ...(facts.headCount !== undefined ? { heads: facts.headCount } : {}),
           ...(facts.headCountKv !== undefined ? { kvHeads: facts.headCountKv } : {}),
           ...(weightBytes !== undefined ? { weightBytes } : {}),
-          ramBytes: totalmem(),
+          ramBytes: onVram ? backend.vramBytes : totalmem(),
+          sequences: wanted,
         });
+        const where = onVram ? `。KV は VRAM（${(backend.vramBytes / 1024 ** 3).toFixed(1)}GB）で数えました` : '';
         this.#opts.onLog?.(fit.why
-          ? `窓: ${fit.window}（このモデルは ${trained} まで持っています）。${fit.why}`
-          : `窓: ${fit.window}（このモデルは ${trained} まで持っています）`);
-        return fit.window;
+          ? `コンテキストウィンドウ: ${fit.window}・並列 ${fit.sequences} 本（このモデルは ${trained} まで持っています）。${fit.why}${where}`
+          : `コンテキストウィンドウ: ${fit.window}・並列 ${fit.sequences} 本（このモデルは ${trained} まで持っています）${where}`);
+        return { window: fit.window, sequences: fit.sequences };
       }
     } catch {
       // 読めなくても止めない。既定へ落とす。
     }
-    return 8192;
+    // 諸元が読めない → KV を数えられない → 広げず、並列もしない。
+    return { window: 8192, sequences: 1 };
   }
 
   /**
@@ -511,6 +815,7 @@ export class InProcRuntime implements LocalRuntime {
       if (op === 'list') return reply(200, await this.list());
       if (op === 'loaded') return reply(200, this.loaded());
       if (op === 'wrappers') return reply(200, this.wrappers());
+      if (op === 'backend') return reply(200, await this.backend());
       if (op === 'load' && req.method === 'POST') {
         const { ref } = await readJson();
         if (typeof ref !== 'string') return reply(400, { error: 'ref が要ります' });
@@ -549,8 +854,7 @@ export class InProcRuntime implements LocalRuntime {
   }
 
   /** ライブラリ。無いときは、無いとだけ言う。黙って別のことをしない。 */
-  async #lib(): Promise<{ getLlama: (o?: { gpu?: false; build?: 'never'; logLevel?: 'error' }) => Promise<{ loadModel: (o: { modelPath: string; onLoadProgress?: (done: number) => void }) => Promise<{ createContext: (o?: { contextSize?: number }) => Promise<{ getSequence: (o?: { tokenPredictor?: unknown }) => unknown; dispose?: () => Promise<void> }> }> }>; LlamaChatSession: new (o: { contextSequence: unknown }) => unknown;
-    InputLookupTokenPredictor?: new () => unknown }> {
+  async #lib(): Promise<LlamaLib> {
     const load = this.#opts.load ?? (() => import(LLAMA_LIB));
     try {
       return await load() as never;
@@ -615,6 +919,17 @@ export class InProcRuntime implements LocalRuntime {
       return;
     }
 
+    // **降ろしている最中は、新しい依頼を始めない。**
+    // 読み込みの入口（ensureLoaded）は #down を見るが、既に読んであるモデルへの
+    // 依頼はそこを通らない。止めている最中に来た依頼をそのまま prompt に流すと、
+    // 解いている最中の context の上で生成することになり、ライブラリ（C++）ごと
+    // 落ちうる（JS の try では拾えない）。断る。
+    if (this.#down) {
+      res.writeHead(503, { 'content-type': 'application/json' });
+      res.end('{"error":{"message":"止めています"}}');
+      return;
+    }
+
     // 本文の上限。上の層が送るのは履歴の JSON で、数MB で十分。
     const LIMIT = 16 * 1024 * 1024;
     const raw = await new Promise<string | undefined>((resolve) => {
@@ -654,8 +969,10 @@ export class InProcRuntime implements LocalRuntime {
     if (!held && ref && /\.gguf$/i.test(ref)) {
       const have = (await this.list()).some((m) => m.ref === ref);
       if (have) {
-        // 答えている最中のものを解かない。順番待ちが空くのを待ってから。
-        await Promise.all([...this.#sessions.values()].map((h) => h.turn.catch(() => undefined)));
+        // 答えている最中のものを解かない。**以後は貸さず、並んでいる人は断り**、
+        // 出ている分が戻るのを待つ。「空くのを待つ」だけだと、返った口をその場で
+        // 次の待ち手へ渡し、その口の上で context を解くことになる（敵対レビューで見つけた）。
+        await Promise.all([...this.#sessions.values()].map((h) => h.lanes.close()));
         for (const other of this.loaded()) {
           this.#opts.onLog?.(`${other} を解いて ${ref} に切り替えます`);
           await this.unload(other);
@@ -700,39 +1017,68 @@ export class InProcRuntime implements LocalRuntime {
       res.write(': queued\n\n');
     }
 
-    // 前の依頼が終わってから始める。setChatHistory から prompt() まで、
-    // 途中で割り込まれてはいけない一続きなので、丸ごと順番待ちに入れる。
-    const mine = held.turn.then(
-      () => this.#answer(held!, ref, body, res),
-      () => this.#answer(held!, ref, body, res),
-    );
-    held.turn = mine.catch(() => undefined);
-    await mine;
-  }
-
-  /** 一人分の受け答え。**必ず順番待ちの中から呼ぶ。** */
-  async #answer(
-    held: Held, ref: string, body: ChatRequest, res: ServerResponse,
-  ): Promise<void> {
     // 画面が「やめる」を押すと、上の層は fetch を切る。切れたら生成も止める。
-    // 止めないと、誰も読まない答えを作りながら次の人を待たせ続ける。
+    // 止めないと、誰も読まない答えを作りながら口を塞ぎ続ける。
     // 切れたことは**返す側**で分かる。req は本文を読み切った時点で
     // 閉じることがあり、切断の合図には使えない（使って空振りした）。
     const gone = new AbortController();
     const onClose = () => gone.abort();
     res.on('close', onClose);
+    // **空いている口（lane）を一本借りる。**空いていなければ、空くまで待つ。
+    // 一本ごとに別の LlamaChatSession なので、二人が同じ履歴を混ぜ合わない。
+    // 全部塞がっていても、ヘッダは既に返してあるので上の層は待てる。
+    // 待っている間に切られたら（gone）、借りずに戻る。
+    // 優先度はヘッダで受ける（`x-aas-priority: 0〜4`）。無ければ中。
+    // 上（最優先・優先）が待っていれば、高・中・低はその後ろ。
+    const priority = toPriority(req.headers[PRIORITY_HEADER]);
+    // 列で待つ間は `: queued` を打ち続ける。上の層の「最初のトークンまで 10 分」を、
+    // 並んでいる時間で使い切らせないため（並んでいるのは停滞ではない）。
+    const streaming = body.stream !== false;
+    const beat = streaming
+      ? setInterval(() => { if (!res.writableEnded) res.write(': queued\n\n'); },
+        this.#opts.queueHeartbeatMs ?? QUEUE_HEARTBEAT_MS)
+      : undefined;
+    let lane: ChatLane | undefined;
+    try {
+      lane = await held.lanes.acquire({ signal: gone.signal, priority });
+    } finally {
+      if (beat) clearInterval(beat);
+    }
     try {
       // 並んでいる間に切られた依頼は、始めない。誰も読まない答えを
-      // 作りながら、次の人を待たせることになる。
+      // 作りながら、口を塞ぐことになる。
       if (res.destroyed || res.writableEnded) return;
-      await this.#respond(held, ref, body, res, gone.signal);
+      if (!lane) {
+        // 借りられなかった（切り替えで口を閉じた）。**黙って放置しない。**
+        // 放置すると上の層は 10 分の停滞で落とし、やり直しもしない。
+        // 落ちたと分かる形で閉じれば、上の層は unavailable としてやり直す。
+        this.#refuse(res, streaming, ref);
+        return;
+      }
+      if (streaming) res.write(': started\n\n');
+      await this.#respond(held, lane, ref, body, res, gone.signal);
     } finally {
       res.off('close', onClose);
+      if (lane) held.lanes.release(lane);
     }
   }
 
+  /** 口を借りられなかった依頼を、落ちたと分かる形で閉じる。 */
+  #refuse(res: ServerResponse, streaming: boolean, ref: string): void {
+    if (streaming) {
+      res.write(`data: ${JSON.stringify({
+        id: 'inproc', object: 'chat.completion.chunk', model: ref,
+        choices: [{ index: 0, delta: {}, finish_reason: 'error' }],
+      })}\n\n`);
+      res.end('data: [DONE]\n\n');
+      return;
+    }
+    res.writeHead(503, { 'content-type': 'application/json' });
+    res.end('{"error":{"message":"切り替えています"}}');
+  }
+
   async #respond(
-    held: Held, ref: string, body: ChatRequest,
+    held: Held, lane: ChatLane, ref: string, body: ChatRequest,
     res: ServerResponse, signal: AbortSignal,
   ): Promise<void> {
     // 上の層は毎回すべての履歴を送ってくる。こちらは持ち越さず、
@@ -745,7 +1091,7 @@ export class InProcRuntime implements LocalRuntime {
     // 履歴から落ちて、モデルは同じ道具をもう一度呼ぶ。
     const fromUser = last?.role === 'user';
     const asked = fromUser ? last.content : CONTINUE;
-    held.session.setChatHistory(toHistory(fromUser ? messages.slice(0, -1) : messages));
+    lane.setChatHistory(toHistory(fromUser ? messages.slice(0, -1) : messages));
 
     // 道具。**受け口の中で止めて、呼ぼうとしたことを持ち帰る。**
     // ライブラリは受け口の返り値を答えとして続きを作るが、実際に道具を
@@ -766,7 +1112,7 @@ export class InProcRuntime implements LocalRuntime {
             ...(t.function.parameters ? { parameters: t.function.parameters } : {}),
           }]
         : []));
-      held.session.setChatHistory([
+      lane.setChatHistory([
         ...toHistory(fromUser ? messages.slice(0, -1) : messages),
         { type: 'system', text: toolPrompt(spec) },
       ]);
@@ -824,7 +1170,7 @@ export class InProcRuntime implements LocalRuntime {
       // そのときも、呼ぼうとしたことは持ち帰る（例外に化けさせない）。
       let text = '';
       try {
-        text = await held.session.prompt(asked, opts);
+        text = await lane.prompt(asked, opts);
       } catch (e) {
         if (calls.length === 0) throw e;
       }
@@ -877,20 +1223,37 @@ export class InProcRuntime implements LocalRuntime {
     // その間、画面には何も出ない。「遅い」のがどこかを、記録で分かるようにする。
     const started = Date.now();
     let firstAt = 0;
+    let seen: number | undefined;
+    let generated = 0;
+    /*
+     * **入力を読んでいる間も、黙らない。**
+     *
+     * ここは最初のトークンまで一バイトも書かなかった。Node の fetch（undici）は
+     * 本文の無音が 300 秒続くと切る（実測 300.9 秒、`TypeError: terminated`）。
+     * 上の層の「最初のトークンまで 10 分」は、その手前で切られて一度も効いて
+     * いなかった。CPU で 2887 トークンを読むのに 1298 秒かかった実機では、
+     * 308 / 619 / 930 秒の三回ともここで切れ、「やり直します」を繰り返して落ちた。
+     * 並んでいる間の `: queued` と同じ間隔で `: working` を打つ。上の層は
+     * 最初のトークン前に届いたバイトで待ちを延ばす（読んでいるのは停滞ではない）。
+     */
+    const working = setInterval(() => { if (!res.writableEnded) res.write(': working\n\n'); },
+      this.#opts.queueHeartbeatMs ?? QUEUE_HEARTBEAT_MS);
     try {
       chunk({ role: 'assistant' });
       let thought = 0;
-      await held.session.prompt(asked, {
+      await lane.prompt(asked, {
         ...opts,
         // 考えごとの分も含めて、最初の 1 トークンを測る。本文だけ見ていると、
         // 考えごとの間は「何も出ていない」としか分からない。
         onResponseChunk: (c) => {
           if (!firstAt) {
+            clearInterval(working);
             firstAt = Date.now();
-            const seen = held.session.sequence?.nextTokenIndex;
+            seen = lane.sequence?.nextTokenIndex;
             this.#opts.onLog?.(`最初の 1 トークンまで ${((firstAt - started) / 1000).toFixed(1)} 秒`
               + (typeof seen === 'number' ? `（入力 ${seen} トークン）` : ''));
           }
+          generated += c.tokens?.length ?? 0;
           if (c.type === 'segment' && c.segmentType === 'thought') thought += c.text.length;
         },
         // 一気に返さず、出来た端から流す。長い返事のときに
@@ -910,6 +1273,9 @@ export class InProcRuntime implements LocalRuntime {
       // ここでも見る。見ていなかったので、やめた後に 'stop' を送っていた。
       if (signal.aborted) { res.end(); return; }
       if (thought > 0) this.#opts.onLog?.(`考えごとに ${thought} 文字使いました（答えには出しません）`);
+      // **速さを数字で残す。**「遅い」が、読む側（入力）なのか書く側（出力）なのか、
+      // GPU が効いているのか、記録だけで分かるようにする。
+      this.#opts.onLog?.(describeSpeed({ started, firstAt, ended: Date.now(), seen, generated }));
       finish();
     } catch (e) {
       if (signal.aborted) { res.end(); return; }
@@ -929,6 +1295,8 @@ export class InProcRuntime implements LocalRuntime {
       // 成功として扱い、画面には「完了・検証済み」と出る。実際にそう出ていた。
       // 落ちたものを完了と記録するのが、いちばん質が悪い。
       else chunk({ content: `\n[止まりました: ${(e as Error).message}]` }, 'error');
+    } finally {
+      clearInterval(working);
     }
     res.write('data: [DONE]\n\n');
     res.end();
@@ -953,8 +1321,8 @@ interface PromptOptions {
   temperature?: number;
   maxTokens?: number;
   onTextChunk?: (text: string) => void;
-  /** 本文でも考えごとでも、出た端から来る。最初の 1 トークンの時間はこちらで測る。 */
-  onResponseChunk?: (chunk: { type?: string; segmentType?: string; text: string }) => void;
+  /** 本文でも考えごとでも、出た端から来る。最初の 1 トークンの時間と tok/s はこちらで測る。 */
+  onResponseChunk?: (chunk: { type?: string; segmentType?: string; text: string; tokens?: unknown[] }) => void;
   /** 考えごと（<think>）などに使ってよいトークン数。0 で書かせない。 */
   budgets?: { thoughtTokens?: number };
   /** 画面が「やめる」を押したら、生成そのものを止める。 */
@@ -976,6 +1344,181 @@ interface LibFunction {
   params?: unknown;
   handler: (args: unknown) => unknown;
 }
+/**
+ * 一本の口（会話一つに一本貸す）。中身は LlamaChatSession。
+ *
+ * LlamaChatSession は履歴を**持っている**。答えている最中に別の依頼が
+ * setChatHistory を呼ぶと、いま答えているほうの足元が入れ替わる。
+ * 混ざった答えが返り、しかも落ちないので気づけない。だから **一本ずつ
+ * 別に持ち**、依頼ごとに空いた一本を貸して、返すまで他へ回さない（LanePool）。
+ */
+export interface ChatLane {
+  prompt: (text: string, opts?: PromptOptions) => Promise<string>;
+  setChatHistory: (history: unknown[]) => void;
+  /** ライブラリが選んだ型。試験の差し替えには無いので、あってもなくてもよい。 */
+  chatWrapper?: { wrapperName?: string };
+  /** 読み終えた入力の数。試験のモックには無い。 */
+  sequence?: { nextTokenIndex?: number };
+}
+
+/** ここから下（高・中・低）は取り分 0。上に待ち手が居ないときだけ借りる。 */
+const OPPORTUNISTIC: Priority = Priority.high;
+
+interface Waiter {
+  rank: Priority;
+  /** 来た順。同じ級の中では、先に来た人から。 */
+  seq: number;
+  give: (lane: ChatLane) => void;
+  /** 貸さずに返す（切られた・閉じた）。 */
+  drop: () => void;
+}
+
+/**
+ * 口の貸し出し。**空いた一本を上から順に貸し、無ければ空くまで待つ。**
+ *
+ * 断らずに待たせる（上の層は待てる。断られると諦めてしまう）。
+ * 待っている間に依頼が切られたら（signal）、貸さずに返す。
+ */
+export class LanePool {
+  readonly #all: ChatLane[];
+  readonly #free: ChatLane[];
+  /** 待ち手。**級（数が小さいほど先）、同じ級なら来た順**で並べて持つ。 */
+  readonly #waiters: Waiter[] = [];
+  #seq = 0;
+  /** 貸している口が、どの級に貸したものか。返るときに取り分の数を戻すため。 */
+  readonly #lentTo = new Map<ChatLane, Priority>();
+  /** 高・中・低が今いくつ借りているか。上のために空ける本数と突き合わせる。 */
+  #lowHeld = 0;
+  /** close() のあと。以後は貸さない。 */
+  #closed = false;
+  /**
+   * これまでに口を返した回数。**「今この場で動いているぶんが片づくまで」を
+   * 数で測る**ために持つ。全部空くのを待つと、次々に依頼が来るあいだ
+   * `#free` が一度も満ちず、`whenAllIdle` が永久に返らない（切り替えが固まる）。
+   */
+  #released = 0;
+  /** いま動いているぶんが片づくのを待っている人（`target` 回まで返るのを待つ）。 */
+  #drainWaiters: Array<{ target: number; resolve: () => void }> = [];
+
+  constructor(lanes: ChatLane[]) {
+    this.#all = lanes;
+    this.#free = [...lanes];
+  }
+
+  /** 何本あるか。 */
+  get size(): number { return this.#all.length; }
+  /** いま貸し出している本数。 */
+  get busy(): number { return this.#all.length - this.#free.length; }
+  /** 高・中・低が今いくつ借りているか。 */
+  get lowHeld(): number { return this.#lowHeld; }
+  /**
+   * 上（最優先・優先）のために空けておく本数。**本数で決まる。設定ではない。**
+   *
+   * 2 本以上なら半分（切り上げ）。高・中・低は残りを借りる。
+   * 1 本しか無ければ 0（空けると、高・中・低が永久に借りられない）。
+   */
+  get reserve(): number { return this.#all.length >= 2 ? Math.ceil(this.#all.length / 2) : 0; }
+
+  /** この級が、いま一本借りてよいか。上は常に。高・中・低は取り分の内なら。 */
+  #allowed(rank: Priority): boolean {
+    if (rank < OPPORTUNISTIC) return true;
+    return this.#lowHeld < this.#all.length - this.reserve;
+  }
+
+  #lend(lane: ChatLane, rank: Priority): ChatLane {
+    this.#lentTo.set(lane, rank);
+    if (rank >= OPPORTUNISTIC) this.#lowHeld += 1;
+    return lane;
+  }
+
+  /**
+   * 一本借りる。無ければ空くまで待つ。**上から順に回る。**
+   *
+   * 空いているのに借りられないのは、高・中・低が上のぶんを残しているとき
+   * （その場合も待つ。断らない）。待っている間に signal が上がったら、
+   * `undefined` を返す（借りない）。
+   */
+  acquire(
+    { signal, priority = DEFAULT_PRIORITY }: { signal?: AbortSignal; priority?: Priority } = {},
+  ): Promise<ChatLane | undefined> {
+    if (this.#closed || signal?.aborted) return Promise.resolve(undefined);
+    if (this.#free.length > 0 && this.#allowed(priority)) {
+      return Promise.resolve(this.#lend(this.#free.pop()!, priority));
+    }
+    return new Promise<ChatLane | undefined>((resolve) => {
+      const waiter: Waiter = {
+        rank: priority,
+        seq: this.#seq++,
+        give: (lane) => { cleanup(); resolve(lane); },
+        drop: () => { cleanup(); resolve(undefined); },
+      };
+      const onAbort = (): void => {
+        const at = this.#waiters.indexOf(waiter);
+        if (at >= 0) this.#waiters.splice(at, 1);
+        waiter.drop();
+      };
+      const cleanup = (): void => signal?.removeEventListener('abort', onAbort);
+      // 級の小さい順、同じ級なら来た順。後ろから見て、自分より級の大きい人を越える。
+      let at = this.#waiters.length;
+      while (at > 0 && this.#waiters[at - 1]!.rank > priority) at -= 1;
+      this.#waiters.splice(at, 0, waiter);
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  /**
+   * 借りた一本を返す。**上から順に見て、いま借りてよい最初の人へ回す。**
+   * 高・中・低しか待っておらず、その取り分が塞がっていれば、誰にも渡さず
+   * 空けておく（上が来たら、その場で渡せるように）。
+   */
+  release(lane: ChatLane): void {
+    const rank = this.#lentTo.get(lane);
+    this.#lentTo.delete(lane);
+    if (rank !== undefined && rank >= OPPORTUNISTIC) this.#lowHeld -= 1;
+    // **一本返るたびに数える。**待っている切り替えは、この数で「片づいた」を見る。
+    this.#released += 1;
+    this.#drainWaiters = this.#drainWaiters.filter((w) => {
+      if (this.#released >= w.target) { w.resolve(); return false; }
+      return true;
+    });
+    // 閉じたあとは誰にも渡さない（待ち手は close() で全員返してある）。
+    const at = this.#closed ? -1 : this.#waiters.findIndex((w) => this.#allowed(w.rank));
+    if (at >= 0) {
+      const [next] = this.#waiters.splice(at, 1);
+      next!.give(this.#lend(lane, next!.rank));
+      return;
+    }
+    this.#free.push(lane);
+  }
+
+  /**
+   * **以後は貸さない。**並んでいる人は全員 `undefined` で返し（断る）、
+   * いま出ている分が戻るのを待つ。降ろす・切り替える前に呼ぶ。
+   *
+   * `whenAllIdle` だけでは足りない。返った口をその場で次の待ち手へ渡すので、
+   * 待っていた側が「片づいた」と受け取った直後に、その口の上で context を解くことになる。
+   */
+  close(): Promise<void> {
+    this.#closed = true;
+    for (const w of this.#waiters.splice(0)) w.drop();
+    return this.whenAllIdle();
+  }
+
+  /**
+   * **いま動いているぶんが片づくまで**待つ。降ろす前・切り替える前に呼ぶ。
+   *
+   * 「全部の口が空く」を待つと、次々に依頼が来るあいだ永久に返らない
+   * （返した口がすぐ次の待ち手へ回り、`#free` が満ちない）。そこで
+   * **呼んだ時点で出ている本数ぶん、返るのを待つ**。以後に来た依頼は待たない。
+   */
+  whenAllIdle(): Promise<void> {
+    const outstanding = this.#all.length - this.#free.length;
+    if (outstanding === 0) return Promise.resolve();
+    const target = this.#released + outstanding;
+    return new Promise<void>((resolve) => this.#drainWaiters.push({ target, resolve }));
+  }
+}
+
 interface Held {
   context: { dispose?: () => Promise<void> };
   /**
@@ -989,23 +1532,8 @@ interface Held {
   wrapper: string;
   /** 実際に開いた窓。刈る量は、設定ではなくこちらで数える。 */
   window: number;
-  session: {
-    prompt: (text: string, opts?: PromptOptions) => Promise<string>;
-    setChatHistory: (history: unknown[]) => void;
-    /** ライブラリが選んだ型。試験の差し替えには無いので、あってもなくてもよい。 */
-    chatWrapper?: { wrapperName?: string };
-    /** 読み終えた入力の数。試験のモックには無い。 */
-    sequence?: { nextTokenIndex?: number };
-  };
-  /**
-   * 一つのモデルを、同時に二人で使わない約束。
-   *
-   * LlamaChatSession は履歴を**持っている**。答えている最中に別の依頼が
-   * setChatHistory を呼ぶと、いま答えているほうの足元が入れ替わる。
-   * 混ざった答えが返り、しかも落ちないので気づけない。
-   * 断らずに**並べる**（上の層は待てる。断られると諦めてしまう）。
-   */
-  turn: Promise<unknown>;
+  /** 会話ごとに貸す口。ここが「同時に何人に答えられるか」を決める。 */
+  lanes: LanePool;
 }
 
 /** OpenAI の形の、道具の呼び出し一つ。 */
@@ -1111,25 +1639,72 @@ function parseArgs(raw: string | undefined): unknown {
  */
 export const HEAVY_ON_CPU_BYTES = 3 * 1024 ** 3;
 
+/** 先の一言を組むのに要る、この機械の事情。 */
+export interface HeadsUpContext {
+  /** 読む側が実際に GPU を使うか（`Backend.gpu`）。nvidia-smi の結果ではない。 */
+  hasGpu: boolean;
+  /** VRAM の総量。GPU を使うときだけ。 */
+  vramBytes?: number;
+  /** nvidia-smi に見えている GPU の名前。読む側が使えていないときに、そう言うため。 */
+  seenGpu?: string;
+}
+
 export function headsUp(
   models: readonly AvailableModel[],
   ramBytes: number,
   wanted: string | undefined,
-  hasGpu: boolean,
+  on: HeadsUpContext,
 ): string | undefined {
-  if (hasGpu) return undefined;
-  // 選び方は本番と同じにする（GPU なしなら小さい方）。違う選び方で脅さない。
-  const picked = chooseModel(models, ramBytes, wanted, { hasGpu });
-  if (!picked || !picked.fits) return undefined;
-  const size = picked.chosen.sizeBytes ?? 0;
-  if (size < HEAVY_ON_CPU_BYTES) return undefined;
   // 1GB 未満は MB で言う（「0.0GB」は無いのと同じに読める）。
   const gb = (n: number) => (n < 1024 ** 3 ? `${Math.round(n / 1024 ** 2)}MB` : `${(n / 1024 ** 3).toFixed(1)}GB`);
+  // 選び方は本番と同じにする。違う選び方で脅さない。
+  const picked = chooseModel(models, ramBytes, wanted, { hasGpu: on.hasGpu, vramBytes: on.vramBytes });
+  if (on.hasGpu) {
+    // GPU で読む。丸ごと VRAM に載るなら、言うことは無い。
+    // 載り切らないなら、遅くなることと、載るものが在るなら在ることを言う。
+    if (!on.vramBytes || !picked || !picked.fits) return undefined;
+    const size = picked.chosen.sizeBytes ?? 0;
+    if (fitsVram(size, on.vramBytes)) return undefined;
+    const inVram = models
+      .filter((m) => m.ref !== picked.chosen.ref && fitsVram(m.sizeBytes, on.vramBytes))
+      .sort((a, b) => (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0))[0];
+    const alt = inVram
+      ? `VRAM に丸ごと載るものもあります: ${inVram.ref}（${gb(inVram.sizeBytes ?? 0)}）。⚙ 設定 → モデル で選べます。`
+      : '';
+    return `${picked.chosen.ref}（${gb(size)}）は VRAM（${gb(on.vramBytes)}）に丸ごとは載りません。`
+      + `載る分だけ GPU に置き、残りは CPU で動くので遅くなります。${alt}`;
+  }
+  // **GPU が見えているのに使えていない**は、大きさに関わらず言う。
+  // 黙っていると、遅い理由を機械の性能に探すことになる（実機で、そう探した）。
+  const unused = on.seenGpu
+    ? `GPU（${on.seenGpu}）は見えていますが、読む側が使えていません（理由は記録の「CPU で読みます」の行に出ています）。`
+    : '';
+  if (!picked || !picked.fits) return unused || undefined;
+  const size = picked.chosen.sizeBytes ?? 0;
+  if (size < HEAVY_ON_CPU_BYTES) return unused || undefined;
   const smaller = models
     .filter((m) => m.ref !== picked.chosen.ref && (m.sizeBytes ?? 0) < size && !tooBigForRam(m.sizeBytes, ramBytes))
     .sort((a, b) => (a.sizeBytes ?? 0) - (b.sizeBytes ?? 0))[0];
   const alt = smaller
     ? `小さいものもあります: ${smaller.ref}（${gb(smaller.sizeBytes ?? 0)}）。⚙ 設定 → モデル で選べます。`
     : '';
-  return `${picked.chosen.ref}（${gb(size)}）を GPU なしで読みます。最初の答えまで数分かかることがあります。${alt}`;
+  return `${unused}${picked.chosen.ref}（${gb(size)}）を GPU なしで読みます。最初の答えまで数分かかることがあります。${alt}`;
+}
+
+/**
+ * 一回の答えの速さを、一行にする。
+ *
+ * 「遅い」だけでは直せない。入力を読む側（prompt evaluation）が遅いのか、
+ * 書く側（generation）が遅いのかで、打つ手が違う（前者はコンテキストウィンドウ、後者は GPU と量子化）。
+ */
+export function describeSpeed(t: {
+  started: number; firstAt: number; ended: number; seen?: number; generated: number;
+}): string {
+  const sec = (ms: number) => Math.max(ms, 1) / 1000;
+  const rate = (n: number, ms: number) => (n / sec(ms)).toFixed(1);
+  const input = t.firstAt && typeof t.seen === 'number'
+    ? `入力 ${t.seen} トークン（${sec(t.firstAt - t.started).toFixed(1)} 秒・${rate(t.seen, t.firstAt - t.started)} tok/s）`
+    : `最初の 1 トークンまで ${sec((t.firstAt || t.ended) - t.started).toFixed(1)} 秒`;
+  const outMs = t.firstAt ? t.ended - t.firstAt : 0;
+  return `答えました: ${input}、出力 ${t.generated} トークン（${sec(outMs).toFixed(1)} 秒・${rate(t.generated, outMs)} tok/s）`;
 }

@@ -25,6 +25,7 @@ import { canRun } from '../core/which.ts';
 import { saveReport, tellWhereItWent } from './report-file.ts';
 import { deepestUnder, judgeRoom, WINDOWS_MAX_PATH } from '../core/pathroom.ts';
 import { resolve } from 'node:path';
+import { probeBackend, describeBackend, GPU_NEEDS, type Backend, type LlamaLib } from '../runtime/inproc.ts';
 const LLAMA_LIB = 'node-llama-cpp'; // 型検査に解決させない（src/runtime/inproc.ts 参照）
 
 const c = {
@@ -142,28 +143,16 @@ if (models.length > 0) {
   add('モデル', 'ok', `${models.length} 件: ${models.slice(0, 3).map((m) => m.ref).join(', ')}`
     + (models.length > 3 ? ' …' : ''));
   /*
-   * **どれを読むのかを、送る前に出す。**
+   * **どれを読むのかを、送る前に出す。**ただし、**読む側の backend が分かってから**
+   * （下の「モデルを読むもの」の後、`whichModel`）。
    *
    * ここは何件あるかしか出していなかった。選ぶのは送ったときで、選び方は
    * 見えない。GPU の無い機械で大きい方を掴むと、最初の送信で何分も待つ
    * ことになるのに、その前に分かる手がかりがどこにも無かった。
+   *
+   * 次に、nvidia-smi に見える GPU で決めていた。読む側は CPU で回っているのに
+   * 「GPU があるので大きい方」と言い、その通りに大きい方を掴んで答えなかった（実機）。
    */
-  if (runtime.id === 'inproc' && models.length > 1) {
-    const { chooseModel } = await import('../runtime/inproc.ts');
-    const { totalmem: ram } = await import('node:os');
-    const picked = chooseModel(models, ram(), config.runtime?.model, {
-      hasGpu: machine.gpuName !== undefined,
-    });
-    if (picked) {
-      const why = config.runtime?.model
-        ? '設定で決めてあります'
-        : machine.gpuName
-          ? 'GPU があるので、載るもののうち大きい方'
-          : 'GPU が無いので、載るもののうち小さい方（大きいほど待ちます）';
-      add('読むモデル', 'ok', `${picked.chosen.ref}（${why}）`,
-        config.runtime?.model ? undefined : '別のものを使うなら 設定 → モデル で選べます。');
-    }
-  }
   // 名前だけ .gguf の別物と、記憶に載らないものは、ここで言う。
   // 送ってから 503 を見るより、貼る出力で先に分かるほうが早い。
   if (runtime.id === 'inproc') {
@@ -276,12 +265,9 @@ step('モデルを読むものを確かめます（初回は少し待ちます�
 // この中で読む道は、ライブラリが要る。bundle には入っているが、
 // 作業コピーには入っていない。**動かす直前まで分からない**のが困るので、
 // ここで先に言う。
-/**
- * 呼んでいる間だけ、向こうの console.warn を黙らせる。
- *
- * node-llama-cpp は binary が無いと「A prebuilt binary was not found」を
- * console.warn に**直に**書く（logLevel を通らない。実測）。この出力は
- * 利用者がそのまま貼るものなので、こちらの言葉で言い直す分だけを残す。
+/*
+ * 向こうの console.warn（「A prebuilt binary was not found」など）は
+ * `probeBackend` が黙らせて拾い、こちらの一行にする。ここでは触らない。
  */
 /*
  * 長くかかっているものを、**かかっている最中に言う。**
@@ -302,24 +288,38 @@ async function saying<T>(what: string, run: () => Promise<T>): Promise<T> {
   try { return await run(); } finally { clearInterval(timer); }
 }
 
-async function quietly<T>(run: () => Promise<T>): Promise<T> {
-  const warn = console.warn;
-  console.warn = () => {};
-  try { return await run(); } finally { console.warn = warn; }
-}
-
 {
   // プログラムのフォルダも見る。OneDrive の中だと、立ち上がりが遅い理由がそこにある。
   const synced = programDirNote(installRoot());
   if (synced) add('プログラムのフォルダ', 'warn', synced.text, synced.hint);
 }
 
+/** 読む側が実際に使う backend。ライブラリを起こせたときだけ分かる。 */
+let backend: Backend | undefined;
+
+/**
+ * どれを読むか。**backend が分かってから**言う。分からなければ nvidia-smi の結果で代える
+ * （そのときは、画面と同じ選び方）。
+ */
+const whichModel = async () => {
+  if (runtime.id !== 'inproc' || models.length <= 1) return;
+  const { chooseModel, CHOICE_WHY } = await import('../runtime/inproc.ts');
+  const { totalmem: ram } = await import('node:os');
+  const hasGpu = backend ? backend.gpu !== false : machine.gpuName !== undefined;
+  const picked = chooseModel(models, ram(), config.runtime?.model, {
+    hasGpu, ...(backend?.vramBytes ? { vramBytes: backend.vramBytes } : {}),
+  });
+  if (!picked) return;
+  add('読むモデル', 'ok', `${picked.chosen.ref}（${CHOICE_WHY[picked.why]}）`,
+    config.runtime?.model ? undefined : '別のものを使うなら 設定 → モデル で選べます。');
+};
+
 if (runtime.id === 'inproc') {
   const { stat } = await import('node:fs/promises');
   const here = join(installRoot(), 'node_modules', 'node-llama-cpp');
   const installed = await stat(here).then(() => true, () => false);
   const binPkg = `@node-llama-cpp/${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`;
-  let lib: { getLlama: (o?: { build?: 'never'; logLevel?: 'error' }) => Promise<unknown> } | undefined;
+  let lib: LlamaLib | undefined;
   try {
     lib = await saying('まだ読んでいます', () => import(LLAMA_LIB)) as typeof lib;
   } catch (e) {
@@ -341,9 +341,30 @@ if (runtime.id === 'inproc') {
   if (lib) {
     try {
       // 組み立てに走らせない。無いなら無いと、すぐ言わせる。
-      await saying('この機械むけの binary を調べています',
-        () => quietly(() => lib.getLlama({ build: 'never', logLevel: 'error' })));
-      add('モデルを読むもの', 'ok', 'node-llama-cpp（この機械むけの binary が動きます。実行ファイルは増えません）');
+      const probed = await saying('この機械むけの binary を調べています',
+        () => probeBackend(lib, config.runtime?.gpu ?? 'auto', { gpuSeen: machine.gpuName !== undefined }));
+      backend = probed.backend;
+      /*
+       * **GPU が見えているのに CPU で読む**は、動くことは動くが、答えるまで何分も
+       * かかり、記憶も使い切る。「動きます」で済ませない。何で読むかを、ここで言う。
+       */
+      const line = describeBackend(backend);
+      if (!backend.gpu && machine.gpuName) {
+        add('モデルを読むもの', 'warn', `node-llama-cpp。${line}`,
+          `GPU（${machine.gpuName}）は見えていますが、読む側が使えていません。\n`
+          + (backend.reason === 'no-binary'
+            ? 'この配布物に GPU 用の binary（@node-llama-cpp/win-x64-cuda・win-x64-vulkan）が入っていません。'
+              + '新しいものを落とし直してください。\n'
+            : backend.reason === 'load-failed'
+              ? 'NVIDIA のドライバを新しくしてから、もう一度試してください。\n'
+              : backend.reason === 'off'
+                ? '設定 runtime.gpu が off です。auto にすると使います。\n'
+                : `読む側が GPU を探し当てられませんでした。${GPU_NEEDS}\n`
+                  + 'NVIDIA のドライバを入れ直すと、Vulkan の分は揃うことが多いです。\n')
+          + 'CPU でも動きますが、最初の答えまで何分もかかります。');
+      } else {
+        add('モデルを読むもの', 'ok', `node-llama-cpp。${line}。実行ファイルは増えません`);
+      }
       /*
        * どう数えているか。
        *
@@ -374,6 +395,7 @@ if (runtime.id === 'inproc') {
     }
   }
 }
+await whichModel();
 
 /* ---------- 置き場所の深さ ---------- */
 
