@@ -154,8 +154,9 @@ describe('doctor は、どれを読むかを、読む側の backend が分かっ
     await writeFile(config, JSON.stringify({ runtime: { kind: 'inproc', modelsDir: models } }));
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: config });
     assert.match(text, /読むモデル\s+small\.gguf（GPU が無いので、載るもののうち小さい方/, text.slice(-1500));
-    // 何で読むかは「モデルを読むもの」に出る（ライブラリが無い CI では「入っていません」）。
-    assert.match(text, /モデルを読むもの\s+node-llama-cpp。(GPU|CPU) で読みます|node-llama-cpp が入っていません/);
+    // 何で読むかは「モデルを読むもの」に出る。ライブラリが無い CI では「入っていません」、
+    // win-x64 の binary だけ入れた release の組み立て（linux）では「この機械むけの binary がありません」。
+    assert.match(text, /モデルを読むもの\s+node-llama-cpp。(GPU|CPU) で読みます|node-llama-cpp が入っていません|この機械むけの binary がありません/);
   });
 });
 
