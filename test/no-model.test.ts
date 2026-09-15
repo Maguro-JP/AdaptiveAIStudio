@@ -76,12 +76,22 @@ describe('モデルが要る所では、断る', () => {
     await session.close();
   });
 
-  test('考えごとは、始めない', async () => {
+  test('考えごとは、始めない。**ただし黙って終わらない**', async () => {
+    /*
+     * ここは「一つも出さずに終わる」を見ていた。**黙って終わることを守る試験**に
+     * なっていて、押した人には何も起きないように見える形をそのまま通していた。
+     * 始めないのは正しい。始めない理由を言うところまでを見る。
+     * 見せるかどうかは呼ぶ側が決める（見回りは黙り、押されたときだけ出す）。
+     */
     const session = await Session.create(await config(), { approve: () => Promise.resolve(true) });
     const gen = session.think();
     const first = await gen.next();
-    assert.equal(first.done, true, '考え始めてしまっている');
-    assert.equal(first.value, false);
+    assert.equal(first.done, false, '理由を言わずに終わっている');
+    assert.equal((first.value as { type: string }).type, 'declined');
+    assert.match((first.value as { reason: string }).reason, /モデル/);
+    const next = await gen.next();
+    assert.equal(next.done, true, '考え始めてしまっている');
+    assert.equal(next.value, false);
     await session.close();
   });
 });
