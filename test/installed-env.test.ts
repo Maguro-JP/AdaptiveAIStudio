@@ -18,7 +18,22 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
 import { installRoot } from '../src/core/home.ts';
+import { tempDir } from './tmp.ts';
+
+/*
+ * 作業場にしか無いものを見る目当て（`test/home.test.ts` と同じ考え）。
+ *
+ * フックと走らせ役は bundle に**入れるべきでない**ので、配る形の中では
+ * 確かめようがない。そこで落とすのは嘘（何も壊れていない）。
+ * 黙って飛ばさず、飛ばした理由を出す。**これで `npm run check:bundle` が
+ * 落ちていた**（配る形で全部のテストを回したときだけ）。
+ */
+const sourceOnly = existsSync(join(installRoot(), '.githooks'))
+  ? {}
+  : { skip: '作業場にしか無いものを見る試験です（bundle では確かめられません）' };
 
 const run = promisify(execFile);
 
@@ -73,6 +88,37 @@ describe('入れた機械の env でも、テストは通る', () => {
     });
     assert.ok(got.ok, `個別の指定で落ちる:\n${got.text.slice(-1200)}`);
   });
+
+  /**
+   * **設定の道（AAS_CONFIG）が立っていても通る。**
+   *
+   * ここは `AAS_CONFIG` を見ていなかった。これが立っていると、仮のフォルダに
+   * 壊れた設定を置いて確かめるテストが**そちらを読む**ので、壊れていない設定で
+   * 動いて、テストだけが落ちる。`selftest` を `AAS_CONFIG` 付きで回して、
+   * 設定と doctor で実際に落ちた（壊れていないのに NG と言う形）。
+   */
+  test('**設定の道が立っていても、設定と doctor のテストは通る**', async () => {
+    const at = join(await tempDir('aas-installed-cfg-'), 'aas.config.json');
+    await writeFile(at, JSON.stringify({ runtime: { kind: 'inproc' }, temperature: 0.2 }), 'utf8');
+    for (const file of ['config-broken.test.ts', 'doctor-inproc.test.ts']) {
+      const got = await runWith(file, { AAS_CONFIG: at });
+      assert.ok(got.ok, `${file} が AAS_CONFIG 付きで落ちる:\n${got.text.slice(-1500)}`);
+    }
+  });
+
+  /**
+   * 走らせ役が、その env を落としていること。
+   *
+   * 一つずつ直しても、次に書いたテストで戻る。**`npm test` の側で消す**のが
+   * 本筋（入れた機械の env でも通ることは、この束が**わざと立てて**見る）。
+   */
+  test('走らせ役が、根を決める env を落としている', sourceOnly, async () => {
+    const runner = await readFile(join(installRoot(), 'scripts', 'run-tests.mjs'), 'utf8');
+    for (const key of ['AAS_HOME', 'AAS_CONFIG', 'AAS_STATE_DIR']) {
+      assert.ok(runner.includes(`'${key}'`), `${key} を落としていない`);
+    }
+    assert.match(runner, /delete env\[key\]/, '消していない');
+  });
 });
 
 /**
@@ -92,8 +138,7 @@ describe('フックの env でも、テストは通る', () => {
     assert.ok(got.ok, `フックと同じ env で落ちる:\n${got.text.slice(-1200)}`);
   });
 
-  test('フックが、その env を落としている', async () => {
-    const { readFile } = await import('node:fs/promises');
+  test('フックが、その env を落としている', sourceOnly, async () => {
     const hook = await readFile(join(installRoot(), '.githooks', 'pre-push'), 'utf8');
     assert.match(hook, /unset GIT_DIR/, 'フックが env を落としていない');
   });

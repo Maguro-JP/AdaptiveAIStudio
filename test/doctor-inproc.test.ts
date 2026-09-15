@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { installRoot } from '../src/core/home.ts';
+import { cleanAasEnv } from './env.ts';
 
 async function runDoctor(env: Record<string, string>): Promise<string> {
   const { execFile } = await import('node:child_process');
@@ -21,7 +22,8 @@ async function runDoctor(env: Record<string, string>): Promise<string> {
   const at = join(installRoot(), 'src', 'cli', 'doctor.ts');
   const out = await run(process.execPath, ['--no-warnings', at], {
     // 報告をプログラムの隣に撒かない（実際に撒いて、利用者に送られてきた）。
-    env: { ...process.env, AAS_REPORT_DIR: join(tmpdir(), 'aas-doc-reports'), ...env, NO_COLOR: '1' },
+    // 外から立っている AAS_* に、この世界を乗っ取らせない（`test/env.ts`）。
+    env: cleanAasEnv({ AAS_REPORT_DIR: join(tmpdir(), 'aas-doc-reports'), ...env, NO_COLOR: '1' }),
     // CPU だけの Windows では、読むものの確かめだけで 60 秒を超えた（実測）。
     timeout: 300_000,
   }).catch((e: { stdout?: string; stderr?: string }) => e);
@@ -253,7 +255,7 @@ describe('読めないモデルしか無いとき', () => {
       execFile(
         process.execPath,
         ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', 'doctor.ts')],
-        { env: { ...process.env, AAS_HOME: home }, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+        { env: cleanAasEnv({ AAS_HOME: home }), encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
         (_e, stdout, stderr) => ok({ out: `${stdout}${stderr}` }),
       );
     });
@@ -303,11 +305,10 @@ describe('記録の保存先へ書けないとき', () => {
            * 走らせるたびに作業場へ doctor-*.txt が一つ増えていた（実測）。
            * 見たいのは「保存先へ書けないと言うこと」なので、報告だけ逃がす。
            */
-          env: {
-            ...process.env,
+          env: cleanAasEnv({
             AAS_HOME: home, AAS_STATE_DIR: state,
             AAS_REPORT_DIR: join(home, 'reports'),
-          },
+          }),
           encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
         },
         (_e, stdout, stderr) => ok({ out: `${stdout}${stderr}` }),
@@ -345,7 +346,7 @@ describe('根に全角が混ざっているとき', () => {
       execFile(
         process.execPath,
         ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', 'doctor.ts')],
-        { env: { ...process.env, ...env }, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+        { env: cleanAasEnv(env), encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
         (_e, stdout, stderr) => ok(`${stdout}${stderr}`),
       );
     });

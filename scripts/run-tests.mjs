@@ -91,7 +91,26 @@ const collect = (chunk) => {
   }
 };
 
-const child = spawn(process.execPath, args, { cwd: root, stdio: ['inherit', 'pipe', 'inherit'] });
+/*
+ * **走らせる側の env で、結果を変えない。**
+ *
+ * `AAS_HOME` や `AAS_CONFIG` が外から立っていると、仮のフォルダを作って
+ * 確かめるテストが**そちらを見に行く**。使う人の機械ではインストーラの入口が
+ * env を立てるので、`selftest` から回したときだけ「壊れていないのに NG」が出た
+ * （実測: 設定・doctor・実走で 5 件）。**NG を信じてもらえなくなるのが、
+ * いちばん高くつく。**
+ *
+ * テストが見たいのはコードなので、ここで消す。入れた機械の env でも通ることは、
+ * `test/installed-env.test.ts` が**わざと立てて**確かめる（一箇所に寄せる）。
+ */
+const AAS_ENV = [
+  'AAS_HOME', 'AAS_CONFIG', 'AAS_STATE_DIR', 'AAS_BIN_DIR', 'AAS_MODELS_DIR',
+  'AAS_REPORT_DIR', 'AAS_UI_PORT',
+];
+const env = { ...process.env };
+for (const key of AAS_ENV) delete env[key];
+
+const child = spawn(process.execPath, args, { cwd: root, env, stdio: ['inherit', 'pipe', 'inherit'] });
 child.stdout.on('data', (c) => { process.stdout.write(c); collect(c); });
 child.on('error', (e) => { console.error(e.message); process.exit(1); });
 child.on('close', (code, signal) => {
