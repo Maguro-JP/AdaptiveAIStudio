@@ -158,9 +158,20 @@ export class PreviewServer {
     this.#server = undefined;
   }
 
-  /** 見ている人へ、読み直せと伝える。 */
+  /**
+   * 見ている人へ、読み直せと伝える。
+   *
+   * **閉じた相手へ書かない。**見ている人が頁を閉じた直後は、こちらの
+   * `#listeners` から外れる前に書き込みが来ることがある（閉じた合図は
+   * 後から届く）。閉じた先へ書くと `ERR_STREAM_DESTROYED` が拾い手なしで
+   * 上がり、**画面のプロセスごと落ちる。**受け手も渡して、書けなかったことは
+   * そのまま流す（見ている人が居ないだけなので、言うことは無い）。
+   */
   notify(): void {
-    for (const res of this.#listeners) res.write('data: change\n\n');
+    for (const res of this.#listeners) {
+      if (res.writableEnded || res.destroyed) { this.#listeners.delete(res); continue; }
+      res.write('data: change\n\n', () => undefined);
+    }
   }
 
   #startWatching(): void {
@@ -172,6 +183,17 @@ export class PreviewServer {
         if (this.#timer) clearTimeout(this.#timer);
         this.#timer = setTimeout(() => this.notify(), 80);
         this.#timer.unref?.();
+      });
+      /*
+       * **見張りが後から音を上げても、落ちない。**
+       *
+       * 見張っているフォルダが消えると、Windows では後から `error` が来る
+       * （`EPERM`）。受け手が無いと拾い手なしの例外になり、**配る口ごと
+       * 落ちる。**見張れなくなっただけなので、配ることは続ける。
+       */
+      this.#watcher.on('error', () => {
+        this.#watcher?.close();
+        this.#watcher = undefined;
       });
     } catch {
       // 見張れない場所（一部の環境）でも、配ることはできる。

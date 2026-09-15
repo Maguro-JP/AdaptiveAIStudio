@@ -70,7 +70,7 @@ describe('書き換えを見て、読み直せと伝える', () => {
       await until(() => seen.lines.some((l) => l.startsWith(':')), '繋がった合図が来る', { timeoutMs: 5000 });
       s.notify();
       await until(() => seen.lines.some((l) => l === 'data: change'), '読み直せと伝わる', { timeoutMs: 5000 });
-    } finally { seen.close(); }
+    } finally { seen.close(); s.stop(); }
   });
 
   test('**ファイルを書き換えたら、見張りが拾って伝える**', async () => {
@@ -83,7 +83,17 @@ describe('書き換えを見て、読み直せと伝える', () => {
       await until(() => seen.lines.some((l) => l.startsWith(':')), '繋がった合図が来る', { timeoutMs: 5000 });
       await writeFile(join(root, 'index.html'), '<h1>い</h1>', 'utf8');
       await until(() => seen.lines.some((l) => l === 'data: change'), '書き換えが伝わる', { timeoutMs: 10_000 });
-    } finally { seen.close(); }
+    } finally {
+      /*
+       * **見ているのをやめたら、その場で止める。**
+       *
+       * まとめの時計（80ms）が後から鳴って、閉じた相手へ書きに行く。
+       * 後片づけ（`after`）まで生かしておくと、仮のフォルダが消えた後に
+       * 見張りが音を上げることもある。試験の終わりを、ここで閉じる。
+       */
+      seen.close();
+      s.stop();
+    }
   });
 
   test('.git や node_modules の中は、拾わない（対）', async () => {
@@ -102,7 +112,7 @@ describe('書き換えを見て、読み直せと伝える', () => {
       // 見張り自体は生きている（対）。ここが死んでいたら、上は黙っていても通る。
       await writeFile(join(root, 'index.html'), '<h1>う</h1>', 'utf8');
       await until(() => seen.lines.some((l) => l === 'data: change'), '中身の書き換えは伝わる', { timeoutMs: 10_000 });
-    } finally { seen.close(); }
+    } finally { seen.close(); s.stop(); }
   });
 });
 
