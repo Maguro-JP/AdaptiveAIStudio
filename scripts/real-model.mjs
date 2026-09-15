@@ -497,14 +497,61 @@ async function cliReachesModel() {
   return found;
 }
 
+/*
+ * selftest が使う「送って返る」の部品を、本物のモデルで通す。
+ *
+ * この部品は、使う人の機械で**いちばん先に読まれる一行**を作る
+ * （`ok 送って返る … 答え「…」`）。作れなければ、そこで使う人は詰まる。
+ * ここで本物の道（この中で読む → 候補 → 送る）を通しておく。
+ * 返る文字は無意味でよい（乱数の重み）。**返ること**を見る。
+ */
+async function askOnceWithRealModel() {
+  const { mkdtempSync, rmSync: rm, writeFileSync } = await import('node:fs');
+  const home = mkdtempSync(join(tmpdir(), 'aas-real-ask-'));
+  const models = mkdtempSync(join(tmpdir(), 'aas-real-ask-models-'));
+  execFileSync(process.execPath, [join(root, 'scripts', 'tiny-gguf.mjs'), join(models, 'tiny.gguf')], { stdio: 'pipe' });
+  const was = { home: process.env.AAS_HOME, state: process.env.AAS_STATE_DIR, config: process.env.AAS_CONFIG };
+  const at = join(home, 'aas.config.json');
+  writeFileSync(at, JSON.stringify({
+    // **設定は、使う人と同じ道で読む。**手で組んだ設定を渡すと、
+    // 繋ぎ先を足す所（`wireInProc`）を通らないので、口が食い違う
+    // （実際に 41781 を向けて「繋ぐ先に断られました」になった）。
+    runtime: { kind: 'inproc', basePort: 41781, modelsDir: models, contextSize: 512 },
+    initiative: { enabled: false },
+  }));
+  process.env.AAS_HOME = home;
+  process.env.AAS_STATE_DIR = join(home, 'state');
+  process.env.AAS_CONFIG = at;
+  const found = [];
+  try {
+    const { loadConfig } = await import(join(root, 'src', 'config.ts'));
+    const { askOnce, describeOneTurn } = await import(join(root, 'src', 'cli', 'ask-once.ts'));
+    const got = await askOnce(loadConfig().config, { waitMs: 240_000 });
+    const said = describeOneTurn(got);
+    if (!said.ok) found.push(`送って返る が本物のモデルで通らない: ${said.detail}`);
+    else if (!/tiny\.gguf/.test(said.detail)) found.push(`どのモデルで答えたかを言っていない: ${said.detail}`);
+    else if (!/読み込み/.test(said.detail)) found.push(`読み込みにかかった時間を言っていない: ${said.detail}`);
+  } catch (e) {
+    found.push(`送って返る で落ちました: ${e.message}`);
+  } finally {
+    if (was.home === undefined) delete process.env.AAS_HOME; else process.env.AAS_HOME = was.home;
+    if (was.state === undefined) delete process.env.AAS_STATE_DIR; else process.env.AAS_STATE_DIR = was.state;
+    if (was.config !== undefined) process.env.AAS_CONFIG = was.config;
+    rm(home, { recursive: true, force: true });
+    rm(models, { recursive: true, force: true });
+  }
+  return found;
+}
+
 bad.push(...await throughSession());
 bad.push(...await thinkingBudget());
 bad.push(...await throughParallel());
 bad.push(...await cliReachesModel());
+bad.push(...await askOnceWithRealModel());
 
 if (bad.length > 0) {
   console.error(`見つかった不具合 ${bad.length} 件:`);
   for (const b of bad) console.error(`- ${b}`);
   process.exit(1);
 }
-console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す・同梱の話し方・土台ごと一往復・本物の数え方・先読みで答えが変わらない・考えごとの予算・二つ同時・端末の入口）');
+console.log('本物のモデルで通りました（読み込み・コンテキストウィンドウ・まとめて返す・流して返す・道具を渡す・同梱の話し方・土台ごと一往復・本物の数え方・先読みで答えが変わらない・考えごとの予算・二つ同時・端末の入口・送って返る）');

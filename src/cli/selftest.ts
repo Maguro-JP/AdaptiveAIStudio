@@ -21,6 +21,7 @@ import { findInstalled, defaultBinDir } from '../runtime/llama-install.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { pickAsset } from '../runtime/llama-release.ts';
 import { loadConfig } from '../config.ts';
+import { askOnce, describeOneTurn } from './ask-once.ts';
 import { padTo, displayWidth } from './width.ts';
 import { chunkReader } from '../core/text.ts';
 import { saveReport, tellWhereItWent } from './report-file.ts';
@@ -137,13 +138,48 @@ add('どれを使うかの選択', choice !== undefined,
 /* ---------- モデル ---------- */
 const { config } = loadConfig();
 const modelsDir = config.runtime?.modelsDir ?? defaultModelsDir();
+let ggufs: string[] = [];
 try {
   const { readdir } = await import('node:fs/promises');
-  const ggufs = (await readdir(modelsDir)).filter((f) => f.toLowerCase().endsWith('.gguf'));
-  add('モデル', ggufs.length > 0,
-    ggufs.length > 0 ? `${ggufs.length} 件: ${ggufs.slice(0, 3).join(', ')}` : `${modelsDir} は空です`);
+  const { looksLikeGguf } = await import('../runtime/inproc.ts');
+  const named = (await readdir(modelsDir)).filter((f) => f.toLowerCase().endsWith('.gguf'));
+  /*
+   * **置いてある数ではなく、読める数で言う。**
+   *
+   * `.gguf` という名前が在るだけで「1 件」と数えていた。中身が配布元の
+   * 同意頁の HTML でも ok になり、送ると 503 で断られる（doctor 側では
+   * 同じことを一度直している）。**在ることを、使えることとして言わない。**
+   */
+  for (const name of named) {
+    if (await looksLikeGguf(join(modelsDir, name))) ggufs.push(name);
+  }
+  const broken = named.length - ggufs.length;
+  add('モデル', ggufs.length > 0, ggufs.length > 0
+    ? `${ggufs.length} 件: ${ggufs.slice(0, 3).join(', ')}`
+      + (broken > 0 ? `（読めないものが ${broken} 件）` : '')
+    : named.length > 0
+      ? `${named.length} 件ありますが、どれも GGUF として読めません（落とし直してください）`
+      : `${modelsDir} は空です`);
 } catch {
   add('モデル', false, `${modelsDir} がありません（npm run models -- --get で取ってきます）`);
+}
+
+/* ---------- 本当に答えるか（送って返る） ---------- */
+/*
+ * 中身は `src/cli/ask-once.ts`。**走らせる口が二つ（ここと
+ * `scripts/real-model.mjs`）在るので、中身は一つにする。**
+ * 出す言葉もそちらに置く（人が読む一行と中身が割れると、片方だけ直す）。
+ */
+if (ggufs.length === 0) {
+  add('送って返る', undefined, 'モデルが無いので確かめていません');
+} else {
+  try {
+    const got = await askOnce(config, { log: (t) => console.log(`  ${t}`) });
+    const said = describeOneTurn(got);
+    add('送って返る', said.ok, said.detail);
+  } catch (e) {
+    add('送って返る', false, (e as Error).message);
+  }
 }
 
 /* ---------- 検査 ---------- */
