@@ -64,16 +64,26 @@ export class ProposalQueue {
     if (!this.#path) return;
     try {
       const raw = JSON.parse(await readFile(this.#path, 'utf8')) as
-        Proposal[] | { items: Proposal[]; examined: string[] };
+        Proposal[] | { items: Proposal[]; examined: string[]; dropped?: number };
       if (Array.isArray(raw)) {
         this.#items = raw;
       } else {
         this.#items = raw.items ?? [];
         this.#examined = new Set(raw.examined ?? []);
+        /*
+         * **書いたものを、読み返す。**
+         *
+         * 落とした数は保存に残していたのに、読む側が見ていなかった。
+         * 立ち上げ直すと 0 に戻り、**次の保存でその 0 を書き込む。**
+         * 残していた数まで消えるので、保存に残した意味が無くなる。
+         * 画面はこのファイルを読んで出すので、消えたら人にも見えなくなる。
+         */
+        this.#dropped = typeof raw.dropped === 'number' ? raw.dropped : 0;
       }
     } catch {
       this.#items = [];
       this.#examined = new Set();
+      this.#dropped = 0;
     }
     // 読み込んだ後も、**既にある番号の続きから**配る。件数から決めていたので、
     // 刈って抜けた番号をもう一度配っていた。

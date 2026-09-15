@@ -1039,6 +1039,12 @@ export const PANELS = {
 
       const foot = el('div', 'proposal-foot');
       foot.append(el('span', 'dim', `この1時間で考えた量 ${r.spent}`));
+      // 上限で古い提案を落としている。**落としたことを黙らない。**
+      // 黙ると、前に出ていた提案が消えたときに、忘れたのか却下したのかが
+      // 分からなくなる。
+      if (r.dropped > 0) {
+        foot.append(el('span', 'warn', `溜まりすぎたので、古い ${r.dropped} 件を落としました`));
+      }
       if (r.due.length > 0) foot.append(el('span', 'warn', `未了の日課: ${r.due.join(', ')}`));
       const now = el('button', 'ghost tiny', 'いま考えさせる');
       now.onclick = async () => {

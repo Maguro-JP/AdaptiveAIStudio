@@ -1064,6 +1064,9 @@ export class UiServer {
         due: duties.due(Date.now()).map((d) => d.duty.codename),
         idle: idle.stats(),
         spent: idle.spentThisHour(Date.now()),
+        // **落としたことを、見る所へ出す。**数えて保存までしていたが、
+        // 出す道が無かった。上限で古い提案が消えるのに、人には分からない。
+        dropped: proposals.dropped,
       });
     }
 
