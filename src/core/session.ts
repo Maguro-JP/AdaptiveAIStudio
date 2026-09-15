@@ -53,7 +53,7 @@ import { readFile as readJson, writeFile as writeJson, mkdir } from 'node:fs/pro
 import { RoleRegistry } from '../roles/registry.ts';
 import type { Tool, ApprovalRequest, ApprovalAnswer } from '../agent/tools/types.ts';
 import { toolsFor } from '../roles/registry.ts';
-import { buildSystemPrompt } from '../roles/role.ts';
+import { buildSystemPrompt, type Role } from '../roles/role.ts';
 import { looksLikeChat } from './intent.ts';
 import { decompose, toWorkItems, type WorkPlan } from '../agent/pm.ts';
 import { findNewerFor, describeNewer } from '../runtime/model-updates.ts';
@@ -687,9 +687,25 @@ export class Session {
       const plan = step.value;
       yield { type: 'planned', plan };
 
+      /*
+       * **段取りの担当にも、こちらの決まりを渡す。**
+       *
+       * ここは役職の文だけを渡していた。送り口（send）が渡している
+       * リポジトリの決まり・二度としないこと・作業場の様子・repo map が、
+       * 段取りからの担当には**一つも届いていなかった。**
+       * 「push では CI を回さない」も「C: 直下にフォルダを作らない」も、
+       * 段取りで書かせる限り一度も目に入らない。
+       *
+       * 組むのは一度だけ（repo map と様子を人数ぶん作り直さない）。役職の文は
+       * **後ろに置く。**前を全員で同じにしておくと、相手が頭から計算し
+       * 直さずに済む（役職ごとに頭が変わると、そのぶん待ち時間になる）。
+       */
+      const shared = await this.#system();
+      const systemFor = (role: Role): string => `${shared}\n\n${buildSystemPrompt(role)}`;
+
       const team = new Team(this.orchestrator, {
         lanes: this.lanes,
-        system: buildSystemPrompt(this.roles.get(fallbackRoleId)!),
+        system: systemFor(this.roles.get(fallbackRoleId)!),
         tools: toolsFor(this.roles.get(fallbackRoleId)!, this.toolPool),
         root,
         maxTurns: this.config.agent?.maxTurns,
@@ -702,7 +718,7 @@ export class Session {
         assign: (roleId) => {
           const role = this.roles.get(roleId);
           if (!role) return undefined;
-          return { system: buildSystemPrompt(role), tools: toolsFor(role, this.toolPool) };
+          return { system: systemFor(role), tools: toolsFor(role, this.toolPool) };
         },
       });
 

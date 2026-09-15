@@ -122,6 +122,44 @@ describe('置いただけで、モデルに届く', () => {
   });
 
   /**
+   * 段取り（plan）から働く担当にも届く。
+   *
+   * ここは役職の文だけを渡していた。送り口が渡しているリポジトリの決まりは
+   * **一つも届いていなかった。**段取りで書かせる限り、リポジトリに何を書いても
+   * 効かないことになる。決まりが効くかどうかが、頼み方で変わってはいけない。
+   */
+  test('**段取りから働く担当にも、決まりが届く**', async () => {
+    const { startFakeServer } = await import('./fake-server.ts');
+    const { Session } = await import('../src/core/session.ts');
+    const { DEFAULT_CONFIG } = await import('../src/config.ts');
+
+    const root = await tempDir('aas-rules-plan-');
+    await writeFile(join(root, 'AGENTS.md'), 'このリポジトリでは、変数名を kebab-case にすること。');
+    // JSON を返さない相手でよい（割れなければ一人で引き受ける形に落ちる）。
+    const fake = await startFakeServer({ kind: 'stream', text: 'わかりました。' });
+    try {
+      const session = await Session.create({
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
+        candidates: ['local:m'],
+        agent: { root, approval: 'auto', verify: { enabled: false }, maxTurns: 1 },
+      } as never, { approve: () => Promise.resolve(true) });
+      const seen: string[] = [];
+      for await (const ev of session.plan('src/a.ts を直して')) seen.push(ev.type);
+      assert.ok(seen.includes('planned'), `段取りが走っていない: ${seen.join(',')}`);
+
+      // **担当への頼みだけを見る。**分解の頼みには元から載らない
+      // （載っていても、それは担当に届いたことにならない）。
+      const members = (fake.bodies as { messages?: { role: string; content: string }[] }[])
+        .filter((b) => (b.messages ?? []).some((m) => m.role === 'system' && m.content.includes('## 責務')));
+      assert.ok(members.length > 0, `担当が動いていない: ${seen.join(',')}`);
+      const sent = JSON.stringify(members);
+      assert.ok(sent.includes('kebab-case'), '段取りの担当に、リポジトリの決まりが渡っていない');
+      assert.ok(sent.includes('AGENTS.md'), 'どこから来た文か渡っていない');
+    } finally { await fake.close(); }
+  });
+
+  /**
    * 訊かれただけのときに、リポジトリの決まりまで載せない（対）。
    *
    * 役職はどれも作業の役職で、話し相手が一人もいなかった。だから
