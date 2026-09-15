@@ -88,3 +88,74 @@ describe('大きすぎるものを断るとき、理由が届く', () => {
     assert.match(got, /大きすぎます/, got.slice(0, 300));
   });
 });
+
+/**
+ * プレビューは、いまの作業場を配ること。
+ *
+ * 一度立てたものを使い回していた。作業場は後から変えられる（横の 📂・設定）のに、
+ * 配っているのは**最初に開いたときの作業場**のまま。返事の `root` は新しい方を
+ * 名乗るので、画面は新しい場所を見ている顔をして、中身は前の場所を出す。
+ */
+describe('プレビューは、いまの作業場を配る', () => {
+  test('**作業場を変えたら、配る中身も変わる**', async () => {
+    const { writeFile, mkdir } = await import('node:fs/promises');
+    const dir = await tempDir('aas-pv-');
+    const w1 = join(dir, 'w1');
+    const w2 = join(dir, 'w2');
+    await mkdir(w1, { recursive: true });
+    await mkdir(w2, { recursive: true });
+    await writeFile(join(w1, 'index.html'), '<h1>ONE</h1>');
+    await writeFile(join(w2, 'index.html'), '<h1>TWO</h1>');
+    process.env.AAS_STATE_DIR = dir;
+    process.env.AAS_CONFIG = join(dir, 'aas.config.json');
+
+    const s = new UiServer({ port: 0, config: { ...DEFAULT_CONFIG, agent: { root: w1 } } as never });
+    servers.push(s);
+    const base = (await s.start()).replace(/\/$/, '');
+
+    const first = await fetch(`${base}/api/preview`).then((x) => x.json()) as { url: string; root: string };
+    assert.equal(first.root, w1);
+    assert.match(await fetch(first.url).then((x) => x.text()), /ONE/);
+
+    const moved = await fetch(`${base}/api/config`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workRoot: w2 }),
+    });
+    assert.equal(moved.status, 200, await moved.text());
+
+    const second = await fetch(`${base}/api/preview`).then((x) => x.json()) as { url: string; root: string };
+    assert.equal(second.root, w2, '名乗りが変わっていない');
+    const body = await fetch(second.url).then((x) => x.text());
+    assert.match(body, /TWO/, `前の作業場を配っている: ${body.slice(0, 120)}`);
+    assert.doesNotMatch(body, /ONE/, body.slice(0, 120));
+  });
+});
+
+/**
+ * 止めたら、配る口も閉じる。
+ *
+ * ここは閉じていなかった。一度プレビューを開くと、画面を止めてもその口が
+ * 立ったままになり、**プロセスが終わらない**。同じことを inproc で踏んで
+ * 直してあるのに、こちらは残っていた。試験の走りが終わらない形で出た。
+ */
+describe('止めたら、配る口も閉じる', () => {
+  test('**画面を止めたあと、プレビューの口は繋がらない**', async () => {
+    const { writeFile, mkdir } = await import('node:fs/promises');
+    const dir = await tempDir('aas-pvstop-');
+    const work = join(dir, 'work');
+    await mkdir(work, { recursive: true });
+    await writeFile(join(work, 'index.html'), '<h1>HERE</h1>');
+    process.env.AAS_STATE_DIR = dir;
+    process.env.AAS_CONFIG = join(dir, 'aas.config.json');
+
+    const s = new UiServer({ port: 0, config: { ...DEFAULT_CONFIG, agent: { root: work } } as never });
+    const base = (await s.start()).replace(/\/$/, '');
+    const { url } = await fetch(`${base}/api/preview`).then((x) => x.json()) as { url: string };
+    assert.match(await fetch(url).then((x) => x.text()), /HERE/);
+
+    await s.stop();
+    const after = await fetch(url).then(() => 'まだ繋がる').catch(() => '閉じた');
+    assert.equal(after, '閉じた', '止めたのに配る口が立ったまま');
+  });
+});

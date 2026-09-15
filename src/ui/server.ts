@@ -353,6 +353,8 @@ export class UiServer {
   readonly #attachments = new Attachments();
   /** 作っているものを見せる口。操作用とは**別の口**にする。 */
   #preview?: PreviewServer;
+  /** いま配っている作業場。変わったら立て直す。 */
+  #previewRoot?: string;
   #seq = 0;
 
   constructor(opts: UiServerOptions) {
@@ -835,6 +837,16 @@ export class UiServer {
     const runtime = this.#runtime as { shutdown?: () => Promise<void> } | undefined;
     await timed('モデルを降ろすの', async () => runtime?.shutdown?.());
     this.#runtime = undefined;
+    /*
+     * **配る口も閉じる。**
+     *
+     * ここは閉じていなかった。一度プレビューを開くと、画面を止めても
+     * その口が立ったままになり、**プロセスが終わらない**（同じことを inproc で
+     * 踏んで、すぐ上に書いてある）。試験でも、止めたのに走りが終わらない形で出た。
+     */
+    this.#preview?.stop();
+    this.#preview = undefined;
+    this.#previewRoot = undefined;
     for (const res of this.#clients) { try { res.end(); } catch { /* 切れている */ } }
     this.#clients.clear();
     // 開いたままの繋ぎ（keep-alive）も切る。close() は新しい繋ぎを断るだけで、
@@ -886,8 +898,21 @@ export class UiServer {
     if (path === '/api/preview' && req.method === 'GET') {
       // **作業場の根を知るためだけに、セッションを作らない。**
       const root = this.#workRoot();
+      /*
+       * **作業場を変えたら、配る先も変える。**
+       *
+       * ここは一度立てたものを使い回していた。作業場は後から変えられる
+       * （横の 📂・設定）のに、配っているのは**最初に開いたときの作業場**のまま。
+       * 返事の `root` は新しい方を名乗るので、画面は新しい場所を見ている顔をして、
+       * 中身は前の場所を出す。どちらが本当かが分からない形がいちばん困る。
+       */
+      if (this.#preview && this.#previewRoot !== root) {
+        this.#preview.stop();
+        this.#preview = undefined;
+      }
       if (!this.#preview) {
         this.#preview = new PreviewServer({ root });
+        this.#previewRoot = root;
         await this.#preview.start();
       }
       return send(res, 200, { url: this.#preview.url, root });
