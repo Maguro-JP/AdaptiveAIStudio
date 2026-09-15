@@ -75,7 +75,7 @@ export const listFilesTool: Tool = {
      * 木を降りるときは Dirent がリンクを「ファイルでもディレクトリでもない」
      * として飛ばすので、漏れるのは**名指しで渡されたとき**だけ。そこを塞ぐ。
      */
-    const abs = await realSafeResolve(ctx.root, p);
+    const abs = safeResolve(ctx.root, p);
     if (!abs) return fail(`作業ディレクトリの外です: ${p}`);
     const found: string[] = [];
     const walked = { capped: false };

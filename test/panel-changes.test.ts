@@ -79,3 +79,47 @@ describe('変更したファイルのパネル', () => {
 function dumpHas(text: string, want: string): boolean {
   return text.includes(want);
 }
+
+/**
+ * 会話のパネルも、作り直したら自分で取り直す。
+ *
+ * 流し込む側（`ctx.showHistory`）を呼ぶのは「頁を開いた最初の一回」と
+ * 「横の一覧から会話を選んだとき」だけだった。パネルを一枚出し入れすると
+ * `render()` が全部を作り直すので、**話している途中でも画面から消える。**
+ * 本体には残っているので、頁を読み直すまで戻らない。
+ */
+describe('会話のパネル', () => {
+  function openChat(id: string | undefined, messages: unknown[]) {
+    // 会話のパネルは音声の口を見る。stub には無いので、空で置いておく。
+    (globalThis as { window?: unknown }).window = globalThis;
+    const asked: string[] = [];
+    (globalThis as { fetch?: unknown }).fetch = (async (url: string) => {
+      asked.push(String(url));
+      if (String(url).includes('/api/conversations/messages')) return Response.json({ messages });
+      return Response.json({});
+    }) as unknown as typeof fetch;
+    const body = createNode('div');
+    PANELS.conversation!(body, {
+      on: () => undefined,
+      onState: () => undefined,
+      conversationId: () => id,
+    });
+    return { body, asked, text: () => dump(body) };
+  }
+
+  test('**作り直されたら、残してあるやり取りを取り直す**', async () => {
+    const { asked, text } = openChat('c-1', [
+      { role: 'user', content: 'MARKER-123 と答えて' },
+      { role: 'assistant', content: 'MARKER-123' },
+    ]);
+    await until(() => asked.some((u) => u.includes('/api/conversations/messages')), '取り直しにいく');
+    await until(() => text().includes('MARKER-123'), '残してあるやり取りが並ぶ');
+  });
+
+  test('見ている会話が無ければ、取りに行かない（対）', async () => {
+    const { asked } = openChat(undefined, []);
+    await new Promise((r) => { setTimeout(r, 50); });
+    assert.ok(!asked.some((u) => u.includes('/api/conversations/messages')),
+      `会話が無いのに取りに行った: ${asked.join(', ')}`);
+  });
+});

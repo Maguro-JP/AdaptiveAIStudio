@@ -713,7 +713,7 @@ describe('その機械のものでない道', () => {
  */
 describe('/api/changes', () => {
   test('**書いたぶんが、あとから取り直せる**', async () => {
-    // **リポジトリに置き土産を残さない。**この土台の作業場は既定（リポジトリの根）。
+    // **リポジトリに置き土産を残さない。**この試験の作業場は既定（リポジトリの根）。
     const name = 'changes-probe.txt';
     const { rm } = await import('node:fs/promises');
     const { installRoot } = await import('../src/core/home.ts');
