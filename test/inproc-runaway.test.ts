@@ -75,7 +75,7 @@ function bodyOf(raw: string): string {
   return text;
 }
 
-async function ask(head: string, unit: string): Promise<{
+async function ask(head: string, unit: string, stream = true): Promise<{
   ran: Ran; text: string; logs: string[];
 }> {
   const dir = await tempDir('aas-runaway-');
@@ -93,11 +93,14 @@ async function ask(head: string, unit: string): Promise<{
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: 'm.gguf', stream: true,
+        model: 'm.gguf', stream,
         messages: [{ role: 'user', content: '1+1=' }],
       }),
     });
-    return { ran, text: bodyOf(await r.text()), logs };
+    const raw = await r.text();
+    if (stream) return { ran, text: bodyOf(raw), logs };
+    const got = JSON.parse(raw) as { choices?: { message?: { content?: string } }[] };
+    return { ran, text: got.choices?.[0]?.message?.content ?? '', logs };
   } finally { await rt.shutdown(); }
 }
 
@@ -126,5 +129,26 @@ describe('同じ並びを吐き続けたら、切る', () => {
     const { ran, text } = await ask('', '');
     assert.equal(ran.stopped, false, '切る必要の無い回で止めている');
     assert.equal(text, '');
+  });
+
+  /**
+   * 切る所を、流して返す道にしか入れていなかった。
+   *
+   * まとめて返す道（`stream: false`）では止まらず、maxTokens まで吐き切るまで
+   * 終わらない。判じるための呼び出し（指摘かどうか・要約）はこちらを通るので、
+   * 画面が固まらなくても、裏で同じだけ待たされる。
+   */
+  test('**まとめて返す道でも、止まる**', async () => {
+    const { ran, text } = await ask('1+1', '0', false);
+    assert.equal(ran.stopped, true, '止める合図が立っていない');
+    assert.ok(ran.emitted < WOULD_EMIT, `最後まで吐いている: ${ran.emitted} 文字`);
+    assert.ok(!/0{300}/.test(text), `切らずに返している: ${text.length} 文字`);
+    assert.ok(text.startsWith('1+1'), `頭まで消している: ${JSON.stringify(text.slice(0, 20))}`);
+  });
+
+  test('まとめて返す道でも、繰り返さない回はそのまま（対）', async () => {
+    const { ran, text } = await ask('答えは 2 です。', '', false);
+    assert.equal(ran.stopped, false, '切る必要の無い回で止めている');
+    assert.equal(text, '答えは 2 です。');
   });
 });

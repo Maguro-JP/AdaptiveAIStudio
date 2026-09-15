@@ -173,6 +173,7 @@
 - 検査で使う模型は、毎回同じ中身にする
 - 問いの回と作業の回で、結末の言葉を分ける
 - 終わり方の符丁を、そのまま画面に出さない
+- 組む道具は、組んだ先の外を片づけない
 
 ---
 
@@ -4235,9 +4236,15 @@ sweep は、落ちた瞬間の画面を残せるようにした（`AAS_SWEEP_SHO
 
 **選ばなかった案。** 温度や繰り返し罰を変える（起きるときは起きる。切る手は別に要る）。
 
-**触る場所。** `src/runtime/runaway.ts`、`src/runtime/inproc.ts`。
-試験は `test/runaway.test.ts`（見つける所）と `test/inproc-runaway.test.ts`（中で読む口に
-繋がっているか）。見つけられても繋いでいなければ止まらないので、両方を見る。
+**流す道とまとめて返す道の、両方に入れる。**最初は流して返す道にしか入れておらず、
+`stream: false` では止まらずに maxTokens まで吐き切っていた。判じるための呼び出し
+（指摘かどうか・要約）はまとめて返す道を通るので、画面が固まらなくても裏で同じだけ待たされる。
+**片方だけ直すのは、直したうちに入らない。**
+
+**触る場所。** `src/runtime/runaway.ts`、`src/runtime/inproc.ts`（流す道の `onTextChunk` と、
+まとめて返す道の `cutAt`）。試験は `test/runaway.test.ts`（見つける所）と
+`test/inproc-runaway.test.ts`（中で読む口の両方の道に繋がっているか）。
+見つけられても繋いでいなければ止まらないので、両方を見る。
 
 ---
 
@@ -4412,3 +4419,37 @@ Windows の CI で実際に壊れている。`%TEMP%` が `C:\Users\RUNNER~1\...
 符丁を一つ足すと、そこが落ちる。
 
 **触る場所。** `src/ui/web/verdict.js` の `WHY`、`src/ui/web/panels.js` の `finished` の分岐。
+
+---
+
+## 2026-09-15  組む道具は、組んだ先の外を片づけない
+
+**決めたこと。** `scripts/bundle.mjs` の片づけ（`pruneForTarget` / `pruneExtras`）は、
+組んだ先（`--out`）を受け取り、**その中でなければ消さずに投げる**（`mustBeInside`）。
+
+**なぜ。** 手元の `node_modules` から typescript・playwright-core・@types が消えた。
+この三つは片づけの一覧そのもの。消えると型検査も、画面を押して回る検査も走らなくなる。
+しかも**黙って消える**ので、次に `npm run check` を回して
+「画面。押して回っていません（playwright-core が入っていません）」と出るまで気づけない。
+**検査が一つ減ったまま「通りました」と出る。**
+
+**どの道でそうなったのかは掴めていない。**切り分けはした:
+
+| 試したこと | 結果 |
+|---|---|
+| `npm run bundle`（作業場の外へ出す） | 消えない |
+| `npm run bundle`（既定の `dist/`） | 消えない |
+| `npm run check:bundle` | 消えない |
+| `npm test`（全 197 件） | **一度消えた。同じ手順で再現しない** |
+| 試験を半分ずつ（98 / 49 / 25 件） | 消えない |
+| `--experimental-vm-modules` を外して全件 | 消えない |
+
+再現しないものを追い続けるより、**起きても壊れない形**にした。
+原因が分かっていないことを、分かったことにしない。
+
+**選ばなかった案。** 原因が分かるまで直さない（その間ずっと、検査が黙って減る）。
+`npm test` の後に `npm ci` する（毎回の待ちが増えるうえ、
+lock に載っていない node-llama-cpp と playwright-core まで消える）。
+
+**触る場所。** `scripts/bundle.mjs` の `mustBeInside`。
+試験は `test/bundle-target.test.ts`（組んだ先の外を渡したら投げること）。

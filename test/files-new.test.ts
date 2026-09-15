@@ -12,7 +12,18 @@ import { stat, readFile, mkdir, writeFile } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 
 const state = await tempDir('aas-new-state-');
-const work = await tempDir('aas-new-work-');
+/*
+ * **作業場の一つ上まで、この試験だけのものにする。**
+ *
+ * 作業場を直に temp の下へ置くと、その一つ上は `/tmp`（みんなで使う所）になる。
+ * この試験は「外へは作らせない」を、一つ上にファイルが無いことで見ているので、
+ * **誰かが `/tmp/outside.txt` を置いた瞬間に落ちる。**実際にそうなった
+ * （別の作業が同じ機械で走っていた）。作りは正しいのに落ちるので、原因を
+ * こちらのコードに探すことになる。一つ上も自分のものにすれば、誰にも触られない。
+ */
+const outer = await tempDir('aas-new-outer-');
+const work = join(outer, 'work');
+await mkdir(work, { recursive: true });
 process.env.AAS_STATE_DIR = state;
 const { UiServer } = await import('../src/ui/server.ts');
 const { DEFAULT_CONFIG } = await import('../src/config.ts');
