@@ -4476,6 +4476,10 @@ lock に載っていない node-llama-cpp と playwright-core まで消える）
 見ていたのは 4 ファイルと 4 つの言い回しだけで、モデルの口は入っていなかった。
 入れて、生の文に戻すと落ちることを確かめた。
 
+**一つ直して終わりにしない。**同じ形を全部数えたら、画面の本体にも二つ残っていた
+（取ってくる失敗と、モデルの一覧の失敗）。網の失敗だけを選ぶ。ファイルや設定の失敗は、
+生の文そのものが手掛かりなので引き直さない。
+
 **触る場所。** `src/runtime/net-why.ts` の `describeNet`、
-`src/providers/openai-compatible.ts` の `describe`。
+`src/providers/openai-compatible.ts` の `describe`、`src/ui/server.ts` の二箇所。
 試験は `test/describe-net.test.ts`（言い換えと、見張るファイルの一覧）。

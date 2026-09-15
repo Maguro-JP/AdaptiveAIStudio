@@ -60,6 +60,8 @@ test('外へ出て失敗した所は、どれもこの関数を通る', async ()
     // モデルの口。ここも同じ形で残っていて、実機の画面に
     // 「ストリームが中断されました: terminated（62 秒）」と出た。
     'src/providers/openai-compatible.ts',
+    // 画面の本体。取ってくる失敗と、モデルの一覧の失敗を人に見せる。
+    'src/ui/server.ts',
   ];
   const bad: string[] = [];
   for (const f of files) {
