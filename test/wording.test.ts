@@ -62,7 +62,7 @@ const INSTEAD: Record<string, string> = {
  * 「減らしたのに数字が合っていない」を見つけるための下限も置く。
  */
 const CEILING: Record<string, number> = {
-  窓: 318,
+  窓: 317,
   前置き: 40,
   地図: 89,
   起点: 37,
