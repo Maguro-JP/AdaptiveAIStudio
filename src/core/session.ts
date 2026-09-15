@@ -232,6 +232,18 @@ export type PlanEvent =
 export type ThinkEvent =
   | { type: 'chose'; modeId: string; codename: string; name: string; roleCodename: string; reason: string; isDuty: boolean }
   | { type: 'noFinding'; codename: string }
+  /**
+   * 今回は考えなかった。**理由を捨てない。**
+   *
+   * ここまで、断るときは黙って `false` を返していた。理由（予算切れ・間合い・
+   * モデルが無い）はその場に在るのに、一つも渡していない。押した人からは
+   * 「押しても何も起きない」としか見えず、壊れているのか効いているのかも
+   * 分からないので、何度も押すことになる。
+   *
+   * **見せるかどうかは、呼ぶ側が決める。**見回り（勝手に動く分）は黙ったまま、
+   * 押されたときだけ出す。
+   */
+  | { type: 'declined'; reason: string }
   | { type: 'proposal'; proposal: Proposal; codename: string };
 
 export interface SessionOptions {
@@ -777,11 +789,19 @@ export class Session {
    * 勝手に手を動かされるのと、勝手に考えてくれるのは、別の話。
    */
   async *think(): AsyncGenerator<ThinkEvent, boolean> {
-    // 考えごとは黙って諦める。モデルが無いことは画面が既に出している。
-    // ここで毎周言うと、同じ一行で記録が埋まる。
-    if (this.noModel) return false;
-    if (this.config.initiative?.enabled === false) return false;
-    if (this.#running) return false;
+    // **断る理由は必ず言う。**黙るかどうかは、呼ぶ側が決める（見回りは黙る）。
+    if (this.noModel) {
+      yield { type: 'declined', reason: `使えるモデルがありません: ${this.modelReason}` };
+      return false;
+    }
+    if (this.config.initiative?.enabled === false) {
+      yield { type: 'declined', reason: '設定で、暇なときの考えごとを止めています（initiative.enabled）' };
+      return false;
+    }
+    if (this.#running) {
+      yield { type: 'declined', reason: 'いま別の作業をしています' };
+      return false;
+    }
 
     const now = Date.now();
     const due = this.duties.due(now).map((s) => ({
@@ -793,7 +813,11 @@ export class Session {
       { lastChangeAt: this.#lastChangeAt, openProposals: this.proposals.open().length, now },
       due,
     );
-    if (!decision.mode) return false;
+    if (!decision.mode) {
+      // 割り当ての側は理由を組み立てている。**ここで捨てない。**
+      yield { type: 'declined', reason: decision.reason ?? '今回は見送りました' };
+      return false;
+    }
 
     const mode = decision.mode;
     const role = this.roles.get(MODE_ROLE[mode.id] ?? 'scout') ?? this.roles.get('scout')!;

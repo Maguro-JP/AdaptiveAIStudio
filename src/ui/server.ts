@@ -708,6 +708,9 @@ export class UiServer {
       this.broadcast({ type: 'musing', on: true });
       try {
         for await (const event of session.think()) {
+          // 勝手に動く分は、断った理由を出さない。30秒ごとに同じ一行で記録が埋まる。
+          // 押されたときは出す（下の /api/think）。
+          if (event.type === 'declined') continue;
           this.broadcast({ type: 'thinkEvent', event });
         }
       } catch { /* 考えに失敗しても、この場所は止まらない */ }
@@ -1120,8 +1123,14 @@ export class UiServer {
       this.#thinking = true;
       void (async () => {
         try {
+          // **押されたときは、断った理由も出す。**黙ると、押しても何も起きない。
           for await (const event of session.think()) this.broadcast({ type: 'thinkEvent', event });
-        } catch { /* 考えに失敗しても止まらない */ } finally {
+        } catch (e) {
+          this.broadcast({
+            type: 'thinkEvent',
+            event: { type: 'declined', reason: `考えられませんでした: ${e instanceof Error ? e.message : String(e)}` },
+          });
+        } finally {
           this.#thinking = false;
           this.broadcast({ type: 'stateChanged' });
         }
