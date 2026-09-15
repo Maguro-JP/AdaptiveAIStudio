@@ -440,8 +440,21 @@ async function cliReachesModel() {
   const { mkdirSync } = await import('node:fs');
   mkdirSync(models, { recursive: true });
   execFileSync(process.execPath, [join(root, 'scripts', 'tiny-gguf.mjs'), join(models, 'tiny.gguf')], { stdio: 'pipe' });
-  const config = join(home, 'aas.config.json');
-  writeFileSync(config, JSON.stringify({ runtime: { kind: 'inproc' }, initiative: { enabled: false } }));
+  /*
+   * **入口ごとに、別の口を使う。**
+   *
+   * 三つとも既定の口（4177）で待つので、前のものの子が落ちきる前に次を起こすと
+   * 「モデルのプロセスが 1 で終わりました」になる。走らせる順で結果が変わるので、
+   * 番号を分ける（**走らせるたびに変わる確かめを作らない**）。
+   */
+  const configFor = (port) => {
+    const at = join(home, `aas.${port}.json`);
+    writeFileSync(at, JSON.stringify({
+      runtime: { kind: 'inproc', basePort: port }, initiative: { enabled: false },
+    }));
+    return at;
+  };
+  const config = configFor(41771);
   const work = join(home, 'work');
   mkdirSync(work, { recursive: true });
   writeFileSync(join(home, 'tasks.json'), JSON.stringify([
@@ -452,9 +465,9 @@ async function cliReachesModel() {
     ...process.env, AAS_HOME: home, AAS_CONFIG: config, NO_COLOR: '1',
     AAS_REPORT_DIR: join(home, 'reports'),
   };
-  const say = async (entry, args = []) => {
+  const say = async (entry, args = [], at = config) => {
     const out = await run(process.execPath, ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', entry), ...args], {
-      env, cwd: work, timeout: 240_000, maxBuffer: 8 * 1024 * 1024,
+      env: { ...env, AAS_CONFIG: at }, cwd: work, timeout: 240_000, maxBuffer: 8 * 1024 * 1024,
     }).catch((e) => e);
     // eslint-disable-next-line no-control-regex
     return `${out.stdout ?? ''}${out.stderr ?? ''}`.replace(/\x1b\[[0-9;]*m/g, '');
@@ -464,12 +477,12 @@ async function cliReachesModel() {
   try {
     // どれも「使えるモデルがありません」で落ちないこと。
     // 名前が出ることまで見る。**落ちなかっただけでは、辿り着いた証拠にならない。**
-    for (const [entry, args, want] of [
-      ['agent.ts', [], /担当モデル: inproc:tiny\.gguf/],
-      ['main.ts', [], /モデル: inproc:tiny\.gguf/],
-      ['team.ts', [join(home, 'tasks.json')], /レーン default: inproc:tiny\.gguf/],
+    for (const [entry, args, want, port] of [
+      ['agent.ts', [], /担当モデル: inproc:tiny\.gguf/, 41771],
+      ['main.ts', [], /モデル: inproc:tiny\.gguf/, 41772],
+      ['team.ts', [join(home, 'tasks.json')], /レーン default: inproc:tiny\.gguf/, 41773],
     ]) {
-      const text = await say(entry, args);
+      const text = await say(entry, args, configFor(port));
       if (/使えるモデルがありません/.test(text)) {
         found.push(`${entry}: 保存先に GGUF が在るのに落ちる（${text.split('\n').find((l) => l.includes('使えるモデル'))}）`);
         continue;
