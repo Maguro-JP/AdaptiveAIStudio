@@ -499,6 +499,24 @@ export const PANELS = {
      * 道具の呼び出しと結果は畳んで出す。開いたときに読みたいのは
      * 「何を頼んで、何が返ったか」で、途中の呼び出しではない。
      */
+    /*
+     * **作り直されたら、自分で取り直す。**
+     *
+     * ログのパネルと同じ形（`/api/logs` から取り直す）。パネルの × を押す、
+     * 表示からパネルを出し入れする、設定→配置で型を変える、のどれでも
+     * `render()` が全部を作り直す。流し込む側（`ctx.showHistory`）を呼ぶのは
+     * 頁を開いた最初の一回と会話を選んだときだけなので、作り直すと空になる。
+     */
+    const restore = async () => {
+      const id = ctx.conversationId?.();
+      if (!id) return;
+      try {
+        const body = await (await fetch(`/api/conversations/messages?id=${encodeURIComponent(id)}`)).json();
+        if (body.messages?.length) ctx.showHistory(body.messages);
+        if (body.inFlight) ctx.showInFlight?.(body.inFlight);
+      } catch { /* 取れなければ、これから来る分だけ */ }
+    };
+
     ctx.showHistory = (messages) => {
       log.textContent = '';
       stream = null;
@@ -537,6 +555,9 @@ export const PANELS = {
       wrap.classList.add('working');
       stop.hidden = false;
     };
+
+    // 作り直されたぶんを、ここで取り戻す。**流し込む側を待たない。**
+    void restore();
 
     ctx.on('busy', (e) => {
       stop.hidden = !e.busy;
@@ -1370,6 +1391,21 @@ export const PANELS = {
     };
 
     draw();
+    /*
+     * **作り直されたら、自分で取り直す。**記録のパネルと同じ形。
+     *
+     * ここまで差分は DOM と、このパネルの中の Map にしか無かった。パネルを一枚
+     * 出し入れするだけで全部が作り直されて消え、そのうえ
+     * 「まだ何も書き換えていません。」と**事実と違うこと**を出していた。
+     * 塊ごと・行ごとに戻す道はこのパネルから入るので、直したものに辿り着けなくなる。
+     */
+    void (async () => {
+      try {
+        const got = await (await fetch('/api/changes')).json();
+        for (const f of got.files ?? []) if (!files.has(f.path)) files.set(f.path, f);
+        if ((got.files ?? []).length > 0) draw();
+      } catch { /* 取れなければ、これから来る分だけ */ }
+    })();
     const record = (v) => {
       const prev = files.get(v.path);
       files.set(v.path, {

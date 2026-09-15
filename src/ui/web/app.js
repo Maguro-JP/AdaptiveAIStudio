@@ -914,6 +914,15 @@ const copiedUpTo = new Map();
  * 出来事はまだ名前を知らない自分の会話のもの。そこだけ通す。
  */
 let sendingFromTop = false;
+/**
+ * いま見ている会話の id。**パネルが自分で取り直すために要る。**
+ *
+ * ここまで、会話の中身は「頁を開いた最初の一回」と「横の一覧から選んだとき」
+ * にしか流し込んでいなかった。パネルを一枚でも出し入れすると `render()` が
+ * 全部作り直すので、**話している途中でも、やり取りが画面から消える。**
+ * 本体には残っているので、頁を読み直すまで戻らない（消えたと思われる）。
+ */
+ctx.conversationId = () => conversations.current;
 ctx.sending = () => { sendingFromTop = !conversations.current; };
 ctx.adopt = (id) => { if (id) conversations.current = id; sendingFromTop = false; };
 let busyNow = false;
@@ -1201,7 +1210,7 @@ async function pickWorkRoot() {
    *
    * ここは `kind` と `modelsDir` も一緒に送っていた。値は設定の頁の入力欄から
    * 取るが、その欄は設定→モデルを開いたときしか埋まらない。開いていない頁では
-   * 空なので、**llamacpp や Ollama の指定と、GGUF の置き場所が黙って消える。**
+   * 空なので、**llamacpp や Ollama の指定と、GGUF の保存先が黙って消える。**
    * 触らないものは送らない（本体側も、送られてこなければ触らない）。
    */
   const r = await ask('/api/config', {

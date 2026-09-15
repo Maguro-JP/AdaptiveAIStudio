@@ -703,3 +703,32 @@ describe('その機械のものでない道', () => {
     assert.equal(foreignPath(undefined), false);
   });
 });
+
+/**
+ * 書き換えたファイルを、本体が覚えていること。
+ *
+ * 画面の「変更したファイル」のパネルは、差分を DOM とパネルの中の Map にしか
+ * 持っていなかった。パネルを一枚出し入れするだけで作り直されて消える。
+ * 本体が持っていなければ、パネルは取り直しようがない。
+ */
+describe('/api/changes', () => {
+  test('**書いたぶんが、あとから取り直せる**', async () => {
+    // **リポジトリに置き土産を残さない。**この土台の作業場は既定（リポジトリの根）。
+    const name = 'changes-probe.txt';
+    const { rm } = await import('node:fs/promises');
+    const { installRoot } = await import('../src/core/home.ts');
+    after(async () => { await rm(join(installRoot(), name), { force: true }); });
+    const before = await json(await get('/api/changes')) as { files: { path: string }[] };
+    assert.ok(!before.files.some((f) => f.path === name), 'この確かめの前提が崩れている');
+
+    const wrote = await put('/api/file', { path: name, content: 'hello world\n' });
+    assert.equal(wrote.status, 200, await wrote.text());
+
+    const got = await json(await get('/api/changes')) as {
+      files: { path: string; diff: string; added: number }[];
+    };
+    const mine = got.files.find((f) => f.path === name);
+    assert.ok(mine, `覚えていない: ${JSON.stringify(got.files.map((f) => f.path))}`);
+    assert.ok(mine.diff.includes('hello world'), mine.diff);
+  });
+});

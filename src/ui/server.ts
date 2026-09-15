@@ -118,6 +118,8 @@ export const MAX_CLIENT_BACKLOG = 4 * 1024 * 1024;
  * 画面はそこを読まない。**本体が最近の分を持ち、画面はそれを取り直す。**
  */
 export const RECENT_LOGS = 500;
+/** 覚えておく「変更したファイル」の数。画面が作り直されたときに配る分。 */
+export const KEPT_CHANGES = 200;
 
 export interface UiServerOptions {
   /** 立ち上げ直しを頼まれたとき。止めて、RESTART_EXIT で終わる側が持つ。 */
@@ -200,6 +202,16 @@ export class UiServer {
   readonly #clients = new Set<ServerResponse>();
   /** 最近の記録。画面が開き直したときに取り直す分。`RECENT_LOGS` 行まで。 */
   readonly #recentLogs: Array<{ seq: number; level: 'info' | 'warn' | 'error'; text: string; at: string }> = [];
+  /**
+   * 書き換えたファイルの差分。**画面が作り直されたときに取り直す分。**
+   *
+   * 「変更したファイル」のパネルは、差分を DOM とパネルの中の Map にしか持っていなかった。
+   * パネルを一枚出し入れするだけで `render()` が全部を作り直すので、中身が消え、
+   * そのうえ「まだ何も書き換えていません。」と**事実と違うこと**を出す。
+   * 塊ごと・行ごとに戻す道はこのパネルから入るので、直したものに辿り着けなくなる。
+   * 記録のパネルと同じく、本体が持って `/api/changes` で配る。
+   */
+  readonly #changes = new Map<string, { path: string; diff: string; added: number; removed: number; created: boolean }>();
   #logSeq = 0;
   #server?: ReturnType<typeof createServer>;
   /** 点検を回す係。状態（走っている子）はそちらが持つ。 */
@@ -378,8 +390,22 @@ export class UiServer {
       this.#recentLogs.push(kept);
       if (this.#recentLogs.length > RECENT_LOGS) this.#recentLogs.splice(0, this.#recentLogs.length - RECENT_LOGS);
       event = { ...event, seq, at: kept.at };
-    } else if (event.type === 'session') {
+    } else if (event.type === 'session' || event.type === 'planEvent') {
       const ev = event.event as { type?: string };
+      if (ev.type === 'diff') {
+        const d = ev as unknown as { path: string; diff: string; added: number; removed: number; created?: boolean };
+        const before = this.#changes.get(d.path);
+        this.#changes.set(d.path, {
+          path: d.path, diff: d.diff, added: d.added, removed: d.removed,
+          created: before?.created ?? d.created === true,
+        });
+        // 際限なく持たない。古い方から落とす（Map は入れた順）。
+        while (this.#changes.size > KEPT_CHANGES) {
+          const oldest = this.#changes.keys().next().value;
+          if (oldest === undefined) break;
+          this.#changes.delete(oldest);
+        }
+      }
       if (ev.type === 'log' || ev.type === 'settled' || ev.type === 'finished') {
         void this.#logFile.append(`[session ${ev.type}] ${JSON.stringify(event.event).slice(0, 2000)}`).catch(() => undefined);
       }
@@ -1334,6 +1360,11 @@ export class UiServer {
       // 最近の記録。画面のログのパネルが開いたときに取り直す。`after` より新しい分だけも取れる。
       const after = Number(url.searchParams.get('after') ?? '0');
       return send(res, 200, { lines: this.#recentLogs.filter((l) => l.seq > after) });
+    }
+
+    if (path === '/api/changes' && req.method === 'GET') {
+      // 書き換えたファイル。画面の「変更したファイル」のパネルが、開いたときに取り直す。
+      return send(res, 200, { files: [...this.#changes.values()] });
     }
 
     if (path === '/api/tasks' && req.method === 'GET') {
