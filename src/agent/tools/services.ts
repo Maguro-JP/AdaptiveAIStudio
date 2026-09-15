@@ -11,6 +11,23 @@
 import { CATALOG, BUILTIN, findEntry, missingSecrets, needsNpx } from '../../mcp/catalog.ts';
 import { connectService, disconnectService } from '../../core/mcp-connect.ts';
 import { type Tool, ok, fail, requireString } from './types.ts';
+import type { McpServerSpec } from '../../mcp/client.ts';
+
+/**
+ * 繋ぎ先が変わったことを、**いま動いているセッションへ伝える口。**
+ *
+ * ここまで、繋ぐ・外すは設定ファイルを書き換えるだけだった。動いている側の
+ * 相手の一覧（`mcpClients`）は `Session.create` のときに作ったきり作り直さない
+ * ので、**外してもツールは呼べたまま**、**繋いでも次の依頼では使えない**。
+ * それでいて「次の依頼から使えます」「次の依頼からは出てきません」と言っていた。
+ * 渡されなければ、これまでどおり設定を書くだけ（試験や CLI から直に使う道）。
+ */
+export interface ServiceHooks {
+  /** 繋いだ相手を起こして、ツールに足す。足せたかを返す。 */
+  onConnected?(id: string, spec: McpServerSpec): Promise<boolean>;
+  /** 外した相手を止めて、ツールから外す。外せたかを返す。 */
+  onDisconnected?(id: string): boolean;
+}
 
 export const listServicesTool: Tool = {
   schema: {
@@ -42,68 +59,97 @@ export const listServicesTool: Tool = {
   },
 };
 
-export const connectServiceTool: Tool = {
-  schema: {
-    name: 'connect_service',
-    description:
-      '外の道具（MCP）に繋ぐ。list_services に在る id を渡す。'
-      + '合言葉はここでは受け取らない（要るときは、何が要るかを返す）。'
-      + '繋いだものは、次の依頼から使える。',
-    parameters: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: '繋ぎ先の id（例: github, playwright）' },
+export function createConnectServiceTool(hooks: ServiceHooks = {}): Tool {
+  return {
+    schema: {
+      name: 'connect_service',
+      description:
+        '外の道具（MCP）に繋ぐ。list_services に在る id を渡す。'
+        + '合言葉はここでは受け取らない（要るときは、何が要るかを返す）。'
+        + '繋いだものは、次の依頼から使える。',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: '繋ぎ先の id（例: github, playwright）' },
+        },
+        required: ['id'],
+        additionalProperties: false,
       },
-      required: ['id'],
-      additionalProperties: false,
     },
-  },
-  async run(args, ctx) {
-    const id = requireString(args, 'id');
-    if (!id) return fail('id が必要です。list_services で一覧を見てください。');
-    const entry = findEntry(id);
-    if (!entry) {
-      return fail(`そういう繋ぎ先はありません: ${id}（在るもの: ${CATALOG.map((e) => e.id).join(', ')}）`);
-    }
+    async run(args, ctx) {
+      const id = requireString(args, 'id');
+      if (!id) return fail('id が必要です。list_services で一覧を見てください。');
+      const entry = findEntry(id);
+      if (!entry) {
+        return fail(`そういう繋ぎ先はありません: ${id}（在るもの: ${CATALOG.map((e) => e.id).join(', ')}）`);
+      }
 
-    // **外と繋ぐのは、勝手にやらない。**利用者の合言葉が動く話なので、
-    // 承認を通す（自動で通す設定でも、協議は必ず人に見せる）。
-    const answer = await ctx.approve({
-      kind: 'deliberation',
-      summary: `外の道具に繋ぎます: ${entry.name}（${entry.id}）\n${entry.about}`,
-    });
-    if (answer === false) return fail(`利用者が断りました: ${entry.name}`);
+      // **外と繋ぐのは、勝手にやらない。**利用者の合言葉が動く話なので、
+      // 承認を通す（自動で通す設定でも、協議は必ず人に見せる）。
+      const answer = await ctx.approve({
+        kind: 'deliberation',
+        summary: `外の道具に繋ぎます: ${entry.name}（${entry.id}）\n${entry.about}`,
+      });
+      if (answer === false) return fail(`利用者が断りました: ${entry.name}`);
 
-    const got = await connectService(entry.id, { root: ctx.root });
-    if (!got.ok) return fail(got.error ?? '繋げませんでした');
+      const got = await connectService(entry.id, { root: ctx.root });
+      if (!got.ok) return fail(got.error ?? '繋げませんでした');
 
-    const said = [`繋ぎました: ${entry.name}（${entry.id}）。次の依頼から使えます。`];
-    for (const m of got.missing) {
-      said.push(`合言葉が要ります: ${m.env}（${m.about}）。設定 → 外の道具 で入れてください。`);
-    }
-    said.push(...got.notes);
-    return ok(said.join('\n'));
-  },
-};
-
-export const disconnectServiceTool: Tool = {
-  schema: {
-    name: 'disconnect_service',
-    description: '外の道具（MCP）を外す。合言葉は消さない。',
-    parameters: {
-      type: 'object',
-      properties: { id: { type: 'string', description: '外す id' } },
-      required: ['id'],
-      additionalProperties: false,
+      /*
+       * **「次の依頼から使えます」を、本当にする。**
+       *
+       * ここまでは設定を書くだけで、動いている側には何も足していなかった。
+       * 次の依頼どころか、立ち上げ直すまで使えない。
+       */
+      const up = got.spec && hooks.onConnected
+        ? await hooks.onConnected(entry.id, got.spec).catch(() => false)
+        : undefined;
+      const said = [
+        up === false
+          ? `設定に書きました: ${entry.name}（${entry.id}）。ただし、いま起こすことはできませんでした`
+            + '（立ち上げ直すと繋がることがあります）。'
+          : up === true
+            ? `繋ぎました: ${entry.name}（${entry.id}）。次の依頼から使えます。`
+            // 動いているセッションが無い所（画面を通さない道）では、書いたところまでを言う。
+            : `設定に書きました: ${entry.name}（${entry.id}）。次に立ち上げたときから使えます。`,
+      ];
+      for (const m of got.missing) {
+        said.push(`合言葉が要ります: ${m.env}（${m.about}）。設定 → 外の道具 で入れてください。`);
+      }
+      said.push(...got.notes);
+      return ok(said.join('\n'));
     },
-  },
-  async run(args, ctx) {
-    const id = requireString(args, 'id');
-    if (!id) return fail('id が必要です。');
-    const answer = await ctx.approve({ kind: 'deliberation', summary: `外の道具を外します: ${id}` });
-    if (answer === false) return fail(`利用者が断りました: ${id}`);
-    const got = await disconnectService(id);
-    if (!got.ok) return fail(got.error ?? '外せませんでした');
-    return ok(`外しました: ${id}。次の依頼からは出てきません。`);
-  },
-};
+  };
+}
+
+export function createDisconnectServiceTool(hooks: ServiceHooks = {}): Tool {
+  return {
+    schema: {
+      name: 'disconnect_service',
+      description: '外の道具（MCP）を外す。合言葉は消さない。',
+      parameters: {
+        type: 'object',
+        properties: { id: { type: 'string', description: '外す id' } },
+        required: ['id'],
+        additionalProperties: false,
+      },
+    },
+    async run(args, ctx) {
+      const id = requireString(args, 'id');
+      if (!id) return fail('id が必要です。');
+      const answer = await ctx.approve({ kind: 'deliberation', summary: `外の道具を外します: ${id}` });
+      if (answer === false) return fail(`利用者が断りました: ${id}`);
+      const got = await disconnectService(id);
+      // 繋がっていないものを「外しました」と言わない（打ち間違いが事実として返る）。
+      if (!got.ok) return fail(got.error ?? '外せませんでした');
+      /*
+       * **止めるところまでやる。**設定から消すだけでは、動いている相手は
+       * そのまま立っていて、ツールも呼べたままになる。
+       */
+      const down = hooks.onDisconnected?.(got.id ?? id);
+      return ok(down === false
+        ? `設定から外しました: ${id}。いま動いている分は、立ち上げ直すまで残ります。`
+        : `外しました: ${id}。次の依頼からは出てきません。`);
+    },
+  };
+}

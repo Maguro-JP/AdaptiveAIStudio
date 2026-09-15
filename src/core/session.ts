@@ -14,7 +14,7 @@
  */
 import { Priority } from '../providers/contract.ts';
 import { findCodeTool, findSymbolTool } from '../agent/tools/find.ts';
-import { listServicesTool, connectServiceTool, disconnectServiceTool } from '../agent/tools/services.ts';
+import { listServicesTool, createConnectServiceTool, createDisconnectServiceTool } from '../agent/tools/services.ts';
 import { defaultWorkRoot } from './home.ts';
 import { isWriteTool } from '../agent/tools/write-kind.ts';
 import { resolve, join } from 'node:path';
@@ -32,7 +32,7 @@ import { createDeliberateTool } from '../agent/tools/deliberate.ts';
 import { buildInspector } from './inspector-setup.ts';
 import { startMcpServers } from './mcp-setup.ts';
 import { loadJournals, type Journals } from './journals.ts';
-import type { McpClient } from '../mcp/client.ts';
+import { McpClient, type McpServerSpec } from '../mcp/client.ts';
 import { collectTools } from '../mcp/tools.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall, betterDetail } from '../memory/memory.ts';
@@ -443,6 +443,42 @@ export class Session {
     let refresh = (): void => { /* ツールの入れ物が出来るまでは、何もしない */ };
     const mcpClients = await startMcpServers(config, log, () => refresh());
 
+    /*
+     * 繋ぐ・外すを、**いま動いている相手の一覧にも効かせる。**
+     *
+     * ここまで、`connect_service` / `disconnect_service` は設定ファイルを
+     * 書き換えるだけだった。この一覧は `Session.create` のときに作ったきり
+     * 作り直さないので、**外してもツールは呼べたまま**、**繋いでも次の依頼では
+     * 使えない**。それでいて「次の依頼から使えます」「次の依頼からは
+     * 出てきません」と言っていた。動かして確かめた。
+     */
+    const serviceHooks = {
+      onConnected: async (id: string, spec: McpServerSpec): Promise<boolean> => {
+        if (mcpClients.some((c) => c.name === id)) return true;
+        const client = new McpClient(id, spec);
+        mcpClients.push(client);
+        const up = await client.start().catch(() => false);
+        if (!up) {
+          // 立たなかったものを一覧に残さない（ツールは出ないが、外せなくなる）。
+          const at = mcpClients.indexOf(client);
+          if (at >= 0) mcpClients.splice(at, 1);
+          log('warn', `外のツールに繋がりませんでした: ${id} — ${client.failure ?? '理由は不明'}`);
+          return false;
+        }
+        log('info', `外のツールに繋がりました: ${id}（${client.tools.length} 件）`);
+        refresh();
+        return true;
+      },
+      onDisconnected: (id: string): boolean => {
+        const at = mcpClients.findIndex((c) => c.name === id);
+        if (at < 0) return false;
+        mcpClients[at]!.stop();
+        mcpClients.splice(at, 1);
+        refresh();
+        return true;
+      },
+    };
+
     // 権限は「配らない」ことで守る。禁じる文言ではなく、手段の有無で決める。
     const netCfg = config.network ?? {};
 
@@ -469,7 +505,8 @@ export class Session {
       // 繋ぐ・外すも、ここに置く。**外の道具の話は、外の道具の側で完結させる。**
       // 繋ぐのは承認を通す（協議は自動では通らない）。
       mcp: wrap([
-        listServicesTool, connectServiceTool, disconnectServiceTool,
+        listServicesTool,
+        createConnectServiceTool(serviceHooks), createDisconnectServiceTool(serviceHooks),
         ...collectTools(mcpClients, { inspector, timeoutMs: config.mcp?.timeoutMs }),
       ]),
     };
@@ -477,7 +514,8 @@ export class Session {
     // 繋がったら、そのぶんを入れ直す。**次のターンから使える。**
     refresh = () => {
       toolPool.mcp = wrap([
-        listServicesTool, connectServiceTool, disconnectServiceTool,
+        listServicesTool,
+        createConnectServiceTool(serviceHooks), createDisconnectServiceTool(serviceHooks),
         ...collectTools(mcpClients, { inspector, timeoutMs: config.mcp?.timeoutMs }),
       ]);
     };

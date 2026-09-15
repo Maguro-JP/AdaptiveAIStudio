@@ -12,6 +12,7 @@ import { saveMcpServer, removeMcpServer } from '../ui/settings.ts';
 import { findEntry, specFrom, missingSecrets, needsNpx, CATALOG, type CatalogEntry } from '../mcp/catalog.ts';
 import { githubLaunch } from './github-mcp.ts';
 import { canRun } from './which.ts';
+import type { McpServerSpec } from '../mcp/client.ts';
 
 export interface ConnectResult {
   ok: boolean;
@@ -23,6 +24,14 @@ export interface ConnectResult {
   /** 言っておくこと（廃止、npm が要る、など）。 */
   notes: string[];
   error?: string;
+  /**
+   * 設定へ書いた、立ち上げ方そのもの。
+   *
+   * **いま動いているセッションへ足すために返す。**ここまでは設定を書くだけで、
+   * 動いている側は次に立ち上げ直すまで何も変わらなかった。
+   * 「次の依頼から使えます」と言いながら、その依頼では使えない。
+   */
+  spec?: McpServerSpec;
 }
 
 export interface ConnectOptions {
@@ -67,7 +76,7 @@ export async function connectService(id: string, opts: ConnectOptions = {}): Pro
     }
     const path = await saveMcpServer(entry.id, spec as Parameters<typeof saveMcpServer>[1]);
     return {
-      ok: true, id: entry.id, path,
+      ok: true, id: entry.id, path, spec: spec as McpServerSpec,
       missing: missingSecrets(entry).map((m) => ({ env: m.env, about: m.about, ...(m.where ? { where: m.where } : {}) })),
       notes: notesFor(entry, opts.prefer),
       };
@@ -81,7 +90,11 @@ export async function disconnectService(id: string): Promise<ConnectResult> {
   const entry = findEntry(id);
   const name = entry?.id ?? id;
   try {
-    const path = await removeMcpServer(name);
+    const { path, removed } = await removeMcpServer(name);
+    // **繋がっていないものを「外しました」と言わない。**
+    if (!removed) {
+      return { ok: false, id: name, path, missing: [], notes: [], error: `繋がっていません: ${name}` };
+    }
     return { ok: true, id: name, path, missing: [], notes: [] };
   } catch (e) {
     return { ok: false, missing: [], notes: [], error: (e as Error).message };

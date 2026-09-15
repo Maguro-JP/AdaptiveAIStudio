@@ -174,18 +174,26 @@ export async function saveMcpServer(
  * **合言葉は消さない。**繋ぎ直すたびに打ち直させることになる。
  * 消したいときは置き場の .env を直に触ってもらう（そこに在ると言ってある）。
  */
-export async function removeMcpServer(name: string): Promise<string> {
+/**
+ * 設定から一つ外す。**在ったかどうかを返す。**
+ *
+ * ここは `delete` して必ず成功を返していた。**一度も繋いでいない id でも
+ * 「外しました」**になる。打ち間違いが、外れた事実として返ってくる。
+ */
+export async function removeMcpServer(name: string): Promise<{ path: string; removed: boolean }> {
   const at = configPath();
   let current: Record<string, unknown> = {};
   try {
     current = JSON.parse(await readFile(at, 'utf8')) as Record<string, unknown>;
-  } catch { return at; }
+  } catch { return { path: at, removed: false }; }
   const mcp = (current.mcp ?? {}) as { servers?: Record<string, unknown> };
   const servers = { ...(mcp.servers ?? {}) };
+  const removed = Object.prototype.hasOwnProperty.call(servers, name);
+  if (!removed) return { path: at, removed: false };
   delete servers[name];
   await mkdir(dirname(at), { recursive: true });
   await writeFile(at, `${JSON.stringify({ ...current, mcp: { ...mcp, servers } }, null, 2)}\n`, 'utf8');
-  return at;
+  return { path: at, removed: true };
 }
 
 /**

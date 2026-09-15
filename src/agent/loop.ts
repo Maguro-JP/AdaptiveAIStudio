@@ -13,7 +13,7 @@ import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
 import type { Tool, ToolContext, ApprovalRequest, ApprovalAnswer } from './tools/types.ts';
 import { ToolTextFilter } from './tool-text.ts';
 import { DoneMark, DONE_MARK } from './done.ts';
-import { fitToWindow, tokenBudget, trimSchemas, type Count } from './window.ts';
+import { fitToWindow, tokenBudget, trimSchemas, TOOL_SHARE, type Count } from './window.ts';
 
 export type AgentEvent =
   | { type: 'thinking'; delta: string }
@@ -143,11 +143,23 @@ export class Agent {
           temperature: this.#opts.temperature,
           maxTokens: this.#opts.maxTokens,
           ...(this.#opts.priority !== undefined ? { priority: this.#opts.priority } : {}),
-          // **狭い窓では、道具の説明を一文に削る。**説明だけで 1400 トークン
-          // あり、4k の窓では 34% を占める。決まりと学びを足すと、
-          // 肝心の依頼と履歴の場所が残らない。広い窓では削らない。
+          /*
+           * **狭い窓では、道具の説明を一文に削る。**説明だけで 1400 トークン
+           * あり、4k の窓では 34% を占める。決まりと学びを足すと、
+           * 肝心の依頼と履歴の場所が残らない。広い窓では削らない。
+           *
+           * **取り分はここに書かない。**ここは 0.15 を明に渡していた。
+           * `window.ts` は「0.15 では一文に切っても入らず、説明が丸ごと落ちて
+           * 呼び分けができなくなる」と書いて `TOOL_SHARE` を 0.25 に直したのに、
+           * **本番で `trimSchemas` を呼ぶのはここ一箇所だけ**なので、直した側は
+           * 誰からも読まれていなかった。本番のツール13個・既定の
+           * コンテキストウィンドウ 8192 で測ると、0.15 では 13 個すべての説明が
+           * 落ちる（run_command の許可コマンドの一覧も、fetch_url の許可先も、
+           * edit_file の使い方も届かない）。
+           * 数は `window.ts` に一つだけ置く。
+           */
           tools: trimSchemas(
-            this.#opts.tools.map((t) => t.schema), this.#opts.contextTokens ?? 8192, 0.15,
+            this.#opts.tools.map((t) => t.schema), this.#opts.contextTokens ?? 8192, TOOL_SHARE,
             this.#opts.count,
           ),
         },

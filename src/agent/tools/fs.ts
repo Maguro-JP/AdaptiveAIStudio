@@ -67,7 +67,15 @@ export const listFilesTool: Tool = {
   },
   async run(args, ctx) {
     const p = typeof args.path === 'string' && args.path ? args.path : '.';
-    const abs = safeResolve(ctx.root, p);
+    /*
+     * **リンクを辿った先まで見る。**`read_file` はそうしていたが、ここは
+     * 文字の上でしか見ていなかった。作業ディレクトリの中に外を指すリンクが
+     * 一つあれば、そこを path に渡すだけで**外のファイル名が並ぶ**
+     * （中身は read_file が断るが、名前は出る）。実際に出した。
+     * 木を降りるときは Dirent がリンクを「ファイルでもディレクトリでもない」
+     * として飛ばすので、漏れるのは**名指しで渡されたとき**だけ。そこを塞ぐ。
+     */
+    const abs = await realSafeResolve(ctx.root, p);
     if (!abs) return fail(`作業ディレクトリの外です: ${p}`);
     const found: string[] = [];
     const walked = { capped: false };
@@ -106,13 +114,29 @@ export const searchTextTool: Tool = {
     const query = requireString(args, 'query');
     if (!query) return fail('query が必要です。');
     const base = typeof args.path === 'string' && args.path ? args.path : '.';
-    const abs = safeResolve(ctx.root, base);
+    // list_files と同じ理由でリンクの先まで見る。片方だけ塞いでも漏れる。
+    const abs = await realSafeResolve(ctx.root, base);
     if (!abs) return fail(`作業ディレクトリの外です: ${base}`);
 
     const files: string[] = [];
     const walked = { capped: false };
-    await walk(abs, ctx.root, files, 0, await ignoresFor(ctx.root, base), walked)
-      .catch(() => undefined);
+    /*
+     * **探せなかったことを、該当なしと言わない。**
+     *
+     * ここは失敗を握り潰していた。無い道・ファイルを指す道・読めない道を
+     * 渡すと、探しにすら行っていないのに `該当なし` と返る。モデルは
+     * 「そこには無い」と読んで、別の場所を探しに行かない。打ち間違いが
+     * **事実として返ってくる**のがいちばん困る形。
+     */
+    try {
+      // **ファイルを指されたら、その一つを探す。**モデルはよく渡してくる。
+      // ここで readdir に落として ENOTDIR を返すと、使い方の間違いにしか見えない。
+      const info = await stat(abs);
+      if (info.isFile()) files.push(toDisplayPath(ctx.root, abs));
+      else await walk(abs, ctx.root, files, 0, await ignoresFor(ctx.root, base), walked);
+    } catch (e) {
+      return fail(`探せません: ${base} (${describe(e)})`);
+    }
 
     /*
      * **打ち切ったことを、必ず言う。**
