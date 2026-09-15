@@ -1,6 +1,0 @@
-build: 4585 (f0d4b29e) with cc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0 for x86_64-linux-gnu
-system info: n_threads = 4, n_threads_batch = 4, total_threads = 4
-
-system_info: n_threads = 4 (n_threads_batch = 4) / 4 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | LLAMAFILE = 1 | OPENMP = 1 | AARCH64_REPACK = 1 | 
-
-main: couldn't bind HTTP server socket, hostname: 127.0.0.1, port: 18092
