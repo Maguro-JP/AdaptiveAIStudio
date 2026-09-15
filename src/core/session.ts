@@ -14,7 +14,9 @@
  */
 import { Priority } from '../providers/contract.ts';
 import { findCodeTool, findSymbolTool } from '../agent/tools/find.ts';
-import { listServicesTool, createConnectServiceTool, createDisconnectServiceTool } from '../agent/tools/services.ts';
+import {
+  listServicesTool, createConnectServiceTool, createDisconnectServiceTool, type ServiceHooks,
+} from '../agent/tools/services.ts';
 import { defaultWorkRoot } from './home.ts';
 import { isWriteTool } from '../agent/tools/write-kind.ts';
 import { resolve, join } from 'node:path';
@@ -328,6 +330,15 @@ export class Session {
   readonly toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[]; mcp: Tool[] };
   /** 外の道具の繋がり具合。画面と doctor に見せるために持つ。 */
   readonly mcpClients: readonly McpClient[];
+  /**
+   * 外のツールを、**いま動いているこのセッションに**繋ぐ・外す口。
+   *
+   * 画面の口（`/api/mcp/connect`）はここまで、設定を書いてから
+   * **手が空いているときだけ**セッションを畳んでいた。作業中は畳まないので、
+   * 繋いだツールはそのセッションの間ずっと立ち上がらず、返事にも一言も無い。
+   * 畳まずに足せるようにする。
+   */
+  readonly services: ServiceHooks;
   readonly #opts: SessionOptions;
   readonly #prefetch: Prefetcher;
   /** ハーネスの規則へ「いま何を頼まれているか」を渡すための箱。 */
@@ -373,7 +384,9 @@ export class Session {
     harness: Harness;
     toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[]; mcp: Tool[] };
     mcpClients: McpClient[];
+    services: ServiceHooks;
   }) {
+    this.services = init.services;
     this.config = init.config;
     this.modelReason = init.modelReason;
     this.root = init.root;
@@ -464,7 +477,7 @@ export class Session {
      * 使えない**。それでいて「次の依頼から使えます」「次の依頼からは
      * 出てきません」と言っていた。動かして確かめた。
      */
-    const serviceHooks = {
+    const serviceHooks: Required<ServiceHooks> = {
       onConnected: async (id: string, spec: McpServerSpec): Promise<boolean> => {
         if (mcpClients.some((c) => c.name === id)) return true;
         const client = new McpClient(id, spec);
@@ -556,6 +569,7 @@ export class Session {
       config, root, candidates, modelReason: note, memory,
       roles: new RoleRegistry(config.roles ?? [], (t) => log('warn', t)),
       orchestrator, pilot, prefetch, opts, holder, forum, toolPool, harness, mcpClients,
+      services: serviceHooks,
       proposals, idle, duties,
     });
     return session;

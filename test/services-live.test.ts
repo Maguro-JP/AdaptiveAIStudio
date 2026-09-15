@@ -117,3 +117,44 @@ describe('繋ぐと、いま動いているセッションへ足しにいく', (
     assert.equal(said.isError, true, said.content);
   });
 });
+
+/**
+ * 画面の口（`/api/mcp/connect`）も、書いたものと同じものを動かす。
+ *
+ * ここは設定ファイルへ書いたあと、動いているほうへは `specFrom` で
+ * **もう一度組み立てて**入れていた。カタログの既定は `npx -y …` なので、
+ * 同梱してあるものを node で直に起こす `github-local` を繋ぐと、
+ * **ファイルは node 直起動、動いている側は npx** になる。npx の無い機械では、
+ * 立ち上げ直すまで繋がらない。
+ *
+ * あわせて、繋ぐ口は「手が空いているときだけ」セッションを畳んでいた。
+ * 外のツールはセッションを組むときにだけ立ち上がるので、**作業中に押すと
+ * そのセッションの間ずっと繋がらない**のに、返事には一言も無かった。
+ */
+describe('画面の口も、書いたものと同じものを動かす', () => {
+  test('**動いている設定に入る立ち上げ方が、ファイルと同じ**', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { UiServer } = await import('../src/ui/server.ts');
+    const { loadConfig } = await import('../src/config.ts');
+    const home = await scratch();
+    const server = new UiServer({ port: 0, config: loadConfig().config });
+    const base = (await server.start()).replace(/\/$/, '');
+    try {
+      const r = await fetch(`${base}/api/mcp/connect`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: 'github-local' }),
+      });
+      assert.equal(r.status, 200, await r.text());
+      const onDisk = JSON.parse(await readFile(join(home, 'aas.config.json'), 'utf8')) as {
+        mcp: { servers: Record<string, { command?: string; args?: string[] }> };
+      };
+      const wrote = onDisk.mcp.servers['github-local'];
+      const live = server.config.mcp?.servers?.['github-local'] as { command?: string; args?: string[] };
+      assert.ok(wrote, '書けていない');
+      assert.equal(live?.command, wrote.command,
+        `ファイルと動いている側で起こし方が違う: ${live?.command} / ${wrote.command}`);
+      assert.deepEqual(live?.args, wrote.args, '引数も違う');
+    } finally { await server.stop(); }
+  });
+});

@@ -53,6 +53,7 @@ import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout, DEFAULT_LAYOUT
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
 import { collectState } from './state.ts';
 import { Attachments, MAX_BYTES } from './attachments.ts';
+import type { McpServerSpec } from '../mcp/client.ts';
 import { expandMentions, mentionBudget } from '../agent/mention.ts';
 import { expandCommand, listCommands } from '../agent/commands.ts';
 import { buildReport } from '../cli/report.ts';
@@ -1906,25 +1907,41 @@ export class UiServer {
       });
       if (!got.ok) return send(res, 400, { error: got.error ?? '繋げませんでした' });
 
-      // **いまの土台を畳む。**外の道具は土台を組むときに立ち上がるので、
-      // 畳まないと、繋いだのに次も繋がらない。会話は残してある。
-      const live = this.#session;
-      if (live && !this.#busyNow(live)) {
-        this.#session = undefined;
-        await live.close().catch(() => undefined);
-      }
+      /*
+       * **書いたものを、そのまま動いている設定にも入れる。**
+       *
+       * ここは `specFrom(entry, …)` でもう一度組み立てていた。カタログの既定は
+       * `npx -y …` なので、`github-local`（同梱してあるものを node で直に起こす）
+       * を繋ぐと、**ファイルは node 直起動、動いている側は npx** になる。
+       * npx の無い機械では、立ち上げ直すまで繋がらない。
+       * 書いた側（`connectService`）が返す spec を使う。
+       */
+      const spec = got.spec ?? specFrom(entry, { root: this.#workRoot(), ...(prefer ? { prefer } : {}) });
       this.#opts.config.mcp = {
         ...this.#opts.config.mcp,
         servers: {
           ...this.#opts.config.mcp?.servers,
-          [entry.id]: {
-            ...specFrom(entry, { root: this.#workRoot(), ...(prefer ? { prefer } : {}) }),
-            enabled: body?.enabled !== false,
-          },
+          [entry.id]: { ...spec, enabled: body?.enabled !== false },
         },
       };
+
+      /*
+       * **畳まずに、その場で足す。**
+       *
+       * ここは「手が空いているときだけ」セッションを畳んでいた。外のツールは
+       * セッションを組むときにだけ立ち上がるので、**作業中に押すと、そのセッションの
+       * 間ずっと繋がらない。**しかも返事には一言も無い。
+       * いまは足す口（`session.services`）が在るので、畳まずに起こす。
+       */
+      let live: string | undefined;
+      const now = this.#session;
+      if (now && body?.enabled !== false) {
+        const up = await now.services.onConnected?.(entry.id, spec as McpServerSpec);
+        live = up === false ? '起こせませんでした（立ち上げ直すと繋がることがあります）' : undefined;
+      }
       return send(res, 200, {
         id: got.id, path: got.path, missing: got.missing, notes: got.notes,
+        ...(live ? { note: live } : {}),
       });
     }
 
@@ -1935,11 +1952,8 @@ export class UiServer {
       if (!servers[id]) return send(res, 404, { error: `繋いでいません: ${id}` });
       delete servers[id];
       await disconnectService(id);
-      const live = this.#session;
-      if (live && !this.#busyNow(live)) {
-        this.#session = undefined;
-        await live.close().catch(() => undefined);
-      }
+      // 繋ぐ側と同じく、畳まずにその場で止める。作業中でも効く。
+      this.#session?.services.onDisconnected?.(id);
       this.#opts.config.mcp = { ...this.#opts.config.mcp, servers };
       return send(res, 200, { id, removed: true });
     }
