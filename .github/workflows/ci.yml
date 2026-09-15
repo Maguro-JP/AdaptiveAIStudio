@@ -1,0 +1,110 @@
+# 検査を回す。
+#
+# Windows を入れているのが要点。
+# 「Linux では通るが Windows では落ちる」が実際に起きており
+# （殻の glob 展開、巨大な仮ファイル、パスの区切り、実行ビット）、
+# 手元が Windows でも、直す側が Linux なら気づけない。
+#
+# ただし **Windows の枠は2倍で数えられる**。前に使い切って
+# 1日まるごと検査できなくなった。
+#
+# **push では回さない。** ここが一番効く。
+# 直しを10回押せば10回回る、という作りだったのが元凶で、
+# 1回あたりを安くしても、回数が減らなければ意味がない。
+#
+# 代わりに、回すのは次の三つだけ。
+#
+#   PR を出したとき   人に見せる前。ここが本来の検査の場
+#   手で頼んだとき    確かめたいときに、確かめたいものを
+#   週に一度          網。手元では気づけない環境側の変化を拾う
+#                     （ランナーの中身や Node の更新で、こちらを
+#                       変えていなくても落ちることがある）
+#
+# main へ直接押す運用では、押す前に手元で npm test を通す。
+# 手元と CI で違いが出るのは Windows なので、そこが気になる変更のときは
+# PR を出すか、手で回す。
+#
+# 1回あたりも減らしてある。
+#   ・後から押したら、走っている前のものは打ち切る
+#   ・組み合わせは2つだけ（下限の Node は Linux、Windows は現行の Node）
+#   ・型検査は独立した仕事にしない（仕事を1つ増やすと、それだけで1分課金される）
+#   ・文書だけの変更では回さない
+name: 検査
+
+on:
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**', '.gitignore', '.gitattributes']
+  schedule:
+    # 毎週月曜 09:00 JST。UTC では月曜 00:00。
+    # （JST の何時かを先に決めてから UTC へ直す。逆をやると1日ずれる）
+    # 週1回 × 3分 なので、月に12分ほど。
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: '全部の組み合わせで回す'
+        type: boolean
+        default: false
+
+# 同じ枝に続けて push したら、前のものは打ち切る。
+# 途中の版が通ったかどうかは、結局いらない。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 既定は2つ。下限の Node が Linux（安い方）で、
+        # Windows は実際に使う版で見る。落ちるのはいつも Windows 側なので、
+        # 減らすならこちらではなく Linux 側から減らす。
+        os: [ubuntu-latest, windows-latest]
+        node: ['22.x']
+        include:
+          - os: windows-latest
+            node: '24.x'
+        exclude:
+          - os: windows-latest
+            node: '22.x'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # 実行時の依存はゼロなので、ここでは何も入れない。
+      # 入れてしまうと「入れなくても動く」が壊れても気づけない。
+      - name: 検査
+        run: npm test
+
+      # 型検査だけは TypeScript が要る。独立した仕事にすると
+      # それだけで1分課金されるので、安い方の仕事に相乗りさせる。
+      - name: 型検査
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+
+  # 手で頼んだときだけ、残りの組み合わせも見る。
+  full:
+    name: ${{ matrix.os }} / Node ${{ matrix.node }}（全部）
+    if: inputs.full
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, node: '24.x' }
+          - { os: windows-latest, node: '22.x' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test

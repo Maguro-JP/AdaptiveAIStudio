@@ -1,0 +1,41 @@
+{
+  "name": "adaptive-ai-studio",
+  "version": "0.12.0",
+  "private": true,
+  "type": "module",
+  "description": "モデル非依存のAI開発基盤",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "doctor": "node --experimental-strip-types --no-warnings src/cli/doctor.ts",
+    "chat": "node --experimental-strip-types --no-warnings src/cli/main.ts",
+    "test": "node scripts/run-tests.mjs",
+    "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
+    "check": "node scripts/check.mjs",
+    "agent": "node --experimental-strip-types --no-warnings src/cli/agent.ts",
+    "team": "node --experimental-strip-types --no-warnings src/cli/team.ts",
+    "models": "node --experimental-strip-types --no-warnings src/cli/models.ts",
+    "ui": "node --experimental-strip-types --no-warnings src/cli/ui.ts",
+    "update": "node --experimental-strip-types --no-warnings src/cli/update.ts",
+    "llama": "node --experimental-strip-types --no-warnings src/cli/llama.ts",
+    "selftest": "node --experimental-strip-types --no-warnings src/cli/selftest.ts",
+    "clean": "node --experimental-strip-types --no-warnings src/cli/clean.ts",
+    "bundle": "node scripts/bundle.mjs --node-here --out dist/AdaptiveAIStudio",
+    "check:bundle": "node scripts/check-bundle.mjs",
+    "smoke": "node --experimental-strip-types --no-warnings scripts/smoke.mjs",
+    "installer": "node scripts/installer.mjs",
+    "sweep": "node scripts/sweep.mjs",
+    "real-model": "node scripts/real-model.mjs",
+    "bench": "node --experimental-strip-types --no-warnings scripts/bench.mjs",
+    "bench-edit": "node --experimental-strip-types --no-warnings scripts/bench-edit.mjs",
+    "handoff": "node scripts/handoff.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/sdk": "^0.71.0"
+  }
+}

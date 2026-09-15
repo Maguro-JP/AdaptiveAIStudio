@@ -1,0 +1,15 @@
+build: 4585 (f0d4b29e) with cc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0 for x86_64-linux-gnu
+system info: n_threads = 4, n_threads_batch = 4, total_threads = 4
+
+system_info: n_threads = 4 (n_threads_batch = 4) / 4 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | LLAMAFILE = 1 | OPENMP = 1 | AARCH64_REPACK = 1 | 
+
+main: HTTP server is listening, hostname: 127.0.0.1, port: 18094, http threads: 3
+main: loading model
+srv    load_model: loading model '/nonexistent/model.gguf'
+gguf_init_from_file: failed to open GGUF file '/nonexistent/model.gguf'
+llama_model_load: error loading model: llama_model_loader: failed to load model from /nonexistent/model.gguf
+
+llama_model_load_from_file_impl: failed to load model
+common_init_from_params: failed to load model '/nonexistent/model.gguf'
+srv    load_model: failed to load model, '/nonexistent/model.gguf'
+main: exiting due to model loading error

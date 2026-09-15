@@ -1,0 +1,248 @@
+/**
+ * 繋ぎ先の見本帳。
+ *
+ * MCP は繋ぎ方が決まっている。決まっているのに、繋ぐたびに
+ * 「命令は何で、引数は何で、合言葉はどの名前で渡すのか」を人に書かせていた。
+ * **形が決まっているものは、こちらが持っておく。**
+ *
+ * ここに在るものは、名前を一つ言えば繋がる（合言葉が要るものは、それだけ訊く）。
+ *
+ * **推測で並べない。**ここに書いた名前は npm で在ることを確かめてある
+ * （確かめた日: 2026-09-04）。廃止されたものは `retired` を立てて、
+ * 黙って消さずに理由を言う。消すと「昨日まで在ったものが無い」になる。
+ */
+
+export interface Secret {
+  /** 環境に置く名前。設定ファイルにも画面にも、値は出さない。 */
+  env: string;
+  /** 何を入れるものか。人に見せる。 */
+  about: string;
+  /** どこで取るか。 */
+  where?: string;
+}
+
+/**
+ * **元から入っているもの。**
+ *
+ * ここに在るものを「外から繋ぐもの」として並べていた。並べた結果、
+ * 自前で持っている機能を、わざわざ npm 経由で入れ直させることになっていた
+ * （しかも npm の無い機械では入らない）。
+ *
+ * 繋ぐ先ではなく「もう在る」と言うために持つ。
+ */
+export const BUILTIN = [
+  {
+    id: 'filesystem',
+    name: 'ファイルを読み書きする',
+    tools: ['read_file', 'list_files', 'search_text', 'find_code', 'write_file', 'edit_file'],
+    about: '作業場の外へは出さない。書き換えは承認と検問所を通る',
+  },
+  {
+    id: 'memory',
+    name: '覚えておく',
+    tools: ['（会話をまたいで、こちらから覚える）'],
+    about: '起きたことを控えて、関係するときに思い出して添える',
+  },
+  {
+    id: 'thinking',
+    name: '段に分けて進める',
+    tools: ['/plan', '（歩幅を測って割り直す）'],
+    about: '大きい依頼を分け、詰まったら小さく割り直す',
+  },
+  {
+    id: 'shell',
+    name: 'コマンドを動かす',
+    tools: ['run_command'],
+    about: '許した先頭語だけ。承認を通る',
+  },
+  {
+    id: 'web',
+    name: '頁を取ってくる',
+    tools: ['fetch_url'],
+    about: '行き先を見せて、返ってきたものは検問所を通す',
+  },
+] as const;
+
+export interface CatalogEntry {
+  id: string;
+  /** 表に出す名前。**訳さない。** */
+  name: string;
+  /** 何ができるか。一行。 */
+  about: string;
+  /** 手元で立ち上げる（stdio） */
+  command?: string;
+  args?: string[];
+  /** 遠くに繋ぐ（Streamable HTTP） */
+  url?: string;
+  envFrom?: Record<string, string>;
+  headersFrom?: Record<string, string>;
+  secrets?: Secret[];
+  /** 立ち上げに npm（npx）が要るか。要るものは、入れた機械では動かない。 */
+  needsNpx?: boolean;
+  /** 廃止されたもの。繋げはするが、そう言う。 */
+  retired?: string;
+  /**
+   * 繋ぎ先を、こちらの見当で書いたもの。**確かめていない。**
+   * 網の外から確かめられないので、外れていることがある。黙って出さない。
+   */
+  unverified?: boolean;
+  /**
+   * 手元で動かす道（遠くが駄目なときの逃げ道）。
+   * `npx` が要るので、npm の無い機械では動かない。
+   */
+  local?: { command: string; args: string[]; needsNpx?: boolean; envFrom?: Record<string, string> };
+  /** 引数に、作業場などを埋める必要があるか。 */
+  wantsRoot?: boolean;
+}
+
+const npx = (pkg: string, ...rest: string[]) => ({
+  command: 'npx', args: ['-y', pkg, ...rest], needsNpx: true,
+});
+
+/**
+ * 見本帳。
+ *
+ * 順は、使う頻度の見当。上から出す。
+ */
+export const CATALOG: CatalogEntry[] = [
+  {
+    id: 'github',
+    name: 'GitHub',
+    about: 'issue と PR を読み書きする。コードも検索できる',
+    // 遠くの相手。**これが今の本筋。**npm の方は廃止されている。
+    url: 'https://api.githubcopilot.com/mcp/',
+    headersFrom: { Authorization: 'GITHUB_TOKEN' },
+    secrets: [{
+      env: 'GITHUB_TOKEN',
+      about: 'GitHub の合言葉（personal access token）',
+      where: 'https://github.com/settings/tokens',
+    }],
+  },
+  {
+    id: 'playwright',
+    name: 'Playwright',
+    about: 'ブラウザを開いて、押して回る（遠くの口は無い。手元で動かす）',
+    ...npx('@playwright/mcp@latest'),
+  },
+  {
+    id: 'context7',
+    name: 'Context7',
+    about: 'ライブラリの、いまの説明書を引く',
+    url: 'https://mcp.context7.com/mcp',
+    unverified: true,
+    local: { command: 'npx', args: ['-y', '@upstash/context7-mcp'], needsNpx: true },
+  },
+  {
+    id: 'notion',
+    name: 'Notion',
+    about: 'Notion の頁を読み書きする',
+    url: 'https://mcp.notion.com/mcp',
+    unverified: true,
+    headersFrom: { Authorization: 'NOTION_TOKEN' },
+    local: { command: 'npx', args: ['-y', '@notionhq/notion-mcp-server'], needsNpx: true },
+    envFrom: { NOTION_TOKEN: 'NOTION_TOKEN' },
+    secrets: [{
+      env: 'NOTION_TOKEN',
+      about: 'Notion の合言葉（integration token）',
+      where: 'https://www.notion.so/my-integrations',
+    }],
+  },
+  {
+    id: 'sentry',
+    name: 'Sentry',
+    about: '起きている不具合を見る',
+    url: 'https://mcp.sentry.dev/mcp',
+    unverified: true,
+    headersFrom: { Authorization: 'SENTRY_TOKEN' },
+    local: { command: 'npx', args: ['-y', '@sentry/mcp-server'], needsNpx: true },
+    envFrom: { SENTRY_ACCESS_TOKEN: 'SENTRY_TOKEN' },
+    secrets: [{ env: 'SENTRY_TOKEN', about: 'Sentry の合言葉' }],
+  },
+  {
+    id: 'exa',
+    name: 'Exa',
+    about: '網を検索して、中身まで取ってくる',
+    url: 'https://mcp.exa.ai/mcp',
+    unverified: true,
+    headersFrom: { Authorization: 'EXA_API_KEY' },
+    local: { command: 'npx', args: ['-y', 'exa-mcp-server'], needsNpx: true },
+    envFrom: { EXA_API_KEY: 'EXA_API_KEY' },
+    secrets: [{ env: 'EXA_API_KEY', about: 'Exa の鍵', where: 'https://dashboard.exa.ai' }],
+  },
+  {
+    id: 'firecrawl',
+    name: 'Firecrawl',
+    about: '頁を取ってきて、読める形にする',
+    ...npx('firecrawl-mcp'),
+    envFrom: { FIRECRAWL_API_KEY: 'FIRECRAWL_API_KEY' },
+    secrets: [{ env: 'FIRECRAWL_API_KEY', about: 'Firecrawl の鍵' }],
+  },
+  {
+    id: 'github-local',
+    name: 'GitHub（手元で動かす）',
+    about: '外へ出られない機械のときは、こちら。同梱してあれば npm も要らない',
+    ...npx('@modelcontextprotocol/server-github'),
+    envFrom: { GITHUB_PERSONAL_ACCESS_TOKEN: 'GITHUB_TOKEN' },
+    secrets: [{ env: 'GITHUB_TOKEN', about: 'GitHub の合言葉（personal access token）' }],
+    retired: '作り手側で止まっています（2025年に archived）。動きますが、直りません。',
+  },
+];
+
+export function findEntry(id: string): CatalogEntry | undefined {
+  const want = id.trim().toLowerCase();
+  return CATALOG.find((e) => e.id === want)
+    ?? CATALOG.find((e) => e.name.toLowerCase() === want);
+}
+
+/**
+ * 見本帳から、設定に書く形を作る。
+ *
+ * **遠くを先に使う。**手元で動かす道は `npx` が要り、npm の無い機械では
+ * 動かない。遠くが駄目だったときのために残してあるだけ。
+ */
+export function specFrom(entry: CatalogEntry, opts: { root?: string; prefer?: 'remote' | 'local' } = {}): {
+  command?: string; args?: string[]; url?: string;
+  envFrom?: Record<string, string>; headersFrom?: Record<string, string>;
+} {
+  const wantLocal = opts.prefer === 'local';
+  if (entry.url && !wantLocal) {
+    return { url: entry.url, ...(entry.headersFrom ? { headersFrom: entry.headersFrom } : {}) };
+  }
+  const local = entry.local;
+  if (local) {
+    return {
+      command: local.command,
+      args: [...local.args, ...(entry.wantsRoot && opts.root ? [opts.root] : [])],
+      ...(entry.envFrom ? { envFrom: entry.envFrom } : {}),
+    };
+  }
+  if (!entry.command) {
+    // 手元の道が無いのに手元を頼まれたら、遠くで返す（何も返さないより良い）。
+    if (entry.url) return { url: entry.url, ...(entry.headersFrom ? { headersFrom: entry.headersFrom } : {}) };
+    return {};
+  }
+  const args = [...(entry.args ?? [])];
+  // 場所を渡すものには、いまの作業場を入れる。**書かせない。**
+  if (entry.wantsRoot && opts.root) args.push(opts.root);
+  return {
+    command: entry.command,
+    args,
+    ...(entry.envFrom ? { envFrom: entry.envFrom } : {}),
+  };
+}
+
+/** その繋ぎ先で、npm（npx）が要るか。遠くで繋ぐなら要らない。 */
+export function needsNpx(entry: CatalogEntry, prefer?: 'remote' | 'local'): boolean {
+  if (entry.url && prefer !== 'local') return false;
+  return (entry.local?.needsNpx ?? entry.needsNpx) === true;
+}
+
+/** 足りていない合言葉。名前だけを返す（値は見ない）。 */
+export function missingSecrets(
+  entry: CatalogEntry, env: NodeJS.ProcessEnv = process.env,
+): Secret[] {
+  return (entry.secrets ?? []).filter((s) => {
+    const value = env[s.env];
+    return value === undefined || value.trim() === '';
+  });
+}

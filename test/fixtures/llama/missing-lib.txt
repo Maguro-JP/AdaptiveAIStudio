@@ -1,0 +1,1 @@
+/tmp/claude-0/-home-user-AdaptiveAIStudio/623755be-82dc-56ed-bbf4-65679bfcb7c3/scratchpad/bin/b4585/llama-server: error while loading shared libraries: libllama.so: cannot open shared object file: No such file or directory
