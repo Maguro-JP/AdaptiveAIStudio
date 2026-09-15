@@ -432,7 +432,7 @@ export class UiServer {
     const server = createServer((req, res) => {
       this.#handle(req, res).catch((e: unknown) => {
         // 画面の不具合で本体を落とさない。
-        if (e instanceof BodyTooLarge) return send(res, 413, { error: e.message });
+        if (e instanceof BodyTooLarge) return refuseTooLarge(req, res, e.message);
         send(res, 500, { error: e instanceof Error ? e.message : String(e) });
       });
     });
@@ -901,8 +901,7 @@ export class UiServer {
         total += (chunk as Buffer).length;
         // 上限を超えたら、最後まで受け取ってから断らない。読むのをやめる。
         if (total > MAX_BYTES) {
-          req.destroy();
-          return send(res, 413, { error: `大きすぎます（${MAX_BYTES / 1024 / 1024}MB まで）` });
+          return refuseTooLarge(req, res, `大きすぎます（${MAX_BYTES / 1024 / 1024}MB まで）`);
         }
         chunks.push(chunk as Buffer);
       }
@@ -3120,6 +3119,29 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(text);
 }
 
+
+/**
+ * 大きすぎるものを断る。**断りの文が、相手へ届くようにする。**
+ *
+ * ここは `req.destroy()` を先に呼んでいた。あれは socket ごと落とすので、
+ * **413 は一バイトも線に乗らない。**受け取る側から見ると、送っている途中で
+ * 黙って切られただけになる（実測: 17MB の PUT で返ってきたのは 0 バイト）。
+ * 「大きすぎます」と書いてあるのに、誰も読めない。
+ *
+ * 読むのはやめるが、残りは読み捨てて（`resume`）、返事を書き切ってから閉じる。
+ * `connection: close` を付けるので、書き終われば Node が閉じる。
+ */
+function refuseTooLarge(req: IncomingMessage, res: ServerResponse, message: string): void {
+  // 残りを読み捨てる。読むのをやめると相手は詰まったまま待つ。
+  req.resume();
+  const text = JSON.stringify({ error: message });
+  res.writeHead(413, {
+    'content-type': 'application/json; charset=utf-8',
+    connection: 'close',
+  });
+  res.end(text);
+}
+
 /** JSON の本文の上限。添付は別の口（/api/attach）で、それ自身の上限を持つ。 */
 export const MAX_JSON_BODY = 16 * 1024 * 1024;
 
@@ -3164,7 +3186,7 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   for await (const c of req) {
     total += (c as Buffer).length;
     // 際限なく抱えない。上限を超えたら読むのをやめて断る。
-    if (total > MAX_JSON_BODY) { req.destroy(); throw new BodyTooLarge(MAX_JSON_BODY); }
+    if (total > MAX_JSON_BODY) throw new BodyTooLarge(MAX_JSON_BODY);
     chunks.push(c as Buffer);
   }
   try {
