@@ -664,3 +664,70 @@ describe('黙って選ばない', () => {
     } finally { await s2.stop(); await fake2.close(); }
   });
 });
+
+/**
+ * 訊かれただけのときに、作業者の服を着せない。
+ *
+ * 実機で「明日の天気を教えて」と打つと、`あなたはソフトウェア開発の作業者です。
+ * …まず read_file / list_files / search_text で現状を確認する` が載った状態で
+ * 2B へ渡り、「明日の天気を調べたいようです」「URL を使用します」と言って
+ * 62 秒後に落ちた。**問いに、作業の決まりとツールを渡していた。**
+ */
+describe('訊かれただけのとき', () => {
+  /**
+   * その依頼で模型へ渡したものを覗く。
+   *
+   * **いちばん後ろを見ない。**指摘かどうかを判じる別口が後ろに来るので、
+   * そちらを掴む（掴んで落ちた）。訊いた本文が載っているものを探す。
+   */
+  const sentFor = (asked: string): { messages: { role: string; content: string }[]; tools?: unknown[] } => {
+    const bodies = fake.bodies as { messages?: { role: string; content: string }[]; tools?: unknown[] }[];
+    const hit = bodies.filter((b) => (b.messages ?? []).some((m) => m.role === 'user' && m.content.includes(asked)))
+      .filter((b) => !(b.messages ?? []).some((m) => m.content.includes('指摘・不満・注意かどうか'))).at(-1);
+    assert.ok(hit?.messages, `その依頼を送っていない: ${asked}`);
+    return hit as { messages: { role: string; content: string }[]; tools?: unknown[] };
+  };
+
+  test('**作業者の決まりもツールも渡さない**', async () => {
+    const before = fake.bodies.length;
+    const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
+    const collecting = collect(done);
+    await opened;
+    await fetch(`${base}/api/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: '明日の天気を教えて' }),
+    });
+    await collecting;
+    await until(() => fake.bodies.length > before, '模型へ届く', { timeoutMs: 20_000 });
+
+    const sent = sentFor('明日の天気を教えて');
+    const system = sent.messages.find((m) => m.role === 'system')?.content ?? '';
+    assert.doesNotMatch(system, /ソフトウェア開発の作業者/, `作業者の決まりが載っている:\n${system.slice(0, 300)}`);
+    assert.doesNotMatch(system, /read_file|write_file|run_command/, `ツールの使い方を教えている:\n${system.slice(0, 300)}`);
+    assert.match(system, /分かりません/, `知らないと言わせていない:\n${system.slice(0, 300)}`);
+    assert.ok(!sent.tools || sent.tools.length === 0, `ツールを渡している: ${JSON.stringify(sent.tools)?.slice(0, 200)}`);
+    // 訊いたことが、そのまま届いている（覚えを継ぎ足していない）。
+    const user = sent.messages.filter((m) => m.role === 'user').pop()?.content ?? '';
+    assert.equal(user, '明日の天気を教えて', `依頼に何か足している: ${JSON.stringify(user)}`);
+  });
+
+  test('**作業を頼んだときは、今までどおり作業者（対）**', async () => {
+    const before = fake.bodies.length;
+    const done = (evs: unknown[]) => evs.some((e) => (e as { type?: string; busy?: boolean }).type === 'busy' && (e as { busy?: boolean }).busy === false);
+    const collecting = collect(done);
+    await opened;
+    await fetch(`${base}/api/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'src/a.ts を直して' }),
+    });
+    await collecting;
+    await until(() => fake.bodies.length > before, '模型へ届く', { timeoutMs: 20_000 });
+
+    const sent = sentFor('src/a.ts を直して');
+    const system = sent.messages.find((m) => m.role === 'system')?.content ?? '';
+    // 相棒の決まりに差し替わっていないこと（決まり本体は設定で替えられるので、
+    // 「作業者」の語では見ない。**リポジトリの決まりが載っているか**で見る）。
+    assert.doesNotMatch(system, /相棒|天気、ニュース、株価/, `問いの決まりになっている:\n${system.slice(0, 300)}`);
+    assert.ok((sent.tools?.length ?? 0) > 0, '作業なのにツールを渡していない');
+  });
+});

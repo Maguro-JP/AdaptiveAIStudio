@@ -147,6 +147,45 @@ describe('点検を回す係', () => {
     assert.ok(toldAt < doneAt, '置く前に終わったと言っている');
   });
 
+  /**
+   * 片づけるツールが、片づける対象を作っていた。
+   *
+   * 「片づけるものはありません。」の一行だけの回でも txt を置いていたので、
+   * 押すたびに reports が増える。実機の画面に clean-20260915-1726.txt が残った。
+   */
+  test('**何も起きていない回は、残さない**', async () => {
+    const { readdir } = await import('node:fs/promises');
+    const { tempDir } = await import('./tmp.ts');
+    const dir = await tempDir('aas-reports-none-');
+    const said: TaskEvent[] = [];
+    const { spawnFn, children } = fakeSpawn();
+    const runner = new TaskRunner({ root: '/app', onEvent: (e) => said.push(e), spawnFn, reportsDir: dir });
+    runner.start('clean');
+    children[0]!.stdout.emit('data', Buffer.from('片づけるものはありません。\n'));
+    children[0]!.emit('close', 0);
+    const { until } = await import('./until.ts');
+    await until(() => said.some((e) => e.code !== undefined), '終わる', { timeoutMs: 5000 });
+    assert.deepEqual((await readdir(dir)).filter((f) => f.startsWith('clean-')), [],
+      'ゴミを置いている');
+    assert.ok(!said.some((e) => e.text?.includes('残しました:')), '置いたと言っている');
+  });
+
+  test('**うまくいかなかった回は、中身が短くても残す（対）**', async () => {
+    const { readdir } = await import('node:fs/promises');
+    const { tempDir } = await import('./tmp.ts');
+    const dir = await tempDir('aas-reports-bad-');
+    const said: TaskEvent[] = [];
+    const { spawnFn, children } = fakeSpawn();
+    const runner = new TaskRunner({ root: '/app', onEvent: (e) => said.push(e), spawnFn, reportsDir: dir });
+    runner.start('clean');
+    children[0]!.stdout.emit('data', Buffer.from('落ちました\n'));
+    children[0]!.emit('close', 1);
+    const { until } = await import('./until.ts');
+    await until(() => said.some((e) => e.code !== undefined), '終わる', { timeoutMs: 5000 });
+    assert.equal((await readdir(dir)).filter((f) => f.startsWith('clean-')).length, 1,
+      '落ちた回まで捨てている');
+  });
+
   test('一覧は、名前と見出しの組で出す', () => {
     const list = TaskRunner.list();
     assert.deepEqual(list.map((t) => t.id), Object.keys(TASKS));

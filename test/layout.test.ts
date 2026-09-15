@@ -170,6 +170,33 @@ describe('知らない中身', () => {
     assert.ok(repairs.some((r) => r.detail.includes('未来の機能')));
   });
 
+  /**
+   * 「裏の仕事」を「実行中のタスク」に畳んだ。既に保存されている配置には
+   * jobs が残っているので、知らない種類として覚え書きに落とすと、
+   * **直したはずが画面に空の札を増やす。**
+   */
+  test('**まとめて無くなった種類は、まとめた先へ寄せる**', () => {
+    const { layout, repairs } = repairLayout({
+      panels: [{ id: 'jobs', kind: 'jobs' }, { id: 'chat', kind: 'conversation' }],
+      root: { type: 'tabs', panels: ['chat', 'jobs'] },
+    });
+    assert.deepEqual(layout.panels.map((p) => p.kind).sort(), ['conversation', 'plan']);
+    assert.ok(!layout.panels.some((p) => p.kind === 'note'), '覚え書きに落としている');
+    assert.ok(repairs.some((r) => r.detail.includes('plan')), `何をしたか言っていない: ${JSON.stringify(repairs)}`);
+    // 置いた所も残る（重ねた札から消えていない）。
+    assert.deepEqual((layout.root as { panels: string[] }).panels.sort(), ['chat', 'jobs']);
+  });
+
+  test('**まとめた先が既に在れば、増やさずに外す（対）**', () => {
+    const { layout, repairs } = repairLayout({
+      panels: [{ id: 'plan', kind: 'plan' }, { id: 'jobs', kind: 'jobs' }],
+      root: { type: 'tabs', panels: ['plan', 'jobs'] },
+    });
+    assert.deepEqual(layout.panels.map((p) => p.kind), ['plan'], '同じ中身が二枚になっている');
+    assert.ok(repairs.some((r) => r.detail.includes('外しました')), JSON.stringify(repairs));
+    assert.deepEqual((layout.root as { panels: string[] }).panels, ['plan'], '置いた所に残っている');
+  });
+
   test('知っている中身は全部そのまま通る', () => {
     const panels = PANEL_KINDS.map((k, i) => ({ id: `p${i}`, kind: k }));
     const { layout, repairs } = repairLayout({

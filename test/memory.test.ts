@@ -338,3 +338,45 @@ describe('番号', () => {
     assert.equal(memory.all().find((e) => e.id === 'm3')?.title, '決めごと 2');
   });
 });
+
+/**
+ * 語が一つも取れない依頼で、全部を思い出していた。
+ *
+ * 当たり判定は `overlap === 0 && q.size > 0` で外していたので、語がゼロだと
+ * この条件が成り立たず、**全部が当たりとして残る**。実機で「1+1=」と送ったら
+ * 関係の無い「src/a.txt を書き換えて」が依頼に差し込まれ、2B が混乱した並びを
+ * 返した（tokenize('1+1=') は []）。
+ */
+describe('語が取れない依頼では、思い出さない', () => {
+  const stocked = () => {
+    const m = new Memory();
+    m.remember({ kind: 'attempt', title: 'src/a.txt を書き換えて', detail: '触ったもの: src/a.txt' });
+    m.remember({ kind: 'fact', title: '設定は aas.config.json に置く' });
+    m.remember({ kind: 'decision', title: 'コンテキストウィンドウは 8192 を既定にする' });
+    return m;
+  };
+
+  test('**「1+1=」で何も思い出さない**（語がゼロ）', () => {
+    assert.equal(tokenize('1+1=').length, 0, '前提が崩れている');
+    assert.deepEqual(stocked().recall('1+1=', { lessons: false }), []);
+  });
+
+  test('記号だけでも思い出さない', () => {
+    assert.deepEqual(stocked().recall('!?、。', { lessons: false }), []);
+    assert.deepEqual(stocked().recall('   ', { lessons: false }), []);
+  });
+
+  test('**語が取れれば、ちゃんと思い出す（対）**', () => {
+    const hits = stocked().recall('src/a.txt を直したい', { lessons: false });
+    assert.ok(hits.length > 0, '語が重なっているのに思い出していない');
+    assert.ok(hits.some((e) => e.title.includes('src/a.txt')));
+  });
+
+  test('嫌がられたことは、語がゼロでも残す（話題に関係なく効かせる）', () => {
+    const m = stocked();
+    m.remember({ kind: 'displeasure', title: '同じ一覧を貼らない' });
+    const hits = m.recall('1+1=');
+    assert.equal(hits.length, 1, '嫌がられたことだけが残るはず');
+    assert.equal(hits[0]!.kind, 'displeasure');
+  });
+});

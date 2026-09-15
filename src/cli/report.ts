@@ -170,6 +170,6 @@ if (process.argv[1] && (process.argv[1] === here || process.argv[1].endsWith('re
   say();
   const body = await buildReport({ root: join(root, ...(await stat(join(root, 'app', 'src')).then(() => ['app']).catch(() => []))), state, home: aasHome(), models: modelsDir() });
   say();
-  for (const line of tellWhereItWent(await saveReport('report', body, [root, state]))) say(`  ${line}`);
+  for (const line of tellWhereItWent(await saveReport('report', body, [join(state, 'reports'), state, root]))) say(`  ${line}`);
   say();
 }

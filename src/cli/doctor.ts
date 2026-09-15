@@ -620,6 +620,12 @@ const flat = [
   }),
 ].join('\n');
 for (const line of tellWhereItWent(
-  await saveReport('doctor', flat, [productRoot(), stateDir()]),
+  /*
+   * **記録の置き場へ置く。プログラムの隣へ撒かない。**
+   * ここは productRoot() が先だったので、git のクローンから回すと
+   * リポジトリの根に doctor-*.txt が溜まった（実機の画面で 18 件、手元で 37 件）。
+   * 押すたびに増えるものを、利用者が毎日見るフォルダに置かない。
+   */
+  await saveReport('doctor', flat, [join(stateDir(), 'reports'), stateDir(), productRoot()]),
 )) console.log(`  ${line}`);
 console.log();

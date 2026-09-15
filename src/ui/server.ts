@@ -2880,7 +2880,7 @@ export class UiServer {
         root, state: stateDir(), home: aasHome(),
         models: this.#opts.config.runtime?.modelsDir ?? modelsDir(),
       })))();
-      const saved = await saveReport('report', body, [join(stateDir(), 'reports'), root]);
+      const saved = await saveReport('report', body, [join(stateDir(), 'reports'), stateDir(), root]);
       const sec = Math.round((Date.now() - began) / 1000);
       this.#report = saved.path
         ? { state: 'done', path: saved.path, message: `出来ました（${sec} 秒）。このファイルを一つ送ってください。`, began }

@@ -310,6 +310,21 @@ export class Memory {
     const q = new Set(tokenize(query));
     const limit = opts.limit ?? 8;
 
+    /*
+     * **語が一つも取れない依頼では、話題では思い出さない。**
+     *
+     * 下の当たり判定は `overlap === 0 && q.size > 0` で外していた。語がゼロだと
+     * この条件が成り立たず、**全部が当たりとして残り**、新しい順に 12 件が
+     * 依頼へ差し込まれる。実機で「1+1=」と送ったら、関係の無い
+     * 「src/a.txt を書き換えて」が付いて出た（tokenize('1+1=') は []）。
+     * 重ねる根拠が無いのだから、何も足さないのが正しい。
+     */
+    if (q.size === 0) {
+      if (opts.lessons === false) return [];
+      if (opts.kinds && !opts.kinds.includes('displeasure')) return [];
+      return this.displeasures();
+    }
+
     const scored = this.#entries
       .filter((e) => (opts.includeSuperseded ? true : !e.supersededBy))
       .filter((e) => (opts.kinds ? opts.kinds.includes(e.kind) : true))

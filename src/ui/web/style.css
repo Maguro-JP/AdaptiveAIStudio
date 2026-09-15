@@ -150,6 +150,16 @@ button.row {
 }
 .side-list { overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 1px; }
 /*
+  **一覧の行は縮めない。**
+
+  横に並べた箱なので、入りきらない分は flex が各行を縮める。
+  フォルダの行は素の button で、縮んで高さ 8px になり、11px の字が
+  切れて**空白の帯に見えた**（実測。ファイルの行は .side-row の中身が
+  支えていたので縮まず、フォルダだけが消えた）。
+  入りきらないぶんは縮めるのではなく、巻く（overflow: auto）。
+*/
+.side-list > * { flex: 0 0 auto; }
+/*
  * 「戻す」は伸ばさない。
  *
  * 件数が増えると横の並びを占領して、下の「会話」と「作業場」が画面の外へ
@@ -306,10 +316,16 @@ button.ghost:hover { color: var(--text); background: var(--surface2); }
   .shell { position: relative; }
 }
 
-.split { display: flex; gap: var(--gap); min-width: 0; min-height: 0; height: 100%; }
+/*
+  パネルとパネルのあいだ。**掴むつまみの幅が、そのまま隙間になる。**
+
+  `gap` とつまみを別々に持っていたので、10 + 8 + 10 = 28px 空いていた（実測）。
+  隙間はつまみ一つで持つ。掴む場所でもあるので、細くしすぎない。
+*/
+.split { display: flex; gap: 0; min-width: 0; min-height: 0; height: 100%; }
 .split.column { flex-direction: column; }
 
-.grip { flex: 0 0 8px; border-radius: 99px; position: relative; cursor: col-resize; }
+.grip { flex: 0 0 var(--gap); border-radius: 99px; position: relative; cursor: col-resize; }
 .split.column > .grip { cursor: row-resize; }
 .grip::after {
   content: ""; position: absolute; inset: 40% 3px;
@@ -937,13 +953,30 @@ dialog.wide { width: min(46rem, 92vw); }
 }
 .tabs-lite button.on { color: var(--text); border-bottom-color: var(--accent); }
 
-.btnbar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: var(--s3); }
+.btnbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: var(--s3); }
+/*
+  選ぶ所は空いている幅まで伸ばし、その隣に押す所を置く。
+  伸びないと選ぶ所が一行を占め、押す所だけが次の行へ落ちて、
+  「または」と押す所が離れて見えた（画面で見て直した）。
+*/
+.btnbar select { flex: 1 1 12rem; min-width: 0; }
 
 .field-row { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s3); }
-.field-row select { flex: 1 1 auto; }
+/*
+  見出しは折らない。「動かし方」が「動かし / 方」の二行になっていた（実測）。
+  入れる所は、空いている幅まで伸ばす。道を入れる欄が 196px しかなく、
+  610px の行の中で、入っているものが読めなかった。
+*/
+.field-row > span, .field-row > label { flex: 0 0 auto; white-space: nowrap; }
+.field-row select,
+.field-row input[type="text"] { flex: 1 1 auto; min-width: 0; }
 
 /* 置き場は末尾まで読めないと意味がない。切らずに折る。 */
-.rows.paths .row > * { white-space: normal; word-break: break-all; }
+/*
+  道は長い。折り返してよいが、**切れる場所を選ぶ。**
+  break-all は字の途中で切るので、区切りで切れる anywhere にする。
+*/
+.rows.paths .row > * { white-space: normal; overflow-wrap: anywhere; }
 .rows.paths .row { align-items: start; }
 
 

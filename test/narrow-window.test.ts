@@ -78,7 +78,9 @@ describe('狭い窓でも、道具は呼べる', () => {
       fake.bodies.length = 0;
       fake.setBehavior({ kind: 'stream', text: 'はい' });
       const session = await Session.create(config(window), { approve: () => Promise.resolve(true) });
-      for await (const _ of session.send('こんにちは')) { /* 流し切る */ }
+      // **作業の依頼で測る。**「こんにちは」は問いかけとして扱われ、
+      // ツールを載せない（`looksLikeChat`）ので、長さが 0 と 0 の比べになる。
+      for await (const _ of session.send('a.txt を読んで直して')) { /* 流し切る */ }
       return toolsSent(fake.bodies)
         .reduce((n, t) => n + (t.function?.description ?? '').length, 0);
     };

@@ -375,27 +375,31 @@ await check('ログのパネルは切り替えで消えない', async () => {
   if (after < before) throw new Error(`描き直しで消えた: ${before} → ${after}`);
 });
 
-// 裏の仕事のパネル。流れではなく、いまの状態だけが並ぶ（空なら空と言う）。
-await check('裏の仕事のパネルが出る', async () => {
-  const shownJobs = async () => (await p.locator('#root .panel header, #root .panel.tabs header button')
-    .allInnerTexts()).some((h) => h.includes('裏の仕事'));
-  if (!(await shownJobs())) {
+// 裏で動いているものは「実行中のタスク」の中に並ぶ（空なら空と言う）。
+// 「裏の仕事」と二枚に分けていたら、同じ意味の札が二つ並んだ。
+await check('実行中のタスクに、裏の仕事が並ぶ', async () => {
+  const shown = async () => (await p.locator('#root .panel header, #root .panel.tabs header button')
+    .allInnerTexts()).some((h) => h.includes('実行中のタスク'));
+  if (!(await shown())) {
     await p.locator('#openView').click();
     await p.waitForTimeout(500);
-    const row = p.locator('#viewList .view-row').filter({ hasText: '裏の仕事' }).first();
-    if (await row.count() === 0) throw new Error('表示の一覧に裏の仕事が無い');
+    const row = p.locator('#viewList .view-row').filter({ hasText: '実行中のタスク' }).first();
+    if (await row.count() === 0) throw new Error('表示の一覧に実行中のタスクが無い');
     await row.locator('input').click();
     await p.waitForTimeout(700);
     await p.keyboard.press('Escape');
     await p.waitForTimeout(400);
   }
-  const tab = p.locator('#root .panel.tabs header button').filter({ hasText: '裏の仕事' });
+  const tab = p.locator('#root .panel.tabs header button').filter({ hasText: '実行中のタスク' });
   if (await tab.count() > 0) { await tab.first().click(); await p.waitForTimeout(400); }
   await p.waitForTimeout(800);
   const jobs = await p.locator('#root .jobs').count();
-  if (jobs === 0) throw new Error('裏の仕事の中身が無い');
+  if (jobs === 0) throw new Error('裏の仕事の入る所が無い');
   const text = (await p.locator('#root .jobs').first().innerText()).trim();
   if (!text) throw new Error('空なのに空と言わない');
+  // 札が二枚に戻っていないこと。
+  const heads = await p.locator('#root .panel header, #root .panel.tabs header button').allInnerTexts();
+  if (heads.some((h) => h.includes('裏の仕事'))) throw new Error('「裏の仕事」の札が戻っている');
 });
 
 // 道の隣に「開く」「コピー」が在る。読めるだけの道は、打ち直すしかなかった。
@@ -617,6 +621,81 @@ await check('コマンドと設定が、手の届く所に在る', async () => {
   if (await gear.count() === 0) throw new Error('設定が ≡ の横に無い');
   // 板の途中の並びには置かない（会話や作業場と同じ重さに見える）。
   if (await p.locator('.side-nav').count() > 0) throw new Error('板の途中の並びが残っている');
+});
+
+/*
+ * **見た目の不具合は、測って見つける。**
+ *
+ * コードを読んでいるだけでは出てこなかったものを、ここで押さえる。
+ * どれも実機の画面で先に見つかっていて、試験は通ったままだった。
+ */
+await check('横の一覧の行が、潰れていない', async () => {
+  /*
+   * 横に並べた箱なので、入りきらない分を flex が各行から削る。
+   * フォルダの行が高さ 8px まで潰れ、字が切れて**空白の帯**に見えた（実測）。
+   *
+   * 高さだけを見ると、**その場のファイルの数で結果が変わる**（溢れなければ
+   * 潰れない）。走らせる場所で変わる確かめにしないため、削る設定そのものを見る。
+   */
+  const found = await p.locator('#sideFiles > *').evaluateAll((els) => els.map((e) => ({
+    shrink: getComputedStyle(e).flexShrink,
+    h: Math.round(e.getBoundingClientRect().height),
+    t: (e.innerText || '').slice(0, 16),
+  })));
+  if (found.length === 0) throw new Error('横の一覧が空');
+  const shrinking = found.filter((f) => f.shrink !== '0');
+  if (shrinking.length > 0) throw new Error(`縮む行が ${shrinking.length} 本ある（flex-shrink が 0 でない）`);
+  const squashed = found.filter((f) => f.h > 0 && f.h < 16);
+  if (squashed.length > 0) throw new Error(`潰れた行がある: ${squashed.map((f) => `${f.t}(${f.h}px)`).join(', ')}`);
+});
+
+await check('パネルとパネルのあいだが、空きすぎていない', async () => {
+  // 隙間（gap）と掴むつまみを別に持っていて、10 + 8 + 10 = 28px 空いていた。
+  const gaps = await p.locator('#root .split').evaluateAll((splits) => {
+    const out = [];
+    for (const s of splits) {
+      const kids = [...s.children].filter((e) => !e.classList.contains('grip'));
+      const row = !s.classList.contains('column');
+      for (let i = 1; i < kids.length; i += 1) {
+        const a = kids[i - 1].getBoundingClientRect();
+        const b = kids[i].getBoundingClientRect();
+        out.push(Math.round(row ? b.x - (a.x + a.width) : b.y - (a.y + a.height)));
+      }
+    }
+    return out;
+  });
+  const wide = gaps.filter((g) => g > 16);
+  if (wide.length > 0) throw new Error(`パネルの隙間が広すぎる: ${wide.join(', ')}px`);
+});
+
+await check('設定の欄が、行の幅まで伸びている', async () => {
+  // 道を入れる欄が 196px しかなく、610px の行の中で中身が読めなかった。
+  await p.locator('#openSettings').click();
+  await p.waitForTimeout(600);
+  // **出ている頁を見る。**開いた直後は「情報」で、そこに入れる欄は無い。
+  // 見に行かずに「不具合なし」と言っていた（わざとバグを入れて気づいた）。
+  await p.locator('dialog button', { hasText: 'モデル' }).first().click();
+  await p.waitForTimeout(800);
+  const rowCount = await p.locator('dialog .field-row:visible').count();
+  if (rowCount === 0) throw new Error('設定のモデルの頁に、入れる欄が一つも無い');
+  const bad = await p.locator('dialog .field-row').evaluateAll((rows) => {
+    const out = [];
+    for (const r of rows) {
+      if (r.hidden || r.getBoundingClientRect().width === 0) continue;
+      const input = r.querySelector('input[type="text"], select');
+      if (!input) continue;
+      const rw = r.getBoundingClientRect().width;
+      const iw = input.getBoundingClientRect().width;
+      if (iw < rw * 0.5) out.push(`${r.innerText.split('\n')[0]}: ${Math.round(iw)}/${Math.round(rw)}px`);
+      // 見出しが折れていないこと（「動かし方」が「動かし / 方」になっていた）。
+      const label = r.querySelector('span, label');
+      if (label && label.getBoundingClientRect().height > 30) out.push(`見出しが折れている: ${label.innerText}`);
+    }
+    return out;
+  });
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(300);
+  if (bad.length > 0) throw new Error(bad.join(' / '));
 });
 
 if (shot) await p.screenshot({ path: shot, fullPage: false });

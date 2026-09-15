@@ -676,7 +676,7 @@ function listen() {
     // いま触っているものを、上の帯に出す。終わったら「作業中」へ戻す
     // （**「読んでいます」のまま止まって見えるのが、いちばん困る**）。
     if (e.type === 'session' && busyNow) {
-      if (e.event.type === 'text' && !wroteYet) { wroteYet = true; run.set('busy', '書いています'); }
+      if (e.event.type === 'text' && !wroteYet) { wroteYet = true; run.set('busy', '答えています'); }
       if (e.event.type === 'toolStart') run.set('busy', doingText(e.event.name, e.event.summary));
       // ツールの結果を読んで、次の一言を待つ。
       if (e.event.type === 'toolEnd') { wroteYet = false; run.set('busy', WAITING_REPLY); }
@@ -1723,7 +1723,7 @@ async function getModel(id) {
   // 数GBかかる。**終わるまで待たせない**ので、どこを見ればいいかを言う。
   $('cfgGetNote').style.whiteSpace = 'pre-line';
   $('cfgGetNote').textContent = r.ok
-    ? `取ってきています: ${id}\n進み具合はここと「裏の仕事」に出ます。`
+    ? `取ってきています: ${id}\n進み具合はここと「実行中のタスク」に出ます。`
     : (body.error ?? '始められませんでした');
 }
 

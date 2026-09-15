@@ -102,7 +102,7 @@ describe('置いただけで、モデルに届く', () => {
     const { DEFAULT_CONFIG } = await import('../src/config.ts');
 
     const root = await tempDir('aas-rules-e2e-');
-    await writeFile(join(root, 'AGENTS.md'), 'この置き場では、変数名を kebab-case にすること。');
+    await writeFile(join(root, 'AGENTS.md'), 'このリポジトリでは、変数名を kebab-case にすること。');
     const fake = await startFakeServer({ kind: 'stream', text: 'わかりました。' });
     try {
       const session = await Session.create({
@@ -111,11 +111,47 @@ describe('置いただけで、モデルに届く', () => {
         candidates: ['local:m'],
         agent: { root, approval: 'auto' },
       } as never, { approve: () => Promise.resolve(true) });
-      for await (const _ of session.send('こんにちは')) { /* 流し切る */ }
+      // **作業の依頼で見る。**挨拶は問いかけとして扱われ、リポジトリの決まりを
+      // 載せない（下の対の試験で押さえている）。
+      for await (const _ of session.send('src/a.ts を直して')) { /* 流し切る */ }
 
       const sent = JSON.stringify(fake.bodies);
       assert.ok(sent.includes('kebab-case'), '置き場の決まりが渡っていない');
       assert.ok(sent.includes('AGENTS.md'), 'どこから来た文か渡っていない');
+    } finally { await fake.close(); }
+  });
+
+  /**
+   * 訊かれただけのときに、リポジトリの決まりまで載せない（対）。
+   *
+   * 役職はどれも作業の役職で、話し相手が一人もいなかった。だから
+   * 「明日の天気は？」にも作業者の決まりとリポジトリの決まりとツールの説明が載り、
+   * 2B の模型は問いをなぞって「完了」と返した（実機）。
+   */
+  test('**訊かれただけのときは、リポジトリの決まりを載せない**', async () => {
+    const { startFakeServer } = await import('./fake-server.ts');
+    const { Session } = await import('../src/core/session.ts');
+    const { DEFAULT_CONFIG } = await import('../src/config.ts');
+
+    const root = await tempDir('aas-rules-chat-');
+    await writeFile(join(root, 'AGENTS.md'), 'このリポジトリでは、変数名を kebab-case にすること。');
+    const fake = await startFakeServer({ kind: 'stream', text: '2 です。' });
+    try {
+      const session = await Session.create({
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
+        candidates: ['local:m'],
+        agent: { root, approval: 'auto' },
+      } as never, { approve: () => Promise.resolve(true) });
+      for await (const _ of session.send('1+1=')) { /* 流し切る */ }
+
+      const asked = (fake.bodies as { messages?: { role: string; content: string }[]; tools?: unknown[] }[])
+        .filter((b) => (b.messages ?? []).some((m) => m.role === 'user' && m.content.includes('1+1=')));
+      assert.ok(asked.length > 0, 'その依頼を送っていない');
+      const sent = JSON.stringify(asked);
+      assert.ok(!sent.includes('kebab-case'), '問いかけにリポジトリの決まりを載せている');
+      assert.ok(!sent.includes('AGENTS.md'), '問いかけにリポジトリの名前を載せている');
+      assert.equal(asked.at(-1)!.tools?.length ?? 0, 0, '問いかけにツールを載せている');
     } finally { await fake.close(); }
   });
 });

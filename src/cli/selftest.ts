@@ -183,7 +183,7 @@ console.log('');
  * 途中で切れる）、結局「試す係をやってください」と同じになる。
  */
 for (const line of tellWhereItWent(
-  await saveReport('selftest', body.join('\n'), [productRoot(), stateDir()]),
+  await saveReport('selftest', body.join('\n'), [join(stateDir(), 'reports'), stateDir(), productRoot()]),
 )) console.log(line);
 
 const bad = results.filter((r) => r.ok === false).length;
