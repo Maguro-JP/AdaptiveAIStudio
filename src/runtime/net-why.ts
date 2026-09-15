@@ -23,5 +23,14 @@ export function describeNet(e: unknown): string {
   if (/certificate|CERT_|self.signed/i.test(m)) return '証明書で断られました（会社の回線で起きます）';
   if (/ECONNREFUSED/i.test(m)) return '繋ぐ先に断られました';
   if (/EPROTO|SSL|TLS/i.test(m)) return '暗号化のやりとりで断られました（会社の回線で起きます）';
+  /*
+   * **最後に `fetch failed` を拾う。**
+   *
+   * この関数の説明にも「会社の回線で最初に見えるのは `fetch failed` の一語」と
+   * 書いてありながら、言い換えていなかった。中の理由（ECONNREFUSED など）が
+   * cause に付いていれば上で拾えるが、付かずにこの一語だけで来ることがある。
+   * 上のどれにも当たらなかったときの受け皿なので、いちばん後ろに置く。
+   */
+  if (/fetch failed/i.test(m)) return '繋げませんでした（回線か、串（プロキシ）の設定かもしれません）';
   return m;
 }

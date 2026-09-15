@@ -14,6 +14,7 @@ import {
   ProviderError, kindFromHttpStatus, kindFromThrown, parseRetryAfter,
 } from './errors.ts';
 import { readSseLines } from './sse.ts';
+import { describeNet } from '../runtime/net-why.ts';
 
 export interface OpenAiCompatibleOptions {
   id: string;
@@ -363,8 +364,20 @@ interface OpenAiStreamChunk {
   usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
 }
 
+/**
+ * 失敗の理由を、人の言葉で言う。
+ *
+ * ここは `e.message` をそのまま出していた。実機の画面に
+ * 「inproc のストリームが中断されました: **terminated**（62 秒）」と出て、
+ * 打った人には何が起きたのかも、次に何をすればいいのかも分からない
+ * （`terminated` は undici が本文を切ったときの語）。
+ *
+ * 言い換える所は既に在る（`describeNet`）。取ってくる側・llama-server・Ollama は
+ * そこを通していて、**ここだけ通していなかった。**
+ * 言い換えられないものは、そのままの文が返る（隠さない）。
+ */
 function describe(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+  return describeNet(e);
 }
 
 function truncate(s: string, max = 200): string {

@@ -174,6 +174,7 @@
 - 問いの回と作業の回で、結末の言葉を分ける
 - 終わり方の符丁を、そのまま画面に出さない
 - 組む道具は、組んだ先の外を片づけない
+- 失敗の理由は、一か所で人の言葉に引き直す
 
 ---
 
@@ -4453,3 +4454,28 @@ lock に載っていない node-llama-cpp と playwright-core まで消える）
 
 **触る場所。** `scripts/bundle.mjs` の `mustBeInside`。
 試験は `test/bundle-target.test.ts`（組んだ先の外を渡したら投げること）。
+
+---
+
+## 2026-09-15  失敗の理由は、一か所で人の言葉に引き直す
+
+**決めたこと。** モデルの口（`src/providers/openai-compatible.ts`）の失敗も、
+既に在る `describeNet` を通す。`fetch failed` の一語も受け皿で拾う
+（中の理由が cause に付いていれば、そちらを優先する）。
+
+**なぜ。** 実機の画面に「inproc のストリームが中断されました: **terminated**（62 秒）」と
+出ていた。`terminated` は undici が本文を切ったときの語で、打った人には何が起きたのかも、
+次に何をすればいいのかも分からない。
+
+**言い換える所は既に在った。**取ってくる側・llama-server・Ollama・新しい版の確認は
+そこを通していて、**モデルの口だけ通していなかった。**しかも `describeNet` の説明には
+「会社の回線で最初に見えるのは `fetch failed` の一語」と書いてありながら、
+その一語を言い換える行が無かった。
+
+**見張りを広げた。**生の文をそのまま出していないかを見るテストは在ったが、
+見ていたのは 4 ファイルと 4 つの言い回しだけで、モデルの口は入っていなかった。
+入れて、生の文に戻すと落ちることを確かめた。
+
+**触る場所。** `src/runtime/net-why.ts` の `describeNet`、
+`src/providers/openai-compatible.ts` の `describe`。
+試験は `test/describe-net.test.ts`（言い換えと、見張るファイルの一覧）。
