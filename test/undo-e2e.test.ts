@@ -14,7 +14,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { writeFile, readFile } from 'node:fs/promises';
+import { writeFile, readFile, mkdir, symlink } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { until } from './until.ts';
 import { startFakeServer } from './fake-server.ts';
@@ -23,9 +23,33 @@ process.env.AAS_STATE_DIR = await tempDir('aas-undo-e2e-');
 const { UiServer } = await import('../src/ui/server.ts');
 const { DEFAULT_CONFIG } = await import('../src/config.ts');
 
+/** リンクを作れるか。作れない機械（Windows の一般権限）では、その分だけ飛ばす。 */
+async function canLink(): Promise<boolean> {
+  const d = await tempDir('aas-undo-ln-');
+  await writeFile(join(d, 'a'), 'x');
+  try { await symlink(join(d, 'a'), join(d, 'b')); return true; } catch { return false; }
+}
+const linkable = await canLink();
+
+/**
+ * 作業場を、**実体と違う綴りで**渡す。
+ *
+ * Windows では `%TEMP%` が `C:\Users\RUNNER~1\...`（8.3 の短い名前）で来るのに
+ * realpath は `C:\Users\runneradmin\...` を返す。junction・ネットワークの割り当て・
+ * OneDrive の付け替えでも同じ形になる。linux では symlink で同じ形が作れる。
+ */
+async function linkedRoot(): Promise<string> {
+  const base = await tempDir('aas-undo-linkroot-');
+  const real = join(base, 'real');
+  const asRoot = join(base, 'asroot');
+  await mkdir(real);
+  await symlink(real, asRoot);
+  return asRoot;
+}
+
 describe('直されたものを、押して戻せる', () => {
-  test('**書かせて、`/api/undo` で元に戻る**', async () => {
-    const root = await tempDir('aas-undo-root-');
+  /** 一連の流れ。渡す作業場の作り方だけを入れ替えて、二通りで見る。 */
+  async function roundTrip(root: string): Promise<void> {
     const original = 'export const add = (a, b) => a + b;\n';
     await writeFile(join(root, 'math.js'), original, 'utf8');
 
@@ -81,5 +105,22 @@ describe('直されたものを、押して戻せる', () => {
       const after = await (await fetch(`${base}/api/undo`)).json() as { list: unknown[] };
       assert.equal(after.list.length, 0, '戻したのに残っている');
     } finally { await server.stop(); await fake.close(); }
+  }
+
+  test('**書かせて、`/api/undo` で元に戻る**', async () => {
+    await roundTrip(await tempDir('aas-undo-root-'));
   });
+
+  /**
+   * 作業場の綴りが実体と違うと、**戻すが何も戻さずに黙って終わっていた。**
+   *
+   * 控える道を実体の綴りで作っていたため、`../../../../../runneradmin/...` のような
+   * 形になり、戻す側の `safeResolve` がそれを弾いていた。弾いたことは誰にも言わない
+   * ので、押しても何も起きない。Windows の CI で見つけた（`src/agent/tools/paths.ts`）。
+   */
+  test('**綴りが実体と違う作業場でも、戻る**',
+    { skip: linkable ? false : 'この機械ではリンクを作れない' },
+    async () => {
+      await roundTrip(await linkedRoot());
+    });
 });

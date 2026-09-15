@@ -14,6 +14,21 @@ import { join, dirname } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
+/**
+ * 読んだ中身の行末を LF にそろえてから見る。
+ *
+ * Windows の checkout は CRLF になる。そろえずに `\n## 読む順\n` を探すと
+ * 一つも当たらず、中身は正しいのに「読む順の節が無い」と言って落ちた
+ * （Windows の CI で実際にそう落ちた）。`split('\n')` の側も、題の末尾に
+ * `\r` が残って名前が一致しなくなる。
+ *
+ * ここで見たいのは目次と節の対応であって行末ではないので、
+ * **読んだ直後にそろえる。**走らせる場所で結果が変わらないようにする。
+ */
+async function readLf(path: string): Promise<string> {
+  return (await readFile(path, 'utf8')).replace(/\r\n/g, '\n');
+}
+
 /** 見出しから、日付を落とした題だけを取り出す。 */
 function headings(text: string): string[] {
   const found: string[] = [];
@@ -39,7 +54,7 @@ function indexed(text: string): string[] {
 
 describe('決めたことの目次', () => {
   test('目次の名前は、すべて節として在る', async () => {
-    const text = await readFile(join(root, 'docs/DECISIONS.md'), 'utf8');
+    const text = await readLf(join(root, 'docs/DECISIONS.md'));
     const titles = new Set(headings(text));
     assert.ok(titles.size > 0, '節が読めていない');
     for (const name of indexed(text)) {
@@ -48,7 +63,7 @@ describe('決めたことの目次', () => {
   });
 
   test('節は、すべて目次に載っている', async () => {
-    const text = await readFile(join(root, 'docs/DECISIONS.md'), 'utf8');
+    const text = await readLf(join(root, 'docs/DECISIONS.md'));
     const listed = new Set(indexed(text));
     for (const name of headings(text)) {
       assert.ok(listed.has(name), `節が在るのに目次に無い: ${name}`);

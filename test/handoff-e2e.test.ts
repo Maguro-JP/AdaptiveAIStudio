@@ -31,6 +31,27 @@ const git = (args: string[], cwd: string): void => {
 };
 
 /**
+ * 行末を変換しない形でクローンする。
+ *
+ * Windows の git は既定で `core.autocrlf=true` なので、この試験が作る
+ * 一時のクローンでも checkout のときに `\n` が `\r\n` へ書き換わる。
+ * その結果、渡ったものを見ている所が
+ * `'クラウドで書いた\r\n' !== 'クラウドで書いた\n'` で落ちた
+ * （Windows の CI で実際に三つそう落ちた）。渡す道の不具合ではない。
+ *
+ * **比べる側で行末をそろえてはいけない。**ここで見たいのは
+ * 「書いたものがそのまま渡る」ことなので、比べる前にそろえてしまうと、
+ * 本当に書き換わっていても通る試験になる。**変換する側を止める。**
+ *
+ * `--config` は最初の checkout より前に効くので、一度も変換されない
+ * （クローンしてから `git config` を書いても、もう遅い）。
+ * 手元の git の設定（グローバル）には触らない。ここで作ったものだけ。
+ */
+const cloneVerbatim = (from: string, to: string, cwd: string): void => {
+  git(['clone', '-q', '--config', 'core.autocrlf=false', '--config', 'core.eol=lf', from, to], cwd);
+};
+
+/**
  * その名前の機械として、渡す道を動かす。
  *
  * **その作業コピーの中に置いたものを呼ぶ。**渡す道は自分の置かれた場所から
@@ -52,7 +73,7 @@ async function twoMachines(): Promise<{ origin: string; cloud: string; local: st
   git(['init', '--bare', '-b', 'main'], origin);
 
   const cloud = join(base, 'cloud');
-  git(['clone', '-q', origin, cloud], base);
+  cloneVerbatim(origin, cloud, base);
   git(['config', 'user.email', 't@example.com'], cloud);
   git(['config', 'user.name', 'test'], cloud);
   // 渡す道そのものを、作業コピーの中へ置く（本番と同じ形で呼ぶ）。
@@ -66,7 +87,7 @@ async function twoMachines(): Promise<{ origin: string; cloud: string; local: st
   git(['push', '-q', '-u', 'origin', 'main'], cloud);
 
   const local = join(base, 'local');
-  git(['clone', '-q', origin, local], base);
+  cloneVerbatim(origin, local, base);
   git(['config', 'user.email', 't@example.com'], local);
   git(['config', 'user.name', 'test'], local);
   return { origin, cloud, local };
