@@ -1196,14 +1196,18 @@ async function pickWorkRoot() {
   const nowAt = $('workNow').textContent ?? '';
   const want = window.prompt('直してほしいコードのある場所を打ってください。\n（空にすると既定へ戻ります）', nowAt);
   if (want === null) return;
+  /*
+   * **作業場だけを送る。**
+   *
+   * ここは `kind` と `modelsDir` も一緒に送っていた。値は設定の頁の入力欄から
+   * 取るが、その欄は設定→モデルを開いたときしか埋まらない。開いていない頁では
+   * 空なので、**llamacpp や Ollama の指定と、GGUF の置き場所が黙って消える。**
+   * 触らないものは送らない（本体側も、送られてこなければ触らない）。
+   */
   const r = await ask('/api/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      kind: $('cfgKind')?.value || 'inproc',
-      modelsDir: $('cfgModelsDir')?.value?.trim() ?? '',
-      workRoot: want.trim(),
-    }),
+    body: JSON.stringify({ workRoot: want.trim() }),
   }, 'フォルダを変えられませんでした');
   if (!r) return;
   const body = r.body;

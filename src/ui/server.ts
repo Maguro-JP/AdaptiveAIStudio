@@ -406,7 +406,6 @@ export class UiServer {
     const server = createServer((req, res) => {
       this.#handle(req, res).catch((e: unknown) => {
         // 画面の不具合で本体を落とさない。
-        if (e instanceof BodyTooLarge) return send(res, 413, { error: e.message });
         send(res, 500, { error: e instanceof Error ? e.message : String(e) });
       });
     });
@@ -2076,18 +2075,38 @@ export class UiServer {
     const body = await readBody(req) as {
       kind?: string; modelsDir?: string; model?: string; workRoot?: string;
     };
+    /*
+     * **送られてこなかった項目は、触らない。**
+     *
+     * ここは `kind` が必ず来るものとして書いてあり、どの保存でも
+     * `saveRuntime(kind, dir, model)` を通していた。横の「フォルダを変える」は
+     * 作業場だけを変えるつもりで `kind` と `modelsDir` も一緒に送るが、
+     * 設定の頁を一度も開いていないと**その二つは空**。空の `kind` は inproc に、
+     * 空の `modelsDir` は「消す」と読まれるので、**llamacpp や Ollama を選び、
+     * 保存先を別のドライブへ向けていた人が、作業場を変えただけでそれを失う。**
+     * 画面は何も言わないので、立ち上げ直したあとに「モデルが無い」で気づく。
+     * 実際に消した。
+     */
     const kind = body?.kind;
-    if (!isRuntimeKind(kind)) return send(res, 400, { error: 'そういう動かし方はありません' });
+    const touchesRuntime = kind !== undefined;
+    if (touchesRuntime && !isRuntimeKind(kind)) {
+      return send(res, 400, { error: 'そういう動かし方はありません' });
+    }
+    if (!touchesRuntime && typeof body?.workRoot !== 'string') {
+      return send(res, 400, { error: '何を変えるのか分かりません' });
+    }
     const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
     // 使う GGUF。名前に道を混ぜさせない（置き場の中の名前だけ）。
     const model = typeof body?.model === 'string' ? body.model.trim() : undefined;
     if (model && /[\\/]/.test(model)) return send(res, 400, { error: 'モデルは置き場の中の名前で指定してください' });
     // 打った場所は見るだけ。既定の場所は、無ければ作る。
     // 「GGUF を置くだけ」と言っておいて置き場が無いのは、案内になっていない。
-    const dirState = dir
-      ? await inspectModelsDir(dir)
-      : await ensureDefaultModelsDir(modelsDir());
-    const at = await saveRuntime(kind, dir, model);
+    const dirState = !touchesRuntime
+      ? undefined
+      : dir
+        ? await inspectModelsDir(dir)
+        : await ensureDefaultModelsDir(modelsDir());
+    const at = touchesRuntime ? await saveRuntime(kind, dir, model) : configPath();
     // 作業場。**打った場所は見るだけ。**無い場所を打っても保存はできる
     // （打ち間違いは、保存したときに言う）。
     let workNote: string | undefined;
@@ -2137,6 +2156,7 @@ export class UiServer {
      */
     let modelRestart = false;
     const rcNow = this.#opts.config.runtime ?? {};
+    if (touchesRuntime) {
     const sameRuntime = kind === (rcNow.kind ?? 'inproc') && (dir || modelsDir()) === (rcNow.modelsDir ?? modelsDir());
     if (model !== undefined && sameRuntime && (model || undefined) !== rcNow.model) {
       const live = this.#session;
@@ -2157,20 +2177,24 @@ export class UiServer {
         this.broadcast({ type: 'stateChanged' });
       }
     }
+    }
     this.broadcast({ type: 'log', level: 'info', text: `設定を書きました: ${at}` });
     return send(res, 200, {
       path: at,
-      saved: { kind, modelsDir: dir || null, ...(model !== undefined ? { model: model || null } : {}) },
+      // 触っていないものを「保存した」と言わない。**書いていないなら出さない。**
+      ...(touchesRuntime
+        ? { saved: { kind, modelsDir: dir || null, ...(model !== undefined ? { model: model || null } : {}) } }
+        : {}),
       // 打ち間違えても保存はできる。だから**保存したときに言う。**
-      dirState,
+      ...(dirState !== undefined ? { dirState } : {}),
       ...(workNote ? { workNote } : {}),
       // いまどこを見ているか。**保存の返事に入れる。**入っていないと、
       // 効いたのかどうかを画面が確かめられない。
       workRootNow: this.#workRoot(),
       // 動かし方の切り替えは、立ち上げ直すまで効かない。黙って効いた顔をしない。
       restartNeeded: workRestart || modelRestart
-        || kind !== (this.#opts.config.runtime?.kind ?? 'inproc')
-        || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir()),
+        || (touchesRuntime && (kind !== (this.#opts.config.runtime?.kind ?? 'inproc')
+          || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir()))),
     });
   }
 

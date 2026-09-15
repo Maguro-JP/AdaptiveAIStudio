@@ -233,3 +233,89 @@ describe('使う GGUF を決める', () => {
     }
   });
 });
+
+/**
+ * 送られてこなかった項目は、触らない。
+ *
+ * 横の「フォルダを変える」は作業場だけを変えるつもりで、`kind` と `modelsDir` も
+ * 一緒に送っていた。値は設定の頁の入力欄から取るが、その欄は設定→モデルを
+ * 開いたときしか埋まらない。開いていない頁では空なので、空の `kind` は inproc に、
+ * 空の `modelsDir` は「消す」と読まれる。**llamacpp や Ollama を選び、置き場所を
+ * 別のドライブへ向けていた人が、作業場を変えただけでそれを失う。**
+ * 画面は何も言わないので、立ち上げ直したあとに「モデルが無い」で気づく。
+ */
+describe('作業場だけを変えたときに、動かし方を消さない', () => {
+  test('**workRoot だけ送れば、動かし方と保存先は残る**', async () => {
+    const { url, at, models } = await start();
+    const work = await tempDir('aas-cfg-work-');
+    // 設定→モデルで、この中で読む道ではないものを選んだ状態を作る。
+    const saved = await fetch(new URL('/api/config', url), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'llamacpp', modelsDir: models }),
+    });
+    assert.equal(saved.status, 200);
+
+    const r = await fetch(new URL('/api/config', url), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workRoot: work }),
+    });
+    assert.equal(r.status, 200, await r.text());
+
+    const after = JSON.parse(await readFile(at, 'utf8')) as {
+      runtime?: { kind?: string; modelsDir?: string }; agent?: { root?: string };
+    };
+    assert.equal(after.runtime?.kind, 'llamacpp', `動かし方が戻っている: ${JSON.stringify(after.runtime)}`);
+    assert.equal(after.runtime?.modelsDir, models, `保存先が消えている: ${JSON.stringify(after.runtime)}`);
+    assert.equal(after.agent?.root, work, '作業場が変わっていない');
+  });
+
+  test('**書いていないものを「保存した」と言わない**', async () => {
+    const { url } = await start();
+    const work = await tempDir('aas-cfg-work2-');
+    const body = await fetch(new URL('/api/config', url), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ workRoot: work }),
+    }).then((x) => x.json()) as { saved?: unknown };
+    assert.equal(body.saved, undefined, `書いていないのに saved を返している: ${JSON.stringify(body.saved)}`);
+  });
+
+  test('何も指さない保存は、断る', async () => {
+    const { url } = await start();
+    const r = await fetch(new URL('/api/config', url), {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    assert.equal(r.status, 400);
+  });
+
+  test('動かし方を送ったときは、これまでどおり書く（対）', async () => {
+    const { url, at, models } = await start();
+    const r = await fetch(new URL('/api/config', url), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'ollama', modelsDir: models }),
+    });
+    assert.equal(r.status, 200, await r.text());
+    const after = JSON.parse(await readFile(at, 'utf8')) as { runtime?: { kind?: string } };
+    assert.equal(after.runtime?.kind, 'ollama');
+  });
+});
+
+/**
+ * 画面の側も、触らないものを送らない。
+ *
+ * 本体を直しても、画面が空の `kind` を送り続ければ同じことが起きる
+ * （`kind` が来た以上、本体は「変えたい」と読む）。**両方で塞ぐ。**
+ */
+describe('フォルダを変えるつまみは、作業場だけを送る', () => {
+  test('**pickWorkRoot が送るのは workRoot だけ**', async () => {
+    const app = await readFile(join(installRoot(), 'src', 'ui', 'web', 'app.js'), 'utf8');
+    const at = app.indexOf('async function pickWorkRoot');
+    assert.ok(at > 0, 'pickWorkRoot が見つからない');
+    const body = app.slice(at, app.indexOf('\n}', at));
+    assert.doesNotMatch(body, /cfgKind|cfgModelsDir/,
+      `作業場を変えるだけなのに、動かし方まで送っている:\n${body}`);
+  });
+});
