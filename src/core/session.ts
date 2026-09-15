@@ -626,6 +626,16 @@ export class Session {
     this.#holder.instruction = request;
     // 依頼が変われば協議もやり直し。前回通した話で今回の変更を通させない。
     this.#forum.clear();
+    /*
+     * **依頼ごとに履歴を切る。ここも送り口と同じ。**
+     *
+     * ハーネスの規則は「1つの依頼の中での積み重ね」を見る。送り口では
+     * 切っていたのに、こちらでは呼んでいなかった。切らないと前の依頼で
+     * 書いたファイルが今回の分として数えられ、**一文字も書いていない依頼が
+     * 上限（maxFilesPerTask）で最初の一回から止まる。**
+     * 同じ内容の書き直しを止める規則も、前の依頼の分で誤爆する。
+     */
+    this.#harness.beginTask();
 
     try {
       const root = this.root;
@@ -780,9 +790,13 @@ export class Session {
       });
       this.#gradeRecall(verified === 'passed' ? 'passed' : verified === 'failed' ? 'failed' : 'notRun');
       this.#compactMemory();
+      // 止めた規則が、通り道になったのか邪魔になったのかは、結末で決まる。
+      this.#harness.endTask(report.verdict === 'accepted' ? 'completed' : 'failed');
+      await this.#harness.metrics?.save();
       this.markChanged();
       return report;
     } catch (e) {
+      this.#harness.endTask('failed');
       yield { type: 'log', level: 'error', text: (e as Error).message };
       return undefined;
     } finally {
