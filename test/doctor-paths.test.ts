@@ -42,3 +42,57 @@ describe('言うこと', () => {
     assert.equal(programDirNote('D:\\AdaptiveAIStudio'), undefined);
   });
 });
+
+/**
+ * 案内する一手が、その形で打てること。
+ *
+ * `how()` は `isPortable()` でしか分けていなかった。あれは `.portable` が在るかどうかで決まるが、**インストーラ用の一式からは `.portable` を消している**
+ * （`scripts/installer.mjs`）。つまり setup.exe で入れた形では
+ * `npm run ui` を案内していた。入れた形にも npm は無いので、
+ * **案内した手がその場で打てない。**
+ *
+ * clean も同じで、`npm run clean -- --yes` と書き写していた。
+ * 配った形では、片づける道がどこにも無い形になっていた。
+ */
+describe('案内する一手は、その形で打てる', () => {
+  test('**配った形（app/ の中）では、入口の呼び方で言う**', async () => {
+    const { how } = await import('../src/cli/how.ts');
+    const { join } = await import('node:path');
+    const { mkdir, writeFile } = await import('node:fs/promises');
+    const { tempDir } = await import('./tmp.ts');
+    // 配った形の見分けは `installRoot()` の名前が app かどうか。
+    // ここは分岐そのものを見る（`isDistributed`）。
+    const { isDistributed } = await import('../src/core/home.ts');
+    const base = await tempDir('aas-how-');
+    const app = join(base, 'app');
+    await mkdir(app, { recursive: true });
+    await writeFile(join(app, 'package.json'), '{}');
+    assert.equal(isDistributed(app), true, 'app/ を配った形と見ていない');
+    // **打てる形で言っているか**を、置かれ方ごとに見る。
+    assert.equal(how('ui', '', app), 'AdaptiveAIStudio.cmd ui',
+      '入れた形なのに npm を案内している');
+    assert.equal(how('clean', '--yes', app), 'AdaptiveAIStudio.cmd clean --yes');
+    // クローン（app ではない）は、これまでどおり npm。
+    assert.equal(isDistributed(base), false);
+    assert.equal(how('ui', '', base), 'npm run ui');
+    assert.equal(how('clean', '--yes', base), 'npm run clean -- --yes');
+  });
+
+  test('**clean は how を通す（書き写さない）**', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { installRoot } = await import('../src/core/home.ts');
+    const src = await readFile(join(installRoot(), 'src', 'cli', 'clean.ts'), 'utf8');
+    assert.doesNotMatch(src, /npm run clean/, '打てない一手を書き写している');
+    assert.match(src, /how\('clean', '--yes'\)/, 'how を通していない');
+  });
+
+  test('**doctor も how を通す（isPortable で分けない）**', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { installRoot } = await import('../src/core/home.ts');
+    const src = await readFile(join(installRoot(), 'src', 'cli', 'doctor.ts'), 'utf8');
+    assert.doesNotMatch(src, /function how\(/, 'doctor が自分の how を持っている（二重になる）');
+    assert.match(src, /from '\.\/how\.ts'/, '共有の how を使っていない');
+  });
+});

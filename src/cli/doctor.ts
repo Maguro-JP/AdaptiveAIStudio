@@ -21,6 +21,7 @@ import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { installRoot, isPortable, productRoot, defaultWorkRoot, aasHome, asciiModelsDir } from '../core/home.ts';
+import { how } from './how.ts';
 import { canRun } from '../core/which.ts';
 import { saveReport, tellWhereItWent } from './report-file.ts';
 import { deepestUnder, judgeRoom, WINDOWS_MAX_PATH } from '../core/pathroom.ts';
@@ -75,16 +76,6 @@ add('Node.js', nodeOk ? 'ok' : 'bad', `v${process.versions.node}`,
 
 step('設定を読みます');
 
-/**
- * 打つ一手の書き方。**無いものを打てと言わない。**
- *
- * bundle には npm が無い。入口（AdaptiveAIStudio.cmd）が package.json を
- * そのまま読んで同じ仕事を動かすので、呼び方だけが違う。
- */
-function how(task: string, args = ''): string {
-  if (isPortable()) return `AdaptiveAIStudio.cmd ${task}${args ? ` ${args}` : ''}`;
-  return `npm run ${task}${args ? ` -- ${args}` : ''}`;
-}
 
 /*
  * **ここで死なない。**設定が壊れていると `loadConfig` は投げる。doctor は
