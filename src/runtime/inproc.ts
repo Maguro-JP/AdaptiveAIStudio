@@ -71,7 +71,7 @@ export interface Backend {
   /** CPU になった理由。GPU を使えているときは無い。 */
   reason?: BackendReason;
 }
-export type BackendReason = 'off' | 'no-binary' | 'load-failed' | 'no-gpu';
+export type BackendReason = 'off' | 'no-binary' | 'load-failed' | 'no-gpu' | 'named-missing';
 
 /** 人に見せる言葉。合図（`BackendReason`）は変えず、ここで引き直す。 */
 export const BACKEND_REASON: Record<BackendReason, string> = {
@@ -79,6 +79,8 @@ export const BACKEND_REASON: Record<BackendReason, string> = {
   'no-binary': 'GPU 用の binary が入っていません',
   'load-failed': 'GPU 用の binary は在りますが、この機械では読めませんでした。ドライバが古い形が多いです',
   'no-gpu': '使える GPU が見つかりませんでした',
+  // 設定で名指ししたときだけ出る。auto と違い、ライブラリは黙って CPU へ落ちずに投げる。
+  'named-missing': '設定 runtime.gpu で名指しした GPU 用の binary が入っていないので、CPU で読みます',
 };
 
 /**
@@ -143,7 +145,26 @@ export async function probeBackend(
   } = {},
 ): Promise<{ llama: LlamaLike; backend: Backend }> {
   const heard: string[] = [];
-  const llama = await quietly(heard, () => lib.getLlama({ gpu: mode === 'off' ? false : mode, build: 'never', logLevel: 'error' }));
+  let llama: LlamaLike;
+  try {
+    llama = await quietly(heard, () => lib.getLlama({ gpu: mode === 'off' ? false : mode, build: 'never', logLevel: 'error' }));
+  } catch (e) {
+    /*
+     * **名指しで頼まれたときだけ、ライブラリは投げる。**
+     *
+     * `auto` なら向こうが黙って CPU へ落ちるが、`cuda` / `vulkan` を名指しすると
+     * binary が無い機械では `NoBinaryFoundError` を投げる。**文はクラス名だけ**で、
+     * 本当の理由（何が足りないか）は拾った console の行の方に在る。
+     * ここはそれを外へ出さずに落ちていたので、doctor には
+     * `NoBinaryFoundError` だけが残り、見当違いの直し方を出しながら
+     * 「動かせます」と言っていた。
+     *
+     * 名指しが効かないことは言う。**ただし、そこで止めない。**CPU で読める。
+     */
+    if (mode === 'off') throw e;
+    const cpu = await quietly(heard, () => lib.getLlama({ gpu: false, build: 'never', logLevel: 'error' }));
+    return { llama: cpu, backend: { gpu: false, devices: [], vramBytes: 0, reason: 'named-missing' } };
+  }
   const gpu = llama.gpu ?? false;
   if (!gpu) {
     const said = heard.join('\n');
