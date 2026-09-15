@@ -26,6 +26,17 @@ const sourceOnly = existsSync(join(installRoot(), '.github'))
   : { skip: '作業場にしか無いものを見る試験です（bundle では確かめられません）' };
 
 const KEYS = ['AAS_HOME', 'AAS_STATE_DIR', 'AAS_BIN_DIR', 'AAS_MODELS_DIR'];
+/*
+ * **入れた機械の env を持ち込まない。**
+ *
+ * ここは `afterEach` でしか消していなかったので、**外から `AAS_HOME` が
+ * 立っている場所では、一つ目の試験がそのまま落ちる。**
+ * インストーラが書く入口は `set "AAS_HOME=%COMMONPROGRAMDATA%\AdaptiveAIStudio"`
+ * を立てるので、**入れた機械では selftest が毎回 NG と言う。**
+ * 壊れていないのに壊れていると言うテストは、あるほうが悪い。
+ * 始める前に消す（走らせる場所で結果が変わらないようにする）。
+ */
+for (const k of KEYS) delete process.env[k];
 afterEach(() => { for (const k of KEYS) delete process.env[k]; });
 
 describe('根の決め方', () => {
