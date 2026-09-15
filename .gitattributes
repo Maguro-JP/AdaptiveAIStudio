@@ -1,0 +1,16 @@
+# バッチファイルは CRLF・CP932 で配る。
+# LF のままだと、cmd.exe が goto や括弧の塊を読み違えることがある。
+#
+# 文字集合は CP932。cmd.exe はバッチを console の文字集合で読むので、
+# UTF-8 で置くと日本語が化けるだけでなく**行が壊れて断片が実行される**。
+# BOM を付けても直らず、むしろ 1 行目の @echo off が効かなくなる。
+# 記録の側は UTF-8 のままにしておきたいので、git に変換させる
+# （working-tree-encoding。取り出すときだけ CP932 になる）。
+*.cmd text eol=crlf working-tree-encoding=CP932
+*.bat text eol=crlf working-tree-encoding=CP932
+*.sh  text eol=lf
+
+# 配布用の書庫（GitHub の「Download ZIP」を含む）に、実際の版を焼き込む。
+# これが無いと、落とした人が「どの版か分からない」まま使うことになり、
+# 直したはずのものが直っていないように見える。
+VERSION export-subst
