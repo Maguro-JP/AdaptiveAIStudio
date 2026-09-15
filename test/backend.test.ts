@@ -16,6 +16,7 @@ import {
   InProcRuntime, probeBackend, describeBackend, describeSpeed, type LlamaLib,
 } from '../src/runtime/inproc.ts';
 import { InProcHost, hostArgs } from '../src/runtime/inproc-host-client.ts';
+import { until } from './until.ts';
 
 const GB = 1024 ** 3;
 const here = dirname(fileURLToPath(import.meta.url));
@@ -363,7 +364,20 @@ describe('別のプロセスでも backend が分かる', () => {
       assert.equal(b.gpu, 'cuda');
       assert.equal(b.vramBytes, 8 * GB);
       assert.deepEqual(b.devices, ['NVIDIA GeForce RTX 4060']);
-      assert.ok(said.some((l) => l.startsWith('GPU で読みます: CUDA')), said.join(' | '));
+      /*
+       * **別の道から届くものを、待たずに見ない。**
+       *
+       * 返事は HTTP、記録は子の stdout。別々の道なので、返事が返った時点で
+       * 記録が届いているとは限らない。ここで即座に見ていたので、
+       * 機械が混んでいるときだけ `said` が空で落ちた（5 回に 1 回）。
+       * 届くまで見る。届かなければ上限で落ちる（黙って通さない）。
+       */
+      try {
+        await until(() => said.some((l) => l.startsWith('GPU で読みます: CUDA')),
+          'GPU で読みます の行が届く', { timeoutMs: 8000 });
+      } catch {
+        assert.fail(`子の記録が届かない: ${said.join(' | ')}`);
+      }
     } finally {
       await host.shutdown().catch(() => undefined);
     }

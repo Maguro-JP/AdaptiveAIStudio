@@ -35,7 +35,14 @@ describe('別のプロセスで読む', () => {
       const pid = host.pid();
       assert.ok(pid && pid !== process.pid, '別のプロセスになっていない');
       assert.deepEqual(host.loaded(), ['a.gguf']);
-      assert.ok(said.some((l) => l.includes('読み込みました')), `子の記録が届いていない: ${said.join(' | ')}`);
+      // 返事は HTTP、記録は子の stdout。**別の道から届くものを、待たずに見ない。**
+      // 返事が返った時点で記録が届いているとは限らない（`test/backend.test.ts` の
+      // 同じ形が、混んでいるときだけ空で落ちた）。届くまで見る。
+      try {
+        await until(() => said.some((l) => l.includes('読み込みました')), '子の記録が届く', { timeoutMs: 8000 });
+      } catch {
+        assert.fail(`子の記録が届いていない: ${said.join(' | ')}`);
+      }
       // 答えは、子の口へ直に頼む（上の層と同じ道）。
       const r = await fetch(`${got.baseUrl}/chat/completions`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
