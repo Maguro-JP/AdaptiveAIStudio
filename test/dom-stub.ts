@@ -32,6 +32,15 @@ export interface StubNode {
   removeChild(child: StubNode): StubNode;
   onclick?: () => unknown;
   onchange?: (e: unknown) => unknown;
+  /** 打ち込む欄の中身。textarea / input を使うパネルのために持つ。 */
+  value: string;
+  spellcheck: boolean;
+  selectionStart: number;
+  selectionEnd: number;
+  focus(): void;
+  addEventListener(type: string, fn: (e: unknown) => unknown): void;
+  /** 付けた相手（addEventListener）と、`on*` の両方を呼ぶ。 */
+  fire(type: string, event?: unknown): void;
   append(...nodes: StubNode[]): void;
   appendChild(node: StubNode): StubNode;
   replaceChildren(...nodes: StubNode[]): void;
@@ -42,6 +51,8 @@ export interface StubNode {
 }
 
 export function createNode(tagName: string): StubNode {
+  /** addEventListener で付いたもの。`on*` とは別に持つ（本物と同じ）。 */
+  const listeners = new Map<string, Array<(e: unknown) => unknown>>();
   const node: StubNode = {
     tagName,
     className: '',
@@ -54,6 +65,20 @@ export function createNode(tagName: string): StubNode {
     placeholder: '',
     dataset: {},
     children: [],
+    value: '',
+    spellcheck: true,
+    selectionStart: 0,
+    selectionEnd: 0,
+    focus() { /* 置く所が無いので、呼べることだけ */ },
+    addEventListener(type, fn) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type)!.push(fn);
+    },
+    fire(type, event) {
+      const on = (node as unknown as Record<string, ((e: unknown) => unknown) | undefined>)[`on${type}`];
+      if (typeof on === 'function') on(event ?? {});
+      for (const fn of listeners.get(type) ?? []) fn(event ?? {});
+    },
     append(...nodes) {
       node.children.push(...nodes);
       for (const c of nodes) { c.parentNode = node; c.parentElement = node; }

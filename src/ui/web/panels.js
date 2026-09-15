@@ -1608,6 +1608,17 @@ export const PANELS = {
         save.disabled = true;
         return;
       }
+      /*
+       * **同じ中身を読み直しただけなら、出ている言葉を取り替えない。**
+       *
+       * 手で保存すると、本体はその差分を全員へ配る（`diff`）。配られたものが
+       * 自分の書き込みの写しなので、下の `ctx.on('session')` がここを呼び直す。
+       * ここで `refresh()` を通っていたので、**「保存しました（+2 -1）」が
+       * 「保存してあります」に化けていた。**書けたのか、何行変わったのかが
+       * 消えるので、保存できたかどうかを画面から確かめられない。
+       * 中身が同じなら、読み直す意味も無い。
+       */
+      if (p === path && j.content === loaded && !dirty()) { name.textContent = p; return; }
       path = p; loaded = j.content;
       name.textContent = p;
       area.value = loaded; area.disabled = false;
