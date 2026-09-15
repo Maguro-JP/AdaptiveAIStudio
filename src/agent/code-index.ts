@@ -269,10 +269,33 @@ export function refsIn(text: string): Refs {
     if (name.length < 3 || RESERVED.has(name) || COMMON.has(name)) continue;
     // **外から入れた名前は、この置き場の誰かを指してはいない。**
     if (outside.has(name)) continue;
+    // **自分がそう名づけている所は、よその同じ名前を指してはいない。**
+    if (DECLARED_HERE.test(stripped.slice(Math.max(0, (m.index ?? 0)), (m.index ?? 0) + m[1]!.length))
+      || declaresAt(stripped, (m.index ?? 0) + m[1]!.length)) continue;
     seen.add(name);
     if (seen.size >= 800) break;
   }
   return [...seen];
+}
+
+/**
+ * その名前が、**この場で名づけている**ものか。
+ *
+ * `async load(): Promise<void>` の `load` は、よその `export function load` を
+ * 指していない。**自分のメソッドの名前**である。ここを参照として数えていたので、
+ * `load()` を持つ 33 枚（`Memory` `ProposalQueue` `Ignores` …）から
+ * `test/fake-llama-lib.ts` の `export async function load` へ辺が張られ、
+ * **repo map のいちばん上が試験用の模型**になっていた（三番目の 5 倍。実測）。
+ * 直す先を探しているモデルに、まず模型を見せることになる。
+ *
+ * 見るのは名前の直前だけ。`await load()` のような**使う側は残す。**
+ */
+const DECL_BEFORE = /(?:^|[^\w$])(?:function|async|get|set|static|class|interface|enum|const|let|var|readonly|declare|def|func|type)\s*\**\s*$/;
+/** 私的なメンバー（`#load`）も、この場の名前。 */
+const DECLARED_HERE = /#\s*$/;
+
+function declaresAt(text: string, at: number): boolean {
+  return DECL_BEFORE.test(text.slice(Math.max(0, at - 24), at));
 }
 
 /**
