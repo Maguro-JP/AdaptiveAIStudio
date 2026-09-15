@@ -23,7 +23,7 @@
  */
 import { cp, copyFile, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink } from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
@@ -148,7 +148,30 @@ export async function guessTarget({ nodeHere, nodeExe }) {
  *
  * @param {string} target 配る先。`win-x64` のような形。
  */
-export async function pruneForTarget(dir, target, log) {
+/**
+ * 消してよい場所か。**組んだ先の中だけ。**
+ *
+ * 片づけが、手元の `node_modules` から typescript・playwright-core・@types を
+ * 消した。`npm run typecheck` も sweep も、そのあと走らなくなる。しかも黙って消える
+ * ので、次に `npm run check` を回したときに「飛ばしました」と出るまで気づけない。
+ * **組む側が開発環境を壊すのは、何があっても割に合わない。**
+ *
+ * どの道でそうなったのかは掴めていない（同じ手順で再現しない）。
+ * 原因が分からないなら、**起きても壊れない形にする。**
+ * 渡された場所が組んだ先の中でなければ、消さずに投げる。
+ */
+function mustBeInside(dir, out, what) {
+  const rel = relative(resolve(out), resolve(dir));
+  if (rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)) return;
+  throw new Error(
+    `組んだ先の外を片づけようとしました（${what}）。`
+    + `\n  片づけようとした場所: ${resolve(dir)}`
+    + `\n  組んだ先: ${resolve(out)}`,
+  );
+}
+
+export async function pruneForTarget(dir, target, log, out) {
+  mustBeInside(dir, out, 'pruneForTarget');
   let freed = 0;
   const size = async (at) => {
     let total = 0;
@@ -180,7 +203,8 @@ export async function pruneForTarget(dir, target, log) {
   if (freed > 0) log(`  空いた: ${(freed / 1024 / 1024).toFixed(0)} MB`);
 }
 
-async function pruneExtras(dir, log) {
+async function pruneExtras(dir, log, out) {
+  mustBeInside(dir, out, 'pruneExtras');
   let maps = 0;
   let types = 0;
   for (const name of await readdir(dir, { recursive: true })) {
@@ -322,7 +346,7 @@ export async function bundle({
   // 転んだのは異常。分けて扱う。
   if (await stat(modules).then(() => true).catch(() => false)) {
     try {
-      await pruneExtras(modules, log);
+      await pruneExtras(modules, log, out);
     } catch (e) {
       log(`  片づけで転びました: ${e instanceof Error ? e.message : String(e)}`);
       throw e;
@@ -491,7 +515,7 @@ export async function bundle({
   const shipTo = target ?? from ?? await guessTarget({ nodeHere, nodeExe });
   if (shipTo) {
     log(`  配る先: ${shipTo}`);
-    await pruneForTarget(join(app, 'node_modules'), shipTo, log);
+    await pruneForTarget(join(app, 'node_modules'), shipTo, log, out);
   } else {
     log('  配る先が分かりません（--target を渡してください）。走らせる場所ごとのものは、そのまま入れます');
   }

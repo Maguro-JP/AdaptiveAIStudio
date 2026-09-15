@@ -84,4 +84,36 @@ describe('前に渡した添付', () => {
     assert.ok(names.includes('old-a.txt'), '古い添付が対象に無い');
     assert.ok(!names.includes('new-b.txt'), '新しい添付まで消そうとしている');
   });
+
+  /**
+   * 記録は増えるだけで、減る道が無かった。作業場に doctor-…txt が 37 個
+   * 並び、横の一覧がそれで埋まった（実機）。新しい方から 10 件だけ残す。
+   */
+  test('**古い記録は挙げる。新しい 10 件は残す**', async () => {
+    const { home } = await scratch();
+    const reports = join(home, 'reports');
+    await mkdir(reports, { recursive: true });
+    for (let i = 1; i <= 14; i += 1) {
+      await writeFile(join(reports, `doctor-20260901-${String(1000 + i)}.txt`), 'x');
+    }
+    const found = await findRemovable({ keepTag: 'b9999' });
+    const names = found.map((f) => f.path.split(/[\\/]/).at(-1)).sort();
+    assert.deepEqual(names, [
+      'doctor-20260901-1001.txt', 'doctor-20260901-1002.txt', 'doctor-20260901-1003.txt',
+      'doctor-20260901-1004.txt',
+    ], `挙げたものが違う: ${names.join(', ')}`);
+    assert.ok(found.every((f) => f.why.includes('古い doctor の記録')), JSON.stringify(found));
+  });
+
+  test('**記録に見えないものは触らない（対）**', async () => {
+    const { home } = await scratch();
+    const reports = join(home, 'reports');
+    await mkdir(reports, { recursive: true });
+    // 15 個置いても、名前の形が違えば対象にしない。
+    for (let i = 1; i <= 15; i += 1) {
+      await writeFile(join(reports, `メモ${i}.txt`), 'x');
+      await writeFile(join(reports, `doctor-${i}.txt`), 'x');
+    }
+    assert.deepEqual(await findRemovable({ keepTag: 'b9999' }), [], '関係ないものを消そうとしている');
+  });
 });

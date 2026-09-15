@@ -11,6 +11,7 @@
  * 素の HTML と ES モジュールなら、組み立ての手順すら要らない。
  */
 import { listDir, resolveInside } from './files.ts';
+import { describeNet } from '../runtime/net-why.ts';
 import { UnfinishedWork, resumePrompt, whyText } from '../core/unfinished.ts';
 import { githubLaunch } from '../core/github-mcp.ts';
 import { CATALOG, BUILTIN, findEntry, specFrom, needsNpx } from '../mcp/catalog.ts';
@@ -2386,7 +2387,8 @@ export class UiServer {
         return undefined;
       }
     } catch (e) {
-      return `モデルの一覧を取れません（${kind}）: ${(e as Error).message}\n`
+      // ここも網の向こう（Ollama / llama-server）。生の文をそのまま出さない。
+      return `モデルの一覧を取れません（${kind}）: ${describeNet(e)}\n`
         + '設定 → モデル で、動かし方を選び直せます。';
     }
     if (kind === 'ollama') {
@@ -2880,7 +2882,7 @@ export class UiServer {
         root, state: stateDir(), home: aasHome(),
         models: this.#opts.config.runtime?.modelsDir ?? modelsDir(),
       })))();
-      const saved = await saveReport('report', body, [join(stateDir(), 'reports'), root]);
+      const saved = await saveReport('report', body, [join(stateDir(), 'reports'), stateDir(), root]);
       const sec = Math.round((Date.now() - began) / 1000);
       this.#report = saved.path
         ? { state: 'done', path: saved.path, message: `出来ました（${sec} 秒）。このファイルを一つ送ってください。`, began }
@@ -2990,7 +2992,8 @@ export class UiServer {
        * 選び方を覚えてもらえば、名前が変わっても困らない。
        */
       // **一つの文にする。**二つに分けると、読む側は下の行を見落とす。
-      const text = `取ってこられませんでした: ${e instanceof Error ? e.message : String(e)}\n${byHand(modelsDir())}`;
+      // 網の失敗は、人の言葉に引き直してから出す（`fetch failed` のままにしない）。
+      const text = `取ってこられませんでした: ${describeNet(e)}\n${byHand(modelsDir())}`;
       // 押した板にも残す。ログの板は閉じていることがある。
       this.#fetching = { id, state: 'failed', message: text, began };
       this.broadcast({ type: 'log', level: 'error', text });

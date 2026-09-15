@@ -23,8 +23,16 @@ const PLATFORMS = [
   'linux-x64-cuda-ext', 'linux-x64-vulkan', 'win-x64', 'win-x64-cuda', 'win-x64-vulkan', 'mac-arm64',
 ];
 
-async function modules(): Promise<string> {
-  const dir = await tempDir('aas-target-');
+/**
+ * 組んだ先を作って、その中に node_modules を並べる。
+ *
+ * **組んだ先を渡す形にした。**片づけは、組んだ先の中でしか消さない
+ * （手元の node_modules から typescript と playwright-core が消えたことがある）。
+ */
+async function modules(): Promise<{ dir: string; out: string }> {
+  const out = await tempDir('aas-target-');
+  const dir = join(out, 'app', 'node_modules');
+  await mkdir(dir, { recursive: true });
   for (const p of PLATFORMS) {
     await mkdir(join(dir, '@node-llama-cpp', p), { recursive: true });
     await writeFile(join(dir, '@node-llama-cpp', p, 'binary'), 'x'.repeat(100), 'utf8');
@@ -35,15 +43,15 @@ async function modules(): Promise<string> {
   }
   await mkdir(join(dir, 'node-llama-cpp'), { recursive: true });
   await writeFile(join(dir, 'node-llama-cpp', 'x.js'), 'x', 'utf8');
-  return dir;
+  return { dir, out };
 }
 
 describe('配る先のものだけを残す', () => {
   test('**Windows むけなら、win-x64 と、その GPU 用（cuda・vulkan）が残る**', async () => {
     // GPU 用は `win-x64-` で始まる別のパッケージ。CPU の分だけ残すと、
     // RTX の機械でも CPU で回る（実機でそうなった）。
-    const dir = await modules();
-    await pruneForTarget(dir, 'win-x64', () => {});
+    const { dir, out } = await modules();
+    await pruneForTarget(dir, 'win-x64', () => {}, out);
     const left = (await readdir(join(dir, '@node-llama-cpp'))).sort();
     assert.deepEqual(left, ['win-x64', 'win-x64-cuda', 'win-x64-vulkan'], `残ったもの: ${left.join(',')}`);
   });
@@ -51,23 +59,23 @@ describe('配る先のものだけを残す', () => {
   test('**配る先そのものを、消さない**', async () => {
     // 当て推量が外れて win-x64 を消した。動かないものが出ていく。
     for (const target of PLATFORMS) {
-      const dir = await modules();
-      await pruneForTarget(dir, target, () => {});
+      const { dir, out } = await modules();
+      await pruneForTarget(dir, target, () => {}, out);
       const left = await readdir(join(dir, '@node-llama-cpp'));
       assert.ok(left.includes(target), `${target} むけなのに、${target} を消している`);
     }
   });
 
   test('本体（走らせる場所に依らないもの）は残す（対）', async () => {
-    const dir = await modules();
-    await pruneForTarget(dir, 'win-x64', () => {});
+    const { dir, out } = await modules();
+    await pruneForTarget(dir, 'win-x64', () => {}, out);
     const left = await readdir(dir);
     assert.ok(left.includes('node-llama-cpp'), '本体まで消している');
   });
 
   test('開発でしか使わないものは落とす', async () => {
-    const dir = await modules();
-    await pruneForTarget(dir, 'win-x64', () => {});
+    const { dir, out } = await modules();
+    await pruneForTarget(dir, 'win-x64', () => {}, out);
     const left = await readdir(dir);
     assert.ok(!left.includes('typescript'), 'typescript が残っている');
     assert.ok(!left.includes('playwright-core'), 'playwright-core が残っている');
@@ -128,5 +136,33 @@ describe('配る先を、渡された Node から決める', () => {
     const { guessTarget } = await import('../scripts/bundle.mjs');
     const got = await guessTarget({ nodeHere: true });
     assert.equal(got, `${process.platform === 'win32' ? 'win' : process.platform}-${process.arch}`);
+  });
+
+  /**
+   * **組んだ先の外は、片づけない。**
+   *
+   * 手元の `node_modules` から typescript・playwright-core・@types が消えた。
+   * `npm run typecheck` も sweep も、そのあと走らなくなる。しかも黙って消えるので、
+   * 次に `npm run check` を回して「飛ばしました」と出るまで気づけない。
+   * どの道でそうなったのかは掴めていない（同じ手順で再現しない）ので、
+   * **起きても壊れない形**にしてある。
+   */
+  test('**組んだ先の外を渡されたら、消さずに投げる**', async () => {
+    const { dir } = await modules();
+    const other = await tempDir('aas-other-out-');
+    await assert.rejects(
+      () => pruneForTarget(dir, 'win-x64', () => {}, other),
+      /組んだ先の外/,
+      '外を渡しても片づけてしまう',
+    );
+    // 投げる前に一つも消していないこと。
+    const left = await readdir(dir);
+    assert.ok(left.includes('typescript'), '投げる前に消している');
+  });
+
+  test('組んだ先そのものを渡されても、投げる（対）', async () => {
+    // `out` と同じ場所を渡すのは、`app/node_modules` の組み立てを間違えた形。
+    const { out } = await modules();
+    await assert.rejects(() => pruneForTarget(out, 'win-x64', () => {}, out), /組んだ先の外/);
   });
 });

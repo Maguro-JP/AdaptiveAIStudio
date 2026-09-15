@@ -52,6 +52,7 @@ import { RoleRegistry } from '../roles/registry.ts';
 import type { Tool, ApprovalRequest, ApprovalAnswer } from '../agent/tools/types.ts';
 import { toolsFor } from '../roles/registry.ts';
 import { buildSystemPrompt } from '../roles/role.ts';
+import { looksLikeChat } from './intent.ts';
 import { decompose, toWorkItems, type WorkPlan } from '../agent/pm.ts';
 import { findNewerFor, describeNewer } from '../runtime/model-updates.ts';
 import { catalogFamilies } from '../runtime/model-catalog.ts';
@@ -123,8 +124,27 @@ export const DEFAULT_SYSTEM = `あなたはソフトウェア開発の作業者�
 - 変更したら run_command でテストやビルドを実行し、結果を確認する。
 - 作業が終わったら、何をしたかを簡潔に日本語で報告する。ツールは呼ばない。
 - 分からないことは推測せず、質問して止まる。
+- **訊かれただけのときは、ツールを使わずにそのまま答える。**作業として扱わない。
+- 知らないことは「分かりません」と言う。天気・ニュース・今日の日付など、
+  外で今起きていることは分かりません。調べに行かず、そう答える。
 
 時間はいくらかかっても構わない。正確さを優先すること。`;
+
+/**
+ * 訊かれただけのときの決まり。
+ *
+ * **作業者の決まりを、問いかけに載せない。**「明日の天気は？」に
+ * 「まず read_file で現状を確認する」「write_file には全内容を渡す」を
+ * 載せていたので、2B の模型は問いをなぞって「完了」と返した（実機）。
+ * 問いには、問いの決まりだけを渡す。ツールも渡さない。
+ */
+export const DEFAULT_CHAT_SYSTEM = `あなたは、この場所に住んでいる相棒です。訊かれたことに日本語で短く答えてください。
+
+守ること:
+- 知らないことは「分かりません」と言う。**作り話をしない。**
+- 今日の日付、天気、ニュース、株価、外で今起きていることは分かりません。そう言ってください。
+- 計算や言葉の問いには、そのまま答える。よけいな説明も言い訳も要りません。
+- ファイルを直す・作る・調べるといった作業を頼まれたら、「作業として進めますか」と訊いてください。`;
 
 export type SessionEvent =
   | { type: 'text'; delta: string }
@@ -165,6 +185,14 @@ export type SessionEvent =
   | {
       type: 'settled'; reason: string; verified: boolean; seconds: number; detail?: string;
       checked: 'passed' | 'failed' | 'preexisting' | 'notRun';
+      /**
+       * 訊かれただけの回か。
+       *
+       * **問いに答えただけの回に「完了（検証していません）」と出していた。**
+       * 何も完了していないし、確かめるものも無い。作業の言葉を、会話にも
+       * 着せていた（実機の画面で見た）。判じ方は `looksLikeChat`。
+       */
+      chat?: boolean;
       /** 答えたモデル。切り替わっていれば、切り替わった先。 */
       model: string;
       /** 出した量の見積もり（文字数から。本文だけで、ツールの呼び出しは数えない）。 */
@@ -977,6 +1005,11 @@ export class Session {
 
     const verifyCfg = this.config.agent?.verify ?? {};
     const harnessCfg = this.config.harness ?? {};
+    /*
+     * **訊かれただけなのか、作業を頼まれたのかを、ここで一度だけ決める。**
+     * 決めた結果は、この 1ターンの中で変えない（途中で服が変わると話が割れる）。
+     */
+    const chat = looksLikeChat(instruction);
     const started = Date.now();
     const checkpoint = new Checkpoint(this.root);
     this.#harness.beginTask();
@@ -1010,7 +1043,8 @@ export class Session {
       // 関係することを思い出して添える。無関係なら何も足さない。
       // **「二度としないこと」はここでは足さない。**決まり（system）が載せる。
       // 両方に載せると、同じ文が一往復に二度入る（実際に八件ずつ二重に入っていた）。
-      const recalled = this.#recall(instruction, { lessons: false });
+      // 問いかけには、前の作業の覚えを足さない。話が混ざるだけで、答えは良くならない。
+      const recalled = chat ? '' : this.#recall(instruction, { lessons: false });
       if (recalled) yield { type: 'recalled', text: recalled };
 
       this.#history.push({
@@ -1135,7 +1169,7 @@ export class Session {
         }
       }.bind(this);
 
-      yield* run(await this.#agent());
+      yield* run(await this.#agent({ chat }));
 
       // 実測を溜める。次回以降の自動選択がこれで変わる。
       await this.pilot.autopilot.record({
@@ -1156,7 +1190,7 @@ export class Session {
         const events: SessionEvent[] = [];
         const fix = async (feedback: string, sig: AbortSignal): Promise<void> => {
           this.#history.push({ role: 'user', content: feedback });
-          for await (const ev of (await this.#agent()).run(this.#history, sig)) {
+          for await (const ev of (await this.#agent({ chat })).run(this.#history, sig)) {
             if (ev.type === 'thinking') events.push({ type: 'text', delta: ev.delta });
             else if (ev.type === 'salvaged') events.push({ type: 'salvaged', name: ev.name });
             else if (ev.type === 'toolStart') {
@@ -1257,6 +1291,7 @@ export class Session {
         reason: finishedReason ?? 'failed',
         verified: checked === 'passed',
         checked,
+        ...(chat ? { chat: true } : {}),
         seconds: (Date.now() - started) / 1000,
         ...speedOf(modelUsed, answerChars, (Date.now() - started) / 1000),
       };
@@ -1266,6 +1301,7 @@ export class Session {
       yield { type: 'log', level: 'error', text: (e as Error).message };
       yield {
         type: 'settled', reason: 'failed', verified: false, checked,
+        ...(chat ? { chat: true } : {}),
         seconds: (Date.now() - started) / 1000, detail: (e as Error).message,
         ...speedOf(modelUsed, answerChars, (Date.now() - started) / 1000),
       };
@@ -1322,12 +1358,13 @@ export class Session {
   }
 
   /** 一人で全部やる作業者。気質も権限も既定のもの。 */
-  async #agent(): Promise<Agent> {
+  async #agent(opts: { chat?: boolean } = {}): Promise<Agent> {
     const counter = await this.#count();
     return new Agent(this.orchestrator, {
       candidates: this.candidates,
-      system: await this.#system(),
-      tools: this.#tools,
+      system: await this.#system(opts),
+      // 問いかけにはツールを渡さない。渡すと、答える前に作業場を読みに行く。
+      tools: opts.chat ? [] : this.#tools,
       root: this.root,
       maxTurns: this.config.agent?.maxTurns ?? 40,
       temperature: this.config.temperature,
@@ -1524,7 +1561,13 @@ export class Session {
   }
 
   /** 依頼のたびに、その時点で分かっている状況を渡す。調べ直させるより速い。 */
-  async #system(): Promise<string> {
+  async #system(opts: { chat?: boolean } = {}): Promise<string> {
+    /*
+     * 訊かれただけのときは、**決まりを入れ替えて、そこで終える。**
+     * リポジトリの決まりも作業場の様子も載せない。問いに答えるのに要らないし、
+     * 狭いコンテキストウィンドウの模型では、それだけで問いが押し出される。
+     */
+    if (opts.chat) return this.config.chatSystem ?? DEFAULT_CHAT_SYSTEM;
     const base = this.config.system ?? DEFAULT_SYSTEM;
     const counter = await this.#count();
     const count = counter ? (t: string) => counter.count(t) : undefined;

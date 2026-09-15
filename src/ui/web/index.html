@@ -192,7 +192,12 @@
         </div>
         <p id="cfgNote" class="repairs"></p>
         <p class="hint">置き場にある GGUF</p>
-        <div id="cfgGguf" class="rows paths" data-cols="2"></div>
+        <!--
+          列は 3 つ（名前と道／大きさ／これを使う）。
+          2 つと書いてあったので、3 つ目の「これを使う」が次の行の左端へ落ちて、
+          押す場所が名前の下にぶら下がっていた（画面で見て気づいた）。
+        -->
+        <div id="cfgGguf" class="rows paths"></div>
 
         <p class="hint">
           取ってくる。数GBあるので時間がかかります。進み具合は下と「裏の仕事」に出ます。

@@ -32,6 +32,10 @@ import { readGguf } from './gguf.ts';
 import { extractFacts } from './gguf-spec.ts';
 import { totalmem } from 'node:os';
 import { DEFAULT_PRIORITY, Priority, PRIORITY_HEADER, toPriority } from '../providers/contract.ts';
+import { findRunaway, runawayNote } from './runaway.ts';
+
+/** 暴走を見るときに持っておく直近の長さ。 */
+const RUNAWAY_TAIL = 512;
 /**
  * ライブラリの名前。文字列の変数にしておく。
  *
@@ -1148,7 +1152,11 @@ export class InProcRuntime implements LocalRuntime {
     const capped = Math.min(wanted, room);
 
     const opts: PromptOptions = {
-      signal: useTools ? AbortSignal.any([signal, stop.signal]) : signal,
+      /*
+       * 止める合図は**いつも**繋ぐ。前はツールを使うときだけだったので、
+       * ただの会話で暴走したとき（同じ並びを吐き続ける）に切る手が無かった。
+       */
+      signal: AbortSignal.any([signal, stop.signal]),
       ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
       maxTokens: capped,
       /*
@@ -1162,18 +1170,45 @@ export class InProcRuntime implements LocalRuntime {
        */
       budgets: { thoughtTokens: 0 },
       // 止めたときに投げられると、何を呼ぼうとしたのかが例外に化けて消える。
-      ...(useTools ? { functions, stopOnAbortSignal: true } : {}),
+      // 切ったときに投げられると、書けていた分まで例外に化けて消える。
+      stopOnAbortSignal: true,
+      ...(useTools ? { functions } : {}),
     };
 
     if (body.stream === false) {
       // 道具を呼ぼうとして止めた道は、**投げて返ることがある**。
       // そのときも、呼ぼうとしたことは持ち帰る（例外に化けさせない）。
       let text = '';
+      /*
+       * **まとめて返す道でも、暴走を切る。**
+       *
+       * 切る所を流して返す道にしか入れていなかったので、ここでは止まらず、
+       * maxTokens まで吐き切るまで終わらなかった。実機で 4 分 36 秒かかったのは
+       * 流す道だが、判じるための呼び出し（指摘かどうか・要約）はこちらを通る。
+       * **片方だけ直すのは、直したうちに入らない。**
+       *
+       * ここは流さないので、出来た端から見るのは切る位置を知るためだけ。
+       */
+      let saw = '';
+      let cutAt = -1;
       try {
-        text = await lane.prompt(asked, opts);
+        text = await lane.prompt(asked, {
+          ...opts,
+          onTextChunk: (t: string) => {
+            if (cutAt >= 0) return;
+            saw += t;
+            const at = findRunaway(saw);
+            if (at < 0) return;
+            cutAt = at;
+            this.#opts.onLog?.(runawayNote(saw, at));
+            stop.abort();
+          },
+        });
       } catch (e) {
         if (calls.length === 0) throw e;
       }
+      // 切ったなら、こちらが見ていた分だけを返す（返り値は切った後を含みうる）。
+      if (cutAt >= 0) text = saw.slice(0, cutAt);
       // 本文で渡したときは、本文から拾う。
       if (asText) {
         const salvaged = extractToolCalls(text);
@@ -1222,6 +1257,9 @@ export class InProcRuntime implements LocalRuntime {
     // CPU では、入力を読む（prompt evaluation）だけで分単位かかる。
     // その間、画面には何も出ない。「遅い」のがどこかを、記録で分かるようにする。
     const started = Date.now();
+    /** 暴走を見るための直近の文字。全部は持たない。 */
+    let tail = '';
+    let runaway = false;
     let firstAt = 0;
     let seen: number | undefined;
     let generated = 0;
@@ -1260,7 +1298,19 @@ export class InProcRuntime implements LocalRuntime {
         // 「止まっている」ように見えるのが、いちばん困る。
         onTextChunk: (text: string) => {
           const show = filter ? filter.push(text) : text;
-          if (show) chunk({ content: show });
+          if (!show || runaway) return;
+          /*
+           * 同じ並びを吐き続けていたら、そこで切る。
+           * 直近だけを持つ（返事の全部を繋いで毎回見ると、長い返事で二乗になる）。
+           */
+          const all = tail + show;
+          const at = findRunaway(all);
+          if (at < 0) { tail = all.slice(-RUNAWAY_TAIL); chunk({ content: show }); return; }
+          runaway = true;
+          const keep = Math.max(0, at - tail.length);
+          if (keep > 0) chunk({ content: show.slice(0, keep) });
+          this.#opts.onLog?.(runawayNote(all, at));
+          stop.abort();
         },
       });
       if (filter) {

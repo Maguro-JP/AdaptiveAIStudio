@@ -14,3 +14,4 @@ selftest-*.txt
 
 # 作業中の生のメモ。git には入れない（docs/DECISIONS.md へ整えて移す）。
 .worklog/
+.claude/worktrees/

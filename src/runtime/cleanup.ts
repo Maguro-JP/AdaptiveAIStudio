@@ -18,6 +18,18 @@ import { readdir, stat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { binDir, modelsDir, stateDir } from '../core/home.ts';
 
+/**
+ * 同じ名前の記録を、これだけ残す。
+ *
+ * **押すたびに一つ増えて、減るものが無かった。**作業場に
+ * doctor-20260912-1126.txt が 37 個並び、横の一覧がそれで埋まった（実機）。
+ * 押した人が欲しいのは直前の一つで、半年前のものではない。
+ */
+export const KEEP_REPORTS = 10;
+
+/** 記録の名前の形。`<名前>-YYYYMMDD-HHMM.txt`（report-file.ts が付ける）。 */
+const REPORT_NAME = /^([a-z][a-z0-9-]*)-\d{8}-\d{4}\.txt$/;
+
 export interface Removable {
   path: string;
   bytes: number;
@@ -93,6 +105,37 @@ export async function findRemovable(opts: {
     const s = await stat(path).catch(() => undefined);
     if (!s || now - s.mtimeMs < maxAttachmentAge) continue;
     found.push({ path, bytes: s.size, why: '前に渡した添付（1日以上前）' });
+  }
+
+  /*
+   * 古い記録（doctor-…・test-…・report-… の txt）。
+   *
+   * **出す仕組みだけ在って、減らす仕組みが無かった。**同じ名前の新しい方から
+   * KEEP_REPORTS 件を残し、それより古いものを挙げる。
+   *
+   * 見るのは記録の保存先だけ。**作業場（productRoot）は見ない。**
+   * 利用者のコードが置いてある場所なので、こちらの判断でファイルを消す場所
+   * ではない。記録の置き先を保存先へ移したので、ここから先は溜まらない。
+   */
+  for (const dir of [join(stateDir(), 'reports'), stateDir()]) {
+    const byName = new Map<string, string[]>();
+    for (const name of await readdir(dir).catch(() => [])) {
+      const m = REPORT_NAME.exec(name);
+      if (!m) continue;
+      const list = byName.get(m[1]!) ?? [];
+      list.push(name);
+      byName.set(m[1]!, list);
+    }
+    for (const [prefix, names] of byName) {
+      // 名前は `-YYYYMMDD-HHMM` で終わるので、**名前の順が時刻の順**。
+      names.sort();
+      for (const name of names.slice(0, Math.max(0, names.length - KEEP_REPORTS))) {
+        const path = join(dir, name);
+        const s = await stat(path).catch(() => undefined);
+        if (!s) continue;
+        found.push({ path, bytes: s.size, why: `古い ${prefix} の記録（新しい ${KEEP_REPORTS} 件は残します）` });
+      }
+    }
   }
 
   return found.sort((a, b) => b.bytes - a.bytes);

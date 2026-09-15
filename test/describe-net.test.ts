@@ -57,13 +57,18 @@ test('外へ出て失敗した所は、どれもこの関数を通る', async ()
   const files = [
     'src/runtime/model-install.ts', 'src/runtime/llama-install.ts',
     'src/runtime/ollama-pull.ts', 'src/runtime/model-updates.ts',
+    // モデルの口。ここも同じ形で残っていて、実機の画面に
+    // 「ストリームが中断されました: terminated（62 秒）」と出た。
+    'src/providers/openai-compatible.ts',
+    // 画面の本体。取ってくる失敗と、モデルの一覧の失敗を人に見せる。
+    'src/ui/server.ts',
   ];
   const bad: string[] = [];
   for (const f of files) {
     const src = await readFile(join(root, f), 'utf8');
     src.split('\n').forEach((line, i) => {
       // 網の失敗を人へ見せている行に、生の文がそのまま入っていないか。
-      if (!/繋がりません|取ってこられませんでした|訊けませんでした|一覧に/.test(line)) return;
+      if (!/繋がりません|取ってこられませんでした|訊けませんでした|一覧に|中断されました|接続に失敗/.test(line)) return;
       if (!/e instanceof Error \? e\.message/.test(line)) return;
       bad.push(`${f}:${i + 1}  ${line.trim()}`);
     });
@@ -73,4 +78,21 @@ test('外へ出て失敗した所は、どれもこの関数を通る', async ()
 
 test('分からないものは、分かったふりをしない', () => {
   assert.equal(describeNet(new Error('なにか別のもの')), 'なにか別のもの');
+});
+
+/**
+ * この関数の説明に「会社の回線で最初に見えるのは `fetch failed` の一語」と
+ * 書いてありながら、その一語だけは言い換えていなかった。
+ * 中の理由が cause に付いていれば上で拾えるが、付かずに来ることがある。
+ */
+test('**`fetch failed` の一語も、人の言葉にする**', () => {
+  assert.match(describeNet(new TypeError('fetch failed')), /繋げませんでした/);
+  assert.ok(!/fetch failed/.test(describeNet(new TypeError('fetch failed'))));
+});
+
+test('中の理由が分かるときは、そちらを言う（対）', () => {
+  // 受け皿が先に当たると、せっかくの理由が「繋げませんでした」に潰れる。
+  const e = new TypeError('fetch failed');
+  (e as { cause?: unknown }).cause = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+  assert.match(describeNet(e), /断られました/);
 });

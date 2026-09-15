@@ -36,7 +36,21 @@ export async function realSafeResolve(root: string, candidate: string): Promise<
   let realRoot: string;
   try { realRoot = await realpath(root); } catch { return undefined; }
 
-  // 在る所まで遡る。
+  /*
+   * **返すのは、渡された root の綴りのまま。**
+   *
+   * realpath は「作業場の中か」を判じるためだけに使う。返す道まで実体の綴りに
+   * 置き換えると、呼んだ側が持っている root と食い違う。
+   *
+   * Windows の CI で実際に壊れた。`%TEMP%` が `C:\Users\RUNNER~1\...`（8.3 の
+   * 短い名前）なのに realpath は `C:\Users\runneradmin\...` を返すので、
+   * `toDisplayPath` が `../../../../../runneradmin/...` を控えた。その道は
+   * `safeResolve` が弾くため、**戻す（undo）が何も戻さずに黙って終わる。**
+   * junction・ネットワークの割り当て・symlink でも同じことが起きる。
+   *
+   * 中か外かは実体（realRoot と full）で見る。ここは変えない。
+   * 変えるのは、外に返す綴りだけ。在る所まで遡るのも、そのまま。
+   */
   let probe = abs;
   let tail = '';
   for (;;) {
@@ -44,9 +58,9 @@ export async function realSafeResolve(root: string, candidate: string): Promise<
       const real = await realpath(probe);
       const full = tail ? resolve(real, tail) : real;
       const rel = relative(realRoot, full);
-      if (rel === '') return full;
+      if (rel === '') return root;
       if (rel.startsWith('..') || isAbsolute(rel)) return undefined;
-      return full;
+      return resolve(root, rel);
     } catch {
       const up = dirOf(probe);
       if (up === probe) return undefined;

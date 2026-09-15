@@ -14,7 +14,22 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const app = readFileSync(join(root, 'src/ui/web/app.js'), 'utf8');
+
+/**
+ * 読んだ中身の行末を LF にそろえてから見る。
+ *
+ * Windows の checkout は CRLF になる。関数の終わりを `\n}\n` で探していたので
+ * 当たらず（-1）、切り出しが空文字列のまま
+ * 「openSettings が設定を出していない」と言って落ちた
+ * （Windows の CI で実際にそう落ちた）。中身は何も悪くない。
+ *
+ * ここで見たいのは書き方であって行末ではないので、**読んだ直後にそろえる。**
+ * 走らせる場所で結果が変わらないようにする。
+ */
+const readLf = (path: string): string =>
+  readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+
+const app = readLf(join(root, 'src/ui/web/app.js'));
 
 test('openSettings は、読み終える前に画面を出す', () => {
   const body = app.slice(app.indexOf('async function openSettings'));
@@ -42,7 +57,9 @@ test('モデルの頁は、二つの読み込みを直列に待たない', () =>
  * 「待機中」と出ていて、送ったのに無視されたようにしか見えなかった。
  */
 test('読み込み中の行を、上の帯へ出す', () => {
-  const src = readFileSync(join(root, 'src/ui/web/app.js'), 'utf8');
+  // ここも行末をそろえて読む。CRLF のままだと 200 文字の切り出しに
+  // `\r` が混ざって、探している所まで届かないことがある。
+  const src = readLf(join(root, 'src/ui/web/app.js'));
   // 出来事を受け取る所で、読み込みの行を拾って帯へ渡していること。
   assert.ok(src.includes('まだ読み込んでいます'), '読み込みの行を拾っていない');
   const at = src.indexOf('まだ読み込んでいます');

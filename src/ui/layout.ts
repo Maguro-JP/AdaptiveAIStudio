@@ -19,7 +19,7 @@
 /** 置ける中身。増やすときはここに足す。 */
 export const PANEL_KINDS = [
   'conversation',  // 会話
-  'plan',          // 進行中の作業（分解された件と、その状態）
+  'plan',          // いま動いているもの（分解された件と、裏の仕事）
   'roster',        // 人員
   'memory',        // 記憶
   'proposals',     // 提案
@@ -28,13 +28,23 @@ export const PANEL_KINDS = [
   'changes',       // この対話で変わったファイルと、その差分
   'preview',       // 作っているものを、その場で見る（HTML/CSS）
   'log',           // 動いているものの流れ
-  'jobs',          // 裏で動いているもの（取得・読み込み・点検・報告）の、いまの状態だけ
   'checks',        // 点検（doctor・検査・片づけ）。cmd の窓でしかできなかったもの
   'note',          // 自由記述。壊れた配置の受け皿でもある
   'editor',        // ファイルを開いて、その場で直して保存する
 ] as const;
 
 export type PanelKind = typeof PANEL_KINDS[number];
+
+/**
+ * 一枚にまとめて、無くなった種類。**消さずに、まとめた先へ寄せる。**
+ *
+ * 「裏の仕事」を「実行中のタスク」に畳んだ。どちらも「いま動いているもの」で、
+ * 札が二つ並ぶだけだった。ただし、既に保存されている配置には jobs が残っている。
+ * 知らない種類として覚え書きに落とすと、**画面に空の札が増える**（直したはずが
+ * ゴミを増やす）。まとめた先が既に在れば外し、無ければその種類に読み替える。
+ */
+const MERGED_KINDS: Record<string, PanelKind> = { jobs: 'plan' };
+
 
 export interface PanelSpec {
   id: string;
@@ -92,7 +102,7 @@ export const PRESETS: Layout[] = [
           type: 'split', direction: 'column', sizes: [0.68, 0.32],
           children: [
             { type: 'panel', panel: 'chat' },
-            { type: 'tabs', panels: ['changes', 'plan', 'checks', 'jobs'] },
+            { type: 'tabs', panels: ['changes', 'plan', 'checks'] },
           ],
         },
       ],
@@ -103,7 +113,6 @@ export const PRESETS: Layout[] = [
       panel('changes', 'changes'),
       panel('plan', 'plan'),
       panel('checks', 'checks'),
-      panel('jobs', 'jobs'),
     ],
     theme: 'auto',
     density: 'comfortable',
@@ -119,7 +128,7 @@ export const PRESETS: Layout[] = [
           type: 'split', direction: 'column', sizes: [0.6, 0.4],
           children: [
             { type: 'panel', panel: 'editor' },
-            { type: 'tabs', panels: ['changes', 'plan', 'checks', 'jobs'] },
+            { type: 'tabs', panels: ['changes', 'plan', 'checks'] },
           ],
         },
       ],
@@ -130,7 +139,6 @@ export const PRESETS: Layout[] = [
       panel('changes', 'changes'),
       panel('plan', 'plan'),
       panel('checks', 'checks'),
-      panel('jobs', 'jobs'),
     ],
     theme: 'auto',
     density: 'comfortable',
@@ -184,7 +192,7 @@ export const PRESETS: Layout[] = [
         {
           type: 'split', direction: 'row', sizes: [0.34, 0.33, 0.33],
           children: [
-            { type: 'tabs', panels: ['jobs', 'log'] },
+            { type: 'panel', panel: 'log' },
             { type: 'panel', panel: 'models' },
             { type: 'panel', panel: 'duties' },
           ],
@@ -194,7 +202,6 @@ export const PRESETS: Layout[] = [
     panels: [
       panel('chat', 'conversation'),
       panel('plan', 'plan'),
-      panel('jobs', 'jobs'),
       panel('log', 'log'),
       panel('models', 'models'),
       panel('duties', 'duties'),
@@ -241,13 +248,25 @@ export function repairLayout(raw: unknown, fallbackId = DEFAULT_LAYOUT_ID): {
   // 中身の一覧を整える。ここが空だと何も置けない。
   const panels: PanelSpec[] = [];
   const seen = new Set<string>();
-  for (const [i, entry] of (Array.isArray(o.panels) ? o.panels : []).entries()) {
+  const given = (Array.isArray(o.panels) ? o.panels : []) as Record<string, unknown>[];
+  // まとめた先が既に置かれているかは、読み替える前の一覧で見る。
+  const givenKinds = new Set(given.map((e) => (e ?? {}).kind));
+  for (const [i, entry] of given.entries()) {
     const e = (entry ?? {}) as Record<string, unknown>;
     const id = typeof e.id === 'string' && e.id.trim() ? e.id.trim() : `p${i + 1}`;
     if (seen.has(id)) { note(`中身の名前が重複していたので ${id} を一つにしました。`); continue; }
     seen.add(id);
 
     let kind = e.kind as PanelKind;
+    const into = MERGED_KINDS[kind as string];
+    if (into) {
+      if (givenKinds.has(into)) {
+        note(`${String(kind)} は ${into} にまとめたので外しました。`);
+        continue;
+      }
+      note(`${String(kind)} は ${into} にまとめました。`);
+      kind = into;
+    }
     if (!PANEL_KINDS.includes(kind)) {
       // 知らない種類でも消さない。何が置かれようとしたかを画面に出す。
       note(`知らない種類 ${String(e.kind)} は、そのままの名前で覚え書きとして出します。`);

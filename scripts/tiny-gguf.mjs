@@ -21,6 +21,36 @@ import { writeFileSync } from 'node:fs';
 const D = 32, FF = 64, LAYERS = 1, HEADS = 4;
 
 /**
+ * 重みは乱数だが、**走らせるたびに変えない。**
+ *
+ * `Math.random()` で書いていたので、組むたびに別の模型になっていた。
+ * 中身が無意味なのは構わないが、**中身が毎回違うとテストの結果が毎回変わる。**
+ * 実際に `scripts/real-model.mjs` の「考えごとの予算」が、同じコードのまま
+ * 一度落ちて、次に通った（乱数の模型が、その回だけ何も吐かなかった）。
+ * 落ちた側を追いかけて、原因のコードを探す時間を丸ごと無駄にする。
+ *
+ * 種は固定。`--seed <数>` で変えられる（別の中身でも通ることを見たいとき用）。
+ * mulberry32。短くて、同じ種なら必ず同じ並びを出す。
+ */
+const SEED = (() => {
+  const at = process.argv.indexOf('--seed');
+  const given = at === -1 ? undefined : Number(process.argv[at + 1]);
+  return Number.isFinite(given) ? given >>> 0 : 0x9e3779b9;
+})();
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rand = mulberry32(SEED);
+
+/**
  * 数え方（字句器）を選ぶ。`--bpe` を付けると gpt2 の方で組む。
  *
  * **数え方はモデルごとに違う。**こちらの実装が本物と同じか確かめるには、
@@ -203,7 +233,7 @@ for (const [name, dims] of tensors) {
   parts.push(str(name), u32(dims.length), ...dims.map((d) => u64(d)), u32(0), u64(offset));
   const n = dims.reduce((a, b) => a * b, 1);
   const buf = Buffer.alloc(n * 4);
-  for (let i = 0; i < n; i += 1) buf.writeFloatLE((Math.random() - 0.5) * 0.1, i * 4);
+  for (let i = 0; i < n; i += 1) buf.writeFloatLE((rand() - 0.5) * 0.1, i * 4);
   datas.push(buf);
   offset += Math.ceil(buf.length / 32) * 32;
 }

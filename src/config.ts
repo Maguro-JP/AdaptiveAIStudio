@@ -45,6 +45,8 @@ export interface AasConfig {
    */
   candidates?: string[];
   system?: string;
+  /** 訊かれただけのときの決まり。作業者の決まりを問いに載せないため。 */
+  chatSystem?: string;
   temperature?: number;
   maxTokens?: number;
   agent?: AgentConfig;

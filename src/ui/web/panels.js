@@ -65,6 +65,38 @@ function rows(items, render, columns = 3) {
   return box;
 }
 
+/**
+ * 裏で動いている仕事、一件ぶんの行。
+ *
+ * 取得の進み具合は 1.5 秒ごとに記録へ流れていて、記録が埋まって読めなかった（実機）。
+ * だから**流れではなく、いまの状態だけ**を一行で出す。
+ */
+function jobRow(j, elapsed) {
+  const row = el('div', `job ${j.state}`);
+  const head = el('div', 'job-head');
+  head.append(
+    el('span', 'job-mark', j.state === 'running' ? '⏳' : j.state === 'done' ? '✓' : '✗'),
+    el('span', 'job-title', j.title),
+  );
+  if (j.state === 'running' && j.startedAt) {
+    head.append(el('span', 'job-elapsed dim', `${elapsed(j.startedAt)} 経過`));
+  }
+  row.append(head);
+  if (j.progress && typeof j.progress.pct === 'number') {
+    const bar = el('div', 'job-bar');
+    const fill = el('div', 'job-fill');
+    fill.style.width = `${Math.max(0, Math.min(100, j.progress.pct))}%`;
+    bar.append(fill);
+    row.append(bar);
+  }
+  if (j.detail) {
+    const d = el('div', `job-detail mono ${j.state === 'failed' ? 'bad' : 'dim'}`, j.detail);
+    d.style.whiteSpace = 'pre-wrap';
+    row.append(d);
+  }
+  return row;
+}
+
 export const PANELS = {
   /**
    * 会話。
@@ -523,7 +555,7 @@ export const PANELS = {
       else if (v.type === 'diff') showDiff(v);
       else if (v.type === 'fallback') note('warn', `${v.from} → ${v.to} に切替（${v.reason}）`);
       else if (v.type === 'recalled') {
-        const c = card('◔', '思い出したこと', '', 'recall');
+        const c = card('◔', '前の作業から引き継いだこと', '', 'recall');
         c.body.append(el('pre', 'tool-out', v.text));
       } else if (v.type === 'log') note(v.level === 'error' ? 'bad' : 'warn', v.text);
       else if (v.type === 'baseline') {
@@ -550,15 +582,24 @@ export const PANELS = {
         // 作業場は変わっていない。完了の顔をさせない。
         note('bad', `ツールが通りませんでした（${v.names.join(', ')}）。ファイルは変わっていません。`);
       } else if (v.type === 'verify') showVerify(v.event);
-      else if (v.type === 'finished' && v.reason === 'failed' && v.detail) {
-        // **落ちた理由を会話に出す。**「failed · 32.5秒」だけでは、次に何を
-        // すればいいか分からない（実機でそうなった）。理由は流れ（log）に
-        // しか出ていなかったが、既定の配置にそのパネルは無い。
-        note('bad', `落ちました: ${v.detail}`);
+      else if (v.type === 'finished' && v.reason !== 'completed' && v.detail) {
+        /*
+         * **うまく終わらなかった理由を、会話に出す。**
+         *
+         * 「failed · 32.5秒」だけでは、次に何をすればいいか分からない（実機）。
+         * 理由は流れ（log）にしか出ていなかったが、既定の配置にそのパネルは無い。
+         *
+         * ここは `failed` の回だけ出していた。`noProgress` にも
+         * 「返事が空でした」という理由が付いているのに、**捨てていた。**
+         * 画面には `noProgress` という符丁だけが残り、何も分からなかった。
+         */
+        note('bad', `${v.reason === 'failed' ? '落ちました' : '終わりませんでした'}: ${v.detail}`);
       } else if (v.type === 'settled') {
         // **確かめていないことを、確かめた顔で出さない。**
         // 試験の無い作業場では、何もしていなくても「完了」に見えていた。
-        const okAll = v.reason === 'completed' && v.verified;
+        // 訊かれただけの回は、確かめるものが無い。**確かめていないことを
+        // 落ちた顔で出さない。**（作業の回は、これまでどおり検証で判じる）
+        const okAll = v.reason === 'completed' && (v.chat === true || v.verified);
         add(el('div', `verdict ${okAll ? 'ok' : 'ng'}`, verdictText(v)));
         // **遅い理由を、その場で言う。**設定の奥の数字は誰も見ない。
         const slow = slowNote(v);
@@ -607,7 +648,7 @@ export const PANELS = {
       else if (v.type === 'diff') showDiff(v);
       else if (v.type === 'verifying') note('dim', `検査: ${v.command}`);
       else if (v.type === 'recalled') {
-        const c = card('◔', '思い出したこと', '', 'recall');
+        const c = card('◔', '前の作業から引き継いだこと', '', 'recall');
         c.body.append(el('pre', 'tool-out', v.text));
       } else if (v.type === 'log') note('bad', v.text);
       else if (v.type === 'accepted') showAcceptance(v.report);
@@ -767,29 +808,64 @@ export const PANELS = {
     });
   },
 
+  /*
+   * いま動いているものを、一枚にまとめる。
+   *
+   * ここと「裏の仕事」で二枚に分けていた。どちらも「いま動いているもの」で、
+   * 札が二つ並ぶだけになっていた（実機の画面で、変更したファイル／実行中のタスク／
+   * 診断／裏の仕事、と四つ並んでいた）。**分けた根拠が無いので、一枚にする。**
+   *
+   * 上が、頼まれた件を分けたもの（出来事から組み立てる。画面は覚えない）。
+   * 下が、裏で動いているもの（取得・点検・報告。本体が状態ごと流してくる）。
+   */
   plan(body, ctx) {
-    /** 進行中の件。状態は出来事から組み立てる。画面は覚えない。 */
     let items = new Map();
+    let jobs = [];
+
+    const elapsed = (iso) => {
+      const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+      return s >= 60 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${s} 秒`;
+    };
 
     const draw = () => {
       body.replaceChildren();
-      if (items.size === 0) return body.append(empty('進行中の作業はありません。'));
-      body.append(rows([...items.values()], (t) => {
-        const row = el('div', 'row');
-        const mark = { running: '▶', done: '✓', failed: '✗', skipped: '−', waiting: '·' }[t.state];
-        const cls = t.state === 'done' ? 'good' : t.state === 'failed' ? 'bad'
-          : t.state === 'skipped' ? 'warn' : t.state === 'running' ? '' : 'dim';
-        row.append(
-          el('span', `key mono ${cls}`, `${mark} ${t.id}`),
-          el('span', t.state === 'waiting' ? 'dim' : '', t.instruction),
-          el('span', 'dim', t.roleId),
-        );
-        row.title = t.note ?? t.instruction;
-        return row;
-      }));
+      if (items.size > 0) {
+        body.append(rows([...items.values()], (t) => {
+          const row = el('div', 'row');
+          const mark = { running: '▶', done: '✓', failed: '✗', skipped: '−', waiting: '·' }[t.state];
+          const cls = t.state === 'done' ? 'good' : t.state === 'failed' ? 'bad'
+            : t.state === 'skipped' ? 'warn' : t.state === 'running' ? '' : 'dim';
+          row.append(
+            el('span', `key mono ${cls}`, `${mark} ${t.id}`),
+            el('span', t.state === 'waiting' ? 'dim' : '', t.instruction),
+            el('span', 'dim', t.roleId),
+          );
+          row.title = t.note ?? t.instruction;
+          return row;
+        }));
+      }
+      // 空でも箱は置く。「何も無い」と言う場所が要る。
+      const list = el('div', 'jobs');
+      if (jobs.length === 0 && items.size === 0) list.append(empty('動いているものはありません。'));
+      for (const j of jobs) list.append(jobRow(j, elapsed));
+      body.append(list);
     };
 
     draw();
+    ctx.on('jobs', (e) => { jobs = Array.isArray(e.jobs) ? e.jobs : []; draw(); });
+    const tick = setInterval(() => {
+      // 外された（描き直しで捨てられた）パネルの時計を、回し続けない。
+      if (!body.isConnected) { clearInterval(tick); return; }
+      if (jobs.some((j) => j.state === 'running')) draw();
+    }, 1000);
+    (async () => {
+      try {
+        const got = await (await fetch('/api/jobs')).json();
+        jobs = Array.isArray(got.jobs) ? got.jobs : [];
+      } catch { /* 取れなければ空。変わったときに流れてくる */ }
+      draw();
+    })();
+
     ctx.on('planEvent', ({ event: v }) => {
       if (v.type === 'planned') {
         items = new Map(v.plan.items.map((t) => [t.id, {
@@ -1223,62 +1299,6 @@ export const PANELS = {
     })();
   },
 
-  /*
-   * 裏で動いているもの。**流れではなく、いまの状態だけ。**
-   *
-   * 取得の進み具合は 1.5 秒ごとに記録へ流れていて、記録が埋まって読めなかった（実機）。
-   * ここは仕事ごとに一行、最新の状態と進み具合だけを出し、終わったものはそう出す。
-   * 本体は状態が変わったときに全部を流してくる（jobs）。経った秒だけは、こちらの時計で進める。
-   */
-  jobs(body, ctx) {
-    const list = el('div', 'jobs');
-    body.append(list);
-    let jobs = [];
-    const elapsed = (iso) => {
-      const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
-      return s >= 60 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${s} 秒`;
-    };
-    const draw = () => {
-      list.replaceChildren();
-      if (jobs.length === 0) { list.append(empty('裏で動いているものはありません。')); return; }
-      for (const j of jobs) {
-        const row = el('div', `job ${j.state}`);
-        const head = el('div', 'job-head');
-        head.append(
-          el('span', 'job-mark', j.state === 'running' ? '⏳' : j.state === 'done' ? '✓' : '✗'),
-          el('span', 'job-title', j.title),
-        );
-        if (j.state === 'running' && j.startedAt) head.append(el('span', 'job-elapsed dim', `${elapsed(j.startedAt)} 経過`));
-        row.append(head);
-        if (j.progress && typeof j.progress.pct === 'number') {
-          const bar = el('div', 'job-bar');
-          const fill = el('div', 'job-fill');
-          fill.style.width = `${Math.max(0, Math.min(100, j.progress.pct))}%`;
-          bar.append(fill);
-          row.append(bar);
-        }
-        if (j.detail) {
-          const d = el('div', `job-detail mono ${j.state === 'failed' ? 'bad' : 'dim'}`, j.detail);
-          d.style.whiteSpace = 'pre-wrap';
-          row.append(d);
-        }
-        list.append(row);
-      }
-    };
-    ctx.on('jobs', (e) => { jobs = Array.isArray(e.jobs) ? e.jobs : []; draw(); });
-    const tick = setInterval(() => {
-      // 外された（描き直しで捨てられた）パネルの時計を、回し続けない。
-      if (!body.isConnected) { clearInterval(tick); return; }
-      if (jobs.some((j) => j.state === 'running')) draw();
-    }, 1000);
-    (async () => {
-      try {
-        const got = await (await fetch('/api/jobs')).json();
-        jobs = Array.isArray(got.jobs) ? got.jobs : [];
-      } catch { /* 取れなければ空。変わったときに流れてくる */ }
-      draw();
-    })();
-  },
 
   /**
    * この対話で何を書き換えたか。
@@ -1690,7 +1710,6 @@ export const TITLES = {
   models: 'モデル',
   changes: '変更したファイル',
   log: 'ログ',
-  jobs: '裏の仕事',
   note: 'メモ',
   checks: '診断',
   preview: 'プレビュー',

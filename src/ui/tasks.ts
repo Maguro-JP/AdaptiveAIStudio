@@ -48,6 +48,12 @@ export function lowerPriority(pid: number | undefined): boolean {
 const KEEP_BYTES = 8 * 1024 * 1024;
 
 /**
+ * これ以下の行数しか出していない回は、残さない。
+ * 「— 片づける —」「片づけるものはありません。」の 2〜3 行だけの回を弾く。
+ */
+const REPORT_MIN_LINES = 4;
+
+/**
  * 端末むけの色指定を落とす。
  *
  * cli 側は端末に色を付ける。画面へそのまま流すと `[36m` が並んで読めない。
@@ -180,8 +186,19 @@ export class TaskRunner {
       const dir = this.#opts.reportsDir;
       // 自分の報告は自分で置く（doctor / selftest）。ここで二重に置かない。
       if (!dir || name === 'doctor' || name === 'selftest') { finish(); return; }
+      /*
+       * **何も起きていない回の報告は、残さない。**
+       *
+       * 「片づけるものはありません」の一行のために txt を置いていた。押すたびに
+       * 増えるので、片づけるためのツールが片づける対象を作る形になっていた。
+       * 残すのは、うまくいかなかった回（終了コードが立った）と、
+       * 読むだけの中身がある回だけ。
+       */
+      const meat = kept.join('');
+      const worth = (code ?? 1) !== 0 || meat.split('\n').filter((l) => l.trim()).length > REPORT_MIN_LINES;
+      if (!worth) { finish(); return; }
       const at = join(dir, `${name}-${stamp()}.txt`);
-      const body = `${kept.join('')}${keptBytes > KEEP_BYTES ? '\n（長すぎるので途中までです）\n' : ''}\n— 終了コード ${code ?? 1} —\n`;
+      const body = `${meat}${keptBytes > KEEP_BYTES ? '\n（長すぎるので途中までです）\n' : ''}\n— 終了コード ${code ?? 1} —\n`;
       void this.#save(name, at, body).catch(() => undefined).finally(finish);
     });
     return undefined;
