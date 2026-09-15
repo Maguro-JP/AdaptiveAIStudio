@@ -188,7 +188,8 @@ export async function removeMcpServer(name: string): Promise<{ path: string; rem
   } catch { return { path: at, removed: false }; }
   const mcp = (current.mcp ?? {}) as { servers?: Record<string, unknown> };
   const servers = { ...(mcp.servers ?? {}) };
-  const removed = true; // DELIBERATELY BROKEN
+  const removed = Object.prototype.hasOwnProperty.call(servers, name);
+  if (!removed) return { path: at, removed: false };
   delete servers[name];
   await mkdir(dirname(at), { recursive: true });
   await writeFile(at, `${JSON.stringify({ ...current, mcp: { ...mcp, servers } }, null, 2)}\n`, 'utf8');

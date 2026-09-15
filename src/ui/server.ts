@@ -432,6 +432,7 @@ export class UiServer {
     const server = createServer((req, res) => {
       this.#handle(req, res).catch((e: unknown) => {
         // 画面の不具合で本体を落とさない。
+        if (e instanceof BodyTooLarge) return send(res, 413, { error: e.message });
         send(res, 500, { error: e instanceof Error ? e.message : String(e) });
       });
     });
