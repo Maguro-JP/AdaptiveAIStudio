@@ -612,6 +612,51 @@ await check('作業場を開く', async () => {
   if (!said.includes('設定')) throw new Error(`空だが、どう変えるかを言っていない: ${said.slice(0, 60)}`);
 });
 
+/*
+ * **初めて開いた人が、一押しで始められるか。**
+ *
+ * モデルを置いていない状態がいちばん多い形で、そこで出るのがこの一手。
+ * ここまで確かめていたのは「`app.js` に `canFetch` の字が在る」だけだった。
+ * 字が在ることは、押し場所が出ることも、押して何かが起きることも言わない。
+ *
+ * **取ってくるものは、本物を落とさない。**数GBになる。口を横取りして、
+ * 頼みが飛んだことと、押し場所の文が変わることで見る。
+ */
+if (noModel) {
+  await check('モデルが無いとき、一押しで取ってこられる', async () => {
+    const note = p.locator('#crashNote');
+    if (await note.count() === 0) throw new Error('話せないことを言っていない');
+    const said = await note.innerText();
+    if (!said.includes('まだ話せません')) throw new Error(`言い方が違う: ${said.slice(0, 60)}`);
+    const button = note.locator('.crash-action');
+    if (await button.count() === 0) throw new Error('一押しで取ってくる所が無い');
+    const label = (await button.innerText()).trim();
+    if (!/取ってくる/.test(label)) throw new Error(`押し場所の文が違う: ${label}`);
+    if (!/GB/.test(label)) throw new Error(`どれだけ落とすかを言っていない: ${label}`);
+
+    // 口を横取りする。本物は落とさない。
+    let asked = 0;
+    await p.route('**/api/models/get', async (route) => {
+      asked += 1;
+      await route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify({ started: true }),
+      });
+    });
+    try {
+      await button.click();
+      await p.waitForTimeout(600);
+      if (asked === 0) throw new Error('押しても取ってこようとしない');
+      const after = (await button.innerText()).trim();
+      if (!/取ってきています/.test(after)) throw new Error(`押したことが見えない: ${after}`);
+    } finally {
+      await p.unroute('**/api/models/get');
+      // 元の姿に戻す（この後の確かめが、この帯に邪魔されないように畳む）。
+      await p.reload({ waitUntil: 'networkidle' });
+      await p.waitForTimeout(600);
+    }
+  });
+}
+
 await check('取ってくる先を、自分で打てる', async () => {
   // カタログはこちらが書いた見当で、配布元の名前は変わる（消えることもある）。
   // **打つ道が無いと、見当が外れた時点で利用者は詰む。**

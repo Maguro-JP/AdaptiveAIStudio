@@ -669,7 +669,17 @@ describe('開いた時点で、使えるかを言う', () => {
     assert.equal(typeof body.canFetch?.approxGB, 'number');
   });
 
-  test('画面は、最初の一つを一押しで取ってこられる形で出す', () => {
+  /*
+   * ここから三つは、**字が在ることしか見ていない。**
+   *
+   * 実際に押す側は `scripts/sweep.mjs` の
+   * 「モデルが無いとき、一押しで取ってこられる」に在る（押し場所が出ること、
+   * 押すと口へ頼みが飛ぶこと、文が変わることまで見る）。**そちらが本体。**
+   * ただし sweep には Chromium が要るので、CI（`npm ci` では
+   * playwright-core が入らない）では飛ぶ。ここはその間の受け皿として残す。
+   * **通ったことを「動く」と読まない。**
+   */
+  test('画面は、最初の一つを一押しで取ってこられる形で出す（字だけ）', () => {
     const app = readFileSync(join(root, 'src/ui/web/app.js'), 'utf8');
     assert.ok(app.includes('canFetch'), '最初の一つを受け取っていない');
     assert.ok(app.includes("'/api/models/get'"), '取ってくる口を叩いていない');
