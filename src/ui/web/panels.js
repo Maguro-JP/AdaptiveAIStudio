@@ -582,15 +582,24 @@ export const PANELS = {
         // 作業場は変わっていない。完了の顔をさせない。
         note('bad', `ツールが通りませんでした（${v.names.join(', ')}）。ファイルは変わっていません。`);
       } else if (v.type === 'verify') showVerify(v.event);
-      else if (v.type === 'finished' && v.reason === 'failed' && v.detail) {
-        // **落ちた理由を会話に出す。**「failed · 32.5秒」だけでは、次に何を
-        // すればいいか分からない（実機でそうなった）。理由は流れ（log）に
-        // しか出ていなかったが、既定の配置にそのパネルは無い。
-        note('bad', `落ちました: ${v.detail}`);
+      else if (v.type === 'finished' && v.reason !== 'completed' && v.detail) {
+        /*
+         * **うまく終わらなかった理由を、会話に出す。**
+         *
+         * 「failed · 32.5秒」だけでは、次に何をすればいいか分からない（実機）。
+         * 理由は流れ（log）にしか出ていなかったが、既定の配置にそのパネルは無い。
+         *
+         * ここは `failed` の回だけ出していた。`noProgress` にも
+         * 「返事が空でした」という理由が付いているのに、**捨てていた。**
+         * 画面には `noProgress` という符丁だけが残り、何も分からなかった。
+         */
+        note('bad', `${v.reason === 'failed' ? '落ちました' : '終わりませんでした'}: ${v.detail}`);
       } else if (v.type === 'settled') {
         // **確かめていないことを、確かめた顔で出さない。**
         // 試験の無い作業場では、何もしていなくても「完了」に見えていた。
-        const okAll = v.reason === 'completed' && v.verified;
+        // 訊かれただけの回は、確かめるものが無い。**確かめていないことを
+        // 落ちた顔で出さない。**（作業の回は、これまでどおり検証で判じる）
+        const okAll = v.reason === 'completed' && (v.chat === true || v.verified);
         add(el('div', `verdict ${okAll ? 'ok' : 'ng'}`, verdictText(v)));
         // **遅い理由を、その場で言う。**設定の奥の数字は誰も見ない。
         const slow = slowNote(v);

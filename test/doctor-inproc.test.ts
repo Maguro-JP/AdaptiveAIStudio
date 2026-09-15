@@ -295,7 +295,19 @@ describe('記録の保存先へ書けないとき', () => {
         process.execPath,
         ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', 'doctor.ts')],
         {
-          env: { ...process.env, AAS_HOME: home, AAS_STATE_DIR: state },
+          /*
+           * **報告の置き先は、別に渡す。**
+           *
+           * 記録の保存先を塞ぐのがこのテストの狙いだが、塞ぐと報告も置けなくなり、
+           * doctor は最後の逃がし先（プログラムの隣＝このリポジトリ）へ置く。
+           * 走らせるたびに作業場へ doctor-*.txt が一つ増えていた（実測）。
+           * 見たいのは「保存先へ書けないと言うこと」なので、報告だけ逃がす。
+           */
+          env: {
+            ...process.env,
+            AAS_HOME: home, AAS_STATE_DIR: state,
+            AAS_REPORT_DIR: join(home, 'reports'),
+          },
           encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
         },
         (_e, stdout, stderr) => ok({ out: `${stdout}${stderr}` }),

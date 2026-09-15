@@ -185,6 +185,14 @@ export type SessionEvent =
   | {
       type: 'settled'; reason: string; verified: boolean; seconds: number; detail?: string;
       checked: 'passed' | 'failed' | 'preexisting' | 'notRun';
+      /**
+       * 訊かれただけの回か。
+       *
+       * **問いに答えただけの回に「完了（検証していません）」と出していた。**
+       * 何も完了していないし、確かめるものも無い。作業の言葉を、会話にも
+       * 着せていた（実機の画面で見た）。判じ方は `looksLikeChat`。
+       */
+      chat?: boolean;
       /** 答えたモデル。切り替わっていれば、切り替わった先。 */
       model: string;
       /** 出した量の見積もり（文字数から。本文だけで、ツールの呼び出しは数えない）。 */
@@ -1283,6 +1291,7 @@ export class Session {
         reason: finishedReason ?? 'failed',
         verified: checked === 'passed',
         checked,
+        ...(chat ? { chat: true } : {}),
         seconds: (Date.now() - started) / 1000,
         ...speedOf(modelUsed, answerChars, (Date.now() - started) / 1000),
       };
@@ -1292,6 +1301,7 @@ export class Session {
       yield { type: 'log', level: 'error', text: (e as Error).message };
       yield {
         type: 'settled', reason: 'failed', verified: false, checked,
+        ...(chat ? { chat: true } : {}),
         seconds: (Date.now() - started) / 1000, detail: (e as Error).message,
         ...speedOf(modelUsed, answerChars, (Date.now() - started) / 1000),
       };

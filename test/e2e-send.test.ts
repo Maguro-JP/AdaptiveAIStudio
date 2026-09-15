@@ -730,4 +730,47 @@ describe('訊かれただけのとき', () => {
     assert.doesNotMatch(system, /相棒|天気、ニュース、株価/, `問いの決まりになっている:\n${system.slice(0, 300)}`);
     assert.ok((sent.tools?.length ?? 0) > 0, '作業なのにツールを渡していない');
   });
+
+  /**
+   * 問いに答えただけの回に「完了（検証していません）」と出していた（実機の画面）。
+   * 何も完了していないし、確かめるものも無い。画面が言い分けられるように、
+   * 結末の出来事（settled）に「訊かれただけの回か」を載せる。
+   */
+  test('**結末に、訊かれただけの回かが載る**', async () => {
+    // 結末は `session` の中に包まれて流れてくる。
+    const isSettled = (e: unknown): boolean =>
+      (e as { type?: string; event?: { type?: string } }).type === 'session'
+      && (e as { event?: { type?: string } }).event?.type === 'settled';
+    const done = (evs: unknown[]) => evs.some(isSettled);
+    const collecting = collect(done);
+    await opened;
+    await fetch(`${base}/api/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: '1+1=' }),
+    });
+    const evs = await collecting;
+    const settled = evs.filter(isSettled).at(-1) as
+      { event?: { chat?: boolean; reason?: string } } | undefined;
+    assert.ok(settled, `結末が出ていない: ${JSON.stringify(evs).slice(0, 300)}`);
+    assert.equal(settled.event?.chat, true, `訊かれた回だと言っていない: ${JSON.stringify(settled)}`);
+  });
+
+  test('**作業の回には載せない（対）**', async () => {
+    // ここが一緒になると、確かめていない作業まで「答えました」で流れる。
+    // 結末は `session` の中に包まれて流れてくる。
+    const isSettled = (e: unknown): boolean =>
+      (e as { type?: string; event?: { type?: string } }).type === 'session'
+      && (e as { event?: { type?: string } }).event?.type === 'settled';
+    const done = (evs: unknown[]) => evs.some(isSettled);
+    const collecting = collect(done);
+    await opened;
+    await fetch(`${base}/api/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'src/a.ts を直して' }),
+    });
+    const evs = await collecting;
+    const settled = evs.filter(isSettled).at(-1) as { event?: { chat?: boolean } } | undefined;
+    assert.ok(settled, '結末が出ていない');
+    assert.notEqual(settled.event?.chat, true, `作業なのに訊かれた回だと言っている: ${JSON.stringify(settled)}`);
+  });
 });
