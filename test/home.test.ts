@@ -400,6 +400,35 @@ describe('同梱した Node の置き場所', () => {
     assert.match(raw, /PATHEXT=%PATHEXT%;\.BIN/, 'PATHEXT に足していない');
   });
 
+  /**
+   * 社用PC で検証を続けるための道。**ここが誰にも見られていなかった。**
+   *
+   * 決まっている手順は「手で二つ落とす」（`docs/DECISIONS.md`）:
+   *   1. ブラウザで ZIP を落として展開する
+   *   2. `node.exe` を `start.cmd` の隣に `node\node.exe` として置く
+   *   3. `start.cmd` を叩く
+   *
+   * この 2 を支えているのが `%HERE%node\node.exe` の行。消しても全部のテストが
+   * 通っていたので、**消えても誰も気づかない。**気づくのは社用PC で叩いた人だけで、
+   * その人は「動かない」以上のことを言えない。
+   */
+  test('**入口は、隣に置かれた node\\node.exe を見る（社用PC の道）**', sourceOnly, async () => {
+    const raw = cmd(await readFile(join(installRoot(), 'start.cmd')));
+    /*
+     * **探しに行く行を見る。案内の文言では見ない。**
+     *
+     * はじめ `%HERE%node\node.exe` が在ることだけを見ていた。この道は
+     * 「ここへ置いてください」という案内の中にも 4 回出てくるので、
+     * **探しに行く行を消しても通ってしまった**（消して確かめて分かった）。
+     * 案内だけ残って探さない、がいちばん困る形なので、行そのものを見る。
+     */
+    assert.match(raw, /if exist "%HERE%node\\node\.exe" set "BUNDLED=%HERE%node"/,
+      '隣の node\\node.exe を探しに行く行が無い。手で二つ落とす道が通らなくなる');
+    // 展開しただけ（runtime を隣に置いた形）も探すこと。
+    assert.match(raw, /if exist "%HERE%runtime\\node\.exe" set "BUNDLED=%HERE%runtime"/,
+      '隣の runtime を探しに行く行が無い');
+  });
+
   test('入口は、組み立てた場所を探しに行く', sourceOnly, async () => {
     const raw = cmd(await readFile(join(installRoot(), 'start.cmd')));
     // app\ の隣の runtime\ を見ていること。
