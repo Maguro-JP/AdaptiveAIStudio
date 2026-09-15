@@ -18,6 +18,7 @@ import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { inspectGit, describeGitState } from '../agent/git.ts';
 import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
+import { readyLocalModel } from '../core/local-ready.ts';
 import { startWarmPool } from '../core/warm-setup.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import type { VerifyEvent } from '../agent/verify.ts';
@@ -57,7 +58,10 @@ function renderDiff(diff: string): string {
 }
 
 async function main(): Promise<void> {
-  const { config, source } = loadConfig();
+  // 候補を入れ直した設定を受け直すので let。入れ直すのは下の readyLocalModel。
+  const loaded = loadConfig();
+  let config = loaded.config;
+  const source = loaded.source;
   const registry = buildRegistry(config);
   const orchestrator = new ChatOrchestrator(registry);
 
@@ -94,9 +98,28 @@ async function main(): Promise<void> {
   };
 
   const pilot = await setupAutopilot(config, registry);
-  const { candidates, note } = resolveCandidates(config, pilot);
+
+  /*
+   * **ランタイムを先に起こしてから、候補を決める。**
+   *
+   * ここは HTTP の一覧（`127.0.0.1:4177/v1/models`）だけを見ていた。
+   * この中で読む道では、**その口はモデルを読むまで立たない**ので必ず空になり、
+   * 保存先に GGUF が在っても `使えるモデルがありません` で exit 1 していた。
+   * 同じ設定・同じ保存先で、画面は普通に答える。doctor も
+   * 「動かせます。`npm run agent` で端末」と言う。案内された手が、その場で落ちる。
+   *
+   * 画面と同じ道（`readyLocalModel`）を通す。読んだものを、そのまま候補にする。
+   */
+  const runtime = await buildRuntime(config, pilot.machine);
+  const ready = await readyLocalModel(config, runtime, (t) => process.stderr.write(c.dim(`  ${t}\n`)));
+  config = ready.config;
+  const picked = resolveCandidates(config, pilot);
+  const candidates = picked.candidates;
+  // 保存先から選んだのなら、そう言う。利用者は「設定で固定」していない。
+  const note = ready.note ?? picked.note;
   if (candidates.length === 0) {
-    console.error(c.red(`使えるモデルがありません: ${note}`));
+    console.error(c.red(`使えるモデルがありません: ${ready.why ?? note}`));
+    await runtime.shutdown().catch(() => undefined);
     process.exit(1);
   }
 
@@ -107,7 +130,6 @@ async function main(): Promise<void> {
   prefetch.start();
 
   // 使うモデルを先に温めておく。作業開始時の待ちをゼロにする。
-  const runtime = await buildRuntime(config, pilot.machine);
   const warm = await startWarmPool(config, runtime, pilot.machine, candidates, (e) => {
     if (e.type === 'warming') process.stderr.write(c.dim(`  温め中: ${e.ref}...\n`));
     else if (e.type === 'warm') process.stderr.write(c.dim(`  常駐: ${e.ref} (${e.loadSeconds}秒)\n`));
@@ -672,6 +694,9 @@ async function main(): Promise<void> {
     // 覚えたことは必ず残す。次の起動で思い出せなければ、記憶ではない。
     await core?.close().catch(() => undefined);
     await warm.pool?.shutdown().catch(() => undefined);
+    // 起こした子（この中で読む道）も落とす。**温めの片づけは読み込みを解くだけ**で、
+    // 子は残る。残ると次の起動で口が埋まり、「モデルが読めない」としか見えない。
+    await runtime.shutdown().catch(() => undefined);
   }
 }
 

@@ -19,6 +19,8 @@ import { readFileTool, listFilesTool, searchTextTool, writeFileTool, editFileToo
 import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { inspectGit, describeGitState } from '../agent/git.ts';
 import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
+import { buildRuntime } from '../core/runtime-setup.ts';
+import { readyLocalModel } from '../core/local-ready.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -45,16 +47,28 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const { config, source } = loadConfig();
+  const loaded = loadConfig();
+  // 候補を入れ直した設定を受け直すので let（下の readyLocalModel）。
+  let config = loaded.config;
+  const source = loaded.source;
   const agentCfg = config.agent ?? {};
   const root = resolve(agentCfg.root ?? defaultWorkRoot());
   const approval = agentCfg.approval ?? 'autoEdit';
 
   const registry = buildRegistry(config);
   const pilot = await setupAutopilot(config, registry);
-  const resolved = resolveCandidates(config, pilot);
+  /*
+   * **ランタイムを先に起こしてから、候補を決める。**agent / chat と同じ理由。
+   * この中で読む道の口は、モデルを読むまで立たないので、一覧だけを見ると必ず空。
+   */
+  const runtime = await buildRuntime(config, pilot.machine);
+  const ready = await readyLocalModel(config, runtime, (t) => console.log(`  ${t}`));
+  config = ready.config;
+  const picked = resolveCandidates(config, pilot);
+  const resolved = { candidates: picked.candidates, note: ready.note ?? picked.note };
   if (resolved.candidates.length === 0) {
-    console.error(`使えるモデルがありません: ${resolved.note}`);
+    console.error(`使えるモデルがありません: ${ready.why ?? picked.note}`);
+    await runtime.shutdown().catch(() => undefined);
     process.exit(1);
   }
 
@@ -144,6 +158,8 @@ async function main(): Promise<void> {
   const outcomes = next.value;
   const done = [...outcomes.values()].filter((o) => o.state === 'done').length;
   console.log(`\n完了 ${done}/${outcomes.size}`);
+  // 起こした子（この中で読む道）を残さない。残すと次の起動で口が埋まる。
+  await runtime.shutdown().catch(() => undefined);
   rl.close();
 }
 

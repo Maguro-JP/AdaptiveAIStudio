@@ -417,13 +417,81 @@ async function throughParallel() {
   return found;
 }
 
+
+/**
+ * 端末の入口（agent / chat / team）が、保存先の GGUF に辿り着くこと。
+ *
+ * **画面だけが動いていた。**端末は HTTP の一覧（`127.0.0.1:4177/v1/models`）
+ * だけを見ていたが、この中で読む道では**その口はモデルを読むまで立たない**。
+ * 保存先に GGUF が在っても必ず空になり、`使えるモデルがありません` で
+ * exit 1 する。同じ状態で doctor は「動かせます。`npm run agent` で端末」と言う。
+ * 案内された手が、その場で落ちていた。
+ *
+ * 相手を入れ替えた確かめでは見えない（入れ替えると口が立ってしまう）。**本物で通す。**
+ */
+async function cliReachesModel() {
+  const { mkdtempSync, rmSync: rm, writeFileSync } = await import('node:fs');
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const run = promisify(execFile);
+
+  const home = mkdtempSync(join(tmpdir(), 'aas-real-cli-'));
+  const models = join(home, 'models');
+  const { mkdirSync } = await import('node:fs');
+  mkdirSync(models, { recursive: true });
+  execFileSync(process.execPath, [join(root, 'scripts', 'tiny-gguf.mjs'), join(models, 'tiny.gguf')], { stdio: 'pipe' });
+  const config = join(home, 'aas.config.json');
+  writeFileSync(config, JSON.stringify({ runtime: { kind: 'inproc' }, initiative: { enabled: false } }));
+  const work = join(home, 'work');
+  mkdirSync(work, { recursive: true });
+  writeFileSync(join(home, 'tasks.json'), JSON.stringify([
+    { id: 't1', instruction: 'なにもしない', laneId: 'default' },
+  ]));
+
+  const env = {
+    ...process.env, AAS_HOME: home, AAS_CONFIG: config, NO_COLOR: '1',
+    AAS_REPORT_DIR: join(home, 'reports'),
+  };
+  const say = async (entry, args = []) => {
+    const out = await run(process.execPath, ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', entry), ...args], {
+      env, cwd: work, timeout: 240_000, maxBuffer: 8 * 1024 * 1024,
+    }).catch((e) => e);
+    // eslint-disable-next-line no-control-regex
+    return `${out.stdout ?? ''}${out.stderr ?? ''}`.replace(/\x1b\[[0-9;]*m/g, '');
+  };
+
+  const found = [];
+  try {
+    // どれも「使えるモデルがありません」で落ちないこと。
+    // 名前が出ることまで見る。**落ちなかっただけでは、辿り着いた証拠にならない。**
+    for (const [entry, args, want] of [
+      ['agent.ts', [], /担当モデル: inproc:tiny\.gguf/],
+      ['main.ts', [], /モデル: inproc:tiny\.gguf/],
+      ['team.ts', [join(home, 'tasks.json')], /レーン default: inproc:tiny\.gguf/],
+    ]) {
+      const text = await say(entry, args);
+      if (/使えるモデルがありません/.test(text)) {
+        found.push(`${entry}: 保存先に GGUF が在るのに落ちる（${text.split('\n').find((l) => l.includes('使えるモデル'))}）`);
+        continue;
+      }
+      if (!want.test(text)) found.push(`${entry}: モデルに辿り着いていない:\n${text.slice(0, 900)}`);
+    }
+  } catch (e) {
+    found.push(`端末の入口で落ちました: ${e.message}`);
+  } finally {
+    rm(home, { recursive: true, force: true });
+  }
+  return found;
+}
+
 bad.push(...await throughSession());
 bad.push(...await thinkingBudget());
 bad.push(...await throughParallel());
+bad.push(...await cliReachesModel());
 
 if (bad.length > 0) {
   console.error(`見つかった不具合 ${bad.length} 件:`);
   for (const b of bad) console.error(`- ${b}`);
   process.exit(1);
 }
-console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す・同梱の話し方・土台ごと一往復・本物の数え方・先読みで答えが変わらない・考えごとの予算・二つ同時）');
+console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す・同梱の話し方・土台ごと一往復・本物の数え方・先読みで答えが変わらない・考えごとの予算・二つ同時・端末の入口）');
