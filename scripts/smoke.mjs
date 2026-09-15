@@ -89,12 +89,28 @@ try {
     return `${body.catalog.length} 件`;
   });
 
-  await check('会話が作れる', async () => {
+  /*
+   * **名前と、見ているものを合わせる。**
+   *
+   * ここは「会話が作れる」という名前で、一覧が配列かどうかだけを見ていた。
+   * 会話はこの口では作らない（最初の一言が来たときに作る）ので、
+   * 名前も、見ているものも違う。配列かどうかだけなら**空でも通る**。
+   *
+   * この口の仕事は「トップへ戻す」。戻ったことと、一覧の数が食い違って
+   * いないことを見る。
+   */
+  await check('新しい会話に戻せる', async () => {
     const made = await fetch(`${base}/api/conversations`, { method: 'POST' });
-    if (!made.ok) throw new Error(`作れない: ${made.status}`);
+    if (!made.ok) throw new Error(`戻せない: ${made.status}`);
+    const top = await made.json();
+    if (top.current !== null) throw new Error(`トップに戻っていない: ${top.current}`);
+    if (!Array.isArray(top.messages) || top.messages.length > 0) throw new Error('やりとりが残っている');
     const list = await (await get('/api/conversations')).json();
     if (!Array.isArray(list.list)) throw new Error('一覧が返らない');
-    return `${list.total ?? list.list.length} 件`;
+    if (typeof list.total !== 'number') throw new Error('総数が返らない');
+    if (list.list.length > list.total) throw new Error(`総数が合わない: ${list.list.length} > ${list.total}`);
+    if (list.current !== null) throw new Error(`戻したのに開いている: ${list.current}`);
+    return `${list.total} 件（出しているのは ${list.list.length} 件）`;
   });
 
   await check('送ったときの返り方', async () => {
