@@ -36,6 +36,16 @@ async function runWith(file: string, env: Record<string, string>): Promise<{ ok:
   delete clean.NODE_OPTIONS;
   for (const k of ['AAS_HOME', 'AAS_STATE_DIR', 'AAS_BIN_DIR', 'AAS_MODELS_DIR']) delete clean[k];
   const out = await run(process.execPath, [
+    /*
+     * **数え方を、こちらで決める。**
+     *
+     * node の既定の出し方は版で変わる（24 では `✔` と `ℹ pass 49`、
+     * 22 では `# pass 49`）。`# pass` だけを見ていたので、**Windows の CI
+     * （Node 24）でだけ「子が中身を走らせていない」で落ちた。**子は 49 件
+     * 通していたのに、読み方が合っていなかっただけ。
+     * 走らせる場所で結果が変わる試験にしないため、出し方を固定する。
+     */
+    '--test-reporter=tap',
     '--experimental-strip-types', '--no-warnings', '--test', join(installRoot(), 'test', file),
   ], { env: { ...clean, ...env, NO_COLOR: '1' }, timeout: 300_000 })
     .then((r) => ({ ok: true, ...r }))
