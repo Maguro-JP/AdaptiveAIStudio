@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
+import { until } from './until.ts';
 import { PreviewServer, inject, listing, RELOAD_SNIPPET } from '../src/ui/preview.ts';
 
 async function site(files: Record<string, string>): Promise<string> {
@@ -28,6 +29,82 @@ async function serve(root: string): Promise<string> {
   servers.push(s);
   return s.start();
 }
+
+/**
+ * 見ている人へ、読み直せと伝わるところまでを見る。
+ *
+ * ここまで確かめていたのは、**差し込む文字が入っていること**だけだった。
+ * 差し込んだ先が繋ぐ `/__reload` と、書き換えを見て知らせる所は、
+ * 一度も動かしていない。このパネルの売りが「書き換えたら勝手に読み直す」なので、
+ * 見張りが黙っていても、こちらでは分からないままになる。
+ *
+ * 開いた口は必ず閉じる（閉じないと、落ちる代わりに試験が終わらなくなる）。
+ */
+async function listen(url: string): Promise<{ lines: string[]; close(): void }> {
+  const ac = new AbortController();
+  const lines: string[] = [];
+  const r = await fetch(`${url}__reload`, { signal: ac.signal });
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-type') ?? '', /text\/event-stream/);
+  void (async () => {
+    const reader = r.body!.getReader();
+    const dec = new TextDecoder();
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        if (value) for (const l of dec.decode(value, { stream: true }).split('\n')) if (l) lines.push(l);
+      }
+    } catch { /* 閉じた */ }
+  })();
+  return { lines, close: () => ac.abort() };
+}
+
+describe('書き換えを見て、読み直せと伝える', () => {
+  test('**繋いだ相手へ、伝わる**', async () => {
+    const s = new PreviewServer({ root: await site({ 'index.html': '<h1>あ</h1>' }), watch: false });
+    servers.push(s);
+    const url = await s.start();
+    const seen = await listen(url);
+    try {
+      await until(() => seen.lines.some((l) => l.startsWith(':')), '繋がった合図が来る', { timeoutMs: 5000 });
+      s.notify();
+      await until(() => seen.lines.some((l) => l === 'data: change'), '読み直せと伝わる', { timeoutMs: 5000 });
+    } finally { seen.close(); }
+  });
+
+  test('**ファイルを書き換えたら、見張りが拾って伝える**', async () => {
+    const root = await site({ 'index.html': '<h1>あ</h1>' });
+    const s = new PreviewServer({ root });
+    servers.push(s);
+    const url = await s.start();
+    const seen = await listen(url);
+    try {
+      await until(() => seen.lines.some((l) => l.startsWith(':')), '繋がった合図が来る', { timeoutMs: 5000 });
+      await writeFile(join(root, 'index.html'), '<h1>い</h1>', 'utf8');
+      await until(() => seen.lines.some((l) => l === 'data: change'), '書き換えが伝わる', { timeoutMs: 10_000 });
+    } finally { seen.close(); }
+  });
+
+  test('.git や node_modules の中は、拾わない（対）', async () => {
+    const root = await site({ 'index.html': '<h1>あ</h1>', 'node_modules/x/p.js': 'a' });
+    const s = new PreviewServer({ root });
+    servers.push(s);
+    const url = await s.start();
+    const seen = await listen(url);
+    try {
+      await until(() => seen.lines.some((l) => l.startsWith(':')), '繋がった合図が来る', { timeoutMs: 5000 });
+      await writeFile(join(root, 'node_modules/x/p.js'), 'b', 'utf8');
+      // 拾わないことは「来ない」で見る。まとめる間（80ms）より十分長く待つ。
+      await new Promise((r) => setTimeout(r, 600));
+      assert.deepEqual(seen.lines.filter((l) => l === 'data: change'), [],
+        '中身と関係ない所で読み直させている');
+      // 見張り自体は生きている（対）。ここが死んでいたら、上は黙っていても通る。
+      await writeFile(join(root, 'index.html'), '<h1>う</h1>', 'utf8');
+      await until(() => seen.lines.some((l) => l === 'data: change'), '中身の書き換えは伝わる', { timeoutMs: 10_000 });
+    } finally { seen.close(); }
+  });
+});
 
 describe('読み直しの差し込み', () => {
   test('</body> の手前に入れる', () => {
