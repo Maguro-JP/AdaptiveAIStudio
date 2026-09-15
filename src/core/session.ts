@@ -1124,6 +1124,15 @@ export class Session {
     let answerChars = 0;
     /** 答えたモデル。途中で切り替わったら、その先を覚える。 */
     let modelUsed = this.candidates[0] ?? '';
+    /*
+     * **速さを測り始める時刻。途中でモデルが変わったら、そこから測り直す。**
+     *
+     * 最初の候補が落ちるまでの時間（やり直しの待ちも入る）を、答えた側の
+     * 秒数に混ぜていた。混ぜたぶん遅く見えるので、**答えたモデルが遅いことに
+     * される。**その数字は次のモデル選びに使われる（`autopilot.record`）ので、
+     * 一度混ぜると選び方まで狂う。
+     */
+    let measuredFrom = started;
     // 巻き戻すかどうか（従来の意味）。確かめて落ちたときだけ倒す。
     let keep = true;
     // 実際に確かめたか、どうだったか。**確かめていないことを、通ったと言わない。**
@@ -1258,6 +1267,9 @@ export class Session {
             }
             case 'fallback':
               modelUsed = ev.to;
+              // 前のモデルに使った時間と文字を、次のモデルの分として数えない。
+              measuredFrom = Date.now();
+              answerChars = 0;
               yield { type: 'fallback', from: ev.from, to: ev.to, reason: ev.reason };
               break;
             case 'retry':
@@ -1277,13 +1289,22 @@ export class Session {
 
       yield* run(await this.#agent({ chat }));
 
-      // 実測を溜める。次回以降の自動選択がこれで変わる。
-      await this.pilot.autopilot.record({
-        modelId: this.candidates[0]!,
-        success: finishedReason === 'completed',
-        outputTokens: Math.round(answerChars / 3),
-        seconds: (Date.now() - started) / 1000,
-      });
+      /*
+       * 実測を溜める。次回以降の自動選択がこれで変わる。
+       *
+       * **答えたモデルに付ける。**ここは候補の先頭に付けていたので、
+       * 途中で別のモデルへ移った回の成否と速さが、**一度も答えていない
+       * モデルの成績**になっていた。選び方がその数字で決まるので、
+       * 付け先を間違えると、以後ずっと間違った方を選び続ける。
+       */
+      if (modelUsed) {
+        await this.pilot.autopilot.record({
+          modelId: modelUsed,
+          success: finishedReason === 'completed',
+          outputTokens: Math.round(answerChars / 3),
+          seconds: (Date.now() - measuredFrom) / 1000,
+        });
+      }
 
       // 道具が全部弾かれたのに、本文だけが「やりました」になっている形を見逃さない。
       if (finishedReason === 'completed' && failedTools.length > 0 && !wroteSomething) {
@@ -1399,7 +1420,7 @@ export class Session {
         checked,
         ...(chat ? { chat: true } : {}),
         seconds: (Date.now() - started) / 1000,
-        ...speedOf(modelUsed, answerChars, (Date.now() - started) / 1000),
+        ...speedOf(modelUsed, answerChars, (Date.now() - measuredFrom) / 1000),
       };
     } catch (e) {
       // 一度の失敗で対話ごと終わらせない。次の指示は受けられる。
@@ -1409,7 +1430,7 @@ export class Session {
         type: 'settled', reason: 'failed', verified: false, checked,
         ...(chat ? { chat: true } : {}),
         seconds: (Date.now() - started) / 1000, detail: (e as Error).message,
-        ...speedOf(modelUsed, answerChars, (Date.now() - started) / 1000),
+        ...speedOf(modelUsed, answerChars, (Date.now() - measuredFrom) / 1000),
       };
     } finally {
       this.#running = undefined;
