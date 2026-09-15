@@ -96,3 +96,54 @@ describe('案内する一手は、その形で打てる', () => {
     assert.match(src, /from '\.\/how\.ts'/, '共有の how を使っていない');
   });
 });
+
+/**
+ * 在ることと、動くことは別。
+ *
+ * doctor は `findInstalled()` が返した道を、そのまま `ok` にしていた。
+ * あれは `stat` して道を返すだけなので、**0 バイトで実行権の無いファイルでも
+ * ok になり、締めは「動かせます」。**実際に起こすと終了コード 126。
+ * 壊れているのに緑なので、直しに行く先がどこにも出ない。
+ * selftest は同じ場所で `--version` を走らせて決めているのに、doctor だけが
+ * 見ていなかった。
+ */
+describe('doctor は llama-server を一度起こす', () => {
+  async function runDoctor(home: string): Promise<string> {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const { join } = await import('node:path');
+    const { installRoot } = await import('../src/core/home.ts');
+    const run = promisify(execFile);
+    const clean = { ...process.env };
+    delete clean.NODE_TEST_CONTEXT;
+    delete clean.NODE_OPTIONS;
+    const out = await run(process.execPath, [
+      '--experimental-strip-types', '--no-warnings', join(installRoot(), 'src', 'cli', 'doctor.ts'),
+    ], {
+      env: {
+        ...clean, NO_COLOR: '1',
+        AAS_HOME: home, AAS_CONFIG: join(home, 'aas.config.json'),
+        AAS_REPORT_DIR: join(home, 'reports'),
+      },
+      timeout: 300_000,
+    }).catch((e: { stdout?: string; stderr?: string }) => e);
+    return `${out.stdout ?? ''}${out.stderr ?? ''}`;
+  }
+
+  test('**0 バイトで実行権の無いものを ok と言わない**', async () => {
+    const { mkdir, writeFile, chmod } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tempDir } = await import('./tmp.ts');
+    const home = await tempDir('aas-llama-');
+    const bin = join(home, 'bin', 'b4585');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, 'llama-server'), '');
+    await chmod(join(bin, 'llama-server'), 0o644);
+    await writeFile(join(home, 'aas.config.json'), JSON.stringify({ runtime: { kind: 'llamacpp' } }));
+
+    const text = await runDoctor(home);
+    assert.match(text, /llama-server/, `見ていない:\n${text.slice(-500)}`);
+    assert.doesNotMatch(text, /ok\s+llama-server/, `壊れているのに ok と言っている:\n${text.slice(-600)}`);
+    assert.match(text, /動きません/, `動かないと言っていない:\n${text.slice(-600)}`);
+  });
+});
