@@ -435,7 +435,7 @@ export class UiServer {
     const server = createServer((req, res) => {
       this.#handle(req, res).catch((e: unknown) => {
         // 画面の不具合で本体を落とさない。
-        if (e instanceof BodyTooLarge) return refuseTooLarge(req, res, e.message);
+        if (e instanceof BodyTooLarge) return refuseTooLarge(res, e.message);
         send(res, 500, { error: e instanceof Error ? e.message : String(e) });
       });
     });
@@ -921,18 +921,16 @@ export class UiServer {
 
     if (path === '/api/attach' && req.method === 'POST') {
       const name = url.searchParams.get('name') ?? 'file';
-      const chunks: Buffer[] = [];
-      let total = 0;
-      for await (const chunk of req) {
-        total += (chunk as Buffer).length;
-        // 上限を超えたら、最後まで受け取ってから断らない。読むのをやめる。
-        if (total > MAX_BYTES) {
-          return refuseTooLarge(req, res, `大きすぎます（${MAX_BYTES / 1024 / 1024}MB まで）`);
-        }
-        chunks.push(chunk as Buffer);
+      // 上限を超えたら、溜めるのをやめて読み捨てる（`readWithin`）。
+      // **壊さない。**壊すと断りの文ごと捨てられる。
+      const taken = await readWithin(req, MAX_BYTES);
+      if (taken === 'tooLarge') {
+        return refuseTooLarge(res, `大きすぎます（${MAX_BYTES / 1024 / 1024}MB まで）`);
       }
+      // 途中で切れたものを、全部として置かない（半分のファイルが残る）。
+      if (taken === 'cut') return;
       try {
-        const item = await this.#attachments.add(name, Buffer.concat(chunks));
+        const item = await this.#attachments.add(name, taken);
         return send(res, 200, {
           id: item.id, name: item.name, bytes: item.bytes, kind: item.kind,
         });
@@ -3181,18 +3179,17 @@ function send(res: ServerResponse, status: number, body: unknown): void {
  * 黙って切られただけになる（実測: 17MB の PUT で返ってきたのは 0 バイト）。
  * 「大きすぎます」と書いてあるのに、誰も読めない。
  *
- * 読むのはやめるが、残りは読み捨てて（`resume`）、返事を書き切ってから閉じる。
- * `connection: close` を付けるので、書き終われば Node が閉じる。
+ * 読み切るのは `readWithin` の仕事。ここへ来る時点で読み終わっているので、
+ * 書いて閉じるだけでよい（読み残しが在るまま閉じると RST になり、
+ * Windows では届いていた返事ごと捨てられる）。
  */
-function refuseTooLarge(req: IncomingMessage, res: ServerResponse, message: string): void {
-  // 残りを読み捨てる。読むのをやめると相手は詰まったまま待つ。
-  req.resume();
-  const text = JSON.stringify({ error: message });
+function refuseTooLarge(res: ServerResponse, message: string): void {
+  if (res.writableEnded || res.destroyed) return;
   res.writeHead(413, {
     'content-type': 'application/json; charset=utf-8',
     connection: 'close',
   });
-  res.end(text);
+  res.end(JSON.stringify({ error: message }));
 }
 
 /** JSON の本文の上限。添付は別の口（/api/attach）で、それ自身の上限を持つ。 */
@@ -3233,17 +3230,65 @@ export function foreignPath(p: string | undefined): boolean {
   return process.platform !== 'win32' && /^[A-Za-z]:[\\/]/.test(p);
 }
 
+/**
+ * 上限つきで本文を読む。**上限を超えても、読み切るまで待つ。**
+ *
+ * ここは `for await` の途中で `throw` / `return` していた。あれは
+ * **その場で `req` を壊す**（async iterator の後片づけが `destroy()` を呼ぶ）。
+ * こちらの受け箱に読んでいない分が残ったまま socket が閉じるので、OS は
+ * FIN ではなく RST を送り、**RST を受けた側は届いていた 413 ごと捨てる。**
+ * linux では届くのに Windows では 0 バイト、という形で実際に出た。
+ *
+ * だから壊さない。上限を超えたら**溜めるのをやめて読み捨て**、
+ * 最後まで受け取ってから断る。読み捨てには上限（`REFUSE_DRAIN_MS`）を置く
+ * （相手が送り続けるだけなら、そこで諦めて断る）。**正しい本文の側には
+ * 時計を置かない。**置くと、遅い相手の本文が途中で切れて、切れたことに
+ * 気づかないまま通る。
+ */
+export const REFUSE_DRAIN_MS = 5000;
+
+type Taken = Buffer | 'tooLarge' | 'cut';
+
+export async function readWithin(req: IncomingMessage, limit: number): Promise<Taken> {
+  return await new Promise<Taken>((resolve) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let over = false;
+    let done = false;
+    let giveUp: NodeJS.Timeout | undefined;
+    const finish = (what: Taken): void => {
+      if (done) return;
+      done = true;
+      if (giveUp) clearTimeout(giveUp);
+      resolve(what);
+    };
+    req.on('data', (c: Buffer) => {
+      total += c.length;
+      if (over) return; // 読み捨てる（溜めるのはやめている）
+      if (total > limit) {
+        over = true;
+        chunks.length = 0;
+        // 読み捨てが終わらないときだけ、上限で諦める。
+        giveUp = setTimeout(() => finish('tooLarge'), REFUSE_DRAIN_MS);
+        giveUp.unref?.();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.once('end', () => finish(over ? 'tooLarge' : Buffer.concat(chunks)));
+    // 最後まで来ていないのに閉じたのは、相手が切ったとき。**途中までを
+    // 全部として扱わない**（切れた JSON や途中までのファイルが通る）。
+    req.once('close', () => finish(over ? 'tooLarge' : 'cut'));
+    req.once('error', () => finish(over ? 'tooLarge' : 'cut'));
+  });
+}
+
 async function readBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const c of req) {
-    total += (c as Buffer).length;
-    // 際限なく抱えない。上限を超えたら読むのをやめて断る。
-    if (total > MAX_JSON_BODY) throw new BodyTooLarge(MAX_JSON_BODY);
-    chunks.push(c as Buffer);
-  }
+  const got = await readWithin(req, MAX_JSON_BODY);
+  if (got === 'tooLarge') throw new BodyTooLarge(MAX_JSON_BODY);
+  if (got === 'cut') return undefined; // 途中で切れた。既定に落とす
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return JSON.parse(got.toString('utf8'));
   } catch {
     return undefined; // 直す側が既定に落としてくれる
   }

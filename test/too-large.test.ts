@@ -14,6 +14,7 @@
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { connect } from 'node:net';
+import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { UiServer, MAX_JSON_BODY } from '../src/ui/server.ts';
@@ -35,14 +36,29 @@ async function start(): Promise<{ host: string; port: number }> {
   return { host: url.hostname, port: Number(url.port) };
 }
 
+interface BigAnswer {
+  /** 返ってきたもの全部。 */
+  text: string;
+  /** 送り切った時刻（送り切れなかったら undefined）。 */
+  wroteAt?: number;
+  /** 返事の一バイト目が届いた時刻。 */
+  answeredAt?: number;
+}
+
 /**
  * 素の socket で、大きすぎる本文を送る。**返ってきたものを全部読む。**
  * 相手が先に返事を書いて閉じても、そこまでは読める。
+ *
+ * 送り切った時刻と、返事が届いた時刻も持ち帰る。**読み切る前に返すと、
+ * こちらの受け箱に読んでいない分が残ったまま閉じることになり、OS は RST を
+ * 送る。RST を受けた側は、届いていた返事ごと捨てる**（Windows で実測）。
+ * 「返ってきた」だけでは、その形を見分けられない。
  */
 async function sendTooBig(
   at: { host: string; port: number }, head: string, bytes: number,
-): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
+): Promise<BigAnswer> {
+  return await new Promise<BigAnswer>((resolve, reject) => {
+    const out: BigAnswer = { text: '' };
     const sock = connect(at.port, at.host, () => {
       sock.write(`${head}content-length: ${bytes}\r\nconnection: close\r\n\r\n`);
       // 少しずつ送る。相手は途中で断るので、最後まで送り切らないことがある。
@@ -54,38 +70,71 @@ async function sendTooBig(
           sent += n;
           if (!sock.write(chunk.subarray(0, n))) { sock.once('drain', push); return; }
         }
+        out.wroteAt = Date.now();
       };
       push();
     });
-    let got = '';
     sock.setEncoding('utf8');
-    sock.on('data', (d) => { got += d; });
-    sock.on('close', () => resolve(got));
+    sock.on('data', (d) => { out.answeredAt ??= Date.now(); out.text += d; });
+    sock.on('close', () => resolve(out));
     // 書いている途中で相手に閉じられるのは普通。返ってきた分で判じる。
-    sock.on('error', () => resolve(got));
+    sock.on('error', () => resolve(out));
     setTimeout(() => { sock.destroy(); reject(new Error('返事が来ない')); }, 60_000).unref?.();
   });
 }
 
 describe('大きすぎるものを断るとき、理由が届く', () => {
+  /** 断りが届いていて、しかも**読み切ってから**返していること。 */
+  function refused(got: BigAnswer): void {
+    assert.match(got.text, /^HTTP\/1\.1 413/, `413 が届いていない: ${JSON.stringify(got.text.slice(0, 200))}`);
+    assert.match(got.text, /大きすぎます/, got.text.slice(0, 300));
+    assert.ok(got.wroteAt, '送り切る前に切られている');
+    assert.ok(got.answeredAt && got.answeredAt >= got.wroteAt,
+      `送り切る前に返している（読み残しがあるまま閉じると、返事ごと捨てられる）: `
+      + `送り切り ${got.wroteAt} / 返事 ${got.answeredAt}`);
+  }
+
   test('**添付が上限を超えたら、413 と理由が返る**', async () => {
     const at = await start();
-    const got = await sendTooBig(
-      at, 'POST /api/attach?name=big.txt HTTP/1.1\r\nhost: localhost\r\n', MAX_BYTES + 2 * 1024 * 1024,
-    );
-    assert.match(got, /^HTTP\/1\.1 413/, `413 が届いていない: ${JSON.stringify(got.slice(0, 200))}`);
-    assert.match(got, /大きすぎます/, got.slice(0, 300));
+    refused(await sendTooBig(
+      at, 'POST /api/attach?name=big.txt HTTP/1.1\r\nhost: localhost\r\n', MAX_BYTES + 16 * 1024 * 1024,
+    ));
   });
 
   test('**JSON の本文が上限を超えても、413 と理由が返る**', async () => {
     const at = await start();
-    const got = await sendTooBig(
+    refused(await sendTooBig(
       at,
       'POST /api/send HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/json\r\n',
-      MAX_JSON_BODY + 2 * 1024 * 1024,
-    );
-    assert.match(got, /^HTTP\/1\.1 413/, `413 が届いていない: ${JSON.stringify(got.slice(0, 200))}`);
-    assert.match(got, /大きすぎます/, got.slice(0, 300));
+      MAX_JSON_BODY + 16 * 1024 * 1024,
+    ));
+  });
+
+  /**
+   * 途中で切れたものを、全部として置かない。
+   *
+   * 読み切る前に返さない形にしたので、**途中までしか来ていないのに
+   * 「来た」と読む道**が出来る。半分のファイルが添付として残ると、
+   * モデルは半分を全部として読む（黙って間違える、いちばん困る形）。
+   */
+  test('**途中で切れた添付は、置かない**', async () => {
+    const at = await start();
+    const dir = join(process.env.AAS_STATE_DIR!, 'attachments');
+    await new Promise<void>((done) => {
+      const sock = connect(at.port, at.host, () => {
+        sock.write('POST /api/attach?name=half.txt HTTP/1.1\r\nhost: localhost\r\n'
+          + `content-length: ${1024 * 1024}\r\nconnection: close\r\n\r\n`);
+        sock.write(Buffer.alloc(64 * 1024, 66));
+        // 送り切らずに切る。相手が止まった・頁を閉じた、と同じ形。
+        setTimeout(() => { sock.destroy(); done(); }, 150);
+      });
+      sock.on('error', () => done());
+    });
+    // 置かれていないこと。置く側は非同期なので、少し待ってから見る。
+    await new Promise((r) => setTimeout(r, 400));
+    const left = await readdir(dir).catch(() => [] as string[]);
+    assert.deepEqual(left.filter((n) => n.includes('half.txt')), [],
+      `途中までのものを置いている: ${left.join(', ')}`);
   });
 });
 
