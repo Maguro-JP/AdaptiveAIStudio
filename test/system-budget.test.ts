@@ -97,8 +97,8 @@ describe('依頼と履歴の取り分', () => {
     const services = await import('../src/agent/tools/services.ts');
     const tools = [
       fs.readFileTool, fs.listFilesTool, fs.searchTextTool, fs.writeFileTool, fs.editFileTool,
-      find.findCodeTool, services.listServicesTool, services.connectServiceTool,
-      services.disconnectServiceTool,
+      find.findCodeTool, services.listServicesTool, services.createConnectServiceTool(),
+      services.createDisconnectServiceTool(),
     ].map((t) => t.schema);
 
     for (const w of WINDOWS) {

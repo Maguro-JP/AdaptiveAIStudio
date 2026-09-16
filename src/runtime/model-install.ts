@@ -270,10 +270,34 @@ async function fetchInto(a: {
     throw new Error(`取ってこられませんでした (${res.status})\n${byHand(entry, modelsDir, url)}`);
   }
 
-  const part = Number(res.headers.get('content-length') ?? 0);
-  const total = resuming ? had + part : part;
-  const handle = await open(tmp, resuming ? 'r+' : 'w');
-  let written = resuming ? had : 0;
+  /*
+   * **すでに全部取れているとき、取れているものを切り詰めない。**
+   *
+   * 416（範囲外）は「もう全部ある」の返事なのに、`open(tmp, 'w')` を通っていた。
+   * `w` は開いた時点で 0 バイトにする。**数GB取れていた .part が、
+   * 「すでに全部取れていました」と言いながら消える。**そのあと中身の確かめで
+   * 落ちて、残骸まで消される。取り直しに何十分もかかる回線では、これが一番重い。
+   */
+  const done = res.status === 416;
+
+  /*
+   * **長さを言わない相手を、0 と数えない。**
+   *
+   * `content-length` を返さない相手（chunked）が居る。`?? 0` にしていたので
+   * `total` が `had` になり、続きを取り切っても `written !== total` で
+   * **「途中で切れました」**と言って .part のまま放り出していた。
+   * 取り切っているのに、何度やっても終わらない。
+   */
+  const lenHeader = res.headers.get('content-length');
+  const part = lenHeader === null ? undefined : Number(lenHeader);
+  const total = done
+    ? had
+    : part === undefined || Number.isNaN(part)
+      // 分からないものは 0（＝分からない）。下の突き合わせは total > 0 のときだけ。
+      ? 0
+      : resuming ? had + part : part;
+  const handle = await open(tmp, resuming || done ? 'r+' : 'w');
+  let written = resuming || done ? had : 0;
   let lastAt = 0;
   const began = Date.now();
   const from = written;

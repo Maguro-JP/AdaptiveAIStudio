@@ -13,6 +13,25 @@ describe('よその頁からの要求を断る', () => {
   test('Sec-Fetch-Site が cross-site', () => {
     assert.ok(crossSiteReason({ host: '127.0.0.1:4174', 'sec-fetch-site': 'cross-site' }, 'POST'));
   });
+  /**
+   * same-site は「同じ登録可能ドメインの、別の生成元」。
+   *
+   * 別の port も、別の下位ドメインもここに入る。**同じ機械の別の口で
+   * 動いている何か**から叩かれる形なので、cross-site と同じく断る。
+   * ここを見ていなかったので、条件を cross-site だけに縮めても通った。
+   */
+  test('Sec-Fetch-Site が same-site（別の口・別の下位ドメイン）', () => {
+    assert.ok(crossSiteReason({ host: '127.0.0.1:4174', 'sec-fetch-site': 'same-site' }, 'POST'));
+  });
+  test('大文字で来ても断る', () => {
+    assert.ok(crossSiteReason({ host: '127.0.0.1:4174', 'sec-fetch-site': 'CROSS-SITE' }, 'POST'));
+  });
+  test('同じ頭が二つ来たら、前のもので決める', () => {
+    // 割り込み（header の二重送り）で緩めさせない。
+    assert.ok(crossSiteReason({
+      host: '127.0.0.1:4174', 'sec-fetch-site': ['cross-site', 'same-origin'],
+    }, 'POST'));
+  });
   test('Origin がよそ', () => {
     assert.ok(crossSiteReason({ host: '127.0.0.1:4174', origin: 'https://evil.example' }, 'POST'));
   });
@@ -38,6 +57,9 @@ describe('自分の頁と、ブラウザでないものは通す（対）', () =
   });
   test('利用者の入力（アドレス欄）は none で来る', () => {
     assert.equal(crossSiteReason({ host: '127.0.0.1:4174', 'sec-fetch-site': 'none' }, 'POST'), undefined);
+  });
+  test('IPv6 の自分（[::1]）も自分', () => {
+    assert.equal(crossSiteReason({ host: '[::1]:4174', origin: 'http://[::1]:4174' }, 'POST'), undefined);
   });
   test('決めた host で開いているなら、それも自分', () => {
     assert.equal(crossSiteReason({ host: '192.168.1.5:4174', origin: 'http://192.168.1.5:4174' }, 'POST', { ownHosts: ['192.168.1.5'] }), undefined);

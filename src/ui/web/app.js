@@ -914,6 +914,15 @@ const copiedUpTo = new Map();
  * 出来事はまだ名前を知らない自分の会話のもの。そこだけ通す。
  */
 let sendingFromTop = false;
+/**
+ * いま見ている会話の id。**パネルが自分で取り直すために要る。**
+ *
+ * ここまで、会話の中身は「頁を開いた最初の一回」と「横の一覧から選んだとき」
+ * にしか流し込んでいなかった。パネルを一枚でも出し入れすると `render()` が
+ * 全部作り直すので、**話している途中でも、やり取りが画面から消える。**
+ * 本体には残っているので、頁を読み直すまで戻らない（消えたと思われる）。
+ */
+ctx.conversationId = () => conversations.current;
 ctx.sending = () => { sendingFromTop = !conversations.current; };
 ctx.adopt = (id) => { if (id) conversations.current = id; sendingFromTop = false; };
 let busyNow = false;
@@ -1196,20 +1205,32 @@ async function pickWorkRoot() {
   const nowAt = $('workNow').textContent ?? '';
   const want = window.prompt('直してほしいコードのある場所を打ってください。\n（空にすると既定へ戻ります）', nowAt);
   if (want === null) return;
+  /*
+   * **作業場だけを送る。**
+   *
+   * ここは `kind` と `modelsDir` も一緒に送っていた。値は設定の頁の入力欄から
+   * 取るが、その欄は設定→モデルを開いたときしか埋まらない。開いていない頁では
+   * 空なので、**llamacpp や Ollama の指定と、GGUF の保存先が黙って消える。**
+   * 触らないものは送らない（本体側も、送られてこなければ触らない）。
+   */
   const r = await ask('/api/config', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      kind: $('cfgKind')?.value || 'inproc',
-      modelsDir: $('cfgModelsDir')?.value?.trim() ?? '',
-      workRoot: want.trim(),
-    }),
+    body: JSON.stringify({ workRoot: want.trim() }),
   }, 'フォルダを変えられませんでした');
   if (!r) return;
   const body = r.body;
   if (!r.ok) { alert(body.error ?? '変えられませんでした'); return; }
   // 打ち間違えても保存はできる。**そのときは言う。**
   if (body.workNote) alert(body.workNote);
+  /*
+   * **開いている場所を、根へ戻してから引き直す。**
+   *
+   * `filesAt` は前の作業場の中の道。変えたあとにそのまま引くと、
+   * 新しい作業場の外なので 400 になり、画面に赤い字が出る。
+   * 下の `loadFiles` には受け皿を置いてあるが、**そもそも訊かない。**
+   */
+  filesAt = '';
   await loadFiles();
 }
 
@@ -1224,8 +1245,20 @@ let filesAt = '';
 async function loadFiles(at = '') {
   const box = $('sideFiles');
   try {
-    const r = await fetch(`/api/files?path=${encodeURIComponent(at)}`);
-    const body = await r.json();
+    let r = await fetch(`/api/files?path=${encodeURIComponent(at)}`);
+    let body = await r.json();
+    /*
+     * **作業場が変わったら、根から見直す。**
+     *
+     * 開いている場所（`filesAt`）は前の作業場の中の道。作業場を変えると、
+     * その道は新しい作業場の外になるので 400 が返る。画面には赤い字が出て、
+     * 一覧は前のまま。**変えたのに変わっていないように見える。**
+     * 一度だけ根で引き直す（それでも駄目なら、下の catch で理由を出す）。
+     */
+    if (!r.ok && at !== '') {
+      r = await fetch('/api/files?path=');
+      body = await r.json();
+    }
     if (!r.ok) throw new Error(body.error ?? '読めませんでした');
     filesAt = body.path;
     $('filesHead').textContent = body.path ? `ファイル / ${body.path}` : 'ファイル';

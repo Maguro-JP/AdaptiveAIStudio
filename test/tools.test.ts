@@ -187,3 +187,84 @@ describe('改行の引き継ぎ', () => {
     assert.match(one.content, /\+1/, `1行だけの変更になっていない: ${one.content}`);
   });
 });
+
+/**
+ * 作業ディレクトリの外を、名前だけでも出さない。
+ *
+ * `read_file` はリンクの先まで見て断っていたが、`list_files` と `search_text` は
+ * **文字の上でしか見ていなかった。**作業ディレクトリの中に外を指すリンクが一つ
+ * あれば、そこを path に渡すだけで外のファイル名が並ぶ。中身は read_file が
+ * 断るので、名前だけが漏れる形になっていた（実際に出した）。
+ *
+ * 木を降りるときは Dirent がリンクを「ファイルでもディレクトリでもない」として
+ * 飛ばすので、**名指しで渡されたときだけ**漏れる。そこを見る。
+ */
+describe('リンクの先が外なら、一覧も検索も断る', () => {
+  async function linked(): Promise<{ root: string; outside: string }> {
+    const { symlink } = await import('node:fs/promises');
+    const base = await tempDir('aas-link-');
+    const root = join(base, 'work');
+    const outside = join(base, 'secret');
+    await mkdir(root, { recursive: true });
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(outside, 'notes.txt'), 'private\n');
+    await symlink(outside, join(root, 'link'), 'dir');
+    return { root, outside };
+  }
+
+  test('**list_files は、外を指すリンクを一覧しない**', async () => {
+    const { root } = await linked();
+    const got = await listFilesTool.run({ path: 'link' }, ctx(root));
+    assert.equal(got.isError, true, `一覧してしまった: ${got.content}`);
+    assert.doesNotMatch(got.content, /notes\.txt/, `外のファイル名が出ている: ${got.content}`);
+  });
+
+  test('**search_text も、外を指すリンクを探さない**', async () => {
+    const { root } = await linked();
+    const got = await searchTextTool.run({ query: 'private', path: 'link' }, ctx(root));
+    assert.equal(got.isError, true, `探してしまった: ${got.content}`);
+    assert.doesNotMatch(got.content, /notes\.txt/, `外のファイル名が出ている: ${got.content}`);
+  });
+
+  test('中のリンクなら、これまでどおり通る（対）', async () => {
+    const { symlink } = await import('node:fs/promises');
+    const root = await tempDir('aas-link-in-');
+    await mkdir(join(root, 'real'), { recursive: true });
+    await writeFile(join(root, 'real', 'a.ts'), 'const x = 1;\n');
+    await symlink(join(root, 'real'), join(root, 'alias'), 'dir');
+    const got = await listFilesTool.run({ path: 'alias' }, ctx(root));
+    assert.equal(got.isError, undefined, `中のリンクを断っている: ${got.content}`);
+    assert.match(got.content, /a\.ts/, `中身が出ていない: ${got.content}`);
+  });
+});
+
+/**
+ * 探せなかったことを、「該当なし」と言わない。
+ *
+ * `search_text` は walk の失敗を握り潰していた。無い道を渡すと、探しにすら
+ * 行っていないのに `該当なし` と返る。モデルは「そこには無い」と読んで、
+ * 別の場所を探しに行かない。**打ち間違いが、事実として返ってくる。**
+ */
+describe('search_text は、探せなかったことを言う', () => {
+  test('**無い道は、該当なしではなく失敗**', async () => {
+    const root = await workspace();
+    const got = await searchTextTool.run({ query: 'answer', path: 'nosuchdir' }, ctx(root));
+    assert.equal(got.isError, true, `該当なしで済ませている: ${got.content}`);
+    assert.doesNotMatch(got.content, /該当なし/, got.content);
+  });
+
+  test('ファイルを指されたら、その一つを探す', async () => {
+    // モデルはよく渡してくる。readdir に落とすと「使い方の間違い」にしか見えない。
+    const root = await workspace();
+    const got = await searchTextTool.run({ query: 'answer', path: 'app.ts' }, ctx(root));
+    assert.equal(got.isError, undefined, `ファイル指定で落ちている: ${got.content}`);
+    assert.match(got.content, /app\.ts:1/, got.content);
+  });
+
+  test('本当に無いときは、これまでどおり該当なし（対）', async () => {
+    const root = await workspace();
+    const got = await searchTextTool.run({ query: 'このことばはどこにもない' }, ctx(root));
+    assert.equal(got.isError, undefined, got.content);
+    assert.match(got.content, /該当なし/, got.content);
+  });
+});

@@ -12,6 +12,8 @@ import type { ProviderMessage } from '../providers/contract.ts';
 import { buildRegistry } from '../core/build.ts';
 import { ChatOrchestrator } from '../core/orchestrator.ts';
 import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
+import { buildRuntime } from '../core/runtime-setup.ts';
+import { readyLocalModel } from '../core/local-ready.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -33,12 +35,27 @@ const HELP = `
 `.trimEnd();
 
 async function main(): Promise<void> {
-  const { config, source } = loadConfig();
+  const loaded = loadConfig();
+  // 候補を入れ直した設定を受け直すので let（下の readyLocalModel）。
+  let config = loaded.config;
+  const source = loaded.source;
   const registry = buildRegistry(config);
   const orchestrator = new ChatOrchestrator(registry);
 
   const pilot = await setupAutopilot(config, registry);
-  const resolved = resolveCandidates(config, pilot);
+  /*
+   * **ランタイムを先に起こしてから、候補を決める。**
+   *
+   * この中で読む道では、HTTP の一覧（`127.0.0.1:4177/v1/models`）は
+   * **モデルを読むまで立たない**。一覧だけを見ていたので、保存先に GGUF が
+   * 在っても `モデル: (なし)` のまま立ち上がり、送ると `失敗 [unavailable]`。
+   * 画面は同じ設定で普通に答える。画面と同じ道を通す。
+   */
+  const runtime = await buildRuntime(config, pilot.machine);
+  const ready = await readyLocalModel(config, runtime, (t) => console.log(c.dim(`  ${t}`)));
+  config = ready.config;
+  const picked = resolveCandidates(config, pilot);
+  const resolved = { candidates: picked.candidates, note: ready.note ?? ready.why ?? picked.note };
   let candidates = [...resolved.candidates];
   let system = config.system;
   const history: ProviderMessage[] = [];
@@ -179,6 +196,8 @@ async function main(): Promise<void> {
     }
   } finally {
     rl.close();
+    // 起こした子（この中で読む道）を残さない。残すと次の起動で口が埋まる。
+    await runtime.shutdown().catch(() => undefined);
   }
 }
 

@@ -13,7 +13,7 @@
  */
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, stat, readdir } from 'node:fs/promises';
-import { watch, type FSWatcher } from 'node:fs';
+import { watch, realpathSync, type FSWatcher } from 'node:fs';
 import { join, extname, relative, sep } from 'node:path';
 import { safeResolve, realSafeResolve } from '../agent/tools/paths.ts';
 import { listenOrExplain } from '../core/listen.ts';
@@ -99,6 +99,30 @@ export function listing(dir: string, entries: { name: string; isDir: boolean }[]
 <h1>${title}</h1><ul>${rows}</ul>${RELOAD_SNIPPET}`;
 }
 
+/**
+ * 見張る前に、path を OS が名乗る形へ直す。
+ *
+ * Windows の CI で、試験のプロセスが**まるごと消えた**。落ちた試験の名前も
+ * 出ないまま、libuv が abort していた。
+ *
+ *   Assertion failed: !_wcsnicmp(filename, dir, dirlen), file src\win\fs-event.c, line 72
+ *
+ * libuv は、書き換えを知らせるときに OS から本来の path を受け取り、見張り
+ * 始めたときの文字列を引いて相対の name を作る。渡した文字列が短い形
+ * （`C:\Users\RUNNER~1\...`）や junction だと、引き算の前提が崩れて abort する。
+ * **例外ではないので try では拾えない。**渡す側で直すしかない。
+ *
+ * 直せないとき（消えた、権限が無い）は、渡されたものをそのまま渡す。
+ * 見張れないだけなら、配ることは続けられる。
+ */
+export function watchablePath(root: string): string {
+  try {
+    return realpathSync.native(root);
+  } catch {
+    return root;
+  }
+}
+
 export interface PreviewOptions {
   /** 作業場。ここより外は出さない。 */
   root: string;
@@ -118,6 +142,8 @@ export class PreviewServer {
   readonly #opts: PreviewOptions;
   #server?: Server;
   #watcher?: FSWatcher;
+  /** 実際に見張っている場所。渡された path とは違うことがある（上の理由）。 */
+  #watching?: string;
   #listeners = new Set<ServerResponse>();
   #port = 0;
   /** 書き換えが続けて来たときに、まとめて一度だけ知らせる。 */
@@ -128,6 +154,8 @@ export class PreviewServer {
   }
 
   get port(): number { return this.#port; }
+  /** 見張っている場所。見張っていなければ undefined。 */
+  get watching(): string | undefined { return this.#watching; }
   get url(): string { return `http://127.0.0.1:${this.#port}/`; }
 
   async start(): Promise<string> {
@@ -152,26 +180,52 @@ export class PreviewServer {
   stop(): void {
     if (this.#timer) clearTimeout(this.#timer);
     this.#watcher?.close();
+    this.#watching = undefined;
     for (const res of this.#listeners) res.end();
     this.#listeners.clear();
     this.#server?.close();
     this.#server = undefined;
   }
 
-  /** 見ている人へ、読み直せと伝える。 */
+  /**
+   * 見ている人へ、読み直せと伝える。
+   *
+   * **閉じた相手へ書かない。**見ている人が頁を閉じた直後は、こちらの
+   * `#listeners` から外れる前に書き込みが来ることがある（閉じた合図は
+   * 後から届く）。閉じた先へ書くと `ERR_STREAM_DESTROYED` が拾い手なしで
+   * 上がり、**画面のプロセスごと落ちる。**受け手も渡して、書けなかったことは
+   * そのまま流す（見ている人が居ないだけなので、言うことは無い）。
+   */
   notify(): void {
-    for (const res of this.#listeners) res.write('data: change\n\n');
+    for (const res of this.#listeners) {
+      if (res.writableEnded || res.destroyed) { this.#listeners.delete(res); continue; }
+      res.write('data: change\n\n', () => undefined);
+    }
   }
 
   #startWatching(): void {
     try {
-      this.#watcher = watch(this.#opts.root, { recursive: true }, (_e, name) => {
+      const at = watchablePath(this.#opts.root);
+      this.#watcher = watch(at, { recursive: true }, (_e, name) => {
         // 中身と関係ない場所は無視する。保存のたびに読み直されると鬱陶しい。
         if (typeof name === 'string' && /(^|[\\/])(\.git|node_modules)([\\/]|$)/.test(name)) return;
         // 保存は何度も起きる。まとめて一度だけ知らせる。
         if (this.#timer) clearTimeout(this.#timer);
         this.#timer = setTimeout(() => this.notify(), 80);
         this.#timer.unref?.();
+      });
+      /*
+       * **見張りが後から音を上げても、落ちない。**
+       *
+       * 見張っているフォルダが消えると、Windows では後から `error` が来る
+       * （`EPERM`）。受け手が無いと拾い手なしの例外になり、**配る口ごと
+       * 落ちる。**見張れなくなっただけなので、配ることは続ける。
+       */
+      this.#watching = at;
+      this.#watcher.on('error', () => {
+        this.#watcher?.close();
+        this.#watcher = undefined;
+        this.#watching = undefined;
       });
     } catch {
       // 見張れない場所（一部の環境）でも、配ることはできる。

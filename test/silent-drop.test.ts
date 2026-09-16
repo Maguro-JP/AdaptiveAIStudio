@@ -70,6 +70,61 @@ describe('溜まりものを落としたら、そう言う', () => {
     assert.equal(saved.dropped, q.dropped, '保存に残していない');
   });
 
+  test('**落とした数は、読み直しても残る（次の保存で消さない）**', async () => {
+    // 保存に残すところまでは直していたが、**読む側が見ていなかった。**
+    // 立ち上げ直すと 0 に戻り、次の保存でその 0 を書き込むので、
+    // 残していた数まで消える。往復で見る。
+    const { ProposalQueue, MAX_ITEMS } = await import('../src/agent/proposals.ts');
+    const { readFile } = await import('node:fs/promises');
+    const dir = await tempDir('aas-drop-round-');
+    const path = join(dir, 'proposals.json');
+    const first = new ProposalQueue(path);
+    for (let i = 0; i < MAX_ITEMS + 30; i += 1) {
+      first.add({ title: `提案${i}`, rationale: 'そう見えた', evidence: [], suggestedAction: '直す', kind: 'bug', fingerprint: `f${i}` });
+    }
+    const dropped = first.dropped;
+    assert.ok(dropped > 0, `落としていない: ${dropped}`);
+    await first.save();
+
+    // 立ち上げ直したのと同じ形。
+    const again = new ProposalQueue(path);
+    await again.load();
+    assert.equal(again.dropped, dropped, '読み直しで落とした数が消えている');
+
+    // そのまま保存しても、消さない。
+    await again.save();
+    const saved = JSON.parse(await readFile(path, 'utf8')) as { dropped?: number };
+    assert.equal(saved.dropped, dropped, '次の保存で上書きして消している');
+  });
+
+  test('落とした数は、画面まで届く', async () => {
+    // 数えて・保存して・読み直しても、出す道が無ければ人には見えない。
+    const { ProposalQueue, MAX_ITEMS } = await import('../src/agent/proposals.ts');
+    const { UiServer } = await import('../src/ui/server.ts');
+    const { DEFAULT_CONFIG } = await import('../src/config.ts');
+    const dir = await tempDir('aas-drop-ui-');
+    const state = join(dir, 'state');
+    await mkdir(state, { recursive: true });
+    const q = new ProposalQueue(join(state, 'proposals.json'));
+    for (let i = 0; i < MAX_ITEMS + 5; i += 1) {
+      q.add({ title: `提案${i}`, rationale: 'r', evidence: [], suggestedAction: 'a', kind: 'bug', fingerprint: `g${i}` });
+    }
+    await q.save();
+    const prev = process.env.AAS_STATE_DIR;
+    process.env.AAS_STATE_DIR = state;
+    const server = new UiServer({ port: 0, config: { ...DEFAULT_CONFIG, agent: { root: dir } } as never });
+    try {
+      const base = (await server.start()).replace(/\/$/, '');
+      const r = await fetch(`${base}/api/proposals`);
+      assert.equal(r.status, 200);
+      const j = await r.json() as { dropped?: number };
+      assert.equal(j.dropped, q.dropped, '落とした数を画面へ出していない');
+    } finally {
+      await server.stop();
+      if (prev === undefined) delete process.env.AAS_STATE_DIR; else process.env.AAS_STATE_DIR = prev;
+    }
+  });
+
   test('記憶を刈ったら、何件片づけたかを言う', async () => {
     const { Memory } = await import('../src/memory/memory.ts');
     const m = new Memory();

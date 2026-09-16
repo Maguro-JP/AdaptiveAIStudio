@@ -13,24 +13,11 @@
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const testDir = join(root, 'test');
-
-const filters = process.argv.slice(2).filter((a) => !a.startsWith('-'));
-const files = readdirSync(testDir)
-  .filter((f) => f.endsWith('.test.ts'))
-  .filter((f) => filters.length === 0 || filters.some((q) => f.includes(q)))
-  .sort()
-  // 殻に頼らず、こちらで並べて渡す。
-  .map((f) => join('test', f));
-
-if (files.length === 0) {
-  console.error(filters.length ? `該当する試験がありません: ${filters.join(', ')}` : '試験が1つもありません');
-  process.exit(1);
-}
 
 /**
  * 型を剥がす指定が要るかどうか。
@@ -44,70 +31,127 @@ function needsStripFlag(version) {
   return true;
 }
 
-const args = [
-  '--no-warnings',
-  ...(needsStripFlag(process.versions.node) ? ['--experimental-strip-types'] : []),
-  // 画面の JS を「まとまり」として読めるか確かめるのに要る。
-  // node --check ではモジュール固有の誤りを見落とす。
-  '--experimental-vm-modules',
-  '--test',
-  ...files,
-];
 
 /**
- * 試験が、作業コピーの設定を書き換えていないか。
+ * 落ちた試験の名前を拾う。
  *
- * AAS_CONFIG を立て忘れた試験は、走らせた場所の `aas.config.json`、
- * つまり**開発中の設定そのもの**に書き込む。実際に起き、画面が使ってもいない
- * モデル名を出し続けた。落ちないので、出力を見ていても気づけない。
- */
-const watched = join(root, 'aas.config.json');
-const before = existsSync(watched) ? readFileSync(watched, 'utf8') : null;
-
-/*
- * 落ちた試験の名前を、最後にまとめて出す。
- *
- * **一度だけ落ちて、名前が分からなかった。**出力は数百行あり、流し見では
+ * **一度だけ落ちて、名前が分からなかった。**出力は数千行あり、流し見では
  * `not ok` を拾えない。揺れているものは滅多に落ちないので、落ちた回の記録が
  * 取れないと、次に落ちるまで何も分からない。
  *
- * 出力はそのまま流す（見ている人の見え方は変えない）。拾うだけ足す。
+ * **診断の塊（`---` から `...`）の中は読まない。**落ちた理由の中に、子として
+ * 走らせた試験の出力がそのまま入ることがある（`test/installed-env.test.ts` は
+ * 子の TAP を assert の言葉に入れる）。その中の `not ok` を拾うと、**落ちて
+ * いない試験の名前を報告する。**名前を頼りに探しに行くので、そこで丸ごと
+ * 時間を失う。
  */
-const failed = [];
-const outer = [];
-let rest = '';
-const collect = (chunk) => {
-  const text = rest + chunk.toString('utf8');
-  const lines = text.split('\n');
-  rest = lines.pop() ?? '';
-  for (const line of lines) {
+export function failedNames(text) {
+  const inner = [];
+  const outer = [];
+  let block;
+  for (const line of text.split('\n')) {
+    if (block !== undefined) {
+      // 開いたときと同じ字下げの `...` で閉じる。
+      if (line === `${block}...`) block = undefined;
+      continue;
+    }
+    const opens = /^(\s*)---\s*$/.exec(line);
+    if (opens) { block = opens[1]; continue; }
     const hit = /^(\s*)not ok \d+ - (.+)$/.exec(line);
     if (!hit) continue;
-    // **束ね（suite）と中の試験を、二重に数えない。**
-    // 束ねは字下げが浅い側に出る（`not ok 40 - 一覧に上限を置く`）。
+    // **suite と中の試験を、二重に数えない。**
+    // suite は字下げが浅い側に出る（`not ok 40 - 一覧に上限を置く`）。
     // 「1 subtest failed」は次の行にあるので、行だけ見ても分からない。
     // 字下げのある方（中の試験）だけを拾い、一つも無ければ浅い方を拾う。
-    (hit[1].length > 0 ? failed : outer).push(hit[2].trim());
+    (hit[1].length > 0 ? inner : outer).push(hit[2].trim());
   }
-};
+  return inner.length > 0 ? inner : outer;
+}
 
-const child = spawn(process.execPath, args, { cwd: root, stdio: ['inherit', 'pipe', 'inherit'] });
-child.stdout.on('data', (c) => { process.stdout.write(c); collect(c); });
-child.on('error', (e) => { console.error(e.message); process.exit(1); });
-child.on('close', (code, signal) => {
-  const names = failed.length > 0 ? failed : outer;
-  if (names.length > 0) {
-    console.error(`\n落ちた試験 ${names.length} 件:`);
-    for (const name of names) console.error(`  - ${name}`);
-  }
-  const after = existsSync(watched) ? readFileSync(watched, 'utf8') : null;
-  if (after !== before) {
-    console.error('\n試験が作業コピーの設定を書き換えました: aas.config.json');
-    console.error(before === null
-      ? '  無かったものが作られています。'
-      : '  中身が変わっています。');
-    console.error('  設定を書く試験は、先に AAS_CONFIG を仮の場所へ逃がしてください。');
+/** 走らせる。落ちたら、そのまま終わりの符号にする。 */
+function main() {
+  const filters = process.argv.slice(2).filter((a) => !a.startsWith('-'));
+  const files = readdirSync(testDir)
+    .filter((f) => f.endsWith('.test.ts'))
+    .filter((f) => filters.length === 0 || filters.some((q) => f.includes(q)))
+    .sort()
+    // 殻に頼らず、こちらで並べて渡す。
+    .map((f) => join('test', f));
+
+  if (files.length === 0) {
+    console.error(filters.length ? `該当する試験がありません: ${filters.join(', ')}` : '試験が1つもありません');
     process.exit(1);
   }
-  process.exit(code ?? (signal ? 1 : 0));
-});
+
+  const args = [
+    '--no-warnings',
+    ...(needsStripFlag(process.versions.node) ? ['--experimental-strip-types'] : []),
+    // 画面の JS を「まとまり」として読めるか確かめるのに要る。
+    // node --check ではモジュール固有の誤りを見落とす。
+    '--experimental-vm-modules',
+    '--test',
+    ...files,
+  ];
+
+  /**
+   * 試験が、作業コピーの設定を書き換えていないか。
+   *
+   * AAS_CONFIG を立て忘れた試験は、走らせた場所の `aas.config.json`、
+   * つまり**開発中の設定そのもの**に書き込む。実際に起き、画面が使ってもいない
+   * モデル名を出し続けた。落ちないので、出力を見ていても気づけない。
+   */
+  const watched = join(root, 'aas.config.json');
+  const before = existsSync(watched) ? readFileSync(watched, 'utf8') : null;
+
+
+  /*
+   * **走らせる側の env で、結果を変えない。**
+   *
+   * `AAS_HOME` や `AAS_CONFIG` が外から立っていると、仮のフォルダを作って
+   * 確かめるテストが**そちらを見に行く**。使う人の機械ではインストーラの入口が
+   * env を立てるので、`selftest` から回したときだけ「壊れていないのに NG」が出た
+   * （実測: 設定・doctor・実走で 5 件）。**NG を信じてもらえなくなるのが、
+   * いちばん高くつく。**
+   *
+   * テストが見たいのはコードなので、ここで消す。入れた機械の env でも通ることは、
+   * `test/installed-env.test.ts` が**わざと立てて**確かめる（一箇所に寄せる）。
+   */
+  const AAS_ENV = [
+    'AAS_HOME', 'AAS_CONFIG', 'AAS_STATE_DIR', 'AAS_BIN_DIR', 'AAS_MODELS_DIR',
+    'AAS_REPORT_DIR', 'AAS_UI_PORT',
+  ];
+  const env = { ...process.env };
+  for (const key of AAS_ENV) delete env[key];
+
+  const child = spawn(process.execPath, args, { cwd: root, env, stdio: ['inherit', 'pipe', 'inherit'] });
+  // 出力はそのまま流す（見ている人の見え方は変えない）。溜めておいて、終わりに読む。
+  let said = '';
+  child.stdout.on('data', (c) => { process.stdout.write(c); said += c.toString('utf8'); });
+  child.on('error', (e) => { console.error(e.message); process.exit(1); });
+  child.on('close', (code, signal) => {
+    const names = failedNames(said);
+    if (names.length > 0) {
+      console.error(`\n落ちた試験 ${names.length} 件:`);
+      for (const name of names) console.error(`  - ${name}`);
+    }
+    const after = existsSync(watched) ? readFileSync(watched, 'utf8') : null;
+    if (after !== before) {
+      console.error('\n試験が作業コピーの設定を書き換えました: aas.config.json');
+      console.error(before === null
+        ? '  無かったものが作られています。'
+        : '  中身が変わっています。');
+      console.error('  設定を書く試験は、先に AAS_CONFIG を仮の場所へ逃がしてください。');
+      process.exit(1);
+    }
+    process.exit(code ?? (signal ? 1 : 0));
+  });
+}
+
+/*
+ * 走らせるのは、直に呼ばれたときだけ。名前の拾い方は試験から読むので、
+ * 読み込んだだけで走ってはいけない（読み込んだ側の argv で `--test` を
+ * 立て直して、試験の中で試験が走る）。
+ * argv[1] は Z:\...\run-tests.mjs（円記号・ドライブ文字）、
+ * import.meta.url は file:///... なので、URL にそろえてから比べる。
+ */
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

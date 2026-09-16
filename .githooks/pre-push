@@ -35,5 +35,14 @@ if [ "$pushing_wip" = "1" ]; then
   exit 0
 fi
 
+# git がフックへ渡す env を、確かめへ持ち込まない。
+#
+# git は pre-push に GIT_DIR・GIT_INDEX_FILE などを渡す。継いだまま試験を
+# 回すと、一時の repository を作る試験が**走らせている repository** を
+# 触りにいって落ちる。手で回すと通り、フックからだけ 21 件落ちた。
+# **確かめの側が嘘をつくと、確かめを迂回する癖がつく。**
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_QUARANTINE_PATH
+unset GIT_REFLOG_ACTION GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+
 echo "== push の手前で確かめます（型検査・検査・画面）"
 node scripts/check.mjs

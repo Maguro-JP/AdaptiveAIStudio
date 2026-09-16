@@ -105,3 +105,31 @@ describe('横の一覧から作る', () => {
     assert.equal(await exists(join(work, '..', 'escape.txt')), false);
   });
 });
+
+/**
+ * 作業場を変えたあと、前の場所で訊かれても赤い字を出さない。
+ *
+ * 画面は開いている場所（`filesAt`）を持っている。作業場を変えるとその道は
+ * 新しい作業場の外になるので、ここで 400 を返していた。画面には赤い字が出て、
+ * 一覧は前のまま。**変えたのに変わっていないように見える。**
+ * 根の一覧を出すだけなので、外を見せることにはならない。
+ */
+describe('前の作業場の中の道で訊かれたら、根を出す', () => {
+  test('**外を指す道でも、根の一覧を 200 で返す**', async () => {
+    await mkdir(join(work, 'inside'), { recursive: true });
+    const r = await fetch(`${base}/api/files?path=..%2F..%2Fetc`);
+    const body = await r.json() as { root: string; path: string; entries: { name: string }[] };
+    assert.equal(r.status, 200, JSON.stringify(body));
+    assert.equal(body.path, '', '外の道をそのまま名乗っている');
+    // **外の中身を出していないこと。**根の中にあるものだけ。
+    assert.ok(body.entries.some((e) => e.name === 'inside'), JSON.stringify(body.entries));
+    assert.ok(!body.entries.some((e) => e.name === 'passwd'), '外を出している');
+  });
+
+  test('根で訊けば、これまでどおり根の一覧（対）', async () => {
+    const r = await fetch(`${base}/api/files?path=`);
+    const body = await r.json() as { path: string };
+    assert.equal(r.status, 200, JSON.stringify(body));
+    assert.equal(body.path, '');
+  });
+});

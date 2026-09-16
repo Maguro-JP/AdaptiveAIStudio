@@ -20,7 +20,9 @@ import { formatChecks, summaryLine, type Check, type Level } from './doctor-view
 import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
+import { spawn } from 'node:child_process';
 import { installRoot, isPortable, productRoot, defaultWorkRoot, aasHome, asciiModelsDir } from '../core/home.ts';
+import { how } from './how.ts';
 import { canRun } from '../core/which.ts';
 import { saveReport, tellWhereItWent } from './report-file.ts';
 import { deepestUnder, judgeRoom, WINDOWS_MAX_PATH } from '../core/pathroom.ts';
@@ -75,16 +77,6 @@ add('Node.js', nodeOk ? 'ok' : 'bad', `v${process.versions.node}`,
 
 step('設定を読みます');
 
-/**
- * 打つ一手の書き方。**無いものを打てと言わない。**
- *
- * bundle には npm が無い。入口（AdaptiveAIStudio.cmd）が package.json を
- * そのまま読んで同じ仕事を動かすので、呼び方だけが違う。
- */
-function how(task: string, args = ''): string {
-  if (isPortable()) return `AdaptiveAIStudio.cmd ${task}${args ? ` ${args}` : ''}`;
-  return `npm run ${task}${args ? ` -- ${args}` : ''}`;
-}
 
 /*
  * **ここで死なない。**設定が壊れていると `loadConfig` は投げる。doctor は
@@ -242,13 +234,39 @@ if (escaped) {
 
 /* ---------- llama-server ---------- */
 
+/** 一度だけ起こして、言ったことを返す。起こせなければ、その理由を返す。 */
+function runOnce(command: string, args: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    let text = '';
+    const child = spawn(command, args);
+    child.stdout?.on('data', (b: Buffer) => { text += b.toString(); });
+    child.stderr?.on('data', (b: Buffer) => { text += b.toString(); });
+    child.on('error', (e) => resolve(e.message));
+    child.on('close', () => resolve(text));
+  });
+}
+
 step('llama-server を探します');
 
 // 借り物ではなく自前で持てているか。ここが空だと、
 // 誰かが入れたものに相乗りしている状態になる。
 const llamaPath = await findInstalled();
 if (llamaPath) {
-  add('llama-server', 'ok', llamaPath);
+  /*
+   * **在るかどうかでは決めない。一度起こして確かめる。**
+   *
+   * ここは `stat` して道を返すだけだった（`findInstalled`）。0 バイトで実行権の
+   * 無いファイルでも `ok` になり、締めは「動かせます」。実際に起こすと
+   * `Permission denied` で終了コード 126。**壊れているのに緑**なので、
+   * 直しに行く先がどこにも出ない。selftest は同じ場所で `--version` を
+   * 走らせて決めているのに、doctor だけが見ていなかった。
+   */
+  const said = await runOnce(llamaPath, ['--version']);
+  if (/version/i.test(said)) add('llama-server', 'ok', `${llamaPath}（${said.trim().split('\n')[0]}）`);
+  else {
+    add('llama-server', 'bad', `在りますが、動きません: ${llamaPath}`,
+      `${said.trim().slice(0, 200)}\n\`${how('llama')}\` で取り直せます。`);
+  }
 } else if (config.runtime?.kind === 'llamacpp') {
   add('llama-server', 'bad', 'まだ用意していません',
     `\`${how('llama')}\` で取ってきます。\n`

@@ -14,7 +14,9 @@
  */
 import { Priority } from '../providers/contract.ts';
 import { findCodeTool, findSymbolTool } from '../agent/tools/find.ts';
-import { listServicesTool, connectServiceTool, disconnectServiceTool } from '../agent/tools/services.ts';
+import {
+  listServicesTool, createConnectServiceTool, createDisconnectServiceTool, type ServiceHooks,
+} from '../agent/tools/services.ts';
 import { defaultWorkRoot } from './home.ts';
 import { isWriteTool } from '../agent/tools/write-kind.ts';
 import { resolve, join } from 'node:path';
@@ -32,7 +34,7 @@ import { createDeliberateTool } from '../agent/tools/deliberate.ts';
 import { buildInspector } from './inspector-setup.ts';
 import { startMcpServers } from './mcp-setup.ts';
 import { loadJournals, type Journals } from './journals.ts';
-import type { McpClient } from '../mcp/client.ts';
+import { McpClient, type McpServerSpec } from '../mcp/client.ts';
 import { collectTools } from '../mcp/tools.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall, betterDetail } from '../memory/memory.ts';
@@ -51,7 +53,7 @@ import { readFile as readJson, writeFile as writeJson, mkdir } from 'node:fs/pro
 import { RoleRegistry } from '../roles/registry.ts';
 import type { Tool, ApprovalRequest, ApprovalAnswer } from '../agent/tools/types.ts';
 import { toolsFor } from '../roles/registry.ts';
-import { buildSystemPrompt } from '../roles/role.ts';
+import { buildSystemPrompt, type Role } from '../roles/role.ts';
 import { looksLikeChat } from './intent.ts';
 import { decompose, toWorkItems, type WorkPlan } from '../agent/pm.ts';
 import { findNewerFor, describeNewer } from '../runtime/model-updates.ts';
@@ -232,6 +234,18 @@ export type PlanEvent =
 export type ThinkEvent =
   | { type: 'chose'; modeId: string; codename: string; name: string; roleCodename: string; reason: string; isDuty: boolean }
   | { type: 'noFinding'; codename: string }
+  /**
+   * 今回は考えなかった。**理由を捨てない。**
+   *
+   * ここまで、断るときは黙って `false` を返していた。理由（予算切れ・間合い・
+   * モデルが無い）はその場に在るのに、一つも渡していない。押した人からは
+   * 「押しても何も起きない」としか見えず、壊れているのか効いているのかも
+   * 分からないので、何度も押すことになる。
+   *
+   * **見せるかどうかは、呼ぶ側が決める。**見回り（勝手に動く分）は黙ったまま、
+   * 押されたときだけ出す。
+   */
+  | { type: 'declined'; reason: string }
   | { type: 'proposal'; proposal: Proposal; codename: string };
 
 export interface SessionOptions {
@@ -316,6 +330,15 @@ export class Session {
   readonly toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[]; mcp: Tool[] };
   /** 外の道具の繋がり具合。画面と doctor に見せるために持つ。 */
   readonly mcpClients: readonly McpClient[];
+  /**
+   * 外のツールを、**いま動いているこのセッションに**繋ぐ・外す口。
+   *
+   * 画面の口（`/api/mcp/connect`）はここまで、設定を書いてから
+   * **手が空いているときだけ**セッションを畳んでいた。作業中は畳まないので、
+   * 繋いだツールはそのセッションの間ずっと立ち上がらず、返事にも一言も無い。
+   * 畳まずに足せるようにする。
+   */
+  readonly services: ServiceHooks;
   readonly #opts: SessionOptions;
   readonly #prefetch: Prefetcher;
   /** ハーネスの規則へ「いま何を頼まれているか」を渡すための箱。 */
@@ -361,7 +384,9 @@ export class Session {
     harness: Harness;
     toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[]; mcp: Tool[] };
     mcpClients: McpClient[];
+    services: ServiceHooks;
   }) {
+    this.services = init.services;
     this.config = init.config;
     this.modelReason = init.modelReason;
     this.root = init.root;
@@ -443,6 +468,42 @@ export class Session {
     let refresh = (): void => { /* ツールの入れ物が出来るまでは、何もしない */ };
     const mcpClients = await startMcpServers(config, log, () => refresh());
 
+    /*
+     * 繋ぐ・外すを、**いま動いている相手の一覧にも効かせる。**
+     *
+     * ここまで、`connect_service` / `disconnect_service` は設定ファイルを
+     * 書き換えるだけだった。この一覧は `Session.create` のときに作ったきり
+     * 作り直さないので、**外してもツールは呼べたまま**、**繋いでも次の依頼では
+     * 使えない**。それでいて「次の依頼から使えます」「次の依頼からは
+     * 出てきません」と言っていた。動かして確かめた。
+     */
+    const serviceHooks: Required<ServiceHooks> = {
+      onConnected: async (id: string, spec: McpServerSpec): Promise<boolean> => {
+        if (mcpClients.some((c) => c.name === id)) return true;
+        const client = new McpClient(id, spec);
+        mcpClients.push(client);
+        const up = await client.start().catch(() => false);
+        if (!up) {
+          // 立たなかったものを一覧に残さない（ツールは出ないが、外せなくなる）。
+          const at = mcpClients.indexOf(client);
+          if (at >= 0) mcpClients.splice(at, 1);
+          log('warn', `外のツールに繋がりませんでした: ${id} — ${client.failure ?? '理由は不明'}`);
+          return false;
+        }
+        log('info', `外のツールに繋がりました: ${id}（${client.tools.length} 件）`);
+        refresh();
+        return true;
+      },
+      onDisconnected: (id: string): boolean => {
+        const at = mcpClients.findIndex((c) => c.name === id);
+        if (at < 0) return false;
+        mcpClients[at]!.stop();
+        mcpClients.splice(at, 1);
+        refresh();
+        return true;
+      },
+    };
+
     // 権限は「配らない」ことで守る。禁じる文言ではなく、手段の有無で決める。
     const netCfg = config.network ?? {};
 
@@ -469,7 +530,8 @@ export class Session {
       // 繋ぐ・外すも、ここに置く。**外の道具の話は、外の道具の側で完結させる。**
       // 繋ぐのは承認を通す（協議は自動では通らない）。
       mcp: wrap([
-        listServicesTool, connectServiceTool, disconnectServiceTool,
+        listServicesTool,
+        createConnectServiceTool(serviceHooks), createDisconnectServiceTool(serviceHooks),
         ...collectTools(mcpClients, { inspector, timeoutMs: config.mcp?.timeoutMs }),
       ]),
     };
@@ -477,7 +539,8 @@ export class Session {
     // 繋がったら、そのぶんを入れ直す。**次のターンから使える。**
     refresh = () => {
       toolPool.mcp = wrap([
-        listServicesTool, connectServiceTool, disconnectServiceTool,
+        listServicesTool,
+        createConnectServiceTool(serviceHooks), createDisconnectServiceTool(serviceHooks),
         ...collectTools(mcpClients, { inspector, timeoutMs: config.mcp?.timeoutMs }),
       ]);
     };
@@ -506,6 +569,7 @@ export class Session {
       config, root, candidates, modelReason: note, memory,
       roles: new RoleRegistry(config.roles ?? [], (t) => log('warn', t)),
       orchestrator, pilot, prefetch, opts, holder, forum, toolPool, harness, mcpClients,
+      services: serviceHooks,
       proposals, idle, duties,
     });
     return session;
@@ -562,6 +626,16 @@ export class Session {
     this.#holder.instruction = request;
     // 依頼が変われば協議もやり直し。前回通した話で今回の変更を通させない。
     this.#forum.clear();
+    /*
+     * **依頼ごとに履歴を切る。ここも送り口と同じ。**
+     *
+     * ハーネスの規則は「1つの依頼の中での積み重ね」を見る。送り口では
+     * 切っていたのに、こちらでは呼んでいなかった。切らないと前の依頼で
+     * 書いたファイルが今回の分として数えられ、**一文字も書いていない依頼が
+     * 上限（maxFilesPerTask）で最初の一回から止まる。**
+     * 同じ内容の書き直しを止める規則も、前の依頼の分で誤爆する。
+     */
+    this.#harness.beginTask();
 
     try {
       const root = this.root;
@@ -613,9 +687,25 @@ export class Session {
       const plan = step.value;
       yield { type: 'planned', plan };
 
+      /*
+       * **段取りの担当にも、こちらの決まりを渡す。**
+       *
+       * ここは役職の文だけを渡していた。送り口（send）が渡している
+       * リポジトリの決まり・二度としないこと・作業場の様子・repo map が、
+       * 段取りからの担当には**一つも届いていなかった。**
+       * 「push では CI を回さない」も「C: 直下にフォルダを作らない」も、
+       * 段取りで書かせる限り一度も目に入らない。
+       *
+       * 組むのは一度だけ（repo map と様子を人数ぶん作り直さない）。役職の文は
+       * **後ろに置く。**前を全員で同じにしておくと、相手が頭から計算し
+       * 直さずに済む（役職ごとに頭が変わると、そのぶん待ち時間になる）。
+       */
+      const shared = await this.#system();
+      const systemFor = (role: Role): string => `${shared}\n\n${buildSystemPrompt(role)}`;
+
       const team = new Team(this.orchestrator, {
         lanes: this.lanes,
-        system: buildSystemPrompt(this.roles.get(fallbackRoleId)!),
+        system: systemFor(this.roles.get(fallbackRoleId)!),
         tools: toolsFor(this.roles.get(fallbackRoleId)!, this.toolPool),
         root,
         maxTurns: this.config.agent?.maxTurns,
@@ -628,7 +718,7 @@ export class Session {
         assign: (roleId) => {
           const role = this.roles.get(roleId);
           if (!role) return undefined;
-          return { system: buildSystemPrompt(role), tools: toolsFor(role, this.toolPool) };
+          return { system: systemFor(role), tools: toolsFor(role, this.toolPool) };
         },
       });
 
@@ -716,9 +806,13 @@ export class Session {
       });
       this.#gradeRecall(verified === 'passed' ? 'passed' : verified === 'failed' ? 'failed' : 'notRun');
       this.#compactMemory();
+      // 止めた規則が、通り道になったのか邪魔になったのかは、結末で決まる。
+      this.#harness.endTask(report.verdict === 'accepted' ? 'completed' : 'failed');
+      await this.#harness.metrics?.save();
       this.markChanged();
       return report;
     } catch (e) {
+      this.#harness.endTask('failed');
       yield { type: 'log', level: 'error', text: (e as Error).message };
       return undefined;
     } finally {
@@ -739,11 +833,19 @@ export class Session {
    * 勝手に手を動かされるのと、勝手に考えてくれるのは、別の話。
    */
   async *think(): AsyncGenerator<ThinkEvent, boolean> {
-    // 考えごとは黙って諦める。モデルが無いことは画面が既に出している。
-    // ここで毎周言うと、同じ一行で記録が埋まる。
-    if (this.noModel) return false;
-    if (this.config.initiative?.enabled === false) return false;
-    if (this.#running) return false;
+    // **断る理由は必ず言う。**黙るかどうかは、呼ぶ側が決める（見回りは黙る）。
+    if (this.noModel) {
+      yield { type: 'declined', reason: `使えるモデルがありません: ${this.modelReason}` };
+      return false;
+    }
+    if (this.config.initiative?.enabled === false) {
+      yield { type: 'declined', reason: '設定で、暇なときの考えごとを止めています（initiative.enabled）' };
+      return false;
+    }
+    if (this.#running) {
+      yield { type: 'declined', reason: 'いま別の作業をしています' };
+      return false;
+    }
 
     const now = Date.now();
     const due = this.duties.due(now).map((s) => ({
@@ -755,7 +857,11 @@ export class Session {
       { lastChangeAt: this.#lastChangeAt, openProposals: this.proposals.open().length, now },
       due,
     );
-    if (!decision.mode) return false;
+    if (!decision.mode) {
+      // 割り当ての側は理由を組み立てている。**ここで捨てない。**
+      yield { type: 'declined', reason: decision.reason ?? '今回は見送りました' };
+      return false;
+    }
 
     const mode = decision.mode;
     const role = this.roles.get(MODE_ROLE[mode.id] ?? 'scout') ?? this.roles.get('scout')!;
@@ -1018,6 +1124,15 @@ export class Session {
     let answerChars = 0;
     /** 答えたモデル。途中で切り替わったら、その先を覚える。 */
     let modelUsed = this.candidates[0] ?? '';
+    /*
+     * **速さを測り始める時刻。途中でモデルが変わったら、そこから測り直す。**
+     *
+     * 最初の候補が落ちるまでの時間（やり直しの待ちも入る）を、答えた側の
+     * 秒数に混ぜていた。混ぜたぶん遅く見えるので、**答えたモデルが遅いことに
+     * される。**その数字は次のモデル選びに使われる（`autopilot.record`）ので、
+     * 一度混ぜると選び方まで狂う。
+     */
+    let measuredFrom = started;
     // 巻き戻すかどうか（従来の意味）。確かめて落ちたときだけ倒す。
     let keep = true;
     // 実際に確かめたか、どうだったか。**確かめていないことを、通ったと言わない。**
@@ -1152,6 +1267,9 @@ export class Session {
             }
             case 'fallback':
               modelUsed = ev.to;
+              // 前のモデルに使った時間と文字を、次のモデルの分として数えない。
+              measuredFrom = Date.now();
+              answerChars = 0;
               yield { type: 'fallback', from: ev.from, to: ev.to, reason: ev.reason };
               break;
             case 'retry':
@@ -1171,13 +1289,22 @@ export class Session {
 
       yield* run(await this.#agent({ chat }));
 
-      // 実測を溜める。次回以降の自動選択がこれで変わる。
-      await this.pilot.autopilot.record({
-        modelId: this.candidates[0]!,
-        success: finishedReason === 'completed',
-        outputTokens: Math.round(answerChars / 3),
-        seconds: (Date.now() - started) / 1000,
-      });
+      /*
+       * 実測を溜める。次回以降の自動選択がこれで変わる。
+       *
+       * **答えたモデルに付ける。**ここは候補の先頭に付けていたので、
+       * 途中で別のモデルへ移った回の成否と速さが、**一度も答えていない
+       * モデルの成績**になっていた。選び方がその数字で決まるので、
+       * 付け先を間違えると、以後ずっと間違った方を選び続ける。
+       */
+      if (modelUsed) {
+        await this.pilot.autopilot.record({
+          modelId: modelUsed,
+          success: finishedReason === 'completed',
+          outputTokens: Math.round(answerChars / 3),
+          seconds: (Date.now() - measuredFrom) / 1000,
+        });
+      }
 
       // 道具が全部弾かれたのに、本文だけが「やりました」になっている形を見逃さない。
       if (finishedReason === 'completed' && failedTools.length > 0 && !wroteSomething) {
@@ -1293,7 +1420,7 @@ export class Session {
         checked,
         ...(chat ? { chat: true } : {}),
         seconds: (Date.now() - started) / 1000,
-        ...speedOf(modelUsed, answerChars, (Date.now() - started) / 1000),
+        ...speedOf(modelUsed, answerChars, (Date.now() - measuredFrom) / 1000),
       };
     } catch (e) {
       // 一度の失敗で対話ごと終わらせない。次の指示は受けられる。
@@ -1303,7 +1430,7 @@ export class Session {
         type: 'settled', reason: 'failed', verified: false, checked,
         ...(chat ? { chat: true } : {}),
         seconds: (Date.now() - started) / 1000, detail: (e as Error).message,
-        ...speedOf(modelUsed, answerChars, (Date.now() - started) / 1000),
+        ...speedOf(modelUsed, answerChars, (Date.now() - measuredFrom) / 1000),
       };
     } finally {
       this.#running = undefined;

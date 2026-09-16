@@ -16,6 +16,7 @@ import {
   InProcRuntime, probeBackend, describeBackend, describeSpeed, type LlamaLib,
 } from '../src/runtime/inproc.ts';
 import { InProcHost, hostArgs } from '../src/runtime/inproc-host-client.ts';
+import { until } from './until.ts';
 
 const GB = 1024 ** 3;
 const here = dirname(fileURLToPath(import.meta.url));
@@ -363,9 +364,77 @@ describe('別のプロセスでも backend が分かる', () => {
       assert.equal(b.gpu, 'cuda');
       assert.equal(b.vramBytes, 8 * GB);
       assert.deepEqual(b.devices, ['NVIDIA GeForce RTX 4060']);
-      assert.ok(said.some((l) => l.startsWith('GPU で読みます: CUDA')), said.join(' | '));
+      /*
+       * **別の道から届くものを、待たずに見ない。**
+       *
+       * 返事は HTTP、記録は子の stdout。別々の道なので、返事が返った時点で
+       * 記録が届いているとは限らない。ここで即座に見ていたので、
+       * 機械が混んでいるときだけ `said` が空で落ちた（5 回に 1 回）。
+       * 届くまで見る。届かなければ上限で落ちる（黙って通さない）。
+       */
+      try {
+        await until(() => said.some((l) => l.startsWith('GPU で読みます: CUDA')),
+          'GPU で読みます の行が届く', { timeoutMs: 8000 });
+      } catch {
+        assert.fail(`子の記録が届かない: ${said.join(' | ')}`);
+      }
     } finally {
       await host.shutdown().catch(() => undefined);
     }
+  });
+});
+
+/**
+ * 名指しした GPU の binary が無いとき、投げずに CPU へ落ちる。
+ *
+ * `auto` なら向こうが黙って CPU へ落ちるが、`cuda` / `vulkan` を名指しすると
+ * binary の無い機械では `NoBinaryFoundError` を投げる。**文はクラス名だけ**で、
+ * 本当の理由は拾った console の行の方に在る。そこを外へ出さずに落ちていたので、
+ * doctor には `NoBinaryFoundError` だけが残り、**見当違いの直し方を出しながら
+ * 「動かせます」と言っていた。**名指しが効かないことは言う。ただしそこで止めない。
+ */
+describe('名指しした GPU が無くても、止まらない', () => {
+  /** 名指し（cuda / vulkan）のときだけ投げる相手。CPU なら普通に返す。 */
+  function pickyLib(): LlamaLib & { asked: unknown[] } {
+    const asked: unknown[] = [];
+    return {
+      asked,
+      getLlama: async (opts: { gpu?: unknown } = {}) => {
+        asked.push(opts.gpu);
+        if (opts.gpu === 'cuda' || opts.gpu === 'vulkan') {
+          console.error('A prebuilt binary was not found');
+          throw Object.assign(new Error('NoBinaryFoundError'), { name: 'NoBinaryFoundError' });
+        }
+        return {
+          getGpuDeviceNames: async () => [],
+          getVramState: async () => ({ total: 0, used: 0, free: 0 }),
+          loadModel: async () => ({ createContext: async () => ({ getSequence: () => ({}), dispose: async () => {} }) }),
+        };
+      },
+      LlamaChatSession: class { setChatHistory() {} async prompt() { return ''; } },
+    } as unknown as LlamaLib & { asked: unknown[] };
+  }
+
+  for (const mode of ['cuda', 'vulkan'] as const) {
+    test(`**${mode} を名指ししても、投げずに CPU で読む**`, async () => {
+      const lib = pickyLib();
+      const { backend } = await probeBackend(lib, mode);
+      assert.equal(backend.gpu, false);
+      assert.equal(backend.reason, 'named-missing', `理由が違う: ${backend.reason}`);
+      // CPU で開き直したことまで見る（開き直していなければ、読む口が無い）。
+      assert.deepEqual(lib.asked, [mode, false], `開き直していない: ${JSON.stringify(lib.asked)}`);
+    });
+  }
+
+  test('**人に見せる言葉が、名指しのことを言っている**', () => {
+    assert.match(describeBackend({ gpu: false, devices: [], vramBytes: 0, reason: 'named-missing' }),
+      /名指し/, '名指しした結果だと分からない');
+  });
+
+  test('off は、これまでどおり投げる側を通さない（対）', async () => {
+    const lib = pickyLib();
+    const { backend } = await probeBackend(lib, 'off');
+    assert.equal(backend.reason, 'off');
+    assert.deepEqual(lib.asked, [false]);
   });
 });

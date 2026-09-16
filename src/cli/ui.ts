@@ -7,6 +7,7 @@ import { loadConfig, ConfigBroken, DEFAULT_CONFIG } from '../config.ts';
 import { UiServer, RESTART_EXIT } from '../ui/server.ts';
 import { openerFor } from '../core/opener.ts';
 import { CannotListen } from '../core/listen.ts';
+import { createStopper } from './stop.ts';
 
 /*
  * **設定が壊れていても、画面は開ける。**
@@ -82,17 +83,11 @@ void server.preload().catch(() => undefined);
 // 抱えたまま止まらないと、閉じたつもりの画面の裏で数GBを掴み続ける。
 // 何を待っていたかは server.stop が言う。
 const STOP_WAIT_MS = 5000;
-let stopping = false;
-const stop = () => {
-  if (stopping) { console.log('  もう一度押されたので、そのまま終わります。'); process.exit(0); }
-  stopping = true;
-  console.log('  止めています…');
-  const giveUp = setTimeout(() => {
-    console.log(`  片づけが ${STOP_WAIT_MS / 1000} 秒で終わらないので、そのまま終わります。`);
-    process.exit(0);
-  }, STOP_WAIT_MS);
-  giveUp.unref?.();
-  void server.stop((line) => console.log(`  ${line}`)).catch(() => undefined).then(() => process.exit(0));
-};
+const stop = createStopper({
+  stop: (log) => server.stop(log),
+  exit: (code) => process.exit(code),
+  log: (line) => console.log(line),
+  waitMs: STOP_WAIT_MS,
+});
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);

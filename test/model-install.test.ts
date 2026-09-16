@@ -401,3 +401,76 @@ describe('こちらの見当が外れても、詰まないこと', () => {
     );
   });
 });
+
+/**
+ * 途中まで取れているものを、取り上げない。
+ *
+ * 数GBの取得は途中で切れる。`.part` を残して続きから取る作りにしてあるのに、
+ * 二通りの形でそれを潰していた。どちらも**取り直しに何十分もかかる回線で
+ * いちばん重い**。
+ *
+ * 1. 416（範囲外＝もう全部ある）で `open(tmp, 'w')` を通っていた。`w` は開いた
+ *    時点で 0 バイトにする。**「すでに全部取れていました」と言いながら消す。**
+ *    そのあと中身の確かめで落ちて、残骸まで消される。
+ * 2. `content-length` を返さない相手（chunked）で `?? 0` にしていたので、
+ *    `total` が `had` になり、取り切っても `written !== total` で
+ *    **「途中で切れました」**と言って `.part` のまま放り出していた。
+ *
+ * ここは**本物の node:http サーバと素の fetch** で確かめる。
+ * 作り話の `fetchImpl` だと、相手の返し方まで真似たことにならない。
+ */
+describe('途中まで取れているものを、取り上げない', () => {
+  /** 決めた形で返す相手を立てる。 */
+  async function serve(body: Buffer, how: 'range-not-satisfiable' | 'partial-no-length') {
+    const { createServer } = await import('node:http');
+    const server = createServer((req, res) => {
+      if (how === 'range-not-satisfiable') {
+        res.writeHead(416, { 'content-range': `bytes */${body.length}` });
+        return res.end();
+      }
+      const from = Number(/bytes=(\d+)-/.exec(req.headers.range ?? '')?.[1] ?? 0);
+      // 長さを言わない（chunked）。**これを返す相手が実際に居る。**
+      res.writeHead(206, {
+        'content-range': `bytes ${from}-${body.length - 1}/${body.length}`,
+        'transfer-encoding': 'chunked',
+      });
+      return res.end(body.subarray(from));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    return { port, close: () => new Promise<void>((r) => server.close(() => r())) };
+  }
+
+  /** URL を直に渡す形。カタログを引かずに、取る所だけを通す。 */
+  const direct = (port: number) => ({
+    ...ENTRY, repo: `http://127.0.0.1:${port}/probe-model.gguf`,
+  });
+
+  test('**416 のとき、取れているものを 0 バイトにしない**', async () => {
+    const body = tinyGguf();
+    const modelsDir = await tempDir('aas-dl416-');
+    // すでに全部取れている `.part`。
+    await writeFile(join(modelsDir, 'probe-model.gguf.part'), body);
+    const s = await serve(body, 'range-not-satisfiable');
+    try {
+      const got = await installModel({ entry: direct(s.port), modelsDir });
+      assert.equal(got.bytes, body.length, `大きさが合わない: ${got.bytes}`);
+      assert.deepEqual((await readdir(modelsDir)).sort(), ['probe-model.gguf'],
+        '取れていたものを失っている');
+      assert.equal((await stat(got.path)).size, body.length);
+    } finally { await s.close(); }
+  });
+
+  test('**長さを言わない相手でも、取り切ったら置く**', async () => {
+    const body = tinyGguf();
+    const modelsDir = await tempDir('aas-dl206-');
+    // 半分まで取れているところから続ける。
+    await writeFile(join(modelsDir, 'probe-model.gguf.part'), body.subarray(0, Math.floor(body.length / 2)));
+    const s = await serve(body, 'partial-no-length');
+    try {
+      const got = await installModel({ entry: direct(s.port), modelsDir });
+      assert.equal(got.bytes, body.length, `途中で切れたことにしている: ${got.bytes}`);
+      assert.deepEqual((await readdir(modelsDir)).sort(), ['probe-model.gguf'], '.part のまま放り出している');
+    } finally { await s.close(); }
+  });
+});

@@ -559,3 +559,97 @@ describe('落とした往復の、触ったファイルを残す', () => {
     assert.doesNotMatch(mark.content, /触ったのは/, `触っていないのに書いている: ${mark.content}`);
   });
 });
+
+/**
+ * 取り分が、**本番の呼び出し口を通って**効いていること。
+ *
+ * `window.ts` は「0.15 では説明が丸ごと落ちて呼び分けができなくなる」と書いて
+ * `TOOL_SHARE` を 0.25 に直したが、**本番で `trimSchemas` を呼ぶのは
+ * `agent/loop.ts` の一箇所だけ**で、そこが 0.15 を明に渡していた。
+ * つまり直した側は誰からも読まれず、既定のコンテキストウィンドウでは**ツール13個すべての説明が
+ * 落ちたまま**だった。run_command の許可コマンドの一覧も、fetch_url の許可先も、
+ * edit_file の使い方も、モデルには一度も届いていない。
+ *
+ * ここは `trimSchemas` を直に呼ばない。**Agent を走らせて、口から出ていったものを
+ * 受け取って数える。**直に呼ぶと、また呼ぶ側だけが古いままになる。
+ */
+describe('ツールの説明が、本番の道でモデルまで届く', () => {
+  /** 本番（`Session.create`）がモデルへ渡すツール一式。 */
+  async function productionTools() {
+    const fs = await import('../src/agent/tools/fs.ts');
+    const find = await import('../src/agent/tools/find.ts');
+    const services = await import('../src/agent/tools/services.ts');
+    const { createRunCommandTool } = await import('../src/agent/tools/shell.ts');
+    const { createFetchUrlTool } = await import('../src/agent/tools/network.ts');
+    const { createDeliberateTool } = await import('../src/agent/tools/deliberate.ts');
+    const { Forum } = await import('../src/harness/deliberation.ts');
+    return [
+      fs.readFileTool, fs.listFilesTool, fs.searchTextTool, find.findCodeTool, find.findSymbolTool,
+      fs.writeFileTool, fs.editFileTool, createDeliberateTool(new Forum()),
+      createRunCommandTool({}), createFetchUrlTool({}),
+      services.listServicesTool, services.createConnectServiceTool(), services.createDisconnectServiceTool(),
+    ];
+  }
+
+  /** Agent を1ターンさせて、口へ実際に出ていったツールの形を返す。 */
+  async function toolsAsSent(contextTokens: number) {
+    const { createServer } = await import('node:http');
+    const { tempDir } = await import('./tmp.ts');
+    const { OpenAiCompatibleProvider } = await import('../src/providers/openai-compatible.ts');
+    const { ProviderRegistry } = await import('../src/core/registry.ts');
+    const { ChatOrchestrator } = await import('../src/core/orchestrator.ts');
+    const { Agent } = await import('../src/agent/loop.ts');
+
+    let sent: { function?: { name?: string; description?: string } }[] = [];
+    const server = createServer((req, res) => {
+      if (req.url?.endsWith('/models')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end('{"data":[{"id":"m"}]}');
+      }
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      return req.on('end', () => {
+        const p = JSON.parse(body || '{}') as { tools?: typeof sent };
+        sent = p.tools ?? [];
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'ok\nTASK_DONE\n' } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
+        res.end('data: [DONE]\n\n');
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const registry = new ProviderRegistry();
+      registry.register(new OpenAiCompatibleProvider({
+        id: 'p', baseUrl: `http://127.0.0.1:${port}/v1`, locality: 'local',
+      }));
+      const agent = new Agent(new ChatOrchestrator(registry), {
+        candidates: ['p:m'], system: 'x', tools: await productionTools(),
+        root: await tempDir('aas-share-'), maxTurns: 1, contextTokens,
+        approve: async () => true,
+      });
+      for await (const _ of agent.run([{ role: 'user', content: 'hi' }], new AbortController().signal)) { /* 流すだけ */ }
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+    return sent;
+  }
+
+  test('**既定のコンテキストウィンドウ（8192）で、どのツールにも説明が付いている**', async () => {
+    const sent = await toolsAsSent(8192);
+    assert.ok(sent.length >= 13, `ツールが届いていない: ${sent.length} 個`);
+    const naked = sent.filter((t) => !(t.function?.description ?? '').length)
+      .map((t) => t.function?.name ?? '?');
+    assert.deepEqual(naked, [], `説明が落ちているツール: ${naked.join(', ')}`);
+  });
+
+  test('run_command の許可コマンドの一覧が、実際に届いている', async () => {
+    // ここが落ちると、モデルは何を打ってよいか知らないまま打つことになる。
+    const sent = await toolsAsSent(8192);
+    const run = sent.find((t) => t.function?.name === 'run_command');
+    assert.ok(run, 'run_command が届いていない');
+    assert.ok((run.function?.description ?? '').length > 40,
+      `説明が短すぎる: ${JSON.stringify(run.function?.description)}`);
+  });
+});

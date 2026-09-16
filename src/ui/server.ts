@@ -53,6 +53,7 @@ import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout, DEFAULT_LAYOUT
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
 import { collectState } from './state.ts';
 import { Attachments, MAX_BYTES } from './attachments.ts';
+import type { McpServerSpec } from '../mcp/client.ts';
 import { expandMentions, mentionBudget } from '../agent/mention.ts';
 import { expandCommand, listCommands } from '../agent/commands.ts';
 import { buildReport } from '../cli/report.ts';
@@ -118,6 +119,8 @@ export const MAX_CLIENT_BACKLOG = 4 * 1024 * 1024;
  * 画面はそこを読まない。**本体が最近の分を持ち、画面はそれを取り直す。**
  */
 export const RECENT_LOGS = 500;
+/** 覚えておく「変更したファイル」の数。画面が作り直されたときに配る分。 */
+export const KEPT_CHANGES = 200;
 
 export interface UiServerOptions {
   /** 立ち上げ直しを頼まれたとき。止めて、RESTART_EXIT で終わる側が持つ。 */
@@ -200,6 +203,16 @@ export class UiServer {
   readonly #clients = new Set<ServerResponse>();
   /** 最近の記録。画面が開き直したときに取り直す分。`RECENT_LOGS` 行まで。 */
   readonly #recentLogs: Array<{ seq: number; level: 'info' | 'warn' | 'error'; text: string; at: string }> = [];
+  /**
+   * 書き換えたファイルの差分。**画面が作り直されたときに取り直す分。**
+   *
+   * 「変更したファイル」のパネルは、差分を DOM とパネルの中の Map にしか持っていなかった。
+   * パネルを一枚出し入れするだけで `render()` が全部を作り直すので、中身が消え、
+   * そのうえ「まだ何も書き換えていません。」と**事実と違うこと**を出す。
+   * 塊ごと・行ごとに戻す道はこのパネルから入るので、直したものに辿り着けなくなる。
+   * 記録のパネルと同じく、本体が持って `/api/changes` で配る。
+   */
+  readonly #changes = new Map<string, { path: string; diff: string; added: number; removed: number; created: boolean }>();
   #logSeq = 0;
   #server?: ReturnType<typeof createServer>;
   /** 点検を回す係。状態（走っている子）はそちらが持つ。 */
@@ -341,6 +354,8 @@ export class UiServer {
   readonly #attachments = new Attachments();
   /** 作っているものを見せる口。操作用とは**別の口**にする。 */
   #preview?: PreviewServer;
+  /** いま配っている作業場。変わったら立て直す。 */
+  #previewRoot?: string;
   #seq = 0;
 
   constructor(opts: UiServerOptions) {
@@ -378,8 +393,22 @@ export class UiServer {
       this.#recentLogs.push(kept);
       if (this.#recentLogs.length > RECENT_LOGS) this.#recentLogs.splice(0, this.#recentLogs.length - RECENT_LOGS);
       event = { ...event, seq, at: kept.at };
-    } else if (event.type === 'session') {
+    } else if (event.type === 'session' || event.type === 'planEvent') {
       const ev = event.event as { type?: string };
+      if (ev.type === 'diff') {
+        const d = ev as unknown as { path: string; diff: string; added: number; removed: number; created?: boolean };
+        const before = this.#changes.get(d.path);
+        this.#changes.set(d.path, {
+          path: d.path, diff: d.diff, added: d.added, removed: d.removed,
+          created: before?.created ?? d.created === true,
+        });
+        // 際限なく持たない。古い方から落とす（Map は入れた順）。
+        while (this.#changes.size > KEPT_CHANGES) {
+          const oldest = this.#changes.keys().next().value;
+          if (oldest === undefined) break;
+          this.#changes.delete(oldest);
+        }
+      }
       if (ev.type === 'log' || ev.type === 'settled' || ev.type === 'finished') {
         void this.#logFile.append(`[session ${ev.type}] ${JSON.stringify(event.event).slice(0, 2000)}`).catch(() => undefined);
       }
@@ -406,7 +435,7 @@ export class UiServer {
     const server = createServer((req, res) => {
       this.#handle(req, res).catch((e: unknown) => {
         // 画面の不具合で本体を落とさない。
-        if (e instanceof BodyTooLarge) return send(res, 413, { error: e.message });
+        if (e instanceof BodyTooLarge) return refuseTooLarge(res, e.message);
         send(res, 500, { error: e instanceof Error ? e.message : String(e) });
       });
     });
@@ -709,6 +738,9 @@ export class UiServer {
       this.broadcast({ type: 'musing', on: true });
       try {
         for await (const event of session.think()) {
+          // 勝手に動く分は、断った理由を出さない。30秒ごとに同じ一行で記録が埋まる。
+          // 押されたときは出す（下の /api/think）。
+          if (event.type === 'declined') continue;
           this.broadcast({ type: 'thinkEvent', event });
         }
       } catch { /* 考えに失敗しても、この場所は止まらない */ }
@@ -806,6 +838,16 @@ export class UiServer {
     const runtime = this.#runtime as { shutdown?: () => Promise<void> } | undefined;
     await timed('モデルを降ろすの', async () => runtime?.shutdown?.());
     this.#runtime = undefined;
+    /*
+     * **配る口も閉じる。**
+     *
+     * ここは閉じていなかった。一度プレビューを開くと、画面を止めても
+     * その口が立ったままになり、**プロセスが終わらない**（同じことを inproc で
+     * 踏んで、すぐ上に書いてある）。試験でも、止めたのに走りが終わらない形で出た。
+     */
+    this.#preview?.stop();
+    this.#preview = undefined;
+    this.#previewRoot = undefined;
     for (const res of this.#clients) { try { res.end(); } catch { /* 切れている */ } }
     this.#clients.clear();
     // 開いたままの繋ぎ（keep-alive）も切る。close() は新しい繋ぎを断るだけで、
@@ -857,8 +899,21 @@ export class UiServer {
     if (path === '/api/preview' && req.method === 'GET') {
       // **作業場の根を知るためだけに、セッションを作らない。**
       const root = this.#workRoot();
+      /*
+       * **作業場を変えたら、配る先も変える。**
+       *
+       * ここは一度立てたものを使い回していた。作業場は後から変えられる
+       * （横の 📂・設定）のに、配っているのは**最初に開いたときの作業場**のまま。
+       * 返事の `root` は新しい方を名乗るので、画面は新しい場所を見ている顔をして、
+       * 中身は前の場所を出す。どちらが本当かが分からない形がいちばん困る。
+       */
+      if (this.#preview && this.#previewRoot !== root) {
+        this.#preview.stop();
+        this.#preview = undefined;
+      }
       if (!this.#preview) {
         this.#preview = new PreviewServer({ root });
+        this.#previewRoot = root;
         await this.#preview.start();
       }
       return send(res, 200, { url: this.#preview.url, root });
@@ -866,19 +921,16 @@ export class UiServer {
 
     if (path === '/api/attach' && req.method === 'POST') {
       const name = url.searchParams.get('name') ?? 'file';
-      const chunks: Buffer[] = [];
-      let total = 0;
-      for await (const chunk of req) {
-        total += (chunk as Buffer).length;
-        // 上限を超えたら、最後まで受け取ってから断らない。読むのをやめる。
-        if (total > MAX_BYTES) {
-          req.destroy();
-          return send(res, 413, { error: `大きすぎます（${MAX_BYTES / 1024 / 1024}MB まで）` });
-        }
-        chunks.push(chunk as Buffer);
+      // 上限を超えたら、溜めるのをやめて読み捨てる（`readWithin`）。
+      // **壊さない。**壊すと断りの文ごと捨てられる。
+      const taken = await readWithin(req, MAX_BYTES);
+      if (taken === 'tooLarge') {
+        return refuseTooLarge(res, `大きすぎます（${MAX_BYTES / 1024 / 1024}MB まで）`);
       }
+      // 途中で切れたものを、全部として置かない（半分のファイルが残る）。
+      if (taken === 'cut') return;
       try {
-        const item = await this.#attachments.add(name, Buffer.concat(chunks));
+        const item = await this.#attachments.add(name, taken);
         return send(res, 200, {
           id: item.id, name: item.name, bytes: item.bytes, kind: item.kind,
         });
@@ -1010,6 +1062,9 @@ export class UiServer {
         due: duties.due(Date.now()).map((d) => d.duty.codename),
         idle: idle.stats(),
         spent: idle.spentThisHour(Date.now()),
+        // **落としたことを、見る所へ出す。**数えて保存までしていたが、
+        // 出す道が無かった。上限で古い提案が消えるのに、人には分からない。
+        dropped: proposals.dropped,
       });
     }
 
@@ -1121,8 +1176,14 @@ export class UiServer {
       this.#thinking = true;
       void (async () => {
         try {
+          // **押されたときは、断った理由も出す。**黙ると、押しても何も起きない。
           for await (const event of session.think()) this.broadcast({ type: 'thinkEvent', event });
-        } catch { /* 考えに失敗しても止まらない */ } finally {
+        } catch (e) {
+          this.broadcast({
+            type: 'thinkEvent',
+            event: { type: 'declined', reason: `考えられませんでした: ${e instanceof Error ? e.message : String(e)}` },
+          });
+        } finally {
           this.#thinking = false;
           this.broadcast({ type: 'stateChanged' });
         }
@@ -1261,7 +1322,16 @@ export class UiServer {
         productRoot: productRoot(),
         home: aasHome(),
         stateDir: stateDir(),
-        modelsDir: modelsDir(),
+        /*
+         * **見ている場所を言う。既定を言わない。**
+         *
+         * ここは `modelsDir()`（AAS_HOME の下の既定）を返していた。設定で
+         * `runtime.modelsDir` を変えていると、画面が言う場所と、読みにいく場所が
+         * 食い違う。言われた場所へ置いた人は、押しても何も出てこない
+         * （**ブラウザで落として置く道**が、これで塞がる）。
+         * 読むのと同じ決め方にする（`/api/models` と同じ）。
+         */
+        modelsDir: this.#opts.config.runtime?.modelsDir ?? modelsDir(),
         binDir: binDir(),
         url: this.#url,
         runtime: this.#opts.config.runtime?.kind ?? '未設定',
@@ -1326,6 +1396,11 @@ export class UiServer {
       // 最近の記録。画面のログのパネルが開いたときに取り直す。`after` より新しい分だけも取れる。
       const after = Number(url.searchParams.get('after') ?? '0');
       return send(res, 200, { lines: this.#recentLogs.filter((l) => l.seq > after) });
+    }
+
+    if (path === '/api/changes' && req.method === 'GET') {
+      // 書き換えたファイル。画面の「変更したファイル」のパネルが、開いたときに取り直す。
+      return send(res, 200, { files: [...this.#changes.values()] });
     }
 
     if (path === '/api/tasks' && req.method === 'GET') {
@@ -1583,8 +1658,19 @@ export class UiServer {
         // 会話を始める前に横の板が一覧を読むので、そこで
         // 「そんな場所は無い」が出る。開いた瞬間に赤が出るのが、いちばん困る。
         await mkdir(root, { recursive: true }).catch(() => { /* 作れないなら listDir が言う */ });
-        const entries = await listDir(root, asked);
-        return send(res, 200, { root, path: asked, entries });
+        /*
+         * **前の作業場の中の道で訊かれたら、根を出す。**
+         *
+         * 画面は開いている場所（`filesAt`）を持っている。作業場を変えると
+         * その道は新しい作業場の外になるので、ここで断っていた。画面には
+         * 赤い字が出て、一覧は前のまま。**変えたのに変わっていないように見える。**
+         * 外を出すわけではない（根の一覧を出すだけ）ので、断る理由が無い。
+         */
+        const entries = await listDir(root, asked).catch(async (e: unknown) => {
+          if (asked === '') throw e;
+          return { at: '', list: await listDir(root, '') };
+        }).then((r) => (Array.isArray(r) ? { at: asked, list: r } : r));
+        return send(res, 200, { root, path: entries.at, entries: entries.list });
       } catch (e) {
         return send(res, 400, { error: (e as Error).message });
       }
@@ -1842,25 +1928,41 @@ export class UiServer {
       });
       if (!got.ok) return send(res, 400, { error: got.error ?? '繋げませんでした' });
 
-      // **いまの土台を畳む。**外の道具は土台を組むときに立ち上がるので、
-      // 畳まないと、繋いだのに次も繋がらない。会話は残してある。
-      const live = this.#session;
-      if (live && !this.#busyNow(live)) {
-        this.#session = undefined;
-        await live.close().catch(() => undefined);
-      }
+      /*
+       * **書いたものを、そのまま動いている設定にも入れる。**
+       *
+       * ここは `specFrom(entry, …)` でもう一度組み立てていた。カタログの既定は
+       * `npx -y …` なので、`github-local`（同梱してあるものを node で直に起こす）
+       * を繋ぐと、**ファイルは node 直起動、動いている側は npx** になる。
+       * npx の無い機械では、立ち上げ直すまで繋がらない。
+       * 書いた側（`connectService`）が返す spec を使う。
+       */
+      const spec = got.spec ?? specFrom(entry, { root: this.#workRoot(), ...(prefer ? { prefer } : {}) });
       this.#opts.config.mcp = {
         ...this.#opts.config.mcp,
         servers: {
           ...this.#opts.config.mcp?.servers,
-          [entry.id]: {
-            ...specFrom(entry, { root: this.#workRoot(), ...(prefer ? { prefer } : {}) }),
-            enabled: body?.enabled !== false,
-          },
+          [entry.id]: { ...spec, enabled: body?.enabled !== false },
         },
       };
+
+      /*
+       * **畳まずに、その場で足す。**
+       *
+       * ここは「手が空いているときだけ」セッションを畳んでいた。外のツールは
+       * セッションを組むときにだけ立ち上がるので、**作業中に押すと、そのセッションの
+       * 間ずっと繋がらない。**しかも返事には一言も無い。
+       * いまは足す口（`session.services`）が在るので、畳まずに起こす。
+       */
+      let live: string | undefined;
+      const now = this.#session;
+      if (now && body?.enabled !== false) {
+        const up = await now.services.onConnected?.(entry.id, spec as McpServerSpec);
+        live = up === false ? '起こせませんでした（立ち上げ直すと繋がることがあります）' : undefined;
+      }
       return send(res, 200, {
         id: got.id, path: got.path, missing: got.missing, notes: got.notes,
+        ...(live ? { note: live } : {}),
       });
     }
 
@@ -1871,11 +1973,8 @@ export class UiServer {
       if (!servers[id]) return send(res, 404, { error: `繋いでいません: ${id}` });
       delete servers[id];
       await disconnectService(id);
-      const live = this.#session;
-      if (live && !this.#busyNow(live)) {
-        this.#session = undefined;
-        await live.close().catch(() => undefined);
-      }
+      // 繋ぐ側と同じく、畳まずにその場で止める。作業中でも効く。
+      this.#session?.services.onDisconnected?.(id);
       this.#opts.config.mcp = { ...this.#opts.config.mcp, servers };
       return send(res, 200, { id, removed: true });
     }
@@ -2076,18 +2175,38 @@ export class UiServer {
     const body = await readBody(req) as {
       kind?: string; modelsDir?: string; model?: string; workRoot?: string;
     };
+    /*
+     * **送られてこなかった項目は、触らない。**
+     *
+     * ここは `kind` が必ず来るものとして書いてあり、どの保存でも
+     * `saveRuntime(kind, dir, model)` を通していた。横の「フォルダを変える」は
+     * 作業場だけを変えるつもりで `kind` と `modelsDir` も一緒に送るが、
+     * 設定の頁を一度も開いていないと**その二つは空**。空の `kind` は inproc に、
+     * 空の `modelsDir` は「消す」と読まれるので、**llamacpp や Ollama を選び、
+     * 保存先を別のドライブへ向けていた人が、作業場を変えただけでそれを失う。**
+     * 画面は何も言わないので、立ち上げ直したあとに「モデルが無い」で気づく。
+     * 実際に消した。
+     */
     const kind = body?.kind;
-    if (!isRuntimeKind(kind)) return send(res, 400, { error: 'そういう動かし方はありません' });
+    const touchesRuntime = kind !== undefined;
+    if (touchesRuntime && !isRuntimeKind(kind)) {
+      return send(res, 400, { error: 'そういう動かし方はありません' });
+    }
+    if (!touchesRuntime && typeof body?.workRoot !== 'string') {
+      return send(res, 400, { error: '何を変えるのか分かりません' });
+    }
     const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
     // 使う GGUF。名前に道を混ぜさせない（置き場の中の名前だけ）。
     const model = typeof body?.model === 'string' ? body.model.trim() : undefined;
     if (model && /[\\/]/.test(model)) return send(res, 400, { error: 'モデルは置き場の中の名前で指定してください' });
     // 打った場所は見るだけ。既定の場所は、無ければ作る。
     // 「GGUF を置くだけ」と言っておいて置き場が無いのは、案内になっていない。
-    const dirState = dir
-      ? await inspectModelsDir(dir)
-      : await ensureDefaultModelsDir(modelsDir());
-    const at = await saveRuntime(kind, dir, model);
+    const dirState = !touchesRuntime
+      ? undefined
+      : dir
+        ? await inspectModelsDir(dir)
+        : await ensureDefaultModelsDir(modelsDir());
+    const at = touchesRuntime ? await saveRuntime(kind, dir, model) : configPath();
     // 作業場。**打った場所は見るだけ。**無い場所を打っても保存はできる
     // （打ち間違いは、保存したときに言う）。
     let workNote: string | undefined;
@@ -2137,6 +2256,7 @@ export class UiServer {
      */
     let modelRestart = false;
     const rcNow = this.#opts.config.runtime ?? {};
+    if (touchesRuntime) {
     const sameRuntime = kind === (rcNow.kind ?? 'inproc') && (dir || modelsDir()) === (rcNow.modelsDir ?? modelsDir());
     if (model !== undefined && sameRuntime && (model || undefined) !== rcNow.model) {
       const live = this.#session;
@@ -2157,20 +2277,24 @@ export class UiServer {
         this.broadcast({ type: 'stateChanged' });
       }
     }
+    }
     this.broadcast({ type: 'log', level: 'info', text: `設定を書きました: ${at}` });
     return send(res, 200, {
       path: at,
-      saved: { kind, modelsDir: dir || null, ...(model !== undefined ? { model: model || null } : {}) },
+      // 触っていないものを「保存した」と言わない。**書いていないなら出さない。**
+      ...(touchesRuntime
+        ? { saved: { kind, modelsDir: dir || null, ...(model !== undefined ? { model: model || null } : {}) } }
+        : {}),
       // 打ち間違えても保存はできる。だから**保存したときに言う。**
-      dirState,
+      ...(dirState !== undefined ? { dirState } : {}),
       ...(workNote ? { workNote } : {}),
       // いまどこを見ているか。**保存の返事に入れる。**入っていないと、
       // 効いたのかどうかを画面が確かめられない。
       workRootNow: this.#workRoot(),
       // 動かし方の切り替えは、立ち上げ直すまで効かない。黙って効いた顔をしない。
       restartNeeded: workRestart || modelRestart
-        || kind !== (this.#opts.config.runtime?.kind ?? 'inproc')
-        || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir()),
+        || (touchesRuntime && (kind !== (this.#opts.config.runtime?.kind ?? 'inproc')
+          || (dir || modelsDir()) !== (this.#opts.config.runtime?.modelsDir ?? modelsDir()))),
     });
   }
 
@@ -3055,6 +3179,28 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(text);
 }
 
+
+/**
+ * 大きすぎるものを断る。**断りの文が、相手へ届くようにする。**
+ *
+ * ここは `req.destroy()` を先に呼んでいた。あれは socket ごと落とすので、
+ * **413 は一バイトも線に乗らない。**受け取る側から見ると、送っている途中で
+ * 黙って切られただけになる（実測: 17MB の PUT で返ってきたのは 0 バイト）。
+ * 「大きすぎます」と書いてあるのに、誰も読めない。
+ *
+ * 読み切るのは `readWithin` の仕事。ここへ来る時点で読み終わっているので、
+ * 書いて閉じるだけでよい（読み残しが在るまま閉じると RST になり、
+ * Windows では届いていた返事ごと捨てられる）。
+ */
+function refuseTooLarge(res: ServerResponse, message: string): void {
+  if (res.writableEnded || res.destroyed) return;
+  res.writeHead(413, {
+    'content-type': 'application/json; charset=utf-8',
+    connection: 'close',
+  });
+  res.end(JSON.stringify({ error: message }));
+}
+
 /** JSON の本文の上限。添付は別の口（/api/attach）で、それ自身の上限を持つ。 */
 export const MAX_JSON_BODY = 16 * 1024 * 1024;
 
@@ -3093,17 +3239,65 @@ export function foreignPath(p: string | undefined): boolean {
   return process.platform !== 'win32' && /^[A-Za-z]:[\\/]/.test(p);
 }
 
+/**
+ * 上限つきで本文を読む。**上限を超えても、読み切るまで待つ。**
+ *
+ * ここは `for await` の途中で `throw` / `return` していた。あれは
+ * **その場で `req` を壊す**（async iterator の後片づけが `destroy()` を呼ぶ）。
+ * こちらの受け箱に読んでいない分が残ったまま socket が閉じるので、OS は
+ * FIN ではなく RST を送り、**RST を受けた側は届いていた 413 ごと捨てる。**
+ * linux では届くのに Windows では 0 バイト、という形で実際に出た。
+ *
+ * だから壊さない。上限を超えたら**溜めるのをやめて読み捨て**、
+ * 最後まで受け取ってから断る。読み捨てには上限（`REFUSE_DRAIN_MS`）を置く
+ * （相手が送り続けるだけなら、そこで諦めて断る）。**正しい本文の側には
+ * 時計を置かない。**置くと、遅い相手の本文が途中で切れて、切れたことに
+ * 気づかないまま通る。
+ */
+export const REFUSE_DRAIN_MS = 5000;
+
+type Taken = Buffer | 'tooLarge' | 'cut';
+
+export async function readWithin(req: IncomingMessage, limit: number): Promise<Taken> {
+  return await new Promise<Taken>((resolve) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let over = false;
+    let done = false;
+    let giveUp: NodeJS.Timeout | undefined;
+    const finish = (what: Taken): void => {
+      if (done) return;
+      done = true;
+      if (giveUp) clearTimeout(giveUp);
+      resolve(what);
+    };
+    req.on('data', (c: Buffer) => {
+      total += c.length;
+      if (over) return; // 読み捨てる（溜めるのはやめている）
+      if (total > limit) {
+        over = true;
+        chunks.length = 0;
+        // 読み捨てが終わらないときだけ、上限で諦める。
+        giveUp = setTimeout(() => finish('tooLarge'), REFUSE_DRAIN_MS);
+        giveUp.unref?.();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.once('end', () => finish(over ? 'tooLarge' : Buffer.concat(chunks)));
+    // 最後まで来ていないのに閉じたのは、相手が切ったとき。**途中までを
+    // 全部として扱わない**（切れた JSON や途中までのファイルが通る）。
+    req.once('close', () => finish(over ? 'tooLarge' : 'cut'));
+    req.once('error', () => finish(over ? 'tooLarge' : 'cut'));
+  });
+}
+
 async function readBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const c of req) {
-    total += (c as Buffer).length;
-    // 際限なく抱えない。上限を超えたら読むのをやめて断る。
-    if (total > MAX_JSON_BODY) { req.destroy(); throw new BodyTooLarge(MAX_JSON_BODY); }
-    chunks.push(c as Buffer);
-  }
+  const got = await readWithin(req, MAX_JSON_BODY);
+  if (got === 'tooLarge') throw new BodyTooLarge(MAX_JSON_BODY);
+  if (got === 'cut') return undefined; // 途中で切れた。既定に落とす
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return JSON.parse(got.toString('utf8'));
   } catch {
     return undefined; // 直す側が既定に落としてくれる
   }

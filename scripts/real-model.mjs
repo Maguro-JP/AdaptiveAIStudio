@@ -417,13 +417,141 @@ async function throughParallel() {
   return found;
 }
 
+
+/**
+ * 端末の入口（agent / chat / team）が、保存先の GGUF に辿り着くこと。
+ *
+ * **画面だけが動いていた。**端末は HTTP の一覧（`127.0.0.1:4177/v1/models`）
+ * だけを見ていたが、この中で読む道では**その口はモデルを読むまで立たない**。
+ * 保存先に GGUF が在っても必ず空になり、`使えるモデルがありません` で
+ * exit 1 する。同じ状態で doctor は「動かせます。`npm run agent` で端末」と言う。
+ * 案内された手が、その場で落ちていた。
+ *
+ * 相手を入れ替えた確かめでは見えない（入れ替えると口が立ってしまう）。**本物で通す。**
+ */
+async function cliReachesModel() {
+  const { mkdtempSync, rmSync: rm, writeFileSync } = await import('node:fs');
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const run = promisify(execFile);
+
+  const home = mkdtempSync(join(tmpdir(), 'aas-real-cli-'));
+  const models = join(home, 'models');
+  const { mkdirSync } = await import('node:fs');
+  mkdirSync(models, { recursive: true });
+  execFileSync(process.execPath, [join(root, 'scripts', 'tiny-gguf.mjs'), join(models, 'tiny.gguf')], { stdio: 'pipe' });
+  /*
+   * **入口ごとに、別の口を使う。**
+   *
+   * 三つとも既定の口（4177）で待つので、前のものの子が落ちきる前に次を起こすと
+   * 「モデルのプロセスが 1 で終わりました」になる。走らせる順で結果が変わるので、
+   * 番号を分ける（**走らせるたびに変わる確かめを作らない**）。
+   */
+  const configFor = (port) => {
+    const at = join(home, `aas.${port}.json`);
+    writeFileSync(at, JSON.stringify({
+      runtime: { kind: 'inproc', basePort: port }, initiative: { enabled: false },
+    }));
+    return at;
+  };
+  const config = configFor(41771);
+  const work = join(home, 'work');
+  mkdirSync(work, { recursive: true });
+  writeFileSync(join(home, 'tasks.json'), JSON.stringify([
+    { id: 't1', instruction: 'なにもしない', laneId: 'default' },
+  ]));
+
+  const env = {
+    ...process.env, AAS_HOME: home, AAS_CONFIG: config, NO_COLOR: '1',
+    AAS_REPORT_DIR: join(home, 'reports'),
+  };
+  const say = async (entry, args = [], at = config) => {
+    const out = await run(process.execPath, ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', entry), ...args], {
+      env: { ...env, AAS_CONFIG: at }, cwd: work, timeout: 240_000, maxBuffer: 8 * 1024 * 1024,
+    }).catch((e) => e);
+    // eslint-disable-next-line no-control-regex
+    return `${out.stdout ?? ''}${out.stderr ?? ''}`.replace(/\x1b\[[0-9;]*m/g, '');
+  };
+
+  const found = [];
+  try {
+    // どれも「使えるモデルがありません」で落ちないこと。
+    // 名前が出ることまで見る。**落ちなかっただけでは、辿り着いた証拠にならない。**
+    for (const [entry, args, want, port] of [
+      ['agent.ts', [], /担当モデル: inproc:tiny\.gguf/, 41771],
+      ['main.ts', [], /モデル: inproc:tiny\.gguf/, 41772],
+      ['team.ts', [join(home, 'tasks.json')], /レーン default: inproc:tiny\.gguf/, 41773],
+    ]) {
+      const text = await say(entry, args, configFor(port));
+      if (/使えるモデルがありません/.test(text)) {
+        found.push(`${entry}: 保存先に GGUF が在るのに落ちる（${text.split('\n').find((l) => l.includes('使えるモデル'))}）`);
+        continue;
+      }
+      if (!want.test(text)) found.push(`${entry}: モデルに辿り着いていない:\n${text.slice(0, 900)}`);
+    }
+  } catch (e) {
+    found.push(`端末の入口で落ちました: ${e.message}`);
+  } finally {
+    rm(home, { recursive: true, force: true });
+  }
+  return found;
+}
+
+/*
+ * selftest が使う「送って返る」の部品を、本物のモデルで通す。
+ *
+ * この部品は、使う人の機械で**いちばん先に読まれる一行**を作る
+ * （`ok 送って返る … 答え「…」`）。作れなければ、そこで使う人は詰まる。
+ * ここで本物の道（この中で読む → 候補 → 送る）を通しておく。
+ * 返る文字は無意味でよい（乱数の重み）。**返ること**を見る。
+ */
+async function askOnceWithRealModel() {
+  const { mkdtempSync, rmSync: rm, writeFileSync } = await import('node:fs');
+  const home = mkdtempSync(join(tmpdir(), 'aas-real-ask-'));
+  const models = mkdtempSync(join(tmpdir(), 'aas-real-ask-models-'));
+  execFileSync(process.execPath, [join(root, 'scripts', 'tiny-gguf.mjs'), join(models, 'tiny.gguf')], { stdio: 'pipe' });
+  const was = { home: process.env.AAS_HOME, state: process.env.AAS_STATE_DIR, config: process.env.AAS_CONFIG };
+  const at = join(home, 'aas.config.json');
+  writeFileSync(at, JSON.stringify({
+    // **設定は、使う人と同じ道で読む。**手で組んだ設定を渡すと、
+    // 繋ぎ先を足す所（`wireInProc`）を通らないので、口が食い違う
+    // （実際に 41781 を向けて「繋ぐ先に断られました」になった）。
+    runtime: { kind: 'inproc', basePort: 41781, modelsDir: models, contextSize: 512 },
+    initiative: { enabled: false },
+  }));
+  process.env.AAS_HOME = home;
+  process.env.AAS_STATE_DIR = join(home, 'state');
+  process.env.AAS_CONFIG = at;
+  const found = [];
+  try {
+    const { loadConfig } = await import(join(root, 'src', 'config.ts'));
+    const { askOnce, describeOneTurn } = await import(join(root, 'src', 'cli', 'ask-once.ts'));
+    const got = await askOnce(loadConfig().config, { waitMs: 240_000 });
+    const said = describeOneTurn(got);
+    if (!said.ok) found.push(`送って返る が本物のモデルで通らない: ${said.detail}`);
+    else if (!/tiny\.gguf/.test(said.detail)) found.push(`どのモデルで答えたかを言っていない: ${said.detail}`);
+    else if (!/読み込み/.test(said.detail)) found.push(`読み込みにかかった時間を言っていない: ${said.detail}`);
+  } catch (e) {
+    found.push(`送って返る で落ちました: ${e.message}`);
+  } finally {
+    if (was.home === undefined) delete process.env.AAS_HOME; else process.env.AAS_HOME = was.home;
+    if (was.state === undefined) delete process.env.AAS_STATE_DIR; else process.env.AAS_STATE_DIR = was.state;
+    if (was.config !== undefined) process.env.AAS_CONFIG = was.config;
+    rm(home, { recursive: true, force: true });
+    rm(models, { recursive: true, force: true });
+  }
+  return found;
+}
+
 bad.push(...await throughSession());
 bad.push(...await thinkingBudget());
 bad.push(...await throughParallel());
+bad.push(...await cliReachesModel());
+bad.push(...await askOnceWithRealModel());
 
 if (bad.length > 0) {
   console.error(`見つかった不具合 ${bad.length} 件:`);
   for (const b of bad) console.error(`- ${b}`);
   process.exit(1);
 }
-console.log('本物のモデルで通りました（読み込み・窓・まとめて返す・流して返す・道具を渡す・同梱の話し方・土台ごと一往復・本物の数え方・先読みで答えが変わらない・考えごとの予算・二つ同時）');
+console.log('本物のモデルで通りました（読み込み・コンテキストウィンドウ・まとめて返す・流して返す・道具を渡す・同梱の話し方・土台ごと一往復・本物の数え方・先読みで答えが変わらない・考えごとの予算・二つ同時・端末の入口・送って返る）');

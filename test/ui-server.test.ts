@@ -669,7 +669,17 @@ describe('開いた時点で、使えるかを言う', () => {
     assert.equal(typeof body.canFetch?.approxGB, 'number');
   });
 
-  test('画面は、最初の一つを一押しで取ってこられる形で出す', () => {
+  /*
+   * ここから三つは、**字が在ることしか見ていない。**
+   *
+   * 実際に押す側は `scripts/sweep.mjs` の
+   * 「モデルが無いとき、一押しで取ってこられる」に在る（押し場所が出ること、
+   * 押すと口へ頼みが飛ぶこと、文が変わることまで見る）。**そちらが本体。**
+   * ただし sweep には Chromium が要るので、CI（`npm ci` では
+   * playwright-core が入らない）では飛ぶ。ここはその間の受け皿として残す。
+   * **通ったことを「動く」と読まない。**
+   */
+  test('画面は、最初の一つを一押しで取ってこられる形で出す（字だけ）', () => {
     const app = readFileSync(join(root, 'src/ui/web/app.js'), 'utf8');
     assert.ok(app.includes('canFetch'), '最初の一つを受け取っていない');
     assert.ok(app.includes("'/api/models/get'"), '取ってくる口を叩いていない');
@@ -701,5 +711,88 @@ describe('その機械のものでない道', () => {
     assert.equal(foreignPath('/home/x/work'), false);
     assert.equal(foreignPath('work'), false);
     assert.equal(foreignPath(undefined), false);
+  });
+});
+
+/**
+ * 書き換えたファイルを、本体が覚えていること。
+ *
+ * 画面の「変更したファイル」のパネルは、差分を DOM とパネルの中の Map にしか
+ * 持っていなかった。パネルを一枚出し入れするだけで作り直されて消える。
+ * 本体が持っていなければ、パネルは取り直しようがない。
+ */
+/**
+ * 画面が言うモデルの場所と、読みにいく場所が同じであること。
+ *
+ * `/api/info` は既定（`AAS_HOME` の下）を返していて、設定で
+ * `runtime.modelsDir` を変えていると食い違った。画面はこの道を出すので、
+ * **言われた場所へ置いた人は、押しても何も出てこない。**
+ * 会社の機械で使う道（ブラウザで落として、置いて、読み直す）が、これで塞がる。
+ */
+describe('モデルの場所を、言うのと読むので違えない', () => {
+  test('**設定で変えた場所を言い、そこに置いたものが出る**', async () => {
+    const models = await tempDir('aas-models-');
+    const mine = new UiServer({
+      config: { ...DEFAULT_CONFIG, runtime: { ...DEFAULT_CONFIG.runtime, kind: 'inproc', modelsDir: models } },
+      port: 0,
+    });
+    const at = (await mine.start()).replace(/\/$/, '');
+    try {
+      const info = await json(await fetch(`${at}/api/info`)) as { modelsDir: string };
+      assert.equal(info.modelsDir, models, '画面に出す場所が、設定した場所と違う');
+
+      // 言われた場所へ置いて、読み直したら出てくるところまで見る。
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(join(info.modelsDir, 'probe.gguf'), 'GGUF');
+      const listed = await json(await fetch(`${at}/api/models`)) as {
+        modelsDir: string; installed: { ref: string }[];
+      };
+      assert.equal(listed.modelsDir, info.modelsDir, '言う場所と読む場所が違う');
+      assert.ok(listed.installed.some((m) => m.ref === 'probe.gguf'),
+        `置いたのに出てこない: ${JSON.stringify(listed.installed.map((m) => m.ref))}`);
+    } finally { await mine.stop(); }
+  });
+});
+
+describe('/api/changes', () => {
+  /**
+   * **リポジトリへ書かない。**
+   *
+   * ここは既定の作業場（リポジトリの根）へ `changes-probe.txt` を書いていた。
+   * みんなが見る場所なので、同時に走っている別の走行や bundle の組み立てから
+   * 見える。**bundle の中で実際に落ちた**（組んだ時点で同じ名前・同じ中身の
+   * ファイルが入っており、書くところが `saved:false` になって、覚える所を
+   * 通らなかった）。自分だけの作業場を持つ口を、この確かめのために起こす。
+   */
+  test('**書いたぶんが、あとから取り直せる**', async () => {
+    const name = 'changes-probe.txt';
+    const work = await tempDir('aas-changes-');
+    const mine = new UiServer({
+      config: { ...DEFAULT_CONFIG, agent: { ...DEFAULT_CONFIG.agent, root: work } },
+      port: 0,
+    });
+    const at = (await mine.start()).replace(/\/$/, '');
+    try {
+      const before = await json(await fetch(`${at}/api/changes`)) as { files: { path: string }[] };
+      assert.deepEqual(before.files, [], 'この確かめの前提が崩れている');
+
+      const wrote = await fetch(`${at}/api/file`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: name, content: 'hello world\n' }),
+      });
+      // 返事は一度しか読めない。文字で受けて、そこから見る。
+      const said = await wrote.text();
+      assert.equal(wrote.status, 200, said);
+      // **書いたことまで見る。**同じ中身が既にあると `saved:false` で返り、
+      // 覚える所を一度も通らないまま「覚えていない」で落ちる（原因が別に見える）。
+      assert.equal((JSON.parse(said) as { saved: boolean }).saved, true, said);
+
+      const got = await json(await fetch(`${at}/api/changes`)) as {
+        files: { path: string; diff: string; added: number }[];
+      };
+      const kept = got.files.find((f) => f.path === name);
+      assert.ok(kept, `覚えていない: ${JSON.stringify(got.files.map((f) => f.path))}`);
+      assert.ok(kept.diff.includes('hello world'), kept.diff);
+    } finally { await mine.stop(); }
   });
 });

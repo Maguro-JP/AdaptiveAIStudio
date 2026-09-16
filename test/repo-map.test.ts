@@ -59,6 +59,64 @@ describe('呼ばれている数で並べる', () => {
     assert.ok(refsIn('heartbeat();').includes('heartbeat'));
   });
 
+  /**
+   * その場で名づけている所は、よその同じ名前を指していない。
+   *
+   * `async load(): Promise<void>` の `load` は自分のメソッドの名前で、
+   * よその `export function load` への参照ではない。数えていたので、
+   * `load()` を持つ 33 枚から `test/fake-llama-lib.ts` の `load` へ辺が張られ、
+   * **repo map のいちばん上が試験用の模型**になっていた（三番目の 5 倍。実測）。
+   * 直す先を探しているモデルに、まず模型を見せることになる。
+   */
+  test('**名づけている所は、参照として数えない**', () => {
+    // 自分のメソッド・自分の型・自分の欄。どれも「この場の名前」。
+    assert.ok(!refsIn('class A {\n  async load(): Promise<void> {}\n}').includes('load'),
+      'メソッドの名前を、よその同じ名前への参照として数えている');
+    assert.ok(!refsIn('type Verdict = "ok";').includes('Verdict'));
+    assert.ok(!refsIn('  readonly holder?: number;').includes('holder'));
+    assert.ok(!refsIn('export function how(task) { return task; }').includes('how'));
+    assert.ok(!refsIn('const reader = 1;').includes('reader'));
+    // **使う側は残す（対）。**ここまで落とすと、repo map が真っ白になる。
+    assert.ok(refsIn('const got = await load();').includes('load'), '使う側まで落としている');
+    assert.ok(refsIn('const box = new ProposalQueue(path);').includes('ProposalQueue'));
+    assert.ok(refsIn('export function how(task) { return help(task); }').includes('help'));
+  });
+
+  test('**名づけている所からは、辺を張らない**', async () => {
+    // 同じ形を小さく作る。`load()` を持つ本体が三枚、`load` を外に出す模型が一枚。
+    const root = await tempDir('aas-map-decl-');
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'test'), { recursive: true });
+    await writeFile(join(root, 'test', 'fake-lib.ts'), 'export async function load() { return {}; }\n');
+    for (const name of ['a', 'b', 'c']) {
+      await writeFile(join(root, 'src', `${name}.ts`), [
+        `export class Keeper${name.toUpperCase()} {`,
+        '  async load(): Promise<void> {}',
+        '}',
+        `export function use${name.toUpperCase()}() { return heartbeat(); }`,
+      ].join('\n'));
+    }
+    await writeFile(join(root, 'src', 'core.ts'), 'export function heartbeat() { return 1; }\n');
+    const index = await buildIndex(root);
+    /*
+     * 見るのは**辺**。順位で見ると、小さな作り物では
+     * 「名前を一つしか出していないファイルは、その一つに点が全部乗る」
+     * という別の理由で上に来るので、直したものを見たことにならない
+     * （この試験を書いたとき、実際にそれで落ちた）。
+     */
+    const g = graphOf(index);
+    const into = (path: string) => {
+      const at = g.files.indexOf(path);
+      assert.ok(at >= 0, `${path} が索引に無い`);
+      return [...g.out].filter(([, edges]) => edges.has(at)).map(([from]) => g.files[from]);
+    };
+    assert.deepEqual(into('test/fake-lib.ts'), [],
+      'メソッドの名前から、よその同じ名前へ辺を張っている');
+    // **呼んでいる側からは張る（対）。**ここまで落とすと repo map が真っ白になる。
+    assert.deepEqual(into('src/core.ts').sort(), ['src/a.ts', 'src/b.ts', 'src/c.ts'],
+      '本当に呼んでいる所から辺が張れていない');
+  });
+
   test('**外から入れた名前は、この置き場の誰かを指していない**', () => {
     const got = importedFromPackages(
       "import { describe, test } from 'node:test';\nimport { local } from './near.ts';\n",

@@ -499,6 +499,24 @@ export const PANELS = {
      * 道具の呼び出しと結果は畳んで出す。開いたときに読みたいのは
      * 「何を頼んで、何が返ったか」で、途中の呼び出しではない。
      */
+    /*
+     * **作り直されたら、自分で取り直す。**
+     *
+     * ログのパネルと同じ形（`/api/logs` から取り直す）。パネルの × を押す、
+     * 表示からパネルを出し入れする、設定→配置で型を変える、のどれでも
+     * `render()` が全部を作り直す。流し込む側（`ctx.showHistory`）を呼ぶのは
+     * 頁を開いた最初の一回と会話を選んだときだけなので、作り直すと空になる。
+     */
+    const restore = async () => {
+      const id = ctx.conversationId?.();
+      if (!id) return;
+      try {
+        const body = await (await fetch(`/api/conversations/messages?id=${encodeURIComponent(id)}`)).json();
+        if (body.messages?.length) ctx.showHistory(body.messages);
+        if (body.inFlight) ctx.showInFlight?.(body.inFlight);
+      } catch { /* 取れなければ、これから来る分だけ */ }
+    };
+
     ctx.showHistory = (messages) => {
       log.textContent = '';
       stream = null;
@@ -537,6 +555,9 @@ export const PANELS = {
       wrap.classList.add('working');
       stop.hidden = false;
     };
+
+    // 作り直されたぶんを、ここで取り戻す。**流し込む側を待たない。**
+    void restore();
 
     ctx.on('busy', (e) => {
       stop.hidden = !e.busy;
@@ -690,6 +711,9 @@ export const PANELS = {
         note('dim', `［${v.codename}］${v.name} — ${v.roleCodename}${v.isDuty ? `（${v.reason}）` : ''}`);
       } else if (v.type === 'noFinding') {
         note('dim', `［${v.codename}］報告することはありませんでした`);
+      } else if (v.type === 'declined') {
+        // **押したのに何も起きない、を作らない。**断ったなら、断ったと言う。
+        note('dim', `今回は考えませんでした: ${v.reason}`);
       } else if (v.type === 'proposal') {
         const c = card('💡', v.proposal.title, v.codename, 'proposal');
         c.box.open = true;
@@ -1015,6 +1039,12 @@ export const PANELS = {
 
       const foot = el('div', 'proposal-foot');
       foot.append(el('span', 'dim', `この1時間で考えた量 ${r.spent}`));
+      // 上限で古い提案を落としている。**落としたことを黙らない。**
+      // 黙ると、前に出ていた提案が消えたときに、忘れたのか却下したのかが
+      // 分からなくなる。
+      if (r.dropped > 0) {
+        foot.append(el('span', 'warn', `溜まりすぎたので、古い ${r.dropped} 件を落としました`));
+      }
       if (r.due.length > 0) foot.append(el('span', 'warn', `未了の日課: ${r.due.join(', ')}`));
       const now = el('button', 'ghost tiny', 'いま考えさせる');
       now.onclick = async () => {
@@ -1367,6 +1397,21 @@ export const PANELS = {
     };
 
     draw();
+    /*
+     * **作り直されたら、自分で取り直す。**記録のパネルと同じ形。
+     *
+     * ここまで差分は DOM と、このパネルの中の Map にしか無かった。パネルを一枚
+     * 出し入れするだけで全部が作り直されて消え、そのうえ
+     * 「まだ何も書き換えていません。」と**事実と違うこと**を出していた。
+     * 塊ごと・行ごとに戻す道はこのパネルから入るので、直したものに辿り着けなくなる。
+     */
+    void (async () => {
+      try {
+        const got = await (await fetch('/api/changes')).json();
+        for (const f of got.files ?? []) if (!files.has(f.path)) files.set(f.path, f);
+        if ((got.files ?? []).length > 0) draw();
+      } catch { /* 取れなければ、これから来る分だけ */ }
+    })();
     const record = (v) => {
       const prev = files.get(v.path);
       files.set(v.path, {
@@ -1569,6 +1614,17 @@ export const PANELS = {
         save.disabled = true;
         return;
       }
+      /*
+       * **同じ中身を読み直しただけなら、出ている言葉を取り替えない。**
+       *
+       * 手で保存すると、本体はその差分を全員へ配る（`diff`）。配られたものが
+       * 自分の書き込みの写しなので、下の `ctx.on('session')` がここを呼び直す。
+       * ここで `refresh()` を通っていたので、**「保存しました（+2 -1）」が
+       * 「保存してあります」に化けていた。**書けたのか、何行変わったのかが
+       * 消えるので、保存できたかどうかを画面から確かめられない。
+       * 中身が同じなら、読み直す意味も無い。
+       */
+      if (p === path && j.content === loaded && !dirty()) { name.textContent = p; return; }
       path = p; loaded = j.content;
       name.textContent = p;
       area.value = loaded; area.disabled = false;

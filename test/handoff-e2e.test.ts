@@ -25,8 +25,23 @@ const onlyWithGit = { skip: GIT_OK ? false : 'この機械には git が無い' 
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
+/**
+ * 走らせている側の git の env を、こちらの git へ持ち込まない。
+ *
+ * git はフック（pre-push など）に `GIT_DIR` や `GIT_INDEX_FILE` を渡す。
+ * 継ぐと、ここで作る一時の repository ではなく**走らせている repository** を
+ * 触りにいくので、`git init --bare` した先が「そんな repository は無い」になる。
+ * 実際に、pre-push から `npm run check` を回したときだけ 8 件が落ちた。
+ * **確かめの側が嘘をつくと、確かめを迂回する癖がつく。**
+ */
+const withoutGitEnv = (): NodeJS.ProcessEnv => {
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (k.startsWith('GIT_')) delete env[k];
+  return env;
+};
+
 const git = (args: string[], cwd: string): void => {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: withoutGitEnv() });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
 };
 
@@ -60,7 +75,7 @@ const cloneVerbatim = (from: string, to: string, cwd: string): void => {
  */
 const run = (cwd: string, name: string, args: string[] = []): { out: string; code: number } => {
   const r = spawnSync(process.execPath, [join(cwd, 'scripts', 'handoff.mjs'), ...args], {
-    cwd, encoding: 'utf8', env: { ...process.env, AAS_HANDOFF_NAME: name },
+    cwd, encoding: 'utf8', env: { ...withoutGitEnv(), AAS_HANDOFF_NAME: name },
   });
   return { out: `${r.stdout}${r.stderr}`, code: r.status ?? 1 };
 };
@@ -165,15 +180,15 @@ describe('片方で書いて、もう片方で受け取る', () => {
      */
     const { cloud, local } = await twoMachines();
     await writeFile(join(cloud, 'まだ途中.txt'), '書きかけ\n', 'utf8');
-    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: cloud, encoding: 'utf8' }).stdout.trim();
-    const before = spawnSync('git', ['status', '--porcelain'], { cwd: cloud, encoding: 'utf8' }).stdout;
+    const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: cloud, encoding: 'utf8', env: withoutGitEnv() }).stdout.trim();
+    const before = spawnSync('git', ['status', '--porcelain'], { cwd: cloud, encoding: 'utf8', env: withoutGitEnv() }).stdout;
 
     const sent = run(cloud, 'cloud');
     assert.equal(sent.code, 0, sent.out);
 
-    const after = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: cloud, encoding: 'utf8' }).stdout.trim();
+    const after = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: cloud, encoding: 'utf8', env: withoutGitEnv() }).stdout.trim();
     assert.equal(after, head, 'いま居るブランチにコミットを作っている');
-    const still = spawnSync('git', ['status', '--porcelain'], { cwd: cloud, encoding: 'utf8' }).stdout;
+    const still = spawnSync('git', ['status', '--porcelain'], { cwd: cloud, encoding: 'utf8', env: withoutGitEnv() }).stdout;
     assert.equal(still, before, `書きかけの状態を変えている: ${still}`);
     assert.match(still, /\?\?/, 'この確かめの前提が崩れている（書きかけが無い）');
 

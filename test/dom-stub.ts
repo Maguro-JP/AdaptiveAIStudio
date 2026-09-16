@@ -32,6 +32,24 @@ export interface StubNode {
   removeChild(child: StubNode): StubNode;
   onclick?: () => unknown;
   onchange?: (e: unknown) => unknown;
+  /** 打ち込む欄の中身。textarea / input を使うパネルのために持つ。 */
+  value: string;
+  spellcheck: boolean;
+  selectionStart: number;
+  selectionEnd: number;
+  focus(): void;
+  addEventListener(type: string, fn: (e: unknown) => unknown): void;
+  /** 付けた相手（addEventListener）と、`on*` の両方を呼ぶ。 */
+  fire(type: string, event?: unknown): void;
+  /** 見た目の組。パネルは付け外しでしか使わない。 */
+  classList: {
+    add(...names: string[]): void;
+    remove(...names: string[]): void;
+    toggle(name: string, on?: boolean): void;
+    contains(name: string): boolean;
+  };
+  /** 自分を親から外す。 */
+  remove(): void;
   append(...nodes: StubNode[]): void;
   appendChild(node: StubNode): StubNode;
   replaceChildren(...nodes: StubNode[]): void;
@@ -42,10 +60,21 @@ export interface StubNode {
 }
 
 export function createNode(tagName: string): StubNode {
+  /** addEventListener で付いたもの。`on*` とは別に持つ（本物と同じ）。 */
+  const listeners = new Map<string, Array<(e: unknown) => unknown>>();
+  /** 自分が直に持つ文字。`textContent` の代入で入れ替わる。 */
+  let own = '';
   const node: StubNode = {
     tagName,
     className: '',
-    textContent: '',
+    /*
+     * **本物と同じにする。**`textContent` への代入は、子を全部捨てて
+     * 文字だけにする。ここを素の欄にしていたので、パネルが
+     * `tray.textContent = ''` で並びを片づけても**子が残り**、
+     * 「外したのに札が残っている」を試験が見られなかった。
+     */
+    get textContent() { return own; },
+    set textContent(text: string) { own = text; node.children = []; },
     title: '',
     disabled: false,
     hidden: false,
@@ -54,6 +83,20 @@ export function createNode(tagName: string): StubNode {
     placeholder: '',
     dataset: {},
     children: [],
+    value: '',
+    spellcheck: true,
+    selectionStart: 0,
+    selectionEnd: 0,
+    focus() { /* 置く所が無いので、呼べることだけ */ },
+    addEventListener(type, fn) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type)!.push(fn);
+    },
+    fire(type, event) {
+      const on = (node as unknown as Record<string, ((e: unknown) => unknown) | undefined>)[`on${type}`];
+      if (typeof on === 'function') on(event ?? {});
+      for (const fn of listeners.get(type) ?? []) fn(event ?? {});
+    },
     append(...nodes) {
       node.children.push(...nodes);
       for (const c of nodes) { c.parentNode = node; c.parentElement = node; }
@@ -97,7 +140,28 @@ export function createNode(tagName: string): StubNode {
       return old;
     },
     get text() {
-      return [node.textContent, ...node.children.map((c) => c.text)].join(' ').trim();
+      return [own, ...node.children.map((c) => c.text)].join(' ').trim();
+    },
+    classList: {
+      add(...names) {
+        const has = new Set(node.className.split(/\s+/).filter(Boolean));
+        for (const n of names) has.add(n);
+        node.className = [...has].join(' ');
+      },
+      remove(...names) {
+        const drop = new Set(names);
+        node.className = node.className.split(/\s+/).filter((n) => n && !drop.has(n)).join(' ');
+      },
+      toggle(name, on) {
+        const has = node.className.split(/\s+/).includes(name);
+        const want = on ?? !has;
+        if (want) node.classList.add(name); else node.classList.remove(name);
+      },
+      contains(name) { return node.className.split(/\s+/).includes(name); },
+    },
+    remove() {
+      const parent = node.parentNode;
+      if (parent) parent.removeChild(node);
     },
     buttons() {
       const out = node.tagName === 'button' ? [node] : [];

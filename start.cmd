@@ -71,8 +71,14 @@ if exist "%UP%\.portable" set "STRIPPED=1"
 where node >nul 2>nul
 if errorlevel 1 goto :noBundledNode
 set "NODE=node"
-set "NPM=npm"
+rem npm は full path で呼ぶ。裸の名前を call に渡すと、npm.cmd の中の %~dp0 が
+rem いま居る場所になり、npm が自分の中身をこの下で探して落ちる。
+rem Windows で実測: Cannot find module ...\node_modules\npm\bin\npm-prefix.js
+rem 見つからなければ npm を使わない。package.json を直接読む道がある。
+set "NPM="
+for /f "delims=" %%p in ('where npm.cmd 2^>nul') do if not defined NPM set "NPM=%%p"
 set "RUNNER=npm"
+if not defined NPM set "RUNNER=direct"
 if defined STRIPPED echo   同梱の Node はありませんが、この機械の Node を使います
 goto :haveNode
 
@@ -128,9 +134,18 @@ rem 引数で来たときは一度だけ動かして終わる（他から呼ば�
 rem 自分で選んだときは、終わってもここへ戻る。**一回で閉じない。**
 set "TASK=%~1"
 set "ONCE="
+set "ARGS="
 if "%TASK%"=="" goto :menu
 set "ONCE=1"
-goto :run
+shift
+goto :collect
+
+rem 2つ目からの引数を集める。集めないと落ちる（clean --yes が効かなかった）。
+:collect
+if "%~1"=="" goto :run
+set "ARGS=%ARGS% %~1"
+shift
+goto :collect
 
 :menu
 set "TASK="
@@ -177,8 +192,12 @@ rem 回線の中継（HTTPS_PROXY 等）が環境にあれば、Node の fetch �
 rem 無ければ何も変わらない。効くかどうかは実機で未確認。
 set "NODE_USE_ENV_PROXY=1"
 set "AAS_RELAUNCH=1"
-if "%RUNNER%"=="direct" call "%NODE%" scripts\run.mjs %TASK%
-if not "%RUNNER%"=="direct" call "%NPM%" run %TASK%
+if "%RUNNER%"=="direct" call "%NODE%" scripts\run.mjs %TASK%%ARGS%
+if "%RUNNER%"=="direct" goto :ran
+if defined ARGS call "%NPM%" run %TASK% --%ARGS%
+if not defined ARGS call "%NPM%" run %TASK%
+
+:ran
 set "CODE=%errorlevel%"
 if "%CODE%"=="75" goto :run
 

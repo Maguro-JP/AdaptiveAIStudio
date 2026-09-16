@@ -23,7 +23,16 @@ import { tempDir } from './tmp.ts';
 import { startRealModel } from './real-run.ts';
 import { until } from './until.ts';
 
-process.env.AAS_STATE_DIR ??= await tempDir('aas-real-');
+/*
+ * **記録の置き先は、必ずこちらで作る。**
+ *
+ * ここは `??=` で、外から立っていればそちらを使っていた。使う人の機械では
+ * インストーラの入口が env を立てるので、**前に動かしたときの記録の上で
+ * 走る。**覚えているものが残っていると「次から持ち歩くか」の類は当たり前に
+ * 通ったり落ちたりする（selftest から回して、実際に落ちた）。
+ * テストが見たいのはコードで、機械に溜まったものではない。
+ */
+process.env.AAS_STATE_DIR = await tempDir('aas-real-');
 const { UiServer } = await import('../src/ui/server.ts');
 const { DEFAULT_CONFIG } = await import('../src/config.ts');
 

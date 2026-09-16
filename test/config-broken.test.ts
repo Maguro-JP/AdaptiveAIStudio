@@ -11,7 +11,7 @@
  * **`doctor`（困ったときに見るもの）も、画面も、同じ所で死ぬ。**
  * 「モデルが一つ無いだけで画面じゅうが 500 になる」と同じ形。
  */
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
@@ -19,6 +19,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseConfigText, ConfigBroken, loadConfig } from '../src/config.ts';
 import { tempDir } from './tmp.ts';
+import { cleanAasEnv, hideAasEnv } from './env.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -51,7 +52,8 @@ describe('壊れた設定', () => {
       execFile(
         process.execPath,
         ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', 'doctor.ts')],
-        { env: { ...process.env, AAS_HOME: home, AAS_REPORT_DIR: home }, encoding: 'utf8' },
+        // 外から立っている AAS_CONFIG に、この世界を乗っ取らせない（`test/env.ts`）。
+        { env: cleanAasEnv({ AAS_HOME: home, AAS_REPORT_DIR: home }), encoding: 'utf8' },
         (err, stdout, stderr) => ok({
           code: (err as { code?: number } | null)?.code ?? 0,
           out: `${stdout}${stderr}`,
@@ -66,6 +68,16 @@ describe('壊れた設定', () => {
 });
 
 describe('動かし方を書いていないとき', () => {
+  /*
+   * ここは `loadConfig(dir)` を同じプロセスで呼ぶ。外から `AAS_CONFIG` が
+   * 立っていればそちらが勝つので、渡したフォルダは見られない
+   * （selftest を `AAS_CONFIG` 付きで回して、実際にそれで落ちた）。
+   * ここが走っている間だけ外す。
+   */
+  let restore = (): void => undefined;
+  before(() => { restore = hideAasEnv(); });
+  after(() => { restore(); });
+
   /**
    * 設定ファイルが無ければ「この中で読む（inproc）」が既定。ところが、
    * ファイルは在るのに `runtime` を書いていないときだけ Ollama 扱いに

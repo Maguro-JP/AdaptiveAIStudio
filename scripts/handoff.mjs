@@ -27,10 +27,25 @@ import { dirname, join } from 'node:path';
 import { branchFor, pickToTake, whyNotSend, whyNotTake, jst } from './handoff-plan.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * 呼んだ側の git の env を継がない。
+ *
+ * git はフック（pre-push など）へ `GIT_DIR` や `GIT_INDEX_FILE` を渡す。
+ * 継ぐと、`cwd` を渡していても**呼んだ側の repository** を触りにいく。
+ * 渡すツールがフックの中から動くことは普通にあるので、ここで落とす。
+ */
+const cleanEnv = () => {
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (k.startsWith('GIT_')) delete env[k];
+  return env;
+};
 const git = (...args) =>
-  execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  execFileSync('git', args, {
+    cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: cleanEnv(),
+  }).trim();
 const gitLoud = (...args) =>
-  execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: 'inherit' });
+  execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: 'inherit', env: cleanEnv() });
 
 const mine = branchFor({ platform: process.platform, hostname: hostname(), env: process.env });
 const args = process.argv.slice(2);
@@ -157,7 +172,7 @@ if (dirty) {
   const tmpIndex = join(mkdtempSync(join(tmpdir(), 'aas-handoff-')), 'index');
   const withTmp = (...a) => execFileSync('git', a, {
     cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, GIT_INDEX_FILE: tmpIndex },
+    env: { ...cleanEnv(), GIT_INDEX_FILE: tmpIndex },
   }).trim();
   withTmp('read-tree', 'HEAD');
   withTmp('add', '-A', '.');

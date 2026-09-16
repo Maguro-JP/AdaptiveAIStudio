@@ -276,21 +276,34 @@ await check('会話を消す', async () => {
   if (await convRows().count() >= before) throw new Error('数が減っていない');
 });
 await check('送って返る', async () => {
-  if (noModel) {
-    // モデルが無いなら、断る理由が画面に出ていること。**黙って何も起きない、を作らない。**
-    await p.locator('.chat textarea').fill('モデルが無いときの確かめ');
-    await p.locator('.chat textarea').press('Enter');
-    await p.waitForTimeout(1500);
+  /*
+   * **自分が打った文で満たされる確かめを書かない。**
+   *
+   * ここは「モデルが無いときの確かめ」と打って、`log.includes('モデル')` を
+   * 見ていた。打った文はそのまま流れに写されるので、**断りの表示を丸ごと
+   * 消しても通る。**打つ文から、見たい語を外す。そして**打った文より後ろ**を見る。
+   */
+  const typed = noModel ? '1 たす 1 は' : '掃除の確かめ';
+  await p.locator('.chat textarea').fill(typed);
+  await p.locator('.chat textarea').press('Enter');
+  const after = async () => {
     const log = await p.locator('.chat .log').innerText();
-    if (!log.includes('GGUF') && !log.includes('モデル')) throw new Error('断った理由が出ていない');
+    const at = log.lastIndexOf(typed);
+    return at < 0 ? '' : log.slice(at + typed.length);
+  };
+  if (noModel) {
+    await p.waitForTimeout(2000);
+    const said = await after();
+    if (!/GGUF|使えるモデルがありません/.test(said)) {
+      throw new Error(`断った理由が出ていない: ${JSON.stringify(said.slice(0, 120))}`);
+    }
     return;
   }
-  await p.locator('.chat textarea').fill('掃除の確かめ');
-  await p.locator('.chat textarea').press('Enter');
   await p.waitForFunction(() => document.getElementById('run')?.dataset.state === 'busy', null, { timeout: 30000 });
   await p.waitForFunction(() => document.getElementById('run')?.dataset.state !== 'busy', null, { timeout: 120000 });
-  const log = await p.locator('.chat .log').innerText();
-  if (!log.includes('掃除の確かめ')) throw new Error('送ったものが出ていない');
+  // **返ってきたことを見る。**打った文が出ていることは、返ったことの証拠にならない。
+  const said = await after();
+  if (said.replace(/\s/g, '').length === 0) throw new Error('打った文の後ろに、何も返っていない');
 });
 // 狭い窓。横の板と会話が重なって、押せなくなっていないか。
 await check('狭い窓（1024）', async () => {
@@ -504,16 +517,40 @@ await check('中断できる', async () => {
   // 動いていないときは、そもそも出ていないこと。
   // **押せないものを出しておかない。**邪魔なだけで、押して何も起きないと戸惑う。
   if (await stop.isVisible()) throw new Error('動いていないのに中断が出ている');
+
+  /*
+   * **押して、止まるところまで見る。**
+   *
+   * ここは「在ること」と「動いていないときは出ていないこと」しか見ていなかった。
+   * 押していないので、押しても何も起きない形をそのまま通す。
+   * モデルが無い回は動かせないので、そこは見ない（見られないものは見ない）。
+   */
+  if (noModel) return;
+  await p.locator('.chat textarea').fill('長めに考えてください');
+  await p.locator('.chat textarea').press('Enter');
+  await p.waitForFunction(() => document.getElementById('run')?.dataset.state === 'busy', null, { timeout: 30000 });
+  if (!(await stop.isVisible())) throw new Error('動いているのに中断が出ていない');
+  await stop.click();
+  await p.waitForFunction(() => document.getElementById('run')?.dataset.state !== 'busy', null, { timeout: 30000 });
+  if (await stop.isVisible()) throw new Error('止めたのに中断が出たまま');
 });
 
 await check('空の区画を出さない', async () => {
-  // hidden は既定の display を消すだけなので、こちらで display: を当てている
-  // 要素では**素通りする**。実際に「やり残し」が空のまま出ていた。
+  /*
+   * **到達しない条件を見ていた。**
+   *
+   * `style.css` に `[hidden] { display: none !important; }` が在るので、
+   * `hidden` を持つ節が `isVisible()` になることは起こり得ない。つまり
+   * 「隠したはずが出ている」は一度も成り立たない。
+   * 本当の壊れ方は逆で、**`hidden` を立て忘れて空のまま出す**こと。
+   * 出ているなら中身が在ること、を見る。
+   */
   for (const id of ['unfinishedSec', 'queue']) {
     const box = p.locator(`#${id}`);
     if (await box.count() === 0) continue;
-    const isHidden = await box.evaluate((e) => e.hasAttribute('hidden'));
-    if (isHidden && await box.isVisible()) throw new Error(`隠したはずが出ている: #${id}`);
+    if (!(await box.isVisible())) continue;
+    const said = (await box.innerText()).trim();
+    if (said.length === 0) throw new Error(`空のまま出ている: #${id}`);
   }
 });
 
@@ -540,10 +577,31 @@ await check('立ち上げ直しは、できないならそう言う', async () =
 });
 
 await check('作業場を開く', async () => {
+  /*
+   * **空かどうかは、文で見る。**案内の一言も `button` なので、数で見ると
+   * 空のときまで「中身が在る」側に入ってしまう（実際に入った）。
+   */
+  const note = (await p.locator('#sideFiles').innerText()).trim();
+  const empty = note.includes('ここは空です');
   const dirs = p.locator('#sideFiles button');
-  if (await dirs.count() > 0) {
+  if (!empty && await dirs.count() > 0) {
+    /*
+     * **押したあと、何も確かめずに返っていた。**
+     *
+     * 押しても何も起きない形をそのまま通す。押した結果が画面に出ること
+     * （開いた先の中身か、少なくとも一つ下がったこと）まで見る。
+     */
+    /*
+     * **「パネルが在る」で満たさない。**エディタのパネルは開いていなくても在るので、
+     * `.editor` の数を見ると、押しても開かない形が素通りする（一度そう書いた）。
+     * 見るのは**中身が変わったか**。一覧が降りるか、開いた先の名前が出るか。
+     */
+    const shown = async () => `${(await p.locator('#sideFiles button').allInnerTexts()).join('|')}`
+      + `##${await p.locator('#root').innerText()}`;
+    const before = await shown();
     await dirs.first().click();
-    await p.waitForTimeout(600);
+    await p.waitForTimeout(1000);
+    if (await shown() === before) throw new Error('押しても何も起きない');
     return;
   }
   // **空でもよい。ただし黙るのは駄目。**
@@ -551,8 +609,77 @@ await check('作業場を開く', async () => {
   // 何も出ないと壊れているようにしか見えない。何の場所で、どう変えるかを言うこと。
   const said = (await p.locator('#sideFiles').innerText()).trim();
   if (said.length === 0) throw new Error('作業場が空なのに、何も言っていない');
-  if (!said.includes('設定')) throw new Error(`空だが、どう変えるかを言っていない: ${said.slice(0, 60)}`);
+  /*
+   * **言葉で合わせない。押して、変える口が開くところを見る。**
+   *
+   * ここは案内が「設定」という語を含むことを見ていた。語が消えたときに落ちたが、
+   * 消したのは正しい（設定→モデルに「フォルダ」は無く、**無い場所を案内していた**）。
+   * 語を見ている限り、正しい直しで落ちて、案内が的外れでも通る。
+   *
+   * 見るのは、案内そのものと横の 📂 の**どちらからでも**、その場で変える口が
+   * 開くこと。打ち込む所を出させるだけで、変えはしない（この確かめの後ろで、
+   * 別の場所を見にいくものが続く）。
+   */
+  const opened = [];
+  const answer = async (d) => { opened.push(d.type()); await d.dismiss(); };
+  p.on('dialog', answer);
+  try {
+    const note = p.locator('#sideFiles .side-empty');
+    if (await note.count() === 0) throw new Error(`空のときの案内が、押せる形をしていない: ${said.slice(0, 60)}`);
+    await note.click();
+    await p.locator('#pickWork').click();
+    await p.waitForTimeout(300);
+  } finally { p.off('dialog', answer); }
+  const prompts = opened.filter((kind) => kind === 'prompt').length;
+  if (prompts < 2) {
+    throw new Error(`空だが、その場で変えられない（開いた口: ${opened.join('|') || 'なし'}）`);
+  }
 });
+
+/*
+ * **初めて開いた人が、一押しで始められるか。**
+ *
+ * モデルを置いていない状態がいちばん多い形で、そこで出るのがこの一手。
+ * ここまで確かめていたのは「`app.js` に `canFetch` の字が在る」だけだった。
+ * 字が在ることは、押し場所が出ることも、押して何かが起きることも言わない。
+ *
+ * **取ってくるものは、本物を落とさない。**数GBになる。口を横取りして、
+ * 頼みが飛んだことと、押し場所の文が変わることで見る。
+ */
+if (noModel) {
+  await check('モデルが無いとき、一押しで取ってこられる', async () => {
+    const note = p.locator('#crashNote');
+    if (await note.count() === 0) throw new Error('話せないことを言っていない');
+    const said = await note.innerText();
+    if (!said.includes('まだ話せません')) throw new Error(`言い方が違う: ${said.slice(0, 60)}`);
+    const button = note.locator('.crash-action');
+    if (await button.count() === 0) throw new Error('一押しで取ってくる所が無い');
+    const label = (await button.innerText()).trim();
+    if (!/取ってくる/.test(label)) throw new Error(`押し場所の文が違う: ${label}`);
+    if (!/GB/.test(label)) throw new Error(`どれだけ落とすかを言っていない: ${label}`);
+
+    // 口を横取りする。本物は落とさない。
+    let asked = 0;
+    await p.route('**/api/models/get', async (route) => {
+      asked += 1;
+      await route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify({ started: true }),
+      });
+    });
+    try {
+      await button.click();
+      await p.waitForTimeout(600);
+      if (asked === 0) throw new Error('押しても取ってこようとしない');
+      const after = (await button.innerText()).trim();
+      if (!/取ってきています/.test(after)) throw new Error(`押したことが見えない: ${after}`);
+    } finally {
+      await p.unroute('**/api/models/get');
+      // 元の姿に戻す（この後の確かめが、この帯に邪魔されないように畳む）。
+      await p.reload({ waitUntil: 'networkidle' });
+      await p.waitForTimeout(600);
+    }
+  });
+}
 
 await check('取ってくる先を、自分で打てる', async () => {
   // カタログはこちらが書いた見当で、配布元の名前は変わる（消えることもある）。
@@ -595,8 +722,28 @@ await check('置いたものを読み直せる', async () => {
   await p.waitForTimeout(1200);
   const again = p.locator('button').filter({ hasText: '置いたものを読み直す' });
   if (await again.count() === 0) throw new Error('置いたものを読み直す押し場所が無い');
-  await again.first().click();
-  await p.waitForTimeout(900);
+
+  /*
+   * **押した結果を見る。**
+   *
+   * ここは「押したあとも押し場所が残っている」しか見ていなかった。
+   * 押しても何もしない形をそのまま通す。保存先へ一つ置いてから押し、
+   * **その名前が出てくるところ**まで見る。置いたものは最後に片づける。
+   */
+  const info = await p.evaluate(() => fetch('/api/info').then((r) => r.json()));
+  const at = `${info.modelsDir}/sweep-probe.gguf`;
+  const { writeFile, rm, mkdir } = await import('node:fs/promises');
+  // 置き先がまだ無いことがある（入れた直後・一時の場所）。作ってから置く。
+  await mkdir(info.modelsDir, { recursive: true });
+  await writeFile(at, 'GGUF');
+  try {
+    await again.first().click();
+    await p.waitForTimeout(1200);
+    const shown = await p.locator('#root').innerText();
+    if (!shown.includes('sweep-probe.gguf')) throw new Error('押しても、置いたものが出てこない');
+  } finally {
+    await rm(at, { force: true });
+  }
   // 押したあとも、押し場所が残っていること（一度きりにならない）。
   if (await p.locator('button').filter({ hasText: '置いたものを読み直す' }).count() === 0) {
     throw new Error('一度押すと消える');
@@ -611,6 +758,50 @@ await check('作業場は、作業場の所で変える', async () => {
   // いまどこを触っているかが、常に出ていること。
   const now = (await p.locator('#workNow').innerText()).trim();
   if (now.length === 0) throw new Error('いまどこを触っているのかが出ていない');
+
+  /*
+   * **押して、変わるところまで見る。**
+   *
+   * ここは在ること・見えること・文字が空でないことしか見ていなかった。
+   * 押していないので、押しても何も起きない形をそのまま通す。
+   * 新しい場所を打ち込んで、出ている場所が変わることを見る。
+   */
+  const { mkdtemp } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  /*
+   * **戻す先は、画面の表示から取らない。**`#workNow` は道を省略して出すうえ、
+   * 「開く」「コピー」の文字も混ざる。それを打ち直すと、**在りもしない場所を
+   * 作業場にしてしまう**（実際にそうした）。本体に訊く。
+   */
+  const cfg = await p.evaluate(() => fetch('/api/config').then((r) => r.json()));
+  const wasAt = String(cfg.workRootNow ?? '');
+  if (!wasAt) throw new Error('いまの作業場が本体から取れない');
+  const want = await mkdtemp(join(tmpdir(), 'aas-sweep-work-'));
+  const type = (text) => (d) => { d.accept(text).catch(() => undefined); };
+  const move = async (to) => {
+    const answer = type(to);
+    p.on('dialog', answer);
+    try {
+      await p.locator('#pickWork').click();
+      await p.waitForTimeout(1500);
+    } finally { p.off('dialog', answer); }
+    return (await p.locator('#workNow').innerText()).trim();
+  };
+  const after = await move(want);
+  if (!after.includes(want.split('/').at(-1))) {
+    throw new Error(`押しても変わらない: ${after.slice(0, 80)}`);
+  }
+  /*
+   * **元へ戻す。**戻さないと、次に回したときの作業場が空になり、
+   * 前のほうの確かめ（作業場を開く）が別の道を通る。
+   * **走らせるたびに結果が変わる確かめを、自分で作らない。**
+   */
+  await move(wasAt);
+  const again = await p.evaluate(() => fetch('/api/config').then((r) => r.json()));
+  if (String(again.workRootNow ?? '') !== wasAt) {
+    throw new Error(`元へ戻せていない: ${String(again.workRootNow).slice(0, 80)}`);
+  }
 });
 
 await check('コマンドと設定が、手の届く所に在る', async () => {

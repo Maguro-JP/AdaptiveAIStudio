@@ -333,3 +333,39 @@ describe('入口の番号', () => {
     }
   });
 });
+
+/**
+ * 2つ目からの引数を、落とさずに渡すこと。
+ *
+ * 入口は `set "TASK=%~1"` で**第1引数しか拾っていなかった**。
+ * 配った形（npm の無い機械）で片づけるには `clean --yes` を渡すしかないのに、
+ * `--yes` が落ちるので**一度も消せない**。画面の「溜まったものを片づける」も
+ * 見せるだけで終わり、次の一手が打てない形になっていた。
+ */
+describe('入口は、渡された引数をそのまま渡す', () => {
+  const source = async (): Promise<string> => {
+    const raw = await readFile(join(installRoot(), 'start.cmd'));
+    return new TextDecoder('shift_jis').decode(raw);
+  };
+
+  test('**2つ目からの引数を集めている**', async () => {
+    const text = await source();
+    assert.match(text, /^:collect$/m, '集める所が無い');
+    assert.match(text, /set "ARGS=%ARGS% %~1"/, '集めていない');
+    assert.match(text, /^shift$/m, 'ずらしていない（同じ引数を数え続ける）');
+  });
+
+  test('**集めたものを、走らせる所へ渡している**', async () => {
+    const text = await source();
+    // npm 無しの道。`run.mjs <名前> <引数…>` は既に引数を通す。
+    assert.match(text, /run\.mjs %TASK%%ARGS%/, 'npm 無しの道へ渡していない');
+    // npm の道は `npm run <名前> -- <引数…>`。
+    assert.match(text, /if defined ARGS call "%NPM%" run %TASK% --%ARGS%/, 'npm の道へ渡していない');
+  });
+
+  test('引数が無いときは、これまでどおり（対）', async () => {
+    const text = await source();
+    assert.match(text, /if not defined ARGS call "%NPM%" run %TASK%$/m,
+      '引数が無いときに -- を付けている');
+  });
+});
