@@ -66,6 +66,14 @@ export interface TeamOptions {
    * 省略すると全員が同じ system と tools で働く（P2までの動き）。
    */
   assign?(roleId: string): { system: string; tools: Tool[] } | undefined;
+  /**
+   * 依頼ごとにツールを組む。
+   *
+   * **ハーネスを通すため。**並列に走らせるので、規則が見る積み重ねは
+   * 依頼ごとに分かれていないといけない（`Harness.forTask()`）。
+   * 省略すると `tools` をそのまま全員で使う。
+   */
+  toolsFor?(item: WorkItem): Tool[];
 }
 
 export interface WorkResult {
@@ -98,7 +106,7 @@ export class Team {
     const agent = new Agent(this.#orchestrator, {
       candidates,
       system: assigned?.system ?? this.#opts.system,
-      tools: assigned?.tools ?? this.#opts.tools,
+      tools: assigned?.tools ?? this.#opts.toolsFor?.(item) ?? this.#opts.tools,
       root: this.#opts.root,
       maxTurns: this.#opts.maxTurns,
       temperature: this.#opts.temperature,

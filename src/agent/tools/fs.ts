@@ -4,7 +4,7 @@ import { unifiedDiff, diffStat } from '../diff.ts';
 import { toolOutputBudget, cutToTokens } from '../window.ts';
 import { applyHunks, splitHunks } from '../hunks.ts';
 import { safeResolve, realSafeResolve, isSymlink, toDisplayPath } from './paths.ts';
-import { type Tool, type ToolContext, ok, fail, requireString } from './types.ts';
+import { type Tool, type ToolContext, ok, fail, requireString, optionalPositiveInt } from './types.ts';
 import { applyEdit, nearestTo } from './write-kind.ts';
 import { Ignores } from '../ignore.ts';
 
@@ -14,10 +14,14 @@ const MAX_READ_BYTES = 400_000;
 export const readFileTool: Tool = {
   schema: {
     name: 'read_file',
-    description: 'ファイルの内容を読む。行番号つきで返る。',
+    description: 'ファイルの内容を読む。行番号つきで返る。長いファイルは offset で続きから読む。',
     parameters: {
       type: 'object',
-      properties: { path: { type: 'string', description: '作業ディレクトリからの相対パス' } },
+      properties: {
+        path: { type: 'string', description: '作業ディレクトリからの相対パス' },
+        offset: { type: 'number', description: '何行目から読むか（1 から数える。省略すると先頭から）' },
+        limit: { type: 'number', description: '何行読むか（省略するとコンテキストウィンドウに入るだけ）' },
+      },
       required: ['path'],
       additionalProperties: false,
     },
@@ -34,7 +38,28 @@ export const readFileTool: Tool = {
         return fail(`ファイルが大きすぎます (${info.size} bytes)。search_text で絞り込んでください。`);
       }
       const text = await readFile(abs, 'utf8');
-      const numbered = text.split('\n').map((l, i) => `${i + 1}\t${l}`).join('\n');
+      const all = text.split('\n');
+      /*
+       * **続きから読めるようにする。**
+       *
+       * ここは丸ごと読んで、コンテキストウィンドウに入る分で切っていた。
+       * 切ったあとの案内は「search_text か find_code で絞ってください」で、
+       * **続きを読む道を一つも持っていなかった。**既定の 8192 では 130 行ほどで
+       * 切れるので、それより下に在るものは一行も読めない。当たる言葉を知って
+       * いれば search_text で覗けるが、知らないから読もうとしている。
+       *
+       * 行の番号で切り出す。番号は**ファイルの中の本当の番号**を出す
+       * （切り出した中での番号にすると、edit_file へ渡す手掛かりが狂う）。
+       */
+      const from = optionalPositiveInt(args, 'offset') ?? 1;
+      if (from > all.length) {
+        return fail(`${all.length} 行しかありません: offset=${from}`);
+      }
+      const limit = optionalPositiveInt(args, 'limit');
+      const taken = all.slice(from - 1, limit === undefined ? undefined : from - 1 + limit);
+      const numbered = taken.map((l, i) => `${from + i}\t${l}`).join('\n');
+      const rest = (last: number): string =>
+        `\n…（${last} 行目まで。全体は ${all.length} 行。続きは offset=${last + 1} で読めます）`;
       // **窓に収まる分だけ返す。**丸ごと返すと、一度読んだだけで溢れる。
       const budget = ctx.contextTokens ? toolOutputBudget(ctx.contextTokens) : undefined;
       if (budget !== undefined) {
@@ -42,10 +67,12 @@ export const readFileTool: Tool = {
         // いたので、日本語ではたまたま合い、英語では4分の1しか使えていなかった。
         const shown = cutToTokens(numbered, budget, ctx.count);
         if (shown.length < numbered.length) {
-          const lines = shown.split('\n').length;
-          return ok(`${shown}\n…（${lines} 行目まで。この先は search_text か find_code で絞ってください）`);
+          // cutToTokens は行の途中で切らない（最後の改行まで戻す）。
+          return ok(`${shown}${rest(from - 1 + shown.split('\n').length)}`);
         }
       }
+      const last = from - 1 + taken.length;
+      if (last < all.length) return ok(`${numbered}${rest(last)}`);
       return ok(numbered);
     } catch (e) {
       return fail(`読めません: ${p} (${describe(e)})`);

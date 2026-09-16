@@ -9,7 +9,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { relative, isAbsolute } from 'node:path';
 import { minimatch } from './glob.ts';
 import { safeResolve } from '../agent/tools/paths.ts';
-import { type Rule, type RuleContext, allow, deny, ok, argString } from './rules.ts';
+import { type Rule, type RuleContext, allow, deny, ok, argString, hasArg } from './rules.ts';
 import type { ToolCall } from '../providers/contract.ts';
 
 /**
@@ -125,8 +125,23 @@ export function blastRadius(maxFiles: number): Rule {
 /**
  * 読まずに書くのを止める。
  *
- * 既存ファイルを read_file / search_text せずに全文で上書きすると、
- * 知らない内容を消す。write_file は全文渡しなので、これは実際に起きる。
+ * 既存ファイルを read_file せずに全文で上書きすると、知らない内容を消す。
+ * write_file は全文渡しなので、これは実際に起きる。
+ *
+ * **見ていたのは「そのファイルを読んだか」ではなかった。**
+ * `search_text` を一度でも呼んでいれば通していた——探した言葉も、
+ * 当たったファイルも見ずに。`search_text` の結果に**そのファイルが
+ * 一件も出ていなくても通る**ので、無関係な検索一回で全文上書きが素通りする。
+ * 守っているつもりで、守っていない形。名指しで読んだことだけを見る。
+ *
+ * `read_file` に `offset` / `limit` が付いたので、**一部だけ読んだ**ことも
+ * 起きる。全文を置き換える `write_file` では、それは読んだことにしない
+ * （読んでいない行を消すのが、この規則が止めたいこと）。`edit_file` は
+ * 当てた所だけを替えるので、一部だけ読んでいれば足りる。
+ *
+ * **残っているところ。**規則には呼び出しだけが渡り、結果は渡らない。だから
+ * `offset` を渡していない読みが、コンテキストウィンドウで切られていたかは
+ * ここでは分からない。切られた分を消す形は、まだ止められない。
  */
 export const readBeforeWrite: Rule = {
   name: 'read-before-write',
@@ -141,12 +156,23 @@ export const readBeforeWrite: Rule = {
     const exists = (await stat(abs).catch(() => undefined)) !== undefined;
     if (!exists) return allow; // 新規作成は読みようがない
 
+    /** 一部だけを読んだ呼び出しか。 */
+    const partial = (c: ToolCall): boolean => hasArg(c, 'offset') || hasArg(c, 'limit');
+    const wholeNeeded = call.name === 'write_file';
     const sawIt = ctx.history.some((c) =>
-      (c.name === 'read_file' && argString(c, 'path') === path) ||
-      (isWriteTool(c.name) && argString(c, 'path') === path) ||
-      c.name === 'search_text');
+      (c.name === 'read_file' && argString(c, 'path') === path
+        && !(wholeNeeded && partial(c)))
+      || (isWriteTool(c.name) && argString(c, 'path') === path));
     if (sawIt) return allow;
 
+    const partly = ctx.history.some((c) =>
+      c.name === 'read_file' && argString(c, 'path') === path && partial(c));
+    if (partly) {
+      return deny(
+        `${path} は一部しか読んでいません。write_file は全文を置き換えるため、` +
+        '読んでいない行が消えます。offset を外して読み直すか、edit_file で直してください。',
+      );
+    }
     return deny(
       `${path} をまだ読んでいません。write_file は全文を置き換えるため、` +
       '先に read_file で現在の内容を確認してください。',

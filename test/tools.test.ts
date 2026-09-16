@@ -48,6 +48,95 @@ describe('ファイルツール', () => {
     assert.match(r.content, /^1\texport const answer = 41;/);
   });
 
+  /**
+   * **入るだけ読んで、続きから読めば、最後まで読める。**
+   *
+   * `read_file` はコンテキストウィンドウに入る分で切っていたが、切ったあとの
+   * 案内は「search_text か find_code で絞ってください」だけだった。
+   * **続きを読む道が無い。**既定の 8192 では 130 行ほどで切れるので、
+   * それより下に在るものは一行も読めなかった（当たる言葉を知っていれば
+   * search_text で覗けるが、知らないから読もうとしている）。
+   *
+   * ここで見るのは、案内に出た `offset` で**本当に続きが取れること**。
+   * 番号が一つずれるだけで、行が消えるか二重になる。
+   */
+  describe('長いファイルを、続きから読む', () => {
+    const lines = 400;
+    const many = async (): Promise<string> => {
+      const root = await tempDir('aas-long-');
+      await writeFile(join(root, 'long.txt'),
+        Array.from({ length: lines }, (_, i) => `line ${i + 1}`).join('\n'));
+      return root;
+    };
+    /** 狭いコンテキストウィンドウ。何度か読まないと最後まで行かない。 */
+    const narrow = (root: string): ToolContext => ({ ...ctx(root), contextTokens: 2048 });
+
+    test('**何度か読めば、一行も落とさずに最後まで読める**', async () => {
+      const root = await many();
+      const seen: string[] = [];
+      let offset = 1;
+      for (let round = 0; round < 20; round += 1) {
+        const r = await readFileTool.run({ path: 'long.txt', offset }, narrow(root));
+        assert.equal(r.isError, undefined, r.content);
+        const body = r.content.split('\n').filter((l) => /^\d+\t/.test(l));
+        for (const l of body) seen.push(l);
+        const more = /続きは offset=(\d+) で読めます/.exec(r.content);
+        if (!more) break;
+        const next = Number(more[1]);
+        assert.ok(next > offset, `進んでいません: ${offset} → ${next}`);
+        offset = next;
+      }
+      assert.equal(seen.length, lines, `読めた行数が違います: ${seen.length}`);
+      assert.equal(seen[0], '1\tline 1');
+      assert.equal(seen[lines - 1], `${lines}\tline ${lines}`);
+      // 番号は飛ばず、重ならない。
+      for (let i = 0; i < lines; i += 1) {
+        assert.equal(seen[i], `${i + 1}\tline ${i + 1}`, `${i + 1} 行目がずれています`);
+      }
+    });
+
+    test('**番号は、切り出した中ではなくファイルの中の番号**', async () => {
+      const root = await many();
+      const r = await readFileTool.run({ path: 'long.txt', offset: 200, limit: 2 }, ctx(root));
+      assert.equal(r.content.split('\n')[0], '200\tline 200');
+      assert.match(r.content, /^201\tline 201$/m);
+    });
+
+    test('limit で行数を決められる', async () => {
+      const root = await many();
+      const r = await readFileTool.run({ path: 'long.txt', offset: 10, limit: 3 }, ctx(root));
+      const body = r.content.split('\n').filter((l) => /^\d+\t/.test(l));
+      assert.deepEqual(body, ['10\tline 10', '11\tline 11', '12\tline 12']);
+      assert.match(r.content, /続きは offset=13 で読めます/);
+    });
+
+    test('数を文字列で渡されても効く（モデルはそう渡してくる）', async () => {
+      const root = await many();
+      const r = await readFileTool.run({ path: 'long.txt', offset: '10', limit: '1' }, ctx(root));
+      const body = r.content.split('\n').filter((l) => /^\d+\t/.test(l));
+      assert.deepEqual(body, ['10\tline 10']);
+    });
+
+    test('行の数を超えた offset は、そう言って断る', async () => {
+      const root = await many();
+      const r = await readFileTool.run({ path: 'long.txt', offset: lines + 5 }, ctx(root));
+      assert.equal(r.isError, true);
+      assert.match(r.content, new RegExp(`${lines} 行しかありません`));
+    });
+
+    test('渡さなければ、これまでどおり先頭から（対）', async () => {
+      const root = await many();
+      const r = await readFileTool.run({ path: 'long.txt' }, ctx(root));
+      assert.match(r.content, /^1\tline 1$/m);
+    });
+
+    test('最後まで出したときは、続きの案内を出さない（対）', async () => {
+      const root = await many();
+      const r = await readFileTool.run({ path: 'long.txt', offset: lines }, ctx(root));
+      assert.doesNotMatch(r.content, /続きは offset/);
+    });
+  });
+
   test('list_files は node_modules を除外する', async () => {
     const root = await workspace();
     const r = await listFilesTool.run({}, ctx(root));

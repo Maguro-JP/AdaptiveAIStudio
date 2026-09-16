@@ -58,3 +58,17 @@ export function argString(call: ToolCall, key: string): string | undefined {
   const v = (args as Record<string, unknown>)[key];
   return typeof v === 'string' ? v : undefined;
 }
+
+/**
+ * その引数が渡されているか。
+ *
+ * **型で見ない。**`argString` は文字列しか返さないので、数で渡された
+ * `offset: 120` を「渡されていない」と読む。渡されたかどうかだけを見たい所で
+ * それを使うと、規則が黙って効かなくなる。
+ */
+export function hasArg(call: ToolCall, key: string): boolean {
+  const args = call.args;
+  if (typeof args !== 'object' || args === null) return false;
+  const v = (args as Record<string, unknown>)[key];
+  return v !== undefined && v !== null && v !== '';
+}
