@@ -120,10 +120,18 @@ jobs:
         with:
           node-version: '24.x'
 
-      # sweep に要る分だけ。まとめて一度に渡す
+      # ここで入れるものは二つ。まとめて一度に渡す
       # （`--no-save` を一つずつ渡すと、他の `--no-save` の分が消える）。
-      - name: sweep に要るものを入れる
-        run: npm i --no-save --no-audit --no-fund playwright-core
+      #
+      #   playwright-core   sweep（画面を押して回る）に要る。**配る形には入らない**
+      #   node-llama-cpp    モデルを読む側。**配る形には入る**（setup.exe と同じ）
+      #
+      # 後者を入れていなかったので、組んだものにモデルを読む側が無く、
+      # 送っても「読み込めませんでした」で返っていた。それでは
+      # **1ターン通せたことにならない。**配る形を組む release と同じものを入れる
+      # （GPU 向けの版は入れない。ランナーに GPU が無いので、CPU の版だけで足りる）。
+      - name: 組むのと押すのに要るものを入れる
+        run: npm i --no-save --no-audit --no-fund playwright-core node-llama-cpp @node-llama-cpp/win-x64
 
       - name: 配る形で1ターン
         run: npm run check:bundle
