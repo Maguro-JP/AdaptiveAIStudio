@@ -67,8 +67,21 @@ export const readFileTool: Tool = {
         // いたので、日本語ではたまたま合い、英語では4分の1しか使えていなかった。
         const shown = cutToTokens(numbered, budget, ctx.count);
         if (shown.length < numbered.length) {
-          // cutToTokens は行の途中で切らない（最後の改行まで戻す）。
-          return ok(`${shown}${rest(from - 1 + shown.split('\n').length)}`);
+          /*
+           * `cutToTokens` は行の切れ目まで戻すが、**1 行が入り切らないときは
+           * 戻る先が無い。**そのときは行の途中で切れる（`あ` を 6 万字並べた
+           * ような形。実際に在る）。
+           *
+           * ここで「続きは offset=2 で読めます」と出すと**嘘になる。**
+           * 2 行目は無いし、offset は行でしか動かないので、この行の残りは
+           * どうやっても取れない。取れないものを案内しない。
+           */
+          const atLineEnd = numbered[shown.length] === '\n';
+          const last = from - 1 + shown.split('\n').length;
+          return ok(atLineEnd
+            ? `${shown}${rest(last)}`
+            : `${shown}\n…（${last} 行目の途中まで。この 1 行が長すぎて入りません。`
+              + 'この先は search_text か find_code で絞ってください）');
         }
       }
       const last = from - 1 + taken.length;

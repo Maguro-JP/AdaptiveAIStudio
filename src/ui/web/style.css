@@ -491,6 +491,12 @@ button.ghost:hover { color: var(--text); background: var(--surface2); }
 .card-head:hover { background: color-mix(in oklab, var(--text) 5%, transparent); }
 .card-icon { flex: 0 0 auto; width: 1.1em; text-align: center; color: var(--dim); }
 .card-title { font-family: var(--font-mono); font-size: .84rem; }
+/* 押せる名前。字のままに見せて、触ったときだけ押せると分かる形にする。 */
+.as-link {
+  background: none; border: 0; padding: 0; margin: 0;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.as-link:hover, .as-link:focus-visible { color: var(--accent); text-decoration: underline; }
 .card-meta { color: var(--dim); font-size: .8rem; margin-left: auto; font-variant-numeric: tabular-nums; }
 .card-body { padding: 0 10px 8px; }
 .card.ok .card-icon { color: var(--good); }

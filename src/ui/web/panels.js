@@ -1385,9 +1385,24 @@ export const PANELS = {
       for (const f of list) {
         const box = el('details', 'card diff-card');
         const h = el('summary', 'card-head');
+        /*
+         * **ファイルの名前を押したら、そのファイルが開く。**
+         *
+         * ここは名前を字として置いていただけだった。書き換わったものを見て
+         * 次に直したいのは、まさにそのファイルなのに、**横の一覧から探し直す**
+         * ことになる。押せる所に見えないので、押してみる人もいない。
+         * 差分を開く（この card の開閉）とは別の動きなので、親へ伝えない。
+         */
+        const name = el('button', 'card-title mono as-link', f.path);
+        name.title = 'エディタで開く';
+        name.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          ctx.revealFile?.(f.path);
+        };
         h.append(
           el('span', 'card-icon', f.created ? '＋' : '◈'),
-          el('span', 'card-title mono', f.path),
+          name,
           el('span', 'card-meta', `+${f.added} -${f.removed}`),
         );
         box.append(h);

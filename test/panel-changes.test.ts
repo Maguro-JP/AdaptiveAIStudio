@@ -20,7 +20,7 @@ const { PANELS } = await import('../src/ui/web/panels.js') as {
 interface Change { path: string; diff: string; added: number; removed: number; created: boolean }
 
 /** パネルを開く。`/api/changes` は `past` を返す。叩いた先も控える。 */
-function open(past: Change[]) {
+function open(past: Change[], extra: Record<string, unknown> = {}) {
   const asked: string[] = [];
   (globalThis as { fetch?: unknown }).fetch = (async (url: string) => {
     asked.push(String(url));
@@ -33,6 +33,7 @@ function open(past: Change[]) {
       if (!handlers.has(type)) handlers.set(type, []);
       handlers.get(type)!.push(fn);
     },
+    ...extra,
   });
   const emit = (type: string, event: unknown) => {
     for (const fn of handlers.get(type) ?? []) fn({ event });
@@ -62,6 +63,32 @@ describe('変更したファイルのパネル', () => {
   test('本体に何も無ければ、これまでどおり「まだ何も」と出す（対）', async () => {
     const { text } = open([]);
     await until(() => dumpHas(text(), 'まだ何も書き換えていません'), '案内が出る');
+  });
+
+  /**
+   * **書き換わったファイルの名前を押したら、そのファイルが開く。**
+   *
+   * 名前は字として置いてあるだけだった。書き換わったものを見て次に直したいのは
+   * まさにそのファイルなのに、**横の一覧から探し直す**ことになる。
+   * 差分を開く（card の開閉）とは別の動きなので、親へは伝えない。
+   */
+  test('**ファイルの名前を押すと、エディタで開く**', async () => {
+    const opened: string[] = [];
+    const { body, text } = open([{
+      path: 'src/a.ts', diff: '@@ -1 +1 @@\n-x\n+y', added: 1, removed: 1, created: false,
+    }], { revealFile: (p: string) => opened.push(p) });
+    await until(() => dumpHas(text(), 'src/a.ts'), '差分が並ぶ');
+
+    const name = pick(body, (n) => n.textContent === 'src/a.ts' && typeof n.onclick === 'function');
+    assert.ok(name, '名前が押せる形になっていません');
+    let stopped = false;
+    let prevented = false;
+    name.onclick!({
+      preventDefault: () => { prevented = true; },
+      stopPropagation: () => { stopped = true; },
+    });
+    assert.deepEqual(opened, ['src/a.ts'], `開いていません: ${opened.join(',')}`);
+    assert.ok(stopped && prevented, '差分の開閉まで動いてしまいます');
   });
 
   test('取り直したあとに届いた分も、重ねずに並ぶ', async () => {
@@ -123,3 +150,13 @@ describe('会話のパネル', () => {
       `会話が無いのに取りに行った: ${asked.join(', ')}`);
   });
 });
+
+/** 条件に合う節を、木の中から探す。 */
+function pick(node: StubNode, want: (n: StubNode) => boolean): StubNode | undefined {
+  if (want(node)) return node;
+  for (const c of node.children) {
+    const got = pick(c, want);
+    if (got) return got;
+  }
+  return undefined;
+}
