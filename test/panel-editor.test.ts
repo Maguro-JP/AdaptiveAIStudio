@@ -91,6 +91,37 @@ describe('エディタのパネル', () => {
       `自分の写しで「保存しました」が消えている: ${state().textContent}`);
   });
 
+  /**
+   * 保存していない直しを、黙って捨てないこと。
+   *
+   * 横の一覧で別のファイルを押すと、読み直した中身をそのまま欄へ入れていた。
+   * **確認も警告も無く、書いていたものが消える。**よそからの書き換えには
+   * `!dirty()` の番が在るのに、人が別のファイルを開く道には無かった。
+   */
+  test('**別のファイルを開いても、保存していない直しは消えない**', async () => {
+    const disk = { 'a.txt': 'aaa\n', 'b.txt': 'bbb\n' };
+    const { ctx, area, state } = open(disk);
+    const openFile = ctx.openFile as (p: string) => void;
+    openFile('a.txt');
+    await until(() => area().value === 'aaa\n', 'a.txt が開く');
+
+    // まだ保存していない直し。
+    area().value = 'まだ保存していない大事な直し\n';
+    area().fire('input');
+    assert.match(state().textContent, /直しています/);
+
+    // 横の一覧で b.txt を押す。
+    openFile('b.txt');
+    await until(() => area().value === 'bbb\n', 'b.txt が開く');
+
+    // a.txt へ戻ると、直しが返ってくる。
+    openFile('a.txt');
+    await until(() => area().value === 'まだ保存していない大事な直し\n',
+      `保存していない直しが消えた: ${area().value}`);
+    assert.match(state().textContent, /戻しました/, state().textContent);
+    assert.equal(disk['a.txt'], 'aaa\n', '勝手に保存している');
+  });
+
   test('よそで書き換わったら、読み直して入れ替える（対）', async () => {
     const disk = { 'a.txt': 'one\n' };
     const { emit, ctx, area, state } = open(disk);

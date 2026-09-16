@@ -16,7 +16,8 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { writeFile, copyFile } from 'node:fs/promises';
 import { join, delimiter } from 'node:path';
-import { installRoot } from '../src/core/home.ts';
+import { existsSync } from 'node:fs';
+import { installRoot, productRoot } from '../src/core/home.ts';
 import { tempDir } from './tmp.ts';
 
 const onlyWindows = process.platform === 'win32'
@@ -86,6 +87,23 @@ function runBatch(
   });
 }
 
+/**
+ * ZIP の中から押される入口（`AdaptiveAIStudio.cmd`）が、いまどこに在るか。
+ *
+ * 作業場では `launcher.cmd`。**配る形では `app\` の中に入らない**
+ * （製品の根に `AdaptiveAIStudio.cmd` として置かれる）。ここを作業場の並びで
+ * 決め打っていたので、**bundle の中で回したときに写す元が無くて落ちた**
+ * （`ENOENT: copyfile ...\app\launcher.cmd`）。
+ *
+ * 配る形では本物の入口をそのまま押すことになるので、確かめとしては強くなる。
+ */
+function launcherPath(): string | undefined {
+  const inSource = join(installRoot(), 'launcher.cmd');
+  if (existsSync(inSource)) return inSource;
+  const shipped = join(productRoot(), 'AdaptiveAIStudio.cmd');
+  return existsSync(shipped) ? shipped : undefined;
+}
+
 describe('入口を、実際に押す', () => {
   /*
    * 日本語は CP932 で出るので、ここで読むと化ける。
@@ -105,7 +123,9 @@ describe('入口を、実際に押す', () => {
     // `app\start.cmd` が無い形（ZIP の中から押すと、これだけが temp へ出る）。
     const dir = await tempDir('aas-zip-');
     const at = join(dir, 'AdaptiveAIStudio.cmd');
-    await copyFile(join(installRoot(), 'launcher.cmd'), at);
+    const from = launcherPath();
+    assert.ok(from, '押す入口（launcher.cmd / AdaptiveAIStudio.cmd）が見つかりません');
+    await copyFile(from, at);
     const got = await runBatch('AdaptiveAIStudio.cmd', [], dir, join(dir, 'home'));
     assert.equal(got.code, 1, `止まっていない: ${got.code}\n${got.out.slice(-600)}`);
     assert.match(got.out, /AdaptiveAIStudio/, `何も言っていない:\n${got.out.slice(0, 600)}`);
@@ -119,7 +139,9 @@ describe('入口を、実際に押す', () => {
      * 中身は写さず、目当ての一行だけ置いて「渡したか」を見る（写すと 90MB 動く）。
      */
     const dir = await tempDir('aas-shape-');
-    await copyFile(join(installRoot(), 'launcher.cmd'), join(dir, 'AdaptiveAIStudio.cmd'));
+    const from = launcherPath();
+    assert.ok(from, '押す入口（launcher.cmd / AdaptiveAIStudio.cmd）が見つかりません');
+    await copyFile(from, join(dir, 'AdaptiveAIStudio.cmd'));
     const { mkdir } = await import('node:fs/promises');
     await mkdir(join(dir, 'app'), { recursive: true });
     // CP932 で置く（本物と同じ作法）。中身は ASCII だけにする。

@@ -514,6 +514,8 @@ export const PANELS = {
         const body = await (await fetch(`/api/conversations/messages?id=${encodeURIComponent(id)}`)).json();
         if (body.messages?.length) ctx.showHistory(body.messages);
         if (body.inFlight) ctx.showInFlight?.(body.inFlight);
+        // 待っている承認。押す口が無いと、本体は 10 分待ち続ける。
+        if (body.approvals?.length) ctx.showApprovals?.(body.approvals);
       } catch { /* 取れなければ、これから来る分だけ */ }
     };
 
@@ -738,8 +740,15 @@ export const PANELS = {
       }
     });
 
-    // 承認。押されるまで、向こう側は止まって待っている。
-    ctx.on('approval', (e) => {
+    /*
+     * 承認。押されるまで、向こう側は止まって待っている。
+     *
+     * **作り直されても取り直せるように、描き手に名前を付ける。**
+     * 押す札はこの DOM にしか無かったので、パネルを一枚出し入れするだけで
+     * 押す口が消えていた（`render()` が全部作り直す）。本体は待ったままで、
+     * 10 分経つまでどの依頼も進まない。
+     */
+    const showApproval = (e) => {
       const req = e.request;
       const what = req.kind === 'write' ? `${req.created ? '新規作成' : '変更'}: ${req.path}`
         : req.kind === 'command' ? `コマンド実行: ${req.command}`
@@ -829,7 +838,10 @@ export const PANELS = {
           box.replaceChildren(el('div', 'dim', `${what} → ${d.approved ? '許可' : '拒否'}`));
         }
       });
-    });
+    };
+    ctx.on('approval', showApproval);
+    // 作り直されたら、待っている承認も取り直す（`restore` から渡ってくる）。
+    ctx.showApprovals = (waiting) => { for (const a of waiting) showApproval(a); };
   },
 
   /*
@@ -1597,7 +1609,22 @@ export const PANELS = {
     };
     area.oninput = refresh;
 
+    /*
+     * **保存していない直しを、黙って捨てない。**
+     *
+     * 横の一覧で別のファイルを押すと、ここは読み直した中身をそのまま
+     * `area.value` に入れていた。**確認も警告も無く、書いていたものが消える。**
+     * よそからの書き換え（`session` の diff）には `!dirty()` の番が在るのに、
+     * 人が別のファイルを開く道には無かった。
+     *
+     * 直す側の受け皿を作る。離れるときに預かって、戻ってきたら返す。
+     * 消さないので、押し間違いでも取り返しがつく。
+     */
+    const drafts = new Map();
+
     const open = async (p) => {
+      // 離れる前に、保存していない分を預かる。
+      if (path && p !== path && dirty()) drafts.set(path, area.value);
       let r;
       try {
         r = await fetch(`/api/file?path=${encodeURIComponent(p)}`, { signal: AbortSignal.timeout(20000) });
@@ -1627,8 +1654,13 @@ export const PANELS = {
       if (p === path && j.content === loaded && !dirty()) { name.textContent = p; return; }
       path = p; loaded = j.content;
       name.textContent = p;
-      area.value = loaded; area.disabled = false;
+      // 預けた分が在れば、それを返す（消さずに戻す）。
+      const kept = drafts.get(p);
+      area.value = kept ?? loaded;
+      area.disabled = false;
+      if (kept !== undefined) drafts.delete(p);
       refresh();
+      if (kept !== undefined && kept !== loaded) state.textContent = '保存していない直しを戻しました（Ctrl+S で保存）';
       area.focus();
     };
 
