@@ -314,6 +314,38 @@ describe('入口の番号', () => {
    * `package.json` に書いてある。二箇所に分かれているので、片方だけ足すと
    * 「番号はあるのに何も起きない」になる。押した人には理由が分からない。
    */
+  /**
+   * **案内に出ている番号が、押せること。**
+   *
+   * README は Windows のメニュー（5 つ）を写した上で、「番号 7 は更新」
+   * 「番号 8 は selftest」と書いていた。その番号は `start.sh` 側のもので、
+   * **Windows のメニューには無い。**配る先は Windows なので、案内どおりに
+   * 押した人は無い番号を探すことになる。
+   *
+   * 写したものは必ずずれるので、**番号の集合が一致することだけを見る。**
+   */
+  test('**README のメニューの番号は、入口の番号と同じ**', async () => {
+    const root = installRoot();
+    const readme = await readFile(join(root, 'README.md'), 'utf8');
+    const cmd = await readFile(join(root, 'start.cmd'), 'utf8');
+
+    // README の中の、入口のメニューを写した塊。
+    const block = /AdaptiveAIStudio\n {2}-{10,}\n([\s\S]*?)```/.exec(readme);
+    assert.ok(block, 'README に入口のメニューの写しが見つかりません');
+    const inReadme = [...block[1]!.matchAll(/^\s{2,}(\d)\s{2,}\S/gm)].map((m) => m[1]!);
+    assert.ok(inReadme.length >= 5, `写しから番号が読めていません: ${inReadme.join(',')}`);
+
+    const inEntry = [...cmd.matchAll(/CHOICE%"=="(\d)"/g)].map((m) => m[1]!);
+    assert.deepEqual(
+      [...new Set(inReadme)].sort(), [...new Set(inEntry)].sort(),
+      'README の番号と、入口の番号が違います',
+    );
+
+    // 番号を本文で名指ししていないこと（写すとずれる。文字で選ばせる）。
+    const named = [...readme.matchAll(/番号 `(\d)`/g)].map((m) => m[1]!);
+    assert.deepEqual(named, [], `本文が番号を名指ししています: ${named.join(',')}`);
+  });
+
   test('番号から呼ばれる仕事が、package.json にある', async () => {
     const root = installRoot();
     const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
