@@ -326,8 +326,11 @@ describe('入口の番号', () => {
    */
   test('**README のメニューの番号は、入口の番号と同じ**', async () => {
     const root = installRoot();
-    const readme = await readFile(join(root, 'README.md'), 'utf8');
-    const cmd = await readFile(join(root, 'start.cmd'), 'utf8');
+    // 行の終わりは、取り出した機械で変わる（Windows の git は CRLF にする）。
+    // 塊を探す正規表現が \n を直に書いていたので、Windows でだけ見つからなかった。
+    const lf = (s: string): string => s.replace(/\r\n/g, '\n');
+    const readme = lf(await readFile(join(root, 'README.md'), 'utf8'));
+    const cmd = lf(await readFile(join(root, 'start.cmd'), 'utf8'));
 
     // README の中の、入口のメニューを写した塊。
     const block = /AdaptiveAIStudio\n {2}-{10,}\n([\s\S]*?)```/.exec(readme);
