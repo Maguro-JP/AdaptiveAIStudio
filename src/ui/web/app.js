@@ -30,6 +30,14 @@ const ctx = {
   showHistory: () => undefined,
   /** ファイルをエディタで開く。エディタのパネルが繋ぐ。 */
   openFile: () => undefined,
+  /**
+   * ファイルを、エディタを出してから開く。
+   *
+   * `openFile` はエディタのパネルが出ているときしか効かない（出ていなければ
+   * 誰も繋いでいないので、押しても何も起きない）。出す口はここに在るので、
+   * **出してから開く道をパネルの側へ渡す。**
+   */
+  revealFile: () => undefined,
   on(type, fn) {
     if (!eventHandlers.has(type)) eventHandlers.set(type, []);
     eventHandlers.get(type).push(fn);
@@ -1337,12 +1345,14 @@ async function loadFiles(at = '') {
  * 出す口が「表示するもの」の一覧だけだと、ファイルを押しても何も起きない
  * ように見える。押した人が最初に見るのはここなので、ここで出す。
  */
-async function openInEditor(path) {
+async function openInEditor(path, line) {
   const shown = new Set(panelsInUse(layout.root));
   const has = layout.panels.some((p) => p.kind === 'editor' && shown.has(p.id));
   if (!has) await apply(openPanel(layout, 'editor'));
-  ctx.openFile(path);
+  ctx.openFile(path, line);
 }
+
+ctx.revealFile = (path, line) => { void openInEditor(path, line); };
 
 function insertPath(path) {
   const input = document.querySelector('.chat textarea');

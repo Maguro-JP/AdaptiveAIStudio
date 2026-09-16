@@ -30,8 +30,18 @@ export interface StubNode {
   readonly childNodes: StubNode[];
   readonly firstChild: StubNode | undefined;
   removeChild(child: StubNode): StubNode;
-  onclick?: () => unknown;
+  /**
+   * 押されたときの受け手。
+   *
+   * **出来事を受け取る形も許す。**本物の onclick には event が渡る。
+   * 引数なしだけを許していたので、`e.stopPropagation()` を呼ぶ受け手を
+   * 押す試験が書けなかった（型で弾かれる）。
+   */
+  onclick?: (e?: unknown) => unknown;
   onchange?: (e: unknown) => unknown;
+  /** 打たれたときの受け手。エディタは Ctrl+S / Ctrl+F / Enter をここで見る。 */
+  onkeydown?: (e: unknown) => unknown;
+  oninput?: (e?: unknown) => unknown;
   /** 打ち込む欄の中身。textarea / input を使うパネルのために持つ。 */
   value: string;
   spellcheck: boolean;

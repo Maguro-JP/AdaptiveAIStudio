@@ -48,6 +48,7 @@ import { buildRuntime } from '../core/runtime-setup.ts';
 import { MachineCache } from '../runtime/machine.ts';
 import { usesGguf, type LocalRuntime } from '../runtime/local-runtime.ts';
 import { realSafeResolve } from '../agent/tools/paths.ts';
+import { searchText } from '../agent/tools/fs.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout, DEFAULT_LAYOUT_ID } from './layout.ts';
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
@@ -349,7 +350,15 @@ export class UiServer {
   /** モデルの土台。要るときに一度だけ組み立てる。 */
   #runtime?: LocalRuntime;
   /** 承認待ちの返事先。画面が答えるまで、ここで待っている。 */
-  readonly #pending = new Map<string, (ok: ApprovalAnswer) => void>();
+  /**
+   * 待っている承認。**答える手だけでなく、訊いている内容も持つ。**
+   *
+   * ここは答える手（resolve）だけを持っていた。押す札は画面の DOM にしか
+   * 無いので、**パネルを一枚出し入れするだけで押す口が消える**
+   * （`render()` が全部作り直す）。本体はここに残ったまま 10 分待ち、
+   * その間どの依頼も進まない。取り直せるように、内容もここに置く。
+   */
+  readonly #pending = new Map<string, { finish: (ok: ApprovalAnswer) => void; request: ApprovalRequest }>();
   /** 渡されたファイルの預かり所。 */
   readonly #attachments = new Attachments();
   /** 作っているものを見せる口。操作用とは**別の口**にする。 */
@@ -569,6 +578,15 @@ export class UiServer {
    * 候補が空のまま固定される。読み込んだ後も直らないので、
    * **打っても打っても即座に「使えるモデルがありません」で終わる。**
    */
+  /**
+   * いま待っている承認。**画面を作り直しても、押す口を取り直せるように。**
+   *
+   * 会話ごとには分けていない（一人で使い、訊くのは一度に一つ）。
+   */
+  #waitingApprovals(): Array<{ id: string; request: ApprovalRequest }> {
+    return [...this.#pending].map(([id, { request }]) => ({ id, request }));
+  }
+
   /** この会話で動いている一言の、ここまで。動いていなければ null。 */
   #inFlightFor(id: string): { asked: string; text: string; seq: number } | null {
     const f = this.#inFlight;
@@ -805,7 +823,7 @@ export class UiServer {
         this.broadcast({ type: 'approvalDone', id, approved: ok !== false });
         resolve(ok);
       };
-      this.#pending.set(id, finish);
+      this.#pending.set(id, { finish, request: req });
       this.broadcast({ type: 'approval', id, request: req });
       // 誰も答えないまま待ち続けない。返事が無いことは、許可ではない。
       const timer = setTimeout(() => finish(false), 10 * 60_000);
@@ -824,7 +842,7 @@ export class UiServer {
     this.#stopped = true;
     if (this.#idleTimer) clearInterval(this.#idleTimer);
     // 待っている承認は、答えが無いまま終わる。許可はしない。
-    for (const finish of this.#pending.values()) finish(false);
+    for (const { finish } of this.#pending.values()) finish(false);
     this.#pending.clear();
     const timed = async (what: string, run: () => Promise<unknown>) => {
       const began = Date.now();
@@ -1192,14 +1210,25 @@ export class UiServer {
     }
 
     if (path === '/api/abort' && req.method === 'POST') {
+      /*
+       * **待っている承認も解く。**
+       *
+       * ここは `abort()` だけを呼んでいた。承認を待っている間は、止めても
+       * `#pending` がそのまま残るので、**10 分経つまでどの依頼も進まない。**
+       * 押した人には「■ が効かない」としか見えない。答えが無いのは許可ではない
+       * ので、拒否として解く。
+       */
+      for (const { finish } of this.#pending.values()) finish(false);
+      this.#pending.clear();
       this.#session?.abort();
       return send(res, 200, { ok: true });
     }
 
     if (path === '/api/approve' && req.method === 'POST') {
       const body = await readBody(req) as { id?: string; approved?: boolean; hunks?: unknown; all?: boolean };
-      const resolveIt = this.#pending.get(String(body?.id ?? ''));
-      if (!resolveIt) return send(res, 404, { error: 'その承認は既に終わっています' });
+      const waiting = this.#pending.get(String(body?.id ?? ''));
+      if (!waiting) return send(res, 404, { error: 'その承認は既に終わっています' });
+      const resolveIt = waiting.finish;
       // 一部だけ通すときは、通す塊の番号が来る。
       const picked = Array.isArray(body?.hunks)
         ? body.hunks.filter((n): n is number => typeof n === 'number')
@@ -1676,6 +1705,30 @@ export class UiServer {
       }
     }
 
+    /*
+     * 探す。
+     *
+     * **画面には、探す口が一つも無かった。**モデルは `search_text` を持って
+     * いるのに、使う側は「あの文字がどこに在るか」を見る手段が無い。
+     * 開いて直すための画面として、これは無いと使えない。
+     *
+     * 探すのはツールと同じ処理（`searchText`）。二度書くと、片方だけ直る日が来る。
+     * 打ち切ったことも、大きすぎて開いていないことも、そのまま画面へ渡す
+     * （**見ていない分を、無かったことにしない**）。
+     */
+    if (path === '/api/search' && req.method === 'GET') {
+      const q = url.searchParams.get('q') ?? '';
+      if (!q) return send(res, 400, { error: '探す文字がありません。' });
+      const at = url.searchParams.get('path') ?? '.';
+      const found = await searchText(this.#workRoot(), q, at || '.', AbortSignal.timeout(20_000));
+      if (found.error) return send(res, 400, { error: found.error });
+      return send(res, 200, {
+        query: q, path: at,
+        hits: found.hits, capped: found.capped,
+        walkCapped: found.walkCapped, tooBig: found.tooBig,
+      });
+    }
+
     // 会話。**残してあるものを出して、開き直せるようにする。**
     if (path === '/api/conversations' && req.method === 'GET') {
       const list = await this.#conversations.list();
@@ -1801,7 +1854,10 @@ export class UiServer {
         this.#saved = past.length;
       }
       this.broadcast({ type: 'conversations' });
-      return send(res, 200, { current: id, messages: past, running: this.#runningId ?? null, inFlight: this.#inFlightFor(id) });
+      return send(res, 200, {
+        current: id, messages: past, running: this.#runningId ?? null,
+        inFlight: this.#inFlightFor(id), approvals: this.#waitingApprovals(),
+      });
     }
 
     // 見出しを付け替える。**消して作り直させない。**
@@ -1840,7 +1896,7 @@ export class UiServer {
       // **画面へ 16MB を投げない。**丸ごと返すと、開いた瞬間に固まる
       // （半年続けた会話で JSON が 5.5MB になった）。後ろから読む。
       const shown = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
-      return send(res, 200, { id, messages: shown, inFlight: this.#inFlightFor(id) });
+      return send(res, 200, { id, messages: shown, inFlight: this.#inFlightFor(id), approvals: this.#waitingApprovals() });
     }
 
     /*

@@ -127,7 +127,9 @@ describe('窓の勘定に繋がっている', () => {
       ...base, count: (t: string) => Math.ceil([...t].length / 4),
     } as never);
     assert.ok(greedy.content.length < thrifty.content.length, '数え方を見ていない');
-    assert.ok(greedy.content.includes('この先は'), '切ったことを言っていない');
+    // 行の切れ目で切れたときは、**続きの取り方まで言う**（offset を出す）。
+    // 「この先は search_text で」しか言えなかった頃は、続きを読む道が無かった。
+    assert.match(greedy.content, /続きは offset=\d+ で読めます/, '続きの取り方を言っていない');
   });
 });
 

@@ -15,12 +15,16 @@
  * のに Windows の binary が入っていなかった）。
  */
 import { spawn } from 'node:child_process';
-import { rm, stat, mkdir } from 'node:fs/promises';
+import { rm, stat, mkdir, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sweepable } from './sweepable.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const out = join(root, 'dist', 'check-bundle');
+
+/** 飛ばしたもの。終わりに必ず出す（黙って飛ばさない）。 */
+const skipped = [];
 
 /** 走らせて、終わりを待つ。落ちたら、そこで止める。 */
 function run(cmd, args, opts = {}) {
@@ -74,9 +78,20 @@ console.log('\n== その中の画面を起こして、通す');
  * 言わなかった。**本体が言っていることを、そのまま出す。**
  * 口は空いているものを使う（AAS_UI_PORT=0）。
  */
+/*
+ * **吐き切るまで待たない。**
+ *
+ * 重みが乱数の模型は、終わりの合図を出さないので `maxTokens` まで吐き続ける。
+ * 遅い機械（CI の Windows）では、それだけで何分もかかり、sweep の方が
+ * 先に諦めた（`送って返る: Timeout 120000ms`）。見たいのは道が繋がっている
+ * ことなので、**出す量の側を決める。**smoke も同じ理由で抑えている。
+ */
+const small = join(out, 'check-config.json');
+await writeFile(small, JSON.stringify({ maxTokens: 32 }, null, 2));
+
 const ui = spawn(node, [join(app, 'scripts', 'run.mjs'), 'ui'], {
   cwd: app, stdio: ['ignore', 'pipe', 'inherit'],
-  env: { ...process.env, AAS_UI_PORT: '0' },
+  env: { ...process.env, AAS_UI_PORT: '0', AAS_CONFIG: small },
 });
 let url = '';
 try {
@@ -103,8 +118,16 @@ try {
   // **黙って飛ばさない。**通ったのか、やらなかったのかが分からなくなる。
   // モデルは置いてある。`--no-model` を付けると、送りが断られるのを
   // 正しい振る舞いとして数えてしまい、**送る所を一度も押さないまま通る。**
-  await run(process.execPath, [join(root, 'scripts', 'sweep.mjs'), url], { cwd: root })
-    .catch((e) => { throw new Error(`sweep が通りませんでした: ${e.message}`); });
+  // 回せない機械では、**回せない理由を言って先へ進む。**ここで落ちると、
+  // この先（止めて、止まったことまで見る）を一度も見ないまま終わる。
+  const can = sweepable();
+  if (!can.ok) {
+    console.log(`  飛ばしました: ${can.why}`);
+    skipped.push(`sweep: ${can.why}`);
+  } else {
+    await run(process.execPath, [join(root, 'scripts', 'sweep.mjs'), url], { cwd: root })
+      .catch((e) => { throw new Error(`sweep が通りませんでした: ${e.message}`); });
+  }
 } finally {
   /*
    * 止めて、**止まったことまで見る。**
@@ -139,4 +162,9 @@ try {
 console.log('\n== 配る形のまま通りました');
 console.log(`  組んだ場所: ${out}`);
 console.log('  ここで確かめたのは、この機械むけに組んだ中身までです。');
-console.log('  配る先（Windows）で開いたわけではありません。');
+if (process.platform !== 'win32') console.log('  配る先（Windows）で開いたわけではありません。');
+if (skipped.length > 0) {
+  console.log('\n  飛ばしたもの:');
+  for (const what of skipped) console.log(`    ・${what}`);
+  console.log('  「通りました」は、この分を含みません。');
+}

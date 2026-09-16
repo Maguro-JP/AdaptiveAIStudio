@@ -4,7 +4,6 @@
  * 作業指示書は今は手書きだが、P3 で PM が自動生成するようになる。
  * 形式はそのまま引き継ぐ。
  */
-import { findCodeTool, findSymbolTool } from '../agent/tools/find.ts';
 import { defaultWorkRoot } from '../core/home.ts';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -15,11 +14,10 @@ import { buildRegistry } from '../core/build.ts';
 import { ChatOrchestrator } from '../core/orchestrator.ts';
 import { Team, type WorkItem } from '../agent/team.ts';
 import type { ApprovalRequest } from '../agent/tools/types.ts';
-import { readFileTool, listFilesTool, searchTextTool, writeFileTool, editFileTool } from '../agent/tools/fs.ts';
-import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { inspectGit, describeGitState } from '../agent/git.ts';
 import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
+import { wireTeam } from '../core/team-setup.ts';
 import { readyLocalModel } from '../core/local-ready.ts';
 
 const c = {
@@ -101,11 +99,21 @@ async function main(): Promise<void> {
     return false;
   };
 
+  /*
+   * **ここもハーネスと戻り先を通す。**組み立ては `core/team-setup.ts`。
+   * 入口の中に書くと、モデルを立てないと一度も通らないので外へ出してある。
+   */
+  const wired = await wireTeam(config, root, (d) => {
+    if (d.outcome === 'denied') console.log(c.red(`   ⛔ ${d.rule}: ${d.reason ?? ''}`));
+    else if (d.outcome === 'warned') console.log(c.yellow(`   ⚠ ${d.rule}: ${d.reason ?? ''}`));
+  });
+
   const team = new Team(new ChatOrchestrator(registry), {
     lanes,
     system: SYSTEM,
-    tools: [readFileTool, listFilesTool, searchTextTool, findCodeTool, findSymbolTool, writeFileTool, editFileTool,
-            createRunCommandTool({ allowed: agentCfg.allowedCommands })],
+    tools: wired.bare,
+    toolsFor: (item) => wired.toolsFor(item),
+    beforeWrite: (path, previous) => wired.beforeWrite(path, previous),
     root,
     maxTurns: agentCfg.maxTurns ?? 40,
     temperature: config.temperature,
@@ -124,6 +132,7 @@ async function main(): Promise<void> {
   }
   const git = describeGitState(await inspectGit(root));
   console.log(git.risky ? c.yellow(`  ${git.text}`) : c.dim(`  ${git.text}`));
+  console.log(c.dim(`規則 ${wired.harness.rules().length} 件（実行の手前で止まる）`));
   console.log(c.dim(`タスク ${items.length} 件\n`));
 
   const gen = team.run(items, ac.signal);
@@ -158,6 +167,9 @@ async function main(): Promise<void> {
   const outcomes = next.value;
   const done = [...outcomes.values()].filter((o) => o.state === 'done').length;
   console.log(`\n完了 ${done}/${outcomes.size}`);
+  // 控えを閉じる。閉じないと、次の一回ぶんと混ざって戻しすぎる。
+  const back = await wired.undo.end();
+  if (back) console.log(c.dim(`戻り先: ${back.id}（aas undo で戻せます）`));
   // 起こした子（この中で読む道）を残さない。残すと次の起動で口が埋まる。
   await runtime.shutdown().catch(() => undefined);
   rl.close();

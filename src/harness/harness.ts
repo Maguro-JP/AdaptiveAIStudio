@@ -50,6 +50,26 @@ export class Harness {
     return this.#metrics;
   }
 
+  /**
+   * 同じ規則で、履歴だけを別に持つものを作る。
+   *
+   * **並列に走らせるときは、依頼ごとに分ける。**一つを使い回すと、規則が
+   * 見る積み重ねが混ざる。読んでから書く規則は**別の担当が読んだこと**で
+   * 通ってしまい、広がりを抑える規則は**他人の書き込みまで数えて**止める。
+   * `beginTask()` で切る形は、並列では使えない（誰かの始まりが、走っている
+   * 他の担当の履歴まで消す）。
+   *
+   * 記録（audit）と測り（metrics）は分けない。そこは全体で一つ。
+   */
+  forTask(): Harness {
+    return new Harness({
+      rules: this.#rules,
+      audit: this.#audit,
+      ...(this.#metrics ? { metrics: this.#metrics } : {}),
+      ...(this.#onDecision ? { onDecision: this.#onDecision } : {}),
+    });
+  }
+
   /** 依頼ごとに履歴を切る。規則は1つの依頼の中での積み重ねを見るため。 */
   beginTask(): void {
     this.#history = [];

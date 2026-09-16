@@ -491,6 +491,12 @@ button.ghost:hover { color: var(--text); background: var(--surface2); }
 .card-head:hover { background: color-mix(in oklab, var(--text) 5%, transparent); }
 .card-icon { flex: 0 0 auto; width: 1.1em; text-align: center; color: var(--dim); }
 .card-title { font-family: var(--font-mono); font-size: .84rem; }
+/* 押せる名前。字のままに見せて、触ったときだけ押せると分かる形にする。 */
+.as-link {
+  background: none; border: 0; padding: 0; margin: 0;
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.as-link:hover, .as-link:focus-visible { color: var(--accent); text-decoration: underline; }
 .card-meta { color: var(--dim); font-size: .8rem; margin-left: auto; font-variant-numeric: tabular-nums; }
 .card-body { padding: 0 10px 8px; }
 .card.ok .card-icon { color: var(--good); }
@@ -1148,7 +1154,21 @@ dialog.wide { width: min(46rem, 92vw); }
 .editor-head { display: flex; align-items: center; gap: var(--s2); }
 .editor-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editor-state { font-size: .78rem; }
-.editor-stage { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
+.editor-stage { position: relative; flex: 1 1 auto; min-height: 0; display: flex; gap: 0; }
+/* 行番号。欄と同じ字組みで並べ、欄の巻きに合わせて動かす。 */
+.editor-lines {
+  flex: 0 0 auto; margin: 0; padding: var(--s2) .35rem var(--s2) .5rem;
+  font-size: .85rem; line-height: 1.5; text-align: right; color: var(--dim);
+  background: transparent; border: 1px solid transparent; border-right-color: var(--line);
+  overflow: hidden; user-select: none; box-sizing: border-box; min-width: 2.6rem;
+}
+.editor-hold { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; }
+/* 探す・置き換える・行へ飛ぶ。Ctrl+F と Ctrl+G で出す。 */
+.editor-find { display: flex; align-items: center; gap: .3rem; padding: .3rem 0; flex-wrap: wrap; }
+.editor-find input { font-size: .8rem; padding: 2px 6px; }
+.find-q, .find-r { flex: 1 1 8rem; min-width: 5rem; }
+.find-line { flex: 0 0 4rem; width: 4rem; }
+.find-count { font-size: .76rem; margin-left: auto; white-space: nowrap; }
 .editor-area, .editor-ghost {
   font-size: .85rem; line-height: 1.5; tab-size: 2; white-space: pre; padding: var(--s2);
   border: 1px solid var(--line); border-radius: 5px; margin: 0; box-sizing: border-box;
@@ -1197,3 +1217,17 @@ dialog.wide { width: min(46rem, 92vw); }
 .task-status.warn { color: var(--warn, #e0b34a); }
 .task-status.good { color: var(--good, #6fcf97); }
 .task-status.bad { color: var(--bad, #ef6b6b); }
+
+/* 探す。上に打つ所、下に当たった行。 */
+.search-head { display: flex; gap: .4rem; padding: .5rem .6rem .2rem; }
+.search-q { flex: 2 1 0; min-width: 0; }
+.search-where { flex: 1 1 0; min-width: 0; }
+.search-state { padding: .2rem .7rem .4rem; font-size: .8rem; }
+.search-hits { overflow: auto; }
+.search-hit {
+  display: grid; grid-template-columns: minmax(8rem, 22rem) 1fr; gap: .6rem;
+  padding: .22rem .7rem; border-top: 1px solid var(--line); align-items: baseline;
+}
+.search-hit:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.search-at { font-size: .78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.search-line { font-size: .78rem; color: var(--dim); white-space: pre; overflow: hidden; text-overflow: ellipsis; }

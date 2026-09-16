@@ -156,6 +156,7 @@ echo    1  画面をひらく          （ふだんはこれだけ）
 echo    2  新しくする
 echo    3  困ったとき（この環境を見てもらう）
 echo    4  動くか確かめる
+echo    5  本当に答えるか確かめる
 echo    0  やめる
 echo.
 echo   点検・モデル・片づけ・設定は、画面の中にあります。
@@ -168,6 +169,7 @@ if "%CHOICE%"=="1" set "TASK=ui"
 if "%CHOICE%"=="2" set "TASK=update"
 if "%CHOICE%"=="3" set "TASK=doctor"
 if "%CHOICE%"=="4" set "TASK=smoke"
+if "%CHOICE%"=="5" set "TASK=selftest"
 if "%CHOICE%"=="0" goto :quit
 if "%TASK%"=="" goto :badChoice
 

@@ -26,6 +26,7 @@ export const PANEL_KINDS = [
   'duties',        // 日課
   'models',        // モデルと実測
   'changes',       // この対話で変わったファイルと、その差分
+  'search',        // 作業場の中を、文字で探す
   'preview',       // 作っているものを、その場で見る（HTML/CSS）
   'log',           // 動いているものの流れ
   'checks',        // 点検（doctor・検査・片づけ）。cmd の窓でしかできなかったもの

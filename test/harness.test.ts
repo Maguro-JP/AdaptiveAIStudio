@@ -15,7 +15,7 @@ import { workspaceBoundary, protectedPaths, testProtection, blastRadius,
   readBeforeWrite, noRepeatedWrites, dangerousCommands, afterWriteHint,
   noSelfKill, noCiSpend,
 } from '../src/harness/builtin-rules.ts';
-import { readFileTool, writeFileTool } from '../src/agent/tools/fs.ts';
+import { readFileTool, writeFileTool, searchTextTool, editFileTool } from '../src/agent/tools/fs.ts';
 import { createRunCommandTool } from '../src/agent/tools/shell.ts';
 import type { Rule } from '../src/harness/rules.ts';
 import type { ToolContext } from '../src/agent/tools/types.ts';
@@ -183,6 +183,61 @@ describe('規則: 読んでから書く', () => {
     const h = harness([readBeforeWrite]);
     const write = h.wrap(writeFileTool, () => '');
     assert.notEqual((await write.run({ path: 'new.ts', content: 'x' }, ctx(root))).isError, true);
+  });
+
+  /**
+   * **無関係な検索一回で、全文上書きが素通りしていた。**
+   *
+   * 規則は「`search_text` を呼んだことが在るか」だけを見ていた。探した言葉も、
+   * 当たったファイルも見ていない。**結果にそのファイルが一件も出ていなくても
+   * 通る**ので、守っているつもりで守っていない形だった。
+   */
+  test('**無関係な search_text 一回では通さない**', async () => {
+    const root = await project({ 'a.ts': 'original' });
+    const h = harness([readBeforeWrite]);
+    const search = h.wrap(searchTextTool, () => '');
+    const write = h.wrap(writeFileTool, () => '');
+    const found = await search.run({ query: 'zzz-どこにも無い' }, ctx(root));
+    assert.notEqual(found.isError, true);
+    const r = await write.run({ path: 'a.ts', content: 'replaced' }, ctx(root));
+    assert.equal(r.isError, true, '検索一回で素通りしています');
+    assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'original');
+  });
+
+  /**
+   * `read_file` に `offset` が付いたので、**一部だけ読んだ**ことが起きる。
+   * 全文を置き換える `write_file` では、読んでいない行が消える。
+   */
+  test('**一部だけ読んで、全文を置き換えさせない**', async () => {
+    const root = await project({ 'a.ts': 'one\ntwo\nthree\nfour\n' });
+    const h = harness([readBeforeWrite]);
+    const read = h.wrap(readFileTool, () => '');
+    const write = h.wrap(writeFileTool, () => '');
+    await read.run({ path: 'a.ts', offset: 3 }, ctx(root));
+    const r = await write.run({ path: 'a.ts', content: 'replaced' }, ctx(root));
+    assert.equal(r.isError, true);
+    assert.match(r.content, /一部しか読んでいません/);
+    assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'one\ntwo\nthree\nfour\n');
+  });
+
+  test('一部だけ読んだあとでも、edit_file は通す（対）', async () => {
+    const root = await project({ 'a.ts': 'one\ntwo\nthree\nfour\n' });
+    const h = harness([readBeforeWrite]);
+    const read = h.wrap(readFileTool, () => '');
+    const edit = h.wrap(editFileTool, () => '');
+    await read.run({ path: 'a.ts', offset: 3, limit: 1 }, ctx(root));
+    const r = await edit.run({ path: 'a.ts', find: 'three', replace: '3' }, ctx(root));
+    assert.notEqual(r.isError, true, r.content);
+    assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'one\ntwo\n3\nfour\n');
+  });
+
+  test('全部読んだあとなら、全文を置き換えられる（対）', async () => {
+    const root = await project({ 'a.ts': 'one\ntwo\n' });
+    const h = harness([readBeforeWrite]);
+    const read = h.wrap(readFileTool, () => '');
+    const write = h.wrap(writeFileTool, () => '');
+    await read.run({ path: 'a.ts' }, ctx(root));
+    assert.notEqual((await write.run({ path: 'a.ts', content: 'x' }, ctx(root))).isError, true);
   });
 });
 

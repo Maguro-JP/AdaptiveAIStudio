@@ -11,6 +11,8 @@ import { ProviderRegistry } from '../src/core/registry.ts';
 import { ChatOrchestrator } from '../src/core/orchestrator.ts';
 import { Team, describeHandoff, type WorkItem, type TeamProgress } from '../src/agent/team.ts';
 import { readFileTool, writeFileTool } from '../src/agent/tools/fs.ts';
+import { wireTeam } from '../src/core/team-setup.ts';
+import { DEFAULT_CONFIG } from '../src/config.ts';
 
 /**
  * 依頼文からファイル名を読み取り、
@@ -241,5 +243,77 @@ describe('申し送り文の組み立て', () => {
 
   test('依存が無ければ空。何も足さない', () => {
     assert.equal(describeHandoff([], items), '');
+  });
+});
+
+/**
+ * **team だけ、ハーネスも戻り先も通っていなかった。**
+ *
+ * 一人で使う `aas` と画面は規則の手前で止まるのに、並列で動かすこの道は
+ * ツールを素で渡していた。守られたファイルも、作業場の外も、危ない命令も、
+ * ここからは全部通った。書き換える前の控えも無いので、10 件走らせて壊れても
+ * 戻す手が一つも無い。
+ *
+ * ここは**組み立てたものを Team に渡して、実際に走らせて**見る。
+ * 入口（`src/cli/team.ts`）は同じ組み立て（`wireTeam`）を呼ぶだけにしてある。
+ */
+describe('team は素通りしない', () => {
+  const run = async (file: string, protect: string[]) => {
+    const server = await workerServer(10);
+    const root = await tempDir('aas-team-wired-');
+    process.env.AAS_STATE_DIR = await tempDir('aas-team-wired-state-');
+    try {
+      const registry = new ProviderRegistry();
+      registry.register(new OpenAiCompatibleProvider({ id: 'local', baseUrl: server.baseUrl, locality: 'local' }));
+      const wired = await wireTeam(
+        { ...DEFAULT_CONFIG, harness: { ...DEFAULT_CONFIG.harness, protectedPaths: protect } },
+        root);
+      const team = new Team(new ChatOrchestrator(registry), {
+        lanes: [{ id: 'coder', candidates: ['local:m'], parallel: 1 }],
+        system: 'test',
+        tools: wired.bare,
+        toolsFor: (it) => wired.toolsFor(it),
+        beforeWrite: (path, previous) => wired.beforeWrite(path, previous),
+        root,
+        maxTurns: 4,
+        approve: async () => true,
+      });
+      const items: WorkItem[] = [{
+        id: 't1', laneId: 'coder', writes: [file],
+        instruction: `${file} を作成してください。`,
+      }];
+      const gen = team.run(items, new AbortController().signal);
+      const events: TeamProgress[] = [];
+      let next = await gen.next();
+      while (!next.done) { events.push(next.value); next = await gen.next(); }
+      return { root, events, undo: wired.undo };
+    } finally {
+      await server.close();
+      delete process.env.AAS_STATE_DIR;
+    }
+  };
+
+  test('**守られたファイルは、team の作業者にも書けない**', async () => {
+    const { root, events } = await run('secret.txt', ['secret.txt']);
+    const blocked = events.some((e) =>
+      e.type === 'agent' && e.event.type === 'toolEnd' && e.event.isError
+      && e.event.result.includes('BLOCKED'));
+    assert.ok(blocked, '規則が挟まっていません（素通りしました）');
+    await assert.rejects(readFile(join(root, 'secret.txt'), 'utf8'), '書かれてしまいました');
+  });
+
+  test('守っていないファイルは、これまでどおり書ける（対）', async () => {
+    const { root } = await run('a.txt', ['secret.txt']);
+    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'done:a.txt\n');
+  });
+
+  test('**書き換えたものは、戻せる形で控えてある**', async () => {
+    const { root, undo } = await run('a.txt', ['secret.txt']);
+    const point = await undo.end();
+    assert.ok(point, '控えが残っていません（戻す手が無い）');
+    assert.deepEqual(point.paths, ['a.txt']);
+    await undo.restore(point.id);
+    // 新しく作ったものは、戻すと消える。
+    await assert.rejects(readFile(join(root, 'a.txt'), 'utf8'));
   });
 });

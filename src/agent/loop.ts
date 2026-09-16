@@ -277,14 +277,17 @@ export class Agent {
         history.push({ role: 'tool', toolCallId: call.id, content: result });
       }
 
-      // 進捗判定: 直近3回が同一の呼び出しなら、堂々巡りとみなす
+      // 進捗判定: 同じ手を繰り返していたら、堂々巡りとみなす。
       const signature = calls.map((c) => `${c.name}:${JSON.stringify(c.args)}`).join('|');
       recentCalls.push(signature);
-      if (recentCalls.length > 3) recentCalls.shift();
-      if (recentCalls.length === 3 && new Set(recentCalls).size === 1) {
+      if (recentCalls.length > CYCLE_WINDOW) recentCalls.shift();
+      const period = cyclePeriod(recentCalls);
+      if (period !== undefined) {
         yield {
           type: 'finished', reason: 'noProgress',
-          detail: `同じ操作を3回繰り返しました: ${calls.map((c) => c.name).join(', ')}`,
+          detail: period === 1
+            ? `同じ操作を3回繰り返しました: ${calls.map((c) => c.name).join(', ')}`
+            : `${period} 手で同じところを回っています: ${calls.map((c) => c.name).join(', ')}`,
         };
         return;
       }
@@ -296,4 +299,37 @@ export class Agent {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** 周期を見るのに覚えておく手の数。3 手周期を 2 周ぶん見るので 6。 */
+export const CYCLE_WINDOW = 6;
+
+/**
+ * 同じところを回っているか。回っていれば、その周期を返す。
+ *
+ * **1 手の繰り返しだけを見ていた。**直近 3 回が同じ呼び出しなら止める形で、
+ * `read_file(a)` を延々と繰り返す形は捕まる。けれど
+ * **`read_file(a)` → `search_text(x)` → `read_file(a)` → … は一度も捕まらない。**
+ * 引数まで同じ 2 手を往復しているので、返ってくるものも毎回同じで、進んでいない。
+ * それでも ターンの上限（既定 40）まで回り続ける。**一番よく見る行き詰まりの形が、
+ * 素通りしていた。**
+ *
+ * 1 手なら 3 回、2 手以上なら 2 周ぶんで止める。引数ごと同じ手が並んでいる
+ * ことを見るので、同じツールで別のファイルを触る形は当たらない。
+ */
+export function cyclePeriod(recent: readonly string[]): number | undefined {
+  // 1 手の繰り返しは 3 回で止める（ここは今までと同じ）。
+  if (recent.length >= 3) {
+    const last3 = recent.slice(-3);
+    if (new Set(last3).size === 1) return 1;
+  }
+  for (let p = 2; p <= Math.floor(CYCLE_WINDOW / 2); p += 1) {
+    if (recent.length < p * 2) continue;
+    const block = recent.slice(-p);
+    const before = recent.slice(-p * 2, -p);
+    // 塊の中が全部同じなら、それは 1 手の繰り返し（上で見ている）。
+    if (new Set(block).size < 2) continue;
+    if (block.every((sig, i) => sig === before[i])) return p;
+  }
+  return undefined;
 }

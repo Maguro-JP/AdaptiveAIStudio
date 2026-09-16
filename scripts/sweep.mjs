@@ -788,9 +788,26 @@ await check('作業場は、作業場の所で変える', async () => {
     } finally { p.off('dialog', answer); }
     return (await p.locator('#workNow').innerText()).trim();
   };
-  const after = await move(want);
-  if (!after.includes(want.split('/').at(-1))) {
-    throw new Error(`押しても変わらない: ${after.slice(0, 80)}`);
+  await move(want);
+  /*
+   * **変わったかどうかは、本体に訊く。**
+   *
+   * ここは `#workNow` の字と道の末尾を突き合わせていた。二つ壊れていて、
+   * どちらも Windows でだけ出た。道の区切りを `/` と決め打っていたので
+   * 末尾が取れず、そのうえ `#workNow` は長い道を**途中を省いて**出すので、
+   * 先頭の一字が欠けて当たらない（`…as-sweep-work-xxxx`）。
+   * 走らせる場所で結果が変わる確かめになっていた。
+   */
+  const moved = await p.evaluate(() => fetch('/api/config').then((r) => r.json()));
+  if (String(moved.workRootNow ?? '') !== want) {
+    throw new Error(`押しても変わらない: ${String(moved.workRootNow).slice(0, 80)} / 入れたのは ${want}`);
+  }
+  // 画面にも出ていること（本体だけ変わって、見た目が前のまま、を作らない）。
+  // **末尾だけを見る。**`#workNow` は長い道の途中を省くので、頭は当てにできない。
+  const shown = (await p.locator('#workNow').innerText()).trim();
+  const tail = want.slice(-10);
+  if (!shown.includes(tail)) {
+    throw new Error(`画面が前のまま: ${shown.slice(0, 80)} / 入れたのは ${want}`);
   }
   /*
    * **元へ戻す。**戻さないと、次に回したときの作業場が空になり、

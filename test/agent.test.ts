@@ -21,8 +21,13 @@ type Scripted =
   | { text: string }
   | { tool: string; args: unknown };
 
-/** 台本どおりに応答する偽モデル。1リクエストごとに次の手へ進む。 */
-async function scriptedServer(script: Scripted[]) {
+/**
+ * 台本どおりに応答する偽モデル。1リクエストごとに次の手へ進む。
+ *
+ * 台本を使い切ったあとは最後の手を返し続ける。`repeat` を渡すと、
+ * **末尾の N 手を順に繰り返す**（往復する堂々巡りを作るため）。
+ */
+async function scriptedServer(script: Scripted[], opts: { repeat?: number } = {}) {
   let turn = 0;
   const seen: unknown[] = [];
   const server = createServer((req, res) => {
@@ -34,7 +39,10 @@ async function scriptedServer(script: Scripted[]) {
     req.on('data', (c) => { body += c; });
     req.on('end', () => {
       seen.push(JSON.parse(body || '{}'));
-      const step = script[Math.min(turn, script.length - 1)]!;
+      const loop = opts.repeat ?? 1;
+      const step = turn < script.length
+        ? script[turn]!
+        : script[script.length - loop + ((turn - script.length) % loop)]!;
       turn += 1;
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       if ('text' in step) {
@@ -64,8 +72,11 @@ async function scriptedServer(script: Scripted[]) {
   };
 }
 
-async function runAgent(script: Scripted[], opts: { approve?: () => Promise<boolean> } = {}) {
-  const server = await scriptedServer(script);
+async function runAgent(
+  script: Scripted[],
+  opts: { approve?: () => Promise<boolean>; repeat?: number } = {},
+) {
+  const server = await scriptedServer(script, opts.repeat ? { repeat: opts.repeat } : {});
   const root = await tempDir('aas-agent-');
   await writeFile(join(root, 'app.ts'), 'export const answer = 41;\n');
   try {
@@ -178,6 +189,26 @@ describe('エージェントループ', () => {
     const finished = events.at(-1);
     assert.equal(finished?.type, 'finished');
     assert.equal(finished.reason, 'noProgress');
+  });
+
+  /**
+   * **1 手の繰り返ししか見ていなかった。**
+   *
+   * 直近 3 回が同じ呼び出しなら止める形だったので、`read_file(a)` を延々と
+   * 繰り返すのは捕まる。けれど `read_file(a)` → `write_file(b)` →
+   * `read_file(a)` → … の往復は**一度も捕まらない。**引数まで同じ手を
+   * 行き来しているので返ってくるものも毎回同じで、進んでいないのに
+   * ターンの上限まで回り続ける。行き詰まりで一番よく見る形が素通りだった。
+   */
+  test('**2手で往復していても、堂々巡りとして止める**', async () => {
+    const { events } = await runAgent([
+      { tool: 'read_file', args: { path: 'app.ts' } },
+      { tool: 'write_file', args: { path: 'app.ts', content: 'export const answer = 41;\n' } },
+    ], { repeat: 2 });
+    const finished = events.at(-1);
+    assert.equal(finished?.type, 'finished');
+    assert.equal(finished.reason, 'noProgress', `止まっていません: ${finished.reason}`);
+    assert.match(finished.detail ?? '', /2 手/);
   });
 
   test('ツール定義がモデルへ渡り、ツール結果が履歴に積まれる', async () => {

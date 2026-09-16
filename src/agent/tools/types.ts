@@ -87,3 +87,21 @@ export function requireString(
   const v = args[key];
   return typeof v === 'string' && v.length > 0 ? v : undefined;
 }
+
+/**
+ * 1 以上の整数を受け取る。
+ *
+ * **モデルは数を文字列で渡してくる。**`{"offset": "120"}` を落とすと、
+ * 使い方は合っているのに効かない。取れなければ `undefined` を返して、
+ * 呼ぶ側の既定に任せる（`0` や `NaN` を既定と混ぜない）。
+ */
+export function optionalPositiveInt(
+  args: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const v = args[key];
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  if (!Number.isFinite(n)) return undefined;
+  const i = Math.floor(n);
+  return i >= 1 ? i : undefined;
+}

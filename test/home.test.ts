@@ -10,6 +10,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { execFile } from 'node:child_process';
 import { tempDir } from './tmp.ts';
 import { aasHome, stateDir, binDir, modelsDir, isPortable, installRoot, isAsciiPath, asciiModelsDir } from '../src/core/home.ts';
 import { lookup, toCommand } from '../scripts/run.mjs';
@@ -24,6 +25,16 @@ import { lookup, toCommand } from '../scripts/run.mjs';
 const sourceOnly = existsSync(join(installRoot(), '.github'))
   ? {}
   : { skip: '作業場にしか無いものを見る試験です（bundle では確かめられません）' };
+
+/**
+ * git に聞く試験だけに付ける条件。
+ *
+ * 取り出し方（.gitattributes）を確かめるには git が要る。ZIP で落とした
+ * ものには `.git` が無いので、そこで落とすのは嘘になる。
+ */
+const gitOnly = existsSync(join(installRoot(), '.git'))
+  ? {}
+  : { skip: 'git のクローンでしか確かめられません' };
 
 const KEYS = ['AAS_HOME', 'AAS_STATE_DIR', 'AAS_BIN_DIR', 'AAS_MODELS_DIR'];
 /*
@@ -98,6 +109,28 @@ describe('用意する道具', () => {
     // 保証しているのは .gitattributes なので、そちらを見る。
     const raw = await readFile(join(installRoot(), '.gitattributes'), 'utf8');
     assert.match(raw, /^\*\.cmd\s+text\s+eol=crlf/m, 'cmd を CRLF で配る宣言が無い');
+  });
+
+  /**
+   * **取り出したときの行末が、どの機械でも同じであること。**
+   *
+   * 既定のままだと Windows の git が CRLF に直す。リポジトリの文章を読んで
+   * `\n` を探す試験は、そこでだけ当たらなくなる。同じことで二度落ちた
+   * （DECISIONS の読む順、README のメニューの番号）。一度目は読む側で
+   * そろえて直したが、**二度目も読む側で書いてしまった。**
+   * 直す場所を取り出しの側へ移し、ここで止める。
+   *
+   * 宣言の文字を見るのではなく、**git に聞く。**書いてあっても、
+   * 後の行に負けていれば効かない。
+   */
+  test('**文章は LF で取り出す。バッチだけ CRLF**', gitOnly, async () => {
+    const asked = await new Promise<string>((done, fail) => {
+      execFile('git', ['check-attr', 'eol', '--', 'README.md', 'docs/DECISIONS.md', 'start.cmd'],
+        { cwd: installRoot() }, (err, out) => (err ? fail(err) : done(out)));
+    });
+    assert.match(asked, /^README\.md: eol: lf$/m, 'README が LF で取り出されない');
+    assert.match(asked, /^docs\/DECISIONS\.md: eol: lf$/m, 'docs が LF で取り出されない');
+    assert.match(asked, /^start\.cmd: eol: crlf$/m, 'バッチが CRLF で取り出されない');
   });
 
   test('用意用は、全角の混ざる置き場所を先に止める', sourceOnly, async () => {
