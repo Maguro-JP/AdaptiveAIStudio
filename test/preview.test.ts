@@ -5,8 +5,9 @@
  */
 import { test, describe, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { realpathSync } from 'node:fs';
 import { tempDir } from './tmp.ts';
 import { until } from './until.ts';
 import { PreviewServer, inject, listing, RELOAD_SNIPPET } from '../src/ui/preview.ts';
@@ -112,6 +113,35 @@ describe('書き換えを見て、読み直せと伝える', () => {
       // 見張り自体は生きている（対）。ここが死んでいたら、上は黙っていても通る。
       await writeFile(join(root, 'index.html'), '<h1>う</h1>', 'utf8');
       await until(() => seen.lines.some((l) => l === 'data: change'), '中身の書き換えは伝わる', { timeoutMs: 10_000 });
+    } finally { seen.close(); s.stop(); }
+  });
+
+  /**
+   * 別の名前で渡された作業場でも、見張れること。
+   *
+   * Windows の CI で、この試験のファイルだけが**まるごと消えた**（通った数にも
+   * 落ちた名前にも出てこない）。libuv が abort していた。
+   *
+   *   Assertion failed: !_wcsnicmp(filename, dir, dirlen), file src\win\fs-event.c, line 72
+   *
+   * %TEMP% が短い形（`C:\Users\RUNNER~1\...`）で入ってきていて、書き換えが
+   * 届いた瞬間に落ちていた。ここでは junction（Windows）と symlink（他）越しに
+   * 見張って、**OS が名乗る形へ直してから渡していること**を見る。
+   */
+  test('**別の名前（junction や symlink）越しでも、見張れる**', async () => {
+    const root = await site({ 'index.html': '<h1>あ</h1>' });
+    const other = join(await tempDir('aas-preview-link-'), 'link');
+    await symlink(root, other, process.platform === 'win32' ? 'junction' : 'dir');
+    const s = new PreviewServer({ root: other });
+    servers.push(s);
+    const url = await s.start();
+    const seen = await listen(url);
+    try {
+      // 渡された名前ではなく、実体の名前で見張っている。
+      assert.equal(s.watching, realpathSync.native(other), '渡された名前のまま見張っている');
+      await until(() => seen.lines.some((l) => l.startsWith(':')), '繋がった合図が来る', { timeoutMs: 5000 });
+      await writeFile(join(other, 'index.html'), '<h1>い</h1>', 'utf8');
+      await until(() => seen.lines.some((l) => l === 'data: change'), '別の名前越しでも伝わる', { timeoutMs: 10_000 });
     } finally { seen.close(); s.stop(); }
   });
 });

@@ -15,13 +15,50 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { writeFile, copyFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, delimiter } from 'node:path';
 import { installRoot } from '../src/core/home.ts';
 import { tempDir } from './tmp.ts';
 
 const onlyWindows = process.platform === 'win32'
   ? {}
   : { skip: 'cmd.exe が要ります（linux では中身の確かめだけ: test/batch.test.ts）' };
+
+/**
+ * 人が押したときと同じ env を作る。
+ *
+ * **走らせている側の env を、そのまま渡さない。**ここは `npm test` の中から
+ * 呼ばれるので、env には npm が立てたものが全部入っている（`npm_config_*`、
+ * `npm_execpath`、`NODE_OPTIONS`）。入口を押す人の env は、それを持たない。
+ * Windows の CI では、継いだまま `npm run` へ入って **npm 自身が起動できず**
+ * に終わった（`Cannot find module …\node_modules\npm\bin\npm-prefix.js`）。
+ * 確かめたいのは入口であって、npm の解決の仕方ではない。
+ *
+ * **PATH も同じ。**npm は仕事を走らせるとき、`node_modules\.bin` を PATH の
+ * 先頭へ足す。継ぐと、入口が呼ぶ `npm` が**そこに置かれた npm の代役**へ当たり、
+ * 代役が指す `node_modules\npm` は入っていないので、そこで終わる
+ * （CI の Windows で出たのはこの形。人が押すときの PATH にこれは無い）。
+ *
+ * 根だけは仮の場所へ逃がす（**リポジトリの中に跡を残させない。**走らせた跡が
+ * 残ると、次の人が消すことになる）。
+ */
+function pressEnv(home: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (/^(npm_|AAS_)/i.test(key)) continue;
+    if (['NODE_OPTIONS', 'NODE_TEST_CONTEXT', 'NODE_V8_COVERAGE', 'INIT_CWD'].includes(key)) continue;
+    // PATH は名前の大小が機械で違う（Windows は Path）。中身で見る。
+    if (key.toUpperCase() === 'PATH') {
+      const parts = value.split(delimiter).filter((at) => !/node_modules/.test(at));
+      env[key] = parts.join(delimiter);
+      continue;
+    }
+    env[key] = value;
+  }
+  env.AAS_HOME = home;
+  env.AAS_STATE_DIR = join(home, 'state');
+  return env;
+}
 
 /**
  * バッチを走らせて、終わりまで待つ。
@@ -36,9 +73,7 @@ function runBatch(
     const child = spawn(process.env.COMSPEC ?? 'cmd.exe', ['/d', '/c', file, ...args], {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      // **リポジトリの中に跡を残させない。**根は仮の場所へ逃がす
-      // （走らせた跡が残ると、次の人が消すことになる）。
-      env: { ...process.env, AAS_HOME: home, AAS_STATE_DIR: join(home, 'state') },
+      env: pressEnv(home),
     });
     let out = '';
     child.stdout.on('data', (b: Buffer) => { out += b.toString('utf8'); });

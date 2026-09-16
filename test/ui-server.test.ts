@@ -722,23 +722,44 @@ describe('その機械のものでない道', () => {
  * 本体が持っていなければ、パネルは取り直しようがない。
  */
 describe('/api/changes', () => {
+  /**
+   * **リポジトリへ書かない。**
+   *
+   * ここは既定の作業場（リポジトリの根）へ `changes-probe.txt` を書いていた。
+   * みんなが見る場所なので、同時に走っている別の走行や bundle の組み立てから
+   * 見える。**bundle の中で実際に落ちた**（組んだ時点で同じ名前・同じ中身の
+   * ファイルが入っており、書くところが `saved:false` になって、覚える所を
+   * 通らなかった）。自分だけの作業場を持つ口を、この確かめのために起こす。
+   */
   test('**書いたぶんが、あとから取り直せる**', async () => {
-    // **リポジトリに置き土産を残さない。**この試験の作業場は既定（リポジトリの根）。
     const name = 'changes-probe.txt';
-    const { rm } = await import('node:fs/promises');
-    const { installRoot } = await import('../src/core/home.ts');
-    after(async () => { await rm(join(installRoot(), name), { force: true }); });
-    const before = await json(await get('/api/changes')) as { files: { path: string }[] };
-    assert.ok(!before.files.some((f) => f.path === name), 'この確かめの前提が崩れている');
+    const work = await tempDir('aas-changes-');
+    const mine = new UiServer({
+      config: { ...DEFAULT_CONFIG, agent: { ...DEFAULT_CONFIG.agent, root: work } },
+      port: 0,
+    });
+    const at = (await mine.start()).replace(/\/$/, '');
+    try {
+      const before = await json(await fetch(`${at}/api/changes`)) as { files: { path: string }[] };
+      assert.deepEqual(before.files, [], 'この確かめの前提が崩れている');
 
-    const wrote = await put('/api/file', { path: name, content: 'hello world\n' });
-    assert.equal(wrote.status, 200, await wrote.text());
+      const wrote = await fetch(`${at}/api/file`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: name, content: 'hello world\n' }),
+      });
+      // 返事は一度しか読めない。文字で受けて、そこから見る。
+      const said = await wrote.text();
+      assert.equal(wrote.status, 200, said);
+      // **書いたことまで見る。**同じ中身が既にあると `saved:false` で返り、
+      // 覚える所を一度も通らないまま「覚えていない」で落ちる（原因が別に見える）。
+      assert.equal((JSON.parse(said) as { saved: boolean }).saved, true, said);
 
-    const got = await json(await get('/api/changes')) as {
-      files: { path: string; diff: string; added: number }[];
-    };
-    const mine = got.files.find((f) => f.path === name);
-    assert.ok(mine, `覚えていない: ${JSON.stringify(got.files.map((f) => f.path))}`);
-    assert.ok(mine.diff.includes('hello world'), mine.diff);
+      const got = await json(await fetch(`${at}/api/changes`)) as {
+        files: { path: string; diff: string; added: number }[];
+      };
+      const kept = got.files.find((f) => f.path === name);
+      assert.ok(kept, `覚えていない: ${JSON.stringify(got.files.map((f) => f.path))}`);
+      assert.ok(kept.diff.includes('hello world'), kept.diff);
+    } finally { await mine.stop(); }
   });
 });
