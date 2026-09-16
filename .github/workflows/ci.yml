@@ -91,6 +91,43 @@ jobs:
           npm ci --no-audit --no-fund
           npm run typecheck
 
+  # 配る形で、配る機械（Windows）で、送って返るところまで通す。
+  #
+  # `docs/RETHINK.md` で決めた**完成の定義がこれ**。
+  # 「組めた」「テストが通った」ではなく、**組んだものを開いて1ターン通せたか**。
+  # ここまで、その確かめは linux でしかやっていなかった（`npm run check:bundle`）。
+  # 配る先は Windows なので、いちばん壊れる所を見ていないことになる。
+  #
+  # 中でやること（`scripts/check-bundle.mjs` 一つ）:
+  #   組む → その中で全部のテスト → 小さなモデルを置く → 画面を起こす
+  #   → smoke（送って返る） → sweep → 止めて、止まったことまで見る
+  #
+  # sweep には playwright-core が要る。**配る形には入れない**
+  # （実行時の依存はゼロのまま）。ブラウザは Edge を使う。Windows には必ず在る。
+  # この仕事の中だけ、組んだものに playwright-core が写る。捨てる物なので構わない。
+  #
+  # **高い。**組んで起こすので十数分、Windows は2倍で数えられる。
+  # だから PR では回さない。**手で頼んだときと、週に一度だけ。**
+  bundle:
+    name: 配る形で1ターン（Windows）
+    if: github.event_name != 'pull_request'
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      # sweep に要る分だけ。まとめて一度に渡す
+      # （`--no-save` を一つずつ渡すと、他の `--no-save` の分が消える）。
+      - name: sweep に要るものを入れる
+        run: npm i --no-save --no-audit --no-fund playwright-core
+
+      - name: 配る形で1ターン
+        run: npm run check:bundle
+
   # 手で頼んだときだけ、残りの組み合わせも見る。
   full:
     name: ${{ matrix.os }} / Node ${{ matrix.node }}（全部）
