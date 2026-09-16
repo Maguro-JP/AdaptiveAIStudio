@@ -125,8 +125,16 @@ describe('溜めない', () => {
   test('古いものは片づける。渡したものは、その依頼が終われば要らない', async () => {
     const s = new Attachments(join(await tempDir('aas-attach-'), 'files'));
     const item = await s.add('a.txt', Buffer.from('xxxx'));
-    // 1日経ったことにする
-    const freed = await s.sweep(1, Date.now() + 2);
+    /*
+     * **時計に頼らない。**ここは「2ms 先の時計で見る」で古さを作っていた。
+     * Windows の CI で落ちた（書いた時刻が 2ms 以内に収まらない、あるいは
+     * 丸められる）。走らせる機械で結果が変わる試験なので、時計を動かす代わりに
+     * **ファイルの時刻を過去へ動かす。**どの機械でも同じ答えになる。
+     */
+    const { utimes } = await import('node:fs/promises');
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    await utimes(item.path, twoDaysAgo, twoDaysAgo);
+    const freed = await s.sweep(24 * 60 * 60 * 1000);
     assert.ok(freed > 0, '片づいていない');
     assert.equal(s.get(item.id), undefined);
   });
