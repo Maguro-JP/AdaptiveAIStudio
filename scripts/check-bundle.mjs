@@ -15,7 +15,7 @@
  * のに Windows の binary が入っていなかった）。
  */
 import { spawn } from 'node:child_process';
-import { rm, stat, mkdir } from 'node:fs/promises';
+import { rm, stat, mkdir, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sweepable } from './sweepable.mjs';
@@ -78,9 +78,20 @@ console.log('\n== その中の画面を起こして、通す');
  * 言わなかった。**本体が言っていることを、そのまま出す。**
  * 口は空いているものを使う（AAS_UI_PORT=0）。
  */
+/*
+ * **吐き切るまで待たない。**
+ *
+ * 重みが乱数の模型は、終わりの合図を出さないので `maxTokens` まで吐き続ける。
+ * 遅い機械（CI の Windows）では、それだけで何分もかかり、sweep の方が
+ * 先に諦めた（`送って返る: Timeout 120000ms`）。見たいのは道が繋がっている
+ * ことなので、**出す量の側を決める。**smoke も同じ理由で抑えている。
+ */
+const small = join(out, 'check-config.json');
+await writeFile(small, JSON.stringify({ maxTokens: 32 }, null, 2));
+
 const ui = spawn(node, [join(app, 'scripts', 'run.mjs'), 'ui'], {
   cwd: app, stdio: ['ignore', 'pipe', 'inherit'],
-  env: { ...process.env, AAS_UI_PORT: '0' },
+  env: { ...process.env, AAS_UI_PORT: '0', AAS_CONFIG: small },
 });
 let url = '';
 try {
