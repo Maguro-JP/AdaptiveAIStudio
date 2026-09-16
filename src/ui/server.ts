@@ -1322,7 +1322,16 @@ export class UiServer {
         productRoot: productRoot(),
         home: aasHome(),
         stateDir: stateDir(),
-        modelsDir: modelsDir(),
+        /*
+         * **見ている場所を言う。既定を言わない。**
+         *
+         * ここは `modelsDir()`（AAS_HOME の下の既定）を返していた。設定で
+         * `runtime.modelsDir` を変えていると、画面が言う場所と、読みにいく場所が
+         * 食い違う。言われた場所へ置いた人は、押しても何も出てこない
+         * （**ブラウザで落として置く道**が、これで塞がる）。
+         * 読むのと同じ決め方にする（`/api/models` と同じ）。
+         */
+        modelsDir: this.#opts.config.runtime?.modelsDir ?? modelsDir(),
         binDir: binDir(),
         url: this.#url,
         runtime: this.#opts.config.runtime?.kind ?? '未設定',

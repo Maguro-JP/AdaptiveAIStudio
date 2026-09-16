@@ -721,6 +721,39 @@ describe('その機械のものでない道', () => {
  * 持っていなかった。パネルを一枚出し入れするだけで作り直されて消える。
  * 本体が持っていなければ、パネルは取り直しようがない。
  */
+/**
+ * 画面が言うモデルの場所と、読みにいく場所が同じであること。
+ *
+ * `/api/info` は既定（`AAS_HOME` の下）を返していて、設定で
+ * `runtime.modelsDir` を変えていると食い違った。画面はこの道を出すので、
+ * **言われた場所へ置いた人は、押しても何も出てこない。**
+ * 会社の機械で使う道（ブラウザで落として、置いて、読み直す）が、これで塞がる。
+ */
+describe('モデルの場所を、言うのと読むので違えない', () => {
+  test('**設定で変えた場所を言い、そこに置いたものが出る**', async () => {
+    const models = await tempDir('aas-models-');
+    const mine = new UiServer({
+      config: { ...DEFAULT_CONFIG, runtime: { ...DEFAULT_CONFIG.runtime, kind: 'inproc', modelsDir: models } },
+      port: 0,
+    });
+    const at = (await mine.start()).replace(/\/$/, '');
+    try {
+      const info = await json(await fetch(`${at}/api/info`)) as { modelsDir: string };
+      assert.equal(info.modelsDir, models, '画面に出す場所が、設定した場所と違う');
+
+      // 言われた場所へ置いて、読み直したら出てくるところまで見る。
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(join(info.modelsDir, 'probe.gguf'), 'GGUF');
+      const listed = await json(await fetch(`${at}/api/models`)) as {
+        modelsDir: string; installed: { ref: string }[];
+      };
+      assert.equal(listed.modelsDir, info.modelsDir, '言う場所と読む場所が違う');
+      assert.ok(listed.installed.some((m) => m.ref === 'probe.gguf'),
+        `置いたのに出てこない: ${JSON.stringify(listed.installed.map((m) => m.ref))}`);
+    } finally { await mine.stop(); }
+  });
+});
+
 describe('/api/changes', () => {
   /**
    * **リポジトリへ書かない。**

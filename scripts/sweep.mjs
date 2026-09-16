@@ -609,7 +609,31 @@ await check('作業場を開く', async () => {
   // 何も出ないと壊れているようにしか見えない。何の場所で、どう変えるかを言うこと。
   const said = (await p.locator('#sideFiles').innerText()).trim();
   if (said.length === 0) throw new Error('作業場が空なのに、何も言っていない');
-  if (!said.includes('設定')) throw new Error(`空だが、どう変えるかを言っていない: ${said.slice(0, 60)}`);
+  /*
+   * **言葉で合わせない。押して、変える口が開くところを見る。**
+   *
+   * ここは案内が「設定」という語を含むことを見ていた。語が消えたときに落ちたが、
+   * 消したのは正しい（設定→モデルに「フォルダ」は無く、**無い場所を案内していた**）。
+   * 語を見ている限り、正しい直しで落ちて、案内が的外れでも通る。
+   *
+   * 見るのは、案内そのものと横の 📂 の**どちらからでも**、その場で変える口が
+   * 開くこと。打ち込む所を出させるだけで、変えはしない（この確かめの後ろで、
+   * 別の場所を見にいくものが続く）。
+   */
+  const opened = [];
+  const answer = async (d) => { opened.push(d.type()); await d.dismiss(); };
+  p.on('dialog', answer);
+  try {
+    const note = p.locator('#sideFiles .side-empty');
+    if (await note.count() === 0) throw new Error(`空のときの案内が、押せる形をしていない: ${said.slice(0, 60)}`);
+    await note.click();
+    await p.locator('#pickWork').click();
+    await p.waitForTimeout(300);
+  } finally { p.off('dialog', answer); }
+  const prompts = opened.filter((kind) => kind === 'prompt').length;
+  if (prompts < 2) {
+    throw new Error(`空だが、その場で変えられない（開いた口: ${opened.join('|') || 'なし'}）`);
+  }
 });
 
 /*

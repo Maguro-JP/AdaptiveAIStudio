@@ -71,8 +71,14 @@ if exist "%UP%\.portable" set "STRIPPED=1"
 where node >nul 2>nul
 if errorlevel 1 goto :noBundledNode
 set "NODE=node"
-set "NPM=npm"
+rem npm は full path で呼ぶ。裸の名前を call に渡すと、npm.cmd の中の %~dp0 が
+rem いま居る場所になり、npm が自分の中身をこの下で探して落ちる。
+rem Windows で実測: Cannot find module ...\node_modules\npm\bin\npm-prefix.js
+rem 見つからなければ npm を使わない。package.json を直接読む道がある。
+set "NPM="
+for /f "delims=" %%p in ('where npm.cmd 2^>nul') do if not defined NPM set "NPM=%%p"
 set "RUNNER=npm"
+if not defined NPM set "RUNNER=direct"
 if defined STRIPPED echo   同梱の Node はありませんが、この機械の Node を使います
 goto :haveNode
 
