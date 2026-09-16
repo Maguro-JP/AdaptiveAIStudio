@@ -1345,14 +1345,14 @@ async function loadFiles(at = '') {
  * 出す口が「表示するもの」の一覧だけだと、ファイルを押しても何も起きない
  * ように見える。押した人が最初に見るのはここなので、ここで出す。
  */
-async function openInEditor(path) {
+async function openInEditor(path, line) {
   const shown = new Set(panelsInUse(layout.root));
   const has = layout.panels.some((p) => p.kind === 'editor' && shown.has(p.id));
   if (!has) await apply(openPanel(layout, 'editor'));
-  ctx.openFile(path);
+  ctx.openFile(path, line);
 }
 
-ctx.revealFile = (path) => { void openInEditor(path); };
+ctx.revealFile = (path, line) => { void openInEditor(path, line); };
 
 function insertPath(path) {
   const input = document.querySelector('.chat textarea');

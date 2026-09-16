@@ -48,6 +48,7 @@ import { buildRuntime } from '../core/runtime-setup.ts';
 import { MachineCache } from '../runtime/machine.ts';
 import { usesGguf, type LocalRuntime } from '../runtime/local-runtime.ts';
 import { realSafeResolve } from '../agent/tools/paths.ts';
+import { searchText } from '../agent/tools/fs.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout, DEFAULT_LAYOUT_ID } from './layout.ts';
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
@@ -1702,6 +1703,30 @@ export class UiServer {
       } catch (e) {
         return send(res, 400, { error: (e as Error).message });
       }
+    }
+
+    /*
+     * 探す。
+     *
+     * **画面には、探す口が一つも無かった。**モデルは `search_text` を持って
+     * いるのに、使う側は「あの文字がどこに在るか」を見る手段が無い。
+     * 開いて直すための画面として、これは無いと使えない。
+     *
+     * 探すのはツールと同じ処理（`searchText`）。二度書くと、片方だけ直る日が来る。
+     * 打ち切ったことも、大きすぎて開いていないことも、そのまま画面へ渡す
+     * （**見ていない分を、無かったことにしない**）。
+     */
+    if (path === '/api/search' && req.method === 'GET') {
+      const q = url.searchParams.get('q') ?? '';
+      if (!q) return send(res, 400, { error: '探す文字がありません。' });
+      const at = url.searchParams.get('path') ?? '.';
+      const found = await searchText(this.#workRoot(), q, at || '.', AbortSignal.timeout(20_000));
+      if (found.error) return send(res, 400, { error: found.error });
+      return send(res, 200, {
+        query: q, path: at,
+        hits: found.hits, capped: found.capped,
+        walkCapped: found.walkCapped, tooBig: found.tooBig,
+      });
     }
 
     // 会話。**残してあるものを出して、開き直せるようにする。**

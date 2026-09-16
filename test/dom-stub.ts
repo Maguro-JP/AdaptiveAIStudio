@@ -39,6 +39,9 @@ export interface StubNode {
    */
   onclick?: (e?: unknown) => unknown;
   onchange?: (e: unknown) => unknown;
+  /** 打たれたときの受け手。エディタは Ctrl+S / Ctrl+F / Enter をここで見る。 */
+  onkeydown?: (e: unknown) => unknown;
+  oninput?: (e?: unknown) => unknown;
   /** 打ち込む欄の中身。textarea / input を使うパネルのために持つ。 */
   value: string;
   spellcheck: boolean;

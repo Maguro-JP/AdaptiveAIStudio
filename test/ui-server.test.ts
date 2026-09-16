@@ -754,6 +754,69 @@ describe('モデルの場所を、言うのと読むので違えない', () => {
   });
 });
 
+/**
+ * 画面から探す。
+ *
+ * **画面には探す口が一つも無かった。**モデルは `search_text` を持っているのに、
+ * 使う側には手段が無い。返すのはツールと同じ処理（`searchText`）で、
+ * 形だけを画面の都合に合わせる。
+ */
+describe('/api/search', () => {
+  const place = async () => {
+    const work = await tempDir('aas-search-');
+    const { writeFile, mkdir } = await import('node:fs/promises');
+    await mkdir(join(work, 'src'), { recursive: true });
+    await writeFile(join(work, 'src', 'a.ts'), 'const answer = 41;\nconsole.log(answer);\n');
+    await writeFile(join(work, 'src', 'b.ts'), 'export const other = 1;\n');
+    const mine = new UiServer({
+      config: { ...DEFAULT_CONFIG, agent: { ...DEFAULT_CONFIG.agent, root: work } },
+      port: 0,
+    });
+    return { work, mine, at: (await mine.start()).replace(/\/$/, '') };
+  };
+
+  test('**当たった所を、道と行番号で返す**', async () => {
+    const { mine, at } = await place();
+    try {
+      const body = await json(await fetch(`${at}/api/search?q=${encodeURIComponent('answer')}`)) as {
+        hits: Array<{ path: string; line: number; text: string }>;
+      };
+      const lines = body.hits.map((h) => `${h.path}:${h.line}`);
+      assert.ok(lines.includes('src/a.ts:1'), `1 行目が出ていません: ${lines.join(',')}`);
+      assert.ok(lines.includes('src/a.ts:2'), `2 行目が出ていません: ${lines.join(',')}`);
+      assert.ok(!lines.some((l) => l.startsWith('src/b.ts')), `当たらない所まで出ています: ${lines.join(',')}`);
+      assert.equal(body.hits[0]!.text, 'const answer = 41;');
+    } finally { await mine.stop(); }
+  });
+
+  test('場所で絞れる', async () => {
+    const { mine, at } = await place();
+    try {
+      const body = await json(await fetch(`${at}/api/search?q=const&path=src/b.ts`)) as {
+        hits: Array<{ path: string }>;
+      };
+      assert.ok(body.hits.length > 0, '絞ったら何も出ない');
+      assert.ok(body.hits.every((h) => h.path === 'src/b.ts'), `絞れていません: ${JSON.stringify(body.hits)}`);
+    } finally { await mine.stop(); }
+  });
+
+  test('**作業場の外は断る**', async () => {
+    const { mine, at } = await place();
+    try {
+      const r = await fetch(`${at}/api/search?q=x&path=${encodeURIComponent('../..')}`);
+      assert.equal(r.status, 400);
+      assert.match((await json(r)).error, /作業ディレクトリの外|探せません/);
+    } finally { await mine.stop(); }
+  });
+
+  test('探す文字が無ければ断る（対）', async () => {
+    const { mine, at } = await place();
+    try {
+      assert.equal((await fetch(`${at}/api/search?q=`)).status, 400);
+    } finally { await mine.stop(); }
+  });
+});
+
 describe('/api/changes', () => {
   /**
    * **リポジトリへ書かない。**

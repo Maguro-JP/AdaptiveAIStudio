@@ -1343,6 +1343,87 @@ export const PANELS = {
 
 
   /**
+   * 探す。
+   *
+   * **画面には、探す口が一つも無かった。**モデルは `search_text` を持って
+   * いるのに、使う側は「あの文字がどこに在るか」を見る手段が無い。開いて直す
+   * ための画面としては、これが無いと使えない（一覧を上から開いて回ることになる）。
+   *
+   * 当たった行を押すと、その行を開く。**開くだけでは足りない。**1000 行の
+   * 頭が出ても、探している行は画面の外に在る。
+   *
+   * 打ち切ったことも、大きすぎて開いていないことも、そのまま出す。
+   * **見ていない分を、無かったことにしない。**
+   */
+  search(body, ctx) {
+    const form = el('div', 'search-head');
+    const q = document.createElement('input');
+    q.className = 'search-q';
+    q.placeholder = '探す文字';
+    q.spellcheck = false;
+    const where = document.createElement('input');
+    where.className = 'search-where mono';
+    where.placeholder = '場所（省略すると全部）';
+    where.spellcheck = false;
+    const go = el('button', 'primary', '探す');
+    form.append(q, where, go);
+    const state = el('div', 'dim search-state', '');
+    const list = el('div', 'search-hits');
+    body.append(form, state, list);
+
+    let asking = null;
+    const look = async () => {
+      const text = q.value.trim();
+      list.replaceChildren();
+      if (!text) { state.textContent = '探す文字を入れてください。'; return; }
+      if (asking) asking.abort();
+      const ac = new AbortController();
+      asking = ac;
+      state.textContent = '探しています…';
+      let r;
+      try {
+        const at = where.value.trim();
+        r = await fetch(`/api/search?q=${encodeURIComponent(text)}${at ? `&path=${encodeURIComponent(at)}` : ''}`,
+          { signal: AbortSignal.any([ac.signal, AbortSignal.timeout(25000)]) });
+      } catch (e) {
+        if (!ac.signal.aborted) state.textContent = `探せませんでした（${e.message ?? e}）`;
+        return;
+      }
+      if (ac.signal.aborted) return;
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) { state.textContent = j.error ?? '探せませんでした'; return; }
+
+      const hits = j.hits ?? [];
+      if (hits.length === 0) {
+        state.textContent = `見つかりませんでした: ${text}`;
+        list.append(empty('別の言葉か、場所を変えて探してみてください。'));
+        return;
+      }
+      const notes = [];
+      if (j.capped) notes.push('打ち切りました（これで全部ではありません）');
+      if (j.walkCapped) notes.push('ファイルが多いので、途中までしか見ていません');
+      if (j.tooBig > 0) notes.push(`大きすぎて開いていないファイルが ${j.tooBig} 個あります`);
+      state.textContent = `${hits.length} 件${notes.length ? ` — ${notes.join(' / ')}` : ''}`;
+
+      for (const h of hits) {
+        const row = el('div', 'search-hit');
+        const at = el('button', 'mono as-link search-at', `${h.path}:${h.line}`);
+        at.title = 'ここを開く';
+        at.onclick = () => { ctx.revealFile?.(h.path, h.line); };
+        row.append(at, el('div', 'mono search-line', h.text));
+        list.append(row);
+      }
+    };
+
+    go.onclick = () => { void look(); };
+    // **変換中の Enter で走らせない。**日本語を打つと、確定のたびに探しに行く。
+    q.onkeydown = (e) => { if (isPlainEnter(e)) { e.preventDefault(); void look(); } };
+    where.onkeydown = (e) => { if (isPlainEnter(e)) { e.preventDefault(); void look(); } };
+    // 出したらすぐ打てる。探すために出したのに、もう一度押させない。
+    q.focus?.();
+  },
+
+  /**
    * この対話で何を書き換えたか。
    * 会話を遡らないと分からない、では見落とす。一箇所に集める。
    */
@@ -1610,17 +1691,64 @@ export const PANELS = {
     // Tab 補完の灰色。欄の裏に同じ字組みで置き、カーソルまでを透明に、
     // 続きを灰色に描く。欄そのものは透けさせる。
     const stage = el('div', 'editor-stage');
+    /*
+     * **行番号。**
+     *
+     * 無かった。落ちた場所は「a.ts:128」の形で来るし、探した結果も行で来るのに、
+     * 画面には行が一つも出ていないので、**数えるしかなかった。**
+     * 欄と同じ字組みで左に並べ、欄の巻きに合わせて動かす。
+     */
+    const gutter = el('pre', 'editor-lines mono');
+    const hold = el('div', 'editor-hold');
     const ghost = el('pre', 'editor-ghost mono');
-    stage.append(ghost, area);
-    wrap.append(head, stage);
+    hold.append(ghost, area);
+    stage.append(gutter, hold);
+
+    /*
+     * **探す・置き換える・行へ飛ぶ。**
+     *
+     * どれも無かった。1000 行のファイルを開いても、目で追うしかない。
+     * 直すための画面として要る所なので、Ctrl+F と Ctrl+G で出す（普通の作法に合わせる）。
+     */
+    const bar = el('div', 'editor-find');
+    bar.hidden = true;
+    const needle = document.createElement('input');
+    needle.className = 'find-q';
+    needle.placeholder = '探す';
+    needle.spellcheck = false;
+    const swap = document.createElement('input');
+    swap.className = 'find-r';
+    swap.placeholder = '置き換える';
+    swap.spellcheck = false;
+    const lineAt = document.createElement('input');
+    lineAt.className = 'find-line';
+    lineAt.placeholder = '行';
+    const prev = el('button', 'ghost', '前へ');
+    const next = el('button', 'ghost', '次へ');
+    const one = el('button', 'ghost', '置換');
+    const all = el('button', 'ghost', '全部');
+    const count = el('span', 'dim find-count', '');
+    const shut = el('button', 'ghost icon', '×');
+    bar.append(needle, prev, next, swap, one, all, lineAt, count, shut);
+
+    wrap.append(head, bar, stage);
     body.append(wrap);
 
     let path = '';
     let loaded = '';
     const dirty = () => area.value !== loaded;
+    /** 行番号を、いまの中身に合わせる。 */
+    const drawLines = () => {
+      const n = area.value.split('\n').length;
+      let out = '';
+      for (let i = 1; i <= n; i += 1) out += `${i}\n`;
+      gutter.textContent = out;
+      gutter.scrollTop = area.scrollTop;
+    };
     const refresh = () => {
       save.disabled = !path || !dirty();
       state.textContent = !path ? '' : dirty() ? '直しています（Ctrl+S で保存）' : '保存してあります';
+      drawLines();
     };
     area.oninput = refresh;
 
@@ -1637,7 +1765,148 @@ export const PANELS = {
      */
     const drafts = new Map();
 
-    const open = async (p) => {
+    /**
+     * 欄のここからここまでを選ぶ。
+     *
+     * `setSelectionRange` が在ればそれで動かし、**selectionStart/End も
+     * 必ず合わせる。**片方だけに頼ると、持っていない所で黙って動かなくなる。
+     */
+    const select = (from, to) => {
+      area.setSelectionRange?.(from, to);
+      area.selectionStart = from;
+      area.selectionEnd = to;
+    };
+
+    /** その行が、上から何番目の字から始まるか。 */
+    const lineStart = (text, line) => {
+      const rows = text.split('\n');
+      const n = Math.max(1, Math.min(line, rows.length));
+      let at = 0;
+      for (let i = 0; i < n - 1; i += 1) at += rows[i].length + 1;
+      return { at, end: at + (rows[n - 1]?.length ?? 0), n, rows: rows.length };
+    };
+
+    /** その行が見える所まで巻く。高さが取れない所（試験の作り物）では何もしない。 */
+    const scrollToLine = (line, rows) => {
+      const h = area.scrollHeight / Math.max(1, rows);
+      if (!Number.isFinite(h) || h <= 0) return;
+      area.scrollTop = Math.max(0, (line - 1) * h - (area.clientHeight || 0) / 2);
+      gutter.scrollTop = area.scrollTop;
+    };
+
+    /**
+     * その行を選んで、見える所まで寄せる。
+     *
+     * **開いただけでは、どこに在るか分からない。**探した結果から開くとき、
+     * 1000 行のファイルの頭が出ても、探している行は画面の外に在る。
+     */
+    const goTo = (line) => {
+      if (!line || line < 1) return;
+      const { at, end, n, rows } = lineStart(area.value, line);
+      area.focus();
+      select(at, end);
+      scrollToLine(n, rows);
+      state.textContent = `${n} 行目`;
+    };
+
+    /** 欄の一部を入れ替える。戻せる形（setRangeText）が在れば、そちらを使う。 */
+    const put = (from, to, text) => {
+      if (typeof area.setRangeText === 'function') {
+        area.setRangeText(text, from, to, 'select');
+      } else {
+        area.value = area.value.slice(0, from) + text + area.value.slice(to);
+        area.selectionStart = from;
+        area.selectionEnd = from + text.length;
+      }
+    };
+
+    /** いま探している文字が何件在るか。0 件なら、そう出す。 */
+    const tally = () => {
+      const q = needle.value;
+      if (!q) { count.textContent = ''; return 0; }
+      const n = area.value.split(q).length - 1;
+      count.textContent = n === 0 ? '見つかりません' : `${n} 件`;
+      return n;
+    };
+
+    /**
+     * 次（前）の当たりへ動く。
+     *
+     * **端まで行ったら、反対の端から続ける。**一度当たらなくなっただけで
+     * 止まると、途中から探し始めた人には「無い」と見える。
+     */
+    const step = (back) => {
+      const q = needle.value;
+      if (!q || area.disabled) return;
+      const text = area.value;
+      let at;
+      if (back) {
+        at = text.lastIndexOf(q, Math.max(0, area.selectionStart - 1));
+        if (at < 0) at = text.lastIndexOf(q);
+      } else {
+        at = text.indexOf(q, area.selectionEnd);
+        if (at < 0) at = text.indexOf(q);
+      }
+      if (at < 0) { tally(); return; }
+      area.focus();
+      select(at, at + q.length);
+      // 当たった所の行まで巻く。
+      const line = text.slice(0, at).split('\n').length;
+      scrollToLine(line, text.split('\n').length);
+      tally();
+      state.textContent = `${line} 行目`;
+    };
+
+    /** いま選んでいる所が当たりなら、置き換える。違えば次の当たりへ動くだけ。 */
+    const swapOne = () => {
+      const q = needle.value;
+      if (!q || area.disabled) return;
+      const picked = area.value.slice(area.selectionStart, area.selectionEnd);
+      if (picked === q) {
+        put(area.selectionStart, area.selectionEnd, swap.value);
+        refresh();
+      }
+      step(false);
+    };
+
+    const swapAll = () => {
+      const q = needle.value;
+      if (!q || area.disabled) return;
+      const n = tally();
+      if (n === 0) return;
+      area.value = area.value.split(q).join(swap.value);
+      refresh();
+      count.textContent = `${n} 件を置き換えました`;
+    };
+
+    /** 探す所を出す。出ていれば、打つ所へ手を戻す。 */
+    const showFind = (which) => {
+      bar.hidden = false;
+      tally();
+      (which === 'line' ? lineAt : needle).focus?.();
+    };
+    const hideFind = () => { bar.hidden = true; area.focus(); };
+
+    next.onclick = () => step(false);
+    prev.onclick = () => step(true);
+    one.onclick = swapOne;
+    all.onclick = swapAll;
+    shut.onclick = hideFind;
+    needle.oninput = () => { tally(); };
+    // **変換中の Enter で動かさない。**日本語で探すと、確定のたびに次へ飛ぶ。
+    needle.onkeydown = (e) => {
+      if (isPlainEnter(e)) { e.preventDefault(); step(e.shiftKey === true); }
+      if (e.key === 'Escape') { e.preventDefault(); hideFind(); }
+    };
+    swap.onkeydown = (e) => { if (isPlainEnter(e)) { e.preventDefault(); swapOne(); } };
+    lineAt.onkeydown = (e) => {
+      if (!isPlainEnter(e)) return;
+      e.preventDefault();
+      const n = Number(lineAt.value);
+      if (Number.isFinite(n) && n >= 1) goTo(Math.floor(n));
+    };
+
+    const open = async (p, line) => {
       // 離れる前に、保存していない分を預かる。
       if (path && p !== path && dirty()) drafts.set(path, area.value);
       let r;
@@ -1666,7 +1935,11 @@ export const PANELS = {
        * 消えるので、保存できたかどうかを画面から確かめられない。
        * 中身が同じなら、読み直す意味も無い。
        */
-      if (p === path && j.content === loaded && !dirty()) { name.textContent = p; return; }
+      if (p === path && j.content === loaded && !dirty()) {
+        name.textContent = p;
+        goTo(line);
+        return;
+      }
       path = p; loaded = j.content;
       name.textContent = p;
       // 預けた分が在れば、それを返す（消さずに戻す）。
@@ -1677,6 +1950,7 @@ export const PANELS = {
       refresh();
       if (kept !== undefined && kept !== loaded) state.textContent = '保存していない直しを戻しました（Ctrl+S で保存）';
       area.focus();
+      goTo(line);
     };
 
     const store = async () => {
@@ -1706,6 +1980,10 @@ export const PANELS = {
     // Ctrl+S はこの欄に手があるときだけ。ブラウザの「ページを保存」を出さない。
     area.onkeydown = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); void store(); return; }
+      // 普通の作法に合わせる。Ctrl+F で探す、Ctrl+G で行へ飛ぶ。
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') { e.preventDefault(); showFind('find'); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'g') { e.preventDefault(); showFind('line'); return; }
+      if (e.key === 'Escape' && !bar.hidden && !suggestion) { e.preventDefault(); hideFind(); return; }
       // Ctrl+Space で、待たずに補完を頼む。
       if ((e.ctrlKey || e.metaKey) && e.key === ' ') { e.preventDefault(); void askCompletion(); return; }
       if (e.key === 'Escape' && suggestion) { e.preventDefault(); clearGhost(); refresh(); return; }
@@ -1782,11 +2060,14 @@ export const PANELS = {
       return true;
     };
     area.addEventListener('input', () => { clearGhost(); scheduleCompletion(); });
-    area.addEventListener('scroll', () => { ghost.scrollTop = area.scrollTop; ghost.scrollLeft = area.scrollLeft; });
+    area.addEventListener('scroll', () => {
+      ghost.scrollTop = area.scrollTop; ghost.scrollLeft = area.scrollLeft;
+      gutter.scrollTop = area.scrollTop;
+    });
     area.addEventListener('click', clearGhost);
     ctx.acceptGhost = acceptGhost;
 
-    ctx.openFile = (p) => { void open(p); };
+    ctx.openFile = (p, line) => { void open(p, line); };
     // モデルが書き換えたら、開いているものは読み直す（直している最中は上書きしない）。
     ctx.on('session', ({ event: v }) => {
       if (v.type === 'diff' && v.path === path && !dirty()) void open(path);
@@ -1812,6 +2093,7 @@ export const TITLES = {
   duties: '定期実行',
   models: 'モデル',
   changes: '変更したファイル',
+  search: '探す',
   log: 'ログ',
   note: 'メモ',
   checks: '診断',

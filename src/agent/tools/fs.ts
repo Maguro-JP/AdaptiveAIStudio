@@ -136,6 +136,100 @@ export const listFilesTool: Tool = {
   },
 };
 
+/** 探した結果、一件ぶん。 */
+export interface TextHit {
+  /** 作業ディレクトリからの相対パス */
+  path: string;
+  /** 1 から数えた行番号 */
+  line: number;
+  /** その行（前後の空白を落とし、長すぎる分は切る） */
+  text: string;
+}
+
+/** 探した結果と、**見ていない分**。 */
+export interface TextSearch {
+  hits: TextHit[];
+  /** 件数で打ち切った */
+  capped: boolean;
+  /** ファイルが多すぎて、途中までしか見ていない */
+  walkCapped: boolean;
+  /** 大きすぎて開いていないファイルの数 */
+  tooBig: number;
+  /** 探しにすら行けなかったときの理由 */
+  error?: string;
+}
+
+/**
+ * 文字列で探す。
+ *
+ * **画面とツールで、同じものを使う。**ここはツールの中に書いてあったので、
+ * 画面から探す口を作ろうとすると同じ処理を二度書くことになる。二度書けば、
+ * 片方だけ直る日が必ず来る（.gitignore を見る／見ない、打ち切りを言う／言わない）。
+ * 探すのはここ一つにして、言葉に直すのはツールの側でやる。
+ */
+export async function searchText(
+  root: string,
+  query: string,
+  base: string,
+  signal: AbortSignal,
+): Promise<TextSearch> {
+  const out: TextSearch = { hits: [], capped: false, walkCapped: false, tooBig: 0 };
+  // list_files と同じ理由でリンクの先まで見る。片方だけ塞いでも漏れる。
+  const abs = await realSafeResolve(root, base);
+  if (!abs) return { ...out, error: `作業ディレクトリの外です: ${base}` };
+
+  const files: string[] = [];
+  const walked = { capped: false };
+  /*
+   * **探せなかったことを、該当なしと言わない。**
+   *
+   * ここは失敗を握り潰していた。無い道・ファイルを指す道・読めない道を
+   * 渡すと、探しにすら行っていないのに `該当なし` と返る。モデルは
+   * 「そこには無い」と読んで、別の場所を探しに行かない。打ち間違いが
+   * **事実として返ってくる**のがいちばん困る形。
+   */
+  try {
+    // **ファイルを指されたら、その一つを探す。**モデルはよく渡してくる。
+    // ここで readdir に落として ENOTDIR を返すと、使い方の間違いにしか見えない。
+    const info = await stat(abs);
+    if (info.isFile()) files.push(toDisplayPath(root, abs));
+    else await walk(abs, root, files, 0, await ignoresFor(root, base), walked);
+  } catch (e) {
+    return { ...out, error: `探せません: ${base} (${describe(e)})` };
+  }
+  out.walkCapped = walked.capped;
+
+  /*
+   * **打ち切ったことを、必ず言う。**
+   *
+   * 100 件で止めていて、何も言っていなかった。呼び出し元を全部直したい
+   * ときに、モデルは 100 件で全部だと思う。**残りは直されないまま残る。**
+   * 直したつもりで壊れているのが、いちばん見つけにくい。
+   */
+  for (const rel of files) {
+    if (out.hits.length >= SEARCH_HITS) { out.capped = true; break; }
+    if (signal.aborted) break;
+    const target = await realSafeResolve(root, rel);
+    if (!target) continue;
+    try {
+      const info = await stat(target);
+      // 大きすぎて見ていないファイルも、見ていないと言う。
+      if (info.size > MAX_READ_BYTES) { out.tooBig += 1; continue; }
+      const text = await readFile(target, 'utf8');
+      if (!text.includes(query)) continue;
+      text.split('\n').forEach((line, i) => {
+        if (!line.includes(query)) return;
+        if (out.hits.length < SEARCH_HITS) {
+          out.hits.push({ path: rel, line: i + 1, text: line.trim().slice(0, 200) });
+        } else {
+          out.capped = true;
+        }
+      });
+    } catch { /* バイナリ等は読み飛ばす */ }
+  }
+  return out;
+}
+
 export const searchTextTool: Tool = {
   schema: {
     name: 'search_text',
@@ -154,74 +248,25 @@ export const searchTextTool: Tool = {
     const query = requireString(args, 'query');
     if (!query) return fail('query が必要です。');
     const base = typeof args.path === 'string' && args.path ? args.path : '.';
-    // list_files と同じ理由でリンクの先まで見る。片方だけ塞いでも漏れる。
-    const abs = await realSafeResolve(ctx.root, base);
-    if (!abs) return fail(`作業ディレクトリの外です: ${base}`);
-
-    const files: string[] = [];
-    const walked = { capped: false };
-    /*
-     * **探せなかったことを、該当なしと言わない。**
-     *
-     * ここは失敗を握り潰していた。無い道・ファイルを指す道・読めない道を
-     * 渡すと、探しにすら行っていないのに `該当なし` と返る。モデルは
-     * 「そこには無い」と読んで、別の場所を探しに行かない。打ち間違いが
-     * **事実として返ってくる**のがいちばん困る形。
-     */
-    try {
-      // **ファイルを指されたら、その一つを探す。**モデルはよく渡してくる。
-      // ここで readdir に落として ENOTDIR を返すと、使い方の間違いにしか見えない。
-      const info = await stat(abs);
-      if (info.isFile()) files.push(toDisplayPath(ctx.root, abs));
-      else await walk(abs, ctx.root, files, 0, await ignoresFor(ctx.root, base), walked);
-    } catch (e) {
-      return fail(`探せません: ${base} (${describe(e)})`);
-    }
-
-    /*
-     * **打ち切ったことを、必ず言う。**
-     *
-     * 100 件で止めていて、何も言っていなかった。呼び出し元を全部直したい
-     * ときに、モデルは 100 件で全部だと思う。**残りは直されないまま残る。**
-     * 直したつもりで壊れているのが、いちばん見つけにくい。
-     */
-    const hits: string[] = [];
-    let capped = false;
-    let tooBig = 0;
-    for (const rel of files) {
-      if (hits.length >= SEARCH_HITS) { capped = true; break; }
-      if (ctx.signal.aborted) break;
-      const target = await realSafeResolve(ctx.root, rel);
-      if (!target) continue;
-      try {
-        const info = await stat(target);
-        // 大きすぎて見ていないファイルも、見ていないと言う。
-        if (info.size > MAX_READ_BYTES) { tooBig += 1; continue; }
-        const text = await readFile(target, 'utf8');
-        if (!text.includes(query)) continue;
-        text.split('\n').forEach((line, i) => {
-          if (hits.length < SEARCH_HITS) {
-            if (line.includes(query)) hits.push(`${rel}:${i + 1}: ${line.trim().slice(0, 200)}`);
-          } else if (line.includes(query)) capped = true;
-        });
-      } catch { /* バイナリ等は読み飛ばす */ }
-    }
+    const found = await searchText(ctx.root, query, base, ctx.signal);
+    if (found.error) return fail(found.error);
 
     const notes: string[] = [];
-    if (capped) {
+    if (found.capped) {
       notes.push(
         `（${SEARCH_HITS} 件で打ち切りました。**これで全部ではありません。**`
         + 'path を絞るか、query を長くして探し直してください）',
       );
     }
-    if (walked.capped) {
+    if (found.walkCapped) {
       notes.push(`（ファイルが多いので ${WALK_FILES} 個までしか見ていません。path で絞ってください）`);
     }
-    if (tooBig > 0) {
-      notes.push(`（大きすぎて見ていないファイルが ${tooBig} 個あります）`);
+    if (found.tooBig > 0) {
+      notes.push(`（大きすぎて見ていないファイルが ${found.tooBig} 個あります）`);
     }
     const tail = notes.length > 0 ? `\n${notes.join('\n')}` : '';
-    return ok(hits.length > 0 ? hits.join('\n') + tail : `該当なし: ${query}${tail}`);
+    const lines = found.hits.map((h) => `${h.path}:${h.line}: ${h.text}`);
+    return ok(lines.length > 0 ? lines.join('\n') + tail : `該当なし: ${query}${tail}`);
   },
 };
 
