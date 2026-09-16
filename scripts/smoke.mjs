@@ -38,6 +38,16 @@ async function check(what, run) {
 // 設定が壊れていても、ここで止まらない。壊れていることは doctor が言う。
 let config = {};
 try { config = loadConfig().config; } catch { /* 既定のまま通す */ }
+/*
+ * **吐き切るまで待たない。**
+ *
+ * ここで見たいのは「送って、返って、終わる」道が繋がっていること。
+ * 答えの中身は見ていない。既定の `maxTokens`（4096）のままだと、
+ * 遅い機械では終わるまでに何分もかかる（CI の Windows で 308 秒、
+ * 次の回は 600 秒でも終わらなかった）。**走らせる機械で結果が変わる。**
+ * 出す量を短く決めて、時間で落ちないようにする。
+ */
+config = { ...config, maxTokens: Math.min(config.maxTokens ?? 4096, 32) };
 const server = new UiServer({ config, port: 0 });
 const base = (await server.start()).replace(/\/$/, '');
 const get = (p) => fetch(base + p, { signal: AbortSignal.timeout(30000) });
