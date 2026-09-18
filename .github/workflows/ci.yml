@@ -45,6 +45,15 @@ on:
         description: '全部の組み合わせで回す'
         type: boolean
         default: false
+      real:
+        description: '本物の重み（unsloth/Qwen3-0.6B-GGUF）を落として、答えの中身まで見る。これだけを回す'
+        type: boolean
+        default: false
+      real_os:
+        description: 'real を回す機械（ubuntu は 1 倍、windows は 2 倍で数える）'
+        type: choice
+        options: [ubuntu-latest, windows-latest]
+        default: ubuntu-latest
 
 # 同じ枝に続けて push したら、前のものは打ち切る。
 # 途中の版が通ったかどうかは、結局いらない。
@@ -55,6 +64,8 @@ concurrency:
 jobs:
   test:
     name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    # 本物の重みだけを頼んだ回では回さない（枠を使わない）。
+    if: github.event_name != 'workflow_dispatch' || !inputs.real
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -110,7 +121,7 @@ jobs:
   # だから PR では回さない。**手で頼んだときと、週に一度だけ。**
   bundle:
     name: 配る形で1ターン（Windows）
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && !inputs.real
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -135,6 +146,43 @@ jobs:
 
       - name: 配る形で1ターン
         run: npm run check:bundle
+
+  # 本物の重みで、本当に答えるかを見る。
+  #
+  # ここまでの確かめは全部、乱数の重みの模型で「道が繋がっている」ことを見ていた。
+  # **答えの中身は一度も見ていない。**配った先で毎回そこで壊れた。
+  # 開発している場所からは配布元（huggingface）へ繋がらないので、外へ出られる
+  # ここでだけ確かめられる。
+  #
+  # 中でやること（`scripts/check-real.mjs` 一つ）:
+  #   配る形に組む → 製品の道で GGUF を取ってくる（約 400MB）→ その中で
+  #   「1+1= に 2」と「read_file を呼んで読んだマーカーを答える」を厳しく見る
+  #
+  # 手で頼んだときだけ（`real`）。既定は ubuntu（1 倍）。配る先で見たいときは
+  # windows（2 倍）。この回では他の仕事を回さない。
+  real:
+    name: 本物の重みで1ターン（${{ inputs.real_os }}）
+    if: github.event_name == 'workflow_dispatch' && inputs.real
+    runs-on: ${{ inputs.real_os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      # モデルを読む側。配る形（setup.exe）と同じもの。GPU 向けの版は入れない。
+      - name: モデルを読む側を入れる（Windows）
+        if: runner.os == 'Windows'
+        run: npm i --no-save --no-audit --no-fund node-llama-cpp @node-llama-cpp/win-x64
+
+      - name: モデルを読む側を入れる（Linux）
+        if: runner.os == 'Linux'
+        run: npm i --no-save --no-audit --no-fund node-llama-cpp @node-llama-cpp/linux-x64
+
+      - name: 本物の重みで1ターン
+        run: node scripts/check-real.mjs
 
   # 手で頼んだときだけ、残りの組み合わせも見る。
   full:

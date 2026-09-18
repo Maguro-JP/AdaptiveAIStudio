@@ -105,6 +105,39 @@ export async function askOnce(config: AasConfig, opts: AskOnceOptions = {}): Pro
 }
 
 /**
+ * 「1+1=」への答えが、本物の文字で 2 と言っているか。落ちる理由を返す（通れば undefined）。
+ *
+ * 最初は `/2/.test(answer)` だけだった。乱数の重みの模型が「Фt2�Y�g…」を返し、
+ * その中に 2 が在ったので**通ってしまった**。偶然通る確かめは、確かめではない。
+ *
+ * 見るのは四つ。考えごと（<think>）を除いた本文が空でない・壊れた文字（U+FFFD）と
+ * 制御文字が無い・文字の九割が普通の文字（ASCII か日本語・漢字）・問いの「1+1=」を
+ * 除いた最初の数字が 2（「2」「1+1=2」「答えは 2 です」は通る。「22」「2.5」は通らない）。
+ *
+ * 道が通ったか（`describeOneTurn` の ok）とは分けて見る。小さいモデルは平気で
+ * 間違えるので、間違いは道の失敗ではない。ただし**本物の重みを確かめる場では、
+ * ここで落ちたら落ちたと言う**（`scripts/real-answer.mjs`）。
+ */
+export function judgeAnswer(answer: string): string | undefined {
+  const body = answer.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  if (body.length === 0) return '本文が空です（考えごとだけで終わったか、何も返っていません）';
+  if (/\uFFFD/.test(body)) return '壊れた文字（U+FFFD）を含みます';
+  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(body)) return '制御文字を含みます';
+  const chars = [...body];
+  const plain = chars.filter((c) => /[\x20-\x7E\s\u3000-\u30FF\u4E00-\u9FFF\uFF00-\uFFEF]/.test(c)).length;
+  if (plain / chars.length < 0.9) return '普通の文字（ASCII・日本語）が九割に届きません';
+  const rest = body.replace(/1\s*\+\s*1\s*=?/g, '');
+  const digit = rest.match(/\d/);
+  if (digit === null || digit.index === undefined) return '数字がありません';
+  if (digit.index > 24) return '最初の数字が遠すぎます（24 文字より後）';
+  const from = rest.slice(digit.index);
+  if (!/^2(?![\d])/.test(from) || /^2[.,]\d/.test(from)) {
+    return `最初の数字が 2 ではありません（${from.slice(0, 4)}）`;
+  }
+  return undefined;
+}
+
+/**
  * 人が読む一行にする。
  *
  * **答えの中身は、道の良し悪しではない。**小さいモデルは平気で間違える。
@@ -120,10 +153,11 @@ export function describeOneTurn(got: OneTurn): { ok: boolean; detail: string } {
     };
   }
   const shown = got.answer.replace(/\s+/g, ' ').slice(0, 60);
+  const judged = judgeAnswer(got.answer);
   return {
     ok: true,
     detail: `${got.model ?? '(不明)'} / 読み込み ${load}秒 / 答え「${shown}」`
       + `${got.tps === undefined ? '' : ` / ${got.tps} tok/s`}`
-      + ` / 2 を${/2/.test(got.answer) ? '含む' : '含まない（モデルの出来。道は通っています）'}`,
+      + ` / ${judged === undefined ? '2 と答えています' : `2 と答えていません（${judged}。モデルの出来。道は通っています）`}`,
   };
 }

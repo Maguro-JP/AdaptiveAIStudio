@@ -15,7 +15,7 @@ import { tempDir } from './tmp.ts';
 import { startFakeServer } from './fake-server.ts';
 
 process.env.AAS_STATE_DIR = await tempDir('aas-oneturn-');
-const { askOnce, describeOneTurn } = await import('../src/cli/ask-once.ts');
+const { askOnce, describeOneTurn, judgeAnswer } = await import('../src/cli/ask-once.ts');
 
 /** 送り先だけを立てた設定。この中で読む道は使わない（どこでも同じ結果にする）。 */
 function configFor(baseUrl: string) {
@@ -51,7 +51,7 @@ describe('送って、返る', () => {
       assert.match(said.detail, /local:m/);
       assert.match(said.detail, /読み込み/);
       assert.match(said.detail, /答え「2 です。」/);
-      assert.match(said.detail, /2 を含む/);
+      assert.match(said.detail, /2 と答えています/);
     } finally { await fake.close(); }
   });
 
@@ -61,7 +61,7 @@ describe('送って、返る', () => {
       answer: 'いろはにほへと', model: 'local:m', loadSeconds: 1.2, answerSeconds: 0.3,
     });
     assert.equal(said.ok, true, '返っているのに NG にしている');
-    assert.match(said.detail, /2 を含まない（モデルの出来。道は通っています）/);
+    assert.match(said.detail, /2 と答えていません（.+。モデルの出来。道は通っています）/);
   });
 
   test('**返らなかったら、返らなかったと言う**', async () => {
@@ -83,6 +83,23 @@ describe('送って、返る', () => {
     assert.equal(got.answer, '');
     assert.ok((got.why ?? '').length > 0, '理由が空');
     assert.equal(describeOneTurn(got).ok, false);
+  });
+
+  test('**2 と答えたか、は本物の文字で見る（乱数の模型が偶然 2 を含んでも通さない）**', () => {
+    // 通る形。答えそのもの・問いの写し・文の中・考えごとの後ろ。
+    for (const ok of ['2', '1+1=2', '1 + 1 = 2', '答えは 2 です。', '<think>足す</think>\n2', '2\n']) {
+      assert.equal(judgeAnswer(ok), undefined, `通るはずの「${ok}」を落とした: ${judgeAnswer(ok)}`);
+    }
+    // 落ちる形。乱数の模型が実際に返したもの（2 を含む）・壊れた文字・違う数・空・数字なし。
+    const garbage = 'Фt2\uFFFDY\uFFFDg\uFFFD\u0DE0#\uFFFD\uFFFD\uFFFD \uFFFD\uFFFD\u061Cr%\uFFFDP\uFFFD\uFFFDt2';
+    for (const ng of [garbage, 'Фt2Y', '22', '2.5', '3', '', '   ', '<think>2</think>', 'いろはにほへと', '1+1=3']) {
+      assert.notEqual(judgeAnswer(ng), undefined, `落ちるはずの「${ng}」を通した`);
+    }
+    // 人が読む一行にも、2 と答えたかどうかが出る。
+    const said = describeOneTurn({ answer: garbage, model: 'local:m', loadSeconds: 1, answerSeconds: 0.3 });
+    assert.equal(said.ok, true, '返っているのに NG にしている');
+    assert.match(said.detail, /2 と答えていません（壊れた文字/);
+    assert.match(describeOneTurn({ answer: '2', model: 'local:m', loadSeconds: 1, answerSeconds: 0.3 }).detail, /2 と答えています/);
   });
 
   test('速さは、測れたときだけ出す（でたらめな数字を出さない）', () => {
