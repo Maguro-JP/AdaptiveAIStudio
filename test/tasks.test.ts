@@ -48,13 +48,14 @@ describe('点検を回す係', () => {
 
   test('検査だけは走らせ役を通す', () => {
     // 環境ごとの差（殻の glob 展開、型剥がしの要否）をそこへ閉じ込めてある。
+    // 旗の有無で位置が動くので、何番目かでは見ない。並びの中に在るかで見る。
     const { runner, calls } = make();
     runner.start('test');
-    assert.match(calls[0]!.args[1]!, /scripts[\\/]run-tests\.mjs$/);
+    assert.ok(calls[0]!.args.some((a) => /scripts[\\/]run-tests\.mjs$/.test(a)), JSON.stringify(calls[0]!.args));
 
     const { runner: r2, calls: c2 } = make();
     r2.start('doctor');
-    assert.match(c2[0]!.args[1]!, /src[\\/]cli[\\/]doctor\.ts$/);
+    assert.ok(c2[0]!.args.some((a) => /src[\\/]cli[\\/]doctor\.ts$/.test(a)), JSON.stringify(c2[0]!.args));
   });
 
   test('同じものは二重に回さない。別のものは並べて回す', () => {

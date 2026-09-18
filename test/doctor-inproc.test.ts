@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { installRoot } from '../src/core/home.ts';
+import { needsStripFlag } from '../src/core/node-flags.ts';
 import { cleanAasEnv } from './env.ts';
 
 async function runDoctor(env: Record<string, string>): Promise<string> {
@@ -20,7 +21,10 @@ async function runDoctor(env: Record<string, string>): Promise<string> {
   const { promisify } = await import('node:util');
   const run = promisify(execFile);
   const at = join(installRoot(), 'src', 'cli', 'doctor.ts');
-  const out = await run(process.execPath, ['--no-warnings', at], {
+  // 型を剥がす旗は、要る版にだけ付ける（`src/ui/tasks.ts` と同じ判断）。
+  // 付けずに 22.13 で起こすと、doctor の中身を見る前に「.ts が読めない」で落ちる。
+  const flags = needsStripFlag(process.versions.node) ? ['--experimental-strip-types'] : [];
+  const out = await run(process.execPath, [...flags, '--no-warnings', at], {
     // 報告をプログラムの隣に撒かない（実際に撒いて、利用者に送られてきた）。
     // 外から立っている AAS_* に、この世界を乗っ取らせない（`test/env.ts`）。
     env: cleanAasEnv({ AAS_REPORT_DIR: join(tmpdir(), 'aas-doc-reports'), ...env, NO_COLOR: '1' }),
