@@ -92,6 +92,9 @@ await check('read_file を呼んで、読んだマーカーを答える', async 
       maxTokens: 256,
       priority: Priority.top,
       approve: async () => true,
+      // 答えたら終わり。押し戻し（TASK_DONE を求める）を入れると、答えた後に
+      // 「次の一手を」と 2 ターン余計に回して、終わり方が noProgress になる。
+      maxNudges: 0,
     });
     const ac = new AbortController();
     const giveUp = setTimeout(() => ac.abort(), 600_000);
@@ -130,3 +133,6 @@ if (bad > 0) {
   process.exit(1);
 }
 console.log('  通りました。本物の重みで、足し算とツール呼びの 1 ターンが返っています。');
+// 通ったときも自分で終わる（`selftest` と同じ）。何かが残って止まると、
+// 全部通ったのに CI の上限まで待って赤になる。
+process.exit(0);

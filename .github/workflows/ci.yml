@@ -58,7 +58,8 @@ on:
 # 同じ枝に続けて push したら、前のものは打ち切る。
 # 途中の版が通ったかどうかは、結局いらない。
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # `real`（有料で長い）は別の組にする。同じ枝への push や週一の回で打ち切られないように。
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.real && 'real' || 'ci' }}
   cancel-in-progress: true
 
 jobs:
@@ -161,9 +162,10 @@ jobs:
   # 手で頼んだときだけ（`real`）。既定は ubuntu（1 倍）。配る先で見たいときは
   # windows（2 倍）。この回では他の仕事を回さない。
   real:
-    name: 本物の重みで1ターン（${{ inputs.real_os }}）
+    name: 本物の重みで1ターン（${{ inputs.real_os || 'ubuntu-latest' }}）
     if: github.event_name == 'workflow_dispatch' && inputs.real
-    runs-on: ${{ inputs.real_os }}
+    # 手で頼んだとき以外は空になる。if で飛ぶが、空のまま渡さない。
+    runs-on: ${{ inputs.real_os || 'ubuntu-latest' }}
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -172,7 +174,9 @@ jobs:
         with:
           node-version: '24.x'
 
-      # モデルを読む側。配る形（setup.exe）と同じもの。GPU 向けの版は入れない。
+      # モデルを読む側。配る形（setup.exe）と同じ入れ方。名指しは CPU の版だが、
+      # npm は node-llama-cpp の optional（cuda・vulkan、合わせて 600MB ほど）も入れる。
+      # GPU の無いランナーでは CPU へ落ちる（Windows の bundle で通っている道）。
       - name: モデルを読む側を入れる（Windows）
         if: runner.os == 'Windows'
         run: npm i --no-save --no-audit --no-fund node-llama-cpp @node-llama-cpp/win-x64

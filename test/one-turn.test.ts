@@ -87,12 +87,16 @@ describe('送って、返る', () => {
 
   test('**2 と答えたか、は本物の文字で見る（乱数の模型が偶然 2 を含んでも通さない）**', () => {
     // 通る形。答えそのもの・問いの写し・文の中・考えごとの後ろ。
-    for (const ok of ['2', '1+1=2', '1 + 1 = 2', '答えは 2 です。', '<think>足す</think>\n2', '2\n']) {
+    for (const ok of ['2', '1+1=2', '1 + 1 = 2', '答えは 2 です。', '<think>足す</think>\n2', '2\n',
+      // 別の役割の読み直しで、前の判定（最初の数字が 2）が落としていた形。
+      '1 plus 1 equals 2', 'The sum of 1 and 1 is 2.', '２', 'The answer to your question is 2.', '1+1等于2']) {
       assert.equal(judgeAnswer(ok), undefined, `通るはずの「${ok}」を落とした: ${judgeAnswer(ok)}`);
     }
     // 落ちる形。乱数の模型が実際に返したもの（2 を含む）・壊れた文字・違う数・空・数字なし。
     const garbage = 'Фt2\uFFFDY\uFFFDg\uFFFD\u0DE0#\uFFFD\uFFFD\uFFFD \uFFFD\uFFFD\u061Cr%\uFFFDP\uFFFD\uFFFDt2';
-    for (const ng of [garbage, 'Фt2Y', '22', '2.5', '3', '', '   ', '<think>2</think>', 'いろはにほへと', '1+1=3']) {
+    for (const ng of [garbage, 'Фt2Y', '22', '2.5', '3', '', '   ', '<think>2</think>', 'いろはにほへと', '1+1=3',
+      // 前の判定が通していた形（2 が先に来るが、答えは別）。
+      '2 is wrong; the answer is 3', '2 + 2 = 4', '2. Wait, no, 3.', '12']) {
       assert.notEqual(judgeAnswer(ng), undefined, `落ちるはずの「${ng}」を通した`);
     }
     // 人が読む一行にも、2 と答えたかどうかが出る。
