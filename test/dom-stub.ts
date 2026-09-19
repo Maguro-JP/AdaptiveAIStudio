@@ -261,4 +261,19 @@ export function installDom(): void {
     },
   };
   (globalThis as unknown as { NodeFilter: unknown }).NodeFilter = { SHOW_TEXT: 4 };
+  /*
+   * **覚えておく所（localStorage）。**
+   *
+   * 画面は、保存していない直しをここへ預ける（ブラウザを閉じても戻せるように）。
+   * 本物と同じく、入れたものが文字で返るだけあればよい。
+   */
+  const store = new Map<string, string>();
+  (globalThis as unknown as { localStorage: unknown }).localStorage = {
+    getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+    setItem: (k: string, v: string) => { store.set(k, String(v)); },
+    removeItem: (k: string) => { store.delete(k); },
+    clear: () => { store.clear(); },
+    key: (i: number) => [...store.keys()][i] ?? null,
+    get length() { return store.size; },
+  };
 }

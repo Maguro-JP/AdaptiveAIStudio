@@ -1861,6 +1861,8 @@ export const PANELS = {
       save.disabled = !path || !dirty();
       state.textContent = !path ? '' : dirty() ? '直しています（Ctrl+S で保存）' : '保存してあります';
       drawLines();
+      // 打つたびに書き込むと重いので、手が止まってから預ける。
+      scheduleKeep();
     };
     area.oninput = refresh;
 
@@ -1876,6 +1878,62 @@ export const PANELS = {
      * 消さないので、押し間違いでも取り返しがつく。
      */
     const drafts = new Map();
+
+    /*
+     * **ブラウザを閉じても、書いたものを失わない。**
+     *
+     * 預かり（`drafts`）はこのパネルの中だけに在るので、**読み直すと消えていた。**
+     * 閉じる・押し間違えて再読み込み、で書いたものが消える（保存前なら戻せない）。
+     * 覚えておく所へ預ける。使えない環境もあるので、全部 try で囲む。
+     *
+     * 一緒に**預けたときの中身**（`base`）も置く。開き直したときに中身が変わって
+     * いたら、黙って戻さない（AI や別のブラウザが書いたものを、古い直しで上書きする）。
+     */
+    const DRAFT_AT = (p) => `aas.draft:${p}`;
+    /** これより大きいものは預けない（覚えておく所が溢れる）。 */
+    const DRAFT_MAX = 512 * 1024;
+    /** これより古い預かりは捨てる。 */
+    const DRAFT_KEEP_MS = 14 * 24 * 60 * 60 * 1000;
+    let toldTooBig = '';
+
+    const keepDraft = () => {
+      if (!path) return;
+      try {
+        if (!dirty()) { localStorage.removeItem(DRAFT_AT(path)); return; }
+        if (area.value.length > DRAFT_MAX) {
+          if (toldTooBig !== path) {
+            toldTooBig = path;
+            tell('大きいので、保存していない直しはブラウザを閉じると残りません（保存してください）。', [], 'info');
+          }
+          return;
+        }
+        localStorage.setItem(DRAFT_AT(path), JSON.stringify({ text: area.value, base: loaded, at: Date.now() }));
+      } catch { /* 覚えておく所が使えない環境もある */ }
+    };
+    /** 預かりを読む。形が違うもの・古いものは、その場で捨てる。 */
+    const readDraft = (p) => {
+      try {
+        const raw = localStorage.getItem(DRAFT_AT(p));
+        if (!raw) return undefined;
+        const got = JSON.parse(raw);
+        if (typeof got?.text !== 'string' || typeof got?.base !== 'string') {
+          localStorage.removeItem(DRAFT_AT(p));
+          return undefined;
+        }
+        if (typeof got.at === 'number' && Date.now() - got.at > DRAFT_KEEP_MS) {
+          localStorage.removeItem(DRAFT_AT(p));
+          return undefined;
+        }
+        return got;
+      } catch { return undefined; }
+    };
+    const dropDraft = (p) => { try { localStorage.removeItem(DRAFT_AT(p)); } catch { /* 同上 */ } };
+
+    let keeping;
+    const scheduleKeep = () => {
+      clearTimeout(keeping);
+      keeping = setTimeout(keepDraft, 400);
+    };
 
     /**
      * 欄のここからここまでを選ぶ。
@@ -2056,7 +2114,31 @@ export const PANELS = {
       notice.hidden = true;
       name.textContent = p;
       // 預けた分が在れば、それを返す（消さずに戻す）。
-      const kept = drafts.get(p);
+      // このパネルの中に無ければ、覚えておく所を見る（ブラウザを閉じたあとでも戻せる）。
+      let kept = drafts.get(p);
+      if (kept === undefined) {
+        const saved = readDraft(p);
+        if (saved && saved.base === loaded) kept = saved.text;
+        else if (saved) {
+          /*
+           * **中身が変わっていたら、黙って戻さない。**
+           *
+           * 預けたときと違うということは、AI か別のブラウザが書いたということ。
+           * 古い直しで上書きすると、その書き換えが消える。出すかどうかは人が決める。
+           */
+          tell('前に保存していない直しが残っていますが、このファイルは後から変わっています。', [
+            ['その直しを出す', () => {
+              mine = area.value;
+              area.value = saved.text;
+              refresh();
+              tell('預かっていた直しを出しました。保存すると、いまのファイルを上書きします。', [
+                ['やめる', () => { area.value = mine ?? area.value; refresh(); tell('戻しました。', [], 'info'); }],
+              ]);
+            }],
+            ['捨てる', () => { dropDraft(p); tell('預かっていた直しを捨てました。', [], 'info'); }],
+          ]);
+        }
+      }
       area.value = kept ?? loaded;
       area.disabled = false;
       if (kept !== undefined) drafts.delete(p);
@@ -2101,6 +2183,8 @@ export const PANELS = {
       if (!r.ok) { state.textContent = j.error ?? '保存できませんでした'; save.disabled = false; return; }
       loaded = area.value;
       stamp = j.stamp ?? stamp;
+      // 保存できたら、預かりは要らない（残すと、次に開いたとき古い方を戻す）。
+      dropDraft(path);
       refresh();
       state.textContent = `保存しました（+${j.added ?? 0} -${j.removed ?? 0}）`;
     };

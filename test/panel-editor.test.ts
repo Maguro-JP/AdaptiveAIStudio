@@ -19,8 +19,15 @@ const { PANELS } = await import('../src/ui/web/panels.js') as {
   PANELS: Record<string, (body: StubNode, ctx: unknown) => void>;
 };
 
-/** パネルを開く。ファイルの中身は `disk` が返し、叩いた先と PUT を控える。 */
-function open(disk: Record<string, string>) {
+/**
+ * パネルを開く。ファイルの中身は `disk` が返し、叩いた先と PUT を控える。
+ *
+ * **覚えておく所は、毎回まっさらにする。**保存していない直しはそこへ預かるので、
+ * 前の試験の分が残っていると、開いた瞬間にそれが戻ってくる（実際に 4 件落ちた）。
+ * 預かりそのものを見る試験は、`keep` を渡して残す。
+ */
+function open(disk: Record<string, string>, keep = false) {
+  if (!keep) localStorage.clear();
   const asked: Array<{ url: string; method: string; body?: unknown }> = [];
   (globalThis as { fetch?: unknown }).fetch = (async (url: string, init?: { method?: string; body?: string }) => {
     const method = init?.method ?? 'GET';
@@ -538,5 +545,87 @@ describe('選んでいた所を、AI が書き換える', () => {
     const done = patch(box, { path: 'b.ts', from: 1, to: 1, text: 'const x = 1;', replacement: 'x' });
     assert.equal(done, false);
     assert.equal(box.area().value, 'const x = 1;\nconst y = 2;\n');
+  });
+});
+
+/**
+ * **ブラウザを閉じても、書いたものを失わない。**
+ *
+ * 預かりはパネルの中だけに在ったので、読み直すと消えていた。閉じる・押し間違えて
+ * 再読み込み、で書いたものが消える（保存前なので、戻す先も無い）。覚えておく所へ
+ * 預ける。ただし**中身が変わっていたら、黙って戻さない**（AI や別のブラウザが書いたものを、
+ * 古い直しで上書きするため）。
+ */
+describe('保存していない直しは、ブラウザを閉じても残る', () => {
+  /** 打って、手が止まるまで待つ（預けるのは手が止まってから）。 */
+  async function typeInto(box: ReturnType<typeof open>, text: string) {
+    box.area().value = text;
+    box.area().oninput!();
+    await new Promise((r) => setTimeout(r, 600));
+  }
+
+  test('**開き直すと、打ったものが戻る**', async () => {
+    localStorage.clear();
+    const disk = { 'a.ts': 'はじめ\n' };
+    const first = open(disk, true);
+    (first.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => first.area().value === 'はじめ\n', 'ファイルが開く');
+    await typeInto(first, '書きかけ\n');
+
+    // ブラウザを閉じて開き直した、と同じこと（パネルを作り直す）。
+    const again = open(disk, true);
+    (again.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => again.area().value === '書きかけ\n', '打ったものが戻る');
+    assert.match(again.state().textContent, /保存していない直しを戻しました/, again.state().textContent);
+  });
+
+  test('**ファイルが変わっていたら、黙って戻さない**', async () => {
+    localStorage.clear();
+    const disk = { 'a.ts': 'はじめ\n' };
+    const first = open(disk, true);
+    (first.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => first.area().value === 'はじめ\n', 'ファイルが開く');
+    await typeInto(first, '書きかけ\n');
+
+    // その間に、AI か別のブラウザが書いた。
+    disk['a.ts'] = 'AI が書いた\n';
+    const again = open(disk, true);
+    (again.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => again.area().value === 'AI が書いた\n', 'いまの中身が出る');
+    const bar = again.find((n) => n.className.startsWith('editor-notice'));
+    assert.equal(bar.hidden, false, '預かりが在ることを言っていない');
+    assert.match(bar.text, /後から変わっています/, bar.text);
+    // 出すかどうかは人が決める。押せば出る。
+    again.press('その直しを出す');
+    assert.equal(again.area().value, '書きかけ\n', '押しても出てこない');
+  });
+
+  test('保存したら、預かりは消える（対）', async () => {
+    localStorage.clear();
+    const disk = { 'a.ts': 'はじめ\n' };
+    const first = open(disk, true);
+    (first.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => first.area().value === 'はじめ\n', 'ファイルが開く');
+    await typeInto(first, 'なおした\n');
+    first.key('s');
+    await until(() => disk['a.ts'] === 'なおした\n', '保存できる');
+    await new Promise((r) => setTimeout(r, 600));
+
+    const again = open(disk, true);
+    (again.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => again.area().value === 'なおした\n', '開く');
+    assert.doesNotMatch(again.state().textContent, /戻しました/, `保存したのに預かりが残っている: ${again.state().textContent}`);
+  });
+
+  test('大きすぎるものは預からない。そのことを言う（対）', async () => {
+    localStorage.clear();
+    const disk = { 'a.ts': 'はじめ\n' };
+    const box = open(disk, true);
+    (box.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => box.area().value === 'はじめ\n', 'ファイルが開く');
+    await typeInto(box, 'あ'.repeat(600 * 1024));
+    const bar = box.find((n) => n.className.startsWith('editor-notice'));
+    assert.match(bar.text, /ブラウザを閉じると残りません/, bar.text);
+    assert.equal(localStorage.getItem('aas.draft:a.ts'), null, '大きいのに預かっている');
   });
 });

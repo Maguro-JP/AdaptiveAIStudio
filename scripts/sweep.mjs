@@ -1210,6 +1210,47 @@ await check('探した所を、依頼に添えられる', async () => {
   }
 });
 
+/*
+ * **ブラウザを閉じても、書いたものを失わない。**
+ *
+ * 保存していない直しの預かりはパネルの中だけに在ったので、**読み直すと消えていた。**
+ * 閉じる・押し間違えて再読み込み、で書いたものが消える（保存前なので戻す先も無い）。
+ * ここは実際に読み直して、打ったものが戻るところまで見る。
+ */
+await check('保存していない直しは、読み直しても残る', async () => {
+  const at = 'sweep-draft-probe.txt';
+  const made = await p.evaluate(([path]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: 'はじめ\n' }),
+  }).then((r) => r.status), [at]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  const openProbe = async () => {
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+  };
+  try {
+    await p.waitForTimeout(900);
+    await openProbe();
+    const area = p.locator('.editor-area');
+    if (await area.count() === 0) throw new Error('エディタが出ない');
+    await area.fill('書きかけ\n');
+    // 手が止まってから預ける作りなので、少し待つ。
+    await p.waitForTimeout(1200);
+    await p.reload({ waitUntil: 'networkidle' });
+    await p.waitForTimeout(1500);
+    await openProbe();
+    const back = await p.locator('.editor-area').inputValue();
+    if (back !== '書きかけ\n') throw new Error(`読み直したら消えている: ${JSON.stringify(back)}`);
+  } finally {
+    await p.evaluate(([path]) => { try { localStorage.removeItem(`aas.draft:${path}`); } catch { /* 使えない環境もある */ } }, [at]);
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
 if (shot) await p.screenshot({ path: shot, fullPage: false });
 await b.close();
 console.log(bad.length === 0 ? '見つかった不具合: なし' : `見つかった不具合 ${bad.length} 件:\n- ${bad.join('\n- ')}`);
