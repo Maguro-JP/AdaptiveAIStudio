@@ -88,6 +88,7 @@
 - 2 と答えたか、は本物の文字で見る
 - 押し戻していないなら、押し戻したと書かない
 - 黙っているのと、死んでいるのを分ける
+- draft のうちは Windows を回さない
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -5864,5 +5865,24 @@ PR では回らない。
 
 **触る場所。** `src/runtime/inproc.ts` の `working`、`src/providers/openai-compatible.ts`
 の `quietCeilingMs`、`test/inproc-quiet.test.ts`、`test/quiet-alive.test.ts`。
+
+---
+
+## 2026-09-19  draft のうちは Windows を回さない
+
+**決めたこと。** Windows で `npm test` を回す仕事を分け、`draft` の PR では回さない
+（`github.event.pull_request.draft != true`）。Ready にした時点で回るように、合図に
+`ready_for_review` を足す。Linux（1 倍）は毎回回す。どの仕事にも `timeout-minutes` を置く。
+
+**なぜ。** draft は「まだ見せていない」という合図なのに、そこへ押すたびに Linux と
+Windows の両方が回っていた。Windows は 2 倍で数えられるので、直しを 3 回押すと
+Windows が 3 回（十数分 → その倍）走る。**この PR で実際に 3 回押した。**
+
+**減らすのは回数だけ。**見る中身は減らさない（Ready にすれば全部回る）。落ちるのは
+いつも Windows 側なので、そこを薄くすると退行を見逃す。安い方（Linux）は毎回回す。
+
+上限を置くのは、暴走した 1 本で枠を溶かさないため。置いていない仕事が 3 つあった。
+
+**触る場所。** `.github/workflows/ci.yml` の `test-windows`、`test/home.test.ts`。
 
 ---

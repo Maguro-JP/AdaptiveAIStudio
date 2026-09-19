@@ -119,8 +119,8 @@ GitHub Actions のランナーは外へ出られる。本物の重みを確か�
   全部まとめて回したときに一度だけ落ちた。単独では通る。落ちた原因の証拠は無い。
   また落ちたら、`settled` が一度目のものか二度目のものかを `conversationId` で見分ける
 - Windows で `os.setPriority(pid, 10)` が BELOW_NORMAL として効くか（未確認）
-- draft の PR でも push のたびに ubuntu と windows のテストが回る。枠を減らすなら
-  「draft のうちは回さない」形だが、CI の設定を触るので別の作業として残してある
+- ~~draft の PR でも push のたびに ubuntu と windows のテストが回る~~
+  **直した**（2026-09-19）。Windows は draft のうちは回らない。Ready にした時点で回る
 
 ## 手順の要点
 

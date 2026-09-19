@@ -33,6 +33,9 @@ name: 検査
 
 on:
   pull_request:
+    # **Ready にした時点も合図にする。**既定（開いた・押した・開き直した）だけだと、
+    # draft の間に止めておいた Windows が、Ready にしても回らない。
+    types: [opened, synchronize, reopened, ready_for_review]
     paths-ignore: ['**.md', 'docs/**', '.gitignore', '.gitattributes']
   schedule:
     # 毎週月曜 09:00 JST。UTC では月曜 00:00。
@@ -63,32 +66,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 安い方（Linux は1倍）。**ここは必ず回す。**
   test:
-    name: ${{ matrix.os }} / Node ${{ matrix.node }}
+    name: ubuntu-latest / Node 22.x
     # 本物の重みだけを頼んだ回では回さない（枠を使わない）。
     if: github.event_name != 'workflow_dispatch' || !inputs.real
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # 既定は2つ。下限の Node が Linux（安い方）で、
-        # Windows は実際に使う版で見る。落ちるのはいつも Windows 側なので、
-        # 減らすならこちらではなく Linux 側から減らす。
-        os: [ubuntu-latest, windows-latest]
-        node: ['22.x']
-        include:
-          - os: windows-latest
-            node: '24.x'
-        exclude:
-          - os: windows-latest
-            node: '22.x'
-
+    runs-on: ubuntu-latest
+    # 暴走した1本で枠を溶かさない。手元では3分ほど。
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version: '22.x'
 
       # 実行時の依存はゼロなので、ここでは何も入れない。
       # 入れてしまうと「入れなくても動く」が壊れても気づけない。
@@ -98,10 +89,37 @@ jobs:
       # 型検査だけは TypeScript が要る。独立した仕事にすると
       # それだけで1分課金されるので、安い方の仕事に相乗りさせる。
       - name: 型検査
-        if: matrix.os == 'ubuntu-latest'
         run: |
           npm ci --no-audit --no-fund
           npm run typecheck
+
+  # 配る先（Windows）。**2倍で数えられるので、draft のうちは回さない。**
+  #
+  # draft は「まだ見せていない」という合図で、そこへ押すたびに回すと、
+  # 直しを 3 回押しただけで Windows が 3 回（15 分 → 30 分ぶん）走る。
+  # 実際にこの PR で 3 回押した。**Ready にした時点で 1 回だけ回る。**
+  #
+  # 手で頼んだとき・週に一度は、draft でなくても回る（PR が無い回なので
+  # `github.event.pull_request` が空になり、下の条件は素通りする）。
+  #
+  # 落ちるのはいつも Windows 側なので、**減らすのは回数だけ。**
+  # 見る中身（`npm test` の全部）は減らさない。
+  test-windows:
+    name: windows-latest / Node 24.x
+    if: >-
+      (github.event_name != 'workflow_dispatch' || !inputs.real)
+      && github.event.pull_request.draft != true
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: 検査
+        run: npm test
 
   # 配る形で、配る機械（Windows）で、送って返るところまで通す。
   #
@@ -193,6 +211,7 @@ jobs:
     name: ${{ matrix.os }} / Node ${{ matrix.node }}（全部）
     if: inputs.full
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
