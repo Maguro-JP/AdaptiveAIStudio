@@ -24,6 +24,38 @@ describe('困ったときの報告', () => {
     assert.ok(!out.includes('MY_TOKEN'), out);
   });
 
+  /**
+   * **項目の名前が無いまま、値だけが出ることがある。**
+   *
+   * 設定は名前しか書かない作りだが、記録（`ui.log`）や点検の出力には、見出しを
+   * 丸ごと出した行や、外のツールのエラーがそのまま残る。名前だけで判じていると
+   * そこがすり抜ける。報告は外へ出すものなので、値の形でも伏せる。
+   */
+  test('**値の形でも伏せる（名前が無くても）**', () => {
+    const out = redactSecrets([
+      'GET /mcp/ Authorization: Bearer abcdefghijklmnopqrstuvwxyz',
+      'github へ: ghp_abcdefghijklmnopqrstuvwxyz0123',
+      'openai へ: sk-proj-abcdefghijklmnopqrstuv',
+      'slack: xoxb-1234567890-abcdefghij',
+      '普通の行はそのまま（Bearer は付いていない）',
+    ].join('\n'));
+    assert.ok(!out.includes('abcdefghijklmnopqrstuvwxyz'), `Bearer の後ろが出ている: ${out}`);
+    assert.ok(!out.includes('ghp_abcdefghijklmnopqrstuvwxyz0123'), out);
+    assert.ok(!out.includes('sk-proj-abcdefghijklmnopqrstuv'), out);
+    assert.ok(!out.includes('xoxb-1234567890-abcdefghij'), out);
+    assert.ok(out.includes('普通の行はそのまま'), out);
+  });
+
+  test('**記録の節も伏せてから出す**', async () => {
+    const state = join(home, 'redact-state');
+    await mkdir(join(state, 'logs'), { recursive: true });
+    await writeFile(join(state, 'logs', 'ui.log'), 'つながりませんでした: Authorization: Bearer ghp_zzzzzzzzzzzzzzzzzzzz\n');
+    const text = await buildReport({
+      root: home, state, models: join(home, 'models'), home,
+    } as never);
+    assert.ok(!text.includes('ghp_zzzzzzzzzzzzzzzzzzzz'), '記録に出たトークンが、そのまま報告へ出ている');
+  });
+
   test('版・機械・設定・モデル・doctor・記録・点検が一つに揃う', async () => {
     const state = join(home, 'state');
     const models = join(home, 'models');
