@@ -749,6 +749,7 @@ export class Session {
         maxTotalParallel: this.config.agent?.maxTotalParallel,
         approve: this.#approve,
         beforeWrite: (path, previous) => this.undo.capture(path, previous),
+        wrote: (path, diff, created) => this.#diffs.set(path, { diff, created }),
         // 権限は役職から配る。調べるだけの担当は書き込む手段を持たない。
         assign: (roleId) => {
           const role = this.roles.get(roleId);
@@ -1556,6 +1557,14 @@ export class Session {
       ...(counter ? { count: (t: string) => counter.count(t) } : {}),
       approve: this.#approve,
       beforeWrite: (path, previous) => this.undo.capture(path, previous),
+      /*
+       * **書いた分の差分で上書きする。**
+       *
+       * 承認のときに拾った差分は「提案そのまま」なので、塊を選んで通したときは
+       * 書いたものと食い違う（当たっていない塊まで札に並び、そこの「戻す」は
+       * 断られる）。書けた側から来たものを正とする。
+       */
+      wrote: (path, diff, created) => this.#diffs.set(path, { diff, created }),
     });
   }
 

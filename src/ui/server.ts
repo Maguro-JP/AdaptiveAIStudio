@@ -794,7 +794,7 @@ export class UiServer {
       // 立ち上げて30秒後に機械が塞がる。
       const missing = await this.#readyToThink(false);
       if (missing) {
-        // 10分は黙る。30秒ごとに同じことを言われても、置き場は変わらない。
+        // 10分は黙る。30秒ごとに同じことを言われても、保存先は変わらない。
         this.#idleHoldUntil = Date.now() + 10 * 60_000;
         return 'MISSING';
       }
@@ -1211,7 +1211,7 @@ export class UiServer {
         fetching: this.#fetching ?? null,
         catalog: AVAILABLE_MODELS.map((m) => ({
           id: m.id, note: m.note, approxGB: m.approxGB,
-          // GGUF を自分で置く道（llamacpp / inproc）では、置き場に入れる元を出す。
+          // GGUF を自分で置く道（llamacpp / inproc）では、保存先に入れる元を出す。
           // Ollama の名前を出しても、そちらでは使えない。
           ref: runtime.id === 'ollama' ? m.ollama : m.repo,
         })),
@@ -1226,7 +1226,7 @@ export class UiServer {
       const installed = (await runtime.list().catch(() => [])).map((m) => m.ref);
       if (installed.length === 0) return send(res, 200, { findings: [] });
       try {
-        // GGUF の名前で Ollama に訊いても、何も出ない。置き場に合わせて訊く先を変える。
+        // GGUF の名前で Ollama に訊いても、何も出ない。保存先に合わせて訊く先を変える。
         const findings = usesGguf(runtime.id)
           ? await findNewerGguf({ installed })
           : await findNewerOllama({ installed });
@@ -2048,7 +2048,7 @@ export class UiServer {
     /*
      * 外の道具（MCP）。GitHub をここから繋げるようにする。
      *
-     * 合言葉は**置き場の .env** に書く（設定ファイルには名前だけ）。
+     * 合言葉は**保存先の .env** に書く（設定ファイルには名前だけ）。
      * 値は返さない。**入っているかどうか**だけを返す。
      */
     if (path === '/api/mcp' && req.method === 'GET') {
@@ -2109,7 +2109,7 @@ export class UiServer {
      * 見本帳から一つ繋ぐ。
      *
      * 名前を一つ言えば繋がる。合言葉が要るものは、それだけ受け取る
-     * （置き場の .env に書く。設定にも画面にも、値は出さない）。
+     * （保存先の .env に書く。設定にも画面にも、値は出さない）。
      */
     if (path === '/api/mcp/connect' && req.method === 'POST') {
       const body = await readBody(req) as {
@@ -2181,7 +2181,7 @@ export class UiServer {
       return send(res, 200, { id, removed: true });
     }
 
-    /** GitHub を繋ぐ。合言葉を置き場へ書き、設定に一つ足す。 */
+    /** GitHub を繋ぐ。合言葉を保存先へ書き、設定に一つ足す。 */
     if (path === '/api/mcp/github' && req.method === 'POST') {
       const body = await readBody(req) as { token?: unknown; enabled?: unknown };
       const token = typeof body?.token === 'string' ? body.token.trim() : '';
@@ -2305,7 +2305,7 @@ export class UiServer {
         // 名前だけ .gguf の別物も、一覧で分かるように。
         notGguf: !(await looksLikeGguf(join(liveDir, m.ref))),
       }))),
-      // GGUF が0件のとき、置き場そのものが無いのか、空なのかで打つ手が違う。
+      // GGUF が0件のとき、保存先そのものが無いのか、空なのかで打つ手が違う。
       dirState: await inspectModelsDir(liveDir),
       slow: false,
     }))();
@@ -2328,14 +2328,14 @@ export class UiServer {
     // ここだけ 'ollama' と決め打つと、既定で動いているものと画面の表示が食い違う。
     const kind = String(saved.kind ?? this.#opts.config.runtime?.kind ?? 'inproc');
     const dir = await savedModelsDir();
-    // いま実際に読まれている置き場。保存した方と違うことがある。
+    // いま実際に読まれている保存先。保存した方と違うことがある。
     const liveDir = active.modelsDir ?? dir;
     return send(res, 200, {
       path: configPath(),
       kinds: RUNTIME_KINDS.map((id) => ({ id, name: KIND_LABELS[id] })),
       kind,
       modelsDir: dir,
-      // 使うと決めた GGUF。無ければ置き場の最初の一つを読む。
+      // 使うと決めた GGUF。無ければ保存先の最初の一つを読む。
       model: typeof saved.model === 'string' ? saved.model : null,
       // いま動いているもの。保存したものと違えば、立ち上げ直しが要る。
       active: {
@@ -2346,9 +2346,9 @@ export class UiServer {
       restartNeeded: kind !== (active.kind ?? 'inproc')
         || dir !== (active.modelsDir ?? modelsDir()),
       /*
-       * 置き場にある GGUF。「置いたのに認識しない」を画面で確かめるための一覧。
+       * 保存先にある GGUF。「置いたのに認識しない」を画面で確かめるための一覧。
        *
-       * **いま読まれている置き場を見る。**保存した方（まだ効いていない）を
+       * **いま読まれている保存先を見る。**保存した方（まだ効いていない）を
        * 見ていたので、設定に別の場所を書いてある機械では、取ってきたものが
        * 一覧に出なかった。落とす先と一覧が割れると、
        * 「用意できました」と出たのに使えない、になる。
@@ -2398,11 +2398,11 @@ export class UiServer {
       return send(res, 400, { error: '何を変えるのか分かりません' });
     }
     const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
-    // 使う GGUF。名前に道を混ぜさせない（置き場の中の名前だけ）。
+    // 使う GGUF。名前に道を混ぜさせない（保存先の中の名前だけ）。
     const model = typeof body?.model === 'string' ? body.model.trim() : undefined;
-    if (model && /[\\/]/.test(model)) return send(res, 400, { error: 'モデルは置き場の中の名前で指定してください' });
+    if (model && /[\\/]/.test(model)) return send(res, 400, { error: 'モデルは保存先の中の名前で指定してください' });
     // 打った場所は見るだけ。既定の場所は、無ければ作る。
-    // 「GGUF を置くだけ」と言っておいて置き場が無いのは、案内になっていない。
+    // 「GGUF を置くだけ」と言っておいて保存先が無いのは、案内になっていない。
     const dirState = !touchesRuntime
       ? undefined
       : dir
@@ -2631,7 +2631,7 @@ export class UiServer {
             return `${ref}: ${big ?? '記憶に載りません。'}${others}`;
           }
           // 名前だけ .gguf で中身が別物（配布元の HTML の案内など）を、読みに行かない。
-          // 一覧と同じ場所（動いている側の置き場）を見る。保存側を見ると、
+          // 一覧と同じ場所（動いている側の保存先）を見る。保存側を見ると、
           // 立ち上げ直す前の設定とずれて「読めない」と嘘をつく。
           if (!(await looksLikeGguf(join(this.#opts.config.runtime?.modelsDir ?? modelsDir(), ref)))) {
             return `${ref} は GGUF として読めません（先頭に GGUF の印がありません）。`
@@ -2717,13 +2717,35 @@ export class UiServer {
       return `モデルの一覧を取れません（${kind}）: ${describeNet(e)}\n`
         + '設定 → モデル で、動かし方を選び直せます。';
     }
+    /*
+     * **保存した設定を、無かったことにしない。**
+     *
+     * ここは**いま動いている**設定だけを見て理由を書いていた。設定 → モデル で
+     * 保存先を入れて保存した直後（立ち上げ直す前）は、保存した方に GGUF が
+     * 在っても「（古い保存先）に GGUF がありません」と出る。**置いた人は、
+     * 置いたはずのものを疑いに行く。**実際にそう出た（画面を押して実測）。
+     *
+     * 保存した方と食い違っているなら、それを先に言う。
+     */
+    const liveDir = this.#opts.config.runtime?.modelsDir ?? modelsDir();
+    const savedKind = String((await readSavedRuntime()).kind ?? kind);
+    const savedDir = await savedModelsDir().catch(() => liveDir);
+    if (savedKind !== kind || savedDir !== liveDir) {
+      const ready = savedKind !== 'inproc' || (await listGguf(savedDir).catch(() => [])).length > 0;
+      return '保存した設定は、立ち上げ直すまで効きません。\n'
+        + `いま動いているのは ${kind}（${liveDir}）です。保存したのは ${savedKind}（${savedDir}）。\n`
+        + (ready
+          ? '設定 → モデル の「立ち上げ直す」を押してください。'
+          : `${savedDir} に GGUF がありません。そこへ .gguf を1つ置いて、「立ち上げ直す」を押してください。`);
+    }
+
     if (kind === 'ollama') {
       return 'モデルがまだありません。\n'
         + '設定 → モデル で「この中で読む」を選ぶと、GGUF を1つ置くだけで動きます。\n'
         + 'Ollama を使うなら `ollama serve` を立ち上げてください。';
     }
-    return `${this.#opts.config.runtime?.modelsDir ?? modelsDir()} に GGUF がありません。\n`
-      + '設定 → モデル に、いま見ている置き場が出ています。そこへ .gguf を1つ置いてください。';
+    return `${liveDir} に GGUF がありません。\n`
+      + '設定 → モデル に、いま見ている保存先が出ています。そこへ .gguf を1つ置いてください。';
   }
 
   async #drive(
@@ -3294,7 +3316,7 @@ export class UiServer {
       if (usesGguf(runtime.id)) {
         // **いま読んでいる側と同じ場所へ落とす。**
         //
-        // 画面が保存した置き場（savedModelsDir）だけを見ていたので、
+        // 画面が保存した保存先（savedModelsDir）だけを見ていたので、
         // 設定（runtime.modelsDir）に別の場所を書いてある機械では、
         // **落とす先と読む先が割れる。**画面には「用意できました」と出るのに、
         // 一覧にも出ず、使えない。動いている側が読む場所を先に見る。
@@ -3329,7 +3351,7 @@ export class UiServer {
        * 利用者にできることが無いと、そこで詰まる。
        *
        * この作りは元から「GGUF を1つ置くだけ」で動く。落とせなかったときは、
-       * **選び方と置き場所**を言う。名前を覚えてもらうのではなく、
+       * **選び方と保存先**を言う。名前を覚えてもらうのではなく、
        * 選び方を覚えてもらえば、名前が変わっても困らない。
        */
       // **一つの文にする。**二つに分けると、読む側は下の行を見落とす。
@@ -3346,7 +3368,7 @@ export class UiServer {
   async #static(path: string, res: ServerResponse): Promise<void> {
     const rel = path === '/' ? 'index.html' : normalize(path).replace(/^([/\\.]+)/, '');
     const file = join(WEB_DIR, rel);
-    // 画面の置き場より外は読ませない。
+    // 画面のファイルが在る所より外は読ませない。
     if (!file.startsWith(WEB_DIR)) return send(res, 403, { error: 'その場所は読めません' });
     try {
       const body = await readFile(file);
@@ -3544,7 +3566,7 @@ export function byHand(dir: string): string {
     '  ・落とす先: https://huggingface.co/Qwen （名前に GGUF が付いたもの）',
     '  ・大きさ: 軽い読み書きなら 3B〜4B、コードを書かせるなら 7B 以上',
     '  ・量子化: 迷ったら Q4_K_M（品質と大きさの釣り合いが良い）',
-    `  ・置き場所: ${dir}`,
+    `  ・保存先: ${dir}`,
     '  置いたら、設定の画面から選べます。',
   ].join('\n');
 }

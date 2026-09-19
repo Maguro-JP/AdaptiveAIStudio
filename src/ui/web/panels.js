@@ -11,6 +11,7 @@ import { verdictText, slowNote } from './verdict.js';
 import { renderMarkdown } from './markdown.js';
 import { isSendKey, isPlainEnter } from './keys.js';
 import { pathActions } from './paths.js';
+import { sizeText } from './size.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -242,9 +243,7 @@ export const PANELS = {
      * 1KB 未満を切り上げていたので、20 バイトのファイルも「1KB」と出ていた
      * （押して実測）。渡したものが正しく渡っているかを、ここで見る人もいる。
      */
-    const kb = (n) => (n >= 1024 * 1024
-      ? `${(n / 1024 / 1024).toFixed(1)}MB`
-      : n >= 1024 ? `${Math.round(n / 1024)}KB` : `${n}B`);
+    const kb = (n) => sizeText(n);
 
     /** 渡されたものを預ける。落とす・貼る・選ぶ、どの道でもここへ来る。 */
     const take = async (files) => {
@@ -1354,7 +1353,7 @@ export const PANELS = {
       } else {
         for (const m of data.installed) {
           const row = el('div', 'row');
-          const size = m.sizeBytes ? `${(m.sizeBytes / 1024 ** 3).toFixed(1)}GB` : '';
+          const size = sizeText(m.sizeBytes);
           const name = el('span', `key mono${m.path ? ' wrap' : ''}`, m.ref);
           // モデルの道。どこに在るかを、開いて・コピーして確かめられる。
           if (m.path) name.append(pathActions(m.path));

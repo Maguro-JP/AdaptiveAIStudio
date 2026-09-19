@@ -388,7 +388,10 @@ async function commit(
     return fail(`書き込めません: ${shown} (${describe(e)})`);
   }
 
-  const { added, removed } = diffStat(unifiedDiff(display, toLf(before), toLf(body)));
+  const applied = unifiedDiff(display, toLf(before), toLf(body));
+  const { added, removed } = diffStat(applied);
+  // **書いたものを、書いた側から知らせる。**提案そのままの差分と食い違うため。
+  ctx.wrote?.(display, applied, created);
   return ok((created ? `作成: ${display}（${added}行）` : `更新: ${display}（+${added} -${removed}）`) + partial);
 }
 

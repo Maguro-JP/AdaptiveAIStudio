@@ -11,6 +11,7 @@ import { closePanel, openPanel, movePanel, panelsInUse } from './layout-ops.js';
 import { doingText } from './doing.js';
 import { isPlainEnter } from './keys.js';
 import { willRestore } from './undo-scope.js';
+import { sizeText } from './size.js';
 import { openPicker } from './color.js';
 
 const root = document.getElementById('editor');
@@ -1557,7 +1558,7 @@ async function commands() {
   const now = cfg?.active?.model ?? cfg?.model;
   for (const g of cfg?.gguf ?? []) {
     if (g.ref === now || g.notGguf) continue;
-    add(`モデルを切り替える: ${g.ref}`, g.tooBig ? '（この機械には載りません）' : `${((g.sizeBytes ?? 0) / 1024 ** 3).toFixed(1)} GB`, async () => {
+    add(`モデルを切り替える: ${g.ref}`, g.tooBig ? '（この機械には載りません）' : sizeText(g.sizeBytes), async () => {
       const r = await ask('/api/config', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kind: cfg.kind, modelsDir: cfg.modelsDir ?? '', model: g.ref }),
@@ -1784,7 +1785,7 @@ async function loadCfg() {
     if (m.path) k.append(pathActions(m.path));
     const v = document.createElement('span');
     v.className = 'dim mono';
-    v.textContent = (m.sizeBytes ? `${(m.sizeBytes / 1024 ** 3).toFixed(1)} GB` : '')
+    v.textContent = sizeText(m.sizeBytes)
       + (m.tooBig ? '　⚠ この機械の記憶に載りません' : '')
       + (m.notGguf ? '　⚠ GGUF ではありません（中身が別物）' : '');
     // どれを使うかを、ここで決められる。決めなければ最初の一つ。

@@ -28,6 +28,14 @@ export interface ToolContext {
    * 承認が通り、実際に中身が変わるときだけ呼ぶ。
    */
   beforeWrite?(relPath: string, previous: string | undefined): void;
+  /**
+   * 書けたときに呼ばれる。**実際に書いた分の差分**を渡す。
+   *
+   * 承認のときに見せる差分は「提案そのまま」なので、塊を選んで通したときは
+   * 書いたものと食い違う。画面の札はそれを並べるので、**当たっていない塊まで
+   * 並び**、そこの「戻す」は当たらずに断られる。書けた側から本当の差分を渡す。
+   */
+  wrote?(relPath: string, diff: string, created: boolean): void;
 }
 
 /**

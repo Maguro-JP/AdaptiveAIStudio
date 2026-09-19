@@ -66,14 +66,15 @@ before(async () => {
 });
 after(async () => { await srv.stop(); await fake.close(); });
 
-/** 1ターン。最初の承認に「前の塊だけ・以降訊かない」で答え、訊かれた回数を返す。 */
-async function turn(): Promise<number> {
+/** 1ターン。最初の承認に「前の塊だけ・以降訊かない」で答え、訊かれた回数と配られた差分を返す。 */
+async function turn(): Promise<{ asked: number; diffs: Array<{ path: string; diff: string }> }> {
   const ac = new AbortController();
   const res = await fetch(`${url}/api/events`, { signal: ac.signal });
   const reader = res.body!.getReader();
   const dec = new TextDecoder();
   let asked = 0;
   let ended = false;
+  const diffs: Array<{ path: string; diff: string }> = [];
 
   const pump = (async () => {
     let buf = '';
@@ -87,7 +88,14 @@ async function turn(): Promise<number> {
           const chunk = buf.slice(0, nl); buf = buf.slice(nl + 2);
           for (const line of chunk.split('\n')) {
             if (!line.startsWith('data: ')) continue;
-            const ev = JSON.parse(line.slice(6)) as { type?: string; id?: string; busy?: boolean };
+            const ev = JSON.parse(line.slice(6)) as {
+              type?: string; id?: string; busy?: boolean;
+              event?: { type?: string; path?: string; diff?: string };
+            };
+            // 画面へ配られた差分。**書いたものと同じであること**を後で見る。
+            if (ev.type === 'session' && ev.event?.type === 'diff') {
+              diffs.push({ path: String(ev.event.path ?? ''), diff: String(ev.event.diff ?? '') });
+            }
             if (ev.type === 'approval') {
               asked += 1;
               // 1 回目だけ答える。2 回目が来たら拒否する（来ないのが正しい）。
@@ -115,16 +123,27 @@ async function turn(): Promise<number> {
   while (!ended && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
   ac.abort();
   await pump;
-  return asked;
+  return { asked, diffs };
 }
 
 describe('塊を選んでから「以降訊かない」', () => {
   test('**外した塊は書かれず、次のファイルは訊かれない**', async () => {
-    const asked = await turn();
+    const { asked, diffs } = await turn();
     assert.equal(await readFile(join(work, 'src', 'a.txt'), 'utf8'), ONLY_FIRST,
       '外した塊まで書いている（または選んだ塊が書かれていない）');
     assert.equal(asked, 1, `${asked} 回訊かれた（1 回のはず）`);
     assert.equal(await readFile(join(work, 'src', 'b.txt'), 'utf8'), '直した b\n',
       '「以降訊かない」が効いていない');
+
+    /*
+     * **画面へ配る差分は、書いたものと同じにする。**
+     *
+     * ここは承認のときに拾った「提案そのまま」を配っていたので、通さなかった
+     * 塊まで札に並び、そこの「戻す」は当たらずに断られていた。
+     */
+    const forA = diffs.filter((d) => d.path.endsWith('a.txt'));
+    assert.equal(forA.length, 1, `a.txt の差分が ${forA.length} 件（1 件のはず）`);
+    assert.match(forA[0]!.diff, /\+FIRST/, `通した塊が差分に無い: ${forA[0]!.diff}`);
+    assert.doesNotMatch(forA[0]!.diff, /\+LAST/, `通していない塊が差分に並んでいる: ${forA[0]!.diff}`);
   });
 });

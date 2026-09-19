@@ -61,6 +61,8 @@ export interface TeamOptions {
   approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
   /** 書き込む直前の控え。**戻せるようにするため**、書く道具から呼ばれる。 */
   beforeWrite?(relPath: string, previous: string | undefined): void;
+  /** 書けたときの、実際に書いた分の差分。画面の札をこれで描く。 */
+  wrote?(relPath: string, diff: string, created: boolean): void;
   /**
    * 役職ごとの気質と権限を引く。
    * 省略すると全員が同じ system と tools で働く（P2までの動き）。
@@ -113,6 +115,7 @@ export class Team {
       maxTokens: this.#opts.maxTokens,
       approve: this.#opts.approve,
       ...(this.#opts.beforeWrite ? { beforeWrite: this.#opts.beforeWrite } : {}),
+      ...(this.#opts.wrote ? { wrote: this.#opts.wrote } : {}),
     });
 
     const history: ProviderMessage[] = [{
