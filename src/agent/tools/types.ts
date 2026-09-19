@@ -39,7 +39,11 @@ export interface ToolContext {
  */
 export type ApprovalAnswer =
   | boolean
-  | { readonly hunks: readonly number[] }
+  /**
+   * 選んだ塊だけを通す。`all` が付いていれば、**この依頼のあいだは
+   * もう訊かない**（塊を選んでから「以降訊かない」を押せる）。
+   */
+  | { readonly hunks: readonly number[]; readonly all?: boolean }
   /**
    * これを通し、**この依頼のあいだは、書き込みをもう訊かない。**
    *

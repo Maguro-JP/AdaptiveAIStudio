@@ -360,6 +360,15 @@ export class Session {
   readonly #prefetch: Prefetcher;
   /** ハーネスの規則へ「いま何を頼まれているか」を渡すための箱。 */
   readonly #holder: { instruction: string };
+  /**
+   * 依頼の通し番号。**依頼のあいだだけ効くものを、持ち越させないための目印。**
+   *
+   * 「この依頼のあいだは訊かない」を入口ごとに倒していたので、段取り（`plan`）の
+   * 入口で倒し忘れていた。一度その押し場所を選んだあとに段取りを送ると、
+   * **札を一枚も出さずに全部の書き込みが通る。**番号で見れば、新しい依頼が
+   * 始まった時点で外れる（入口を足しても、ここを通らなければ依頼にならない）。
+   */
+  #requests = 0;
   /** 協議の場。依頼ごとに開き直す。 */
   readonly #forum: Forum;
   readonly #harness: Harness;
@@ -599,6 +608,9 @@ export class Session {
 
   get busy(): boolean { return this.#running !== undefined; }
 
+  /** いま何本目の依頼か。依頼のあいだだけ効くものは、これが変わったら外す。 */
+  get requestSeq(): number { return this.#requests; }
+
   /**
    * 承認の問い合わせを通り道にして、差分を拾っておく。
    * 差分は道具の中で作られていて、承認以外に外へ出る道が無いため。
@@ -646,6 +658,7 @@ export class Session {
     // 段取りでもファイルを触る。**戻せるのは送り口だけ、にしない。**
     await this.undo.begin(request);
     this.#holder.instruction = request;
+    this.#requests += 1;
     // 依頼が変われば協議もやり直し。前回通した話で今回の変更を通させない。
     this.#forum.clear();
     /*
@@ -1135,6 +1148,7 @@ export class Session {
     this.#running = ac;
     this.#instruction = instruction;
     this.#holder.instruction = instruction;
+    this.#requests += 1;
     this.#forum.clear();
     /*
      * **この 1 ターンで触ったものを、後から戻せるようにする。**

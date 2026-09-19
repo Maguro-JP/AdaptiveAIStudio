@@ -44,6 +44,8 @@ export interface StubNode {
   oninput?: (e?: unknown) => unknown;
   /** 打ち込む欄の中身。textarea / input を使うパネルのために持つ。 */
   value: string;
+  /** チェックが付いているか（checkbox）。承認の札で、通す塊を選ぶのに使う。 */
+  checked?: boolean;
   spellcheck: boolean;
   selectionStart: number;
   selectionEnd: number;

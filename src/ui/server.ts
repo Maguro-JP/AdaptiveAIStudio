@@ -835,7 +835,14 @@ export class UiServer {
    * 一度「残りも全部通す」と答えたら、その依頼が終わるまで立つ。
    * **依頼が変わったら倒す**（`#drive` の頭）。次の依頼まで持ち越さない。
    */
-  #allWrites = false;
+  /**
+   * 「この依頼のあいだは訊かない」を選んだ依頼。**番号で持つ。**
+   *
+   * 真偽の旗にして入口ごとに倒していたので、段取り（`/plan`）の入口で倒し
+   * 忘れていた（一度押したあとの段取りが、札を一枚も出さずに全部書いていた）。
+   * どの依頼で選ばれたかを覚えておけば、新しい依頼が始まった時点で外れる。
+   */
+  #allWritesFor?: { session: object; seq: number };
 
   #ask(req: ApprovalRequest): Promise<ApprovalAnswer> {
     const approval = this.#opts.config.agent?.approval ?? 'autoEdit';
@@ -851,7 +858,9 @@ export class UiServer {
      *
      * 効くのは書き込みだけ。コマンドも、外へ出るのも、協議も、毎回訊く。
      */
-    if (req.kind === 'write' && this.#allWrites) {
+    const now = this.#session;
+    if (req.kind === 'write' && now !== undefined
+      && this.#allWritesFor?.session === now && this.#allWritesFor.seq === now.requestSeq) {
       this.broadcast({
         type: 'log', level: 'info',
         text: `${req.path} を書きました（この依頼のあいだは訊かない、を選んでいます）`,
@@ -866,7 +875,13 @@ export class UiServer {
         if (done) return;
         done = true;
         // 「残りも全部」を受け取ったら、ここで旗を立てる。返す答えは通常の許可。
-        if (ok === 'all') { this.#allWrites = true; ok = true; }
+        const mark = () => {
+          const s = this.#session;
+          if (s) this.#allWritesFor = { session: s, seq: s.requestSeq };
+        };
+        if (ok === 'all') { mark(); ok = true; }
+        // 塊を選びつつ「以降訊かない」も選べる。選んだ塊はそのまま通す。
+        else if (typeof ok === 'object' && ok !== null && ok.all === true) mark();
         this.#pending.delete(id);
         this.broadcast({ type: 'approvalDone', id, approved: ok !== false });
         resolve(ok);
@@ -1297,8 +1312,17 @@ export class UiServer {
         ? body.hunks.filter((n): n is number => typeof n === 'number')
         : undefined;
       // 「この依頼のあいだは訊かない」。書き込みだけに効く。
-      if (body?.approved === true && (body as { all?: unknown }).all === true) resolveIt('all');
-      else if (body?.approved === true && picked && picked.length > 0) resolveIt({ hunks: picked });
+      const wantAll = body?.approved === true && (body as { all?: unknown }).all === true;
+      /*
+       * **塊を選んでから「以降訊かない」を押せる。**
+       *
+       * ここは `all` を先に見て `'all'` を返していたので、**外した塊まで
+       * 書かれていた**（画面は「許可（この依頼は以降訊かない）」と出す）。
+       * 選んだ塊が来ているなら、それを通す側として返し、旗だけ一緒に立てる。
+       */
+      if (body?.approved === true && picked && picked.length > 0) {
+        resolveIt(wantAll ? { hunks: picked, all: true } : { hunks: picked });
+      } else if (wantAll) resolveIt('all');
       else resolveIt(body?.approved === true);
       return send(res, 200, { ok: true });
     }
@@ -2706,9 +2730,11 @@ export class UiServer {
     session: Session, text: string, resuming?: string,
     opts: { fromUser?: boolean; said?: string; editor?: EditorHere } = {},
   ): Promise<void> {
-    // **依頼をまたいで持ち越さない。**「この依頼のあいだは訊かない」は、
-    // その依頼のあいだだけ。次の依頼では、また訊く。
-    this.#allWrites = false;
+    /*
+     * 「この依頼のあいだは訊かない」は、その依頼のあいだだけ。
+     * 入口ごとに倒すのはやめて、依頼の番号（`session.requestSeq`）で見る
+     * （倒し忘れた入口が在った。`#ask` を参照）。ここでは何もしない。
+     */
     /*
      * いま選んでいる所は、**その依頼のあいだだけ**持つ。
      *

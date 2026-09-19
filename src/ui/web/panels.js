@@ -929,31 +929,59 @@ export const PANELS = {
        * 書き込みのときだけ出す。コマンドも、外へ出るのも、協議も、毎回訊く。
        */
       const all = req.kind === 'write' ? el('button', '', 'この依頼は以降訊かない') : null;
-      const answer = (approved, everything) => {
+      const answer = async (approved, everything) => {
         // 選ばれた塊。全部に印が付いていれば、そのまま全部通す。
         const chosen = picks.map((t, i) => (t.checked ? i : -1)).filter((i) => i >= 0);
-        const partial = approved && !everything && picks.length > 0 && chosen.length < picks.length;
-        fetch('/api/approve', {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            id: e.id, approved,
-            ...(partial ? { hunks: chosen } : {}),
-            ...(everything ? { all: true } : {}),
-          }),
-        });
+        // チェックを全部外して許可は、拒否と同じ。何も通さない（「以降訊かない」も同じ）。
+        if (approved && picks.length > 0 && chosen.length === 0) { approved = false; everything = false; }
+        /*
+         * **外した塊を、押し場所によって黙って通さない。**
+         *
+         * ここは「以降訊かない」のときだけ塊の番号を送らず、本体は全文を
+         * 書いていた。チェックを外してからそちらを押した人は、外したはずの塊まで
+         * 書かれる（画面は「許可（この依頼は以降訊かない）」と出す）。
+         * 選んだ塊は、どちらの押し場所でも送る。
+         */
+        const partial = approved && picks.length > 0 && chosen.length < picks.length;
         const said = !approved ? '拒否'
+          : partial ? `一部だけ許可（${chosen.length}/${picks.length}${everything ? '、以降訊かない' : ''}）`
           : everything ? '許可（この依頼は以降訊かない）'
-          : partial ? `一部だけ許可（${chosen.length}/${picks.length}）`
           : '許可';
-        box.replaceChildren(el('div', approved ? 'good' : 'dim', `${what} → ${said}`));
+        /*
+         * **返事を見てから、押した結果を出す。**
+         *
+         * 送ったところで「許可」に書き換えていたので、10 分で切れたあとに
+         * 押すと、本体は 404（その承認は既に終わっています）を返し、モデルには
+         * 「拒否しました」が渡っているのに、**画面だけが「許可」になる。**
+         */
+        box.replaceChildren(el('div', 'dim', `${what} → 送っています…`));
+        let ok = false;
+        let why = '';
+        try {
+          const r = await fetch('/api/approve', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              id: e.id, approved,
+              ...(partial ? { hunks: chosen } : {}),
+              ...(everything ? { all: true } : {}),
+            }),
+            signal: AbortSignal.timeout(20000),
+          });
+          ok = r.ok;
+          if (!ok) {
+            const j = await r.json().catch(() => ({}));
+            why = j.error ?? `${r.status}`;
+          }
+        } catch (err) {
+          why = err?.message ?? String(err);
+        }
+        box.replaceChildren(ok
+          ? el('div', approved ? 'good' : 'dim', `${what} → ${said}`)
+          : el('div', 'dim', `${what} → 送れませんでした（${why}）`));
       };
-      yes.onclick = () => {
-        // 印を全部外して「許可」は、拒否と同じ。何も通さない。
-        if (picks.length > 0 && picks.every((t) => !t.checked)) return answer(false);
-        answer(true);
-      };
-      no.onclick = () => answer(false);
-      if (all) all.onclick = () => answer(true, true);
+      yes.onclick = () => { void answer(true); };
+      no.onclick = () => { void answer(false); };
+      if (all) all.onclick = () => { void answer(true, true); };
       const menu = el('div', 'ask-menu');
       menu.append(yes, no);
       if (all) menu.append(all);

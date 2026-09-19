@@ -10,6 +10,7 @@ import { pathActions } from './paths.js';
 import { closePanel, openPanel, movePanel, panelsInUse } from './layout-ops.js';
 import { doingText } from './doing.js';
 import { isPlainEnter } from './keys.js';
+import { willRestore } from './undo-scope.js';
 import { openPicker } from './color.js';
 
 const root = document.getElementById('editor');
@@ -1076,15 +1077,23 @@ async function loadUndo() {
     label.textContent = `${when} ${p.request}`;
     label.title = `${p.request}\n触ったファイル（${p.paths.length} 件）:\n${p.paths.join('\n')}`;
 
+    /*
+     * **戻るファイルを、全部並べてから訊く。**
+     *
+     * ここは選んだ一件の `paths` だけを出していた。戻るのはこの後の回の分も
+     * 含む（`src/core/undo.ts` の `restore`）ので、**並べていないファイルまで
+     * 書き戻る。**消える直しが在るのに、名前が出ていない形だった。
+     */
+    const willTouch = willRestore(list, i);
     const back = document.createElement('button');
     back.className = 'ghost icon';
     back.title = i === 0
-      ? `ここまで戻す（${p.paths.length} 件）`
-      : `ここまで戻す（この後の ${i} 回ぶんも一緒に戻ります）`;
+      ? `ここまで戻す（${willTouch.length} 件）`
+      : `ここまで戻す（この後の ${i} 回ぶんも一緒に、${willTouch.length} 件）`;
     back.textContent = '↶';
     back.addEventListener('click', async () => {
       const also = i === 0 ? '' : `\nこの後の ${i} 回ぶんの直しも一緒に戻ります。`;
-      if (!confirm(`${p.paths.length} 件のファイルを戻します。${also}\n\n${p.paths.join('\n')}`)) return;
+      if (!confirm(`${willTouch.length} 件のファイルを戻します。${also}\n\n${willTouch.join('\n')}`)) return;
       back.disabled = true;
       try {
         const r = await fetch('/api/undo', {
