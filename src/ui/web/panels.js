@@ -1091,16 +1091,29 @@ export const PANELS = {
     ctx.on('thinkEvent', ({ event: v }) => { if (v.type === 'proposal') void draw(); });
   },
 
+  /**
+   * 日課。**仕込んであるもの全部を出す。**
+   *
+   * ここまでは記録（いつ回ったか）だけを出していたので、**まだ一度も回って
+   * いないと空**で、何が仕込まれているのかも、いつ起きるのかも分からなかった。
+   * しかも読んでいた欄（`lastRunAt`）は記録に無い名前で、**記録が在っても
+   * 必ず「未実施」**になっていた。
+   */
   duties(body, ctx) {
     ctx.onState((s) => {
       body.replaceChildren();
-      if (!s.duties || s.duties.length === 0) return body.append(empty('日課の記録はまだありません。'));
+      if (!s.duties || s.duties.length === 0) return body.append(empty('日課はまだありません。'));
       body.append(rows(s.duties, (d) => {
         const row = el('div', 'row');
-        const when = d.lastRunAt ? new Date(d.lastRunAt).toLocaleString('ja-JP') : '未実施';
-        row.append(el('span', 'key mono', d.dutyId ?? d.id ?? ''), el('span', 'dim', when));
+        const last = typeof d.lastAt === 'number' ? new Date(d.lastAt).toLocaleString('ja-JP') : '未実施';
+        const when = el('span', 'dim', d.when ?? '');
+        const name = el('span', '', d.name ?? d.id ?? '');
+        // いま発生しているものは、そう分かるようにする。
+        const state = el('span', d.due ? 'warn' : 'dim', d.due ? `${d.catchUp ? '未了（前の分）' : '未了'} · ${last}` : last);
+        row.append(el('span', 'key mono', d.codename ?? d.id ?? ''), name, when, state);
+        row.title = d.purpose ?? '';
         return row;
-      }, 2));
+      }, 4));
     });
   },
 

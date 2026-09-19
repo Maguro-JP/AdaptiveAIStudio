@@ -392,6 +392,10 @@ button.ghost:hover { color: var(--text); background: var(--surface2); }
   column-gap: var(--s3);
 }
 .rows[data-cols="2"] { grid-template-columns: minmax(0, max-content) minmax(0, 1fr); }
+.rows[data-cols="4"] {
+  grid-template-columns:
+    minmax(0, max-content) minmax(0, 1fr) minmax(0, max-content) minmax(0, max-content);
+}
 .row {
   display: grid;
   grid-template-columns: subgrid;
