@@ -1987,12 +1987,48 @@ export const PANELS = {
       // Ctrl+Space で、待たずに補完を頼む。
       if ((e.ctrlKey || e.metaKey) && e.key === ' ') { e.preventDefault(); void askCompletion(); return; }
       if (e.key === 'Escape' && suggestion) { e.preventDefault(); clearGhost(); refresh(); return; }
-      // Tab で欄から抜けない。灰色が出ていればそれを入れ、無ければ字。
+      /*
+       * Tab で欄から抜けない。灰色が出ていればそれを入れ、無ければ字下げ。
+       *
+       * **選んだ範囲を消していた。**数行選んで押すと、選んだ行が丸ごと空白二つに
+       * なった（字下げのつもりで押して、書いたものを失う）。行にまたがる選択は
+       * 行ごとに字下げして、選んだ範囲を選んだまま返す。Shift+Tab で戻す。
+       * 一行の中の選択とカーソルだけのときは、これまでどおり空白二つを入れる。
+       */
       if (e.key === 'Tab') {
         e.preventDefault();
-        if (acceptGhost()) return;
+        if (!e.shiftKey && acceptGhost()) return;
         const { selectionStart: a, selectionEnd: b } = area;
-        area.setRangeText('  ', a, b, 'end');
+        const spansLines = area.value.slice(a, b).includes('\n');
+        if (!e.shiftKey && !spansLines) {
+          area.setRangeText('  ', a, b, 'end');
+          refresh();
+          return;
+        }
+        // 選んでいる行の、頭から終わりまでを取り直す（行の途中で切らない）。
+        const from = area.value.lastIndexOf('\n', a - 1) + 1;
+        const tail = area.value.indexOf('\n', b);
+        const to = tail < 0 ? area.value.length : tail;
+        let head = 0;
+        let moved = 0;
+        const lines = area.value.slice(from, to).split('\n').map((line, i) => {
+          if (e.shiftKey) {
+            const cut = /^ {1,2}/.exec(line)?.[0].length ?? 0;
+            if (i === 0) head = -cut;
+            moved -= cut;
+            return line.slice(cut);
+          }
+          // 空の行に空白を足さない（見えない字を残さない）。
+          if (line === '') return line;
+          if (i === 0) head = 2;
+          moved += 2;
+          return `  ${line}`;
+        });
+        area.setRangeText(lines.join('\n'), from, to, 'preserve');
+        // 行にまたがる選択は、行の頭から選び直す（続けて押せる形にする）。
+        // カーソルだけのときは、動いたぶんだけずらす。
+        const start = spansLines ? from : Math.max(from, a + head);
+        area.setSelectionRange(start, Math.max(start, b + moved));
         refresh();
       }
     };

@@ -79,6 +79,56 @@ function open(disk: Record<string, string>) {
 }
 
 describe('エディタのパネル', () => {
+  /**
+   * **選んだ範囲を、Tab で消さない。**
+   *
+   * Tab は選んでいる範囲を空白二つで置き換えていた。数行選んで Tab を押すと、
+   * **選んだ行が丸ごと空白二つになる**（書いたものが消える）。字下げのつもりで
+   * 押して失う形で、取り返しがつかない（保存前なら戻せるが、気づかない）。
+   *
+   * 数行にまたがる選択は、行ごとに字下げする。Shift+Tab で戻す。
+   * 一行の中の選択とカーソルだけのときは、これまでどおり空白二つを入れる
+   * （普通のエディタもそうする）。
+   */
+  test('**数行を選んで Tab を押しても、選んだ行が消えない（行ごとに字下げ）**', async () => {
+    const disk = { 'a.ts': 'one\ntwo\nthree\n' };
+    const { area, ctx, key } = open(disk);
+    (ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => area().value === 'one\ntwo\nthree\n', 'ファイルが開く');
+
+    // 1〜2 行目を選ぶ（one\ntwo）。
+    area().setSelectionRange(0, 7);
+    key('Tab', { ctrlKey: false });
+    assert.equal(area().value, '  one\n  two\nthree\n', `字下げになっていない: ${JSON.stringify(area().value)}`);
+    // 選んだ範囲は選んだまま（続けて押せる）。
+    assert.equal(area().value.slice(area().selectionStart, area().selectionEnd), '  one\n  two');
+
+    // Shift+Tab で戻る。
+    key('Tab', { ctrlKey: false, shiftKey: true });
+    assert.equal(area().value, 'one\ntwo\nthree\n', `戻っていない: ${JSON.stringify(area().value)}`);
+  });
+
+  test('カーソルだけのときは、これまでどおり空白二つ（対）', async () => {
+    const disk = { 'a.ts': 'x\n' };
+    const { area, ctx, key } = open(disk);
+    (ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => area().value === 'x\n', 'ファイルが開く');
+    area().setSelectionRange(0, 0);
+    key('Tab', { ctrlKey: false });
+    assert.equal(area().value, '  x\n');
+    assert.equal(area().selectionStart, 2, 'カーソルが字下げの後に来ていない');
+  });
+
+  test('Shift+Tab は、カーソルの行の字下げを戻す', async () => {
+    const disk = { 'a.ts': '    deep\n' };
+    const { area, ctx, key } = open(disk);
+    (ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => area().value === '    deep\n', 'ファイルが開く');
+    area().setSelectionRange(6, 6);
+    key('Tab', { ctrlKey: false, shiftKey: true });
+    assert.equal(area().value, '  deep\n', `戻っていない: ${JSON.stringify(area().value)}`);
+  });
+
   test('**保存したあと、自分の書き込みの写しで言葉が消えない**', async () => {
     const disk = { 'a.txt': 'one\n' };
     const { emit, ctx, area, state, save } = open(disk);

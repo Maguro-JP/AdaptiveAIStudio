@@ -47,6 +47,9 @@ export interface StubNode {
   spellcheck: boolean;
   selectionStart: number;
   selectionEnd: number;
+  /** 本物の textarea と同じ置き換え（Tab の字下げがここを通る）。 */
+  setRangeText(text: string, start?: number, end?: number, mode?: 'select' | 'start' | 'end' | 'preserve'): void;
+  setSelectionRange(start: number, end: number): void;
   focus(): void;
   addEventListener(type: string, fn: (e: unknown) => unknown): void;
   /** 付けた相手（addEventListener）と、`on*` の両方を呼ぶ。 */
@@ -97,6 +100,29 @@ export function createNode(tagName: string): StubNode {
     spellcheck: true,
     selectionStart: 0,
     selectionEnd: 0,
+    /*
+     * **本物と同じ置き換えを持たせる。**持っていなかったので、Tab の字下げは
+     * 試験から一度も通っていなかった（呼べば落ちる）。動かない所ではなく、
+     * **見ていない所**が在ることの方が困る。
+     */
+    setRangeText(text, start = node.selectionStart, end = node.selectionEnd, mode = 'preserve') {
+      const before = node.value.slice(0, start);
+      const after = node.value.slice(end);
+      node.value = before + text + after;
+      const stop = start + text.length;
+      if (mode === 'end') { node.selectionStart = stop; node.selectionEnd = stop; }
+      else if (mode === 'start') { node.selectionStart = start; node.selectionEnd = start; }
+      else if (mode === 'select') { node.selectionStart = start; node.selectionEnd = stop; }
+      else {
+        // preserve: 置き換えた分だけずらす（本物と同じ）。
+        const shift = text.length - (end - start);
+        if (node.selectionStart > end) node.selectionStart += shift;
+        else if (node.selectionStart > start) node.selectionStart = stop;
+        if (node.selectionEnd > end) node.selectionEnd += shift;
+        else if (node.selectionEnd > start) node.selectionEnd = stop;
+      }
+    },
+    setSelectionRange(start, end) { node.selectionStart = start; node.selectionEnd = end; },
     focus() { /* 置く所が無いので、呼べることだけ */ },
     addEventListener(type, fn) {
       if (!listeners.has(type)) listeners.set(type, []);
