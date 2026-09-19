@@ -742,7 +742,18 @@ export const PANELS = {
       else if (e.type === 'failed') {
         const c = card('✗', `検証に失敗（${e.round}回目）`, '', 'ng');
         c.box.open = true;
-        c.body.append(el('pre', 'tool-out', e.digest.split('\n').slice(-12).join('\n')));
+        /*
+         * **切ったことを、黙って隠さない。**
+         *
+         * ここは末尾 12 行だけを出していた。本体は 40 行まで持っているので、
+         * **最初に落ちた所が上にあると、それが見えないまま**「これで全部」に見える。
+         */
+        const lines = e.digest.split('\n');
+        const tail = lines.slice(-12);
+        if (lines.length > tail.length) {
+          c.body.append(el('div', 'dim', `（前の ${lines.length - tail.length} 行は出していません）`));
+        }
+        c.body.append(el('pre', 'tool-out', tail.join('\n')));
       } else if (e.type === 'preexisting') {
         note('warn', 'この失敗は作業前から出ています。今回の作業が原因ではありません。');
       } else if (e.type === 'tampered') note('bad', e.reason);
@@ -807,7 +818,10 @@ export const PANELS = {
         const line = el('div', `concern ${con.severity}`);
         line.append(el('span', 'chip', con.severity === 'block' ? '要対応' : '確認'), el('span', '', con.reason));
         box.append(line);
-        for (const w of (con.where ?? []).slice(0, 5)) box.append(el('div', 'concern-where', w));
+        // 場所は 5 か所まで。**切ったことは言う**（無いのと区別が付かなくなる）。
+        const where = con.where ?? [];
+        for (const w of where.slice(0, 5)) box.append(el('div', 'concern-where', w));
+        if (where.length > 5) box.append(el('div', 'concern-where dim', `ほかに ${where.length - 5} か所`));
       }
       if (r.concerns.length === 0) box.append(el('div', 'dim', '指摘はありません。'));
       add(box);
