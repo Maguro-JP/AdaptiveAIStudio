@@ -1887,6 +1887,15 @@ export const PANELS = {
 
     let path = '';
     let loaded = '';
+    /*
+     * **行末は、開いたファイルのものに戻して保存する。**
+     *
+     * ブラウザの欄は、入れた `\r\n` を `\n` に直して持つ（実測）。直したのは
+     * 欄の中だけなので、そのまま保存すると**一行も触っていないのに全行が
+     * 変わる**。配る先は Windows で、CRLF のファイルは普通に在る。
+     * 開いたときの形を覚えて、保存でその形に戻す。
+     */
+    let eol = '\n';
     /** 開いたときの中身から作られた stamp。保存のときに送って、上書きを止めてもらう。 */
     let stamp = '';
     /** AI の版を読む前に預かった、自分の直し。**消さずに戻せるように持つ。** */
@@ -2196,12 +2205,18 @@ export const PANELS = {
        * 消えるので、保存できたかどうかを画面から確かめられない。
        * 中身が同じなら、読み直す意味も無い。
        */
-      if (p === path && j.content === loaded && !dirty()) {
+      if (p === path && String(j.content ?? '').replace(/\r\n/g, '\n') === loaded && !dirty()) {
         name.textContent = p;
         goTo(line);
         return;
       }
-      path = p; loaded = j.content; stamp = j.stamp ?? ''; mine = null;
+      /*
+       * 全部 CRLF のファイルだけ、CRLF に戻す。混ざっているものは触らない
+       * （直していない行まで書き換えることになる）。
+       */
+      const raw = String(j.content ?? '');
+      eol = raw.includes('\r\n') && !raw.replace(/\r\n/g, '').includes('\n') ? '\r\n' : '\n';
+      path = p; loaded = raw.replace(/\r\n/g, '\n'); stamp = j.stamp ?? ''; mine = null;
       notice.hidden = true;
       name.textContent = p;
       // 預けた分が在れば、それを返す（消さずに戻す）。
@@ -2248,7 +2263,12 @@ export const PANELS = {
         r = await fetch('/api/file', {
           method: 'PUT', headers: { 'content-type': 'application/json' },
           // 開いたときの stamp を添える。開いたあとで誰かが書いていたら、本体が断る。
-          body: JSON.stringify({ path, content: area.value, ...(stamp ? { stamp } : {}) }),
+          // 行末は、開いたときの形に戻してから渡す。
+          body: JSON.stringify({
+            path,
+            content: eol === '\r\n' ? area.value.replace(/\n/g, '\r\n') : area.value,
+            ...(stamp ? { stamp } : {}),
+          }),
           signal: AbortSignal.timeout(20000),
         });
       } catch (e) {

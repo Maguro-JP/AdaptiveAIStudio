@@ -629,3 +629,58 @@ describe('保存していない直しは、ブラウザを閉じても残る', (
     assert.equal(localStorage.getItem('aas.draft:a.ts'), null, '大きいのに預かっている');
   });
 });
+
+/**
+ * 行末（CRLF）のファイル。
+ *
+ * **ブラウザの欄は、入れた `\r\n` を `\n` に直して持つ**（Chromium で実測）。
+ * 開いた中身と欄の中身が最初から食い違うので、**一文字も触っていないのに
+ * 「直しています」**になり、保存すると**全行が書き換わる**。配る先は Windows で、
+ * CRLF のファイルは普通に在る。開いたときの形を覚えて、保存でその形に戻す。
+ */
+describe('CRLF のファイルを、勝手に書き換えない', () => {
+  test('**開いただけでは、直したことにならない**', async () => {
+    const disk = { 'a.txt': 'one\r\ntwo\r\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value.includes('one'), 'ファイルが開く');
+    assert.equal(box.area().value, 'one\ntwo\n', '欄は行末をそろえて持つ');
+    assert.match(box.state().textContent, /保存してあります/,
+      `触っていないのに直したことになっている: ${box.state().textContent}`);
+  });
+
+  test('**保存すると、開いたときの行末で書き戻す**', async () => {
+    const disk = { 'a.txt': 'one\r\ntwo\r\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value.includes('one'), 'ファイルが開く');
+    box.area().value = 'one\nTWO\n';
+    box.area().oninput!();
+    box.key('s');
+    await until(() => disk['a.txt'] !== 'one\r\ntwo\r\n', '保存できる');
+    assert.equal(disk['a.txt'], 'one\r\nTWO\r\n', `行末が変わっている: ${JSON.stringify(disk['a.txt'])}`);
+  });
+
+  test('LF のファイルは、LF のまま（対）', async () => {
+    const disk = { 'a.txt': 'one\ntwo\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value.includes('one'), 'ファイルが開く');
+    box.area().value = 'one\nTWO\n';
+    box.area().oninput!();
+    box.key('s');
+    await until(() => disk['a.txt'] === 'one\nTWO\n', '保存できる');
+  });
+
+  test('混ざっているものは、触らない（直していない行まで変えない）', async () => {
+    const disk = { 'a.txt': 'one\r\ntwo\nthree\r\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value.includes('one'), 'ファイルが開く');
+    box.area().value = 'one\ntwo\nTHREE\n';
+    box.area().oninput!();
+    box.key('s');
+    await until(() => disk['a.txt'] !== 'one\r\ntwo\nthree\r\n', '保存できる');
+    assert.equal(disk['a.txt'], 'one\ntwo\nTHREE\n', `混ざっているのに CRLF へ寄せている: ${JSON.stringify(disk['a.txt'])}`);
+  });
+});
