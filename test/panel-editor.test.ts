@@ -757,4 +757,47 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
     box.press('自分の直しに戻す');
     assert.equal(box.area().value, 'one\nMINE\n', '預かった直しに戻れない');
   });
+
+  /**
+   * **打つたびに、行番号を全部書き直さない。**
+   *
+   * ここは一文字ごとに 1 から行数まで数字を繋ぎ直して、丸ごと入れ直していた。
+   * 行が増えるほど遅くなり、実測で 5000 行のファイルは一打 35ms、40000 行では
+   * 254ms かかっていた（本物のブラウザで、一文字ずつ入れて測った）。
+   * 書いた字が遅れて出る。
+   *
+   * **速さそのものは試験にしない**（走らせる機械で変わる）。代わりに
+   * 「行の数が変わらなければ書き直さない」を見る。
+   */
+  test('**行が増えなければ、行番号は書き直さない**', async () => {
+    const disk = { 'a.ts': 'one\ntwo\nthree\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => box.area().value.includes('two'), 'ファイルが開く');
+
+    const gutter = box.at('editor-lines');
+    let writes = 0;
+    let held = gutter.textContent;
+    Object.defineProperty(gutter, 'textContent', {
+      configurable: true,
+      get: () => held,
+      set: (v: string) => { writes += 1; held = v; },
+    });
+
+    // 行の中に打つ（行は増えない）。
+    box.area().value = 'oneX\ntwo\nthree\n';
+    box.area().fire('input');
+    assert.equal(writes, 0, '行が増えていないのに、行番号を書き直している');
+
+    // 行が増えたら、足りない分が付く。
+    box.area().value = 'oneX\ntwo\nthree\nfour\n';
+    box.area().fire('input');
+    assert.equal(writes, 1, '行が増えたのに、行番号が追いついていない');
+    assert.equal(held, '1\n2\n3\n4\n5\n', `行番号がおかしい: ${JSON.stringify(held)}`);
+
+    // 行が減ったら、数え直す。
+    box.area().value = 'oneX\n';
+    box.area().fire('input');
+    assert.equal(held, '1\n2\n', `減ったときに合っていない: ${JSON.stringify(held)}`);
+  });
 });
