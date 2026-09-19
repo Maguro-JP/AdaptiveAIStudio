@@ -1356,6 +1356,20 @@ async function loadFiles(at = '') {
       row.append(b, at);
       box.append(row);
     }
+    /*
+     * **出していない分を、黙って隠さない。**
+     *
+     * 一覧は多すぎると切る（開くのが重くなるため）。切ったことを言わないので、
+     * 5000 件のフォルダでは 400 件だけ出て、**残りは無いように見えていた**
+     * （押して実測）。戻せる一覧や会話の一覧と同じように、何件あるかを言う。
+     */
+    const hidden = (body.total ?? body.entries.length) - body.entries.length;
+    if (hidden > 0) {
+      box.append(Object.assign(document.createElement('div'), {
+        className: 'dim',
+        textContent: `ほかに ${hidden} 件（多いので一覧に出していません。探すパネルか、依頼の中で名前を書けば届きます）`,
+      }));
+    }
   } catch (e) {
     box.textContent = '';
     box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: String(e.message ?? e) }));

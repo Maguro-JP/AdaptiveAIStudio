@@ -1788,11 +1788,17 @@ export class UiServer {
          * 赤い字が出て、一覧は前のまま。**変えたのに変わっていないように見える。**
          * 外を出すわけではない（根の一覧を出すだけ）ので、断る理由が無い。
          */
-        const entries = await listDir(root, asked).catch(async (e: unknown) => {
+        let at = asked;
+        let got;
+        try {
+          got = await listDir(root, asked);
+        } catch (e) {
           if (asked === '') throw e;
-          return { at: '', list: await listDir(root, '') };
-        }).then((r) => (Array.isArray(r) ? { at: asked, list: r } : r));
-        return send(res, 200, { root, path: entries.at, entries: entries.list });
+          at = '';
+          got = await listDir(root, '');
+        }
+        // `total` は切る前の数。画面は「ほかに N 件」を出す。
+        return send(res, 200, { root, path: at, entries: got.entries, total: got.total });
       } catch (e) {
         return send(res, 400, { error: (e as Error).message });
       }

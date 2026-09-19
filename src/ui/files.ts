@@ -42,8 +42,16 @@ export async function insideRoot(root: string, asked: string): Promise<string | 
   return real;
 }
 
+/** 一階層ぶんの中身。**切ったことを黙らない**ために、切る前の数も持つ。 */
+export interface Listing {
+  /** 出すぶん。多いときは `MAX_ENTRIES` で切る。 */
+  entries: Entry[];
+  /** 切る前の数。画面は「ほかに N 件」を出すのに使う。 */
+  total: number;
+}
+
 /** 一階層だけ返す。木を全部読むと、大きな作業場で待たされる。 */
-export async function listDir(root: string, asked: string): Promise<Entry[]> {
+export async function listDir(root: string, asked: string): Promise<Listing> {
   const real = await insideRoot(root, asked);
   if (!real) throw new Error('作業場の外は見られません');
 
@@ -59,7 +67,14 @@ export async function listDir(root: string, asked: string): Promise<Entry[]> {
   }
   // フォルダが先、その中で名前順。探すときの目の動きに合わせる。
   entries.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1));
-  return entries.slice(0, MAX_ENTRIES);
+  /*
+   * **切ったことを、黙って隠さない。**
+   *
+   * ここは黙って `MAX_ENTRIES` 件で切っていた。5000 件のフォルダを開くと
+   * 400 件だけ出て、**残りは無いように見える**（押して実測）。
+   * 戻せる一覧や会話の一覧は「ほかに N 件」と言っているので、ここも言う。
+   */
+  return { entries: entries.slice(0, MAX_ENTRIES), total: entries.length };
 }
 
 /** 画面から来た道を、読むための実体に直す。読めない・外なら undefined。 */

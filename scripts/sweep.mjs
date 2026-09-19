@@ -1156,6 +1156,42 @@ await check('エディタの見出しが、長い文で潰れない', async () =
 });
 
 /*
+ * **出していない分を、黙って隠さない。**
+ *
+ * 横の一覧は多すぎると切る（開くのが重くなるため）。切ったことを言わないので、
+ * 5000 件のフォルダでは 400 件だけ出て、**残りは無いように見えていた**（実測）。
+ */
+await check('多いフォルダでは、出していない分を言う', async () => {
+  const { mkdir, writeFile, rm } = await import('node:fs/promises');
+  const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow));
+  if (!root) throw new Error('作業場が分からない');
+  const dir = `${root}/sweep-many-probe`;
+  await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  await mkdir(dir, { recursive: true });
+  try {
+    // 上限（400）を超える数を置く。
+    for (let i = 0; i < 420; i += 1) {
+      await writeFile(`${dir}/f${String(i).padStart(4, '0')}.txt`, 'x');
+    }
+    await p.reload({ waitUntil: 'domcontentloaded' });
+    await p.waitForTimeout(1500);
+    const folder = p.locator('#sideFiles button').filter({ hasText: 'sweep-many-probe' }).first();
+    if (await folder.count() === 0) throw new Error('作ったフォルダが一覧に出ない');
+    await folder.click();
+    await p.waitForTimeout(1200);
+    const text = await p.locator('#sideFiles').innerText();
+    if (!/ほかに \d+ 件/.test(text)) {
+      throw new Error(`切ったことを言っていない: ${JSON.stringify(text.slice(-160))}`);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    // 根へ戻しておく（後の確かめが、このフォルダの中を見ないように）。
+    await p.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined);
+    await p.waitForTimeout(1200);
+  }
+});
+
+/*
  * **開いているファイルをもう一度押して、書きかけを消さない。**
  *
  * 読み直しを飛ばすのは「直していないとき」だけだった。直している最中に同じ
