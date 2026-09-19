@@ -1156,6 +1156,45 @@ await check('エディタの見出しが、長い文で潰れない', async () =
 });
 
 /*
+ * **開いているファイルをもう一度押して、書きかけを消さない。**
+ *
+ * 読み直しを飛ばすのは「直していないとき」だけだった。直している最中に同じ
+ * ファイルを開き直すと、ディスクの中身で欄を上書きしていた。横の一覧で同じ
+ * 行をもう一度押すのも、AI に `show_file` で開かせるのも、同じ道を通る。
+ */
+await check('開いているファイルをもう一度押しても、書きかけが消えない', async () => {
+  const at = 'sweep-reopen-probe.txt';
+  const made = await p.evaluate(([path]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: 'one\ntwo\n' }),
+  }).then((r) => r.status), [at]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  try {
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    if (await area.count() === 0) throw new Error('エディタが出ない');
+    await area.click();
+    await area.press('End');
+    await area.type('-KAKIKAKE');
+    const typed = await area.inputValue();
+    if (!typed.includes('KAKIKAKE')) throw new Error(`打てていない: ${JSON.stringify(typed)}`);
+    // 同じ行をもう一度押す。
+    await row.click();
+    await p.waitForTimeout(1500);
+    const now = await area.inputValue();
+    if (!now.includes('KAKIKAKE')) throw new Error(`書きかけが消えている: ${JSON.stringify(now)}`);
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
  * **保存したことを、補完の返事で消さない。**
  *
  * 打つと少しあとに続きを訊きに行くので、打ってすぐ保存すると、保存が終わった

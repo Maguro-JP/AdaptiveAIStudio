@@ -2195,28 +2195,49 @@ export const PANELS = {
         save.disabled = true;
         return;
       }
+      const raw = String(j.content ?? '');
+      const text = raw.replace(/\r\n/g, '\n');
       /*
-       * **同じ中身を読み直しただけなら、出ている言葉を取り替えない。**
+       * 全部 CRLF のファイルだけ、CRLF に戻す。混ざっているものは触らない
+       * （直していない行まで書き換えることになる）。
+       */
+      const nextEol = raw.includes('\r\n') && !raw.replace(/\r\n/g, '').includes('\n') ? '\r\n' : '\n';
+      /*
+       * **同じ中身を読み直しただけなら、欄にも、出ている言葉にも触らない。**
        *
        * 手で保存すると、本体はその差分を全員へ配る（`diff`）。配られたものが
        * 自分の書き込みの写しなので、下の `ctx.on('session')` がここを呼び直す。
        * ここで `refresh()` を通っていたので、**「保存しました（+2 -1）」が
        * 「保存してあります」に化けていた。**書けたのか、何行変わったのかが
        * 消えるので、保存できたかどうかを画面から確かめられない。
-       * 中身が同じなら、読み直す意味も無い。
+       *
+       * **直している最中も、ここで返す。**ここは直していないときだけ通して
+       * いたので、同じファイルを開き直すと**保存していない直しが消えていた**。
+       * AI に `show_file` で開かせてから `replace_selection` で書き換えると、
+       * 後から返ってくる読み直しが、当てた直しを消す（押して実測）。
+       * ファイルの側が変わっていないなら、読み直す意味は無い。
        */
-      if (p === path && String(j.content ?? '').replace(/\r\n/g, '\n') === loaded && !dirty()) {
+      if (p === path && text === loaded) {
         name.textContent = p;
         goTo(line);
         return;
       }
       /*
-       * 全部 CRLF のファイルだけ、CRLF に戻す。混ざっているものは触らない
-       * （直していない行まで書き換えることになる）。
+       * **直している最中に、ファイルの側が変わっていた。**黙って捨てない。
+       *
+       * 自分の直しは預かって、「自分の直しに戻す」から戻せるようにする
+       * （AI が書き換えたときと同じ扱い）。ここを素通りさせると、開き直した
+       * 瞬間に書いていたものが消える。
        */
-      const raw = String(j.content ?? '');
-      eol = raw.includes('\r\n') && !raw.replace(/\r\n/g, '').includes('\n') ? '\r\n' : '\n';
-      path = p; loaded = raw.replace(/\r\n/g, '\n'); stamp = j.stamp ?? ''; mine = null;
+      if (p === path && dirty()) {
+        eol = nextEol;
+        name.textContent = p;
+        takeOver(text, j.stamp);
+        goTo(line);
+        return;
+      }
+      eol = nextEol;
+      path = p; loaded = text; stamp = j.stamp ?? ''; mine = null;
       notice.hidden = true;
       name.textContent = p;
       // 預けた分が在れば、それを返す（消さずに戻す）。

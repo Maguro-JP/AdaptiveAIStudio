@@ -714,4 +714,47 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
     assert.match(box.state().textContent, /保存しました/,
       `保存の報せが消えている: ${box.state().textContent}`);
   });
+
+  /**
+   * **同じファイルを開き直して、書きかけを消さない。**
+   *
+   * 読み直しを飛ばすのは「直していないとき」だけだった。直している最中に
+   * 同じファイルを開き直すと、ディスクの中身で欄を上書きしていた。
+   * AI に `show_file` で開かせてから `replace_selection` で書き換えると、
+   * 後から返ってくる読み直しが**当てた直しを消す**（画面を押して実測）。
+   * 横の一覧で、開いているファイルをもう一度押したときも同じ道を通る。
+   */
+  test('**同じファイルを開き直しても、保存していない直しが消えない**', async () => {
+    const disk = { 'a.ts': 'one\ntwo\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string, line?: number) => void)('a.ts');
+    await until(() => box.area().value === 'one\ntwo\n', 'ファイルが開く');
+
+    box.area().value = 'one\nTWO\n';
+    box.area().fire('input');
+    // 同じ所をもう一度開かせる（`show_file` も、横の一覧を押すのもここ）。
+    (box.ctx.openFile as (p: string, line?: number) => void)('a.ts', 2);
+    // 行を渡しているので、読み直しが終われば見出しに「2 行目」が出る。
+    await until(() => box.state().textContent === '2 行目', '読み直しが終わる');
+    assert.equal(box.area().value, 'one\nTWO\n', '書きかけが消えている');
+  });
+
+  /**
+   * **直している最中に、ファイルの側が変わっていた。**黙って捨てない。
+   * 自分の直しは預かって、押せば戻せる（AI が書き換えたときと同じ扱い）。
+   */
+  test('**開き直したときファイルが変わっていたら、直しを預かってから出す**', async () => {
+    const disk = { 'a.ts': 'one\ntwo\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string, line?: number) => void)('a.ts');
+    await until(() => box.area().value === 'one\ntwo\n', 'ファイルが開く');
+
+    box.area().value = 'one\nMINE\n';
+    box.area().fire('input');
+    disk['a.ts'] = 'one\nAI\n';
+    (box.ctx.openFile as (p: string, line?: number) => void)('a.ts');
+    await until(() => box.area().value === 'one\nAI\n', 'いまのファイルが出る');
+    box.press('自分の直しに戻す');
+    assert.equal(box.area().value, 'one\nMINE\n', '預かった直しに戻れない');
+  });
 });
