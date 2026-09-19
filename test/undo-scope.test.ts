@@ -7,7 +7,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { willRestore } from '../src/ui/web/undo-scope.js';
+import { willRestore, wontRestore } from '../src/ui/web/undo-scope.js';
 
 // 新しい順。いちばん新しいものが先頭。
 const LIST = [
@@ -37,5 +37,29 @@ describe('ここまで戻すと、どれが書き戻るか', () => {
     assert.deepEqual(willRestore(LIST, -1), ['c.txt']);
     assert.deepEqual(willRestore(LIST, 99), ['c.txt', 'b.txt', 'a.txt']);
     assert.deepEqual(willRestore(undefined as unknown as typeof LIST, 0), []);
+  });
+});
+
+/**
+ * **戻らないものを、戻る顔で並べない。**
+ *
+ * 大きすぎて控えられなかったファイルは、戻り先に中身が入っていない。知らせは
+ * 流れにしか出していなかったので、既定の並びで見ている人には届かない。
+ */
+describe('ここまで戻しても、戻らないもの', () => {
+  const WITH_SKIP = [
+    { paths: ['a.txt'], skipped: ['big.bin'] },
+    { paths: ['b.txt'] },
+    { paths: ['c.txt'], skipped: ['big.bin', 'huge.bin'] },
+  ];
+
+  test('**控えられなかったファイルを並べる**', () => {
+    assert.deepEqual(wontRestore(WITH_SKIP, 0), ['big.bin']);
+    assert.deepEqual(wontRestore(WITH_SKIP, 2), ['big.bin', 'huge.bin']);
+  });
+
+  test('控えられなかったものが無ければ、空', () => {
+    assert.deepEqual(wontRestore([{ paths: ['a.txt'] }], 0), []);
+    assert.deepEqual(wontRestore(undefined as unknown as typeof WITH_SKIP, 0), []);
   });
 });

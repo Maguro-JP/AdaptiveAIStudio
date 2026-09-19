@@ -10,7 +10,7 @@ import { pathActions } from './paths.js';
 import { closePanel, openPanel, movePanel, panelsInUse } from './layout-ops.js';
 import { doingText } from './doing.js';
 import { isPlainEnter } from './keys.js';
-import { willRestore } from './undo-scope.js';
+import { willRestore, wontRestore } from './undo-scope.js';
 import { sizeText } from './size.js';
 import { openPicker } from './color.js';
 
@@ -1086,15 +1086,21 @@ async function loadUndo() {
      * 書き戻る。**消える直しが在るのに、名前が出ていない形だった。
      */
     const willTouch = willRestore(list, i);
+    // 大きすぎて控えていない分は、戻らない。押す前に、そう言う。
+    const wont = wontRestore(list, i);
+    const wontSay = wont.length > 0
+      ? `\n戻らないファイルが ${wont.length} 件あります（大きすぎて控えていません）:\n${wont.join('\n')}`
+      : '';
     const back = document.createElement('button');
     back.className = 'ghost icon';
-    back.title = i === 0
+    back.title = (i === 0
       ? `ここまで戻す（${willTouch.length} 件）`
-      : `ここまで戻す（この後の ${i} 回ぶんも一緒に、${willTouch.length} 件）`;
+      : `ここまで戻す（この後の ${i} 回ぶんも一緒に、${willTouch.length} 件）`)
+      + (wont.length > 0 ? `／戻らない ${wont.length} 件` : '');
     back.textContent = '↶';
     back.addEventListener('click', async () => {
       const also = i === 0 ? '' : `\nこの後の ${i} 回ぶんの直しも一緒に戻ります。`;
-      if (!confirm(`${willTouch.length} 件のファイルを戻します。${also}\n\n${willTouch.join('\n')}`)) return;
+      if (!confirm(`${willTouch.length} 件のファイルを戻します。${also}\n\n${willTouch.join('\n')}${wontSay}`)) return;
       back.disabled = true;
       try {
         const r = await fetch('/api/undo', {

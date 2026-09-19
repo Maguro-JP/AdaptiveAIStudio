@@ -27,6 +27,14 @@ export interface UndoPoint {
   request: string;
   /** 触ったファイル（作業場からの相対）。 */
   paths: string[];
+  /**
+   * 大きすぎて控えなかったファイル。**戻らないものを、黙って持たない。**
+   *
+   * 知らせは流れ（`log`）にだけ出していた。既定の並びにそのパネルは無いので、
+   * 人は見ていない。戻り先の行は普通に見えるのに、そのファイルは戻らない。
+   * 選ぶ所に出せるように、戻り先そのものに書いておく。
+   */
+  skipped?: string[];
 }
 
 interface Saved {
@@ -152,11 +160,15 @@ export class UndoStore {
       request: open.request,
       paths: [...open.files.keys()],
       files: [...open.files.values()],
+      ...(open.skipped.length > 0 ? { skipped: [...open.skipped] } : {}),
     };
     await mkdir(this.#dir, { recursive: true });
     await writeFile(join(this.#dir, `${point.id}.json`), JSON.stringify(point), 'utf8');
     await this.#prune();
-    return { id: point.id, at: point.at, request: point.request, paths: point.paths };
+    return {
+      id: point.id, at: point.at, request: point.request, paths: point.paths,
+      ...(point.skipped ? { skipped: point.skipped } : {}),
+    };
   }
 
   /** 大きすぎて控えられなかったもの。読んだら空にする。 */
@@ -190,7 +202,12 @@ export class UndoStore {
       if (!raw) continue;
       try {
         const p = JSON.parse(raw) as Stored;
-        if (typeof p.id === 'string') points.push({ id: p.id, at: p.at, request: p.request, paths: p.paths ?? [] });
+        if (typeof p.id === 'string') {
+          points.push({
+            id: p.id, at: p.at, request: p.request, paths: p.paths ?? [],
+            ...(p.skipped && p.skipped.length > 0 ? { skipped: p.skipped } : {}),
+          });
+        }
       } catch { /* 1件壊れても全部は失わない */ }
     }
     return points.sort((a, b) => b.at - a.at);
