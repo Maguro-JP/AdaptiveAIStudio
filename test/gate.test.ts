@@ -291,17 +291,61 @@ describe('検査官', () => {
     assert.match(sent.user, /^===検体-[0-9a-f]{8}===\n/);
   });
 
-  test('長すぎるものは頭と尻を見る（仕込みは末尾に置かれる）', async () => {
-    let sent = '';
+  /**
+   * **頭と尻だけを見ていた。**仕込みは末尾に置かれることが多い、という見立て
+   * だったが、裏を返せば**中ほどに置けば見られない**。外から入ってくるものには
+   * 長さの上限が無いところがある（MCP の返しは一行 8MB まで）ので、詰め物で
+   * 中央を隠せる。頭・中ほど・尻を、それぞれ一つのチャンクとして見る。
+   */
+  test('**長すぎるものは、頭・中ほど・尻を見る**', async () => {
+    const sent: string[] = [];
     const spy = new Inspector({
       maxChars: 100,
-      judge: async (p) => { sent = p.user; return 'PASS'; },
+      judge: async (p) => { sent.push(p.user); return 'PASS'; },
     });
-    const long = `先頭の目印${'あ'.repeat(500)}末尾の目印`;
+    const long = `HEAD${'あ'.repeat(300)}MIDDLE${'い'.repeat(300)}TAIL`;
     const r = await spy.inspect(long, 'inbound');
-    assert.equal(r.sampled, true);
-    assert.match(sent, /先頭の目印/);
-    assert.match(sent, /末尾の目印/);
+    assert.equal(r.sampled, true, '見切れていないのに、全部見たことにしている');
+    const all = sent.join('\n');
+    assert.match(all, /HEAD/);
+    assert.match(all, /MIDDLE/, '中ほどを見ていない（そこに置けば隠せる）');
+    assert.match(all, /TAIL/);
+  });
+
+  test('**中ほどに仕込まれたものでも止まる**', async () => {
+    const spy = new Inspector({
+      maxChars: 100,
+      judge: async (p) => (p.user.includes('仕込み') ? 'BLOCK: INSTRUCTION_OVERRIDE' : 'PASS'),
+    });
+    const long = `頭${'あ'.repeat(300)}ここに仕込み${'い'.repeat(300)}尻`;
+    const r = await spy.inspect(long, 'inbound');
+    assert.equal(r.judgement, 'block', '中ほどの仕込みを素通りさせている');
+  });
+
+  test('短いものは、チャンクに分けない（対）', async () => {
+    const sent: string[] = [];
+    const spy = new Inspector({ maxChars: 100, judge: async (p) => { sent.push(p.user); return 'PASS'; } });
+    const r = await spy.inspect('短い文', 'inbound');
+    assert.equal(sent.length, 1, `短いのに ${sent.length} 回も呼んでいる`);
+    assert.equal(r.sampled, false);
+  });
+
+  test('止めたら、残りのチャンクにモデルを使わない', async () => {
+    let calls = 0;
+    const spy = new Inspector({
+      maxChars: 100,
+      judge: async () => { calls += 1; return 'BLOCK: INSTRUCTION_OVERRIDE'; },
+    });
+    await spy.inspect('あ'.repeat(1000), 'inbound');
+    assert.equal(calls, 1, `止めたのに ${calls} 回呼んでいる`);
+  });
+
+  test('チャンクの数には上限が在る（長さでこちらの時間を決めさせない）', async () => {
+    let calls = 0;
+    const spy = new Inspector({ maxChars: 10, judge: async () => { calls += 1; return 'PASS'; } });
+    const r = await spy.inspect('あ'.repeat(100_000), 'inbound');
+    assert.ok(calls <= 3, `${calls} 回呼んでいる（上限は 3）`);
+    assert.equal(r.sampled, true, '見切れていないのに、全部見たことにしている');
   });
 });
 
@@ -329,7 +373,7 @@ describe('一段目と二段目の足し合わせ', () => {
   test('一部しか見ていないことは記録に残す', () => {
     const v = combine(clean, { judgement: 'pass', sampled: true }, 'inbound');
     assert.equal(v.passed, true);
-    assert.match(v.findings[0]!.detail, /頭と尻だけ/);
+    assert.match(v.findings[0]!.detail, /頭・中ほど・尻/);
   });
 
   test('当てはめが止めたものは、そのまま止まったまま', () => {
