@@ -316,6 +316,59 @@ await check('狭い窓（1024）', async () => {
   const send = await p.locator('.chat .send').boundingBox();
   if (!send || send.width < 20) throw new Error('送るボタンが潰れている');
 });
+/*
+ * **溢れは、`scrollWidth` では見つからない。**
+ *
+ * 上の確かめは「横に溢れていないか」を `scrollWidth` で見ていた。溢れた分を
+ * 親が切り取る（overflow: hidden）と、`scrollWidth` は増えない。**切り取られた
+ * ものは、見えないまま押せない。**実測で、幅 900 のとき入力の行が画面から 40px、
+ * 送るボタンが 35px はみ出していた（切り取られて、画面には出ていない）。
+ *
+ * だから「押せるか」で見る。押したいものの右端が、画面の中に在ること。
+ */
+await check('会話のパネルが狭くても、押したいものが外へ出ない', async () => {
+  /*
+   * **ブラウザの幅で測らない。**ブラウザを縮めても、配置（どのパネルが開いているか）で会話の
+   * パネルの幅は変わる。ここまでの確かめでサイドを畳んでいるので、同じブラウザの幅でも
+   * 広いままになり、**溢れが出ない**（実際に、畳んだ形では一度も出なかった）。
+   * 走らせる順で結果が変わる確かめにしない。
+   *
+   * 見たいのは「会話のパネルが狭いとき、中のものが外へ出ないか」。だから
+   * **パネルの幅をこちらで決めて**測る。実測では、ブラウザを 900 にしたとき
+   * 送るボタンが 35px 外へ出ていた（切り取られるので `scrollWidth` では増えない）。
+   */
+  const bad = await p.evaluate(async () => {
+    const chat = document.querySelector('.chat');
+    const field = chat?.querySelector('.field');
+    if (!chat || !field) return ['会話のパネルが見つからない'];
+    const panel = chat.closest('.panel') ?? chat;
+    const was = panel.style.width;
+    const found = [];
+    try {
+      for (const width of [420, 360, 320, 280, 240]) {
+        panel.style.width = `${width}px`;
+        // 次の描き直しを待つ（測る前に効かせる）。
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        // **入れ物からはみ出すのは、行そのもの。**中の部品は行の中に収まったまま、
+        // 行ごとパネルの外へ出ていた（だから中だけ見ると見つからない）。
+        const edge = panel.getBoundingClientRect().right;
+        const box = field.getBoundingClientRect();
+        const over = Math.round(box.right - edge);
+        if (over > 1) found.push(`幅 ${width}: 入力の行が ${over}px 外（送るボタンが隠れる）`);
+        for (const el of field.querySelectorAll('button, textarea')) {
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          const out = Math.round(r.right - edge);
+          if (out > 1) found.push(`幅 ${width}: ${el.className || el.tagName.toLowerCase()} が ${out}px 外`);
+        }
+      }
+    } finally {
+      panel.style.width = was;
+    }
+    return found;
+  });
+  if (bad.length > 0) throw new Error(bad.join(' / '));
+});
 await check('もっと狭い窓（720）', async () => {
   await p.setViewportSize({ width: 720, height: 720 });
   await p.waitForTimeout(400);

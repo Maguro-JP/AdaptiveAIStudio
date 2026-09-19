@@ -113,7 +113,16 @@ export const PANELS = {
     const input = document.createElement('textarea');
     input.rows = 1;
     // 狭い画面で切れない長さにする。/plan の案内は ⌘ の一覧にある。
-    input.placeholder = '指示を書く（Enter で送る・Shift+Enter で改行）';
+    /*
+     * **案内は一行で収まる長さにする。**
+     *
+     * 「指示を書く（Enter で送る・Shift+Enter で改行）」は、会話のパネルの幅
+     * （既定 380px）でも二行に折れて、二行目が切れていた（実測。狭い配置では
+     * 「指示を」しか読めない）。詳しい方は title に置く（指で触る画面では出ないが、
+     * 送るボタンが在るので送り方は分かる）。
+     */
+    input.placeholder = '指示を書く';
+    input.title = 'Enter で送る・Shift+Enter で改行';
     const send = el('button', 'primary send', '送る');
     // 動いていないときは、そもそも出さない。**押せないものは邪魔なだけ。**
     const stop = el('button', 'ghost icon', '■');
@@ -132,7 +141,8 @@ export const PANELS = {
 
     // 声。使えない環境では、そもそも出さない（押せないボタンは邪魔なだけ）。
     const Recog = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    const mic = el('button', 'ghost icon', '🎤');
+    // 狭いときに引っ込める側（名前で分かるようにしておく。style.css の @container）。
+    const mic = el('button', 'ghost icon opt', '🎤');
     mic.type = 'button';
     mic.title = Recog ? '声で入れる' : 'この環境では声を使えません';
     if (!Recog) mic.style.display = 'none';
@@ -140,7 +150,7 @@ export const PANELS = {
     // コマンド。**送る所の隣に置く。**
     // 横の板の並びに置いていたので、書いている手から遠かった。
     // 使うのは「いま書いているとき」なので、書く所の隣に在るべきもの。
-    const cmd = el('button', 'ghost icon', '⌘');
+    const cmd = el('button', 'ghost icon opt', '⌘');
     cmd.type = 'button';
     cmd.title = 'コマンド (Ctrl+K)';
     cmd.onclick = () => window.aasOpenPalette?.();

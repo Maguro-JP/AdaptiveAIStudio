@@ -614,6 +614,10 @@ button.tiny { font-size: .74rem; padding: 2px 7px; }
  */
 .field {
   flex: 1;
+  /* **縮める。**既定（min-width: auto）だと中身より細くならず、行ごとパネルの
+     外へ出る。外へ出た分は切り取られるので、送るボタンが画面から消えた
+     （実測: パネル 280px で行が 9px、ボタンが 4px 外）。 */
+  min-width: 0;
   display: flex; align-items: flex-end; gap: var(--s2);
   /* 折り返さない。右に会話を置く配置（幅 380px）で「送る」が二段目に落ちた。
      欄が縮む方を選ぶ。 */
@@ -625,9 +629,36 @@ button.tiny { font-size: .74rem; padding: 2px 7px; }
   transition: border-color .12s ease;
 }
 .field:focus-within { border-color: var(--accent); }
+/* 押すものは縮めない。削るのは打つ欄の側（上）。 */
+.field button { flex: 0 0 auto; }
+
+/*
+ * **会話のパネルが狭いときは、隙間と飾りから削る。**
+ *
+ * 欄を細くしただけでは足りなかった（実測: パネル 213px に対し、中身と隙間で
+ * 245px 要る。送るボタンが 7px 外へ出たまま）。ブラウザの幅ではなくパネルの幅で
+ * 決める。パネルは掴んで動かせるので、ブラウザが広くても会話が細いことがある。
+ */
+.chat { container-type: inline-size; }
+@container (max-width: 380px) {
+  .field { gap: 4px; padding-left: 8px; }
+  .field .icon { padding: 0 4px; }
+}
+/*
+ * もっと狭いときは、**鍵盤から届くものを引っ込める**。
+ *
+ * 押す口を四つ並べたままだと、打つ欄が 48px になって案内の字すら読めない
+ * （実測）。引っ込めるのは声（任意）とコマンド（Ctrl+K で開く。下の帯にも
+ * 出ている）。添えるボタンと送るボタンは残す——落とす・貼る以外の道が無く、
+ * 送るは初めての人がいちばん探すもの。
+ */
+@container (max-width: 320px) {
+  .field .icon.opt { display: none; }
+}
 .field textarea {
-  /* 折り返しても潰れないよう、下限を決める。 */
-  flex: 1 1 8rem; min-width: 6rem;
+  /* 折り返しても潰れないよう、下限を決める。**狭いときは欄から削る**
+     （押すものを消さない。打つ所は狭くても打てる）。 */
+  flex: 1 1 8rem; min-width: 3rem;
   border: 0; background: transparent; padding: 6px 0;
   resize: none; font-family: var(--font); font-size: 1rem;
   max-height: 180px; height: auto; min-height: 2.1em;
