@@ -109,6 +109,20 @@ describe('会話のパネル・添付', () => {
     assert.ok(posts.some((p) => p.url.includes('/api/attach') && p.method === 'POST'), '本体へ預けていない');
   });
 
+  /**
+   * **小さいものを 1KB と言わない。**
+   *
+   * 1KB 未満を切り上げていたので、20 バイトのファイルも「1KB」と出ていた
+   * （押して実測）。渡したものが正しく渡っているかを、ここで見る人もいる。
+   */
+  test('**1KB より小さいものは、バイトで出す**', async () => {
+    const { body } = await draw({ id: 'a2', name: 'ちいさい.txt', kind: 'text', bytes: 20 });
+    drop(body, [{ name: 'ちいさい.txt' }]);
+    await until(() => chips(body).some((c) => c.text.includes('ちいさい.txt')), '札が出る', { timeoutMs: 5000 });
+    const chip = chips(body).find((c) => c.text.includes('ちいさい.txt'))!;
+    assert.match(chip.text, /20B/, `小さいものを切り上げている: ${chip.text}`);
+  });
+
   test('**× を押すと、札が消えて、本体からも外れる**', async () => {
     const { body, posts } = await draw({ id: 'a1', name: 'メモ.txt', kind: 'text', bytes: 2048 });
     drop(body, [{ name: 'メモ.txt' }]);
