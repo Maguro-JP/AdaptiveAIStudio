@@ -40,6 +40,7 @@ const ctx = {
   revealFile: () => undefined,
   applyPatch: () => undefined,
   insertText: () => false,
+  saveNote: async () => false,
   on(type, fn) {
     if (!eventHandlers.has(type)) eventHandlers.set(type, []);
     eventHandlers.get(type).push(fn);
@@ -1399,6 +1400,19 @@ function insertPath(path) {
  * 打ち間違えれば別の所の話になる。押した所から渡す。
  */
 ctx.insertText = (text) => appendToInstruction(text);
+
+/*
+ * **覚え書きを、残す。**
+ *
+ * 打った分は配置と一緒に残す（`spec.options.text`）。**描き直さない**のが肝心で、
+ * 描き直すと打っている最中に欄が作り直され、手が飛ぶ。
+ */
+ctx.saveNote = async (id, text) => {
+  const spec = layout.panels.find((p) => p.id === id);
+  if (!spec) return false;
+  spec.options = { ...(spec.options ?? {}), text };
+  return Boolean(await save(layout));
+};
 
 /**
  * 横の板の開け閉め。

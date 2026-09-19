@@ -1335,6 +1335,50 @@ await check('どのパネルを出しても、中身が外へ出ない', async (
   }
 });
 
+/*
+ * **覚え書きに打てて、読み直しても残る。**
+ *
+ * 「メモ」と並んでいるのに、渡された字を出すだけで**一文字も書けなかった**。
+ * 打った分は配置と一緒に残る。前に書いてあったものは、最後に書き戻す。
+ */
+await check('覚え書きに打てて、読み直しても残る', async () => {
+  const front = async () => {
+    const tab = p.locator('#root .panel.tabs header button').filter({ hasText: 'メモ' }).last();
+    if (await tab.count() > 0) { await tab.first().click(); await p.waitForTimeout(350); }
+  };
+  await front();
+  let area = p.locator('.note-area');
+  if (await area.count() === 0) {
+    // 出ていなければ、表示から出す。
+    await p.locator('#openView').click();
+    await p.waitForTimeout(400);
+    const row = p.locator('#viewList .view-row').filter({ hasText: 'メモ' }).last();
+    if (await row.count() === 0) throw new Error('表示の一覧にメモが無い');
+    const tick = row.locator('input');
+    if (!(await tick.isChecked())) await tick.click();
+    await p.waitForTimeout(600);
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(300);
+    await front();
+    area = p.locator('.note-area');
+    if (await area.count() === 0) throw new Error('打つ所が無い');
+  }
+  const was = await area.inputValue();
+  try {
+    await area.fill('sweep で書いた覚え書き');
+    // 手が止まってから残す作りなので、少し待つ。
+    await p.waitForTimeout(1400);
+    await p.reload({ waitUntil: 'networkidle' });
+    await p.waitForTimeout(1200);
+    await front();
+    const back = await p.locator('.note-area').inputValue();
+    if (back !== 'sweep で書いた覚え書き') throw new Error(`読み直したら消えている: ${JSON.stringify(back)}`);
+  } finally {
+    await p.locator('.note-area').fill(was).catch(() => undefined);
+    await p.waitForTimeout(1200);
+  }
+});
+
 if (shot) await p.screenshot({ path: shot, fullPage: false });
 await b.close();
 console.log(bad.length === 0 ? '見つかった不具合: なし' : `見つかった不具合 ${bad.length} 件:\n- ${bad.join('\n- ')}`);

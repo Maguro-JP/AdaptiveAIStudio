@@ -1712,8 +1712,36 @@ export const PANELS = {
     });
   },
 
-  note(body, _ctx, spec) {
-    body.append(el('div', 'dim', String(spec.options?.text ?? '（覚え書き）')));
+  /**
+   * 覚え書き。**打てる。**
+   *
+   * ここまでは渡された字を出すだけで、`表示` の一覧に「メモ」と並んでいるのに
+   * **一文字も書けなかった**。開いた人は、書ける所を探して諦めることになる。
+   * 打った分は配置と一緒に残す（読み直しても消えない）。
+   *
+   * 知らない種類の受け皿でもあるので、そのときは説明が最初の中身として入る。
+   */
+  note(body, ctx, spec) {
+    const area = document.createElement('textarea');
+    area.className = 'note-area';
+    area.spellcheck = false;
+    area.placeholder = '覚え書き（ここに書いたものは残ります）';
+    area.value = String(spec.options?.text ?? '');
+    const state = el('div', 'dim note-state', '');
+    body.append(area, state);
+
+    let saving;
+    const keep = async () => {
+      state.textContent = '書き留めています…';
+      const ok = await ctx.saveNote?.(spec.id, area.value);
+      state.textContent = ok ? '書き留めました' : '書き留められませんでした';
+    };
+    area.addEventListener('input', () => {
+      state.textContent = '';
+      clearTimeout(saving);
+      // 打つたびに送らない。手が止まってから送る。
+      saving = setTimeout(() => { void keep(); }, 600);
+    });
   },
 
   /**
