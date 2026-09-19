@@ -1144,7 +1144,8 @@ export class Session {
      * 使うと、横の一覧に「【いま開いているファイル】a.ts（3 行目）」と出て、
      * **どの依頼を戻すのか人が選べない**（押して実測）。
      */
-    await this.undo.begin(opts.said ?? instruction);
+    // 打った分が空（添付だけを送った回）なら、差し込んだ方を使う。空の名前を残さない。
+    await this.undo.begin(opts.said || instruction);
 
     const verifyCfg = this.config.agent?.verify ?? {};
     const harnessCfg = this.config.harness ?? {};

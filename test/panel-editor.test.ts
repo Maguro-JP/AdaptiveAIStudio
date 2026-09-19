@@ -701,16 +701,36 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
     await until(() => disk['a.txt'] === 'one\nTWO\n', '保存できる');
   });
 
-  test('混ざっているものは、触らない（直していない行まで変えない）', async () => {
+  /**
+   * **混ざっているものは、戻せない。だから、そう言う。**
+   *
+   * 欄は `\r\n` を `\n` に直して持つので、混ざったファイルは開いて保存するだけで
+   * LF にそろう（触っていない行も変わる）。全部 CRLF のものは元へ戻せるが、
+   * 混ざったものは戻せない。**黙って変えるのをやめて、開いた時点で言う。**
+   */
+  test('**混ざっているものは、LF にそろうと言う**', async () => {
     const disk = { 'a.txt': 'one\r\ntwo\nthree\r\n' };
     const box = open(disk);
     (box.ctx.openFile as (p: string) => void)('a.txt');
     await until(() => box.area().value.includes('one'), 'ファイルが開く');
+    assert.match(box.at('editor-notice').text, /行末が混ざっています/,
+      `混ざっていることを言っていない: ${box.at('editor-notice').text}`);
+
     box.area().value = 'one\ntwo\nTHREE\n';
     box.area().oninput!();
     box.key('s');
     await until(() => disk['a.txt'] !== 'one\r\ntwo\nthree\r\n', '保存できる');
+    // 言ったとおり、LF にそろう（CRLF へ寄せ直しはしない）。
     assert.equal(disk['a.txt'], 'one\ntwo\nTHREE\n', `混ざっているのに CRLF へ寄せている: ${JSON.stringify(disk['a.txt'])}`);
+  });
+
+  test('混ざっていなければ、何も言わない（対）', async () => {
+    const disk = { 'a.txt': 'one\r\ntwo\r\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value.includes('one'), 'ファイルが開く');
+    assert.ok(!box.at('editor-notice').text.includes('行末が混ざっています'),
+      `全部 CRLF なのに言っている: ${box.at('editor-notice').text}`);
   });
 
   /**
@@ -876,5 +896,94 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
     box.emit('session', { type: 'diff', path: 'a.ts', diff: '', added: 1, removed: 0 });
     assert.match(box.at('editor-notice').text, /AI がこのファイルを書き換えました/,
       `よそからの書き換えを言っていない: ${box.at('editor-notice').text}`);
+  });
+
+  /**
+   * **「AI の版を出す」でも、行末をそろえてから取り込む。**
+   *
+   * 生のまま `loaded` に入れていたので、欄（`\n` にそろえて持つ）と食い違い、
+   * 押した直後から**一文字も触っていないのに「直しています」**のまま戻らなかった。
+   */
+  test('**AI の版を出しても、直したことにならない（CRLF）**', async () => {
+    const disk = { 'a.txt': 'one\r\ntwo\r\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value.includes('one'), 'ファイルが開く');
+
+    box.area().value = 'one\nMINE\n';
+    box.area().fire('input');
+    // よそが書き換えた（中身も CRLF のまま）。
+    disk['a.txt'] = 'one\r\nAI\r\n';
+    box.emit('session', { type: 'diff', path: 'a.txt', diff: '', added: 1, removed: 0 });
+    box.press('AI の版を出す');
+    await until(() => box.area().value === 'one\nAI\n', 'AI の版が出る');
+    assert.match(box.state().textContent, /保存してあります/,
+      `触っていないのに直したことになっている: ${box.state().textContent}`);
+  });
+
+  /**
+   * **保存している間に、別のファイルへ移ることがある。**
+   *
+   * 返事を読んだところで今の `path` を見ていたので、移った先へ前のファイルの
+   * 結果を当てていた（移った先を「保存してあります」にして、預かりを捨てる）。
+   * 移った先の書きかけが、次の読み直しで消える。
+   */
+  test('**保存の途中で別のファイルへ移っても、移った先を書き換えない**', async () => {
+    const disk = { 'a.txt': 'A\n', 'b.txt': 'B\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value === 'A\n', 'a が開く');
+
+    // 保存の返事を、こちらが放すまで返さない。
+    const inner = globalThis.fetch;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    (globalThis as { fetch?: unknown }).fetch = (async (url: string, init?: { method?: string }) => {
+      if ((init?.method ?? 'GET') === 'PUT') await gate;
+      return (inner as unknown as (u: string, i?: unknown) => Promise<Response>)(url, init);
+    }) as unknown as typeof fetch;
+
+    box.area().value = 'A2\n';
+    box.area().fire('input');
+    box.key('s');
+    // 返事を待たずに、別のファイルへ移って打つ。
+    (box.ctx.openFile as (p: string) => void)('b.txt');
+    await until(() => box.area().value === 'B\n', 'b が開く');
+    box.area().value = 'B2\n';
+    box.area().fire('input');
+
+    release();
+    await until(() => disk['a.txt'] === 'A2\n', 'a が保存される');
+    assert.equal(box.area().value, 'B2\n', '移った先の中身が変わっている');
+    assert.match(box.state().textContent, /直しています/,
+      `移った先を「保存した」ことにしている: ${box.state().textContent}`);
+    (globalThis as { fetch?: unknown }).fetch = inner;
+  });
+
+  /**
+   * **預かった直しを、読み直しで捨てない。**
+   *
+   * 「AI の版を出す」を押すと、自分の直しは預かりの中だけに残る。そこへもう一度
+   * 書き換えが来ると、読み直しで預かりごと捨てていたので、戻す先が無くなっていた。
+   */
+  test('**二度書き換えられても、預かった直しに戻せる**', async () => {
+    const disk = { 'a.txt': 'one\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value === 'one\n', 'ファイルが開く');
+
+    box.area().value = 'one\nMINE\n';
+    box.area().fire('input');
+    disk['a.txt'] = 'one\nAI\n';
+    box.emit('session', { type: 'diff', path: 'a.txt', diff: '', added: 1, removed: 0 });
+    box.press('AI の版を出す');
+    await until(() => box.area().value === 'one\nAI\n', 'AI の版が出る');
+
+    // 二度目の書き換え。直していないので、そのまま読み直す。
+    disk['a.txt'] = 'one\nAI2\n';
+    box.emit('session', { type: 'diff', path: 'a.txt', diff: '', added: 1, removed: 0 });
+    await until(() => box.area().value === 'one\nAI2\n', '二度目が出る');
+    box.press('自分の直しに戻す');
+    assert.equal(box.area().value, 'one\nMINE\n', '預かった直しに戻れない');
   });
 });

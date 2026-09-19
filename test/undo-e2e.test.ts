@@ -180,6 +180,36 @@ describe('直されたものを、押して戻せる', () => {
   });
 
   /**
+   * **名前が空の戻り先を作らない。**
+   *
+   * 打った分だけを名前にしたので、**添付だけを送った回**（打った分が空）で
+   * 名前が空になり、横の一覧に何も書かれていない行が並ぶ。どれを戻すのか選べない。
+   */
+  test('**添付だけを送っても、戻り先に名前が付く**', async () => {
+    const { base, points, stop } = await place();
+    try {
+      // **この試験で増えた分だけを見る。**戻り先は保存先ごと（`AAS_STATE_DIR`）に
+      // 溜まるので、同じファイルの前の試験が残した分も一覧に並ぶ。
+      const before = new Set((await points()).map((x) => x.id));
+      const put = await fetch(`${base}/api/attach?name=note.txt`, {
+        method: 'POST', headers: { 'content-type': 'text/plain' }, body: 'a + b を引き算にしてください\n',
+      });
+      // 本文は一度しか読めない。先に読んでから、両方に使う。
+      const putBody = await put.text();
+      assert.equal(put.status, 200, putBody);
+      const item = JSON.parse(putBody) as { id: string };
+      const sent = await fetch(`${base}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: '', attachments: [item.id] }),
+      });
+      assert.equal(sent.status, 202, await sent.text());
+      await until(async () => (await points()).some((x) => !before.has(x.id)), '戻り先ができる', { timeoutMs: 40_000 });
+      const fresh = (await points()).find((x) => !before.has(x.id))!;
+      assert.ok(fresh.request.trim().length > 0, `戻り先の名前が空になっている: ${JSON.stringify(fresh)}`);
+    } finally { await stop(); }
+  });
+
+  /**
    * **戻したことを、開いている画面へ配る。**
    *
    * 配っていたのは一覧の作り直しだけだったので、開いているエディタは

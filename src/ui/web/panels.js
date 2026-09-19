@@ -2004,7 +2004,18 @@ export const PANELS = {
     };
 
     /** 自分の直しを預かって、いま在る中身（AI の版）に取り替える。 */
-    const takeOver = (text, newStamp) => {
+    const takeOver = (raw, newStamp) => {
+      /*
+       * **行末をそろえてから取り込む。**
+       *
+       * 欄は `\r\n` を `\n` に直して持つので、生のまま `loaded` に入れると
+       * 欄と食い違い、**一文字も触っていないのに「直しています」**のまま
+       * 戻らなくなる（開くときは `open` でそろえているのに、ここだけ素通し
+       * だった）。開いたときの行末も、取り込んだ方に合わせる。
+       */
+      const text = String(raw ?? '').replace(/\r\n/g, '\n');
+      eol = String(raw ?? '').includes('\r\n')
+        && !String(raw ?? '').replace(/\r\n/g, '').includes('\n') ? '\r\n' : '\n';
       mine = area.value;
       loaded = text;
       stamp = newStamp ?? '';
@@ -2307,6 +2318,14 @@ export const PANELS = {
        */
       const nextEol = raw.includes('\r\n') && !raw.replace(/\r\n/g, '').includes('\n') ? '\r\n' : '\n';
       /*
+       * **行末が混ざっているなら、そう言う。**
+       *
+       * 欄は `\r\n` を `\n` に直して持つので、混ざったファイルは**開いて保存する
+       * だけで LF にそろう**（触っていない行も変わる）。全部 CRLF のものは元の形へ
+       * 戻せるが、混ざったものは戻せない。黙って変えない。
+       */
+      const mixedEol = raw.includes('\r\n') && raw.replace(/\r\n/g, '').includes('\n');
+      /*
        * **同じ中身を読み直しただけなら、欄にも、出ている言葉にも触らない。**
        *
        * 手で保存すると、本体はその差分を全員へ配る（`diff`）。配られたものが
@@ -2340,8 +2359,17 @@ export const PANELS = {
         goTo(line);
         return;
       }
+      /*
+       * **預かった直しを、読み直しで捨てない。**
+       *
+       * 「AI の版を出す」を押すと、自分の直しは `mine` にだけ残る（預かりは
+       * 保存済み扱いで消えている）。そこへもう一度書き換えが来ると、ここで
+       * `mine` を捨てていたので、**戻す先が無くなっていた。**同じファイルの
+       * 読み直しなら、預かったままにする。
+       */
+      const same = p === path;
       eol = nextEol;
-      path = p; loaded = text; stamp = j.stamp ?? ''; mine = null;
+      path = p; loaded = text; stamp = j.stamp ?? ''; mine = same ? mine : null;
       notice.hidden = true;
       name.textContent = p;
       // 預けた分が在れば、それを返す（消さずに戻す）。
@@ -2375,6 +2403,17 @@ export const PANELS = {
       if (kept !== undefined) drafts.delete(p);
       refresh();
       if (kept !== undefined && kept !== loaded) state.textContent = '保存していない直しを戻しました（Ctrl+S で保存）';
+      if (mixedEol) tell('行末が混ざっています（CRLF と LF）。保存すると LF にそろいます。', [], 'info');
+      // 預かったままの直しが在るなら、戻せることを出す（黙って持っていても届かない）。
+      if (same && mine !== null && mine !== area.value) {
+        tell('前に預かった直しが残っています。', [
+          ['自分の直しに戻す', () => {
+            area.value = mine ?? area.value;
+            refresh();
+            tell('自分の直しに戻しました。保存すると、いまのファイルを上書きします。', []);
+          }],
+        ], 'info');
+      }
       area.focus();
       goTo(line);
     };
@@ -2395,6 +2434,15 @@ export const PANELS = {
       state.textContent = '保存しています…';
       let r;
       savingNow = path;
+      /*
+       * **保存している間に、別のファイルへ移ることがある。**
+       *
+       * 返事を読んだところで `path` を見ていたので、移った先へ前のファイルの
+       * 結果を当てていた（`loaded` を移った先の中身にして「保存してあります」と
+       * 出し、預かりを捨て、stamp も前のファイルのものにする）。移った先の
+       * 書きかけが、次の読み直しで消える。**どのファイルの保存かを、覚えておく。**
+       */
+      const at = path;
       try {
         r = await fetch('/api/file', {
           method: 'PUT', headers: { 'content-type': 'application/json' },
@@ -2409,6 +2457,7 @@ export const PANELS = {
         });
       } catch (e) {
         savingNow = null;
+        if (path !== at) { refresh(); return; }
         // 繋がらなかったときに黙ると、書いたものが消えたように見える。欄は残す。
         state.textContent = `保存できませんでした（${e.message ?? e}）`;
         save.disabled = false;
@@ -2416,6 +2465,8 @@ export const PANELS = {
       }
       const j = await r.json().catch(() => ({}));
       savingNow = null;
+      // 移った先の画面を、前のファイルの結果で書き換えない（ディスクへは書けている）。
+      if (path !== at) { refresh(); return; }
       /*
        * **断られたら、選ばせる。**黙って上書きもしないし、黙って捨てもしない。
        * 上書きを選んでも、前の中身は戻り先に残る（本体が控える）。
