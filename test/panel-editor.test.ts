@@ -338,6 +338,35 @@ describe('エディタで、探して直す', () => {
     assert.equal(t.area().value.split('\n')[1], 'const b = 2;', '選んでいない所まで替えています');
   });
 
+  /**
+   * **押しても何も起きない回を作らない。**
+   *
+   * 探す文字を打っただけでは、欄では何も選んでいない。その状態で置換を押すと
+   * 次の当たりへ動くだけで、一度目は何も置き換わらなかった（押して実測）。
+   */
+  test('**選んでいなくても、押した一度で置き換わる**', async () => {
+    const t = await opened();
+    t.key('f');
+    t.at('find-q').value = 'const';
+    t.at('find-q').fire('input');
+    t.at('find-r').value = 'let';
+    // 「次へ」を押さずに、いきなり置換。
+    t.press('置換');
+    assert.equal(t.area().value.split('\n')[0], 'let a = 1;', `一度押しただけでは置き換わらない: ${t.area().value}`);
+    assert.equal(t.area().value.split('\n')[1], 'const b = 2;', '選んでいない所まで替えています');
+  });
+
+  test('当たりが無ければ、何も替えない（対）', async () => {
+    const t = await opened();
+    t.key('f');
+    t.at('find-q').value = 'どこにも無い';
+    t.at('find-q').fire('input');
+    t.at('find-r').value = 'X';
+    const before = t.area().value;
+    t.press('置換');
+    assert.equal(t.area().value, before, '当たりが無いのに書き換えている');
+  });
+
   test('**全部置換は、全部替える**', async () => {
     const t = await opened();
     t.key('f');

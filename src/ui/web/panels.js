@@ -2218,15 +2218,22 @@ export const PANELS = {
       state.textContent = `${line} 行目`;
     };
 
-    /** いま選んでいる所が当たりなら、置き換える。違えば次の当たりへ動くだけ。 */
+    /**
+     * 当たりを一つ置き換えて、次の当たりへ動く。
+     *
+     * **押しても何も起きない回を作らない。**ここは「選んでいる所が当たりのときだけ」
+     * 置き換えていた。探す文字を打っただけでは何も選んでいないので、置換を押すと
+     * 次の当たりへ動くだけで、**一度目は何も置き換わらない**（押して実測）。
+     * 選んでいなければ、まず次の当たりへ動いてから置き換える。
+     * 置き換えるのは当たりだけ、は変えない。
+     */
     const swapOne = () => {
       const q = needle.value;
       if (!q || area.disabled) return;
-      const picked = area.value.slice(area.selectionStart, area.selectionEnd);
-      if (picked === q) {
-        put(area.selectionStart, area.selectionEnd, swap.value);
-        refresh();
-      }
+      if (area.value.slice(area.selectionStart, area.selectionEnd) !== q) step(false);
+      if (area.value.slice(area.selectionStart, area.selectionEnd) !== q) { tally(); return; }
+      put(area.selectionStart, area.selectionEnd, swap.value);
+      refresh();
       step(false);
     };
 
