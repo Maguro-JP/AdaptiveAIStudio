@@ -1558,6 +1558,24 @@ await check('覚え書きに打てて、読み直しても残る', async () => {
  * 開いた直後の会話は、空の箱と「指示を書く」だけだった。押せば入る例を出す。
  * 例は**入れるだけで送らない**（押した瞬間に走り出すと、確かめる間が無い）。
  */
+/*
+ * **新しい会話を始める所が、見える形で在る。**
+ *
+ * 入口は左上の名前を押すことだけで、その案内は指を乗せたときの吹き出しに
+ * しか出ていなかった。押して探しても見つからない（実測。横の一覧の ＋ は
+ * ファイルのもの）。
+ */
+await check('新しい会話を、横の一覧から始められる', async () => {
+  const plus = p.locator('#newTalk');
+  if (await plus.count() === 0) throw new Error('新しい会話の押し場所が無い');
+  if (!(await plus.isVisible())) throw new Error('押し場所が見えない');
+  await plus.click();
+  await p.waitForTimeout(1000);
+  if (await p.locator('.chat-guide').count() === 0) {
+    throw new Error('押しても新しい会話にならない（案内が出ない）');
+  }
+});
+
 await check('会話が空のとき、押せる例が出る', async () => {
   /*
    * **画面の道でトップへ戻す。**口を直に叩くと本体の側は新しい会話になるが、

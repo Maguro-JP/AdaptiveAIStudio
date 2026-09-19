@@ -2142,6 +2142,8 @@ listen();
 setInterval(refreshState, 5000);
 
 $('openView').onclick = () => openViewMenu();
+// 新しい会話。名前を押すのと同じ所へ行く（入口が二つあっても、行き先は一つ）。
+$('newTalk').onclick = () => { void goTop(); };
 // 名前を押すとトップへ。普通のチャットの作法（左上の名前が入口）に合わせる。
 for (const b of document.querySelectorAll('.brand')) {
   b.title = 'トップへ（ここで書き始めると新しい会話）';

@@ -60,7 +60,16 @@
       </section>
 
       <section class="side-sec">
-        <h3>会話</h3>
+        <!--
+          **新しい会話を始める所を、見える形で置く。**
+          入口は名前（左上）を押すことだけで、その案内は指を乗せたときの
+          吹き出しにしか出ていなかった。押して探したときに見つからない。
+          ファイルの並びと同じ形で、見出しの隣に置く。
+        -->
+        <div class="sec-head">
+          <h3>会話</h3>
+          <button id="newTalk" class="ghost icon" title="新しい会話を始める">＋</button>
+        </div>
         <div id="sideSessions" class="side-list"></div>
         <!--
           押した結果を出す場所。押しても何も起きないように見える、をなくす。
