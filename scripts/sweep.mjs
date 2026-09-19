@@ -1097,6 +1097,64 @@ await check('直している最中に書き換えられたら、そう言う', a
   }
 });
 
+/*
+ * **見出しに、長い文を流し込まない。**
+ *
+ * 補完が出せない理由（「…に GGUF がありません。設定 → モデル に…」）を
+ * そのままエディタの見出しに入れていた。見出しは 3 行に折れ、**ファイル名が
+ * 47px まで潰れて**「head-pro…」になり、保存の押し場所まで二段になっていた（実測）。
+ *
+ * ここは**返ってくるものを決めてから**見る（モデルが在る機械では補完が返って
+ * しまい、走らせる場所で結果が変わるため）。
+ */
+await check('エディタの見出しが、長い文で潰れない', async () => {
+  const at = 'sweep-head-probe.txt';
+  const made = await p.evaluate(([path]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: 'const x = 1;\n' }),
+  }).then((r) => r.status), [at]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  const why = 'C:/どこか/長い/道/models に GGUF がありません。設定 → モデル に、いま見ている保存先が出ています。そこへ .gguf を1つ置いてください。';
+  await p.route('**/api/complete', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: '', why }) });
+  });
+  try {
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    if (await area.count() === 0) throw new Error('エディタが出ない');
+    // 行の終わりで手を止めると、補完を訊きに行く（行の途中では出さない作り）。
+    await area.click();
+    await area.press('End');
+    await area.type(' ');
+    await p.waitForTimeout(2500);
+    const got = await p.evaluate(() => {
+      const head = document.querySelector('.editor-head');
+      const name = head.querySelector('.editor-name');
+      const notice = document.querySelector('.editor-notice');
+      return {
+        headH: Math.round(head.getBoundingClientRect().height),
+        nameW: Math.round(name.getBoundingClientRect().width),
+        nameNeeds: Math.round(name.scrollWidth),
+        said: head.querySelector('.editor-state').textContent,
+        notice: notice && !notice.hidden ? notice.innerText : '',
+      };
+    });
+    // 見出しは一行のまま（折れると 50px を超える）。
+    if (got.headH > 40) throw new Error(`見出しが折れている（${got.headH}px）: ${got.said.slice(0, 40)}`);
+    if (got.nameW + 1 < got.nameNeeds) throw new Error(`ファイル名が潰れている（${got.nameW}/${got.nameNeeds}px）`);
+    if (!got.notice.includes('GGUF がありません')) throw new Error(`理由がどこにも出ていない: ${got.said.slice(0, 40)}`);
+  } finally {
+    await p.unroute('**/api/complete');
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
 if (shot) await p.screenshot({ path: shot, fullPage: false });
 await b.close();
 console.log(bad.length === 0 ? '見つかった不具合: なし' : `見つかった不具合 ${bad.length} 件:\n- ${bad.join('\n- ')}`);

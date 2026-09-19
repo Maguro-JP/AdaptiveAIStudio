@@ -26,6 +26,9 @@ function open(disk: Record<string, string>) {
     const method = init?.method ?? 'GET';
     const body = init?.body ? JSON.parse(init.body) as { path: string; content: string } : undefined;
     asked.push({ url: String(url), method, body });
+    if (String(url).includes('/api/complete')) {
+      return Response.json({ text: '', why: '/長い/道/のどこかに GGUF がありません。設定 → モデル に、いま見ている保存先が出ています。そこへ .gguf を1つ置いてください。' });
+    }
     if (method === 'PUT') {
       /*
        * 本体と同じように、**開いたあとで変わっていたら断る。**
@@ -426,5 +429,59 @@ describe('AI が書き換えたことを、黙らない', () => {
     assert.equal(disk['a.ts'], 'AI が書いた\n', '断られたのに書いている');
     box.press('自分の版で上書きする');
     await until(() => disk['a.ts'] === '人が書いた\n', '上書きが通る');
+  });
+});
+
+/**
+ * **長い断りを、見出しへ流し込まない。**
+ *
+ * 「補完なし（…に GGUF がありません。設定 → モデル に…）」を見出しに入れていた
+ * ので、見出しが 3 行に折れ、ファイル名が 47px まで潰れて「head-pro…」になり、
+ * 保存の押し場所まで二段になっていた（本物のブラウザで測った）。
+ * 見出しは一行のものだけにして、長い話は帯で読ませる。
+ */
+describe('補完が出せない理由は、見出しに流し込まない', () => {
+  test('**見出しは短いまま、理由は帯に出る**', async () => {
+    const disk = { 'a.ts': 'const x = 1;\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => box.area().value === 'const x = 1;\n', 'ファイルが開く');
+    // 行の終わりにカーソルを置く（途中では補完を出さない作り）。
+    box.area().setSelectionRange(13, 13);
+    // 打つと、少し置いてから補完を訊きに行く。
+    box.area().fire('input');
+    await until(() => box.state().textContent === '補完なし', '補完の答えが返る', { timeoutMs: 10_000 });
+    const bar = box.find((n) => n.className.startsWith('editor-notice'));
+    assert.equal(bar.hidden, false, '理由がどこにも出ていない');
+    assert.match(bar.text, /GGUF がありません/, bar.text);
+    // ただの知らせなので、消えるものが在るときの帯とは見た目を変える。
+    assert.ok(bar.className.includes('info'), `知らせの見た目になっていない: ${bar.className}`);
+    // 見出しには長い文を入れない（潰れる）。
+    assert.ok(box.state().textContent.length < 20, `見出しが長い: ${box.state().textContent}`);
+  });
+
+  /**
+   * **ただの知らせで、消えるものが在る知らせを押しのけない。**
+   *
+   * 「AI が書き換えました」を出している最中に打つと、補完の断りが同じ帯へ来て、
+   * 割れていることの知らせが消えていた（sweep で見つけた）。
+   * 直している最中なので、打つのはむしろ普通のこと。
+   */
+  test('**書き換えの知らせは、補完の断りに消されない**', async () => {
+    const disk = { 'a.ts': 'const x = 1;\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => box.area().value === 'const x = 1;\n', 'ファイルが開く');
+    box.area().value = 'const x = 2;\n';
+    box.area().oninput!();
+    disk['a.ts'] = 'AI が書いた\n';
+    box.emit('session', { type: 'diff', path: 'a.ts' });
+    const bar = box.find((n) => n.className.startsWith('editor-notice'));
+    assert.match(bar.text, /書き換えました/, bar.text);
+    // ここで補完を訊きに行かせる（直している最中なので、打つのは普通のこと）。
+    box.area().setSelectionRange(13, 13);
+    box.area().fire('input');
+    await until(() => box.state().textContent === '補完なし', '補完の答えが返る', { timeoutMs: 10_000 });
+    assert.match(bar.text, /書き換えました/, `知らせが消えている: ${bar.text}`);
   });
 });

@@ -1227,6 +1227,8 @@ dialog.wide { width: min(46rem, 92vw); }
   background: color-mix(in srgb, var(--warn) 10%, transparent);
   font-size: .8rem; line-height: 1.5;
 }
+/* ただの知らせ（補完が出せない理由など）。放っておいても何も消えないので、色を落とす。 */
+.editor-notice.info { border-color: var(--line); background: var(--surface2); }
 .editor-notice-text { flex: 1 1 14rem; min-width: 0; }
 .editor-notice-acts { display: flex; align-items: center; gap: .3rem; flex: 0 0 auto; flex-wrap: wrap; }
 .editor-notice button { font-size: .78rem; padding: 2px 8px; }

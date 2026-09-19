@@ -1790,8 +1790,22 @@ export const PANELS = {
     let mine = null;
     const dirty = () => area.value !== loaded;
 
-    /** 知らせの帯を出す。押し場所は毎回作り直す（前の押し方が残らないように）。 */
-    const tell = (text, acts) => {
+    /**
+     * 知らせの帯を出す。押し場所は毎回作り直す（前の押し方が残らないように）。
+     *
+     * `kind` が `'info'` なら、ただの知らせ（色を落とす）。既定は、放っておくと
+     * 書いたものが消える方の知らせ。
+     */
+    const tell = (text, acts, kind) => {
+      /*
+       * **ただの知らせで、消えるものが在る知らせを押しのけない。**
+       *
+       * 「AI が書き換えました」を出している最中に打つと、補完の断りが同じ帯へ
+       * 来て、**割れていることの知らせが消えていた**（sweep で見つけた）。
+       * 直している最中なので、打つのはむしろ普通のことだった。
+       */
+      if (kind === 'info' && !notice.hidden && !notice.className.includes('info')) return;
+      notice.className = kind === 'info' ? 'editor-notice info' : 'editor-notice';
       noticeText.textContent = text;
       noticeActs.replaceChildren();
       for (const [label, run] of acts) {
@@ -2201,7 +2215,19 @@ export const PANELS = {
       const j = await r.json().catch(() => ({}));
       // 訊いている間に打っていたら、古い答えは捨てる。
       if (area.selectionStart !== at || area.value.slice(0, at) !== prefix) return;
-      if (!j.text) { refresh(); if (j.why) state.textContent = `補完なし（${j.why}）`; return; }
+      /*
+       * **長い断りを、見出しへ流し込まない。**
+       *
+       * 「補完なし（…に GGUF がありません。設定 → モデル に…）」をそのまま
+       * 見出しに入れていたので、見出しが 3 行に折れ、**ファイル名が 47px まで
+       * 潰れて**「head-pro…」になり、保存の押し場所まで二段になっていた（実測）。
+       * 見出しは一行のものだけにして、長い話は帯で読ませる。
+       */
+      if (!j.text) {
+        refresh();
+        if (j.why) { state.textContent = '補完なし'; tell(`補完しませんでした。${j.why}`, [], 'info'); }
+        return;
+      }
       suggestion = j.text;
       drawGhost();
       state.textContent = 'Tab で入れる・Esc で消す';
