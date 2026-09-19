@@ -1386,11 +1386,13 @@ await check('覚え書きに打てて、読み直しても残る', async () => {
  * 例は**入れるだけで送らない**（押した瞬間に走り出すと、確かめる間が無い）。
  */
 await check('会話が空のとき、押せる例が出る', async () => {
-  // 新しい会話を作って、空の状態にする。
-  const made = await p.evaluate(() => fetch('/api/conversations', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
-  }).then((r) => r.status).catch(() => 0));
-  if (made === 200 || made === 201) await p.waitForTimeout(1200);
+  /*
+   * **画面の道でトップへ戻す。**口を直に叩くと本体の側は新しい会話になるが、
+   * 開いている画面は前の話を出したままなので、案内は出ない。配る形の中で
+   * 回したとき、その形で落ちた（送って返るを見た後なので、話が残っていた）。
+   */
+  await p.locator('.brand').first().click();
+  await p.waitForTimeout(1000);
   const guide = p.locator('.chat-guide');
   if (await guide.count() === 0) throw new Error('案内が出ていない');
   const said = await guide.innerText();

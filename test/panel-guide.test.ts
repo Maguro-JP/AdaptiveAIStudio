@@ -70,6 +70,22 @@ describe('会話が空のときの案内', () => {
     assert.equal(t.guide(), undefined, '話が始まったのに案内が残っている');
   });
 
+  /**
+   * **出したまま、空の会話へ切り替えたとき。**
+   *
+   * 案内を消すのは二通りある。話が出たとき（`add`）と、記録を入れ替えるとき
+   * （`textContent = ''`）。後者は節だけ消えて `guided` が残るので、
+   * 次に出そうとしても「もう出ている」と判じて出さない。**配る形の中で
+   * 実際にそうなった**（名前を押してトップへ戻ると、案内が消えたままだった）。
+   */
+  test('**案内が出たまま空の会話へ切り替えても、また出る**', async () => {
+    const t = draw();
+    assert.ok(t.guide(), '案内が出ていない');
+    (t.ctx.showHistory as (m: unknown[]) => void)([]);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.ok(t.guide(), '切り替えたら、案内が消えたまま戻らない');
+  });
+
   test('続きの無い会話へ切り替えたら、また出る（対）', async () => {
     const t = draw();
     (t.ctx.showHistory as (m: unknown[]) => void)([{ role: 'user', content: 'やあ' }]);

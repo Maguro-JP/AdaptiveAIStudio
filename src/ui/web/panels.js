@@ -570,6 +570,12 @@ export const PANELS = {
 
     ctx.showHistory = (messages) => {
       log.textContent = '';
+      /*
+       * **消したことを、案内の側にも知らせる。**`textContent = ''` は案内の節ごと
+       * 消すが、`guided`（出したかどうか）は残る。残ったままだと、次に出そうとしても
+       * 「もう出ている」と判じて出さない（配る形の中で実際に出なかった）。
+       */
+      guided = false;
       // 話が一つも無い会話に切り替えたら、案内をまた出す。
       if (!messages || messages.length === 0) setTimeout(showGuide, 0);
       stream = null;
