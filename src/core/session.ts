@@ -1136,8 +1136,15 @@ export class Session {
     this.#instruction = instruction;
     this.#holder.instruction = instruction;
     this.#forum.clear();
-    // **この一往復で触ったものを、後から戻せるようにする。**
-    await this.undo.begin(instruction);
+    /*
+     * **この 1 ターンで触ったものを、後から戻せるようにする。**
+     *
+     * 覚える名前は**利用者が打った分だけ**にする。依頼にはこちらが差し込んだ
+     * ものが前に付くことがあるので（いま開いている所・添付の中身）、そのまま
+     * 使うと、横の一覧に「【いま開いているファイル】a.ts（3 行目）」と出て、
+     * **どの依頼を戻すのか人が選べない**（押して実測）。
+     */
+    await this.undo.begin(opts.said ?? instruction);
 
     const verifyCfg = this.config.agent?.verify ?? {};
     const harnessCfg = this.config.harness ?? {};

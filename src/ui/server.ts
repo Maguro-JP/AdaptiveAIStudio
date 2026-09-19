@@ -1910,6 +1910,22 @@ export class UiServer {
           ? `${done.paths.length} 件のファイルを戻しました（${done.points} 回ぶん）: ${done.paths.join(', ')}`
           : `${done.paths.length} 件のファイルを戻しました: ${done.paths.join(', ')}`,
       });
+      /*
+       * **戻したことを、開いている画面へ配る。**
+       *
+       * ここまで配っていたのは一覧の作り直し（`undo`）だけだったので、
+       * エディタは**戻す前の中身のまま**「保存してあります」と出していた
+       * （画面を押して実測）。書き込んだときと同じ形で差分を配れば、
+       * エディタは読み直し、直している最中なら帯で断る。
+       */
+      for (const c of done.changed) {
+        const diff = unifiedDiff(c.path, c.before ?? '', c.after ?? '');
+        const { added, removed } = diffStat(diff);
+        this.broadcast({
+          type: 'session',
+          event: { type: 'diff', path: c.path, diff, added, removed, created: c.before === undefined },
+        });
+      }
       this.broadcast({ type: 'undo' });
       return send(res, 200, { paths: done.paths, points: done.points });
     }

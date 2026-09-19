@@ -123,4 +123,126 @@ describe('直されたものを、押して戻せる', () => {
     async () => {
       await roundTrip(await linkedRoot());
     });
+
+  /** この試験だけの作業場と本体。戻り先の中身と、配られるものを見る。 */
+  async function place() {
+    const root = await tempDir('aas-undo-said-');
+    const original = 'export const add = (a, b) => a + b;\n';
+    await writeFile(join(root, 'math.js'), original, 'utf8');
+    const fake = await startFakeServer({
+      kind: 'steps',
+      calls: [
+        { name: 'read_file', args: { path: 'math.js' } },
+        { name: 'edit_file', args: { path: 'math.js', find: 'a + b', replace: 'a - b' } },
+      ],
+      then: '直しました',
+    });
+    const server = new UiServer({
+      port: 0,
+      config: {
+        ...DEFAULT_CONFIG,
+        providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
+        candidates: ['local:m'],
+        runtime: { kind: 'ollama' },
+        agent: { ...(DEFAULT_CONFIG as { agent?: object }).agent, approval: 'auto', root },
+      } as typeof DEFAULT_CONFIG,
+    });
+    const base = (await server.start()).replace(/\/$/, '');
+    const points = async () => (await (await fetch(`${base}/api/undo`)).json() as {
+      list: { id: string; request: string; paths: string[] }[];
+    }).list;
+    return { root, base, original, points, stop: async () => { await server.stop(); await fake.close(); } };
+  }
+
+  /**
+   * **戻り先の名前は、利用者が打った分だけ。**
+   *
+   * 依頼にはこちらが差し込んだものが前に付く（いま開いている所・添付の中身）。
+   * 名前は依頼の一行目から取っていたので、横の一覧に
+   * 「【いま開いているファイル】a.ts（3 行目）」と出て、**どの依頼を戻すのか
+   * 人が選べなかった**（画面を押して見つけた）。
+   */
+  test('**戻り先の名前に、差し込んだ塊が出ない**', async () => {
+    const { base, points, stop } = await place();
+    try {
+      const sent = await fetch(`${base}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          text: '引き算にして',
+          editor: { path: 'math.js', line: 1, selection: 'a + b', selectionFrom: 1, selectionTo: 1 },
+        }),
+      });
+      assert.equal(sent.status, 202, await sent.text());
+      await until(async () => (await points()).length > 0, '戻り先ができる', { timeoutMs: 40_000 });
+      const list = await points();
+      assert.equal(list[0]!.request, '引き算にして', `差し込んだ塊が名前になっている: ${list[0]!.request}`);
+    } finally { await stop(); }
+  });
+
+  /**
+   * **戻したことを、開いている画面へ配る。**
+   *
+   * 配っていたのは一覧の作り直しだけだったので、開いているエディタは
+   * **戻す前の中身のまま**「保存してあります」と出していた（押して実測）。
+   * 書き込んだときと同じ差分を配れば、エディタは読み直す。
+   */
+  test('**戻すと、書き換えたときと同じ差分が配られる**', async () => {
+    const { base, original, points, stop } = await place();
+    const events: Array<Record<string, unknown>> = [];
+    const ac = new AbortController();
+    try {
+      const res = await fetch(`${base}/api/events`, { signal: ac.signal });
+      const reader = res.body!.getReader();
+      const dec = new TextDecoder();
+      void (async () => {
+        let buf = '';
+        try {
+          for (;;) {
+            const got = await reader.read();
+            if (got.done) break;
+            buf += dec.decode(got.value, { stream: true });
+            let nl: number;
+            while ((nl = buf.indexOf('\n\n')) !== -1) {
+              const chunk = buf.slice(0, nl); buf = buf.slice(nl + 2);
+              for (const line of chunk.split('\n')) {
+                if (!line.startsWith('data: ')) continue;
+                try { events.push(JSON.parse(line.slice(6)) as Record<string, unknown>); } catch { /* 注釈 */ }
+              }
+            }
+          }
+        } catch { /* 読むのをやめた */ }
+      })();
+
+      await fetch(`${base}/api/send`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text: '引き算にして' }),
+      });
+      await until(async () => (await points()).length > 0, '戻り先ができる', { timeoutMs: 40_000 });
+      // 動いている最中は戻せない（本体が断る）。終わったことを見てから押す。
+      await until(() => {
+        const last = [...events].reverse().find((e) => e.type === 'busy');
+        return last !== undefined && last.busy === false;
+      }, '1 ターンが終わる', { timeoutMs: 40_000 });
+      const list = await points();
+      events.length = 0;
+      const back = await fetch(`${base}/api/undo`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: list[0]!.id }),
+      });
+      assert.equal(back.status, 200, await back.text());
+
+      await until(() => events.some((e) => {
+        const v = (e as { event?: { type?: string; path?: string } }).event;
+        return e.type === 'session' && v?.type === 'diff' && v.path === 'math.js';
+      }), '戻したことが配られる', { timeoutMs: 20_000 });
+      const sent = events.find((e) => (e as { event?: { type?: string } }).event?.type === 'diff')!;
+      const v = (sent as { event: { diff: string; added: number; removed: number } }).event;
+      assert.match(v.diff, /a \+ b/, `戻した後の中身が差分に出ていない: ${v.diff}`);
+      assert.ok(v.added > 0 && v.removed > 0, `何行戻したのかが出ていない: +${v.added} -${v.removed}`);
+    } finally {
+      ac.abort();
+      await stop();
+    }
+    assert.ok(original.includes('a + b'));
+  });
 });

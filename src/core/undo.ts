@@ -39,6 +39,23 @@ interface Stored extends UndoPoint {
   files: Saved[];
 }
 
+/** 戻したファイル一つ。無かった・消した所は undefined。 */
+export interface RestoredFile {
+  path: string;
+  /** 戻す前の中身（いまディスクに在ったもの）。 */
+  before?: string;
+  /** 戻した後の中身。消したときは undefined。 */
+  after?: string;
+}
+
+/** 戻した結果。`changed` は、戻したことを画面へ伝えるために持つ。 */
+export interface Restored {
+  paths: string[];
+  /** 何往復ぶん戻したか。 */
+  points: number;
+  changed: RestoredFile[];
+}
+
 /**
  * 残す数。
  *
@@ -186,12 +203,21 @@ export class UndoStore {
    * 一つだけ戻すと、途中だけ古い、どこにも無かった状態になる。
    * 選んだ戻り先を含めて、それより新しいものを新しい方から順に当てる。
    */
-  async restore(id: string): Promise<{ paths: string[]; points: number } | undefined> {
+  async restore(id: string): Promise<Restored | undefined> {
     const all = await this.list();
     const at = all.findIndex((p) => p.id === id);
     if (at === -1) return undefined;
 
     const touched: string[] = [];
+    /*
+     * 戻す前の中身を、ファイルごとに最初の一度だけ控える。
+     *
+     * **戻したことを画面へ伝えるために要る。**ここまで戻した結果を配って
+     * いなかったので、開いているエディタは古い中身のまま「保存してあります」
+     * と出していた（画面を押して実測）。何往復ぶん戻しても、人が見たいのは
+     * 「戻す前 → 戻した後」なので、控えるのは最初の一度でよい。
+     */
+    const was = new Map<string, string | undefined>();
     // 新しい方から当てる。古い控えが後に来るので、いちばん古い姿が残る。
     for (const point of all.slice(0, at + 1)) {
       const raw = await readFile(join(this.#dir, `${point.id}.json`), 'utf8').catch(() => undefined);
@@ -202,6 +228,7 @@ export class UndoStore {
         const abs = safeResolve(this.#root, saved.path);
         if (!abs) continue;
         try {
+          if (!was.has(saved.path)) was.set(saved.path, await readFile(abs, 'utf8').catch(() => undefined));
           if (saved.content === undefined) {
             if (await stat(abs).catch(() => undefined)) await unlink(abs);
           } else {
@@ -213,7 +240,13 @@ export class UndoStore {
       }
       await unlink(join(this.#dir, `${point.id}.json`)).catch(() => undefined);
     }
-    return { paths: touched, points: at + 1 };
+    const changed: RestoredFile[] = [];
+    for (const path of touched) {
+      const abs = safeResolve(this.#root, path);
+      const after = abs ? await readFile(abs, 'utf8').catch(() => undefined) : undefined;
+      changed.push({ path, before: was.get(path), after });
+    }
+    return { paths: touched, points: at + 1, changed };
   }
 
   /** 溜めすぎない。落とした数を返す。 */
