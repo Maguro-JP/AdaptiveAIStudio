@@ -358,7 +358,19 @@ export const PANELS = {
       guide.remove();
       guided = false;
     };
-    const add = (node) => { hideGuide(); log.append(node); follow(); return node; };
+    /*
+     * 出し先。ふだんは `log`。**古い分を継ぎ足すときだけ**、いったん別の入れ物へ
+     * 出してから頭に差し込む（`card()` の中でも `add()` を呼ぶので、出し先は
+     * ここで切り替えられるようにしておく）。
+     */
+    let sink = null;
+    const add = (node) => {
+      if (sink) { sink.append(node); return node; }
+      hideGuide();
+      log.append(node);
+      follow();
+      return node;
+    };
 
     /** 一言。種類で色が変わるだけの、いちばん軽い形。 */
     const note = (cls, text) => {
@@ -568,18 +580,8 @@ export const PANELS = {
       } catch { /* 取れなければ、これから来る分だけ */ }
     };
 
-    ctx.showHistory = (messages) => {
-      log.textContent = '';
-      /*
-       * **消したことを、案内の側にも知らせる。**`textContent = ''` は案内の節ごと
-       * 消すが、`guided`（出したかどうか）は残る。残ったままだと、次に出そうとしても
-       * 「もう出ている」と判じて出さない（配る形の中で実際に出なかった）。
-       */
-      guided = false;
-      // 話が一つも無い会話に切り替えたら、案内をまた出す。
-      if (!messages || messages.length === 0) setTimeout(showGuide, 0);
-      stream = null;
-      openTools.clear();
+    /** やりとりを並べる。出し先は `add()` が決める（`log` か、継ぎ足し用の入れ物）。 */
+    const lay = (messages) => {
       for (const m of messages) {
         if (m.role === 'user') { add(el('div', 'asked', m.content)); continue; }
         if (m.role === 'assistant') {
@@ -592,12 +594,59 @@ export const PANELS = {
         }
         // 道具の結果。直前の札の中へ入れる。
         if (m.role === 'tool') {
-          const last = log.lastElementChild;
+          const last = (sink ?? log).lastElementChild;
           if (last?.classList.contains('tool')) {
             last.querySelector('.card-body')?.append(el('pre', 'tool-out', m.content));
           }
         }
       }
+    };
+
+    /**
+     * 一度に並べる数。
+     *
+     * **長い会話を開くと、画面が固まっていた。**1500 往復（3000 件）の会話を
+     * 開いたところ、**5.8 秒**返らず、その間フレームが一度も進まなかった（実測）。
+     * 何時間も動かし続ける作りなので、会話は普通に伸びる。
+     *
+     * 出すのは後ろから。古い分は「前を出す」で足す（押さなければ描かない）。
+     */
+    const SHOWN = 200;
+
+    ctx.showHistory = (messages) => {
+      log.textContent = '';
+      /*
+       * **消したことを、案内の側にも知らせる。**`textContent = ''` は案内の節ごと
+       * 消すが、`guided`（出したかどうか）は残る。残ったままだと、次に出そうとしても
+       * 「もう出ている」と判じて出さない（配る形の中で実際に出なかった）。
+       */
+      guided = false;
+      // 話が一つも無い会話に切り替えたら、案内をまた出す。
+      if (!messages || messages.length === 0) setTimeout(showGuide, 0);
+      stream = null;
+      openTools.clear();
+      const all = messages ?? [];
+      let from = Math.max(0, all.length - SHOWN);
+      if (from > 0) {
+        const more = el('button', 'ghost log-more', `前の ${from} 件を出す`);
+        more.type = 'button';
+        more.onclick = () => {
+          const next = Math.max(0, from - SHOWN);
+          // いったん別の入れ物へ出してから、押し場所の後ろへ差し込む。
+          const held = document.createElement('div');
+          sink = held;
+          try { lay(all.slice(next, from)); } finally { sink = null; }
+          // 差し込む前の「下からの距離」を覚えて、読んでいた所を動かさない。
+          const bottom = log.scrollHeight - log.scrollTop;
+          more.after(...held.childNodes);
+          log.scrollTop = log.scrollHeight - bottom;
+          from = next;
+          if (from === 0) more.remove();
+          else more.textContent = `前の ${from} 件を出す`;
+        };
+        log.append(more);
+      }
+      lay(all.slice(from));
       follow();
     };
 

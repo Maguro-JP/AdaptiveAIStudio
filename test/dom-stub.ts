@@ -64,6 +64,8 @@ export interface StubNode {
   /** 自分を親から外す。 */
   remove(): void;
   append(...nodes: StubNode[]): void;
+  /** 自分のすぐ後ろへ入れる。入れるものは、いま居る親から外す（本物と同じ）。 */
+  after(...nodes: StubNode[]): void;
   appendChild(node: StubNode): StubNode;
   replaceChildren(...nodes: StubNode[]): void;
   /** 中身の文字列を全部つなげたもの。検査で「出ているか」を見るのに使う。 */
@@ -153,6 +155,27 @@ export function createNode(tagName: string): StubNode {
       return child;
     },
     replaceChildren(...nodes) { node.children = [...nodes]; },
+    /**
+     * 自分のすぐ後ろへ入れる（本物と同じ）。
+     *
+     * **本物と同じように、いま居る親からは外す。**外さないと、長い会話の
+     * 「前を出す」で古い分を差し込んだとき、元の入れ物にも残ったままになり、
+     * 数えると二重になる。
+     */
+    after(...nodes: StubNode[]) {
+      const parent = node.parentNode;
+      if (!parent) return;
+      for (const c of nodes) {
+        const was = c.parentNode;
+        if (was) {
+          const at = was.children.indexOf(c);
+          if (at >= 0) was.children.splice(at, 1);
+        }
+      }
+      const at = parent.children.indexOf(node);
+      parent.children.splice(at < 0 ? parent.children.length : at + 1, 0, ...nodes);
+      for (const c of nodes) { c.parentNode = parent; c.parentElement = parent; }
+    },
     // 本物では、文字だけの節は children に入らず childNodes にだけ入る。
     // 板は溜まりすぎたぶんを childNodes で数えて捨てるので、同じ名前を持たせる。
     get childNodes() { return node.children; },

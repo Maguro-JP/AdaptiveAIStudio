@@ -1239,6 +1239,8 @@ dialog.wide { width: min(46rem, 92vw); }
 /* 探す・置き換える・行へ飛ぶ。Ctrl+F と Ctrl+G で出す。 */
 /* AI が同じファイルを書いたことを伝える帯。**見落とされると、書いたものが消える。**
    欄の上に出し、押し場所は折り返して全部見せる（狭い画面で外へ出さない）。 */
+/* 長い会話の、古い分を出す押し場所。上に置いて、中身と同じ幅にそろえる。 */
+.log-more { display: block; width: 100%; margin: 0 0 var(--s2); font-size: .82rem; }
 /* まだ何も無いときの案内。押せる例は、入れるだけで送らない。 */
 .chat-guide { padding: var(--s4) var(--s3); color: var(--dim); font-size: .86rem; line-height: 1.7; }
 .chat-chips { display: flex; flex-wrap: wrap; gap: .35rem; margin: .5rem 0; }
