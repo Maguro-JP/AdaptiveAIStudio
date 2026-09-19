@@ -1202,6 +1202,87 @@ await check('続けて二度、保存できる', async () => {
 });
 
 /*
+ * **全部置き換えたあと、Ctrl+Z で戻せる。**
+ *
+ * 置き換えを欄への丸ごと代入で書いていたので、ブラウザの戻し履歴が消えていた。
+ * 押した人は置換の前に戻せない（取り返しがつかない）。戻せるかどうかはブラウザの
+ * 中に在るので、**実際に Ctrl+Z を押して見る**。
+ */
+await check('全部置き換えたあと、Ctrl+Z で戻せる', async () => {
+  const at = 'sweep-undo-probe.txt';
+  const first = 'const a = 1;\nconst b = 2;\n';
+  const made = await p.evaluate(([path, content]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content }),
+  }).then((r) => r.status), [at, first]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  try {
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    await area.click();
+    await area.press('Control+f');
+    await p.locator('.find-q').fill('const');
+    await p.locator('.find-r').fill('let');
+    await p.locator('.editor-find button').filter({ hasText: '全部' }).first().click();
+    await p.waitForFunction(() => /let a = 1;/.test(document.querySelector('.editor-area')?.value ?? ''),
+      null, { timeout: 5000 });
+    // **手を戻さずに押す。**置き換えた側が欄へ手を戻しているはずで、
+    // そこがずれていると Ctrl+Z は探す欄の戻しになる（ここで落ちてよい）。
+    await area.press('Control+z');
+    await p.waitForTimeout(300);
+    const now = await area.inputValue();
+    if (now !== first) throw new Error(`Ctrl+Z で置換の前に戻れない: ${JSON.stringify(now)}`);
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
+ * **数行を選んで Tab で字下げしたあとも、Ctrl+Z で戻せる。**
+ *
+ * 字下げも `execCommand('insertText')` で書くように変えた。改行を含む字を
+ * 一度で入れる形なので、**本物のブラウザで行が崩れないこと**まで見ておく。
+ */
+await check('数行の字下げを、Ctrl+Z で戻せる', async () => {
+  const at = 'sweep-indent-probe.txt';
+  const first = 'one\ntwo\nthree\n';
+  const made = await p.evaluate(([path, content]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content }),
+  }).then((r) => r.status), [at, first]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  try {
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    await area.click();
+    // 1〜2 行目（one\ntwo）を選ぶ。
+    await p.evaluate(() => { const t = document.querySelector('.editor-area'); t.focus(); t.setSelectionRange(0, 7); });
+    await area.press('Tab');
+    await p.waitForTimeout(300);
+    const after = await area.inputValue();
+    if (after !== '  one\n  two\nthree\n') throw new Error(`字下げになっていない: ${JSON.stringify(after)}`);
+    await area.press('Control+z');
+    await p.waitForTimeout(300);
+    const undone = await area.inputValue();
+    if (undone !== first) throw new Error(`Ctrl+Z で字下げの前に戻れない: ${JSON.stringify(undone)}`);
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
  * **出していない分を、黙って隠さない。**
  *
  * 横の一覧は多すぎると切る（開くのが重くなるため）。切ったことを言わないので、

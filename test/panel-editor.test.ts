@@ -654,7 +654,9 @@ describe('保存していない直しは、ブラウザを閉じても残る', (
     await until(() => box.area().value === 'はじめ\n', 'ファイルが開く');
     await typeInto(box, 'あ'.repeat(600 * 1024));
     const bar = box.find((n) => n.className.startsWith('editor-notice'));
-    assert.match(bar.text, /ブラウザを閉じると残りません/, bar.text);
+    // パネルを作り直しても消えることまで言う（「閉じると残りません」だけでは足りない）。
+    assert.match(bar.text, /ブラウザを閉じたときも残りません/, bar.text);
+    assert.match(bar.text, /パネルを作り直したとき/, bar.text);
     assert.equal(localStorage.getItem('aas.draft:a.ts'), null, '大きいのに預かっている');
   });
 });
@@ -985,5 +987,307 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
     await until(() => box.area().value === 'one\nAI2\n', '二度目が出る');
     box.press('自分の直しに戻す');
     assert.equal(box.area().value, 'one\nMINE\n', '預かった直しに戻れない');
+  });
+
+  /**
+   * **保存の間に打った字が、黙って消える。**
+   *
+   * PUT の本体はそのときの中身を写して送る。返事のあと「保存した中身」を
+   * **いまの欄**にしていたので、返事を待つ間（最大 20 秒）に打った分まで
+   * 保存済みになった。押し場所は灰色、預かりも消える。**画面とディスクが
+   * 違うまま、読み直しでその分を失う。**
+   */
+  test('**保存の返事を待つ間に打った分を、保存したことにしない**', async () => {
+    const disk = { 'a.txt': 'one\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value === 'one\n', 'ファイルが開く');
+
+    const inner = globalThis.fetch;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    (globalThis as { fetch?: unknown }).fetch = (async (url: string, init?: { method?: string }) => {
+      if ((init?.method ?? 'GET') === 'PUT') await gate;
+      return (inner as unknown as (u: string, i?: unknown) => Promise<Response>)(url, init);
+    }) as unknown as typeof fetch;
+
+    box.area().value = 'one\ntwo\n';
+    box.area().fire('input');
+    box.key('s');
+    // 返事を待つ間に、続きを打つ。
+    box.area().value = 'one\ntwo\nthree\n';
+    box.area().fire('input');
+    release();
+
+    await until(() => disk['a.txt'] === 'one\ntwo\n', '送った分が保存される');
+    await until(() => box.state().textContent.includes('保存しました'), '保存の返事が出る');
+    assert.match(box.state().textContent, /まだ保存していません/,
+      `保存の間に打った分を、保存したことにしている: ${box.state().textContent}`);
+    const kept = localStorage.getItem('aas.draft:a.txt');
+    assert.ok(kept && kept.includes('three'), '保存の間に打った分の預かりを消している');
+    (globalThis as { fetch?: unknown }).fetch = inner;
+  });
+
+  /**
+   * **「AI の版を出す」あと、別のファイルへ移ると自分の直しが消えていた。**
+   *
+   * 預かりは一つの変数だけに在り、欄は AI の版と同じ＝`dirty()` は false なので、
+   * 離れるときの預かりも走らない。別のファイルを開いた瞬間に、戻す口ごと消える。
+   */
+  test('**AI の版を出したあと別のファイルへ移っても、自分の直しに戻せる**', async () => {
+    const disk = { 'a.txt': 'one\n', 'b.txt': 'B\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value === 'one\n', 'a が開く');
+
+    box.area().value = 'one\nMINE\n';
+    box.area().fire('input');
+    disk['a.txt'] = 'one\nAI\n';
+    box.emit('session', { type: 'diff', path: 'a.txt', diff: '', added: 1, removed: 0 });
+    box.press('AI の版を出す');
+    await until(() => box.area().value === 'one\nAI\n', 'AI の版が出る');
+
+    (box.ctx.openFile as (p: string) => void)('b.txt');
+    await until(() => box.area().value === 'B\n', 'b が開く');
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value === 'one\nAI\n', 'a へ戻る');
+
+    box.press('自分の直しに戻す');
+    assert.equal(box.area().value, 'one\nMINE\n', '別のファイルを経ると預かった直しが消えている');
+  });
+
+  /**
+   * **CRLF のファイルが、開き直しで全行 LF になる。**
+   *
+   * 直している最中に同じファイルを開き直す所（一覧を押す・探した結果から飛ぶ）で、
+   * 行末をそろえた後の中身を渡していた。渡した先は渡されたものから行末を見直すので、
+   * `\r\n` が消えた中身では `\n` に戻る。次の保存が、触っていない行まで書き換える。
+   */
+  test('**CRLF のファイルは、直している最中に開き直しても CRLF で保存する**', async () => {
+    const disk = { 'a.txt': 'one\r\ntwo\r\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value === 'one\ntwo\n', 'ファイルが開く');
+
+    box.area().value = 'one\ntwo\nMINE\n';
+    box.area().fire('input');
+    // ファイルの側が変わってから、同じファイルを開き直す。
+    disk['a.txt'] = 'one\r\nX\r\n';
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value === 'one\nX\n', '開き直す');
+
+    box.area().value = 'one\nX2\n';
+    box.area().fire('input');
+    box.key('s');
+    await until(() => disk['a.txt'] !== 'one\r\nX\r\n', '保存される');
+    assert.equal(disk['a.txt'], 'one\r\nX2\r\n', `行末が LF にそろっている: ${JSON.stringify(disk['a.txt'])}`);
+  });
+
+  /**
+   * **開き直せなかったときに、直している欄を空にしない。**
+   *
+   * 開いているファイルが消えた・名前が変わった（404）状態で同じ名前を押すと、
+   * 欄を空にしていた。開けないので預かりも出せず、保存していない直しがどこにも
+   * 残らない。
+   */
+  test('**開き直せなくても、保存していない直しを欄から消さない**', async () => {
+    const disk: Record<string, string> = { 'a.txt': 'one\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value === 'one\n', 'ファイルが開く');
+
+    box.area().value = 'one\nMINE\n';
+    box.area().fire('input');
+    delete disk['a.txt'];
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.at('editor-notice').hidden === false, '開けなかったことを言う');
+    assert.equal(box.area().value, 'one\nMINE\n', '開けなかっただけで、直しを欄から消している');
+    assert.match(box.at('editor-notice').text, /残してあります/, '残してあることを言っていない');
+    const kept = localStorage.getItem('aas.draft:a.txt');
+    assert.ok(kept && kept.includes('MINE'), '開けなかったときに預かっていない');
+  });
+
+  /**
+   * **保存できなかったことを、別のファイルへ移っても言う。**
+   *
+   * Ctrl+S の直後に別のファイルを押すと、409（`いま作業中です`）や 500 を
+   * 丸ごと捨てていた。帯も一行も出ないので、保存できていないことに気づけない。
+   */
+  test('**移ったあとでも、保存できなかったことを言う**', async () => {
+    const disk = { 'a.txt': 'A\n', 'b.txt': 'B\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value === 'A\n', 'a が開く');
+
+    const inner = globalThis.fetch;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    (globalThis as { fetch?: unknown }).fetch = (async (url: string, init?: { method?: string }) => {
+      if ((init?.method ?? 'GET') === 'PUT') { await gate; return Response.json({ error: 'いま作業中です' }, { status: 409 }); }
+      return (inner as unknown as (u: string, i?: unknown) => Promise<Response>)(url, init);
+    }) as unknown as typeof fetch;
+
+    box.area().value = 'A2\n';
+    box.area().fire('input');
+    box.key('s');
+    (box.ctx.openFile as (p: string) => void)('b.txt');
+    await until(() => box.area().value === 'B\n', 'b が開く');
+    release();
+
+    await until(() => box.at('editor-notice').hidden === false, '保存できなかったことを言う');
+    assert.match(box.at('editor-notice').text, /a\.txt/, 'どのファイルが保存できなかったのか言っていない');
+    assert.match(box.at('editor-notice').text, /保存できませんでした/, '保存できなかったことを言っていない');
+    (globalThis as { fetch?: unknown }).fetch = inner;
+  });
+
+  /**
+   * **灰色（補完）は、見えていた所と違う所へ入れない。**
+   *
+   * 灰色が出たままカーソルキーで動かして Tab を押すと、いまのカーソルへ差し込んでいた。
+   * 字下げのつもりで押した人が、見ていない所に知らない字を入れることになる。
+   */
+  describe('補完の灰色', () => {
+    /** 補完が「SUGGEST」を返す形にして、灰色を出す。 */
+    const withGhost = async () => {
+      const disk = { 'a.txt': 'one\n' };
+      const box = open(disk);
+      const inner = globalThis.fetch;
+      (globalThis as { fetch?: unknown }).fetch = (async (url: string, init?: { method?: string }) => {
+        if (String(url).includes('/api/complete')) return Response.json({ text: 'SUGGEST' });
+        return (inner as unknown as (u: string, i?: unknown) => Promise<Response>)(url, init);
+      }) as unknown as typeof fetch;
+      (box.ctx.openFile as (p: string) => void)('a.txt');
+      await until(() => box.area().value === 'one\n', 'ファイルが開く');
+      box.area().setSelectionRange(4, 4);
+      box.key(' ');
+      await until(() => box.state().textContent.includes('Tab で入れる'), '灰色が出る');
+      return { box, inner };
+    };
+
+    test('**カーソルを動かしたあとの Tab は、字下げになる**', async () => {
+      const { box, inner } = await withGhost();
+      box.area().setSelectionRange(0, 0);
+      box.key('Tab', { ctrlKey: false });
+      assert.equal(box.area().value, '  one\n',
+        `見えていない所へ補完を入れている: ${JSON.stringify(box.area().value)}`);
+      (globalThis as { fetch?: unknown }).fetch = inner;
+    });
+
+    test('動かしていなければ、Tab で入る（対）', async () => {
+      const { box, inner } = await withGhost();
+      box.key('Tab', { ctrlKey: false });
+      assert.equal(box.area().value, 'one\nSUGGEST', `Tab で入らない: ${JSON.stringify(box.area().value)}`);
+      (globalThis as { fetch?: unknown }).fetch = inner;
+    });
+
+    test('カーソルキーで動かしたら、灰色は消える', async () => {
+      const { box, inner } = await withGhost();
+      assert.match(box.at('editor-ghost').text, /SUGGEST/, '灰色が出ていない');
+      box.key('ArrowUp', { ctrlKey: false });
+      assert.equal(box.at('editor-ghost').text, '', 'カーソルキーで動かしても灰色が残っている');
+      (globalThis as { fetch?: unknown }).fetch = inner;
+    });
+  });
+
+  /**
+   * **全部置き換えを、Ctrl+Z で戻せる形にする。**
+   *
+   * 丸ごと代入していたので、ブラウザの戻し履歴が消えていた。押した人は置換の
+   * 前に戻せない。
+   *
+   * 戻せるかどうかはブラウザの中に在るので、ここで見えるのは**一度の書き換えで
+   * 入れ替えていること**だけ（ここの `document` には `execCommand` が無いので、
+   * `writeRange` は `setRangeText` に落ちる）。本物のブラウザで Ctrl+Z を押して
+   * 戻ることは `scripts/sweep.mjs` で見ている。
+   */
+  test('**全部置き換えは、一度の書き換えで入れ替える（戻せる形）**', async () => {
+    const disk = { 'a.ts': 'const a = 1;\nconst b = 2;\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => box.area().value.includes('const'), 'ファイルが開く');
+
+    const area = box.area();
+    const real = area.setRangeText.bind(area);
+    const calls: Array<{ from: number; to: number }> = [];
+    area.setRangeText = ((text: string, from: number, to: number, mode?: 'select' | 'start' | 'end' | 'preserve') => {
+      calls.push({ from, to });
+      real(text, from, to, mode);
+    }) as typeof area.setRangeText;
+
+    box.key('f');
+    box.at('find-q').value = 'const';
+    box.at('find-q').fire('input');
+    box.at('find-r').value = 'let';
+    box.press('全部');
+
+    assert.equal(box.area().value, 'let a = 1;\nlet b = 2;\n', '置き換わっていない');
+    assert.equal(calls.length, 1, `丸ごと代入している（戻し履歴が消える）: ${calls.length} 回`);
+    assert.deepEqual(calls[0], { from: 0, to: 'const a = 1;\nconst b = 2;\n'.length });
+  });
+
+  /**
+   * **AI の書き込みで、打っている手を奪わない。**
+   *
+   * 読み直しは最後に必ず欄へ手を移していた。チャットの欄に打っている途中で
+   * AI がそのファイルを書くと、続きがファイルの欄に入る。
+   */
+  test('**AI の書き込みで読み直すときは、欄へ手を移さない**', async () => {
+    const disk = { 'a.txt': 'one\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value === 'one\n', 'ファイルが開く');
+
+    let moved = 0;
+    box.area().focus = () => { moved += 1; };
+    disk['a.txt'] = 'one\nAI\n';
+    box.emit('session', { type: 'diff', path: 'a.txt', diff: '', added: 1, removed: 0 });
+    await until(() => box.area().value === 'one\nAI\n', 'AI の版が出る');
+    assert.equal(moved, 0, 'AI の書き込みで、打っている手を奪っている');
+
+    // 人が押して開いたときは、これまでどおり手を移す（対）。
+    (box.ctx.openFile as (p: string, line?: number) => void)('a.txt');
+    disk['a.txt'] = 'one\nAI2\n';
+    (box.ctx.openFile as (p: string, line?: number) => void)('a.txt');
+    await until(() => box.area().value === 'one\nAI2\n', '押して開き直す');
+    assert.ok(moved > 0, '人が押して開いても、手が移らない');
+  });
+
+  test('行番号に数字でないものを入れて Enter を押したら、そう言う', async () => {
+    const disk = { 'a.txt': 'one\ntwo\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value === 'one\ntwo\n', 'ファイルが開く');
+    box.key('g');
+    const line = box.at('find-line');
+    line.value = 'あ';
+    line.onkeydown!({ key: 'Enter', preventDefault: () => undefined });
+    assert.match(box.state().textContent, /数字/, `押して何も起きない: ${box.state().textContent}`);
+  });
+
+  /**
+   * **AI の直しが入らなかったことを、帯だけに頼らない。**
+   *
+   * 入らなかった知らせは `info` なので、消えるものが在る知らせが出ていると
+   * 押しのけない＝完全に無音になる。一行の所にも出す。
+   */
+  test('**割れている帯が出ていても、AI の直しが入らなかったことは出る**', async () => {
+    const disk = { 'a.txt': 'one\ntwo\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value === 'one\ntwo\n', 'ファイルが開く');
+
+    // 直している最中に AI が書いて、割れている帯を出す。
+    box.area().value = 'one\ntwo\nMINE\n';
+    box.area().fire('input');
+    disk['a.txt'] = 'one\nAI\n';
+    box.emit('session', { type: 'diff', path: 'a.txt', diff: '', added: 1, removed: 0 });
+    await until(() => box.at('editor-notice').text.includes('書き換えました'), '割れている帯が出る');
+
+    const ok = (box.ctx.applyPatch as (at: unknown) => boolean)({
+      path: 'a.txt', from: 1, to: 1, text: 'どこにも無い', replacement: 'X',
+    });
+    assert.equal(ok, false, '当たっていないのに入れている');
+    assert.match(box.state().textContent, /入れられませんでした/,
+      `入らなかったことが、どこにも出ていない: ${box.state().textContent}`);
   });
 });
