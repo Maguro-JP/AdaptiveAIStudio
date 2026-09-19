@@ -1156,6 +1156,58 @@ await check('エディタの見出しが、長い文で潰れない', async () =
 });
 
 /*
+ * **保存したことを、補完の返事で消さない。**
+ *
+ * 打つと少しあとに続きを訊きに行くので、打ってすぐ保存すると、保存が終わった
+ * あとに補完が走る。出す先が同じ一行なので「保存しました（+1 -1）」が
+ * 「補完なし」へ化けていた（ここで押して実測）。書けたのかが画面から消える。
+ *
+ * 返ってくるものは決めてから見る（モデルが在る機械では続きが返ってしまい、
+ * 走らせる場所で結果が変わる）。
+ */
+await check('保存したことが、補完の返事で消えない', async () => {
+  const at = 'sweep-save-probe.txt';
+  const made = await p.evaluate(([path]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: 'one\ntwo\n' }),
+  }).then((r) => r.status), [at]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  await p.route('**/api/complete', async (route) => {
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ text: '', why: 'ここには GGUF がありません。' }),
+    });
+  });
+  try {
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    if (await area.count() === 0) throw new Error('エディタが出ない');
+    // 打って、すぐ保存する（補完の予約が入ったまま保存する形）。
+    await area.click();
+    await area.press('End');
+    await area.type('X');
+    await area.press('Control+s');
+    await p.waitForFunction(
+      () => document.querySelector('.editor-state')?.textContent?.startsWith('保存しました') === true,
+      null, { timeout: 15000 },
+    );
+    // 補完が走る時刻（打った 700ms 後）を過ぎても、保存の報せが残っていること。
+    await p.waitForTimeout(2500);
+    const said = await p.locator('.editor-state').first().textContent();
+    if (!/保存しました/.test(said ?? '')) throw new Error(`保存の報せが消えている: ${said}`);
+  } finally {
+    await p.unroute('**/api/complete');
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
  * **探した所を、会話へ渡す。**
  *
  * 見つけた行を AI に訊くとき、道と行を打ち直していた（`src/a.ts:120`）。

@@ -683,4 +683,35 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
     await until(() => disk['a.txt'] !== 'one\r\ntwo\nthree\r\n', '保存できる');
     assert.equal(disk['a.txt'], 'one\ntwo\nTHREE\n', `混ざっているのに CRLF へ寄せている: ${JSON.stringify(disk['a.txt'])}`);
   });
+
+  /**
+   * **保存したことを、補完の返事で消さない。**
+   *
+   * 打つと少しあとに続きを訊きに行く作りなので、打ってすぐ保存すると、保存が
+   * 終わったあとに補完が走る。出す先が同じ一行なので「保存しました（+1 -1）」が
+   * 「補完なし」へ化けていた（画面を押して実測）。**書けたのかが画面から消える。**
+   *
+   * **時計の速さに頼らない。**ここが頼るのは「先に予約したものが先に鳴る」だけ。
+   * 補完の予約（打った時点）より後に置いた合図が鳴った時点では、補完はもう走って
+   * いる。機械が混んでいれば両方が遅れるが、順番は変わらない。
+   */
+  test('**保存したあと、補完の返事で「保存しました」が消えない**', async () => {
+    const disk = { 'a.ts': 'x\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => box.area().value === 'x\n', 'ファイルが開く');
+
+    // 打つ。ここで補完の予約が入る（`addEventListener('input')` の側）。
+    box.area().value = 'x1\n';
+    box.area().setSelectionRange(3, 3);
+    box.area().fire('input');
+    box.key('s');
+    await until(() => box.state().textContent.startsWith('保存しました'), '保存できる');
+
+    let late = false;
+    setTimeout(() => { late = true; }, 1500);
+    await until(() => late, '補完が走る時刻を過ぎる', { timeoutMs: 10_000 });
+    assert.match(box.state().textContent, /保存しました/,
+      `保存の報せが消えている: ${box.state().textContent}`);
+  });
 });
