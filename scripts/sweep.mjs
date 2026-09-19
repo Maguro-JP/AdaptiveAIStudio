@@ -1043,6 +1043,60 @@ await check('設定の欄が、行の幅まで伸びている', async () => {
   if (bad.length > 0) throw new Error(bad.join(' / '));
 });
 
+/*
+ * **直している最中に書き換えられたら、そう言う。**
+ *
+ * 画面で直している（保存していない）ファイルを AI が書くと、ファイルは AI の版、
+ * 欄は人の版、と二つに割れる。ここまでは**何も言わずに人の版を出し続けて**
+ * いたので、先に保存した方が相手を消していた。出来事を流して、帯が出て、
+ * 押せば入れ替わり、**押し間違えても戻せる**ところまで見る。
+ *
+ * 試すファイルはここで作って、最後に消す（人のファイルは触らない）。
+ */
+await check('直している最中に書き換えられたら、そう言う', async () => {
+  const at = 'sweep-notice-probe.txt';
+  const put = (content) => p.evaluate(([path, body]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: body }),
+  }).then((r) => r.status), [at, content]);
+  const made = await put('はじめ\n');
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  try {
+    // 横の一覧から開く。出来事で一覧は読み直されるが、念のため少し待つ。
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    if (await area.count() === 0) throw new Error('エディタが出ない');
+    // 保存しないで直す。
+    await area.fill('人が書いた\n');
+    await p.waitForTimeout(300);
+    // ここで AI が書いた、という状況を作る（stamp を送らないので本体は書く）。
+    await put('AI が書いた\n');
+    await p.waitForTimeout(1200);
+    const notice = p.locator('.editor-notice');
+    if (await notice.count() === 0 || await notice.isHidden()) throw new Error('書き換えられたのに、何も出ていない');
+    const said = await notice.innerText();
+    if (!said.includes('書き換えました')) throw new Error(`言い方が違う: ${said.slice(0, 60)}`);
+    if (await area.inputValue() !== '人が書いた\n') throw new Error('直している欄を上書きしている');
+    // 押すと入れ替わり、押し間違えても戻せる。
+    await notice.locator('button', { hasText: 'AI の版を出す' }).first().click();
+    await p.waitForTimeout(700);
+    if (await area.inputValue() !== 'AI が書いた\n') throw new Error('押しても入れ替わらない');
+    await notice.locator('button', { hasText: '自分の直しに戻す' }).first().click();
+    await p.waitForTimeout(500);
+    if (await area.inputValue() !== '人が書いた\n') throw new Error('預かった直しが戻らない');
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    // 画面の字からではなく、本体が答える道を使う（画面の字は省略されることがある）。
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow))
+      .catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
 if (shot) await p.screenshot({ path: shot, fullPage: false });
 await b.close();
 console.log(bad.length === 0 ? '見つかった不具合: なし' : `見つかった不具合 ${bad.length} 件:\n- ${bad.join('\n- ')}`);

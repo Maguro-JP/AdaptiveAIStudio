@@ -31,6 +31,7 @@ import { canRun } from '../core/which.ts';
 import { saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { revealCommand } from '../core/opener.ts';
 import { join, dirname, extname, normalize, resolve as resolvePath, relative, isAbsolute } from 'node:path';
@@ -1509,13 +1510,15 @@ export class UiServer {
       const bytes = await readFile(real);
       // 途中に NUL があるものは文字のファイルではない。開いても壊すだけ。
       if (bytes.subarray(0, 8192).includes(0)) return send(res, 415, { error: '文字のファイルではないので、画面では開けません' });
-      return send(res, 200, { path: asked, content: bytes.toString('utf8'), bytes: info.size });
+      return send(res, 200, { path: asked, content: bytes.toString('utf8'), bytes: info.size, stamp: stampOf(bytes.toString('utf8')) });
     }
 
     if (path === '/api/file' && req.method === 'PUT') {
-      const body = await readBody(req) as { path?: unknown; content?: unknown };
+      const body = await readBody(req) as { path?: unknown; content?: unknown; stamp?: unknown };
       const asked = typeof body?.path === 'string' ? body.path : '';
       const content = typeof body?.content === 'string' ? body.content : undefined;
+      // 開いたときの stamp。送ってきたときだけ見る（持っていない相手は今までどおり）。
+      const stamp = typeof body?.stamp === 'string' ? body.stamp : undefined;
       if (!asked || content === undefined) return send(res, 400, { error: 'path と content が要ります' });
       /*
        * **まだ無いファイルも書ける。**
@@ -1531,6 +1534,21 @@ export class UiServer {
         return send(res, 409, { error: 'いま作業中です。終わってから保存してください' });
       }
       const before = await readFile(real, 'utf8').catch(() => undefined);
+      /*
+       * **黙って上書きさせない。**
+       *
+       * 画面で直している最中に AI が同じファイルを書くと、ファイルは AI の版、
+       * 欄は人の版、という二つに割れる。保存は先に書いた方を**何も言わずに
+       * 消していた**（人が保存すれば AI の直しが消える）。開いたときの stamp と
+       * 今の中身が違うなら、断る。どうするかは画面で選ばせる。
+       */
+      if (stamp !== undefined && before !== undefined && stampOf(before) !== stamp) {
+        return send(res, 409, {
+          error: '開いたあとで、このファイルは別の所で変わりました（AI の書き換えなど）。'
+            + '画面で、どちらを残すか選んでください',
+          conflict: true, path: asked, content: before, stamp: stampOf(before),
+        });
+      }
       if (before === content) return send(res, 200, { saved: false, path: asked });
       const { added, removed } = await this.#writeByHand(asked, real, before, content, `手で直した: ${asked}`);
       return send(res, 200, { saved: true, path: asked, added, removed });
@@ -3302,6 +3320,17 @@ export class BodyTooLarge extends Error {
  */
 /** 画面で開くファイルの上限。これより大きいものは、画面のエディタでは扱わない。 */
 const EDIT_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * 開いたときの中身から作る、短い文字列（stamp）。
+ *
+ * 保存のときに「開いたあとで誰かが書いたか」を見るために使う。時刻では見ない
+ * （同じミリ秒に二度書かれると同じになるし、時計の粒も環境で違う）。中身から
+ * 作れば、同じ中身なら同じ、違えば違う、とだけ言える。
+ */
+function stampOf(text: string): string {
+  return createHash('sha1').update(text).digest('hex').slice(0, 16);
+}
 const NOT_LOADED_YET = 'モデルをまだ読んでいません（頼まれたときに読みます）';
 
 /** OS で開いて見せる。起こしたら手を離す（閉じるまで待たない）。 */

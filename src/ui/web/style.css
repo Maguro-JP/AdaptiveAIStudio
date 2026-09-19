@@ -1218,6 +1218,18 @@ dialog.wide { width: min(46rem, 92vw); }
 }
 .editor-hold { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; }
 /* 探す・置き換える・行へ飛ぶ。Ctrl+F と Ctrl+G で出す。 */
+/* AI が同じファイルを書いたことを伝える帯。**見落とされると、書いたものが消える。**
+   欄の上に出し、押し場所は折り返して全部見せる（狭い画面で外へ出さない）。 */
+.editor-notice {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+  margin: .3rem 0; padding: .4rem .55rem; border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  font-size: .8rem; line-height: 1.5;
+}
+.editor-notice-text { flex: 1 1 14rem; min-width: 0; }
+.editor-notice-acts { display: flex; align-items: center; gap: .3rem; flex: 0 0 auto; flex-wrap: wrap; }
+.editor-notice button { font-size: .78rem; padding: 2px 8px; }
 .editor-find { display: flex; align-items: center; gap: .3rem; padding: .3rem 0; flex-wrap: wrap; }
 .editor-find input { font-size: .8rem; padding: 2px 6px; }
 .find-q, .find-r { flex: 1 1 8rem; min-width: 5rem; }

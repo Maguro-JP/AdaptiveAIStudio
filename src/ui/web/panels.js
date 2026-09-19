@@ -1765,12 +1765,64 @@ export const PANELS = {
     const shut = el('button', 'ghost icon', '×');
     bar.append(needle, prev, next, swap, one, all, lineAt, count, shut);
 
-    wrap.append(head, bar, stage);
+    /*
+     * **AI が同じファイルを書いたことを、直している最中の人に伝える帯。**
+     *
+     * ここまで、直している最中（保存していない）に AI がそのファイルを書くと、
+     * 画面は**何も言わずに人の版を出し続けていた**。ファイルは AI の版、欄は
+     * 人の版、と二つに割れたまま、保存した方が相手を消す。どちらを残すかは
+     * 人が決めることなので、起きたことを出して選ばせる。
+     */
+    const notice = el('div', 'editor-notice');
+    notice.hidden = true;
+    const noticeText = el('span', 'editor-notice-text', '');
+    const noticeActs = el('span', 'editor-notice-acts');
+    notice.append(noticeText, noticeActs);
+
+    wrap.append(head, notice, bar, stage);
     body.append(wrap);
 
     let path = '';
     let loaded = '';
+    /** 開いたときの中身から作られた stamp。保存のときに送って、上書きを止めてもらう。 */
+    let stamp = '';
+    /** AI の版を読む前に預かった、自分の直し。**消さずに戻せるように持つ。** */
+    let mine = null;
     const dirty = () => area.value !== loaded;
+
+    /** 知らせの帯を出す。押し場所は毎回作り直す（前の押し方が残らないように）。 */
+    const tell = (text, acts) => {
+      noticeText.textContent = text;
+      noticeActs.replaceChildren();
+      for (const [label, run] of acts) {
+        const b = el('button', 'ghost', label);
+        b.type = 'button';
+        b.onclick = run;
+        noticeActs.append(b);
+      }
+      const close = el('button', 'ghost icon', '×');
+      close.type = 'button';
+      close.title = '閉じる（直しはそのまま）';
+      close.onclick = () => { notice.hidden = true; };
+      noticeActs.append(close);
+      notice.hidden = false;
+    };
+
+    /** 自分の直しを預かって、いま在る中身（AI の版）に取り替える。 */
+    const takeOver = (text, newStamp) => {
+      mine = area.value;
+      loaded = text;
+      stamp = newStamp ?? '';
+      area.value = text;
+      refresh();
+      tell('AI の版を出しました。自分の直しは預かっています。', [
+        ['自分の直しに戻す', () => {
+          area.value = mine ?? area.value;
+          refresh();
+          tell('自分の直しに戻しました。保存すると AI の版を上書きします。', []);
+        }],
+      ]);
+    };
     /** 行番号を、いまの中身に合わせる。 */
     const drawLines = () => {
       const n = area.value.split('\n').length;
@@ -1974,7 +2026,8 @@ export const PANELS = {
         goTo(line);
         return;
       }
-      path = p; loaded = j.content;
+      path = p; loaded = j.content; stamp = j.stamp ?? ''; mine = null;
+      notice.hidden = true;
       name.textContent = p;
       // 預けた分が在れば、それを返す（消さずに戻す）。
       const kept = drafts.get(p);
@@ -1995,7 +2048,8 @@ export const PANELS = {
       try {
         r = await fetch('/api/file', {
           method: 'PUT', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ path, content: area.value }),
+          // 開いたときの stamp を添える。開いたあとで誰かが書いていたら、本体が断る。
+          body: JSON.stringify({ path, content: area.value, ...(stamp ? { stamp } : {}) }),
           signal: AbortSignal.timeout(20000),
         });
       } catch (e) {
@@ -2005,8 +2059,22 @@ export const PANELS = {
         return;
       }
       const j = await r.json().catch(() => ({}));
+      /*
+       * **断られたら、選ばせる。**黙って上書きもしないし、黙って捨てもしない。
+       * 上書きを選んでも、前の中身は戻り先に残る（本体が控える）。
+       */
+      if (r.status === 409 && j.conflict) {
+        state.textContent = '保存していません（別の所で変わっています）';
+        save.disabled = false;
+        tell('保存していません。開いたあとで、このファイルは別の所で変わりました（AI の書き換えなど）。', [
+          ['AI の版を出す', () => takeOver(j.content ?? loaded, j.stamp)],
+          ['自分の版で上書きする', () => { stamp = j.stamp ?? ''; notice.hidden = true; void store(); }],
+        ]);
+        return;
+      }
       if (!r.ok) { state.textContent = j.error ?? '保存できませんでした'; save.disabled = false; return; }
       loaded = area.value;
+      stamp = j.stamp ?? stamp;
       refresh();
       state.textContent = `保存しました（+${j.added ?? 0} -${j.removed ?? 0}）`;
     };
@@ -2182,9 +2250,26 @@ export const PANELS = {
         ...(dirty() ? { dirty: true } : {}),
       };
     };
-    // モデルが書き換えたら、開いているものは読み直す（直している最中は上書きしない）。
+    /*
+     * モデルが書き換えたら、開いているものは読み直す（直している最中は上書きしない）。
+     *
+     * **直している最中でも、黙らない。**上書きしないのは正しいが、何も言わないと
+     * ファイルと欄が割れていることに気づけず、保存した方が相手を消す。
+     */
     ctx.on('session', ({ event: v }) => {
-      if (v.type === 'diff' && v.path === path && !dirty()) void open(path);
+      if (v.type !== 'diff' || v.path !== path) return;
+      if (!dirty()) { void open(path); return; }
+      tell('AI がこのファイルを書き換えました。あなたの直しは保存していません。', [
+        ['AI の版を出す', () => {
+          void (async () => {
+            const r = await fetch(`/api/file?path=${encodeURIComponent(path)}`, { signal: AbortSignal.timeout(20000) })
+              .catch(() => null);
+            const got = r && r.ok ? await r.json().catch(() => null) : null;
+            if (!got) { state.textContent = '読み直せませんでした'; return; }
+            takeOver(got.content, got.stamp);
+          })();
+        }],
+      ]);
     });
   },
 };

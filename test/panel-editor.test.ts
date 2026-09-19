@@ -27,13 +27,24 @@ function open(disk: Record<string, string>) {
     const body = init?.body ? JSON.parse(init.body) as { path: string; content: string } : undefined;
     asked.push({ url: String(url), method, body });
     if (method === 'PUT') {
+      /*
+       * 本体と同じように、**開いたあとで変わっていたら断る。**
+       * ここでは中身そのものを stamp として使う（同じ中身なら同じ、違えば違う）。
+       */
+      const sent = (body as { stamp?: string }).stamp;
+      if (sent !== undefined && disk[body!.path] !== undefined && disk[body!.path] !== sent) {
+        return Response.json(
+          { error: '別の所で変わりました', conflict: true, content: disk[body!.path], stamp: disk[body!.path] },
+          { status: 409 },
+        );
+      }
       disk[body!.path] = body!.content;
-      return Response.json({ saved: true, path: body!.path, added: 1, removed: 1 });
+      return Response.json({ saved: true, path: body!.path, added: 1, removed: 1, stamp: body!.content });
     }
     const path = decodeURIComponent(String(url).split('path=')[1] ?? '');
     const content = disk[path];
     if (content === undefined) return Response.json({ error: '無い' }, { status: 404 });
-    return Response.json({ path, content });
+    return Response.json({ path, content, stamp: content });
   }) as unknown as typeof fetch;
 
   const handlers = new Map<string, Array<(e: unknown) => void>>();
@@ -346,5 +357,74 @@ describe('エディタで、探して直す', () => {
     t.key('f');
     t.press('×');
     assert.equal(t.at('editor-find').hidden, true);
+  });
+});
+
+/**
+ * 直している最中に、AI が同じファイルを書いたとき。
+ *
+ * ここまでは**何も言わずに人の版を出し続けていた**（上書きしないのは正しいが、
+ * 黙っている）。ファイルは AI の版、欄は人の版、と二つに割れたまま、
+ * 先に保存した方が相手を消す。どちらを残すかは人が決めることなので、
+ * 起きたことを出して選ばせる。消さないので、押し間違いでも取り返しがつく。
+ */
+describe('AI が書き換えたことを、黙らない', () => {
+  /** 開いて、保存していない直しを作る。 */
+  async function editing(disk: Record<string, string>) {
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => box.area().value === disk['a.ts'], 'ファイルが開く');
+    box.area().value = '人が書いた\n';
+    box.area().oninput!();
+    return box;
+  }
+  const notice = (box: ReturnType<typeof open>) => box.find((n) => n.className === 'editor-notice');
+
+  test('**直している最中に書き換えられたら、そう言う**', async () => {
+    const disk = { 'a.ts': 'はじめ\n' };
+    const box = await editing(disk);
+    disk['a.ts'] = 'AI が書いた\n';
+    box.emit('session', { type: 'diff', path: 'a.ts' });
+    const bar = notice(box);
+    assert.equal(bar.hidden, false, '書き換えられたのに、何も出ていない');
+    assert.match(bar.text, /AI がこのファイルを書き換えました/, bar.text);
+    // 黙って上書きもしない。欄は人の版のまま。
+    assert.equal(box.area().value, '人が書いた\n', '直している欄を上書きしている');
+  });
+
+  test('**AI の版を出しても、自分の直しに戻せる**', async () => {
+    const disk = { 'a.ts': 'はじめ\n' };
+    const box = await editing(disk);
+    disk['a.ts'] = 'AI が書いた\n';
+    box.emit('session', { type: 'diff', path: 'a.ts' });
+    box.press('AI の版を出す');
+    await until(() => box.area().value === 'AI が書いた\n', 'AI の版が出る');
+    assert.match(notice(box).text, /預かっています/, notice(box).text);
+    box.press('自分の直しに戻す');
+    assert.equal(box.area().value, '人が書いた\n', '預かったものが戻らない');
+  });
+
+  test('直していなければ、これまでどおり読み直す（対）', async () => {
+    const disk = { 'a.ts': 'はじめ\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => box.area().value === 'はじめ\n', 'ファイルが開く');
+    disk['a.ts'] = 'AI が書いた\n';
+    box.emit('session', { type: 'diff', path: 'a.ts' });
+    await until(() => box.area().value === 'AI が書いた\n', '読み直す');
+    assert.equal(notice(box).hidden, true, '直していないのに、選ばせている');
+  });
+
+  test('**保存で断られたら、どちらを残すか選ばせる**', async () => {
+    const disk = { 'a.ts': 'はじめ\n' };
+    const box = await editing(disk);
+    // 帯を出さずに（出来事を流さずに）、ファイルだけが変わった場合。
+    disk['a.ts'] = 'AI が書いた\n';
+    box.key('s');
+    await until(() => notice(box).hidden === false, '断られたことを出す');
+    assert.match(notice(box).text, /保存していません/, notice(box).text);
+    assert.equal(disk['a.ts'], 'AI が書いた\n', '断られたのに書いている');
+    box.press('自分の版で上書きする');
+    await until(() => disk['a.ts'] === '人が書いた\n', '上書きが通る');
   });
 });
