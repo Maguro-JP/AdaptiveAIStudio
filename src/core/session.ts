@@ -28,6 +28,7 @@ import { buildHarness } from './harness-setup.ts';
 import { Forum } from '../harness/deliberation.ts';
 import { Agent } from '../agent/loop.ts';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool, editFileTool } from '../agent/tools/fs.ts';
+import { createShowFileTool, type ShowHook } from '../agent/tools/show.ts';
 import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { createDeliberateTool } from '../agent/tools/deliberate.ts';
@@ -253,6 +254,13 @@ export interface SessionOptions {
   approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
   /** 画面や端末へ流したいもの。省略可。 */
   onLog?(level: 'info' | 'warn' | 'error', text: string): void;
+  /**
+   * 「ここを見てください」を画面で開く受け手。省略可。
+   *
+   * **画面の無い入口（端末）では置かない。**置かないと `show_file` は
+   * 「開く先がありません」と返す。受け手が無いのに開いたことにしない。
+   */
+  onShow?: ShowHook;
   /**
    * 暇なときの思考に、外を読むことを許すか。既定は許す。
    * 完全に閉じたいときだけ false にする。
@@ -518,7 +526,9 @@ export class Session {
     );
     const wrap = (tools: Tool[]) => harness.wrapAll(tools, () => holder.instruction);
     const toolPool = {
-      read: wrap([readFileTool, listFilesTool, searchTextTool, findCodeTool, findSymbolTool]),
+      // `show_file` は読む側に置く。中身を返さないので、読む権限より弱い。
+      read: wrap([readFileTool, listFilesTool, searchTextTool, findCodeTool, findSymbolTool,
+        createShowFileTool(opts.onShow)]),
       write: wrap([writeFileTool, editFileTool, createDeliberateTool(forum)]),
       execute: wrap([createRunCommandTool({ allowed: agentCfg.allowedCommands })]),
       network: netCfg.enabled === false ? [] : wrap([createFetchUrlTool({

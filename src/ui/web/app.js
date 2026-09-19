@@ -674,6 +674,16 @@ function listen() {
       box.textContent = `順番待ち ${e.waiting} 件`;
     }
     if (e.type === 'report') { void showReport(); return; }
+    /*
+     * **AI が「ここを見てください」と言ったら、その場所を開く。**
+     *
+     * ここまで、AI から画面へ向かう道が無かった。答えに `a.ts:120` と書かれても、
+     * 人が横の一覧から探し直していた。`show_file` を呼ばれたら、エディタで開く。
+     */
+    if (e.type === 'show' && typeof e.path === 'string') {
+      ctx.revealFile?.(e.path, typeof e.line === 'number' ? e.line : undefined);
+      return;
+    }
     // 裏の仕事の状態。設定 → モデル の一言と「まだ話せません」の押しボタンにも、最新を出す。
     if (e.type === 'jobs') noteJobs(e.jobs);
     if (e.type === 'stateChanged') { void refreshState(); void loadFiles(filesAt); void tellIfNotReady(); ctx.forgetCommands?.(); return; }

@@ -179,6 +179,8 @@ export type UiEvent =
   /** 点検の出来事。cmd の窓でしか見られなかったものを、画面へ出す。 */
   | { type: 'task'; name: string; text: string }
   | { type: 'taskDone'; name: string; code: number }
+  /** AI が「ここを見てください」と言った。画面はエディタで開く（`show_file`）。 */
+  | { type: 'show'; path: string; line?: number }
   /** 裏で動いているものの、いまの状態（流れではなく、状態そのもの）。 */
   | { type: 'jobs'; jobs: Job[] };
 
@@ -524,6 +526,9 @@ export class UiServer {
       journals: await this.journals(),
       approve: (req) => this.#ask(req),
       onLog: (level, text) => this.broadcast({ type: 'log', level, text }),
+      // AI が「ここを見てください」と言ったら、画面のエディタで開く。
+      // 画面が無い入口（端末）では置かない（`show_file` はそこでは使えない）。
+      onShow: ({ path, line }) => this.broadcast({ type: 'show', path, ...(line === undefined ? {} : { line }) }),
     });
     // 続きから話す。**土台は作り直しても、話は続ける。**
     const id = await this.#currentConversation();
