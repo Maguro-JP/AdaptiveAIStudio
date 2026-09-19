@@ -1297,5 +1297,8 @@ dialog.wide { width: min(46rem, 92vw); }
   padding: .22rem .7rem; border-top: 1px solid var(--line); align-items: baseline;
 }
 .search-hit:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.search-at { font-size: .78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 当たった行の頭。道と、会話へ渡す @ を並べる。道の側だけ縮める。 */
+.search-hit-head { display: flex; align-items: baseline; gap: .25rem; min-width: 0; }
+.search-at { font-size: .78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.search-ask { flex: 0 0 auto; font-size: .78rem; padding: 0 4px; }
 .search-line { font-size: .78rem; color: var(--dim); white-space: pre; overflow: hidden; text-overflow: ellipsis; }

@@ -1155,6 +1155,61 @@ await check('エディタの見出しが、長い文で潰れない', async () =
   }
 });
 
+/*
+ * **探した所を、会話へ渡す。**
+ *
+ * 見つけた行を AI に訊くとき、道と行を打ち直していた（`src/a.ts:120`）。
+ * 打ち間違えれば別の所の話になる。探して、押して、**書きかけの指示に入る**
+ * ところまで見る。試すファイルはここで作って、最後に消す。
+ */
+await check('探した所を、依頼に添えられる', async () => {
+  const at = 'sweep-search-probe.txt';
+  // **この行に、探す言葉そのものを書かない。**書くと、作業場がこの置き所のときに
+  // この script 自身が当たり、当たった一件目が試すファイルではなくなる（実際にそうなった）。
+  const word = ['sweep', 'Needle', '42'].join('');
+  const made = await p.evaluate(([path, w]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: `一行目\n${w} を探す\n` }),
+  }).then((r) => r.status), [at, word]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  try {
+    // 「探す」を出す。出ていなければ表示から出す。
+    const shown = async () => (await p.locator('#root .panel header, #root .panel.tabs header button')
+      .allInnerTexts()).some((h) => h.includes('探す'));
+    if (!(await shown())) {
+      await p.locator('#openView').click();
+      await p.waitForTimeout(500);
+      const row = p.locator('#viewList .view-row').filter({ hasText: '探す' }).first();
+      if (await row.count() === 0) throw new Error('表示の一覧に探すが無い');
+      await row.locator('input').click();
+      await p.waitForTimeout(700);
+      await p.keyboard.press('Escape');
+      await p.waitForTimeout(400);
+    }
+    const tab = p.locator('#root .panel.tabs header button').filter({ hasText: '探す' });
+    if (await tab.count() > 0) { await tab.first().click(); await p.waitForTimeout(400); }
+    await p.locator('.search-q').first().fill(word);
+    await p.locator('.search-head button', { hasText: '探す' }).first().click();
+    await p.waitForTimeout(2500);
+    // 試すファイルの行を選ぶ（他のファイルが当たっていても、そこを見る）。
+    const row = p.locator('.search-hit').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが当たらない');
+    const ask = row.locator('.search-ask').first();
+    if (await ask.count() === 0) throw new Error('会話へ渡す押し場所が無い');
+    // 書きかけを空にしてから押す（前の確かめが書いたものと混ざらない）。
+    await p.locator('.chat textarea').first().fill('');
+    await ask.click();
+    await p.waitForTimeout(400);
+    const said = await p.locator('.chat textarea').first().inputValue();
+    if (!said.includes(`${at}:2`)) throw new Error(`会話へ渡っていない: ${JSON.stringify(said)}`);
+  } finally {
+    await p.locator('.chat textarea').first().fill('').catch(() => undefined);
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
 if (shot) await p.screenshot({ path: shot, fullPage: false });
 await b.close();
 console.log(bad.length === 0 ? '見つかった不具合: なし' : `見つかった不具合 ${bad.length} 件:\n- ${bad.join('\n- ')}`);

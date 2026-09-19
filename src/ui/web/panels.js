@@ -1444,7 +1444,19 @@ export const PANELS = {
         const at = el('button', 'mono as-link search-at', `${h.path}:${h.line}`);
         at.title = 'ここを開く';
         at.onclick = () => { ctx.revealFile?.(h.path, h.line); };
-        row.append(at, el('div', 'mono search-line', h.text));
+        /*
+         * **探した所を、会話へ渡す。**
+         *
+         * 見つけた行を AI に訊くとき、道と行を打ち直していた（`src/a.ts:120`）。
+         * 打ち間違えれば、別の所の話になる。押した所から渡す。
+         */
+        const ask = el('button', 'icon search-ask', '@');
+        ask.type = 'button';
+        ask.title = '依頼に添える（この場所を渡す）';
+        ask.onclick = () => { ctx.insertText?.(`${h.path}:${h.line}`); };
+        const head = el('div', 'search-hit-head');
+        head.append(at, ask);
+        row.append(head, el('div', 'mono search-line', h.text));
         list.append(row);
       }
     };

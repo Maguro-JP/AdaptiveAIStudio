@@ -39,6 +39,7 @@ const ctx = {
    */
   revealFile: () => undefined,
   applyPatch: () => undefined,
+  insertText: () => false,
   on(type, fn) {
     if (!eventHandlers.has(type)) eventHandlers.set(type, []);
     eventHandlers.get(type).push(fn);
@@ -1376,15 +1377,28 @@ async function openInEditor(path, line) {
 
 ctx.revealFile = (path, line) => { void openInEditor(path, line); };
 
-function insertPath(path) {
+/** 書きかけの指示に、言葉を足す。押した所から会話へ渡る道は、全部ここを通る。 */
+function appendToInstruction(text) {
   const input = document.querySelector('.chat textarea');
-  if (!input) return;
+  if (!input) return false;
+  input.value = input.value ? `${input.value.replace(/\s+$/, '')} ${text} ` : `${text} `;
+  input.focus();
+  return true;
+}
+
+function insertPath(path) {
   // **`@` を付ける。**印が付いていると、送るときに中身ごと渡る。
   // 道の文字だけだと、開かずに書き始めることがある。
-  const at = `@${path}`;
-  input.value = input.value ? `${input.value.replace(/\s+$/, '')} ${at} ` : `${at} `;
-  input.focus();
+  appendToInstruction(`@${path}`);
 }
+
+/*
+ * **探した所を、会話へ渡す。**
+ *
+ * 探して見つけた行を AI に訊くとき、道と行を**打ち直していた**（`src/a.ts:120`）。
+ * 打ち間違えれば別の所の話になる。押した所から渡す。
+ */
+ctx.insertText = (text) => appendToInstruction(text);
 
 /**
  * 横の板の開け閉め。
