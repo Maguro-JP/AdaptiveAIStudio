@@ -413,6 +413,9 @@ button.ghost:hover { color: var(--text); background: var(--surface2); }
 /* 数は右で揃える。桁が縦に並ぶ。 */
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 
+/* **何行もある案内は、中央に寄せない。**行の頭がそろわず、読む所を目で
+   探すことになる（設定のモデルの頁で実際にそう出ていた）。 */
+.empty.guide { text-align: left; max-width: 46rem; margin: 0 auto; line-height: 1.7; }
 .empty {
   color: var(--dim);
   padding: var(--s4);

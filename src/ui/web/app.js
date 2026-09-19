@@ -1696,9 +1696,15 @@ async function loadCfg() {
   if (!c.gguf?.length) {
     const e = document.createElement('div');
     e.className = 'empty';
-    // ここで止まる人がいちばん多い。**次に何をすればいいかまで書く。**
-    e.textContent = (DIR_NOTES[c.dirState] ? `${DIR_NOTES[c.dirState]}\n` : '')
-      + 'ありません。上のフォルダに .gguf を1つ入れると、ここに出ます。\n'
+    /*
+     * ここで止まる人がいちばん多い。**次に何をすればいいかまで書く。**
+     *
+     * **同じ案内を二度出さない。**フォルダの様子（「そのフォルダはまだありません」）は
+     * すぐ上の一行に出ている。ここにも足していたので、同じ文が 60px 離れて二度
+     * 並んでいた（撮って見つけた）。二度言われると、別のことかと読み直す。
+     */
+    e.classList.add('guide');
+    e.textContent = 'ありません。上のフォルダに .gguf を1つ入れると、ここに出ます。\n'
       + '取ってくる先の例: https://huggingface.co/Qwen （名前に GGUF が付いたもの）\n'
       + '迷ったら 3B の Q4_K_M（約2GB）。要約や下書きなら足ります。';
     e.style.whiteSpace = 'pre-line';

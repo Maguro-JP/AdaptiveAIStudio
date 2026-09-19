@@ -369,6 +369,40 @@ await check('会話のパネルが狭くても、押したいものが外へ出�
   });
   if (bad.length > 0) throw new Error(bad.join(' / '));
 });
+await check('同じ案内を、二度出していない', async () => {
+  /*
+   * **二度言われると、別のことかと読み直す。**設定のモデルの頁で、
+   * 「そのフォルダはまだありません。…」が 60px 離れて二度出ていた（撮って見つけた）。
+   * GGUF のフォルダの様子を一行で出したうえに、空のときの案内にも同じ文を足していた。
+   *
+   * 見るのは**文の重なり**。一つの頁の中に、同じ一文が二度出ていないこと。
+   */
+  await p.locator('#openSettings').click();
+  await p.waitForTimeout(600);
+  await p.locator('#settings button', { hasText: 'モデル' }).first().click();
+  await p.waitForTimeout(800);
+  const twice = await p.evaluate(() => {
+    // **設定のダイアログを名指しする。**`dialog` で引くと、先に在るコマンドの方が
+    // 当たって、設定の中身を一度も見ないまま通っていた。
+    const text = document.getElementById('settings')?.innerText ?? '';
+    const seen = new Map();
+    /*
+     * **行ではなく、文で数える。**片方は道の行にくっついて出ていた
+     * （「設定ファイル: /tmp/… 開く コピー そのフォルダは…」）ので、
+     * 行で突き合わせると同じ文だと分からない（一度それで見逃した）。
+     */
+    for (const one of text.split(/\n|(?<=。)/).map((l) => l.trim())) {
+      // 短い塊（見出し・ボタンの字）は数えない。案内の文だけを見る。
+      if (one.length < 12) continue;
+      seen.set(one, (seen.get(one) ?? 0) + 1);
+    }
+    console.log('DIALOG:' + JSON.stringify(text.slice(0, 700)));
+    return [...seen].filter(([, n]) => n > 1).map(([line, n]) => `${line.slice(0, 30)}（${n} 回）`);
+  });
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(300);
+  if (twice.length > 0) throw new Error(`同じ案内が二度出ている: ${twice.join(' / ')}`);
+});
 await check('見えている字が、切れていない', async () => {
   /*
    * **名前が切れていた。**横のサイドの上に押しものを三つ並べたので、名前の枠が
