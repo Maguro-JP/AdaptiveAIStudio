@@ -2254,6 +2254,35 @@ export const PANELS = {
 
     ctx.openFile = (p, line) => { void open(p, line); };
     /*
+     * **AI が、選んでいた所を書き換えた（`replace_selection`）。**
+     *
+     * 入れ替えるのは欄の中だけで、**保存はしない**（人が見て、良ければ保存する）。
+     * 選んだ所は人が動かせるので、**渡された字がまだそこに在るときだけ**入れ替える。
+     * 入れ替える前の中身は預かって、「元に戻す」で戻せるようにする。
+     */
+    ctx.applyPatch = (at) => {
+      if (!path || at.path !== path) return false;
+      const head = lineStart(area.value, at.from);
+      const tail = lineStart(area.value, at.to);
+      const now = area.value.slice(head.at, tail.end);
+      if (now !== at.text) {
+        tell('AI の直しを入れられませんでした（選んでいた所が動いています）。', [], 'info');
+        return false;
+      }
+      mine = area.value;
+      area.value = `${area.value.slice(0, head.at)}${at.replacement}${area.value.slice(tail.end)}`;
+      select(head.at, head.at + at.replacement.length);
+      refresh();
+      tell('AI が、選んでいた所を書き換えました（まだ保存していません）。', [
+        ['元に戻す', () => {
+          area.value = mine ?? area.value;
+          refresh();
+          tell('元に戻しました。', [], 'info');
+        }],
+      ]);
+      return true;
+    };
+    /*
      * **いま開いている所を、AI に渡せるようにする。**
      *
      * ここまで、AI は開いているファイルも選んでいる所も知らなかった。

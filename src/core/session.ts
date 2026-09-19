@@ -29,6 +29,7 @@ import { Forum } from '../harness/deliberation.ts';
 import { Agent } from '../agent/loop.ts';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool, editFileTool } from '../agent/tools/fs.ts';
 import { createShowFileTool, type ShowHook } from '../agent/tools/show.ts';
+import { createReplaceSelectionTool, type SelectionSource, type PatchHook } from '../agent/tools/patch.ts';
 import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { createDeliberateTool } from '../agent/tools/deliberate.ts';
@@ -261,6 +262,14 @@ export interface SessionOptions {
    * 「開く先がありません」と返す。受け手が無いのに開いたことにしない。
    */
   onShow?: ShowHook;
+  /**
+   * 画面で選んでいる所を教える相手と、そこを書き換える受け手。省略可。
+   *
+   * **画面の無い入口（端末）では置かない。**置かないと `replace_selection` は
+   * 「書き換える先がありません」と返す。範囲は利用者が選んだ所で、AI は文だけを出す。
+   */
+  editorSelection?: SelectionSource;
+  onPatch?: PatchHook;
   /**
    * 暇なときの思考に、外を読むことを許すか。既定は許す。
    * 完全に閉じたいときだけ false にする。
@@ -529,7 +538,10 @@ export class Session {
       // `show_file` は読む側に置く。中身を返さないので、読む権限より弱い。
       read: wrap([readFileTool, listFilesTool, searchTextTool, findCodeTool, findSymbolTool,
         createShowFileTool(opts.onShow)]),
-      write: wrap([writeFileTool, editFileTool, createDeliberateTool(forum)]),
+      // `replace_selection` は書く側。ディスクは触らないが、**人が書きかけの
+      // 欄を書き換える**ので、読むだけの役職には持たせない。
+      write: wrap([writeFileTool, editFileTool, createDeliberateTool(forum),
+        createReplaceSelectionTool(opts.editorSelection, opts.onPatch)]),
       execute: wrap([createRunCommandTool({ allowed: agentCfg.allowedCommands })]),
       network: netCfg.enabled === false ? [] : wrap([createFetchUrlTool({
         allowedHosts: netCfg.allowedHosts, maxBytes: netCfg.maxBytes, timeoutMs: netCfg.timeoutMs,

@@ -485,3 +485,58 @@ describe('補完が出せない理由は、見出しに流し込まない', () =
     assert.match(bar.text, /書き換えました/, `知らせが消えている: ${bar.text}`);
   });
 });
+
+/**
+ * AI が、選んでいた所を書き換えたとき（`replace_selection`）。
+ *
+ * 入れ替えるのは欄の中だけで、保存はしない。選んだ所は人が動かせるので、
+ * **渡された字がまだそこに在るときだけ**入れ替える。入れ替える前は預かって、
+ * 「元に戻す」で戻せるようにする。
+ */
+describe('選んでいた所を、AI が書き換える', () => {
+  async function opened() {
+    const disk = { 'a.ts': 'const x = 1;\nconst y = 2;\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => box.area().value.includes('const x'), 'ファイルが開く');
+    return box;
+  }
+  type Patch = { path: string; from: number; to: number; text: string; replacement: string };
+  const patch = (box: Awaited<ReturnType<typeof opened>>, at: Patch) =>
+    (box.ctx.applyPatch as (a: Patch) => boolean)(at);
+
+  test('**選んでいた行だけ入れ替わり、他は残る**', async () => {
+    const box = await opened();
+    const done = patch(box, { path: 'a.ts', from: 1, to: 1, text: 'const x = 1;', replacement: 'const x = 42;' });
+    assert.equal(done, true);
+    assert.equal(box.area().value, 'const x = 42;\nconst y = 2;\n');
+    // 保存はしない（人が見て決める）。
+    assert.match(box.state().textContent, /直しています/, box.state().textContent);
+  });
+
+  test('**元に戻せる**', async () => {
+    const box = await opened();
+    patch(box, { path: 'a.ts', from: 1, to: 1, text: 'const x = 1;', replacement: 'const x = 42;' });
+    box.press('元に戻す');
+    assert.equal(box.area().value, 'const x = 1;\nconst y = 2;\n', '戻っていない');
+  });
+
+  test('選んでいた所が動いていたら、入れない（対）', async () => {
+    const box = await opened();
+    // 人が先に直した。渡された字は、もうそこに無い。
+    box.area().value = 'const x = 999;\nconst y = 2;\n';
+    box.area().oninput!();
+    const done = patch(box, { path: 'a.ts', from: 1, to: 1, text: 'const x = 1;', replacement: 'const x = 42;' });
+    assert.equal(done, false);
+    assert.equal(box.area().value, 'const x = 999;\nconst y = 2;\n', '人の直しを上書きしている');
+    const bar = box.find((n) => n.className.startsWith('editor-notice'));
+    assert.match(bar.text, /入れられませんでした/, bar.text);
+  });
+
+  test('別のファイルなら、何もしない（対）', async () => {
+    const box = await opened();
+    const done = patch(box, { path: 'b.ts', from: 1, to: 1, text: 'const x = 1;', replacement: 'x' });
+    assert.equal(done, false);
+    assert.equal(box.area().value, 'const x = 1;\nconst y = 2;\n');
+  });
+});

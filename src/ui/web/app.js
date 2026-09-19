@@ -38,6 +38,7 @@ const ctx = {
    * **出してから開く道をパネルの側へ渡す。**
    */
   revealFile: () => undefined,
+  applyPatch: () => undefined,
   on(type, fn) {
     if (!eventHandlers.has(type)) eventHandlers.set(type, []);
     eventHandlers.get(type).push(fn);
@@ -682,6 +683,17 @@ function listen() {
      */
     if (e.type === 'show' && typeof e.path === 'string') {
       ctx.revealFile?.(e.path, typeof e.line === 'number' ? e.line : undefined);
+      return;
+    }
+    /*
+     * **AI が、選んでいる所を書き換えた（`replace_selection`）。**
+     *
+     * ここも AI から画面へ向かう道。ディスクではなく**欄の中だけ**を入れ替える。
+     * 保存はしない（人が見て、良ければ保存する）。開いていない・選んだ所が
+     * 動いていた、は画面の側で断る。
+     */
+    if (e.type === 'patch' && typeof e.path === 'string') {
+      ctx.applyPatch?.(e);
       return;
     }
     // 裏の仕事の状態。設定 → モデル の一言と「まだ話せません」の押しボタンにも、最新を出す。

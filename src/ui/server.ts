@@ -182,6 +182,12 @@ export type UiEvent =
   | { type: 'taskDone'; name: string; code: number }
   /** AI が「ここを見てください」と言った。画面はエディタで開く（`show_file`）。 */
   | { type: 'show'; path: string; line?: number }
+  /**
+   * AI が「選んでいる所をこう書き換えて」と言った（`replace_selection`）。
+   * 画面は欄の中だけ入れ替える。**保存はしない。**`text` は選んでいた字で、
+   * そこがまだ在るかを画面で見てから入れ替える。
+   */
+  | { type: 'patch'; path: string; from: number; to: number; text: string; replacement: string }
   /** 裏で動いているものの、いまの状態（流れではなく、状態そのもの）。 */
   | { type: 'jobs'; jobs: Job[] };
 
@@ -242,6 +248,14 @@ export class UiServer {
    * 思って書いているので、預かって順に流すのが素直。
    */
   readonly #queue: Array<{ text: string; attached: string[]; conversationId: string; editor?: EditorHere }> = [];
+  /**
+   * いま動いている依頼で、画面が選んでいる所。
+   *
+   * `replace_selection` はここを見て書き換える先を決める。**範囲は利用者が
+   * 選んだ所**で、モデルには文だけを出させる（範囲まで決めさせると、
+   * 選んでいない所を書き換えられる）。依頼が終わったら捨てる。
+   */
+  #editorNow: EditorHere | undefined;
   /**
    * 残してある会話。**窓を閉じても消えないように。**
    * ここまでメモリの中だけだったので、立ち上げ直すと無かったことになっていた。
@@ -530,6 +544,15 @@ export class UiServer {
       // AI が「ここを見てください」と言ったら、画面のエディタで開く。
       // 画面が無い入口（端末）では置かない（`show_file` はそこでは使えない）。
       onShow: ({ path, line }) => this.broadcast({ type: 'show', path, ...(line === undefined ? {} : { line }) }),
+      // いま選んでいる所（画面から来たもの）と、そこを書き換える受け手。
+      editorSelection: () => {
+        const at = this.#editorNow;
+        if (!at || at.selection === undefined || at.selectionFrom === undefined || at.selectionTo === undefined) {
+          return undefined;
+        }
+        return { path: at.path, from: at.selectionFrom, to: at.selectionTo, text: at.selection };
+      },
+      onPatch: (at) => this.broadcast({ type: 'patch', ...at }),
     });
     // 続きから話す。**土台は作り直しても、話は続ける。**
     const id = await this.#currentConversation();
@@ -624,7 +647,8 @@ export class UiServer {
       // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
       // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
       const full = await this.#compose(session, text, attached, editor);
-      this.#bg(this.#drive(session, full, undefined, { said: text }), '依頼の実行が落ちました');
+      this.#bg(this.#drive(session, full, undefined, { said: text, ...(editor ? { editor } : {}) }),
+        '依頼の実行が落ちました');
     } finally {
       this.#preparing = false;
     }
@@ -1050,7 +1074,8 @@ export class UiServer {
         // 受け取ったことだけ先に返し、続きは出来事として流す。
         send(res, 202, { accepted: true, conversationId, loading: false });
         // 判じるのは、利用者が打った分だけ（差し込んだ中身は利用者の言葉ではない）。
-        this.#bg(this.#drive(session, full, undefined, { said: text }), '依頼の実行が落ちました');
+        this.#bg(this.#drive(session, full, undefined, { said: text, ...(editor ? { editor } : {}) }),
+          '依頼の実行が落ちました');
       } finally {
         this.#preparing = false;
       }
@@ -2620,11 +2645,18 @@ export class UiServer {
 
   async #drive(
     session: Session, text: string, resuming?: string,
-    opts: { fromUser?: boolean; said?: string } = {},
+    opts: { fromUser?: boolean; said?: string; editor?: EditorHere } = {},
   ): Promise<void> {
     // **依頼をまたいで持ち越さない。**「この依頼のあいだは訊かない」は、
     // その依頼のあいだだけ。次の依頼では、また訊く。
     this.#allWrites = false;
+    /*
+     * いま選んでいる所は、**その依頼のあいだだけ**持つ。
+     *
+     * `replace_selection` はここを見て書き換える先を決める。持ち越すと、
+     * 次の依頼で**もう選んでいない所**を書き換えることになる。
+     */
+    this.#editorNow = opts.editor;
     // 動いている会話。出来事に添えて流す。画面は、見ている会話のものだけを描く。
     const conversationId = this.#loadedId;
     this.#runningId = conversationId;
@@ -2652,6 +2684,7 @@ export class UiServer {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
     } finally {
       this.#inFlight = undefined;
+      this.#editorNow = undefined;
       await this.#recordUnfinished(text, settled, resuming, didSomething);
       // 戻り先が増えたことを画面へ。**触ったのに出ていないと、
       // 戻せることに気づけない。**
@@ -3038,7 +3071,8 @@ export class UiServer {
     await this.#loadInto(session, next.conversationId);
     const full = await this.#compose(session, next.text, next.attached, next.editor);
     this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
-    this.#bg(this.#drive(session, full, undefined, { said: next.text }), '順番待ちの実行が落ちました');
+    this.#bg(this.#drive(session, full, undefined, { said: next.text, ...(next.editor ? { editor: next.editor } : {}) }),
+      '順番待ちの実行が落ちました');
   }
 
   async #drivePlan(session: Session, text: string): Promise<void> {
