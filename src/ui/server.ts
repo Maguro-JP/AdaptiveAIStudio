@@ -265,6 +265,15 @@ export class UiServer {
    */
   #editorNow: EditorHere | undefined;
   /**
+   * 最後に答えたモデル。
+   *
+   * **横の一覧の足元が「ollama · —」のままだった。**答えの札には
+   * `local:local-model` と出ているのに、いま動かしているものを出す所が
+   * 空のままで、壊れているように見える（撮って見つけた）。設定で固定して
+   * いなければ名前は答えてみるまで決まらないので、答えたものを覚えておく。
+   */
+  #lastAnswered = '';
+  /**
    * 残してある会話。**窓を閉じても消えないように。**
    * ここまでメモリの中だけだったので、立ち上げ直すと無かったことになっていた。
    */
@@ -1428,8 +1437,17 @@ export class UiServer {
           : '（最初の依頼のときに立ち上がります）',
         // 決めていなくても、この中で読んでいるなら「いま読んでいるもの」を出す。
         // 「—」だけだと、動いているのに何も無いように見える。
+        /*
+         * **いま動かしているものを出す。**
+         *
+         * 固定していなければ、名前は答えてみるまで決まらない（速い方へ乗り換える）。
+         * 分からないからと「—」を出していたので、答えの札に名前が出ているのに
+         * 足元は空、という形になっていた。**答えたのなら、もう分かっている。**
+         * 一度も答えていないうちは「—」のまま（まだ何も動かしていない）。
+         */
         model: this.#opts.config.runtime?.model
           ?? (this.#runtime?.id === 'inproc' ? this.#runtime.loaded()[0] : undefined)
+          ?? (this.#lastAnswered || undefined)
           ?? '—',
         // **なぜそれなのかも出す。**速い方へ勝手に乗り換える作りなので、
         // 名前だけ出しても「いつのまにか変わっている」に見える。
@@ -2699,6 +2717,7 @@ export class UiServer {
       for await (const event of session.send(text, opts)) {
         if (event.type === 'settled') {
           settled = { reason: event.reason, verified: event.verified, checked: event.checked };
+          if (event.model) this.#lastAnswered = event.model;
         }
         if (event.type === 'toolEnd' && event.ok) didSomething = true;
         let seq: number | undefined;
