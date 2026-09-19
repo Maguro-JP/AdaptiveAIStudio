@@ -450,6 +450,8 @@ export const PANELS = {
           body: JSON.stringify({
             text: isPlan ? text.slice('/plan'.length).trim() : text,
             attachments: ids,
+            // いま開いている所（名前・行・選んでいる字）。開いていなければ付かない。
+            ...(ctx.editorNow?.() ? { editor: ctx.editorNow() } : {}),
           }),
         });
       } catch (e) {
@@ -2125,6 +2127,29 @@ export const PANELS = {
     ctx.acceptGhost = acceptGhost;
 
     ctx.openFile = (p, line) => { void open(p, line); };
+    /*
+     * **いま開いている所を、AI に渡せるようにする。**
+     *
+     * ここまで、AI は開いているファイルも選んでいる所も知らなかった。
+     * 「この関数を直して」と打っても、どこの話か分からない（人は画面を見ながら
+     * 打つので、指せていると思っている）。
+     *
+     * 渡すのは、名前・カーソルの行・選んでいる字だけ。**中身は丸ごと渡さない**
+     * （毎回コンテキストウィンドウを食う。読みたければ AI が `read_file` を呼ぶ）。
+     * 上限は送る側（`src/ui/server.ts`）で決める。
+     */
+    ctx.editorNow = () => {
+      if (!path) return null;
+      const before = area.value.slice(0, area.selectionStart);
+      const line = before.split('\n').length;
+      const picked = area.value.slice(area.selectionStart, area.selectionEnd);
+      return {
+        path,
+        line,
+        ...(picked ? { selection: picked, selectionFrom: line, selectionTo: before.split('\n').length + picked.split('\n').length - 1 } : {}),
+        ...(dirty() ? { dirty: true } : {}),
+      };
+    };
     // モデルが書き換えたら、開いているものは読み直す（直している最中は上書きしない）。
     ctx.on('session', ({ event: v }) => {
       if (v.type === 'diff' && v.path === path && !dirty()) void open(path);

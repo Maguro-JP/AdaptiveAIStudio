@@ -53,6 +53,7 @@ import { pullModel } from '../runtime/ollama-pull.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout, DEFAULT_LAYOUT_ID } from './layout.ts';
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
 import { collectState } from './state.ts';
+import { editorHere, describeEditorHere, type EditorHere } from './editor-here.ts';
 import { Attachments, MAX_BYTES } from './attachments.ts';
 import type { McpServerSpec } from '../mcp/client.ts';
 import { expandMentions, mentionBudget } from '../agent/mention.ts';
@@ -237,7 +238,7 @@ export class UiServer {
    * 断って書き直させない。利用者は「終わったらこれをやって」と
    * 思って書いているので、預かって順に流すのが素直。
    */
-  readonly #queue: Array<{ text: string; attached: string[]; conversationId: string }> = [];
+  readonly #queue: Array<{ text: string; attached: string[]; conversationId: string; editor?: EditorHere }> = [];
   /**
    * 残してある会話。**窓を閉じても消えないように。**
    * ここまでメモリの中だけだったので、立ち上げ直すと無かったことになっていた。
@@ -597,7 +598,7 @@ export class UiServer {
    * 受け取ったあとの続き。読んでいなければ読み、セッションを組み直し、走らせる。
    * 読んでいる間は #preparing で「手が塞がっている」ことにする（次の送信は積まれる）。
    */
-  async #loadThenDrive(text: string, attached: string[], conversationId: string): Promise<void> {
+  async #loadThenDrive(text: string, attached: string[], conversationId: string, editor?: EditorHere): Promise<void> {
     this.#preparing = true;
     try {
       const notReady = await this.#readyToThink();
@@ -616,8 +617,8 @@ export class UiServer {
       await this.#loadInto(session, conversationId);
       // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
       // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
-      const full = await this.#compose(session, text, attached);
-      this.#bg(this.#drive(session, full), '依頼の実行が落ちました');
+      const full = await this.#compose(session, text, attached, editor);
+      this.#bg(this.#drive(session, full, undefined, { said: text }), '依頼の実行が落ちました');
     } finally {
       this.#preparing = false;
     }
@@ -963,11 +964,13 @@ export class UiServer {
     }
 
     if (path === '/api/send' && req.method === 'POST') {
-      const body = await readBody(req) as { text?: string; attachments?: unknown };
+      const body = await readBody(req) as { text?: string; attachments?: unknown; editor?: unknown };
       const typed = typeof body?.text === 'string' ? body.text.trim() : '';
       const attached = Array.isArray(body?.attachments)
         ? body.attachments.filter((a): a is string => typeof a === 'string')
         : [];
+      // いま開いている所（画面のエディタ）。無ければ付かない。
+      const editor = editorHere(body?.editor);
       if (!typed && attached.length === 0) return send(res, 400, { error: '指示が空です' });
 
       // 打ち込みのコマンド（/fix …）と作業場の skill。指示に置き換えてから送る。
@@ -1018,7 +1021,7 @@ export class UiServer {
       // 別の会話への依頼も積める（手が一つでも、口は会話ごと）。
       const live = this.#session;
       if (live && this.#busyNow(live)) {
-        this.#queue.push({ text, attached, conversationId });
+        this.#queue.push({ text, attached, conversationId, ...(editor ? { editor } : {}) });
         this.broadcast({ type: 'queue', waiting: this.#queue.length });
         return send(res, 202, { queued: this.#queue.length, conversationId });
       }
@@ -1026,7 +1029,7 @@ export class UiServer {
       if (mustLoad) {
         // 受け取ったことだけ先に返し、読み込みと答えは出来事として流す。
         send(res, 202, { accepted: true, conversationId, loading: true });
-        this.#bg(this.#loadThenDrive(text, attached, conversationId), '依頼の実行が落ちました');
+        this.#bg(this.#loadThenDrive(text, attached, conversationId, editor), '依頼の実行が落ちました');
         return;
       }
 
@@ -1037,10 +1040,11 @@ export class UiServer {
         await this.#loadInto(session, conversationId);
         // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
         // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
-        const full = await this.#compose(session, text, attached);
+        const full = await this.#compose(session, text, attached, editor);
         // 受け取ったことだけ先に返し、続きは出来事として流す。
         send(res, 202, { accepted: true, conversationId, loading: false });
-        this.#bg(this.#drive(session, full), '依頼の実行が落ちました');
+        // 判じるのは、利用者が打った分だけ（差し込んだ中身は利用者の言葉ではない）。
+        this.#bg(this.#drive(session, full, undefined, { said: text }), '依頼の実行が落ちました');
       } finally {
         this.#preparing = false;
       }
@@ -2582,7 +2586,7 @@ export class UiServer {
 
   async #drive(
     session: Session, text: string, resuming?: string,
-    opts: { fromUser?: boolean } = {},
+    opts: { fromUser?: boolean; said?: string } = {},
   ): Promise<void> {
     // **依頼をまたいで持ち越さない。**「この依頼のあいだは訊かない」は、
     // その依頼のあいだだけ。次の依頼では、また訊く。
@@ -2969,19 +2973,22 @@ export class UiServer {
    * 窓から決める形に直したとき、送り口だけ直して順番待ちの方が
    * 取り残されていた。
    */
-  async #compose(session: Session, text: string, attached: string[]): Promise<string> {
+  async #compose(session: Session, text: string, attached: string[], editor?: EditorHere): Promise<string> {
     const room = mentionBudget(session.contextTokens);
     const extra = attached.length > 0
       ? await this.#attachments.describe(attached, { chars: room }).catch(() => '')
       : '';
+    // 開いている所は、依頼と同じ枠から取る（添付の後、指名の前）。
+    const here = describeEditorHere(editor, Math.min(2000, Math.floor(room.total / 4)));
     const named = await expandMentions(text, this.#workRoot(), {
       contextTokens: session.contextTokens,
-      totalBytes: Math.max(400, room.total - extra.length),
+      totalBytes: Math.max(400, room.total - extra.length - here.length),
     }).catch(() => ({ text, reads: [] }));
     for (const r of named.reads) {
       if (!r.ok) this.broadcast({ type: 'log', level: 'warn', text: `指名を読めません ${r.path}: ${r.body}` });
     }
-    return extra ? `${extra}\n\n${named.text}` : named.text;
+    // **依頼を末尾に置く。**前に長い中身を積むので、指示が埋もれないようにする。
+    return [extra, here, named.text].filter((x) => x).join('\n\n');
   }
 
   /**
@@ -2995,9 +3002,9 @@ export class UiServer {
     this.broadcast({ type: 'queue', waiting: this.#queue.length });
     if (!next) return;
     await this.#loadInto(session, next.conversationId);
-    const full = await this.#compose(session, next.text, next.attached);
+    const full = await this.#compose(session, next.text, next.attached, next.editor);
     this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
-    this.#bg(this.#drive(session, full), '順番待ちの実行が落ちました');
+    this.#bg(this.#drive(session, full, undefined, { said: next.text }), '順番待ちの実行が落ちました');
   }
 
   async #drivePlan(session: Session, text: string): Promise<void> {

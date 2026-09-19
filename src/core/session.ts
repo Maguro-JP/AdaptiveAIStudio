@@ -1090,6 +1090,14 @@ export class Session {
        * それを指摘として覚えると、**利用者が言っていないことを覚える**。
        */
       fromUser?: boolean;
+      /**
+       * 利用者が**打った分だけ**。
+       *
+       * 依頼には、こちらが差し込んだものが前に付くことがある（添付の中身、
+       * いま開いている所）。それを「利用者の言葉」として判じると、**選んだ
+       * コードを指摘として覚える**。判じるのは、打った分だけにする。
+       */
+      said?: string;
     } = {},
   ): AsyncGenerator<SessionEvent> {
     if (this.noModel) {
@@ -1442,7 +1450,7 @@ export class Session {
       // 待たない代わりに、**拾い手を置く。**置かないと、判じるところで
       // 一度失敗しただけでプロセスごと落ちる。
       if (opts.fromUser !== false) {
-        void this.#judge(instruction, situation.when, situation.did)
+        void this.#judge(opts.said ?? instruction, situation.when, situation.did)
           .catch((e: unknown) => {
             this.#opts.onLog?.('warn', `判じられませんでした: ${e instanceof Error ? e.message : String(e)}`);
           });
