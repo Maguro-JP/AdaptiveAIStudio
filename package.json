@@ -29,7 +29,8 @@
     "real-model": "node scripts/real-model.mjs",
     "bench": "node --experimental-strip-types --no-warnings scripts/bench.mjs",
     "bench-edit": "node --experimental-strip-types --no-warnings scripts/bench-edit.mjs",
-    "handoff": "node scripts/handoff.mjs"
+    "handoff": "node scripts/handoff.mjs",
+    "shot": "node scripts/shot.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

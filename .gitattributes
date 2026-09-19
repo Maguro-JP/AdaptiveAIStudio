@@ -19,6 +19,14 @@
 *.bat text eol=crlf working-tree-encoding=CP932
 *.sh  text eol=lf
 
+# 画像は文字ではない。`text=auto` は中身を見て判じるので普通は触られないが、
+# 行末を直された画像は**開けなくなる**（直っていないことに気づけるのは、
+# README を開いた人）。判じさせずに、binary と書いておく。
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+
 # 配布用の書庫（GitHub の「Download ZIP」を含む）に、実際の版を焼き込む。
 # これが無いと、落とした人が「どの版か分からない」まま使うことになり、
 # 直したはずのものが直っていないように見える。
