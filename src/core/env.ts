@@ -1,7 +1,7 @@
 /**
- * 合言葉を、置き場の `.env` から読む。
+ * トークンを、置き場の `.env` から読む。
  *
- * 設定ファイルには合言葉の**名前**しか書かない（値は書かない）と決めた。
+ * 設定ファイルにはトークンの**名前**しか書かない（値は書かない）と決めた。
  * では値はどこに置くのか。環境変数を自分で立てられる人ばかりではないし、
  * 会社の PC では立てられない。**データの置き場（`data\\.env`）に一行ずつ置く**。
  * `.env` は保護の既定に入っているので、モデルは書けないし、見る窓にも出ない。
@@ -38,6 +38,51 @@ export function parseEnvFile(text: string): Record<string, string> {
 }
 
 /**
+ * `.env` から入れた名前。**値は持たない。**
+ *
+ * ここに入っているものは「この機械の持ち主が、トークンとして置いた値」なので、
+ * 子のプロセス（外部ツール・`run_command`）へは渡さない。渡す先を決めるのに
+ * 名前が要るので、入れた時点で覚えておく。
+ */
+const fromEnvFile = new Set<string>();
+
+/** `.env` から入れた名前（値は返さない）。 */
+export function secretNames(): string[] {
+  return [...fromEnvFile];
+}
+
+/**
+ * 名前だけで見た「トークンらしさ」。`.env` を通っていないものも拾う。
+ *
+ * `.env` に置かず、自分で `export` している人も居る。名前で見ておけば、
+ * そこも渡さずに済む（外れることはあるが、外れて困るのは**渡らない**側で、
+ * 渡ってしまう側ではない）。
+ */
+const LOOKS_SECRET = /(^|_)(TOKEN|KEY|SECRET|PASSWORD|PASSWD|PAT|CREDENTIALS?|COOKIE|SESSION)S?(_|$)/i;
+
+/**
+ * 子のプロセスへ渡す環境変数。**トークンは入れない。**
+ *
+ * `spawn` に `env` を渡さないと、親の環境変数がそのまま全部子へ行く。
+ * 外部ツール（MCP）の子も、`run_command` で走らせるものも同じで、
+ * **`echo` 一つでトークンが読めた**（出力はモデルの履歴と会話の記録に入る。
+ * 遠くのモデルを候補に入れていれば、そこへも出て行く）。
+ *
+ * 渡す先で本当に要るものは、外部ツールなら `envFrom` で名前を書く。
+ * `run_command` で要るなら、その場の命令に書く（`KEY=... npm test` のように）。
+ */
+export function envForChild(base: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(base)) {
+    if (value === undefined) continue;
+    if (fromEnvFile.has(key)) continue;
+    if (LOOKS_SECRET.test(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+/**
  * 読んで環境変数へ入れる。**既にあるものは上書きしない。**
  * 入れた名前を返す（値は返さない。記録にも出さない）。
  */
@@ -49,18 +94,20 @@ export function loadEnvFile(path: string, env: NodeJS.ProcessEnv = process.env):
     if (env[key] !== undefined) continue;
     env[key] = value;
     loaded.push(key);
+    // 入れた名前を覚える（子へ渡さないため）。値は覚えない。
+    if (env === process.env) fromEnvFile.add(key);
   }
   return loaded;
 }
 
 /**
- * 合言葉を1つ書き足す（同じ名前があれば差し替える）。
+ * トークンを1つ書き足す（同じ名前があれば差し替える）。
  *
- * **他の行を残す。**丸ごと書き直すと、手で書いた別の合言葉や注釈が消える。
+ * **他の行を残す。**丸ごと書き直すと、手で書いた別のトークンや注釈が消える。
  * 値は返さないし、記録にも出さない（呼ぶ側で出させないため、名前だけ返す）。
  *
  * **本人しか読めない権限で置く。**ここに入るのは GITHUB_TOKEN のような
- * 合言葉そのもの。既定のまま書くと 644（同じ機械の他の利用者が読める）に
+ * トークンそのもの。既定のまま書くと 644（同じ機械の他の利用者が読める）に
  * なっていた。鍵をどこに置くかで守れる範囲が決まる、という話の入口で、
  * いちばん安いのがここ。
  *
@@ -70,9 +117,9 @@ export function loadEnvFile(path: string, env: NodeJS.ProcessEnv = process.env):
  * @returns 書いた名前
  */
 export async function writeEnvValue(path: string, key: string, value: string): Promise<string> {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`合言葉の名前として使えません: ${key}`);
-  // 改行を混ぜられると、一行で別の合言葉を足せてしまう。
-  if (/[\r\n]/.test(value)) throw new Error('合言葉に改行は入れられません');
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`トークンの名前として使えません: ${key}`);
+  // 改行を混ぜられると、一行で別のトークンを足せてしまう。
+  if (/[\r\n]/.test(value)) throw new Error('トークンに改行は入れられません');
 
   const { readFile, writeFile, mkdir, chmod } = await import('node:fs/promises');
   const { dirname } = await import('node:path');

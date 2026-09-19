@@ -1,14 +1,14 @@
 /**
- * 外の道具を、この場所の道具として配る。
+ * 外部ツールを、この場所のツールとして配る。
  *
  * 繋ぐこと自体は難しくない。難しいのは**繋いだ先をどう扱うか**で、
  * ここを雑にすると、外から来た文字がそのまま手元の判断材料になる。
  *
  *   ・返ってきた中身は「外から入ってきたもの」。検問所を通す
  *   ・止めたら、中身は渡さない
- *   ・道具は権限として配る（役職が mcp を持っていなければ渡らない）
+ *   ・ツールは権限として配る（役職が mcp を持っていなければ渡らない）
  *
- * 名前は `<サーバ名>__<道具名>` にする。相手が同じ名前の道具を
+ * 名前は `<サーバ名>__<道具名>` にする。相手が同じ名前のツールを
  * 持っていても、ぶつからないようにするため。
  */
 import { type Tool, ok, fail } from '../agent/tools/types.ts';
@@ -24,7 +24,7 @@ export function toolName(server: string, tool: string): string {
 }
 
 /**
- * 一つの MCP 道具を、この場所の道具にする。
+ * 一つの MCP ツールを、この場所のツールにする。
  *
  * 呼び出しの引数は、相手が出してきた schema をそのまま渡す。
  * こちらで作り直すと、相手が受け付ける形からずれる。
@@ -43,7 +43,7 @@ export function wrapTool(
       parameters: spec.inputSchema ?? { type: 'object', properties: {}, additionalProperties: true },
     },
     async run(args, ctx) {
-      // 外の道具を動かすのは、外へ出るのと同じ重さで扱う。
+      // 外部ツールを動かすのは、外へ出るのと同じ重さで扱う。
       // 相手が何をするかはこちらからは分からないので、黙って呼ばない。
       const approved = await ctx.approve({
         kind: 'command',
@@ -52,9 +52,15 @@ export function wrapTool(
       if (!approved) return fail(`${client.name}/${spec.name} は許可されませんでした。`);
 
       const r = await client.call(spec.name, args, opts.timeoutMs);
-      if (r.isError) return fail(r.text || `${client.name}/${spec.name} が失敗しました。`);
 
-      // 返ってきたものは、外から入ってきたもの。検問所を通す。
+      /*
+       * 返ってきたものは、外から入ってきたもの。検問所を通す。
+       *
+       * **失敗の文も通す。**ここは `isError` を先に見て、相手の文をそのまま
+       * 返していた。相手は `isError` を立てるだけでよく、**中身は検問所を通らずに
+       * モデルの履歴へ入る**（`src/agent/loop.ts` がツールの返しを履歴へ積む）。
+       * 同じ文字列が、成功として返ってきたときは止まる——という食い違いだった。
+       */
       let verdict = inspectInbound(r.text);
       if (verdict.passed && opts.inspector) {
         verdict = combine(
@@ -68,6 +74,8 @@ export function wrapTool(
         // 渡した時点で読まれている。
         return fail(`${client.name}/${spec.name}\n${describeVerdict(verdict, 'inbound')}`);
       }
+      // 検問所を通ってから、失敗として返す。
+      if (r.isError) return fail(r.text || `${client.name}/${spec.name} が失敗しました。`);
       const notes = verdict.findings.length > 0
         ? `${describeVerdict(verdict, 'inbound')}\n\n`
         : '';
@@ -76,7 +84,7 @@ export function wrapTool(
   };
 }
 
-/** 立ち上がっているサーバの道具を、まとめて配れる形にする。 */
+/** 立ち上がっているサーバのツールを、まとめて配れる形にする。 */
 export function collectTools(
   clients: readonly McpClient[],
   opts: { inspector?: Inspector; timeoutMs?: number } = {},
@@ -92,17 +100,21 @@ export function collectTools(
 /**
  * いまの繋がり具合を、人に見せる形にする。
  *
- * **繋がらなかったものを黙らせない。**道具が出てこない理由が
+ * **繋がらなかったものを黙らせない。**ツールが出てこない理由が
  * 「設定していない」のか「立ち上がらなかった」のかは、まるで違う。
  */
 export function describeServers(clients: readonly McpClient[]): string {
   if (clients.length === 0) {
-    return '外の道具は繋いでいません（設定の mcp.servers に足せます）。';
+    return '外部ツールは繋いでいません（設定の mcp.servers に足せます）。';
   }
   const lines: string[] = [];
   for (const c of clients) {
     if (c.running) {
-      lines.push(`  ✓ ${c.name}  道具 ${c.tools.length} 件`);
+      // 見出しの名前が見つからなかったなら、繋がっていても言う（相手は 401 を返す）。
+      const missing = c.missingHeaders.length > 0
+        ? `  ⚠ 見出しの名前が環境にありません: ${c.missingHeaders.join(', ')}`
+        : '';
+      lines.push(`  ✓ ${c.name}  道具 ${c.tools.length} 件${missing}`);
     } else {
       lines.push(`  ✗ ${c.name}  ${c.failure ?? '立ち上がっていません'}`);
     }

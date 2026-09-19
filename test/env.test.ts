@@ -1,5 +1,5 @@
 /**
- * 合言葉を data/.env から読むところ。
+ * トークンを data/.env から読むところ。
  *
  * 値は絶対に記録に出さない。読めた名前だけを返す。
  * 既にある環境変数は上書きしない（外から渡されたものが勝つ）。
@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
-import { parseEnvFile, loadEnvFile } from '../src/core/env.ts';
+import { parseEnvFile, loadEnvFile, envForChild, secretNames } from '../src/core/env.ts';
 
 describe('一行ずつ読む', () => {
   test('KEY=VALUE、注釈、引用符、空行', () => {
@@ -39,5 +39,48 @@ describe('環境変数へ入れる', () => {
     const env: NodeJS.ProcessEnv = {};
     assert.deepEqual(loadEnvFile(join(dir, '.env'), env), []);
     assert.deepEqual(env, {});
+  });
+});
+
+/**
+ * **トークンを、子のプロセスへ渡さない。**
+ *
+ * `spawn` に `env` を渡していなかったので、親の環境変数がそのまま全部子へ
+ * 行っていた。外部ツール（MCP）の子も、`run_command` で走らせるものも同じで、
+ * **`echo` 一つでトークンが読める**（出力はモデルの履歴と会話の記録に入る）。
+ */
+describe('子のプロセスへ渡す環境', () => {
+  test('**名前がトークンらしいものは渡さない**', () => {
+    const got = envForChild({
+      PATH: '/usr/bin', HOME: '/home/x',
+      GITHUB_TOKEN: 'ghp_abc', ANTHROPIC_API_KEY: 'sk-abc',
+      MY_SECRET: 'x', DB_PASSWORD: 'p', SESSION_ID: 's', NPM_TOKENS: 'n',
+    });
+    assert.deepEqual(got, { PATH: '/usr/bin', HOME: '/home/x' });
+  });
+
+  test('トークンらしくない名前は、そのまま渡す（対）', () => {
+    const got = envForChild({ PATH: '/usr/bin', CI: '1', NODE_ENV: 'test', KEYBOARD_LAYOUT: 'jp' });
+    assert.deepEqual(got, { PATH: '/usr/bin', CI: '1', NODE_ENV: 'test', KEYBOARD_LAYOUT: 'jp' });
+  });
+
+  test('**`.env` から入れた名前は、トークンらしくなくても渡さない**', async () => {
+    const dir = await tempDir('aas-env-child-');
+    await writeFile(join(dir, '.env'), 'PLAIN_NAME=v\n');
+    // 本物の process.env へ入れる（覚えるのはそのときだけ）。
+    delete process.env.PLAIN_NAME;
+    const names = loadEnvFile(join(dir, '.env'));
+    try {
+      assert.deepEqual(names, ['PLAIN_NAME']);
+      assert.ok(secretNames().includes('PLAIN_NAME'), '入れた名前を覚えていない');
+      const got = envForChild({ PATH: '/usr/bin', PLAIN_NAME: 'v' });
+      assert.deepEqual(got, { PATH: '/usr/bin' });
+    } finally {
+      delete process.env.PLAIN_NAME;
+    }
+  });
+
+  test('値が無いもの（undefined）は渡さない', () => {
+    assert.deepEqual(envForChild({ PATH: '/usr/bin', GONE: undefined }), { PATH: '/usr/bin' });
   });
 });

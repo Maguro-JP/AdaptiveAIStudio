@@ -334,7 +334,7 @@ async function serialized<T>(key: string, run: () => Promise<T>): Promise<T> {
 /**
  * 中身を書き込むところ。**書き換えるツールは、必ずここを通す。**
  *
- * 承認・差分・改行の合わせ方が、道具ごとに散ると必ずずれる。
+ * 承認・差分・改行の合わせ方が、ツールごとに散ると必ずずれる。
  * 片方だけ承認を通さない、片方だけ CRLF を潰す、という形になる。
  */
 async function commit(

@@ -8,7 +8,7 @@ import { writeFile, rm, readFile } from 'node:fs/promises';
 import { tempDir, cleanup } from './tmp.ts';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { execCommand, spawnPlan, killPlan, decodeOutput } from '../src/agent/shell-exec.ts';
+import { execCommand, spawnPlan, spawnCall, killPlan, decodeOutput } from '../src/agent/shell-exec.ts';
 
 /**
  * 打ち切られた後も生きていれば、印を書き足してしまう子。
@@ -78,7 +78,7 @@ describe('execCommand', () => {
 });
 
 /**
- * Windows 側の分岐の検査。
+ * Windows 側の分岐を見る。
  *
  * 手元も CI も Linux だと、win32 の分岐は一度も実行されないまま配られる。
  * 実際に「Linux では通るが Windows では落ちる」を踏んだので、
@@ -145,5 +145,73 @@ describe('cmd の出力が CP932 でも化けない', () => {
     // 「あいう」の先頭1バイトを落とした形。頭だけ捨てて残りを読む。
     const raw = Buffer.from('あいう', 'utf8').subarray(1);
     assert.equal(decodeOutput(raw), 'いう');
+  });
+});
+
+/**
+ * **トークンを、走らせたものから読めないようにする。**
+ *
+ * `spawn` に `env` を渡していなかったので、親の環境変数がそのまま全部子へ
+ * 行っていた。許可している命令に `echo` と `cat` が在るので、
+ * **`echo $GITHUB_TOKEN` 一つでトークンが読める。**出力はモデルの履歴と会話の
+ * 記録に入るので、遠くのモデルを候補に入れていれば、そこへも出て行く。
+ *
+ * 走らせ方は `node -e`（どの OS でも同じに書ける）。`echo` は殻ごとに書き方が
+ * 違うので、**走らせる場所で結果が変わる試験**になってしまう。
+ */
+describe('トークンを子へ渡さない', () => {
+  test('**名前がトークンらしい環境変数は、走らせたものから読めない**', async () => {
+    const root = await tempDir('aas-exec-secret-');
+    process.env.AAS_TEST_TOKEN = 'ghp_should_not_leak';
+    try {
+      const r = await execCommand(
+        `node -e "console.log(process.env.AAS_TEST_TOKEN ?? 'none')"`,
+        root, 30_000, new AbortController().signal,
+      );
+      assert.equal(r.output.trim(), 'none', `走らせたものからトークンが読める: ${r.output}`);
+      assert.equal(r.output.includes('ghp_should_not_leak'), false, 'トークンが出力に出ている');
+    } finally {
+      delete process.env.AAS_TEST_TOKEN;
+      await cleanup(root);
+    }
+  });
+
+  test('トークンらしくない環境変数は、これまでどおり渡す（対）', async () => {
+    const root = await tempDir('aas-exec-plain-');
+    process.env.AAS_TEST_PLAIN = 'ok';
+    try {
+      const r = await execCommand(
+        `node -e "console.log(process.env.AAS_TEST_PLAIN ?? 'none')"`,
+        root, 30_000, new AbortController().signal,
+      );
+      assert.equal(r.output.trim(), 'ok', `渡すべきものが渡っていない: ${r.output}`);
+    } finally {
+      delete process.env.AAS_TEST_PLAIN;
+      await cleanup(root);
+    }
+  });
+});
+
+/**
+ * **どちらの道でも、渡す環境を絞る。**
+ *
+ * 殻を使う道（Windows）と使わない道（それ以外）で `spawn` の呼び方が違うので、
+ * 片方にだけ `env` を渡しても、走らせている機械の道しか通らず気づけない
+ * （linux では Windows の道を一度も通らない）。両方まとめて見る。
+ */
+describe('spawn へ渡すもの', () => {
+  const env = { PATH: '/usr/bin' };
+
+  test('**殻を使う道（Windows）でも env を渡す**', () => {
+    const call = spawnCall(spawnPlan('npm test', 'win32'), 'C:/work', env);
+    assert.equal(call.args, undefined, '殻を使う道で args を渡している');
+    assert.deepEqual(call.options.env, env, '殻を使う道で env を渡していない');
+    assert.equal(call.options.shell, true);
+  });
+
+  test('**殻を使わない道でも env を渡す**', () => {
+    const call = spawnCall(spawnPlan('npm test', 'linux'), '/work', env);
+    assert.deepEqual(call.args, ['-c', 'npm test']);
+    assert.deepEqual(call.options.env, env, '殻を使わない道で env を渡していない');
   });
 });
