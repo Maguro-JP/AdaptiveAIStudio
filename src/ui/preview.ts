@@ -236,9 +236,19 @@ export class PreviewServer {
     const url = new URL(req.url ?? '/', 'http://localhost');
 
     if (url.pathname === '/__reload') {
+      /*
+       * **画面のプレビューは、出所が `null` で来る。**
+       *
+       * 埋め込みは sandbox 付き（`allow-same-origin` は付けない）ので、中の
+       * ページの出所は `null` になる。差し込んだ読み直しはここへ繋ぎに来るが、
+       * CORS で弾かれて**一度も繋がらないまま、毎秒やり直していた**（画面の
+       * コンソールがそのエラーで埋まる）。読み直しの合図だけを配る口なので、
+       * ここに限って誰からでも受ける（ファイルを配る側には付けない）。
+       */
       res.writeHead(200, {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
+        'access-control-allow-origin': '*',
         connection: 'keep-alive',
       });
       res.write(': つながりました\n\n');

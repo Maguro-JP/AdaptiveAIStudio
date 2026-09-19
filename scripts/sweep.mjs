@@ -1251,6 +1251,90 @@ await check('保存していない直しは、読み直しても残る', async (
   }
 });
 
+/*
+ * **どのパネルを出しても、中身が入れ物の外へ出ない。**
+ *
+ * 狭いときだけ崩れる所は、既定の配置では見えない。全部出して、狭くして測る。
+ * 実際にここで二つ見つけた（ロールの行が 64px 外／会話の送るボタンが 31px 外）。
+ * 出したものは、出す前の状態へ戻す（利用者の配置を残さない）。
+ */
+await check('どのパネルを出しても、中身が外へ出ない', async () => {
+  const before = await p.viewportSize();
+  /*
+   * **出す前の配置を控えてから出す。**
+   *
+   * 全部出して閉じ直す形にしたら、**閉じ方が元に戻らず**会話のパネルごと
+   * 消えた（次に回したとき「会話のパネルが見つからない」で八件落ちた）。
+   * 配置は本体に残るので、利用者の配置を壊すということでもある。控えを戻す。
+   */
+  const saved = await p.evaluate(() => fetch('/api/layout').then((r) => r.json()).then((j) => j.layout));
+  const toggle = async (name) => {
+    await p.locator('#openView').click();
+    await p.waitForTimeout(400);
+    const row = p.locator('#viewList .view-row').filter({ hasText: name }).first();
+    if (await row.count() === 0) { await p.keyboard.press('Escape'); return; }
+    const tick = row.locator('input');
+    if (!(await tick.isChecked())) await tick.click();
+    await p.waitForTimeout(500);
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(250);
+  };
+  try {
+    await p.locator('#openView').click();
+    await p.waitForTimeout(500);
+    const names = await p.locator('#viewList .view-row').evaluateAll(
+      (rows) => rows.map((r) => r.innerText.trim().split('\n')[0]));
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(300);
+    for (const name of names) await toggle(name);
+    await p.setViewportSize({ width: 420, height: 800 });
+    /*
+     * **横の一覧を出したままにする。**畳んだままだとパネルが広く取れてしまい、
+     * 狭いときだけ崩れる所が出てこない（畳んだ状態で回したら、崩れているのに
+     * 何も見つからなかった）。出ている状態が、いちばん狭い。
+     */
+    if (await p.locator('#sideOpen').isVisible().catch(() => false)) {
+      await p.locator('#sideOpen').click();
+      await p.waitForTimeout(400);
+    }
+    await p.waitForTimeout(900);
+    /*
+     * **一つずつ前に出してから測る。**タブの裏にあるものは描かれていないので、
+     * まとめて測ると幅 0 で飛ばしてしまう。崩れているのに何も見つからなかった
+     * （ロールの一覧がタブの裏に居た）。
+     */
+    const out = [];
+    for (const name of names) {
+      const tab = p.locator('#root .panel.tabs header button').filter({ hasText: name });
+      if (await tab.count() > 0) { await tab.first().click().catch(() => undefined); await p.waitForTimeout(350); }
+      const found = await p.evaluate((want) => {
+        const panel = [...document.querySelectorAll('#root .panel')]
+          .find((el) => (el.querySelector('header')?.innerText ?? '').includes(want));
+        if (!panel) return [];
+        const box = panel.getBoundingClientRect();
+        if (box.width === 0) return [];
+        const bad = [];
+        for (const el of panel.querySelectorAll('*')) {
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          const over = Math.round(Math.max(r.right - box.right, box.left - r.left));
+          if (over > 1) bad.push(`${want}: ${(el.textContent || el.className || el.tagName).trim().slice(0, 14)}（${over}px 外）`);
+        }
+        return [...new Set(bad)].slice(0, 3);
+      }, name);
+      out.push(...found);
+    }
+    if (out.length > 0) throw new Error(out.slice(0, 8).join(' / '));
+  } finally {
+    await p.setViewportSize(before ?? { width: 1440, height: 900 });
+    await p.evaluate((l) => fetch('/api/layout', {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(l),
+    }), saved).catch(() => undefined);
+    await p.reload({ waitUntil: 'networkidle' }).catch(() => undefined);
+    await p.waitForTimeout(900);
+  }
+});
+
 if (shot) await p.screenshot({ path: shot, fullPage: false });
 await b.close();
 console.log(bad.length === 0 ? '見つかった不具合: なし' : `見つかった不具合 ${bad.length} 件:\n- ${bad.join('\n- ')}`);

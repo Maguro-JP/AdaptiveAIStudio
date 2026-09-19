@@ -940,8 +940,10 @@ export const PANELS = {
       const live = s.roles.filter((r) => !r.retired);
       body.append(rows(live, (r) => {
         const row = el('div', 'row');
-        row.append(el('span', 'key mono', r.codename), el('span', '', r.name),
-          el('span', 'dim', r.access.join('/')));
+        const access = el('span', 'dim', r.access.join('/'));
+        // 狭いと末尾が切れる。**何を許してあるかは、切れて困る。**指せば全部出す。
+        access.title = r.access.join('/');
+        row.append(el('span', 'key mono', r.codename), el('span', '', r.name), access);
         row.title = r.disposition;
         return row;
       }));

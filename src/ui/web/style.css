@@ -383,12 +383,15 @@ button.ghost:hover { color: var(--text); background: var(--surface2); }
  * 列は必ず揃える。行ごとに幅が動くと、読むたびに目が探し直すことになる。
  * 行の中の列を、一覧全体で共有する（subgrid）。
  */
+/* 行の列。**両端も縮められるようにする。**`max-content` のままだと、パネルが
+   狭いときに縮む先が無く、行ごと入れ物の外へ出ていた（ロールの一覧で 64px。実測）。
+   縮んだ分は末尾が切れる（`.row > *` の ellipsis）ので、切れて困る所には title を付ける。 */
 .rows {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) minmax(0, max-content);
   column-gap: var(--s3);
 }
-.rows[data-cols="2"] { grid-template-columns: max-content minmax(0, 1fr); }
+.rows[data-cols="2"] { grid-template-columns: minmax(0, max-content) minmax(0, 1fr); }
 .row {
   display: grid;
   grid-template-columns: subgrid;
@@ -662,6 +665,18 @@ button.tiny { font-size: .74rem; padding: 2px 7px; }
  */
 @container (max-width: 320px) {
   .field .icon.opt { display: none; }
+}
+/*
+ * **それでも入らないときは、二段にする。**
+ *
+ * 引っ込めるものを引っ込めても、打つ欄の下限（3rem）＋ 添える ＋ 送る で
+ * 入らない幅がある。パネルを四つ縦に並べると実際にそうなり、**送るボタンが
+ * 31px 外へ出て切り取られていた**（実測）。折り返さない方が読みやすいが、
+ * 押せなくなるくらいなら二段にする。
+ */
+@container (max-width: 240px) {
+  .field { flex-wrap: wrap; }
+  .field textarea { flex: 1 1 100%; }
 }
 .field textarea {
   /* 折り返しても潰れないよう、下限を決める。**狭いときは欄から削る**
