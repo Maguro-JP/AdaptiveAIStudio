@@ -1131,8 +1131,19 @@ export class UiServer {
         findInstalled(),
       ]);
       const dir = this.#opts.config.runtime?.modelsDir ?? modelsDir();
+      /*
+       * **保存先の .gguf は、動かし方に関わらず数える。**
+       *
+       * Ollama のときは `runtime.list()` が Ollama のモデルを返すので、
+       * 保存先に .gguf を入れても画面には一つも出ず、「まだありません」とだけ出る。
+       * 落として置いた人には、**何が起きているのか分からない**（社用PC は
+       * ブラウザでしか落とせないので、置く道がいちばん使われる）。
+       * 数だけ返して、画面で「在るが、いまの動かし方では使わない」と言えるようにする。
+       */
+      const localGguf = usesGguf(runtime.id) ? 0 : (await listGguf(dir).catch(() => [])).length;
       return send(res, 200, {
         runtime: runtime.id,
+        localGguf,
         // GGUF を置く道では、絶対の道も返す。画面で開く・コピーするため（Ollama にはファイルが無い）。
         installed: installed.map((m) => ({ ref: m.ref, sizeBytes: m.sizeBytes, ...(usesGguf(runtime.id) ? { path: join(dir, m.ref) } : {}) })),
         llamaServer: llama ?? null,

@@ -1155,9 +1155,18 @@ export const PANELS = {
        * 拾い直す手が無いと、立ち上げ直すまで出てこない。
        * 案内の文（「読み直す」）が指しているのは、この押し場所。
        */
-      const again = el('button', 'ghost', '⟳ 置いたものを読み直す');
+      /*
+       * **何を読み直すのかは、動かし方で違う。**Ollama のときに
+       * 「置いたものを読み直す」と出していたので、押しても何も変わらない
+       * （Ollama は保存先の .gguf を使わない）。押せるのに効かない口は、
+       * 壊れていると読まれる。
+       */
+      const ollama = data.runtime === 'ollama';
+      const again = el('button', 'ghost', ollama ? '⟳ 一覧を取り直す' : '⟳ 置いたものを読み直す');
       again.type = 'button';
-      again.title = '保存先に自分で入れた .gguf を拾い直します';
+      again.title = ollama
+        ? 'Ollama に入っているモデルを一覧し直します'
+        : '保存先に自分で入れた .gguf を拾い直します';
       again.onclick = async () => {
         again.disabled = true;
         again.textContent = '読み直しています…';
@@ -1166,9 +1175,22 @@ export const PANELS = {
       status.append(again);
 
       // 手元にあるもの
-      list.replaceChildren(el('div', 'dim', '手元のモデル'));
+      list.replaceChildren(el('div', 'dim', ollama ? 'Ollama に入っているモデル' : '手元のモデル'));
       if (!data.installed || data.installed.length === 0) {
-        list.append(empty('まだありません。下から取ってこられます。'));
+        /*
+         * **在るものを「ありません」と言わない。**保存先に .gguf を入れても、
+         * Ollama のときは一つも出ず「まだありません」とだけ出ていた。落として
+         * 置いた人には、何が起きているのか分からない（社用PCはブラウザでしか
+         * 落とせないので、置く道がいちばん使われる）。
+         */
+        const why = ollama && data.localGguf > 0;
+        const note = empty(why
+          ? `Ollama には入っていません。\n保存先には .gguf が ${data.localGguf} 件ありますが、`
+            + 'いまの動かし方（Ollama）では使いません。\n設定 → モデル で「中で読む」に切り替えると使えます。'
+          : 'まだありません。下から取ってこられます。');
+        // 何行もある案内は、行の頭をそろえる（中央寄せだと読む所を目で探す）。
+        if (why) note.className = 'empty guide';
+        list.append(note);
       } else {
         for (const m of data.installed) {
           const row = el('div', 'row');

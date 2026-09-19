@@ -50,6 +50,45 @@ async function draw(answers: Record<string, unknown> = {}) {
   return { body, calls };
 }
 
+describe('Ollama のときに、在るものを「ありません」と言わない', () => {
+  /**
+   * **保存先に .gguf を入れても、Ollama のときは一つも出なかった。**
+   *
+   * 画面は「まだありません。下から取ってこられます。」とだけ出す。落として
+   * 置いた人には、何が起きているのか分からない（社用PCはブラウザでしか
+   * 落とせないので、置く道がいちばん使われる）。しかも押し場所は
+   * 「置いたものを読み直す」のままで、押しても何も変わらない。
+   */
+  test('**保存先に .gguf が在るなら、そう言って、切り替え先も言う**', async () => {
+    const { body } = await draw({
+      '/api/models': { ...ANSWER, runtime: 'ollama', installed: [], localGguf: 2 },
+    });
+    const said = body.text;
+    assert.match(said, /Ollama には入っていません/, `何の一覧かを言っていない: ${said.slice(0, 200)}`);
+    assert.match(said, /\.gguf が 2 件/, `保存先に在ることを言っていない: ${said.slice(0, 200)}`);
+    assert.match(said, /中で読む/, `切り替え先を言っていない: ${said.slice(0, 200)}`);
+    assert.doesNotMatch(said, /まだありません。下から取ってこられます。/, '在るのに「ありません」と言っている');
+  });
+
+  test('保存先にも無いなら、これまでどおり（対）', async () => {
+    const { body } = await draw({
+      '/api/models': { ...ANSWER, runtime: 'ollama', installed: [], localGguf: 0 },
+    });
+    assert.match(body.text, /まだありません。下から取ってこられます。/);
+  });
+
+  test('**押し場所の名前は、動かし方に合わせる**', async () => {
+    // Ollama は保存先の .gguf を使わない。「置いたものを読み直す」と出していると、
+    // 押しても何も変わらず、壊れていると読まれる。
+    const ollama = await draw({ '/api/models': { ...ANSWER, runtime: 'ollama', installed: [], localGguf: 0 } });
+    assert.ok(ollama.body.buttons().some((b) => b.textContent === '⟳ 一覧を取り直す'),
+      `Ollama で名前が合っていない: ${ollama.body.buttons().map((b) => b.textContent).join('|')}`);
+    const inproc = await draw({ '/api/models': { ...ANSWER, runtime: 'inproc', installed: [] } });
+    assert.ok(inproc.body.buttons().some((b) => b.textContent === '⟳ 置いたものを読み直す'),
+      `中で読む で名前が合っていない: ${inproc.body.buttons().map((b) => b.textContent).join('|')}`);
+  });
+});
+
 describe('モデルの道は、開ける・コピーできる', () => {
   test('道が返っていれば、名前の隣に「開く」「コピー」が出て、開くは /api/open に道を渡す', async () => {
     const { body, calls } = await draw({

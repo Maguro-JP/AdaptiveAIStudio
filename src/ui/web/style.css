@@ -419,6 +419,8 @@ button.ghost:hover { color: var(--text); background: var(--surface2); }
 .empty {
   color: var(--dim);
   padding: var(--s4);
+  /* 改行を書いたら、改行として出す（案内は複数行になることがある）。 */
+  white-space: pre-line;
   text-align: center;
   font-size: .88rem;
 }
