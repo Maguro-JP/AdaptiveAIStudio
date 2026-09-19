@@ -1239,6 +1239,18 @@ dialog.wide { width: min(46rem, 92vw); }
 /* 探す・置き換える・行へ飛ぶ。Ctrl+F と Ctrl+G で出す。 */
 /* AI が同じファイルを書いたことを伝える帯。**見落とされると、書いたものが消える。**
    欄の上に出し、押し場所は折り返して全部見せる（狭い画面で外へ出さない）。 */
+/* まだ何も無いときの案内。押せる例は、入れるだけで送らない。 */
+.chat-guide { padding: var(--s4) var(--s3); color: var(--dim); font-size: .86rem; line-height: 1.7; }
+.chat-chips { display: flex; flex-wrap: wrap; gap: .35rem; margin: .5rem 0; }
+/* 例は**押せると分かる形**にする。枠が無いと、ただの字に見えて誰も押さない
+   （撮って見たら、押した一つだけが枠付きで、他は字のままだった）。 */
+.chat-guide .chip-btn {
+  font-size: .8rem; padding: 3px 10px; text-align: left; white-space: normal;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface2);
+  color: var(--text);
+}
+.chat-guide .chip-btn:hover { border-color: var(--accent); color: var(--accent); }
+
 /* 覚え書き。打てる所だと分かるように、欄として見せる。 */
 .note-area {
   width: 100%; flex: 1 1 auto; min-height: 6rem; box-sizing: border-box;

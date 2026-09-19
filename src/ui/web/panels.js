@@ -321,7 +321,44 @@ export const PANELS = {
     wrap.append(jump);
     const follow = () => { if (pinned) log.scrollTop = log.scrollHeight; else jump.hidden = false; };
 
-    const add = (node) => { log.append(node); follow(); return node; };
+    /*
+     * **まだ何も無いときに、何を書けばいいか分からない。**
+     *
+     * 開いた直後の会話は、空の箱と「指示を書く」だけだった。初めて触る人は、
+     * ここで何を打てるのかが分からない（押せば入る例が在れば、そこから始められる）。
+     * 例は**入れるだけで送らない**。押した瞬間に走り出すと、確かめる間が無い。
+     */
+    const guide = el('div', 'chat-guide');
+    {
+      guide.append(el('div', '', 'やってほしいことを、そのまま書いてください。'));
+      const chips = el('div', 'chat-chips');
+      for (const text of [
+        'このリポジトリの構成を教えて',
+        'いま開いているファイルが何をしているか説明して',
+        'テストを書いて',
+      ]) {
+        const chip = el('button', 'ghost chip-btn', text);
+        chip.type = 'button';
+        chip.title = '書きかけの指示に入れる（送りません）';
+        chip.onclick = () => { input.value = text; input.focus(); };
+        chips.append(chip);
+      }
+      guide.append(chips);
+      guide.append(el('div', 'dim', 'ファイルは横の一覧の @ で添えられます。Ctrl+K でコマンド。'));
+    }
+    /** 何か出たら、案内は引っ込める。空に戻ったら、また出す。 */
+    let guided = false;
+    const showGuide = () => {
+      if (guided || log.childNodes.length > 0) return;
+      log.append(guide);
+      guided = true;
+    };
+    const hideGuide = () => {
+      if (!guided) return;
+      guide.remove();
+      guided = false;
+    };
+    const add = (node) => { hideGuide(); log.append(node); follow(); return node; };
 
     /** 一言。種類で色が変わるだけの、いちばん軽い形。 */
     const note = (cls, text) => {
@@ -533,6 +570,8 @@ export const PANELS = {
 
     ctx.showHistory = (messages) => {
       log.textContent = '';
+      // 話が一つも無い会話に切り替えたら、案内をまた出す。
+      if (!messages || messages.length === 0) setTimeout(showGuide, 0);
       stream = null;
       openTools.clear();
       for (const m of messages) {
@@ -854,6 +893,9 @@ export const PANELS = {
     ctx.on('approval', showApproval);
     // 作り直されたら、待っている承認も取り直す（`restore` から渡ってくる）。
     ctx.showApprovals = (waiting) => { for (const a of waiting) showApproval(a); };
+
+    // まだ何も無いなら、何を書けばいいかを出す（続きの在る会話では出ない）。
+    showGuide();
   },
 
   /*

@@ -1379,6 +1379,37 @@ await check('覚え書きに打てて、読み直しても残る', async () => {
   }
 });
 
+/*
+ * **まだ何も無いときに、何を書けばいいか分かる。**
+ *
+ * 開いた直後の会話は、空の箱と「指示を書く」だけだった。押せば入る例を出す。
+ * 例は**入れるだけで送らない**（押した瞬間に走り出すと、確かめる間が無い）。
+ */
+await check('会話が空のとき、押せる例が出る', async () => {
+  // 新しい会話を作って、空の状態にする。
+  const made = await p.evaluate(() => fetch('/api/conversations', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+  }).then((r) => r.status).catch(() => 0));
+  if (made === 200 || made === 201) await p.waitForTimeout(1200);
+  const guide = p.locator('.chat-guide');
+  if (await guide.count() === 0) throw new Error('案内が出ていない');
+  const said = await guide.innerText();
+  if (!said.includes('書いてください')) throw new Error(`言い方が違う: ${said.slice(0, 40)}`);
+  const chips = p.locator('.chat-chips button');
+  if (await chips.count() < 3) throw new Error(`例が足りない（${await chips.count()}）`);
+  // 押せると分かる形（枠が付いている）。
+  const framed = await chips.first().evaluate((el) => getComputedStyle(el).borderStyle);
+  if (framed === 'none') throw new Error('例に枠が無い（ただの字に見える）');
+  await p.locator('.chat textarea').first().fill('');
+  await chips.first().click();
+  await p.waitForTimeout(300);
+  const typed = await p.locator('.chat textarea').first().inputValue();
+  if (typed.length === 0) throw new Error('押しても書きかけに入らない');
+  // 押しただけで送っていないこと（会話に何も出ていない）。
+  if (await p.locator('.log .asked').count() > 0) throw new Error('押しただけで送っている');
+  await p.locator('.chat textarea').first().fill('');
+});
+
 if (shot) await p.screenshot({ path: shot, fullPage: false });
 await b.close();
 console.log(bad.length === 0 ? '見つかった不具合: なし' : `見つかった不具合 ${bad.length} 件:\n- ${bad.join('\n- ')}`);
