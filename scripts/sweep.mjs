@@ -369,6 +369,34 @@ await check('会話のパネルが狭くても、押したいものが外へ出�
   });
   if (bad.length > 0) throw new Error(bad.join(' / '));
 });
+await check('画面が低くても、閉じ方が見えている', async () => {
+  /*
+   * **閉じ方が見えていないと、閉じ方を探すことになる。**画面が低いと
+   * （実測: 高さ 700 以下）設定の中身が画面より長くなり、「閉じる」は
+   * 下端 755px ＝ 画面の外に居た。中は巻けるので辿り着けるが、見えていない。
+   * Esc を知らない人は、そこで詰まる。
+   */
+  const bad = [];
+  for (const height of [700, 560, 460]) {
+    await p.setViewportSize({ width: 1100, height });
+    await p.locator('#openSettings').click();
+    await p.waitForTimeout(600);
+    const seen = await p.evaluate(() => {
+      const d = document.getElementById('settings');
+      const close = d && [...d.querySelectorAll('button')].find((b) => (b.textContent || '').includes('閉じる'));
+      if (!close) return { 無い: true };
+      const r = close.getBoundingClientRect();
+      return { 見えている: r.bottom <= window.innerHeight + 1 && r.top >= -1, 下端: Math.round(r.bottom), 画面: window.innerHeight };
+    });
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(250);
+    if (seen.無い) bad.push(`高さ ${height}: 閉じるが無い`);
+    else if (!seen.見えている) bad.push(`高さ ${height}: 閉じるが画面の外（下端 ${seen.下端} > ${seen.画面}）`);
+  }
+  await p.setViewportSize({ width: 1440, height: 900 });
+  await p.waitForTimeout(300);
+  if (bad.length > 0) throw new Error(bad.join(' / '));
+});
 await check('同じ案内を、二度出していない', async () => {
   /*
    * **二度言われると、別のことかと読み直す。**設定のモデルの頁で、

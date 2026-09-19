@@ -739,6 +739,21 @@ textarea {
 }
 .repairs { color: var(--warn); font-size: .84rem; white-space: pre-wrap; margin: var(--s2) 0 0; }
 menu { display: flex; justify-content: flex-end; gap: var(--s2); padding: 0; margin: var(--s3) 0 0; }
+/*
+ * **「閉じる」を、折り返しの下に置かない。**
+ *
+ * 画面が低いと（実測: 高さ 700 以下）、設定の中身が画面より長くなり、
+ * 「閉じる」は下端 755px の位置＝画面の外に居た。中は巻けるので辿り着けるが、
+ * **閉じ方が見えていない**。Esc を知らない人は、閉じ方を探すことになる。
+ * 下に貼り付けて、いつでも見えるようにする。
+ */
+dialog menu {
+  position: sticky;
+  bottom: calc(var(--s4) * -1);
+  background: var(--surface);
+  padding: var(--s2) 0;
+  margin-bottom: calc(var(--s4) * -1);
+}
 
 /* 動きを嫌う人には動かさない。 */
 @media (prefers-reduced-motion: reduce) {
