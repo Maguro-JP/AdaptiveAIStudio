@@ -1988,6 +1988,27 @@ export const PANELS = {
       if ((e.ctrlKey || e.metaKey) && e.key === ' ') { e.preventDefault(); void askCompletion(); return; }
       if (e.key === 'Escape' && suggestion) { e.preventDefault(); clearGhost(); refresh(); return; }
       /*
+       * **Enter で、字下げを引き継ぐ。**
+       *
+       * 引き継いでいなかったので、深い所を書くたびに次の行が頭（0 列）から
+       * 始まり、人が空白を打ち直していた。前の行の頭にある空白を、そのまま置く。
+       *
+       * 変換中（日本語の確定）の Enter は奪わない。奪うと確定のたびに
+       * 余分な改行が入る（会話の欄で一度やった形）。
+       */
+      if (isPlainEnter(e) && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const at = area.selectionStart;
+        const from = area.value.lastIndexOf('\n', at - 1) + 1;
+        const indent = /^[ \t]*/.exec(area.value.slice(from, at))?.[0] ?? '';
+        if (indent === '') return; // 引き継ぐものが無い。既定の改行に任せる。
+        e.preventDefault();
+        clearGhost();
+        area.setRangeText(`\n${indent}`, at, area.selectionEnd, 'end');
+        refresh();
+        return;
+      }
+
+      /*
        * Tab で欄から抜けない。灰色が出ていればそれを入れ、無ければ字下げ。
        *
        * **選んだ範囲を消していた。**数行選んで押すと、選んだ行が丸ごと空白二つに

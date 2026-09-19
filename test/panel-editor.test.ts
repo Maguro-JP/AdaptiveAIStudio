@@ -108,6 +108,42 @@ describe('エディタのパネル', () => {
     assert.equal(area().value, 'one\ntwo\nthree\n', `戻っていない: ${JSON.stringify(area().value)}`);
   });
 
+  /**
+   * **Enter で、字下げが消える。**
+   *
+   * 字下げした行の終わりで改行すると、次の行は必ず頭（0 列）から始まっていた。
+   * 深い所を書くたびに、人が空白を打ち直すことになる。普通のエディタは引き継ぐ。
+   *
+   * 変換中の Enter（日本語の確定）では何もしない。そこを奪うと、確定のたびに
+   * 余分な改行が入る（会話の欄で実際にやった形）。
+   */
+  test('**Enter で、前の行の字下げを引き継ぐ**', async () => {
+    const disk = { 'a.ts': 'if (x) {\n    deep\n}\n' };
+    const { area, ctx, key } = open(disk);
+    (ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => area().value.includes('deep'), 'ファイルが開く');
+
+    // 「    deep」の終わり（13 文字目）で改行する。
+    const at = area().value.indexOf('deep') + 'deep'.length;
+    area().setSelectionRange(at, at);
+    key('Enter', { ctrlKey: false });
+    assert.equal(area().value, 'if (x) {\n    deep\n    \n}\n',
+      `字下げを引き継いでいない: ${JSON.stringify(area().value)}`);
+    assert.equal(area().selectionStart, at + 5, 'カーソルが字下げの後に来ていない');
+  });
+
+  test('変換中の Enter では、何もしない（対）', async () => {
+    const disk = { 'a.ts': '  x\n' };
+    const { area, ctx, key } = open(disk);
+    (ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => area().value === '  x\n', 'ファイルが開く');
+    area().setSelectionRange(3, 3);
+    let stopped = false;
+    key('Enter', { ctrlKey: false, isComposing: true, preventDefault: () => { stopped = true; } });
+    assert.equal(stopped, false, '変換中の Enter を奪っている（確定のたびに改行が入る）');
+    assert.equal(area().value, '  x\n', '変換中なのに書き換えている');
+  });
+
   test('カーソルだけのときは、これまでどおり空白二つ（対）', async () => {
     const disk = { 'a.ts': 'x\n' };
     const { area, ctx, key } = open(disk);
