@@ -210,4 +210,35 @@ describe('黙って上書きさせない', () => {
     const r = await put({ path: 'f.txt', content: '人が書いた\n' });
     assert.equal(r.status, 200, await r.text());
   });
+
+  /**
+   * **書けたら、新しい stamp を返す。**
+   *
+   * 返していなかったので、画面は開いたときの stamp を持ったままになり、
+   * **続けて二度目を保存すると断られていた**（「別の所で変わりました（AI の
+   * 書き換えなど）」。嘘だし、直すたびに押し直させることになる）。
+   * 画面を押して見つけた。ここは本体の返しだけを見る。
+   */
+  test('**保存できたら、次に使える stamp が返る**', async () => {
+    await writeFile(join(work, 'g.txt'), 'はじめ\n');
+    const opened = await json(await get('/api/file?path=g.txt'));
+    const first = await json(await put({ path: 'g.txt', content: '一度目\n', stamp: opened.stamp }));
+    assert.ok(first.stamp, `保存の返しに stamp が無い: ${JSON.stringify(first)}`);
+    assert.notEqual(first.stamp, opened.stamp, '中身が変わったのに stamp が同じ');
+    // 返ってきた stamp は、開き直したときのものと同じ。
+    const again = await json(await get('/api/file?path=g.txt'));
+    assert.equal(first.stamp, again.stamp, '保存の返しと、開き直したときで stamp が違う');
+    // **続けて保存できる。**ここが落ちると、一度直したら押し直すまで保存できない。
+    const second = await put({ path: 'g.txt', content: '二度目\n', stamp: first.stamp });
+    assert.equal(second.status, 200, await second.text());
+    assert.equal(await readFile(join(work, 'g.txt'), 'utf8'), '二度目\n');
+  });
+
+  test('中身が同じで保存したときも、stamp を返す（対）', async () => {
+    await writeFile(join(work, 'h.txt'), 'おなじ\n');
+    const opened = await json(await get('/api/file?path=h.txt'));
+    const r = await json(await put({ path: 'h.txt', content: 'おなじ\n', stamp: opened.stamp }));
+    assert.equal(r.saved, false, '書いていないのに書いたことになっている');
+    assert.equal(r.stamp, opened.stamp, `stamp が返っていない: ${JSON.stringify(r)}`);
+  });
 });

@@ -2366,11 +2366,22 @@ export const PANELS = {
       goTo(line);
     };
 
+    /*
+     * いま保存している中身。**自分の保存で流れてくる差分を、自分で受け止める。**
+     *
+     * 本体は書けた時点で差分を全員へ配る。その写しが**返事より先に戻ってくる**ので、
+     * まだ `loaded` を入れ替える前の欄は「直している最中」のままになり、
+     * 「AI がこのファイルを書き換えました」と出ていた（押して実測。自分で保存した
+     * だけなのに、身に覚えのない書き換えを知らされる）。
+     */
+    let savingNow = null;
+
     const store = async () => {
       if (!path || !dirty()) return;
       save.disabled = true;
       state.textContent = '保存しています…';
       let r;
+      savingNow = path;
       try {
         r = await fetch('/api/file', {
           method: 'PUT', headers: { 'content-type': 'application/json' },
@@ -2384,12 +2395,14 @@ export const PANELS = {
           signal: AbortSignal.timeout(20000),
         });
       } catch (e) {
+        savingNow = null;
         // 繋がらなかったときに黙ると、書いたものが消えたように見える。欄は残す。
         state.textContent = `保存できませんでした（${e.message ?? e}）`;
         save.disabled = false;
         return;
       }
       const j = await r.json().catch(() => ({}));
+      savingNow = null;
       /*
        * **断られたら、選ばせる。**黙って上書きもしないし、黙って捨てもしない。
        * 上書きを選んでも、前の中身は戻り先に残る（本体が控える）。
@@ -2644,6 +2657,8 @@ export const PANELS = {
      */
     ctx.on('session', ({ event: v }) => {
       if (v.type !== 'diff' || v.path !== path) return;
+      // 自分がいま保存した分の写し。返事を読んだところで入れ替えるので、ここでは何もしない。
+      if (savingNow === v.path) return;
       if (!dirty()) { void open(path); return; }
       tell('AI がこのファイルを書き換えました。あなたの直しは保存していません。', [
         ['AI の版を出す', () => {

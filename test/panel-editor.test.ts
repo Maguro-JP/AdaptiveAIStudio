@@ -800,4 +800,52 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
     box.area().fire('input');
     assert.equal(held, '1\n2\n', `減ったときに合っていない: ${JSON.stringify(held)}`);
   });
+
+  /**
+   * **自分の保存で「AI が書き換えました」と出さない。**
+   *
+   * 本体は書けた時点で差分を全員へ配る。その写しが**返事より先に戻ってくる**ので、
+   * まだ `loaded` を入れ替える前の欄は「直している最中」のままになり、
+   * 保存するたびに「AI がこのファイルを書き換えました」と出ていた（押して実測）。
+   * 自分で保存しただけなのに、身に覚えのない書き換えを知らされる。
+   */
+  test('**自分の保存の写しでは、書き換えられたと言わない**', async () => {
+    const disk = { 'a.ts': 'one\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => box.area().value === 'one\n', 'ファイルが開く');
+
+    // 保存の返事を、こちらが放すまで返さない形にする。
+    const inner = globalThis.fetch;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    (globalThis as { fetch?: unknown }).fetch = (async (url: string, init?: { method?: string }) => {
+      if ((init?.method ?? 'GET') === 'PUT') await gate;
+      return inner(url as unknown as RequestInfo, init as RequestInit);
+    }) as unknown as typeof fetch;
+
+    box.area().value = 'one\nTWO\n';
+    box.area().fire('input');
+    box.key('s');
+    // 返事より先に、自分の書き込みの写しが戻ってくる。
+    box.emit('session', { type: 'diff', path: 'a.ts', diff: '', added: 1, removed: 0 });
+    assert.ok(!box.at('editor-notice').text.includes('AI がこのファイルを書き換えました'),
+      `自分の保存で、書き換えられたと言っている: ${box.at('editor-notice').text}`);
+
+    release();
+    await until(() => box.state().textContent.startsWith('保存しました'), '保存できる');
+    (globalThis as { fetch?: unknown }).fetch = inner;
+  });
+
+  test('よそからの書き換えなら、ちゃんと言う（対）', async () => {
+    const disk = { 'a.ts': 'one\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => box.area().value === 'one\n', 'ファイルが開く');
+    box.area().value = 'one\nMINE\n';
+    box.area().fire('input');
+    box.emit('session', { type: 'diff', path: 'a.ts', diff: '', added: 1, removed: 0 });
+    assert.match(box.at('editor-notice').text, /AI がこのファイルを書き換えました/,
+      `よそからの書き換えを言っていない: ${box.at('editor-notice').text}`);
+  });
 });

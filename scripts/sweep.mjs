@@ -1156,6 +1156,52 @@ await check('エディタの見出しが、長い文で潰れない', async () =
 });
 
 /*
+ * **続けて二度、保存できる。**
+ *
+ * 本体は書けたときに新しい stamp を返していなかったので、画面は開いたときの
+ * stamp を持ったままになり、**二度目の保存が「別の所で変わりました（AI の
+ * 書き換えなど）」で断られていた**（実測）。直すたびに押し直させることになる。
+ * 自分の書き込みの写しで「AI が書き換えました」と出ていたのも、同じ場面。
+ */
+await check('続けて二度、保存できる', async () => {
+  const at = 'sweep-twice-probe.txt';
+  const made = await p.evaluate(([path]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: 'one\ntwo\n' }),
+  }).then((r) => r.status), [at]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  try {
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    const state = p.locator('.editor-state').first();
+    const notice = p.locator('.editor-notice').first();
+    for (const mark of ['X', 'Y']) {
+      await area.click();
+      await area.press('End');
+      await area.type(mark);
+      await area.press('Control+s');
+      await p.waitForFunction(() => /保存しました|保存していません/.test(
+        document.querySelector('.editor-state')?.textContent ?? ''), null, { timeout: 15000 });
+      const said = (await state.textContent()) ?? '';
+      if (!said.startsWith('保存しました')) throw new Error(`${mark} で保存できていない: ${said}`);
+      const band = await notice.isHidden() ? '' : await notice.innerText();
+      if (/AI がこのファイルを書き換えました/.test(band)) {
+        throw new Error(`自分の保存で、書き換えられたと言っている（${mark}）: ${band.replace(/\n/g, ' / ')}`);
+      }
+      await p.waitForTimeout(400);
+    }
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
  * **出していない分を、黙って隠さない。**
  *
  * 横の一覧は多すぎると切る（開くのが重くなるため）。切ったことを言わないので、

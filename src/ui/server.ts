@@ -1604,9 +1604,16 @@ export class UiServer {
           conflict: true, path: asked, content: before, stamp: stampOf(before),
         });
       }
-      if (before === content) return send(res, 200, { saved: false, path: asked });
+      /*
+       * **書けたら、新しい stamp を返す。**
+       *
+       * ここは返していなかったので、画面は**開いたときの stamp を持ったまま**に
+       * なり、続けて二度目を保存すると「別の所で変わりました（AI の書き換えなど）」と
+       * 断られていた。嘘だし、直すたびに押し直させることになる（押して実測）。
+       */
+      if (before === content) return send(res, 200, { saved: false, path: asked, stamp: stampOf(content) });
       const { added, removed } = await this.#writeByHand(asked, real, before, content, `手で直した: ${asked}`);
-      return send(res, 200, { saved: true, path: asked, added, removed });
+      return send(res, 200, { saved: true, path: asked, added, removed, stamp: stampOf(content) });
     }
 
     /*
