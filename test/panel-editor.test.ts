@@ -821,7 +821,7 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
     const gate = new Promise<void>((r) => { release = r; });
     (globalThis as { fetch?: unknown }).fetch = (async (url: string, init?: { method?: string }) => {
       if ((init?.method ?? 'GET') === 'PUT') await gate;
-      return inner(url as unknown as RequestInfo, init as RequestInit);
+      return (inner as unknown as (u: string, i?: unknown) => Promise<Response>)(url, init);
     }) as unknown as typeof fetch;
 
     box.area().value = 'one\nTWO\n';
