@@ -42,6 +42,12 @@ const port = Number(process.env.AAS_UI_PORT ?? 4174);
 const relaunches = process.env.AAS_RELAUNCH === '1';
 const server = new UiServer({
   config, port, relaunches,
+  /*
+   * **端末にだけ出しても、読まれない。**start.cmd から起こすと、その端末は
+   * 裏に隠れる（Windows では閉じていることもある）。設定が読めなかったことは
+   * 画面にも出す。直すのは画面の「設定」からなので、そこに出ていないと辿れない。
+   */
+  ...(broken ? { configProblem: broken } : {}),
   ...(relaunches
     ? { onRestart: () => { void server.stop().catch(() => undefined).then(() => process.exit(RESTART_EXIT)); } }
     : {}),

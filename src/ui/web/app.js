@@ -2070,12 +2070,26 @@ async function tellIfNotReady() {
   const r = await fetch('/api/ready', { signal: AbortSignal.timeout(20000) })
     .then((x) => x.json())
     .catch((e) => ({ ready: false, why: `見に行けませんでした（${e.message ?? e}）` }));
+  /*
+   * **設定が読めていないことを、一緒に言う。**
+   *
+   * 読めなければ既定で開く作りだが、理由は端末にしか出ていなかった。
+   * `start.cmd` から起こすとその端末は隠れるので、開いた人は気づけない
+   * （書いたはずの繋ぎ先が使われていない、が黙って起きる）。
+   *
+   * **帯は一本しかない。**別々に出すと、後から出した方が前のを消す
+   * （実際、モデルが無い帯に消されて何も見えなかった）。文の側で足す。
+   */
+  const configNote = r.configProblem
+    ? `設定を読めませんでした（既定のまま開いています）: ${r.configProblem}\n`
+    : '';
   if (r.ready) {
     // 話せるようになったなら、「まだ話せません」は下げる（取ってき終わったとき）。
     const box = document.getElementById('crashNote');
     if (box && box.textContent.startsWith('まだ話せません')) box.remove();
     // 話せるが、待たされそうなら先に言う（GPU なしで大きいモデルのとき）。
-    if (r.heads) showCrash('先に一つ', r.heads, 'warn');
+    if (configNote) showCrash('設定', configNote.trim(), 'warn');
+    else if (r.heads) showCrash('先に一つ', r.heads, 'warn');
     return;
   }
   /*
@@ -2089,7 +2103,7 @@ async function tellIfNotReady() {
   if (f) {
     const label = f.fetching ? `取ってきています… ${f.message || ''}`.trim() : `小さいモデル（約${f.approxGB}GB）を取ってくる`;
     // 取ってこられなかったときは、その理由をここに出す（ログを開かせない）。
-    const why = f.failed ? `${r.why}\n${f.failed}` : r.why;
+    const why = configNote + (f.failed ? `${r.why}\n${f.failed}` : r.why);
     showCrash('まだ話せません', why, 'warn', {
       label,
       run: async (btn) => {
@@ -2104,7 +2118,7 @@ async function tellIfNotReady() {
     });
     return;
   }
-  showCrash('まだ話せません', `${r.why}　⚙ 設定 → モデル で決められます`, 'warn');
+  showCrash('まだ話せません', `${configNote}${r.why}　⚙ 設定 → モデル で決められます`, 'warn');
 }
 void tellIfNotReady();
 // 開いた時点で裏の仕事が動いていれば、その最新を押した場所に出す（合図は繋ぐ前に流れている）。

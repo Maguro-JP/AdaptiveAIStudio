@@ -130,6 +130,14 @@ export interface UiServerOptions {
   onRestart?: () => void;
   /** 入口（start.cmd）が起こし直してくれるか。画面の案内が変わる。 */
   relaunches?: boolean;
+  /**
+   * 設定が読めなかった理由。**画面にも出す。**
+   *
+   * 読めなければ既定で開く作りにしてあるが、理由は端末にしか出していなかった。
+   * `start.cmd` から起こすとその端末は隠れる（閉じていることもある）ので、
+   * 開いた人は**既定で動いていることに気づけない**。直すのは画面の「設定」から。
+   */
+  configProblem?: string;
   /** モデルを読むライブラリの差し替え。試験で使う。 */
   inprocLoad?: () => Promise<unknown>;
   /**
@@ -1350,7 +1358,11 @@ export class UiServer {
           failed: this.#fetching?.state === 'failed' ? this.#fetching.message : '',
         }
         : null;
-      return send(res, 200, { ready: !notReady, why: notReady ?? '', heads: heads ?? '', canFetch });
+      return send(res, 200, {
+        ready: !notReady, why: notReady ?? '', heads: heads ?? '', canFetch,
+        // 設定が読めなかったなら、開いた時点で言う（既定で動いていることに気づけるように）。
+        configProblem: this.#opts.configProblem ?? '',
+      });
     }
 
     if (path === '/api/config' && req.method === 'GET') {
