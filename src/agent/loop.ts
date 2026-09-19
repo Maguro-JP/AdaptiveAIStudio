@@ -229,7 +229,14 @@ export class Agent {
             type: 'finished',
             reason: stalled ? 'noProgress' : 'completed',
             ...(stalled
-              ? { detail: `${DONE_MARK} が無いまま ${nudges} 回押し戻しましたが、動きませんでした。` }
+              ? {
+                // 押し戻しを切ってあるときに「0 回押し戻しましたが、動きませんでした」と
+                // 言っていた。押し戻していないのだから嘘になる（本物の重みで確かめた回に
+                // 実際に出た）。**やっていないことを、やったと書かない。**
+                detail: maxNudges === 0
+                  ? `${DONE_MARK} が無いまま手を止めました（押し戻しは切ってあります）。`
+                  : `${DONE_MARK} が無いまま ${nudges} 回押し戻しましたが、動きませんでした。`,
+              }
               : {}),
           };
           return;

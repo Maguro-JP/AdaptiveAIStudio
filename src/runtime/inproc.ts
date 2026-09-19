@@ -1259,7 +1259,10 @@ export class InProcRuntime implements LocalRuntime {
         connection: 'keep-alive',
       });
     }
+    /** 最後に何かを書いた時刻。生きている合図を、要るときだけ打つため。 */
+    let wroteAt = Date.now();
     const chunk = (delta: Record<string, unknown>, finish: string | null = null) => {
+      wroteAt = Date.now();
       res.write(`data: ${JSON.stringify({
         id: 'inproc', object: 'chat.completion.chunk', model: ref,
         choices: [{ index: 0, delta, finish_reason: finish }],
@@ -1295,8 +1298,25 @@ export class InProcRuntime implements LocalRuntime {
      * 並んでいる間の `: queued` と同じ間隔で `: working` を打つ。上の層は
      * 最初のトークン前に届いたバイトで待ちを延ばす（読んでいるのは停滞ではない）。
      */
-    const working = setInterval(() => { if (!res.writableEnded) res.write(': working\n\n'); },
-      this.#opts.queueHeartbeatMs ?? QUEUE_HEARTBEAT_MS);
+    /*
+     * **最初のトークンが出た後も、打ち続ける。**
+     *
+     * ここは最初の 1 トークンで打つのをやめていた。ツールの呼び出しを組んでいる間は
+     * 本文が一文字も出ないので、遅い機械ではそこから何分も黙る。送り側はその無音を
+     * 停滞と読んで落とす。Windows のランナーで本物の重みを読ませたとき、足し算は
+     * 通り、ツールを渡した回だけ「120秒 応答しませんでした（停滞）」で落ちた。
+     * **動いていたのに落としている。**
+     *
+     * 打つのは黙っているときだけ（直前に何か書いていれば要らない）。
+     * 送り側は、この合図で待ちを延ばすが、上限（`quietCeilingMs`）は超えない。
+     */
+    const beatMs = this.#opts.queueHeartbeatMs ?? QUEUE_HEARTBEAT_MS;
+    const working = setInterval(() => {
+      if (res.writableEnded) return;
+      if (Date.now() - wroteAt < beatMs) return;
+      res.write(': working\n\n');
+      wroteAt = Date.now();
+    }, beatMs);
     try {
       chunk({ role: 'assistant' });
       let thought = 0;
@@ -1306,7 +1326,6 @@ export class InProcRuntime implements LocalRuntime {
         // 考えごとの間は「何も出ていない」としか分からない。
         onResponseChunk: (c) => {
           if (!firstAt) {
-            clearInterval(working);
             firstAt = Date.now();
             seen = lane.sequence?.nextTokenIndex;
             this.#opts.onLog?.(`最初の 1 トークンまで ${((firstAt - started) / 1000).toFixed(1)} 秒`

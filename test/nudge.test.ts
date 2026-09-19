@@ -165,4 +165,34 @@ describe('途中で手を止めたら、押し戻す', () => {
       assert.equal((r.events.at(-1) as { reason?: string }).reason, 'noProgress');
     } finally { await r.close(); }
   });
+
+  /**
+   * **押し戻していないなら、押し戻したと書かない。**
+   *
+   * 切ってある（0 回）のに「0 回押し戻しましたが、動きませんでした」と出していた。
+   * 本物の重みで確かめた回に実際に出た文言で、読む人は「押し戻したのに駄目だった」と
+   * 受け取る。止めること自体は変えない（やっていないのに完了と言わないため）。
+   */
+  test('**押し戻しを切ったときの理由に、押し戻した回数を書かない**', async () => {
+    const off = await run([
+      { tool: 'read_file', args: { path: 'a.txt' } },
+      { text: 'では書き換えます。' },
+    ], 0);
+    try {
+      const last = off.events.at(-1) as { reason?: string; detail?: string };
+      assert.equal(last.reason, 'noProgress');
+      assert.ok(!/回押し戻し/.test(last.detail ?? ''), `押し戻していないのに回数を書いている: ${last.detail}`);
+      assert.match(last.detail ?? '', /押し戻しは切ってあります/);
+    } finally { await off.close(); }
+
+    // 対。押し戻しが在るときは、回数を書く（何度粘ったかが分からないと追えない）。
+    const on = await run([
+      { tool: 'read_file', args: { path: 'a.txt' } },
+      { text: 'では書き換えます。' },
+    ], 2);
+    try {
+      const last = on.events.at(-1) as { detail?: string };
+      assert.match(last.detail ?? '', /2 回押し戻しましたが/);
+    } finally { await on.close(); }
+  });
 });
