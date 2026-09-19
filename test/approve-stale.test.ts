@@ -96,3 +96,55 @@ describe('空のファイル', () => {
     assert.match(r.content, /変更なし/, r.content);
   });
 });
+
+/**
+ * **同じファイルへ、二人が同時に書いたとき。**
+ *
+ * 押さえているのは段取りが宣言した書き込み先だけ（`src/core/scheduler.ts`）で、
+ * 宣言は模型の当て推量。宣言に無ければ、同じファイルへ二人が同時に入る。
+ * 読み直して見比べてから書くまでのあいだに相手の書き込みが挟まると、
+ * **どちらも「書けた」と返すのに、片方の中身しか残らない。**
+ */
+describe('同じファイルへ二人が同時に書く', () => {
+  test('**片方だけが通り、もう片方は変わったと返す**', async () => {
+    const root = await tempDir('aas-race-');
+    await writeFile(join(root, 'a.txt'), 'もとの\n');
+    const ctx: ToolContext = {
+      root, signal: new AbortController().signal, approve: () => Promise.resolve(true),
+    };
+
+    const [one, two] = await Promise.all([
+      writeFileTool.run({ path: 'a.txt', content: '担当 A\n' }, ctx),
+      writeFileTool.run({ path: 'a.txt', content: '担当 B\n' }, ctx),
+    ]);
+
+    const wrote = [one, two].filter((r) => r.isError === undefined);
+    const refused = [one, two].filter((r) => r.isError === true);
+    assert.equal(wrote.length, 1,
+      `両方が書けたことになっている: ${JSON.stringify([one.content, two.content])}`);
+    assert.equal(refused.length, 1);
+    assert.match(refused[0]!.content, /変わりました/, refused[0]!.content);
+
+    // 残った中身は、通った方のもの（混ざらない）。
+    const now = await readFile(join(root, 'a.txt'), 'utf8');
+    assert.ok(now === '担当 A\n' || now === '担当 B\n', `中身が混ざっている: ${JSON.stringify(now)}`);
+    assert.ok(wrote[0]!.content.includes('更新'), wrote[0]!.content);
+  });
+
+  test('別のファイルなら、二人とも書ける（対）', async () => {
+    const root = await tempDir('aas-race-ok-');
+    await writeFile(join(root, 'a.txt'), 'もとの a\n');
+    await writeFile(join(root, 'b.txt'), 'もとの b\n');
+    const ctx: ToolContext = {
+      root, signal: new AbortController().signal, approve: () => Promise.resolve(true),
+    };
+    const [one, two] = await Promise.all([
+      writeFileTool.run({ path: 'a.txt', content: '直した a\n' }, ctx),
+      writeFileTool.run({ path: 'b.txt', content: '直した b\n' }, ctx),
+    ]);
+    assert.equal(one.isError, undefined, one.content);
+    assert.equal(two.isError, undefined, two.content);
+    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), '直した a\n');
+    assert.equal(await readFile(join(root, 'b.txt'), 'utf8'), '直した b\n');
+  });
+});
