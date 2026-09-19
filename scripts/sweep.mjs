@@ -369,6 +369,28 @@ await check('会話のパネルが狭くても、押したいものが外へ出�
   });
   if (bad.length > 0) throw new Error(bad.join(' / '));
 });
+await check('見えている字が、切れていない', async () => {
+  /*
+   * **名前が切れていた。**横のサイドの上に押しものを三つ並べたので、名前の枠が
+   * 107px しか残らず、137px 要る「AdaptiveAIStudio」が切れていた（実測）。
+   * 撮って見るまで気づかず、しかも毎回の画面に出ている所だった。
+   *
+   * 入れ物より中身が広い（`scrollWidth > clientWidth`）所を数える。
+   * 省略（…）を付けてあっても、**名前や見出しは切らさない**。
+   */
+  const cut = await p.evaluate(() => {
+    const out = [];
+    for (const el of document.querySelectorAll('.brand, .panel-head, .panel-head *, .side-top *')) {
+      if (el.children.length > 0) continue;
+      const text = (el.textContent || '').trim();
+      if (!text || el.clientWidth === 0) continue;
+      const over = el.scrollWidth - el.clientWidth;
+      if (over > 1) out.push(`${text.slice(0, 20)}（${over}px 切れ／枠 ${Math.round(el.clientWidth)}px）`);
+    }
+    return out;
+  });
+  if (cut.length > 0) throw new Error(`字が切れている: ${cut.join(' / ')}`);
+});
 await check('もっと狭い窓（720）', async () => {
   await p.setViewportSize({ width: 720, height: 720 });
   await p.waitForTimeout(400);

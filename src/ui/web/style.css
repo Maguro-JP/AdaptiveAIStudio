@@ -96,7 +96,10 @@ body {
 }
 .side-open:hover { color: var(--text); }
 
-.side-top { display: flex; align-items: center; gap: var(--s2); }
+/* **名前が入る幅を残す。**同じ行に押しものを三つ並べたので、名前の枠が 107px
+   しか残らず、137px 要る名前が切れていた（実測）。余白から削る。 */
+.side-top { display: flex; align-items: center; gap: 4px; }
+.side-top .icon { padding: 0 5px; }
 .side-top .brand {
   flex: 1; min-width: 0; font-size: .95rem;
   /* **溢れさせない。**溢れると、右に並べた押しものの上へ字が乗る
