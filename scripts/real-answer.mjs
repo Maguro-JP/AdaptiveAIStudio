@@ -24,7 +24,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.ts';
-import { askOnce, describeOneTurn, judgeAnswer } from '../src/cli/ask-once.ts';
+import { askOnce, describeOneTurn, judgeAnswer, describeEnd } from '../src/cli/ask-once.ts';
 import { buildRegistry } from '../src/core/build.ts';
 import { ChatOrchestrator } from '../src/core/orchestrator.ts';
 import { setupAutopilot, resolveCandidates } from '../src/core/autopilot-setup.ts';
@@ -90,7 +90,15 @@ await check('read_file を呼んで、読んだマーカーを答える', async 
       root,
       maxTurns: 4,
       temperature: 0,
-      maxTokens: 256,
+      /*
+       * **出す量の側を決める。**待つ上限（下の 10 分）は伸ばさない。
+       *
+       * 256 にしていたところ、Windows の回が 10 分で打ち切られた
+       * （生成が ubuntu の 10 倍遅く、4 ターン分の余白が時間に化けた）。
+       * ここに要るのは「read_file を呼ぶ」と「10 文字のマーカーを含めて答える」
+       * だけなので、1 ターンの上限は狭くても足りる。
+       */
+      maxTokens: 96,
       priority: Priority.top,
       approve: async () => true,
       // 答えたら終わり。押し戻し（TASK_DONE を求める）を入れると、答えた後に
@@ -98,8 +106,17 @@ await check('read_file を呼んで、読んだマーカーを答える', async 
       maxNudges: 0,
     });
     const ac = new AbortController();
-    const giveUp = setTimeout(() => ac.abort(), 600_000);
+    /*
+     * 打ち切りの上限。**伸ばさない。**
+     *
+     * ここで切られたことを、切られたと言えるようにする。前は上限で切っても
+     * 「返事が空でした（モデルが本文を書かずに止まりました）」と出ていたので、
+     * **時計の話をモデルの話として読んだ**（実際に Windows の回で読み違えた）。
+     */
+    const LIMIT_MS = 600_000;
+    const giveUp = setTimeout(() => ac.abort(), LIMIT_MS);
     giveUp.unref?.();
+    const began = Date.now();
     const seen = [];
     let text = '';
     let finished;
@@ -113,11 +130,22 @@ await check('read_file を呼んで、読んだマーカーを答える', async 
     } finally { clearTimeout(giveUp); }
     const called = seen.some((s) => s.startsWith('呼んだ: read_file'));
     const shown = text.replace(/\s+/g, ' ').slice(0, 160);
+    // 上限で切ったのか、モデルが黙ったのか。言い分けは describeEnd に置いてある
+    // （人が読む一行は、中身と同じ場所で決める）。
+    const how = describeEnd({
+      aborted: ac.signal.aborted,
+      limitMs: LIMIT_MS,
+      tookMs: Date.now() - began,
+      chars: text.length,
+      calls: seen.filter((l) => l.startsWith('呼んだ: ')).length,
+      ...(finished?.reason ? { reason: finished.reason } : {}),
+      ...(finished?.detail ? { detail: finished.detail } : {}),
+    });
     if (!called) {
-      throw new Error(`read_file を呼びませんでした。答え: 「${shown}」 / 終わり方: ${finished?.reason ?? '不明'} ${finished?.detail ?? ''}`);
+      throw new Error(`read_file を呼びませんでした。答え: 「${shown}」 / ${how}`);
     }
     if (!text.includes(mark)) {
-      throw new Error(`読んだマーカー（${mark}）を答えに含めませんでした。答え: 「${shown}」 / 終わり方: ${finished?.reason ?? '不明'}`);
+      throw new Error(`読んだマーカー（${mark}）を答えに含めませんでした。答え: 「${shown}」 / ${how}`);
     }
     return `${candidates[0]} / 呼んで、読んで、答えました（${finished?.reason ?? '不明'}）`;
   } finally {

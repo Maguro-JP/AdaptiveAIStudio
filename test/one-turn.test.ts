@@ -17,7 +17,7 @@ import { tempDir } from './tmp.ts';
 import { startFakeServer } from './fake-server.ts';
 
 process.env.AAS_STATE_DIR = await tempDir('aas-oneturn-');
-const { askOnce, describeOneTurn, judgeAnswer } = await import('../src/cli/ask-once.ts');
+const { askOnce, describeOneTurn, judgeAnswer, describeEnd } = await import('../src/cli/ask-once.ts');
 
 /**
  * 読む側のモック。数GBの GGUF を置かずに、読む道だけ通す。
@@ -172,5 +172,45 @@ describe('読む側の声も、頼んだ人まで届く', () => {
     // 素性とコアの数まで届く。ここが無いと「なぜ遅いのか」が記録から読めない。
     assert.match(line, /AVX2/, `素性が入っていない: ${line}`);
     assert.match(line, /4 コア \/ 8 スレッド/, `機械の大きさが入っていない: ${line}`);
+  });
+});
+
+describe('上限で切ったのか、モデルが黙ったのか', () => {
+  /*
+   * **直し方が正反対になる。**モデルが黙ったのなら訊き方や重みの話だが、
+   * こちらが待ち切れなかったのなら出す量の話（上限は伸ばさない）。
+   * Windows の回で、上限で切られたものを「モデルが黙った」と読んだ。
+   */
+  test('上限で切ったら、切ったと言う（秒・文字・呼び出しの回数まで）', () => {
+    const said = describeEnd({
+      aborted: true, limitMs: 600_000, tookMs: 616_000, chars: 1, calls: 0,
+      // 切られた回でも、途中の終わり方が付いていることがある。上限の方を言う。
+      reason: 'noProgress', detail: '返事が空でした',
+    });
+    assert.match(said, /10分で打ち切りました/, said);
+    assert.match(said, /616秒/, said);
+    assert.match(said, /1文字/, said);
+    assert.match(said, /ツールの呼び出し 0 回/, said);
+    assert.ok(!/noProgress/.test(said), `モデルが黙ったように読める: ${said}`);
+  });
+
+  test('1分に満たない上限は、秒で言う', () => {
+    assert.match(
+      describeEnd({ aborted: true, limitMs: 30_000, tookMs: 30_100, chars: 0, calls: 0 }),
+      /30秒で打ち切りました/,
+    );
+  });
+
+  test('切っていないなら、終わり方をそのまま言う', () => {
+    const said = describeEnd({
+      aborted: false, limitMs: 600_000, tookMs: 12_000, chars: 40, calls: 1,
+      reason: 'noProgress', detail: '返事が空でした',
+    });
+    assert.equal(said, '終わり方: noProgress 返事が空でした');
+    // 理由が付いていなくても、打ち切りと読ませない。
+    assert.equal(
+      describeEnd({ aborted: false, limitMs: 600_000, tookMs: 1, chars: 0, calls: 0 }),
+      '終わり方: 不明',
+    );
   });
 });

@@ -150,6 +150,41 @@ export function judgeAnswer(answer: string): string | undefined {
  * **答えの中身は、道の良し悪しではない。**小さいモデルは平気で間違える。
  * 道が通っていること（返ってきたこと）と、中身が合っていることを分けて書く。
  */
+/** 走り終えたときの様子。`describeEnd` に渡す。 */
+export interface RunEnd {
+  /** 上限で切ったか（`AbortSignal.aborted`）。 */
+  aborted: boolean;
+  /** 切る上限（ミリ秒）。 */
+  limitMs: number;
+  /** 実際にかかったミリ秒。 */
+  tookMs: number;
+  /** 返ってきた文字の数。 */
+  chars: number;
+  /** ツールを呼んだ回数。 */
+  calls: number;
+  reason?: string;
+  detail?: string;
+}
+
+/**
+ * 走り終えた様子を、人が読む一行にする。
+ *
+ * **上限で切ったのなら、切ったと言う。**前は上限で切っても
+ * 「返事が空でした（モデルが本文を書かずに止まりました）」しか出ていなかったので、
+ * 時計の話をモデルの話として読んだ（Windows の回で実際に読み違えた）。
+ * モデルが黙ったのか、こちらが待ち切れなかったのかは、直し方が正反対になる。
+ */
+export function describeEnd(end: RunEnd): string {
+  if (end.aborted) {
+    const limit = end.limitMs >= 60_000
+      ? `${Math.round(end.limitMs / 60_000)}分`
+      : `${Math.round(end.limitMs / 1000)}秒`;
+    return `${limit}で打ち切りました`
+      + `（${(end.tookMs / 1000).toFixed(0)}秒・${end.chars}文字・ツールの呼び出し ${end.calls} 回）`;
+  }
+  return `終わり方: ${end.reason ?? '不明'}${end.detail ? ` ${end.detail}` : ''}`;
+}
+
 export function describeOneTurn(got: OneTurn): { ok: boolean; detail: string } {
   const load = got.loadSeconds.toFixed(1);
   if (got.answer.length === 0) {
