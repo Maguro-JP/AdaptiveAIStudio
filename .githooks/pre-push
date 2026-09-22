@@ -21,11 +21,20 @@
 set -e
 
 pushing_wip=1
-while read -r _local_ref _local_sha remote_ref _remote_sha; do
+AAS_PUSH_RANGE=''
+while read -r _local_ref local_sha remote_ref remote_sha; do
   [ -z "$remote_ref" ] && continue
   case "$remote_ref" in
     refs/heads/wip/*) ;;
     *) pushing_wip=0 ;;
+  esac
+  # 枝を消す push（local_sha が全部 0）と、remote にまだ無い枝は見ない。
+  case "$local_sha$remote_sha" in
+    *[!0]*)
+      case "$remote_sha" in
+        *[!0]*) AAS_PUSH_RANGE="$remote_sha..$local_sha" ;;
+      esac
+      ;;
   esac
 done
 
@@ -43,6 +52,22 @@ fi
 # **確かめの側が嘘をつくと、確かめを迂回する癖がつく。**
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_QUARANTINE_PATH
 unset GIT_REFLOG_ACTION GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
+
+# 文書だけの push は、そのまま出さない。
+#
+# ci.yml の paths-ignore は効かない（GitHub は pull_request の path 判定を
+# PR 全体の差分で行うので、PR に一度でもコードが入っていれば当たらない）。
+# この repo は push では回さないので、**開いている PR への文書だけの push は
+# 毎回 1 回ぶん枠を食う**。実際に食った。
+#
+# 押す範囲は、上で読んだ remote_ref/local_sha から出す。remote にまだ
+# 枝が無い（_remote_sha が全部 0）ときは、範囲が決められないので見ない。
+if [ -n "$AAS_PUSH_RANGE" ]; then
+  reason=$(node scripts/docs-only-check.mjs "$AAS_PUSH_RANGE") || {
+    echo "$reason"
+    exit 1
+  }
+fi
 
 echo "== push の手前で確かめます（型検査・検査・画面）"
 node scripts/check.mjs
