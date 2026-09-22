@@ -173,6 +173,23 @@ function realModel() {
 }
 
 /**
+ * CI へ出す前に、**CI が動かすものを、この機械で一度動かす。**
+ *
+ * `scripts/real-answer.mjs` は本物の重みが要るものだと思って、手元で一度も
+ * 動かさずに CI へ出していた。要るのは重みを落とすところだけで、残りは
+ * 作り物の模型で通る。9月だけで、本物の重みの回を 5 回落としている
+ * （78 分。Windows は 2 倍で数えるので、課金はその倍に近い）。
+ * どれも、ここで 1 分もかからずに見えるものだった。
+ *
+ * 見るのは配管だけ（終わる・白黒を付ける・読む側の声が 2 本出る・
+ * 二つとも走る）。答えの中身は乱数なので見ない。
+ */
+function realAnswerDry() {
+  console.log('\n== CI へ出すものを、ここで一度動かす');
+  return run('CI へ出す前', [join(root, 'scripts', 'real-answer-dry.mjs')]);
+}
+
+/**
  * 数え方が本物と同じか。
  *
  * 窓の勘定はここに乗っている。ずれると、落としてはいけないものを落とし、
@@ -196,6 +213,8 @@ const counted = tokenizer();
 if (counted !== 0) process.exit(counted);
 const real = realModel();
 if (real !== 0) process.exit(real);
+const dry = realAnswerDry();
+if (dry !== 0) process.exit(dry);
 
 /*
  * **確かめていないことを、通ったときにこそ言う。**
