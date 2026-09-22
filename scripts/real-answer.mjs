@@ -77,7 +77,8 @@ await check('read_file を呼んで、読んだマーカーを答える', async 
   const registry = buildRegistry(config);
   const orchestrator = new ChatOrchestrator(registry);
   const pilot = await setupAutopilot(config, registry);
-  const runtime = await buildRuntime(config, pilot.machine);
+  // 読む側の声も流す（backend・CPU の素性・tok/s）。遅い理由が記録に出るように。
+  const runtime = await buildRuntime(config, pilot.machine, log);
   try {
     const ready = await readyLocalModel(config, runtime, log);
     const { candidates } = resolveCandidates(ready.config, pilot);

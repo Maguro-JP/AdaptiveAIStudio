@@ -11,11 +11,31 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
+import { writeFile } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { startFakeServer } from './fake-server.ts';
 
 process.env.AAS_STATE_DIR = await tempDir('aas-oneturn-');
 const { askOnce, describeOneTurn, judgeAnswer } = await import('../src/cli/ask-once.ts');
+
+/**
+ * 読む側のモック。数GBの GGUF を置かずに、読む道だけ通す。
+ *
+ * 機械の素性も返す。**毎回同じ値**にしてあるので、走らせる機械が
+ * 変わっても同じ一行になる（本物の CPU を見に行かせない）。
+ */
+const fakeLib = async () => ({
+  getLlama: async () => ({
+    systemInfo: 'CPU : SSE3 = 1 | AVX2 = 1 | AVX512 = 0 | FMA = 1',
+    cpuMathCores: 4,
+    maxThreads: 8,
+    loadModel: async () => ({
+      createContext: async () => ({ getSequence: () => ({}), dispose: async () => {} }),
+    }),
+  }),
+  LlamaChatSession: class { setChatHistory() {} async prompt() { return '2'; } },
+});
 
 /** 送り先だけを立てた設定。この中で読む道は使わない（どこでも同じ結果にする）。 */
 function configFor(baseUrl: string) {
@@ -115,5 +135,42 @@ describe('送って、返る', () => {
       answer: '2', model: 'local:m', loadSeconds: 1, answerSeconds: 0.2,
     });
     assert.ok(!/tok\/s/.test(few.detail), `短い回で速さを出している: ${few.detail}`);
+  });
+});
+
+describe('読む側の声も、頼んだ人まで届く', () => {
+  /**
+   * **ここを渡していなかったので、遅い理由が記録に出なかった。**
+   *
+   * Windows の一回が ubuntu の 10 倍かかったとき、記録に在ったのは
+   * 「停滞」だけだった。backend も CPU の素性も tok/s も、読む側
+   * （InProcRuntime）が持っていて、`log` を渡した相手にしか言わない。
+   *
+   * **「渡す行が在る」ことでは確かめない。**行を消しても案内は残るので、
+   * 実際に読ませて、読む側の一行が届くところを見る。
+   */
+  test('askOnce に log を渡すと、backend の一行が届く', async () => {
+    const dir = await tempDir('aas-oneturn-log-');
+    await writeFile(join(dir, 'm.gguf'), 'GGUF');
+    const said: string[] = [];
+    // 候補を書かない。書くと読む側に触らずに終わる（`readyLocalModel` が即座に返す）。
+    // 返事そのものは見ない（送り先は立てていない）。**見るのは記録の側**。
+    await askOnce({
+      providers: [{
+        id: 'local', kind: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1',
+        locality: 'local', models: ['m.gguf'], enabled: true,
+      }],
+      runtime: { kind: 'inproc', modelsDir: dir, basePort: 0 },
+      initiative: { enabled: false },
+    } as never, {
+      waitMs: 5000,
+      log: (l) => { said.push(l); },
+      hooks: { inprocLoad: fakeLib },
+    });
+    const line = said.find((l) => /で読みます/.test(l));
+    assert.ok(line, `読む側の一行が届いていない: ${JSON.stringify(said)}`);
+    // 素性とコアの数まで届く。ここが無いと「なぜ遅いのか」が記録から読めない。
+    assert.match(line, /AVX2/, `素性が入っていない: ${line}`);
+    assert.match(line, /4 コア \/ 8 スレッド/, `機械の大きさが入っていない: ${line}`);
   });
 });

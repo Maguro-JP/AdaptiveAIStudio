@@ -70,7 +70,43 @@ export interface Backend {
   vramBytes: number;
   /** CPU になった理由。GPU を使えているときは無い。 */
   reason?: BackendReason;
+  /** CPU の素性。ライブラリが報じたものを、そのまま持つ。 */
+  cpu?: CpuInfo;
 }
+
+/**
+ * CPU 側の素性。**遅い理由を、次の回で言えるようにする。**
+ *
+ * 同じモデル・同じ読み込み時間（12.8 秒 対 13.4 秒）で、**生成だけが 10 倍
+ * 違った**（ubuntu で 32 秒の足し算が、Windows のランナーで 342 秒）。
+ * ライブラリは CPU 向けの binary を素性ごとに持っていて（`libggml-cpu-haswell`
+ * `-sse42` `-x64` など）、動かす機械に合うものを読む。合うものが読めていないと、
+ * ここが桁で変わる。**それを記録していなかったので、遅い理由が分からなかった。**
+ *
+ * `systemInfo` は `CPU : SSE3 = 1 | AVX2 = 1 | …` の形で来る。1 のものだけ拾う。
+ */
+export interface CpuInfo {
+  /** 使える素性の名前（`AVX2` `AVX512` `FMA` など）。 */
+  features: string[];
+  /** 計算に使える core の数（ライブラリの `cpuMathCores`）。 */
+  cores: number;
+  /** 使えるスレッドの上限（ライブラリの `maxThreads`）。 */
+  threads: number;
+}
+
+/** `CPU : SSE3 = 1 | AVX2 = 0 | …` から、1 のものだけ拾う。 */
+export function cpuFeatures(systemInfo: string): string[] {
+  const out: string[] = [];
+  // 頭の `CPU :` は素性ではない。外してから区切る。
+  for (const part of String(systemInfo).replace(/^\s*CPU\s*:/i, '').split('|')) {
+    const m = /^\s*([A-Za-z0-9_]+)\s*=\s*(\d+)\s*$/.exec(part);
+    if (m && m[2] !== '0') out.push(m[1]!);
+  }
+  return out;
+}
+
+/** 速さに効く素性。**無いものは無いと言う。** */
+const SPEED_FEATURES = ['AVX2', 'AVX512', 'FMA', 'LLAMAFILE', 'REPACK'];
 export type BackendReason = 'off' | 'no-binary' | 'load-failed' | 'no-gpu' | 'named-missing';
 
 /** 人に見せる言葉。合図（`BackendReason`）は変えず、ここで引き直す。 */
@@ -101,7 +137,24 @@ export function describeBackend(b: Backend): string {
     const vram = b.vramBytes > 0 ? `、VRAM ${(b.vramBytes / 1024 ** 3).toFixed(1)}GB` : '';
     return `GPU で読みます: ${b.gpu === 'cuda' ? 'CUDA' : b.gpu === 'vulkan' ? 'Vulkan' : b.gpu}（${name}${vram}）`;
   }
-  return `CPU で読みます（${BACKEND_REASON[b.reason ?? 'no-gpu']}）`;
+  const why = BACKEND_REASON[b.reason ?? 'no-gpu'];
+  const cpu = b.cpu;
+  if (!cpu) return `CPU で読みます（${why}）`;
+  const has = SPEED_FEATURES.filter((f) => cpu.features.includes(f));
+  /*
+   * **AVX2 が無いことは、名指しで言う。**
+   *
+   * 在るものを並べるだけだと、無い機械では「短い行」になるだけで、
+   * 読む側は遅い理由に辿り着けない。ここがいちばん効く素性なので、
+   * 無いときは無いと書く。
+   */
+  const speed = cpu.features.includes('AVX2')
+    ? has.join('・')
+    : `AVX2 なし（この機械では何倍も遅くなります）${has.length > 0 ? `・${has.join('・')}` : ''}`;
+  const cores = cpu.cores > 0 ? `${cpu.cores} コア` : '';
+  const threads = cpu.threads > 0 ? `${cpu.threads} スレッド` : '';
+  const machine = [cores, threads].filter(Boolean).join(' / ');
+  return `CPU で読みます（${why}・${speed}${machine ? `・${machine}` : ''}）`;
 }
 
 /** ライブラリの、こちらが使う分だけの形（`getLlama` が返すもの）。 */
@@ -118,6 +171,21 @@ export interface LlamaLike {
   gpu?: false | 'cuda' | 'vulkan' | 'metal';
   getGpuDeviceNames?: () => Promise<string[]>;
   getVramState?: () => Promise<{ total: number; used: number; free: number }>;
+  /** `CPU : SSE3 = 1 | AVX2 = 1 | …`。試験のモックには無い。 */
+  systemInfo?: string;
+  /** 計算に使える core の数。試験のモックには無い。 */
+  cpuMathCores?: number;
+  /** 使えるスレッドの上限。試験のモックには無い。 */
+  maxThreads?: number;
+}
+
+/** ライブラリが報じた CPU の素性。報じないものは持たない。 */
+function cpuOf(llama: LlamaLike): CpuInfo | undefined {
+  const info = typeof llama.systemInfo === 'string' ? llama.systemInfo : '';
+  const cores = typeof llama.cpuMathCores === 'number' ? llama.cpuMathCores : 0;
+  const threads = typeof llama.maxThreads === 'number' ? llama.maxThreads : 0;
+  if (!info && cores === 0 && threads === 0) return undefined;
+  return { features: cpuFeatures(info), cores, threads };
 }
 export interface LlamaLib {
   getLlama: (o?: { gpu?: false | 'auto' | 'cuda' | 'vulkan'; build?: 'never'; logLevel?: 'error' }) => Promise<LlamaLike>;
@@ -163,7 +231,11 @@ export async function probeBackend(
      */
     if (mode === 'off') throw e;
     const cpu = await quietly(heard, () => lib.getLlama({ gpu: false, build: 'never', logLevel: 'error' }));
-    return { llama: cpu, backend: { gpu: false, devices: [], vramBytes: 0, reason: 'named-missing' } };
+    const info = cpuOf(cpu);
+    return {
+      llama: cpu,
+      backend: { gpu: false, devices: [], vramBytes: 0, reason: 'named-missing', ...(info ? { cpu: info } : {}) },
+    };
   }
   const gpu = llama.gpu ?? false;
   if (!gpu) {
@@ -173,11 +245,14 @@ export async function probeBackend(
         : /not found/i.test(said) ? 'no-binary'
           : /not compatible|failed to load/i.test(said) ? 'load-failed'
             : 'no-gpu';
-    return { llama, backend: { gpu: false, devices: [], vramBytes: 0, reason } };
+    const info = cpuOf(llama);
+    return { llama, backend: { gpu: false, devices: [], vramBytes: 0, reason, ...(info ? { cpu: info } : {}) } };
   }
   const devices = await llama.getGpuDeviceNames?.().catch(() => [] as string[]) ?? [];
   const vram = await llama.getVramState?.().catch(() => undefined);
-  return { llama, backend: { gpu, devices, vramBytes: vram?.total ?? 0 } };
+  const info = cpuOf(llama);
+  // GPU でも、載り切らない層は CPU で動く。素性は持ち帰る。
+  return { llama, backend: { gpu, devices, vramBytes: vram?.total ?? 0, ...(info ? { cpu: info } : {}) } };
 }
 
 /** 呼んでいる間だけ、向こうの console.warn / console.error を拾って黙らせる。 */

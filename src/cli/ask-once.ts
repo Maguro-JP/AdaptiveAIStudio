@@ -18,7 +18,7 @@ import type { AasConfig } from '../config.ts';
 import { buildRegistry } from '../core/build.ts';
 import { ChatOrchestrator } from '../core/orchestrator.ts';
 import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
-import { buildRuntime } from '../core/runtime-setup.ts';
+import { buildRuntime, type RuntimeHooks } from '../core/runtime-setup.ts';
 import { readyLocalModel } from '../core/local-ready.ts';
 import { speedOf } from '../core/session.ts';
 import { Priority } from '../providers/contract.ts';
@@ -46,6 +46,11 @@ export interface AskOnceOptions {
   waitMs?: number;
   /** 訊く言葉。既定は足し算（答えを見れば、通ったかどうかが人にも分かる）。 */
   ask?: string;
+  /**
+   * 読む側のモック。**試験で使う**（本物は数GBの GGUF が要る）。
+   * `buildRuntime` が同じ理由で持っている口を、そのまま通す。
+   */
+  hooks?: RuntimeHooks;
 }
 
 export async function askOnce(config: AasConfig, opts: AskOnceOptions = {}): Promise<OneTurn> {
@@ -53,7 +58,9 @@ export async function askOnce(config: AasConfig, opts: AskOnceOptions = {}): Pro
   const registry = buildRegistry(config);
   const orchestrator = new ChatOrchestrator(registry);
   const pilot = await setupAutopilot(config, registry);
-  const runtime = await buildRuntime(config, pilot.machine);
+  // 読む側の声（backend・CPU の素性・コンテキストウィンドウ・tok/s）も流す。
+  // ここを渡していなかったので、**遅い理由が記録に出なかった**。
+  const runtime = await buildRuntime(config, pilot.machine, opts.log, opts.hooks ?? {});
   try {
     const ready = await readyLocalModel(config, runtime, opts.log);
     const picked = resolveCandidates(ready.config, pilot);
