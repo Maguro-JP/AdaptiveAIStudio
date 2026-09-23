@@ -737,19 +737,32 @@ describe('訊かれただけのとき', () => {
    * 結末の出来事（settled）に「訊かれただけの回か」を載せる。
    */
   test('**結末に、訊かれただけの回かが載る**', async () => {
-    // 結末は `session` の中に包まれて流れてくる。
+    /*
+     * **この会話の結末だけを見る。**
+     *
+     * ここは会話を問わず `settled` を見ていた。前のテストの後片付けが
+     * 読み始めた直後に届くと、**送る前に「終わった」と読んで**、
+     * 前の回の結末を答えにしてしまう。全部まとめて回したときだけ落ちる形で、
+     * 実際に一度落ちた（単独では通る）。上の「二度目」のテストは同じ理由で
+     * 会話の名前で分けてある（`forId`）。同じ形をこちらにも入れる。
+     */
     const isSettled = (e: unknown): boolean =>
       (e as { type?: string; event?: { type?: string } }).type === 'session'
       && (e as { event?: { type?: string } }).event?.type === 'settled';
-    const done = (evs: unknown[]) => evs.some(isSettled);
+    let mine: string | undefined;
+    const isMine = (e: unknown): boolean =>
+      mine !== undefined && (e as { conversationId?: string }).conversationId === mine;
+    const done = (evs: unknown[]) => evs.some((e) => isMine(e) && isSettled(e));
     const collecting = collect(done);
     await opened;
-    await fetch(`${base}/api/send`, {
+    const r = await fetch(`${base}/api/send`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: '1+1=' }),
     });
+    mine = (await r.json() as { conversationId?: string }).conversationId;
+    assert.ok(mine, '会話の名前が返っていない');
     const evs = await collecting;
-    const settled = evs.filter(isSettled).at(-1) as
+    const settled = evs.filter((e) => isMine(e) && isSettled(e)).at(-1) as
       { event?: { chat?: boolean; reason?: string } } | undefined;
     assert.ok(settled, `結末が出ていない: ${JSON.stringify(evs).slice(0, 300)}`);
     assert.equal(settled.event?.chat, true, `訊かれた回だと言っていない: ${JSON.stringify(settled)}`);
@@ -761,15 +774,22 @@ describe('訊かれただけのとき', () => {
     const isSettled = (e: unknown): boolean =>
       (e as { type?: string; event?: { type?: string } }).type === 'session'
       && (e as { event?: { type?: string } }).event?.type === 'settled';
-    const done = (evs: unknown[]) => evs.some(isSettled);
+    // 上と同じ理由で、この会話の結末だけを見る。
+    let mine: string | undefined;
+    const isMine = (e: unknown): boolean =>
+      mine !== undefined && (e as { conversationId?: string }).conversationId === mine;
+    const done = (evs: unknown[]) => evs.some((e) => isMine(e) && isSettled(e));
     const collecting = collect(done);
     await opened;
-    await fetch(`${base}/api/send`, {
+    const r = await fetch(`${base}/api/send`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ text: 'src/a.ts を直して' }),
     });
+    mine = (await r.json() as { conversationId?: string }).conversationId;
+    assert.ok(mine, '会話の名前が返っていない');
     const evs = await collecting;
-    const settled = evs.filter(isSettled).at(-1) as { event?: { chat?: boolean } } | undefined;
+    const settled = evs.filter((e) => isMine(e) && isSettled(e)).at(-1) as
+      { event?: { chat?: boolean } } | undefined;
     assert.ok(settled, '結末が出ていない');
     assert.notEqual(settled.event?.chat, true, `作業なのに訊かれた回だと言っている: ${JSON.stringify(settled)}`);
   });
