@@ -52,6 +52,7 @@ JST と UTC の対応。
 
 | 名前 | cron（UTC） | プロンプト |
 |---|---|---|
+| `long-dev` | `0 1 * * *` | long-dev E=23h を実行する。翌朝 09:00 まで回す |
 | `dev-report daily` | `0 0 * * *` | dev-report daily を実行する。日報を書く。開発はしない |
 | `dev-report weekly` | `0 0 * * 1` | dev-report weekly を実行する。週報と来週の計画。PR を整理する |
 | `dev-report monthly` | `0 0 1 * *` | dev-report monthly を実行する。月報と今月の週ごとの計画 |
@@ -65,7 +66,8 @@ Raphael の配布は Actions の schedule で、Routine ではない。土曜 09
 
 | 周期 | 月の起動回数 |
 |---|---|
-| daily | 約30。報告だけなので短い |
+| daily（報告） | 約30。報告だけなので短い |
+| long-dev | 約30。1回が翌朝まで続く長いセッション |
 | weekly | 4〜5 |
 | monthly | 1 |
 | 朝夕 | 約60 |
