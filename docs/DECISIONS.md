@@ -7617,6 +7617,14 @@ long-dev の原則は `docs/knowledge/`（tech / problems / ai / decisions）に
 | 索引の行 | `docs/knowledge/README.md` |
 | 周期の起動 | Routine `long-dev weekly（AdaptiveAIStudio）`（毎週月曜 09:00 JST） |
 
+**置き換え済み（同日）。**同じ日に long-dev の設計が変わり（#25〜#27）、知識は
+`docs/knowledge/` の 4 ファイル（tech / problems / ai / decisions）に書く形になった。
+設計どおりに 4 ファイルを置き、`decisions.md` だけは `docs/DECISIONS.md` を指す
+（決定はここに書く決まりが先に在るため）。定期実行も設計どおり 4 つにした:
+`long-dev`（毎日 10:00 JST、翌朝まで）、`dev-report daily`（毎日 09:00）、
+`dev-report weekly`（月曜 09:00）、`dev-report monthly`（1日 09:00）。
+先に作った `long-dev weekly` と `long-dev daily` は消さずに無効にした。
+
 ## 2026-09-24  テストの数は、外のツールの手前でも記録する
 
 2026-09-23 の「塞げていないところ」の半分を塞ぐ。
