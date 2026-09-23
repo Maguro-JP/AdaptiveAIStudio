@@ -9,14 +9,17 @@
 |---|---|
 | 版 | 0.12.1（`package.json`）。v0.12.0 の後、#16〜#19 は全部「直し」なので最後の桁 |
 | release | v0.12.0 まで出ている（portable / portable-noexe / Setup.exe） |
-| main の先頭 | `5229a27`（#19）。いまの作業は PR #20（draft、`claude/adaptive-ai-parallel-execution-6fbg6a`。先頭は `f1cff5a`） |
+| main の先頭 | PR #20 を squash でマージした commit（2026-09-23）。その直前は `031702e`（#21） |
+| 次の作業 | **main から枝を切り直す。**#20 はマージ済みなので、あの枝に積まない |
 | 配る物（2026-09-23 に手元で組んだ） | `Setup.exe` 158MB（CPU・CUDA・Vulkan）／`portable-noexe-cpu.zip` 80MB（`.exe` 0 個・CPU のみ）。**Releases には置けていない**（下記） |
-| テスト | 2643 件（linux。うち 3 件は意図して飛ばす）。**`npm run check` に「CI へ出す前の確かめ」が入った**（`scripts/real-answer-dry.mjs`。CI が動かすものを、作り物の模型でこの機械に通す） |
+| テスト | 2691 件（linux。うち 3 件は意図して飛ばす）。`npm run check` に「CI へ出す前の確かめ」が入っている（`scripts/real-answer-dry.mjs`） |
+| push の手前 | `.githooks/pre-push` が、確かめの**前と後**で木を見る。汚れている・別のブランチを押している・確かめ中に HEAD が動いた、のどれかなら止める（タグと、消す push は除く） |
 | 配る形で1ターン（Windows） | **CI で通った**（組む → 中のテスト → 画面 → 送って返る → sweep → 止まる）。重みは乱数の模型 |
 | 本物の重みで1ターン | **ubuntu は両方通った**（2026-09-19 JST）。**Windows は足し算だけ通った**（2026-09-22 JST、run 35683441820）。ツールを呼ぶ方は 10 分の上限で打ち切られた |
 
 `npm run check` の終わりが「確かめていないこと」の一覧を出す（`scripts/not-checked.mjs`）。
 **そこに並んでいるものは、一つも確かめられていない。**報告に写すときは要約しない。
+一行目の版は**確かめを始めた時点**のもの。汚れた木で回したなら、そうも書く。
 
 ## 先に読むもの
 
