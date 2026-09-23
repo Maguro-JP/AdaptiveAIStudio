@@ -14,10 +14,16 @@
 import { type Tool, ok, fail } from '../agent/tools/types.ts';
 import { inspectInbound, describeVerdict } from '../harness/gate.ts';
 import { type Inspector, combine } from '../harness/inspector.ts';
+import { EXTERNAL_SEPARATOR } from '../agent/tools/write-kind.ts';
 import type { McpClient } from './client.ts';
 
-/** 名前の区切り。モデルが呼びやすいよう、記号は使わない。 */
-export const SEPARATOR = '__';
+/**
+ * 名前の区切り。モデルが呼びやすいよう、記号は使わない。
+ *
+ * **決めているのは `write-kind.ts` の側。**守りが「外から来たものか」を
+ * この形で見分けるので、二箇所に同じ文字を書くと片方だけ変わる。
+ */
+export const SEPARATOR = EXTERNAL_SEPARATOR;
 
 export function toolName(server: string, tool: string): string {
   return `${server}${SEPARATOR}${tool}`;

@@ -19,6 +19,34 @@ export function isWriteTool(name: string): boolean {
   return (WRITE_TOOLS as readonly string[]).includes(name);
 }
 
+/**
+ * 外から来たツール（MCP）の名前の区切り。`<サーバ名>__<ツール名>`。
+ *
+ * **この場所のツールには入れない。**入れた瞬間、そのツールは
+ * 「外から来たもの」として扱われる。`test/mcp-protected.test.ts` で止めている。
+ */
+export const EXTERNAL_SEPARATOR = '__';
+
+/** 外から来たツールか。 */
+export function isExternalTool(name: string): boolean {
+  return name.includes(EXTERNAL_SEPARATOR);
+}
+
+/**
+ * ファイルを書き換える**かもしれない**か。
+ *
+ * 守りはどれも `isWriteTool` で入口を絞っていた。名前の一致で見るので、
+ * 当たるのは `write_file` と `edit_file` の二つだけ。**外から来たツールは
+ * 一つも当たらない。**相手が何をするかはこちらからは分からないのに、
+ * 「書かない側」に置いていたことになる。
+ *
+ * 分からないものは、書くかもしれない側に置く。**分からないことを理由に
+ * 素通りさせない。**
+ */
+export function mayWriteFiles(name: string): boolean {
+  return isWriteTool(name) || isExternalTool(name);
+}
+
 /** 呼び出しから、書き換える先の道を取る。 */
 export function writePath(args: Record<string, unknown> | unknown): string | undefined {
   if (typeof args !== 'object' || args === null) return undefined;
