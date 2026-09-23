@@ -19,7 +19,9 @@ import { dirname, join } from 'node:path';
 import { mkdtempSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
-import { describeNotChecked } from './not-checked.mjs';
+import { reportEnd } from './not-checked.mjs';
+import { lookTreeOrEmpty } from './git-tree.mjs';
+import { treeMoved } from './pushed-tree.mjs';
 import { findBrowser } from './find-browser.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -200,6 +202,18 @@ function tokenizer() {
   return run('数え方', [join(root, 'scripts', 'tokenizer-conformance.mjs')]);
 }
 
+/*
+ * **どの木を確かめるのかを、始めに控える。**
+ *
+ * ここは版を終わりに読んでいた。途中で commit すると、**確かめていない版が
+ * 「通りました（…）」に書かれる**（実際に書かれた）。始めに読んで、
+ * 終わりに動いていないかを見る。
+ *
+ * commit していない直しも控える。汚れた木でも回す（回さないと何も確かめられない）
+ * が、**その sha そのものの話ではないと言う。**
+ */
+const began = lookTreeOrEmpty(root);
+
 const typecheck = run('型検査', [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit']);
 if (typecheck !== 0) process.exit(typecheck);
 
@@ -222,14 +236,24 @@ if (dry !== 0) process.exit(dry);
  * 中身は `scripts/not-checked.mjs`。走らせないと出ない文章は書いたことに
  * ならないので、**そのものを検査にかけられる形**にして外に出してある。
  */
-let head = '';
-try {
-  head = spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8' })
-    .stdout.trim();
-} catch { /* git が無い場所でも出す */ }
-console.log(`\n${describeNotChecked({
-  platform: process.platform,
-  sweep: ready.ok ? 'ran' : ready.why,
-  realModel: existsSync(join(root, 'node_modules', 'node-llama-cpp')),
-}, head)}`);
-process.exit(0);
+/*
+ * 始めの木と、終わりの木を突き合わせて、出すものを決める。
+ *
+ * 動いていたら、この結果はどちらの木の話か決まらない。**通ったと言わない。**
+ * push の手前では `.githooks/pre-push` が同じことを見るが、`npm run check` を
+ * 直に回したときは、ここが最後の砦になる。
+ *
+ * 判断は `reportEnd` に置いてある（走らせないと出ない文章にしないため）。
+ */
+const end = reportEnd({
+  began,
+  ended: lookTreeOrEmpty(root),
+  how: {
+    platform: process.platform,
+    sweep: ready.ok ? 'ran' : ready.why,
+    realModel: existsSync(join(root, 'node_modules', 'node-llama-cpp')),
+  },
+  moved: treeMoved,
+});
+console.log(`\n${end.text}`);
+process.exit(end.code);

@@ -57,17 +57,34 @@ export function pushedTree(push) {
       + '  ・押すブランチを git switch で出してから押す';
   }
 
+  return treeMoved(before, after);
+}
+
+/**
+ * 確かめている間に、木が変わったか。
+ *
+ * push の手前だけでなく、`npm run check` を直に回したときも要る。あちらは
+ * **汚れていても回す**（回さないと何も確かめられない）ので、汚れそのものを
+ * 止める条件と、動いたことを言う条件は分けておく。
+ *
+ * @param {{ head: string, dirty: readonly string[] }} before
+ * @param {{ head: string, dirty: readonly string[] }} after
+ * @returns {string | undefined}
+ */
+export function treeMoved(before, after) {
   if (after.head !== before.head) {
     return `確かめている間に HEAD が動きました（${short(before.head)} → ${short(after.head)}）。\n`
-      + `確かめたのは ${short(before.head)} の木で、押されるのは ${short(after.head)} です。\n`
-      + '  ・もう一度押す（今度は動かした後の木を確かめます）';
+      + `確かめたのは ${short(before.head)} の木で、出るのは ${short(after.head)} です。\n`
+      + '  ・もう一度回す（今度は動かした後の木を確かめます）';
   }
 
-  if (after.dirty.length > 0) {
-    return `確かめている間に、commit していない直しが ${after.dirty.length} 件できました。\n`
-      + `${list(after.dirty)}\n`
+  // 数ではなく中身で見る。一つ片付いて一つ汚れると、数は同じまま木が変わる。
+  const grew = after.dirty.filter((l) => !before.dirty.includes(l));
+  if (grew.length > 0) {
+    return `確かめている間に、commit していない直しが ${grew.length} 件増えました。\n`
+      + `${list(grew)}\n`
       + '確かめの途中で木が変わっているので、結果がどちらの木の話か決まりません。\n'
-      + '  ・もう一度押す（今度は止まったところから確かめ直します）';
+      + '  ・もう一度回す（今度は止まったところから確かめ直します）';
   }
 
   return undefined;

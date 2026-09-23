@@ -13,7 +13,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, copyFile, readFile } from 'node:fs/promises';
+import { mkdir, writeFile, copyFile, readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
@@ -99,9 +99,13 @@ async function sandbox(check: string): Promise<{ work: string; remote: string; r
   await mkdir(join(work, '.githooks'), { recursive: true });
   await mkdir(join(work, 'src'), { recursive: true });
 
-  for (const f of ['pushed-tree.mjs', 'pushed-tree-check.mjs',
-    'docs-only-push.mjs', 'docs-only-check.mjs']) {
-    await copyFile(join(here, 'scripts', f), join(work, 'scripts', f));
+  /*
+   * scripts/ は**丸ごと**写す。名前を並べていたら、`git-tree.mjs` を切り出した
+   * ときに写し漏れて 7 件落ちた。フックが呼ぶ物の依存まで数え上げるのは、
+   * 足すたびに漏れる形。並べずに全部持っていく。
+   */
+  for (const f of await readdir(join(here, 'scripts'))) {
+    if (f.endsWith('.mjs')) await copyFile(join(here, 'scripts', f), join(work, 'scripts', f));
   }
   await copyFile(join(here, '.githooks', 'pre-push'), join(work, '.githooks', 'pre-push'));
   /*

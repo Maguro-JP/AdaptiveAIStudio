@@ -12,26 +12,10 @@
  * `before` を確かめの前に置くのは、**10 分待たせてから「汚れています」と
  * 言わないため。**動いたかどうかは後でしか分からないので、そこだけ後に回す。
  */
-import { execFileSync } from 'node:child_process';
 import { pushedTree } from './pushed-tree.mjs';
+import { lookTree, pack, unpack } from './git-tree.mjs';
 
-/** いまの木を読む。 */
-function look() {
-  const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-  const dirty = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' })
-    .split('\n').map((l) => l.trim()).filter(Boolean);
-  return { head, dirty };
-}
-
-/** 一行に畳む。シェルの変数へ入れて持ち回るため。 */
-export function pack(tree) {
-  return [tree.head, ...tree.dirty].join('\t');
-}
-
-export function unpack(line) {
-  const [head, ...dirty] = String(line).split('\t');
-  return { head: head ?? '', dirty: dirty.filter(Boolean) };
-}
+const look = () => lookTree();
 
 function stop(why) {
   process.stdout.write(`== ${why}\n`);
