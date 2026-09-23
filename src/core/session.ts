@@ -18,7 +18,7 @@ import {
   listServicesTool, createConnectServiceTool, createDisconnectServiceTool, type ServiceHooks,
 } from '../agent/tools/services.ts';
 import { defaultWorkRoot } from './home.ts';
-import { isWriteTool } from '../agent/tools/write-kind.ts';
+import { isWriteTool, mayChangeFiles, changesFilesHere } from '../agent/tools/write-kind.ts';
 import { resolve, join } from 'node:path';
 import type { AasConfig } from '../config.ts';
 import { buildRegistry } from './build.ts';
@@ -771,10 +771,14 @@ export class Session {
         else if (ev.type === 'handoff') yield { type: 'handoff', taskId: ev.taskId, from: ev.from };
         else if (ev.type === 'running') yield { type: 'running', taskIds: ev.taskIds };
         else if (ev.type === 'agent' && ev.event.type === 'toolEnd') {
-          if (!ev.event.isError && isWriteTool(ev.event.call.name)) {
-            const path = (ev.event.call.args as { path?: string }).path;
-            if (path) written.add(path.replace(/\\/g, '/').replace(/^\.\//, ''));
+          if (!ev.event.isError && mayChangeFiles(ev.event.call.name)) {
             this.#prefetch.invalidate();
+            // 触った先が分かるのは、この場所の書くツールだけ。外のツールと
+            // run_command は path を持たない（持っていても意味が違う）。
+            if (isWriteTool(ev.event.call.name)) {
+              const path = (ev.event.call.args as { path?: string }).path;
+              if (path) written.add(path.replace(/\\/g, '/').replace(/^\.\//, ''));
+            }
           }
           yield {
             type: 'work', taskId: ev.taskId, ok: !ev.event.isError,
@@ -1256,7 +1260,7 @@ export class Session {
       };
 
       /** 作業場を変えうる道具か。触る前に、作業前の状態を控える。 */
-      const changesFiles = (name: string): boolean => isWriteTool(name) || name === 'run_command';
+      const changesFiles = changesFilesHere;
 
       /*
        * 効かなかった道具を数える。
@@ -1310,7 +1314,7 @@ export class Session {
                 const at = (ev.call.args as { path?: unknown }).path;
                 if (typeof at === 'string' && !changedHere.includes(at)) changedHere.push(at);
               }
-              if (!ev.isError && isWriteTool(ev.call.name)) this.#prefetch.invalidate();
+              if (!ev.isError && mayChangeFiles(ev.call.name)) this.#prefetch.invalidate();
               yield {
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
               };
@@ -1380,7 +1384,7 @@ export class Session {
               }
               events.push({ type: 'toolStart', name: ev.call.name, summary: summarize(ev.call.args) });
             } else if (ev.type === 'toolEnd') {
-              if (!ev.isError && isWriteTool(ev.call.name)) this.#prefetch.invalidate();
+              if (!ev.isError && mayChangeFiles(ev.call.name)) this.#prefetch.invalidate();
               events.push({
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
               });
