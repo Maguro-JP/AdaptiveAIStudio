@@ -52,12 +52,12 @@ JST と UTC の対応。
 
 | 名前 | cron（UTC） | プロンプト |
 |---|---|---|
-| `long-dev daily` | `0 0 * * *` | long-dev daily を実行する。principles.md に従い、変更不要なら変更不要と報告する |
+| `long-dev daily` | `0 0 * * *` | long-dev daily を実行する。前日を評価して優先を決め、auto-dev を L=auto E=23h で次の朝まで回す |
 | `long-dev weekly` | `0 0 * * 1` | long-dev weekly を実行する |
 | `long-dev monthly` | `0 0 1 * *` | long-dev monthly を実行する |
 | `auto-dev 朝夕` | `0 0,9 * * *` | auto-dev E=1h を実行する。優先: <指示> |
 
-long-dev は weekly から始めて、様子を見て daily を足すのを勧める。
+long-dev は3つを揃えて作る。daily が本体で、weekly と monthly はその上の評価と計画。
 
 Raphael の配布は Actions の schedule で、Routine ではない。土曜 09:00 JST。
 
@@ -65,7 +65,7 @@ Raphael の配布は Actions の schedule で、Routine ではない。土曜 09
 
 | 周期 | 月の起動回数 |
 |---|---|
-| daily | 約30 |
+| daily | 約30。1回が次の朝まで続く長いセッション |
 | weekly | 4〜5 |
 | monthly | 1 |
 | 朝夕 | 約60 |

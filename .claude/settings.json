@@ -1,9 +1,4 @@
 {
-  "permissions": {
-    "deny": [
-      "mcp__github__actions_run_trigger"
-    ]
-  },
   "hooks": {
     "SessionStart": [
       {
