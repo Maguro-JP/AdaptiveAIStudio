@@ -1,6 +1,6 @@
 ---
 name: scheduler
-description: 定期実行（Routine）を作る・見る・止めるとき。「毎日回して」「毎週月曜に」「毎月1日に」「定期実行して」「スケジュールを止めて」「いつ動くようにした?」と言われたとき、long-dev や auto-dev を時刻で起こしたいときに使う。cron は UTC で分は 0、間隔指定（*/N）は使わず時刻を列挙する、毎回新しいセッションで起こす、1回の起動は1セッション分のトークン、を守る。1時間以内の繰り返しは loop の仕事で、このスキルは使わない。
+description: 定期実行（Routine）を作る・見る・止めるとき。「毎日回して」「毎週月曜に」「毎月1日に」「定期実行して」「スケジュールを止めて」「いつ動くようにした?」と言われたとき、dev-report や auto-dev を時刻で起こしたいときに使う。cron は UTC で分は 0、間隔指定（*/N）は使わず時刻を列挙する、毎回新しいセッションで起こす、1回の起動は1セッション分のトークン、を守る。1時間以内の繰り返しは loop の仕事で、このスキルは使わない。
 ---
 
 # スケジューリング
@@ -52,12 +52,13 @@ JST と UTC の対応。
 
 | 名前 | cron（UTC） | プロンプト |
 |---|---|---|
-| `long-dev daily` | `0 0 * * *` | long-dev daily を実行する。principles.md に従い、変更不要なら変更不要と報告する |
-| `long-dev weekly` | `0 0 * * 1` | long-dev weekly を実行する |
-| `long-dev monthly` | `0 0 1 * *` | long-dev monthly を実行する |
+| `long-dev` | `0 1 * * *` | long-dev E=23h を実行する。翌朝 09:00 まで回す |
+| `dev-report daily` | `0 0 * * *` | dev-report daily を実行する。日報を書く。開発はしない |
+| `dev-report weekly` | `0 0 * * 1` | dev-report weekly を実行する。週報と来週の計画。PR を整理する |
+| `dev-report monthly` | `0 0 1 * *` | dev-report monthly を実行する。月報と今月の週ごとの計画 |
 | `auto-dev 朝夕` | `0 0,9 * * *` | auto-dev E=1h を実行する。優先: <指示> |
 
-long-dev は weekly から始めて、様子を見て daily を足すのを勧める。
+報告の3つは揃えて作る。開発そのもの（long-dev）は Routine ではなく、セッションで回し続けるもの。
 
 Raphael の配布は Actions の schedule で、Routine ではない。土曜 09:00 JST。
 
@@ -65,7 +66,8 @@ Raphael の配布は Actions の schedule で、Routine ではない。土曜 09
 
 | 周期 | 月の起動回数 |
 |---|---|
-| daily | 約30 |
+| daily（報告） | 約30。報告だけなので短い |
+| long-dev | 約30。1回が翌朝まで続く長いセッション |
 | weekly | 4〜5 |
 | monthly | 1 |
 | 朝夕 | 約60 |
@@ -86,6 +88,7 @@ push とマージをさせるなら、書き込み可能な状態で作る。
 
 ## 他のスキルとの関係
 
-- 長期開発の周期: `long-dev`
+- 日報・週報・月報: `dev-report`
+- 終わりの無い自律開発: `long-dev`
 - 周ごとの作業: `auto-dev`
 - 1時間以内の繰り返し: `loop`
