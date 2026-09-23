@@ -3,14 +3,15 @@
 次に入る人（または次のセッション）が、ここから続けるための書き置き。
 **経緯ではなく、いま何が在って、何が無いかを書く。**
 
-## いまの状態（2026-09-19）
+## いまの状態（2026-09-23）
 
 | | |
 |---|---|
 | 版 | 0.12.1（`package.json`）。v0.12.0 の後、#16〜#19 は全部「直し」なので最後の桁 |
 | release | v0.12.0 まで出ている（portable / portable-noexe / Setup.exe） |
-| main の先頭 | `5229a27`（#19）。いまの作業は PR #20（draft、`claude/adaptive-ai-parallel-execution-6fbg6a`） |
-| テスト | 2562 件（linux。うち 3 件は意図して飛ばす）。Windows の CI も緑（run 35072134737） |
+| main の先頭 | `5229a27`（#19）。いまの作業は PR #20（draft、`claude/adaptive-ai-parallel-execution-6fbg6a`。先頭は `f1cff5a`） |
+| 配る物（2026-09-23 に手元で組んだ） | `Setup.exe` 158MB（CPU・CUDA・Vulkan）／`portable-noexe-cpu.zip` 80MB（`.exe` 0 個・CPU のみ）。**Releases には置けていない**（下記） |
+| テスト | 2643 件（linux。うち 3 件は意図して飛ばす）。**`npm run check` に「CI へ出す前の確かめ」が入った**（`scripts/real-answer-dry.mjs`。CI が動かすものを、作り物の模型でこの機械に通す） |
 | 配る形で1ターン（Windows） | **CI で通った**（組む → 中のテスト → 画面 → 送って返る → sweep → 止まる）。重みは乱数の模型 |
 | 本物の重みで1ターン | **ubuntu は両方通った**（2026-09-19 JST）。**Windows は足し算だけ通った**（2026-09-22 JST、run 35683441820）。ツールを呼ぶ方は 10 分の上限で打ち切られた |
 
@@ -123,8 +124,14 @@ GitHub Actions のランナーは外へ出られる。本物の重みを確か�
 - **本物の重みで1ターン**（上）。ubuntu は両方通った。Windows は足し算の1ターンが通り、
   ツールを呼ぶ方が 10 分の上限で打ち切られた（run 35683441820）。出す量を下げて
   （`maxTokens` 256 → 96）、打ち切りを打ち切りと言う形にしたが、**効いたかは確かめられていない**
-- **GitHub Actions のジョブが始まらない**（2026-09-22 JST の昼以降）。`2ac334e` で回した
-  二つが、どちらも 3 秒で落ちている（run 35686392730 の ubuntu、run 35752188758 の windows）。
+- **配る物を Releases へ置けない**。この session に GitHub の資格情報が無い
+  （`gh` 無し、MCP に release を作る口が無い、credential helper も環境変数も無い）。
+  publish の経路は `release.yml` だけで、`v*` のタグか `release/v*` の枝を押すと動く。
+  **どちらも Actions の枠が要る。**枠が戻ったら `release/v0.12.1` の枝を押す。
+  それまでの渡し方は、28 MiB ずつに割って送る（この場に送れるのは 30 MiB まで）。
+  結合用の `join.cmd` を添えると、向こうで `copy /b` して SHA256 まで出る
+- **GitHub Actions のジョブが始まらない**（2026-09-22 JST の昼以降、2026-09-23 も同じ）。
+  `2ac334e`・`999943f`・`a450760`・`f1cff5a` で回した回が、どれも 3 秒で落ちている。
   段取りが一つも記録されず、ログも 404。checkout に入っていないので、こちらのコードは走っていない。
   04:18 UTC より前は同じ workflow が全部通っている。
   **枠（private の実行時間）を使い切っている形が、いちばんあり得る**（Windows は 2 倍で数える。
