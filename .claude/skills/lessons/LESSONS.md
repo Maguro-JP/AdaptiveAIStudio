@@ -4,6 +4,12 @@
 1件は4行。場面は「次から」を差し込むときの索引になるので、短い名詞で書く。
 新しいものを上に足す。
 
+## 2026-09-24 docs だけの PR を、一部の試験だけで通してマージした
+場面: マージ、docs
+起きたこと: PR #24 で docs/DECISIONS.md に節を足し、test/wording.test.ts だけ回してマージした。目次の試験 test/decisions.test.ts が main で落ちた（CI は paths-ignore で走らない）
+判定の誤り: docs だけなら試験に関係しないと決めた。docs を読む試験があり、CI も docs では回らないので、手元が唯一の関門だった
+次から: docs だけの変更でも、マージの前に手元で npm test を全部回す
+
 ## 2026-09-22 CI が赤いまま PR をマージした
 場面: マージ
 起きたこと: RuleCrawler #3 を `mergeable_state: unstable` のままマージした。verify は落ちていた

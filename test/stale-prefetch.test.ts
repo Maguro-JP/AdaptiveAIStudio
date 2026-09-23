@@ -87,15 +87,22 @@ describe('捨てる場所が、全部その判じ方を使っている', () => {
      * テストを一度走らせる。**外のツールの手前に置くと 1ターンが何十秒も伸びる
      * （広げた回に、外のツールを呼ぶ e2e が記録を待つ間に打ち切られた）。
      *
-     * 呼ぶ行を名指しで見る。うっかり `mayChangeFiles` に戻すと、
-     * また同じところで打ち切られる。
+     * 記録の取り方は `src/agent/before-work.ts` に集めた（テストの数は外のツールの
+     * 手前でも取り、重い方は `changesFilesHere` でだけ取る。振る舞いは
+     * `test/before-work.test.ts`）。ここでは、session がそれを通していることと、
+     * 重い方の判じ方が `mayChangeFiles` に戻っていないことを名指しで見る。
      */
     const src = await readFile(
       join(import.meta.dirname, '..', 'src', 'core', 'session.ts'), 'utf8');
-    assert.match(src, /const changesFiles = changesFilesHere;/,
-      '作業前の記録が、別の判じ方で決まっています');
-    assert.doesNotMatch(src, /const changesFiles = mayChangeFiles;/,
-      '記録を外のツールまで広げています（e2e がそこで打ち切られます）');
+    assert.match(src, /new BeforeWork\(/, '作業前の記録が BeforeWork を通っていません');
+    assert.match(src, /await before\.atToolStart\(ev\.call\.name\);/,
+      'ツールの手前で記録を取っていません');
+    assert.doesNotMatch(src, /snapshotTests\(this\.root\)\.catch/,
+      'BeforeWork の外で、別にテストの数を記録しています');
+    const helper = await readFile(
+      join(import.meta.dirname, '..', 'src', 'agent', 'before-work.ts'), 'utf8');
+    assert.match(helper, /!this\.#measured && changesFilesHere\(name\)/,
+      '重い記録の判じ方が変わっています（外のツールまで広げると e2e が打ち切られます）');
   });
 
   test('先読みと記録で、外のツールの扱いが違う', () => {

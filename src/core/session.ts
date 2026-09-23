@@ -18,7 +18,7 @@ import {
   listServicesTool, createConnectServiceTool, createDisconnectServiceTool, type ServiceHooks,
 } from '../agent/tools/services.ts';
 import { defaultWorkRoot } from './home.ts';
-import { isWriteTool, mayChangeFiles, changesFilesHere } from '../agent/tools/write-kind.ts';
+import { isWriteTool, mayChangeFiles } from '../agent/tools/write-kind.ts';
 import { resolve, join } from 'node:path';
 import type { AasConfig } from '../config.ts';
 import { buildRegistry } from './build.ts';
@@ -81,6 +81,7 @@ import { fitByTokens, estimateTokens } from '../agent/window.ts';
 import { ProjectRules } from '../agent/project-rules.ts';
 import type { Counter } from '../agent/tokenizer.ts';
 import { resolveCounting, type Counting } from './counting.ts';
+import { BeforeWork } from '../agent/before-work.ts';
 import { describeNet } from '../runtime/net-why.ts';
 
 /**
@@ -1238,29 +1239,29 @@ export class Session {
        * 測るのは、最初にファイルを触る直前。そこまでは作業場は変わっていないので、
        * 「作業前」であることは変わらない。
        */
-      let testsBefore: Awaited<ReturnType<typeof snapshotTests>> | undefined;
       let baseline: VerifyResult | undefined;
-      let measured = false;
       /** 測っている間に出た出来事。流れの順番を崩さないよう、外へ出して渡す。 */
       const beforeEvents: SessionEvent[] = [];
-      const measureBefore = async (): Promise<void> => {
-        if (measured || !verifyOn) return;
-        measured = true;
-        testsBefore = await snapshotTests(this.root).catch(() => undefined);
-        if (!command || verifyCfg.baseline === false) return;
-        const probed = await this.measureBaseline(command, ac.signal);
-        baseline = probed.result;
-        beforeEvents.push({
-          type: 'baseline', command,
-          passed: probed.status === 'passed',
-          cached: probed.cached,
-          ...(probed.status === 'unknown' ? { unknown: true } : {}),
-          ...(probed.reason !== undefined ? { detail: probed.reason } : {}),
-        });
-      };
-
-      /** 作業場を変えうる道具か。触る前に、作業前の状態を控える。 */
-      const changesFiles = changesFilesHere;
+      /*
+       * テストの数は、外のツールの手前でも記録する（軽い）。作業前の成否は、
+       * この場所のツールの手前でだけ測る（重い）。分けた理由は `before-work.ts`。
+       */
+      const before = new BeforeWork({
+        enabled: verifyOn,
+        snapshot: () => snapshotTests(this.root),
+        measure: async () => {
+          if (!command || verifyCfg.baseline === false) return;
+          const probed = await this.measureBaseline(command, ac.signal);
+          baseline = probed.result;
+          beforeEvents.push({
+            type: 'baseline', command,
+            passed: probed.status === 'passed',
+            cached: probed.cached,
+            ...(probed.status === 'unknown' ? { unknown: true } : {}),
+            ...(probed.reason !== undefined ? { detail: probed.reason } : {}),
+          });
+        },
+      });
 
       /*
        * 効かなかった道具を数える。
@@ -1294,10 +1295,8 @@ export class Session {
               break;
             case 'toolStart':
               // 作業場を変える手前で、作業前の状態を控える。
-              if (changesFiles(ev.call.name)) {
-                await measureBefore();
-                while (beforeEvents.length > 0) yield beforeEvents.shift()!;
-              }
+              await before.atToolStart(ev.call.name);
+              while (beforeEvents.length > 0) yield beforeEvents.shift()!;
               // 書き込む前の状態を控える。打ち切ったときに戻せるように。
               if (isWriteTool(ev.call.name) && harnessCfg.rollbackOnGiveUp) {
                 const p = (ev.call.args as { path?: unknown }).path;
@@ -1369,6 +1368,7 @@ export class Session {
       }
 
       // 書いて終わりにしない。失敗したら、その内容を渡して直させる。
+      const testsBefore = before.measured ? before.tests : undefined;
       if (finishedReason === 'completed' && testsBefore && command) {
         keep = false;
         const events: SessionEvent[] = [];
