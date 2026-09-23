@@ -106,7 +106,7 @@ async function main(): Promise<void> {
   const wired = await wireTeam(config, root, (d) => {
     if (d.outcome === 'denied') console.log(c.red(`   ⛔ ${d.rule}: ${d.reason ?? ''}`));
     else if (d.outcome === 'warned') console.log(c.yellow(`   ⚠ ${d.rule}: ${d.reason ?? ''}`));
-  });
+  }, Date.now(), SYSTEM);
 
   const team = new Team(new ChatOrchestrator(registry), {
     lanes,
@@ -114,6 +114,8 @@ async function main(): Promise<void> {
     tools: wired.bare,
     toolsFor: (item) => wired.toolsFor(item),
     beforeWrite: (path, previous) => wired.beforeWrite(path, previous),
+    // 役職が付いた依頼は、役職で絞ってから渡す。
+    assign: (roleId, item) => wired.assign(roleId, item),
     root,
     maxTurns: agentCfg.maxTurns ?? 40,
     temperature: config.temperature,

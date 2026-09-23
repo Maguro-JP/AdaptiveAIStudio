@@ -146,3 +146,101 @@ describe('team は、戻り先を残す', () => {
     assert.equal(readFileTool.schema.name, 'read_file');
   });
 });
+
+/**
+ * 役職で絞る。
+ *
+ * **端末側は役職を見ていなかった。**画面側（`src/core/session.ts`）は
+ * `assign` で絞るのに、`src/cli/team.ts` は渡していなかったので、
+ * 依頼ファイルに `roleId` を書いても、読むだけの担当が書き込みも実行もできた。
+ *
+ * 絞るだけでは足りない。**絞ったうえで規則の手前で止まる**ところまで見る
+ * （素のツールを渡せば絞りは通るが、守りが全部抜ける）。
+ */
+describe('team は、役職で絞る', () => {
+  // 組み込みの役職を使う。**実際に配られるものを見る。**
+  //   reviewer  read だけ
+  //   librarian read + write（execute は無い）
+  //   worker    read + write + execute
+
+  test('**読むだけの役職は、書くツールも走らせるツールも持たない**', async () => {
+    const root = await place();
+    const wired = await wireTeam(DEFAULT_CONFIG, root);
+    const got = wired.assign('reviewer', item('t1'));
+    assert.ok(got, 'reviewer を配っていない');
+    const names = got.tools.map((t) => t.schema.name).sort();
+    assert.ok(names.includes('read_file'), `読むツールが無い: ${names.join(',')}`);
+    assert.ok(!names.includes('write_file'), `書くツールを持っている: ${names.join(',')}`);
+    assert.ok(!names.includes('edit_file'), `書くツールを持っている: ${names.join(',')}`);
+    assert.ok(!names.includes('run_command'), `走らせるツールを持っている: ${names.join(',')}`);
+    await wired.undo.end();
+  });
+
+  test('書く役職は書くツールを持つ（対）', async () => {
+    const root = await place();
+    const wired = await wireTeam(DEFAULT_CONFIG, root);
+    const names = wired.assign('librarian', item('t1'))!.tools.map((t) => t.schema.name);
+    assert.ok(names.includes('write_file'), `書くツールが無い: ${names.join(',')}`);
+    assert.ok(!names.includes('run_command'), `走らせるツールまで持っている: ${names.join(',')}`);
+    // 全部持つ役職とも比べる。絞りが効いていなければ、ここが同じ数になる。
+    const all = wired.assign('worker', item('t1'))!.tools.map((t) => t.schema.name);
+    assert.ok(all.includes('run_command'), `worker が走らせるツールを持っていない: ${all.join(',')}`);
+    assert.ok(all.length > names.length, `librarian と worker が同じ数（絞れていない）: ${all.length}`);
+    await wired.undo.end();
+  });
+
+  test('**絞ったツールも、規則の手前で止まる**', async () => {
+    const root = await place();
+    await writeFile(join(root, '.env'), 'SECRET=1');
+    const wired = await wireTeam(DEFAULT_CONFIG, root);
+    const tools = wired.assign('librarian', item('t1'))!.tools;
+    // 守られたファイル。絞りを通ったあとも、ここで止まる。
+    // **絞るだけにして素のツールを渡すと、ここが素通りになる。**
+    const r = await named(tools, 'write_file').run({ path: '.env', content: 'STOLEN=1' }, ctx(root));
+    assert.equal(r.isError, true, '素通りしています');
+    assert.match(r.content, /BLOCKED/);
+    assert.equal(await readFile(join(root, '.env'), 'utf8'), 'SECRET=1');
+    await wired.undo.end();
+  });
+
+  test('知らない役職は配らない（呼んだ側の既定に落ちる）', async () => {
+    const root = await place();
+    const wired = await wireTeam(DEFAULT_CONFIG, root);
+    assert.equal(wired.assign('居ない役職', item('t1')), undefined);
+    await wired.undo.end();
+  });
+});
+
+/**
+ * 入口が、絞りを実際に渡しているか。
+ *
+ * **組み立てだけ直しても、入口が渡さなければ効かない。**
+ * `wireTeam` に `assign` を足したのに `src/cli/team.ts` が渡し忘れると、
+ * Team は `toolsFor` に落ちて、全部のツールが配られる。それは
+ * 直す前と同じ状態で、しかも「直した」と記録に残る。
+ *
+ * 入口はモデルを立てないと通らないので、**Team が実際に選ぶところ**を
+ * ここで押す（`assign` を渡した Team と、渡さない Team を比べる）。
+ */
+describe('入口が渡した絞りは、Team まで届く', () => {
+  test('**assign を渡すと、役職のツールが選ばれる**', async () => {
+    const root = await place();
+    const wired = await wireTeam(DEFAULT_CONFIG, root);
+    const withRole: WorkItem = { id: 't1', laneId: 'coder', instruction: 'なおす', roleId: 'reviewer' };
+
+    // 渡したとき: 読むだけになる。
+    const picked = wired.assign(withRole.roleId!, withRole)!.tools.map((t) => t.schema.name);
+    assert.ok(!picked.includes('write_file'), `絞れていない: ${picked.join(',')}`);
+
+    // **渡し忘れても守られる。**Team は assign が無ければ toolsFor に落ちるので、
+    // そちらでも同じ絞りをかけてある。直す前はここが全部来ていた。
+    const fallback = wired.toolsFor(withRole).map((t) => t.schema.name);
+    assert.ok(!fallback.includes('write_file'), `渡し忘れで素通りする: ${fallback.join(',')}`);
+    assert.ok(!fallback.includes('run_command'), `渡し忘れで素通りする: ${fallback.join(',')}`);
+
+    // 役職が付いていない依頼は、これまでどおり全部（対）。
+    const none = wired.toolsFor(item('t2')).map((t) => t.schema.name);
+    assert.ok(none.includes('write_file'), `役職なしまで絞っている: ${none.join(',')}`);
+    await wired.undo.end();
+  });
+});

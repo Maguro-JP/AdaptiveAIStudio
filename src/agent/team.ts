@@ -67,7 +67,14 @@ export interface TeamOptions {
    * 役職ごとの気質と権限を引く。
    * 省略すると全員が同じ system と tools で働く（P2までの動き）。
    */
-  assign?(roleId: string): { system: string; tools: Tool[] } | undefined;
+  /**
+   * 役職ごとの決まりとツール。**依頼も渡す。**
+   *
+   * 渡していなかったとき、端末側（`src/cli/team.ts`）は依頼ごとの履歴と
+   * 依頼の文が要るので `assign` を使えず、**役職を見ないまま全部のツールを
+   * 配っていた**。役職で絞る側と、依頼ごとに包む側が、同時に成り立つようにする。
+   */
+  assign?(roleId: string, item: WorkItem): { system: string; tools: Tool[] } | undefined;
   /**
    * 依頼ごとにツールを組む。
    *
@@ -104,7 +111,7 @@ export class Team {
     handoff = '',
   ): Promise<WorkResult> {
     // 役職が指定されていれば、その気質と権限で働かせる。
-    const assigned = item.roleId ? this.#opts.assign?.(item.roleId) : undefined;
+    const assigned = item.roleId ? this.#opts.assign?.(item.roleId, item) : undefined;
     const agent = new Agent(this.#orchestrator, {
       candidates,
       system: assigned?.system ?? this.#opts.system,
