@@ -191,4 +191,33 @@ describe('直近で触ったファイルを覚える', () => {
     assert.ok(undo.recent().includes('huge.ts'),
       '戻せないことと、いま作業しているかどうかを混ぜている');
   });
+
+  /**
+   * **戻らないものを、戻り先そのものに書いておく。**
+   *
+   * 控えなかったことは流れ（`log`）にだけ出していた。既定の並びにそのパネルは
+   * 無いので、人は見ていない。戻り先の行は普通に見えるのに、そのファイルは
+   * 戻らない。選ぶ所（横の一覧）に出せるように、戻り先に持たせる。
+   */
+  test('**控えなかったファイルが、戻り先の一覧に出る**', async () => {
+    const { undo } = await store();
+    await undo.begin('直して');
+    undo.capture('huge.ts', 'x'.repeat(MAX_POINT_BYTES + 1));
+    undo.capture('small.ts', 'x');
+    const point = await undo.end();
+    assert.deepEqual(point?.skipped, ['huge.ts'], '戻り先が、控えなかったことを持っていない');
+    assert.deepEqual(point?.paths, ['small.ts'], '控えていないものを、戻る顔で並べている');
+
+    const list = await undo.list();
+    assert.deepEqual(list[0]?.skipped, ['huge.ts'], '一覧に、控えなかったことが出ていない');
+  });
+
+  test('控えられたものだけなら、戻り先は何も抱えない（対）', async () => {
+    const { undo } = await store();
+    await undo.begin('直して');
+    undo.capture('small.ts', 'x');
+    const point = await undo.end();
+    assert.equal(point?.skipped, undefined, '控えなかったものが無いのに、空でない');
+    assert.equal((await undo.list())[0]?.skipped, undefined);
+  });
 });

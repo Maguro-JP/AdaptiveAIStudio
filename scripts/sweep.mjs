@@ -316,6 +316,143 @@ await check('狭い窓（1024）', async () => {
   const send = await p.locator('.chat .send').boundingBox();
   if (!send || send.width < 20) throw new Error('送るボタンが潰れている');
 });
+/*
+ * **溢れは、`scrollWidth` では見つからない。**
+ *
+ * 上の確かめは「横に溢れていないか」を `scrollWidth` で見ていた。溢れた分を
+ * 親が切り取る（overflow: hidden）と、`scrollWidth` は増えない。**切り取られた
+ * ものは、見えないまま押せない。**実測で、幅 900 のとき入力の行が画面から 40px、
+ * 送るボタンが 35px はみ出していた（切り取られて、画面には出ていない）。
+ *
+ * だから「押せるか」で見る。押したいものの右端が、画面の中に在ること。
+ */
+await check('会話のパネルが狭くても、押したいものが外へ出ない', async () => {
+  /*
+   * **ブラウザの幅で測らない。**ブラウザを縮めても、配置（どのパネルが開いているか）で会話の
+   * パネルの幅は変わる。ここまでの確かめでサイドを畳んでいるので、同じブラウザの幅でも
+   * 広いままになり、**溢れが出ない**（実際に、畳んだ形では一度も出なかった）。
+   * 走らせる順で結果が変わる確かめにしない。
+   *
+   * 見たいのは「会話のパネルが狭いとき、中のものが外へ出ないか」。だから
+   * **パネルの幅をこちらで決めて**測る。実測では、ブラウザを 900 にしたとき
+   * 送るボタンが 35px 外へ出ていた（切り取られるので `scrollWidth` では増えない）。
+   */
+  const bad = await p.evaluate(async () => {
+    const chat = document.querySelector('.chat');
+    const field = chat?.querySelector('.field');
+    if (!chat || !field) return ['会話のパネルが見つからない'];
+    const panel = chat.closest('.panel') ?? chat;
+    const was = panel.style.width;
+    const found = [];
+    try {
+      for (const width of [420, 360, 320, 280, 240]) {
+        panel.style.width = `${width}px`;
+        // 次の描き直しを待つ（測る前に効かせる）。
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        // **入れ物からはみ出すのは、行そのもの。**中の部品は行の中に収まったまま、
+        // 行ごとパネルの外へ出ていた（だから中だけ見ると見つからない）。
+        const edge = panel.getBoundingClientRect().right;
+        const box = field.getBoundingClientRect();
+        const over = Math.round(box.right - edge);
+        if (over > 1) found.push(`幅 ${width}: 入力の行が ${over}px 外（送るボタンが隠れる）`);
+        for (const el of field.querySelectorAll('button, textarea')) {
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          const out = Math.round(r.right - edge);
+          if (out > 1) found.push(`幅 ${width}: ${el.className || el.tagName.toLowerCase()} が ${out}px 外`);
+        }
+      }
+    } finally {
+      panel.style.width = was;
+    }
+    return found;
+  });
+  if (bad.length > 0) throw new Error(bad.join(' / '));
+});
+await check('画面が低くても、閉じ方が見えている', async () => {
+  /*
+   * **閉じ方が見えていないと、閉じ方を探すことになる。**画面が低いと
+   * （実測: 高さ 700 以下）設定の中身が画面より長くなり、「閉じる」は
+   * 下端 755px ＝ 画面の外に居た。中は巻けるので辿り着けるが、見えていない。
+   * Esc を知らない人は、そこで詰まる。
+   */
+  const bad = [];
+  for (const height of [700, 560, 460]) {
+    await p.setViewportSize({ width: 1100, height });
+    await p.locator('#openSettings').click();
+    await p.waitForTimeout(600);
+    const seen = await p.evaluate(() => {
+      const d = document.getElementById('settings');
+      const close = d && [...d.querySelectorAll('button')].find((b) => (b.textContent || '').includes('閉じる'));
+      if (!close) return { 無い: true };
+      const r = close.getBoundingClientRect();
+      return { 見えている: r.bottom <= window.innerHeight + 1 && r.top >= -1, 下端: Math.round(r.bottom), 画面: window.innerHeight };
+    });
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(250);
+    if (seen.無い) bad.push(`高さ ${height}: 閉じるが無い`);
+    else if (!seen.見えている) bad.push(`高さ ${height}: 閉じるが画面の外（下端 ${seen.下端} > ${seen.画面}）`);
+  }
+  await p.setViewportSize({ width: 1440, height: 900 });
+  await p.waitForTimeout(300);
+  if (bad.length > 0) throw new Error(bad.join(' / '));
+});
+await check('同じ案内を、二度出していない', async () => {
+  /*
+   * **二度言われると、別のことかと読み直す。**設定のモデルの頁で、
+   * 「そのフォルダはまだありません。…」が 60px 離れて二度出ていた（撮って見つけた）。
+   * GGUF のフォルダの様子を一行で出したうえに、空のときの案内にも同じ文を足していた。
+   *
+   * 見るのは**文の重なり**。一つの頁の中に、同じ一文が二度出ていないこと。
+   */
+  await p.locator('#openSettings').click();
+  await p.waitForTimeout(600);
+  await p.locator('#settings button', { hasText: 'モデル' }).first().click();
+  await p.waitForTimeout(800);
+  const twice = await p.evaluate(() => {
+    // **設定のダイアログを名指しする。**`dialog` で引くと、先に在るコマンドの方が
+    // 当たって、設定の中身を一度も見ないまま通っていた。
+    const text = document.getElementById('settings')?.innerText ?? '';
+    const seen = new Map();
+    /*
+     * **行ではなく、文で数える。**片方は道の行にくっついて出ていた
+     * （「設定ファイル: /tmp/… 開く コピー そのフォルダは…」）ので、
+     * 行で突き合わせると同じ文だと分からない（一度それで見逃した）。
+     */
+    for (const one of text.split(/\n|(?<=。)/).map((l) => l.trim())) {
+      // 短い塊（見出し・ボタンの字）は数えない。案内の文だけを見る。
+      if (one.length < 12) continue;
+      seen.set(one, (seen.get(one) ?? 0) + 1);
+    }
+    console.log('DIALOG:' + JSON.stringify(text.slice(0, 700)));
+    return [...seen].filter(([, n]) => n > 1).map(([line, n]) => `${line.slice(0, 30)}（${n} 回）`);
+  });
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(300);
+  if (twice.length > 0) throw new Error(`同じ案内が二度出ている: ${twice.join(' / ')}`);
+});
+await check('見えている字が、切れていない', async () => {
+  /*
+   * **名前が切れていた。**横のサイドの上に押しものを三つ並べたので、名前の枠が
+   * 107px しか残らず、137px 要る「AdaptiveAIStudio」が切れていた（実測）。
+   * 撮って見るまで気づかず、しかも毎回の画面に出ている所だった。
+   *
+   * 入れ物より中身が広い（`scrollWidth > clientWidth`）所を数える。
+   * 省略（…）を付けてあっても、**名前や見出しは切らさない**。
+   */
+  const cut = await p.evaluate(() => {
+    const out = [];
+    for (const el of document.querySelectorAll('.brand, .panel-head, .panel-head *, .side-top *')) {
+      if (el.children.length > 0) continue;
+      const text = (el.textContent || '').trim();
+      if (!text || el.clientWidth === 0) continue;
+      const over = el.scrollWidth - el.clientWidth;
+      if (over > 1) out.push(`${text.slice(0, 20)}（${over}px 切れ／枠 ${Math.round(el.clientWidth)}px）`);
+    }
+    return out;
+  });
+  if (cut.length > 0) throw new Error(`字が切れている: ${cut.join(' / ')}`);
+});
 await check('もっと狭い窓（720）', async () => {
   await p.setViewportSize({ width: 720, height: 720 });
   await p.waitForTimeout(400);
@@ -904,6 +1041,647 @@ await check('設定の欄が、行の幅まで伸びている', async () => {
   await p.keyboard.press('Escape');
   await p.waitForTimeout(300);
   if (bad.length > 0) throw new Error(bad.join(' / '));
+});
+
+/*
+ * **直している最中に書き換えられたら、そう言う。**
+ *
+ * 画面で直している（保存していない）ファイルを AI が書くと、ファイルは AI の版、
+ * 欄は人の版、と二つに割れる。ここまでは**何も言わずに人の版を出し続けて**
+ * いたので、先に保存した方が相手を消していた。出来事を流して、帯が出て、
+ * 押せば入れ替わり、**押し間違えても戻せる**ところまで見る。
+ *
+ * 試すファイルはここで作って、最後に消す（人のファイルは触らない）。
+ */
+await check('直している最中に書き換えられたら、そう言う', async () => {
+  const at = 'sweep-notice-probe.txt';
+  const put = (content) => p.evaluate(([path, body]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: body }),
+  }).then((r) => r.status), [at, content]);
+  const made = await put('はじめ\n');
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  try {
+    // 横の一覧から開く。出来事で一覧は読み直されるが、念のため少し待つ。
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    if (await area.count() === 0) throw new Error('エディタが出ない');
+    // 保存しないで直す。
+    await area.fill('人が書いた\n');
+    await p.waitForTimeout(300);
+    // ここで AI が書いた、という状況を作る（stamp を送らないので本体は書く）。
+    await put('AI が書いた\n');
+    await p.waitForTimeout(1200);
+    const notice = p.locator('.editor-notice');
+    if (await notice.count() === 0 || await notice.isHidden()) throw new Error('書き換えられたのに、何も出ていない');
+    const said = await notice.innerText();
+    if (!said.includes('書き換えました')) throw new Error(`言い方が違う: ${said.slice(0, 60)}`);
+    if (await area.inputValue() !== '人が書いた\n') throw new Error('直している欄を上書きしている');
+    // 押すと入れ替わり、押し間違えても戻せる。
+    await notice.locator('button', { hasText: 'AI の版を出す' }).first().click();
+    await p.waitForTimeout(700);
+    if (await area.inputValue() !== 'AI が書いた\n') throw new Error('押しても入れ替わらない');
+    await notice.locator('button', { hasText: '自分の直しに戻す' }).first().click();
+    await p.waitForTimeout(500);
+    if (await area.inputValue() !== '人が書いた\n') throw new Error('預かった直しが戻らない');
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    // 画面の字からではなく、本体が答える道を使う（画面の字は省略されることがある）。
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow))
+      .catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
+ * **見出しに、長い文を流し込まない。**
+ *
+ * 補完が出せない理由（「…に GGUF がありません。設定 → モデル に…」）を
+ * そのままエディタの見出しに入れていた。見出しは 3 行に折れ、**ファイル名が
+ * 47px まで潰れて**「head-pro…」になり、保存の押し場所まで二段になっていた（実測）。
+ *
+ * ここは**返ってくるものを決めてから**見る（モデルが在る機械では補完が返って
+ * しまい、走らせる場所で結果が変わるため）。
+ */
+await check('エディタの見出しが、長い文で潰れない', async () => {
+  const at = 'sweep-head-probe.txt';
+  const made = await p.evaluate(([path]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: 'const x = 1;\n' }),
+  }).then((r) => r.status), [at]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  const why = 'C:/どこか/長い/道/models に GGUF がありません。設定 → モデル に、いま見ている保存先が出ています。そこへ .gguf を1つ置いてください。';
+  await p.route('**/api/complete', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ text: '', why }) });
+  });
+  try {
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    if (await area.count() === 0) throw new Error('エディタが出ない');
+    // 行の終わりで手を止めると、補完を訊きに行く（行の途中では出さない作り）。
+    await area.click();
+    await area.press('End');
+    await area.type(' ');
+    await p.waitForTimeout(2500);
+    const got = await p.evaluate(() => {
+      const head = document.querySelector('.editor-head');
+      const name = head.querySelector('.editor-name');
+      const notice = document.querySelector('.editor-notice');
+      return {
+        headH: Math.round(head.getBoundingClientRect().height),
+        nameW: Math.round(name.getBoundingClientRect().width),
+        nameNeeds: Math.round(name.scrollWidth),
+        said: head.querySelector('.editor-state').textContent,
+        notice: notice && !notice.hidden ? notice.innerText : '',
+      };
+    });
+    // 見出しは一行のまま（折れると 50px を超える）。
+    if (got.headH > 40) throw new Error(`見出しが折れている（${got.headH}px）: ${got.said.slice(0, 40)}`);
+    if (got.nameW + 1 < got.nameNeeds) throw new Error(`ファイル名が潰れている（${got.nameW}/${got.nameNeeds}px）`);
+    if (!got.notice.includes('GGUF がありません')) throw new Error(`理由がどこにも出ていない: ${got.said.slice(0, 40)}`);
+  } finally {
+    await p.unroute('**/api/complete');
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
+ * **続けて二度、保存できる。**
+ *
+ * 本体は書けたときに新しい stamp を返していなかったので、画面は開いたときの
+ * stamp を持ったままになり、**二度目の保存が「別の所で変わりました（AI の
+ * 書き換えなど）」で断られていた**（実測）。直すたびに押し直させることになる。
+ * 自分の書き込みの写しで「AI が書き換えました」と出ていたのも、同じ場面。
+ */
+await check('続けて二度、保存できる', async () => {
+  const at = 'sweep-twice-probe.txt';
+  const made = await p.evaluate(([path]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: 'one\ntwo\n' }),
+  }).then((r) => r.status), [at]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  try {
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    const state = p.locator('.editor-state').first();
+    const notice = p.locator('.editor-notice').first();
+    for (const mark of ['X', 'Y']) {
+      await area.click();
+      await area.press('End');
+      await area.type(mark);
+      await area.press('Control+s');
+      await p.waitForFunction(() => /保存しました|保存していません/.test(
+        document.querySelector('.editor-state')?.textContent ?? ''), null, { timeout: 15000 });
+      const said = (await state.textContent()) ?? '';
+      if (!said.startsWith('保存しました')) throw new Error(`${mark} で保存できていない: ${said}`);
+      const band = await notice.isHidden() ? '' : await notice.innerText();
+      if (/AI がこのファイルを書き換えました/.test(band)) {
+        throw new Error(`自分の保存で、書き換えられたと言っている（${mark}）: ${band.replace(/\n/g, ' / ')}`);
+      }
+      await p.waitForTimeout(400);
+    }
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
+ * **全部置き換えたあと、Ctrl+Z で戻せる。**
+ *
+ * 置き換えを欄への丸ごと代入で書いていたので、ブラウザの戻し履歴が消えていた。
+ * 押した人は置換の前に戻せない（取り返しがつかない）。戻せるかどうかはブラウザの
+ * 中に在るので、**実際に Ctrl+Z を押して見る**。
+ */
+await check('全部置き換えたあと、Ctrl+Z で戻せる', async () => {
+  const at = 'sweep-undo-probe.txt';
+  const first = 'const a = 1;\nconst b = 2;\n';
+  const made = await p.evaluate(([path, content]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content }),
+  }).then((r) => r.status), [at, first]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  try {
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    await area.click();
+    await area.press('Control+f');
+    await p.locator('.find-q').fill('const');
+    await p.locator('.find-r').fill('let');
+    await p.locator('.editor-find button').filter({ hasText: '全部' }).first().click();
+    await p.waitForFunction(() => /let a = 1;/.test(document.querySelector('.editor-area')?.value ?? ''),
+      null, { timeout: 5000 });
+    // **手を戻さずに押す。**置き換えた側が欄へ手を戻しているはずで、
+    // そこがずれていると Ctrl+Z は探す欄の戻しになる（ここで落ちてよい）。
+    await area.press('Control+z');
+    await p.waitForTimeout(300);
+    const now = await area.inputValue();
+    if (now !== first) throw new Error(`Ctrl+Z で置換の前に戻れない: ${JSON.stringify(now)}`);
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
+ * **数行を選んで Tab で字下げしたあとも、Ctrl+Z で戻せる。**
+ *
+ * 字下げも `execCommand('insertText')` で書くように変えた。改行を含む字を
+ * 一度で入れる形なので、**本物のブラウザで行が崩れないこと**まで見ておく。
+ */
+await check('数行の字下げを、Ctrl+Z で戻せる', async () => {
+  const at = 'sweep-indent-probe.txt';
+  const first = 'one\ntwo\nthree\n';
+  const made = await p.evaluate(([path, content]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content }),
+  }).then((r) => r.status), [at, first]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  try {
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    await area.click();
+    // 1〜2 行目（one\ntwo）を選ぶ。
+    await p.evaluate(() => { const t = document.querySelector('.editor-area'); t.focus(); t.setSelectionRange(0, 7); });
+    await area.press('Tab');
+    await p.waitForTimeout(300);
+    const after = await area.inputValue();
+    if (after !== '  one\n  two\nthree\n') throw new Error(`字下げになっていない: ${JSON.stringify(after)}`);
+    await area.press('Control+z');
+    await p.waitForTimeout(300);
+    const undone = await area.inputValue();
+    if (undone !== first) throw new Error(`Ctrl+Z で字下げの前に戻れない: ${JSON.stringify(undone)}`);
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
+ * **出していない分を、黙って隠さない。**
+ *
+ * 横の一覧は多すぎると切る（開くのが重くなるため）。切ったことを言わないので、
+ * 5000 件のフォルダでは 400 件だけ出て、**残りは無いように見えていた**（実測）。
+ */
+await check('多いフォルダでは、出していない分を言う', async () => {
+  const { mkdir, writeFile, rm } = await import('node:fs/promises');
+  const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow));
+  if (!root) throw new Error('作業場が分からない');
+  const dir = `${root}/sweep-many-probe`;
+  await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  await mkdir(dir, { recursive: true });
+  try {
+    // 上限（400）を超える数を置く。
+    for (let i = 0; i < 420; i += 1) {
+      await writeFile(`${dir}/f${String(i).padStart(4, '0')}.txt`, 'x');
+    }
+    await p.reload({ waitUntil: 'domcontentloaded' });
+    await p.waitForTimeout(1500);
+    const folder = p.locator('#sideFiles button').filter({ hasText: 'sweep-many-probe' }).first();
+    if (await folder.count() === 0) throw new Error('作ったフォルダが一覧に出ない');
+    await folder.click();
+    await p.waitForTimeout(1200);
+    const text = await p.locator('#sideFiles').innerText();
+    if (!/ほかに \d+ 件/.test(text)) {
+      throw new Error(`切ったことを言っていない: ${JSON.stringify(text.slice(-160))}`);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    // 根へ戻しておく（後の確かめが、このフォルダの中を見ないように）。
+    await p.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined);
+    await p.waitForTimeout(1200);
+  }
+});
+
+/*
+ * **開いているファイルをもう一度押して、書きかけを消さない。**
+ *
+ * 読み直しを飛ばすのは「直していないとき」だけだった。直している最中に同じ
+ * ファイルを開き直すと、ディスクの中身で欄を上書きしていた。横の一覧で同じ
+ * 行をもう一度押すのも、AI に `show_file` で開かせるのも、同じ道を通る。
+ */
+await check('開いているファイルをもう一度押しても、書きかけが消えない', async () => {
+  const at = 'sweep-reopen-probe.txt';
+  const made = await p.evaluate(([path]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: 'one\ntwo\n' }),
+  }).then((r) => r.status), [at]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  try {
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    if (await area.count() === 0) throw new Error('エディタが出ない');
+    await area.click();
+    await area.press('End');
+    await area.type('-KAKIKAKE');
+    const typed = await area.inputValue();
+    if (!typed.includes('KAKIKAKE')) throw new Error(`打てていない: ${JSON.stringify(typed)}`);
+    // 同じ行をもう一度押す。
+    await row.click();
+    await p.waitForTimeout(1500);
+    const now = await area.inputValue();
+    if (!now.includes('KAKIKAKE')) throw new Error(`書きかけが消えている: ${JSON.stringify(now)}`);
+  } finally {
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
+ * **保存したことを、補完の返事で消さない。**
+ *
+ * 打つと少しあとに続きを訊きに行くので、打ってすぐ保存すると、保存が終わった
+ * あとに補完が走る。出す先が同じ一行なので「保存しました（+1 -1）」が
+ * 「補完なし」へ化けていた（ここで押して実測）。書けたのかが画面から消える。
+ *
+ * 返ってくるものは決めてから見る（モデルが在る機械では続きが返ってしまい、
+ * 走らせる場所で結果が変わる）。
+ */
+await check('保存したことが、補完の返事で消えない', async () => {
+  const at = 'sweep-save-probe.txt';
+  const made = await p.evaluate(([path]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: 'one\ntwo\n' }),
+  }).then((r) => r.status), [at]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  await p.route('**/api/complete', async (route) => {
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({ text: '', why: 'ここには GGUF がありません。' }),
+    });
+  });
+  try {
+    await p.waitForTimeout(900);
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+    const area = p.locator('.editor-area');
+    if (await area.count() === 0) throw new Error('エディタが出ない');
+    // 打って、すぐ保存する（補完の予約が入ったまま保存する形）。
+    await area.click();
+    await area.press('End');
+    await area.type('X');
+    await area.press('Control+s');
+    await p.waitForFunction(
+      () => document.querySelector('.editor-state')?.textContent?.startsWith('保存しました') === true,
+      null, { timeout: 15000 },
+    );
+    // 補完が走る時刻（打った 700ms 後）を過ぎても、保存の報せが残っていること。
+    await p.waitForTimeout(2500);
+    const said = await p.locator('.editor-state').first().textContent();
+    if (!/保存しました/.test(said ?? '')) throw new Error(`保存の報せが消えている: ${said}`);
+  } finally {
+    await p.unroute('**/api/complete');
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
+ * **探した所を、会話へ渡す。**
+ *
+ * 見つけた行を AI に訊くとき、道と行を打ち直していた（`src/a.ts:120`）。
+ * 打ち間違えれば別の所の話になる。探して、押して、**書きかけの指示に入る**
+ * ところまで見る。試すファイルはここで作って、最後に消す。
+ */
+await check('探した所を、依頼に添えられる', async () => {
+  const at = 'sweep-search-probe.txt';
+  // **この行に、探す言葉そのものを書かない。**書くと、作業場がこの置き所のときに
+  // この script 自身が当たり、当たった一件目が試すファイルではなくなる（実際にそうなった）。
+  const word = ['sweep', 'Needle', '42'].join('');
+  const made = await p.evaluate(([path, w]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: `一行目\n${w} を探す\n` }),
+  }).then((r) => r.status), [at, word]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  try {
+    // 「探す」を出す。出ていなければ表示から出す。
+    const shown = async () => (await p.locator('#root .panel header, #root .panel.tabs header button')
+      .allInnerTexts()).some((h) => h.includes('探す'));
+    if (!(await shown())) {
+      await p.locator('#openView').click();
+      await p.waitForTimeout(500);
+      const row = p.locator('#viewList .view-row').filter({ hasText: '探す' }).first();
+      if (await row.count() === 0) throw new Error('表示の一覧に探すが無い');
+      await row.locator('input').click();
+      await p.waitForTimeout(700);
+      await p.keyboard.press('Escape');
+      await p.waitForTimeout(400);
+    }
+    const tab = p.locator('#root .panel.tabs header button').filter({ hasText: '探す' });
+    if (await tab.count() > 0) { await tab.first().click(); await p.waitForTimeout(400); }
+    await p.locator('.search-q').first().fill(word);
+    await p.locator('.search-head button', { hasText: '探す' }).first().click();
+    await p.waitForTimeout(2500);
+    // 試すファイルの行を選ぶ（他のファイルが当たっていても、そこを見る）。
+    const row = p.locator('.search-hit').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが当たらない');
+    const ask = row.locator('.search-ask').first();
+    if (await ask.count() === 0) throw new Error('会話へ渡す押し場所が無い');
+    // 書きかけを空にしてから押す（前の確かめが書いたものと混ざらない）。
+    await p.locator('.chat textarea').first().fill('');
+    await ask.click();
+    await p.waitForTimeout(400);
+    const said = await p.locator('.chat textarea').first().inputValue();
+    if (!said.includes(`${at}:2`)) throw new Error(`会話へ渡っていない: ${JSON.stringify(said)}`);
+  } finally {
+    await p.locator('.chat textarea').first().fill('').catch(() => undefined);
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
+ * **ブラウザを閉じても、書いたものを失わない。**
+ *
+ * 保存していない直しの預かりはパネルの中だけに在ったので、**読み直すと消えていた。**
+ * 閉じる・押し間違えて再読み込み、で書いたものが消える（保存前なので戻す先も無い）。
+ * ここは実際に読み直して、打ったものが戻るところまで見る。
+ */
+await check('保存していない直しは、読み直しても残る', async () => {
+  const at = 'sweep-draft-probe.txt';
+  const made = await p.evaluate(([path]) => fetch('/api/file', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ path, content: 'はじめ\n' }),
+  }).then((r) => r.status), [at]);
+  if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
+  const openProbe = async () => {
+    const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
+    if (await row.count() === 0) throw new Error('作ったファイルが一覧に出ない');
+    await row.click();
+    await p.waitForTimeout(900);
+  };
+  try {
+    await p.waitForTimeout(900);
+    await openProbe();
+    const area = p.locator('.editor-area');
+    if (await area.count() === 0) throw new Error('エディタが出ない');
+    await area.fill('書きかけ\n');
+    // 手が止まってから預ける作りなので、少し待つ。
+    await p.waitForTimeout(1200);
+    await p.reload({ waitUntil: 'networkidle' });
+    await p.waitForTimeout(1500);
+    await openProbe();
+    const back = await p.locator('.editor-area').inputValue();
+    if (back !== '書きかけ\n') throw new Error(`読み直したら消えている: ${JSON.stringify(back)}`);
+  } finally {
+    await p.evaluate(([path]) => { try { localStorage.removeItem(`aas.draft:${path}`); } catch { /* 使えない環境もある */ } }, [at]);
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
+});
+
+/*
+ * **どのパネルを出しても、中身が入れ物の外へ出ない。**
+ *
+ * 狭いときだけ崩れる所は、既定の配置では見えない。全部出して、狭くして測る。
+ * 実際にここで二つ見つけた（ロールの行が 64px 外／会話の送るボタンが 31px 外）。
+ * 出したものは、出す前の状態へ戻す（利用者の配置を残さない）。
+ */
+await check('どのパネルを出しても、中身が外へ出ない', async () => {
+  const before = await p.viewportSize();
+  /*
+   * **出す前の配置を控えてから出す。**
+   *
+   * 全部出して閉じ直す形にしたら、**閉じ方が元に戻らず**会話のパネルごと
+   * 消えた（次に回したとき「会話のパネルが見つからない」で八件落ちた）。
+   * 配置は本体に残るので、利用者の配置を壊すということでもある。控えを戻す。
+   */
+  const saved = await p.evaluate(() => fetch('/api/layout').then((r) => r.json()).then((j) => j.layout));
+  const toggle = async (name) => {
+    await p.locator('#openView').click();
+    await p.waitForTimeout(400);
+    const row = p.locator('#viewList .view-row').filter({ hasText: name }).first();
+    if (await row.count() === 0) { await p.keyboard.press('Escape'); return; }
+    const tick = row.locator('input');
+    if (!(await tick.isChecked())) await tick.click();
+    await p.waitForTimeout(500);
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(250);
+  };
+  try {
+    await p.locator('#openView').click();
+    await p.waitForTimeout(500);
+    const names = await p.locator('#viewList .view-row').evaluateAll(
+      (rows) => rows.map((r) => r.innerText.trim().split('\n')[0]));
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(300);
+    for (const name of names) await toggle(name);
+    await p.setViewportSize({ width: 420, height: 800 });
+    /*
+     * **横の一覧を出したままにする。**畳んだままだとパネルが広く取れてしまい、
+     * 狭いときだけ崩れる所が出てこない（畳んだ状態で回したら、崩れているのに
+     * 何も見つからなかった）。出ている状態が、いちばん狭い。
+     */
+    if (await p.locator('#sideOpen').isVisible().catch(() => false)) {
+      await p.locator('#sideOpen').click();
+      await p.waitForTimeout(400);
+    }
+    await p.waitForTimeout(900);
+    /*
+     * **一つずつ前に出してから測る。**タブの裏にあるものは描かれていないので、
+     * まとめて測ると幅 0 で飛ばしてしまう。崩れているのに何も見つからなかった
+     * （ロールの一覧がタブの裏に居た）。
+     */
+    const out = [];
+    for (const name of names) {
+      const tab = p.locator('#root .panel.tabs header button').filter({ hasText: name });
+      if (await tab.count() > 0) { await tab.first().click().catch(() => undefined); await p.waitForTimeout(350); }
+      const found = await p.evaluate((want) => {
+        const panel = [...document.querySelectorAll('#root .panel')]
+          .find((el) => (el.querySelector('header')?.innerText ?? '').includes(want));
+        if (!panel) return [];
+        const box = panel.getBoundingClientRect();
+        if (box.width === 0) return [];
+        const bad = [];
+        for (const el of panel.querySelectorAll('*')) {
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) continue;
+          const over = Math.round(Math.max(r.right - box.right, box.left - r.left));
+          if (over > 1) bad.push(`${want}: ${(el.textContent || el.className || el.tagName).trim().slice(0, 14)}（${over}px 外）`);
+        }
+        return [...new Set(bad)].slice(0, 3);
+      }, name);
+      out.push(...found);
+    }
+    if (out.length > 0) throw new Error(out.slice(0, 8).join(' / '));
+  } finally {
+    await p.setViewportSize(before ?? { width: 1440, height: 900 });
+    await p.evaluate((l) => fetch('/api/layout', {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(l),
+    }), saved).catch(() => undefined);
+    await p.reload({ waitUntil: 'networkidle' }).catch(() => undefined);
+    await p.waitForTimeout(900);
+  }
+});
+
+/*
+ * **覚え書きに打てて、読み直しても残る。**
+ *
+ * 「メモ」と並んでいるのに、渡された字を出すだけで**一文字も書けなかった**。
+ * 打った分は配置と一緒に残る。前に書いてあったものは、最後に書き戻す。
+ */
+await check('覚え書きに打てて、読み直しても残る', async () => {
+  const front = async () => {
+    const tab = p.locator('#root .panel.tabs header button').filter({ hasText: 'メモ' }).last();
+    if (await tab.count() > 0) { await tab.first().click(); await p.waitForTimeout(350); }
+  };
+  await front();
+  let area = p.locator('.note-area');
+  if (await area.count() === 0) {
+    // 出ていなければ、表示から出す。
+    await p.locator('#openView').click();
+    await p.waitForTimeout(400);
+    const row = p.locator('#viewList .view-row').filter({ hasText: 'メモ' }).last();
+    if (await row.count() === 0) throw new Error('表示の一覧にメモが無い');
+    const tick = row.locator('input');
+    if (!(await tick.isChecked())) await tick.click();
+    await p.waitForTimeout(600);
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(300);
+    await front();
+    area = p.locator('.note-area');
+    if (await area.count() === 0) throw new Error('打つ所が無い');
+  }
+  const was = await area.inputValue();
+  try {
+    await area.fill('sweep で書いた覚え書き');
+    // 手が止まってから残す作りなので、少し待つ。
+    await p.waitForTimeout(1400);
+    await p.reload({ waitUntil: 'networkidle' });
+    await p.waitForTimeout(1200);
+    await front();
+    const back = await p.locator('.note-area').inputValue();
+    if (back !== 'sweep で書いた覚え書き') throw new Error(`読み直したら消えている: ${JSON.stringify(back)}`);
+  } finally {
+    await p.locator('.note-area').fill(was).catch(() => undefined);
+    await p.waitForTimeout(1200);
+  }
+});
+
+/*
+ * **まだ何も無いときに、何を書けばいいか分かる。**
+ *
+ * 開いた直後の会話は、空の箱と「指示を書く」だけだった。押せば入る例を出す。
+ * 例は**入れるだけで送らない**（押した瞬間に走り出すと、確かめる間が無い）。
+ */
+/*
+ * **新しい会話を始める所が、見える形で在る。**
+ *
+ * 入口は左上の名前を押すことだけで、その案内は指を乗せたときの吹き出しに
+ * しか出ていなかった。押して探しても見つからない（実測。横の一覧の ＋ は
+ * ファイルのもの）。
+ */
+await check('新しい会話を、横の一覧から始められる', async () => {
+  const plus = p.locator('#newTalk');
+  if (await plus.count() === 0) throw new Error('新しい会話の押し場所が無い');
+  if (!(await plus.isVisible())) throw new Error('押し場所が見えない');
+  await plus.click();
+  await p.waitForTimeout(1000);
+  if (await p.locator('.chat-guide').count() === 0) {
+    throw new Error('押しても新しい会話にならない（案内が出ない）');
+  }
+});
+
+await check('会話が空のとき、押せる例が出る', async () => {
+  /*
+   * **画面の道でトップへ戻す。**口を直に叩くと本体の側は新しい会話になるが、
+   * 開いている画面は前の話を出したままなので、案内は出ない。配る形の中で
+   * 回したとき、その形で落ちた（送って返るを見た後なので、話が残っていた）。
+   */
+  await p.locator('.brand').first().click();
+  await p.waitForTimeout(1000);
+  const guide = p.locator('.chat-guide');
+  if (await guide.count() === 0) throw new Error('案内が出ていない');
+  const said = await guide.innerText();
+  if (!said.includes('書いてください')) throw new Error(`言い方が違う: ${said.slice(0, 40)}`);
+  const chips = p.locator('.chat-chips button');
+  if (await chips.count() < 3) throw new Error(`例が足りない（${await chips.count()}）`);
+  // 押せると分かる形（枠が付いている）。
+  const framed = await chips.first().evaluate((el) => getComputedStyle(el).borderStyle);
+  if (framed === 'none') throw new Error('例に枠が無い（ただの字に見える）');
+  await p.locator('.chat textarea').first().fill('');
+  await chips.first().click();
+  await p.waitForTimeout(300);
+  const typed = await p.locator('.chat textarea').first().inputValue();
+  if (typed.length === 0) throw new Error('押しても書きかけに入らない');
+  // 押しただけで送っていないこと（会話に何も出ていない）。
+  if (await p.locator('.log .asked').count() > 0) throw new Error('押しただけで送っている');
+  await p.locator('.chat textarea').first().fill('');
 });
 
 if (shot) await p.screenshot({ path: shot, fullPage: false });

@@ -18,7 +18,7 @@ import type { AasConfig } from '../config.ts';
 import { buildRegistry } from '../core/build.ts';
 import { ChatOrchestrator } from '../core/orchestrator.ts';
 import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
-import { buildRuntime } from '../core/runtime-setup.ts';
+import { buildRuntime, type RuntimeHooks } from '../core/runtime-setup.ts';
 import { readyLocalModel } from '../core/local-ready.ts';
 import { speedOf } from '../core/session.ts';
 import { Priority } from '../providers/contract.ts';
@@ -46,6 +46,11 @@ export interface AskOnceOptions {
   waitMs?: number;
   /** 訊く言葉。既定は足し算（答えを見れば、通ったかどうかが人にも分かる）。 */
   ask?: string;
+  /**
+   * 読む側のモック。**試験で使う**（本物は数GBの GGUF が要る）。
+   * `buildRuntime` が同じ理由で持っている口を、そのまま通す。
+   */
+  hooks?: RuntimeHooks;
 }
 
 export async function askOnce(config: AasConfig, opts: AskOnceOptions = {}): Promise<OneTurn> {
@@ -53,7 +58,9 @@ export async function askOnce(config: AasConfig, opts: AskOnceOptions = {}): Pro
   const registry = buildRegistry(config);
   const orchestrator = new ChatOrchestrator(registry);
   const pilot = await setupAutopilot(config, registry);
-  const runtime = await buildRuntime(config, pilot.machine);
+  // 読む側の声（backend・CPU の素性・コンテキストウィンドウ・tok/s）も流す。
+  // ここを渡していなかったので、**遅い理由が記録に出なかった**。
+  const runtime = await buildRuntime(config, pilot.machine, opts.log, opts.hooks ?? {});
   try {
     const ready = await readyLocalModel(config, runtime, opts.log);
     const picked = resolveCandidates(ready.config, pilot);
@@ -105,11 +112,79 @@ export async function askOnce(config: AasConfig, opts: AskOnceOptions = {}): Pro
 }
 
 /**
+ * 「1+1=」への答えが、本物の文字で 2 と言っているか。落ちる理由を返す（通れば undefined）。
+ *
+ * 最初は `/2/.test(answer)` だけだった。乱数の重みの模型が「Фt2�Y�g…」を返し、
+ * その中に 2 が在ったので**通ってしまった**。偶然通る確かめは、確かめではない。
+ *
+ * 次に「問いの 1+1= を除いた最初の数字が 2」にしたが、別の役割の読み直しで
+ * 「1 plus 1 equals 2」「The sum of 1 and 1 is 2.」「２」（全角）を落とすと分かった。
+ * 問いを言い直した 1 が先に来る。**正しい答えを落とすと、有料の回が無駄になる。**
+ *
+ * 見るのは四つ。考えごと（<think>）を除いた本文が空でない・壊れた文字（U+FFFD）と
+ * 制御文字が無い・文字の九割が普通の文字（ASCII か日本語・漢字）・全角を半角にそろえ、
+ * 問いに含まれる数字（単独の 1）を除いた残りの数字の並びが、一つ以上あって全部 2。
+ * 「2」「1+1=2」「1 plus 1 equals 2」「答えは 2 です」は通る。
+ * 「22」「2.5」「2 + 2 = 4」「2 is wrong; the answer is 3」は通らない。
+ */
+export function judgeAnswer(answer: string): string | undefined {
+  const body = answer.normalize('NFKC').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  if (body.length === 0) return '本文が空です（考えごとだけで終わったか、何も返っていません）';
+  if (/\uFFFD/.test(body)) return '壊れた文字（U+FFFD）を含みます';
+  if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(body)) return '制御文字を含みます';
+  const chars = [...body];
+  const plain = chars.filter((c) => /[\x20-\x7E\s\u3000-\u30FF\u4E00-\u9FFF\uFF00-\uFFEF]/.test(c)).length;
+  if (plain / chars.length < 0.9) return '普通の文字（ASCII・日本語）が九割に届きません';
+  // 問いに在る数字は 1 だけ。単独の 1 は問いの写しと見なして除く（12 や 21 は残る）。
+  const rest = body.replace(/(?<!\d)1(?!\d)/g, '');
+  const runs = rest.match(/\d+/g) ?? [];
+  if (runs.length === 0) return '数字がありません';
+  const other = runs.find((r) => r !== '2');
+  if (other !== undefined) return `2 でない数字があります（${other}）`;
+  return undefined;
+}
+
+/**
  * 人が読む一行にする。
  *
  * **答えの中身は、道の良し悪しではない。**小さいモデルは平気で間違える。
  * 道が通っていること（返ってきたこと）と、中身が合っていることを分けて書く。
  */
+/** 走り終えたときの様子。`describeEnd` に渡す。 */
+export interface RunEnd {
+  /** 上限で切ったか（`AbortSignal.aborted`）。 */
+  aborted: boolean;
+  /** 切る上限（ミリ秒）。 */
+  limitMs: number;
+  /** 実際にかかったミリ秒。 */
+  tookMs: number;
+  /** 返ってきた文字の数。 */
+  chars: number;
+  /** ツールを呼んだ回数。 */
+  calls: number;
+  reason?: string;
+  detail?: string;
+}
+
+/**
+ * 走り終えた様子を、人が読む一行にする。
+ *
+ * **上限で切ったのなら、切ったと言う。**前は上限で切っても
+ * 「返事が空でした（モデルが本文を書かずに止まりました）」しか出ていなかったので、
+ * 時計の話をモデルの話として読んだ（Windows の回で実際に読み違えた）。
+ * モデルが黙ったのか、こちらが待ち切れなかったのかは、直し方が正反対になる。
+ */
+export function describeEnd(end: RunEnd): string {
+  if (end.aborted) {
+    const limit = end.limitMs >= 60_000
+      ? `${Math.round(end.limitMs / 60_000)}分`
+      : `${Math.round(end.limitMs / 1000)}秒`;
+    return `${limit}で打ち切りました`
+      + `（${(end.tookMs / 1000).toFixed(0)}秒・${end.chars}文字・ツールの呼び出し ${end.calls} 回）`;
+  }
+  return `終わり方: ${end.reason ?? '不明'}${end.detail ? ` ${end.detail}` : ''}`;
+}
+
 export function describeOneTurn(got: OneTurn): { ok: boolean; detail: string } {
   const load = got.loadSeconds.toFixed(1);
   if (got.answer.length === 0) {
@@ -120,10 +195,11 @@ export function describeOneTurn(got: OneTurn): { ok: boolean; detail: string } {
     };
   }
   const shown = got.answer.replace(/\s+/g, ' ').slice(0, 60);
+  const judged = judgeAnswer(got.answer);
   return {
     ok: true,
     detail: `${got.model ?? '(不明)'} / 読み込み ${load}秒 / 答え「${shown}」`
       + `${got.tps === undefined ? '' : ` / ${got.tps} tok/s`}`
-      + ` / 2 を${/2/.test(got.answer) ? '含む' : '含まない（モデルの出来。道は通っています）'}`,
+      + ` / ${judged === undefined ? '2 と答えています' : `2 と答えていません（${judged}。モデルの出来。道は通っています）`}`,
   };
 }

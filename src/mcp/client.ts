@@ -1,7 +1,7 @@
 /**
  * MCP の口。
  *
- * 外の道具を、この場所の道具として扱えるようにする。
+ * 外部ツールを、この場所のツールとして扱えるようにする。
  * GitHub も、それ用の口を書くのではなく **MCP のサーバを一つ足すだけ**にする。
  * 相手ごとに口を書いていくと、相手の数だけ保守が増える。
  *
@@ -12,12 +12,13 @@
  * 大事なのは、繋ぐことより**繋いだ先をどう扱うか**。
  *
  *   ・返ってきた中身は「外から入ってきたもの」。検問所を通す
- *   ・道具は権限として配る。持っていない役職には渡らない
+ *   ・ツールは権限として配る。持っていない役職には渡らない
  *   ・立ち上がらない相手がいても、他は動く。全部を道連れにしない
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { canRun } from '../core/which.ts';
 import { StringDecoder } from 'node:string_decoder';
+import { envForChild } from '../core/env.ts';
 
 /**
  * 溜めてよい上限。
@@ -55,7 +56,7 @@ export interface McpServerSpec {
   headersFrom?: Record<string, string>;
   /**
    * 渡す環境変数。**値ではなく名前で書く。**
-   * 設定ファイルに合言葉そのものを書かせない。
+   * 設定ファイルにトークンそのものを書かせない。
    */
   envFrom?: Record<string, string>;
   /** 立ち上がりを待つ上限。既定10秒 */
@@ -107,6 +108,27 @@ export function spawnPlan(command: string, platform: NodeJS.Platform): { command
   return { command, shell: false };
 }
 
+/**
+ * 立ち上げる相手へ渡す環境変数。**トークンは、名前を書いたものだけ。**
+ *
+ * ここは親の環境変数を丸ごと写していたので、`envFrom` で名前を書く仕組みに
+ * 関わらず、**繋いだ相手の子プロセス全部がトークンを持っていた**（`npx` で
+ * 落としてくる相手も含む）。持ち主が `.env` に置いたものと、名前がトークン
+ * らしいものは外し（`envForChild`）、`envFrom` に書かれた分だけを足す。
+ */
+export function childEnvFor(
+  spec: { envFrom?: Record<string, string> },
+  base: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const env = envForChild(base);
+  for (const [key, from] of Object.entries(spec.envFrom ?? {})) {
+    const value = base[from];
+    // 無いなら渡さない。空文字を渡すと、相手が「設定済み」と誤認する。
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 export class McpClient {
   readonly name: string;
   readonly #spec: McpServerSpec;
@@ -128,6 +150,14 @@ export class McpClient {
   #serverVersion?: string;
   /** 立ち上げに失敗した理由。使う側が「なぜ無いのか」を言えるように残す。 */
   #failure?: string;
+  /**
+   * `headersFrom` に書いたのに、その名前が環境に無かったもの。
+   *
+   * 黙って見出し無しで繋いでいたので、人が見るのは相手の 401 だけだった。
+   * **どの名前が見つからなかったか**が分からないと、`.env` の綴り違いに
+   * 辿り着けない。名前だけ覚える（値は持たない）。
+   */
+  readonly #missingHeaders: string[] = [];
   #abort?: AbortSignal;
 
   constructor(name: string, spec: McpServerSpec) {
@@ -137,6 +167,9 @@ export class McpClient {
 
   get tools(): readonly McpToolSpec[] { return this.#tools; }
   get failure(): string | undefined { return this.#failure; }
+
+  /** `headersFrom` の名前が環境に無かったもの（値は持たない）。 */
+  get missingHeaders(): readonly string[] { return this.#missingHeaders; }
   get running(): boolean {
     if (this.#http) return this.#http.open;
     return this.#child !== undefined && this.#child.exitCode === null;
@@ -161,12 +194,7 @@ export class McpClient {
       return false;
     }
 
-    const env: Record<string, string> = { ...process.env as Record<string, string> };
-    for (const [key, from] of Object.entries(this.#spec.envFrom ?? {})) {
-      const value = process.env[from];
-      // 無いなら渡さない。空文字を渡すと、相手が「設定済み」と誤認する。
-      if (value !== undefined) env[key] = value;
-    }
+    const env = childEnvFor(this.#spec);
 
     // 立ち上げる前に、その命令が在るかを見る。
     // 殻（shell: true）に渡すと、無い命令でも spawn は成功し、
@@ -224,7 +252,7 @@ export class McpClient {
     }
   }
 
-  /** 道具を呼ぶ。 */
+  /** ツールを呼ぶ。 */
   async call(tool: string, args: Record<string, unknown>, timeoutMs = 60_000): Promise<{
     text: string; isError: boolean;
   }> {
@@ -320,14 +348,19 @@ export class McpClient {
    * 遠くの相手に繋ぐ。
    *
    * 立ち上げるものが無いので、失敗するのは**繋がらない**ときだけ。
-   * そのときも投げない（一つ繋がらないだけで、他の道具まで止めない）。
+   * そのときも投げない（一つ繋がらないだけで、他のツールまで止めない）。
    */
   async #startRemote(signal?: AbortSignal): Promise<boolean> {
     const headers: Record<string, string> = {};
+    this.#missingHeaders.length = 0;
     for (const [name, from] of Object.entries(this.#spec.headersFrom ?? {})) {
       const value = process.env[from];
-      if (value === undefined) continue;
-      // 合言葉は、そのまま渡すと通らない相手が多い。付いていなければ付ける。
+      if (value === undefined) {
+        // 黙って見出し無しで繋がない。**どの名前が無かったかを言う。**
+        this.#missingHeaders.push(from);
+        continue;
+      }
+      // トークンは、そのまま渡すと通らない相手が多い。付いていなければ付ける。
       headers[name] = name.toLowerCase() === 'authorization' && !/^\S+\s/.test(value)
         ? `Bearer ${value}`
         : value;

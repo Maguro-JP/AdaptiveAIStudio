@@ -304,9 +304,37 @@ export const writeFileTool: Tool = {
 };
 
 /**
- * 中身を書き込むところ。**書き換える道具は、必ずここを通す。**
+ * 同じファイルへの書き込みを、重ねない。
  *
- * 承認・差分・改行の合わせ方が、道具ごとに散ると必ずずれる。
+ * 押さえているのは段取りが**宣言した**書き込み先だけ（`src/core/scheduler.ts` の
+ * `writes`）で、宣言は模型の当て推量なので、同じファイルへ二人が同時に入ることが
+ * ある。そうなると、読み直して見比べてから書くまでのあいだに相手の書き込みが挟まり、
+ * **どちらも「書けた」と返すのに、片方の中身しか残らない。**
+ *
+ * 書き換える道はここ一本なので、ここで順番に通す。承認を待っているあいだは
+ * 押さえない（10 分のあいだ、別の担当の書き込みまで止めることになる）。
+ * 待たせるのは、読み直してから書き終えるまで。
+ */
+const oneAtATime = new Map<string, Promise<unknown>>();
+
+async function serialized<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const prev = oneAtATime.get(key) ?? Promise.resolve();
+  // 前が失敗しても列は進める（失敗した相手のせいで、以後ずっと書けない、をなくす）。
+  const mine = prev.then(run, run);
+  const marker = mine.then(() => undefined, () => undefined);
+  oneAtATime.set(key, marker);
+  try {
+    return await mine;
+  } finally {
+    // 自分の後ろに誰も並んでいなければ、鍵を捨てる（溜めない）。
+    if (oneAtATime.get(key) === marker) oneAtATime.delete(key);
+  }
+}
+
+/**
+ * 中身を書き込むところ。**書き換えるツールは、必ずここを通す。**
+ *
+ * 承認・差分・改行の合わせ方が、ツールごとに散ると必ずずれる。
  * 片方だけ承認を通さない、片方だけ CRLF を潰す、という形になる。
  */
 async function commit(
@@ -325,7 +353,14 @@ async function commit(
   // ファイル全体が変更扱い**になり、差分を見る意味がなくなる。
   const written = matchLineEndings(content, before);
 
-  if (before === written) return ok(`変更なし: ${shown}`);
+  /*
+   * **空のファイルを作る道を塞がない。**
+   *
+   * 無いファイルに空の中身を書くと `before`（''）と同じになるので、ここで
+   * 「変更なし」と返して**何も作っていなかった**。頼んだ側には変更が無いと
+   * 見えるのに、ファイルは生まれていない。作るときは、空でも通す。
+   */
+  if (before === written && !created) return ok(`変更なし: ${shown}`);
 
   const display = toDisplayPath(ctx.root, abs);
   // 差分は LF に揃えて見せる。^M が全行に並ぶと読めない。
@@ -333,39 +368,62 @@ async function commit(
   const answer = await ctx.approve({ kind: 'write', path: display, diff, created });
   if (answer === false) return fail(`利用者が書き込みを拒否しました: ${shown}`);
 
-  // **一部だけ通す。**通らなかった塊は、通らなかったとモデルへ返す。
-  // 黙って落とすと、直したつもりのまま次へ進んで、噛み合わなくなる。
-  let body = written;
-  let partial = '';
-  // `'all'`（この依頼のあいだは訊かない）は、ここまで来ない形にしてある
-  // （画面の側で `true` に直す）。それでも、来たら通す側として扱う。
-  if (answer !== true && answer !== 'all') {
-    const all = splitHunks(diff);
-    const took = [...new Set(answer.hunks)].filter((i) => i >= 0 && i < all.length).sort((a, b) => a - b);
-    if (took.length === 0) return fail(`利用者が書き込みを拒否しました: ${shown}`);
-    const built = applyHunks(toLf(before), diff, took);
-    if (built === undefined) return fail(`選ばれた分だけを当てられません: ${shown}`);
-    body = matchLineEndings(built, before);
-    if (took.length < all.length) {
-      partial = `（${all.length} か所のうち ${took.length} か所だけ通りました。残りは通っていません）`;
+  // ここから先は、同じファイルに一人ずつ。読み直してから書き終えるまで割り込ませない。
+  return serialized(abs, async () => {
+    /*
+     * **承認を待っているあいだに、ディスクが変わっていることがある。**
+     *
+     * 中身を読んだのは承認を訊く前で、返事は 10 分待つ（`src/ui/server.ts`）。
+     * その間に人が外のエディタで直して保存し、それから許可を押すと、ここは
+     * **待つ前に読んだ中身をそのまま書いて**直しを消していた。しかも戻り先へ
+     * 控えるのも待つ前の中身なので、**戻しても直しは返ってこない。**
+     * 塊を選んで通すときの当て先（`before`）も同じく古い。
+     *
+     * 変わっていたら書かない。読み直してから、と返す。
+     */
+    const nowOnDisk = await readFile(abs, 'utf8').catch(() => undefined);
+    if (nowOnDisk !== (created ? undefined : before)) {
+      return fail(`待っているあいだに ${shown} が変わりました。`
+        + '読み直してから、もう一度書いてください（いまの中身は消していません）');
     }
-  }
 
-  if (body === before) return ok(`変更なし: ${shown}${partial}`);
+    // **一部だけ通す。**通らなかった塊は、通らなかったとモデルへ返す。
+    // 黙って落とすと、直したつもりのまま次へ進んで、噛み合わなくなる。
+    let body = written;
+    let partial = '';
+    // `'all'`（この依頼のあいだは訊かない）は、ここまで来ない形にしてある
+    // （画面の側で `true` に直す）。それでも、来たら通す側として扱う。
+    if (answer !== true && answer !== 'all' && !(created && written === '')) {
+      const all = splitHunks(diff);
+      const took = [...new Set(answer.hunks)].filter((i) => i >= 0 && i < all.length).sort((a, b) => a - b);
+      if (took.length === 0) return fail(`利用者が書き込みを拒否しました: ${shown}`);
+      const built = applyHunks(toLf(before), diff, took);
+      if (built === undefined) return fail(`選ばれた分だけを当てられません: ${shown}`);
+      body = matchLineEndings(built, before);
+      if (took.length < all.length) {
+        partial = `（${all.length} か所のうち ${took.length} か所だけ通りました。残りは通っていません）`;
+      }
+    }
 
-  // **書き換える直前に控える。**ここを通らない書き込みは無いので、
-  // 戻せないものが生まれない。
-  ctx.beforeWrite?.(display, created ? undefined : before);
+    if (body === before && !created) return ok(`変更なし: ${shown}${partial}`);
 
-  try {
-    await mkdir(dirname(abs), { recursive: true });
-    await writeFile(abs, body, 'utf8');
-  } catch (e) {
-    return fail(`書き込めません: ${shown} (${describe(e)})`);
-  }
+    // **書き換える直前に控える。**ここを通らない書き込みは無いので、
+    // 戻せないものが生まれない。
+    ctx.beforeWrite?.(display, created ? undefined : before);
 
-  const { added, removed } = diffStat(unifiedDiff(display, toLf(before), toLf(body)));
-  return ok((created ? `作成: ${display}（${added}行）` : `更新: ${display}（+${added} -${removed}）`) + partial);
+    try {
+      await mkdir(dirname(abs), { recursive: true });
+      await writeFile(abs, body, 'utf8');
+    } catch (e) {
+      return fail(`書き込めません: ${shown} (${describe(e)})`);
+    }
+
+    const applied = unifiedDiff(display, toLf(before), toLf(body));
+    const { added, removed } = diffStat(applied);
+    // **書いたものを、書いた側から知らせる。**提案そのままの差分と食い違うため。
+    ctx.wrote?.(display, applied, created);
+    return ok((created ? `作成: ${display}（${added}行）` : `更新: ${display}（+${added} -${removed}）`) + partial);
+  });
 }
 
 /**

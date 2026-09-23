@@ -86,8 +86,15 @@ export interface InspectorOptions {
   judge: Judge;
   /** 一件にかけてよい時間。ここを越えたら「分からない」。既定8秒 */
   timeoutMs?: number;
-  /** 検査官に渡す最大文字数。越えたら頭と尻を見る。既定12000 */
+  /** 検査官に渡す最大文字数（チャンクの大きさ）。越えたら分けて見る。既定12000 */
   maxChars?: number;
+  /**
+   * 見るチャンクの数の上限（既定 3）。長いものは頭・中ほど・尻を見る。
+   *
+   * 二段目はチャンクごとにモデルを呼ぶので、長さに応じて無制限に増やすと、
+   * **外から来たものの長さで、こちらの時間を決められる。**
+   */
+  maxWindows?: number;
 }
 
 /**
@@ -162,14 +169,27 @@ function systemPrompt(direction: Direction, fence: string): string {
   ].join('\n');
 }
 
-/** 長いものは頭と尻を見る。仕込みは末尾に置かれることが多い。 */
-function sample(text: string, max: number): { text: string; sampled: boolean } {
-  if (text.length <= max) return { text, sampled: false };
-  const half = Math.floor(max / 2);
-  return {
-    text: `${text.slice(0, half)}\n\n…（中略 ${text.length - max} 文字）…\n\n${text.slice(-half)}`,
-    sampled: true,
-  };
+/**
+ * 長いものを、チャンクに分けて見る。
+ *
+ * **頭と尻だけを見ていた。**仕込みは末尾に置かれることが多い、という見立て
+ * だったが、裏を返せば**中ほどに置けば見られない**。外から入ってくるものには
+ * 長さの上限が無いところがある（MCP の返しは一行 8MB まで）ので、詰め物で
+ * 中央を隠せる。頭・中ほど・尻を、それぞれ一つのチャンクとして見る。
+ *
+ * チャンクの数には上限を置く（既定 3）。二段目はチャンクごとにモデルを呼ぶので、長さに応じて
+ * 無制限に増やすと、**外から来たものの長さで、こちらの時間を決められる**。
+ * 上限で見切れない分が残ったときは、そのことを `sampled` で返す。
+ */
+export function windowsOf(text: string, max: number, limit = 3): { parts: string[]; sampled: boolean } {
+  if (text.length <= max) return { parts: [text], sampled: false };
+  const parts: string[] = [text.slice(0, max)];
+  if (limit >= 3) {
+    const mid = Math.floor((text.length - max) / 2);
+    parts.push(text.slice(mid, mid + max));
+  }
+  if (limit >= 2) parts.push(text.slice(-max));
+  return { parts: parts.slice(0, limit), sampled: text.length > max * Math.min(limit, 3) };
 }
 
 /**
@@ -243,17 +263,29 @@ export class Inspector {
   readonly #judge: Judge;
   readonly #timeoutMs: number;
   readonly #maxChars: number;
+  /** 見るチャンクの数の上限。長いものに、こちらの時間を無制限に使わせない。 */
+  readonly #maxWindows: number;
 
   constructor(opts: InspectorOptions) {
     this.#judge = opts.judge;
     this.#timeoutMs = opts.timeoutMs ?? 8_000;
     this.#maxChars = opts.maxChars ?? 12_000;
+    this.#maxWindows = opts.maxWindows ?? 3;
   }
 
   async inspect(text: string, direction: Direction, signal?: AbortSignal): Promise<Inspection> {
+    const { parts, sampled } = windowsOf(text, this.#maxChars, this.#maxWindows);
+    for (const body of parts) {
+      const got = await this.#look(body, direction, signal);
+      // 止める・分からない、は、そこで返す（残りのチャンクにモデルを使わない）。
+      if (got.judgement !== 'pass') return { ...got, sampled };
+    }
+    return { judgement: 'pass', sampled };
+  }
+
+  async #look(body: string, direction: Direction, signal?: AbortSignal): Promise<Inspection> {
     // 囲いの印は毎回変える。固定だと、荷物の側で囲いを閉じて外へ出られる。
     const fence = `===検体-${randomUUID().slice(0, 8)}===`;
-    const { text: body, sampled } = sample(text, this.#maxChars);
 
     const ac = new AbortController();
     const onAbort = () => ac.abort();
@@ -264,12 +296,12 @@ export class Inspector {
         { system: systemPrompt(direction, fence), user: `${fence}\n${body}\n${fence}` },
         ac.signal,
       );
-      return { ...readJudgement(raw), sampled };
+      return readJudgement(raw);
     } catch (e) {
       // 検査官が落ちていても、ここで例外は投げない。
       // 「検査できなかった」という事実として返し、どう扱うかは呼ぶ側が決める。
       const why = ac.signal.aborted ? `${this.#timeoutMs}ms で答えが無い` : (e as Error).message;
-      return { judgement: 'unknown', unavailable: why, sampled };
+      return { judgement: 'unknown', unavailable: why };
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
@@ -316,7 +348,7 @@ export function combine(
     findings.push({
       severity: 'warn',
       kind: '一部のみ検査',
-      detail: '長いため、検査官は頭と尻だけを見ています（当てはめは全文を見ています）。',
+      detail: '長いため、検査官は一部（頭・中ほど・尻）だけを見ています（当てはめは全文を見ています）。',
     });
   }
 

@@ -4,7 +4,7 @@
  * それぞれ「モデルがやりがちな誤った選択」に対応している。
  * プロンプトで禁じるのではなく、実行の手前で止める。
  */
-import { isWriteTool, plannedContent } from '../agent/tools/write-kind.ts';
+import { isWriteTool, isExternalTool, mayWriteFiles, plannedContent } from '../agent/tools/write-kind.ts';
 import { readFile, stat } from 'node:fs/promises';
 import { relative, isAbsolute } from 'node:path';
 import { minimatch } from './glob.ts';
@@ -37,15 +37,56 @@ export function protectedPaths(patterns: string[], opts: { nocase?: boolean } = 
     name: 'protected-paths',
     description: `保護対象への書き込みを禁じる: ${patterns.join(', ')}`,
     pre(call, ctx) {
-      if (!isWriteTool(call.name)) return allow;
-      const path = argString(call, 'path');
-      if (!path) return allow;
-      const rel = normalize(ctx.root, path);
-      // 大小を区別しない機械では `.ENV` も `.env`。区別すると守りをすり抜ける。
-      const hit = patterns.find((p) => minimatch(rel, p, opts));
-      return hit ? deny(`${rel} は保護されています（${hit}）。このファイルは変更できません。`) : allow;
+      // 外から来たツールも見る。何をするか分からないものを「書かない側」に
+      // 置くと、ここが丸ごと素通りする（`mayWriteFiles`）。
+      if (!mayWriteFiles(call.name)) return allow;
+
+      /*
+       * **どの引数を見るかは、相手によって変わる。**
+       *
+       * この場所のツールは `path` で受けると決めてある。外から来たツールの
+       * 引数の名前は相手が決めるので、`file` にも `target` にもなるし、
+       * 入れ子にも入る。`path` だけを見ていると、名前を変えるだけで通る。
+       */
+      const named = isExternalTool(call.name)
+        ? stringsIn(call.args)
+        : [argString(call, 'path')].filter((p): p is string => p !== undefined);
+
+      for (const path of named) {
+        const rel = normalize(ctx.root, path);
+        // 大小を区別しない機械では `.ENV` も `.env`。区別すると守りをすり抜ける。
+        const hit = patterns.find((p) => minimatch(rel, p, opts));
+        if (hit) {
+          return deny(isExternalTool(call.name)
+            ? `${rel} は保護されています（${hit}）。外のツールには渡せません。`
+            : `${rel} は保護されています（${hit}）。このファイルは変更できません。`);
+        }
+      }
+      return allow;
     },
   };
+}
+
+/**
+ * 引数の中の文字列を、入れ子まで全部集める。
+ *
+ * 外から来たツールの引数の形は、相手の schema のまま。こちらでは決められない
+ * ので、**名前ではなく値の側を見る。**丸ごと一致で照合するので、文の中に
+ * `.env` と混ざっているだけでは当たらない（`test/mcp-protected.test.ts`）。
+ *
+ * 深さと数に上限を置く。上限が無いと、大きな引数一つで規則の側が止まる。
+ */
+function stringsIn(args: unknown, depth = 0, out: string[] = []): string[] {
+  if (depth > 5 || out.length >= 200) return out;
+  if (typeof args === 'string') { out.push(args); return out; }
+  if (Array.isArray(args)) {
+    for (const v of args) stringsIn(v, depth + 1, out);
+    return out;
+  }
+  if (typeof args === 'object' && args !== null) {
+    for (const v of Object.values(args as Record<string, unknown>)) stringsIn(v, depth + 1, out);
+  }
+  return out;
 }
 
 /**

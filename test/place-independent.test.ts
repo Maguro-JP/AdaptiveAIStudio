@@ -54,8 +54,16 @@ test('ファイルを読むテストは、自分の位置を持つ', () => {
     const readsRepo = REPO_DIRS.some((d) => new RegExp(`['"\`]${d}(/|['"\`])`).test(text))
       && /\b(readFile|readFileSync|readdir|readdirSync)\s*\(/.test(text);
     if (!readsRepo) continue;
-    // 自分の位置（import.meta.url）か、根を返すもの（installRoot）を持っているか。
-    if (/import\.meta\.url|installRoot|tempDir/.test(text)) continue;
+    /*
+     * 自分の位置（`import.meta.url` / `import.meta.dirname`）か、根を返すもの
+     * （`installRoot`）を持っているか。
+     *
+     * **`import.meta.dirname` を見ていなかった。**`dirname(fileURLToPath(
+     * import.meta.url))` と同じものを Node が直に持っているだけなので、
+     * 位置は持っている。見ていなかったので、そちらで書いた試験が
+     * 「位置を持っていない」として落ちた（網の側が古い）。
+     */
+    if (/import\.meta\.(url|dirname)|installRoot|tempDir/.test(text)) continue;
     bad.push(`test/${name}`);
   }
   assert.deepEqual(bad, [],

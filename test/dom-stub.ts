@@ -44,9 +44,14 @@ export interface StubNode {
   oninput?: (e?: unknown) => unknown;
   /** 打ち込む欄の中身。textarea / input を使うパネルのために持つ。 */
   value: string;
+  /** チェックが付いているか（checkbox）。承認の札で、通す塊を選ぶのに使う。 */
+  checked?: boolean;
   spellcheck: boolean;
   selectionStart: number;
   selectionEnd: number;
+  /** 本物の textarea と同じ置き換え（Tab の字下げがここを通る）。 */
+  setRangeText(text: string, start?: number, end?: number, mode?: 'select' | 'start' | 'end' | 'preserve'): void;
+  setSelectionRange(start: number, end: number): void;
   focus(): void;
   addEventListener(type: string, fn: (e: unknown) => unknown): void;
   /** 付けた相手（addEventListener）と、`on*` の両方を呼ぶ。 */
@@ -61,6 +66,8 @@ export interface StubNode {
   /** 自分を親から外す。 */
   remove(): void;
   append(...nodes: StubNode[]): void;
+  /** 自分のすぐ後ろへ入れる。入れるものは、いま居る親から外す（本物と同じ）。 */
+  after(...nodes: StubNode[]): void;
   appendChild(node: StubNode): StubNode;
   replaceChildren(...nodes: StubNode[]): void;
   /** 中身の文字列を全部つなげたもの。検査で「出ているか」を見るのに使う。 */
@@ -74,6 +81,14 @@ export function createNode(tagName: string): StubNode {
   const listeners = new Map<string, Array<(e: unknown) => unknown>>();
   /** 自分が直に持つ文字。`textContent` の代入で入れ替わる。 */
   let own = '';
+  /**
+   * 欄の中身。
+   *
+   * **本物の欄は、入れた `\r\n` を `\n` に直して持つ**（Chromium で実測）。
+   * ここを素の入れ物にしていると、CRLF のファイルを開いたときの振る舞いが
+   * 本物と変わり、試験だけ通ってしまう。同じにそろえる。
+   */
+  let val = '';
   const node: StubNode = {
     tagName,
     className: '',
@@ -93,10 +108,34 @@ export function createNode(tagName: string): StubNode {
     placeholder: '',
     dataset: {},
     children: [],
-    value: '',
+    get value() { return val; },
+    set value(v: string) { val = tagName === 'textarea' ? String(v).replace(/\r\n/g, '\n') : String(v); },
     spellcheck: true,
     selectionStart: 0,
     selectionEnd: 0,
+    /*
+     * **本物と同じ置き換えを持たせる。**持っていなかったので、Tab の字下げは
+     * 試験から一度も通っていなかった（呼べば落ちる）。動かない所ではなく、
+     * **見ていない所**が在ることの方が困る。
+     */
+    setRangeText(text, start = node.selectionStart, end = node.selectionEnd, mode = 'preserve') {
+      const before = node.value.slice(0, start);
+      const after = node.value.slice(end);
+      node.value = before + text + after;
+      const stop = start + text.length;
+      if (mode === 'end') { node.selectionStart = stop; node.selectionEnd = stop; }
+      else if (mode === 'start') { node.selectionStart = start; node.selectionEnd = start; }
+      else if (mode === 'select') { node.selectionStart = start; node.selectionEnd = stop; }
+      else {
+        // preserve: 置き換えた分だけずらす（本物と同じ）。
+        const shift = text.length - (end - start);
+        if (node.selectionStart > end) node.selectionStart += shift;
+        else if (node.selectionStart > start) node.selectionStart = stop;
+        if (node.selectionEnd > end) node.selectionEnd += shift;
+        else if (node.selectionEnd > start) node.selectionEnd = stop;
+      }
+    },
+    setSelectionRange(start, end) { node.selectionStart = start; node.selectionEnd = end; },
     focus() { /* 置く所が無いので、呼べることだけ */ },
     addEventListener(type, fn) {
       if (!listeners.has(type)) listeners.set(type, []);
@@ -118,6 +157,27 @@ export function createNode(tagName: string): StubNode {
       return child;
     },
     replaceChildren(...nodes) { node.children = [...nodes]; },
+    /**
+     * 自分のすぐ後ろへ入れる（本物と同じ）。
+     *
+     * **本物と同じように、いま居る親からは外す。**外さないと、長い会話の
+     * 「前を出す」で古い分を差し込んだとき、元の入れ物にも残ったままになり、
+     * 数えると二重になる。
+     */
+    after(...nodes: StubNode[]) {
+      const parent = node.parentNode;
+      if (!parent) return;
+      for (const c of nodes) {
+        const was = c.parentNode;
+        if (was) {
+          const at = was.children.indexOf(c);
+          if (at >= 0) was.children.splice(at, 1);
+        }
+      }
+      const at = parent.children.indexOf(node);
+      parent.children.splice(at < 0 ? parent.children.length : at + 1, 0, ...nodes);
+      for (const c of nodes) { c.parentNode = parent; c.parentElement = parent; }
+    },
     // 本物では、文字だけの節は children に入らず childNodes にだけ入る。
     // 板は溜まりすぎたぶんを childNodes で数えて捨てるので、同じ名前を持たせる。
     get childNodes() { return node.children; },
@@ -235,4 +295,19 @@ export function installDom(): void {
     },
   };
   (globalThis as unknown as { NodeFilter: unknown }).NodeFilter = { SHOW_TEXT: 4 };
+  /*
+   * **覚えておく所（localStorage）。**
+   *
+   * 画面は、保存していない直しをここへ預ける（ブラウザを閉じても戻せるように）。
+   * 本物と同じく、入れたものが文字で返るだけあればよい。
+   */
+  const store = new Map<string, string>();
+  (globalThis as unknown as { localStorage: unknown }).localStorage = {
+    getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
+    setItem: (k: string, v: string) => { store.set(k, String(v)); },
+    removeItem: (k: string) => { store.delete(k); },
+    clear: () => { store.clear(); },
+    key: (i: number) => [...store.keys()][i] ?? null,
+    get length() { return store.size; },
+  };
 }

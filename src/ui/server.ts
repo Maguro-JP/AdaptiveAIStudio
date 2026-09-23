@@ -31,6 +31,7 @@ import { canRun } from '../core/which.ts';
 import { saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { revealCommand } from '../core/opener.ts';
 import { join, dirname, extname, normalize, resolve as resolvePath, relative, isAbsolute } from 'node:path';
@@ -53,6 +54,7 @@ import { pullModel } from '../runtime/ollama-pull.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout, DEFAULT_LAYOUT_ID } from './layout.ts';
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
 import { collectState } from './state.ts';
+import { editorHere, describeEditorHere, type EditorHere } from './editor-here.ts';
 import { Attachments, MAX_BYTES } from './attachments.ts';
 import type { McpServerSpec } from '../mcp/client.ts';
 import { expandMentions, mentionBudget } from '../agent/mention.ts';
@@ -128,6 +130,14 @@ export interface UiServerOptions {
   onRestart?: () => void;
   /** 入口（start.cmd）が起こし直してくれるか。画面の案内が変わる。 */
   relaunches?: boolean;
+  /**
+   * 設定が読めなかった理由。**画面にも出す。**
+   *
+   * 読めなければ既定で開く作りにしてあるが、理由は端末にしか出していなかった。
+   * `start.cmd` から起こすとその端末は隠れる（閉じていることもある）ので、
+   * 開いた人は**既定で動いていることに気づけない**。直すのは画面の「設定」から。
+   */
+  configProblem?: string;
   /** モデルを読むライブラリの差し替え。試験で使う。 */
   inprocLoad?: () => Promise<unknown>;
   /**
@@ -178,6 +188,14 @@ export type UiEvent =
   /** 点検の出来事。cmd の窓でしか見られなかったものを、画面へ出す。 */
   | { type: 'task'; name: string; text: string }
   | { type: 'taskDone'; name: string; code: number }
+  /** AI が「ここを見てください」と言った。画面はエディタで開く（`show_file`）。 */
+  | { type: 'show'; path: string; line?: number }
+  /**
+   * AI が「選んでいる所をこう書き換えて」と言った（`replace_selection`）。
+   * 画面は欄の中だけ入れ替える。**保存はしない。**`text` は選んでいた字で、
+   * そこがまだ在るかを画面で見てから入れ替える。
+   */
+  | { type: 'patch'; path: string; from: number; to: number; text: string; replacement: string }
   /** 裏で動いているものの、いまの状態（流れではなく、状態そのもの）。 */
   | { type: 'jobs'; jobs: Job[] };
 
@@ -237,7 +255,24 @@ export class UiServer {
    * 断って書き直させない。利用者は「終わったらこれをやって」と
    * 思って書いているので、預かって順に流すのが素直。
    */
-  readonly #queue: Array<{ text: string; attached: string[]; conversationId: string }> = [];
+  readonly #queue: Array<{ text: string; attached: string[]; conversationId: string; editor?: EditorHere }> = [];
+  /**
+   * いま動いている依頼で、画面が選んでいる所。
+   *
+   * `replace_selection` はここを見て書き換える先を決める。**範囲は利用者が
+   * 選んだ所**で、モデルには文だけを出させる（範囲まで決めさせると、
+   * 選んでいない所を書き換えられる）。依頼が終わったら捨てる。
+   */
+  #editorNow: EditorHere | undefined;
+  /**
+   * 最後に答えたモデル。
+   *
+   * **横の一覧の足元が「ollama · —」のままだった。**答えの札には
+   * `local:local-model` と出ているのに、いま動かしているものを出す所が
+   * 空のままで、壊れているように見える（撮って見つけた）。設定で固定して
+   * いなければ名前は答えてみるまで決まらないので、答えたものを覚えておく。
+   */
+  #lastAnswered = '';
   /**
    * 残してある会話。**窓を閉じても消えないように。**
    * ここまでメモリの中だけだったので、立ち上げ直すと無かったことになっていた。
@@ -523,6 +558,18 @@ export class UiServer {
       journals: await this.journals(),
       approve: (req) => this.#ask(req),
       onLog: (level, text) => this.broadcast({ type: 'log', level, text }),
+      // AI が「ここを見てください」と言ったら、画面のエディタで開く。
+      // 画面が無い入口（端末）では置かない（`show_file` はそこでは使えない）。
+      onShow: ({ path, line }) => this.broadcast({ type: 'show', path, ...(line === undefined ? {} : { line }) }),
+      // いま選んでいる所（画面から来たもの）と、そこを書き換える受け手。
+      editorSelection: () => {
+        const at = this.#editorNow;
+        if (!at || at.selection === undefined || at.selectionFrom === undefined || at.selectionTo === undefined) {
+          return undefined;
+        }
+        return { path: at.path, from: at.selectionFrom, to: at.selectionTo, text: at.selection };
+      },
+      onPatch: (at) => this.broadcast({ type: 'patch', ...at }),
     });
     // 続きから話す。**土台は作り直しても、話は続ける。**
     const id = await this.#currentConversation();
@@ -597,7 +644,7 @@ export class UiServer {
    * 受け取ったあとの続き。読んでいなければ読み、セッションを組み直し、走らせる。
    * 読んでいる間は #preparing で「手が塞がっている」ことにする（次の送信は積まれる）。
    */
-  async #loadThenDrive(text: string, attached: string[], conversationId: string): Promise<void> {
+  async #loadThenDrive(text: string, attached: string[], conversationId: string, editor?: EditorHere): Promise<void> {
     this.#preparing = true;
     try {
       const notReady = await this.#readyToThink();
@@ -616,8 +663,9 @@ export class UiServer {
       await this.#loadInto(session, conversationId);
       // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
       // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
-      const full = await this.#compose(session, text, attached);
-      this.#bg(this.#drive(session, full), '依頼の実行が落ちました');
+      const full = await this.#compose(session, text, attached, editor);
+      this.#bg(this.#drive(session, full, undefined, { said: text, ...(editor ? { editor } : {}) }),
+        '依頼の実行が落ちました');
     } finally {
       this.#preparing = false;
     }
@@ -746,7 +794,7 @@ export class UiServer {
       // 立ち上げて30秒後に機械が塞がる。
       const missing = await this.#readyToThink(false);
       if (missing) {
-        // 10分は黙る。30秒ごとに同じことを言われても、置き場は変わらない。
+        // 10分は黙る。30秒ごとに同じことを言われても、保存先は変わらない。
         this.#idleHoldUntil = Date.now() + 10 * 60_000;
         return 'MISSING';
       }
@@ -787,7 +835,14 @@ export class UiServer {
    * 一度「残りも全部通す」と答えたら、その依頼が終わるまで立つ。
    * **依頼が変わったら倒す**（`#drive` の頭）。次の依頼まで持ち越さない。
    */
-  #allWrites = false;
+  /**
+   * 「この依頼のあいだは訊かない」を選んだ依頼。**番号で持つ。**
+   *
+   * 真偽の旗にして入口ごとに倒していたので、段取り（`/plan`）の入口で倒し
+   * 忘れていた（一度押したあとの段取りが、札を一枚も出さずに全部書いていた）。
+   * どの依頼で選ばれたかを覚えておけば、新しい依頼が始まった時点で外れる。
+   */
+  #allWritesFor?: { session: object; seq: number };
 
   #ask(req: ApprovalRequest): Promise<ApprovalAnswer> {
     const approval = this.#opts.config.agent?.approval ?? 'autoEdit';
@@ -803,7 +858,9 @@ export class UiServer {
      *
      * 効くのは書き込みだけ。コマンドも、外へ出るのも、協議も、毎回訊く。
      */
-    if (req.kind === 'write' && this.#allWrites) {
+    const now = this.#session;
+    if (req.kind === 'write' && now !== undefined
+      && this.#allWritesFor?.session === now && this.#allWritesFor.seq === now.requestSeq) {
       this.broadcast({
         type: 'log', level: 'info',
         text: `${req.path} を書きました（この依頼のあいだは訊かない、を選んでいます）`,
@@ -818,7 +875,13 @@ export class UiServer {
         if (done) return;
         done = true;
         // 「残りも全部」を受け取ったら、ここで旗を立てる。返す答えは通常の許可。
-        if (ok === 'all') { this.#allWrites = true; ok = true; }
+        const mark = () => {
+          const s = this.#session;
+          if (s) this.#allWritesFor = { session: s, seq: s.requestSeq };
+        };
+        if (ok === 'all') { mark(); ok = true; }
+        // 塊を選びつつ「以降訊かない」も選べる。選んだ塊はそのまま通す。
+        else if (typeof ok === 'object' && ok !== null && ok.all === true) mark();
         this.#pending.delete(id);
         this.broadcast({ type: 'approvalDone', id, approved: ok !== false });
         resolve(ok);
@@ -963,11 +1026,13 @@ export class UiServer {
     }
 
     if (path === '/api/send' && req.method === 'POST') {
-      const body = await readBody(req) as { text?: string; attachments?: unknown };
+      const body = await readBody(req) as { text?: string; attachments?: unknown; editor?: unknown };
       const typed = typeof body?.text === 'string' ? body.text.trim() : '';
       const attached = Array.isArray(body?.attachments)
         ? body.attachments.filter((a): a is string => typeof a === 'string')
         : [];
+      // いま開いている所（画面のエディタ）。無ければ付かない。
+      const editor = editorHere(body?.editor);
       if (!typed && attached.length === 0) return send(res, 400, { error: '指示が空です' });
 
       // 打ち込みのコマンド（/fix …）と作業場の skill。指示に置き換えてから送る。
@@ -1018,7 +1083,7 @@ export class UiServer {
       // 別の会話への依頼も積める（手が一つでも、口は会話ごと）。
       const live = this.#session;
       if (live && this.#busyNow(live)) {
-        this.#queue.push({ text, attached, conversationId });
+        this.#queue.push({ text, attached, conversationId, ...(editor ? { editor } : {}) });
         this.broadcast({ type: 'queue', waiting: this.#queue.length });
         return send(res, 202, { queued: this.#queue.length, conversationId });
       }
@@ -1026,7 +1091,7 @@ export class UiServer {
       if (mustLoad) {
         // 受け取ったことだけ先に返し、読み込みと答えは出来事として流す。
         send(res, 202, { accepted: true, conversationId, loading: true });
-        this.#bg(this.#loadThenDrive(text, attached, conversationId), '依頼の実行が落ちました');
+        this.#bg(this.#loadThenDrive(text, attached, conversationId, editor), '依頼の実行が落ちました');
         return;
       }
 
@@ -1037,10 +1102,12 @@ export class UiServer {
         await this.#loadInto(session, conversationId);
         // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
         // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
-        const full = await this.#compose(session, text, attached);
+        const full = await this.#compose(session, text, attached, editor);
         // 受け取ったことだけ先に返し、続きは出来事として流す。
         send(res, 202, { accepted: true, conversationId, loading: false });
-        this.#bg(this.#drive(session, full), '依頼の実行が落ちました');
+        // 判じるのは、利用者が打った分だけ（差し込んだ中身は利用者の言葉ではない）。
+        this.#bg(this.#drive(session, full, undefined, { said: text, ...(editor ? { editor } : {}) }),
+          '依頼の実行が落ちました');
       } finally {
         this.#preparing = false;
       }
@@ -1122,8 +1189,19 @@ export class UiServer {
         findInstalled(),
       ]);
       const dir = this.#opts.config.runtime?.modelsDir ?? modelsDir();
+      /*
+       * **保存先の .gguf は、動かし方に関わらず数える。**
+       *
+       * Ollama のときは `runtime.list()` が Ollama のモデルを返すので、
+       * 保存先に .gguf を入れても画面には一つも出ず、「まだありません」とだけ出る。
+       * 落として置いた人には、**何が起きているのか分からない**（社用PC は
+       * ブラウザでしか落とせないので、置く道がいちばん使われる）。
+       * 数だけ返して、画面で「在るが、いまの動かし方では使わない」と言えるようにする。
+       */
+      const localGguf = usesGguf(runtime.id) ? 0 : (await listGguf(dir).catch(() => [])).length;
       return send(res, 200, {
         runtime: runtime.id,
+        localGguf,
         // GGUF を置く道では、絶対の道も返す。画面で開く・コピーするため（Ollama にはファイルが無い）。
         installed: installed.map((m) => ({ ref: m.ref, sizeBytes: m.sizeBytes, ...(usesGguf(runtime.id) ? { path: join(dir, m.ref) } : {}) })),
         llamaServer: llama ?? null,
@@ -1133,7 +1211,7 @@ export class UiServer {
         fetching: this.#fetching ?? null,
         catalog: AVAILABLE_MODELS.map((m) => ({
           id: m.id, note: m.note, approxGB: m.approxGB,
-          // GGUF を自分で置く道（llamacpp / inproc）では、置き場に入れる元を出す。
+          // GGUF を自分で置く道（llamacpp / inproc）では、保存先に入れる元を出す。
           // Ollama の名前を出しても、そちらでは使えない。
           ref: runtime.id === 'ollama' ? m.ollama : m.repo,
         })),
@@ -1148,7 +1226,7 @@ export class UiServer {
       const installed = (await runtime.list().catch(() => [])).map((m) => m.ref);
       if (installed.length === 0) return send(res, 200, { findings: [] });
       try {
-        // GGUF の名前で Ollama に訊いても、何も出ない。置き場に合わせて訊く先を変える。
+        // GGUF の名前で Ollama に訊いても、何も出ない。保存先に合わせて訊く先を変える。
         const findings = usesGguf(runtime.id)
           ? await findNewerGguf({ installed })
           : await findNewerOllama({ installed });
@@ -1234,8 +1312,17 @@ export class UiServer {
         ? body.hunks.filter((n): n is number => typeof n === 'number')
         : undefined;
       // 「この依頼のあいだは訊かない」。書き込みだけに効く。
-      if (body?.approved === true && (body as { all?: unknown }).all === true) resolveIt('all');
-      else if (body?.approved === true && picked && picked.length > 0) resolveIt({ hunks: picked });
+      const wantAll = body?.approved === true && (body as { all?: unknown }).all === true;
+      /*
+       * **塊を選んでから「以降訊かない」を押せる。**
+       *
+       * ここは `all` を先に見て `'all'` を返していたので、**外した塊まで
+       * 書かれていた**（画面は「許可（この依頼は以降訊かない）」と出す）。
+       * 選んだ塊が来ているなら、それを通す側として返し、旗だけ一緒に立てる。
+       */
+      if (body?.approved === true && picked && picked.length > 0) {
+        resolveIt(wantAll ? { hunks: picked, all: true } : { hunks: picked });
+      } else if (wantAll) resolveIt('all');
       else resolveIt(body?.approved === true);
       return send(res, 200, { ok: true });
     }
@@ -1304,7 +1391,11 @@ export class UiServer {
           failed: this.#fetching?.state === 'failed' ? this.#fetching.message : '',
         }
         : null;
-      return send(res, 200, { ready: !notReady, why: notReady ?? '', heads: heads ?? '', canFetch });
+      return send(res, 200, {
+        ready: !notReady, why: notReady ?? '', heads: heads ?? '', canFetch,
+        // 設定が読めなかったなら、開いた時点で言う（既定で動いていることに気づけるように）。
+        configProblem: this.#opts.configProblem ?? '',
+      });
     }
 
     if (path === '/api/config' && req.method === 'GET') {
@@ -1370,8 +1461,17 @@ export class UiServer {
           : '（最初の依頼のときに立ち上がります）',
         // 決めていなくても、この中で読んでいるなら「いま読んでいるもの」を出す。
         // 「—」だけだと、動いているのに何も無いように見える。
+        /*
+         * **いま動かしているものを出す。**
+         *
+         * 固定していなければ、名前は答えてみるまで決まらない（速い方へ乗り換える）。
+         * 分からないからと「—」を出していたので、答えの札に名前が出ているのに
+         * 足元は空、という形になっていた。**答えたのなら、もう分かっている。**
+         * 一度も答えていないうちは「—」のまま（まだ何も動かしていない）。
+         */
         model: this.#opts.config.runtime?.model
           ?? (this.#runtime?.id === 'inproc' ? this.#runtime.loaded()[0] : undefined)
+          ?? (this.#lastAnswered || undefined)
           ?? '—',
         // **なぜそれなのかも出す。**速い方へ勝手に乗り換える作りなので、
         // 名前だけ出しても「いつのまにか変わっている」に見える。
@@ -1489,13 +1589,15 @@ export class UiServer {
       const bytes = await readFile(real);
       // 途中に NUL があるものは文字のファイルではない。開いても壊すだけ。
       if (bytes.subarray(0, 8192).includes(0)) return send(res, 415, { error: '文字のファイルではないので、画面では開けません' });
-      return send(res, 200, { path: asked, content: bytes.toString('utf8'), bytes: info.size });
+      return send(res, 200, { path: asked, content: bytes.toString('utf8'), bytes: info.size, stamp: stampOf(bytes.toString('utf8')) });
     }
 
     if (path === '/api/file' && req.method === 'PUT') {
-      const body = await readBody(req) as { path?: unknown; content?: unknown };
+      const body = await readBody(req) as { path?: unknown; content?: unknown; stamp?: unknown };
       const asked = typeof body?.path === 'string' ? body.path : '';
       const content = typeof body?.content === 'string' ? body.content : undefined;
+      // 開いたときの stamp。送ってきたときだけ見る（持っていない相手は今までどおり）。
+      const stamp = typeof body?.stamp === 'string' ? body.stamp : undefined;
       if (!asked || content === undefined) return send(res, 400, { error: 'path と content が要ります' });
       /*
        * **まだ無いファイルも書ける。**
@@ -1511,9 +1613,31 @@ export class UiServer {
         return send(res, 409, { error: 'いま作業中です。終わってから保存してください' });
       }
       const before = await readFile(real, 'utf8').catch(() => undefined);
-      if (before === content) return send(res, 200, { saved: false, path: asked });
+      /*
+       * **黙って上書きさせない。**
+       *
+       * 画面で直している最中に AI が同じファイルを書くと、ファイルは AI の版、
+       * 欄は人の版、という二つに割れる。保存は先に書いた方を**何も言わずに
+       * 消していた**（人が保存すれば AI の直しが消える）。開いたときの stamp と
+       * 今の中身が違うなら、断る。どうするかは画面で選ばせる。
+       */
+      if (stamp !== undefined && before !== undefined && stampOf(before) !== stamp) {
+        return send(res, 409, {
+          error: '開いたあとで、このファイルは別の所で変わりました（AI の書き換えなど）。'
+            + '画面で、どちらを残すか選んでください',
+          conflict: true, path: asked, content: before, stamp: stampOf(before),
+        });
+      }
+      /*
+       * **書けたら、新しい stamp を返す。**
+       *
+       * ここは返していなかったので、画面は**開いたときの stamp を持ったまま**に
+       * なり、続けて二度目を保存すると「別の所で変わりました（AI の書き換えなど）」と
+       * 断られていた。嘘だし、直すたびに押し直させることになる（押して実測）。
+       */
+      if (before === content) return send(res, 200, { saved: false, path: asked, stamp: stampOf(content) });
       const { added, removed } = await this.#writeByHand(asked, real, before, content, `手で直した: ${asked}`);
-      return send(res, 200, { saved: true, path: asked, added, removed });
+      return send(res, 200, { saved: true, path: asked, added, removed, stamp: stampOf(content) });
     }
 
     /*
@@ -1695,11 +1819,17 @@ export class UiServer {
          * 赤い字が出て、一覧は前のまま。**変えたのに変わっていないように見える。**
          * 外を出すわけではない（根の一覧を出すだけ）ので、断る理由が無い。
          */
-        const entries = await listDir(root, asked).catch(async (e: unknown) => {
+        let at = asked;
+        let got;
+        try {
+          got = await listDir(root, asked);
+        } catch (e) {
           if (asked === '') throw e;
-          return { at: '', list: await listDir(root, '') };
-        }).then((r) => (Array.isArray(r) ? { at: asked, list: r } : r));
-        return send(res, 200, { root, path: entries.at, entries: entries.list });
+          at = '';
+          got = await listDir(root, '');
+        }
+        // `total` は切る前の数。画面は「ほかに N 件」を出す。
+        return send(res, 200, { root, path: at, entries: got.entries, total: got.total });
       } catch (e) {
         return send(res, 400, { error: (e as Error).message });
       }
@@ -1835,6 +1965,22 @@ export class UiServer {
           ? `${done.paths.length} 件のファイルを戻しました（${done.points} 回ぶん）: ${done.paths.join(', ')}`
           : `${done.paths.length} 件のファイルを戻しました: ${done.paths.join(', ')}`,
       });
+      /*
+       * **戻したことを、開いている画面へ配る。**
+       *
+       * ここまで配っていたのは一覧の作り直し（`undo`）だけだったので、
+       * エディタは**戻す前の中身のまま**「保存してあります」と出していた
+       * （画面を押して実測）。書き込んだときと同じ形で差分を配れば、
+       * エディタは読み直し、直している最中なら帯で断る。
+       */
+      for (const c of done.changed) {
+        const diff = unifiedDiff(c.path, c.before ?? '', c.after ?? '');
+        const { added, removed } = diffStat(diff);
+        this.broadcast({
+          type: 'session',
+          event: { type: 'diff', path: c.path, diff, added, removed, created: c.before === undefined },
+        });
+      }
       this.broadcast({ type: 'undo' });
       return send(res, 200, { paths: done.paths, points: done.points });
     }
@@ -1902,7 +2048,7 @@ export class UiServer {
     /*
      * 外の道具（MCP）。GitHub をここから繋げるようにする。
      *
-     * 合言葉は**置き場の .env** に書く（設定ファイルには名前だけ）。
+     * 合言葉は**保存先の .env** に書く（設定ファイルには名前だけ）。
      * 値は返さない。**入っているかどうか**だけを返す。
      */
     if (path === '/api/mcp' && req.method === 'GET') {
@@ -1963,7 +2109,7 @@ export class UiServer {
      * 見本帳から一つ繋ぐ。
      *
      * 名前を一つ言えば繋がる。合言葉が要るものは、それだけ受け取る
-     * （置き場の .env に書く。設定にも画面にも、値は出さない）。
+     * （保存先の .env に書く。設定にも画面にも、値は出さない）。
      */
     if (path === '/api/mcp/connect' && req.method === 'POST') {
       const body = await readBody(req) as {
@@ -2035,7 +2181,7 @@ export class UiServer {
       return send(res, 200, { id, removed: true });
     }
 
-    /** GitHub を繋ぐ。合言葉を置き場へ書き、設定に一つ足す。 */
+    /** GitHub を繋ぐ。合言葉を保存先へ書き、設定に一つ足す。 */
     if (path === '/api/mcp/github' && req.method === 'POST') {
       const body = await readBody(req) as { token?: unknown; enabled?: unknown };
       const token = typeof body?.token === 'string' ? body.token.trim() : '';
@@ -2159,7 +2305,7 @@ export class UiServer {
         // 名前だけ .gguf の別物も、一覧で分かるように。
         notGguf: !(await looksLikeGguf(join(liveDir, m.ref))),
       }))),
-      // GGUF が0件のとき、置き場そのものが無いのか、空なのかで打つ手が違う。
+      // GGUF が0件のとき、保存先そのものが無いのか、空なのかで打つ手が違う。
       dirState: await inspectModelsDir(liveDir),
       slow: false,
     }))();
@@ -2182,14 +2328,14 @@ export class UiServer {
     // ここだけ 'ollama' と決め打つと、既定で動いているものと画面の表示が食い違う。
     const kind = String(saved.kind ?? this.#opts.config.runtime?.kind ?? 'inproc');
     const dir = await savedModelsDir();
-    // いま実際に読まれている置き場。保存した方と違うことがある。
+    // いま実際に読まれている保存先。保存した方と違うことがある。
     const liveDir = active.modelsDir ?? dir;
     return send(res, 200, {
       path: configPath(),
       kinds: RUNTIME_KINDS.map((id) => ({ id, name: KIND_LABELS[id] })),
       kind,
       modelsDir: dir,
-      // 使うと決めた GGUF。無ければ置き場の最初の一つを読む。
+      // 使うと決めた GGUF。無ければ保存先の最初の一つを読む。
       model: typeof saved.model === 'string' ? saved.model : null,
       // いま動いているもの。保存したものと違えば、立ち上げ直しが要る。
       active: {
@@ -2200,9 +2346,9 @@ export class UiServer {
       restartNeeded: kind !== (active.kind ?? 'inproc')
         || dir !== (active.modelsDir ?? modelsDir()),
       /*
-       * 置き場にある GGUF。「置いたのに認識しない」を画面で確かめるための一覧。
+       * 保存先にある GGUF。「置いたのに認識しない」を画面で確かめるための一覧。
        *
-       * **いま読まれている置き場を見る。**保存した方（まだ効いていない）を
+       * **いま読まれている保存先を見る。**保存した方（まだ効いていない）を
        * 見ていたので、設定に別の場所を書いてある機械では、取ってきたものが
        * 一覧に出なかった。落とす先と一覧が割れると、
        * 「用意できました」と出たのに使えない、になる。
@@ -2252,11 +2398,11 @@ export class UiServer {
       return send(res, 400, { error: '何を変えるのか分かりません' });
     }
     const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
-    // 使う GGUF。名前に道を混ぜさせない（置き場の中の名前だけ）。
+    // 使う GGUF。名前に道を混ぜさせない（保存先の中の名前だけ）。
     const model = typeof body?.model === 'string' ? body.model.trim() : undefined;
-    if (model && /[\\/]/.test(model)) return send(res, 400, { error: 'モデルは置き場の中の名前で指定してください' });
+    if (model && /[\\/]/.test(model)) return send(res, 400, { error: 'モデルは保存先の中の名前で指定してください' });
     // 打った場所は見るだけ。既定の場所は、無ければ作る。
-    // 「GGUF を置くだけ」と言っておいて置き場が無いのは、案内になっていない。
+    // 「GGUF を置くだけ」と言っておいて保存先が無いのは、案内になっていない。
     const dirState = !touchesRuntime
       ? undefined
       : dir
@@ -2485,7 +2631,7 @@ export class UiServer {
             return `${ref}: ${big ?? '記憶に載りません。'}${others}`;
           }
           // 名前だけ .gguf で中身が別物（配布元の HTML の案内など）を、読みに行かない。
-          // 一覧と同じ場所（動いている側の置き場）を見る。保存側を見ると、
+          // 一覧と同じ場所（動いている側の保存先）を見る。保存側を見ると、
           // 立ち上げ直す前の設定とずれて「読めない」と嘘をつく。
           if (!(await looksLikeGguf(join(this.#opts.config.runtime?.modelsDir ?? modelsDir(), ref)))) {
             return `${ref} は GGUF として読めません（先頭に GGUF の印がありません）。`
@@ -2571,22 +2717,53 @@ export class UiServer {
       return `モデルの一覧を取れません（${kind}）: ${describeNet(e)}\n`
         + '設定 → モデル で、動かし方を選び直せます。';
     }
+    /*
+     * **保存した設定を、無かったことにしない。**
+     *
+     * ここは**いま動いている**設定だけを見て理由を書いていた。設定 → モデル で
+     * 保存先を入れて保存した直後（立ち上げ直す前）は、保存した方に GGUF が
+     * 在っても「（古い保存先）に GGUF がありません」と出る。**置いた人は、
+     * 置いたはずのものを疑いに行く。**実際にそう出た（画面を押して実測）。
+     *
+     * 保存した方と食い違っているなら、それを先に言う。
+     */
+    const liveDir = this.#opts.config.runtime?.modelsDir ?? modelsDir();
+    const savedKind = String((await readSavedRuntime()).kind ?? kind);
+    const savedDir = await savedModelsDir().catch(() => liveDir);
+    if (savedKind !== kind || savedDir !== liveDir) {
+      const ready = savedKind !== 'inproc' || (await listGguf(savedDir).catch(() => [])).length > 0;
+      return '保存した設定は、立ち上げ直すまで効きません。\n'
+        + `いま動いているのは ${kind}（${liveDir}）です。保存したのは ${savedKind}（${savedDir}）。\n`
+        + (ready
+          ? '設定 → モデル の「立ち上げ直す」を押してください。'
+          : `${savedDir} に GGUF がありません。そこへ .gguf を1つ置いて、「立ち上げ直す」を押してください。`);
+    }
+
     if (kind === 'ollama') {
       return 'モデルがまだありません。\n'
         + '設定 → モデル で「この中で読む」を選ぶと、GGUF を1つ置くだけで動きます。\n'
         + 'Ollama を使うなら `ollama serve` を立ち上げてください。';
     }
-    return `${this.#opts.config.runtime?.modelsDir ?? modelsDir()} に GGUF がありません。\n`
-      + '設定 → モデル に、いま見ている置き場が出ています。そこへ .gguf を1つ置いてください。';
+    return `${liveDir} に GGUF がありません。\n`
+      + '設定 → モデル に、いま見ている保存先が出ています。そこへ .gguf を1つ置いてください。';
   }
 
   async #drive(
     session: Session, text: string, resuming?: string,
-    opts: { fromUser?: boolean } = {},
+    opts: { fromUser?: boolean; said?: string; editor?: EditorHere } = {},
   ): Promise<void> {
-    // **依頼をまたいで持ち越さない。**「この依頼のあいだは訊かない」は、
-    // その依頼のあいだだけ。次の依頼では、また訊く。
-    this.#allWrites = false;
+    /*
+     * 「この依頼のあいだは訊かない」は、その依頼のあいだだけ。
+     * 入口ごとに倒すのはやめて、依頼の番号（`session.requestSeq`）で見る
+     * （倒し忘れた入口が在った。`#ask` を参照）。ここでは何もしない。
+     */
+    /*
+     * いま選んでいる所は、**その依頼のあいだだけ**持つ。
+     *
+     * `replace_selection` はここを見て書き換える先を決める。持ち越すと、
+     * 次の依頼で**もう選んでいない所**を書き換えることになる。
+     */
+    this.#editorNow = opts.editor;
     // 動いている会話。出来事に添えて流す。画面は、見ている会話のものだけを描く。
     const conversationId = this.#loadedId;
     this.#runningId = conversationId;
@@ -2601,6 +2778,7 @@ export class UiServer {
       for await (const event of session.send(text, opts)) {
         if (event.type === 'settled') {
           settled = { reason: event.reason, verified: event.verified, checked: event.checked };
+          if (event.model) this.#lastAnswered = event.model;
         }
         if (event.type === 'toolEnd' && event.ok) didSomething = true;
         let seq: number | undefined;
@@ -2614,6 +2792,7 @@ export class UiServer {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
     } finally {
       this.#inFlight = undefined;
+      this.#editorNow = undefined;
       await this.#recordUnfinished(text, settled, resuming, didSomething);
       // 戻り先が増えたことを画面へ。**触ったのに出ていないと、
       // 戻せることに気づけない。**
@@ -2969,19 +3148,22 @@ export class UiServer {
    * 窓から決める形に直したとき、送り口だけ直して順番待ちの方が
    * 取り残されていた。
    */
-  async #compose(session: Session, text: string, attached: string[]): Promise<string> {
+  async #compose(session: Session, text: string, attached: string[], editor?: EditorHere): Promise<string> {
     const room = mentionBudget(session.contextTokens);
     const extra = attached.length > 0
       ? await this.#attachments.describe(attached, { chars: room }).catch(() => '')
       : '';
+    // 開いている所は、依頼と同じ枠から取る（添付の後、指名の前）。
+    const here = describeEditorHere(editor, Math.min(2000, Math.floor(room.total / 4)));
     const named = await expandMentions(text, this.#workRoot(), {
       contextTokens: session.contextTokens,
-      totalBytes: Math.max(400, room.total - extra.length),
+      totalBytes: Math.max(400, room.total - extra.length - here.length),
     }).catch(() => ({ text, reads: [] }));
     for (const r of named.reads) {
       if (!r.ok) this.broadcast({ type: 'log', level: 'warn', text: `指名を読めません ${r.path}: ${r.body}` });
     }
-    return extra ? `${extra}\n\n${named.text}` : named.text;
+    // **依頼を末尾に置く。**前に長い中身を積むので、指示が埋もれないようにする。
+    return [extra, here, named.text].filter((x) => x).join('\n\n');
   }
 
   /**
@@ -2995,9 +3177,10 @@ export class UiServer {
     this.broadcast({ type: 'queue', waiting: this.#queue.length });
     if (!next) return;
     await this.#loadInto(session, next.conversationId);
-    const full = await this.#compose(session, next.text, next.attached);
+    const full = await this.#compose(session, next.text, next.attached, next.editor);
     this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
-    this.#bg(this.#drive(session, full), '順番待ちの実行が落ちました');
+    this.#bg(this.#drive(session, full, undefined, { said: next.text, ...(next.editor ? { editor: next.editor } : {}) }),
+      '順番待ちの実行が落ちました');
   }
 
   async #drivePlan(session: Session, text: string): Promise<void> {
@@ -3133,7 +3316,7 @@ export class UiServer {
       if (usesGguf(runtime.id)) {
         // **いま読んでいる側と同じ場所へ落とす。**
         //
-        // 画面が保存した置き場（savedModelsDir）だけを見ていたので、
+        // 画面が保存した保存先（savedModelsDir）だけを見ていたので、
         // 設定（runtime.modelsDir）に別の場所を書いてある機械では、
         // **落とす先と読む先が割れる。**画面には「用意できました」と出るのに、
         // 一覧にも出ず、使えない。動いている側が読む場所を先に見る。
@@ -3168,7 +3351,7 @@ export class UiServer {
        * 利用者にできることが無いと、そこで詰まる。
        *
        * この作りは元から「GGUF を1つ置くだけ」で動く。落とせなかったときは、
-       * **選び方と置き場所**を言う。名前を覚えてもらうのではなく、
+       * **選び方と保存先**を言う。名前を覚えてもらうのではなく、
        * 選び方を覚えてもらえば、名前が変わっても困らない。
        */
       // **一つの文にする。**二つに分けると、読む側は下の行を見落とす。
@@ -3185,7 +3368,7 @@ export class UiServer {
   async #static(path: string, res: ServerResponse): Promise<void> {
     const rel = path === '/' ? 'index.html' : normalize(path).replace(/^([/\\.]+)/, '');
     const file = join(WEB_DIR, rel);
-    // 画面の置き場より外は読ませない。
+    // 画面のファイルが在る所より外は読ませない。
     if (!file.startsWith(WEB_DIR)) return send(res, 403, { error: 'その場所は読めません' });
     try {
       const body = await readFile(file);
@@ -3279,6 +3462,17 @@ export class BodyTooLarge extends Error {
  */
 /** 画面で開くファイルの上限。これより大きいものは、画面のエディタでは扱わない。 */
 const EDIT_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * 開いたときの中身から作る、短い文字列（stamp）。
+ *
+ * 保存のときに「開いたあとで誰かが書いたか」を見るために使う。時刻では見ない
+ * （同じミリ秒に二度書かれると同じになるし、時計の粒も環境で違う）。中身から
+ * 作れば、同じ中身なら同じ、違えば違う、とだけ言える。
+ */
+function stampOf(text: string): string {
+  return createHash('sha1').update(text).digest('hex').slice(0, 16);
+}
 const NOT_LOADED_YET = 'モデルをまだ読んでいません（頼まれたときに読みます）';
 
 /** OS で開いて見せる。起こしたら手を離す（閉じるまで待たない）。 */
@@ -3372,7 +3566,7 @@ export function byHand(dir: string): string {
     '  ・落とす先: https://huggingface.co/Qwen （名前に GGUF が付いたもの）',
     '  ・大きさ: 軽い読み書きなら 3B〜4B、コードを書かせるなら 7B 以上',
     '  ・量子化: 迷ったら Q4_K_M（品質と大きさの釣り合いが良い）',
-    `  ・置き場所: ${dir}`,
+    `  ・保存先: ${dir}`,
     '  置いたら、設定の画面から選べます。',
   ].join('\n');
 }

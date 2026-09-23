@@ -25,6 +25,21 @@ export type Cadence =
   /** 毎週。weekday は 0=日曜 */
   | { kind: 'weekly'; weekday: number; atHour?: number };
 
+/**
+ * いつ起きるかを、人が読む形にする。
+ *
+ * 画面には記録（いつ回ったか）しか出していなかったので、**まだ一度も回って
+ * いないと何も出ず、何が仕込まれているのかも分からなかった。**いつ起きるかは
+ * 日課の側が持っているので、ここで言葉にする。
+ */
+export function describeCadence(cadence: Cadence): string {
+  const WEEK = ['日', '月', '火', '水', '木', '金', '土'];
+  if (cadence.kind === 'everyHours') return `${cadence.hours} 時間ごと`;
+  const at = `${cadence.atHour ?? 0} 時`;
+  if (cadence.kind === 'weekly') return `毎週${WEEK[cadence.weekday] ?? '?'}曜 ${at}`;
+  return `毎日 ${at}`;
+}
+
 export interface Duty {
   id: string;
   codename: string;

@@ -53,3 +53,22 @@ test('組み込みの役職も、両方は持たない', () => {
     .map((r) => r.id);
   assert.deepEqual(bad, [], `外へ出る道と write を両方持っています: ${bad.join(', ')}`);
 });
+
+/**
+ * **組み込みの役職も、同じ道を通す。**
+ *
+ * ここは素通しで入れていたので、守りが効くのは設定から足す役職だけだった。
+ * いまの一覧に違反は無いが（上の試験）、足した人が気づけない形は残さない。
+ */
+test('組み込みとして渡ってきたものでも、write を落とす', () => {
+  const said: string[] = [];
+  const reg = new RoleRegistry([], (t) => said.push(t), [{
+    id: 'envoy2', codename: 'envoy2', name: '外と話す係', responsibility: 'x', disposition: 'y',
+    access: ['read', 'write', 'mcp'],
+    instructions: [], prefers: 'any',
+  }]);
+  assert.deepEqual(reg.get('envoy2')?.access, ['read', 'mcp'],
+    '組み込みの側では write が落ちていない');
+  assert.equal(said.length, 1, '黙って落としている');
+  assert.match(said[0]!, /envoy2/);
+});

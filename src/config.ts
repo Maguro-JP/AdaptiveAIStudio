@@ -531,23 +531,31 @@ export function wireInProc(c: AasConfig): void {
   }
 }
 
+/*
+ * **直せる形で断る。**
+ *
+ * ここで普通の `Error` を投げていたので、`aas.config.json` の中身が一つでも
+ * 食い違うと**画面がそもそも立ち上がらなかった**（理由は端末にだけ出る）。
+ * 書き間違い（JSON の形）は `ConfigBroken` として画面を開ける作りにしてあるのに、
+ * 中身の食い違いだけ、直しに行く手段ごと塞いでいた。同じ形で投げる。
+ */
 function validate(c: AasConfig): void {
-  if (c.providers.length === 0) throw new Error('providers が空です。');
+  if (c.providers.length === 0) throw new ConfigBroken('providers が空です。');
   if (c.candidates && c.candidates.length === 0) {
-    throw new Error('candidates を空配列にはできません。自動選択に任せるなら項目ごと省いてください。');
+    throw new ConfigBroken('candidates を空配列にはできません。自動選択に任せるなら項目ごと省いてください。');
   }
   for (const p of c.providers) {
     if (p.kind === 'openai-compatible') {
-      if (!p.baseUrl) throw new Error(`baseUrl が未設定です: ${p.id}`);
+      if (!p.baseUrl) throw new ConfigBroken(`baseUrl が未設定です: ${p.id}`);
     } else if (p.kind !== 'anthropic') {
-      throw new Error(`未対応の provider kind です: ${p.kind} (${p.id})`);
+      throw new ConfigBroken(`未対応の provider kind です: ${p.kind} (${p.id})`);
     }
   }
   const ids = new Set(enabledProviders(c).map((p) => p.id));
   for (const cand of c.candidates ?? []) {
     const providerId = cand.slice(0, cand.indexOf(':'));
     if (!ids.has(providerId)) {
-      throw new Error(
+      throw new ConfigBroken(
         `candidates の "${cand}" に対応する provider "${providerId}" が有効になっていません。` +
         ' 設定で enabled: true にしてください。',
       );
@@ -558,12 +566,12 @@ function validate(c: AasConfig): void {
 function validateLanes(c: AasConfig): void {
   const ids = new Set(enabledProviders(c).map((p) => p.id));
   for (const lane of c.agent?.lanes ?? []) {
-    if (lane.parallel < 1) throw new Error(`lane "${lane.id}" の parallel は1以上にしてください。`);
-    if (lane.candidates.length === 0) throw new Error(`lane "${lane.id}" に candidates がありません。`);
+    if (lane.parallel < 1) throw new ConfigBroken(`lane "${lane.id}" の parallel は1以上にしてください。`);
+    if (lane.candidates.length === 0) throw new ConfigBroken(`lane "${lane.id}" に candidates がありません。`);
     for (const cand of lane.candidates) {
       const providerId = cand.slice(0, cand.indexOf(':'));
       if (!ids.has(providerId)) {
-        throw new Error(`lane "${lane.id}" の "${cand}" に対応する provider が有効ではありません。`);
+        throw new ConfigBroken(`lane "${lane.id}" の "${cand}" に対応する provider が有効ではありません。`);
       }
     }
   }

@@ -10,6 +10,8 @@ import { join } from 'node:path';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { Memory, type MemoryEntry } from '../memory/memory.ts';
 import { RoleRegistry } from '../roles/registry.ts';
+import { DutyRoster, describeCadence, type DutyRecord } from '../harness/duties.ts';
+import { BUILTIN_DUTIES } from '../harness/builtin-duties.ts';
 import type { AasConfig } from '../config.ts';
 
 export interface UiState {
@@ -27,8 +29,50 @@ export interface UiState {
    * 数えているだけで、どこにも出していなかった。
    */
   proposalsDropped: number;
-  duties: unknown[];
+  /**
+   * 日課。**記録ではなく、仕込んであるもの全部**を出す。
+   *
+   * 記録（`duties.json`）だけを渡していたので、まだ一度も回っていないと
+   * 画面は空で、何が仕込まれているのかも、いつ起きるのかも分からなかった。
+   */
+  duties: DutyBoard[];
   models: unknown[];
+}
+
+/** 画面に出す日課、一件ぶん。 */
+export interface DutyBoard {
+  id: string;
+  codename: string;
+  name: string;
+  purpose: string;
+  /** いつ起きるか（「毎日 7 時」など）。 */
+  when: string;
+  /** 最後に済んだ時刻。まだなら undefined。 */
+  lastAt?: number;
+  /** いま発生しているか。 */
+  due: boolean;
+  /** 逃した分の埋め合わせか。 */
+  catchUp: boolean;
+  completions: number;
+  missed: number;
+}
+
+/** 記録と、仕込んである日課を重ねて、画面に出す形にする。 */
+export function dutyBoard(records: DutyRecord[], now: number): DutyBoard[] {
+  const roster = new DutyRoster(BUILTIN_DUTIES);
+  if (Array.isArray(records)) roster.restore(records);
+  return roster.status(now).map((s) => ({
+    id: s.duty.id,
+    codename: s.duty.codename,
+    name: s.duty.name,
+    purpose: s.duty.purpose,
+    when: describeCadence(s.duty.cadence),
+    ...(typeof s.record.lastAt === 'number' ? { lastAt: s.record.lastAt } : {}),
+    due: s.due,
+    catchUp: s.isCatchUp,
+    completions: s.record.completions,
+    missed: s.record.missed,
+  }));
 }
 
 async function readJson<T>(path: string, fallback: T): Promise<T> {
@@ -71,7 +115,7 @@ export async function collectState(config: AasConfig): Promise<UiState> {
     // だった（画面は使っていなかったので気づかれなかった）。
     proposals: proposals.items,
     proposalsDropped: proposals.dropped,
-    duties: await readJson<unknown[]>(join(dir, 'duties.json'), []),
+    duties: dutyBoard(await readJson<DutyRecord[]>(join(dir, 'duties.json'), []), Date.now()),
     models: await readJson<unknown[]>(join(dir, 'metrics.json'), []),
   };
 }

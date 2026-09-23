@@ -81,7 +81,7 @@ Windows でも、本物のモデルでも、setup.exe でも、一度も動か�
 | ~~bundle の中で全部のテストを回す手順~~ | **入れた**（`npm run check:bundle`、2026-09-08）。組む → その中で全テスト（1947 通過・0 失敗・22 は意図して飛ばす）→ **その中の画面を起こして smoke と sweep まで**通す |
 | ~~開いた時点の道案内~~ | **入れた**（`/api/ready`、2026-09-08）。開いた時点で、使えないなら理由と次の一手を出す |
 | Windows で1ターン通すテスト | **通った**（2026-09-16 JST、`.github/workflows/ci.yml` の `bundle`）。Windows で組んで・その中のテスト 2362 件・画面を起こして・送って返って（32 文字・43 秒）・sweep（不具合なし）・止まるところまで。重みは乱数の模型。PR では回さない（手で頼んだときと週に一度） |
-| 本物の重みで1ターン | ここからは配布元へ繋がらない（網の方針）。製品が自分で言う形にはした（`npm run selftest` の「送って返る」）。**配る機械で一度押してもらう**のが残り |
+| 本物の重みで1ターン | **ubuntu の CI で通った**（2026-09-19 JST、`.github/workflows/ci.yml` の `real`。手で頼んだときだけ）。製品の取ってくる道で `unsloth/Qwen3-0.6B-GGUF`（q4_k_m）を落とし、配る形の中で「1 + 1 = 2」と答え、`read_file` も呼んだ。**Windows も、足し算の1ターンは通った**（2026-09-22 JST、run 35683441820。配る形の中で読み込み 12.7 秒、「1 + 1 = 2」）。ツールを呼ぶ方（`read_file`）は、その回の 10 分の上限で打ち切られて落ちた（生成が ubuntu の 10 倍遅い）。出す量を下げて（`maxTokens` 256 → 96）、打ち切りを打ち切りと言う形にしたが、**その後の Windows はまだ回していない**（枠を 2 倍使うので、回す前に断る）。配る機械で押してもらうのは、そのあと |
 
 ## 3. 方針
 
@@ -185,7 +185,7 @@ HTTPではなく子プロセスとして起動し、標準入出力で会話す�
 | P5 | 画面（チャット + 差分 + 役割表示） | 済（ブラウザ。Tauri にはしない。§3.4） | Chromium で押して回っただけ。**Windows のブラウザで 0 回** |
 | P6 | インストーラ配布（NSIS） | 済。タグを付けると組む（v0.3.0 から setup.exe が出ている） | **一度も開いていない** |
 | P8 | Cursor と並ぶ使い勝手 | エディタ（開く・直す・Ctrl+S）、当てた変更を塊ごと・行ごとに戻す、索引は触ったものだけ読み直す、Tab 補完（灰色で見せて Tab で入れる） | Chromium で押して回っただけ。**本物のモデルでの補完の当たり具合は 0 回** |
-| P7 | Project Memory / 独自ワークフロー | 半分。置き場の決まり（`AGENTS.md` / `CLAUDE.md` / `.cursorrules` / `.cursor/rules/*` / `.github/copilot-instructions.md`）は自動で読む（`src/agent/project-rules.ts`）。独自ワークフローは未着手 | 未 |
+| P7 | Project Memory / 独自ワークフロー | 済。置き場の決まり（`AGENTS.md` / `CLAUDE.md` / `.cursorrules` / `.cursor/rules/*` / `.github/copilot-instructions.md`）は自動で読む（`src/agent/project-rules.ts`）。独自ワークフローは、作業場の `.claude/skills/*/SKILL.md` がそのままコマンドになる（`src/agent/commands.ts`。`$ARGUMENTS` に後ろが入る） | Chromium で押して確かめた（2026-09-19。コマンドの一覧に出て、押すと `/名前 ` が入る） |
 
 **右の列を埋める順番は、入口から**（4.3）。P1 の右が「Windows で 1 回」に
 なるまで、P2 以降の右は触らない。

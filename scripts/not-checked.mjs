@@ -34,12 +34,51 @@ export function notChecked(how) {
   return out;
 }
 
-/** 人に見せる形。**報告に、この塊ごと写せるようにする。** */
-export function describeNotChecked(how, head = '') {
-  const lines = [`== 通りました${head ? `（${head}）` : ''}`, '', '**ここで確かめていないこと**'];
+/**
+ * 人に見せる形。**報告に、この塊ごと写せるようにする。**
+ *
+ * `head` は**確かめを始めた時点**の版。終わりに読むと、途中で commit したときに
+ * 確かめていない版が書かれる（実際に書かれた）。
+ *
+ * `dirty` は、その時点で commit していなかった直し。空でないなら、
+ * `通りました（sha）` は**その sha そのものの話ではない。**黙って sha だけ出すと、
+ * 受け取った側はその commit を確かめたものとして扱う。
+ */
+export function describeNotChecked(how, head = '', dirty = []) {
+  const lines = [`== 通りました${head ? `（${head}）` : ''}`];
+  if (dirty.length > 0) {
+    lines.push('');
+    lines.push(`**commit していない直しが ${dirty.length} 件ある木で確かめました。**`);
+    lines.push(`  ${head ? `${head} そのものではありません。` : ''}確かめたのは、この直しを含む木です。`);
+    for (const line of dirty.slice(0, 10)) lines.push(`    ${line}`);
+    if (dirty.length > 10) lines.push(`    ほか ${dirty.length - 10} 件`);
+  }
+  lines.push('', '**ここで確かめていないこと**');
   for (const line of notChecked(how)) lines.push(`  ・${line}`);
   lines.push('');
   lines.push('  「通った」は、この一覧の外を保証しません。');
   lines.push('  報告するときは、この一覧ごと写してください。');
   return lines.join('\n');
+}
+
+/**
+ * 終わりに出すものを、まとめて決める。
+ *
+ * ここは `check.mjs` の中に直に書いてあった。**走らせないと出ない文章は、
+ * 書いたことにならない**ので、判断ごと外に出して、そのものを押せるようにする。
+ *
+ * @param {{
+ *   began: { head: string, dirty: readonly string[] },
+ *   ended: { head: string, dirty: readonly string[] },
+ *   how: { platform: string, sweep: string, realModel: boolean },
+ *   moved?: (before: object, after: object) => (string | undefined),
+ * }} arg
+ * @returns {{ code: number, text: string }}
+ */
+export function reportEnd(arg) {
+  const { began, ended, how, moved } = arg;
+  const why = moved ? moved(began, ended) : undefined;
+  // 木が動いていたら、この結果はどちらの木の話か決まらない。通ったと言わない。
+  if (why) return { code: 1, text: `== ${why}` };
+  return { code: 0, text: describeNotChecked(how, began.head.slice(0, 7), began.dirty) };
 }

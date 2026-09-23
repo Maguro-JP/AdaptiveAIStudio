@@ -35,22 +35,23 @@ async function workRoot(): Promise<string> {
 describe('作業場の一覧', () => {
   test('フォルダが先、その中で名前順', async () => {
     const root = await workRoot();
-    const names = (await listDir(root, '')).map((e) => `${e.dir ? 'd' : 'f'}:${e.name}`);
+    const names = (await listDir(root, '')).entries.map((e) => `${e.dir ? 'd' : 'f'}:${e.name}`);
     assert.deepEqual(names, ['d:src', 'f:README.md']);
   });
 
   test('見に行く用の無いものは出さない', async () => {
     // node_modules と .git は数が多く、開いても仕方がない。
     const root = await workRoot();
-    const names = (await listDir(root, '')).map((e) => e.name);
+    const names = (await listDir(root, '')).entries.map((e) => e.name);
     assert.ok(!names.includes('node_modules'), 'node_modules を出している');
     assert.ok(!names.includes('.git'), '.git を出している');
   });
 
   test('一階層だけ返す。道は根からの相対', async () => {
     const root = await workRoot();
-    const entries = await listDir(root, 'src');
-    assert.deepEqual(entries.map((e) => e.path), ['src/main.ts']);
+    const got = await listDir(root, 'src');
+    assert.deepEqual(got.entries.map((e) => e.path), ['src/main.ts']);
+    assert.equal(got.total, 1, '切る前の数が合っていない');
   });
 
   test('根の外は見せない', async () => {
@@ -83,6 +84,22 @@ describe('作業場の一覧', () => {
     for (let i = 0; i < MAX_ENTRIES + 20; i += 1) {
       await writeFile(join(root, `f${String(i).padStart(4, '0')}.txt`), 'x');
     }
-    assert.equal((await listDir(root, '')).length, MAX_ENTRIES);
+    assert.equal((await listDir(root, '')).entries.length, MAX_ENTRIES);
+  });
+
+  /**
+   * **切ったことを、黙って隠さない。**
+   *
+   * 5000 件のフォルダを開くと 400 件だけ出て、残りは無いように見えた
+   * （押して実測）。何件あったのかを返して、画面が「ほかに N 件」と言えるようにする。
+   */
+  test('**切ったときは、切る前の数を返す**', async () => {
+    const root = await tempDir('aas-many-total-');
+    for (let i = 0; i < MAX_ENTRIES + 20; i += 1) {
+      await writeFile(join(root, `f${String(i).padStart(4, '0')}.txt`), 'x');
+    }
+    const got = await listDir(root, '');
+    assert.equal(got.entries.length, MAX_ENTRIES);
+    assert.equal(got.total, MAX_ENTRIES + 20, `切る前の数を言っていない: ${got.total}`);
   });
 });

@@ -13,8 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { tempDir } from './tmp.ts';
 import { ggufHead } from './gguf-head.ts';
 import {
-  InProcRuntime, probeBackend, describeBackend, describeSpeed, type LlamaLib,
-} from '../src/runtime/inproc.ts';
+  InProcRuntime, probeBackend, describeBackend, describeSpeed, type LlamaLib, cpuFeatures } from '../src/runtime/inproc.ts';
 import { InProcHost, hostArgs } from '../src/runtime/inproc-host-client.ts';
 import { until } from './until.ts';
 
@@ -436,5 +435,70 @@ describe('名指しした GPU が無くても、止まらない', () => {
     const { backend } = await probeBackend(lib, 'off');
     assert.equal(backend.reason, 'off');
     assert.deepEqual(lib.asked, [false]);
+  });
+});
+
+/**
+ * **遅い理由を、記録で言えるようにする。**
+ *
+ * 同じモデル・同じ読み込み時間（12.8 秒 対 13.4 秒）で、生成だけが 10 倍違った
+ * （ubuntu で 32 秒の足し算が、Windows のランナーで 342 秒）。ライブラリは CPU 向けの
+ * binary を素性ごとに持っていて（`libggml-cpu-haswell` `-sse42` `-x64` など）、
+ * 動かす機械に合うものを読む。**どれを読んだかを記録していなかったので、
+ * 遅い理由が分からなかった。**
+ */
+describe('CPU の素性', () => {
+  const REAL = 'CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 '
+    + '| BMI2 = 1 | AVX512 = 1 | LLAMAFILE = 1 | REPACK = 1 | ';
+
+  test('**1 のものだけ拾う。頭の `CPU :` は素性ではない**', () => {
+    assert.deepEqual(cpuFeatures('CPU : SSE3 = 1 | AVX2 = 0 | FMA = 1 | '), ['SSE3', 'FMA']);
+    assert.ok(cpuFeatures(REAL).includes('AVX2'));
+    assert.equal(cpuFeatures(REAL).includes('CPU'), false, '頭の CPU を素性として数えている');
+  });
+
+  test('読めない形でも落ちない', () => {
+    assert.deepEqual(cpuFeatures(''), []);
+    assert.deepEqual(cpuFeatures('なんだか違う文'), []);
+  });
+
+  test('**素性が在れば、それも一行に出す**', () => {
+    const said = describeBackend({
+      gpu: false, devices: [], vramBytes: 0, reason: 'no-gpu',
+      cpu: { features: cpuFeatures(REAL), cores: 4, threads: 4 },
+    });
+    assert.match(said, /AVX2/, `素性を出していない: ${said}`);
+    assert.match(said, /4 コア \/ 4 スレッド/, said);
+  });
+
+  test('**AVX2 が無いなら、遅いと名指しで言う**', () => {
+    const said = describeBackend({
+      gpu: false, devices: [], vramBytes: 0, reason: 'no-gpu',
+      cpu: { features: cpuFeatures('CPU : SSE3 = 1 | AVX = 1 | '), cores: 2, threads: 2 },
+    });
+    assert.match(said, /AVX2 なし/, `無いことを言っていない: ${said}`);
+    assert.match(said, /何倍も遅くなります/, said);
+  });
+
+  test('素性が分からないときは、これまでどおりの一行（対）', () => {
+    assert.equal(describeBackend({ gpu: false, devices: [], vramBytes: 0, reason: 'no-gpu' }),
+      'CPU で読みます（使える GPU が見つかりませんでした）');
+  });
+
+  test('ライブラリが報じたものを、そのまま持ち帰る', async () => {
+    const lib = {
+      getLlama: async () => ({
+        gpu: false as const,
+        systemInfo: REAL,
+        cpuMathCores: 4,
+        maxThreads: 8,
+        loadModel: async () => ({ createContext: async () => ({ getSequence: () => ({}) }) }),
+      }),
+      LlamaChatSession: class {},
+    } as unknown as Parameters<typeof probeBackend>[0];
+    const { backend } = await probeBackend(lib, 'auto', { gpuSeen: false });
+    assert.equal(backend.cpu?.cores, 4);
+    assert.equal(backend.cpu?.threads, 8);
+    assert.ok(backend.cpu?.features.includes('AVX512'), JSON.stringify(backend.cpu));
   });
 });

@@ -51,6 +51,20 @@ export interface OpenAiCompatibleOptions {
    */
   stallTimeoutMs?: number;
   /**
+   * **黙っているが生きている、を許す上限。既定10分。**
+   *
+   * 最初のトークンより前は、届いたバイト（`: queued` / `: working`）で待ちを
+   * 延ばしていた。**後ろでは延ばしていなかった。**ツールの呼び出しを組んでいる間は
+   * 本文が一文字も出ないので、遅い機械ではそこで黙る。Windows のランナーで
+   * 本物の重みを読ませたとき、足し算は通り、ツールを渡した回だけ
+   * 「120秒 応答しませんでした（停滞）」で落ちた。**動いていたのに落としている。**
+   *
+   * だから最初のトークンの後も、届いたバイトで待ちを延ばす。ただし
+   * **合図だけで永久には延ばさない。**本文かツールの欠片が最後に来てから
+   * ここを超えたら、合図が来ていても停滞と言う（死んでいる相手を待ち続けない）。
+   */
+  quietCeilingMs?: number;
+  /**
    * **モデル一覧と生存確認の上限。既定2秒。**
    *
    * 生成の上限と分ける。ここは相手が居るかを見るだけで、返るものは
@@ -70,6 +84,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
   readonly #firstTokenTimeoutMs: number;
   readonly #connectTimeoutMs: number;
   readonly #stallTimeoutMs: number;
+  readonly #quietCeilingMs: number;
   readonly #listTimeoutMs: number;
 
   constructor(opts: OpenAiCompatibleOptions) {
@@ -81,6 +96,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     this.#firstTokenTimeoutMs = opts.firstTokenTimeoutMs ?? 600_000;
     this.#connectTimeoutMs = opts.connectTimeoutMs ?? 10_000;
     this.#stallTimeoutMs = opts.stallTimeoutMs ?? 120_000;
+    this.#quietCeilingMs = opts.quietCeilingMs ?? 600_000;
     this.#listTimeoutMs = opts.listTimeoutMs ?? 2_000;
   }
 
@@ -231,9 +247,23 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     // 来なければ、これまでどおり 10 分で落とす。
     let firstToken = false;
     const firstTokenTimeoutMs = this.#firstTokenTimeoutMs;
+    /*
+     * **最初のトークンの後も、届いたバイトを生きている合図として数える。**
+     *
+     * 数えていなかったので、ツールの呼び出しを組んでいる間（本文が一文字も
+     * 出ない間）に黙ると停滞と判定した。Windows のランナーで本物の重みを
+     * 読ませたとき、足し算は通り、ツールを渡した回だけそこで落ちた。
+     *
+     * ただし**合図だけで永久には延ばさない。**本文かツールの欠片が最後に来てから
+     * `quietCeilingMs` を超えたら、合図が来ていても停滞にする。
+     */
+    const stallTimeoutMs = this.#stallTimeoutMs;
+    const quietCeilingMs = this.#quietCeilingMs;
+    let lastDeltaAt = Date.now();
     const alive = res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
       transform(bytes, controller) {
         if (!firstToken) arm(firstTokenTimeoutMs);
+        else if (Date.now() - lastDeltaAt < quietCeilingMs) arm(stallTimeoutMs);
         controller.enqueue(bytes);
       },
     }));
@@ -253,6 +283,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         const delta = choice?.delta?.content;
         if (typeof delta === 'string' && delta.length > 0) {
           firstToken = true;
+          lastDeltaAt = Date.now();
           arm(this.#stallTimeoutMs); // 生成が進んでいるので待ち直す
           yield { type: 'text', delta };
         }
@@ -264,6 +295,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
           if (tc.function?.arguments) slot.args += tc.function.arguments;
           pending.set(idx, slot);
           firstToken = true;
+          lastDeltaAt = Date.now();
           arm(this.#stallTimeoutMs);
         }
 

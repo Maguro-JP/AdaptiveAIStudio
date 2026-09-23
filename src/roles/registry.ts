@@ -55,8 +55,35 @@ export class RoleRegistry {
   /** 落とした権限。何を落としたかを、使う側が言えるように残す。 */
   readonly #dropped: string[] = [];
 
-  constructor(extra: RoleOverride[] = [], onLog?: (text: string) => void) {
-    for (const r of BUILTIN_ROLES) this.#roles.set(r.id, r);
+  /**
+   * `builtins` を渡せるのは**確かめるため**。既定は組み込みの一覧。
+   *
+   * 組み込みを素通しで入れていた頃は、ここに何を入れても守りが効かなかった。
+   * 効くようになったことを試験で押せる形にしておく（組み込みの一覧そのものに
+   * 違反を入れて確かめることはできないので、入口を開けておく）。
+   */
+  constructor(
+    extra: RoleOverride[] = [],
+    onLog?: (text: string) => void,
+    builtins: readonly Role[] = BUILTIN_ROLES,
+  ) {
+    /*
+     * 組み込みの役職も、同じ道を通す。
+     *
+     * ここは素通しで入れていたので、**守りが効くのは設定から足す役職だけ**
+     * だった。いまの一覧に該当は無いが（`test/roles.test.ts` で見ている）、
+     * 足した人が気づけない形は残さない。
+     */
+    for (const r of builtins) {
+      const { access, dropped } = dropWriteIfOutbound(r.access);
+      if (dropped) {
+        this.#dropped.push(
+          `${r.id}: 外へ出る道があるので write を外しました`
+          + '（外から入ってきたものを、そのままリポジトリへ書けてしまうため）',
+        );
+      }
+      this.#roles.set(r.id, dropped ? { ...r, access } : r);
+    }
     for (const o of extra) this.#apply(o);
     this.#buildAliases();
     for (const said of this.#dropped) onLog?.(said);

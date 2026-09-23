@@ -10,6 +10,8 @@ import { pathActions } from './paths.js';
 import { closePanel, openPanel, movePanel, panelsInUse } from './layout-ops.js';
 import { doingText } from './doing.js';
 import { isPlainEnter } from './keys.js';
+import { willRestore, wontRestore } from './undo-scope.js';
+import { sizeText } from './size.js';
 import { openPicker } from './color.js';
 
 const root = document.getElementById('editor');
@@ -38,6 +40,9 @@ const ctx = {
    * **出してから開く道をパネルの側へ渡す。**
    */
   revealFile: () => undefined,
+  applyPatch: () => undefined,
+  insertText: () => false,
+  saveNote: async () => false,
   on(type, fn) {
     if (!eventHandlers.has(type)) eventHandlers.set(type, []);
     eventHandlers.get(type).push(fn);
@@ -674,6 +679,27 @@ function listen() {
       box.textContent = `順番待ち ${e.waiting} 件`;
     }
     if (e.type === 'report') { void showReport(); return; }
+    /*
+     * **AI が「ここを見てください」と言ったら、その場所を開く。**
+     *
+     * ここまで、AI から画面へ向かう道が無かった。答えに `a.ts:120` と書かれても、
+     * 人が横の一覧から探し直していた。`show_file` を呼ばれたら、エディタで開く。
+     */
+    if (e.type === 'show' && typeof e.path === 'string') {
+      ctx.revealFile?.(e.path, typeof e.line === 'number' ? e.line : undefined);
+      return;
+    }
+    /*
+     * **AI が、選んでいる所を書き換えた（`replace_selection`）。**
+     *
+     * ここも AI から画面へ向かう道。ディスクではなく**欄の中だけ**を入れ替える。
+     * 保存はしない（人が見て、良ければ保存する）。開いていない・選んだ所が
+     * 動いていた、は画面の側で断る。
+     */
+    if (e.type === 'patch' && typeof e.path === 'string') {
+      ctx.applyPatch?.(e);
+      return;
+    }
     // 裏の仕事の状態。設定 → モデル の一言と「まだ話せません」の押しボタンにも、最新を出す。
     if (e.type === 'jobs') noteJobs(e.jobs);
     if (e.type === 'stateChanged') { void refreshState(); void loadFiles(filesAt); void tellIfNotReady(); ctx.forgetCommands?.(); return; }
@@ -1052,15 +1078,29 @@ async function loadUndo() {
     label.textContent = `${when} ${p.request}`;
     label.title = `${p.request}\n触ったファイル（${p.paths.length} 件）:\n${p.paths.join('\n')}`;
 
+    /*
+     * **戻るファイルを、全部並べてから訊く。**
+     *
+     * ここは選んだ一件の `paths` だけを出していた。戻るのはこの後の回の分も
+     * 含む（`src/core/undo.ts` の `restore`）ので、**並べていないファイルまで
+     * 書き戻る。**消える直しが在るのに、名前が出ていない形だった。
+     */
+    const willTouch = willRestore(list, i);
+    // 大きすぎて控えていない分は、戻らない。押す前に、そう言う。
+    const wont = wontRestore(list, i);
+    const wontSay = wont.length > 0
+      ? `\n戻らないファイルが ${wont.length} 件あります（大きすぎて控えていません）:\n${wont.join('\n')}`
+      : '';
     const back = document.createElement('button');
     back.className = 'ghost icon';
-    back.title = i === 0
-      ? `ここまで戻す（${p.paths.length} 件）`
-      : `ここまで戻す（この後の ${i} 回ぶんも一緒に戻ります）`;
+    back.title = (i === 0
+      ? `ここまで戻す（${willTouch.length} 件）`
+      : `ここまで戻す（この後の ${i} 回ぶんも一緒に、${willTouch.length} 件）`)
+      + (wont.length > 0 ? `／戻らない ${wont.length} 件` : '');
     back.textContent = '↶';
     back.addEventListener('click', async () => {
       const also = i === 0 ? '' : `\nこの後の ${i} 回ぶんの直しも一緒に戻ります。`;
-      if (!confirm(`${p.paths.length} 件のファイルを戻します。${also}\n\n${p.paths.join('\n')}`)) return;
+      if (!confirm(`${willTouch.length} 件のファイルを戻します。${also}\n\n${willTouch.join('\n')}${wontSay}`)) return;
       back.disabled = true;
       try {
         const r = await fetch('/api/undo', {
@@ -1332,6 +1372,20 @@ async function loadFiles(at = '') {
       row.append(b, at);
       box.append(row);
     }
+    /*
+     * **出していない分を、黙って隠さない。**
+     *
+     * 一覧は多すぎると切る（開くのが重くなるため）。切ったことを言わないので、
+     * 5000 件のフォルダでは 400 件だけ出て、**残りは無いように見えていた**
+     * （押して実測）。戻せる一覧や会話の一覧と同じように、何件あるかを言う。
+     */
+    const hidden = (body.total ?? body.entries.length) - body.entries.length;
+    if (hidden > 0) {
+      box.append(Object.assign(document.createElement('div'), {
+        className: 'dim',
+        textContent: `ほかに ${hidden} 件（多いので一覧に出していません。探すパネルか、依頼の中で名前を書けば届きます）`,
+      }));
+    }
   } catch (e) {
     box.textContent = '';
     box.append(Object.assign(document.createElement('div'), { className: 'empty', textContent: String(e.message ?? e) }));
@@ -1354,15 +1408,41 @@ async function openInEditor(path, line) {
 
 ctx.revealFile = (path, line) => { void openInEditor(path, line); };
 
-function insertPath(path) {
+/** 書きかけの指示に、言葉を足す。押した所から会話へ渡る道は、全部ここを通る。 */
+function appendToInstruction(text) {
   const input = document.querySelector('.chat textarea');
-  if (!input) return;
+  if (!input) return false;
+  input.value = input.value ? `${input.value.replace(/\s+$/, '')} ${text} ` : `${text} `;
+  input.focus();
+  return true;
+}
+
+function insertPath(path) {
   // **`@` を付ける。**印が付いていると、送るときに中身ごと渡る。
   // 道の文字だけだと、開かずに書き始めることがある。
-  const at = `@${path}`;
-  input.value = input.value ? `${input.value.replace(/\s+$/, '')} ${at} ` : `${at} `;
-  input.focus();
+  appendToInstruction(`@${path}`);
 }
+
+/*
+ * **探した所を、会話へ渡す。**
+ *
+ * 探して見つけた行を AI に訊くとき、道と行を**打ち直していた**（`src/a.ts:120`）。
+ * 打ち間違えれば別の所の話になる。押した所から渡す。
+ */
+ctx.insertText = (text) => appendToInstruction(text);
+
+/*
+ * **覚え書きを、残す。**
+ *
+ * 打った分は配置と一緒に残す（`spec.options.text`）。**描き直さない**のが肝心で、
+ * 描き直すと打っている最中に欄が作り直され、手が飛ぶ。
+ */
+ctx.saveNote = async (id, text) => {
+  const spec = layout.panels.find((p) => p.id === id);
+  if (!spec) return false;
+  spec.options = { ...(spec.options ?? {}), text };
+  return Boolean(await save(layout));
+};
 
 /**
  * 横の板の開け閉め。
@@ -1484,7 +1564,7 @@ async function commands() {
   const now = cfg?.active?.model ?? cfg?.model;
   for (const g of cfg?.gguf ?? []) {
     if (g.ref === now || g.notGguf) continue;
-    add(`モデルを切り替える: ${g.ref}`, g.tooBig ? '（この機械には載りません）' : `${((g.sizeBytes ?? 0) / 1024 ** 3).toFixed(1)} GB`, async () => {
+    add(`モデルを切り替える: ${g.ref}`, g.tooBig ? '（この機械には載りません）' : sizeText(g.sizeBytes), async () => {
       const r = await ask('/api/config', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kind: cfg.kind, modelsDir: cfg.modelsDir ?? '', model: g.ref }),
@@ -1686,9 +1766,15 @@ async function loadCfg() {
   if (!c.gguf?.length) {
     const e = document.createElement('div');
     e.className = 'empty';
-    // ここで止まる人がいちばん多い。**次に何をすればいいかまで書く。**
-    e.textContent = (DIR_NOTES[c.dirState] ? `${DIR_NOTES[c.dirState]}\n` : '')
-      + 'ありません。上のフォルダに .gguf を1つ入れると、ここに出ます。\n'
+    /*
+     * ここで止まる人がいちばん多い。**次に何をすればいいかまで書く。**
+     *
+     * **同じ案内を二度出さない。**フォルダの様子（「そのフォルダはまだありません」）は
+     * すぐ上の一行に出ている。ここにも足していたので、同じ文が 60px 離れて二度
+     * 並んでいた（撮って見つけた）。二度言われると、別のことかと読み直す。
+     */
+    e.classList.add('guide');
+    e.textContent = 'ありません。上のフォルダに .gguf を1つ入れると、ここに出ます。\n'
       + '取ってくる先の例: https://huggingface.co/Qwen （名前に GGUF が付いたもの）\n'
       + '迷ったら 3B の Q4_K_M（約2GB）。要約や下書きなら足ります。';
     e.style.whiteSpace = 'pre-line';
@@ -1705,7 +1791,7 @@ async function loadCfg() {
     if (m.path) k.append(pathActions(m.path));
     const v = document.createElement('span');
     v.className = 'dim mono';
-    v.textContent = (m.sizeBytes ? `${(m.sizeBytes / 1024 ** 3).toFixed(1)} GB` : '')
+    v.textContent = sizeText(m.sizeBytes)
       + (m.tooBig ? '　⚠ この機械の記憶に載りません' : '')
       + (m.notGguf ? '　⚠ GGUF ではありません（中身が別物）' : '');
     // どれを使うかを、ここで決められる。決めなければ最初の一つ。
@@ -2014,12 +2100,26 @@ async function tellIfNotReady() {
   const r = await fetch('/api/ready', { signal: AbortSignal.timeout(20000) })
     .then((x) => x.json())
     .catch((e) => ({ ready: false, why: `見に行けませんでした（${e.message ?? e}）` }));
+  /*
+   * **設定が読めていないことを、一緒に言う。**
+   *
+   * 読めなければ既定で開く作りだが、理由は端末にしか出ていなかった。
+   * `start.cmd` から起こすとその端末は隠れるので、開いた人は気づけない
+   * （書いたはずの繋ぎ先が使われていない、が黙って起きる）。
+   *
+   * **帯は一本しかない。**別々に出すと、後から出した方が前のを消す
+   * （実際、モデルが無い帯に消されて何も見えなかった）。文の側で足す。
+   */
+  const configNote = r.configProblem
+    ? `設定を読めませんでした（既定のまま開いています）: ${r.configProblem}\n`
+    : '';
   if (r.ready) {
     // 話せるようになったなら、「まだ話せません」は下げる（取ってき終わったとき）。
     const box = document.getElementById('crashNote');
     if (box && box.textContent.startsWith('まだ話せません')) box.remove();
     // 話せるが、待たされそうなら先に言う（GPU なしで大きいモデルのとき）。
-    if (r.heads) showCrash('先に一つ', r.heads, 'warn');
+    if (configNote) showCrash('設定', configNote.trim(), 'warn');
+    else if (r.heads) showCrash('先に一つ', r.heads, 'warn');
     return;
   }
   /*
@@ -2033,7 +2133,7 @@ async function tellIfNotReady() {
   if (f) {
     const label = f.fetching ? `取ってきています… ${f.message || ''}`.trim() : `小さいモデル（約${f.approxGB}GB）を取ってくる`;
     // 取ってこられなかったときは、その理由をここに出す（ログを開かせない）。
-    const why = f.failed ? `${r.why}\n${f.failed}` : r.why;
+    const why = configNote + (f.failed ? `${r.why}\n${f.failed}` : r.why);
     showCrash('まだ話せません', why, 'warn', {
       label,
       run: async (btn) => {
@@ -2048,7 +2148,7 @@ async function tellIfNotReady() {
     });
     return;
   }
-  showCrash('まだ話せません', `${r.why}　⚙ 設定 → モデル で決められます`, 'warn');
+  showCrash('まだ話せません', `${configNote}${r.why}　⚙ 設定 → モデル で決められます`, 'warn');
 }
 void tellIfNotReady();
 // 開いた時点で裏の仕事が動いていれば、その最新を押した場所に出す（合図は繋ぐ前に流れている）。
@@ -2058,6 +2158,8 @@ listen();
 setInterval(refreshState, 5000);
 
 $('openView').onclick = () => openViewMenu();
+// 新しい会話。名前を押すのと同じ所へ行く（入口が二つあっても、行き先は一つ）。
+$('newTalk').onclick = () => { void goTop(); };
 // 名前を押すとトップへ。普通のチャットの作法（左上の名前が入口）に合わせる。
 for (const b of document.querySelectorAll('.brand')) {
   b.title = 'トップへ（ここで書き始めると新しい会話）';

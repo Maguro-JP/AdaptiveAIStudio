@@ -74,6 +74,41 @@ describe('書き換えを見て、読み直せと伝える', () => {
     } finally { seen.close(); s.stop(); }
   });
 
+  /**
+   * **画面のプレビューは、出所が `null` で来る。**
+   *
+   * 埋め込みは sandbox 付き（`allow-same-origin` は付けない）ので、中のページの
+   * 出所は `null` になる。差し込んだ読み直しはここへ繋ぎに来るが、CORS で弾かれて
+   * **一度も繋がらないまま毎秒やり直していた**（本物のブラウザで確かめた。
+   * 書き換えても映りが変わらず、コンソールがエラーで埋まる）。
+   */
+  test('**出所が違っても、読み直しの口は受ける**', async () => {
+    const s = new PreviewServer({ root: await site({ 'index.html': '<h1>あ</h1>' }), watch: false });
+    servers.push(s);
+    const url = await s.start();
+    const ac = new AbortController();
+    try {
+      const r = await fetch(new URL('/__reload', url), {
+        headers: { origin: 'null', accept: 'text/event-stream' }, signal: ac.signal,
+      });
+      assert.equal(r.status, 200);
+      assert.equal(r.headers.get('access-control-allow-origin'), '*',
+        '出所が null の埋め込みから繋げない（読み直しが一度も効かない）');
+    } finally { ac.abort(); s.stop(); }
+  });
+
+  test('ファイルを配る方には、誰からでも、を付けない（対）', async () => {
+    // 作業場のファイルそのものは、よそから読めてはいけない。
+    const s = new PreviewServer({ root: await site({ 'index.html': '<h1>あ</h1>' }), watch: false });
+    servers.push(s);
+    const url = await s.start();
+    try {
+      const r = await fetch(new URL('/index.html', url));
+      assert.equal(r.headers.get('access-control-allow-origin'), null,
+        'ファイルを誰からでも読めるようにしている');
+    } finally { s.stop(); }
+  });
+
   test('**ファイルを書き換えたら、見張りが拾って伝える**', async () => {
     const root = await site({ 'index.html': '<h1>あ</h1>' });
     const s = new PreviewServer({ root });

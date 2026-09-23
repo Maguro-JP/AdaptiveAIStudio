@@ -96,7 +96,10 @@ body {
 }
 .side-open:hover { color: var(--text); }
 
-.side-top { display: flex; align-items: center; gap: var(--s2); }
+/* **名前が入る幅を残す。**同じ行に押しものを三つ並べたので、名前の枠が 107px
+   しか残らず、137px 要る名前が切れていた（実測）。余白から削る。 */
+.side-top { display: flex; align-items: center; gap: 4px; }
+.side-top .icon { padding: 0 5px; }
 .side-top .brand {
   flex: 1; min-width: 0; font-size: .95rem;
   /* **溢れさせない。**溢れると、右に並べた押しものの上へ字が乗る
@@ -380,12 +383,19 @@ button.ghost:hover { color: var(--text); background: var(--surface2); }
  * 列は必ず揃える。行ごとに幅が動くと、読むたびに目が探し直すことになる。
  * 行の中の列を、一覧全体で共有する（subgrid）。
  */
+/* 行の列。**両端も縮められるようにする。**`max-content` のままだと、パネルが
+   狭いときに縮む先が無く、行ごと入れ物の外へ出ていた（ロールの一覧で 64px。実測）。
+   縮んだ分は末尾が切れる（`.row > *` の ellipsis）ので、切れて困る所には title を付ける。 */
 .rows {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr) minmax(0, max-content);
   column-gap: var(--s3);
 }
-.rows[data-cols="2"] { grid-template-columns: max-content minmax(0, 1fr); }
+.rows[data-cols="2"] { grid-template-columns: minmax(0, max-content) minmax(0, 1fr); }
+.rows[data-cols="4"] {
+  grid-template-columns:
+    minmax(0, max-content) minmax(0, 1fr) minmax(0, max-content) minmax(0, max-content);
+}
 .row {
   display: grid;
   grid-template-columns: subgrid;
@@ -410,9 +420,14 @@ button.ghost:hover { color: var(--text); background: var(--surface2); }
 /* 数は右で揃える。桁が縦に並ぶ。 */
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 
+/* **何行もある案内は、中央に寄せない。**行の頭がそろわず、読む所を目で
+   探すことになる（設定のモデルの頁で実際にそう出ていた）。 */
+.empty.guide { text-align: left; max-width: 46rem; margin: 0 auto; line-height: 1.7; }
 .empty {
   color: var(--dim);
   padding: var(--s4);
+  /* 改行を書いたら、改行として出す（案内は複数行になることがある）。 */
+  white-space: pre-line;
   text-align: center;
   font-size: .88rem;
 }
@@ -614,6 +629,10 @@ button.tiny { font-size: .74rem; padding: 2px 7px; }
  */
 .field {
   flex: 1;
+  /* **縮める。**既定（min-width: auto）だと中身より細くならず、行ごとパネルの
+     外へ出る。外へ出た分は切り取られるので、送るボタンが画面から消えた
+     （実測: パネル 280px で行が 9px、ボタンが 4px 外）。 */
+  min-width: 0;
   display: flex; align-items: flex-end; gap: var(--s2);
   /* 折り返さない。右に会話を置く配置（幅 380px）で「送る」が二段目に落ちた。
      欄が縮む方を選ぶ。 */
@@ -625,9 +644,48 @@ button.tiny { font-size: .74rem; padding: 2px 7px; }
   transition: border-color .12s ease;
 }
 .field:focus-within { border-color: var(--accent); }
+/* 押すものは縮めない。削るのは打つ欄の側（上）。 */
+.field button { flex: 0 0 auto; }
+
+/*
+ * **会話のパネルが狭いときは、隙間と飾りから削る。**
+ *
+ * 欄を細くしただけでは足りなかった（実測: パネル 213px に対し、中身と隙間で
+ * 245px 要る。送るボタンが 7px 外へ出たまま）。ブラウザの幅ではなくパネルの幅で
+ * 決める。パネルは掴んで動かせるので、ブラウザが広くても会話が細いことがある。
+ */
+.chat { container-type: inline-size; }
+@container (max-width: 380px) {
+  .field { gap: 4px; padding-left: 8px; }
+  .field .icon { padding: 0 4px; }
+}
+/*
+ * もっと狭いときは、**鍵盤から届くものを引っ込める**。
+ *
+ * 押す口を四つ並べたままだと、打つ欄が 48px になって案内の字すら読めない
+ * （実測）。引っ込めるのは声（任意）とコマンド（Ctrl+K で開く。下の帯にも
+ * 出ている）。添えるボタンと送るボタンは残す——落とす・貼る以外の道が無く、
+ * 送るは初めての人がいちばん探すもの。
+ */
+@container (max-width: 320px) {
+  .field .icon.opt { display: none; }
+}
+/*
+ * **それでも入らないときは、二段にする。**
+ *
+ * 引っ込めるものを引っ込めても、打つ欄の下限（3rem）＋ 添える ＋ 送る で
+ * 入らない幅がある。パネルを四つ縦に並べると実際にそうなり、**送るボタンが
+ * 31px 外へ出て切り取られていた**（実測）。折り返さない方が読みやすいが、
+ * 押せなくなるくらいなら二段にする。
+ */
+@container (max-width: 240px) {
+  .field { flex-wrap: wrap; }
+  .field textarea { flex: 1 1 100%; }
+}
 .field textarea {
-  /* 折り返しても潰れないよう、下限を決める。 */
-  flex: 1 1 8rem; min-width: 6rem;
+  /* 折り返しても潰れないよう、下限を決める。**狭いときは欄から削る**
+     （押すものを消さない。打つ所は狭くても打てる）。 */
+  flex: 1 1 8rem; min-width: 3rem;
   border: 0; background: transparent; padding: 6px 0;
   resize: none; font-family: var(--font); font-size: 1rem;
   max-height: 180px; height: auto; min-height: 2.1em;
@@ -702,6 +760,21 @@ textarea {
 }
 .repairs { color: var(--warn); font-size: .84rem; white-space: pre-wrap; margin: var(--s2) 0 0; }
 menu { display: flex; justify-content: flex-end; gap: var(--s2); padding: 0; margin: var(--s3) 0 0; }
+/*
+ * **「閉じる」を、折り返しの下に置かない。**
+ *
+ * 画面が低いと（実測: 高さ 700 以下）、設定の中身が画面より長くなり、
+ * 「閉じる」は下端 755px の位置＝画面の外に居た。中は巻けるので辿り着けるが、
+ * **閉じ方が見えていない**。Esc を知らない人は、閉じ方を探すことになる。
+ * 下に貼り付けて、いつでも見えるようにする。
+ */
+dialog menu {
+  position: sticky;
+  bottom: calc(var(--s4) * -1);
+  background: var(--surface);
+  padding: var(--s2) 0;
+  margin-bottom: calc(var(--s4) * -1);
+}
 
 /* 動きを嫌う人には動かさない。 */
 @media (prefers-reduced-motion: reduce) {
@@ -1164,6 +1237,44 @@ dialog.wide { width: min(46rem, 92vw); }
 }
 .editor-hold { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; }
 /* 探す・置き換える・行へ飛ぶ。Ctrl+F と Ctrl+G で出す。 */
+/* AI が同じファイルを書いたことを伝える帯。**見落とされると、書いたものが消える。**
+   欄の上に出し、押し場所は折り返して全部見せる（狭い画面で外へ出さない）。 */
+/* 長い会話の、古い分を出す押し場所。上に置いて、中身と同じ幅にそろえる。 */
+.log-more { display: block; width: 100%; margin: 0 0 var(--s2); font-size: .82rem; }
+/* まだ何も無いときの案内。押せる例は、入れるだけで送らない。 */
+.chat-guide { padding: var(--s4) var(--s3); color: var(--dim); font-size: .86rem; line-height: 1.7; }
+.chat-chips { display: flex; flex-wrap: wrap; gap: .35rem; margin: .5rem 0; }
+/* 例は**押せると分かる形**にする。枠が無いと、ただの字に見えて誰も押さない
+   （撮って見たら、押した一つだけが枠付きで、他は字のままだった）。 */
+.chat-guide .chip-btn {
+  font-size: .8rem; padding: 3px 10px; text-align: left; white-space: normal;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--surface2);
+  color: var(--text);
+}
+.chat-guide .chip-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* 覚え書き。打てる所だと分かるように、欄として見せる。 */
+.note-area {
+  width: 100%; flex: 1 1 auto; min-height: 6rem; box-sizing: border-box;
+  border: 1px solid var(--line); border-radius: 5px; padding: var(--s2);
+  background: var(--surface); color: var(--text);
+  font-family: var(--font); font-size: .9rem; line-height: 1.6; resize: none;
+}
+.note-area:focus { outline: none; border-color: var(--accent); }
+.note-state { font-size: .76rem; padding: 2px 2px 0; min-height: 1rem; }
+
+.editor-notice {
+  display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap;
+  margin: .3rem 0; padding: .4rem .55rem; border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  font-size: .8rem; line-height: 1.5;
+}
+/* ただの知らせ（補完が出せない理由など）。放っておいても何も消えないので、色を落とす。 */
+.editor-notice.info { border-color: var(--line); background: var(--surface2); }
+.editor-notice-text { flex: 1 1 14rem; min-width: 0; }
+.editor-notice-acts { display: flex; align-items: center; gap: .3rem; flex: 0 0 auto; flex-wrap: wrap; }
+.editor-notice button { font-size: .78rem; padding: 2px 8px; }
 .editor-find { display: flex; align-items: center; gap: .3rem; padding: .3rem 0; flex-wrap: wrap; }
 .editor-find input { font-size: .8rem; padding: 2px 6px; }
 .find-q, .find-r { flex: 1 1 8rem; min-width: 5rem; }
@@ -1229,5 +1340,8 @@ dialog.wide { width: min(46rem, 92vw); }
   padding: .22rem .7rem; border-top: 1px solid var(--line); align-items: baseline;
 }
 .search-hit:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.search-at { font-size: .78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 当たった行の頭。道と、会話へ渡す @ を並べる。道の側だけ縮める。 */
+.search-hit-head { display: flex; align-items: baseline; gap: .25rem; min-width: 0; }
+.search-at { font-size: .78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.search-ask { flex: 0 0 auto; font-size: .78rem; padding: 0 4px; }
 .search-line { font-size: .78rem; color: var(--dim); white-space: pre; overflow: hidden; text-overflow: ellipsis; }

@@ -18,7 +18,7 @@ import {
   listServicesTool, createConnectServiceTool, createDisconnectServiceTool, type ServiceHooks,
 } from '../agent/tools/services.ts';
 import { defaultWorkRoot } from './home.ts';
-import { isWriteTool } from '../agent/tools/write-kind.ts';
+import { isWriteTool, mayChangeFiles, changesFilesHere } from '../agent/tools/write-kind.ts';
 import { resolve, join } from 'node:path';
 import type { AasConfig } from '../config.ts';
 import { buildRegistry } from './build.ts';
@@ -28,6 +28,8 @@ import { buildHarness } from './harness-setup.ts';
 import { Forum } from '../harness/deliberation.ts';
 import { Agent } from '../agent/loop.ts';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool, editFileTool } from '../agent/tools/fs.ts';
+import { createShowFileTool, type ShowHook } from '../agent/tools/show.ts';
+import { createReplaceSelectionTool, type SelectionSource, type PatchHook } from '../agent/tools/patch.ts';
 import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { createDeliberateTool } from '../agent/tools/deliberate.ts';
@@ -254,6 +256,21 @@ export interface SessionOptions {
   /** 画面や端末へ流したいもの。省略可。 */
   onLog?(level: 'info' | 'warn' | 'error', text: string): void;
   /**
+   * 「ここを見てください」を画面で開く受け手。省略可。
+   *
+   * **画面の無い入口（端末）では置かない。**置かないと `show_file` は
+   * 「開く先がありません」と返す。受け手が無いのに開いたことにしない。
+   */
+  onShow?: ShowHook;
+  /**
+   * 画面で選んでいる所を教える相手と、そこを書き換える受け手。省略可。
+   *
+   * **画面の無い入口（端末）では置かない。**置かないと `replace_selection` は
+   * 「書き換える先がありません」と返す。範囲は利用者が選んだ所で、AI は文だけを出す。
+   */
+  editorSelection?: SelectionSource;
+  onPatch?: PatchHook;
+  /**
    * 暇なときの思考に、外を読むことを許すか。既定は許す。
    * 完全に閉じたいときだけ false にする。
    */
@@ -343,6 +360,15 @@ export class Session {
   readonly #prefetch: Prefetcher;
   /** ハーネスの規則へ「いま何を頼まれているか」を渡すための箱。 */
   readonly #holder: { instruction: string };
+  /**
+   * 依頼の通し番号。**依頼のあいだだけ効くものを、持ち越させないための目印。**
+   *
+   * 「この依頼のあいだは訊かない」を入口ごとに倒していたので、段取り（`plan`）の
+   * 入口で倒し忘れていた。一度その押し場所を選んだあとに段取りを送ると、
+   * **札を一枚も出さずに全部の書き込みが通る。**番号で見れば、新しい依頼が
+   * 始まった時点で外れる（入口を足しても、ここを通らなければ依頼にならない）。
+   */
+  #requests = 0;
   /** 協議の場。依頼ごとに開き直す。 */
   readonly #forum: Forum;
   readonly #harness: Harness;
@@ -518,8 +544,13 @@ export class Session {
     );
     const wrap = (tools: Tool[]) => harness.wrapAll(tools, () => holder.instruction);
     const toolPool = {
-      read: wrap([readFileTool, listFilesTool, searchTextTool, findCodeTool, findSymbolTool]),
-      write: wrap([writeFileTool, editFileTool, createDeliberateTool(forum)]),
+      // `show_file` は読む側に置く。中身を返さないので、読む権限より弱い。
+      read: wrap([readFileTool, listFilesTool, searchTextTool, findCodeTool, findSymbolTool,
+        createShowFileTool(opts.onShow)]),
+      // `replace_selection` は書く側。ディスクは触らないが、**人が書きかけの
+      // 欄を書き換える**ので、読むだけの役職には持たせない。
+      write: wrap([writeFileTool, editFileTool, createDeliberateTool(forum),
+        createReplaceSelectionTool(opts.editorSelection, opts.onPatch)]),
       execute: wrap([createRunCommandTool({ allowed: agentCfg.allowedCommands })]),
       network: netCfg.enabled === false ? [] : wrap([createFetchUrlTool({
         allowedHosts: netCfg.allowedHosts, maxBytes: netCfg.maxBytes, timeoutMs: netCfg.timeoutMs,
@@ -577,6 +608,9 @@ export class Session {
 
   get busy(): boolean { return this.#running !== undefined; }
 
+  /** いま何本目の依頼か。依頼のあいだだけ効くものは、これが変わったら外す。 */
+  get requestSeq(): number { return this.#requests; }
+
   /**
    * 承認の問い合わせを通り道にして、差分を拾っておく。
    * 差分は道具の中で作られていて、承認以外に外へ出る道が無いため。
@@ -624,6 +658,7 @@ export class Session {
     // 段取りでもファイルを触る。**戻せるのは送り口だけ、にしない。**
     await this.undo.begin(request);
     this.#holder.instruction = request;
+    this.#requests += 1;
     // 依頼が変われば協議もやり直し。前回通した話で今回の変更を通させない。
     this.#forum.clear();
     /*
@@ -714,6 +749,7 @@ export class Session {
         maxTotalParallel: this.config.agent?.maxTotalParallel,
         approve: this.#approve,
         beforeWrite: (path, previous) => this.undo.capture(path, previous),
+        wrote: (path, diff, created) => this.#diffs.set(path, { diff, created }),
         // 権限は役職から配る。調べるだけの担当は書き込む手段を持たない。
         assign: (roleId) => {
           const role = this.roles.get(roleId);
@@ -735,10 +771,14 @@ export class Session {
         else if (ev.type === 'handoff') yield { type: 'handoff', taskId: ev.taskId, from: ev.from };
         else if (ev.type === 'running') yield { type: 'running', taskIds: ev.taskIds };
         else if (ev.type === 'agent' && ev.event.type === 'toolEnd') {
-          if (!ev.event.isError && isWriteTool(ev.event.call.name)) {
-            const path = (ev.event.call.args as { path?: string }).path;
-            if (path) written.add(path.replace(/\\/g, '/').replace(/^\.\//, ''));
+          if (!ev.event.isError && mayChangeFiles(ev.event.call.name)) {
             this.#prefetch.invalidate();
+            // 触った先が分かるのは、この場所の書くツールだけ。外のツールと
+            // run_command は path を持たない（持っていても意味が違う）。
+            if (isWriteTool(ev.event.call.name)) {
+              const path = (ev.event.call.args as { path?: string }).path;
+              if (path) written.add(path.replace(/\\/g, '/').replace(/^\.\//, ''));
+            }
           }
           yield {
             type: 'work', taskId: ev.taskId, ok: !ev.event.isError,
@@ -1090,6 +1130,14 @@ export class Session {
        * それを指摘として覚えると、**利用者が言っていないことを覚える**。
        */
       fromUser?: boolean;
+      /**
+       * 利用者が**打った分だけ**。
+       *
+       * 依頼には、こちらが差し込んだものが前に付くことがある（添付の中身、
+       * いま開いている所）。それを「利用者の言葉」として判じると、**選んだ
+       * コードを指摘として覚える**。判じるのは、打った分だけにする。
+       */
+      said?: string;
     } = {},
   ): AsyncGenerator<SessionEvent> {
     if (this.noModel) {
@@ -1105,9 +1153,18 @@ export class Session {
     this.#running = ac;
     this.#instruction = instruction;
     this.#holder.instruction = instruction;
+    this.#requests += 1;
     this.#forum.clear();
-    // **この一往復で触ったものを、後から戻せるようにする。**
-    await this.undo.begin(instruction);
+    /*
+     * **この 1 ターンで触ったものを、後から戻せるようにする。**
+     *
+     * 覚える名前は**利用者が打った分だけ**にする。依頼にはこちらが差し込んだ
+     * ものが前に付くことがあるので（いま開いている所・添付の中身）、そのまま
+     * 使うと、横の一覧に「【いま開いているファイル】a.ts（3 行目）」と出て、
+     * **どの依頼を戻すのか人が選べない**（押して実測）。
+     */
+    // 打った分が空（添付だけを送った回）なら、差し込んだ方を使う。空の名前を残さない。
+    await this.undo.begin(opts.said || instruction);
 
     const verifyCfg = this.config.agent?.verify ?? {};
     const harnessCfg = this.config.harness ?? {};
@@ -1203,7 +1260,7 @@ export class Session {
       };
 
       /** 作業場を変えうる道具か。触る前に、作業前の状態を控える。 */
-      const changesFiles = (name: string): boolean => isWriteTool(name) || name === 'run_command';
+      const changesFiles = changesFilesHere;
 
       /*
        * 効かなかった道具を数える。
@@ -1257,7 +1314,7 @@ export class Session {
                 const at = (ev.call.args as { path?: unknown }).path;
                 if (typeof at === 'string' && !changedHere.includes(at)) changedHere.push(at);
               }
-              if (!ev.isError && isWriteTool(ev.call.name)) this.#prefetch.invalidate();
+              if (!ev.isError && mayChangeFiles(ev.call.name)) this.#prefetch.invalidate();
               yield {
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
               };
@@ -1327,7 +1384,7 @@ export class Session {
               }
               events.push({ type: 'toolStart', name: ev.call.name, summary: summarize(ev.call.args) });
             } else if (ev.type === 'toolEnd') {
-              if (!ev.isError && isWriteTool(ev.call.name)) this.#prefetch.invalidate();
+              if (!ev.isError && mayChangeFiles(ev.call.name)) this.#prefetch.invalidate();
               events.push({
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
               });
@@ -1442,7 +1499,7 @@ export class Session {
       // 待たない代わりに、**拾い手を置く。**置かないと、判じるところで
       // 一度失敗しただけでプロセスごと落ちる。
       if (opts.fromUser !== false) {
-        void this.#judge(instruction, situation.when, situation.did)
+        void this.#judge(opts.said ?? instruction, situation.when, situation.did)
           .catch((e: unknown) => {
             this.#opts.onLog?.('warn', `判じられませんでした: ${e instanceof Error ? e.message : String(e)}`);
           });
@@ -1504,6 +1561,14 @@ export class Session {
       ...(counter ? { count: (t: string) => counter.count(t) } : {}),
       approve: this.#approve,
       beforeWrite: (path, previous) => this.undo.capture(path, previous),
+      /*
+       * **書いた分の差分で上書きする。**
+       *
+       * 承認のときに拾った差分は「提案そのまま」なので、塊を選んで通したときは
+       * 書いたものと食い違う（当たっていない塊まで札に並び、そこの「戻す」は
+       * 断られる）。書けた側から来たものを正とする。
+       */
+      wrote: (path, diff, created) => this.#diffs.set(path, { diff, created }),
     });
   }
 

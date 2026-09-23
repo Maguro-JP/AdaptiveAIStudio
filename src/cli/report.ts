@@ -24,12 +24,22 @@ import { needsStripFlag } from '../core/node-flags.ts';
 const say = (line = ''): void => { console.log(line); };
 
 /**
- * トークンの値を出さない。名前が key / token / secret / password を含む項目は伏せる。
- * 設定は envFrom で名前しか書かない作りだが、他所から持ってきた設定に値が
- * 書いてあることはある。報告は外へ出すものなので、機械的に伏せる。
+ * トークンの値を出さない。報告は**外へ出すもの**なので、機械的に伏せる。
+ *
+ * 見るのは二つ。項目の名前（`apiKey` `Authorization` など）と、**値そのものの形**。
+ * 設定は名前しか書かない作りだが、記録（`ui.log`）や点検の出力には、項目名の無い
+ * まま値が出ることがある（見出しを丸ごと出した行、外のツールのエラーなど）。
+ * 名前だけで判じていると、そこがすり抜ける。
  */
 export function redactSecrets(text: string): string {
-  return text.replace(/("([^"\\]*(key|token|secret|password|passwd|credential)[^"\\]*)"\s*:\s*)"[^"]*"/gi, '$1"（伏せました）"');
+  return text
+    // 項目の名前で判じる。
+    .replace(/("([^"\\]*(key|token|secret|password|passwd|credential|authorization|cookie)[^"\\]*)"\s*:\s*)"[^"]*"/gi, '$1"（伏せました）"')
+    // 値の形で判じる。`Bearer ` の後ろ、と、よく知られた頭の付いたもの。
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer （伏せました）')
+    .replace(/\bgh[pousr]_[A-Za-z0-9]{16,}\b/g, '（伏せました）')
+    .replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b/g, '（伏せました）')
+    .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, '（伏せました）');
 }
 
 async function tailOf(path: string, lines: number): Promise<string> {
@@ -106,7 +116,14 @@ export async function buildReport(opts: {
   doctorMaxAgeMs?: number;
 }): Promise<string> {
   const parts: string[] = [];
-  const section = (title: string, body: string) => { parts.push(`## ${title}`, '', body.trimEnd(), ''); };
+  /*
+   * **どの節も、出す前に伏せる。**設定だけ伏せていたが、記録（`ui.log`）や
+   * 点検の出力にもトークンが出うる（見出しを丸ごと出した行、外のツールのエラー）。
+   * 出す所を一本にして、そこで通す。
+   */
+  const section = (title: string, body: string) => {
+    parts.push(`## ${title}`, '', redactSecrets(body).trimEnd(), '');
+  };
 
   const v = await currentVersion().catch(() => undefined);
   section('版', [

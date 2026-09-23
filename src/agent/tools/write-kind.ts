@@ -19,6 +19,67 @@ export function isWriteTool(name: string): boolean {
   return (WRITE_TOOLS as readonly string[]).includes(name);
 }
 
+/**
+ * 外から来たツール（MCP）の名前の区切り。`<サーバ名>__<ツール名>`。
+ *
+ * **この場所のツールには入れない。**入れた瞬間、そのツールは
+ * 「外から来たもの」として扱われる。`test/mcp-protected.test.ts` で止めている。
+ */
+export const EXTERNAL_SEPARATOR = '__';
+
+/** 外から来たツールか。 */
+export function isExternalTool(name: string): boolean {
+  return name.includes(EXTERNAL_SEPARATOR);
+}
+
+/**
+ * ファイルを書き換える**かもしれない**か。
+ *
+ * 守りはどれも `isWriteTool` で入口を絞っていた。名前の一致で見るので、
+ * 当たるのは `write_file` と `edit_file` の二つだけ。**外から来たツールは
+ * 一つも当たらない。**相手が何をするかはこちらからは分からないのに、
+ * 「書かない側」に置いていたことになる。
+ *
+ * 分からないものは、書くかもしれない側に置く。**分からないことを理由に
+ * 素通りさせない。**
+ */
+export function mayWriteFiles(name: string): boolean {
+  return isWriteTool(name) || isExternalTool(name);
+}
+
+/** 走らせるツール。何が起きるかは命令の中身で決まるので、ここからは分からない。 */
+const RUN_TOOL = 'run_command';
+
+/**
+ * 作業場のファイルを**変えうる**か。
+ *
+ * `mayWriteFiles` に `run_command` を足したもの。走らせた物がファイルを作る・
+ * 消すのは普通のこと（生成、依存の入れ直し、片付け）。
+ *
+ * **先読みを捨てるのは、こちらで判じる。**捨てて外したときの損は作り直す手間
+ * だけだが、古いものを渡すと、モデルは**在るファイルを無いものとして考える。**
+ * 分からないものは、変えたかもしれない側に置く。
+ */
+export function mayChangeFiles(name: string): boolean {
+  return mayWriteFiles(name) || name === RUN_TOOL;
+}
+
+/**
+ * **この場所のツール**でファイルが変わるか。外のツールは含めない。
+ *
+ * `mayChangeFiles` と分けてある。先読みを捨てるのは作り直すだけなので、
+ * 分からないものまで含めて構わない。**作業前の控えは違う。**あれはその場で
+ * テストを一度走らせるので、外のツールの手前に置くと、1ターンが何十秒も伸びる
+ * （実測。外のツールを呼ぶ e2e が、控えを待つ間に打ち切られた）。
+ *
+ * 外のツールが先にファイルを変えると、控えた「前」が既に後になっている。
+ * **そこは塞げていない。**塞ぐには、控えを軽くする（テストを走らせずに
+ * ファイルの姿だけ控える）方から決める必要がある。
+ */
+export function changesFilesHere(name: string): boolean {
+  return isWriteTool(name) || name === RUN_TOOL;
+}
+
 /** 呼び出しから、書き換える先の道を取る。 */
 export function writePath(args: Record<string, unknown> | unknown): string | undefined {
   if (typeof args !== 'object' || args === null) return undefined;

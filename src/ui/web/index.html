@@ -60,7 +60,16 @@
       </section>
 
       <section class="side-sec">
-        <h3>会話</h3>
+        <!--
+          **新しい会話を始める所を、見える形で置く。**
+          入口は名前（左上）を押すことだけで、その案内は指を乗せたときの
+          吹き出しにしか出ていなかった。押して探したときに見つからない。
+          ファイルの並びと同じ形で、見出しの隣に置く。
+        -->
+        <div class="sec-head">
+          <h3>会話</h3>
+          <button id="newTalk" class="ghost icon" title="新しい会話を始める">＋</button>
+        </div>
         <div id="sideSessions" class="side-list"></div>
         <!--
           押した結果を出す場所。押しても何も起きないように見える、をなくす。
@@ -156,7 +165,7 @@
 
       <section data-sec="look" hidden>
         <label class="field-row">
-          <span class="dim">ランタイム</span>
+          <span class="dim">テーマ</span>
           <select id="themes" title="見た目を選ぶ"></select>
         </label>
         <p class="hint">色と間合いを細かく変えるときは、こちら。</p>
@@ -165,10 +174,10 @@
 
       <section data-sec="place" hidden>
         <label class="field-row">
-          <span class="dim">型</span>
+          <span class="dim">プリセット</span>
           <select id="presets" title="配置を選ぶ"></select>
         </label>
-        <p class="hint">板の並べ方そのものを書き換えるときは、こちら。</p>
+        <p class="hint">パネルの並べ方そのものを書き換えるときは、こちら。</p>
         <button type="button" id="edit" class="ghost">配置を直接いじる</button>
       </section>
 
@@ -181,7 +190,7 @@
           <select id="cfgKind"></select>
         </label>
         <label class="field-row">
-          <span class="dim">GGUF の置き場</span>
+          <span class="dim">GGUF の保存先</span>
           <input id="cfgModelsDir" type="text" spellcheck="false" placeholder="既定のまま">
         </label>
 

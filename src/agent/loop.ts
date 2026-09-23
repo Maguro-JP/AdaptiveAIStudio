@@ -68,6 +68,8 @@ export interface AgentOptions {
   approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
   /** 書き込む直前の控え。**戻せるようにするため**、書く道具から呼ばれる。 */
   beforeWrite?(relPath: string, previous: string | undefined): void;
+  /** 書けたときの、実際に書いた分の差分。画面の札をこれで描く。 */
+  wrote?(relPath: string, diff: string, created: boolean): void;
 }
 
 export class Agent {
@@ -104,6 +106,7 @@ export class Agent {
       signal,
       approve: this.#opts.approve,
       ...(this.#opts.beforeWrite ? { beforeWrite: this.#opts.beforeWrite } : {}),
+      ...(this.#opts.wrote ? { wrote: this.#opts.wrote } : {}),
       // 道具の返しも窓に収める。読んだ時点で収めないと、刈る段では
       // 中身がほとんど残らない（直近の結果は 1200 字まで削られる）。
       ...(this.#opts.contextTokens !== undefined ? { contextTokens: this.#opts.contextTokens } : {}),
@@ -229,7 +232,14 @@ export class Agent {
             type: 'finished',
             reason: stalled ? 'noProgress' : 'completed',
             ...(stalled
-              ? { detail: `${DONE_MARK} が無いまま ${nudges} 回押し戻しましたが、動きませんでした。` }
+              ? {
+                // 押し戻しを切ってあるときに「0 回押し戻しましたが、動きませんでした」と
+                // 言っていた。押し戻していないのだから嘘になる（本物の重みで確かめた回に
+                // 実際に出た）。**やっていないことを、やったと書かない。**
+                detail: maxNudges === 0
+                  ? `${DONE_MARK} が無いまま手を止めました（押し戻しは切ってあります）。`
+                  : `${DONE_MARK} が無いまま ${nudges} 回押し戻しましたが、動きませんでした。`,
+              }
               : {}),
           };
           return;

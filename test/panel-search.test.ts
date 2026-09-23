@@ -129,3 +129,64 @@ describe('探すパネル', () => {
     await until(() => t.text().includes('作業ディレクトリの外です'), '理由が出る');
   });
 });
+
+/**
+ * **探した所を、会話へ渡す。**
+ *
+ * 見つけた行を AI に訊くとき、道と行を打ち直していた（`src/a.ts:120`）。
+ * 打ち間違えれば、別の所の話になる。押した所から渡す。
+ */
+describe('探した所を、依頼に添える', () => {
+  /** 会話へ渡ったものを控えるパネル。 */
+  function openWithChat(answer: Answer) {
+    const asked: string[] = [];
+    (globalThis as { fetch?: unknown }).fetch = (async (url: string) => {
+      asked.push(String(url));
+      const { status = 200, ...body } = answer;
+      return Response.json(body, { status });
+    }) as unknown as typeof fetch;
+    const sent: string[] = [];
+    const body = createNode('div');
+    PANELS.search!(body, {
+      on: () => undefined,
+      revealFile: () => undefined,
+      insertText: (text: string) => { sent.push(text); return true; },
+    });
+    const find = (want: (n: StubNode) => boolean): StubNode | undefined => {
+      const walk = (n: StubNode): StubNode | undefined => {
+        if (want(n)) return n;
+        for (const c of n.children) { const got = walk(c); if (got) return got; }
+        return undefined;
+      };
+      return walk(body);
+    };
+    const dump = (n: StubNode): string => {
+      let out = n.textContent ?? '';
+      for (const c of n.children) out += ` ${dump(c)}`;
+      return out;
+    };
+    return { body, sent, find, text: () => dump(body) };
+  }
+
+  test('**@ を押すと、道と行が会話へ渡る**', async () => {
+    const t = openWithChat({ hits: [{ path: 'src/a.ts', line: 12, text: 'const answer = 41;' }] });
+    const q = t.find((n) => (n.className ?? '').includes('search-q'))!;
+    q.value = 'answer';
+    t.find((n) => n.textContent === '探す' && typeof n.onclick === 'function')!.onclick!();
+    await until(() => t.text().includes('src/a.ts:12'), '当たった行が並ぶ');
+    const ask = t.find((n) => (n.className ?? '').includes('search-ask'));
+    assert.ok(ask, '会話へ渡す押し場所がありません');
+    ask.onclick!();
+    assert.deepEqual(t.sent, ['src/a.ts:12'], `渡ったものが違います: ${JSON.stringify(t.sent)}`);
+  });
+
+  test('開くのと、渡すのは別（押し間違えない）', async () => {
+    const t = openWithChat({ hits: [{ path: 'src/a.ts', line: 12, text: 'x' }] });
+    t.find((n) => (n.className ?? '').includes('search-q'))!.value = 'x';
+    t.find((n) => n.textContent === '探す' && typeof n.onclick === 'function')!.onclick!();
+    await until(() => t.text().includes('src/a.ts:12'), '当たった行が並ぶ');
+    // 道を押しても、会話へは渡らない（開くだけ）。
+    t.find((n) => n.textContent === 'src/a.ts:12')!.onclick!();
+    assert.deepEqual(t.sent, [], `開くつもりで渡っています: ${JSON.stringify(t.sent)}`);
+  });
+});

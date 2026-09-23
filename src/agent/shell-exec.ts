@@ -4,6 +4,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { decodeText } from '../core/text.ts';
+import { envForChild } from '../core/env.ts';
 
 /**
  * 実行中の一群を根ごと止める。
@@ -37,7 +38,7 @@ function killTree(child: ChildProcess, platform: NodeJS.Platform = process.platf
  * 分岐を関数として取り出しているのは、**Windows の側を試験するため**。
  * 手元も CI も Linux だと、win32 の分岐は一度も実行されないまま配られる。
  * 実際に「Linux では通るが Windows では落ちる」を踏んだので、
- * せめて組み立ての内容だけは、どちらの側も検査できるようにしておく。
+ * せめて組み立ての内容だけは、どちらの側も試験で押せるようにしておく。
  */
 export function killPlan(pid: number, platform: NodeJS.Platform): { command: string; args: string[] } {
   if (platform === 'win32') {
@@ -63,6 +64,29 @@ export function spawnPlan(command: string, platform: NodeJS.Platform): {
   return { file: '/bin/sh', args: ['-c', command], shell: false, detached: true };
 }
 
+/**
+ * `spawn` に渡すもの。**どちらの道でも `env` を渡す**ことを、試験で押せる形にする。
+ *
+ * ここは殻を使う道（Windows）と使わない道（それ以外）で `spawn` の呼び方が違う。
+ * 片方にだけ `env` を渡して、もう片方を素のままにしても、**走らせている機械の
+ * 道しか通らないので気づけない**（実際、Windows の道は linux では一度も通らない）。
+ * 呼び方を作る所を一つにして、両方まとめて見る。
+ */
+export function spawnCall(
+  plan: { file: string; args: string[]; shell: boolean; detached: boolean },
+  cwd: string,
+  env: Record<string, string>,
+): {
+  file: string;
+  /** 殻を使う道では渡さない（命令の文をそのまま殻へ渡す）。 */
+  args?: string[];
+  options: { cwd: string; env: Record<string, string>; shell?: boolean; detached?: boolean };
+} {
+  return plan.shell
+    ? { file: plan.file, options: { cwd, shell: true, env } }
+    : { file: plan.file, args: plan.args, options: { cwd, detached: plan.detached, env } };
+}
+
 export interface ExecResult {
   code: number | null;
   output: string;
@@ -81,9 +105,18 @@ export function execCommand(
   return new Promise((resolve) => {
     const startedAt = Date.now();
     const plan = spawnPlan(command, process.platform);
-    const child = plan.shell
-      ? spawn(plan.file, { cwd, shell: true })
-      : spawn(plan.file, plan.args, { cwd, detached: plan.detached });
+    /*
+     * **トークンを子へ渡さない。**
+     *
+     * `env` を渡していなかったので、親の環境変数がそのまま全部子へ行っていた。
+     * 許可している命令に `echo` と `cat` が在るので、**`echo $GITHUB_TOKEN` 一つで
+     * トークンが読める**（出力はモデルの履歴と会話の記録に入る。遠くのモデルを
+     * 候補に入れていれば、そこへも出て行く）。渡す環境は `envForChild` で作る。
+     */
+    const call = spawnCall(plan, cwd, envForChild());
+    const child = call.args
+      ? spawn(call.file, call.args, call.options)
+      : spawn(call.file, call.options);
 
     // 文字に直すのは**最後に一度**。cmd の出力は日本語の Windows では CP932 で
     // 来るので、塊ごとに UTF-8 と決めて読むと丸ごと化ける。全部揃ってから

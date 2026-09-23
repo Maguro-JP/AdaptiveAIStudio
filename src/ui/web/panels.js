@@ -11,6 +11,7 @@ import { verdictText, slowNote } from './verdict.js';
 import { renderMarkdown } from './markdown.js';
 import { isSendKey, isPlainEnter } from './keys.js';
 import { pathActions } from './paths.js';
+import { sizeText } from './size.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -113,7 +114,16 @@ export const PANELS = {
     const input = document.createElement('textarea');
     input.rows = 1;
     // 狭い画面で切れない長さにする。/plan の案内は ⌘ の一覧にある。
-    input.placeholder = '指示を書く（Enter で送る・Shift+Enter で改行）';
+    /*
+     * **案内は一行で収まる長さにする。**
+     *
+     * 「指示を書く（Enter で送る・Shift+Enter で改行）」は、会話のパネルの幅
+     * （既定 380px）でも二行に折れて、二行目が切れていた（実測。狭い配置では
+     * 「指示を」しか読めない）。詳しい方は title に置く（指で触る画面では出ないが、
+     * 送るボタンが在るので送り方は分かる）。
+     */
+    input.placeholder = '指示を書く';
+    input.title = 'Enter で送る・Shift+Enter で改行';
     const send = el('button', 'primary send', '送る');
     // 動いていないときは、そもそも出さない。**押せないものは邪魔なだけ。**
     const stop = el('button', 'ghost icon', '■');
@@ -132,7 +142,8 @@ export const PANELS = {
 
     // 声。使えない環境では、そもそも出さない（押せないボタンは邪魔なだけ）。
     const Recog = window.SpeechRecognition ?? window.webkitSpeechRecognition;
-    const mic = el('button', 'ghost icon', '🎤');
+    // 狭いときに引っ込める側（名前で分かるようにしておく。style.css の @container）。
+    const mic = el('button', 'ghost icon opt', '🎤');
     mic.type = 'button';
     mic.title = Recog ? '声で入れる' : 'この環境では声を使えません';
     if (!Recog) mic.style.display = 'none';
@@ -140,7 +151,7 @@ export const PANELS = {
     // コマンド。**送る所の隣に置く。**
     // 横の板の並びに置いていたので、書いている手から遠かった。
     // 使うのは「いま書いているとき」なので、書く所の隣に在るべきもの。
-    const cmd = el('button', 'ghost icon', '⌘');
+    const cmd = el('button', 'ghost icon opt', '⌘');
     cmd.type = 'button';
     cmd.title = 'コマンド (Ctrl+K)';
     cmd.onclick = () => window.aasOpenPalette?.();
@@ -226,9 +237,13 @@ export const PANELS = {
       }
     };
 
-    const kb = (n) => (n >= 1024 * 1024
-      ? `${(n / 1024 / 1024).toFixed(1)}MB`
-      : `${Math.max(1, Math.round(n / 1024))}KB`);
+    /*
+     * 大きさの出し方。**小さいものを 1KB と言わない。**
+     *
+     * 1KB 未満を切り上げていたので、20 バイトのファイルも「1KB」と出ていた
+     * （押して実測）。渡したものが正しく渡っているかを、ここで見る人もいる。
+     */
+    const kb = (n) => sizeText(n);
 
     /** 渡されたものを預ける。落とす・貼る・選ぶ、どの道でもここへ来る。 */
     const take = async (files) => {
@@ -311,7 +326,56 @@ export const PANELS = {
     wrap.append(jump);
     const follow = () => { if (pinned) log.scrollTop = log.scrollHeight; else jump.hidden = false; };
 
-    const add = (node) => { log.append(node); follow(); return node; };
+    /*
+     * **まだ何も無いときに、何を書けばいいか分からない。**
+     *
+     * 開いた直後の会話は、空の箱と「指示を書く」だけだった。初めて触る人は、
+     * ここで何を打てるのかが分からない（押せば入る例が在れば、そこから始められる）。
+     * 例は**入れるだけで送らない**。押した瞬間に走り出すと、確かめる間が無い。
+     */
+    const guide = el('div', 'chat-guide');
+    {
+      guide.append(el('div', '', 'やってほしいことを、そのまま書いてください。'));
+      const chips = el('div', 'chat-chips');
+      for (const text of [
+        'このリポジトリの構成を教えて',
+        'いま開いているファイルが何をしているか説明して',
+        'テストを書いて',
+      ]) {
+        const chip = el('button', 'ghost chip-btn', text);
+        chip.type = 'button';
+        chip.title = '書きかけの指示に入れる（送りません）';
+        chip.onclick = () => { input.value = text; input.focus(); };
+        chips.append(chip);
+      }
+      guide.append(chips);
+      guide.append(el('div', 'dim', 'ファイルは横の一覧の @ で添えられます。Ctrl+K でコマンド。'));
+    }
+    /** 何か出たら、案内は引っ込める。空に戻ったら、また出す。 */
+    let guided = false;
+    const showGuide = () => {
+      if (guided || log.childNodes.length > 0) return;
+      log.append(guide);
+      guided = true;
+    };
+    const hideGuide = () => {
+      if (!guided) return;
+      guide.remove();
+      guided = false;
+    };
+    /*
+     * 出し先。ふだんは `log`。**古い分を継ぎ足すときだけ**、いったん別の入れ物へ
+     * 出してから頭に差し込む（`card()` の中でも `add()` を呼ぶので、出し先は
+     * ここで切り替えられるようにしておく）。
+     */
+    let sink = null;
+    const add = (node) => {
+      if (sink) { sink.append(node); return node; }
+      hideGuide();
+      log.append(node);
+      follow();
+      return node;
+    };
 
     /** 一言。種類で色が変わるだけの、いちばん軽い形。 */
     const note = (cls, text) => {
@@ -450,6 +514,8 @@ export const PANELS = {
           body: JSON.stringify({
             text: isPlan ? text.slice('/plan'.length).trim() : text,
             attachments: ids,
+            // いま開いている所（名前・行・選んでいる字）。開いていなければ付かない。
+            ...(ctx.editorNow?.() ? { editor: ctx.editorNow() } : {}),
           }),
         });
       } catch (e) {
@@ -519,10 +585,8 @@ export const PANELS = {
       } catch { /* 取れなければ、これから来る分だけ */ }
     };
 
-    ctx.showHistory = (messages) => {
-      log.textContent = '';
-      stream = null;
-      openTools.clear();
+    /** やりとりを並べる。出し先は `add()` が決める（`log` か、継ぎ足し用の入れ物）。 */
+    const lay = (messages) => {
       for (const m of messages) {
         if (m.role === 'user') { add(el('div', 'asked', m.content)); continue; }
         if (m.role === 'assistant') {
@@ -535,12 +599,59 @@ export const PANELS = {
         }
         // 道具の結果。直前の札の中へ入れる。
         if (m.role === 'tool') {
-          const last = log.lastElementChild;
+          const last = (sink ?? log).lastElementChild;
           if (last?.classList.contains('tool')) {
             last.querySelector('.card-body')?.append(el('pre', 'tool-out', m.content));
           }
         }
       }
+    };
+
+    /**
+     * 一度に並べる数。
+     *
+     * **長い会話を開くと、画面が固まっていた。**1500 往復（3000 件）の会話を
+     * 開いたところ、**5.8 秒**返らず、その間フレームが一度も進まなかった（実測）。
+     * 何時間も動かし続ける作りなので、会話は普通に伸びる。
+     *
+     * 出すのは後ろから。古い分は「前を出す」で足す（押さなければ描かない）。
+     */
+    const SHOWN = 200;
+
+    ctx.showHistory = (messages) => {
+      log.textContent = '';
+      /*
+       * **消したことを、案内の側にも知らせる。**`textContent = ''` は案内の節ごと
+       * 消すが、`guided`（出したかどうか）は残る。残ったままだと、次に出そうとしても
+       * 「もう出ている」と判じて出さない（配る形の中で実際に出なかった）。
+       */
+      guided = false;
+      // 話が一つも無い会話に切り替えたら、案内をまた出す。
+      if (!messages || messages.length === 0) setTimeout(showGuide, 0);
+      stream = null;
+      openTools.clear();
+      const all = messages ?? [];
+      let from = Math.max(0, all.length - SHOWN);
+      if (from > 0) {
+        const more = el('button', 'ghost log-more', `前の ${from} 件を出す`);
+        more.type = 'button';
+        more.onclick = () => {
+          const next = Math.max(0, from - SHOWN);
+          // いったん別の入れ物へ出してから、押し場所の後ろへ差し込む。
+          const held = document.createElement('div');
+          sink = held;
+          try { lay(all.slice(next, from)); } finally { sink = null; }
+          // 差し込む前の「下からの距離」を覚えて、読んでいた所を動かさない。
+          const bottom = log.scrollHeight - log.scrollTop;
+          more.after(...held.childNodes);
+          log.scrollTop = log.scrollHeight - bottom;
+          from = next;
+          if (from === 0) more.remove();
+          else more.textContent = `前の ${from} 件を出す`;
+        };
+        log.append(more);
+      }
+      lay(all.slice(from));
       follow();
     };
 
@@ -636,7 +747,18 @@ export const PANELS = {
       else if (e.type === 'failed') {
         const c = card('✗', `検証に失敗（${e.round}回目）`, '', 'ng');
         c.box.open = true;
-        c.body.append(el('pre', 'tool-out', e.digest.split('\n').slice(-12).join('\n')));
+        /*
+         * **切ったことを、黙って隠さない。**
+         *
+         * ここは末尾 12 行だけを出していた。本体は 40 行まで持っているので、
+         * **最初に落ちた所が上にあると、それが見えないまま**「これで全部」に見える。
+         */
+        const lines = e.digest.split('\n');
+        const tail = lines.slice(-12);
+        if (lines.length > tail.length) {
+          c.body.append(el('div', 'dim', `（前の ${lines.length - tail.length} 行は出していません）`));
+        }
+        c.body.append(el('pre', 'tool-out', tail.join('\n')));
       } else if (e.type === 'preexisting') {
         note('warn', 'この失敗は作業前から出ています。今回の作業が原因ではありません。');
       } else if (e.type === 'tampered') note('bad', e.reason);
@@ -701,7 +823,10 @@ export const PANELS = {
         const line = el('div', `concern ${con.severity}`);
         line.append(el('span', 'chip', con.severity === 'block' ? '要対応' : '確認'), el('span', '', con.reason));
         box.append(line);
-        for (const w of (con.where ?? []).slice(0, 5)) box.append(el('div', 'concern-where', w));
+        // 場所は 5 か所まで。**切ったことは言う**（無いのと区別が付かなくなる）。
+        const where = con.where ?? [];
+        for (const w of where.slice(0, 5)) box.append(el('div', 'concern-where', w));
+        if (where.length > 5) box.append(el('div', 'concern-where dim', `ほかに ${where.length - 5} か所`));
       }
       if (r.concerns.length === 0) box.append(el('div', 'dim', '指摘はありません。'));
       add(box);
@@ -803,31 +928,59 @@ export const PANELS = {
        * 書き込みのときだけ出す。コマンドも、外へ出るのも、協議も、毎回訊く。
        */
       const all = req.kind === 'write' ? el('button', '', 'この依頼は以降訊かない') : null;
-      const answer = (approved, everything) => {
+      const answer = async (approved, everything) => {
         // 選ばれた塊。全部に印が付いていれば、そのまま全部通す。
         const chosen = picks.map((t, i) => (t.checked ? i : -1)).filter((i) => i >= 0);
-        const partial = approved && !everything && picks.length > 0 && chosen.length < picks.length;
-        fetch('/api/approve', {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            id: e.id, approved,
-            ...(partial ? { hunks: chosen } : {}),
-            ...(everything ? { all: true } : {}),
-          }),
-        });
+        // チェックを全部外して許可は、拒否と同じ。何も通さない（「以降訊かない」も同じ）。
+        if (approved && picks.length > 0 && chosen.length === 0) { approved = false; everything = false; }
+        /*
+         * **外した塊を、押し場所によって黙って通さない。**
+         *
+         * ここは「以降訊かない」のときだけ塊の番号を送らず、本体は全文を
+         * 書いていた。チェックを外してからそちらを押した人は、外したはずの塊まで
+         * 書かれる（画面は「許可（この依頼は以降訊かない）」と出す）。
+         * 選んだ塊は、どちらの押し場所でも送る。
+         */
+        const partial = approved && picks.length > 0 && chosen.length < picks.length;
         const said = !approved ? '拒否'
+          : partial ? `一部だけ許可（${chosen.length}/${picks.length}${everything ? '、以降訊かない' : ''}）`
           : everything ? '許可（この依頼は以降訊かない）'
-          : partial ? `一部だけ許可（${chosen.length}/${picks.length}）`
           : '許可';
-        box.replaceChildren(el('div', approved ? 'good' : 'dim', `${what} → ${said}`));
+        /*
+         * **返事を見てから、押した結果を出す。**
+         *
+         * 送ったところで「許可」に書き換えていたので、10 分で切れたあとに
+         * 押すと、本体は 404（その承認は既に終わっています）を返し、モデルには
+         * 「拒否しました」が渡っているのに、**画面だけが「許可」になる。**
+         */
+        box.replaceChildren(el('div', 'dim', `${what} → 送っています…`));
+        let ok = false;
+        let why = '';
+        try {
+          const r = await fetch('/api/approve', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              id: e.id, approved,
+              ...(partial ? { hunks: chosen } : {}),
+              ...(everything ? { all: true } : {}),
+            }),
+            signal: AbortSignal.timeout(20000),
+          });
+          ok = r.ok;
+          if (!ok) {
+            const j = await r.json().catch(() => ({}));
+            why = j.error ?? `${r.status}`;
+          }
+        } catch (err) {
+          why = err?.message ?? String(err);
+        }
+        box.replaceChildren(ok
+          ? el('div', approved ? 'good' : 'dim', `${what} → ${said}`)
+          : el('div', 'dim', `${what} → 送れませんでした（${why}）`));
       };
-      yes.onclick = () => {
-        // 印を全部外して「許可」は、拒否と同じ。何も通さない。
-        if (picks.length > 0 && picks.every((t) => !t.checked)) return answer(false);
-        answer(true);
-      };
-      no.onclick = () => answer(false);
-      if (all) all.onclick = () => answer(true, true);
+      yes.onclick = () => { void answer(true); };
+      no.onclick = () => { void answer(false); };
+      if (all) all.onclick = () => { void answer(true, true); };
       const menu = el('div', 'ask-menu');
       menu.append(yes, no);
       if (all) menu.append(all);
@@ -842,6 +995,9 @@ export const PANELS = {
     ctx.on('approval', showApproval);
     // 作り直されたら、待っている承認も取り直す（`restore` から渡ってくる）。
     ctx.showApprovals = (waiting) => { for (const a of waiting) showApproval(a); };
+
+    // まだ何も無いなら、何を書けばいいかを出す（続きの在る会話では出ない）。
+    showGuide();
   },
 
   /*
@@ -928,8 +1084,10 @@ export const PANELS = {
       const live = s.roles.filter((r) => !r.retired);
       body.append(rows(live, (r) => {
         const row = el('div', 'row');
-        row.append(el('span', 'key mono', r.codename), el('span', '', r.name),
-          el('span', 'dim', r.access.join('/')));
+        const access = el('span', 'dim', r.access.join('/'));
+        // 狭いと末尾が切れる。**何を許してあるかは、切れて困る。**指せば全部出す。
+        access.title = r.access.join('/');
+        row.append(el('span', 'key mono', r.codename), el('span', '', r.name), access);
         row.title = r.disposition;
         return row;
       }));
@@ -1077,16 +1235,29 @@ export const PANELS = {
     ctx.on('thinkEvent', ({ event: v }) => { if (v.type === 'proposal') void draw(); });
   },
 
+  /**
+   * 日課。**仕込んであるもの全部を出す。**
+   *
+   * ここまでは記録（いつ回ったか）だけを出していたので、**まだ一度も回って
+   * いないと空**で、何が仕込まれているのかも、いつ起きるのかも分からなかった。
+   * しかも読んでいた欄（`lastRunAt`）は記録に無い名前で、**記録が在っても
+   * 必ず「未実施」**になっていた。
+   */
   duties(body, ctx) {
     ctx.onState((s) => {
       body.replaceChildren();
-      if (!s.duties || s.duties.length === 0) return body.append(empty('日課の記録はまだありません。'));
+      if (!s.duties || s.duties.length === 0) return body.append(empty('日課はまだありません。'));
       body.append(rows(s.duties, (d) => {
         const row = el('div', 'row');
-        const when = d.lastRunAt ? new Date(d.lastRunAt).toLocaleString('ja-JP') : '未実施';
-        row.append(el('span', 'key mono', d.dutyId ?? d.id ?? ''), el('span', 'dim', when));
+        const last = typeof d.lastAt === 'number' ? new Date(d.lastAt).toLocaleString('ja-JP') : '未実施';
+        const when = el('span', 'dim', d.when ?? '');
+        const name = el('span', '', d.name ?? d.id ?? '');
+        // いま発生しているものは、そう分かるようにする。
+        const state = el('span', d.due ? 'warn' : 'dim', d.due ? `${d.catchUp ? '未了（前の分）' : '未了'} · ${last}` : last);
+        row.append(el('span', 'key mono', d.codename ?? d.id ?? ''), name, when, state);
+        row.title = d.purpose ?? '';
         return row;
-      }, 2));
+      }, 4));
     });
   },
 
@@ -1143,9 +1314,18 @@ export const PANELS = {
        * 拾い直す手が無いと、立ち上げ直すまで出てこない。
        * 案内の文（「読み直す」）が指しているのは、この押し場所。
        */
-      const again = el('button', 'ghost', '⟳ 置いたものを読み直す');
+      /*
+       * **何を読み直すのかは、動かし方で違う。**Ollama のときに
+       * 「置いたものを読み直す」と出していたので、押しても何も変わらない
+       * （Ollama は保存先の .gguf を使わない）。押せるのに効かない口は、
+       * 壊れていると読まれる。
+       */
+      const ollama = data.runtime === 'ollama';
+      const again = el('button', 'ghost', ollama ? '⟳ 一覧を取り直す' : '⟳ 置いたものを読み直す');
       again.type = 'button';
-      again.title = '保存先に自分で入れた .gguf を拾い直します';
+      again.title = ollama
+        ? 'Ollama に入っているモデルを一覧し直します'
+        : '保存先に自分で入れた .gguf を拾い直します';
       again.onclick = async () => {
         again.disabled = true;
         again.textContent = '読み直しています…';
@@ -1154,13 +1334,26 @@ export const PANELS = {
       status.append(again);
 
       // 手元にあるもの
-      list.replaceChildren(el('div', 'dim', '手元のモデル'));
+      list.replaceChildren(el('div', 'dim', ollama ? 'Ollama に入っているモデル' : '手元のモデル'));
       if (!data.installed || data.installed.length === 0) {
-        list.append(empty('まだありません。下から取ってこられます。'));
+        /*
+         * **在るものを「ありません」と言わない。**保存先に .gguf を入れても、
+         * Ollama のときは一つも出ず「まだありません」とだけ出ていた。落として
+         * 置いた人には、何が起きているのか分からない（社用PCはブラウザでしか
+         * 落とせないので、置く道がいちばん使われる）。
+         */
+        const why = ollama && data.localGguf > 0;
+        const note = empty(why
+          ? `Ollama には入っていません。\n保存先には .gguf が ${data.localGguf} 件ありますが、`
+            + 'いまの動かし方（Ollama）では使いません。\n設定 → モデル で「中で読む」に切り替えると使えます。'
+          : 'まだありません。下から取ってこられます。');
+        // 何行もある案内は、行の頭をそろえる（中央寄せだと読む所を目で探す）。
+        if (why) note.className = 'empty guide';
+        list.append(note);
       } else {
         for (const m of data.installed) {
           const row = el('div', 'row');
-          const size = m.sizeBytes ? `${(m.sizeBytes / 1024 ** 3).toFixed(1)}GB` : '';
+          const size = sizeText(m.sizeBytes);
           const name = el('span', `key mono${m.path ? ' wrap' : ''}`, m.ref);
           // モデルの道。どこに在るかを、開いて・コピーして確かめられる。
           if (m.path) name.append(pathActions(m.path));
@@ -1410,7 +1603,19 @@ export const PANELS = {
         const at = el('button', 'mono as-link search-at', `${h.path}:${h.line}`);
         at.title = 'ここを開く';
         at.onclick = () => { ctx.revealFile?.(h.path, h.line); };
-        row.append(at, el('div', 'mono search-line', h.text));
+        /*
+         * **探した所を、会話へ渡す。**
+         *
+         * 見つけた行を AI に訊くとき、道と行を打ち直していた（`src/a.ts:120`）。
+         * 打ち間違えれば、別の所の話になる。押した所から渡す。
+         */
+        const ask = el('button', 'icon search-ask', '@');
+        ask.type = 'button';
+        ask.title = '依頼に添える（この場所を渡す）';
+        ask.onclick = () => { ctx.insertText?.(`${h.path}:${h.line}`); };
+        const head = el('div', 'search-hit-head');
+        head.append(at, ask);
+        row.append(head, el('div', 'mono search-line', h.text));
         list.append(row);
       }
     };
@@ -1664,8 +1869,36 @@ export const PANELS = {
     });
   },
 
-  note(body, _ctx, spec) {
-    body.append(el('div', 'dim', String(spec.options?.text ?? '（覚え書き）')));
+  /**
+   * 覚え書き。**打てる。**
+   *
+   * ここまでは渡された字を出すだけで、`表示` の一覧に「メモ」と並んでいるのに
+   * **一文字も書けなかった**。開いた人は、書ける所を探して諦めることになる。
+   * 打った分は配置と一緒に残す（読み直しても消えない）。
+   *
+   * 知らない種類の受け皿でもあるので、そのときは説明が最初の中身として入る。
+   */
+  note(body, ctx, spec) {
+    const area = document.createElement('textarea');
+    area.className = 'note-area';
+    area.spellcheck = false;
+    area.placeholder = '覚え書き（ここに書いたものは残ります）';
+    area.value = String(spec.options?.text ?? '');
+    const state = el('div', 'dim note-state', '');
+    body.append(area, state);
+
+    let saving;
+    const keep = async () => {
+      state.textContent = '書き留めています…';
+      const ok = await ctx.saveNote?.(spec.id, area.value);
+      state.textContent = ok ? '書き留めました' : '書き留められませんでした';
+    };
+    area.addEventListener('input', () => {
+      state.textContent = '';
+      clearTimeout(saving);
+      // 打つたびに送らない。手が止まってから送る。
+      saving = setTimeout(() => { void keep(); }, 600);
+    });
   },
 
   /**
@@ -1731,24 +1964,151 @@ export const PANELS = {
     const shut = el('button', 'ghost icon', '×');
     bar.append(needle, prev, next, swap, one, all, lineAt, count, shut);
 
-    wrap.append(head, bar, stage);
+    /*
+     * **AI が同じファイルを書いたことを、直している最中の人に伝える帯。**
+     *
+     * ここまで、直している最中（保存していない）に AI がそのファイルを書くと、
+     * 画面は**何も言わずに人の版を出し続けていた**。ファイルは AI の版、欄は
+     * 人の版、と二つに割れたまま、保存した方が相手を消す。どちらを残すかは
+     * 人が決めることなので、起きたことを出して選ばせる。
+     */
+    const notice = el('div', 'editor-notice');
+    notice.hidden = true;
+    const noticeText = el('span', 'editor-notice-text', '');
+    const noticeActs = el('span', 'editor-notice-acts');
+    notice.append(noticeText, noticeActs);
+
+    wrap.append(head, notice, bar, stage);
     body.append(wrap);
 
     let path = '';
     let loaded = '';
+    /*
+     * **行末は、開いたファイルのものに戻して保存する。**
+     *
+     * ブラウザの欄は、入れた `\r\n` を `\n` に直して持つ（実測）。直したのは
+     * 欄の中だけなので、そのまま保存すると**一行も触っていないのに全行が
+     * 変わる**。配る先は Windows で、CRLF のファイルは普通に在る。
+     * 開いたときの形を覚えて、保存でその形に戻す。
+     */
+    let eol = '\n';
+    /** 開いたときの中身から作られた stamp。保存のときに送って、上書きを止めてもらう。 */
+    let stamp = '';
+    /** AI の版を読む前に預かった、自分の直し。**消さずに戻せるように持つ。** */
+    let mine = null;
+    /*
+     * 預かった直しを、**ファイルごとに**持つ。
+     *
+     * `mine` 一つだけで持っていたので、別のファイルを開いた瞬間に消えていた
+     * （`mine = same ? mine : null`）。「AI の版を出す」を押すと欄は AI の版と
+     * 同じになる＝`dirty()` は false なので、離れるときの預かりも走らない。
+     * **どこにも残らないまま、戻す口だけが消える。**開き直したら返せるようにする。
+     */
+    const held = new Map();
     const dirty = () => area.value !== loaded;
-    /** 行番号を、いまの中身に合わせる。 */
+
+    /**
+     * 知らせの帯を出す。押し場所は毎回作り直す（前の押し方が残らないように）。
+     *
+     * `kind` が `'info'` なら、ただの知らせ（色を落とす）。既定は、放っておくと
+     * 書いたものが消える方の知らせ。
+     */
+    const tell = (text, acts, kind) => {
+      /*
+       * **ただの知らせで、消えるものが在る知らせを押しのけない。**
+       *
+       * 「AI が書き換えました」を出している最中に打つと、補完の断りが同じ帯へ
+       * 来て、**割れていることの知らせが消えていた**（sweep で見つけた）。
+       * 直している最中なので、打つのはむしろ普通のことだった。
+       */
+      if (kind === 'info' && !notice.hidden && !notice.className.includes('info')) return;
+      notice.className = kind === 'info' ? 'editor-notice info' : 'editor-notice';
+      noticeText.textContent = text;
+      noticeActs.replaceChildren();
+      for (const [label, run] of acts) {
+        const b = el('button', 'ghost', label);
+        b.type = 'button';
+        b.onclick = run;
+        noticeActs.append(b);
+      }
+      const close = el('button', 'ghost icon', '×');
+      close.type = 'button';
+      close.title = '閉じる（直しはそのまま）';
+      close.onclick = () => { notice.hidden = true; };
+      noticeActs.append(close);
+      notice.hidden = false;
+    };
+
+    /** 自分の直しを預かって、いま在る中身（AI の版）に取り替える。 */
+    const takeOver = (raw, newStamp) => {
+      /*
+       * **行末をそろえてから取り込む。**
+       *
+       * 欄は `\r\n` を `\n` に直して持つので、生のまま `loaded` に入れると
+       * 欄と食い違い、**一文字も触っていないのに「直しています」**のまま
+       * 戻らなくなる（開くときは `open` でそろえているのに、ここだけ素通し
+       * だった）。開いたときの行末も、取り込んだ方に合わせる。
+       */
+      const text = String(raw ?? '').replace(/\r\n/g, '\n');
+      eol = String(raw ?? '').includes('\r\n')
+        && !String(raw ?? '').replace(/\r\n/g, '').includes('\n') ? '\r\n' : '\n';
+      mine = area.value;
+      if (path) held.set(path, mine);
+      loaded = text;
+      stamp = newStamp ?? '';
+      area.value = text;
+      refresh();
+      tell('AI の版を出しました。自分の直しは預かっています。', [
+        ['自分の直しに戻す', () => {
+          area.value = mine ?? area.value;
+          held.delete(path);
+          refresh();
+          tell('自分の直しに戻しました。保存すると AI の版を上書きします。', []);
+        }],
+      ]);
+    };
+    /*
+     * 行番号を、いまの中身に合わせる。
+     *
+     * **打つたびに全部書き直さない。**ここは一文字ごとに 1 から行数まで
+     * 数字を繋ぎ直して、丸ごと入れ直していた。行が増えるほど遅くなり、
+     * 実測で 5000 行のファイルは一打 89ms、40000 行では 669ms かかっていた
+     * （3 段階で測った。200 行では 4ms）。**書きかけの字が遅れて出る。**
+     *
+     * 行の数が変わらなければ、番号は変わらない。数えるだけにして、
+     * 増えたときは足りない分を継ぎ足す（新しく書くときは、ここが多い）。
+     */
+    let drawnLines = -1;
+    let gutterText = '';
+    /** 行の数。`split` と違って、行の配列を作らない（大きいファイルで効く）。 */
+    const countLines = (text) => {
+      let n = 1;
+      for (let i = 0; i < text.length; i += 1) if (text.charCodeAt(i) === 10) n += 1;
+      return n;
+    };
     const drawLines = () => {
-      const n = area.value.split('\n').length;
-      let out = '';
-      for (let i = 1; i <= n; i += 1) out += `${i}\n`;
-      gutter.textContent = out;
+      const n = countLines(area.value);
+      if (n !== drawnLines) {
+        if (drawnLines > 0 && n > drawnLines) {
+          let add = '';
+          for (let i = drawnLines + 1; i <= n; i += 1) add += `${i}\n`;
+          gutterText += add;
+        } else {
+          let out = '';
+          for (let i = 1; i <= n; i += 1) out += `${i}\n`;
+          gutterText = out;
+        }
+        gutter.textContent = gutterText;
+        drawnLines = n;
+      }
       gutter.scrollTop = area.scrollTop;
     };
     const refresh = () => {
       save.disabled = !path || !dirty();
       state.textContent = !path ? '' : dirty() ? '直しています（Ctrl+S で保存）' : '保存してあります';
       drawLines();
+      // 打つたびに書き込むと重いので、手が止まってから預ける。
+      scheduleKeep();
     };
     area.oninput = refresh;
 
@@ -1764,6 +2124,67 @@ export const PANELS = {
      * 消さないので、押し間違いでも取り返しがつく。
      */
     const drafts = new Map();
+
+    /*
+     * **ブラウザを閉じても、書いたものを失わない。**
+     *
+     * 預かり（`drafts`）はこのパネルの中だけに在るので、**読み直すと消えていた。**
+     * 閉じる・押し間違えて再読み込み、で書いたものが消える（保存前なら戻せない）。
+     * 覚えておく所へ預ける。使えない環境もあるので、全部 try で囲む。
+     *
+     * 一緒に**預けたときの中身**（`base`）も置く。開き直したときに中身が変わって
+     * いたら、黙って戻さない（AI や別のブラウザが書いたものを、古い直しで上書きする）。
+     */
+    const DRAFT_AT = (p) => `aas.draft:${p}`;
+    /** これより大きいものは預けない（覚えておく所が溢れる）。 */
+    const DRAFT_MAX = 512 * 1024;
+    /** これより古い預かりは捨てる。 */
+    const DRAFT_KEEP_MS = 14 * 24 * 60 * 60 * 1000;
+    let toldTooBig = '';
+
+    const keepDraft = () => {
+      if (!path) return;
+      try {
+        if (!dirty()) { localStorage.removeItem(DRAFT_AT(path)); return; }
+        if (area.value.length > DRAFT_MAX) {
+          if (toldTooBig !== path) {
+            toldTooBig = path;
+            /*
+             * **「ブラウザを閉じると残りません」だけでは足りない。**
+             * 預かれないということは、パネルを開き閉じ・並べ替えしただけでも
+             * この欄が作り直されて消えるということ。そこまで言う。
+             */
+            tell('大きいので、保存していない直しを預かれません（パネルを作り直したときも、ブラウザを閉じたときも残りません。保存してください）。', [], 'info');
+          }
+          return;
+        }
+        localStorage.setItem(DRAFT_AT(path), JSON.stringify({ text: area.value, base: loaded, at: Date.now() }));
+      } catch { /* 覚えておく所が使えない環境もある */ }
+    };
+    /** 預かりを読む。形が違うもの・古いものは、その場で捨てる。 */
+    const readDraft = (p) => {
+      try {
+        const raw = localStorage.getItem(DRAFT_AT(p));
+        if (!raw) return undefined;
+        const got = JSON.parse(raw);
+        if (typeof got?.text !== 'string' || typeof got?.base !== 'string') {
+          localStorage.removeItem(DRAFT_AT(p));
+          return undefined;
+        }
+        if (typeof got.at === 'number' && Date.now() - got.at > DRAFT_KEEP_MS) {
+          localStorage.removeItem(DRAFT_AT(p));
+          return undefined;
+        }
+        return got;
+      } catch { return undefined; }
+    };
+    const dropDraft = (p) => { try { localStorage.removeItem(DRAFT_AT(p)); } catch { /* 同上 */ } };
+
+    let keeping;
+    const scheduleKeep = () => {
+      clearTimeout(keeping);
+      keeping = setTimeout(keepDraft, 400);
+    };
 
     /**
      * 欄のここからここまでを選ぶ。
@@ -1809,16 +2230,36 @@ export const PANELS = {
       state.textContent = `${n} 行目`;
     };
 
-    /** 欄の一部を入れ替える。戻せる形（setRangeText）が在れば、そちらを使う。 */
-    const put = (from, to, text) => {
-      if (typeof area.setRangeText === 'function') {
-        area.setRangeText(text, from, to, 'select');
-      } else {
+    /**
+     * 欄の一部を、**Ctrl+Z で戻せる形で**書き換える。
+     *
+     * `setRangeText` を「戻せる形」と書いていたが、**戻せない**。Chromium で
+     * 実測したところ、`setRangeText`・丸ごと代入のどちらも戻し履歴に乗らず、
+     * 置き換えたあと Ctrl+Z を押しても戻らなかった。人が打ったのと同じ扱いで
+     * 入る `execCommand('insertText')` だけが乗る（一度の呼びで一段。空文字を
+     * 渡せば、選んだ所を消すのも乗る。これも実測）。古い名前だが、履歴へ入れる
+     * 口はこれしかない。効かない所では `setRangeText` に落とす（戻せないが、
+     * 書き換えはできる）。
+     *
+     * カーソルは入れた字の後ろに置く。選び直したい所は、呼んだ側で置き直す。
+     */
+    const writeRange = (from, to, text) => {
+      try {
+        if (typeof document.execCommand === 'function') {
+          area.focus();
+          area.setSelectionRange(from, to);
+          if (document.execCommand('insertText', false, text) === true) return;
+        }
+      } catch { /* 効かない所は下に落とす */ }
+      if (typeof area.setRangeText === 'function') area.setRangeText(text, from, to, 'end');
+      else {
         area.value = area.value.slice(0, from) + text + area.value.slice(to);
-        area.selectionStart = from;
+        area.selectionStart = from + text.length;
         area.selectionEnd = from + text.length;
       }
     };
+    /** 当たった所を入れ替える。入れたあとは、次の当たりを探せる位置に居る。 */
+    const put = (from, to, text) => writeRange(from, to, text);
 
     /** いま探している文字が何件在るか。0 件なら、そう出す。 */
     const tally = () => {
@@ -1857,15 +2298,22 @@ export const PANELS = {
       state.textContent = `${line} 行目`;
     };
 
-    /** いま選んでいる所が当たりなら、置き換える。違えば次の当たりへ動くだけ。 */
+    /**
+     * 当たりを一つ置き換えて、次の当たりへ動く。
+     *
+     * **押しても何も起きない回を作らない。**ここは「選んでいる所が当たりのときだけ」
+     * 置き換えていた。探す文字を打っただけでは何も選んでいないので、置換を押すと
+     * 次の当たりへ動くだけで、**一度目は何も置き換わらない**（押して実測）。
+     * 選んでいなければ、まず次の当たりへ動いてから置き換える。
+     * 置き換えるのは当たりだけ、は変えない。
+     */
     const swapOne = () => {
       const q = needle.value;
       if (!q || area.disabled) return;
-      const picked = area.value.slice(area.selectionStart, area.selectionEnd);
-      if (picked === q) {
-        put(area.selectionStart, area.selectionEnd, swap.value);
-        refresh();
-      }
+      if (area.value.slice(area.selectionStart, area.selectionEnd) !== q) step(false);
+      if (area.value.slice(area.selectionStart, area.selectionEnd) !== q) { tally(); return; }
+      put(area.selectionStart, area.selectionEnd, swap.value);
+      refresh();
       step(false);
     };
 
@@ -1874,13 +2322,27 @@ export const PANELS = {
       if (!q || area.disabled) return;
       const n = tally();
       if (n === 0) return;
-      area.value = area.value.split(q).join(swap.value);
+      /*
+       * **Ctrl+Z で戻せる形で入れ替える。**
+       *
+       * 丸ごと代入していたので、ブラウザの戻し履歴が消えて、押した人は
+       * 置換の前に戻せなかった（欄の巻きとカーソルも頭へ飛ぶ）。一つずつの
+       * 置換（`put`）は `setRangeText` を使っているのに、ここだけ素通しだった。
+       */
+      const next = area.value.split(q).join(swap.value);
+      const caret = Math.min(area.selectionStart, next.length);
+      const top = area.scrollTop;
+      writeRange(0, area.value.length, next);
+      area.selectionStart = caret; area.selectionEnd = caret;
+      area.scrollTop = top;
       refresh();
       count.textContent = `${n} 件を置き換えました`;
     };
 
     /** 探す所を出す。出ていれば、打つ所へ手を戻す。 */
     const showFind = (which) => {
+      // 手が欄から離れるので、灰色は残さない（見えている所とカーソルがずれる）。
+      clearGhost();
       bar.hidden = false;
       tally();
       (which === 'line' ? lineAt : needle).focus?.();
@@ -1903,10 +2365,12 @@ export const PANELS = {
       if (!isPlainEnter(e)) return;
       e.preventDefault();
       const n = Number(lineAt.value);
+      // **押して何も起きない回を作らない。**数字でなければ、そう言う。
       if (Number.isFinite(n) && n >= 1) goTo(Math.floor(n));
+      else state.textContent = '行番号は数字で入れてください';
     };
 
-    const open = async (p, line) => {
+    const open = async (p, line, quiet) => {
       // 離れる前に、保存していない分を預かる。
       if (path && p !== path && dirty()) drafts.set(path, area.value);
       let r;
@@ -1921,60 +2385,258 @@ export const PANELS = {
       if (!r.ok) {
         name.textContent = p;
         state.textContent = j.error ?? '開けませんでした';
+        /*
+         * **開き直せなかったときに、直している欄を空にしない。**
+         *
+         * 開いているファイルが消えた・名前が変わった（404）、大きすぎる（413）、
+         * 字でないものが入っている（415）状態で同じ名前を押すと、ここで欄を
+         * 空にしていた。**開けないので預かりも出せない**＝保存していない直しが
+         * どこにも残らない。開けなかっただけなら、欄はそのままにして言う。
+         */
+        if (p === path && dirty()) {
+          keepDraft();
+          tell(`開き直せませんでした（${j.error ?? r.status}）。保存していない直しは、欄に残してあります。`, []);
+          return;
+        }
         area.value = ''; area.disabled = true; path = ''; loaded = '';
         save.disabled = true;
         return;
       }
+      const raw = String(j.content ?? '');
+      const text = raw.replace(/\r\n/g, '\n');
       /*
-       * **同じ中身を読み直しただけなら、出ている言葉を取り替えない。**
+       * 全部 CRLF のファイルだけ、CRLF に戻す。混ざっているものは触らない
+       * （直していない行まで書き換えることになる）。
+       */
+      const nextEol = raw.includes('\r\n') && !raw.replace(/\r\n/g, '').includes('\n') ? '\r\n' : '\n';
+      /*
+       * **行末が混ざっているなら、そう言う。**
+       *
+       * 欄は `\r\n` を `\n` に直して持つので、混ざったファイルは**開いて保存する
+       * だけで LF にそろう**（触っていない行も変わる）。全部 CRLF のものは元の形へ
+       * 戻せるが、混ざったものは戻せない。黙って変えない。
+       */
+      const mixedEol = raw.includes('\r\n') && raw.replace(/\r\n/g, '').includes('\n');
+      /*
+       * **同じ中身を読み直しただけなら、欄にも、出ている言葉にも触らない。**
        *
        * 手で保存すると、本体はその差分を全員へ配る（`diff`）。配られたものが
        * 自分の書き込みの写しなので、下の `ctx.on('session')` がここを呼び直す。
        * ここで `refresh()` を通っていたので、**「保存しました（+2 -1）」が
        * 「保存してあります」に化けていた。**書けたのか、何行変わったのかが
        * 消えるので、保存できたかどうかを画面から確かめられない。
-       * 中身が同じなら、読み直す意味も無い。
+       *
+       * **直している最中も、ここで返す。**ここは直していないときだけ通して
+       * いたので、同じファイルを開き直すと**保存していない直しが消えていた**。
+       * AI に `show_file` で開かせてから `replace_selection` で書き換えると、
+       * 後から返ってくる読み直しが、当てた直しを消す（押して実測）。
+       * ファイルの側が変わっていないなら、読み直す意味は無い。
        */
-      if (p === path && j.content === loaded && !dirty()) {
+      if (p === path && text === loaded) {
         name.textContent = p;
         goTo(line);
         return;
       }
-      path = p; loaded = j.content;
+      /*
+       * **直している最中に、ファイルの側が変わっていた。**黙って捨てない。
+       *
+       * 自分の直しは預かって、「自分の直しに戻す」から戻せるようにする
+       * （AI が書き換えたときと同じ扱い）。ここを素通りさせると、開き直した
+       * 瞬間に書いていたものが消える。
+       */
+      if (p === path && dirty()) {
+        /*
+         * **行末をそろえる前のものを渡す。**
+         *
+         * ここは `eol` を入れてから正規化済みの `text` を渡していた。渡した
+         * 先（`takeOver`）は渡されたものから行末を見直すので、`\r\n` の無い
+         * `text` では `\n` に戻る。**直している最中に開き直すだけで、次の保存が
+         * 全行を書き換えていた**（一覧を押す・探した結果から飛ぶ、で起きる）。
+         */
+        name.textContent = p;
+        takeOver(raw, j.stamp);
+        goTo(line);
+        return;
+      }
+      /*
+       * **預かった直しを、読み直しで捨てない。**
+       *
+       * 「AI の版を出す」を押すと、自分の直しは `mine` にだけ残る（預かりは
+       * 保存済み扱いで消えている）。そこへもう一度書き換えが来ると、ここで
+       * `mine` を捨てていたので、**戻す先が無くなっていた。**同じファイルの
+       * 読み直しなら、預かったままにする。
+       */
+      const same = p === path;
+      eol = nextEol;
+      path = p; loaded = text; stamp = j.stamp ?? ''; mine = same ? mine : (held.get(p) ?? null);
+      notice.hidden = true;
       name.textContent = p;
       // 預けた分が在れば、それを返す（消さずに戻す）。
-      const kept = drafts.get(p);
+      // このパネルの中に無ければ、覚えておく所を見る（ブラウザを閉じたあとでも戻せる）。
+      let kept = drafts.get(p);
+      if (kept === undefined) {
+        const saved = readDraft(p);
+        if (saved && saved.base === loaded) kept = saved.text;
+        else if (saved) {
+          /*
+           * **中身が変わっていたら、黙って戻さない。**
+           *
+           * 預けたときと違うということは、AI か別のブラウザが書いたということ。
+           * 古い直しで上書きすると、その書き換えが消える。出すかどうかは人が決める。
+           */
+          tell('前に保存していない直しが残っていますが、このファイルは後から変わっています。', [
+            ['その直しを出す', () => {
+              mine = area.value;
+              area.value = saved.text;
+              refresh();
+              tell('預かっていた直しを出しました。保存すると、いまのファイルを上書きします。', [
+                ['やめる', () => { area.value = mine ?? area.value; refresh(); tell('戻しました。', [], 'info'); }],
+              ]);
+            }],
+            ['捨てる', () => { dropDraft(p); tell('預かっていた直しを捨てました。', [], 'info'); }],
+          ]);
+        }
+      }
       area.value = kept ?? loaded;
       area.disabled = false;
       if (kept !== undefined) drafts.delete(p);
       refresh();
       if (kept !== undefined && kept !== loaded) state.textContent = '保存していない直しを戻しました（Ctrl+S で保存）';
-      area.focus();
+      if (mixedEol) tell('行末が混ざっています（CRLF と LF）。保存すると LF にそろいます。', [], 'info');
+      // 預かったままの直しが在るなら、戻せることを出す（黙って持っていても届かない）。
+      if (mine !== null && mine !== area.value) {
+        tell('前に預かった直しが残っています。', [
+          ['自分の直しに戻す', () => {
+            area.value = mine ?? area.value;
+            held.delete(p);
+            refresh();
+            tell('自分の直しに戻しました。保存すると、いまのファイルを上書きします。', []);
+          }],
+        ], 'info');
+      }
+      /*
+       * **打っている手を、AI の書き込みで奪わない。**
+       *
+       * ここは開いたら必ず欄へ手を移していた。チャットの欄に打っている途中で
+       * AI がそのファイルを書くと、読み直しがここを通って、**続きがファイルの
+       * 欄に入る**。人が押して開いたときだけ手を移す。
+       */
+      if (!quiet) area.focus();
       goTo(line);
     };
+
+    /*
+     * いま保存している中身。**自分の保存で流れてくる差分を、自分で受け止める。**
+     *
+     * 本体は書けた時点で差分を全員へ配る。その写しが**返事より先に戻ってくる**ので、
+     * まだ `loaded` を入れ替える前の欄は「直している最中」のままになり、
+     * 「AI がこのファイルを書き換えました」と出ていた（押して実測。自分で保存した
+     * だけなのに、身に覚えのない書き換えを知らされる）。
+     */
+    let savingNow = null;
 
     const store = async () => {
       if (!path || !dirty()) return;
       save.disabled = true;
       state.textContent = '保存しています…';
       let r;
+      savingNow = path;
+      /*
+       * **保存している間に、別のファイルへ移ることがある。**
+       *
+       * 返事を読んだところで `path` を見ていたので、移った先へ前のファイルの
+       * 結果を当てていた（`loaded` を移った先の中身にして「保存してあります」と
+       * 出し、預かりを捨て、stamp も前のファイルのものにする）。移った先の
+       * 書きかけが、次の読み直しで消える。**どのファイルの保存かを、覚えておく。**
+       */
+      const at = path;
+      /*
+       * **送った中身を覚えておく。**
+       *
+       * 返事のあと `loaded` を**いまの** `area.value` にしていた。返事を待つ間
+       * （最大 20 秒。モデルが動いていればもっと）に打った字は送っていないのに、
+       * `dirty()` が false になり、保存の押し場所は灰色、預かりも消える。
+       * **画面とディスクが違うまま、読み直しで打った分を失う。**
+       */
+      const sent = area.value;
       try {
         r = await fetch('/api/file', {
           method: 'PUT', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ path, content: area.value }),
+          // 開いたときの stamp を添える。開いたあとで誰かが書いていたら、本体が断る。
+          // 行末は、開いたときの形に戻してから渡す。
+          body: JSON.stringify({
+            path,
+            content: eol === '\r\n' ? sent.replace(/\n/g, '\r\n') : sent,
+            ...(stamp ? { stamp } : {}),
+          }),
           signal: AbortSignal.timeout(20000),
         });
       } catch (e) {
+        savingNow = null;
+        if (path !== at) {
+          // **移った先の画面は書き換えないが、保存できなかったことは言う。**
+          refresh();
+          tell(`${at} を保存できませんでした（${e.message ?? e}）。開き直すと、保存していない直しを戻せます。`, []);
+          return;
+        }
         // 繋がらなかったときに黙ると、書いたものが消えたように見える。欄は残す。
         state.textContent = `保存できませんでした（${e.message ?? e}）`;
         save.disabled = false;
         return;
       }
       const j = await r.json().catch(() => ({}));
+      savingNow = null;
+      /*
+       * 移った先の画面を、前のファイルの結果で書き換えない。
+       *
+       * **ただし、書けていないなら言う。**ここは 409（`いま作業中です` は
+       * モデルが動いていれば普通に出る）や 500 を丸ごと捨てていた。Ctrl+S の
+       * 直後に別のファイルを押すと、**保存できていないことに気づけない。**
+       */
+      if (path !== at) {
+        refresh();
+        if (!r.ok) {
+          tell(`${at} を保存できませんでした（${j.error ?? r.status}）。開き直すと、保存していない直しを戻せます。`, []);
+        }
+        return;
+      }
+      /*
+       * **断られたら、選ばせる。**黙って上書きもしないし、黙って捨てもしない。
+       * 上書きを選んでも、前の中身は戻り先に残る（本体が控える）。
+       */
+      if (r.status === 409 && j.conflict) {
+        state.textContent = '保存していません（別の所で変わっています）';
+        save.disabled = false;
+        tell('保存していません。開いたあとで、このファイルは別の所で変わりました（AI の書き換えなど）。', [
+          ['AI の版を出す', () => takeOver(j.content ?? loaded, j.stamp)],
+          ['自分の版で上書きする', () => { stamp = j.stamp ?? ''; notice.hidden = true; void store(); }],
+        ]);
+        return;
+      }
       if (!r.ok) { state.textContent = j.error ?? '保存できませんでした'; save.disabled = false; return; }
-      loaded = area.value;
+      loaded = sent;
+      stamp = j.stamp ?? stamp;
+      // 保存の間に打った分が在れば、それは保存していない。預かりは残す。
+      const over = dirty();
+      if (over) keepDraft();
+      // 保存できたら、預かりは要らない（残すと、次に開いたとき古い方を戻す）。
+      else dropDraft(path);
+      /*
+       * **保存したことを、補完の返事で消さない。**
+       *
+       * 打った少しあとに続きを訊きに行く作りなので、打ってすぐ保存すると、
+       * 保存が終わったあとに補完が走る。出す先が同じ一行なので
+       * 「保存しました（+1 -1）」が「補完を考えています…」から「補完なし」へ
+       * 化けていた（押して実測）。**書けたのかどうかが画面から消える。**
+       *
+       * 保存したということは、続きを待っていないということ。頼んだ分は捨てる。
+       */
+      clearTimeout(pending);
+      asking?.abort();
       refresh();
-      state.textContent = `保存しました（+${j.added ?? 0} -${j.removed ?? 0}）`;
+      state.textContent = over
+        ? `保存しました（+${j.added ?? 0} -${j.removed ?? 0}）。保存の間に打った分は、まだ保存していません`
+        : `保存しました（+${j.added ?? 0} -${j.removed ?? 0}）`;
     };
     save.onclick = () => { void store(); };
     // Ctrl+S はこの欄に手があるときだけ。ブラウザの「ページを保存」を出さない。
@@ -1987,12 +2649,77 @@ export const PANELS = {
       // Ctrl+Space で、待たずに補完を頼む。
       if ((e.ctrlKey || e.metaKey) && e.key === ' ') { e.preventDefault(); void askCompletion(); return; }
       if (e.key === 'Escape' && suggestion) { e.preventDefault(); clearGhost(); refresh(); return; }
-      // Tab で欄から抜けない。灰色が出ていればそれを入れ、無ければ字。
+      /*
+       * **カーソルが動いたら、灰色を消す。**
+       *
+       * 消していたのは打ったとき・押したとき・Esc のときだけだった。カーソルキーで
+       * 動かすと灰色は出たままなので、そこで Tab を押すと**見えていない所へ
+       * 補完が入る**（字下げのつもりで押した人が、知らない字を入れてしまう）。
+       */
+      if (suggestion && MOVES.has(e.key)) { clearGhost(); refresh(); return; }
+      /*
+       * **Enter で、字下げを引き継ぐ。**
+       *
+       * 引き継いでいなかったので、深い所を書くたびに次の行が頭（0 列）から
+       * 始まり、人が空白を打ち直していた。前の行の頭にある空白を、そのまま置く。
+       *
+       * 変換中（日本語の確定）の Enter は奪わない。奪うと確定のたびに
+       * 余分な改行が入る（会話の欄で一度やった形）。
+       */
+      if (isPlainEnter(e) && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const at = area.selectionStart;
+        const from = area.value.lastIndexOf('\n', at - 1) + 1;
+        const indent = /^[ \t]*/.exec(area.value.slice(from, at))?.[0] ?? '';
+        if (indent === '') return; // 引き継ぐものが無い。既定の改行に任せる。
+        e.preventDefault();
+        clearGhost();
+        writeRange(at, area.selectionEnd, `\n${indent}`);
+        refresh();
+        return;
+      }
+
+      /*
+       * Tab で欄から抜けない。灰色が出ていればそれを入れ、無ければ字下げ。
+       *
+       * **選んだ範囲を消していた。**数行選んで押すと、選んだ行が丸ごと空白二つに
+       * なった（字下げのつもりで押して、書いたものを失う）。行にまたがる選択は
+       * 行ごとに字下げして、選んだ範囲を選んだまま返す。Shift+Tab で戻す。
+       * 一行の中の選択とカーソルだけのときは、これまでどおり空白二つを入れる。
+       */
       if (e.key === 'Tab') {
         e.preventDefault();
-        if (acceptGhost()) return;
+        if (!e.shiftKey && acceptGhost()) return;
         const { selectionStart: a, selectionEnd: b } = area;
-        area.setRangeText('  ', a, b, 'end');
+        const spansLines = area.value.slice(a, b).includes('\n');
+        if (!e.shiftKey && !spansLines) {
+          writeRange(a, b, '  ');
+          refresh();
+          return;
+        }
+        // 選んでいる行の、頭から終わりまでを取り直す（行の途中で切らない）。
+        const from = area.value.lastIndexOf('\n', a - 1) + 1;
+        const tail = area.value.indexOf('\n', b);
+        const to = tail < 0 ? area.value.length : tail;
+        let head = 0;
+        let moved = 0;
+        const lines = area.value.slice(from, to).split('\n').map((line, i) => {
+          if (e.shiftKey) {
+            const cut = /^ {1,2}/.exec(line)?.[0].length ?? 0;
+            if (i === 0) head = -cut;
+            moved -= cut;
+            return line.slice(cut);
+          }
+          // 空の行に空白を足さない（見えない字を残さない）。
+          if (line === '') return line;
+          if (i === 0) head = 2;
+          moved += 2;
+          return `  ${line}`;
+        });
+        writeRange(from, to, lines.join('\n'));
+        // 行にまたがる選択は、行の頭から選び直す（続けて押せる形にする）。
+        // カーソルだけのときは、動いたぶんだけずらす。
+        const start = spansLines ? from : Math.max(from, a + head);
+        area.setSelectionRange(start, Math.max(start, b + moved));
         refresh();
       }
     };
@@ -2002,13 +2729,24 @@ export const PANELS = {
      * Tab で入れる。Esc か、何か打てば消える。行の途中（右に字がある所）
      * では出さない。灰色と実物が重なって読めなくなる。
      */
+    /** カーソルを動かす打ち方。ここでは灰色を消す。 */
+    const MOVES = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
     let suggestion = '';
+    /*
+     * 灰色を描いたときのカーソルの位置。**見えていた所と違う所へ入れない。**
+     *
+     * 灰色が出たままカーソルキーで動かして Tab を押すと、`acceptGhost` は**いまの**
+     * カーソルへ差し込んでいた。見えていた場所と違う所に入り、字下げのつもりの
+     * Tab が字下げにならない（選んだ範囲も字下げされない）。
+     */
+    let ghostAt = -1;
     let pending = 0;
     let asking = null;
-    const clearGhost = () => { suggestion = ''; ghost.textContent = ''; };
+    const clearGhost = () => { suggestion = ''; ghostAt = -1; ghost.textContent = ''; };
     const drawGhost = () => {
       if (!suggestion) return clearGhost();
       const at = area.selectionStart;
+      ghostAt = at;
       ghost.replaceChildren(
         Object.assign(document.createElement('span'), { className: 'ghost-before', textContent: area.value.slice(0, at) }),
         Object.assign(document.createElement('span'), { className: 'ghost-text', textContent: suggestion }),
@@ -2042,7 +2780,19 @@ export const PANELS = {
       const j = await r.json().catch(() => ({}));
       // 訊いている間に打っていたら、古い答えは捨てる。
       if (area.selectionStart !== at || area.value.slice(0, at) !== prefix) return;
-      if (!j.text) { refresh(); if (j.why) state.textContent = `補完なし（${j.why}）`; return; }
+      /*
+       * **長い断りを、見出しへ流し込まない。**
+       *
+       * 「補完なし（…に GGUF がありません。設定 → モデル に…）」をそのまま
+       * 見出しに入れていたので、見出しが 3 行に折れ、**ファイル名が 47px まで
+       * 潰れて**「head-pro…」になり、保存の押し場所まで二段になっていた（実測）。
+       * 見出しは一行のものだけにして、長い話は帯で読ませる。
+       */
+      if (!j.text) {
+        refresh();
+        if (j.why) { state.textContent = '補完なし'; tell(`補完しませんでした。${j.why}`, [], 'info'); }
+        return;
+      }
       suggestion = j.text;
       drawGhost();
       state.textContent = 'Tab で入れる・Esc で消す';
@@ -2054,7 +2804,9 @@ export const PANELS = {
     const acceptGhost = () => {
       if (!suggestion) return false;
       const at = area.selectionStart;
-      area.setRangeText(suggestion, at, at, 'end');
+      // 描いた所から動いていたら、入れない（Tab は字下げに戻す）。
+      if (at !== ghostAt || at !== area.selectionEnd) { clearGhost(); refresh(); return false; }
+      writeRange(at, at, suggestion);
       clearGhost();
       refresh();
       return true;
@@ -2068,9 +2820,91 @@ export const PANELS = {
     ctx.acceptGhost = acceptGhost;
 
     ctx.openFile = (p, line) => { void open(p, line); };
-    // モデルが書き換えたら、開いているものは読み直す（直している最中は上書きしない）。
+    /*
+     * **AI が、選んでいた所を書き換えた（`replace_selection`）。**
+     *
+     * 入れ替えるのは欄の中だけで、**保存はしない**（人が見て、良ければ保存する）。
+     * 選んだ所は人が動かせるので、**渡された字がまだそこに在るときだけ**入れ替える。
+     * 入れ替える前の中身は預かって、「元に戻す」で戻せるようにする。
+     */
+    ctx.applyPatch = (at) => {
+      if (!path || at.path !== path) return false;
+      const head = lineStart(area.value, at.from);
+      const tail = lineStart(area.value, at.to);
+      const now = area.value.slice(head.at, tail.end);
+      if (now !== at.text) {
+        /*
+         * **知らせの帯だけに頼らない。**
+         *
+         * ここは `info` なので、消えるものが在る知らせ（割れている等）が出て
+         * いると押しのけない＝**完全に無音**になる。一行の所にも出す。
+         */
+        state.textContent = 'AI の直しは入れられませんでした（選んでいた所が動いています）';
+        tell('AI の直しを入れられませんでした（選んでいた所が動いています）。', [], 'info');
+        return false;
+      }
+      mine = area.value;
+      held.set(path, mine);
+      // 丸ごと代入すると Ctrl+Z の履歴が消える。置き換える所だけを入れ替える。
+      if (typeof area.setRangeText === 'function') area.setRangeText(at.replacement, head.at, tail.end, 'end');
+      else area.value = `${area.value.slice(0, head.at)}${at.replacement}${area.value.slice(tail.end)}`;
+      select(head.at, head.at + at.replacement.length);
+      refresh();
+      tell('AI が、選んでいた所を書き換えました（まだ保存していません）。', [
+        ['元に戻す', () => {
+          area.value = mine ?? area.value;
+          held.delete(path);
+          refresh();
+          tell('元に戻しました。', [], 'info');
+        }],
+      ]);
+      return true;
+    };
+    /*
+     * **いま開いている所を、AI に渡せるようにする。**
+     *
+     * ここまで、AI は開いているファイルも選んでいる所も知らなかった。
+     * 「この関数を直して」と打っても、どこの話か分からない（人は画面を見ながら
+     * 打つので、指せていると思っている）。
+     *
+     * 渡すのは、名前・カーソルの行・選んでいる字だけ。**中身は丸ごと渡さない**
+     * （毎回コンテキストウィンドウを食う。読みたければ AI が `read_file` を呼ぶ）。
+     * 上限は送る側（`src/ui/server.ts`）で決める。
+     */
+    ctx.editorNow = () => {
+      if (!path) return null;
+      const before = area.value.slice(0, area.selectionStart);
+      const line = before.split('\n').length;
+      const picked = area.value.slice(area.selectionStart, area.selectionEnd);
+      return {
+        path,
+        line,
+        ...(picked ? { selection: picked, selectionFrom: line, selectionTo: before.split('\n').length + picked.split('\n').length - 1 } : {}),
+        ...(dirty() ? { dirty: true } : {}),
+      };
+    };
+    /*
+     * モデルが書き換えたら、開いているものは読み直す（直している最中は上書きしない）。
+     *
+     * **直している最中でも、黙らない。**上書きしないのは正しいが、何も言わないと
+     * ファイルと欄が割れていることに気づけず、保存した方が相手を消す。
+     */
     ctx.on('session', ({ event: v }) => {
-      if (v.type === 'diff' && v.path === path && !dirty()) void open(path);
+      if (v.type !== 'diff' || v.path !== path) return;
+      // 自分がいま保存した分の写し。返事を読んだところで入れ替えるので、ここでは何もしない。
+      if (savingNow === v.path) return;
+      if (!dirty()) { void open(path, undefined, true); return; }
+      tell('AI がこのファイルを書き換えました。あなたの直しは保存していません。', [
+        ['AI の版を出す', () => {
+          void (async () => {
+            const r = await fetch(`/api/file?path=${encodeURIComponent(path)}`, { signal: AbortSignal.timeout(20000) })
+              .catch(() => null);
+            const got = r && r.ok ? await r.json().catch(() => null) : null;
+            if (!got) { state.textContent = '読み直せませんでした'; return; }
+            takeOver(got.content, got.stamp);
+          })();
+        }],
+      ]);
     });
   },
 };

@@ -11,6 +11,8 @@
  */
 const TOOL_VERB = {
   read_file: '読んでいます',
+  show_file: '画面で開いています',
+  replace_selection: '選んでいる所を書き換えています',
   list_files: '見ています',
   search_text: '探しています',
   find_code: '探しています',

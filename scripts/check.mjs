@@ -19,7 +19,9 @@ import { dirname, join } from 'node:path';
 import { mkdtempSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
-import { describeNotChecked } from './not-checked.mjs';
+import { reportEnd } from './not-checked.mjs';
+import { lookTreeOrEmpty } from './git-tree.mjs';
+import { treeMoved } from './pushed-tree.mjs';
 import { findBrowser } from './find-browser.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -173,6 +175,23 @@ function realModel() {
 }
 
 /**
+ * CI へ出す前に、**CI が動かすものを、この機械で一度動かす。**
+ *
+ * `scripts/real-answer.mjs` は本物の重みが要るものだと思って、手元で一度も
+ * 動かさずに CI へ出していた。要るのは重みを落とすところだけで、残りは
+ * 作り物の模型で通る。9月だけで、本物の重みの回を 5 回落としている
+ * （78 分。Windows は 2 倍で数えるので、課金はその倍に近い）。
+ * どれも、ここで 1 分もかからずに見えるものだった。
+ *
+ * 見るのは配管だけ（終わる・白黒を付ける・読む側の声が 2 本出る・
+ * 二つとも走る）。答えの中身は乱数なので見ない。
+ */
+function realAnswerDry() {
+  console.log('\n== CI へ出すものを、ここで一度動かす');
+  return run('CI へ出す前', [join(root, 'scripts', 'real-answer-dry.mjs')]);
+}
+
+/**
  * 数え方が本物と同じか。
  *
  * 窓の勘定はここに乗っている。ずれると、落としてはいけないものを落とし、
@@ -182,6 +201,18 @@ function tokenizer() {
   console.log('\n== 数え方を、本物と突き合わせる');
   return run('数え方', [join(root, 'scripts', 'tokenizer-conformance.mjs')]);
 }
+
+/*
+ * **どの木を確かめるのかを、始めに控える。**
+ *
+ * ここは版を終わりに読んでいた。途中で commit すると、**確かめていない版が
+ * 「通りました（…）」に書かれる**（実際に書かれた）。始めに読んで、
+ * 終わりに動いていないかを見る。
+ *
+ * commit していない直しも控える。汚れた木でも回す（回さないと何も確かめられない）
+ * が、**その sha そのものの話ではないと言う。**
+ */
+const began = lookTreeOrEmpty(root);
 
 const typecheck = run('型検査', [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit']);
 if (typecheck !== 0) process.exit(typecheck);
@@ -196,6 +227,8 @@ const counted = tokenizer();
 if (counted !== 0) process.exit(counted);
 const real = realModel();
 if (real !== 0) process.exit(real);
+const dry = realAnswerDry();
+if (dry !== 0) process.exit(dry);
 
 /*
  * **確かめていないことを、通ったときにこそ言う。**
@@ -203,14 +236,24 @@ if (real !== 0) process.exit(real);
  * 中身は `scripts/not-checked.mjs`。走らせないと出ない文章は書いたことに
  * ならないので、**そのものを検査にかけられる形**にして外に出してある。
  */
-let head = '';
-try {
-  head = spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: root, encoding: 'utf8' })
-    .stdout.trim();
-} catch { /* git が無い場所でも出す */ }
-console.log(`\n${describeNotChecked({
-  platform: process.platform,
-  sweep: ready.ok ? 'ran' : ready.why,
-  realModel: existsSync(join(root, 'node_modules', 'node-llama-cpp')),
-}, head)}`);
-process.exit(0);
+/*
+ * 始めの木と、終わりの木を突き合わせて、出すものを決める。
+ *
+ * 動いていたら、この結果はどちらの木の話か決まらない。**通ったと言わない。**
+ * push の手前では `.githooks/pre-push` が同じことを見るが、`npm run check` を
+ * 直に回したときは、ここが最後の砦になる。
+ *
+ * 判断は `reportEnd` に置いてある（走らせないと出ない文章にしないため）。
+ */
+const end = reportEnd({
+  began,
+  ended: lookTreeOrEmpty(root),
+  how: {
+    platform: process.platform,
+    sweep: ready.ok ? 'ran' : ready.why,
+    realModel: existsSync(join(root, 'node_modules', 'node-llama-cpp')),
+  },
+  moved: treeMoved,
+});
+console.log(`\n${end.text}`);
+process.exit(end.code);

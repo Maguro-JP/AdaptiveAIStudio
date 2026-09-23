@@ -5,7 +5,8 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { DutyRoster, periodKey, formatDuties, type Duty } from '../src/harness/duties.ts';
+import { DutyRoster, periodKey, formatDuties, describeCadence, type Duty } from '../src/harness/duties.ts';
+import { dutyBoard } from '../src/ui/state.ts';
 import { BUILTIN_DUTIES } from '../src/harness/builtin-duties.ts';
 import { IdleScheduler } from '../src/harness/idle.ts';
 import { BUILTIN_IDLE_MODES } from '../src/harness/idle-modes.ts';
@@ -237,5 +238,73 @@ describe('組み込みの日課', () => {
     // 全検査は今日回せば足りる。前回分の確認は日をまたぐと見つけにくくなる。
     assert.equal(BUILTIN_DUTIES.find((d) => d.id === 'daily-sweep')!.catchUp, false);
     assert.equal(BUILTIN_DUTIES.find((d) => d.id === 'carry-over')!.catchUp, true);
+  });
+});
+
+/**
+ * 画面に出す形。
+ *
+ * ここまで画面へ渡していたのは**記録だけ**だったので、まだ一度も回っていないと
+ * 空になり、何が仕込まれているのかも、いつ起きるのかも分からなかった。
+ * しかも画面が読んでいた欄は記録に無い名前で、**記録が在っても必ず「未実施」**
+ * になっていた。仕込んである日課ごと、いつ起きるかを添えて渡す。
+ */
+describe('画面に出す日課', () => {
+  test('**記録が一つも無くても、仕込んである分だけ出る**', () => {
+    const board = dutyBoard([], Date.parse('2026-09-19T12:00:00+09:00'));
+    assert.equal(board.length, BUILTIN_DUTIES.length);
+    for (const d of board) {
+      assert.ok(d.when.length > 0, `いつ起きるかが空: ${d.id}`);
+      assert.equal(d.lastAt, undefined);
+    }
+  });
+
+  test('**済んだ記録は、済んだ時刻として出る**', () => {
+    const now = Date.parse('2026-09-19T12:00:00+09:00');
+    const board = dutyBoard([{
+      dutyId: 'daily-sweep', lastPeriod: '2026-09-19', lastAt: now - 3600_000,
+      completions: 4, missed: 1,
+    }], now);
+    const got = board.find((d) => d.id === 'daily-sweep')!;
+    assert.equal(got.lastAt, now - 3600_000, '済んだ時刻が渡っていない');
+    assert.equal(got.completions, 4);
+    assert.equal(got.due, false, '今期が済んでいるのに、まだ発生していることになっている');
+  });
+
+  /**
+   * **画面へ渡す所まで見る。**
+   *
+   * 形にする関数だけ試験しても、渡す所が記録のままなら画面は空のまま。
+   * 実際、渡す側を戻しても試験は通った（ここを足す前）。
+   */
+  test('**画面へ渡す所でも、仕込んである分が出る**', async () => {
+    const { tempDir } = await import('./tmp.ts');
+    const dir = await tempDir('aas-duties-state-');
+    const { writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    await writeFile(join(dir, 'duties.json'), JSON.stringify([
+      { dutyId: 'daily-sweep', lastPeriod: 'x', lastAt: 1_700_000_000_000, completions: 1, missed: 0 },
+    ]));
+    const before = process.env.AAS_STATE_DIR;
+    process.env.AAS_STATE_DIR = dir;
+    try {
+      const { collectState } = await import('../src/ui/state.ts');
+      const state = await collectState({ roles: [] } as never);
+      assert.equal(state.duties.length, BUILTIN_DUTIES.length,
+        '仕込んである日課が、画面へ渡っていない');
+      const swept = state.duties.find((d) => d.id === 'daily-sweep');
+      assert.equal(swept?.lastAt, 1_700_000_000_000, '済んだ時刻が渡っていない');
+      assert.ok(swept?.when, 'いつ起きるかが渡っていない');
+    } finally {
+      if (before === undefined) delete process.env.AAS_STATE_DIR;
+      else process.env.AAS_STATE_DIR = before;
+    }
+  });
+
+  test('いつ起きるかを、人が読む形で言う', () => {
+    assert.equal(describeCadence({ kind: 'daily', atHour: 7 }), '毎日 7 時');
+    assert.equal(describeCadence({ kind: 'daily' }), '毎日 0 時');
+    assert.equal(describeCadence({ kind: 'everyHours', hours: 4 }), '4 時間ごと');
+    assert.equal(describeCadence({ kind: 'weekly', weekday: 1, atHour: 9 }), '毎週月曜 9 時');
   });
 });

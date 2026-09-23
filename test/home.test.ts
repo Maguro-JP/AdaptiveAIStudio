@@ -331,6 +331,19 @@ describe('CI の使い方', () => {
   });
 });
 
+/**
+ * `ci.yml` を仕事ごとに切る。
+ *
+ * **注釈を先に落とす。**落とさずに切ると、次の仕事の頭に付いている注釈が
+ * 前の仕事の塊に入る。そのせいで「Windows でテストを回す仕事」を探す条件
+ * （`check:bundle` を含まない）が、隣の注釈に書いてある語で外れた。
+ */
+function ciJobs(raw: string): string[] {
+  const body = raw.slice(raw.indexOf('\njobs:'))
+    .split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  return body.split(/\n  (?=[a-z][\w-]*:\n)/).slice(1);
+}
+
 describe('CI は押すたびに回さない', () => {
   test('push では回らない', sourceOnly, async () => {
     // 1回あたりを安くしても、回数が減らなければ意味がない。
@@ -357,6 +370,43 @@ describe('CI は押すたびに回さない', () => {
     // JST = UTC+9。月曜 09:00 JST → 月曜 00:00 UTC。
     assert.equal(hourUtc, '0');
     assert.equal(dowUtc, '1', 'JST の月曜にしたいなら UTC も月曜（0時なので日をまたがない）');
+  });
+
+  /**
+   * **draft のうちは Windows を回さない。**
+   *
+   * Windows は2倍で数えられる。draft は「まだ見せていない」という合図なのに、
+   * そこへ押すたびに Linux と Windows の両方が回っていた。直しを 3 回押しただけで
+   * Windows が 3 回走る（この PR で実際に 3 回押した）。
+   *
+   * 回数だけを減らす。**見る中身は減らさない**（Ready にした時点で全部回る）。
+   */
+  test('**draft の PR では Windows を回さない。Ready にしたら回る**', sourceOnly, async () => {
+    const raw = (await readFile(join(installRoot(), '.github', 'workflows', 'ci.yml'), 'utf8')).replace(/\r\n/g, '\n');
+    // Windows で `npm test` を回す仕事に、draft を除く条件が付いていること。
+    const jobs = ciJobs(raw);
+    const winTest = jobs.find((j) => /runs-on: windows-latest/.test(j) && /npm test/.test(j) && !/check:bundle/.test(j));
+    assert.ok(winTest, 'Windows でテストを回す仕事が見つからない');
+    assert.match(winTest, /github\.event\.pull_request\.draft != true/,
+      `draft を除く条件が無い（押すたびに2倍で回る）:\n${winTest.slice(0, 400)}`);
+    // Ready にした時点で回るように、合図に ready_for_review が入っていること。
+    const on = raw.slice(raw.indexOf('\non:'), raw.indexOf('\njobs:'));
+    assert.match(on, /types:\s*\[[^\]]*ready_for_review/,
+      'ready_for_review が無い。draft を外しても Windows が回らない');
+    // 安い方（Linux）には条件を付けない。**見る回数を減らすのはこちらではない。**
+    const linuxTest = jobs.find((j) => /runs-on: ubuntu-latest/.test(j) && /npm test/.test(j));
+    assert.ok(linuxTest, 'Linux でテストを回す仕事が見つからない');
+    assert.doesNotMatch(linuxTest, /draft/, 'Linux 側まで止めている（安い方は毎回回す）');
+  });
+
+  test('どの仕事にも上限がある（暴走した1本で枠を溶かさない）', sourceOnly, async () => {
+    const raw = (await readFile(join(installRoot(), '.github', 'workflows', 'ci.yml'), 'utf8')).replace(/\r\n/g, '\n');
+    const jobs = ciJobs(raw);
+    assert.ok(jobs.length >= 4, `仕事が ${jobs.length} つしか読めていない`);
+    for (const job of jobs) {
+      const name = /^\s*([a-z][\w-]*):/.exec(job)?.[1] ?? '(不明)';
+      assert.match(job, /timeout-minutes:\s*\d+/, `${name} に timeout-minutes が無い`);
+    }
   });
 });
 
