@@ -7600,3 +7600,17 @@ pre-push で見る。
 
 **捨てる行そのものを動かして確かめてはいない**（Session を組む試験が無い）。呼ぶ行を
 名指しで見る網で代わりにしてある。
+
+## 2026-09-24  long-dev の知識の置き場は、既存の文書を指す索引にする
+
+long-dev の原則は `docs/knowledge/`（tech / problems / ai / decisions）に知識を置くよう求める。
+この場所には `HANDOFF.md`・`DECISIONS.md`・`TROUBLESHOOTING.md` が既に同じ役目で在る。
+
+決めたこと: `docs/knowledge/README.md` に索引だけを置き、中身は写さない。報告は `docs/reports/` に置く。
+
+選ばなかった案: 原則どおり四つのファイルを作って移す。二か所に割れて、片方だけが古くなるため。
+
+| 変えたいとき | どこ |
+|---|---|
+| 索引の行 | `docs/knowledge/README.md` |
+| 周期の起動 | Routine `long-dev weekly（AdaptiveAIStudio）`（毎週月曜 09:00 JST） |
