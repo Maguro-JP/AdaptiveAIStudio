@@ -389,7 +389,7 @@ export class Session {
   /** 提案がどの思考から出たか。採否をその思考の実績に返すために持つ。 */
   readonly #origin = new Map<string, string>();
   #lastChangeAt = Date.now();
-  /** 作業前検査。同じ命令なら一度しか流さない。 */
+  /** ベースライン。同じ命令なら一度しか流さない。 */
   #baseline?: BaselineProbe;
   /** 置き場の決まり（AGENTS.md など）。**人に貼り直させない。** */
   readonly #projectRules: ProjectRules;
@@ -681,7 +681,7 @@ export class Session {
       const dirtyBefore = gitBefore.kind === 'dirty' ? gitBefore.changed : [];
 
       const command = await this.verifyCommand();
-      // 作業前検査は切り分けのためだけのもの。切っても作業後の検査は残す。
+      // ベースラインは切り分けのためだけのもの。切っても作業後の検査は残す。
       const probed = command && verifyCfg.baseline !== false
         ? await this.measureBaseline(command, ac.signal)
         : undefined;
@@ -1083,7 +1083,7 @@ export class Session {
   get lastChangeAt(): number { return this.#lastChangeAt; }
 
   /** 検査コマンド。設定 > 先読みが見つけたもの。 */
-  /** 作業前検査の実行役。設定を読んで一度だけ作る。 */
+  /** ベースラインの実行役。設定を読んで一度だけ作る。 */
   get baselineProbe(): BaselineProbe {
     if (!this.#baseline) {
       const cfg = this.config.agent?.verify ?? {};

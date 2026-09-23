@@ -1,9 +1,9 @@
 /**
- * 確かめた木と、押す木が同じか。
+ * 確かめたワークツリーと、押すワークツリーが同じか。
  *
- * pre-push が見るのは**いまの作業の木**で、押されるのは git が push の時点で
+ * pre-push が見るのは**いまの作業のワークツリー**で、押されるのは git が push の時点で
  * 読み直した ref の先。同じだと思い込んでいたが、違う。10 分の確かめが試験の段を
- * 終えたあと、その裏で次の作業を commit した。確かめは前の木を見たまま
+ * 終えたあと、その裏で次の作業を commit した。確かめは前のワークツリーを見たまま
  * 「通りました」と言い、push は新しい commit を出した。
  * **一度も試験を通っていないものが、通った顔で外に出た。**
  *
@@ -27,7 +27,7 @@ const B = 'b'.repeat(40);
 
 const clean = (head: string) => ({ head, dirty: [] as string[] });
 
-describe('確かめた木と、押す木', () => {
+describe('確かめたワークツリーと、押すワークツリー', () => {
   test('同じなら通す', () => {
     assert.equal(pushedTree({ sending: A, before: clean(A), after: clean(A) }), undefined);
   });
@@ -37,7 +37,7 @@ describe('確かめた木と、押す木', () => {
     const why = pushedTree({ sending: A, before: clean(A), after: clean(B) });
     assert.ok(why, '止めていない');
     assert.match(why, /動きました/);
-    assert.match(why, /aaaaaaa/, `どの木を確かめたのかを言っていない: ${why}`);
+    assert.match(why, /aaaaaaa/, `どのワークツリーを確かめたのかを言っていない: ${why}`);
     assert.match(why, /bbbbbbb/, `何が出るのかを言っていない: ${why}`);
   });
 
@@ -67,7 +67,7 @@ describe('確かめた木と、押す木', () => {
   test('押す先が突き合わせられないときは、突き合わせだけ飛ばす', () => {
     /*
      * タグを押すときの sha は commit ではないので、HEAD と比べると必ず食い違う。
-     * 突き合わせは飛ばすが、**汚れているか・動いたかは見る**（確かめる木は同じ）。
+     * 突き合わせは飛ばすが、**汚れているか・動いたかは見る**（確かめるワークツリーは同じ）。
      */
     assert.equal(pushedTree({ sending: '', before: clean(A), after: clean(A) }), undefined);
     assert.equal(pushedTree({ sending: ZERO, before: clean(A), after: clean(A) }), undefined);
@@ -112,7 +112,7 @@ async function sandbox(check: string): Promise<{ work: string; remote: string; r
    * 確かめの代役。10 分の本物は回せないので、同じ場所で同じことをする物を置く。
    * **走ったことが分かる形**にしておく（走らせずに止めたかを見るため）。
    *
-   * マーカーは作業の木の**外**へ置く。中に置くと、それ自体が「汚れ」として数えられて
+   * マーカーは作業のワークツリーの**外**へ置く。中に置くと、それ自体が「汚れ」として数えられて
    * 通る回まで止まる（実際に止めた）。
    */
   const ran = join(base, 'ran.txt');
@@ -147,7 +147,7 @@ function push(work: string, args: string[] = ['-u', 'origin', 'main']): { ok: bo
 }
 
 describe('フックが、本当に止める', () => {
-  test('確かめが通って、木が動いていなければ押せる', async () => {
+  test('確かめが通って、ワークツリーが動いていなければ押せる', async () => {
     const { work, ran } = await sandbox('process.exit(0);\n');
     const r = push(work);
     assert.equal(r.ok, true, `押せていない: ${r.text}`);
@@ -205,7 +205,7 @@ describe('フックが、本当に止める', () => {
   });
 
   test('タグでも、汚れていれば止める（対）', async () => {
-    // 飛ばすのは突き合わせだけ。確かめる木が汚れていることは、タグでも同じ。
+    // 飛ばすのは突き合わせだけ。確かめるワークツリーが汚れていることは、タグでも同じ。
     const { work } = await sandbox('process.exit(0);\n');
     execFileSync('git', ['tag', 'v0.0.2'], { cwd: work });
     await writeFile(join(work, 'src', 'a.ts'), 'export const a = 9;\n');
@@ -216,7 +216,7 @@ describe('フックが、本当に止める', () => {
 
   test('ブランチを消す push は、汚れていても通す（対）', async () => {
     /*
-     * 消す push は木を運んでいない。確かめようがないので、汚れを理由に止めない。
+     * 消す push はワークツリーを運んでいない。確かめようがないので、汚れを理由に止めない。
      * ここで止めると、手元に直しがある間は片付けができなくなる。
      */
     const { work } = await sandbox('process.exit(0);\n');

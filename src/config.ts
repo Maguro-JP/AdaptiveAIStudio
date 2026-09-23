@@ -311,11 +311,11 @@ export interface VerifyConfig {
    */
   baseline?: boolean;
   /**
-   * 作業前検査だけの時間上限(ms)。既定2分。
+   * ベースラインだけの時間上限(ms)。既定2分。
    * 全件が長い場合はここで切り上げ、「分からない」として扱う。
    */
   baselineTimeoutMs?: number;
-  /** 作業前検査の結果を覚えておく時間(ms)。既定30分。 */
+  /** ベースラインの結果を覚えておく時間(ms)。既定30分。 */
   baselineMaxAgeMs?: number;
 }
 

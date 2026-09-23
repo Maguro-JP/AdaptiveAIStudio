@@ -1,5 +1,5 @@
 /**
- * 作業前検査を、書き換えが起きるまで流さない。
+ * ベースラインを、書き換えが起きるまで流さない。
  *
  * ここまで、依頼のたびに**いちばん先に検査を丸ごと流していた**。
  * 「この関数は何をしていますか」と訊いただけで数分止まり、
@@ -77,7 +77,7 @@ describe('やったと言って、やっていない、を出す', () => {
   });
 });
 
-describe('作業前検査は、触る直前まで流さない', () => {
+describe('ベースラインは、触る直前まで流さない', () => {
   test('訊いただけなら、検査は流れない', async () => {
     fake.setBehavior({ kind: 'stream', text: 'これは説明です。' });
     const session = await Session.create(config(), { approve: () => Promise.resolve(true) });
@@ -85,7 +85,7 @@ describe('作業前検査は、触る直前まで流さない', () => {
       const before = await ranCount();
       const seen = await ask(session, 'src/a.txt は何ですか');
       assert.equal(await ranCount(), before, '訊いただけで検査が流れている');
-      assert.ok(!seen.includes('baseline'), `作業前検査を出している: ${seen.join(',')}`);
+      assert.ok(!seen.includes('baseline'), `ベースラインを出している: ${seen.join(',')}`);
     } finally { await session.close(); }
   });
 
@@ -105,7 +105,7 @@ describe('作業前検査は、触る直前まで流さない', () => {
       const before = await ranCount();
       const seen = await ask(session, 'src/a.txt を書き換えて');
       assert.ok(await ranCount() > before, '書き換えたのに検査が流れていない');
-      assert.ok(seen.includes('baseline'), `作業前検査が出ていない: ${seen.join(',')}`);
+      assert.ok(seen.includes('baseline'), `ベースラインが出ていない: ${seen.join(',')}`);
       // 触る前に控えていること。控えが無いと、作業後の検査そのものが回らない。
       assert.ok(seen.includes('verify'), `作業後の検査が回っていない: ${seen.join(',')}`);
       // **本当に書けたかを、ファイルで見る。**出来事だけを見ていたので、
