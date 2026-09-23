@@ -81,11 +81,11 @@ describe('捨てる場所が、全部その判じ方を使っている', () => {
     );
   });
 
-  test('**作業前の控えは、この場所のツールだけで決めている**', async () => {
+  test('**作業前の記録は、この場所のツールだけで決めている**', async () => {
     /*
-     * 控えは分けてある。先読みを捨てるのは作り直すだけだが、**控えはその場で
+     * 記録は分けてある。先読みを捨てるのは作り直すだけだが、**記録はその場で
      * テストを一度走らせる。**外のツールの手前に置くと 1ターンが何十秒も伸びる
-     * （広げた回に、外のツールを呼ぶ e2e が控えを待つ間に打ち切られた）。
+     * （広げた回に、外のツールを呼ぶ e2e が記録を待つ間に打ち切られた）。
      *
      * 呼ぶ行を名指しで見る。うっかり `mayChangeFiles` に戻すと、
      * また同じところで打ち切られる。
@@ -93,15 +93,15 @@ describe('捨てる場所が、全部その判じ方を使っている', () => {
     const src = await readFile(
       join(import.meta.dirname, '..', 'src', 'core', 'session.ts'), 'utf8');
     assert.match(src, /const changesFiles = changesFilesHere;/,
-      '作業前の控えが、別の判じ方で決まっています');
+      '作業前の記録が、別の判じ方で決まっています');
     assert.doesNotMatch(src, /const changesFiles = mayChangeFiles;/,
-      '控えを外のツールまで広げています（e2e がそこで打ち切られます）');
+      '記録を外のツールまで広げています（e2e がそこで打ち切られます）');
   });
 
-  test('先読みと控えで、外のツールの扱いが違う', () => {
+  test('先読みと記録で、外のツールの扱いが違う', () => {
     const outside = `notes${EXTERNAL_SEPARATOR}save`;
     assert.equal(mayChangeFiles(outside), true, '先読みを捨てない側にしている');
-    assert.equal(changesFilesHere(outside), false, '控えを外のツールまで広げている');
+    assert.equal(changesFilesHere(outside), false, '記録を外のツールまで広げている');
     // この場所のツールでは、二つは同じ答えになる。
     for (const name of ['write_file', 'edit_file', 'run_command', 'read_file']) {
       assert.equal(mayChangeFiles(name), changesFilesHere(name), `${name} で食い違う`);

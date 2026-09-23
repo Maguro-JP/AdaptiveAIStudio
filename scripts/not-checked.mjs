@@ -48,8 +48,8 @@ export function describeNotChecked(how, head = '', dirty = []) {
   const lines = [`== 通りました${head ? `（${head}）` : ''}`];
   if (dirty.length > 0) {
     lines.push('');
-    lines.push(`**commit していない直しが ${dirty.length} 件ある木で確かめました。**`);
-    lines.push(`  ${head ? `${head} そのものではありません。` : ''}確かめたのは、この直しを含む木です。`);
+    lines.push(`**commit していない直しが ${dirty.length} 件あるワークツリーで確かめました。**`);
+    lines.push(`  ${head ? `${head} そのものではありません。` : ''}確かめたのは、この直しを含むワークツリーです。`);
     for (const line of dirty.slice(0, 10)) lines.push(`    ${line}`);
     if (dirty.length > 10) lines.push(`    ほか ${dirty.length - 10} 件`);
   }
@@ -78,7 +78,7 @@ export function describeNotChecked(how, head = '', dirty = []) {
 export function reportEnd(arg) {
   const { began, ended, how, moved } = arg;
   const why = moved ? moved(began, ended) : undefined;
-  // 木が動いていたら、この結果はどちらの木の話か決まらない。通ったと言わない。
+  // ワークツリーが動いていたら、この結果はどちらのワークツリーの話か決まらない。通ったと言わない。
   if (why) return { code: 1, text: `== ${why}` };
   return { code: 0, text: describeNotChecked(how, began.head.slice(0, 7), began.dirty) };
 }

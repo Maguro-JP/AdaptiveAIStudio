@@ -1,13 +1,13 @@
 /**
- * pre-push から呼ぶ入口。確かめの前と後で木を読んで、ずれていたら 1 で終わる。
+ * pre-push から呼ぶ入口。確かめの前と後でワークツリーを読んで、ずれていたら 1 で終わる。
  *
  * 判断そのものは pushed-tree.mjs に置いてある（押せる形にするため。
  * ここに書くと、シェル越しでしか確かめられない）。
  *
  * 呼び方は二つ。
  *
- *   before <sending>            確かめの前。通れば、いまの木を一行で出す
- *   after  <sending> <before>   確かめの後。前の木と突き合わせる
+ *   before <sending>            確かめの前。通れば、いまのワークツリーを一行で出す
+ *   after  <sending> <before>   確かめの後。前のワークツリーと突き合わせる
  *
  * `before` を確かめの前に置くのは、**10 分待たせてから「汚れています」と
  * 言わないため。**動いたかどうかは後でしか分からないので、そこだけ後に回す。
@@ -36,7 +36,7 @@ try {
   if (mode !== 'after') process.exit(0);
 
   const before = unpack(process.argv[4] ?? '');
-  // 前の木が読めていないなら、比べようがない。止めない。
+  // 前のワークツリーが読めていないなら、比べようがない。止めない。
   if (!before.head) process.exit(0);
   const why = pushedTree({ sending, before, after: look() });
   if (why) stop(why);

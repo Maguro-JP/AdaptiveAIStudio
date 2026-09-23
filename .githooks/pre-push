@@ -7,12 +7,12 @@
 # ここを通らずに push はできない（--no-verify を使えば別だが、それは
 # 「確かめずに出す」と自分で宣言することになる）。
 #
-# 中身は npm run check と同じ: 型検査 → 検査 → 画面を押して回る。
+# 中身は npm run check と同じ: 型チェック → テスト → 画面の sweep。
 # npm 無しでも動くよう、node で直に起こす。
 #
 # ■ wip/ のブランチだけは、確かめずに通す
 #
-# ここは行き先を見ずに、どのブランチでも4分の検査を回していた。
+# ここは行き先を見ずに、どのブランチでも4分のテストを回していた。
 # ローカルとクラウドの間で**作業中のものを渡す**のに毎回4分かかると、
 # 渡すこと自体をやめる。実際、渡す道が無いので同じ作業を二度やっていた。
 #
@@ -35,7 +35,7 @@ while read -r _local_ref local_sha remote_ref remote_sha; do
   case "$_local_ref" in
     refs/heads/*) AAS_PUSH_SENDING="$local_sha" ;;
   esac
-  # 消す push（sha が全部 0）だけなら、木を運んでいない。確かめようがない。
+  # 消す push（sha が全部 0）だけなら、ワークツリーを運んでいない。確かめようがない。
   case "$local_sha" in
     *[!0]*) AAS_PUSH_CARRIES=1 ;;
   esac
@@ -80,9 +80,9 @@ if [ -n "$AAS_PUSH_RANGE" ]; then
   }
 fi
 
-# 確かめる木と、押す木を、同じものにする。
+# 確かめるワークツリーと、押すワークツリーを、同じものにする。
 #
-# pre-push が見るのは**いまの作業の木**で、押されるのは git が push の時点で
+# pre-push が見るのは**いまの作業のワークツリー**で、押されるのは git が push の時点で
 # 読み直した ref の先。実際にずれた（確かめが試験の段を終えたあとに次の作業を
 # commit して、**一度も試験を通っていないものが通った顔で出た**）。
 #
@@ -96,7 +96,7 @@ if [ "$AAS_PUSH_CARRIES" = "1" ]; then
   }
 fi
 
-echo "== push の手前で確かめます（型検査・検査・画面）"
+echo "== push の手前で確かめます（型チェック・テスト・画面）"
 node scripts/check.mjs
 
 reason=$(node scripts/pushed-tree-check.mjs after "$AAS_PUSH_SENDING" "$AAS_PUSH_BEFORE") || {

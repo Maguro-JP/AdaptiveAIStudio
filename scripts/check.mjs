@@ -1,5 +1,5 @@
 /**
- * 型検査 → 検査 → **画面を押して回る**を、続けて回す。
+ * 型チェック → テスト → **画面を sweep する**を、続けて回す。
  *
  * `npm run typecheck && npm test` と書くと npm 無しでは動かせない
  * （scripts/run.mjs は node 一つで仕事を起こす作り。`&&` は shell の言葉）。
@@ -8,7 +8,7 @@
  * **画面を押して回るところまでを、ここに入れる。**
  * 「確かめた」と言いながら画面を一度も押さずに出し、
  * 「設定の選択肢が全部空」「畳んだら二度と開けない」を利用者に見つけさせた。
- * 検査を通したという言葉が、画面を押したことを含むようにする。
+ * テストを通したという言葉が、画面を押したことを含むようにする。
  *
  * 押して回るには playwright-core と Chromium が要る。無い場所（CI・bundle）では
  * **飛ばして、そう言う。**黙って通すと、また押さずに「通った」と言うことになる。
@@ -91,7 +91,7 @@ async function sweep() {
     writeFileSync(join(undoDir, `${id}.json`), JSON.stringify({
       id,
       at: Date.now() - i * 60_000,
-      request: `src/a.txt を書き換えて（検査のために作ったもの ${i}）`,
+      request: `src/a.txt を書き換えて（テストのために作ったもの ${i}）`,
       paths: ['src/a.txt'],
       files: [{ path: 'src/a.txt', content: '' }],
     }));
@@ -110,7 +110,7 @@ async function sweep() {
     const id = `c20260101-00000${i}-000${i}`;
     const at = new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString();
     writeFileSync(join(convDir, `${id}.jsonl`), [
-      JSON.stringify({ t: 'meta', id, title: `検査のために作った会話 ${i}`, createdAt: at }),
+      JSON.stringify({ t: 'meta', id, title: `テストのために作った会話 ${i}`, createdAt: at }),
       JSON.stringify({ t: 'msg', at, m: { role: 'user', content: `確かめ ${i}` } }),
       JSON.stringify({ t: 'msg', at, m: { role: 'assistant', content: `はい ${i}` } }),
     ].join('\n') + '\n');
@@ -203,21 +203,21 @@ function tokenizer() {
 }
 
 /*
- * **どの木を確かめるのかを、始めに控える。**
+ * **どのワークツリーを確かめるのかを、始めに記録する。**
  *
  * ここは版を終わりに読んでいた。途中で commit すると、**確かめていない版が
  * 「通りました（…）」に書かれる**（実際に書かれた）。始めに読んで、
  * 終わりに動いていないかを見る。
  *
- * commit していない直しも控える。汚れた木でも回す（回さないと何も確かめられない）
+ * commit していない直しも記録する。汚れたワークツリーでも回す（回さないと何も確かめられない）
  * が、**その sha そのものの話ではないと言う。**
  */
 const began = lookTreeOrEmpty(root);
 
-const typecheck = run('型検査', [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit']);
+const typecheck = run('型チェック', [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit']);
 if (typecheck !== 0) process.exit(typecheck);
 
-const tests = run('検査', [join(root, 'scripts', 'run-tests.mjs')]);
+const tests = run('テスト', [join(root, 'scripts', 'run-tests.mjs')]);
 if (tests !== 0) process.exit(tests);
 
 const ready = sweepReady();
@@ -234,12 +234,12 @@ if (dry !== 0) process.exit(dry);
  * **確かめていないことを、通ったときにこそ言う。**
  *
  * 中身は `scripts/not-checked.mjs`。走らせないと出ない文章は書いたことに
- * ならないので、**そのものを検査にかけられる形**にして外に出してある。
+ * ならないので、**そのものをテストにかけられる形**にして外に出してある。
  */
 /*
- * 始めの木と、終わりの木を突き合わせて、出すものを決める。
+ * 始めのワークツリーと、終わりのワークツリーを突き合わせて、出すものを決める。
  *
- * 動いていたら、この結果はどちらの木の話か決まらない。**通ったと言わない。**
+ * 動いていたら、この結果はどちらのワークツリーの話か決まらない。**通ったと言わない。**
  * push の手前では `.githooks/pre-push` が同じことを見るが、`npm run check` を
  * 直に回したときは、ここが最後の砦になる。
  *

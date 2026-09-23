@@ -78,11 +78,11 @@ describe('確かめていないことを、必ず言う', () => {
   });
 });
 
-describe('どの木の話かを、出力に書く', () => {
-  test('**commit していない直しがある木で確かめたなら、そう言う**', () => {
+describe('どのワークツリーの話かを、出力に書く', () => {
+  test('**commit していない直しがあるワークツリーで確かめたなら、そう言う**', () => {
     /*
      * `通りました（abc1234）` とだけ出すと、受け取った側はその commit を
-     * 確かめたものとして扱う。汚れた木で回したなら、その sha そのものの
+     * 確かめたものとして扱う。汚れたワークツリーで回したなら、その sha そのものの
      * 話ではない。**黙って sha だけ出さない。**
      */
     const text = describeNotChecked(ran, 'abc1234', [' M src/a.ts', '?? src/b.ts']) as string;
@@ -93,7 +93,7 @@ describe('どの木の話かを、出力に書く', () => {
     assert.match(text, /ここで確かめていないこと/);
   });
 
-  test('綺麗な木なら、その行は出さない（対）', () => {
+  test('綺麗なワークツリーなら、その行は出さない（対）', () => {
     const text = describeNotChecked(ran, 'abc1234', []) as string;
     assert.doesNotMatch(text, /commit していない直し/, '綺麗なのに汚れていると言っている');
   });
@@ -104,8 +104,8 @@ describe('どの木の話かを、出力に書く', () => {
     assert.match(text, /ほか 20 件/);
   });
 
-  test('**木が動いていたら、通ったと言わない**', () => {
-    // 実際に起きたずれ方。始めの木と終わりの木が違うなら、結果はどちらの話でもない。
+  test('**ワークツリーが動いていたら、通ったと言わない**', () => {
+    // 実際に起きたずれ方。始めのワークツリーと終わりのワークツリーが違うなら、結果はどちらの話でもない。
     const end = reportEnd({
       began: { head: 'a'.repeat(40), dirty: [] },
       ended: { head: 'b'.repeat(40), dirty: [] },
@@ -127,7 +127,7 @@ describe('どの木の話かを、出力に書く', () => {
 
   test('汚れの数が同じでも、中身が変われば動いたと見る', () => {
     /*
-     * 一つ片付いて一つ汚れると、数は同じまま木が変わる。数で見ていると
+     * 一つ片付いて一つ汚れると、数は同じままワークツリーが変わる。数で見ていると
      * 「変わっていない」と読む。
      */
     const end = reportEnd({
@@ -135,11 +135,11 @@ describe('どの木の話かを、出力に書く', () => {
       ended: { head: 'a'.repeat(40), dirty: [' M src/b.ts'] },
       how: ran, moved: treeMoved,
     }) as { code: number; text: string };
-    assert.equal(end.code, 1, '同じ木だと読んでいる');
+    assert.equal(end.code, 1, '同じワークツリーだと読んでいる');
     assert.match(end.text, /増えました/);
   });
 
-  test('**始めに控えて、終わりに突き合わせている**', async () => {
+  test('**始めに記録て、終わりに突き合わせている**', async () => {
     /*
      * 版を終わりに読むと、途中で commit したときに確かめていない版が書かれる。
      * 直したのは呼ぶ順番なので、**順番そのものを見る**（関数を足しても、
@@ -148,12 +148,12 @@ describe('どの木の話かを、出力に書く', () => {
     const src = await readFile(
       join(import.meta.dirname, '..', 'scripts', 'check.mjs'), 'utf8');
     const began = src.indexOf('const began = lookTreeOrEmpty(root)');
-    // 最初の段は `--noEmit` で指す。言葉の網に当たらない文字を選ぶ。
+    // 最初の段は `--noEmit` で指す。言葉のガードに当たらない文字を選ぶ。
     const first = src.indexOf("'--noEmit'");
     const judge = src.indexOf('moved: treeMoved,');
     const said = src.indexOf('process.exit(end.code)');
-    assert.ok(began >= 0, '始めに控えていない');
-    assert.ok(first >= 0 && began < first, '最初の段より後で控えている');
+    assert.ok(began >= 0, '始めに記録ていない');
+    assert.ok(first >= 0 && began < first, '最初の段より後で記録ている');
     assert.ok(judge > first, '突き合わせが、段より前にある');
     assert.ok(judge < said, '突き合わせが、通りましたと言った後にある');
     // 終わりに HEAD を読み直す形へ戻っていないか。

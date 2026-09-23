@@ -1,4 +1,4 @@
-# 検査を回す。
+# テストを回す。
 #
 # Windows を入れているのが要点。
 # 「Linux では通るが Windows では落ちる」が実際に起きており
@@ -6,7 +6,7 @@
 # 手元が Windows でも、直す側が Linux なら気づけない。
 #
 # ただし **Windows の枠は2倍で数えられる**。前に使い切って
-# 1日まるごと検査できなくなった。
+# 1日まるごと確かめられなくなった。
 #
 # **push では回さない。** ここが一番効く。
 # 直しを10回押せば10回回る、という作りだったのが元凶で、
@@ -14,7 +14,7 @@
 #
 # 代わりに、回すのは次の三つだけ。
 #
-#   PR を出したとき   人に見せる前。ここが本来の検査の場
+#   PR を出したとき   人に見せる前。ここが本来のテストの場
 #   手で頼んだとき    確かめたいときに、確かめたいものを
 #   週に一度          網。手元では気づけない環境側の変化を拾う
 #                     （ランナーの中身や Node の更新で、こちらを
@@ -27,9 +27,9 @@
 # 1回あたりも減らしてある。
 #   ・後から押したら、走っている前のものは打ち切る
 #   ・組み合わせは2つだけ（下限の Node は Linux、Windows は現行の Node）
-#   ・型検査は独立した仕事にしない（仕事を1つ増やすと、それだけで1分課金される）
+#   ・型チェックは独立した仕事にしない（仕事を1つ増やすと、それだけで1分課金される）
 #   ・文書だけの変更では回さない
-name: 検査
+name: CI
 
 on:
   pull_request:
@@ -90,12 +90,12 @@ jobs:
 
       # 実行時の依存はゼロなので、ここでは何も入れない。
       # 入れてしまうと「入れなくても動く」が壊れても気づけない。
-      - name: 検査
+      - name: テスト
         run: npm test
 
-      # 型検査だけは TypeScript が要る。独立した仕事にすると
+      # 型チェックだけは TypeScript が要る。独立した仕事にすると
       # それだけで1分課金されるので、安い方の仕事に相乗りさせる。
-      - name: 型検査
+      - name: 型チェック
         run: |
           npm ci --no-audit --no-fund
           npm run typecheck
@@ -125,7 +125,7 @@ jobs:
         with:
           node-version: '24.x'
 
-      - name: 検査
+      - name: テスト
         run: npm test
 
   # 配る形で、配る機械（Windows）で、送って返るところまで通す。
@@ -146,7 +146,7 @@ jobs:
   # **高い。**組んで起こすので十数分、Windows は2倍で数えられる。
   # だから PR では回さない。**手で頼んだときと、週に一度だけ。**
   bundle:
-    name: 配る形で1ターン（Windows）
+    name: bundle / Windows
     if: github.event_name != 'pull_request' && !inputs.real
     runs-on: windows-latest
     timeout-minutes: 40
@@ -187,7 +187,7 @@ jobs:
   # 手で頼んだときだけ（`real`）。既定は ubuntu（1 倍）。配る先で見たいときは
   # windows（2 倍）。この回では他の仕事を回さない。
   real:
-    name: 本物の重みで1ターン（${{ inputs.real_os || 'ubuntu-latest' }}）
+    name: real model / ${{ inputs.real_os || 'ubuntu-latest' }}
     if: github.event_name == 'workflow_dispatch' && inputs.real
     # 手で頼んだとき以外は空になる。if で飛ぶが、空のまま渡さない。
     runs-on: ${{ inputs.real_os || 'ubuntu-latest' }}
@@ -215,7 +215,7 @@ jobs:
 
   # 手で頼んだときだけ、残りの組み合わせも見る。
   full:
-    name: ${{ matrix.os }} / Node ${{ matrix.node }}（全部）
+    name: ${{ matrix.os }} / Node ${{ matrix.node }} (full)
     if: inputs.full
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
