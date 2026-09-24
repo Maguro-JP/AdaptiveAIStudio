@@ -38,7 +38,7 @@ scripts/check.sh <owner>/<repo> <branch-part>
 |---|---|---|
 | `create_new_session_on_fire` | `sources: []`、`mcp_servers: []` | リポジトリ無し。clone も push もできず、承認待ちか無言で終わる。status は緑のまま |
 | `persistent_session_id` にリポジトリ無しのセッション | 作った側のリポジトリ | 対象と違うリポジトリで動く |
-| `persistent_session_id` にリポジトリを渡して作ったセッション | 対象リポジトリ、auto | clone、変更、commit、push が通った |
+| `persistent_session_id` にリポジトリを渡して作ったセッション | 対象リポジトリ、auto | clone、変更、commit、push、PR 作成、マージまで通った（AdaptiveAIStudio #33、起こしてから5分） |
 
 status が緑でも仕事をしたとは限らない。このアカウントの「動いているように見えた」Routine
 （DigiMon、RuleCrawler）は、9時間走って1つもコミットを残していなかった。
@@ -47,8 +47,6 @@ status が緑でも仕事をしたとは限らない。このアカウントの�
 ## 確かめていないこと
 
 - 結びつけたセッションが数日放置で回収されたあとも、定刻に起きて clone し直すか。公式は「期限切れのセッションは開き直すと会話を復元して新しい容器を作る」と書いている。Routine から起きる場合も同じかは、最初の定刻の起動で見る
-- 起きたセッションから GitHub の API（PR 作成、マージ）が使えるか。git の push は通った。PR が要る Routine は、最初の1回で PR まで見る
-
 分かったら、この節を消して上の表に足す。
 
 ## 決まり
@@ -78,7 +76,8 @@ JST と UTC の対応。
 ### 作る
 
 1. 何を、どの周期で、何時（JST）に起こすかを1行で確かめる
-2. 一覧を見て、同じ仕事の Routine が無いか見る。リポジトリ無しの古いものがあれば無効にする
+2. 一覧を見て、同じ仕事の Routine が無いか見る。あれば `persistent_session_id` の先を `get_session` で見て、`session_context.sources` に対象リポジトリがあるかで判定する。あるならそのまま使う。無い（`create_new_session_on_fire` のもの、別のリポジトリのセッション）なら無効にして作り直す
+   利用者がそのリポジトリを開いて long-dev を回しているセッションがあれば、新しく作らずそれに結びつける。1リポジトリに1セッション
 3. cron に直す。UTC、分は 0、列挙
 4. プロンプトを書く。対象リポジトリ（owner/repo）、スキル名、引数、止まる条件
 5. 「作り方」の 1〜4 をそのまま行う。4 の結果（ブランチかコミット）を貼る
