@@ -37,6 +37,7 @@ import { revealCommand } from '../core/opener.ts';
 import { join, dirname, extname, normalize, resolve as resolvePath, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
+import { AckStore, ACK_TEXT, isAckId } from '../core/acks.ts';
 import { aasHome, binDir, modelsDir, isPortable, productRoot, installRoot, defaultWorkRoot } from '../core/home.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { LogFile } from '../core/logfile.ts';
@@ -1135,6 +1136,29 @@ export class UiServer {
         this.#preparing = false;
       }
       return;
+    }
+
+    /*
+     * 了解した警告（作業場ごと）。**ここではセッションを作らない。**ファイルから読める。
+     * Session が出す前に絞るので、画面と CLI で食い違わない（`src/core/session.ts`）。
+     * 取り消せる（DELETE）。閉じたら開けない、を作らない。
+     */
+    if (path === '/api/acks' && req.method === 'GET') {
+      const root = this.#workRoot();
+      const key = resolvePath(root);
+      const acks = (await new AckStore(join(stateDir(), 'acks.json')).list())
+        .filter((a) => a.root === key)
+        .map((a) => ({ id: a.id, text: ACK_TEXT[a.id], at: a.at }));
+      return send(res, 200, { root, acks });
+    }
+    if (path === '/api/acks' && (req.method === 'POST' || req.method === 'DELETE')) {
+      const body = await readBody(req) as { id?: unknown };
+      if (!isAckId(body?.id)) return send(res, 400, { error: '了解できる警告の名前ではありません' });
+      const store = new AckStore(join(stateDir(), 'acks.json'));
+      const root = this.#workRoot();
+      if (req.method === 'POST') await store.add(body.id, root);
+      else await store.remove(body.id, root);
+      return send(res, 200, { id: body.id, acked: req.method === 'POST' });
     }
 
     if (path === '/api/proposals' && req.method === 'GET') {

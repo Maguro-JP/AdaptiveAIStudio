@@ -146,6 +146,19 @@ export class UndoStore {
     this.#note(relPath);
   }
 
+  /**
+   * 記録できなかったことだけを記す。
+   *
+   * 外のツールが変えた大きなファイルは、前の中身を読まない（読めば同じ上限に当たる）。
+   * 名前だけ残して「戻せない」と言う。
+   */
+  skip(relPath: string): void {
+    const open = this.#open;
+    if (!open || open.files.has(relPath) || open.skipped.includes(relPath)) return;
+    open.skipped.push(relPath);
+    this.#note(relPath);
+  }
+
   /** いまの一往復を閉じて、戻り先として残す。何も触っていなければ残さない。 */
   async end(): Promise<UndoPoint | undefined> {
     const open = this.#open;

@@ -20,7 +20,7 @@
  * **比べられないことを「変わっていない」と読まない。**呼ぶ側がそう言う。
  */
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 
 /**
@@ -38,7 +38,15 @@ function gitOut(args: string[], cwd: string): Promise<string | undefined> {
   });
 }
 
-/** 変わっているファイルごとの記録。`状態 大きさ 時刻`。消えたものは `状態 -`。 */
+/** git の根からの道を、作業場からの道（この場所の他の記録と同じ形）にする。 */
+function fromTop(top: string, root: string, gitPath: string): string {
+  return relative(root, join(top, gitPath)).split(sep).join('/');
+}
+
+/**
+ * 変わっているファイルごとの記録。鍵は**作業場からの道**（`toDisplayPath` と同じ形）。
+ * 値は `状態 大きさ 時刻`。消えたものは `状態 -`。
+ */
 export type WorkspaceStamp = Map<string, string>;
 
 export async function workspaceStamp(root: string): Promise<WorkspaceStamp | undefined> {
@@ -65,9 +73,22 @@ export async function workspaceStamp(root: string): Promise<WorkspaceStamp | und
     // 索引の側（X）でも、作業ツリーの側（Y）でも起きる。
     if ('RC'.includes(code[0]!) || 'RC'.includes(code[1]!)) i += 1;
     const s = await stat(join(top, path)).catch(() => undefined);
-    stamp.set(path, s ? `${code} ${s.size} ${s.mtimeMs}` : `${code} -`);
+    stamp.set(fromTop(top, root, path), s ? `${code} ${s.size} ${s.mtimeMs}` : `${code} -`);
   }
   return stamp;
+}
+
+/**
+ * 索引（index）に在る中身を、作業ツリーの形で返す。
+ *
+ * 外のツールが触る前に**きれいだった**ファイルは、作業ツリー・索引・HEAD が同じ。
+ * だから外のツールが変えた後でも、索引から「前」の中身が取れる。
+ * `--filters` で、改行の変換（`core.autocrlf`）まで作業ツリーの形にそろえる
+ * （blob のまま書き戻すと、Windows で全行が差分になる）。
+ * `:./道` は cwd からの相対。索引に無い（新しく作られた）ものは `undefined`。
+ */
+export function indexContent(root: string, relPath: string): Promise<string | undefined> {
+  return gitOut(['cat-file', '--filters', `:./${relPath}`], root);
 }
 
 /** 二つの記録の間で、変わったファイル。並びは名前順。 */

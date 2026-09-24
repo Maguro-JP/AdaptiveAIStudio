@@ -10,7 +10,7 @@ import { writeFile, mkdir, appendFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { workspaceStamp, stampChanges } from '../src/agent/workspace-stamp.ts';
+import { workspaceStamp, stampChanges, indexContent } from '../src/agent/workspace-stamp.ts';
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', args, { cwd, stdio: 'ignore' });
@@ -37,7 +37,8 @@ describe('作業場の記録', () => {
     await appendFile(join(ws, 'f.txt'), 'ccc\n');          // さらに書き足す
     const after = await workspaceStamp(ws);
     assert.ok(before && after);
-    assert.deepEqual(stampChanges(before, after), ['pkg/f.txt'],
+    // 鍵は作業場からの道。git の根からの道（pkg/f.txt）ではない。
+    assert.deepEqual(stampChanges(before, after), ['f.txt'],
       `下のフォルダの書き足しを見逃している: ${JSON.stringify([...before], null, 0)}`);
   });
 
@@ -73,4 +74,14 @@ describe('作業場の記録', () => {
     }
   });
 
+
+  test('索引から、触る前の中身を作業ツリーの形で取れる', async () => {
+    const root = await repo();
+    const ws = join(root, 'pkg');
+    // 変える前はきれい。変えた後・消した後でも、索引には前の中身が残っている。
+    await writeFile(join(ws, 'f.txt'), 'changed\n');
+    assert.equal(await indexContent(ws, 'f.txt'), 'a\n');
+    await writeFile(join(ws, 'g.txt'), 'new\n');
+    assert.equal(await indexContent(ws, 'g.txt'), undefined, '索引に無いものを取れたことにしている');
+  });
 });

@@ -710,7 +710,11 @@ export const PANELS = {
         // **黙って押し戻さない。**何が起きているか分からないまま
         // 往復が増えると、動きが遅いだけに見える。
         note('dim', `途中で手が止まったので、続きを促しました（あと ${v.left} 回）`);
-      } else if (v.type === 'rolledBack') note('warn', `変更を巻き戻しました: ${v.paths.join(', ')}`);
+      } else if (v.type === 'rolledBack') {
+        // 戻せなかった分を黙らない。戻ったつもりで開くと、半分だけ戻った作業場を見ることになる。
+        note('warn', `変更を巻き戻しました: ${v.paths.join(', ')}`
+          + (v.notRestored?.length ? `（戻せなかった: ${v.notRestored.join(', ')} — 大きすぎて前の中身を記録していません）` : ''));
+      }
       else if (v.type === 'toolsFailed') {
         // **言葉より結果。**本文が「書き換えました」でも、止められていれば
         // 作業場は変わっていない。完了の顔をさせない。
@@ -718,11 +722,46 @@ export const PANELS = {
       } else if (v.type === 'outsideChanged') {
         // **外のツールで書いた回を、確かめた顔でも確かめていない顔でも黙らせない。**
         // 作業前の成否は測っていないので、落ちても今回の変更が原因とは限らない。
-        note('warn', v.beforeBaseline
-          ? `外のツールが先に作業場を変えました（${Array.isArray(v.paths) ? outsideNames(v.paths) : '比べられませんでした'}）。作業前の状態は測れないので、このあと落ちたものは今回の作業のものとして直させます。`
-          : Array.isArray(v.paths)
-          ? `外のツールが作業場を変えました（${outsideNames(v.paths)}）。作業前の状態は測っていないので、落ちても今回の変更が原因とは限りません。一度だけ確かめます。`
-          : '外のツールを使いましたが、作業場が変わったかを比べられませんでした（git の管理下でない作業場など）。確かめは回していません。');
+        if (v.beforeBaseline) {
+          const where = Array.isArray(v.paths) ? outsideNames(v.paths) : '比べられませんでした';
+          note('warn', v.remembered
+            ? `外のツールが先に作業場を変えました（${where}）。作業前の成否は、この回より前に測った結果を使います。`
+            : `外のツールが先に作業場を変えました（${where}）。作業前の状態は測れないので、このあと落ちたものは今回の作業のものとして直させます。`);
+        } else if (Array.isArray(v.paths)) {
+          note('warn', `外のツールが作業場を変えました（${outsideNames(v.paths)}）。作業前の状態は測っていないので、落ちても今回の変更が原因とは限りません。一度だけ確かめます。`);
+        } else {
+          /*
+           * **一度伝われば済む警告には、了解の口を付ける。**
+           *
+           * git の管理下でない作業場（社用 PC の Z: など）で使う人は、比べられないことを
+           * 一度了解すれば足りる。了解は作業場ごとに本体が覚え（`/api/acks`）、
+           * 次からは Session が出さない。取り消しは設定の中。
+           */
+          const n = el('div', 'note warn');
+          n.append(linkify('外のツールを使いましたが、作業場が変わったかを比べられませんでした（git の管理下でない作業場など）。確かめは回していません。'));
+          if (v.ackable) {
+            const bar = el('div', 'btnbar');
+            const ok = el('button', 'ghost', '了解（この作業場では次から出さない）');
+            ok.type = 'button';
+            ok.onclick = async () => {
+              ok.disabled = true;
+              try {
+                const r = await fetch('/api/acks', {
+                  method: 'POST', headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ id: v.ackable }),
+                });
+                if (!r.ok) throw new Error(String(r.status));
+                ok.textContent = '了解しました（設定 → 外の道具 で、また出せます）';
+              } catch {
+                ok.disabled = false;
+                ok.textContent = '了解を保存できませんでした。もう一度押してください';
+              }
+            };
+            bar.append(ok);
+            n.append(bar);
+          }
+          add(n);
+        }
       } else if (v.type === 'verify') showVerify(v.event);
       else if (v.type === 'finished' && v.reason !== 'completed' && v.detail) {
         /*

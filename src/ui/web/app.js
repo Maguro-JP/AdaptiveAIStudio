@@ -1987,7 +1987,53 @@ function fillSection(name) {
   if (name === 'check') return void loadChecks();
   if (name === 'info') { void loadInfo(); void showReport(); return; }
   if (name === 'model') { void loadCfg(); void loadCatalog(); return; }
-  if (name === 'mcp') { void loadMcpCatalog(); void loadMcp(); }
+  if (name === 'mcp') { void loadMcpCatalog(); void loadMcp(); void loadAcks(); }
+}
+
+/**
+ * この作業場で了解した警告。
+ *
+ * **閉じたら開けない、を作らない。**会話で「了解」を押した警告は、ここで「また出す」に戻せる。
+ * 記憶は本体（`/api/acks`）にあり、CLI の `/ack` と同じもの。
+ */
+async function loadAcks() {
+  const box = $('ackRows');
+  box.replaceChildren();
+  const empty = (text) => Object.assign(document.createElement('div'), { className: 'empty', textContent: text });
+  let d;
+  try {
+    d = await fetch('/api/acks').then((r) => r.json());
+  } catch (e) {
+    box.append(empty(`了解した警告を読めませんでした: ${e.message ?? e}`));
+    return;
+  }
+  if (!d.acks?.length) {
+    box.append(empty('この作業場で了解した警告はありません。'));
+    return;
+  }
+  for (const a of d.acks) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const k = document.createElement('span');
+    k.className = 'dim';
+    k.textContent = a.text;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ghost';
+    b.textContent = 'また出す';
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        await fetch('/api/acks', {
+          method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: a.id }),
+        });
+      } finally {
+        await loadAcks();
+      }
+    };
+    row.append(k, b);
+    box.append(row);
+  }
 }
 
 /* ---------- サポート用レポート ----------

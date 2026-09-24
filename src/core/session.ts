@@ -18,7 +18,7 @@ import {
   listServicesTool, createConnectServiceTool, createDisconnectServiceTool, type ServiceHooks,
 } from '../agent/tools/services.ts';
 import { defaultWorkRoot } from './home.ts';
-import { isWriteTool, mayChangeFiles } from '../agent/tools/write-kind.ts';
+import { isWriteTool, mayChangeFiles, isExternalTool } from '../agent/tools/write-kind.ts';
 import { resolve, join } from 'node:path';
 import type { AasConfig } from '../config.ts';
 import { buildRegistry } from './build.ts';
@@ -68,6 +68,8 @@ import { workspaceStamp, stampChanges } from '../agent/workspace-stamp.ts';
 import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
 import { UndoStore } from './undo.ts';
+import { OutsideChanges } from '../agent/outside-changes.ts';
+import { AckStore, type AckId } from './acks.ts';
 import { fitParts } from './prompt-budget.ts';
 import { rerankByBody, rerankShare } from '../agent/rerank.ts';
 import { rankedEntries, renderMap, seedFrom, covers } from '../agent/repo-map.ts';
@@ -176,7 +178,11 @@ export type SessionEvent =
     }
   /** 検証ループの様子。書いて終わりにしないための往復。 */
   | { type: 'verify'; event: VerifyEvent }
-  | { type: 'rolledBack'; paths: string[] }
+  | {
+      type: 'rolledBack'; paths: string[];
+      /** 外のツールが変えたが、大きすぎて前の中身を記録できず、戻せなかった道。 */
+      notRestored?: string[];
+    }
   /** 書き換えの中身。何がどう変わったかは、文章より差分の方が速い。 */
   | { type: 'diff'; path: string; diff: string; added: number; removed: number; created: boolean }
   /** 検証まで含めた、この依頼の結末。 */
@@ -221,7 +227,13 @@ export type SessionEvent =
    * `beforeBaseline` は、この場所のツールで書く手前で見つけたとき。作業前の成否は
    * 測らず、このあと落ちたものはこの回のものとして直させる。
    */
-  | { type: 'outsideChanged'; paths: string[] | undefined; beforeBaseline?: true }
+  | {
+      type: 'outsideChanged'; paths: string[] | undefined; beforeBaseline?: true;
+      /** 作業前の成否は測らないが、この回より前に測った結果を覚えていて、それを使う。 */
+      remembered?: true;
+      /** 了解できる警告。了解すると、この作業場では次から出ない（`Session.acks`）。 */
+      ackable?: AckId;
+    }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string };
 
 /** 分解して並列に働かせるときの出来事。CLI も画面も、これを見て描く。 */
@@ -305,6 +317,8 @@ export class Session {
    * 利用者にできることが「自分で書き戻す」しか無い**のでは任せられない。
    */
   readonly undo: UndoStore;
+  /** 了解した警告（作業場ごと）。画面の `/api/acks` と CLI の `/ack` が同じものを触る。 */
+  readonly acks: AckStore;
   /** なぜいまのモデルなのか。画面に出すために持つ（黙って選ばない）。 */
   readonly modelReason: string;
   /**
@@ -427,6 +441,7 @@ export class Session {
     this.modelReason = init.modelReason;
     this.root = init.root;
     this.undo = new UndoStore(init.root, join(stateDir(), 'undo'));
+    this.acks = new AckStore(join(stateDir(), 'acks.json'));
     this.#projectRules = new ProjectRules(init.root);
     this.candidates = init.candidates;
     this.memory = init.memory;
@@ -1185,6 +1200,18 @@ export class Session {
     const chat = looksLikeChat(instruction);
     const started = Date.now();
     const checkpoint = new Checkpoint(this.root);
+    /*
+     * **外のツール（MCP）と `run_command` が変えた分も、巻き戻しと「戻す」に載せる。**
+     *
+     * この場所の書くツールは書く直前に前の中身を渡してくれるが、外のツールは何を書くか
+     * 前もって分からない。呼ぶ前後で作業場を比べ、前の中身は呼ぶ前に読んだものか
+     * git の索引から取る（`src/agent/outside-changes.ts`）。載せないと、打ち切って
+     * 巻き戻したとき、この場所で書いた分だけ戻って外のツールの分が残る。
+     */
+    const outside = new OutsideChanges(this.root);
+    const outsideTool = (name: string): boolean => isExternalTool(name) || name === 'run_command';
+    /** 大きすぎて前の中身を記録できなかった道。戻せないことを言うために持つ。 */
+    const outsideTooLarge: string[] = [];
     this.#harness.beginTask();
 
     let finishedReason: string | undefined;
@@ -1277,7 +1304,23 @@ export class Session {
             const now = await workspaceStamp(this.root);
             const moved = now ? stampChanges(was, now) : undefined;
             if (moved === undefined || moved.length > 0) {
-              beforeEvents.push({ type: 'outsideChanged', paths: moved, beforeBaseline: true });
+              /*
+               * 走らせずに使える「前」があるなら使う。**この回より前に測った結果**は、
+               * 外のツールが触る前の姿。同じ回の中では、この場所のツールより前に測ることは
+               * 無いので、覚えているものは必ず外のツールより前（`BaselineProbe` は 30 分まで
+               * 覚える。普通の道でも同じ古さのものを使っている）。
+               */
+              const kept = this.baselineProbe.remembered(command);
+              if (kept?.result) {
+                baseline = kept.result;
+                beforeEvents.push({ type: 'outsideChanged', paths: moved, beforeBaseline: true, remembered: true });
+                beforeEvents.push({
+                  type: 'baseline', command, passed: kept.status === 'passed', cached: true,
+                  ...(kept.reason !== undefined ? { detail: kept.reason } : {}),
+                });
+              } else {
+                beforeEvents.push({ type: 'outsideChanged', paths: moved, beforeBaseline: true });
+              }
               return;
             }
           }
@@ -1294,7 +1337,7 @@ export class Session {
       });
 
       /*
-       * 効かなかった道具を数える。
+       * 効かなかったツールを数える。
        *
        * **「書き換えました」と言われても、書けているとは限らない。**
        * 読む前に書こうとして規則に止められたのに、本文は「書き換えました」で、
@@ -1332,6 +1375,7 @@ export class Session {
                 const p = (ev.call.args as { path?: unknown }).path;
                 if (typeof p === 'string') await checkpoint.capture(p);
               }
+              if (outsideTool(ev.call.name)) await outside.before();
               yield { type: 'toolStart', name: ev.call.name, summary: summarize(ev.call.args) };
               break;
             case 'toolEnd': {
@@ -1342,6 +1386,17 @@ export class Session {
                 wroteSomething = true;
                 const at = (ev.call.args as { path?: unknown }).path;
                 if (typeof at === 'string' && !changedHere.includes(at)) changedHere.push(at);
+              }
+              // 外のツールが変えた分を記録する。失敗して返っても、途中まで書いたかもしれない。
+              if (outsideTool(ev.call.name)) {
+                const found = await outside.after();
+                for (const c of found.changes) {
+                  if (harnessCfg.rollbackOnGiveUp) checkpoint.remember(c.path, c.previous);
+                  this.undo.capture(c.path, c.previous);
+                  if (!changedHere.includes(c.path)) changedHere.push(c.path);
+                }
+                for (const path of found.tooLarge) { this.undo.skip(path); outsideTooLarge.push(path); }
+                if (found.changes.length > 0 || found.tooLarge.length > 0) wroteSomething = true;
               }
               if (!ev.isError && mayChangeFiles(ev.call.name)) this.#prefetch.invalidate();
               yield {
@@ -1392,7 +1447,7 @@ export class Session {
         });
       }
 
-      // 道具が全部弾かれたのに、本文だけが「やりました」になっている形を見逃さない。
+      // ツールが全部弾かれたのに、本文だけが「やりました」になっている形を見逃さない。
       if (finishedReason === 'completed' && failedTools.length > 0 && !wroteSomething) {
         yield { type: 'toolsFailed', names: [...new Set(failedTools)] };
       }
@@ -1412,9 +1467,18 @@ export class Session {
                 const p = (ev.call.args as { path?: unknown }).path;
                 if (typeof p === 'string') await checkpoint.capture(p);
               }
+              if (outsideTool(ev.call.name)) await outside.before();
               events.push({ type: 'toolStart', name: ev.call.name, summary: summarize(ev.call.args) });
             } else if (ev.type === 'toolEnd') {
               if (!ev.isError && mayChangeFiles(ev.call.name)) this.#prefetch.invalidate();
+              if (outsideTool(ev.call.name)) {
+                const found = await outside.after();
+                for (const c of found.changes) {
+                  if (harnessCfg.rollbackOnGiveUp) checkpoint.remember(c.path, c.previous);
+                  this.undo.capture(c.path, c.previous);
+                }
+                for (const path of found.tooLarge) { this.undo.skip(path); outsideTooLarge.push(path); }
+              }
               events.push({
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
               });
@@ -1467,7 +1531,10 @@ export class Session {
         const now = was ? await workspaceStamp(this.root) : undefined;
         const paths = was && now ? stampChanges(was, now) : undefined;
         if (paths === undefined) {
-          yield { type: 'outsideChanged', paths: undefined };
+          // 比べられない作業場。一度伝われば済むので、了解済みならもう言わない。
+          if (!(await this.acks.has('outside-uncomparable', this.root))) {
+            yield { type: 'outsideChanged', paths: undefined, ackable: 'outside-uncomparable' };
+          }
         } else if (paths.length > 0 && !ac.signal.aborted) {
           yield { type: 'outsideChanged', paths };
           yield { type: 'verify', event: { type: 'running', round: 1, command } };
@@ -1492,12 +1559,25 @@ export class Session {
             yield { type: 'verify', event: { type: 'giveUp', reason: 'timeBudget', detail: '確かめが時間内に終わりませんでした' } };
           } else {
             /*
-             * **落ちた。ただし、この回のせいとは言えない。**作業前の成否を測っていないので、
-             * 元から落ちていたのかもしれない。`failed` にすると、思い出した記憶に失点を付け、
-             * 画面の「原因とは限りません」と記録が食い違う。分からないは分からないで持つ。
+             * **落ちた。この回のせいかは、覚えている「前」があれば言える。**
+             *
+             * この回より前に測った結果（`remembered`）と同じ落ち方なら元から。前は通っていた、
+             * または別の落ち方なら、外のツールで落ちた（打ち切りと同じく巻き戻す）。
+             * 覚えていなければ、分からないは分からないで持つ。`failed` にすると、思い出した
+             * 記憶に失点を付け、画面の「原因とは限りません」と記録が食い違う。
              */
-            checked = 'unsure';
-            yield { type: 'verify', event: { type: 'failed', round: 1, digest: digestFailure(r.output) } };
+            const digest = digestFailure(r.output);
+            const kept = this.baselineProbe.remembered(command);
+            if (kept?.result && !kept.result.passed && digestFailure(kept.result.output) === digest) {
+              checked = 'preexisting';
+              yield { type: 'verify', event: { type: 'preexisting', digest } };
+            } else if (kept?.result) {
+              keep = false; checked = 'failed';
+              yield { type: 'verify', event: { type: 'failed', round: 1, digest } };
+            } else {
+              checked = 'unsure';
+              yield { type: 'verify', event: { type: 'failed', round: 1, digest } };
+            }
           }
         }
       }
@@ -1505,7 +1585,8 @@ export class Session {
       // 打ち切ったなら、中途半端な状態を残さない選択肢を持つ。
       if (!keep && harnessCfg.rollbackOnGiveUp && checkpoint.size > 0) {
         const paths = await checkpoint.restore();
-        yield { type: 'rolledBack', paths };
+        const notRestored = [...new Set(outsideTooLarge)].sort();
+        yield { type: 'rolledBack', paths, ...(notRestored.length > 0 ? { notRestored } : {}) };
       } else {
         checkpoint.commit();
       }
