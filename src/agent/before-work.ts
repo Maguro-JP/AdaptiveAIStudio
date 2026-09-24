@@ -17,7 +17,7 @@
  *   ・成否は `changesFilesHere`（この場所のツール）の手前で、一度だけ
  *
  * 作業後の確かめ（直させるループ）を回すかどうかは、重い方を取ったか
- * （`measured`）で決める。外のツールだけの回は、軽い方と一緒に作業場の印
+ * （`measured`）で決める。外のツールだけの回は、軽い方と一緒に作業場の記録
  * （`stamp`）も取っておき、終わったときに作業場が変わっていたら一度だけ確かめる
  * （`src/core/session.ts`）。読むだけの MCP を呼んだ回ではテストを走らせない。
  */
@@ -32,7 +32,7 @@ export interface BeforeWorkOptions<S> {
   /** 重い記録（作業前の成否）。 */
   measure: () => Promise<void>;
   /**
-   * 作業場の印（`workspaceStamp`）。軽い記録と一緒に取る。
+   * 作業場の記録（`workspaceStamp`）。軽い記録と一緒に取る。
    * 外のツールだけの回に、作業場が変わったかを後で比べるのに使う。
    */
   stamp?: () => Promise<WorkspaceStamp | undefined>;
@@ -73,7 +73,7 @@ export class BeforeWork<S> {
     return this.#snapped;
   }
 
-  /** 最初に変えうるツールを呼ぶ手前の、作業場の印。比べられなければ無い。 */
+  /** 最初に変えうるツールを呼ぶ手前の、作業場の記録。比べられなければ無い。 */
   get stamp(): WorkspaceStamp | undefined {
     return this.#stamp;
   }

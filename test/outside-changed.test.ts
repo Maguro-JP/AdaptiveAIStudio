@@ -5,7 +5,7 @@
  * 回っていた。MCP で書いて終わった回は、何も確かめずに「完了」になっていた。
  *
  * 作業場が変わっていたら、一度だけ確かめる（直させない）。読むだけの回では
- * 走らせない。どちらも、検査が走った跡（印のファイル）で見る。
+ * 走らせない。どちらも、テストが走った跡（走るたびに1行増えるファイル）で見る。
  */
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,8 +24,8 @@ before(async () => { fake = await startFakeServer({ kind: 'stream', text: 'は�
 after(async () => { await fake.close(); });
 
 /**
- * 作業場を一つ作る。検査は「走った印を一つ上に足し、FAIL が在れば落ちる」だけ。
- * **印は作業場の外に置く。**中に置くと、検査が走ったこと自体が作業場の変化になる。
+ * 作業場を一つ作る。テストは「走ったことを一つ上のファイルに1行足し、FAIL が在れば落ちる」だけ。
+ * **そのファイルは作業場の外に置く。**中に置くと、テストが走ったこと自体が作業場の変化になる。
  */
 async function workspace(opts: { git: boolean }): Promise<{ root: string; marker: string }> {
   const home = await tempDir('aas-outside-');
@@ -107,7 +107,7 @@ describe('外のツールだけで書いた回', { timeout: 60_000 }, () => {
     const { root, marker } = await workspace({ git: true });
     const seen = await turn(root, { kind: 'toolcall', name: 'w__look', args: {}, then: '見ました。' });
     assert.equal(outside(seen), undefined, '変わっていないのに変わったと言っている');
-    assert.equal(await ranCount(marker), 0, '読んだだけで検査が走っている');
+    assert.equal(await ranCount(marker), 0, '読んだだけでテストが走っている');
     assert.deepEqual(verifyTypes(seen), []);
   });
 
