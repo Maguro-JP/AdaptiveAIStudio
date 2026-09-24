@@ -16,11 +16,13 @@
  *   ・数は `mayChangeFiles`（外のツールを含む）の手前で、一度だけ
  *   ・成否は `changesFilesHere`（この場所のツール）の手前で、一度だけ
  *
- * 作業後の確かめを回すかどうかは、今までどおり重い方を取ったか（`measured`）で
- * 決める。外のツールだけの回に確かめを足すと、読むだけの MCP を呼んだ回でも
- * テストが走る。それは別の判断なので、ここでは変えない。
+ * 作業後の確かめ（直させるループ）を回すかどうかは、重い方を取ったか
+ * （`measured`）で決める。外のツールだけの回は、軽い方と一緒に作業場の印
+ * （`stamp`）も取っておき、終わったときに作業場が変わっていたら一度だけ確かめる
+ * （`src/core/session.ts`）。読むだけの MCP を呼んだ回ではテストを走らせない。
  */
 import { mayChangeFiles, changesFilesHere } from './tools/write-kind.ts';
+import type { WorkspaceStamp } from './workspace-stamp.ts';
 
 export interface BeforeWorkOptions<S> {
   /** 確かめを切っているなら、何も記録しない。 */
@@ -29,11 +31,17 @@ export interface BeforeWorkOptions<S> {
   snapshot: () => Promise<S>;
   /** 重い記録（作業前の成否）。 */
   measure: () => Promise<void>;
+  /**
+   * 作業場の印（`workspaceStamp`）。軽い記録と一緒に取る。
+   * 外のツールだけの回に、作業場が変わったかを後で比べるのに使う。
+   */
+  stamp?: () => Promise<WorkspaceStamp | undefined>;
 }
 
 export class BeforeWork<S> {
   readonly #opts: BeforeWorkOptions<S>;
   #tests: S | undefined;
+  #stamp: WorkspaceStamp | undefined;
   #snapped = false;
   #measured = false;
 
@@ -47,6 +55,7 @@ export class BeforeWork<S> {
     if (!this.#snapped && mayChangeFiles(name)) {
       this.#snapped = true;
       this.#tests = await this.#opts.snapshot().catch(() => undefined);
+      this.#stamp = await this.#opts.stamp?.().catch(() => undefined);
     }
     if (!this.#measured && changesFilesHere(name)) {
       this.#measured = true;
@@ -57,6 +66,16 @@ export class BeforeWork<S> {
   /** 作業前のテストの数。まだ何も変えうるツールを呼んでいなければ無い。 */
   get tests(): S | undefined {
     return this.#tests;
+  }
+
+  /** 変えうるツール（外のツールを含む）を一度でも呼ぶ手前まで来たか。 */
+  get snapped(): boolean {
+    return this.#snapped;
+  }
+
+  /** 最初に変えうるツールを呼ぶ手前の、作業場の印。比べられなければ無い。 */
+  get stamp(): WorkspaceStamp | undefined {
+    return this.#stamp;
   }
 
   /** この場所のツールで変えうる手前まで来たか（重い記録を取ったか）。 */

@@ -62,8 +62,9 @@ import { findNewerFor, describeNewer } from '../runtime/model-updates.ts';
 import { catalogFamilies } from '../runtime/model-catalog.ts';
 import { Team } from '../agent/team.ts';
 import { accept, changedBetween, type AcceptanceReport, type MemberReport } from '../agent/acceptance.ts';
-import { runVerification, verifyLoop, type VerifyEvent, type VerifyResult } from '../agent/verify.ts';
-import { snapshotTests } from '../agent/test-integrity.ts';
+import { runVerification, verifyLoop, digestFailure, type VerifyEvent, type VerifyResult } from '../agent/verify.ts';
+import { snapshotTests, compareTests } from '../agent/test-integrity.ts';
+import { workspaceStamp, stampChanges } from '../agent/workspace-stamp.ts';
 import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
 import { UndoStore } from './undo.ts';
@@ -213,6 +214,12 @@ export type SessionEvent =
    * 本文が「やりました」でも、作業場は変わっていない。**言葉より結果を出す。**
    */
   | { type: 'toolsFailed'; names: string[] }
+  /**
+   * 外のツール（MCP）だけで終わった回に、作業場が変わっていた。
+   * `paths` が無いのは、比べられなかったとき（git の管理下でない等）。
+   * 変わっていれば、このあと一度だけ確かめる（直させはしない）。
+   */
+  | { type: 'outsideChanged'; paths: string[] | undefined }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string };
 
 /** 分解して並列に働かせるときの出来事。CLI も画面も、これを見て描く。 */
@@ -1249,6 +1256,7 @@ export class Session {
       const before = new BeforeWork({
         enabled: verifyOn,
         snapshot: () => snapshotTests(this.root),
+        stamp: () => workspaceStamp(this.root),
         measure: async () => {
           if (!command || verifyCfg.baseline === false) return;
           const probed = await this.measureBaseline(command, ac.signal);
@@ -1417,6 +1425,47 @@ export class Session {
           step = await loop.next();
         }
         while (events.length > 0) yield events.shift()!;
+      }
+
+      /*
+       * **外のツールだけの回。作業場が変わっていたら、一度だけ確かめる。**
+       *
+       * 上の確かめは、この場所のツールで書く手前に作業前の成否を測った回だけ回る。
+       * 外のツール（MCP）で書いて終わった回は、何も確かめずに「完了」になっていた。
+       *
+       * 作業前の成否は測っていない（外のツールの手前で測ると 1ターンが何十秒も
+       * 伸びる）。だから**直させない。**落ちたものが元から落ちていたのか分からない
+       * ままモデルに直させると、関係の無い所まで書き換えにいく。一度走らせて、
+       * 結果をそのまま見せるところまで。
+       *
+       * 読むだけの MCP を呼んだ回は、作業場が変わっていないので走らせない。
+       */
+      if (finishedReason === 'completed' && before.snapped && !before.measured && command) {
+        const was = before.stamp;
+        const now = was ? await workspaceStamp(this.root) : undefined;
+        const paths = was && now ? stampChanges(was, now) : undefined;
+        if (paths === undefined) {
+          yield { type: 'outsideChanged', paths: undefined };
+        } else if (paths.length > 0) {
+          yield { type: 'outsideChanged', paths };
+          yield { type: 'verify', event: { type: 'running', round: 1, command } };
+          const r = await runVerification(
+            { command, root: this.root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal);
+          // テストを消して通す形は、通っていても通ったとは言わない（上と同じ判じ方）。
+          const verdict = r.passed && before.tests
+            ? compareTests(before.tests, await snapshotTests(this.root))
+            : { ok: true as const };
+          if (!verdict.ok) {
+            keep = false; checked = 'failed';
+            yield { type: 'verify', event: { type: 'tampered', reason: verdict.reason ?? 'テストが減っています' } };
+          } else if (r.passed) {
+            checked = 'passed';
+            yield { type: 'verify', event: { type: 'passed', round: 1, durationMs: r.durationMs } };
+          } else {
+            keep = false; checked = 'failed';
+            yield { type: 'verify', event: { type: 'failed', round: 1, digest: digestFailure(r.output) } };
+          }
+        }
       }
 
       // 打ち切ったなら、中途半端な状態を残さない選択肢を持つ。

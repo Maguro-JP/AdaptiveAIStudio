@@ -658,6 +658,12 @@ async function main(): Promise<void> {
               flush();
               renderVerify(ev.event);
               break;
+            case 'outsideChanged':
+              flush();
+              console.log(c.yellow(ev.paths
+                ? `  外のツールが作業場を変えました（${ev.paths.length} 件: ${ev.paths.slice(0, 5).join(', ')}${ev.paths.length > 5 ? ' ほか' : ''}）。作業前の状態は測っていないので、落ちても今回の変更が原因とは限りません。一度だけ確かめます。`
+                : '  外のツールを使いましたが、作業場が変わったかを比べられませんでした（git の管理下ではありません）。確かめは回していません。'));
+              break;
             case 'rolledBack':
               console.log(c.yellow(`  変更を巻き戻しました: ${ev.paths.join(', ')}\n`));
               break;
