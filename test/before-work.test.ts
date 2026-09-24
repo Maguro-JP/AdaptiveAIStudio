@@ -95,3 +95,25 @@ describe('作業前の記録', () => {
     assert.equal(work.measured, false);
   });
 });
+
+describe('作業場の記録は、要る回だけ取る', () => {
+  test('外のツールが先なら取る。この場所のツールが先なら取らない', async () => {
+    let stamps = 0;
+    const make = () => new BeforeWork<number>({
+      enabled: true,
+      snapshot: async () => 0,
+      measure: async () => {},
+      stamp: async () => { stamps += 1; return new Map(); },
+    });
+    const outsideFirst = make();
+    await outsideFirst.atToolStart(OUTSIDE);
+    assert.equal(stamps, 1, '外のツールの手前で取っていない');
+    assert.ok(outsideFirst.stamp);
+
+    const hereFirst = make();
+    await hereFirst.atToolStart('write_file');
+    await hereFirst.atToolStart(OUTSIDE);
+    assert.equal(stamps, 1, 'この場所のツールが先なのに取っている（使わない git status を払う）');
+    assert.equal(hereFirst.stamp, undefined);
+  });
+});

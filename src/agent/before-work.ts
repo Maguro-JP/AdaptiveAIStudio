@@ -55,7 +55,9 @@ export class BeforeWork<S> {
     if (!this.#snapped && mayChangeFiles(name)) {
       this.#snapped = true;
       this.#tests = await this.#opts.snapshot().catch(() => undefined);
-      this.#stamp = await this.#opts.stamp?.().catch(() => undefined);
+      // 作業場の記録が要るのは、外のツールが先に来た回だけ。この場所のツールが
+      // 先なら、すぐ下で成否を測るので使わない（git status を毎回払わない）。
+      if (!changesFilesHere(name)) this.#stamp = await this.#opts.stamp?.().catch(() => undefined);
     }
     if (!this.#measured && changesFilesHere(name)) {
       this.#measured = true;
