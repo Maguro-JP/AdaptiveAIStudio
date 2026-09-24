@@ -109,6 +109,20 @@ export class BaselineProbe {
     else this.#done.delete(command);
   }
 
+  /**
+   * 作業後の確かめの結果を、次の回の「前」として覚える。
+   *
+   * 覚えているのが作業前の測りだけだと、前の回が落ちる姿のまま残した作業場でも
+   * 「前は通っていた」のままになる。回の終わりに分かった姿を書き戻して、
+   * 「この回より前」が本当に直前の姿になるようにする。
+   */
+  note(command: string, result: VerifyResult): void {
+    this.#done.set(command, {
+      at: this.#now(),
+      outcome: { status: result.passed ? 'passed' : 'failed', result, cached: false },
+    });
+  }
+
   /** 流さずに、覚えている結果だけを見る。 */
   remembered(command: string): BaselineOutcome | undefined {
     const e = this.#done.get(command);

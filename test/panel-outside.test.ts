@@ -15,7 +15,11 @@ const { PANELS } = await import('../src/ui/web/panels.js') as {
 };
 
 function open() {
-  (globalThis as { fetch?: unknown }).fetch = (async () => Response.json({})) as unknown as typeof fetch;
+  const sent: Array<{ url: string; method?: string; body?: unknown }> = [];
+  (globalThis as { fetch?: unknown }).fetch = (async (url: string, init?: { method?: string; body?: string }) => {
+    sent.push({ url, method: init?.method, body: init?.body ? JSON.parse(init.body) : undefined });
+    return Response.json({});
+  }) as unknown as typeof fetch;
   const handlers = new Map<string, Array<(e: unknown) => void>>();
   const body = createNode('div');
   PANELS.conversation!(body, {
@@ -29,7 +33,7 @@ function open() {
   const emit = (event: unknown) => {
     for (const fn of handlers.get('session') ?? []) fn({ event });
   };
-  return { emit, text: () => body.text };
+  return { emit, text: () => body.text, body, sent };
 }
 
 describe('外のツールで作業場が変わったことを言う', () => {
@@ -51,6 +55,32 @@ describe('外のツールで作業場が変わったことを言う', () => {
     t.emit({ type: 'outsideChanged', paths: undefined });
     assert.match(t.text(), /比べられませんでした/);
     assert.match(t.text(), /確かめは回していません/);
+    assert.equal(t.body.buttons().filter((b) => /了解/.test(b.textContent ?? '')).length, 0, '了解できないのに口を出している');
+  });
+
+  test('了解できる警告には「了解」の口があり、押すと本体へ送る', async () => {
+    const t = open();
+    t.emit({ type: 'outsideChanged', paths: undefined, ackable: 'outside-uncomparable' });
+    const ok = t.body.buttons().find((b) => /了解/.test(b.textContent ?? ''));
+    assert.ok(ok, '了解の口が無い');
+    await ok.onclick!();
+    assert.deepEqual(t.sent.map((s) => [s.url, s.method, s.body]), [['/api/acks', 'POST', { id: 'outside-uncomparable' }]]);
+    assert.match(ok.textContent ?? '', /了解しました/);
+    assert.match(ok.textContent ?? '', /また出せます/, '取り消せることを言っていない');
+  });
+
+  test('覚えている作業前を使うなら、そう言う', () => {
+    const t = open();
+    t.emit({ type: 'outsideChanged', paths: ['a.txt'], beforeBaseline: true, remembered: true });
+    assert.match(t.text(), /この回より前に測った結果を使います/);
+    assert.ok(!/直させます/.test(t.text()));
+  });
+
+  test('戻せなかった分を、巻き戻しの知らせに添える', () => {
+    const t = open();
+    t.emit({ type: 'rolledBack', paths: ['a.txt'], notRestored: ['big.bin'] });
+    assert.match(t.text(), /変更を巻き戻しました: a\.txt/);
+    assert.match(t.text(), /戻せなかった: big\.bin/);
   });
 
   test('書く手前で見つけたなら、直させると言う', () => {

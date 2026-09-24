@@ -39,6 +39,7 @@ import { formatIdleStats } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES } from '../harness/idle-modes.ts';
 import { formatDuties } from '../harness/duties.ts';
 
+import { ACK_IDS, ACK_TEXT, isAckId } from '../core/acks.ts';
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
   cyan: (s: string) => `\x1b[36m${s}\x1b[0m`,
@@ -518,6 +519,33 @@ async function main(): Promise<void> {
         await runPanelOn(target || '直近の変更を見て、問題があれば指摘してください。');
         continue;
       }
+      if (line === '/ack' || line === '/unack') {
+        console.log(c.dim(`  使い方: ${line} <警告の名前>（${ACK_IDS.join(', ')}）。一覧は /acks\n`));
+        continue;
+      }
+      if (line === '/acks' || line.startsWith('/ack ') || line.startsWith('/unack ')) {
+        const session = await getSession();
+        if (line === '/acks') {
+          const mine = (await session.acks.list()).filter((a) => a.root === session.root);
+          if (mine.length === 0) console.log(c.dim('  この作業場で了解した警告はありません。\n'));
+          for (const a of mine) console.log(`  ${c.cyan(a.id)} — ${c.dim(ACK_TEXT[a.id])}`);
+          if (mine.length > 0) console.log();
+          continue;
+        }
+        const [cmd, id] = line.split(/\s+/);
+        if (!isAckId(id)) {
+          console.log(c.red(`  了解できる警告ではありません: ${id ?? ''}（${ACK_IDS.join(', ')}）\n`));
+          continue;
+        }
+        if (cmd === '/ack') {
+          await session.acks.add(id, session.root);
+          console.log(c.dim(`  ${id} を了解しました。この作業場では次から出しません（/unack ${id} で戻せます）。\n`));
+        } else {
+          await session.acks.remove(id, session.root);
+          console.log(c.dim(`  ${id} をまた出すようにしました。\n`));
+        }
+        continue;
+      }
       if (line === '/proposals') {
         const open = (await getSession()).proposals.open();
         if (open.length === 0) console.log(c.dim('  未処理の提案はありません。\n'));
@@ -660,14 +688,23 @@ async function main(): Promise<void> {
               break;
             case 'outsideChanged':
               flush();
-              console.log(c.yellow(ev.beforeBaseline
-                ? `  外のツールが先に作業場を変えました（${ev.paths ? `${ev.paths.length} 件` : '比べられませんでした'}）。作業前の状態は測れないので、このあと落ちたものは今回の作業のものとして直させます。`
-                : ev.paths
-                ? `  外のツールが作業場を変えました（${ev.paths.length} 件: ${ev.paths.slice(0, 5).join(', ')}${ev.paths.length > 5 ? ' ほか' : ''}）。作業前の状態は測っていないので、落ちても今回の変更が原因とは限りません。一度だけ確かめます。`
-                : '  外のツールを使いましたが、作業場が変わったかを比べられませんでした（git の管理下でない作業場など）。確かめは回していません。'));
+              if (ev.beforeBaseline) {
+                const where = ev.paths ? `${ev.paths.length} 件` : '比べられませんでした';
+                console.log(c.yellow(ev.remembered
+                  ? `  外のツールが先に作業場を変えました（${where}）。作業前の成否は、この回より前に測った結果を使います。`
+                  : `  外のツールが先に作業場を変えました（${where}）。作業前の状態は測れないので、このあと落ちたものは今回の作業のものとして直させます。`));
+              } else if (ev.paths) {
+                console.log(c.yellow(`  外のツールが作業場を変えました（${ev.paths.length} 件: ${ev.paths.slice(0, 5).join(', ')}${ev.paths.length > 5 ? ' ほか' : ''}）。作業前の状態は測っていないので、落ちても今回の変更が原因とは限りません。一度だけ確かめます。`));
+              } else {
+                console.log(c.yellow('  外のツールを使いましたが、作業場が変わったかを比べられませんでした（git の管理下でない作業場など）。確かめは回していません。'));
+                // 一度伝われば済む。了解は作業場ごとに覚える（画面のボタンと同じ記憶）。
+                if (ev.ackable) console.log(c.dim(`     次から出さない: /ack ${ev.ackable}（取り消しは /unack ${ev.ackable}）`));
+              }
               break;
             case 'rolledBack':
-              console.log(c.yellow(`  変更を巻き戻しました: ${ev.paths.join(', ')}\n`));
+              flush();
+              console.log(c.yellow(`  変更を巻き戻しました: ${ev.paths.join(', ')}`
+                + (ev.notRestored?.length ? `（戻せなかった: ${ev.notRestored.join(', ')} — 大きすぎて前の中身を記録していません）` : '') + '\n'));
               break;
             case 'settled': {
               // 画面と同じく、どのモデルがどれだけの速さだったかを添える。

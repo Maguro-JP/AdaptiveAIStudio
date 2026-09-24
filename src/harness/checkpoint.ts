@@ -10,7 +10,7 @@
  */
 import { readFile, writeFile, unlink, mkdir, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { safeResolve } from '../agent/tools/paths.ts';
+import { safeResolve, toDisplayPath } from '../agent/tools/paths.ts';
 
 interface Saved {
   path: string;
@@ -30,13 +30,35 @@ export class Checkpoint {
     return this.#saved.size;
   }
 
-  /** 書き込む直前の状態を控える。同じファイルは最初の1回だけ。 */
+  /**
+   * 書き込む直前の状態を記録する。同じファイルは最初の1回だけ。
+   *
+   * 鍵は綴りをそろえてから使う。`a.ts` と `./a.ts` を別のファイルとして二つ記録すると、
+   * 二つ目は一つ目が書いた後の中身になり、戻すと元に戻らない。
+   */
   async capture(relPath: string): Promise<void> {
-    if (this.#saved.has(relPath)) return;
     const abs = safeResolve(this.#root, relPath);
     if (!abs) return;
+    const key = toDisplayPath(this.#root, abs);
+    if (this.#saved.has(key)) return;
     const content = await readFile(abs, 'utf8').catch(() => undefined);
-    this.#saved.set(relPath, { path: relPath, content });
+    this.#saved.set(key, { path: key, content });
+  }
+
+  /**
+   * 前の中身を**渡されて**記録する。同じファイルは最初の1回だけ。
+   *
+   * 外のツール（MCP）や `run_command` が変えたファイルは、変えた後にしか道が分からない。
+   * その時点でディスクを読んでも後の中身しか無いので、前の中身は呼ぶ側が
+   * （呼ぶ前に読んだもの、または git の索引から）持ってきて渡す。
+   * `content` が `undefined` なら「前は無かった」（戻すときは消す）。
+   */
+  remember(relPath: string, content: string | undefined): void {
+    const abs = safeResolve(this.#root, relPath);
+    if (!abs) return;
+    const key = toDisplayPath(this.#root, abs);
+    if (this.#saved.has(key)) return;
+    this.#saved.set(key, { path: key, content });
   }
 
   /** 控えた状態へ戻す。戻せた件数を返す。 */
