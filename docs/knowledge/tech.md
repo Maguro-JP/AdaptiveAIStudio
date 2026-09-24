@@ -3,6 +3,10 @@
 採用技術、ライブラリ、API、環境固有の問題、設計上の知識。新しいものを上に足す。
 経緯の長いものは `docs/DECISIONS.md` に書き、ここには一行と参照だけを置く。
 
+## 2026-09-24 CI は `.claude/` の .md 以外を触った PR でも起動する
+- `ci.yml` の `paths-ignore` は `**.md` `docs/**` `.gitignore` `.gitattributes` だけ。スキルの `SKILL.md` と `LESSONS.md` だけの PR（#26 #27 #29 #30）は起動しなかったが、`.claude/settings.json` や `.claude/**/*.sh` を触った PR（#22 #25 #32）は起動した（run 119・121・126）
+- 枠が戻ると、これらは ubuntu の 4 分ぶんずつ払う。`.claude/**` を足すかは判断が要る（`settings.json` の `permissions.deny` はハーネスの中身）
+
 ## 2026-09-24 claude.ai のクラウドでも、`npm run check` を飛ばさずに回せる
 - 読む側: `npm i --no-save --no-audit --no-fund node-llama-cpp @node-llama-cpp/linux-x64`（CI の `real` と同じ入れ方）。`--omit=optional` を付けると、このプロジェクトの任意の依存 `@anthropic-ai/sdk` まで外れて型検査が落ちる。付けない（GPU 用の部品で node_modules が 765MB になる）
 - 画面: `ln -sfn /opt/node22/lib/node_modules/playwright/node_modules/playwright-core node_modules/playwright-core`。`npm i` のたびにこのリンクは外されるので、入れた後に張り直す
