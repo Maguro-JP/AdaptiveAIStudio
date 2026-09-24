@@ -28,7 +28,7 @@ const B = 'b'.repeat(40);
 const clean = (head: string) => ({ head, dirty: [] as string[] });
 
 /**
- * フックを見る試験の印。
+ * フックを見る試験だけに付ける条件。
  *
  * `.githooks/` は作業場にだけ在り、bundle には入れない（利用者の手元で push はしない）。
  * bundle の中で走らせると、写す元が無くて落ちる。それは嘘の赤なので、飛ばしてそう言う。
