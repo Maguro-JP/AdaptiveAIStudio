@@ -27,6 +27,23 @@ const B = 'b'.repeat(40);
 
 const clean = (head: string) => ({ head, dirty: [] as string[] });
 
+/**
+ * フックを見る試験だけに付ける条件。
+ *
+ * `.githooks/` は作業場にだけ在り、bundle には入れない（利用者の手元で push はしない）。
+ * bundle の中で走らせると、写す元が無くて落ちる。それは嘘の赤なので、飛ばしてそう言う。
+ * 判断そのもの（`pushedTree`）の試験は、どこでも走らせる。
+ *
+ * **フックが在るかで決めない。**それだと作業場でフックを消したとき、フックを守る
+ * 試験が落ちる代わりに黙って飛ぶ。bundle であること（一つ上に `.portable` が在る）か、git の
+ * クローンでないことで決める。
+ */
+const inBundle = existsSync(join(import.meta.dirname, '..', '..', '.portable'))
+  || !existsSync(join(import.meta.dirname, '..', '.git'));
+const sourceOnly = inBundle
+  ? { skip: 'フックは作業場にしか無いので、bundle では確かめられません' }
+  : {};
+
 describe('確かめたワークツリーと、押すワークツリー', () => {
   test('同じなら通す', () => {
     assert.equal(pushedTree({ sending: A, before: clean(A), after: clean(A) }), undefined);
@@ -146,7 +163,7 @@ function push(work: string, args: string[] = ['-u', 'origin', 'main']): { ok: bo
   }
 }
 
-describe('フックが、本当に止める', () => {
+describe('フックが、本当に止める', sourceOnly, () => {
   test('確かめが通って、ワークツリーが動いていなければ押せる', async () => {
     const { work, ran } = await sandbox('process.exit(0);\n');
     const r = push(work);
@@ -235,7 +252,7 @@ describe('フックが、本当に止める', () => {
   });
 });
 
-describe('使うものが、そろっている', () => {
+describe('使うものが、そろっている', sourceOnly, () => {
   test('フックが、この二つを呼んでいる', async () => {
     /*
      * 判断を書いても、呼ばれなければ何も守らない。**呼ぶ行を見る。**

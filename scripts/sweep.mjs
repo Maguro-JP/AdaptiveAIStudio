@@ -58,7 +58,21 @@ p.on('response', (r) => {
   bad.push(`${r.status()} ${at}`);
 });
 
-await p.goto(url, { waitUntil: 'networkidle' });
+/*
+ * **通信が止むのを待たない。本体と繋がったのを待つ。**
+ *
+ * `networkidle`（通信が 0.5 秒止むまで待つ）で開いていた。画面は開いた瞬間から
+ * `/api/events` を開きっぱなしにするので、通信は止まない。Chromium の版によっては
+ * 30 秒で切れて、押す前に落ちた（2026-09-24、claude.ai のクラウドで実測）。
+ * Playwright も `networkidle` は勧めていない。画面が「つながっています」になった
+ * （`#status.live`、EventSource の onopen）ところを、開き終わりとみなす。
+ */
+// 横のパネルを畳んでいても繋がりは見える。**見えているかではなく、在るかで待つ**
+// （既定の visible だと、畳んだ状態が残ったとき 30 秒ずつ待って連鎖して落ちる）。
+const opened = () => p.waitForSelector('#status.live', { state: 'attached', timeout: 30_000 });
+
+await p.goto(url, { waitUntil: 'load' });
+await opened();
 await p.waitForTimeout(800);
 
 /** 設定の板を閉じる。開いたままだと、後の確かめが全部その板に阻まれる。 */
@@ -812,7 +826,8 @@ if (noModel) {
     } finally {
       await p.unroute('**/api/models/get');
       // 元の姿に戻す（この後の確かめが、この帯に邪魔されないように畳む）。
-      await p.reload({ waitUntil: 'networkidle' });
+      await p.reload({ waitUntil: 'load' });
+      await opened();
       await p.waitForTimeout(600);
     }
   });
@@ -1492,7 +1507,8 @@ await check('保存していない直しは、読み直しても残る', async (
     await area.fill('書きかけ\n');
     // 手が止まってから預ける作りなので、少し待つ。
     await p.waitForTimeout(1200);
-    await p.reload({ waitUntil: 'networkidle' });
+    await p.reload({ waitUntil: 'load' });
+    await opened();
     await p.waitForTimeout(1500);
     await openProbe();
     const back = await p.locator('.editor-area').inputValue();
@@ -1584,7 +1600,7 @@ await check('どのパネルを出しても、中身が外へ出ない', async (
     await p.evaluate((l) => fetch('/api/layout', {
       method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(l),
     }), saved).catch(() => undefined);
-    await p.reload({ waitUntil: 'networkidle' }).catch(() => undefined);
+    await p.reload({ waitUntil: 'load' }).then(opened).catch(() => undefined);
     await p.waitForTimeout(900);
   }
 });
@@ -1622,7 +1638,8 @@ await check('覚え書きに打てて、読み直しても残る', async () => {
     await area.fill('sweep で書いた覚え書き');
     // 手が止まってから残す作りなので、少し待つ。
     await p.waitForTimeout(1400);
-    await p.reload({ waitUntil: 'networkidle' });
+    await p.reload({ waitUntil: 'load' });
+    await opened();
     await p.waitForTimeout(1200);
     await front();
     const back = await p.locator('.note-area').inputValue();

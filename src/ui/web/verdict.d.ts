@@ -1,7 +1,7 @@
 /** 画面側の素の JS に、型だけ添える。中身は verdict.js が持つ。 */
 export interface Verdict {
   reason: string;
-  checked?: 'passed' | 'failed' | 'preexisting' | 'notRun';
+  checked?: 'passed' | 'failed' | 'preexisting' | 'unsure' | 'notRun';
   /**
    * 訊かれただけの回か。
    *

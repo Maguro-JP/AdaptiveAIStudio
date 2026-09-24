@@ -40,6 +40,8 @@ function howText(v) {
   if (v.checked === 'passed') return '完了（検証を通りました）';
   if (v.checked === 'failed') return '完了（検証は通っていません）';
   if (v.checked === 'preexisting') return '完了（元から落ちています）';
+  // 作業前を測っていない回（外のツールだけで書いた回）。落ちているが、原因は言えない。
+  if (v.checked === 'unsure') return '完了（検証は通っていません。今回が原因かは分かりません）';
   return '完了（検証していません）';
 }
 
