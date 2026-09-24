@@ -17,6 +17,7 @@
 import { readFile, writeFile, mkdir, unlink, stat, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { safeResolve } from '../agent/tools/paths.ts';
+import { putBack, putBackOrder } from '../harness/put-back.ts';
 
 /** 一つの戻り先。 */
 export interface UndoPoint {
@@ -254,19 +255,13 @@ export class UndoStore {
       if (!raw) continue;
       let stored: Stored;
       try { stored = JSON.parse(raw) as Stored; } catch { continue; }
-      for (const saved of stored.files ?? []) {
+      for (const saved of putBackOrder(stored.files ?? [])) {
         const abs = safeResolve(this.#root, saved.path);
         if (!abs) continue;
-        try {
-          if (!was.has(saved.path)) was.set(saved.path, await readFile(abs, 'utf8').catch(() => undefined));
-          if (saved.content === undefined) {
-            if (await stat(abs).catch(() => undefined)) await unlink(abs);
-          } else {
-            await mkdir(dirname(abs), { recursive: true });
-            await writeFile(abs, saved.content, 'utf8');
-          }
-          if (!touched.includes(saved.path)) touched.push(saved.path);
-        } catch { /* 1件戻せなくても他は戻す */ }
+        if (!was.has(saved.path)) was.set(saved.path, await readFile(abs, 'utf8').catch(() => undefined));
+        // リンクは辿らず、フォルダには書かず、戻せなければ飛ばす（1件戻せなくても他は戻す）。
+        const r = await putBack(this.#root, saved.path, saved.content);
+        if (r === 'restored' && !touched.includes(saved.path)) touched.push(saved.path);
       }
       await unlink(join(this.#dir, `${point.id}.json`)).catch(() => undefined);
     }

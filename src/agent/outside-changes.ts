@@ -18,14 +18,14 @@
  * 呼ぶたびに `before()` → ツール → `after()`。同じ道は最初の一度だけ記録する
  * （Checkpoint / UndoStore と同じ）。大きすぎるもの・取れないものは読まず、名前だけ返す
  * （`unrecorded`）。**取れないものを「前は無い」と読まない。**読むと、戻すときに在った
- * ファイルを消す。
+ * ファイルを消す。二進（utf8 で往復しないもの）・HEAD がリンク・submodule も同じく名前だけ。
  *
  * **見えないところ。**git の管理下でない作業場では何も分からない（`comparable: false`）。
  * `.gitignore` の中は git が挙げないので見えない。`run_command` が `git commit` で HEAD を
  * 動かした回は、その後に「前」として引く HEAD が変わっている。
  */
 import { readFile, stat } from 'node:fs/promises';
-import { workspaceStamp, stampChanges, headContent, type WorkspaceStamp } from './workspace-stamp.ts';
+import { workspaceStamp, stampChanges, headContent, textOf, type WorkspaceStamp } from './workspace-stamp.ts';
 import { safeResolve } from './tools/paths.ts';
 
 /** 一つの道につき、これより大きいものは記録しない（UndoStore と同じ 8MiB）。 */
@@ -93,7 +93,9 @@ export class OutsideChanges {
         this.#unrecorded.add(path);
         continue;
       }
-      const text = await readFile(abs, 'utf8').catch(() => undefined);
+      // 文字列として往復で戻るものだけ持つ。二進や Shift_JIS を utf8 で読むと、戻すときに壊す。
+      const bytes = await readFile(abs).catch(() => undefined);
+      const text = bytes === undefined ? undefined : textOf(bytes);
       if (text === undefined) { this.#unrecorded.add(path); continue; }
       this.#bytes += s.size;
       this.#kept.set(path, text);
@@ -115,9 +117,12 @@ export class OutsideChanges {
       this.#reported.add(path);
       if (this.#unrecorded.has(path)) { unrecorded.push(path); continue; }
       if (this.#kept.has(path)) { changes.push({ path, previous: this.#kept.get(path) }); continue; }
-      // 呼ぶ前はきれいだった（記録に無い）。新しく出てきた untracked なら、前は無い。
-      if (now.get(path)?.startsWith('??')) { changes.push({ path, previous: undefined }); continue; }
-      // 追跡されていて、変わった・消えた・索引だけ動いた。HEAD に前の中身がある。
+      /*
+       * 呼ぶ前はきれいだった（記録に無い）。**`??` でも HEAD を引く。**
+       * `git rm --cached`（作業ツリーには残して追跡をやめる）や、`git mv` の後に元の名前へ書く回は、
+       * 在ったファイルが `??` で出てくる。`??` を「前は無い」と読むと、戻すときにそれを消す。
+       * HEAD に無いときだけ「前は無い」。
+       */
       const head = await headContent(this.#root, path, Math.min(this.#maxBytes, this.#maxTotalBytes - this.#bytes));
       if (head.kind === 'absent') { changes.push({ path, previous: undefined }); continue; }
       if (head.kind === 'unavailable') { this.#unrecorded.add(path); unrecorded.push(path); continue; }

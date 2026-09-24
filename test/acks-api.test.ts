@@ -53,6 +53,16 @@ describe('/api/acks', () => {
     assert.deepEqual((await (await call('GET')).json() as { acks: unknown[] }).acks, []);
   });
 
+  test('警告に添えた作業場があれば、いまの作業場でなくそちらに結びつける', async () => {
+    const other = await tempDir('aas-acks-other-');
+    const r = await call('POST', { id: 'outside-uncomparable', root: other });
+    assert.equal(r.status, 200);
+    const raw = JSON.parse(await readFile(join(dir, 'acks.json'), 'utf8')) as { acks: Array<{ root: string }> };
+    assert.ok(raw.acks.some((a) => a.root === other), '添えた作業場に結びついていない');
+    assert.deepEqual((await (await call('GET')).json() as { acks: unknown[] }).acks, [], 'いまの作業場に結びつけている');
+    await call('DELETE', { id: 'outside-uncomparable', root: other });
+  });
+
   test('知らない名前は 400', async () => {
     const r = await call('POST', { id: 'nope' });
     assert.equal(r.status, 400);

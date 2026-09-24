@@ -48,7 +48,8 @@ async function workspace(opts: { git: boolean; failing?: boolean }): Promise<{ r
   if (opts.failing) await writeFile(join(root, 'FAIL'), 'x');
   await writeFile(join(root, 'package.json'), JSON.stringify({
     name: 'x', version: '1.0.0',
-    scripts: { test: `node -e "require('fs').appendFileSync('../ran.txt','x\\n');if(require('fs').existsSync('FAIL'))process.exit(1)"` },
+    // HANG が在れば止まらない（時間切れの回を作るため）。
+    scripts: { test: `node -e "const f=require('fs');f.appendFileSync('../ran.txt','x\\n');if(f.existsSync('HANG'))setTimeout(()=>{},30000);else if(f.existsSync('FAIL'))process.exit(1)"` },
   }));
   if (opts.git) {
     git(root, 'init', '-q');
@@ -73,14 +74,19 @@ async function ranCount(marker: string): Promise<number> {
   return raw.split('\n').filter((l) => l.length > 0).length;
 }
 
-type Extra = { maxRounds?: number; rollback?: boolean };
+type Extra = { maxRounds?: number; rollback?: boolean; commandTimeoutMs?: number };
 
 function config(root: string, extra: Extra = {}): AasConfig {
   return {
     ...DEFAULT_CONFIG,
     providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
     candidates: ['local:m'],
-    agent: { root, approval: 'auto', ...(extra.maxRounds ? { verify: { maxRounds: extra.maxRounds } } : {}) },
+    agent: {
+      root, approval: 'auto',
+      ...(extra.maxRounds || extra.commandTimeoutMs
+        ? { verify: { ...(extra.maxRounds ? { maxRounds: extra.maxRounds } : {}), ...(extra.commandTimeoutMs ? { commandTimeoutMs: extra.commandTimeoutMs } : {}) } }
+        : {}),
+    },
     ...(extra.rollback ? { harness: { rollbackOnGiveUp: true } } : {}),
     mcp: { servers: { w: { command: process.execPath, args: [FIXTURE], startupTimeoutMs: 20_000 } } },
   } as AasConfig;
@@ -414,5 +420,42 @@ describe('覚えている作業前を、回の終わりに書き直す', { timeo
     assert.deepEqual(rb.notRestored, ['big.bin'], '戻せなかったものを言っていない');
     assert.equal(await exists(join(root, 'FAIL')), false);
     assert.equal((await stat(join(root, 'big.bin'))).size, 5, '戻せないものを戻したことにしている');
+  });
+});
+
+/*
+ * 読み直しで見つかった二つ。巻き戻した後の「前」を捨てていた／時間切れの途中の出力を「前」として覚えていた。
+ */
+describe('覚えている「前」の扱い（読み直しの指摘）', { timeout: 120_000 }, () => {
+  const writeHere: Behavior = {
+    kind: 'steps',
+    calls: [
+      { name: 'read_file', args: { path: 'note.txt' } },
+      { name: 'write_file', args: { path: 'note.txt', content: '書き換えました\n' } },
+    ],
+    then: '書きました。',
+  };
+
+  test('外のツールだけの回を巻き戻しても「前」を覚えたまま。三回目も巻き戻す', async () => {
+    const { root } = await workspace({ git: true });
+    const mcpFail: Behavior = { kind: 'toolcall', name: 'w__write', args: { path: join(root, 'FAIL'), content: 'x' }, then: '書きました。' };
+    const [, second, third] = await turns(root, [writeHere, mcpFail, mcpFail], { maxRounds: 1, rollback: true });
+    assert.deepEqual(rolledBack(second!)?.paths, ['FAIL']);
+    assert.equal(settledOf(third!)?.checked, 'failed', `三回目で「前」を忘れている: ${settledOf(third!)?.checked}`);
+    assert.deepEqual(rolledBack(third!)?.paths, ['FAIL'], '三回目を巻き戻していない');
+    assert.equal(await exists(join(root, 'FAIL')), false);
+  });
+
+  test('時間切れで打ち切った回の途中の出力を「前」として覚えない。次の回は分からないで持つ', async () => {
+    const { root } = await workspace({ git: true });
+    const [first, second] = await turns(root, [
+      { kind: 'steps', calls: [
+        { name: 'write_file', args: { path: 'FAIL', content: 'x' } },
+        { name: 'write_file', args: { path: 'HANG', content: 'x' } }], then: '書きました。' },
+      { kind: 'toolcall', name: 'w__remove', args: { path: join(root, 'HANG') }, then: '消しました。' },
+    ], { maxRounds: 1, commandTimeoutMs: 1500 });
+    assert.ok(verifyTypes(first!).includes('giveUp'), `一回目が時間切れで打ち切られていない: ${verifyTypes(first!).join(',')}`);
+    // FAIL は一回目が残したもの。二回目の外のツールのせいにしない（覚えていないので「分からない」）。
+    assert.equal(settledOf(second!)?.checked, 'unsure', `一回目が残した失敗を二回目のせいにしている: ${settledOf(second!)?.checked}`);
   });
 });

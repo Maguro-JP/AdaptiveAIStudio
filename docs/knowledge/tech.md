@@ -9,6 +9,10 @@
 - 索引（`:./道`）は `git add` / `git rm` / `git mv` で動くので「前」にならない。HEAD は `git commit` でしか動かない
 - `git rev-parse --show-prefix` は cwd の根からの道（`sub/`、根なら空）。`--show-toplevel` は実体の道なので、シンボリックリンク越しの cwd から `relative()` を取ると `../../` になる
 - `git status --porcelain=v1 -z` で R / C の元の名前は次の欄に来る（`新\0元\0`）
+- `git status` は同じ道を二行で出すことがある（`git rm --cached` の後は `D ` と `??`）。道を鍵にした Map は後の行で上書きされる
+- `git ls-tree -l -z HEAD -- ./道` は一度で、在るか・mode（100644 / 120000 リンク / 160000 submodule）・大きさを返す
+- Node の `fs.writeFile` / `stat` はリンクを辿る。作業場の中に置かれたリンクへ書くと、外のファイルを書く。`lstat` で見て、リンクは消してから書く
+- `npm install` の `prepare` は引数なしの `npm install` と `npm ci` で走る。`npm i --no-save x` では走らない
 - `toolStart` はツールが動く前に届く（`src/agent/loop.ts` の `yield` が先）。ここで作業場の記録を取れば、ツールが触る前の姿になる
 - 一つの Session で続けて送る試験は、fake-server の `steps` が履歴のツールの数で段を決めるので、回ごとに `session.reset()` で履歴を空にする（覚えたもの＝ベースラインは残る）
 

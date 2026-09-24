@@ -3,6 +3,18 @@
 起きたバグ、原因、解決、再発防止、失敗した手、採用しなかった案と理由。新しいものを上に足す。
 自分の判定の誤りは `.claude/skills/lessons/LESSONS.md`、ここはプロダクトの問題。
 
+## 2026-09-24 bundle の中の `npm test` で、`test/report.test.ts` が runner の側で一度だけ落ちた
+- 症状: 中の 6 件は全部 ok なのに、ファイル単位が `Unable to deserialize cloned data due to invalid or unsupported version.`（`node:internal/test_runner/runner` の `#processRawBuffer`）で not ok。`check:bundle` の 4 回のうち 1 回
+- 原因: 分かっていない。node の test runner が子プロセスから受ける記録が壊れた形。`report.test.ts` は doctor を回すので、子プロセスの出力が runner の口に混ざった可能性を疑っている（確かめていない）
+- 対処: 手元で 3 回回して 3 回通った。同じ木で `check:bundle` をもう一度回す（一度だけ）。二度目も落ちるなら test 側を読む
+- 残り: 再発したら、`report.test.ts` の doctor を回す試験で stdio を `pipe` に閉じる
+
+## 2026-09-24 巻き戻しがリンクを辿って作業場の外を書き、二進を別の中身にして戻し、`??` の在るファイルを消していた
+- 原因: `writeFile` はリンクを辿る／前の中身を utf8 の文字列で持っていた／`??` を「前は無い」と読んでいた（`git rm --cached` と `git mv` 後の再エクスポートで在るファイルが `??` になる）／戻せなかった道を `catch {}` で黙って落としていた
+- 解決: 置き戻しを `src/harness/put-back.ts` に集め（`lstat`、リンクは消してから書く、親の実体で外を断る、消す道を先に）、`Checkpoint.restoreAll` が戻せなかった道を返す。`textOf` で往復で戻る文字列だけ持つ。`headContent` は `ls-tree -l` で種類と大きさを見て、`??` でも HEAD を引く
+- 再発防止: `test/put-back.test.ts`、`test/outside-changes.test.ts`（`git rm --cached`／`git mv` 後／二進／HEAD がリンク）、`test/outside-changed.test.ts`（三回目も巻き戻す／時間切れを覚えない）
+- 見つけ方: マージ後に 5 観点で読ませ、指摘ごとに 2 人に反証させた。自分の一度目の読みでは 6 件、押す前の読み直しで 21 件、マージ後の読み直しで 26 件
+
 ## 2026-09-24 fresh clone に pre-push フックが入っておらず、確かめずに push が通った
 - 原因: `.githooks/README.md` の「一度だけ打つ」を誰も打たなかった。`core.hooksPath` は clone に付いてこない
 - 解決: `npm install` の `prepare` が `scripts/hooks.mjs` で入れる。`npm run check` の始めでも入れる。入っていなければ `test/hooks.test.ts` が落ちる

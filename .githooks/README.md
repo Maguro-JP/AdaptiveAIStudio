@@ -8,4 +8,5 @@
 （中身は `git config core.hooksPath .githooks`）。
 
 「新しく clone したときは一度だけ打つ」と書いていたが、fresh clone で誰も打たず、
-フックが無いまま push が通った。入っていなければ `test/hooks.test.ts` が落ちて言う。
+フックが無いまま push が通った。`test/hooks.test.ts` は、本物の clone に入ることを見る
+（この作業場の状態は見ない。CI は `npm ci` の前に `npm test` を回す）。

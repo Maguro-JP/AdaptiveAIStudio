@@ -8,9 +8,9 @@
  * git があるならそちらが本来の安全網。これは git 管理外や
  * 未コミット状態でも巻き戻せるようにする補助。
  */
-import { readFile, writeFile, unlink, mkdir, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { safeResolve, toDisplayPath } from '../agent/tools/paths.ts';
+import { putBack, putBackOrder } from './put-back.ts';
 
 interface Saved {
   path: string;
@@ -61,30 +61,27 @@ export class Checkpoint {
     this.#saved.set(key, { path: key, content });
   }
 
-  /** 控えた状態へ戻す。戻せた件数を返す。 */
+  /** 記録した状態へ戻す。戻せた道を返す。 */
   async restore(): Promise<string[]> {
+    return (await this.restoreAll()).restored;
+  }
+
+  /**
+   * 記録した状態へ戻し、**戻せなかった道も返す。**
+   *
+   * 1件戻せなくても他は戻す。ただし黙って落とさない。戻せなかった道が無いと、
+   * 呼ぶ側は「作業場は回の前に戻った」と読んで、次の回の「前」を間違える。
+   */
+  async restoreAll(): Promise<{ restored: string[]; failed: string[] }> {
     const restored: string[] = [];
-    for (const saved of this.#saved.values()) {
-      const abs = safeResolve(this.#root, saved.path);
-      if (!abs) continue;
-      try {
-        if (saved.content === undefined) {
-          // 元々無かったファイル。作られていれば消す。
-          if (await stat(abs).catch(() => undefined)) {
-            await unlink(abs);
-            restored.push(saved.path);
-          }
-        } else {
-          await mkdir(dirname(abs), { recursive: true });
-          await writeFile(abs, saved.content, 'utf8');
-          restored.push(saved.path);
-        }
-      } catch {
-        // 1件戻せなくても他は戻す
-      }
+    const failed: string[] = [];
+    for (const saved of putBackOrder([...this.#saved.values()])) {
+      const r = await putBack(this.#root, saved.path, saved.content);
+      if (r === 'restored') restored.push(saved.path);
+      else if (r === 'failed') failed.push(saved.path);
     }
     this.#saved.clear();
-    return restored;
+    return { restored, failed };
   }
 
   /** 成功したので控えを捨てる。 */
