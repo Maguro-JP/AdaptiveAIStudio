@@ -718,7 +718,9 @@ export const PANELS = {
       } else if (v.type === 'outsideChanged') {
         // **外のツールで書いた回を、確かめた顔でも確かめていない顔でも黙らせない。**
         // 作業前の成否は測っていないので、落ちても今回の変更が原因とは限らない。
-        note('warn', Array.isArray(v.paths)
+        note('warn', v.beforeBaseline
+          ? `外のツールが先に作業場を変えました（${Array.isArray(v.paths) ? outsideNames(v.paths) : '比べられませんでした'}）。作業前の状態は測れないので、このあと落ちたものは今回の作業のものとして直させます。`
+          : Array.isArray(v.paths)
           ? `外のツールが作業場を変えました（${outsideNames(v.paths)}）。作業前の状態は測っていないので、落ちても今回の変更が原因とは限りません。一度だけ確かめます。`
           : '外のツールを使いましたが、作業場が変わったかを比べられませんでした（git の管理下ではありません）。確かめは回していません。');
       } else if (v.type === 'verify') showVerify(v.event);

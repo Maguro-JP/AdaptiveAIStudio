@@ -218,8 +218,10 @@ export type SessionEvent =
    * 外のツール（MCP）だけで終わった回に、作業場が変わっていた。
    * `paths` が無いのは、比べられなかったとき（git の管理下でない等）。
    * 変わっていれば、このあと一度だけ確かめる（直させはしない）。
+   * `beforeBaseline` は、この場所のツールで書く手前で見つけたとき。作業前の成否は
+   * 測らず、このあと落ちたものはこの回のものとして直させる。
    */
-  | { type: 'outsideChanged'; paths: string[] | undefined }
+  | { type: 'outsideChanged'; paths: string[] | undefined; beforeBaseline?: true }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string };
 
 /** 分解して並列に働かせるときの出来事。CLI も画面も、これを見て描く。 */
@@ -1259,6 +1261,23 @@ export class Session {
         stamp: () => workspaceStamp(this.root),
         measure: async () => {
           if (!command || verifyCfg.baseline === false) return;
+          /*
+           * **外のツールが先に作業場を変えていたら、ここで測るのは「作業前」ではない。**
+           *
+           * 測れば、外のツールが落とした分まで「作業前から落ちていた」と読み、
+           * この回のせいにしない（直させない）。外のツールを呼んだのもこの回なので、
+           * 落ちたものはこの回のものとして扱う。成否は測らず、そう言う。
+           * 比べられないとき（git の管理下でない等）は、これまでどおり測る。
+           */
+          const was = before.stamp;
+          if (was) {
+            const now = await workspaceStamp(this.root);
+            const moved = now ? stampChanges(was, now) : undefined;
+            if (moved === undefined || moved.length > 0) {
+              beforeEvents.push({ type: 'outsideChanged', paths: moved, beforeBaseline: true });
+              return;
+            }
+          }
           const probed = await this.measureBaseline(command, ac.signal);
           baseline = probed.result;
           beforeEvents.push({

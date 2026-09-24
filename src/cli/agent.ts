@@ -660,7 +660,9 @@ async function main(): Promise<void> {
               break;
             case 'outsideChanged':
               flush();
-              console.log(c.yellow(ev.paths
+              console.log(c.yellow(ev.beforeBaseline
+                ? `  外のツールが先に作業場を変えました（${ev.paths ? `${ev.paths.length} 件` : '比べられませんでした'}）。作業前の状態は測れないので、このあと落ちたものは今回の作業のものとして直させます。`
+                : ev.paths
                 ? `  外のツールが作業場を変えました（${ev.paths.length} 件: ${ev.paths.slice(0, 5).join(', ')}${ev.paths.length > 5 ? ' ほか' : ''}）。作業前の状態は測っていないので、落ちても今回の変更が原因とは限りません。一度だけ確かめます。`
                 : '  外のツールを使いましたが、作業場が変わったかを比べられませんでした（git の管理下ではありません）。確かめは回していません。'));
               break;

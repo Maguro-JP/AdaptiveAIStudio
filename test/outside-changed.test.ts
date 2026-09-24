@@ -27,12 +27,15 @@ after(async () => { await fake.close(); });
  * 作業場を一つ作る。テストは「走ったことを一つ上のファイルに1行足し、FAIL が在れば落ちる」だけ。
  * **そのファイルは作業場の外に置く。**中に置くと、テストが走ったこと自体が作業場の変化になる。
  */
-async function workspace(opts: { git: boolean }): Promise<{ root: string; marker: string }> {
+async function workspace(opts: { git: boolean; failing?: boolean }): Promise<{ root: string; marker: string }> {
   const home = await tempDir('aas-outside-');
   const root = join(home, 'project');
   const marker = join(home, 'ran.txt');
   await mkdir(join(root, 'test'), { recursive: true });
   await writeFile(join(root, 'test', 'a.test.ts'), "test('one', () => {});\ntest('two', () => {});\n");
+  await writeFile(join(root, 'note.txt'), 'もとの中身\n');
+  // 作業の前から落ちている作業場（対を作るため）。
+  if (opts.failing) await writeFile(join(root, 'FAIL'), 'x');
   await writeFile(join(root, 'package.json'), JSON.stringify({
     name: 'x', version: '1.0.0',
     scripts: { test: `node -e "require('fs').appendFileSync('../ran.txt','x\\n');if(require('fs').existsSync('FAIL'))process.exit(1)"` },
@@ -51,12 +54,12 @@ async function ranCount(marker: string): Promise<number> {
   return raw.split('\n').filter((l) => l.length > 0).length;
 }
 
-function config(root: string): AasConfig {
+function config(root: string, extra: { maxRounds?: number } = {}): AasConfig {
   return {
     ...DEFAULT_CONFIG,
     providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
     candidates: ['local:m'],
-    agent: { root, approval: 'auto' },
+    agent: { root, approval: 'auto', ...(extra.maxRounds ? { verify: { maxRounds: extra.maxRounds } } : {}) },
     mcp: { servers: { w: { command: process.execPath, args: [FIXTURE], startupTimeoutMs: 20_000 } } },
   } as AasConfig;
 }
@@ -77,9 +80,11 @@ async function ask(session: Session, text: string): Promise<SessionEvent[]> {
   return seen;
 }
 
-async function turn(root: string, behavior: Parameters<FakeServer['setBehavior']>[0]): Promise<SessionEvent[]> {
+async function turn(
+  root: string, behavior: Parameters<FakeServer['setBehavior']>[0], extra: { maxRounds?: number } = {},
+): Promise<SessionEvent[]> {
   fake.setBehavior(behavior);
-  const session = await Session.create(config(root), { approve: () => Promise.resolve(true) });
+  const session = await Session.create(config(root, extra), { approve: () => Promise.resolve(true) });
   try {
     await ready(session);
     return await ask(session, 'やって');
@@ -142,5 +147,45 @@ describe('外のツールだけで書いた回', { timeout: 60_000 }, () => {
     assert.ok(ev, '比べられないのに黙っている');
     assert.equal(ev.paths, undefined);
     assert.equal(await ranCount(marker), 0);
+  });
+});
+
+/*
+ * 外のツールが先に作業場を変え、そのあとこの場所のツールで書く回。
+ *
+ * 作業前の成否は、この場所のツールで書く手前で測る。外のツールの後に測ると、
+ * 外のツールが落とした分まで「作業前から落ちていた」と読み、直させなかった。
+ */
+describe('外のツールが先に変えてから、この場所で書いた回', { timeout: 60_000 }, () => {
+  const writeHere = [
+    { name: 'read_file', args: { path: 'note.txt' } },
+    { name: 'write_file', args: { path: 'note.txt', content: '書き換えました\n' } },
+  ];
+
+  test('外のツールが落とした分を、作業前からとは言わない', async () => {
+    const { root } = await workspace({ git: true });
+    const seen = await turn(root, {
+      kind: 'steps',
+      calls: [{ name: 'w__write', args: { path: join(root, 'FAIL'), content: 'x' } }, ...writeHere],
+      then: '書きました。',
+    }, { maxRounds: 1 });
+    const ev = outside(seen);
+    assert.ok(ev?.beforeBaseline, `先に変わったことを言っていない: ${JSON.stringify(ev)}`);
+    assert.deepEqual(ev.paths, ['FAIL']);
+    assert.ok(!seen.some((e) => e.type === 'baseline'), '外のツールの後に「作業前」を測っている');
+    assert.ok(!verifyTypes(seen).includes('preexisting'), `外のツールが落とした分を、作業前からと言っている: ${verifyTypes(seen).join(',')}`);
+    assert.ok(verifyTypes(seen).includes('failed'), '落ちたと言っていない');
+  });
+
+  test('外のツールが読んだだけなら、これまでどおり作業前を測る（対）', async () => {
+    const { root } = await workspace({ git: true, failing: true });
+    const seen = await turn(root, {
+      kind: 'steps',
+      calls: [{ name: 'w__look', args: {} }, ...writeHere],
+      then: '書きました。',
+    }, { maxRounds: 1 });
+    assert.equal(outside(seen), undefined, '変わっていないのに変わったと言っている');
+    assert.ok(seen.some((e) => e.type === 'baseline'), '作業前を測っていない');
+    assert.ok(verifyTypes(seen).includes('preexisting'), `元から落ちていたものを、元からと言っていない: ${verifyTypes(seen).join(',')}`);
   });
 });
