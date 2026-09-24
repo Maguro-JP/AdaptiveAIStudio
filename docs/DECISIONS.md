@@ -155,6 +155,7 @@
 - 打ち切ったら、外のツールが変えた分も戻す
 - 一度伝われば済む警告は、了解を作業場ごとに覚える
 - 前の中身は、索引ではなく HEAD から引く
+- push の手前のフックは、npm install が入れる
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -7922,3 +7923,36 @@ git の管理下でない作業場（社用 PC の Z: など）で外のツー�
 わざとバグを入れた 6 通り（取れないを無いと読む／名前変更の元を記録しない／索引から引く／
 `--show-toplevel` + `relative()`／回の終わりに書き直さない／`notRestored` を言わない）で、
 それぞれ狙った試験だけが落ちることを見た。
+
+## 2026-09-24  push の手前のフックは、npm install が入れる
+
+`.githooks/README.md` に「新しく clone したときは一度だけ `git config core.hooksPath .githooks`」と
+書いてあったが、クラウドの session（毎回 fresh clone）で誰も打たず、`.githooks/pre-push` の
+確かめが走らないまま push が通った（#36 の push。ログが 4 行しか無いことで気づいた）。
+「確かめるのは pre-push が止める」は、フックが入っている clone でしか成り立たない。
+
+決めたこと:
+
+- 入れるのは `npm install`（package.json の `prepare` が `scripts/hooks.mjs` を呼ぶ）。
+  `npm ci` でも `npm i --no-save …` でも走る。手で入れるなら `npm run hooks`
+- `npm run check` の始めでも入れて、何をしたかを一行言う（入っています／入れました／clone ではない）
+- 入っていなければ `test/hooks.test.ts` が落ちて言う。bundle の中と git の clone でない所は飛ばす
+  （`test/pushed-tree.test.ts` と同じ判じ方。フックが在るかでは決めない）
+- `scripts/hooks.mjs` はどの結果でも 0 で終わる。ここで止めると、installer の作業場や
+  bundle の中（clone ではない）で `npm ci` そのものが落ちる
+
+選ばなかった案:
+
+- README に書いて打ってもらう（前の形）。打たれなかった
+- `pre-push` の代わりに CI で確かめる。push では CI を回さない決まり（お金）と食い違う
+- `--no-verify` で押す。確かめずに出す、と自分で宣言することになる（この session でも止められた）
+
+| 変えたいとき | どこ |
+|---|---|
+| 入れる判断 | `scripts/hooks.mjs` の `hooksPlan` |
+| いつ入れるか | `package.json` の `prepare`、`scripts/check.mjs` の始め |
+| 入っていないときに落とす | `test/hooks.test.ts` |
+
+確かめたこと: `test/hooks.test.ts` 2 件（判断の 5 通り／この作業場に入っている）。わざと
+`core.hooksPath` を外すと後者が落ち、`node scripts/hooks.mjs` が「入れました」と言って戻る。
+clone でない場所に写して走らせると「入れません」で 0 で終わる。

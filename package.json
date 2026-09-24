@@ -13,6 +13,8 @@
     "test": "node scripts/run-tests.mjs",
     "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
     "check": "node scripts/check.mjs",
+    "hooks": "node scripts/hooks.mjs",
+    "prepare": "node scripts/hooks.mjs",
     "agent": "node --experimental-strip-types --no-warnings src/cli/agent.ts",
     "team": "node --experimental-strip-types --no-warnings src/cli/team.ts",
     "models": "node --experimental-strip-types --no-warnings src/cli/models.ts",
