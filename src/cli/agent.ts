@@ -537,12 +537,17 @@ async function main(): Promise<void> {
           console.log(c.red(`  了解できる警告ではありません: ${id ?? ''}（${ACK_IDS.join(', ')}）\n`));
           continue;
         }
-        if (cmd === '/ack') {
-          await session.acks.add(id, session.root);
-          console.log(c.dim(`  ${id} を了解しました。この作業場では次から出しません（/unack ${id} で戻せます）。\n`));
-        } else {
-          await session.acks.remove(id, session.root);
-          console.log(c.dim(`  ${id} をまた出すようにしました。\n`));
+        try {
+          if (cmd === '/ack') {
+            await session.acks.add(id, session.root);
+            console.log(c.dim(`  ${id} を了解しました。この作業場では次から出しません（/unack ${id} で戻せます）。\n`));
+          } else {
+            await session.acks.remove(id, session.root);
+            console.log(c.dim(`  ${id} をまた出すようにしました。\n`));
+          }
+        } catch (e) {
+          // 記憶が書けなくても、対話は続ける。
+          console.log(c.red(`  了解を保存できませんでした: ${e instanceof Error ? e.message : String(e)}\n`));
         }
         continue;
       }

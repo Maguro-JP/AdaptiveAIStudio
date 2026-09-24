@@ -748,7 +748,7 @@ export const PANELS = {
               try {
                 const r = await fetch('/api/acks', {
                   method: 'POST', headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify({ id: v.ackable }),
+                  body: JSON.stringify({ id: v.ackable, ...(v.root ? { root: v.root } : {}) }),
                 });
                 if (!r.ok) throw new Error(String(r.status));
                 ok.textContent = '了解しました（設定 → 外の道具 で、また出せます）';

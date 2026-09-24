@@ -1153,10 +1153,11 @@ export class UiServer {
       return send(res, 200, { root, acks });
     }
     if (path === '/api/acks' && (req.method === 'POST' || req.method === 'DELETE')) {
-      const body = await readBody(req) as { id?: unknown };
+      const body = await readBody(req) as { id?: unknown; root?: unknown };
       if (!isAckId(body?.id)) return send(res, 400, { error: '了解できる警告の名前ではありません' });
       const store = new AckStore(join(stateDir(), 'acks.json'));
-      const root = this.#session?.root ?? this.#workRoot();
+      // 警告に添えた作業場があればそちら。会話に残った警告を、作業場を変えた後に押しても、出た作業場に結びつく。
+      const root = typeof body.root === 'string' && body.root.length > 0 ? body.root : (this.#session?.root ?? this.#workRoot());
       if (req.method === 'POST') await store.add(body.id, root);
       else await store.remove(body.id, root);
       return send(res, 200, { id: body.id, acked: req.method === 'POST' });

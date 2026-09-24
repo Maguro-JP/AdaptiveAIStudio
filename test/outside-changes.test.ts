@@ -33,6 +33,7 @@ async function repo(opts: { git?: boolean } = {}): Promise<string> {
     git(root, 'init', '-q');
     // 走らせる環境の設定（Windows の autocrlf=true など）で結果が変わらないように、ここで決める。
     git(root, 'config', 'core.autocrlf', 'false');
+    git(root, 'config', 'status.renames', 'true');
     commit(root);
   }
   return root;
@@ -175,5 +176,70 @@ describe('外のツールが変えたファイルの、前の中身', () => {
     await writeFile(join(root, 'clean.txt'), 'tool wrote\n');
     const r = await outside.after();
     assert.deepEqual(byPath(r), { 'clean.txt': 'clean\r\n' }, 'blob のまま返している（Windows で全行が差分になる）');
+  });
+
+  test('`git rm --cached`（追跡をやめるが作業ツリーには残す）を「前は無い」と読まない', async () => {
+    const root = await repo();
+    const outside = new OutsideChanges(root);
+    await outside.before();
+    git(root, 'rm', '-q', '--cached', 'clean.txt');                    // status は `D ` と `??` の二行
+    const r = await outside.after();
+    assert.deepEqual(byPath(r), { 'clean.txt': 'clean\n' }, '在るファイルを「前は無い」にしている（戻すと消える）');
+  });
+
+  test('`git mv` の後に元の名前へ書いた回は、元の名前を HEAD の中身へ戻す', async () => {
+    const root = await repo();
+    const outside = new OutsideChanges(root);
+    await outside.before();
+    git(root, 'mv', 'clean.txt', 'moved.txt');
+    await writeFile(join(root, 'clean.txt'), 'export * from "./moved";\n');   // 元の名前は `??`
+    const r = await outside.after();
+    assert.deepEqual(byPath(r), { 'clean.txt': 'clean\n', 'moved.txt': undefined });
+  });
+
+  test('utf8 で往復しないもの（二進）は、呼ぶ前から変わっていても HEAD からでも、名前だけ返す', async () => {
+    const root = await repo();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe, 0x80, 0x81, 0xc3]);
+    await writeFile(join(root, 'logo.png'), png);
+    commit(root);                                                      // きれい → HEAD から
+    await writeFile(join(root, 'dirty.png'), png);                     // 呼ぶ前から変わっている → 呼ぶ前に読む
+    const sjis = Buffer.from([0x82, 0xa0, 0x82, 0xa2, 0x0a]);          // Shift_JIS の「あい」。NUL は無いが utf8 ではない
+    await writeFile(join(root, 'memo.txt'), sjis);
+    const outside = new OutsideChanges(root);
+    await outside.before();
+    await writeFile(join(root, 'logo.png'), 'tool\n');
+    await writeFile(join(root, 'dirty.png'), 'tool\n');
+    await writeFile(join(root, 'memo.txt'), 'tool\n');
+    const r = await outside.after();
+    assert.deepEqual(byPath(r), {}, '二進を文字列として持っている（戻すと壊れる）');
+    assert.deepEqual(r.unrecorded, ['dirty.png', 'logo.png', 'memo.txt']);
+  });
+
+  test('HEAD ではリンクだったものを、リンク先の文字列のファイルとして戻さない', async (t) => {
+    const root = await repo();
+    try { await symlink('clean.txt', join(root, 'link')); } catch { t.skip('シンボリックリンクを作れない'); return; }
+    commit(root);
+    const outside = new OutsideChanges(root);
+    await outside.before();
+    await rm(join(root, 'link'));
+    await writeFile(join(root, 'link'), 'now a file\n');               // status は ` T link`
+    const r = await outside.after();
+    assert.deepEqual(byPath(r), {}, 'リンク先の文字列を「前の中身」にしている');
+    assert.deepEqual(r.unrecorded, ['link']);
+  });
+
+  test('作業場の上のフォルダの名前が空白で始まっても、変化が見える', async () => {
+    const home = await tempDir('aas-outside-space-');
+    const root = join(home, ' repo');                                   // 先頭が空白
+    await mkdir(join(root, 'sub'), { recursive: true });
+    await writeFile(join(root, 'sub', 'f.txt'), 'f\n');
+    git(root, 'init', '-q');
+    git(root, 'config', 'core.autocrlf', 'false');
+    commit(root);
+    const outside = new OutsideChanges(join(root, 'sub'));
+    await outside.before();
+    await writeFile(join(root, 'sub', 'f.txt'), 'tool\n');
+    const r = await outside.after();
+    assert.deepEqual(byPath(r), { 'f.txt': 'f\n' }, `変化が見えていない: ${JSON.stringify(r)}`);
   });
 });

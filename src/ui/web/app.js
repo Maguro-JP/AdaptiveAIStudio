@@ -1998,6 +1998,9 @@ function fillSection(name) {
  */
 async function loadAcks() {
   const box = $('ackRows');
+  // 続けて呼ばれたら、後の呼び出しだけが描く（先の結果が後から届いて二重に並ぶのを防ぐ）。
+  const seq = (loadAcks.seq = (loadAcks.seq ?? 0) + 1);
+  const mine = () => loadAcks.seq === seq;
   box.replaceChildren();
   const empty = (text) => Object.assign(document.createElement('div'), { className: 'empty', textContent: text });
   let d;
@@ -2007,9 +2010,10 @@ async function loadAcks() {
     d = await r.json();
   } catch (e) {
     // 読めなかったのに「ありません」と言わない。
-    box.append(empty(`了解した警告を読めませんでした: ${e.message ?? e}`));
+    if (mine()) box.append(empty(`了解した警告を読めませんでした: ${e.message ?? e}`));
     return;
   }
+  if (!mine()) return;
   if (!d.acks?.length) {
     box.append(empty('この作業場で了解した警告はありません。'));
     return;

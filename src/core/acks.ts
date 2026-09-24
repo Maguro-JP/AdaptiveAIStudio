@@ -13,7 +13,7 @@
  *
  * 取り消せる。**閉じたら開けない、を作らない。**設定の中に「また出す」がある。
  */
-import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 /** 了解できる警告。増やすときは、ここと ACK_TEXT の両方に足す。 */
@@ -83,8 +83,15 @@ export class AckStore {
    */
   async #save(acks: Ack[]): Promise<void> {
     await mkdir(dirname(this.#file), { recursive: true });
-    const tmp = `${this.#file}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(tmp, `${JSON.stringify({ acks }, null, 2)}\n`, 'utf8');
-    await rename(tmp, this.#file);
+    // 同じプロセスの同じミリ秒に二つ書いても名前が重ならないように、乱数も足す。
+    const tmp = `${this.#file}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+    try {
+      await writeFile(tmp, `${JSON.stringify({ acks }, null, 2)}\n`, 'utf8');
+      await rename(tmp, this.#file);
+    } catch (e) {
+      // 途中で落ちたら、書きかけを残さない。
+      await unlink(tmp).catch(() => undefined);
+      throw e;
+    }
   }
 }

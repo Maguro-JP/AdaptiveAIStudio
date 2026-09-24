@@ -24,6 +24,8 @@ async function repo(): Promise<string> {
   await writeFile(join(root, 'other.txt'), 'a\n');
   git(root, 'init', '-q');
   git(root, 'config', 'core.autocrlf', 'false');
+  // 名前変更の検出は設定で切れる。断定は設定に依らせない。
+  git(root, 'config', 'status.renames', 'true');
   git(root, 'add', '-A');
   git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
   return root;
@@ -108,5 +110,30 @@ describe('作業場の記録', () => {
     assert.deepEqual(await headContent(ws, 'g.txt', 1024), { kind: 'absent' }, 'HEAD に無いものを取れたことにしている');
     // 在るが大きすぎる。「無い」ではない。
     assert.deepEqual(await headContent(ws, 'f.txt', 1), { kind: 'unavailable', why: 'tooLarge' });
+  });
+
+  test('作業場の名前が全角空白で始まっても、鍵は作業場からの道', async () => {
+    const root = await repo();
+    const ws = join(root, '\u3000zen');
+    await mkdir(ws);
+    await writeFile(join(ws, 'g.txt'), 'g\n');
+    git(root, 'add', '-A');
+    git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'zen');
+    await appendFile(join(ws, 'g.txt'), 'h\n');
+    const stamp = await workspaceStamp(ws);
+    assert.ok(stamp);
+    assert.deepEqual([...stamp.keys()], ['g.txt'], `先頭の空白を落として鍵がずれている: ${[...stamp.keys()].join(',')}`);
+  });
+
+  test('HEAD がリンク・二進・submodule のものは、取れないと言う（「無い」でも「中身」でもない）', async (t) => {
+    const root = await repo();
+    await writeFile(join(root, 'bin.dat'), Buffer.from([0x00, 0xff, 0xfe]));
+    let linked = true;
+    try { await symlink('other.txt', join(root, 'lnk')); } catch { linked = false; }
+    git(root, 'add', '-A');
+    git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'more');
+    assert.deepEqual(await headContent(root, 'bin.dat', 1024), { kind: 'unavailable', why: 'binary' });
+    if (linked) assert.deepEqual(await headContent(root, 'lnk', 1024), { kind: 'unavailable', why: 'symlink' });
+    else t.diagnostic('シンボリックリンクを作れないので、リンクの分は見ていない');
   });
 });
