@@ -14,18 +14,21 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { startFakeServer, type FakeServer } from './fake-server.ts';
-import { Session, type SessionEvent } from '../src/core/session.ts';
-import { DEFAULT_CONFIG, type AasConfig } from '../src/config.ts';
-import { AckStore } from '../src/core/acks.ts';
+import type { Session as SessionT, SessionEvent } from '../src/core/session.ts';
+import type { AasConfig } from '../src/config.ts';
+
+// 了解の記憶・戻り先・索引を、試験専用の場所へ（本物の保存先を汚さない）。
+// **読み込む前に**移す。索引（find.ts）は読み込んだ時点で保存先を決めるので、後から移しても効かない。
+const stateDir = await tempDir('aas-outside-state-');
+process.env.AAS_STATE_DIR = stateDir;
+const { Session } = await import('../src/core/session.ts');
+const { DEFAULT_CONFIG } = await import('../src/config.ts');
+const { AckStore } = await import('../src/core/acks.ts');
 
 const FIXTURE = join(import.meta.dirname, 'fixtures', 'writer-mcp.mjs');
 
 let fake: FakeServer;
-let stateDir = '';
 before(async () => {
-  // 了解の記憶と戻り先を、試験専用の場所へ（本物の保存先を汚さない）。
-  stateDir = await tempDir('aas-outside-state-');
-  process.env.AAS_STATE_DIR = stateDir;
   fake = await startFakeServer({ kind: 'stream', text: 'はい。' });
 });
 after(async () => { await fake.close(); });
@@ -48,12 +51,21 @@ async function workspace(opts: { git: boolean; failing?: boolean }): Promise<{ r
     scripts: { test: `node -e "require('fs').appendFileSync('../ran.txt','x\\n');if(require('fs').existsSync('FAIL'))process.exit(1)"` },
   }));
   if (opts.git) {
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, stdio: 'ignore' });
-    git('init', '-q');
-    git('add', '-A');
-    git('-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+    git(root, 'init', '-q');
+    // 走らせる環境の設定（Windows の autocrlf=true など）で戻る姿が変わらないように、ここで決める。
+    git(root, 'config', 'core.autocrlf', 'false');
+    commit(root);
   }
   return { root, marker };
+}
+
+function git(cwd: string, ...args: string[]): void {
+  execFileSync('git', args, { cwd, stdio: 'ignore' });
+}
+
+function commit(root: string): void {
+  git(root, 'add', '-A');
+  git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
 }
 
 async function ranCount(marker: string): Promise<number> {
@@ -75,7 +87,7 @@ function config(root: string, extra: Extra = {}): AasConfig {
 }
 
 /** MCP のツールが揃うまで待つ。繋がる前に送ると、模型の呼んだ名前が無い。 */
-async function ready(session: Session): Promise<void> {
+async function ready(session: SessionT): Promise<void> {
   const until = Date.now() + 20_000;
   while (Date.now() < until) {
     if (session.toolPool.mcp.some((t) => t.schema.name === 'w__write')) return;
@@ -84,7 +96,7 @@ async function ready(session: Session): Promise<void> {
   throw new Error('MCP のツールが揃いませんでした');
 }
 
-async function ask(session: Session, text: string): Promise<SessionEvent[]> {
+async function ask(session: SessionT, text: string): Promise<SessionEvent[]> {
   const seen: SessionEvent[] = [];
   for await (const ev of session.send(text)) seen.push(ev);
   return seen;
@@ -348,5 +360,59 @@ describe('覚えている作業前を使う', { timeout: 90_000 }, () => {
     assert.equal(settledOf(second!)?.checked, 'failed', `覚えている「前」が通っているのに、分からないにしている: ${settledOf(second!)?.checked}`);
     assert.deepEqual(rolledBack(second!)?.paths, ['FAIL']);
     assert.equal(await exists(join(root, 'FAIL')), false);
+  });
+});
+
+/*
+ * 覚えている「前」は、回の終わりの姿に書き直す。
+ *
+ * 一回目で作業場を落ちる姿のまま終えた（巻き戻さない設定）なら、次の回の「前」はその姿。
+ * 一回目の作業前（通っていた）を覚えたままだと、二回目の外のツールだけの回で
+ * 「前は通っていたのに落ちた」と、外のツールのせいにして巻き戻す。
+ */
+describe('覚えている作業前を、回の終わりに書き直す', { timeout: 90_000 }, () => {
+  const writeHere: Behavior = {
+    kind: 'steps',
+    calls: [
+      { name: 'read_file', args: { path: 'note.txt' } },
+      { name: 'write_file', args: { path: 'note.txt', content: '書き換えました\n' } },
+    ],
+    then: '書きました。',
+  };
+
+  test('前の回で落としたまま終えたなら、次の回はその落ち方を「元から」と言う', async () => {
+    const { root } = await workspace({ git: true });
+    const [first, second] = await turns(root, [
+      { kind: 'steps', calls: [{ name: 'write_file', args: { path: 'FAIL', content: 'x' } }], then: '書きました。' },
+      { kind: 'toolcall', name: 'w__write', args: { path: join(root, 'new.txt'), content: 'x' }, then: '書きました。' },
+    ], { maxRounds: 1 });
+    assert.ok(verifyTypes(first!).includes('failed'), `一回目で壊れていない: ${verifyTypes(first!).join(',')}`);
+    assert.equal(settledOf(second!)?.checked, 'preexisting',
+      `前の回で落とした分を、外のツールのせいにしている: ${settledOf(second!)?.checked}`);
+  });
+
+  test('大きすぎて前の中身を記録できなかったものは、戻せなかったと言い、覚えている「前」を捨てる', async () => {
+    const { root } = await workspace({ git: true });
+    // HEAD に在る大きなファイル（記録の上限 8MiB を超える）。
+    await writeFile(join(root, 'big.bin'), Buffer.alloc(9 * 1024 * 1024, 0x61));
+    commit(root);
+    const [first, second] = await turns(root, [
+      writeHere,
+      {
+        kind: 'steps',
+        calls: [
+          { name: 'w__write', args: { path: join(root, 'big.bin'), content: 'small' } },
+          { name: 'w__write', args: { path: join(root, 'FAIL'), content: 'x' } },
+        ],
+        then: '書きました。',
+      },
+    ], { maxRounds: 1, rollback: true });
+    assert.ok(verifyTypes(first!).includes('passed'));
+    const rb = rolledBack(second!);
+    assert.ok(rb, `巻き戻していない: ${verifyTypes(second!).join(',')}`);
+    assert.deepEqual(rb.paths, ['FAIL']);
+    assert.deepEqual(rb.notRestored, ['big.bin'], '戻せなかったものを言っていない');
+    assert.equal(await exists(join(root, 'FAIL')), false);
+    assert.equal((await stat(join(root, 'big.bin'))).size, 5, '戻せないものを戻したことにしている');
   });
 });

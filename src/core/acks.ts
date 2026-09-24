@@ -7,12 +7,13 @@
  * また言う。
  *
  * 保存先は `stateDir()/acks.json`。画面（`/api/acks`）と CLI（`/ack`）の両方から
- * 同じファイルを触るので、**書く直前に読み直して足す**（後から書いた方が前の分を
- * 消さない）。画面は状態を持たない（`src/ui/state.ts`）ので、ここに置く。
+ * 同じファイルを触るので、**書く直前に読み直して足す**。画面は状態を持たない
+ * （`src/ui/state.ts`）ので、ここに置く。鍵は `resolve` した道。Windows の大文字小文字は
+ * そろえていない（外れる方向は「また出る」側）。
  *
  * 取り消せる。**閉じたら開けない、を作らない。**設定の中に「また出す」がある。
  */
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 /** 了解できる警告。増やすときは、ここと ACK_TEXT の両方に足す。 */
@@ -75,8 +76,15 @@ export class AckStore {
     await this.#save((await this.list()).filter((a) => !(a.id === id && a.root === key)));
   }
 
+  /**
+   * 隣に書いてから名前を付け替える。途中まで書いたものを、別の口が「壊れた JSON」として
+   * 読んで空にする、を防ぐ。画面と CLI が同じ瞬間に書いた分は、後から書いた方が勝つ
+   * （読んでから書くまでの短い間。了解は「また出る」側にしか外れない）。
+   */
   async #save(acks: Ack[]): Promise<void> {
     await mkdir(dirname(this.#file), { recursive: true });
-    await writeFile(this.#file, `${JSON.stringify({ acks }, null, 2)}\n`, 'utf8');
+    const tmp = `${this.#file}.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(tmp, `${JSON.stringify({ acks }, null, 2)}\n`, 'utf8');
+    await rename(tmp, this.#file);
   }
 }

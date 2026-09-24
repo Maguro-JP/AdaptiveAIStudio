@@ -40,6 +40,7 @@ describe('/api/acks', () => {
     r = await call('POST', { id: 'outside-uncomparable' });
     assert.equal(r.status, 200);
     const listed = await (await call('GET')).json() as { root: string; acks: Array<{ id: string; text: string; at: string }> };
+    assert.equal(listed.root, work, '了解を、設定の作業場でなく別の場所に結びつけている');
     assert.equal(listed.acks.length, 1);
     assert.equal(listed.acks[0]!.id, 'outside-uncomparable');
     assert.match(listed.acks[0]!.text, /比べられない/);

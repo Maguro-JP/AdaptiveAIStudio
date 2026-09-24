@@ -519,6 +519,10 @@ async function main(): Promise<void> {
         await runPanelOn(target || '直近の変更を見て、問題があれば指摘してください。');
         continue;
       }
+      if (line === '/ack' || line === '/unack') {
+        console.log(c.dim(`  使い方: ${line} <警告の名前>（${ACK_IDS.join(', ')}）。一覧は /acks\n`));
+        continue;
+      }
       if (line === '/acks' || line.startsWith('/ack ') || line.startsWith('/unack ')) {
         const session = await getSession();
         if (line === '/acks') {

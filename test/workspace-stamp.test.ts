@@ -6,11 +6,11 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, mkdir, appendFile } from 'node:fs/promises';
+import { writeFile, mkdir, appendFile, symlink } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { workspaceStamp, stampChanges, indexContent } from '../src/agent/workspace-stamp.ts';
+import { workspaceStamp, stampChanges, headContent } from '../src/agent/workspace-stamp.ts';
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', args, { cwd, stdio: 'ignore' });
@@ -23,6 +23,7 @@ async function repo(): Promise<string> {
   await writeFile(join(root, 'pkg', 'f.txt'), 'a\n');
   await writeFile(join(root, 'other.txt'), 'a\n');
   git(root, 'init', '-q');
+  git(root, 'config', 'core.autocrlf', 'false');
   git(root, 'add', '-A');
   git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
   return root;
@@ -52,6 +53,29 @@ describe('作業場の記録', () => {
     assert.deepEqual(stampChanges(before, after), [], '作業場の外の変化を数えている');
   });
 
+  test('作業場がシンボリックリンク越しでも、鍵は作業場からの道', async (t) => {
+    const root = await repo();
+    const link = join(dirname(root), 'link');
+    try { await symlink(root, link, 'dir'); } catch { t.skip('シンボリックリンクを作れない'); return; }
+    const ws = join(link, 'pkg');
+    await appendFile(join(ws, 'f.txt'), 'b\n');
+    const stamp = await workspaceStamp(ws);
+    assert.ok(stamp);
+    // `--show-toplevel` は実体の道を返すので、リンクの道から relative() を取ると `../../repo/...` になる。
+    assert.deepEqual([...stamp.keys()], ['f.txt'], `鍵が作業場からの道でない: ${[...stamp.keys()].join(',')}`);
+    assert.match(stamp.get('f.txt')!, /^ M \d+ /, '大きさが取れていない（stat の道がずれている）');
+  });
+
+  test('名前を変えたものは、元の名前も「消えた」として記録する', async () => {
+    const root = await repo();
+    const before = await workspaceStamp(root);
+    git(root, 'mv', 'pkg/f.txt', 'pkg/g.txt');
+    const after = await workspaceStamp(root);
+    assert.ok(before && after);
+    assert.deepEqual(stampChanges(before, after), ['pkg/f.txt', 'pkg/g.txt'], '元の名前が変わったことになっていない');
+    assert.equal(after.get('pkg/f.txt'), 'R  -');
+  });
+
   test('git が標準エラーに何か書いても、記録が壊れない', async () => {
     /*
      * 警告（`core.autocrlf` の「LF will be replaced by CRLF」など）は、版や設定で
@@ -74,14 +98,15 @@ describe('作業場の記録', () => {
     }
   });
 
-
-  test('索引から、触る前の中身を作業ツリーの形で取れる', async () => {
+  test('HEAD から、触る前の中身を作業ツリーの形で取れる。無い・取れない、を分けて言う', async () => {
     const root = await repo();
     const ws = join(root, 'pkg');
-    // 変える前はきれい。変えた後・消した後でも、索引には前の中身が残っている。
+    // 変える前はきれい。変えた後・消した後でも、HEAD には前の中身が残っている。
     await writeFile(join(ws, 'f.txt'), 'changed\n');
-    assert.equal(await indexContent(ws, 'f.txt'), 'a\n');
+    assert.deepEqual(await headContent(ws, 'f.txt', 1024), { kind: 'content', text: 'a\n' });
     await writeFile(join(ws, 'g.txt'), 'new\n');
-    assert.equal(await indexContent(ws, 'g.txt'), undefined, '索引に無いものを取れたことにしている');
+    assert.deepEqual(await headContent(ws, 'g.txt', 1024), { kind: 'absent' }, 'HEAD に無いものを取れたことにしている');
+    // 在るが大きすぎる。「無い」ではない。
+    assert.deepEqual(await headContent(ws, 'f.txt', 1), { kind: 'unavailable', why: 'tooLarge' });
   });
 });

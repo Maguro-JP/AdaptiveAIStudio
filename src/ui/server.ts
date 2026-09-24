@@ -1144,7 +1144,8 @@ export class UiServer {
      * 取り消せる（DELETE）。閉じたら開けない、を作らない。
      */
     if (path === '/api/acks' && req.method === 'GET') {
-      const root = this.#workRoot();
+      // 警告を出しているのは生きている Session。設定を変えた直後で畳めていないときは、そちらの作業場。
+      const root = this.#session?.root ?? this.#workRoot();
       const key = resolvePath(root);
       const acks = (await new AckStore(join(stateDir(), 'acks.json')).list())
         .filter((a) => a.root === key)
@@ -1155,7 +1156,7 @@ export class UiServer {
       const body = await readBody(req) as { id?: unknown };
       if (!isAckId(body?.id)) return send(res, 400, { error: '了解できる警告の名前ではありません' });
       const store = new AckStore(join(stateDir(), 'acks.json'));
-      const root = this.#workRoot();
+      const root = this.#session?.root ?? this.#workRoot();
       if (req.method === 'POST') await store.add(body.id, root);
       else await store.remove(body.id, root);
       return send(res, 200, { id: body.id, acked: req.method === 'POST' });

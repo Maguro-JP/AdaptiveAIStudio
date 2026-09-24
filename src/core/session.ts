@@ -180,7 +180,7 @@ export type SessionEvent =
   | { type: 'verify'; event: VerifyEvent }
   | {
       type: 'rolledBack'; paths: string[];
-      /** 外のツールが変えたが、大きすぎて前の中身を記録できず、戻せなかった道。 */
+      /** 外のツールが変えたが、前の中身を記録できず（大きすぎる・取れない）、戻せなかった道。 */
       notRestored?: string[];
     }
   /** 書き換えの中身。何がどう変わったかは、文章より差分の方が速い。 */
@@ -1210,8 +1210,8 @@ export class Session {
      */
     const outside = new OutsideChanges(this.root);
     const outsideTool = (name: string): boolean => isExternalTool(name) || name === 'run_command';
-    /** 大きすぎて前の中身を記録できなかった道。戻せないことを言うために持つ。 */
-    const outsideTooLarge: string[] = [];
+    /** 前の中身を記録できなかった道（大きすぎる・取れない）。戻せないことを言うために持つ。 */
+    const outsideUnrecorded: string[] = [];
     this.#harness.beginTask();
 
     let finishedReason: string | undefined;
@@ -1395,8 +1395,8 @@ export class Session {
                   this.undo.capture(c.path, c.previous);
                   if (!changedHere.includes(c.path)) changedHere.push(c.path);
                 }
-                for (const path of found.tooLarge) { this.undo.skip(path); outsideTooLarge.push(path); }
-                if (found.changes.length > 0 || found.tooLarge.length > 0) wroteSomething = true;
+                for (const path of found.unrecorded) { this.undo.skip(path); outsideUnrecorded.push(path); }
+                if (found.changes.length > 0 || found.unrecorded.length > 0) wroteSomething = true;
               }
               if (!ev.isError && mayChangeFiles(ev.call.name)) this.#prefetch.invalidate();
               yield {
@@ -1452,6 +1452,8 @@ export class Session {
         yield { type: 'toolsFailed', names: [...new Set(failedTools)] };
       }
 
+      /** この回の終わりに分かった作業場の成否。巻き戻さなければ、次の回の「前」になる。 */
+      let verifiedLast: VerifyResult | undefined;
       // 書いて終わりにしない。失敗したら、その内容を渡して直させる。
       const testsBefore = before.measured ? before.tests : undefined;
       if (finishedReason === 'completed' && testsBefore && command) {
@@ -1477,7 +1479,7 @@ export class Session {
                   if (harnessCfg.rollbackOnGiveUp) checkpoint.remember(c.path, c.previous);
                   this.undo.capture(c.path, c.previous);
                 }
-                for (const path of found.tooLarge) { this.undo.skip(path); outsideTooLarge.push(path); }
+                for (const path of found.unrecorded) { this.undo.skip(path); outsideUnrecorded.push(path); }
               }
               events.push({
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
@@ -1511,6 +1513,7 @@ export class Session {
           step = await loop.next();
         }
         while (events.length > 0) yield events.shift()!;
+        verifiedLast = step.value.last;
       }
 
       /*
@@ -1531,15 +1534,26 @@ export class Session {
         const now = was ? await workspaceStamp(this.root) : undefined;
         const paths = was && now ? stampChanges(was, now) : undefined;
         if (paths === undefined) {
-          // 比べられない作業場。一度伝われば済むので、了解済みならもう言わない。
-          if (!(await this.acks.has('outside-uncomparable', this.root))) {
-            yield { type: 'outsideChanged', paths: undefined, ackable: 'outside-uncomparable' };
+          /*
+           * 比べられない作業場。一度伝われば済むので、了解済みならもう言わない。
+           * 了解が効くのは**呼ぶ前から比べられなかった**回だけ。手前では比べられたのに
+           * 今は比べられない（途中で `.git` が消えた等）は別のことなので、了解で黙らせない。
+           */
+          if (!was) {
+            if (!(await this.acks.has('outside-uncomparable', this.root))) {
+              yield { type: 'outsideChanged', paths: undefined, ackable: 'outside-uncomparable' };
+            }
+          } else {
+            yield { type: 'outsideChanged', paths: undefined };
           }
         } else if (paths.length > 0 && !ac.signal.aborted) {
           yield { type: 'outsideChanged', paths };
+          // 覚えている「前」は、走らせる前に引く。走らせた後に引くと、確かめの長さで期限の境目が動く。
+          const kept = this.baselineProbe.remembered(command);
           yield { type: 'verify', event: { type: 'running', round: 1, command } };
           const r = await runVerification(
             { command, root: this.root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal);
+          if (!ac.signal.aborted && !r.timedOut) verifiedLast = r;
           // テストを消して通す形は、通っていても通ったとは言わない（上と同じ判じ方）。
           const verdict = r.passed && before.tests
             ? compareTests(before.tests, await snapshotTests(this.root))
@@ -1567,7 +1581,6 @@ export class Session {
              * 記憶に失点を付け、画面の「原因とは限りません」と記録が食い違う。
              */
             const digest = digestFailure(r.output);
-            const kept = this.baselineProbe.remembered(command);
             if (kept?.result && !kept.result.passed && digestFailure(kept.result.output) === digest) {
               checked = 'preexisting';
               yield { type: 'verify', event: { type: 'preexisting', digest } };
@@ -1583,12 +1596,21 @@ export class Session {
       }
 
       // 打ち切ったなら、中途半端な状態を残さない選択肢を持つ。
-      if (!keep && harnessCfg.rollbackOnGiveUp && checkpoint.size > 0) {
+      const notRestored = [...new Set(outsideUnrecorded)].sort();
+      if (!keep && harnessCfg.rollbackOnGiveUp && (checkpoint.size > 0 || notRestored.length > 0)) {
+        // 戻せなかった道だけの回も黙らない。「打ち切ったら戻る」つもりの人に、戻っていないことを言う。
         const paths = await checkpoint.restore();
-        const notRestored = [...new Set(outsideTooLarge)].sort();
         yield { type: 'rolledBack', paths, ...(notRestored.length > 0 ? { notRestored } : {}) };
+        /*
+         * 作業場は回の前に戻った（戻せなかった分を除く）。次の回の「前」も、回の前のもの。
+         * 戻せなかった分があるなら、いまの姿は分からないので忘れる。
+         */
+        if (notRestored.length === 0 && baseline) this.baselineProbe.note(command!, baseline);
+        else if (command) this.baselineProbe.invalidate(command);
       } else {
         checkpoint.commit();
+        // 回の終わりに分かった姿を、次の回の「前」として覚える（測った時点のままにしない）。
+        if (command && verifiedLast) this.baselineProbe.note(command, verifiedLast);
       }
 
       // 添えた覚えに、結果を書き戻す。ここが「使うほど賢く」の要。

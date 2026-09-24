@@ -2002,8 +2002,11 @@ async function loadAcks() {
   const empty = (text) => Object.assign(document.createElement('div'), { className: 'empty', textContent: text });
   let d;
   try {
-    d = await fetch('/api/acks').then((r) => r.json());
+    const r = await fetch('/api/acks');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    d = await r.json();
   } catch (e) {
+    // 読めなかったのに「ありません」と言わない。
     box.append(empty(`了解した警告を読めませんでした: ${e.message ?? e}`));
     return;
   }
@@ -2024,11 +2027,14 @@ async function loadAcks() {
     b.onclick = async () => {
       b.disabled = true;
       try {
-        await fetch('/api/acks', {
+        const r = await fetch('/api/acks', {
           method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: a.id }),
         });
-      } finally {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
         await loadAcks();
+      } catch (e) {
+        b.disabled = false;
+        b.textContent = `また出すに戻せませんでした（${e.message ?? e}）。もう一度押してください`;
       }
     };
     row.append(k, b);

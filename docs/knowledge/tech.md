@@ -3,9 +3,12 @@
 採用技術、ライブラリ、API、環境固有の問題、設計上の知識。新しいものを上に足す。
 経緯の長いものは `docs/DECISIONS.md` に書き、ここには一行と参照だけを置く。
 
-## 2026-09-24 きれいだったファイルの「前」は、索引から作業ツリーの形で取れる
-- `git cat-file --filters :./道`（cwd からの相対）。`--filters` で `core.autocrlf` の変換まで作業ツリーの形になる。blob のまま書き戻すと Windows で全行が差分になる
-- 索引に無い道（新しく作られた）は非ゼロで終わる → 「前は無い」
+## 2026-09-24 きれいだったファイルの「前」は、HEAD から作業ツリーの形で取れる
+- `git cat-file --filters HEAD:./道`（cwd からの相対）。`--filters` で `core.autocrlf` の変換まで作業ツリーの形になる。blob のまま書き戻すと Windows で全行が差分になる
+- 無い道（新しく作られた）は非ゼロで終わる → 「前は無い」。大きさは `git cat-file -s` で先に見て、「在るが取れない」を「無い」と分ける
+- 索引（`:./道`）は `git add` / `git rm` / `git mv` で動くので「前」にならない。HEAD は `git commit` でしか動かない
+- `git rev-parse --show-prefix` は cwd の根からの道（`sub/`、根なら空）。`--show-toplevel` は実体の道なので、シンボリックリンク越しの cwd から `relative()` を取ると `../../` になる
+- `git status --porcelain=v1 -z` で R / C の元の名前は次の欄に来る（`新\0元\0`）
 - `toolStart` はツールが動く前に届く（`src/agent/loop.ts` の `yield` が先）。ここで作業場の記録を取れば、ツールが触る前の姿になる
 - 一つの Session で続けて送る試験は、fake-server の `steps` が履歴のツールの数で段を決めるので、回ごとに `session.reset()` で履歴を空にする（覚えたもの＝ベースラインは残る）
 

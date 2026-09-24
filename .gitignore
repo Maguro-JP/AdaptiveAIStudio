@@ -15,3 +15,7 @@ selftest-*.txt
 # 作業中の生のメモ。git には入れない（docs/DECISIONS.md へ整えて移す）。
 .worklog/
 .claude/worktrees/
+
+# 画面を押して回る確かめ（scripts/sweep.mjs）が作業場の根に作って消す試しファイル。
+# 確かめが走っている最中に git add -A すると拾う（実際に commit に入れた）。
+sweep-reopen-probe.txt
