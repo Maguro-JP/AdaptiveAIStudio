@@ -7742,4 +7742,4 @@ e2e が控えを待つ間に打ち切られた。
 
 確かめたこと: この環境で `npm run check` の sweep が最後まで回り「見つかった不具合: なし」。
 直す前は `page.goto: Timeout 30000ms exceeded` で落ちていた（残っていた要求は `/api/events` だけ）。
-`scripts/shot.mjs` はまだ `networkidle` のまま（README の画面を撮るときにだけ使う。触っていない）。
+`scripts/shot.mjs` も同じ所で止まっていたので同じ待ち方に替えた。直す前は `page.goto: Timeout 30000ms exceeded`、直した後は撮れた（作業用の場所へ撮った。README の画像は差し替えていない）。

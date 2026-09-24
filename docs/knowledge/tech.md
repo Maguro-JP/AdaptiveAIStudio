@@ -6,7 +6,7 @@
 ## 2026-09-24 claude.ai のクラウドでも、画面を押して確かめられる
 - `ln -sfn /opt/node22/lib/node_modules/playwright/node_modules/playwright-core node_modules/playwright-core` を張ると、`npm run check` が sweep まで回す（`node_modules/` は git の外）
 - sweep は `networkidle` で開いていたので、`/api/events`（EventSource）が開きっぱなしのこの環境では 30 秒で切れていた。画面が「つながっています」（`#status.live`）になるのを待つ形に替えて通った（`scripts/sweep.mjs` の `opened`）
-- `scripts/shot.mjs` はまだ `networkidle`。README の画面を撮り直すときに同じ所で止まる見込み（確かめていない）
+- `scripts/shot.mjs` も同じ所で止まっていた（`page.goto: Timeout 30000ms exceeded`）。同じ待ち方に替えて撮れた（作業用の場所へ撮って確かめた。README の画像は差し替えていない）
 
 ## 2026-09-24 作業場が変わったかは、git に聞いて安く見分ける
 - `git status --porcelain=v1 -z --untracked-files=all` の各ファイルに、大きさと更新時刻を添えた印を前後で比べる（`src/agent/workspace-stamp.ts`）
