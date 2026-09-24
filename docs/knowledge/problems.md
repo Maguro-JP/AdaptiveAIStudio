@@ -3,6 +3,12 @@
 起きたバグ、原因、解決、再発防止、失敗した手、採用しなかった案と理由。新しいものを上に足す。
 自分の判定の誤りは `.claude/skills/lessons/LESSONS.md`、ここはプロダクトの問題。
 
+## 2026-09-24 fresh clone に pre-push フックが入っておらず、確かめずに push が通った
+- 原因: `.githooks/README.md` の「一度だけ打つ」を誰も打たなかった。`core.hooksPath` は clone に付いてこない
+- 解決: `npm install` の `prepare` が `scripts/hooks.mjs` で入れる。`npm run check` の始めでも入れる。入っていなければ `test/hooks.test.ts` が落ちる
+- 再発防止: 上の三つ。`--no-verify` で押す道は取らない（この session では自動の番人にも止められた）
+- 残り: 差分ゼロの push（マージ後に枝を main へ合わせ直す）もフック越しに 12 分の確かめを払う。次の実の push まで remote の枝を触らない
+
 ## 2026-09-24 確かめが走っている最中に `git add -A` して、sweep の試しファイルを commit に入れた
 - 原因: `scripts/sweep.mjs` は「開いているファイルをもう一度押す」の確かめで `sweep-reopen-probe.txt` を作業場の根に作って消す。その間に `git add -A` した
 - 解決: `.gitignore` に `sweep-reopen-probe.txt` を足した。画面の一覧（`src/ui/files.ts`）は `.gitignore` を見ないので、確かめは変わらない。commit は押す前だったので amend で外した

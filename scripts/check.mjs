@@ -23,6 +23,7 @@ import { reportEnd } from './not-checked.mjs';
 import { lookTreeOrEmpty } from './git-tree.mjs';
 import { treeMoved } from './pushed-tree.mjs';
 import { findBrowser } from './find-browser.mjs';
+import { installHooks } from './hooks.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -213,6 +214,12 @@ function tokenizer() {
  * が、**その sha そのものの話ではないと言う。**
  */
 const began = lookTreeOrEmpty(root);
+
+/*
+ * push の手前のフックが入っているかを始めに見て、無ければ入れる。
+ * fresh clone にフックが無いまま push が通ったことがある（`scripts/hooks.mjs`）。
+ */
+console.log(`\n== push の手前のフック\n${installHooks(root).text}`);
 
 const typecheck = run('型チェック', [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '--noEmit']);
 if (typecheck !== 0) process.exit(typecheck);
