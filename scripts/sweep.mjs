@@ -67,7 +67,9 @@ p.on('response', (r) => {
  * Playwright も `networkidle` は勧めていない。画面が「つながっています」になった
  * （`#status.live`、EventSource の onopen）ところを、開き終わりとみなす。
  */
-const opened = () => p.waitForSelector('#status.live', { timeout: 30_000 });
+// 横のパネルを畳んでいても繋がりは見える。**見えているかではなく、在るかで待つ**
+// （既定の visible だと、畳んだ状態が残ったとき 30 秒ずつ待って連鎖して落ちる）。
+const opened = () => p.waitForSelector('#status.live', { state: 'attached', timeout: 30_000 });
 
 await p.goto(url, { waitUntil: 'load' });
 await opened();

@@ -3042,7 +3042,7 @@ export class UiServer {
     // **済んだかどうかは「確かめて落ちていないこと」で見る。**
     // 「確かめて通った」を条件にすると、試験の無い作業場で
     // 何をしても永久に済まない（実際にそうなった）。
-    const done = settled?.reason === 'completed' && settled.checked !== 'failed';
+    const done = settled?.reason === 'completed' && settled.checked !== 'failed' && settled.checked !== 'unsure';
     try {
       // 一段ぶんを進めていたなら、その結果を先に書き戻す。
       // **通った跡で歩幅を測る。**言い訳ではなく、通ったかどうかで。

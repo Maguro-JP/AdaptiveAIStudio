@@ -722,7 +722,7 @@ export const PANELS = {
           ? `外のツールが先に作業場を変えました（${Array.isArray(v.paths) ? outsideNames(v.paths) : '比べられませんでした'}）。作業前の状態は測れないので、このあと落ちたものは今回の作業のものとして直させます。`
           : Array.isArray(v.paths)
           ? `外のツールが作業場を変えました（${outsideNames(v.paths)}）。作業前の状態は測っていないので、落ちても今回の変更が原因とは限りません。一度だけ確かめます。`
-          : '外のツールを使いましたが、作業場が変わったかを比べられませんでした（git の管理下ではありません）。確かめは回していません。');
+          : '外のツールを使いましたが、作業場が変わったかを比べられませんでした（git の管理下でない作業場など）。確かめは回していません。');
       } else if (v.type === 'verify') showVerify(v.event);
       else if (v.type === 'finished' && v.reason !== 'completed' && v.detail) {
         /*

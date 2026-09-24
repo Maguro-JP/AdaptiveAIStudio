@@ -190,7 +190,7 @@ export type SessionEvent =
    */
   | {
       type: 'settled'; reason: string; verified: boolean; seconds: number; detail?: string;
-      checked: 'passed' | 'failed' | 'preexisting' | 'notRun';
+      checked: 'passed' | 'failed' | 'preexisting' | 'unsure' | 'notRun';
       /**
        * 訊かれただけの回か。
        *
@@ -1203,7 +1203,7 @@ export class Session {
     // 巻き戻すかどうか（従来の意味）。確かめて落ちたときだけ倒す。
     let keep = true;
     // 実際に確かめたか、どうだったか。**確かめていないことを、通ったと言わない。**
-    let checked: 'passed' | 'failed' | 'preexisting' | 'notRun' = 'notRun';
+    let checked: 'passed' | 'failed' | 'preexisting' | 'unsure' | 'notRun' = 'notRun';
 
     /*
      * 嫌がっていないかを見る材料は、**ここで押さえる。**
@@ -1258,7 +1258,8 @@ export class Session {
       const before = new BeforeWork({
         enabled: verifyOn,
         snapshot: () => snapshotTests(this.root),
-        stamp: () => workspaceStamp(this.root),
+        // 記録を使うのは、確かめる命令があるときだけ（無ければ比べても走らせない）。
+        ...(command ? { stamp: () => workspaceStamp(this.root) } : {}),
         measure: async () => {
           if (!command || verifyCfg.baseline === false) return;
           /*
@@ -1267,7 +1268,9 @@ export class Session {
            * 測れば、外のツールが落とした分まで「作業前から落ちていた」と読み、
            * この回のせいにしない（直させない）。外のツールを呼んだのもこの回なので、
            * 落ちたものはこの回のものとして扱う。成否は測らず、そう言う。
-           * 比べられないとき（git の管理下でない等）は、これまでどおり測る。
+           * 外のツールの手前で記録が取れなかったとき（git の管理下でない等）は、
+           * これまでどおり測る。手前で取れて、いま取れないときは、変わったかもしれない
+           * 側に置いて測らない。
            */
           const was = before.stamp;
           if (was) {
@@ -1465,7 +1468,7 @@ export class Session {
         const paths = was && now ? stampChanges(was, now) : undefined;
         if (paths === undefined) {
           yield { type: 'outsideChanged', paths: undefined };
-        } else if (paths.length > 0) {
+        } else if (paths.length > 0 && !ac.signal.aborted) {
           yield { type: 'outsideChanged', paths };
           yield { type: 'verify', event: { type: 'running', round: 1, command } };
           const r = await runVerification(
@@ -1474,14 +1477,26 @@ export class Session {
           const verdict = r.passed && before.tests
             ? compareTests(before.tests, await snapshotTests(this.root))
             : { ok: true as const };
-          if (!verdict.ok) {
+          if (ac.signal.aborted) {
+            // **止められたものを「落ちた」と言わない。**直させるループの側と同じ言い方にする。
+            yield { type: 'verify', event: { type: 'giveUp', reason: 'aborted', detail: '止めました' } };
+          } else if (!verdict.ok) {
+            // テストが減ったのは、この回が呼んだ外のツールのせい。はっきり失敗。
             keep = false; checked = 'failed';
             yield { type: 'verify', event: { type: 'tampered', reason: verdict.reason ?? 'テストが減っています' } };
           } else if (r.passed) {
             checked = 'passed';
             yield { type: 'verify', event: { type: 'passed', round: 1, durationMs: r.durationMs } };
+          } else if (r.timedOut) {
+            checked = 'unsure';
+            yield { type: 'verify', event: { type: 'giveUp', reason: 'timeBudget', detail: '確かめが時間内に終わりませんでした' } };
           } else {
-            keep = false; checked = 'failed';
+            /*
+             * **落ちた。ただし、この回のせいとは言えない。**作業前の成否を測っていないので、
+             * 元から落ちていたのかもしれない。`failed` にすると、思い出した記憶に失点を付け、
+             * 画面の「原因とは限りません」と記録が食い違う。分からないは分からないで持つ。
+             */
+            checked = 'unsure';
             yield { type: 'verify', event: { type: 'failed', round: 1, digest: digestFailure(r.output) } };
           }
         }
@@ -1521,6 +1536,7 @@ export class Session {
             checked === 'passed' ? '確かめて通った'
               : checked === 'failed' ? '確かめたが通らなかった'
               : checked === 'preexisting' ? '元から落ちていた'
+              : checked === 'unsure' ? '通らなかったが、この回が原因かは分からない'
               : '確かめていない',
           ].filter(Boolean).join(' — '),
           tags: changedHere.slice(0, 5),
@@ -1741,6 +1757,7 @@ export class Session {
       last.changed.length > 0 ? `触ったもの: ${last.changed.slice(0, 3).join(', ')}` : '作業場は変えていない',
       last.checked === 'passed' ? '確かめて通した'
         : last.checked === 'failed' ? '確かめたが通らなかった'
+        : last.checked === 'unsure' ? '確かめたが通らなかった（この回が原因かは分からない）'
         : '確かめていない',
     ].join(' / ');
   }
@@ -1774,7 +1791,7 @@ export class Session {
    * **確かめた回だけ。**検証を回していない回の「うまくいった気がする」で
    * 重みを動かすと、思い込みが固まるだけで、賢くはならない。
    */
-  #gradeRecall(checked: 'passed' | 'failed' | 'preexisting' | 'notRun'): void {
+  #gradeRecall(checked: 'passed' | 'failed' | 'preexisting' | 'unsure' | 'notRun'): void {
     const ids = this.#recalledIds;
     this.#recalledIds = [];
     if (ids.length === 0) return;

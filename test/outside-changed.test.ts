@@ -116,7 +116,7 @@ describe('外のツールだけで書いた回', { timeout: 60_000 }, () => {
     assert.deepEqual(verifyTypes(seen), []);
   });
 
-  test('落ちても直させない。落ちたとは言う', async () => {
+  test('落ちても直させない。落ちたとは言うが、この回のせいとは言わない', async () => {
     const { root, marker } = await workspace({ git: true });
     const seen = await turn(root, {
       kind: 'toolcall', name: 'w__write',
@@ -125,7 +125,8 @@ describe('外のツールだけで書いた回', { timeout: 60_000 }, () => {
     assert.deepEqual(verifyTypes(seen), ['running', 'failed'], '直させている、または落ちたと言っていない');
     assert.equal(await ranCount(marker), 1);
     const settled = seen.find((e) => e.type === 'settled') as { checked?: string } | undefined;
-    assert.equal(settled?.checked, 'failed', '落ちたのに、結末が落ちたになっていない');
+    // 作業前を測っていないので、この回のせいとは言えない。**失敗とも通ったとも言わない。**
+    assert.equal(settled?.checked, 'unsure', `結末が「分からない」になっていない: ${settled?.checked}`);
   });
 
   test('テストを消して通したら、通ったとは言わない', async () => {

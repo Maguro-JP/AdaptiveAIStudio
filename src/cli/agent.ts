@@ -664,7 +664,7 @@ async function main(): Promise<void> {
                 ? `  外のツールが先に作業場を変えました（${ev.paths ? `${ev.paths.length} 件` : '比べられませんでした'}）。作業前の状態は測れないので、このあと落ちたものは今回の作業のものとして直させます。`
                 : ev.paths
                 ? `  外のツールが作業場を変えました（${ev.paths.length} 件: ${ev.paths.slice(0, 5).join(', ')}${ev.paths.length > 5 ? ' ほか' : ''}）。作業前の状態は測っていないので、落ちても今回の変更が原因とは限りません。一度だけ確かめます。`
-                : '  外のツールを使いましたが、作業場が変わったかを比べられませんでした（git の管理下ではありません）。確かめは回していません。'));
+                : '  外のツールを使いましたが、作業場が変わったかを比べられませんでした（git の管理下でない作業場など）。確かめは回していません。'));
               break;
             case 'rolledBack':
               console.log(c.yellow(`  変更を巻き戻しました: ${ev.paths.join(', ')}\n`));
@@ -678,7 +678,7 @@ async function main(): Promise<void> {
               }
               // 確かめて落ちたときだけ、片付けない。
               // （試験の無い作業場で、いつまでも残り続けるのを避ける）
-              if (acceptedProposalId && ev.reason === 'completed' && ev.checked !== 'failed') {
+              if (acceptedProposalId && ev.reason === 'completed' && ev.checked !== 'failed' && ev.checked !== 'unsure') {
                 await session.completeProposal(acceptedProposalId);
               }
               acceptedProposalId = undefined;

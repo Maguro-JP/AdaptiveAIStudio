@@ -103,7 +103,7 @@ try {
   // 通信が止むのを待たない（`/api/events` が開きっぱなしで止まない）。
   // 本体と繋がったのを待つ。理由は scripts/sweep.mjs の `opened`。
   await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
-  await p.waitForSelector('#status.live', { timeout: 30_000 });
+  await p.waitForSelector('#status.live', { state: 'attached', timeout: 30_000 });
   await p.waitForTimeout(1500);
   const file = p.locator('#sideFiles button').filter({ hasText: 'hello.ts' }).first();
   if (await file.count() === 0) throw new Error('見本のファイルが一覧に出ない');

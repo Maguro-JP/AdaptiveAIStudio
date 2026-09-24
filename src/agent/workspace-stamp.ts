@@ -21,27 +21,50 @@
  */
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { runGit } from './git.ts';
+import { execFile } from 'node:child_process';
+
+/**
+ * git を呼び、**標準出力だけ**を返す。
+ *
+ * `runGit` は標準エラーも同じ文字列に足す。git は status の最中に警告を出すことがあり
+ * （`core.autocrlf` の「LF will be replaced by CRLF」など）、それが NUL 区切りの欄に
+ * 紛れ込むと、欄がずれて壊れた記録になる。ここでは二つを混ぜない。
+ */
+function gitOut(args: string[], cwd: string): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8' }, (err, stdout) => {
+      resolve(err ? undefined : stdout);
+    });
+  });
+}
 
 /** 変わっているファイルごとの記録。`状態 大きさ 時刻`。消えたものは `状態 -`。 */
 export type WorkspaceStamp = Map<string, string>;
 
 export async function workspaceStamp(root: string): Promise<WorkspaceStamp | undefined> {
+  /*
+   * **git が返す名前は、リポジトリの根からの道。**作業場がリポジトリの下のフォルダ
+   * （monorepo の一つの包みなど）だと、作業場につないでも場所がずれて stat が必ず
+   * 外れる。根を聞いてつなぐ。見る範囲は `-- .` で作業場の中に絞る（外の変化を
+   * この作業場の変化と数えない）。
+   */
+  const top = (await gitOut(['rev-parse', '--show-toplevel'], root))?.trim();
+  if (!top) return undefined;
   // -z: 名前に空白や全角が入っても切れ目を取り違えない。
-  const r = await runGit(['status', '--porcelain=v1', '-z', '--untracked-files=all'], root)
-    .catch(() => undefined);
-  if (!r || r.code !== 0) return undefined;
+  const out = await gitOut(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], root);
+  if (out === undefined) return undefined;
 
   const stamp: WorkspaceStamp = new Map();
-  const parts = r.out.split('\0');
+  const parts = out.split('\0');
   for (let i = 0; i < parts.length; i += 1) {
     const entry = parts[i]!;
     if (entry.length < 4) continue;
     const code = entry.slice(0, 2);
     const path = entry.slice(3);
     // 名前を変えたものは、次の欄に元の名前が来る。元の名前は記録に要らない。
-    if (code[0] === 'R' || code[0] === 'C') i += 1;
-    const s = await stat(join(root, path)).catch(() => undefined);
+    // 索引の側（X）でも、作業ツリーの側（Y）でも起きる。
+    if ('RC'.includes(code[0]!) || 'RC'.includes(code[1]!)) i += 1;
+    const s = await stat(join(top, path)).catch(() => undefined);
     stamp.set(path, s ? `${code} ${s.size} ${s.mtimeMs}` : `${code} -`);
   }
   return stamp;

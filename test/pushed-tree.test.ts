@@ -33,10 +33,16 @@ const clean = (head: string) => ({ head, dirty: [] as string[] });
  * `.githooks/` は作業場にだけ在り、bundle には入れない（利用者の手元で push はしない）。
  * bundle の中で走らせると、写す元が無くて落ちる。それは嘘の赤なので、飛ばしてそう言う。
  * 判断そのもの（`pushedTree`）の試験は、どこでも走らせる。
+ *
+ * **フックが在るかで決めない。**それだと作業場でフックを消したとき、フックを守る
+ * 試験が落ちる代わりに黙って飛ぶ。bundle であること（一つ上に `.portable` が在る）か、git の
+ * クローンでないことで決める。
  */
-const sourceOnly = existsSync(join(import.meta.dirname, '..', '.githooks', 'pre-push'))
-  ? {}
-  : { skip: 'フックは作業場にしか無いので、bundle では確かめられません' };
+const inBundle = existsSync(join(import.meta.dirname, '..', '..', '.portable'))
+  || !existsSync(join(import.meta.dirname, '..', '.git'));
+const sourceOnly = inBundle
+  ? { skip: 'フックは作業場にしか無いので、bundle では確かめられません' }
+  : {};
 
 describe('確かめたワークツリーと、押すワークツリー', () => {
   test('同じなら通す', () => {
