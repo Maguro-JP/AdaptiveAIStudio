@@ -50,8 +50,15 @@ describe('困ったときの報告', () => {
     const state = join(home, 'redact-state');
     await mkdir(join(state, 'logs'), { recursive: true });
     await writeFile(join(state, 'logs', 'ui.log'), 'つながりませんでした: Authorization: Bearer ghp_zzzzzzzzzzzzzzzzzzzz\n');
+    /*
+     * doctor は渡す（他の試験と同じ）。渡さないと、根を一時のフォルダにしたまま本物の doctor を
+     * 子で起こし、`MODULE_NOT_FOUND` の出力がそのまま試験の標準出力へ流れる。node の試験の
+     * 受け口はそこを記録の道として読むので、割り込んだ出力で一度だけ壊れた
+     * （`Unable to deserialize cloned data`、2026-09-24 の check:bundle）。
+     */
     const text = await buildReport({
       root: home, state, models: join(home, 'models'), home,
+      doctor: async () => 'DOCTOR-OUT',
     } as never);
     assert.ok(!text.includes('ghp_zzzzzzzzzzzzzzzzzzzz'), '記録に出たトークンが、そのまま報告へ出ている');
   });

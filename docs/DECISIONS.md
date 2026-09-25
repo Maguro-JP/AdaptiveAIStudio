@@ -160,6 +160,7 @@
 - draft で開いた一回は、ubuntu も回さない
 - 段取りは、依頼全体を一度の前後比べで挟む
 - 外の main と同じツリーを押すときは、push の手前の確かめを飛ばす
+- `.claude/` だけの変更では CI を回さない
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -8113,3 +8114,32 @@ MCP も組んでいないので、外から作業場を変える手が無い。
 
 確かめたこと: 判断の 4 件と、使い捨ての repository で本物のフックを通す 3 件（同じツリーなら確かめを走らせずに押せる／
 違えば確かめる／ブランチをタグとして押すなら確かめる）。わざとバグを入れた 3 通り（いつも飛ばす／タグでも飛ばす／フックが呼ばない）で落ちることを見た。
+
+## 2026-09-25  `.claude/` だけの変更では CI を回さない
+
+`.claude/` は Claude Code の作業の決まり（スキル・フック・権限の設定）で、製品のコードもテストも
+ここを読まない（`src/agent/commands.ts` が読むのは作業場の `.claude/skills/` で、この repository のものではない。
+`test/commands.test.ts` は一時のフォルダに作った写しを読む）。それでもスキルの更新だけの PR で CI が起きていた
+（#32 の run 126 ほか。`.claude/` の .sh や .json は `**.md` に当たらない）。
+
+決めたこと:
+
+- `ci.yml` の `paths-ignore` に `.claude/**` を足す。文書だけの push を止める判断（`scripts/docs-only-push.mjs`）の並びにも足す
+- 二つの並びの突き合わせは、`test/docs-only-push.test.ts` が `ci.yml` を読んで行う。手で写した並びは、
+  片方だけ直すと食い違ったまま通っていた
+- `.claude/settings.json` の `permissions.deny`（ハーネスの中身）も対象に入る。変えたら手元のフックが確かめる。
+  CI で見て分かることが無い（テストが読まない）ので、外す理由は無い
+
+選ばなかった案:
+
+- `.claude/skills/**` だけにする。`.claude/hooks/` と `settings.json` も製品のテストは読まないので、分ける意味が無い
+- 何もしない。スキルの更新は Raphael から定期に来るので、そのたびに ubuntu の 4 分と、Ready の回の Windows（2 倍）を払う
+
+| 変えたいとき | どこ |
+|---|---|
+| CI を回さない道 | `.github/workflows/ci.yml` の `paths-ignore` |
+| 文書だけの push とみなす道 | `scripts/docs-only-push.mjs` の `DOCS` |
+| 突き合わせ | `test/docs-only-push.test.ts`「ci.yml が挙げている並びを、全部わかる」 |
+
+確かめたこと: 突き合わせの試験は、`docs-only-push.mjs` から `.claude/` を外すと落ちる。
+GitHub 上で `.claude/` だけの PR が起きないことは、次のスキルの更新で見る（まだ確かめていない）。

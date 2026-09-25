@@ -3,6 +3,11 @@
 起きたバグ、原因、解決、再発防止、失敗した手、採用しなかった案と理由。新しいものを上に足す。
 自分の判定の誤りは `.claude/skills/lessons/LESSONS.md`、ここはプロダクトの問題。
 
+## 2026-09-25 作業場にしか無いファイルを読む試験が、bundle の中で落ちた（二度目）
+- 原因: `test/docs-only-push.test.ts` に足した「ci.yml の並びと突き合わせる」試験が、bundle に入らない `.github/workflows/ci.yml` を開いていた。09-24 の `test/hooks.test.ts` と同じ形
+- 解決: その試験を bundle の中では飛ばす（`pushed-tree.test.ts` と同じ判じ方）
+- 再発防止: `test/source-only.test.ts`。`join(...)` で `.github` か `.githooks` を開く試験のファイルが `skip` を持たなければ落とす
+
 ## 2026-09-25 段取りの担当が `run_command` で書いたファイルが「戻す」に載っていなかった
 - 原因: 段取りの経路は `beforeWrite`（この場所の書くツールだけ）しか通っていなかった。送り口の前後比べは段取りには入っていなかった
 - 解決: 依頼全体を一度の前後比べで挟む（`plan()` の `team.run` の手前と終わり）。並列の担当を切り分けなくてよい
@@ -11,9 +16,9 @@
 
 ## 2026-09-24 bundle の中の `npm test` で、`test/report.test.ts` が runner の側で一度だけ落ちた
 - 症状: 中の 6 件は全部 ok なのに、ファイル単位が `Unable to deserialize cloned data due to invalid or unsupported version.`（`node:internal/test_runner/runner` の `#processRawBuffer`）で not ok。`check:bundle` の 4 回のうち 1 回
-- 原因: 分かっていない。node の test runner が子プロセスから受ける記録が壊れた形。`report.test.ts` は doctor を回すので、子プロセスの出力が runner の口に混ざった可能性を疑っている（確かめていない）
-- 対処: 手元で 3 回回して 3 回通った。同じ木で `check:bundle` をもう一度回す（一度だけ）。二度目も落ちるなら test 側を読む
-- 残り: 再発したら、`report.test.ts` の doctor を回す試験で stdio を `pipe` に閉じる
+- 原因（09-25 に見つけた。再現はできていないので、いちばんあり得る形）: 「記録の節も伏せてから出す」の試験だけが `doctor` を渡しておらず、根を一時のフォルダにしたまま本物の doctor を子で起こしていた。子は `MODULE_NOT_FOUND` で落ち、その出力を `runDoctor` が行の区切りに関係なく `process.stdout.write` でそのまま流す。試験のプロセスの標準出力は runner の記録の道なので、割り込んだ出力で枠が崩れうる
+- 対処: その試験にも `doctor` を渡し、試験の中で子を起こさない（09-25）
+- 残り: `runDoctor` が子の出力を行の区切りに関係なく流す作りはそのまま（利用者の端末では問題にならない）。再発したらそこを行ごとに流す
 
 ## 2026-09-24 巻き戻しがリンクを辿って作業場の外を書き、二進を別の中身にして戻し、`??` の在るファイルを消していた
 - 原因: `writeFile` はリンクを辿る／前の中身を utf8 の文字列で持っていた／`??` を「前は無い」と読んでいた（`git rm --cached` と `git mv` 後の再エクスポートで在るファイルが `??` になる）／戻せなかった道を `catch {}` で黙って落としていた

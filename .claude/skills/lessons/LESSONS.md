@@ -4,6 +4,12 @@
 1件は4行。場面は「次から」を差し込むときの索引になるので、短い名詞で書く。
 新しいものを上に足す。
 
+## 2026-09-25 作業場にしか無いファイルを読む試験を、二日続けて bundle で落とした
+場面: テスト、bundle
+起きたこと: 09-24 は `test/hooks.test.ts` が `.githooks/pre-push` を、09-25 は `test/docs-only-push.test.ts` が `.github/workflows/ci.yml` を読み、どちらも bundle の中で `ENOENT` で落ちた。どちらも `check:bundle` で見つけた
+判定の誤り: 手元の `npm test` が通ったことを、配る形でも通る根拠にした。bundle に何が入らないかを書く前に見なかった
+次から: `.github` や `.githooks` を開く試験には `sourceOnly`（`inBundle`）を付ける。付け忘れは `test/source-only.test.ts` が落とす
+
 ## 2026-09-25 long-dev に auto-dev の止まる条件をそのまま継がせた
 場面: long-dev、スキル
 起きたこと: AdaptiveAIStudio の long-dev が PR のマージ可否など3つを利用者に聞いて止まり、翌日の Routine まで何もしなかった。Routine 用に E=23h を毎回書かせてもいた

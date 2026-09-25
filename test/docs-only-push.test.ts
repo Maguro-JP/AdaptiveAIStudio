@@ -9,8 +9,20 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 // @ts-expect-error 型定義を置かない開発用の script。ここだけ読む。
 import { docsOnlyPush, SKIP_MARK } from '../scripts/docs-only-push.mjs';
+
+/**
+ * ci.yml は作業場にしか無い（bundle には入れない）。bundle の中では、ci.yml を読む試験を飛ばす。
+ * 在るかで決めない（消したとき黙って飛ぶ）。bundle であること（一つ上に `.portable`）か、
+ * git の clone でないことで決める（`test/pushed-tree.test.ts` と同じ）。
+ */
+const inBundle = existsSync(join(import.meta.dirname, '..', '..', '.portable'))
+  || !existsSync(join(import.meta.dirname, '..', '.git'));
+const sourceOnly = inBundle ? { skip: 'ci.yml は作業場にしか無いので、bundle では確かめられません' } : {};
 
 describe('文書だけの push', () => {
   test('文書だけなら止める。通り道も言う', () => {
@@ -41,10 +53,28 @@ describe('文書だけの push', () => {
     );
   });
 
-  test('ci.yml が挙げている並びを、全部わかる', () => {
-    for (const f of ['README.md', 'docs/images/a.png', '.gitignore', '.gitattributes']) {
-      assert.ok(docsOnlyPush({ files: [f], message: '直す' }), `${f} を文書として見ていない`);
+  test('ci.yml が挙げている並びを、全部わかる', sourceOnly, async () => {
+    /*
+     * **ci.yml そのものを読む。**並びを手で写していたので、ci.yml に足しても
+     * ここは古いまま通った（片方だけ直すと食い違う、と注釈にだけ書いてあった）。
+     * glob ごとに見本の道を作り、文書として見ているかを確かめる。
+     */
+    const raw = (await readFile(join(import.meta.dirname, '..', '.github', 'workflows', 'ci.yml'), 'utf8'))
+      .replace(/\r\n/g, '\n');
+    const list = /paths-ignore:\s*\[([^\]]*)\]/.exec(raw)?.[1];
+    assert.ok(list, 'ci.yml の paths-ignore が読めない');
+    const globs = [...list.matchAll(/'([^']+)'/g)].map((m) => m[1]!);
+    assert.ok(globs.length >= 5, `並びが短すぎる: ${globs.join(', ')}`);
+    for (const glob of globs) {
+      const sample = glob.replace(/\*\*/g, 'a/b').replace(/\*/g, 'x');
+      assert.ok(docsOnlyPush({ files: [sample], message: '直す' }), `${glob}（${sample}）を文書として見ていない`);
     }
+  });
+
+  test('`.claude/` の下は文書と同じ扱い。製品のコードは違う（対）', () => {
+    assert.ok(docsOnlyPush({ files: ['.claude/hooks/lessons.sh'], message: '直す' }));
+    assert.equal(docsOnlyPush({ files: ['.claude/hooks/lessons.sh', 'src/a.ts'], message: '直す' }), undefined);
+    assert.equal(docsOnlyPush({ files: ['claude/x.ts'], message: '直す' }), undefined);
   });
 
   test('何も変わっていない push では、何も言わない', () => {
