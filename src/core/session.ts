@@ -798,16 +798,20 @@ export class Session {
        * 送り口（send）はツールを呼ぶたびに前後を比べるが、段取りは担当が並列に動くので、
        * ツールごとに比べると他の担当の書き込みが混ざる。「戻す」は依頼 1 件で 1 つの戻り点
        * なので、依頼全体を一度で挟めば足りる。担当が始まる手前で記録を取り、終わり
-       * （途中で落ちても）にもう一度比べる。この場所のツールで書いた分は、書く手前に
-       * 記録済み（最初の一度が勝つ）なので二重にはならない。
+       * （途中で落ちても）にもう一度比べる。
+       *
+       * ここで分かる前の中身は**依頼の前の姿**なので、書く手前の記録（`beforeWrite`）より優先して
+       * 置き換える。担当が先に `run_command` で変えてから `write_file` で書くと、書く手前の記録は
+       * `run_command` の後の姿になっている（最初の一度が勝つので、そのままだと途中の姿に戻る）。
+       * 前の中身を記録できなかった道は、書く手前の記録も捨てて「戻せない」にする（途中の姿に戻さない）。
        * 確かめのコマンドが書くもの（スナップショット等）は作業ではないので、比べるのは確かめの前。
        */
       const outside = new OutsideChanges(root);
       await outside.before();
       outsideTaken = async () => {
         const found = await outside.after();
-        for (const c of found.changes) this.undo.capture(c.path, c.previous);
-        for (const path of found.unrecorded) this.undo.skip(path);
+        for (const c of found.changes) this.undo.replace(c.path, c.previous);
+        for (const path of found.unrecorded) this.undo.forget(path);
       };
 
       /** 実際に書き換えられたファイル。宣言ではなく、起きたことを見る。 */

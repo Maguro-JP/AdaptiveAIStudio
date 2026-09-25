@@ -38,10 +38,12 @@ while read -r _local_ref local_sha remote_ref remote_sha; do
   case "$_local_ref" in
     refs/heads/*) AAS_PUSH_SENDING="$local_sha" ;;
   esac
+  # ブランチかは**両側**で見る。`git push origin feature:refs/tags/v1` は手元ではブランチでも、
+  # 外ではタグ（release の合図）になる。
   case "$local_sha" in
     *[!0]*)
-      case "$_local_ref" in
-        refs/heads/*) AAS_PUSH_BRANCH_SHAS="$AAS_PUSH_BRANCH_SHAS $local_sha" ;;
+      case "$_local_ref $remote_ref" in
+        'refs/heads/'*' refs/heads/'*) AAS_PUSH_BRANCH_SHAS="$AAS_PUSH_BRANCH_SHAS $local_sha" ;;
         *) AAS_PUSH_OTHER=1 ;;
       esac
       ;;

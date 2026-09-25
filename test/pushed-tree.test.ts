@@ -269,6 +269,17 @@ describe('フックが、本当に止める', sourceOnly, () => {
     assert.equal(existsSync(ran), true, 'main と違うのに確かめを飛ばした');
   });
 
+  test('**ブランチをタグとして押すときは、main と同じツリーでも確かめる**', async () => {
+    // 手元ではブランチでも、外ではタグ（release の合図）になる。
+    const { work, ran } = await sandbox('process.exit(0);\n');
+    execFileSync('git', ['push', '-q', '--no-verify', '-u', 'origin', 'main'], { cwd: work });
+    execFileSync('git', ['branch', 'feature'], { cwd: work });
+    const r = push(work, ['origin', 'feature:refs/tags/v9.9.9']);
+    assert.equal(r.ok, true, `押せていない: ${r.text}`);
+    assert.doesNotMatch(r.text, /origin\/main と同じ/, `タグなのに飛ばした: ${r.text}`);
+    assert.equal(existsSync(ran), true, 'タグとして押すのに確かめを飛ばした');
+  });
+
   test('確かめが落ちたら、もちろん押さない（対）', async () => {
     const { work } = await sandbox('process.exit(1);\n');
     const r = push(work);

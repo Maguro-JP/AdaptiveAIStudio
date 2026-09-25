@@ -399,8 +399,9 @@ describe('CI は押すたびに回さない', () => {
     assert.ok(linuxTest, 'Linux でテストを回す仕事が見つからない');
     const cond = /if: >-\n([\s\S]*?)\n    runs-on:/.exec(linuxTest)?.[1] ?? /if: (.*)/.exec(linuxTest)?.[1] ?? '';
     assert.doesNotMatch(cond, /draft != true/, 'Linux 側まで draft の間ずっと止めている（安い方は押すたびに回す）');
-    assert.match(cond, /github\.event\.action == 'opened' && github\.event\.pull_request\.draft == true/,
-      `draft で開いた回を止める条件が無い（開いてすぐ Ready にすると二度回る）:\n${cond}`);
+    // **否定まで見る。**`!(` を落とすと、Linux は draft で開いた回にだけ回り、他の回では全部飛ぶ。
+    assert.match(cond, /&& !\(github\.event\.action == 'opened' && github\.event\.pull_request\.draft == true\)/,
+      `draft で開いた回だけを止める条件（否定付き）が無い:\n${cond}`);
   });
 
   test('どの仕事にも上限がある（暴走した1本で枠を溶かさない）', sourceOnly, async () => {

@@ -86,4 +86,32 @@ describe('段取りで run_command が変えた分も「戻す」に載る', { t
       await session.close();
     }
   });
+
+  test('先に run_command が変え、後で write_file が書いたファイルも、依頼の前の姿に戻る', async () => {
+    // 書く手前の記録（beforeWrite）は run_command の後の姿。最初の一度が勝つままだと、途中の姿に戻る。
+    const root = await workspace();
+    const session = await open(root);
+    try {
+      fake.setBehavior({
+        kind: 'steps',
+        calls: [
+          { name: 'run_command', args: { command: `node -e "require('fs').writeFileSync('note.txt','途中\\n')"` } },
+          { name: 'read_file', args: { path: 'note.txt' } },
+          { name: 'write_file', args: { path: 'note.txt', content: '最後\n' } },
+        ],
+        then: '書きました。',
+      });
+      const work: string[] = [];
+      for await (const ev of session.plan('note.txt を書き換えて')) {
+        if (ev.type === 'work') work.push(`${ev.ok ? 'ok' : 'NG'} ${ev.text}`);
+      }
+      assert.equal(await readFile(join(root, 'note.txt'), 'utf8'), '最後\n', `前提: 書けていない: ${work.join(' / ')}`);
+      const [point] = await session.undo.list();
+      assert.ok(point, '戻り先が無い');
+      await session.undo.restore(point.id);
+      assert.equal(await readFile(join(root, 'note.txt'), 'utf8'), 'もとの中身\n', 'run_command の後の途中の姿に戻っている');
+    } finally {
+      await session.close();
+    }
+  });
 });
