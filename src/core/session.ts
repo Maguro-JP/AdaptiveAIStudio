@@ -698,6 +698,13 @@ export class Session {
      * 同じ内容の書き直しを止める規則も、前の依頼の分で誤爆する。
      */
     this.#harness.beginTask();
+    /** 外のツールの分を「戻す」に載せる。一度だけ（途中で落ちたら finally から）。 */
+    let outsideTaken: (() => Promise<void>) | undefined;
+    const takeOutside = async (): Promise<void> => {
+      const take = outsideTaken;
+      outsideTaken = undefined;
+      await take?.().catch(() => undefined);
+    };
 
     try {
       const root = this.root;
@@ -785,6 +792,24 @@ export class Session {
         },
       });
 
+      /*
+       * **外のツール（MCP）と `run_command` が変えた分も「戻す」に載せる。**
+       *
+       * 送り口（send）はツールを呼ぶたびに前後を比べるが、段取りは担当が並列に動くので、
+       * ツールごとに比べると他の担当の書き込みが混ざる。「戻す」は依頼 1 件で 1 つの戻り点
+       * なので、依頼全体を一度で挟めば足りる。担当が始まる手前で記録を取り、終わり
+       * （途中で落ちても）にもう一度比べる。この場所のツールで書いた分は、書く手前に
+       * 記録済み（最初の一度が勝つ）なので二重にはならない。
+       * 確かめのコマンドが書くもの（スナップショット等）は作業ではないので、比べるのは確かめの前。
+       */
+      const outside = new OutsideChanges(root);
+      await outside.before();
+      outsideTaken = async () => {
+        const found = await outside.after();
+        for (const c of found.changes) this.undo.capture(c.path, c.previous);
+        for (const path of found.unrecorded) this.undo.skip(path);
+      };
+
       /** 実際に書き換えられたファイル。宣言ではなく、起きたことを見る。 */
       const written = new Set<string>();
       const gen = team.run(toWorkItems(plan), ac.signal);
@@ -817,6 +842,8 @@ export class Session {
         next = await gen.next();
       }
       const outcomes = next.value;
+      // 担当が終わった時点の姿で比べる（確かめのコマンドが書く分を混ぜない）。
+      await takeOutside();
 
       // 検査。通らないものを人に見せない。
       let verified: 'passed' | 'failed' | 'skipped' | 'preexisting' = 'skipped';
@@ -884,6 +911,8 @@ export class Session {
       return undefined;
     } finally {
       this.#running = undefined;
+      // 担当の途中で落ちた・止めた回も、そこまでに外のツールが変えた分を戻せるように。
+      await takeOutside();
       await this.undo.end().catch(() => undefined);
       await this.memory.save().catch(() => undefined);
     }

@@ -3,6 +3,12 @@
 起きたバグ、原因、解決、再発防止、失敗した手、採用しなかった案と理由。新しいものを上に足す。
 自分の判定の誤りは `.claude/skills/lessons/LESSONS.md`、ここはプロダクトの問題。
 
+## 2026-09-25 段取りの担当が `run_command` で書いたファイルが「戻す」に載っていなかった
+- 原因: 段取りの経路は `beforeWrite`（この場所の書くツールだけ）しか通っていなかった。送り口の前後比べは段取りには入っていなかった
+- 解決: 依頼全体を一度の前後比べで挟む（`plan()` の `team.run` の手前と終わり）。並列の担当を切り分けなくてよい
+- 再発防止: `test/plan-outside-undo.test.ts`
+- 分かったこと: 段取りの既定の担当（worker）は MCP を持たない（持つのは外を調べる役だけ）。`run_command` は `;` で二つのコマンドに分けて読み、後ろも許可の一覧で見る
+
 ## 2026-09-24 bundle の中の `npm test` で、`test/report.test.ts` が runner の側で一度だけ落ちた
 - 症状: 中の 6 件は全部 ok なのに、ファイル単位が `Unable to deserialize cloned data due to invalid or unsupported version.`（`node:internal/test_runner/runner` の `#processRawBuffer`）で not ok。`check:bundle` の 4 回のうち 1 回
 - 原因: 分かっていない。node の test runner が子プロセスから受ける記録が壊れた形。`report.test.ts` は doctor を回すので、子プロセスの出力が runner の口に混ざった可能性を疑っている（確かめていない）
