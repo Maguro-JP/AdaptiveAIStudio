@@ -10,9 +10,19 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 // @ts-expect-error 型定義を置かない開発用の script。ここだけ読む。
 import { docsOnlyPush, SKIP_MARK } from '../scripts/docs-only-push.mjs';
+
+/**
+ * ci.yml は作業場にしか無い（bundle には入れない）。bundle の中では、ci.yml を読む試験を飛ばす。
+ * 在るかで決めない（消したとき黙って飛ぶ）。bundle であること（一つ上に `.portable`）か、
+ * git の clone でないことで決める（`test/pushed-tree.test.ts` と同じ）。
+ */
+const inBundle = existsSync(join(import.meta.dirname, '..', '..', '.portable'))
+  || !existsSync(join(import.meta.dirname, '..', '.git'));
+const sourceOnly = inBundle ? { skip: 'ci.yml は作業場にしか無いので、bundle では確かめられません' } : {};
 
 describe('文書だけの push', () => {
   test('文書だけなら止める。通り道も言う', () => {
@@ -43,7 +53,7 @@ describe('文書だけの push', () => {
     );
   });
 
-  test('ci.yml が挙げている並びを、全部わかる', async () => {
+  test('ci.yml が挙げている並びを、全部わかる', sourceOnly, async () => {
     /*
      * **ci.yml そのものを読む。**並びを手で写していたので、ci.yml に足しても
      * ここは古いまま通った（片方だけ直すと食い違う、と注釈にだけ書いてあった）。

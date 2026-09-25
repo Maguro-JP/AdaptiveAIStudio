@@ -3,6 +3,11 @@
 起きたバグ、原因、解決、再発防止、失敗した手、採用しなかった案と理由。新しいものを上に足す。
 自分の判定の誤りは `.claude/skills/lessons/LESSONS.md`、ここはプロダクトの問題。
 
+## 2026-09-25 作業場にしか無いファイルを読む試験が、bundle の中で落ちた（二度目）
+- 原因: `test/docs-only-push.test.ts` に足した「ci.yml の並びと突き合わせる」試験が、bundle に入らない `.github/workflows/ci.yml` を開いていた。09-24 の `test/hooks.test.ts` と同じ形
+- 解決: その試験を bundle の中では飛ばす（`pushed-tree.test.ts` と同じ判じ方）
+- 再発防止: `test/source-only.test.ts`。`join(...)` で `.github` か `.githooks` を開く試験のファイルが `skip` を持たなければ落とす
+
 ## 2026-09-25 段取りの担当が `run_command` で書いたファイルが「戻す」に載っていなかった
 - 原因: 段取りの経路は `beforeWrite`（この場所の書くツールだけ）しか通っていなかった。送り口の前後比べは段取りには入っていなかった
 - 解決: 依頼全体を一度の前後比べで挟む（`plan()` の `team.run` の手前と終わり）。並列の担当を切り分けなくてよい
