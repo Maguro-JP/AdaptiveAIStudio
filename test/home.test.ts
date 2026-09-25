@@ -393,10 +393,14 @@ describe('CI は押すたびに回さない', () => {
     const on = raw.slice(raw.indexOf('\non:'), raw.indexOf('\njobs:'));
     assert.match(on, /types:\s*\[[^\]]*ready_for_review/,
       'ready_for_review が無い。draft を外しても Windows が回らない');
-    // 安い方（Linux）には条件を付けない。**見る回数を減らすのはこちらではない。**
+    // 安い方（Linux）は押すたびに回す。止めるのは「draft で開いた」その一回だけ
+    // （開いてすぐ Ready にすると、Ready の回に打ち切られて途中までの分を払うだけになる）。
     const linuxTest = jobs.find((j) => /runs-on: ubuntu-latest/.test(j) && /npm test/.test(j));
     assert.ok(linuxTest, 'Linux でテストを回す仕事が見つからない');
-    assert.doesNotMatch(linuxTest, /draft/, 'Linux 側まで止めている（安い方は毎回回す）');
+    const cond = /if: >-\n([\s\S]*?)\n    runs-on:/.exec(linuxTest)?.[1] ?? /if: (.*)/.exec(linuxTest)?.[1] ?? '';
+    assert.doesNotMatch(cond, /draft != true/, 'Linux 側まで draft の間ずっと止めている（安い方は押すたびに回す）');
+    assert.match(cond, /github\.event\.action == 'opened' && github\.event\.pull_request\.draft == true/,
+      `draft で開いた回を止める条件が無い（開いてすぐ Ready にすると二度回る）:\n${cond}`);
   });
 
   test('どの仕事にも上限がある（暴走した1本で枠を溶かさない）', sourceOnly, async () => {
