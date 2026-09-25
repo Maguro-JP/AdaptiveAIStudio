@@ -257,6 +257,26 @@ describe('フックが、本当に止める', sourceOnly, () => {
     assert.equal(existsSync(ran), false, '外に新しいものが無いのに確かめを走らせた');
   });
 
+  test('**main に文書だけの更新が入った後の合わせ直しも、文書だけの push として止めない**', async () => {
+    // スキルの更新（.claude/ だけ）が main に入った後、作業のブランチを main へ合わせ直して押す形。
+    // 前のブランチとの差は文書だけだが、押すツリーは外の main と同じなので、外に新しいものは出ない。
+    const { work, ran } = await sandbox('process.exit(1);\n');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: work, encoding: 'utf8' });
+    git('push', '-q', '--no-verify', '-u', 'origin', 'main');
+    git('checkout', '-q', '-b', 'feature');
+    git('push', '-q', '--no-verify', '-u', 'origin', 'feature');
+    git('checkout', '-q', 'main');
+    await writeFile(join(work, 'README.md'), '# 更新\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', '文書だけ');
+    git('push', '-q', '--no-verify', 'origin', 'main');
+    git('checkout', '-q', '-B', 'feature', 'main');
+    const r = push(work, ['--force-with-lease', 'origin', 'feature']);
+    assert.equal(r.ok, true, `押せていない（文書だけの push として止めた？）: ${r.text}`);
+    assert.match(r.text, /origin\/main と同じ/, `飛ばした理由を言っていない: ${r.text}`);
+    assert.equal(existsSync(ran), false, '外に新しいものが無いのに確かめを走らせた');
+  });
+
   test('main と一つでも違えば、これまでどおり確かめる（対）', async () => {
     const { work, ran } = await sandbox('process.exit(0);\n');
     execFileSync('git', ['push', '-q', '--no-verify', '-u', 'origin', 'main'], { cwd: work });
