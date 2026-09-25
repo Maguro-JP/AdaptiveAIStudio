@@ -3,6 +3,11 @@
 採用技術、ライブラリ、API、環境固有の問題、設計上の知識。新しいものを上に足す。
 経緯の長いものは `docs/DECISIONS.md` に書き、ここには一行と参照だけを置く。
 
+## 2026-09-25 pre-push フックには remote の名前が $1 で来る
+- `git push` は pre-push に `$1`（remote 名）と `$2`（URL）を渡し、標準入力に `<local ref> <local sha> <remote ref> <remote sha>` を行ごとに流す
+- 手元の `refs/remotes/<remote>/main` は最後に fetch した時点のもの。古くても、そこに在るツリーは外に在る（force push で消されない限り）
+- `git rev-parse --verify -q <sha>^{tree}` でコミットでもタグでもツリーが引ける
+
 ## 2026-09-25 draft で作ってすぐ ready にすると、CI が 2 回起きる
 - `ci.yml` の `pull_request` は `types: [opened, synchronize, reopened, ready_for_review]`。draft で開いた時点（opened）と ready にした時点（ready_for_review）で 1 回ずつ起きる
 - #36・#37・#38 の run 130/131、132/133、134/135 がこの形（同じ head sha で 2 回）。直後にマージするなら opened の回は無駄

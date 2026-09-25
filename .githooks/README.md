@@ -10,3 +10,6 @@
 「新しく clone したときは一度だけ打つ」と書いていたが、fresh clone で誰も打たず、
 フックが無いまま push が通った。`test/hooks.test.ts` は、本物の clone に入ることを見る
 （この作業場の状態は見ない。CI は `npm ci` の前に `npm test` を回す）。
+
+押すツリーが外の main と同じ（マージの後にブランチを main へ合わせ直すなど）なら、確かめを飛ばして
+理由を一行言う（`scripts/same-as-main.mjs`）。外に新しく出るものが無いため。

@@ -24,6 +24,9 @@ pushing_wip=1
 AAS_PUSH_RANGE=''
 AAS_PUSH_SENDING=''
 AAS_PUSH_CARRIES=0
+# main と同じツリーかを見るための、押すブランチの sha と、ブランチ以外が混ざったか。
+AAS_PUSH_BRANCH_SHAS=''
+AAS_PUSH_OTHER=0
 while read -r _local_ref local_sha remote_ref remote_sha; do
   [ -z "$remote_ref" ] && continue
   case "$remote_ref" in
@@ -34,6 +37,14 @@ while read -r _local_ref local_sha remote_ref remote_sha; do
   # ないので、HEAD と比べると `v*` のタグで release を出す道が塞がる。
   case "$_local_ref" in
     refs/heads/*) AAS_PUSH_SENDING="$local_sha" ;;
+  esac
+  case "$local_sha" in
+    *[!0]*)
+      case "$_local_ref" in
+        refs/heads/*) AAS_PUSH_BRANCH_SHAS="$AAS_PUSH_BRANCH_SHAS $local_sha" ;;
+        *) AAS_PUSH_OTHER=1 ;;
+      esac
+      ;;
   esac
   # 消す push（sha が全部 0）だけなら、ワークツリーを運んでいない。確かめようがない。
   case "$local_sha" in
@@ -78,6 +89,19 @@ if [ -n "$AAS_PUSH_RANGE" ]; then
     echo "$reason"
     exit 1
   }
+fi
+
+# 押すツリーが、外に既に在る main と同じなら、確かめを飛ばす（scripts/same-as-main.mjs）。
+#
+# マージの後に作業のブランチを main へ合わせ直す push は、外に新しいものを何も出さない。
+# それでも 12 分の確かめを回していた。出るものが無いなら、確かめるものも無い。
+# 飛ばすのは「押すものが全部ブランチで、ツリーが全部 main と同じ」ときだけ。
+if [ -n "$AAS_PUSH_BRANCH_SHAS" ]; then
+  # shellcheck disable=SC2086
+  if reason=$(node scripts/same-as-main.mjs "${1:-origin}" "$AAS_PUSH_OTHER" $AAS_PUSH_BRANCH_SHAS); then
+    echo "$reason"
+    exit 0
+  fi
 fi
 
 # 確かめるワークツリーと、押すワークツリーを、同じものにする。
