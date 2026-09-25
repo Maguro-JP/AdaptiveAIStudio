@@ -39,6 +39,7 @@ scripts/check.sh <owner>/<repo> <branch-part>
 | `create_new_session_on_fire` | `sources: []`、`mcp_servers: []` | リポジトリ無し。clone も push もできず、承認待ちか無言で終わる。status は緑のまま |
 | `persistent_session_id` にリポジトリ無しのセッション | 作った側のリポジトリ | 対象と違うリポジトリで動く |
 | `persistent_session_id` にリポジトリを渡して作ったセッション | 対象リポジトリ、auto | clone、変更、commit、push、PR 作成、マージまで通った（AdaptiveAIStudio #33、起こしてから5分） |
+| 同上を約20時間放置したあと、定刻（cron）で起こす | 対象リポジトリ、auto | 09:04 JST に起きて日報の PR #39 を作りマージし、10:03 JST に long-dev が再開した（2026-09-25） |
 
 結びつけ先のセッションをアーカイブすると、Routine は止まらず、次に起きるときに黙って
 新しい空のセッション（リポジトリ無し）に結びつけ直される。仕事はせず、status は緑のまま。
@@ -49,11 +50,6 @@ scripts/check.sh <owner>/<repo> <branch-part>
 status が緑でも仕事をしたとは限らない。このアカウントの「動いているように見えた」Routine
 （DigiMon、RuleCrawler）は、9時間走って1つもコミットを残していなかった。
 動いたかはリポジトリ側で見る。
-
-## 確かめていないこと
-
-- 結びつけたセッションが数日放置で回収されたあとも、定刻に起きて clone し直すか。公式は「期限切れのセッションは開き直すと会話を復元して新しい容器を作る」と書いている。Routine から起きる場合も同じかは、最初の定刻の起動で見る
-分かったら、この節を消して上の表に足す。
 
 ## 決まり
 
@@ -121,7 +117,7 @@ Routine から起きたセッションは、最初に `git remote -v` を出す�
 
 | 名前 | cron（UTC） | プロンプト |
 |---|---|---|
-| `long-dev` | `0 1 * * *` | <owner/repo> で long-dev E=23h を実行する。翌朝 09:00 JST まで回す |
+| `long-dev` | `0 1 * * *` | <owner/repo> で long-dev。止まっていれば再開、回っていればそのまま続ける |
 | `dev-report daily` | `0 0 * * *` | <owner/repo> で dev-report daily を実行する。日報を書く。開発はしない |
 | `dev-report weekly` | `0 0 * * 1` | <owner/repo> で dev-report weekly を実行する。週報と来週の計画。PR を整理する |
 | `dev-report monthly` | `0 0 1 * *` | <owner/repo> で dev-report monthly を実行する。月報と今月の週ごとの計画 |
