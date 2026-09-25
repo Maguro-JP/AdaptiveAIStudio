@@ -73,11 +73,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 安い方（Linux は1倍）。**ここは必ず回す。**
+  # 安い方（Linux は1倍）。**ここは押すたびに回す。**
+  #
+  # 回さないのは「draft で開いた」その一回だけ。押した木は push の手前のフックが手元で
+  # 確かめてあり、開いてすぐ Ready にすると、この回は同じ組（concurrency）の Ready の回に
+  # 打ち切られて、打ち切られるまでの分だけ課金される（run 128、2026-09-24）。
+  # draft のまま押せば synchronize で回り、Ready にすれば全部回るので、見る機会は減らない。
   test:
     name: ubuntu-latest / Node 22.x
     # 本物の重みだけを頼んだ回では回さない（枠を使わない）。
-    if: github.event_name != 'workflow_dispatch' || !inputs.real
+    if: >-
+      (github.event_name != 'workflow_dispatch' || !inputs.real)
+      && !(github.event.action == 'opened' && github.event.pull_request.draft == true)
     runs-on: ubuntu-latest
     # 暴走した1本で枠を溶かさない。手元では3分ほど。
     timeout-minutes: 20

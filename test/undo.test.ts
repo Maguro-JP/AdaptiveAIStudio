@@ -221,3 +221,35 @@ describe('直近で触ったファイルを覚える', () => {
     assert.equal((await undo.list())[0]?.skipped, undefined);
   });
 });
+
+describe('前の中身を置き換える・捨てる（段取りの前後比べ）', () => {
+  test('replace は先に記録した「前」を置き換え、戻すとそちらへ戻る', async () => {
+    const { root, undo } = await store();
+    await writeFile(join(root, 'n.txt'), 'もと\n', 'utf8');
+    await undo.begin('段取り');
+    await writeFile(join(root, 'n.txt'), '途中\n', 'utf8');       // run_command の代わり
+    await edit(root, undo, 'n.txt', '最後\n');                     // 記録されるのは「途中」
+    undo.replace('n.txt', 'もと\n');                              // 依頼の前の姿で置き換える
+    const point = await undo.end();
+    assert.ok(point);
+    await undo.restore(point.id);
+    assert.equal(await readFile(join(root, 'n.txt'), 'utf8'), 'もと\n', '途中の姿に戻っている');
+  });
+
+  test('forget は記録を捨てて「戻せない」にする。戻しても触らない', async () => {
+    const { root, undo } = await store();
+    await writeFile(join(root, 'b.bin'), 'もと\n', 'utf8');
+    await writeFile(join(root, 'a.txt'), 'a\n', 'utf8');
+    await undo.begin('段取り');
+    // 戻せるものが一つも無い戻り先は残らない（end の決まり）。戻せるものを一つ置く。
+    await edit(root, undo, 'a.txt', 'a2\n');
+    await edit(root, undo, 'b.bin', '最後\n');
+    undo.forget('b.bin');
+    const point = await undo.end();
+    assert.ok(point);
+    assert.deepEqual(point.skipped, ['b.bin'], '戻せないと書いていない');
+    await undo.restore(point.id);
+    assert.equal(await readFile(join(root, 'b.bin'), 'utf8'), '最後\n', '捨てた記録で戻している');
+  });
+});
+

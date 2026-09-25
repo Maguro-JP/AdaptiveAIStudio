@@ -3,10 +3,16 @@
 採用技術、ライブラリ、API、環境固有の問題、設計上の知識。新しいものを上に足す。
 経緯の長いものは `docs/DECISIONS.md` に書き、ここには一行と参照だけを置く。
 
+## 2026-09-25 pre-push フックには remote の名前が $1 で来る
+- `git push` は pre-push に `$1`（remote 名）と `$2`（URL）を渡し、標準入力に `<local ref> <local sha> <remote ref> <remote sha>` を行ごとに流す
+- 手元の `refs/remotes/<remote>/main` は最後に fetch した時点のもの。古くても、そこに在るツリーは外に在る（force push で消されない限り）
+- `git rev-parse --verify -q <sha>^{tree}` でコミットでもタグでもツリーが引ける
+
 ## 2026-09-25 draft で作ってすぐ ready にすると、CI が 2 回起きる
 - `ci.yml` の `pull_request` は `types: [opened, synchronize, reopened, ready_for_review]`。draft で開いた時点（opened）と ready にした時点（ready_for_review）で 1 回ずつ起きる
 - #36・#37・#38 の run 130/131、132/133、134/135 がこの形（同じ head sha で 2 回）。直後にマージするなら opened の回は無駄
-- ready の回は Windows も回る（draft の間は止めている）。枠が戻ると、PR ごとに ubuntu の 4 分が余分にかかる
+- ready の回は Windows も回る（draft の間は止めている）。二つの回は同じ concurrency の組なので、ready が 4 分以内なら opened の回は打ち切られる（run 128 の `cancelled`）。余分に払うのは打ち切られるまでの分（1 分ほど）で、4 分ではない（09-25 の日報の見積もりは多すぎた）
+- 塞ぎ方: `ci.yml` の ubuntu の仕事は「draft で開いた」回だけ回さない（09-25。`docs/DECISIONS.md`「draft で開いた一回は、ubuntu も回さない」）
 
 ## 2026-09-24 きれいだったファイルの「前」は、HEAD から作業ツリーの形で取れる
 - `git cat-file --filters HEAD:./道`（cwd からの相対）。`--filters` で `core.autocrlf` の変換まで作業ツリーの形になる。blob のまま書き戻すと Windows で全行が差分になる

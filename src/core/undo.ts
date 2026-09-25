@@ -148,6 +148,44 @@ export class UndoStore {
   }
 
   /**
+   * 前の中身を**置き換える**。先に記録したものより、こちらが「前」として正しいと分かっているとき。
+   *
+   * 段取り（plan）は依頼全体を一度の前後比べで挟むので、そこで分かる前の中身は依頼の前の姿そのもの。
+   * 担当が先に `run_command` で変えた後に `write_file` で書くと、書く手前の記録（`capture`）は
+   * `run_command` の後の姿になり、最初の一度が勝つせいで「戻す」が途中の姿に戻っていた。
+   */
+  replace(relPath: string, previous: string | undefined): void {
+    const open = this.#open;
+    if (!open) return;
+    const old = open.files.get(relPath);
+    const size = previous?.length ?? 0;
+    const freed = old?.content?.length ?? 0;
+    if (open.bytes - freed + size > MAX_POINT_BYTES) {
+      this.forget(relPath);
+      return;
+    }
+    open.bytes += size - freed;
+    open.files.set(relPath, { path: relPath, content: previous });
+    this.#note(relPath);
+  }
+
+  /**
+   * 記録したものを捨てて「戻せない」にする。記録した「前」が正しいと言えなくなったとき。
+   * 途中の姿へ戻すより、戻せないと言う方がよい。
+   */
+  forget(relPath: string): void {
+    const open = this.#open;
+    if (!open) return;
+    const old = open.files.get(relPath);
+    if (old) {
+      open.bytes -= old.content?.length ?? 0;
+      open.files.delete(relPath);
+    }
+    if (!open.skipped.includes(relPath)) open.skipped.push(relPath);
+    this.#note(relPath);
+  }
+
+  /**
    * 記録できなかったことだけを記す。
    *
    * 外のツールが変えた大きなファイルは、前の中身を読まない（読めば同じ上限に当たる）。

@@ -245,6 +245,41 @@ describe('フックが、本当に止める', sourceOnly, () => {
     assert.equal(r.ok, true, `消せない: ${r.text}`);
   });
 
+  test('**押すツリーが外の main と同じなら、確かめを走らせずに押せる**', async () => {
+    // マージの後に作業のブランチを main へ合わせ直す push。外に新しいものは出ない。
+    const { work, ran } = await sandbox('process.exit(1);\n');   // 走れば落ちる代役
+    // 先に main を外へ出しておく（確かめを走らせない形で。ここは手順の準備）。
+    execFileSync('git', ['push', '-q', '--no-verify', '-u', 'origin', 'main'], { cwd: work });
+    execFileSync('git', ['checkout', '-q', '-b', 'feature'], { cwd: work });
+    const r = push(work, ['-u', 'origin', 'feature']);
+    assert.equal(r.ok, true, `押せていない: ${r.text}`);
+    assert.match(r.text, /origin\/main と同じ/, `飛ばした理由を言っていない: ${r.text}`);
+    assert.equal(existsSync(ran), false, '外に新しいものが無いのに確かめを走らせた');
+  });
+
+  test('main と一つでも違えば、これまでどおり確かめる（対）', async () => {
+    const { work, ran } = await sandbox('process.exit(0);\n');
+    execFileSync('git', ['push', '-q', '--no-verify', '-u', 'origin', 'main'], { cwd: work });
+    execFileSync('git', ['checkout', '-q', '-b', 'feature'], { cwd: work });
+    await writeFile(join(work, 'src', 'b.ts'), 'export const b = 2;\n');
+    execFileSync('git', ['add', '-A'], { cwd: work });
+    execFileSync('git', ['commit', '-q', '-m', '足した'], { cwd: work });
+    const r = push(work, ['-u', 'origin', 'feature']);
+    assert.equal(r.ok, true, `押せていない: ${r.text}`);
+    assert.equal(existsSync(ran), true, 'main と違うのに確かめを飛ばした');
+  });
+
+  test('**ブランチをタグとして押すときは、main と同じツリーでも確かめる**', async () => {
+    // 手元ではブランチでも、外ではタグ（release の合図）になる。
+    const { work, ran } = await sandbox('process.exit(0);\n');
+    execFileSync('git', ['push', '-q', '--no-verify', '-u', 'origin', 'main'], { cwd: work });
+    execFileSync('git', ['branch', 'feature'], { cwd: work });
+    const r = push(work, ['origin', 'feature:refs/tags/v9.9.9']);
+    assert.equal(r.ok, true, `押せていない: ${r.text}`);
+    assert.doesNotMatch(r.text, /origin\/main と同じ/, `タグなのに飛ばした: ${r.text}`);
+    assert.equal(existsSync(ran), true, 'タグとして押すのに確かめを飛ばした');
+  });
+
   test('確かめが落ちたら、もちろん押さない（対）', async () => {
     const { work } = await sandbox('process.exit(1);\n');
     const r = push(work);
@@ -261,6 +296,11 @@ describe('使うものが、そろっている', sourceOnly, () => {
     const hook = await readFile(join(import.meta.dirname, '..', '.githooks', 'pre-push'), 'utf8');
     assert.match(hook, /pushed-tree-check\.mjs before/, '前の確かめを呼んでいない');
     assert.match(hook, /pushed-tree-check\.mjs after/, '後の確かめを呼んでいない');
+    // main と同じツリーを飛ばす判断は、確かめより前に置く（飛ばすなら走らせない）。
+    assert.ok(
+      hook.indexOf('same-as-main.mjs') > 0 && hook.indexOf('same-as-main.mjs') < hook.indexOf('node scripts/check.mjs'),
+      'main と同じツリーを飛ばす判断を、確かめより前で呼んでいない',
+    );
     // 後の確かめは、本物の確かめより後に置く（動いたかどうかは後でしか分からない）。
     assert.ok(
       hook.indexOf('node scripts/check.mjs') < hook.indexOf('pushed-tree-check.mjs after'),
