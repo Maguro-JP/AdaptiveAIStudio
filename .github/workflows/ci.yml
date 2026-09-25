@@ -36,7 +36,10 @@ on:
     # **Ready にした時点も合図にする。**既定（開いた・押した・開き直した）だけだと、
     # draft の間に止めておいた Windows が、Ready にしても回らない。
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore: ['**.md', 'docs/**', '.gitignore', '.gitattributes']
+    # `.claude/**` は Claude Code の作業の決まり（スキル・フック・権限）。製品のコードもテストも
+    # ここを読まないので、ここだけの変更では `npm test` の結果が変わらない（スキルの更新の PR で起きていた）。
+    # 並びは `scripts/docs-only-push.mjs` の DOCS と同じ（`test/docs-only-push.test.ts` が突き合わせる）。
+    paths-ignore: ['**.md', 'docs/**', '.gitignore', '.gitattributes', '.claude/**']
   schedule:
     # 毎週月曜 09:00 JST。UTC では月曜 00:00。
     # （JST の何時かを先に決めてから UTC へ直す。逆をやると1日ずれる）

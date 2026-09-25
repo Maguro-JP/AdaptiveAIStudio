@@ -18,6 +18,7 @@ const DOCS = [
   (f) => f.startsWith('docs/'),
   (f) => f === '.gitignore',
   (f) => f === '.gitattributes',
+  (f) => f.startsWith('.claude/'),
 ];
 
 /** HEAD の題に入っていれば、GitHub はその push と pull_request を起こさない。 */
