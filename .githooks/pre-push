@@ -77,6 +77,23 @@ fi
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_PREFIX GIT_QUARANTINE_PATH
 unset GIT_REFLOG_ACTION GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 
+# 押すツリーが、外に既に在る main と同じなら、確かめを飛ばす（scripts/same-as-main.mjs）。
+#
+# マージの後に作業のブランチを main へ合わせ直す push は、外に新しいものを何も出さない。
+# それでも 12 分の確かめを回していた。出るものが無いなら、確かめるものも無い。
+# 飛ばすのは「押すものが全部ブランチで、ツリーが全部 main と同じ」ときだけ。
+#
+# **文書だけの push を止める判断より前に置く。**main と同じツリーなら外に新しいものは出ず、
+# 開いている PR も起きない。後に置くと、main に文書だけの更新（スキルの更新など）が入った後の
+# 合わせ直しを「文書だけの push」として止めていた（2026-09-25）。
+if [ -n "$AAS_PUSH_BRANCH_SHAS" ]; then
+  # shellcheck disable=SC2086
+  if reason=$(node scripts/same-as-main.mjs "${1:-origin}" "$AAS_PUSH_OTHER" $AAS_PUSH_BRANCH_SHAS); then
+    echo "$reason"
+    exit 0
+  fi
+fi
+
 # 文書だけの push は、そのまま出さない。
 #
 # ci.yml の paths-ignore は効かない（GitHub は pull_request の path 判定を
@@ -91,19 +108,6 @@ if [ -n "$AAS_PUSH_RANGE" ]; then
     echo "$reason"
     exit 1
   }
-fi
-
-# 押すツリーが、外に既に在る main と同じなら、確かめを飛ばす（scripts/same-as-main.mjs）。
-#
-# マージの後に作業のブランチを main へ合わせ直す push は、外に新しいものを何も出さない。
-# それでも 12 分の確かめを回していた。出るものが無いなら、確かめるものも無い。
-# 飛ばすのは「押すものが全部ブランチで、ツリーが全部 main と同じ」ときだけ。
-if [ -n "$AAS_PUSH_BRANCH_SHAS" ]; then
-  # shellcheck disable=SC2086
-  if reason=$(node scripts/same-as-main.mjs "${1:-origin}" "$AAS_PUSH_OTHER" $AAS_PUSH_BRANCH_SHAS); then
-    echo "$reason"
-    exit 0
-  fi
 fi
 
 # 確かめるワークツリーと、押すワークツリーを、同じものにする。
