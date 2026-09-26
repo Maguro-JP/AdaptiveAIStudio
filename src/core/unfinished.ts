@@ -16,6 +16,8 @@
  */
 import { appendFile, mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
+import { idMaker } from './ordered-id.ts';
+import { inOrder } from './in-order.ts';
 
 /** なぜ終わっていないか。**符丁で持つ**（表示のときに日本語へ引き直す）。 */
 export type UnfinishedWhy = 'maxTurns' | 'noProgress' | 'unverified' | 'failed';
@@ -59,54 +61,11 @@ type Line =
  */
 export const MAX_OPEN = 50;
 
-/** 直前に配った名前。**同じミリ秒でも、必ず別のものにする。** */
-let lastId = '';
+const makeId = idMaker('u');
 
-/**
- * 名前を配る。
- *
- * 時刻＋乱数2桁で作っていた。**同じミリ秒に二つ作ると、1296 分の 1 では
- * なく、かなりの割合でぶつかる**（50 件なら 6 割）。一覧は名前で引くので、
- * ぶつかると**後のものが前のものを置き換える＝頼んだことが黙って消える。**
- * 検査が時々落ちて気づいた。
- *
- * 乱数はそのまま使い、前に配った名前と同じか前になるときだけ一つ進める。
- * 会話の名前で同じことを直したので、同じやり方にする。
- */
+/** 名前を配る。**同じミリ秒でも、必ず別のものにする**（`ordered-id.ts`）。 */
 export function nextId(now: number, rand = Math.random): string {
-  const head = `u${now.toString(36)}`;
-  let tail = Math.floor(rand() * 1296).toString(36).padStart(2, '0');
-  if (lastId.startsWith(head)) {
-    const before = lastId.slice(head.length);
-    if (tail <= before) tail = after(before);
-  }
-  lastId = head + tail;
-  return lastId;
-}
-
-/** その末尾の、次に来るもの。**必ず後になり、必ず別のものになる。** */
-function after(tail: string): string {
-  const [base = '', over] = tail.split('-');
-  const n = parseInt(base, 36);
-  if (over === undefined && n < 1295) return (n + 1).toString(36).padStart(2, '0');
-  const next = over === undefined ? 1 : parseInt(over, 36) + 1;
-  return `${base}-${next.toString(36).padStart(4, '0')}`;
-}
-
-/**
- * 同じ記録のファイルへの書き込みを、一列に並べる（同じプロセスの中の入れ物は、どれもここを通る）。
- *
- * 畳みは全体を読んで書き戻すので、その間に足した行（別の依頼の add、画面からの取り消し）を消していた。
- * 読んで決めて書くまで（add の「既にあるか」も含めて）を、ファイルごとに順番に通す。
- */
-const writing = new Map<string, Promise<unknown>>();
-function inOrder<T>(path: string, run: () => Promise<T>): Promise<T> {
-  const prev = writing.get(path) ?? Promise.resolve();
-  const mine = prev.then(run, run);
-  const settled = mine.catch(() => undefined);
-  writing.set(path, settled);
-  settled.then(() => { if (writing.get(path) === settled) writing.delete(path); }).catch(() => undefined);
-  return mine;
+  return makeId(now, rand);
 }
 
 let tmpSeq = 0;
