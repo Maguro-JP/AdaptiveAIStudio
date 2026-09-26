@@ -2199,6 +2199,12 @@ export const PANELS = {
      * 片づけるときに、誰が預けたものかを見る（見ずに消すと、別のパネルの保存していない直しを消す）。
      */
     const DRAFT_ME = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    /**
+     * 「後から変わっています」を出した預かり（ファイルの名前 → 預けた時刻）。**片づけでは名札を見ずに消す。**
+     * 名札はパネルを作るたびに変わるので、ブラウザを閉じた後の預かりはどれも「他人のもの」になる。見ずに残すと、
+     * 開くたびに同じ知らせを出し、保存した版を古い直しで上書きする道を勧め続ける（名札を足した版でそうなった）。
+     */
+    const toldDraft = new Map();
     /** これより大きいものは預けない（覚えておく所が溢れる）。 */
     const DRAFT_MAX = 512 * 1024;
     /** これより古い預かりは捨てる。 */
@@ -2210,6 +2216,8 @@ export const PANELS = {
       try {
         if (!dirty()) { releaseDraft(path); return; }
         if (area.value.length > DRAFT_MAX) {
+          // 前に預けた小さい版は残さない（残すと、ブラウザを閉じた後に古い版を黙って「戻しました」と出す）。
+          releaseDraft(path);
           if (toldTooBig !== path) {
             toldTooBig = path;
             /*
@@ -2254,7 +2262,8 @@ export const PANELS = {
         let got;
         try { got = JSON.parse(raw); } catch { got = undefined; }
         const mine = !got || typeof got !== 'object' || got.by === undefined || got.by === DRAFT_ME;
-        if (mine || got.text === area.value) localStorage.removeItem(DRAFT_AT(p));
+        const told = toldDraft.has(p) && got?.at === toldDraft.get(p);
+        if (mine || told || got.text === area.value) localStorage.removeItem(DRAFT_AT(p));
       } catch { /* 同上 */ }
     };
     /** 覚えておく所から戻した直しを、このパネルのものとして預け直す（戻した側が保存したら片づけられるように）。 */
@@ -2560,6 +2569,7 @@ export const PANELS = {
         const saved = readDraft(p);
         if (saved && saved.base === loaded) { kept = saved.text; adoptDraft(p, saved); }
         else if (saved) {
+          toldDraft.set(p, saved.at);
           /*
            * **中身が変わっていたら、黙って戻さない。**
            *
@@ -2570,7 +2580,6 @@ export const PANELS = {
             ['その直しを出す', () => {
               mine = area.value;
               area.value = saved.text;
-              adoptDraft(p, saved);
               refresh();
               tell('預かっていた直しを出しました。保存すると、いまのファイルを上書きします。', [
                 ['やめる', () => { area.value = mine ?? area.value; refresh(); tell('戻しました。', [], 'info'); }],
