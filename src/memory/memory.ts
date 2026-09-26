@@ -186,6 +186,11 @@ export class Memory {
    * 空として始めて保存すると、覚えていたものを全部上書きしていた。
    */
   #unreadable?: string;
+  /**
+   * 読むときに退けた行（壊れた行・形の違う行）を、元の文のまま持っておく。保存のときに書き戻す。
+   * 退けたまま保存すると、手で直している途中の行や、別の版が書いた行が、次の保存でファイルから消えていた。
+   */
+  #kept: string[] = [];
 
   constructor(path?: string, opts: { write?: MemoryWriter; read?: (path: string) => Promise<string> } = {}) {
     this.#path = path;
@@ -210,10 +215,13 @@ export class Memory {
     }
     this.#unreadable = undefined;
     try {
-      this.#entries = parseEntries(await this.#readRetrying(this.#path));
-      this.#seq = maxSeq(this.#entries);
+      const got = parseEntries(await this.#readRetrying(this.#path));
+      this.#entries = got.entries;
+      this.#kept = got.kept;
+      this.#seq = Math.max(maxSeq(got.entries), got.keptSeq);
     } catch (e) {
       this.#entries = [];
+      this.#kept = [];
       // 無いのは正常（はじめて）。それ以外は、読めなかったと覚えて保存を断る。
       const code = (e as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT') this.#unreadable = code ?? (e as Error).message;
@@ -264,8 +272,10 @@ export class Memory {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return false;
       raw = '';
     }
-    const onDisk = parseEntries(raw);
-    let seq = maxSeq(onDisk);
+    const got = parseEntries(raw);
+    const onDisk = got.entries;
+    this.#kept = got.kept;
+    let seq = Math.max(maxSeq(onDisk), got.keptSeq);
     const renamed = new Map<string, string>();
     for (const e of this.#entries) { seq += 1; renamed.set(e.id, `m${seq}`); }
     const mine = this.#entries.map((e) => ({
@@ -286,7 +296,7 @@ export class Memory {
       throw new Error(`記憶のファイルを読めなかった（${this.#unreadable}）ので、上書きしないよう保存を止めています: ${this.#path}`);
     }
     this.#dirty = false;
-    const body = this.#entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    const body = [...this.#entries.map((e) => JSON.stringify(e)), ...this.#kept].join('\n') + '\n';
     try {
       await mkdir(dirname(this.#path), { recursive: true });
       await this.#write(this.#path, body);
@@ -769,14 +779,27 @@ function isEntry(e: unknown): e is MemoryEntry {
     && Array.isArray(m.tags) && (m.detail === undefined || typeof m.detail === 'string');
 }
 
-/** 記憶のファイルの中身を一件ずつに。1行壊れても記憶全体を失わない（JSONL にしているのはこのため）。形の違う行も捨てる。 */
-function parseEntries(raw: string): MemoryEntry[] {
-  return raw.split('\n')
-    .filter((l) => l.trim().length > 0)
-    .map((l) => {
-      try { return JSON.parse(l) as unknown; } catch { return undefined; }
-    })
-    .filter((e): e is MemoryEntry => isEntry(e));
+/**
+ * 記憶のファイルの中身を一件ずつに。1行壊れても記憶全体を失わない（JSONL にしているのはこのため）。
+ * 壊れた行・形の違う行は、思い出す側には渡さず（止まるため）、元の文のまま `kept` に分ける（保存で書き戻す）。
+ * `keptSeq` は分けた行が持つ番号のいちばん大きいもの（直して戻されたときに、新しく配る番号とぶつけない）。
+ */
+function parseEntries(raw: string): { entries: MemoryEntry[]; kept: string[]; keptSeq: number } {
+  const entries: MemoryEntry[] = [];
+  const kept: string[] = [];
+  let keptSeq = 0;
+  for (const line of raw.split('\n')) {
+    if (line.trim().length === 0) continue;
+    let value: unknown;
+    try { value = JSON.parse(line); } catch { value = undefined; }
+    if (isEntry(value)) { entries.push(value); continue; }
+    kept.push(line.replace(/\r$/, ''));
+    // 読めない行（途中で切れた等）からも番号を拾う。直されて戻ってきたときに、同じ番号を配らない。
+    const id = (value as { id?: unknown } | null | undefined)?.id;
+    const n = typeof id === 'string' ? /^m(\d+)$/.exec(id) : /"id"\s*:\s*"m(\d+)"/.exec(line);
+    if (n) keptSeq = Math.max(keptSeq, Number(n[1]));
+  }
+  return { entries, kept, keptSeq };
 }
 
 /**

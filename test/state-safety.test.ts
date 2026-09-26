@@ -195,6 +195,23 @@ describe('記憶', () => {
     assert.match(await readFile(path, 'utf8'), /はじめて/);
   });
 
+  test('**読み飛ばした行（形の違う行・壊れた行）は、次の保存で消さずに元の文のまま書き戻す**', async () => {
+    const path = join(await tempDir('aas-mem-keep-'), 'memory.jsonl');
+    const odd = '{"id":"m7","kind":"fact","title":"手で直している途中"}';
+    const broken = '{"id":"m8","kind":"fa';
+    // ふつうの行は m6。読み飛ばした行の番号（m7・m8）を数えないと、次に配る番号が m7 になってぶつかる。
+    await writeFile(path, `${JSON.stringify({ id: 'm6', kind: 'fact', title: 'ふつう', tags: [] })}\n${odd}\n${broken}\n`);
+    const m = new Memory(path);
+    await m.load();
+    assert.equal(m.size, 1);
+    const added = m.remember({ kind: 'fact', title: '新しく覚える', tags: [] });
+    await m.save();
+    const lines = (await readFile(path, 'utf8')).trim().split('\n');
+    assert.ok(lines.includes(odd), `形の違う行を消した: ${lines.join(' / ')}`);
+    assert.ok(lines.includes(broken), `壊れた行を消した: ${lines.join(' / ')}`);
+    assert.equal(added.entry.id, 'm9', `読み飛ばした行の番号とぶつけた: ${added.entry.id}`);
+  });
+
   test('形の違う行（tags が無い）は読み飛ばし、思い出すときに止まらない', async () => {
     const path = join(await tempDir('aas-mem-shape-'), 'memory.jsonl');
     await writeFile(path, '{"id":"m1","kind":"fact","title":"テスト 大事"}\n');
