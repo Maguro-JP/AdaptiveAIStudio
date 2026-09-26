@@ -8,7 +8,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { findRemovable } from '../src/runtime/cleanup.ts';
 
@@ -55,11 +55,16 @@ describe('片づけるもの・片づけないもの', () => {
       join(home, 'unfinished.jsonl.123.4.tmp'),
       join(home, 'goals.jsonl.123.5.tmp'),
       join(undo, 'u1.json.123.6.tmp'),
+      join(home, 'acks.json.123.1790000000000.k3j2h1.tmp'),
+      join(home, 'harness-metrics.json.123.7.tmp'),
     ];
     for (const p of old) await writeFile(p, 'x');
     await writeFile(join(home, 'memory.jsonl'), '{}\n');
     await writeFile(join(home, 'goals.jsonl'), '{}\n');
     await writeFile(join(home, 'mine.jsonl.123.4.tmp'), 'x');
+    await writeFile(join(home, 'xmemory.jsonl.123.4.tmp'), 'x');
+    await writeFile(join(home, 'u2.json.123.6.tmp'), 'x');     // 戻り先の一時ファイルの形でも、場所が違えば触らない
+    await writeFile(join(undo, 'goals.jsonl.123.5.tmp'), 'x'); // 逆も同じ
     await writeFile(join(undo, 'u1.json'), JSON.stringify({ id: 'u1', root: home }));
     const later = Date.now() + 2 * 60 * 60 * 1000;
     assert.deepEqual((await findRemovable({ keepTag: 'b9999', now: later })).map((f) => f.path).sort(), [...old].sort());
@@ -77,7 +82,44 @@ describe('片づけるもの・片づけないもの', () => {
     await writeFile(join(undo, 'nothing.json'), 'null');
     await writeFile(join(undo, 'no-id.json'), JSON.stringify({ files: [] }));
     await writeFile(join(undo, 'text.json'), JSON.stringify('x'));
-    assert.deepEqual((await findRemovable({ keepTag: 'b9999' })).map((f) => f.path), [join(undo, 'old.json')]);
+    const later = Date.now() + 31 * 86_400_000;
+    assert.deepEqual((await findRemovable({ keepTag: 'b9999', now: later })).map((f) => f.path), [join(undo, 'old.json')]);
+  });
+
+  test('**根の無い戻り先でも、新しいものは挙げない**（根を持たせる前の版が今も書いていて、その画面では使える）', async () => {
+    const { home } = await scratch();
+    const undo = join(home, 'undo');
+    await mkdir(undo, { recursive: true });
+    await writeFile(join(undo, 'recent.json'), JSON.stringify({ id: 'recent', files: [] }));
+    assert.deepEqual((await findRemovable({ keepTag: 'b9999', now: Date.now() + 29 * 86_400_000 })).map((f) => f.path), []);
+  });
+
+  test('**本物の書き手が書いたもの（戻り先・一部を戻せなかった後の書き直し・記憶・段取り・やり残し）は挙げない**', async () => {
+    const { home } = await scratch();
+    const work = join(home, 'work');
+    await mkdir(work, { recursive: true });
+    const { UndoStore } = await import('../src/core/undo.ts');
+    const { Memory } = await import('../src/memory/memory.ts');
+    const { Goals } = await import('../src/core/goals.ts');
+    const { UnfinishedWork } = await import('../src/core/unfinished.ts');
+    const u = new UndoStore(work, join(home, 'undo'));
+    await writeFile(join(work, 'a.txt'), 'a0');
+    await writeFile(join(work, 'b.txt'), 'b0');
+    await u.begin('直す'); u.capture('a.txt', 'a0'); u.capture('b.txt', 'b0'); await u.end();
+    await u.begin('もう一度'); u.capture('a.txt', 'a1'); await u.end();
+    // b.txt を中身の在るフォルダにして、一部を戻せない形で戻す（戻り先の書き直しを通す）。
+    await rm(join(work, 'b.txt'));
+    await mkdir(join(work, 'b.txt'));
+    await writeFile(join(work, 'b.txt', 'x'), 'x');
+    const first = (await u.list()).find((p) => p.request === '直す')!;
+    assert.deepEqual((await u.restore(first.id))?.failed, ['b.txt']);
+    const m = new Memory(join(home, 'memory.jsonl'));
+    m.remember({ kind: 'fact', title: '覚える', tags: [] });
+    await m.save();
+    await new Goals(join(home, 'goals.jsonl')).open('依頼', ['読む']);
+    await new UnfinishedWork(join(home, 'unfinished.jsonl')).add({ request: '依頼', why: 'maxTurns', note: '' });
+    const far = Date.now() + 365 * 86_400_000;
+    assert.deepEqual((await findRemovable({ keepTag: 'b9999', now: far })).map((f) => f.path), [], '書き手が書いたものを挙げた');
   });
 
   test('途中で切れた取得は消す', async () => {

@@ -325,7 +325,7 @@ export class UndoStore {
       if (!raw) continue;
       try {
         const p = JSON.parse(raw) as Stored;
-        // 今の作業場の戻り先だけ。根の無い古い記録は、どの作業場のものか分からないので出さない（消しもしない）。
+        // 今の作業場の戻り先だけ。根の無い古い記録は、どの作業場のものか分からないので出さない（ここでは消さない。古くなったら `npm run clean` が挙げる）。
         if (typeof p.id === 'string' && p.root === rootKey(this.#root)) {
           points.push({
             id: p.id, at: p.at, request: p.request, paths: p.paths ?? [],

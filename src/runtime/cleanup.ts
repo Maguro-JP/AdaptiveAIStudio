@@ -101,10 +101,10 @@ export async function findRemovable(opts: {
   }
 
   /*
-   * 状態のファイル（記憶・やり残し・段取り・戻り先）を置き換えるときの一時ファイル。置き換えられずに残ったもの。
-   * 名前は `<元の名前>.<pid>.<番号か英数字>.tmp`。会話と同じく、書いている最中のものを消さないよう 1 時間より古いものだけ。
+   * 状態のファイル（記憶・やり残し・段取り・了解・ハーネスの記録・戻り先）を置き換えるときの一時ファイル。置き換えられずに
+   * 残ったもの。名前は `<元の名前>.<pid>.<番号か英数字（一つ以上）>.tmp`。会話と同じく、書いている最中のものを消さないよう 1 時間より古いものだけ。
    */
-  const STATE_TMP = /^(memory|unfinished|goals)\.jsonl\.\d+\.[a-z0-9]+\.tmp$/;
+  const STATE_TMP = /^(?:(?:memory|unfinished|goals)\.jsonl|(?:acks|harness-metrics)\.json)\.\d+(?:\.[a-z0-9]+)+\.tmp$/;
   const UNDO_TMP = /\.json\.\d+\.\d+\.tmp$/;
   const undoDir = join(stateDir(), 'undo');
   for (const [dir, shape] of [[stateDir(), STATE_TMP], [undoDir, UNDO_TMP]] as const) {
@@ -121,17 +121,20 @@ export async function findRemovable(opts: {
    * どの作業場のものか分からない古い戻り先（作業場の根を持たない）。
    * どの作業場の「戻す」にも出ないので、戻す手にならないまま残り続ける。**根を持つものは消さない**
    * （今の作業場のものでなくても、その作業場へ戻れば使う）。読めないもの・形の違うものも触らない。
+   *
+   * **古いものだけ**（記録と同じ 30 日）。根を持たせる前の版がまだ動いていれば、根の無い戻り先を今も書き、
+   * その版の画面では使える。中身は利用者のファイルの前の姿で、ほかに写しは無い。
    */
   for (const name of await readdir(undoDir).catch(() => [])) {
     if (!name.endsWith('.json')) continue;
     const path = join(undoDir, name);
     const s = await stat(path).catch(() => undefined);
-    if (!s || !s.isFile()) continue;
+    if (!s || !s.isFile() || now - s.mtimeMs < maxLogAge) continue;
     let point: unknown;
     try { point = JSON.parse(await readFile(path, 'utf8')); } catch { continue; }
     if (typeof point !== 'object' || point === null || typeof (point as { id?: unknown }).id !== 'string') continue;
     if ((point as { root?: unknown }).root !== undefined) continue;
-    found.push({ path, bytes: s.size, why: 'どの作業場のものか分からない古い戻り先（どの作業場の「戻す」にも出ません）' });
+    found.push({ path, bytes: s.size, why: `どの作業場のものか分からない ${Math.floor((now - s.mtimeMs) / 86_400_000)}日前の戻り先（どの作業場の「戻す」にも出ません。消すと、その前の姿には戻せません）` });
   }
 
   // 古い記録。新しいものは残す（直近の様子は見たいことがある）。
