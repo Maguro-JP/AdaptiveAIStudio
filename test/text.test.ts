@@ -93,7 +93,8 @@ describe('ファイルの中身を文字にする', () => {
   });
 
   test('どちらでもないものは、化けを許して UTF-8 で読み、そう分かる', () => {
-    const r = decodeText(Buffer.from([0xff, 0xfe, 0x00, 0x41]));
+    // FF FE で始めると UTF-16LE の BOM になり、UTF-16 として読める。どちらでも読めないバイトにする。
+    const r = decodeText(Buffer.from([0x80, 0xff, 0x41]));
     assert.equal(r.lossy, true);
   });
 

@@ -44,7 +44,7 @@ export function lineReader(): { push: (chunk: Buffer | string) => string[]; flus
   };
 }
 
-export type TextEncodingName = 'utf-8' | 'shift_jis';
+export type TextEncodingName = 'utf-8' | 'shift_jis' | 'utf-16le' | 'utf-16be';
 
 /**
  * ファイルの中身を文字にする。UTF-8 でなければ CP932 も試す。
@@ -58,6 +58,13 @@ export type TextEncodingName = 'utf-8' | 'shift_jis';
  * 当てずっぽうで CP932 にはしない。UTF-8 として通るものは UTF-8。
  */
 export function decodeText(data: Buffer): { text: string; encoding: TextEncodingName; lossy: boolean } {
+  // UTF-16 の BOM を先に見る（メモ帳の「Unicode」、Windows PowerShell 5.1 の `>` の出力）。BOM は落とす。
+  if (data.length >= 2 && data[0] === 0xff && data[1] === 0xfe) {
+    return { text: new TextDecoder('utf-16le').decode(data), encoding: 'utf-16le', lossy: false };
+  }
+  if (data.length >= 2 && data[0] === 0xfe && data[1] === 0xff) {
+    return { text: new TextDecoder('utf-16be').decode(data), encoding: 'utf-16be', lossy: false };
+  }
   try {
     return { text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(data), encoding: 'utf-8', lossy: false };
   } catch { /* UTF-8 ではない */ }
