@@ -16,10 +16,21 @@
  * **次の段へ進む**。一段で全部を止めない。止めると、独立して進められる
  * 残りまで道連れになる。
  *
- * 段は置き場に残す。窓を閉じても、機械を落としても続きから進む。
+ * 段はファイルに残す。画面を閉じても、機械を落としても続きから進む。
  */
-import { readFile, appendFile, mkdir } from 'node:fs/promises';
+import { readFile, appendFile, mkdir, writeFile, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { idMaker } from './ordered-id.ts';
+import { inOrder } from './in-order.ts';
+
+const makeId = idMaker('g');
+let tmpSeq = 0;
+
+/**
+ * 記録を畳む行数。追記式なので、閉じた段取りの行も残り続け、読むたびに全部を解く。
+ * これを超えたら、開いているものだけで書き直す。
+ */
+export const COMPACT_AFTER_LINES = 400;
 
 /** 段の状態。**符丁で持つ。** */
 export type StepState = 'pending' | 'done' | 'blocked' | 'split';
@@ -88,6 +99,8 @@ export class Goals {
       if (text.trim().length === 0) continue;
       let line: Line;
       try { line = JSON.parse(text) as Line; } catch { continue; } // 壊れた行は捨てる
+      // 形の違う行（`null`・手で直した・別の版が書いた）も捨てる。通すと一覧ごと止まり、段取りが進まない。
+      if (!isLine(line)) continue;
       if (line.t === 'goal') { open.set(line.goal.id, line.goal); continue; }
       const goal = open.get(line.goalId);
       if (!goal) continue;
@@ -108,8 +121,19 @@ export class Goals {
   }
 
   /** 段取りを立てる。 */
-  async open(request: string, instructions: string[], now = Date.now()): Promise<Goal> {
-    const id = `g${now.toString(36)}${Math.floor(Math.random() * 1296).toString(36).padStart(2, '0')}`;
+  open(request: string, instructions: string[], now = Date.now()): Promise<Goal> {
+    return inOrder(this.#path, async () => {
+      const goal = await this.#open(request, instructions, now);
+      // 畳みは片づけにすぎない。段取りはもう書けているので、畳めなくても立てたことは返す（次に立てるときにまた畳む）。
+      // 投げると、書けているのに「立てられなかった」になり、畳めない間は新しい段取りを一つも立てられなくなる。
+      await this.#compact().catch(() => undefined);
+      return goal;
+    });
+  }
+
+  async #open(request: string, instructions: string[], now: number): Promise<Goal> {
+    // 同じミリ秒に二つ立てても、名前をぶつけない（ぶつかると後の段取りが前のものを置き換える）。
+    const id = makeId(now);
     const goal: Goal = {
       id,
       request,
@@ -128,7 +152,11 @@ export class Goals {
     return goal?.steps.find((s) => s.state === 'pending');
   }
 
-  async succeed(goalId: string, stepId: string): Promise<void> {
+  succeed(goalId: string, stepId: string): Promise<void> {
+    return inOrder(this.#path, () => this.#succeed(goalId, stepId));
+  }
+
+  async #succeed(goalId: string, stepId: string): Promise<void> {
     const goal = (await this.list()).find((g) => g.id === goalId);
     const step = goal?.steps.find((s) => s.id === stepId);
     await this.#append({ t: 'state', goalId, stepId, state: 'done', attempts: step?.attempts ?? 0 });
@@ -140,7 +168,12 @@ export class Goals {
    * 一度目は、そのままもう一度（届かなかっただけ、ということがある）。
    * 二度目で割り直す。割り直した先がまた駄目なら、塞がったとして脇へ置く。
    */
-  async fail(goalId: string, stepId: string): Promise<FailAction> {
+  fail(goalId: string, stepId: string): Promise<FailAction> {
+    // 回数を読んで一つ足して書く。並んで走ると、二回落ちたのを一回と数える。
+    return inOrder(this.#path, () => this.#fail(goalId, stepId));
+  }
+
+  async #fail(goalId: string, stepId: string): Promise<FailAction> {
     const goal = (await this.list()).find((g) => g.id === goalId);
     const step = goal?.steps.find((s) => s.id === stepId);
     if (!goal || !step) return { do: 'block', attempts: 0 };
@@ -161,7 +194,11 @@ export class Goals {
   }
 
   /** 割り直す。元の段のすぐ後ろへ差し込む。 */
-  async split(goalId: string, stepId: string, instructions: string[]): Promise<Step[]> {
+  split(goalId: string, stepId: string, instructions: string[]): Promise<Step[]> {
+    return inOrder(this.#path, () => this.#split(goalId, stepId, instructions));
+  }
+
+  async #split(goalId: string, stepId: string, instructions: string[]): Promise<Step[]> {
     const steps: Step[] = instructions.map((instruction, i) => ({
       id: `${stepId}.${i}`, instruction, state: 'pending' as const, attempts: 0, parent: stepId,
     }));
@@ -170,15 +207,72 @@ export class Goals {
   }
 
   /** その段は塞がった。**次の段へ進む**（一段で全部を止めない）。 */
-  async block(goalId: string, stepId: string): Promise<void> {
+  block(goalId: string, stepId: string): Promise<void> {
+    return inOrder(this.#path, () => this.#block(goalId, stepId));
+  }
+
+  async #block(goalId: string, stepId: string): Promise<void> {
     const goal = (await this.list()).find((g) => g.id === goalId);
     const step = goal?.steps.find((s) => s.id === stepId);
     await this.#append({ t: 'state', goalId, stepId, state: 'blocked', attempts: step?.attempts ?? 0 });
   }
 
-  async close(goalId: string): Promise<void> {
-    await this.#append({ t: 'close', goalId });
+  close(goalId: string): Promise<void> {
+    return inOrder(this.#path, () => this.#append({ t: 'close', goalId }));
   }
+
+  /**
+   * 記録を畳む。閉じた段取りの行は読むたびに解くだけなので、開いているものの今の姿（割り直しも状態も
+   * 入れた形）だけで書き直す。一時ファイルに書いてから置き換える（途中で落ちても、記録を丸ごと失わない）。
+   */
+  async #compact(): Promise<void> {
+    const raw = await readFile(this.#path, 'utf8').catch(() => '');
+    const lines = raw.split('\n').filter((l) => l.trim().length > 0).length;
+    if (lines <= COMPACT_AFTER_LINES) return;
+    const live = await this.list();
+    const body = live.map((goal) => `${JSON.stringify({ t: 'goal', goal })}\n`).join('');
+    const tmp = `${this.#path}.${process.pid}.${++tmpSeq}.tmp`;
+    try {
+      await writeFile(tmp, body, 'utf8');
+      await rename(tmp, this.#path);
+    } catch (e) {
+      await rm(tmp, { force: true }).catch(() => undefined);
+      throw e;
+    }
+  }
+}
+
+/** 一行の形を確かめる。一覧と「次の段」で使う所まで見る。 */
+function isLine(v: unknown): v is Line {
+  if (typeof v !== 'object' || v === null) return false;
+  const l = v as Record<string, unknown>;
+  if (l.t === 'goal') {
+    const g = l.goal as Record<string, unknown> | null | undefined;
+    return typeof g === 'object' && g !== null && typeof g.id === 'string' && typeof g.request === 'string'
+      && typeof g.createdAt === 'string' && Array.isArray(g.steps) && g.steps.every(isStep);
+  }
+  if (typeof l.goalId !== 'string') return false;
+  if (l.t === 'close') return true;
+  // 製品が state の行に書くのは pending・done・blocked だけ（split は割り直しの行で表す）。
+  // それ以外を通すと、壊れた行ひとつで「手を付ける段が無い＝終えた」になり、頼んだことを済みとして閉じる。
+  if (l.t === 'state') return typeof l.stepId === 'string' && STATE_LINE.has(l.state as StepState) && isCount(l.attempts);
+  if (l.t === 'split') return typeof l.stepId === 'string' && Array.isArray(l.steps) && l.steps.every(isStep);
+  return false;
+}
+
+function isStep(v: unknown): v is Step {
+  if (typeof v !== 'object' || v === null) return false;
+  const s = v as Record<string, unknown>;
+  return typeof s.id === 'string' && typeof s.instruction === 'string' && STEP_STATES.has(s.state as StepState)
+    && isCount(s.attempts) && (s.parent === undefined || typeof s.parent === 'string');
+}
+
+const STEP_STATES = new Set<StepState>(['pending', 'done', 'blocked', 'split']);
+const STATE_LINE = new Set<StepState>(['pending', 'done', 'blocked']);
+
+/** 回数。負の数を通すと、落ちても「もう一度」を返し続ける。 */
+function isCount(v: unknown): boolean {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0;
 }
 
 /** 何回割り直した先か。 */
