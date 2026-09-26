@@ -993,6 +993,7 @@ export class Session {
       return report;
     } catch (e) {
       this.#harness.endTask('failed');
+      await this.#harness.metrics?.save();
       yield { type: 'log', level: 'error', text: (e as Error).message };
       return undefined;
     } finally {
@@ -1366,6 +1367,17 @@ export class Session {
     const metricsKey = conv.request.metricsKey();
     if (shared) this.#harness.beginTask();
     else this.#harness.metrics?.beginTask(metricsKey);
+    /*
+     * 依頼の数えを閉じる。一度だけ。受け取る側が途中で抜けると（`for await` の break）、try の終わりも
+     * catch も通らず finally だけが走るので、そこでも閉じる。閉じないと札が開いたまま残り続ける。
+     */
+    let metricsEnded = false;
+    const endMetrics = (outcome: 'completed' | 'failed'): void => {
+      if (metricsEnded) return;
+      metricsEnded = true;
+      if (shared) this.#harness.endTask(outcome);
+      else this.#harness.metrics?.endTask(outcome, metricsKey);
+    };
 
     let finishedReason: string | undefined;
     let answerChars = 0;
@@ -1820,8 +1832,7 @@ export class Session {
       }
 
       const succeeded = finishedReason === 'completed' && keep;
-      if (shared) this.#harness.endTask(succeeded ? 'completed' : 'failed');
-      else this.#harness.metrics?.endTask(succeeded ? 'completed' : 'failed', metricsKey);
+      endMetrics(succeeded ? 'completed' : 'failed');
       await this.#harness.metrics?.save();
       this.#prefetch.invalidate();
       this.markChanged();
@@ -1843,8 +1854,9 @@ export class Session {
       const stopped = ac.signal.aborted;
       // 一度の失敗で対話ごと終わらせない。次の指示は受けられる。
       // 規則の数え（harness）は、通常の止めた回と同じく「完了しなかった」に数える。
-      if (shared) this.#harness.endTask('failed');
-      else this.#harness.metrics?.endTask('failed', metricsKey);
+      endMetrics('failed');
+      // 失敗の回も数えを残す（成功の回でしか保存しないと、次の成功まで結末がファイルに無い）。
+      await this.#harness.metrics?.save();
       if (!stopped) yield { type: 'log', level: 'error', text: (e as Error).message };
       yield {
         type: 'settled', reason: stopped ? 'aborted' : 'failed', verified: false, checked,
@@ -1855,6 +1867,10 @@ export class Session {
     } finally {
       // **この一往復ぶんを、戻り先として残す。**触っていなければ残らない（錠を取っていなければ始めてもいない）。
       if (locked) await this.undo.end().catch(() => undefined);
+      if (!metricsEnded) {
+        endMetrics('failed');
+        await this.#harness.metrics?.save();
+      }
       // 錠を返してから「動いていない」にする。逆だと、その間に押した保存が錠に当たって断られる。
       this.lock.release(lockOwner);
       conv.running = undefined;
@@ -2389,6 +2405,7 @@ export class Session {
     await this.saveAutonomy();
     this.#compactMemory();
     await this.memory.save().catch(() => undefined);
+    await this.#harness.metrics?.save();
   }
 }
 

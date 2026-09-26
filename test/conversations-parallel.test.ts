@@ -186,6 +186,26 @@ describe('規則の数えは依頼ごとの札で分ける', () => {
       await session.close();
     }
   });
+
+  test('受け取る側が途中で抜けても、その依頼を閉じて数えを保存する', async () => {
+    const statePath = join(process.env.AAS_STATE_DIR!, 'harness-metrics.json');
+    const tasks = async () => {
+      const raw = await readFile(statePath, 'utf8').catch(() => '');
+      return raw ? (JSON.parse(raw) as { tasks: number }).tasks : 0;
+    };
+    const { session } = await openAt();
+    try {
+      fake.setBehavior({ kind: 'echo', delayMs: 50 });
+      const before = await tasks();
+      const a = new Conversation();
+      // 最初の出来事で抜ける（for await の break は generator の return() で、finally だけが走る）。
+      for await (const _ of session.send('途中で抜ける', { conversation: a })) break;
+      assert.equal(await tasks() - before, 1, '途中で抜けた依頼を閉じていない（札が開いたまま残る）');
+    } finally {
+      fake.setBehavior({ kind: 'echo', delayMs: 400 });
+      await session.close();
+    }
+  });
 });
 
 describe('止めるときは全部の会話を止める', { timeout: 30_000 }, () => {

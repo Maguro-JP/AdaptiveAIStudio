@@ -6,6 +6,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
+import { readdir } from 'node:fs/promises';
 import { HarnessMetrics, formatReport } from '../src/harness/metrics.ts';
 
 const RULES = ['good-rule', 'strict-rule', 'sleeping-rule'];
@@ -131,6 +132,22 @@ describe('ハーネス計測', () => {
     const stat = m.report(['r']).rules[0]!;
     assert.equal(stat.recovered, 1);
     assert.equal(stat.abandoned, 0, '前の依頼の拒否を次の依頼に持ち越した');
+  });
+
+  test('並べて保存しても、最後の数が残り、一時ファイルを残さない', async () => {
+    const dir = await tempDir('aas-hm-many-');
+    const path = join(dir, 'harness.json');
+    const m = new HarnessMetrics(path);
+    const saves: Promise<void>[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      m.beginTask(String(i)); m.recordDenial('r', String(i)); m.endTask('completed', String(i));
+      saves.push(m.save());
+    }
+    await Promise.all(saves);
+    const reloaded = new HarnessMetrics(path);
+    await reloaded.load();
+    assert.equal(reloaded.report(['r']).tasks, 20, '最後の数が残っていない');
+    assert.deepEqual((await readdir(dir)).sort(), ['harness.json'], '一時ファイルが残った');
   });
 
   test('記録が無くても落ちない', async () => {

@@ -11,7 +11,7 @@
  *   拒否 → そのまま作業が失敗した       悪い規則（邪魔をしている）
  *   一度も発動しない                    不要な規則（削る候補）
  */
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 export interface RuleStat {
@@ -57,6 +57,9 @@ export class HarnessMetrics {
    * 別の依頼の結末が、その拒否の良し悪しを決めてしまう。
    */
   #open = new Map<string, string[]>();
+  /** 保存を順に並べる列。並べないと、二つの会話がほぼ同時に終わったとき同じファイルへ二本が重なって書く。 */
+  #saving: Promise<void> = Promise.resolve();
+  #saveSeq = 0;
 
   constructor(path?: string) {
     this.#path = path;
@@ -165,18 +168,30 @@ export class HarnessMetrics {
     };
   }
 
-  async save(): Promise<void> {
-    if (!this.#path) return;
-    try {
-      await mkdir(dirname(this.#path), { recursive: true });
-      await writeFile(this.#path, JSON.stringify({
-        stats: [...this.#stats.values()],
-        tasks: this.#tasks,
-        cleanTasks: this.#cleanTasks,
-      }, null, 2), 'utf8');
-    } catch {
-      // 記録に失敗しても本体は止めない
-    }
+  /**
+   * 記録を書く。列に並べ、書く直前の数を写す（後から並んだ保存が、前の古い数で上書きされない）。
+   * 一時ファイルへ書いてから置き換える。途中で切れても前の記録が残る（壊れた記録は load が 0 から数え直す）。
+   */
+  save(): Promise<void> {
+    const path = this.#path;
+    if (!path) return Promise.resolve();
+    const next = this.#saving.then(async () => {
+      const tmp = `${path}.${process.pid}.${++this.#saveSeq}.tmp`;
+      try {
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(tmp, JSON.stringify({
+          stats: [...this.#stats.values()],
+          tasks: this.#tasks,
+          cleanTasks: this.#cleanTasks,
+        }, null, 2), 'utf8');
+        await rename(tmp, path);
+      } catch {
+        // 記録に失敗しても本体は止めない
+        await rm(tmp, { force: true }).catch(() => undefined);
+      }
+    });
+    this.#saving = next;
+    return next;
   }
 
   #stat(rule: string): RuleStat {
