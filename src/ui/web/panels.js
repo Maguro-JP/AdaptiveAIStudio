@@ -2256,6 +2256,8 @@ export const PANELS = {
      * 別のパネルが預けた、違う中身の直しは残す。名札の無いもの（前の版が預けた）は、今までどおり片づける。
      */
     const releaseDraft = (p) => {
+      // まだ選んでいないパネルの中の預かりが在る間は、覚えておく所の写しも残す（ブラウザを閉じても失わない）。
+      if (drafts.has(p)) return;
       try {
         const raw = localStorage.getItem(DRAFT_AT(p));
         if (!raw) return;
@@ -2462,9 +2464,12 @@ export const PANELS = {
     };
 
     const open = async (p, line, quiet) => {
-      // 離れる前に、保存していない分を預かる。
-      // 預けたときの中身（base）も持つ。戻ったときに変わっていたら、黙って戻さない（下の「後から変わっています」）。
-      if (path && p !== path && dirty()) drafts.set(path, { text: area.value, base: loaded });
+      /*
+       * 離れる前に、保存していない分を預かる。預けたときの中身（base）も持つ（戻ったときに変わっていたら、黙って戻さない）。
+       * **預けるのは、本当に離れるときだけ。**繋がらずに離れなかったのに預けると、その後の直しと保存の後で古い預かりが残り、
+       * 戻ったときに「後から変わっています」と古い版を出させようとした。
+       */
+      const leave = () => { if (path && p !== path && dirty()) drafts.set(path, { text: area.value, base: loaded }); };
       let r;
       try {
         r = await fetch(`/api/file?path=${encodeURIComponent(p)}`, { signal: AbortSignal.timeout(20000) });
@@ -2490,6 +2495,8 @@ export const PANELS = {
           tell(`開き直せませんでした（${j.error ?? r.status}）。保存していない直しは、欄に残してあります。`, []);
           return;
         }
+        leave();
+        notice.hidden = true; // 前のファイルの知らせを、空の欄の上に残さない（押すと、空の欄に前の直しが入った）
         area.value = ''; area.disabled = true; path = ''; loaded = '';
         save.disabled = true;
         return;
@@ -2558,6 +2565,7 @@ export const PANELS = {
        * `mine` を捨てていたので、**戻す先が無くなっていた。**同じファイルの
        * 読み直しなら、預かったままにする。
        */
+      leave();
       const same = p === path;
       eol = nextEol;
       path = p; loaded = text; stamp = j.stamp ?? ''; mine = same ? mine : (held.get(p) ?? null);
@@ -2567,19 +2575,27 @@ export const PANELS = {
       // このパネルの中に無ければ、覚えておく所を見る（ブラウザを閉じたあとでも戻せる）。
       let kept;
       const inPanel = drafts.get(p);
-      if (inPanel !== undefined) drafts.delete(p);
       /*
        * このパネルの中で預けた分。**離れている間にファイルが変わっていたら、黙って戻さない。**
        * 黙って戻すと、開き直しで新しい stamp を取るので、次の保存が AI や別のパネルの書き換えを確かめずに消していた。
        */
-      if (inPanel !== undefined && inPanel.base === loaded) kept = inPanel.text;
+      if (inPanel !== undefined && inPanel.base === loaded) { kept = inPanel.text; drafts.delete(p); }
       else {
-        const saved = readDraft(p);
-        const stale = inPanel !== undefined ? { ...saved, text: inPanel.text, base: inPanel.base } : saved;
-        if (inPanel === undefined && saved && saved.base === loaded) { kept = saved.text; adoptDraft(p, saved); }
-        else if (stale) {
-          const saved = stale;
-          if (saved.at !== undefined) toldDraft.set(p, saved.at);
+        const stored = readDraft(p);
+        /*
+         * 覚えておく所の預かりを、このパネルのものとして扱ってよいか（名札が自分・中身が同じ）。別のパネルの違う直しを、
+         * こちらの知らせで片づけたり捨てたりしない。
+         */
+        const ours = !!stored && (inPanel === undefined || stored.by === DRAFT_ME || stored.text === inPanel.text);
+        const saved = inPanel !== undefined ? { text: inPanel.text, base: inPanel.base } : stored;
+        if (inPanel === undefined && stored && stored.base === loaded) { kept = stored.text; adoptDraft(p, stored); }
+        else if (saved) {
+          if (ours) toldDraft.set(p, stored.at);
+          /*
+           * パネルの中の預かりは、人が「出す」か「捨てる」を選ぶまで残す（× で閉じても、押さずに離れても、
+           * 次に戻ったときにまた出す）。先に消すと、直しがこの知らせのボタンの中にしか無くなり、失っていた。
+           */
+          let before = '';
           /*
            * **中身が変わっていたら、黙って戻さない。**
            *
@@ -2588,14 +2604,26 @@ export const PANELS = {
            */
           tell('前に保存していない直しが残っていますが、このファイルは後から変わっています。', [
             ['その直しを出す', () => {
-              mine = area.value;
+              // 戻す先は、この知らせの中だけで持つ（保存を断られたあとの自分の版 `mine` を上書きしない）。
+              before = area.value;
               area.value = saved.text;
+              drafts.delete(p);
               refresh();
               tell('預かっていた直しを出しました。保存すると、いまのファイルを上書きします。', [
-                ['やめる', () => { area.value = mine ?? area.value; refresh(); tell('戻しました。', [], 'info'); }],
+                ['やめる', () => {
+                  area.value = before;
+                  // やめても、直しは捨てない。預け直して、次に開いたときにまた選べるようにする。
+                  drafts.set(p, { text: saved.text, base: saved.base });
+                  refresh();
+                  tell('戻しました。預かっていた直しは、このファイルを開き直すともう一度出せます。', [], 'info');
+                }],
               ]);
             }],
-            ['捨てる', () => { dropDraft(p); tell('預かっていた直しを捨てました。', [], 'info'); }],
+            ['捨てる', () => {
+              drafts.delete(p);
+              if (ours) dropDraft(p);
+              tell('預かっていた直しを捨てました。', [], 'info');
+            }],
           ]);
         }
       }
@@ -2698,6 +2726,14 @@ export const PANELS = {
         refresh();
         if (!r.ok) {
           tell(`${at} を保存できませんでした（${j.error ?? r.status}）。開き直すと、保存していない直しを戻せます。`, []);
+        } else {
+          /*
+           * 返事の前に離れたので、預かりの base は保存する前の中身のまま。自分の保存を「後から変わっています」と
+           * 言わないよう、保存した中身に合わせる（預けた分が保存した分と同じなら、預かりは要らない）。
+           */
+          const d = drafts.get(at);
+          if (d && d.text === sent) drafts.delete(at);
+          else if (d) d.base = sent;
         }
         return;
       }

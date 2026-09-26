@@ -1456,6 +1456,126 @@ describe('別のファイルへ移って戻る', () => {
     assert.equal(box.area().value, 'one\nMINE\n', '出すを押しても直しが戻らない');
   });
 
+  /** a を直して b へ移り、a が外で変わってから a へ戻る（「後から変わっています」が出る形）。 */
+  async function staleBack(prefix: string) {
+    const a = `${prefix}-a.txt`;
+    const b = `${prefix}-b.txt`;
+    const disk: Record<string, string> = { [a]: 'one\n', [b]: 'B\n' };
+    const box = open(disk);
+    const go = (f: string) => (box.ctx.openFile as (p: string) => void)(f);
+    go(a);
+    await until(() => box.area().value === 'one\n', 'a が開く');
+    box.area().value = 'one\nMINE\n';
+    box.area().fire('input');
+    go(b);
+    await until(() => box.area().value === 'B\n', 'b が開く');
+    disk[a] = 'one\nAI\n';
+    go(a);
+    await until(() => box.area().value === 'one\nAI\n' && box.at('editor-notice').hidden === false, '後から変わっていると言う');
+    return { box, disk, go, a, b };
+  }
+
+  test('**知らせを閉じても、押さずに離れても、直しは失わない（次に戻ったときにまた出す）**', async () => {
+    const { box, go, a, b } = await staleBack('closed');
+    box.press('×');
+    go(b);
+    await until(() => box.area().value === 'B\n', 'b が開く');
+    go(a);
+    await until(() => box.at('editor-notice').hidden === false, '戻っても、もう一度出さない（直しを失った）');
+    box.press('その直しを出す');
+    assert.equal(box.area().value, 'one\nMINE\n');
+  });
+
+  test('**「やめる」を押しても、直しは捨てない（開き直すともう一度出せる）**', async () => {
+    const { box, go, a, b } = await staleBack('undo');
+    box.press('その直しを出す');
+    box.press('やめる');
+    assert.equal(box.area().value, 'one\nAI\n');
+    go(b);
+    await until(() => box.area().value === 'B\n', 'b が開く');
+    go(a);
+    await until(() => box.at('editor-notice').hidden === false, 'やめたら直しが消えた');
+    box.press('その直しを出す');
+    assert.equal(box.area().value, 'one\nMINE\n');
+  });
+
+  test('「捨てる」を押したら、次に戻ったときは出さない', async () => {
+    const { box, go, a, b } = await staleBack('drop');
+    box.press('捨てる');
+    go(b);
+    await until(() => box.area().value === 'B\n', 'b が開く');
+    go(a);
+    await until(() => box.area().value === 'one\nAI\n', 'a が開く');
+    assert.equal(box.at('editor-notice').hidden, true, '捨てたのにまた出した');
+  });
+
+  test('**保存の返事の前に移って戻っても、自分の保存を「後から変わっています」と言わない**', async () => {
+    const disk: Record<string, string> = { 'own-a.txt': 'one\n', 'own-b.txt': 'B\n' };
+    const box = open(disk);
+    const go = (f: string) => (box.ctx.openFile as (p: string) => void)(f);
+    go('own-a.txt');
+    await until(() => box.area().value === 'one\n', 'a が開く');
+    const inner = globalThis.fetch;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => { release = r; });
+    (globalThis as { fetch?: unknown }).fetch = (async (url: string, init?: { method?: string }) => {
+      if ((init?.method ?? 'GET') === 'PUT') await gate;
+      return (inner as unknown as (u: string, i?: unknown) => Promise<Response>)(url, init);
+    }) as unknown as typeof fetch;
+    try {
+      box.area().value = 'one\nNEW\n';
+      box.area().fire('input');
+      box.key('s');
+      go('own-b.txt');
+      await until(() => box.area().value === 'B\n', 'b が開く');
+      release();
+      await until(() => disk['own-a.txt'] === 'one\nNEW\n', '保存される');
+      await until(() => box.asked.filter((q) => q.method === 'PUT').length === 1, 'PUT が一回');
+      // 保存の返事を受け取り切るまで待つ（返事の後の片づけが済んでから戻る）。
+      await new Promise((r) => setImmediate(r));
+      go('own-a.txt');
+      await until(() => box.area().value === 'one\nNEW\n', 'a が開く');
+      assert.equal(box.at('editor-notice').hidden, true, `自分の保存を「後から変わっています」と言った: ${box.at('editor-notice').text}`);
+    } finally {
+      (globalThis as { fetch?: unknown }).fetch = inner;
+    }
+  });
+
+  test('**移れなかった（繋がらない）あとに直して保存しても、古い預かりを出さない**', async () => {
+    const disk: Record<string, string> = { 'fail-a.txt': 'one\n', 'fail-b.txt': 'B\n' };
+    const box = open(disk);
+    const go = (f: string) => (box.ctx.openFile as (p: string) => void)(f);
+    go('fail-a.txt');
+    await until(() => box.area().value === 'one\n', 'a が開く');
+    box.area().value = 'one\nOLD\n';
+    box.area().fire('input');
+    const inner = globalThis.fetch;
+    (globalThis as { fetch?: unknown }).fetch = (async (url: string, init?: { method?: string }) => {
+      if (String(url).includes('fail-b.txt')) throw new Error('繋がらない');
+      return (inner as unknown as (u: string, i?: unknown) => Promise<Response>)(url, init);
+    }) as unknown as typeof fetch;
+    go('fail-b.txt');
+    await until(() => box.state().textContent.includes('開けませんでした'), '開けなかったと言う');
+    (globalThis as { fetch?: unknown }).fetch = inner;
+    box.area().value = 'one\nNEW\n';
+    box.area().fire('input');
+    box.key('s');
+    await until(() => disk['fail-a.txt'] === 'one\nNEW\n', '保存される');
+    await until(() => box.state().textContent.includes('保存しました'), '保存の返事');
+    go('fail-b.txt');
+    await until(() => box.area().value === 'B\n', 'b が開く');
+    go('fail-a.txt');
+    await until(() => box.area().value === 'one\nNEW\n', 'a が開く');
+    assert.equal(box.at('editor-notice').hidden, true, `古い預かりを出した: ${box.at('editor-notice').text}`);
+  });
+
+  test('開けないファイルへ移ったら、前のファイルの知らせを残さない', async () => {
+    const { box, go } = await staleBack('gone');
+    go('no-such-file.txt');
+    await until(() => box.area().disabled === true, '開けない');
+    assert.equal(box.at('editor-notice').hidden, true, '前のファイルの知らせが残っている');
+  });
+
   test('離れている間に変わっていなければ、直しをそのまま戻す（対）', async () => {
     const disk: Record<string, string> = { 'kept-a.txt': 'one\n', 'kept-b.txt': 'B\n' };
     const box = open(disk);
