@@ -8361,6 +8361,24 @@ Shift_JIS の文書に `edit_file` を当てると、直した一行のほかの
    作業場の錠を足す。二会話を差し替えの provider で並行させ、履歴と記憶が混ざらないことを試験で見る
 3. 画面が会話ごとに走らせる（`#busyNow` の順番待ちを、錠の待ちに置き換える）
 
+第 2 段の割り方（09-26 に `Session` と画面の本体を読み、切り分けを洗い出した）:
+
+- 2a `Conversation` を作り、履歴・実行中・依頼文・思い出した記憶・差分を移す。`Session` は既定の一つを持って
+  そちらへ渡す（動きは変えない）
+- 2b 作業場の錠（`WorkspaceLock`）。`send()` の「戻す」の記録は、書く手を初めて使う時点で錠を取ってから始める
+  （いまは依頼の頭で始めている）。巻き戻し・外の変化の比べ・作業前の確かめの覚えは、錠を持つ依頼だけ。
+  `plan()` は依頼の頭で錠を取る（担当が並列に書くため）。画面の手書き・`/api/revert`・`POST /api/undo` も錠を取る
+- 2c `send(text, opts, conv)`。harness の依頼ごとの履歴・協議（Forum）・`#holder` を会話ごとにする
+  （道具は `create()` で一度だけ包まれていて、holder と forum に結びついている。`AsyncLocalStorage` で会話を引く）。
+  `requestSeq` を会話ごとに。`think()` は走っている会話が一つも無いときだけ
+- 2d 画面の本体を会話ごとの表に（`#loadedId` `#saved` `#inFlight` `#editorNow` `#runningId` `#queue`）。
+  `/api/send` は**その会話が**動いているときだけ順番待ちに積む。`/api/abort` は会話を受ける
+- 2e metrics を依頼ごとの札で数える（並行した `endTask` の取り違えを防ぐ）
+
+縛る既存の試験: `test/many-hands.test.ts`（二つ目の会話を順番待ちに積むことを見ている。2d で変える）、
+`test/e2e-send.test.ts`（同じ会話への二つ目は順番待ちのまま）、`test/in-flight.test.ts`、`test/request-seq.test.ts`、
+`test/approve-all.test.ts`、`test/undo-e2e.test.ts`、`test/plan-outside-undo.test.ts`、`test/outside-changed.test.ts`。
+
 選ばなかった案:
 
 - 書く依頼も並列に走らせ、ファイル単位で錠を取る。外のツールと `run_command` はどのファイルに書くか
