@@ -1590,3 +1590,33 @@ describe('別のファイルへ移って戻る', () => {
     assert.match(box.state().textContent, /保存していない直しを戻しました/);
   });
 });
+
+describe('AI の版を出したあと', () => {
+  /**
+   * **保存を断られて「AI の版を出す」を押したあと、自分の直しを画面の中にしか残さない。**
+   *
+   * 欄は AI の版になり直しが無い状態になるので、預かりの片づけが自分の直しの写しを消していた。
+   * 自分の直しは画面の中（held）にしか無く、ブラウザを閉じると失っていた。
+   */
+  test('**ブラウザを閉じて開き直しても、自分の直しを「出す」で戻せる**', async () => {
+    const disk: Record<string, string> = { 'held.txt': 'one\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('held.txt');
+    await until(() => box.area().value === 'one\n', '開く');
+    box.area().value = 'one\nMINE\n';
+    box.area().fire('input');
+    disk['held.txt'] = 'one\nAI\n';
+    box.key('s');
+    await until(() => box.at('editor-notice').text.includes('別の所で変わりました'), '保存を断られる');
+    box.press('AI の版を出す');
+    assert.equal(box.area().value, 'one\nAI\n');
+    // 預かりの片づけ（打ってから 400 ms の時計）が走り終えるまで待つ。先に仕掛けた時計なので、こちらより先に走る。
+    await new Promise((r) => setTimeout(r, 450));
+    // ブラウザを閉じて開き直した形（新しいパネル、覚えておく所はそのまま）。
+    const again = open(disk, true);
+    (again.ctx.openFile as (p: string) => void)('held.txt');
+    await until(() => again.area().value === 'one\nAI\n' && again.at('editor-notice').hidden === false, '自分の直しが残っていると言わない');
+    again.press('その直しを出す');
+    assert.equal(again.area().value, 'one\nMINE\n');
+  });
+});

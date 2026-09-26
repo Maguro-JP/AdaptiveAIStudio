@@ -2111,7 +2111,16 @@ export const PANELS = {
       eol = String(raw ?? '').includes('\r\n')
         && !String(raw ?? '').replace(/\r\n/g, '').includes('\n') ? '\r\n' : '\n';
       mine = area.value;
-      if (path) held.set(path, mine);
+      if (path) {
+        held.set(path, mine);
+        /*
+         * 自分の直しを、覚えておく所にも預ける。base は AI の版より前の中身にする（開き直したときに「後から変わっています」
+         * として選ばせる）。欄は AI の版になり直しが無くなるので、預けないと片づけが写しを消し、画面の中にしか残らなかった。
+         */
+        try {
+          localStorage.setItem(DRAFT_AT(path), JSON.stringify({ text: mine, base: loaded, at: Date.now(), by: DRAFT_ME }));
+        } catch { /* 覚えておく所が使えない環境もある */ }
+      }
       loaded = text;
       stamp = newStamp ?? '';
       area.value = text;
@@ -2256,8 +2265,9 @@ export const PANELS = {
      * 別のパネルが預けた、違う中身の直しは残す。名札の無いもの（前の版が預けた）は、今までどおり片づける。
      */
     const releaseDraft = (p) => {
-      // まだ選んでいないパネルの中の預かりが在る間は、覚えておく所の写しも残す（ブラウザを閉じても失わない）。
-      if (drafts.has(p)) return;
+      // まだ選んでいないパネルの中の預かり・AI の版と取り替えた自分の直しが在る間は、覚えておく所の写しも残す
+      // （ブラウザを閉じても失わない）。
+      if (drafts.has(p) || held.has(p)) return;
       try {
         const raw = localStorage.getItem(DRAFT_AT(p));
         if (!raw) return;
@@ -2588,8 +2598,10 @@ export const PANELS = {
          */
         const ours = !!stored && (inPanel === undefined || stored.by === DRAFT_ME || stored.text === inPanel.text);
         const saved = inPanel !== undefined ? { text: inPanel.text, base: inPanel.base } : stored;
+        // 写しが、この画面の中に預かっている自分の直し（AI の版と取り替えたもの）と同じなら、そちらの知らせに任せる。
+        const sameAsHeld = inPanel === undefined && mine !== null && saved?.text === mine;
         if (inPanel === undefined && stored && stored.base === loaded) { kept = stored.text; adoptDraft(p, stored); }
-        else if (saved) {
+        else if (saved && !sameAsHeld) {
           if (ours) toldDraft.set(p, stored.at);
           /*
            * パネルの中の預かりは、人が「出す」か「捨てる」を選ぶまで残す（× で閉じても、押さずに離れても、
