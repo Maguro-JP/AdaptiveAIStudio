@@ -83,17 +83,38 @@ function inOrder<T>(path: string, run: () => Promise<T>): Promise<T> {
   const mine = prev.then(run, run);
   const settled = mine.catch(() => undefined);
   writing.set(path, settled);
-  void settled.then(() => { if (writing.get(path) === settled) writing.delete(path); });
+  settled.then(() => { if (writing.get(path) === settled) writing.delete(path); }).catch(() => undefined);
   return mine;
 }
 
 let tmpSeq = 0;
-/** 書き戻す。隣の一時ファイルに書いてから置き換える（途中で落ちても、前の中身が残る）。 */
+/**
+ * 書き戻す。隣の一時ファイルに書き切って（ディスクまで）から置き換える。プロセスが途中で落ちても前の中身が残る
+ * （OS ごと落ちたときは、ファイルシステム次第で確かめていない）。
+ *
+ * Windows では、ウイルス対策や検索が一時ファイルや元のファイルを掴んでいると、置き換えが一時的に断られる
+ * （EPERM・EACCES・EBUSY）。少し待って数回やり直す。残った一時ファイルは `npm run clean` が片づける（`.tmp`）。
+ */
 async function replaceWhole(path: string, text: string): Promise<void> {
   const tmp = `${path}.${process.pid}.${++tmpSeq}.tmp`;
   try {
-    await writeFile(tmp, text, 'utf8');
-    await rename(tmp, path);
+    const fh = await open(tmp, 'w');
+    try {
+      await fh.writeFile(text, 'utf8');
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
+    for (let tries = 0; ; tries += 1) {
+      try {
+        await rename(tmp, path);
+        return;
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (tries >= 10 || !(code === 'EPERM' || code === 'EACCES' || code === 'EBUSY')) throw e;
+        await new Promise((r) => setTimeout(r, 100 + tries * 50));
+      }
+    }
   } catch (e) {
     await rm(tmp, { force: true }).catch(() => undefined);
     throw e;

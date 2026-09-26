@@ -6,7 +6,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, appendFile, readFile, readdir } from 'node:fs/promises';
+import { appendFile, readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { Conversations, titleFrom } from '../src/core/conversations.ts';
@@ -40,11 +40,21 @@ describe('会話の保存を壊さない', () => {
     assert.equal((await c.head(id)).title, '最初の依頼');
   });
 
-  test('見出しの書き換えは一時ファイルから置き換え、一時ファイルを残さない', async () => {
+  test('見出しの書き換えは一時ファイルから置き換え（上書きしない）、一時ファイルを残さない', async () => {
     const { c, dir } = await store();
     const { id } = await c.create();
+    const before = (await stat(join(dir, `${id}.jsonl`))).ino;
     await c.rename(id, 'a');
+    // 置き換えならファイルの番号が変わる。その場で上書きすると同じ番号のまま（途中で落ちると空になる形）。
+    assert.notEqual((await stat(join(dir, `${id}.jsonl`))).ino, before, 'その場で上書きした');
     assert.deepEqual((await readdir(dir)).sort(), [`${id}.jsonl`]);
+  });
+
+  test('**自動の見出しと人が付けた名前が重なっても、人の名前を自動の見出しで上書きしない**', async () => {
+    const { c } = await store();
+    const { id } = await c.create();
+    await Promise.all([c.titleIfUnset(id, '自動の見出し'), c.rename(id, '人が付けた名前')]);
+    assert.equal((await c.head(id)).title, '人が付けた名前');
   });
 
   test('**同じ名前で作り直して、既にある会話を空にしない**', async () => {

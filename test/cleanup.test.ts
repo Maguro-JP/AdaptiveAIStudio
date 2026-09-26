@@ -35,6 +35,17 @@ describe('片づけるもの・片づけないもの', () => {
     assert.deepEqual(found.map((f) => f.path), [], 'モデルを消そうとしている');
   });
 
+  test('会話の見出しの書き換えで残った古い一時ファイルは消す。書いている最中の新しいものと会話そのものは消さない', async () => {
+    const { home } = await scratch();
+    const talks = join(home, 'conversations');
+    await mkdir(talks, { recursive: true });
+    await writeFile(join(talks, 'c1.jsonl'), '{}\n');
+    await writeFile(join(talks, 'c1.jsonl.123.1.tmp'), '{}\n');
+    const later = Date.now() + 2 * 60 * 60 * 1000;
+    assert.deepEqual((await findRemovable({ keepTag: 'b9999', now: later })).map((f) => f.path), [join(talks, 'c1.jsonl.123.1.tmp')]);
+    assert.deepEqual((await findRemovable({ keepTag: 'b9999' })).map((f) => f.path), [], '書いている最中の一時ファイルを消そうとした');
+  });
+
   test('途中で切れた取得は消す', async () => {
     const { models } = await scratch();
     await writeFile(join(models, 'm.gguf.part'), 'x');
