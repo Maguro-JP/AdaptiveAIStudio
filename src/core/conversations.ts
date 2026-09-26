@@ -11,7 +11,7 @@
  * **足すだけで書く。**丸ごと書き直すと、書いている最中に落ちたときに
  * 全部を失う。行ごとなら、壊れた行を捨てるだけで残りは読める。
  */
-import { readdir, readFile, appendFile, writeFile, mkdir, rm, stat, open } from 'node:fs/promises';
+import { readdir, readFile, appendFile, writeFile, mkdir, rm, rename, stat, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ProviderMessage } from '../providers/contract.ts';
 
@@ -61,7 +61,43 @@ const TITLE_MAX = 40;
 export function titleFrom(text: string): string {
   const line = text.split('\n').map((l) => l.trim()).find((l) => l.length > 0) ?? '';
   if (line.length === 0) return '新しい会話';
-  return line.length > TITLE_MAX ? `${line.slice(0, TITLE_MAX)}…` : line;
+  return cutTitle(line);
+}
+
+/** 見出しの長さで切る。字の単位で数える（UTF-16 の単位で切ると、絵文字を半分に割る）。 */
+function cutTitle(line: string): string {
+  const chars = Array.from(line);
+  return chars.length > TITLE_MAX ? `${chars.slice(0, TITLE_MAX).join('')}…` : line;
+}
+
+/**
+ * 同じ会話のファイルへの書き込みを、一列に並べる。
+ *
+ * 見出しの書き換えは全体を読んで書き戻すので、その間に足した返事を古い中身で上書きして消していた。
+ * 足す・書き戻す・作る・消すを、ファイルごとに順番に通す（同じプロセスの中の入れ物は、どれもここを通る）。
+ */
+const writing = new Map<string, Promise<unknown>>();
+function inOrder<T>(path: string, run: () => Promise<T>): Promise<T> {
+  const prev = writing.get(path) ?? Promise.resolve();
+  // 前が失敗しても列は進める。
+  const mine = prev.then(run, run);
+  const settled = mine.catch(() => undefined);
+  writing.set(path, settled);
+  void settled.then(() => { if (writing.get(path) === settled) writing.delete(path); });
+  return mine;
+}
+
+let tmpSeq = 0;
+/** 書き戻す。隣の一時ファイルに書いてから置き換える（途中で落ちても、前の中身が残る）。 */
+async function replaceWhole(path: string, text: string): Promise<void> {
+  const tmp = `${path}.${process.pid}.${++tmpSeq}.tmp`;
+  try {
+    await writeFile(tmp, text, 'utf8');
+    await rename(tmp, path);
+  } catch (e) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw e;
+  }
 }
 
 /** 名前の末尾に使える幅。base36 の4桁。 */
@@ -138,12 +174,26 @@ export class Conversations {
   }
 
   /** 新しい会話を始める。中身はまだ無い。 */
-  async create(id = newId()): Promise<ConversationHead> {
+  async create(given?: string): Promise<ConversationHead> {
     await mkdir(this.#dir, { recursive: true });
     const createdAt = new Date().toISOString();
-    const meta: MetaLine = { t: 'meta', id, title: '新しい会話', createdAt };
-    await writeFile(this.#path(id), `${JSON.stringify(meta)}\n`, 'utf8');
-    return { id, title: meta.title, createdAt, updatedAt: createdAt, messages: 0 };
+    /*
+     * **既にある会話を空にしない。**作るときは「無ければ作る」（wx）で書く。名前を任せられたときは、
+     * ぶつかったら引き直す（別のプロセスが同じ秒に同じ末尾を引くことがある）。名前を渡されたときは断る。
+     */
+    for (let tries = 0; ; tries += 1) {
+      const id = given ?? newId();
+      const meta: MetaLine = { t: 'meta', id, title: '新しい会話', createdAt };
+      const path = this.#path(id);
+      try {
+        await inOrder(path, () => writeFile(path, `${JSON.stringify(meta)}\n`, { encoding: 'utf8', flag: 'wx' }));
+        return { id, title: meta.title, createdAt, updatedAt: createdAt, messages: 0 };
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+        if (given !== undefined) throw new Error(`その名前の会話は既にあります: ${id}`);
+        if (tries >= 20) throw e;
+      }
+    }
   }
 
   /** 新しいものが上。**空の会話も出す**（作った直後に消えると戸惑う）。 */
@@ -250,8 +300,10 @@ export class Conversations {
         const from = Math.max(0, info.size - opts.tailBytes);
         const fh = await open(path, 'r');
         try {
-          const buf = Buffer.alloc(info.size - from);
-          const { bytesRead } = await fh.read(buf, 0, buf.length, from);
+          // 一つ手前の字も読む。それが改行なら、読み始めは行の頭ちょうどなので捨てない。
+          const start = Math.max(0, from - 1);
+          const buf = Buffer.alloc(info.size - start);
+          const { bytesRead } = await fh.read(buf, 0, buf.length, start);
           const text = buf.subarray(0, bytesRead).toString('utf8');
           // 頭は行の途中（字の途中のことも）から始まる。最初の改行まで捨てる。
           raw = from > 0 ? text.slice(text.indexOf('\n') + 1) : text;
@@ -280,7 +332,7 @@ export class Conversations {
     const body = messages.map((m) => `${JSON.stringify({ t: 'msg', at, m } satisfies MsgLine)}\n`).join('');
     // **前の行の途中に繋げない。**書いている最中に落ちると、改行の無い
     // 半端な行が残る。そこへ足すと、次の行まで巻き添えで読めなくなる。
-    await appendFile(path, (await endsWithNewline(path)) ? body : `\n${body}`, 'utf8');
+    await inOrder(path, async () => appendFile(path, (await endsWithNewline(path)) ? body : `\n${body}`, 'utf8'));
   }
 
   /**
@@ -290,12 +342,16 @@ export class Conversations {
   async titleIfUnset(id: string, text: string): Promise<void> {
     const head = await this.head(id).catch(() => undefined);
     if (!head || head.title !== '新しい会話') return;
-    const raw = await readFile(this.#path(id), 'utf8');
-    const lines = raw.split('\n');
-    const first = parse(lines[0] ?? '');
-    if (first?.t !== 'meta') return;
-    lines[0] = JSON.stringify({ ...first, title: titleFrom(text) } satisfies MetaLine);
-    await writeFile(this.#path(id), lines.join('\n'), 'utf8');
+    const path = this.#path(id);
+    await inOrder(path, async () => {
+      const raw = await readFile(path, 'utf8');
+      const lines = raw.split('\n');
+      const first = parse(lines[0] ?? '');
+      // 並んで待つ間に別の所が付けていたら、上書きしない。
+      if (first?.t !== 'meta' || first.title !== '新しい会話') return;
+      lines[0] = JSON.stringify({ ...first, title: titleFrom(text) } satisfies MetaLine);
+      await replaceWhole(path, lines.join('\n'));
+    });
   }
 
   /**
@@ -308,22 +364,24 @@ export class Conversations {
    * また自動の見出しが付く）。
    */
   async rename(id: string, title: string): Promise<string> {
-    const raw = await readFile(this.#path(id), 'utf8');
-    const lines = raw.split('\n');
-    const first = parse(lines[0] ?? '');
-    if (first?.t !== 'meta') throw new Error('会話の見出しが読めません');
-    const trimmed = title.replace(/\s+/g, ' ').trim();
-    const next = trimmed.length === 0
-      ? '新しい会話'
-      : (trimmed.length > TITLE_MAX ? `${trimmed.slice(0, TITLE_MAX)}…` : trimmed);
-    lines[0] = JSON.stringify({ ...first, title: next } satisfies MetaLine);
-    await writeFile(this.#path(id), lines.join('\n'), 'utf8');
-    return next;
+    const path = this.#path(id);
+    return inOrder(path, async () => {
+      const raw = await readFile(path, 'utf8');
+      const lines = raw.split('\n');
+      const first = parse(lines[0] ?? '');
+      if (first?.t !== 'meta') throw new Error('会話の見出しが読めません');
+      const trimmed = title.replace(/\s+/g, ' ').trim();
+      const next = trimmed.length === 0 ? '新しい会話' : cutTitle(trimmed);
+      lines[0] = JSON.stringify({ ...first, title: next } satisfies MetaLine);
+      await replaceWhole(path, lines.join('\n'));
+      return next;
+    });
   }
 
   /** 消す。無いものを消しても落ちない。 */
   async remove(id: string): Promise<void> {
-    await rm(this.#path(id), { force: true });
+    const path = this.#path(id);
+    await inOrder(path, () => rm(path, { force: true }));
   }
 }
 
@@ -336,18 +394,30 @@ export class Conversations {
  */
 function trimDangling(messages: ProviderMessage[]): ProviderMessage[] {
   const at = messages.findIndex((m) => m.role === 'user' || m.role === 'assistant');
-  if (at <= 0) return messages;
+  // ツールの結果しか無いなら、渡せるものは無い（呼び出しの無い結果を渡すと、OpenAI 互換の口が落ちる）。
+  if (at === -1) return messages.some((m) => m.role === 'tool') ? [] : messages;
+  if (at === 0) return messages;
   // 先頭が道具の結果だけのときは、その塊ごと捨てる。
   return messages[0]?.role === 'tool' ? messages.slice(at) : messages;
 }
 
 /** 最後が改行で終わっているか。無い＝途中で落ちた書き込みが残っている。 */
 async function endsWithNewline(path: string): Promise<boolean> {
+  // 最後の一字だけを読む（全体を読むと、16MB の会話で一行足すたびに 100ms かかった）。
+  let fh;
   try {
-    const raw = await readFile(path, 'utf8');
-    return raw.length === 0 || raw.endsWith('\n');
+    fh = await open(path, 'r');
   } catch {
     return true; // まだ無い。足せばそのまま1行目になる。
+  }
+  try {
+    const { size } = await fh.stat();
+    if (size === 0) return true;
+    const one = Buffer.alloc(1);
+    await fh.read(one, 0, 1, size - 1);
+    return one[0] === 0x0a;
+  } finally {
+    await fh.close();
   }
 }
 
@@ -355,7 +425,17 @@ async function endsWithNewline(path: string): Promise<boolean> {
 function parse(line: string): MetaLine | MsgLine | undefined {
   try {
     const v = JSON.parse(line) as MetaLine | MsgLine;
-    if (v && (v.t === 'meta' || v.t === 'msg')) return v;
+    if (v?.t === 'meta' && typeof v.title === 'string') return v;
+    // 形の合わない返事の行（m が無い・content が文字でない・role が違う）は捨てる。
+    // 通すと、一覧を作る所が落ちて会話ごと一覧から消え、読む所は undefined を履歴に混ぜた。
+    if (v?.t === 'msg' && isMessage(v.m)) return v;
   } catch { /* 壊れた行。捨てる */ }
   return undefined;
+}
+
+const ROLES = new Set(['system', 'user', 'assistant', 'tool']);
+function isMessage(m: unknown): m is ProviderMessage {
+  if (typeof m !== 'object' || m === null) return false;
+  const r = m as { role?: unknown; content?: unknown };
+  return typeof r.role === 'string' && ROLES.has(r.role) && typeof r.content === 'string';
 }
