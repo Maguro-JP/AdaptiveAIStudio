@@ -36,7 +36,8 @@ export function contentBytes(content: FileContent | undefined): number {
 export function contentOf(bytes: Buffer): FileContent {
   if (bytes.includes(0)) return bytes;
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    // ignoreBOM: 既定では先頭の BOM を黙って落とす。落とすと、BOM の要る .cmd が BOM なしで戻る。
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch {
     return bytes;
   }

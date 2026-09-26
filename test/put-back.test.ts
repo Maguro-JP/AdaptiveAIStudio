@@ -101,6 +101,18 @@ describe('置き戻す', () => {
     assert.deepEqual(await readFile(join(root, 'memo.txt')), sjis, 'Shift_JIS が別の中身で戻った');
   });
 
+  test('BOM 付きのファイルは、BOM ごと同じバイト列で戻る（.cmd は BOM が無いと cmd.exe が CP932 で読む）', async () => {
+    const { root } = await place();
+    const cmd = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('@echo off\r\n')]);
+    await writeFile(join(root, 'start.cmd'), cmd);
+    const cp = new Checkpoint(root);
+    await cp.capture('start.cmd');
+    await writeFile(join(root, 'start.cmd'), 'tool\n');
+    await cp.restoreAll();
+    assert.deepEqual(await readFile(join(root, 'start.cmd')), cmd, 'BOM を落として戻した');
+    assert.equal(contentOf(cmd), '\ufeff@echo off\r\n');
+  });
+
   test('持つ形: utf8 で往復するものだけ文字列、NUL を含むものと往復しないものはバイト列', () => {
     assert.equal(contentOf(Buffer.from('あい\n')), 'あい\n');
     assert.ok(Buffer.isBuffer(contentOf(Buffer.from([0x61, 0x00, 0x62]))));
