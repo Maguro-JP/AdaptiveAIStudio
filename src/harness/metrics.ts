@@ -50,8 +50,13 @@ export class HarnessMetrics {
   #stats = new Map<string, RuleStat>();
   #tasks = 0;
   #cleanTasks = 0;
-  /** 現在の依頼で拒否した規則 */
-  #current: string[] = [];
+  /**
+   * 開いている依頼ごとの、拒否した規則。札で分ける（札を渡さない呼び方は '' の一つ）。
+   *
+   * 一つだけ持つと、並行して走る依頼の拒否が混ざる。別の依頼の始まりが、走っている依頼の拒否を消し、
+   * 別の依頼の結末が、その拒否の良し悪しを決めてしまう。
+   */
+  #open = new Map<string, string[]>();
 
   constructor(path?: string) {
     this.#path = path;
@@ -71,13 +76,15 @@ export class HarnessMetrics {
     }
   }
 
-  /** 依頼の開始。拒否の集計単位を切る。 */
-  beginTask(): void {
-    this.#current = [];
+  /** 依頼の開始。拒否の集計単位を切る。`key` は依頼の札（並行する依頼を見分ける）。 */
+  beginTask(key = ''): void {
+    this.#open.set(key, []);
   }
 
-  recordDenial(rule: string): void {
-    this.#current.push(rule);
+  recordDenial(rule: string, key = ''): void {
+    const current = this.#open.get(key);
+    if (current) current.push(rule);
+    else this.#open.set(key, [rule]);
     this.#stat(rule).denials += 1;
   }
 
@@ -89,19 +96,21 @@ export class HarnessMetrics {
    * 依頼の終わり。
    * ここで初めて「その拒否が良かったのか」が分かる。
    */
-  endTask(outcome: TaskRecord['outcome']): void {
+  endTask(outcome: TaskRecord['outcome'], key = ''): void {
+    const current = this.#open.get(key) ?? [];
+    // 終えた札は閉じる。次の依頼に前の拒否を持ち越さない。
+    this.#open.delete(key);
     this.#tasks += 1;
-    if (this.#current.length === 0) {
+    if (current.length === 0) {
       this.#cleanTasks += 1;
       return;
     }
     // 同じ規則が複数回拒否しても、依頼としては1件と数える
-    for (const rule of new Set(this.#current)) {
+    for (const rule of new Set(current)) {
       const stat = this.#stat(rule);
       if (outcome === 'completed') stat.recovered += 1;
       else stat.abandoned += 1;
     }
-    this.#current = [];
   }
 
   /** 発動しなかった規則も一覧に出す。「効いていない」ことが情報になる。 */

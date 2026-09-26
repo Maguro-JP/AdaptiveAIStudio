@@ -96,8 +96,9 @@ export class Harness {
         const call: ToolCall = { id: '', name: tool.schema.name, args };
         // 会話ごとの入れ物が渡されていれば、そちらの積み重ねと依頼文で判じる（別の会話の読み書きを数えない）。
         const history = toolCtx.request?.history ?? this.#history;
-        // 規則の数え（metrics）は作業場で一つの「いまの依頼」を追う。数えない会話の分は入れない。
-        const metrics = toolCtx.request && !toolCtx.request.counted() ? undefined : this.#metrics;
+        // 規則の数え（metrics）は依頼の札で分ける。並行する会話の拒否を、別の依頼の結末に結び付けない。
+        const metricsKey = toolCtx.request?.metricsKey() ?? '';
+        const metrics = this.#metrics;
         const ctx: RuleContext = {
           root: toolCtx.root,
           history,
@@ -115,7 +116,7 @@ export class Harness {
               tool: call.name, outcome: 'denied',
               rule: rule.name, reason: decision.reason, summary: summarize(args),
             });
-            metrics?.recordDenial(rule.name);
+            metrics?.recordDenial(rule.name, metricsKey);
             this.#onDecision?.({ tool: call.name, outcome: 'denied', rule: rule.name, reason: decision.reason });
             // 例外にせず、モデルが読める形で返す。考え直させるのが目的。
             return { content: `BLOCKED by ${rule.name}: ${decision.reason}`, isError: true };

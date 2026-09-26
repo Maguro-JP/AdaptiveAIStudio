@@ -422,8 +422,8 @@ export class Session {
    */
   readonly #conv = (() => {
     const conv = new Conversation();
-    // 規則の数え（metrics）は既定の会話の分だけ数える（数えは作業場で一つの「いまの依頼」を追うため）。
-    conv.counted = true;
+    // 既定の会話は、共有の harness の依頼（札 ''）で規則の数え（metrics）に数える。
+    conv.isDefault = true;
     return conv;
   })();
   /** 走っている会話（既定の会話も、画面が渡したほかの会話も）。暇な思考は、どれかが走っていれば始めない。 */
@@ -1296,7 +1296,7 @@ export class Session {
     /*
      * 既定の会話か。共有の入れ物（ツールを包んだときの依頼文・協議・規則の積み重ねと数え）に触るのは既定の会話だけ。
      * ほかの会話が触ると、並行して走る段取りの判じ方を崩す。ほかの会話の規則の数え（metrics）は、
-     * 依頼ごとの札で数える段（DECISIONS 09-26 の 2e）まで数えない。
+     * 依頼ごとの札（`metricsKey`）で開いて閉じる（DECISIONS 09-26 の 2e）。
      */
     const shared = conv === this.#conv;
     if (this.noModel) {
@@ -1362,7 +1362,10 @@ export class Session {
     };
     /** 前の中身を記録できなかった道（大きすぎる・取れない）。戻せないことを言うために持つ。 */
     const outsideUnrecorded: string[] = [];
+    // 依頼の番号はこの依頼の間は変わらない（同じ会話の次の依頼は、これが終わるまで始まらない）。
+    const metricsKey = conv.request.metricsKey();
     if (shared) this.#harness.beginTask();
+    else this.#harness.metrics?.beginTask(metricsKey);
 
     let finishedReason: string | undefined;
     let answerChars = 0;
@@ -1818,6 +1821,7 @@ export class Session {
 
       const succeeded = finishedReason === 'completed' && keep;
       if (shared) this.#harness.endTask(succeeded ? 'completed' : 'failed');
+      else this.#harness.metrics?.endTask(succeeded ? 'completed' : 'failed', metricsKey);
       await this.#harness.metrics?.save();
       this.#prefetch.invalidate();
       this.markChanged();
@@ -1840,6 +1844,7 @@ export class Session {
       // 一度の失敗で対話ごと終わらせない。次の指示は受けられる。
       // 規則の数え（harness）は、通常の止めた回と同じく「完了しなかった」に数える。
       if (shared) this.#harness.endTask('failed');
+      else this.#harness.metrics?.endTask('failed', metricsKey);
       if (!stopped) yield { type: 'log', level: 'error', text: (e as Error).message };
       yield {
         type: 'settled', reason: stopped ? 'aborted' : 'failed', verified: false, checked,
