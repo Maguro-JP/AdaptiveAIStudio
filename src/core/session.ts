@@ -416,7 +416,12 @@ export class Session {
    * いまの会話（履歴・実行中・依頼文・差分）。`src/core/conversation.ts`。
    * いまは一つだけ持つ。画面で会話ごとに走らせる段（DECISIONS 09-26 の 2c）で、呼ぶ側が渡す形にする。
    */
-  readonly #conv = new Conversation();
+  readonly #conv = (() => {
+    const conv = new Conversation();
+    // 規則の数え（metrics）は既定の会話の分だけ数える（数えは作業場で一つの「いまの依頼」を追うため）。
+    conv.counted = true;
+    return conv;
+  })();
   /** 走っている会話（既定の会話も、画面が渡したほかの会話も）。暇な思考は、どれかが走っていれば始めない。 */
   readonly #active = new Set<Conversation>();
   /** 提案がどの思考から出たか。採否をその思考の実績に返すために持つ。 */
@@ -1242,8 +1247,11 @@ export class Session {
     return snap?.commands.check ?? snap?.commands.test;
   }
 
-  /** いま動いているものを止める。止めても対話は続く。 */
-  abort(): void { this.#conv.running?.abort(); }
+  /** いま動いているものを止める。既定の会話だけでなく、走っている会話を全部止める。止めても対話は続く。 */
+  abort(): void {
+    this.#conv.running?.abort();
+    for (const conv of this.#active) conv.running?.abort();
+  }
 
   /**
    * 指示を受けて、起きたことを順に返す。

@@ -15,6 +15,7 @@ import { Conversation } from '../src/core/conversation.ts';
 import { Forum, requiresDeliberation } from '../src/harness/deliberation.ts';
 import type { RuleContext } from '../src/harness/rules.ts';
 import { Harness } from '../src/harness/harness.ts';
+import { HarnessMetrics } from '../src/harness/metrics.ts';
 import { readBeforeWrite } from '../src/harness/builtin-rules.ts';
 import { readFileTool, writeFileTool } from '../src/agent/tools/fs.ts';
 import { writeFile } from 'node:fs/promises';
@@ -52,7 +53,7 @@ describe('一つの作業場で、二つの会話を同時に動かす', { timeo
         for await (const ev of session.send(text, { conversation: conv })) seen.push(ev.type);
         return seen;
       };
-      const started = Date.now();
+      fake.resetMaxInFlight();
       const both = Promise.all([drain(a, 'りんごの話'), drain(b, 'みかんの話')]);
       await new Promise((r) => setTimeout(r, 100));
       // 既定でない会話が走っている間も「どれかが走っている」（暇な思考はこれで断る）。
@@ -61,8 +62,8 @@ describe('一つの作業場で、二つの会話を同時に動かす', { timeo
       const [sa, sb] = await both;
       assert.equal(session.anyBusy, false, '終わっても走っていることになっている');
       assert.ok(sa.includes('settled') && sb.includes('settled'), `終わっていない: ${sa.join(',')} | ${sb.join(',')}`);
-      // 同時に走った（順に走れば 800ms 以上かかる）。
-      assert.ok(Date.now() - started < 790, `順番に走っている: ${Date.now() - started}ms`);
+      // 同時に走った（モデルの口が二本同時に受けた）。時間で見ると負荷で揺れるので、重なりを数える。
+      assert.ok(fake.maxInFlight >= 2, `順番に走っている: 同時に受けたのは ${fake.maxInFlight} 本`);
       assert.match(texts(a), /りんご/);
       assert.doesNotMatch(texts(a), /みかん/, `A にみかんが混ざった: ${texts(a)}`);
       assert.match(texts(b), /みかん/);
@@ -125,6 +126,51 @@ describe('規則の積み重ねは会話ごと', () => {
     assert.equal(byB.isError, true, `A が読んだことで B の上書きが通った: ${byB.content}`);
     const byA = await write!.run({ path: 'a.txt', content: 'A\n' }, ctx(a));
     assert.equal(byA.isError, undefined, `自分で読んだのに通らない: ${byA.content}`);
+  });
+});
+
+describe('規則の数えは既定の会話の分だけ', () => {
+  test('数えない会話で規則が止めても、成績に数えない。数える会話なら数える', async () => {
+    const root = await tempDir('aas-conv-metrics-');
+    await writeFile(join(root, 'a.txt'), 'もと\n');
+    const metrics = new HarnessMetrics();
+    const harness = new Harness({ rules: [readBeforeWrite], metrics });
+    const [, write] = harness.wrapAll([readFileTool, writeFileTool], () => '');
+    const other = new Conversation();
+    const main = new Conversation();
+    main.counted = true;
+    const ctx = (conv: Conversation) => ({
+      root, signal: new AbortController().signal, approve: () => Promise.resolve(true as const), request: conv.request,
+    });
+    const denials = () => metrics.report(['read-before-write']).rules[0]!.denials;
+    harness.beginTask();
+    const byOther = await write!.run({ path: 'a.txt', content: 'x\n' }, ctx(other));
+    assert.equal(byOther.isError, true, '前提: 止められていない');
+    assert.equal(denials(), 0, 'ほかの会話で止めた回を数えた');
+    await write!.run({ path: 'a.txt', content: 'x\n' }, ctx(main));
+    assert.equal(denials(), 1, '既定の会話で止めた回を数えていない');
+  });
+});
+
+describe('止めるときは全部の会話を止める', { timeout: 30_000 }, () => {
+  test('abort は、既定でない会話が走っていても止める', async () => {
+    fake.setBehavior({ kind: 'echo', delayMs: 3000 });
+    const session = await open();
+    try {
+      const a = new Conversation();
+      let reason: string | undefined;
+      const run = (async () => {
+        for await (const ev of session.send('ゆっくり答えて', { conversation: a })) if (ev.type === 'settled') reason = ev.reason;
+      })();
+      await new Promise((r) => setTimeout(r, 200));
+      session.abort();
+      await run;
+      assert.notEqual(reason, 'completed', '止めたのに最後まで走った');
+      assert.equal(session.anyBusy, false);
+    } finally {
+      fake.setBehavior({ kind: 'echo', delayMs: 400 });
+      await session.close();
+    }
   });
 });
 

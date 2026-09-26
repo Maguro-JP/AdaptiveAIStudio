@@ -14,6 +14,11 @@ export interface RequestScope {
   readonly history: ToolCall[];
   /** 協議の場。依頼ごとに開き直す。 */
   readonly forum: Forum;
+  /**
+   * 規則の数え（metrics）に数えるか。数えは作業場で一つの「いまの依頼」を追っているので、
+   * 既定の会話の分だけ数える。ほかの会話の分を数えると、既定の会話の成績に混ざる。
+   */
+  counted(): boolean;
 }
 
 export interface ToolContext {

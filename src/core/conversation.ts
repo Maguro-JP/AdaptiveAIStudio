@@ -42,11 +42,15 @@ export class Conversation {
   /** この依頼で呼んだツール（規則が積み重ねを見る）。依頼ごとに空にする。 */
   readonly toolHistory: ToolCall[] = [];
 
+  /** 規則の数え（metrics）に数える会話か。作業場の既定の会話だけ true（`Session` が立てる）。 */
+  counted = false;
+
   /** ツールまで届ける、この会話の依頼の入れ物。 */
   readonly request: RequestScope = {
     instruction: () => this.instruction,
     history: this.toolHistory,
     forum: this.forum,
+    counted: () => this.counted,
   };
 
   /** 依頼を始める。依頼文を置き、規則の積み重ねと協議を切る（前の依頼の分で判じない）。 */
