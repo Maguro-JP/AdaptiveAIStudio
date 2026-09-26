@@ -24,6 +24,12 @@ const work = join(dir, 'work');
 await mkdir(work, { recursive: true });
 await writeFile(join(work, 'a.txt'), 'one\ntwo\n');
 await writeFile(join(work, 'bin.dat'), Buffer.from([0x47, 0x49, 0x46, 0x00, 0x01, 0x02]));
+// Shift_JIS の「あいう」。utf8 として読むと化ける。
+const SJIS = Buffer.from([0x82, 0xa0, 0x82, 0xa2, 0x82, 0xa4, 0x0a]);
+// 試験ごとに別のファイルにする（前の試験が壊すと、後ろが別の理由で落ちて原因を読み違える）。
+for (const name of ['sjis-open.txt', 'sjis-put.txt', 'sjis-revert.txt']) await writeFile(join(work, name), SJIS);
+// 8KB より先にだけ NUL がある文字のファイル。
+await writeFile(join(work, 'late-nul.txt'), Buffer.concat([Buffer.from('a'.repeat(9000)), Buffer.from([0]), Buffer.from('b\n')]));
 
 let base = '';
 let server: InstanceType<typeof UiServer>;
@@ -57,6 +63,22 @@ describe('開く', () => {
   });
   test('文字でないものは開かない（壊すだけ）', async () => {
     assert.equal((await get('/api/file?path=bin.dat')).status, 415);
+  });
+  test('**utf8 でないもの（Shift_JIS）も開かない。化けた字で開いて保存すると、全体が壊れる**', async () => {
+    const r = await get('/api/file?path=sjis-open.txt');
+    assert.equal(r.status, 415, `開いてしまった: ${await r.text()}`);
+    assert.match((await json(await get('/api/file?path=sjis-open.txt'))).error, /utf8/);
+  });
+  test('8KB より先にだけ NUL がある文字のファイルは、「utf8 でない」ではなく「文字のファイルでない」と言う', async () => {
+    const r = await get('/api/file?path=late-nul.txt');
+    assert.equal(r.status, 415);
+    const j = await json(r);
+    assert.match(j.error, /文字のファイルではない/, `理由が違う: ${j.error}`);
+  });
+  test('**utf8 でないファイルへの保存は断り、中身を変えない**', async () => {
+    const r = await put({ path: 'sjis-put.txt', content: 'あいう\n' });
+    assert.equal(r.status, 415, `保存してしまった: ${await r.text()}`);
+    assert.deepEqual(await readFile(join(work, 'sjis-put.txt')), SJIS, '中身が変わった');
   });
 });
 
@@ -144,6 +166,18 @@ describe('当てた変更を、塊ごと・行ごとに戻す', () => {
   });
   test('材料が足りなければ 400', async () => {
     assert.equal((await post('/api/revert', { path: 'a.txt' })).status, 400);
+  });
+  test('**utf8 でないファイルは、行ごとにも戻さない（化けた字で書き戻すと全体が壊れる）**', async () => {
+    const { unifiedDiff } = await import('../src/agent/diff.ts');
+    // 差分は文字の形で作れてしまう（化けた字どうしの差分）。それでも書き戻さない。
+    const shown = SJIS.toString('utf8');
+    const diff = unifiedDiff('sjis-revert.txt', `x\n`, shown);
+    const r = await post('/api/revert', { path: 'sjis-revert.txt', diff, picks: [{ hunk: 0 }] });
+    const said = await r.text();
+    // 落ちて止まるのではなく、utf8 でないと言って断る。
+    assert.equal(r.status, 415, `断っていない: ${r.status} ${said}`);
+    assert.match(said, /utf8/);
+    assert.deepEqual(await readFile(join(work, 'sjis-revert.txt')), SJIS, '中身が変わった');
   });
   test('前が utf8 で読めない中身だった差分は、当てずに断る（仮の一行がファイルに書かれる）', async () => {
     const { unifiedDiff } = await import('../src/agent/diff.ts');

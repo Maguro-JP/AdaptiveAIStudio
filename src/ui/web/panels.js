@@ -2957,8 +2957,10 @@ export const PANELS = {
           void (async () => {
             const r = await fetch(`/api/file?path=${encodeURIComponent(path)}`, { signal: AbortSignal.timeout(20000) })
               .catch(() => null);
-            const got = r && r.ok ? await r.json().catch(() => null) : null;
-            if (!got) { state.textContent = '読み直せませんでした'; return; }
+            const said = r ? await r.json().catch(() => null) : null;
+            // 断られたら、その理由を出す（utf8 でない形に書き換えられた等）。
+            if (!r || !r.ok || !said) { state.textContent = said?.error ?? '読み直せませんでした'; return; }
+            const got = said;
             takeOver(got.content, got.stamp);
           })();
         }],
