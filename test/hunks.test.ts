@@ -136,6 +136,8 @@ describe('当てたあとから、塊ごと・行ごとに戻す', () => {
     assert.equal(revertLines(after.replace('G2', 'changed'), diff, [{ hunk: 1 }]), undefined);
     assert.equal(revertLines(after, diff, [{ hunk: 5 }]), undefined);
     assert.equal(revertLines(after, diff, [{ hunk: 1, lines: [99] }]), undefined);
+    // 整数でない番号（画面以外の口から来る）は当てない。落ちもしない。
+    assert.equal(revertLines(after, diff, [{ hunk: 1, lines: [1.5] }]), undefined);
   });
 
   test('新しく作ったファイルを全部戻すと、空になる', () => {

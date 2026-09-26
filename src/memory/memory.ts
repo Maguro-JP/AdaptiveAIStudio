@@ -174,7 +174,10 @@ export class Memory {
   #entries: MemoryEntry[] = [];
   #seq = 0;
   #dirty = false;
-  /** 保存の列。二つの会話が同時に保存しても、同じファイルへ同時には書かない。 */
+  /**
+   * 保存の列。**同じインスタンスの中だけ**、同時に書かない。同じファイルへ別のインスタンスが書くと
+   * 互いの分を上書きし得るので、会話を分けるときは共有の作業場が一つの `Memory` を持つ（DECISIONS 09-26）。
+   */
   #saving: Promise<void> = Promise.resolve();
 
   constructor(path?: string, opts: { write?: MemoryWriter } = {}) {

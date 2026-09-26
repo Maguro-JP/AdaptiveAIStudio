@@ -898,9 +898,19 @@ export class Session {
        * 並列の担当の正しい仕事も一緒に戻る。何を戻したかを言い、次の依頼でやり直せる形にする。
        */
       let rolledBack: string[] | undefined;
-      if (verified === 'failed' && (this.config.harness ?? {}).rollbackOnGiveUp) {
+      // 止めた回は、確かめが途中で切れて「落ちた」に見えるだけ。落ちたとは言えないので戻さない。
+      if (verified === 'failed' && !ac.signal.aborted && (this.config.harness ?? {}).rollbackOnGiveUp) {
         const point = await this.undo.end();
-        const done = point ? await this.undo.restore(point.id) : undefined;
+        /*
+         * **いちばん新しい戻り先のときだけ当てる。**`restore` は選んだ戻り先より新しいものも全部当てる。
+         * 記録の保存先は一つで、別の Session や CLI が同じ保存先を使うと、この依頼の後に始まって閉じた
+         * 別の戻り先が在り得る。黙ってそれまで戻さない。戻さなかったことは言う。
+         */
+        const newest = point ? (await this.undo.list())[0]?.id === point.id : false;
+        if (point && !newest) {
+          yield { type: 'log', level: 'warn', text: '確かめて落ちましたが、この依頼の後に別の作業の戻り先ができているので、自動では戻していません（「戻す」から選んでください）' };
+        }
+        const done = point && newest ? await this.undo.restore(point.id) : undefined;
         const notRestored = [...new Set([...this.undo.peekSkipped(), ...(done?.failed ?? [])])].sort();
         rolledBack = done?.paths ?? [];
         if (rolledBack.length > 0 || notRestored.length > 0) {

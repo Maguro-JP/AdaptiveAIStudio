@@ -15,6 +15,7 @@ import { writeFile, readFile, mkdir, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
+import { UndoStore } from '../src/core/undo.ts';
 import { startFakeServer, type FakeServer } from './fake-server.ts';
 
 process.env.AAS_STATE_DIR = await tempDir('aas-plan-outside-state-');
@@ -155,6 +156,56 @@ describe('段取りで確かめて落ちたら、この依頼の変更を全部�
       // 戻した後に「戻す」を押しても、戻した姿を壊さない（この依頼の戻り先は使い切っている）。
       assert.ok(!(await session.undo.list()).some((p) => p.request.startsWith('note.txt を書き換えて') && p.paths.includes('made.txt')),
         'この依頼の戻り先が残っている');
+    } finally {
+      await session.close();
+    }
+  });
+
+  /** 確かめのコマンドを遅くして、確かめの最中に手を入れる。落ちるのは note.txt に「上書き」があるとき。 */
+  const SLOW_FAIL = `node -e "setTimeout(()=>process.exit(require('fs').readFileSync('note.txt','utf8').includes('上書き')?1:0),1500)"`;
+
+  test('確かめの途中で止めたら、落ちたとは言えないので戻さない', async () => {
+    const root = await workspace();
+    const session = await open(root, { verify: SLOW_FAIL, rollback: true });
+    try {
+      fake.setBehavior(steps);
+      const seen: string[] = [];
+      let verifying = 0;
+      for await (const ev of session.plan('note.txt を書き換えて')) {
+        seen.push(ev.type);
+        // 作業の前の確かめ（切り分け）と、終わりの確かめ。終わりの方で止める。
+        if (ev.type === 'verifying' && ++verifying >= 1) setTimeout(() => session.abort(), 200);
+      }
+      assert.ok(!seen.includes('rolledBack'), `止めたのに戻した: ${seen.join(',')}`);
+      assert.equal(await readFile(join(root, 'note.txt'), 'utf8'), '上書き\n');
+    } finally {
+      await session.close();
+    }
+  });
+
+  test('この依頼の後に別の戻り先ができていたら、自動では戻さずに言う（別の作業まで戻さない）', async () => {
+    const root = await workspace();
+    const session = await open(root, { verify: SLOW_FAIL, rollback: true });
+    try {
+      fake.setBehavior(steps);
+      const seen: string[] = [];
+      const logs: string[] = [];
+      for await (const ev of session.plan('note.txt を書き換えて')) {
+        seen.push(ev.type);
+        if (ev.type === 'log') logs.push(ev.text);
+        if (ev.type === 'verifying') {
+          // 同じ保存先を使う別の作業（別の Session や CLI）が、この依頼の後に戻り先を作って閉じた。
+          const other = new UndoStore(root, join(process.env.AAS_STATE_DIR!, 'undo'));
+          await writeFile(join(root, 'other.txt'), 'よそ\n');
+          await other.begin('別の作業', Date.now() + 1000);
+          other.capture('other.txt', undefined);
+          await other.end();
+        }
+      }
+      assert.ok(!seen.includes('rolledBack'), `別の戻り先があるのに戻した: ${seen.join(',')}`);
+      assert.ok(logs.some((t) => t.includes('自動では戻していません')), `戻さなかったと言っていない: ${logs.join(' / ')}`);
+      assert.equal(await readFile(join(root, 'note.txt'), 'utf8'), '上書き\n');
+      assert.equal(await exists(join(root, 'other.txt')), true, '別の作業のファイルまで消した');
     } finally {
       await session.close();
     }

@@ -135,7 +135,8 @@ export function revertLines(
   const reversed: string[] = [];
   for (const [i, asked] of [...byHunk.entries()].sort((a, b) => a[0] - b[0])) {
     const h = hunks[i]!;
-    if (asked !== undefined && [...asked].some((at) => at < 0 || at >= h.lines.length)) return undefined;
+    // 整数でない番号（画面以外の口から来る）も当てない。`lines[1.5]` は無く、先で落ちる。
+    if (asked !== undefined && [...asked].some((at) => !Number.isInteger(at) || at < 0 || at >= h.lines.length)) return undefined;
     const chosen = asked === undefined ? undefined : changeGroups(h.lines, asked);
     const lines: string[] = [];
     h.lines.forEach((line, at) => {
