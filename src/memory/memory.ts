@@ -29,7 +29,7 @@
  * 埋め込みも外部データベースも使わない。語の重なりと新しさと確認回数で十分に効く。
  * 動く条件を増やさないことも、止まらないための設計のうち。
  */
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { jstDate } from '../core/clock.ts';
 import { BUILTIN_LESSONS, lessonLine } from './builtin-lessons.ts';
@@ -153,14 +153,33 @@ export function normalizeTitle(title: string): string {
 
 const DAY = 86_400_000;
 
+/** 記憶のファイルへ書く手。試験で途中に割り込むために、別の手を渡せる。 */
+export type MemoryWriter = (path: string, body: string) => Promise<void>;
+
+/** 一時ファイルに書いてから置き換える。途中で落ちても、半分だけ書かれたファイルを残さない。 */
+const writeWhole: MemoryWriter = async (path, body) => {
+  const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+  try {
+    await writeFile(tmp, body, 'utf8');
+    await rename(tmp, path);
+  } catch (e) {
+    await unlink(tmp).catch(() => undefined);
+    throw e;
+  }
+};
+
 export class Memory {
   readonly #path?: string;
+  readonly #write: MemoryWriter;
   #entries: MemoryEntry[] = [];
   #seq = 0;
   #dirty = false;
+  /** 保存の列。二つの会話が同時に保存しても、同じファイルへ同時には書かない。 */
+  #saving: Promise<void> = Promise.resolve();
 
-  constructor(path?: string) {
+  constructor(path?: string, opts: { write?: MemoryWriter } = {}) {
     this.#path = path;
+    this.#write = opts.write ?? writeWhole;
   }
 
   get size(): number {
@@ -195,11 +214,30 @@ export class Memory {
     }
   }
 
-  async save(): Promise<void> {
+  /**
+   * 保存する。**呼ばれた順に一つずつ書く**（画面で二つの会話が同時に呼んでも重ならない）。
+   *
+   * `#dirty`（保存していない変更がある）は**書く前に**下ろす。書き終えてから下ろすと、書いている最中に
+   * 覚えた分まで「保存済み」になり、次の保存で書かれない。書くのに失敗したら `#dirty` を戻す。
+   */
+  save(): Promise<void> {
+    const run = this.#saving.then(() => this.#saveNow());
+    // 一度失敗しても、列を止めない（次の保存は走る）。失敗は呼んだ側へ返す。
+    this.#saving = run.catch(() => undefined);
+    return run;
+  }
+
+  async #saveNow(): Promise<void> {
     if (!this.#path || !this.#dirty) return;
-    await mkdir(dirname(this.#path), { recursive: true });
-    await writeFile(this.#path, this.#entries.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8');
     this.#dirty = false;
+    const body = this.#entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    try {
+      await mkdir(dirname(this.#path), { recursive: true });
+      await this.#write(this.#path, body);
+    } catch (e) {
+      this.#dirty = true;
+      throw e;
+    }
   }
 
   /**
