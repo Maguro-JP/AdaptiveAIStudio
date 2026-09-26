@@ -844,6 +844,11 @@ export const PANELS = {
       else if (v.type === 'work') toolEnd(v.text.split(' ')[0], v.ok, v.text, v.taskId);
       else if (v.type === 'diff') showDiff(v);
       else if (v.type === 'verifying') note('dim', `検査: ${v.command}`);
+      else if (v.type === 'rolledBack') {
+        // 確かめて落ちたので戻した。戻せなかった道を黙らない。
+        note('warn', `確かめて落ちたので、この依頼の変更を巻き戻しました: ${v.paths.join(', ') || 'なし'}`
+          + (v.notRestored?.length ? `（戻せなかった: ${v.notRestored.join(', ')}）` : ''));
+      }
       else if (v.type === 'recalled') {
         const c = card('◔', '前の作業から引き継いだこと', '', 'recall');
         c.body.append(el('pre', 'tool-out', v.text));

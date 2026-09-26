@@ -290,3 +290,26 @@ describe('二進のファイルを戻す', () => {
     assert.equal(await stat(join(root, 'made.txt')).then(() => true, () => false), false, '前は無かったのに残っている');
   });
 });
+
+describe('戻せなかった道を言う', () => {
+  test('ファイルが中身の在るフォルダに入れ替わっていれば、戻せなかった道として返し、戻した道には入れない', async () => {
+    const { root, undo } = await store();
+    await writeFile(join(root, 'a.txt'), 'a\n', 'utf8');
+    await writeFile(join(root, 'b.txt'), 'b\n', 'utf8');
+    await undo.begin('書き換える');
+    await edit(root, undo, 'a.txt', 'a2\n');
+    await edit(root, undo, 'b.txt', 'b2\n');
+    const point = await undo.end();
+    assert.ok(point);
+    // 外で b.txt がフォルダになり、中にファイルが置かれた。
+    const { rm } = await import('node:fs/promises');
+    await rm(join(root, 'b.txt'));
+    await mkdir(join(root, 'b.txt'));
+    await writeFile(join(root, 'b.txt', 'inner'), 'x', 'utf8');
+    const done = await undo.restore(point.id);
+    assert.deepEqual(done?.paths, ['a.txt']);
+    assert.deepEqual(done?.failed, ['b.txt']);
+    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'a\n');
+  });
+});
+
