@@ -174,3 +174,42 @@ describe('止めるときは全部の会話を止める', { timeout: 30_000 }, (
   });
 });
 
+describe('承認に添える依頼の札は、会話と依頼ごと', { timeout: 30_000 }, () => {
+  test('別の会話の依頼とも、同じ会話の次の依頼とも、札が違う（「訊かない」を持ち越さない）', async () => {
+    fake.setBehavior({ kind: 'steps', calls: [{ name: 'write_file', args: { path: 'n.txt', content: 'x\n' } }], then: '書きました。' });
+    const root = join(await tempDir('aas-conv-approve-'), 'project');
+    await mkdir(root, { recursive: true });
+    const keys: string[] = [];
+    const session = await Session.create({
+      providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
+      candidates: ['local:m'],
+      runtime: { kind: 'none' },
+      agent: { root, approval: 'ask', verify: { enabled: false }, maxTurns: 3 },
+      initiative: { enabled: false },
+    } as never, {
+      approve: (_req: unknown, meta?: { requestKey: string }) => { keys.push(meta?.requestKey ?? '(無し)'); return Promise.resolve(true); },
+    });
+    try {
+      const a = new Conversation();
+      const b = new Conversation();
+      // 送りごとに新しいファイルを作らせる（在るファイルは「読んでから書く」規則で止まり、承認まで届かない）。
+      // 偽のモデルは、会話に在るツールの結果の数で何手目かを数える。同じ会話の二つ目の依頼では、前の依頼の分だけ手前を埋める。
+      const make = async (conv: Conversation, name: string) => {
+        const before = conv.history.filter((m) => m.role === 'tool').length;
+        const pad = Array.from({ length: before }, () => ({ name: 'list_files', args: {} }));
+        fake.setBehavior({ kind: 'steps', calls: [...pad, { name: 'write_file', args: { path: name, content: 'x\n' } }], then: '書きました。' });
+        for await (const _ of session.send(`${name} を作って`, { conversation: conv })) { /* 流す */ }
+      };
+      await make(a, 'n1.txt');
+      await make(b, 'n2.txt');
+      await make(a, 'n3.txt');
+      assert.equal(keys.length, 3, `承認が訊かれた回数: ${JSON.stringify(keys)}`);
+      assert.equal(new Set(keys).size, 3, `札が重なった: ${JSON.stringify(keys)}`);
+      assert.ok(!keys.includes('(無し)'), '札を添えていない');
+    } finally {
+      fake.setBehavior({ kind: 'echo', delayMs: 400 });
+      await session.close();
+    }
+  });
+});
+

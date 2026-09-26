@@ -53,8 +53,20 @@ export class Conversation {
     counted: () => this.counted,
   };
 
+  /** 会話を見分ける札。承認の「この依頼のあいだは訊かない」を、会話と依頼の組で覚えるのに使う。 */
+  readonly key = `c${Math.random().toString(36).slice(2, 10)}`;
+  /** この会話で何件目の依頼か。 */
+  requestSeq = 0;
+
+  /** いまの依頼を見分ける札（会話と依頼の番号の組）。別の会話の依頼と取り違えない。 */
+  get requestKey(): string { return `${this.key}:${this.requestSeq}`; }
+
+  /** 依頼の番号を進める（段取りのように、依頼文や協議を切らずに番号だけ進めたいとき）。 */
+  nextRequest(): void { this.requestSeq += 1; }
+
   /** 依頼を始める。依頼文を置き、規則の積み重ねと協議を切る（前の依頼の分で判じない）。 */
   beginRequest(instruction: string): void {
+    this.nextRequest();
     this.instruction = instruction;
     this.toolHistory.length = 0;
     this.forum.clear();

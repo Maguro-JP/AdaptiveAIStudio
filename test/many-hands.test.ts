@@ -4,7 +4,10 @@
  * 動いている間は別の会話へ切り替えられず（「終わってから」と断っていた）、
  * 送ったものは見ている会話に関係なく一つの流れに積まれていた。
  * 見ている会話・本体に載っている会話・動いている会話を分け、動いている間も
- * 切り替えられ、別の会話への依頼も積めて、答えは頼んだ会話に残る。
+ * 切り替えられ、答えは頼んだ会話に残る。
+ *
+ * 別の会話への依頼は、順番待ちに積まずに**並べて走らせる**（DECISIONS 09-26 の 2d）。
+ * 同じ会話への二つ目は、今までどおり順番待ち（`test/e2e-send.test.ts`）。
  */
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -49,7 +52,8 @@ const get = (p: string) => fetch(base + p);
 const messagesOf = async (id: string) => (await json(await get(`/api/conversations/messages?id=${id}`))).messages as { role: string; content: string }[];
 
 describe('動いている間も、別の会話が持てる', () => {
-  test('A を送って動いている間に、トップへ戻って B を送り、A を見に戻れる。答えはそれぞれの会話に残る', async () => {
+  test('A を送って動いている間に、トップへ戻って B を送ると並べて走り、A を見に戻れる。答えはそれぞれの会話に残る', async () => {
+    fake.resetMaxInFlight();
     // 出来事を集める（会話の名前が添えてあるか見る）。
     const seen: { type: string; conversationId?: string; event?: { type?: string } }[] = [];
     const ac = new AbortController();
@@ -77,9 +81,10 @@ describe('動いている間も、別の会話が持てる', () => {
     assert.equal(top.status, 200, topBody);
     assert.equal(JSON.parse(topBody).running, idA, '動いている会話を言っていない');
 
-    // B を送ると、新しい会話に積まれる。
+    // B を送ると、新しい会話で**すぐ走る**（順番待ちに積まない）。
     const b = await json(await post('/api/send', { text: 'B の依頼' }));
-    assert.equal(typeof b.queued, 'number', `積まれていない: ${JSON.stringify(b)}`);
+    assert.equal(b.accepted, true, `B が走らずに積まれた: ${JSON.stringify(b)}`);
+    assert.equal(b.queued, undefined, `B が順番待ちに積まれた: ${JSON.stringify(b)}`);
     assert.ok(b.conversationId && b.conversationId !== idA, 'B が A と同じ会話になっている');
     const idB = b.conversationId as string;
 
@@ -100,8 +105,76 @@ describe('動いている間も、別の会話が持てる', () => {
     assert.ok(!ma.some((m) => m.content.includes('B の依頼')), 'A に B が混ざっている');
     assert.ok(!mb.some((m) => m.content.includes('A の依頼')), 'B に A が混ざっている');
 
-    // 出来事には、どの会話のものかが添えてある。
+    // 並べて走った（モデルの口が同時に二本受けた）。
+    assert.ok(fake.maxInFlight >= 2, `順番に走った: 同時に受けたのは ${fake.maxInFlight} 本`);
+    // 出来事には、どの会話のものかが添えてある（並べて走るので、順は問わない）。
     const tagged = seen.filter((e) => e.type === 'session' && e.event?.type === 'settled').map((e) => e.conversationId);
-    assert.deepEqual(tagged, [idA, idB], `終わりの出来事に会話の名前が無い／順が違う: ${JSON.stringify(tagged)}`);
+    assert.deepEqual([...tagged].sort(), [idA, idB].sort(), `終わりの出来事に会話の名前が無い: ${JSON.stringify(tagged)}`);
+  });
+
+  test('横で走っている会話への二つ目は順番待ちに積み、その会話は走っている間は消せない', async () => {
+    // A を本体で走らせ、B を横で走らせる。
+    const a = await json(await post('/api/send', { text: 'A2 の依頼' }));
+    assert.equal(a.accepted, true, JSON.stringify(a));
+    await post('/api/conversations');
+    const b = await json(await post('/api/send', { text: 'B2 の依頼' }));
+    assert.equal(b.accepted, true, `B が横で走らない: ${JSON.stringify(b)}`);
+    const idB = b.conversationId as string;
+    // B を見に行って、B へ二つ目を送る。
+    await post('/api/conversations/select', { id: idB });
+    const b2 = await json(await post('/api/send', { text: 'B2 の二つ目' }));
+    assert.equal(typeof b2.queued, 'number', `横で走っている会話への二つ目を積まずに走らせた: ${JSON.stringify(b2)}`);
+    assert.equal(b2.conversationId, idB);
+    // 走っている間は消せない。
+    const del = await fetch(`${base}/api/conversations?id=${idB}`, { method: 'DELETE' });
+    assert.equal(del.status, 409, '横で走っている会話を消せた');
+    // 最後には、B に二つとも答えが残る（順番待ちが流れる）。
+    await until(async () => (await messagesOf(idB)).filter((m) => m.role === 'assistant').length >= 2,
+      'B の二つ目も答えが残る', { timeoutMs: 30_000, everyMs: 100 });
+    const mb = await messagesOf(idB);
+    assert.ok(mb.some((m) => m.content.includes('B2 の二つ目')), `二つ目が B に無い: ${JSON.stringify(mb)}`);
+    assert.ok(!mb.some((m) => m.content.includes('A2 の依頼')), 'B に A が混ざった');
+    // 二つ目は、B の一つ目のやりとりを踏まえて走った（横の走者が残してから流れた）。
+    // 横で走っている間に本体で流すと、一つ目の答えを知らないまま走る。
+    const asked = fake.bodies.find((body) => {
+      const ms = (body as { messages?: { role?: string; content?: unknown }[] }).messages ?? [];
+      const last = [...ms].reverse().find((m) => m.role === 'user');
+      return typeof last?.content === 'string' && last.content.includes('B2 の二つ目');
+    }) as { messages: { content?: unknown }[] } | undefined;
+    assert.ok(asked, '二つ目の依頼がモデルに届いていない');
+    assert.ok(JSON.stringify(asked.messages).includes('B2 の依頼'), '二つ目が、B の一つ目を知らないまま走った');
+  });
+
+  test('順番待ちに同じ会話の分があれば、横が空いても後ろに並ぶ（会話の中で順番を入れ替えない）', async () => {
+    // X は長く、W は短く。W が終わって横が空いても、X は本体でまだ走っている形を作る。
+    fake.setBehavior({ kind: 'echo', delayMs: 300, delayFor: (asked) => (asked.includes('X3') ? 4000 : undefined) });
+    try {
+      const x = await json(await post('/api/send', { text: 'X3 の依頼' }));
+      assert.equal(x.accepted, true, JSON.stringify(x));
+      await post('/api/conversations');
+      const w = await json(await post('/api/send', { text: 'W3 の依頼' }));
+      assert.equal(w.accepted, true, `W が横で走らない: ${JSON.stringify(w)}`);
+      const idW = w.conversationId as string;
+      await post('/api/conversations');
+      // 横が塞がっているので Y の一つ目は積まれる。
+      const y1 = await json(await post('/api/send', { text: 'Y3 の一つ目' }));
+      assert.equal(typeof y1.queued, 'number', `Y の一つ目が積まれない: ${JSON.stringify(y1)}`);
+      const idY = y1.conversationId as string;
+      // W が終わって横が空くのを待つ（X はまだ本体で走っている）。
+      await until(async () => (await messagesOf(idW)).some((m) => m.role === 'assistant'), 'W が終わる', { timeoutMs: 10_000, everyMs: 50 });
+      // Y を見て二つ目を送る。一つ目が積まれたままなので、横が空いていても後ろに並ぶ。
+      await post('/api/conversations/select', { id: idY });
+      const y2 = await json(await post('/api/send', { text: 'Y3 の二つ目' }));
+      assert.equal(typeof y2.queued, 'number', `Y の二つ目が一つ目を追い越して走った: ${JSON.stringify(y2)}`);
+      await until(async () => (await messagesOf(idY)).filter((m) => m.role === 'assistant').length >= 2,
+        'Y の二つとも答えが残る', { timeoutMs: 30_000, everyMs: 100 });
+      const asked = (await messagesOf(idY)).filter((m) => m.role === 'user').map((m) => m.content);
+      const first = asked.findIndex((t) => t.includes('Y3 の一つ目'));
+      const second = asked.findIndex((t) => t.includes('Y3 の二つ目'));
+      assert.ok(first >= 0 && second > first, `Y の中で順番が入れ替わった: ${JSON.stringify(asked)}`);
+    } finally {
+      fake.setBehavior({ kind: 'echo', delayMs: 1200 });
+    }
   });
 });
+

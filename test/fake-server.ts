@@ -9,7 +9,11 @@ export type Behavior =
    * どの会話への答えかを見分けたいとき（手が一つで口が複数）に使う。
    * 指摘かどうかの問いには NONE と即答する。
    */
-  | { kind: 'echo'; delayMs?: number; /** 一文字ずつ、この間隔で流す（途中までを見る試験のため） */ trickleMs?: number }
+  | {
+    kind: 'echo'; delayMs?: number; /** 一文字ずつ、この間隔で流す（途中までを見る試験のため） */ trickleMs?: number;
+    /** 依頼の文ごとに待ち時間を変える（並べて走る会話の終わる順を決める試験のため）。返さなければ delayMs。 */
+    delayFor?: (asked: string) => number | undefined;
+  }
   /** 最初は道具を呼び、道具の結果が履歴に載って戻ってきたら then を答える。 */
   | { kind: 'toolcall'; name: string; args: Record<string, unknown>; then: string }
   /**
@@ -144,7 +148,7 @@ export async function startFakeServer(initial: Behavior): Promise<FakeServer> {
       const asked = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
       const judge = /指摘・不満・注意かどうか|CODE:/.test(asked);
       const text = judge ? 'NONE' : `答え: ${asked.trim().split('\n').pop() ?? ''}`;
-      const wait = judge ? 0 : (behavior.delayMs ?? 0);
+      const wait = judge ? 0 : (behavior.delayFor?.(asked) ?? behavior.delayMs ?? 0);
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       const finish = () => {
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
