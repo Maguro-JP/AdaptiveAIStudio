@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs';
 /** 一行ずつ読む。壊れた行は飛ばす（そこで全部を止めない）。 */
 export function parseEnvFile(text: string): Record<string, string> {
   const out: Record<string, string> = {};
+  // 先頭の BOM（古いメモ帳の utf8 保存）は、下の trim() が空白として外す。
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith('#')) continue;
@@ -124,7 +125,19 @@ export async function writeEnvValue(path: string, key: string, value: string): P
   const { readFile, writeFile, mkdir, chmod } = await import('node:fs/promises');
   const { dirname } = await import('node:path');
   await mkdir(dirname(path), { recursive: true });
-  const before = await readFile(path, 'utf8').catch(() => '');
+  /*
+   * バイト列で読む。utf8 でないもの（Shift_JIS の注釈）を文字として読んで書き戻すと、全体が化ける。
+   * 先頭の BOM と行末（CRLF）は、読んだ形のまま書き戻す。
+   */
+  const bytes = await readFile(path).catch(() => Buffer.alloc(0));
+  const { contentOf } = await import('../harness/put-back.ts');
+  const decoded = contentOf(bytes);
+  if (typeof decoded !== 'string') {
+    throw new Error(`${path} は utf8 ではないので書き換えません（化けるため）。utf8 で保存し直してから、もう一度入れてください`);
+  }
+  const bom = decoded.startsWith('\uFEFF') ? '\uFEFF' : '';
+  const before = decoded.slice(bom.length);
+  const eol = before.includes('\r\n') ? '\r\n' : '\n';
   const lines = before.split(/\r?\n/);
   const line = `${key}=${value}`;
   let replaced = false;
@@ -136,13 +149,11 @@ export async function writeEnvValue(path: string, key: string, value: string): P
     replaced = true;
     return line;
   });
-  if (!replaced) {
-    // 末尾の空行を増やさない。
-    while (after.length > 0 && after[after.length - 1]!.trim() === '') after.pop();
-    after.push(line);
-  }
+  // 末尾の空行を増やさない（書き換えるたびに一行ずつ増えていた）。
+  while (after.length > 0 && after[after.length - 1]!.trim() === '') after.pop();
+  if (!replaced) after.push(line);
   // 作るときの権限。既に在るファイルには効かないので、下で付け直す。
-  await writeFile(path, `${after.filter((l, i) => !(l === '' && i === after.length)).join('\n')}\n`, { encoding: 'utf8', mode: 0o600 });
+  await writeFile(path, `${bom}${after.join(eol)}${eol}`, { encoding: 'utf8', mode: 0o600 });
   await chmod(path, 0o600).catch(() => { /* Windows では効かない。落とさない */ });
   return key;
 }
