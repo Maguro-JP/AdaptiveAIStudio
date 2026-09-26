@@ -12,6 +12,7 @@
 import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, readFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { wireTeam } from '../src/core/team-setup.ts';
@@ -157,6 +158,56 @@ describe('team は、戻り先を残す', () => {
  * 絞るだけでは足りない。**絞ったうえで規則の手前で止まる**ところまで見る
  * （素のツールを渡せば絞りは通るが、守りが全部抜ける）。
  */
+function git(cwd: string, ...args: string[]): void {
+  execFileSync('git', args, { cwd, stdio: 'ignore' });
+}
+
+/** git の管理下の作業場（外のツールの前後比べは git の記録で見る）。 */
+async function repo(files: Record<string, string>): Promise<string> {
+  const root = await place();
+  for (const [name, body] of Object.entries(files)) await writeFile(join(root, name), body);
+  git(root, 'init', '-q');
+  git(root, 'config', 'core.autocrlf', 'false');
+  git(root, 'add', '-A');
+  git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+  return root;
+}
+
+describe('team は、run_command が変えた分も戻り先に載せる', () => {
+  test('**書くツールを通らない書き換え（run_command）も、終わりの前後比べで戻せる**', async () => {
+    const root = await repo({ 'a.txt': 'もと\n' });
+    const wired = await wireTeam(DEFAULT_CONFIG, root);
+    // run_command が書き換えた形（書くツールを通らないので、書く手前の記録は取られない）。
+    await writeFile(join(root, 'a.txt'), 'コマンドが書いた\n');
+    const { point, unrecorded } = await wired.finish();
+    assert.ok(point, 'run_command の分が戻り先に載っていない');
+    assert.deepEqual(unrecorded, []);
+    await wired.undo.restore(point.id);
+    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'もと\n');
+  });
+
+  test('run_command の後に書くツールで書いても、依頼の前の姿へ戻す（途中の姿に戻さない）', async () => {
+    const root = await repo({ 'a.txt': 'もと\n' });
+    const wired = await wireTeam(DEFAULT_CONFIG, root);
+    await writeFile(join(root, 'a.txt'), '途中\n');
+    const tools = wired.toolsFor(item('t1'));
+    await named(tools, 'read_file').run({ path: 'a.txt' }, ctx(root, wired.beforeWrite));
+    const w = await named(tools, 'write_file').run({ path: 'a.txt', content: '最後\n' }, ctx(root, wired.beforeWrite));
+    assert.equal(w.isError, undefined, w.content);
+    const { point } = await wired.finish();
+    assert.ok(point);
+    await wired.undo.restore(point.id);
+    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'もと\n', '途中の姿に戻した');
+  });
+
+  test('何も変えなければ、戻り先は作らない（対）', async () => {
+    const root = await repo({ 'a.txt': 'もと\n' });
+    const wired = await wireTeam(DEFAULT_CONFIG, root);
+    const { point } = await wired.finish();
+    assert.equal(point, undefined);
+  });
+});
+
 describe('team は、役職で絞る', () => {
   // 組み込みの役職を使う。**実際に配られるものを見る。**
   //   reviewer  read だけ

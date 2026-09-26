@@ -169,9 +169,12 @@ async function main(): Promise<void> {
   const outcomes = next.value;
   const done = [...outcomes.values()].filter((o) => o.state === 'done').length;
   console.log(`\n完了 ${done}/${outcomes.size}`);
-  // 控えを閉じる。閉じないと、次の一回ぶんと混ざって戻しすぎる。
-  const back = await wired.undo.end();
+  // 控えを閉じる。閉じないと、次の一回ぶんと混ざって戻しすぎる。run_command の分もここで載せる。
+  const { point: back, unrecorded } = await wired.finish();
   if (back) console.log(c.dim(`戻り先: ${back.id}（aas undo で戻せます）`));
+  if (unrecorded.length > 0) {
+    console.log(c.yellow(`前の中身を記録できず、戻せないファイル: ${unrecorded.join(', ')}`));
+  }
   // 起こした子（この中で読む道）を残さない。残すと次の起動で口が埋まる。
   await runtime.shutdown().catch(() => undefined);
   rl.close();

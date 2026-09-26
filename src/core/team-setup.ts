@@ -11,7 +11,8 @@ import type { Tool } from '../agent/tools/types.ts';
 import type { WorkItem } from '../agent/team.ts';
 import type { Harness, HarnessDecision } from '../harness/harness.ts';
 import { buildHarness } from './harness-setup.ts';
-import { UndoStore } from './undo.ts';
+import { UndoStore, type UndoPoint } from './undo.ts';
+import { OutsideChanges } from '../agent/outside-changes.ts';
 import { stateDir } from './home.ts';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool, editFileTool } from '../agent/tools/fs.ts';
 import { findCodeTool, findSymbolTool } from '../agent/tools/find.ts';
@@ -39,8 +40,13 @@ export interface TeamWiring {
   assign(roleId: string, item: WorkItem): { system: string; tools: Tool[] } | undefined;
   /** 書き換える直前の中身を控える。**戻せるようにするため。** */
   beforeWrite(path: string, previous: string | Buffer | undefined): void;
-  /** 一回ぶんの戻り先。終わったら `end()` で閉じる。 */
+  /** 一回ぶんの戻り先。終わったら `finish()` で閉じる（`end()` を直に呼ぶと run_command の分が載らない）。 */
   undo: UndoStore;
+  /**
+   * 終わりに呼ぶ。作業場を始めの記録と比べ、書くツールを通らずに変わった分（run_command）も
+   * 戻り先に載せてから閉じる。`unrecorded` は、変わったが前の中身を記録できなかった道（戻せない）。
+   */
+  finish(): Promise<{ point: UndoPoint | undefined; unrecorded: string[] }>;
   harness: Harness;
   /** 素のツール。規則を通らない。画面に出す数え上げ用。 */
   bare: Tool[];
@@ -82,6 +88,13 @@ export async function wireTeam(
   const roles = new RoleRegistry(config.roles ?? []);
   const undo = new UndoStore(root, join(stateDir(), 'undo'));
   await undo.begin(`team ${root}`, now);
+  /*
+   * **run_command が変えた分も戻り先に載せる。**書くツールは書く手前で記録を取るが、run_command は
+   * どこを書くか分からないので記録を取らない。段取り（`Session.plan`）と同じく、始めに作業場の記録を取り、
+   * 終わりに前後を比べる。前後比べで分かった「前」は書く手前の記録より古い（依頼の前の姿）ので置き換える。
+   */
+  const outside = new OutsideChanges(root);
+  await outside.before();
   return {
     // 履歴は依頼ごとに分ける。一つを使い回すと、読んでから書く規則が
     // **別の担当が読んだこと**で通ってしまう（`Harness.forTask()`）。
@@ -104,6 +117,12 @@ export async function wireTeam(
     },
     beforeWrite: (path, previous) => undo.capture(path, previous),
     undo,
+    finish: async () => {
+      const found = await outside.after().catch(() => ({ changes: [], unrecorded: [] as string[] }));
+      for (const c of found.changes) undo.replace(c.path, c.previous);
+      for (const path of found.unrecorded) undo.forget(path);
+      return { point: await undo.end(), unrecorded: found.unrecorded };
+    },
     harness,
     bare,
   };
