@@ -59,7 +59,8 @@ export function createDeliberateTool(forum: Forum): Tool {
         return fail('協議は通りませんでした。この変更は行わず、別の手を考えてください。');
       }
 
-      forum.add({ ...(draft as Proposal), at: Date.now() });
+      // 会話ごとの協議の場が渡されていれば、そちらへ（別の会話の協議で、この会話の変更を通させない）。
+      (ctx.request?.forum ?? forum).add({ ...(draft as Proposal), at: Date.now() });
       return ok(`協議を記録しました。対象への変更を進められます。\n${summary}`);
     },
   };

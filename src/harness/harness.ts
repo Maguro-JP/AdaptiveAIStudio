@@ -94,10 +94,13 @@ export class Harness {
       schema: tool.schema,
       run: async (args, toolCtx: ToolContext): Promise<ToolResult> => {
         const call: ToolCall = { id: '', name: tool.schema.name, args };
+        // 会話ごとの入れ物が渡されていれば、そちらの積み重ねと依頼文で判じる（別の会話の読み書きを数えない）。
+        const history = toolCtx.request?.history ?? this.#history;
         const ctx: RuleContext = {
           root: toolCtx.root,
-          history: this.#history,
-          instruction: instruction(),
+          history,
+          instruction: toolCtx.request ? toolCtx.request.instruction() : instruction(),
+          ...(toolCtx.request ? { forum: toolCtx.request.forum } : {}),
           signal: toolCtx.signal,
         };
 
@@ -125,7 +128,7 @@ export class Harness {
         }
 
         const result = await tool.run(args, toolCtx);
-        this.#history.push(call);
+        history.push(call);
 
         // 実行後の判定
         let content = result.content;

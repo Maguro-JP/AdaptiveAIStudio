@@ -7,7 +7,9 @@
  * ここに置くのは、会話を切り替えたら入れ替わるものだけ。二つの会話が同じものを書き換えると、
  * 履歴や差分が混ざる。
  */
-import type { ProviderMessage } from '../providers/contract.ts';
+import type { ProviderMessage, ToolCall } from '../providers/contract.ts';
+import type { RequestScope } from '../agent/tools/types.ts';
+import { Forum } from '../harness/deliberation.ts';
 
 export interface LastTurn {
   instruction: string;
@@ -34,6 +36,25 @@ export class Conversation {
   lastTurn?: LastTurn;
   /** 書き込みの直前に作られた差分。承認の問い合わせを通り道にして拾う。 */
   readonly diffs = new Map<string, { diff: string; created: boolean }>();
+
+  /** この会話の協議の場。依頼ごとに開き直す。 */
+  readonly forum = new Forum();
+  /** この依頼で呼んだツール（規則が積み重ねを見る）。依頼ごとに空にする。 */
+  readonly toolHistory: ToolCall[] = [];
+
+  /** ツールまで届ける、この会話の依頼の入れ物。 */
+  readonly request: RequestScope = {
+    instruction: () => this.instruction,
+    history: this.toolHistory,
+    forum: this.forum,
+  };
+
+  /** 依頼を始める。依頼文を置き、規則の積み重ねと協議を切る（前の依頼の分で判じない）。 */
+  beginRequest(instruction: string): void {
+    this.instruction = instruction;
+    this.toolHistory.length = 0;
+    this.forum.clear();
+  }
 
   get busy(): boolean { return this.running !== undefined; }
 

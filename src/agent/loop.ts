@@ -10,7 +10,7 @@
 import type { Priority } from '../providers/contract.ts';
 import type { ProviderMessage, ToolCall } from '../providers/contract.ts';
 import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
-import type { Tool, ToolContext, ApprovalRequest, ApprovalAnswer } from './tools/types.ts';
+import type { Tool, ToolContext, ApprovalRequest, ApprovalAnswer, RequestScope } from './tools/types.ts';
 import { ToolTextFilter } from './tool-text.ts';
 import { DoneMark, DONE_MARK } from './done.ts';
 import { fitToWindow, tokenBudget, trimSchemas, TOOL_SHARE, type Count } from './window.ts';
@@ -70,6 +70,8 @@ export interface AgentOptions {
   beforeWrite?(relPath: string, previous: string | Buffer | undefined): void;
   /** 書けたときの、実際に書いた分の差分。画面の札をこれで描く。 */
   wrote?(relPath: string, diff: string, created: boolean): void;
+  /** 依頼ごとの入れ物（会話ごとの規則の履歴・依頼文・協議）。ツールへそのまま渡す。 */
+  request?: RequestScope;
 }
 
 export class Agent {
@@ -107,6 +109,7 @@ export class Agent {
       approve: this.#opts.approve,
       ...(this.#opts.beforeWrite ? { beforeWrite: this.#opts.beforeWrite } : {}),
       ...(this.#opts.wrote ? { wrote: this.#opts.wrote } : {}),
+      ...(this.#opts.request ? { request: this.#opts.request } : {}),
       // 道具の返しも窓に収める。読んだ時点で収めないと、刈る段では
       // 中身がほとんど残らない（直近の結果は 1200 字まで削られる）。
       ...(this.#opts.contextTokens !== undefined ? { contextTokens: this.#opts.contextTokens } : {}),

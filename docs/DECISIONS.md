@@ -8380,6 +8380,16 @@ Shift_JIS の文書に `edit_file` を当てると、直した一行のほかの
 - 2c `send(text, opts, conv)`。harness の依頼ごとの履歴・協議（Forum）・`#holder` を会話ごとにする
   （道具は `create()` で一度だけ包まれていて、holder と forum に結びついている。`AsyncLocalStorage` で会話を引く）。
   `requestSeq` を会話ごとに。`think()` は走っている会話が一つも無いときだけ
+  - （09-26 入れた）`send(text, { conversation })`。会話を渡せば、履歴・差分・思い出した記憶・前回の要約・
+    規則の積み重ね・協議がその会話のものになる。道具へは `ToolContext.request`（依頼文・規則の積み重ね・協議）で
+    届ける。**`AsyncLocalStorage` は使わない。**送り口は非同期の generator で、画面が外から回すので、文脈が
+    ツールまで確実には伝わらない。明示の引数で渡す。規則の文脈（`RuleContext.forum`）にも協議の場を載せ、
+    「広い変更は協議を通す」規則はそれを見る（別の会話の協議で通させない）。共有の入れ物（道具を包んだときの
+    依頼文・協議・規則の積み重ねと数え）に触るのは既定の会話だけ。ほかの会話の規則の数え（metrics）は 2e まで
+    数えない。暇な思考は、どれかの会話が走っていれば始めない（`anyBusy`）。
+    試験: `test/conversations-parallel.test.ts`（同時に送って履歴が混ざらない・同じ会話への二つ目は断る・
+    協議は会話ごと・規則の積み重ねは会話ごと）。会話を無視する・規則が共有の協議しか見ない・規則が共有の
+    積み重ねしか見ない、をそれぞれわざと入れて落ちることを見た
 - 2d 画面の本体を会話ごとの表に（`#loadedId` `#saved` `#inFlight` `#editorNow` `#runningId` `#queue`）。
   `/api/send` は**その会話が**動いているときだけ順番待ちに積む。`/api/abort` は会話を受ける
 - 2e metrics を依頼ごとの札で数える（並行した `endTask` の取り違えを防ぐ）
