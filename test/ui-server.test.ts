@@ -789,6 +789,19 @@ describe('/api/search', () => {
     } finally { await mine.stop(); }
   });
 
+  test('二進のファイルは中を探さず、見ていない数を返す', async () => {
+    const { work, mine, at } = await place();
+    try {
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(join(work, 'src', 'c.bin'), Buffer.concat([Buffer.from('answer '), Buffer.from([0, 0xff])]));
+      const body = await json(await fetch(`${at}/api/search?q=${encodeURIComponent('answer')}`)) as {
+        hits: Array<{ path: string }>; unreadable?: number;
+      };
+      assert.ok(!body.hits.some((h) => h.path === 'src/c.bin'), `二進の中を当たりとして返した: ${JSON.stringify(body.hits)}`);
+      assert.equal(body.unreadable, 1, '見ていない数を返していない');
+    } finally { await mine.stop(); }
+  });
+
   test('場所で絞れる', async () => {
     const { mine, at } = await place();
     try {

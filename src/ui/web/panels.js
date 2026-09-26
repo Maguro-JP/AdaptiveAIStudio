@@ -1653,6 +1653,7 @@ export const PANELS = {
       if (j.capped) notes.push('打ち切りました（これで全部ではありません）');
       if (j.walkCapped) notes.push('ファイルが多いので、途中までしか見ていません');
       if (j.tooBig > 0) notes.push(`大きすぎて開いていないファイルが ${j.tooBig} 個あります`);
+      if (j.unreadable > 0) notes.push(`二進のため見ていないファイルが ${j.unreadable} 個あります`);
       state.textContent = `${hits.length} 件${notes.length ? ` — ${notes.join(' / ')}` : ''}`;
 
       for (const h of hits) {

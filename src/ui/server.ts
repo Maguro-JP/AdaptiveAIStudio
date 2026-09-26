@@ -1978,7 +1978,7 @@ export class UiServer {
       return send(res, 200, {
         query: q, path: at,
         hits: found.hits, capped: found.capped,
-        walkCapped: found.walkCapped, tooBig: found.tooBig,
+        walkCapped: found.walkCapped, tooBig: found.tooBig, unreadable: found.unreadable,
       });
     }
 
