@@ -124,7 +124,9 @@ export class Goals {
   open(request: string, instructions: string[], now = Date.now()): Promise<Goal> {
     return inOrder(this.#path, async () => {
       const goal = await this.#open(request, instructions, now);
-      await this.#compact();
+      // 畳みは片づけにすぎない。段取りはもう書けているので、畳めなくても立てたことは返す（次に立てるときにまた畳む）。
+      // 投げると、書けているのに「立てられなかった」になり、畳めない間は新しい段取りを一つも立てられなくなる。
+      await this.#compact().catch(() => undefined);
       return goal;
     });
   }
@@ -251,7 +253,9 @@ function isLine(v: unknown): v is Line {
   }
   if (typeof l.goalId !== 'string') return false;
   if (l.t === 'close') return true;
-  if (l.t === 'state') return typeof l.stepId === 'string' && typeof l.state === 'string' && typeof l.attempts === 'number';
+  // 製品が state の行に書くのは pending・done・blocked だけ（split は割り直しの行で表す）。
+  // それ以外を通すと、壊れた行ひとつで「手を付ける段が無い＝終えた」になり、頼んだことを済みとして閉じる。
+  if (l.t === 'state') return typeof l.stepId === 'string' && STATE_LINE.has(l.state as StepState) && isCount(l.attempts);
   if (l.t === 'split') return typeof l.stepId === 'string' && Array.isArray(l.steps) && l.steps.every(isStep);
   return false;
 }
@@ -259,8 +263,16 @@ function isLine(v: unknown): v is Line {
 function isStep(v: unknown): v is Step {
   if (typeof v !== 'object' || v === null) return false;
   const s = v as Record<string, unknown>;
-  return typeof s.id === 'string' && typeof s.instruction === 'string' && typeof s.state === 'string'
-    && typeof s.attempts === 'number' && (s.parent === undefined || typeof s.parent === 'string');
+  return typeof s.id === 'string' && typeof s.instruction === 'string' && STEP_STATES.has(s.state as StepState)
+    && isCount(s.attempts) && (s.parent === undefined || typeof s.parent === 'string');
+}
+
+const STEP_STATES = new Set<StepState>(['pending', 'done', 'blocked', 'split']);
+const STATE_LINE = new Set<StepState>(['pending', 'done', 'blocked']);
+
+/** 回数。負の数を通すと、落ちても「もう一度」を返し続ける。 */
+function isCount(v: unknown): boolean {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0;
 }
 
 /** 何回割り直した先か。 */

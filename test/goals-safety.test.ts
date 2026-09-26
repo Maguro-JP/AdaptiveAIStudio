@@ -6,6 +6,8 @@ import assert from 'node:assert/strict';
 import { readFile, appendFile, writeFile, stat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
+const require = createRequire(import.meta.url);
 import { Goals, COMPACT_AFTER_LINES } from '../src/core/goals.ts';
 
 async function goals(name: string) {
@@ -18,9 +20,10 @@ describe('段取りの記録', () => {
   test('**同じミリ秒に二つ立てても、名前がぶつからない**', async () => {
     const { g } = await goals('same-ms');
     const at = 1_800_000_000_000;
-    const made = await Promise.all(Array.from({ length: 50 }, (_, i) => g.open(`依頼 ${i}`, ['読む'], at)));
-    assert.equal(new Set(made.map((x) => x.id)).size, 50, '名前がぶつかった');
-    assert.equal((await g.list()).length, 50, '後の段取りが前のものを置き換えた');
+    // 乱数 2 桁（1296 通り）のままなら、200 件でほぼ必ずぶつかる（50 件では 6 割でしか落ちなかった）。
+    const made = await Promise.all(Array.from({ length: 200 }, (_, i) => g.open(`依頼 ${i}`, ['読む'], at)));
+    assert.equal(new Set(made.map((x) => x.id)).size, 200, '名前がぶつかった');
+    assert.equal((await g.list()).length, 200, '後の段取りが前のものを置き換えた');
   });
 
   test('**形の違う行（null・goal の無い行・steps の無い段取り）で、一覧ごと止まらない**', async () => {
@@ -68,6 +71,42 @@ describe('段取りの記録', () => {
     assert.deepEqual(after.map((x) => x.id), [keep.id, added.id]);
     assert.deepEqual(after[0], before, '畳んだら、割り直しか状態が変わった');
     assert.equal((await g.next(keep.id))?.instruction, '型を見る');
+  });
+
+  test('**知らない状態・負の回数の行で、段取りを「終えた」にしない**', async () => {
+    const { g, path } = await goals('state-value');
+    const goal = await g.open('依頼', ['直す']);
+    const stepId = goal.steps[0]!.id;
+    await appendFile(path, [
+      { t: 'state', goalId: goal.id, stepId, state: 'DONE', attempts: 0 },
+      { t: 'state', goalId: goal.id, stepId, state: 'split', attempts: 0 },
+      { t: 'state', goalId: goal.id, stepId, state: 'pending', attempts: -5 },
+    ].map((l) => JSON.stringify(l)).join('\n') + '\n');
+    assert.equal((await g.next(goal.id))?.id, stepId, '壊れた行で、手を付ける段が無くなった');
+    assert.equal((await g.list())[0]!.steps[0]!.attempts, 0);
+  });
+
+  test('**畳めなくても、立てた段取りは立てたとして返す**', async () => {
+    const { g, path } = await goals('compact-fails');
+    const lines: string[] = [];
+    for (let i = 0; lines.length <= COMPACT_AFTER_LINES; i += 1) {
+      lines.push(JSON.stringify({ t: 'goal', goal: { id: `gold${i}`, request: `古い ${i}`, createdAt: new Date(i).toISOString(), steps: [] } }));
+      lines.push(JSON.stringify({ t: 'close', goalId: `gold${i}` }));
+    }
+    await writeFile(path, `${lines.join('\n')}\n`);
+    const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
+    const real = fsp.rename;
+    (fsp as { rename: unknown }).rename = () => Promise.reject(Object.assign(new Error('busy'), { code: 'EPERM' }));
+    syncBuiltinESMExports();
+    let made;
+    try {
+      made = await g.open('新しい依頼', ['読む']);
+    } finally {
+      (fsp as { rename: unknown }).rename = real;
+      syncBuiltinESMExports();
+    }
+    assert.ok((await g.list()).some((x) => x.id === made.id), '立てた段取りが無い');
+    assert.ok((await readdir(join(path, '..'))).every((n) => !n.endsWith('.tmp')), '一時ファイルが残った');
   });
 
   test('畳む行数までは畳まない（対）', async () => {
