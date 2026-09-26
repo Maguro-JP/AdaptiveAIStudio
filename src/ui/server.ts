@@ -128,6 +128,20 @@ export const RECENT_LOGS = 500;
 /** 覚えておく「変更したファイル」の数。画面が作り直されたときに配る分。 */
 export const KEPT_CHANGES = 200;
 
+/**
+ * 手で書くのを断った。呼ぶ側は `status` で返す（ここまで 500 で「落ちた」ように見えていた）。
+ * `extra` は返事に添える（読み直した今の中身など）。
+ */
+class HandWriteRefused extends Error {
+  readonly status: number;
+  readonly extra: Record<string, unknown>;
+  constructor(message: string, status: number, extra: Record<string, unknown> = {}) {
+    super(message);
+    this.status = status;
+    this.extra = extra;
+  }
+}
+
 export interface UiServerOptions {
   /** 立ち上げ直しを頼まれたとき。止めて、RESTART_EXIT で終わる側が持つ。 */
   onRestart?: () => void;
@@ -155,6 +169,11 @@ export interface UiServerOptions {
   buildReport?: () => Promise<string>;
   /** OS でファイルやフォルダを見せる係。試験でモックにできる（本物は explorer / open / xdg-open）。 */
   opener?: (command: string, args: string[]) => Promise<void>;
+  /**
+   * 手で書くとき、作業場の錠を取った直後に呼ぶ。試験で使う（読んでから書くまでの間に、
+   * 別の所がファイルを書き換える形を作るため。本物では割り込みの隙間が短く、確実には作れない）。
+   */
+  afterHandLock?: () => Promise<void>;
   config: AasConfig;
   port?: number;
   host?: string;
@@ -491,6 +510,7 @@ export class UiServer {
       this.#handle(req, res).catch((e: unknown) => {
         // 画面の不具合で本体を落とさない。
         if (e instanceof BodyTooLarge) return refuseTooLarge(res, e.message);
+        if (e instanceof HandWriteRefused) return send(res, e.status, { error: e.message, ...e.extra });
         send(res, 500, { error: e instanceof Error ? e.message : String(e) });
       });
     });
@@ -1858,7 +1878,8 @@ export class UiServer {
         return send(res, 409, { error: 'その後に中身が変わっているので、この差分では戻せません（エディタで直してください）' });
       }
       if (after === current) return send(res, 200, { reverted: false, path: asked });
-      const { added, removed } = await this.#writeByHand(asked, real, current, after, `戻した: ${asked}`);
+      const { added, removed } = await this.#writeByHand(asked, real, current, after, `戻した: ${asked}`,
+        '差分を出したあとで、このファイルは別の所で変わりました（AI の書き換えなど）。差分を開き直してから戻してください');
       return send(res, 200, { reverted: true, path: asked, added, removed });
     }
 
@@ -1928,7 +1949,7 @@ export class UiServer {
         this.broadcast({ type: 'stateChanged' });
         return send(res, 200, { created: asked, kind });
       }
-      await this.#writeByHand(asked, real, undefined, '', `作った: ${asked}`);
+      await this.#writeByHand(asked, real, undefined, '', `作った: ${asked}`, `既にあります: ${asked}`);
       return send(res, 200, { created: asked, kind });
     }
 
@@ -2710,7 +2731,11 @@ export class UiServer {
   /** 手書きの錠の持ち主の札。名前で作ると、同じ名前の手書きが二つ重なったとき両方が取れてしまう。 */
   #handSeq = 0;
 
-  async #writeByHand(asked: string, real: string, before: string | undefined, content: string, request: string): Promise<{ added: number; removed: number }> {
+  async #writeByHand(
+    asked: string, real: string, before: string | undefined, content: string, request: string,
+    /** 読んだあとで変わっていたときの断りの文言。呼ぶ口ごとに、画面でできることが違う。 */
+    changed = '読んだあとで、このファイルは別の所で変わりました（AI の書き換えなど）。画面で、どちらを残すか選んでください',
+  ): Promise<{ added: number; removed: number }> {
     const session = this.#session;
     const undo = session?.undo ?? new UndoStore(this.#workRoot(), join(stateDir(), 'undo'));
     /*
@@ -2720,9 +2745,24 @@ export class UiServer {
      */
     const owner = `hand:${++this.#handSeq}`;
     if (session && !session.lock.tryAcquire(owner)) {
-      throw new Error('いま AI が作業場に書いています。終わってからもう一度押してください');
+      throw new HandWriteRefused('いま AI が作業場に書いています。終わってからもう一度押してください', 409);
     }
     try {
+      await this.#opts.afterHandLock?.();
+      /*
+       * **錠を取ってから、前の中身を読み直す。**呼ぶ側は錠の手前で読んでいるので、その間に AI が書くと、
+       * AI の書き換えを黙って上書きし、「戻す」の記録も古い中身になる。違っていれば書かずに断る
+       * （今の中身を添えて、画面でどちらを残すか選ばせる。保存の口の stamp の断りと同じ形）。
+       */
+      const nowBytes = await readFile(real).catch(() => undefined);
+      const now = nowBytes === undefined ? undefined : contentOf(nowBytes);
+      if (now !== before) {
+        // 消えていた・文字でなくなっていたときは、そう言う（画面は「AI の版」を出せない）。
+        throw new HandWriteRefused(changed, 409,
+          typeof now === 'string' ? { conflict: true, path: asked, content: now, stamp: stampOf(now) }
+            : now === undefined ? { conflict: true, path: asked, gone: true }
+              : { conflict: true, path: asked, binary: true });
+      }
       await undo.begin(request);
       undo.capture(asked, before);
       // 無い階層ごと作る（新しいファイルは、無いフォルダの中に置きたいことが多い）。

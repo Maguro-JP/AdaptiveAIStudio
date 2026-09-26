@@ -2662,6 +2662,17 @@ export const PANELS = {
        * **断られたら、選ばせる。**黙って上書きもしないし、黙って捨てもしない。
        * 上書きを選んでも、前の中身は戻り先に残る（本体が控える）。
        */
+      // 消えていた・文字でなくなっていたときは、出せる「AI の版」が無い。そう言って、上書きだけ選ばせる。
+      if (r.status === 409 && j.conflict && (j.gone || j.binary)) {
+        state.textContent = '保存していません（別の所で変わっています）';
+        save.disabled = false;
+        tell(j.gone
+          ? '保存していません。開いたあとで、このファイルは別の所で消されました。'
+          : '保存していません。開いたあとで、このファイルは文字でない中身に書き換えられました。', [
+          ['自分の版で上書きする', () => { stamp = ''; notice.hidden = true; void store(); }],
+        ]);
+        return;
+      }
       if (r.status === 409 && j.conflict) {
         state.textContent = '保存していません（別の所で変わっています）';
         save.disabled = false;
