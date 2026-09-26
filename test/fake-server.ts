@@ -32,6 +32,8 @@ export type Behavior =
 export interface FakeServer {
   baseUrl: string;
   requests: number;
+  maxInFlight: number;
+  resetMaxInFlight(): void;
   /** 受け取った本文（新しい順ではなく届いた順）。何を渡されたかを検査で見る。 */
   bodies: unknown[];
   setBehavior(b: Behavior): void;
@@ -52,7 +54,7 @@ function withDone(text: string): string {
 
 export async function startFakeServer(initial: Behavior): Promise<FakeServer> {
   let behavior = initial;
-  const state = { requests: 0, bodies: [] as unknown[] };
+  const state = { requests: 0, bodies: [] as unknown[], inFlight: 0, maxInFlight: 0 };
 
   const server: Server = createServer((req, res) => {
     if (req.url?.endsWith('/models')) {
@@ -62,6 +64,10 @@ export async function startFakeServer(initial: Behavior): Promise<FakeServer> {
     }
 
     state.requests += 1;
+    // 同時に受けている本数。並行を経過時間で見ると負荷で揺れるので、重なりそのものを数える。
+    state.inFlight += 1;
+    state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
+    res.on('close', () => { state.inFlight -= 1; });
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
@@ -174,6 +180,9 @@ export async function startFakeServer(initial: Behavior): Promise<FakeServer> {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     get requests() { return state.requests; },
     get bodies() { return state.bodies; },
+    /** これまでに同時に受けていた本数の最大。数え直すときは `resetMaxInFlight`。 */
+    get maxInFlight() { return state.maxInFlight; },
+    resetMaxInFlight() { state.maxInFlight = state.inFlight; },
     setBehavior(b: Behavior) { behavior = b; },
     close: () => new Promise<void>((r) => { server.closeAllConnections(); server.close(() => r()); }),
   };

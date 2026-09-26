@@ -12,6 +12,7 @@
  *   inject 実行後に追加の情報をモデルへ渡す（気づかせる）
  */
 import type { ToolCall } from '../providers/contract.ts';
+import type { Forum } from './deliberation.ts';
 
 export interface RuleContext {
   root: string;
@@ -20,6 +21,11 @@ export interface RuleContext {
   /** 依頼の本文 */
   instruction: string;
   signal: AbortSignal;
+  /**
+   * この依頼の協議の場（会話ごと）。渡されていれば、協議を見る規則はこちらを見る。
+   * 無ければ規則を作ったときの共有の場（別の会話の協議で、この会話の変更を通させないため）。
+   */
+  forum?: Forum;
 }
 
 export type PreDecision =

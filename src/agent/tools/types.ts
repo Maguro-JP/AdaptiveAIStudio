@@ -1,6 +1,29 @@
-import type { ToolSchema } from '../../providers/contract.ts';
+import type { ToolSchema, ToolCall } from '../../providers/contract.ts';
+import type { Forum } from '../../harness/deliberation.ts';
+
+/**
+ * 依頼ごとの入れ物。会話ごとに走らせるとき、規則の履歴・依頼文・協議をツールまで届ける。
+ *
+ * ツールは一度だけ規則に包まれて、既定では共有の入れ物を見る。二つの会話が同時に動くと、
+ * 読んでから書く規則が**別の会話が読んだこと**で通り、協議も混ざる。渡されていれば、こちらを使う。
+ */
+export interface RequestScope {
+  /** いまの依頼文（規則が見る）。 */
+  instruction(): string;
+  /** この依頼で呼んだツール（規則が積み重ねを見る）。依頼ごとに空にする。 */
+  readonly history: ToolCall[];
+  /** 協議の場。依頼ごとに開き直す。 */
+  readonly forum: Forum;
+  /**
+   * 規則の数え（metrics）に数えるか。数えは作業場で一つの「いまの依頼」を追っているので、
+   * 既定の会話の分だけ数える。ほかの会話の分を数えると、既定の会話の成績に混ざる。
+   */
+  counted(): boolean;
+}
 
 export interface ToolContext {
+  /** 依頼ごとの入れ物。無ければ、ツールを包んだときの共有の入れ物を使う。 */
+  request?: RequestScope;
   /** 作業ディレクトリ。ここより外へは一切アクセスさせない。 */
   root: string;
   signal: AbortSignal;

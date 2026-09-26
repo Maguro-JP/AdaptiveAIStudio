@@ -416,7 +416,14 @@ export class Session {
    * いまの会話（履歴・実行中・依頼文・差分）。`src/core/conversation.ts`。
    * いまは一つだけ持つ。画面で会話ごとに走らせる段（DECISIONS 09-26 の 2c）で、呼ぶ側が渡す形にする。
    */
-  readonly #conv = new Conversation();
+  readonly #conv = (() => {
+    const conv = new Conversation();
+    // 規則の数え（metrics）は既定の会話の分だけ数える（数えは作業場で一つの「いまの依頼」を追うため）。
+    conv.counted = true;
+    return conv;
+  })();
+  /** 走っている会話（既定の会話も、画面が渡したほかの会話も）。暇な思考は、どれかが走っていれば始めない。 */
+  readonly #active = new Set<Conversation>();
   /** 提案がどの思考から出たか。採否をその思考の実績に返すために持つ。 */
   readonly #origin = new Map<string, string>();
   #lastChangeAt = Date.now();
@@ -640,6 +647,9 @@ export class Session {
 
   get busy(): boolean { return this.#conv.running !== undefined; }
 
+  /** どれかの会話が走っているか（既定の会話に限らない）。 */
+  get anyBusy(): boolean { return this.#conv.running !== undefined || this.#active.size > 0; }
+
   /** いま何本目の依頼か。依頼のあいだだけ効くものは、これが変わったら外す。 */
   get requestSeq(): number { return this.#requests; }
 
@@ -647,17 +657,22 @@ export class Session {
    * 承認の問い合わせを通り道にして、差分を拾っておく。
    * 差分は道具の中で作られていて、承認以外に外へ出る道が無いため。
    */
-  readonly #approve = async (req: ApprovalRequest): Promise<ApprovalAnswer> => {
-    if (req.kind === 'write') this.#conv.diffs.set(req.path, { diff: req.diff, created: req.created });
-    return this.#opts.approve(req);
-  };
+  #approveFor(conv: Conversation): (req: ApprovalRequest) => Promise<ApprovalAnswer> {
+    return async (req) => {
+      if (req.kind === 'write') conv.diffs.set(req.path, { diff: req.diff, created: req.created });
+      return this.#opts.approve(req);
+    };
+  }
+
+  /** 既定の会話の承認（段取り・暇な思考・役職が使う）。 */
+  readonly #approve = this.#approveFor(this.#conv);
 
   /** 直近の書き換えの差分。取り出したら手放す。 */
-  #takeDiff(path: string): { diff: string; created: boolean } | undefined {
+  #takeDiff(path: string, conv: Conversation = this.#conv): { diff: string; created: boolean } | undefined {
     const key = path.replace(/\\/g, '/').replace(/^\.\//, '');
     for (const candidate of [path, key]) {
-      const found = this.#conv.diffs.get(candidate);
-      if (found) { this.#conv.diffs.delete(candidate); return found; }
+      const found = conv.diffs.get(candidate);
+      if (found) { conv.diffs.delete(candidate); return found; }
     }
     return undefined;
   }
@@ -1005,7 +1020,7 @@ export class Session {
       yield { type: 'declined', reason: '設定で、暇なときの考えごとを止めています（initiative.enabled）' };
       return false;
     }
-    if (this.#conv.running) {
+    if (this.anyBusy) {
       yield { type: 'declined', reason: 'いま別の作業をしています' };
       return false;
     }
@@ -1232,8 +1247,11 @@ export class Session {
     return snap?.commands.check ?? snap?.commands.test;
   }
 
-  /** いま動いているものを止める。止めても対話は続く。 */
-  abort(): void { this.#conv.running?.abort(); }
+  /** いま動いているものを止める。既定の会話だけでなく、走っている会話を全部止める。止めても対話は続く。 */
+  abort(): void {
+    this.#conv.running?.abort();
+    for (const conv of this.#active) conv.running?.abort();
+  }
 
   /**
    * 指示を受けて、起きたことを順に返す。
@@ -1261,23 +1279,36 @@ export class Session {
        * コードを指摘として覚える**。判じるのは、打った分だけにする。
        */
       said?: string;
+      /**
+       * どの会話で送るか。省けば既定の会話。画面は会話ごとに渡して、二つの会話を同時に動かす
+       * （履歴・差分・思い出した記憶・規則の積み重ね・協議が会話ごとに分かれる）。
+       */
+      conversation?: Conversation;
     } = {},
   ): AsyncGenerator<SessionEvent> {
+    const conv = opts.conversation ?? this.#conv;
+    /*
+     * 既定の会話か。共有の入れ物（ツールを包んだときの依頼文・協議・規則の積み重ねと数え）に触るのは既定の会話だけ。
+     * ほかの会話が触ると、並行して走る段取りの判じ方を崩す。ほかの会話の規則の数え（metrics）は、
+     * 依頼ごとの札で数える段（DECISIONS 09-26 の 2e）まで数えない。
+     */
+    const shared = conv === this.#conv;
     if (this.noModel) {
       yield { type: 'log', level: 'error', text: this.noModel };
       yield { type: 'finished', reason: 'error', detail: this.noModel };
       return;
     }
-    if (this.#conv.running) {
+    if (conv.running) {
       yield { type: 'log', level: 'warn', text: 'いま別の作業をしています。' };
       return;
     }
     const ac = new AbortController();
-    this.#conv.running = ac;
-    this.#conv.instruction = instruction;
-    this.#holder.instruction = instruction;
+    conv.running = ac;
+    this.#active.add(conv);
+    conv.beginRequest(instruction);
+    if (shared) this.#holder.instruction = instruction;
     this.#requests += 1;
-    this.#forum.clear();
+    if (shared) this.#forum.clear();
     /*
      * **この 1 ターンで触ったものを、後から戻せるようにする。**
      *
@@ -1325,7 +1356,7 @@ export class Session {
     };
     /** 前の中身を記録できなかった道（大きすぎる・取れない）。戻せないことを言うために持つ。 */
     const outsideUnrecorded: string[] = [];
-    this.#harness.beginTask();
+    if (shared) this.#harness.beginTask();
 
     let finishedReason: string | undefined;
     let answerChars = 0;
@@ -1356,8 +1387,8 @@ export class Session {
      * 場面（直前の指示）は、この回の記録で上書きされる前に取る。
      */
     const situation = {
-      when: this.#conv.lastTurn?.instruction.trim().slice(0, 120),
-      did: this.#lastTurnSummary(),
+      when: conv.lastTurn?.instruction.trim().slice(0, 120),
+      did: this.#lastTurnSummary(conv),
     };
 
     try {
@@ -1366,10 +1397,10 @@ export class Session {
       // **「二度としないこと」はここでは足さない。**決まり（system）が載せる。
       // 両方に載せると、同じ文が一往復に二度入る（実際に八件ずつ二重に入っていた）。
       // 問いかけには、前の作業の覚えを足さない。話が混ざるだけで、答えは良くならない。
-      const recalled = chat ? '' : this.#recall(instruction, { lessons: false });
+      const recalled = chat ? '' : this.#recall(instruction, { lessons: false }, conv);
       if (recalled) yield { type: 'recalled', text: recalled };
 
-      this.#conv.history.push({
+      conv.history.push({
         role: 'user',
         content: recalled ? `${instruction}\n\n---\n${recalled}` : instruction,
       });
@@ -1464,7 +1495,7 @@ export class Session {
       const usedTools: string[] = [];
 
       const run = async function* (this: Session, agent: Agent): AsyncGenerator<SessionEvent> {
-        for await (const ev of agent.run(this.#conv.history, ac.signal)) {
+        for await (const ev of agent.run(conv.history, ac.signal)) {
           switch (ev.type) {
             case 'thinking':
               answerChars += ev.delta.length;
@@ -1516,7 +1547,7 @@ export class Session {
               yield {
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
               };
-              const shown = this.#diffFor(ev.call.name, ev.call.args, ev.isError);
+              const shown = this.#diffFor(ev.call.name, ev.call.args, ev.isError, conv);
               if (shown) yield shown;
               break;
             }
@@ -1542,7 +1573,7 @@ export class Session {
         }
       }.bind(this);
 
-      yield* run(await this.#agent({ chat }));
+      yield* run(await this.#agent({ chat, conv }));
 
       /*
        * 実測を溜める。次回以降の自動選択がこれで変わる。
@@ -1576,8 +1607,8 @@ export class Session {
         keep = false;
         const events: SessionEvent[] = [];
         const fix = async (feedback: string, sig: AbortSignal): Promise<void> => {
-          this.#conv.history.push({ role: 'user', content: feedback });
-          for await (const ev of (await this.#agent({ chat })).run(this.#conv.history, sig)) {
+          conv.history.push({ role: 'user', content: feedback });
+          for await (const ev of (await this.#agent({ chat, conv })).run(conv.history, sig)) {
             if (ev.type === 'thinking') events.push({ type: 'text', delta: ev.delta });
             else if (ev.type === 'salvaged') events.push({ type: 'salvaged', name: ev.name });
             else if (ev.type === 'toolStart') {
@@ -1601,7 +1632,7 @@ export class Session {
               events.push({
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
               });
-              const shown = this.#diffFor(ev.call.name, ev.call.args, ev.isError);
+              const shown = this.#diffFor(ev.call.name, ev.call.args, ev.isError, conv);
               if (shown) events.push(shown);
             }
           }
@@ -1742,9 +1773,9 @@ export class Session {
       }
 
       // 添えた覚えに、結果を書き戻す。ここが「使うほど賢く」の要。
-      this.#gradeRecall(checked);
+      this.#gradeRecall(checked, conv);
       // 次に嫌がられたとき、「このとき何をしていたか」を言えるようにする。
-      this.#conv.lastTurn = { instruction, tools: usedTools, changed: changedHere, checked };
+      conv.lastTurn = { instruction, tools: usedTools, changed: changedHere, checked };
 
       /*
        * この回のことを覚える。
@@ -1780,7 +1811,7 @@ export class Session {
       }
 
       const succeeded = finishedReason === 'completed' && keep;
-      this.#harness.endTask(succeeded ? 'completed' : 'failed');
+      if (shared) this.#harness.endTask(succeeded ? 'completed' : 'failed');
       await this.#harness.metrics?.save();
       this.#prefetch.invalidate();
       this.markChanged();
@@ -1802,7 +1833,7 @@ export class Session {
       const stopped = ac.signal.aborted;
       // 一度の失敗で対話ごと終わらせない。次の指示は受けられる。
       // 規則の数え（harness）は、通常の止めた回と同じく「完了しなかった」に数える。
-      this.#harness.endTask('failed');
+      if (shared) this.#harness.endTask('failed');
       if (!stopped) yield { type: 'log', level: 'error', text: (e as Error).message };
       yield {
         type: 'settled', reason: stopped ? 'aborted' : 'failed', verified: false, checked,
@@ -1815,7 +1846,8 @@ export class Session {
       if (locked) await this.undo.end().catch(() => undefined);
       // 錠を返してから「動いていない」にする。逆だと、その間に押した保存が錠に当たって断られる。
       this.lock.release(lockOwner);
-      this.#conv.running = undefined;
+      conv.running = undefined;
+      this.#active.delete(conv);
       await this.memory.save().catch(() => undefined);
       // **この回が終わってから判じる。**待たせない、を本当にする。
       // こちらが書いた文は判じない（利用者が言っていないことを覚えないため）。
@@ -1831,11 +1863,11 @@ export class Session {
   }
 
   /** 書き換えが通ったら、その差分を出来事にする。 */
-  #diffFor(name: string, args: unknown, isError: boolean): (SessionEvent & PlanEvent & { type: 'diff' }) | undefined {
+  #diffFor(name: string, args: unknown, isError: boolean, conv: Conversation = this.#conv): (SessionEvent & PlanEvent & { type: 'diff' }) | undefined {
     if (isError || !isWriteTool(name)) return undefined;
     const path = (args as { path?: unknown }).path;
     if (typeof path !== 'string') return undefined;
-    const found = this.#takeDiff(path);
+    const found = this.#takeDiff(path, conv);
     if (!found) return undefined;
     const { added, removed } = diffStat(found.diff);
     return { type: 'diff', path, diff: found.diff, added, removed, created: found.created };
@@ -1865,11 +1897,12 @@ export class Session {
   }
 
   /** 一人で全部やる作業者。気質も権限も既定のもの。 */
-  async #agent(opts: { chat?: boolean } = {}): Promise<Agent> {
+  async #agent(opts: { chat?: boolean; conv?: Conversation } = {}): Promise<Agent> {
     const counter = await this.#count();
+    const conv = opts.conv ?? this.#conv;
     return new Agent(this.orchestrator, {
       candidates: this.candidates,
-      system: await this.#system(opts),
+      system: await this.#system({ ...opts, conv }),
       // 問いかけにはツールを渡さない。渡すと、答える前に作業場を読みに行く。
       tools: opts.chat ? [] : this.#tools,
       root: this.root,
@@ -1882,8 +1915,13 @@ export class Session {
       // 狭い窓を広いと思って溢れさせるか、広い窓を狭いと思って刈りすぎる。
       contextTokens: this.contextTokens,
       ...(counter ? { count: (t: string) => counter.count(t) } : {}),
-      approve: this.#approve,
+      approve: conv === this.#conv ? this.#approve : this.#approveFor(conv),
       beforeWrite: (path, previous) => this.undo.capture(path, previous),
+      /*
+       * **会話ごとの依頼の入れ物を、ツールまで届ける。**規則の履歴・依頼文・協議を会話ごとに持つため
+       * （ツールは `create()` で一度だけ包まれていて、既定では共有の入れ物を見る）。
+       */
+      request: conv.request,
       /*
        * **書いた分の差分で上書きする。**
        *
@@ -1891,7 +1929,7 @@ export class Session {
        * 書いたものと食い違う（当たっていない塊まで札に並び、そこの「戻す」は
        * 断られる）。書けた側から来たものを正とする。
        */
-      wrote: (path, diff, created) => this.#conv.diffs.set(path, { diff, created }),
+      wrote: (path, diff, created) => conv.diffs.set(path, { diff, created }),
     });
   }
 
@@ -1988,8 +2026,8 @@ export class Session {
    * **符丁だけでは、次に何を変えればいいのか分からない。**
    * 「同じことを言わせた」が並ぶだけの覚え書きは、学びではなく記録になる。
    */
-  #lastTurnSummary(): string | undefined {
-    const last = this.#conv.lastTurn;
+  #lastTurnSummary(conv: Conversation = this.#conv): string | undefined {
+    const last = conv.lastTurn;
     if (!last) return undefined;
     return [
       last.tools.length > 0 ? `使った道具: ${[...new Set(last.tools)].slice(0, 4).join(', ')}` : '道具は使っていない',
@@ -2007,7 +2045,7 @@ export class Session {
    * 控えないと、あとで「役に立ったのか」を書き戻せない。書き戻さないと、
    * 外れた覚えが永遠に効き続ける（使うほど雑音が増える）。
    */
-  #recall(text: string, opts: { lessons?: boolean } = {}): string {
+  #recall(text: string, opts: { lessons?: boolean } = {}, conv: Conversation = this.#conv): string {
     // **件数ではなく、長さで決める。**一件の長さは決まっていないので、
     // 「6件」では窓が狭いモデルで押し出し、広いモデルで余らせる。
     const related = fitByTokens(
@@ -2019,8 +2057,8 @@ export class Session {
     const failed = this.memory.failedBefore(text, 2);
     const merged = [...related];
     for (const f of failed) if (!merged.some((e) => e.id === f.id)) merged.push(f);
-    this.#conv.recalledIds = merged.map((e) => e.id);
-    this.memory.noteRecalled(this.#conv.recalledIds);
+    conv.recalledIds = merged.map((e) => e.id);
+    this.memory.noteRecalled(conv.recalledIds);
     return formatRecall(merged);
   }
 
@@ -2030,9 +2068,9 @@ export class Session {
    * **確かめた回だけ。**検証を回していない回の「うまくいった気がする」で
    * 重みを動かすと、思い込みが固まるだけで、賢くはならない。
    */
-  #gradeRecall(checked: 'passed' | 'failed' | 'preexisting' | 'unsure' | 'notRun'): void {
-    const ids = this.#conv.recalledIds;
-    this.#conv.recalledIds = [];
+  #gradeRecall(checked: 'passed' | 'failed' | 'preexisting' | 'unsure' | 'notRun', conv: Conversation = this.#conv): void {
+    const ids = conv.recalledIds;
+    conv.recalledIds = [];
     if (ids.length === 0) return;
     if (checked === 'passed') this.memory.noteOutcome(ids, true);
     else if (checked === 'failed') this.memory.noteOutcome(ids, false);
@@ -2077,7 +2115,7 @@ export class Session {
   }
 
   /** 依頼のたびに、その時点で分かっている状況を渡す。調べ直させるより速い。 */
-  async #system(opts: { chat?: boolean } = {}): Promise<string> {
+  async #system(opts: { chat?: boolean; conv?: Conversation } = {}): Promise<string> {
     /*
      * 訊かれただけのときは、**決まりを入れ替えて、そこで終える。**
      * リポジトリの決まりも作業場の様子も載せない。問いに答えるのに要らないし、
@@ -2226,7 +2264,7 @@ export class Session {
          * 探すところで窓を使い切って、直すところまで辿り着かない。
          * 手元の小さいモデルでは、ここが効く。
          */
-        render: (left) => this.#repoMap(left, count),
+        render: (left) => this.#repoMap(left, count, opts.conv),
       },
     ], budget, size);
 
@@ -2259,7 +2297,7 @@ export class Session {
    * 出せないことを黙るのではなく、出せるようになってから出す
    * （最初の一往復だけ地図が無い。二回目からは在る）。
    */
-  async #repoMap(left: number, count?: (t: string) => number): Promise<string> {
+  async #repoMap(left: number, count?: (t: string) => number, conv: Conversation = this.#conv): Promise<string> {
     if (left <= 0) return '';
     try {
       /*
@@ -2278,14 +2316,14 @@ export class Session {
       // 無ければ組む（このあとの `find_code` もそれを使うので、払いは一度きり）。
       const index = await indexStore.fresh(this.root);
       if (index.files.length === 0) return '';
-      const seed = seedFrom(index, this.#conv.instruction, this.#conv.history
+      const seed = seedFrom(index, conv.instruction, conv.history
         .flatMap((m) => (typeof m.content === 'string' ? m.content.match(/[\w./-]+\.[a-z]{1,4}/g) ?? [] : [])),
         this.undo.recent());
       const held = this.#map;
       // 作ってあるものを使ってよいかは、**確かな手がかりだけ**で決める
       // （`covers` のコメント）。検索の点の付け方は、並べるには効くが、
       // 「そのファイルを直している」の判断には使えない。
-      const strong = seedFrom(index, this.#conv.instruction, [], this.undo.recent(), { search: false });
+      const strong = seedFrom(index, conv.instruction, [], this.undo.recent(), { search: false });
       if (held && held.builtAt === index.builtAt && covers(held.text, index, strong)) return held.text;
 
       // トークンではなく文字で切る（切り出しが文字単位のため）。**多めに数える。**
@@ -2300,7 +2338,7 @@ export class Session {
        * 効かせ方は repo map の予算で決める。数件しか見せられないときほど
        * 上位の精度が効き、ほとんど見せられるなら並べ直しても入れ替わるだけ。
        */
-      const ranked = await rerankByBody(index, this.#conv.instruction, seed, rerankShare(chars));
+      const ranked = await rerankByBody(index, conv.instruction, seed, rerankShare(chars));
       const entries = rankedEntries(index, ranked);
       const made = renderMap(entries, { chars }, count);
       this.#map = { text: made, builtAt: index.builtAt };

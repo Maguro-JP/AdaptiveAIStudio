@@ -94,10 +94,15 @@ export class Harness {
       schema: tool.schema,
       run: async (args, toolCtx: ToolContext): Promise<ToolResult> => {
         const call: ToolCall = { id: '', name: tool.schema.name, args };
+        // 会話ごとの入れ物が渡されていれば、そちらの積み重ねと依頼文で判じる（別の会話の読み書きを数えない）。
+        const history = toolCtx.request?.history ?? this.#history;
+        // 規則の数え（metrics）は作業場で一つの「いまの依頼」を追う。数えない会話の分は入れない。
+        const metrics = toolCtx.request && !toolCtx.request.counted() ? undefined : this.#metrics;
         const ctx: RuleContext = {
           root: toolCtx.root,
-          history: this.#history,
-          instruction: instruction(),
+          history,
+          instruction: toolCtx.request ? toolCtx.request.instruction() : instruction(),
+          ...(toolCtx.request ? { forum: toolCtx.request.forum } : {}),
           signal: toolCtx.signal,
         };
 
@@ -110,7 +115,7 @@ export class Harness {
               tool: call.name, outcome: 'denied',
               rule: rule.name, reason: decision.reason, summary: summarize(args),
             });
-            this.#metrics?.recordDenial(rule.name);
+            metrics?.recordDenial(rule.name);
             this.#onDecision?.({ tool: call.name, outcome: 'denied', rule: rule.name, reason: decision.reason });
             // 例外にせず、モデルが読める形で返す。考え直させるのが目的。
             return { content: `BLOCKED by ${rule.name}: ${decision.reason}`, isError: true };
@@ -119,13 +124,13 @@ export class Harness {
             await this.#audit.record({
               tool: call.name, outcome: 'warned', rule: rule.name, reason: decision.note,
             });
-            this.#metrics?.recordWarning(rule.name);
+            metrics?.recordWarning(rule.name);
             this.#onDecision?.({ tool: call.name, outcome: 'warned', rule: rule.name, reason: decision.note });
           }
         }
 
         const result = await tool.run(args, toolCtx);
-        this.#history.push(call);
+        history.push(call);
 
         // 実行後の判定
         let content = result.content;

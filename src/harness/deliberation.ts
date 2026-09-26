@@ -133,7 +133,7 @@ export function requiresDeliberation(opts: DeliberationOptions): Rule {
       const spreading = !written.has(path) && written.size >= wide;
       if (!guarded && !spreading) return allow;
 
-      if (forum.covers(path)) return allow;
+      if ((ctx.forum ?? forum).covers(path)) return allow;
 
       const why = guarded
         ? `${path} は守りの仕掛けそのものです。ここが緩むと、以後の検査はすべて素通りになります。`
