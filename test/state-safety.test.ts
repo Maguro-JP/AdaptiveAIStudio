@@ -274,6 +274,14 @@ describe('やり残しの記録', () => {
     assert.ok((await readdir(join(path, '..'))).every((n) => !n.endsWith('.tmp')));
   });
 
+  test('厳しく読むときは、読めないのを空と取り違えない（無いのは空）', async () => {
+    const dir = await tempDir('aas-unf-strict-');
+    await assert.doesNotReject(new UnfinishedWork(join(dir, 'none.jsonl')).list({ strict: true }));
+    await mkdir(join(dir, 'isdir.jsonl'));
+    await assert.rejects(new UnfinishedWork(join(dir, 'isdir.jsonl')).list({ strict: true }));
+    assert.deepEqual(await new UnfinishedWork(join(dir, 'isdir.jsonl')).list(), [], '厳しくないときは、今までどおり空');
+  });
+
   test('形の違う行（item が無い）は捨て、一覧を止めない', async () => {
     const path = join(await tempDir('aas-unf-shape-'), 'u.jsonl');
     const w = new UnfinishedWork(path);

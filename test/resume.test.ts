@@ -10,6 +10,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { startFakeServer, type FakeServer } from './fake-server.ts';
 
@@ -21,6 +22,7 @@ process.env.AAS_STATE_DIR = dir;
 const { UiServer } = await import('../src/ui/server.ts');
 const { DEFAULT_CONFIG } = await import('../src/config.ts');
 const { UnfinishedWork } = await import('../src/core/unfinished.ts');
+const { Goals } = await import('../src/core/goals.ts');
 
 /**
  * 偽モデルは、**試験ごとに一つ**。
@@ -132,6 +134,75 @@ describe('やり残しを、こちらから拾う', () => {
       assert.equal(del.status, 200);
       const after = await (await fetch(`${base}/api/unfinished`)).json() as { list: { id: string }[] };
       assert.ok(!after.list.some((u) => u.id === id), 'やめたのに残っている');
+    } finally { await s.stop(); await fake.close(); }
+  });
+
+  test('**やめた依頼の段取りも閉じる**（開いたまま残すと、同じ依頼をもう一度頼んだときに古い段取りの続きから始める）', async () => {
+    const state = await ownState('b2');
+    const root = await tempDir('aas-resume-root2b-');
+    const fake = await startFakeServer({
+      kind: 'stalls', name: 'list_files', args: { path: '.' },
+      then: 'このあと直します。',
+    });
+    const s = new UiServer({ config: config(fake, root), port: 0 });
+    const base = (await s.start()).replace(/\/$/, '');
+    try {
+      const { id } = await ask(base, 'tests を直して');
+      assert.ok(await new UnfinishedWork(join(state, 'unfinished.jsonl')).add({ request: 'docs も直して', why: 'maxTurns', note: '' }));
+      const goals = new Goals(join(state, 'goals.jsonl'));
+      await goals.open('tests を直して', ['読む', '直す']);
+      await goals.open('docs も直して', ['読む']);
+      const del = await fetch(`${base}/api/unfinished?id=${id}`, { method: 'DELETE' });
+      assert.equal(del.status, 200);
+      assert.deepEqual((await goals.list()).map((g) => g.request), ['docs も直して'],
+        'やめた依頼の段取りが開いたまま、または生きている依頼の段取りまで閉じた');
+    } finally { await s.stop(); await fake.close(); }
+  });
+
+  test('**一段を進めている最中にやめたら、「片づきました」と言わず、やり残しの記録に done も書かない**', async () => {
+    const state = await ownState('b3');
+    const root = await tempDir('aas-resume-root2c-');
+    const fake = await startFakeServer({
+      kind: 'stalls', name: 'list_files', args: { path: '.' },
+      then: 'このあと直します。',
+    });
+    const s = new UiServer({ config: config(fake, root), port: 0 });
+    const logs: string[] = [];
+    let unfinishedEvents = 0;
+    const orig = s.broadcast.bind(s);
+    (s as { broadcast: unknown }).broadcast = (m: { type: string; level?: string; text?: string }) => {
+      if (m.type === 'log') logs.push(`${m.level}: ${m.text}`);
+      if (m.type === 'unfinished') unfinishedEvents += 1;
+      return orig(m as Parameters<typeof orig>[0]);
+    };
+    const base = (await s.start()).replace(/\/$/, '');
+    try {
+      const { id } = await ask(base, 'lib を直して');
+      // 一度落ちたことにして、時を過去にする（次の見回りで段に割って進める）。
+      await new UnfinishedWork(join(state, 'unfinished.jsonl')).bump(id, Date.now() - 60 * 60_000);
+      fake.setBehavior({ kind: 'stream', text: 'ファイルを読んで確かめる\nテストを直して走らせる\n' });
+      const session = await s.session();
+      const asked = fake.requests;
+      assert.equal(await s.idleTick(session), 'RESUMED');
+      // 割り終えたら、一段をゆっくりにする（その間にやめる）。
+      for (let i = 0; i < 2000 && fake.requests === asked; i += 1) await new Promise((r) => setTimeout(r, 5));
+      fake.setBehavior({ kind: 'echo', delayMs: 800 });
+      const goals = new Goals(join(state, 'goals.jsonl'));
+      for (let i = 0; i < 300 && (await goals.list()).length === 0; i += 1) await new Promise((r) => setTimeout(r, 10));
+      assert.equal((await goals.list()).length, 1, '段取りが立っていない');
+      const logsAtCancel = logs.length;
+      const eventsAtCancel = unfinishedEvents;
+      const del = await fetch(`${base}/api/unfinished?id=${id}`, { method: 'DELETE' });
+      assert.equal(del.status, 200);
+      // やめた口の知らせ（一回）と、一段の終わりの知らせ（一回以上）を待つ。
+      for (let i = 0; i < 400 && unfinishedEvents < eventsAtCancel + 2; i += 1) await new Promise((r) => setTimeout(r, 25));
+      assert.ok(unfinishedEvents >= eventsAtCancel + 2, '一段が終わっていない');
+      const after = logs.slice(logsAtCancel);
+      assert.deepEqual(after.filter((l) => /片づきました|諦めました|割り直しても通りませんでした|しばらく置いて/.test(l)), [],
+        `やめた依頼について、片づいた・諦めたと言った: ${after.join(' / ')}`);
+      const raw = await readFile(join(state, 'unfinished.jsonl'), 'utf8');
+      assert.ok(!raw.includes('"how":"done"'), `やめた依頼に done を書き足した: ${raw}`);
+      assert.deepEqual(await goals.list(), [], '段取りが開いたまま');
     } finally { await s.stop(); await fake.close(); }
   });
 

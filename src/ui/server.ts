@@ -2104,6 +2104,7 @@ export class UiServer {
       const id = url.searchParams.get('id') ?? '';
       if (!id) return send(res, 400, { error: 'id がありません' });
       await this.#unfinished.cancel(id);
+      await this.#settleGoals();
       this.broadcast({ type: 'unfinished' });
       return send(res, 200, { canceled: id });
     }
@@ -3114,6 +3115,27 @@ export class UiServer {
   }
 
   /**
+   * 元の依頼がもう「やり残し」に無い段取りを閉じる。やり残しが減る所（取り消した・片づいた・諦めた・溜めすぎで落とした）で呼ぶ。
+   * 閉じられなくても、やり残しの側は済んでいるので投げない（次に減ったときにまた閉じる）。
+   */
+  /** そのやり残しが、まだ抱えられているか。読めなければ「在る」とみなす（取り消されたと取り違えて止めない）。 */
+  async #stillUnfinished(id: string): Promise<boolean> {
+    try {
+      return (await this.#unfinished.list({ strict: true })).some((u) => u.id === id);
+    } catch {
+      return true;
+    }
+  }
+
+  async #settleGoals(): Promise<void> {
+    try {
+      // 読めなかったら閉じない（空と取り違えると、進めている段取りまで全部閉じる）。
+      const live = new Set((await this.#unfinished.list({ strict: true })).map((u) => u.request));
+      await this.#goals.retain(live);
+    } catch { /* 上に書いたとおり */ }
+  }
+
+  /**
    * 段取りを立てて、**一段だけ**進める。
    *
    * ここが「その機械のそのモデルに合わせる」の実体。
@@ -3148,6 +3170,8 @@ export class UiServer {
         this.broadcast({ type: 'log', level: 'warn', text: '段に割れませんでした。丸ごと進めます。' });
         return false;
       }
+      // 割っている間（モデルへの問い合わせ）に取り消されていたら、立てない。立てると、取り消した依頼の段取りが残る。
+      if (!(await this.#stillUnfinished(item.id))) return false;
       goal = await this.#goals.open(item.request, steps);
       this.broadcast({ type: 'unfinished' });
     }
@@ -3209,6 +3233,8 @@ export class UiServer {
    */
   async #continueStep(session: Session, item: { id: string; request: string; note: string }): Promise<void> {
     if (this.#busyNow(session) || this.#queue.length > 0) return;
+    // 前の段の終わりから少し置いて呼ばれる。その間に取り消されていたら、進めない（段取りを立て直さない）。
+    if (!(await this.#stillUnfinished(item.id))) return;
     this.#resuming = item.id;
     const started = await this.#driveStep(session, item).catch(() => false);
     if (!started) this.#resuming = undefined;
@@ -3283,6 +3309,16 @@ export class UiServer {
     // 何をしても永久に済まない（実際にそうなった）。
     const done = settled?.reason === 'completed' && settled.checked !== 'failed' && settled.checked !== 'unsure';
     try {
+      /*
+       * 続きとして流している間に、そのやり残しが外で閉じられた（利用者が取り消した・溜めすぎで落とした）。
+       * 段取りも閉じてあるので、段の結果も書かず、片づいた・諦めたとも言わない（取り消したものに done を書き足し、
+       * 「片づきました」と出していた）。
+       */
+      if (resuming && !opts.beside && !(await this.#stillUnfinished(resuming))) {
+        this.#resuming = undefined;
+        this.broadcast({ type: 'unfinished' });
+        return;
+      }
       // 一段ぶんを進めていたなら、その結果を先に書き戻す。
       // **通った跡で歩幅を測る。**言い訳ではなく、通ったかどうかで。
       const stepping = opts.beside ? undefined : this.#step;
@@ -3323,6 +3359,7 @@ export class UiServer {
       // 続きとして流したものが片づいたなら、控えから外す。
       if (resuming && done) {
         await this.#unfinished.done(resuming);
+        await this.#settleGoals();
         this.broadcast({ type: 'log', level: 'info', text: 'やり残しが片づきました' });
         this.broadcast({ type: 'unfinished' });
         return;
@@ -3330,6 +3367,7 @@ export class UiServer {
       if (resuming) {
         // まだ終わっていない。次はもっと後にする。
         const { gaveUp, attempts } = await this.#unfinished.bump(resuming);
+        if (gaveUp) await this.#settleGoals();
         this.broadcast({
           type: 'log', level: gaveUp ? 'warn' : 'info',
           text: gaveUp
@@ -3351,6 +3389,8 @@ export class UiServer {
         note: settled.reason,
         ...((opts.beside ?? this.#conversationId) ? { conversationId: opts.beside ?? this.#conversationId } : {}),
       });
+      // 溜めすぎで古いものを落としたなら、その段取りも閉じる。
+      await this.#settleGoals();
       // **溜めすぎて閉じた分も言う。**上限を超えると古い方から諦めるが、
       // それが見えないと、頼んだことが黙って消えたようにしか見えない。
       const dropped = this.#unfinished.takeDropped();

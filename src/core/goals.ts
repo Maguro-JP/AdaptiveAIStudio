@@ -222,6 +222,24 @@ export class Goals {
   }
 
   /**
+   * 元の依頼がもう「やり残し」に無い段取りを閉じる（閉じた数を返す）。
+   *
+   * 段取りを閉じるのは、段が尽きたときだけだった。利用者がやり残しを取り消した・諦めた・溜めすぎで落とした場合は、
+   * 段取りが開いたまま残り、畳んでも減らず、同じ依頼をもう一度頼むと古い段取りの続きから始めていた。
+   */
+  retain(liveRequests: ReadonlySet<string>): Promise<number> {
+    return inOrder(this.#path, async () => {
+      let closed = 0;
+      for (const goal of await this.list()) {
+        if (liveRequests.has(goal.request)) continue;
+        await this.#append({ t: 'close', goalId: goal.id });
+        closed += 1;
+      }
+      return closed;
+    });
+  }
+
+  /**
    * 記録を畳む。閉じた段取りの行は読むたびに解くだけなので、開いているものの今の姿（割り直しも状態も
    * 入れた形）だけで書き直す。一時ファイルに書いてから置き換える（途中で落ちても、記録を丸ごと失わない）。
    */
