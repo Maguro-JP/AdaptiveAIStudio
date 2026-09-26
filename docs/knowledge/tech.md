@@ -48,3 +48,10 @@
 - テストの数（`snapshotTests`）はディレクトリを歩くだけで軽い。作業前の成否（ベースライン）はテストを一度走らせるので重い
 - 軽い方は外のツール（MCP）の手前でも取れる。重い方は取れない（1ターンが何十秒も伸びる）
 - まとめてある所: `src/agent/before-work.ts`
+
+## 2026-09-26 TextDecoder は既定で BOM を黙って落とす
+
+- `new TextDecoder('utf-8', { fatal: true })` は `ignoreBOM: false` が既定で、先頭の `EF BB BF` を取り除いた文字列を返す。
+  バイト列へ戻すと BOM が無くなる。`readFile(p, 'utf8')` は BOM を残す（`﻿` が先頭に来る）ので、二つは同じではない
+- 「読んだものを同じバイト列で戻す」用途では `ignoreBOM: true` を付ける（`src/harness/put-back.ts` の `contentOf`）
+- この場所では `.cmd` に BOM が要る（無いと cmd.exe が CP932 として読み、日本語の行が壊れる）。落とすと巻き戻しで壊れる

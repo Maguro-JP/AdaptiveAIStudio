@@ -50,7 +50,7 @@ import { buildRuntime } from '../core/runtime-setup.ts';
 import { MachineCache } from '../runtime/machine.ts';
 import { usesGguf, type LocalRuntime } from '../runtime/local-runtime.ts';
 import { realSafeResolve } from '../agent/tools/paths.ts';
-import { searchText } from '../agent/tools/fs.ts';
+import { searchText, OPAQUE_LINE } from '../agent/tools/fs.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout, DEFAULT_LAYOUT_ID } from './layout.ts';
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
@@ -1726,6 +1726,10 @@ export class UiServer {
         ? body.picks.filter((p): p is RevertPick => typeof p === 'object' && p !== null && typeof (p as { hunk?: unknown }).hunk === 'number')
         : [];
       if (!asked || !diff || picks.length === 0) return send(res, 400, { error: 'path・diff・picks が要ります' });
+      // 前が utf8 で読めない中身だった差分は、中身の代わりに仮の一行を持つ。当てるとその文字が書かれる。
+      if (diff.split('\n').some((l) => l.startsWith('-') && OPAQUE_LINE.test(l.slice(1)))) {
+        return send(res, 409, { error: 'utf8 で読めない中身だったので、差分からは戻せません（履歴の「戻す」で戻してください）' });
+      }
       const real = await resolveInside(this.#workRoot(), asked);
       if (!real) return send(res, 400, { error: '作業場の外には書けません' });
       const session = this.#session;

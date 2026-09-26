@@ -27,7 +27,7 @@ export interface ToolContext {
    * 書く側が既に読んでいるものを渡すので、二度読まない。
    * 承認が通り、実際に中身が変わるときだけ呼ぶ。
    */
-  beforeWrite?(relPath: string, previous: string | undefined): void;
+  beforeWrite?(relPath: string, previous: string | Buffer | undefined): void;
   /**
    * 書けたときに呼ばれる。**実際に書いた分の差分**を渡す。
    *
