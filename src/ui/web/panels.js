@@ -2194,6 +2194,17 @@ export const PANELS = {
      * いたら、黙って戻さない（AI や別のブラウザが書いたものを、古い直しで上書きする）。
      */
     const DRAFT_AT = (p) => `aas.draft:${p}`;
+    /**
+     * このパネルの名札。預かる所はファイルの名前ごとに一つで、パネル（別のタブも）をまたいで同じ。
+     * 片づけるときに、誰が預けたものかを見る（見ずに消すと、別のパネルの保存していない直しを消す）。
+     */
+    const DRAFT_ME = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    /**
+     * 「後から変わっています」を出した預かり（ファイルの名前 → 預けた時刻）。**片づけでは名札を見ずに消す。**
+     * 名札はパネルを作るたびに変わるので、ブラウザを閉じた後の預かりはどれも「他人のもの」になる。見ずに残すと、
+     * 開くたびに同じ知らせを出し、保存した版を古い直しで上書きする道を勧め続ける（名札を足した版でそうなった）。
+     */
+    const toldDraft = new Map();
     /** これより大きいものは預けない（覚えておく所が溢れる）。 */
     const DRAFT_MAX = 512 * 1024;
     /** これより古い預かりは捨てる。 */
@@ -2203,8 +2214,10 @@ export const PANELS = {
     const keepDraft = () => {
       if (!path) return;
       try {
-        if (!dirty()) { localStorage.removeItem(DRAFT_AT(path)); return; }
+        if (!dirty()) { releaseDraft(path); return; }
         if (area.value.length > DRAFT_MAX) {
+          // 前に預けた小さい版は残さない（残すと、ブラウザを閉じた後に古い版を黙って「戻しました」と出す）。
+          releaseDraft(path);
           if (toldTooBig !== path) {
             toldTooBig = path;
             /*
@@ -2216,7 +2229,7 @@ export const PANELS = {
           }
           return;
         }
-        localStorage.setItem(DRAFT_AT(path), JSON.stringify({ text: area.value, base: loaded, at: Date.now() }));
+        localStorage.setItem(DRAFT_AT(path), JSON.stringify({ text: area.value, base: loaded, at: Date.now(), by: DRAFT_ME }));
       } catch { /* 覚えておく所が使えない環境もある */ }
     };
     /** 預かりを読む。形が違うもの・古いものは、その場で捨てる。 */
@@ -2236,7 +2249,27 @@ export const PANELS = {
         return got;
       } catch { return undefined; }
     };
+    /** 預かりを捨てる。**人が「捨てる」を押したときだけ**（誰が預けたものでも捨てる）。 */
     const dropDraft = (p) => { try { localStorage.removeItem(DRAFT_AT(p)); } catch { /* 同上 */ } };
+    /**
+     * 要らなくなった預かりを片づける（保存した・直しが無くなった）。**自分が預けたものと、中身がいまの欄と同じものだけ。**
+     * 別のパネルが預けた、違う中身の直しは残す。名札の無いもの（前の版が預けた）は、今までどおり片づける。
+     */
+    const releaseDraft = (p) => {
+      try {
+        const raw = localStorage.getItem(DRAFT_AT(p));
+        if (!raw) return;
+        let got;
+        try { got = JSON.parse(raw); } catch { got = undefined; }
+        const mine = !got || typeof got !== 'object' || got.by === undefined || got.by === DRAFT_ME;
+        const told = toldDraft.has(p) && got?.at === toldDraft.get(p);
+        if (mine || told || got.text === area.value) localStorage.removeItem(DRAFT_AT(p));
+      } catch { /* 同上 */ }
+    };
+    /** 覚えておく所から戻した直しを、このパネルのものとして預け直す（戻した側が保存したら片づけられるように）。 */
+    const adoptDraft = (p, saved) => {
+      try { localStorage.setItem(DRAFT_AT(p), JSON.stringify({ ...saved, by: DRAFT_ME })); } catch { /* 同上 */ }
+    };
 
     let keeping;
     const scheduleKeep = () => {
@@ -2534,8 +2567,9 @@ export const PANELS = {
       let kept = drafts.get(p);
       if (kept === undefined) {
         const saved = readDraft(p);
-        if (saved && saved.base === loaded) kept = saved.text;
+        if (saved && saved.base === loaded) { kept = saved.text; adoptDraft(p, saved); }
         else if (saved) {
+          toldDraft.set(p, saved.at);
           /*
            * **中身が変わっていたら、黙って戻さない。**
            *
@@ -2689,7 +2723,7 @@ export const PANELS = {
       const over = dirty();
       if (over) keepDraft();
       // 保存できたら、預かりは要らない（残すと、次に開いたとき古い方を戻す）。
-      else dropDraft(path);
+      else releaseDraft(path);
       /*
        * **保存したことを、補完の返事で消さない。**
        *
