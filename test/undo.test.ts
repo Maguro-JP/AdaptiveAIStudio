@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { UndoStore, MAX_POINTS, MAX_POINT_BYTES, RECENT_PATHS } from '../src/core/undo.ts';
+import { UndoStore, MAX_POINTS, MAX_POINT_BYTES, RECENT_PATHS, rootKey } from '../src/core/undo.ts';
 
 async function store(): Promise<{ root: string; undo: UndoStore }> {
   const root = await tempDir('aas-undo-');
@@ -282,12 +282,30 @@ describe('二進のファイルを戻す', () => {
     await writeFile(join(dir, 'u1.json'), JSON.stringify({
       id: 'u1', at: 1, request: '前の版の記録', paths: ['old.txt', 'made.txt'],
       files: [{ path: 'old.txt', content: 'もと\n' }, { path: 'made.txt' }],
+      root: rootKey(root),
     }), 'utf8');
     await writeFile(join(root, 'made.txt'), 'x\n', 'utf8');
     const undo = new UndoStore(root, dir);
     await undo.restore('u1');
     assert.equal(await readFile(join(root, 'old.txt'), 'utf8'), 'もと\n');
     assert.equal(await stat(join(root, 'made.txt')).then(() => true, () => false), false, '前は無かったのに残っている');
+  });
+
+  test('作業場の根を持たない記録は、どの作業場のものか分からないので出さず、消しもしない', async () => {
+    const root = await tempDir('aas-undo-');
+    const state = await tempDir('aas-undo-state-');
+    const dir = join(state, 'undo');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(root, 'old.txt'), 'いま\n', 'utf8');
+    await writeFile(join(dir, 'u1.json'), JSON.stringify({
+      id: 'u1', at: 1, request: '根の無い記録', paths: ['old.txt'],
+      files: [{ path: 'old.txt', content: 'もと\n' }],
+    }), 'utf8');
+    const undo = new UndoStore(root, dir);
+    assert.deepEqual(await undo.list(), []);
+    assert.equal(await undo.restore('u1'), undefined);
+    assert.equal(await readFile(join(root, 'old.txt'), 'utf8'), 'いま\n', '別の作業場のものかもしれない記録で上書きした');
+    assert.equal(await stat(join(dir, 'u1.json')).then(() => true, () => false), true, '根の無い記録を消した');
   });
 });
 

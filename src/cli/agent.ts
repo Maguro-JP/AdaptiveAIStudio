@@ -509,7 +509,7 @@ async function main(): Promise<void> {
           console.log(c.yellow(`  前にこう決めています: ${conflict.title}`));
           console.log(c.dim(`    決め直すなら、そう言ってください（${conflict.id}）\n`));
         }
-        await memory.save();
+        await memory.save().catch((e: unknown) => console.log(c.yellow(`  ${(e as Error).message}\n`)));
         continue;
       }
       if (line.startsWith('/plan')) {

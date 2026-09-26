@@ -14,8 +14,8 @@
  *   ・未コミットの直しは git でも戻せない
  * ので、git の有無に関わらず効くものを別に持つ。
  */
-import { readFile, writeFile, mkdir, unlink, stat, readdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { readFile, writeFile, mkdir, unlink, stat, readdir, rename, rm } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { safeResolve } from '../agent/tools/paths.ts';
 import { putBack, putBackOrder, contentOf, contentBytes, type FileContent } from '../harness/put-back.ts';
 
@@ -56,6 +56,30 @@ interface StoredFile {
 
 interface Stored extends UndoPoint {
   files: StoredFile[];
+  /**
+   * どの作業場の戻り先か。保存先は作業場をまたいで一つなので、持たないと、作業場を変えたあとに前の作業場の
+   * 戻り先が今の作業場に当たり、別の作業場のファイルを上書きし、作ったものを消していた。
+   */
+  root?: string;
+}
+
+/** 作業場の根を比べられる形にする（Windows と macOS は大文字小文字を区別しない）。 */
+export function rootKey(root: string): string {
+  const r = resolve(root);
+  return process.platform === 'linux' ? r : r.toLowerCase();
+}
+
+let tmpSeq = 0;
+/** 戻り先を書く。一時ファイルに書いてから置き換える（書きかけの戻り先を残さない）。 */
+async function writeStored(path: string, point: Stored): Promise<void> {
+  const tmp = `${path}.${process.pid}.${++tmpSeq}.tmp`;
+  try {
+    await writeFile(tmp, JSON.stringify(point), 'utf8');
+    await rename(tmp, path);
+  } catch (e) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw e;
+  }
 }
 
 function toStored(saved: Saved): StoredFile {
@@ -256,9 +280,10 @@ export class UndoStore {
       paths: [...open.files.keys()],
       files: [...open.files.values()].map(toStored),
       ...(open.skipped.length > 0 ? { skipped: [...open.skipped] } : {}),
+      root: rootKey(this.#root),
     };
     await mkdir(this.#dir, { recursive: true });
-    await writeFile(join(this.#dir, `${point.id}.json`), JSON.stringify(point), 'utf8');
+    await writeStored(join(this.#dir, `${point.id}.json`), point);
     await this.#prune();
     return {
       id: point.id, at: point.at, request: point.request, paths: point.paths,
@@ -300,7 +325,8 @@ export class UndoStore {
       if (!raw) continue;
       try {
         const p = JSON.parse(raw) as Stored;
-        if (typeof p.id === 'string') {
+        // 今の作業場の戻り先だけ。根の無い古い記録は、どの作業場のものか分からないので出さない（消しもしない）。
+        if (typeof p.id === 'string' && p.root === rootKey(this.#root)) {
           points.push({
             id: p.id, at: p.at, request: p.request, paths: p.paths ?? [],
             ...(p.skipped && p.skipped.length > 0 ? { skipped: p.skipped } : {}),
@@ -341,6 +367,8 @@ export class UndoStore {
       if (!raw) continue;
       let stored: Stored;
       try { stored = JSON.parse(raw) as Stored; } catch { continue; }
+      /** この戻り先の中で戻せなかった道。残して、原因を除いたあとにもう一度戻せるようにする。 */
+      const notBack = new Set<string>();
       for (const saved of putBackOrder((stored.files ?? []).map(fromStored))) {
         const abs = safeResolve(this.#root, saved.path);
         if (!abs) continue;
@@ -349,8 +377,19 @@ export class UndoStore {
         const r = await putBack(this.#root, saved.path, saved.content);
         if (r === 'restored' && !touched.includes(saved.path)) touched.push(saved.path);
         last.set(saved.path, r);
+        if (r === 'failed') notBack.add(saved.path);
       }
-      await unlink(join(this.#dir, `${point.id}.json`)).catch(() => undefined);
+      /*
+       * **戻せなかった分がある戻り先は消さない。**消すと、Windows で掴まれていた等で戻せなかったファイルを
+       * 戻す手が残らない。戻せなかった道の分だけを残して書き直す。
+       */
+      const file = join(this.#dir, `${point.id}.json`);
+      if (notBack.size === 0) {
+        await unlink(file).catch(() => undefined);
+      } else {
+        const keep = (stored.files ?? []).filter((f) => notBack.has(f.path));
+        await writeStored(file, { ...stored, paths: keep.map((f) => f.path), files: keep }).catch(() => undefined);
+      }
     }
     const paths = touched.filter((p) => last.get(p) !== 'failed');
     const failed = [...last].filter(([, r]) => r === 'failed').map(([p]) => p);
