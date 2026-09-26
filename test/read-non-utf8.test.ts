@@ -13,6 +13,7 @@ import { readFileTool, writeFileTool, searchTextTool } from '../src/agent/tools/
 import { Harness } from '../src/harness/harness.ts';
 import { readBeforeWrite } from '../src/harness/builtin-rules.ts';
 import { readMentions } from '../src/agent/mention.ts';
+import { shiftJisSupported } from '../src/agent/tools/decode.ts';
 import type { ToolContext } from '../src/agent/tools/types.ts';
 
 const ctx = (root: string): ToolContext => ({
@@ -125,5 +126,13 @@ describe('@ の指名も read_file と同じ読み方', () => {
     const bin = reads.find((r) => r.path === 'a.bin');
     assert.equal(bin?.ok, false, `二進を読んだことにした: ${JSON.stringify(bin)}`);
     assert.match(bin!.body, /二進/);
+  });
+});
+
+describe('Shift_JIS を読めるか（doctor が言う）', () => {
+  test('この Node では読める。作れない Node（small-icu）では読めないと返す', () => {
+    assert.equal(shiftJisSupported(), true, 'この機械の Node で読めないことになった');
+    const noIcu = (label: string): { decode(bytes: Uint8Array): string } => { throw new RangeError(`The "${label}" encoding is not supported`); };
+    assert.equal(shiftJisSupported(noIcu), false);
   });
 });

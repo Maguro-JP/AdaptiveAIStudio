@@ -58,3 +58,17 @@ export function decodeForReading(bytes: Buffer): Decoded {
     return lossyNote(bad);
   }
 }
+
+/**
+ * この Node で Shift_JIS を読めるか。同梱の Node が small-icu で組まれていると読めない
+ * （そのときは utf8 として読む）。配った先で確かめる手が無いので、doctor に言わせる。
+ */
+export function shiftJisSupported(
+  make: (label: string) => { decode(bytes: Uint8Array): string } = (label) => new TextDecoder(label),
+): boolean {
+  try {
+    return make('shift_jis').decode(Buffer.from([0x82, 0xa0])) === 'あ';
+  } catch {
+    return false;
+  }
+}
