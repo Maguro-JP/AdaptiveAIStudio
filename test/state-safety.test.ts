@@ -195,6 +195,77 @@ describe('記憶', () => {
     assert.match(await readFile(path, 'utf8'), /はじめて/);
   });
 
+  test('**読み飛ばした行（形の違う行・壊れた行）は、次の保存で消さずに元の文のまま書き戻す**', async () => {
+    const path = join(await tempDir('aas-mem-keep-'), 'memory.jsonl');
+    const odd = '{"id":"m7","kind":"fact","title":"手で直している途中"}';
+    const broken = '{"id":"m8","kind":"fa';
+    // ふつうの行は m6。読み飛ばした行の番号（m7・m8）を数えないと、次に配る番号が m7 になってぶつかる。
+    await writeFile(path, `${JSON.stringify({ id: 'm6', kind: 'fact', title: 'ふつう', tags: [] })}\n${odd}\n${broken}\n`);
+    const m = new Memory(path);
+    await m.load();
+    assert.equal(m.size, 1);
+    const added = m.remember({ kind: 'fact', title: '新しく覚える', tags: [] });
+    await m.save();
+    const lines = (await readFile(path, 'utf8')).trim().split('\n');
+    assert.ok(lines.includes(odd), `形の違う行を消した: ${lines.join(' / ')}`);
+    assert.ok(lines.includes(broken), `壊れた行を消した: ${lines.join(' / ')}`);
+    assert.equal(added.entry.id, 'm9', `読み飛ばした行の番号とぶつけた: ${added.entry.id}`);
+  });
+
+  test('**動いている間に手で消した読み飛ばしの行を、保存で書き戻さない**（秘密を書いてしまった行を消しても戻っていた）', async () => {
+    const path = join(await tempDir('aas-mem-handdel-'), 'memory.jsonl');
+    const ok = JSON.stringify({ id: 'm1', kind: 'fact', title: 'ふつう', tags: [] });
+    const odd = '{"id":"m2","kind":"fact","title":"secret sk-XXXX"}';
+    await writeFile(path, `${ok}\n${odd}\n`);
+    const m = new Memory(path);
+    await m.load();
+    await writeFile(path, `${ok}\n`); // 動いている間に、手でその行を消した
+    m.remember({ kind: 'fact', title: '新しく覚える', tags: [] });
+    await m.save();
+    assert.ok(!(await readFile(path, 'utf8')).includes('sk-XXXX'), '手で消した行を書き戻した');
+  });
+
+  test('読めなかったファイルが後で読めて合わせるときも、読み飛ばしの行の番号とぶつけない', async () => {
+    const path = join(await tempDir('aas-mem-rejoin-seq-'), 'memory.jsonl');
+    await writeFile(path, `${JSON.stringify({ id: 'm1', kind: 'fact', title: 'ふつう', tags: [] })}\n{"id":"m9","kind":"fact","title":"途中"}\n`);
+    let busy = true;
+    const m = new Memory(path, {
+      read: (p) => busy ? Promise.reject(Object.assign(new Error('busy'), { code: 'EBUSY' })) : readFile(p, 'utf8'),
+    });
+    await m.load();
+    m.remember({ kind: 'fact', title: '読めない間に覚えた', tags: [] });
+    busy = false;
+    await m.save();
+    const ids = (await readFile(path, 'utf8')).trim().split('\n').map((l) => /"id":"(m\d+)"/.exec(l)?.[1]);
+    assert.deepEqual(ids, ['m1', 'm10', 'm9'], `番号がぶつかった・並びが違う: ${ids.join(',')}`);
+  });
+
+  test('丸まる大きさの番号の行が在っても、同じ番号を二度配らない', async () => {
+    const path = join(await tempDir('aas-mem-huge-'), 'memory.jsonl');
+    await writeFile(path, '{"id":"m99999999999999999999","kind":"fact","title":"x"}\n');
+    const m = new Memory(path);
+    await m.load();
+    const a = m.remember({ kind: 'fact', title: 'ひとつめ', tags: [] }).entry.id;
+    const b = m.remember({ kind: 'fact', title: 'ふたつめ', tags: [] }).entry.id;
+    assert.notEqual(a, b);
+  });
+
+  test('NUL だけの行は捨て、先頭の BOM は外して読み、くっついた二件の番号も拾う', async () => {
+    const path = join(await tempDir('aas-mem-odd-bytes-'), 'memory.jsonl');
+    const one = JSON.stringify({ id: 'm1', kind: 'fact', title: 'いち', tags: [] });
+    const two = JSON.stringify({ id: 'm2', kind: 'fact', title: 'に', tags: [] });
+    const glued = '{"id":"m3","kind":"fa{"id":"m9","kind":"fact","title":"x","tags":[]}';
+    await writeFile(path, `\uFEFF${one}\n${two}\n${'\0'.repeat(100)}\n${glued}\n`);
+    const m = new Memory(path);
+    await m.load();
+    assert.equal(m.size, 2, 'BOM の付いた一行目を読めていない');
+    assert.equal(m.remember({ kind: 'fact', title: 'さん', tags: [] }).entry.id, 'm10', 'くっついた二件目の番号を拾っていない');
+    await m.save();
+    const text = await readFile(path, 'utf8');
+    assert.ok(!text.includes('\0'), 'NUL の行を残した');
+    assert.ok(text.includes(glued), 'くっついた行を消した');
+  });
+
   test('形の違う行（tags が無い）は読み飛ばし、思い出すときに止まらない', async () => {
     const path = join(await tempDir('aas-mem-shape-'), 'memory.jsonl');
     await writeFile(path, '{"id":"m1","kind":"fact","title":"テスト 大事"}\n');

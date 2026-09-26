@@ -186,6 +186,11 @@ export class Memory {
    * 空として始めて保存すると、覚えていたものを全部上書きしていた。
    */
   #unreadable?: string;
+  /**
+   * 読むときに退けた行（壊れた行・形の違う行）を、元の文のまま持っておく。保存のときに書き戻す。
+   * 退けたまま保存すると、手で直している途中の行や、別の版が書いた行が、次の保存でファイルから消えていた。
+   */
+  #kept: string[] = [];
 
   constructor(path?: string, opts: { write?: MemoryWriter; read?: (path: string) => Promise<string> } = {}) {
     this.#path = path;
@@ -210,10 +215,13 @@ export class Memory {
     }
     this.#unreadable = undefined;
     try {
-      this.#entries = parseEntries(await this.#readRetrying(this.#path));
-      this.#seq = maxSeq(this.#entries);
+      const got = parseEntries(await this.#readRetrying(this.#path));
+      this.#entries = got.entries;
+      this.#kept = got.kept;
+      this.#seq = Math.max(maxSeq(got.entries), got.keptSeq);
     } catch (e) {
       this.#entries = [];
+      this.#kept = [];
       // 無いのは正常（はじめて）。それ以外は、読めなかったと覚えて保存を断る。
       const code = (e as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT') this.#unreadable = code ?? (e as Error).message;
@@ -264,8 +272,10 @@ export class Memory {
       if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return false;
       raw = '';
     }
-    const onDisk = parseEntries(raw);
-    let seq = maxSeq(onDisk);
+    const got = parseEntries(raw);
+    const onDisk = got.entries;
+    this.#kept = got.kept;
+    let seq = Math.max(maxSeq(onDisk), got.keptSeq);
     const renamed = new Map<string, string>();
     for (const e of this.#entries) { seq += 1; renamed.set(e.id, `m${seq}`); }
     const mine = this.#entries.map((e) => ({
@@ -286,7 +296,19 @@ export class Memory {
       throw new Error(`記憶のファイルを読めなかった（${this.#unreadable}）ので、上書きしないよう保存を止めています: ${this.#path}`);
     }
     this.#dirty = false;
-    const body = this.#entries.map((e) => JSON.stringify(e)).join('\n') + '\n';
+    /*
+     * 退けた行は、**保存の直前のファイルから取り直す。**読み込んだときの形を書くと、動いている間に手で消した行
+     * （秘密を書いてしまった行など）や手で直した行を、古い形のまま書き戻していた。
+     */
+    try {
+      const now = parseEntries(await this.#readRetrying(this.#path));
+      this.#kept = now.kept;
+      this.#seq = Math.max(this.#seq, now.keptSeq);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') this.#kept = [];
+      // ほかの読み失敗は、読み込んだときの形のまま書く（読めないのを「退けた行が無い」と取り違えて消さない）。
+    }
+    const body = [...this.#entries.map((e) => JSON.stringify(e)), ...this.#kept].join('\n') + '\n';
     try {
       await mkdir(dirname(this.#path), { recursive: true });
       await this.#write(this.#path, body);
@@ -769,14 +791,27 @@ function isEntry(e: unknown): e is MemoryEntry {
     && Array.isArray(m.tags) && (m.detail === undefined || typeof m.detail === 'string');
 }
 
-/** 記憶のファイルの中身を一件ずつに。1行壊れても記憶全体を失わない（JSONL にしているのはこのため）。形の違う行も捨てる。 */
-function parseEntries(raw: string): MemoryEntry[] {
-  return raw.split('\n')
-    .filter((l) => l.trim().length > 0)
-    .map((l) => {
-      try { return JSON.parse(l) as unknown; } catch { return undefined; }
-    })
-    .filter((e): e is MemoryEntry => isEntry(e));
+/**
+ * 記憶のファイルの中身を一件ずつに。1行壊れても記憶全体を失わない（JSONL にしているのはこのため）。
+ * 壊れた行・形の違う行は、思い出す側には渡さず（止まるため）、元の文のまま `kept` に分ける（保存で書き戻す）。
+ * `keptSeq` は分けた行が持つ番号のいちばん大きいもの（直して戻されたときに、新しく配る番号とぶつけない）。
+ */
+function parseEntries(raw: string): { entries: MemoryEntry[]; kept: string[]; keptSeq: number } {
+  const entries: MemoryEntry[] = [];
+  const kept: string[] = [];
+  let keptSeq = 0;
+  // 先頭の BOM（古いメモ帳で直すと付く）を外す。付いたままだと一行目が読めず、退けた行として残り続ける。
+  for (const line of raw.replace(/^\uFEFF/, '').split('\n')) {
+    // 空白と NUL だけの行は捨てる（電源が落ちたあとに NUL で埋まることがある。退けて残すと消えなくなる）。
+    if (/^[\s\0]*$/.test(line)) continue;
+    let value: unknown;
+    try { value = JSON.parse(line); } catch { value = undefined; }
+    if (isEntry(value)) { entries.push(value); continue; }
+    kept.push(line.replace(/\r$/, ''));
+    // 番号を拾う（読めない行・二件がくっついた行からも）。直されて戻ってきたときに、同じ番号を配らない。
+    for (const n of line.matchAll(/"id"\s*:\s*"m(\d+)"/g)) keptSeq = Math.max(keptSeq, seqOf(n[1]!));
+  }
+  return { entries, kept, keptSeq };
 }
 
 /**
@@ -787,6 +822,12 @@ function parseEntries(raw: string): MemoryEntry[] {
 function maxSeq(entries: MemoryEntry[]): number {
   return entries.reduce((max, e) => {
     const n = /^m(\d+)$/.exec(e.id);
-    return n ? Math.max(max, Number(n[1])) : max;
+    return n ? Math.max(max, seqOf(n[1]!)) : max;
   }, 0);
+}
+
+/** 番号の数。**丸まる大きさの番号は数えない**（数えると次の番号が同じ値のまま進まず、同じ id を何度も配った）。 */
+function seqOf(digits: string): number {
+  const n = Number(digits);
+  return Number.isSafeInteger(n) && n < Number.MAX_SAFE_INTEGER ? n : 0;
 }
