@@ -44,7 +44,8 @@ export interface TeamWiring {
   undo: UndoStore;
   /**
    * 終わりに呼ぶ。作業場を始めの記録と比べ、書くツールを通らずに変わった分（run_command）も
-   * 戻り先に載せてから閉じる。`unrecorded` は、変わったが前の中身を記録できなかった道（戻せない）。
+   * 戻り先に載せてから閉じる。`unrecorded` は、変わったが前の中身を記録できなかった道（戻せない。
+   * 前後比べで取れなかったものも、大きさの上限で記録しなかったものも入る）。
    */
   finish(): Promise<{ point: UndoPoint | undefined; unrecorded: string[] }>;
   harness: Harness;
@@ -71,6 +72,8 @@ export async function wireTeam(
    * 前を全員で同じにしておくと、相手が頭から計算し直さずに済む。
    */
   baseSystem = '',
+  /** 前後比べで前の中身を記録する上限。試験のために渡せる（既定は `OutsideChanges` の既定）。 */
+  outsideLimits: { maxBytes?: number; maxTotalBytes?: number } = {},
 ): Promise<TeamWiring> {
   const harness = await buildHarness(config, onDecision);
   /*
@@ -93,7 +96,7 @@ export async function wireTeam(
    * どこを書くか分からないので記録を取らない。段取り（`Session.plan`）と同じく、始めに作業場の記録を取り、
    * 終わりに前後を比べる。前後比べで分かった「前」は書く手前の記録より古い（依頼の前の姿）ので置き換える。
    */
-  const outside = new OutsideChanges(root);
+  const outside = new OutsideChanges(root, outsideLimits);
   await outside.before();
   return {
     // 履歴は依頼ごとに分ける。一つを使い回すと、読んでから書く規則が
@@ -121,7 +124,9 @@ export async function wireTeam(
       const found = await outside.after().catch(() => ({ changes: [], unrecorded: [] as string[] }));
       for (const c of found.changes) undo.replace(c.path, c.previous);
       for (const path of found.unrecorded) undo.forget(path);
-      return { point: await undo.end(), unrecorded: found.unrecorded };
+      const point = await undo.end();
+      // 戻せないのは、前後比べで記録できなかった道だけではない。大きさで記録できなかった道も入れる。
+      return { point, unrecorded: [...undo.peekSkipped()] };
     },
     harness,
     bare,

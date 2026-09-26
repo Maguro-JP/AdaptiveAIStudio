@@ -86,6 +86,8 @@ async function main(): Promise<void> {
   const rl = createInterface({ input: stdin, output: stdout });
   const ac = new AbortController();
   rl.on('SIGINT', () => ac.abort());
+  // 入力が端末でない（パイプ・リダイレクト）と rl の SIGINT は来ない。止めずに落ちると戻り先が残らない。
+  process.once('SIGINT', () => ac.abort());
 
   const approve = async (req: ApprovalRequest): Promise<boolean> => {
     if (approval === 'auto') return true;
@@ -103,6 +105,8 @@ async function main(): Promise<void> {
    * **ここもハーネスと戻り先を通す。**組み立ては `core/team-setup.ts`。
    * 入口の中に書くと、モデルを立てないと一度も通らないので外へ出してある。
    */
+  // 始めに作業場の記録を取る（大きい作業場では少しかかる。黙っていると止まって見える）。
+  console.log(c.dim('作業場の記録を取っています…'));
   const wired = await wireTeam(config, root, (d) => {
     if (d.outcome === 'denied') console.log(c.red(`   ⛔ ${d.rule}: ${d.reason ?? ''}`));
     else if (d.outcome === 'warned') console.log(c.yellow(`   ⚠ ${d.rule}: ${d.reason ?? ''}`));
@@ -137,47 +141,54 @@ async function main(): Promise<void> {
   console.log(c.dim(`規則 ${wired.harness.rules().length} 件（実行の手前で止まる）`));
   console.log(c.dim(`タスク ${items.length} 件\n`));
 
-  const gen = team.run(items, ac.signal);
-  let next = await gen.next();
-  while (!next.done) {
-    const p = next.value;
-    switch (p.type) {
-      case 'taskStart':
-        console.log(c.cyan(`▶ ${p.taskId}`) + c.dim(` [${p.laneId}]`));
-        break;
-      case 'taskEnd':
-        console.log(p.state === 'done'
-          ? c.green(`✓ ${p.taskId}`) + c.dim(` (${(p.ms / 1000).toFixed(1)}s)`)
-          : c.red(`✗ ${p.taskId}`) + c.dim(` ${p.error ?? ''}`));
-        break;
-      case 'handoff':
-        console.log(c.dim(`   ${p.from.join(', ')} → ${p.taskId} へ申し送り`));
-        break;
-      case 'taskSkip':
-        console.log(c.yellow(`− ${p.taskId} skip`) + c.dim(` (${p.reason})`));
-        break;
-      case 'agent': {
-        const ev = p.event;
-        if (ev.type === 'toolStart') console.log(c.dim(`   ${p.taskId} · ${ev.call.name}`));
-        else if (ev.type === 'toolEnd' && ev.isError) console.log(c.red(`   ${p.taskId} ✗ ${ev.result.split('\n')[0]}`));
-        break;
+  /*
+   * 途中で例外が出ても、戻り先を閉じてから終える（閉じないと、書くツールの分も run_command の分も戻せない）。
+   * 起こした子も残さない。
+   */
+  try {
+    const gen = team.run(items, ac.signal);
+    let next = await gen.next();
+    while (!next.done) {
+      const p = next.value;
+      switch (p.type) {
+        case 'taskStart':
+          console.log(c.cyan(`▶ ${p.taskId}`) + c.dim(` [${p.laneId}]`));
+          break;
+        case 'taskEnd':
+          console.log(p.state === 'done'
+            ? c.green(`✓ ${p.taskId}`) + c.dim(` (${(p.ms / 1000).toFixed(1)}s)`)
+            : c.red(`✗ ${p.taskId}`) + c.dim(` ${p.error ?? ''}`));
+          break;
+        case 'handoff':
+          console.log(c.dim(`   ${p.from.join(', ')} → ${p.taskId} へ申し送り`));
+          break;
+        case 'taskSkip':
+          console.log(c.yellow(`− ${p.taskId} skip`) + c.dim(` (${p.reason})`));
+          break;
+        case 'agent': {
+          const ev = p.event;
+          if (ev.type === 'toolStart') console.log(c.dim(`   ${p.taskId} · ${ev.call.name}`));
+          else if (ev.type === 'toolEnd' && ev.isError) console.log(c.red(`   ${p.taskId} ✗ ${ev.result.split('\n')[0]}`));
+          break;
+        }
       }
+      next = await gen.next();
     }
-    next = await gen.next();
-  }
 
-  const outcomes = next.value;
-  const done = [...outcomes.values()].filter((o) => o.state === 'done').length;
-  console.log(`\n完了 ${done}/${outcomes.size}`);
-  // 控えを閉じる。閉じないと、次の一回ぶんと混ざって戻しすぎる。run_command の分もここで載せる。
-  const { point: back, unrecorded } = await wired.finish();
-  if (back) console.log(c.dim(`戻り先: ${back.id}（aas undo で戻せます）`));
-  if (unrecorded.length > 0) {
-    console.log(c.yellow(`前の中身を記録できず、戻せないファイル: ${unrecorded.join(', ')}`));
+    const outcomes = next.value;
+    const done = [...outcomes.values()].filter((o) => o.state === 'done').length;
+    console.log(`\n完了 ${done}/${outcomes.size}`);
+  } finally {
+    // 控えを閉じる。閉じないと、次の一回ぶんと混ざって戻しすぎる。run_command の分もここで載せる。
+    const closed = await wired.finish().catch(() => undefined);
+    if (closed?.point) console.log(c.dim(`戻り先: ${closed.point.id}（aas undo で戻せます）`));
+    if (closed && closed.unrecorded.length > 0) {
+      console.log(c.yellow(`前の中身を記録できず、戻せないファイル: ${closed.unrecorded.join(', ')}`));
+    }
+    // 起こした子（この中で読む道）を残さない。残すと次の起動で口が埋まる。
+    await runtime.shutdown().catch(() => undefined);
+    rl.close();
   }
-  // 起こした子（この中で読む道）を残さない。残すと次の起動で口が埋まる。
-  await runtime.shutdown().catch(() => undefined);
-  rl.close();
 }
 
 await main();

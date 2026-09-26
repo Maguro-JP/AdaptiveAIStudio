@@ -200,6 +200,21 @@ describe('team は、run_command が変えた分も戻り先に載せる', () =>
     assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'もと\n', '途中の姿に戻した');
   });
 
+  test('**始めから変わっていて前の中身を記録できなかった道は、途中の姿に戻さず「戻せない」と返す**', async () => {
+    const root = await repo({ 'big.txt': 'もと\n' });
+    // 始めの時点で変わっていて、記録の上限（ここでは 16 バイト）より大きい。中身は固定する。
+    await writeFile(join(root, 'big.txt'), 'x'.repeat(100));
+    const wired = await wireTeam(DEFAULT_CONFIG, root, undefined, Date.now(), '', { maxBytes: 16 });
+    await writeFile(join(root, 'big.txt'), '途中\n');
+    const tools = wired.toolsFor(item('t1'));
+    await named(tools, 'read_file').run({ path: 'big.txt' }, ctx(root, wired.beforeWrite));
+    const w = await named(tools, 'write_file').run({ path: 'big.txt', content: '最後\n' }, ctx(root, wired.beforeWrite));
+    assert.equal(w.isError, undefined, w.content);
+    const { point, unrecorded } = await wired.finish();
+    assert.deepEqual(unrecorded, ['big.txt'], '戻せないと言っていない');
+    assert.ok(!point?.paths.includes('big.txt'), `途中の姿を戻り先に残した: ${JSON.stringify(point)}`);
+  });
+
   test('何も変えなければ、戻り先は作らない（対）', async () => {
     const root = await repo({ 'a.txt': 'もと\n' });
     const wired = await wireTeam(DEFAULT_CONFIG, root);
