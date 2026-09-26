@@ -14,7 +14,7 @@
  * **黙って消さない。**消す物を決めるのはこちらだが、
  * 消したことを隠すと、次に何かが無くなったときに疑う先が増える。
  */
-import { readdir, stat, rm } from 'node:fs/promises';
+import { readdir, stat, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { binDir, modelsDir, stateDir } from '../core/home.ts';
 
@@ -98,6 +98,40 @@ export async function findRemovable(opts: {
     const s = await stat(path).catch(() => undefined);
     if (!s || now - s.mtimeMs < 60 * 60 * 1000) continue;
     found.push({ path, bytes: s.size, why: '会話の見出しを書き換えたときに残った一時ファイル' });
+  }
+
+  /*
+   * 状態のファイル（記憶・やり残し・段取り・戻り先）を置き換えるときの一時ファイル。置き換えられずに残ったもの。
+   * 名前は `<元の名前>.<pid>.<番号か英数字>.tmp`。会話と同じく、書いている最中のものを消さないよう 1 時間より古いものだけ。
+   */
+  const STATE_TMP = /^(memory|unfinished|goals)\.jsonl\.\d+\.[a-z0-9]+\.tmp$/;
+  const UNDO_TMP = /\.json\.\d+\.\d+\.tmp$/;
+  const undoDir = join(stateDir(), 'undo');
+  for (const [dir, shape] of [[stateDir(), STATE_TMP], [undoDir, UNDO_TMP]] as const) {
+    for (const name of await readdir(dir).catch(() => [])) {
+      if (!shape.test(name)) continue;
+      const path = join(dir, name);
+      const s = await stat(path).catch(() => undefined);
+      if (!s || !s.isFile() || now - s.mtimeMs < 60 * 60 * 1000) continue;
+      found.push({ path, bytes: s.size, why: '覚えておくファイルを書き換えたときに残った一時ファイル' });
+    }
+  }
+
+  /*
+   * どの作業場のものか分からない古い戻り先（作業場の根を持たない）。
+   * どの作業場の「戻す」にも出ないので、戻す手にならないまま残り続ける。**根を持つものは消さない**
+   * （今の作業場のものでなくても、その作業場へ戻れば使う）。読めないもの・形の違うものも触らない。
+   */
+  for (const name of await readdir(undoDir).catch(() => [])) {
+    if (!name.endsWith('.json')) continue;
+    const path = join(undoDir, name);
+    const s = await stat(path).catch(() => undefined);
+    if (!s || !s.isFile()) continue;
+    let point: unknown;
+    try { point = JSON.parse(await readFile(path, 'utf8')); } catch { continue; }
+    if (typeof point !== 'object' || point === null || typeof (point as { id?: unknown }).id !== 'string') continue;
+    if ((point as { root?: unknown }).root !== undefined) continue;
+    found.push({ path, bytes: s.size, why: 'どの作業場のものか分からない古い戻り先（どの作業場の「戻す」にも出ません）' });
   }
 
   // 古い記録。新しいものは残す（直近の様子は見たいことがある）。

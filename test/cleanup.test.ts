@@ -46,6 +46,40 @@ describe('片づけるもの・片づけないもの', () => {
     assert.deepEqual((await findRemovable({ keepTag: 'b9999' })).map((f) => f.path), [], '書いている最中の一時ファイルを消そうとした');
   });
 
+  test('状態のファイルと戻り先で残った古い一時ファイルは消す。新しいもの・元のファイル・知らない名前は消さない', async () => {
+    const { home } = await scratch();
+    const undo = join(home, 'undo');
+    await mkdir(undo, { recursive: true });
+    const old = [
+      join(home, 'memory.jsonl.123.a1b2c3.tmp'),
+      join(home, 'unfinished.jsonl.123.4.tmp'),
+      join(home, 'goals.jsonl.123.5.tmp'),
+      join(undo, 'u1.json.123.6.tmp'),
+    ];
+    for (const p of old) await writeFile(p, 'x');
+    await writeFile(join(home, 'memory.jsonl'), '{}\n');
+    await writeFile(join(home, 'goals.jsonl'), '{}\n');
+    await writeFile(join(home, 'mine.jsonl.123.4.tmp'), 'x');
+    await writeFile(join(undo, 'u1.json'), JSON.stringify({ id: 'u1', root: home }));
+    const later = Date.now() + 2 * 60 * 60 * 1000;
+    assert.deepEqual((await findRemovable({ keepTag: 'b9999', now: later })).map((f) => f.path).sort(), [...old].sort());
+    assert.deepEqual((await findRemovable({ keepTag: 'b9999' })).map((f) => f.path), [], '書いている最中の一時ファイルを消そうとした');
+  });
+
+  test('作業場の根を持たない古い戻り先は消す。根を持つもの（別の作業場のものも）・読めないものは消さない', async () => {
+    const { home } = await scratch();
+    const undo = join(home, 'undo');
+    await mkdir(undo, { recursive: true });
+    await writeFile(join(undo, 'old.json'), JSON.stringify({ id: 'old', files: [] }));
+    await writeFile(join(undo, 'here.json'), JSON.stringify({ id: 'here', root: home, files: [] }));
+    await writeFile(join(undo, 'there.json'), JSON.stringify({ id: 'there', root: '/somewhere/else', files: [] }));
+    await writeFile(join(undo, 'broken.json'), '{');
+    await writeFile(join(undo, 'nothing.json'), 'null');
+    await writeFile(join(undo, 'no-id.json'), JSON.stringify({ files: [] }));
+    await writeFile(join(undo, 'text.json'), JSON.stringify('x'));
+    assert.deepEqual((await findRemovable({ keepTag: 'b9999' })).map((f) => f.path), [join(undo, 'old.json')]);
+  });
+
   test('途中で切れた取得は消す', async () => {
     const { models } = await scratch();
     await writeFile(join(models, 'm.gguf.part'), 'x');
