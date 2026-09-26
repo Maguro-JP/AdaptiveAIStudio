@@ -19,7 +19,7 @@ import type { ToolContext, ApprovalAnswer } from '../src/agent/tools/types.ts';
 
 /** 承認のあいだに `during` を走らせる文脈。控えた分も覚えておく。 */
 function ctxWith(root: string, during: () => Promise<void>) {
-  const kept: Array<{ path: string; previous: string | undefined }> = [];
+  const kept: Array<{ path: string; previous: string | Buffer | undefined }> = [];
   const ctx: ToolContext = {
     root,
     signal: new AbortController().signal,

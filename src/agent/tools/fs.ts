@@ -7,6 +7,7 @@ import { safeResolve, realSafeResolve, isSymlink, toDisplayPath } from './paths.
 import { type Tool, type ToolContext, ok, fail, requireString, optionalPositiveInt } from './types.ts';
 import { applyEdit, nearestTo } from './write-kind.ts';
 import { Ignores } from '../ignore.ts';
+import { contentOf, type FileContent } from '../../harness/put-back.ts';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'target', '.venv']);
 const MAX_READ_BYTES = 400_000;
@@ -342,11 +343,21 @@ async function commit(
 ): Promise<{ content: string; isError?: boolean }> {
   let before = '';
   let created = false;
+  /**
+   * 書く前の中身を、**バイト列で**持つ。utf8 で往復しないもの（Shift_JIS の文書、二進）を
+   * 文字列で持つと U+FFFD に置き換わり、戻り先へ記録した中身も化ける（「戻す」を押しても元に戻らない）。
+   */
+  let priorBytes: Buffer | undefined;
+  let prior: FileContent | undefined;
   try {
-    before = await readFile(abs, 'utf8');
+    priorBytes = await readFile(abs);
+    prior = contentOf(priorBytes);
+    // 差分に出すための文字。utf8 で読めないものは中身の代わりに大きさだけ見せる（化けた差分を見せない）。
+    before = typeof prior === 'string' ? prior : `（utf8 で読めない中身 ${priorBytes.length} バイト）\n`;
   } catch {
     created = true;
   }
+  const opaque = prior !== undefined && typeof prior !== 'string';
 
   // 元の改行に合わせる。Windows で取ってきた木は CRLF のことがあり、
   // モデルは LF で書き戻す。そのまま書くと**1行も直していないのに
@@ -360,7 +371,7 @@ async function commit(
    * 「変更なし」と返して**何も作っていなかった**。頼んだ側には変更が無いと
    * 見えるのに、ファイルは生まれていない。作るときは、空でも通す。
    */
-  if (before === written && !created) return ok(`変更なし: ${shown}`);
+  if (before === written && !created && !opaque) return ok(`変更なし: ${shown}`);
 
   const display = toDisplayPath(ctx.root, abs);
   // 差分は LF に揃えて見せる。^M が全行に並ぶと読めない。
@@ -381,8 +392,10 @@ async function commit(
      *
      * 変わっていたら書かない。読み直してから、と返す。
      */
-    const nowOnDisk = await readFile(abs, 'utf8').catch(() => undefined);
-    if (nowOnDisk !== (created ? undefined : before)) {
+    // バイト列で比べる。文字にしてから比べると、utf8 で読めないものは違う中身でも同じに見える。
+    const nowOnDisk = await readFile(abs).catch(() => undefined);
+    const same = created ? nowOnDisk === undefined : nowOnDisk !== undefined && priorBytes!.equals(nowOnDisk);
+    if (!same) {
       return fail(`待っているあいだに ${shown} が変わりました。`
         + '読み直してから、もう一度書いてください（いまの中身は消していません）');
     }
@@ -394,6 +407,8 @@ async function commit(
     // `'all'`（この依頼のあいだは訊かない）は、ここまで来ない形にしてある
     // （画面の側で `true` に直す）。それでも、来たら通す側として扱う。
     if (answer !== true && answer !== 'all' && !(created && written === '')) {
+      // 塊を当てる先（`before`）が中身そのものではないので、一部だけは当てられない。
+      if (opaque) return fail(`utf8 で読めないファイルは、一部だけ通すことができません: ${shown}`);
       const all = splitHunks(diff);
       const took = [...new Set(answer.hunks)].filter((i) => i >= 0 && i < all.length).sort((a, b) => a - b);
       if (took.length === 0) return fail(`利用者が書き込みを拒否しました: ${shown}`);
@@ -405,11 +420,11 @@ async function commit(
       }
     }
 
-    if (body === before && !created) return ok(`変更なし: ${shown}${partial}`);
+    if (body === before && !created && !opaque) return ok(`変更なし: ${shown}${partial}`);
 
     // **書き換える直前に控える。**ここを通らない書き込みは無いので、
     // 戻せないものが生まれない。
-    ctx.beforeWrite?.(display, created ? undefined : before);
+    ctx.beforeWrite?.(display, created ? undefined : prior);
 
     try {
       await mkdir(dirname(abs), { recursive: true });
@@ -528,9 +543,18 @@ export const editFileTool: Tool = {
       return fail(`リンク越しには書きません: ${p}（実体を直接指定してください）`);
     }
 
-    const before = await readFile(abs, 'utf8').catch(() => undefined);
-    if (before === undefined) {
+    const bytes = await readFile(abs).catch(() => undefined);
+    if (bytes === undefined) {
       return fail(`まだありません: ${p}（新しく作るなら write_file を使ってください）`);
+    }
+    const before = contentOf(bytes);
+    /*
+     * **utf8 で読めないファイルは、一部だけ書き換えない。**
+     * 文字として読んで書き戻すと、直していない行（Shift_JIS の日本語など）まで U+FFFD に化ける。
+     */
+    if (typeof before !== 'string') {
+      return fail(`utf8 で読めないファイルです: ${p}（Shift_JIS などの文書か、二進のファイル）。`
+        + '一部だけ書き換えると、直していない所まで文字が化けます。**何も書いていません。**');
     }
 
     // モデルは LF で書いてくる。中身が CRLF だと、**そのままでは一致しない。**

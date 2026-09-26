@@ -67,7 +67,7 @@ export interface AgentOptions {
   priority?: Priority;
   approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
   /** 書き込む直前の控え。**戻せるようにするため**、書く道具から呼ばれる。 */
-  beforeWrite?(relPath: string, previous: string | undefined): void;
+  beforeWrite?(relPath: string, previous: string | Buffer | undefined): void;
   /** 書けたときの、実際に書いた分の差分。画面の札をこれで描く。 */
   wrote?(relPath: string, diff: string, created: boolean): void;
 }

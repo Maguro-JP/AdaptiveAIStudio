@@ -38,7 +38,7 @@ export interface TeamWiring {
    */
   assign(roleId: string, item: WorkItem): { system: string; tools: Tool[] } | undefined;
   /** 書き換える直前の中身を控える。**戻せるようにするため。** */
-  beforeWrite(path: string, previous: string | undefined): void;
+  beforeWrite(path: string, previous: string | Buffer | undefined): void;
   /** 一回ぶんの戻り先。終わったら `end()` で閉じる。 */
   undo: UndoStore;
   harness: Harness;
