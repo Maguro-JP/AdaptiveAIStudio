@@ -80,6 +80,8 @@ import { diffStat, unifiedDiff } from '../agent/diff.ts';
 import { inspectDependencies, describeDependencies } from '../agent/dependencies.ts';
 import type { LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
+import { Conversation } from './conversation.ts';
+import { WorkspaceLock } from './workspace-lock.ts';
 import { fitByTokens, estimateTokens } from '../agent/window.ts';
 import { ProjectRules } from '../agent/project-rules.ts';
 import type { Counter } from '../agent/tokenizer.ts';
@@ -324,6 +326,13 @@ export class Session {
    * 利用者にできることが「自分で書き戻す」しか無い**のでは任せられない。
    */
   readonly undo: UndoStore;
+  /**
+   * 作業場の錠。書く依頼は持っている間だけ作業場を変え、「戻す」の記録・巻き戻し・外の変化の比べを持つ。
+   * 二つの会話が同時に書くと、互いの書き込みを外の変化と読み違えるため（DECISIONS 09-26）。
+   */
+  readonly lock = new WorkspaceLock();
+  /** 錠の持ち主の札を作る数え。 */
+  #lockSeq = 0;
   /** 了解した警告（作業場ごと）。画面の `/api/acks` と CLI の `/ack` が同じものを触る。 */
   readonly acks: AckStore;
   /** なぜいまのモデルなのか。画面に出すために持つ（黙って選ばない）。 */
@@ -403,20 +412,11 @@ export class Session {
   /** 協議の場。依頼ごとに開き直す。 */
   readonly #forum: Forum;
   readonly #harness: Harness;
-  readonly #history: ProviderMessage[] = [];
-  #running?: AbortController;
-  #instruction = '';
-  /** いま添えている覚え。結果が出たら、ここへ書き戻す。 */
-  #recalledIds: string[] = [];
   /**
-   * 直前の回で何をしたか。
-   *
-   * 嫌がられたときに「このとき何をしていたか」を添えるために持つ。
-   * これが無いと、覚えが符丁の羅列になって、次の手が変わらない。
+   * いまの会話（履歴・実行中・依頼文・差分）。`src/core/conversation.ts`。
+   * いまは一つだけ持つ。画面で会話ごとに走らせる段（DECISIONS 09-26 の 2c）で、呼ぶ側が渡す形にする。
    */
-  #lastTurn?: { instruction: string; tools: string[]; changed: string[]; checked: string };
-  /** 書き込みの直前に作られた差分。承認の問い合わせを通り道にして拾う。 */
-  readonly #diffs = new Map<string, { diff: string; created: boolean }>();
+  readonly #conv = new Conversation();
   /** 提案がどの思考から出たか。採否をその思考の実績に返すために持つ。 */
   readonly #origin = new Map<string, string>();
   #lastChangeAt = Date.now();
@@ -638,7 +638,7 @@ export class Session {
     return session;
   }
 
-  get busy(): boolean { return this.#running !== undefined; }
+  get busy(): boolean { return this.#conv.running !== undefined; }
 
   /** いま何本目の依頼か。依頼のあいだだけ効くものは、これが変わったら外す。 */
   get requestSeq(): number { return this.#requests; }
@@ -648,7 +648,7 @@ export class Session {
    * 差分は道具の中で作られていて、承認以外に外へ出る道が無いため。
    */
   readonly #approve = async (req: ApprovalRequest): Promise<ApprovalAnswer> => {
-    if (req.kind === 'write') this.#diffs.set(req.path, { diff: req.diff, created: req.created });
+    if (req.kind === 'write') this.#conv.diffs.set(req.path, { diff: req.diff, created: req.created });
     return this.#opts.approve(req);
   };
 
@@ -656,8 +656,8 @@ export class Session {
   #takeDiff(path: string): { diff: string; created: boolean } | undefined {
     const key = path.replace(/\\/g, '/').replace(/^\.\//, '');
     for (const candidate of [path, key]) {
-      const found = this.#diffs.get(candidate);
-      if (found) { this.#diffs.delete(candidate); return found; }
+      const found = this.#conv.diffs.get(candidate);
+      if (found) { this.#conv.diffs.delete(candidate); return found; }
     }
     return undefined;
   }
@@ -681,14 +681,34 @@ export class Session {
       yield { type: 'log', level: 'error', text: this.noModel };
       return undefined;
     }
-    if (this.#running) {
+    if (this.#conv.running) {
       yield { type: 'log', level: 'warn', text: 'いま別の作業をしています。' };
       return undefined;
     }
     const ac = new AbortController();
-    this.#running = ac;
+    this.#conv.running = ac;
+    /*
+     * 段取りは担当が並列に書くので、依頼の頭で作業場の錠を取る（最初に書く時点を一つに決められない）。
+     * 止められて待つのをやめたら、何もせずに終える。
+     */
+    const lockOwner = `plan:${++this.#lockSeq}`;
+    try {
+      await this.lock.acquire(lockOwner, ac.signal);
+    } catch (e) {
+      this.#conv.running = undefined;
+      yield { type: 'log', level: 'warn', text: (e as Error).message };
+      return undefined;
+    }
     // 段取りでもファイルを触る。**戻せるのは送り口だけ、にしない。**
-    await this.undo.begin(request);
+    // 始められなかったら（前の戻り先を閉じる書き込みの失敗など）、錠と「動いている」を返して終える。
+    try {
+      await this.undo.begin(request);
+    } catch (e) {
+      this.lock.release(lockOwner);
+      this.#conv.running = undefined;
+      yield { type: 'log', level: 'error', text: (e as Error).message };
+      return undefined;
+    }
     this.#holder.instruction = request;
     this.#requests += 1;
     // 依頼が変われば協議もやり直し。前回通した話で今回の変更を通させない。
@@ -788,7 +808,7 @@ export class Session {
         maxTotalParallel: this.config.agent?.maxTotalParallel,
         approve: this.#approve,
         beforeWrite: (path, previous) => this.undo.capture(path, previous),
-        wrote: (path, diff, created) => this.#diffs.set(path, { diff, created }),
+        wrote: (path, diff, created) => this.#conv.diffs.set(path, { diff, created }),
         // 権限は役職から配る。調べるだけの担当は書き込む手段を持たない。
         assign: (roleId) => {
           const role = this.roles.get(roleId);
@@ -955,10 +975,12 @@ export class Session {
       yield { type: 'log', level: 'error', text: (e as Error).message };
       return undefined;
     } finally {
-      this.#running = undefined;
       // 担当の途中で落ちた・止めた回も、そこまでに外のツールが変えた分を戻せるように。
       await takeOutside();
       await this.undo.end().catch(() => undefined);
+      // 錠を返してから「動いていない」にする（送り口と同じ）。
+      this.lock.release(lockOwner);
+      this.#conv.running = undefined;
       await this.memory.save().catch(() => undefined);
     }
   }
@@ -983,7 +1005,7 @@ export class Session {
       yield { type: 'declined', reason: '設定で、暇なときの考えごとを止めています（initiative.enabled）' };
       return false;
     }
-    if (this.#running) {
+    if (this.#conv.running) {
       yield { type: 'declined', reason: 'いま別の作業をしています' };
       return false;
     }
@@ -1080,7 +1102,7 @@ export class Session {
     };
 
     const ac = new AbortController();
-    this.#running = ac;
+    this.#conv.running = ac;
     let text = '';
     try {
       const thinker = new Agent(this.orchestrator, {
@@ -1105,7 +1127,7 @@ export class Session {
       // 考えに失敗しても、この場所は止まらない。
       return true;
     } finally {
-      this.#running = undefined;
+      this.#conv.running = undefined;
     }
 
     if (mode.id === 'recon') this.proposals.markExamined(fingerprint);
@@ -1211,7 +1233,7 @@ export class Session {
   }
 
   /** いま動いているものを止める。止めても対話は続く。 */
-  abort(): void { this.#running?.abort(); }
+  abort(): void { this.#conv.running?.abort(); }
 
   /**
    * 指示を受けて、起きたことを順に返す。
@@ -1246,13 +1268,13 @@ export class Session {
       yield { type: 'finished', reason: 'error', detail: this.noModel };
       return;
     }
-    if (this.#running) {
+    if (this.#conv.running) {
       yield { type: 'log', level: 'warn', text: 'いま別の作業をしています。' };
       return;
     }
     const ac = new AbortController();
-    this.#running = ac;
-    this.#instruction = instruction;
+    this.#conv.running = ac;
+    this.#conv.instruction = instruction;
     this.#holder.instruction = instruction;
     this.#requests += 1;
     this.#forum.clear();
@@ -1265,7 +1287,7 @@ export class Session {
      * **どの依頼を戻すのか人が選べない**（押して実測）。
      */
     // 打った分が空（添付だけを送った回）なら、差し込んだ方を使う。空の名前を残さない。
-    await this.undo.begin(opts.said || instruction);
+    const undoName = opts.said || instruction;
 
     const verifyCfg = this.config.agent?.verify ?? {};
     const harnessCfg = this.config.harness ?? {};
@@ -1286,6 +1308,21 @@ export class Session {
      */
     const outside = new OutsideChanges(this.root);
     const outsideTool = (name: string): boolean => isExternalTool(name) || name === 'run_command';
+    /*
+     * **書き得る手を初めて使う時点で、作業場の錠を取り、「戻す」の記録を始める。**
+     *
+     * 読むだけの回（質問・調べもの）は錠を取らず、ほかの会話と並んで動ける。錠を取ってから記録を始めるので、
+     * 二つの会話の書き込みが一つの戻り先に混ざらない。ツールはこちらが次の出来事を受け取ってから動くので、
+     * ここで待てば書く前に止まる。
+     */
+    const lockOwner = `send:${++this.#lockSeq}`;
+    let locked = false;
+    const takeLock = async (name: string): Promise<void> => {
+      if (locked || !(mayChangeFiles(name) || isWriteTool(name) || outsideTool(name))) return;
+      await this.lock.acquire(lockOwner, ac.signal);
+      locked = true;
+      await this.undo.begin(undoName);
+    };
     /** 前の中身を記録できなかった道（大きすぎる・取れない）。戻せないことを言うために持つ。 */
     const outsideUnrecorded: string[] = [];
     this.#harness.beginTask();
@@ -1319,7 +1356,7 @@ export class Session {
      * 場面（直前の指示）は、この回の記録で上書きされる前に取る。
      */
     const situation = {
-      when: this.#lastTurn?.instruction.trim().slice(0, 120),
+      when: this.#conv.lastTurn?.instruction.trim().slice(0, 120),
       did: this.#lastTurnSummary(),
     };
 
@@ -1332,7 +1369,7 @@ export class Session {
       const recalled = chat ? '' : this.#recall(instruction, { lessons: false });
       if (recalled) yield { type: 'recalled', text: recalled };
 
-      this.#history.push({
+      this.#conv.history.push({
         role: 'user',
         content: recalled ? `${instruction}\n\n---\n${recalled}` : instruction,
       });
@@ -1427,7 +1464,7 @@ export class Session {
       const usedTools: string[] = [];
 
       const run = async function* (this: Session, agent: Agent): AsyncGenerator<SessionEvent> {
-        for await (const ev of agent.run(this.#history, ac.signal)) {
+        for await (const ev of agent.run(this.#conv.history, ac.signal)) {
           switch (ev.type) {
             case 'thinking':
               answerChars += ev.delta.length;
@@ -1443,6 +1480,7 @@ export class Session {
               yield { type: 'trimmed', dropped: ev.dropped };
               break;
             case 'toolStart':
+              await takeLock(ev.call.name);
               // 作業場を変える手前で、作業前の状態を控える。
               await before.atToolStart(ev.call.name);
               while (beforeEvents.length > 0) yield beforeEvents.shift()!;
@@ -1538,11 +1576,12 @@ export class Session {
         keep = false;
         const events: SessionEvent[] = [];
         const fix = async (feedback: string, sig: AbortSignal): Promise<void> => {
-          this.#history.push({ role: 'user', content: feedback });
-          for await (const ev of (await this.#agent({ chat })).run(this.#history, sig)) {
+          this.#conv.history.push({ role: 'user', content: feedback });
+          for await (const ev of (await this.#agent({ chat })).run(this.#conv.history, sig)) {
             if (ev.type === 'thinking') events.push({ type: 'text', delta: ev.delta });
             else if (ev.type === 'salvaged') events.push({ type: 'salvaged', name: ev.name });
             else if (ev.type === 'toolStart') {
+              await takeLock(ev.call.name);
               if (isWriteTool(ev.call.name) && harnessCfg.rollbackOnGiveUp) {
                 const p = (ev.call.args as { path?: unknown }).path;
                 if (typeof p === 'string') await checkpoint.capture(p);
@@ -1705,7 +1744,7 @@ export class Session {
       // 添えた覚えに、結果を書き戻す。ここが「使うほど賢く」の要。
       this.#gradeRecall(checked);
       // 次に嫌がられたとき、「このとき何をしていたか」を言えるようにする。
-      this.#lastTurn = { instruction, tools: usedTools, changed: changedHere, checked };
+      this.#conv.lastTurn = { instruction, tools: usedTools, changed: changedHere, checked };
 
       /*
        * この回のことを覚える。
@@ -1756,19 +1795,27 @@ export class Session {
         ...speedOf(modelUsed, answerChars, (Date.now() - measuredFrom) / 1000),
       };
     } catch (e) {
+      /*
+       * 止めた回（作業場の錠を待っている間に止めた等）は「失敗」にしない。止めたと言う。
+       * 失敗として残すと、止めただけの手が「駄目だった手」として覚えられる。
+       */
+      const stopped = ac.signal.aborted;
       // 一度の失敗で対話ごと終わらせない。次の指示は受けられる。
+      // 規則の数え（harness）は、通常の止めた回と同じく「完了しなかった」に数える。
       this.#harness.endTask('failed');
-      yield { type: 'log', level: 'error', text: (e as Error).message };
+      if (!stopped) yield { type: 'log', level: 'error', text: (e as Error).message };
       yield {
-        type: 'settled', reason: 'failed', verified: false, checked,
+        type: 'settled', reason: stopped ? 'aborted' : 'failed', verified: false, checked,
         ...(chat ? { chat: true } : {}),
         seconds: (Date.now() - started) / 1000, detail: (e as Error).message,
         ...speedOf(modelUsed, answerChars, (Date.now() - measuredFrom) / 1000),
       };
     } finally {
-      this.#running = undefined;
-      // **この一往復ぶんを、戻り先として残す。**触っていなければ残らない。
-      await this.undo.end().catch(() => undefined);
+      // **この一往復ぶんを、戻り先として残す。**触っていなければ残らない（錠を取っていなければ始めてもいない）。
+      if (locked) await this.undo.end().catch(() => undefined);
+      // 錠を返してから「動いていない」にする。逆だと、その間に押した保存が錠に当たって断られる。
+      this.lock.release(lockOwner);
+      this.#conv.running = undefined;
       await this.memory.save().catch(() => undefined);
       // **この回が終わってから判じる。**待たせない、を本当にする。
       // こちらが書いた文は判じない（利用者が言っていないことを覚えないため）。
@@ -1844,7 +1891,7 @@ export class Session {
        * 書いたものと食い違う（当たっていない塊まで札に並び、そこの「戻す」は
        * 断られる）。書けた側から来たものを正とする。
        */
-      wrote: (path, diff, created) => this.#diffs.set(path, { diff, created }),
+      wrote: (path, diff, created) => this.#conv.diffs.set(path, { diff, created }),
     });
   }
 
@@ -1942,7 +1989,7 @@ export class Session {
    * 「同じことを言わせた」が並ぶだけの覚え書きは、学びではなく記録になる。
    */
   #lastTurnSummary(): string | undefined {
-    const last = this.#lastTurn;
+    const last = this.#conv.lastTurn;
     if (!last) return undefined;
     return [
       last.tools.length > 0 ? `使った道具: ${[...new Set(last.tools)].slice(0, 4).join(', ')}` : '道具は使っていない',
@@ -1972,8 +2019,8 @@ export class Session {
     const failed = this.memory.failedBefore(text, 2);
     const merged = [...related];
     for (const f of failed) if (!merged.some((e) => e.id === f.id)) merged.push(f);
-    this.#recalledIds = merged.map((e) => e.id);
-    this.memory.noteRecalled(this.#recalledIds);
+    this.#conv.recalledIds = merged.map((e) => e.id);
+    this.memory.noteRecalled(this.#conv.recalledIds);
     return formatRecall(merged);
   }
 
@@ -1984,8 +2031,8 @@ export class Session {
    * 重みを動かすと、思い込みが固まるだけで、賢くはならない。
    */
   #gradeRecall(checked: 'passed' | 'failed' | 'preexisting' | 'unsure' | 'notRun'): void {
-    const ids = this.#recalledIds;
-    this.#recalledIds = [];
+    const ids = this.#conv.recalledIds;
+    this.#conv.recalledIds = [];
     if (ids.length === 0) return;
     if (checked === 'passed') this.memory.noteOutcome(ids, true);
     else if (checked === 'failed') this.memory.noteOutcome(ids, false);
@@ -2231,14 +2278,14 @@ export class Session {
       // 無ければ組む（このあとの `find_code` もそれを使うので、払いは一度きり）。
       const index = await indexStore.fresh(this.root);
       if (index.files.length === 0) return '';
-      const seed = seedFrom(index, this.#instruction, this.#history
+      const seed = seedFrom(index, this.#conv.instruction, this.#conv.history
         .flatMap((m) => (typeof m.content === 'string' ? m.content.match(/[\w./-]+\.[a-z]{1,4}/g) ?? [] : [])),
         this.undo.recent());
       const held = this.#map;
       // 作ってあるものを使ってよいかは、**確かな手がかりだけ**で決める
       // （`covers` のコメント）。検索の点の付け方は、並べるには効くが、
       // 「そのファイルを直している」の判断には使えない。
-      const strong = seedFrom(index, this.#instruction, [], this.undo.recent(), { search: false });
+      const strong = seedFrom(index, this.#conv.instruction, [], this.undo.recent(), { search: false });
       if (held && held.builtAt === index.builtAt && covers(held.text, index, strong)) return held.text;
 
       // トークンではなく文字で切る（切り出しが文字単位のため）。**多めに数える。**
@@ -2253,7 +2300,7 @@ export class Session {
        * 効かせ方は repo map の予算で決める。数件しか見せられないときほど
        * 上位の精度が効き、ほとんど見せられるなら並べ直しても入れ替わるだけ。
        */
-      const ranked = await rerankByBody(index, this.#instruction, seed, rerankShare(chars));
+      const ranked = await rerankByBody(index, this.#conv.instruction, seed, rerankShare(chars));
       const entries = rankedEntries(index, ranked);
       const made = renderMap(entries, { chars }, count);
       this.#map = { text: made, builtAt: index.builtAt };
@@ -2261,10 +2308,10 @@ export class Session {
     } catch { return ''; }
   }
 
-  get instruction(): string { return this.#instruction; }
+  get instruction(): string { return this.#conv.instruction; }
 
   /** 話の続きを切る。覚えたことは消えない。忘れるのは、いま話していた流れだけ。 */
-  reset(): void { this.#history.length = 0; }
+  reset(): void { this.#conv.reset(); }
 
   /**
    * いままでのやりとり。**残す側が読む。**
@@ -2273,7 +2320,7 @@ export class Session {
    * 書き換えを許すと、道具の呼び出しと結果の対応が崩れて、
    * 次の一手でモデルが弾かれる。
    */
-  get history(): readonly ProviderMessage[] { return this.#history; }
+  get history(): readonly ProviderMessage[] { return this.#conv.history; }
 
   /**
    * 続きから話す。残してあったやりとりを積み直す。
@@ -2282,8 +2329,7 @@ export class Session {
    * 前の会話が下に残り、別の話が地続きに見える。
    */
   restore(messages: readonly ProviderMessage[]): void {
-    this.#history.length = 0;
-    this.#history.push(...messages);
+    this.#conv.restore(messages);
   }
 
   async close(): Promise<void> {
