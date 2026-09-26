@@ -11,7 +11,7 @@
  *   拒否 → そのまま作業が失敗した       悪い規則（邪魔をしている）
  *   一度も発動しない                    不要な規則（削る候補）
  */
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 export interface RuleStat {
@@ -50,8 +50,16 @@ export class HarnessMetrics {
   #stats = new Map<string, RuleStat>();
   #tasks = 0;
   #cleanTasks = 0;
-  /** 現在の依頼で拒否した規則 */
-  #current: string[] = [];
+  /**
+   * 開いている依頼ごとの、拒否した規則。札で分ける（札を渡さない呼び方は '' の一つ）。
+   *
+   * 一つだけ持つと、並行して走る依頼の拒否が混ざる。別の依頼の始まりが、走っている依頼の拒否を消し、
+   * 別の依頼の結末が、その拒否の良し悪しを決めてしまう。
+   */
+  #open = new Map<string, string[]>();
+  /** 保存を順に並べる列。並べないと、二つの会話がほぼ同時に終わったとき同じファイルへ二本が重なって書く。 */
+  #saving: Promise<void> = Promise.resolve();
+  #saveSeq = 0;
 
   constructor(path?: string) {
     this.#path = path;
@@ -71,13 +79,15 @@ export class HarnessMetrics {
     }
   }
 
-  /** 依頼の開始。拒否の集計単位を切る。 */
-  beginTask(): void {
-    this.#current = [];
+  /** 依頼の開始。拒否の集計単位を切る。`key` は依頼の札（並行する依頼を見分ける）。 */
+  beginTask(key = ''): void {
+    this.#open.set(key, []);
   }
 
-  recordDenial(rule: string): void {
-    this.#current.push(rule);
+  recordDenial(rule: string, key = ''): void {
+    const current = this.#open.get(key);
+    if (current) current.push(rule);
+    else this.#open.set(key, [rule]);
     this.#stat(rule).denials += 1;
   }
 
@@ -89,19 +99,21 @@ export class HarnessMetrics {
    * 依頼の終わり。
    * ここで初めて「その拒否が良かったのか」が分かる。
    */
-  endTask(outcome: TaskRecord['outcome']): void {
+  endTask(outcome: TaskRecord['outcome'], key = ''): void {
+    const current = this.#open.get(key) ?? [];
+    // 終えた札は閉じる。次の依頼に前の拒否を持ち越さない。
+    this.#open.delete(key);
     this.#tasks += 1;
-    if (this.#current.length === 0) {
+    if (current.length === 0) {
       this.#cleanTasks += 1;
       return;
     }
     // 同じ規則が複数回拒否しても、依頼としては1件と数える
-    for (const rule of new Set(this.#current)) {
+    for (const rule of new Set(current)) {
       const stat = this.#stat(rule);
       if (outcome === 'completed') stat.recovered += 1;
       else stat.abandoned += 1;
     }
-    this.#current = [];
   }
 
   /** 発動しなかった規則も一覧に出す。「効いていない」ことが情報になる。 */
@@ -156,18 +168,30 @@ export class HarnessMetrics {
     };
   }
 
-  async save(): Promise<void> {
-    if (!this.#path) return;
-    try {
-      await mkdir(dirname(this.#path), { recursive: true });
-      await writeFile(this.#path, JSON.stringify({
-        stats: [...this.#stats.values()],
-        tasks: this.#tasks,
-        cleanTasks: this.#cleanTasks,
-      }, null, 2), 'utf8');
-    } catch {
-      // 記録に失敗しても本体は止めない
-    }
+  /**
+   * 記録を書く。列に並べ、書く直前の数を写す（後から並んだ保存が、前の古い数で上書きされない）。
+   * 一時ファイルへ書いてから置き換える。途中で切れても前の記録が残る（壊れた記録は load が 0 から数え直す）。
+   */
+  save(): Promise<void> {
+    const path = this.#path;
+    if (!path) return Promise.resolve();
+    const next = this.#saving.then(async () => {
+      const tmp = `${path}.${process.pid}.${++this.#saveSeq}.tmp`;
+      try {
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(tmp, JSON.stringify({
+          stats: [...this.#stats.values()],
+          tasks: this.#tasks,
+          cleanTasks: this.#cleanTasks,
+        }, null, 2), 'utf8');
+        await rename(tmp, path);
+      } catch {
+        // 記録に失敗しても本体は止めない
+        await rm(tmp, { force: true }).catch(() => undefined);
+      }
+    });
+    this.#saving = next;
+    return next;
   }
 
   #stat(rule: string): RuleStat {

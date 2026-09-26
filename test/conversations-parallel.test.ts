@@ -18,7 +18,7 @@ import { Harness } from '../src/harness/harness.ts';
 import { HarnessMetrics } from '../src/harness/metrics.ts';
 import { readBeforeWrite } from '../src/harness/builtin-rules.ts';
 import { readFileTool, writeFileTool } from '../src/agent/tools/fs.ts';
-import { writeFile } from 'node:fs/promises';
+import { writeFile, readFile } from 'node:fs/promises';
 
 process.env.AAS_STATE_DIR = await tempDir('aas-conv-parallel-state-');
 const { Session } = await import('../src/core/session.ts');
@@ -29,15 +29,20 @@ before(async () => { fake = await startFakeServer({ kind: 'echo', delayMs: 400 }
 after(async () => { await fake.close(); });
 
 async function open() {
+  return (await openAt()).session;
+}
+
+async function openAt() {
   const root = join(await tempDir('aas-conv-parallel-'), 'project');
   await mkdir(root, { recursive: true });
-  return Session.create({
+  const session = await Session.create({
     providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
     candidates: ['local:m'],
     runtime: { kind: 'none' },
     agent: { root, approval: 'auto', verify: { enabled: false }, maxTurns: 3 },
     initiative: { enabled: false },
   } as never, { approve: () => Promise.resolve(true) });
+  return { session, root };
 }
 
 const texts = (c: Conversation) => c.history.map((m) => (typeof m.content === 'string' ? m.content : '')).join(' / ');
@@ -129,8 +134,8 @@ describe('規則の積み重ねは会話ごと', () => {
   });
 });
 
-describe('規則の数えは既定の会話の分だけ', () => {
-  test('数えない会話で規則が止めても、成績に数えない。数える会話なら数える', async () => {
+describe('規則の数えは依頼ごとの札で分ける', () => {
+  test('既定でない会話で規則が止めた回も、その会話の依頼の札で数える', async () => {
     const root = await tempDir('aas-conv-metrics-');
     await writeFile(join(root, 'a.txt'), 'もと\n');
     const metrics = new HarnessMetrics();
@@ -138,17 +143,68 @@ describe('規則の数えは既定の会話の分だけ', () => {
     const [, write] = harness.wrapAll([readFileTool, writeFileTool], () => '');
     const other = new Conversation();
     const main = new Conversation();
-    main.counted = true;
+    main.isDefault = true;
+    other.beginRequest('書いて');
     const ctx = (conv: Conversation) => ({
       root, signal: new AbortController().signal, approve: () => Promise.resolve(true as const), request: conv.request,
     });
-    const denials = () => metrics.report(['read-before-write']).rules[0]!.denials;
+    const stat = () => metrics.report(['read-before-write']).rules[0]!;
     harness.beginTask();
+    metrics.beginTask(other.request.metricsKey());
+    assert.notEqual(other.request.metricsKey(), main.request.metricsKey(), '二つの会話が同じ札を使う');
     const byOther = await write!.run({ path: 'a.txt', content: 'x\n' }, ctx(other));
     assert.equal(byOther.isError, true, '前提: 止められていない');
-    assert.equal(denials(), 0, 'ほかの会話で止めた回を数えた');
-    await write!.run({ path: 'a.txt', content: 'x\n' }, ctx(main));
-    assert.equal(denials(), 1, '既定の会話で止めた回を数えていない');
+    assert.equal(stat().denials, 1, 'ほかの会話で止めた回を数えていない');
+    // 既定の会話が先に終わっても、ほかの会話の拒否は既定の会話の結末に結び付かない。
+    harness.endTask('completed');
+    assert.equal(stat().recovered, 0, 'ほかの会話の拒否を既定の会話の完了に結び付けた');
+    metrics.endTask('failed', other.request.metricsKey());
+    assert.equal(stat().abandoned, 1, 'ほかの会話の拒否を、その会話の結末に結び付けていない');
+  });
+
+  test('Session を通しても、既定でない会話の拒否と結末を数える', async () => {
+    const statePath = join(process.env.AAS_STATE_DIR!, 'harness-metrics.json');
+    const read = async () => {
+      const raw = await readFile(statePath, 'utf8').catch(() => '');
+      const stats = raw ? (JSON.parse(raw) as { stats: Array<{ rule: string; denials: number; recovered: number; abandoned: number }>; tasks: number }) : undefined;
+      const s = stats?.stats.find((x) => x.rule === 'read-before-write');
+      return { denials: s?.denials ?? 0, ended: (s?.recovered ?? 0) + (s?.abandoned ?? 0), tasks: stats?.tasks ?? 0 };
+    };
+    const { session, root } = await openAt();
+    try {
+      await writeFile(join(root, 'a.txt'), 'もと\n');
+      fake.setBehavior({ kind: 'toolcall', name: 'write_file', args: { path: 'a.txt', content: 'x\n' }, then: '書けませんでした' });
+      const before = await read();
+      const a = new Conversation();
+      for await (const _ of session.send('a.txt を書き換えて', { conversation: a })) { /* 流す */ }
+      const after = await read();
+      assert.equal(after.denials - before.denials, 1, `既定でない会話の拒否を数えていない: ${JSON.stringify({ before, after })}`);
+      assert.equal(after.ended - before.ended, 1, '拒否を依頼の結末に結び付けていない');
+      assert.equal(after.tasks - before.tasks, 1, '既定でない会話の依頼を数えていない');
+    } finally {
+      fake.setBehavior({ kind: 'echo', delayMs: 400 });
+      await session.close();
+    }
+  });
+
+  test('受け取る側が途中で抜けても、その依頼を閉じて数えを保存する', async () => {
+    const statePath = join(process.env.AAS_STATE_DIR!, 'harness-metrics.json');
+    const tasks = async () => {
+      const raw = await readFile(statePath, 'utf8').catch(() => '');
+      return raw ? (JSON.parse(raw) as { tasks: number }).tasks : 0;
+    };
+    const { session } = await openAt();
+    try {
+      fake.setBehavior({ kind: 'echo', delayMs: 50 });
+      const before = await tasks();
+      const a = new Conversation();
+      // 最初の出来事で抜ける（for await の break は generator の return() で、finally だけが走る）。
+      for await (const _ of session.send('途中で抜ける', { conversation: a })) break;
+      assert.equal(await tasks() - before, 1, '途中で抜けた依頼を閉じていない（札が開いたまま残る）');
+    } finally {
+      fake.setBehavior({ kind: 'echo', delayMs: 400 });
+      await session.close();
+    }
   });
 });
 

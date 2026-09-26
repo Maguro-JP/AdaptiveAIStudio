@@ -6,6 +6,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
+import { readdir } from 'node:fs/promises';
 import { HarnessMetrics, formatReport } from '../src/harness/metrics.ts';
 
 const RULES = ['good-rule', 'strict-rule', 'sleeping-rule'];
@@ -105,6 +106,48 @@ describe('ハーネス計測', () => {
     assert.equal(stat.denials, 1);
     assert.equal(stat.recovered, 1);
     assert.equal(reloaded.report(['r']).tasks, 1);
+  });
+
+  test('重なって走る依頼の拒否は、札ごとに分けて結末に結び付ける', () => {
+    const m = new HarnessMetrics();
+    m.beginTask('a');
+    m.beginTask('b');
+    m.recordDenial('r', 'a');
+    // b の始まりと終わりで、走っている a の拒否を消さない。
+    m.endTask('completed', 'b');
+    m.endTask('failed', 'a');
+    const stat = m.report(['r']).rules[0]!;
+    assert.equal(stat.denials, 1);
+    assert.equal(stat.recovered, 0, 'b の完了を a の拒否に結び付けた');
+    assert.equal(stat.abandoned, 1, 'a の失敗を拒否に結び付けていない');
+    assert.equal(m.report(['r']).tasks, 2);
+    assert.equal(m.report(['r']).cleanTaskRatio, 0.5, 'b は拒否の無い依頼');
+  });
+
+  test('札を渡さない呼び方は、これまでどおり一つの依頼を追う', () => {
+    const m = new HarnessMetrics();
+    m.beginTask(); m.recordDenial('r'); m.endTask('completed');
+    // 終えた札は閉じる。次の依頼に前の拒否を持ち越さない。
+    m.beginTask(); m.endTask('failed');
+    const stat = m.report(['r']).rules[0]!;
+    assert.equal(stat.recovered, 1);
+    assert.equal(stat.abandoned, 0, '前の依頼の拒否を次の依頼に持ち越した');
+  });
+
+  test('並べて保存しても、最後の数が残り、一時ファイルを残さない', async () => {
+    const dir = await tempDir('aas-hm-many-');
+    const path = join(dir, 'harness.json');
+    const m = new HarnessMetrics(path);
+    const saves: Promise<void>[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      m.beginTask(String(i)); m.recordDenial('r', String(i)); m.endTask('completed', String(i));
+      saves.push(m.save());
+    }
+    await Promise.all(saves);
+    const reloaded = new HarnessMetrics(path);
+    await reloaded.load();
+    assert.equal(reloaded.report(['r']).tasks, 20, '最後の数が残っていない');
+    assert.deepEqual((await readdir(dir)).sort(), ['harness.json'], '一時ファイルが残った');
   });
 
   test('記録が無くても落ちない', async () => {

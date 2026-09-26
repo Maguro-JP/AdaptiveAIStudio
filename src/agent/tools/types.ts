@@ -15,10 +15,10 @@ export interface RequestScope {
   /** 協議の場。依頼ごとに開き直す。 */
   readonly forum: Forum;
   /**
-   * 規則の数え（metrics）に数えるか。数えは作業場で一つの「いまの依頼」を追っているので、
-   * 既定の会話の分だけ数える。ほかの会話の分を数えると、既定の会話の成績に混ざる。
+   * 規則の数え（metrics）で、この依頼を見分ける札。並行して走る依頼の拒否を、別の依頼の結末に
+   * 結び付けないために使う。作業場の既定の会話は ''（`Harness.beginTask()` が開く札）。
    */
-  counted(): boolean;
+  metricsKey(): string;
 }
 
 export interface ToolContext {
