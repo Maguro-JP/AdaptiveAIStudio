@@ -62,6 +62,15 @@ describe('utf8 で読めないファイルへ書く', () => {
     assert.deepEqual(await readFile(join(root, 'logo.png')), png);
   });
 
+  test('CRLF の Shift_JIS を置き換えると、改行は CRLF に合わせる（仮の一行で数えない）', async () => {
+    const { root, ctx } = await place();
+    const crlf = Buffer.concat([Buffer.from('x = 1\r\n'), Buffer.from([0x82, 0xa0, 0x0d, 0x0a])]);
+    await writeFile(join(root, 'memo.txt'), crlf);
+    const r = await writeFileTool.run({ path: 'memo.txt', content: 'x = 2\nok\n' }, ctx());
+    assert.equal(r.isError, undefined, r.content);
+    assert.equal(await readFile(join(root, 'memo.txt'), 'utf8'), 'x = 2\r\nok\r\n');
+  });
+
   test('utf8 のファイルは今までどおり（記録は文字列、BOM も残る）', async () => {
     const { root, undo, ctx } = await place();
     const bom = '﻿@echo off\r\n';

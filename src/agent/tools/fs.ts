@@ -9,6 +9,17 @@ import { applyEdit, nearestTo } from './write-kind.ts';
 import { Ignores } from '../ignore.ts';
 import { contentOf, type FileContent } from '../../harness/put-back.ts';
 
+/**
+ * utf8 で読めない中身の代わりに、差分へ出す一行。
+ *
+ * 化けた中身を差分に出さないための仮の文字で、ファイルの中身ではない。画面の札から塊・行ごとに
+ * 戻す口（`/api/revert`）は、この行を含む差分を断る（当てるとこの文字がファイルに書かれる）。
+ */
+export function opaqueLine(bytes: number): string {
+  return `（utf8 で読めない中身 ${bytes} バイト）`;
+}
+export const OPAQUE_LINE = /^（utf8 で読めない中身 \d+ バイト）$/;
+
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'target', '.venv']);
 const MAX_READ_BYTES = 400_000;
 
@@ -353,7 +364,7 @@ async function commit(
     priorBytes = await readFile(abs);
     prior = contentOf(priorBytes);
     // 差分に出すための文字。utf8 で読めないものは中身の代わりに大きさだけ見せる（化けた差分を見せない）。
-    before = typeof prior === 'string' ? prior : `（utf8 で読めない中身 ${priorBytes.length} バイト）\n`;
+    before = typeof prior === 'string' ? prior : `${opaqueLine(priorBytes.length)}\n`;
   } catch {
     created = true;
   }
@@ -362,7 +373,8 @@ async function commit(
   // 元の改行に合わせる。Windows で取ってきた木は CRLF のことがあり、
   // モデルは LF で書き戻す。そのまま書くと**1行も直していないのに
   // ファイル全体が変更扱い**になり、差分を見る意味がなくなる。
-  const written = matchLineEndings(content, before);
+  // utf8 で読めないものは、仮の一行ではなく元のバイト列で改行を数える（latin1 は 1 バイト 1 文字で、改行を崩さない）。
+  const written = matchLineEndings(content, opaque ? priorBytes!.toString('latin1') : before);
 
   /*
    * **空のファイルを作る道を塞がない。**

@@ -144,6 +144,15 @@ describe('当てた変更を、塊ごと・行ごとに戻す', () => {
   test('材料が足りなければ 400', async () => {
     assert.equal((await post('/api/revert', { path: 'a.txt' })).status, 400);
   });
+  test('前が utf8 で読めない中身だった差分は、当てずに断る（仮の一行がファイルに書かれる）', async () => {
+    const { unifiedDiff } = await import('../src/agent/diff.ts');
+    const { opaqueLine } = await import('../src/agent/tools/fs.ts');
+    const now = await readFile(join(work, 'a.txt'), 'utf8');
+    const diff = unifiedDiff('a.txt', `${opaqueLine(13)}\n`, now);
+    const r = await post('/api/revert', { path: 'a.txt', diff, picks: [{ hunk: 0 }] });
+    assert.equal(r.status, 409);
+    assert.equal(await readFile(join(work, 'a.txt'), 'utf8'), now, '断ったのに書いている');
+  });
 });
 
 describe('画面', () => {
