@@ -19,7 +19,7 @@ const { PANELS, TITLES } = await import('../src/ui/web/panels.js') as {
   TITLES: Record<string, string>;
 };
 
-interface Answer { hits?: Array<{ path: string; line: number; text: string }>; capped?: boolean; walkCapped?: boolean; tooBig?: number; error?: string; status?: number }
+interface Answer { hits?: Array<{ path: string; line: number; text: string }>; capped?: boolean; walkCapped?: boolean; tooBig?: number; unreadable?: number; error?: string; status?: number }
 
 /** パネルを開く。`/api/search` は `answer` を返す。叩いた先も控える。 */
 function open(answer: Answer) {
@@ -99,13 +99,14 @@ describe('探すパネル', () => {
   test('**見ていない分を、無かったことにしない**', async () => {
     const t = open({
       hits: [{ path: 'src/a.ts', line: 1, text: 'x' }],
-      capped: true, walkCapped: true, tooBig: 3,
+      capped: true, walkCapped: true, tooBig: 3, unreadable: 2,
     });
     input(t, 'search-q').value = 'x';
     press(t, '探す');
     await until(() => t.text().includes('打ち切りました'), '打ち切りを言う');
     assert.ok(t.text().includes('途中までしか見ていません'), `見ていない分を言っていません: ${t.text()}`);
     assert.ok(t.text().includes('3 個'), `開いていない分を言っていません: ${t.text()}`);
+    assert.ok(t.text().includes('utf8 で読めないため見ていないファイルが 2 個'), `読めずに見ていない分を言っていません: ${t.text()}`);
   });
 
   test('見つからなければ、そう言う（対）', async () => {

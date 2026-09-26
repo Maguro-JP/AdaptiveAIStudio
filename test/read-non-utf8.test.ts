@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { readFileTool, writeFileTool } from '../src/agent/tools/fs.ts';
+import { readFileTool, writeFileTool, searchTextTool } from '../src/agent/tools/fs.ts';
 import { Harness } from '../src/harness/harness.ts';
 import { readBeforeWrite } from '../src/harness/builtin-rules.ts';
 import type { ToolContext } from '../src/agent/tools/types.ts';
@@ -53,5 +53,16 @@ describe('utf8 で読めないファイルを読む', () => {
     assert.equal((await read!.run({ path: 'sjis.txt' }, ctx(root))).isError, true, '前提: 読めてしまった');
     const w = await write!.run({ path: 'sjis.txt', content: 'あ\n' }, ctx(root));
     assert.doesNotMatch(w.content, /BLOCKED/, `読んだのに止められた: ${w.content}`);
+  });
+
+  test('search_text は utf8 で読めないファイルの中を探さず、見ていない数を言う', async () => {
+    const root = await tempDir('aas-search-bin-');
+    await writeFile(join(root, 'a.bin'), Buffer.concat([Buffer.from('needle '), Buffer.from([0, 0xff, 0xfe]), Buffer.from('\n')]));
+    await writeFile(join(root, 'b.txt'), 'needle です\n');
+    const r = await searchTextTool.run({ query: 'needle' }, ctx(root));
+    assert.doesNotMatch(r.content, /\uFFFD/, '化けた字を渡した');
+    assert.doesNotMatch(r.content, /a\.bin:/, '二進の中を当たりとして返した');
+    assert.match(r.content, /b\.txt:1: needle です/, 'utf8 のファイルの当たりが消えた');
+    assert.match(r.content, /utf8 で読めないため見ていないファイルが 1 個/, '見ていないことを言っていない');
   });
 });

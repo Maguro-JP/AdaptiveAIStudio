@@ -177,6 +177,8 @@ export interface TextSearch {
   walkCapped: boolean;
   /** 大きすぎて開いていないファイルの数 */
   tooBig: number;
+  /** utf8 で読めない（二進・別の文字コード）ので中を見ていないファイルの数 */
+  unreadable: number;
   /** 探しにすら行けなかったときの理由 */
   error?: string;
 }
@@ -195,7 +197,7 @@ export async function searchText(
   base: string,
   signal: AbortSignal,
 ): Promise<TextSearch> {
-  const out: TextSearch = { hits: [], capped: false, walkCapped: false, tooBig: 0 };
+  const out: TextSearch = { hits: [], capped: false, walkCapped: false, tooBig: 0, unreadable: 0 };
   // list_files と同じ理由でリンクの先まで見る。片方だけ塞いでも漏れる。
   const abs = await realSafeResolve(root, base);
   if (!abs) return { ...out, error: `作業ディレクトリの外です: ${base}` };
@@ -237,7 +239,9 @@ export async function searchText(
       const info = await stat(target);
       // 大きすぎて見ていないファイルも、見ていないと言う。
       if (info.size > MAX_READ_BYTES) { out.tooBig += 1; continue; }
-      const text = await readFile(target, 'utf8');
+      // utf8 で読めないものは中を探さない（化けた字の行を当たりとして返さない）。見ていない数は言う。
+      const text = contentOf(await readFile(target));
+      if (typeof text !== 'string') { out.unreadable += 1; continue; }
       if (!text.includes(query)) continue;
       text.split('\n').forEach((line, i) => {
         if (!line.includes(query)) return;
@@ -247,7 +251,7 @@ export async function searchText(
           out.capped = true;
         }
       });
-    } catch { /* バイナリ等は読み飛ばす */ }
+    } catch { /* 読めない道（消えた・権限が無い）は読み飛ばす */ }
   }
   return out;
 }
@@ -285,6 +289,9 @@ export const searchTextTool: Tool = {
     }
     if (found.tooBig > 0) {
       notes.push(`（大きすぎて見ていないファイルが ${found.tooBig} 個あります）`);
+    }
+    if (found.unreadable > 0) {
+      notes.push(`（utf8 で読めないため見ていないファイルが ${found.unreadable} 個あります）`);
     }
     const tail = notes.length > 0 ? `\n${notes.join('\n')}` : '';
     const lines = found.hits.map((h) => `${h.path}:${h.line}: ${h.text}`);

@@ -8473,4 +8473,9 @@ Shift_JIS の文書に `edit_file` を当てると、直した一行のほかの
 
 確かめたこと: `test/read-non-utf8.test.ts` 4 件（二進・Shift_JIS は化けた字を渡さない、BOM つきの utf8 は
 これまでどおり、読めないと言われたあとの全文の置き換えは止めない）。直す前に最初の 2 件が落ちることを見た。
-確かめていない: `search_text` が二進のファイルの中を探して化けた字を返すか（別に見る）
+`search_text`（画面の検索 `/api/search` も同じ `searchText`）も同じだった。`readFile(..., 'utf8')` は二進でも
+例外を出さないので、「バイナリ等は読み飛ばす」の注記どおりには動いておらず、当たった行を化けた字のまま返していた。
+utf8 で読めないファイルは中を探さず、見ていない数（`unreadable`）を言う。画面の検索にも出す。
+試験: `test/read-non-utf8.test.ts`（search_text）、`test/ui-server.test.ts`（`/api/search` の `unreadable`）、
+`test/panel-search.test.ts`（画面に出す）。直す前に search_text の試験が落ちること、サーバーの受け渡しと画面の
+表示をそれぞれわざと外すと落ちることを見た
