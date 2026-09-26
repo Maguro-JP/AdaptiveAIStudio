@@ -8,8 +8,9 @@
  * 実行するかは利用者が決める。自発性と暴走は紙一重なので、
  * 「気づくこと」と「やること」の間に必ず承認を挟む。
  */
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { inOrder } from '../core/in-order.ts';
 
 export type ProposalKind =
   | 'bug'          // 壊れている可能性
@@ -43,6 +44,33 @@ export interface Proposal {
  */
 export const MAX_ITEMS = 200;
 
+/**
+ * 調べ終えた指紋を覚えておく上限。指紋にはファイルの大きさと時刻が入るので、書き換えるたびに増える。
+ * 刈らずにいたので、提案は 200 件でもファイルが際限なく大きくなった（5 万件で 1MB）。古い方から落とす。
+ */
+export const MAX_EXAMINED = 2000;
+
+const STATUSES = new Set<ProposalStatus>(['open', 'accepted', 'rejected', 'done']);
+
+/** 一件の形を確かめる（一覧・番号・重複の判定で使う所まで）。形が違うと、起動ごと止まっていた。 */
+function isProposal(v: unknown): v is Proposal {
+  if (typeof v !== 'object' || v === null) return false;
+  const p = v as Record<string, unknown>;
+  return typeof p.id === 'string' && typeof p.title === 'string' && typeof p.fingerprint === 'string'
+    && typeof p.createdAt === 'string' && STATUSES.has(p.status as ProposalStatus)
+    && typeof p.suggestedAction === 'string';
+}
+
+function idNumber(id: string): number {
+  const n = /^p(\d+)$/.exec(id);
+  const v = n ? Number(n[1]) : 0;
+  return Number.isSafeInteger(v) ? v : 0;
+}
+
+let tmpSeq = 0;
+
+interface DiskState { items: Proposal[]; examined: string[]; dropped: number; broken: boolean }
+
 export class ProposalQueue {
   readonly #path?: string;
   #items: Proposal[] = [];
@@ -55,46 +83,85 @@ export class ProposalQueue {
    * これが無いと、同じところを何度も調べ直して計算を捨てることになる。
    */
   #examined = new Set<string>();
+  /**
+   * 読めなかった（EBUSY 等）。この間は保存しない。空として始めて保存すると、溜めていた提案を全部上書きしていた。
+   */
+  #unreadable?: string;
+  /** この実体が刈って落とした番号。保存で合わせるとき、ファイルに残っていても戻さない。 */
+  #droppedIds = new Set<string>();
 
   constructor(path?: string) {
     this.#path = path;
   }
 
+  /** ファイルを読む。**無い**は空、**読めない**は投げる、**壊れている**は `broken` を立てて空。 */
+  async #readDisk(): Promise<DiskState> {
+    let text: string;
+    for (let tries = 0; ; tries += 1) {
+      try {
+        text = await readFile(this.#path!, 'utf8');
+        break;
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') return { items: [], examined: [], dropped: 0, broken: false };
+        if (tries >= 3 || !(code === 'EBUSY' || code === 'EPERM')) throw e;
+        await new Promise((r) => setTimeout(r, 100 * (tries + 1)));
+      }
+    }
+    let raw: unknown;
+    try { raw = JSON.parse(text); } catch { return { items: [], examined: [], dropped: 0, broken: true }; }
+    const list = Array.isArray(raw) ? raw : (raw as { items?: unknown } | null)?.items;
+    const obj = (Array.isArray(raw) ? {} : raw ?? {}) as { examined?: unknown; dropped?: unknown };
+    return {
+      // 形の違う一件（null 等）は、その一件だけ除く。
+      items: Array.isArray(list) ? list.filter(isProposal) : [],
+      examined: Array.isArray(obj.examined) ? obj.examined.filter((x): x is string => typeof x === 'string') : [],
+      /*
+       * **書いたものを、読み返す。**落とした数を保存に残していたのに読む側が見ていなかったので、
+       * 立ち上げ直すと 0 に戻り、次の保存でその 0 を書き込んでいた。
+       */
+      dropped: typeof obj.dropped === 'number' && Number.isFinite(obj.dropped) ? obj.dropped : 0,
+      broken: raw === null || (typeof raw !== 'object'),
+    };
+  }
+
   async load(): Promise<void> {
     if (!this.#path) return;
+    this.#unreadable = undefined;
     try {
-      const raw = JSON.parse(await readFile(this.#path, 'utf8')) as
-        Proposal[] | { items: Proposal[]; examined: string[]; dropped?: number };
-      if (Array.isArray(raw)) {
-        this.#items = raw;
-      } else {
-        this.#items = raw.items ?? [];
-        this.#examined = new Set(raw.examined ?? []);
-        /*
-         * **書いたものを、読み返す。**
-         *
-         * 落とした数は保存に残していたのに、読む側が見ていなかった。
-         * 立ち上げ直すと 0 に戻り、**次の保存でその 0 を書き込む。**
-         * 残していた数まで消えるので、保存に残した意味が無くなる。
-         * 画面はこのファイルを読んで出すので、消えたら人にも見えなくなる。
-         */
-        this.#dropped = typeof raw.dropped === 'number' ? raw.dropped : 0;
-      }
-    } catch {
+      const got = await this.#readDisk();
+      if (got.broken) await this.#setAside();
+      this.#items = got.items;
+      this.#examined = new Set(got.examined);
+      this.#dropped = got.dropped;
+    } catch (e) {
       this.#items = [];
       this.#examined = new Set();
       this.#dropped = 0;
+      this.#unreadable = (e as NodeJS.ErrnoException).code ?? (e as Error).message;
     }
     // 読み込んだ後も、**既にある番号の続きから**配る。件数から決めていたので、
     // 刈って抜けた番号をもう一度配っていた。
-    this.#issued = this.#items.reduce((max, x) => {
-      const n = /^p(\d+)$/.exec(x.id);
-      return n ? Math.max(max, Number(n[1])) : max;
-    }, 0);
+    this.#issued = this.#items.reduce((max, x) => Math.max(max, idNumber(x.id)), 0);
+  }
+
+  /**
+   * JSON として読めないファイルは、空で上書きする前に脇へ移す（`<名前>.broken-<時刻>`）。
+   * 書きかけで落ちたものでも、中身の大半は手で拾える。上書きすると拾えない。
+   */
+  async #setAside(): Promise<void> {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    await rename(this.#path!, `${this.#path}.broken-${stamp}`).catch(() => undefined);
   }
 
   markExamined(fingerprint: string): void {
     this.#examined.add(fingerprint);
+    // 古い方から落とす（Set は足した順に並ぶ）。
+    while (this.#examined.size > MAX_EXAMINED) {
+      const first = this.#examined.values().next().value;
+      if (first === undefined) break;
+      this.#examined.delete(first);
+    }
   }
 
   /** 提案済み・調査済みの両方。次に何を調べるかの判断に使う。 */
@@ -111,9 +178,13 @@ export class ProposalQueue {
   }
 
   find(id: string): Proposal | undefined {
-    // 前方一致でも引けるようにする。毎回全部打たせない。
-    return this.#items.find((p) => p.id === id)
-      ?? this.#items.find((p) => p.id.startsWith(id));
+    if (id.length === 0) return undefined; // 空は、どれにも当てない（前方一致で先頭の提案に当たっていた）
+    const exact = this.#items.find((p) => p.id === id);
+    if (exact) return exact;
+    // 前方一致でも引けるようにする（毎回全部打たせない）。ただし**当たりが一つだけのとき**に限る。
+    // 最初の当たりを返していたので、`p01` が p010 に、消えた `p100` が p1000 に当たり、別の提案を実行した。
+    const hits = this.#items.filter((p) => p.id.startsWith(id));
+    return hits.length === 1 ? hits[0] : undefined;
   }
 
   /**
@@ -179,6 +250,8 @@ export class ProposalQueue {
     this.#items = [...keepSettled, ...keepOpen].sort(
       (a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0),
     );
+    const kept = new Set([...keepSettled, ...keepOpen].map((x) => x.id));
+    for (const x of [...settled, ...open]) if (!kept.has(x.id)) this.#droppedIds.add(x.id);
     this.#dropped += (settled.length - keepSettled.length) + (open.length - keepOpen.length);
   }
 
@@ -191,19 +264,86 @@ export class ProposalQueue {
     return item;
   }
 
-  async save(): Promise<void> {
-    if (!this.#path) return;
-    try {
-      await mkdir(dirname(this.#path), { recursive: true });
-      await writeFile(this.#path, JSON.stringify({
-        items: this.#items,
-        examined: [...this.#examined],
-        // **落とした数も残す。**数えているのに残していなかったので、
-        // 立ち上げ直すと「無かったこと」になっていた。
-        dropped: this.#dropped,
-      }, null, 2), 'utf8');
-    } catch {
-      // 保存できなくても本体は止めない
+  /**
+   * 保存する。同じファイルへの保存は一列に並べる。
+   *
+   * **保存の直前に読み直して合わせる。**画面と端末は別々に読み込んで持つので、手元を丸ごと書くと、
+   * もう一方が足した提案・決めた採否を消していた。同じ番号を別の提案に配ることもあった（端末で「p003 を採る」と
+   * 打つと、見ていたものと別の提案が実行される）。
+   */
+  save(): Promise<void> {
+    const path = this.#path;
+    if (!path) return Promise.resolve();
+    return inOrder(path, async () => {
+      try {
+        let disk: DiskState;
+        try {
+          disk = await this.#readDisk();
+        } catch {
+          // 読めない間は書かない（空と取り違えて、溜めていた提案を上書きしない）。
+          return;
+        }
+        if (this.#unreadable) this.#unreadable = undefined; // 読めるようになった。合わせて書く
+        if (disk.broken) await this.#setAside();
+        this.#merge(disk.items, disk.examined, disk.dropped);
+        await mkdir(dirname(path), { recursive: true });
+        const tmp = `${path}.${process.pid}.${++tmpSeq}.tmp`;
+        try {
+          await writeFile(tmp, JSON.stringify({
+            items: this.#items,
+            examined: [...this.#examined],
+            // **落とした数も残す。**数えているのに残していなかったので、立ち上げ直すと「無かったこと」になっていた。
+            dropped: this.#dropped,
+          }, null, 2), 'utf8');
+          await rename(tmp, path);
+        } catch (e) {
+          await rm(tmp, { force: true }).catch(() => undefined);
+          throw e;
+        }
+      } catch {
+        // 保存できなくても本体は止めない
+      }
+    });
+  }
+
+  /**
+   * ファイルにある分と手元を合わせる。
+   * - 手元に無い番号は足す（もう一方が足したもの）。この実体が刈った番号は戻さない
+   * - 同じ番号で中身が違う（別々に同じ番号を配った）なら、手元の方を新しい番号に振り直す
+   * - 同じ提案で採否が違うなら、決まっている方を採る（開いたままの側が、決めたことを戻さない）
+   */
+  #merge(onDisk: Proposal[], examined: string[], dropped: number): void {
+    const mine = new Map(this.#items.map((x) => [x.id, x]));
+    for (const d of onDisk) this.#issued = Math.max(this.#issued, idNumber(d.id));
+    const merged: Proposal[] = [];
+    for (const d of onDisk) {
+      if (this.#droppedIds.has(d.id)) continue;
+      const m = mine.get(d.id);
+      if (!m) { merged.push(d); continue; }
+      if (m.fingerprint !== d.fingerprint || m.createdAt !== d.createdAt) {
+        merged.push(d);
+        continue; // 手元の方は、下で新しい番号を付けて足す
+      }
+      mine.delete(d.id);
+      merged.push(m.status === 'open' && d.status !== 'open' ? d : m);
+    }
+    const onDiskIds = new Set(onDisk.map((d) => d.id));
+    for (const m of this.#items) {
+      if (!mine.has(m.id)) continue;
+      if (onDiskIds.has(m.id)) m.id = this.#nextIdAmong(merged);
+      merged.push(m);
+    }
+    this.#items = merged.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+    for (const f of examined) if (!this.#examined.has(f)) this.markExamined(f);
+    this.#dropped = Math.max(this.#dropped, dropped);
+    this.#prune();
+  }
+
+  #nextIdAmong(list: Proposal[]): string {
+    for (;;) {
+      this.#issued += 1;
+      const id = `p${this.#issued.toString().padStart(3, '0')}`;
+      if (!list.some((x) => x.id === id) && !this.#items.some((x) => x.id === id)) return id;
     }
   }
 }

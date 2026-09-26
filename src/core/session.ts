@@ -1200,7 +1200,8 @@ export class Session {
   /** 提案の採否。役に立ったかどうかが、次に何を考えるかを変える。 */
   async decide(id: string, verdict: 'accepted' | 'rejected'): Promise<Proposal | undefined> {
     const target = this.proposals.find(id);
-    if (!target) return undefined;
+    // 決まった提案は決め直さない（片づいた提案を開き直して、もう一度実行していた）。
+    if (!target || target.status !== 'open') return undefined;
     this.proposals.setStatus(target.id, verdict);
     const origin = this.#origin.get(target.id);
     if (origin) this.idle.recordVerdict(origin, verdict);
