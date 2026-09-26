@@ -21,6 +21,7 @@ process.env.AAS_STATE_DIR = dir;
 const { UiServer } = await import('../src/ui/server.ts');
 const { DEFAULT_CONFIG } = await import('../src/config.ts');
 const { UnfinishedWork } = await import('../src/core/unfinished.ts');
+const { Goals } = await import('../src/core/goals.ts');
 
 /**
  * 偽モデルは、**試験ごとに一つ**。
@@ -132,6 +133,25 @@ describe('やり残しを、こちらから拾う', () => {
       assert.equal(del.status, 200);
       const after = await (await fetch(`${base}/api/unfinished`)).json() as { list: { id: string }[] };
       assert.ok(!after.list.some((u) => u.id === id), 'やめたのに残っている');
+    } finally { await s.stop(); await fake.close(); }
+  });
+
+  test('**やめた依頼の段取りも閉じる**（開いたまま残すと、同じ依頼をもう一度頼んだときに古い段取りの続きから始める）', async () => {
+    const state = await ownState('b2');
+    const root = await tempDir('aas-resume-root2b-');
+    const fake = await startFakeServer({
+      kind: 'stalls', name: 'list_files', args: { path: '.' },
+      then: 'このあと直します。',
+    });
+    const s = new UiServer({ config: config(fake, root), port: 0 });
+    const base = (await s.start()).replace(/\/$/, '');
+    try {
+      const { id } = await ask(base, 'tests を直して');
+      const goals = new Goals(join(state, 'goals.jsonl'));
+      await goals.open('tests を直して', ['読む', '直す']);
+      const del = await fetch(`${base}/api/unfinished?id=${id}`, { method: 'DELETE' });
+      assert.equal(del.status, 200);
+      assert.deepEqual((await goals.list()).map((g) => g.request), [], 'やめた依頼の段取りが開いたまま');
     } finally { await s.stop(); await fake.close(); }
   });
 

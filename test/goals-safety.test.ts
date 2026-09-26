@@ -109,6 +109,15 @@ describe('段取りの記録', () => {
     assert.ok((await readdir(join(path, '..'))).every((n) => !n.endsWith('.tmp')), '一時ファイルが残った');
   });
 
+  test('**元の依頼がもうやり残しに無い段取りを閉じる。在るものは残す**', async () => {
+    const { g } = await goals('retain');
+    const keep = await g.open('続ける依頼', ['読む']);
+    await g.open('取り消した依頼', ['読む']);
+    assert.equal(await g.retain(new Set(['続ける依頼'])), 1);
+    assert.deepEqual((await g.list()).map((x) => x.id), [keep.id]);
+    assert.equal(await g.retain(new Set(['続ける依頼'])), 0, '二度目に閉じるものは無い');
+  });
+
   test('畳む行数までは畳まない（対）', async () => {
     const { g, path } = await goals('no-compact');
     await writeFile(path, `${JSON.stringify({ t: 'goal', goal: { id: 'gx', request: 'r', createdAt: '2026-01-01T00:00:00.000Z', steps: [] } })}\n${JSON.stringify({ t: 'close', goalId: 'gx' })}\n`);
