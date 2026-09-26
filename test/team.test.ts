@@ -286,7 +286,7 @@ describe('team は素通りしない', () => {
       const events: TeamProgress[] = [];
       let next = await gen.next();
       while (!next.done) { events.push(next.value); next = await gen.next(); }
-      return { root, events, undo: wired.undo };
+      return { root, events, undo: wired.undo, finish: wired.finish };
     } finally {
       await server.close();
       delete process.env.AAS_STATE_DIR;
@@ -308,8 +308,8 @@ describe('team は素通りしない', () => {
   });
 
   test('**書き換えたものは、戻せる形で控えてある**', async () => {
-    const { root, undo } = await run('a.txt', ['secret.txt']);
-    const point = await undo.end();
+    const { root, undo, finish } = await run('a.txt', ['secret.txt']);
+    const { point } = await finish();
     assert.ok(point, '控えが残っていません（戻す手が無い）');
     assert.deepEqual(point.paths, ['a.txt']);
     await undo.restore(point.id);
