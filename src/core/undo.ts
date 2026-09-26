@@ -17,7 +17,7 @@
 import { readFile, writeFile, mkdir, unlink, stat, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { safeResolve } from '../agent/tools/paths.ts';
-import { putBack, putBackOrder } from '../harness/put-back.ts';
+import { putBack, putBackOrder, contentOf, contentBytes, type FileContent } from '../harness/put-back.ts';
 
 /** 一つの戻り先。 */
 export interface UndoPoint {
@@ -40,12 +40,42 @@ export interface UndoPoint {
 
 interface Saved {
   path: string;
-  /** 元々無かったファイルは undefined。戻すときは消す。 */
+  /** 元々無かったファイルは undefined。戻すときは消す。utf8 で往復しないものはバイト列。 */
+  content?: FileContent;
+}
+
+/**
+ * 記録に書く形。文字は `content`、バイト列は `base64` に入れる（JSON にバイト列は書けない）。
+ * どちらも無ければ「元々無かった」。`base64` を足す前の記録は `content` だけなので、そのまま読める。
+ */
+interface StoredFile {
+  path: string;
   content?: string;
+  base64?: string;
 }
 
 interface Stored extends UndoPoint {
-  files: Saved[];
+  files: StoredFile[];
+}
+
+function toStored(saved: Saved): StoredFile {
+  if (saved.content === undefined) return { path: saved.path };
+  return typeof saved.content === 'string'
+    ? { path: saved.path, content: saved.content }
+    : { path: saved.path, base64: saved.content.toString('base64') };
+}
+
+function fromStored(file: StoredFile): Saved {
+  if (typeof file.base64 === 'string') return { path: file.path, content: Buffer.from(file.base64, 'base64') };
+  return typeof file.content === 'string' ? { path: file.path, content: file.content } : { path: file.path };
+}
+
+/** 画面へ配るための中身。文字として読めないもの（二進）は配らない（`undefined` と区別するため `false`）。 */
+async function readText(abs: string): Promise<string | undefined | false> {
+  const bytes = await readFile(abs).catch(() => undefined);
+  if (bytes === undefined) return undefined;
+  const content = contentOf(bytes);
+  return typeof content === 'string' ? content : false;
 }
 
 /** 戻したファイル一つ。無かった・消した所は undefined。 */
@@ -133,10 +163,10 @@ export class UndoStore {
    *
    * `previous` を受け取るのは、**書く側が既に読んでいるものを二度読まない**ため。
    */
-  capture(relPath: string, previous: string | undefined): void {
+  capture(relPath: string, previous: FileContent | undefined): void {
     const open = this.#open;
     if (!open || open.files.has(relPath)) return;
-    const size = previous?.length ?? 0;
+    const size = contentBytes(previous);
     if (open.bytes + size > MAX_POINT_BYTES) {
       open.skipped.push(relPath);
       this.#note(relPath);
@@ -154,12 +184,12 @@ export class UndoStore {
    * 担当が先に `run_command` で変えた後に `write_file` で書くと、書く手前の記録（`capture`）は
    * `run_command` の後の姿になり、最初の一度が勝つせいで「戻す」が途中の姿に戻っていた。
    */
-  replace(relPath: string, previous: string | undefined): void {
+  replace(relPath: string, previous: FileContent | undefined): void {
     const open = this.#open;
     if (!open) return;
     const old = open.files.get(relPath);
-    const size = previous?.length ?? 0;
-    const freed = old?.content?.length ?? 0;
+    const size = contentBytes(previous);
+    const freed = contentBytes(old?.content);
     if (open.bytes - freed + size > MAX_POINT_BYTES) {
       this.forget(relPath);
       return;
@@ -178,7 +208,7 @@ export class UndoStore {
     if (!open) return;
     const old = open.files.get(relPath);
     if (old) {
-      open.bytes -= old.content?.length ?? 0;
+      open.bytes -= contentBytes(old.content);
       open.files.delete(relPath);
     }
     if (!open.skipped.includes(relPath)) open.skipped.push(relPath);
@@ -211,7 +241,7 @@ export class UndoStore {
       at: open.at,
       request: open.request,
       paths: [...open.files.keys()],
-      files: [...open.files.values()],
+      files: [...open.files.values()].map(toStored),
       ...(open.skipped.length > 0 ? { skipped: [...open.skipped] } : {}),
     };
     await mkdir(this.#dir, { recursive: true });
@@ -286,17 +316,17 @@ export class UndoStore {
      * と出していた（画面を押して実測）。何往復ぶん戻しても、人が見たいのは
      * 「戻す前 → 戻した後」なので、控えるのは最初の一度でよい。
      */
-    const was = new Map<string, string | undefined>();
+    const was = new Map<string, string | undefined | false>();
     // 新しい方から当てる。古い控えが後に来るので、いちばん古い姿が残る。
     for (const point of all.slice(0, at + 1)) {
       const raw = await readFile(join(this.#dir, `${point.id}.json`), 'utf8').catch(() => undefined);
       if (!raw) continue;
       let stored: Stored;
       try { stored = JSON.parse(raw) as Stored; } catch { continue; }
-      for (const saved of putBackOrder(stored.files ?? [])) {
+      for (const saved of putBackOrder((stored.files ?? []).map(fromStored))) {
         const abs = safeResolve(this.#root, saved.path);
         if (!abs) continue;
-        if (!was.has(saved.path)) was.set(saved.path, await readFile(abs, 'utf8').catch(() => undefined));
+        if (!was.has(saved.path)) was.set(saved.path, await readText(abs));
         // リンクは辿らず、フォルダには書かず、戻せなければ飛ばす（1件戻せなくても他は戻す）。
         const r = await putBack(this.#root, saved.path, saved.content);
         if (r === 'restored' && !touched.includes(saved.path)) touched.push(saved.path);
@@ -306,8 +336,11 @@ export class UndoStore {
     const changed: RestoredFile[] = [];
     for (const path of touched) {
       const abs = safeResolve(this.#root, path);
-      const after = abs ? await readFile(abs, 'utf8').catch(() => undefined) : undefined;
-      changed.push({ path, before: was.get(path), after });
+      const after = abs ? await readText(abs) : undefined;
+      const before = was.get(path);
+      // 二進は差分にできない。戻したことは `paths` で言い、画面へは配らない（化けた差分を見せない）。
+      if (before === false || after === false) continue;
+      changed.push({ path, before, after });
     }
     return { paths: touched, points: at + 1, changed };
   }
