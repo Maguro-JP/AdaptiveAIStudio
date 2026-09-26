@@ -998,9 +998,9 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
    * 違うまま、読み直しでその分を失う。**
    */
   test('**保存の返事を待つ間に打った分を、保存したことにしない**', async () => {
-    const disk = { 'a.txt': 'one\n' };
+    const disk = { 'typed-while-saving.txt': 'one\n' };
     const box = open(disk);
-    (box.ctx.openFile as (p: string) => void)('a.txt');
+    (box.ctx.openFile as (p: string) => void)('typed-while-saving.txt');
     await until(() => box.area().value === 'one\n', 'ファイルが開く');
 
     const inner = globalThis.fetch;
@@ -1019,11 +1019,11 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
     box.area().fire('input');
     release();
 
-    await until(() => disk['a.txt'] === 'one\ntwo\n', '送った分が保存される');
+    await until(() => disk['typed-while-saving.txt'] === 'one\ntwo\n', '送った分が保存される');
     await until(() => box.state().textContent.includes('保存しました'), '保存の返事が出る');
     assert.match(box.state().textContent, /まだ保存していません/,
       `保存の間に打った分を、保存したことにしている: ${box.state().textContent}`);
-    const kept = localStorage.getItem('aas.draft:a.txt');
+    const kept = localStorage.getItem('aas.draft:typed-while-saving.txt');
     assert.ok(kept && kept.includes('three'), '保存の間に打った分の預かりを消している');
     (globalThis as { fetch?: unknown }).fetch = inner;
   });
@@ -1091,19 +1091,21 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
    * 残らない。
    */
   test('**開き直せなくても、保存していない直しを欄から消さない**', async () => {
-    const disk: Record<string, string> = { 'a.txt': 'one\n' };
+    const disk: Record<string, string> = { 'gone-while-editing.txt': 'one\n' };
+    // 名前を他の試験と分ける。前の試験のパネルは、終わった後にも保存の返事を受けて同じ名前の預かりを消すことがある
+    // （預かる所はみんなで一つ）。重なると、ここが偶然落ちる（check の中で一度落ちた）。
     const box = open(disk);
-    (box.ctx.openFile as (p: string) => void)('a.txt');
+    (box.ctx.openFile as (p: string) => void)('gone-while-editing.txt');
     await until(() => box.area().value === 'one\n', 'ファイルが開く');
 
     box.area().value = 'one\nMINE\n';
     box.area().fire('input');
-    delete disk['a.txt'];
-    (box.ctx.openFile as (p: string) => void)('a.txt');
+    delete disk['gone-while-editing.txt'];
+    (box.ctx.openFile as (p: string) => void)('gone-while-editing.txt');
     await until(() => box.at('editor-notice').hidden === false, '開けなかったことを言う');
     assert.equal(box.area().value, 'one\nMINE\n', '開けなかっただけで、直しを欄から消している');
     assert.match(box.at('editor-notice').text, /残してあります/, '残してあることを言っていない');
-    const kept = localStorage.getItem('aas.draft:a.txt');
+    const kept = localStorage.getItem('aas.draft:gone-while-editing.txt');
     assert.ok(kept && kept.includes('MINE'), '開けなかったときに預かっていない');
   });
 
