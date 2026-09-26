@@ -16,6 +16,7 @@ import { findInstalled } from '../runtime/llama-install.ts';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { join } from 'node:path';
 import { readdir } from 'node:fs/promises';
+import { shiftJisSupported } from '../agent/tools/decode.ts';
 import { formatChecks, summaryLine, type Check, type Level } from './doctor-view.ts';
 import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
@@ -72,6 +73,11 @@ add('版', 'ok', describeVersion(await currentVersion()));
 add('Node.js', nodeOk ? 'ok' : 'bad', `v${process.versions.node}`,
   nodeOk ? undefined
     : 'v22.6 以降が要ります（型を剥がしながら実行する機能を使うため）。https://nodejs.org から入れ直してください。');
+// 同梱の Node が Shift_JIS を読めるか。読めなければ Shift_JIS のファイルは utf8 として（化けた字で）読む。
+add('Shift_JIS', shiftJisSupported() ? 'ok' : 'warn',
+  shiftJisSupported() ? '読めます（Shift_JIS のファイルもその文字コードで読みます）' : 'この Node では読めません',
+  shiftJisSupported() ? undefined
+    : 'Shift_JIS のファイルは utf8 として読むので、日本語が化けます。https://nodejs.org の Node（full-icu）なら読めます。');
 
 /* ---------- 設定 ---------- */
 

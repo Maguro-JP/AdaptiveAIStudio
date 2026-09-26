@@ -8480,6 +8480,9 @@ Shift_JIS の文書に `edit_file` を当てると、直した一行のほかの
 - 残るところ: cp1252 の引用符が並ぶ英文などは、Shift_JIS として読めてしまうことがある（頭の添え書きで
   そう読んだと分かる）。同梱の Node が Shift_JIS を持たない（small-icu）ときは utf8 として読む。Windows の
   同梱の Node で Shift_JIS が使えるかは確かめていない
+  （追記 09-26）配った先で確かめる手が無いので、`npm run doctor` に「Shift_JIS」の一行を出して製品に言わせる
+  （`shiftJisSupported`。読めなければ注意として出し、full-icu の Node を案内する）。試験は `test/doctor-inproc.test.ts`
+  （行を外すと落ちることを見た）と `test/read-non-utf8.test.ts`（作れない Node では読めないと返す）
 
 | 変えたいとき | どこ |
 |---|---|

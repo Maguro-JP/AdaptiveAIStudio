@@ -365,3 +365,11 @@ describe('根に全角が混ざっているとき', () => {
     assert.ok(!/逃がしています/.test(plain), `半角なのに出ている: ${plain.slice(-300)}`);
   });
 });
+
+describe('doctor は、Shift_JIS を読めるかを言う', () => {
+  test('この Node で読めるなら、読めると一行出す（同梱の Node の確かめを製品に言わせる）', async () => {
+    const { home } = await scratch();
+    const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: join(home, 'なし.json') });
+    assert.match(text, /Shift_JIS[^\n]*読めます/, `Shift_JIS の行が無い:\n${text.slice(0, 1200)}`);
+  });
+});
