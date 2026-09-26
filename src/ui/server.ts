@@ -2765,9 +2765,15 @@ export class UiServer {
       }
       await undo.begin(request);
       undo.capture(asked, before);
-      // 無い階層ごと作る（新しいファイルは、無いフォルダの中に置きたいことが多い）。
-      await mkdir(dirname(real), { recursive: true });
-      await writeFile(real, content, 'utf8');
+      try {
+        // 無い階層ごと作る（新しいファイルは、無いフォルダの中に置きたいことが多い）。
+        await mkdir(dirname(real), { recursive: true });
+        await writeFile(real, content, 'utf8');
+      } catch (e) {
+        // 書けなかった分を戻り先に残さない（残すと、押したときに在るものを消しに行く）。
+        undo.discard();
+        throw e;
+      }
       await undo.end().catch(() => undefined);
     } finally {
       session?.lock.release(owner);
