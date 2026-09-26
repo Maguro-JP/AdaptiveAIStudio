@@ -8368,6 +8368,10 @@ Shift_JIS の文書に `edit_file` を当てると、直した一行のほかの
 - 2b 作業場の錠（`WorkspaceLock`）。`send()` の「戻す」の記録は、書く手を初めて使う時点で錠を取ってから始める
   （いまは依頼の頭で始めている）。巻き戻し・外の変化の比べ・作業前の確かめの覚えは、錠を持つ依頼だけ。
   `plan()` は依頼の頭で錠を取る（担当が並列に書くため）。画面の手書き・`/api/revert`・`POST /api/undo` も錠を取る
+  - （09-26 入れた）`send()` は書き得る手（書くツール・`run_command`・外のツール）の `toolStart` を初めて受けた時点で
+    錠を取り、そこで「戻す」の記録を始める。読むだけの回は錠を取らない。画面の手書き（保存・差分からの戻し・
+    新しいファイル）と「戻す」は、待たずに取れなければ断る（`tryAcquire`）。試験: `test/workspace-lock.test.ts`、
+    `test/send-lock.test.ts`（相手が持っている間は書かずに待つ・読むだけは触らない）。錠を取る行を外すと落ちる
 - 2c `send(text, opts, conv)`。harness の依頼ごとの履歴・協議（Forum）・`#holder` を会話ごとにする
   （道具は `create()` で一度だけ包まれていて、holder と forum に結びついている。`AsyncLocalStorage` で会話を引く）。
   `requestSeq` を会話ごとに。`think()` は走っている会話が一つも無いときだけ

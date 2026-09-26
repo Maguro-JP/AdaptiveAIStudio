@@ -1986,7 +1986,16 @@ export class UiServer {
       if (this.#busyNow(session)) {
         return send(res, 409, { error: 'いま作業中です。終わってから戻してください' });
       }
-      const done = await session.undo.restore(id);
+      // 「戻す」も作業場を書く。錠を通す（会話ごとに走らせる段でも、書いている依頼と混ざらない）。
+      if (!session.lock.tryAcquire('hand:undo')) {
+        return send(res, 409, { error: 'いま AI が作業場に書いています。終わってから戻してください' });
+      }
+      let done: Awaited<ReturnType<typeof session.undo.restore>>;
+      try {
+        done = await session.undo.restore(id);
+      } finally {
+        session.lock.release('hand:undo');
+      }
       if (!done) return send(res, 404, { error: 'その戻り先はもうありません' });
       session.markChanged();
       this.broadcast({
@@ -2569,15 +2578,31 @@ export class UiServer {
     return (await resolveInside(root, asked)) ?? await realSafeResolve(root, asked);
   }
 
+  /** 手書きの錠の持ち主の札。名前で作ると、同じ名前の手書きが二つ重なったとき両方が取れてしまう。 */
+  #handSeq = 0;
+
   async #writeByHand(asked: string, real: string, before: string | undefined, content: string, request: string): Promise<{ added: number; removed: number }> {
     const session = this.#session;
     const undo = session?.undo ?? new UndoStore(this.#workRoot(), join(stateDir(), 'undo'));
-    await undo.begin(request);
-    undo.capture(asked, before);
-    // 無い階層ごと作る（新しいファイルは、無いフォルダの中に置きたいことが多い）。
-    await mkdir(dirname(real), { recursive: true });
-    await writeFile(real, content, 'utf8');
-    await undo.end().catch(() => undefined);
+    /*
+     * **作業場の錠を通す。**AI の依頼が書いている間に手で書くと、その依頼の「戻す」の記録と
+     * 巻き戻しに手の分が混ざる。呼ぶ側は作業中なら先に断っているが、会話ごとに走らせる段で
+     * 「作業中」の意味が会話ごとに変わっても、ここで守る。待たずに断る（手は AI の作業を待たせない）。
+     */
+    const owner = `hand:${++this.#handSeq}`;
+    if (session && !session.lock.tryAcquire(owner)) {
+      throw new Error('いま AI が作業場に書いています。終わってからもう一度押してください');
+    }
+    try {
+      await undo.begin(request);
+      undo.capture(asked, before);
+      // 無い階層ごと作る（新しいファイルは、無いフォルダの中に置きたいことが多い）。
+      await mkdir(dirname(real), { recursive: true });
+      await writeFile(real, content, 'utf8');
+      await undo.end().catch(() => undefined);
+    } finally {
+      session?.lock.release(owner);
+    }
     session?.markChanged();
     const diff = unifiedDiff(asked, before ?? '', content);
     const { added, removed } = diffStat(diff);

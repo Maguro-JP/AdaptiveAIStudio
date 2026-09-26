@@ -81,6 +81,7 @@ import { inspectDependencies, describeDependencies } from '../agent/dependencies
 import type { LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
 import { Conversation } from './conversation.ts';
+import { WorkspaceLock } from './workspace-lock.ts';
 import { fitByTokens, estimateTokens } from '../agent/window.ts';
 import { ProjectRules } from '../agent/project-rules.ts';
 import type { Counter } from '../agent/tokenizer.ts';
@@ -325,6 +326,13 @@ export class Session {
    * 利用者にできることが「自分で書き戻す」しか無い**のでは任せられない。
    */
   readonly undo: UndoStore;
+  /**
+   * 作業場の錠。書く依頼は持っている間だけ作業場を変え、「戻す」の記録・巻き戻し・外の変化の比べを持つ。
+   * 二つの会話が同時に書くと、互いの書き込みを外の変化と読み違えるため（DECISIONS 09-26）。
+   */
+  readonly lock = new WorkspaceLock();
+  /** 錠の持ち主の札を作る数え。 */
+  #lockSeq = 0;
   /** 了解した警告（作業場ごと）。画面の `/api/acks` と CLI の `/ack` が同じものを触る。 */
   readonly acks: AckStore;
   /** なぜいまのモデルなのか。画面に出すために持つ（黙って選ばない）。 */
@@ -679,6 +687,18 @@ export class Session {
     }
     const ac = new AbortController();
     this.#conv.running = ac;
+    /*
+     * 段取りは担当が並列に書くので、依頼の頭で作業場の錠を取る（最初に書く時点を一つに決められない）。
+     * 止められて待つのをやめたら、何もせずに終える。
+     */
+    const lockOwner = `plan:${++this.#lockSeq}`;
+    try {
+      await this.lock.acquire(lockOwner, ac.signal);
+    } catch (e) {
+      this.#conv.running = undefined;
+      yield { type: 'log', level: 'warn', text: (e as Error).message };
+      return undefined;
+    }
     // 段取りでもファイルを触る。**戻せるのは送り口だけ、にしない。**
     await this.undo.begin(request);
     this.#holder.instruction = request;
@@ -951,6 +971,7 @@ export class Session {
       // 担当の途中で落ちた・止めた回も、そこまでに外のツールが変えた分を戻せるように。
       await takeOutside();
       await this.undo.end().catch(() => undefined);
+      this.lock.release(lockOwner);
       await this.memory.save().catch(() => undefined);
     }
   }
@@ -1257,7 +1278,7 @@ export class Session {
      * **どの依頼を戻すのか人が選べない**（押して実測）。
      */
     // 打った分が空（添付だけを送った回）なら、差し込んだ方を使う。空の名前を残さない。
-    await this.undo.begin(opts.said || instruction);
+    const undoName = opts.said || instruction;
 
     const verifyCfg = this.config.agent?.verify ?? {};
     const harnessCfg = this.config.harness ?? {};
@@ -1278,6 +1299,21 @@ export class Session {
      */
     const outside = new OutsideChanges(this.root);
     const outsideTool = (name: string): boolean => isExternalTool(name) || name === 'run_command';
+    /*
+     * **書き得る手を初めて使う時点で、作業場の錠を取り、「戻す」の記録を始める。**
+     *
+     * 読むだけの回（質問・調べもの）は錠を取らず、ほかの会話と並んで動ける。錠を取ってから記録を始めるので、
+     * 二つの会話の書き込みが一つの戻り先に混ざらない。ツールはこちらが次の出来事を受け取ってから動くので、
+     * ここで待てば書く前に止まる。
+     */
+    const lockOwner = `send:${++this.#lockSeq}`;
+    let locked = false;
+    const takeLock = async (name: string): Promise<void> => {
+      if (locked || !(mayChangeFiles(name) || isWriteTool(name) || outsideTool(name))) return;
+      await this.lock.acquire(lockOwner, ac.signal);
+      locked = true;
+      await this.undo.begin(undoName);
+    };
     /** 前の中身を記録できなかった道（大きすぎる・取れない）。戻せないことを言うために持つ。 */
     const outsideUnrecorded: string[] = [];
     this.#harness.beginTask();
@@ -1435,6 +1471,7 @@ export class Session {
               yield { type: 'trimmed', dropped: ev.dropped };
               break;
             case 'toolStart':
+              await takeLock(ev.call.name);
               // 作業場を変える手前で、作業前の状態を控える。
               await before.atToolStart(ev.call.name);
               while (beforeEvents.length > 0) yield beforeEvents.shift()!;
@@ -1535,6 +1572,7 @@ export class Session {
             if (ev.type === 'thinking') events.push({ type: 'text', delta: ev.delta });
             else if (ev.type === 'salvaged') events.push({ type: 'salvaged', name: ev.name });
             else if (ev.type === 'toolStart') {
+              await takeLock(ev.call.name);
               if (isWriteTool(ev.call.name) && harnessCfg.rollbackOnGiveUp) {
                 const p = (ev.call.args as { path?: unknown }).path;
                 if (typeof p === 'string') await checkpoint.capture(p);
@@ -1759,8 +1797,9 @@ export class Session {
       };
     } finally {
       this.#conv.running = undefined;
-      // **この一往復ぶんを、戻り先として残す。**触っていなければ残らない。
-      await this.undo.end().catch(() => undefined);
+      // **この一往復ぶんを、戻り先として残す。**触っていなければ残らない（錠を取っていなければ始めてもいない）。
+      if (locked) await this.undo.end().catch(() => undefined);
+      this.lock.release(lockOwner);
       await this.memory.save().catch(() => undefined);
       // **この回が終わってから判じる。**待たせない、を本当にする。
       // こちらが書いた文は判じない（利用者が言っていないことを覚えないため）。
