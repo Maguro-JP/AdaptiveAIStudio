@@ -8680,3 +8680,6 @@ BOM にならないバイト列に替えた
   → 消し方・読み方を差し替えられるようにし、消せない・読めない形を作って確かめる
 試験: `test/attachments-safety.test.ts` に 8 件。直す前に 7 件が落ちることと、片づけ・BOM の判定・シェルの読み方の守りを
 それぞれ外すと落ちることを見た
+（追記 09-26）この PR の check:bundle で `test/report.test.ts` が、試験の受け口の読み違い（`Unable to deserialize cloned data`）で
+落ちた。報告の進み具合の行（「doctor を回します」）が `console.log` で試験の子の標準出力へ出ていた。09-24 は doctor の子の出力で
+同じ落ち方をしている。`buildReport` に進み具合を言う先（`say`）を渡せるようにし、試験では黙らせる

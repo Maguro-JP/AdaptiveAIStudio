@@ -114,7 +114,13 @@ export async function buildReport(opts: {
   doctor?: (root: string) => Promise<string>;
   /** 直近の doctor をどれだけ古くまで使い回すか。既定 `DOCTOR_REUSE_MS`。 */
   doctorMaxAgeMs?: number;
+  /**
+   * 進み具合を言う先。既定は標準出力。試験では黙らせる（node の試験の受け口は子の標準出力を記録の道として
+   * 読むので、割り込んだ行で壊れた。2026-09-24 と 09-26 の check:bundle）。
+   */
+  say?: (line: string) => void;
 }): Promise<string> {
+  const tell = opts.say ?? say;
   const parts: string[] = [];
   /*
    * **どの節も、出す前に伏せる。**設定だけ伏せていたが、記録（`ui.log`）や
@@ -153,13 +159,13 @@ export async function buildReport(opts: {
   let doctorBody: string;
   if (cached) {
     const min = Math.round(cached.ageMs / 60_000);
-    say(`… 直近の doctor（${min} 分前）を使い回します（押してすぐ出すため）`);
+    tell(`… 直近の doctor（${min} 分前）を使い回します（押してすぐ出すため）`);
     doctorBody = `直近の doctor（${min} 分前・${cached.file}）を使い回しました。`
       + '押してすぐ出すため、その場では回していません。'
       + '新しく見たいときは、診断 → 「この環境を見てもらう」を回してから、もう一度作ってください。'
       + `\n\n${cached.text}`;
   } else {
-    say('… doctor を回します（この機械では 1〜2 分かかります）');
+    tell('… doctor を回します（この機械では 1〜2 分かかります）');
     const out = await (opts.doctor ?? ((root) => runDoctor(root, { ...process.env, AAS_REPORT_DIR: join(opts.state, 'reports') }, 240_000)))(opts.root);
     doctorBody = `その場で doctor を回しました。\n\n${out}`;
   }

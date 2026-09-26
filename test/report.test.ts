@@ -13,6 +13,8 @@ process.env.AAS_HOME = home;
 process.env.AAS_STATE_DIR = join(home, 'state');
 process.env.AAS_CONFIG = join(home, 'aas.config.json');
 const { buildReport, redactSecrets } = await import('../src/cli/report.ts');
+/** 進み具合の行を標準出力へ書かせない（試験の受け口がそこを記録の道として読み、割り込んだ行で壊れた）。 */
+const quiet = (): void => {};
 const { saveReport } = await import('../src/cli/report-file.ts');
 
 describe('困ったときの報告', () => {
@@ -56,7 +58,7 @@ describe('困ったときの報告', () => {
      * 受け口はそこを記録の道として読むので、割り込んだ出力で一度だけ壊れた
      * （`Unable to deserialize cloned data`、2026-09-24 の check:bundle）。
      */
-    const text = await buildReport({
+    const text = await buildReport({ say: quiet,
       root: home, state, models: join(home, 'models'), home,
       doctor: async () => 'DOCTOR-OUT',
     } as never);
@@ -76,7 +78,7 @@ describe('困ったときの報告', () => {
     await writeFile(join(state, 'reports', 'test-20260911-0100.txt'), 'not ok 1 - 古い\n');
     await writeFile(join(state, 'reports', 'test-20260911-0200.txt'), 'not ok 9 - 新しい\n');
     await writeFile(join(models, 'a.gguf'), 'GGUF');
-    const body = await buildReport({ root: process.cwd(), state, home, models, doctor: async () => 'DOCTOR-OUT 動かせます' });
+    const body = await buildReport({ say: quiet, root: process.cwd(), state, home, models, doctor: async () => 'DOCTOR-OUT 動かせます' });
     for (const must of ['## 版', 'Node: v', '## 機械', '"gpuName"', '## 設定', '"secretToken"', '## モデル', 'a.gguf', '## doctor', 'DOCTOR-OUT', '## 直近の記録', 'line 499', '## 直近の操作', '{"a":2}', '直近の点検: test', 'not ok 9 - 新しい']) {
       assert.ok(body.includes(must), `無い: ${must}`);
     }
@@ -91,7 +93,7 @@ describe('困ったときの報告', () => {
     await mkdir(reports, { recursive: true });
     await writeFile(join(reports, 'doctor-20260912-1200.txt'), 'CACHED-DOCTOR よい状態です\n');
     let ran = false;
-    const body = await buildReport({
+    const body = await buildReport({ say: quiet,
       root: dir, state: dir, home, models: join(dir, 'models'),
       doctor: async () => { ran = true; return 'FRESH-RUN'; },
     });
@@ -107,7 +109,7 @@ describe('困ったときの報告', () => {
     await mkdir(reports, { recursive: true });
     await writeFile(join(reports, 'doctor-20260912-1200.txt'), 'CACHED-DOCTOR\n');
     let ran = false;
-    const body = await buildReport({
+    const body = await buildReport({ say: quiet,
       root: dir, state: dir, home, models: join(dir, 'models'),
       doctorMaxAgeMs: 0, // どんな控えも「古い」扱いにする
       doctor: async () => { ran = true; return 'FRESH-RUN その場で回した'; },
