@@ -14,8 +14,8 @@
  *   ・未コミットの直しは git でも戻せない
  * ので、git の有無に関わらず効くものを別に持つ。
  */
-import { readFile, writeFile, mkdir, unlink, stat, readdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { readFile, writeFile, mkdir, unlink, stat, readdir, rename, rm } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { safeResolve } from '../agent/tools/paths.ts';
 import { putBack, putBackOrder, contentOf, contentBytes, type FileContent } from '../harness/put-back.ts';
 
@@ -56,6 +56,30 @@ interface StoredFile {
 
 interface Stored extends UndoPoint {
   files: StoredFile[];
+  /**
+   * どの作業場の戻り先か。保存先は作業場をまたいで一つなので、持たないと、作業場を変えたあとに前の作業場の
+   * 戻り先が今の作業場に当たり、別の作業場のファイルを上書きし、作ったものを消していた。
+   */
+  root?: string;
+}
+
+/** 作業場の根を比べられる形にする（Windows と macOS は大文字小文字を区別しない）。 */
+export function rootKey(root: string, platform: NodeJS.Platform = process.platform): string {
+  const r = resolve(root);
+  return platform === 'linux' ? r : r.toLowerCase();
+}
+
+let tmpSeq = 0;
+/** 戻り先を書く。一時ファイルに書いてから置き換える（書きかけの戻り先を残さない）。 */
+async function writeStored(path: string, point: Stored): Promise<void> {
+  const tmp = `${path}.${process.pid}.${++tmpSeq}.tmp`;
+  try {
+    await writeFile(tmp, JSON.stringify(point), 'utf8');
+    await rename(tmp, path);
+  } catch (e) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw e;
+  }
 }
 
 function toStored(saved: Saved): StoredFile {
@@ -256,9 +280,10 @@ export class UndoStore {
       paths: [...open.files.keys()],
       files: [...open.files.values()].map(toStored),
       ...(open.skipped.length > 0 ? { skipped: [...open.skipped] } : {}),
+      root: rootKey(this.#root),
     };
     await mkdir(this.#dir, { recursive: true });
-    await writeFile(join(this.#dir, `${point.id}.json`), JSON.stringify(point), 'utf8');
+    await writeStored(join(this.#dir, `${point.id}.json`), point);
     await this.#prune();
     return {
       id: point.id, at: point.at, request: point.request, paths: point.paths,
@@ -300,7 +325,8 @@ export class UndoStore {
       if (!raw) continue;
       try {
         const p = JSON.parse(raw) as Stored;
-        if (typeof p.id === 'string') {
+        // 今の作業場の戻り先だけ。根の無い古い記録は、どの作業場のものか分からないので出さない（消しもしない）。
+        if (typeof p.id === 'string' && p.root === rootKey(this.#root)) {
           points.push({
             id: p.id, at: p.at, request: p.request, paths: p.paths ?? [],
             ...(p.skipped && p.skipped.length > 0 ? { skipped: p.skipped } : {}),
@@ -335,12 +361,17 @@ export class UndoStore {
      * 「戻す前 → 戻した後」なので、控えるのは最初の一度でよい。
      */
     const was = new Map<string, string | undefined | false>();
+    /** 読めた戻り先と、その記録。戻し終えてから、消すか残すかを決める。 */
+    const read: { id: string; stored: Stored }[] = [];
+    /** 道ごとに、いちばん古い（最後に当てた）戻り先。戻したい姿はそこに在る。 */
+    const oldest = new Map<string, string>();
     // 新しい方から当てる。古い控えが後に来るので、いちばん古い姿が残る。
     for (const point of all.slice(0, at + 1)) {
       const raw = await readFile(join(this.#dir, `${point.id}.json`), 'utf8').catch(() => undefined);
       if (!raw) continue;
       let stored: Stored;
       try { stored = JSON.parse(raw) as Stored; } catch { continue; }
+      read.push({ id: point.id, stored });
       for (const saved of putBackOrder((stored.files ?? []).map(fromStored))) {
         const abs = safeResolve(this.#root, saved.path);
         if (!abs) continue;
@@ -349,8 +380,25 @@ export class UndoStore {
         const r = await putBack(this.#root, saved.path, saved.content);
         if (r === 'restored' && !touched.includes(saved.path)) touched.push(saved.path);
         last.set(saved.path, r);
+        oldest.set(saved.path, point.id);
       }
-      await unlink(join(this.#dir, `${point.id}.json`)).catch(() => undefined);
+    }
+    /*
+     * **戻せなかった道がある戻り先は消さない。**消すと、Windows で掴まれていた等で戻せなかったファイルを
+     * 戻す手が残らない。
+     *
+     * 残すかは、道ごとの**最後の結果**で決め、残すのは**いちばん古い戻り先の分だけ**にする。
+     * 戻り先ごとの失敗で決めていたときは、新しい戻り先で失敗して古い戻り先で戻せた道まで残り、
+     * あとでそれを戻すと、戻した姿より新しい姿を当ててファイルを消していた。
+     */
+    for (const { id: pointId, stored } of read) {
+      const file = join(this.#dir, `${pointId}.json`);
+      const keep = (stored.files ?? []).filter((f) => last.get(f.path) === 'failed' && oldest.get(f.path) === pointId);
+      if (keep.length === 0) {
+        await unlink(file).catch(() => undefined);
+      } else {
+        await writeStored(file, { ...stored, paths: keep.map((f) => f.path), files: keep }).catch(() => undefined);
+      }
     }
     const paths = touched.filter((p) => last.get(p) !== 'failed');
     const failed = [...last].filter(([, r]) => r === 'failed').map(([p]) => p);

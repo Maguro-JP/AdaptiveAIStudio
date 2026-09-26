@@ -14,7 +14,7 @@
  * 一行ずつ足すだけで書く（会話の残し方と同じ）。丸ごと書き直すと、
  * 書いている最中に落ちたときに全部を失う。
  */
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 
 /** なぜ終わっていないか。**符丁で持つ**（表示のときに日本語へ引き直す）。 */
@@ -93,6 +93,24 @@ function after(tail: string): string {
   return `${base}-${next.toString(36).padStart(4, '0')}`;
 }
 
+/**
+ * 同じ記録のファイルへの書き込みを、一列に並べる（同じプロセスの中の入れ物は、どれもここを通る）。
+ *
+ * 畳みは全体を読んで書き戻すので、その間に足した行（別の依頼の add、画面からの取り消し）を消していた。
+ * 読んで決めて書くまで（add の「既にあるか」も含めて）を、ファイルごとに順番に通す。
+ */
+const writing = new Map<string, Promise<unknown>>();
+function inOrder<T>(path: string, run: () => Promise<T>): Promise<T> {
+  const prev = writing.get(path) ?? Promise.resolve();
+  const mine = prev.then(run, run);
+  const settled = mine.catch(() => undefined);
+  writing.set(path, settled);
+  settled.then(() => { if (writing.get(path) === settled) writing.delete(path); }).catch(() => undefined);
+  return mine;
+}
+
+let tmpSeq = 0;
+
 export class UnfinishedWork {
   readonly #path: string;
 
@@ -116,6 +134,8 @@ export class UnfinishedWork {
       if (text.trim().length === 0) continue;
       let line: Line;
       try { line = JSON.parse(text) as Line; } catch { continue; } // 壊れた行は捨てる
+      // 形の違う行（手で直した・別の版が書いた）も捨てる。通すと一覧ごと止まる。
+      if (!isLine(line)) continue;
       if (line.t === 'add') open.set(line.item.id, line.item);
       else if (line.t === 'bump') {
         const at = open.get(line.id);
@@ -141,9 +161,16 @@ export class UnfinishedWork {
     return got;
   }
 
-  async add(
+  add(
     item: Omit<Unfinished, 'id' | 'attempts' | 'nextAt' | 'createdAt'>,
     now = Date.now(),
+  ): Promise<Unfinished | undefined> {
+    return inOrder(this.#path, () => this.#add(item, now));
+  }
+
+  async #add(
+    item: Omit<Unfinished, 'id' | 'attempts' | 'nextAt' | 'createdAt'>,
+    now: number,
   ): Promise<Unfinished | undefined> {
     const already = (await this.list()).find((u) => u.request === item.request);
     if (already) return undefined;
@@ -193,7 +220,15 @@ export class UnfinishedWork {
     const live = await this.list();
     const body = live.map((item) => `${JSON.stringify({ t: 'add', item })}\n`).join('');
     await mkdir(dirname(this.#path), { recursive: true });
-    await writeFile(this.#path, body, 'utf8');
+    // 一時ファイルに書いてから置き換える（書き戻しの途中で落ちると、記録が丸ごと消えていた）。
+    const tmp = `${this.#path}.${process.pid}.${++tmpSeq}.tmp`;
+    try {
+      await writeFile(tmp, body, 'utf8');
+      await rename(tmp, this.#path);
+    } catch (e) {
+      await rm(tmp, { force: true }).catch(() => undefined);
+      throw e;
+    }
   }
 
   /** いま手を付けてよいもの。**一つだけ返す**（一度に一つずつ進める）。 */
@@ -207,7 +242,11 @@ export class UnfinishedWork {
    * 上限まで来たら諦める。**諦めたことは、諦めたと言う。**
    * 黙って消すと、頼んだことが消えたようにしか見えない。
    */
-  async bump(id: string, now = Date.now()): Promise<{ gaveUp: boolean; attempts: number }> {
+  bump(id: string, now = Date.now()): Promise<{ gaveUp: boolean; attempts: number }> {
+    return inOrder(this.#path, () => this.#bump(id, now));
+  }
+
+  async #bump(id: string, now: number): Promise<{ gaveUp: boolean; attempts: number }> {
     const item = (await this.list()).find((u) => u.id === id);
     if (!item) return { gaveUp: true, attempts: 0 };
     const attempts = item.attempts + 1;
@@ -220,14 +259,29 @@ export class UnfinishedWork {
   }
 
   /** 片づいた。 */
-  async done(id: string): Promise<void> {
-    await this.#append({ t: 'close', id, how: 'done' });
+  done(id: string): Promise<void> {
+    return inOrder(this.#path, () => this.#append({ t: 'close', id, how: 'done' }));
   }
 
   /** 利用者がやめた。 */
-  async cancel(id: string): Promise<void> {
-    await this.#append({ t: 'close', id, how: 'canceled' });
+  cancel(id: string): Promise<void> {
+    return inOrder(this.#path, () => this.#append({ t: 'close', id, how: 'canceled' }));
   }
+}
+
+/** 一行の形を確かめる。 */
+function isLine(v: unknown): v is Line {
+  if (typeof v !== 'object' || v === null) return false;
+  const l = v as { t?: unknown; id?: unknown; attempts?: unknown; nextAt?: unknown; item?: Record<string, unknown> | null };
+  if (l.t === 'add') {
+    const i = l.item;
+    // 並べ替えと「いま手を付けてよいか」で使う所まで見る。欠けていると一覧ごと止まる。
+    return typeof i === 'object' && i !== null && typeof i.id === 'string' && typeof i.request === 'string'
+      && typeof i.createdAt === 'string' && typeof i.attempts === 'number' && typeof i.nextAt === 'number';
+  }
+  if (l.t === 'bump') return typeof l.id === 'string' && typeof l.attempts === 'number' && typeof l.nextAt === 'number';
+  if (l.t === 'close') return typeof l.id === 'string';
+  return false;
 }
 
 /** 符丁を、人に見せる言葉へ。**基幹には日本語を置かない。** */
