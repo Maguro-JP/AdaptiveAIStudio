@@ -1293,3 +1293,62 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
       `入らなかったことが、どこにも出ていない: ${box.state().textContent}`);
   });
 });
+
+describe('二つのパネルで同じファイルを開く', () => {
+  /**
+   * **保存した側が、もう一方の保存していない直しの預かりを消さない。**
+   *
+   * 預かる所はファイルの名前ごとに一つで、パネルをまたいで同じ。保存した側と、直しが無くなった側の片づけは、
+   * 誰が預けたものかを見ずに消していた。もう一方のパネル（別のタブも同じ）がブラウザごと閉じると、直しが残らない。
+   */
+  test('**保存した側の片づけが、もう一方の預かりを消さない**', async () => {
+    const disk: Record<string, string> = { 'two-panels.txt': 'one\n' };
+    const a = open(disk);
+    const b = open(disk, true);
+    (a.ctx.openFile as (p: string) => void)('two-panels.txt');
+    (b.ctx.openFile as (p: string) => void)('two-panels.txt');
+    await until(() => a.area().value === 'one\n' && b.area().value === 'one\n', '両方で開く');
+
+    a.area().value = 'one\nA\n';
+    a.area().fire('input');
+    await until(() => (localStorage.getItem('aas.draft:two-panels.txt') ?? '').includes('A'), 'A が預ける');
+
+    b.area().value = 'one\nB\n';
+    b.area().fire('input');
+    b.key('s');
+    await until(() => disk['two-panels.txt'] === 'one\nB\n', 'B が保存する');
+    await until(() => b.state().textContent.includes('保存しました'), 'B の保存の返事が出る');
+    // B が打ったときの預かりの時計（400 ms）も過ぎるまで待つ。
+    await new Promise((r) => setTimeout(r, 600));
+    const kept = localStorage.getItem('aas.draft:two-panels.txt');
+    assert.ok(kept && kept.includes('A'), `B の片づけが A の預かりを消した: ${kept}`);
+  });
+
+  test('自分で預けた分は、保存したら片づける（対）', async () => {
+    const disk: Record<string, string> = { 'one-panel.txt': 'one\n' };
+    const a = open(disk);
+    (a.ctx.openFile as (p: string) => void)('one-panel.txt');
+    await until(() => a.area().value === 'one\n', '開く');
+    a.area().value = 'one\nA\n';
+    a.area().fire('input');
+    await until(() => localStorage.getItem('aas.draft:one-panel.txt') !== null, '預ける');
+    a.key('s');
+    await until(() => disk['one-panel.txt'] === 'one\nA\n', '保存する');
+    await until(() => localStorage.getItem('aas.draft:one-panel.txt') === null, '保存しても預かりが残っている');
+  });
+
+  test('覚えておく所から戻した直しは、戻した側のものになり、保存したら片づける', async () => {
+    const disk: Record<string, string> = { 'adopted.txt': 'one\n' };
+    localStorage.clear();
+    localStorage.setItem('aas.draft:adopted.txt', JSON.stringify({ text: 'one\nOLD\n', base: 'one\n', at: Date.now(), by: 'someone-else' }));
+    const a = open(disk, true);
+    (a.ctx.openFile as (p: string) => void)('adopted.txt');
+    await until(() => a.area().value === 'one\nOLD\n', '預かりが戻る');
+    // 戻したものに手を入れて、預かりの時計（400 ms）より先に保存する（預かりの中身と欄が違う形）。
+    a.area().value = 'one\nOLD2\n';
+    a.area().fire('input');
+    a.key('s');
+    await until(() => disk['adopted.txt'] === 'one\nOLD2\n', '保存する');
+    await until(() => localStorage.getItem('aas.draft:adopted.txt') === null, '戻して保存したのに預かりが残っている');
+  });
+});
