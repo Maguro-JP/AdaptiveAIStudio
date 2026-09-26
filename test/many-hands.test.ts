@@ -144,5 +144,37 @@ describe('動いている間も、別の会話が持てる', () => {
     assert.ok(asked, '二つ目の依頼がモデルに届いていない');
     assert.ok(JSON.stringify(asked.messages).includes('B2 の依頼'), '二つ目が、B の一つ目を知らないまま走った');
   });
+
+  test('順番待ちに同じ会話の分があれば、横が空いても後ろに並ぶ（会話の中で順番を入れ替えない）', async () => {
+    // X は長く、W は短く。W が終わって横が空いても、X は本体でまだ走っている形を作る。
+    fake.setBehavior({ kind: 'echo', delayMs: 300, delayFor: (asked) => (asked.includes('X3') ? 4000 : undefined) });
+    try {
+      const x = await json(await post('/api/send', { text: 'X3 の依頼' }));
+      assert.equal(x.accepted, true, JSON.stringify(x));
+      await post('/api/conversations');
+      const w = await json(await post('/api/send', { text: 'W3 の依頼' }));
+      assert.equal(w.accepted, true, `W が横で走らない: ${JSON.stringify(w)}`);
+      const idW = w.conversationId as string;
+      await post('/api/conversations');
+      // 横が塞がっているので Y の一つ目は積まれる。
+      const y1 = await json(await post('/api/send', { text: 'Y3 の一つ目' }));
+      assert.equal(typeof y1.queued, 'number', `Y の一つ目が積まれない: ${JSON.stringify(y1)}`);
+      const idY = y1.conversationId as string;
+      // W が終わって横が空くのを待つ（X はまだ本体で走っている）。
+      await until(async () => (await messagesOf(idW)).some((m) => m.role === 'assistant'), 'W が終わる', { timeoutMs: 10_000, everyMs: 50 });
+      // Y を見て二つ目を送る。一つ目が積まれたままなので、横が空いていても後ろに並ぶ。
+      await post('/api/conversations/select', { id: idY });
+      const y2 = await json(await post('/api/send', { text: 'Y3 の二つ目' }));
+      assert.equal(typeof y2.queued, 'number', `Y の二つ目が一つ目を追い越して走った: ${JSON.stringify(y2)}`);
+      await until(async () => (await messagesOf(idY)).filter((m) => m.role === 'assistant').length >= 2,
+        'Y の二つとも答えが残る', { timeoutMs: 30_000, everyMs: 100 });
+      const asked = (await messagesOf(idY)).filter((m) => m.role === 'user').map((m) => m.content);
+      const first = asked.findIndex((t) => t.includes('Y3 の一つ目'));
+      const second = asked.findIndex((t) => t.includes('Y3 の二つ目'));
+      assert.ok(first >= 0 && second > first, `Y の中で順番が入れ替わった: ${JSON.stringify(asked)}`);
+    } finally {
+      fake.setBehavior({ kind: 'echo', delayMs: 1200 });
+    }
+  });
 });
 

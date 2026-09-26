@@ -283,7 +283,11 @@ export type ThinkEvent =
 
 export interface SessionOptions {
   /** 承認の訊き方。入口ごとに違う。 */
-  approve(req: ApprovalRequest): Promise<ApprovalAnswer>;
+  /**
+   * `meta.requestKey` はいまの依頼を見分ける札（会話と依頼の番号の組）。画面は「この依頼のあいだは訊かない」を
+   * これで覚える（全会話で共通の番号で覚えると、並べて走る別の会話の依頼に漏れる）。
+   */
+  approve(req: ApprovalRequest, meta?: { requestKey: string }): Promise<ApprovalAnswer>;
   /** 画面や端末へ流したいもの。省略可。 */
   onLog?(level: 'info' | 'warn' | 'error', text: string): void;
   /**
@@ -660,7 +664,7 @@ export class Session {
   #approveFor(conv: Conversation): (req: ApprovalRequest) => Promise<ApprovalAnswer> {
     return async (req) => {
       if (req.kind === 'write') conv.diffs.set(req.path, { diff: req.diff, created: req.created });
-      return this.#opts.approve(req);
+      return this.#opts.approve(req, { requestKey: conv.requestKey });
     };
   }
 
@@ -726,6 +730,8 @@ export class Session {
     }
     this.#holder.instruction = request;
     this.#requests += 1;
+    // 段取りも一つの依頼。承認の「この依頼のあいだは訊かない」を前の依頼から持ち越さない。
+    this.#conv.nextRequest();
     // 依頼が変われば協議もやり直し。前回通した話で今回の変更を通させない。
     this.#forum.clear();
     /*

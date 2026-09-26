@@ -566,7 +566,7 @@ export class UiServer {
     if (this.#stopped) throw new Error('止めています');
     this.#session = await Session.create(await this.#configForSession(), {
       journals: await this.journals(),
-      approve: (req) => this.#ask(req),
+      approve: (req, meta) => this.#ask(req, meta),
       onLog: (level, text) => this.broadcast({ type: 'log', level, text }),
       // AI が「ここを見てください」と言ったら、画面のエディタで開く。
       // 画面が無い入口（端末）では置かない（`show_file` はそこでは使えない）。
@@ -666,6 +666,8 @@ export class UiServer {
     if (!session.busy) return false;
     if (this.#runningId === conversationId || this.#loadedId === conversationId) return false;
     if (this.#side.has(conversationId)) return false;
+    // 順番待ちに同じ会話の分が残っていれば、その後ろに並ぶ（会話の中で順番を入れ替えない）。
+    if (this.#queue.some((q) => q.conversationId === conversationId)) return false;
     const mouths = Math.max(1, ...session.lanes.map((l) => l.parallel ?? 1));
     return this.#side.size < mouths - 1;
   }
@@ -923,9 +925,9 @@ export class UiServer {
    * 忘れていた（一度押したあとの段取りが、札を一枚も出さずに全部書いていた）。
    * どの依頼で選ばれたかを覚えておけば、新しい依頼が始まった時点で外れる。
    */
-  #allWritesFor?: { session: object; seq: number };
+  #allWritesFor?: { session: object; key: string };
 
-  #ask(req: ApprovalRequest): Promise<ApprovalAnswer> {
+  #ask(req: ApprovalRequest, meta?: { requestKey: string }): Promise<ApprovalAnswer> {
     const approval = this.#opts.config.agent?.approval ?? 'autoEdit';
     // 協議は自動承認の対象にしない。重大な変更は必ず人の目を通す。
     if (approval === 'auto' && req.kind !== 'deliberation') return Promise.resolve(true);
@@ -940,8 +942,13 @@ export class UiServer {
      * 効くのは書き込みだけ。コマンドも、外へ出るのも、協議も、毎回訊く。
      */
     const now = this.#session;
+    /*
+     * どの依頼か。会話と依頼の番号の組（`meta.requestKey`）で見る。全会話で共通の番号で見ると、
+     * 並べて走る別の会話の依頼にも「訊かない」が漏れ、逆に別の会話が始まると外れる。
+     */
+    const key = meta?.requestKey ?? (now ? `seq:${now.requestSeq}` : '');
     if (req.kind === 'write' && now !== undefined
-      && this.#allWritesFor?.session === now && this.#allWritesFor.seq === now.requestSeq) {
+      && this.#allWritesFor?.session === now && this.#allWritesFor.key === key) {
       this.broadcast({
         type: 'log', level: 'info',
         text: `${req.path} を書きました（この依頼のあいだは訊かない、を選んでいます）`,
@@ -958,7 +965,7 @@ export class UiServer {
         // 「残りも全部」を受け取ったら、ここで旗を立てる。返す答えは通常の許可。
         const mark = () => {
           const s = this.#session;
-          if (s) this.#allWritesFor = { session: s, seq: s.requestSeq };
+          if (s) this.#allWritesFor = { session: s, key };
         };
         if (ok === 'all') { mark(); ok = true; }
         // 塊を選びつつ「以降訊かない」も選べる。選んだ塊はそのまま通す。
@@ -3330,16 +3337,27 @@ export class UiServer {
    * ここで全部回すと、途中で中断されても止まらない。
    */
   async #drainQueue(session: Session): Promise<void> {
+    /*
+     * 流す口は複数ある（本体の依頼の終わり・横の走者の終わり・見回り）。本体が塞がっていれば流さない。
+     * 取り出してから走り出すまで（履歴の載せ替えと組み立ての await の間）は「準備中」にしておく。
+     * しておかないと、その隙に別の口がもう一つ取り出し、二つの載せ替えが混ざる。
+     */
+    if (this.#mainBusy(session)) return;
     // 横で走っている会話の分は飛ばす（その会話の中では一つずつ。横が終われば流れる）。
     const at = this.#queue.findIndex((q) => !this.#side.has(q.conversationId));
     const next = at >= 0 ? this.#queue.splice(at, 1)[0] : undefined;
     this.broadcast({ type: 'queue', waiting: this.#queue.length });
     if (!next) return;
-    await this.#loadInto(session, next.conversationId);
-    const full = await this.#compose(session, next.text, next.attached, next.editor);
-    this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
-    this.#bg(this.#drive(session, full, undefined, { said: next.text, ...(next.editor ? { editor: next.editor } : {}) }),
-      '順番待ちの実行が落ちました');
+    this.#preparing = true;
+    try {
+      await this.#loadInto(session, next.conversationId);
+      const full = await this.#compose(session, next.text, next.attached, next.editor);
+      this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
+      this.#bg(this.#drive(session, full, undefined, { said: next.text, ...(next.editor ? { editor: next.editor } : {}) }),
+        '順番待ちの実行が落ちました');
+    } finally {
+      this.#preparing = false;
+    }
   }
 
   async #drivePlan(session: Session, text: string): Promise<void> {
