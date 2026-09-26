@@ -86,8 +86,15 @@ export class UnfinishedWork {
   }
 
   /** いま残っているもの。古い順。 */
-  async list(): Promise<Unfinished[]> {
-    const raw = await readFile(this.#path, 'utf8').catch(() => '');
+  /**
+   * いま抱えているもの。`strict` のときは、ファイルが無い以外の読み失敗で投げる（読めないのを「空」と取り違えない。
+   * 空と読んで、段取りを全部閉じる側に倒れるため）。
+   */
+  async list(opts: { strict?: boolean } = {}): Promise<Unfinished[]> {
+    const raw = await readFile(this.#path, 'utf8').catch((e: NodeJS.ErrnoException) => {
+      if (opts.strict && e.code !== 'ENOENT') throw e;
+      return '';
+    });
     const open = new Map<string, Unfinished>();
     for (const text of raw.split('\n')) {
       if (text.trim().length === 0) continue;
