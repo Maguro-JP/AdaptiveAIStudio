@@ -296,6 +296,18 @@ export class Memory {
       throw new Error(`記憶のファイルを読めなかった（${this.#unreadable}）ので、上書きしないよう保存を止めています: ${this.#path}`);
     }
     this.#dirty = false;
+    /*
+     * 退けた行は、**保存の直前のファイルから取り直す。**読み込んだときの形を書くと、動いている間に手で消した行
+     * （秘密を書いてしまった行など）や手で直した行を、古い形のまま書き戻していた。
+     */
+    try {
+      const now = parseEntries(await this.#readRetrying(this.#path));
+      this.#kept = now.kept;
+      this.#seq = Math.max(this.#seq, now.keptSeq);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') this.#kept = [];
+      // ほかの読み失敗は、読み込んだときの形のまま書く（読めないのを「退けた行が無い」と取り違えて消さない）。
+    }
     const body = [...this.#entries.map((e) => JSON.stringify(e)), ...this.#kept].join('\n') + '\n';
     try {
       await mkdir(dirname(this.#path), { recursive: true });
@@ -788,16 +800,16 @@ function parseEntries(raw: string): { entries: MemoryEntry[]; kept: string[]; ke
   const entries: MemoryEntry[] = [];
   const kept: string[] = [];
   let keptSeq = 0;
-  for (const line of raw.split('\n')) {
-    if (line.trim().length === 0) continue;
+  // 先頭の BOM（古いメモ帳で直すと付く）を外す。付いたままだと一行目が読めず、退けた行として残り続ける。
+  for (const line of raw.replace(/^\uFEFF/, '').split('\n')) {
+    // 空白と NUL だけの行は捨てる（電源が落ちたあとに NUL で埋まることがある。退けて残すと消えなくなる）。
+    if (/^[\s\0]*$/.test(line)) continue;
     let value: unknown;
     try { value = JSON.parse(line); } catch { value = undefined; }
     if (isEntry(value)) { entries.push(value); continue; }
     kept.push(line.replace(/\r$/, ''));
-    // 読めない行（途中で切れた等）からも番号を拾う。直されて戻ってきたときに、同じ番号を配らない。
-    const id = (value as { id?: unknown } | null | undefined)?.id;
-    const n = typeof id === 'string' ? /^m(\d+)$/.exec(id) : /"id"\s*:\s*"m(\d+)"/.exec(line);
-    if (n) keptSeq = Math.max(keptSeq, Number(n[1]));
+    // 番号を拾う（読めない行・二件がくっついた行からも）。直されて戻ってきたときに、同じ番号を配らない。
+    for (const n of line.matchAll(/"id"\s*:\s*"m(\d+)"/g)) keptSeq = Math.max(keptSeq, seqOf(n[1]!));
   }
   return { entries, kept, keptSeq };
 }
@@ -810,6 +822,12 @@ function parseEntries(raw: string): { entries: MemoryEntry[]; kept: string[]; ke
 function maxSeq(entries: MemoryEntry[]): number {
   return entries.reduce((max, e) => {
     const n = /^m(\d+)$/.exec(e.id);
-    return n ? Math.max(max, Number(n[1])) : max;
+    return n ? Math.max(max, seqOf(n[1]!)) : max;
   }, 0);
+}
+
+/** 番号の数。**丸まる大きさの番号は数えない**（数えると次の番号が同じ値のまま進まず、同じ id を何度も配った）。 */
+function seqOf(digits: string): number {
+  const n = Number(digits);
+  return Number.isSafeInteger(n) && n < Number.MAX_SAFE_INTEGER ? n : 0;
 }
