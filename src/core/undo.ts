@@ -64,9 +64,9 @@ interface Stored extends UndoPoint {
 }
 
 /** 作業場の根を比べられる形にする（Windows と macOS は大文字小文字を区別しない）。 */
-export function rootKey(root: string): string {
+export function rootKey(root: string, platform: NodeJS.Platform = process.platform): string {
   const r = resolve(root);
-  return process.platform === 'linux' ? r : r.toLowerCase();
+  return platform === 'linux' ? r : r.toLowerCase();
 }
 
 let tmpSeq = 0;

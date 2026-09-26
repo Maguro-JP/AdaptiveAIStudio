@@ -291,6 +291,12 @@ describe('二進のファイルを戻す', () => {
     assert.equal(await stat(join(root, 'made.txt')).then(() => true, () => false), false, '前は無かったのに残っている');
   });
 
+  test('作業場の根は、Windows と macOS では大文字小文字を区別しない。Linux では区別する', () => {
+    assert.equal(rootKey('/Work/App', 'win32'), rootKey('/work/app', 'win32'));
+    assert.equal(rootKey('/Work/App', 'darwin'), rootKey('/work/app', 'darwin'));
+    assert.notEqual(rootKey('/Work/App', 'linux'), rootKey('/work/app', 'linux'));
+  });
+
   test('作業場の根を持たない記録は、どの作業場のものか分からないので出さず、消しもしない', async () => {
     const root = await tempDir('aas-undo-');
     const state = await tempDir('aas-undo-state-');
