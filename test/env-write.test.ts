@@ -27,6 +27,39 @@ describe('合言葉を書き足す', () => {
     assert.deepEqual(parseEnvFile(raw), { OTHER: 'そのまま', GITHUB_TOKEN: 'あたらしい' });
   });
 
+  test('**先頭に BOM がある .env（古いメモ帳の utf8 保存）の一行目を書き換えても、BOM を落とさない**', async () => {
+    const p = join(await tempDir('aas-env-'), '.env');
+    await writeFile(p, '\uFEFFGITHUB_TOKEN=ふるい\nOTHER=x\n');
+    assert.deepEqual(parseEnvFile(await readFile(p, 'utf8')), { GITHUB_TOKEN: 'ふるい', OTHER: 'x' }, '一行目を読み飛ばした');
+    await writeEnvValue(p, 'GITHUB_TOKEN', 'あたらしい');
+    const raw = await readFile(p, 'utf8');
+    assert.equal(raw.match(/GITHUB_TOKEN=/g)?.length, 1, `同じ名前が二行になった: ${JSON.stringify(raw)}`);
+    assert.ok(raw.startsWith('\uFEFF'), 'BOM を落とした');
+    assert.deepEqual(parseEnvFile(raw), { GITHUB_TOKEN: 'あたらしい', OTHER: 'x' });
+  });
+
+  test('同じ名前を何度書き換えても、末尾に空行が増えない', async () => {
+    const p = join(await tempDir('aas-env-'), '.env');
+    await writeFile(p, 'OTHER=x\nGITHUB_TOKEN=a\n');
+    for (const v of ['b', 'c', 'd']) await writeEnvValue(p, 'GITHUB_TOKEN', v);
+    assert.equal(await readFile(p, 'utf8'), 'OTHER=x\nGITHUB_TOKEN=d\n');
+  });
+
+  test('CRLF の .env は CRLF のまま書く', async () => {
+    const p = join(await tempDir('aas-env-'), '.env');
+    await writeFile(p, 'OTHER=x\r\nGITHUB_TOKEN=ふるい\r\n');
+    await writeEnvValue(p, 'GITHUB_TOKEN', 'あたらしい');
+    assert.equal(await readFile(p, 'utf8'), 'OTHER=x\r\nGITHUB_TOKEN=あたらしい\r\n');
+  });
+
+  test('**utf8 でない .env（Shift_JIS の注釈）は、化けた字で書き戻さずに断る**', async () => {
+    const p = join(await tempDir('aas-env-'), '.env');
+    const sjis = Buffer.concat([Buffer.from('# '), Buffer.from([0x83, 0x81, 0x83, 0x82]), Buffer.from('\nOTHER=x\n')]);
+    await writeFile(p, sjis);
+    await assert.rejects(writeEnvValue(p, 'GITHUB_TOKEN', 'y'), /utf8/);
+    assert.deepEqual(await readFile(p), sjis, '中身が変わった');
+  });
+
   test('改行を混ぜて、別の合言葉を足させない', async () => {
     const p = join(await tempDir('aas-env-'), '.env');
     await assert.rejects(writeEnvValue(p, 'A', 'x\nB=y'), /改行/);
