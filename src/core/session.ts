@@ -76,7 +76,7 @@ import { rankedEntries, renderMap, seedFrom, covers } from '../agent/repo-map.ts
 import { indexStore } from '../agent/tools/find.ts';
 import type { Harness } from '../harness/harness.ts';
 import { inspectGit } from '../agent/git.ts';
-import { diffStat } from '../agent/diff.ts';
+import { diffStat, unifiedDiff } from '../agent/diff.ts';
 import { inspectDependencies, describeDependencies } from '../agent/dependencies.ts';
 import type { LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
@@ -254,6 +254,11 @@ export type PlanEvent =
   | { type: 'verifying'; command: string }
   | { type: 'baselineFailed' }
   | { type: 'accepted'; report: AcceptanceReport }
+  /**
+   * 確かめて落ちたので、この依頼の変更を巻き戻した（`harness.rollbackOnGiveUp`）。
+   * 戻せなかった道（前の中身を記録していない・置き戻しに失敗した）も言う。
+   */
+  | { type: 'rolledBack'; paths: string[]; notRestored?: string[] }
   | { type: 'log'; level: 'info' | 'warn' | 'error'; text: string };
 
 /** 暇なときに考えたことの流れ。 */
@@ -883,6 +888,41 @@ export class Session {
         declared: [...new Set(plan.items.flatMap((t) => t.writes ?? []))],
         verified, verifyDetail,
       });
+
+      /*
+       * **確かめて落ちたら、この依頼の変更を全部戻す**（送り口と同じ設定 `harness.rollbackOnGiveUp`）。
+       *
+       * 戻す材料は「戻す」の記録そのもの。書くツールの分は書く手前に、外のツールと `run_command` の分は
+       * 依頼全体の前後比べで、依頼の前の姿が入っている（`takeOutside` は済んでいる）。人が「戻す」を
+       * 押したときと同じ道で戻すので、二進も、戻せなかった道の扱いも同じになる。
+       * 並列の担当の正しい仕事も一緒に戻る。何を戻したかを言い、次の依頼でやり直せる形にする。
+       */
+      let rolledBack: string[] | undefined;
+      // 止めた回は、確かめが途中で切れて「落ちた」に見えるだけ。落ちたとは言えないので戻さない。
+      if (verified === 'failed' && !ac.signal.aborted && (this.config.harness ?? {}).rollbackOnGiveUp) {
+        const point = await this.undo.end();
+        /*
+         * **いちばん新しい戻り先のときだけ当てる。**`restore` は選んだ戻り先より新しいものも全部当てる。
+         * 記録の保存先は一つで、別の Session や CLI が同じ保存先を使うと、この依頼の後に始まって閉じた
+         * 別の戻り先が在り得る。黙ってそれまで戻さない。戻さなかったことは言う。
+         */
+        const newest = point ? (await this.undo.list())[0]?.id === point.id : false;
+        if (point && !newest) {
+          yield { type: 'log', level: 'warn', text: '確かめて落ちましたが、この依頼の後に別の作業の戻り先ができているので、自動では戻していません（「戻す」から選んでください）' };
+        }
+        const done = point && newest ? await this.undo.restore(point.id) : undefined;
+        const notRestored = [...new Set([...this.undo.peekSkipped(), ...(done?.failed ?? [])])].sort();
+        rolledBack = done?.paths ?? [];
+        if (rolledBack.length > 0 || notRestored.length > 0) {
+          yield { type: 'rolledBack', paths: rolledBack, ...(notRestored.length > 0 ? { notRestored } : {}) };
+          // 開いている画面に、戻した中身を配る（「戻す」を押したときと同じ）。
+          for (const c of done?.changed ?? []) {
+            const diff = unifiedDiff(c.path, c.before ?? '', c.after ?? '');
+            const { added, removed } = diffStat(diff);
+            yield { type: 'diff', path: c.path, diff, added, removed, created: c.before === undefined };
+          }
+        }
+      }
       yield { type: 'accepted', report };
 
       // 起きたことを覚える。同じ手を二度試さないため。
@@ -894,6 +934,7 @@ export class Session {
           report.verdict === 'rejected'
             ? `受け取れず: ${report.concerns.map((x) => x.reason).join(' / ')}`
             : `${members.filter((m) => m.state === 'done').length}/${members.length}件完了、検査は${verified}`,
+          ...(rolledBack ? [`確かめて落ちたので巻き戻した（${rolledBack.length}件）`] : []),
         ].join(' — '),
         tags: changed.slice(0, 5),
         // **確かめて通ったときだけ「うまくいった」。**

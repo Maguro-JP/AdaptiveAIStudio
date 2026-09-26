@@ -269,6 +269,10 @@ async function main(): Promise<void> {
           case 'baselineFailed':
             console.log(c.yellow('  作業前から検査が失敗しています。今回の作業の成否とは切り分けて見ます。'));
             break;
+          case 'rolledBack':
+            console.log(c.yellow(`  確かめて落ちたので、この依頼の変更を巻き戻しました: ${ev.paths.join(', ') || 'なし'}`
+              + (ev.notRestored?.length ? `（戻せなかった: ${ev.notRestored.join(', ')}）` : '')));
+            break;
           case 'planRepaired':
             console.log(c.yellow(`  計画を直しました: ${ev.detail}`));
             break;

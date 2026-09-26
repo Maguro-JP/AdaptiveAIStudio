@@ -93,6 +93,11 @@ export interface Restored {
   /** 何往復ぶん戻したか。 */
   points: number;
   changed: RestoredFile[];
+  /**
+   * 置き戻しに失敗した道（掴まれている・フォルダに入れ替わった・作業場の外を指す）。
+   * **黙って落とさない。**戻ったつもりで開くと、半分だけ戻った作業場を見ることになる。
+   */
+  failed: string[];
 }
 
 /**
@@ -253,6 +258,9 @@ export class UndoStore {
     };
   }
 
+  /** 最後に閉じた 1 ターンで、記録できなかったもの。空にしない（画面へ言う側が後で `takeSkipped` で取る）。 */
+  peekSkipped(): readonly string[] { return this.#skipped; }
+
   /** 大きすぎて控えられなかったもの。読んだら空にする。 */
   takeSkipped(): string[] {
     const out = this.#skipped;
@@ -308,6 +316,8 @@ export class UndoStore {
     if (at === -1) return undefined;
 
     const touched: string[] = [];
+    /** 道ごとの、最後に当てた結果。古い記録ほど後に当てるので、最後の一回が今の姿を決める。 */
+    const last = new Map<string, 'restored' | 'unchanged' | 'failed'>();
     /*
      * 戻す前の中身を、ファイルごとに最初の一度だけ控える。
      *
@@ -330,11 +340,14 @@ export class UndoStore {
         // リンクは辿らず、フォルダには書かず、戻せなければ飛ばす（1件戻せなくても他は戻す）。
         const r = await putBack(this.#root, saved.path, saved.content);
         if (r === 'restored' && !touched.includes(saved.path)) touched.push(saved.path);
+        last.set(saved.path, r);
       }
       await unlink(join(this.#dir, `${point.id}.json`)).catch(() => undefined);
     }
+    const paths = touched.filter((p) => last.get(p) !== 'failed');
+    const failed = [...last].filter(([, r]) => r === 'failed').map(([p]) => p);
     const changed: RestoredFile[] = [];
-    for (const path of touched) {
+    for (const path of paths) {
       const abs = safeResolve(this.#root, path);
       const after = abs ? await readText(abs) : undefined;
       const before = was.get(path);
@@ -342,7 +355,7 @@ export class UndoStore {
       if (before === false || after === false) continue;
       changed.push({ path, before, after });
     }
-    return { paths: touched, points: at + 1, changed };
+    return { paths, points: at + 1, changed, failed };
   }
 
   /** 溜めすぎない。落とした数を返す。 */

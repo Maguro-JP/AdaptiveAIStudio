@@ -146,7 +146,7 @@ function gutter(value) {
 
 /**
  * 1 本で描く。`opts.onRevert(picks)` が渡されていれば、当てた変更を
- * **塊ごと・行ごとに戻す**押しボタンを添える（Cursor の Reject に当たる）。
+ * **塊ごと・書き換えの組ごとに戻す**押しボタンを添える（Cursor の Reject に当たる）。
  */
 function unified(file, opts = {}) {
   const table = el('div', 'diff-lines');
@@ -172,7 +172,8 @@ function unified(file, opts = {}) {
     row.append(el('span', 'diff-text', l.text));
     if (revert && l.kind !== 'same') {
       const b = el('button', 'ghost tiny revert-line', '戻す');
-      b.title = 'この行だけ戻す';
+      // 押した行だけでなく、その行を含む書き換えの組（続けて並ぶ − と +）を戻す（src/agent/hunks.ts）。
+      b.title = 'この書き換え（消した行と足した行の組）を戻す';
       b.onclick = () => revert([{ hunk: l.hunk, lines: [l.at] }]);
       row.append(b);
     }
