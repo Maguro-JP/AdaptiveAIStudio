@@ -105,6 +105,20 @@ describe('読んでから書くまでの間の書き換えを、手の書き込�
     assert.equal(undoAfter, undoBefore, '「戻す」の記録が増えた');
   });
 
+  test('**書き込みが失敗したら、その分を「戻す」の記録に残さない**', async () => {
+    // フォルダを指して保存させる。書き込みは EISDIR で落ちる。
+    await mkdir(join(work, 'adir'), { recursive: true });
+    const list = async () => (await (await fetch(base + '/api/undo')).json() as { list: Array<{ paths: string[] }> }).list;
+    const failed = await send('PUT', '/api/file', { path: 'adir', content: 'x\n' });
+    assert.notEqual(failed.status, 200, '前提: 書けてしまった');
+    // 次の手の書き込みで、前の開いたままの記録が閉じられて残らないこと。
+    await writeFile(join(work, 'after.txt'), 'もと\n');
+    assert.equal((await send('PUT', '/api/file', { path: 'after.txt', content: '人\n' })).status, 200);
+    const points = await list();
+    assert.ok(!points.some((p) => p.paths.includes('adir')),
+      `書けなかったフォルダが戻り先に載った（押すと在るものを消しに行く）: ${JSON.stringify(points)}`);
+  });
+
   test('割り込みが無ければ、これまでどおり書ける（対）', async () => {
     await writeFile(join(work, 'c.txt'), 'もと\n');
     const r = await send('PUT', '/api/file', { path: 'c.txt', content: '人が書いた\n' });
