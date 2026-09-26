@@ -624,7 +624,15 @@ function listen() {
   };
   src.onmessage = (m) => {
     const e = JSON.parse(m.data);
-    if (e.type === 'busy') {
+    /*
+     * **見ている会話の動き出し・止まりだけで、上の表示を切り替える。**
+     * 別の会話を横で並べて走らせるので、その会話が終わった知らせで「待機中」に戻すと、
+     * 見ている会話はまだ動いているのに止まったように見える。一覧の表示だけ取り直す。
+     */
+    const busyForOther = e.type === 'busy' && e.conversationId && conversations
+      && (conversations.current ? e.conversationId !== conversations.current : !sendingFromTop);
+    if (e.type === 'busy' && busyForOther) void loadConversations();
+    if (e.type === 'busy' && !busyForOther) {
       busyNow = e.busy;
       wroteYet = false;
       // **何を待っているかを出す。**「作業中」だけだと、固まっているのか
@@ -1172,7 +1180,7 @@ function drawConversations() {
     open.title = `${head.title}（${head.messages}${head.more ? '+' : ''}）`;
     open.className = head.id === conversations.current ? 'on' : '';
     // 動いている会話には ● を付ける。**動いている間も切り替えられる**ので、押せる。
-    if (head.id === conversations.running) {
+    if ((conversations.runningAll ?? [conversations.running]).includes(head.id)) {
       open.textContent = `● ${head.title}`;
       open.title += '（動いています）';
     }
