@@ -128,6 +128,20 @@ export const RECENT_LOGS = 500;
 /** 覚えておく「変更したファイル」の数。画面が作り直されたときに配る分。 */
 export const KEPT_CHANGES = 200;
 
+/**
+ * 手で書くのを断った。呼ぶ側は `status` で返す（ここまで 500 で「落ちた」ように見えていた）。
+ * `extra` は返事に添える（読み直した今の中身など）。
+ */
+class HandWriteRefused extends Error {
+  readonly status: number;
+  readonly extra: Record<string, unknown>;
+  constructor(message: string, status: number, extra: Record<string, unknown> = {}) {
+    super(message);
+    this.status = status;
+    this.extra = extra;
+  }
+}
+
 export interface UiServerOptions {
   /** 立ち上げ直しを頼まれたとき。止めて、RESTART_EXIT で終わる側が持つ。 */
   onRestart?: () => void;
@@ -155,6 +169,11 @@ export interface UiServerOptions {
   buildReport?: () => Promise<string>;
   /** OS でファイルやフォルダを見せる係。試験でモックにできる（本物は explorer / open / xdg-open）。 */
   opener?: (command: string, args: string[]) => Promise<void>;
+  /**
+   * 手で書くとき、作業場の錠を取った直後に呼ぶ。試験で使う（読んでから書くまでの間に、
+   * 別の所がファイルを書き換える形を作るため。本物では割り込みの隙間が短く、確実には作れない）。
+   */
+  afterHandLock?: () => Promise<void>;
   config: AasConfig;
   port?: number;
   host?: string;
@@ -491,6 +510,7 @@ export class UiServer {
       this.#handle(req, res).catch((e: unknown) => {
         // 画面の不具合で本体を落とさない。
         if (e instanceof BodyTooLarge) return refuseTooLarge(res, e.message);
+        if (e instanceof HandWriteRefused) return send(res, e.status, { error: e.message, ...e.extra });
         send(res, 500, { error: e instanceof Error ? e.message : String(e) });
       });
     });
@@ -2720,9 +2740,24 @@ export class UiServer {
      */
     const owner = `hand:${++this.#handSeq}`;
     if (session && !session.lock.tryAcquire(owner)) {
-      throw new Error('いま AI が作業場に書いています。終わってからもう一度押してください');
+      throw new HandWriteRefused('いま AI が作業場に書いています。終わってからもう一度押してください', 409);
     }
     try {
+      await this.#opts.afterHandLock?.();
+      /*
+       * **錠を取ってから、前の中身を読み直す。**呼ぶ側は錠の手前で読んでいるので、その間に AI が書くと、
+       * AI の書き換えを黙って上書きし、「戻す」の記録も古い中身になる。違っていれば書かずに断る
+       * （今の中身を添えて、画面でどちらを残すか選ばせる。保存の口の stamp の断りと同じ形）。
+       */
+      const nowBytes = await readFile(real).catch(() => undefined);
+      const now = nowBytes === undefined ? undefined : contentOf(nowBytes);
+      if (now !== before) {
+        throw new HandWriteRefused(
+          '読んだあとで、このファイルは別の所で変わりました（AI の書き換えなど）。画面で、どちらを残すか選んでください',
+          409,
+          typeof now === 'string' ? { conflict: true, path: asked, content: now, stamp: stampOf(now) } : { conflict: true, path: asked },
+        );
+      }
       await undo.begin(request);
       undo.capture(asked, before);
       // 無い階層ごと作る（新しいファイルは、無いフォルダの中に置きたいことが多い）。
