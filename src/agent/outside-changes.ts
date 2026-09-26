@@ -18,14 +18,16 @@
  * 呼ぶたびに `before()` → ツール → `after()`。同じ道は最初の一度だけ記録する
  * （Checkpoint / UndoStore と同じ）。大きすぎるもの・取れないものは読まず、名前だけ返す
  * （`unrecorded`）。**取れないものを「前は無い」と読まない。**読むと、戻すときに在った
- * ファイルを消す。二進（utf8 で往復しないもの）・HEAD がリンク・submodule も同じく名前だけ。
+ * ファイルを消す。HEAD がリンク・submodule も同じく名前だけ。二進（utf8 で往復しないもの）は
+ * バイト列のまま持つ（文字列にすると、戻すときに別の中身を書く）。
  *
  * **見えないところ。**git の管理下でない作業場では何も分からない（`comparable: false`）。
  * `.gitignore` の中は git が挙げないので見えない。`run_command` が `git commit` で HEAD を
  * 動かした回は、その後に「前」として引く HEAD が変わっている。
  */
 import { readFile, stat } from 'node:fs/promises';
-import { workspaceStamp, stampChanges, headContent, textOf, type WorkspaceStamp } from './workspace-stamp.ts';
+import { workspaceStamp, stampChanges, headContent, type WorkspaceStamp } from './workspace-stamp.ts';
+import { contentOf, contentBytes, type FileContent } from '../harness/put-back.ts';
 import { safeResolve } from './tools/paths.ts';
 
 /** 一つの道につき、これより大きいものは記録しない（UndoStore と同じ 8MiB）。 */
@@ -42,8 +44,8 @@ export const OUTSIDE_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
 export interface OutsideChange {
   /** 作業場からの道。 */
   path: string;
-  /** 前の中身。無かったなら `undefined`（戻すときは消す）。 */
-  previous: string | undefined;
+  /** 前の中身。無かったなら `undefined`（戻すときは消す）。utf8 で往復しないものはバイト列。 */
+  previous: FileContent | undefined;
 }
 
 export interface OutsideResult {
@@ -62,7 +64,7 @@ export class OutsideChanges {
   #bytes = 0;
   #before: WorkspaceStamp | undefined;
   /** 呼ぶ前から変わっていた道の、呼ぶ前の中身。 */
-  readonly #kept = new Map<string, string | undefined>();
+  readonly #kept = new Map<string, FileContent | undefined>();
   /** 前の中身を記録できなかった道。 */
   readonly #unrecorded = new Set<string>();
   /** もう返した道。二度目は返さない（最初の一度が「前」）。 */
@@ -93,12 +95,11 @@ export class OutsideChanges {
         this.#unrecorded.add(path);
         continue;
       }
-      // 文字列として往復で戻るものだけ持つ。二進や Shift_JIS を utf8 で読むと、戻すときに壊す。
+      // バイト列で読む。二進や Shift_JIS を utf8 で読むと、戻すときに壊す。
       const bytes = await readFile(abs).catch(() => undefined);
-      const text = bytes === undefined ? undefined : textOf(bytes);
-      if (text === undefined) { this.#unrecorded.add(path); continue; }
-      this.#bytes += s.size;
-      this.#kept.set(path, text);
+      if (bytes === undefined) { this.#unrecorded.add(path); continue; }
+      this.#bytes += bytes.length;
+      this.#kept.set(path, contentOf(bytes));
     }
   }
 
@@ -126,8 +127,8 @@ export class OutsideChanges {
       const head = await headContent(this.#root, path, Math.min(this.#maxBytes, this.#maxTotalBytes - this.#bytes));
       if (head.kind === 'absent') { changes.push({ path, previous: undefined }); continue; }
       if (head.kind === 'unavailable') { this.#unrecorded.add(path); unrecorded.push(path); continue; }
-      this.#bytes += Buffer.byteLength(head.text);
-      changes.push({ path, previous: head.text });
+      this.#bytes += contentBytes(head.content);
+      changes.push({ path, previous: head.content });
     }
     return { changes, unrecorded, comparable: true };
   }

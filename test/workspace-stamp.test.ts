@@ -105,7 +105,7 @@ describe('作業場の記録', () => {
     const ws = join(root, 'pkg');
     // 変える前はきれい。変えた後・消した後でも、HEAD には前の中身が残っている。
     await writeFile(join(ws, 'f.txt'), 'changed\n');
-    assert.deepEqual(await headContent(ws, 'f.txt', 1024), { kind: 'content', text: 'a\n' });
+    assert.deepEqual(await headContent(ws, 'f.txt', 1024), { kind: 'content', content: 'a\n' });
     await writeFile(join(ws, 'g.txt'), 'new\n');
     assert.deepEqual(await headContent(ws, 'g.txt', 1024), { kind: 'absent' }, 'HEAD に無いものを取れたことにしている');
     // 在るが大きすぎる。「無い」ではない。
@@ -125,14 +125,14 @@ describe('作業場の記録', () => {
     assert.deepEqual([...stamp.keys()], ['g.txt'], `先頭の空白を落として鍵がずれている: ${[...stamp.keys()].join(',')}`);
   });
 
-  test('HEAD がリンク・二進・submodule のものは、取れないと言う（「無い」でも「中身」でもない）', async (t) => {
+  test('HEAD がリンク・submodule のものは取れないと言い、二進はバイト列のまま返す', async (t) => {
     const root = await repo();
     await writeFile(join(root, 'bin.dat'), Buffer.from([0x00, 0xff, 0xfe]));
     let linked = true;
     try { await symlink('other.txt', join(root, 'lnk')); } catch { linked = false; }
     git(root, 'add', '-A');
     git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'more');
-    assert.deepEqual(await headContent(root, 'bin.dat', 1024), { kind: 'unavailable', why: 'binary' });
+    assert.deepEqual(await headContent(root, 'bin.dat', 1024), { kind: 'content', content: Buffer.from([0x00, 0xff, 0xfe]) });
     if (linked) assert.deepEqual(await headContent(root, 'lnk', 1024), { kind: 'unavailable', why: 'symlink' });
     else t.diagnostic('シンボリックリンクを作れないので、リンクの分は見ていない');
   });

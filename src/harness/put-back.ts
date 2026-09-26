@@ -10,6 +10,9 @@
  *     捨てられ、「戻した」の一覧に出ない。**戻せなかったと言う。**
  *
  * 親がリンクで外へ出る道は `realSafeResolve` で断る（文字の上では作業場の中でも、実体は外）。
+ *
+ * 前の中身は、utf8 で往復する文字なら文字列、往復しないもの（png、Shift_JIS の文書）はバイト列で持つ。
+ * 二進を utf8 として読んで持つと U+FFFD に置き換わり、戻すと別の中身になる。
  */
 import { lstat, unlink, rmdir, mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -17,7 +20,30 @@ import { safeResolve, realSafeResolve } from '../agent/tools/paths.ts';
 
 export type PutBack = 'restored' | 'unchanged' | 'failed';
 
-export async function putBack(root: string, relPath: string, content: string | undefined): Promise<PutBack> {
+/** ファイルの前の中身。文字列は utf8、バイト列はそのまま書く。 */
+export type FileContent = string | Buffer;
+
+/** 上限の勘定に使う大きさ（バイト）。 */
+export function contentBytes(content: FileContent | undefined): number {
+  if (content === undefined) return 0;
+  return typeof content === 'string' ? Buffer.byteLength(content) : content.length;
+}
+
+/**
+ * 読んだバイト列を、持つ形にする。utf8 で往復するなら文字列、しないならバイト列のまま。
+ * NUL を含むものも文字列にしない（画面に文字として出す先が無い）。
+ */
+export function contentOf(bytes: Buffer): FileContent {
+  if (bytes.includes(0)) return bytes;
+  try {
+    // ignoreBOM: 既定では先頭の BOM を黙って落とす。落とすと、BOM の要る .cmd が BOM なしで戻る。
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    return bytes;
+  }
+}
+
+export async function putBack(root: string, relPath: string, content: FileContent | undefined): Promise<PutBack> {
   const abs = safeResolve(root, relPath);
   if (!abs) return 'failed';
   // 実体で見るのは親まで。道そのものがリンクなら、辿らずにそのリンクを消す（下）。
@@ -39,7 +65,7 @@ export async function putBack(root: string, relPath: string, content: string | u
     }
     if (content === undefined) return 'restored';
     await mkdir(dirname(abs), { recursive: true });
-    await writeFile(abs, content, 'utf8');
+    await writeFile(abs, content);
     return 'restored';
   } catch {
     return 'failed';
@@ -47,6 +73,6 @@ export async function putBack(root: string, relPath: string, content: string | u
 }
 
 /** 消す道を先に、書く道を後に。ファイル → フォルダの入れ替えは、中を消してからでないと書けない。 */
-export function putBackOrder<T extends { content?: string | undefined }>(items: readonly T[]): T[] {
+export function putBackOrder<T extends { content?: FileContent | undefined }>(items: readonly T[]): T[] {
   return [...items].sort((a, b) => Number(a.content !== undefined) - Number(b.content !== undefined));
 }

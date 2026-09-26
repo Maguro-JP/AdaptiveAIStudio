@@ -10,12 +10,12 @@
  */
 import { readFile } from 'node:fs/promises';
 import { safeResolve, toDisplayPath } from '../agent/tools/paths.ts';
-import { putBack, putBackOrder } from './put-back.ts';
+import { putBack, putBackOrder, contentOf, type FileContent } from './put-back.ts';
 
 interface Saved {
   path: string;
-  /** 元々存在しなかった場合は undefined（巻き戻しでは削除する） */
-  content?: string;
+  /** 元々存在しなかった場合は undefined（巻き戻しでは削除する）。utf8 で往復しないものはバイト列。 */
+  content?: FileContent;
 }
 
 export class Checkpoint {
@@ -41,8 +41,9 @@ export class Checkpoint {
     if (!abs) return;
     const key = toDisplayPath(this.#root, abs);
     if (this.#saved.has(key)) return;
-    const content = await readFile(abs, 'utf8').catch(() => undefined);
-    this.#saved.set(key, { path: key, content });
+    // バイト列で読む。二進を utf8 として読むと、戻すときに別の中身を書く。
+    const bytes = await readFile(abs).catch(() => undefined);
+    this.#saved.set(key, { path: key, content: bytes === undefined ? undefined : contentOf(bytes) });
   }
 
   /**
@@ -53,7 +54,7 @@ export class Checkpoint {
    * （呼ぶ前に読んだもの、または git の索引から）持ってきて渡す。
    * `content` が `undefined` なら「前は無かった」（戻すときは消す）。
    */
-  remember(relPath: string, content: string | undefined): void {
+  remember(relPath: string, content: FileContent | undefined): void {
     const abs = safeResolve(this.#root, relPath);
     if (!abs) return;
     const key = toDisplayPath(this.#root, abs);

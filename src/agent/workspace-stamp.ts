@@ -22,6 +22,7 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
+import { contentOf, type FileContent } from '../harness/put-back.ts';
 
 /**
  * git を呼び、**標準出力だけ**を返す。
@@ -45,22 +46,6 @@ function gitBytes(args: string[], cwd: string, maxBuffer: number): Promise<Buffe
       resolve(err ? undefined : stdout);
     });
   });
-}
-
-/**
- * バイト列を、**往復で戻る**ときだけ文字列にする。
- *
- * 前の中身は文字列で持つ（Checkpoint / UndoStore）。utf8 で読めないもの（png、gguf、
- * Shift_JIS の文書）を utf8 として読むと U+FFFD に置き換わり、戻すときに壊れたバイト列を
- * 書く。**別の中身にして戻すのは、戻さないより悪い。**NUL を含むか、utf8 として読めなければ undefined。
- */
-export function textOf(bytes: Buffer): string | undefined {
-  if (bytes.includes(0)) return undefined;
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  } catch {
-    return undefined;
-  }
 }
 
 /**
@@ -131,18 +116,18 @@ export function stampChanges(before: WorkspaceStamp, after: WorkspaceStamp): str
  *
  *   ・`absent`: HEAD にその道は無い（新しく作られたもの）。戻すときは消す
  *   ・`content`: 作業ツリーの形の中身。`--filters` で改行の変換（`core.autocrlf`）まで
- *     そろえる（blob のまま書き戻すと、Windows で全行が差分になる）
+ *     そろえる（blob のまま書き戻すと、Windows で全行が差分になる）。utf8 で往復しないもの
+ *     （二進・Shift_JIS）はバイト列のまま（文字列にすると別の中身にして戻す）
  *   ・`unavailable`: 在るが取れない。**「無い」と読まない。**読むと、戻すときに在ったファイルを消す
  *       - `tooLarge`: 大きすぎる
- *       - `binary`: utf8 の文字列として往復で戻らない（二進・Shift_JIS）。文字列で持つと別の中身にして戻す
  *       - `symlink`: HEAD ではリンク。blob はリンク先の文字列なので、書き戻すと普通のファイルになる
  *       - `submodule`: gitlink。中の変化はこの repository から戻せない
  *       - `unreadable`: 読めなかった
  */
 export type HeadContent =
   | { kind: 'absent' }
-  | { kind: 'content'; text: string }
-  | { kind: 'unavailable'; why: 'tooLarge' | 'binary' | 'symlink' | 'submodule' | 'unreadable' };
+  | { kind: 'content'; content: FileContent }
+  | { kind: 'unavailable'; why: 'tooLarge' | 'symlink' | 'submodule' | 'unreadable' };
 
 /**
  * 外のツールが触る前に**きれいだった**ファイルは、作業ツリー・索引・HEAD が同じ。
@@ -166,7 +151,5 @@ export async function headContent(root: string, relPath: string, maxBytes: numbe
   if (Number(size) > maxBytes) return { kind: 'unavailable', why: 'tooLarge' };
   const bytes = await gitBytes(['cat-file', '--filters', `HEAD:./${relPath}`], root, maxBytes * 2 + 1024);
   if (bytes === undefined) return { kind: 'unavailable', why: 'unreadable' };
-  const text = textOf(bytes);
-  if (text === undefined) return { kind: 'unavailable', why: 'binary' };
-  return { kind: 'content', text };
+  return { kind: 'content', content: contentOf(bytes) };
 }

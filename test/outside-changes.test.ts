@@ -39,7 +39,7 @@ async function repo(opts: { git?: boolean } = {}): Promise<string> {
   return root;
 }
 
-const byPath = (r: { changes: Array<{ path: string; previous: string | undefined }> }) =>
+const byPath = (r: { changes: Array<{ path: string; previous: string | Buffer | undefined }> }) =>
   Object.fromEntries(r.changes.map((c) => [c.path, c.previous]));
 
 describe('外のツールが変えたファイルの、前の中身', () => {
@@ -197,7 +197,7 @@ describe('外のツールが変えたファイルの、前の中身', () => {
     assert.deepEqual(byPath(r), { 'clean.txt': 'clean\n', 'moved.txt': undefined });
   });
 
-  test('utf8 で往復しないもの（二進）は、呼ぶ前から変わっていても HEAD からでも、名前だけ返す', async () => {
+  test('utf8 で往復しないもの（二進）は、呼ぶ前から変わっていても HEAD からでも、バイト列のまま返す', async () => {
     const root = await repo();
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe, 0x80, 0x81, 0xc3]);
     await writeFile(join(root, 'logo.png'), png);
@@ -211,8 +211,10 @@ describe('外のツールが変えたファイルの、前の中身', () => {
     await writeFile(join(root, 'dirty.png'), 'tool\n');
     await writeFile(join(root, 'memo.txt'), 'tool\n');
     const r = await outside.after();
-    assert.deepEqual(byPath(r), {}, '二進を文字列として持っている（戻すと壊れる）');
-    assert.deepEqual(r.unrecorded, ['dirty.png', 'logo.png', 'memo.txt']);
+    // 文字列にしていたら U+FFFD に置き換わって、戻すと別の中身になる。
+    assert.deepEqual(byPath(r), { 'dirty.png': png, 'logo.png': png, 'memo.txt': sjis });
+    for (const c of r.changes) assert.ok(Buffer.isBuffer(c.previous), `${c.path} を文字列にしている`);
+    assert.deepEqual(r.unrecorded, []);
   });
 
   test('HEAD ではリンクだったものを、リンク先の文字列のファイルとして戻さない', async (t) => {

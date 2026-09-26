@@ -253,3 +253,40 @@ describe('前の中身を置き換える・捨てる（段取りの前後比べ�
   });
 });
 
+describe('二進のファイルを戻す', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe, 0x80]);
+
+  test('バイト列で記録したものは、保存を通ってもバイト列のまま戻る。画面へは配らない', async () => {
+    const { root, undo } = await store();
+    await writeFile(join(root, 'logo.png'), png);
+    await writeFile(join(root, 'a.txt'), 'a\n', 'utf8');
+    await undo.begin('外のツールが絵を書き換えた');
+    undo.capture('logo.png', png);                   // 外のツールの前後比べが渡す形
+    await writeFile(join(root, 'logo.png'), 'tool\n');
+    await edit(root, undo, 'a.txt', 'b\n');
+    const point = await undo.end();
+    assert.ok(point);
+    const done = await undo.restore(point.id);
+    assert.deepEqual(await readFile(join(root, 'logo.png')), png, '二進が別の中身で戻った');
+    assert.deepEqual(done?.paths.sort(), ['a.txt', 'logo.png']);
+    // 差分にできないものを画面へ配らない。文字のものは今までどおり配る。
+    assert.deepEqual(done?.changed.map((c) => c.path), ['a.txt']);
+  });
+
+  test('base64 を足す前の記録（content だけ）も、そのまま戻せる', async () => {
+    const root = await tempDir('aas-undo-');
+    const state = await tempDir('aas-undo-state-');
+    const dir = join(state, 'undo');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(root, 'old.txt'), 'いま\n', 'utf8');
+    await writeFile(join(dir, 'u1.json'), JSON.stringify({
+      id: 'u1', at: 1, request: '前の版の記録', paths: ['old.txt', 'made.txt'],
+      files: [{ path: 'old.txt', content: 'もと\n' }, { path: 'made.txt' }],
+    }), 'utf8');
+    await writeFile(join(root, 'made.txt'), 'x\n', 'utf8');
+    const undo = new UndoStore(root, dir);
+    await undo.restore('u1');
+    assert.equal(await readFile(join(root, 'old.txt'), 'utf8'), 'もと\n');
+    assert.equal(await stat(join(root, 'made.txt')).then(() => true, () => false), false, '前は無かったのに残っている');
+  });
+});

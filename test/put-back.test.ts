@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile, mkdir, symlink, lstat, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { putBack, putBackOrder } from '../src/harness/put-back.ts';
+import { putBack, putBackOrder, contentOf } from '../src/harness/put-back.ts';
 import { Checkpoint } from '../src/harness/checkpoint.ts';
 
 const exists = (p: string) => lstat(p).then(() => true, () => false);
@@ -81,5 +81,41 @@ describe('置き戻す', () => {
   test('並びは、消す道が先', () => {
     const items = [{ path: 'a', content: 'x' }, { path: 'b', content: undefined }, { path: 'c', content: 'y' }];
     assert.deepEqual(putBackOrder(items).map((i) => i.path), ['b', 'a', 'c']);
+  });
+
+  test('二進（utf8 で往復しないもの）は、バイト列のまま戻す', async () => {
+    const { root } = await place();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0xff, 0xfe, 0x80]);
+    const sjis = Buffer.from([0x82, 0xa0, 0x82, 0xa2, 0x0a]);   // Shift_JIS の「あい」
+    await writeFile(join(root, 'logo.png'), png);
+    await writeFile(join(root, 'memo.txt'), sjis);
+    // Checkpoint が書く手前に読む道。utf8 で読むと U+FFFD に置き換わる。
+    const cp = new Checkpoint(root);
+    await cp.capture('logo.png');
+    await cp.capture('memo.txt');
+    await writeFile(join(root, 'logo.png'), 'tool\n');
+    await writeFile(join(root, 'memo.txt'), 'tool\n');
+    const r = await cp.restoreAll();
+    assert.deepEqual(r, { restored: ['logo.png', 'memo.txt'], failed: [] });
+    assert.deepEqual(await readFile(join(root, 'logo.png')), png, '二進が別の中身で戻った');
+    assert.deepEqual(await readFile(join(root, 'memo.txt')), sjis, 'Shift_JIS が別の中身で戻った');
+  });
+
+  test('BOM 付きのファイルは、BOM ごと同じバイト列で戻る（.cmd は BOM が無いと cmd.exe が CP932 で読む）', async () => {
+    const { root } = await place();
+    const cmd = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('@echo off\r\n')]);
+    await writeFile(join(root, 'start.cmd'), cmd);
+    const cp = new Checkpoint(root);
+    await cp.capture('start.cmd');
+    await writeFile(join(root, 'start.cmd'), 'tool\n');
+    await cp.restoreAll();
+    assert.deepEqual(await readFile(join(root, 'start.cmd')), cmd, 'BOM を落として戻した');
+    assert.equal(contentOf(cmd), '\ufeff@echo off\r\n');
+  });
+
+  test('持つ形: utf8 で往復するものだけ文字列、NUL を含むものと往復しないものはバイト列', () => {
+    assert.equal(contentOf(Buffer.from('あい\n')), 'あい\n');
+    assert.ok(Buffer.isBuffer(contentOf(Buffer.from([0x61, 0x00, 0x62]))));
+    assert.ok(Buffer.isBuffer(contentOf(Buffer.from([0x82, 0xa0]))));
   });
 });
