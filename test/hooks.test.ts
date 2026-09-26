@@ -10,7 +10,8 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, copyFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
@@ -69,3 +70,34 @@ describe('push の手前のフック', () => {
     assert.throws(() => git(other, clean, 'config', '--local', 'core.hooksPath'), '別の repository に書いている');
   });
 });
+
+/** 本物のフックを写して走らせる試験は、`.githooks` の無い bundle では飛ばす。 */
+const inBundle = existsSync(join(import.meta.dirname, '..', '..', '.portable'))
+  || !existsSync(join(import.meta.dirname, '..', '.git'));
+const sourceOnly = inBundle ? { skip: 'フックは作業場にしか無いので、bundle では確かめられません' } : {};
+
+describe('commit の手前のフック', () => {
+  /** 本物の pre-commit を写し、試験の二つを作り物にした一時フォルダで走らせる。 */
+  async function run(wording: string): Promise<number> {
+    const root = await tempDir('aas-pre-commit-');
+    await mkdir(join(root, HOOKS_PATH), { recursive: true });
+    await mkdir(join(root, 'test'), { recursive: true });
+    await copyFile(join(import.meta.dirname, '..', HOOKS_PATH, 'pre-commit'), join(root, HOOKS_PATH, 'pre-commit'));
+    await writeFile(join(root, 'test', 'wording.test.ts'), wording);
+    await writeFile(join(root, 'test', 'decisions.test.ts'), "import { test } from 'node:test';\ntest('ok', () => {});\n");
+    try {
+      execFileSync('sh', [join(root, HOOKS_PATH, 'pre-commit')], { cwd: root, stdio: 'ignore' });
+      return 0;
+    } catch (e) {
+      return (e as { status?: number }).status ?? -1;
+    }
+  }
+
+  test('言葉の試験が落ちていれば止め、通っていれば通す', sourceOnly, async () => {
+    const pass = "import { test } from 'node:test';\ntest('ok', () => {});\n";
+    const failing = "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('ng', () => { assert.fail('x'); });\n";
+    assert.equal(await run(pass), 0, '通っているのに止めた');
+    assert.notEqual(await run(failing), 0, '落ちているのに通した');
+  });
+});
+

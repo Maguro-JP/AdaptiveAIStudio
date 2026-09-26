@@ -1,0 +1,18 @@
+#!/bin/sh
+#
+# commit の手前で、言葉と記録の試験だけを回す（1 秒ほど）。
+#
+# 言葉の試験（wording）と記録の目次の試験（decisions）で落ちたまま commit したことが二度ある。
+# どちらも試験の出力を絞ってから次の命令へつないだので、落ちたことが止める側へ届かなかった。
+# 気づくのは push の手前（12 分）で、そこまで落ちた commit が積み上がる。
+# 重い試験は pre-push に任せ、ここは速いものだけ。
+set -e
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+# node の test runner の中から呼ばれると、この変数を受け継いで結果を親へ流し、落ちても 0 で終わる。
+unset NODE_TEST_CONTEXT
+if ! node --test test/wording.test.ts test/decisions.test.ts >/dev/null 2>&1; then
+  echo "== commit を止めました: test/wording.test.ts か test/decisions.test.ts が落ちています" >&2
+  echo "   node --test test/wording.test.ts test/decisions.test.ts で中身を見てください" >&2
+  exit 1
+fi
