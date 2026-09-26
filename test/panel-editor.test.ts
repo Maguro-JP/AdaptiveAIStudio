@@ -1430,3 +1430,43 @@ describe('二つのパネルで同じファイルを開く', () => {
     await until(() => localStorage.getItem('aas.draft:adopted.txt') === null, '戻して保存したのに預かりが残っている');
   });
 });
+
+describe('別のファイルへ移って戻る', () => {
+  /**
+   * **離れている間にファイルが変わっていたら、預けた直しを黙って戻さない。**
+   *
+   * 戻ったときに黙って直しを戻していた。開き直しで新しい stamp を取るので、次の保存は「開いたあとで変わった」を
+   * 確かめられず、離れている間の AI や別のパネルの書き換えを消していた。
+   */
+  test('**離れている間に変わっていたら、新しい中身を出し、直しは「出す」を押したときだけ戻す**', async () => {
+    const disk: Record<string, string> = { 'moved-a.txt': 'one\n', 'moved-b.txt': 'B\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('moved-a.txt');
+    await until(() => box.area().value === 'one\n', 'a が開く');
+    box.area().value = 'one\nMINE\n';
+    box.area().fire('input');
+    (box.ctx.openFile as (p: string) => void)('moved-b.txt');
+    await until(() => box.area().value === 'B\n', 'b が開く');
+    disk['moved-a.txt'] = 'one\nAI\n';
+    (box.ctx.openFile as (p: string) => void)('moved-a.txt');
+    await until(() => box.area().value === 'one\nAI\n', 'a の新しい中身が出ない（古い直しを黙って戻した）');
+    assert.equal(box.at('editor-notice').hidden, false, '後から変わったことを言っていない');
+    assert.match(box.at('editor-notice').text, /後から変わっています/);
+    box.press('その直しを出す');
+    assert.equal(box.area().value, 'one\nMINE\n', '出すを押しても直しが戻らない');
+  });
+
+  test('離れている間に変わっていなければ、直しをそのまま戻す（対）', async () => {
+    const disk: Record<string, string> = { 'kept-a.txt': 'one\n', 'kept-b.txt': 'B\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('kept-a.txt');
+    await until(() => box.area().value === 'one\n', 'a が開く');
+    box.area().value = 'one\nMINE\n';
+    box.area().fire('input');
+    (box.ctx.openFile as (p: string) => void)('kept-b.txt');
+    await until(() => box.area().value === 'B\n', 'b が開く');
+    (box.ctx.openFile as (p: string) => void)('kept-a.txt');
+    await until(() => box.area().value === 'one\nMINE\n', '直しが戻らない');
+    assert.match(box.state().textContent, /保存していない直しを戻しました/);
+  });
+});

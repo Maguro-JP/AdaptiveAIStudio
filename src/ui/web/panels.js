@@ -2463,7 +2463,8 @@ export const PANELS = {
 
     const open = async (p, line, quiet) => {
       // 離れる前に、保存していない分を預かる。
-      if (path && p !== path && dirty()) drafts.set(path, area.value);
+      // 預けたときの中身（base）も持つ。戻ったときに変わっていたら、黙って戻さない（下の「後から変わっています」）。
+      if (path && p !== path && dirty()) drafts.set(path, { text: area.value, base: loaded });
       let r;
       try {
         r = await fetch(`/api/file?path=${encodeURIComponent(p)}`, { signal: AbortSignal.timeout(20000) });
@@ -2564,12 +2565,21 @@ export const PANELS = {
       name.textContent = p;
       // 預けた分が在れば、それを返す（消さずに戻す）。
       // このパネルの中に無ければ、覚えておく所を見る（ブラウザを閉じたあとでも戻せる）。
-      let kept = drafts.get(p);
-      if (kept === undefined) {
+      let kept;
+      const inPanel = drafts.get(p);
+      if (inPanel !== undefined) drafts.delete(p);
+      /*
+       * このパネルの中で預けた分。**離れている間にファイルが変わっていたら、黙って戻さない。**
+       * 黙って戻すと、開き直しで新しい stamp を取るので、次の保存が AI や別のパネルの書き換えを確かめずに消していた。
+       */
+      if (inPanel !== undefined && inPanel.base === loaded) kept = inPanel.text;
+      else {
         const saved = readDraft(p);
-        if (saved && saved.base === loaded) { kept = saved.text; adoptDraft(p, saved); }
-        else if (saved) {
-          toldDraft.set(p, saved.at);
+        const stale = inPanel !== undefined ? { ...saved, text: inPanel.text, base: inPanel.base } : saved;
+        if (inPanel === undefined && saved && saved.base === loaded) { kept = saved.text; adoptDraft(p, saved); }
+        else if (stale) {
+          const saved = stale;
+          if (saved.at !== undefined) toldDraft.set(p, saved.at);
           /*
            * **中身が変わっていたら、黙って戻さない。**
            *
@@ -2591,7 +2601,6 @@ export const PANELS = {
       }
       area.value = kept ?? loaded;
       area.disabled = false;
-      if (kept !== undefined) drafts.delete(p);
       refresh();
       if (kept !== undefined && kept !== loaded) state.textContent = '保存していない直しを戻しました（Ctrl+S で保存）';
       if (mixedEol) tell('行末が混ざっています（CRLF と LF）。保存すると LF にそろいます。', [], 'info');
