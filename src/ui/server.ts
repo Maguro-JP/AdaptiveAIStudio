@@ -1777,6 +1777,13 @@ export class UiServer {
        * 消していた**（人が保存すれば AI の直しが消える）。開いたときの stamp と
        * 今の中身が違うなら、断る。どうするかは画面で選ばせる。
        */
+      // 開いたあとで消されていたら、黙って作り直さない（錠の後で消えたときと同じく、消されたと言う）。
+      if (stamp !== undefined && before === undefined) {
+        return send(res, 409, {
+          error: '開いたあとで、このファイルは別の所で消されました。画面で、作り直すか選んでください',
+          conflict: true, path: asked, gone: true,
+        });
+      }
       if (stamp !== undefined && before !== undefined && stampOf(before) !== stamp) {
         return send(res, 409, {
           error: '開いたあとで、このファイルは別の所で変わりました（AI の書き換えなど）。'
