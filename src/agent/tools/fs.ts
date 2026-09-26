@@ -49,7 +49,17 @@ export const readFileTool: Tool = {
       if (info.size > MAX_READ_BYTES) {
         return fail(`ファイルが大きすぎます (${info.size} bytes)。search_text で絞り込んでください。`);
       }
-      const text = await readFile(abs, 'utf8');
+      /*
+       * **utf8 で読めないものは、読めないと言う。**文字として読むと、二進や Shift_JIS は化けた字
+       * （U+FFFD）になり、モデルはそれを中身だと思って直しにかかる。判じ方は「戻す」と同じ（`contentOf`）。
+       */
+      const bytes = await readFile(abs);
+      const text = contentOf(bytes);
+      if (typeof text !== 'string') {
+        return fail(
+          `${p} は utf8 で読めません（二進か、別の文字コード。${bytes.length} バイト）。中身は渡しません。`,
+        );
+      }
       const all = text.split('\n');
       /*
        * **続きから読めるようにする。**
