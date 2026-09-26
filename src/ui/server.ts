@@ -1878,7 +1878,8 @@ export class UiServer {
         return send(res, 409, { error: 'その後に中身が変わっているので、この差分では戻せません（エディタで直してください）' });
       }
       if (after === current) return send(res, 200, { reverted: false, path: asked });
-      const { added, removed } = await this.#writeByHand(asked, real, current, after, `戻した: ${asked}`);
+      const { added, removed } = await this.#writeByHand(asked, real, current, after, `戻した: ${asked}`,
+        '差分を出したあとで、このファイルは別の所で変わりました（AI の書き換えなど）。差分を開き直してから戻してください');
       return send(res, 200, { reverted: true, path: asked, added, removed });
     }
 
@@ -1948,7 +1949,7 @@ export class UiServer {
         this.broadcast({ type: 'stateChanged' });
         return send(res, 200, { created: asked, kind });
       }
-      await this.#writeByHand(asked, real, undefined, '', `作った: ${asked}`);
+      await this.#writeByHand(asked, real, undefined, '', `作った: ${asked}`, `既にあります: ${asked}`);
       return send(res, 200, { created: asked, kind });
     }
 
@@ -2730,7 +2731,11 @@ export class UiServer {
   /** 手書きの錠の持ち主の札。名前で作ると、同じ名前の手書きが二つ重なったとき両方が取れてしまう。 */
   #handSeq = 0;
 
-  async #writeByHand(asked: string, real: string, before: string | undefined, content: string, request: string): Promise<{ added: number; removed: number }> {
+  async #writeByHand(
+    asked: string, real: string, before: string | undefined, content: string, request: string,
+    /** 読んだあとで変わっていたときの断りの文言。呼ぶ口ごとに、画面でできることが違う。 */
+    changed = '読んだあとで、このファイルは別の所で変わりました（AI の書き換えなど）。画面で、どちらを残すか選んでください',
+  ): Promise<{ added: number; removed: number }> {
     const session = this.#session;
     const undo = session?.undo ?? new UndoStore(this.#workRoot(), join(stateDir(), 'undo'));
     /*
@@ -2752,11 +2757,11 @@ export class UiServer {
       const nowBytes = await readFile(real).catch(() => undefined);
       const now = nowBytes === undefined ? undefined : contentOf(nowBytes);
       if (now !== before) {
-        throw new HandWriteRefused(
-          '読んだあとで、このファイルは別の所で変わりました（AI の書き換えなど）。画面で、どちらを残すか選んでください',
-          409,
-          typeof now === 'string' ? { conflict: true, path: asked, content: now, stamp: stampOf(now) } : { conflict: true, path: asked },
-        );
+        // 消えていた・文字でなくなっていたときは、そう言う（画面は「AI の版」を出せない）。
+        throw new HandWriteRefused(changed, 409,
+          typeof now === 'string' ? { conflict: true, path: asked, content: now, stamp: stampOf(now) }
+            : now === undefined ? { conflict: true, path: asked, gone: true }
+              : { conflict: true, path: asked, binary: true });
       }
       await undo.begin(request);
       undo.capture(asked, before);
