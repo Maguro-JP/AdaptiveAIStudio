@@ -700,7 +700,15 @@ export class Session {
       return undefined;
     }
     // 段取りでもファイルを触る。**戻せるのは送り口だけ、にしない。**
-    await this.undo.begin(request);
+    // 始められなかったら（前の戻り先を閉じる書き込みの失敗など）、錠と「動いている」を返して終える。
+    try {
+      await this.undo.begin(request);
+    } catch (e) {
+      this.lock.release(lockOwner);
+      this.#conv.running = undefined;
+      yield { type: 'log', level: 'error', text: (e as Error).message };
+      return undefined;
+    }
     this.#holder.instruction = request;
     this.#requests += 1;
     // 依頼が変われば協議もやり直し。前回通した話で今回の変更を通させない。
@@ -967,11 +975,12 @@ export class Session {
       yield { type: 'log', level: 'error', text: (e as Error).message };
       return undefined;
     } finally {
-      this.#conv.running = undefined;
       // 担当の途中で落ちた・止めた回も、そこまでに外のツールが変えた分を戻せるように。
       await takeOutside();
       await this.undo.end().catch(() => undefined);
+      // 錠を返してから「動いていない」にする（送り口と同じ）。
       this.lock.release(lockOwner);
+      this.#conv.running = undefined;
       await this.memory.save().catch(() => undefined);
     }
   }
@@ -1786,20 +1795,27 @@ export class Session {
         ...speedOf(modelUsed, answerChars, (Date.now() - measuredFrom) / 1000),
       };
     } catch (e) {
+      /*
+       * 止めた回（作業場の錠を待っている間に止めた等）は「失敗」にしない。止めたと言う。
+       * 失敗として残すと、止めただけの手が「駄目だった手」として覚えられる。
+       */
+      const stopped = ac.signal.aborted;
       // 一度の失敗で対話ごと終わらせない。次の指示は受けられる。
+      // 規則の数え（harness）は、通常の止めた回と同じく「完了しなかった」に数える。
       this.#harness.endTask('failed');
-      yield { type: 'log', level: 'error', text: (e as Error).message };
+      if (!stopped) yield { type: 'log', level: 'error', text: (e as Error).message };
       yield {
-        type: 'settled', reason: 'failed', verified: false, checked,
+        type: 'settled', reason: stopped ? 'aborted' : 'failed', verified: false, checked,
         ...(chat ? { chat: true } : {}),
         seconds: (Date.now() - started) / 1000, detail: (e as Error).message,
         ...speedOf(modelUsed, answerChars, (Date.now() - measuredFrom) / 1000),
       };
     } finally {
-      this.#conv.running = undefined;
       // **この一往復ぶんを、戻り先として残す。**触っていなければ残らない（錠を取っていなければ始めてもいない）。
       if (locked) await this.undo.end().catch(() => undefined);
+      // 錠を返してから「動いていない」にする。逆だと、その間に押した保存が錠に当たって断られる。
       this.lock.release(lockOwner);
+      this.#conv.running = undefined;
       await this.memory.save().catch(() => undefined);
       // **この回が終わってから判じる。**待たせない、を本当にする。
       // こちらが書いた文は判じない（利用者が言っていないことを覚えないため）。

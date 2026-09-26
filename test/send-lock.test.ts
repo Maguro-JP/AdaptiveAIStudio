@@ -19,6 +19,15 @@ let fake: FakeServer;
 before(async () => { fake = await startFakeServer({ kind: 'stream', text: 'はい。' }); });
 after(async () => { await fake.close(); });
 
+/** 条件が満ちるまで繰り返し見る（決まった時間を待つと、遅い機械で待ちに着く前に見てしまう）。 */
+async function until(cond: () => boolean, what: string, ms = 20_000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > end) throw new Error(`待っても ${what}`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
 async function open() {
   const root = join(await tempDir('aas-send-lock-'), 'project');
   await mkdir(root, { recursive: true });
@@ -52,10 +61,9 @@ describe('送り口と作業場の錠', { timeout: 60_000 }, () => {
           if (ev.type === 'toolEnd' && ev.name === 'write_file') heldDuring = session.lock.owner;
         }
       })();
-      // 相手が持っている間は書かない。
-      await new Promise((r) => setTimeout(r, 600));
+      // 相手が持っている間は書かない。錠の待ちに着くまで見る。
+      await until(() => session.lock.waiting === 1, '錠を待ちに来ない');
       assert.equal(await readFile(join(root, 'note.txt'), 'utf8'), 'もと\n', '錠を待たずに書いた');
-      assert.equal(session.lock.waiting, 1, '錠を待っていない');
       session.lock.release('other');
       await run;
       assert.equal(await readFile(join(root, 'note.txt'), 'utf8'), '書いた\n');
@@ -87,4 +95,31 @@ describe('送り口と作業場の錠', { timeout: 60_000 }, () => {
       await session.close();
     }
   });
+
+  test('錠を待っている間に止めたら、書かずに「止めた」で終わる（失敗にしない）', async () => {
+    const { root, session } = await open();
+    try {
+      fake.setBehavior({
+        kind: 'steps',
+        calls: [{ name: 'write_file', args: { path: 'note.txt', content: '書いた\n' } }],
+        then: '書きました。',
+      });
+      await session.lock.acquire('other');
+      let settled: { reason: string } | undefined;
+      const run = (async () => {
+        for await (const ev of session.send('note.txt を書き換えて')) if (ev.type === 'settled') settled = ev;
+      })();
+      await until(() => session.lock.waiting === 1, '錠を待ちに来ない');
+      session.abort();
+      await run;
+      assert.equal(settled?.reason, 'aborted', `止めたのに ${settled?.reason} で終わった`);
+      assert.equal(await readFile(join(root, 'note.txt'), 'utf8'), 'もと\n', '止めたのに書いた');
+      assert.equal(session.lock.owner, 'other', '止めた依頼が錠に触った');
+      assert.equal(session.lock.waiting, 0, '止めた依頼が列に残っている');
+      session.lock.release('other');
+    } finally {
+      await session.close();
+    }
+  });
 });
+

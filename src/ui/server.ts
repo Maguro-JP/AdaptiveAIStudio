@@ -1635,7 +1635,7 @@ export class UiServer {
       const real = await this.#writablePath(asked);
       if (!real) return send(res, 400, { error: '作業場の外には書けません' });
       const session = this.#session;
-      if (session && this.#busyNow(session)) {
+      if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから保存してください' });
       }
       const before = await readFile(real, 'utf8').catch(() => undefined);
@@ -1733,7 +1733,7 @@ export class UiServer {
       const real = await resolveInside(this.#workRoot(), asked);
       if (!real) return send(res, 400, { error: '作業場の外には書けません' });
       const session = this.#session;
-      if (session && this.#busyNow(session)) {
+      if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから戻してください' });
       }
       const current = await readFile(real, 'utf8').catch(() => undefined);
@@ -1804,7 +1804,7 @@ export class UiServer {
       const real = await this.#writablePath(asked);
       if (!real) return send(res, 400, { error: '作業場の外には作れません' });
       const session = this.#session;
-      if (session && this.#busyNow(session)) {
+      if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから作ってください' });
       }
       if (await stat(real).then(() => true, () => false)) return send(res, 409, { error: `既にあります: ${asked}` });
@@ -1987,14 +1987,16 @@ export class UiServer {
         return send(res, 409, { error: 'いま作業中です。終わってから戻してください' });
       }
       // 「戻す」も作業場を書く。錠を通す（会話ごとに走らせる段でも、書いている依頼と混ざらない）。
-      if (!session.lock.tryAcquire('hand:undo')) {
+      // 札は一回ごとに作る（同じ名前だと二度押しの二つ目も通り、先に終わった方が錠を外してしまう）。
+      const owner = `hand:${++this.#handSeq}`;
+      if (!session.lock.tryAcquire(owner)) {
         return send(res, 409, { error: 'いま AI が作業場に書いています。終わってから戻してください' });
       }
       let done: Awaited<ReturnType<typeof session.undo.restore>>;
       try {
         done = await session.undo.restore(id);
       } finally {
-        session.lock.release('hand:undo');
+        session.lock.release(owner);
       }
       if (!done) return send(res, 404, { error: 'その戻り先はもうありません' });
       session.markChanged();
