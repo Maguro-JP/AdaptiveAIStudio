@@ -87,6 +87,19 @@ export async function findRemovable(opts: {
     }
   }
 
+  /*
+   * 会話の見出しを書き戻すときの一時ファイル（`<id>.jsonl.<pid>.<番号>.tmp`）。置き換えられずに残ったもの。
+   * 書いている最中のものを消さないよう、1 時間より古いものだけ。
+   */
+  const talks = join(stateDir(), 'conversations');
+  for (const name of await readdir(talks).catch(() => [])) {
+    if (!/\.jsonl\.\d+\.\d+\.tmp$/.test(name)) continue;
+    const path = join(talks, name);
+    const s = await stat(path).catch(() => undefined);
+    if (!s || now - s.mtimeMs < 60 * 60 * 1000) continue;
+    found.push({ path, bytes: s.size, why: '会話の見出しを書き換えたときに残った一時ファイル' });
+  }
+
   // 古い記録。新しいものは残す（直近の様子は見たいことがある）。
   const logs = join(stateDir(), 'logs');
   for (const name of await readdir(logs).catch(() => [])) {

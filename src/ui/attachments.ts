@@ -74,6 +74,15 @@ export function detectKind(name: string, data: Buffer): AttachmentKind {
   if (data.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) return 'image';
   if (data.subarray(0, JPEG_MAGIC.length).equals(JPEG_MAGIC)) return 'image';
 
+  /*
+   * UTF-16 の BOM で始まるものは文字もの（NUL を含むが、二進ではない）。ただし BOM だけで決めない
+   * （UTF-32LE や音声も FF FE で始まる）。厳密に読めて、読んだ中に NUL が無いときだけ。
+   */
+  if (data.length >= 2 && ((data[0] === 0xff && data[1] === 0xfe) || (data[0] === 0xfe && data[1] === 0xff))) {
+    const head = data.subarray(0, 4096 - (4096 % 2));
+    const r = decodeText(head.length % 2 === 0 ? head : head.subarray(0, head.length - 1));
+    if (!r.lossy && !r.text.includes('\0')) return 'text';
+  }
   const head = data.subarray(0, 4096);
   if (head.includes(0)) return 'binary';
 
@@ -85,21 +94,52 @@ export function detectKind(name: string, data: Buffer): AttachmentKind {
   return broken > head.length / 100 ? 'binary' : 'text';
 }
 
-/** 名前を安全にする。渡された名前を、そのまま置き場所に使わない。 */
+/** 名前の長さの上限（UTF-8 のバイト数）。前に付く `id-` を足しても 255 バイトに収まるように。 */
+const NAME_MAX_BYTES = 200;
+/** 字の数の上限。Windows の道の長さ（260 字）に当たりにくくする（保存先のフォルダだけで 80 字ほどある）。 */
+const NAME_MAX_CHARS = 120;
+/** 二重の拡張子。切っても残す。 */
+const DOUBLE_EXT = /\.(tar\.(gz|bz2|xz|zst)|d\.ts)$/i;
+
+/**
+ * 名前を安全にする。渡された名前を、そのまま置き場所に使わない。
+ *
+ * 長さは UTF-8 のバイトで数える（Linux・macOS の上限は 255 バイト。全角は一字 3 バイトなので、字の数で 120 に
+ * 切っても受け取れなかった）。切るのは本体だけで、拡張子は残す（落とすと絵を読めない形式と取り違える）。
+ * 字の単位で切る（絵文字を半分に割らない）。
+ */
 export function safeName(name: string): string {
   const base = name.split(/[\\/]/).pop() ?? 'file';
-  // 制御文字と、Windows で使えない字を落とす。
-  const cleaned = base.replace(/[\x00-\x1f<>:"|?*]/g, '_').replace(/^\.+/, '').slice(0, 120);
-  return cleaned.length > 0 ? cleaned : 'file';
+  // 制御文字と、Windows で使えない字を落とす。末尾の点と空白は Windows が保存時に落とすので、先に外す。
+  const cleaned = base.replace(/[\x00-\x1f<>:"|?*]/g, '_').replace(/^\.+/, '').replace(/[. ]+$/, '');
+  if (cleaned.length === 0) return 'file';
+  const double = DOUBLE_EXT.exec(cleaned);
+  const dot = double ? double.index : cleaned.lastIndexOf('.');
+  const ext = dot > 0 && cleaned.length - dot <= 16 ? cleaned.slice(dot) : '';
+  const chars = Array.from(ext ? cleaned.slice(0, dot) : cleaned);
+  const extChars = Array.from(ext).length;
+  while (chars.length > 1
+    && (Buffer.byteLength(chars.join('') + ext) > NAME_MAX_BYTES || chars.length + extChars > NAME_MAX_CHARS)) chars.pop();
+  // 切った位置が点や空白なら、それも外す（Windows が保存時に落とす）。
+  const body = chars.join('').replace(/[. ]+$/, '');
+  return body.length > 0 ? body + ext : `file${ext}`;
 }
 
 export class Attachments {
   readonly #dir: string;
   readonly #items = new Map<string, Attachment>();
   readonly #id: () => string;
+  readonly #remove: (path: string) => Promise<void>;
+  readonly #read: (path: string) => Promise<Buffer>;
 
-  constructor(dir = join(stateDir(), 'attachments'), opts: { id?: () => string } = {}) {
+  constructor(
+    dir = join(stateDir(), 'attachments'),
+    /** `remove`・`read` は試験で入れ替える（消せない・読めない形を、ファイルシステムの種類に頼らずに作るため）。 */
+    opts: { id?: () => string; remove?: (path: string) => Promise<void>; read?: (path: string) => Promise<Buffer> } = {},
+  ) {
     this.#dir = dir;
+    this.#remove = opts.remove ?? ((path) => rm(path));
+    this.#read = opts.read ?? ((path) => readFile(path));
     // 名前の作り手を差し替えられるようにしてあるのは、**ぶつかったときに
     // どうなるかを検査で見るため**。ぶつからないことを祈る検査は書けない。
     this.#id = opts.id ?? (() => randomUUID().slice(0, 8));
@@ -169,10 +209,18 @@ export class Attachments {
       if (used >= total) { leftOut += 1; continue; }
 
       if (item.kind === 'text') {
-        const bytes = await readFile(item.path).catch(() => Buffer.alloc(0));
+        const got = await this.#read(item.path).then((b) => ({ b }), (e: NodeJS.ErrnoException) => ({ code: e.code ?? 'error' }));
+        // 読めなければ、空の中身で渡さない（渡したのに無視されたように見える）。「消えて」は無いときだけ言う。
+        if (!('b' in got)) {
+          parts.push(`--- 添付: ${item.name}（${got.code === 'ENOENT' ? '保存先から消えていて読めません' : `読めません（${got.code}）`}）---`);
+          used = parts.join('\n\n').length;
+          continue;
+        }
+        const bytes = got.b;
         const { text: raw, encoding } = decodeText(bytes);
         // CP932 として読んだなら、そう言う。黙って直すと、書き戻すときに困る。
-        const how = encoding === 'shift_jis' ? '（CP932 として読みました）' : '';
+        const how = encoding === 'shift_jis' ? '（CP932 として読みました）'
+          : encoding === 'utf-16le' || encoding === 'utf-16be' ? '（UTF-16 として読みました）' : '';
         // 囲みの分も窓を食う。**中身だけ数えて収まったつもりにならない。**
         const frame = `--- 添付: ${item.name}${how} ---\n\n--- ここまで ---\n\n`.length;
         // **一つで全部を使い切らせない。**複数付けたときに、後ろが空になる。
@@ -207,9 +255,12 @@ export class Attachments {
     for (const name of await readdir(this.#dir).catch(() => [])) {
       const path = join(this.#dir, name);
       const s = await stat(path).catch(() => undefined);
-      if (!s || now - s.mtimeMs < olderThanMs) continue;
+      // 預かりはファイルだけ。フォルダ等は触らない（消せないのに数えていた）。
+      if (!s || !s.isFile() || now - s.mtimeMs < olderThanMs) continue;
+      // 消せた分だけ数える（「消した量を必ず言う」の量を嘘にしない）。使用中なら次回。
+      const removed = await this.#remove(path).then(() => true, () => false);
+      if (!removed) continue;
       freed += s.size;
-      await rm(path, { force: true }).catch(() => { /* 使用中なら次回 */ });
       for (const [id, item] of this.#items) if (item.path === path) this.#items.delete(id);
     }
     return freed;

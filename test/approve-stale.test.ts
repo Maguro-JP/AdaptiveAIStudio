@@ -109,8 +109,17 @@ describe('同じファイルへ二人が同時に書く', () => {
   test('**片方だけが通り、もう片方は変わったと返す**', async () => {
     const root = await tempDir('aas-race-');
     await writeFile(join(root, 'a.txt'), 'もとの\n');
+    /*
+     * **二人とも同じ前の中身を読んだ形を、確実に作る。**承認は前の中身を読んだ後に来るので、二人が承認を
+     * 求めるまで両方を待たせる。待たせないと、一人目が書き終えてから二人目が読む回があり、そのときは
+     * 二人目が一人目の版を見て正しく書けるので「両方が書けた」になる（bundle の中で一度そう落ちた）。
+     */
+    let waiting = 0;
+    let release: () => void = () => {};
+    const both = new Promise<void>((r) => { release = r; });
     const ctx: ToolContext = {
-      root, signal: new AbortController().signal, approve: () => Promise.resolve(true),
+      root, signal: new AbortController().signal,
+      approve: async () => { waiting += 1; if (waiting === 2) release(); await both; return true; },
     };
 
     const [one, two] = await Promise.all([

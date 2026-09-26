@@ -172,10 +172,10 @@ export function execCommand(
  */
 export function decodeOutput(raw: Buffer): string {
   for (let skip = 0; skip <= 3 && skip < raw.length; skip++) {
-    const r = decodeText(raw.subarray(skip));
+    const r = decodeText(raw.subarray(skip), { utf16: false });
     if (!r.lossy) return r.text;
   }
-  return decodeText(raw).text;
+  return decodeText(raw, { utf16: false }).text;
 }
 
 /** 出力の末尾だけを残す。失敗の原因は末尾にあることが多い。 */
