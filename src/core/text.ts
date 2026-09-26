@@ -57,13 +57,25 @@ export type TextEncodingName = 'utf-8' | 'shift_jis' | 'utf-16le' | 'utf-16be';
  * 順番: UTF-8（厳密） → CP932（厳密） → UTF-8（化けを許す）。
  * 当てずっぽうで CP932 にはしない。UTF-8 として通るものは UTF-8。
  */
-export function decodeText(data: Buffer): { text: string; encoding: TextEncodingName; lossy: boolean } {
+export function decodeText(
+  data: Buffer,
+  /**
+   * UTF-16 の BOM を見るか。シェルの出力は stdout と stderr を届いた順につないでいるので、UTF-16 で読むと
+   * 後ろの utf8 の stderr まで化ける。そこでは見ない（`shell-exec.ts` の `decodeOutput`）。
+   */
+  opts: { utf16?: boolean } = {},
+): { text: string; encoding: TextEncodingName; lossy: boolean } {
   // UTF-16 の BOM を先に見る（メモ帳の「Unicode」、Windows PowerShell 5.1 の `>` の出力）。BOM は落とす。
-  if (data.length >= 2 && data[0] === 0xff && data[1] === 0xfe) {
-    return { text: new TextDecoder('utf-16le').decode(data), encoding: 'utf-16le', lossy: false };
-  }
-  if (data.length >= 2 && data[0] === 0xfe && data[1] === 0xff) {
-    return { text: new TextDecoder('utf-16be').decode(data), encoding: 'utf-16be', lossy: false };
+  // 厳密に読めなければ、化けを許して読み、そう言う（長さが奇数・片割れの字）。
+  if (opts.utf16 !== false && data.length >= 2) {
+    const label = data[0] === 0xff && data[1] === 0xfe ? 'utf-16le' : data[0] === 0xfe && data[1] === 0xff ? 'utf-16be' : undefined;
+    if (label) {
+      try {
+        return { text: new TextDecoder(label, { fatal: true }).decode(data), encoding: label, lossy: false };
+      } catch {
+        return { text: new TextDecoder(label).decode(data), encoding: label, lossy: true };
+      }
+    }
   }
   try {
     return { text: new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(data), encoding: 'utf-8', lossy: false };

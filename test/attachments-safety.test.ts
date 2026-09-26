@@ -3,8 +3,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { rm, mkdir, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { rm } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { Attachments, safeName, detectKind } from '../src/ui/attachments.ts';
 import { decodeText } from '../src/core/text.ts';
@@ -51,12 +50,62 @@ describe('添付の預かり', () => {
     assert.match(await a.describe([item.id]), /こんにちは/);
   });
 
-  test('**片づけで、消せなかった分を空けた量に数えない**', async () => {
+});
+
+describe('添付の預かり（読み直しで挙がった形）', () => {
+  test('ASCII の長い名前も 120 字で止める（Windows の道の長さ 260 字に当たりにくくする）', () => {
+    const name = safeName(`${'a'.repeat(300)}.txt`);
+    assert.ok(Array.from(name).length <= 120, `${Array.from(name).length} 字`);
+    assert.ok(name.endsWith('.txt'));
+  });
+
+  test('切ったあとの末尾にも、点と空白を残さない', () => {
+    const name = safeName('abc '.repeat(60));
+    assert.doesNotMatch(name, /[. ]$/, JSON.stringify(name));
+  });
+
+  test('二重の拡張子（.tar.gz）は切っても残す', () => {
+    assert.ok(safeName(`${'b'.repeat(300)}.tar.gz`).endsWith('.tar.gz'));
+  });
+
+  test('UTF-16BE も、その文字コードで読む', async () => {
+    const be = Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from('こんにちは', 'utf16le').swap16()]);
+    assert.equal(decodeText(be).text, 'こんにちは');
+    assert.equal(detectKind('noext', be), 'text');
+  });
+
+  test('UTF-16 として読めない（長さが奇数）なら、化けたと言う', () => {
+    assert.equal(decodeText(Buffer.from([0xff, 0xfe, 0x41])).lossy, true);
+  });
+
+  test('FF FE で始まる二進（UTF-32LE・音声）を、文字ものと取り違えない', () => {
+    const utf32 = Buffer.from([0xff, 0xfe, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x42, 0x00, 0x00, 0x00]);
+    assert.equal(detectKind('noext', utf32), 'binary');
+  });
+
+  test('**片づけで、消せなかったファイルを空けた量に数えず、一覧にも残す**', async () => {
     const dir = await tempDir('aas-att-');
-    const a = new Attachments(dir);
-    await mkdir(join(dir, 'sub'), { recursive: true });
+    const a = new Attachments(dir, { remove: () => Promise.reject(Object.assign(new Error('busy'), { code: 'EBUSY' })) });
+    const item = await a.add('memo.txt', Buffer.from('メモ'));
     const freed = await a.sweep(0, Date.now() + 1000);
-    assert.equal(freed, 0, '消せなかったフォルダを数えた');
-    assert.ok((await readdir(dir)).includes('sub'));
+    assert.equal(freed, 0, '消せなかった分を数えた');
+    assert.ok(a.get(item.id), '消せなかったのに一覧から外した');
+  });
+
+  test('読めない理由が「無い」でなければ、消えたとは言わない', async () => {
+    const dir = await tempDir('aas-att-');
+    const a = new Attachments(dir, { read: () => Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' })) });
+    const item = await a.add('memo.txt', Buffer.from('メモ'));
+    const text = await a.describe([item.id]);
+    assert.doesNotMatch(text, /消えて/, text);
+    assert.match(text, /読めません（EACCES）/, text);
+  });
+});
+
+describe('シェルの出力は UTF-16 として読まない', () => {
+  test('stdout が UTF-16 の BOM で始まっても、後ろの utf8 の stderr を化けさせない', async () => {
+    const { decodeOutput } = await import('../src/agent/shell-exec.ts');
+    const raw = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('out\r\n', 'utf16le'), Buffer.from('エラー: 見つかりません')]);
+    assert.match(decodeOutput(raw), /エラー: 見つかりません/);
   });
 });
