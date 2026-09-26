@@ -1590,3 +1590,101 @@ describe('別のファイルへ移って戻る', () => {
     assert.match(box.state().textContent, /保存していない直しを戻しました/);
   });
 });
+
+describe('AI の版を出したあと', () => {
+  /**
+   * **保存を断られて「AI の版を出す」を押したあと、自分の直しを画面の中にしか残さない。**
+   *
+   * 欄は AI の版になり直しが無い状態になるので、預かりの片づけが自分の直しの写しを消していた。
+   * 自分の直しは画面の中（held）にしか無く、ブラウザを閉じると失っていた。
+   */
+  test('**ブラウザを閉じて開き直しても、自分の直しを「出す」で戻せる**', async () => {
+    const disk: Record<string, string> = { 'held.txt': 'one\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('held.txt');
+    await until(() => box.area().value === 'one\n', '開く');
+    box.area().value = 'one\nMINE\n';
+    box.area().fire('input');
+    disk['held.txt'] = 'one\nAI\n';
+    box.key('s');
+    await until(() => box.at('editor-notice').text.includes('別の所で変わりました'), '保存を断られる');
+    box.press('AI の版を出す');
+    assert.equal(box.area().value, 'one\nAI\n');
+    // 預かりの片づけ（「AI の版を出す」を押したときに仕掛け直された 400 ms の時計）が走り終えるまで待つ。
+    // その時計はこれより先に仕掛けたので、先に走る。
+    await new Promise((r) => setTimeout(r, 450));
+    // ブラウザを閉じて開き直した形（新しいパネル、覚えておく所はそのまま）。
+    const again = open(disk, true);
+    (again.ctx.openFile as (p: string) => void)('held.txt');
+    await until(() => again.area().value === 'one\nAI\n' && again.at('editor-notice').hidden === false, '自分の直しが残っていると言わない');
+    assert.match(again.at('editor-notice').text, /取り替える前/);
+    again.press('その直しを出す');
+    assert.equal(again.area().value, 'one\nMINE\n');
+  });
+
+  /** 保存を断られて「AI の版を出す」を押したところまで進める。 */
+  async function tookOver(name: string) {
+    const disk: Record<string, string> = { [name]: 'one\n', [`other-${name}`]: 'B\n' };
+    const box = open(disk);
+    const go = (f: string) => (box.ctx.openFile as (p: string) => void)(f);
+    go(name);
+    await until(() => box.area().value === 'one\n', '開く');
+    box.area().value = 'one\nMINE\n';
+    box.area().fire('input');
+    disk[name] = 'one\nAI\n';
+    box.key('s');
+    await until(() => box.at('editor-notice').text.includes('別の所で変わりました'), '保存を断られる');
+    box.press('AI の版を出す');
+    return { box, disk, go };
+  }
+
+  test('**AI の版を直して打ち消したら、移って戻っても途中の直しを黙って戻さない**', async () => {
+    const { box, go } = await tookOver('undo-typed.txt');
+    box.area().value = 'one\nAI\nzz\n';
+    box.area().fire('input');
+    await until(() => (localStorage.getItem('aas.draft:undo-typed.txt') ?? '').includes('zz'), '途中の直しを預ける');
+    box.area().value = 'one\nAI\n';
+    box.area().fire('input');
+    await until(() => localStorage.getItem('aas.draft:undo-typed.txt') === null, '打ち消したのに途中の直しの預かりが残っている');
+    go('other-undo-typed.txt');
+    await until(() => box.area().value === 'B\n', '移る');
+    go('undo-typed.txt');
+    await until(() => box.area().value === 'one\nAI\n', '途中の直しを黙って戻した');
+  });
+
+  test('**AI の版を直したあとも、取り替える前の自分の直しは覚えておく所に残る**', async () => {
+    const { box } = await tookOver('typed-after.txt');
+    box.area().value = 'one\nAI\nq\n';
+    box.area().fire('input');
+    await until(() => (localStorage.getItem('aas.draft:typed-after.txt') ?? '').includes('q'), '直した分を預ける');
+    const parked = localStorage.getItem('aas.held:typed-after.txt');
+    assert.equal(parked && (JSON.parse(parked) as { text: string }).text, 'one\nMINE\n', '取り替える前の直しを上書きした');
+  });
+
+  test('「自分の直しに戻す」を押したら、取り替える前の直しの預かりは片づける', async () => {
+    const { box } = await tookOver('restored.txt');
+    assert.ok(localStorage.getItem('aas.held:restored.txt'), '預けていない');
+    box.press('自分の直しに戻す');
+    assert.equal(box.area().value, 'one\nMINE\n');
+    assert.equal(localStorage.getItem('aas.held:restored.txt'), null);
+  });
+
+  test('**選んだ範囲を AI が書き換えたあと、手で元に戻したら、移って戻っても AI の直しを黙って戻さない**', async () => {
+    const disk: Record<string, string> = { 'patched.txt': 'a\nb\n', 'patched-other.txt': 'B\n' };
+    const box = open(disk);
+    const go = (f: string) => (box.ctx.openFile as (p: string) => void)(f);
+    go('patched.txt');
+    await until(() => box.area().value === 'a\nb\n', '開く');
+    const done = (box.ctx.applyPatch as (at: unknown) => boolean)({ path: 'patched.txt', from: 1, to: 1, text: 'a', replacement: 'A' });
+    assert.equal(done, true);
+    assert.equal(box.area().value, 'A\nb\n');
+    await until(() => (localStorage.getItem('aas.draft:patched.txt') ?? '').includes('A'), '直しを預ける');
+    box.area().value = 'a\nb\n';
+    box.area().fire('input');
+    await until(() => localStorage.getItem('aas.draft:patched.txt') === null, '元に戻したのに預かりが残っている');
+    go('patched-other.txt');
+    await until(() => box.area().value === 'B\n', '移る');
+    go('patched.txt');
+    await until(() => box.area().value === 'a\nb\n', '直しを黙って戻した');
+  });
+});

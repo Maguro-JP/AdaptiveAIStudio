@@ -2111,7 +2111,17 @@ export const PANELS = {
       eol = String(raw ?? '').includes('\r\n')
         && !String(raw ?? '').replace(/\r\n/g, '').includes('\n') ? '\r\n' : '\n';
       mine = area.value;
-      if (path) held.set(path, mine);
+      if (path) {
+        held.set(path, mine);
+        /*
+         * 自分の直しを、覚えておく所にも預ける（ブラウザを閉じても失わない）。**保存していない直しの預かりとは鍵を分ける。**
+         * 同じ鍵に置くと、AI の版を直した分の預かりが上書きし、片づけも止めることになり、移って戻ったときに途中の直しを
+         * 黙って戻した（読み直しで見つけた）。
+         */
+        try {
+          localStorage.setItem(HELD_AT(path), JSON.stringify({ text: mine, base: loaded, at: Date.now(), by: DRAFT_ME }));
+        } catch { /* 覚えておく所が使えない環境もある */ }
+      }
       loaded = text;
       stamp = newStamp ?? '';
       area.value = text;
@@ -2120,6 +2130,7 @@ export const PANELS = {
         ['自分の直しに戻す', () => {
           area.value = mine ?? area.value;
           held.delete(path);
+          dropHeld(path);
           refresh();
           tell('自分の直しに戻しました。保存すると AI の版を上書きします。', []);
         }],
@@ -2194,6 +2205,22 @@ export const PANELS = {
      * いたら、黙って戻さない（AI や別のブラウザが書いたものを、古い直しで上書きする）。
      */
     const DRAFT_AT = (p) => `aas.draft:${p}`;
+    /** 「AI の版を出す」で取り替えた自分の直しの預かり。保存していない直しの預かりとは分ける（片づけ・上書きの対象にしない）。 */
+    const HELD_AT = (p) => `aas.held:${p}`;
+    const dropHeld = (p) => { try { localStorage.removeItem(HELD_AT(p)); } catch { /* 覚えておく所が使えない環境もある */ } };
+    /** 取り替えた自分の直しを読む。形が違うもの・古いものは捨てる。 */
+    const readHeld = (p) => {
+      try {
+        const raw = localStorage.getItem(HELD_AT(p));
+        if (!raw) return undefined;
+        const got = JSON.parse(raw);
+        if (typeof got?.text !== 'string' || (typeof got.at === 'number' && Date.now() - got.at > DRAFT_KEEP_MS)) {
+          localStorage.removeItem(HELD_AT(p));
+          return undefined;
+        }
+        return got;
+      } catch { return undefined; }
+    };
     /**
      * このパネルの名札。預かる所はファイルの名前ごとに一つで、パネル（別のタブも）をまたいで同じ。
      * 片づけるときに、誰が預けたものかを見る（見ずに消すと、別のパネルの保存していない直しを消す）。
@@ -2638,10 +2665,29 @@ export const PANELS = {
           ['自分の直しに戻す', () => {
             area.value = mine ?? area.value;
             held.delete(p);
+            dropHeld(p);
             refresh();
             tell('自分の直しに戻しました。保存すると、いまのファイルを上書きします。', []);
           }],
         ], 'info');
+      } else if (mine === null) {
+        /*
+         * この画面の中には無いが、覚えておく所に「AI の版に取り替える前の自分の直し」が在る（ブラウザを閉じて開き直した）。
+         * 黙って戻さず、選ばせる。ほかの知らせ（後から変わっています等）が出ているなら、今回はそちらを先に出す（次に開いたときに出す）。
+         */
+        const parked = readHeld(p);
+        if (parked && parked.text === area.value) dropHeld(p);
+        else if (parked && notice.hidden) {
+          tell('AI の版に取り替える前の、自分の直しが残っています。', [
+            ['その直しを出す', () => {
+              area.value = parked.text;
+              dropHeld(p);
+              refresh();
+              tell('自分の直しを出しました。保存すると、いまのファイルを上書きします。', []);
+            }],
+            ['捨てる', () => { dropHeld(p); tell('取り替える前の直しを捨てました。', [], 'info'); }],
+          ]);
+        }
       }
       /*
        * **打っている手を、AI の書き込みで奪わない。**
