@@ -106,16 +106,29 @@ describe('当てたあとから、塊ごと・行ごとに戻す', () => {
     assert.equal(revertLines(after, diff, [{ hunk: 0 }, { hunk: 1 }]), before);
   });
 
-  test('**行ごとに戻す**（塊の中の一行だけ）', () => {
+  test('**行を押すと、その行を含む書き換えの組を丸ごと戻す**（片方だけ戻して両方が並ぶ姿を作らない）', () => {
     const { revertLines, splitHunks } = hunksApi;
     const h1 = splitHunks(diff)[1]!;
-    // 2 つ目の塊は「-g / +G / +G2」。G2 だけ戻す。
-    const g2 = h1.lines.findIndex((l) => l === '+G2');
-    assert.ok(g2 >= 0, h1.lines.join('|'));
-    assert.equal(revertLines(after, diff, [{ hunk: 1, lines: [g2] }]), 'a\nB\nc\nd\ne\nf\nG\nh\n');
-    // -g だけ戻す（g を復活させ、G と G2 は残る）。
-    const g = h1.lines.findIndex((l) => l === '-g');
-    assert.equal(revertLines(after, diff, [{ hunk: 1, lines: [g] }]), 'a\nB\nc\nd\ne\nf\ng\nG\nG2\nh\n');
+    // 2 つ目の塊は「-g / +G / +G2」。どの行を押しても、g に戻り G と G2 は消える。
+    for (const text of ['+G2', '+G', '-g']) {
+      const at = h1.lines.findIndex((l) => l === text);
+      assert.ok(at >= 0, h1.lines.join('|'));
+      assert.equal(revertLines(after, diff, [{ hunk: 1, lines: [at] }]), 'a\nB\nc\nd\ne\nf\ng\nh\n', `${text} を押したとき`);
+    }
+  });
+
+  test('一つの塊に書き換えの組が二つあれば、押した方の組だけ戻す', () => {
+    const { revertLines, splitHunks } = hunksApi;
+    const b2 = 'a\nb\nc\nd\n';
+    const a2 = 'A\nb\nC\nd\n';
+    const d2 = unifiedDiff('y.txt', b2, a2, 3);
+    const h = splitHunks(d2);
+    assert.equal(h.length, 1, d2);
+    const atC = h[0]!.lines.indexOf('+C');
+    assert.equal(revertLines(a2, d2, [{ hunk: 0, lines: [atC] }]), 'A\nb\nc\nd\n');
+    // 変えていない行（文脈）を押しても何も戻さない。
+    const atB = h[0]!.lines.indexOf(' b');
+    assert.equal(revertLines(a2, d2, [{ hunk: 0, lines: [atB] }]), a2);
   });
 
   test('その後に変わっていれば、当てない（壊さない）', () => {

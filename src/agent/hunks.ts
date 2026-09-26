@@ -93,7 +93,12 @@ export function applyHunks(
   return out.join('\n');
 }
 
-/** 戻す塊と、その中の行（塊の中の何番目か。省くと塊ごと）。 */
+/**
+ * 戻す塊と、その中の行（塊の中の何番目か。省くと塊ごと）。
+ *
+ * 行を渡しても、**その行だけは戻さない。**その行を含む書き換えの組（続けて並ぶ `-` と `+`）を丸ごと戻す。
+ * 消した行と足した行は多くの場合「書き換え」の組で、片方だけ戻すと両方が並んだ、どこにも無かった姿になる。
+ */
 export interface RevertPick {
   readonly hunk: number;
   readonly lines?: readonly number[];
@@ -128,8 +133,10 @@ export function revertLines(
   if (byHunk.size === 0) return current;
 
   const reversed: string[] = [];
-  for (const [i, chosen] of [...byHunk.entries()].sort((a, b) => a[0] - b[0])) {
+  for (const [i, asked] of [...byHunk.entries()].sort((a, b) => a[0] - b[0])) {
     const h = hunks[i]!;
+    if (asked !== undefined && [...asked].some((at) => at < 0 || at >= h.lines.length)) return undefined;
+    const chosen = asked === undefined ? undefined : changeGroups(h.lines, asked);
     const lines: string[] = [];
     h.lines.forEach((line, at) => {
       const pick = chosen === undefined || chosen.has(at);
@@ -137,9 +144,25 @@ export function revertLines(
       else if (line.startsWith('-')) { if (pick) lines.push(`+${line.slice(1)}`); }
       else lines.push(line);
     });
-    if (chosen !== undefined && [...chosen].some((at) => at < 0 || at >= h.lines.length)) return undefined;
     const count = lines.filter((l) => !l.startsWith('+')).length;
     reversed.push(`@@ -${h.newFrom},${count} +${h.newFrom},${count} @@`, ...lines);
   }
   return applyHunks(current, reversed.join('\n'), Array.from({ length: byHunk.size }, (_, k) => k));
 }
+
+/**
+ * 選んだ行を、それを含む書き換えの組（続けて並ぶ `-` と `+` の行）に広げる。
+ * 文脈（` `）の行を選んでも何も戻さない（変えていない行）。
+ */
+function changeGroups(lines: readonly string[], picked: ReadonlySet<number>): Set<number> {
+  const out = new Set<number>();
+  const changed = (at: number) => at >= 0 && at < lines.length && (lines[at]!.startsWith('+') || lines[at]!.startsWith('-'));
+  for (const at of picked) {
+    if (!changed(at)) continue;
+    let from = at;
+    while (changed(from - 1)) from -= 1;
+    for (let k = from; changed(k); k += 1) out.add(k);
+  }
+  return out;
+}
+
