@@ -38,6 +38,7 @@ import { join, dirname, extname, normalize, resolve as resolvePath, relative, is
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { AckStore, ACK_TEXT, isAckId } from '../core/acks.ts';
+import { contentOf } from '../harness/put-back.ts';
 import { aasHome, binDir, modelsDir, isPortable, productRoot, installRoot, defaultWorkRoot } from '../core/home.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { LogFile } from '../core/logfile.ts';
@@ -1706,9 +1707,17 @@ export class UiServer {
         return send(res, 413, { error: `大きすぎて画面では開けません（${Math.round(info.size / 1024)} KB。上限 ${EDIT_MAX_BYTES / 1024} KB）` });
       }
       const bytes = await readFile(real);
-      // 途中に NUL があるものは文字のファイルではない。開いても壊すだけ。
-      if (bytes.subarray(0, 8192).includes(0)) return send(res, 415, { error: '文字のファイルではないので、画面では開けません' });
-      return send(res, 200, { path: asked, content: bytes.toString('utf8'), bytes: info.size, stamp: stampOf(bytes.toString('utf8')) });
+      // 途中に NUL があるものは文字のファイルではない。開いても壊すだけ。全体を見る（「戻す」の判じ方 `contentOf` と同じ線）。
+      if (bytes.includes(0)) return send(res, 415, { error: '文字のファイルではないので、画面では開けません' });
+      /*
+       * **utf8 でないもの（Shift_JIS 等）も開かない。**化けた字で開いて保存すると、直した一行の外まで
+       * 全部が化けた字で書き戻される（「戻す」の記録も同じ化けた字なので、戻しても元に戻らない）。
+       */
+      const text = contentOf(bytes);
+      if (typeof text !== 'string') {
+        return send(res, 415, { error: 'utf8 ではないので、画面では開けません（化けた字で保存すると壊れるため）。AI に読ませれば、その文字コードで読みます' });
+      }
+      return send(res, 200, { path: asked, content: text, bytes: info.size, stamp: stampOf(text) });
     }
 
     if (path === '/api/file' && req.method === 'PUT') {
@@ -1731,7 +1740,15 @@ export class UiServer {
       if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから保存してください' });
       }
-      const before = await readFile(real, 'utf8').catch(() => undefined);
+      const beforeBytes = await readFile(real).catch(() => undefined);
+      const beforeContent = beforeBytes === undefined ? undefined : contentOf(beforeBytes);
+      // utf8 でないファイルには書かない（開く口が断っているので、ここへ来るのは画面を通らない呼び出しだけ）。
+      if (beforeContent !== undefined && typeof beforeContent !== 'string') {
+        return send(res, 415, { error: beforeBytes!.includes(0)
+          ? '文字のファイルではないので、画面から書きません（壊さないため）'
+          : 'utf8 ではないファイルには、画面から書きません（壊さないため）' });
+      }
+      const before = beforeContent;
       /*
        * **黙って上書きさせない。**
        *
@@ -1829,8 +1846,13 @@ export class UiServer {
       if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから戻してください' });
       }
-      const current = await readFile(real, 'utf8').catch(() => undefined);
-      if (current === undefined) return send(res, 404, { error: 'そのファイルはもうありません' });
+      const currentBytes = await readFile(real).catch(() => undefined);
+      if (currentBytes === undefined) return send(res, 404, { error: 'そのファイルはもうありません' });
+      const current = contentOf(currentBytes);
+      // utf8 でないファイルを文字として書き戻すと、戻した行の外まで化けた字になる。
+      if (typeof current !== 'string') {
+        return send(res, 415, { error: `${currentBytes.includes(0) ? '文字のファイルではない' : 'utf8 ではない'}ので、行ごとには戻せません。「戻す」の一覧から丸ごと戻してください` });
+      }
       const after = revertLines(current, diff, picks);
       if (after === undefined) {
         return send(res, 409, { error: 'その後に中身が変わっているので、この差分では戻せません（エディタで直してください）' });
