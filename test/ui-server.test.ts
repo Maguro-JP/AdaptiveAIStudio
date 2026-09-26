@@ -789,7 +789,7 @@ describe('/api/search', () => {
     } finally { await mine.stop(); }
   });
 
-  test('utf8 で読めないファイルは中を探さず、見ていない数を返す', async () => {
+  test('二進のファイルは中を探さず、見ていない数を返す', async () => {
     const { work, mine, at } = await place();
     try {
       const { writeFile } = await import('node:fs/promises');

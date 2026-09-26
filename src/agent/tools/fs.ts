@@ -8,6 +8,7 @@ import { type Tool, type ToolContext, ok, fail, requireString, optionalPositiveI
 import { applyEdit, nearestTo } from './write-kind.ts';
 import { Ignores } from '../ignore.ts';
 import { contentOf, type FileContent } from '../../harness/put-back.ts';
+import { decodeForReading } from './decode.ts';
 
 /**
  * utf8 で読めない中身の代わりに、差分へ出す一行。
@@ -50,16 +51,17 @@ export const readFileTool: Tool = {
         return fail(`ファイルが大きすぎます (${info.size} bytes)。search_text で絞り込んでください。`);
       }
       /*
-       * **utf8 で読めないものは、読めないと言う。**文字として読むと、二進や Shift_JIS は化けた字
-       * （U+FFFD）になり、モデルはそれを中身だと思って直しにかかる。判じ方は「戻す」と同じ（`contentOf`）。
+       * **utf8 で読めないものは、どう読んだかを添える。**黙って utf8 として読むと、二進や Shift_JIS は
+       * 化けた字になり、モデルはそれを中身だと思って直しにかかる。二進（NUL を含む）だけは中身を渡さない。
+       * 読み方は `decode.ts`（search_text と `@` の指名も同じ）。
        */
       const bytes = await readFile(abs);
-      const text = contentOf(bytes);
-      if (typeof text !== 'string') {
-        return fail(
-          `${p} は utf8 で読めません（二進か、別の文字コード。${bytes.length} バイト）。中身は渡しません。`,
-        );
+      const decoded = decodeForReading(bytes);
+      if (decoded.kind === 'binary') {
+        return fail(`${p} は二進のファイルなので読めません（${decoded.bytes} バイト）。中身は渡しません。`);
       }
+      const text = decoded.text;
+      const head = decoded.encoding === 'utf-8' ? '' : `${decoded.note}\n`;
       const all = text.split('\n');
       /*
        * **続きから読めるようにする。**
@@ -100,15 +102,15 @@ export const readFileTool: Tool = {
            */
           const atLineEnd = numbered[shown.length] === '\n';
           const last = from - 1 + shown.split('\n').length;
-          return ok(atLineEnd
+          return ok(head + (atLineEnd
             ? `${shown}${rest(last)}`
             : `${shown}\n…（${last} 行目の途中まで。この 1 行が長すぎて入りません。`
-              + 'この先は search_text か find_code で絞ってください）');
+              + 'この先は search_text か find_code で絞ってください）'));
         }
       }
       const last = from - 1 + taken.length;
-      if (last < all.length) return ok(`${numbered}${rest(last)}`);
-      return ok(numbered);
+      if (last < all.length) return ok(`${head}${numbered}${rest(last)}`);
+      return ok(`${head}${numbered}`);
     } catch (e) {
       return fail(`読めません: ${p} (${describe(e)})`);
     }
@@ -177,7 +179,7 @@ export interface TextSearch {
   walkCapped: boolean;
   /** 大きすぎて開いていないファイルの数 */
   tooBig: number;
-  /** utf8 で読めない（二進・別の文字コード）ので中を見ていないファイルの数 */
+  /** 二進（NUL を含む）なので中を見ていないファイルの数 */
   unreadable: number;
   /** 探しにすら行けなかったときの理由 */
   error?: string;
@@ -239,9 +241,10 @@ export async function searchText(
       const info = await stat(target);
       // 大きすぎて見ていないファイルも、見ていないと言う。
       if (info.size > MAX_READ_BYTES) { out.tooBig += 1; continue; }
-      // utf8 で読めないものは中を探さない（化けた字の行を当たりとして返さない）。見ていない数は言う。
-      const text = contentOf(await readFile(target));
-      if (typeof text !== 'string') { out.unreadable += 1; continue; }
+      // 二進は中を探さない（化けた字の行を当たりとして返さない）。見ていない数は言う。Shift_JIS 等は読んで探す。
+      const decoded = decodeForReading(await readFile(target));
+      if (decoded.kind === 'binary') { out.unreadable += 1; continue; }
+      const text = decoded.text;
       if (!text.includes(query)) continue;
       text.split('\n').forEach((line, i) => {
         if (!line.includes(query)) return;
@@ -291,7 +294,7 @@ export const searchTextTool: Tool = {
       notes.push(`（大きすぎて見ていないファイルが ${found.tooBig} 個あります）`);
     }
     if (found.unreadable > 0) {
-      notes.push(`（utf8 で読めないため見ていないファイルが ${found.unreadable} 個あります）`);
+      notes.push(`（二進のため見ていないファイルが ${found.unreadable} 個あります）`);
     }
     const tail = notes.length > 0 ? `\n${notes.join('\n')}` : '';
     const lines = found.hits.map((h) => `${h.path}:${h.line}: ${h.text}`);

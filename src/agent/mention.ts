@@ -11,6 +11,7 @@
  */
 import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { decodeForReading } from './tools/decode.ts';
 
 /**
  * 上限は、**窓から決める。**
@@ -94,7 +95,7 @@ export async function readMentions(
   root: string,
   opts: MentionOpts = {},
 ): Promise<MentionRead[]> {
-  const rf = opts.readFileImpl ?? ((p: string) => readFile(p, 'utf8'));
+  const rf = opts.readFileImpl ?? readForMention;
   const st = opts.statImpl ?? ((p: string) => stat(p));
   const fromWindow = opts.contextTokens ? mentionBudget(opts.contextTokens) : undefined;
   const each = opts.maxBytes ?? fromWindow?.each ?? MENTION_MAX_BYTES;
@@ -130,6 +131,16 @@ export async function readMentions(
     }
   }
   return out;
+}
+
+/**
+ * 指名されたファイルを、read_file と同じ読み方で読む（`decode.ts`）。
+ * 食い違うと、指名では化けた中身が入り、「続きは read_file で」と案内した先では別の読み方になる。
+ */
+async function readForMention(p: string): Promise<string> {
+  const decoded = decodeForReading(await readFile(p));
+  if (decoded.kind === 'binary') throw new Error(`二進のファイルです（${decoded.bytes} バイト）`);
+  return decoded.encoding === 'utf-8' ? decoded.text : `${decoded.note}\n${decoded.text}`;
 }
 
 /** 読んだものを、依頼の前に置く形に組む。 */

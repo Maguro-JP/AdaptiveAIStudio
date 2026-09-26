@@ -106,7 +106,7 @@ describe('探すパネル', () => {
     await until(() => t.text().includes('打ち切りました'), '打ち切りを言う');
     assert.ok(t.text().includes('途中までしか見ていません'), `見ていない分を言っていません: ${t.text()}`);
     assert.ok(t.text().includes('3 個'), `開いていない分を言っていません: ${t.text()}`);
-    assert.ok(t.text().includes('utf8 で読めないため見ていないファイルが 2 個'), `読めずに見ていない分を言っていません: ${t.text()}`);
+    assert.ok(t.text().includes('二進のため見ていないファイルが 2 個'), `読めずに見ていない分を言っていません: ${t.text()}`);
   });
 
   test('見つからなければ、そう言う（対）', async () => {
