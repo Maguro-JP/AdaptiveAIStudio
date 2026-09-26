@@ -119,6 +119,20 @@ describe('読んでから書くまでの間の書き換えを、手の書き込�
       `書けなかったフォルダが戻り先に載った（押すと在るものを消しに行く）: ${JSON.stringify(points)}`);
   });
 
+  test('開いたあとで消されていたら、stamp を持つ保存は黙って作り直さず、消されたと返す', async () => {
+    const { rm } = await import('node:fs/promises');
+    await writeFile(join(work, 'k.txt'), 'もと\n');
+    const opened = await (await fetch(base + '/api/file?path=k.txt')).json() as { stamp: string };
+    await rm(join(work, 'k.txt'));
+    const r = await send('PUT', '/api/file', { path: 'k.txt', content: '人\n', stamp: opened.stamp });
+    const j = await r.json() as { gone?: boolean };
+    assert.equal(r.status, 409, JSON.stringify(j));
+    assert.equal(j.gone, true);
+    await assert.rejects(readFile(join(work, 'k.txt')), '黙って作り直した');
+    // stamp を持たない保存（新しく作る・上書きを選んだ）は、これまでどおり書ける。
+    assert.equal((await send('PUT', '/api/file', { path: 'k.txt', content: '人\n' })).status, 200);
+  });
+
   test('割り込みが無ければ、これまでどおり書ける（対）', async () => {
     await writeFile(join(work, 'c.txt'), 'もと\n');
     const r = await send('PUT', '/api/file', { path: 'c.txt', content: '人が書いた\n' });
