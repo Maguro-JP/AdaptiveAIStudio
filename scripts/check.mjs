@@ -87,6 +87,16 @@ async function sweep() {
    */
   const undoDir = join(home, 'undo');
   mkdirSync(undoDir, { recursive: true });
+  /*
+   * 戻り先は作業場の根を持ち、画面は今の作業場のものだけを出す。根を持たせないと一覧は空になり、
+   * 30 件を溜めたつもりで空の一覧を押して通る。画面と同じ決め方で根を求め、溜めた分が見えることを先に確かめる。
+   */
+  const { defaultWorkRoot } = await import('../src/core/home.ts');
+  const { UndoStore, rootKey } = await import('../src/core/undo.ts');
+  const savedHome = process.env.AAS_HOME;
+  process.env.AAS_HOME = home;
+  const workRoot = defaultWorkRoot(root);
+  if (savedHome === undefined) delete process.env.AAS_HOME; else process.env.AAS_HOME = savedHome;
   for (let i = 0; i < 30; i += 1) {
     const id = `u-check-${i}`;
     writeFileSync(join(undoDir, `${id}.json`), JSON.stringify({
@@ -95,7 +105,13 @@ async function sweep() {
       request: `src/a.txt を書き換えて（テストのために作ったもの ${i}）`,
       paths: ['src/a.txt'],
       files: [{ path: 'src/a.txt', content: '' }],
+      root: rootKey(workRoot),
     }));
+  }
+  const seen = (await new UndoStore(workRoot, undoDir).list()).length;
+  if (seen !== 30) {
+    console.error(`溜めた戻り先が一覧に出ていません（${seen} / 30）。sweep で「戻す」の一覧を確かめられません`);
+    return 1;
   }
   /*
    * 会話も溜めておく。

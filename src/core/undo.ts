@@ -361,14 +361,17 @@ export class UndoStore {
      * 「戻す前 → 戻した後」なので、控えるのは最初の一度でよい。
      */
     const was = new Map<string, string | undefined | false>();
+    /** 読めた戻り先と、その記録。戻し終えてから、消すか残すかを決める。 */
+    const read: { id: string; stored: Stored }[] = [];
+    /** 道ごとに、いちばん古い（最後に当てた）戻り先。戻したい姿はそこに在る。 */
+    const oldest = new Map<string, string>();
     // 新しい方から当てる。古い控えが後に来るので、いちばん古い姿が残る。
     for (const point of all.slice(0, at + 1)) {
       const raw = await readFile(join(this.#dir, `${point.id}.json`), 'utf8').catch(() => undefined);
       if (!raw) continue;
       let stored: Stored;
       try { stored = JSON.parse(raw) as Stored; } catch { continue; }
-      /** この戻り先の中で戻せなかった道。残して、原因を除いたあとにもう一度戻せるようにする。 */
-      const notBack = new Set<string>();
+      read.push({ id: point.id, stored });
       for (const saved of putBackOrder((stored.files ?? []).map(fromStored))) {
         const abs = safeResolve(this.#root, saved.path);
         if (!abs) continue;
@@ -377,17 +380,23 @@ export class UndoStore {
         const r = await putBack(this.#root, saved.path, saved.content);
         if (r === 'restored' && !touched.includes(saved.path)) touched.push(saved.path);
         last.set(saved.path, r);
-        if (r === 'failed') notBack.add(saved.path);
+        oldest.set(saved.path, point.id);
       }
-      /*
-       * **戻せなかった分がある戻り先は消さない。**消すと、Windows で掴まれていた等で戻せなかったファイルを
-       * 戻す手が残らない。戻せなかった道の分だけを残して書き直す。
-       */
-      const file = join(this.#dir, `${point.id}.json`);
-      if (notBack.size === 0) {
+    }
+    /*
+     * **戻せなかった道がある戻り先は消さない。**消すと、Windows で掴まれていた等で戻せなかったファイルを
+     * 戻す手が残らない。
+     *
+     * 残すかは、道ごとの**最後の結果**で決め、残すのは**いちばん古い戻り先の分だけ**にする。
+     * 戻り先ごとの失敗で決めていたときは、新しい戻り先で失敗して古い戻り先で戻せた道まで残り、
+     * あとでそれを戻すと、戻した姿より新しい姿を当ててファイルを消していた。
+     */
+    for (const { id: pointId, stored } of read) {
+      const file = join(this.#dir, `${pointId}.json`);
+      const keep = (stored.files ?? []).filter((f) => last.get(f.path) === 'failed' && oldest.get(f.path) === pointId);
+      if (keep.length === 0) {
         await unlink(file).catch(() => undefined);
       } else {
-        const keep = (stored.files ?? []).filter((f) => notBack.has(f.path));
         await writeStored(file, { ...stored, paths: keep.map((f) => f.path), files: keep }).catch(() => undefined);
       }
     }

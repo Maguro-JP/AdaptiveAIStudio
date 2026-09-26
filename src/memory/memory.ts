@@ -203,24 +203,15 @@ export class Memory {
 
   async load(): Promise<void> {
     if (!this.#path) return;
+    // 読めない間に覚えた分があれば、読み直しで捨てずに合わせる（読めなければそのまま持っておく）。
+    if (this.#unreadable && this.#dirty) {
+      await this.#rejoin();
+      return;
+    }
     this.#unreadable = undefined;
     try {
-      const raw = await this.#readRetrying(this.#path);
-      this.#entries = raw.split('\n')
-        .filter((l) => l.trim().length > 0)
-        .map((l) => {
-          try { return JSON.parse(l) as MemoryEntry; } catch { return undefined; }
-        })
-        // 1行壊れても記憶全体を失わない。JSONL にしているのはこのため。形の違う行も捨てる（思い出すときに止まる）。
-        .filter((e): e is MemoryEntry => isEntry(e));
-      // **件数ではなく、いちばん大きい番号から続ける。**
-      // 刈り込みで途中が抜けると（m1, m3 が残るなど）件数は 2 になり、
-      // 次に配る番号が m3 になって**既にあるものとぶつかる**。
-      // ぶつかると supersedes の繋ぎ先と、忘れる先が壊れる。
-      this.#seq = this.#entries.reduce((max, e) => {
-        const n = /^m(\d+)$/.exec(e.id);
-        return n ? Math.max(max, Number(n[1])) : max;
-      }, 0);
+      this.#entries = parseEntries(await this.#readRetrying(this.#path));
+      this.#seq = maxSeq(this.#entries);
     } catch (e) {
       this.#entries = [];
       // 無いのは正常（はじめて）。それ以外は、読めなかったと覚えて保存を断る。
@@ -229,14 +220,17 @@ export class Memory {
     }
   }
 
-  /** 一時的に掴まれているだけのことがある（Windows のウイルス対策・同期）。少し待って数回読み直す。 */
+  /**
+   * 一時的に掴まれているだけのことがある（Windows のウイルス対策・同期）。少し待って数回読み直す。
+   * 権限が無い（EACCES）は待っても直らないので読み直さない（画面の状態を取るたびに待たせていた）。
+   */
   async #readRetrying(path: string): Promise<string> {
     for (let tries = 0; ; tries += 1) {
       try {
         return await this.#read(path);
       } catch (e) {
         const code = (e as NodeJS.ErrnoException).code;
-        if (tries >= 3 || !(code === 'EBUSY' || code === 'EPERM' || code === 'EACCES')) throw e;
+        if (tries >= 3 || !(code === 'EBUSY' || code === 'EPERM')) throw e;
         await new Promise((r) => setTimeout(r, 100 * (tries + 1)));
       }
     }
@@ -255,9 +249,40 @@ export class Memory {
     return run;
   }
 
+  /**
+   * 読めなかった記憶のファイルを、保存の手前でもう一度読む。読めたら、ファイルの中身の後ろに、
+   * 読めない間に覚えた分を番号を振り直して足す（読めない間は空から始めているので、手元の分がそれに当たる）。
+   *
+   * 起動時に一度読めなかっただけで、その後ずっと保存しない形を止める（画面は保存の断りを見せる口を持たない）。
+   */
+  async #rejoin(): Promise<boolean> {
+    if (!this.#path) return false;
+    let raw: string;
+    try {
+      raw = await this.#readRetrying(this.#path);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+      raw = '';
+    }
+    const onDisk = parseEntries(raw);
+    let seq = maxSeq(onDisk);
+    const renamed = new Map<string, string>();
+    for (const e of this.#entries) { seq += 1; renamed.set(e.id, `m${seq}`); }
+    const mine = this.#entries.map((e) => ({
+      ...e,
+      id: renamed.get(e.id)!,
+      ...(e.supersedes !== undefined ? { supersedes: renamed.get(e.supersedes) ?? e.supersedes } : {}),
+      ...(e.supersededBy !== undefined ? { supersededBy: renamed.get(e.supersededBy) ?? e.supersededBy } : {}),
+    }));
+    this.#entries = [...onDisk, ...mine];
+    this.#seq = seq;
+    this.#unreadable = undefined;
+    return true;
+  }
+
   async #saveNow(): Promise<void> {
     if (!this.#path || !this.#dirty) return;
-    if (this.#unreadable) {
+    if (this.#unreadable && !(await this.#rejoin())) {
       throw new Error(`記憶のファイルを読めなかった（${this.#unreadable}）ので、上書きしないよう保存を止めています: ${this.#path}`);
     }
     this.#dirty = false;
@@ -742,4 +767,26 @@ function isEntry(e: unknown): e is MemoryEntry {
   const m = e as Partial<MemoryEntry>;
   return typeof m.id === 'string' && typeof m.kind === 'string' && typeof m.title === 'string'
     && Array.isArray(m.tags) && (m.detail === undefined || typeof m.detail === 'string');
+}
+
+/** 記憶のファイルの中身を一件ずつに。1行壊れても記憶全体を失わない（JSONL にしているのはこのため）。形の違う行も捨てる。 */
+function parseEntries(raw: string): MemoryEntry[] {
+  return raw.split('\n')
+    .filter((l) => l.trim().length > 0)
+    .map((l) => {
+      try { return JSON.parse(l) as unknown; } catch { return undefined; }
+    })
+    .filter((e): e is MemoryEntry => isEntry(e));
+}
+
+/**
+ * **件数ではなく、いちばん大きい番号から続ける。**
+ * 刈り込みで途中が抜けると（m1, m3 が残るなど）件数は 2 になり、次に配る番号が m3 になって
+ * **既にあるものとぶつかる**。ぶつかると supersedes の繋ぎ先と、忘れる先が壊れる。
+ */
+function maxSeq(entries: MemoryEntry[]): number {
+  return entries.reduce((max, e) => {
+    const n = /^m(\d+)$/.exec(e.id);
+    return n ? Math.max(max, Number(n[1])) : max;
+  }, 0);
 }

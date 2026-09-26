@@ -272,9 +272,15 @@ export class UnfinishedWork {
 /** 一行の形を確かめる。 */
 function isLine(v: unknown): v is Line {
   if (typeof v !== 'object' || v === null) return false;
-  const l = v as { t?: unknown; id?: unknown; item?: { id?: unknown; request?: unknown } };
-  if (l.t === 'add') return typeof l.item === 'object' && l.item !== null && typeof l.item.id === 'string' && typeof l.item.request === 'string';
-  if (l.t === 'bump' || l.t === 'close') return typeof l.id === 'string';
+  const l = v as { t?: unknown; id?: unknown; attempts?: unknown; nextAt?: unknown; item?: Record<string, unknown> | null };
+  if (l.t === 'add') {
+    const i = l.item;
+    // 並べ替えと「いま手を付けてよいか」で使う所まで見る。欠けていると一覧ごと止まる。
+    return typeof i === 'object' && i !== null && typeof i.id === 'string' && typeof i.request === 'string'
+      && typeof i.createdAt === 'string' && typeof i.attempts === 'number' && typeof i.nextAt === 'number';
+  }
+  if (l.t === 'bump') return typeof l.id === 'string' && typeof l.attempts === 'number' && typeof l.nextAt === 'number';
+  if (l.t === 'close') return typeof l.id === 'string';
   return false;
 }
 
