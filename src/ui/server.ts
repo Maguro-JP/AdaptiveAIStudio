@@ -2363,7 +2363,10 @@ export class UiServer {
       const servers = { ...this.#opts.config.mcp?.servers };
       if (!servers[id]) return send(res, 404, { error: `繋いでいません: ${id}` });
       delete servers[id];
-      await disconnectService(id);
+      const got = await disconnectService(id);
+      // 設定を書き換えられなかった（壊れている・読めない）なら、外したと言わない。動いている設定からも外さない
+      // （外すと、画面は外れたと言うのに、次に立ち上げるとまた繋がる）。path が無いのは、書き換えで断られたとき
+      if (!got.ok && got.path === undefined) return send(res, 400, { error: got.error ?? '外せませんでした' });
       // 繋ぐ側と同じく、畳まずにその場で止める。作業中でも効く。
       this.#session?.services.onDisconnected?.(id);
       this.#opts.config.mcp = { ...this.#opts.config.mcp, servers };

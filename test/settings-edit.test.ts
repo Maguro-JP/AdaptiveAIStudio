@@ -7,7 +7,9 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { writeFile, readFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
-import { saveRuntime, saveMcpServer, removeMcpServer, saveWorkRoot } from '../src/ui/settings.ts';
+import { saveRuntime, saveMcpServer, removeMcpServer, saveWorkRoot, readSavedRuntime, savedWorkRoot } from '../src/ui/settings.ts';
+import { loadConfig } from '../src/config.ts';
+import { UiServer } from '../src/ui/server.ts';
 
 let saved: string | undefined;
 before(() => { saved = process.env.AAS_CONFIG; });
@@ -85,5 +87,50 @@ describe('設定を書き換える', () => {
     await saveWorkRoot('/w');
     assert.notEqual((await stat(at, { bigint: true })).ino, first, 'その場で書いた');
     assert.deepEqual(await readdir(dir), ['aas.config.json']);
+  });
+
+  test('**同時に保存しても、互いの変更を消さない**（読んでから書くまでを一列に並べる）', async () => {
+    const { at } = await configAt(JSON.stringify({ keep: 1 }));
+    await Promise.all([
+      saveRuntime('llamacpp', '/m'),
+      saveMcpServer('github', { url: 'https://x' }),
+      saveWorkRoot('/w'),
+      saveMcpServer('other', { url: 'https://y' }),
+    ]);
+    const got = JSON.parse(await readFile(at, 'utf8')) as Record<string, Record<string, unknown>>;
+    assert.equal(got.keep, 1 as never);
+    assert.equal(got.runtime?.kind, 'llamacpp');
+    assert.deepEqual(Object.keys((got.mcp as { servers: object }).servers).sort(), ['github', 'other']);
+    assert.deepEqual(got.agent, { root: '/w' });
+  });
+
+  test('**BOM の付いた設定を、起動時の読み込みでも画面の表示でも読む**', async () => {
+    await configAt('\uFEFF' + JSON.stringify({ runtime: { kind: 'llamacpp', modelsDir: '/m' }, agent: { root: '/w' } }));
+    assert.equal(loadConfig().config.runtime?.kind, 'llamacpp');
+    assert.equal((await readSavedRuntime()).kind, 'llamacpp');
+    assert.equal(await savedWorkRoot(), '/w');
+  });
+});
+
+describe('繋いだものを外す', () => {
+  test('**設定が壊れていたら、外したと言わず理由を返し、動いている設定からも外さない**', async () => {
+    const { dir, at } = await configAt(JSON.stringify({ mcp: { servers: { github: { url: 'https://x' } } } }));
+    const savedHome = process.env.AAS_HOME;
+    process.env.AAS_HOME = join(dir, 'home');
+    const s = new UiServer({ config: loadConfig().config, port: 0 });
+    try {
+      const url = await s.start();
+      const good = await readFile(at, 'utf8');
+      await writeFile(at, good.replace(/}\s*$/, ',}'));
+      const r = await fetch(new URL('/api/mcp/connect?id=github', url), { method: 'DELETE' });
+      assert.equal(r.status, 400);
+      assert.match(((await r.json()) as { error: string }).error, /書き換えませんでした/);
+      await writeFile(at, good); // 直して押し直せば外れる（動いている設定に残っている）
+      const again = await fetch(new URL('/api/mcp/connect?id=github', url), { method: 'DELETE' });
+      assert.equal(again.status, 200, '動いている設定から先に外していた');
+    } finally {
+      await s.stop();
+      if (savedHome === undefined) delete process.env.AAS_HOME; else process.env.AAS_HOME = savedHome;
+    }
   });
 });

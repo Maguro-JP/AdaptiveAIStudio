@@ -422,7 +422,8 @@ export class ConfigBroken extends Error {}
 
 export function parseConfigText(raw: string, path: string): Partial<AasConfig> {
   try {
-    return JSON.parse(raw) as Partial<AasConfig>;
+    // 先頭の BOM は外す（メモ帳などが付ける。付いたままだと、正しい設定でも起動時に「壊れている」と断っていた）
+    return JSON.parse(raw.replace(/^\uFEFF/, '')) as Partial<AasConfig>;
   } catch (e) {
     const why = e instanceof Error ? e.message : String(e);
     const at = /position (\d+)/.exec(why);

@@ -9137,8 +9137,15 @@ JSON として読めず、同じく上書きした。書くのもその場で、
 - 設定は利用者が書くファイルなので、壊れていても脇へ移さない（そのまま直してもらう）
 - 項目が `null` や配列でも止まらず、入れ物として作り直す（配列を広げて番号の鍵を混ぜない）
 - 書くのは一時ファイルから付け替える（`writeWhole`）。片づけの一時ファイルの形に `aas.config.json` を足した
+- 読んでから書くまでを、設定ファイルごとに一列に並べる（`editConfig`。同時に保存すると、後の方が先の変更を消していた）
+- 「外す」で設定を書き換えられなかったら、400 と理由を返し、動いている設定からも外さない（外したと言うのに、次に
+  立ち上げるとまた繋がっていた）
+- BOM を外して読むのを、起動時の読み込み（`parseConfigText`）と画面の表示（`readSavedRuntime`・`savedWorkRoot`）にも
+  そろえた（正しい設定でも起動時に「壊れている」と断り、画面の表示が空になっていた）
 選ばなかった案: 壊れた設定を脇へ移して新しく書く（利用者が直している途中の設定を、画面の一押しで退かすことになる）
-触る場所: `src/ui/settings.ts`（`configForEdit`・`writeConfig`・`objectOr`・各 save）、`src/runtime/cleanup.ts`
-試験: `test/settings-edit.test.ts` に 20 件、`test/settings.test.ts` に 1 件（保存の口を叩いて、理由が返り、ファイルが元のまま）。
+触る場所: `src/ui/settings.ts`（`configForEdit`・`editConfig`・`writeConfig`・`objectOr`・各 save）、`src/config.ts`（`parseConfigText`）、
+`src/ui/server.ts`（外す口）、`src/runtime/cleanup.ts`
+試験: `test/settings-edit.test.ts` に 23 件、`test/settings.test.ts` に 1 件（保存の口を叩いて、理由が返り、ファイルが元のまま）。
+押す前の読み直しで挙がった 3 点（一列・外す・BOM）も、外すと落ちることを見た（一列は 3 回とも落ちた）。
 壊れた JSON・読めない・形・BOM・入れ物の作り直し・その場で書く形を、それぞれ外すと落ちることを見た（入れ物の作り直しは、
 はじめ `null` しか試しておらず外しても通った → 配列の場合を足した）
