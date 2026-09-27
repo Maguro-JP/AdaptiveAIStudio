@@ -183,6 +183,11 @@ button.row {
 .side-list button:hover { background: var(--surface2); color: var(--text); }
 .side-list button.on { background: var(--surface2); color: var(--text); }
 .side-row { display: flex; align-items: center; }
+/* 消した・やめた直後の知らせ（「〜を消しました [戻す] [閉じる]」）。一覧の行（.side-row）とは数えを分ける */
+.side-note { display: flex; align-items: center; gap: 4px; }
+.side-note > .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 一覧のボタンは幅いっぱい（.side-list button）。知らせの [戻す][閉じる] まで幅いっぱいにすると、文が 0 に潰れて見えない（測った） */
+.side-note > button { width: auto; flex: none; }
 .side-row > button:first-child { flex: 1; min-width: 0; }
 /*
  * 一覧の行に置く押す印（× や ↶）は、幅を取らない。

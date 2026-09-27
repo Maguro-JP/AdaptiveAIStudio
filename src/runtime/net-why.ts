@@ -8,6 +8,9 @@
  *
  * 外へ出て失敗したことを人に見せる所は、全部ここを通す。
  */
+/** 文の中の場所。URL と、区切り（/ か \）を含む並び（Windows のドライブ名も）。 */
+const PLACES = /https?:\/\/\S+|(?:[A-Za-z]:)?(?:[\\/][^\s\\/（）()、。]+)+[\\/]?/g;
+
 export function describeNet(e: unknown): string {
   const chain: string[] = [];
   for (let at: unknown = e, depth = 0; at instanceof Error && depth < 5; depth += 1) {
@@ -17,12 +20,18 @@ export function describeNet(e: unknown): string {
     at = (at as { cause?: unknown }).cause;
   }
   const m = chain.join(' / ') || String(e);
-  if (/terminated|aborted|ECONNRESET|socket hang up/i.test(m)) return '途中で切れました';
-  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(m)) return '配布元の名前を引けません（回線が繋がっていないようです）';
-  if (/ETIMEDOUT|timeout/i.test(m)) return '時間切れです';
-  if (/certificate|CERT_|self.signed/i.test(m)) return '証明書で断られました（会社の回線で起きます）';
-  if (/ECONNREFUSED/i.test(m)) return '繋ぐ先に断られました';
-  if (/EPROTO|SSL|TLS/i.test(m)) return '暗号化のやりとりで断られました（会社の回線で起きます）';
+  /*
+   * **場所（パス・URL）の字では決めない。**失敗の文には保存先や配布元の場所が入る。一時フォルダの乱数に「tls」が並んだだけで、
+   * 404 を「暗号化のやりとりで断られました」と言い、保存先の案内も落としていた。見分けるのは場所を除いた残りで。
+   */
+  const said = m.replace(PLACES, ' ');
+  const hit = (re: RegExp): boolean => re.test(said);
+  if (hit(/terminated|aborted|ECONNRESET|socket hang up/i)) return '途中で切れました';
+  if (hit(/ENOTFOUND|EAI_AGAIN|getaddrinfo/i)) return '配布元の名前を引けません（回線が繋がっていないようです）';
+  if (hit(/ETIMEDOUT|timeout/i)) return '時間切れです';
+  if (hit(/certificate|CERT_|self.signed/i)) return '証明書で断られました（会社の回線で起きます）';
+  if (hit(/ECONNREFUSED/i)) return '繋ぐ先に断られました';
+  if (hit(/EPROTO|SSL|TLS/i)) return '暗号化のやりとりで断られました（会社の回線で起きます）';
   /*
    * **最後に `fetch failed` を拾う。**
    *
@@ -31,6 +40,6 @@ export function describeNet(e: unknown): string {
    * cause に付いていれば上で拾えるが、付かずにこの一語だけで来ることがある。
    * 上のどれにも当たらなかったときの受け皿なので、いちばん後ろに置く。
    */
-  if (/fetch failed/i.test(m)) return '繋げませんでした（回線か、串（プロキシ）の設定かもしれません）';
+  if (hit(/fetch failed/i)) return '繋げませんでした（回線か、串（プロキシ）の設定かもしれません）';
   return m;
 }
