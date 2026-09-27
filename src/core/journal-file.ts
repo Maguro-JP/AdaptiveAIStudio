@@ -23,6 +23,8 @@ export interface JournalOps {
   /** 試験では、読む・脇へ移すを別のものにする。 */
   read?: (path: string) => Promise<string>;
   setAside?: (path: string) => Promise<boolean>;
+  /** 一時ファイルへ書く。 */
+  write?: (tmp: string, text: string) => Promise<void>;
 }
 
 export async function readJournal(path: string, ops: JournalOps = {}): Promise<JournalRead> {
@@ -84,7 +86,7 @@ export function saveJournal(
     }
     const tmp = `${path}.${process.pid}.${++tmpSeq}.tmp`; // 同じプロセスで並んで呼ばれても名前をぶつけない
     try {
-      await writeFile(tmp, text(), 'utf8');
+      await (ops.write ?? ((t: string, x: string) => writeFile(t, x, 'utf8')))(tmp, text());
       await rename(tmp, path);
       return true;
     } catch {

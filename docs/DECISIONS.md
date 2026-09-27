@@ -8974,5 +8974,10 @@ AI や別のパネルの書き換えを黙って消していた。
 記憶のファイルのように、形の違う一件を元の文のまま書き戻す（製品はこの形を書かない。当番の記録と同じ扱いにそろえた）
 触る場所: `src/core/journal-file.ts`、`src/core/journals.ts`（`loadJournals`・`saveJournals`）、`src/core/session.ts`
 （`saveAutonomy`）、`src/harness/idle.ts`・`src/harness/duties.ts`（`restore`・`absorb`）、`src/runtime/cleanup.ts`
-試験: `test/journal-file.test.ts` に 9 件、`test/cleanup.test.ts` に一時ファイル 2 つ。守りを一つずつ外して 11 通りとも落ちることを見た
-手を付けていない: 歩幅（`stride.json`）とハーネスの記録（`harness-metrics.json`）、画面の並び・見た目の保存
+試験: `test/journal-file.test.ts` に 12 件、`test/cleanup.test.ts` に一時ファイル 2 つ。守りを一つずつ外して 11 通りとも落ちることを見た
+押す前の読み直しで直した: 一列に並べる守りを外しても試験が通る回があった（名前のぶつからない一時ファイルなので、
+順番が崩れても偶然そろう）→ 先の書き込みを遅らせて毎回落ちる形にした（5 回とも落ちた）。一時ファイルを経ずに書いても、
+足したときに次に考えてよい時刻を巻き戻しても通った → 書いている途中で落ちる試験と、時刻の試験を足した。
+読めないまま書けないときに黙っていた → 書けなかったファイルを返し、セッションが警告を出す
+手を付けていない: 歩幅（`stride.json`）とハーネスの記録（`harness-metrics.json`）、画面の並び・見た目の保存。
+脇へ移した `*.broken-<時刻>` は片づけの対象にしていない（壊れたときにしか作られず、中身を手で拾うためのもの）

@@ -95,14 +95,42 @@ describe('暇の実績', () => {
     assert.equal((JSON.parse(await readFile(path, 'utf8')) as ReturnType<typeof stat>[]).find((x) => x.mode === MODE)!.runs, 3);
   });
 
-  test('**書くのは一時ファイルから付け替え。残さない。並んで呼んでも壊れない**', async () => {
+  test('**並んで呼んだら、呼んだ順に書く**（先の書き込みが遅くても、後の分を上書きしない）', async () => {
     const dir = await tempDir('aas-journal-');
     const path = join(dir, 'idle.json');
     const s = idle();
-    await Promise.all(Array.from({ length: 5 }, (_, i) =>
-      saveJournal(s, path, () => JSON.stringify([stat(i)]), () => undefined)));
+    const slowFirst = async (tmp: string, text: string) => {
+      if (text.includes('"runs":0')) await new Promise((r) => setTimeout(r, 80));
+      await writeFile(tmp, text);
+    };
+    await Promise.all([0, 1].map((i) =>
+      saveJournal(s, path, () => JSON.stringify([stat(i)]), () => undefined, { write: slowFirst })));
+    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), [stat(1)]);
     assert.deepEqual(await readdir(dir), ['idle.json']);
-    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), [stat(4)]);
+  });
+
+  test('**書いている途中で落ちても、元のファイルは残り、一時ファイルも残さない**', async () => {
+    const dir = await tempDir('aas-journal-');
+    const path = join(dir, 'idle.json');
+    await writeFile(path, JSON.stringify([stat(3)]));
+    const s = idle();
+    const halfThenFail = async (tmp: string, text: string) => {
+      await writeFile(tmp, text.slice(0, 5));
+      throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    };
+    assert.equal(await saveJournal(s, path, () => JSON.stringify([stat(9)]), () => undefined, { write: halfThenFail }), false);
+    assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), [stat(3)]);
+    assert.deepEqual(await readdir(dir), ['idle.json']);
+  });
+
+  test('**読めた記録を足したとき、次に考えてよい時刻を古い記録で巻き戻さない**', () => {
+    const s = idle();
+    s.begin(BUILTIN_IDLE_MODES[0]!, 9000); // 空で始めた後に考えた
+    s.absorb([stat(7, 5000)]);
+    assert.equal(s.nextAllowedAt(), 9000 + 600_000);
+    const fresh = idle();
+    fresh.absorb([stat(7, 5000)]); // 空で始めて何も考えていなければ、記録の時刻から
+    assert.equal(fresh.nextAllowedAt(), 5000 + 600_000);
   });
 });
 
@@ -136,9 +164,10 @@ describe('起動から保存まで（loadJournals → saveJournals）', () => {
       await mkdir(join(dir, 'idle.json')); // 読めない（EISDIR）
       const j = await loadJournals(DEFAULT_CONFIG);
       j.idle.restore([stat(1)]);
+      assert.deepEqual(await saveJournals(j), [join(dir, 'idle.json')], '読めないまま書かなかったことを返していない');
       await rm(join(dir, 'idle.json'), { recursive: true });
       await writeFile(join(dir, 'idle.json'), JSON.stringify([stat(6)]));
-      await saveJournals(j);
+      assert.deepEqual(await saveJournals(j), []);
       const idleSaved = (JSON.parse(await readFile(join(dir, 'idle.json'), 'utf8')) as ReturnType<typeof stat>[]).find((x) => x.mode === MODE)!;
       assert.equal(idleSaved.runs, 7, '読めなかった間の空で上書きした');
       assert.ok(Array.isArray(JSON.parse(await readFile(join(dir, 'duties.json'), 'utf8'))));

@@ -1216,7 +1216,9 @@ export class Session {
 
   /** 思考の実績と日課の記録を残す。次の起動でも続きから考えられるように。 */
   async saveAutonomy(): Promise<void> {
-    await saveJournals(this).catch(() => undefined);
+    const unsaved = await saveJournals(this).catch(() => []);
+    // 読めないまま（EACCES 等）だと書けない日が続く。黙っていると、記録が止まっていることに誰も気づかない。
+    if (unsaved.length > 0) this.#opts.onLog?.('warn', `記録を書けませんでした（読めないか、書き込みに失敗）: ${unsaved.join(', ')}`);
   }
 
   /** 何かが変わった。考え直す価値が生まれたということ。 */

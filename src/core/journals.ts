@@ -63,10 +63,12 @@ export async function loadJournals(config: AasConfig): Promise<Journals> {
  * 暇の実績と当番の記録を書く。起動のときに読めなかったものは、読み直せるまで書かない
  * （空で始めた分で、それまでの記録を上書きしない）。
  */
-export async function saveJournals(j: Pick<Journals, 'idle' | 'duties'>): Promise<void> {
+export async function saveJournals(j: Pick<Journals, 'idle' | 'duties'>): Promise<string[]> {
   const { idle, duties } = j;
-  await saveJournal(idle, join(stateDir(), 'idle.json'),
-    () => JSON.stringify(idle.stats(), null, 2), (v) => idle.absorb(v));
-  await saveJournal(duties, join(stateDir(), 'duties.json'),
-    () => JSON.stringify(duties.records(), null, 2), (v) => duties.absorb(v));
+  const unsaved: string[] = [];
+  const idlePath = join(stateDir(), 'idle.json');
+  if (!await saveJournal(idle, idlePath, () => JSON.stringify(idle.stats(), null, 2), (v) => idle.absorb(v))) unsaved.push(idlePath);
+  const dutiesPath = join(stateDir(), 'duties.json');
+  if (!await saveJournal(duties, dutiesPath, () => JSON.stringify(duties.records(), null, 2), (v) => duties.absorb(v))) unsaved.push(dutiesPath);
+  return unsaved; // 書けなかったもの。黙って止め続けないよう、呼んだ側が言う
 }
