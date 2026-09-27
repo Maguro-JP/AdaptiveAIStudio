@@ -52,7 +52,12 @@ export const MAX_ATTEMPTS = BACKOFF_MS.length;
 type Line =
   | { t: 'add'; item: Unfinished }
   | { t: 'bump'; id: string; attempts: number; nextAt: number }
-  | { t: 'close'; id: string; how: 'done' | 'gaveUp' | 'canceled' };
+  | { t: 'close'; id: string; how: 'done' | 'gaveUp' | 'canceled' }
+  /** 利用者がやめたもの（`canceled`）を、押し間違えとして戻す。前の版は知らない行として読み飛ばす（やめたまま）。 */
+  | { t: 'reopen'; id: string; nextAt?: number };
+
+/** `reopen` の結果。 */
+export type ReopenResult = 'reopened' | 'open' | 'gone' | 'duplicate' | 'full';
 
 /**
  * 抱えてよい上限。
@@ -91,24 +96,43 @@ export class UnfinishedWork {
    * 空と読んで、段取りを全部閉じる側に倒れるため）。
    */
   async list(opts: { strict?: boolean } = {}): Promise<Unfinished[]> {
+    return (await this.#read(opts)).open;
+  }
+
+  /** 抱えているものと、利用者がやめたもの（戻せる分）。 */
+  async #read(opts: { strict?: boolean } = {}): Promise<{ open: Unfinished[]; canceled: Map<string, Unfinished> }> {
     const raw = await readFile(this.#path, 'utf8').catch((e: NodeJS.ErrnoException) => {
       if (opts.strict && e.code !== 'ENOENT') throw e;
       return '';
     });
     const open = new Map<string, Unfinished>();
+    const canceled = new Map<string, Unfinished>();
     for (const text of raw.split('\n')) {
       if (text.trim().length === 0) continue;
       let line: Line;
       try { line = JSON.parse(text) as Line; } catch { continue; } // 壊れた行は捨てる
       // 形の違う行（手で直した・別の版が書いた）も捨てる。通すと一覧ごと止まる。
       if (!isLine(line)) continue;
-      if (line.t === 'add') open.set(line.item.id, line.item);
+      if (line.t === 'add') { open.set(line.item.id, line.item); canceled.delete(line.item.id); }
       else if (line.t === 'bump') {
         const at = open.get(line.id);
         if (at) { at.attempts = line.attempts; at.nextAt = line.nextAt; }
-      } else if (line.t === 'close') open.delete(line.id);
+      } else if (line.t === 'close') {
+        const at = open.get(line.id);
+        open.delete(line.id);
+        if (at && line.how === 'canceled') canceled.set(line.id, at);
+        // やめた後に別の道が片づけた・諦めたと書いたら、もう戻さない（片づいたものが戻る）
+        else if (line.how !== 'canceled') canceled.delete(line.id);
+      } else if (line.t === 'reopen') {
+        const at = canceled.get(line.id);
+        if (at) {
+          canceled.delete(line.id);
+          if (typeof line.nextAt === 'number') at.nextAt = line.nextAt;
+          open.set(line.id, at);
+        }
+      }
     }
-    return [...open.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return { open: [...open.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), canceled };
   }
 
   /** 控える。**同じ依頼を二重に控えない。** */
@@ -233,6 +257,35 @@ export class UnfinishedWork {
   cancel(id: string): Promise<void> {
     return inOrder(this.#path, () => this.#append({ t: 'close', id, how: 'canceled' }));
   }
+
+  /**
+   * やめたものを戻す（押し間違え）。元の依頼の文は、ここにしか残っていない。
+   *
+   * - `gone`: やめたものの中に無い（片づいた・諦めた・記録を畳んで消えた）
+   * - `duplicate`: やめた後に同じ依頼をもう一度記録している。二つにしない
+   * - `open`: まだ抱えている（戻すまでもない）
+   *
+   * - `full`: 抱えている数が上限（`MAX_OPEN`）に届いている。戻すと、次に新しく記録したときに古い方から落とされる
+   *   （戻したものは作った時刻が古いので、真っ先に落ちる）
+   *
+   * やり直した回数はやめたときのまま戻す。次に手を付けるのは、戻してから最初の間（`BACKOFF_MS[0]`）を置いた後か、
+   * 元の時刻の遅い方（戻したとたんに走り出して、作業場を書き換え始めない）。段取りの進み具合は戻らない（やめたときに
+   * 閉じている）。次に手を付けるときに割り直す。
+   *
+   * 読めないときは投げる（読めないのを「無い」と取り違えて、戻す口を下げさせない）。
+   */
+  reopen(id: string, now = Date.now()): Promise<ReopenResult> {
+    return inOrder(this.#path, async () => {
+      const { open, canceled } = await this.#read({ strict: true });
+      if (open.some((u) => u.id === id)) return 'open';
+      const item = canceled.get(id);
+      if (!item) return 'gone';
+      if (open.some((u) => u.request === item.request)) return 'duplicate';
+      if (open.length >= MAX_OPEN) return 'full';
+      await this.#append({ t: 'reopen', id, nextAt: Math.max(item.nextAt, now + BACKOFF_MS[0]!) });
+      return 'reopened';
+    });
+  }
 }
 
 /** 一行の形を確かめる。 */
@@ -247,6 +300,7 @@ function isLine(v: unknown): v is Line {
   }
   if (l.t === 'bump') return typeof l.id === 'string' && typeof l.attempts === 'number' && typeof l.nextAt === 'number';
   if (l.t === 'close') return typeof l.id === 'string';
+  if (l.t === 'reopen') return typeof l.id === 'string' && (l.nextAt === undefined || typeof l.nextAt === 'number');
   return false;
 }
 

@@ -12,7 +12,7 @@
  */
 import { listDir, resolveInside } from './files.ts';
 import { describeNet } from '../runtime/net-why.ts';
-import { UnfinishedWork, resumePrompt, whyText } from '../core/unfinished.ts';
+import { UnfinishedWork, resumePrompt, whyText, MAX_OPEN } from '../core/unfinished.ts';
 import { githubLaunch } from '../core/github-mcp.ts';
 import { CATALOG, BUILTIN, findEntry, specFrom, needsNpx } from '../mcp/catalog.ts';
 import { connectService, disconnectService } from '../core/mcp-connect.ts';
@@ -2113,6 +2113,25 @@ export class UiServer {
       return send(res, 200, { canceled: id });
     }
 
+    // やめたやり残しを戻す（押し間違え）。元の依頼の文は、やり残しの記録にしか残っていない
+    if (path === '/api/unfinished/reopen' && req.method === 'POST') {
+      const body = await readBody(req) as { id?: unknown };
+      if (typeof body?.id !== 'string' || body.id.length === 0) return send(res, 400, { error: 'id がありません' });
+      // 走っている回の最中は戻さない。やめたときに段取りを閉じているので、その回の終わりが「片づいた」と取り違える
+      if (this.#resuming === body.id) return send(res, 409, { error: 'いま走っている回が終わってから戻してください' });
+      let got;
+      try {
+        got = await this.#unfinished.reopen(body.id);
+      } catch (e) {
+        return send(res, 500, { error: `やり残しの記録を読めませんでした（${(e as Error).message}）` });
+      }
+      if (got === 'full') return send(res, 409, { error: `やり残しが上限（${MAX_OPEN} 件）まで溜まっているので、戻していません`, gone: true });
+      if (got === 'gone') return send(res, 404, { error: 'やめたものの中にありません（記録を畳んだ後は戻せません）', gone: true });
+      if (got === 'duplicate') return send(res, 409, { error: '同じ依頼を、やめた後にもう一度やり残しに入れています。二つにしないよう、戻していません', gone: true });
+      this.broadcast({ type: 'unfinished' });
+      return send(res, 200, { reopened: body.id });
+    }
+
     /*
      * 戻せるようにする。
      *
@@ -3348,6 +3367,16 @@ export class UiServer {
         if (session) await this.#settleStep(done && didSomething, session);
         // **段取りの途中は、やり残しを閉じない。**まだ段が残っている。
         const mine = (await this.#goals.list()).find((g) => g.id === stepping.goalId);
+        /*
+         * 一段を走らせている間に、段取りが外で閉じられた（利用者がやめて、すぐ戻した）。やり残しは戻っているが、
+         * 段取りは閉じたまま。ここで下へ落ちると、一段が済んだだけで依頼全体を「片づいた」と閉じる。
+         * 何も書かずに抜け、次に手を付けるときに段取りを割り直させる。
+         */
+        if (resuming && !mine) {
+          this.#resuming = undefined;
+          this.broadcast({ type: 'unfinished' });
+          return;
+        }
         if (resuming && mine && !isSettled(mine)) {
           this.broadcast({ type: 'unfinished' });
           // 通った段の次は、**待たずに次へ**。一段ごとに見回りを待つと、

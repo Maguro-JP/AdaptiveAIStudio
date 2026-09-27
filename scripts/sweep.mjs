@@ -58,7 +58,7 @@ p.on('response', (r) => {
   // **起こし直してもらえない入口では、断るのが正しい。**作業中の 409 も同じ。
   // ここで止めると誰も起こさず、二度と戻らない（実際にそうなっていた）。
   if (expectingRefusal && [409, 501].includes(r.status()) && at === '/api/restart') return;
-  if (expectingSaveFailure && r.status() === 500 && ['/api/theme/preset', '/api/layout/preset', '/api/theme', '/api/memory'].includes(at)) return;
+  if (expectingSaveFailure && r.status() === 500 && ['/api/theme/preset', '/api/layout/preset', '/api/theme', '/api/memory', '/api/unfinished'].includes(at)) return;
   bad.push(`${r.status()} ${at}`);
 });
 
@@ -1918,6 +1918,67 @@ await check('記憶を忘れた直後に、戻せる', async () => {
     await p.evaluate((l) => fetch('/api/layout', {
       method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(l),
     }), saved).catch(() => undefined);
+    await p.reload({ waitUntil: 'load' }).then(opened).catch(() => undefined);
+    await p.waitForTimeout(800);
+  }
+});
+
+/*
+ * **やり残しの「×」も、押した直後に「戻す」で取り消せる。**元の依頼の文は、やり残しの記録にしか無い。
+ * やめられなかった（500）ときは、黙らずに帯で言う。本体の返事は横取りする（やり残しを作るにはモデルが要る）。
+ */
+await check('やめたやり残しを、戻せる', async () => {
+  const item = { id: 'u-sweep', request: 'SWEEP-やり残し\n二行目', whyText: '往復の上限に届いて、途中で切れました', attempts: 1, running: false };
+  let list = [item];
+  let cancelFails = true;
+  const sent = [];
+  await p.route('**/api/unfinished**', async (r) => {
+    const req = r.request();
+    const at = new URL(req.url()).pathname;
+    if (req.method() === 'GET') return r.fulfill({ json: { list } });
+    sent.push(`${req.method()} ${at} ${req.postData() ?? ''}`);
+    if (req.method() === 'DELETE') {
+      if (cancelFails) return r.fulfill({ status: 500, json: { error: 'SWEEP-書けません' } });
+      list = [];
+      return r.fulfill({ json: { canceled: item.id } });
+    }
+    list = [item];
+    return r.fulfill({ json: { reopened: item.id } });
+  });
+  try {
+    await p.reload({ waitUntil: 'load' });
+    await opened();
+    await p.waitForTimeout(800);
+    const stop = p.locator('#sideUnfinished button', { hasText: '×' });
+    if (await stop.count() === 0) throw new Error('やり残しの × が無い');
+
+    expectingSaveFailure = true;
+    await stop.first().click();
+    await p.waitForTimeout(500);
+    expectingSaveFailure = false;
+    const note = p.locator('#crashNote');
+    if (await note.count() === 0 || !(await note.innerText()).includes('SWEEP-書けません')) throw new Error('やめられなかったことを言っていない');
+    if ((await p.locator('#sideUnfinished').innerText()).includes('をやめました')) throw new Error('やめられなかったのに、やめたと出した');
+    await note.click();
+
+    cancelFails = false;
+    await stop.first().click();
+    await p.waitForTimeout(500);
+    const side = await p.locator('#sideUnfinished').innerText();
+    if (!side.includes('「SWEEP-やり残し」をやめました')) throw new Error(`やめたことと、戻す口を出していない: ${side.slice(0, 60)}`);
+    if (await p.locator('#unfinishedSec').isHidden()) throw new Error('一覧が空になって、戻す口ごと隠れた');
+    await p.locator('#sideUnfinished button', { hasText: '戻す' }).first().click();
+    await p.waitForTimeout(500);
+    const back = await p.locator('#sideUnfinished').innerText();
+    if (back.includes('をやめました')) throw new Error('戻したのに、やめた知らせが残っている');
+    if (!back.includes('SWEEP-やり残し')) throw new Error('戻したやり残しが一覧に無い');
+    const reopen = sent.find((x) => x.startsWith('POST /api/unfinished/reopen'));
+    if (!reopen) throw new Error(`戻すよう頼んでいない: ${sent.join(' / ')}`);
+    const keys = Object.keys(JSON.parse(reopen.split(' ').slice(2).join(' '))).join(',');
+    if (keys !== 'id') throw new Error(`戻す中身を画面から送っている（番号だけにする）: ${keys}`);
+  } finally {
+    expectingSaveFailure = false;
+    await p.unroute('**/api/unfinished**');
     await p.reload({ waitUntil: 'load' }).then(opened).catch(() => undefined);
     await p.waitForTimeout(800);
   }
