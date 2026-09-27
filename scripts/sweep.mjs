@@ -1871,7 +1871,7 @@ await check('記憶を忘れた直後に、戻せる', async () => {
     return r.fulfill({ json: { id: 'm7', title: entry.title, restored: true } });
   });
   const said = [];
-  const answer = (d) => { said.push(d.message()); void d.dismiss(); };
+  const answer = (d) => { said.push(d.message()); void d.dismiss().catch(() => undefined); };
   p.on('dialog', answer);
   try {
     await p.evaluate(() => {
