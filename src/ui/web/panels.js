@@ -5,6 +5,7 @@
  * 増やすときに他を触らなくていいことが、いじりやすさになる。
  */
 
+import { getJson } from './get-json.js';
 import { renderDiff, splitHunkTexts } from './diff.js';
 import { decorate } from './color.js';
 import { verdictText, slowNote } from './verdict.js';
@@ -614,7 +615,7 @@ export const PANELS = {
       const id = ctx.conversationId?.();
       if (!id) return;
       try {
-        const body = await (await fetch(`/api/conversations/messages?id=${encodeURIComponent(id)}`)).json();
+        const body = await getJson(`/api/conversations/messages?id=${encodeURIComponent(id)}`);
         if (body.messages?.length) ctx.showHistory(body.messages);
         if (body.inFlight) ctx.showInFlight?.(body.inFlight);
         // 待っている承認。押す口が無いと、本体は 10 分待ち続ける。
@@ -1140,7 +1141,7 @@ export const PANELS = {
     }, 1000);
     (async () => {
       try {
-        const got = await (await fetch('/api/jobs')).json();
+        const got = await getJson('/api/jobs');
         jobs = Array.isArray(got.jobs) ? got.jobs : [];
       } catch { /* 取れなければ空。変わったときに流れてくる */ }
       draw();
@@ -1308,7 +1309,7 @@ export const PANELS = {
     const KIND = { bug: '不具合', risk: '危うさ', question: '確認', idea: '思いつき' };
 
     const draw = async () => {
-      const r = await fetch('/api/proposals').then((x) => x.json()).catch(() => null);
+      const r = await getJson('/api/proposals').catch(() => null);
       body.replaceChildren();
       if (!r) return body.append(empty('提案を読めませんでした。'));
       if (r.open.length === 0) {
@@ -1412,7 +1413,7 @@ export const PANELS = {
     const draw = async () => {
       let data;
       try {
-        data = await (await fetch('/api/models')).json();
+        data = await getJson('/api/models');
       } catch {
         status.replaceChildren(el('div', 'warn', 'モデルの状態を取れませんでした。'));
         return;
@@ -1556,13 +1557,14 @@ export const PANELS = {
         check.disabled = true;
         check.textContent = '確認中…';
         try {
-          const r = await (await fetch('/api/models/newer')).json();
+          const r = await getJson('/api/models/newer');
           const found = r.findings ?? [];
           check.textContent = found.length === 0
             ? '新しい世代はありません'
             : found.map((f) => `${f.current} → ${f.found.join(', ')}`).join(' / ');
-        } catch {
-          check.textContent = '配布元に訊けませんでした';
+        } catch (e) {
+          // 訊けなかった（502）のを「新しい世代はありません」と取り違えない
+          check.textContent = `配布元に訊けませんでした（${e?.message ?? e}）`;
         }
         check.disabled = false;
       };
@@ -1660,7 +1662,7 @@ export const PANELS = {
     ctx.on('log', (e) => { if (ready) show(e); else pending.push(e); });
     (async () => {
       try {
-        const { lines } = await (await fetch('/api/logs')).json();
+        const { lines } = await getJson('/api/logs');
         for (const l of lines) show(l);
       } catch { /* 取れなければ、これから来る分だけ */ }
       ready = true;
@@ -1856,7 +1858,7 @@ export const PANELS = {
      */
     void (async () => {
       try {
-        const got = await (await fetch('/api/changes')).json();
+        const got = await getJson('/api/changes');
         for (const f of got.files ?? []) if (!files.has(f.path)) files.set(f.path, f);
         if ((got.files ?? []).length > 0) draw();
       } catch { /* 取れなければ、これから来る分だけ */ }
@@ -1955,7 +1957,7 @@ export const PANELS = {
         : `✗ 終了コード ${code}: ${displayOf.get(name) ?? name}（${sec} 秒）`;
     };
 
-    void fetch('/api/tasks').then((r) => r.json()).then(({ tasks }) => {
+    void getJson('/api/tasks').then(({ tasks }) => {
       for (const t of tasks ?? []) {
         displayOf.set(t.id, t.name);
         const b = el('button', '', t.name);
@@ -1989,6 +1991,9 @@ export const PANELS = {
         bar.append(b);
       }
       bar.append(stop);
+    }, (e) => {
+      // 読めなかったのを黙ると、押す口が一つも無い空のパネルに見える（受けるのは読むところの失敗だけ。組み立ての失敗は受けない）
+      bar.append(el('span', 'warn', `作業の一覧を読めませんでした（${e?.message ?? e}）`), stop);
     });
 
     const hint = el('div', 'dim', '困ったときは ⚙ → 情報 の「サポート用レポートを作る」を押して、出来たファイルを一つ送ってください。');

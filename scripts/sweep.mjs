@@ -58,7 +58,7 @@ p.on('response', (r) => {
   // **起こし直してもらえない入口では、断るのが正しい。**作業中の 409 も同じ。
   // ここで止めると誰も起こさず、二度と戻らない（実際にそうなっていた）。
   if (expectingRefusal && [409, 501].includes(r.status()) && at === '/api/restart') return;
-  if (expectingSaveFailure && r.status() === 500 && ['/api/theme/preset', '/api/layout/preset', '/api/theme', '/api/memory', '/api/unfinished'].includes(at)) return;
+  if (expectingSaveFailure && r.status() === 500 && ['/api/theme/preset', '/api/layout/preset', '/api/theme', '/api/memory', '/api/unfinished', '/api/state'].includes(at)) return;
   bad.push(`${r.status()} ${at}`);
 });
 
@@ -2004,6 +2004,32 @@ await check('やめたやり残しを、戻せる', async () => {
     await p.reload({ waitUntil: 'load' }).then(opened).catch(() => undefined);
     await p.waitForTimeout(800);
   }
+});
+
+/*
+ * **状態（/api/state）が断られても、画面は止まらない。**断られたときの `{ error }` を状態として全部のパネルへ配り、
+ * パネルが順に止まっていた（getJson で失敗として投げる）。状態は 5 秒ごとに取り直すので、その間 500 を返させて見る。
+ */
+await check('状態が読めなくても、画面は止まらない', async () => {
+  const before = bad.length;
+  expectingSaveFailure = true;
+  await p.route('**/api/state', (r) => r.fulfill({ status: 500, json: { error: 'SWEEP-状態を読めません' } }));
+  try {
+    await p.waitForTimeout(6500);
+  } finally {
+    await p.unroute('**/api/state');
+    expectingSaveFailure = false;
+  }
+  const crashed = bad.slice(before).filter((x) => x.startsWith('落ちた'));
+  if (crashed.length > 0) throw new Error(`状態が読めない間に止まった: ${crashed.join(' / ')}`);
+  const notes = async () => (await p.locator('.crash-note').allInnerTexts()).join(' / ');
+  const during = await notes();
+  if (during.includes('途中で止まりました')) throw new Error('止まった知らせが出た');
+  // 黙らない（古い状態が出たままで、何かあったことが見えない形にしない）
+  if (!during.includes('状態を読めませんでした') || !during.includes('SWEEP-状態を読めません')) throw new Error(`状態が読めないことを言っていない: ${during}`);
+  // 読めるようになったら下げる
+  await p.waitForTimeout(6000);
+  if ((await notes()).includes('状態を読めませんでした')) throw new Error('読めるようになっても、読めなかった知らせが残っている');
 });
 
 if (shot) await p.screenshot({ path: shot, fullPage: false });

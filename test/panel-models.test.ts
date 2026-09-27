@@ -41,6 +41,9 @@ async function draw(answers: Record<string, unknown> = {}) {
     const key = Object.keys(answers).find((k) => u.includes(k));
     const payload = key ? answers[key] : (u.includes('/api/models/newer') ? { findings: [] } : ANSWER);
     if (payload instanceof Error) throw payload;
+    // 断られた返事（`{ status, body }` で渡す）
+    const refused = payload as { refusedWith?: number; body?: unknown };
+    if (typeof refused?.refusedWith === 'number') return Response.json(refused.body ?? {}, { status: refused.refusedWith });
     return Response.json(payload);
   }) as unknown as typeof fetch;
 
@@ -165,6 +168,17 @@ describe('モデルの板', () => {
     await check.onclick?.();
     await new Promise((r) => setTimeout(r, 10));
     assert.match(check.textContent, /qwen3\.5 → qwen3\.6/);
+  });
+
+  test('**配布元に訊けなかった（502）のを、「新しい世代はありません」と言わない**', async () => {
+    const { body } = await draw({
+      '/api/models/newer': { refusedWith: 502, body: { error: 'fetch failed' } },
+    });
+    const check = body.buttons().find((b) => b.textContent.includes('新しい世代'))!;
+    await check.onclick?.();
+    await new Promise((r) => setTimeout(r, 10));
+    assert.match(check.textContent, /訊けませんでした（fetch failed）/);
+    assert.doesNotMatch(check.textContent, /ありません/);
   });
 
   test('新しいものが無ければ、無いと言う', async () => {

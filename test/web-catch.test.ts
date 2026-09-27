@@ -41,9 +41,10 @@ function inTry(src: string, at: number): boolean {
 
 function unguarded(): string[] {
   const found: string[] = [];
-  for (const file of readdirSync(web).filter((f) => f.endsWith('.js'))) {
+  // `get-json.js` は、断られたのを呼ぶ側へ投げるのが役目（受け手は呼ぶ側に置く）。代わりに `await getJson(` を呼ぶ側を数える
+  for (const file of readdirSync(web).filter((f) => f.endsWith('.js') && f !== 'get-json.js')) {
     const src = readFileSync(join(web, file), 'utf8');
-    for (const m of src.matchAll(/await fetch\(/g)) {
+    for (const m of src.matchAll(/await (?:fetch|getJson)\(/g)) {
       const at = m.index ?? 0;
       const stmt = src.slice(at, src.indexOf(';', at) + 1);
       // その場に `.catch(` があるか、`try {` の中にいるか。
