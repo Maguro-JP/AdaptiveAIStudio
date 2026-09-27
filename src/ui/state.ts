@@ -21,6 +21,8 @@ export interface UiState {
   }>;
   memory: MemoryEntry[];
   memorySize: number;
+  /** 読めずに退けた記憶の行の数。黙っていると、手で直した行が効いていないことに気づけない。 */
+  memorySkipped: number;
   proposals: unknown[];
   /**
    * 溜まりすぎて落とした提案の数。
@@ -111,6 +113,7 @@ export async function collectState(config: AasConfig): Promise<UiState> {
     })),
     memory: memory.all().slice(-60).reverse(),
     memorySize: memory.size,
+    memorySkipped: memory.skipped,
     // **保存の形と読み方を合わせる。**`{items, examined, dropped}` で
     // 書いてあるのに配列として読んでいたので、ここは常に「配列ではない何か」
     // だった（画面は使っていなかったので気づかれなかった）。

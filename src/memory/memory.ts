@@ -202,6 +202,11 @@ export class Memory {
     return this.#entries.length;
   }
 
+  /** 読むときに退けた行（形の違う行・壊れた行）の数。ファイルの末尾に元の文のまま残している。 */
+  get skipped(): number {
+    return this.#kept.length;
+  }
+
   all(): MemoryEntry[] {
     return [...this.#entries];
   }

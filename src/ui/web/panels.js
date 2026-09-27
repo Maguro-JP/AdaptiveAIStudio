@@ -1166,9 +1166,14 @@ export const PANELS = {
       decision: '決めたこと', attempt: '試したこと', fact: '分かったこと',
       preference: '好み', incident: '起きたこと', displeasure: '二度としないこと',
     };
+    // 読めずに退けた行は、思い出すときに使っていない。黙ると、手で直した行が効いていないことに気づけない。
+    // 全部の行が読めないときも出す（覚えが 0 件の分岐より先に作る）。
+    const skippedNote = (s) => s.memorySkipped > 0
+      ? [el('div', 'warn', `読めない行が ${s.memorySkipped} 行あり、使っていません（memory.jsonl の末尾に元の文のまま残しています。直すと次から読みます）`)]
+      : [];
     ctx.onState((s) => {
       body.replaceChildren();
-      if (s.memory.length === 0) return body.append(empty('まだ何も覚えていません。'));
+      if (s.memory.length === 0) return body.append(empty('まだ何も覚えていません。'), ...skippedNote(s));
       // **嫌がられたことを、いちばん上に。**これだけは話題に関係なく効く。
       const sorted = [
         ...s.memory.filter((m) => m.kind === 'displeasure'),
@@ -1208,7 +1213,7 @@ export const PANELS = {
         if (m.detail) row.title = m.detail;
         return row;
       }));
-      body.append(el('div', 'dim', `全 ${s.memorySize} 件`));
+      body.append(el('div', 'dim', `全 ${s.memorySize} 件`), ...skippedNote(s));
     });
   },
 
