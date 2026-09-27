@@ -96,3 +96,24 @@ test('中の理由が分かるときは、そちらを言う（対）', () => {
   (e as { cause?: unknown }).cause = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
   assert.match(describeNet(e), /断られました/);
 });
+
+/**
+ * 失敗の文に入っている場所（パス・URL）で取り違えない。
+ *
+ * 試験の一時フォルダの名前は乱数で、`aas-getui-404-aTlS9x` のように「tls」が並ぶことがある。その場所が 404 の文に
+ * 入っていたので、配布元が見つからなかったのを「暗号化のやりとりで断られました」と言い、保存先の案内も落としていた
+ * （全体を回したときだけ、まれに落ちた）。
+ */
+test('**文の中の場所（パス・URL）の字で、失敗の種類を取り違えない**', () => {
+  const places = [
+    '/tmp/aas-getui-404-aTlS9x/models',
+    'C:\\Users\\me\\AppData\\Local\\Temp\\aas-SSLx12\\models',
+    'https://huggingface.co/unsloth/timeout-ECONNRESET-GGUF/tree/main',
+  ];
+  for (const at of places) {
+    const said = `一覧を取れませんでした（404）。ここに置く: ${at}`;
+    assert.equal(describeNet(new Error(said)), said, `場所の字で取り違えた: ${at}`);
+  }
+  // 場所を除いても、本当の理由は拾う
+  assert.match(describeNet(new Error('Client network socket disconnected before secure TLS connection was established /tmp/x')), /暗号化/);
+});
