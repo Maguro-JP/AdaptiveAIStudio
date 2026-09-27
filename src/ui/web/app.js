@@ -5,6 +5,7 @@
  * ここがやるのは、配置の通りに並べることと、
  * 仕切りを掴んで動かしたら配置に書き戻すことだけ。
  */
+import { getJson } from './get-json.js';
 import { PANELS, TITLES } from './panels.js';
 import { pathActions } from './paths.js';
 import { closePanel, openPanel, movePanel, panelsInUse } from './layout-ops.js';
@@ -610,16 +611,21 @@ let stateAsked = 0;
 async function refreshState() {
   const mine = ++stateAsked;
   try {
-    const got = await fetch('/api/state').then((x) => x.json());
+    const got = await getJson('/api/state');
     if (mine === stateAsked) {
+      dropCrashNote('状態を読めませんでした');
       lastState = got;
       for (const fn of stateHandlers) fn(lastState);
     }
-  } catch { /* 本体が止まっているだけ。画面は残す。 */ }
+  } catch (e) {
+    // 繋がらない（本体が止まっている）ときは黙る（繋がりの欄が言う）。本体が断ったときは言う。黙ると、古い状態が出たままで、
+    // 何かあったことが見えない。次に読めたら下げる
+    if (!(e instanceof TypeError) && mine === stateAsked) showCrash('状態を読めませんでした', e?.message ?? String(e), 'warn');
+  }
   try {
     // **いま動かしているものを出す。**手元に入っているモデルの一覧の
     // 先頭を出していたので、使ってもいない名前が出ていた（実際に出ていた）。
-    const info = await fetch('/api/info').then((x) => x.json());
+    const info = await getJson('/api/info');
     $('sbModel').textContent = `${info.runtime} · ${info.model}`;
     // 起動時の読み込みの最中に画面を開いたとき。読み始めの合図は、繋ぐ前に流れている。
     if (info.loading && !busyNow) run.set('busy', `モデルを読み込んでいます: ${info.loading.ref}`);
@@ -821,7 +827,7 @@ async function loadMcp() {
   box.replaceChildren();
   let d;
   try {
-    d = await fetch('/api/mcp').then((r) => r.json());
+    d = await getJson('/api/mcp');
   } catch (e) {
     box.append(Object.assign(document.createElement('div'),
       { className: 'empty', textContent: `繋がり具合を読めませんでした: ${e.message ?? e}` }));
@@ -876,7 +882,7 @@ async function loadMcpCatalog() {
   box.replaceChildren();
   let d;
   try {
-    d = await fetch('/api/mcp/catalog').then((r) => r.json());
+    d = await getJson('/api/mcp/catalog');
   } catch (e) {
     box.append(Object.assign(document.createElement('div'),
       { className: 'empty', textContent: `見本帳を読めませんでした: ${e.message ?? e}` }));
@@ -1054,11 +1060,11 @@ let lastCanceled;
 async function loadUnfinished() {
   let data;
   try {
-    data = await fetch('/api/unfinished').then((x) => x.json());
+    data = await getJson('/api/unfinished');
   } catch { return; }
   let goals = { list: [], stride: {} };
   try {
-    goals = await fetch('/api/goals').then((x) => x.json());
+    goals = await getJson('/api/goals');
   } catch { /* 段取りが読めなくても、やり残しは出す */ }
 
   const sec = $('unfinishedSec');
@@ -1168,7 +1174,7 @@ function canceledNote({ id, text }) {
 async function loadUndo() {
   let data;
   try {
-    data = await fetch('/api/undo').then((x) => x.json());
+    data = await getJson('/api/undo');
   } catch { return; }
   const list = data.list ?? [];
   const sec = $('undoSec');
@@ -1268,7 +1274,7 @@ async function goTop() {
 
 async function loadConversations() {
   try {
-    conversations = await fetch('/api/conversations').then((x) => x.json());
+    conversations = await getJson('/api/conversations');
   } catch { return; }
   drawConversations();
 }
@@ -1833,7 +1839,7 @@ const INFO_LABELS = {
 };
 
 async function loadInfo() {
-  const info = await fetch('/api/info').then((r) => r.json()).catch(() => null);
+  const info = await getJson('/api/info').catch(() => null);
   const box = $('infoRows');
   box.replaceChildren();
   if (!info) {
@@ -1881,7 +1887,7 @@ async function loadCfg() {
   $('cfgNote').textContent = '読んでいます…';
   // **返らない口で、黙って待ち続けない。**繋がっていないドライブを読みに
   // 行くと、応答そのものが返らないことがある。上限で切って、理由を出す。
-  const c = await fetch('/api/config', { signal: AbortSignal.timeout(15000) }).then((r) => r.json()).catch((e) => ({ failed: String(e.message ?? e) }));
+  const c = await getJson('/api/config', { signal: AbortSignal.timeout(15000) }).catch((e) => ({ failed: String(e.message ?? e) }));
   // **黙って空欄にしない。**選択肢が一つも無い画面を出されても、
   // 利用者には何が起きたのか分からない（実際にそう出た）。
   if (!c || c.failed || c.error) {
@@ -1990,7 +1996,7 @@ async function loadCfg() {
 
 /** 取ってこられるものを並べる。一覧は必ず古くなるので、名前も直に打てる。 */
 async function loadCatalog() {
-  const d = await fetch('/api/models').then((r) => r.json()).catch(() => null);
+  const d = await getJson('/api/models').catch(() => null);
   const sel = $('cfgCatalog');
   sel.replaceChildren();
   for (const m of d?.catalog ?? []) {
@@ -2107,7 +2113,7 @@ async function loadChecks() {
   checksReady = true;
   const bar = $('settingsChecks');
   const out = $('settingsCheckOut');
-  const { tasks } = await fetch('/api/tasks').then((r) => r.json()).catch(() => ({ tasks: [] }));
+  const { tasks } = await getJson('/api/tasks').catch(() => ({ tasks: [] }));
   const buttons = [];
   for (const t of tasks ?? []) {
     const b = document.createElement('button');
@@ -2219,7 +2225,7 @@ async function loadAcks() {
  * 取りに行く（GET /api/report）の両方で追う。合図を取りこぼしても止まらない。
  */
 async function showReport() {
-  const r = await fetch('/api/report').then((x) => x.json()).catch(() => null);
+  const r = await getJson('/api/report').catch(() => null);
   const rep = r?.report;
   const status = $('reportStatus');
   const path = $('reportPath');
@@ -2302,8 +2308,7 @@ $('newDir').onclick = () => { void makeEntry('dir'); };
 // 開き直したときは、続きの会話をそのまま出す。空の画面から始めない。
 if (conversations.current) {
   try {
-    const body = await fetch(`/api/conversations/messages?id=${encodeURIComponent(conversations.current)}`)
-      .then((x) => x.json());
+    const body = await getJson(`/api/conversations/messages?id=${encodeURIComponent(conversations.current)}`);
     if (body.messages?.length || body.inFlight) ctx.showHistory(body.messages ?? []);
     // 動いている最中に開き直しても、途中までは見える。
     if (body.inFlight) {
@@ -2320,8 +2325,7 @@ if (conversations.current) {
  * 送る手間だけが無駄になる。開いた時点で、次に打つ一手まで出す。
  */
 async function tellIfNotReady() {
-  const r = await fetch('/api/ready', { signal: AbortSignal.timeout(20000) })
-    .then((x) => x.json())
+  const r = await getJson('/api/ready', { signal: AbortSignal.timeout(20000) })
     .catch((e) => ({ ready: false, why: `見に行けませんでした（${e.message ?? e}）` }));
   /*
    * **設定が読めていないことを、一緒に言う。**
@@ -2374,7 +2378,7 @@ async function tellIfNotReady() {
 }
 void tellIfNotReady();
 // 開いた時点で裏の仕事が動いていれば、その最新を押した場所に出す（合図は繋ぐ前に流れている）。
-void fetch('/api/jobs').then((r) => r.json()).then((j) => noteJobs(j.jobs)).catch(() => undefined);
+void getJson('/api/jobs').then((j) => noteJobs(j.jobs)).catch(() => undefined);
 
 listen();
 setInterval(refreshState, 5000);
