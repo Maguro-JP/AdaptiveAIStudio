@@ -58,7 +58,7 @@ p.on('response', (r) => {
   // **起こし直してもらえない入口では、断るのが正しい。**作業中の 409 も同じ。
   // ここで止めると誰も起こさず、二度と戻らない（実際にそうなっていた）。
   if (expectingRefusal && [409, 501].includes(r.status()) && at === '/api/restart') return;
-  if (expectingSaveFailure && r.status() === 500 && ['/api/theme/preset', '/api/layout/preset', '/api/theme'].includes(at)) return;
+  if (expectingSaveFailure && r.status() === 500 && ['/api/theme/preset', '/api/layout/preset', '/api/theme', '/api/memory'].includes(at)) return;
   bad.push(`${r.status()} ${at}`);
 });
 
@@ -1835,6 +1835,85 @@ await check('読めない記憶の行を、メモリのパネルで言う', asyn
     const text = await p.locator('#root').innerText();
     if (!text.includes('読めない行が 3 行')) throw new Error('読めない行の数を言っていない');
   } finally {
+    await p.unroute('**/api/state');
+    await p.evaluate((l) => fetch('/api/layout', {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(l),
+    }), saved).catch(() => undefined);
+    await p.reload({ waitUntil: 'load' }).then(opened).catch(() => undefined);
+    await p.waitForTimeout(800);
+  }
+});
+
+/*
+ * **記憶の「忘れる」は、押した直後に「戻す」で取り消せる。**一押しで効くので、押し間違えを戻せないと覚え直すまで同じ失敗をする。
+ * 本体が忘れられなかった（保存できなかった）ときは、その文を出し、戻す口は出さない。本体の返事は横取りする
+ * （モデルが無いと、記憶を持つセッションが無い）。並びは前の場面と同じく、写しを取って最後に戻す。
+ */
+await check('記憶を忘れた直後に、戻せる', async () => {
+  const saved = await p.evaluate(() => fetch('/api/layout').then((r) => r.json()).then((j) => j.layout));
+  const entry = { id: 'm7', kind: 'fact', title: '試しの覚え', confirms: 1, helped: 0, misled: 0 };
+  let memory = [entry];
+  let forgetFails = true;
+  const sent = [];
+  await p.route('**/api/state', async (r) => {
+    const real = await r.fetch();
+    await r.fulfill({ response: real, json: { ...(await real.json()), memory, memorySkipped: 0, memorySize: memory.length } });
+  });
+  await p.route('**/api/memory**', async (r) => {
+    const req = r.request();
+    sent.push(`${req.method()} ${new URL(req.url()).pathname} ${req.postData() ?? ''}`);
+    if (req.method() === 'DELETE') {
+      if (forgetFails) return r.fulfill({ status: 500, json: { error: '保存できなかったので、忘れていません（試し）' } });
+      memory = [];
+      return r.fulfill({ json: { id: 'm7', title: entry.title, forgotten: true } });
+    }
+    memory = [entry];
+    return r.fulfill({ json: { id: 'm7', title: entry.title, restored: true } });
+  });
+  const said = [];
+  const answer = (d) => { said.push(d.message()); void d.dismiss().catch(() => undefined); };
+  p.on('dialog', answer);
+  try {
+    await p.evaluate(() => {
+      const s = document.getElementById('presets');
+      s.value = 'command';
+      s.dispatchEvent(new Event('change'));
+    });
+    await p.waitForTimeout(1200);
+    const tab = p.locator('#root .panel.tabs header button').filter({ hasText: 'メモリ' });
+    if (await tab.count() === 0) throw new Error('統制卓の並びにメモリのタブが無い');
+    await tab.first().click();
+    await p.waitForTimeout(500);
+    const forget = p.locator('#root button', { hasText: '忘れる' });
+    if (await forget.count() === 0) throw new Error('忘れる口が無い');
+
+    expectingSaveFailure = true;
+    await forget.first().click();
+    await p.waitForTimeout(500);
+    expectingSaveFailure = false;
+    if (!said.some((t) => t.includes('忘れていません'))) throw new Error(`忘れられなかったことを言っていない: ${said.join(' / ')}`);
+    if ((await p.locator('#root').innerText()).includes('を忘れました')) throw new Error('忘れられなかったのに、忘れたと出した');
+
+    forgetFails = false;
+    await forget.first().click();
+    await p.waitForTimeout(500);
+    const after = await p.locator('#root').innerText();
+    if (!after.includes('「試しの覚え」を忘れました')) throw new Error('忘れたことと、戻す口を出していない');
+    const undo = p.locator('#root button', { hasText: '戻す' });
+    if (await undo.count() === 0) throw new Error('戻す口が無い');
+    await undo.first().click();
+    await p.waitForTimeout(800);
+    const back = await p.locator('#root').innerText();
+    if (back.includes('を忘れました')) throw new Error('戻したのに、忘れた知らせが残っている');
+    if (!back.includes('試しの覚え')) throw new Error('戻した覚えが一覧に無い');
+    const restore = sent.find((x) => x.startsWith('POST /api/memory/restore'));
+    if (!restore) throw new Error(`戻すよう頼んでいない: ${sent.join(' / ')}`);
+    const keys = Object.keys(JSON.parse(restore.split(' ').slice(2).join(' '))).join(',');
+    if (keys !== 'id') throw new Error(`戻す中身を画面から送っている（番号だけにする）: ${keys}`);
+  } finally {
+    expectingSaveFailure = false;
+    p.off('dialog', answer);
+    await p.unroute('**/api/memory**');
     await p.unroute('**/api/state');
     await p.evaluate((l) => fetch('/api/layout', {
       method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(l),

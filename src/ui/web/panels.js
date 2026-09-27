@@ -1176,10 +1176,54 @@ export const PANELS = {
     const skippedNote = (s) => s.memorySkipped > 0
       ? [el('div', 'warn', `読めない行が ${s.memorySkipped} 行あり、使っていません（memory.jsonl に元の文のまま残しています。直すと次から読みます）`)]
       : [];
-    ctx.onState((s) => {
+    // 最後に忘れた覚え。押し間違えを、その場で戻せるようにする（戻す中身は本体が持っている。ここは番号と題と、見せるための写し）。
+    // 戻せるのは最後の一件だけ（本体は 20 件取っておくが、画面に戻す口を並べると、どれを押せばよいか迷う）。
+    let lastForgotten;
+    let lastState;
+    // 一覧は新しい順（本体が `slice(-60).reverse()` で渡す）。戻した行は、覚えた時刻の位置へ差し込む
+    const withEntry = (list, entry) => {
+      const at = list.findIndex((x) => x.at < entry.at);
+      return at < 0 ? [...list, entry] : [...list.slice(0, at), entry, ...list.slice(at)];
+    };
+    const forgottenNote = () => {
+      if (!lastForgotten) return [];
+      const { id, title, entry } = lastForgotten;
+      const note = el('div', 'row dim', `「${title}」を忘れました`);
+      const undo = el('button', 'ghost tiny', '戻す');
+      undo.title = '忘れた覚えを元に戻す';
+      undo.onclick = async () => {
+        undo.disabled = true; // 二度押すと、二本目が「戻せる覚えがありません」になる
+        try {
+          const r = await fetch('/api/memory/restore', {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }),
+          });
+          const got = await r.json().catch(() => ({}));
+          if (!r.ok) {
+            // 押しても戻らない口は残さない（立ち上げ直した・読み直した・同じものを覚え直した）
+            if (got.gone && lastForgotten?.id === id) { lastForgotten = undefined; if (lastState) render(lastState); }
+            else undo.disabled = false;
+            return alert(got.error ?? '戻せませんでした');
+          }
+          if (lastForgotten?.id === id) lastForgotten = undefined;
+          // 知らせを待たずに、戻した行を一覧へ戻す（手元の写しは見せるためだけ。本体へは番号しか送らない）
+          if (lastState && !lastState.memory.some((x) => x.id === id)) {
+            render({ ...lastState, memory: withEntry(lastState.memory, entry), memorySize: lastState.memorySize + 1 });
+          } else if (lastState) render(lastState);
+        } catch (e) {
+          undo.disabled = false;
+          alert(`戻せませんでした（${e?.message ?? e}）`);
+        }
+      };
+      const close = el('button', 'ghost tiny', '閉じる');
+      close.onclick = () => { lastForgotten = undefined; if (lastState) render(lastState); };
+      note.append(undo, close);
+      return [note];
+    };
+    const render = (s) => {
+      lastState = s;
       body.replaceChildren();
-      if (s.memory.length === 0) return body.append(empty('まだ何も覚えていません。'), ...skippedNote(s));
-      body.append(...skippedNote(s)); // 一覧の上に出す（下だと、60 件の一覧をたどらないと見えない）
+      if (s.memory.length === 0) return body.append(empty('まだ何も覚えていません。'), ...skippedNote(s), ...forgottenNote());
+      body.append(...skippedNote(s), ...forgottenNote()); // 一覧の上に出す（下だと、60 件の一覧をたどらないと見えない）
       // **嫌がられたことを、いちばん上に。**これだけは話題に関係なく効く。
       const sorted = [
         ...s.memory.filter((m) => m.kind === 'displeasure'),
@@ -1207,10 +1251,14 @@ export const PANELS = {
         drop.onclick = async () => {
           try {
             const r = await fetch(`/api/memory?id=${encodeURIComponent(m.id)}`, { method: 'DELETE' });
-            if (!r.ok) {
-              const body = await r.json().catch(() => ({}));
-              alert(body.error ?? '消せませんでした');
-            }
+            const got = await r.json().catch(() => ({}));
+            if (!r.ok) return alert(got.error ?? '消せませんでした');
+            // 題は本体が実際に忘れたものから取る（一覧は別に読み直したもので、ずれていることがある）
+            lastForgotten = { id: m.id, title: got.title ?? m.title, entry: m };
+            // 知らせ（stateChanged）を待たずに、忘れた行を消して戻す口を出す
+            if (lastState?.memory.some((x) => x.id === m.id)) {
+              render({ ...lastState, memory: lastState.memory.filter((x) => x.id !== m.id), memorySize: lastState.memorySize - 1 });
+            } else if (lastState) render(lastState);
           } catch (e) {
             alert(`消せませんでした（${e?.message ?? e}）`);
           }
@@ -1220,7 +1268,8 @@ export const PANELS = {
         return row;
       }));
       body.append(el('div', 'dim', `全 ${s.memorySize} 件`));
-    });
+    };
+    ctx.onState(render);
   },
 
   /**

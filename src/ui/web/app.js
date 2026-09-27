@@ -605,10 +605,16 @@ function showRepairs(repairs, what) {
   box.textContent = box.textContent ? `${box.textContent.replace(/（押すと消えます）$/, '')} ／ ${line}（押すと消えます）` : `${line}（押すと消えます）`;
 }
 
+/** 状態を頼んだ回数。遅れて返った古い返事で、後から頼んだ分の描き直しを上書きしない（忘れた直後に戻すと踏む）。 */
+let stateAsked = 0;
 async function refreshState() {
+  const mine = ++stateAsked;
   try {
-    lastState = await fetch('/api/state').then((x) => x.json());
-    for (const fn of stateHandlers) fn(lastState);
+    const got = await fetch('/api/state').then((x) => x.json());
+    if (mine === stateAsked) {
+      lastState = got;
+      for (const fn of stateHandlers) fn(lastState);
+    }
   } catch { /* 本体が止まっているだけ。画面は残す。 */ }
   try {
     // **いま動かしているものを出す。**手元に入っているモデルの一覧の
