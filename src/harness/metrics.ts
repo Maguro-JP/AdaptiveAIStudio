@@ -11,8 +11,9 @@
  *   拒否 → そのまま作業が失敗した       悪い規則（邪魔をしている）
  *   一度も発動しない                    不要な規則（削る候補）
  */
-import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { loadJournal, saveJournal } from '../core/journal-file.ts';
 
 export interface RuleStat {
   rule: string;
@@ -57,26 +58,34 @@ export class HarnessMetrics {
    * 別の依頼の結末が、その拒否の良し悪しを決めてしまう。
    */
   #open = new Map<string, string[]>();
-  /** 保存を順に並べる列。並べないと、二つの会話がほぼ同時に終わったとき同じファイルへ二本が重なって書く。 */
-  #saving: Promise<void> = Promise.resolve();
-  #saveSeq = 0;
-
   constructor(path?: string) {
     this.#path = path;
   }
 
+  /**
+   * 読む。無いのは正常。形の違う一件（`null`・数でない回数）はその一件だけ除く（全部を捨てて 0 から数え直し、
+   * 次の保存でそれまでの記録を消していた）。在るのに読めないときは空で始め、保存の前に読み直す（`journal-file.ts`）。
+   */
   async load(): Promise<void> {
     if (!this.#path) return;
-    try {
-      const raw = JSON.parse(await readFile(this.#path, 'utf8')) as {
-        stats: RuleStat[]; tasks: number; cleanTasks: number;
-      };
+    await loadJournal(this, this.#path, (v) => {
+      const raw = readMetrics(v);
       this.#stats = new Map(raw.stats.map((s) => [s.rule, s]));
       this.#tasks = raw.tasks;
       this.#cleanTasks = raw.cleanTasks;
-    } catch {
-      // 記録が無いのは正常
+    });
+  }
+
+  /** 起動のときに読めなかった記録を、後から読めたときに足す（空で始めた間の分を、その上に積む）。 */
+  #absorb(v: unknown): void {
+    const raw = readMetrics(v);
+    for (const base of raw.stats) {
+      const now = this.#stat(base.rule);
+      now.denials += base.denials; now.recovered += base.recovered;
+      now.abandoned += base.abandoned; now.warnings += base.warnings;
     }
+    this.#tasks += raw.tasks;
+    this.#cleanTasks += raw.cleanTasks;
   }
 
   /** 依頼の開始。拒否の集計単位を切る。`key` は依頼の札（並行する依頼を見分ける）。 */
@@ -169,29 +178,18 @@ export class HarnessMetrics {
   }
 
   /**
-   * 記録を書く。列に並べ、書く直前の数を写す（後から並んだ保存が、前の古い数で上書きされない）。
-   * 一時ファイルへ書いてから置き換える。途中で切れても前の記録が残る（壊れた記録は load が 0 から数え直す）。
+   * 記録を書く。同じファイルへは一列に並べ、書く直前の数を写す（後から並んだ保存が、前の古い数で上書きされない）。
+   * 一時ファイルへ書いてから置き換える。途中で切れても前の記録が残る。記録に失敗しても本体は止めない。
    */
-  save(): Promise<void> {
+  async save(): Promise<void> {
     const path = this.#path;
-    if (!path) return Promise.resolve();
-    const next = this.#saving.then(async () => {
-      const tmp = `${path}.${process.pid}.${++this.#saveSeq}.tmp`;
-      try {
-        await mkdir(dirname(path), { recursive: true });
-        await writeFile(tmp, JSON.stringify({
-          stats: [...this.#stats.values()],
-          tasks: this.#tasks,
-          cleanTasks: this.#cleanTasks,
-        }, null, 2), 'utf8');
-        await rename(tmp, path);
-      } catch {
-        // 記録に失敗しても本体は止めない
-        await rm(tmp, { force: true }).catch(() => undefined);
-      }
-    });
-    this.#saving = next;
-    return next;
+    if (!path) return;
+    await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
+    await saveJournal(this, path, () => JSON.stringify({
+      stats: [...this.#stats.values()],
+      tasks: this.#tasks,
+      cleanTasks: this.#cleanTasks,
+    }, null, 2), (v) => this.#absorb(v)).catch(() => false);
   }
 
   #stat(rule: string): RuleStat {
@@ -201,6 +199,26 @@ export class HarnessMetrics {
     this.#stats.set(rule, created);
     return created;
   }
+}
+
+const isCount = (x: unknown): x is number => typeof x === 'number' && Number.isInteger(x) && x >= 0;
+
+function isRuleStat(v: unknown): v is RuleStat {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as Record<string, unknown>;
+  return typeof r.rule === 'string' && isCount(r.denials) && isCount(r.recovered)
+    && isCount(r.abandoned) && isCount(r.warnings);
+}
+
+/** 記録のうち、形の合う分だけ。入れ物でなければ空。 */
+function readMetrics(v: unknown): { stats: RuleStat[]; tasks: number; cleanTasks: number } {
+  const r = (v ?? {}) as Record<string, unknown>; // 入れ物でなくても、下の確かめで全部 0 と空になる
+  const tasks = isCount(r.tasks) ? r.tasks : 0;
+  return {
+    stats: Array.isArray(r.stats) ? r.stats.filter(isRuleStat) : [],
+    tasks,
+    cleanTasks: isCount(r.cleanTasks) ? Math.min(r.cleanTasks, tasks) : 0,
+  };
 }
 
 function pct(n: number): string {
