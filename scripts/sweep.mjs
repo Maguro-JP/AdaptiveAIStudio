@@ -1774,11 +1774,12 @@ await check('読み込みで直したことを、押すまで消えない帯に�
 });
 
 /*
- * **読めずに退けた記憶の行を、記憶のパネルで言う。**覚えが 0 件のときも言う（その分岐で先に返していた）。
- * 記憶のパネルは既定の並びに無いので、統制卓の並びへ切り替えて見て、最後に既定へ戻す。状態の返事は横取りして数を足す。
+ * **読めずに退けた記憶の行を、メモリのパネルで言う。**覚えが 0 件のときも言う（その分岐で先に返していた）。
+ * メモリのパネルは既定の並びに無いので、統制卓の並びへ切り替えて見て、最後に写しを取った並びへ戻す。状態の返事は横取りして数を足す。
  */
-await check('読めない記憶の行を、記憶のパネルで言う', async () => {
-  const back = await p.evaluate(() => document.getElementById('presets').value);
+await check('読めない記憶の行を、メモリのパネルで言う', async () => {
+  // 並びは型を選び直すのではなく、丸ごと写しを取って丸ごと戻す（型を選び直すと、大きさや出し入れを変えた並びが型の初期形になる）
+  const saved = await p.evaluate(() => fetch('/api/layout').then((r) => r.json()).then((j) => j.layout));
   await p.route('**/api/state', async (r) => {
     const real = await r.fetch();
     await r.fulfill({ response: real, json: { ...(await real.json()), memory: [], memorySkipped: 3 } });
@@ -1799,7 +1800,10 @@ await check('読めない記憶の行を、記憶のパネルで言う', async (
     if (!text.includes('読めない行が 3 行')) throw new Error('読めない行の数を言っていない');
   } finally {
     await p.unroute('**/api/state');
-    await pick(back);
+    await p.evaluate((l) => fetch('/api/layout', {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(l),
+    }), saved).catch(() => undefined);
+    await p.reload({ waitUntil: 'load' }).then(opened).catch(() => undefined);
     await p.waitForTimeout(800);
   }
 });
