@@ -20,6 +20,17 @@ import { runtimeEnv } from './llama-env.ts';
 import { chunkReader } from '../core/text.ts';
 import { describeNet } from './net-why.ts';
 
+/**
+ * `llama-server --version` の出力が、版を答えているか。
+ *
+ * 出力に「version」が在るかで見ていた。動かなかったときの出力には、実行ファイルの場所（`app-version2/` のような名前）や、
+ * GLIBC が合わないときの `` version `GLIBC_2.38' not found `` が入るので、動かないのに「動く」と言っていた。
+ * 版の行（`version: 4585 (f0d4b29e)`）そのものを見る。
+ */
+export function answeredVersion(out: string): boolean {
+  return /^version:\s*\d+/m.test(out);
+}
+
 export interface InstallOptions {
   /** 置き場。既定は ~/.aas/bin */
   binDir?: string;

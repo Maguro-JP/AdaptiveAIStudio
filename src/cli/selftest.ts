@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { detectMachine, describeMachine } from '../runtime/machine.ts';
-import { findInstalled, defaultBinDir } from '../runtime/llama-install.ts';
+import { findInstalled, defaultBinDir, answeredVersion } from '../runtime/llama-install.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { pickAsset } from '../runtime/llama-release.ts';
 import { loadConfig } from '../config.ts';
@@ -118,7 +118,7 @@ const binDir = defaultBinDir();
 const llama = await findInstalled(binDir);
 if (llama) {
   const out = await run(llama, ['--version']);
-  const works = /version/i.test(out.text);
+  const works = answeredVersion(out.text);
   add('llama-server', works, works ? out.text.trim().split('\n')[0]! : `動きません: ${out.text.trim().slice(0, 200)}`);
 } else {
   add('llama-server', undefined, `まだ用意していません（npm run llama で取ってきます）。置き場: ${binDir}`);

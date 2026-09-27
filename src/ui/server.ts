@@ -11,7 +11,7 @@
  * 素の HTML と ES モジュールなら、組み立ての手順すら要らない。
  */
 import { listDir, resolveInside } from './files.ts';
-import { describeNet } from '../runtime/net-why.ts';
+import { describeNet, withoutPlaces } from '../runtime/net-why.ts';
 import { UnfinishedWork, resumePrompt, whyText, MAX_OPEN } from '../core/unfinished.ts';
 import { githubLaunch } from '../core/github-mcp.ts';
 import { CATALOG, BUILTIN, findEntry, specFrom, needsNpx } from '../mcp/catalog.ts';
@@ -2997,7 +2997,7 @@ export class UiServer {
              * そう出るので、**嘘になる。**読む側は在るファイルを消しに行く。
              * 中で出た理由が既に具体的なら、それをそのまま先に出す。
              */
-            const looksLikeFile = /gguf|magic|size|out of range|unexpected|parse/i.test(detail);
+            const looksLikeFile = looksLikeBrokenModelFile(detail);
             const hint = looksLikeFile
               ? '**ファイルが途中までしか落ちていない**ことが多いです。'
                 + '大きさを配布元と見比べて、違っていたら消して取り直してください。'
@@ -3924,6 +3924,19 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   } catch {
     return undefined; // 直す側が既定に落としてくれる
   }
+}
+
+/**
+ * 読み込みの失敗が、ファイルの中身（途中までしか落ちていない・形が違う）を指しているか。
+ *
+ * 文の全体に `/gguf|magic|size|…/i` を当てていたので、文に入るモデルの場所（`….gguf`）や、llama.cpp の行の頭に付く関数名
+ * （`gguf_init_from_file`）で、ほぼいつも「ファイルのせい」になり、読む側の失敗やファイルが無いときにも「消して取り直して
+ * ください」と言っていた。場所を除いた残りを、決め手になる句だけで見る。句は実物の文から取った
+ * （`test/fixtures/llama/bad-format.txt`、node-llama-cpp の `InvalidGgufMagicError`）。
+ */
+export function looksLikeBrokenModelFile(detail: string): boolean {
+  return /invalid (?:gguf )?magic|expected ['"]?GGUF|file bounds|corrupted|incomplete|truncat|size mismatch|file size|unexpected end|out of range|failed to parse|parse error/i
+    .test(withoutPlaces(detail));
 }
 
 /**
