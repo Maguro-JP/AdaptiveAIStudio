@@ -64,11 +64,12 @@ const unread = new WeakMap<object, string>();
 /** 読んで渡す。読めなかったときは覚えておき、保存の前に読み直す。 */
 export async function loadJournal(
   target: object, path: string, apply: (value: unknown) => void, ops: JournalOps = {},
-): Promise<void> {
+): Promise<JournalRead['kind']> {
   const r = await readJournal(path, ops);
   if (r.kind === 'value') apply(r.value);
   if (r.kind === 'unreadable') unread.set(target, path);
   else unread.delete(target); // 読み直して読めたなら、次の保存で読み直して二重に足さない
+  return r.kind; // 読めなかったかを、呼んだ側が振る舞いに使えるように（前が分からないときに「変わった」と言わない等）
 }
 
 let tmpSeq = 0;
