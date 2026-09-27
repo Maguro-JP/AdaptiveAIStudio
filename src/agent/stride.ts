@@ -145,7 +145,8 @@ export class StrideBook {
   /** いまの歩幅。まだ測っていなければ、窓の広さから見当をつける。 */
   async get(model: string, contextTokens: number): Promise<StrideRecord> {
     const all = await this.#load();
-    return all[model] ?? { size: firstStride(contextTokens), streak: 0, ok: 0, ng: 0 };
+    // 自分で持つ名前だけを引く（`toString` のような名前で、入れ物の関数を返さない）
+    return Object.hasOwn(all, model) ? all[model]! : { size: firstStride(contextTokens), streak: 0, ok: 0, ng: 0 };
   }
 
   /** 一歩ぶんの結果を入れる。**通った跡で測る。** */
@@ -157,7 +158,7 @@ export class StrideBook {
       await mkdir(dirname(this.#path), { recursive: true });
       // 読めなかったファイルが後で読めたら、この間に測っていないモデルの分だけ取り込む（測った分が新しい）
       await saveJournal(this, this.#path, () => JSON.stringify(all, null, 2), (v) => {
-        for (const [m, r] of Object.entries(validStrides(v))) if (!(m in all)) all[m] = r;
+        for (const [m, r] of Object.entries(validStrides(v))) if (!Object.hasOwn(all, m)) all[m] = r;
       });
       return next;
     });
@@ -173,7 +174,7 @@ export class StrideBook {
 function validStrides(v: unknown): Record<string, StrideRecord> {
   const out: Record<string, StrideRecord> = {};
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return out;
-  for (const [model, r] of Object.entries(v)) if (model !== '__proto__' && isStride(r)) out[model] = r; // 入れ物の型を書き換えない
+  for (const [model, r] of Object.entries(v)) if (isStride(r)) out[model] = r;
   return out;
 }
 

@@ -124,6 +124,32 @@ describe('歩幅の記録ファイル', () => {
     assert.equal((await book.record('c', 1000, true)).ok, 1);
   });
 
+  for (const [field, bad] of [['streak', '1'], ['ok', -1], ['ng', '5'], ['ng', 1.5], ['size', 'huge']] as const) {
+    test(`**${field} が ${JSON.stringify(bad)} の一件は使わない**（使うと、足したときに文字や端数の回数になる）`, async () => {
+      const dir = await tempDir('aas-stride-f-');
+      const path = join(dir, 'stride.json');
+      await writeFile(path, JSON.stringify({ k: { ...good, [field]: bad } }));
+      const book = new StrideBook(path);
+      assert.deepEqual(await book.all(), {});
+      const r = await book.record('k', 8192, false);
+      assert.deepEqual([r.size, r.streak, r.ok, r.ng], ['tiny', 0, 0, 1]);
+    });
+  }
+
+  test('**入れ物が受け継いだ名前（constructor・toString）も、ただのモデル名として扱う**', async () => {
+    const dir = await tempDir('aas-stride-f-');
+    const path = join(dir, 'stride.json');
+    assert.equal((await new StrideBook(join(dir, 'none.json')).get('toString', 8192)).size, 'small');
+    await mkdir(path); // 読めない（EISDIR）
+    const book = new StrideBook(path);
+    await book.record('m', 8192, true);
+    await rm(path, { recursive: true });
+    await writeFile(path, JSON.stringify({ constructor: good }));
+    await book.record('m', 8192, true);
+    const saved = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+    assert.deepEqual(saved.constructor, good, '受け継いだ名前の記録を取り込まずに落とした');
+  });
+
   test('**在るのに読めないときは書かない。読めたら、測っていないモデルの分を残して書く**', async () => {
     const dir = await tempDir('aas-stride-f-');
     const path = join(dir, 'stride.json');
