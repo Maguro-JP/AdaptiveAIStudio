@@ -1298,7 +1298,7 @@ export class UiServer {
       const verdict = body?.verdict === 'rejected' ? 'rejected' as const : 'accepted' as const;
       const session = await this.session();
       const target = await session.decide(String(body?.id ?? ''), verdict);
-      if (!target) return send(res, 404, { error: 'その提案は見つかりません' });
+      if (!target) return send(res, 404, { error: 'その提案は見つからないか、もう決まっています' });
       this.broadcast({ type: 'stateChanged' });
       // 採用したなら、その内容をそのまま依頼として流す。
       // 提案の実行文は、モデルが書いたもの。利用者の言葉として判じない。

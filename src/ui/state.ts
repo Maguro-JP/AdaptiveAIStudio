@@ -87,10 +87,11 @@ async function readJson<T>(path: string, fallback: T): Promise<T> {
 /** 提案の記録。古い形（配列そのまま）でも読めるようにしておく。 */
 async function readProposals(path: string): Promise<{ items: unknown[]; dropped: number }> {
   const raw = await readJson<unknown>(path, []);
-  if (Array.isArray(raw)) return { items: raw, dropped: 0 };
-  const obj = raw as { items?: unknown; dropped?: unknown };
+  if (Array.isArray(raw)) return { items: raw.filter((x) => typeof x === 'object' && x !== null), dropped: 0 };
+  // `null` や形の違う一件で、画面の一覧ごと 500 にしない。
+  const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as { items?: unknown; dropped?: unknown };
   return {
-    items: Array.isArray(obj.items) ? obj.items : [],
+    items: Array.isArray(obj.items) ? obj.items.filter((x) => typeof x === 'object' && x !== null) : [],
     dropped: typeof obj.dropped === 'number' ? obj.dropped : 0,
   };
 }

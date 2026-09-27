@@ -1199,20 +1199,19 @@ export class Session {
 
   /** 提案の採否。役に立ったかどうかが、次に何を考えるかを変える。 */
   async decide(id: string, verdict: 'accepted' | 'rejected'): Promise<Proposal | undefined> {
-    const target = this.proposals.find(id);
+    // 決まった提案は決め直さない（片づいた提案を開き直して、もう一度実行していた）。ファイルを読み直して、
+    // もう一方（画面と端末）が決めた分も見てから決める。
+    const target = await this.proposals.settle(id, verdict, { onlyOpen: true });
     if (!target) return undefined;
-    this.proposals.setStatus(target.id, verdict);
     const origin = this.#origin.get(target.id);
     if (origin) this.idle.recordVerdict(origin, verdict);
-    await this.proposals.save();
     await this.saveAutonomy();
     return target;
   }
 
   /** 提案を実行し終えたことにする。 */
   async completeProposal(id: string): Promise<void> {
-    this.proposals.setStatus(id, 'done');
-    await this.proposals.save();
+    await this.proposals.settle(id, 'done');
   }
 
   /** 思考の実績と日課の記録を残す。次の起動でも続きから考えられるように。 */

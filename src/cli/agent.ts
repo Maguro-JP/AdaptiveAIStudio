@@ -217,6 +217,7 @@ async function main(): Promise<void> {
       if (merged.length === 0) {
         console.log(c.green('  全員が問題なしと判断しました。\n'));
       }
+      const registered: { roleName: string; title: string; id: () => string }[] = [];
       for (const f of merged) {
         const also = f.alsoBy.length > 0 ? c.dim(`（${f.alsoBy.join('・')}も同意）`) : '';
         const added = (await getSession()).proposals.add({
@@ -227,9 +228,12 @@ async function main(): Promise<void> {
         });
         console.log(c.cyan(`  💡 [${f.roleName}] ${f.title}`) + also);
         console.log(c.dim(`     ${f.rationale}`));
-        if (added) console.log(c.dim(`     → 提案 ${added.id} として登録しました`));
+        if (added) registered.push({ roleName: f.roleName, title: f.title, id: () => added.id });
       }
       await (await getSession()).proposals.save();
+      // 番号は**保存した後に**出す。保存で画面の分と合わせるとき、ほぼ同時に足した提案と番号がぶつかれば振り直す。
+      // 先に出すと、その番号を打ったときに別の提案に当たる。
+      for (const r of registered) console.log(c.dim(`     → 「${r.title}」を提案 ${r.id()} として登録しました`));
       console.log();
     } finally {
       generating = undefined;
