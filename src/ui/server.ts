@@ -2213,7 +2213,7 @@ export class UiServer {
       if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
       const session = this.#session;
       if ((id === this.#conversationId && session && this.#mainBusy(session)) || this.#side.has(id)) {
-        return send(res, 409, { error: 'いま作業中です。終わってから消してください' });
+        return send(res, 409, { error: 'いま作業中です。消すのは、終わってからにしてください' });
       }
       await this.#conversations.remove(id);
       if (id === this.#conversationId) {
