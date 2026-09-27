@@ -57,6 +57,8 @@ describe('片づけるもの・片づけないもの', () => {
       join(undo, 'u1.json.123.6.tmp'),
       join(home, 'acks.json.123.1790000000000.k3j2h1.tmp'),
       join(home, 'harness-metrics.json.123.7.tmp'),
+      join(home, 'idle.json.123.8.tmp'),
+      join(home, 'duties.json.123.9.tmp'),
     ];
     for (const p of old) await writeFile(p, 'x');
     await writeFile(join(home, 'memory.jsonl'), '{}\n');

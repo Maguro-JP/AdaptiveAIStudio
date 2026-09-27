@@ -130,10 +130,31 @@ export class IdleScheduler {
   }
 
   restore(stats: ModeStat[]): void {
-    for (const s of stats) this.#stats.set(s.mode, s);
+    // 形の違う一件（`null` 等）は、その一件だけ除く。そのまま入れると、途中で投げて残りを読まず、次の保存で消していた。
+    if (!Array.isArray(stats)) return;
+    const valid = stats.filter(isStat);
+    for (const s of valid) this.#stats.set(s.mode, s);
     // 再起動しても間合いは引き継ぐ。立ち上げ直せば喋り出す、では意味がない。
-    const last = stats.map((s) => s.lastRunAt ?? 0).reduce((a, b) => Math.max(a, b), 0);
-    if (last > 0) this.#lastThoughtAt = last;
+    const last = valid.map((s) => s.lastRunAt ?? 0).reduce((a, b) => Math.max(a, b), 0);
+    if (last > 0) this.#lastThoughtAt = Math.max(this.#lastThoughtAt ?? 0, last);
+  }
+
+  /**
+   * 起動のときに読めなかった記録を、後から読めたときに足す。空で始めた間に数えた分は、その上に積む。
+   * 置き換えると、その間の分か、それまでの実績のどちらかが消える。
+   */
+  absorb(stats: unknown): void {
+    if (!Array.isArray(stats)) return;
+    for (const base of stats.filter(isStat)) {
+      const now = this.#stats.get(base.mode);
+      if (!now) { this.#stats.set(base.mode, base); continue; }
+      now.runs += base.runs; now.produced += base.produced; now.accepted += base.accepted;
+      now.rejected += base.rejected; now.spent += base.spent;
+      const last = Math.max(now.lastRunAt ?? 0, base.lastRunAt ?? 0);
+      if (last > 0) now.lastRunAt = last;
+    }
+    const last = [...this.#stats.values()].map((s) => s.lastRunAt ?? 0).reduce((a, b) => Math.max(a, b), 0);
+    if (last > 0) this.#lastThoughtAt = Math.max(this.#lastThoughtAt ?? 0, last);
   }
 
   /** 次に考えてよくなる時刻。まだなら undefined。 */
@@ -283,6 +304,16 @@ export class IdleScheduler {
     this.#stats.set(id, created);
     return created;
   }
+}
+
+/** 暇の実績の形。回数は有限で 0 以上、最後の時刻は数か無し。 */
+function isStat(v: unknown): v is ModeStat {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as Record<string, unknown>;
+  const count = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0;
+  return typeof r.mode === 'string' && count(r.runs) && count(r.produced) && count(r.accepted)
+    && count(r.rejected) && count(r.spent)
+    && (r.lastRunAt === undefined || (typeof r.lastRunAt === 'number' && Number.isFinite(r.lastRunAt)));
 }
 
 /** 人が読む形の要約。どの考え方が効いているかを見るため。 */

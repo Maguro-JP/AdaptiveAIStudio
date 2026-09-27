@@ -14,13 +14,13 @@
  * セッションを作るときは**同じものを渡す**（二つ持つと食い違う）。
  */
 import { join } from 'node:path';
-import { readFile } from 'node:fs/promises';
 import { ProposalQueue } from '../agent/proposals.ts';
-import { IdleScheduler, type ModeStat } from '../harness/idle.ts';
+import { IdleScheduler } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES } from '../harness/idle-modes.ts';
-import { DutyRoster, type DutyRecord } from '../harness/duties.ts';
+import { DutyRoster } from '../harness/duties.ts';
 import { BUILTIN_DUTIES } from '../harness/builtin-duties.ts';
 import { stateDir } from './home.ts';
+import { loadJournal, saveJournal } from './journal-file.ts';
 import type { AasConfig } from '../config.ts';
 
 export interface Journals {
@@ -30,7 +30,7 @@ export interface Journals {
 }
 
 /**
- * 読み込む。**無いのは正常**なので、黙って空で始める。
+ * 読み込む。**無いのは正常**なので、黙って空で始める。書くのは `saveJournals`。
  *
  * 一度読んだら使い回す。画面は 5 秒ごとに見に来るので、そのたびに
  * ディスクを読み直さない。
@@ -50,14 +50,25 @@ export async function loadJournals(config: AasConfig): Promise<Journals> {
       maxPerChange: initCfg.maxPerChange ?? 2,
     },
   );
-  try {
-    idle.restore(JSON.parse(await readFile(join(stateDir(), 'idle.json'), 'utf8')) as ModeStat[]);
-  } catch { /* 記録が無いのは正常 */ }
+  // 無いのは正常。在るのに読めないときは空で始め、保存の前に読み直す（`journal-file.ts`）。
+  await loadJournal(idle, join(stateDir(), 'idle.json'), (v) => idle.restore(v as never));
 
   const duties = new DutyRoster(BUILTIN_DUTIES);
-  try {
-    duties.restore(JSON.parse(await readFile(join(stateDir(), 'duties.json'), 'utf8')) as DutyRecord[]);
-  } catch { /* 記録が無いのは正常 */ }
+  await loadJournal(duties, join(stateDir(), 'duties.json'), (v) => duties.restore(v as never));
 
   return { proposals, idle, duties };
+}
+
+/**
+ * 暇の実績と当番の記録を書く。起動のときに読めなかったものは、読み直せるまで書かない
+ * （空で始めた分で、それまでの記録を上書きしない）。
+ */
+export async function saveJournals(j: Pick<Journals, 'idle' | 'duties'>): Promise<string[]> {
+  const { idle, duties } = j;
+  const unsaved: string[] = [];
+  const idlePath = join(stateDir(), 'idle.json');
+  if (!await saveJournal(idle, idlePath, () => JSON.stringify(idle.stats(), null, 2), (v) => idle.absorb(v))) unsaved.push(idlePath);
+  const dutiesPath = join(stateDir(), 'duties.json');
+  if (!await saveJournal(duties, dutiesPath, () => JSON.stringify(duties.records(), null, 2), (v) => duties.absorb(v))) unsaved.push(dutiesPath);
+  return unsaved; // 書けなかったもの。黙って止め続けないよう、呼んだ側が言う
 }
