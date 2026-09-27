@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile, readdir, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { readJournal, loadJournal, saveJournal } from '../src/core/journal-file.ts';
+import { readJournal, loadJournal, saveJournal, writeWhole } from '../src/core/journal-file.ts';
 import { IdleScheduler } from '../src/harness/idle.ts';
 import { BUILTIN_IDLE_MODES } from '../src/harness/idle-modes.ts';
 import { DutyRoster } from '../src/harness/duties.ts';
@@ -175,5 +175,34 @@ describe('起動から保存まで（loadJournals → saveJournals）', () => {
     } finally {
       if (saved === undefined) delete process.env.AAS_STATE_DIR; else process.env.AAS_STATE_DIR = saved;
     }
+  });
+});
+
+describe('丸ごと書く（画面の並び・見た目）', () => {
+  test('**並んで呼んだら、呼んだ順に書く**（先の書き込みが遅くても、後の分を上書きしない）', async () => {
+    const dir = await tempDir('aas-journal-');
+    const path = join(dir, 'layout.json');
+    const slowFirst = async (tmp: string, text: string) => {
+      if (text === 'first') await new Promise((r) => setTimeout(r, 80));
+      await writeFile(tmp, text);
+    };
+    await Promise.all(['first', 'second'].map((t) => writeWhole(path, t, { write: slowFirst })));
+    assert.equal(await readFile(path, 'utf8'), 'second');
+  });
+
+  test('**付け替えが EPERM・EBUSY で一時的に断られても、待って付け替え直す。続けば諦めて一時ファイルを残さない**', async () => {
+    const dir = await tempDir('aas-journal-');
+    const path = join(dir, 'layout.json');
+    let n = 0;
+    const flaky = async (from: string, to: string) => {
+      if (n++ < 2) throw Object.assign(new Error('locked'), { code: n === 1 ? 'EPERM' : 'EBUSY' });
+      const { rename } = await import('node:fs/promises');
+      await rename(from, to);
+    };
+    assert.equal(await writeWhole(path, 'x', { rename: flaky }), true);
+    assert.equal(await readFile(path, 'utf8'), 'x');
+    assert.equal(await writeWhole(path, 'y', { rename: async () => { throw Object.assign(new Error('locked'), { code: 'EPERM' }); } }), false);
+    assert.equal(await readFile(path, 'utf8'), 'x');
+    assert.deepEqual(await readdir(dir), ['layout.json']);
   });
 });

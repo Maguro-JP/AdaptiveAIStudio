@@ -421,7 +421,7 @@ async function loadTheme() {
     sel.append(o);
   }
   applyTheme(r.theme, r.vars);
-  showRepairs(r.repairs);
+  showRepairs(r.repairs, '見た目');
 }
 
 $('themes').onchange = async (e) => {
@@ -429,7 +429,7 @@ $('themes').onchange = async (e) => {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ id: e.target.value }),
   }, '色を変えられませんでした');
-  if (!r) return;
+  if (!saved(r, 'theme', '色を変えられませんでした')) return;
   applyTheme(r.theme, r.vars);
 };
 
@@ -492,14 +492,14 @@ $('editTheme').onclick = () => {
     if ($('themeEditor').returnValue !== 'save') {
       // 戻す。触っただけで決まってしまわないように。
       const r = await askJson('/api/theme', undefined, '色を戻せませんでした');
-      if (r) applyTheme(r.theme, r.vars);
+      if (saved(r, 'theme', '色を戻せませんでした')) applyTheme(r.theme, r.vars);
       return;
     }
     const r = await askJson('/api/theme', {
       method: 'PUT', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ...draft, base: before.id, id: 'custom', name: '自分の色' }),
     }, '色を保存できませんでした');
-    if (!r) return;
+    if (!saved(r, 'theme', '色を保存できませんでした')) return;
     applyTheme(r.theme, r.vars);
     if (r.repairs?.length) {
       // 受け取れなかった値は黙って捨てない。なぜ効かないのか分からなくなる。
@@ -513,9 +513,9 @@ $('editTheme').onclick = () => {
 
 async function load() {
   const r = await askJson('/api/layout', undefined, '配置を読めませんでした');
-  if (!r) return;
+  if (!saved(r, 'layout', '配置を読めませんでした')) return;
   layout = r.layout;
-  showRepairs(r.repairs);
+  showRepairs(r.repairs, '画面の並び');
   const sel = $('presets');
   sel.replaceChildren();
   for (const p of r.presets) {
@@ -532,17 +532,44 @@ async function save(next) {
     method: 'PUT', headers: { 'content-type': 'application/json' },
     body: JSON.stringify(next),
   }, '配置を保存できませんでした');
-  if (!r) return undefined;
+  if (!saved(r, 'layout', '配置を保存できませんでした')) return undefined;
   layout = r.layout;
-  showRepairs(r.repairs);
+  showRepairs(r.repairs, '画面の並び');
   return r;
 }
 
-function showRepairs(repairs) {
+/**
+ * 返事に欲しいもの（`layout`・`theme`）が入っているか。入っていなければ、向こうが返した文を出して false。
+ * 保存に失敗すると `{ error }` が返る。そのまま `layout = r.layout` にすると、次の描画で止まり、
+ * 「途中で止まりました」としか出ず、なぜ保存できなかったかが見えなかった。
+ */
+function saved(r, key, what) {
+  if (!r) return false;
+  if (r[key]) return true;
+  showCrash(what, r.error ?? '返事に中身がありませんでした');
+  return false;
+}
+
+/**
+ * 直したことは黙らない。黙って直すと、次も同じ壊れ方をする。
+ * 中身を、押すまで消えない帯に出す（状態の欄はすぐ「つながっています」に戻るので、件数だけでは見落とす）。
+ */
+function showRepairs(repairs, what) {
   if (!repairs || repairs.length === 0) return;
-  // 直したことは黙らない。黙って直すと、次も同じ壊れ方をする。
-  console.warn('配置を直しました:', repairs.map((x) => x.detail));
-  $('status').textContent = `配置を直しました（${repairs.length}件）`;
+  console.warn(`${what}を直しました:`, repairs.map((x) => x.detail));
+  $('status').textContent = `${what}を直しました（${repairs.length}件）`;
+  // 止まった知らせの帯（`#crashNote`）とは分ける。一つを使い回すと、起動直後の「まだ話せません」等に上書きされて消えた。
+  let box = document.getElementById('repairNote');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'repairNote';
+    box.className = 'crash-note warn';
+    box.onclick = () => box.remove();
+    const shell = document.querySelector('.shell');
+    if (shell) shell.before(box); else document.body.append(box);
+  }
+  const line = `${what}を直しました: ${repairs.map((x) => x.detail).join(' ／ ')}`;
+  box.textContent = box.textContent ? `${box.textContent.replace(/（押すと消えます）$/, '')} ／ ${line}（押すと消えます）` : `${line}（押すと消えます）`;
 }
 
 async function refreshState() {
@@ -1489,6 +1516,7 @@ $('editor').addEventListener('close', async () => {
     return;
   }
   const r = await save(parsed);
+  if (!r) return;
   render();
   if (r.repairs?.length) {
     $('json').value = JSON.stringify(r.layout, null, 2);
@@ -1502,7 +1530,7 @@ $('presets').onchange = async (e) => {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ id: e.target.value }),
   }, '配置を変えられませんでした');
-  if (!r) return;
+  if (!saved(r, 'layout', '配置を変えられませんでした')) return;
   layout = r.layout;
   render();
 };

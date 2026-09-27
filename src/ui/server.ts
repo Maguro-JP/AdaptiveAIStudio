@@ -31,6 +31,7 @@ import { canRun } from '../core/which.ts';
 import { saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises';
+import { readJournal, writeWhole, type JournalRead } from '../core/journal-file.ts';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { revealCommand } from '../core/opener.ts';
@@ -3672,36 +3673,41 @@ export class UiServer {
   }
 }
 
+/**
+ * 画面の並びを読む。まだ無ければ既定。**壊れていた・読めなかったときも既定で出すが、黙らない**（直した記録に書く）。
+ * 黙って既定に戻すと、利用者は並びが消えたことに気づかず、次に動かした時点で上書きされる。
+ * 壊れたファイルは `layout.json.broken-<時刻>` へ移してあるので、中身は手で拾える。
+ */
 export async function loadLayout(): Promise<{ layout: Layout; repairs: { detail: string }[] }> {
-  try {
-    return repairLayout(JSON.parse(await readFile(LAYOUT_PATH(), 'utf8')));
-  } catch {
-    // まだ配置を決めていないだけ。既定から始める。
-    // 何も無い（入れた直後）なら、既定の配置。名前を決め打ちにしていて、
-    // 既定を Cursor の形に変えたあとも、入れた直後だけ古い形が出ていた。
-    return { layout: preset(DEFAULT_LAYOUT_ID), repairs: [] };
-  }
+  const r = await readJournal(LAYOUT_PATH());
+  if (r.kind === 'value') return repairLayout(r.value);
+  // 何も無い（入れた直後）なら、既定の配置。名前を決め打ちにしていて、
+  // 既定を Cursor の形に変えたあとも、入れた直後だけ古い形が出ていた。
+  return { layout: preset(DEFAULT_LAYOUT_ID), repairs: startedFromDefault(r, '画面の並び', 'layout.json') };
 }
 
 export async function loadTheme(): Promise<{ theme: Theme; repairs: { detail: string }[] }> {
-  try {
-    return repairTheme(JSON.parse(await readFile(THEME_PATH(), 'utf8')));
-  } catch {
-    // まだ選んでいないだけ。既定から始める。
-    return { theme: baseTheme('slate'), repairs: [] };
-  }
+  const r = await readJournal(THEME_PATH());
+  if (r.kind === 'value') return repairTheme(r.value);
+  return { theme: baseTheme('slate'), repairs: startedFromDefault(r, '見た目', 'theme.json') };
+}
+
+function startedFromDefault(r: JournalRead, what: string, name: string): { detail: string }[] {
+  if (r.kind === 'unreadable') return [{ detail: `保存していた${what}（${name}）が読めなかったので、既定で出しています。ここで変えると上書きします` }];
+  if (r.kind === 'missing' && r.broken) return [{ detail: `保存していた${what}が壊れていたので、既定で始めました。元のファイルは ${name}.broken-<時刻> として残しています` }];
+  return [];
 }
 
 export async function saveTheme(theme: Theme): Promise<void> {
   const path = THEME_PATH();
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(theme, null, 2) + '\n', 'utf8');
+  if (!await writeWhole(path, JSON.stringify(theme, null, 2) + '\n')) throw new Error(`見た目を保存できませんでした: ${path}`);
 }
 
 export async function saveLayout(layout: Layout): Promise<void> {
   const path = LAYOUT_PATH();
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(layout, null, 2) + '\n', 'utf8');
+  if (!await writeWhole(path, JSON.stringify(layout, null, 2) + '\n')) throw new Error(`画面の並びを保存できませんでした: ${path}`);
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {

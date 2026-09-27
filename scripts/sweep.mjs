@@ -40,11 +40,14 @@ const bad = [];
  * 変わる**（一度通って、次に落ちた）。
  */
 let expectingRefusal = false;
+/** わざと保存を失敗させている間（500 を返させている口）。その 500 は不具合として数えない。 */
+let expectingSaveFailure = false;
 p.on('pageerror', (e) => bad.push(`落ちた: ${e.message}`));
 p.on('console', (m) => {
   if (m.type() !== 'error') return;
   if (noModel && m.text().includes('503')) return;
   if (expectingRefusal && /\b(409|501)\b/.test(m.text())) return;
+  if (expectingSaveFailure && /\b500\b/.test(m.text())) return;
   bad.push(`画面のエラー: ${m.text()}`);
 });
 p.on('response', (r) => {
@@ -55,6 +58,7 @@ p.on('response', (r) => {
   // **起こし直してもらえない入口では、断るのが正しい。**作業中の 409 も同じ。
   // ここで止めると誰も起こさず、二度と戻らない（実際にそうなっていた）。
   if (expectingRefusal && [409, 501].includes(r.status()) && at === '/api/restart') return;
+  if (expectingSaveFailure && r.status() === 500 && ['/api/theme/preset', '/api/layout/preset'].includes(at)) return;
   bad.push(`${r.status()} ${at}`);
 });
 
@@ -1699,6 +1703,74 @@ await check('会話が空のとき、押せる例が出る', async () => {
   // 押しただけで送っていないこと（会話に何も出ていない）。
   if (await p.locator('.log .asked').count() > 0) throw new Error('押しただけで送っている');
   await p.locator('.chat textarea').first().fill('');
+});
+
+/*
+ * **保存に失敗したら、向こうが返した文を出し、画面は止めない。**
+ *
+ * 失敗すると `{ error }` が返る。これを受け取った画面が `layout = r.layout`（undefined）とし、
+ * 次の描画で止まって「途中で止まりました」としか出ていなかった。口を横取りして 500 を返させる。
+ */
+await check('並びや色の保存に失敗したら、その文を出して止まらない', async () => {
+  expectingSaveFailure = true;
+  try {
+    for (const [route, select, said] of [
+      ['**/api/theme/preset', 'themes', 'SWEEP-色を保存できません'],
+      ['**/api/layout/preset', 'presets', 'SWEEP-並びを保存できません'],
+    ]) {
+      await p.route(route, (r) => r.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: said }) }));
+      await p.evaluate((id) => {
+        const s = document.getElementById(id);
+        const other = [...s.options].find((o) => o.value !== s.value);
+        if (!other) throw new Error(`${id} に切り替え先が無い`);
+        s.value = other.value;
+        s.dispatchEvent(new Event('change'));
+      }, select);
+      await p.waitForTimeout(800);
+      await p.unroute(route);
+      const note = p.locator('#crashNote');
+      if (await note.count() === 0) throw new Error(`${select}: 失敗を言っていない`);
+      const text = await note.innerText();
+      if (!text.includes(said)) throw new Error(`${select}: 向こうの文を出していない: ${text.slice(0, 60)}`);
+      await note.click();
+    }
+    // 止まっていない: 並びは描けたまま
+    if (await p.locator('#root').innerText().then((t) => t.length === 0)) throw new Error('並びが消えた');
+  } finally {
+    expectingSaveFailure = false;
+  }
+});
+
+/*
+ * **読み込みで直したことは、押すまで消えない帯に出す。**
+ *
+ * 保存していた並びや色が壊れていた・読めなかったときは、既定で出して `repairs` にそう書く。
+ * それを状態の欄に件数だけ出していたので、すぐ「つながっています」に書き換わり、見えなかった。
+ * 見た目の分も「配置を直しました」と出ていた。口を横取りして、直した記録を足して返させる。
+ */
+await check('読み込みで直したことを、押すまで消えない帯に出す', async () => {
+  for (const [route, key, said, what] of [
+    ['**/api/theme', 'theme', 'SWEEP-見た目が壊れていた', '見た目を直しました'],
+    ['**/api/layout', 'layout', 'SWEEP-並びが壊れていた', '画面の並びを直しました'],
+  ]) {
+    await p.route(route, async (r) => {
+      if (r.request().method() !== 'GET') return r.continue();
+      const real = await r.fetch();
+      const body = await real.json();
+      if (!body[key]) throw new Error(`${route} の返事に ${key} が無い`);
+      await r.fulfill({ response: real, json: { ...body, repairs: [{ detail: said }] } });
+    });
+    await p.reload({ waitUntil: 'load' });
+    await opened();
+    await p.waitForTimeout(1500); // 状態の欄が「つながっています」に戻った後でも残っていること
+    await p.unroute(route);
+    const note = p.locator('#repairNote');
+    if (await note.count() === 0) throw new Error(`${what}: 帯が出ていない`);
+    const text = await note.innerText();
+    if (!text.includes(said)) throw new Error(`${what}: 中身を出していない: ${text.slice(0, 60)}`);
+    if (!text.includes(what)) throw new Error(`何を直したかを取り違えている: ${text.slice(0, 60)}`);
+    await note.click();
+  }
 });
 
 if (shot) await p.screenshot({ path: shot, fullPage: false });
