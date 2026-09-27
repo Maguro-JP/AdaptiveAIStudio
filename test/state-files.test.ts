@@ -3,7 +3,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, readFile, readdir } from 'node:fs/promises';
+import { writeFile, readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { dutyBoard } from '../src/ui/state.ts';
@@ -19,6 +19,14 @@ describe('当番の記録', () => {
     const mine = board.find((b) => b.id === id)!;
     assert.equal(mine.completions, 3);
     assert.equal(mine.missed, 1);
+  });
+
+  test('**仕込まれた当番の記録でも、回数が数でない一件は使わない**（使うと、足したときに "many1" という文字になる）', () => {
+    const id = BUILTIN_DUTIES[1]!.id;
+    const board = dutyBoard([{ dutyId: id, completions: 'many', missed: 0, lastPeriod: 'x' }] as never, Date.now());
+    const mine = board.find((b) => b.id === id)!;
+    assert.equal(typeof mine.completions, 'number');
+    assert.equal(mine.completions, 0);
   });
 });
 
@@ -37,6 +45,29 @@ describe('マシンの検出結果', () => {
       assert.ok((await readdir(dir)).every((n) => !n.endsWith('.tmp')), '一時ファイルが残った');
     });
   }
+
+  test('RAM が 0 の検出結果は、検出し直す', async () => {
+    const dir = await tempDir('aas-machine-zero-');
+    const path = join(dir, 'machine.json');
+    await writeFile(path, JSON.stringify({ vramBytes: 0, ramBytes: 0, ramBandwidthBytesPerSec: 1, vramBandwidthBytesPerSec: 0, bandwidthEstimated: true }));
+    assert.ok((await new MachineCache(path).get()).ramBytes > 0);
+  });
+
+  test('**この機械で検出した結果（GPU が無い形も）は、二度目は書き直さずに使う**', async () => {
+    const dir = await tempDir('aas-machine-real-');
+    const path = join(dir, 'machine.json');
+    const first = await new MachineCache(path).get();
+    const ino = (await stat(path)).ino;
+    const again = await new MachineCache(path).get();
+    assert.deepEqual(again, first);
+    assert.equal((await stat(path)).ino, ino, '正しい検出結果を退けて書き直した');
+    // 製品の GPU の無い形（gpuName が無く、ディスクの帯域が在る）もそのまま使う。
+    const noGpu = { vramBytes: 0, ramBytes: 8 * 2 ** 30, ramBandwidthBytesPerSec: 40 * 2 ** 30, vramBandwidthBytesPerSec: 0, diskBandwidthBytesPerSec: 2 ** 30, bandwidthEstimated: true };
+    await writeFile(path, JSON.stringify(noGpu));
+    const ino2 = (await stat(path)).ino;
+    assert.deepEqual(await new MachineCache(path).get(), noGpu);
+    assert.equal((await stat(path)).ino, ino2);
+  });
 
   test('正しい検出結果は、検出し直さずにそのまま使う（対）', async () => {
     const dir = await tempDir('aas-machine-ok-');

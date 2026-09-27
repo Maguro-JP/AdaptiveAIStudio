@@ -89,6 +89,8 @@ function run(cmd: string, args: string[]): Promise<string | undefined> {
   });
 }
 
+let tmpSeq = 0;
+
 /** 検出結果は毎回取らずキャッシュする。ハードは頻繁に変わらない。 */
 export class MachineCache {
   readonly #path: string;
@@ -103,7 +105,7 @@ export class MachineCache {
     const detected = await detectMachine();
     await mkdir(dirname(this.#path), { recursive: true }).catch(() => undefined);
     // 一時ファイルに書いてから置き換える（書きかけで落ちると、壊れた検出結果が残る）。
-    const tmp = `${this.#path}.${process.pid}.${Date.now()}.tmp`;
+    const tmp = `${this.#path}.${process.pid}.${++tmpSeq}.tmp`; // 同じプロセスで並んで呼ばれても名前をぶつけない
     await writeFile(tmp, JSON.stringify(detected, null, 2), 'utf8')
       .then(() => rename(tmp, this.#path))
       .catch(() => rm(tmp, { force: true }).catch(() => undefined));
