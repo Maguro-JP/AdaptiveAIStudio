@@ -12,7 +12,7 @@ import { MachineCache, describeMachine } from '../runtime/machine.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { resolveCounting } from '../core/counting.ts';
 import { modelsDirNote, programDirNote } from './doctor-paths.ts';
-import { findInstalled } from '../runtime/llama-install.ts';
+import { findInstalled, answeredVersion } from '../runtime/llama-install.ts';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { join } from 'node:path';
 import { readdir } from 'node:fs/promises';
@@ -268,7 +268,7 @@ if (llamaPath) {
    * 走らせて決めているのに、doctor だけが見ていなかった。
    */
   const said = await runOnce(llamaPath, ['--version']);
-  if (/version/i.test(said)) add('llama-server', 'ok', `${llamaPath}（${said.trim().split('\n')[0]}）`);
+  if (answeredVersion(said)) add('llama-server', 'ok', `${llamaPath}（${said.trim().split('\n')[0]}）`);
   else {
     add('llama-server', 'bad', `在りますが、動きません: ${llamaPath}`,
       `${said.trim().slice(0, 200)}\n\`${how('llama')}\` で取り直せます。`);

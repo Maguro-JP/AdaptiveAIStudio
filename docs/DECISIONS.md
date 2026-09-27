@@ -203,6 +203,7 @@
 - やり残しの「×」を、押した直後に戻せる形にする
 - 消した会話を、立ち上げ直すまでは戻せる形にする
 - 網の失敗の種類を、文の中の場所（パス・URL）の字で取り違えない
+- モデルを読めなかったときと llama-server の版の見分けも、場所の字で取り違えない
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -9364,3 +9365,28 @@ sweep の「会話を消す」に戻すと文の幅を足した。すぐ消す�
 - 試験: 「tls」「ssl」を含む一時フォルダ・Windows のパス・名前に `timeout` `ECONNRESET` を含む URL で取り違えないこと、場所を
   除いても本当の理由（secure TLS connection）は拾うこと。直す前の形で落ちることを見てから直した
 触る場所: `src/runtime/net-why.ts`、`test/describe-net.test.ts`
+
+## 2026-09-28  モデルを読めなかったときと llama-server の版の見分けも、場所の字で取り違えない
+
+前の周で直した形（失敗の文の全体に正規表現を当て、文に入る場所の字で取り違える）を、ほかの所から探した。
+
+- モデルを読み込めなかったときの案内（`looksLikeBrokenModelFile`）: `/gguf|magic|size|…/i` を文の全体に当てていた。文にはモデルの
+  場所（`….gguf`）が入るので、ほぼいつも「ファイルが途中までしか落ちていない。消して取り直してください」と言っていた。読む側
+  （node-llama-cpp）で止まっているときに数 GB を取り直させても直らない → 場所を除いた残りを、決め手になる句だけで見る
+  （`invalid magic`・`expected 'GGUF'`・`file bounds`・`corrupted`・`incomplete` など。実物の文から取った）
+- `llama-server --version` が動いたか（`answeredVersion`、doctor と selftest）: 出力に「version」が在るかで見ていた。動かなかったときの
+  出力（`Permission denied` など）には実行ファイルの場所が入るので、保存先の名前に「version」が入っていると、動かないのに「動く」と
+  言っていた → 版の行（`version: 4585 (…)`）そのものを見る
+- 押す前の読み直しで挙がって直したもの: はじめは場所を除いて同じ語（`gguf` など）で見ていた。llama.cpp の行の頭には
+  `gguf_init_from_file` のような関数名が付くので、ファイルが無いときも「消して取り直して」のままだった。`size` を絞ったことで、
+  途中までしか落ちていないときの llama.cpp の文（`not within the file bounds, model is corrupted or incomplete`）を拾えなくなった。
+  版の見分けは、GLIBC が合わないときの `` version `GLIBC_2.38' not found `` で「動く」と言った。試験の例が作った文ばかりで、
+  実物の形を見ていなかった → 試験は `test/fixtures/llama/` の実物の出力を `describeFailure` に通したものと、node-llama-cpp が
+  投げる文そのものを使う
+- 場所を除く処理は `src/runtime/net-why.ts` の `withoutPlaces` に一つにした
+- 見なかった所: HTTP の本文（quota など）、git の出力、GPU の名前、llama-server の起動時の出力（場所の入らない文の形）
+触る場所: `src/runtime/net-why.ts`（`withoutPlaces`）、`src/ui/server.ts`（`looksLikeBrokenModelFile`）、`src/runtime/llama-install.ts`
+（`answeredVersion`）、`src/cli/doctor.ts`、`src/cli/selftest.ts`
+試験: `test/model-load-hint.test.ts`（3 件）。直す前の形で落ちることを見てから直した。前の見分けに戻す・場所を除く所・
+`file bounds` などの句・版の行の見方を、それぞれ外すと落ちることを見た（場所を除く所は、はじめ例のパスに句が入っておらず、
+外しても落ちなかったので `models-incomplete\` の例を足した）

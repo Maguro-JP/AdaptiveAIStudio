@@ -11,6 +11,14 @@
 /** 文の中の場所。URL と、区切り（/ か \）を含む並び（Windows のドライブ名も）。 */
 const PLACES = /https?:\/\/\S+|(?:[A-Za-z]:)?(?:[\\/][^\s\\/（）()、。]+)+[\\/]?/g;
 
+/**
+ * 文から場所（パス・URL）を除く。失敗の種類を文で見分けるときは、これを通した残りに当てる
+ * （保存先の名前やモデルのファイル名の字で、見分けが変わらないように）。
+ */
+export function withoutPlaces(text: string): string {
+  return text.replace(PLACES, ' ');
+}
+
 export function describeNet(e: unknown): string {
   const chain: string[] = [];
   for (let at: unknown = e, depth = 0; at instanceof Error && depth < 5; depth += 1) {
@@ -24,7 +32,7 @@ export function describeNet(e: unknown): string {
    * **場所（パス・URL）の字では決めない。**失敗の文には保存先や配布元の場所が入る。一時フォルダの乱数に「tls」が並んだだけで、
    * 404 を「暗号化のやりとりで断られました」と言い、保存先の案内も落としていた。見分けるのは場所を除いた残りで。
    */
-  const said = m.replace(PLACES, ' ');
+  const said = withoutPlaces(m);
   const hit = (re: RegExp): boolean => re.test(said);
   if (hit(/terminated|aborted|ECONNRESET|socket hang up/i)) return '途中で切れました';
   if (hit(/ENOTFOUND|EAI_AGAIN|getaddrinfo/i)) return '配布元の名前を引けません（回線が繋がっていないようです）';
