@@ -1758,6 +1758,14 @@ await check('見た目を読めなかったら、その文を出して止まら�
     const text = await note.innerText();
     if (!text.includes('SWEEP-色を読めません')) throw new Error(`向こうの文を出していない: ${text.slice(0, 60)}`);
     if (text.includes('途中で止まりました')) throw new Error('止まった');
+    // 止まったことの知らせが出ている間、案内（まだ話せません）は二本目の帯に出る。一本目を押して下げたら、
+    // 二本目が一本目に繰り上がる（二本目だけが残って、次の案内と二本並ぶ形にしない）。
+    const more = p.locator('#crashNoteMore');
+    if (await more.count() === 0 || !(await more.innerText()).includes('まだ話せません')) throw new Error('案内を二本目に出していない');
+    await note.click();
+    await p.waitForTimeout(200);
+    if (await p.locator('#crashNoteMore').count() !== 0) throw new Error('一本目を下げても、二本目が残った');
+    if (!(await p.locator('#crashNote').innerText()).includes('まだ話せません')) throw new Error('二本目が一本目に繰り上がっていない');
   } finally {
     await p.unroute('**/api/theme');
     expectingSaveFailure = false;

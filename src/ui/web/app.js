@@ -72,6 +72,24 @@ let lastState = null;
  * これは受け手を書かなくてよいという話ではない（`web-catch.test.ts` が
  * 受け手の無い呼び出しの数を数えていて、増やせない）。最後の網。
  */
+/** 知らせの帯（一本目と二本目）。探す・消す側は、必ず両方を見る（一本目だけ見ると、二本目の案内が消えずに残る）。 */
+function crashNotes() {
+  return ['crashNote', 'crashNoteMore'].map((id) => document.getElementById(id)).filter(Boolean);
+}
+
+/** その文で始まる知らせの帯を下げる（二本とも見る）。 */
+function dropCrashNote(prefix) {
+  for (const box of crashNotes()) if (box.textContent.startsWith(prefix)) removeCrashNote(box);
+}
+
+/** 帯を下げる。一本目を下げたら、二本目を一本目に繰り上げる（二本目だけが残り、次の知らせと並んで二本になるのを避ける）。 */
+function removeCrashNote(box) {
+  box.remove();
+  if (box.id !== 'crashNote') return;
+  const more = document.getElementById('crashNoteMore');
+  if (more) more.id = 'crashNote';
+}
+
 /*
  * **止まったことの知らせ（bad）を、案内（warn）で上書きしない。**帯を一つ使い回していたので、起動直後に出た
  * 「色を読めませんでした」等を、すぐ後の「まだ話せません」が消していた（sweep で見つけた）。bad が出ている間は、
@@ -84,7 +102,7 @@ function showCrash(what, detail, tone = 'bad', action) {
     box = document.createElement('div');
     box.id = id;
     box.className = 'crash-note';
-    box.onclick = (e) => { if (e.target.tagName !== 'BUTTON') box.remove(); };
+    box.onclick = (e) => { if (e.target.tagName !== 'BUTTON') removeCrashNote(box); };
     // **被せない。**浮かせると、その下の押しボタン（パネルの ×、添えたものを外す ×）が
     // 押せなくなる（二度そうなった）。上の帯として流れの中に置き、中身を押し下げる。
     const shell = document.querySelector('.shell');
@@ -712,8 +730,7 @@ function listen() {
        */
       if (/^モデルのプロセスが落ちました/.test(e.text)) showCrash('モデルが落ちました', e.text, 'warn');
       if (/^読み込みました/.test(e.text)) {
-        const box = document.getElementById('crashNote');
-        if (box && box.textContent.startsWith('モデルが落ちました')) box.remove();
+        dropCrashNote('モデルが落ちました');
       }
     }
     if (e.type === 'conversations') void loadConversations();
@@ -1927,7 +1944,7 @@ function noteJobs(jobs) {
         ? `${fetching.detail}\n「読み直す」を押すと一覧に出ます。`
         : fetching.detail;
   }
-  const btn = document.querySelector('#crashNote .crash-action');
+  const btn = crashNotes().map((b) => b.querySelector('.crash-action')).find(Boolean);
   if (btn && fetching.state === 'running') btn.textContent = `取ってきています… ${fetching.detail}`;
 }
 
@@ -2222,8 +2239,7 @@ async function tellIfNotReady() {
     : '';
   if (r.ready) {
     // 話せるようになったなら、「まだ話せません」は下げる（取ってき終わったとき）。
-    const box = document.getElementById('crashNote');
-    if (box && box.textContent.startsWith('まだ話せません')) box.remove();
+    dropCrashNote('まだ話せません');
     // 話せるが、待たされそうなら先に言う（GPU なしで大きいモデルのとき）。
     if (configNote) showCrash('設定', configNote.trim(), 'warn');
     else if (r.heads) showCrash('先に一つ', r.heads, 'warn');
