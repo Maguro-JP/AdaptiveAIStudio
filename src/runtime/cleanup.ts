@@ -104,7 +104,7 @@ export async function findRemovable(opts: {
    * 状態のファイル（記憶・やり残し・段取り・了解・ハーネスの記録・戻り先）を置き換えるときの一時ファイル。置き換えられずに
    * 残ったもの。名前は `<元の名前>.<pid>.<番号か英数字（一つ以上）>.tmp`。会話と同じく、書いている最中のものを消さないよう 1 時間より古いものだけ。
    */
-  const STATE_TMP = /^(?:(?:memory|unfinished|goals)\.jsonl|(?:acks|harness-metrics|idle|duties|stride)\.json)\.\d+(?:\.[a-z0-9]+)+\.tmp$/;
+  const STATE_TMP = /^(?:(?:memory|unfinished|goals)\.jsonl|(?:acks|harness-metrics|metrics|idle|duties|stride)\.json)\.\d+(?:\.[a-z0-9]+)+\.tmp$/;
   const UNDO_TMP = /\.json\.\d+\.\d+\.tmp$/;
   const undoDir = join(stateDir(), 'undo');
   for (const [dir, shape] of [[stateDir(), STATE_TMP], [undoDir, UNDO_TMP]] as const) {

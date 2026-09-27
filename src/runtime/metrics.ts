@@ -5,9 +5,10 @@
  * 諸元から推測するより、使った結果を記録する方が正確。
  * 「効率の良い運用」は、この記録があって初めて成立する。
  */
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { ModelStats } from './efficiency.ts';
+import { loadJournal, saveJournal } from '../core/journal-file.ts';
 
 export interface Attempt {
   modelId: string;
@@ -30,15 +31,15 @@ export class MetricsStore {
     this.#path = path;
   }
 
+  /**
+   * 読む。無いのは正常（事前値で走り出す）。形の違う一件（`null`・数でない回数）はその一件だけ除く。
+   * 在るのに読めないときは空で始め、保存の前に読み直す（`src/core/journal-file.ts`）。
+   */
   async load(): Promise<void> {
-    try {
-      const raw = await readFile(this.#path, 'utf8');
-      const parsed = JSON.parse(raw) as ModelStats[];
-      this.#stats = new Map(parsed.map((s) => [s.modelId, s]));
-    } catch {
-      // 記録が無いのは正常。事前値で走り出す。
-      this.#stats = new Map();
-    }
+    this.#stats = new Map();
+    await loadJournal(this, this.#path, (v) => {
+      for (const s of validStats(v)) this.#stats.set(s.modelId, s);
+    });
   }
 
   get(modelId: string): ModelStats | undefined {
@@ -83,9 +84,22 @@ export class MetricsStore {
     return cur;
   }
 
+  /** 書く。一時ファイルから付け替える。起動のときに読めなかったなら、読めるまで書かない。 */
   async save(): Promise<void> {
     await mkdir(dirname(this.#path), { recursive: true });
-    await writeFile(this.#path, JSON.stringify(this.all(), null, 2), 'utf8');
+    await saveJournal(this, this.#path, () => JSON.stringify(this.all(), null, 2), (v) => {
+      // 読めなかった間に数えた分を、ファイルの分の上に足す。実測の値は、この間に測ったものがあればそちらを取る
+      for (const base of validStats(v)) {
+        const now = this.#stats.get(base.modelId);
+        if (!now) { this.#stats.set(base.modelId, base); continue; }
+        now.successes += base.successes;
+        now.failures += base.failures;
+        if (base.defects !== undefined) now.defects = (now.defects ?? 0) + base.defects;
+        now.measuredTps ??= base.measuredTps;
+        now.avgTokens ??= base.avgTokens;
+        now.loadSeconds ??= base.loadSeconds;
+      }
+    });
   }
 
   /** 利用者に見せる一覧。どの配置が実際に効いているかの判断材料。 */
@@ -116,4 +130,19 @@ export class MetricsStore {
     }
     return lines.join('\n');
   }
+}
+
+/** 実測の記録のうち、形の合う分だけ。配列でなければ空。 */
+function validStats(v: unknown): ModelStats[] {
+  return Array.isArray(v) ? v.filter(isModelStats) : [];
+}
+
+function isModelStats(v: unknown): v is ModelStats {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as Record<string, unknown>;
+  const count = (x: unknown) => typeof x === 'number' && Number.isInteger(x) && x >= 0;
+  const measure = (x: unknown) => x === undefined || (typeof x === 'number' && Number.isFinite(x) && x >= 0);
+  return typeof r.modelId === 'string' && count(r.successes) && count(r.failures)
+    && (r.defects === undefined || count(r.defects))
+    && measure(r.measuredTps) && measure(r.avgTokens) && measure(r.loadSeconds);
 }
