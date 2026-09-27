@@ -16,8 +16,10 @@
  * 広げるのは慎重に（三回続けて通ってから）、狭めるのは即座に。
  * 落ちる方が高くつくので、対称にしない。
  */
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { loadJournal, saveJournal } from '../core/journal-file.ts';
+import { inOrder } from '../core/in-order.ts';
 
 /** 歩幅。**符丁で持つ**（表示のときに日本語へ引き直す）。 */
 export type StrideSize = 'tiny' | 'small' | 'medium' | 'large';
@@ -112,44 +114,74 @@ export function firstStride(contextTokens: number): StrideSize {
   return 'tiny';
 }
 
-/** モデルごとの歩幅を、置き場に覚える。 */
+/**
+ * モデルごとの歩幅を、置き場に覚える。
+ *
+ * 読み書きは暇の実績と同じ形（`src/core/journal-file.ts`）。`null` や形の違う一件で止まらず、
+ * 在るのに読めないときは空の歩幅で上書きせず、書くのは一時ファイルから付け替える。
+ * 一歩ぶんの記録は一列に並べる（同じ回数から二つ数えて、片方を落とさない）。
+ */
 export class StrideBook {
   readonly #path: string;
   #cache?: Record<string, StrideRecord>;
+  #loading?: Promise<Record<string, StrideRecord>>;
 
   constructor(path: string) {
     this.#path = path;
   }
 
-  async #load(): Promise<Record<string, StrideRecord>> {
-    if (this.#cache) return this.#cache;
-    try {
-      const raw = await readFile(this.#path, 'utf8');
-      this.#cache = JSON.parse(raw) as Record<string, StrideRecord>;
-    } catch {
-      this.#cache = {};
-    }
-    return this.#cache;
+  #load(): Promise<Record<string, StrideRecord>> {
+    if (this.#cache) return Promise.resolve(this.#cache);
+    // 同時に呼ばれても一度だけ読む（二度読むと、後から読んだ分が先に数えた分を上書きする）
+    this.#loading ??= (async () => {
+      const all: Record<string, StrideRecord> = {};
+      await loadJournal(this, this.#path, (v) => Object.assign(all, validStrides(v)));
+      this.#cache = all;
+      return all;
+    })();
+    return this.#loading;
   }
 
   /** いまの歩幅。まだ測っていなければ、窓の広さから見当をつける。 */
   async get(model: string, contextTokens: number): Promise<StrideRecord> {
     const all = await this.#load();
-    return all[model] ?? { size: firstStride(contextTokens), streak: 0, ok: 0, ng: 0 };
+    // 自分で持つ名前だけを引く（`toString` のような名前で、入れ物の関数を返さない）
+    return Object.hasOwn(all, model) ? all[model]! : { size: firstStride(contextTokens), streak: 0, ok: 0, ng: 0 };
   }
 
   /** 一歩ぶんの結果を入れる。**通った跡で測る。** */
-  async record(model: string, contextTokens: number, ok: boolean): Promise<StrideRecord> {
-    const all = await this.#load();
-    const next = nextStride(await this.get(model, contextTokens), ok);
-    all[model] = next;
-    await mkdir(dirname(this.#path), { recursive: true });
-    await writeFile(this.#path, JSON.stringify(all, null, 2), 'utf8');
-    return next;
+  record(model: string, contextTokens: number, ok: boolean): Promise<StrideRecord> {
+    return inOrder(`${this.#path}#record`, async () => {
+      const all = await this.#load();
+      const next = nextStride(await this.get(model, contextTokens), ok);
+      all[model] = next;
+      await mkdir(dirname(this.#path), { recursive: true });
+      // 読めなかったファイルが後で読めたら、この間に測っていないモデルの分だけ取り込む（測った分が新しい）
+      await saveJournal(this, this.#path, () => JSON.stringify(all, null, 2), (v) => {
+        for (const [m, r] of Object.entries(validStrides(v))) if (!Object.hasOwn(all, m)) all[m] = r;
+      });
+      return next;
+    });
   }
 
   /** 覚えている分ぜんぶ。画面に出す。 */
   async all(): Promise<Record<string, StrideRecord>> {
     return { ...(await this.#load()) };
   }
+}
+
+/** 歩幅の記録のうち、形の合う分だけ。入れ物でなければ空。 */
+function validStrides(v: unknown): Record<string, StrideRecord> {
+  const out: Record<string, StrideRecord> = {};
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return out;
+  for (const [model, r] of Object.entries(v)) if (isStride(r)) out[model] = r;
+  return out;
+}
+
+function isStride(v: unknown): v is StrideRecord {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as Record<string, unknown>;
+  const count = (x: unknown) => typeof x === 'number' && Number.isInteger(x) && x >= 0;
+  return typeof r.size === 'string' && (ORDER as string[]).includes(r.size)
+    && count(r.streak) && count(r.ok) && count(r.ng);
 }
