@@ -8,6 +8,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { writeFile, readFile, readdir, mkdir, rm } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import {
   StrideBook, nextStride, firstStride, guideFor, strideText, type StrideRecord,
@@ -96,5 +97,53 @@ describe('歩幅を覚える', () => {
     assert.equal(r.ok, 2);
     assert.equal(r.ng, 1);
     assert.equal(r.size, 'tiny', '落ちたのに狭めていない');
+  });
+});
+
+describe('歩幅の記録ファイル', () => {
+  const good = { size: 'medium', streak: 1, ok: 4, ng: 0 };
+  for (const [name, text] of [['null', 'null'], ['文字', '"x"'], ['配列', '[1]']] as const) {
+    test(`**記録が${name}でも止めず、測ったら書き直す**`, async () => {
+      const dir = await tempDir('aas-stride-f-');
+      const path = join(dir, 'stride.json');
+      await writeFile(path, text);
+      const book = new StrideBook(path);
+      assert.equal((await book.get('m', 8192)).size, 'small');
+      await book.record('m', 8192, true);
+      assert.equal((JSON.parse(await readFile(path, 'utf8')) as Record<string, { ok: number }>).m!.ok, 1);
+    });
+  }
+
+  test('**形の違う一件（null・知らない歩幅・数でない回数）は除き、正しい一件は使う**', async () => {
+    const dir = await tempDir('aas-stride-f-');
+    const path = join(dir, 'stride.json');
+    await writeFile(path, JSON.stringify({ a: null, b: { ...good, size: 'huge' }, c: { ...good, ok: 'many' }, k: good }));
+    const book = new StrideBook(path);
+    assert.deepEqual(Object.keys(await book.all()), ['k']);
+    assert.equal((await book.get('b', 1000)).size, 'tiny', '知らない歩幅をそのまま使った');
+    assert.equal((await book.record('c', 1000, true)).ok, 1);
+  });
+
+  test('**在るのに読めないときは書かない。読めたら、測っていないモデルの分を残して書く**', async () => {
+    const dir = await tempDir('aas-stride-f-');
+    const path = join(dir, 'stride.json');
+    await mkdir(path); // 読めない（EISDIR）
+    const book = new StrideBook(path);
+    await book.record('m', 8192, true);
+    await rm(path, { recursive: true });
+    await writeFile(path, JSON.stringify({ k: good, m: { ...good, ok: 99 } }));
+    await book.record('m', 8192, true);
+    const saved = JSON.parse(await readFile(path, 'utf8')) as Record<string, { ok: number }>;
+    assert.deepEqual(saved.k, good, '読めなかった間の空で上書きした');
+    assert.equal(saved.m!.ok, 2, '測った分より古い記録を取った');
+    assert.deepEqual(await readdir(dir), ['stride.json']);
+  });
+
+  test('**並んで測っても数え落とさない**', async () => {
+    const dir = await tempDir('aas-stride-f-');
+    const path = join(dir, 'stride.json');
+    const book = new StrideBook(path);
+    await Promise.all(Array.from({ length: 5 }, () => book.record('m', 8192, false)));
+    assert.equal((await new StrideBook(path).get('m', 8192)).ng, 5);
   });
 });
