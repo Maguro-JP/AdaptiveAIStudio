@@ -353,7 +353,14 @@ export class Conversations {
     const body = messages.map((m) => `${JSON.stringify({ t: 'msg', at, m } satisfies MsgLine)}\n`).join('');
     // **前の行の途中に繋げない。**書いている最中に落ちると、改行の無い
     // 半端な行が残る。そこへ足すと、次の行まで巻き添えで読めなくなる。
-    await inOrder(path, async () => appendFile(path, (await endsWithNewline(path)) ? body : `\n${body}`, 'utf8'));
+    await inOrder(path, async () => {
+      /*
+       * 消した後に書き足しが来た（走っていた依頼の答えが、消した後に届いた）。元の場所に書くと、見出しの無い切れ端の会話が
+       * 一覧に出て、本物は同じ名前が在るので戻せなくなる。消した方へ足す（戻せば、その1ターンも一緒に戻る）。
+       */
+      const to = (await exists(path)) ? path : ((await this.#trashedLatest(id)) ?? path);
+      await appendFile(to, (await endsWithNewline(to)) ? body : `\n${body}`, 'utf8');
+    });
   }
 
   /**
@@ -399,10 +406,88 @@ export class Conversations {
     });
   }
 
-  /** 消す。無いものを消しても落ちない。 */
+  /**
+   * 消す。無いものを消しても落ちない。**すぐには消さず、`trash/` へ移す。**画面の「戻す」で戻せるように
+   * （押し間違えた会話は、ほかに写しが無い）。移したものは、次に立ち上げたときに本当に消す（`purgeTrash`）。
+   * 消したつもりの会話を、ディスクに長く残さない（秘密を書いてしまった会話を消す人がいる）。
+   *
+   * 移した先の名前には消した時刻を入れる（`<id>.<時刻>.jsonl`）。同じ会話を二度消しても、前に移したものを上書きしない。
+   */
   async remove(id: string): Promise<void> {
     const path = this.#path(id);
-    await inOrder(path, () => rm(path, { force: true }));
+    await inOrder(path, () => inOrder(this.#trash, async () => {
+      await mkdir(this.#trash, { recursive: true });
+      let at = Date.now();
+      while (await exists(join(this.#trash, `${id}.${at}.jsonl`))) at += 1;
+      try {
+        await renameRetrying(path, join(this.#trash, `${id}.${at}.jsonl`));
+      } catch (e) {
+        // 無いものを消すのは、落ちずに済ませる。無いのが元のファイルだと確かめてから（移す先が消えていても ENOENT になる）
+        if ((e as NodeJS.ErrnoException).code !== 'ENOENT' || await exists(path)) throw e;
+      }
+    }));
+  }
+
+  /**
+   * 消した会話を戻す。戻した名前を返す。
+   * - `gone`: 移した先に無い（立ち上げ直して本当に消えた、または消していない）
+   * - `already`: もう戻っている（別のタブで戻した）
+   *
+   * 同じ名前の会話が既に在るとき（消した後に同じ名前で作り直された）は、上書きせず、別の名前で戻す。
+   * 二度以上消していたら、最初に消したもの（元の本体）を戻す。
+   */
+  async restore(id: string): Promise<{ id: string } | 'gone' | 'already'> {
+    const path = this.#path(id);
+    return inOrder(path, () => inOrder(this.#trash, async () => {
+      const mine = (await this.#trashed()).filter((t) => t.id === id).sort((x, y) => x.at - y.at);
+      const from = mine[0];
+      if (!from) return (await exists(path)) ? 'already' : 'gone';
+      if (!(await exists(path))) {
+        await renameRetrying(from.path, path);
+        return { id };
+      }
+      // 別の名前で戻す。見出しの行の名前も書き換える（いま読む所は無いが、ファイルの名前と中の名前の食い違いを残さない）
+      const lines = (await readFile(from.path, 'utf8')).split('\n');
+      const other = newId();
+      const first = parse(lines[0] ?? '');
+      if (first?.t === 'meta') lines[0] = JSON.stringify({ ...first, id: other } satisfies MetaLine);
+      await writeFile(this.#path(other), lines.join('\n'), { encoding: 'utf8', flag: 'wx' });
+      await rm(from.path, { force: true });
+      return { id: other };
+    }));
+  }
+
+  /** 移した先に在るもの。名前の形の違うものは見ない。 */
+  async #trashed(): Promise<{ id: string; at: number; path: string }[]> {
+    const names = await readdir(this.#trash).catch(() => [] as string[]);
+    return names.flatMap((name) => {
+      const m = /^(.+)\.(\d+)\.jsonl$/.exec(name);
+      return m && ID_SHAPE.test(m[1]!) ? [{ id: m[1]!, at: Number(m[2]), path: join(this.#trash, name) }] : [];
+    });
+  }
+
+  /** 消した会話を本当に消す。立ち上げたときに呼ぶ。消した数を返す。 */
+  async purgeTrash(): Promise<number> {
+    return inOrder(this.#trash, async () => {
+      const names = await readdir(this.#trash).catch(() => [] as string[]);
+      let gone = 0;
+      for (const name of names) {
+        // 掴まれていたら少し待ってやり直す（Windows のウイルス対策）。消せなかったものは次に立ち上げたときにまた消す
+        const ok = await rm(join(this.#trash, name), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).then(() => true, () => false);
+        if (ok) gone += 1;
+      }
+      return gone;
+    });
+  }
+
+  /** 消した後に来た書き足しの行き先（最後に消したもの）。無ければ undefined。 */
+  async #trashedLatest(id: string): Promise<string | undefined> {
+    const mine = (await this.#trashed()).filter((t) => t.id === id).sort((x, y) => y.at - x.at);
+    return mine[0]?.path;
+  }
+
+  get #trash(): string {
+    return join(this.#dir, 'trash');
   }
 }
 
@@ -459,4 +544,22 @@ function isMessage(m: unknown): m is ProviderMessage {
   if (typeof m !== 'object' || m === null) return false;
   const r = m as { role?: unknown; content?: unknown };
   return typeof r.role === 'string' && ROLES.has(r.role) && typeof r.content === 'string';
+}
+
+async function exists(path: string): Promise<boolean> {
+  return stat(path).then(() => true, () => false);
+}
+
+/** 置き換え（`replaceWhole`）と同じく、掴まれていたら少し待って数回やり直す（Windows のウイルス対策・検索）。 */
+async function renameRetrying(from: string, to: string): Promise<void> {
+  for (let tries = 0; ; tries += 1) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (tries >= 10 || !(code === 'EPERM' || code === 'EACCES' || code === 'EBUSY')) throw e;
+      await new Promise((r) => setTimeout(r, 100 + tries * 50));
+    }
+  }
 }

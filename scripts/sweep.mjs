@@ -292,6 +292,17 @@ await check('会話を消す', async () => {
   const names = await p.locator('#sideSessions .side-row button').allInnerTexts();
   if (names.map((s) => s.trim()).includes(name)) throw new Error(`消えていない: ${name}`);
   if (await convRows().count() >= before) throw new Error('数が減っていない');
+  // 押し間違えは戻せる（本体は立ち上げ直すまで trash/ に持っている）。戻すと一覧に戻る
+  const note = p.locator('#sideSessions .side-note');
+  if (await note.count() === 0 || !(await note.innerText()).includes('を消しました')) throw new Error('消したことと、戻す口を出していない');
+  // 文字が在っても、幅が 0 に潰れていれば見えない（innerText は見えていなくても返る）。測って見る
+  const said = await note.locator('.grow').boundingBox();
+  if (!said || said.width < 40) throw new Error(`消した知らせの文が潰れて見えない（幅 ${said?.width ?? 0}px）`);
+  await note.locator('button', { hasText: '戻す' }).click();
+  await p.waitForTimeout(800);
+  const back = (await p.locator('#sideSessions .side-row button').allInnerTexts()).map((s) => s.trim());
+  if (!back.includes(name)) throw new Error(`戻していない: ${name}`);
+  if (await p.locator('#sideSessions .side-note').count() !== 0) throw new Error('戻したのに、消した知らせが残っている');
 });
 await check('送って返る', async () => {
   /*
@@ -1899,6 +1910,15 @@ await check('記憶を忘れた直後に、戻せる', async () => {
     await p.waitForTimeout(500);
     const after = await p.locator('#root').innerText();
     if (!after.includes('「試しの覚え」を忘れました')) throw new Error('忘れたことと、戻す口を出していない');
+    // 行ではなく文そのものの幅を測る（行は幅があっても、文が潰れていることがある）
+    const drawn = await p.locator('#root .row', { hasText: 'を忘れました' }).first().evaluate((row) => {
+      const text = [...row.childNodes].find((n) => n.nodeType === 3 && n.textContent.includes('を忘れました'));
+      if (!text) return 0;
+      const r = document.createRange();
+      r.selectNodeContents(text);
+      return r.getBoundingClientRect().width;
+    });
+    if (drawn < 40) throw new Error(`忘れた知らせの文が潰れて見えない（幅 ${drawn}px）`);
     const undo = p.locator('#root button', { hasText: '戻す' });
     if (await undo.count() === 0) throw new Error('戻す口が無い');
     await undo.first().click();
@@ -1966,6 +1986,8 @@ await check('やめたやり残しを、戻せる', async () => {
     await p.waitForTimeout(500);
     const side = await p.locator('#sideUnfinished').innerText();
     if (!side.includes('「SWEEP-やり残し」をやめました')) throw new Error(`やめたことと、戻す口を出していない: ${side.slice(0, 60)}`);
+    const said = await p.locator('#sideUnfinished .side-note .grow').boundingBox();
+    if (!said || said.width < 40) throw new Error(`やめた知らせの文が潰れて見えない（幅 ${said?.width ?? 0}px）`);
     if (await p.locator('#unfinishedSec').isHidden()) throw new Error('一覧が空になって、戻す口ごと隠れた');
     await p.locator('#sideUnfinished button', { hasText: '戻す' }).first().click();
     await p.waitForTimeout(500);

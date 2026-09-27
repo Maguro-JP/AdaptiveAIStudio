@@ -525,6 +525,10 @@ export class UiServer {
     const actual = await listenOrExplain(server, { port, host, what: '画面' });
     this.#url = `http://${host}:${actual}/`;
     await this.#pickInProcPort();
+    // 前に消した会話を本当に消す。消した直後は「戻す」で戻せるよう `trash/` に移してあるだけ（`Conversations.remove`）。
+    void this.#conversations.purgeTrash().then((n) => {
+      if (n > 0) this.broadcast({ type: 'log', level: 'info', text: `前に消した会話を ${n} 件、本当に消しました` });
+    }, () => undefined);
     // 前に渡された添付を片づける。その依頼が終われば要らない。
     // 溜めない。消したら、消した量を言う（黙って消さない）。
     void this.#attachments.sweep().then((freed) => {
@@ -2234,7 +2238,14 @@ export class UiServer {
       const id = url.searchParams.get('id') ?? '';
       if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
       const session = this.#session;
-      if ((id === this.#conversationId && session && this.#mainBusy(session)) || this.#side.has(id)) {
+      /*
+       * 走っている会話・順番待ちの会話・本体に載ったまま動いている会話は消さない。見ている会話（`#conversationId`）だけを
+       * 見ていたので、動いている間に別の会話を開いてから、動いている方を消せた。終わった答えが消した名前へ書かれて、
+       * 見出しの無い切れ端の会話ができていた。
+       */
+      const busy = session !== undefined && this.#mainBusy(session);
+      if ((busy && (id === this.#conversationId || id === this.#loadedId)) || id === this.#runningId
+        || this.#side.has(id) || this.#queue.some((q) => q.conversationId === id)) {
         return send(res, 409, { error: 'いま作業中です。消すのは、終わってからにしてください' });
       }
       await this.#conversations.remove(id);
@@ -2243,8 +2254,26 @@ export class UiServer {
         this.#saved = 0;
         this.#session?.reset();
       }
+      // 本体に載っている会話を消したら、載せたままにしない（次に載せた名前へ書く道が、消した会話へ書く）
+      if (id === this.#loadedId) {
+        this.#loadedId = undefined;
+        this.#session?.reset();
+      }
       this.broadcast({ type: 'conversations' });
       return send(res, 200, { removed: id });
+    }
+
+    // 消した会話を戻す（押し間違え）。立ち上げ直すまでは `trash/` に在る
+    if (path === '/api/conversations/restore' && req.method === 'POST') {
+      const body = await readBody(req) as { id?: unknown };
+      if (typeof body?.id !== 'string' || !ID_SHAPE.test(body.id)) return send(res, 400, { error: '会話の名前が正しくありません' });
+      const got = await this.#conversations.restore(body.id);
+      if (got === 'gone') return send(res, 404, { error: '戻せる会話がありません（立ち上げ直すと、消した会話は本当に消えます）', gone: true });
+      // 別のタブで戻した。戻っているので、失敗ではない
+      if (got === 'already') return send(res, 200, { restored: body.id, already: true });
+      this.broadcast({ type: 'conversations' });
+      // 同じ名前が在ったときは、別の名前で戻している
+      return send(res, 200, { restored: got.id });
     }
 
     if (path === '/api/conversations/messages' && req.method === 'GET') {
