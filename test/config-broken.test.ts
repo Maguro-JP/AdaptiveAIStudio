@@ -34,8 +34,9 @@ describe('壊れた設定', () => {
       const said = (e as Error).message;
       assert.match(said, /どこか\/aas\.config\.json/, 'ファイルを言っていない');
       assert.match(said, /4 行目/, `行を言っていない: ${said}`);
-      // 次の一手。**消せば動く**ことまで言う。
-      assert.match(said, /消せば/, '次の一手が無い');
+      // 次の一手。消させずに、名前を変えれば既定で動き中身は残る、まで言う。
+      assert.match(said, /名前を変えれば/, '次の一手が無い');
+      assert.doesNotMatch(said, /消せば/, '消す案内に戻っている');
     }
   });
 

@@ -4,7 +4,7 @@
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { INPROC_PORT } from './runtime/inproc.ts';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { loadEnvFile } from './core/env.ts';
 import { aasHome } from './core/home.ts';
 
@@ -435,7 +435,8 @@ export function parseConfigText(raw: string, path: string): Partial<AasConfig> {
       + `  ${lineNo} 行目のあたり: ${line.trim().slice(0, 80)}\n`
       + `  （${why}）\n`
       + '  よくあるのは、末尾のコンマと、閉じ忘れです。\n'
-      + '  直せないときは、このファイルを消せば既定で動きます（設定は画面からやり直せます）。',
+      // 消させない。名前を変えれば既定で動き、中身は残る（案内どおりに消した設定は戻らない）
+      + `  直せないときは、このファイルの名前を変えれば（例: ${basename(path)}.bak）既定で動きます。中身は残るので、あとで直して戻せます。`,
     );
   }
 }
