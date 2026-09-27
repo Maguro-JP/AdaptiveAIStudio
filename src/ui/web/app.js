@@ -987,9 +987,17 @@ async function loadMcpCatalog() {
       off.className = 'ghost';
       off.textContent = '外す';
       off.onclick = async () => {
+        off.disabled = true; // 二度押すと、二本目の「繋いでいません」が、外せた知らせを上書きする
         const off1 = await ask(`/api/mcp/connect?id=${encodeURIComponent(e.id)}`,
           { method: 'DELETE' }, `${e.name} を外せませんでした`);
-        if (!off1) return;
+        if (!off1) { off.disabled = false; return; }
+        // 断られたときは、外したと言わない（設定を書き換えられなかった・もう繋いでいない）。一覧は読み直す（もう外れていることがある）
+        if (!off1.ok) {
+          $('ghNote').textContent = off1.body?.error ?? `${e.name} を外せませんでした`;
+          off.disabled = false;
+          await loadMcpCatalog();
+          return;
+        }
         $('ghNote').textContent = `${e.name} を外しました。`;
         await loadMcpCatalog();
         await loadMcp();
@@ -1707,7 +1715,11 @@ async function commands() {
     add(`/${c.name}`, c.description + (c.source === 'skill' ? `（skill: ${c.path}）` : ''), () => ctx.prefill(`/${c.name} `));
   }
   add('中断する', '動いている依頼を止める', () => fetch('/api/abort', { method: 'POST' }).catch(() => undefined));
-  add('いま考えさせる', '暇なときの考えごとを今やる', () => fetch('/api/think', { method: 'POST' }).catch(() => undefined));
+  add('いま考えさせる', '暇なときの考えごとを今やる', async () => {
+    const r = await ask('/api/think', { method: 'POST' }, '考えさせられませんでした');
+    // 作業中は断られる（409）。黙らない
+    if (r && !r.ok) showCrash('考えさせられませんでした', r.body?.error ?? `${r.status}`, 'warn');
+  });
   add('入力へ移動', 'Ctrl+/', () => ctx.focusInput());
 
   // ファイル。**一つ一つのファイルは並べない。**

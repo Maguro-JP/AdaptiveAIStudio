@@ -58,6 +58,38 @@ export function linkify(text) {
  * 揃えるのは好みではなく、読み取りの速さの問題。
  * subgrid を使って、行の中の列を一覧全体で共有する。
  */
+/**
+ * 本体へ書き込みを頼む。断られた（400・404・409・500）ら本体の文を返す。**効いた顔をしない。**
+ * 成功は `{ ok: true, body }`、失敗は `{ ok: false, error }`（繋がらなかったときも失敗として返す）。
+ */
+async function tell(path, payload, what) {
+  try {
+    const r = await fetch(path, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+    });
+    const body = await r.json().catch(() => ({}));
+    return r.ok ? { ok: true, body } : { ok: false, error: body.error ?? `${what}（${r.status}）` };
+  } catch (e) {
+    return { ok: false, error: `${what}（${e?.message ?? e}）` };
+  }
+}
+
+/**
+ * 提案の採否を伝える。提案のパネルと会話の中のカードの両方から使う（片方だけ直して、もう片方に同じ不具合を残した）。
+ * 送っている間は「伝えています…」。断られたら本体の文と押す口を戻し、受け取られてから「着手します」と言う。
+ */
+async function decideProposal(id, verdict, menu, buttons) {
+  menu.replaceChildren(el('span', 'dim', '伝えています…'));
+  const got = await tell('/api/proposal', { id, verdict }, '伝えられませんでした');
+  if (!got.ok) {
+    menu.replaceChildren(el('span', 'warn', got.error), ...buttons);
+    return false;
+  }
+  menu.replaceChildren(el('span', 'dim', verdict === 'accepted' ? '着手します…' : '却下しました'));
+  return true;
+}
+
 function rows(items, render, columns = 3) {
   const box = document.createElement('div');
   box.className = 'rows';
@@ -913,13 +945,7 @@ export const PANELS = {
         const menu = el('div', 'ask-menu');
         const yes = el('button', 'primary', 'やってもらう');
         const no = el('button', '', '却下');
-        const decide = (verdict) => {
-          fetch('/api/proposal', {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ id: v.proposal.id, verdict }),
-          });
-          menu.replaceChildren(el('span', 'dim', verdict === 'accepted' ? '着手します…' : '却下しました'));
-        };
+        const decide = (verdict) => { void decideProposal(v.proposal.id, verdict, menu, [yes, no]); };
         yes.onclick = () => decide('accepted');
         no.onclick = () => decide('rejected');
         menu.append(yes, no);
@@ -1304,17 +1330,9 @@ export const PANELS = {
         const yes = el('button', 'primary', 'やってもらう');
         const no = el('button', '', '却下');
         const decide = async (verdict) => {
-          menu.replaceChildren(el('span', 'dim', verdict === 'accepted' ? '着手します…' : '却下しました'));
-          try {
-            await fetch('/api/proposal', {
-              method: 'POST', headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ id: p.id, verdict }),
-            });
-          } catch (e) {
-            menu.replaceChildren(el('span', 'warn', `伝えられませんでした（${e?.message ?? e}）`));
-            return;
-          }
-          setTimeout(draw, 400);
+          // 断られても、通信が落ちても、少し置いて描き直す（押す口が消えたまま残らない）
+          await decideProposal(p.id, verdict, menu, [yes, no]);
+          setTimeout(draw, 1500);
         };
         yes.onclick = () => decide('accepted');
         no.onclick = () => decide('rejected');
@@ -1334,16 +1352,16 @@ export const PANELS = {
       }
       if (r.due.length > 0) foot.append(el('span', 'warn', `未了の日課: ${r.due.join(', ')}`));
       const now = el('button', 'ghost tiny', 'いま考えさせる');
+      const said = el('span', 'dim', '');
       now.onclick = async () => {
-        try {
-          await fetch('/api/think', { method: 'POST' });
-        } catch (e) {
-          note('bad', `考えさせられませんでした（${e?.message ?? e}）`);
-          return;
-        }
+        now.disabled = true; // 二度押すと、二本目が「いま別の作業をしています」で断られ、失敗に見える
+        const got = await tell('/api/think', undefined, '考えさせられませんでした');
+        now.disabled = false;
+        // 作業中は断られる（409）。黙って押せなかったことにしない
+        if (!got.ok) { said.className = 'warn'; said.textContent = got.error; return; }
         setTimeout(draw, 800);
       };
-      foot.append(now);
+      foot.append(now, said);
       body.append(foot);
     };
 
@@ -3101,6 +3119,8 @@ export const PANELS = {
       }
       if (ac.signal.aborted) return;
       const j = await r.json().catch(() => ({}));
+      // 断られた（400・500）ときは why が無いので、見ないと黙る
+      if (!r.ok) { state.textContent = `補完できませんでした（${j.error ?? r.status}）`; return; }
       // 訊いている間に打っていたら、古い答えは捨てる。
       if (area.selectionStart !== at || area.value.slice(0, at) !== prefix) return;
       /*
