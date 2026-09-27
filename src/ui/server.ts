@@ -82,6 +82,7 @@ import { totalmem } from 'node:os';
 import { Session } from '../core/session.ts';
 import { Conversation } from '../core/conversation.ts';
 import type { ApprovalRequest, ApprovalAnswer } from '../agent/tools/types.ts';
+import { ForgetShelf, forgetAndSave, restoreAndSave } from '../memory/forget-shelf.ts';
 
 /**
  * 画面から回せる点検。
@@ -256,6 +257,8 @@ export class UiServer {
    */
   readonly #changes = new Map<string, { path: string; diff: string; added: number; removed: number; created: boolean }>();
   #logSeq = 0;
+  /** 画面で忘れた覚え。押し間違えを「戻す」ためにしばらく取っておく（`src/memory/forget-shelf.ts`）。 */
+  readonly #forgotten = new ForgetShelf();
   #server?: ReturnType<typeof createServer>;
   /** 点検を回す係。状態（走っている子）はそちらが持つ。 */
   /** 記録をファイルにも残す。困ったときの報告に、ここから直近を入れる。 */
@@ -2443,11 +2446,22 @@ export class UiServer {
       const id = url.searchParams.get('id') ?? '';
       const session = this.#session;
       if (!session) return send(res, 409, { error: 'まだ土台がありません。一度何か送ってください' });
-      const gone = session.memory.forget(id);
-      if (!gone) return send(res, 404, { error: `その覚えはありません: ${id}` });
-      await session.memory.save().catch(() => undefined);
+      const r = await forgetAndSave(session.memory, this.#forgotten, id);
+      if (!r.ok) return send(res, r.status, { error: r.error });
       this.broadcast({ type: 'stateChanged' });
-      return send(res, 200, { id, forgotten: true });
+      return send(res, 200, { id, title: r.title, forgotten: true });
+    }
+
+    if (path === '/api/memory/restore' && req.method === 'POST') {
+      const body = await readBody(req) as { id?: unknown };
+      if (typeof body?.id !== 'string') return send(res, 400, { error: '戻す覚えの番号がありません' });
+      const session = this.#session;
+      // セッションを作り直すと記憶も読み直すので、前のセッションで忘れた分は戻せない（押しても戻らない口を残さない）
+      if (!session) return send(res, 409, { error: '忘れた後にセッションが変わったので、戻せません', gone: true });
+      const r = await restoreAndSave(session.memory, this.#forgotten, body.id);
+      if (!r.ok) return send(res, r.status, { error: r.error, gone: r.gone === true });
+      this.broadcast({ type: 'stateChanged' });
+      return send(res, 200, { id: r.id, title: r.title, restored: true });
     }
 
     if (path === '/api/events') {

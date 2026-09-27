@@ -168,11 +168,32 @@ const writeWhole: MemoryWriter = async (path, body) => {
   }
 };
 
+/** 忘れた覚えと、それを指していた繋がり（`Memory.remove` が返し、`Memory.restore` が受け取る）。 */
+export interface Forgotten {
+  entry: MemoryEntry;
+  links: { id: string; field: 'supersedes' | 'supersededBy' }[];
+  /** 取ったときの読み直しの代（中は見ない）。 */
+  era: object;
+}
+
+/** `restore` が戻さなかった理由。 */
+export type RestoreRefusal = 'reloaded' | 'taken' | 'duplicate';
+
 export class Memory {
   readonly #path?: string;
   readonly #write: MemoryWriter;
   #entries: MemoryEntry[] = [];
   #seq = 0;
+  /**
+   * 読み直しの代。`load` と `#rejoin` で番号が振り直されるたびに変える。`remove` で取ったものは、同じ代の間しか
+   * `restore` できない（代をまたぐと、同じ番号が別の覚えを指す）。
+   */
+  #era: object = {};
+  /**
+   * 戻したときに繋ぎ直せなかった繋がり（相手もまだ忘れられていた）。相手が戻ったときに繋ぐ。
+   * B と C を続けて忘れると、C の写しは B を忘れた時点で切られている。B を先に戻すと、C への繋がりの行き先が無い。
+   */
+  #waiting: { id: string; field: 'supersedes' | 'supersededBy'; to: string }[] = [];
   #dirty = false;
   /**
    * 保存の列。**同じインスタンスの中だけ**、同時に書かない。同じファイルへ別のインスタンスが書くと
@@ -212,6 +233,8 @@ export class Memory {
   }
 
   async load(): Promise<void> {
+    this.#era = {};
+    this.#waiting = [];
     if (!this.#path) return;
     // 読めない間に覚えた分があれば、読み直しで捨てずに合わせる（読めなければそのまま持っておく）。
     if (this.#unreadable && this.#dirty) {
@@ -292,6 +315,8 @@ export class Memory {
     this.#entries = [...onDisk, ...mine];
     this.#seq = seq;
     this.#unreadable = undefined;
+    this.#era = {};
+    this.#waiting = [];
     return true;
   }
 
@@ -547,16 +572,75 @@ export class Memory {
    * 消したかどうかを返す（黙って何もしない、を作らない）。
    */
   forget(id: string): boolean {
-    const before = this.#entries.length;
-    this.#entries = this.#entries.filter((e) => e.id !== id);
+    return this.remove(id) !== undefined;
+  }
+
+  /**
+   * 忘れて、戻すのに要るもの（消した覚えと、それを指していた繋がり）を返す。無ければ `undefined`。
+   *
+   * 画面の「忘れる」は一押しで効く。押し間違えた覚えを戻せないと、覚え直すまで同じ失敗を繰り返す。
+   */
+  remove(id: string): Forgotten | undefined {
+    const entry = this.#entries.find((e) => e.id === id);
+    if (!entry) return undefined;
+    this.#entries = this.#entries.filter((e) => e !== entry);
     // 繋がりも切っておく。消した先を指したままにすると、履歴が辿れなくなる。
+    const links: Forgotten['links'] = [];
     for (const e of this.#entries) {
-      if (e.supersedes === id) delete e.supersedes;
-      if (e.supersededBy === id) delete e.supersededBy;
+      if (e.supersedes === id) { delete e.supersedes; links.push({ id: e.id, field: 'supersedes' }); }
+      if (e.supersededBy === id) { delete e.supersededBy; links.push({ id: e.id, field: 'supersededBy' }); }
     }
-    const gone = this.#entries.length < before;
-    if (gone) this.#dirty = true;
-    return gone;
+    this.#dirty = true;
+    return { entry: { ...entry }, links, era: this.#era };
+  }
+
+  /**
+   * `remove` で忘れたものを戻す。戻したら `true`、戻さなければその理由を返す。
+   *
+   * - `reloaded`: 取った後に読み直した（番号が振り直されたか、別のファイルの中身になった）。同じ番号が別の覚えを指すので戻さない
+   * - `taken`: 同じ番号が既に在る
+   * - `duplicate`: 同じ種類・同じ題の覚えが、決め直されずに在る（忘れている間に覚え直した）。二つにしない
+   *
+   * 繋がりは、相手が居るものだけ戻す。自分の側の `supersedes` / `supersededBy` も、相手が居なければ外し、
+   * 相手の向こう側の欄が空なら繋ぎ直す（片側だけ残ると、居ない相手に決め直された扱いで、思い出されなくなる）。
+   * 相手が、その間に別の先を指すようになっていたら上書きしない。並びは覚えた時刻の順に戻す。
+   */
+  restore(f: Forgotten): true | RestoreRefusal {
+    if (f.era !== this.#era) return 'reloaded';
+    if (this.#entries.some((e) => e.id === f.entry.id)) return 'taken';
+    const key = normalizeTitle(f.entry.title);
+    if (this.#entries.some((e) => e.kind === f.entry.kind && normalizeTitle(e.title) === key && !e.supersededBy)) return 'duplicate';
+    const entry = { ...f.entry };
+    const find = (id: string): MemoryEntry | undefined => this.#entries.find((x) => x.id === id);
+    // 自分が戻るのを待っていた繋がり（先に戻った相手から、自分へ。向こう側は下で揃える）
+    for (const w of this.#waiting.filter((x) => x.id === entry.id)) {
+      if (entry[w.field] === undefined && find(w.to)) entry[w.field] = w.to;
+    }
+    this.#waiting = this.#waiting.filter((x) => x.id !== entry.id);
+    if (entry.supersedes !== undefined) {
+      const other = find(entry.supersedes);
+      if (!other) delete entry.supersedes;
+      else if (other.supersededBy === undefined) other.supersededBy = entry.id;
+    }
+    if (entry.supersededBy !== undefined) {
+      const other = find(entry.supersededBy);
+      if (!other) delete entry.supersededBy;
+      else if (other.supersedes === undefined) other.supersedes = entry.id;
+    }
+    for (const link of f.links) {
+      const e = find(link.id);
+      if (!e) this.#waiting.push({ ...link, to: entry.id });
+      else if (e[link.field] === undefined) e[link.field] = entry.id;
+    }
+    const at = this.#entries.findIndex((e) => e.at > entry.at);
+    if (at < 0) this.#entries.push(entry); else this.#entries.splice(at, 0, entry);
+    this.#dirty = true;
+    return true;
+  }
+
+  /** いまの読み直しの代。保存の前後で比べると、その間に番号が振り直されたかが分かる。 */
+  get era(): object {
+    return this.#era;
   }
 
   /**
