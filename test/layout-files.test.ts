@@ -63,9 +63,9 @@ for (const [what, file, load, save] of [
       const first = await load();
       const value = 'layout' in first ? first.layout : first.theme;
       await save(value);
-      const before = (await stat(join(dir, file))).ino;
+      const before = (await stat(join(dir, file), { bigint: true })).ino; // Windows の番号は 2^53 を超えうる
       await save(value);
-      assert.notEqual((await stat(join(dir, file))).ino, before, '同じファイルへその場で書いた');
+      assert.notEqual((await stat(join(dir, file), { bigint: true })).ino, before, '同じファイルへその場で書いた');
     });
 
     test('**書けなければ投げる（保存したと返さない）。一時ファイルを残さない**', async () => {

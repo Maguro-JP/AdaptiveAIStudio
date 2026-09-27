@@ -9042,3 +9042,12 @@ AI や別のパネルの書き換えを黙って消していた。
 触る場所: `src/ui/server.ts`（`loadLayout`・`loadTheme`・`startedFromDefault`・`saveLayout`・`saveTheme`）、
 `src/core/journal-file.ts`（`broken`・`writeWhole`）、`src/runtime/cleanup.ts`
 試験: `test/layout-files.test.ts` に 12 件、`test/cleanup.test.ts` に一時ファイル 2 つ。守りを一つずつ外して 6 通りとも落ちることを見た
+押す前の読み直しで直した:
+- 直した記録を、画面は状態の欄に件数だけ出していた。起動直後に「つながっています」へ書き換わって見えず、見た目の分も
+  「配置を直しました」と出ていた → 押すまで消えない帯（`#repairNote`）に中身を出す。止まった知らせの帯（`#crashNote`）と
+  一つにすると、起動直後の「まだ話せません」に上書きされた（sweep で見つけた）ので分けた
+- 保存に失敗すると `{ error }` が返るのに、画面はそのまま `layout = r.layout` として次の描画で止まり、なぜかが見えなかった
+  → 欲しいものが無ければ向こうの文を出して止める（`saved`）
+- 付け替えを EPERM・EBUSY で断られたら、少し待って 3 回まで付け替え直す（Windows で、ウイルス対策や索引作りが一瞬掴む）
+- 一列に並べる守りと、付け替えの付け直しに試験を足した。inode を比べる試験は bigint で読む（Windows の番号は 2^53 を超えうる）
+- sweep に 2 場面を足した（保存に失敗させる・直した記録を足して返させる）。どちらも守りを外すと落ちることを見た

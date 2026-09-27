@@ -26,6 +26,8 @@ export interface JournalOps {
   setAside?: (path: string) => Promise<boolean>;
   /** 一時ファイルへ書く。 */
   write?: (tmp: string, text: string) => Promise<void>;
+  /** 一時ファイルを付け替える。 */
+  rename?: (from: string, to: string) => Promise<void>;
 }
 
 export async function readJournal(path: string, ops: JournalOps = {}): Promise<JournalRead> {
@@ -95,8 +97,17 @@ async function replaceWhole(path: string, text: string, ops: JournalOps): Promis
   const tmp = `${path}.${process.pid}.${++tmpSeq}.tmp`; // 同じプロセスで並んで呼ばれても名前をぶつけない
   try {
     await (ops.write ?? ((t: string, x: string) => writeFile(t, x, 'utf8')))(tmp, text);
-    await rename(tmp, path);
-    return true;
+    // Windows では、ウイルス対策や索引作りが付け替え先を一瞬掴むと EPERM・EBUSY になる。少し待って付け替え直す
+    for (let tries = 0; ; tries++) {
+      try {
+        await (ops.rename ?? rename)(tmp, path);
+        return true;
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (tries >= 3 || !(code === 'EPERM' || code === 'EBUSY')) throw e;
+        await new Promise((r) => setTimeout(r, 100 * (tries + 1)));
+      }
+    }
   } catch {
     await unlink(tmp).catch(() => undefined);
     return false;
