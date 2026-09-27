@@ -118,6 +118,20 @@ export async function findRemovable(opts: {
   }
 
   /*
+   * 壊れていたので脇へ移した写し（`<名前>.broken-<時刻>`、`src/core/journal-file.ts` と提案の記録が作る）。
+   * 中身を手で拾うためのものなので、すぐには消さない。**古いものだけ**（記録と同じ 30 日）。ここに載せるまで、壊れるたびに
+   * 溜まって誰も片づけなかった。
+   */
+  const BROKEN = /\.broken-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/;
+  for (const name of await readdir(stateDir()).catch(() => [])) {
+    if (!BROKEN.test(name)) continue;
+    const path = join(stateDir(), name);
+    const s = await stat(path).catch(() => undefined);
+    if (!s || !s.isFile() || now - s.mtimeMs < maxLogAge) continue;
+    found.push({ path, bytes: s.size, why: `壊れていたので脇へ移した ${Math.floor((now - s.mtimeMs) / 86_400_000)}日前の写し（中身を手で拾うためのもの）` });
+  }
+
+  /*
    * どの作業場のものか分からない古い戻り先（作業場の根を持たない）。
    * どの作業場の「戻す」にも出ないので、戻す手にならないまま残り続ける。**根を持つものは消さない**
    * （今の作業場のものでなくても、その作業場へ戻れば使う）。読めないもの・形の違うものも触らない。

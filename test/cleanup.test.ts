@@ -8,7 +8,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, writeFile, rm, readdir } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { findRemovable } from '../src/runtime/cleanup.ts';
 
@@ -44,6 +44,29 @@ describe('片づけるもの・片づけないもの', () => {
     const later = Date.now() + 2 * 60 * 60 * 1000;
     assert.deepEqual((await findRemovable({ keepTag: 'b9999', now: later })).map((f) => f.path), [join(talks, 'c1.jsonl.123.1.tmp')]);
     assert.deepEqual((await findRemovable({ keepTag: 'b9999' })).map((f) => f.path), [], '書いている最中の一時ファイルを消そうとした');
+  });
+
+  test('**壊れていたので脇へ移した写しは、30 日より古いものだけ挙げる**（中身を手で拾う間は残す。似た名前は触らない）', async () => {
+    const { home } = await scratch();
+    const journalAside = (name: string) => `${name}.broken-2026-09-27T10-52-04-123Z`;
+    // 本物の読み込みに写しを作らせる（名前の形を試験の中で決め打ちにすると、作る側と食い違っても通る）
+    const { readJournal } = await import('../src/core/journal-file.ts');
+    await writeFile(join(home, 'stride.json'), '{"broken"');
+    assert.equal((await readJournal(join(home, 'stride.json'))).kind, 'missing');
+    const made = (await readdir(home)).filter((n) => n.startsWith('stride.json.broken-')).map((n) => join(home, n));
+    assert.equal(made.length, 1);
+    const aside = [...made, join(home, journalAside('proposals.json'))];
+    await writeFile(aside[1]!, '{"broken"');
+    await writeFile(join(home, 'idle.json.broken-mine'), 'x');           // 時刻の形でない
+    await writeFile(join(home, 'idle.json.broken-2026-09-27T10-52-04-123Z.txt'), 'x'); // 後ろに何か付いている
+    await mkdir(join(home, journalAside('dir.json')));                  // フォルダは触らない
+    const soon = Date.now() + 5 * 86_400_000;
+    const later = Date.now() + 31 * 86_400_000;
+    assert.deepEqual((await findRemovable({ keepTag: 'b9999', now: soon })).map((f) => f.path).filter((p) => p.includes('.broken-')), [],
+      '中身を拾う間もなく挙げた');
+    const found = (await findRemovable({ keepTag: 'b9999', now: later })).filter((f) => f.path.includes('.broken-'));
+    assert.deepEqual(found.map((f) => f.path).sort(), [...aside].sort());
+    assert.match(found[0]!.why, /脇へ移した/);
   });
 
   test('状態のファイルと戻り先で残った古い一時ファイルは消す。新しいもの・元のファイル・知らない名前は消さない', async () => {
