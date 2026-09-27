@@ -75,19 +75,21 @@ describe('モデルの実測の記録', () => {
   const stat = (successes: number, extra: Record<string, unknown> = {}) =>
     ({ modelId: 'm', successes, failures: 1, measuredTps: 20, ...extra });
 
-  test('**形の違う一件（null・数でない回数・負の実測）はその一件だけ除き、残りは読む**', async () => {
+  test('**形の違う一件（null・数でない回数）は除き、壊れた実測の値はその値だけ落として回数は残す**', async () => {
     const dir = await tempDir('aas-msf-');
     const path = join(dir, 'metrics.json');
     await writeFile(path, JSON.stringify([
       null,
       stat(1, { modelId: 'a', successes: '3' }),
-      stat(1, { modelId: 'b', measuredTps: -5 }),
-      stat(1, { modelId: 'c', defects: 1.5 }),
-      stat(4),
+      stat(1, { modelId: 'f', failures: -1 }),
+      stat(2, { modelId: 'b', measuredTps: -5, avgTokens: null, loadSeconds: 'x', defects: 1.5 }),
+      stat(4, { avgTokens: 300, loadSeconds: 7, defects: 2 }),
     ]));
     const store = new MetricsStore(path);
     await store.load();
-    assert.deepEqual(store.all().map((s) => s.modelId), ['m']);
+    assert.deepEqual(store.all().map((s) => s.modelId), ['b', 'm']);
+    assert.deepEqual(store.get('b'), { modelId: 'b', successes: 2, failures: 1 });
+    assert.deepEqual(store.get('m'), { modelId: 'm', successes: 4, failures: 1, measuredTps: 20, avgTokens: 300, loadSeconds: 7, defects: 2 });
     store.record({ modelId: 'a', success: true, outputTokens: 0, seconds: 0 });
     assert.equal(store.get('a')!.successes, 1, '文字の回数に足した');
   });
@@ -125,5 +127,20 @@ describe('モデルの実測の記録', () => {
     assert.equal(m.loadSeconds, 7);
     assert.ok(saved.some((s) => s.modelId === 'k'), '測っていないモデルの分を落とした');
     assert.deepEqual(await readdir(dir), ['metrics.json']);
+  });
+});
+
+describe('読み直し', () => {
+  test('**load し直して読めたら、次の保存で読み直して二重に足さない**', async () => {
+    const dir = await tempDir('aas-msf-');
+    const path = join(dir, 'metrics.json');
+    await mkdir(path); // 読めない（EISDIR）
+    const store = new MetricsStore(path);
+    await store.load();
+    await rm(path, { recursive: true });
+    await writeFile(path, JSON.stringify([{ modelId: 'm', successes: 3, failures: 0 }]));
+    await store.load();
+    await store.save();
+    assert.equal((JSON.parse(await readFile(path, 'utf8')) as { successes: number }[])[0]!.successes, 3);
   });
 });

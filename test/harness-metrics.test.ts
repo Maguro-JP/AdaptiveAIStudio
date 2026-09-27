@@ -134,6 +134,18 @@ describe('ハーネス計測', () => {
     assert.equal(stat.abandoned, 0, '前の依頼の拒否を次の依頼に持ち越した');
   });
 
+  test('**保存は、呼んだ時点ではなく書く時点の数を書く**（呼んだ直後に数えた分を、次の保存まで落とさない）', async () => {
+    const dir = await tempDir('aas-hm-snap-');
+    const path = join(dir, 'harness.json');
+    const m = new HarnessMetrics(path);
+    const saving = m.save();
+    m.beginTask(); m.endTask('completed');
+    await saving;
+    const reloaded = new HarnessMetrics(path);
+    await reloaded.load();
+    assert.equal(reloaded.report([]).tasks, 1);
+  });
+
   test('並べて保存しても、最後の数が残り、一時ファイルを残さない', async () => {
     const dir = await tempDir('aas-hm-many-');
     const path = join(dir, 'harness.json');

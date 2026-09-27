@@ -36,7 +36,6 @@ export class MetricsStore {
    * 在るのに読めないときは空で始め、保存の前に読み直す（`src/core/journal-file.ts`）。
    */
   async load(): Promise<void> {
-    this.#stats = new Map();
     await loadJournal(this, this.#path, (v) => {
       for (const s of validStats(v)) this.#stats.set(s.modelId, s);
     });
@@ -132,17 +131,27 @@ export class MetricsStore {
   }
 }
 
-/** 実測の記録のうち、形の合う分だけ。配列でなければ空。 */
+/**
+ * 実測の記録のうち、形の合う分だけ。配列でなければ空。
+ * 名前と回数が合わない一件は除く。実測の値（tok/s 等）だけが壊れている一件は、その値だけ落として回数は残す
+ * （NaN は JSON で null になる。一つの値のために、そのモデルの成功と失敗の数まで捨てない）。
+ */
 function validStats(v: unknown): ModelStats[] {
-  return Array.isArray(v) ? v.filter(isModelStats) : [];
+  if (!Array.isArray(v)) return [];
+  const out: ModelStats[] = [];
+  for (const x of v) {
+    if (typeof x !== 'object' || x === null) continue;
+    const r = x as Record<string, unknown>;
+    if (typeof r.modelId !== 'string' || !isCount(r.successes) || !isCount(r.failures)) continue;
+    const s: ModelStats = { modelId: r.modelId, successes: r.successes, failures: r.failures };
+    if (isCount(r.defects)) s.defects = r.defects;
+    if (isMeasure(r.measuredTps)) s.measuredTps = r.measuredTps;
+    if (isMeasure(r.avgTokens)) s.avgTokens = r.avgTokens;
+    if (isMeasure(r.loadSeconds)) s.loadSeconds = r.loadSeconds;
+    out.push(s);
+  }
+  return out;
 }
 
-function isModelStats(v: unknown): v is ModelStats {
-  if (typeof v !== 'object' || v === null) return false;
-  const r = v as Record<string, unknown>;
-  const count = (x: unknown) => typeof x === 'number' && Number.isInteger(x) && x >= 0;
-  const measure = (x: unknown) => x === undefined || (typeof x === 'number' && Number.isFinite(x) && x >= 0);
-  return typeof r.modelId === 'string' && count(r.successes) && count(r.failures)
-    && (r.defects === undefined || count(r.defects))
-    && measure(r.measuredTps) && measure(r.avgTokens) && measure(r.loadSeconds);
-}
+const isCount = (x: unknown): x is number => typeof x === 'number' && Number.isInteger(x) && x >= 0;
+const isMeasure = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x >= 0;

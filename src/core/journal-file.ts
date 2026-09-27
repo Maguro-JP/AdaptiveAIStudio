@@ -65,6 +65,7 @@ export async function loadJournal(
   const r = await readJournal(path, ops);
   if (r.kind === 'value') apply(r.value);
   if (r.kind === 'unreadable') unread.set(target, path);
+  else unread.delete(target); // 読み直して読めたなら、次の保存で読み直して二重に足さない
 }
 
 let tmpSeq = 0;
