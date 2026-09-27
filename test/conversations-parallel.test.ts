@@ -11,6 +11,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { startFakeServer, type FakeServer } from './fake-server.ts';
+import { until } from './until.ts';
 import { Conversation } from '../src/core/conversation.ts';
 import { Forum, requiresDeliberation } from '../src/harness/deliberation.ts';
 import type { RuleContext } from '../src/harness/rules.ts';
@@ -60,9 +61,9 @@ describe('一つの作業場で、二つの会話を同時に動かす', { timeo
       };
       fake.resetMaxInFlight();
       const both = Promise.all([drain(a, 'りんごの話'), drain(b, 'みかんの話')]);
-      await new Promise((r) => setTimeout(r, 100));
       // 既定でない会話が走っている間も「どれかが走っている」（暇な思考はこれで断る）。
-      assert.equal(session.anyBusy, true, '走っている会話を数えていない');
+      // 決まった時間だけ待って「もう走っているはず」としない（重い機械では、走り出す前に見て落ちる）。
+      await until(() => session.anyBusy, '走っている会話を数えていない', { timeoutMs: 10_000, everyMs: 5 });
       assert.equal(session.busy, false, '既定の会話まで走っていることになった');
       const [sa, sb] = await both;
       assert.equal(session.anyBusy, false, '終わっても走っていることになっている');
@@ -81,16 +82,19 @@ describe('一つの作業場で、二つの会話を同時に動かす', { timeo
   });
 
   test('同じ会話に二つ目を送ると、断る（会話の中では一つずつ）', async () => {
+    // 一つ目が確実に走っている間に二つ目を送る。一つ目は長く、送るのは走り出したのを見てから（決まった時間だけ待たない）。
+    fake.setBehavior({ kind: 'echo', delayMs: 3000 });
     const session = await open();
     try {
       const a = new Conversation();
       const first = (async () => { for await (const _ of session.send('一つ目', { conversation: a })) { /* 流す */ } })();
-      await new Promise((r) => setTimeout(r, 50));
+      await until(() => session.anyBusy, '一つ目が走り出す', { timeoutMs: 10_000, everyMs: 5 });
       const logs: string[] = [];
       for await (const ev of session.send('二つ目', { conversation: a })) if (ev.type === 'log') logs.push(ev.text);
       assert.ok(logs.some((t) => t.includes('別の作業')), `断っていない: ${logs.join(' / ')}`);
       await first;
     } finally {
+      fake.setBehavior({ kind: 'echo', delayMs: 400 });
       await session.close();
     }
   });
@@ -218,7 +222,8 @@ describe('止めるときは全部の会話を止める', { timeout: 30_000 }, (
       const run = (async () => {
         for await (const ev of session.send('ゆっくり答えて', { conversation: a })) if (ev.type === 'settled') reason = ev.reason;
       })();
-      await new Promise((r) => setTimeout(r, 200));
+      // 走り出したのを見てから止める（決まった時間だけ待つと、重い機械では走り出す前に止めて、止めたことにならない）
+      await until(() => session.anyBusy, '走り出す', { timeoutMs: 10_000, everyMs: 5 });
       session.abort();
       await run;
       assert.notEqual(reason, 'completed', '止めたのに最後まで走った');
