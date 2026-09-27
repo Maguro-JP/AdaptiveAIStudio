@@ -37,6 +37,33 @@ describe('溜まりものを落としたら、そう言う', () => {
     }
   });
 
+  test('**読めずに退けた記憶の行の数を、画面へ渡す**（黙ると、手で直した行が効いていないことに気づけない）', async () => {
+    const { collectState } = await import('../src/ui/state.ts');
+    const { DEFAULT_CONFIG } = await import('../src/config.ts');
+    const { Memory } = await import('../src/memory/memory.ts');
+    const dir = await tempDir('aas-drop-mem-');
+    await mkdir(join(dir, 'state'), { recursive: true });
+    const path = join(dir, 'state', 'memory.jsonl');
+    const mem = new Memory(path);
+    await mem.load();
+    mem.seedLessons();
+    await mem.save();
+    const prev = process.env.AAS_STATE_DIR;
+    process.env.AAS_STATE_DIR = join(dir, 'state');
+    try {
+      const clean = await collectState(DEFAULT_CONFIG);
+      assert.ok(clean.memorySize > 0, '正しい行を読めていない');
+      assert.equal(clean.memorySkipped, 0);
+      const { appendFile } = await import('node:fs/promises');
+      await appendFile(path, '{"id":"m999","壊れた\n{"id":"m1000","kind":1}\n');
+      const st = await collectState(DEFAULT_CONFIG);
+      assert.equal(st.memorySkipped, 2, '退けた行の数を出していない');
+      assert.equal(st.memorySize, clean.memorySize);
+    } finally {
+      if (prev === undefined) delete process.env.AAS_STATE_DIR; else process.env.AAS_STATE_DIR = prev;
+    }
+  });
+
   test('古い形（配列そのまま）でも読める', async () => {
     const { collectState } = await import('../src/ui/state.ts');
     const { DEFAULT_CONFIG } = await import('../src/config.ts');

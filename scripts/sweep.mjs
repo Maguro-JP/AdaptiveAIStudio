@@ -1773,6 +1773,41 @@ await check('読み込みで直したことを、押すまで消えない帯に�
   }
 });
 
+/*
+ * **読めずに退けた記憶の行を、メモリのパネルで言う。**覚えが 0 件のときも言う（その分岐で先に返していた）。
+ * メモリのパネルは既定の並びに無いので、統制卓の並びへ切り替えて見て、最後に写しを取った並びへ戻す。状態の返事は横取りして数を足す。
+ */
+await check('読めない記憶の行を、メモリのパネルで言う', async () => {
+  // 並びは型を選び直すのではなく、丸ごと写しを取って丸ごと戻す（型を選び直すと、大きさや出し入れを変えた並びが型の初期形になる）
+  const saved = await p.evaluate(() => fetch('/api/layout').then((r) => r.json()).then((j) => j.layout));
+  await p.route('**/api/state', async (r) => {
+    const real = await r.fetch();
+    await r.fulfill({ response: real, json: { ...(await real.json()), memory: [], memorySkipped: 3 } });
+  });
+  const pick = (id) => p.evaluate((v) => {
+    const s = document.getElementById('presets');
+    s.value = v;
+    s.dispatchEvent(new Event('change'));
+  }, id);
+  try {
+    await pick('command');
+    await p.waitForTimeout(1200);
+    const tab = p.locator('#root .panel.tabs header button').filter({ hasText: 'メモリ' });
+    if (await tab.count() === 0) throw new Error('統制卓の並びにメモリのタブが無い');
+    await tab.first().click();
+    await p.waitForTimeout(500);
+    const text = await p.locator('#root').innerText();
+    if (!text.includes('読めない行が 3 行')) throw new Error('読めない行の数を言っていない');
+  } finally {
+    await p.unroute('**/api/state');
+    await p.evaluate((l) => fetch('/api/layout', {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(l),
+    }), saved).catch(() => undefined);
+    await p.reload({ waitUntil: 'load' }).then(opened).catch(() => undefined);
+    await p.waitForTimeout(800);
+  }
+});
+
 if (shot) await p.screenshot({ path: shot, fullPage: false });
 await b.close();
 console.log(bad.length === 0 ? '見つかった不具合: なし' : `見つかった不具合 ${bad.length} 件:\n- ${bad.join('\n- ')}`);
