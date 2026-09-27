@@ -134,6 +134,18 @@ describe('やり残しを、こちらから拾う', () => {
       assert.equal(del.status, 200);
       const after = await (await fetch(`${base}/api/unfinished`)).json() as { list: { id: string }[] };
       assert.ok(!after.list.some((u) => u.id === id), 'やめたのに残っている');
+      // 押し間違えは戻せる（元の依頼の文は、やり残しの記録にしか無い）
+      const back = await fetch(`${base}/api/unfinished/reopen`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }),
+      });
+      assert.equal(back.status, 200);
+      const again = await (await fetch(`${base}/api/unfinished`)).json() as { list: { id: string; request: string }[] };
+      assert.equal(again.list.find((u) => u.id === id)?.request, 'docs を直して', '戻していない');
+      const unknown = await fetch(`${base}/api/unfinished/reopen`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'u-none' }),
+      });
+      assert.equal(unknown.status, 404);
+      assert.equal(((await unknown.json()) as { gone?: boolean }).gone, true);
     } finally { await s.stop(); await fake.close(); }
   });
 
@@ -203,6 +215,61 @@ describe('やり残しを、こちらから拾う', () => {
       const raw = await readFile(join(state, 'unfinished.jsonl'), 'utf8');
       assert.ok(!raw.includes('"how":"done"'), `やめた依頼に done を書き足した: ${raw}`);
       assert.deepEqual(await goals.list(), [], '段取りが開いたまま');
+    } finally { await s.stop(); await fake.close(); }
+  });
+
+  test('**一段を進めている最中にやめて戻しても、その一段で依頼全体を片づけない**（戻す口は、その回の間は断る）', async () => {
+    const state = await ownState('b4');
+    const root = await tempDir('aas-resume-root2d-');
+    const fake = await startFakeServer({
+      kind: 'stalls', name: 'list_files', args: { path: '.' },
+      then: 'このあと直します。',
+    });
+    const s = new UiServer({ config: config(fake, root), port: 0 });
+    const logs: string[] = [];
+    let unfinishedEvents = 0;
+    const orig = s.broadcast.bind(s);
+    (s as { broadcast: unknown }).broadcast = (m: { type: string; level?: string; text?: string }) => {
+      if (m.type === 'log') logs.push(`${m.level}: ${m.text}`);
+      if (m.type === 'unfinished') unfinishedEvents += 1;
+      return orig(m as Parameters<typeof orig>[0]);
+    };
+    const base = (await s.start()).replace(/\/$/, '');
+    try {
+      const { id } = await ask(base, 'app を直して');
+      const path = join(state, 'unfinished.jsonl');
+      await new UnfinishedWork(path).bump(id, Date.now() - 60 * 60_000);
+      fake.setBehavior({ kind: 'stream', text: 'ファイルを読んで確かめる\nテストを直して走らせる\n' });
+      const session = await s.session();
+      const asked = fake.requests;
+      assert.equal(await s.idleTick(session), 'RESUMED');
+      for (let i = 0; i < 2000 && fake.requests === asked; i += 1) await new Promise((r) => setTimeout(r, 5));
+      // 一段は「済んだ」で返す（ここで落ちると、依頼全体を片づけるかが見える）
+      fake.setBehavior({ kind: 'echo', delayMs: 800 });
+      const goals = new Goals(join(state, 'goals.jsonl'));
+      for (let i = 0; i < 300 && (await goals.list()).length === 0; i += 1) await new Promise((r) => setTimeout(r, 10));
+      assert.equal((await goals.list()).length, 1, '段取りが立っていない');
+      const logsAtCancel = logs.length;
+      const eventsAtCancel = unfinishedEvents;
+      const attemptsBefore = (await new UnfinishedWork(path).list()).find((u) => u.id === id)!.attempts;
+      assert.equal((await fetch(`${base}/api/unfinished?id=${id}`, { method: 'DELETE' })).status, 200);
+      const refused = await fetch(`${base}/api/unfinished/reopen`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }),
+      });
+      assert.equal(refused.status, 409, '走っている回の最中に戻した');
+      assert.notEqual(((await refused.json()) as { gone?: boolean }).gone, true, '回が終われば戻せるのに、戻す口を下げさせる');
+      // 口を通らずに戻った場合（別のタブ・手で）も、一段の終わりで依頼全体を「片づいた」にしない
+      assert.equal(await new UnfinishedWork(path).reopen(id), 'reopened');
+      for (let i = 0; i < 400 && unfinishedEvents < eventsAtCancel + 2; i += 1) await new Promise((r) => setTimeout(r, 25));
+      assert.ok(unfinishedEvents >= eventsAtCancel + 2, '一段が終わっていない');
+      const after = logs.slice(logsAtCancel);
+      assert.deepEqual(after.filter((l) => /片づきました/.test(l)), [], `一段で依頼全体を片づけた: ${after.join(' / ')}`);
+      const raw = await readFile(path, 'utf8');
+      assert.ok(!raw.includes('"how":"done"'), `戻した依頼に done を書いた: ${raw}`);
+      const back = (await new UnfinishedWork(path).list()).find((u) => u.id === id);
+      assert.ok(back, '戻した依頼が残っていない');
+      // 段取りの外で閉じられた一段の結果は、やり残しに書かない（済めば片づけ、落ちればやり直しの回数を足していた）
+      assert.equal(back.attempts, attemptsBefore, `閉じた段取りの一段の結果を、やり残しに書いた: ${raw}`);
     } finally { await s.stop(); await fake.close(); }
   });
 

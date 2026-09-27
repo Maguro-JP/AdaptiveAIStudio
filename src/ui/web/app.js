@@ -1040,6 +1040,9 @@ let busyNow = false;
  * **見えて、やめられること。**控えるだけなら覚え書きだが、こちらから
  * 勝手に続きを始めるので、何が残っているかは常に見えていないといけない。
  */
+/** 最後にやめたやり残し。押し間違えを、その場で戻せるようにする（元の依頼の文は、やり残しの記録にしか無い）。 */
+let lastCanceled;
+
 async function loadUnfinished() {
   let data;
   try {
@@ -1053,7 +1056,9 @@ async function loadUnfinished() {
   const sec = $('unfinishedSec');
   const box = $('sideUnfinished');
   const list = data.list ?? [];
-  sec.hidden = list.length === 0 && goals.list.length === 0;
+  // 別のタブで戻した・見回りが戻したものは、もう「やめました」ではない
+  if (lastCanceled && list.some((u) => u.id === lastCanceled.id)) lastCanceled = undefined;
+  sec.hidden = list.length === 0 && goals.list.length === 0 && !lastCanceled;
   box.textContent = '';
 
   // 段取り。**どこまで進んだかを出す。**一段ずつ進むので、見えないと
@@ -1097,12 +1102,49 @@ async function loadUnfinished() {
       const done = await ask(`/api/unfinished?id=${encodeURIComponent(u.id)}`,
         { method: 'DELETE' }, 'やり残しを消せませんでした');
       if (!done) return;
+      // 断られたときも黙らない（前は 500 でも何も出さず、押しても消えないだけに見えた）
+      if (!done.ok) return showCrash('やり残しを消せませんでした', done.body?.error ?? `${done.status}`);
+      lastCanceled = { id: u.id, text: u.request.split('\n')[0].slice(0, 40) };
       await loadUnfinished();
     });
 
     row.append(label, stop);
     box.append(row);
   }
+  if (lastCanceled) box.append(canceledNote(lastCanceled));
+}
+
+/** 「〜をやめました [戻す] [閉じる]」。戻すときは番号だけを送る。 */
+function canceledNote({ id, text }) {
+  const row = document.createElement('div');
+  row.className = 'side-row dim';
+  const label = document.createElement('span');
+  label.className = 'grow';
+  label.textContent = `「${text}」をやめました`;
+  const undo = document.createElement('button');
+  undo.className = 'ghost tiny';
+  undo.textContent = '戻す';
+  undo.title = 'やめたやり残しを元に戻す';
+  undo.addEventListener('click', async () => {
+    undo.disabled = true; // 二度押すと、二本目が「やめたものの中にありません」になる
+    const got = await ask('/api/unfinished/reopen', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }),
+    }, 'やり残しを戻せませんでした');
+    if (!got) { undo.disabled = false; return; }
+    if (!got.ok) {
+      showCrash('やり残しを戻せませんでした', got.body?.error ?? `${got.status}`);
+      // 押しても戻らない口は残さない（畳んだ・同じ依頼をもう一度記録した・上限まで溜まっている）
+      if (!got.body?.gone) { undo.disabled = false; return; }
+    }
+    if (lastCanceled?.id === id) lastCanceled = undefined;
+    await loadUnfinished();
+  });
+  const close = document.createElement('button');
+  close.className = 'ghost tiny';
+  close.textContent = '閉じる';
+  close.addEventListener('click', () => { if (lastCanceled?.id === id) lastCanceled = undefined; void loadUnfinished(); });
+  row.append(label, undo, close);
+  return row;
 }
 
 /**
