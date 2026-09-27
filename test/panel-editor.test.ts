@@ -88,6 +88,8 @@ function open(disk: Record<string, string>, keep = false) {
   const at = (cls: string) => find((n) => n.className.includes(cls));
   return {
     emit, asked, ctx, find, press, at,
+    /** パネルを閉じる（画面から切り離す）。閉じたパネルの預かりは、後から開いたパネルが引き取る。 */
+    close: () => { (body as unknown as { isConnected: boolean }).isConnected = false; },
     area: () => find((n) => n.tagName === 'textarea'),
     state: () => find((n) => n.className.includes('editor-state')),
     save: () => find((n) => n.tagName === 'button'),
@@ -601,7 +603,8 @@ describe('保存していない直しは、ブラウザを閉じても残る', (
     await until(() => first.area().value === 'はじめ\n', 'ファイルが開く');
     await typeInto(first, '書きかけ\n');
 
-    // ブラウザを閉じて開き直した、と同じこと（パネルを作り直す）。
+    // ブラウザを閉じて開き直した、と同じこと（パネルを閉じて作り直す）。
+    first.close();
     const again = open(disk, true);
     (again.ctx.openFile as (p: string) => void)('a.ts');
     await until(() => again.area().value === '書きかけ\n', '打ったものが戻る');
@@ -1346,6 +1349,40 @@ describe('二つのパネルで同じファイルを開く', () => {
     (b.ctx.openFile as (p: string) => void)('stale.txt');
     await until(() => b.area().value === 'NEW\n', '開く');
     assert.equal(b.at('editor-notice').hidden, true, '同じ知らせをもう一度出した');
+  });
+
+  test('**生きている別のパネルの預かりは、後から開いた側が引き取らない**（保存した版を出し、そう言う）', async () => {
+    localStorage.clear();
+    const disk: Record<string, string> = { 'live.txt': 'one\n' };
+    const a = open(disk, true);
+    (a.ctx.openFile as (p: string) => void)('live.txt');
+    await until(() => a.area().value === 'one\n', 'A で開く');
+    a.area().value = 'one\nA\n';
+    a.area().fire('input');
+    await until(() => (localStorage.getItem('aas.draft:live.txt') ?? '').includes('A'), 'A が預ける');
+    const byA = (JSON.parse(localStorage.getItem('aas.draft:live.txt')!) as { by: string }).by;
+
+    const b = open(disk, true);
+    (b.ctx.openFile as (p: string) => void)('live.txt');
+    const bar = () => b.find((n) => n.className.startsWith('editor-notice'));
+    await until(() => bar().hidden === false, '別のパネルで直している途中だと言う');
+    assert.equal(b.area().value, 'one\n', '生きている別のパネルの直しを引き取った');
+    assert.match(bar().text, /別のパネル/, bar().text);
+    assert.equal((JSON.parse(localStorage.getItem('aas.draft:live.txt')!) as { by: string }).by, byA, '預かりの名札を奪った');
+  });
+
+  test('**別のタブのパネルは時刻で見る**: 新しければ引き取らず、古ければ（閉じた）引き取る', async () => {
+    for (const [ago, adopt] of [[1_000, false], [60_000, true]] as const) {
+      localStorage.clear();
+      const disk: Record<string, string> = { 'tab.txt': 'one\n' };
+      localStorage.setItem('aas.draft:tab.txt', JSON.stringify({ text: 'one\nT\n', base: 'one\n', at: Date.now(), by: 'other-tab' }));
+      localStorage.setItem('aas.live:other-tab', String(Date.now() - ago));
+      const b = open(disk, true);
+      (b.ctx.openFile as (p: string) => void)('tab.txt');
+      await until(() => b.area().value !== '', '開く');
+      await new Promise((r) => setTimeout(r, 50));
+      assert.equal(b.area().value, adopt ? 'one\nT\n' : 'one\n', `${ago}ms 前の合図で、引き取り方が違う`);
+    }
   });
 
   test('名札の無い預かり（前の版が預けた）は、保存したら片づける', async () => {

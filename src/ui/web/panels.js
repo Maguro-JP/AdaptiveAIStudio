@@ -21,6 +21,11 @@ const el = (tag, cls, text) => {
 };
 
 const empty = (text) => el('div', 'empty', text);
+/**
+ * このページで作ったエディタのパネル（名札 → そのパネルの入れ物）。同じページの中のパネルは、生きているかを
+ * 時刻でなく、切り離されたかどうかで見る（並びを組み直した直後、前のパネルの時刻はまだ新しい）。
+ */
+const EDITORS_HERE = new Map();
 
 /**
  * 文の中の https:// を、押せる形にする。
@@ -2233,6 +2238,34 @@ export const PANELS = {
      */
     const DRAFT_ME = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     /**
+     * このパネルが生きていることを、名札ごとに覚えておく所へ時刻で書き続ける（別のタブのパネルにも見える）。
+     * 開いたファイルに別のパネルの預かりが在るとき、そのパネルが生きていれば引き取らない。引き取ると、同じ直しを
+     * 二つのパネルが持ち、片方の保存がもう一方の片づけの名札を奪っていた。閉じたパネル（切り離された・ページを
+     * 離れた）は書くのを止めるので、時刻が古くなれば死んだものとして扱い、今までどおり引き取る。
+     */
+    const LIVE_AT = (who) => `aas.live:${who}`;
+    const LIVE_MS = 15_000;
+    const beat = () => { try { localStorage.setItem(LIVE_AT(DRAFT_ME), String(Date.now())); } catch { /* 覚えておく所が使えない環境もある */ } };
+    const stopBeat = () => { clearInterval(beating); EDITORS_HERE.delete(DRAFT_ME); try { localStorage.removeItem(LIVE_AT(DRAFT_ME)); } catch { /* 同上 */ } };
+    beat();
+    const beating = setInterval(() => {
+      // 並びを組み直すとパネルは作り直され、前のものは切り離される。切り離されたら止める（死んだパネルを生かし続けない）。
+      if (body.isConnected === false) { stopBeat(); return; }
+      beat();
+    }, 5_000);
+    beating.unref?.(); // 試験（Node の中で画面を組む）で、このタイマーが走りを生かし続けないように
+    globalThis.addEventListener?.('pagehide', stopBeat);
+    EDITORS_HERE.set(DRAFT_ME, body);
+    const aliveElsewhere = (who) => {
+      if (typeof who !== 'string' || who === DRAFT_ME) return false;
+      // このページのパネルなら、切り離されていないかで決める。別のタブのものは時刻で決める。
+      if (EDITORS_HERE.has(who)) return EDITORS_HERE.get(who).isConnected !== false;
+      try {
+        const at = Number(localStorage.getItem(LIVE_AT(who)));
+        return Number.isFinite(at) && at > 0 && Date.now() - at < LIVE_MS;
+      } catch { return false; }
+    };
+    /**
      * 「後から変わっています」を出した預かり（ファイルの名前 → 預けた時刻）。**片づけでは名札を見ずに消す。**
      * 名札はパネルを作るたびに変わるので、ブラウザを閉じた後の預かりはどれも「他人のもの」になる。見ずに残すと、
      * 開くたびに同じ知らせを出し、保存した版を古い直しで上書きする道を勧め続ける（名札を足した版でそうなった）。
@@ -2621,7 +2654,10 @@ export const PANELS = {
          */
         const ours = !!stored && (inPanel === undefined || stored.by === DRAFT_ME || stored.text === inPanel.text);
         const saved = inPanel !== undefined ? { text: inPanel.text, base: inPanel.base } : stored;
-        if (inPanel === undefined && stored && stored.base === loaded) { kept = stored.text; adoptDraft(p, stored); }
+        if (inPanel === undefined && stored && stored.base === loaded && aliveElsewhere(stored.by)) {
+          // 生きている別のパネルの直し。引き取らず、そちらで保存してもらう（ここでは保存した版を出す）。
+          tell('このファイルは、別のパネル（または別のタブ）で保存していない直しの途中です。ここでは保存した版を出しています。直しはそちらで保存してください。', [], 'info');
+        } else if (inPanel === undefined && stored && stored.base === loaded) { kept = stored.text; adoptDraft(p, stored); }
         else if (saved) {
           if (ours) toldDraft.set(p, stored.at);
           /*
