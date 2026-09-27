@@ -63,6 +63,7 @@ describe('片づけるもの・片づけないもの', () => {
       join(home, 'metrics.json.123.11.tmp'),
       join(home, 'layout.json.123.12.tmp'),
       join(home, 'theme.json.123.13.tmp'),
+      join(home, 'roles-ledger.json.123.14.tmp'),
     ];
     for (const p of old) await writeFile(p, 'x');
     await writeFile(join(home, 'memory.jsonl'), '{}\n');

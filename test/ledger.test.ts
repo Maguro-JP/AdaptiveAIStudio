@@ -163,3 +163,58 @@ describe('旧名での呼び出し', () => {
     assert.equal(r.get('split-me')!.id, 'envoy');
   });
 });
+
+describe('記録ファイルが壊れている・読めない', () => {
+  const setup = async () => {
+    const dir = await tempDir('aas-ledger-f-');
+    const path = join(dir, 'roles-ledger.json');
+    const first = new RoleLedger(path);
+    await first.load();
+    first.sync([role({ id: 'scout' }), role({ id: 'smith' }), role({ id: 'retired' })]);
+    first.markAnnounced();
+    await first.save();
+    return { dir, path };
+  };
+
+  test('**形の違う一件（null・権限が配列でない）は除き、照合を止めない**', async () => {
+    const { writeFile, readFile } = await import('node:fs/promises');
+    const { path } = await setup();
+    const raw = JSON.parse(await readFile(path, 'utf8')) as { known: Record<string, unknown>[] };
+    raw.known.push(null as never, { ...raw.known[0], id: 'odd', access: 'read' });
+    await writeFile(path, JSON.stringify(raw));
+    const l = new RoleLedger(path);
+    await l.load();
+    let changes: ReturnType<typeof l.sync> = [];
+    assert.doesNotThrow(() => { changes = l.sync([role({ id: 'scout' }), role({ id: 'smith' }), role({ id: 'retired' })]); });
+    assert.deepEqual(changes, [], '正しい記録まで捨てて、配属し直しと言った');
+  });
+
+  test('**在るのに読めないときは、全員を「配属されました」と言わず、読めるまで書かない**', async () => {
+    const { mkdir, rm, readFile, writeFile } = await import('node:fs/promises');
+    const { path } = await setup();
+    const before = await readFile(path, 'utf8');
+    await rm(path);
+    await mkdir(path); // 読めない（EISDIR）
+    const l = new RoleLedger(path);
+    await l.load();
+    assert.deepEqual(l.sync([role({ id: 'scout' }), role({ id: 'smith' }), role({ id: 'newbie' })]), [], '前が分からないのに知らせた');
+    assert.deepEqual(l.pending(), []);
+    await l.save();
+    await rm(path, { recursive: true });
+    await writeFile(path, before);
+    await l.save(); // 読めたので、前の名簿を取り込んで書く
+    const saved = JSON.parse(await readFile(path, 'utf8')) as { known: { id: string }[] };
+    // 今の名簿に無い役職（retired）も、前の名簿から取り込んで残す（消えたことを次の起動で言えるように）
+    assert.deepEqual(saved.known.map((s) => s.id).sort(), ['newbie', 'retired', 'scout', 'smith']);
+  });
+
+  test('壊れた JSON は脇へ移し、初めてと同じく配属を知らせる（対）', async () => {
+    const { writeFile, readdir } = await import('node:fs/promises');
+    const { dir, path } = await setup();
+    await writeFile(path, '{"known": [');
+    const l = new RoleLedger(path);
+    await l.load();
+    assert.equal(l.sync([role({ id: 'scout' })]).length, 1);
+    assert.ok((await readdir(dir)).some((n) => n.startsWith('roles-ledger.json.broken-')));
+  });
+});

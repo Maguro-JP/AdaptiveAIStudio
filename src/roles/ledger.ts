@@ -10,10 +10,11 @@
  * 4つ目が仕組みとして要る。
  * 黙って変えると、利用者は「前と違う」ことに気づけない。
  */
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { Role } from './role.ts';
+import { loadJournal, saveJournal } from '../core/journal-file.ts';
 
 export type ChangeKind =
   | 'joined'      // 新しく配属された
@@ -46,6 +47,11 @@ export class RoleLedger {
   readonly #path?: string;
   #known = new Map<string, Snapshot>();
   #unannounced: RoleChange[] = [];
+  /**
+   * 記録が在るのに読めなかった。前の名簿が分からないので、照合しても「変わった」とは言わない（全員を「配属されました」と
+   * 知らせ直していた）。保存の前に読み直し、読めたら前の名簿を取り込む（`src/core/journal-file.ts`）。
+   */
+  #blind = false;
 
   constructor(path?: string) {
     this.#path = path;
@@ -53,16 +59,15 @@ export class RoleLedger {
 
   async load(): Promise<void> {
     if (!this.#path) return;
-    try {
-      const raw = JSON.parse(await readFile(this.#path, 'utf8')) as {
-        known: Snapshot[]; unannounced: RoleChange[];
-      };
+    this.#known = new Map();
+    this.#unannounced = [];
+    // 形の違う一件（`null`・権限が配列でない等）は、その一件だけ除く。そのまま入れると、照合の途中で投げていた。
+    const got = await loadJournal(this, this.#path, (v) => {
+      const raw = readLedger(v);
       this.#known = new Map(raw.known.map((s) => [s.id, s]));
-      this.#unannounced = raw.unannounced ?? [];
-    } catch {
-      this.#known = new Map();
-      this.#unannounced = [];
-    }
+      this.#unannounced = raw.unannounced;
+    });
+    this.#blind = got === 'unreadable';
   }
 
   /**
@@ -147,6 +152,7 @@ export class RoleLedger {
       });
     }
 
+    if (this.#blind) return []; // 前が分からない。今の名簿だけ覚え、知らせない
     this.#unannounced.push(...changes);
     return changes;
   }
@@ -161,18 +167,48 @@ export class RoleLedger {
     this.#unannounced = [];
   }
 
+  /** 書く。一時ファイルから付け替える。起動のときに読めなかったなら、読めるまで書かない。記録に失敗しても本体は止めない。 */
   async save(): Promise<void> {
     if (!this.#path) return;
-    try {
-      await mkdir(dirname(this.#path), { recursive: true });
-      await writeFile(this.#path, JSON.stringify({
-        known: [...this.#known.values()],
-        unannounced: this.#unannounced,
-      }, null, 2), 'utf8');
-    } catch {
-      // 記録に失敗しても本体は止めない
-    }
+    await mkdir(dirname(this.#path), { recursive: true }).catch(() => undefined);
+    await saveJournal(this, this.#path, () => JSON.stringify({
+      known: [...this.#known.values()],
+      unannounced: this.#unannounced,
+    }, null, 2), (v) => {
+      // 読めなかった間に覚えた名簿の方が新しい。覚えていない役職と、まだ伝えていない変更だけ取り込む
+      const raw = readLedger(v);
+      for (const s of raw.known) if (!this.#known.has(s.id)) this.#known.set(s.id, s);
+      this.#unannounced = [...raw.unannounced, ...this.#unannounced];
+    }).catch(() => false);
   }
+}
+
+const CHANGE_KINDS = new Set<string>(['joined', 'renamed', 'reassigned', 'retuned', 'authorized', 'succeeded']);
+const isText = (x: unknown): x is string => typeof x === 'string';
+const isTexts = (x: unknown): x is string[] => Array.isArray(x) && x.every(isText);
+
+function isSnapshot(v: unknown): v is Snapshot {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as Record<string, unknown>;
+  return isText(r.id) && isText(r.codename) && isText(r.name) && isText(r.responsibility)
+    && isText(r.disposition) && isTexts(r.access) && isText(r.signature)
+    && (r.succeededBy === undefined || isTexts(r.succeededBy));
+}
+
+function isChange(v: unknown): v is RoleChange {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as Record<string, unknown>;
+  return isText(r.at) && isText(r.kind) && CHANGE_KINDS.has(r.kind) && isText(r.roleId)
+    && isText(r.codename) && isText(r.detail);
+}
+
+/** 記録のうち、形の合う分だけ。入れ物でなければ空。 */
+function readLedger(v: unknown): { known: Snapshot[]; unannounced: RoleChange[] } {
+  const r = (v ?? {}) as Record<string, unknown>;
+  return {
+    known: Array.isArray(r.known) ? r.known.filter(isSnapshot) : [],
+    unannounced: Array.isArray(r.unannounced) ? r.unannounced.filter(isChange) : [],
+  };
 }
 
 function snapshotOf(role: Role): Snapshot {
