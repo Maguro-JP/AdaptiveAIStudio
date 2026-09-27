@@ -21,6 +21,9 @@
 set -e
 
 pushing_wip=1
+# 押す ref を一つでも見たか。見ていないのに pushing_wip=1 のままだと「wip/ のブランチなので」と取り違える
+# （non-fast-forward で断られた push では、ref が一行も渡らない）
+saw_ref=0
 AAS_PUSH_RANGE=''
 AAS_PUSH_SENDING=''
 AAS_PUSH_CARRIES=0
@@ -29,6 +32,7 @@ AAS_PUSH_BRANCH_SHAS=''
 AAS_PUSH_OTHER=0
 while read -r _local_ref local_sha remote_ref remote_sha; do
   [ -z "$remote_ref" ] && continue
+  saw_ref=1
   case "$remote_ref" in
     refs/heads/wip/*) ;;
     *) pushing_wip=0 ;;
@@ -61,6 +65,11 @@ while read -r _local_ref local_sha remote_ref remote_sha; do
       ;;
   esac
 done
+
+if [ "$saw_ref" = "0" ]; then
+  echo "== 押すものがありません（確かめずに通します。断られた push では、ここへ何も渡りません）"
+  exit 0
+fi
 
 if [ "$pushing_wip" = "1" ]; then
   echo "== wip/ のブランチなので、確かめずに通します（作業中のものを移すだけ）"
