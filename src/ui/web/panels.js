@@ -588,7 +588,9 @@ export const PANELS = {
       void updateSlash();
     };
     input.onblur = () => { slashShown = []; drawSlash(); };
-    stop.onclick = () => fetch('/api/abort', { method: 'POST' });
+    // 繋がらないときに黙ると、止めたつもりで止まっていない
+    stop.onclick = () => fetch('/api/abort', { method: 'POST' })
+      .catch((e) => note('bad', `止められませんでした（繋がりません: ${e?.message ?? e}）`));
     ctx.focusInput = () => input.focus();
     ctx.prefill = (head) => {
       if (!input.value.startsWith(head)) input.value = head + input.value;

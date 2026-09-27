@@ -67,3 +67,23 @@
   番号だけを受け取り、中身は本体が取っておいた方から出す
 - playwright の `dialog.dismiss()` は Promise を返す。`void d.dismiss()` のままだと、受け手の無い Promise として
   `test/no-unhandled.test.ts` が止める。`.catch(() => undefined)` を付ける
+
+## 2026-09-28 画面と本体のやりとりで、断られたのを見落とさない形
+
+- `ask`（app.js）は、繋がらなかったときだけ `undefined` を返し、断られた（400・404・409・500）ときは中身を返す。`if (!r) return;` の
+  後で `r.ok` を見ないと、断られたのに効いた顔をする（`test/ask-ok.test.ts` が止める）
+- 読むだけのときは `getJson`（`src/ui/web/get-json.js`）を通す。断られたら本体の文で投げるので、呼ぶ側の `catch` が繋がらなかった
+  ときと同じに効く。`fetch(p).then((r) => r.json())` は、断られた `{ error }` を中身として返す（`test/get-json.test.ts` が止める）
+- 書き込みで生の `fetch` を使うなら、受け取って `ok` を見る。投げっぱなしにしてよいのは中断・添付・作業を止める所だけで、
+  中断も繋がらないときは言う
+- 文字列の在る無しを見る試験（`app.includes("fetch('/api/ready'")` など）は、書き方を置き換えると落ちる。置き換える前に
+  `grep -rn` で test/ の中の古い書き方を探す
+
+## 2026-09-28 失敗の文で種類を見分けるときは、場所を除く
+
+- 失敗の文には、保存先・モデルのファイル・実行ファイルの場所が入る。一時フォルダの乱数（`aas-…-aTlS9x`）や、利用者が付けた
+  フォルダの名前（`app-version2`、`models-incomplete`）の字で、見分けが変わっていた
+- `withoutPlaces`（`src/runtime/net-why.ts`）で URL と区切りを含む並びを除いてから当てる。当てる語は実物の文から取り、
+  llama.cpp の行の頭に付く関数名（`gguf_init_from_file`）のような、どの行にも出る語は使わない
+- 版の確かめは「version」の一語ではなく、版の行（`version: 4585 (…)`）そのものを見る（GLIBC の `version \`GLIBC_2.38' not found`
+  にも「version」が入る）
