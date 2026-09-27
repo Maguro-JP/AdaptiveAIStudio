@@ -72,14 +72,13 @@ let lastState = null;
  * これは受け手を書かなくてよいという話ではない（`web-catch.test.ts` が
  * 受け手の無い呼び出しの数を数えていて、増やせない）。最後の網。
  */
+/*
+ * **止まったことの知らせ（bad）を、案内（warn）で上書きしない。**帯を一つ使い回していたので、起動直後に出た
+ * 「色を読めませんでした」等を、すぐ後の「まだ話せません」が消していた（sweep で見つけた）。bad が出ている間は、
+ * 案内をもう一本の帯に出す。
+ */
 function showCrash(what, detail, tone = 'bad', action) {
-  /*
-   * **止まったことの知らせ（bad）を、案内（warn）で上書きしない。**帯を一つ使い回していたので、起動直後に出た
-   * 「色を読めませんでした」等を、すぐ後の「まだ話せません」が消していた（sweep で見つけた）。bad が出ている間は、
-   * 案内をもう一本の帯に出す。
-   */
-  const first = document.getElementById('crashNote');
-  const id = tone !== 'bad' && first?.classList.contains('bad') ? 'crashNoteMore' : 'crashNote';
+  const id = tone !== 'bad' && document.querySelector('#crashNote.bad') ? 'crashNoteMore' : 'crashNote';
   let box = document.getElementById(id);
   if (!box) {
     box = document.createElement('div');
