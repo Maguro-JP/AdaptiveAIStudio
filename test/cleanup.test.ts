@@ -69,6 +69,22 @@ describe('片づけるもの・片づけないもの', () => {
     assert.match(found[0]!.why, /脇へ移した/);
   });
 
+  test('**写しの古さは、移した時刻（名前の時刻）で数える**（長く書き換えていなかったファイルを、移したその日に挙げない）', async () => {
+    const { home } = await scratch();
+    const { utimes } = await import('node:fs/promises');
+    const { readJournal } = await import('../src/core/journal-file.ts');
+    const at = join(home, 'layout.json');
+    await writeFile(at, '{"half');
+    const longAgo = new Date(Date.now() - 40 * 86_400_000);
+    await utimes(at, longAgo, longAgo); // 40 日前に書いたきりの並び
+    await readJournal(at); // いま壊れていると分かって、脇へ移す
+    const listed = async (now: number) => (await findRemovable({ keepTag: 'b9999', now })).filter((f) => f.path.includes('layout.json.broken-'));
+    assert.deepEqual(await listed(Date.now()), [], '移したその日に挙げた');
+    const later = await listed(Date.now() + 31 * 86_400_000);
+    assert.equal(later.length, 1);
+    assert.match(later[0]!.why, /3[01]日前の写し/, later[0]!.why);
+  });
+
   test('状態のファイルと戻り先で残った古い一時ファイルは消す。新しいもの・元のファイル・知らない名前は消さない', async () => {
     const { home } = await scratch();
     const undo = join(home, 'undo');

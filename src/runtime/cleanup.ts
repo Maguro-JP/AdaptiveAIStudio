@@ -122,13 +122,22 @@ export async function findRemovable(opts: {
    * 中身を手で拾うためのものなので、すぐには消さない。**古いものだけ**（記録と同じ 30 日）。ここに載せるまで、壊れるたびに
    * 溜まって誰も片づけなかった。
    */
-  const BROKEN = /\.broken-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/;
+  const BROKEN = /\.broken-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/;
   for (const name of await readdir(stateDir()).catch(() => [])) {
-    if (!BROKEN.test(name)) continue;
+    const m = BROKEN.exec(name);
+    if (!m) continue;
     const path = join(stateDir(), name);
     const s = await stat(path).catch(() => undefined);
-    if (!s || !s.isFile() || now - s.mtimeMs < maxLogAge) continue;
-    found.push({ path, bytes: s.size, why: `壊れていたので脇へ移した ${Math.floor((now - s.mtimeMs) / 86_400_000)}日前の写し（中身を手で拾うためのもの）` });
+    if (!s || !s.isFile()) continue;
+    /*
+     * **古さは、名前に入れた移した時刻で数える。**写しは名前の付け替えで作るので、最終更新は元のファイルを最後に書いた
+     * 時刻のまま。長く書き換えていなかった設定（並び・見た目）が壊れると、移したその日に「40日前の写し」として挙がり、
+     * `--yes` で消えた（画面では「元のファイルは残しています」と言っているのに）。読めない時刻なら最終更新に戻す。
+     */
+    const movedAt = Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`);
+    const since = Number.isFinite(movedAt) ? movedAt : s.mtimeMs;
+    if (now - since < maxLogAge) continue;
+    found.push({ path, bytes: s.size, why: `壊れていたので脇へ移した ${Math.floor((now - since) / 86_400_000)}日前の写し（中身を手で拾うためのもの）` });
   }
 
   /*
