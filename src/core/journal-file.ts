@@ -16,7 +16,8 @@ import { inOrder } from './in-order.ts';
 
 export type JournalRead =
   | { kind: 'value'; value: unknown }
-  | { kind: 'missing' }
+  /** `broken`: 壊れていたので脇へ移した（無かったのではない）。黙って既定に戻さず、そう言うため。 */
+  | { kind: 'missing'; broken?: true }
   | { kind: 'unreadable' };
 
 export interface JournalOps {
@@ -44,7 +45,7 @@ export async function readJournal(path: string, ops: JournalOps = {}): Promise<J
   try {
     return { kind: 'value', value: JSON.parse(text.replace(/^﻿/, '')) };
   } catch {
-    return await (ops.setAside ?? setAside)(path) ? { kind: 'missing' } : { kind: 'unreadable' };
+    return await (ops.setAside ?? setAside)(path) ? { kind: 'missing', broken: true } : { kind: 'unreadable' };
   }
 }
 
@@ -85,14 +86,27 @@ export function saveJournal(
       if (r.kind === 'value') absorb(r.value);
       unread.delete(target);
     }
-    const tmp = `${path}.${process.pid}.${++tmpSeq}.tmp`; // 同じプロセスで並んで呼ばれても名前をぶつけない
-    try {
-      await (ops.write ?? ((t: string, x: string) => writeFile(t, x, 'utf8')))(tmp, text());
-      await rename(tmp, path);
-      return true;
-    } catch {
-      await unlink(tmp).catch(() => undefined);
-      return false;
-    }
+    return replaceWhole(path, text(), ops);
   });
+}
+
+/** 一時ファイルに書いてから名前を付け替える。並びは呼ぶ側が決める。 */
+async function replaceWhole(path: string, text: string, ops: JournalOps): Promise<boolean> {
+  const tmp = `${path}.${process.pid}.${++tmpSeq}.tmp`; // 同じプロセスで並んで呼ばれても名前をぶつけない
+  try {
+    await (ops.write ?? ((t: string, x: string) => writeFile(t, x, 'utf8')))(tmp, text);
+    await rename(tmp, path);
+    return true;
+  } catch {
+    await unlink(tmp).catch(() => undefined);
+    return false;
+  }
+}
+
+/**
+ * 利用者が選んだものを丸ごと書く（画面の並び・見た目）。読み直して足すものが無いので、起動のときに読めたかどうかは見ない。
+ * 同じファイルへは一列に並べ、一時ファイルから付け替える（途中で落ちても前の中身が残る）。書けなければ false。
+ */
+export function writeWhole(path: string, text: string, ops: JournalOps = {}): Promise<boolean> {
+  return inOrder(path, () => replaceWhole(path, text, ops));
 }
