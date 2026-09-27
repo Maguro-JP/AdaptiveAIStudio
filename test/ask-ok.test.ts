@@ -74,3 +74,24 @@ test('**書き込みの `fetch` は、返事の `ok` を見る**（投げっぱ�
   assert.ok(seen >= 10, `書き込みの fetch を見つけられていない（${seen} 件）。書き方が変わったなら、この試験も合わせる`);
   assert.deepEqual(bad, [], `返事の ok を見ていない書き込み:\n${bad.join('\n')}`);
 });
+
+/**
+ * 中断（`/api/abort`）は投げっぱなしでよいが、繋がらないときは黙らない。本体はいつも受けるが、止まっている・繋がらない
+ * ときに黙ると、止めたつもりで止まっていない（受け手の無い失敗は「途中で止まりました」とだけ出る）。
+ */
+test('**中断を送る所は、繋がらないときに黙らない受け手を持つ**', async () => {
+  const bad: string[] = [];
+  let seen = 0;
+  for (const { name, lines } of await codeLines()) {
+    const src = lines.join('\n');
+    for (const m of src.matchAll(/fetch\('\/api\/abort'/g)) {
+      seen += 1;
+      const at = m.index ?? 0;
+      const end = src.indexOf(';', at);
+      const stmt = src.slice(at, end < 0 ? at + 300 : end);
+      if (!/\.catch\(\(e\) =>/.test(stmt)) bad.push(`${name}:${src.slice(0, at).split('\n').length}`);
+    }
+  }
+  assert.ok(seen >= 3, `中断を送る所を見つけられていない（${seen} 件）`);
+  assert.deepEqual(bad, [], `繋がらないときに黙る中断:\n${bad.join('\n')}`);
+});
