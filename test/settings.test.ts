@@ -37,6 +37,21 @@ async function start(): Promise<{ url: string; at: string; models: string }> {
 }
 
 describe('設定の口', () => {
+  test('**設定の JSON が壊れていたら、画面から保存しても上書きせず、理由を返す**', async () => {
+    const { url, at, models } = await start();
+    const broken = '{\n  "providers": [],\n}';
+    await writeFile(at, broken);
+    const r = await fetch(new URL('/api/config', url), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'inproc', modelsDir: models }),
+    });
+    assert.equal(r.ok, false);
+    const body = await r.json() as { error?: string };
+    assert.match(body.error ?? '', /書き換えませんでした/, JSON.stringify(body));
+    assert.equal(await readFile(at, 'utf8'), broken, '壊れた設定を上書きした');
+  });
+
   test('いまの設定と、置いてある GGUF が読める', async () => {
     const { url, models } = await start();
     const r = await fetch(new URL('/api/config', url)).then((x) => x.json()) as {

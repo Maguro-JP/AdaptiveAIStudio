@@ -147,7 +147,9 @@ describe('動いている間も、別の会話が持てる', () => {
 
   test('順番待ちに同じ会話の分があれば、横が空いても後ろに並ぶ（会話の中で順番を入れ替えない）', async () => {
     // X は長く、W は短く。W が終わって横が空いても、X は本体でまだ走っている形を作る。
-    fake.setBehavior({ kind: 'echo', delayMs: 300, delayFor: (asked) => (asked.includes('X3') ? 4000 : undefined) });
+    // **W は、Y の一つ目を送るまで確実に走っている長さにする。**300ms にしていたので、重い機械（bundle の確かめと
+    // 並んで走る等）では Y を送る前に W が終わって横が空き、Y の一つ目が積まれずに走って落ちた（間を 800ms 空けて再現した）。
+    fake.setBehavior({ kind: 'echo', delayMs: 300, delayFor: (asked) => (asked.includes('X3') ? 10_000 : asked.includes('W3') ? 3000 : undefined) });
     try {
       const x = await json(await post('/api/send', { text: 'X3 の依頼' }));
       assert.equal(x.accepted, true, JSON.stringify(x));

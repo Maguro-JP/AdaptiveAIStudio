@@ -5,7 +5,9 @@
  * 書き込めると、設定という顔をして道具の振る舞いを丸ごと差し替えられる。
  * 変えたい理由がはっきりしているものだけを、ここに挙げる。
  */
-import { readFile, writeFile, stat, mkdir } from 'node:fs/promises';
+import { readFile, stat, mkdir } from 'node:fs/promises';
+import { writeWhole } from '../core/journal-file.ts';
+import { inOrder } from '../core/in-order.ts';
 import { dirname } from 'node:path';
 import { configPath } from '../config.ts';
 import { modelsDir } from '../core/home.ts';
@@ -32,10 +34,59 @@ export function isRuntimeKind(value: unknown): value is RuntimeKind {
   return typeof value === 'string' && (RUNTIME_KINDS as readonly string[]).includes(value);
 }
 
+/**
+ * 書き換える前に、今の設定を読む。**無いときだけ空から始める。**
+ *
+ * ここは読めなければ何であれ `{}` から始めていたので、手で書き損じた設定（カンマ一つ）や、一瞬掴まれて読めなかった
+ * 設定を、画面で一つ変えただけで丸ごと上書きして消した。設定は利用者が書くファイルなので、脇へ移しもしない。
+ * 壊れている・読めない・入れ物でないときは、書き換えずに理由を投げる（画面に出る）。先頭の BOM は外して読む。
+ */
+async function configForEdit(at: string): Promise<Record<string, unknown>> {
+  let text: string;
+  try {
+    text = await readFile(at, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw new Error(`設定（${at}）が読めないので、書き換えませんでした（${(e as NodeJS.ErrnoException).code ?? String(e)}）。少し待ってからもう一度押してください`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.replace(/^\uFEFF/, ''));
+  } catch (e) {
+    throw new Error(`設定（${at}）の JSON が壊れているので、書き換えませんでした（${(e as Error).message}）。ファイルを直してから、もう一度押してください`);
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`設定（${at}）が { } で囲んだ形ではないので、書き換えませんでした。ファイルを直してから、もう一度押してください`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/**
+ * 読んでから書くまでを、設定ファイルごとに一列に並べる。並べないと、ランタイムの保存と繋ぎ先の保存が同時に走ったとき、
+ * 後から書いた方が、先に書いた変更を知らない古い中身で上書きして消す。`change` が `next` を返さなければ書かない。
+ */
+function editConfig<T>(change: (current: Record<string, unknown>, at: string) => { next?: Record<string, unknown>; result: T }): Promise<T> {
+  const at = configPath();
+  // 書く側（writeWhole）も同じファイルの名前で並ぶので、別の名前で並べる（同じ名前だと、自分の書き込みを待ち続ける）
+  return inOrder(`${at}#edit`, async () => {
+    const { next, result } = change(await configForEdit(at), at);
+    if (next) await writeConfig(at, next);
+    return result;
+  });
+}
+
+/** 書く。一時ファイルから付け替える（途中で落ちても、前の設定が残る）。 */
+async function writeConfig(at: string, value: Record<string, unknown>): Promise<void> {
+  await mkdir(dirname(at), { recursive: true });
+  if (!await writeWhole(at, `${JSON.stringify(value, null, 2)}\n`)) {
+    throw new Error(`設定（${at}）を書けませんでした。少し待ってからもう一度押してください`);
+  }
+}
+
 /** 保存してある設定の runtime だけを読む。無ければ空。 */
 export async function readSavedRuntime(): Promise<Record<string, unknown>> {
   try {
-    const raw = JSON.parse(await readFile(configPath(), 'utf8')) as Record<string, unknown>;
+    const raw = JSON.parse((await readFile(configPath(), 'utf8')).replace(/^\uFEFF/, '')) as Record<string, unknown>;
     return (raw.runtime as Record<string, unknown>) ?? {};
   } catch {
     return {};
@@ -54,20 +105,16 @@ export async function saveRuntime(
   /** 使う GGUF の名前。undefined なら触らない、空文字なら消す。 */
   model?: string,
 ): Promise<string> {
-  const at = configPath();
-  let current: Record<string, unknown> = {};
-  try {
-    current = JSON.parse(await readFile(at, 'utf8')) as Record<string, unknown>;
-  } catch { /* まだ無い */ }
-  const runtime: Record<string, unknown> = { ...(current.runtime as Record<string, unknown> ?? {}), kind };
-  if (modelsDir) runtime.modelsDir = modelsDir;
-  else delete runtime.modelsDir;
-  if (model !== undefined) {
-    if (model) runtime.model = model;
-    else delete runtime.model;
-  }
-  await writeFile(at, `${JSON.stringify({ ...current, runtime }, null, 2)}\n`, 'utf8');
-  return at;
+  return editConfig((current, at) => {
+    const runtime: Record<string, unknown> = { ...objectOr(current.runtime), kind };
+    if (modelsDir) runtime.modelsDir = modelsDir;
+    else delete runtime.modelsDir;
+    if (model !== undefined) {
+      if (model) runtime.model = model;
+      else delete runtime.model;
+    }
+    return { next: { ...current, runtime }, result: at };
+  });
 }
 
 /** 置き場そのものの状態。語形の変わらない符丁で返し、表示のときに引き直す。 */
@@ -156,16 +203,11 @@ export async function saveMcpServer(
     envFrom?: Record<string, string>; headersFrom?: Record<string, string>; enabled?: boolean;
   },
 ): Promise<string> {
-  const at = configPath();
-  let current: Record<string, unknown> = {};
-  try {
-    current = JSON.parse(await readFile(at, 'utf8')) as Record<string, unknown>;
-  } catch { /* 無ければ、これが最初の一つ */ }
-  const mcp = (current.mcp ?? {}) as { servers?: Record<string, unknown> };
-  const servers = { ...(mcp.servers ?? {}), [name]: spec };
-  await mkdir(dirname(at), { recursive: true });
-  await writeFile(at, `${JSON.stringify({ ...current, mcp: { ...mcp, servers } }, null, 2)}\n`, 'utf8');
-  return at;
+  return editConfig((current, at) => { // 無ければ、これが最初の一つ
+    const mcp = objectOr(current.mcp) as { servers?: Record<string, unknown> };
+    const servers = { ...objectOr(mcp.servers), [name]: spec };
+    return { next: { ...current, mcp: { ...mcp, servers } }, result: at };
+  });
 }
 
 /**
@@ -181,19 +223,13 @@ export async function saveMcpServer(
  * 「外しました」**になる。打ち間違いが、外れた事実として返ってくる。
  */
 export async function removeMcpServer(name: string): Promise<{ path: string; removed: boolean }> {
-  const at = configPath();
-  let current: Record<string, unknown> = {};
-  try {
-    current = JSON.parse(await readFile(at, 'utf8')) as Record<string, unknown>;
-  } catch { return { path: at, removed: false }; }
-  const mcp = (current.mcp ?? {}) as { servers?: Record<string, unknown> };
-  const servers = { ...(mcp.servers ?? {}) };
-  const removed = Object.prototype.hasOwnProperty.call(servers, name);
-  if (!removed) return { path: at, removed: false };
-  delete servers[name];
-  await mkdir(dirname(at), { recursive: true });
-  await writeFile(at, `${JSON.stringify({ ...current, mcp: { ...mcp, servers } }, null, 2)}\n`, 'utf8');
-  return { path: at, removed: true };
+  return editConfig<{ path: string; removed: boolean }>((current, at) => {
+    const mcp = objectOr(current.mcp) as { servers?: Record<string, unknown> };
+    const servers = { ...objectOr(mcp.servers) };
+    if (!Object.prototype.hasOwnProperty.call(servers, name)) return { result: { path: at, removed: false } };
+    delete servers[name];
+    return { next: { ...current, mcp: { ...mcp, servers } }, result: { path: at, removed: true } };
+  });
 }
 
 /**
@@ -206,24 +242,25 @@ export async function removeMcpServer(name: string): Promise<{ path: string; rem
  * 空文字で消す（既定に戻る）。
  */
 export async function saveWorkRoot(root: string): Promise<string> {
-  const at = configPath();
-  let current: Record<string, unknown> = {};
-  try {
-    current = JSON.parse(await readFile(at, 'utf8')) as Record<string, unknown>;
-  } catch { /* まだ無い */ }
-  const agent: Record<string, unknown> = { ...(current.agent as Record<string, unknown> ?? {}) };
-  if (root) agent.root = root;
-  else delete agent.root;
-  await writeFile(at, `${JSON.stringify({ ...current, agent }, null, 2)}\n`, 'utf8');
-  return at;
+  return editConfig((current, at) => {
+    const agent: Record<string, unknown> = { ...objectOr(current.agent) };
+    if (root) agent.root = root;
+    else delete agent.root;
+    return { next: { ...current, agent }, result: at };
+  });
 }
 
 /** 書いてある作業場。無ければ空。 */
 export async function savedWorkRoot(): Promise<string> {
   try {
-    const raw = JSON.parse(await readFile(configPath(), 'utf8')) as { agent?: { root?: unknown } };
+    const raw = JSON.parse((await readFile(configPath(), 'utf8')).replace(/^\uFEFF/, '')) as { agent?: { root?: unknown } };
     return typeof raw.agent?.root === 'string' ? raw.agent.root : '';
   } catch {
     return '';
   }
+}
+
+/** 入れ物ならそれ、違えば空（`null` の項目を広げて止まらない）。 */
+function objectOr(v: unknown): Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : {};
 }
