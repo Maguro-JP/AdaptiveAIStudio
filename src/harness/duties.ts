@@ -166,6 +166,24 @@ export class DutyRoster {
     for (const r of records) if (isRecord(r)) this.#records.set(r.dutyId, r);
   }
 
+  /**
+   * 起動のときに読めなかった記録を、後から読めたときに足す。空で始めた間に数えた分は、その上に積む。
+   * 最後の期は、その間に済ませた（または流した）ならそちらを取る。
+   */
+  absorb(records: unknown): void {
+    if (!Array.isArray(records)) return;
+    for (const base of records.filter(isRecord)) {
+      const now = this.#records.get(base.dutyId);
+      if (!now) { this.#records.set(base.dutyId, base); continue; }
+      const touched = now.lastPeriod !== undefined;
+      now.completions += base.completions;
+      now.missed += base.missed;
+      if (!touched) now.lastPeriod = base.lastPeriod;
+      const last = Math.max(now.lastAt ?? 0, base.lastAt ?? 0);
+      if (last > 0) now.lastAt = last;
+    }
+  }
+
   /** 今の状況。何が済んでいて、何が残っているか。 */
   status(now: number): DutyStatus[] {
     return this.#duties.map((duty) => {

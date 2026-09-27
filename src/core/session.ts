@@ -35,7 +35,7 @@ import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { createDeliberateTool } from '../agent/tools/deliberate.ts';
 import { buildInspector } from './inspector-setup.ts';
 import { startMcpServers } from './mcp-setup.ts';
-import { loadJournals, type Journals } from './journals.ts';
+import { loadJournals, saveJournals, type Journals } from './journals.ts';
 import { McpClient, type McpServerSpec } from '../mcp/client.ts';
 import { collectTools } from '../mcp/tools.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
@@ -51,7 +51,7 @@ import { IdleScheduler, type ModeStat } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES, MODE_ROLE, promptFor } from '../harness/idle-modes.ts';
 import { DutyRoster, type DutyRecord } from '../harness/duties.ts';
 import { BUILTIN_DUTIES } from '../harness/builtin-duties.ts';
-import { readFile as readJson, writeFile as writeJson, mkdir } from 'node:fs/promises';
+import { readFile as readJson, mkdir } from 'node:fs/promises';
 import { RoleRegistry } from '../roles/registry.ts';
 import type { Tool, ApprovalRequest, ApprovalAnswer } from '../agent/tools/types.ts';
 import { toolsFor } from '../roles/registry.ts';
@@ -1216,10 +1216,7 @@ export class Session {
 
   /** 思考の実績と日課の記録を残す。次の起動でも続きから考えられるように。 */
   async saveAutonomy(): Promise<void> {
-    await writeJson(join(stateDir(), 'idle.json'),
-      JSON.stringify(this.idle.stats(), null, 2), 'utf8').catch(() => undefined);
-    await writeJson(join(stateDir(), 'duties.json'),
-      JSON.stringify(this.duties.records(), null, 2), 'utf8').catch(() => undefined);
+    await saveJournals(this).catch(() => undefined);
   }
 
   /** 何かが変わった。考え直す価値が生まれたということ。 */
