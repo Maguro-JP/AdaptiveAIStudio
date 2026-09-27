@@ -161,7 +161,9 @@ export class DutyRoster {
   }
 
   restore(records: DutyRecord[]): void {
-    for (const r of records) this.#records.set(r.dutyId, r);
+    // 形の違う一件（`null` 等）は、その一件だけ除く。そのまま入れると、画面の当番の一覧ごと 500 になっていた。
+    if (!Array.isArray(records)) return;
+    for (const r of records) if (isRecord(r)) this.#records.set(r.dutyId, r);
   }
 
   /** 今の状況。何が済んでいて、何が残っているか。 */
@@ -260,4 +262,14 @@ function formatWhen(at: number, now: number): string {
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${hours}時間後`;
   return `${Math.round(hours / 24)}日後`;
+}
+
+/** 当番の記録の形。回数は有限で 0 以上。 */
+function isRecord(v: unknown): v is DutyRecord {
+  if (typeof v !== 'object' || v === null) return false;
+  const r = v as Record<string, unknown>;
+  const count = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0;
+  return typeof r.dutyId === 'string' && count(r.completions) && count(r.missed)
+    && (r.lastPeriod === undefined || typeof r.lastPeriod === 'string')
+    && (r.lastAt === undefined || (typeof r.lastAt === 'number' && Number.isFinite(r.lastAt)));
 }

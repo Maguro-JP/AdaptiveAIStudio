@@ -6,7 +6,7 @@
  */
 import { spawn } from 'node:child_process';
 import { totalmem } from 'node:os';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { type MachineSpec, GB } from './spec.ts';
 import { chunkReader } from '../core/text.ts';
@@ -89,6 +89,8 @@ function run(cmd: string, args: string[]): Promise<string | undefined> {
   });
 }
 
+let tmpSeq = 0;
+
 /** 検出結果は毎回取らずキャッシュする。ハードは頻繁に変わらない。 */
 export class MachineCache {
   readonly #path: string;
@@ -96,14 +98,31 @@ export class MachineCache {
 
   async get(): Promise<DetectedMachine> {
     try {
-      return JSON.parse(await readFile(this.#path, 'utf8')) as DetectedMachine;
-    } catch {
-      const detected = await detectMachine();
-      await mkdir(dirname(this.#path), { recursive: true }).catch(() => undefined);
-      await writeFile(this.#path, JSON.stringify(detected, null, 2), 'utf8').catch(() => undefined);
-      return detected;
-    }
+      const got = JSON.parse(await readFile(this.#path, 'utf8')) as unknown;
+      // 形を確かめる。`null` で doctor が落ち、`{}` で「RAM NaNGB」のまま使っていた。違えば検出し直して書き直す。
+      if (isMachine(got)) return got;
+    } catch { /* 無い・壊れている。下で検出し直す */ }
+    const detected = await detectMachine();
+    await mkdir(dirname(this.#path), { recursive: true }).catch(() => undefined);
+    // 一時ファイルに書いてから置き換える（書きかけで落ちると、壊れた検出結果が残る）。
+    const tmp = `${this.#path}.${process.pid}.${++tmpSeq}.tmp`; // 同じプロセスで並んで呼ばれても名前をぶつけない
+    await writeFile(tmp, JSON.stringify(detected, null, 2), 'utf8')
+      .then(() => rename(tmp, this.#path))
+      .catch(() => rm(tmp, { force: true }).catch(() => undefined));
+    return detected;
   }
+}
+
+/** 検出結果の形。数は有限で 0 以上。 */
+function isMachine(v: unknown): v is DetectedMachine {
+  if (typeof v !== 'object' || v === null) return false;
+  const m = v as Record<string, unknown>;
+  const count = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0;
+  return count(m.vramBytes) && count(m.ramBytes) && m.ramBytes as number > 0
+    && count(m.ramBandwidthBytesPerSec) && count(m.vramBandwidthBytesPerSec)
+    && (m.diskBandwidthBytesPerSec === undefined || count(m.diskBandwidthBytesPerSec))
+    && typeof m.bandwidthEstimated === 'boolean'
+    && (m.gpuName === undefined || typeof m.gpuName === 'string');
 }
 
 export function describeMachine(m: DetectedMachine): string {
