@@ -202,10 +202,15 @@ describe('記録ファイルが壊れている・読めない', () => {
     await l.save();
     await rm(path, { recursive: true });
     await writeFile(path, before);
-    await l.save(); // 読めたので、前の名簿を取り込んで書く
+    await l.save(); // 読めたので、前の名簿を取り戻して書く
     const saved = JSON.parse(await readFile(path, 'utf8')) as { known: { id: string }[] };
-    // 今の名簿に無い役職（retired）も、前の名簿から取り込んで残す（消えたことを次の起動で言えるように）
-    assert.deepEqual(saved.known.map((s) => s.id).sort(), ['newbie', 'retired', 'scout', 'smith']);
+    // 読めなかった間の名簿は覚えない。前の名簿のまま残し、次の起動で照合し直して newbie の配属を知らせる
+    assert.deepEqual(saved.known.map((s) => s.id).sort(), ['retired', 'scout', 'smith']);
+    const next = new RoleLedger(path);
+    await next.load();
+    const news = next.sync([role({ id: 'scout', codename: 'RENAMED' }), role({ id: 'smith' }), role({ id: 'newbie' })]);
+    assert.deepEqual(news.map((c) => `${c.kind}:${c.roleId}`).sort(), ['joined:newbie', 'renamed:scout', 'succeeded:retired'],
+      '読めなかった起動の間の変更を、次の起動で知らせていない');
   });
 
   test('壊れた JSON は脇へ移し、初めてと同じく配属を知らせる（対）', async () => {
@@ -216,5 +221,41 @@ describe('記録ファイルが壊れている・読めない', () => {
     await l.load();
     assert.equal(l.sync([role({ id: 'scout' })]).length, 1);
     assert.ok((await readdir(dir)).some((n) => n.startsWith('roles-ledger.json.broken-')));
+  });
+
+  test('**まだ伝えていない変更は、読めなかった起動のあと読めたら取り込んで残す（形の違う一件は除く）**', async () => {
+    const { mkdir, rm, readFile, writeFile } = await import('node:fs/promises');
+    const dir = await tempDir('aas-ledger-f-');
+    const path = join(dir, 'roles-ledger.json');
+    const first = new RoleLedger(path);
+    await first.load();
+    first.sync([role({ id: 'scout' })]); // 知らせる前に落ちた
+    await first.save();
+    const raw = JSON.parse(await readFile(path, 'utf8')) as { unannounced: unknown[] };
+    raw.unannounced.push(null, { at: 'x', kind: 'exploded', roleId: 'a', codename: 'A', detail: 'd' });
+    const before = JSON.stringify(raw);
+    await rm(path);
+    await mkdir(path);
+    const l = new RoleLedger(path);
+    await l.load();
+    l.sync([role({ id: 'scout' })]);
+    await rm(path, { recursive: true });
+    await writeFile(path, before);
+    await l.save();
+    const saved = JSON.parse(await readFile(path, 'utf8')) as { unannounced: { kind: string; roleId: string }[] };
+    assert.deepEqual(saved.unannounced.map((c) => `${c.kind}:${c.roleId}`), ['joined:scout'], '未通知の変更を落とした・形の違う一件を残した');
+  });
+
+  test('**文字でない呼び名の役職を、起動のたびに「配属されました」と言わない**', async () => {
+    const dir = await tempDir('aas-ledger-f-');
+    const path = join(dir, 'roles-ledger.json');
+    const odd = role({ id: 'odd', codename: 7 as never });
+    for (const want of [1, 0, 0]) {
+      const l = new RoleLedger(path);
+      await l.load();
+      assert.equal(l.sync([odd]).length, want);
+      l.markAnnounced();
+      await l.save();
+    }
   });
 });

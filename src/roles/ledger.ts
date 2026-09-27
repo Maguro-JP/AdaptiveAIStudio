@@ -99,7 +99,7 @@ export class RoleLedger {
             detail: `${role.codename}（${role.name}）が配属されました。${role.responsibility}`,
           });
         }
-        this.#known.set(role.id, snap);
+        if (!this.#blind) this.#known.set(role.id, snap);
         continue;
       }
 
@@ -139,7 +139,7 @@ export class RoleLedger {
         });
       }
 
-      this.#known.set(role.id, snap);
+      if (!this.#blind) this.#known.set(role.id, snap);
     }
 
     // 名簿から消えた役職。方針では消さないので、記録に残して気づけるようにする。
@@ -152,7 +152,9 @@ export class RoleLedger {
       });
     }
 
-    if (this.#blind) return []; // 前が分からない。今の名簿だけ覚え、知らせない
+    // 前が分からない。知らせず、覚えもしない（覚えると、後で読めたときにファイルの前の姿を今の姿で上書きし、
+    // 改名や配属を一度も知らせないまま消す）。読めたら前の名簿を取り戻し、次の起動で照合し直す
+    if (this.#blind) return [];
     this.#unannounced.push(...changes);
     return changes;
   }
@@ -179,20 +181,23 @@ export class RoleLedger {
       const raw = readLedger(v);
       for (const s of raw.known) if (!this.#known.has(s.id)) this.#known.set(s.id, s);
       this.#unannounced = [...raw.unannounced, ...this.#unannounced];
+      this.#blind = false; // 前の名簿を取り戻した。これ以降の照合は知らせてよい
     }).catch(() => false);
   }
 }
 
 const CHANGE_KINDS = new Set<string>(['joined', 'renamed', 'reassigned', 'retuned', 'authorized', 'succeeded']);
 const isText = (x: unknown): x is string => typeof x === 'string';
-const isTexts = (x: unknown): x is string[] => Array.isArray(x) && x.every(isText);
 
+/**
+ * 照合で止まらない形か。見るのは名前と、配列として扱う所だけ。呼び名などの中身は比べるだけなので、型は問わない
+ * （設定の役職は型を確かめていないので、数の呼び名も入りうる。文字に限ると、読むたびに捨てて毎回「配属」と言う）。
+ */
 function isSnapshot(v: unknown): v is Snapshot {
   if (typeof v !== 'object' || v === null) return false;
   const r = v as Record<string, unknown>;
-  return isText(r.id) && isText(r.codename) && isText(r.name) && isText(r.responsibility)
-    && isText(r.disposition) && isTexts(r.access) && isText(r.signature)
-    && (r.succeededBy === undefined || isTexts(r.succeededBy));
+  return isText(r.id) && Array.isArray(r.access)
+    && (r.succeededBy === undefined || Array.isArray(r.succeededBy));
 }
 
 function isChange(v: unknown): v is RoleChange {
