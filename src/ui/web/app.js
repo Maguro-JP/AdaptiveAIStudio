@@ -73,10 +73,17 @@ let lastState = null;
  * 受け手の無い呼び出しの数を数えていて、増やせない）。最後の網。
  */
 function showCrash(what, detail, tone = 'bad', action) {
-  let box = document.getElementById('crashNote');
+  /*
+   * **止まったことの知らせ（bad）を、案内（warn）で上書きしない。**帯を一つ使い回していたので、起動直後に出た
+   * 「色を読めませんでした」等を、すぐ後の「まだ話せません」が消していた（sweep で見つけた）。bad が出ている間は、
+   * 案内をもう一本の帯に出す。
+   */
+  const first = document.getElementById('crashNote');
+  const id = tone !== 'bad' && first?.classList.contains('bad') ? 'crashNoteMore' : 'crashNote';
+  let box = document.getElementById(id);
   if (!box) {
     box = document.createElement('div');
-    box.id = 'crashNote';
+    box.id = id;
     box.className = 'crash-note';
     box.onclick = (e) => { if (e.target.tagName !== 'BUTTON') box.remove(); };
     // **被せない。**浮かせると、その下の押しボタン（パネルの ×、添えたものを外す ×）が
@@ -420,7 +427,7 @@ function applyTheme(t, vars) {
 
 async function loadTheme() {
   const r = await askJson('/api/theme', undefined, '色を読めませんでした');
-  if (!r) return;
+  if (!saved(r, 'theme', '色を読めませんでした')) return; // 失敗の返事（{ error }）で、一覧を回そうとして止まらない
   tokenNames = r.tokens;
   const sel = $('themes');
   sel.replaceChildren();
@@ -1554,7 +1561,7 @@ async function checkForUpdate() {
   const status = await askJson('/api/update', undefined, '更新を見に行けませんでした');
   if (!status) return;
   if (!status.can) {
-    alert(status.reason || '更新できません');
+    alert(status.reason || status.error || '更新できません'); // 見に行けなかった理由（{ error }）も言う
     return;
   }
   const list = status.incoming.map((c) => `  ${c}`).join('\n');

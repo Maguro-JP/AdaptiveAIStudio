@@ -58,7 +58,7 @@ p.on('response', (r) => {
   // **起こし直してもらえない入口では、断るのが正しい。**作業中の 409 も同じ。
   // ここで止めると誰も起こさず、二度と戻らない（実際にそうなっていた）。
   if (expectingRefusal && [409, 501].includes(r.status()) && at === '/api/restart') return;
-  if (expectingSaveFailure && r.status() === 500 && ['/api/theme/preset', '/api/layout/preset'].includes(at)) return;
+  if (expectingSaveFailure && r.status() === 500 && ['/api/theme/preset', '/api/layout/preset', '/api/theme'].includes(at)) return;
   bad.push(`${r.status()} ${at}`);
 });
 
@@ -1738,6 +1738,31 @@ await check('並びや色の保存に失敗したら、その文を出して止�
     if (await p.locator('#root').innerText().then((t) => t.length === 0)) throw new Error('並びが消えた');
   } finally {
     expectingSaveFailure = false;
+  }
+});
+
+/*
+ * **見た目を読めなかったら、その文を出して止まらない。**失敗の返事（`{ error }`）のまま一覧を回そうとして止まっていた。
+ */
+await check('見た目を読めなかったら、その文を出して止まらない', async () => {
+  expectingSaveFailure = true;
+  try {
+    await p.route('**/api/theme', (r) => (r.request().method() === 'GET'
+      ? r.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'SWEEP-色を読めません' }) })
+      : r.continue()));
+    await p.reload({ waitUntil: 'load' });
+    await opened();
+    await p.waitForTimeout(800);
+    const note = p.locator('#crashNote');
+    if (await note.count() === 0) throw new Error('読めなかったことを言っていない');
+    const text = await note.innerText();
+    if (!text.includes('SWEEP-色を読めません')) throw new Error(`向こうの文を出していない: ${text.slice(0, 60)}`);
+    if (text.includes('途中で止まりました')) throw new Error('止まった');
+  } finally {
+    await p.unroute('**/api/theme');
+    expectingSaveFailure = false;
+    await p.reload({ waitUntil: 'load' }).then(opened).catch(() => undefined);
+    await p.waitForTimeout(800);
   }
 });
 
