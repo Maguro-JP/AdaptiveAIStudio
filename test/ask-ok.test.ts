@@ -84,12 +84,14 @@ test('**中断を送る所は、繋がらないときに黙らない受け手を
   let seen = 0;
   for (const { name, lines } of await codeLines()) {
     const src = lines.join('\n');
-    for (const m of src.matchAll(/fetch\('\/api\/abort'/g)) {
+    // 引用符の違い・助け手（ask）を通した書き方も数える
+    for (const m of src.matchAll(/(?:fetch|ask)\(\s*['"`]\/api\/abort/g)) {
       seen += 1;
       const at = m.index ?? 0;
       const end = src.indexOf(';', at);
       const stmt = src.slice(at, end < 0 ? at + 300 : end);
-      if (!/\.catch\(\(e\) =>/.test(stmt)) bad.push(`${name}:${src.slice(0, at).split('\n').length}`);
+      // 受けて何も言わない形（`.catch((e) => undefined)`）は通さない。画面に出す（showCrash・note）ところまで見る
+      if (!/\.catch\(\(e\) =>[^;]*\b(showCrash|note)\(/.test(stmt) && !/^ask\(/.test(stmt)) bad.push(`${name}:${src.slice(0, at).split('\n').length}`);
     }
   }
   assert.ok(seen >= 3, `中断を送る所を見つけられていない（${seen} 件）`);

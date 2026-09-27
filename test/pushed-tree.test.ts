@@ -328,3 +328,20 @@ describe('使うものが、そろっている', sourceOnly, () => {
     );
   });
 });
+
+/**
+ * 押す ref が一つも渡らなかった（押す前に断られた・押すものが無い）とき、「wip/ のブランチなので」と言わない。
+ *
+ * 既定を「wip/ を押す」として、wip/ 以外の ref を見たら確かめる形だった。non-fast-forward で断られた push では ref が
+ * 一行も渡らず、wip/ でないブランチなのに「wip/ のブランチなので、確かめずに通します」と言っていた。
+ */
+describe('押すものが無いとき', sourceOnly, () => {
+  test('**ref が一つも渡らなければ、wip/ と取り違えず、押すものが無いと言う**', async () => {
+    const { spawnSync } = await import('node:child_process');
+    const hook = join(import.meta.dirname, '..', '.githooks', 'pre-push');
+    const got = spawnSync('sh', [hook, 'origin', 'https://example.invalid/x.git'], { input: '', encoding: 'utf8', cwd: join(import.meta.dirname, '..') });
+    assert.equal(got.status, 0, got.stderr);
+    assert.doesNotMatch(got.stdout, /wip\//, `ref が無いのに wip/ と言った: ${got.stdout}`);
+    assert.match(got.stdout, /押すものがありません/);
+  });
+});
