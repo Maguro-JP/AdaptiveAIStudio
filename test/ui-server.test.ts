@@ -692,7 +692,8 @@ describe('開いた時点で、使えるかを言う', () => {
 
   test('画面は、開いた時点でそれを訊きに行く', () => {
     const app = readFileSync(join(root, 'src/ui/web/app.js'), 'utf8');
-    assert.ok(app.includes("fetch('/api/ready'"), '開いた時点で訊いていない');
+    // 読むときは getJson を通す（断られた返事を中身として使わない）
+    assert.match(app, /(?:fetch|getJson)\('\/api\/ready'/, '開いた時点で訊いていない');
   });
 });
 
