@@ -23,7 +23,15 @@ let tokenNames = [];
 const stateHandlers = [];
 const eventHandlers = new Map();
 
+/**
+ * 並びを組み直した回数。組み直すと、それまでのパネルは捨てられる（新しいものが作られる）。
+ * タブにまとめた中の隠れた中身も DOM から外れるので、「外れている」では捨てられたのか隠れているだけかが分からない。
+ */
+let renderGen = 0;
+
 const ctx = {
+  /** いまの並びの世代。パネルは作られたときの値と比べて、自分が捨てられたかを知る。 */
+  gen: () => renderGen,
   /** 会話の入力欄へ寄せる。差し替えられる。 */
   focusInput: () => undefined,
   /** 入力欄の先頭に文字を置く（/plan など）。チャットのパネルが繋ぐ。 */
@@ -378,6 +386,7 @@ function grip(node, index, box) {
 }
 
 function render() {
+  renderGen += 1;
   stateHandlers.length = 0;
   eventHandlers.clear();
   document.documentElement.dataset.density = layout.density ?? 'comfortable';

@@ -25,7 +25,7 @@ const empty = (text) => el('div', 'empty', text);
  * このページで作ったエディタのパネル（名札 → そのパネルの入れ物）。同じページの中のパネルは、生きているかを
  * 時刻でなく、切り離されたかどうかで見る（並びを組み直した直後、前のパネルの時刻はまだ新しい）。
  */
-const EDITORS_HERE = new Map();
+const EDITORS_HERE = new Map(); // 名札 → 捨てられたか（() => boolean）
 
 /**
  * 文の中の https:// を、押せる形にする。
@@ -2244,22 +2244,46 @@ export const PANELS = {
      * 離れた）は書くのを止めるので、時刻が古くなれば死んだものとして扱い、今までどおり引き取る。
      */
     const LIVE_AT = (who) => `aas.live:${who}`;
-    const LIVE_MS = 15_000;
+    /*
+     * 別のタブのパネルが生きているとみなす長さ。背景のタブはタイマーが間引かれ（長く裏にあると 1 分に 1 回程度）、
+     * 5 秒ごとの書き込みが止まって見える。短くすると、裏で直している途中のタブの預かりを引き取る。
+     * 閉じたタブはページを離れるときに消すので、長くして困るのは落ちたタブだけ（その分、引き取るのが遅れる）。
+     */
+    const LIVE_MS = 150_000;
+    /*
+     * 捨てられたか。並びの世代で見る（タブにまとめた中で隠れている間は DOM から外れるが、生きている）。
+     * 世代を渡さない呼び方（試験）では、外れたかで見る。
+     */
+    const myGen = typeof ctx?.gen === 'function' ? ctx.gen() : undefined;
+    const discarded = () => (myGen !== undefined ? ctx.gen() !== myGen : body.isConnected === false);
     const beat = () => { try { localStorage.setItem(LIVE_AT(DRAFT_ME), String(Date.now())); } catch { /* 覚えておく所が使えない環境もある */ } };
-    const stopBeat = () => { clearInterval(beating); EDITORS_HERE.delete(DRAFT_ME); try { localStorage.removeItem(LIVE_AT(DRAFT_ME)); } catch { /* 同上 */ } };
-    beat();
-    const beating = setInterval(() => {
-      // 並びを組み直すとパネルは作り直され、前のものは切り離される。切り離されたら止める（死んだパネルを生かし続けない）。
-      if (body.isConnected === false) { stopBeat(); return; }
+    const unbeat = () => { try { localStorage.removeItem(LIVE_AT(DRAFT_ME)); } catch { /* 同上 */ } };
+    let beating;
+    const pause = () => { clearInterval(beating); beating = undefined; unbeat(); };
+    const resume = () => {
+      if (beating !== undefined || discarded()) return;
       beat();
-    }, 5_000);
-    beating.unref?.(); // 試験（Node の中で画面を組む）で、このタイマーが走りを生かし続けないように
-    globalThis.addEventListener?.('pagehide', stopBeat);
-    EDITORS_HERE.set(DRAFT_ME, body);
+      beating = setInterval(() => { if (discarded()) dispose(); else beat(); }, 5_000);
+      beating.unref?.(); // 試験（Node の中で画面を組む）で、このタイマーが走りを生かし続けないように
+    };
+    // ページを離れる（閉じる・裏の保存に入る）ときは止め、戻ってきたら（裏の保存から戻る）書き直す。
+    const onHide = () => pause();
+    const onShow = () => resume();
+    /** 捨てられた。書くのを止め、ページに付けた受け手も外す（外さないと、捨てたエディタが中身ごと残る）。 */
+    const dispose = () => {
+      pause();
+      EDITORS_HERE.delete(DRAFT_ME);
+      globalThis.removeEventListener?.('pagehide', onHide);
+      globalThis.removeEventListener?.('pageshow', onShow);
+    };
+    globalThis.addEventListener?.('pagehide', onHide);
+    globalThis.addEventListener?.('pageshow', onShow);
+    resume();
+    EDITORS_HERE.set(DRAFT_ME, discarded);
     const aliveElsewhere = (who) => {
       if (typeof who !== 'string' || who === DRAFT_ME) return false;
-      // このページのパネルなら、切り離されていないかで決める。別のタブのものは時刻で決める。
-      if (EDITORS_HERE.has(who)) return EDITORS_HERE.get(who).isConnected !== false;
+      // このページのパネルなら、捨てられていないかで決める。別のタブのものは時刻で決める。
+      if (EDITORS_HERE.has(who)) return !EDITORS_HERE.get(who)();
       try {
         const at = Number(localStorage.getItem(LIVE_AT(who)));
         return Number.isFinite(at) && at > 0 && Date.now() - at < LIVE_MS;
@@ -2276,6 +2300,7 @@ export const PANELS = {
     /** これより古い預かりは捨てる。 */
     const DRAFT_KEEP_MS = 14 * 24 * 60 * 60 * 1000;
     let toldTooBig = '';
+    let toldBusy = '';
 
     const keepDraft = () => {
       if (!path) return;
@@ -2292,6 +2317,15 @@ export const PANELS = {
              * この欄が作り直されて消えるということ。そこまで言う。
              */
             tell('大きいので、保存していない直しを預かれません（パネルを作り直したときも、ブラウザを閉じたときも残りません。保存してください）。', [], 'info');
+          }
+          return;
+        }
+        // 生きている別のパネルが同じファイルを預けているなら、上書きしない（そちらの直しを預かりから落とす）。
+        const other = readDraft(path);
+        if (other && aliveElsewhere(other.by) && other.text !== area.value) {
+          if (toldBusy !== path) {
+            toldBusy = path;
+            tell('別のパネルが同じファイルの直しを預けているので、ここの直しは預かれません（ブラウザを閉じると残りません。保存してください）。', [], 'info');
           }
           return;
         }
@@ -2640,6 +2674,7 @@ export const PANELS = {
       // 預けた分が在れば、それを返す（消さずに戻す）。
       // このパネルの中に無ければ、覚えておく所を見る（ブラウザを閉じたあとでも戻せる）。
       let kept;
+      let busyElsewhere = false;
       const inPanel = drafts.get(p);
       /*
        * このパネルの中で預けた分。**離れている間にファイルが変わっていたら、黙って戻さない。**
@@ -2657,6 +2692,7 @@ export const PANELS = {
         if (inPanel === undefined && stored && stored.base === loaded && aliveElsewhere(stored.by)) {
           // 生きている別のパネルの直し。引き取らず、そちらで保存してもらう（ここでは保存した版を出す）。
           tell('このファイルは、別のパネル（または別のタブ）で保存していない直しの途中です。ここでは保存した版を出しています。直しはそちらで保存してください。', [], 'info');
+          busyElsewhere = true;
         } else if (inPanel === undefined && stored && stored.base === loaded) { kept = stored.text; adoptDraft(p, stored); }
         else if (saved) {
           if (ours) toldDraft.set(p, stored.at);
@@ -2699,6 +2735,8 @@ export const PANELS = {
       area.value = kept ?? loaded;
       area.disabled = false;
       refresh();
+      // 後の知らせ（行末が混ざっている等）で上の知らせが置き換わっても、なぜ直しが戻らないかを見出しに残す
+      if (busyElsewhere) state.textContent = '別のパネルで直している途中';
       if (kept !== undefined && kept !== loaded) state.textContent = '保存していない直しを戻しました（Ctrl+S で保存）';
       if (mixedEol) tell('行末が混ざっています（CRLF と LF）。保存すると LF にそろいます。', [], 'info');
       // 預かったままの直しが在るなら、戻せることを出す（黙って持っていても届かない）。

@@ -26,8 +26,16 @@ const { PANELS } = await import('../src/ui/web/panels.js') as {
  * 前の試験の分が残っていると、開いた瞬間にそれが戻ってくる（実際に 4 件落ちた）。
  * 預かりそのものを見る試験は、`keep` を渡して残す。
  */
-function open(disk: Record<string, string>, keep = false) {
-  if (!keep) localStorage.clear();
+/** この試験で作ったパネル。預かりを消して始めるときに、前の試験のパネルも閉じる（生きたまま残すと、同じ名前の
+ * ファイルの預かりを後から書き、こちらの試験の預かりを「生きている別のパネルのもの」として断らせる）。 */
+const made: StubNode[] = [];
+function fresh(): void {
+  localStorage.clear();
+  for (const b of made.splice(0)) (b as unknown as { isConnected: boolean }).isConnected = false;
+}
+
+function open(disk: Record<string, string>, keep = false, extra: Record<string, unknown> = {}) {
+  if (!keep) fresh();
   const asked: Array<{ url: string; method: string; body?: unknown }> = [];
   (globalThis as { fetch?: unknown }).fetch = (async (url: string, init?: { method?: string; body?: string }) => {
     const method = init?.method ?? 'GET';
@@ -59,7 +67,9 @@ function open(disk: Record<string, string>, keep = false) {
 
   const handlers = new Map<string, Array<(e: unknown) => void>>();
   const body = createNode('div');
+  made.push(body);
   const ctx: Record<string, unknown> = {
+    ...extra,
     on: (type: string, fn: (e: unknown) => void) => {
       if (!handlers.has(type)) handlers.set(type, []);
       handlers.get(type)!.push(fn);
@@ -596,7 +606,7 @@ describe('保存していない直しは、ブラウザを閉じても残る', (
   }
 
   test('**開き直すと、打ったものが戻る**', async () => {
-    localStorage.clear();
+    fresh();
     const disk = { 'a.ts': 'はじめ\n' };
     const first = open(disk, true);
     (first.ctx.openFile as (p: string) => void)('a.ts');
@@ -612,7 +622,7 @@ describe('保存していない直しは、ブラウザを閉じても残る', (
   });
 
   test('**ファイルが変わっていたら、黙って戻さない**', async () => {
-    localStorage.clear();
+    fresh();
     const disk = { 'a.ts': 'はじめ\n' };
     const first = open(disk, true);
     (first.ctx.openFile as (p: string) => void)('a.ts');
@@ -633,7 +643,7 @@ describe('保存していない直しは、ブラウザを閉じても残る', (
   });
 
   test('保存したら、預かりは消える（対）', async () => {
-    localStorage.clear();
+    fresh();
     const disk = { 'a.ts': 'はじめ\n' };
     const first = open(disk, true);
     (first.ctx.openFile as (p: string) => void)('a.ts');
@@ -650,7 +660,7 @@ describe('保存していない直しは、ブラウザを閉じても残る', (
   });
 
   test('大きすぎるものは預からない。そのことを言う（対）', async () => {
-    localStorage.clear();
+    fresh();
     const disk = { 'a.ts': 'はじめ\n' };
     const box = open(disk, true);
     (box.ctx.openFile as (p: string) => void)('a.ts');
@@ -1339,7 +1349,7 @@ describe('二つのパネルで同じファイルを開く', () => {
 
   test('**ブラウザを閉じた後の古い預かりは、「後から変わっています」を出したら片づける（開くたびに出し続けない）**', async () => {
     const disk: Record<string, string> = { 'stale.txt': 'NEW\n' };
-    localStorage.clear();
+    fresh();
     localStorage.setItem('aas.draft:stale.txt', JSON.stringify({ text: 'OLD-EDIT\n', base: 'OLD\n', at: Date.now(), by: 'closed-panel' }));
     const a = open(disk, true);
     (a.ctx.openFile as (p: string) => void)('stale.txt');
@@ -1352,7 +1362,7 @@ describe('二つのパネルで同じファイルを開く', () => {
   });
 
   test('**生きている別のパネルの預かりは、後から開いた側が引き取らない**（保存した版を出し、そう言う）', async () => {
-    localStorage.clear();
+    fresh();
     const disk: Record<string, string> = { 'live.txt': 'one\n' };
     const a = open(disk, true);
     (a.ctx.openFile as (p: string) => void)('live.txt');
@@ -1372,8 +1382,8 @@ describe('二つのパネルで同じファイルを開く', () => {
   });
 
   test('**別のタブのパネルは時刻で見る**: 新しければ引き取らず、古ければ（閉じた）引き取る', async () => {
-    for (const [ago, adopt] of [[1_000, false], [60_000, true]] as const) {
-      localStorage.clear();
+    for (const [ago, adopt] of [[100_000, false], [300_000, true]] as const) {
+      fresh();
       const disk: Record<string, string> = { 'tab.txt': 'one\n' };
       localStorage.setItem('aas.draft:tab.txt', JSON.stringify({ text: 'one\nT\n', base: 'one\n', at: Date.now(), by: 'other-tab' }));
       localStorage.setItem('aas.live:other-tab', String(Date.now() - ago));
@@ -1383,6 +1393,83 @@ describe('二つのパネルで同じファイルを開く', () => {
       await new Promise((r) => setTimeout(r, 50));
       assert.equal(b.area().value, adopt ? 'one\nT\n' : 'one\n', `${ago}ms 前の合図で、引き取り方が違う`);
     }
+  });
+
+  test('**タブで隠れて外れていても、並びの世代が同じなら生きている。組み直したら（世代が変わったら）引き取る**', async () => {
+    fresh();
+    let gen = 1;
+    const disk: Record<string, string> = { 'tabbed.txt': 'one\n' };
+    const a = open(disk, true, { gen: () => gen });
+    (a.ctx.openFile as (p: string) => void)('tabbed.txt');
+    await until(() => a.area().value === 'one\n', 'A で開く');
+    a.area().value = 'one\nA\n';
+    a.area().fire('input');
+    await until(() => (localStorage.getItem('aas.draft:tabbed.txt') ?? '').includes('A'), 'A が預ける');
+    a.close(); // タブを切り替えて DOM から外れた（まだ生きている）
+
+    const b = open(disk, true, { gen: () => gen });
+    (b.ctx.openFile as (p: string) => void)('tabbed.txt');
+    await until(() => b.state().textContent === '別のパネルで直している途中', '隠れているだけのパネルを生きていると見る');
+    assert.equal(b.area().value, 'one\n', '隠れているだけのパネルの直しを引き取った');
+
+    gen += 1; // 並びを組み直した。A も B も捨てられた
+    const c = open(disk, true, { gen: () => gen });
+    (c.ctx.openFile as (p: string) => void)('tabbed.txt');
+    await until(() => c.area().value === 'one\nA\n', '捨てられたパネルの直しは引き取る');
+  });
+
+  test('**捨てられたら、ページに付けた受け手を外す**（外さないと、捨てたエディタが中身ごと残る）', async () => {
+    const listeners = new Map<string, Set<unknown>>();
+    const g = globalThis as { addEventListener?: unknown; removeEventListener?: unknown };
+    const saved = [g.addEventListener, g.removeEventListener];
+    g.addEventListener = (t: string, fn: unknown) => { if (!listeners.has(t)) listeners.set(t, new Set()); listeners.get(t)!.add(fn); };
+    g.removeEventListener = (t: string, fn: unknown) => { listeners.get(t)?.delete(fn); };
+    try {
+      fresh();
+      let gen = 1;
+      open({}, true, { gen: () => gen });
+      assert.equal(listeners.get('pagehide')?.size, 1);
+      gen += 1;
+      await until(() => (listeners.get('pagehide')?.size ?? 0) === 0 && (listeners.get('pageshow')?.size ?? 0) === 0,
+        '捨てられたのに受け手を外していない', { timeoutMs: 8_000 });
+    } finally {
+      [g.addEventListener, g.removeEventListener] = saved;
+    }
+  });
+
+  test('**引き取らなかった側で打っても、生きている別のパネルの預かりを上書きしない（そう言う）**', async () => {
+    fresh();
+    const disk: Record<string, string> = { 'busy.txt': 'one\n' };
+    const a = open(disk, true);
+    (a.ctx.openFile as (p: string) => void)('busy.txt');
+    await until(() => a.area().value === 'one\n', 'A で開く');
+    a.area().value = 'one\nA\n';
+    a.area().fire('input');
+    await until(() => (localStorage.getItem('aas.draft:busy.txt') ?? '').includes('A'), 'A が預ける');
+
+    const b = open(disk, true);
+    (b.ctx.openFile as (p: string) => void)('busy.txt');
+    await until(() => b.state().textContent === '別のパネルで直している途中', 'B は引き取らない');
+    b.area().value = 'one\nB\n';
+    b.area().fire('input');
+    const bar = () => b.find((n) => n.className.startsWith('editor-notice'));
+    await until(() => /預かれません/.test(bar().text), 'B の直しを預かれないと言う');
+    assert.equal((JSON.parse(localStorage.getItem('aas.draft:busy.txt')!) as { text: string }).text, 'one\nA\n', 'A の預かりを上書きした');
+  });
+
+  test('**行末が混ざったファイルでも、なぜ直しが戻らないかを見出しに残す**（後の知らせに置き換わっても）', async () => {
+    fresh();
+    const disk: Record<string, string> = { 'mixed.txt': 'one\r\ntwo\n' };
+    const a = open(disk, true);
+    (a.ctx.openFile as (p: string) => void)('mixed.txt');
+    await until(() => a.area().value !== '', 'A で開く');
+    a.area().value = a.area().value + 'A\n';
+    a.area().fire('input');
+    await until(() => (localStorage.getItem('aas.draft:mixed.txt') ?? '').includes('A'), 'A が預ける');
+    const b = open(disk, true);
+    (b.ctx.openFile as (p: string) => void)('mixed.txt');
+    await until(() => /行末が混ざって/.test(b.find((n) => n.className.startsWith('editor-notice')).text), '行末の知らせが出る');
+    assert.equal(b.state().textContent, '別のパネルで直している途中');
   });
 
   test('名札の無い預かり（前の版が預けた）は、保存したら片づける', async () => {
@@ -1413,7 +1500,7 @@ describe('二つのパネルで同じファイルを開く', () => {
 
   test('「その直しを出す」で出した直しは、出した側のものになり、手を入れてすぐ保存しても片づける', async () => {
     const disk: Record<string, string> = { 'shown.txt': 'NEW\n' };
-    localStorage.clear();
+    fresh();
     localStorage.setItem('aas.draft:shown.txt', JSON.stringify({ text: 'OLD-EDIT\n', base: 'OLD\n', at: Date.now(), by: 'closed-panel' }));
     const a = open(disk, true);
     (a.ctx.openFile as (p: string) => void)('shown.txt');
@@ -1454,7 +1541,7 @@ describe('二つのパネルで同じファイルを開く', () => {
 
   test('覚えておく所から戻した直しは、戻した側のものになり、保存したら片づける', async () => {
     const disk: Record<string, string> = { 'adopted.txt': 'one\n' };
-    localStorage.clear();
+    fresh();
     localStorage.setItem('aas.draft:adopted.txt', JSON.stringify({ text: 'one\nOLD\n', base: 'one\n', at: Date.now(), by: 'someone-else' }));
     const a = open(disk, true);
     (a.ctx.openFile as (p: string) => void)('adopted.txt');
