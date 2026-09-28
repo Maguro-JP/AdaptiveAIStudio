@@ -117,6 +117,54 @@ describe('やり残しを、こちらから拾う', () => {
     } finally { await s.stop(); await fake.close(); }
   });
 
+  test('**続きのやりとりは、元の会話のファイルへ書く**（いま本体に載っている別の会話へ書かない）', async () => {
+    const state = await ownState('conv');
+    const root = await tempDir('aas-resume-root-conv-');
+    const fake = await startFakeServer({
+      kind: 'stalls', name: 'list_files', args: { path: '.' },
+      then: 'では、このあと直します。',
+    });
+    const s = new UiServer({ config: config(fake, root), port: 0 });
+    const base = (await s.start()).replace(/\/$/, '');
+    const post = (p: string, body: unknown) => fetch(base + p, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const idle = async () => {
+      for (let i = 0; i < 300; i += 1) {
+        const c = await (await fetch(`${base}/api/conversations`)).json() as { running: string | null; runningAll: string[] };
+        if (c.running === null && c.runningAll.length === 0) return;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      assert.fail('終わらない');
+    };
+    try {
+      // 会話 A の依頼が止まって、やり残しになる
+      const mine = await ask(base, 'A の依頼を直して');
+      await idle();
+      const a = (await (await fetch(`${base}/api/conversations`)).json() as { current: string }).current;
+      // 別の会話 B を開いて、1ターンやりとりする（本体には B が載る）
+      fake.setBehavior({ kind: 'stream', text: 'B の答え' });
+      await post('/api/conversations', {});
+      const b = (await (await post('/api/send', { text: 'B の依頼' })).json() as { conversationId: string }).conversationId;
+      await idle();
+      assert.notEqual(a, b);
+
+      // 時を進め、続きを始めさせる
+      await new UnfinishedWork(join(state, 'unfinished.jsonl')).bump(mine.id, Date.now() - 60 * 60_000);
+      fake.setBehavior({ kind: 'stream', text: '続きを直しました' });
+      assert.equal(await s.idleTick(await s.session()), 'RESUMED');
+      for (let i = 0; i < 300; i += 1) {
+        const now = await (await fetch(`${base}/api/unfinished`)).json() as { list: { id: string }[] };
+        if (!now.list.some((u) => u.id === mine.id)) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      await idle();
+      const talk = (id: string) => readFile(join(state, 'conversations', `${id}.jsonl`), 'utf8');
+      assert.match(await talk(a), /続きを直しました/, '続きのやりとりが、元の会話に無い');
+      assert.doesNotMatch(await talk(b), /続きを直しました|前回の続きです/, '続きのやりとりを、別の会話のファイルへ書いた');
+    } finally { await s.stop(); await fake.close(); }
+  });
+
   test('利用者は、やめられる', async () => {
     // **見えて、やめられること。**知らないうちに勝手に動き続けるのが
     // いちばん怖い。
