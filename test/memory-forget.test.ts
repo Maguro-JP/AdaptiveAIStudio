@@ -271,4 +271,31 @@ describe('記憶を忘れて、戻す', () => {
     assert.equal(shelf.has('m3'), true);
     assert.equal(shelf.has('m22'), true);
   });
+
+  test('**戻せる分を新しい順に並べる。番号と題と種類と時刻だけで、中身や繋がりは出さない**', () => {
+    const shelf = new ForgetShelf();
+    const m = new Memory();
+    const { old, next, other } = threeEntries(m);
+    shelf.put(m.remove(other)!, 100);
+    shelf.put(m.remove(old)!, 200);
+    shelf.put(m.remove(next)!, 300);
+    const list = shelf.list(m.era);
+    assert.deepEqual(list.map((x) => x.id), [next, old, other]);
+    assert.deepEqual(list[0], { id: next, title: '保存は一時ファイルから置き換える', kind: 'decision', at: 300 });
+    // 戻したものは並べない
+    shelf.take(old);
+    assert.deepEqual(shelf.list(m.era).map((x) => x.id), [next, other]);
+  });
+
+  test('**読み直した後（代が違う）の分は並べない**（押しても戻らない口を出さない）', async () => {
+    const dir = await tempDir('aas-forget-list-');
+    const { m } = await failable(dir);
+    const shelf = new ForgetShelf();
+    const id = m.remember({ kind: 'fact', title: '覚え', now: 1 }).entry.id;
+    await m.save();
+    shelf.put(m.remove(id)!);
+    assert.equal(shelf.list(m.era).length, 1);
+    await m.load();
+    assert.deepEqual(shelf.list(m.era), []);
+  });
 });

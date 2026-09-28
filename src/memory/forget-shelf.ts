@@ -13,19 +13,39 @@ import type { Forgotten, Memory, RestoreRefusal } from './memory.ts';
 /** 取っておく数。古いものから落とす（一日に何十も忘れる使い方は考えていない）。 */
 const KEEP = 20;
 
-export class ForgetShelf {
-  readonly #items = new Map<string, Forgotten>();
+/** 画面に並べる一件。中身（覚えの本文や繋がり）は渡さない。戻すときは番号だけを受け取る。 */
+export interface ShelfItem {
+  id: string;
+  title: string;
+  kind: string;
+  /** 忘れた時刻（ms） */
+  at: number;
+}
 
-  put(f: Forgotten): void {
+export class ForgetShelf {
+  readonly #items = new Map<string, { f: Forgotten; at: number }>();
+
+  put(f: Forgotten, at: number = Date.now()): void {
     this.#items.delete(f.entry.id);
-    this.#items.set(f.entry.id, f);
+    this.#items.set(f.entry.id, { f, at });
     while (this.#items.size > KEEP) this.#items.delete(this.#items.keys().next().value!);
   }
 
   take(id: string): Forgotten | undefined {
-    const f = this.#items.get(id);
+    const got = this.#items.get(id);
     this.#items.delete(id);
-    return f;
+    return got?.f;
+  }
+
+  /**
+   * いま戻せるもの（新しい順）。読み直しで番号が変わった後の分（代が違う）は並べない。押しても戻らない口を出さない。
+   * 続けて二つ忘れると、画面は最後の一件しか持っていなかったので、一つ目を戻せなかった。
+   */
+  list(era: object): ShelfItem[] {
+    return [...this.#items.values()]
+      .filter(({ f }) => f.era === era)
+      .map(({ f, at }) => ({ id: f.entry.id, title: f.entry.title, kind: f.entry.kind, at }))
+      .reverse();
   }
 
   has(id: string): boolean {
