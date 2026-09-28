@@ -265,9 +265,15 @@ export class UnfinishedWork {
     return inOrder(this.#path, () => this.#append({ t: 'close', id, how: 'done' }));
   }
 
-  /** 利用者がやめた。 */
-  cancel(id: string, now = Date.now()): Promise<void> {
-    return inOrder(this.#path, () => this.#append({ t: 'close', id, how: 'canceled', at: now }));
+  /**
+   * やめた。利用者が画面でやめたとき（`byUser`）だけ、やめた時刻を書く。時刻の在る分だけが「戻す」に並ぶ。
+   * 本体が自分で閉じた分（段取りの段が塞がって止めた）まで並べると、押していないのに「やめました」と出て、戻すとまた走り出す。
+   */
+  cancel(id: string, opts: { byUser?: boolean; now?: number } = {}): Promise<void> {
+    const line: Line = opts.byUser
+      ? { t: 'close', id, how: 'canceled', at: opts.now ?? Date.now() }
+      : { t: 'close', id, how: 'canceled' };
+    return inOrder(this.#path, () => this.#append(line));
   }
 
   /**

@@ -2117,7 +2117,7 @@ export class UiServer {
     if (path === '/api/unfinished' && req.method === 'DELETE') {
       const id = url.searchParams.get('id') ?? '';
       if (!id) return send(res, 400, { error: 'id がありません' });
-      await this.#unfinished.cancel(id);
+      await this.#unfinished.cancel(id, { byUser: true });
       await this.#settleGoals();
       this.broadcast({ type: 'unfinished' });
       return send(res, 200, { canceled: id });
