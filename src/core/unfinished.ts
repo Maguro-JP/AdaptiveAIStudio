@@ -18,6 +18,7 @@ import { appendFile, mkdir, readFile, writeFile, rename, rm } from 'node:fs/prom
 import { join, dirname } from 'node:path';
 import { idMaker } from './ordered-id.ts';
 import { inOrder } from './in-order.ts';
+import { keptOdd } from './odd-lines.ts';
 
 /** なぜ終わっていないか。**符丁で持つ**（表示のときに日本語へ引き直す）。 */
 export type UnfinishedWhy = 'maxTurns' | 'noProgress' | 'unverified' | 'failed';
@@ -79,13 +80,17 @@ let tmpSeq = 0;
 export class UnfinishedWork {
   readonly #path: string;
 
-  constructor(path: string) {
+  /** 試験で読む手をモックにするためのもの。 */
+  readonly #readText: (path: string) => Promise<string>;
+
+  constructor(path: string, ops: { read?: (path: string) => Promise<string> } = {}) {
     this.#path = path;
+    this.#readText = ops.read ?? ((p) => readFile(p, 'utf8'));
   }
 
   async #append(line: Line): Promise<void> {
     await mkdir(dirname(this.#path), { recursive: true });
-    const raw = await readFile(this.#path, 'utf8').catch(() => '');
+    const raw = await this.#readText(this.#path).catch(() => '');
     // 途中で落ちた書き込みの続きに繋げない。半端な行が残っていることがある。
     const sep = raw.length === 0 || raw.endsWith('\n') ? '' : '\n';
     await appendFile(this.#path, `${sep}${JSON.stringify(line)}\n`, 'utf8');
@@ -104,47 +109,11 @@ export class UnfinishedWork {
   async #read(opts: { strict?: boolean } = {}): Promise<{
     open: Unfinished[]; canceled: Map<string, Unfinished>; canceledAt: Map<string, number>;
   }> {
-    const raw = await readFile(this.#path, 'utf8').catch((e: NodeJS.ErrnoException) => {
+    const raw = await this.#readText(this.#path).catch((e: NodeJS.ErrnoException) => {
       if (opts.strict && e.code !== 'ENOENT') throw e;
       return '';
     });
-    const open = new Map<string, Unfinished>();
-    const canceled = new Map<string, Unfinished>();
-    // やめた時刻。やめた順に並ぶ（やめ直すと後ろへ回る）
-    const canceledAt = new Map<string, number>();
-    for (const text of raw.split('\n')) {
-      if (text.trim().length === 0) continue;
-      let line: Line;
-      try { line = JSON.parse(text) as Line; } catch { continue; } // 壊れた行は捨てる
-      // 形の違う行（手で直した・別の版が書いた）も捨てる。通すと一覧ごと止まる。
-      if (!isLine(line)) continue;
-      if (line.t === 'add') { open.set(line.item.id, line.item); canceled.delete(line.item.id); canceledAt.delete(line.item.id); }
-      else if (line.t === 'bump') {
-        const at = open.get(line.id);
-        if (at) { at.attempts = line.attempts; at.nextAt = line.nextAt; }
-      } else if (line.t === 'close') {
-        const at = open.get(line.id);
-        open.delete(line.id);
-        if (at && line.how === 'canceled') {
-          canceled.set(line.id, at);
-          canceledAt.delete(line.id);
-          if (typeof line.at === 'number' && Number.isFinite(line.at)) canceledAt.set(line.id, line.at);
-        } else if (line.how !== 'canceled') {
-          // やめた後に別の道が片づけた・諦めたと書いたら、もう戻さない（片づいたものが戻る）
-          canceled.delete(line.id);
-          canceledAt.delete(line.id);
-        }
-      } else if (line.t === 'reopen') {
-        const at = canceled.get(line.id);
-        if (at) {
-          canceled.delete(line.id);
-          canceledAt.delete(line.id);
-          if (typeof line.nextAt === 'number') at.nextAt = line.nextAt;
-          open.set(line.id, at);
-        }
-      }
-    }
-    return { open: [...open.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), canceled, canceledAt };
+    return parseLines(raw);
   }
 
   /** 控える。**同じ依頼を二重に控えない。** */
@@ -216,11 +185,14 @@ export class UnfinishedWork {
    * 増えるほど遅くなる。生きている分だけで書き直す。
    */
   async #compact(max: number): Promise<void> {
-    const raw = await readFile(this.#path, 'utf8').catch(() => '');
+    // 一度だけ読み、読めた同じ中身から畳む。読めなければ畳まない（前は二度読み、二度目が一瞬読めないと空で書き戻して全部消した）
+    let raw: string;
+    try { raw = await this.#readText(this.#path); } catch { return; }
     const lines = raw.split('\n').filter((l) => l.trim().length > 0).length;
     if (lines <= Math.max(200, max * 4)) return;
-    const live = await this.list();
-    const body = live.map((item) => `${JSON.stringify({ t: 'add', item })}\n`).join('');
+    const { open: live, odd } = parseLines(raw);
+    // 別の版が書いた行（JSON として読めて `t` を持つ）は、元の文のまま残す（畳むたびに黙って捨てない）
+    const body = live.map((item) => `${JSON.stringify({ t: 'add', item })}\n`).join('') + keptOdd(odd).map((l) => `${l}\n`).join('');
     await mkdir(dirname(this.#path), { recursive: true });
     // 一時ファイルに書いてから置き換える（書き戻しの途中で落ちると、記録が丸ごと消えていた）。
     const tmp = `${this.#path}.${process.pid}.${++tmpSeq}.tmp`;
@@ -320,6 +292,50 @@ export class UnfinishedWork {
       return 'reopened';
     });
   }
+}
+
+/** 記録の中身を解く。読めなかった行（壊れた・形の違う）は `odd` に元の文のまま返す（畳むときに捨てない）。 */
+function parseLines(raw: string): {
+  open: Unfinished[]; canceled: Map<string, Unfinished>; canceledAt: Map<string, number>; odd: string[];
+} {
+  const odd: string[] = [];
+  const open = new Map<string, Unfinished>();
+  const canceled = new Map<string, Unfinished>();
+  // やめた時刻。やめた順に並ぶ（やめ直すと後ろへ回る）
+  const canceledAt = new Map<string, number>();
+  for (const text of raw.split('\n')) {
+    if (text.trim().length === 0) continue;
+    let line: Line;
+    try { line = JSON.parse(text) as Line; } catch { odd.push(text); continue; } // 壊れた行は読み飛ばす
+    // 形の違う行（手で直した・別の版が書いた）も読み飛ばす。通すと一覧ごと止まる。
+    if (!isLine(line)) { odd.push(text); continue; }
+    if (line.t === 'add') { open.set(line.item.id, line.item); canceled.delete(line.item.id); canceledAt.delete(line.item.id); }
+    else if (line.t === 'bump') {
+      const at = open.get(line.id);
+      if (at) { at.attempts = line.attempts; at.nextAt = line.nextAt; }
+    } else if (line.t === 'close') {
+      const at = open.get(line.id);
+      open.delete(line.id);
+      if (at && line.how === 'canceled') {
+        canceled.set(line.id, at);
+        canceledAt.delete(line.id);
+        if (typeof line.at === 'number' && Number.isFinite(line.at)) canceledAt.set(line.id, line.at);
+      } else if (line.how !== 'canceled') {
+        // やめた後に別の道が片づけた・諦めたと書いたら、もう戻さない（片づいたものが戻る）
+        canceled.delete(line.id);
+        canceledAt.delete(line.id);
+      }
+    } else if (line.t === 'reopen') {
+      const at = canceled.get(line.id);
+      if (at) {
+        canceled.delete(line.id);
+        canceledAt.delete(line.id);
+        if (typeof line.nextAt === 'number') at.nextAt = line.nextAt;
+        open.set(line.id, at);
+      }
+    }
+  }
+  return { open: [...open.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), canceled, canceledAt, odd };
 }
 
 /** 一行の形を確かめる。 */
