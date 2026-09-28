@@ -356,6 +356,8 @@ async function main(): Promise<void> {
         process.stderr.write(c.dim(`\n  [${ev.codename}] ${ev.name} — ${ev.roleCodename}\n`));
       } else if (ev.type === 'noFinding') {
         process.stderr.write(c.dim('    → 報告することはありませんでした\n'));
+      } else if (ev.type === 'failed') {
+        process.stderr.write(c.yellow(`    → 考えられませんでした: ${ev.reason}\n`));
       } else if (ev.type === 'proposal') {
         console.log(c.cyan(`\n  💡 [${ev.codename}] ${ev.proposal.title}`));
         console.log(c.dim(`     ${ev.proposal.rationale}`));

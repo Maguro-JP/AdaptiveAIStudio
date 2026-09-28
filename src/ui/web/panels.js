@@ -935,6 +935,9 @@ export const PANELS = {
         note('dim', `［${v.codename}］${v.name} — ${v.roleCodename}${v.isDuty ? `（${v.reason}）` : ''}`);
       } else if (v.type === 'noFinding') {
         note('dim', `［${v.codename}］報告することはありませんでした`);
+      } else if (v.type === 'failed') {
+        // 選んで試したが、落ちた。選んだ一行だけで終わらせない
+        note('warn', `［${v.codename}］考えられませんでした: ${v.reason}`);
       } else if (v.type === 'declined') {
         // **押したのに何も起きない、を作らない。**断ったなら、断ったと言う。
         note('dim', `今回は考えませんでした: ${v.reason}`);
