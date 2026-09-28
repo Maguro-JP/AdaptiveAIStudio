@@ -149,6 +149,31 @@ describe('点検を回す係', () => {
   });
 
   /**
+   * 子が閉じてから報告を書き終えるまでの間も、動いていると答える。閉じた時点で外していたので、その間の「止める」は
+   * 「動いていない」と答え、同じ名前の新しい回が始まると、古い回の終わりの知らせが新しい回を終わったことにした。
+   */
+  test('**報告を書いている間は、まだ動いていると答え、同じ名前を始めない**', async () => {
+    const { tempDir } = await import('./tmp.ts');
+    const dir = await tempDir('aas-reports-finishing-');
+    const said: TaskEvent[] = [];
+    const { spawnFn, children } = fakeSpawn();
+    const runner = new TaskRunner({ root: '/app', onEvent: (e) => said.push(e), spawnFn, reportsDir: dir });
+    runner.start('test');
+    children[0]!.emit('close', 1); // 報告は非同期で書く。終わりの知らせはまだ
+    assert.equal(said.some((e) => e.code !== undefined), false, '書き終える前に終わりを知らせた');
+    assert.deepEqual(runner.running, ['test']);
+    assert.equal(runner.isRunning('test'), true);
+    assert.match(runner.start('test') ?? '', /既に回しています/);
+    assert.equal(children.length, 1, '二本目を起こした');
+    assert.deepEqual(runner.stop('test'), ['test']);
+    assert.deepEqual(runner.stop(), ['test']);
+    const { until } = await import('./until.ts');
+    await until(() => said.some((e) => e.code !== undefined), '終わる', { timeoutMs: 5000 });
+    assert.deepEqual(runner.running, []);
+    assert.equal(runner.start('test'), undefined, '終わった後に始められない');
+  });
+
+  /**
    * 片づけるツールが、片づける対象を作っていた。
    *
    * 「片づけるものはありません。」の一行だけの回でも txt を置いていたので、

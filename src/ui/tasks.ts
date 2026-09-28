@@ -103,6 +103,12 @@ export class TaskRunner {
   readonly #children = new Map<string, ChildProcess>();
   /** 名前 → 始めた時刻。裏の仕事の一覧で「何秒経った」を出すため。 */
   readonly #startedAt = new Map<string, number>();
+  /**
+   * 子は閉じたが、報告を書き終えて終わりを知らせるまでの名前。終わりを知らせるまでは「動いている」と答える。
+   * 閉じた時点で外すと、その間の「止める」は「動いていない」と答え、同じ名前の新しい回が始まって、古い回の終わりの知らせが
+   * 新しい回を終わったことにした（知らせにどの回のものかを持たない）。
+   */
+  readonly #finishing = new Set<string>();
 
   constructor(opts: TaskRunnerOptions) {
     this.#opts = opts;
@@ -110,17 +116,17 @@ export class TaskRunner {
 
   /** いま回しているものの名前。無ければ空。 */
   get running(): string[] {
-    return [...this.#children.keys()];
+    return [...this.#children.keys(), ...this.#finishing];
   }
 
   /** その点検が動いているか。 */
   isRunning(name: string): boolean {
-    return this.#children.has(name);
+    return this.#children.has(name) || this.#finishing.has(name);
   }
 
   /** いつ始めたか（ms）。動いていなければ undefined。 */
   startedAt(name: string): number | undefined {
-    return this.#children.has(name) ? this.#startedAt.get(name) : undefined;
+    return this.isRunning(name) ? this.#startedAt.get(name) : undefined;
   }
 
   /** 一覧。画面に並べるためのもの。 */
@@ -134,7 +140,7 @@ export class TaskRunner {
    */
   start(name: string): string | undefined {
     if (!(name in TASKS)) return 'そういう点検はありません';
-    if (this.#children.has(name)) return `${name} は既に回しています`;
+    if (this.isRunning(name)) return `${name} は既に回しています`;
 
     // 決めた名前を、そのまま src/cli/<名前>.ts として起こす。
     // 検査だけは走らせ役が別にいる（環境ごとの差をそこへ閉じ込めてある）。
@@ -182,7 +188,11 @@ export class TaskRunner {
     child.on('error', (e) => this.#opts.onEvent({ name, text: `${e.message}\n` }));
     child.on('close', (code) => {
       this.#children.delete(name);
-      const finish = () => this.#opts.onEvent({ name, code: code ?? 1 });
+      this.#finishing.add(name);
+      const finish = () => {
+        this.#finishing.delete(name);
+        this.#opts.onEvent({ name, code: code ?? 1 });
+      };
       const dir = this.#opts.reportsDir;
       // 自分の報告は自分で置く（doctor / selftest）。ここで二重に置かない。
       if (!dir || name === 'doctor' || name === 'selftest') { finish(); return; }
@@ -221,6 +231,8 @@ export class TaskRunner {
    */
   stop(name?: string): string[] {
     if (name !== undefined) {
+      // 閉じて報告を書いている最中のものは、もう止まっている。終わりの知らせはこの後に来る
+      if (this.#finishing.has(name)) return [name];
       const child = this.#children.get(name);
       if (!child) return [];
       child.kill();
