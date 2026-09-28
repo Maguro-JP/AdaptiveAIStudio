@@ -17,15 +17,14 @@ const root = join(import.meta.dirname, '..');
 
 /** 自分で読み書きを持っているファイルと、その理由（どこで確かめたか）。 */
 const OWN_HANDLING: Record<string, string> = {
-  'src/agent/code-index.ts': '作り直せる索引。読めなければ作り直す（利用者のデータではない）',
+  'src/agent/code-index.ts': '作り直せる索引。読めなければ作り直す（利用者のデータではない。書くのは一時ファイルを通さないが、壊れても作り直す）',
   'src/agent/proposals.ts': '一件の null で止まらない・読めないときは書かない・保存の直前に合わせる（#73、test/proposals-safety.test.ts）',
   'src/core/conversations.ts': '追記式。壊れた行は飛ばす。消すときは trash へ移す（#63・#91）',
-  'src/core/goals.ts': '追記式。壊れた行・形の違う行は飛ばす（#65・#69、test/goals-safety.test.ts）',
+  'src/core/goals.ts': '追記式。壊れた行・形の違う行は飛ばす。畳むときは一度だけ読み、別の版の行は残す（#65・#69、test/goals-safety.test.ts・test/compact-read-once.test.ts）',
   'src/core/undo.ts': '戻り先。別の作業場の分に当たらない・読めないときに空で上書きしない（#64、test/state-safety.test.ts）',
-  'src/core/unfinished.ts': '追記式。壊れた行・形の違う行は飛ばす。読めないときの戻すは投げる（#64・#90）',
+  'src/core/unfinished.ts': '追記式。壊れた行・形の違う行は飛ばす。畳むときは一度だけ読み、別の版の行は残す。読めないときの戻すは投げる（#64・#90、test/compact-read-once.test.ts）',
   'src/memory/memory.ts': '読み飛ばした行を数えて残し、読めないときに上書きしない（#64・#72）',
   'src/runtime/machine.ts': 'マシンの検出結果。null や空の入れ物なら検出し直す（作り直せる、#75）',
-  'src/ui/server.ts': '画面の並び・見た目は journal-file を通す（#79）。ほかは設定（settings.ts の configForEdit）へ渡す',
 };
 
 async function sources(dir: string): Promise<string[]> {
@@ -47,7 +46,9 @@ export function rewritesJson(text: string): boolean {
   return /JSON\.parse\(/.test(c) && /JSON\.stringify\(/.test(c) && /\b(writeFile|appendFile|rename)\(/.test(c);
 }
 
-const usesJournal = (text: string): boolean => /\b(readJournal|loadJournal|saveJournal|writeWhole)\(/.test(code(text));
+/** journal-file を通しているか。読む側（`readJournal`・`loadJournal`）を使っていること。書く側（`writeWhole`）だけでは、読む側が
+ * `catch { 空 }` のままでも通ってしまう。 */
+const usesJournal = (text: string): boolean => /\b(readJournal|loadJournal)\(/.test(code(text));
 
 test('**JSON を読んで書き戻すファイルは、journal-file を通すか、自分で持つ理由が一覧に在る**', async () => {
   const found: string[] = [];
@@ -65,7 +66,7 @@ test('**JSON を読んで書き戻すファイルは、journal-file を通すか
     unknown.push(name);
   }
   assert.deepEqual(unknown, [],
-    `JSON を読んで書き戻すのに、journal-file（readJournal / loadJournal / saveJournal / writeWhole）を通していません:\n${unknown.join('\n')}\n`
+    `JSON を読んで書き戻すのに、journal-file の読む側（readJournal / loadJournal）を通していません:\n${unknown.join('\n')}\n`
     + '読めない・壊れている・一件だけ形が違うときに空で上書きしないことを確かめたうえで、通すか、この試験の一覧に理由を書く');
   // 一覧に残っているのに、もう当たらないもの（直して journal-file へ寄せた・消した）は一覧から外す
   const stale = Object.keys(OWN_HANDLING).filter((name) => !found.includes(name));

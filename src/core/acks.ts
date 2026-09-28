@@ -50,8 +50,10 @@ export class AckStore {
   }
 
   async list(): Promise<Ack[]> {
-    const r = await readJournal(this.#file, this.#ops);
-    // 無い・読めないときは「何も了解していない」と読む（外れる向きは「また出る」側）
+    // 読むだけではファイルを動かさない（壊れていても脇へ移さない）。移すのは書き換えるときだけ。読むだけで動かすと、
+    // 書き換えた直後の正しいファイルを、遅れて届いた読み手が脇へ移すことがある
+    const r = await readJournal(this.#file, { ...this.#ops, setAside: async () => false });
+    // 無い・読めない・壊れているときは「何も了解していない」と読む（外れる向きは「また出る」側）
     return r.kind === 'value' ? itemsOf(r.value).filter(isAck) : [];
   }
 
@@ -75,6 +77,8 @@ export class AckStore {
 
   /**
    * 読み直して書き換える。画面と CLI が同じファイルを触るので、書く直前に読み直す（同じプロセスの中は一列に並べる）。
+   * 別のプロセス（画面と CLI）が同じ瞬間に書いた分は、後から書いた方が勝つ（読んでから書くまでの短い間。了解は「また出る」側にしか
+   * 外れない）。
    *
    * - 読めない（EBUSY・EPERM が続く）: 書き換えずに投げる。空から書くと、それまでの了解を全部消す（前はそうしていた）
    * - 壊れている: 脇へ移してから（`acks.json.broken-<時刻>`）空で始める

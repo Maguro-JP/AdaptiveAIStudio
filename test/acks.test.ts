@@ -47,6 +47,9 @@ describe('了解した警告', () => {
     const { acks, file } = await store();
     await writeFile(file, '{not json');
     assert.deepEqual(await acks.list(), []);
+    // 読むだけでは脇へ移さない（移すのは書き換えるときだけ）
+    assert.deepEqual((await readdir(dirname(file))).filter((n) => n.includes('.broken-')), [], '読むだけで脇へ移した');
+    assert.equal(await readFile(file, 'utf8'), '{not json');
     await acks.add('outside-uncomparable', '/w/a');
     assert.equal(await acks.has('outside-uncomparable', '/w/a'), true);
   });

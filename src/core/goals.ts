@@ -22,6 +22,7 @@ import { readFile, appendFile, mkdir, writeFile, rename, rm } from 'node:fs/prom
 import { dirname } from 'node:path';
 import { idMaker } from './ordered-id.ts';
 import { inOrder } from './in-order.ts';
+import { keptOdd } from './odd-lines.ts';
 
 const makeId = idMaker('g');
 let tmpSeq = 0;
@@ -80,44 +81,24 @@ export type FailAction =
 export class Goals {
   readonly #path: string;
 
-  constructor(path: string) {
+  /** 試験で読む手をモックにするためのもの。 */
+  readonly #readText: (path: string) => Promise<string>;
+
+  constructor(path: string, ops: { read?: (path: string) => Promise<string> } = {}) {
     this.#path = path;
+    this.#readText = ops.read ?? ((p) => readFile(p, 'utf8'));
   }
 
   async #append(line: Line): Promise<void> {
     await mkdir(dirname(this.#path), { recursive: true });
-    const raw = await readFile(this.#path, 'utf8').catch(() => '');
+    const raw = await this.#readText(this.#path).catch(() => '');
     const sep = raw.length === 0 || raw.endsWith('\n') ? '' : '\n';
     await appendFile(this.#path, `${sep}${JSON.stringify(line)}\n`, 'utf8');
   }
 
   /** いま開いているもの。古い順。 */
   async list(): Promise<Goal[]> {
-    const raw = await readFile(this.#path, 'utf8').catch(() => '');
-    const open = new Map<string, Goal>();
-    for (const text of raw.split('\n')) {
-      if (text.trim().length === 0) continue;
-      let line: Line;
-      try { line = JSON.parse(text) as Line; } catch { continue; } // 壊れた行は捨てる
-      // 形の違う行（`null`・手で直した・別の版が書いた）も捨てる。通すと一覧ごと止まり、段取りが進まない。
-      if (!isLine(line)) continue;
-      if (line.t === 'goal') { open.set(line.goal.id, line.goal); continue; }
-      const goal = open.get(line.goalId);
-      if (!goal) continue;
-      if (line.t === 'close') { open.delete(line.goalId); continue; }
-      if (line.t === 'state') {
-        const step = goal.steps.find((s) => s.id === line.stepId);
-        if (step) { step.state = line.state; step.attempts = line.attempts; }
-        continue;
-      }
-      // 割り直し。元の段の**すぐ後ろ**へ差し込む。前でも末尾でもない。
-      // 順番が意味を持つ（読んでから書く、が入れ替わると通らない）。
-      const at = goal.steps.findIndex((s) => s.id === line.stepId);
-      if (at < 0) continue;
-      goal.steps[at]!.state = 'split';
-      goal.steps.splice(at + 1, 0, ...line.steps);
-    }
-    return [...open.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return parseGoals(await this.#readText(this.#path).catch(() => '')).open;
   }
 
   /** 段取りを立てる。 */
@@ -244,11 +225,14 @@ export class Goals {
    * 入れた形）だけで書き直す。一時ファイルに書いてから置き換える（途中で落ちても、記録を丸ごと失わない）。
    */
   async #compact(): Promise<void> {
-    const raw = await readFile(this.#path, 'utf8').catch(() => '');
+    // 一度だけ読み、読めた同じ中身から畳む。読めなければ畳まない（前は二度読み、二度目が一瞬読めないと空で書き戻して全部消した）
+    let raw: string;
+    try { raw = await this.#readText(this.#path); } catch { return; }
     const lines = raw.split('\n').filter((l) => l.trim().length > 0).length;
     if (lines <= COMPACT_AFTER_LINES) return;
-    const live = await this.list();
-    const body = live.map((goal) => `${JSON.stringify({ t: 'goal', goal })}\n`).join('');
+    const { open: live, odd } = parseGoals(raw);
+    // 別の版が書いた行は、元の文のまま残す（畳むたびに黙って捨てない）
+    const body = live.map((goal) => `${JSON.stringify({ t: 'goal', goal })}\n`).join('') + keptOdd(odd).map((l) => `${l}\n`).join('');
     const tmp = `${this.#path}.${process.pid}.${++tmpSeq}.tmp`;
     try {
       await writeFile(tmp, body, 'utf8');
@@ -258,6 +242,35 @@ export class Goals {
       throw e;
     }
   }
+}
+
+/** 記録の中身を解く。読めなかった行（壊れた・形の違う）は `odd` に元の文のまま返す。 */
+function parseGoals(raw: string): { open: Goal[]; odd: string[] } {
+  const odd: string[] = [];
+  const open = new Map<string, Goal>();
+  for (const text of raw.split('\n')) {
+    if (text.trim().length === 0) continue;
+    let line: Line;
+    try { line = JSON.parse(text) as Line; } catch { odd.push(text); continue; } // 壊れた行は読み飛ばす
+    // 形の違う行（`null`・手で直した・別の版が書いた）も読み飛ばす。通すと一覧ごと止まり、段取りが進まない。
+    if (!isLine(line)) { odd.push(text); continue; }
+    if (line.t === 'goal') { open.set(line.goal.id, line.goal); continue; }
+    const goal = open.get(line.goalId);
+    if (!goal) continue;
+    if (line.t === 'close') { open.delete(line.goalId); continue; }
+    if (line.t === 'state') {
+      const step = goal.steps.find((s) => s.id === line.stepId);
+      if (step) { step.state = line.state; step.attempts = line.attempts; }
+      continue;
+    }
+    // 割り直し。元の段の**すぐ後ろ**へ差し込む。前でも末尾でもない。
+    // 順番が意味を持つ（読んでから書く、が入れ替わると通らない）。
+    const at = goal.steps.findIndex((s) => s.id === line.stepId);
+    if (at < 0) continue;
+    goal.steps[at]!.state = 'split';
+    goal.steps.splice(at + 1, 0, ...line.steps);
+  }
+  return { open: [...open.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), odd };
 }
 
 /** 一行の形を確かめる。一覧と「次の段」で使う所まで見る。 */
