@@ -2094,10 +2094,16 @@ export class UiServer {
       this.#conversationId = undefined;
       // 動いている間は本体に触らない（見ている所だけトップへ）。横で走る会話は本体の履歴に触らないので数えない。
       if (session && !this.#mainBusy(session)) {
-        await this.#flushBeforeLeaving(session);
-        session.reset();
-        this.#loadedId = undefined;
-        this.#saved = 0;
+        // 書き直しを待つ間も「手が塞がっている」ことにする（その隙に来た送りが、同じ分を二重に書く・入れ替えた後の本体を走らせる）
+        this.#preparing = true;
+        try {
+          await this.#flushBeforeLeaving(session);
+          session.reset();
+          this.#loadedId = undefined;
+          this.#saved = 0;
+        } finally {
+          this.#preparing = false;
+        }
       }
       this.broadcast({ type: 'conversations' });
       return send(res, 200, { current: null, messages: [], running: this.#runningId ?? null });
@@ -2240,10 +2246,16 @@ export class UiServer {
       this.#conversationId = id;
       // 横で走っている会話は本体に載せない（横の走者が自分の履歴を持っている。終われば残す）。
       if (session && !this.#mainBusy(session) && !this.#side.has(id)) {
-        if (this.#loadedId !== id) await this.#flushBeforeLeaving(session);
-        session.restore(past);
-        this.#loadedId = id;
-        this.#saved = past.length;
+        // 書き直しを待つ間も「手が塞がっている」ことにする（トップへ戻る所と同じ）
+        this.#preparing = true;
+        try {
+          if (this.#loadedId !== id) await this.#flushBeforeLeaving(session);
+          session.restore(past);
+          this.#loadedId = id;
+          this.#saved = past.length;
+        } finally {
+          this.#preparing = false;
+        }
       }
       this.broadcast({ type: 'conversations' });
       return send(res, 200, {
