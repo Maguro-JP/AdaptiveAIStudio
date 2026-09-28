@@ -820,6 +820,13 @@ export class UiServer {
    */
   async #loadInto(session: Session, id: string): Promise<void> {
     if (this.#loadedId === id) return;
+    // 載せ替える前に、いま載っている会話の書けていない分をもう一度書いてみる（載せ替えると、手元の分は手放す）
+    if (this.#loadedId !== undefined && this.#saved < session.history.length) {
+      await this.#persist(session);
+      if (this.#saved < session.history.length) {
+        this.broadcast({ type: 'log', level: 'error', text: '書けなかったやりとりを残せないまま、別の会話へ移りました（その分はファイルに残っていません）' });
+      }
+    }
     const past = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
     session.restore(past);
     this.#loadedId = id;
@@ -844,7 +851,7 @@ export class UiServer {
       await this.#conversations.append(id, fresh);
     } catch (e) {
       // 「ここまで残した」を進めない。次のターンで、書けなかった分から書き直す（前は進めてしまい、そのターンが抜け落ちた）
-      this.broadcast({ type: 'log', level: 'error', text: `会話を残せませんでした。次のやりとりのときに書き直します: ${(e as Error).message}` });
+      this.broadcast({ type: 'log', level: 'error', text: `会話を残せませんでした。同じ会話で次にやりとりしたときに書き直します: ${(e as Error).message}` });
       return;
     }
     this.#saved = session.history.length;
@@ -2273,6 +2280,7 @@ export class UiServer {
       // 本体に載っている会話を消したら、載せたままにしない（次に載せた名前へ書く道が、消した会話へ書く）
       if (id === this.#loadedId) {
         this.#loadedId = undefined;
+        this.#saved = 0; // 空にした履歴と合わせる（残したままだと、次に書く分の切り出しがずれる）
         this.#session?.reset();
       }
       this.broadcast({ type: 'conversations' });
@@ -3179,14 +3187,12 @@ export class UiServer {
       if (stepped) return true;
     }
     // 元の会話へ戻して続ける。別の会話で続けると、話が二つに割れる。
-    if (item.conversationId && item.conversationId !== this.#conversationId) {
-      const past = await this.#conversations
-        .load(item.conversationId, { tailBytes: UiServer.RESTORE_TAIL })
-        .catch(() => undefined);
-      if (past) {
+    // 比べるのは本体に載っている会話（`#loadedId`）。載せ替えは `#loadInto` を通す（前は履歴だけ入れ替えて載っている会話の名前を
+    // 変えず、続きのやりとりを、前に載っていた別の会話のファイルへ書いていた）
+    if (item.conversationId && item.conversationId !== this.#loadedId) {
+      const loaded = await this.#loadInto(session, item.conversationId).then(() => true, () => false);
+      if (loaded) {
         this.#conversationId = item.conversationId;
-        this.#saved = past.length;
-        session.restore(past);
         this.broadcast({ type: 'conversations' });
       }
     }

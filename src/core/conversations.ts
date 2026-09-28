@@ -380,11 +380,11 @@ export class Conversations {
        * 一覧に出て、本物は同じ名前が在るので戻せなくなる。消した方へ足す（戻せば、その1ターンも一緒に戻る）。
        */
       const to = (await exists(path)) ? path : ((await this.#trashedLatest(id)) ?? path);
-      const text = (await endsWithNewline(to)) ? body : `\n${body}`;
       // Windows では、ウイルス対策や索引作りが一瞬掴むと EBUSY・EPERM になる。少し待ってやり直す（そのターンを落とさない）
       for (let tries = 0; ; tries++) {
         try {
-          await this.#appendText(to, text);
+          // 改行を足すかは、やり直すたびに見直す（途中まで書けていたら、その書きかけの行に繋げない）
+          await this.#appendText(to, (await endsWithNewline(to)) ? body : `\n${body}`);
           return;
         } catch (e) {
           const code = (e as NodeJS.ErrnoException).code;
