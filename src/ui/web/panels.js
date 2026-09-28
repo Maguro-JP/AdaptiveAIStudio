@@ -1205,19 +1205,25 @@ export const PANELS = {
     const skippedNote = (s) => s.memorySkipped > 0
       ? [el('div', 'warn', `読めない行が ${s.memorySkipped} 行あり、使っていません（memory.jsonl に元の文のまま残しています。直すと次から読みます）`)]
       : [];
-    // 最後に忘れた覚え。押し間違えを、その場で戻せるようにする（戻す中身は本体が持っている。ここは番号と題と、見せるための写し）。
-    // 戻せるのは最後の一件だけ（本体は 20 件取っておくが、画面に戻す口を並べると、どれを押せばよいか迷う）。
-    let lastForgotten;
+    // 忘れて戻せる覚え（本体が持っている分を、新しい順に `memoryForgotten` で受け取る）。押し間違えを、その場で戻せるようにする。
+    // 最後の一件は目の前に出し、それより前の分は畳んで並べる（続けて二つ忘れると、前は一つ目を戻せなかった）。
+    // 本体へ送るのは番号だけ。中身を送らせると、記憶へ任意の文を書き込める口になる。
     let lastState;
+    // この画面で忘れた覚えの写し。戻したときに、知らせを待たずに一覧へ差し戻すためだけに使う
+    const forgotHere = new Map();
+    // 「閉じる」を押したら、次に忘れるまで出さない（戻す口は本体に残っていて、開き直せばまた出る）
+    let hideForgotten = false;
+    // 畳んだ分を開いているか。本体の状態は 5 秒ごとに読み直して描き直すので、覚えておかないと開いたそばから閉じる
+    let moreOpen = false;
     // 一覧は新しい順（本体が `slice(-60).reverse()` で渡す）。戻した行は、覚えた時刻の位置へ差し込む
     const withEntry = (list, entry) => {
       const at = list.findIndex((x) => x.at < entry.at);
       return at < 0 ? [...list, entry] : [...list.slice(0, at), entry, ...list.slice(at)];
     };
-    const forgottenNote = () => {
-      if (!lastForgotten) return [];
-      const { id, title, entry } = lastForgotten;
-      const note = el('div', 'row dim', `「${title}」を忘れました`);
+    const forgottenOf = (st) => (Array.isArray(st?.memoryForgotten) ? st.memoryForgotten : []);
+    const withoutForgotten = (st, id) => ({ ...st, memoryForgotten: forgottenOf(st).filter((x) => x.id !== id) });
+    const undoButton = (item) => {
+      const { id } = item;
       const undo = el('button', 'ghost tiny', '戻す');
       undo.title = '忘れた覚えを元に戻す';
       undo.onclick = async () => {
@@ -1229,24 +1235,44 @@ export const PANELS = {
           const got = await r.json().catch(() => ({}));
           if (!r.ok) {
             // 押しても戻らない口は残さない（立ち上げ直した・読み直した・同じものを覚え直した）
-            if (got.gone && lastForgotten?.id === id) { lastForgotten = undefined; if (lastState) render(lastState); }
+            if (got.gone && lastState) render(withoutForgotten(lastState, id));
             else undo.disabled = false;
             return alert(got.error ?? '戻せませんでした');
           }
-          if (lastForgotten?.id === id) lastForgotten = undefined;
+          if (!lastState) return;
           // 知らせを待たずに、戻した行を一覧へ戻す（手元の写しは見せるためだけ。本体へは番号しか送らない）
-          if (lastState && !lastState.memory.some((x) => x.id === id)) {
-            render({ ...lastState, memory: withEntry(lastState.memory, entry), memorySize: lastState.memorySize + 1 });
-          } else if (lastState) render(lastState);
+          const entry = forgotHere.get(id);
+          forgotHere.delete(id);
+          const next = withoutForgotten(lastState, id);
+          render(entry && !next.memory.some((x) => x.id === id)
+            ? { ...next, memory: withEntry(next.memory, entry), memorySize: next.memorySize + 1 }
+            : next);
         } catch (e) {
           undo.disabled = false;
           alert(`戻せませんでした（${e?.message ?? e}）`);
         }
       };
+      return undo;
+    };
+    const forgottenNote = () => {
+      const list = forgottenOf(lastState);
+      if (list.length === 0 || hideForgotten) return [];
+      const [latest, ...older] = list;
+      const note = el('div', 'row dim', `「${latest.title}」を忘れました`);
       const close = el('button', 'ghost tiny', '閉じる');
-      close.onclick = () => { lastForgotten = undefined; if (lastState) render(lastState); };
-      note.append(undo, close);
-      return [note];
+      close.onclick = () => { hideForgotten = true; if (lastState) render(lastState); };
+      note.append(undoButton(latest), close);
+      if (older.length === 0) return [note];
+      const more = el('details', 'forgotten-more');
+      more.open = moreOpen;
+      more.ontoggle = () => { moreOpen = more.open; };
+      more.append(el('summary', 'dim', `ほかにも ${older.length} 件戻せます`));
+      for (const item of older) {
+        const row = el('div', 'row dim', `「${item.title}」`);
+        row.append(undoButton(item));
+        more.append(row);
+      }
+      return [note, more];
     };
     const render = (s) => {
       lastState = s;
@@ -1283,11 +1309,16 @@ export const PANELS = {
             const got = await r.json().catch(() => ({}));
             if (!r.ok) return alert(got.error ?? '消せませんでした');
             // 題は本体が実際に忘れたものから取る（一覧は別に読み直したもので、ずれていることがある）
-            lastForgotten = { id: m.id, title: got.title ?? m.title, entry: m };
+            forgotHere.set(m.id, m);
+            hideForgotten = false;
+            if (!lastState) return;
             // 知らせ（stateChanged）を待たずに、忘れた行を消して戻す口を出す
-            if (lastState?.memory.some((x) => x.id === m.id)) {
-              render({ ...lastState, memory: lastState.memory.filter((x) => x.id !== m.id), memorySize: lastState.memorySize - 1 });
-            } else if (lastState) render(lastState);
+            const item = { id: m.id, title: got.title ?? m.title, kind: m.kind, at: Date.now() };
+            const next = { ...withoutForgotten(lastState, m.id) };
+            next.memoryForgotten = [item, ...next.memoryForgotten];
+            render(next.memory.some((x) => x.id === m.id)
+              ? { ...next, memory: next.memory.filter((x) => x.id !== m.id), memorySize: next.memorySize - 1 }
+              : next);
           } catch (e) {
             alert(`消せませんでした（${e?.message ?? e}）`);
           }

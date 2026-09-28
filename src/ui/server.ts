@@ -2481,7 +2481,10 @@ export class UiServer {
     }
 
     if (path === '/api/state' && req.method === 'GET') {
-      return send(res, 200, await collectState(this.#opts.config));
+      const state = await collectState(this.#opts.config);
+      // 忘れて戻せるもの。本体が手元に持っている分（立ち上げ直すと消える）なので、ファイルからは読めない
+      const session = this.#session;
+      return send(res, 200, { ...state, memoryForgotten: session ? this.#forgotten.list(session.memory.era) : [] });
     }
 
     /**
