@@ -163,9 +163,15 @@ describe('記憶を忘れて、戻す', () => {
     const { old, other } = threeEntries(m);
     await m.save();
     const shelf = new ForgetShelf();
-    // 続けて二つ忘れたら、後に忘れた方が先
-    assert.equal((await forgetAndSave(m, shelf, other)).ok, true);
-    assert.equal((await forgetAndSave(m, shelf, old)).ok, true);
+    // 続けて二つ忘れたら、後に忘れた方が先。同じミリ秒に忘れても（時計を止めて、必ず同じ時刻にする。前はここで、走らせるたびに結果が変わった）
+    const realNow = Date.now;
+    Date.now = () => 1_800_000_000_000;
+    try {
+      assert.equal((await forgetAndSave(m, shelf, other)).ok, true);
+      assert.equal((await forgetAndSave(m, shelf, old)).ok, true);
+    } finally {
+      Date.now = realNow;
+    }
     const before = shelf.list(m.era);
     assert.deepEqual(before.map((x) => x.id), [old, other]);
     fail(true);

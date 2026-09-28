@@ -293,8 +293,9 @@ await check('会話を消す', async () => {
   if (names.map((s) => s.trim()).includes(name)) throw new Error(`消えていない: ${name}`);
   if (await convRows().count() >= before) throw new Error('数が減っていない');
   // 押し間違えは戻せる（本体は立ち上げ直すまで trash/ に持っている）。戻すと一覧に戻る
-  const note = p.locator('#sideSessions .side-note');
-  if (await note.count() === 0 || !(await note.innerText()).includes('を消しました')) throw new Error('消したことと、戻す口を出していない');
+  // 最後に消した一件（一覧の直下）。前に消した分は畳みの中に並ぶので、数に入れない（普段の画面に当てると残っている）
+  const note = p.locator('#sideSessions > .side-note');
+  if (await note.count() === 0 || !(await note.innerText()).includes(`「${name}」を消しました`)) throw new Error('消したことと、戻す口を出していない');
   // 文字が在っても、幅が 0 に潰れていれば見えない（innerText は見えていなくても返る）。測って見る
   const said = await note.locator('.grow').boundingBox();
   if (!said || said.width < 40) throw new Error(`消した知らせの文が潰れて見えない（幅 ${said?.width ?? 0}px）`);
@@ -302,7 +303,7 @@ await check('会話を消す', async () => {
   await p.waitForTimeout(800);
   const back = (await p.locator('#sideSessions .side-row button').allInnerTexts()).map((s) => s.trim());
   if (!back.includes(name)) throw new Error(`戻していない: ${name}`);
-  if (await p.locator('#sideSessions .side-note').count() !== 0) throw new Error('戻したのに、消した知らせが残っている');
+  if ((await p.locator('#sideSessions').innerText()).includes(`「${name}」を消しました`)) throw new Error('戻したのに、消した知らせが残っている');
 });
 
 /*

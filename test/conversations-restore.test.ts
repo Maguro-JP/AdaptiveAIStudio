@@ -119,6 +119,16 @@ describe('消した会話を戻す', () => {
     assert.deepEqual(listed.map((x) => [x.id, x.title]), [[id, '本物の話']]);
   });
 
+  test('trash に桁の大きすぎる時刻の名前が在っても、消すのが止まらない', { timeout: 10_000 }, async () => {
+    const { c, dir, id } = await withTalk();
+    await mkdir(join(dir, 'trash'), { recursive: true });
+    // 2**60 は 1 を足しても同じ数で、文字にしても同じ名前になる（後ろへずらしても、同じ名前に当たり続ける）
+    await writeFile(join(dir, 'trash', `${id}.${String(2 ** 60)}.jsonl`), '');
+    await c.remove(id);
+    assert.deepEqual((await c.trashList()).map((x) => x.id), [id]);
+    assert.deepEqual(await c.restore(id), { id });
+  });
+
   test('trash の中のものは、名前が会話の形でも一覧に出さない', async () => {
     const { c, dir } = await withTalk();
     await mkdir(join(dir, 'trash'), { recursive: true });

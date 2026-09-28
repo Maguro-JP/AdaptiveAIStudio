@@ -481,6 +481,11 @@ export class Conversations {
    * 画面を開き直すと戻す口ごと消えた。題は戻すときに戻る方（最初に消したもの）の見出しから取る。
    */
   async trashList(limit = 20): Promise<{ id: string; title: string; at: number }[]> {
+    // 消す・戻す・立ち上げたときの片づけと同じ順番待ちに入る（片づけの最中に読むと、消えかけの題を読んで「新しい会話」と出した）
+    return inOrder(this.#trash, () => this.#trashList(limit));
+  }
+
+  async #trashList(limit: number): Promise<{ id: string; title: string; at: number }[]> {
     const byId = new Map<string, { first: { at: number; path: string }; latest: number }>();
     for (const t of await this.#trashed()) {
       const got = byId.get(t.id);
@@ -499,7 +504,8 @@ export class Conversations {
     const names = await readdir(this.#trash).catch(() => [] as string[]);
     return names.flatMap((name) => {
       const m = /^(.+)\.(\d+)\.jsonl$/.exec(name);
-      return m && ID_SHAPE.test(m[1]!) ? [{ id: m[1]!, at: Number(m[2]), path: join(this.#trash, name) }] : [];
+      // 桁の大きすぎる時刻は見ない（足しても変わらない数だと、消すときの「後にずらす」が回り続ける）
+      return m && ID_SHAPE.test(m[1]!) && Number.isSafeInteger(Number(m[2])) ? [{ id: m[1]!, at: Number(m[2]), path: join(this.#trash, name) }] : [];
     });
   }
 
