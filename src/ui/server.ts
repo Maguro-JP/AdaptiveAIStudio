@@ -820,17 +820,23 @@ export class UiServer {
    */
   async #loadInto(session: Session, id: string): Promise<void> {
     if (this.#loadedId === id) return;
-    // 載せ替える前に、いま載っている会話の書けていない分をもう一度書いてみる（載せ替えると、手元の分は手放す）
-    if (this.#loadedId !== undefined && this.#saved < session.history.length) {
-      await this.#persist(session);
-      if (this.#saved < session.history.length) {
-        this.broadcast({ type: 'log', level: 'error', text: '書けなかったやりとりを残せないまま、別の会話へ移りました（その分はファイルに残っていません）' });
-      }
-    }
+    await this.#flushBeforeLeaving(session);
     const past = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
     session.restore(past);
     this.#loadedId = id;
     this.#saved = past.length;
+  }
+
+  /**
+   * 本体から会話を降ろす前に（載せ替える・選び直す・トップへ戻る）、いま載っている会話の書けていない分をもう一度書いてみる。
+   * 降ろすと手元の分は手放すので、それでも書けなければ、残っていないと言う。
+   */
+  async #flushBeforeLeaving(session: Session): Promise<void> {
+    if (this.#loadedId === undefined || this.#saved >= session.history.length) return;
+    await this.#persist(session);
+    if (this.#saved < session.history.length) {
+      this.broadcast({ type: 'log', level: 'error', text: '書けなかったやりとりを残せないまま、会話を移りました（その分はファイルに残っていません）' });
+    }
   }
 
   /**
@@ -2088,9 +2094,16 @@ export class UiServer {
       this.#conversationId = undefined;
       // 動いている間は本体に触らない（見ている所だけトップへ）。横で走る会話は本体の履歴に触らないので数えない。
       if (session && !this.#mainBusy(session)) {
-        session.reset();
-        this.#loadedId = undefined;
-        this.#saved = 0;
+        // 書き直しを待つ間も「手が塞がっている」ことにする（その隙に来た送りが、同じ分を二重に書く・入れ替えた後の本体を走らせる）
+        this.#preparing = true;
+        try {
+          await this.#flushBeforeLeaving(session);
+          session.reset();
+          this.#loadedId = undefined;
+          this.#saved = 0;
+        } finally {
+          this.#preparing = false;
+        }
       }
       this.broadcast({ type: 'conversations' });
       return send(res, 200, { current: null, messages: [], running: this.#runningId ?? null });
@@ -2233,9 +2246,16 @@ export class UiServer {
       this.#conversationId = id;
       // 横で走っている会話は本体に載せない（横の走者が自分の履歴を持っている。終われば残す）。
       if (session && !this.#mainBusy(session) && !this.#side.has(id)) {
-        session.restore(past);
-        this.#loadedId = id;
-        this.#saved = past.length;
+        // 書き直しを待つ間も「手が塞がっている」ことにする（トップへ戻る所と同じ）
+        this.#preparing = true;
+        try {
+          if (this.#loadedId !== id) await this.#flushBeforeLeaving(session);
+          session.restore(past);
+          this.#loadedId = id;
+          this.#saved = past.length;
+        } finally {
+          this.#preparing = false;
+        }
       }
       this.broadcast({ type: 'conversations' });
       return send(res, 200, {
