@@ -13,8 +13,10 @@
  *
  * 取り消せる。**閉じたら開けない、を作らない。**設定の中に「また出す」がある。
  */
-import { readFile, writeFile, mkdir, rename, unlink } from 'node:fs/promises';
+import { copyFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { readJournal, writeWhole, type JournalOps } from './journal-file.ts';
+import { inOrder } from './in-order.ts';
 
 /** 了解できる警告。増やすときは、ここと ACK_TEXT の両方に足す。 */
 export const ACK_IDS = ['outside-uncomparable'] as const;
@@ -39,24 +41,18 @@ export interface Ack {
 
 export class AckStore {
   readonly #file: string;
+  readonly #ops: JournalOps;
 
-  constructor(file: string) {
+  /** `ops` は試験で読む・書くをモックにするためのもの（`journal-file` と同じ）。 */
+  constructor(file: string, ops: JournalOps = {}) {
     this.#file = file;
+    this.#ops = ops;
   }
 
   async list(): Promise<Ack[]> {
-    const raw = await readFile(this.#file, 'utf8').catch(() => undefined);
-    if (!raw) return [];
-    try {
-      const parsed = JSON.parse(raw) as { acks?: unknown };
-      if (!Array.isArray(parsed.acks)) return [];
-      return parsed.acks.filter((a): a is Ack =>
-        typeof a === 'object' && a !== null
-        && isAckId((a as Ack).id) && typeof (a as Ack).root === 'string' && typeof (a as Ack).at === 'string');
-    } catch {
-      // 壊れたファイルは「何も了解していない」と読む。黙って消さない（書くときに上書きされる）。
-      return [];
-    }
+    const r = await readJournal(this.#file, this.#ops);
+    // 無い・読めないときは「何も了解していない」と読む（外れる向きは「また出る」側）
+    return r.kind === 'value' ? itemsOf(r.value).filter(isAck) : [];
   }
 
   async has(id: AckId, root: string): Promise<boolean> {
@@ -66,32 +62,54 @@ export class AckStore {
 
   async add(id: AckId, root: string, now = new Date()): Promise<void> {
     const key = resolve(root);
-    const acks = (await this.list()).filter((a) => !(a.id === id && a.root === key));
-    acks.push({ id, root: key, at: now.toISOString() });
-    await this.#save(acks);
+    await this.#rewrite((items) => [
+      ...items.filter((a) => !(isAck(a) && a.id === id && a.root === key)),
+      { id, root: key, at: now.toISOString() },
+    ]);
   }
 
   async remove(id: AckId, root: string): Promise<void> {
     const key = resolve(root);
-    await this.#save((await this.list()).filter((a) => !(a.id === id && a.root === key)));
+    await this.#rewrite((items) => items.filter((a) => !(isAck(a) && a.id === id && a.root === key)));
   }
 
   /**
-   * 隣に書いてから名前を付け替える。途中まで書いたものを、別の口が「壊れた JSON」として
-   * 読んで空にする、を防ぐ。画面と CLI が同じ瞬間に書いた分は、後から書いた方が勝つ
-   * （読んでから書くまでの短い間。了解は「また出る」側にしか外れない）。
+   * 読み直して書き換える。画面と CLI が同じファイルを触るので、書く直前に読み直す（同じプロセスの中は一列に並べる）。
+   *
+   * - 読めない（EBUSY・EPERM が続く）: 書き換えずに投げる。空から書くと、それまでの了解を全部消す（前はそうしていた）
+   * - 壊れている: 脇へ移してから（`acks.json.broken-<時刻>`）空で始める
+   * - 知らない形の一件（新しい版が書いた等）は、書き直しても残す
+   *
+   * 書くのは一時ファイルから付け替える（`writeWhole`）。
    */
-  async #save(acks: Ack[]): Promise<void> {
-    await mkdir(dirname(this.#file), { recursive: true });
-    // 同じプロセスの同じミリ秒に二つ書いても名前が重ならないように、乱数も足す。
-    const tmp = `${this.#file}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
-    try {
-      await writeFile(tmp, `${JSON.stringify({ acks }, null, 2)}\n`, 'utf8');
-      await rename(tmp, this.#file);
-    } catch (e) {
-      // 途中で落ちたら、書きかけを残さない。
-      await unlink(tmp).catch(() => undefined);
-      throw e;
-    }
+  #rewrite(change: (items: unknown[]) => unknown[]): Promise<void> {
+    return inOrder(`${this.#file}#rewrite`, async () => {
+      const r = await readJournal(this.#file, this.#ops);
+      if (r.kind === 'unreadable') throw new Error(`了解の記録を読めないので、書き換えていません: ${this.#file}`);
+      const items = r.kind === 'value' ? itemsOf(r.value) : [];
+      // JSON としては読めても入れ物の形が違う（`null`・`acks` が配列でない）ときは、写しを脇に取ってから書く。中身を黙って消さない
+      if (r.kind === 'value' && !hasItems(r.value)) {
+        await copyFile(this.#file, `${this.#file}.broken-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+      }
+      await mkdir(dirname(this.#file), { recursive: true });
+      if (!await writeWhole(this.#file, `${JSON.stringify({ acks: change(items) }, null, 2)}\n`, this.#ops)) {
+        throw new Error(`了解の記録を書けませんでした: ${this.#file}`);
+      }
+    });
   }
+}
+
+/** 入れ物が `{ acks: [...] }` の形か。 */
+function hasItems(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && Array.isArray((value as { acks?: unknown }).acks);
+}
+
+/** 記録の中の一件ずつ（形を問わず）。入れ物の形が違えば空。 */
+function itemsOf(value: unknown): unknown[] {
+  return hasItems(value) ? (value as { acks: unknown[] }).acks : [];
+}
+
+function isAck(a: unknown): a is Ack {
+  return typeof a === 'object' && a !== null
+    && isAckId((a as Ack).id) && typeof (a as Ack).root === 'string' && typeof (a as Ack).at === 'string';
 }

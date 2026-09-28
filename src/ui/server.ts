@@ -1282,8 +1282,13 @@ export class UiServer {
       const store = new AckStore(join(stateDir(), 'acks.json'));
       // 警告に添えた作業場があればそちら。会話に残った警告を、作業場を変えた後に押しても、出た作業場に結びつく。
       const root = typeof body.root === 'string' && body.root.length > 0 ? body.root : (this.#session?.root ?? this.#workRoot());
-      if (req.method === 'POST') await store.add(body.id, root);
-      else await store.remove(body.id, root);
+      try {
+        if (req.method === 'POST') await store.add(body.id, root);
+        else await store.remove(body.id, root);
+      } catch (e) {
+        // 読めない記録を空から書き直さない（それまでの了解を消す）。書けなかったことを言う
+        return send(res, 500, { error: (e as Error).message });
+      }
       return send(res, 200, { id: body.id, acked: req.method === 'POST' });
     }
 
