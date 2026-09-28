@@ -65,6 +65,47 @@ test('**書けなかったターンは、次のターンで書き直す**（フ�
   }
 });
 
+test('**書けなかったターンの後で別の会話へ移るときは、移る前に書き直す**', async () => {
+  const fake = await startFakeServer({ kind: 'echo' });
+  const config = {
+    ...DEFAULT_CONFIG,
+    providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
+    candidates: ['local:m'],
+    runtime: { kind: 'ollama' },
+    agent: { root: dir, approval: 'auto' },
+    initiative: { enabled: false },
+  } as typeof DEFAULT_CONFIG;
+  const server = new UiServer({ port: 0, config });
+  const base = (await server.start()).replace(/\/$/, '');
+  const send = async (text: string): Promise<string> => {
+    const r = await (await fetch(`${base}/api/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }),
+    })).json() as { conversationId: string };
+    await until(async () => {
+      const c = await (await fetch(`${base}/api/conversations`)).json() as { running: string | null; runningAll: string[] };
+      return c.running === null && c.runningAll.length === 0;
+    }, `「${text}」が終わる`, { timeoutMs: 15000, everyMs: 50 });
+    return r.conversationId;
+  };
+  try {
+    const id = await send('移る前の一つ目');
+    const file = join(dir, 'state', 'conversations', `${id}.jsonl`);
+    await rename(file, `${file}.away`);
+    await mkdir(file);
+    await send('移る前の二つ目');
+    await rmdir(file);
+    await rename(`${file}.away`, file);
+    // トップへ戻る（新しい会話）。本体から降ろす前に書き直す
+    await fetch(`${base}/api/conversations`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    const asked = (await new Conversations(join(dir, 'state', 'conversations')).load(id))
+      .filter((m) => m.role === 'user').map((m) => m.content);
+    assert.deepEqual(asked, ['移る前の一つ目', '移る前の二つ目'], '移る前に書き直していない');
+  } finally {
+    await server.stop();
+    await fake.close();
+  }
+});
+
 test('会話の書き足しは、一時的な失敗（EBUSY・EPERM）をやり直す。ほかの失敗はそのまま投げる', async () => {
   const d = await tempDir('aas-conv-append-retry-');
   let fails = 2;
