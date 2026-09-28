@@ -1864,11 +1864,13 @@ await check('記憶を忘れた直後に、戻せる', async () => {
   const saved = await p.evaluate(() => fetch('/api/layout').then((r) => r.json()).then((j) => j.layout));
   const entry = { id: 'm7', kind: 'fact', title: '試しの覚え', confirms: 1, helped: 0, misled: 0 };
   let memory = [entry];
+  // 忘れて戻せる分（本体が持つ）。5 秒ごとの読み直しで本物の空の一覧が来ると、戻す口が消えて偶然落ちる
+  let forgotten = [];
   let forgetFails = true;
   const sent = [];
   await p.route('**/api/state', async (r) => {
     const real = await r.fetch();
-    await r.fulfill({ response: real, json: { ...(await real.json()), memory, memorySkipped: 0, memorySize: memory.length } });
+    await r.fulfill({ response: real, json: { ...(await real.json()), memory, memorySkipped: 0, memorySize: memory.length, memoryForgotten: forgotten } });
   });
   await p.route('**/api/memory**', async (r) => {
     const req = r.request();
@@ -1876,9 +1878,11 @@ await check('記憶を忘れた直後に、戻せる', async () => {
     if (req.method() === 'DELETE') {
       if (forgetFails) return r.fulfill({ status: 500, json: { error: '保存できなかったので、忘れていません（試し）' } });
       memory = [];
+      forgotten = [{ id: 'm7', title: entry.title, kind: entry.kind, at: Date.now() }];
       return r.fulfill({ json: { id: 'm7', title: entry.title, forgotten: true } });
     }
     memory = [entry];
+    forgotten = [];
     return r.fulfill({ json: { id: 'm7', title: entry.title, restored: true } });
   });
   const said = [];

@@ -32,9 +32,14 @@ export class ForgetShelf {
   }
 
   take(id: string): Forgotten | undefined {
+    return this.takeWithTime(id)?.f;
+  }
+
+  /** 取り出して、忘れた時刻も返す。戻し損ねて載せ直すときに、時刻と並びを元のままにするため。 */
+  takeWithTime(id: string): { f: Forgotten; at: number } | undefined {
     const got = this.#items.get(id);
     this.#items.delete(id);
-    return got?.f;
+    return got;
   }
 
   /**
@@ -43,9 +48,11 @@ export class ForgetShelf {
    */
   list(era: object): ShelfItem[] {
     return [...this.#items.values()]
+      .map((item, order) => ({ ...item, order }))
       .filter(({ f }) => f.era === era)
-      .map(({ f, at }) => ({ id: f.entry.id, title: f.entry.title, kind: f.entry.kind, at }))
-      .reverse();
+      // 載せた順ではなく、忘れた時刻の順（戻し損ねて載せ直した一件を、最後に忘れたものに見せない）。同じ時刻なら後に載せた方を先に
+      .sort((x, y) => y.at - x.at || y.order - x.order)
+      .map(({ f, at }) => ({ id: f.entry.id, title: f.entry.title, kind: f.entry.kind, at }));
   }
 
   has(id: string): boolean {
@@ -86,8 +93,9 @@ export async function forgetAndSave(memory: Memory, shelf: ForgetShelf, id: stri
 
 /** 忘れたものを戻して保存する。保存できなければ忘れたままにして、戻していないと言う。 */
 export async function restoreAndSave(memory: Memory, shelf: ForgetShelf, id: string): Promise<ForgetResult> {
-  const f = shelf.take(id);
-  if (!f) return { ok: false, status: 404, gone: true, error: `戻せる覚えがありません（立ち上げ直すと、戻せる分は消えます）: ${id}` };
+  const taken = shelf.takeWithTime(id);
+  const f = taken?.f;
+  if (!taken || !f) return { ok: false, status: 404, gone: true, error: `戻せる覚えがありません（立ち上げ直すと、戻せる分は消えます）: ${id}` };
   const done = memory.restore(f);
   if (done !== true) return { ok: false, status: 409, gone: true, error: `${WHY_NOT[done]}: ${id}` };
   try {
@@ -96,7 +104,7 @@ export async function restoreAndSave(memory: Memory, shelf: ForgetShelf, id: str
     const why = (e as Error).message;
     // 同じ代の間なら、戻した分を取り出して、もう一度押せるようにする。振り直された後は取り出す先が分からない
     if (f.era === memory.era && memory.remove(id)) {
-      shelf.put(f);
+      shelf.put(f, taken.at);
       return { ok: false, status: 500, error: `保存できなかったので、戻していません（${why}）` };
     }
     return { ok: false, status: 500, gone: true, error: `保存できませんでした。手元では戻していて、次に保存できたときに書きます（${why}）` };

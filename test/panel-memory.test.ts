@@ -80,6 +80,32 @@ describe('記憶のパネルの「戻す」', () => {
     assert.equal(buttons(body, '戻す').length, 3);
   });
 
+  test('**開いた「ほかにも」は、描き直しで閉じない**（本体の状態は 5 秒ごとに読み直す）', () => {
+    const forgotten = [
+      { id: 'm4', title: '三つ目', kind: 'fact', at: 30 },
+      { id: 'm3', title: '二つ目', kind: 'fact', at: 20 },
+    ];
+    const { body, render } = draw([], forgotten);
+    const find = (): StubNode & { open?: boolean; ontoggle?: () => void } => {
+      let hit: StubNode | undefined;
+      const walk = (n: StubNode) => { if (n.tagName === 'details') hit = n; for (const c of n.children) walk(c); };
+      walk(body);
+      assert.ok(hit, '畳んだ分が無い');
+      return hit as StubNode & { open?: boolean; ontoggle?: () => void };
+    };
+    assert.equal(Boolean(find().open), false, '初めから開いている');
+    const more = find();
+    more.open = true;
+    more.ontoggle!();
+    render({ memoryForgotten: forgotten });
+    assert.equal(find().open, true, '描き直しで閉じた');
+    const again = find();
+    again.open = false;
+    again.ontoggle!();
+    render({ memoryForgotten: forgotten });
+    assert.equal(find().open, false);
+  });
+
   test('**続けて二つ忘れても、一つ目を戻せる**（戻した行は一覧の元の位置へ）', async () => {
     const memory = [entry('m3', '新しい覚え', 30), entry('m2', '真ん中の覚え', 20), entry('m1', '古い覚え', 10)];
     const { body, sent } = draw(memory);

@@ -1213,6 +1213,8 @@ export const PANELS = {
     const forgotHere = new Map();
     // 「閉じる」を押したら、次に忘れるまで出さない（戻す口は本体に残っていて、開き直せばまた出る）
     let hideForgotten = false;
+    // 畳んだ分を開いているか。本体の状態は 5 秒ごとに読み直して描き直すので、覚えておかないと開いたそばから閉じる
+    let moreOpen = false;
     // 一覧は新しい順（本体が `slice(-60).reverse()` で渡す）。戻した行は、覚えた時刻の位置へ差し込む
     const withEntry = (list, entry) => {
       const at = list.findIndex((x) => x.at < entry.at);
@@ -1262,6 +1264,8 @@ export const PANELS = {
       note.append(undoButton(latest), close);
       if (older.length === 0) return [note];
       const more = el('details', 'forgotten-more');
+      more.open = moreOpen;
+      more.ontoggle = () => { moreOpen = more.open; };
       more.append(el('summary', 'dim', `ほかにも ${older.length} 件戻せます`));
       for (const item of older) {
         const row = el('div', 'row dim', `「${item.title}」`);
