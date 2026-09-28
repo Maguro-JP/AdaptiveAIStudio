@@ -1895,14 +1895,51 @@ export const PANELS = {
     stop.type = 'button';
     stop.hidden = true;
     // 名前を渡さなければ、全部止める（今までどおり）。
-    stop.onclick = () => { void fetch('/api/task', { method: 'DELETE' }); };
+    // 止められなかったときは黙らない。黙ると、止めたつもりで点検が回り続ける
+    const stopNote = el('span', 'warn', '');
+    stop.onclick = async () => {
+      stopNote.textContent = '';
+      // 押した時点で本体に始まりが届いていた分だけを見る（返事を待つ間に押し始めた分や、始まりを頼んでいる途中の分は本体の答えに入らない）
+      const asked = [...running].filter((id) => !starting.has(id));
+      let r;
+      try {
+        r = await fetch('/api/task', { method: 'DELETE' });
+      } catch (e) {
+        stopNote.textContent = `止められませんでした（${e?.message ?? e}）`;
+        return;
+      }
+      const got = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        stopNote.textContent = got.error ?? `止められませんでした（${r.status}）`;
+        return;
+      }
+      // 本体では動いていなかった分（終わりの知らせを取りこぼした）は、実行中のまま残さない
+      const stopped = new Set(Array.isArray(got.stopped) ? got.stopped : []);
+      // 返事を待つ間に終わりの知らせが来た分は、もう「終わりました」を出しているので触らない
+      const gone = asked.filter((id) => running.has(id) && !stopped.has(id));
+      for (const id of gone) {
+        running.delete(id);
+        const b = buttonById.get(id);
+        if (b) b.disabled = false;
+        clearInterval(ticks.get(id));
+        const s = statusEl.get(id);
+        if (s) { s.className = 'task-status dim'; s.textContent = `もう動いていませんでした: ${displayOf.get(id) ?? id}`; }
+      }
+      syncStop();
+    };
 
     // **同じ点検は二重に回さない。別の点検は並べて回せる。**
     // 押した点検のボタンだけを止め、他は押せるままにする。
     const running = new Set();
+    // 始まりを頼んでいて、まだ返事の無いもの
+    const starting = new Set();
     const buttonById = new Map();
     const displayOf = new Map();
-    const syncStop = () => { stop.hidden = running.size === 0; };
+    const syncStop = () => {
+      stop.hidden = running.size === 0;
+      // 止める口が消えたら、止められなかった知らせも片づける（その後に終わった点検は、それぞれの行が言う）
+      if (running.size === 0) stopNote.textContent = '';
+    };
 
     /*
      * 出力は一つの箱に混ぜて出す。**どの点検の行か**を、切り替わりで見出しに出す。
@@ -1971,6 +2008,7 @@ export const PANELS = {
           syncStop();
           startStatus(t.id);
           let r;
+          starting.add(t.id);
           try {
             r = await fetch('/api/task', {
               method: 'POST',
@@ -1978,11 +2016,13 @@ export const PANELS = {
               body: JSON.stringify({ name: t.id }),
             });
           } catch (e) {
+            starting.delete(t.id);
             running.delete(t.id); b.disabled = false; syncStop();
             doneStatus(t.id, -1);
             show(t.id, `始められませんでした（${e?.message ?? e}）\n`);
             return;
           }
+          starting.delete(t.id);
           if (!r.ok) {
             running.delete(t.id); b.disabled = false; syncStop();
             doneStatus(t.id, -1);
@@ -1992,10 +2032,10 @@ export const PANELS = {
         buttonById.set(t.id, b);
         bar.append(b);
       }
-      bar.append(stop);
+      bar.append(stop, stopNote);
     }, (e) => {
       // 読めなかったのを黙ると、押す口が一つも無い空のパネルに見える（受けるのは読むところの失敗だけ。組み立ての失敗は受けない）
-      bar.append(el('span', 'warn', `作業の一覧を読めませんでした（${e?.message ?? e}）`), stop);
+      bar.append(el('span', 'warn', `作業の一覧を読めませんでした（${e?.message ?? e}）`), stop, stopNote);
     });
 
     const hint = el('div', 'dim', '困ったときは ⚙ → 情報 の「サポート用レポートを作る」を押して、出来たファイルを一つ送ってください。');

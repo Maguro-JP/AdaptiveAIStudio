@@ -24,9 +24,10 @@ const TASKS = {
 };
 
 /** 板を描いて、落ち着くまで待つ。出来事は手で流せるようにして返す。 */
-async function draw(taskAnswer: unknown = TASKS, postStatus = 200) {
+async function draw(taskAnswer: unknown = TASKS, postStatus = 200, onDelete: () => Promise<Response> = async () => Response.json({ stopped: [] })) {
   const posts: unknown[] = [];
   (globalThis as { fetch?: unknown }).fetch = (async (url: string, init?: RequestInit) => {
+    if (init?.method === 'DELETE') return onDelete();
     if (init?.method === 'POST') {
       posts.push(JSON.parse(String(init.body)));
       return postStatus === 200
@@ -101,5 +102,70 @@ describe('点検の板', () => {
     await button(body, '検査を回す')!.onclick!();
     await new Promise((r) => setTimeout(r, 10));
     assert.match(body.text, /回しています/);
+  });
+
+  test('止められなかったら、そう言う（繋がらない・断られた）', async () => {
+    const down = await draw(TASKS, 200, async () => { throw new TypeError('Failed to fetch'); });
+    await button(down.body, 'この環境を見てもらう')!.onclick!();
+    await button(down.body, '止める')!.onclick!();
+    assert.match(down.body.text, /止められませんでした（Failed to fetch）/);
+    // 点検が終わって止める口が消えたら、止められなかった知らせも残さない
+    down.emit('taskDone', { name: 'doctor', code: 0 });
+    assert.doesNotMatch(down.body.text, /止められませんでした/);
+
+    const refused = await draw(TASKS, 200, async () => Response.json({ error: '本体が止められませんでした' }, { status: 500 }));
+    await button(refused.body, 'この環境を見てもらう')!.onclick!();
+    await button(refused.body, '止める')!.onclick!();
+    assert.match(refused.body.text, /本体が止められませんでした/);
+  });
+
+  test('本体で動いていなかった分は、実行中のまま残さない', async () => {
+    const { body } = await draw(TASKS, 200, async () => Response.json({ stopped: [] }));
+    const doctor = button(body, 'この環境を見てもらう')!;
+    await doctor.onclick!();
+    assert.equal(doctor.disabled, true);
+    await button(body, '止める')!.onclick!();
+    assert.equal(doctor.disabled, false, '押せるように戻っていない');
+    assert.match(body.text, /もう動いていませんでした: この環境を見てもらう/);
+    assert.doesNotMatch(body.text, /実行中/);
+  });
+
+  test('止める返事を待つ間に終わった分は、「終わりました」のまま', async () => {
+    let answer!: (r: Response) => void;
+    const { body, emit } = await draw(TASKS, 200, () => new Promise<Response>((r) => { answer = r; }));
+    await button(body, 'この環境を見てもらう')!.onclick!();
+    const stopping = button(body, '止める')!.onclick!();
+    emit('taskDone', { name: 'doctor', code: 0 });
+    answer(Response.json({ stopped: [] }));
+    await stopping;
+    assert.match(body.text, /終わりました: この環境を見てもらう/);
+    assert.doesNotMatch(body.text, /もう動いていませんでした/);
+  });
+
+  test('始まりを頼んでいる途中の分は、止める答えに無くても実行中のまま', async () => {
+    let started!: (r: Response) => void;
+    const { body } = await draw(TASKS, 200, async () => Response.json({ stopped: [] }));
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => (init?.method === 'POST'
+      ? new Promise<Response>((r) => { started = r; })
+      : inner(url, init))) as typeof fetch;
+    const doctor = button(body, 'この環境を見てもらう')!;
+    const starting = doctor.onclick!();
+    await button(body, '止める')!.onclick!();
+    assert.equal(doctor.disabled, true, '始まりの返事の前に、押せるように戻した');
+    assert.doesNotMatch(body.text, /もう動いていませんでした/);
+    started(Response.json({ started: 'doctor' }));
+    await starting;
+  });
+
+  test('止めた分は、終わりの知らせが来るまで実行中のまま', async () => {
+    const { body, emit } = await draw(TASKS, 200, async () => Response.json({ stopped: ['doctor'] }));
+    const doctor = button(body, 'この環境を見てもらう')!;
+    await doctor.onclick!();
+    await button(body, '止める')!.onclick!();
+    assert.equal(doctor.disabled, true);
+    assert.doesNotMatch(body.text, /止められませんでした|もう動いていませんでした/);
+    emit('taskDone', { name: 'doctor', code: 143 });
+    assert.equal(doctor.disabled, false);
   });
 });
