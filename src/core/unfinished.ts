@@ -52,7 +52,8 @@ export const MAX_ATTEMPTS = BACKOFF_MS.length;
 type Line =
   | { t: 'add'; item: Unfinished }
   | { t: 'bump'; id: string; attempts: number; nextAt: number }
-  | { t: 'close'; id: string; how: 'done' | 'gaveUp' | 'canceled' }
+  /** `at` はやめた時刻（ms）。前の版が書いた行には無い（その分は「最近やめたもの」に並べない）。 */
+  | { t: 'close'; id: string; how: 'done' | 'gaveUp' | 'canceled'; at?: number }
   /** 利用者がやめたもの（`canceled`）を、押し間違えとして戻す。前の版は知らない行として読み飛ばす（やめたまま）。 */
   | { t: 'reopen'; id: string; nextAt?: number };
 
@@ -100,39 +101,50 @@ export class UnfinishedWork {
   }
 
   /** 抱えているものと、利用者がやめたもの（戻せる分）。 */
-  async #read(opts: { strict?: boolean } = {}): Promise<{ open: Unfinished[]; canceled: Map<string, Unfinished> }> {
+  async #read(opts: { strict?: boolean } = {}): Promise<{
+    open: Unfinished[]; canceled: Map<string, Unfinished>; canceledAt: Map<string, number>;
+  }> {
     const raw = await readFile(this.#path, 'utf8').catch((e: NodeJS.ErrnoException) => {
       if (opts.strict && e.code !== 'ENOENT') throw e;
       return '';
     });
     const open = new Map<string, Unfinished>();
     const canceled = new Map<string, Unfinished>();
+    // やめた時刻。やめた順に並ぶ（やめ直すと後ろへ回る）
+    const canceledAt = new Map<string, number>();
     for (const text of raw.split('\n')) {
       if (text.trim().length === 0) continue;
       let line: Line;
       try { line = JSON.parse(text) as Line; } catch { continue; } // 壊れた行は捨てる
       // 形の違う行（手で直した・別の版が書いた）も捨てる。通すと一覧ごと止まる。
       if (!isLine(line)) continue;
-      if (line.t === 'add') { open.set(line.item.id, line.item); canceled.delete(line.item.id); }
+      if (line.t === 'add') { open.set(line.item.id, line.item); canceled.delete(line.item.id); canceledAt.delete(line.item.id); }
       else if (line.t === 'bump') {
         const at = open.get(line.id);
         if (at) { at.attempts = line.attempts; at.nextAt = line.nextAt; }
       } else if (line.t === 'close') {
         const at = open.get(line.id);
         open.delete(line.id);
-        if (at && line.how === 'canceled') canceled.set(line.id, at);
-        // やめた後に別の道が片づけた・諦めたと書いたら、もう戻さない（片づいたものが戻る）
-        else if (line.how !== 'canceled') canceled.delete(line.id);
+        if (at && line.how === 'canceled') {
+          canceled.set(line.id, at);
+          canceledAt.delete(line.id);
+          if (typeof line.at === 'number' && Number.isFinite(line.at)) canceledAt.set(line.id, line.at);
+        } else if (line.how !== 'canceled') {
+          // やめた後に別の道が片づけた・諦めたと書いたら、もう戻さない（片づいたものが戻る）
+          canceled.delete(line.id);
+          canceledAt.delete(line.id);
+        }
       } else if (line.t === 'reopen') {
         const at = canceled.get(line.id);
         if (at) {
           canceled.delete(line.id);
+          canceledAt.delete(line.id);
           if (typeof line.nextAt === 'number') at.nextAt = line.nextAt;
           open.set(line.id, at);
         }
       }
     }
-    return { open: [...open.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), canceled };
+    return { open: [...open.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), canceled, canceledAt };
   }
 
   /** 控える。**同じ依頼を二重に控えない。** */
@@ -254,8 +266,24 @@ export class UnfinishedWork {
   }
 
   /** 利用者がやめた。 */
-  cancel(id: string): Promise<void> {
-    return inOrder(this.#path, () => this.#append({ t: 'close', id, how: 'canceled' }));
+  cancel(id: string, now = Date.now()): Promise<void> {
+    return inOrder(this.#path, () => this.#append({ t: 'close', id, how: 'canceled', at: now }));
+  }
+
+  /**
+   * `since` より後にやめて、まだ戻せるもの（やめた新しい順、上限 `limit`）。画面の「戻す」に並べる。
+   * 前は画面が最後にやめた一件だけを持っていたので、続けて二つやめると一つ目を戻せず、読み直すと戻す口ごと消えた。
+   * やめた記録は畳むまで残るので、何日も前の分まで並べないよう、画面が区切り（立ち上げた時刻）を渡す。
+   */
+  async canceledSince(since: number, limit = 20): Promise<{ id: string; request: string; at: number }[]> {
+    const { open, canceled, canceledAt } = await this.#read();
+    // 戻せないもの（上限まで抱えている・同じ依頼をもう一度抱えている）は並べない。押しても戻らない口を出さない
+    if (open.length >= MAX_OPEN) return [];
+    return [...canceledAt.entries()]
+      .filter(([id, at]) => at >= since && canceled.has(id) && !open.some((u) => u.request === canceled.get(id)!.request))
+      .reverse()
+      .slice(0, limit)
+      .map(([id, at]) => ({ id, request: canceled.get(id)!.request, at }));
   }
 
   /**
@@ -299,6 +327,7 @@ function isLine(v: unknown): v is Line {
       && typeof i.createdAt === 'string' && typeof i.attempts === 'number' && typeof i.nextAt === 'number';
   }
   if (l.t === 'bump') return typeof l.id === 'string' && typeof l.attempts === 'number' && typeof l.nextAt === 'number';
+  // やめた時刻（`at`）の形は見ない。形の違う時刻で閉じた行ごと捨てると、やめたものが戻ってくる（時刻は読むところで数のときだけ使う）
   if (l.t === 'close') return typeof l.id === 'string';
   if (l.t === 'reopen') return typeof l.id === 'string' && (l.nextAt === undefined || typeof l.nextAt === 'number');
   return false;

@@ -1056,8 +1056,15 @@ let busyNow = false;
  * **見えて、やめられること。**控えるだけなら覚え書きだが、こちらから
  * 勝手に続きを始めるので、何が残っているかは常に見えていないといけない。
  */
-/** 最後にやめたやり残し。押し間違えを、その場で戻せるようにする（元の依頼の文は、やり残しの記録にしか無い）。 */
-let lastCanceled;
+/*
+ * やめて、まだ戻せるやり残し（本体が、立ち上げてからやめた分を新しい順に `canceled` で渡す）。押し間違えを、その場で戻せるようにする
+ * （元の依頼の文は、やり残しの記録にしか無い）。最後の一件は目の前に、それより前は畳んで並べる
+ * （前は画面が最後の一件だけを持っていたので、続けて二つやめると一つ目を戻せず、読み直すと戻す口ごと消えた）。
+ */
+// 「閉じる」を押したら、次にやめるまで出さない（本体には残っていて、開き直せばまた出る）
+let hideCanceled = false;
+// 畳んだ分を開いているか。一覧は何度も描き直すので、覚えておかないと開いたそばから閉じる
+let canceledMoreOpen = false;
 
 async function loadUnfinished() {
   let data;
@@ -1072,9 +1079,9 @@ async function loadUnfinished() {
   const sec = $('unfinishedSec');
   const box = $('sideUnfinished');
   const list = data.list ?? [];
-  // 別のタブで戻した・見回りが戻したものは、もう「やめました」ではない
-  if (lastCanceled && list.some((u) => u.id === lastCanceled.id)) lastCanceled = undefined;
-  sec.hidden = list.length === 0 && goals.list.length === 0 && !lastCanceled;
+  // 戻せるものは本体が知っている（別のタブで戻した・畳んだものは、もう並ばない）
+  const canceled = hideCanceled || !Array.isArray(data.canceled) ? [] : data.canceled;
+  sec.hidden = list.length === 0 && goals.list.length === 0 && canceled.length === 0;
   box.textContent = '';
 
   // 段取り。**どこまで進んだかを出す。**一段ずつ進むので、見えないと
@@ -1120,23 +1127,47 @@ async function loadUnfinished() {
       if (!done) return;
       // 断られたときも黙らない（前は 500 でも何も出さず、押しても消えないだけに見えた）
       if (!done.ok) return showCrash('やり残しを消せませんでした', done.body?.error ?? `${done.status}`);
-      lastCanceled = { id: u.id, text: u.request.split('\n')[0].slice(0, 40) };
+      hideCanceled = false;
       await loadUnfinished();
     });
 
     row.append(label, stop);
     box.append(row);
   }
-  if (lastCanceled) box.append(canceledNote(lastCanceled));
+  box.append(...canceledNotes(canceled));
 }
 
-/** 「〜をやめました [戻す] [閉じる]」。戻すときは番号だけを送る。 */
-function canceledNote({ id, text }) {
-  const row = document.createElement('div');
-  row.className = 'side-note dim';
-  const label = document.createElement('span');
-  label.className = 'grow';
-  label.textContent = `「${text}」をやめました`;
+/** やめたやり残しの見出し（依頼の一行目の頭）。 */
+const canceledText = (c) => String(c.request ?? '').split('\n')[0].slice(0, 40);
+
+/** 「〜をやめました [戻す] [閉じる]」と、それより前にやめた分の畳み。 */
+function canceledNotes(canceled) {
+  if (canceled.length === 0) return [];
+  const [latest, ...older] = canceled;
+  const row = canceledNote({ id: latest.id, text: canceledText(latest) });
+  if (older.length === 0) return [row];
+  const more = document.createElement('details');
+  more.className = 'removed-more';
+  more.open = canceledMoreOpen;
+  more.addEventListener('toggle', () => { canceledMoreOpen = more.open; });
+  const summary = document.createElement('summary');
+  summary.className = 'dim';
+  summary.textContent = `ほかにも ${older.length} 件戻せます`;
+  more.append(summary);
+  for (const c of older) {
+    const r = document.createElement('div');
+    r.className = 'side-note dim';
+    const t = document.createElement('span');
+    t.className = 'grow';
+    t.textContent = `「${canceledText(c)}」`;
+    r.append(t, reopenButton(c.id));
+    more.append(r);
+  }
+  return [row, more];
+}
+
+/** やめたやり残しを戻す口。戻すときは番号だけを送る。 */
+function reopenButton(id) {
   const undo = document.createElement('button');
   undo.className = 'ghost tiny';
   undo.textContent = '戻す';
@@ -1149,17 +1180,26 @@ function canceledNote({ id, text }) {
     if (!got) { undo.disabled = false; return; }
     if (!got.ok) {
       showCrash('やり残しを戻せませんでした', got.body?.error ?? `${got.status}`);
-      // 押しても戻らない口は残さない（畳んだ・同じ依頼をもう一度記録した・上限まで溜まっている）
+      // 押しても戻らない口は残さない（畳んだ・同じ依頼をもう一度記録した・上限まで溜まっている）。本体の一覧からも消えている
       if (!got.body?.gone) { undo.disabled = false; return; }
     }
-    if (lastCanceled?.id === id) lastCanceled = undefined;
     await loadUnfinished();
   });
+  return undo;
+}
+
+/** 「〜をやめました [戻す] [閉じる]」。 */
+function canceledNote({ id, text }) {
+  const row = document.createElement('div');
+  row.className = 'side-note dim';
+  const label = document.createElement('span');
+  label.className = 'grow';
+  label.textContent = `「${text}」をやめました`;
   const close = document.createElement('button');
   close.className = 'ghost tiny';
   close.textContent = '閉じる';
-  close.addEventListener('click', () => { if (lastCanceled?.id === id) lastCanceled = undefined; void loadUnfinished(); });
-  row.append(label, undo, close);
+  close.addEventListener('click', () => { hideCanceled = true; void loadUnfinished(); });
+  row.append(label, reopenButton(id), close);
   return row;
 }
 

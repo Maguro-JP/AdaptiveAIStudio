@@ -132,8 +132,10 @@ describe('やり残しを、こちらから拾う', () => {
       const { id } = await ask(base, 'docs を直して');
       const del = await fetch(`${base}/api/unfinished?id=${id}`, { method: 'DELETE' });
       assert.equal(del.status, 200);
-      const after = await (await fetch(`${base}/api/unfinished`)).json() as { list: { id: string }[] };
+      const after = await (await fetch(`${base}/api/unfinished`)).json() as { list: { id: string }[]; canceled: { id: string; request: string }[] };
       assert.ok(!after.list.some((u) => u.id === id), 'やめたのに残っている');
+      // 立ち上げてからやめたものは、戻す口に並ぶ（画面が読み直しても消えない）
+      assert.deepEqual(after.canceled.map((c) => [c.id, c.request]), [[id, 'docs を直して']]);
       // 押し間違えは戻せる（元の依頼の文は、やり残しの記録にしか無い）
       const back = await fetch(`${base}/api/unfinished/reopen`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }),
@@ -141,6 +143,7 @@ describe('やり残しを、こちらから拾う', () => {
       assert.equal(back.status, 200);
       const again = await (await fetch(`${base}/api/unfinished`)).json() as { list: { id: string; request: string }[] };
       assert.equal(again.list.find((u) => u.id === id)?.request, 'docs を直して', '戻していない');
+      assert.deepEqual((again as unknown as { canceled: unknown[] }).canceled, [], '戻したのに、戻す口に残っている');
       const unknown = await fetch(`${base}/api/unfinished/reopen`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'u-none' }),
       });
