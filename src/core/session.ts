@@ -1126,6 +1126,8 @@ export class Session {
     const ac = new AbortController();
     this.#conv.running = ac;
     let text = '';
+    // モデルが落ちた・止められたか。`Agent.run` は投げずに `finished` で知らせる
+    let broken: string | undefined;
     try {
       const thinker = new Agent(this.orchestrator, {
         candidates: this.candidates,
@@ -1144,12 +1146,21 @@ export class Session {
         [{ role: 'user', content: promptFor(mode, context) }], ac.signal,
       )) {
         if (ev.type === 'thinking') text += ev.delta;
+        if (ev.type === 'finished' && (ev.reason === 'failed' || ev.reason === 'aborted')) {
+          broken = ev.reason === 'aborted' ? '止められました' : (ev.detail ?? 'モデルが答えませんでした');
+        }
       }
     } catch {
       // 考えに失敗しても、この場所は止まらない。
       return true;
     } finally {
       this.#conv.running = undefined;
+    }
+    // 落ちた・止められた回は、手がかりを「調べた」とも、日課を「済ませた」とも記録しない（前は記録していたので、繋がらなかった
+    // 回の手がかりは二度と調べられず、その日の日課は済んだことになった）。次の見回りでもう一度やる
+    if (broken !== undefined) {
+      yield { type: 'declined', reason: `考えられませんでした（${broken}）` };
+      return true;
     }
 
     if (mode.id === 'recon') this.proposals.markExamined(fingerprint);
