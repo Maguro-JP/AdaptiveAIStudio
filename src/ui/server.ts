@@ -2052,6 +2052,8 @@ export class UiServer {
         // 動いている会話の全部（本体と、横で並べて走らせているもの）。一覧の「動いています」はこちらで付ける。
         runningAll: [...(this.#runningId ? [this.#runningId] : []), ...this.#side.keys()],
         list, total, hidden: Math.max(0, total - list.length),
+        // 消して、まだ戻せるもの（立ち上げ直すと本当に消える）。新しい順
+        trash: await this.#conversations.trashList(),
       });
     }
 

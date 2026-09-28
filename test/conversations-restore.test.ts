@@ -83,6 +83,42 @@ describe('消した会話を戻す', () => {
     await c.remove('c20260101-000000-0000');
   });
 
+  test('**戻せる会話を、消した新しい順に題と一緒に並べる。戻したものは並べない**', async () => {
+    const dir = await tempDir('aas-conv-trash-list-');
+    const c = new Conversations(dir);
+    const ids: string[] = [];
+    for (const title of ['一つ目の話', '二つ目の話', '三つ目の話']) {
+      const { id } = await c.create();
+      await c.rename(id, title);
+      ids.push(id);
+    }
+    // 同じミリ秒に続けて消しても、消した順に並ぶ（時計を止めて、必ず同じ時刻にする）
+    const realNow = Date.now;
+    Date.now = () => 1_800_000_000_000;
+    try {
+      for (const id of ids) await c.remove(id);
+    } finally {
+      Date.now = realNow;
+    }
+    const listed = await c.trashList();
+    assert.deepEqual(listed.map((x) => [x.id, x.title]), [[ids[2], '三つ目の話'], [ids[1], '二つ目の話'], [ids[0], '一つ目の話']]);
+    assert.deepEqual(await c.restore(ids[1]!), { id: ids[1] });
+    assert.deepEqual((await c.trashList()).map((x) => x.id), [ids[2], ids[0]]);
+    assert.deepEqual((await c.trashList(1)).map((x) => x.id), [ids[2]], '上限を守っていない');
+    await c.purgeTrash();
+    assert.deepEqual(await c.trashList(), []);
+  });
+
+  test('**二度消した会話は一件だけ並べ、題は戻す方（最初に消したもの）から取る**', async () => {
+    const { c, dir, id } = await withTalk();
+    await c.rename(id, '本物の話');
+    await c.remove(id);
+    await writeFile(join(dir, `${id}.jsonl`), `${JSON.stringify({ t: 'meta', id, title: '切れ端', createdAt: new Date().toISOString() })}\n`);
+    await c.remove(id);
+    const listed = await c.trashList();
+    assert.deepEqual(listed.map((x) => [x.id, x.title]), [[id, '本物の話']]);
+  });
+
   test('trash の中のものは、名前が会話の形でも一覧に出さない', async () => {
     const { c, dir } = await withTalk();
     await mkdir(join(dir, 'trash'), { recursive: true });
