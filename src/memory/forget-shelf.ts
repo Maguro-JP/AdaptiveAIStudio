@@ -22,12 +22,25 @@ export interface ShelfItem {
   at: number;
 }
 
+/** 棚に載っている一件。`seq` は忘れた順の通し番号（同じミリ秒に忘れたものの前後を決める）。 */
+interface Shelved { f: Forgotten; at: number; seq: number }
+
 export class ForgetShelf {
-  readonly #items = new Map<string, { f: Forgotten; at: number }>();
+  readonly #items = new Map<string, Shelved>();
+  #seq = 0;
 
   put(f: Forgotten, at: number = Date.now()): void {
-    this.#items.delete(f.entry.id);
-    this.#items.set(f.entry.id, { f, at });
+    this.#keep({ f, at, seq: ++this.#seq });
+  }
+
+  /** 取り出したものを、忘れた時刻と順のまま載せ直す（戻し損ねたとき）。載せ直した一件を、最後に忘れたものに見せない。 */
+  putBack(item: Shelved): void {
+    this.#keep(item);
+  }
+
+  #keep(item: Shelved): void {
+    this.#items.delete(item.f.entry.id);
+    this.#items.set(item.f.entry.id, item);
     while (this.#items.size > KEEP) this.#items.delete(this.#items.keys().next().value!);
   }
 
@@ -35,8 +48,8 @@ export class ForgetShelf {
     return this.takeWithTime(id)?.f;
   }
 
-  /** 取り出して、忘れた時刻も返す。戻し損ねて載せ直すときに、時刻と並びを元のままにするため。 */
-  takeWithTime(id: string): { f: Forgotten; at: number } | undefined {
+  /** 取り出して、忘れた時刻と順も返す。戻し損ねて載せ直すとき（`putBack`）に使う。 */
+  takeWithTime(id: string): Shelved | undefined {
     const got = this.#items.get(id);
     this.#items.delete(id);
     return got;
@@ -48,10 +61,10 @@ export class ForgetShelf {
    */
   list(era: object): ShelfItem[] {
     return [...this.#items.values()]
-      .map((item, order) => ({ ...item, order }))
       .filter(({ f }) => f.era === era)
-      // 載せた順ではなく、忘れた時刻の順（戻し損ねて載せ直した一件を、最後に忘れたものに見せない）。同じ時刻なら後に載せた方を先に
-      .sort((x, y) => y.at - x.at || y.order - x.order)
+      // 載せた順ではなく、忘れた時刻の順。同じ時刻なら後に忘れた方を先に（載せ直した順では決めない。前はそれで、同じミリ秒に
+      // 忘れた二つのうち、戻し損ねた古い方が前に出た）
+      .sort((x, y) => y.at - x.at || y.seq - x.seq)
       .map(({ f, at }) => ({ id: f.entry.id, title: f.entry.title, kind: f.entry.kind, at }));
   }
 
@@ -104,7 +117,7 @@ export async function restoreAndSave(memory: Memory, shelf: ForgetShelf, id: str
     const why = (e as Error).message;
     // 同じ代の間なら、戻した分を取り出して、もう一度押せるようにする。振り直された後は取り出す先が分からない
     if (f.era === memory.era && memory.remove(id)) {
-      shelf.put(f, taken.at);
+      shelf.putBack(taken);
       return { ok: false, status: 500, error: `保存できなかったので、戻していません（${why}）` };
     }
     return { ok: false, status: 500, gone: true, error: `保存できませんでした。手元では戻していて、次に保存できたときに書きます（${why}）` };

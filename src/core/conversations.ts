@@ -43,6 +43,23 @@ export interface ConversationHead {
  */
 const HEAD_SCAN = 128 * 1024;
 
+/** 見出しの行（1 行目）の題。読めない・見出しが無いときは「新しい会話」（一覧と同じ）。 */
+async function titleOf(path: string): Promise<string> {
+  try {
+    const fh = await open(path, 'r');
+    try {
+      const buf = Buffer.alloc(4096);
+      const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+      const first = parse(buf.subarray(0, bytesRead).toString('utf8').split('\n')[0] ?? '');
+      return first?.t === 'meta' && typeof first.title === 'string' && first.title ? first.title : '新しい会話';
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return '新しい会話';
+  }
+}
+
 interface MetaLine { t: 'meta'; id: string; title: string; createdAt: string }
 interface MsgLine { t: 'msg'; at: string; m: ProviderMessage }
 
@@ -417,7 +434,9 @@ export class Conversations {
     const path = this.#path(id);
     await inOrder(path, () => inOrder(this.#trash, async () => {
       await mkdir(this.#trash, { recursive: true });
-      let at = Date.now();
+      // 消した順が時刻で一つに決まるように、移した先に在るどれよりも後にする（同じミリ秒に続けて消すと、戻す一覧の並びが揺れた）
+      const latest = Math.max(0, ...(await this.#trashed()).map((t) => t.at));
+      let at = Math.max(Date.now(), latest + 1);
       while (await exists(join(this.#trash, `${id}.${at}.jsonl`))) at += 1;
       try {
         await renameRetrying(path, join(this.#trash, `${id}.${at}.jsonl`));
@@ -457,12 +476,36 @@ export class Conversations {
     }));
   }
 
+  /**
+   * 戻せる会話（消した新しい順、会話ごとに一件）。画面が最後の一件だけを持っていたので、続けて二つ消すと一つ目を戻せず、
+   * 画面を開き直すと戻す口ごと消えた。題は戻すときに戻る方（最初に消したもの）の見出しから取る。
+   */
+  async trashList(limit = 20): Promise<{ id: string; title: string; at: number }[]> {
+    // 消す・戻す・立ち上げたときの片づけと同じ順番待ちに入る（片づけの最中に読むと、消えかけの題を読んで「新しい会話」と出した）
+    return inOrder(this.#trash, () => this.#trashList(limit));
+  }
+
+  async #trashList(limit: number): Promise<{ id: string; title: string; at: number }[]> {
+    const byId = new Map<string, { first: { at: number; path: string }; latest: number }>();
+    for (const t of await this.#trashed()) {
+      const got = byId.get(t.id);
+      if (!got) { byId.set(t.id, { first: t, latest: t.at }); continue; }
+      if (t.at < got.first.at) got.first = t;
+      got.latest = Math.max(got.latest, t.at);
+    }
+    const newest = [...byId.entries()].sort((x, y) => y[1].latest - x[1].latest).slice(0, limit);
+    const out: { id: string; title: string; at: number }[] = [];
+    for (const [id, { first, latest }] of newest) out.push({ id, title: await titleOf(first.path), at: latest });
+    return out;
+  }
+
   /** 移した先に在るもの。名前の形の違うものは見ない。 */
   async #trashed(): Promise<{ id: string; at: number; path: string }[]> {
     const names = await readdir(this.#trash).catch(() => [] as string[]);
     return names.flatMap((name) => {
       const m = /^(.+)\.(\d+)\.jsonl$/.exec(name);
-      return m && ID_SHAPE.test(m[1]!) ? [{ id: m[1]!, at: Number(m[2]), path: join(this.#trash, name) }] : [];
+      // 桁の大きすぎる時刻は見ない（足しても変わらない数だと、消すときの「後にずらす」が回り続ける）
+      return m && ID_SHAPE.test(m[1]!) && Number.isSafeInteger(Number(m[2])) ? [{ id: m[1]!, at: Number(m[2]), path: join(this.#trash, name) }] : [];
     });
   }
 

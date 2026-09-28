@@ -190,7 +190,8 @@ button.row {
 .side-note > button { width: auto; flex: none; }
 .side-row > button:first-child { flex: 1; min-width: 0; }
 /* 忘れて戻せる覚えのうち、最新より前の分。畳んでおき、開いたら一件ずつ [戻す] を並べる */
-.forgotten-more > summary { cursor: pointer; }
+.forgotten-more > summary, .removed-more > summary { cursor: pointer; }
+.removed-more > .side-note { padding-left: 1em; }
 .forgotten-more > .row { padding-left: 1em; }
 /*
  * 一覧の行に置く押す印（× や ↶）は、幅を取らない。

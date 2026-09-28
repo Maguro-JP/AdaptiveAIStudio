@@ -1281,16 +1281,18 @@ async function loadConversations() {
   drawConversations();
 }
 
-/** 最後に消した会話。押し間違えを、その場で戻せるようにする（本体は立ち上げ直すまで `trash/` に持っている）。 */
-let lastRemoved;
+/*
+ * 消して、まだ戻せる会話（本体が `trash/` に持っている分を、新しい順に `conversations.trash` で受け取る）。
+ * 押し間違えを、その場で戻せるようにする。最後の一件は目の前に、それより前は畳んで並べる
+ * （前は画面が最後の一件だけを持っていたので、続けて二つ消すと一つ目を戻せず、読み直すと戻す口ごと消えた）。
+ */
+// 「閉じる」を押したら、次に消すまで出さない（本体には残っていて、開き直せばまた出る）
+let hideRemoved = false;
+// 畳んだ分を開いているか。一覧は何度も描き直すので、覚えておかないと開いたそばから閉じる
+let removedMoreOpen = false;
 
-/** 「〜を消しました [戻す] [閉じる]」。戻すときは名前だけを送る。 */
-function removedNote({ id, title }) {
-  const row = document.createElement('div');
-  row.className = 'side-note dim';
-  const label = document.createElement('span');
-  label.className = 'grow';
-  label.textContent = `「${title}」を消しました`;
+/** 消した会話を戻す口。戻すときは名前だけを送る。 */
+function restoreButton(id) {
   const undo = document.createElement('button');
   undo.className = 'ghost tiny';
   undo.textContent = '戻す';
@@ -1303,25 +1305,55 @@ function removedNote({ id, title }) {
     if (!got) { undo.disabled = false; return; }
     if (!got.ok) {
       showCrash('会話を戻せませんでした', got.body?.error ?? `${got.status}`);
+      // 押しても戻らない口は、読み直した一覧から消える（本体の `trash` に無い）
       if (!got.body?.gone) { undo.disabled = false; return; }
     }
-    if (lastRemoved?.id === id) lastRemoved = undefined;
     await loadConversations();
   });
+  return undo;
+}
+
+/** 「〜を消しました [戻す] [閉じる]」と、それより前に消した分の畳み。 */
+function removedNotes() {
+  const trash = Array.isArray(conversations.trash) ? conversations.trash : [];
+  if (trash.length === 0 || hideRemoved) return [];
+  const [latest, ...older] = trash;
+  const row = document.createElement('div');
+  row.className = 'side-note dim';
+  const label = document.createElement('span');
+  label.className = 'grow';
+  label.textContent = `「${latest.title}」を消しました`;
   const close = document.createElement('button');
   close.className = 'ghost tiny';
   close.textContent = '閉じる';
-  close.addEventListener('click', () => { if (lastRemoved?.id === id) lastRemoved = undefined; drawConversations(); });
-  row.append(label, undo, close);
-  return row;
+  close.addEventListener('click', () => { hideRemoved = true; drawConversations(); });
+  row.append(label, restoreButton(latest.id), close);
+  if (older.length === 0) return [row];
+  const more = document.createElement('details');
+  more.className = 'removed-more';
+  more.open = removedMoreOpen;
+  more.addEventListener('toggle', () => { removedMoreOpen = more.open; });
+  const summary = document.createElement('summary');
+  summary.className = 'dim';
+  summary.textContent = `ほかにも ${older.length} 件戻せます`;
+  more.append(summary);
+  for (const item of older) {
+    const r = document.createElement('div');
+    r.className = 'side-note dim';
+    const t = document.createElement('span');
+    t.className = 'grow';
+    t.textContent = `「${item.title}」`;
+    r.append(t, restoreButton(item.id));
+    more.append(r);
+  }
+  return [row, more];
 }
 
 function drawConversations() {
   const box = $('sideSessions');
   box.textContent = '';
-  // 別のタブで戻したものは、もう「消しました」ではない
-  if (lastRemoved && conversations.list.some((h) => h.id === lastRemoved.id)) lastRemoved = undefined;
-  if (lastRemoved) box.append(removedNote(lastRemoved));
+  // 戻せるものは本体が知っている（別のタブで戻したもの・立ち上げ直して消えたものは、もう並ばない）
+  box.append(...removedNotes());
 
   // 「新しい会話」の押しボタンは置かない。**トップ（何も開いていない画面）で
   // 書き始めれば新しい会話になる。**トップへは名前（左上）を押して戻る。
@@ -1396,7 +1428,7 @@ function drawConversations() {
       if (!r) return;
       if (!r.ok) return void alert(r.body.error ?? '消せませんでした');
       if (head.id === conversations.current) ctx.showHistory([]);
-      lastRemoved = { id: head.id, title: head.title };
+      hideRemoved = false;
       await loadConversations();
     };
     row.append(open, label, drop);

@@ -293,8 +293,9 @@ await check('会話を消す', async () => {
   if (names.map((s) => s.trim()).includes(name)) throw new Error(`消えていない: ${name}`);
   if (await convRows().count() >= before) throw new Error('数が減っていない');
   // 押し間違えは戻せる（本体は立ち上げ直すまで trash/ に持っている）。戻すと一覧に戻る
-  const note = p.locator('#sideSessions .side-note');
-  if (await note.count() === 0 || !(await note.innerText()).includes('を消しました')) throw new Error('消したことと、戻す口を出していない');
+  // 最後に消した一件（一覧の直下）。前に消した分は畳みの中に並ぶので、数に入れない（普段の画面に当てると残っている）
+  const note = p.locator('#sideSessions > .side-note');
+  if (await note.count() === 0 || !(await note.innerText()).includes(`「${name}」を消しました`)) throw new Error('消したことと、戻す口を出していない');
   // 文字が在っても、幅が 0 に潰れていれば見えない（innerText は見えていなくても返る）。測って見る
   const said = await note.locator('.grow').boundingBox();
   if (!said || said.width < 40) throw new Error(`消した知らせの文が潰れて見えない（幅 ${said?.width ?? 0}px）`);
@@ -302,7 +303,62 @@ await check('会話を消す', async () => {
   await p.waitForTimeout(800);
   const back = (await p.locator('#sideSessions .side-row button').allInnerTexts()).map((s) => s.trim());
   if (!back.includes(name)) throw new Error(`戻していない: ${name}`);
-  if (await p.locator('#sideSessions .side-note').count() !== 0) throw new Error('戻したのに、消した知らせが残っている');
+  if ((await p.locator('#sideSessions').innerText()).includes(`「${name}」を消しました`)) throw new Error('戻したのに、消した知らせが残っている');
+});
+
+/*
+ * **続けて二つ消しても、前に消した方を戻せる。**前は画面が最後の一件だけを持っていたので、一つ目は戻せなかった。
+ * 戻せるものは本体が `trash` で渡す。二件を作るにはモデルが要るので、一覧と戻す口は横取りする。
+ */
+await check('続けて消した会話の、前の方を戻せる', async () => {
+  const heads = [
+    { id: 'c20260101-000000-0001', title: 'SWEEP-一つ目', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', messages: 2 },
+    { id: 'c20260101-000000-0002', title: 'SWEEP-二つ目', createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z', messages: 2 },
+  ];
+  let list = [];
+  let trash = [{ id: heads[1].id, title: heads[1].title, at: 2 }, { id: heads[0].id, title: heads[0].title, at: 1 }];
+  const sent = [];
+  await p.route('**/api/conversations**', async (r) => {
+    const req = r.request();
+    const at = new URL(req.url()).pathname;
+    if (req.method() === 'GET' && at === '/api/conversations') {
+      return r.fulfill({ json: { current: null, running: null, runningAll: [], list, total: list.length, hidden: 0, trash } });
+    }
+    if (req.method() === 'POST' && at === '/api/conversations/restore') {
+      const { id } = JSON.parse(req.postData() ?? '{}');
+      sent.push(req.postData() ?? '');
+      list = [...list, heads.find((h) => h.id === id)];
+      trash = trash.filter((t) => t.id !== id);
+      return r.fulfill({ json: { id } });
+    }
+    return r.fallback();
+  });
+  try {
+    await p.reload({ waitUntil: 'load' });
+    await opened();
+    await p.waitForTimeout(800);
+    const box = p.locator('#sideSessions');
+    if (!(await box.innerText()).includes('「SWEEP-二つ目」を消しました')) throw new Error('最後に消した会話と、戻す口を出していない');
+    const more = box.locator('details');
+    if (await more.count() !== 1) throw new Error('前に消した会話を畳んで並べていない');
+    await more.locator('summary').click();
+    await p.waitForTimeout(300);
+    const older = more.locator('.side-note', { hasText: 'SWEEP-一つ目' });
+    if (!(await older.isVisible())) throw new Error('畳んだ分を開いても、前に消した会話が見えない');
+    await older.locator('button', { hasText: '戻す' }).click();
+    await p.waitForTimeout(800);
+    if (sent.length !== 1 || JSON.parse(sent[0]).id !== heads[0].id) throw new Error(`前に消した方を戻すよう頼んでいない: ${sent.join(' / ')}`);
+    if (Object.keys(JSON.parse(sent[0])).join(',') !== 'id') throw new Error(`名前のほかまで送っている: ${sent[0]}`);
+    const names = (await p.locator('#sideSessions .side-row button').allInnerTexts()).map((x) => x.trim());
+    if (!names.includes('SWEEP-一つ目')) throw new Error(`戻した会話が一覧に無い: ${names.join(', ')}`);
+    const text = await box.innerText();
+    if (!text.includes('「SWEEP-二つ目」を消しました')) throw new Error('戻していない方の口を消した');
+    if (text.includes('ほかにも')) throw new Error('戻した後も、前の分が畳みに残っている');
+  } finally {
+    await p.unroute('**/api/conversations**');
+    await p.reload({ waitUntil: 'load' }).then(opened).catch(() => undefined);
+    await p.waitForTimeout(800);
+  }
 });
 await check('送って返る', async () => {
   /*
