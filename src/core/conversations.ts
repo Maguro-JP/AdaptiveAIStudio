@@ -202,8 +202,12 @@ export const LIST_LIMIT = 100;
 export class Conversations {
   readonly #dir: string;
 
-  constructor(dir: string) {
+  /** 書き足す手。試験でモックにするためのもの。 */
+  readonly #appendText: (path: string, text: string) => Promise<void>;
+
+  constructor(dir: string, ops: { append?: (path: string, text: string) => Promise<void> } = {}) {
     this.#dir = dir;
+    this.#appendText = ops.append ?? ((p, t) => appendFile(p, t, 'utf8'));
   }
 
   #path(id: string): string {
@@ -376,7 +380,18 @@ export class Conversations {
        * 一覧に出て、本物は同じ名前が在るので戻せなくなる。消した方へ足す（戻せば、その1ターンも一緒に戻る）。
        */
       const to = (await exists(path)) ? path : ((await this.#trashedLatest(id)) ?? path);
-      await appendFile(to, (await endsWithNewline(to)) ? body : `\n${body}`, 'utf8');
+      const text = (await endsWithNewline(to)) ? body : `\n${body}`;
+      // Windows では、ウイルス対策や索引作りが一瞬掴むと EBUSY・EPERM になる。少し待ってやり直す（そのターンを落とさない）
+      for (let tries = 0; ; tries++) {
+        try {
+          await this.#appendText(to, text);
+          return;
+        } catch (e) {
+          const code = (e as NodeJS.ErrnoException).code;
+          if (tries >= 3 || !(code === 'EBUSY' || code === 'EPERM')) throw e;
+          await new Promise((r) => setTimeout(r, 100 * (tries + 1)));
+        }
+      }
     });
   }
 

@@ -738,7 +738,8 @@ export class UiServer {
       const fresh = conv.history.slice(run.saved);
       if (fresh.length > 0) {
         await this.#conversations.append(conversationId, fresh).catch((e: unknown) => {
-          this.broadcast({ type: 'log', level: 'error', text: `会話を残せませんでした: ${(e as Error).message}` });
+          // 横で走らせた会話は、ここで手元の履歴ごと手放す。書き直す次の機会が無いので、残っていないことをはっきり言う
+          this.broadcast({ type: 'log', level: 'error', text: `会話を残せませんでした（この会話の今回のやりとりは、ファイルに残っていません）: ${(e as Error).message}` });
         });
         const firstAsked = fresh.find((m) => m.role === 'user');
         if (firstAsked) await this.#conversations.titleIfUnset(conversationId, firstAsked.content).catch(() => undefined);
@@ -839,9 +840,13 @@ export class UiServer {
     this.#loadedId = id;
     const fresh = session.history.slice(this.#saved);
     if (fresh.length === 0) return;
-    await this.#conversations.append(id, fresh).catch((e: unknown) => {
-      this.broadcast({ type: 'log', level: 'error', text: `会話を残せませんでした: ${(e as Error).message}` });
-    });
+    try {
+      await this.#conversations.append(id, fresh);
+    } catch (e) {
+      // 「ここまで残した」を進めない。次のターンで、書けなかった分から書き直す（前は進めてしまい、そのターンが抜け落ちた）
+      this.broadcast({ type: 'log', level: 'error', text: `会話を残せませんでした。次のやりとりのときに書き直します: ${(e as Error).message}` });
+      return;
+    }
     this.#saved = session.history.length;
     const firstAsked = fresh.find((m) => m.role === 'user');
     if (firstAsked) await this.#conversations.titleIfUnset(id, firstAsked.content).catch(() => undefined);
