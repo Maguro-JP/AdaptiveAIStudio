@@ -2009,21 +2009,28 @@ await check('記憶を忘れた直後に、戻せる', async () => {
  */
 await check('やめたやり残しを、戻せる', async () => {
   const item = { id: 'u-sweep', request: 'SWEEP-やり残し\n二行目', whyText: '往復の上限に届いて、途中で切れました', attempts: 1, running: false };
-  let list = [item];
+  const item2 = { id: 'u-sweep2', request: 'SWEEP-二つ目', whyText: '往復の上限に届いて、途中で切れました', attempts: 1, running: false };
+  let list = [item, item2];
+  // やめて、まだ戻せるもの（本体が新しい順に渡す）
+  let canceled = [];
   let cancelFails = true;
   const sent = [];
   await p.route('**/api/unfinished**', async (r) => {
     const req = r.request();
-    const at = new URL(req.url()).pathname;
-    if (req.method() === 'GET') return r.fulfill({ json: { list } });
-    sent.push(`${req.method()} ${at} ${req.postData() ?? ''}`);
+    const url = new URL(req.url());
+    if (req.method() === 'GET') return r.fulfill({ json: { list, canceled } });
+    sent.push(`${req.method()} ${url.pathname} ${req.postData() ?? ''}`);
     if (req.method() === 'DELETE') {
       if (cancelFails) return r.fulfill({ status: 500, json: { error: 'SWEEP-書けません' } });
-      list = [];
-      return r.fulfill({ json: { canceled: item.id } });
+      const it = [item, item2].find((x) => x.id === url.searchParams.get('id'));
+      list = list.filter((x) => x.id !== it.id);
+      canceled = [{ id: it.id, request: it.request, at: Date.now() }, ...canceled.filter((c) => c.id !== it.id)];
+      return r.fulfill({ json: { canceled: it.id } });
     }
-    list = [item];
-    return r.fulfill({ json: { reopened: item.id } });
+    const { id } = JSON.parse(req.postData() ?? '{}');
+    list = [...list, [item, item2].find((x) => x.id === id)];
+    canceled = canceled.filter((c) => c.id !== id);
+    return r.fulfill({ json: { reopened: id } });
   });
   try {
     await p.reload({ waitUntil: 'load' });
@@ -2046,18 +2053,32 @@ await check('やめたやり残しを、戻せる', async () => {
     await p.waitForTimeout(500);
     const side = await p.locator('#sideUnfinished').innerText();
     if (!side.includes('「SWEEP-やり残し」をやめました')) throw new Error(`やめたことと、戻す口を出していない: ${side.slice(0, 60)}`);
-    const said = await p.locator('#sideUnfinished .side-note .grow').boundingBox();
+    const said = await p.locator('#sideUnfinished > .side-note .grow').boundingBox();
     if (!said || said.width < 40) throw new Error(`やめた知らせの文が潰れて見えない（幅 ${said?.width ?? 0}px）`);
+
+    // 続けてもう一つやめる。前にやめた方は畳みに回り、そこから戻せる
+    await stop.first().click();
+    await p.waitForTimeout(500);
     if (await p.locator('#unfinishedSec').isHidden()) throw new Error('一覧が空になって、戻す口ごと隠れた');
-    await p.locator('#sideUnfinished button', { hasText: '戻す' }).first().click();
+    const two = await p.locator('#sideUnfinished').innerText();
+    if (!two.includes('「SWEEP-二つ目」をやめました')) throw new Error(`最後にやめた方を目の前に出していない: ${two.slice(0, 80)}`);
+    const more = p.locator('#sideUnfinished details');
+    if (await more.count() !== 1) throw new Error('前にやめた方を畳んで並べていない');
+    await more.locator('summary').click();
+    await p.waitForTimeout(300);
+    const older = more.locator('.side-note', { hasText: 'SWEEP-やり残し' });
+    if (!(await older.isVisible())) throw new Error('畳んだ分を開いても、前にやめた方が見えない');
+    await older.locator('button', { hasText: '戻す' }).click();
     await p.waitForTimeout(500);
     const back = await p.locator('#sideUnfinished').innerText();
-    if (back.includes('をやめました')) throw new Error('戻したのに、やめた知らせが残っている');
+    if (back.includes('「SWEEP-やり残し」をやめました')) throw new Error('戻したのに、やめた知らせが残っている');
     if (!back.includes('SWEEP-やり残し')) throw new Error('戻したやり残しが一覧に無い');
-    const reopen = sent.find((x) => x.startsWith('POST /api/unfinished/reopen'));
-    if (!reopen) throw new Error(`戻すよう頼んでいない: ${sent.join(' / ')}`);
-    const keys = Object.keys(JSON.parse(reopen.split(' ').slice(2).join(' '))).join(',');
-    if (keys !== 'id') throw new Error(`戻す中身を画面から送っている（番号だけにする）: ${keys}`);
+    if (!back.includes('「SWEEP-二つ目」をやめました')) throw new Error('戻していない方の口を消した');
+    const reopen = sent.filter((x) => x.startsWith('POST /api/unfinished/reopen'));
+    if (reopen.length !== 1) throw new Error(`戻すよう頼んでいない: ${sent.join(' / ')}`);
+    const body = JSON.parse(reopen[0].split(' ').slice(2).join(' '));
+    if (body.id !== item.id) throw new Error(`前にやめた方を戻すよう頼んでいない: ${reopen[0]}`);
+    if (Object.keys(body).join(',') !== 'id') throw new Error(`戻す中身を画面から送っている（番号だけにする）: ${Object.keys(body).join(',')}`);
   } finally {
     expectingSaveFailure = false;
     await p.unroute('**/api/unfinished**');

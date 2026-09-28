@@ -259,6 +259,8 @@ export class UiServer {
   #logSeq = 0;
   /** 画面で忘れた覚え。押し間違えを「戻す」ためにしばらく取っておく（`src/memory/forget-shelf.ts`）。 */
   readonly #forgotten = new ForgetShelf();
+  /** 立ち上げた時刻。やめたやり残しのうち、これより後の分を「戻す」に並べる */
+  readonly #bootAt = Date.now();
   #server?: ReturnType<typeof createServer>;
   /** 点検を回す係。状態（走っている子）はそちらが持つ。 */
   /** 記録をファイルにも残す。困ったときの報告に、ここから直近を入れる。 */
@@ -2107,13 +2109,15 @@ export class UiServer {
           nextAt: u.nextAt,
           running: u.id === this.#resuming,
         })),
+        // 立ち上げてからやめて、まだ戻せるもの（新しい順）。記憶・会話と同じく、立ち上げ直す前の分は並べない
+        canceled: await this.#unfinished.canceledSince(this.#bootAt).catch(() => []),
       });
     }
 
     if (path === '/api/unfinished' && req.method === 'DELETE') {
       const id = url.searchParams.get('id') ?? '';
       if (!id) return send(res, 400, { error: 'id がありません' });
-      await this.#unfinished.cancel(id);
+      await this.#unfinished.cancel(id, { byUser: true });
       await this.#settleGoals();
       this.broadcast({ type: 'unfinished' });
       return send(res, 200, { canceled: id });

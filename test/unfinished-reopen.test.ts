@@ -105,6 +105,64 @@ describe('やめたやり残しを戻す', () => {
     assert.equal((await w.list()).length, 1);
   });
 
+  test('**区切りより後にやめて、まだ戻せるものを、やめた新しい順に並べる**', async () => {
+    const { w, path } = await store();
+    const a = (await w.add({ ...item, request: '一つ目\n二行目' }, 1))!;
+    const b = (await w.add({ ...item, request: '二つ目' }, 2))!;
+    const c = (await w.add({ ...item, request: '三つ目' }, 3))!;
+    const old = (await w.add({ ...item, request: '前の起動でやめた' }, 4))!;
+    await w.cancel(old.id, { byUser: true, now: 500 });
+    await w.cancel(a.id, { byUser: true, now: 1000 });
+    await w.cancel(b.id, { byUser: true, now: 1000 }); // 同じ時刻でも、後にやめた方が先
+    await w.cancel(c.id, { byUser: true, now: 1100 });
+    assert.deepEqual((await w.canceledSince(1000)).map((x) => [x.id, x.request, x.at]),
+      [[c.id, '三つ目', 1100], [b.id, '二つ目', 1000], [a.id, '一つ目\n二行目', 1000]]);
+    assert.deepEqual((await w.canceledSince(1000, 2)).map((x) => x.id), [c.id, b.id], '上限を守っていない');
+    // 戻したもの・片づいたと書かれたものは並べない
+    assert.equal(await w.reopen(b.id), 'reopened');
+    await appendFile(path, `${JSON.stringify({ t: 'close', id: c.id, how: 'done' })}\n`);
+    assert.deepEqual((await w.canceledSince(1000)).map((x) => x.id), [a.id]);
+    // 戻した後にまたやめたら、いちばん新しい
+    await w.cancel(b.id, { byUser: true, now: 900 });
+    assert.deepEqual((await w.canceledSince(0)).map((x) => x.id), [b.id, a.id, old.id]);
+  });
+
+  test('**本体が自分で閉じた分（利用者が押していない）は並べない**が、番号で戻せるまま', async () => {
+    const { w } = await store();
+    const mine = (await w.add({ ...item, request: '利用者がやめた' }, 1))!;
+    const stuck = (await w.add({ ...item, request: '段が塞がって止めた' }, 2))!;
+    await w.cancel(mine.id, { byUser: true, now: 10 });
+    await w.cancel(stuck.id);
+    assert.deepEqual((await w.canceledSince(0)).map((x) => x.id), [mine.id]);
+    assert.equal(await w.reopen(stuck.id), 'reopened');
+  });
+
+  test('前の版が書いた（時刻の無い・形の違う時刻の）やめた行は並べないが、戻せるまま', async () => {
+    const { w, path } = await store();
+    const a = (await w.add(item))!;
+    await appendFile(path, `${JSON.stringify({ t: 'close', id: a.id, how: 'canceled' })}\n`);
+    const b = (await w.add({ ...item, request: '別の依頼' }))!;
+    await appendFile(path, `${JSON.stringify({ t: 'close', id: b.id, how: 'canceled', at: 'きのう' })}\n`);
+    assert.deepEqual(await w.canceledSince(0), []);
+    assert.equal((await w.list()).length, 0, '形の違う時刻で、やめたものが戻った');
+    assert.equal(await w.reopen(a.id), 'reopened');
+    assert.equal(await w.reopen(b.id), 'reopened');
+  });
+
+  test('戻せないもの（同じ依頼をもう一度抱えている・上限まで抱えている）は並べない', async () => {
+    const { w } = await store();
+    const a = (await w.add({ ...item, request: '同じ依頼' }, 1))!;
+    await w.cancel(a.id, { byUser: true, now: 10 });
+    await w.add({ ...item, request: '同じ依頼' }, 2);
+    assert.deepEqual(await w.canceledSince(0), []);
+    const { w: full } = await store();
+    const first = (await full.add({ ...item, request: 'やめるもの' }, 1))!;
+    await full.cancel(first.id, { byUser: true, now: 10 });
+    assert.equal((await full.canceledSince(0)).length, 1);
+    for (let i = 0; i < MAX_OPEN; i += 1) await full.add({ ...item, request: `依頼 ${i}` }, 2 + i);
+    assert.deepEqual(await full.canceledSince(0), []);
+  });
+
   test('記録を畳んだ後は、やめたものは戻らないと言う', async () => {
     const { w, path } = await store();
     const gone = (await w.add({ ...item, request: 'やめるもの' }))!;
