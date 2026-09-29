@@ -180,7 +180,11 @@ async function main(): Promise<void> {
     console.log(`\n完了 ${done}/${outcomes.size}`);
   } finally {
     // 控えを閉じる。閉じないと、次の一回ぶんと混ざって戻しすぎる。run_command の分もここで載せる。
-    const closed = await wired.finish().catch(() => undefined);
+    const closed = await wired.finish().catch((e: unknown) => {
+      // 書き換えは済んでいる。戻り先だけが残っていないことを言う（黙ると aas undo で戻せるつもりのままになる）
+      console.log(c.yellow(`戻り先を残せませんでした（${(e as Error).message}）。この回の変更は aas undo からは戻せません`));
+      return undefined;
+    });
     if (closed?.point) console.log(c.dim(`戻り先: ${closed.point.id}（aas undo で戻せます）`));
     if (closed && closed.unrecorded.length > 0) {
       console.log(c.yellow(`前の中身を記録できず、戻せないファイル: ${closed.unrecorded.join(', ')}`));

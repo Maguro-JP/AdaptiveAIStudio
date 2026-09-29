@@ -333,7 +333,14 @@ async function main(): Promise<void> {
    */
   let core: Session | undefined;
   const getSession = async (): Promise<Session> => {
-    core ??= await Session.create(config, { approve });
+    core ??= await Session.create(config, {
+      approve,
+      // 警告と失敗だけを出す（戻り先を残せなかった等）。渡していなかったので、端末では黙っていた。
+      onLog: (level, text) => {
+        if (level === 'warn') console.log(c.yellow(`  ${text}`));
+        else if (level === 'error') console.log(c.red(`  ${text}`));
+      },
+    });
     return core;
   };
 

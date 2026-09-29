@@ -284,7 +284,8 @@ export class UndoStore {
     };
     await mkdir(this.#dir, { recursive: true });
     await writeStored(join(this.#dir, `${point.id}.json`), point);
-    await this.#prune();
+    // 古い戻り先の片づけに失敗しても、この戻り先は書けている。書けなかったことにしない（呼ぶ側が「戻せません」と言ってしまう）
+    await this.#prune().catch(() => undefined);
     return {
       id: point.id, at: point.at, request: point.request, paths: point.paths,
       ...(point.skipped ? { skipped: point.skipped } : {}),

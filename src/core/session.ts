@@ -943,17 +943,21 @@ export class Session {
       let rolledBack: string[] | undefined;
       // 止めた回は、確かめが途中で切れて「落ちた」に見えるだけ。落ちたとは言えないので戻さない。
       if (verified === 'failed' && !ac.signal.aborted && (this.config.harness ?? {}).rollbackOnGiveUp) {
-        const point = await this.undo.end();
+        const point = await this.undo.end().catch((e: unknown) => e as Error);
+        if (point instanceof Error) {
+          yield { type: 'log', level: 'warn', text: `確かめて落ちましたが、この依頼の戻り先を残せなかったので、自動では戻していません（${point.message}）。「戻す」からも戻せません` };
+        }
         /*
          * **いちばん新しい戻り先のときだけ当てる。**`restore` は選んだ戻り先より新しいものも全部当てる。
          * 記録の保存先は一つで、別の Session や CLI が同じ保存先を使うと、この依頼の後に始まって閉じた
          * 別の戻り先が在り得る。黙ってそれまで戻さない。戻さなかったことは言う。
          */
-        const newest = point ? (await this.undo.list())[0]?.id === point.id : false;
-        if (point && !newest) {
+        const kept = point instanceof Error ? undefined : point;
+        const newest = kept ? (await this.undo.list())[0]?.id === kept.id : false;
+        if (kept && !newest) {
           yield { type: 'log', level: 'warn', text: '確かめて落ちましたが、この依頼の後に別の作業の戻り先ができているので、自動では戻していません（「戻す」から選んでください）' };
         }
-        const done = point && newest ? await this.undo.restore(point.id) : undefined;
+        const done = kept && newest ? await this.undo.restore(kept.id) : undefined;
         const notRestored = [...new Set([...this.undo.peekSkipped(), ...(done?.failed ?? [])])].sort();
         rolledBack = done?.paths ?? [];
         if (rolledBack.length > 0 || notRestored.length > 0) {
@@ -1001,7 +1005,7 @@ export class Session {
     } finally {
       // 担当の途中で落ちた・止めた回も、そこまでに外のツールが変えた分を戻せるように。
       await takeOutside();
-      await this.undo.end().catch(() => undefined);
+      await this.#closeUndo();
       // 錠を返してから「動いていない」にする（送り口と同じ）。
       this.lock.release(lockOwner);
       this.#conv.running = undefined;
@@ -1248,6 +1252,18 @@ export class Session {
   /** 提案を実行し終えたことにする。 */
   async completeProposal(id: string): Promise<void> {
     await this.proposals.settle(id, 'done');
+  }
+
+  /**
+   * この依頼の戻り先を閉じて残す。書けなければ（ディスクが一杯・掴まれている）、そう言う。前は黙って捨てていたので、
+   * 利用者は「戻す」で戻せるつもりのままだった。依頼そのものは止めない（書き換えは済んでいる）。
+   */
+  async #closeUndo(): Promise<void> {
+    try {
+      await this.undo.end();
+    } catch (e) {
+      this.#opts.onLog?.('warn', `この依頼の戻り先を残せませんでした（${(e as Error).message}）。この依頼の変更は「戻す」からは戻せません`);
+    }
   }
 
   /** 思考の実績と日課の記録を残す。次の起動でも続きから考えられるように。 */
@@ -1900,7 +1916,7 @@ export class Session {
       };
     } finally {
       // **この一往復ぶんを、戻り先として残す。**触っていなければ残らない（錠を取っていなければ始めてもいない）。
-      if (locked) await this.undo.end().catch(() => undefined);
+      if (locked) await this.#closeUndo();
       if (!metricsEnded) {
         endMetrics('failed');
         await this.#harness.metrics?.save();
