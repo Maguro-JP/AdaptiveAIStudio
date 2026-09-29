@@ -9971,13 +9971,18 @@ sweep の「会話を消す」に戻すと文の幅を足した。すぐ消す�
 
 - Team の後始末（`team-setup.ts` の `finish`）: 前後比べ（`outside.after()`）が落ちると、黙って空の結果にし、run_command で変わった分を
   戻り先に載せないまま「戻り先: …（aas undo で戻せます）」と言っていた。書くツールの分の戻り先は今までどおり閉じ、`outsideLost` に理由を返す。
-  `aas team` は「run_command で変わったファイルを調べられませんでした。その分は aas undo からは戻せません」と言う
+  `aas team` は「run_command で変わったファイルを調べられませんでした。その分は aas undo からは戻せません」と言い、戻り先の行も
+  「書くツールで変えた分だけ、aas undo で戻せます」にする
+  - 押す前の読み直しで足した: git が落ちた・git の管理下でないとき、`after()` は投げずに「比べられない」（`comparable: false`）を返す。
+    最初はここを拾っておらず、いちばんありそうな場面を素通りさせていた。これも `outsideLost` にする
 - 思いつきの手がかり（`initiative.ts` の `findLeads`）: 読めなかったテストファイルを「無い」と数え、「対応するテストが見当たりません」の手がかりを
   出して、在るテストの二つ目を書かせにいっていた。読めなかったテストファイルは在る側に数え、数え直しが落ちた・中を見られないフォルダがある
-  ときは、テストが無いという手がかりを出さない
+  ときは、テストが無いという手がかりを出さない（中を見られないフォルダが一つでもあると、その作業場ではこの手がかりが出なくなる。
+  止まっていることは外から見えないが、在るテストを書き直させるよりは安全なので、そのままにした）
 - 片づけ（`cleanup.ts` の `findRemovable`）: `logs/` と `attachments/` の下のフォルダを、フォルダ自身の更新時刻で「古い記録」「前に渡した添付」
   として挙げ、`--yes` で中身ごと消していた。ファイルだけを挙げる（`attachments.ts` の `sweep` と同じ）
 - 直さなかったもの: 片づけで名前だけで候補になるもの（古い llama-server・`.part`）は、大きさを取れないと 0 と数える。消すものは変わらず、
   言う量が少なくなるだけ
-- 試験: `test/team-wired.test.ts`・`test/initiative.test.ts`・`test/cleanup.test.ts` に 1 件ずつ。三つとも直す前の版で落ちることを見た
+- 試験: `test/team-wired.test.ts` に 2 件（投げた・比べられない）、`test/initiative.test.ts`・`test/cleanup.test.ts` に 1 件ずつ。どれも直す前の版で
+  落ちることを見た
 触る場所: `src/core/team-setup.ts` の `finish`、`src/cli/team.ts`、`src/agent/initiative.ts` の `findLeads`、`src/runtime/cleanup.ts` の `findRemovable`

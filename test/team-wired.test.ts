@@ -13,7 +13,7 @@ import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { wireTeam } from '../src/core/team-setup.ts';
 import { OutsideChanges } from '../src/agent/outside-changes.ts';
@@ -231,6 +231,22 @@ describe('team は、run_command が変えた分も戻り先に載せる', () =>
       assert.ok(point?.paths.includes('a.txt'), '書くツールの分の戻り先まで捨てた');
     } finally {
       OutsideChanges.prototype.after = real;
+    }
+  });
+
+  test('git の管理下でない作業場では、run_command の分を比べられないと返す（投げずに黙る道）', async () => {
+    const root = await tempDir('aas-team-nogit-');
+    await writeFile(join(root, 'a.txt'), 'もと\n');
+    // 一時フォルダが別のリポジトリの下にあっても、そこまで上って「管理下」と読ませない（走らせる場所で結果を変えない）
+    const ceiling = process.env.GIT_CEILING_DIRECTORIES;
+    process.env.GIT_CEILING_DIRECTORIES = dirname(root);
+    try {
+      const wired = await wireTeam(DEFAULT_CONFIG, root);
+      const { outsideLost } = await wired.finish();
+      assert.match(outsideLost ?? '', /比べられませんでした/, 'run_command の分を比べられないことを黙った');
+    } finally {
+      if (ceiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+      else process.env.GIT_CEILING_DIRECTORIES = ceiling;
     }
   });
 
