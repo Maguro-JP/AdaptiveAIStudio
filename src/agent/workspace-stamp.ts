@@ -68,6 +68,9 @@ async function prefixOf(root: string): Promise<string | undefined> {
  */
 export type WorkspaceStamp = Map<string, string>;
 
+/** 見られなかったものに振る番号。回をまたいで増やし、二つの記録で同じ値にならないようにする。 */
+let unseen = 0;
+
 export async function workspaceStamp(root: string): Promise<WorkspaceStamp | undefined> {
   const prefix = await prefixOf(root);
   if (prefix === undefined) return undefined;
@@ -97,8 +100,13 @@ export async function workspaceStamp(root: string): Promise<WorkspaceStamp | und
       if (from) stamp.set(from, `${code} -`);
     }
     if (!path) continue;
-    const s = await stat(join(root, path)).catch(() => undefined);
-    stamp.set(path, s ? `${code} ${s.size} ${s.mtimeMs}` : `${code} -`);
+    try {
+      const s = await stat(join(root, path));
+      stamp.set(path, `${code} ${s.size} ${s.mtimeMs}`);
+    } catch (e) {
+      // 見られないものは、前の回と同じ値にしない（前後とも見られないと「変わらない」と数え、確かめずに済ませていた）
+      stamp.set(path, isAbsent(e) ? `${code} -` : `${code} ? ${++unseen}`);
+    }
   }
   return stamp;
 }

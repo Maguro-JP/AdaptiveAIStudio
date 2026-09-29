@@ -21,27 +21,28 @@ const root = join(import.meta.dirname, '..');
 
 /** 黙って空にしてよいファイルと、その数・理由。 */
 const ALLOWED: Record<string, { count: number; why: string }> = {
-  'src/runtime/cleanup.ts': { count: 18, why: '片づけの候補を探すだけ。読めないものは候補に入らず、消さない側に倒れる' },
-  'src/cli/report.ts': { count: 5, why: '報告に載せるだけ。読めなければ載らない' },
+  'src/runtime/cleanup.ts': { count: 18, why: '片づけの候補探しと大きさ。読めないものは候補に入らない。ただし名前だけで候補になるもの（古い llama-server・.part）は、大きさを取れないと 0 と数える（消す量を少なく言う）' },
+  'src/cli/report.ts': { count: 7, why: '報告に載せるだけ。読めなければ載らない' },
   'src/ui/preview.ts': { count: 3, why: '画面に見せるだけ。読めなければ見せられないと出す' },
-  'src/core/undo.ts': { count: 3, why: '戻した差分を見せる文字・一覧・更新時刻。更新時刻が取れないものは「挟まっているかもしれない」として止める側（#115）' },
+  'src/core/undo.ts': { count: 2, why: '戻した差分を見せる文字と更新時刻。更新時刻が取れないものは「挟まっているかもしれない」として止める側（#115）' },
   'src/agent/prefetch.ts': { count: 3, why: 'ファイル一覧と錠の在る無しの下調べ。読めないものは一覧に載らないだけ（動かし方は別に厳しく読む、#116）' },
   'src/agent/initiative.ts': { count: 3, why: '思いつきの手がかり集め。読めないものは手がかりにしない' },
-  'src/ui/server.ts': { count: 2, why: 'ファイルの情報を見せる所と、作業場にするフォルダの確かめ（読めなければ選べない側）' },
+  'src/ui/server.ts': { count: 1, why: 'ファイルの情報を見せる所。読めなければ見せない（書く所は readPrior で守る）' },
   'src/ui/attachments.ts': { count: 2, why: '添付の古い分の片づけの候補探し。読めないものは消さない' },
-  'src/runtime/inproc.ts': { count: 2, why: 'モデルの大きさを見るだけ。取れなければ大きさを言わない' },
-  'src/harness/builtin-rules.ts': { count: 2, why: '規則は通すが、書くツールが読めないファイルに書かない（#111）ので、そこで止まる' },
-  'src/core/version.ts': { count: 2, why: '版の表示。読めなければ分からないと出す' },
+  'src/runtime/inproc.ts': { count: 3, why: 'モデルの一覧と大きさを見るだけ。取れなければ一覧に出さない・大きさを言わない' },
+  'src/harness/builtin-rules.ts': { count: 1, why: '規則の判定の下調べ。読めなければ書くツールが読めないファイルに書かない（#111）ので、そこで止まる' },
+  'src/core/version.ts': { count: 2, why: '版の表示。読めなければ次の候補（一つ上の VERSION・git）を出す。消す・書くことは無い' },
   'src/core/logfile.ts': { count: 2, why: '記録の大きさ（回すかどうか）と末尾の表示。読めなくても書き直さない' },
+  'src/core/conversations.ts': { count: 1, why: '立ち上げたときの捨て場の片づけ。読めなければ次に立ち上げたときにまた消す（在る無しの判定は厳しく読む）' },
   'src/agent/commands.ts': { count: 2, why: '利用者が置いたコマンドの定義を読む。読めないものは一覧に出さない' },
   'src/ui/settings.ts': { count: 1, why: '保存先のフォルダの状態を見せるだけ' },
-  'src/runtime/llama-install.ts': { count: 1, why: '取り出した実行ファイルの在る無し。掴まれていれば書き出しの方が落ちる' },
-  'src/agent/workspace-stamp.ts': { count: 1, why: '変化を見つけるための大きさと時刻。取れなければ変わったと数える側' },
+  'src/runtime/llama-install.ts': { count: 1, why: '書き出した後の在る無し。取れなければ .bin の写しを一つ余分に書くだけ' },
   'src/agent/tools/write-kind.ts': { count: 1, why: '書く種類の判定。書くツールが読めないファイルに書かない（#111）' },
   'src/agent/outside-changes.ts': { count: 1, why: '読めなければ記録できなかった道にする（「無い」とは読まない）' },
 };
 
-const LENIENT = /\b(readFile|stat|lstat|readdir|open)\([^)]*\)[^;]*\.catch\(\(\) => (undefined|\[\]|''|0|false|null|\{\}|Buffer\.alloc\(0\))\)/g;
+// `[] as string[]` のような型の付け足しも同じ形として数える
+const LENIENT = /\b(readFile|stat|lstat|readdir|open)\([^)]*\)[^;]*\.catch\(\(\) => (undefined|\[\]|''|0|false|null|\{\}|Buffer\.alloc\(0\))( as [\w<>[\]]+)?\)/g;
 
 async function sources(dir: string): Promise<string[]> {
   const out: string[] = [];

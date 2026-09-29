@@ -39,7 +39,7 @@ import { join, dirname, extname, normalize, resolve as resolvePath, relative, is
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { AckStore, ACK_TEXT, isAckId } from '../core/acks.ts';
-import { contentOf, readPrior } from '../harness/put-back.ts';
+import { contentOf, readPrior, isAbsent } from '../harness/put-back.ts';
 import { aasHome, binDir, modelsDir, isPortable, productRoot, installRoot, defaultWorkRoot } from '../core/home.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { LogFile } from '../core/logfile.ts';
@@ -2789,8 +2789,11 @@ export class UiServer {
       const before = this.#workRoot();
       await saveWorkRoot(want);
       if (want) {
-        const ok = await stat(want).then((st) => st.isDirectory()).catch(() => false);
-        if (!ok) workNote = `そこは見つかりません: ${want}（保存はしました）`;
+        // 見られないのを「無い」と言わない（権限で塞がれたフォルダを打ち間違いだと思わせる）
+        const seen = await stat(want).then((st) => (st.isDirectory() ? 'dir' : 'notDir'), (e: unknown) => (isAbsent(e) ? 'absent' : (e as Error)));
+        if (seen === 'absent') workNote = `そこは見つかりません: ${want}（保存はしました）`;
+        else if (seen === 'notDir') workNote = `そこはフォルダではありません: ${want}（保存はしました）`;
+        else if (seen instanceof Error) workNote = `そこを開けません: ${want}（保存はしました。${seen.message}）`;
       }
 
       // **いま動いている設定にも入れる。**

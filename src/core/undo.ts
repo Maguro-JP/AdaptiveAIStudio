@@ -329,7 +329,15 @@ export class UndoStore {
   async #scan(): Promise<{ points: UndoPoint[]; unreadable: string[] }> {
     const points: UndoPoint[] = [];
     const unreadable: string[] = [];
-    for (const name of await readdir(this.#dir).catch(() => [])) {
+    let names: string[];
+    try {
+      names = await readdir(this.#dir);
+    } catch (e) {
+      // フォルダそのものを見られないのを「戻り先がもう無い」と読まない
+      if (!isAbsent(e)) throw new Error(`戻り先のフォルダを読めません: ${(e as Error).message}`);
+      names = [];
+    }
+    for (const name of names) {
       if (!name.endsWith('.json')) continue;
       let raw: string | undefined;
       try {

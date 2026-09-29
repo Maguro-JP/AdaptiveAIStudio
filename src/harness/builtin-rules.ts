@@ -9,6 +9,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { relative, isAbsolute } from 'node:path';
 import { minimatch } from './glob.ts';
 import { safeResolve } from '../agent/tools/paths.ts';
+import { isAbsent } from './put-back.ts';
 import { type Rule, type RuleContext, allow, deny, ok, argString, hasArg } from './rules.ts';
 import type { ToolCall } from '../providers/contract.ts';
 
@@ -110,15 +111,21 @@ export const testProtection: Rule = {
     const abs = safeResolve(ctx.root, path);
     if (!abs) return allow; // 範囲外は別の規則が止める
 
-    const before = await readFile(abs, 'utf8').catch(() => undefined);
-    if (before === undefined) return allow; // 新規作成は歓迎
+    let before: string;
+    try {
+      before = await readFile(abs, 'utf8');
+    } catch (e) {
+      if (isAbsent(e)) return allow; // 新規作成は歓迎
+      // 読めないのを「新しいファイル」と読まない。書く時点で掴みが外れていると、テストを減らす書き込みが通る
+      return deny(`${path} を読めないので、テストが減らないかを確かめられません（${(e as Error).message}）。少し待ってからやり直してください。`);
+    }
 
     const was = countCases(before);
     const now = countCases(content);
     if (now < was) {
       return deny(
         `${path} のテストが ${was} 件から ${now} 件に減っています。` +
-        'テストを消して通すことはできません。実装side を直してください。',
+        'テストを消して通すことはできません。実装側を直してください。',
       );
     }
     const skipsAdded = countSkips(content) - countSkips(before);
