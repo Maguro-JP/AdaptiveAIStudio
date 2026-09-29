@@ -23,6 +23,7 @@ import { dirname } from 'node:path';
 import { idMaker } from './ordered-id.ts';
 import { inOrder } from './in-order.ts';
 import { keptOdd } from './odd-lines.ts';
+import { isAbsent } from '../harness/put-back.ts';
 
 const makeId = idMaker('g');
 let tmpSeq = 0;
@@ -127,9 +128,26 @@ export class Goals {
     return goal;
   }
 
-  /** 次に手を付ける段。無ければ undefined。 */
+  /**
+   * いま開いているもの。**読めなければ投げる**（無いだけなら空）。
+   *
+   * `list` は読めないと空を返す（見せるだけの所向け）。段を進める所がそれを使うと、読めないだけなのに
+   * 「段が残っていない」と読んで段取りを閉じ、やり残しを「済んだ」にしていた。
+   */
+  async openGoals(): Promise<Goal[]> {
+    let raw: string;
+    try {
+      raw = await this.#readText(this.#path);
+    } catch (e) {
+      if (!isAbsent(e)) throw e;
+      raw = '';
+    }
+    return parseGoals(raw).open;
+  }
+
+  /** 次に手を付ける段。無ければ undefined。記録を読めなければ投げる（「無い」と取り違えない）。 */
   async next(goalId: string): Promise<Step | undefined> {
-    const goal = (await this.list()).find((g) => g.id === goalId);
+    const goal = (await this.openGoals()).find((g) => g.id === goalId);
     return goal?.steps.find((s) => s.state === 'pending');
   }
 

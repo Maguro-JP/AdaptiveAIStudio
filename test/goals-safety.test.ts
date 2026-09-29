@@ -126,4 +126,22 @@ describe('段取りの記録', () => {
     assert.equal((await stat(path)).ino, ino);
     assert.equal((await readFile(path, 'utf8')).trim().split('\n').length, 3);
   });
+
+  test('**記録を読めないとき、次の段を「無い」と取り違えない**（読めない＝投げる、無い＝空）', async () => {
+    const { path } = await goals('unreadable-next');
+    const writer = new Goals(path);
+    const goal = await writer.open('依頼', ['読む', '直す']);
+    const denied = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    const g = new Goals(path, { read: () => Promise.reject(denied) });
+    await assert.rejects(g.next(goal.id), /EACCES/, '読めないのに「段は残っていない」と返した');
+    await assert.rejects(g.openGoals(), /EACCES/);
+    // 見せるだけの一覧は、今までどおり空で返す
+    assert.deepEqual(await g.list(), []);
+    // 無いだけなら空（段取りが無い）
+    const missing = Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' });
+    const none = new Goals(path, { read: () => Promise.reject(missing) });
+    assert.equal(await none.next(goal.id), undefined);
+    // 読めれば、残っている段を返す
+    assert.equal((await writer.next(goal.id))?.instruction, '読む');
+  });
 });
