@@ -241,6 +241,7 @@
 - 置いてある llama-server と、作業場の決まりのファイルで、見られないを「無い」と読まない
 - 止まったまま戻らない所を塞ぐ（再試行の待ち・nvidia-smi・git・run_command の入力・子を止める呼び出し）
 - ■ が届かない所を塞ぐ（裏の分解・MCP・考えごとの問い合わせ・CLI の承認待ち）と、待ちの上限を足す
+- CLI の Ctrl-C を、プロセスごと落とさず止める処理に届ける
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10143,7 +10144,7 @@ MCP・作業場（`agent.root`）が黙って外れる。
   打ち切った・止めた問い合わせは中で失敗を握って空を返すので、空を「新しい世代は無かった」と読まず「訊けませんでした」の道へ回す。
   ■で止めたら考えごとも続けない（押す前の読み直しで足した。最初は 15 秒で打ち切り、空を「無かった」と書いていた）
 - CLI の承認待ち（`input.ts` の `cancelWaiting`）: Ctrl-C で依頼は止めても、承認の問いが Enter を押すまで待ち続けた。止めるときに問いを
-  「答え無し」（許可しない）で解く。端末で Ctrl-C が readline の SIGINT として届くかは確かめていない
+  「答え無し」（許可しない）で解く。Ctrl-C そのものが止める処理に届いていなかったことは、下の項で直した
 - 失敗の本文（`openai-compatible.ts`）: 見張りの時計を止めてから本文を読んでいたので、失敗の頭だけ返して本文を止める相手を何分も待った。
   本文を読む間も、つなぐときと同じ長さで見張る
 - 試験: `test/provider-error-body.test.ts`（本文を止める相手）、`test/mcp-bytes.test.ts`（返事をしない MCP を ■ で止める）、
@@ -10151,3 +10152,21 @@ MCP・作業場（`agent.root`）が黙って外れる。
   試験を足しておらず、既存の試験で後退が無いことだけを見た
 触る場所: `src/ui/server.ts` の `#stoppable`・`#background`・`/api/abort`、`src/mcp/client.ts`・`src/mcp/tools.ts`、`src/agent/workspace-stamp.ts`、
 `src/core/session.ts`、`src/cli/input.ts`・`src/cli/agent.ts`、`src/providers/openai-compatible.ts`
+
+## 2026-09-29  CLI の Ctrl-C を、プロセスごと落とさず止める処理に届ける
+
+`aas`（`src/cli/agent.ts`）は Ctrl-C で生成だけを止めるつもりで、`LineSource.onSigint` に止める処理を渡していた。読み手は `terminal: false` で
+作っているので rl の SIGINT は来ず、Ctrl-C はプロセスへの SIGINT としてそのまま届き、プロセスごと落ちていた（戻り先を閉じる前に終わる）。
+子プロセスに SIGINT を送って、止める処理が呼ばれずに SIGINT で終わることを手元で見て確かめた。
+
+- `onSigint` でプロセスの SIGINT も受ける（`src/cli/team.ts` は同じ理由で既に `process.once('SIGINT')` を付けていた）。`src/cli/agent.ts` と
+  `src/cli/main.ts` の二か所が使う
+- 生成していないときは読み手を閉じて、今までどおりの道で終わる。閉じたら聞き手を外すので、それ以降の Ctrl-C は既定どおり終わらせる
+- 2 秒以内に二度押したら、止める処理を待たずに終わる（終了コード 130）。止める処理が詰まる場面（起動の途中・考えごとの最中・片づけが
+  返らない）で、Ctrl-C で落とせなくなるのを防ぐ（押す前の読み直しで見つかった）
+- 残り: 端末の Ctrl-C は、同じプロセスグループの子（llama-server・inproc-host）にも届くはずで、生成だけ止めるつもりがモデルのサーバーまで
+  落とすおそれがある。直す前からの形で、確かめていない
+- 試験: `test/input.test.ts` に 2 件（`test/fixtures/sigint-probe.mts` を子として起こし、SIGINT を送る。止める処理に届いてきれいに終わるか・
+  詰まっても二度押しで終わるか）。直す前の版と、二度押しを外した版で落ちることを見た。Windows では `kill('SIGINT')` が強制終了になるので
+  飛ばす。端末（TTY）で押したときは確かめていない
+触る場所: `src/cli/input.ts` の `onSigint`・`close`
