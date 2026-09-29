@@ -19,6 +19,7 @@ import { unzip } from './unzip.ts';
 import { runtimeEnv } from './llama-env.ts';
 import { chunkReader } from '../core/text.ts';
 import { describeNet } from './net-why.ts';
+import { isAbsent } from '../harness/put-back.ts';
 
 /**
  * `llama-server --version` の出力が、版を答えているか。
@@ -77,14 +78,27 @@ export function defaultBinDir(): string {
  */
 export const SERVER_NAMES = ['llama-server', 'llama-server.exe', 'llama-server.bin'] as const;
 
-/** すでに用意してあるか。あればその場所。 */
-export async function findInstalled(binDir = defaultBinDir(), tag = PINNED_TAG): Promise<string | undefined> {
+/**
+ * すでに用意してあるか。あればその場所。
+ *
+ * `strict` のときは、在るのに見られない（EACCES・EPERM 等）を「無い」と読まずに投げる。入れ直す道で使う。
+ * 「無い」と読むと入れ直しに進み、それが途中で落ちると、後始末が元から在った同じ版のフォルダごと消す（動いていたものが消える）。
+ * 表示（doctor・画面の状態）は今までどおり「無い」と読む。
+ */
+export async function findInstalled(binDir = defaultBinDir(), tag = PINNED_TAG, opts: { strict?: boolean } = {}): Promise<string | undefined> {
+  // 見られないものがあっても、ほかの名前で見つかればそれを使う。どれも見つからず、見られないものがあったときだけ投げる
+  let unseen: { path: string; e: unknown } | undefined;
   for (const name of SERVER_NAMES) {
     const p = join(binDir, tag, name);
     try {
       await stat(p);
       return p;
-    } catch { /* 無い */ }
+    } catch (e) {
+      if (!isAbsent(e)) unseen ??= { path: p, e };
+    }
+  }
+  if (opts.strict && unseen) {
+    throw new Error(`置いてある llama-server（${unseen.path}）を見られません（${(unseen.e as NodeJS.ErrnoException).code ?? (unseen.e as Error).message}）。消さずに残してあります。少し置いてからもう一度試してください`);
   }
   return undefined;
 }
@@ -102,7 +116,7 @@ export async function install(opts: InstallOptions): Promise<Installed> {
   const log = opts.onProgress ?? (() => {});
   const dest = join(binDir, tag);
 
-  const already = await findInstalled(binDir, tag);
+  const already = await findInstalled(binDir, tag, { strict: true });
   if (already) {
     log(`すでにあります: ${already}`);
     return { command: already, tag, asset: '(取得済み)', why: '既に用意されています' };

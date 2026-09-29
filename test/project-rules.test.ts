@@ -296,3 +296,15 @@ describe('入り切らない決まりを、名前で返す', () => {
     assert.ok(got[0]!.text.includes('さいご'));
   });
 });
+
+describe('決まりのファイルが読めないとき', () => {
+  test('「無い」と読まず、読めなかったと分かる一件にする（黙って決まりを外さない）', async () => {
+    const root = await tempDir('aas-rules-unreadable-');
+    // 読めなさはフォルダで作る（EISDIR。権限に頼らない）
+    await mkdir(join(root, 'AGENTS.md'));
+    const rules = await readProjectRules(root);
+    const hit = rules.find((r) => r.path === 'AGENTS.md');
+    assert.ok(hit, `読めない決まりを黙って外した: ${JSON.stringify(rules)}`);
+    assert.match(hit.text, /読めませんでした/);
+  });
+});

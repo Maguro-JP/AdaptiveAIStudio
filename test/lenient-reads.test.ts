@@ -30,7 +30,6 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/ui/server.ts': { count: 1, why: 'ファイルの情報を見せる所。読めなければ見せない（書く所は readPrior で守る）' },
   'src/ui/attachments.ts': { count: 2, why: '添付の古い分の片づけの候補探し。読めないものは消さない' },
   'src/runtime/inproc.ts': { count: 3, why: 'モデルの一覧と大きさを見るだけ。取れなければ一覧に出さない・大きさを言わない' },
-  'src/harness/builtin-rules.ts': { count: 1, why: '規則の判定の下調べ。読めなければ書くツールが読めないファイルに書かない（#111）ので、そこで止まる' },
   'src/core/version.ts': { count: 2, why: '版の表示。読めなければ次の候補（一つ上の VERSION・git）を出す。消す・書くことは無い' },
   'src/core/logfile.ts': { count: 2, why: '記録の大きさ（回すかどうか）と末尾の表示。読めなくても書き直さない' },
   'src/core/conversations.ts': { count: 1, why: '立ち上げたときの捨て場の片づけ。読めなければ次に立ち上げたときにまた消す（在る無しの判定は厳しく読む）' },
@@ -38,7 +37,6 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/agent/commands.ts': { count: 2, why: '利用者が置いたコマンドの定義を読む。読めないものは一覧に出さない' },
   'src/ui/settings.ts': { count: 1, why: '保存先のフォルダの状態を見せるだけ' },
   'src/runtime/llama-install.ts': { count: 1, why: '書き出した後の在る無し。取れなければ .bin の写しを一つ余分に書くだけ' },
-  'src/agent/tools/write-kind.ts': { count: 1, why: '書く種類の判定。書くツールが読めないファイルに書かない（#111）' },
   'src/agent/outside-changes.ts': { count: 1, why: '読めなければ記録できなかった道にする（「無い」とは読まない）' },
 };
 

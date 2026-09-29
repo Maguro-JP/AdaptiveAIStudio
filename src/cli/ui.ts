@@ -28,7 +28,7 @@ try {
   broken = e.message;
   config = { ...structuredClone(DEFAULT_CONFIG), runtime: { kind: 'inproc' } };
   console.log(`\n${broken}\n`);
-  console.log('  既定のまま開きます。上の場所を直すか、名前を変えてください（消さずに名前を変えれば、中身は残ります）。\n');
+  console.log('  既定のまま開きます。上の案内に従ってください（名前を変えるときも、消さなければ中身は残ります）。\n');
 }
 const port = Number(process.env.AAS_UI_PORT ?? 4174);
 // AAS_RELAUNCH は start.cmd が付ける。付いていれば、RESTART_EXIT で終わると

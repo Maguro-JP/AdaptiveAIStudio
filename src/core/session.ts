@@ -1019,7 +1019,7 @@ export class Session {
       // 錠を返してから「動いていない」にする（送り口と同じ）。
       this.lock.release(lockOwner);
       this.#conv.running = undefined;
-      await this.memory.save().catch(() => undefined);
+      await this.saveMemory();
     }
   }
 
@@ -1193,7 +1193,7 @@ export class Session {
         if (failures >= Session.#RECON_GIVE_UP) {
           this.proposals.markExamined(fingerprint);
           this.#reconFailures.delete(fingerprint);
-          await this.proposals.save();
+          await this.saveProposals();
         }
       }
       // 見回りの回数と間合い（`idle.begin` で数えた分）は残す。残さないと、立ち上げ直すと間合いが戻る
@@ -1216,7 +1216,7 @@ export class Session {
     await this.saveAutonomy();
 
     if (!parsed) {
-      await this.proposals.save();
+      await this.saveProposals();
       yield { type: 'noFinding', codename: mode.codename };
       return true;
     }
@@ -1226,7 +1226,7 @@ export class Session {
       this.memory.remember({
         kind: 'fact', title: parsed.title, detail: parsed.rationale, source: '外部',
       });
-      await this.memory.save().catch(() => undefined);
+      await this.saveMemory();
     }
 
     const added = this.proposals.add({
@@ -1237,7 +1237,7 @@ export class Session {
       suggestedAction: parsed.action,
       fingerprint,
     });
-    await this.proposals.save();
+    await this.saveProposals();
 
     if (added) {
       // どの思考から出た提案かを覚える。採否がその思考の実績になる。
@@ -1274,6 +1274,19 @@ export class Session {
     } catch (e) {
       this.#opts.onLog?.('warn', `この依頼の戻り先を残せませんでした（${(e as Error).message}）。この依頼の変更は「戻す」からは戻せません`);
     }
+  }
+
+  /** 提案を残す。残せなかったら言う（立ち上げ直すと消えるのに、黙って「提案」を出さない）。 */
+  async saveProposals(): Promise<void> {
+    const failed = await this.proposals.save();
+    if (failed) this.#opts.onLog?.('warn', failed.message);
+  }
+
+  /** 覚えたことを残す。残せなかったら言う（覚えたつもりで、立ち上げ直すと消えるのを黙らない）。 */
+  async saveMemory(): Promise<void> {
+    await this.memory.save().catch((e: unknown) => {
+      this.#opts.onLog?.('warn', `覚えたことを残せませんでした（${(e as Error).message}）。立ち上げ直すと、残せなかった分は消えます`);
+    });
   }
 
   /** 思考の実績と日課の記録を残す。次の起動でも続きから考えられるように。 */
@@ -1944,7 +1957,7 @@ export class Session {
       this.lock.release(lockOwner);
       conv.running = undefined;
       this.#active.delete(conv);
-      await this.memory.save().catch(() => undefined);
+      await this.saveMemory();
       // **この回が終わってから判じる。**待たせない、を本当にする。
       // こちらが書いた文は判じない（利用者が言っていないことを覚えないため）。
       // 待たない代わりに、**拾い手を置く。**置かないと、判じるところで
@@ -2113,7 +2126,8 @@ export class Session {
     });
     if (betterDetail(detail, got.entry.detail)) got.entry.detail = detail;
     this.memory.touch();
-    void this.memory.save().catch(() => undefined);
+    // saveMemory は中で失敗を言い、投げない。受け手は、落ちてもプロセスごと消さないための念のため
+    void this.saveMemory().catch(() => undefined);
   }
 
   /**
@@ -2473,7 +2487,7 @@ export class Session {
     for (const c of this.mcpClients) c.stop();
     await this.saveAutonomy();
     this.#compactMemory();
-    await this.memory.save().catch(() => undefined);
+    await this.saveMemory();
     await this.#harness.metrics?.save();
   }
 }

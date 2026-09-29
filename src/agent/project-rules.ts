@@ -22,6 +22,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { estimateTokens, type Count } from './window.ts';
+import { isAbsent } from '../harness/put-back.ts';
 
 /** 読みに行く名前。**上から順に。**先に見つかったものを上に置く。 */
 export const RULE_FILES = [
@@ -188,7 +189,11 @@ export async function readProjectRules(root: string): Promise<ProjectRule[]> {
     let names: string[];
     try {
       names = await readdir(join(root, dir));
-    } catch { continue; }
+    } catch (e) {
+      // 無いのは普通。在るのに中を見られないのは、決まりが効いていないことを言う
+      if (!isAbsent(e)) out.push(unreadableRule(dir, e));
+      continue;
+    }
     for (const name of names.filter(isRuleFile).sort()) {
       const got = await readOne(root, `${dir}/${name}`);
       if (got) out.push(got);
@@ -207,9 +212,16 @@ async function readOne(root: string, rel: string): Promise<ProjectRule | undefin
     const [text, info] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
     if (text.trim().length === 0) return undefined;
     return { path: rel, text: text.trim(), at: info.mtimeMs };
-  } catch {
-    return undefined; // 無い。異常ではない。
+  } catch (e) {
+    // 無い。異常ではない。**在るのに読めないのは「無い」と読まない。**読むと、その作業場の決まりを知らないまま黙って反して書く
+    return isAbsent(e) ? undefined : unreadableRule(rel, e);
   }
+}
+
+/** 読めなかった決まりを、それと分かる一件にする（モデルに、効いていないことが見える）。 */
+function unreadableRule(rel: string, e: unknown): ProjectRule {
+  const why = (e as NodeJS.ErrnoException).code ?? (e as Error).message;
+  return { path: rel, text: `（${rel} を読めませんでした: ${why}。ここに書かれた決まりは、読めるようになるまで効いていません）`, at: 0 };
 }
 
 /**

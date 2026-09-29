@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { writeFile, readFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { saveRuntime, saveMcpServer, removeMcpServer, saveWorkRoot, readSavedRuntime, savedWorkRoot } from '../src/ui/settings.ts';
-import { loadConfig } from '../src/config.ts';
+import { loadConfig, ConfigBroken, DEFAULT_CONFIG } from '../src/config.ts';
 import { UiServer } from '../src/ui/server.ts';
 
 let saved: string | undefined;
@@ -142,7 +142,9 @@ describe('保存してある設定を読めないとき', () => {
     await rm(at);
     await mkdir(at);
     await assert.rejects(readSavedRuntime(), /設定.*を読めません/);
-    const s = new UiServer({ port: 0, config: loadConfig().config });
+    // 読めない設定では、読み込みそのものが止めて言う（既定で黙って動かさない）。画面の入口（src/cli/ui.ts）と同じく、既定で開く
+    assert.throws(() => loadConfig(), ConfigBroken);
+    const s = new UiServer({ port: 0, config: { ...structuredClone(DEFAULT_CONFIG), runtime: { kind: 'inproc' } } });
     const base = (await s.start()).replace(/\/$/, '');
     try {
       const body = await (await fetch(`${base}/api/config`)).json() as { error?: string; gguf?: unknown[]; modelsDir?: string };

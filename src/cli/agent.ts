@@ -230,10 +230,12 @@ async function main(): Promise<void> {
         console.log(c.dim(`     ${f.rationale}`));
         if (added) registered.push({ roleName: f.roleName, title: f.title, id: () => added.id });
       }
-      await (await getSession()).proposals.save();
+      const unsaved = await (await getSession()).proposals.save();
       // 番号は**保存した後に**出す。保存で画面の分と合わせるとき、ほぼ同時に足した提案と番号がぶつかれば振り直す。
       // 先に出すと、その番号を打ったときに別の提案に当たる。
       for (const r of registered) console.log(c.dim(`     → 「${r.title}」を提案 ${r.id()} として登録しました`));
+      // 残せなかったら言う（この中では選べるが、立ち上げ直すと消える）
+      if (unsaved) console.log(c.yellow(`  ${unsaved.message}。立ち上げ直すと、いまの提案は消えます`));
       console.log();
     } finally {
       generating = undefined;

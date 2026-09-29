@@ -260,3 +260,24 @@ describe('提案の記録', () => {
     assert.equal(q.find('p001')?.status, 'open');
   });
 });
+
+describe('提案を残せないとき', () => {
+  test('読めない記録には書かず、残せなかったことを返す（黙って「登録しました」と言わせない）', async () => {
+    const dir = await tempDir('aas-prop-unsaved-');
+    const path = join(dir, 'proposals.json');
+    // 読めなさはフォルダで作る（EISDIR。権限に頼らない）
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(path);
+    const q = new ProposalQueue(path);
+    q.add(input('残らない提案'));
+    const failed = await q.save();
+    assert.match(failed?.message ?? '', /残せませんでした/, '残せなかったことを返していない');
+  });
+
+  test('残せたときは、何も返さない（対）', async () => {
+    const path = join(await tempDir('aas-prop-saved-'), 'proposals.json');
+    const q = new ProposalQueue(path);
+    q.add(input('残る提案'));
+    assert.equal(await q.save(), undefined);
+  });
+});

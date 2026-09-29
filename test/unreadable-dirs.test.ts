@@ -19,7 +19,7 @@ import { tempDir } from './tmp.ts';
 import { Conversations } from '../src/core/conversations.ts';
 import { UndoStore } from '../src/core/undo.ts';
 import { workspaceStamp, stampChanges } from '../src/agent/workspace-stamp.ts';
-import { testProtection } from '../src/harness/builtin-rules.ts';
+import { testProtection, readBeforeWrite } from '../src/harness/builtin-rules.ts';
 
 const require = createRequire(import.meta.url);
 const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
@@ -129,10 +129,48 @@ describe('テストを減らさない規則で読めないテストファイル'
     assert.match(JSON.stringify(r), /読めない/);
   });
 
+  test('edit_file でも、読めないテストファイルを「後の姿が分からない」と読んで通さない', async () => {
+    const root = await tempDir('aas-protect-edit-unreadable-');
+    await mkdir(join(root, 'test'), { recursive: true });
+    const abs = join(root, 'test', 'x.test.ts');
+    await writeFile(abs, "test('あ', () => {});\ntest('い', () => {});\n");
+    const r = await failing('readFile', abs, async () => testProtection.pre!(
+      { id: '1', name: 'edit_file', args: { path: 'test/x.test.ts', find: "test('い', () => {});\n", replace: '' } },
+      { root, history: [], instruction: '' } as never,
+    ));
+    assert.equal(r.kind, 'deny', `読めないテストファイルへの edit を素通しにした: ${JSON.stringify(r)}`);
+    assert.match(JSON.stringify(r), /読めない/);
+  });
+
   test('本当に新しいテストファイルは、今までどおり通す', async () => {
     const root = await tempDir('aas-protect-new-');
     const r = await testProtection.pre!(
       { id: '1', name: 'write_file', args: { path: 'test/y.test.ts', content: "test('う', () => {});\n" } },
+      { root, history: [], instruction: '' } as never,
+    );
+    assert.equal(r.kind, 'allow');
+  });
+});
+
+describe('読む前に書く規則で見られないファイル', () => {
+  test('在るのに見られないファイルを「新しいファイル」と読んで、読まずに全文を書かせない', async () => {
+    const root = await tempDir('aas-rbw-unreadable-');
+    const abs = join(root, 'a.txt');
+    await writeFile(abs, 'もとの中身\n');
+    // 読んだことにしておく（読めていれば通る場面）。そうしないと「まだ読んでいません」の別の道で止まり、直す前の版でも通ってしまう
+    const history = [{ id: '0', name: 'read_file', args: { path: 'a.txt' } }];
+    const r = await failing('lstat', abs, async () => readBeforeWrite.pre!(
+      { id: '1', name: 'write_file', args: { path: 'a.txt', content: '全部書き換え\n' } },
+      { root, history, instruction: '' } as never,
+    ));
+    assert.equal(r.kind, 'deny', `見られないファイルを通した: ${JSON.stringify(r)}`);
+    assert.match(JSON.stringify(r), /見られない/);
+  });
+
+  test('本当に無いファイルは、今までどおり新規として通す', async () => {
+    const root = await tempDir('aas-rbw-new-');
+    const r = await readBeforeWrite.pre!(
+      { id: '1', name: 'write_file', args: { path: 'new.txt', content: 'x\n' } },
       { root, history: [], instruction: '' } as never,
     );
     assert.equal(r.kind, 'allow');
