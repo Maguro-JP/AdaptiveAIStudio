@@ -141,9 +141,13 @@ export type HeadContent =
 export async function headContent(root: string, relPath: string, maxBytes: number): Promise<HeadContent> {
   // `ls-tree -l` は一度で、在るか・種類（mode）・大きさを返す。
   const entry = await gitOut(['ls-tree', '-l', '-z', 'HEAD', '--', `./${relPath}`], root);
-  if (entry === undefined) return { kind: 'absent' };
+  // **git が落ちたのを「無い」と読まない。**HEAD に無い道は、正常に終わって空を返す。落ちた（索引の錠の取り合い・起動の失敗）
+  // のを「無い」と読むと、HEAD に在るファイルを「前は無かった」と記録し、戻すときに消していた
+  if (entry === undefined) return { kind: 'unavailable', why: 'unreadable' };
+  if (entry === '') return { kind: 'absent' };
   const m = /^(\d{6}) (\w+) [0-9a-f]+ +(\d+|-)\t/.exec(entry);
-  if (!m) return { kind: 'absent' };
+  // 読めない形で返ってきたものも「無い」と読まない
+  if (!m) return { kind: 'unavailable', why: 'unreadable' };
   const [, mode, type, size] = m;
   if (type === 'commit' || mode === '160000') return { kind: 'unavailable', why: 'submodule' };
   if (mode === '120000') return { kind: 'unavailable', why: 'symlink' };

@@ -122,15 +122,21 @@ export async function writeEnvValue(path: string, key: string, value: string): P
   // 改行を混ぜられると、一行で別のトークンを足せてしまう。
   if (/[\r\n]/.test(value)) throw new Error('トークンに改行は入れられません');
 
-  const { readFile, writeFile, mkdir, chmod } = await import('node:fs/promises');
+  const { writeFile, mkdir, chmod } = await import('node:fs/promises');
   const { dirname } = await import('node:path');
   await mkdir(dirname(path), { recursive: true });
   /*
    * バイト列で読む。utf8 でないもの（Shift_JIS の注釈）を文字として読んで書き戻すと、全体が化ける。
    * 先頭の BOM と行末（CRLF）は、読んだ形のまま書き戻す。
    */
-  const bytes = await readFile(path).catch(() => Buffer.alloc(0));
-  const { contentOf } = await import('../harness/put-back.ts');
+  const { contentOf, readPrior } = await import('../harness/put-back.ts');
+  /*
+   * **読めないときは書かない。**「無い」以外の読めなさ（ウイルス対策・同期ソフトが一瞬掴んだ等）を空として読み、
+   * 空に一行足して丸ごと書き直していたので、そこに在ったほかのトークンが全部消えていた。
+   */
+  const bytes = await readPrior(path).catch((e: unknown) => {
+    throw new Error(`${path} を読めないので書き換えません（${(e as Error).message}）。ほかのトークンを消さないためです。少し置いてから、もう一度入れてください`);
+  }) ?? Buffer.alloc(0);
   const decoded = contentOf(bytes);
   if (typeof decoded !== 'string') {
     throw new Error(`${path} は utf8 ではないので書き換えません（化けるため）。utf8 で保存し直してから、もう一度入れてください`);
