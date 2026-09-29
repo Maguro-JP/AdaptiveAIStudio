@@ -157,11 +157,14 @@ describe('読む前に書く規則で見られないファイル', () => {
     const root = await tempDir('aas-rbw-unreadable-');
     const abs = join(root, 'a.txt');
     await writeFile(abs, 'もとの中身\n');
+    // 読んだことにしておく（読めていれば通る場面）。そうしないと「まだ読んでいません」の別の道で止まり、直す前の版でも通ってしまう
+    const history = [{ id: '0', name: 'read_file', args: { path: 'a.txt' } }];
     const r = await failing('lstat', abs, async () => readBeforeWrite.pre!(
       { id: '1', name: 'write_file', args: { path: 'a.txt', content: '全部書き換え\n' } },
-      { root, history: [], instruction: '' } as never,
+      { root, history, instruction: '' } as never,
     ));
-    assert.equal(r.kind, 'deny', `見られないファイルを新規として通した: ${JSON.stringify(r)}`);
+    assert.equal(r.kind, 'deny', `見られないファイルを通した: ${JSON.stringify(r)}`);
+    assert.match(JSON.stringify(r), /見られない/);
   });
 
   test('本当に無いファイルは、今までどおり新規として通す', async () => {

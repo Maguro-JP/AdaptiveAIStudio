@@ -1276,7 +1276,6 @@ export class Session {
     }
   }
 
-  /** 思考の実績と日課の記録を残す。次の起動でも続きから考えられるように。 */
   /** 提案を残す。残せなかったら言う（立ち上げ直すと消えるのに、黙って「提案」を出さない）。 */
   async saveProposals(): Promise<void> {
     const failed = await this.proposals.save();
@@ -1290,6 +1289,7 @@ export class Session {
     });
   }
 
+  /** 思考の実績と日課の記録を残す。次の起動でも続きから考えられるように。 */
   async saveAutonomy(): Promise<void> {
     const unsaved = await saveJournals(this).catch(() => []);
     // 読めないまま（EACCES 等）だと書けない日が続く。黙っていると、記録が止まっていることに誰も気づかない。
@@ -2126,7 +2126,8 @@ export class Session {
     });
     if (betterDetail(detail, got.entry.detail)) got.entry.detail = detail;
     this.memory.touch();
-    void this.saveMemory();
+    // saveMemory は中で失敗を言い、投げない。受け手は、落ちてもプロセスごと消さないための念のため
+    void this.saveMemory().catch(() => undefined);
   }
 
   /**

@@ -273,6 +273,26 @@ describe('置いてある llama-server を見られないとき', () => {
     }
   });
 
+  test('見られない名前があっても、ほかの名前で見つかればそれを使う（strict でも止めない）', async () => {
+    const { createRequire, syncBuiltinESMExports } = await import('node:module');
+    const fsp = createRequire(import.meta.url)('node:fs/promises') as typeof import('node:fs/promises');
+    const bin = await tempDir('aas-llama-other-');
+    await mkdir(join(bin, 'b1'), { recursive: true });
+    await writeFile(join(bin, 'b1', 'llama-server.bin'), 'x');
+    const unseen = join(bin, 'b1', 'llama-server');
+    const real = fsp.stat;
+    (fsp as { stat: unknown }).stat = ((p: unknown, ...rest: unknown[]) => p === unseen
+      ? Promise.reject(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }))
+      : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as never;
+    syncBuiltinESMExports();
+    try {
+      assert.equal(await findInstalled(bin, 'b1', { strict: true }), join(bin, 'b1', 'llama-server.bin'));
+    } finally {
+      (fsp as { stat: unknown }).stat = real;
+      syncBuiltinESMExports();
+    }
+  });
+
   test('本当に無いときは、strict でも「無い」', async () => {
     const bin = await tempDir('aas-llama-none-');
     assert.equal(await findInstalled(bin, 'b1', { strict: true }), undefined);

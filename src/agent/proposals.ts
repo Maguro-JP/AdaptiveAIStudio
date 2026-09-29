@@ -325,7 +325,9 @@ export class ProposalQueue {
       // 脇へ移せないなら、壊れたファイルを上書きしない
       if (disk.broken && !(await this.#setAside())) return new Error('提案の記録が壊れていて、脇へ移せないので、残せませんでした');
       this.#merge(disk);
-      return this.#write(disk);
+      // 何を残せなかったかが分かる文にする（書き込みの失敗は、一時ファイルの道を含む生の英文になる）
+      const failed = await this.#write(disk);
+      return failed ? new Error(`提案を残せませんでした（${(failed as NodeJS.ErrnoException).code ?? failed.message}）`) : undefined;
     });
   }
 

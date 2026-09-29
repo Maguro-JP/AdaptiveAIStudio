@@ -218,7 +218,7 @@ async function readOne(root: string, rel: string): Promise<ProjectRule | undefin
   }
 }
 
-/** 読めなかった決まりを、それと分かる一件にする（モデルにも画面にも、効いていないことが見える）。 */
+/** 読めなかった決まりを、それと分かる一件にする（モデルに、効いていないことが見える）。 */
 function unreadableRule(rel: string, e: unknown): ProjectRule {
   const why = (e as NodeJS.ErrnoException).code ?? (e as Error).message;
   return { path: rel, text: `（${rel} を読めませんでした: ${why}。ここに書かれた決まりは、読めるようになるまで効いていません）`, at: 0 };

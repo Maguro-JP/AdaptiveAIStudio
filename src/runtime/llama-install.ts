@@ -86,16 +86,19 @@ export const SERVER_NAMES = ['llama-server', 'llama-server.exe', 'llama-server.b
  * 表示（doctor・画面の状態）は今までどおり「無い」と読む。
  */
 export async function findInstalled(binDir = defaultBinDir(), tag = PINNED_TAG, opts: { strict?: boolean } = {}): Promise<string | undefined> {
+  // 見られないものがあっても、ほかの名前で見つかればそれを使う。どれも見つからず、見られないものがあったときだけ投げる
+  let unseen: { path: string; e: unknown } | undefined;
   for (const name of SERVER_NAMES) {
     const p = join(binDir, tag, name);
     try {
       await stat(p);
       return p;
     } catch (e) {
-      if (opts.strict && !isAbsent(e)) {
-        throw new Error(`置いてある llama-server（${p}）を見られません（${(e as NodeJS.ErrnoException).code ?? (e as Error).message}）。消さずに残してあります。少し置いてからもう一度試してください`);
-      }
+      if (!isAbsent(e)) unseen ??= { path: p, e };
     }
+  }
+  if (opts.strict && unseen) {
+    throw new Error(`置いてある llama-server（${unseen.path}）を見られません（${(unseen.e as NodeJS.ErrnoException).code ?? (unseen.e as Error).message}）。消さずに残してあります。少し置いてからもう一度試してください`);
   }
   return undefined;
 }
