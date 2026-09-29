@@ -214,4 +214,18 @@ describe('spawn へ渡すもの', () => {
     assert.deepEqual(call.args, ['-c', 'npm test']);
     assert.deepEqual(call.options.env, env, '殻を使わない道で env を渡していない');
   });
+
+  test('**どちらの道でも標準入力は閉じる**（入力を待つ命令を、時間切れまで待たせない）', () => {
+    for (const platform of ['win32', 'linux'] as const) {
+      assert.equal(spawnCall(spawnPlan('cat', platform), '/work', env).options.stdio[0], 'ignore', platform);
+    }
+  });
+
+  test('入力を待つ命令（引数なしの cat）が、すぐ返る', async () => {
+    if (process.platform === 'win32') return; // cat は Windows に無い
+    const started = Date.now();
+    const r = await execCommand('cat', process.cwd(), 30_000, new AbortController().signal);
+    assert.equal(r.timedOut, false, '入力を待って時間切れまで止まった');
+    assert.ok(Date.now() - started < 10_000);
+  });
 });

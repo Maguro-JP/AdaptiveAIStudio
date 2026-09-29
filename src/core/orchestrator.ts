@@ -31,7 +31,19 @@ export interface ChatInput {
   priority?: Priority;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** 待つ。止めるボタン（signal）で抜ける。抜けた後は、呼ぶ側が `signal.aborted` を見て終わる。 */
+const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((r) => {
+  if (signal?.aborted) return r();
+  const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); r(); };
+  const timer = setTimeout(done, ms);
+  signal?.addEventListener('abort', done, { once: true });
+});
+
+/**
+ * やり直すまでに待つ上限。相手の `Retry-After` は上限が無く（3600 秒や数時間先の日時が来る）、そのまま待つと、その間は依頼が
+ * 動いたまま・次の依頼は順番待ち・■も効かない、になっていた。これより長く待てと言われたら、待たずに次の候補へ回す。
+ */
+export const MAX_RETRY_WAIT_MS = 30_000;
 
 export class ChatOrchestrator {
   readonly #registry: ProviderRegistry;
@@ -146,8 +158,16 @@ export class ChatOrchestrator {
           }
           if (attempt < retries) {
             const wait = err.retryAfterMs ?? 500 * 2 ** attempt;
+            if (wait > MAX_RETRY_WAIT_MS) {
+              // 長く待てと言われた。待たずに次の候補へ。次が無い（fallback しない）なら、ここで落ちたと言う
+              if (!err.rule.fallback) {
+                yield { type: 'failed', error: err };
+                return;
+              }
+              break;
+            }
             attempt += 1;
-            await sleep(wait);
+            await sleep(wait, signal);
             continue;
           }
           break; // 次の候補モデルへ

@@ -46,7 +46,7 @@ export async function detectMachine(): Promise<DetectedMachine> {
 }
 
 async function detectNvidia(): Promise<{ name: string; vramBytes: number } | undefined> {
-  const out = await run('nvidia-smi', [
+  const out = await runProbe('nvidia-smi', [
     '--query-gpu=name,memory.total', '--format=csv,noheader,nounits',
   ]);
   if (out === undefined) return undefined;
@@ -73,7 +73,11 @@ function estimateRamBandwidth(ramBytes: number): number {
   return ramBytes >= 32 * GB ? 70 * GB : 45 * GB;
 }
 
-function run(cmd: string, args: string[]): Promise<string | undefined> {
+/**
+ * 命令を走らせて出力を取る。**時間切れで打ち切る**（`environment.ts` と同じ 5 秒）。ドライバが固まって nvidia-smi が返らないと、
+ * 検出を待つ送信の前処理ごと止まり、送った依頼が全部順番待ちのまま・■も効かない、になっていた。
+ */
+export function runProbe(cmd: string, args: string[], timeoutMs = 5000): Promise<string | undefined> {
   return new Promise((resolve) => {
     let child;
     try {
@@ -82,10 +86,11 @@ function run(cmd: string, args: string[]): Promise<string | undefined> {
       return resolve(undefined);
     }
     let out = '';
+    const timer = setTimeout(() => { child.kill(); resolve(undefined); }, timeoutMs);
     const read = chunkReader();
     child.stdout?.on('data', (b: Buffer) => { out += read(b); });
-    child.on('error', () => resolve(undefined));
-    child.on('close', (code) => resolve(code === 0 ? out : undefined));
+    child.on('error', () => { clearTimeout(timer); resolve(undefined); });
+    child.on('close', (code) => { clearTimeout(timer); resolve(code === 0 ? out : undefined); });
   });
 }
 

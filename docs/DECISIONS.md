@@ -239,6 +239,7 @@
 - 設定が在るのに読めないとき、既定の設定で黙って動かさない
 - 提案と覚えたことを残せなかったとき、黙らない
 - 置いてある llama-server と、作業場の決まりのファイルで、見られないを「無い」と読まない
+- 止まったまま戻らない所を塞ぐ（再試行の待ち・nvidia-smi・git・run_command の入力・子を止める呼び出し）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10100,3 +10101,26 @@ MCP・作業場（`agent.root`）が黙って外れる。
 - 試験: `test/llama-install.test.ts` に 3 件（strict で投げる・ほかの名前で見つかる・本当に無い）、`test/project-rules.test.ts` に 1 件（AGENTS.md がフォルダ）。
   守りを外すと落ちることを見た。`install` が strict で呼んでいることは試験で見ていない
 触る場所: `src/runtime/llama-install.ts` の `findInstalled`・`install`、`src/agent/project-rules.ts` の `readProjectRules`・`readOne`
+
+## 2026-09-29  止まったまま戻らない所を塞ぐ（再試行の待ち・nvidia-smi・git・run_command の入力・子を止める呼び出し）
+
+利用者の操作が「止まったまま戻らない」（依頼が終わらない・■が効かない・次の依頼が順番待ちのまま）になる所を別の担当に洗い出させ、11 件
+見つかった。単純で効き目の大きい 5 件を直した。
+
+- 再試行の待ち（`orchestrator.ts`）: 相手の `Retry-After` をそのまま待っていた（上限なし、■で抜けない）。3600 秒や数時間先の日時が来ると、
+  その間は依頼が動いたまま・次の依頼は順番待ちだった。30 秒（`MAX_RETRY_WAIT_MS`）を超えたら待たずに次の候補へ回り（次が無ければ落ちたと
+  言う）、待ちは ■ で抜ける
+- 機械の検出（`machine.ts` の `runProbe`）: nvidia-smi を時間切れなしで起こしていた。ドライバが固まると送信の前処理ごと止まった。
+  `environment.ts` と同じ 5 秒で打ち切る
+- git（`git.ts` の `runGit`）: 時間切れなし・資格情報を訊ける状態で起こしていた。取得（fetch）が止まる・資格情報を訊く画面が出ると、更新の口と
+  `/update` が返らなかった。5 分（`GIT_TIMEOUT_MS`）で打ち切り、`GIT_TERMINAL_PROMPT=0`・`GCM_INTERACTIVE=never` を渡す（資格情報を訊く画面が
+  実際に出るかは確かめていない）
+- run_command（`shell-exec.ts` の `spawnCall`）: 標準入力を開いたままにしていたので、入力を待つ命令が時間切れ（600 秒）まで止まった。閉じる
+- モデルの子プロセスを止める（`inproc-host-client.ts` の `shutdown`）: 止めるよう頼む呼び出しに時間切れが無く、子の手が塞がると、殺すまでの
+  5 秒の前に何分も待った。頼む呼び出しは 2 秒（`SHUTDOWN_ASK_MS`）で切る。読み込み（load）は大きなモデルで長くかかるので上限を付けない
+- 残り（次に直す）: やり残しの続きの分解に止められない signal を渡している所、MCP の呼び出しに ■ が届かない所、作業場の記録の git に
+  時間切れが無い所、考えごとの配布元への問い合わせ、CLI の承認待ちで Ctrl-C が効かない所、失敗の本文を読む間の見張り
+- 試験: `test/orchestrator.test.ts` に 2 件（長い Retry-After・待ちの間に止める）、`test/machine-probe.test.ts` に 2 件、`test/git-timeout.test.ts`
+  に 3 件、`test/shell-exec.test.ts` に 2 件。直す前の版（試験の中の関数が無いものは、打ち切りを外した版）で落ちることを見た。
+  子を止める呼び出しは試験を足していない（返事をしない子を作る形が大きい）
+触る場所: `src/core/orchestrator.ts`、`src/runtime/machine.ts`、`src/agent/git.ts`、`src/agent/shell-exec.ts`、`src/runtime/inproc-host-client.ts`

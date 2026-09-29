@@ -46,6 +46,49 @@ describe('ChatOrchestrator', () => {
     }
   });
 
+  test('Retry-After で長く待てと言われたら、待たずに次の候補へ回る（1 時間止まったままにしない）', async () => {
+    const primary = await startFakeServer({ kind: 'status', status: 429, body: 'slow down', retryAfter: '3600' });
+    const backup = await startFakeServer({ kind: 'stream', text: '次の候補で続ける' });
+    try {
+      const registry = new ProviderRegistry();
+      registry.register(new OpenAiCompatibleProvider({ id: 'cloud', baseUrl: primary.baseUrl, locality: 'cloud' }));
+      registry.register(new OpenAiCompatibleProvider({ id: 'local', baseUrl: backup.baseUrl, locality: 'local' }));
+      const started = Date.now();
+      const events = await Promise.race([
+        drain(new ChatOrchestrator(registry).run(
+          { candidates: ['cloud:m', 'local:m'], messages: [{ role: 'user', content: 'hi' }] },
+          new AbortController().signal,
+        )),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Retry-After の 1 時間を待っている')), 10_000).unref()),
+      ]);
+      assert.ok(Date.now() - started < 10_000);
+      assert.equal(events.find((e) => e.type === 'done')?.modelId, 'local:m');
+    } finally {
+      await primary.close();
+      await backup.close();
+    }
+  });
+
+  test('やり直しを待っている間に止めたら、待ち明けを待たずに終わる', async () => {
+    const primary = await startFakeServer({ kind: 'status', status: 429, body: 'slow down', retryAfter: '20' });
+    try {
+      const registry = new ProviderRegistry();
+      registry.register(new OpenAiCompatibleProvider({ id: 'cloud', baseUrl: primary.baseUrl, locality: 'cloud' }));
+      const ac = new AbortController();
+      setTimeout(() => ac.abort(), 300).unref();
+      const started = Date.now();
+      await Promise.race([
+        drain(new ChatOrchestrator(registry).run(
+          { candidates: ['cloud:m'], messages: [{ role: 'user', content: 'hi' }] }, ac.signal,
+        )),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('止めたのに 20 秒の待ちを続けている')), 10_000).unref()),
+      ]);
+      assert.ok(Date.now() - started < 10_000);
+    } finally {
+      await primary.close();
+    }
+  });
+
   test('invalid_request はフォールバックせず即失敗する', async () => {
     const primary = await startFakeServer({ kind: 'status', status: 400, body: 'bad field' });
     const backup = await startFakeServer({ kind: 'stream', text: 'ここには来ない' });
