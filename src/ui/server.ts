@@ -793,8 +793,7 @@ export class UiServer {
     if (live.anyBusy || this.#side.size > 0 || this.#thinking) return;
     const fixed = await this.#configForSession();
     if (!fixed.candidates || fixed.candidates.length === 0) return;
-    this.#session = undefined;
-    await live.close().catch(() => undefined);
+    await this.#retireSession(live);
   }
 
   /**
@@ -837,6 +836,16 @@ export class UiServer {
     if (this.#saved < session.history.length) {
       this.broadcast({ type: 'log', level: 'error', text: '書けなかったやりとりを残せないまま、会話を移りました（その分はファイルに残っていません）' });
     }
+  }
+
+  /**
+   * 本体を畳む（候補の作り直し・外のツールの繋ぎ直し・作業場やモデルの変更）。畳む前に、書けていないやりとりをもう一度書く
+   * （次に組む本体はファイルから読み直すので、手元の分は手放す）。それでも書けなければ、残っていないと言う。
+   */
+  async #retireSession(live: Session): Promise<void> {
+    if (this.#session === live) await this.#flushBeforeLeaving(live);
+    if (this.#session === live) this.#session = undefined;
+    await live.close().catch(() => undefined);
   }
 
   /**
@@ -1050,6 +1059,8 @@ export class UiServer {
       const took = Date.now() - began;
       if (took > 2000) say(`${what}に ${(took / 1000).toFixed(1)} 秒かかりました`);
     };
+    // 止める前に、書けていないやりとりをもう一度書く（止めると手元の分は消える）
+    await timed('書けていないやりとりを書くの', async () => { if (this.#session) await this.#flushBeforeLeaving(this.#session); });
     await timed('会話を閉じるの', async () => this.#session?.close());
     // 自分の中に立てた口（inproc）も閉じる。閉じないと、画面を止めても
     // プロセスが生き続ける（検査が終わらないことで気づいた）。
@@ -2249,10 +2260,24 @@ export class UiServer {
         // 書き直しを待つ間も「手が塞がっている」ことにする（トップへ戻る所と同じ）
         this.#preparing = true;
         try {
-          if (this.#loadedId !== id) await this.#flushBeforeLeaving(session);
-          session.restore(past);
-          this.#loadedId = id;
-          this.#saved = past.length;
+          if (this.#loadedId !== id) {
+            await this.#flushBeforeLeaving(session);
+            session.restore(past);
+            this.#loadedId = id;
+            this.#saved = past.length;
+          } else if (this.#saved < session.history.length) {
+            // 載っている会話を押し直した。書けていない分を先に書き、それでも書けなければファイルの中身で上書きしない
+            // （前はファイルから読み直して、書き直し待ちのやりとりを黙って消した）
+            await this.#persist(session);
+            if (this.#saved >= session.history.length) {
+              const fresh = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
+              session.restore(fresh);
+              this.#saved = fresh.length;
+            }
+          } else {
+            session.restore(past);
+            this.#saved = past.length;
+          }
         } finally {
           this.#preparing = false;
         }
@@ -2292,11 +2317,9 @@ export class UiServer {
         return send(res, 409, { error: 'いま作業中です。消すのは、終わってからにしてください' });
       }
       await this.#conversations.remove(id);
-      if (id === this.#conversationId) {
-        this.#conversationId = undefined;
-        this.#saved = 0;
-        this.#session?.reset();
-      }
+      // 見ている会話を消したら、見ている所だけトップへ。本体を空にするのは、消した会話が本体に載っているときだけ（下）。
+      // 前は本体に別の会話が載っていても空にし、その会話の書けていないやりとりまで黙って消した
+      if (id === this.#conversationId) this.#conversationId = undefined;
       // 本体に載っている会話を消したら、載せたままにしない（次に載せた名前へ書く道が、消した会話へ書く）
       if (id === this.#loadedId) {
         this.#loadedId = undefined;
@@ -2491,10 +2514,7 @@ export class UiServer {
         // **いまの土台を畳む。**外の道具は土台を組むときに立ち上がるので、
         // 畳まないと、繋いだのに次も繋がらない。会話は残してあるので続きから話せる。
         const live = this.#session;
-        if (live && !this.#busyNow(live)) {
-          this.#session = undefined;
-          await live.close().catch(() => undefined);
-        }
+        if (live && !this.#busyNow(live)) await this.#retireSession(live);
         // いま動いている設定にも入れる。次の依頼から使える。
         this.#opts.config.mcp = {
           ...this.#opts.config.mcp,
@@ -2737,8 +2757,7 @@ export class UiServer {
         // 変えたのに道具は前の場所を触り続ける。会話は残してあるので続きから話せる。
         const live = this.#session;
         if (live && !this.#busyNow(live)) {
-          this.#session = undefined;
-          await live.close().catch(() => undefined);
+          await this.#retireSession(live);
         } else if (live) {
           // 作業中は畳めない。**黙って効いた顔をしない。**
           workRestart = true;
@@ -2772,10 +2791,7 @@ export class UiServer {
         if (runtime?.id === 'inproc') {
           for (const ref of runtime.loaded()) await runtime.unload(ref).catch(() => undefined);
         }
-        if (live) {
-          this.#session = undefined;
-          await live.close().catch(() => undefined);
-        }
+        if (live) await this.#retireSession(live);
         this.broadcast({ type: 'log', level: 'info', text: model ? `モデルを ${model} にしました。次の送信で読みます` : 'モデルの指定を外しました。次の送信で選び直します' });
         this.broadcast({ type: 'stateChanged' });
       }
