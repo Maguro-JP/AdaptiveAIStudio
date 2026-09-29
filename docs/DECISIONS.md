@@ -10220,7 +10220,9 @@ inproc-host は SIGINT で自分を止めていたので、CLI が Ctrl-C で生
 - SIGTERM を送り、`KILL_GRACE_MS`（3 秒）待って終わっていなければ SIGKILL を送る（`src/mcp/client.ts` の `endChild`）
 - 待つ時計は unref する。こちらが終わるのを 3 秒引き止めない（こちらが先に終わると、無視する相手は残りうる。前と同じ）
 - 選ばなかった案: 初めから SIGKILL。相手が記録を書き出す等の後始末の間が無くなる
-- 残り: `shell: true` で立ち上げた相手は、殺すのが shell だけで、その下の本体に届かないことがある（前からの形。確かめていない）
+- 残り: Windows で shell を通して立ち上げた相手（`spawnPlan` が shell を使うのは win32 だけ）は、殺すのが shell だけで、その下の本体に
+  届かないことがある。POSIX でも、npx のように孫を立ち上げる相手は、SIGKILL を受けると孫へ止める合図を回せず、孫が残りうる
+  （孫が入力の終わりで止まるかは相手しだい）。どちらも前からの形で、確かめていない
 - 試験: `test/mcp-bytes.test.ts` に 1 件（SIGTERM を無視する相手が stop() の後に終わる）。直す前の版で落ちることを見た。Windows は
   kill が初めから強制なので飛ばす
 触る場所: `src/mcp/client.ts` の `endChild`・`KILL_GRACE_MS`

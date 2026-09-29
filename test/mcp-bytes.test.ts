@@ -150,13 +150,16 @@ describe('止めた相手を残さない', () => {
     `]);
     assert.equal(await c.start(), true, `立ち上がらなかった: ${c.failure}`);
     const pid = Number((await c.call('pid', {}, 10_000)).text);
-    assert.ok(pid > 0);
-    c.stop();
+    assert.ok(pid > 0, `pid が取れない: ${pid}`);
     const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
-    const deadline = Date.now() + 15_000;
-    while (alive() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
-    const left = alive();
-    if (left) process.kill(pid, 'SIGKILL'); // 試験の後に残さない
-    assert.equal(left, false, 'stop() の後も相手が残っている');
+    try {
+      c.stop();
+      const deadline = Date.now() + 15_000;
+      while (alive() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+      assert.equal(alive(), false, 'stop() の後も相手が残っている');
+    } finally {
+      // 途中で落ちても、SIGTERM を無視する相手を試験の後に残さない
+      if (alive()) process.kill(pid, 'SIGKILL');
+    }
   });
 });
