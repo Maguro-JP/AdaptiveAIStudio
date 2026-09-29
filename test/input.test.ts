@@ -108,13 +108,15 @@ describe('Ctrl-C（SIGINT）', () => {
     const probe = fileURLToPath(new URL('./fixtures/sigint-probe.mts', import.meta.url));
     const child = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', probe], { stdio: ['pipe', 'pipe', 'inherit'] });
     let out = '';
+    let sent = false;
     child.stdout.on('data', (d: Buffer) => {
       out += d.toString();
-      if (out.includes('READY') && !out.includes('HANDLER')) setTimeout(() => child.kill('SIGINT'), 100).unref();
+      // 一度だけ送る。READY と「> 」が別の塊で届くと、HANDLER の前に二度送って二度押しになり、ENDED の前に終わっていた
+      if (out.includes('READY') && !sent) { sent = true; setTimeout(() => child.kill('SIGINT'), 100).unref(); }
     });
     // 終わらない形に戻っても、試験ごと止まらないように打ち切る
     const stuck = setTimeout(() => child.kill('SIGKILL'), 15_000);
-    const exit = await new Promise<{ code: number | null; signal: string | null }>((ok) => child.on('exit', (code, signal) => ok({ code, signal })));
+    const exit = await new Promise<{ code: number | null; signal: string | null }>((ok) => child.on('close', (code, signal) => ok({ code, signal })));
     clearTimeout(stuck);
     assert.match(out, /HANDLER/, `止める処理に届かず落ちた: ${JSON.stringify({ out, ...exit })}`);
     // 止める処理の後、きれいに終わる（別の理由で落ちていない）
@@ -135,7 +137,7 @@ describe('Ctrl-C（SIGINT）', () => {
       if (out.includes('HANDLER') && sent === 1) { sent = 2; setTimeout(() => child.kill('SIGINT'), 100).unref(); }
     });
     const stuck = setTimeout(() => child.kill('SIGKILL'), 15_000);
-    const exit = await new Promise<{ code: number | null; signal: string | null }>((ok) => child.on('exit', (code, signal) => ok({ code, signal })));
+    const exit = await new Promise<{ code: number | null; signal: string | null }>((ok) => child.on('close', (code, signal) => ok({ code, signal })));
     clearTimeout(stuck);
     assert.deepEqual(exit, { code: 130, signal: null }, `二度押しで終わらなかった: ${JSON.stringify({ out, ...exit })}`);
   });
