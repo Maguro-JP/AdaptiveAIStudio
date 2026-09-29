@@ -10183,4 +10183,5 @@ inproc-host は SIGINT で自分を止めていたので、CLI が Ctrl-C で生
   ときの後始末を足す必要がある
 - 試験: `test/inproc-host.test.ts` に 1 件（子へ SIGINT を送っても答え続け、親が止めれば終わる）。直す前の版で落ちることを見た。
   Windows では飛ばす
+- 確かめていない: Windows のコンソールの Ctrl-C。Node は SIGINT の listener があれば既定の終了を抑えると文書にあるが、実機では見ていない
 触る場所: `src/runtime/inproc-host.ts` の SIGINT の扱い
