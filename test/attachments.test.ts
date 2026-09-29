@@ -4,9 +4,12 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tempDir } from './tmp.ts';
 import { Attachments, detectKind, safeName, MAX_BYTES, MAX_INLINE_CHARS } from '../src/ui/attachments.ts';
 import { mentionBudget } from '../src/agent/mention.ts';
+
+const fsp = createRequire(import.meta.url)('node:fs/promises') as typeof import('node:fs/promises');
 
 const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 
@@ -68,9 +71,28 @@ describe('預かる', () => {
   test('外せる', async () => {
     const s = await store();
     const item = await s.add('a.txt', Buffer.from('x'));
-    assert.equal(await s.drop(item.id), true);
+    assert.deepEqual(await s.drop(item.id), { dropped: true });
     assert.equal(s.get(item.id), undefined);
-    assert.equal(await s.drop(item.id), false);
+    assert.deepEqual(await s.drop(item.id), { dropped: false });
+  });
+
+  test('写しを消せなかったときは、外したうえで消せなかったと返す（消したつもりで残さない）', async () => {
+    const s = await store();
+    const item = await s.add('a.txt', Buffer.from('x'));
+    const real = fsp.rm;
+    (fsp as { rm: unknown }).rm = ((p: unknown, ...rest: unknown[]) => p === item.path
+      ? Promise.reject(Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' }))
+      : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as never;
+    syncBuiltinESMExports();
+    try {
+      const r = await s.drop(item.id);
+      assert.equal(r.dropped, true);
+      assert.match(r.kept ?? '', /EBUSY/);
+      assert.equal(s.get(item.id), undefined, '預かりから外していない');
+    } finally {
+      (fsp as { rm: unknown }).rm = real;
+      syncBuiltinESMExports();
+    }
   });
 });
 
