@@ -93,6 +93,13 @@ describe('動かし方を書いていないとき', () => {
     assert.equal(config.runtime?.kind, 'inproc', '書いていないのに Ollama になっている');
   });
 
+  test('設定が在るのに読めないとき（フォルダだった等）は、既定で黙って動かさず「読めません」と止める', async () => {
+    const dir = await tempDir('aas-cfg-unreadable-');
+    // 読めなさはフォルダで作る（EISDIR。権限に頼らない）
+    await mkdir(join(dir, 'aas.config.json'));
+    assert.throws(() => loadConfig(dir), (e: unknown) => e instanceof ConfigBroken && /設定を読めません/.test(e.message));
+  });
+
   test('書いてあるものは、そのまま使う', async () => {
     const dir = await tempDir('aas-cfg-kind2-');
     await writeFile(join(dir, 'aas.config.json'),

@@ -236,6 +236,7 @@
 - 「戻す」で、戻せなかったファイルと片づけられなかった戻り先を黙らない。無い命令（aas undo）を案内しない
 - 書く・消す・移すの失敗を黙って捨てる書き方も、試験で数えて新しく持ち込ませない
 - 規則の手前で、読めない・見られないを「後の姿が分からない」「新しいファイル」と読んで通さない
+- 設定が在るのに読めないとき、既定の設定で黙って動かさない
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10055,3 +10056,16 @@ sweep の「会話を消す」に戻すと文の幅を足した。すぐ消す�
 - 試験: `test/unreadable-dirs.test.ts` に 3 件（edit_file・見られないファイル・本当に無いファイル）。直す前の版で落ちることを見た。
   `test/lenient-reads.test.ts` の一覧から `write-kind.ts` と `builtin-rules.ts` を外した（直して減った）
 触る場所: `src/agent/tools/write-kind.ts` の `plannedContent`、`src/harness/builtin-rules.ts` の `testProtection`・`readBeforeWrite`
+
+## 2026-09-29  設定が在るのに読めないとき、既定の設定で黙って動かさない
+
+`loadConfig` は `aas.config.json` の読み込みの失敗をすべて「無い」と読み、既定の設定で動いて「aas.config.json なし」と言っていた。
+ウイルス対策や同期ソフトが一瞬掴んだ（EBUSY）・権限が無い（EACCES）と、利用者が書いた守り（`protectedPaths`・`maxFilesPerTask`）・役職・
+MCP・作業場（`agent.root`）が黙って外れる。
+
+- 「無い」（ENOENT・ENOTDIR）だけを既定にし、ほかは壊れた設定と同じ `ConfigBroken` で止めて言う。画面は今までどおり既定で開いて理由を出し、
+  CLI の入口はそこで止まる
+- 選ばなかった案: 読み直しを数回試す。起動時の同期の読み込みで待つ形になり、掴みが長いと起動ごと止まる。立ち上げ直しを案内する方が単純
+- `isAbsent` は取り込まず、符丁をその場で見る（設定は多くの所から読まれるので、取り込みの循環を作らない）
+- 試験: `test/config-broken.test.ts` に 1 件（設定の場所がフォルダ＝EISDIR）。直す前の版で落ちることを見た
+触る場所: `src/config.ts` の `loadConfig`

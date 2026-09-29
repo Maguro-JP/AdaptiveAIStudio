@@ -449,7 +449,17 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
   let raw: string;
   try {
     raw = readFileSync(path, 'utf8');
-  } catch {
+  } catch (e) {
+    // **在るのに読めないのを「無い」と読まない。**読むと、利用者が書いた守り（protectedPaths・roles・mcp）と作業場を外した
+    // 既定で黙って動く。壊れているときと同じく止めて言う（取り込みの循環を避けて、符丁をここで見る）
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+      throw new ConfigBroken(
+        `設定を読めません: ${path}（${code ?? (e as Error).message}）\n`
+        + '  ほかのプログラム（ウイルス対策・同期ソフト）が掴んでいるなら、少し置いてから立ち上げ直してください。\n'
+        + '  読めるようになるまで、書いておいた守り・作業場・役職は効きません（黙って既定で動かさないため、ここで言います）。',
+      );
+    }
     // 設定が無いときは、この中で読む。二つ目の実行ファイルも Ollama も要らない道が既定。
     // （既定を Ollama にしていたので、製品の形で何もしないと「Provider が起動しているか」で止まっていた）
     const config: AasConfig = { ...structuredClone(DEFAULT_CONFIG), runtime: { kind: 'inproc' } };
