@@ -19,6 +19,7 @@ import { join, dirname } from 'node:path';
 import { idMaker } from './ordered-id.ts';
 import { inOrder } from './in-order.ts';
 import { keptOdd } from './odd-lines.ts';
+import { isAbsent } from '../harness/put-back.ts';
 
 /** なぜ終わっていないか。**符丁で持つ**（表示のときに日本語へ引き直す）。 */
 export type UnfinishedWhy = 'maxTurns' | 'noProgress' | 'unverified' | 'failed';
@@ -90,9 +91,10 @@ export class UnfinishedWork {
 
   async #append(line: Line): Promise<void> {
     await mkdir(dirname(this.#path), { recursive: true });
-    const raw = await this.#readText(this.#path).catch(() => '');
     // 途中で落ちた書き込みの続きに繋げない。半端な行が残っていることがある。
-    const sep = raw.length === 0 || raw.endsWith('\n') ? '' : '\n';
+    // 読めないときは区切りを入れる（空行は読むときに飛ばす）。「無い」と読んで入れないと、半端な行と繋がって両方読めなくなる
+    const raw = await this.#readText(this.#path).catch((e: unknown) => (isAbsent(e) ? '' : undefined));
+    const sep = raw === undefined ? '\n' : raw.length === 0 || raw.endsWith('\n') ? '' : '\n';
     await appendFile(this.#path, `${sep}${JSON.stringify(line)}\n`, 'utf8');
   }
 
@@ -143,7 +145,8 @@ export class UnfinishedWork {
     item: Omit<Unfinished, 'id' | 'attempts' | 'nextAt' | 'createdAt'>,
     now: number,
   ): Promise<Unfinished | undefined> {
-    const already = (await this.list()).find((u) => u.request === item.request);
+    // 読めないときは投げる（重なりを確かめられないまま足すと、同じ依頼を二重に記録する）
+    const already = (await this.list({ strict: true })).find((u) => u.request === item.request);
     if (already) return undefined;
     const full: Unfinished = {
       ...item,
@@ -221,7 +224,8 @@ export class UnfinishedWork {
   }
 
   async #bump(id: string, now: number): Promise<{ gaveUp: boolean; attempts: number }> {
-    const item = (await this.list()).find((u) => u.id === id);
+    // 読めないときは投げる（空と読むと「諦めた」と返し、0 回で諦めたと言っていた）
+    const item = (await this.list({ strict: true })).find((u) => u.id === id);
     if (!item) return { gaveUp: true, attempts: 0 };
     const attempts = item.attempts + 1;
     if (attempts >= MAX_ATTEMPTS) {

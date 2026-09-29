@@ -474,3 +474,27 @@ describe('途中まで取れているものを、取り上げない', () => {
     } finally { await s.close(); }
   });
 });
+
+describe('途中まで取ったファイルを見られないとき', () => {
+  test('空にしてゼロから取り直さず、そう言って残す', async () => {
+    const { createRequire, syncBuiltinESMExports } = await import('node:module');
+    const require = createRequire(import.meta.url);
+    const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
+    const modelsDir = await tempDir('aas-models-part-');
+    const part = join(modelsDir, 'test-q4_k_m.gguf.part');
+    await writeFile(part, 'x'.repeat(1000));
+    const real = fsp.stat;
+    // 見られなさは、その道だけ stat を失敗させて作る（権限に頼らない）
+    (fsp as { stat: unknown }).stat = ((p: unknown, ...rest: unknown[]) => p === part
+      ? Promise.reject(Object.assign(new Error('EBUSY: busy'), { code: 'EBUSY' }))
+      : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as never;
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(installModel({ entry: ENTRY, modelsDir, fetchImpl: fakeFetch().impl }), /見られません/);
+    } finally {
+      (fsp as { stat: unknown }).stat = real;
+      syncBuiltinESMExports();
+    }
+    assert.equal((await stat(part)).size, 1000, '取れていた分を空にした');
+  });
+});

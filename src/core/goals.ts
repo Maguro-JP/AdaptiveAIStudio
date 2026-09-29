@@ -92,8 +92,9 @@ export class Goals {
 
   async #append(line: Line): Promise<void> {
     await mkdir(dirname(this.#path), { recursive: true });
-    const raw = await this.#readText(this.#path).catch(() => '');
-    const sep = raw.length === 0 || raw.endsWith('\n') ? '' : '\n';
+    // 読めないときは区切りを入れる（空行は読むときに飛ばす）。「無い」と読んで入れないと、半端な行と繋がって両方読めなくなる
+    const raw = await this.#readText(this.#path).catch((e: unknown) => (isAbsent(e) ? '' : undefined));
+    const sep = raw === undefined ? '\n' : raw.length === 0 || raw.endsWith('\n') ? '' : '\n';
     await appendFile(this.#path, `${sep}${JSON.stringify(line)}\n`, 'utf8');
   }
 

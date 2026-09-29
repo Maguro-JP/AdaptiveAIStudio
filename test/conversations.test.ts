@@ -379,3 +379,32 @@ describe('読めない会話を、中身の無い会話と取り違えない', (
     await assert.rejects(c.load(id, { tailBytes: 1024 }), '後ろから読む形で、読めない会話を空として返した');
   });
 });
+
+describe('会話の在る無しを見られないとき', () => {
+  test('消した会話を戻すとき、見られない生きている会話を「無い」と読んで上書きしない', async () => {
+    const { createRequire, syncBuiltinESMExports } = await import('node:module');
+    const require = createRequire(import.meta.url);
+    const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
+    const dir = join(await tempDir('aas-conv-exists-'), 'conversations');
+    const c = new Conversations(dir);
+    const id = newId();
+    await c.append(id, [{ role: 'user', content: '消した方' }]);
+    await c.remove(id);
+    // 同じ名前の生きている会話（外で戻された・別の口が作った）
+    const live = join(dir, `${id}.jsonl`);
+    await writeFile(live, `${JSON.stringify({ role: 'user', content: '生きている方' })}\n`);
+    const real = fsp.stat;
+    // 見られなさは、その道だけ stat を失敗させて作る（権限に頼らない）
+    (fsp as { stat: unknown }).stat = ((p: unknown, ...rest: unknown[]) => p === live
+      ? Promise.reject(Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }))
+      : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as never;
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(c.restore(id));
+    } finally {
+      (fsp as { stat: unknown }).stat = real;
+      syncBuiltinESMExports();
+    }
+    assert.match(await readFile(live, 'utf8'), /生きている方/, '見られない生きている会話を、消した写しで上書きした');
+  });
+});
