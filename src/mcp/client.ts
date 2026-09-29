@@ -253,7 +253,7 @@ export class McpClient {
   }
 
   /**
-   * ツールを呼ぶ。`signal`（■）で止めたら、返事を待たずに返す。返事を待っていた分は、自分の時間切れで片づく。
+   * ツールを呼ぶ。`signal`（■）で止めたら、返事を待たずに返し、相手にも取り消しを知らせる。
    * 渡していなかったので、外のツールの返事待ちの間は ■ を押しても時間切れ（既定 60 秒、設定しだいで更に長い）まで止まらなかった。
    */
   async call(tool: string, args: Record<string, unknown>, timeoutMs = 60_000, signal?: AbortSignal): Promise<{
@@ -264,19 +264,8 @@ export class McpClient {
     }
     if (signal?.aborted) return { text: `${this.name}/${tool} は止めたので呼んでいません`, isError: true };
     try {
-      const asked = this.#call('tools/call', { name: tool, arguments: args }, timeoutMs);
-      // 返事が普通に来たら聞き手を外す（一つの依頼で何度も呼ぶと、聞き手が溜まって Node が警告を出す）
-      let onAbort: (() => void) | undefined;
-      const stopped = signal
-        ? new Promise<'stopped'>((ok) => { onAbort = () => ok('stopped'); signal.addEventListener('abort', onAbort, { once: true }); })
-        : undefined;
-      const result = stopped
-        ? await Promise.race([asked, stopped]).finally(() => { if (onAbort) signal!.removeEventListener('abort', onAbort); })
-        : await asked;
-      if (result === 'stopped') {
-        asked.catch(() => undefined); // 後で時間切れになっても、受け手の無い失敗にしない
-        return { text: `${this.name}/${tool} の返事を待たずに止めました`, isError: true };
-      }
+      const result = await this.#call('tools/call', { name: tool, arguments: args }, timeoutMs, signal);
+      if (result === STOPPED) return { text: `${this.name}/${tool} の返事を待たずに止めました`, isError: true };
       return flatten(result);
     } catch (e) {
       return { text: `${this.name}/${tool} を呼べませんでした: ${(e as Error).message}`, isError: true };
@@ -478,23 +467,39 @@ export class McpClient {
     this.#send({ jsonrpc: '2.0', method, params });
   }
 
-  #call(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+  /**
+   * 一つ訊いて、返事を待つ。`signal` で止めたら、待ちを片づけて `STOPPED` で返し、相手へ `notifications/cancelled` を送る。
+   * 知らせないと、相手は止めた仕事（外への書き込み・重い検索）を最後まで続ける。遅れて届いた返事は、待ちが無いので捨てられる。
+   */
+  #call(method: string, params: unknown, timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
     const id = ++this.#seq;
     return new Promise<unknown>((resolve, reject) => {
+      const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); };
+      const onAbort = () => {
+        if (!this.#pending.delete(id)) return;
+        done();
+        this.#notify('notifications/cancelled', { requestId: id, reason: '利用者が止めました' });
+        resolve(STOPPED);
+      };
       const timer = setTimeout(() => {
         this.#pending.delete(id);
+        done();
         reject(new Error(`${timeoutMs}ms で返事がありませんでした（${method}）`));
       }, timeoutMs);
       timer.unref?.();
 
       this.#pending.set(id, {
-        resolve: (v) => { clearTimeout(timer); resolve(v); },
-        reject: (e) => { clearTimeout(timer); reject(e); },
+        resolve: (v) => { done(); resolve(v); },
+        reject: (e) => { done(); reject(e); },
       });
+      signal?.addEventListener('abort', onAbort, { once: true });
       this.#send({ jsonrpc: '2.0', id, method, params });
     });
   }
 }
+
+/** `#call` を止めたときの返り。相手の返事と取り違えないよう、ほかに無い値にする。 */
+const STOPPED: unique symbol = Symbol('stopped');
 
 /**
  * 返ってきたものを、一つずつの JSON にほどく。
