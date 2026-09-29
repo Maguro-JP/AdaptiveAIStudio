@@ -244,6 +244,7 @@
 - CLI の Ctrl-C を、プロセスごと落とさず止める処理に届ける
 - モデルの子プロセス（inproc-host）は、端末の Ctrl-C では止まらない
 - MCP の呼び出しを止めたら、相手にも取り消しを知らせる
+- 止めた MCP の相手が SIGTERM を無視しても残さない
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10210,3 +10211,16 @@ inproc-host は SIGINT で自分を止めていたので、CLI が Ctrl-C で生
 - 試験: `test/mcp-bytes.test.ts` に 2 件（止めた呼び出しの id が相手の取り消しに載る／相手の入力が閉じていても落ちない）、
   `test/mcp-http.test.ts` に 1 件（取り消しが 500 でも別の呼び出しは返る）。どれも直す前の版で落ちることを見た
 触る場所: `src/mcp/client.ts` の `#call`・`#send`・`#post`
+
+## 2026-09-30  止めた MCP の相手が SIGTERM を無視しても残さない
+
+手元で立ち上げた MCP の相手は、`stop()` でも入力の失敗（EPIPE）でも SIGTERM を送るだけだった。無視する相手は生き続け、こちらは
+`#child` を外すので、後から止める手も無かった。
+
+- SIGTERM を送り、`KILL_GRACE_MS`（3 秒）待って終わっていなければ SIGKILL を送る（`src/mcp/client.ts` の `endChild`）
+- 待つ時計は unref する。こちらが終わるのを 3 秒引き止めない（こちらが先に終わると、無視する相手は残りうる。前と同じ）
+- 選ばなかった案: 初めから SIGKILL。相手が記録を書き出す等の後始末の間が無くなる
+- 残り: `shell: true` で立ち上げた相手は、殺すのが shell だけで、その下の本体に届かないことがある（前からの形。確かめていない）
+- 試験: `test/mcp-bytes.test.ts` に 1 件（SIGTERM を無視する相手が stop() の後に終わる）。直す前の版で落ちることを見た。Windows は
+  kill が初めから強制なので飛ばす
+触る場所: `src/mcp/client.ts` の `endChild`・`KILL_GRACE_MS`
