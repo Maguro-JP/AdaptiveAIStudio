@@ -575,8 +575,9 @@ async function endsWithNewline(path: string): Promise<boolean> {
   let fh;
   try {
     fh = await open(path, 'r');
-  } catch {
-    return true; // まだ無い。足せばそのまま1行目になる。
+  } catch (e) {
+    if (isAbsent(e)) return true; // まだ無い。足せばそのまま1行目になる。
+    throw e; // 開けないのを「改行で終わっている」と読むと、書きかけの行に繋げて両方を壊す
   }
   try {
     const { size } = await fh.stat();
@@ -608,8 +609,18 @@ function isMessage(m: unknown): m is ProviderMessage {
   return typeof r.role === 'string' && ROLES.has(r.role) && typeof r.content === 'string';
 }
 
+/**
+ * 在るか。**「無い」だけを false にし、見られない（権限・掴まれている）ときは投げる。**
+ * 見られないのを「無い」と読むと、消した会話を戻すときに生きている会話を上書きし、書き足すときに消した側の写しへ書いていた。
+ */
 async function exists(path: string): Promise<boolean> {
-  return stat(path).then(() => true, () => false);
+  try {
+    await stat(path);
+    return true;
+  } catch (e) {
+    if (isAbsent(e)) return false;
+    throw e;
+  }
 }
 
 /** 置き換え（`replaceWhole`）と同じく、掴まれていたら少し待って数回やり直す（Windows のウイルス対策・検索）。 */

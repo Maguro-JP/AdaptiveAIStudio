@@ -14,6 +14,7 @@ import { describeNet } from './net-why.ts';
 import { readGguf } from './gguf.ts';
 import { modelsDir } from '../core/home.ts';
 import type { CatalogEntry } from './model-catalog.ts';
+import { isAbsent } from '../harness/put-back.ts';
 
 /**
  * GGUF の既定の置き場。
@@ -221,7 +222,11 @@ async function fetchInto(a: {
   // 数GBを落とす途中で切れることは普通にある。毎回ゼロからやり直させると、
   // 回線の細い家では永久に終わらない。実際、切れると .part が残ったまま
   // 次もゼロから始めていた（残骸だけが増える）。
-  const had = await stat(tmp).then((st) => st.size).catch(() => 0);
+  // 見られない（掴まれている）のを「無い」と読まない。読むと、取れていた数 GB を空にしてゼロから取り直していた
+  const had = await stat(tmp).then((st) => st.size).catch((e: unknown) => {
+    if (isAbsent(e)) return 0;
+    throw new Error(`途中まで取ったファイル（${tmp}）を見られません（${(e as Error).message}）。消さずに残してあります。少し置いてからもう一度取ってください`);
+  });
   if (had > 0) log(`途中まで取れています（${human(had)}）。続きから取ります。`);
 
   // 置き場に入るか、先に見る。数GB落とし切ってから「入りません」は遅い。

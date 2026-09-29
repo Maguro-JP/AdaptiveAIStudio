@@ -179,3 +179,36 @@ describe('溜めすぎない', () => {
     assert.ok(size < live * 2000, `畳んでいない: ${size} バイト / 生きている ${live} 件`);
   });
 });
+
+describe('やり残しの記録を読めないとき', () => {
+  const denied = () => Promise.reject(Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }));
+
+  test('回数を進めずに投げる（0 回で「諦めた」と言わない）', async () => {
+    const path = join(await tempDir('aas-unfinished-unreadable-'), 'unfinished.jsonl');
+    const w = new UnfinishedWork(path);
+    const item = (await w.add({ request: '依頼', why: 'noProgress', note: 'x' }))!;
+    const r = new UnfinishedWork(path, { read: denied });
+    await assert.rejects(r.bump(item.id), /EACCES/);
+    assert.equal((await w.list())[0]?.attempts, 0, '回数を進めた');
+  });
+
+  test('重なりを確かめられないまま、同じ依頼を二重に足さない', async () => {
+    const path = join(await tempDir('aas-unfinished-unreadable-'), 'unfinished.jsonl');
+    const w = new UnfinishedWork(path);
+    await w.add({ request: '依頼', why: 'noProgress', note: 'x' });
+    const r = new UnfinishedWork(path, { read: denied });
+    await assert.rejects(r.add({ request: '依頼', why: 'noProgress', note: 'x' }), /EACCES/);
+    assert.equal((await w.list()).length, 1, '同じ依頼を二重に記録した');
+  });
+
+  test('読めないときは区切りを入れて書き足す（半端な最終行と繋げない）', async () => {
+    const path = join(await tempDir('aas-unfinished-unreadable-'), 'unfinished.jsonl');
+    const w = new UnfinishedWork(path);
+    const item = (await w.add({ request: '依頼', why: 'noProgress', note: 'x' }))!;
+    const { appendFile } = await import('node:fs/promises');
+    await appendFile(path, '{"t":"bump","id":"half');
+    const r = new UnfinishedWork(path, { read: denied });
+    await r.done(item.id);
+    assert.deepEqual(await w.list(), [], '書き足した行が半端な行と繋がって読めない');
+  });
+});
