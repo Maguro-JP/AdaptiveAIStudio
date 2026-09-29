@@ -966,6 +966,9 @@ export class Session {
           yield { type: 'log', level: 'warn', text: `確かめて落ちましたが、自動では戻せませんでした（${tried.message}）。「戻す」から選んでください` };
         }
         const done = tried instanceof Error ? undefined : tried;
+        if (done?.leftover) {
+          yield { type: 'log', level: 'warn', text: `自動で戻しましたが、戻し終えた戻り先を一覧から片づけられませんでした（${done.leftover.length} 件）。一覧に残っていても、もう当ててあります。もう一度押すと、その後の直しを古い姿で上書きします` };
+        }
         const notRestored = [...new Set([...this.undo.peekSkipped(), ...(done?.failed ?? [])])].sort();
         rolledBack = done?.paths ?? [];
         if (rolledBack.length > 0 || notRestored.length > 0) {

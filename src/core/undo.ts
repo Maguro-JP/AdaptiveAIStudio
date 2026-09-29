@@ -122,6 +122,11 @@ export interface Restored {
    * **黙って落とさない。**戻ったつもりで開くと、半分だけ戻った作業場を見ることになる。
    */
   failed: string[];
+  /**
+   * 当て終えたのに片づけられなかった戻り先（消せない・書き直せない）。一覧に残るが、もう当ててある。
+   * **黙らない。**残ったものをもう一度押すと、その後の直しを古い姿で上書きする。
+   */
+  leftover?: string[];
 }
 
 /**
@@ -443,14 +448,15 @@ export class UndoStore {
      * 戻り先ごとの失敗で決めていたときは、新しい戻り先で失敗して古い戻り先で戻せた道まで残り、
      * あとでそれを戻すと、戻した姿より新しい姿を当ててファイルを消していた。
      */
+    const leftover: string[] = [];
     for (const { id: pointId, stored } of read) {
       const file = join(this.#dir, `${pointId}.json`);
       const keep = (stored.files ?? []).filter((f) => last.get(f.path) === 'failed' && oldest.get(f.path) === pointId);
-      if (keep.length === 0) {
-        await unlink(file).catch(() => undefined);
-      } else {
-        await writeStored(file, { ...stored, paths: keep.map((f) => f.path), files: keep }).catch(() => undefined);
-      }
+      // 片づけられなかったら、そう返す（もう無いなら片づいている）
+      const tidied = keep.length === 0
+        ? await unlink(file).then(() => true, (e: unknown) => isAbsent(e))
+        : await writeStored(file, { ...stored, paths: keep.map((f) => f.path), files: keep }).then(() => true, () => false);
+      if (!tidied) leftover.push(pointId);
     }
     const paths = touched.filter((p) => last.get(p) !== 'failed');
     const failed = [...last].filter(([, r]) => r === 'failed').map(([p]) => p);
@@ -463,7 +469,7 @@ export class UndoStore {
       if (before === false || after === false) continue;
       changed.push({ path, before, after });
     }
-    return { paths, points: at + 1, changed, failed };
+    return { paths, points: at + 1, changed, failed, ...(leftover.length > 0 ? { leftover } : {}) };
   }
 
   /** 溜めすぎない。落とした数を返す。 */

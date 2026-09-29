@@ -19,7 +19,7 @@ const require = createRequire(import.meta.url);
 const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
 
 /** fs/promises の `name` を、`path` のときだけ EACCES で失敗させて `fn` を回す。 */
-async function failing<T>(name: 'readFile' | 'lstat', path: string, fn: () => Promise<T>): Promise<T> {
+async function failing<T>(name: 'readFile' | 'lstat' | 'unlink', path: string, fn: () => Promise<T>): Promise<T> {
   const real = fsp[name] as (...a: unknown[]) => Promise<unknown>;
   (fsp as Record<string, unknown>)[name] = ((p: unknown, ...rest: unknown[]) => p === path
     ? Promise.reject(Object.assign(new Error(`EACCES: ${name} failed`), { code: 'EACCES' }))
@@ -102,5 +102,36 @@ describe('読めない戻り先があるとき', () => {
     await writeFile(join(root, 'a.txt'), 'v2\n');
     const point = (await undo.end())!;
     await assert.rejects(failing('readFile', join(dir, `${point.id}.json`), () => undo.restore(point.id)), /その戻り先を読めません/);
+  });
+});
+
+describe('当て終えた戻り先を片づけられないとき', () => {
+  test('戻したうえで、片づけられなかった戻り先を返す（一覧に残ったものを、まだ当てていないと思わせない）', async () => {
+    const root = await tempDir('aas-undo-leftover-');
+    const state = await tempDir('aas-undo-leftover-state-');
+    const dir = join(state, 'undo');
+    const undo = new UndoStore(root, dir);
+    const abs = join(root, 'a.txt');
+    await writeFile(abs, 'v1\n');
+    await undo.begin('一回目');
+    undo.capture('a.txt', 'v1\n');
+    await writeFile(abs, 'v2\n');
+    const point = (await undo.end())!;
+    const done = await failing('unlink', join(dir, `${point.id}.json`), () => undo.restore(point.id));
+    assert.equal(await readFile(abs, 'utf8'), 'v1\n');
+    assert.deepEqual(done?.leftover, [point.id], '片づけられなかったことを黙った');
+  });
+
+  test('片づけられたときは、何も返さない（対）', async () => {
+    const root = await tempDir('aas-undo-tidy-');
+    const undo = new UndoStore(root, join(await tempDir('aas-undo-tidy-state-'), 'undo'));
+    await writeFile(join(root, 'a.txt'), 'v1\n');
+    await undo.begin('一回目');
+    undo.capture('a.txt', 'v1\n');
+    await writeFile(join(root, 'a.txt'), 'v2\n');
+    const point = (await undo.end())!;
+    const done = await undo.restore(point.id);
+    assert.equal(done?.leftover, undefined);
+    assert.deepEqual(await undo.list(), []);
   });
 });
