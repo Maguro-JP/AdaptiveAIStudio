@@ -2928,7 +2928,10 @@ export class UiServer {
         undo.discard();
         throw e;
       }
-      await undo.end().catch(() => undefined);
+      await undo.end().catch((e: unknown) => {
+        // 書き込みは済んでいる。戻り先だけが残っていないことを言う（黙ると「戻す」で戻せるつもりのままになる）
+        this.broadcast({ type: 'log', level: 'warn', text: `この保存の戻り先を残せませんでした（${(e as Error).message}）。「戻す」からは戻せません` });
+      });
     } finally {
       session?.lock.release(owner);
     }
