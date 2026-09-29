@@ -279,6 +279,8 @@ export type ThinkEvent =
    * 押されたときだけ出す。
    */
   | { type: 'declined'; reason: string }
+  /** 選んで試したが、モデルが落ちた・止められた・何も返さなかった。断った（選ぶ前）とは別。見回りでも出す（選んだ一行だけで終わらせない）。 */
+  | { type: 'failed'; codename: string; reason: string }
   | { type: 'proposal'; proposal: Proposal; codename: string };
 
 export interface SessionOptions {
@@ -1017,6 +1019,11 @@ export class Session {
    * 考えた結果は提案として溜めるだけで、実行はしない。
    * 勝手に手を動かされるのと、勝手に考えてくれるのは、別の話。
    */
+  /** 手がかりごとに、考えごとが落ちた回数（立ち上げ直すと数え直す）。 */
+  readonly #reconFailures = new Map<string, number>();
+  /** 同じ手がかりで何回落ちたら、調べたことにして次へ進むか。 */
+  static readonly #RECON_GIVE_UP = 3;
+
   async *think(): AsyncGenerator<ThinkEvent, boolean> {
     // **断る理由は必ず言う。**黙るかどうかは、呼ぶ側が決める（見回りは黙る）。
     if (this.noModel) {
@@ -1126,6 +1133,9 @@ export class Session {
     const ac = new AbortController();
     this.#conv.running = ac;
     let text = '';
+    // モデルが落ちた・止められたか。`Agent.run` は投げずに `finished` で知らせる
+    let broken: string | undefined;
+    let finishedWith: string | undefined;
     try {
       const thinker = new Agent(this.orchestrator, {
         candidates: this.candidates,
@@ -1144,12 +1154,38 @@ export class Session {
         [{ role: 'user', content: promptFor(mode, context) }], ac.signal,
       )) {
         if (ev.type === 'thinking') text += ev.delta;
+        if (ev.type === 'finished') {
+          finishedWith = ev.reason;
+          if (ev.reason === 'failed' || ev.reason === 'aborted') {
+            broken = ev.reason === 'aborted' ? '止められました' : (ev.detail ?? 'モデルが答えませんでした');
+          }
+        }
       }
     } catch {
       // 考えに失敗しても、この場所は止まらない。
       return true;
     } finally {
       this.#conv.running = undefined;
+    }
+    // 落ちた・止められた回は、手がかりを「調べた」とも、日課を「済ませた」とも記録しない（前は記録していたので、繋がらなかった
+    // 回の手がかりは二度と調べられず、その日の日課は済んだことになった）。次の見回りでもう一度やる
+    // 返事が空のまま止まった回も、答えていない（手が止まった回とは違い、何も調べていない）
+    if (broken === undefined && finishedWith === 'noProgress' && text.trim() === '') broken = '返事が空でした';
+    if (broken !== undefined) {
+      // 手がかりは、同じものが決まって落ちる（長すぎて断られる等）と、先へ進めなくなる。3 回落ちたら調べたことにして次へ進む
+      if (mode.id === 'recon') {
+        const failures = (this.#reconFailures.get(fingerprint) ?? 0) + 1;
+        this.#reconFailures.set(fingerprint, failures);
+        if (failures >= Session.#RECON_GIVE_UP) {
+          this.proposals.markExamined(fingerprint);
+          this.#reconFailures.delete(fingerprint);
+          await this.proposals.save();
+        }
+      }
+      // 見回りの回数と間合い（`idle.begin` で数えた分）は残す。残さないと、立ち上げ直すと間合いが戻る
+      await this.saveAutonomy();
+      yield { type: 'failed', codename: mode.codename, reason: broken };
+      return true;
     }
 
     if (mode.id === 'recon') this.proposals.markExamined(fingerprint);
