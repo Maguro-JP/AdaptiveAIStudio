@@ -17,7 +17,7 @@
 import { readFile, writeFile, mkdir, unlink, stat, readdir, rename, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { safeResolve } from '../agent/tools/paths.ts';
-import { putBack, putBackOrder, contentOf, contentBytes, type FileContent } from '../harness/put-back.ts';
+import { putBack, putBackOrder, contentOf, contentBytes, isAbsent, type FileContent } from '../harness/put-back.ts';
 
 /** 一つの戻り先。 */
 export interface UndoPoint {
@@ -319,10 +319,25 @@ export class UndoStore {
 
   /** 戻り先の一覧。新しい順。 */
   async list(): Promise<UndoPoint[]> {
+    return (await this.#scan()).points;
+  }
+
+  /**
+   * 一覧と、**在るのに読めなかった戻り先**（ファイル名）。読めなかったものを黙って外すと、それを挟んだ古い戻り先まで戻すとき、
+   * その回の分だけ当てずに「戻した」と返し、途中だけ新しい、どこにも無かった姿にしていた。
+   */
+  async #scan(): Promise<{ points: UndoPoint[]; unreadable: string[] }> {
     const points: UndoPoint[] = [];
+    const unreadable: string[] = [];
     for (const name of await readdir(this.#dir).catch(() => [])) {
       if (!name.endsWith('.json')) continue;
-      const raw = await readFile(join(this.#dir, name), 'utf8').catch(() => undefined);
+      let raw: string | undefined;
+      try {
+        raw = await readFile(join(this.#dir, name), 'utf8');
+      } catch (e) {
+        if (!isAbsent(e)) unreadable.push(name);
+        continue;
+      }
       if (!raw) continue;
       try {
         const p = JSON.parse(raw) as Stored;
@@ -335,7 +350,7 @@ export class UndoStore {
         }
       } catch { /* 1件壊れても全部は失わない */ }
     }
-    return points.sort((a, b) => b.at - a.at);
+    return { points: points.sort((a, b) => b.at - a.at), unreadable };
   }
 
   /**
@@ -346,9 +361,13 @@ export class UndoStore {
    * 選んだ戻り先を含めて、それより新しいものを新しい方から順に当てる。
    */
   async restore(id: string): Promise<Restored | undefined> {
-    const all = await this.list();
+    const { points: all, unreadable } = await this.#scan();
     const at = all.findIndex((p) => p.id === id);
     if (at === -1) return undefined;
+    // 読めない戻り先があるときは戻さない（どの作業場のものか・いつのものかも分からない。挟まっていれば、その回の分だけ抜ける）
+    if (unreadable.length > 0) {
+      throw new Error(`読めない戻り先があるので戻しません（${unreadable.join(', ')}）。途中の回を飛ばして戻すと、どこにも無かった姿になります`);
+    }
 
     const touched: string[] = [];
     /** 道ごとの、最後に当てた結果。古い記録ほど後に当てるので、最後の一回が今の姿を決める。 */
@@ -366,13 +385,22 @@ export class UndoStore {
     const read: { id: string; stored: Stored }[] = [];
     /** 道ごとに、いちばん古い（最後に当てた）戻り先。戻したい姿はそこに在る。 */
     const oldest = new Map<string, string>();
-    // 新しい方から当てる。古い控えが後に来るので、いちばん古い姿が残る。
+    // 先に全部読む。途中で読めなくなったら、何も当てずにやめる（当ててから気づくと、途中だけ戻した姿が残る）
     for (const point of all.slice(0, at + 1)) {
-      const raw = await readFile(join(this.#dir, `${point.id}.json`), 'utf8').catch(() => undefined);
-      if (!raw) continue;
+      let raw: string;
+      try {
+        raw = await readFile(join(this.#dir, `${point.id}.json`), 'utf8');
+      } catch (e) {
+        if (isAbsent(e)) continue; // 並んで走る片づけが消した
+        throw new Error(`戻り先 ${point.id} を読めないので戻しません（${(e as Error).message}）`);
+      }
       let stored: Stored;
       try { stored = JSON.parse(raw) as Stored; } catch { continue; }
       read.push({ id: point.id, stored });
+    }
+    // 新しい方から当てる。古い控えが後に来るので、いちばん古い姿が残る。
+    for (const { id: pointId, stored } of read) {
+      const point = { id: pointId };
       for (const saved of putBackOrder((stored.files ?? []).map(fromStored))) {
         const abs = safeResolve(this.#root, saved.path);
         if (!abs) continue;

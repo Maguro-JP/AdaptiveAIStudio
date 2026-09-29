@@ -957,7 +957,13 @@ export class Session {
         if (kept && !newest) {
           yield { type: 'log', level: 'warn', text: '確かめて落ちましたが、この依頼の後に別の作業の戻り先ができているので、自動では戻していません（「戻す」から選んでください）' };
         }
-        const done = kept && newest ? await this.undo.restore(kept.id) : undefined;
+        const done = kept && newest
+          ? await this.undo.restore(kept.id).catch((e: unknown) => {
+            // 戻せなかった（読めない戻り先がある等）。依頼の結末は変えず、戻していないことを言う
+            this.#opts.onLog?.('warn', `確かめて落ちましたが、自動では戻せませんでした（${(e as Error).message}）`);
+            return undefined;
+          })
+          : undefined;
         const notRestored = [...new Set([...this.undo.peekSkipped(), ...(done?.failed ?? [])])].sort();
         rolledBack = done?.paths ?? [];
         if (rolledBack.length > 0 || notRestored.length > 0) {
