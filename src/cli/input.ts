@@ -45,8 +45,14 @@ export class LineSource {
     });
   }
 
+  /**
+   * Ctrl-C を受ける。**プロセスの SIGINT も受ける。**読み手は `terminal: false` で作っているので、rl の SIGINT は来ない。
+   * rl だけに付けていたので、Ctrl-C で生成だけを止めるつもりが、プロセスごと落ちていた（戻り先を閉じる前に終わる）。
+   * 端末でも同じで、Ctrl-C は端末の側で SIGINT としてプロセスへ送られる。
+   */
   onSigint(handler: () => void): void {
     this.#rl.on('SIGINT', handler);
+    process.on('SIGINT', handler);
   }
 
   /** 溜まっている行があるか。待機中かどうかの判断に使う。 */

@@ -99,3 +99,20 @@ describe('止めたときの、待っている問い', () => {
     src.close();
   });
 });
+
+describe('Ctrl-C（SIGINT）', () => {
+  test('端末でない入力でも、止める処理に届く（プロセスごと落ちない）', async () => {
+    const { spawn } = await import('node:child_process');
+    const { fileURLToPath } = await import('node:url');
+    const probe = fileURLToPath(new URL('./fixtures/sigint-probe.mts', import.meta.url));
+    const child = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', probe], { stdio: ['pipe', 'pipe', 'inherit'] });
+    let out = '';
+    child.stdout.on('data', (d: Buffer) => {
+      out += d.toString();
+      if (out.includes('READY') && !out.includes('HANDLER')) setTimeout(() => child.kill('SIGINT'), 100).unref();
+    });
+    const exit = await new Promise<{ code: number | null; signal: string | null }>((ok) => child.on('exit', (code, signal) => ok({ code, signal })));
+    assert.match(out, /HANDLER/, `止める処理に届かず落ちた: ${JSON.stringify({ out, ...exit })}`);
+    assert.equal(exit.signal, null);
+  });
+});
