@@ -19,7 +19,7 @@
  * git が無い・git の管理下でない作業場では、比べられない（`undefined`）。
  * **比べられないことを「変わっていない」と読まない。**呼ぶ側がそう言う。
  */
-import { stat, readFile } from 'node:fs/promises';
+import { lstat, stat, readFile } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { execFile } from 'node:child_process';
 import { contentOf, isAbsent, type FileContent } from '../harness/put-back.ts';
@@ -101,7 +101,8 @@ export async function workspaceStamp(root: string): Promise<WorkspaceStamp | und
     }
     if (!path) continue;
     try {
-      const s = await stat(join(root, path));
+      // リンクは辿らない。git が記録するのはリンクそのもので、辿れないリンク（自分を指す・読めない所を指す）を毎回「変わった」と数えない
+      const s = await lstat(join(root, path));
       stamp.set(path, `${code} ${s.size} ${s.mtimeMs}`);
     } catch (e) {
       // 見られないものは、前の回と同じ値にしない（前後とも見られないと「変わらない」と数え、確かめずに済ませていた）

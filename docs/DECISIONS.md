@@ -9932,10 +9932,18 @@ sweep の「会話を消す」に戻すと文の幅を足した。すぐ消す�
   掴みが外れていると、テストを減らす書き込みが通る。読めなければ「確かめられない」と止める（前の項で「直さなかったもの」にしていたのを改めた）。
   同じ所の「実装side」の打ち間違いも直した
 - 作業場の設定（画面）: 見られないフォルダを「見つかりません」と言っていた。見つからない・フォルダではない・開けない、を分けて言う
+- 押す前の読み直しで足した:
+  - 会話の一覧の口: 捨て場を読めないと 500 になり、画面が生きている会話の一覧まで黙って出さなくなった。捨て場の分だけ空にして
+    「消した会話を読めません」を返し、画面はそれを出す
+  - 戻す一覧の口: 戻り先のフォルダを読めないと 500 になり、画面が古い一覧を出したままになった。空の一覧と読めない理由を返し、画面はそれを出す
+  - 作業場の記録は `lstat` で取る。`stat` はリンクを辿るので、辿れないリンク（自分を指す・読めない所を指す）が在ると毎回「変わった」になり、
+    読むだけの外のツールの回でも確かめを走らせる。git が記録するのもリンクそのもの
+  - 新しく作る口（`/api/files/new`）: 見られない場所を「無い」と読み、フォルダなら既に在るのに「作った」と返していた。「確かめられません」と返す
 - 直さなかったもの: 片づけの大きさ（名前だけで候補になる古い llama-server・`.part` は、大きさを取れないと 0 と数え、消す量を少なく言う）、
   版の表示（VERSION を読めないと次の候補を出す）、Team の後始末（`team-setup.ts` の `outside.after()` の失敗）、思いつきの手がかり
   （`initiative.ts` が読めないテストを数えない）。どれも消す・書き直すには繋がらない。一覧の理由は実際に合わせて書き直した
-- 試験: `test/unreadable-dirs.test.ts` に 8 件。直した 4 か所を直す前の版に戻すと、それぞれ落ちることを見た。画面の文言と、自動で戻す所の
-  一覧が読めない場合は試験を足していない
+- 試験: `test/unreadable-dirs.test.ts` に 9 件、`test/unreadable-dirs-server.test.ts` に 4 件。直した所を直す前の版に戻すと、それぞれ落ちることを見た。
+  作業場の設定の文言、自動で戻す所の一覧が読めない場合、画面に出る文（app.js）は試験を足していない
 触る場所: `src/core/conversations.ts` の `#trashed`、`src/core/undo.ts` の `#scan`、`src/core/session.ts` の自動で戻す所、
-`src/agent/workspace-stamp.ts` の `workspaceStamp`、`src/harness/builtin-rules.ts` の `testProtection`、`src/ui/server.ts` の作業場の設定
+`src/agent/workspace-stamp.ts` の `workspaceStamp`、`src/harness/builtin-rules.ts` の `testProtection`、`src/ui/server.ts` の作業場の設定・
+`/api/conversations`・`/api/undo`・`/api/files/new`、`src/ui/web/app.js` の `removedNotes`・`loadUndo`

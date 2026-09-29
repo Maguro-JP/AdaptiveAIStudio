@@ -11,7 +11,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, mkdir, readdir as listDir } from 'node:fs/promises';
+import { writeFile, mkdir, symlink, readdir as listDir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
@@ -25,7 +25,7 @@ const require = createRequire(import.meta.url);
 const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
 
 /** fs/promises の `name` を、`path` のときだけ EACCES で失敗させて `fn` を回す。 */
-async function failing<T>(name: 'readFile' | 'readdir' | 'stat', path: string, fn: () => Promise<T>): Promise<T> {
+async function failing<T>(name: 'readFile' | 'readdir' | 'lstat', path: string, fn: () => Promise<T>): Promise<T> {
   const real = fsp[name] as (...a: unknown[]) => Promise<unknown>;
   (fsp as Record<string, unknown>)[name] = ((p: unknown, ...rest: unknown[]) => p === path
     ? Promise.reject(Object.assign(new Error(`EACCES: ${name} failed`), { code: 'EACCES' }))
@@ -94,10 +94,23 @@ describe('作業場の記録で見られないファイル', () => {
     execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
     await writeFile(join(root, 'new.txt'), 'a\n');
     const abs = join(root, 'new.txt');
-    const before = await failing('stat', abs, () => workspaceStamp(root));
-    const after = await failing('stat', abs, () => workspaceStamp(root));
+    const before = await failing('lstat', abs, () => workspaceStamp(root));
+    const after = await failing('lstat', abs, () => workspaceStamp(root));
     assert.ok(before && after);
     assert.deepEqual(stampChanges(before, after), ['new.txt'], '見られないのを「変わらない」と読んだ');
+  });
+
+  test('辿れないリンク（自分を指す）は、何もしていない回を「変わった」と数えない', async (t) => {
+    const root = join(await tempDir('aas-stamp-loop-'), 'repo');
+    await mkdir(root, { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: root, stdio: 'ignore' });
+    // Windows は権限が無いとリンクを作れない
+    try { await symlink('loop', join(root, 'loop')); } catch { t.skip('シンボリックリンクを作れない'); return; }
+    const before = await workspaceStamp(root);
+    const after = await workspaceStamp(root);
+    assert.ok(before && after);
+    assert.ok(before.has('loop'), 'リンクを記録していない');
+    assert.deepEqual(stampChanges(before, after), [], '何もしていないのに変わったと数えた');
   });
 });
 
@@ -108,10 +121,12 @@ describe('テストを減らさない規則で読めないテストファイル'
     const abs = join(root, 'test', 'x.test.ts');
     await writeFile(abs, "test('あ', () => {});\ntest('い', () => {});\n");
     const r = await failing('readFile', abs, async () => testProtection.pre!(
-      { id: '1', name: 'write_file', args: { path: 'test/x.test.ts', content: "test('あ', () => {});\n" } },
+      // 件数を変えない中身にする（減らす中身だと、読めたときの「減った」で止まり、読めないときの守りを見ていない）
+      { id: '1', name: 'write_file', args: { path: 'test/x.test.ts', content: "test('あ', () => {});\ntest('え', () => {});\n" } },
       { root, history: [], instruction: '' } as never,
     ));
     assert.equal(r.kind, 'deny', `読めないテストファイルへの書き込みを素通しにした: ${JSON.stringify(r)}`);
+    assert.match(JSON.stringify(r), /読めない/);
   });
 
   test('本当に新しいテストファイルは、今までどおり通す', async () => {

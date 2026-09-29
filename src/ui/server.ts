@@ -2026,7 +2026,10 @@ export class UiServer {
       if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから作ってください' });
       }
-      if (await stat(real).then(() => true, () => false)) return send(res, 409, { error: `既にあります: ${asked}` });
+      // 見られないのを「無い」と読まない（フォルダなら、既に在るのに「作った」と返していた）
+      const there = await stat(real).then(() => true, (e: unknown) => (isAbsent(e) ? false : e as Error));
+      if (there instanceof Error) return send(res, 409, { error: `そこを確かめられません: ${asked}（${there.message}）` });
+      if (there) return send(res, 409, { error: `既にあります: ${asked}` });
       if (kind === 'dir') {
         await mkdir(real, { recursive: true });
         this.broadcast({ type: 'stateChanged' });
@@ -2120,8 +2123,12 @@ export class UiServer {
         // 動いている会話の全部（本体と、横で並べて走らせているもの）。一覧の「動いています」はこちらで付ける。
         runningAll: [...(this.#runningId ? [this.#runningId] : []), ...this.#side.keys()],
         list, total, hidden: Math.max(0, total - list.length),
-        // 消して、まだ戻せるもの（立ち上げ直すと本当に消える）。新しい順
-        trash: await this.#conversations.trashList(),
+        // 消して、まだ戻せるもの（立ち上げ直すと本当に消える）。新しい順。
+        // 読めなくても、生きている会話の一覧まで道連れにしない（画面は一覧ごと出さなくなる）。読めないことは言う
+        ...await this.#conversations.trashList().then(
+          (trash) => ({ trash }),
+          (e: unknown) => ({ trash: [], trashError: `消した会話を読めません（${(e as Error).message}）` }),
+        ),
       });
     }
 
@@ -2226,7 +2233,11 @@ export class UiServer {
       // 戻せるものの一覧は、ファイルから読める。**セッションは要らない。**
       // ここは画面が開いた直後に読む所（横の一覧に出る）。
       const undo = this.#session?.undo ?? new UndoStore(this.#workRoot(), join(stateDir(), 'undo'));
-      return send(res, 200, { list: await undo.list() });
+      // 読めなくても 500 にしない（画面は前に描いた古い一覧を出したままになる）。空の一覧と、読めないことを返す
+      return send(res, 200, await undo.list().then(
+        (list) => ({ list }),
+        (e: unknown) => ({ list: [], error: (e as Error).message }),
+      ));
     }
 
     if (path === '/api/undo' && req.method === 'POST') {
