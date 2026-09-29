@@ -22,7 +22,7 @@ import { StrideBook, strideText } from '../agent/stride.ts';
 import { decompose, stepPrompt } from '../agent/decompose.ts';
 import { Conversations, ID_SHAPE } from '../core/conversations.ts';
 import { loadJournals, type Journals } from '../core/journals.ts';
-import { UndoStore } from '../core/undo.ts';
+import { UndoStore, restoreWarnings } from '../core/undo.ts';
 import { unifiedDiff, diffStat } from '../agent/diff.ts';
 import { revertLines, type RevertPick } from '../agent/hunks.ts';
 import { buildCompletionInput, cleanCompletion } from '../core/completion.ts';
@@ -2269,13 +2269,10 @@ export class UiServer {
           ? `${done.paths.length} 件のファイルを戻しました（${done.points} 回ぶん）: ${done.paths.join(', ')}`
           : `${done.paths.length} 件のファイルを戻しました: ${done.paths.join(', ')}`,
       });
-      // 戻せなかった道と、片づけられなかった戻り先を黙らない（戻ったつもりで半分だけ戻った作業場を見せない）
-      if (done.failed.length > 0) {
-        this.broadcast({ type: 'log', level: 'warn', text: `戻せなかったファイルがあります（掴まれている等）: ${done.failed.join(', ')}。その戻り先は一覧に残してあるので、少し置いてからもう一度戻してください` });
-      }
-      if (done.leftover) {
-        this.broadcast({ type: 'log', level: 'warn', text: `戻し終えた戻り先を一覧から片づけられませんでした（${done.leftover.length} 件）。一覧に残っていても、もう当ててあります。もう一度押すと、その後の直しを古い姿で上書きします` });
-      }
+      // 戻せなかった道と、片づけられなかった戻り先を黙らない（戻ったつもりで半分だけ戻った作業場を見せない）。
+      // log は既定の画面には出ないので、返事にも載せて押した画面が出す
+      const warnings = restoreWarnings(done, { withFailed: true });
+      for (const text of warnings) this.broadcast({ type: 'log', level: 'warn', text });
       /*
        * **戻したことを、開いている画面へ配る。**
        *
@@ -2293,7 +2290,7 @@ export class UiServer {
         });
       }
       this.broadcast({ type: 'undo' });
-      return send(res, 200, { paths: done.paths, points: done.points, failed: done.failed, ...(done.leftover ? { leftover: done.leftover } : {}) });
+      return send(res, 200, { paths: done.paths, points: done.points, failed: done.failed, warnings });
     }
 
     if (path === '/api/conversations/select' && req.method === 'POST') {

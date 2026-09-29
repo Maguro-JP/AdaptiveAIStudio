@@ -23,7 +23,7 @@ const { DEFAULT_CONFIG } = await import('../src/config.ts');
 const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
 
 /** fs/promises の `name` を、道が `hit` に当たるときだけ EACCES で失敗させて `fn` を回す。 */
-async function failing<T>(name: 'readdir' | 'stat', hit: (p: string) => boolean, fn: () => Promise<T>): Promise<T> {
+async function failing<T>(name: 'readdir' | 'stat' | 'unlink', hit: (p: string) => boolean, fn: () => Promise<T>): Promise<T> {
   const real = fsp[name] as (...a: unknown[]) => Promise<unknown>;
   (fsp as Record<string, unknown>)[name] = ((p: unknown, ...rest: unknown[]) => typeof p === 'string' && hit(p)
     ? Promise.reject(Object.assign(new Error(`EACCES: ${name} failed`), { code: 'EACCES' }))
@@ -81,5 +81,23 @@ describe('画面の口で、フォルダを見られないとき', () => {
     const body = await r.json() as { error?: string; created?: string };
     assert.equal(r.status, 409, `作ったと返した: ${JSON.stringify(body)}`);
     assert.match(body.error ?? '', /確かめられません/);
+  });
+
+  test('「戻す」で戻り先を消せなかったら、返事に知らせを載せる（既定の画面は log を出さない）', async () => {
+    const made = await fetch(`${base}/api/files/new`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: 'undo-me.txt', kind: 'file' }),
+    });
+    assert.equal(made.status, 200, await made.text());
+    const { list } = await (await fetch(`${base}/api/undo`)).json() as { list: { id: string; paths: string[] }[] };
+    const point = list.find((p) => p.paths.includes('undo-me.txt'));
+    assert.ok(point, JSON.stringify(list));
+    const r = await failing('unlink', (p) => p.endsWith(`${point.id}.json`), () => fetch(`${base}/api/undo`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: point.id }),
+    }));
+    const body = await r.json() as { warnings?: string[] };
+    assert.equal(r.status, 200, JSON.stringify(body));
+    assert.match((body.warnings ?? []).join('\n'), /消せませんでした/, `知らせを返さなかった: ${JSON.stringify(body)}`);
   });
 });

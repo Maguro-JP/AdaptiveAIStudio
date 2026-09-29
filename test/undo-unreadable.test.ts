@@ -122,6 +122,31 @@ describe('当て終えた戻り先を片づけられないとき', () => {
     assert.deepEqual(done?.leftover, [point.id], '片づけられなかったことを黙った');
   });
 
+  test('別の所が先に消していた（ENOENT）ときは、片づいたと数える', async () => {
+    const root = await tempDir('aas-undo-gone-');
+    const state = await tempDir('aas-undo-gone-state-');
+    const dir = join(state, 'undo');
+    const undo = new UndoStore(root, dir);
+    await writeFile(join(root, 'a.txt'), 'v1\n');
+    await undo.begin('一回目');
+    undo.capture('a.txt', 'v1\n');
+    await writeFile(join(root, 'a.txt'), 'v2\n');
+    const point = (await undo.end())!;
+    const file = join(dir, `${point.id}.json`);
+    const real = fsp.unlink;
+    (fsp as { unlink: unknown }).unlink = ((p: unknown, ...rest: unknown[]) => p === file
+      ? Promise.reject(Object.assign(new Error('ENOENT: gone'), { code: 'ENOENT' }))
+      : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as never;
+    syncBuiltinESMExports();
+    try {
+      const done = await undo.restore(point.id);
+      assert.equal(done?.leftover, undefined, '先に消えていたのを、片づけられなかったと言った');
+    } finally {
+      (fsp as { unlink: unknown }).unlink = real;
+      syncBuiltinESMExports();
+    }
+  });
+
   test('片づけられたときは、何も返さない（対）', async () => {
     const root = await tempDir('aas-undo-tidy-');
     const undo = new UndoStore(root, join(await tempDir('aas-undo-tidy-state-'), 'undo'));

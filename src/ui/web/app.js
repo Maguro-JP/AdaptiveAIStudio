@@ -1291,7 +1291,10 @@ async function loadUndo() {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ id: p.id }),
         });
-        if (!r.ok) alert((await r.json()).error ?? '戻せませんでした');
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) alert(body.error ?? '戻せませんでした');
+        // 戻せたが、言わなければいけないことがある（戻せなかったファイル・片づけられなかった戻り先）
+        else if (Array.isArray(body.warnings) && body.warnings.length > 0) alert(body.warnings.join('\n\n'));
       } finally {
         back.disabled = false;
         await loadUndo();

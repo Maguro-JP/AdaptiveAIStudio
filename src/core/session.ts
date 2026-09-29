@@ -67,7 +67,7 @@ import { snapshotTests, compareTests } from '../agent/test-integrity.ts';
 import { workspaceStamp, stampChanges } from '../agent/workspace-stamp.ts';
 import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
-import { UndoStore } from './undo.ts';
+import { UndoStore, restoreWarnings } from './undo.ts';
 import { OutsideChanges } from '../agent/outside-changes.ts';
 import { AckStore, type AckId } from './acks.ts';
 import { fitParts } from './prompt-budget.ts';
@@ -966,9 +966,8 @@ export class Session {
           yield { type: 'log', level: 'warn', text: `確かめて落ちましたが、自動では戻せませんでした（${tried.message}）。「戻す」から選んでください` };
         }
         const done = tried instanceof Error ? undefined : tried;
-        if (done?.leftover) {
-          yield { type: 'log', level: 'warn', text: `自動で戻しましたが、戻し終えた戻り先を一覧から片づけられませんでした（${done.leftover.length} 件）。一覧に残っていても、もう当ててあります。もう一度押すと、その後の直しを古い姿で上書きします` };
-        }
+        // 戻せなかった道は notRestored で出すので、ここでは片づけの失敗だけを言う
+        for (const text of done ? restoreWarnings(done) : []) yield { type: 'log', level: 'warn', text: `自動で戻しましたが、${text}` };
         const notRestored = [...new Set([...this.undo.peekSkipped(), ...(done?.failed ?? [])])].sort();
         rolledBack = done?.paths ?? [];
         if (rolledBack.length > 0 || notRestored.length > 0) {
