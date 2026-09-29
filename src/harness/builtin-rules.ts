@@ -5,7 +5,7 @@
  * プロンプトで禁じるのではなく、実行の手前で止める。
  */
 import { isWriteTool, isExternalTool, mayWriteFiles, plannedContent } from '../agent/tools/write-kind.ts';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, lstat } from 'node:fs/promises';
 import { relative, isAbsolute } from 'node:path';
 import { minimatch } from './glob.ts';
 import { safeResolve } from '../agent/tools/paths.ts';
@@ -102,11 +102,15 @@ export const testProtection: Rule = {
   async pre(call, ctx) {
     if (!isWriteTool(call.name)) return allow;
     const path = argString(call, 'path');
+    if (!path || !isTestFile(path)) return allow;
     // **当ててから見る。**edit_file は引数に「後の姿」が入っていない。
     // 引数だけ見ていると、部分置換でテストを消すのを素通りさせる。
-    const content = await plannedContent(call.name, call.args, ctx.root);
-    if (!path || content === undefined) return allow;
-    if (!isTestFile(path)) return allow;
+    const content = await plannedContent(call.name, call.args, ctx.root).catch((e: unknown) => e as Error);
+    // 読めなくて当てられないのを「後の姿が分からない」と読んで通さない
+    if (content instanceof Error) {
+      return deny(`${path} を読めないので、テストが減らないかを確かめられません（${(content as NodeJS.ErrnoException).code ?? content.message}）。少し待ってからやり直してください。`);
+    }
+    if (content === undefined) return allow;
 
     const abs = safeResolve(ctx.root, path);
     if (!abs) return allow; // 範囲外は別の規則が止める
@@ -201,8 +205,12 @@ export const readBeforeWrite: Rule = {
 
     const abs = safeResolve(ctx.root, path);
     if (!abs) return allow;
-    const exists = (await stat(abs).catch(() => undefined)) !== undefined;
-    if (!exists) return allow; // 新規作成は読みようがない
+    // 新規作成は読みようがない。**見られないのを「無い」と読まない。**読むと、在るファイルを読まずに全文で上書きさせる
+    const seen = await lstat(abs).then(() => 'there' as const, (e: unknown) => (isAbsent(e) ? 'absent' as const : e as Error));
+    if (seen === 'absent') return allow;
+    if (seen instanceof Error) {
+      return deny(`${path} を見られないので、読んだかを確かめられません（${(seen as NodeJS.ErrnoException).code ?? seen.message}）。少し待ってからやり直してください。`);
+    }
 
     /** 一部だけを読んだ呼び出しか。 */
     const partial = (c: ToolCall): boolean => hasArg(c, 'offset') || hasArg(c, 'limit');

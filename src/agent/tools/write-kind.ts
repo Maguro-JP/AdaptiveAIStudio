@@ -10,6 +10,7 @@
  * だから、増やす前にここへ集める。
  */
 import { readFile } from 'node:fs/promises';
+import { isAbsent } from '../../harness/put-back.ts';
 import { safeResolve } from './paths.ts';
 
 /** ファイルを書き換える道具。**増やすときは、必ずここに足す。** */
@@ -111,8 +112,15 @@ export async function plannedContent(
   if (!path) return undefined;
   const abs = safeResolve(root, path);
   if (!abs) return undefined;
-  const before = await readFile(abs, 'utf8').catch(() => undefined);
-  if (before === undefined) return undefined;
+  // 無いファイルへの edit は後の姿が決まらない（undefined）。**在るのに読めないのは投げる。**「分からない」として返すと、
+  // 規則は後の姿が分からないものを通すので、読めない一瞬にテストを消す edit が素通りする
+  let before: string;
+  try {
+    before = await readFile(abs, 'utf8');
+  } catch (e) {
+    if (isAbsent(e)) return undefined;
+    throw e;
+  }
 
   /*
    * **並べて渡された直しも、当ててから見る。**
