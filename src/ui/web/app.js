@@ -1965,6 +1965,8 @@ async function loadCfg() {
   const c = await getJson('/api/config', { signal: AbortSignal.timeout(15000) }).catch((e) => ({ failed: String(e.message ?? e) }));
   // **黙って空欄にしない。**選択肢が一つも無い画面を出されても、
   // 利用者には何が起きたのか分からない（実際にそう出た）。
+  // 読めなかったときは保存させない。見えている保存先は空欄（読めていない）なので、押すと決めてある保存先を消す
+  $('cfgSave').disabled = Boolean(!c || c.failed || c.error);
   if (!c || c.failed || c.error) {
     $('cfgNote').style.whiteSpace = 'pre-line';
     $('cfgNote').textContent = `設定を読めませんでした。\n${c?.failed ?? c?.error ?? '理由が取れませんでした'}\n`
