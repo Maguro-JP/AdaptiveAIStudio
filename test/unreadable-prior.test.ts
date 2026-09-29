@@ -65,6 +65,14 @@ describe('git から前の中身を取れないとき', () => {
     assert.deepEqual(await headContent(notRepo, 'a.txt', 1024), { kind: 'unavailable', why: 'unreadable' },
       'git が落ちたのを「HEAD に無い」と読んだ');
   });
+
+  test('まだ一度もコミットしていないリポジトリでは、HEAD に何も無いので「無い」', async () => {
+    const root = join(await tempDir('aas-unreadable-head-fresh-'), 'repo');
+    await mkdir(root, { recursive: true });
+    git(root, 'init', '-q');
+    await writeFile(join(root, 'new.txt'), 'new\n');
+    assert.deepEqual(await headContent(root, 'new.txt', 1024), { kind: 'absent' }, '作ったばかりのファイルを戻せない形にした');
+  });
 });
 
 describe('外のツールの前に、変わっていたファイルを stat できないとき', () => {

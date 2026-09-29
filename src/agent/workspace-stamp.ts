@@ -143,7 +143,13 @@ export async function headContent(root: string, relPath: string, maxBytes: numbe
   const entry = await gitOut(['ls-tree', '-l', '-z', 'HEAD', '--', `./${relPath}`], root);
   // **git が落ちたのを「無い」と読まない。**HEAD に無い道は、正常に終わって空を返す。落ちた（索引の錠の取り合い・起動の失敗）
   // のを「無い」と読むと、HEAD に在るファイルを「前は無かった」と記録し、戻すときに消していた
-  if (entry === undefined) return { kind: 'unavailable', why: 'unreadable' };
+  if (entry === undefined) {
+    // まだ一度もコミットしていないリポジトリは HEAD が無く、ls-tree は落ちる。そこでは何も HEAD に無いので「無い」。
+    // git そのものは動いて HEAD だけ無いと確かめられたときに限る（git が動かないのを「無い」と読まない）
+    const gitDir = await gitOut(['rev-parse', '--git-dir'], root);
+    const head = await gitOut(['rev-parse', '--verify', '-q', 'HEAD'], root);
+    return gitDir !== undefined && head === undefined ? { kind: 'absent' } : { kind: 'unavailable', why: 'unreadable' };
+  }
   if (entry === '') return { kind: 'absent' };
   const m = /^(\d{6}) (\w+) [0-9a-f]+ +(\d+|-)\t/.exec(entry);
   // 読めない形で返ってきたものも「無い」と読まない
