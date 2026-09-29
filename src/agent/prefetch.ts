@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { inspectGit, type GitState } from './git.ts';
 import { toDisplayPath } from './tools/paths.ts';
 import { canRun } from '../core/which.ts';
+import { isAbsent } from '../harness/put-back.ts';
 
 export interface ProjectSnapshot {
   /** ファイル一覧（作業ディレクトリからの相対パス） */
@@ -44,6 +45,8 @@ export class Prefetcher {
   readonly #can: (command: string) => boolean;
   #inFlight?: Promise<ProjectSnapshot>;
   #snapshot?: ProjectSnapshot;
+  /** 動かし方だけを調べ直している途中。重ねて走らせない。 */
+  #commandsRetry?: Promise<void>;
 
   constructor(root: string, onEvent?: (e: PrefetchEvent) => void, can: (command: string) => boolean = canRun) {
     this.#root = root;
@@ -84,7 +87,12 @@ export class Prefetcher {
    * 上限を超えたら諦めて先へ進む（構築自体は裏で続く）。
    */
   async snapshotWithin(ms: number): Promise<ProjectSnapshot | undefined> {
-    if (this.#snapshot) return this.#snapshot;
+    if (this.#snapshot) {
+      // 動かし方（package.json など）だけ調べられていなければ、そこだけ調べ直す（ファイルの一覧は作り直さない）。
+      // 調べられないまま覚えていると、作り直すまで「確かめのコマンドが無い」と同じ顔のまま、確かめないで済ませていた
+      if (!this.#snapshot.ready.includes('commands')) await this.#retryCommands(this.#snapshot, ms);
+      return this.#snapshot;
+    }
     if (!this.#inFlight) return undefined;
 
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -93,6 +101,24 @@ export class Prefetcher {
     });
     try {
       return await Promise.race([this.#inFlight, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** 動かし方だけを調べ直し、調べられたら覚えている下調べへ書き足す。上限つきで待つ（調べ直しは裏で続く）。 */
+  async #retryCommands(snap: ProjectSnapshot, ms: number): Promise<void> {
+    this.#commandsRetry ??= this.#detectProject().then((p) => {
+      // 待つ間に作り直されていたら書き足さない（新しい回が自分で調べる）
+      if (this.#snapshot !== snap) return;
+      snap.commands = p.commands;
+      snap.kind = p.kind;
+      if (!snap.ready.includes('commands')) snap.ready.push('commands');
+    }, () => undefined).finally(() => { this.#commandsRetry = undefined; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); });
+    try {
+      await Promise.race([this.#commandsRetry, timeout]);
     } finally {
       clearTimeout(timer);
     }
@@ -179,7 +205,13 @@ export class Prefetcher {
     const exists = async (name: string) =>
       (await stat(join(this.#root, name)).catch(() => undefined)) !== undefined;
 
-    const pkgRaw = await readFile(join(this.#root, 'package.json'), 'utf8').catch(() => undefined);
+    // 読めない package.json を「無い」と読まない（投げる）。読むと「確かめのコマンドが無い」と覚え、確かめないまま済ませていた
+    let pkgRaw: string | undefined;
+    try {
+      pkgRaw = await readFile(join(this.#root, 'package.json'), 'utf8');
+    } catch (e) {
+      if (!isAbsent(e)) throw e;
+    }
     if (pkgRaw) {
       let scripts: Record<string, unknown> = {};
       try {

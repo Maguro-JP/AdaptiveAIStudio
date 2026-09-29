@@ -134,3 +134,27 @@ describe('繋いだものを外す', () => {
     }
   });
 });
+describe('保存してある設定を読めないとき', () => {
+  test('既定の保存先を返さず、読めないと言う（画面が既定を送り返して、決めた保存先を上書きしないように）', async () => {
+    const { at } = await configAt(JSON.stringify({ runtime: { kind: 'inproc', modelsDir: '/d/models' } }));
+    // 読めなさは、設定の場所にフォルダを置いて作る（権限に頼らない）
+    const { rm } = await import('node:fs/promises');
+    await rm(at);
+    await mkdir(at);
+    await assert.rejects(readSavedRuntime(), /設定.*を読めません/);
+    const s = new UiServer({ port: 0, config: loadConfig().config });
+    const base = (await s.start()).replace(/\/$/, '');
+    try {
+      const body = await (await fetch(`${base}/api/config`)).json() as { error?: string; gguf?: unknown[]; modelsDir?: string };
+      assert.match(body.error ?? '', /読めません/, `読めないのに設定を返した: ${JSON.stringify(body)}`);
+      assert.deepEqual(body.gguf, [], 'モデルを切り替える口を出した（押すと既定の保存先を書き戻す）');
+    } finally {
+      await s.stop();
+    }
+  });
+
+  test('無いだけなら空（まだ保存していない）', async () => {
+    await configAt();
+    assert.deepEqual(await readSavedRuntime(), {});
+  });
+});

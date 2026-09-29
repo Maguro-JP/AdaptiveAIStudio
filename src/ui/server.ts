@@ -3150,7 +3150,8 @@ export class UiServer {
      * 保存した方と食い違っているなら、それを先に言う。
      */
     const liveDir = this.#opts.config.runtime?.modelsDir ?? modelsDir();
-    const savedKind = String((await readSavedRuntime()).kind ?? kind);
+    // 理由を書くためだけに読む。読めなければ、いま動いている方を言う
+    const savedKind = String((await readSavedRuntime().catch(() => ({} as Record<string, unknown>))).kind ?? kind);
     const savedDir = await savedModelsDir().catch(() => liveDir);
     if (savedKind !== kind || savedDir !== liveDir) {
       const ready = savedKind !== 'inproc' || (await listGguf(savedDir).catch(() => [])).length > 0;

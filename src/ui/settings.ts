@@ -11,6 +11,7 @@ import { inOrder } from '../core/in-order.ts';
 import { dirname } from 'node:path';
 import { configPath } from '../config.ts';
 import { modelsDir } from '../core/home.ts';
+import { isAbsent } from '../harness/put-back.ts';
 
 /**
  * 動かし方。**先頭が既定。**
@@ -83,10 +84,23 @@ async function writeConfig(at: string, value: Record<string, unknown>): Promise<
   }
 }
 
-/** 保存してある設定の runtime だけを読む。無ければ空。 */
+/**
+ * 保存してある設定の runtime だけを読む。無ければ空。**読めなければ投げる。**
+ *
+ * 読めないのを空と読むと、画面に既定の保存先を見せ、画面はモデルを切り替えるたびにそれを送り返すので、
+ * 利用者が決めた保存先（D:\models など）を黙って既定へ書き戻していた（立ち上げ直すと「モデルが無い」になる）。
+ * 形の壊れた設定は空とする（書く側は厳しく読み直して断るので、上書きはしない）。
+ */
 export async function readSavedRuntime(): Promise<Record<string, unknown>> {
+  let text: string;
   try {
-    const raw = JSON.parse((await readFile(configPath(), 'utf8')).replace(/^\uFEFF/, '')) as Record<string, unknown>;
+    text = await readFile(configPath(), 'utf8');
+  } catch (e) {
+    if (isAbsent(e)) return {};
+    throw new Error(`設定（${configPath()}）を読めません（${(e as Error).message}）。少し待ってから開き直してください`);
+  }
+  try {
+    const raw = JSON.parse(text.replace(/^\uFEFF/, '')) as Record<string, unknown>;
     return (raw.runtime as Record<string, unknown>) ?? {};
   } catch {
     return {};

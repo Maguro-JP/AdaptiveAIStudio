@@ -1304,6 +1304,10 @@ export class Session {
     const configured = this.config.agent?.verify?.command;
     if (configured) return configured;
     const snap = await this.#prefetch.snapshotWithin(2000);
+    // 動かし方（package.json など）を読めなかった。「確かめのコマンドが無い」と同じ顔をさせない（次の依頼で調べ直す）
+    if (snap && !snap.ready.includes('commands')) {
+      this.#opts.onLog?.('warn', 'この作業場の動かし方（package.json など）を読めなかったので、今回は確かめられません。次の依頼で読み直します');
+    }
     // **`check` があるなら、そちらを先に。**`npm test` は型を見ないことが多い。
     // この作業場自身が、型のずれを 30 件溜めてから気づいた。
     return snap?.commands.check ?? snap?.commands.test;
