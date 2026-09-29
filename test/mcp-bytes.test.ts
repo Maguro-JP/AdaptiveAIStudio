@@ -102,3 +102,28 @@ describe('返事をしない相手の呼び出しを、止めたら待たない'
     assert.deepEqual(seen.cancelled, [seen.hung], `取り消しが届いていない、または違う id: ${JSON.stringify(seen)}`);
   });
 });
+
+describe('相手の入力が閉じていても、こちらは落ちない', () => {
+  test('相手が標準入力を閉じたまま生きているとき、呼び出しは失敗として返る（EPIPE を受け手の無い失敗にしない）', async () => {
+    const c = client(['-e', `
+      const { createInterface } = require('node:readline');
+      const { closeSync } = require('node:fs');
+      setInterval(() => {}, 1000); // 生き続ける（exit の知らせで片づく道を通らせない）
+      const rl = createInterface({ input: process.stdin });
+      rl.on('line', (line) => {
+        const msg = JSON.parse(line);
+        const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+        if (msg.method === 'initialize') say({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18' } });
+        else if (msg.method === 'tools/list') {
+          say({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'x' }] } });
+          rl.close(); process.stdin.destroy(); try { closeSync(0); } catch {}
+        }
+      });
+    `]);
+    assert.equal(await c.start(), true, `立ち上がらなかった: ${c.failure}`);
+    await new Promise((r) => setTimeout(r, 300));
+    const got = await c.call('x', {}, 5_000);
+    assert.equal(got.isError, true);
+    assert.match(got.text, /送れませんでした.*EPIPE/);
+  });
+});

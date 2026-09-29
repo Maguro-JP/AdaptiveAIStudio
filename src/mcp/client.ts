@@ -226,6 +226,8 @@ export class McpClient {
     });
     this.#child.stdout?.on('data', (b: Buffer) => { this.#onData(this.#decoder.write(b)); });
     this.#child.on('error', (e) => { this.#fail(`落ちました: ${e.message}`); });
+    // 相手が終わった直後（exit を受ける前）に書くと EPIPE になる。聞き手が無いと、受け手の無い失敗でこちらごと落ちる
+    this.#child.stdin?.on('error', (e) => { this.#fail(`送れませんでした: ${e.message}`); });
     this.#child.on('exit', (code) => {
       // 待っている呼び出しを放置しない。相手が消えたら、待ち手も終わらせる。
       this.#fail(`終了しました（コード ${code ?? '不明'}）${stderr ? `\n${stderr.trim()}` : ''}`);
@@ -336,12 +338,13 @@ export class McpClient {
     }
   }
 
-  #send(payload: unknown): void {
+  /** `optional` の知らせ（取り消し）は、届かなくても失敗にしない。失敗にすると、同じ相手に出しているほかの呼び出しまで落ちる。 */
+  #send(payload: unknown, optional = false): void {
     if (this.#http) {
       // 送れなかったことは、待っている呼び出しの側で（上限で）分かる。
       // ここで投げっぱなしにすると、拾い手が居ないままプロセスが落ちる。
-      void this.#post(payload).catch((e: unknown) => {
-        this.#fail(`送れませんでした: ${e instanceof Error ? e.message : String(e)}`);
+      void this.#post(payload, optional).catch((e: unknown) => {
+        if (!optional) this.#fail(`送れませんでした: ${e instanceof Error ? e.message : String(e)}`);
       });
       return;
     }
@@ -397,9 +400,10 @@ export class McpClient {
    *
    * 相手は JSON でも、流れ（SSE）でも返してくる。どちらも同じ形に均す。
    */
-  async #post(payload: unknown): Promise<void> {
+  async #post(payload: unknown, optional = false): Promise<void> {
     const http = this.#http;
     if (!http) return;
+    const fail = (reason: string) => { if (!optional) this.#fail(reason); };
     let res: Response;
     try {
       res = await fetch(http.url, {
@@ -414,7 +418,7 @@ export class McpClient {
         ...(this.#abort ? { signal: this.#abort } : {}),
       });
     } catch (e) {
-      this.#fail(`繋がりません: ${(e as Error).message}`);
+      fail(`繋がりません: ${(e as Error).message}`);
       return;
     }
     // 繋ぎの名前をもらったら、以後は付けて出す。付けないと毎回名乗り直しになる。
@@ -424,7 +428,7 @@ export class McpClient {
     if (res.status === 202 || res.status === 204) return; // 知らせだけ。返事は無い
     if (!res.ok) {
       const body = await res.text().catch(() => '');
-      this.#fail(`${res.status} ${res.statusText}${body ? `: ${body.slice(0, 300)}` : ''}`);
+      fail(`${res.status} ${res.statusText}${body ? `: ${body.slice(0, 300)}` : ''}`);
       return;
     }
 
@@ -463,8 +467,8 @@ export class McpClient {
     }
   }
 
-  #notify(method: string, params: unknown): void {
-    this.#send({ jsonrpc: '2.0', method, params });
+  #notify(method: string, params: unknown, optional = false): void {
+    this.#send({ jsonrpc: '2.0', method, params }, optional);
   }
 
   /**
@@ -478,7 +482,8 @@ export class McpClient {
       const onAbort = () => {
         if (!this.#pending.delete(id)) return;
         done();
-        this.#notify('notifications/cancelled', { requestId: id, reason: '利用者が止めました' });
+        // reason は相手の記録に残る機械向けの文。日本語を置かない
+        this.#notify('notifications/cancelled', { requestId: id, reason: 'cancelled by user' }, true);
         resolve(STOPPED);
       };
       const timer = setTimeout(() => {
