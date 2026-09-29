@@ -72,4 +72,26 @@ describe('Checkpoint.capture で前の中身を読めなかったとき', () => 
     await cp.restoreAll();
     assert.equal(await readFile(abs, 'utf8'), '最後\n', '途中の姿に戻した');
   });
+
+  test('途中がファイルで辿れない（ENOTDIR）のは「無い」として記録する', async () => {
+    const root = await tempDir('aas-cp-unreadable-');
+    const abs = join(root, 'd', 'a.txt');
+    const cp = new Checkpoint(root);
+    await unreadable(abs, 'ENOTDIR', () => cp.capture('d/a.txt'));
+    assert.deepEqual(cp.unrecorded(), [], '「無い」を記録できなかった道にしている');
+    assert.equal(cp.size, 1);
+  });
+
+  test('書き込めた道だけを、戻せない道として返す（綴りが違っても同じ道）', async () => {
+    const root = await tempDir('aas-cp-unreadable-');
+    const cp = new Checkpoint(root);
+    for (const name of ['a.txt', 'b.txt']) {
+      const abs = join(root, name);
+      await writeFile(abs, 'もと\n');
+      await unreadable(abs, 'EACCES', () => cp.capture(name));
+    }
+    assert.deepEqual(cp.unrecorded(), ['a.txt', 'b.txt']);
+    // b.txt は書けずに終わった。変えていない道まで「戻せなかった」と言わない
+    assert.deepEqual(cp.unrecorded(['./a.txt']), ['a.txt']);
+  });
 });

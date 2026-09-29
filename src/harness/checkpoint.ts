@@ -51,15 +51,27 @@ export class Checkpoint {
     try {
       bytes = await readFile(abs);
     } catch (e) {
-      // 「無い」だけが「前は無かった」。ほかの読めなさ（権限・掴まれている）は記録できなかったとして持つ
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') { this.#unrecorded.add(key); return; }
+      // 「無い」（途中がファイルで辿れない ENOTDIR も同じ）だけが「前は無かった」。
+      // ほかの読めなさ（権限・掴まれている）は記録できなかったとして持つ
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') { this.#unrecorded.add(key); return; }
     }
     this.#saved.set(key, { path: key, content: bytes === undefined ? undefined : contentOf(bytes) });
   }
 
-  /** 前の中身を読めず、戻せない道。巻き戻しでは触らない。 */
-  unrecorded(): string[] {
-    return [...this.#unrecorded].sort();
+  /**
+   * 前の中身を読めず、戻せない道。巻き戻しでは触らない。
+   * `changed` を渡すと、その中にある道だけ（書き込めた道だけ）を返す。書けずに終わった道まで「戻せなかった」と言わない。
+   */
+  unrecorded(changed?: readonly string[]): string[] {
+    const keys = changed ? new Set(changed.map((p) => this.keyOf(p)).filter((k): k is string => k !== undefined)) : undefined;
+    return [...this.#unrecorded].filter((k) => !keys || keys.has(k)).sort();
+  }
+
+  /** 記録に使う鍵（綴りをそろえた道）。作業場の外なら undefined。 */
+  keyOf(relPath: string): string | undefined {
+    const abs = safeResolve(this.#root, relPath);
+    return abs ? toDisplayPath(this.#root, abs) : undefined;
   }
 
   /**
