@@ -39,7 +39,7 @@ import { join, dirname, extname, normalize, resolve as resolvePath, relative, is
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { AckStore, ACK_TEXT, isAckId } from '../core/acks.ts';
-import { contentOf } from '../harness/put-back.ts';
+import { contentOf, readPrior } from '../harness/put-back.ts';
 import { aasHome, binDir, modelsDir, isPortable, productRoot, installRoot, defaultWorkRoot } from '../core/home.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { LogFile } from '../core/logfile.ts';
@@ -1815,7 +1815,13 @@ export class UiServer {
       if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから保存してください' });
       }
-      const beforeBytes = await readFile(real).catch(() => undefined);
+      let beforeBytes: Buffer | undefined;
+      try {
+        beforeBytes = await readPrior(real);
+      } catch (e) {
+        // 在るのに読めないものを「新しいファイル」として書かない。「戻す」に「前は無かった」と残り、戻すと消していた
+        return send(res, 409, { error: `いまの中身を読めないので、保存しません（${(e as Error).message}）` });
+      }
       const beforeContent = beforeBytes === undefined ? undefined : contentOf(beforeBytes);
       // utf8 でないファイルには書かない（開く口が断っているので、ここへ来るのは画面を通らない呼び出しだけ）。
       if (beforeContent !== undefined && typeof beforeContent !== 'string') {
@@ -1928,7 +1934,12 @@ export class UiServer {
       if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから戻してください' });
       }
-      const currentBytes = await readFile(real).catch(() => undefined);
+      let currentBytes: Buffer | undefined;
+      try {
+        currentBytes = await readPrior(real);
+      } catch (e) {
+        return send(res, 409, { error: `いまの中身を読めないので、戻しません（${(e as Error).message}）` });
+      }
       if (currentBytes === undefined) return send(res, 404, { error: 'そのファイルはもうありません' });
       const current = contentOf(currentBytes);
       // utf8 でないファイルを文字として書き戻すと、戻した行の外まで化けた字になる。
@@ -2908,7 +2919,9 @@ export class UiServer {
        * AI の書き換えを黙って上書きし、「戻す」の記録も古い中身になる。違っていれば書かずに断る
        * （今の中身を添えて、画面でどちらを残すか選ばせる。保存の口の stamp の断りと同じ形）。
        */
-      const nowBytes = await readFile(real).catch(() => undefined);
+      const nowBytes = await readPrior(real).catch((e: unknown) => {
+        throw new HandWriteRefused(`いまの中身を読めないので、保存しません（${(e as Error).message}）`, 409);
+      });
       const now = nowBytes === undefined ? undefined : contentOf(nowBytes);
       if (now !== before) {
         // 消えていた・文字でなくなっていたときは、そう言う（画面は「AI の版」を出せない）。

@@ -7,7 +7,7 @@ import { safeResolve, realSafeResolve, isSymlink, toDisplayPath } from './paths.
 import { type Tool, type ToolContext, ok, fail, requireString, optionalPositiveInt } from './types.ts';
 import { applyEdit, nearestTo } from './write-kind.ts';
 import { Ignores } from '../ignore.ts';
-import { contentOf, type FileContent } from '../../harness/put-back.ts';
+import { contentOf, readPrior, type FileContent } from '../../harness/put-back.ts';
 import { decodeForReading } from './decode.ts';
 
 /**
@@ -381,12 +381,20 @@ async function commit(
   let priorBytes: Buffer | undefined;
   let prior: FileContent | undefined;
   try {
-    priorBytes = await readFile(abs);
+    priorBytes = await readPrior(abs);
+  } catch (e) {
+    /*
+     * **読めないファイルに書かない。**「無い」以外の読めなさ（権限・掴まれている）を「新しく作る」と取り違えていた。
+     * 承認には新規作成の差分を見せ、「戻す」には「前は無かった」と記録するので、戻すと元のファイルを消していた。
+     */
+    return fail(`${shown} を読めません（${describe(e)}）。前の中身を記録できないので、書きません`);
+  }
+  if (priorBytes === undefined) {
+    created = true;
+  } else {
     prior = contentOf(priorBytes);
     // 差分に出すための文字。utf8 で読めないものは中身の代わりに大きさだけ見せる（化けた差分を見せない）。
     before = typeof prior === 'string' ? prior : `${opaqueLine(priorBytes.length)}\n`;
-  } catch {
-    created = true;
   }
   const opaque = prior !== undefined && typeof prior !== 'string';
 
@@ -425,8 +433,10 @@ async function commit(
      * 変わっていたら書かない。読み直してから、と返す。
      */
     // バイト列で比べる。文字にしてから比べると、utf8 で読めないものは違う中身でも同じに見える。
-    const nowOnDisk = await readFile(abs).catch(() => undefined);
-    const same = created ? nowOnDisk === undefined : nowOnDisk !== undefined && priorBytes!.equals(nowOnDisk);
+    // 読めなくなったのも「変わった」側に倒す（「無い」と取り違えると、作る回で読めない中身を上書きする）
+    const nowOnDisk = await readPrior(abs).catch(() => null);
+    const same = nowOnDisk !== null
+      && (created ? nowOnDisk === undefined : nowOnDisk !== undefined && priorBytes!.equals(nowOnDisk));
     if (!same) {
       return fail(`待っているあいだに ${shown} が変わりました。`
         + '読み直してから、もう一度書いてください（いまの中身は消していません）');
@@ -575,7 +585,13 @@ export const editFileTool: Tool = {
       return fail(`リンク越しには書きません: ${p}（実体を直接指定してください）`);
     }
 
-    const bytes = await readFile(abs).catch(() => undefined);
+    let bytes: Buffer | undefined;
+    try {
+      bytes = await readPrior(abs);
+    } catch (e) {
+      // 在るのに読めないものを「まだありません」と言わない（write_file で作り直させる方へ誘う）
+      return fail(`${p} を読めません（${describe(e)}）。何も書いていません`);
+    }
     if (bytes === undefined) {
       return fail(`まだありません: ${p}（新しく作るなら write_file を使ってください）`);
     }

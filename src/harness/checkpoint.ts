@@ -8,9 +8,8 @@
  * git があるならそちらが本来の安全網。これは git 管理外や
  * 未コミット状態でも巻き戻せるようにする補助。
  */
-import { readFile } from 'node:fs/promises';
 import { safeResolve, toDisplayPath } from '../agent/tools/paths.ts';
-import { putBack, putBackOrder, contentOf, type FileContent } from './put-back.ts';
+import { putBack, putBackOrder, contentOf, readPrior, type FileContent } from './put-back.ts';
 
 interface Saved {
   path: string;
@@ -49,12 +48,12 @@ export class Checkpoint {
     // バイト列で読む。二進を utf8 として読むと、戻すときに別の中身を書く。
     let bytes: Buffer | undefined;
     try {
-      bytes = await readFile(abs);
-    } catch (e) {
-      // 「無い」（途中がファイルで辿れない ENOTDIR も同じ）だけが「前は無かった」。
+      // 「無い」（途中がファイルで辿れない ENOTDIR も同じ）だけが「前は無かった」
+      bytes = await readPrior(abs);
+    } catch {
       // ほかの読めなさ（権限・掴まれている）は記録できなかったとして持つ
-      const code = (e as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT' && code !== 'ENOTDIR') { this.#unrecorded.add(key); return; }
+      this.#unrecorded.add(key);
+      return;
     }
     this.#saved.set(key, { path: key, content: bytes === undefined ? undefined : contentOf(bytes) });
   }

@@ -14,7 +14,7 @@
  * 前の中身は、utf8 で往復する文字なら文字列、往復しないもの（png、Shift_JIS の文書）はバイト列で持つ。
  * 二進を utf8 として読んで持つと U+FFFD に置き換わり、戻すと別の中身になる。
  */
-import { lstat, unlink, rmdir, mkdir, writeFile } from 'node:fs/promises';
+import { lstat, unlink, rmdir, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { safeResolve, realSafeResolve } from '../agent/tools/paths.ts';
 
@@ -27,6 +27,27 @@ export type FileContent = string | Buffer;
 export function contentBytes(content: FileContent | undefined): number {
   if (content === undefined) return 0;
   return typeof content === 'string' ? Buffer.byteLength(content) : content.length;
+}
+
+/** 「無い」ことを言う失敗か（途中がファイルで辿れない ENOTDIR も、道そのものが無い）。 */
+export function isAbsent(e: unknown): boolean {
+  const code = (e as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+/**
+ * 書く前の中身を読む。**「無い」だけを undefined にし、ほかの読めなさ（権限・掴まれている）は投げる。**
+ *
+ * 読めない理由を問わず undefined にしていたので、元から在るファイルを「前は無かった」と記録し、
+ * 巻き戻し・「戻す」でそのファイルを消していた。
+ */
+export async function readPrior(abs: string): Promise<Buffer | undefined> {
+  try {
+    return await readFile(abs);
+  } catch (e) {
+    if (isAbsent(e)) return undefined;
+    throw e;
+  }
 }
 
 /**
