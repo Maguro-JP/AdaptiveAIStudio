@@ -225,7 +225,8 @@ async function fetchInto(a: {
   // 見られない（掴まれている）のを「無い」と読まない。読むと、取れていた数 GB を空にしてゼロから取り直していた
   const had = await stat(tmp).then((st) => st.size).catch((e: unknown) => {
     if (isAbsent(e)) return 0;
-    throw new Error(`途中まで取ったファイル（${tmp}）を見られません（${(e as Error).message}）。消さずに残してあります。少し置いてからもう一度取ってください`);
+    // 理由は符丁（EBUSY 等）で言う。stat の文は同じ道をもう一度含む長い英文になる
+    throw new Error(`途中まで取ったファイル（${tmp}）を見られません（${(e as NodeJS.ErrnoException).code ?? (e as Error).message}）。消さずに残してあります。少し置いてからもう一度取ってください`);
   });
   if (had > 0) log(`途中まで取れています（${human(had)}）。続きから取ります。`);
 

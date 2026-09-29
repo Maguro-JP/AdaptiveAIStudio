@@ -112,7 +112,8 @@ export class UnfinishedWork {
     open: Unfinished[]; canceled: Map<string, Unfinished>; canceledAt: Map<string, number>;
   }> {
     const raw = await this.#readText(this.#path).catch((e: NodeJS.ErrnoException) => {
-      if (opts.strict && e.code !== 'ENOENT') throw e;
+      // 無い（ENOENT・ENOTDIR）だけを空にする。ほかを空と読むと、回数を進める所で「諦めた」と取り違える
+      if (opts.strict && !isAbsent(e)) throw e;
       return '';
     });
     return parseLines(raw);

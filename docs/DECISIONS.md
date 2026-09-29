@@ -232,6 +232,7 @@
 - 会話の捨て場・戻り先のフォルダ・作業場の記録・テストを減らさない規則で、見られないのを「空」「無い」と読まない
 - 作業を止める・添付を外すの失敗も、画面が言う
 - Team の前後比べ・思いつきのテスト探し・片づけで、取れない・読めない・フォルダを取り違えない
+- 緩い読み方の数え方に .then の形を足し、やり残しの「無い」を ENOTDIR までそろえる
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -9986,3 +9987,16 @@ sweep の「会話を消す」に戻すと文の幅を足した。すぐ消す�
 - 試験: `test/team-wired.test.ts` に 2 件（投げた・比べられない）、`test/initiative.test.ts`・`test/cleanup.test.ts` に 1 件ずつ。どれも直す前の版で
   落ちることを見た
 触る場所: `src/core/team-setup.ts` の `finish`、`src/cli/team.ts`、`src/agent/initiative.ts` の `findLeads`、`src/runtime/cleanup.ts` の `findRemovable`
+
+## 2026-09-29  緩い読み方の数え方に .then の形を足し、やり残しの「無い」を ENOTDIR までそろえる
+
+読み直しで optional として残していた小さな件をまとめた。
+
+- `test/lenient-reads.test.ts`: `.then(() => true, () => false)` の二つ目の受け手で空の値を返す形も数える。新しく数えた 2 か所
+  （`preview.ts` の index.html の在る無し、`doctor.ts` の node-llama-cpp が入っているかの下調べ）は、見せるだけなので理由を付けて一覧に載せた
+- やり残し（`unfinished.ts` の `#read`）: 厳しく読む所で「無い」と見なすのが ENOENT だけで、ENOTDIR（記録を置くフォルダの所がファイルに
+  なっている）では投げていた。`isAbsent` にそろえる
+- 途中まで取ったモデルを見られないときの知らせ: 理由を符丁（EBUSY 等）で言う（添付を外すと同じ）
+- 試験: `test/unfinished.test.ts` に 1 件（ENOTDIR）。ENOENT だけを見る形に戻すと落ちることを見た。`.then` の形は、一覧に無いファイルに
+  一か所足すと落ちることを見た
+触る場所: `test/lenient-reads.test.ts` の `LENIENT`・`ALLOWED`、`src/core/unfinished.ts` の `#read`、`src/runtime/model-install.ts`
