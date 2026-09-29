@@ -268,14 +268,14 @@ export const PANELS = {
         x.onclick = async () => {
           attached.delete(id);
           drawTray();
-          // 依頼には添えなくなる（画面の預かりから外した）。預けた写しを消せたかは、返事を見て言う
+          // 依頼には添えなくなる（画面の預かりから外した）。預けたコピーを消せたかは、返事を見て言う
           try {
             const r = await fetch(`/api/attach?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
             const body = await r.json().catch(() => ({}));
-            if (!r.ok) note('warn', `「${item.name}」を外しましたが、預けた写しを消せたかを確かめられません（${body.error ?? r.status}）`);
-            else if (body.kept) note('warn', `「${item.name}」を外しましたが、預けた写しを消せませんでした（${body.kept}）。一日経つと、立ち上げたときに片づけます`);
+            if (!r.ok) note('warn', `「${item.name}」を外しましたが、預けたコピーを消せたかを確かめられません（${body.error ?? r.status}）`);
+            else if (body.kept) note('warn', `「${item.name}」を外しましたが、預けたコピーを消せませんでした（${body.kept}）。一日経つと、立ち上げたときに片づけます`);
           } catch (e) {
-            note('warn', `「${item.name}」を外しましたが、預けた写しを消せたかを確かめられません（繋がりません: ${e?.message ?? e}）`);
+            note('warn', `「${item.name}」を外しましたが、預けたコピーを消せたかを確かめられません（繋がりません: ${e?.message ?? e}）`);
           }
         };
         chip.append(x);
