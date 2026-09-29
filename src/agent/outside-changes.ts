@@ -27,7 +27,7 @@
  */
 import { readFile, stat } from 'node:fs/promises';
 import { workspaceStamp, stampChanges, headContent, type WorkspaceStamp } from './workspace-stamp.ts';
-import { contentOf, contentBytes, type FileContent } from '../harness/put-back.ts';
+import { contentOf, contentBytes, isAbsent, type FileContent } from '../harness/put-back.ts';
 import { safeResolve } from './tools/paths.ts';
 
 /** 一つの道につき、これより大きいものは記録しない（UndoStore と同じ 8MiB）。 */
@@ -85,7 +85,13 @@ export class OutsideChanges {
       if (this.#reported.has(path) || this.#kept.has(path) || this.#unrecorded.has(path)) continue;
       const abs = safeResolve(this.#root, path);
       if (!abs) continue;
-      const s = await stat(abs).catch(() => undefined);
+      let s: import('node:fs').Stats | undefined;
+      try {
+        s = await stat(abs);
+      } catch (e) {
+        // 「無い」だけが「前は無い」。ほかの読めなさ（権限・掴まれている）は記録できなかった道にする（戻すときに消さない）
+        if (!isAbsent(e)) { this.#unrecorded.add(path); continue; }
+      }
       if (!s || !s.isFile()) {
         // 消されている（` D`）か、ファイルでない。前は「無い」。
         if (!s || mark.endsWith(' -')) this.#kept.set(path, undefined);
