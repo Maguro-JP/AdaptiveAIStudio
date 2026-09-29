@@ -28,6 +28,11 @@ export interface IntegrityVerdict {
   ok: boolean;
   /** 利用者とモデルに見せる説明 */
   reason?: string;
+  /**
+   * 作業前に在ったテストを、後で読めなかった（`ok` は true のまま）。消えた・減ったとは言えないが、減っていないとも言えない。
+   * 呼ぶ側は合格にしない（作業がテストを見られなくして通す形を素通しにしない）。巻き戻す理由にもしない。
+   */
+  unsure?: string;
 }
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'target', '.venv']);
@@ -140,5 +145,13 @@ export function compareTests(before: TestSnapshot, after: TestSnapshot): Integri
     };
   }
 
+  const unseen = [...before.files.keys()].filter((f) => !after.files.has(f) && unknown(f));
+  if (unseen.length > 0) {
+    return {
+      ok: true,
+      unsure: `テストを読めませんでした: ${unseen.join(', ')}。減っていないとは言えないので、通ったとはみなしません。` +
+        '読めるようにしてから、もう一度確かめてください。',
+    };
+  }
   return { ok: true };
 }

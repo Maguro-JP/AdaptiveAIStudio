@@ -8,7 +8,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile, readdir } from 'node:fs/promises';
+import { readFile, writeFile, readdir, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tempDir } from './tmp.ts';
@@ -70,5 +70,37 @@ describe('読めない戻り先があるとき', () => {
     // 読めるようになれば戻せる
     await undo.restore(first.id);
     assert.equal(await readFile(abs, 'utf8'), 'v1\n');
+  });
+
+  test('選んだ戻り先より前に書かれた読めない戻り先（古い・別の作業場の記録）では止めない', async () => {
+    const root = await tempDir('aas-undo-unreadable-old-');
+    const state = await tempDir('aas-undo-unreadable-old-state-');
+    const dir = join(state, 'undo');
+    const undo = new UndoStore(root, dir);
+    const abs = join(root, 'a.txt');
+    await writeFile(abs, 'v1\n');
+    await undo.begin('一回目');
+    undo.capture('a.txt', 'v1\n');
+    await writeFile(abs, 'v2\n');
+    const point = (await undo.end())!;
+    // 古い記録（更新時刻を昔にする）を置き、読めなくする
+    const old = join(dir, 'uold.json');
+    await writeFile(old, '{}');
+    await utimes(old, new Date(2000, 0, 1), new Date(2000, 0, 1));
+    await failing('readFile', old, () => undo.restore(point.id));
+    assert.equal(await readFile(abs, 'utf8'), 'v1\n', '関係の無い古い記録で「戻す」が止まった');
+  });
+
+  test('選んだ戻り先そのものが読めないときは、「もう無い」ではなく「読めない」と言う', async () => {
+    const root = await tempDir('aas-undo-unreadable-self-');
+    const state = await tempDir('aas-undo-unreadable-self-state-');
+    const dir = join(state, 'undo');
+    const undo = new UndoStore(root, dir);
+    await writeFile(join(root, 'a.txt'), 'v1\n');
+    await undo.begin('一回目');
+    undo.capture('a.txt', 'v1\n');
+    await writeFile(join(root, 'a.txt'), 'v2\n');
+    const point = (await undo.end())!;
+    await assert.rejects(failing('readFile', join(dir, `${point.id}.json`), () => undo.restore(point.id)), /その戻り先を読めません/);
   });
 });

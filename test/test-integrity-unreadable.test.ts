@@ -48,14 +48,28 @@ describe('数え直しで読めなかったもの', () => {
     const before = await snapshotTests(root);
     const after = await failing('readFile', join(root, 'a.test.ts'), () => snapshotTests(root));
     assert.deepEqual([...(after.unreadable ?? [])], ['a.test.ts']);
-    assert.equal(compareTests(before, after).ok, true, '一瞬読めなかっただけのテストを「消された」と読んだ');
+    const verdict = compareTests(before, after);
+    assert.equal(verdict.ok, true, '一瞬読めなかっただけのテストを「消された」と読んだ');
+    // 減っていないとも言えないので、通ったとはみなさない（呼ぶ側はこれを合格にしない）
+    assert.match(verdict.unsure ?? '', /a\.test\.ts/, '読めなかったテストを素通しにした');
   });
 
   test('後で中を見られなかったフォルダの下のテストも「消えた」と数えない', async () => {
     const root = await project({ 'tests/a.test.ts': 'test("x", () => {});', 'b.test.ts': 'test("z", () => {});' });
     const before = await snapshotTests(root);
     const after = await failing('readdir', join(root, 'tests'), () => snapshotTests(root));
+    assert.deepEqual([...(after.unreadable ?? [])], ['tests/']);
     assert.equal(compareTests(before, after).ok, true, '見られなかったフォルダの下のテストを「消された」と読んだ');
+  });
+
+  test('見られなかったフォルダと名前の頭が同じだけの別のフォルダ（tests2/）で消したテストは、今までどおり見つける', async () => {
+    const root = await project({ 'tests/a.test.ts': 'test("x", () => {});', 'tests2/b.test.ts': 'test("z", () => {});' });
+    const before = await snapshotTests(root);
+    await rm(join(root, 'tests2', 'b.test.ts'));
+    const after = await failing('readdir', join(root, 'tests'), () => snapshotTests(root));
+    const verdict = compareTests(before, after);
+    assert.equal(verdict.ok, false, 'tests/ を見られなかったのを、tests2/ にまで広げた');
+    assert.match(verdict.reason!, /tests2\/b\.test\.ts/);
   });
 
   test('読めなかったものとは別に、本当に消したテストは今までどおり見つける', async () => {

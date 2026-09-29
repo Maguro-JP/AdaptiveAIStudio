@@ -28,7 +28,7 @@ export type VerifyEvent =
   | { type: 'failed'; round: number; digest: string }
   | { type: 'tampered'; reason: string }
   | { type: 'fixing'; round: number }
-  | { type: 'giveUp'; reason: 'maxRounds' | 'noProgress' | 'timeBudget' | 'aborted'; detail: string };
+  | { type: 'giveUp'; reason: 'maxRounds' | 'noProgress' | 'timeBudget' | 'aborted' | 'unsure'; detail: string };
 
 export interface VerifyOptions {
   command: string;
@@ -135,6 +135,10 @@ export async function* verifyLoop(
           passed: false, digest: `tampered:${verdict.reason}`,
           feedback: verdict.reason, tampered: verdict.reason, result,
         };
+      }
+      // テストを読めなかった。合格にせず、もう一度確かめさせる（一瞬読めなかっただけなら次の回で通る）
+      if (verdict.unsure) {
+        return { passed: false, digest: `unreadable:${verdict.unsure}`, feedback: verdict.unsure, result };
       }
       return { passed: true, digest: 'passed', result };
     }

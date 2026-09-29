@@ -363,10 +363,25 @@ export class UndoStore {
   async restore(id: string): Promise<Restored | undefined> {
     const { points: all, unreadable } = await this.#scan();
     const at = all.findIndex((p) => p.id === id);
-    if (at === -1) return undefined;
-    // 読めない戻り先があるときは戻さない（どの作業場のものか・いつのものかも分からない。挟まっていれば、その回の分だけ抜ける）
-    if (unreadable.length > 0) {
-      throw new Error(`読めない戻り先があるので戻しません（${unreadable.join(', ')}）。途中の回を飛ばして戻すと、どこにも無かった姿になります`);
+    if (at === -1) {
+      // 選んだ戻り先そのものが読めない。「もう無い」と言わない
+      if (unreadable.includes(`${id}.json`)) throw new Error(`その戻り先を読めません（${id}）`);
+      return undefined;
+    }
+    /*
+     * 戻す範囲に挟まりうる、読めない戻り先があるときは戻さない（挟まっていれば、その回の分だけ抜けて、どこにも無かった姿になる）。
+     * 範囲は「選んだ戻り先より後に書かれたもの」。書かれた時刻はファイルの更新時刻で見る（中身は読めないので）。
+     * 時刻も取れないものは、挟まっているかもしれないとして止める。選んだ戻り先より前に書かれたもの（古い・別の作業場の記録）では止めない。
+     * 止めないと、読めない古い記録が一つあるだけで、どの作業場の「戻す」もずっと止まる。
+     */
+    const since = all[at]!.at;
+    const inRange: string[] = [];
+    for (const name of unreadable) {
+      const s = await stat(join(this.#dir, name)).catch(() => undefined);
+      if (!s || s.mtimeMs >= since) inRange.push(name);
+    }
+    if (inRange.length > 0) {
+      throw new Error(`読めない戻り先があるので戻しません（${inRange.join(', ')}）。途中の回を飛ばして戻すと、どこにも無かった姿になります`);
     }
 
     const touched: string[] = [];
