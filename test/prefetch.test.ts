@@ -263,7 +263,7 @@ describe('上限つきの待機', () => {
 });
 
 describe('package.json を読めないとき', () => {
-  test('「確かめのコマンドが無い」と覚えず、次に訊かれたときに調べ直す', async () => {
+  test('「確かめのコマンドが無い」と決めつけず、次に訊かれたときに動かし方だけ調べ直す', async () => {
     const { createRequire, syncBuiltinESMExports } = await import('node:module');
     const require = createRequire(import.meta.url);
     const fsp = require('node:fs/promises') as typeof import('node:fs/promises');

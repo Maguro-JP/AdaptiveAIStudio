@@ -45,8 +45,8 @@ export class Prefetcher {
   readonly #can: (command: string) => boolean;
   #inFlight?: Promise<ProjectSnapshot>;
   #snapshot?: ProjectSnapshot;
-  /** 動かし方を調べられなかった回があった（覚えていない）。次に訊かれたときに調べ直す。 */
-  #failedOnce = false;
+  /** 動かし方だけを調べ直している途中。重ねて走らせない。 */
+  #commandsRetry?: Promise<void>;
 
   constructor(root: string, onEvent?: (e: PrefetchEvent) => void, can: (command: string) => boolean = canRun) {
     this.#root = root;
@@ -58,12 +58,7 @@ export class Prefetcher {
   start(signal?: AbortSignal): void {
     if (this.#inFlight) return;
     this.#inFlight = this.#build(signal).then(
-      (s) => {
-        // 動かし方を調べられなかった回は覚えない（次に訊かれたときに調べ直す）。覚えると、invalidate まで確かめのコマンドが無いまま
-        if (s.ready.includes('commands')) this.#snapshot = s;
-        else { this.#inFlight = undefined; this.#failedOnce = true; }
-        return s;
-      },
+      (s) => { this.#snapshot = s; return s; },
       // 先読みの失敗で本体を止めない。無いなら無いで作業は始められる。
       () => ({
         files: [], recentFiles: [], commands: {},
@@ -92,9 +87,12 @@ export class Prefetcher {
    * 上限を超えたら諦めて先へ進む（構築自体は裏で続く）。
    */
   async snapshotWithin(ms: number): Promise<ProjectSnapshot | undefined> {
-    if (this.#snapshot) return this.#snapshot;
-    // 前の回で調べられずに覚えなかったなら、ここで調べ直す（一度も始めていないときは、今までどおり待たない）
-    if (!this.#inFlight && this.#failedOnce) this.start();
+    if (this.#snapshot) {
+      // 動かし方（package.json など）だけ調べられていなければ、そこだけ調べ直す（ファイルの一覧は作り直さない）。
+      // 調べられないまま覚えていると、作り直すまで「確かめのコマンドが無い」と同じ顔のまま、確かめないで済ませていた
+      if (!this.#snapshot.ready.includes('commands')) await this.#retryCommands(this.#snapshot, ms);
+      return this.#snapshot;
+    }
     if (!this.#inFlight) return undefined;
 
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -103,6 +101,24 @@ export class Prefetcher {
     });
     try {
       return await Promise.race([this.#inFlight, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** 動かし方だけを調べ直し、調べられたら覚えている下調べへ書き足す。上限つきで待つ（調べ直しは裏で続く）。 */
+  async #retryCommands(snap: ProjectSnapshot, ms: number): Promise<void> {
+    this.#commandsRetry ??= this.#detectProject().then((p) => {
+      // 待つ間に作り直されていたら書き足さない（新しい回が自分で調べる）
+      if (this.#snapshot !== snap) return;
+      snap.commands = p.commands;
+      snap.kind = p.kind;
+      if (!snap.ready.includes('commands')) snap.ready.push('commands');
+    }, () => undefined).finally(() => { this.#commandsRetry = undefined; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); });
+    try {
+      await Promise.race([this.#commandsRetry, timeout]);
     } finally {
       clearTimeout(timer);
     }
