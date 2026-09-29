@@ -69,7 +69,14 @@ export async function putBack(root: string, relPath: string, content: FileConten
   if (!abs) return 'failed';
   // 実体で見るのは親まで。道そのものがリンクなら、辿らずにそのリンクを消す（下）。
   if (!(await realSafeResolve(root, dirname(relPath)))) return 'failed';
-  const now = await lstat(abs).catch(() => undefined);
+  let now: import('node:fs').Stats | undefined;
+  try {
+    now = await lstat(abs);
+  } catch (e) {
+    // 見られない（権限・掴まれている）のを「無い」と読まない。読むと、消すべきものを「変わらず」と返して戻り先ごと捨て、
+    // 書き戻すときはリンクかどうか分からないまま書く（リンクなら、その先を上書きする）
+    if (!isAbsent(e)) return 'failed';
+  }
   try {
     if (now?.isSymbolicLink()) {
       // 前がファイルでも「無い」でも、いまのリンクは要らない。辿らずに消す。

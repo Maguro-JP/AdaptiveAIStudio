@@ -957,7 +957,12 @@ export class Session {
         if (kept && !newest) {
           yield { type: 'log', level: 'warn', text: '確かめて落ちましたが、この依頼の後に別の作業の戻り先ができているので、自動では戻していません（「戻す」から選んでください）' };
         }
-        const done = kept && newest ? await this.undo.restore(kept.id) : undefined;
+        const tried = kept && newest ? await this.undo.restore(kept.id).catch((e: unknown) => e as Error) : undefined;
+        if (tried instanceof Error) {
+          // 戻せなかった（読めない戻り先がある等）。依頼の結末は変えず、戻していないことを言う（依頼の出来事の流れに残す）
+          yield { type: 'log', level: 'warn', text: `確かめて落ちましたが、自動では戻せませんでした（${tried.message}）。「戻す」から選んでください` };
+        }
+        const done = tried instanceof Error ? undefined : tried;
         const notRestored = [...new Set([...this.undo.peekSkipped(), ...(done?.failed ?? [])])].sort();
         rolledBack = done?.paths ?? [];
         if (rolledBack.length > 0 || notRestored.length > 0) {
@@ -1786,6 +1791,10 @@ export class Session {
             // テストが減ったのは、この回が呼んだ外のツールのせい。はっきり失敗。
             keep = false; checked = 'failed';
             yield { type: 'verify', event: { type: 'tampered', reason: verdict.reason ?? 'テストが減っています' } };
+          } else if ('unsure' in verdict && verdict.unsure) {
+            // 読めなかっただけ。通ったとは言わないが、巻き戻しもしない（確かめはこの一回きり）
+            checked = 'unsure';
+            yield { type: 'verify', event: { type: 'giveUp', reason: 'unsure', detail: verdict.unsure } };
           } else if (r.passed) {
             checked = 'passed';
             yield { type: 'verify', event: { type: 'passed', round: 1, durationMs: r.durationMs } };
