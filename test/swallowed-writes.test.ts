@@ -8,7 +8,8 @@
  * `.catch(() => …)` と `.then(() => …, () => …)` をファイルごとに数える。下の一覧に「なぜ捨ててよいか」を書くまで落とす。
  * 数が増えても落とす。直して減ったのに一覧が古いままのときも落とす。
  *
- * 数えるのは一行に収まる形だけ（`try { … } catch { }` は数えない）。読みの側は `test/lenient-reads.test.ts`。
+ * 数えるのは一行に収まる形だけ（`try { … } catch { }` は数えない）。書き込みを包んだ関数（`saveJournal(…).catch` 等）も数えない。
+ * 読みの側は `test/lenient-reads.test.ts`。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -21,12 +22,12 @@ const root = join(import.meta.dirname, '..');
 const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/core/undo.ts': { count: 3, why: '一時ファイルの後始末、古い戻り先の片づけ（残るだけ）、縮めた戻り先の書き直し（失敗は unshrunk で言う）' },
   'src/core/conversations.ts': { count: 2, why: '一時ファイルの後始末と、立ち上げたときの捨て場の片づけ（消せたものだけ数え、残りは次にまた消す）' },
-  'src/runtime/machine.ts': { count: 2, why: '機械の検出結果の記録。書けなければ次に検出し直すだけ' },
+  'src/runtime/machine.ts': { count: 2, why: '機械の検出結果の記録。書けなければ次に検出し直すだけ（二つ目は、外側の `.catch(() => rm(…))` の中の `rm(…).catch` に当たっている。中の方を外すと数が減って二つ目の試験が落ちる）' },
   'src/runtime/llama-install.ts': { count: 1, why: '取り出しに失敗したときの後始末。元の失敗を投げ直す' },
   'src/ui/server.ts': { count: 1, why: '作業場のフォルダを作っておくだけ。作れなければ一覧を読む所が言う' },
-  'src/harness/metrics.ts': { count: 1, why: '書く前の mkdir。作れなければ続く書き込みが落ちる' },
+  'src/harness/metrics.ts': { count: 1, why: '書く前の mkdir。続く保存も失敗を捨てる（記録に失敗しても本体は止めず、言わない。無くなるのは測った数だけ）' },
   'src/agent/proposals.ts': { count: 1, why: '一時ファイルの後始末' },
-  'src/roles/ledger.ts': { count: 1, why: '書く前の mkdir。作れなければ続く書き込みが落ちる' },
+  'src/roles/ledger.ts': { count: 1, why: '書く前の mkdir。続く保存も失敗を捨てる（記録に失敗しても本体は止めず、言わない。同じ知らせがもう一度出るだけ）' },
   'src/core/goals.ts': { count: 1, why: '一時ファイルの後始末' },
   'src/core/session.ts': { count: 1, why: '作業場のフォルダを作っておくだけ。作れなければ使う所が言う' },
   'src/core/unfinished.ts': { count: 1, why: '一時ファイルの後始末' },
