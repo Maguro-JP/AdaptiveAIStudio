@@ -74,4 +74,61 @@ describe('返事をしない相手の呼び出しを、止めたら待たない'
     assert.match(got.text, /止めました/);
     assert.ok(Date.now() - started < 10_000, `止めたのに時間切れまで待った（${Date.now() - started}ms）`);
   });
+
+  test('止めたら、相手にも取り消しを知らせる（notifications/cancelled に、止めた呼び出しの id を載せる）', async () => {
+    const c = client(['-e', `
+      const { createInterface } = require('node:readline');
+      let hung;
+      const cancelled = [];
+      createInterface({ input: process.stdin }).on('line', (line) => {
+        const msg = JSON.parse(line);
+        const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+        if (msg.method === 'initialize') say({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18' } });
+        else if (msg.method === 'tools/list') say({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'hang' }, { name: 'seen' }] } });
+        else if (msg.method === 'notifications/cancelled') cancelled.push(msg.params.requestId);
+        else if (msg.method === 'tools/call' && msg.params.name === 'hang') hung = msg.id;
+        else if (msg.method === 'tools/call' && msg.params.name === 'seen') {
+          say({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: JSON.stringify({ hung, cancelled }) }] } });
+        }
+      });
+    `]);
+    assert.equal(await c.start(), true, `立ち上がらなかった: ${c.failure}`);
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 300).unref();
+    const got = await c.call('hang', {}, 30_000, ac.signal);
+    assert.match(got.text, /止めました/);
+    const seen = JSON.parse((await c.call('seen', {}, 10_000)).text) as { hung: number; cancelled: number[] };
+    assert.equal(typeof seen.hung, 'number', '相手に hang が届いていない');
+    assert.deepEqual(seen.cancelled, [seen.hung], `取り消しが届いていない、または違う id: ${JSON.stringify(seen)}`);
+  });
+});
+
+describe('相手の入力が閉じていても、こちらは落ちない', () => {
+  // 閉じた管へ書いたときの失敗の出方（EPIPE か、黙って溜まるか）は OS の管の作りによる。Windows では確かめていない
+  test('相手が標準入力を閉じたまま生きているとき、呼び出しは失敗として返り、以後は待たずに断る', { skip: process.platform === 'win32' }, async () => {
+    const c = client(['-e', `
+      const { createInterface } = require('node:readline');
+      const { closeSync } = require('node:fs');
+      setInterval(() => {}, 1000); // 生き続ける（exit の知らせで片づく道を通らせない）
+      const rl = createInterface({ input: process.stdin });
+      rl.on('line', (line) => {
+        const msg = JSON.parse(line);
+        const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+        if (msg.method === 'initialize') say({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18' } });
+        else if (msg.method === 'tools/list') {
+          // 先に閉じてから返す。返事を受け取った時点で、入力は必ず閉じている（待つ時間に頼らない）
+          rl.close(); process.stdin.destroy(); try { closeSync(0); } catch {}
+          say({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'x' }] } });
+        }
+      });
+    `]);
+    assert.equal(await c.start(), true, `立ち上がらなかった: ${c.failure}`);
+    const started = Date.now();
+    const got = await c.call('x', {}, 30_000);
+    assert.equal(got.isError, true);
+    assert.match(got.text, /送れませんでした/);
+    assert.ok(Date.now() - started < 10_000, `時間切れまで待った（${Date.now() - started}ms）`);
+    const again = await c.call('x', {}, 30_000);
+    assert.match(again.text, /動いていません/, `二度目も書きに行った: ${again.text}`);
+  });
 });

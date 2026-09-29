@@ -153,3 +153,44 @@ describe('遠くの相手に繋ぐ', () => {
     assert.match(c.failure ?? '', /繋ぎ先/);
   });
 });
+
+describe('取り消しの知らせが断られても、ほかの呼び出しを巻き込まない', () => {
+  test('notifications/cancelled が 500 でも、同じ相手に出している別の呼び出しは返事を受け取れる', async () => {
+    const held: import('node:http').ServerResponse[] = [];
+    const server: Server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { id?: number; method?: string; params?: { name?: string } };
+        if (body.method === 'notifications/cancelled') { res.writeHead(500); res.end('だめです'); return; }
+        if (body.id === undefined) { res.writeHead(202); res.end(); return; }
+        const say = (result: unknown) => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
+        };
+        if (body.method === 'initialize') say({ protocolVersion: '2025-06-18', capabilities: {} });
+        else if (body.method === 'tools/list') say({ tools: [{ name: 'hang' }, { name: 'slow' }] });
+        else if (body.params?.name === 'hang') held.push(res); // 返さない
+        else setTimeout(() => say({ content: [{ type: 'text', text: 'おそく返した' }] }), 800);
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    const c = new McpClient('remote', { url: `http://127.0.0.1:${port}/mcp` });
+    try {
+      assert.equal(await c.start(), true, c.failure);
+      const slow = c.call('slow', {}, 10_000);
+      const ac = new AbortController();
+      setTimeout(() => ac.abort(), 200).unref();
+      assert.match((await c.call('hang', {}, 10_000, ac.signal)).text, /止めました/);
+      const got = await slow;
+      assert.equal(got.isError, false, `取り消しの失敗に巻き込まれた: ${got.text}`);
+      assert.equal(got.text, 'おそく返した');
+      assert.equal(c.failure, undefined);
+    } finally {
+      c.stop();
+      for (const res of held) res.destroy();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+});
