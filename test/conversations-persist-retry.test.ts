@@ -123,3 +123,72 @@ test('会話の書き足しは、一時的な失敗（EBUSY・EPERM）をやり�
   const full = new Conversations(d, { append: async () => { throw Object.assign(new Error('ENOSPC: no space'), { code: 'ENOSPC' }); } });
   await assert.rejects(full.append(id, [{ role: 'user', content: 'x' }]), /ENOSPC/);
 });
+
+/** 書けなかったターンを作れる画面の本体。会話のファイルの場所にフォルダを置いて書けなくする（root で走っても同じ結果になる）。 */
+async function blockedHarness() {
+  const fake = await startFakeServer({ kind: 'echo' });
+  const config = {
+    ...DEFAULT_CONFIG,
+    providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
+    candidates: ['local:m'],
+    runtime: { kind: 'ollama' },
+    agent: { root: dir, approval: 'auto' },
+    initiative: { enabled: false },
+  } as typeof DEFAULT_CONFIG;
+  const server = new UiServer({ port: 0, config });
+  const base = (await server.start()).replace(/\/$/, '');
+  const send = async (text: string): Promise<string> => {
+    const r = await (await fetch(`${base}/api/send`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }),
+    })).json() as { conversationId: string };
+    await until(async () => {
+      const c = await (await fetch(`${base}/api/conversations`)).json() as { running: string | null; runningAll: string[] };
+      return c.running === null && c.runningAll.length === 0;
+    }, `「${text}」が終わる`, { timeoutMs: 15000, everyMs: 50 });
+    return r.conversationId;
+  };
+  const fileOf = (id: string) => join(dir, 'state', 'conversations', `${id}.jsonl`);
+  const block = async (id: string) => { await rename(fileOf(id), `${fileOf(id)}.away`); await mkdir(fileOf(id)); };
+  const unblock = async (id: string) => { await rmdir(fileOf(id)); await rename(`${fileOf(id)}.away`, fileOf(id)); };
+  const asked = async (id: string) => (await new Conversations(join(dir, 'state', 'conversations')).load(id))
+    .filter((m) => m.role === 'user').map((m) => m.content);
+  return { fake, server, base, send, block, unblock, asked };
+}
+
+test('**載っている会話を押し直しても、書き直し待ちのやりとりを手放さない**', async () => {
+  const h = await blockedHarness();
+  try {
+    const id = await h.send('押し直す前の一つ目');
+    await h.block(id);
+    await h.send('押し直す前の二つ目');
+    // 書けないまま、同じ会話を一覧で押し直す（前はファイルの中身で履歴を上書きして、二つ目を手放した）
+    const picked = await (await fetch(`${h.base}/api/conversations/select`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }),
+    })).json() as { messages: { role: string; content: string }[] };
+    // 画面にも、書けていないやりとりまで出す（ファイルの中身だけを出すと見えない）
+    assert.deepEqual(picked.messages.filter((m) => m.role === 'user').map((m) => m.content), ['押し直す前の一つ目', '押し直す前の二つ目']);
+    await h.unblock(id);
+    await h.send('押し直した後の三つ目');
+    assert.deepEqual(await h.asked(id), ['押し直す前の一つ目', '押し直す前の二つ目', '押し直した後の三つ目']);
+  } finally {
+    await h.server.stop();
+    await h.fake.close();
+  }
+});
+
+test('**止めるときも、書き直し待ちのやりとりを書いてから止める**', async () => {
+  const h = await blockedHarness();
+  let stopped = false;
+  try {
+    const id = await h.send('止める前の一つ目');
+    await h.block(id);
+    await h.send('止める前の二つ目');
+    await h.unblock(id);
+    await h.server.stop();
+    stopped = true;
+    assert.deepEqual(await h.asked(id), ['止める前の一つ目', '止める前の二つ目'], '止めるときに書き直していない');
+  } finally {
+    if (!stopped) await h.server.stop();
+    await h.fake.close();
+  }
+});
