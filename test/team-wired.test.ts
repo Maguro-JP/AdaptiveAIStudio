@@ -13,9 +13,10 @@ import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, readFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { wireTeam } from '../src/core/team-setup.ts';
+import { OutsideChanges } from '../src/agent/outside-changes.ts';
 import { DEFAULT_CONFIG } from '../src/config.ts';
 import { writeFileTool, readFileTool } from '../src/agent/tools/fs.ts';
 import type { Tool, ToolContext } from '../src/agent/tools/types.ts';
@@ -213,6 +214,40 @@ describe('team は、run_command が変えた分も戻り先に載せる', () =>
     const { point, unrecorded } = await wired.finish();
     assert.deepEqual(unrecorded, ['big.txt'], '戻せないと言っていない');
     assert.ok(!point?.paths.includes('big.txt'), `途中の姿を戻り先に残した: ${JSON.stringify(point)}`);
+  });
+
+  test('前後比べそのものが落ちたら、run_command の分は戻せないと返す（書くツールの分は閉じる）', async () => {
+    const root = await repo({ 'a.txt': 'もと\n' });
+    const wired = await wireTeam(DEFAULT_CONFIG, root);
+    const tools = wired.toolsFor(item('t1'));
+    await named(tools, 'read_file').run({ path: 'a.txt' }, ctx(root, wired.beforeWrite));
+    const w = await named(tools, 'write_file').run({ path: 'a.txt', content: '書いた\n' }, ctx(root, wired.beforeWrite));
+    assert.equal(w.isError, undefined, w.content);
+    const real = OutsideChanges.prototype.after;
+    OutsideChanges.prototype.after = () => Promise.reject(new Error('git が落ちた'));
+    try {
+      const { point, outsideLost } = await wired.finish();
+      assert.match(outsideLost ?? '', /git が落ちた/, 'run_command の分が載っていないことを黙った');
+      assert.ok(point?.paths.includes('a.txt'), '書くツールの分の戻り先まで捨てた');
+    } finally {
+      OutsideChanges.prototype.after = real;
+    }
+  });
+
+  test('git の管理下でない作業場では、run_command の分を比べられないと返す（投げずに黙る道）', async () => {
+    const root = await tempDir('aas-team-nogit-');
+    await writeFile(join(root, 'a.txt'), 'もと\n');
+    // 一時フォルダが別のリポジトリの下にあっても、そこまで上って「管理下」と読ませない（走らせる場所で結果を変えない）
+    const ceiling = process.env.GIT_CEILING_DIRECTORIES;
+    process.env.GIT_CEILING_DIRECTORIES = dirname(root);
+    try {
+      const wired = await wireTeam(DEFAULT_CONFIG, root);
+      const { outsideLost } = await wired.finish();
+      assert.match(outsideLost ?? '', /比べられませんでした/, 'run_command の分を比べられないことを黙った');
+    } finally {
+      if (ceiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+      else process.env.GIT_CEILING_DIRECTORIES = ceiling;
+    }
   });
 
   test('何も変えなければ、戻り先は作らない（対）', async () => {

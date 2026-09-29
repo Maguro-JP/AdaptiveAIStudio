@@ -5,11 +5,14 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, mkdir } from 'node:fs/promises';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { findLeads, investigationPrompt, parseProposal } from '../src/agent/initiative.ts';
 import { ProposalQueue, formatProposal } from '../src/agent/proposals.ts';
 import { Prefetcher } from '../src/agent/prefetch.ts';
+
+const fsp = createRequire(import.meta.url)('node:fs/promises') as typeof import('node:fs/promises');
 
 async function project(files: Record<string, string>): Promise<string> {
   const root = await tempDir('aas-init-');
@@ -51,6 +54,24 @@ describe('手がかりの発見', () => {
     const hit = (await leadsOf(root)).find((l) => l.kind === 'risk');
     assert.ok(hit);
     assert.match(hit.fact, /認証を実装/);
+  });
+
+  test('読めなかったテストファイルを「無い」と数えて、テストが無いと言わない', async () => {
+    const root = await project({ 'src/b.ts': 'export const x = 1;', 'src/b.test.ts': 'test("x",()=>{});' });
+    const snapshot = await snapshotOf(root);
+    const unreadable = join(root, 'src', 'b.test.ts');
+    const real = fsp.readFile;
+    (fsp as { readFile: unknown }).readFile = ((path: unknown, ...rest: unknown[]) => path === unreadable
+      ? Promise.reject(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }))
+      : (real as (...a: unknown[]) => Promise<unknown>)(path, ...rest)) as never;
+    syncBuiltinESMExports();
+    try {
+      const leads = await findLeads({ root, snapshot, known: new Set(), max: 20 });
+      assert.equal(leads.find((l) => l.kind === 'test'), undefined, `在るテストを見当たらないと言った: ${leads.map((l) => l.title).join(' / ')}`);
+    } finally {
+      (fsp as { readFile: unknown }).readFile = real;
+      syncBuiltinESMExports();
+    }
   });
 
   test('テストが無い実装を見つける', async () => {

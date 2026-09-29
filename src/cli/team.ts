@@ -185,9 +185,16 @@ async function main(): Promise<void> {
       console.log(c.yellow(`戻り先を残せませんでした（${(e as Error).message}）。この回の変更は aas undo からは戻せません`));
       return undefined;
     });
-    if (closed?.point) console.log(c.dim(`戻り先: ${closed.point.id}（aas undo で戻せます）`));
+    if (closed?.point) {
+      // run_command の分が載っていないときは、書くツールの分だけだと分かる言い方にする
+      const scope = closed.outsideLost ? '書くツールで変えた分だけ、aas undo で戻せます' : 'aas undo で戻せます';
+      console.log(c.dim(`戻り先: ${closed.point.id}（${scope}）`));
+    }
     if (closed && closed.unrecorded.length > 0) {
       console.log(c.yellow(`前の中身を記録できず、戻せないファイル: ${closed.unrecorded.join(', ')}`));
+    }
+    if (closed?.outsideLost) {
+      console.log(c.yellow(`run_command で変わったファイルを調べられませんでした（${closed.outsideLost}）。その分は aas undo からは戻せません`));
     }
     // 起こした子（この中で読む道）を残さない。残すと次の起動で口が埋まる。
     await runtime.shutdown().catch(() => undefined);
