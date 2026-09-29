@@ -252,3 +252,29 @@ describe('取れないときの言い方', () => {
     );
   });
 });
+
+describe('置いてある llama-server を見られないとき', () => {
+  test('入れ直す道（strict）では「無い」と読まずに投げる。表示の道は今までどおり「無い」', async () => {
+    const { createRequire, syncBuiltinESMExports } = await import('node:module');
+    const fsp = createRequire(import.meta.url)('node:fs/promises') as typeof import('node:fs/promises');
+    const bin = await tempDir('aas-llama-unseen-');
+    const target = join(bin, 'b1', 'llama-server');
+    const real = fsp.stat;
+    (fsp as { stat: unknown }).stat = ((p: unknown, ...rest: unknown[]) => p === target
+      ? Promise.reject(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }))
+      : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as never;
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(findInstalled(bin, 'b1', { strict: true }), /見られません/);
+      assert.equal(await findInstalled(bin, 'b1'), undefined);
+    } finally {
+      (fsp as { stat: unknown }).stat = real;
+      syncBuiltinESMExports();
+    }
+  });
+
+  test('本当に無いときは、strict でも「無い」', async () => {
+    const bin = await tempDir('aas-llama-none-');
+    assert.equal(await findInstalled(bin, 'b1', { strict: true }), undefined);
+  });
+});

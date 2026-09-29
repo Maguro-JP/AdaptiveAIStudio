@@ -238,6 +238,7 @@
 - 規則の手前で、読めない・見られないを「後の姿が分からない」「新しいファイル」と読んで通さない
 - 設定が在るのに読めないとき、既定の設定で黙って動かさない
 - 提案と覚えたことを残せなかったとき、黙らない
+- 置いてある llama-server と、作業場の決まりのファイルで、見られないを「無い」と読まない
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10082,3 +10083,16 @@ MCP・作業場（`agent.root`）が黙って外れる。
 - 試験: `test/proposals-safety.test.ts` に 2 件（読めない記録・残せた）、`test/session-save-warn.test.ts` に 2 件（提案・覚えたこと）。
   黙る形に戻すと落ちることを見た。呼ぶ側の各所が助け手を通っていることは、試験では見ていない
 触る場所: `src/agent/proposals.ts` の `save`、`src/core/session.ts` の `saveProposals`・`saveMemory`、`src/cli/agent.ts`
+
+## 2026-09-29  置いてある llama-server と、作業場の決まりのファイルで、見られないを「無い」と読まない
+
+- llama-server の用意（`llama-install.ts` の `install`）: 置いてある実行ファイルを見られない（EACCES・EPERM）と「無い」と読んで入れ直しに進み、
+  それが途中で落ちると後始末が元から在った同じ版のフォルダごと消していた。`findInstalled` に `strict` を足し、入れ直す道でだけ「無い」以外は
+  投げる。表示の道（doctor・画面の状態・selftest）は今までどおり「無い」と読む（投げると表示が壊れる）
+- 作業場の決まり（`project-rules.ts`）: AGENTS.md・CLAUDE.md・.cursor/rules が読めないと「無い」と読み、その決まりを知らないまま作業していた。
+  読めなかったと分かる一件（「読めるようになるまで効いていません」）にして載せ、モデルにも画面にも見えるようにする
+- 直さなかったもの: 監査の記録（`audit.ts` の `record`）と、規則の実績・役職の記録の保存の失敗。記録を見る人が「記録された」と取り違える
+  ことはあるが、消す・壊すには繋がらない。言う先の口が無く、配線から足すことになるので見送った
+- 試験: `test/llama-install.test.ts` に 2 件（strict で投げる・本当に無い）、`test/project-rules.test.ts` に 1 件（AGENTS.md がフォルダ）。
+  守りを外すと落ちることを見た。`install` が strict で呼んでいることは試験で見ていない
+触る場所: `src/runtime/llama-install.ts` の `findInstalled`・`install`、`src/agent/project-rules.ts` の `readProjectRules`・`readOne`
