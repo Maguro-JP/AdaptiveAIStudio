@@ -321,6 +321,9 @@ export interface SessionOptions {
   journals?: Journals;
 }
 
+/** 考えごとで、配布元に新しい世代を訊く上限。 */
+const UPDATE_PROBE_TIMEOUT_MS = 15_000;
+
 export class Session {
   readonly config: AasConfig;
   readonly root: string;
@@ -1106,11 +1109,16 @@ export class Session {
           const at = c.indexOf(':');
           return at < 0 ? c : c.slice(at + 1);
         });
+        // 配布元への問い合わせも ■ で止められるようにし、15 秒で打ち切る。考えごとの間は人の送信が順番待ちになるので、
+        // 返事が来ないと（最大で約 5 分）その間ずっと待たせていた
+        const probe = new AbortController();
+        this.#conv.running = probe;
         const newer = await findNewerFor({
           runtimeKind: this.config.runtime?.kind ?? 'inproc',
           installed: using,
           seed: catalogFamilies(),
-        });
+          signal: AbortSignal.any([probe.signal, AbortSignal.timeout(UPDATE_PROBE_TIMEOUT_MS)]),
+        }).finally(() => { if (this.#conv.running === probe) this.#conv.running = undefined; });
         context = [
           `いま使っているモデル: ${using.join(', ') || '(ローカルの指定なし)'}`,
           '',

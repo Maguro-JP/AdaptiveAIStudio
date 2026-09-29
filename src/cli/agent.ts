@@ -72,7 +72,8 @@ async function main(): Promise<void> {
 
   const rl = new LineSource(stdin, stdout);
   let generating: AbortController | undefined;
-  rl.onSigint(() => { if (generating) generating.abort(); else rl.close(); });
+  // 止めるときは、待っている承認の問いも解く（解かないと、止めたのに Enter を押すまで進まない）
+  rl.onSigint(() => { if (generating) { generating.abort(); rl.cancelWaiting(); } else rl.close(); });
 
   const approve = async (req: ApprovalRequest): Promise<boolean> => {
     // 協議だけは自動承認から外す。人が読まない協議は、記録しか残らない。

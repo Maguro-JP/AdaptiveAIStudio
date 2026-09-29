@@ -52,3 +52,26 @@ describe('行区切りを守らない相手を、道連れにしない', () => {
     assert.ok(c.failure, '理由が残っていない');
   });
 });
+
+describe('返事をしない相手の呼び出しを、止めたら待たない', () => {
+  test('■（signal）で止めたら、時間切れを待たずに返す', async () => {
+    const c = client(['-e', `
+      const { createInterface } = require('node:readline');
+      createInterface({ input: process.stdin }).on('line', (line) => {
+        const msg = JSON.parse(line);
+        const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+        if (msg.method === 'initialize') say({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18' } });
+        else if (msg.method === 'tools/list') say({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'hang', description: '返さない' }] } });
+        // tools/call には返さない
+      });
+    `]);
+    assert.equal(await c.start(), true, `立ち上がらなかった: ${c.failure}`);
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 300).unref();
+    const started = Date.now();
+    const got = await c.call('hang', {}, 30_000, ac.signal);
+    assert.equal(got.isError, true);
+    assert.match(got.text, /止めました/);
+    assert.ok(Date.now() - started < 10_000, `止めたのに時間切れまで待った（${Date.now() - started}ms）`);
+  });
+});

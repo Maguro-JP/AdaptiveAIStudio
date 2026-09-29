@@ -57,7 +57,7 @@ export function wrapTool(
       });
       if (!approved) return fail(`${client.name}/${spec.name} は許可されませんでした。`);
 
-      const r = await client.call(spec.name, args, opts.timeoutMs);
+      const r = await client.call(spec.name, args, opts.timeoutMs, ctx.signal);
 
       /*
        * 返ってきたものは、外から入ってきたもの。検問所を通す。

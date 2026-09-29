@@ -25,6 +25,12 @@ import { execFile } from 'node:child_process';
 import { contentOf, isAbsent, type FileContent } from '../harness/put-back.ts';
 
 /**
+ * 作業場の記録で git を待つ上限。外のツールや run_command の前後で毎回走るので、大きなリポジトリや遅いドライブで長引くと、■が効かないまま
+ * 待っていた。過ぎたら打ち切って「比べられない」（`undefined`）にする。呼ぶ側はそう言う。
+ */
+export const STAMP_GIT_TIMEOUT_MS = 2 * 60_000;
+
+/**
  * git を呼び、**標準出力だけ**を返す。
  *
  * `runGit` は標準エラーも同じ文字列に足す。git は status の最中に警告を出すことがあり
@@ -33,7 +39,7 @@ import { contentOf, isAbsent, type FileContent } from '../harness/put-back.ts';
  */
 function gitOut(args: string[], cwd: string, maxBuffer = 16 * 1024 * 1024): Promise<string | undefined> {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, maxBuffer, encoding: 'utf8' }, (err, stdout) => {
+    execFile('git', args, { cwd, maxBuffer, encoding: 'utf8', timeout: STAMP_GIT_TIMEOUT_MS }, (err, stdout) => {
       resolve(err ? undefined : stdout);
     });
   });
@@ -42,7 +48,7 @@ function gitOut(args: string[], cwd: string, maxBuffer = 16 * 1024 * 1024): Prom
 /** 同じく、バイト列のまま返す。中身は utf8 と限らない（二進・Shift_JIS）。 */
 function gitBytes(args: string[], cwd: string, maxBuffer: number): Promise<Buffer | undefined> {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, maxBuffer, encoding: 'buffer' }, (err, stdout) => {
+    execFile('git', args, { cwd, maxBuffer, encoding: 'buffer', timeout: STAMP_GIT_TIMEOUT_MS }, (err, stdout) => {
       resolve(err ? undefined : stdout);
     });
   });

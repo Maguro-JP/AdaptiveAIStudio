@@ -240,6 +240,7 @@
 - 提案と覚えたことを残せなかったとき、黙らない
 - 置いてある llama-server と、作業場の決まりのファイルで、見られないを「無い」と読まない
 - 止まったまま戻らない所を塞ぐ（再試行の待ち・nvidia-smi・git・run_command の入力・子を止める呼び出し）
+- ■ が届かない所を塞ぐ（裏の分解・MCP・考えごとの問い合わせ・CLI の承認待ち）と、待ちの上限を足す
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10118,9 +10119,30 @@ MCP・作業場（`agent.root`）が黙って外れる。
 - run_command（`shell-exec.ts` の `spawnCall`）: 標準入力を開いたままにしていたので、入力を待つ命令が時間切れ（600 秒）まで止まった。閉じる
 - モデルの子プロセスを止める（`inproc-host-client.ts` の `shutdown`）: 止めるよう頼む呼び出しに時間切れが無く、子の手が塞がると、殺すまでの
   5 秒の前に何分も待った。頼む呼び出しは 2 秒（`SHUTDOWN_ASK_MS`）で切る。読み込み（load）は大きなモデルで長くかかるので上限を付けない
-- 残り（次に直す）: やり残しの続きの分解に止められない signal を渡している所、MCP の呼び出しに ■ が届かない所、作業場の記録の git に
-  時間切れが無い所、考えごとの配布元への問い合わせ、CLI の承認待ちで Ctrl-C が効かない所、失敗の本文を読む間の見張り
+- 残りの 6 件は、下の項で直した
 - 試験: `test/orchestrator.test.ts` に 2 件（長い Retry-After・待ちの間に止める）、`test/machine-probe.test.ts` に 2 件、`test/git-timeout.test.ts`
   に 3 件、`test/shell-exec.test.ts` に 2 件。直す前の版（試験の中の関数が無いものは、打ち切りを外した版）で落ちることを見た。
   子を止める呼び出しは試験を足していない（返事をしない子を作る形が大きい）
 触る場所: `src/core/orchestrator.ts`、`src/runtime/machine.ts`、`src/agent/git.ts`、`src/agent/shell-exec.ts`、`src/runtime/inproc-host-client.ts`
+
+## 2026-09-29  ■ が届かない所を塞ぐ（裏の分解・MCP・考えごとの問い合わせ・CLI の承認待ち）と、待ちの上限を足す
+
+上の項の続き。洗い出しの残り 6 件。
+
+- やり残しの続きの分解（`server.ts` の `#driveStep` と割り直し）: 誰も止めない signal を渡していたので、見回りから走っている最中に ■ を押しても
+  割り終わるまでモデルの口を塞いだ。裏の問い合わせを `#stoppable` で走らせ、`/api/abort` で止める。止めた結果の空を「割れなかった」と読むと、
+  丸ごと進める・段を塞ぐ、に進むので、止めたときは進めず・塞がず、次の見回りでまた試す
+- MCP の呼び出し（`client.ts` の `call`）: ■（`ctx.signal`）を渡していなかったので、外のツールの返事待ちは時間切れ（既定 60 秒）まで止まらなかった。
+  止めたら返事を待たずに返す（返事を待っていた分は、自分の時間切れで片づく）
+- 作業場の記録の git（`workspace-stamp.ts`）: 時間切れが無く、大きなリポジトリ・遅いドライブで長引くと ■ が効かないまま待った。2 分
+  （`STAMP_GIT_TIMEOUT_MS`）で打ち切って「比べられない」にする
+- 考えごとの配布元への問い合わせ（`session.ts` の upkeep）: ■ も時間切れも無かった。問い合わせの間だけ止める口を置き、15 秒で打ち切る
+- CLI の承認待ち（`input.ts` の `cancelWaiting`）: Ctrl-C で依頼は止めても、承認の問いが Enter を押すまで待ち続けた。止めるときに問いを
+  「答え無し」（許可しない）で解く。端末で Ctrl-C が readline の SIGINT として届くかは確かめていない
+- 失敗の本文（`openai-compatible.ts`）: 見張りの時計を止めてから本文を読んでいたので、失敗の頭だけ返して本文を止める相手を何分も待った。
+  本文を読む間も、つなぐときと同じ長さで見張る
+- 試験: `test/provider-error-body.test.ts`（本文を止める相手）、`test/mcp-bytes.test.ts`（返事をしない MCP を ■ で止める）、
+  `test/input.test.ts`（問いを解く）。前の二つは直す前の版で落ちることを見た。裏の分解・作業場の記録の git・考えごとの問い合わせは
+  試験を足しておらず、既存の試験で後退が無いことだけを見た
+触る場所: `src/ui/server.ts` の `#stoppable`・`#background`・`/api/abort`、`src/mcp/client.ts`・`src/mcp/tools.ts`、`src/agent/workspace-stamp.ts`、
+`src/core/session.ts`、`src/cli/input.ts`・`src/cli/agent.ts`、`src/providers/openai-compatible.ts`
