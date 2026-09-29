@@ -518,9 +518,19 @@ export class Conversations {
     return out;
   }
 
-  /** 移した先に在るもの。名前の形の違うものは見ない。 */
+  /**
+   * 移した先に在るもの。名前の形の違うものは見ない。
+   * **中を見られないのを「空」と読まない。**読むと、消した後に来た書き足しを元の場所へ書いて見出しの無い切れ端の会話を作り、
+   * 戻すときは本物が在るのに「もう無い」と返していた。無い（まだ一度も消していない）だけを空にする。
+   */
   async #trashed(): Promise<{ id: string; at: number; path: string }[]> {
-    const names = await readdir(this.#trash).catch(() => [] as string[]);
+    let names: string[];
+    try {
+      names = await readdir(this.#trash);
+    } catch (e) {
+      if (!isAbsent(e)) throw e;
+      names = [];
+    }
     return names.flatMap((name) => {
       const m = /^(.+)\.(\d+)\.jsonl$/.exec(name);
       // 桁の大きすぎる時刻は見ない（足しても変わらない数だと、消すときの「後にずらす」が回り続ける）

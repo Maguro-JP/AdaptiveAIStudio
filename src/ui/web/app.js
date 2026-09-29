@@ -1221,8 +1221,16 @@ async function loadUndo() {
   const list = data.list ?? [];
   const sec = $('undoSec');
   const box = $('sideUndo');
-  sec.hidden = list.length === 0;
+  sec.hidden = list.length === 0 && !data.error;
   box.textContent = '';
+  if (data.error) {
+    // 読めないのを「戻せるものは無い」と見せない
+    const note = document.createElement('div');
+    note.className = 'side-note dim';
+    note.textContent = `戻り先を読めません（${data.error}）`;
+    box.append(note);
+    return;
+  }
 
   /*
    * **少しだけ出す。**
@@ -1356,6 +1364,13 @@ function restoreButton(id) {
 /** 「〜を消しました [戻す] [閉じる]」と、それより前に消した分の畳み。 */
 function removedNotes() {
   const trash = Array.isArray(conversations.trash) ? conversations.trash : [];
+  if (conversations.trashError) {
+    // 読めないのを「消した会話は無い」と見せない
+    const note = document.createElement('div');
+    note.className = 'side-note dim';
+    note.textContent = conversations.trashError;
+    return [note];
+  }
   if (trash.length === 0 || hideRemoved) return [];
   const [latest, ...older] = trash;
   const row = document.createElement('div');

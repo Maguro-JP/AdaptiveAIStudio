@@ -953,8 +953,11 @@ export class Session {
          * 別の戻り先が在り得る。黙ってそれまで戻さない。戻さなかったことは言う。
          */
         const kept = point instanceof Error ? undefined : point;
-        const newest = kept ? (await this.undo.list())[0]?.id === kept.id : false;
-        if (kept && !newest) {
+        const listed = kept ? await this.undo.list().catch((e: unknown) => e as Error) : undefined;
+        const newest = kept && !(listed instanceof Error) ? listed?.[0]?.id === kept.id : false;
+        if (listed instanceof Error) {
+          yield { type: 'log', level: 'warn', text: `確かめて落ちましたが、戻り先の一覧を読めなかったので、自動では戻していません（${listed.message}）` };
+        } else if (kept && !newest) {
           yield { type: 'log', level: 'warn', text: '確かめて落ちましたが、この依頼の後に別の作業の戻り先ができているので、自動では戻していません（「戻す」から選んでください）' };
         }
         const tried = kept && newest ? await this.undo.restore(kept.id).catch((e: unknown) => e as Error) : undefined;
