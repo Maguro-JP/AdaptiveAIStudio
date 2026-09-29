@@ -14,6 +14,9 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tempDir } from './tmp.ts';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
+
+const require = createRequire(import.meta.url);
 
 const { UiServer } = await import('../src/ui/server.ts');
 const { DEFAULT_CONFIG } = await import('../src/config.ts');
@@ -146,7 +149,7 @@ describe('二度目は、同じ大きさで挑まない', () => {
 
 describe('段取りの終わり方', () => {
   /** 段取りだけを直に組んで、終わりの筋を見る。 */
-  async function endWith(states: ('done' | 'blocked')[]) {
+  async function endWith(states: ('done' | 'blocked' | 'pending')[], opts: { beforeTick?: (state: string) => void } = {}) {
     const state = await tempDir('aas-end-');
     process.env.AAS_STATE_DIR = state;
     const root = await tempDir('aas-end-root-');
@@ -157,7 +160,7 @@ describe('段取りの終わり方', () => {
     const goal = await goals.open('src を直して', states.map((_, i) => `段${i}`));
     for (const [i, st] of states.entries()) {
       if (st === 'done') await goals.succeed(goal.id, goal.steps[i]!.id);
-      else await goals.block(goal.id, goal.steps[i]!.id);
+      else if (st === 'blocked') await goals.block(goal.id, goal.steps[i]!.id);
     }
     const item = (await store.add({ request: 'src を直して', why: 'noProgress', note: 'x' }))!;
     // 時が来たことにする。
@@ -177,8 +180,9 @@ describe('段取りの終わり方', () => {
     });
     const base = (await s.start()).replace(/\/$/, '');
     const session = await s.session();
+    opts.beforeTick?.(state);
     const tick = await s.idleTick(session);
-    return { s, fake, base, asked, tick, store, item };
+    return { s, fake, base, asked, tick, store, item, goals, goal };
   }
 
   test('全部通ったら、やり残しも片づく', async () => {
@@ -204,6 +208,35 @@ describe('段取りの終わり方', () => {
       // 控えからも外れていること（際限なく蒸し返さない）。
       assert.deepEqual(await r.store.list(), [], '諦めたのに控えが残っている');
     } finally { await r.s.stop(); await r.fake.close(); }
+  });
+
+  test('段取りの記録を読めないときは、「段が残っていない」と取り違えて片づけない', async () => {
+    // 読めないだけなのに「段は残っていない」と読むと、段取りを閉じ、やり残しを「済んだ」にしていた。
+    // 読めなさは readFile をその道だけ失敗させて作る（権限に頼らない）。
+    const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
+    const realRead = fsp.readFile;
+    const restore = () => { (fsp as { readFile: unknown }).readFile = realRead; syncBuiltinESMExports(); };
+    let r: Awaited<ReturnType<typeof endWith>> | undefined;
+    try {
+      r = await endWith(['pending', 'pending'], {
+        beforeTick: (state) => {
+          const path = join(state, 'goals.jsonl');
+          (fsp as { readFile: unknown }).readFile = ((file: unknown, ...rest: unknown[]) => file === path
+            ? Promise.reject(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }))
+            : (realRead as (...a: unknown[]) => Promise<unknown>)(file, ...rest)) as never;
+          syncBuiltinESMExports();
+        },
+      });
+      restore();
+      assert.equal(r.tick, 'RESUMED', `進めないことを、手を付けた回として扱っていない: ${r.tick}`);
+      assert.equal((await r.store.list()).length, 1, 'やり残しを「済んだ」にした');
+      const still = (await r.goals.list()).find((g) => g.id === r!.goal.id);
+      assert.ok(still, '段取りを閉じた');
+      assert.ok(!r.asked.some((a) => a.includes('前回の続きです')), '読めないのに丸ごと投げ直した');
+    } finally {
+      restore();
+      if (r) { await r.s.stop(); await r.fake.close(); }
+    }
   });
 });
 

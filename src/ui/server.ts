@@ -17,7 +17,7 @@ import { githubLaunch } from '../core/github-mcp.ts';
 import { CATALOG, BUILTIN, findEntry, specFrom, needsNpx } from '../mcp/catalog.ts';
 import { connectService, disconnectService } from '../core/mcp-connect.ts';
 import { stat } from 'node:fs/promises';
-import { Goals, progressOf, isSettled } from '../core/goals.ts';
+import { Goals, progressOf, isSettled, type Goal } from '../core/goals.ts';
 import { StrideBook, strideText } from '../agent/stride.ts';
 import { decompose, stepPrompt } from '../agent/decompose.ts';
 import { Conversations, ID_SHAPE } from '../core/conversations.ts';
@@ -3313,7 +3313,19 @@ export class UiServer {
     const model = session.candidates[0] ?? '(不明)';
     const stride = await this.#stride.get(model, session.contextTokens);
 
-    let goal = (await this.#goals.list()).find((g) => g.request === item.request);
+    // 段取りの記録を読めないときは、今回は進めない。「無い」と取り違えると、立て直して二つ目を作る・
+    // 残っている段を「無い」と読んで閉じ、やり残しを「済んだ」にする（下の next）。
+    const unreadable = (e: unknown): true => {
+      this.broadcast({ type: 'log', level: 'warn', text: `段取りの記録を読めませんでした（${(e as Error).message}）。今回は進めません` });
+      this.#resuming = undefined;
+      return true;
+    };
+    let goal: Goal | undefined;
+    try {
+      goal = (await this.#goals.openGoals()).find((g) => g.request === item.request);
+    } catch (e) {
+      return unreadable(e);
+    }
     if (!goal) {
       this.broadcast({
         type: 'log', level: 'info',
@@ -3336,7 +3348,12 @@ export class UiServer {
       this.broadcast({ type: 'unfinished' });
     }
 
-    const step = await this.#goals.next(goal.id);
+    let step: Awaited<ReturnType<Goals['next']>>;
+    try {
+      step = await this.#goals.next(goal.id);
+    } catch (e) {
+      return unreadable(e);
+    }
     if (!step) {
       // 全部片づいた（塞がったものも含めて、もう手を付けない）。
       await this.#goals.close(goal.id);
@@ -3412,7 +3429,14 @@ export class UiServer {
       this.broadcast({ type: 'unfinished' });
       return;
     }
-    const action = await this.#goals.fail(at.goalId, at.stepId);
+    let action: Awaited<ReturnType<Goals['fail']>>;
+    try {
+      action = await this.#goals.fail(at.goalId, at.stepId);
+    } catch (e) {
+      // 記録を読めない。数えずに段を開いたまま残す（塞いだことにしない）。次にまた試す
+      this.broadcast({ type: 'log', level: 'warn', text: `段の結果を記録できませんでした（${(e as Error).message}）。この段は次にまた試します` });
+      return;
+    }
     if (action.do === 'retry') {
       this.broadcast({ type: 'log', level: 'info', text: 'この一歩は通りませんでした。もう一度試します。' });
     } else if (action.do === 'block') {
