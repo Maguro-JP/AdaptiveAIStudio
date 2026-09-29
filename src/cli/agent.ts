@@ -745,7 +745,7 @@ async function main(): Promise<void> {
               // （試験の無い作業場で、いつまでも残り続けるのを避ける）
               if (acceptedProposalId && ev.reason === 'completed' && ev.checked !== 'failed' && ev.checked !== 'unsure') {
                 await session.completeProposal(acceptedProposalId).catch((e: unknown) => {
-                  console.log(c.yellow(`  ${(e as Error).message}（実行は済んでいます。提案は開いたまま残ります）\n`));
+                  console.log(c.yellow(`  ${(e as Error).message}（実行は済んでいます。提案は採用済みのまま残ります）\n`));
                 });
               }
               acceptedProposalId = undefined;
