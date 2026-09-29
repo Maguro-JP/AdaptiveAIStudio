@@ -212,3 +212,13 @@ describe('やり残しの記録を読めないとき', () => {
     assert.deepEqual(await w.list(), [], '書き足した行が半端な行と繋がって読めない');
   });
 });
+
+describe('やり残しの記録の上がフォルダでなかったとき', () => {
+  test('ENOTDIR は「無い」と同じに読み、厳しく読む所でも投げない', async () => {
+    const dir = await tempDir('aas-unfinished-notdir-');
+    // 記録を置くはずのフォルダが、ファイルになっている
+    await writeFile(join(dir, 'state'), 'x');
+    const w = new UnfinishedWork(join(dir, 'state', 'unfinished.jsonl'));
+    assert.deepEqual(await w.list({ strict: true }), []);
+  });
+});

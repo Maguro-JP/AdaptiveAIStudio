@@ -23,7 +23,7 @@ const root = join(import.meta.dirname, '..');
 const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/runtime/cleanup.ts': { count: 18, why: '片づけの候補探しと大きさ。読めないものは候補に入らない。ただし名前だけで候補になるもの（古い llama-server・.part）は、大きさを取れないと 0 と数える（消す量を少なく言う）' },
   'src/cli/report.ts': { count: 7, why: '報告に載せるだけ。読めなければ載らない' },
-  'src/ui/preview.ts': { count: 3, why: '画面に見せるだけ。読めなければ見せられないと出す' },
+  'src/ui/preview.ts': { count: 4, why: '画面に見せるだけ。読めなければ見せられないと出す（index.html が見られなければ一覧を見せる）' },
   'src/core/undo.ts': { count: 2, why: '戻した差分を見せる文字と更新時刻。更新時刻が取れないものは「挟まっているかもしれない」として止める側（#115）' },
   'src/agent/prefetch.ts': { count: 3, why: 'ファイル一覧と錠の在る無しの下調べ。読めないものは一覧に載らないだけ（動かし方は別に厳しく読む、#116）' },
   'src/agent/initiative.ts': { count: 3, why: '思いつきの手がかり集め。読めないものは手がかりにしない' },
@@ -34,6 +34,7 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/core/version.ts': { count: 2, why: '版の表示。読めなければ次の候補（一つ上の VERSION・git）を出す。消す・書くことは無い' },
   'src/core/logfile.ts': { count: 2, why: '記録の大きさ（回すかどうか）と末尾の表示。読めなくても書き直さない' },
   'src/core/conversations.ts': { count: 1, why: '立ち上げたときの捨て場の片づけ。読めなければ次に立ち上げたときにまた消す（在る無しの判定は厳しく読む）' },
+  'src/cli/doctor.ts': { count: 1, why: '診断の表示。入っているかの下調べで、見られなければ入っていない側の案内が出るだけ' },
   'src/agent/commands.ts': { count: 2, why: '利用者が置いたコマンドの定義を読む。読めないものは一覧に出さない' },
   'src/ui/settings.ts': { count: 1, why: '保存先のフォルダの状態を見せるだけ' },
   'src/runtime/llama-install.ts': { count: 1, why: '書き出した後の在る無し。取れなければ .bin の写しを一つ余分に書くだけ' },
@@ -41,8 +42,8 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/agent/outside-changes.ts': { count: 1, why: '読めなければ記録できなかった道にする（「無い」とは読まない）' },
 };
 
-// `[] as string[]` のような型の付け足しも同じ形として数える
-const LENIENT = /\b(readFile|stat|lstat|readdir|open)\([^)]*\)[^;]*\.catch\(\(\) => (undefined|\[\]|''|0|false|null|\{\}|Buffer\.alloc\(0\))( as [\w<>[\]]+)?\)/g;
+// `[] as string[]` のような型の付け足しも同じ形として数える。`.then(() => true, () => false)` の二つ目の受け手も同じ
+const LENIENT = /\b(readFile|stat|lstat|readdir|open)\([^)]*\)[^;]*(\.catch\(|\.then\([^;]*?, )\(\) => (undefined|\[\]|''|0|false|null|\{\}|Buffer\.alloc\(0\))( as [\w<>[\]]+)?\)/g;
 
 async function sources(dir: string): Promise<string[]> {
   const out: string[] = [];
