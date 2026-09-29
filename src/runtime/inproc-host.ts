@@ -57,7 +57,12 @@ const runtime = new InProcRuntime({
 });
 
 process.on('SIGTERM', () => stop('SIGTERM'));
-process.on('SIGINT', () => stop('SIGINT'));
+/*
+ * **SIGINT では止まらない。**端末の Ctrl-C は、同じプロセスグループのこの子にも届く。親（CLI）は Ctrl-C で生成だけを止めて続けるつもり
+ * なのに、ここで止まると、モデルを読み直すまで次の依頼が落ちていた。止めるのは親の役目（止める口・SIGTERM）で、親が居なくなれば
+ * 標準入力が閉じて、下で終わる。
+ */
+process.on('SIGINT', () => { /* 親が決める */ });
 // 親が消えたら、こちらも終わる。読み込んだモデルを抱えたまま残らない。
 process.stdin.on('end', () => stop('親が居なくなった'));
 process.stdin.on('close', () => stop('親が居なくなった'));

@@ -144,3 +144,29 @@ describe('子の終わり方を、人の言葉に直す', () => {
     assert.equal(explainExit(null, null), '理由不明');
   });
 });
+
+describe('端末の Ctrl-C（SIGINT）', () => {
+  test('子は SIGINT では止まらない（親が生成だけ止めて続けるとき、モデルのサーバーまで落とさない）', { skip: process.platform === 'win32' && 'Windows では SIGINT を送れない' }, async () => {
+    const dir = await tempDir('aas-host-sigint-');
+    await writeFile(join(dir, 'a.gguf'), 'GGUF');
+    const host = new InProcHost({ modelsDir: dir, port: 0, lib: fakeLib });
+    try {
+      const got = await host.ensureLoaded('a.gguf');
+      const pid = host.pid()!;
+      process.kill(pid, 'SIGINT');
+      await new Promise((r) => setTimeout(r, 500));
+      assert.ok(alive(pid), 'SIGINT で子が止まった');
+      const r = await fetch(`${got.baseUrl}/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'a.gguf', messages: [{ role: 'user', content: 'hi' }], stream: true }),
+      });
+      assert.equal(r.status, 200, 'SIGINT の後に答えられない');
+      await r.text();
+      // 親が止めれば、今までどおり終わる
+      await host.shutdown();
+      await until(() => !alive(pid), '子が終わる', { timeoutMs: 8000 });
+    } finally {
+      await host.shutdown().catch(() => undefined);
+    }
+  });
+});
