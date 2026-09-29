@@ -311,17 +311,21 @@ export class ProposalQueue {
    *
    * **保存の直前に読み直して合わせる。**画面と端末は別々に読み込んで持つので、手元を丸ごと書くと、
    * もう一方が足した提案・決めた採否を消していた。
+   *
+   * 残せなかったときは、その失敗を返す（投げない。保存できなくても本体は止めない）。**黙らない。**呼ぶ側は
+   * 「登録しました」と言うので、残せていないのに言うと、立ち上げ直したときに提案が消えて見える。
    */
-  save(): Promise<void> {
+  save(): Promise<Error | undefined> {
     const path = this.#path;
-    if (!path) return Promise.resolve();
+    if (!path) return Promise.resolve(undefined);
     return inOrder(path, async () => {
       let disk: DiskState;
       // 読めない間は書かない（空と取り違えて、溜めていた提案を上書きしない）。
-      try { disk = await this.#readDisk(); } catch { return; }
-      if (disk.broken && !(await this.#setAside())) return; // 脇へ移せないなら、壊れたファイルを上書きしない
+      try { disk = await this.#readDisk(); } catch (e) { return new Error(`提案の記録を読めないので、残せませんでした（${(e as Error).message}）`); }
+      // 脇へ移せないなら、壊れたファイルを上書きしない
+      if (disk.broken && !(await this.#setAside())) return new Error('提案の記録が壊れていて、脇へ移せないので、残せませんでした');
       this.#merge(disk);
-      await this.#write(disk);
+      return this.#write(disk);
     });
   }
 
