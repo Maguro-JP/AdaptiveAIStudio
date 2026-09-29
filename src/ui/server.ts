@@ -834,7 +834,7 @@ export class UiServer {
     if (this.#loadedId === undefined || this.#saved >= session.history.length) return;
     await this.#persist(session);
     if (this.#saved < session.history.length) {
-      this.broadcast({ type: 'log', level: 'error', text: '書けなかったやりとりを残せないまま、会話を移りました（その分はファイルに残っていません）' });
+      this.broadcast({ type: 'log', level: 'error', text: '書けなかったやりとりを残せないまま、本体から会話を降ろしました（その分はファイルに残っていません）' });
     }
   }
 
@@ -843,7 +843,15 @@ export class UiServer {
    * （次に組む本体はファイルから読み直すので、手元の分は手放す）。それでも書けなければ、残っていないと言う。
    */
   async #retireSession(live: Session): Promise<void> {
-    if (this.#session === live) await this.#flushBeforeLeaving(live);
+    // 書き直しを待つ間も「手が塞がっている」ことにする（その隙に来た送りが、畳む本体で走り出す・同じ分を二重に書く）。
+    // 送る道の中（既に塞いでいる）からも呼ばれるので、終わったら元の値に戻す
+    const was = this.#preparing;
+    this.#preparing = true;
+    try {
+      if (this.#session === live) await this.#flushBeforeLeaving(live);
+    } finally {
+      this.#preparing = was;
+    }
     if (this.#session === live) this.#session = undefined;
     await live.close().catch(() => undefined);
   }
@@ -1060,7 +1068,10 @@ export class UiServer {
       if (took > 2000) say(`${what}に ${(took / 1000).toFixed(1)} 秒かかりました`);
     };
     // 止める前に、書けていないやりとりをもう一度書く（止めると手元の分は消える）
-    await timed('書けていないやりとりを書くの', async () => { if (this.#session) await this.#flushBeforeLeaving(this.#session); });
+    // 動いている依頼の分は、その依頼の終わりの書き込みに任せる（ここでも書くと、同じ分を二重に書く）
+    await timed('書けていないやりとりを書くの', async () => {
+      if (this.#session && !this.#mainBusy(this.#session)) await this.#flushBeforeLeaving(this.#session);
+    });
     await timed('会話を閉じるの', async () => this.#session?.close());
     // 自分の中に立てた口（inproc）も閉じる。閉じないと、画面を止めても
     // プロセスが生き続ける（検査が終わらないことで気づいた）。
@@ -2252,6 +2263,8 @@ export class UiServer {
       if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
       const session = this.#session;
       const past = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
+      // 画面へ返す中身（押し直しで書き直した・書けなかったときは、本体の今の履歴に合わせる）
+      let shown = past;
       // **動いている間も切り替えられる。**見るだけなら本体には触らない。
       // 手が空いているなら、その場で本体にも載せる。
       this.#conversationId = id;
@@ -2273,6 +2286,10 @@ export class UiServer {
               const fresh = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
               session.restore(fresh);
               this.#saved = fresh.length;
+              shown = fresh;
+            } else {
+              // 画面にも手元の履歴を出す（ファイルの中身だけを出すと、書けていないやりとりが見えない）
+              shown = [...session.history];
             }
           } else {
             session.restore(past);
@@ -2284,7 +2301,7 @@ export class UiServer {
       }
       this.broadcast({ type: 'conversations' });
       return send(res, 200, {
-        current: id, messages: past, running: this.#runningId ?? null,
+        current: id, messages: shown, running: this.#runningId ?? null,
         inFlight: this.#inFlightFor(id), approvals: this.#waitingApprovals(),
       });
     }

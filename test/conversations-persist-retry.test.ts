@@ -162,9 +162,11 @@ test('**載っている会話を押し直しても、書き直し待ちのやり
     await h.block(id);
     await h.send('押し直す前の二つ目');
     // 書けないまま、同じ会話を一覧で押し直す（前はファイルの中身で履歴を上書きして、二つ目を手放した）
-    await fetch(`${h.base}/api/conversations/select`, {
+    const picked = await (await fetch(`${h.base}/api/conversations/select`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }),
-    });
+    })).json() as { messages: { role: string; content: string }[] };
+    // 画面にも、書けていないやりとりまで出す（ファイルの中身だけを出すと見えない）
+    assert.deepEqual(picked.messages.filter((m) => m.role === 'user').map((m) => m.content), ['押し直す前の一つ目', '押し直す前の二つ目']);
     await h.unblock(id);
     await h.send('押し直した後の三つ目');
     assert.deepEqual(await h.asked(id), ['押し直す前の一つ目', '押し直す前の二つ目', '押し直した後の三つ目']);
