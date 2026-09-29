@@ -54,7 +54,7 @@ export function runGit(args: string[], cwd: string): Promise<{ code: number; out
 }
 
 /**
- * git を待つ上限。取得（fetch）（fetch）が途中で止まっても、git は既定で打ち切らない。画面の更新の口・CLI の /update が返らないまま
+ * git を待つ上限。取得（fetch）が途中で止まっても、git は既定で打ち切らない。画面の更新の口・CLI の /update が返らないまま
  * 固まっていた。遅い回線でも取り終わる長さにしておく。
  */
 export const GIT_TIMEOUT_MS = 5 * 60_000;

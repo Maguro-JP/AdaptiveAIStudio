@@ -265,10 +265,14 @@ export class McpClient {
     if (signal?.aborted) return { text: `${this.name}/${tool} は止めたので呼んでいません`, isError: true };
     try {
       const asked = this.#call('tools/call', { name: tool, arguments: args }, timeoutMs);
+      // 返事が普通に来たら聞き手を外す（一つの依頼で何度も呼ぶと、聞き手が溜まって Node が警告を出す）
+      let onAbort: (() => void) | undefined;
       const stopped = signal
-        ? new Promise<'stopped'>((ok) => signal.addEventListener('abort', () => ok('stopped'), { once: true }))
+        ? new Promise<'stopped'>((ok) => { onAbort = () => ok('stopped'); signal.addEventListener('abort', onAbort, { once: true }); })
         : undefined;
-      const result = stopped ? await Promise.race([asked, stopped]) : await asked;
+      const result = stopped
+        ? await Promise.race([asked, stopped]).finally(() => { if (onAbort) signal!.removeEventListener('abort', onAbort); })
+        : await asked;
       if (result === 'stopped') {
         asked.catch(() => undefined); // 後で時間切れになっても、受け手の無い失敗にしない
         return { text: `${this.name}/${tool} の返事を待たずに止めました`, isError: true };

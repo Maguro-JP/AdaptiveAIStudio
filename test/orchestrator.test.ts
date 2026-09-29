@@ -69,6 +69,25 @@ describe('ChatOrchestrator', () => {
     }
   });
 
+  test('候補が一つで、とても長く待てと言われたら、言われた長さを添えて落ちる（1 時間止まったままにしない）', async () => {
+    const primary = await startFakeServer({ kind: 'status', status: 429, body: 'slow down', retryAfter: '3600' });
+    try {
+      const registry = new ProviderRegistry();
+      registry.register(new OpenAiCompatibleProvider({ id: 'cloud', baseUrl: primary.baseUrl, locality: 'cloud' }));
+      const events = await Promise.race([
+        drain(new ChatOrchestrator(registry).run(
+          { candidates: ['cloud:m'], messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal,
+        )),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('1 時間待っている')), 10_000).unref()),
+      ]);
+      const failed = events.find((e) => e.type === 'failed');
+      assert.ok(failed, '落ちたと言っていない');
+      assert.match(failed.error.message, /3600 秒待つよう言われた/);
+    } finally {
+      await primary.close();
+    }
+  });
+
   test('やり直しを待っている間に止めたら、待ち明けを待たずに終わる', async () => {
     const primary = await startFakeServer({ kind: 'status', status: 429, body: 'slow down', retryAfter: '20' });
     try {
@@ -77,13 +96,15 @@ describe('ChatOrchestrator', () => {
       const ac = new AbortController();
       setTimeout(() => ac.abort(), 300).unref();
       const started = Date.now();
-      await Promise.race([
+      const events = await Promise.race([
         drain(new ChatOrchestrator(registry).run(
           { candidates: ['cloud:m'], messages: [{ role: 'user', content: 'hi' }] }, ac.signal,
         )),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('止めたのに 20 秒の待ちを続けている')), 10_000).unref()),
       ]);
       assert.ok(Date.now() - started < 10_000);
+      // 抜けたのが「止めたから」であること（待たずに落ちた、の別の道で抜けていない）
+      assert.equal(events.find((e) => e.type === 'failed'), undefined, '止めたのではなく、落ちたとして抜けた');
     } finally {
       await primary.close();
     }

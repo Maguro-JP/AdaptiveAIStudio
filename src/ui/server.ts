@@ -3405,6 +3405,8 @@ export class UiServer {
       // ■で止めた。「割れなかった」と読んで丸ごと進めない（止めたのに走り出す）。やり残しは残るので、次の見回りでまた試す
       if (stopped) {
         this.broadcast({ type: 'log', level: 'info', text: '止めたので、段に割るのをやめました' });
+        // 続きの状態も戻す（戻さないと、仕事の一覧に「やり残しの続き」が出たまま、やり直しの口も断り続ける）
+        this.#resuming = undefined;
         return true;
       }
       if (steps.length === 0) {

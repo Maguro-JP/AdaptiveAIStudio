@@ -321,8 +321,8 @@ export interface SessionOptions {
   journals?: Journals;
 }
 
-/** 考えごとで、配布元に新しい世代を訊く上限。 */
-const UPDATE_PROBE_TIMEOUT_MS = 15_000;
+/** 考えごとで、配布元に新しい世代を訊く上限。家族ごとに順に訊くので、短すぎると普段から打ち切って何も分からない。 */
+const UPDATE_PROBE_TIMEOUT_MS = 60_000;
 
 export class Session {
   readonly config: AasConfig;
@@ -1090,6 +1090,7 @@ export class Session {
 
     // UPKEEP は道具の側の話。BRIEFING（利用者の仕事の話）とは持ち場が違う。
     // 混ぜると、利用者にとって必要な報告が道具の都合に押し出される。
+    let upkeepStopped = false;
     if (mode.id === 'upkeep') {
       // 人が思い出したときだけ確かめる作りでは、結局は古いまま使い続ける。
       // 機械が定期的に見に行き、出ていたら提案として上げる。
@@ -1109,16 +1110,20 @@ export class Session {
           const at = c.indexOf(':');
           return at < 0 ? c : c.slice(at + 1);
         });
-        // 配布元への問い合わせも ■ で止められるようにし、15 秒で打ち切る。考えごとの間は人の送信が順番待ちになるので、
+        // 配布元への問い合わせも ■ で止められるようにし、上限で打ち切る。考えごとの間は人の送信が順番待ちになるので、
         // 返事が来ないと（最大で約 5 分）その間ずっと待たせていた
         const probe = new AbortController();
         this.#conv.running = probe;
+        const asked = AbortSignal.any([probe.signal, AbortSignal.timeout(UPDATE_PROBE_TIMEOUT_MS)]);
         const newer = await findNewerFor({
           runtimeKind: this.config.runtime?.kind ?? 'inproc',
           installed: using,
           seed: catalogFamilies(),
-          signal: AbortSignal.any([probe.signal, AbortSignal.timeout(UPDATE_PROBE_TIMEOUT_MS)]),
+          signal: asked,
         }).finally(() => { if (this.#conv.running === probe) this.#conv.running = undefined; });
+        // 止めた・打ち切った問い合わせは、中で失敗を握って空を返す。空を「新しい世代は無かった」と読まない（下の catch で「訊けなかった」と書く）
+        if (probe.signal.aborted) upkeepStopped = true;
+        if (asked.aborted) throw new Error(probe.signal.aborted ? '止めました' : `${UPDATE_PROBE_TIMEOUT_MS / 1000} 秒で返事が揃いませんでした`);
         context = [
           `いま使っているモデル: ${using.join(', ') || '(ローカルの指定なし)'}`,
           '',
@@ -1131,6 +1136,9 @@ export class Session {
           + '新しいものが無いのか、繋がらなかっただけなのかは分かりません。';
       }
     }
+
+    // ■で止めたなら、考えごとも続けない（問い合わせだけ止めて、モデルは呼び出す、にしない）
+    if (upkeepStopped) return false;
 
     // RECON だけは手がかりを機械で探してから渡す。
     // 事実の収集は機械の方が速く、確実で、無料。
