@@ -213,4 +213,50 @@ describe('提案の記録', () => {
     assert.ok(!saved.examined.includes('old0'), '古い方を残して新しい方を落とした');
     assert.ok(q.seen().has('new0'), '手元からも消えた');
   });
+
+  test('**採否を書けなかったときは、決まったことにしない**（手元も開いたまま、もう一度決められる）', async () => {
+    const { path } = await queueWith('settle-write-fails', ['a']);
+    const q = new ProposalQueue(path);
+    await q.load();
+    const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
+    const realRename = fsp.rename;
+    (fsp as { rename: unknown }).rename = (from: string, to: string) => to === path
+      ? Promise.reject(Object.assign(new Error('disk full'), { code: 'ENOSPC' }))
+      : realRename(from, to);
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(q.settle('p001', 'accepted', { onlyOpen: true }), /採否を保存できませんでした.*disk full/);
+    } finally {
+      (fsp as { rename: unknown }).rename = realRename;
+      syncBuiltinESMExports();
+    }
+    assert.equal(q.find('p001')?.status, 'open', '書けなかった採否が手元で決まったままになっている');
+    const disk = new ProposalQueue(path);
+    await disk.load();
+    assert.equal(disk.find('p001')?.status, 'open');
+    // 書けるようになれば、同じ提案をもう一度決められる
+    assert.equal((await q.settle('p001', 'accepted', { onlyOpen: true }))?.status, 'accepted');
+    const after = new ProposalQueue(path);
+    await after.load();
+    assert.equal(after.find('p001')?.status, 'accepted');
+  });
+
+  test('**記録を読めないときは、「見つからない」と取り違えず、読めなかったと言う**', async () => {
+    const { path } = await queueWith('settle-read-fails', ['a']);
+    const q = new ProposalQueue(path);
+    await q.load();
+    const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
+    const realRead = fsp.readFile;
+    (fsp as { readFile: unknown }).readFile = ((file: unknown, ...rest: unknown[]) => file === path
+      ? Promise.reject(Object.assign(new Error('denied'), { code: 'EACCES' }))
+      : (realRead as (...a: unknown[]) => Promise<unknown>)(file, ...rest)) as never;
+    syncBuiltinESMExports();
+    try {
+      await assert.rejects(q.settle('p001', 'rejected', { onlyOpen: true }), /提案の記録を読めませんでした/);
+    } finally {
+      (fsp as { readFile: unknown }).readFile = realRead;
+      syncBuiltinESMExports();
+    }
+    assert.equal(q.find('p001')?.status, 'open');
+  });
 });

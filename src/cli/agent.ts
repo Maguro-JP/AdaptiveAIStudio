@@ -592,8 +592,14 @@ async function main(): Promise<void> {
       if (line.startsWith('/do ') || line.startsWith('/reject ')) {
         const [cmd, id] = line.split(/\s+/);
         const session = await getSession();
-        const target = await session.decide(
-          id ?? '', cmd === '/reject' ? 'rejected' : 'accepted');
+        let target: Awaited<ReturnType<Session['decide']>>;
+        try {
+          target = await session.decide(id ?? '', cmd === '/reject' ? 'rejected' : 'accepted');
+        } catch (e) {
+          // 採否を残せなかった。決めたことにしない（採用でも実行しない）
+          console.log(c.red(`  ${(e as Error).message}\n`));
+          continue;
+        }
         if (!target) { console.log(c.red(`  提案が見つかりません: ${id ?? ''}\n`)); continue; }
         if (cmd === '/reject') {
           console.log(c.dim(`  ${target.id} を却下しました。\n`));
@@ -738,7 +744,9 @@ async function main(): Promise<void> {
               // 確かめて落ちたときだけ、片付けない。
               // （試験の無い作業場で、いつまでも残り続けるのを避ける）
               if (acceptedProposalId && ev.reason === 'completed' && ev.checked !== 'failed' && ev.checked !== 'unsure') {
-                await session.completeProposal(acceptedProposalId);
+                await session.completeProposal(acceptedProposalId).catch((e: unknown) => {
+                  console.log(c.yellow(`  ${(e as Error).message}（実行は済んでいます。提案は採用済みのまま残ります）\n`));
+                });
               }
               acceptedProposalId = undefined;
               break;

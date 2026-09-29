@@ -284,12 +284,24 @@ export class ProposalQueue {
     }
     return inOrder(path, async () => {
       let disk: DiskState;
-      try { disk = await this.#readDisk(); } catch { return undefined; }
+      // 読めないときは決めない。前は「見つからないか、もう決まっている」と同じ返事にしていた。
+      try { disk = await this.#readDisk(); } catch (e) {
+        throw new Error(`提案の記録を読めませんでした（${(e as Error).message}）。採否は決めていません`);
+      }
       this.#merge(disk);
       const item = this.find(id);
       if (!item || (opts.onlyOpen && item.status !== 'open')) return undefined;
+      const before = item.status;
+      const wasChanged = this.#changed.has(item.id);
       this.setStatus(item.id, status);
-      await this.#write(disk);
+      const failed = await this.#write(disk);
+      if (failed) {
+        // **書けなかった採否を、決まったことにしない。**前は手元だけ決まったまま返し、採用なら実行まで進めた。
+        // ファイルは開いたままなので、もう一方（画面と端末）や立ち上げ直した後に、同じ提案がもう一度決められた。
+        item.status = before;
+        if (!wasChanged) this.#changed.delete(item.id);
+        throw new Error(`提案の採否を保存できませんでした（${failed.message}）。採否は決めていません`);
+      }
       return item;
     });
   }
@@ -313,7 +325,8 @@ export class ProposalQueue {
     });
   }
 
-  async #write(disk: DiskState): Promise<void> {
+  /** 書く。書けなかったときはその失敗を返す（投げない。保存できなくても本体は止めない）。 */
+  async #write(disk: DiskState): Promise<Error | undefined> {
     const path = this.#path!;
     try {
       await mkdir(dirname(path), { recursive: true });
@@ -333,8 +346,10 @@ export class ProposalQueue {
       }
       this.#changed.clear();
       this.#droppedDelta = 0;
-    } catch {
-      // 保存できなくても本体は止めない
+      return undefined;
+    } catch (e) {
+      // 保存できなくても本体は止めない。決めた採否のように、書けたかで答えが変わる所は呼ぶ側が見る
+      return e instanceof Error ? e : new Error(String(e));
     }
   }
 
