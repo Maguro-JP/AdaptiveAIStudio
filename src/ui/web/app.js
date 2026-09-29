@@ -671,8 +671,13 @@ const run = {
 };
 
 // 繋がらないときに黙ると（受け手の無い失敗は「途中で止まりました」とだけ出る）、止めたつもりで止まっていない
-$('runStop').onclick = () => fetch('/api/abort', { method: 'POST' })
-  .catch((e) => showCrash('止められませんでした', `繋がりません（${e?.message ?? e}）`));
+$('runStop').onclick = () => void stopRun();
+
+/** 動いている依頼を止める。断られた（500 等）ときも、繋がらないときも言う。止めたつもりで止まっていない、を作らない。 */
+async function stopRun() {
+  const r = await ask('/api/abort', { method: 'POST' }, '止められませんでした');
+  if (r && !r.ok) showCrash('止められませんでした', r.body.error ?? String(r.status));
+}
 
 
 /**
@@ -1809,8 +1814,7 @@ async function commands() {
   for (const c of cmds?.commands ?? []) {
     add(`/${c.name}`, c.description + (c.source === 'skill' ? `（skill: ${c.path}）` : ''), () => ctx.prefill(`/${c.name} `));
   }
-  add('中断する', '動いている依頼を止める', () => fetch('/api/abort', { method: 'POST' })
-    .catch((e) => showCrash('止められませんでした', `繋がりません（${e?.message ?? e}）`)));
+  add('中断する', '動いている依頼を止める', () => void stopRun());
   add('いま考えさせる', '暇なときの考えごとを今やる', async () => {
     const r = await ask('/api/think', { method: 'POST' }, '考えさせられませんでした');
     // 作業中は断られる（409）。黙らない

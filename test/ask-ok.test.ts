@@ -45,13 +45,12 @@ test('**`ask` の返事を受け取ったら、次に `ask` を呼ぶまでに�
 });
 
 /**
- * 書き込み（`method:` を持つ）の生の `fetch(` は、受け取ってその `ok` を見る。投げっぱなしにしてよいのは、失敗しても次の
- * 描き直しで状態が見える所だけ（中断・添付）。添付の「×」は送るときに画面の手元の一覧だけを使うので、外し損ねても依頼には
- * 入らない。作業を止めるのは、失敗すると止めたつもりで回り続けるので外した。`ask` / `askJson` / `tell` の中身は、そこで見ている。
+ * 書き込み（`method:` を持つ）の生の `fetch(` は、受け取ってその `ok` を見る。投げっぱなしにしてよい所は置かない
+ * （中断と添付を外すのも、失敗したら言う。止めたつもりで回り続ける・消したつもりで写しが残る、を作らない）。
+ * `ask` / `askJson` / `tell` の中身は、そこで見ている。
  */
-const FIRE_AND_FORGET = /\/api\/(abort|attach)\b/;
 
-test('**書き込みの `fetch` は、返事の `ok` を見る**（投げっぱなしは、決めた所だけ）', async () => {
+test('**書き込みの `fetch` は、返事の `ok` を見る**（投げっぱなしにしない）', async () => {
   const bad: string[] = [];
   let seen = 0;
   for (const { name, lines } of await codeLines()) {
@@ -60,7 +59,6 @@ test('**書き込みの `fetch` は、返事の `ok` を見る**（投げっぱ�
       const call = lines.slice(i, i + 4).join('\n');
       if (!/method:\s*['"`]?(POST|PUT|DELETE|PATCH)|method:\s*\w/.test(call)) return; // 読むだけのものは見ない
       seen += 1;
-      if (FIRE_AND_FORGET.test(call)) return;
       // 助け手の中身（ask・askJson・tell）は、それ自身が ok を見ている
       const above = lines.slice(Math.max(0, i - 6), i).join('\n');
       if (/(async function (ask|askJson|tell)\b)/.test(above)) return;
@@ -77,8 +75,8 @@ test('**書き込みの `fetch` は、返事の `ok` を見る**（投げっぱ�
 });
 
 /**
- * 中断（`/api/abort`）は投げっぱなしでよいが、繋がらないときは黙らない。本体はいつも受けるが、止まっている・繋がらない
- * ときに黙ると、止めたつもりで止まっていない（受け手の無い失敗は「途中で止まりました」とだけ出る）。
+ * 中断（`/api/abort`）は、繋がらないとき・断られたときに黙らない。黙ると、止めたつもりで止まっていない
+ * （受け手の無い失敗は「途中で止まりました」とだけ出る）。
  */
 test('**中断を送る所は、繋がらないときに黙らない受け手を持つ**', async () => {
   const bad: string[] = [];
@@ -91,10 +89,14 @@ test('**中断を送る所は、繋がらないときに黙らない受け手を
       const at = m.index ?? 0;
       const end = src.indexOf(';', at);
       const stmt = src.slice(at, end < 0 ? at + 300 : end);
-      // 受けて何も言わない形（`.catch((e) => undefined)`）は通さない。画面に出す（showCrash・note）ところまで見る
-      if (!/\.catch\(\(e\) =>[^;]*\b(showCrash|note)\(/.test(stmt) && !/^ask\(/.test(stmt)) bad.push(`${name}:${src.slice(0, at).split('\n').length}`);
+      // 受けて何も言わない形（`.catch((e) => undefined)`）は通さない。画面に出す（showCrash・note）ところまで見る。
+      // try で包む形は、続く catch が画面に出すこと（繋がらない）と、ok を見て出すこと（断られた）の両方を見る
+      const after = src.slice(at, at + 600);
+      const caught = /\.catch\(\(e\) =>[^;]*\b(showCrash|note)\(/.test(stmt)
+        || (/!r\.ok\)[\s\S]*?\b(showCrash|note)\(/.test(after) && /\} catch \(e\) \{\s*\b(showCrash|note)\(/.test(after));
+      if (!caught && !/^ask\(/.test(stmt)) bad.push(`${name}:${src.slice(0, at).split('\n').length}`);
     }
   }
-  assert.ok(seen >= 3, `中断を送る所を見つけられていない（${seen} 件）`);
+  assert.ok(seen >= 2, `中断を送る所を見つけられていない（${seen} 件）`);
   assert.deepEqual(bad, [], `繋がらないときに黙る中断:\n${bad.join('\n')}`);
 });

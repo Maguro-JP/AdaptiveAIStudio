@@ -179,12 +179,18 @@ export class Attachments {
   get(id: string): Attachment | undefined { return this.#items.get(id); }
   list(): Attachment[] { return [...this.#items.values()].sort((a, b) => a.at - b.at); }
 
-  async drop(id: string): Promise<boolean> {
+  /**
+   * 外す。`dropped` は預かっていたか。預かりからは外れても、コピーを消せなかったときは `kept` にその理由が入る
+   * （掴まれている等。一日経ったものは立ち上げたときの片づけで消える）。預けたものを消したつもりで残さない。
+   */
+  async drop(id: string): Promise<{ dropped: boolean; kept?: string }> {
     const item = this.#items.get(id);
-    if (!item) return false;
+    if (!item) return { dropped: false };
     this.#items.delete(id);
-    await rm(item.path, { force: true }).catch(() => { /* もう無いなら、それでよい */ });
-    return true;
+    // もう無いなら、それでよい（force）
+    // 画面に出すのは符丁（EBUSY 等）だけ。rm の文はフルパス入りの長い英文になる
+    const failed = await rm(item.path, { force: true }).then(() => undefined, (e: unknown) => (e as NodeJS.ErrnoException).code ?? (e as Error).message);
+    return failed === undefined ? { dropped: true } : { dropped: true, kept: failed };
   }
 
   /**

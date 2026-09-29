@@ -1191,7 +1191,7 @@ export class UiServer {
 
     if (path === '/api/attach' && req.method === 'DELETE') {
       const id = url.searchParams.get('id') ?? '';
-      return send(res, 200, { dropped: await this.#attachments.drop(id) });
+      return send(res, 200, await this.#attachments.drop(id));
     }
 
     if (path === '/api/send' && req.method === 'POST') {

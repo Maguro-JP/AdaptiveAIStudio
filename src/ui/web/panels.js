@@ -265,10 +265,18 @@ export const PANELS = {
         const x = el('button', 'attachment-x', '×');
         x.type = 'button';
         x.title = '外す';
-        x.onclick = () => {
+        x.onclick = async () => {
           attached.delete(id);
           drawTray();
-          void fetch(`/api/attach?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+          // 依頼には添えなくなる（画面の預かりから外した）。預けたコピーを消せたかは、返事を見て言う
+          try {
+            const r = await fetch(`/api/attach?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+            const body = await r.json().catch(() => ({}));
+            if (!r.ok) note('warn', `「${item.name}」を外しましたが、預けたコピーを消せたかを確かめられません（${body.error ?? r.status}）`);
+            else if (body.kept) note('warn', `「${item.name}」を外しましたが、預けたコピーを消せませんでした（${body.kept}）。一日経つと、立ち上げたときに片づけます`);
+          } catch (e) {
+            note('warn', `「${item.name}」を外しましたが、預けたコピーを消せたかを確かめられません（繋がりません: ${e?.message ?? e}）`);
+          }
         };
         chip.append(x);
         tray.append(chip);
@@ -589,8 +597,17 @@ export const PANELS = {
     };
     input.onblur = () => { slashShown = []; drawSlash(); };
     // 繋がらないときに黙ると、止めたつもりで止まっていない
-    stop.onclick = () => fetch('/api/abort', { method: 'POST' })
-      .catch((e) => note('bad', `止められませんでした（繋がりません: ${e?.message ?? e}）`));
+    stop.onclick = async () => {
+      try {
+        const r = await fetch('/api/abort', { method: 'POST' });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          note('bad', `止められませんでした（${body.error ?? r.status}）`);
+        }
+      } catch (e) {
+        note('bad', `止められませんでした（繋がりません: ${e?.message ?? e}）`);
+      }
+    };
     ctx.focusInput = () => input.focus();
     ctx.prefill = (head) => {
       if (!input.value.startsWith(head)) input.value = head + input.value;
