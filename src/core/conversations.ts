@@ -14,6 +14,7 @@
 import { readdir, readFile, appendFile, writeFile, mkdir, rm, rename, stat, open } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ProviderMessage } from '../providers/contract.ts';
+import { isAbsent } from '../harness/put-back.ts';
 
 /** 一覧に出す見出し。中身（やりとり）は含めない。 */
 export interface ConversationHead {
@@ -353,8 +354,11 @@ export class Conversations {
           await fh.close();
         }
       }
-    } catch {
-      return [];
+    } catch (e) {
+      // 無いだけなら、まだ話していない会話。**読めない（権限・掴まれている）ときは投げる。**空として返すと、
+      // 読めないだけの会話を中身の無い会話として本体に載せ、モデルはそれまでのやりとりを知らないまま続きを書いていた
+      if (isAbsent(e)) return [];
+      throw e;
     }
     const out: ProviderMessage[] = [];
     for (const line of raw.split('\n')) {
