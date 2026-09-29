@@ -19,10 +19,10 @@
  * git が無い・git の管理下でない作業場では、比べられない（`undefined`）。
  * **比べられないことを「変わっていない」と読まない。**呼ぶ側がそう言う。
  */
-import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { stat, readFile } from 'node:fs/promises';
+import { join, isAbsolute } from 'node:path';
 import { execFile } from 'node:child_process';
-import { contentOf, type FileContent } from '../harness/put-back.ts';
+import { contentOf, isAbsent, type FileContent } from '../harness/put-back.ts';
 
 /**
  * git を呼び、**標準出力だけ**を返す。
@@ -112,6 +112,42 @@ export function stampChanges(before: WorkspaceStamp, after: WorkspaceStamp): str
 }
 
 /**
+ * まだ一度もコミットしていない（HEAD が指すブランチがまだ無い）か。**確かめられたときだけ true。**
+ *
+ * `rev-parse --verify HEAD` が落ちるのは、コミットが無いときだけではない。ブランチの ref ファイルが壊れていても同じ形で落ちる
+ * （電源断・同期ソフトで空やゼロ埋めになる）。そこで「無い」と読むと、HEAD に在るファイルを戻すときに消す。だから:
+ *   ・HEAD が指すブランチ名が取れる（`symbolic-ref`。壊れた ref では落ちる）
+ *   ・そのブランチの ref ファイルが無い（「無い」と確かめられた。読めない・在るなら違う）
+ *   ・packed-refs にもそのブランチが無い
+ * の全部を満たすときだけ、まだコミットが無いとする。
+ */
+async function unbornHead(root: string): Promise<boolean> {
+  const ref = (await gitOut(['symbolic-ref', '-q', 'HEAD'], root))?.trim();
+  if (!ref) return false;
+  const resolveGitPath = async (p: string): Promise<string | undefined> => {
+    const out = (await gitOut(['rev-parse', '--git-path', p], root))?.trim();
+    return out ? (isAbsolute(out) ? out : join(root, out)) : undefined;
+  };
+  const loose = await resolveGitPath(ref);
+  if (!loose) return false;
+  try {
+    await stat(loose);
+    return false; // 在る（壊れている）
+  } catch (e) {
+    if (!isAbsent(e)) return false;
+  }
+  const packedPath = await resolveGitPath('packed-refs');
+  if (!packedPath) return false;
+  let packed = '';
+  try {
+    packed = await readFile(packedPath, 'utf8');
+  } catch (e) {
+    if (!isAbsent(e)) return false;
+  }
+  return !packed.split('\n').some((line) => line.endsWith(` ${ref}`));
+}
+
+/**
  * HEAD に在る中身。
  *
  *   ・`absent`: HEAD にその道は無い（新しく作られたもの）。戻すときは消す
@@ -141,14 +177,11 @@ export type HeadContent =
 export async function headContent(root: string, relPath: string, maxBytes: number): Promise<HeadContent> {
   // `ls-tree -l` は一度で、在るか・種類（mode）・大きさを返す。
   const entry = await gitOut(['ls-tree', '-l', '-z', 'HEAD', '--', `./${relPath}`], root);
-  // **git が落ちたのを「無い」と読まない。**HEAD に無い道は、正常に終わって空を返す。落ちた（索引の錠の取り合い・起動の失敗）
+  // **git が落ちたのを「無い」と読まない。**HEAD に無い道は、正常に終わって空を返す。落ちた（起動の失敗・壊れた ref・読めない object）
   // のを「無い」と読むと、HEAD に在るファイルを「前は無かった」と記録し、戻すときに消していた
   if (entry === undefined) {
-    // まだ一度もコミットしていないリポジトリは HEAD が無く、ls-tree は落ちる。そこでは何も HEAD に無いので「無い」。
-    // git そのものは動いて HEAD だけ無いと確かめられたときに限る（git が動かないのを「無い」と読まない）
-    const gitDir = await gitOut(['rev-parse', '--git-dir'], root);
-    const head = await gitOut(['rev-parse', '--verify', '-q', 'HEAD'], root);
-    return gitDir !== undefined && head === undefined ? { kind: 'absent' } : { kind: 'unavailable', why: 'unreadable' };
+    // まだ一度もコミットしていないリポジトリは HEAD が無く、ls-tree は落ちる。そこでは何も HEAD に無いので「無い」
+    return (await unbornHead(root)) ? { kind: 'absent' } : { kind: 'unavailable', why: 'unreadable' };
   }
   if (entry === '') return { kind: 'absent' };
   const m = /^(\d{6}) (\w+) [0-9a-f]+ +(\d+|-)\t/.exec(entry);

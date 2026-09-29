@@ -11,7 +11,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tempDir } from './tmp.ts';
 import { writeEnvValue } from '../src/core/env.ts';
@@ -60,10 +60,16 @@ describe('git から前の中身を取れないとき', () => {
     git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
     assert.deepEqual(await headContent(root, 'a.txt', 1024), { kind: 'content', content: 'a\n' });
     assert.deepEqual(await headContent(root, 'b.txt', 1024), { kind: 'absent' });
-    // git そのものが落ちる（リポジトリでない所で走らせる）
+    // git そのものが落ちる（リポジトリでない所で走らせる）。一時フォルダが別のリポジトリの中にあっても、上を探させない
     const notRepo = await tempDir('aas-unreadable-head-none-');
-    assert.deepEqual(await headContent(notRepo, 'a.txt', 1024), { kind: 'unavailable', why: 'unreadable' },
-      'git が落ちたのを「HEAD に無い」と読んだ');
+    const saved = process.env.GIT_CEILING_DIRECTORIES;
+    process.env.GIT_CEILING_DIRECTORIES = dirname(notRepo);
+    try {
+      assert.deepEqual(await headContent(notRepo, 'a.txt', 1024), { kind: 'unavailable', why: 'unreadable' },
+        'git が落ちたのを「HEAD に無い」と読んだ');
+    } finally {
+      if (saved === undefined) delete process.env.GIT_CEILING_DIRECTORIES; else process.env.GIT_CEILING_DIRECTORIES = saved;
+    }
   });
 
   test('まだ一度もコミットしていないリポジトリでは、HEAD に何も無いので「無い」', async () => {
@@ -72,6 +78,19 @@ describe('git から前の中身を取れないとき', () => {
     git(root, 'init', '-q');
     await writeFile(join(root, 'new.txt'), 'new\n');
     assert.deepEqual(await headContent(root, 'new.txt', 1024), { kind: 'absent' }, '作ったばかりのファイルを戻せない形にした');
+  });
+
+  test('ブランチの ref が壊れているときは、コミットが無いのと取り違えず「取れない」', async () => {
+    const root = join(await tempDir('aas-unreadable-head-broken-'), 'repo');
+    await mkdir(root, { recursive: true });
+    await writeFile(join(root, 'a.txt'), 'a\n');
+    git(root, 'init', '-q');
+    git(root, 'add', '-A');
+    git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+    const ref = execFileSync('git', ['symbolic-ref', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+    await writeFile(join(root, '.git', ref), 'garbage\n');
+    assert.deepEqual(await headContent(root, 'a.txt', 1024), { kind: 'unavailable', why: 'unreadable' },
+      '壊れた ref を「まだコミットが無い」と読み、HEAD に在るファイルを「無い」とした');
   });
 });
 
