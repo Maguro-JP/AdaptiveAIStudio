@@ -432,6 +432,23 @@ export class UiServer {
    * その間どの依頼も進まない。取り直せるように、内容もここに置く。
    */
   readonly #pending = new Map<string, { finish: (ok: ApprovalAnswer) => void; request: ApprovalRequest }>();
+  /**
+   * 裏で動いている問い合わせ（やり残しの続きで依頼を段に割る等）を止める口。■（`/api/abort`）で全部止める。
+   * 誰も止めない signal を渡していたので、■を押しても割り終わるまでモデルの口を塞ぎ続けた。
+   */
+  readonly #background = new Set<AbortController>();
+
+  /** 裏の問い合わせを、■で止められる形で走らせる。`stopped` は ■ で止めたか（止めた結果の空を「割れなかった」と読まないため）。 */
+  async #stoppable<T>(run: (signal: AbortSignal) => Promise<T>): Promise<{ value: T; stopped: boolean }> {
+    const ac = new AbortController();
+    this.#background.add(ac);
+    try {
+      const value = await run(ac.signal);
+      return { value, stopped: ac.signal.aborted };
+    } finally {
+      this.#background.delete(ac);
+    }
+  }
   /** 渡されたファイルの預かり所。 */
   readonly #attachments = new Attachments();
   /** 作っているものを見せる口。操作用とは**別の口**にする。 */
@@ -1503,6 +1520,7 @@ export class UiServer {
        */
       for (const { finish } of this.#pending.values()) finish(false);
       this.#pending.clear();
+      for (const ac of this.#background) ac.abort();
       this.#session?.abort();
       return send(res, 200, { ok: true });
     }
@@ -3377,13 +3395,20 @@ export class UiServer {
         type: 'log', level: 'info',
         text: `一度で通らなかったので、段に割ります（歩幅: ${strideText(stride.size)}）`,
       });
-      const steps = await decompose(session.orchestrator, {
+      const { value: steps, stopped } = await this.#stoppable((signal) => decompose(session.orchestrator, {
         candidates: session.candidates,
         request: item.request,
         size: stride.size,
         note: item.note,
-        signal: new AbortController().signal,
-      });
+        signal,
+      }));
+      // ■で止めた。「割れなかった」と読んで丸ごと進めない（止めたのに走り出す）。やり残しは残るので、次の見回りでまた試す
+      if (stopped) {
+        this.broadcast({ type: 'log', level: 'info', text: '止めたので、段に割るのをやめました' });
+        // 続きの状態も戻す（戻さないと、仕事の一覧に「やり残しの続き」が出たまま、やり直しの口も断り続ける）
+        this.#resuming = undefined;
+        return true;
+      }
       if (steps.length === 0) {
         this.broadcast({ type: 'log', level: 'warn', text: '段に割れませんでした。丸ごと進めます。' });
         return false;
@@ -3502,13 +3527,19 @@ export class UiServer {
         type: 'log', level: 'info',
         text: `この一歩が通らないので、もっと小さく割り直します（歩幅: ${strideText(stride.size)}）`,
       });
-      const smaller = await decompose(session.orchestrator, {
+      const { value: smaller, stopped } = await this.#stoppable((signal) => decompose(session.orchestrator, {
         candidates: session.candidates,
         request: step.instruction,
         size: stride.size,
         note: '一度で通らなかった段です。もっと細かく割ってください。',
-        signal: new AbortController().signal,
-      });
+        signal,
+      }));
+      // ■で止めた。割れなかったとして段を塞がない（開いたまま残し、次にまた試す）
+      if (stopped) {
+        this.broadcast({ type: 'log', level: 'info', text: '止めたので、割り直すのをやめました。この段は次にまた試します' });
+        this.broadcast({ type: 'unfinished' });
+        return;
+      }
       if (smaller.length === 0) {
         await this.#goals.block(at.goalId, at.stepId);
         this.broadcast({ type: 'log', level: 'warn', text: '割り直せませんでした。次の段へ進みます。' });

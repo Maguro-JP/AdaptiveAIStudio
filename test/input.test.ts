@@ -5,7 +5,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { Readable, Writable } from 'node:stream';
+import { Readable, Writable, PassThrough } from 'node:stream';
 import { LineSource } from '../src/cli/input.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -86,5 +86,16 @@ describe('行入力', () => {
       [await src.question('> '), await src.question('> '), await src.question('> ')],
       ['a', 'b', 'c'],
     );
+  });
+});
+
+describe('止めたときの、待っている問い', () => {
+  test('cancelWaiting で、待っている問いが「答え無し」で返る（Enter を押すまで待たせない）', async () => {
+    const input = new PassThrough();
+    const src = new LineSource(input, new PassThrough());
+    const asked = src.question('許可しますか？ ');
+    src.cancelWaiting();
+    assert.equal(await asked, undefined);
+    src.close();
   });
 });

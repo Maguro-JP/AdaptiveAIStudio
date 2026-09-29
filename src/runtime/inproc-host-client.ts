@@ -69,6 +69,9 @@ export function explainExit(code: number | null, signal: string | null): string 
   return String(how);
 }
 
+/** 止めるよう頼んで返事を待つ上限。これを過ぎたら頼んだことにして、あとは出て行くのを待ち、出なければ殺す。 */
+export const SHUTDOWN_ASK_MS = 2_000;
+
 export class InProcHost implements LocalRuntime {
   readonly id = 'inproc';
   readonly #opts: InProcHostOptions;
@@ -129,11 +132,12 @@ export class InProcHost implements LocalRuntime {
     return this.#url;
   }
 
-  async #call<T>(op: string, body?: unknown): Promise<T> {
+  async #call<T>(op: string, body?: unknown, timeoutMs?: number): Promise<T> {
     const base = await this.#up();
+    const signal = timeoutMs === undefined ? undefined : AbortSignal.timeout(timeoutMs);
     const r = await fetch(`${base}/control/${op}`, body === undefined
-      ? { method: 'GET' }
-      : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      ? { method: 'GET', ...(signal ? { signal } : {}) }
+      : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), ...(signal ? { signal } : {}) });
     const j = await r.json() as T & { error?: string };
     if (!r.ok) throw new Error(j.error ?? `${op} が ${r.status} で終わりました`);
     return j;
@@ -179,7 +183,8 @@ export class InProcHost implements LocalRuntime {
     if (!child) return;
     const gone = new Promise<void>((ok) => child.once('exit', () => ok()));
     this.#stopping = true;
-    await this.#call('shutdown', {}).catch(() => undefined);
+    // 頼むのは短く待つだけ（子の手が塞がって返事をしないと、殺すまでの 5 秒の前に何分も待っていた）
+    await this.#call('shutdown', {}, SHUTDOWN_ASK_MS).catch(() => undefined);
     const wait = new Promise<'late'>((ok) => setTimeout(() => ok('late'), 5000).unref?.());
     if (await Promise.race([gone.then(() => 'gone' as const), wait]) === 'late') child.kill('SIGKILL');
     this.#child = undefined;

@@ -80,11 +80,16 @@ export function spawnCall(
   file: string;
   /** 殻を使う道では渡さない（命令の文をそのまま殻へ渡す）。 */
   args?: string[];
-  options: { cwd: string; env: Record<string, string>; shell?: boolean; detached?: boolean };
+  options: { cwd: string; env: Record<string, string>; shell?: boolean; detached?: boolean; stdio: ['ignore', 'pipe', 'pipe'] };
 } {
+  /*
+   * **標準入力は渡さない（閉じておく）。**開いたままだと、入力を待つ命令（引数なしの `cat`、`-m` なしの `git commit`、`npm init`）が
+   * 時間切れの上限（既定 600 秒）まで何もせずに待つ。閉じていれば、すぐ終わるか失敗して返る。
+   */
+  const stdio: ['ignore', 'pipe', 'pipe'] = ['ignore', 'pipe', 'pipe'];
   return plan.shell
-    ? { file: plan.file, options: { cwd, shell: true, env } }
-    : { file: plan.file, args: plan.args, options: { cwd, detached: plan.detached, env } };
+    ? { file: plan.file, options: { cwd, shell: true, env, stdio } }
+    : { file: plan.file, args: plan.args, options: { cwd, detached: plan.detached, env, stdio } };
 }
 
 export interface ExecResult {

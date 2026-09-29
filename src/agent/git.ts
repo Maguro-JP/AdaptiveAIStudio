@@ -13,7 +13,7 @@ export type GitState =
   | { kind: 'unavailable'; reason: string };
 
 export async function inspectGit(root: string): Promise<GitState> {
-  const status = await run('git', ['status', '--porcelain', '--branch'], root);
+  const status = await runGit(['status', '--porcelain', '--branch'], root);
   if (status.code !== 0) {
     if (/not a git repository/i.test(status.out)) return { kind: 'notRepo' };
     return { kind: 'unavailable', reason: status.out.trim().split('\n')[0] ?? 'git を実行できません' };
@@ -46,17 +46,36 @@ export function describeGitState(state: GitState): { text: string; risky: boolea
 
 /** git を呼ぶ。更新の仕組みからも使う。 */
 export function runGit(args: string[], cwd: string): Promise<{ code: number; out: string }> {
-  return run('git', args, cwd);
+  return runWithin('git', args, cwd, GIT_TIMEOUT_MS, {
+    // 資格情報を訊かせない（端末の入力待ち・Windows の資格情報を訊く画面で、返らないまま止まる）。訊かれる場面は失敗として返る
+    GIT_TERMINAL_PROMPT: '0',
+    GCM_INTERACTIVE: 'never',
+  });
 }
 
-function run(cmd: string, args: string[], cwd: string) {
+/**
+ * git を待つ上限。取得（fetch）が途中で止まっても、git は既定で打ち切らない。画面の更新の口・CLI の /update が返らないまま
+ * 固まっていた。遅い回線でも取り終わる長さにしておく。
+ */
+export const GIT_TIMEOUT_MS = 5 * 60_000;
+
+/** 命令を走らせ、`timeoutMs` を過ぎたら打ち切って `code: -1` で返す。 */
+export function runWithin(
+  cmd: string, args: string[], cwd: string, timeoutMs: number, env: Record<string, string> = {},
+): Promise<{ code: number; out: string }> {
   return new Promise<{ code: number; out: string }>((resolve) => {
-    const child = spawn(cmd, args, { cwd });
+    const child = spawn(cmd, args, { cwd, env: { ...process.env, ...env } });
     let out = '';
+    let settled = false;
+    const finish = (r: { code: number; out: string }) => { if (!settled) { settled = true; clearTimeout(timer); resolve(r); } };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish({ code: -1, out: `${out}\n${Math.round(timeoutMs / 1000)} 秒たっても終わらないので打ち切りました` });
+    }, timeoutMs);
     const append = (read: (c: Buffer) => string) => (b: Buffer) => { out += read(b); };
     child.stdout?.on('data', append(chunkReader()));
     child.stderr?.on('data', append(chunkReader()));
-    child.on('error', (e) => resolve({ code: -1, out: e.message }));
-    child.on('close', (code) => resolve({ code: code ?? -1, out }));
+    child.on('error', (e) => finish({ code: -1, out: e.message }));
+    child.on('close', (code) => finish({ code: code ?? -1, out }));
   });
 }

@@ -228,8 +228,10 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     arm(this.#firstTokenTimeoutMs);
 
     if (!res.ok || !res.body) {
-      clearTimeout(timer);
+      // 本文を読む間も見張る（つなぐときと同じ長さ）。相手が失敗の頭だけ返して本文を止めると、ここで何分も待っていた
+      arm(this.#connectTimeoutMs);
       const body = await res.text().catch(() => '');
+      clearTimeout(timer);
       throw new ProviderError({
         kind: kindFromHttpStatus(res.status, body),
         providerId: this.id,

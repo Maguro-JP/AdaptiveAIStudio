@@ -31,7 +31,25 @@ export interface ChatInput {
   priority?: Priority;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** 待つ。止めるボタン（signal）で抜ける。抜けた後は、呼ぶ側が `signal.aborted` を見て終わる。 */
+const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((r) => {
+  if (signal?.aborted) return r();
+  const done = () => { clearTimeout(timer); signal?.removeEventListener('abort', done); r(); };
+  const timer = setTimeout(done, ms);
+  signal?.addEventListener('abort', done, { once: true });
+});
+
+/**
+ * やり直すまでに待つ上限。相手の `Retry-After` は上限が無く（3600 秒や数時間先の日時が来る）、そのまま待つと、その間は依頼が
+ * 動いたまま・次の依頼は順番待ち・■も効かない、になっていた。
+ *
+ * - 次の候補があるとき: これより長く待てと言われたら、待たずに次の候補へ回す
+ * - 最後の候補のとき: `MAX_LAST_RETRY_WAIT_MS` までは待つ（35〜60 秒の 429 はよく来る。待てば通るものを落とさない）。
+ *   それより長ければ、何秒待てと言われたかを添えて落ちたと言う
+ * どちらの待ちも ■ で抜ける。
+ */
+export const MAX_RETRY_WAIT_MS = 30_000;
+export const MAX_LAST_RETRY_WAIT_MS = 5 * 60_000;
 
 export class ChatOrchestrator {
   readonly #registry: ProviderRegistry;
@@ -61,7 +79,8 @@ export class ChatOrchestrator {
     let lastError: ProviderError | undefined;
     let previousModelId: ModelId | undefined;
 
-    for (const modelId of usable) {
+    for (const [index, modelId] of usable.entries()) {
+      const isLast = index === usable.length - 1;
       const resolved = this.#registry.resolve(modelId)!;
       const { provider, model } = resolved;
 
@@ -146,8 +165,23 @@ export class ChatOrchestrator {
           }
           if (attempt < retries) {
             const wait = err.retryAfterMs ?? 500 * 2 ** attempt;
+            const limit = isLast || !err.rule.fallback ? MAX_LAST_RETRY_WAIT_MS : MAX_RETRY_WAIT_MS;
+            if (wait > limit) {
+              // 長く待てと言われた。次の候補があれば待たずにそちらへ。無ければ、言われた長さを添えて落ちたと言う
+              if (isLast || !err.rule.fallback) {
+                yield {
+                  type: 'failed',
+                  error: new ProviderError({
+                    kind: err.kind, providerId: err.providerId,
+                    message: `${err.message}（${Math.ceil(wait / 1000)} 秒待つよう言われたので、待たずにやめました）`,
+                  }),
+                };
+                return;
+              }
+              break;
+            }
             attempt += 1;
-            await sleep(wait);
+            await sleep(wait, signal);
             continue;
           }
           break; // 次の候補モデルへ

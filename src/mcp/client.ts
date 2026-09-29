@@ -252,15 +252,31 @@ export class McpClient {
     }
   }
 
-  /** ツールを呼ぶ。 */
-  async call(tool: string, args: Record<string, unknown>, timeoutMs = 60_000): Promise<{
+  /**
+   * ツールを呼ぶ。`signal`（■）で止めたら、返事を待たずに返す。返事を待っていた分は、自分の時間切れで片づく。
+   * 渡していなかったので、外のツールの返事待ちの間は ■ を押しても時間切れ（既定 60 秒、設定しだいで更に長い）まで止まらなかった。
+   */
+  async call(tool: string, args: Record<string, unknown>, timeoutMs = 60_000, signal?: AbortSignal): Promise<{
     text: string; isError: boolean;
   }> {
     if (!this.running) {
       return { text: `${this.name} は動いていません: ${this.#failure ?? '理由は不明'}`, isError: true };
     }
+    if (signal?.aborted) return { text: `${this.name}/${tool} は止めたので呼んでいません`, isError: true };
     try {
-      const result = await this.#call('tools/call', { name: tool, arguments: args }, timeoutMs);
+      const asked = this.#call('tools/call', { name: tool, arguments: args }, timeoutMs);
+      // 返事が普通に来たら聞き手を外す（一つの依頼で何度も呼ぶと、聞き手が溜まって Node が警告を出す）
+      let onAbort: (() => void) | undefined;
+      const stopped = signal
+        ? new Promise<'stopped'>((ok) => { onAbort = () => ok('stopped'); signal.addEventListener('abort', onAbort, { once: true }); })
+        : undefined;
+      const result = stopped
+        ? await Promise.race([asked, stopped]).finally(() => { if (onAbort) signal!.removeEventListener('abort', onAbort); })
+        : await asked;
+      if (result === 'stopped') {
+        asked.catch(() => undefined); // 後で時間切れになっても、受け手の無い失敗にしない
+        return { text: `${this.name}/${tool} の返事を待たずに止めました`, isError: true };
+      }
       return flatten(result);
     } catch (e) {
       return { text: `${this.name}/${tool} を呼べませんでした: ${(e as Error).message}`, isError: true };

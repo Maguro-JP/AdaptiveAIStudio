@@ -107,6 +107,17 @@ export class LineSource {
     return new Promise<string | undefined>((resolve) => { this.#waiting = resolve; });
   }
 
+  /**
+   * 待っている問いを「答え無し」で解く（Ctrl-C で止めたとき）。解かないと、承認の問いが Enter を押すまで待ち続け、
+   * 止めたのに先へ進まなかった。答え無しは、承認では「許可しない」になる。
+   */
+  cancelWaiting(): void {
+    const waiter = this.#waiting;
+    if (!waiter) return;
+    this.#waiting = undefined;
+    waiter(undefined);
+  }
+
   close(): void {
     this.#rl.close();
   }

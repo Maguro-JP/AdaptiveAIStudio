@@ -239,6 +239,8 @@
 - 設定が在るのに読めないとき、既定の設定で黙って動かさない
 - 提案と覚えたことを残せなかったとき、黙らない
 - 置いてある llama-server と、作業場の決まりのファイルで、見られないを「無い」と読まない
+- 止まったまま戻らない所を塞ぐ（再試行の待ち・nvidia-smi・git・run_command の入力・子を止める呼び出し）
+- ■ が届かない所を塞ぐ（裏の分解・MCP・考えごとの問い合わせ・CLI の承認待ち）と、待ちの上限を足す
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10100,3 +10102,52 @@ MCP・作業場（`agent.root`）が黙って外れる。
 - 試験: `test/llama-install.test.ts` に 3 件（strict で投げる・ほかの名前で見つかる・本当に無い）、`test/project-rules.test.ts` に 1 件（AGENTS.md がフォルダ）。
   守りを外すと落ちることを見た。`install` が strict で呼んでいることは試験で見ていない
 触る場所: `src/runtime/llama-install.ts` の `findInstalled`・`install`、`src/agent/project-rules.ts` の `readProjectRules`・`readOne`
+
+## 2026-09-29  止まったまま戻らない所を塞ぐ（再試行の待ち・nvidia-smi・git・run_command の入力・子を止める呼び出し）
+
+利用者の操作が「止まったまま戻らない」（依頼が終わらない・■が効かない・次の依頼が順番待ちのまま）になる所を別の担当に洗い出させ、11 件
+見つかった。単純で効き目の大きい 5 件を直した。
+
+- 再試行の待ち（`orchestrator.ts`）: 相手の `Retry-After` をそのまま待っていた（上限なし、■で抜けない）。3600 秒や数時間先の日時が来ると、
+  その間は依頼が動いたまま・次の依頼は順番待ちだった。次の候補があれば 30 秒（`MAX_RETRY_WAIT_MS`）を超えたら待たずにそちらへ回る。
+  最後の候補では 5 分（`MAX_LAST_RETRY_WAIT_MS`）までは待ち、それより長ければ言われた秒数を添えて落ちたと言う。待ちは ■ で抜ける
+  - 押す前の読み直しで変えた: 最初は候補が一つでも 30 秒を超えたら落としていた。35〜60 秒の 429 はよく来るので、待てば通るものを落としていた
+- 機械の検出（`machine.ts` の `runProbe`）: nvidia-smi を時間切れなしで起こしていた。ドライバが固まると送信の前処理ごと止まった。
+  `environment.ts` と同じ 5 秒で打ち切る
+- git（`git.ts` の `runGit`）: 時間切れなし・資格情報を訊ける状態で起こしていた。取得（fetch）が止まる・資格情報を訊く画面が出ると、更新の口と
+  `/update` が返らなかった。5 分（`GIT_TIMEOUT_MS`）で打ち切り、`GIT_TERMINAL_PROMPT=0`・`GCM_INTERACTIVE=never` を渡す（資格情報を訊く画面が
+  実際に出るかは確かめていない）
+- run_command（`shell-exec.ts` の `spawnCall`）: 標準入力を開いたままにしていたので、入力を待つ命令が時間切れ（600 秒）まで止まった。閉じる
+- モデルの子プロセスを止める（`inproc-host-client.ts` の `shutdown`）: 止めるよう頼む呼び出しに時間切れが無く、子の手が塞がると、殺すまでの
+  5 秒の前に何分も待った。頼む呼び出しは 2 秒（`SHUTDOWN_ASK_MS`）で切る。読み込み（load）は大きなモデルで長くかかるので上限を付けない
+- 残りの 6 件は、下の項で直した
+- 試験: `test/orchestrator.test.ts` に 2 件（長い Retry-After・待ちの間に止める）、`test/machine-probe.test.ts` に 2 件、`test/git-timeout.test.ts`
+  に 3 件、`test/shell-exec.test.ts` に 2 件。直す前の版（試験の中の関数が無いものは、打ち切りを外した版）で落ちることを見た。
+  子を止める呼び出しは試験を足していない（返事をしない子を作る形が大きい）
+触る場所: `src/core/orchestrator.ts`、`src/runtime/machine.ts`、`src/agent/git.ts`、`src/agent/shell-exec.ts`、`src/runtime/inproc-host-client.ts`
+
+## 2026-09-29  ■ が届かない所を塞ぐ（裏の分解・MCP・考えごとの問い合わせ・CLI の承認待ち）と、待ちの上限を足す
+
+上の項の続き。洗い出しの残り 6 件。
+
+- やり残しの続きの分解（`server.ts` の `#driveStep` と割り直し）: 誰も止めない signal を渡していたので、見回りから走っている最中に ■ を押しても
+  割り終わるまでモデルの口を塞いだ。裏の問い合わせを `#stoppable` で走らせ、`/api/abort` で止める。止めた結果の空を「割れなかった」と読むと、
+  丸ごと進める・段を塞ぐ、に進むので、止めたときは進めず・塞がず、次の見回りでまた試す。続きの状態（`#resuming`）も戻す
+  （戻さないと、仕事の一覧に「やり残しの続き」が出たまま、やり直しの口も断り続けた。押す前の読み直しで見つかった）
+- MCP の呼び出し（`client.ts` の `call`）: ■（`ctx.signal`）を渡していなかったので、外のツールの返事待ちは時間切れ（既定 60 秒）まで止まらなかった。
+  止めたら返事を待たずに返す（返事を待っていた分は、自分の時間切れで片づく）。返事が普通に来たら ■ の聞き手を外す。相手へ取り消しは
+  送らないので、ツールの処理は向こうで続くことがある
+- 作業場の記録の git（`workspace-stamp.ts`）: 時間切れが無く、大きなリポジトリ・遅いドライブで長引くと ■ が効かないまま待った。2 分
+  （`STAMP_GIT_TIMEOUT_MS`）で打ち切って「比べられない」にする
+- 考えごとの配布元への問い合わせ（`session.ts` の upkeep）: ■ も時間切れも無かった。問い合わせの間だけ止める口を置き、60 秒で打ち切る。
+  打ち切った・止めた問い合わせは中で失敗を握って空を返すので、空を「新しい世代は無かった」と読まず「訊けませんでした」の道へ回す。
+  ■で止めたら考えごとも続けない（押す前の読み直しで足した。最初は 15 秒で打ち切り、空を「無かった」と書いていた）
+- CLI の承認待ち（`input.ts` の `cancelWaiting`）: Ctrl-C で依頼は止めても、承認の問いが Enter を押すまで待ち続けた。止めるときに問いを
+  「答え無し」（許可しない）で解く。端末で Ctrl-C が readline の SIGINT として届くかは確かめていない
+- 失敗の本文（`openai-compatible.ts`）: 見張りの時計を止めてから本文を読んでいたので、失敗の頭だけ返して本文を止める相手を何分も待った。
+  本文を読む間も、つなぐときと同じ長さで見張る
+- 試験: `test/provider-error-body.test.ts`（本文を止める相手）、`test/mcp-bytes.test.ts`（返事をしない MCP を ■ で止める）、
+  `test/input.test.ts`（問いを解く）。前の二つは直す前の版で落ちることを見た。裏の分解・作業場の記録の git・考えごとの問い合わせは
+  試験を足しておらず、既存の試験で後退が無いことだけを見た
+触る場所: `src/ui/server.ts` の `#stoppable`・`#background`・`/api/abort`、`src/mcp/client.ts`・`src/mcp/tools.ts`、`src/agent/workspace-stamp.ts`、
+`src/core/session.ts`、`src/cli/input.ts`・`src/cli/agent.ts`、`src/providers/openai-compatible.ts`
