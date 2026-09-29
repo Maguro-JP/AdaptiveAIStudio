@@ -122,6 +122,34 @@ export interface Restored {
    * **黙って落とさない。**戻ったつもりで開くと、半分だけ戻った作業場を見ることになる。
    */
   failed: string[];
+  /**
+   * 当て終えたのに消せなかった戻り先。一覧に残るが、もう全部当ててある。
+   * **黙らない。**残ったものをもう一度押すと、その後の直しを古い姿で上書きする。
+   */
+  leftover?: string[];
+  /**
+   * 戻せなかった道だけに縮められなかった戻り先。一覧には、戻せた道も入ったまま残る。
+   * もう一度押すと、戻せなかった道と一緒に、戻せた道も古い姿で当て直す。
+   */
+  unshrunk?: string[];
+}
+
+/**
+ * 戻した結果のうち、利用者に言わなければいけないこと（画面の「戻す」と、確かめて落ちたときの自動の巻き戻しで同じ文にする）。
+ * `failed` は呼ぶ側が別の形で出すことがあるので、`withFailed` で選ぶ。
+ */
+export function restoreWarnings(done: Restored, opts: { withFailed?: boolean } = {}): string[] {
+  const out: string[] = [];
+  if (opts.withFailed && done.failed.length > 0) {
+    out.push(`戻せなかったファイルがあります（掴まれている等）: ${done.failed.join(', ')}。その分は戻り先に残してあるので、少し置いてからもう一度戻してください`);
+  }
+  if (done.leftover) {
+    out.push(`戻し終えた戻り先を一覧から消せませんでした（${done.leftover.length} 件）。一覧に残っていても、もう当ててあります。もう一度押すと、その後の直しを古い姿で上書きします`);
+  }
+  if (done.unshrunk) {
+    out.push(`戻せなかったファイルの分だけを戻り先に残せませんでした（${done.unshrunk.length} 件）。一覧のその戻り先には戻せたファイルも入ったままです。もう一度押すと、戻せたファイルも古い姿で当て直します`);
+  }
+  return out;
 }
 
 /**
@@ -443,13 +471,16 @@ export class UndoStore {
      * 戻り先ごとの失敗で決めていたときは、新しい戻り先で失敗して古い戻り先で戻せた道まで残り、
      * あとでそれを戻すと、戻した姿より新しい姿を当ててファイルを消していた。
      */
+    const leftover: string[] = [];
+    const unshrunk: string[] = [];
     for (const { id: pointId, stored } of read) {
       const file = join(this.#dir, `${pointId}.json`);
       const keep = (stored.files ?? []).filter((f) => last.get(f.path) === 'failed' && oldest.get(f.path) === pointId);
+      // 片づけられなかったら、そう返す（もう無いなら片づいている）
       if (keep.length === 0) {
-        await unlink(file).catch(() => undefined);
-      } else {
-        await writeStored(file, { ...stored, paths: keep.map((f) => f.path), files: keep }).catch(() => undefined);
+        if (!await unlink(file).then(() => true, (e: unknown) => isAbsent(e))) leftover.push(pointId);
+      } else if (!await writeStored(file, { ...stored, paths: keep.map((f) => f.path), files: keep }).then(() => true, () => false)) {
+        unshrunk.push(pointId);
       }
     }
     const paths = touched.filter((p) => last.get(p) !== 'failed');
@@ -463,7 +494,10 @@ export class UndoStore {
       if (before === false || after === false) continue;
       changed.push({ path, before, after });
     }
-    return { paths, points: at + 1, changed, failed };
+    return {
+      paths, points: at + 1, changed, failed,
+      ...(leftover.length > 0 ? { leftover } : {}), ...(unshrunk.length > 0 ? { unshrunk } : {}),
+    };
   }
 
   /** 溜めすぎない。落とした数を返す。 */

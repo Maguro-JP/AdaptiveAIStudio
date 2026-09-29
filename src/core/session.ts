@@ -67,7 +67,7 @@ import { snapshotTests, compareTests } from '../agent/test-integrity.ts';
 import { workspaceStamp, stampChanges } from '../agent/workspace-stamp.ts';
 import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
-import { UndoStore } from './undo.ts';
+import { UndoStore, restoreWarnings } from './undo.ts';
 import { OutsideChanges } from '../agent/outside-changes.ts';
 import { AckStore, type AckId } from './acks.ts';
 import { fitParts } from './prompt-budget.ts';
@@ -966,6 +966,8 @@ export class Session {
           yield { type: 'log', level: 'warn', text: `確かめて落ちましたが、自動では戻せませんでした（${tried.message}）。「戻す」から選んでください` };
         }
         const done = tried instanceof Error ? undefined : tried;
+        // 戻せなかった道は notRestored で出すので、ここでは片づけの失敗だけを言う
+        for (const text of done ? restoreWarnings(done) : []) yield { type: 'log', level: 'warn', text: `自動で戻しましたが、${text}` };
         const notRestored = [...new Set([...this.undo.peekSkipped(), ...(done?.failed ?? [])])].sort();
         rolledBack = done?.paths ?? [];
         if (rolledBack.length > 0 || notRestored.length > 0) {

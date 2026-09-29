@@ -486,11 +486,12 @@ describe('途中まで取ったファイルを見られないとき', () => {
     const real = fsp.stat;
     // 見られなさは、その道だけ stat を失敗させて作る（権限に頼らない）
     (fsp as { stat: unknown }).stat = ((p: unknown, ...rest: unknown[]) => p === part
-      ? Promise.reject(Object.assign(new Error('EBUSY: busy'), { code: 'EBUSY' }))
+      ? Promise.reject(Object.assign(new Error('resource busy or locked, stat (長い英文)'), { code: 'EBUSY' }))
       : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as never;
     syncBuiltinESMExports();
     try {
-      await assert.rejects(installModel({ entry: ENTRY, modelsDir, fetchImpl: fakeFetch().impl }), /見られません/);
+      // 理由は符丁で言う（stat の長い英文をそのまま出さない）
+      await assert.rejects(installModel({ entry: ENTRY, modelsDir, fetchImpl: fakeFetch().impl }), /見られません（EBUSY）/);
     } finally {
       (fsp as { stat: unknown }).stat = real;
       syncBuiltinESMExports();
