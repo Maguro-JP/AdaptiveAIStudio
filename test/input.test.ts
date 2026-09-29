@@ -101,7 +101,8 @@ describe('止めたときの、待っている問い', () => {
 });
 
 describe('Ctrl-C（SIGINT）', () => {
-  test('端末でない入力でも、止める処理に届く（プロセスごと落ちない）', async () => {
+  // Windows の kill('SIGINT') はシグナルを届けず強制終了するので、この形では確かめられない
+  test('端末でない入力でも、止める処理に届く（プロセスごと落ちない）', { skip: process.platform === 'win32' && 'Windows では SIGINT を送れない' }, async () => {
     const { spawn } = await import('node:child_process');
     const { fileURLToPath } = await import('node:url');
     const probe = fileURLToPath(new URL('./fixtures/sigint-probe.mts', import.meta.url));
@@ -111,8 +112,31 @@ describe('Ctrl-C（SIGINT）', () => {
       out += d.toString();
       if (out.includes('READY') && !out.includes('HANDLER')) setTimeout(() => child.kill('SIGINT'), 100).unref();
     });
+    // 終わらない形に戻っても、試験ごと止まらないように打ち切る
+    const stuck = setTimeout(() => child.kill('SIGKILL'), 15_000);
     const exit = await new Promise<{ code: number | null; signal: string | null }>((ok) => child.on('exit', (code, signal) => ok({ code, signal })));
+    clearTimeout(stuck);
     assert.match(out, /HANDLER/, `止める処理に届かず落ちた: ${JSON.stringify({ out, ...exit })}`);
-    assert.equal(exit.signal, null);
+    // 止める処理の後、きれいに終わる（別の理由で落ちていない）
+    assert.match(out, /ENDED/);
+    assert.deepEqual(exit, { code: 0, signal: null });
+  });
+
+  test('止める処理が詰まっても、2 秒以内に二度押せば終わる', { skip: process.platform === 'win32' && 'Windows では SIGINT を送れない' }, async () => {
+    const { spawn } = await import('node:child_process');
+    const { fileURLToPath } = await import('node:url');
+    const probe = fileURLToPath(new URL('./fixtures/sigint-probe.mts', import.meta.url));
+    const child = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', probe, 'stuck'], { stdio: ['pipe', 'pipe', 'inherit'] });
+    let out = '';
+    let sent = 0;
+    child.stdout.on('data', (d: Buffer) => {
+      out += d.toString();
+      if (out.includes('READY') && sent === 0) { sent = 1; setTimeout(() => child.kill('SIGINT'), 100).unref(); }
+      if (out.includes('HANDLER') && sent === 1) { sent = 2; setTimeout(() => child.kill('SIGINT'), 100).unref(); }
+    });
+    const stuck = setTimeout(() => child.kill('SIGKILL'), 15_000);
+    const exit = await new Promise<{ code: number | null; signal: string | null }>((ok) => child.on('exit', (code, signal) => ok({ code, signal })));
+    clearTimeout(stuck);
+    assert.deepEqual(exit, { code: 130, signal: null }, `二度押しで終わらなかった: ${JSON.stringify({ out, ...exit })}`);
   });
 });

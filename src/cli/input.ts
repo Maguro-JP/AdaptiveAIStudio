@@ -19,6 +19,7 @@ export class LineSource {
   readonly #pending: string[] = [];
   #waiting?: (line: string | undefined) => void;
   #closed = false;
+  #onProcessSigint?: () => void;
 
   constructor(input: Readable, output: Writable) {
     this.#output = output;
@@ -52,7 +53,19 @@ export class LineSource {
    */
   onSigint(handler: () => void): void {
     this.#rl.on('SIGINT', handler);
-    process.on('SIGINT', handler);
+    /*
+     * **二度押したら終わる。**止める処理が詰まる（起動の途中・考えごとの最中・片づけが返らない）と、一度目の Ctrl-C では抜けない。
+     * 2 秒以内の二度目は、止める処理を待たずに終わる（130 は Ctrl-C で終わったときの慣例の終了コード）。
+     * 読み手を閉じた後は聞き手を外すので、それ以降の Ctrl-C は既定どおりプロセスを終わらせる。
+     */
+    let lastAt = 0;
+    this.#onProcessSigint = () => {
+      const now = Date.now();
+      if (now - lastAt < SIGINT_TWICE_MS) process.exit(130);
+      lastAt = now;
+      handler();
+    };
+    process.on('SIGINT', this.#onProcessSigint);
   }
 
   /** 溜まっている行があるか。待機中かどうかの判断に使う。 */
@@ -126,5 +139,10 @@ export class LineSource {
 
   close(): void {
     this.#rl.close();
+    if (this.#onProcessSigint) process.off('SIGINT', this.#onProcessSigint);
+    this.#onProcessSigint = undefined;
   }
 }
+
+/** 二度押しとみなす間合い。 */
+const SIGINT_TWICE_MS = 2_000;

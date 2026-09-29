@@ -10159,8 +10159,14 @@ MCP・作業場（`agent.root`）が黙って外れる。
 作っているので rl の SIGINT は来ず、Ctrl-C はプロセスへの SIGINT としてそのまま届き、プロセスごと落ちていた（戻り先を閉じる前に終わる）。
 子プロセスに SIGINT を送って、止める処理が呼ばれずに SIGINT で終わることを手元で見て確かめた。
 
-- `onSigint` でプロセスの SIGINT も受ける（`src/cli/team.ts` は同じ理由で既に `process.once('SIGINT')` を付けていた）
-- 生成していないときは読み手を閉じて、今までどおりの道で終わる
-- 試験: `test/input.test.ts` に 1 件（`test/fixtures/sigint-probe.mts` を子として起こし、SIGINT を送って止める処理に届くか）。直す前の版で
-  落ちることを見た。端末（TTY）で押したときは確かめていない
-触る場所: `src/cli/input.ts` の `onSigint`
+- `onSigint` でプロセスの SIGINT も受ける（`src/cli/team.ts` は同じ理由で既に `process.once('SIGINT')` を付けていた）。`src/cli/agent.ts` と
+  `src/cli/main.ts` の二か所が使う
+- 生成していないときは読み手を閉じて、今までどおりの道で終わる。閉じたら聞き手を外すので、それ以降の Ctrl-C は既定どおり終わらせる
+- 2 秒以内に二度押したら、止める処理を待たずに終わる（終了コード 130）。止める処理が詰まる場面（起動の途中・考えごとの最中・片づけが
+  返らない）で、Ctrl-C で落とせなくなるのを防ぐ（押す前の読み直しで見つかった）
+- 残り: 端末の Ctrl-C は、同じプロセスグループの子（llama-server・inproc-host）にも届くはずで、生成だけ止めるつもりがモデルのサーバーまで
+  落とすおそれがある。直す前からの形で、確かめていない
+- 試験: `test/input.test.ts` に 2 件（`test/fixtures/sigint-probe.mts` を子として起こし、SIGINT を送る。止める処理に届いてきれいに終わるか・
+  詰まっても二度押しで終わるか）。直す前の版と、二度押しを外した版で落ちることを見た。Windows では `kill('SIGINT')` が強制終了になるので
+  飛ばす。端末（TTY）で押したときは確かめていない
+触る場所: `src/cli/input.ts` の `onSigint`・`close`
