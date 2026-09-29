@@ -618,12 +618,13 @@ export class UiServer {
     const id = await this.#currentConversation();
     // 本体を組む所では投げない（投げると、読めない会話が一つあるだけで画面ごと使えなくなる）。読めなかったことは言う
     const past = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL }).catch((e: unknown) => {
-      this.broadcast({ type: 'log', level: 'warn', text: `会話の記録を読めませんでした（${(e as Error).message}）。これまでのやりとりを知らないまま続きます` });
-      return [];
+      this.broadcast({ type: 'log', level: 'warn', text: `会話の記録を読めませんでした（${(e as Error).message}）。次に送るときに読み直します` });
+      return undefined;
     });
-    this.#session.restore(past);
-    this.#loadedId = id;
-    this.#saved = past.length;
+    // 読めなかったときは「載っていない」ままにする。空で載ったことにすると、次の送りで読み直さず、文脈なしで続いていた
+    this.#session.restore(past ?? []);
+    this.#loadedId = past ? id : undefined;
+    this.#saved = past?.length ?? 0;
     this.#startThinking(this.#session);
     return this.#session;
   }
@@ -719,7 +720,10 @@ export class UiServer {
     let settled: { reason: string; verified: boolean; checked: string } | undefined;
     let didSomething = false;
     try {
-      const past = await this.#conversations.load(conversationId, { tailBytes: UiServer.RESTORE_TAIL });
+      const past = await this.#conversations.load(conversationId, { tailBytes: UiServer.RESTORE_TAIL }).catch((e: unknown) => {
+        // 始める前に落ちた。依頼の文を添えて、送り直しを頼む（やり残しにも残らない）
+        throw new Error(`この会話の記録を読めないので、依頼を始められませんでした（${(e as Error).message}）。送り直してください: ${text}`);
+      });
       conv.restore(past);
       run.saved = past.length;
       const full = await this.#compose(session, text, attached, undefined);
@@ -3277,11 +3281,16 @@ export class UiServer {
     // 比べるのは本体に載っている会話（`#loadedId`）。載せ替えは `#loadInto` を通す（前は履歴だけ入れ替えて載っている会話の名前を
     // 変えず、続きのやりとりを、前に載っていた別の会話のファイルへ書いていた）
     if (item.conversationId && item.conversationId !== this.#loadedId) {
-      const loaded = await this.#loadInto(session, item.conversationId).then(() => true, () => false);
+      const loaded = await this.#loadInto(session, item.conversationId).then(() => undefined, (e: unknown) => e as Error);
       if (loaded) {
-        this.#conversationId = item.conversationId;
-        this.broadcast({ type: 'conversations' });
+        // 読めない会話の続きを、いま載っている別の会話で走らせない（その会話のファイルへ書いていた）。
+        // 回数は数えない（数えると、読めないだけで諦める方へ進む）。次の見回りでまた試す
+        this.broadcast({ type: 'log', level: 'warn', text: `やり残しの会話の記録を読めないので、今回は続けません（${loaded.message}）` });
+        this.#resuming = undefined;
+        return true;
       }
+      this.#conversationId = item.conversationId;
+      this.broadcast({ type: 'conversations' });
     }
     // 続きの文はこちらが組み立てたもの。利用者の言葉として判じない。
     this.#bg(
