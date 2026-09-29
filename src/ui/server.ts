@@ -3429,7 +3429,14 @@ export class UiServer {
       this.broadcast({ type: 'unfinished' });
       return;
     }
-    const action = await this.#goals.fail(at.goalId, at.stepId);
+    let action: Awaited<ReturnType<Goals['fail']>>;
+    try {
+      action = await this.#goals.fail(at.goalId, at.stepId);
+    } catch (e) {
+      // 記録を読めない。数えずに段を開いたまま残す（塞いだことにしない）。次にまた試す
+      this.broadcast({ type: 'log', level: 'warn', text: `段の結果を記録できませんでした（${(e as Error).message}）。この段は次にまた試します` });
+      return;
+    }
     if (action.do === 'retry') {
       this.broadcast({ type: 'log', level: 'info', text: 'この一歩は通りませんでした。もう一度試します。' });
     } else if (action.do === 'block') {

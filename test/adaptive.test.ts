@@ -228,6 +228,7 @@ describe('段取りの終わり方', () => {
         },
       });
       restore();
+      assert.equal(r.tick, 'RESUMED', `進めないことを、手を付けた回として扱っていない: ${r.tick}`);
       assert.equal((await r.store.list()).length, 1, 'やり残しを「済んだ」にした');
       const still = (await r.goals.list()).find((g) => g.id === r!.goal.id);
       assert.ok(still, '段取りを閉じた');

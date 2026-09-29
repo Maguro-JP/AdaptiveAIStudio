@@ -173,7 +173,8 @@ export class Goals {
   }
 
   async #fail(goalId: string, stepId: string): Promise<FailAction> {
-    const goal = (await this.list()).find((g) => g.id === goalId);
+    // 読めないときは投げる。空と読むと「段取りが無い」になり、一度読めなかっただけで段を塞いでいた（やり残しごと諦める道へ進む）
+    const goal = (await this.openGoals()).find((g) => g.id === goalId);
     const step = goal?.steps.find((s) => s.id === stepId);
     if (!goal || !step) return { do: 'block', attempts: 0 };
     const attempts = step.attempts + 1;
