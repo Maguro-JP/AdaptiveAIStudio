@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { inspectGit, type GitState } from './git.ts';
 import { toDisplayPath } from './tools/paths.ts';
 import { canRun } from '../core/which.ts';
+import { isAbsent } from '../harness/put-back.ts';
 
 export interface ProjectSnapshot {
   /** ファイル一覧（作業ディレクトリからの相対パス） */
@@ -44,6 +45,8 @@ export class Prefetcher {
   readonly #can: (command: string) => boolean;
   #inFlight?: Promise<ProjectSnapshot>;
   #snapshot?: ProjectSnapshot;
+  /** 動かし方を調べられなかった回があった（覚えていない）。次に訊かれたときに調べ直す。 */
+  #failedOnce = false;
 
   constructor(root: string, onEvent?: (e: PrefetchEvent) => void, can: (command: string) => boolean = canRun) {
     this.#root = root;
@@ -55,7 +58,12 @@ export class Prefetcher {
   start(signal?: AbortSignal): void {
     if (this.#inFlight) return;
     this.#inFlight = this.#build(signal).then(
-      (s) => { this.#snapshot = s; return s; },
+      (s) => {
+        // 動かし方を調べられなかった回は覚えない（次に訊かれたときに調べ直す）。覚えると、invalidate まで確かめのコマンドが無いまま
+        if (s.ready.includes('commands')) this.#snapshot = s;
+        else { this.#inFlight = undefined; this.#failedOnce = true; }
+        return s;
+      },
       // 先読みの失敗で本体を止めない。無いなら無いで作業は始められる。
       () => ({
         files: [], recentFiles: [], commands: {},
@@ -85,6 +93,8 @@ export class Prefetcher {
    */
   async snapshotWithin(ms: number): Promise<ProjectSnapshot | undefined> {
     if (this.#snapshot) return this.#snapshot;
+    // 前の回で調べられずに覚えなかったなら、ここで調べ直す（一度も始めていないときは、今までどおり待たない）
+    if (!this.#inFlight && this.#failedOnce) this.start();
     if (!this.#inFlight) return undefined;
 
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -179,7 +189,13 @@ export class Prefetcher {
     const exists = async (name: string) =>
       (await stat(join(this.#root, name)).catch(() => undefined)) !== undefined;
 
-    const pkgRaw = await readFile(join(this.#root, 'package.json'), 'utf8').catch(() => undefined);
+    // 読めない package.json を「無い」と読まない（投げる）。読むと「確かめのコマンドが無い」と覚え、確かめないまま済ませていた
+    let pkgRaw: string | undefined;
+    try {
+      pkgRaw = await readFile(join(this.#root, 'package.json'), 'utf8');
+    } catch (e) {
+      if (!isAbsent(e)) throw e;
+    }
     if (pkgRaw) {
       let scripts: Record<string, unknown> = {};
       try {

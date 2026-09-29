@@ -261,3 +261,34 @@ describe('上限つきの待機', () => {
     assert.ok(Date.now() - t < 50);
   });
 });
+
+describe('package.json を読めないとき', () => {
+  test('「確かめのコマンドが無い」と覚えず、次に訊かれたときに調べ直す', async () => {
+    const { createRequire, syncBuiltinESMExports } = await import('node:module');
+    const require = createRequire(import.meta.url);
+    const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
+    const root = await tempDir('aas-prefetch-unreadable-');
+    const pkg = join(root, 'package.json');
+    await writeFile(pkg, JSON.stringify({ scripts: { test: 'node --test' } }));
+    const real = fsp.readFile;
+    // 読めなさは、その道だけ readFile を失敗させて作る（権限に頼らない）
+    (fsp as { readFile: unknown }).readFile = ((p: unknown, ...rest: unknown[]) => p === pkg
+      ? Promise.reject(Object.assign(new Error('EBUSY: busy'), { code: 'EBUSY' }))
+      : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as never;
+    syncBuiltinESMExports();
+    const p = new Prefetcher(root, undefined, () => true);
+    let first;
+    try {
+      p.start();
+      first = await p.snapshotWithin(10_000);
+    } finally {
+      (fsp as { readFile: unknown }).readFile = real;
+      syncBuiltinESMExports();
+    }
+    assert.ok(first && !first.ready.includes('commands'), '読めないのに、動かし方を調べ終えたことにした');
+    assert.deepEqual(first.commands, {});
+    // 読めるようになってから訊けば、調べ直してコマンドが出る
+    const again = await p.snapshotWithin(10_000);
+    assert.ok(again?.commands.test, `調べ直していない: ${JSON.stringify(again?.commands)}`);
+  });
+});
