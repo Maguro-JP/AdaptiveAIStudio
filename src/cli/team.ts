@@ -189,6 +189,9 @@ async function main(): Promise<void> {
     if (closed && closed.unrecorded.length > 0) {
       console.log(c.yellow(`前の中身を記録できず、戻せないファイル: ${closed.unrecorded.join(', ')}`));
     }
+    if (closed?.outsideLost) {
+      console.log(c.yellow(`run_command で変わったファイルを調べられませんでした（${closed.outsideLost}）。その分は aas undo からは戻せません`));
+    }
     // 起こした子（この中で読む道）を残さない。残すと次の起動で口が埋まる。
     await runtime.shutdown().catch(() => undefined);
     rl.close();

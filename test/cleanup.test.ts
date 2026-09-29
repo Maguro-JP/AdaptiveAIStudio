@@ -196,6 +196,20 @@ describe('片づけるもの・片づけないもの', () => {
     assert.deepEqual(found.map((f) => f.path), []);
   });
 
+  test('記録・添付のフォルダの下のフォルダは、古くても挙げない（中身ごと消すことになる）', async () => {
+    const { home } = await scratch();
+    const { utimes } = await import('node:fs/promises');
+    const longAgo = new Date(Date.now() - 400 * 86_400_000);
+    for (const sub of ['logs', 'attachments']) {
+      const dir = join(home, sub, 'だれかのフォルダ');
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, '中身.txt'), 'x');
+      await utimes(dir, longAgo, longAgo);
+    }
+    const found = await findRemovable({ keepTag: 'b9999' });
+    assert.deepEqual(found.map((f) => f.path), []);
+  });
+
   test('置き場が無くても落ちない', async () => {
     process.env.AAS_HOME = join(await tempDir('aas-none-'), 'まだ無い');
     assert.deepEqual(await findRemovable({ keepTag: 'b1' }), []);

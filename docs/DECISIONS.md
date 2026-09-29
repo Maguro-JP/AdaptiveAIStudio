@@ -231,6 +231,7 @@
 - 読めない失敗を黙って空にする書き方を、試験で数えて新しく持ち込ませない
 - 会話の捨て場・戻り先のフォルダ・作業場の記録・テストを減らさない規則で、見られないのを「空」「無い」と読まない
 - 作業を止める・添付を外すの失敗も、画面が言う
+- Team の前後比べ・思いつきのテスト探し・片づけで、取れない・読めない・フォルダを取り違えない
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -9963,3 +9964,20 @@ sweep の「会話を消す」に戻すと文の幅を足した。すぐ消す�
   三通りで落ちることを見た。画面の文そのものは試験していない
 触る場所: `src/ui/attachments.ts` の `drop`、`src/ui/server.ts` の `DELETE /api/attach`、`src/ui/web/app.js` の `stopRun`、`src/ui/web/panels.js` の
 添付の「×」と止める、`test/ask-ok.test.ts`
+
+## 2026-09-29  Team の前後比べ・思いつきのテスト探し・片づけで、取れない・読めない・フォルダを取り違えない
+
+読み直しで optional として残していた件のうち、戻す・消す・書かせる、に繋がる三つを直した。
+
+- Team の後始末（`team-setup.ts` の `finish`）: 前後比べ（`outside.after()`）が落ちると、黙って空の結果にし、run_command で変わった分を
+  戻り先に載せないまま「戻り先: …（aas undo で戻せます）」と言っていた。書くツールの分の戻り先は今までどおり閉じ、`outsideLost` に理由を返す。
+  `aas team` は「run_command で変わったファイルを調べられませんでした。その分は aas undo からは戻せません」と言う
+- 思いつきの手がかり（`initiative.ts` の `findLeads`）: 読めなかったテストファイルを「無い」と数え、「対応するテストが見当たりません」の手がかりを
+  出して、在るテストの二つ目を書かせにいっていた。読めなかったテストファイルは在る側に数え、数え直しが落ちた・中を見られないフォルダがある
+  ときは、テストが無いという手がかりを出さない
+- 片づけ（`cleanup.ts` の `findRemovable`）: `logs/` と `attachments/` の下のフォルダを、フォルダ自身の更新時刻で「古い記録」「前に渡した添付」
+  として挙げ、`--yes` で中身ごと消していた。ファイルだけを挙げる（`attachments.ts` の `sweep` と同じ）
+- 直さなかったもの: 片づけで名前だけで候補になるもの（古い llama-server・`.part`）は、大きさを取れないと 0 と数える。消すものは変わらず、
+  言う量が少なくなるだけ
+- 試験: `test/team-wired.test.ts`・`test/initiative.test.ts`・`test/cleanup.test.ts` に 1 件ずつ。三つとも直す前の版で落ちることを見た
+触る場所: `src/core/team-setup.ts` の `finish`、`src/cli/team.ts`、`src/agent/initiative.ts` の `findLeads`、`src/runtime/cleanup.ts` の `findRemovable`

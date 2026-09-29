@@ -57,9 +57,14 @@ export async function findLeads(opts: LeadOptions): Promise<Lead[]> {
   };
 
   const tests = await snapshotTests(root).catch(() => undefined);
+  // 読めなかったテストファイルも「在る」側に数える（中身が読めないだけで、無いのではない）
   const testedBasenames = new Set(
-    [...(tests?.files.keys() ?? [])].map((f) => baseName(f).replace(/\.(test|spec)$/, '')),
+    [...(tests?.files.keys() ?? []), ...[...(tests?.unreadable ?? [])].filter((f) => !f.endsWith('/'))]
+      .map((f) => baseName(f).replace(/\.(test|spec)$/, '')),
   );
+  // 数え直しそのものが落ちた・中を見られないフォルダがある: どのテストが在るか分からない。「見当たりません」と言わない
+  // （言うと、在るテストの二つ目を書かせにいく）
+  const testsKnown = tests !== undefined && ![...(tests.unreadable ?? [])].some((f) => f.endsWith('/'));
 
   // 未コミットの変更。作業中のものが一番関心が高い。
   if (snapshot.git?.kind === 'dirty') {
@@ -79,7 +84,7 @@ export async function findLeads(opts: LeadOptions): Promise<Lead[]> {
     if (!isSource(file)) continue;
 
     // 検査されていない実装。これは事実として確認できる。
-    if (!isTestPath(file) && !testedBasenames.has(baseName(file))) {
+    if (testsKnown && !isTestPath(file) && !testedBasenames.has(baseName(file))) {
       leads.push(lead({
         kind: 'test',
         title: `${file} に対応するテストが見当たりません`,

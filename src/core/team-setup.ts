@@ -46,8 +46,9 @@ export interface TeamWiring {
    * 終わりに呼ぶ。作業場を始めの記録と比べ、書くツールを通らずに変わった分（run_command）も
    * 戻り先に載せてから閉じる。`unrecorded` は、変わったが前の中身を記録できなかった道（戻せない。
    * 前後比べで取れなかったものも、大きさの上限で記録しなかったものも入る）。
+   * `outsideLost` は、前後比べそのものが落ちたときの理由。run_command で変わった分は一つも載っていない（戻せない）。
    */
-  finish(): Promise<{ point: UndoPoint | undefined; unrecorded: string[] }>;
+  finish(): Promise<{ point: UndoPoint | undefined; unrecorded: string[]; outsideLost?: string }>;
   harness: Harness;
   /** 素のツール。規則を通らない。画面に出す数え上げ用。 */
   bare: Tool[];
@@ -121,12 +122,19 @@ export async function wireTeam(
     beforeWrite: (path, previous) => undo.capture(path, previous),
     undo,
     finish: async () => {
-      const found = await outside.after().catch(() => ({ changes: [], unrecorded: [] as string[] }));
-      for (const c of found.changes) undo.replace(c.path, c.previous);
-      for (const path of found.unrecorded) undo.forget(path);
+      // 前後比べが落ちても、書くツールの分の戻り先は閉じる。ただし run_command の分が載っていないことを黙らない
+      // （黙ると、戻したつもりで run_command の変更だけ残る）
+      const found = await outside.after().catch((e: unknown) => e as Error);
+      if (!(found instanceof Error)) {
+        for (const c of found.changes) undo.replace(c.path, c.previous);
+        for (const path of found.unrecorded) undo.forget(path);
+      }
       const point = await undo.end();
       // 戻せないのは、前後比べで記録できなかった道だけではない。大きさで記録できなかった道も入れる。
-      return { point, unrecorded: [...undo.peekSkipped()] };
+      return {
+        point, unrecorded: [...undo.peekSkipped()],
+        ...(found instanceof Error ? { outsideLost: found.message } : {}),
+      };
     },
     harness,
     bare,

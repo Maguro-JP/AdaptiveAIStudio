@@ -165,7 +165,8 @@ export async function findRemovable(opts: {
   for (const name of await readdir(logs).catch(() => [])) {
     const path = join(logs, name);
     const s = await stat(path).catch(() => undefined);
-    if (!s || now - s.mtimeMs < maxLogAge) continue;
+    // フォルダは記録ではない（消すと中身ごと消える。更新時刻もフォルダ自身のもので、中身の古さではない）
+    if (!s || !s.isFile() || now - s.mtimeMs < maxLogAge) continue;
     const days = Math.floor((now - s.mtimeMs) / 86_400_000);
     found.push({ path, bytes: s.size, why: `${days}日前の記録` });
   }
@@ -176,7 +177,8 @@ export async function findRemovable(opts: {
   for (const name of await readdir(attachments).catch(() => [])) {
     const path = join(attachments, name);
     const s = await stat(path).catch(() => undefined);
-    if (!s || now - s.mtimeMs < maxAttachmentAge) continue;
+    // 添付は一つずつのファイル。フォルダは添付ではない（attachments.ts の sweep と同じ）
+    if (!s || !s.isFile() || now - s.mtimeMs < maxAttachmentAge) continue;
     found.push({ path, bytes: s.size, why: '前に渡した添付（1日以上前）' });
   }
 
