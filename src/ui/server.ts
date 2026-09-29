@@ -283,7 +283,7 @@ export class UiServer {
    * 断って書き直させない。利用者は「終わったらこれをやって」と
    * 思って書いているので、預かって順に流すのが素直。
    */
-  readonly #queue: Array<{ text: string; attached: string[]; conversationId: string; editor?: EditorHere }> = [];
+  readonly #queue: Array<{ text: string; attached: string[]; conversationId: string; editor?: EditorHere; failures?: number }> = [];
   /**
    * いま動いている依頼で、画面が選んでいる所。
    *
@@ -364,6 +364,8 @@ export class UiServer {
    * 2MB あれば足りる。
    */
   static readonly RESTORE_TAIL = 2 * 1024 * 1024;
+  /** 順番待ちの依頼を、始められないまま何回まで戻すか。超えたら外して送り直しを頼む（見回りのたびに同じ失敗を言い続けない）。 */
+  static readonly QUEUE_TRIES = 3;
   #idleTimer?: ReturnType<typeof setInterval>;
   #thinking = false;
   /**
@@ -614,10 +616,15 @@ export class UiServer {
     });
     // 続きから話す。**土台は作り直しても、話は続ける。**
     const id = await this.#currentConversation();
-    const past = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
-    this.#session.restore(past);
-    this.#loadedId = id;
-    this.#saved = past.length;
+    // 本体を組む所では投げない（投げると、読めない会話が一つあるだけで画面ごと使えなくなる）。読めなかったことは言う
+    const past = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL }).catch((e: unknown) => {
+      this.broadcast({ type: 'log', level: 'warn', text: `会話の記録を読めませんでした（${(e as Error).message}）。次に送るときに読み直します` });
+      return undefined;
+    });
+    // 読めなかったときは「載っていない」ままにする。空で載ったことにすると、次の送りで読み直さず、文脈なしで続いていた
+    this.#session.restore(past ?? []);
+    this.#loadedId = past ? id : undefined;
+    this.#saved = past?.length ?? 0;
     this.#startThinking(this.#session);
     return this.#session;
   }
@@ -713,7 +720,10 @@ export class UiServer {
     let settled: { reason: string; verified: boolean; checked: string } | undefined;
     let didSomething = false;
     try {
-      const past = await this.#conversations.load(conversationId, { tailBytes: UiServer.RESTORE_TAIL });
+      const past = await this.#conversations.load(conversationId, { tailBytes: UiServer.RESTORE_TAIL }).catch((e: unknown) => {
+        // 始める前に落ちた。依頼の文を添えて、送り直しを頼む（やり残しにも残らない）
+        throw new Error(`この会話の記録を読めないので、依頼を始められませんでした（${(e as Error).message}）。送り直してください: ${text}`);
+      });
       conv.restore(past);
       run.saved = past.length;
       const full = await this.#compose(session, text, attached, undefined);
@@ -2273,7 +2283,17 @@ export class UiServer {
       const id = typeof body?.id === 'string' ? body.id : '';
       if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
       const session = this.#session;
-      const past = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
+      const loaded = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL })
+        .then((m) => ({ m }), (e: unknown) => ({ error: e as Error }));
+      // 読めない会話。本体に載っている会話なら、手元の履歴のまま続ける（空で上書きしない）。載っていなければ切り替えない
+      const keepHere = 'error' in loaded && session !== undefined && this.#loadedId === id;
+      if ('error' in loaded && !keepHere) {
+        return send(res, 409, { error: `この会話の記録を読めません（${loaded.error.message}）` });
+      }
+      if ('error' in loaded) {
+        this.broadcast({ type: 'log', level: 'warn', text: `この会話の記録を読めません（${loaded.error.message}）。本体に載っている分で続けます` });
+      }
+      const past = 'error' in loaded ? [...(session?.history ?? [])] : loaded.m;
       // 画面へ返す中身（押し直しで書き直した・書けなかったときは、本体の今の履歴に合わせる）
       let shown = past;
       // **動いている間も切り替えられる。**見るだけなら本体には触らない。
@@ -2293,8 +2313,10 @@ export class UiServer {
             // 載っている会話を押し直した。書けていない分を先に書き、それでも書けなければファイルの中身で上書きしない
             // （前はファイルから読み直して、書き直し待ちのやりとりを黙って消した）
             await this.#persist(session);
-            if (this.#saved >= session.history.length) {
-              const fresh = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
+            const fresh = this.#saved >= session.history.length && !keepHere
+              ? await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL }).catch(() => undefined)
+              : undefined;
+            if (fresh) {
               session.restore(fresh);
               this.#saved = fresh.length;
               shown = fresh;
@@ -2302,7 +2324,7 @@ export class UiServer {
               // 画面にも手元の履歴を出す（ファイルの中身だけを出すと、書けていないやりとりが見えない）
               shown = [...session.history];
             }
-          } else {
+          } else if (!keepHere) {
             session.restore(past);
             this.#saved = past.length;
           }
@@ -3259,11 +3281,16 @@ export class UiServer {
     // 比べるのは本体に載っている会話（`#loadedId`）。載せ替えは `#loadInto` を通す（前は履歴だけ入れ替えて載っている会話の名前を
     // 変えず、続きのやりとりを、前に載っていた別の会話のファイルへ書いていた）
     if (item.conversationId && item.conversationId !== this.#loadedId) {
-      const loaded = await this.#loadInto(session, item.conversationId).then(() => true, () => false);
+      const loaded = await this.#loadInto(session, item.conversationId).then(() => undefined, (e: unknown) => e as Error);
       if (loaded) {
-        this.#conversationId = item.conversationId;
-        this.broadcast({ type: 'conversations' });
+        // 読めない会話の続きを、いま載っている別の会話で走らせない（その会話のファイルへ書いていた）。
+        // 回数は数えない（数えると、読めないだけで諦める方へ進む）。次の見回りでまた試す
+        this.broadcast({ type: 'log', level: 'warn', text: `やり残しの会話の記録を読めないので、今回は続けません（${loaded.message}）` });
+        this.#resuming = undefined;
+        return true;
       }
+      this.#conversationId = item.conversationId;
+      this.broadcast({ type: 'conversations' });
     }
     // 続きの文はこちらが組み立てたもの。利用者の言葉として判じない。
     this.#bg(
@@ -3658,15 +3685,31 @@ export class UiServer {
     this.broadcast({ type: 'queue', waiting: this.#queue.length });
     if (!next) return;
     this.#preparing = true;
+    let full: string;
     try {
       await this.#loadInto(session, next.conversationId);
-      const full = await this.#compose(session, next.text, next.attached, next.editor);
-      this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
-      this.#bg(this.#drive(session, full, undefined, { said: next.text, ...(next.editor ? { editor: next.editor } : {}) }),
-        '順番待ちの実行が落ちました');
+      full = await this.#compose(session, next.text, next.attached, next.editor);
+    } catch (e) {
+      /*
+       * **始められなかった依頼を、黙って落とさない。**取り出してから走り出すまでに落ちると（会話の記録を読めない等）、
+       * 前は取り出した依頼ごと消えていた。先頭へ戻して次の機会に回す。続けて落ちるなら、文を添えて送り直しを頼む。
+       */
+      const failures = (next.failures ?? 0) + 1;
+      const head = next.text.split('\n')[0]?.slice(0, 60) ?? '';
+      if (failures < UiServer.QUEUE_TRIES) {
+        this.#queue.splice(Math.max(0, at), 0, { ...next, failures });
+        this.broadcast({ type: 'log', level: 'warn', text: `順番待ちの依頼を始められませんでした（${(e as Error).message}）。順番待ちに戻しました: ${head}` });
+      } else {
+        this.broadcast({ type: 'log', level: 'error', text: `順番待ちの依頼を ${failures} 回続けて始められなかったので、外しました（${(e as Error).message}）。送り直してください: ${next.text}` });
+      }
+      this.broadcast({ type: 'queue', waiting: this.#queue.length });
+      return;
     } finally {
       this.#preparing = false;
     }
+    this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
+    this.#bg(this.#drive(session, full, undefined, { said: next.text, ...(next.editor ? { editor: next.editor } : {}) }),
+      '順番待ちの実行が落ちました');
   }
 
   async #drivePlan(session: Session, text: string): Promise<void> {

@@ -367,3 +367,15 @@ describe('後ろから読む', () => {
     assert.equal(large, small, `丸ごと読んでいる（10 倍で ${large} / ${small}）`);
   });
 });
+
+describe('読めない会話を、中身の無い会話と取り違えない', () => {
+  test('無い会話は空、読めない会話（場所がフォルダ）は投げる。後ろから読む形でも同じ', async () => {
+    const dir = join(await tempDir('aas-conv-unreadable-'), 'conversations');
+    const c = new Conversations(dir);
+    const id = newId();
+    assert.deepEqual(await c.load(id), [], '無い会話が空で返らない');
+    await mkdir(join(dir, `${id}.jsonl`), { recursive: true });
+    await assert.rejects(c.load(id), '読めない会話を空として返した');
+    await assert.rejects(c.load(id, { tailBytes: 1024 }), '後ろから読む形で、読めない会話を空として返した');
+  });
+});
