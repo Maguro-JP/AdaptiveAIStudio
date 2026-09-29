@@ -226,8 +226,14 @@ export class McpClient {
     });
     this.#child.stdout?.on('data', (b: Buffer) => { this.#onData(this.#decoder.write(b)); });
     this.#child.on('error', (e) => { this.#fail(`落ちました: ${e.message}`); });
-    // 相手が終わった直後（exit を受ける前）に書くと EPIPE になる。聞き手が無いと、受け手の無い失敗でこちらごと落ちる
-    this.#child.stdin?.on('error', (e) => { this.#fail(`送れませんでした: ${e.message}`); });
+    // 相手が終わった直後（exit を受ける前）や、相手が入力を閉じたときに書くと EPIPE になる。聞き手が無いと、受け手の無い失敗で
+    // こちらごと落ちる。相手は生きていても、もう何も届かないので止める（残すと、以後の呼び出しが毎回時間切れまで待つ）
+    const child = this.#child;
+    child.stdin?.on('error', (e) => {
+      this.#fail(`送れませんでした: ${e.message}${stderr ? `\n${stderr.trim()}` : ''}`);
+      child.kill();
+      if (this.#child === child) this.#child = undefined;
+    });
     this.#child.on('exit', (code) => {
       // 待っている呼び出しを放置しない。相手が消えたら、待ち手も終わらせる。
       this.#fail(`終了しました（コード ${code ?? '不明'}）${stderr ? `\n${stderr.trim()}` : ''}`);
