@@ -22,19 +22,28 @@ process.env.AAS_STATE_DIR = join(dir, 'state');
 const { UiServer } = await import('../src/ui/server.ts');
 const { DEFAULT_CONFIG } = await import('../src/config.ts');
 
-/** `path` だけ EACCES で読めなくして `fn` を回す。 */
-async function unreadable<T>(path: string, fn: () => Promise<T>): Promise<T> {
-  const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
-  const real = fsp.readFile;
+const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
+const realReadFile = fsp.readFile;
+
+/** `path` だけ EACCES で読めなくする。戻すのは `restoreRead`。 */
+function blockRead(path: string): void {
   (fsp as { readFile: unknown }).readFile = ((file: unknown, ...rest: unknown[]) => file === path
     ? Promise.reject(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }))
-    : (real as (...a: unknown[]) => Promise<unknown>)(file, ...rest)) as never;
+    : (realReadFile as (...a: unknown[]) => Promise<unknown>)(file, ...rest)) as never;
   syncBuiltinESMExports();
+}
+function restoreRead(): void {
+  (fsp as { readFile: unknown }).readFile = realReadFile;
+  syncBuiltinESMExports();
+}
+
+/** `path` だけ EACCES で読めなくして `fn` を回す。 */
+async function unreadable<T>(path: string, fn: () => Promise<T>): Promise<T> {
+  blockRead(path);
   try {
     return await fn();
   } finally {
-    (fsp as { readFile: unknown }).readFile = real;
-    syncBuiltinESMExports();
+    restoreRead();
   }
 }
 
@@ -88,6 +97,58 @@ describe('画面の手保存', () => {
       method: 'PUT', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ path: 'b.txt', content: '上書き\n' }),
     }));
+    const body = await r.json() as { error?: string };
+    assert.equal(r.status, 409, `保存した: ${JSON.stringify(body)}`);
+    assert.match(body.error ?? '', /読めない/);
+    assert.equal(await readFile(abs, 'utf8'), 'もとの中身\n');
+  });
+
+  test('行ごとに戻す口も、読めないファイルには書かない', async () => {
+    const abs = join(work, 'c.txt');
+    await writeFile(abs, 'one\ntwo\n');
+    const diff = '--- a/c.txt\n+++ b/c.txt\n@@ -1,1 +1,2 @@\n one\n+two\n';
+    const r = await unreadable(abs, () => fetch(`${base}/api/revert`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path: 'c.txt', diff, picks: [{ hunk: 0 }] }),
+    }));
+    const body = await r.json() as { error?: string };
+    assert.equal(r.status, 409, `戻した・別の理由で断った: ${r.status} ${JSON.stringify(body)}`);
+    assert.match(body.error ?? '', /読めない/);
+    assert.equal(await readFile(abs, 'utf8'), 'one\ntwo\n');
+  });
+});
+
+describe('画面の手保存で、錠を取った後に読めなくなったとき', () => {
+  const work2 = join(dir, 'work2');
+  let base2 = '';
+  let server2: InstanceType<typeof UiServer>;
+  let blockAfterLock: string | undefined;
+  before(async () => {
+    await mkdir(work2, { recursive: true });
+    server2 = new UiServer({
+      config: { ...DEFAULT_CONFIG, agent: { root: work2 } } as typeof DEFAULT_CONFIG,
+      port: 0,
+      // 錠を取った後の読み直しの手前で、読めなくする
+      afterHandLock: async () => { if (blockAfterLock) blockRead(blockAfterLock); },
+    });
+    base2 = (await server2.start()).replace(/\/$/, '');
+  });
+  after(async () => { await server2.stop(); });
+
+  test('保存せず、読めないと言う', async () => {
+    const abs = join(work2, 'd.txt');
+    await writeFile(abs, 'もとの中身\n');
+    blockAfterLock = abs;
+    let r: Response;
+    try {
+      r = await fetch(`${base2}/api/file`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: 'd.txt', content: '上書き\n' }),
+      });
+    } finally {
+      blockAfterLock = undefined;
+      restoreRead();
+    }
     const body = await r.json() as { error?: string };
     assert.equal(r.status, 409, `保存した: ${JSON.stringify(body)}`);
     assert.match(body.error ?? '', /読めない/);

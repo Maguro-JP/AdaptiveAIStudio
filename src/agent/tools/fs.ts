@@ -435,8 +435,10 @@ async function commit(
     // バイト列で比べる。文字にしてから比べると、utf8 で読めないものは違う中身でも同じに見える。
     // 読めなくなったのも「変わった」側に倒す（「無い」と取り違えると、作る回で読めない中身を上書きする）
     const nowOnDisk = await readPrior(abs).catch(() => null);
-    const same = nowOnDisk !== null
-      && (created ? nowOnDisk === undefined : nowOnDisk !== undefined && priorBytes!.equals(nowOnDisk));
+    if (nowOnDisk === null) {
+      return fail(`待っているあいだに ${shown} を読めなくなりました。何も書いていません`);
+    }
+    const same = created ? nowOnDisk === undefined : nowOnDisk !== undefined && priorBytes!.equals(nowOnDisk);
     if (!same) {
       return fail(`待っているあいだに ${shown} が変わりました。`
         + '読み直してから、もう一度書いてください（いまの中身は消していません）');
