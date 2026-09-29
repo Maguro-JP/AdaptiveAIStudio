@@ -1817,7 +1817,8 @@ export class Session {
       }
 
       // 打ち切ったなら、中途半端な状態を残さない選択肢を持つ。
-      const unrecorded = [...new Set(outsideUnrecorded)].sort();
+      // 書く前の中身を読めなかった道も、戻せない道として言う（checkpoint は触らずに残す）
+      const unrecorded = [...new Set([...outsideUnrecorded, ...checkpoint.unrecorded()])].sort();
       if (!keep && harnessCfg.rollbackOnGiveUp && (checkpoint.size > 0 || unrecorded.length > 0)) {
         // 戻せなかった道だけの回も黙らない。「打ち切ったら戻る」つもりの人に、戻っていないことを言う。
         // 前の中身を記録できなかった道と、置き戻しに失敗した道（掴まれている・フォルダに入れ替わった）の両方。
