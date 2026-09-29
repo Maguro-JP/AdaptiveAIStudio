@@ -231,7 +231,7 @@ export class McpClient {
     const child = this.#child;
     child.stdin?.on('error', (e) => {
       this.#fail(`送れませんでした: ${e.message}${stderr ? `\n${stderr.trim()}` : ''}`);
-      child.kill();
+      endChild(child);
       if (this.#child === child) this.#child = undefined;
     });
     this.#child.on('exit', (code) => {
@@ -294,7 +294,7 @@ export class McpClient {
       this.#http = undefined;
       return;
     }
-    this.#child?.kill();
+    if (this.#child) endChild(this.#child);
     this.#child = undefined;
   }
 
@@ -508,6 +508,21 @@ export class McpClient {
     });
   }
 }
+
+/**
+ * 止めた相手が SIGTERM を無視しても残さない。`KILL_GRACE_MS` 待って終わっていなければ SIGKILL を送る。
+ * SIGTERM だけだと、無視する相手はこちらが手を放した後も生き続けた（`#child` を外すので、後から止める手も無い）。
+ */
+function endChild(child: ChildProcess): void {
+  child.kill();
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const hard = setTimeout(() => { child.kill('SIGKILL'); }, KILL_GRACE_MS);
+  hard.unref();
+  child.once('exit', () => clearTimeout(hard));
+}
+
+/** SIGTERM から SIGKILL までの猶予。後始末（記録の書き出し等）に足りる長さ。 */
+export const KILL_GRACE_MS = 3_000;
 
 /** `#call` を止めたときの返り。相手の返事と取り違えないよう、ほかに無い値にする。 */
 const STOPPED: unique symbol = Symbol('stopped');

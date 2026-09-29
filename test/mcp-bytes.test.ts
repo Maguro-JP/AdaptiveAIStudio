@@ -132,3 +132,34 @@ describe('相手の入力が閉じていても、こちらは落ちない', () =
     assert.match(again.text, /動いていません/, `二度目も書きに行った: ${again.text}`);
   });
 });
+
+describe('止めた相手を残さない', () => {
+  // Windows の kill は初めから強制終了なので、SIGTERM を無視する相手は作れない
+  test('SIGTERM を無視する相手も、stop() の後しばらくで強制的に終わらせる', { skip: process.platform === 'win32' }, async () => {
+    const c = client(['-e', `
+      process.on('SIGTERM', () => {}); // 無視する
+      const { createInterface } = require('node:readline');
+      createInterface({ input: process.stdin }).on('line', (line) => {
+        const msg = JSON.parse(line);
+        const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+        if (msg.method === 'initialize') say({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18' } });
+        else if (msg.method === 'tools/list') say({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'pid' }] } });
+        else if (msg.method === 'tools/call') say({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: String(process.pid) }] } });
+      });
+      setInterval(() => {}, 1000); // 入力が閉じても生き続ける
+    `]);
+    assert.equal(await c.start(), true, `立ち上がらなかった: ${c.failure}`);
+    const pid = Number((await c.call('pid', {}, 10_000)).text);
+    assert.ok(pid > 0, `pid が取れない: ${pid}`);
+    const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    try {
+      c.stop();
+      const deadline = Date.now() + 15_000;
+      while (alive() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
+      assert.equal(alive(), false, 'stop() の後も相手が残っている');
+    } finally {
+      // 途中で落ちても、SIGTERM を無視する相手を試験の後に残さない
+      if (alive()) process.kill(pid, 'SIGKILL');
+    }
+  });
+});
