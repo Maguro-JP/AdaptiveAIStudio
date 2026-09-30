@@ -702,10 +702,9 @@ export class Session {
    *
    * 入口ごとに書き直さない。ここが唯一の手順で、
    * CLI も画面も、出てくる出来事を見て描くだけにする。
-   */
-  /**
-   * 段取り。`said` は利用者が打った文（添付の中身を差し込む前）。戻り先の見出し・前に分かっていることの呼び出し・
-   * 覚える見出しは利用者の言葉で持つ（送り口の `said` と同じ）。分解と規則の判定には全文を渡す。
+   *
+   * `said` は利用者が打った文（添付の中身を差し込む前）。戻り先の見出し・前に分かっていることの呼び出し・覚える見出しは
+   * 利用者の言葉で持つ（添付の頭が見出しにならないように）。分解・規則の判定・検収には全文を渡す。
    */
   async *plan(request: string, said?: string): AsyncGenerator<PlanEvent, AcceptanceReport | undefined> {
     const asked = said || request;

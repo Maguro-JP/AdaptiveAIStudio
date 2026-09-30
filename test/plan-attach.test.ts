@@ -38,9 +38,9 @@ test('/plan に添えたファイルの中身が、段取りを組むモデル�
       body: JSON.stringify({ text: '添付の仕様どおりに直して', attachments: [id] }),
     });
     assert.equal(planned.status, 202, await planned.text());
-    await until(() => fake.requests > 0, 'モデルに問いが届く', { timeoutMs: 30_000 });
+    // 見たいことそのものを待つ（問いの数だけを待つと、本文を読み終える前に見て落ちうる）
+    await until(() => /KIWI-4412/.test(JSON.stringify(fake.bodies)), '添付の中身がモデルに届く', { timeoutMs: 30_000 });
     const sent = JSON.stringify(fake.bodies);
-    assert.match(sent, /KIWI-4412/, `添付の中身がモデルに届いていない: ${sent.slice(0, 400)}`);
     assert.match(sent, /添付の仕様どおりに直して/, '利用者が打った文が依頼から消えた');
   } finally { await server.stop(); await fake.close(); }
 });

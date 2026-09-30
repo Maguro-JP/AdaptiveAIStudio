@@ -1307,12 +1307,13 @@ export class UiServer {
     }
 
     if (path === '/api/plan' && req.method === 'POST') {
-      const body = await readBody(req) as { text?: string; attachments?: unknown };
+      const body = await readBody(req) as { text?: string; attachments?: unknown; editor?: unknown };
       const text = typeof body?.text === 'string' ? body.text.trim() : '';
-      // 添えたファイルも読む。読まずにいたので、画面は「📎 名前」を出すのに、段取りは添付を見ないまま組まれていた
+      // 添えたファイル・開いている所も読む。読まずにいたので、画面は「📎 名前」を出すのに、段取りは添付を見ないまま組まれていた
       const attached = Array.isArray(body?.attachments)
         ? body.attachments.filter((a): a is string => typeof a === 'string')
         : [];
+      const editor = editorHere(body?.editor);
       if (!text) return send(res, 400, { error: '依頼が空です' });
 
       const session = await this.session();
@@ -1325,9 +1326,9 @@ export class UiServer {
         const missing = await this.#readyToThink();
         if (missing) return send(res, 503, { error: missing });
 
+        // 送り口と同じ組み立て（添付・開いている所・@ の指名）。返事の前に組む（返した後に投げると、受け手の無い失敗になる）
+        const full = await this.#compose(session, text, attached, editor);
         send(res, 202, { accepted: true });
-        // 送り口と同じ組み立てで、添付の中身を依頼の前に差し込む（読めないものは describe が「読めない」と書く）
-        const full = attached.length > 0 ? await this.#compose(session, text, attached) : text;
         this.#bg(this.#drivePlan(session, full, text), '段取りが落ちました');
       } finally {
         this.#preparing = false;
