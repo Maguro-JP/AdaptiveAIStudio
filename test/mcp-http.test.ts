@@ -194,3 +194,76 @@ describe('取り消しの知らせが断られても、ほかの呼び出しを�
     }
   });
 });
+
+/** 流れ（SSE）の頭だけ返して黙る相手。`closed()` で、その繋ぎが閉じたかを見る。 */
+async function startSilentStream() {
+  let closed = false;
+  const held: import('node:http').ServerResponse[] = [];
+  const server: Server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { id?: number; method?: string };
+      if (body.id === undefined) { res.writeHead(202); res.end(); return; }
+      const say = (result: unknown) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
+      };
+      if (body.method === 'initialize') say({ protocolVersion: '2025-06-18', capabilities: {} });
+      else if (body.method === 'tools/list') say({ tools: [{ name: 'hang' }] });
+      else {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write(': started\n\n');
+        res.on('close', () => { closed = true; });
+        held.push(res);
+      }
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const port = (server.address() as { port: number }).port;
+  return {
+    url: `http://127.0.0.1:${port}/mcp`,
+    closed: () => closed,
+    close: async () => {
+      for (const res of held) res.destroy();
+      await new Promise<void>((r) => server.close(() => r()));
+    },
+  };
+}
+
+describe('止めた呼び出しの返事の流れを、開いたままにしない', () => {
+  test('流れ（SSE）で返し始めて黙る相手でも、止めたらその繋ぎを閉じる', async () => {
+    const s = await startSilentStream();
+    const c = new McpClient('remote', { url: s.url });
+    try {
+      assert.equal(await c.start(), true, c.failure);
+      const ac = new AbortController();
+      setTimeout(() => ac.abort(), 200).unref();
+      assert.match((await c.call('hang', {}, 10_000, ac.signal)).text, /止めました/);
+      await until(s.closed, '止めた呼び出しの流れが閉じる', { timeoutMs: 5_000 }).catch(() => undefined);
+      assert.equal(s.closed(), true, '止めた呼び出しの流れが開いたまま');
+      assert.equal(c.failure, undefined, `止めただけで失敗扱いになった: ${c.failure}`);
+      assert.equal(c.running, true);
+    } finally {
+      c.stop();
+      await s.close();
+    }
+  });
+
+  test('stop() でも、返事を待っている流れを閉じる', async () => {
+    const s = await startSilentStream();
+    const c = new McpClient('remote', { url: s.url });
+    try {
+      assert.equal(await c.start(), true, c.failure);
+      const pending = c.call('hang', {}, 10_000);
+      await new Promise((r) => setTimeout(r, 200));
+      c.stop();
+      await until(s.closed, 'stop() で流れが閉じる', { timeoutMs: 5_000 }).catch(() => undefined);
+      assert.equal(s.closed(), true, 'stop() の後も流れが開いたまま');
+      await pending;
+    } finally {
+      c.stop();
+      await s.close();
+    }
+  });
+});
