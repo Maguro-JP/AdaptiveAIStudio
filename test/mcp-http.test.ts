@@ -223,6 +223,8 @@ async function startSilentStream() {
   const port = (server.address() as { port: number }).port;
   return {
     url: `http://127.0.0.1:${port}/mcp`,
+    /** 相手が hang の問いを受け取って、流れを開いた */
+    started: () => held.length > 0,
     closed: () => closed,
     close: async () => {
       for (const res of held) res.destroy();
@@ -238,8 +240,10 @@ describe('止めた呼び出しの返事の流れを、開いたままにしな�
     try {
       assert.equal(await c.start(), true, c.failure);
       const ac = new AbortController();
-      setTimeout(() => ac.abort(), 200).unref();
-      assert.match((await c.call('hang', {}, 10_000, ac.signal)).text, /止めました/);
+      const asked = c.call('hang', {}, 10_000, ac.signal);
+      await until(s.started, '相手が問いを受け取る', { timeoutMs: 5_000 }); // 決め打ちの時間で待たない
+      ac.abort();
+      assert.match((await asked).text, /止めました/);
       await until(s.closed, '止めた呼び出しの流れが閉じる', { timeoutMs: 5_000 }).catch(() => undefined);
       assert.equal(s.closed(), true, '止めた呼び出しの流れが開いたまま');
       assert.equal(c.failure, undefined, `止めただけで失敗扱いになった: ${c.failure}`);
@@ -250,17 +254,20 @@ describe('止めた呼び出しの返事の流れを、開いたままにしな�
     }
   });
 
-  test('stop() でも、返事を待っている流れを閉じる', async () => {
+  test('stop() でも、返事を待っている流れを閉じ、待っている呼び出しは時間切れを待たずに返る', async () => {
     const s = await startSilentStream();
     const c = new McpClient('remote', { url: s.url });
     try {
       assert.equal(await c.start(), true, c.failure);
-      const pending = c.call('hang', {}, 10_000);
-      await new Promise((r) => setTimeout(r, 200));
+      const pending = c.call('hang', {}, 30_000);
+      await until(s.started, '相手が問いを受け取る', { timeoutMs: 5_000 });
+      const stoppedAt = Date.now();
       c.stop();
       await until(s.closed, 'stop() で流れが閉じる', { timeoutMs: 5_000 }).catch(() => undefined);
       assert.equal(s.closed(), true, 'stop() の後も流れが開いたまま');
-      await pending;
+      const got = await pending;
+      assert.equal(got.isError, true);
+      assert.ok(Date.now() - stoppedAt < 10_000, `stop() の後、時間切れまで待った（${Date.now() - stoppedAt}ms）`);
     } finally {
       c.stop();
       await s.close();

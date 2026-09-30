@@ -297,9 +297,9 @@ export class McpClient {
         }).catch(() => undefined);
       }
       this.#http = undefined;
-      // 返事を待っている流れも閉じる（切った後も繋ぎが残らないように）
-      for (const own of this.#streams.values()) own.abort();
-      this.#streams.clear();
+      // 待っている呼び出しを終わらせ、返事の流れも閉じる（手元の相手が落ちたときの exit と同じ扱い。
+      // 落とさないと、切った後も呼び出しが時間切れまで返らなかった）
+      this.#fail('切りました');
       return;
     }
     if (this.#child) endChild(this.#child);
@@ -312,6 +312,9 @@ export class McpClient {
     this.#failure ??= reason;
     for (const p of this.#pending.values()) p.reject(new Error(reason));
     this.#pending.clear();
+    // 待ちが無くなった問いの流れも閉じる（開いたままだと、相手が次の塊を出すまで繋ぎが残る）
+    for (const own of this.#streams.values()) own.abort();
+    this.#streams.clear();
   }
 
   /**
