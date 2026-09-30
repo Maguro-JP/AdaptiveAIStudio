@@ -408,3 +408,24 @@ describe('会話の在る無しを見られないとき', () => {
     assert.match(await readFile(live, 'utf8'), /生きている方/, '見られない生きている会話を、消した写しで上書きした');
   });
 });
+
+describe('一覧は、使った順で切る', () => {
+  /**
+   * 名前（作った順）で新しい方から切っていたので、前に作った会話に今日書き足しても、後から作った会話が上限を超えていると
+   * 一覧に出ず、いま話していた会話が横の一覧から消えていた。
+   */
+  test('前に作った会話でも、最近書き足したものは一覧に残る', async () => {
+    const { c, dir } = await store();
+    const { utimes } = await import('node:fs/promises');
+    const old = await c.create();
+    const a = await c.create();
+    const b = await c.create();
+    // 時刻は決めて置く（作った順は old < a < b。書き足したのは old がいちばん後）
+    const t0 = new Date('2026-01-01T00:00:00Z');
+    await utimes(join(dir, `${a.id}.jsonl`), t0, new Date(t0.getTime() + 1000));
+    await utimes(join(dir, `${b.id}.jsonl`), t0, new Date(t0.getTime() + 2000));
+    await utimes(join(dir, `${old.id}.jsonl`), t0, new Date(t0.getTime() + 3000));
+    const listed = (await c.list(2)).map((h) => h.id);
+    assert.deepEqual(listed, [old.id, b.id], `最近書き足した会話が一覧から消えた: ${JSON.stringify(listed)}`);
+  });
+});
