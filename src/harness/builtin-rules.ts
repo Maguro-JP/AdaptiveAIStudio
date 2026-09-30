@@ -6,7 +6,8 @@
  */
 import { isWriteTool, isExternalTool, mayWriteFiles, plannedContent } from '../agent/tools/write-kind.ts';
 import { readFile, lstat } from 'node:fs/promises';
-import { relative, isAbsolute } from 'node:path';
+import { relative, isAbsolute, dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { minimatch } from './glob.ts';
 import { safeResolve } from '../agent/tools/paths.ts';
 import { isAbsent } from './put-back.ts';
@@ -55,6 +56,12 @@ export function protectedPaths(patterns: string[], opts: { nocase?: boolean } = 
 
       for (const path of named) {
         const rel = normalize(ctx.root, path);
+        /*
+         * 外のツールの値のうち、空白を含む文は、親のフォルダが在る道のときだけ道として見る。既定の守りは `**\/` でどの階層にも当たるので、
+         * 「please check packages/api/.env」のような文（最初の区切りが「please check packages」）まで保護された道として止め、
+         * issue やコメントに `.env` の話を書けなくしていた。空白を含む本当の道（`My Docs/.env`）は、親のフォルダが在るので今までどおり見る
+         */
+        if (isExternalTool(call.name) && /\s/.test(path) && !existsSync(dirname(join(ctx.root, rel)))) continue;
         // 大小を区別しない機械では `.ENV` も `.env`。区別すると守りをすり抜ける。
         const hit = patterns.find((p) => minimatch(rel, p, opts));
         if (hit) {
@@ -215,10 +222,13 @@ export const readBeforeWrite: Rule = {
     /** 一部だけを読んだ呼び出しか。 */
     const partial = (c: ToolCall): boolean => hasArg(c, 'offset') || hasArg(c, 'limit');
     const wholeNeeded = call.name === 'write_file';
+    // 前に書いたことも「見た」に数える。ただし全文を置き換えるときは、前に全文を書いた（write_file）ときだけ。edit_file は当てた所しか
+    // 知らない（失敗して何も書いていないこともある）。数えていたので、一部だけ読んで edit_file を一度（失敗でも）挟むと、全文の
+    // write_file が通り、読んでいない行を消していた
     const sawIt = ctx.history.some((c) =>
       (c.name === 'read_file' && argString(c, 'path') === path
         && !(wholeNeeded && partial(c)))
-      || (isWriteTool(c.name) && argString(c, 'path') === path));
+      || (isWriteTool(c.name) && argString(c, 'path') === path && (!wholeNeeded || c.name === 'write_file')));
     if (sawIt) return allow;
 
     const partly = ctx.history.some((c) =>
@@ -236,6 +246,17 @@ export const readBeforeWrite: Rule = {
   },
 };
 
+/** 引数の中身を一つの文字列にする（同じ呼び出しかを見るため）。文字列にできないものは、その都度違うものとして扱う。 */
+let unsignable = 0;
+function signArgs(args: unknown): string {
+  // キーの順は揃える（同じ中身をキーの順だけ変えて出し直すと、別の呼び出しとして通ってしまう）
+  const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
+    : v && typeof v === 'object'
+      ? Object.fromEntries(Object.keys(v as Record<string, unknown>).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])]))
+      : v;
+  try { return JSON.stringify(sorted(args ?? null)); } catch { return `unsignable:${++unsignable}`; }
+}
+
 /**
  * 同じ書き込みの繰り返しを止める。
  * 直したつもりで同じ内容を書き続けるのは、行き詰まりの典型。
@@ -248,9 +269,9 @@ export const noRepeatedWrites: Rule = {
     // 同じ呼び出しかどうかは、**渡された引数そのもの**で見る。
     // ここで当て直すと、当てるたびに中身が変わる（一度目で書き換わるので、
     // 二度目は「見つからない」になる）。繰り返しを見るには引数の方が正しい。
-    const sign = (c: ToolCall) =>
-      `${c.name}::${argString(c, 'path')}::${argString(c, 'content')}`
-      + `::${argString(c, 'find')}::${argString(c, 'replace')}`;
+    // **引数の全部で見る。**名前を挙げた一部（path・content・find・replace）で見ていたので、まとめて直す `edits` だけの
+    // edit_file は、中身が違っても二度目から「同じ内容」として止めていた（ツールの説明が勧める、いちばん普通の使い方）
+    const sign = (c: ToolCall) => `${c.name}::${signArgs(c.args)}`;
     const signature = sign(call);
     const repeats = ctx.history.filter((c) =>
       isWriteTool(c.name) && sign(c) === signature).length;

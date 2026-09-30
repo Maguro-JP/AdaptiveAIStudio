@@ -15,10 +15,14 @@ import {
 import { type Forum, requiresDeliberation } from '../harness/deliberation.ts';
 import { stateDir } from './autopilot-setup.ts';
 
-/** 既定で保護するもの。触れて得より害が大きいファイル。 */
+/**
+ * 既定で保護するもの。触れて得より害が大きいファイル。
+ * **どの階層でも守る（`**\/` を付ける）。**道は全体で照らすので、付けないと作業場の直下だけに当たる（monorepo の
+ * `packages/api/.env` が守りの外だった）。`**\/` は階層が無いものにも当たるので、直下のものも守る。
+ */
 const DEFAULT_PROTECTED = [
-  '.env', '.env.*',
-  '**/*.lock', 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock',
+  '**/.env', '**/.env.*',
+  '**/*.lock', '**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock',
   '.git/**',
   '**/id_rsa', '**/*.pem', '**/credentials*',
 ];

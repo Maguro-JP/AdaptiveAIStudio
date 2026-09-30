@@ -178,6 +178,20 @@ describe('規則: 読んでから書く', () => {
     assert.notEqual(r.isError, true);
   });
 
+  test('一部だけ読んで edit_file を挟んでも、全文の write_file は通さない（読んでいない行を消さない）', async () => {
+    const root = await project({ 'a.ts': 'line1\nline2\nline3\n' });
+    const h = harness([readBeforeWrite]);
+    const read = h.wrap(readFileTool, () => '');
+    const edit = h.wrap(editFileTool, () => '');
+    const write = h.wrap(writeFileTool, () => '');
+    await read.run({ path: 'a.ts', limit: 1 }, ctx(root));
+    // 当たらない edit_file（失敗して何も書かない）
+    await edit.run({ path: 'a.ts', find: 'nope', replace: 'x' }, ctx(root));
+    const r = await write.run({ path: 'a.ts', content: 'line1\n' }, ctx(root));
+    assert.equal(r.isError, true, `一部しか読んでいないのに全文で上書きできた: ${r.content}`);
+    assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'line1\nline2\nline3\n');
+  });
+
   test('新規作成は読まずに通す', async () => {
     const root = await project();
     const h = harness([readBeforeWrite]);
@@ -250,6 +264,18 @@ describe('規則: その他', () => {
     const again = await write.run({ path: 'a.ts', content: 'same' }, ctx(root));
     assert.equal(again.isError, true);
     assert.match(again.content, /同じ内容/);
+  });
+
+  test('まとめて直す edits は、中身が違えば二度目も止めない（同じなら止める）', () => {
+    const edit = (find: string, replace: string) => ({ id: find, name: 'edit_file', args: { path: 'a.ts', edits: [{ find, replace }] } });
+    const ctx = (history: ReturnType<typeof edit>[]) => ({ history } as never);
+    const first = edit('A', 'B');
+    const kind = (d: unknown) => (d as { kind: string }).kind;
+    assert.equal(kind(noRepeatedWrites.pre!(edit('C', 'D'), ctx([first]))), 'allow', '中身の違う edits を、同じ内容として止めた');
+    assert.equal(kind(noRepeatedWrites.pre!(edit('A', 'B'), ctx([first]))), 'deny');
+    // キーの順だけを変えて出し直しても、同じ呼び出し
+    const reordered = { id: 'r', name: 'edit_file', args: { edits: [{ replace: 'B', find: 'A' }], path: 'a.ts' } };
+    assert.equal(kind(noRepeatedWrites.pre!(reordered as never, ctx([first]))), 'deny', 'キーの順だけ変えた同じ直しを通した');
   });
 
   test('作業ディレクトリの外を止める', async () => {

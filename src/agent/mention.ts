@@ -12,6 +12,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { decodeForReading } from './tools/decode.ts';
+import { isAbsent } from '../harness/put-back.ts';
 
 /**
  * 上限は、**窓から決める。**
@@ -47,6 +48,17 @@ export function mentionBudget(contextTokens: number): { each: number; total: num
 }
 
 /**
+ * `@道` の形。文の頭か、空白・句読点・括弧の後ろの `@` だけを見る（`m@guro.email` のようなメールの `@` は指名ではない）。
+ * 空白で終わるのが基本だが、日本語は空白を置かずに続けるので、句読点でも切る。
+ */
+const MENTION = /(?<=^|[\s、。「」（）()])@([^\s、。「」（）()]+)/g;
+
+/** 道の後ろに付いた英語の句読点（`@src/a.ts,` の `,`）は、道に含めない。 */
+function tokenOf(raw: string): string {
+  return raw.replace(/[.,:;!?]+$/, '');
+}
+
+/**
  * `@` で指名された道を拾う。
  *
  * 空白で終わるのが基本だが、日本語は空白を置かずに続けるので
@@ -54,21 +66,31 @@ export function mentionBudget(contextTokens: number): { each: number; total: num
  */
 export function mentionsIn(text: string): string[] {
   const found: string[] = [];
-  for (const m of text.matchAll(/@([^\s、。「」（）()]+)/g)) {
-    const at = m[1];
+  for (const m of text.matchAll(MENTION)) {
+    const at = tokenOf(m[1] ?? '');
     if (!at || found.includes(at)) continue;
     found.push(at);
   }
   return found;
 }
 
-/** 指名された道から `@` を外して、素の文へ戻す。 */
-export function stripMentions(text: string): string {
-  return text.replace(/@([^\s、。「」（）()]+)/g, '$1');
+/**
+ * 指名された道から `@` を外して、素の文へ戻す。`only` を渡したら、その道の `@` だけを外す
+ * （読めた指名だけ。`@types/node` のように指名でなかったものは、打ったとおりに残す）。
+ */
+export function stripMentions(text: string, only?: ReadonlySet<string>): string {
+  return text.replace(MENTION, (whole, raw: string) => {
+    const at = tokenOf(raw);
+    return only && !only.has(at) ? whole : whole.slice(1);
+  });
 }
 
 export interface MentionRead {
   readonly path: string;
+  /** 打たれた道（`@` の後ろ、そのまま）。 */
+  readonly at?: string;
+  /** 在りませんでした。**指名ではなかったもの**として扱う（`@types/node`・`@pytest.fixture` など）。 */
+  readonly missing?: boolean;
   readonly ok: boolean;
   /** 中身。読めなかったときは、なぜ読めないか。 */
   readonly body: string;
@@ -125,9 +147,9 @@ export async function readMentions(
       const cut = body.length > room;
       const shown = cut ? body.slice(0, room) : body;
       used += shown.length;
-      out.push({ path: rel.split(sep).join('/'), ok: true, body: shown, truncated: cut });
+      out.push({ path: rel.split(sep).join('/'), at, ok: true, body: shown, truncated: cut });
     } catch (e) {
-      out.push({ path: at, ok: false, body: (e as Error).message });
+      out.push({ path: at, at, ok: false, body: (e as Error).message, ...(isAbsent(e) ? { missing: true } : {}) });
     }
   }
   return out;
@@ -165,7 +187,13 @@ export async function expandMentions(
   root: string,
   opts: MentionOpts = {},
 ): Promise<{ text: string; reads: MentionRead[] }> {
-  const reads = await readMentions(text, root, opts);
+  /*
+   * **在らないものは指名ではない。**`@` の付いた言葉を全部指名として読み、`@` を外していたので、`npm i -D @types/node` は
+   * `types/node` として（別の包みの名前になって）モデルへ渡り、コードの `@pytest.fixture` も `@` を失っていた。
+   * 在らないものは中身の塊にも載せず、`@` も打ったとおりに残す。在るのに読めない（外・フォルダ・一杯）ものは今までどおり言う
+   */
+  const reads = (await readMentions(text, root, opts)).filter((r) => !r.missing);
   if (reads.length === 0) return { text, reads };
-  return { text: `${mentionBlock(reads)}\n\n${stripMentions(text)}`, reads };
+  const read = new Set(reads.filter((r) => r.ok).map((r) => r.at ?? r.path));
+  return { text: `${mentionBlock(reads)}\n\n${stripMentions(text, read)}`, reads };
 }
