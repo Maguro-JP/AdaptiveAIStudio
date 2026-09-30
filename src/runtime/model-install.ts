@@ -79,16 +79,32 @@ export function pickModelFile(files: string[], quant: string): string | undefine
   return single.sort((a, b) => a.length - b.length)[0];
 }
 
+/**
+ * 命令行の `--quant <名前>` を読む。無ければ q4_k_m。
+ * `argv[indexOf('--quant') + 1]` だと、無いときに argv[0]（node の場所）を量子化の名前として読んでいた。
+ */
+export function quantFrom(argv: readonly string[]): string {
+  const at = argv.indexOf('--quant');
+  const value = at >= 0 ? argv[at + 1] : undefined;
+  return value && !value.startsWith('--') ? value : 'q4_k_m';
+}
+
 /** すでに置いてあるか。 */
 export async function findModel(modelsDir: string, quant: string, repo: string): Promise<string | undefined> {
   const stem = repo.split('/').at(-1)!.toLowerCase().replace(/-gguf$/, '');
   try {
     const { readdir } = await import('node:fs/promises');
     const names = await readdir(modelsDir);
+    // 語ごとに見る。文字列として含むかで見ていたので、`4b` が `14b` に、`qwen3` が `qwen3.5` に当たり、
+    // 別のモデルを「もうある」として取らなかった
+    const wanted = stem.split(/[-_]/).filter((w) => w.length > 0);
+    const q = quant.toLowerCase();
     const hit = names.find((n) => {
       const lower = n.toLowerCase();
-      return lower.endsWith('.gguf') && lower.includes(quant.toLowerCase())
-        && stem.split('-').every((part) => lower.includes(part));
+      if (!lower.endsWith('.gguf') || !lower.includes(q)) return false;
+      // 量子化の名前は先に外す（`mistral-7b-instruct-v0.2.q4_k_m` のように . で繋がると、`v0.2.q4` が一語になる）
+      const words = new Set(lower.replace(/\.gguf$/, '').replace(q, '').replace(/[-_.]+$/, '').split(/[-_]/));
+      return wanted.every((w) => words.has(w));
     });
     return hit ? join(modelsDir, hit) : undefined;
   } catch {
@@ -101,7 +117,9 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
   const fetchImpl = opts.fetchImpl ?? fetch;
   const log = opts.onProgress ?? (() => {});
 
-  const already = await findModel(modelsDir, entry.quant, entry.repo);
+  // URL を直に渡されたときは、ファイルの名前（URL の最後）そのもので見る（下）。配布元の名前から探す見当は当てない
+  const direct = /^https?:\/\//i.test(entry.repo);
+  const already = direct ? undefined : await findModel(modelsDir, entry.quant, entry.repo);
   if (already) {
     const s = await stat(already);
     log(`すでにあります: ${already}`);
@@ -125,6 +143,14 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
         + '配布元の頁ではなく、ファイルそのものの場所を貼ってください\n'
         + '（HuggingFace なら、ファイル名の横の download の先）。',
       );
+    }
+    // 同じ名前が置いてあれば取らない（取り直して、数GBを上書きしていた）
+    const here = join(modelsDir, leaf);
+    // 無いときだけ取りに行く。読めない（権限など）なら、取り直して上書きする前に言う
+    const had = await stat(here).catch((e: unknown) => { if (isAbsent(e)) return undefined; throw e; });
+    if (had?.isFile()) {
+      log(`すでにあります: ${here}`);
+      return { path: here, file: leaf, bytes: had.size };
     }
     return await fetchInto({
       url: directUrl, leaf, modelsDir, entry, fetchImpl, log,

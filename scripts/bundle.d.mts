@@ -12,6 +12,8 @@ export function bundle(opts: {
   srcRoot?: string;
   version?: string;
   log?: (line: string) => void;
+  /** 出力先の data を残すか（入れてある所へ組み直すとき）。既定は残さない */
+  keepData?: boolean;
 }): Promise<{
   out: string;
   version: string;

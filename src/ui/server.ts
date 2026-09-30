@@ -3996,6 +3996,8 @@ export class UiServer {
     this.broadcast({ type: 'stateChanged' });
     this.#jobsChanged();
 
+    // 落とす先。失敗の案内でも同じ場所を言う（既定の場所を言うと、設定で別の場所を選んだ人がそこへ置いて、一覧に出ない）
+    let dir: string | undefined;
     try {
       if (usesGguf(runtime.id)) {
         // **いま読んでいる側と同じ場所へ落とす。**
@@ -4004,7 +4006,7 @@ export class UiServer {
         // 設定（runtime.modelsDir）に別の場所を書いてある機械では、
         // **落とす先と読む先が割れる。**画面には「用意できました」と出るのに、
         // 一覧にも出ず、使えない。動いている側が読む場所を先に見る。
-        const dir = this.#opts.config.runtime?.modelsDir ?? await savedModelsDir();
+        dir = this.#opts.config.runtime?.modelsDir ?? await savedModelsDir();
         await installModel({
           entry: entry ?? {
             id, repo: id, quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '',
@@ -4040,7 +4042,7 @@ export class UiServer {
        */
       // **一つの文にする。**二つに分けると、読む側は下の行を見落とす。
       // 網の失敗は、人の言葉に引き直してから出す（`fetch failed` のままにしない）。
-      const text = `取ってこられませんでした: ${describeNet(e)}\n${byHand(modelsDir())}`;
+      const text = `取ってこられませんでした: ${describeNet(e)}\n${byHand(dir ?? this.#opts.config.runtime?.modelsDir ?? modelsDir())}`;
       // 押した板にも残す。ログの板は閉じていることがある。
       this.#fetching = { id, state: 'failed', message: text, began };
       this.broadcast({ type: 'log', level: 'error', text });

@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { writeFile, stat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { pickModelFile, installModel, findModel, defaultModelsDir } from '../src/runtime/model-install.ts';
+import { pickModelFile, installModel, findModel, defaultModelsDir, quantFrom } from '../src/runtime/model-install.ts';
 import type { CatalogEntry } from '../src/runtime/model-catalog.ts';
 
 const ENTRY: CatalogEntry = {
@@ -497,5 +497,52 @@ describe('途中まで取ったファイルを見られないとき', () => {
       syncBuiltinESMExports();
     }
     assert.equal((await stat(part)).size, 1000, '取れていた分を空にした');
+  });
+});
+
+describe('置いてあるかを、名前の語で見る', () => {
+  test('名前の一部が重なる別のモデルを「もうある」としない', async () => {
+    const modelsDir = await tempDir('aas-findmodel-');
+    await writeFile(join(modelsDir, 'Qwen3.5-4B-Q4_K_M.gguf'), 'GGUF');
+    await writeFile(join(modelsDir, 'Qwen3-14B-Q4_K_M.gguf'), 'GGUF');
+    assert.equal(await findModel(modelsDir, 'q4_k_m', 'unsloth/Qwen3-4B-GGUF'), undefined);
+    await writeFile(join(modelsDir, 'Qwen3-4B-Q4_K_M.gguf'), 'GGUF');
+    assert.equal(await findModel(modelsDir, 'q4_k_m', 'unsloth/Qwen3-4B-GGUF'), join(modelsDir, 'Qwen3-4B-Q4_K_M.gguf'));
+    assert.equal(await findModel(modelsDir, 'q4_k_m', 'unsloth/Qwen3.5-4B-GGUF'), join(modelsDir, 'Qwen3.5-4B-Q4_K_M.gguf'));
+  });
+
+  test('量子化の名前が . で繋がったファイルも見つける（取り直さない）', async () => {
+    const modelsDir = await tempDir('aas-findmodel-dot-');
+    await writeFile(join(modelsDir, 'mistral-7b-instruct-v0.2.Q4_K_M.gguf'), 'GGUF');
+    assert.equal(await findModel(modelsDir, 'q4_k_m', 'TheBloke/Mistral-7B-Instruct-v0.2-GGUF'),
+      join(modelsDir, 'mistral-7b-instruct-v0.2.Q4_K_M.gguf'));
+  });
+});
+
+describe('命令行の --quant', () => {
+  test('無ければ q4_k_m（node の場所を量子化の名前として読まない）', () => {
+    assert.equal(quantFrom(['/usr/bin/node', 'models.ts', '--get', 'a/b']), 'q4_k_m');
+    assert.equal(quantFrom(['node', 'models.ts', '--get', 'a/b', '--quant', 'q8_0']), 'q8_0');
+    assert.equal(quantFrom(['node', 'models.ts', '--quant', '--get', 'a/b']), 'q4_k_m');
+  });
+});
+
+describe('URL を直に渡したとき', () => {
+  test('同じ名前が置いてあれば取りに行かない（数GBを取り直して上書きしない）', async () => {
+    const modelsDir = await tempDir('aas-direct-have-');
+    await writeFile(join(modelsDir, 'Qwen3-4B-Q4_K_M.gguf'), 'GGUF');
+    let asked = 0;
+    const impl = (async () => { asked++; throw new Error('取りに行った'); }) as unknown as typeof fetch;
+    for (const repo of [
+      'https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true',
+    ]) {
+      const r = await installModel({
+        entry: { id: repo, repo, quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '' },
+        modelsDir, fetchImpl: impl,
+      });
+      assert.equal(r.path, join(modelsDir, 'Qwen3-4B-Q4_K_M.gguf'));
+    }
+    assert.equal(asked, 0, '置いてあるのに取りに行った');
   });
 });

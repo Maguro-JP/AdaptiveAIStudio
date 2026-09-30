@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { GB } from '../runtime/spec.ts';
 import { readGguf } from '../runtime/gguf.ts';
 import { toModelSpec, formatGguf } from '../runtime/gguf-spec.ts';
-import { installModel, defaultModelsDir } from '../runtime/model-install.ts';
+import { installModel, defaultModelsDir, quantFrom } from '../runtime/model-install.ts';
 import { usesGguf } from '../runtime/local-runtime.ts';
 import { lookupCatalog, formatCatalog, STARTER_ID } from '../runtime/model-catalog.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
@@ -102,7 +102,7 @@ if (process.argv.includes('--get') || process.argv.includes('--available')) {
   // 表を書いた人（＝私）が直すまで新しいモデルが使えないことになる。
   // llama.cpp なら Hugging Face の置き場名、Ollama ならあちらの名前。
   if (!entry && usesGguf(runtime.id) && id.includes('/')) {
-    const quant = process.argv[process.argv.indexOf('--quant') + 1] ?? 'q4_k_m';
+    const quant = quantFrom(process.argv);
     console.log(c.cyan(`  ${id}`) + c.dim(` — 一覧にはありませんが、そのまま取ってきます（${quant}）`));
     try {
       const r = await installModel({

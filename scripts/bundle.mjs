@@ -320,8 +320,25 @@ export async function bundle({
   // cmd.exe は PATHEXT に載っていれば拡張子を問わず実行するので、
   // 呼ぶ側は何も変えなくてよい。
   nodeName,
+  /*
+   * 出力先の data を残すか。既定は残さない（開発者の手元で組み直した bundle に、その人の会話やモデルを載せて配らない）。
+   * 入れてある所へ組み直す bootstrap.cmd だけが残す（portable ではここが AAS_HOME で、モデル・設定・会話が入っている）。
+   */
+  keepData = false,
 }) {
-  await rm(out, { recursive: true, force: true });
+  /*
+   * 元が出力先の中にあると、前の分を片づけるときに元ごと消える（bootstrap.cmd が材料を出力先の中に置いていて、
+   * 組み立ての途中で自分の材料を消していた）。組まずに止める。
+   */
+  const within = relative(resolve(out), resolve(srcRoot));
+  if (within === '' || (!/^\.\.([\\/]|$)/.test(within) && !isAbsolute(within))) {
+    throw new Error(`組み立ての元（${resolve(srcRoot)}）が出力先（${resolve(out)}）の中にあります。出力先を片づけると元も消えるので、組めません`);
+  }
+  // 前に組んだ分を片づける。頼まれたら data は残す（出力先ごと消していたので、入れ直すたびに消えていた）
+  for (const name of await readdir(out).catch(() => [])) {
+    if (keepData && name === 'data') continue;
+    await rm(join(out, name), { recursive: true, force: true });
+  }
   const app = join(out, 'app');
   await mkdir(app, { recursive: true });
 
@@ -558,6 +575,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     nodeZip: arg('--node-zip'),
     nodeExe: arg('--node-exe'),
     nodeHere: process.argv.includes('--node-here'),
+    keepData: process.argv.includes('--keep-data'),
     nodeName: arg('--node-name'),
     target: arg('--target'),
     ...(arg('--src') ? { srcRoot: resolve(arg('--src')) } : {}),

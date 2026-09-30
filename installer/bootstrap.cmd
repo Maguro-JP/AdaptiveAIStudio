@@ -26,6 +26,11 @@ title AdaptiveAIStudio
 
 set "DEST=%~1"
 if "%DEST%"=="" set "DEST=%LOCALAPPDATA%\Programs\AdaptiveAIStudio"
+rem Full path without a trailing backslash. With "Z:\AAS\" the work folder
+rem below became "Z:\AAS\.setup", inside DEST again. A drive root keeps its
+rem backslash; bundle.mjs then refuses to build instead of deleting anything.
+for %%I in ("%DEST%") do set "DEST=%%~fI"
+if not "%DEST:~-2%"==":\" if "%DEST:~-1%"=="\" set "DEST=%DEST:~0,-1%"
 
 set "REPO=https://github.com/Maguro-JP/AdaptiveAIStudio"
 set "BRANCH=main"
@@ -59,7 +64,10 @@ mkdir "%DEST%" 2>nul
 cd /d "%DEST%"
 if errorlevel 1 goto :badDest
 
-set "WORK=%DEST%\.setup"
+rem The work folder sits next to DEST, not inside it. bundle.mjs clears
+rem DEST before building, which used to delete the downloaded source
+rem and node.exe halfway through (and data\ on a reinstall).
+set "WORK=%DEST%.setup"
 rmdir /s /q "%WORK%" 2>nul
 mkdir "%WORK%"
 if errorlevel 1 goto :badDest
@@ -79,7 +87,7 @@ curl -fL --retry 3 -o "%WORK%\node.exe" "https://nodejs.org/dist/%NODEVER%/win-x
 if errorlevel 1 goto :netfail
 
 echo   [3/4] 組み立てます
-"%WORK%\node.exe" "%SRC%\scripts\bundle.mjs" --out "%DEST%" --src "%SRC%" --node-exe "%WORK%\node.exe" --version "%BRANCH%-bootstrap"
+"%WORK%\node.exe" "%SRC%\scripts\bundle.mjs" --out "%DEST%" --src "%SRC%" --node-exe "%WORK%\node.exe" --keep-data --version "%BRANCH%-bootstrap"
 if errorlevel 1 goto :cannotBuild
 
 rmdir /s /q "%WORK%" 2>nul
