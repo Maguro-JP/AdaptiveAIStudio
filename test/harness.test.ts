@@ -273,6 +273,9 @@ describe('規則: その他', () => {
     const kind = (d: unknown) => (d as { kind: string }).kind;
     assert.equal(kind(noRepeatedWrites.pre!(edit('C', 'D'), ctx([first]))), 'allow', '中身の違う edits を、同じ内容として止めた');
     assert.equal(kind(noRepeatedWrites.pre!(edit('A', 'B'), ctx([first]))), 'deny');
+    // キーの順だけを変えて出し直しても、同じ呼び出し
+    const reordered = { id: 'r', name: 'edit_file', args: { edits: [{ replace: 'B', find: 'A' }], path: 'a.ts' } };
+    assert.equal(kind(noRepeatedWrites.pre!(reordered as never, ctx([first]))), 'deny', 'キーの順だけ変えた同じ直しを通した');
   });
 
   test('作業ディレクトリの外を止める', async () => {

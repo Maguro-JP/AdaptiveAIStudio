@@ -6,7 +6,8 @@
  */
 import { isWriteTool, isExternalTool, mayWriteFiles, plannedContent } from '../agent/tools/write-kind.ts';
 import { readFile, lstat } from 'node:fs/promises';
-import { relative, isAbsolute } from 'node:path';
+import { relative, isAbsolute, dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { minimatch } from './glob.ts';
 import { safeResolve } from '../agent/tools/paths.ts';
 import { isAbsent } from './put-back.ts';
@@ -55,6 +56,12 @@ export function protectedPaths(patterns: string[], opts: { nocase?: boolean } = 
 
       for (const path of named) {
         const rel = normalize(ctx.root, path);
+        /*
+         * 外のツールの値のうち、空白を含む文は、親のフォルダが在る道のときだけ道として見る。既定の守りは `**\/` でどの階層にも当たるので、
+         * 「please check packages/api/.env」のような文（最初の区切りが「please check packages」）まで保護された道として止め、
+         * issue やコメントに `.env` の話を書けなくしていた。空白を含む本当の道（`My Docs/.env`）は、親のフォルダが在るので今までどおり見る
+         */
+        if (isExternalTool(call.name) && /\s/.test(path) && !existsSync(dirname(join(ctx.root, rel)))) continue;
         // 大小を区別しない機械では `.ENV` も `.env`。区別すると守りをすり抜ける。
         const hit = patterns.find((p) => minimatch(rel, p, opts));
         if (hit) {
@@ -242,7 +249,12 @@ export const readBeforeWrite: Rule = {
 /** 引数の中身を一つの文字列にする（同じ呼び出しかを見るため）。文字列にできないものは、その都度違うものとして扱う。 */
 let unsignable = 0;
 function signArgs(args: unknown): string {
-  try { return JSON.stringify(args ?? null); } catch { return `unsignable:${++unsignable}`; }
+  // キーの順は揃える（同じ中身をキーの順だけ変えて出し直すと、別の呼び出しとして通ってしまう）
+  const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
+    : v && typeof v === 'object'
+      ? Object.fromEntries(Object.keys(v as Record<string, unknown>).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])]))
+      : v;
+  try { return JSON.stringify(sorted(args ?? null)); } catch { return `unsignable:${++unsignable}`; }
 }
 
 /**

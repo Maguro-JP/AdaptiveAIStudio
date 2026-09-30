@@ -116,6 +116,22 @@ describe('外から来たツールと、保護されたファイル', () => {
     assert.equal(called.count, 1);
   });
 
+  test('どの階層でも守る形（**/.env）でも、道で終わる文は止めない。空白を含む本当の道は止める', async () => {
+    // 既定の守りは **/ でどの階層にも当たる。文の最初の区切り（「please check packages」）まで道として見ると、
+    // issue やコメントに .env の話を書けなくなる
+    const root = await project({ 'packages/api/.env': 'SECRET=1', 'My Docs/.env': 'SECRET=2' });
+    const called = { count: 0 };
+    const tool = harness(['**/.env']).wrap(externalTool(called), () => '');
+
+    const talk = await tool.run({ body: 'please check packages/api/.env' }, ctx(root));
+    assert.notEqual(talk.isError, true, `文で止まった: ${talk.content}`);
+    const nested = await tool.run({ path: 'packages/api/.env' }, ctx(root));
+    assert.equal(nested.isError, true, '下の階層の .env を外のツールへ渡した');
+    const spaced = await tool.run({ path: 'My Docs/.env' }, ctx(root));
+    assert.equal(spaced.isError, true, '空白を含む道の .env を外のツールへ渡した');
+    assert.equal(called.count, 1);
+  });
+
   test('この場所の読むツールは、いままで通り読める（対）', async () => {
     /*
      * 保護は「書き換えさせない」ためのもの。読む側まで止めると、
