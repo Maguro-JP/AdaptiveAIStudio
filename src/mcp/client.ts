@@ -226,20 +226,27 @@ export class McpClient {
 
     let stderr = '';
     const errDecoder = new StringDecoder('utf8');
-    this.#child.stderr?.on('data', (b: Buffer) => {
+    const child = this.#child;
+    /*
+     * **いまの相手からのものだけを受ける。**止めた相手は、止めてから少し置いて終わる（SIGTERM の後始末）。その間に立ち上げ直すと、
+     * 前の相手の終わり・出力が、立ち上げ直した相手のこととして届き、今の相手への呼び出しを「終了しました」で落としていた
+     */
+    const mine = (): boolean => this.#child === child;
+    child.stderr?.on('data', (b: Buffer) => {
       stderr = (stderr + errDecoder.write(b)).slice(-2000);
     });
-    this.#child.stdout?.on('data', (b: Buffer) => { this.#onData(this.#decoder.write(b)); });
-    this.#child.on('error', (e) => { this.#fail(`落ちました: ${e.message}`); });
+    child.stdout?.on('data', (b: Buffer) => { if (mine()) this.#onData(this.#decoder.write(b)); });
+    child.on('error', (e) => { if (mine()) this.#fail(`落ちました: ${e.message}`); });
     // 相手が終わった直後（exit を受ける前）や、相手が入力を閉じたときに書くと EPIPE になる。聞き手が無いと、受け手の無い失敗で
     // こちらごと落ちる。相手は生きていても、もう何も届かないので止める（残すと、以後の呼び出しが毎回時間切れまで待つ）
-    const child = this.#child;
     child.stdin?.on('error', (e) => {
-      this.#fail(`送れませんでした: ${e.message}${stderr ? `\n${stderr.trim()}` : ''}`);
       endChild(child);
-      if (this.#child === child) this.#child = undefined;
+      if (!mine()) return;
+      this.#fail(`送れませんでした: ${e.message}${stderr ? `\n${stderr.trim()}` : ''}`);
+      this.#child = undefined;
     });
-    this.#child.on('exit', (code) => {
+    child.on('exit', (code) => {
+      if (!mine()) return;
       // 待っている呼び出しを放置しない。相手が消えたら、待ち手も終わらせる。
       this.#fail(`終了しました（コード ${code ?? '不明'}）${stderr ? `\n${stderr.trim()}` : ''}`);
     });
@@ -259,8 +266,11 @@ export class McpClient {
       this.#tools = (listed?.tools ?? []).filter((t) => typeof t?.name === 'string');
       return true;
     } catch (e) {
-      this.#failure = (e as Error).message;
-      this.stop();
+      // 立ち上げている間に止めて立ち上げ直されていたら、今の相手には触らない（止めて、失敗を上書きすると、立ち上げ直した方まで落ちる）
+      if (mine()) {
+        this.#failure = (e as Error).message;
+        this.stop();
+      }
       return false;
     }
   }
@@ -302,8 +312,12 @@ export class McpClient {
       this.#fail('切りました');
       return;
     }
-    if (this.#child) endChild(this.#child);
-    this.#child = undefined;
+    if (this.#child) {
+      endChild(this.#child);
+      this.#child = undefined;
+      // 待っている呼び出しは、ここで終わらせる（相手の終わりは、もう今の相手のこととしては受けない）
+      this.#fail('止めました');
+    }
   }
 
   // ---- 中身 ----------------------------------------------------
