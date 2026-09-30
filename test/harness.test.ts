@@ -252,6 +252,15 @@ describe('規則: その他', () => {
     assert.match(again.content, /同じ内容/);
   });
 
+  test('まとめて直す edits は、中身が違えば二度目も止めない（同じなら止める）', () => {
+    const edit = (find: string, replace: string) => ({ id: find, name: 'edit_file', args: { path: 'a.ts', edits: [{ find, replace }] } });
+    const ctx = (history: ReturnType<typeof edit>[]) => ({ history } as never);
+    const first = edit('A', 'B');
+    const kind = (d: unknown) => (d as { kind: string }).kind;
+    assert.equal(kind(noRepeatedWrites.pre!(edit('C', 'D'), ctx([first]))), 'allow', '中身の違う edits を、同じ内容として止めた');
+    assert.equal(kind(noRepeatedWrites.pre!(edit('A', 'B'), ctx([first]))), 'deny');
+  });
+
   test('作業ディレクトリの外を止める', async () => {
     const root = await project();
     const h = harness([workspaceBoundary]);

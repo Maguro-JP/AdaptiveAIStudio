@@ -236,6 +236,12 @@ export const readBeforeWrite: Rule = {
   },
 };
 
+/** 引数の中身を一つの文字列にする（同じ呼び出しかを見るため）。文字列にできないものは、その都度違うものとして扱う。 */
+let unsignable = 0;
+function signArgs(args: unknown): string {
+  try { return JSON.stringify(args ?? null); } catch { return `unsignable:${++unsignable}`; }
+}
+
 /**
  * 同じ書き込みの繰り返しを止める。
  * 直したつもりで同じ内容を書き続けるのは、行き詰まりの典型。
@@ -248,9 +254,9 @@ export const noRepeatedWrites: Rule = {
     // 同じ呼び出しかどうかは、**渡された引数そのもの**で見る。
     // ここで当て直すと、当てるたびに中身が変わる（一度目で書き換わるので、
     // 二度目は「見つからない」になる）。繰り返しを見るには引数の方が正しい。
-    const sign = (c: ToolCall) =>
-      `${c.name}::${argString(c, 'path')}::${argString(c, 'content')}`
-      + `::${argString(c, 'find')}::${argString(c, 'replace')}`;
+    // **引数の全部で見る。**名前を挙げた一部（path・content・find・replace）で見ていたので、まとめて直す `edits` だけの
+    // edit_file は、中身が違っても二度目から「同じ内容」として止めていた（ツールの説明が勧める、いちばん普通の使い方）
+    const sign = (c: ToolCall) => `${c.name}::${signArgs(c.args)}`;
     const signature = sign(call);
     const repeats = ctx.history.filter((c) =>
       isWriteTool(c.name) && sign(c) === signature).length;
