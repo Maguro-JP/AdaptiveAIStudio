@@ -13,16 +13,31 @@ export type GitState =
   | { kind: 'unavailable'; reason: string };
 
 export async function inspectGit(root: string): Promise<GitState> {
-  const status = await runGit(['status', '--porcelain', '--branch'], root);
+  /*
+   * **道は -z で受け、新しいフォルダの中も一つずつ出させる。**`--porcelain` だけでは、新しいフォルダを `sub/` と縮め、日本語の名前を
+   * `"\350\250\255..."` と引用し、名前の変更を `a -> b` と一行にする。その文字をそのまま道として使っていたので、段取りの受け入れで
+   * `sub/a.ts` を作っても `sub/` という無いファイルを「計画に無いファイル」として挙げ、人の判断待ちにしていた
+   */
+  const status = await runGit(['status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all'], root);
   if (status.code !== 0) {
     if (/not a git repository/i.test(status.out)) return { kind: 'notRepo' };
     return { kind: 'unavailable', reason: status.out.trim().split('\n')[0] ?? 'git を実行できません' };
   }
 
-  const lines = status.out.split('\n').filter((l) => l.length > 0);
-  const branchLine = lines.find((l) => l.startsWith('##')) ?? '## (不明)';
+  const parts = status.out.split('\0').filter((l) => l.length > 0);
+  const branchLine = parts.find((l) => l.startsWith('##')) ?? '## (不明)';
   const branch = branchLine.replace(/^##\s*/, '').split(/\.{3}|\s/)[0] ?? '(不明)';
-  const changed = lines.filter((l) => !l.startsWith('##')).map((l) => l.slice(3));
+  const changed: string[] = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    const entry = parts[i]!;
+    if (entry.startsWith('##') || entry.length < 4) continue;
+    changed.push(entry.slice(3));
+    // 名前を変えた・写したものは、次の欄に元の名前が来る。元の道も変わったものとして数える
+    if (/[RC]/.test(entry.slice(0, 2)) && i + 1 < parts.length) {
+      changed.push(parts[i + 1]!);
+      i += 1;
+    }
+  }
 
   return changed.length === 0 ? { kind: 'clean', branch } : { kind: 'dirty', branch, changed };
 }
