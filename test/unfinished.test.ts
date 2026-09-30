@@ -222,3 +222,31 @@ describe('やり残しの記録の上がフォルダでなかったとき', () =
     assert.deepEqual(await w.list({ strict: true }), []);
   });
 });
+
+describe('やり残しは、作業場ごと', () => {
+  test('due に作業場を渡すと、その作業場の分と、作業場の分からない前からの分だけ', async () => {
+    const { w } = await store();
+    const past = Date.now() + 10 * 60_000;
+    await w.add({ ...item, request: 'A の依頼', root: '/a' });
+    await w.add({ ...item, request: 'B の依頼', root: '/b' });
+    assert.equal((await w.due(past, '/b'))?.request, 'B の依頼');
+    assert.equal(await w.due(past, '/c'), undefined, '別の作業場の依頼を返した');
+    await w.add({ ...item, request: '前からの依頼' });
+    assert.equal((await w.due(past, '/c'))?.request, '前からの依頼');
+    // 渡さなければ、今までどおり全部から
+    assert.equal((await w.due(past))?.request, 'A の依頼');
+  });
+
+  test('同じ依頼は、作業場が違っても一つ（段取りが依頼の文で結びつくので、二つにしない）', async () => {
+    const { w } = await store();
+    assert.ok(await w.add({ ...item, root: '/a' }));
+    assert.equal(await w.add({ ...item, root: '/b' }), undefined, '同じ文の依頼を二つ記録した');
+  });
+
+  test('作業場が文字でない行は読まない（どこでも拾われないまま枠を占め続けない）', async () => {
+    const { w, path } = await store();
+    const bad = { t: 'add', item: { id: 'x1', request: '壊れた行', why: 'maxTurns', note: '', attempts: 0, nextAt: 0, createdAt: new Date(0).toISOString(), root: 3 } };
+    await writeFile(path, JSON.stringify(bad) + '\n');
+    assert.deepEqual((await w.list()).map((u) => u.request), []);
+  });
+});

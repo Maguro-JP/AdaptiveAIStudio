@@ -33,6 +33,11 @@ export interface Unfinished {
   note: string;
   /** どの会話の続きか。分かれば、そこへ戻して続ける。 */
   conversationId?: string;
+  /**
+   * どの作業場の作業か（絶対の道）。続けるのは、同じ作業場を開いているときだけ。
+   * 無い（前からある記録）なら、どこでも続ける。
+   */
+  root?: string;
   /** 何回やり直したか。 */
   attempts: number;
   /** 次に手を付けてよい時刻（ミリ秒）。 */
@@ -147,6 +152,8 @@ export class UnfinishedWork {
     now: number,
   ): Promise<Unfinished | undefined> {
     // 読めないときは投げる（重なりを確かめられないまま足すと、同じ依頼を二重に記録する）
+    // 重なりは依頼の文だけで見る（作業場が違っても一つ）。段取り（goals）が依頼の文で結びつくので、同じ文が二つあると
+    // 別の作業場の段取りを拾って、途中の段から走らせる
     const already = (await this.list({ strict: true })).find((u) => u.request === item.request);
     if (already) return undefined;
     const full: Unfinished = {
@@ -209,9 +216,13 @@ export class UnfinishedWork {
     }
   }
 
-  /** いま手を付けてよいもの。**一つだけ返す**（一度に一つずつ進める）。 */
-  async due(now = Date.now()): Promise<Unfinished | undefined> {
-    return (await this.list()).find((u) => u.nextAt <= now);
+  /**
+   * いま手を付けてよいもの。**一つだけ返す**（一度に一つずつ進める）。
+   * `root` を渡したら、その作業場の分（と、作業場の分からない前からの分）だけ。作業場を変えたあとに、前の作業場の依頼を
+   * 新しい作業場で続けない（別のプロジェクトのファイルを、その依頼のつもりで書き換える）。
+   */
+  async due(now = Date.now(), root?: string): Promise<Unfinished | undefined> {
+    return (await this.list()).find((u) => u.nextAt <= now && (root === undefined || u.root === undefined || u.root === root));
   }
 
   /**
@@ -350,8 +361,10 @@ function isLine(v: unknown): v is Line {
   if (l.t === 'add') {
     const i = l.item;
     // 並べ替えと「いま手を付けてよいか」で使う所まで見る。欠けていると一覧ごと止まる。
+    // 作業場は、あるなら文字（違う形だとどの作業場でも拾われず、諦めにも至らないまま枠を一つ占め続ける）
     return typeof i === 'object' && i !== null && typeof i.id === 'string' && typeof i.request === 'string'
-      && typeof i.createdAt === 'string' && typeof i.attempts === 'number' && typeof i.nextAt === 'number';
+      && typeof i.createdAt === 'string' && typeof i.attempts === 'number' && typeof i.nextAt === 'number'
+      && (i.root === undefined || typeof i.root === 'string');
   }
   if (l.t === 'bump') return typeof l.id === 'string' && typeof l.attempts === 'number' && typeof l.nextAt === 'number';
   // やめた時刻（`at`）の形は見ない。形の違う時刻で閉じた行ごと捨てると、やめたものが戻ってくる（時刻は読むところで数のときだけ使う）
