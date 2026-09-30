@@ -18,7 +18,7 @@
  * 落として立ち上げ直すのは、外側（start.cmd / start.sh）の仕事。
  */
 import { runGit, inspectGit } from '../agent/git.ts';
-import { isPortable, productRoot } from './home.ts';
+import { isPortable, isDistributed, productRoot } from './home.ts';
 import { currentVersion, describeVersion } from './version.ts';
 
 export interface UpdateStatus {
@@ -77,6 +77,15 @@ export const RELEASES_URL = 'https://github.com/Maguro-JP/AdaptiveAIStudio/relea
  * 版も一緒に出す。控えていないと「入れ替えたつもりで古いまま動いていた」に
  * 気づけない（ここで実際にやった）。
  */
+/** インストーラで入れた形の、新しくする道。git clone の案内は、入れた形の利用者には打てない。 */
+export function byInstallerUpdate(version?: string): string {
+  return [
+    '新しい版のインストーラ（setup.exe）を取ってきて、実行してください。',
+    `  取ってくる: ${RELEASES_URL}`,
+    ...(version ? ['', `いまの版: ${version}`] : []),
+  ].join('\n');
+}
+
 export function byHandUpdate(root: string, version?: string): string {
   return [
     '新しいbundle をブラウザで取ってきて、入れ替えてください。',
@@ -99,6 +108,16 @@ export function byHandUpdate(root: string, version?: string): string {
 
 /** いま新しくなれるか。取ってくる前に、必ずこれを通す。 */
 export async function checkUpdate(root: string): Promise<UpdateStatus> {
+  /*
+   * 配った形（portable・インストーラ）は git で新しくするものではない。git を見ない。見ると、置かれた場所の上にある
+   * 別のリポジトリ（portable を自分のプロジェクトの中に置いた等）を製品と取り違え、その上流を「製品の更新」として出していた。
+   */
+  if (isDistributed(root)) {
+    const reason = isPortable(root)
+      ? byHandUpdate(root, describeVersion(await currentVersion()))
+      : byInstallerUpdate(describeVersion(await currentVersion()));
+    return { can: false, behind: 0, ahead: 0, incoming: [], reason };
+  }
   const state = await inspectGit(root);
   if (state.kind === 'notRepo' || state.kind === 'unavailable') {
     const why = state.kind === 'notRepo' ? 'git 管理下ではありません' : `git を確認できません（${state.reason}）`;
