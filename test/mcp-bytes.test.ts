@@ -165,10 +165,10 @@ describe('止めた相手を残さない', () => {
 });
 
 describe('相手から来た問いを、こちらの問いの返事と取り違えない', () => {
-  test('相手が同じ番号で ping を訊いてきても、こちらの呼び出しはその問いで済まず、ping には答える', async () => {
+  test('相手が同じ番号で ping を訊いてきても、こちらの呼び出しはその問いで済まず、ping には答え、持っていない力は断る', async () => {
     const c = client(['-e', `
       const { createInterface } = require('node:readline');
-      let callId;
+      let callId, pinged = false, refused = false, done = false;
       createInterface({ input: process.stdin }).on('line', (line) => {
         const msg = JSON.parse(line);
         const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
@@ -180,15 +180,36 @@ describe('相手から来た問いを、こちらの問いの返事と取り違�
           say({ jsonrpc: '2.0', id: callId, method: 'ping' });
           say({ jsonrpc: '2.0', id: callId + 1000, method: 'roots/list' });
         } else if (msg.id === callId && 'result' in msg) {
-          say({ jsonrpc: '2.0', id: callId, result: { content: [{ type: 'text', text: 'ping に答えてもらった' }] } });
-        } else if (msg.id === callId + 1000 && msg.error) {
-          process.stderr.write('roots/list は断られた\\n');
+          pinged = true;
+        } else if (msg.id === callId + 1000 && msg.error && msg.error.code === -32601) {
+          refused = true;
+        }
+        if (pinged && refused && !done) {
+          done = true;
+          say({ jsonrpc: '2.0', id: callId, result: { content: [{ type: 'text', text: 'ping に答え、roots/list は断った' }] } });
         }
       });
     `]);
     assert.equal(await c.start(), true, `立ち上がらなかった: ${c.failure}`);
     const got = await c.call('x', {}, 10_000);
     assert.equal(got.isError, false, got.text);
-    assert.equal(got.text, 'ping に答えてもらった');
+    assert.equal(got.text, 'ping に答え、roots/list は断った');
+  });
+});
+
+describe('method を持つ返事も、返事として読む', () => {
+  test('返事に method を付けて返す相手でも、こちらの呼び出しは済む', async () => {
+    const c = client(['-e', `
+      const { createInterface } = require('node:readline');
+      createInterface({ input: process.stdin }).on('line', (line) => {
+        const msg = JSON.parse(line);
+        const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+        if (msg.method === 'initialize') say({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18' } });
+        else if (msg.method === 'tools/list') say({ jsonrpc: '2.0', id: msg.id, method: 'tools/list', result: { tools: [{ name: 'x' }] } });
+        else if (msg.method === 'tools/call') say({ jsonrpc: '2.0', id: msg.id, method: 'tools/call', result: { content: [{ type: 'text', text: '返しました' }] } });
+      });
+    `]);
+    assert.equal(await c.start(), true, `立ち上がらなかった: ${c.failure}`);
+    assert.equal((await c.call('x', {}, 10_000)).text, '返しました');
   });
 });

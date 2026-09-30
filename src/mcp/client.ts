@@ -346,7 +346,9 @@ export class McpClient {
         continue; // 相手が余計なものを出すことがある。落とさず読み飛ばす
       }
       if (msg === null || typeof msg !== 'object') continue;
-      if (typeof msg.method === 'string') {
+      // 返事の中身（result / error）を持つものは、method があっても返事として読む（問いは result・error を持たない）
+      const isReply = 'result' in msg || 'error' in msg;
+      if (typeof msg.method === 'string' && !isReply) {
         /*
          * 相手からの問い（method を持つ）。番号は相手が振るので、こちらの問いの番号と重なることがある。
          * 返事として読むと、こちらの待ちを相手の問いで済ませていた（結果は空）。問いには答える: ping は空で返し、
@@ -502,7 +504,10 @@ export class McpClient {
     }
   }
 
-  /** 相手からの問いに答える。答えが届かなくても失敗にしない（こちらの問いには関わらない）。 */
+  /**
+   * 相手からの問いに答える。遠くの相手では、答えが届かなくても失敗にしない（こちらの問いには関わらない）。
+   * 手元の相手では標準入力へ書くので、入力が閉じていれば EPIPE で相手ごと止める（取り消しの知らせと同じ。閉じた相手には何も届かない）。
+   */
   #answer(id: number | string, method: string): void {
     const reply = method === 'ping'
       ? { jsonrpc: '2.0', id, result: {} }
