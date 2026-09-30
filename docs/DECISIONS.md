@@ -283,6 +283,7 @@
 - bundle を組み直しても data を消さない・bootstrap の材料を出力先の外に置く
 - 答えの表示が止まる行・--quant の読み違い・取得の失敗の保存先・置いてあるモデルの取り違え
 - 続きから取るときに別の版を継がない・team が llama-server を残さない・タブ・SSE の分かれた行・Windows の大文字小文字
+- 止めたら「止めた」で終える・計画の ID を重ねない・Claude でツールを使う・行を丸ごと選んだ Tab
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10780,4 +10781,25 @@ llama-server に渡す計画（`planExecution`）が、実物と違う前提で�
   「知らないレーン」は前も一文で止まっていたので、前の形でも通る。llama-server が残らないことは Windows で確かめていない
 触る場所: `src/runtime/model-install.ts` の `fetchInto`、`src/core/team-setup.ts` の `parseTasks` と `src/cli/team.ts`、
 `src/ui/web/layout-ops.js` の `pluck`、`src/mcp/client.ts` の `#readEvents`、`src/core/home.ts` の `insideDir`
+
+## 2026-10-01  止めたら「止めた」で終える・計画の ID を重ねない・Claude でツールを使う・行を丸ごと選んだ Tab
+
+- 止めた（■）とき: 相手は止められると黙って終わる。返事を読んだ後で止められたかを見ていなかったので、途中までの文を普通の返事として
+  「完了」にし（モデルの成績にも成功として載る）、ツールを使った後なら促しの文を会話の記録に積んでいた。返事の後で見て `aborted` で終える。
+  見えていた途中までの文は記録に残す。ツールを続けて呼ぶ途中で止めたら、残りの呼び出しにも「中断されました」の結果を付ける
+- 確かめ（テスト）の途中で止めたとき: 止めたせいで落ちた結果を「落ちた」として記録し、`rollbackOnGiveUp` ならこの依頼で書いたものを
+  全部戻していた。確かめの輪（`runLoop`）は、止められて落ちた結果を「止めた」で終える。依頼の本体の巻き戻しも、止めた回はしない（team と同じ）
+- 計画（`pm.ts`）: ID が重なったときの付け直しと、確かめる工程を足すときの ID が同じ名前になり、確かめる工程が黙って消えていた。
+  使われていない ID を探して付ける（`freshId`）。付け直すときは、後ろの項目がこれから名乗る ID とも重ねない
+- Claude（`anthropic.ts`）: ツールを渡しておらず、ツールの結果（role: 'tool'）をそのまま送って 400 で断られていた（依頼ごと落ちる）。
+  ツールを渡し、呼び出しは tool_use、結果は tool_result にして送る（`toAnthropicMessages`）。返事の tool_use をツールの呼び出しとして読む。
+  temperature は渡さない（Opus 5 以降は受け取らず 400 で断る。既定の設定は必ず持つので、渡すと全部落ちる。読み直しで見つけた）。
+  結果の無い呼び出し（止めたときの残り・前の記録）には結果を補い、会話の中で重なった呼び出しの ID（ローカルのモデルは依頼ごとに
+  数え直す）は付け直す。どちらも相手が 400 で断り、その会話が続けられなくなる。読めない引数は `__parseError` の形で渡す
+  （文字列のまま渡すと、呼ぶ側が断らずに空の引数でツールを走らせる。この形の試験は書いていない）
+- エディタの Tab: 行を丸ごと選ぶと終わりは次の行の頭に来る。その行まで字下げしていた
+- 試験: `test/stop-aborts.test.ts`・`test/pm.test.ts`・`test/anthropic.test.ts`（SDK が要る分は、偽の相手に tool_use を流させる）・
+  `test/panel-editor.test.ts`。直す前の形で落ちることを見た。依頼の本体の巻き戻しを止めた回にしないことの試験は書いていない
+触る場所: `src/agent/loop.ts`、`src/harness/loop.ts`、`src/core/session.ts` の巻き戻し、`src/agent/pm.ts` の `freshId`、
+`src/providers/anthropic.ts`、`src/ui/web/panels.js` の Tab
 
