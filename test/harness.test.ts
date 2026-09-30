@@ -146,6 +146,15 @@ describe('規則: 影響範囲', () => {
     assert.notEqual(again.isError, true);
   });
 
+  test('同じファイルを書き方を変えて（./a.ts）書いても、二件と数えない', async () => {
+    const root = await project();
+    const h = harness([blastRadius(1)]);
+    const write = h.wrap(writeFileTool, () => '');
+    await write.run({ path: 'a.ts', content: '1' }, ctx(root));
+    const again = await write.run({ path: './a.ts', content: '2' }, ctx(root));
+    assert.notEqual(again.isError, true, `同じファイルを二件と数えた: ${again.content}`);
+  });
+
   test('依頼が変われば数え直す', async () => {
     const root = await project();
     const h = harness([blastRadius(1)]);
@@ -190,6 +199,16 @@ describe('規則: 読んでから書く', () => {
     const r = await write.run({ path: 'a.ts', content: 'line1\n' }, ctx(root));
     assert.equal(r.isError, true, `一部しか読んでいないのに全文で上書きできた: ${r.content}`);
     assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'line1\nline2\nline3\n');
+  });
+
+  test('読んだ道と書く道の書き方が違っても（a.ts と ./a.ts）、読んだことにする', async () => {
+    const root = await project({ 'a.ts': 'original' });
+    const h = harness([readBeforeWrite]);
+    const read = h.wrap(readFileTool, () => '');
+    const write = h.wrap(writeFileTool, () => '');
+    await read.run({ path: 'a.ts' }, ctx(root));
+    const r = await write.run({ path: './a.ts', content: 'replaced' }, ctx(root));
+    assert.notEqual(r.isError, true, `読んだのに止まった: ${r.content}`);
   });
 
   test('新規作成は読まずに通す', async () => {
