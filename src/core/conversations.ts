@@ -257,11 +257,21 @@ export class Conversations {
     } catch {
       return []; // まだ一度も話していない。異常ではない。
     }
-    const ids = names
+    const byName = names
       .filter((n) => n.endsWith('.jsonl'))
       .map((n) => n.slice(0, -'.jsonl'.length))
-      .filter((id) => ID_SHAPE.test(id))
-      .sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+      .filter((id) => ID_SHAPE.test(id));
+    /*
+     * **切る前に、使った順（書いた時刻）で並べる。**名前（作った順）で新しい方から `limit` 件を切っていたので、前に作った会話に
+     * 今日書き足しても、後から作った会話（空のものも数える）が `limit` 件を超えていると一覧に出ず、いま話していた会話が横の一覧から
+     * 消えていた。時刻を見るだけ（stat）は安い。重いのは頭を読む方なので、読む数は今までどおり `limit` 件で止める
+     */
+    const touched = await Promise.all(byName.map(async (id) => ({
+      id, at: await stat(this.#path(id)).then((st) => st.mtimeMs, () => 0),
+    })));
+    const ids = touched
+      .sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+      .map((t) => t.id);
 
     const heads: ConversationHead[] = [];
     for (const id of ids) {

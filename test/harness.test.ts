@@ -166,6 +166,25 @@ describe('規則: 影響範囲', () => {
   });
 });
 
+describe('規則: テストを消させない（CRLF のファイル）', () => {
+  /**
+   * 書く前の見積もり（plannedContent）は CRLF のまま当てていたので、LF に揃えて当てるツールでは当たる直しがここでは当たらず、
+   * 「後の姿は前と同じ」と見てテストを消す直しを通していた（行の途中から始まる塊は、行で見る当て方でも拾えない）。
+   */
+  test('CRLF のテストファイルで、行の途中から始まる塊でテストを消す直しを止める', async () => {
+    const body = "test('a', () => { x = keep(1,\r\n  2); });\r\ntest('b', () => {});\r\n";
+    const root = await project({ 'a.test.ts': body });
+    const h = harness([testProtection]);
+    const edit = h.wrap(editFileTool, () => '');
+    const r = await edit.run({
+      path: 'a.test.ts', find: "keep(1,\n  2); });\ntest('b', () => {});", replace: 'keep(1,\n  2); });',
+    }, ctx(root));
+    assert.equal(r.isError, true, `テストを消す直しを通した: ${r.content}`);
+    assert.match(r.content, /test-protection/);
+    assert.equal(await readFile(join(root, 'a.test.ts'), 'utf8'), body);
+  });
+});
+
 describe('規則: 読んでから書く', () => {
   test('既存ファイルを読まずに上書きさせない', async () => {
     const root = await project({ 'a.ts': 'original' });

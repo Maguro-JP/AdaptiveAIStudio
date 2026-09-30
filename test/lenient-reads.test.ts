@@ -32,7 +32,7 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/runtime/inproc.ts': { count: 3, why: 'モデルの一覧と大きさを見るだけ。取れなければ一覧に出さない・大きさを言わない' },
   'src/core/version.ts': { count: 2, why: '版の表示。読めなければ次の候補（一つ上の VERSION・git）を出す。消す・書くことは無い' },
   'src/core/logfile.ts': { count: 2, why: '記録の大きさ（回すかどうか）と末尾の表示。読めなくても書き直さない' },
-  'src/core/conversations.ts': { count: 1, why: '立ち上げたときの捨て場の片づけ。読めなければ次に立ち上げたときにまた消す（在る無しの判定は厳しく読む）' },
+  'src/core/conversations.ts': { count: 2, why: '立ち上げたときの捨て場の片づけ。読めなければ次に立ち上げたときにまた消す（在る無しの判定は厳しく読む）。一覧を使った順に並べる時刻。取れなければ後ろに並ぶだけ（消す・書くことは無い）' },
   'src/cli/doctor.ts': { count: 1, why: '診断の表示。入っているかの下調べで、見られなければ入っていない側の案内が出るだけ' },
   'src/agent/commands.ts': { count: 2, why: '利用者が置いたコマンドの定義を読む。読めないものは一覧に出さない' },
   'src/ui/settings.ts': { count: 1, why: '保存先のフォルダの状態を見せるだけ' },

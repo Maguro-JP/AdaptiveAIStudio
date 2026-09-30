@@ -116,7 +116,9 @@ export async function plannedContent(
   // 規則は後の姿が分からないものを通すので、読めない一瞬にテストを消す edit が素通りする
   let before: string;
   try {
-    before = await readFile(abs, 'utf8');
+    // **ツールと同じ形で当てる**（edit_file は LF に揃えてから当てる。CRLF のまま当てると、ツールでは当たる直しがここでは当たらず、
+    // 「後の姿は前と同じ」と見て、テストを消す直しを通していた）。後の姿は LF で返す（規則は数を比べるだけ）
+    before = lf(await readFile(abs, 'utf8'));
   } catch (e) {
     if (isAbsent(e)) return undefined;
     throw e;
@@ -137,7 +139,7 @@ export async function plannedContent(
     for (const e of raw) {
       const one = e as { find?: unknown; replace?: unknown; all?: unknown };
       if (typeof one?.find !== 'string' || typeof one?.replace !== 'string') return undefined;
-      const got = applyEdit(text, one.find, one.replace, one.all === true);
+      const got = applyEdit(text, lf(one.find), lf(one.replace), one.all === true);
       // 当たらないものが混じっていたら、後の姿は決まらない。
       // **決まらないものを「これが後の姿だ」として渡さない。**
       if (got.hits === 0) return undefined;
@@ -147,7 +149,12 @@ export async function plannedContent(
   }
 
   if (typeof a.find !== 'string' || typeof a.replace !== 'string') return undefined;
-  return applyEdit(before, a.find, a.replace, a.all === true).text;
+  return applyEdit(before, lf(a.find), lf(a.replace), a.all === true).text;
+}
+
+/** 改行を LF に揃える（`fs.ts` の `toLf` と同じ。あちらはこのファイルを読み込むので、ここで持つ）。 */
+function lf(s: string): string {
+  return s.replace(/\r\n/g, '\n');
 }
 
 /**
@@ -168,6 +175,15 @@ export function applyEdit(
   before: string, find: string, replace: string, all: boolean,
 ): { text: string; hits: number; loose?: boolean; how?: EditHow } {
   if (find.length === 0) return { text: before, hits: 0 };
+  /*
+   * **頭の BOM は外して当て、戻して返す。**付いたまま当てると、一行目から始まる複数行の `find` は「行の頭から」と見なされず、
+   * 緩い当て（行を trim して比べる。trim は BOM も落とす）に回り、一行目を BOM の無い行で置き換えていた。バッチファイルは BOM が
+   * 無いと cmd.exe が CP932 として読むので、それだけで壊れる（差分にも出ない）
+   */
+  if (before.startsWith('\uFEFF') && !find.startsWith('\uFEFF')) {
+    const inner = applyEdit(before.slice(1), find, replace, all);
+    return inner.hits > 0 && inner.text !== before.slice(1) ? { ...inner, text: `\uFEFF${inner.text}` } : { ...inner, text: before };
+  }
 
   const found = positionsOf(before, find);
   /*
@@ -187,7 +203,15 @@ export function applyEdit(
   const aligned = find.includes('\n')
     ? found.filter((at) => at === 0 || before[at - 1] === '\n')
     : found;
-  if (aligned.length > 0) return spliceAt(before, aligned, find.length, replace, all);
+  if (aligned.length > 0) {
+    /*
+     * 行の途中の当たりのうち、前に字下げ以外の字がある物（`x = f(a,\n  b)` の `f(a,…`）は本物の出現。捨てると、`all` では
+     * 一部だけ替えて「更新」と言い、`all` でなければ「何箇所にも当たる」を言わずに行の頭の方だけを黙って替えていた。
+     * 前が字下げだけの物は、字下げを落とした `find` が行の途中と一致しただけ（上の理由）なので数えない
+     */
+    const real = found.filter((at) => aligned.includes(at) || /\S/.test(before.slice(before.lastIndexOf('\n', at - 1) + 1, at)));
+    return spliceAt(before, real, find.length, replace, all);
+  }
 
   const loose = looseEdit(before, find, replace, all);
   if (loose.hits > 0) return loose;
