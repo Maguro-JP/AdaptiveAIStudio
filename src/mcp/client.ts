@@ -293,7 +293,7 @@ export class McpClient {
       if (http.session) {
         void fetch(http.url, {
           method: 'DELETE',
-          headers: { ...http.headers, 'mcp-session-id': http.session },
+          headers: { ...http.headers, 'mcp-session-id': http.session, ...this.#versionHeader() },
         }).catch(() => undefined);
       }
       this.#http = undefined;
@@ -408,6 +408,7 @@ export class McpClient {
     }
     this.#http = { url: this.#spec.url!, headers, open: true };
     this.#abort = signal;
+    this.#serverVersion = undefined; // 名乗りには版を付けない（まだ取り決めていない）
 
     const timeout = this.#spec.startupTimeoutMs ?? 10_000;
     try {
@@ -449,6 +450,7 @@ export class McpClient {
           'content-type': 'application/json',
           accept: 'application/json, text/event-stream',
           ...(http.session ? { 'mcp-session-id': http.session } : {}),
+          ...this.#versionHeader(),
         },
         body: JSON.stringify(payload),
         ...(signals.length > 0 ? { signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals) } : {}),
@@ -502,6 +504,15 @@ export class McpClient {
       const settled = id === undefined ? this.#pending.size === 0 : !this.#pending.has(id);
       if (settled) { void reader.cancel().catch(() => undefined); break; }
     }
+  }
+
+  /**
+   * 名乗りの後の問いに付ける、取り決めた版（2025-06-18 の決まり。付けないと相手は 2025-03-26 とみなす）。
+   * 相手が返した文字列が見出しに使えない形なら付けない（fetch が見出しを受け付けず、以後の問いが全部失敗するため）。
+   */
+  #versionHeader(): Record<string, string> {
+    const v = this.#serverVersion;
+    return v && /^[\w.-]{1,64}$/.test(v) ? { 'mcp-protocol-version': v } : {};
   }
 
   /**
