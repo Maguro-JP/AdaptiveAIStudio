@@ -322,10 +322,12 @@ describe('規則: その他', () => {
       'git clean -x -d -f', 'git clean --force', 'git clean -fdx', 'git -C . push', 'git -c x=y push origin main',
       'git reset -q --hard', 'git reset --hard=HEAD', 'git restore .', 'git checkout .', 'git checkout -f main',
       'npm test && git clean -d -f', '"git" push', 'git restore --staged --worktree .',
+      "git -c alias.x='reset --hard' x", 'git -c alias.p=push p', 'git reset --har', 'git clean --forc', 'git switch -f main',
+      'git switch --discard-changes main', 'git checkout -- ./', '(git -C . push)', '$(git -c x=y push)',
     ]) {
       assert.equal(kind(command), 'deny', `止めなかった: ${command}`);
     }
-    for (const command of ['git status', 'git diff', 'git log --oneline -5', 'git clean -n', 'git checkout -b feature', 'git restore --staged a.ts', 'git restore --staged .', 'git restore -S -- .']) {
+    for (const command of ['git status', 'git diff', 'git log --oneline -5', 'git clean -n', 'git checkout -b feature', 'git restore --staged a.ts', 'git restore --staged .', 'git restore -S -- .', 'git switch main', 'git -c alias.st=status st', 'git reset --soft HEAD~1']) {
       assert.equal(kind(command), 'allow', `止めすぎた: ${command}`);
     }
   });

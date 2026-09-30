@@ -339,20 +339,34 @@ const GIT_OPTS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--
  */
 export function gitDanger(command: string): string | undefined {
   for (const part of command.split(/\|\||&&|;|\n|\|(?!&)|(?<![>])&(?!&)/)) {
-    const words = part.trim().split(/\s+/).map((w) => w.replace(/^['"]|['"]$/g, '')).filter((w) => w.length > 0);
+    // 括弧・$( ・` で包んだ形（`(git -C . push)`）も、包みを外して語にする
+    const words = part.trim().split(/\s+/).map((w) => w.replace(/^(\$?\(|`)+/, '').replace(/[)`]+$/, '').replace(/^['"]|['"]$/g, '')).filter((w) => w.length > 0);
     const at = words.findIndex((w) => /(^|[\\/])git(\.exe)?$/i.test(w));
     if (at < 0) continue;
     let i = at + 1;
+    const aliases: string[] = [];
     while (i < words.length && words[i]!.startsWith('-')) {
       const w = words[i]!;
+      // `-c alias.x='reset --hard'` の別名は、中身も見る（別名にすると並びでは見えない）
+      if (w === '-c' && /^alias\./i.test(words[i + 1] ?? '')) aliases.push(words.slice(i + 1).join(' '));
       i += GIT_OPTS_WITH_VALUE.has(w) ? 2 : 1;
+    }
+    for (const a of aliases) {
+      const body = a.replace(/^alias\.[^=]*=/i, '').replace(/^['"]/, '');
+      const inner = gitDanger(`git ${body}`);
+      if (inner) return `別名の ${inner}`;
     }
     const sub = words[i]?.toLowerCase();
     const rest = words.slice(i + 1);
     const shortFlag = (ch: string) => rest.some((w) => /^-[a-z]+$/i.test(w) && w.slice(1).includes(ch));
-    const long = (name: string) => rest.some((w) => w === name || w.startsWith(`${name}=`));
-    const wholeTree = rest.some((w) => w === '.' || w === '*' || w === ':/' || w === ':(top)');
+    // git は長い名前の省略を受け付ける（`--har` は `--hard`）。4 字以上の頭が一致すれば同じとみなす
+    const long = (name: string) => rest.some((w) => {
+      const key = w.split('=')[0]!;
+      return key === name || (key.startsWith('--') && key.length >= 5 && name.startsWith(key));
+    });
+    const wholeTree = rest.some((w) => w === '.' || w === './' || w === '*' || w === ':/' || w === ':(top)');
     if (sub === 'push') return 'push';
+    if (sub === 'switch' && (shortFlag('f') || long('--force') || long('--discard-changes'))) return 'switch -f';
     if (sub === 'reset' && long('--hard')) return 'reset --hard';
     if (sub === 'clean' && (shortFlag('f') || long('--force'))) return 'clean -f';
     // restore は --staged（-S）だけなら索引を戻すだけで、作業ツリーには触らない（--worktree・-W が付けば触る）
