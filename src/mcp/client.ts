@@ -411,7 +411,8 @@ export class McpClient {
       return true;
     } catch (e) {
       this.#failure = (e as Error).message;
-      this.#http.open = false;
+      // 立ち上げの途中で stop() されると #http はもう無い。無いのに触ると、「投げない」はずの start() が TypeError を投げた
+      if (this.#http) this.#http.open = false;
       return false;
     }
   }

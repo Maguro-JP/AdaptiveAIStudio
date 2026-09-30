@@ -157,12 +157,14 @@ describe('遠くの相手に繋ぐ', () => {
 describe('取り消しの知らせが断られても、ほかの呼び出しを巻き込まない', () => {
   test('notifications/cancelled が 500 でも、同じ相手に出している別の呼び出しは返事を受け取れる', async () => {
     const held: import('node:http').ServerResponse[] = [];
+    let cancelRefused: (() => void) | undefined;
+    const refused = new Promise<void>((ok) => { cancelRefused = ok; });
     const server: Server = createServer((req, res) => {
       const chunks: Buffer[] = [];
       req.on('data', (c: Buffer) => chunks.push(c));
       req.on('end', () => {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { id?: number; method?: string; params?: { name?: string } };
-        if (body.method === 'notifications/cancelled') { res.writeHead(500); res.end('だめです'); return; }
+        if (body.method === 'notifications/cancelled') { res.writeHead(500); res.end('だめです'); cancelRefused?.(); return; }
         if (body.id === undefined) { res.writeHead(202); res.end(); return; }
         const say = (result: unknown) => {
           res.writeHead(200, { 'content-type': 'application/json' });
@@ -171,7 +173,8 @@ describe('取り消しの知らせが断られても、ほかの呼び出しを�
         if (body.method === 'initialize') say({ protocolVersion: '2025-06-18', capabilities: {} });
         else if (body.method === 'tools/list') say({ tools: [{ name: 'hang' }, { name: 'slow' }] });
         else if (body.params?.name === 'hang') held.push(res); // 返さない
-        else setTimeout(() => say({ content: [{ type: 'text', text: 'おそく返した' }] }), 800);
+        // 取り消しを 500 で断った後に返す（決め打ちの時間の並びに頼らない）
+        else void refused.then(() => say({ content: [{ type: 'text', text: 'おそく返した' }] }));
       });
     });
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -181,8 +184,10 @@ describe('取り消しの知らせが断られても、ほかの呼び出しを�
       assert.equal(await c.start(), true, c.failure);
       const slow = c.call('slow', {}, 10_000);
       const ac = new AbortController();
-      setTimeout(() => ac.abort(), 200).unref();
-      assert.match((await c.call('hang', {}, 10_000, ac.signal)).text, /止めました/);
+      const asked = c.call('hang', {}, 10_000, ac.signal);
+      await until(() => held.length > 0, '相手が hang を受け取る', { timeoutMs: 5_000 });
+      ac.abort();
+      assert.match((await asked).text, /止めました/);
       const got = await slow;
       assert.equal(got.isError, false, `取り消しの失敗に巻き込まれた: ${got.text}`);
       assert.equal(got.text, 'おそく返した');
@@ -271,6 +276,30 @@ describe('止めた呼び出しの返事の流れを、開いたままにしな�
     } finally {
       c.stop();
       await s.close();
+    }
+  });
+});
+
+describe('立ち上げの途中で切っても、start() は投げない', () => {
+  test('名乗りに答えない相手へ繋いでいる途中で stop() しても、false で返る', async () => {
+    const held: import('node:http').ServerResponse[] = [];
+    const server: Server = createServer((req, res) => {
+      req.resume();
+      req.on('end', () => { held.push(res); }); // 名乗りにも答えない
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    const c = new McpClient('remote', { url: `http://127.0.0.1:${port}/mcp`, startupTimeoutMs: 30_000 });
+    try {
+      const starting = c.start();
+      await until(() => held.length > 0, '相手が名乗りを受け取る', { timeoutMs: 5_000 });
+      c.stop();
+      assert.equal(await starting, false);
+      assert.equal(c.running, false);
+    } finally {
+      c.stop();
+      for (const res of held) res.destroy();
+      await new Promise<void>((r) => server.close(() => r()));
     }
   });
 });
