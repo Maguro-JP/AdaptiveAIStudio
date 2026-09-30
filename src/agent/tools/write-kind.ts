@@ -116,7 +116,9 @@ export async function plannedContent(
   // 規則は後の姿が分からないものを通すので、読めない一瞬にテストを消す edit が素通りする
   let before: string;
   try {
-    before = await readFile(abs, 'utf8');
+    // **ツールと同じ形で当てる**（edit_file は LF に揃えてから当てる。CRLF のまま当てると、ツールでは当たる直しがここでは当たらず、
+    // 「後の姿は前と同じ」と見て、テストを消す直しを通していた）。後の姿は LF で返す（規則は数を比べるだけ）
+    before = lf(await readFile(abs, 'utf8'));
   } catch (e) {
     if (isAbsent(e)) return undefined;
     throw e;
@@ -137,7 +139,7 @@ export async function plannedContent(
     for (const e of raw) {
       const one = e as { find?: unknown; replace?: unknown; all?: unknown };
       if (typeof one?.find !== 'string' || typeof one?.replace !== 'string') return undefined;
-      const got = applyEdit(text, one.find, one.replace, one.all === true);
+      const got = applyEdit(text, lf(one.find), lf(one.replace), one.all === true);
       // 当たらないものが混じっていたら、後の姿は決まらない。
       // **決まらないものを「これが後の姿だ」として渡さない。**
       if (got.hits === 0) return undefined;
@@ -147,7 +149,12 @@ export async function plannedContent(
   }
 
   if (typeof a.find !== 'string' || typeof a.replace !== 'string') return undefined;
-  return applyEdit(before, a.find, a.replace, a.all === true).text;
+  return applyEdit(before, lf(a.find), lf(a.replace), a.all === true).text;
+}
+
+/** 改行を LF に揃える（`fs.ts` の `toLf` と同じ。あちらはこのファイルを読み込むので、ここで持つ）。 */
+function lf(s: string): string {
+  return s.replace(/\r\n/g, '\n');
 }
 
 /**
