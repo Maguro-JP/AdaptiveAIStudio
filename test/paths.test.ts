@@ -151,6 +151,9 @@ describe('.. で始まる名前は、中のファイル', () => {
     assert.equal(outsideRel(`..env${sep}bak`), false);
     assert.equal(outsideRel('..'), true);
     assert.equal(outsideRel(`..${sep}x`), true);
+    // Windows は区切りの末の点と空白を落とすので、`.. ` や `...` は `..` になりうる。断る側
+    assert.equal(outsideRel('.. '), true);
+    assert.equal(outsideRel(`...${sep}x`), true);
     const root = join(sep, 'work');
     assert.equal(safeResolve(root, '..foo'), join(root, '..foo'));
     assert.equal(safeResolve(root, '../foo'), undefined);

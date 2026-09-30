@@ -1747,6 +1747,7 @@ export class Session {
                * 前を読めなかった道の報告（`checkpoint.unrecorded(changedHere)`）からこの周の分が漏れ、戻せていないのに全部戻したと言っていた
                */
               if (!ev.isError && isWriteTool(ev.call.name)) {
+                wroteSomething = true;
                 const at = (ev.call.args as { path?: unknown }).path;
                 if (typeof at === 'string' && !changedHere.includes(at)) changedHere.push(at);
               }

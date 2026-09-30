@@ -9,7 +9,8 @@ import { resolve, relative, isAbsolute, sep } from 'node:path';
  * `..foo` のような名前のファイル（`..env.bak` など）まで外として断っていた。
  */
 export function outsideRel(rel: string): boolean {
-  return isAbsolute(rel) || rel.split(sep)[0] === '..';
+  // `.. ` や `...` も外として扱う（Windows は区切りの末の点と空白を落とすので、`..` と同じになりうる。確かめていないので断る側に倒す）
+  return isAbsolute(rel) || /^\.\.[. ]*$/.test(rel.split(sep)[0] ?? '');
 }
 
 export function safeResolve(root: string, candidate: string): string | undefined {
