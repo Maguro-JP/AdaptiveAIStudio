@@ -132,11 +132,14 @@ export class Harness {
 
         const result = await tool.run(args, toolCtx);
         /*
-         * 読めなかった read_file は「読んだ」に数えない（数えると、読めなかったファイルを丸ごと書き換えさせる。readBeforeWrite は結果を見られない）。
-         * ただし大きすぎて断られたものは「一部を読んだ」として残す。read_file は大きいファイルを必ず断るので、残さないと edit_file でも
-         * 二度と直せない。一部の扱いなので、全文を置き換える write_file は今までどおり止まる。
+         * 読めなかった read_file は「読んだ」に数えない（数えると、無かったファイルや読めなかったファイルを丸ごと書き換えさせる。
+         * readBeforeWrite は結果を見られないので、積む側で分ける）。ただし次の二つは、中身を見たのと同じ扱いにする。
+         * - 二進と言われた: 何のファイルかは分かっている。全文の置き換えを止めない（前からの決め）
+         * - 大きすぎて断られた: 「一部を読んだ」として残す。read_file は大きいファイルを必ず断るので、残さないと edit_file でも
+         *   二度と直せない。一部の扱いなので、全文を置き換える write_file は止まる
          */
         if (!(result.isError && call.name === 'read_file')) history.push(call);
+        else if (result.content.includes('は二進のファイルなので読めません')) history.push(call);
         else if (result.content.includes('ファイルが大きすぎます')) {
           history.push({ ...call, args: { ...(args as Record<string, unknown>), limit: 0 } });
         }
