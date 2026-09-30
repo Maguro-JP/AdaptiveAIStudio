@@ -134,6 +134,7 @@ export function repairPlan(raw: unknown, request: string, ctx: PmContext): WorkP
 
   const rawItems = Array.isArray(obj.items) ? obj.items : [];
   const seen = new Set<string>();
+  const rawIds = new Set(rawItems.map((entry) => asString(((entry ?? {}) as Record<string, unknown>).id)).filter((x): x is string => !!x));
   let items: PlanItem[] = [];
 
   for (const [i, entry] of rawItems.entries()) {
@@ -146,7 +147,8 @@ export function repairPlan(raw: unknown, request: string, ctx: PmContext): WorkP
 
     let id = asString(e.id) ?? `t${i + 1}`;
     if (seen.has(id)) {
-      const fixed = freshId(`${id}_${i + 1}`, seen);
+      // 後ろの項目がこれから名乗る ID とも重ねない（重ねると、その ID を deps で指す先が入れ替わる）
+      const fixed = freshId(`${id}_${i + 1}`, new Set([...seen, ...rawIds]));
       repairs.push(`ID が重複していたため ${id} を ${fixed} に変えました。`);
       id = fixed;
     }

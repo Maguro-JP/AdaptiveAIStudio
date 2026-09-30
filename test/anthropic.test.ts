@@ -104,6 +104,25 @@ describe('Claude でツールを使う', () => {
     ]);
   });
 
+  test('結果の無い呼び出しには結果を補い、重なった ID は付け直す（どちらも相手が 400 で断る形）', async () => {
+    const { toAnthropicMessages } = await import('../src/providers/anthropic.ts');
+    const got = toAnthropicMessages([
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'salvaged-0-0', name: 'a', args: {} }, { id: 'c2', name: 'b', args: {} }] },
+      { role: 'tool', content: 'r1', toolCallId: 'salvaged-0-0' },
+      { role: 'user', content: '次' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'salvaged-0-0', name: 'a', args: {} }] },
+      { role: 'tool', content: 'r2', toolCallId: 'salvaged-0-0' },
+    ]);
+    const uses = got.flatMap((m) => m.content).filter((b) => b.type === 'tool_use').map((b) => (b as { id: string }).id);
+    const results = got.flatMap((m) => m.content).filter((b) => b.type === 'tool_result').map((b) => (b as { tool_use_id: string }).tool_use_id);
+    assert.equal(new Set(uses).size, uses.length, `ID が重なっている: ${uses.join(', ')}`);
+    assert.deepEqual([...results].sort(), [...uses].sort(), `結果の無い呼び出しがある: ${JSON.stringify(got)}`);
+    // 補った結果は、呼び出しの直後の user に入っている
+    assert.equal(got[2]!.role, 'user');
+    assert.deepEqual(got[2]!.content.map((b) => b.type), ['tool_result', 'tool_result', 'text']);
+  });
+
   test('ツールを渡し、返ってきた tool_use をツールの呼び出しとして読む', needsSdk, async () => {
     const { createServer } = await import('node:http');
     let sent: { tools?: { name: string }[]; messages?: { role: string }[] } = {};
@@ -138,7 +157,10 @@ describe('Claude でツールを使う', () => {
           { role: 'tool', content: 'a.txt', toolCallId: 'c0' },
         ],
         tools: [{ name: 'read_file', description: '読む', parameters: { type: 'object' } }],
+        // 既定の設定は temperature を持つ。Opus 5 以降は受け取らず 400 で断るので、送らない
+        temperature: 0.2,
       }, new AbortController().signal)) chunks.push(c);
+      assert.equal((sent as { temperature?: number }).temperature, undefined, 'temperature を送った');
       assert.deepEqual(sent.tools?.map((t) => t.name), ['read_file'], 'ツールを送っていない');
       assert.equal(sent.messages?.some((m) => m.role === 'tool'), false, 'role: tool のまま送った');
       assert.deepEqual(chunks.find((c) => c.type === 'toolCall'), { type: 'toolCall', call: { id: 'tu1', name: 'read_file', args: { path: 'a.txt' } } });

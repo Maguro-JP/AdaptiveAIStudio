@@ -122,7 +122,6 @@ export class AnthropicProvider implements ChatProvider {
           max_tokens: req.maxTokens ?? 16_000,
           ...(system ? { system } : {}),
           messages: messages as never,
-          ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
           // ツールを渡す。渡していなかったので、Claude はツールを呼べず、ツールを使った後の会話は role: 'tool' のまま送って断られていた
           ...(req.tools && req.tools.length > 0
             ? { tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters as never })) }
@@ -144,7 +143,8 @@ export class AnthropicProvider implements ChatProvider {
           building.delete(ev.index);
           let args: unknown = {};
           if (b.json.trim()) {
-            try { args = JSON.parse(b.json); } catch { args = b.json; } // 読めない引数も落とさず渡す（呼ぶ側が断る）
+            // 読めない引数も落とさず、壊れていると分かる形で渡す（呼ぶ側が断る。openai-compatible と同じ形）
+            try { args = JSON.parse(b.json); } catch { args = { __raw: b.json, __parseError: true }; }
           }
           yield { type: 'toolCall', call: { id: b.id, name: b.name, args } };
         } else if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
@@ -234,24 +234,52 @@ type Block =
  */
 export function toAnthropicMessages(messages: readonly ProviderMessage[]): { role: 'user' | 'assistant'; content: Block[] }[] {
   const out: { role: 'user' | 'assistant'; content: Block[] }[] = [];
-  for (const m of messages) {
-    if (m.role === 'system') continue;
-    const role: 'user' | 'assistant' = m.role === 'assistant' ? 'assistant' : 'user';
-    const blocks: Block[] = [];
-    if (m.role === 'tool') {
-      blocks.push({ type: 'tool_result', tool_use_id: m.toolCallId ?? '', content: m.content });
-    } else {
-      if (m.content.trim()) blocks.push({ type: 'text', text: m.content });
-      for (const c of m.toolCalls ?? []) {
-        const input = c.args !== null && typeof c.args === 'object' && !Array.isArray(c.args) ? c.args : {};
-        blocks.push({ type: 'tool_use', id: c.id, name: c.name, input });
-      }
-    }
-    if (blocks.length === 0) continue;
+  const push = (role: 'user' | 'assistant', blocks: Block[]): void => {
+    if (blocks.length === 0) return;
     const last = out.at(-1);
     if (last && last.role === role) last.content.push(...blocks);
     else out.push({ role, content: blocks });
+  };
+  /*
+   * 呼び出しの ID は会話の中で一つずつにする。ローカルのモデルが付けた ID（`call_0`・拾い上げた `salvaged-0-0`）は
+   * 依頼ごとに数え直すので重なる。重なった ID は付け直し、その結果も同じ名前へ引き直す。
+   */
+  const used = new Set<string>();
+  let renamed = new Map<string, string>();
+  // 結果の無い呼び出し（止めたときの残り）には結果を補う。無いと相手は 400 で断る
+  let open: string[] = [];
+  const closeOpen = (): void => {
+    if (open.length > 0) push('user', open.map((id) => ({ type: 'tool_result', tool_use_id: id, content: 'ERROR: 結果がありません（実行されませんでした）' })));
+    open = [];
+  };
+  for (const m of messages) {
+    if (m.role === 'system') continue;
+    if (m.role === 'tool') {
+      const id = renamed.get(m.toolCallId ?? '') ?? m.toolCallId ?? '';
+      open = open.filter((o) => o !== id);
+      push('user', [{ type: 'tool_result', tool_use_id: id, content: m.content }]);
+      continue;
+    }
+    closeOpen();
+    const blocks: Block[] = [];
+    if (m.content.trim()) blocks.push({ type: 'text', text: m.content });
+    if (m.role === 'assistant') renamed = new Map();
+    for (const c of m.toolCalls ?? []) {
+      let id = c.id || 'call';
+      if (used.has(id)) {
+        let n = 2;
+        while (used.has(`${id}_${n}`)) n += 1;
+        renamed.set(c.id, `${id}_${n}`);
+        id = `${id}_${n}`;
+      }
+      used.add(id);
+      open.push(id);
+      const input = c.args !== null && typeof c.args === 'object' && !Array.isArray(c.args) ? c.args : {};
+      blocks.push({ type: 'tool_use', id, name: c.name, input });
+    }
+    push(m.role === 'assistant' ? 'assistant' : 'user', blocks);
   }
+  closeOpen();
   return out;
 }
 

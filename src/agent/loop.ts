@@ -211,7 +211,11 @@ export class Agent {
        * 返事の途中で止められた。相手は止められると黙って終わるので、ここで見ないと、途中までの文を普通の返事として
        * 「完了」にし、ツールを使った後なら「まだ TASK_DONE がありません」を記録に積んでいた。
        */
-      if (signal.aborted) { yield { type: 'finished', reason: 'aborted' }; return; }
+      if (signal.aborted) {
+        // 利用者がもう見た途中までの文は残す（残さないと、次の指示が止めた指示と一つに繋がり、止めた作業をやり直させる）
+        if (text.trim()) history.push({ role: 'assistant', content: text });
+        yield { type: 'finished', reason: 'aborted' }; return;
+      }
       yield { type: 'turn', index: turn, modelId };
 
       history.push({
@@ -270,8 +274,12 @@ export class Agent {
       nudges = 0;
       usedTools = true;
 
-      for (const call of calls) {
-        if (signal.aborted) { yield { type: 'finished', reason: 'aborted' }; return; }
+      for (const [at, call] of calls.entries()) {
+        if (signal.aborted) {
+          // 呼んだのに結果の無いツールを残さない（残すと、以後の依頼を相手が 400 で断り、この会話が続けられなくなる）
+          for (const left of calls.slice(at)) history.push({ role: 'tool', toolCallId: left.id, content: 'ERROR: 中断されました（実行していません）' });
+          yield { type: 'finished', reason: 'aborted' }; return;
+        }
         if (call.id.startsWith('salvaged-')) yield { type: 'salvaged', name: call.name };
         yield { type: 'toolStart', call };
 

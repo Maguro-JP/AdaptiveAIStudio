@@ -14,6 +14,17 @@ import { runLoop, type LoopCheck, type LoopEvent } from '../src/harness/loop.ts'
 import { readFileTool } from '../src/agent/tools/fs.ts';
 import { tempDir } from './tmp.ts';
 
+/** ツールを二つ続けて呼ぶ相手。 */
+function twoCalls(): ChatOrchestrator {
+  return {
+    async *run() {
+      yield { type: 'toolCall', call: { id: 'c1', name: 'stopper', args: {} } };
+      yield { type: 'toolCall', call: { id: 'c2', name: 'stopper', args: {} } };
+      yield { type: 'done', modelId: 'm' };
+    },
+  } as unknown as ChatOrchestrator;
+}
+
 /** 決めた順に出来事を流し、途中で止める相手。止められたら、本物と同じく黙って終わる。 */
 function stoppingOrchestrator(ac: AbortController, withToolFirst: boolean): ChatOrchestrator {
   let call = 0;
@@ -56,6 +67,30 @@ describe('返事の途中で止めたとき', () => {
     assert.deepEqual([last.type, last.reason], ['finished', 'aborted'], JSON.stringify(events));
     assert.equal(events.some((e) => e.type === 'nudged'), false, '止めたのに促している');
     assert.equal(history.some((m) => m.role === 'user' && m.content.includes('TASK_DONE')), false, '促しが記録に残った');
+  });
+});
+
+describe('止めたあとの会話の記録', () => {
+  test('返事の途中で止めたら、見えていた途中までの文を記録に残す', async () => {
+    const { history } = await runAgent(false);
+    assert.deepEqual(history.at(-1), { role: 'assistant', content: '途中' });
+  });
+
+  test('ツールを続けて呼ぶ途中で止めたら、残りの呼び出しにも結果を付ける（結果の無い呼び出しを残さない）', async () => {
+    const ac = new AbortController();
+    const root = await tempDir('aas-stop-tools-');
+    const stopper = {
+      schema: { name: 'stopper', description: 's', parameters: { type: 'object' } },
+      async run() { ac.abort(); return { content: 'ok' }; },
+    };
+    const agent = new Agent(twoCalls(), {
+      candidates: ['x:m'], system: 's', tools: [stopper as never], root, maxTurns: 5, approve: async () => true,
+    });
+    const history: ProviderMessage[] = [{ role: 'user', content: 'q' }];
+    for await (const _ of agent.run(history, ac.signal)) { /* 流す */ }
+    const called = history.flatMap((m) => m.toolCalls ?? []).map((c) => c.id);
+    const answered = history.filter((m) => m.role === 'tool').map((m) => m.toolCallId);
+    assert.deepEqual(answered, called, JSON.stringify(history));
   });
 });
 

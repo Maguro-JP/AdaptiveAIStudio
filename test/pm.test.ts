@@ -330,6 +330,22 @@ describe('一人に任せない', () => {
   });
 });
 
+describe('ID を付け直すとき、後ろの項目の ID と重ねない', () => {
+  test('[t1, t1, t1_2] の t1_2 を deps で指す先が入れ替わらない', () => {
+    const p = plan([
+      { id: 't1', instruction: 'a', laneId: 'fast' },
+      { id: 't1', instruction: 'b', laneId: 'fast' },
+      { id: 't1_2', instruction: 'c', laneId: 'fast' },
+      { id: 't4', instruction: 'd', laneId: 'fast', deps: ['t1_2'] },
+    ]);
+    const ids = p.items.map((i) => i.id);
+    assert.equal(new Set(ids).size, ids.length, ids.join(', '));
+    const c = p.items.find((i) => i.instruction === 'c')!;
+    assert.equal(c.id, 't1_2', `後ろの項目の ID を変えた: ${ids.join(', ')}`);
+    assert.deepEqual(p.items.find((i) => i.instruction === 'd')!.deps, ['t1_2']);
+  });
+});
+
 describe('ID が重なった計画に、確かめる工程を足すとき', () => {
   test('足した工程の ID も重ならない（重なると確かめる工程が黙って消える）', () => {
     const p = repairPlan({ items: [
