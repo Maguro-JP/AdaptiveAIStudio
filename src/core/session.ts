@@ -703,7 +703,12 @@ export class Session {
    * 入口ごとに書き直さない。ここが唯一の手順で、
    * CLI も画面も、出てくる出来事を見て描くだけにする。
    */
-  async *plan(request: string): AsyncGenerator<PlanEvent, AcceptanceReport | undefined> {
+  /**
+   * 段取り。`said` は利用者が打った文（添付の中身を差し込む前）。戻り先の見出し・前に分かっていることの呼び出し・
+   * 覚える見出しは利用者の言葉で持つ（送り口の `said` と同じ）。分解と規則の判定には全文を渡す。
+   */
+  async *plan(request: string, said?: string): AsyncGenerator<PlanEvent, AcceptanceReport | undefined> {
+    const asked = said || request;
     if (this.noModel) {
       yield { type: 'log', level: 'error', text: this.noModel };
       return undefined;
@@ -729,7 +734,7 @@ export class Session {
     // 段取りでもファイルを触る。**戻せるのは送り口だけ、にしない。**
     // 始められなかったら（前の戻り先を閉じる書き込みの失敗など）、錠と「動いている」を返して終える。
     try {
-      await this.undo.begin(request);
+      await this.undo.begin(asked);
     } catch (e) {
       this.lock.release(lockOwner);
       this.#conv.running = undefined;
@@ -792,7 +797,7 @@ export class Session {
       // 前に分かっていること・駄目だったことを渡してから分解させる。
       // 段取りの側は、こちらの決まり（system）を通らない（進行役は別の決まりで動く）。
       // なので「二度としないこと」は、こちらに載せる。
-      const known = this.#recall(request);
+      const known = this.#recall(asked);
       if (known) yield { type: 'recalled', text: known };
 
       const pm = decompose(
@@ -991,7 +996,7 @@ export class Session {
       // 起きたことを覚える。同じ手を二度試さないため。
       this.memory.remember({
         kind: 'attempt',
-        title: request,
+        title: asked,
         detail: [
           plan.summary,
           report.verdict === 'rejected'
