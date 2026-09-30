@@ -318,6 +318,14 @@ describe('鍵や記録は、見る窓から出さない', () => {
     assert.equal(r.status, 403, '\\ で区切った .env を断っていない');
   });
 
+  test('別の名前から辿った先が隠しファイルなら断る（Windows の短い名前 ENV~1 と同じ形）', { skip: process.platform === 'win32' && 'リンクを作るのに権限が要る' }, async () => {
+    const root = await site({ '.env': 'SECRET=1', 'index.html': 'x' });
+    await symlink(join(root, '.env'), join(root, 'plain'));
+    const url = await serve(root);
+    const r = await fetch(`${url}plain`);
+    assert.equal(r.status, 403, `別の名前から .env の中身を出した: ${r.status}`);
+  });
+
   test('ふつうの頁は出る（対）', async () => {
     const url = await serve(await site({ 'index.html': 'ここ', 'a.txt': 'b' }));
     assert.equal((await fetch(`${url}a.txt`)).status, 200);

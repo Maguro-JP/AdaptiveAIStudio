@@ -12,7 +12,7 @@
  * 出すのは作業場の中だけ。`..` で外へは出られない。
  */
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFile, stat, readdir } from 'node:fs/promises';
+import { readFile, stat, readdir, realpath } from 'node:fs/promises';
 import { watch, realpathSync, type FSWatcher } from 'node:fs';
 import { join, extname, relative, sep } from 'node:path';
 import { safeResolve, realSafeResolve } from '../agent/tools/paths.ts';
@@ -281,6 +281,12 @@ export class PreviewServer {
       // 作業場の外。何があるかも言わない。
       res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('作業場の外は見せません');
+      return;
+    }
+    // 実体の名前でも見る。Windows の短い名前（`GIT~1`・`ENV~1`）は点で始まらないので上を抜けるが、実体は `.git`・`.env`
+    if (wanted !== '' && hiddenRequest(relative(await realpath(this.#opts.root).catch(() => this.#opts.root), abs))) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('点で始まるものは見せません');
       return;
     }
 
