@@ -165,13 +165,15 @@ export function blastRadius(maxFiles: number): Rule {
       const path = argString(call, 'path');
       if (!path) return allow;
 
+      // 道は揃えて数える（`./a.ts` と `a.ts` を二件と数えない）
       const written = new Set(
         ctx.history
           .filter((c) => isWriteTool(c.name))
           .map((c) => argString(c, 'path'))
-          .filter((p): p is string => !!p),
+          .filter((p): p is string => !!p)
+          .map((p) => normalize(ctx.root, p)),
       );
-      if (written.has(path) || written.size < maxFiles) return allow;
+      if (written.has(normalize(ctx.root, path)) || written.size < maxFiles) return allow;
 
       return deny(
         `1つの依頼で書き換えられるのは ${maxFiles} 件までです（既に ${[...written].join(', ')}）。` +
@@ -225,14 +227,20 @@ export const readBeforeWrite: Rule = {
     // 前に書いたことも「見た」に数える。ただし全文を置き換えるときは、前に全文を書いた（write_file）ときだけ。edit_file は当てた所しか
     // 知らない（失敗して何も書いていないこともある）。数えていたので、一部だけ読んで edit_file を一度（失敗でも）挟むと、全文の
     // write_file が通り、読んでいない行を消していた
+    // 道は揃えて比べる（`a.ts` を読んで `./a.ts` に書くのを、読んでいないと取り違えない）
+    const target = normalize(ctx.root, path);
+    const same = (c: ToolCall): boolean => {
+      const p = argString(c, 'path');
+      return p !== undefined && normalize(ctx.root, p) === target;
+    };
     const sawIt = ctx.history.some((c) =>
-      (c.name === 'read_file' && argString(c, 'path') === path
+      (c.name === 'read_file' && same(c)
         && !(wholeNeeded && partial(c)))
-      || (isWriteTool(c.name) && argString(c, 'path') === path && (!wholeNeeded || c.name === 'write_file')));
+      || (isWriteTool(c.name) && same(c) && (!wholeNeeded || c.name === 'write_file')));
     if (sawIt) return allow;
 
     const partly = ctx.history.some((c) =>
-      c.name === 'read_file' && argString(c, 'path') === path && partial(c));
+      c.name === 'read_file' && same(c) && partial(c));
     if (partly) {
       return deny(
         `${path} は一部しか読んでいません。write_file は全文を置き換えるため、` +
