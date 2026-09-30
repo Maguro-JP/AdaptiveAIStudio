@@ -1519,8 +1519,26 @@ export class UiServer {
       const id = String(body?.id ?? '');
       if (!id) return send(res, 400, { error: '名前がありません' });
 
+      /*
+       * **取っている間に二つ目を始めない。**断らずに始めていたので、二度押すと同じ `.part` へ二本が数GBずつ書き、先に終わった方が
+       * 名前を付け替えると、もう一本は「GGUF として読めませんでした」で失敗と言っていた（取れているのに）。見てから記すまでに
+       * 待ちを挟まない（挟むと、その間に来た二つ目も通る）
+       */
+      if (this.#fetching?.state === 'running') {
+        return send(res, 409, { error: `いま別のモデル（${this.#fetching.id}）を取ってきています。終わってからにしてください` });
+      }
+      const began = Date.now();
+      this.#fetching = { id, state: 'running', message: '始めます…', began };
+
       // 数GBかかるので、待たせずに始めて、進み具合は流し込む。
-      this.#bg(this.#fetchModel(session, id), 'モデルの取得が落ちました');
+      this.#bg(this.#fetchModel(session, id).catch((e: unknown) => {
+        // 取りかかる前に落ちたときも、「取っている」のまま残さない（残ると、以後の取得を全部断る）
+        if (this.#fetching?.id === id && this.#fetching.began === began && this.#fetching.state === 'running') {
+          this.#fetching = { id, state: 'failed', message: (e as Error).message, began };
+          this.#jobsChanged();
+        }
+        throw e;
+      }), 'モデルの取得が落ちました');
       return send(res, 202, { started: id });
     }
 
