@@ -32,11 +32,20 @@ const stop = (): void => {
 };
 
 child.on('error', (e) => {
-  // 起こせなかった（実行ファイルが無い等）。親は出力の末尾から見立てるので、理由をそのまま流す
-  process.stderr.write(`${e.message}\n`);
-  process.exit(127);
+  // 起こせなかった（実行ファイルが無い等）。親は出力の末尾から見立てるので、理由をそのまま流す。
+  // 書き終えてから終わる（管への書き込みが非同期の所では、すぐ終わると理由が消える）
+  process.stderr.write(`${e.message}\n`, () => process.exit(127));
 });
-child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
+child.on('exit', (code, signal) => {
+  if (code !== null) process.exit(code);
+  // シグナルで落ちたなら、同じシグナルで落ちる（終了コード 1 にすると、llama-server が自分で失敗したように見える）
+  if (signal) {
+    process.removeAllListeners(signal);
+    process.kill(process.pid, signal);
+    return;
+  }
+  process.exit(1);
+});
 
 process.on('SIGTERM', stop);
 // 端末の Ctrl-C は受け流す（止めるのは親が決める）

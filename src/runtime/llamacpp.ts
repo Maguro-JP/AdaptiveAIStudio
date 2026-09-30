@@ -209,13 +209,19 @@ export class LlamaCppRuntime implements LocalRuntime {
     child.stdout?.on('data', capture(lineReader()));
     child.stderr?.on('data', capture(lineReader()));
     child.on('error', (e) => { exited = { code: null, detail: e.message }; });
-    child.on('exit', (code) => {
-      // 末尾5行では足りない。llama.cpp は原因が何であれ最後は
-      // 「failed to load model」で終わり、**決め手はその手前にある**。
-      // 実測では、ファイルが無い/GGUF でない を分ける行が6行目より前だった。
+    // 末尾5行では足りない。llama.cpp は原因が何であれ最後は
+    // 「failed to load model」で終わり、**決め手はその手前にある**。
+    // 実測では、ファイルが無い/GGUF でない を分ける行が6行目より前だった。
+    const settle = (code: number | null): void => {
       if (!exited) exited = { code, detail: stderrTail.split('\n').slice(-20).join('\n') };
+    };
+    child.on('exit', (code) => {
       this.#running.delete(ref);
+      // 出力は 'exit' の後に届くことがある（付き添いが書いた「起こせなかった理由」など）。管が閉じるのを待って見立てる。
+      // 閉じなければ（付き添いだけが落ち、llama-server が管を握ったまま）、少し待って今ある分で見立てる
+      setTimeout(() => settle(code), 1000).unref?.();
     });
+    child.on('close', (code) => settle(code));
 
     try {
       await this.#waitReady(baseUrl, () => exited, signal);

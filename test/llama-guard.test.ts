@@ -35,7 +35,7 @@ describe('llama-server と端末の Ctrl-C', () => {
     const parent = spawn(process.execPath, [
       '--experimental-strip-types', '--no-warnings', join(here, 'fixtures', 'llama-harness.ts'),
       dir, join(here, 'fixtures', 'fake-llama-server.mjs'), String(await freePort()),
-    ], { stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    ], { stdio: ['pipe', 'pipe', 'pipe'], detached: true });
     let out = '';
     let err = '';
     parent.stdout!.on('data', (b: Buffer) => { out += b.toString(); });
@@ -47,6 +47,7 @@ describe('llama-server と端末の Ctrl-C', () => {
       pid = got.pid;
 
       process.kill(-parent.pid!, 'SIGINT');
+      // SIGINT で落ちるなら、落ちきるまでの間。下の問い合わせでも見るので、遅い機械で間に合わなくても素通りはしない
       await new Promise((r) => setTimeout(r, 500));
       assert.ok(alive(parent.pid!), '親が Ctrl-C で落ちた（代役の作りが違う）');
       assert.ok(alive(pid), 'Ctrl-C で llama-server が止まった');
