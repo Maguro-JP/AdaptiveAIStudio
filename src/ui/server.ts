@@ -617,6 +617,7 @@ export class UiServer {
   }
 
   async session(): Promise<Session> {
+    if (this.#session) await this.#retireIfRootMoved();
     if (this.#session) return this.#session;
     if (this.#stopped) throw new Error('止めています');
     this.#session = await Session.create(await this.#configForSession(), {
@@ -778,6 +779,7 @@ export class UiServer {
         this.broadcast({ type: 'conversations' });
       }
       this.#side.delete(conversationId);
+      await this.#retireIfRootMoved();
       this.broadcast({ type: 'undo' });
       this.broadcast({ type: 'busy', busy: false, conversationId });
       this.broadcast({ type: 'stateChanged' });
@@ -818,6 +820,8 @@ export class UiServer {
   }
 
   async #rebuildIfCandidatesMissing(): Promise<void> {
+    // 作業中に作業場を変えて畳めずに残った本体は、ここで畳む（次の session() が変えた作業場で組む）
+    if (await this.#retireIfRootMoved({ mine: true })) return;
     const live = this.#session;
     if (!live || live.candidates.length > 0) return;
     // 走っている・考えている間は組み直さない（#preparing は読んでいるだけなので構わない）。
@@ -826,6 +830,31 @@ export class UiServer {
     const fixed = await this.#configForSession();
     if (!fixed.candidates || fixed.candidates.length === 0) return;
     await this.#retireSession(live);
+  }
+
+  /**
+   * 手が空いていて、本体が前の作業場で組んだままなら畳む。畳んだら true。
+   *
+   * 作業中に作業場を変えると、その場では畳めない（設定の口は「立ち上げ直しが要る」と返す）。前は、
+   * 作業が終わってもその本体が残り続けた。手で書く口は道を変えた作業場で解くのに、「戻す」の記録は
+   * 前の作業場の本体に積むので、戻すと前の作業場の同じ名前のファイルを書き換えていた。
+   * `mine` は、呼ぶ側が自分で「準備中」を立てているとき（そのときは準備中を理由に断らない）。
+   */
+  async #retireIfRootMoved(opts: { mine?: boolean } = {}): Promise<boolean> {
+    const live = this.#session;
+    if (!live || !this.#rootMoved(live)) return false;
+    if (live.busy || live.anyBusy || live.lock.held || this.#side.size > 0 || this.#thinking) return false;
+    if (this.#preparing && !opts.mine) return false;
+    await this.#retireSession(live);
+    this.broadcast({ type: 'log', level: 'info', text: `前の作業が終わったので、変えた作業場に切り替えました: ${this.#workRoot()}` });
+    this.broadcast({ type: 'undo' });
+    this.broadcast({ type: 'stateChanged' });
+    return true;
+  }
+
+  /** 本体が、いまの作業場とは別の場所で組まれているか。 */
+  #rootMoved(live: Session): boolean {
+    return resolvePath(live.root) !== this.#workRoot();
   }
 
   /**
@@ -884,7 +913,12 @@ export class UiServer {
     } finally {
       this.#preparing = was;
     }
-    if (this.#session === live) this.#session = undefined;
+    if (this.#session === live) {
+      this.#session = undefined;
+      // 見回りも止める（次に組む本体が自分の見回りを立てる。止めないと、畳んだ本体でやり残しを続け、前の作業場を触る）
+      if (this.#idleTimer) clearInterval(this.#idleTimer);
+      this.#idleTimer = undefined;
+    }
     await live.close().catch(() => undefined);
   }
 
@@ -951,6 +985,8 @@ export class UiServer {
    * 立たない。支度せずに考えに行くと、30秒ごとに「繋がりません」を作る。
    */
   async idleTick(session: Session): Promise<'BUSY' | 'HELD' | 'MISSING' | 'THOUGHT' | 'RESUMED'> {
+    // 畳んだ本体では動かない（前の作業場を触る）
+    if (session !== this.#session) return 'HELD';
     // 作業中は考えない。人の依頼が先。支度の最中も、人の依頼のうち。
     if (this.#busyNow(session)) return 'BUSY';
     // **順番待ちがあるなら、暇ではない。**ここで考え始めると、
@@ -1004,9 +1040,11 @@ export class UiServer {
 
   /** 手が空いていて、待っているものがあれば流す。 */
   async #maybeDrain(): Promise<void> {
-    const session = this.#session;
-    if (!session || this.#queue.length === 0) return;
-    if (this.#busyNow(session)) return;
+    await this.#retireIfRootMoved();
+    if (this.#queue.length === 0) return;
+    // 畳んだ直後は本体が無い。待っている依頼があるなら組む（組まずに帰ると、次の送りが来るまで誰も流さない）
+    const session = this.#session ?? await this.session().catch(() => undefined);
+    if (!session || this.#busyNow(session)) return;
     await this.#drainQueue(session);
   }
 
@@ -2267,6 +2305,7 @@ export class UiServer {
     if (path === '/api/undo' && req.method === 'GET') {
       // 戻せるものの一覧は、ファイルから読める。**セッションは要らない。**
       // ここは画面が開いた直後に読む所（横の一覧に出る）。
+      await this.#retireIfRootMoved();
       const undo = this.#session?.undo ?? new UndoStore(this.#workRoot(), join(stateDir(), 'undo'));
       // 読めなくても 500 にしない（画面は前に描いた古い一覧を出したままになる）。空の一覧と、読めないことを返す
       return send(res, 200, await undo.list().then(
@@ -2985,7 +3024,12 @@ export class UiServer {
     /** 読んだあとで変わっていたときの断りの文言。呼ぶ口ごとに、画面でできることが違う。 */
     changed = '読んだあとで、このファイルは別の所で変わりました（AI の書き換えなど）。画面で、どちらを残すか選んでください',
   ): Promise<{ added: number; removed: number }> {
+    await this.#retireIfRootMoved();
     const session = this.#session;
+    // 畳めずに残っている（前の作業場の作業がまだ走っている）なら書かない。道は変えた作業場で解いてあり、記録と食い違う
+    if (session && this.#rootMoved(session)) {
+      throw new HandWriteRefused('作業場を変える前の作業がまだ終わっていません。終わってからもう一度押してください', 409);
+    }
     const undo = session?.undo ?? new UndoStore(this.#workRoot(), join(stateDir(), 'undo'));
     /*
      * **作業場の錠を通す。**AI の依頼が書いている間に手で書くと、その依頼の「戻す」の記録と
@@ -3294,6 +3338,8 @@ export class UiServer {
       // その回のやりとりが消える。
       await this.#persist(session);
       this.#runningId = undefined;
+      // 作業中に作業場を変えていたら、ここで変えた作業場へ切り替える（空いたことを言う前に。言った直後の口が前の本体に当たらない）
+      await this.#retireIfRootMoved();
       this.broadcast({ type: 'busy', busy: false, conversationId });
       // 作業で記憶やファイルが動いている。画面の材料を取り直させる。
       this.broadcast({ type: 'stateChanged' });
@@ -3507,6 +3553,8 @@ export class UiServer {
    */
   async #continueStep(session: Session, item: { id: string; request: string; note: string }): Promise<void> {
     if (this.#busyNow(session) || this.#queue.length > 0) return;
+    // 置いている間に本体を畳んでいたら（作業場を変えた等）、畳んだ本体では進めない。やり残しは残っているので、見回りが拾う
+    if (session !== this.#session) return;
     // 前の段の終わりから少し置いて呼ばれる。その間に取り消されていたら、進めない（段取りを立て直さない）。
     if (!(await this.#stillUnfinished(item.id))) return;
     this.#resuming = item.id;
@@ -3763,6 +3811,8 @@ export class UiServer {
     this.#preparing = true;
     let full: string;
     try {
+      // 前の作業場の本体なら畳んで組み直す（作業中に作業場を変えたあと、最初に空いた所がここのことがある）
+      if (await this.#retireIfRootMoved({ mine: true }) || this.#session !== session) session = await this.session();
       await this.#loadInto(session, next.conversationId);
       full = await this.#compose(session, next.text, next.attached, next.editor);
     } catch (e) {
