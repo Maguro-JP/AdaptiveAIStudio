@@ -469,6 +469,12 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
 
   const parsed = parseConfigText(raw, path);
   const config: AasConfig = {
+    /*
+     * **書いてある項目は全部渡す（下で既定を埋める項目だけ上書きする）。**項目を一つずつ拾っていたので、拾い忘れた
+     * `network`（外へ出る道を閉じる・行き先を足す）と `chatSystem` は、書いても黙って捨てていた。`network.enabled: false` と
+     * 書いても外へ出る道は開いたままで、承認が自動なら訊かずに外へ取りに行っていた
+     */
+    ...parsed,
     // **既定をそのまま渡さない。**同じ物を返すと、あとで書き換えたときに
     // 既定そのものが書き換わり、次に読んだ設定にも残る（実際に起きた。
     // inproc の繋ぎ先を入れたら、別の設定を読んでも 4177 のままになった）。
