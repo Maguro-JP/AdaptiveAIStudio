@@ -169,12 +169,20 @@ describe('片づけるもの・片づけないもの', () => {
     assert.deepEqual((await findRemovable({ keepTag: 'b9999', now: far })).map((f) => f.path), [], '書き手が書いたものを挙げた');
   });
 
-  test('途中で切れた取得は消す', async () => {
+  test('途中で切れた取得は消す（1 時間より古いもの）', async () => {
     const { models } = await scratch();
     await writeFile(join(models, 'm.gguf.part'), 'x');
     await writeFile(join(models, 'm.gguf'), 'GGUF');
-    const found = await findRemovable({ keepTag: 'b9999' });
+    const found = await findRemovable({ keepTag: 'b9999', now: Date.now() + 2 * 60 * 60 * 1000 });
     assert.deepEqual(found.map((f) => f.path), [join(models, 'm.gguf.part')]);
+  });
+
+  test('いま取っている最中の取得は消さない（書き続けているので新しい）', async () => {
+    const { models, bin } = await scratch();
+    await writeFile(join(models, 'm.gguf.part'), 'x');
+    await writeFile(join(bin, 'llama.zip.partial'), 'x');
+    const found = await findRemovable({ keepTag: 'b9999' });
+    assert.deepEqual(found.map((f) => f.path), [], '取得中のファイルを消す一覧に載せた（消すと、取得が壊れる）');
   });
 
   test('古い llama-server は消すが、いま使っている版は残す', async () => {

@@ -1,10 +1,11 @@
 #!/bin/sh
 #
-# commit の手前で、言葉と記録の試験だけを回す（1 秒ほど）。
+# commit の手前で、言葉と記録と読めない失敗の数の試験だけを回す（1 秒ほど）。
 #
 # 言葉の試験（wording）と記録の目次の試験（decisions）で落ちたまま commit したことが二度ある。
 # どちらも試験の出力を絞ってから次の命令へつないだので、落ちたことが止める側へ届かなかった。
 # 気づくのは push の手前（12 分）で、そこまで落ちた commit が積み上がる。
+# 読めない失敗を黙って空にする書き方の数（lenient-reads）も、足したまま一覧を直さずに push の手前で止まったことが二度ある。
 # 重い試験は pre-push に任せ、ここは速いものだけ。
 set -e
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -18,10 +19,10 @@ fi
 unset NODE_TEST_CONTEXT
 # npm test と同じ走らせ役を通す（Node の版によって型を剥がす指定が要る。直に呼ぶと 22.18 より前で必ず落ちる）。
 log=$(mktemp)
-if ! node scripts/run-tests.mjs wording decisions >"$log" 2>&1; then
+if ! node scripts/run-tests.mjs wording decisions lenient-reads >"$log" 2>&1; then
   tail -n 20 "$log" >&2
   rm -f "$log"
-  echo "== commit を止めました: test/wording.test.ts か test/decisions.test.ts が落ちています" >&2
+  echo "== commit を止めました: test/wording.test.ts・test/decisions.test.ts・test/lenient-reads.test.ts のどれかが落ちています" >&2
   exit 1
 fi
 rm -f "$log"

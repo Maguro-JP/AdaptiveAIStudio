@@ -18,6 +18,9 @@ import {
 
 export type KvCacheType = 'f16' | 'q8_0' | 'q4_0';
 
+/** 計画の量子化の名前。量子化していないファイル（F16・F32）はその名前で呼ぶ（Q8_0 と呼ぶと、別物に見える）。 */
+export type PlanQuant = QuantName | 'F16' | 'F32';
+
 const KV_ELEMENT_BYTES: Record<KvCacheType, number> = { f16: 2, q8_0: 1, q4_0: 0.55 };
 
 /** VRAMのうち、OS・表示・CUDAコンテキストが使う分。 */
@@ -36,6 +39,11 @@ export interface PlanRequest {
   minContext?: number;
   /** 量子化を下げることを許すか。既定 true（最後の手段として） */
   allowQuantDowngrade?: boolean;
+  /**
+   * 同時に抱える会話の数（llama-server の `--parallel`）。KVキャッシュはこの数ぶん要る。既定 1。
+   * `contextLength` は1つの会話あたりの長さのまま返す。
+   */
+  sequences?: number;
 }
 
 export type Placement = 'fullGpu' | 'partialOffload' | 'cpuOnly' | 'diskMmap';
@@ -43,7 +51,7 @@ export type Placement = 'fullGpu' | 'partialOffload' | 'cpuOnly' | 'diskMmap';
 export interface Plan {
   modelId: string;
   placement: Placement;
-  quant: QuantName;
+  quant: PlanQuant;
   gpuLayers: number;
   totalLayers: number;
   contextLength: number;
@@ -64,11 +72,16 @@ export function planExecution(req: PlanRequest): Plan {
   const desired = req.desiredContext ?? 8192;
   const minContext = req.minContext ?? 2048;
   const allowDowngrade = req.allowQuantDowngrade ?? true;
+  const sequences = Math.max(1, Math.floor(req.sequences ?? 1));
 
-  const startQuant = nearestQuant(req.model.bitsPerWeight);
-  const quants = allowDowngrade
-    ? QUANT_LADDER.slice(QUANT_LADDER.indexOf(startQuant))
+  // ファイルそのものの重さ（F16 なら 16）。いちばん近い段の名前で呼ぶが、重さは段の値に丸めない
+  // （丸めると、F16 を Q8_0 の半分の重さで見積もり、GPU に載せすぎて落ちる）。
+  const realBits = req.model.bitsPerWeight;
+  const startQuant = fileQuant(realBits);
+  const quants: PlanQuant[] = allowDowngrade
+    ? [startQuant, ...QUANT_LADDER.filter((q) => q !== startQuant && QUANT_BITS[q] < realBits)]
     : [startQuant];
+  const bitsOf = (quant: PlanQuant): number => quant === startQuant ? realBits : QUANT_BITS[quant as QuantName];
 
   for (const quant of quants) {
     // 劣化の記録は採用した設定のぶんだけにする。
@@ -76,12 +89,12 @@ export function planExecution(req: PlanRequest): Plan {
     const degradations: string[] = quant === startQuant
       ? []
       : [`量子化を ${startQuant} → ${quant} に下げた`];
-    const model = { ...req.model, bitsPerWeight: QUANT_BITS[quant] };
+    const model = { ...req.model, bitsPerWeight: bitsOf(quant) };
 
-    // context と KV量子化を、品質が落ちにくい順に試す
-    for (const kvType of ['f16', 'q8_0', 'q4_0'] as KvCacheType[]) {
-      for (const context of contextCandidates(desired, minContext)) {
-        const fit = tryFit(model, machine, context, kvType);
+    // context と KV量子化を、品質が落ちにくい順に試す。KVの量子化（ほぼ落ちない）を使い切ってから context を縮める
+    for (const context of contextCandidates(desired, minContext)) {
+      for (const kvType of ['f16', 'q8_0', 'q4_0'] as KvCacheType[]) {
+        const fit = tryFit(model, machine, context, kvType, sequences);
         if (!fit) continue;
 
         const notes = [...degradations];
@@ -100,7 +113,7 @@ export function planExecution(req: PlanRequest): Plan {
   // ここまで来たら、RAMにも載らない。ディスクから mmap で実行する。
   const quant = quants.at(-1)!;
   const finalDegradations = quant === startQuant ? [] : [`量子化を ${startQuant} → ${quant} に下げた`];
-  const model = { ...req.model, bitsPerWeight: QUANT_BITS[quant] };
+  const model = { ...req.model, bitsPerWeight: bitsOf(quant) };
   const context = minContext;
   const tps = diskTps(model, machine);
   return {
@@ -128,11 +141,11 @@ interface Fit {
 
 /** 指定条件で載るかを判定し、載るなら最大のGPU層数を返す。 */
 function tryFit(
-  model: ModelSpec, machine: MachineSpec, context: number, kvType: KvCacheType,
+  model: ModelSpec, machine: MachineSpec, context: number, kvType: KvCacheType, sequences: number,
 ): Fit | undefined {
   const total = weightBytes(model);
   const perLayer = bytesPerLayer(model);
-  const kv = kvCacheBytes(model, context, KV_ELEMENT_BYTES[kvType]);
+  const kv = kvCacheBytes(model, context, KV_ELEMENT_BYTES[kvType]) * sequences;
   const ramBudget = machine.ramBytes - RAM_RESERVED;
   const vramBudget = machine.vramBytes - VRAM_RESERVED;
 
@@ -159,7 +172,7 @@ function tryFit(
 }
 
 function finish(
-  model: ModelSpec, machine: MachineSpec, quant: QuantName,
+  model: ModelSpec, machine: MachineSpec, quant: PlanQuant,
   fit: Fit, context: number, kvType: KvCacheType, degradations: string[],
 ): Plan {
   const placement: Placement =
@@ -228,6 +241,13 @@ function contextCandidates(desired: number, min: number): number[] {
   return out;
 }
 
+/** ファイルの重さから、量子化の名前を決める。Q8_0（8.5）より明らかに重いものは量子化していない形として呼ぶ。 */
+function fileQuant(bits: number): PlanQuant {
+  if (bits >= 24) return 'F32';
+  if (bits >= 12) return 'F16';
+  return nearestQuant(bits);
+}
+
 function nearestQuant(bits: number): QuantName {
   let best: QuantName = 'Q4_K_M';
   let diff = Infinity;
@@ -239,7 +259,7 @@ function nearestQuant(bits: number): QuantName {
 }
 
 function summarize(
-  placement: Placement, id: string, quant: QuantName,
+  placement: Placement, id: string, quant: PlanQuant,
   gpuLayers: number, layers: number, context: number, tps: number,
 ): string {
   const where = {

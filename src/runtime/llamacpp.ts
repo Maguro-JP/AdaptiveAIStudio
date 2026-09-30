@@ -157,6 +157,10 @@ export class LlamaCppRuntime implements LocalRuntime {
       model: spec,
       machine: this.#opts.machine,
       desiredContext: this.#opts.desiredContext,
+      // `--ctx-size` は会話の数ぶん確保するので、KVもその数ぶんで見積もる
+      sequences: this.#opts.parallel,
+      // 読むのはファイルそのもの。量子化を下げた計画にしても、下げたファイルは無い
+      allowQuantDowngrade: false,
     });
   }
 
