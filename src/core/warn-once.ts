@@ -18,9 +18,10 @@ export class WarnOnce {
   }
 
   fail(text: string): void {
-    if (this.#failing) return;
+    // 言う先がまだ無いときは「言った」ことにしない（繋いだ後の失敗で言えるように）
+    if (this.#failing || !this.#say) return;
     this.#failing = true;
-    this.#say?.(text);
+    this.#say(text);
   }
 }
 

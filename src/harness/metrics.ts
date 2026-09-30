@@ -194,7 +194,8 @@ export class HarnessMetrics {
       cleanTasks: this.#cleanTasks,
     }, null, 2), (v) => this.#absorb(v)).catch(() => false);
     if (saved) this.#warn.ok();
-    else this.#warn.fail(`ハーネスの測った数を残せませんでした（${path}）。規則ごとの止めた回数が、立ち上げ直すと前の分から数え直しになります`);
+    // false は二通り: 書けなかった／起動のときに読めなかったファイルがまだ読めない（前の数を消さないよう、わざと書かない）
+    else this.#warn.fail(`ハーネスの測った数を残せませんでした（${path}。書けないか、読めないので上書きを見合わせています）。ファイルに入っている前の数は消していませんが、この起動で数えた分は入りません`);
   }
 
   /** 残せなかったことを言う先。 */

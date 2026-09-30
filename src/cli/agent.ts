@@ -171,7 +171,7 @@ async function main(): Promise<void> {
     ledger.markAnnounced();
   }
   if (!await ledger.save()) {
-    console.log(c.yellow(`  人員の名簿を残せませんでした（${join(stateDir(), 'roles-ledger.json')}）。同じ知らせが次の起動でもう一度出ます\n`));
+    console.log(c.yellow(`  人員の名簿を残せませんでした（${join(stateDir(), 'roles-ledger.json')}。書けないか、読めないので上書きを見合わせています）。役職の変わった知らせが、次の起動でもう一度出ることがあります\n`));
   }
 
   const panelCfg = config.panel ?? {};

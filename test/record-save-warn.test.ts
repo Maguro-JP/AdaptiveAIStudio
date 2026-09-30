@@ -25,7 +25,8 @@ async function blocked(): Promise<{ dir: string; path: (name: string) => string;
     dir,
     path: (name) => join(dir, name),
     unblock: async () => { await rm(dir, { force: true }); await mkdir(dir); },
-    reblock: async () => { await rm(dir, { recursive: true, force: true }); await writeFile(dir, 'ここはフォルダではない'); },
+    // Windows でウイルス対策が付け替えた直後のファイルを掴んでも落ちないよう、待って消し直す
+    reblock: async () => { await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); await writeFile(dir, 'ここはフォルダではない'); },
   };
 }
 
@@ -70,6 +71,16 @@ describe('記録を残せなかったことを言う', () => {
     assert.equal(await ledger.save(), false);
     await b.unblock();
     assert.equal(await ledger.save(), true);
+  });
+
+  test('言う先を繋ぐ前の失敗は「言った」ことにせず、繋いだ後の失敗で言う', async () => {
+    const b = await blocked();
+    const warned: string[] = [];
+    const audit = new AuditLog(b.path('audit.jsonl'));
+    await audit.record({ tool: 'read_file', outcome: 'allowed' });
+    audit.warnTo((t) => warned.push(t));
+    await audit.record({ tool: 'read_file', outcome: 'allowed' });
+    assert.equal(warned.length, 1, `繋いだ後の失敗を言わなかった: ${JSON.stringify(warned)}`);
   });
 
   test('書き先を持たない記録は、書かないので何も言わない', async () => {
