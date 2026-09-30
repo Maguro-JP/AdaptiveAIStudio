@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { realpathSync } from 'node:fs';
 import { tempDir } from './tmp.ts';
 import { until } from './until.ts';
-import { PreviewServer, inject, listing, RELOAD_SNIPPET } from '../src/ui/preview.ts';
+import { PreviewServer, inject, listing, RELOAD_SNIPPET, hiddenRequest } from '../src/ui/preview.ts';
 
 async function site(files: Record<string, string>): Promise<string> {
   const root = await tempDir('aas-preview-');
@@ -305,6 +305,25 @@ describe('鍵や記録は、見る窓から出さない', () => {
       const r = await fetch(`${url}${path}`);
       assert.equal(r.status, 403, `出てしまった: ${path}`);
     }
+  });
+
+  test('\\ で区切った隠しファイルも断る（%5C を使うと、Windows では道の区切りになる）', async () => {
+    // Windows の実機では確かめていない。判定の関数と、Linux で要求が断られることを見る
+    assert.equal(hiddenRequest('x\\..\\.env'), true);
+    assert.equal(hiddenRequest('sub\\.git\\config'), true);
+    assert.equal(hiddenRequest('sub/a.txt'), false);
+    assert.equal(hiddenRequest('./a.txt'), false);
+    const url = await serve(await site({ '.env': 'SECRET=1', 'index.html': 'x' }));
+    const r = await fetch(`${url}x%5C..%5C.env`);
+    assert.equal(r.status, 403, '\\ で区切った .env を断っていない');
+  });
+
+  test('別の名前から辿った先が隠しファイルなら断る（Windows の短い名前 ENV~1 と同じ形）', { skip: process.platform === 'win32' && 'リンクを作るのに権限が要る' }, async () => {
+    const root = await site({ '.env': 'SECRET=1', 'index.html': 'x' });
+    await symlink(join(root, '.env'), join(root, 'plain'));
+    const url = await serve(root);
+    const r = await fetch(`${url}plain`);
+    assert.equal(r.status, 403, `別の名前から .env の中身を出した: ${r.status}`);
   });
 
   test('ふつうの頁は出る（対）', async () => {

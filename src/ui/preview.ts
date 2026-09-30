@@ -12,7 +12,7 @@
  * 出すのは作業場の中だけ。`..` で外へは出られない。
  */
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFile, stat, readdir } from 'node:fs/promises';
+import { readFile, stat, readdir, realpath } from 'node:fs/promises';
 import { watch, realpathSync, type FSWatcher } from 'node:fs';
 import { join, extname, relative, sep } from 'node:path';
 import { safeResolve, realSafeResolve } from '../agent/tools/paths.ts';
@@ -269,7 +269,7 @@ export class PreviewServer {
     const wanted = decodeURIComponent(url.pathname).replace(/^\/+/, '');
     // 点で始まるもの（.env / .git / .ssh）は見せない。見る窓が要るのは
     // 書いた頁であって、鍵や記録ではない。
-    if (wanted.split('/').some((seg) => seg.startsWith('.') && seg !== '.' )) {
+    if (hiddenRequest(wanted)) {
       res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('点で始まるものは見せません');
       return;
@@ -281,6 +281,12 @@ export class PreviewServer {
       // 作業場の外。何があるかも言わない。
       res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('作業場の外は見せません');
+      return;
+    }
+    // 実体の名前でも見る。Windows の短い名前（`GIT~1`・`ENV~1`）は点で始まらないので上を抜けるが、実体は `.git`・`.env`
+    if (wanted !== '' && hiddenRequest(relative(await realpath(this.#opts.root).catch(() => this.#opts.root), abs))) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('点で始まるものは見せません');
       return;
     }
 
@@ -324,4 +330,15 @@ export class PreviewServer {
     res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' });
     res.end(data);
   }
+}
+
+/**
+ * 点で始まる区切り（`.env`・`.git`・`..`）を含む要求か。
+ *
+ * **`\` でも区切る。**`/` だけで切っていたので、`%5C`（`\`）を使った `x\..\.env` は一つの区切りに見えて通り、
+ * Windows では `\` が道の区切りなので、作業場の `.env` を見せていた。Linux では `\` は名前の一文字なので、
+ * `\` を含む名前も断ることになるが、プレビューで困ることはない（確かめたのは Linux だけ。Windows では確かめていない）。
+ */
+export function hiddenRequest(wanted: string): boolean {
+  return wanted.split(/[\\/]/).some((seg) => seg.startsWith('.') && seg !== '.');
 }
