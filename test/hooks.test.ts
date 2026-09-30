@@ -76,9 +76,12 @@ const inBundle = existsSync(join(import.meta.dirname, '..', '..', '.portable'))
   || !existsSync(join(import.meta.dirname, '..', '.git'));
 const sourceOnly = inBundle ? { skip: 'フックは作業場にしか無いので、bundle では確かめられません' } : {};
 
+const PASS = "import { test } from 'node:test';\ntest('ok', () => {});\n";
+const FAILING = "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('ng', () => { assert.fail('x'); });\n";
+
 describe('commit の手前のフック', () => {
   /** 本物の pre-commit を写し、試験の二つを作り物にした一時フォルダで走らせる。 */
-  async function run(wording: string): Promise<number> {
+  async function run(wording: string, lenient = PASS): Promise<number> {
     const root = await tempDir('aas-pre-commit-');
     await mkdir(join(root, HOOKS_PATH), { recursive: true });
     await mkdir(join(root, 'test'), { recursive: true });
@@ -87,6 +90,7 @@ describe('commit の手前のフック', () => {
     await copyFile(join(import.meta.dirname, '..', 'scripts', 'run-tests.mjs'), join(root, 'scripts', 'run-tests.mjs'));
     await writeFile(join(root, 'test', 'wording.test.ts'), wording);
     await writeFile(join(root, 'test', 'decisions.test.ts'), "import { test } from 'node:test';\ntest('ok', () => {});\n");
+    await writeFile(join(root, 'test', 'lenient-reads.test.ts'), lenient);
     try {
       execFileSync('sh', [join(root, HOOKS_PATH, 'pre-commit')], { cwd: root, stdio: 'ignore' });
       return 0;
@@ -96,10 +100,12 @@ describe('commit の手前のフック', () => {
   }
 
   test('言葉の試験が落ちていれば止め、通っていれば通す', sourceOnly, async () => {
-    const pass = "import { test } from 'node:test';\ntest('ok', () => {});\n";
-    const failing = "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\ntest('ng', () => { assert.fail('x'); });\n";
-    assert.equal(await run(pass), 0, '通っているのに止めた');
-    assert.notEqual(await run(failing), 0, '落ちているのに通した');
+    assert.equal(await run(PASS), 0, '通っているのに止めた');
+    assert.notEqual(await run(FAILING), 0, '落ちているのに通した');
+  });
+
+  test('読めない失敗の数の試験が落ちていても止める', sourceOnly, async () => {
+    assert.notEqual(await run(PASS, FAILING), 0, 'lenient-reads が落ちているのに通した');
   });
 });
 

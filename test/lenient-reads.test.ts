@@ -21,7 +21,7 @@ const root = join(import.meta.dirname, '..');
 
 /** 黙って空にしてよいファイルと、その数・理由。 */
 const ALLOWED: Record<string, { count: number; why: string }> = {
-  'src/runtime/cleanup.ts': { count: 18, why: '片づけの候補探しと大きさ。読めないものは候補に入らない。ただし名前だけで候補になるもの（古い llama-server・.part）は、大きさを取れないと 0 と数える（消す量を少なく言う）' },
+  'src/runtime/cleanup.ts': { count: 19, why: '片づけの候補探しと大きさ。読めないものは候補に入らない（.part は新しさを取れなければ候補にしない＝消さない側）。ただし名前だけで候補になるもの（古い llama-server）は、大きさを取れないと 0 と数える（消す量を少なく言う）' },
   'src/cli/report.ts': { count: 7, why: '報告に載せるだけ。読めなければ載らない' },
   'src/ui/preview.ts': { count: 4, why: '画面に見せるだけ。読めなければ見せられないと出す（index.html が見られなければ一覧を見せる）' },
   'src/core/undo.ts': { count: 2, why: '戻した差分を見せる文字と更新時刻。更新時刻が取れないものは「挟まっているかもしれない」として止める側（#115）' },

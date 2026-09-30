@@ -279,6 +279,7 @@
 - 実行の計画を、実際に読むファイルと実際に確保する量で立てる
 - 取っている最中のモデルを、片づけで消さない
 - formerly で改名した役職を、名簿から消えたと言い続けない
+- 読めない失敗の数の試験も、commit の手前で回す
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10717,3 +10718,13 @@ llama-server に渡す計画（`planExecution`）が、実物と違う前提で�
 - 試験: `test/ledger.test.ts`（改名した回にも、同じ名簿の次の回にも前の名前について何も言わず、改名した先を消せばそれだけを言う）。
   直す前の版で落ちることを見た
 触る場所: `src/roles/ledger.ts` の `sync`
+
+## 2026-09-30  読めない失敗の数の試験も、commit の手前で回す
+
+読めない失敗を黙って空にする書き方（`.catch(() => undefined)` など）を足して、一覧（`test/lenient-reads.test.ts` の `ALLOWED`）を
+直さないまま commit し、push の手前（20 分）で止まったことが今日二度ある。この試験はファイルを読んで数えるだけで速い。
+
+- pre-commit で `wording`・`decisions` と一緒に `lenient-reads` も回す
+- 試験: `test/hooks.test.ts`（lenient-reads が落ちていれば commit を止める）。前のフックで落ちることを見た
+触る場所: `.githooks/pre-commit`
+
