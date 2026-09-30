@@ -404,7 +404,8 @@ function normalize(root: string, path: string): string {
 const TEST_FILE = /(\.|_|^)(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.go$|(^|\/)tests?\//i;
 
 export function isTestFile(path: string): boolean {
-  return TEST_FILE.test(path);
+  // `tests\test_api.py` のような `\` 区切りの道も見る（`/` だけを見ていたので、試験を守る規則を素通りした）
+  return TEST_FILE.test(path.replace(/\\/g, '/'));
 }
 
 const CASE_PATTERNS = [

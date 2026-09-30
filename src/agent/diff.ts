@@ -89,9 +89,14 @@ function diffLines(a: string[], b: string[]): Op[] {
 
 export function diffStat(diff: string): { added: number; removed: number } {
   let added = 0, removed = 0;
+  // 見出し（`--- a/…`・`+++ b/…`）は最初の塊（`@@`）の前にだけ在る。塊の中で `---` や `+++` で始まる行は、中身が `--`
+  // （SQL の注釈など）や `++` で始まる行の出入り。塊の中まで見出しとして飛ばしていたので、その行を数えていなかった
+  let inHunk = false;
   for (const line of diff.split('\n')) {
-    if (line.startsWith('+') && !line.startsWith('+++')) added += 1;
-    else if (line.startsWith('-') && !line.startsWith('---')) removed += 1;
+    if (line.startsWith('@@')) { inHunk = true; continue; }
+    if (!inHunk) continue;
+    if (line.startsWith('+')) added += 1;
+    else if (line.startsWith('-')) removed += 1;
   }
   return { added, removed };
 }
