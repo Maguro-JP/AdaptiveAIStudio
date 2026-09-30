@@ -692,3 +692,36 @@ describe('まとめて当てる', () => {
     assert.ok(!/つ目/.test(r.content), `一つなのに番号を言っている: ${r.content}`);
   });
 });
+
+describe('頭の BOM と、行の途中の本物の出現', () => {
+  /**
+   * 一行目から始まる複数行の `find` は、BOM があると「行の頭から」と見なされず緩い当てに回り、一行目を BOM の無い行で置き換えていた。
+   * バッチファイルは BOM が無いと cmd.exe が CP932 として読むので、それだけで壊れる。
+   */
+  test('一行目から当てても BOM を残す（ファイルに書くところまで）', async () => {
+    const { root, path } = await fixture('﻿@echo off\r\nsetlocal\r\n:label\r\n', 'run.cmd');
+    await readFileTool.run({ path }, await ctxAt(root));
+    const r = await editFileTool.run({ path, find: '@echo off\nsetlocal', replace: '@echo off\nsetlocal enabledelayedexpansion' }, await ctxAt(root));
+    assert.equal(r.isError, undefined, r.content);
+    const bytes = await readFile(join(root, path));
+    assert.deepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'BOM が消えた');
+    assert.equal(bytes.toString('utf8'), '﻿@echo off\r\nsetlocal enabledelayedexpansion\r\n:label\r\n');
+  });
+
+  test('行の途中の本物の出現も数える（all なら全部替え、all でなければ何箇所にも当たると言う）', () => {
+    const before = 'x = f(a,\n  b)\nf(a,\n  b)\n';
+    const every = applyEdit(before, 'f(a,\n  b)', 'g(a, b)', true);
+    assert.equal(every.text, 'x = g(a, b)\ng(a, b)\n', '行の途中の出現を替え残した');
+    const one = applyEdit(before, 'f(a,\n  b)', 'g(a, b)', false);
+    assert.equal(one.hits, 2, '二箇所あるのに一つだけ黙って替えた');
+    assert.equal(one.text, before);
+  });
+
+  test('前が字下げだけの行の途中の当たりは、今までどおり数えない（対）', () => {
+    // 行の頭からの当たり（0）と、字下げの後ろからの当たり（字下げを落とした find が一致しただけ）。後ろの方は別の出現にしない
+    const before = '* a\n  * b\n  * a\n  * b\n';
+    const got = applyEdit(before, '* a\n  * b', 'X', false);
+    assert.equal(got.hits, 1, `字下げだけの当たりを別の出現として数えた: ${got.hits}`);
+    assert.equal(got.text, 'X\n  * a\n  * b\n');
+  });
+});
