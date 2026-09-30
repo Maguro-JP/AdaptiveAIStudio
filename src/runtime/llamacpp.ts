@@ -20,6 +20,21 @@ import { toModelSpec } from './gguf-spec.ts';
 import type { MachineSpec, ModelSpec } from './spec.ts';
 import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.ts';
 import { lineReader } from '../core/text.ts';
+import { fileURLToPath } from 'node:url';
+
+/** llama-server を付き添い越しに起こすか（Windows 以外）。 */
+const GUARDED = process.platform !== 'win32';
+const GUARD = fileURLToPath(new URL('./llama-guard.ts', import.meta.url));
+
+/**
+ * 止まらないものを落とす。付き添い越しなら、付き添いのグループごと落とす（付き添いだけ落とすと、llama-server が親無しで残る）。
+ */
+function killHard(child: ChildProcess): void {
+  if (GUARDED && child.pid !== undefined) {
+    try { process.kill(-child.pid, 'SIGKILL'); return; } catch { /* 既に居ない */ }
+  }
+  child.kill('SIGKILL');
+}
 
 export interface LlamaCppOptions {
   /** llama-server の実行パス */
@@ -166,10 +181,20 @@ export class LlamaCppRuntime implements LocalRuntime {
 
     // 共有ライブラリは実行ファイルの隣にある。探す場所を明示しないと、
     // 置いてあるのに「見つからない」で落ちる。
-    const child = spawn(this.#opts.command, args, {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: runtimeEnv(this.#opts.command),
-    });
+    //
+    // Windows 以外は付き添い（`llama-guard.ts`）を挟み、別のプロセスグループで起こす。端末の Ctrl-C（生成だけを止める合図）で
+    // llama-server まで落ちない。親が居なくなったら付き添いが止める（標準入力を開けたままにしておくのは、そのため）。
+    // Windows のコンソールの Ctrl-C は別の仕組みで届くので、ここでは変えない（確かめていない）
+    const child = GUARDED
+      ? spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', GUARD, this.#opts.command, ...args], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: runtimeEnv(this.#opts.command),
+        detached: true,
+      })
+      : spawn(this.#opts.command, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: runtimeEnv(this.#opts.command),
+      });
     let exited: { code: number | null; detail: string } | undefined;
     let stderrTail = '';
 
@@ -184,13 +209,19 @@ export class LlamaCppRuntime implements LocalRuntime {
     child.stdout?.on('data', capture(lineReader()));
     child.stderr?.on('data', capture(lineReader()));
     child.on('error', (e) => { exited = { code: null, detail: e.message }; });
-    child.on('exit', (code) => {
-      // 末尾5行では足りない。llama.cpp は原因が何であれ最後は
-      // 「failed to load model」で終わり、**決め手はその手前にある**。
-      // 実測では、ファイルが無い/GGUF でない を分ける行が6行目より前だった。
+    // 末尾5行では足りない。llama.cpp は原因が何であれ最後は
+    // 「failed to load model」で終わり、**決め手はその手前にある**。
+    // 実測では、ファイルが無い/GGUF でない を分ける行が6行目より前だった。
+    const settle = (code: number | null): void => {
       if (!exited) exited = { code, detail: stderrTail.split('\n').slice(-20).join('\n') };
+    };
+    child.on('exit', (code) => {
       this.#running.delete(ref);
+      // 出力は 'exit' の後に届くことがある（付き添いが書いた「起こせなかった理由」など）。管が閉じるのを待って見立てる。
+      // 閉じなければ（付き添いだけが落ち、llama-server が管を握ったまま）、少し待って今ある分で見立てる
+      setTimeout(() => settle(code), 1000).unref?.();
     });
+    child.on('close', (code) => settle(code));
 
     try {
       await this.#waitReady(baseUrl, () => exited, signal);
@@ -262,7 +293,7 @@ export class LlamaCppRuntime implements LocalRuntime {
     running.child.kill();
     // プロセスが消えるまで待つ。待たずに次を起動するとVRAMが足りなくなる。
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => { running.child.kill('SIGKILL'); resolve(); }, 5000);
+      const timer = setTimeout(() => { killHard(running.child); resolve(); }, 5000);
       running.child.once('exit', () => { clearTimeout(timer); resolve(); });
       if (running.child.exitCode !== null) { clearTimeout(timer); resolve(); }
     });

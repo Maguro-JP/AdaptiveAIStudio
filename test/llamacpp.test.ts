@@ -133,6 +133,15 @@ describe('起動と停止', () => {
     }
   });
 
+  test('実行ファイルが無いときは、その理由を添えて失敗する（番号だけにしない）', async () => {
+    const dir = await modelsDir(['a-7b.gguf']);
+    const rt = runtime(dir, { command: join(dir, 'no-such-llama-server'), commandArgs: [] }); started.push(rt);
+    await assert.rejects(
+      () => rtEnsure(rt, dir, 'a-7b.gguf'),
+      (e: Error) => /起動に失敗/.test(e.message) && /ENOENT/.test(e.message),
+    );
+  });
+
   test('起動が遅くても、応答可能になるまで待つ', async () => {
     const dir = await modelsDir(['a-7b.gguf']);
     const rt = runtime(dir); started.push(rt);
