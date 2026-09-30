@@ -99,6 +99,11 @@ describe('どんな行でも、読み進める（固まらない）', () => {
     }
   });
 
+  test('一行に閉じた囲いは一行の段落、4 つ以上の ` の囲いはコード', () => {
+    assert.deepEqual(parseBlocks('```a```b'), [{ type: 'para', text: '```a```b' }]);
+    assert.deepEqual(parseBlocks('````md\n```js\n````'), [{ type: 'code', lang: 'md', text: '```js', closed: true }]);
+  });
+
   test('CRLF でも、見出しは見出し、囲いの言語名は言語名になる', () => {
     assert.deepEqual(parseBlocks('# 題\r\n本文'), [{ type: 'heading', level: 1, text: '題' }, { type: 'para', text: '本文' }]);
     assert.deepEqual(parseBlocks('```python main.py\nx\n```'), [{ type: 'code', lang: 'python', text: 'x', closed: true }]);

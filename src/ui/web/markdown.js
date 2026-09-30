@@ -19,13 +19,13 @@ function parseBlocks(text) {
   while (i < lines.length) {
     const line = lines[i];
     // 言語名の後ろに何か書いてある囲い（```python main.py）も囲い。段落の側は ``` で始まる行を切れ目とみなすので、揃える
-    const fence = /^\s*```\s*([^`\s]*)[^`]*$/.exec(line);
+    const fence = /^\s*````*\s*([^`\s]*)[^`]*$/.exec(line);
     if (fence) {
       const body = [];
       i++;
       let closed = false;
       while (i < lines.length) {
-        if (/^\s*```\s*$/.test(lines[i])) { closed = true; i++; break; }
+        if (/^\s*````*\s*$/.test(lines[i])) { closed = true; i++; break; }
         body.push(lines[i]); i++;
       }
       blocks.push({ type: 'code', lang: fence[1] ?? '', text: body.join('\n'), closed });

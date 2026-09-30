@@ -98,10 +98,12 @@ export async function findModel(modelsDir: string, quant: string, repo: string):
     // 語ごとに見る。文字列として含むかで見ていたので、`4b` が `14b` に、`qwen3` が `qwen3.5` に当たり、
     // 別のモデルを「もうある」として取らなかった
     const wanted = stem.split(/[-_]/).filter((w) => w.length > 0);
+    const q = quant.toLowerCase();
     const hit = names.find((n) => {
       const lower = n.toLowerCase();
-      if (!lower.endsWith('.gguf') || !lower.includes(quant.toLowerCase())) return false;
-      const words = new Set(lower.replace(/\.gguf$/, '').split(/[-_]/));
+      if (!lower.endsWith('.gguf') || !lower.includes(q)) return false;
+      // 量子化の名前は先に外す（`mistral-7b-instruct-v0.2.q4_k_m` のように . で繋がると、`v0.2.q4` が一語になる）
+      const words = new Set(lower.replace(/\.gguf$/, '').replace(q, '').replace(/[-_.]+$/, '').split(/[-_]/));
       return wanted.every((w) => words.has(w));
     });
     return hit ? join(modelsDir, hit) : undefined;

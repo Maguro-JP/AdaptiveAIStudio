@@ -510,6 +510,13 @@ describe('置いてあるかを、名前の語で見る', () => {
     assert.equal(await findModel(modelsDir, 'q4_k_m', 'unsloth/Qwen3-4B-GGUF'), join(modelsDir, 'Qwen3-4B-Q4_K_M.gguf'));
     assert.equal(await findModel(modelsDir, 'q4_k_m', 'unsloth/Qwen3.5-4B-GGUF'), join(modelsDir, 'Qwen3.5-4B-Q4_K_M.gguf'));
   });
+
+  test('量子化の名前が . で繋がったファイルも見つける（取り直さない）', async () => {
+    const modelsDir = await tempDir('aas-findmodel-dot-');
+    await writeFile(join(modelsDir, 'mistral-7b-instruct-v0.2.Q4_K_M.gguf'), 'GGUF');
+    assert.equal(await findModel(modelsDir, 'q4_k_m', 'TheBloke/Mistral-7B-Instruct-v0.2-GGUF'),
+      join(modelsDir, 'mistral-7b-instruct-v0.2.Q4_K_M.gguf'));
+  });
 });
 
 describe('命令行の --quant', () => {

@@ -148,6 +148,11 @@ describe('用意する道具', () => {
     const work = /^set "WORK=([^"]*)"/m.exec(raw)?.[1];
     assert.ok(work, 'WORK を決める行が無い');
     assert.equal(/^%DEST%[\\/]/i.test(work!), false, `材料を出力先の中に置いている: ${work}`);
+    // 末尾に \\ を付けて渡されても、中に入らない（外す行が WORK より前にある）
+    const trim = raw.indexOf('set "DEST=%DEST:~0,-1%"');
+    assert.ok(trim >= 0 && trim < raw.indexOf('set "WORK='), '出力先の末尾の \\ を外していない');
+    // 入れ直しでは data を残すよう頼む
+    assert.match(raw, /bundle\.mjs"[^\r\n]*--keep-data/, 'bundle に data を残すよう頼んでいない');
   });
 
   test('用意用は、git も npm も要求しない', sourceOnly, async () => {
@@ -705,10 +710,13 @@ describe('bundle を組み直すとき', () => {
     await mkdir(join(out, 'app'), { recursive: true });
     await writeFile(join(out, 'app', 'stale.txt'), '前に組んだ残り');
     const { bundle } = await import('../scripts/bundle.mjs');
-    await bundle({ out, srcRoot: installRoot(), version: 'test-rebundle' });
+    await bundle({ out, srcRoot: installRoot(), version: 'test-rebundle', keepData: true });
     assert.equal(await readFile(join(out, 'data', 'models', 'keep.gguf'), 'utf8'), 'GGUF', '組み直したら data が消えた');
     assert.equal(existsSync(join(out, 'app', 'stale.txt')), false, '前に組んだものが残っている');
     assert.ok(existsSync(join(out, 'AdaptiveAIStudio.cmd')));
+    // 頼まれなければ残さない（開発者の手元で組み直した bundle に、その人の会話やモデルを載せて配らない）
+    await bundle({ out, srcRoot: installRoot(), version: 'test-rebundle' });
+    assert.equal(existsSync(join(out, 'data')), false, '頼まれていないのに data を残した');
   });
 
   test('元が出力先の中にあれば組まずに止め、元を消さない', async () => {
