@@ -215,10 +215,13 @@ export const readBeforeWrite: Rule = {
     /** 一部だけを読んだ呼び出しか。 */
     const partial = (c: ToolCall): boolean => hasArg(c, 'offset') || hasArg(c, 'limit');
     const wholeNeeded = call.name === 'write_file';
+    // 前に書いたことも「見た」に数える。ただし全文を置き換えるときは、前に全文を書いた（write_file）ときだけ。edit_file は当てた所しか
+    // 知らない（失敗して何も書いていないこともある）。数えていたので、一部だけ読んで edit_file を一度（失敗でも）挟むと、全文の
+    // write_file が通り、読んでいない行を消していた
     const sawIt = ctx.history.some((c) =>
       (c.name === 'read_file' && argString(c, 'path') === path
         && !(wholeNeeded && partial(c)))
-      || (isWriteTool(c.name) && argString(c, 'path') === path));
+      || (isWriteTool(c.name) && argString(c, 'path') === path && (!wholeNeeded || c.name === 'write_file')));
     if (sawIt) return allow;
 
     const partly = ctx.history.some((c) =>

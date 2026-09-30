@@ -178,6 +178,20 @@ describe('規則: 読んでから書く', () => {
     assert.notEqual(r.isError, true);
   });
 
+  test('一部だけ読んで edit_file を挟んでも、全文の write_file は通さない（読んでいない行を消さない）', async () => {
+    const root = await project({ 'a.ts': 'line1\nline2\nline3\n' });
+    const h = harness([readBeforeWrite]);
+    const read = h.wrap(readFileTool, () => '');
+    const edit = h.wrap(editFileTool, () => '');
+    const write = h.wrap(writeFileTool, () => '');
+    await read.run({ path: 'a.ts', limit: 1 }, ctx(root));
+    // 当たらない edit_file（失敗して何も書かない）
+    await edit.run({ path: 'a.ts', find: 'nope', replace: 'x' }, ctx(root));
+    const r = await write.run({ path: 'a.ts', content: 'line1\n' }, ctx(root));
+    assert.equal(r.isError, true, `一部しか読んでいないのに全文で上書きできた: ${r.content}`);
+    assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'line1\nline2\nline3\n');
+  });
+
   test('新規作成は読まずに通す', async () => {
     const root = await project();
     const h = harness([readBeforeWrite]);
