@@ -176,6 +176,11 @@ export interface UiServerOptions {
    * 別の所がファイルを書き換える形を作るため。本物では割り込みの隙間が短く、確実には作れない）。
    */
   afterHandLock?: () => Promise<void>;
+  /**
+   * 更新を見る・取り込む場所（製品が入っている場所）。既定は `installRoot()`。試験で渡す（渡さないと、試験を走らせている
+   * リポジトリそのものに git fetch がかかり、ネットワークの有無で振る舞いが変わる）。
+   */
+  updateRoot?: string;
   config: AasConfig;
   port?: number;
   host?: string;
@@ -1483,14 +1488,16 @@ export class UiServer {
 
     if (path === '/api/update' && req.method === 'GET') {
       // 新しい版が出ていないか見るだけ。**セッションは要らない。**
-      return send(res, 200, await checkUpdate(this.#workRoot()));
+      // 見るのは製品が入っている場所。作業場（利用者のプロジェクト）を見ていたので、その上流の変更を「製品の更新」として出していた
+      return send(res, 200, await checkUpdate(this.#opts.updateRoot ?? installRoot()));
     }
 
     if (path === '/api/update' && req.method === 'POST') {
       const session = await this.session();
       // 作業中に足元のコードを入れ替えない。
       if (this.#busyNow(session)) return send(res, 409, { error: 'いま作業中です。終わってから更新してください' });
-      const result = await applyUpdate(session.root);
+      // 早送りするのも製品が入っている場所（作業場を早送りすると、利用者のブランチが動き、製品は新しくならない）
+      const result = await applyUpdate(this.#opts.updateRoot ?? installRoot());
       return send(res, result.ok ? 200 : 409, result);
     }
 

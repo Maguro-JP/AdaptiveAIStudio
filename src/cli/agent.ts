@@ -5,7 +5,7 @@
  * 何時間かかってもよい。打ち切るのは「進捗が無いとき」だけ。
  */
 import { findCodeTool, findSymbolTool } from '../agent/tools/find.ts';
-import { defaultWorkRoot } from '../core/home.ts';
+import { defaultWorkRoot, installRoot } from '../core/home.ts';
 import { stdin, stdout } from 'node:process';
 import { LineSource } from './input.ts';
 import { resolve, join } from 'node:path';
@@ -585,14 +585,15 @@ async function main(): Promise<void> {
         continue;
       }
       if (line === '/update' || line === '/update!') {
-        const status = await checkUpdate(root);
+        // 製品が入っている場所を見る（root は作業場＝利用者のプロジェクト）
+        const status = await checkUpdate(installRoot());
         console.log(c.dim(`  ${describeUpdate(status)}\n`));
         if (!status.can) continue;
         if (line !== '/update!') {
           console.log(c.dim('  取り込むなら /update! を実行してください。\n'));
           continue;
         }
-        const r = await applyUpdate(root);
+        const r = await applyUpdate(installRoot());
         console.log(r.ok ? c.green(`  ${r.message}\n`) : c.red(`  ${r.message}\n`));
         continue;
       }

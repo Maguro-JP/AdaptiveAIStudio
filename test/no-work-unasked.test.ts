@@ -46,6 +46,8 @@ before(async () => {
 
   server = new UiServer({
     port: 0,
+    // 更新を見る場所もネットワークに出ない所にする（渡さないと、試験を走らせているリポジトリに git fetch がかかる）
+    updateRoot: dir,
     config: {
       ...DEFAULT_CONFIG,
       providers: [{
