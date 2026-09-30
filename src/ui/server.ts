@@ -52,7 +52,7 @@ import { buildRuntime } from '../core/runtime-setup.ts';
 import { MachineCache } from '../runtime/machine.ts';
 import { usesGguf, type LocalRuntime } from '../runtime/local-runtime.ts';
 import { realSafeResolve, safeResolve, isSymlink } from '../agent/tools/paths.ts';
-import { searchText, OPAQUE_LINE } from '../agent/tools/fs.ts';
+import { searchText, OPAQUE_LINE, toLf, matchLineEndings } from '../agent/tools/fs.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout, DEFAULT_LAYOUT_ID } from './layout.ts';
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
@@ -2028,7 +2028,16 @@ export class UiServer {
       if (typeof current !== 'string') {
         return send(res, 415, { error: `${currentBytes.includes(0) ? '文字のファイルではない' : 'utf8 ではない'}ので、行ごとには戻せません。「戻す」の一覧から丸ごと戻してください` });
       }
-      const after = revertLines(current, diff, picks);
+      /*
+       * **CRLF のファイルは LF に揃えて当て、元の改行に戻して書く。**AI の書き込みは差分を LF で作り、ファイルは CRLF のまま書く
+       * （`matchLineEndings`）。そのまま当てると行の末の `\r` で一致せず、Windows の普通のファイルでは塊ごとの「戻す」が必ず
+       * 「その後に中身が変わっている」で断られていた。そのまま当たるものは今までどおり（改行の混ざったファイルを揃え直さない）
+       */
+      let after = revertLines(current, diff, picks);
+      if (after === undefined && current.includes('\r\n')) {
+        const lf = revertLines(toLf(current), diff.replace(/\r(?=\n|$)/g, ''), picks);
+        if (lf !== undefined) after = lf === toLf(current) ? current : matchLineEndings(lf, current);
+      }
       if (after === undefined) {
         return send(res, 409, { error: 'その後に中身が変わっているので、この差分では戻せません（エディタで直してください）' });
       }

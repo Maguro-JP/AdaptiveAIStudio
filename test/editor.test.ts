@@ -164,6 +164,16 @@ describe('当てた変更を、塊ごと・行ごとに戻す', () => {
     assert.equal(r.status, 409);
     assert.equal(await readFile(join(work, 'a.txt'), 'utf8'), 'one\ntwo\n');
   });
+  test('CRLF のファイルでも、AI が書いた差分（LF）で塊ごとに戻す。改行は CRLF のまま', async () => {
+    // AI の書き込みは差分を LF で作り、ファイルは CRLF のまま書く。そのまま当てると行の末の \r で一致せず、必ず断っていた
+    const { unifiedDiff } = await import('../src/agent/diff.ts');
+    await writeFile(join(work, 'crlf.txt'), 'one\r\nTWO\r\nthree\r\n');
+    const diff = unifiedDiff('crlf.txt', 'one\ntwo\nthree\n', 'one\nTWO\nthree\n');
+    const r = await post('/api/revert', { path: 'crlf.txt', diff, picks: [{ hunk: 0 }] });
+    const j = await json(r);
+    assert.equal(r.status, 200, JSON.stringify(j));
+    assert.equal(await readFile(join(work, 'crlf.txt'), 'utf8'), 'one\r\ntwo\r\nthree\r\n');
+  });
   test('材料が足りなければ 400', async () => {
     assert.equal((await post('/api/revert', { path: 'a.txt' })).status, 400);
   });
