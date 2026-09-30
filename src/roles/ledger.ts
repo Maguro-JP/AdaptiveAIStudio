@@ -143,10 +143,15 @@ export class RoleLedger {
     }
 
     // 名簿から消えた役職。方針では消さないので、記録に残して気づけるようにする。
-    // 改名（formerly に載っている前の名前）は消えたのではない。方針どおりの形なので知らせない
+    // 改名（formerly に載っている前の名前）は消えたのではない。方針どおりの形なので知らせず、前の名前の記録は畳む
+    // （残すと、改名した先を後で本当に消したとき、前の名前まで消えたと言う）
     const renamedFrom = new Set(roles.flatMap((r) => r.formerly ?? []));
     for (const [id, snap] of this.#known) {
-      if (current.has(id) || renamedFrom.has(id)) continue;
+      if (current.has(id)) continue;
+      if (renamedFrom.has(id)) {
+        if (!this.#blind) this.#known.delete(id);
+        continue;
+      }
       changes.push({
         at: now, kind: 'succeeded', roleId: id, codename: snap.codename,
         detail: `${snap.codename} が名簿から消えています。役職は消さず、` +

@@ -77,6 +77,15 @@ describe('計画', () => {
     assert.equal(plan.degradations.some((d) => d.startsWith('量子化を')), false);
   });
 
+  test('中身が読めない F16 のファイルを、名前から Q8_0 の重さと推さない', async () => {
+    const dir = await modelsDir(['a-7b-f16.gguf', 'a-7b-bf16.gguf']);
+    for (const ref of ['a-7b-f16.gguf', 'a-7b-bf16.gguf']) {
+      const plan = runtime(dir).planFor(ref)!;
+      assert.equal(plan.quant, 'F16', ref);
+      assert.equal(inferSpec(ref.replace('.gguf', ''))!.bitsPerWeight, 16, ref);
+    }
+  });
+
   test('会話の数（parallel）ぶんの KV を見込んだ計画にする', async () => {
     const dir = await modelsDir(['a-7b.gguf']);
     const one = runtime(dir, { desiredContext: 32768 }).planFor('a-7b.gguf')!;

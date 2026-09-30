@@ -36,6 +36,9 @@ describe('変更の検出', () => {
     assert.equal(renamed.some((c) => c.roleId === 'scout'), false, JSON.stringify(renamed));
     assert.equal(renamed.some((c) => c.kind === 'renamed'), true);
     assert.deepEqual(l.sync(roster), [], '同じ名簿で、また何か言っている');
+    // 改名した先を本当に消したら、消えたと言うのはその一つだけ（前の名前まで言わない）
+    const gone = l.sync([]);
+    assert.deepEqual(gone.map((c) => c.roleId), ['pathfinder'], JSON.stringify(gone));
   });
 
   test('変わっていなければ何も記録しない', () => {

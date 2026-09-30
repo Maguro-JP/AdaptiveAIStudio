@@ -18,6 +18,9 @@ import {
 
 export type KvCacheType = 'f16' | 'q8_0' | 'q4_0';
 
+/** 計画の量子化の名前。量子化していないファイル（F16・F32）はその名前で呼ぶ（Q8_0 と呼ぶと、別物に見える）。 */
+export type PlanQuant = QuantName | 'F16' | 'F32';
+
 const KV_ELEMENT_BYTES: Record<KvCacheType, number> = { f16: 2, q8_0: 1, q4_0: 0.55 };
 
 /** VRAMのうち、OS・表示・CUDAコンテキストが使う分。 */
@@ -48,7 +51,7 @@ export type Placement = 'fullGpu' | 'partialOffload' | 'cpuOnly' | 'diskMmap';
 export interface Plan {
   modelId: string;
   placement: Placement;
-  quant: QuantName;
+  quant: PlanQuant;
   gpuLayers: number;
   totalLayers: number;
   contextLength: number;
@@ -74,11 +77,11 @@ export function planExecution(req: PlanRequest): Plan {
   // ファイルそのものの重さ（F16 なら 16）。いちばん近い段の名前で呼ぶが、重さは段の値に丸めない
   // （丸めると、F16 を Q8_0 の半分の重さで見積もり、GPU に載せすぎて落ちる）。
   const realBits = req.model.bitsPerWeight;
-  const startQuant = nearestQuant(realBits);
-  const quants = allowDowngrade
+  const startQuant = fileQuant(realBits);
+  const quants: PlanQuant[] = allowDowngrade
     ? [startQuant, ...QUANT_LADDER.filter((q) => q !== startQuant && QUANT_BITS[q] < realBits)]
     : [startQuant];
-  const bitsOf = (quant: QuantName): number => quant === startQuant ? realBits : QUANT_BITS[quant];
+  const bitsOf = (quant: PlanQuant): number => quant === startQuant ? realBits : QUANT_BITS[quant as QuantName];
 
   for (const quant of quants) {
     // 劣化の記録は採用した設定のぶんだけにする。
@@ -169,7 +172,7 @@ function tryFit(
 }
 
 function finish(
-  model: ModelSpec, machine: MachineSpec, quant: QuantName,
+  model: ModelSpec, machine: MachineSpec, quant: PlanQuant,
   fit: Fit, context: number, kvType: KvCacheType, degradations: string[],
 ): Plan {
   const placement: Placement =
@@ -238,6 +241,13 @@ function contextCandidates(desired: number, min: number): number[] {
   return out;
 }
 
+/** ファイルの重さから、量子化の名前を決める。Q8_0（8.5）より明らかに重いものは量子化していない形として呼ぶ。 */
+function fileQuant(bits: number): PlanQuant {
+  if (bits >= 24) return 'F32';
+  if (bits >= 12) return 'F16';
+  return nearestQuant(bits);
+}
+
 function nearestQuant(bits: number): QuantName {
   let best: QuantName = 'Q4_K_M';
   let diff = Infinity;
@@ -249,7 +259,7 @@ function nearestQuant(bits: number): QuantName {
 }
 
 function summarize(
-  placement: Placement, id: string, quant: QuantName,
+  placement: Placement, id: string, quant: PlanQuant,
   gpuLayers: number, layers: number, context: number, tps: number,
 ): string {
   const where = {

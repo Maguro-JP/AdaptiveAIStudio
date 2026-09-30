@@ -42,7 +42,10 @@ function inferLayers(paramsB: number): number {
 }
 
 function inferQuant(name: string): number {
-  if (/q8|f16|fp16/.test(name)) return QUANT_BITS.Q8_0;
+  // 量子化していないもの。Q8_0 の重さで数えると半分に見積もり、GPU に載せすぎる
+  if (/f32|fp32/.test(name)) return 32;
+  if (/f16|fp16|bf16/.test(name)) return 16;
+  if (/q8/.test(name)) return QUANT_BITS.Q8_0;
   if (/q6/.test(name)) return QUANT_BITS.Q6_K;
   if (/q5/.test(name)) return QUANT_BITS.Q5_K_M;
   if (/q3/.test(name)) return QUANT_BITS.Q3_K_M;

@@ -131,8 +131,9 @@ const KV_BYTES = { f16: 2, q8_0: 1, q4_0: 0.55 } as const;
 function gpuBytesReally(file: ModelSpec, p: ReturnType<typeof planExecution>, sequences = 1): number {
   if (p.gpuLayers === 0) return 0;
   // 量子化を下げた計画なら、下げた先の重さで数える
-  const model = p.degradations.some((d) => d.startsWith('量子化を')) ? { ...file, bitsPerWeight: QUANT_BITS[p.quant] } : file;
-  return p.gpuLayers * bytesPerLayer(model) + kvCacheBytes(model, p.contextLength, KV_BYTES[p.kvCacheType]) * sequences;
+  const model = p.degradations.some((d) => d.startsWith('量子化を')) ? { ...file, bitsPerWeight: QUANT_BITS[p.quant as keyof typeof QUANT_BITS] } : file;
+  // 400MB は推論の作業バッファ（プランナと同じ見込み）
+  return p.gpuLayers * bytesPerLayer(model) + kvCacheBytes(model, p.contextLength, KV_BYTES[p.kvCacheType]) * sequences + 400 * MB;
 }
 
 describe('計画は、実際に読むファイルと実際に確保する量で載る', () => {
@@ -144,6 +145,14 @@ describe('計画は、実際に読むファイルと実際に確保する量で�
       assert.ok(gpuBytesReally(f16, p) <= machine.vramBytes - 900 * MB,
         `${p.gpuLayers} 層を GPU に載せる計画だが、本当の重さでは ${(gpuBytesReally(f16, p) / GB).toFixed(1)}GB（allowQuantDowngrade=${allowQuantDowngrade}）`);
     }
+  });
+
+  test('F16 は F16 と呼び、下げるなら Q8_0 から下げる', () => {
+    assert.equal(planExecution({ model: f16, machine, allowQuantDowngrade: false }).quant, 'F16');
+    const tight: MachineSpec = { ...machine, vramBytes: 0, ramBytes: 4 * GB + weightBytes({ ...f16, bitsPerWeight: QUANT_BITS.Q8_0 }) + 1 * GB };
+    const p = planExecution({ model: f16, machine: tight });
+    assert.equal(p.quant, 'Q8_0', p.degradations.join(' / '));
+    assert.ok(p.degradations.includes('量子化を F16 → Q8_0 に下げた'), p.degradations.join(' / '));
   });
 
   test('量子化を下げないなら、読むファイルの重さのまま見積もる', () => {
