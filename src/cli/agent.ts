@@ -149,6 +149,9 @@ async function main(): Promise<void> {
       console.log(c.yellow(`    ⚠ ${d.rule}: ${d.reason ?? ''}`));
     }
   });
+  // 記録を残せなかったことを黙らない（続けて失敗している間は一度だけ）
+  harness.audit.warnTo((t) => console.log(c.yellow(`    ⚠ ${t}`)));
+  harness.metrics?.warnTo((t) => console.log(c.yellow(`    ⚠ ${t}`)));
 
   // 調査担当には書き込みを渡さない。権限が無ければ事故は起きない。
   const readOnlyTools = harness.wrapAll(
@@ -167,7 +170,9 @@ async function main(): Promise<void> {
     console.log(c.yellow(formatChanges(roleNews)) + '\n');
     ledger.markAnnounced();
   }
-  await ledger.save();
+  if (!await ledger.save()) {
+    console.log(c.yellow(`  人員の名簿を残せませんでした（${join(stateDir(), 'roles-ledger.json')}）。同じ知らせが次の起動でもう一度出ます\n`));
+  }
 
   const panelCfg = config.panel ?? {};
   const netCfg = config.network ?? {};

@@ -6,6 +6,7 @@
  */
 import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { WarnOnce, failCode } from '../core/warn-once.ts';
 
 export interface AuditEntry {
   at: string;
@@ -21,6 +22,7 @@ export interface AuditEntry {
 export class AuditLog {
   readonly #path?: string;
   readonly #entries: AuditEntry[] = [];
+  readonly #warn = new WarnOnce();
 
   constructor(path?: string) {
     this.#path = path;
@@ -33,9 +35,16 @@ export class AuditLog {
     try {
       await mkdir(dirname(this.#path), { recursive: true });
       await appendFile(this.#path, JSON.stringify(full) + '\n', 'utf8');
-    } catch {
-      // 記録に失敗しても本体は止めない
+      this.#warn.ok();
+    } catch (e) {
+      // 記録に失敗しても本体は止めない。ただし黙らない（続けて失敗している間は一度だけ言う）
+      this.#warn.fail(`監査の記録を残せませんでした（${failCode(e)}）。ハーネスが止めた・通した理由が、このあと ${this.#path} に残りません`);
     }
+  }
+
+  /** 残せなかったことを言う先。 */
+  warnTo(say: (text: string) => void): void {
+    this.#warn.to(say);
   }
 
   entries(): AuditEntry[] {

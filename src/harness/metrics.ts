@@ -14,6 +14,7 @@
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { loadJournal, saveJournal } from '../core/journal-file.ts';
+import { WarnOnce } from '../core/warn-once.ts';
 
 export interface RuleStat {
   rule: string;
@@ -58,6 +59,7 @@ export class HarnessMetrics {
    * 別の依頼の結末が、その拒否の良し悪しを決めてしまう。
    */
   #open = new Map<string, string[]>();
+  readonly #warn = new WarnOnce();
   constructor(path?: string) {
     this.#path = path;
   }
@@ -180,16 +182,24 @@ export class HarnessMetrics {
   /**
    * 記録を書く。同じファイルへは一列に並べ、書く直前の数を写す（後から並んだ保存が、前の古い数で上書きされない）。
    * 一時ファイルへ書いてから置き換える。途中で切れても前の記録が残る。記録に失敗しても本体は止めない。
+   * ただし黙らない（続けて失敗している間は一度だけ言う）。
    */
   async save(): Promise<void> {
     const path = this.#path;
     if (!path) return;
     await mkdir(dirname(path), { recursive: true }).catch(() => undefined);
-    await saveJournal(this, path, () => JSON.stringify({
+    const saved = await saveJournal(this, path, () => JSON.stringify({
       stats: [...this.#stats.values()],
       tasks: this.#tasks,
       cleanTasks: this.#cleanTasks,
     }, null, 2), (v) => this.#absorb(v)).catch(() => false);
+    if (saved) this.#warn.ok();
+    else this.#warn.fail(`ハーネスの測った数を残せませんでした（${path}）。規則ごとの止めた回数が、立ち上げ直すと前の分から数え直しになります`);
+  }
+
+  /** 残せなかったことを言う先。 */
+  warnTo(say: (text: string) => void): void {
+    this.#warn.to(say);
   }
 
   #stat(rule: string): RuleStat {

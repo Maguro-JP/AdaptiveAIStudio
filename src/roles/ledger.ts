@@ -169,11 +169,14 @@ export class RoleLedger {
     this.#unannounced = [];
   }
 
-  /** 書く。一時ファイルから付け替える。起動のときに読めなかったなら、読めるまで書かない。記録に失敗しても本体は止めない。 */
-  async save(): Promise<void> {
-    if (!this.#path) return;
+  /**
+   * 書く。一時ファイルから付け替える。起動のときに読めなかったなら、読めるまで書かない。記録に失敗しても本体は止めない。
+   * 残せたかを返す（残せなければ、同じ知らせが次の起動でもう一度出る。呼ぶ側が言う）。
+   */
+  async save(): Promise<boolean> {
+    if (!this.#path) return true;
     await mkdir(dirname(this.#path), { recursive: true }).catch(() => undefined);
-    await saveJournal(this, this.#path, () => JSON.stringify({
+    return saveJournal(this, this.#path, () => JSON.stringify({
       known: [...this.#known.values()],
       unannounced: this.#unannounced,
     }, null, 2), (v) => {
