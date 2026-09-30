@@ -213,3 +213,28 @@ describe('method を持つ返事も、返事として読む', () => {
     assert.equal((await c.call('x', {}, 10_000)).text, '返しました');
   });
 });
+
+describe('立ち上げ直したとき、前の相手の終わりを今の相手のことにしない', () => {
+  test('止めた相手が遅れて終わっても、立ち上げ直した相手への呼び出しは落ちない', async () => {
+    // SIGTERM を受けてから少し置いて終わる相手。止めてすぐ立ち上げ直すと、前の相手の終わりが後から届く
+    const c = client(['-e', `
+      process.on('SIGTERM', () => setTimeout(() => process.exit(0), 400));
+      const { createInterface } = require('node:readline');
+      createInterface({ input: process.stdin }).on('line', (line) => {
+        const msg = JSON.parse(line);
+        const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+        if (msg.method === 'initialize') say({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18' } });
+        else if (msg.method === 'tools/list') say({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'slow' }] } });
+        else if (msg.method === 'tools/call') setTimeout(() => say({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: '返しました' }] } }), 1200);
+      });
+      setInterval(() => {}, 1000);
+    `]);
+    assert.equal(await c.start(), true, `立ち上がらなかった: ${c.failure}`);
+    c.stop();
+    assert.equal(await c.start(), true, `立ち上げ直せなかった: ${c.failure}`);
+    const got = await c.call('slow', {}, 10_000);
+    assert.equal(got.isError, false, `前の相手の終わりで、今の呼び出しが落ちた: ${got.text}`);
+    assert.equal(got.text, '返しました');
+    assert.equal(c.running, true, '前の相手の終わりで、今の相手まで止まったことになった');
+  });
+});
