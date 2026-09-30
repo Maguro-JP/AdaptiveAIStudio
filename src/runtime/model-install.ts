@@ -117,7 +117,9 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
   const fetchImpl = opts.fetchImpl ?? fetch;
   const log = opts.onProgress ?? (() => {});
 
-  const already = await findModel(modelsDir, entry.quant, entry.repo);
+  // URL を直に渡されたときは、ファイルの名前（URL の最後）そのもので見る（下）。配布元の名前から探す見当は当てない
+  const direct = /^https?:\/\//i.test(entry.repo);
+  const already = direct ? undefined : await findModel(modelsDir, entry.quant, entry.repo);
   if (already) {
     const s = await stat(already);
     log(`すでにあります: ${already}`);
@@ -141,6 +143,14 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
         + '配布元の頁ではなく、ファイルそのものの場所を貼ってください\n'
         + '（HuggingFace なら、ファイル名の横の download の先）。',
       );
+    }
+    // 同じ名前が置いてあれば取らない（取り直して、数GBを上書きしていた）
+    const here = join(modelsDir, leaf);
+    // 無いときだけ取りに行く。読めない（権限など）なら、取り直して上書きする前に言う
+    const had = await stat(here).catch((e: unknown) => { if (isAbsent(e)) return undefined; throw e; });
+    if (had?.isFile()) {
+      log(`すでにあります: ${here}`);
+      return { path: here, file: leaf, bytes: had.size };
     }
     return await fetchInto({
       url: directUrl, leaf, modelsDir, entry, fetchImpl, log,

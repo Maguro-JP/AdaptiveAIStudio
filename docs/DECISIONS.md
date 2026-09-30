@@ -10752,6 +10752,8 @@ llama-server に渡す計画（`planExecution`）が、実物と違う前提で�
 - 置いてあるかの判定（`findModel`）は、量子化の名前を外してから `-` と `_` で語に分けて語ごとに見る。文字列として含むかで見ていたので、
   `4b` が `14b` に、`qwen3` が `qwen3.5` に当たり、別のモデルを「もうある」として取らなかった（`…-v0.2.Q4_K_M` のように . で繋がる名前も見つける）
 - 囲いは 4 つ以上の ` でも囲いとして読む
+- URL を直に渡したときは、URL の最後の名前が置いてあるかで見る（`findModel` の見当は当てない）。語で見るように変えたら、量子化の名前まで
+  語に入って当たらなくなり、置いてあるのに取り直して上書きしていた（読み直しで見つけた。前の文字列の一致では当たっていた）
 - 試験: `test/markdown.test.ts`（別の thread で読ませ、返らなければ止める）・`test/model-install.test.ts`・`test/model-get-ui.test.ts`。
   直す前の形で 5 本とも落ちることを見た
 触る場所: `src/ui/web/markdown.js`、`src/runtime/model-install.ts` の `quantFrom`・`findModel`、`src/ui/server.ts` のモデルの取得

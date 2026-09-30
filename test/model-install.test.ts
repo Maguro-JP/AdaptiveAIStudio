@@ -526,3 +526,23 @@ describe('命令行の --quant', () => {
     assert.equal(quantFrom(['node', 'models.ts', '--quant', '--get', 'a/b']), 'q4_k_m');
   });
 });
+
+describe('URL を直に渡したとき', () => {
+  test('同じ名前が置いてあれば取りに行かない（数GBを取り直して上書きしない）', async () => {
+    const modelsDir = await tempDir('aas-direct-have-');
+    await writeFile(join(modelsDir, 'Qwen3-4B-Q4_K_M.gguf'), 'GGUF');
+    let asked = 0;
+    const impl = (async () => { asked++; throw new Error('取りに行った'); }) as unknown as typeof fetch;
+    for (const repo of [
+      'https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf',
+      'https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true',
+    ]) {
+      const r = await installModel({
+        entry: { id: repo, repo, quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '' },
+        modelsDir, fetchImpl: impl,
+      });
+      assert.equal(r.path, join(modelsDir, 'Qwen3-4B-Q4_K_M.gguf'));
+    }
+    assert.equal(asked, 0, '置いてあるのに取りに行った');
+  });
+});
