@@ -224,3 +224,32 @@ describe('bundle では、手で新しくする道を言う', () => {
     assert.ok(!s.reason?.includes(RELEASES_URL));
   });
 });
+
+describe('配った形では git を見ない', () => {
+  test('portable を別の git リポジトリの中に置いても、親のリポジトリを製品と取り違えない', onlyWithGit, async () => {
+    const { RELEASES_URL } = await import('../src/core/update.ts');
+    const { root, advance } = await pair();
+    const product = join(root, 'prod');
+    const app = join(product, 'app');
+    await mkdir(app, { recursive: true });
+    await writeFile(join(product, '.portable'), 'built\n');
+    // 親のリポジトリはきれいなまま（置いた portable は git から外す）。見に行けば上流の変更が見える形にする
+    await writeFile(join(root, '.git', 'info', 'exclude'), 'prod/\n');
+    await advance('PARENT-REPO-ONLY');
+    const s = await checkUpdate(app);
+    assert.equal(s.can, false, `親のリポジトリを取り込めることにした: ${JSON.stringify(s)}`);
+    assert.ok(!s.incoming.some((l) => l.includes('PARENT-REPO-ONLY')), `親の変更を製品の更新として出した: ${JSON.stringify(s)}`);
+    assert.ok(s.reason?.includes(RELEASES_URL), `手で新しくする道を言っていない: ${s.reason}`);
+  });
+
+  test('インストーラで入れた形（app の中、.portable なし）には、打てない git clone の案内を出さない', async () => {
+    const { RELEASES_URL } = await import('../src/core/update.ts');
+    const app = join(await tempDir('aas-upd-installed-'), 'app');
+    await mkdir(app, { recursive: true });
+    const s = await checkUpdate(app);
+    assert.equal(s.can, false);
+    assert.doesNotMatch(s.reason ?? '', /git clone/, `入れた形に git の案内を出した: ${s.reason}`);
+    assert.match(s.reason ?? '', /setup\.exe/);
+    assert.ok(s.reason?.includes(RELEASES_URL), `取ってくる先が無い: ${s.reason}`);
+  });
+});
