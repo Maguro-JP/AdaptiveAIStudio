@@ -78,7 +78,8 @@ export async function findRemovable(opts: {
   // 何を捨てることになるかを添える。
   for (const dir of [modelsDir(), binDir()]) {
     for (const name of await readdir(dir).catch(() => [])) {
-      if (!/\.(part|partial|tmp)$/i.test(name)) continue;
+      // .part.tag は途中の分がどの版かの記録。途中の分と一緒に片づける
+      if (!/\.(part|partial|tmp)(\.tag)?$/i.test(name)) continue;
       const path = join(dir, name);
       // いま取っている最中のものは消さない（書き続けているので新しい）。1 時間より古いものだけ
       const s = await stat(path).catch(() => undefined);

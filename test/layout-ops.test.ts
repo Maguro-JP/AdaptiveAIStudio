@@ -140,3 +140,22 @@ describe('動かす', () => {
     }
   });
 });
+
+describe('見ているタブより左を閉じても、見ているタブのまま', () => {
+  test('4 つ並んだ 3 つ目を見ていて 1 つ目を閉じたら、見ているのは同じもの', () => {
+    const l = {
+      root: { type: 'tabs', panels: ['a', 'b', 'c', 'd'], active: 2 },
+      panels: [],
+    } as unknown as Layout;
+    const got = closePanel(l, 'a').root as { panels: string[]; active: number };
+    assert.equal(got.panels[got.active], 'c', JSON.stringify(got));
+  });
+
+  test('右を閉じたら動かない・見ているものを閉じたら同じ位置（なければ一つ左）', () => {
+    const l = { root: { type: 'tabs', panels: ['a', 'b', 'c', 'd'], active: 1 }, panels: [] } as unknown as Layout;
+    const right = closePanel(l, 'd').root as { panels: string[]; active: number };
+    assert.equal(right.panels[right.active], 'b');
+    const self = closePanel(l, 'b').root as { panels: string[]; active: number };
+    assert.equal(self.panels[self.active], 'c');
+  });
+});

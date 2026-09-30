@@ -12,7 +12,7 @@ import { writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { tempDir } from './tmp.ts';
-import { aasHome, stateDir, binDir, modelsDir, isPortable, installRoot, isAsciiPath, asciiModelsDir } from '../src/core/home.ts';
+import { aasHome, stateDir, binDir, modelsDir, isPortable, installRoot, isAsciiPath, asciiModelsDir, insideDir } from '../src/core/home.ts';
 import { lookup, toCommand } from '../scripts/run.mjs';
 
 /**
@@ -728,5 +728,22 @@ describe('bundle を組み直すとき', () => {
     const { bundle } = await import('../scripts/bundle.mjs');
     await assert.rejects(bundle({ out, srcRoot: src, version: 'test-inside' }), /中にあります/);
     assert.ok(existsSync(join(src, 'marker.txt')), '止める前に元を消した');
+  });
+});
+
+describe('いま居る場所がプログラムの中か', () => {
+  test('Windows では、道の大文字と小文字を区別しない', () => {
+    assert.equal(insideDir('c:\\program files\\adaptiveaistudio\\app', 'C:\\Program Files\\AdaptiveAIStudio', 'win32'), true);
+    assert.equal(insideDir('C:\\Program Files\\AdaptiveAIStudio', 'c:\\program files\\adaptiveaistudio', 'win32'), true);
+  });
+
+  test('名前の頭が同じだけの隣は、中ではない', () => {
+    assert.equal(insideDir('C:\\AAS2\\work', 'C:\\AAS', 'win32'), false);
+    assert.equal(insideDir('/opt/aas2/work', '/opt/aas', 'linux'), false);
+  });
+
+  test('Windows 以外は、大文字と小文字を区別する', () => {
+    assert.equal(insideDir('/opt/AAS/app', '/opt/aas', 'linux'), false);
+    assert.equal(insideDir('/opt/aas/app', '/opt/aas', 'linux'), true);
   });
 });

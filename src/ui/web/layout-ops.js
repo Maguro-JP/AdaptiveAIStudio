@@ -39,7 +39,10 @@ function pluck(node, id) {
     const left = node.panels.filter((p) => p !== id);
     if (left.length === 0) return null;
     if (left.length === 1) return { type: 'panel', panel: left[0] };
-    const active = Math.min(node.active ?? 0, left.length - 1);
+    // 見ているタブより左を外したら、一つ左へずらす（ずらさないと、右隣のタブへ表示が飛ぶ）
+    const at = node.panels.indexOf(id);
+    const was = node.active ?? 0;
+    const active = Math.min(at >= 0 && at < was ? was - 1 : was, left.length - 1);
     return { type: 'tabs', panels: left, active };
   }
   const kids = [];

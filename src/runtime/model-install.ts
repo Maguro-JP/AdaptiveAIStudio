@@ -8,7 +8,7 @@
  * ファイル名は決め打ちにしない。配布側の名前は変わるし、
  * 大きいものは分割されている。取ってくるときに一覧から選ぶ。
  */
-import { mkdir, rename, rm, stat, open } from 'node:fs/promises';
+import { mkdir, rename, rm, stat, open, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describeNet } from './net-why.ts';
 import { readGguf } from './gguf.ts';
@@ -237,11 +237,26 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
 async function fetchInto(a: {
   url: string; leaf: string; modelsDir: string; entry: CatalogEntry;
   fetchImpl: typeof fetch; log: (l: string) => void; status?: (s: FetchStatus) => void; signal?: AbortSignal;
+  /** 途中の分を捨てて取り直している回（取り直しをもう一度繰り返さない） */
+  restarted?: boolean;
 }): Promise<InstalledModel> {
   const { url, leaf, modelsDir, entry, fetchImpl, log, status } = a;
   const opts = { signal: a.signal };
   const dest = join(modelsDir, leaf);
   const tmp = `${dest}.part`;
+  /*
+   * 途中の分がどの版のファイルか（配布元の ETag か Last-Modified）。続きを頼むときに If-Range で添える。
+   * 添えなかったので、途中で配布元のファイルが差し替わると、古い頭に新しい続きを継いだものを「置きました」としていた
+   * （頭の 1MB しか確かめないので、通ってしまう）。
+   */
+  const tagFile = `${tmp}.tag`;
+  const startOver = async (why: string): Promise<InstalledModel> => {
+    if (a.restarted) throw new Error(`${why}。取り直しても合わないので止めます\n${byHand(entry, modelsDir, url)}`);
+    log(`${why}。途中の分を捨てて、最初から取り直します。`);
+    await rm(tmp, { force: true });
+    await rm(tagFile, { force: true });
+    return fetchInto({ ...a, restarted: true });
+  };
   await mkdir(modelsDir, { recursive: true });
 
   // すでに途中まで取れているなら、**その続きから**。
@@ -255,6 +270,8 @@ async function fetchInto(a: {
     throw new Error(`途中まで取ったファイル（${tmp}）を見られません（${(e as NodeJS.ErrnoException).code ?? (e as Error).message}）。消さずに残してあります。少し置いてからもう一度取ってください`);
   });
   if (had > 0) log(`途中まで取れています（${human(had)}）。続きから取ります。`);
+  // ETag・Last-Modified の記録が無い（前の版が残した途中の分）なら、確かめられないまま続きを取る（捨てると数GBを取り直させる）
+  const tag = had > 0 ? (await readFile(tagFile, 'utf8').catch((e: unknown) => { if (isAbsent(e)) return ''; throw e; })).trim() : '';
 
   // 置き場に入るか、先に見る。数GB落とし切ってから「入りません」は遅い。
   await checkRoom(modelsDir, entry.approxGB, log);
@@ -279,7 +296,7 @@ async function fetchInto(a: {
     res = await fetchImpl(url, {
       redirect: 'follow',
       signal: AbortSignal.any(signals),
-      ...(had > 0 ? { headers: { range: `bytes=${had}-` } } : {}),
+      ...(had > 0 ? { headers: { range: `bytes=${had}-`, ...(tag ? { 'if-range': tag } : {}) } } : {}),
     });
   } catch (e) {
     clearTimeout(timer);
@@ -291,7 +308,32 @@ async function fetchInto(a: {
         : `取ってこられませんでした（${describeNet(e)}）。\n${byHand(entry, modelsDir, url)}`,
     );
   }
-  // 206 なら続き、200 なら相手が続きに応じなかった（最初から取り直す）。
+  // 続きの始まりが、手元の長さと合わない。継ぐと中身がずれる
+  if (had > 0 && res.status === 206) {
+    const range = /^bytes (\d+)-/i.exec(res.headers.get('content-range') ?? '');
+    if (range && Number(range[1]) !== had) {
+      clearTimeout(timer);
+      void res.body?.cancel().catch(() => undefined);
+      return startOver(`配布元が返した続きの始まり（${range[1]}）が、取れている長さ（${had}）と合いません`);
+    }
+    // If-Range を無視して続きを返す相手も居る。返ってきた版が記録と違えば、継がない
+    const now = markOf(res);
+    if (tag && now && now !== tag) {
+      clearTimeout(timer);
+      void res.body?.cancel().catch(() => undefined);
+      return startOver('配布元のファイルが、途中まで取ったときと別の版になっています');
+    }
+  }
+  // 416 は「その位置から先は無い」。本当の長さが手元と同じときだけ「全部取れている」。違えば、配布元のファイルが変わっている
+  if (res.status === 416) {
+    const size = /\*\/(\d+)/.exec(res.headers.get('content-range') ?? '');
+    if (size && Number(size[1]) !== had) {
+      clearTimeout(timer);
+      void res.body?.cancel().catch(() => undefined);
+      return startOver(`配布元のファイル（${human(Number(size[1]))}）と、取れている長さ（${human(had)}）が合いません`);
+    }
+  }
+  // 206 なら続き、200 なら相手が続きに応じなかった（最初から取り直す。If-Range が合わないときも 200 で全体が来る）。
   const resuming = had > 0 && res.status === 206;
   if (had > 0 && res.status === 200) log('配布元が続きに応じないので、最初から取り直します。');
   if (res.status === 416) {
@@ -328,6 +370,18 @@ async function fetchInto(a: {
       // 分からないものは 0（＝分からない）。下の突き合わせは total > 0 のときだけ。
       ? 0
       : resuming ? had + part : part;
+  // 最初から取るときに、どの版を取っているかを残す。開く前に書く（書けずに落ちたとき、開いたものと見張りを残さない）
+  if (!resuming && !done) {
+    const mark = markOf(res);
+    try {
+      if (mark) await writeFile(tagFile, mark, 'utf8');
+      else await rm(tagFile, { force: true });
+    } catch (e) {
+      clearTimeout(timer);
+      void res.body?.cancel().catch(() => undefined);
+      throw e;
+    }
+  }
   const handle = await open(tmp, resuming || done ? 'r+' : 'w');
   let written = resuming || done ? had : 0;
   let lastAt = 0;
@@ -390,12 +444,20 @@ async function fetchInto(a: {
     log(`  ${info.metadata.get('general.architecture') ?? '(種別不明)'} として読めました`);
   } catch (e) {
     await rm(tmp, { force: true });
+    await rm(tagFile, { force: true });
     throw new Error(`GGUF として読めませんでした: ${e instanceof Error ? e.message : String(e)}`);
   }
 
   await rename(tmp, dest);
+  await rm(tagFile, { force: true });
   log(`置きました: ${dest}`);
   return { path: dest, file: dest.split(/[\\/]/).at(-1)!, bytes: written };
+}
+
+/** 配布元が返した版。強い ETag、無ければ Last-Modified（弱い ETag は If-Range に使えない）。 */
+function markOf(res: Response): string | undefined {
+  const etag = res.headers.get('etag');
+  return (etag && !etag.startsWith('W/') ? etag : res.headers.get('last-modified')) ?? undefined;
 }
 
 /**

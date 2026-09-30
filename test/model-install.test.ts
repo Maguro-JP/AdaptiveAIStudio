@@ -546,3 +546,105 @@ describe('URL を直に渡したとき', () => {
     assert.equal(asked, 0, '置いてあるのに取りに行った');
   });
 });
+
+describe('続きから取るとき、別の版を継がない', () => {
+  const entry = { id: 'x', repo: 'a/b', quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '' };
+  const body = (fill: number) => Buffer.concat([tinyGguf(), Buffer.alloc(64 * 1024, fill)]);
+
+  /** 今の版は `now`。Range と If-Range に、本物の配布元と同じ決まりで応じる。`answer` で続きの返し方を変えられる。 */
+  async function origin(now: Buffer, etag: string, answer?: 'wrongStart' | 'ignoreIfRange') {
+    const { createServer } = await import('node:http');
+    const asked: { range?: string; ifRange?: string }[] = [];
+    const srv = createServer((req, res) => {
+      if (req.url?.startsWith('/api/models/')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ siblings: [{ rfilename: 'model-Q4_K_M.gguf' }] }));
+      }
+      const range = req.headers.range as string | undefined;
+      const ifRange = req.headers['if-range'] as string | undefined;
+      asked.push({ range, ifRange });
+      const from = Number(/bytes=(\d+)-/.exec(range ?? '')?.[1] ?? NaN);
+      // If-Range が今の版と違えば、範囲を無視して全体を返す（RFC 9110）
+      if (range === undefined || (answer !== 'ignoreIfRange' && ifRange !== undefined && ifRange !== etag)) {
+        res.writeHead(200, { 'content-length': String(now.length), etag });
+        return res.end(now);
+      }
+      if (from >= now.length) {
+        res.writeHead(416, { 'content-range': `bytes */${now.length}` });
+        return res.end();
+      }
+      if (answer === 'wrongStart') {
+        // 範囲を無視して頭から返してくる相手
+        res.writeHead(206, { 'content-length': String(now.length), 'content-range': `bytes 0-${now.length - 1}/${now.length}`, etag });
+        return res.end(now);
+      }
+      const rest = now.subarray(from);
+      res.writeHead(206, { 'content-length': String(rest.length), 'content-range': `bytes ${from}-${now.length - 1}/${now.length}`, etag });
+      res.end(rest);
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const { port } = srv.address() as import('node:net').AddressInfo;
+    return {
+      asked,
+      fetchImpl: ((u: string | URL, init?: RequestInit) =>
+        fetch(String(u).replace('https://huggingface.co', `http://127.0.0.1:${port}`), init)) as typeof fetch,
+      close: () => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); }),
+    };
+  }
+
+  test('途中で配布元の版が変わったら、古い頭に新しい続きを継がずに取り直す', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const dir = await tempDir('aas-dl-ifrange-');
+    const older = body(0x61);
+    const newer = body(0x62);
+    // 前の版を半分まで取ってあった
+    await writeFile(join(dir, 'model-Q4_K_M.gguf.part'), older.subarray(0, older.length / 2));
+    await writeFile(join(dir, 'model-Q4_K_M.gguf.part.tag'), '"v1"');
+    const srv = await origin(newer, '"v2"');
+    try {
+      const got = await installModel({ entry, modelsDir: dir, fetchImpl: srv.fetchImpl });
+      assert.ok((await readFile(got.path)).equals(newer), '古い頭に新しい続きを継いだ');
+      assert.equal(srv.asked[0]?.ifRange, '"v1"', `続きを頼むときに版を添えていない: ${JSON.stringify(srv.asked)}`);
+      await assert.rejects(stat(join(dir, 'model-Q4_K_M.gguf.part.tag')), '取り終えたのに版の記録が残っている');
+    } finally { await srv.close(); }
+  });
+
+  test('If-Range を無視して別の版の続きを返されても、継がずに取り直す', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const dir = await tempDir('aas-dl-ignore-');
+    const older = body(0x66);
+    const newer = body(0x67);
+    await writeFile(join(dir, 'model-Q4_K_M.gguf.part'), older.subarray(0, older.length / 2));
+    await writeFile(join(dir, 'model-Q4_K_M.gguf.part.tag'), '"v5"');
+    const srv = await origin(newer, '"v6"', 'ignoreIfRange');
+    try {
+      const got = await installModel({ entry, modelsDir: dir, fetchImpl: srv.fetchImpl });
+      assert.ok((await readFile(got.path)).equals(newer), '別の版の続きを継いだ');
+    } finally { await srv.close(); }
+  });
+
+  test('416 で配布元の長さが手元と違えば、「全部取れている」としない', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const dir = await tempDir('aas-dl-416-');
+    const now = body(0x63);
+    // 前の版の残り。今の版より長い
+    await writeFile(join(dir, 'model-Q4_K_M.gguf.part'), Buffer.concat([now, Buffer.alloc(1024, 0x64)]));
+    const srv = await origin(now, '"v3"');
+    try {
+      const got = await installModel({ entry, modelsDir: dir, fetchImpl: srv.fetchImpl });
+      assert.ok((await readFile(got.path)).equals(now), `長さの違う残りを置いた（${(await readFile(got.path)).length} / ${now.length}）`);
+    } finally { await srv.close(); }
+  });
+
+  test('続きの始まりが手元の長さと違えば、継がずに取り直す', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const dir = await tempDir('aas-dl-start-');
+    const now = body(0x65);
+    await writeFile(join(dir, 'model-Q4_K_M.gguf.part'), now.subarray(0, 1000));
+    const srv = await origin(now, '"v4"', 'wrongStart');
+    try {
+      const got = await installModel({ entry, modelsDir: dir, fetchImpl: srv.fetchImpl });
+      assert.ok((await readFile(got.path)).equals(now), '頭から返ってきた分を、続きとして継いだ');
+    } finally { await srv.close(); }
+  });
+});

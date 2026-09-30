@@ -17,7 +17,7 @@ import type { ApprovalRequest } from '../agent/tools/types.ts';
 import { inspectGit, describeGitState } from '../agent/git.ts';
 import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
-import { wireTeam } from '../core/team-setup.ts';
+import { wireTeam, parseTasks } from '../core/team-setup.ts';
 import { readyLocalModel } from '../core/local-ready.ts';
 
 const c = {
@@ -53,6 +53,15 @@ async function main(): Promise<void> {
   const root = resolve(agentCfg.root ?? defaultWorkRoot());
   const approval = agentCfg.approval ?? 'autoEdit';
 
+  // 作業指示書は、モデルを起こす前に読んで確かめる（起こした後で落ちると、Windows では llama-server が残る）
+  let items: WorkItem[];
+  try {
+    items = parseTasks(await readFile(resolve(taskFile), 'utf8'), agentCfg.lanes?.map((l) => l.id) ?? ['default']);
+  } catch (e) {
+    console.error((e as Error).message);
+    process.exit(1);
+  }
+
   const registry = buildRegistry(config);
   const pilot = await setupAutopilot(config, registry);
   /*
@@ -74,14 +83,6 @@ async function main(): Promise<void> {
   const lanes = agentCfg.lanes ?? [
     { id: 'default', candidates: resolved.candidates, parallel: 2 },
   ];
-
-  const items = JSON.parse(await readFile(resolve(taskFile), 'utf8')) as WorkItem[];
-  for (const item of items) {
-    if (!lanes.some((l) => l.id === item.laneId)) {
-      console.error(`タスク "${item.id}" のレーン "${item.laneId}" が設定にありません。`);
-      process.exit(1);
-    }
-  }
 
   const rl = createInterface({ input: stdin, output: stdout });
   const ac = new AbortController();
