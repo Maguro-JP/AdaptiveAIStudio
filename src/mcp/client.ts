@@ -511,8 +511,8 @@ export class McpClient {
    * 相手が返した文字列が見出しに使えない形なら付けない（fetch が見出しを受け付けず、以後の問いが全部失敗するため）。
    */
   #versionHeader(): Record<string, string> {
-    const v = this.#serverVersion;
-    return v && /^[\w.-]{1,64}$/.test(v) ? { 'mcp-protocol-version': v } : {};
+    const v: unknown = this.#serverVersion; // JSON から来た値なので、文字列とは限らない
+    return typeof v === 'string' && /^[\w.-]{1,64}$/.test(v) ? { 'mcp-protocol-version': v } : {};
   }
 
   /**

@@ -13,16 +13,20 @@ import { createServer, type Server } from 'node:http';
 import { McpClient } from '../src/mcp/client.ts';
 import { until } from './until.ts';
 
-interface Seen { headers: Record<string, string | undefined>[]; deleted: boolean }
+interface Seen { headers: Record<string, string | undefined>[]; deleted: boolean; deleteVersion?: string }
 
 /**
  * 相手役。名乗り・道具の一覧・呼び出しに答える。
  * `sse` を立てると、流れ（text/event-stream）で返す。
  */
-async function startServer(opts: { sse?: boolean; fail?: number; batch?: boolean } = {}) {
+async function startServer(opts: { sse?: boolean; fail?: number; batch?: boolean; version?: string } = {}) {
   const seen: Seen = { headers: [], deleted: false };
   const server: Server = createServer((req, res) => {
-    if (req.method === 'DELETE') { seen.deleted = true; res.writeHead(204); res.end(); return; }
+    if (req.method === 'DELETE') {
+      seen.deleted = true;
+      seen.deleteVersion = req.headers['mcp-protocol-version'] as string | undefined;
+      res.writeHead(204); res.end(); return;
+    }
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
@@ -39,7 +43,7 @@ async function startServer(opts: { sse?: boolean; fail?: number; batch?: boolean
       if (body.id === undefined) { res.writeHead(202); res.end(); return; }
 
       const result = body.method === 'initialize'
-        ? { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'つくりもの', version: '1' } }
+        ? { protocolVersion: opts.version ?? '2025-06-18', capabilities: {}, serverInfo: { name: 'つくりもの', version: '1' } }
         : body.method === 'tools/list'
           ? { tools: [{ name: 'echo', description: '返すだけ', inputSchema: { type: 'object' } }] }
           : { content: [{ type: 'text', text: 'こんにちは' }] };
@@ -316,6 +320,20 @@ describe('取り決めた版を、名乗りの後の問いに付ける', () => {
       assert.equal(init?.version, undefined, '名乗りに版を付けた（まだ取り決めていない）');
       assert.ok(rest.length >= 2, `名乗りの後の問いが届いていない: ${rest.length}`);
       for (const h of rest) assert.equal(h.version, '2025-06-18', `名乗りの後の問いに版が無い: ${JSON.stringify(s.seen.headers)}`);
+    } finally { c.stop(); await s.close(); }
+  });
+
+  test('付けるのは相手が返した版（こちらが送った版ではない）。切るときの DELETE にも付ける', async () => {
+    const s = await startServer({ version: '2025-03-26' });
+    const c = new McpClient('remote', { url: s.url });
+    try {
+      assert.equal(await c.start(), true, c.failure);
+      await c.call('echo', {});
+      const rest = s.seen.headers.slice(1);
+      for (const h of rest) assert.equal(h.version, '2025-03-26', `相手が返した版ではない: ${JSON.stringify(s.seen.headers)}`);
+      c.stop();
+      await until(() => s.seen.deleted, '切るときの DELETE が届く', { timeoutMs: 5_000 });
+      assert.equal(s.seen.deleteVersion, '2025-03-26', 'DELETE に版が無い');
     } finally { c.stop(); await s.close(); }
   });
 });
