@@ -93,7 +93,8 @@ async function main(): Promise<void> {
       console.log('\n' + c.cyan(`  外部への問い合わせ: ${req.url}`));
       console.log(c.dim('  取得のみ。資格情報は送りません。'));
     }
-    const ans = await rl.question(c.yellow('  許可しますか？ [y/N] '));
+    // 先に打ってある次の依頼を、承認の答えとして食べない（`askNow`）
+    const ans = await rl.askNow(c.yellow('  許可しますか？ [y/N] '));
     if (ans === undefined) return false; // 入力が無いなら許可しない
     const normalized = ans.trim().toLowerCase();
     return normalized === 'y' || normalized === 'yes';

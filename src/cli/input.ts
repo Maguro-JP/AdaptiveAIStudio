@@ -127,6 +127,18 @@ export class LineSource {
   }
 
   /**
+   * いま訊いたことへの答えを、これから打たれる行で受ける（承認の [y/N]）。**溜まっている行は使わない。**
+   *
+   * `question` は溜まっている行から先に取るので、作業の最中に次の依頼を打っておくと、承認の問いがその依頼を答えとして食べていた
+   * （`y` でないので断られ、次の依頼も消える）。溜まっている行は次の依頼のために残す。入力が閉じていれば答え無し（許可しない）。
+   */
+  async askNow(prompt: string): Promise<string | undefined> {
+    if (this.#closed) return undefined;
+    this.#output.write(prompt);
+    return new Promise<string | undefined>((resolve) => { this.#waiting = resolve; });
+  }
+
+  /**
    * 待っている問いを「答え無し」で解く（Ctrl-C で止めたとき）。解かないと、承認の問いが Enter を押すまで待ち続け、
    * 止めたのに先へ進まなかった。答え無しは、承認では「許可しない」になる。
    */

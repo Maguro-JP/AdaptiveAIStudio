@@ -142,3 +142,30 @@ describe('Ctrl-C（SIGINT）', () => {
     assert.deepEqual(exit, { code: 130, signal: null }, `二度押しで終わらなかった: ${JSON.stringify({ out, ...exit })}`);
   });
 });
+
+describe('承認の問いは、先に打ってある依頼を食べない', () => {
+  /**
+   * `question` は溜まっている行から先に取るので、作業の最中に次の依頼を打っておくと、承認の [y/N] がその依頼を答えとして
+   * 食べていた（y でないので断られ、次の依頼も消える）。
+   */
+  test('askNow は溜まった行を残し、これから打たれる行で答える', async () => {
+    const input = new PassThrough();
+    const src = new LineSource(input, new PassThrough());
+    input.write('依頼1\n次の依頼\n');
+    await sleep(20);
+    assert.equal(await src.question('> '), '依頼1');
+    const asked = src.askNow('許可しますか？ ');
+    input.write('y\n');
+    assert.equal(await asked, 'y', '承認の答えに、先に打ってあった依頼を使った');
+    assert.equal(await src.question('> '), '次の依頼', '先に打ってあった依頼が消えた');
+    src.close();
+  });
+
+  test('入力が閉じていれば、askNow は答え無し（許可しない）で、溜まった行は残る', async () => {
+    const src = new LineSource(Readable.from(['依頼1\n残る依頼\n']), new PassThrough());
+    await sleep(30);
+    assert.equal(await src.question('> '), '依頼1');
+    assert.equal(await src.askNow('許可しますか？ '), undefined);
+    assert.equal(await src.question('> '), '残る依頼');
+  });
+});
