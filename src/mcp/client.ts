@@ -339,11 +339,23 @@ export class McpClient {
       this.#buffer = this.#buffer.slice(index + 1);
       if (line.length === 0) continue;
 
-      let msg: { id?: number; result?: unknown; error?: { message?: string } };
+      let msg: { id?: number | string; method?: unknown; result?: unknown; error?: { message?: string } };
       try {
         msg = JSON.parse(line);
       } catch {
         continue; // 相手が余計なものを出すことがある。落とさず読み飛ばす
+      }
+      if (msg === null || typeof msg !== 'object') continue;
+      // 返事の中身（result / error）を持つものは、method があっても返事として読む（問いは result・error を持たない）
+      const isReply = 'result' in msg || 'error' in msg;
+      if (typeof msg.method === 'string' && !isReply) {
+        /*
+         * 相手からの問い（method を持つ）。番号は相手が振るので、こちらの問いの番号と重なることがある。
+         * 返事として読むと、こちらの待ちを相手の問いで済ませていた（結果は空）。問いには答える: ping は空で返し、
+         * ほかは「持っていない」で断る（名乗りで何の力も申し出ていないので、roots や sampling は来ない約束）。
+         */
+        if (msg.id !== undefined && msg.id !== null) this.#answer(msg.id, msg.method);
+        continue;
       }
       if (typeof msg.id !== 'number') continue; // こちらからの問いへの返事だけを見る
 
@@ -490,6 +502,17 @@ export class McpClient {
       const settled = id === undefined ? this.#pending.size === 0 : !this.#pending.has(id);
       if (settled) { void reader.cancel().catch(() => undefined); break; }
     }
+  }
+
+  /**
+   * 相手からの問いに答える。遠くの相手では、答えが届かなくても失敗にしない（こちらの問いには関わらない）。
+   * 手元の相手では標準入力へ書くので、入力が閉じていれば EPIPE で相手ごと止める（取り消しの知らせと同じ。閉じた相手には何も届かない）。
+   */
+  #answer(id: number | string, method: string): void {
+    const reply = method === 'ping'
+      ? { jsonrpc: '2.0', id, result: {} }
+      : { jsonrpc: '2.0', id, error: { code: -32601, message: `Method not found: ${method}` } };
+    this.#send(reply, true);
   }
 
   #notify(method: string, params: unknown, optional = false): void {
