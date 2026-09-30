@@ -280,6 +280,8 @@
 - 取っている最中のモデルを、片づけで消さない
 - formerly で改名した役職を、名簿から消えたと言い続けない
 - 読めない失敗の数の試験も、commit の手前で回す
+- bundle を組み直しても data を消さない・bootstrap の材料を出力先の外に置く
+- 答えの表示が止まる行・--quant の読み違い・取得の失敗の保存先・置いてあるモデルの取り違え
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10727,4 +10729,28 @@ llama-server に渡す計画（`planExecution`）が、実物と違う前提で�
 - pre-commit で `wording`・`decisions` と一緒に `lenient-reads` も回す
 - 試験: `test/hooks.test.ts`（lenient-reads が落ちていれば commit を止める）。前のフックで落ちることを見た
 触る場所: `.githooks/pre-commit`
+
+## 2026-09-30  bundle を組み直しても data を消さない・bootstrap の材料を出力先の外に置く
+
+`bundle()` は組む前に出力先を丸ごと消していた。`installer/bootstrap.cmd` は取ってきた元と `node.exe` を出力先の中（`.setup`）に置いて
+そこから `bundle.mjs` を走らせるので、組む途中で自分の材料を消していた（Windows では走っている `node.exe` を消せずに止まる）。
+入れ直しでは、portable の AAS_HOME である `data\`（モデル・設定・会話）も消していた。
+
+- `bundle()` は、元が出力先の中にあれば組まずに止める。前に組んだ分は片づけるが、`data` は残す
+- `bootstrap.cmd` の材料は、出力先の隣（`%DEST%.setup`）に置く
+- 試験: `test/home.test.ts`（組み直しても data が残る・元が中にあれば止めて元を消さない・材料の置き先）。直す前の版で 3 本とも落ちることを見た
+- Windows の実機では確かめていない（出力先の末尾に `\` を付けて渡すと、材料はまた中に入る。そのときは bundle が止めるので、消えはしない）
+触る場所: `scripts/bundle.mjs` の `bundle`、`installer/bootstrap.cmd` の `WORK`
+
+## 2026-09-30  答えの表示が止まる行・--quant の読み違い・取得の失敗の保存先・置いてあるモデルの取り違え
+
+- 答えの表示（`markdown.js` の `parseBlocks`）: 段落の切れ目とは見るが、どの塊にも当たらない行（CRLF の見出し、```python main.py の囲い）で
+  読む位置が進まず、画面が固まっていた。行は `\r?\n` で切り、囲いは言語名の後ろに何かあっても囲いとし、それでも段落が空なら一行を段落にして進める
+- `npm run models -- --get <repo>` で `--quant` を付けないと、node の場所を量子化の名前として読んでいた。`quantFrom` で読む
+- 画面でモデルを取れなかったときの「保存先」は、落とす先（設定で選んだ場所）を言う。既定の場所を言っていた
+- 置いてあるかの判定（`findModel`）は、名前を `-` と `_` で語に分けて語ごとに見る。文字列として含むかで見ていたので、`4b` が `14b` に、
+  `qwen3` が `qwen3.5` に当たり、別のモデルを「もうある」として取らなかった
+- 試験: `test/markdown.test.ts`（別の thread で読ませ、返らなければ止める）・`test/model-install.test.ts`・`test/model-get-ui.test.ts`。
+  直す前の形で 5 本とも落ちることを見た
+触る場所: `src/ui/web/markdown.js`、`src/runtime/model-install.ts` の `quantFrom`・`findModel`、`src/ui/server.ts` のモデルの取得
 

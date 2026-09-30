@@ -228,6 +228,9 @@ describe('取ってこられなかったときに、行き止まりにしない'
       assert.match(all, /手で置く/, `手で置く道を案内していない: ${all.slice(-400)}`);
       assert.match(all, /Q4_K_M/, `選び方を言っていない: ${all.slice(-400)}`);
       assert.match(all, /保存先:/, `どこへ置くのか言っていない: ${all.slice(-400)}`);
+      // 保存先は、設定で選んだ場所（落とす先と同じ）。既定の場所を言うと、そこへ置いても一覧に出ない
+      const where = all.split('\n').find((l) => l.includes('保存先:'));
+      assert.ok(where?.includes(models), `保存先が落とす先と違う: ${where}`);
     } finally { await hf.close(); }
   });
 });

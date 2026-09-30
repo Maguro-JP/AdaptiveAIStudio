@@ -7,6 +7,26 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseBlocks, parseInline } from '../src/ui/web/markdown.js';
+import { Worker } from 'node:worker_threads';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
+
+/**
+ * 別の thread で切らせ、時間内に返らなければ止める。返らない（進まない）形のとき、同じ thread で呼ぶと試験ごと固まる。
+ */
+function parseWithin(text: string, ms = 3000): Promise<unknown> {
+  const url = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '../src/ui/web/markdown.js')).href;
+  const worker = new Worker(
+    `const { parentPort, workerData } = require('node:worker_threads');
+     import(workerData.url).then((m) => parentPort.postMessage(m.parseBlocks(workerData.text)));`,
+    { eval: true, workerData: { url, text } },
+  );
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { void worker.terminate(); reject(new Error(`返らない: ${JSON.stringify(text)}`)); }, ms);
+    worker.once('message', (v) => { clearTimeout(timer); void worker.terminate(); resolve(v); });
+    worker.once('error', (e) => { clearTimeout(timer); reject(e); });
+  });
+}
 
 describe('答えを塊に切る', () => {
   test('囲いは、コードの塊になる', () => {
@@ -68,5 +88,19 @@ describe('画面が、答えを組み直して出す', () => {
     assert.ok(!/stream\.textContent \+=/.test(src), '答えを素の文のまま足している');
     // innerHTML に外から来た文を流していないこと。
     assert.ok(!/innerHTML\s*=/.test(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../src/ui/web/markdown.js'), 'utf8')));
+  });
+});
+
+describe('どんな行でも、読み進める（固まらない）', () => {
+  test('言語名の後ろに何か書いた囲い・CRLF の見出しと箇条書き・一行の囲いでも返る', async () => {
+    for (const text of ['```python main.py\nx\n```', '``` js\nx\n```', '# a\r\nb', '- a\r\n- b\r\n', '```a```b', '1. x\r\n2. y']) {
+      const blocks = await parseWithin(text) as { type: string }[];
+      assert.ok(Array.isArray(blocks) && blocks.length > 0, JSON.stringify(text));
+    }
+  });
+
+  test('CRLF でも、見出しは見出し、囲いの言語名は言語名になる', () => {
+    assert.deepEqual(parseBlocks('# 題\r\n本文'), [{ type: 'heading', level: 1, text: '題' }, { type: 'para', text: '本文' }]);
+    assert.deepEqual(parseBlocks('```python main.py\nx\n```'), [{ type: 'code', lang: 'python', text: 'x', closed: true }]);
   });
 });

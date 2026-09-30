@@ -12,12 +12,14 @@
 
 /** 文を塊に切る。純粋関数。試験はここを見る。 */
 function parseBlocks(text) {
-  const lines = String(text ?? '').split('\n');
+  // CRLF の \r を残すと、見出しや箇条書きの `(.*)$` が行末まで届かず、どの塊にも当たらない
+  const lines = String(text ?? '').split(/\r?\n/);
   const blocks = [];
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    const fence = /^\s*```(\S*)\s*$/.exec(line);
+    // 言語名の後ろに何か書いてある囲い（```python main.py）も囲い。段落の側は ``` で始まる行を切れ目とみなすので、揃える
+    const fence = /^\s*```\s*([^`\s]*)[^`]*$/.exec(line);
     if (fence) {
       const body = [];
       i++;
@@ -50,6 +52,8 @@ function parseBlocks(text) {
       && !/^(#{1,6})\s+/.test(lines[i]) && !/^\s*(?:[-*+]|\d+[.)])\s+/.test(lines[i])) {
       para.push(lines[i]); i++;
     }
+    // どの塊にも当たらず段落も切れ目で止まった行（```a```b のような形）。一行の段落にして必ず進める（進まないと画面が固まる）
+    if (para.length === 0) { para.push(lines[i]); i++; }
     blocks.push({ type: 'para', text: para.join('\n') });
   }
   return blocks;

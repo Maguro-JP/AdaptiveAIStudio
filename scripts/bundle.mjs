@@ -321,7 +321,22 @@ export async function bundle({
   // 呼ぶ側は何も変えなくてよい。
   nodeName,
 }) {
-  await rm(out, { recursive: true, force: true });
+  /*
+   * 元が出力先の中にあると、前の分を片づけるときに元ごと消える（bootstrap.cmd が材料を出力先の中に置いていて、
+   * 組み立ての途中で自分の材料を消していた）。組まずに止める。
+   */
+  const within = relative(resolve(out), resolve(srcRoot));
+  if (within === '' || (!/^\.\.([\\/]|$)/.test(within) && !isAbsolute(within))) {
+    throw new Error(`組み立ての元（${resolve(srcRoot)}）が出力先（${resolve(out)}）の中にあります。出力先を片づけると元も消えるので、組めません`);
+  }
+  /*
+   * 前に組んだ分を片づける。data は残す（portable ではここが AAS_HOME で、モデル・設定・会話が入っている。
+   * 出力先ごと消していたので、入れ直すたびに消えていた）。
+   */
+  for (const name of await readdir(out).catch(() => [])) {
+    if (name === 'data') continue;
+    await rm(join(out, name), { recursive: true, force: true });
+  }
   const app = join(out, 'app');
   await mkdir(app, { recursive: true });
 

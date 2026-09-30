@@ -79,16 +79,30 @@ export function pickModelFile(files: string[], quant: string): string | undefine
   return single.sort((a, b) => a.length - b.length)[0];
 }
 
+/**
+ * 命令行の `--quant <名前>` を読む。無ければ q4_k_m。
+ * `argv[indexOf('--quant') + 1]` だと、無いときに argv[0]（node の場所）を量子化の名前として読んでいた。
+ */
+export function quantFrom(argv: readonly string[]): string {
+  const at = argv.indexOf('--quant');
+  const value = at >= 0 ? argv[at + 1] : undefined;
+  return value && !value.startsWith('--') ? value : 'q4_k_m';
+}
+
 /** すでに置いてあるか。 */
 export async function findModel(modelsDir: string, quant: string, repo: string): Promise<string | undefined> {
   const stem = repo.split('/').at(-1)!.toLowerCase().replace(/-gguf$/, '');
   try {
     const { readdir } = await import('node:fs/promises');
     const names = await readdir(modelsDir);
+    // 語ごとに見る。文字列として含むかで見ていたので、`4b` が `14b` に、`qwen3` が `qwen3.5` に当たり、
+    // 別のモデルを「もうある」として取らなかった
+    const wanted = stem.split(/[-_]/).filter((w) => w.length > 0);
     const hit = names.find((n) => {
       const lower = n.toLowerCase();
-      return lower.endsWith('.gguf') && lower.includes(quant.toLowerCase())
-        && stem.split('-').every((part) => lower.includes(part));
+      if (!lower.endsWith('.gguf') || !lower.includes(quant.toLowerCase())) return false;
+      const words = new Set(lower.replace(/\.gguf$/, '').split(/[-_]/));
+      return wanted.every((w) => words.has(w));
     });
     return hit ? join(modelsDir, hit) : undefined;
   } catch {

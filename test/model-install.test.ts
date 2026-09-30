@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { writeFile, stat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { pickModelFile, installModel, findModel, defaultModelsDir } from '../src/runtime/model-install.ts';
+import { pickModelFile, installModel, findModel, defaultModelsDir, quantFrom } from '../src/runtime/model-install.ts';
 import type { CatalogEntry } from '../src/runtime/model-catalog.ts';
 
 const ENTRY: CatalogEntry = {
@@ -497,5 +497,25 @@ describe('途中まで取ったファイルを見られないとき', () => {
       syncBuiltinESMExports();
     }
     assert.equal((await stat(part)).size, 1000, '取れていた分を空にした');
+  });
+});
+
+describe('置いてあるかを、名前の語で見る', () => {
+  test('名前の一部が重なる別のモデルを「もうある」としない', async () => {
+    const modelsDir = await tempDir('aas-findmodel-');
+    await writeFile(join(modelsDir, 'Qwen3.5-4B-Q4_K_M.gguf'), 'GGUF');
+    await writeFile(join(modelsDir, 'Qwen3-14B-Q4_K_M.gguf'), 'GGUF');
+    assert.equal(await findModel(modelsDir, 'q4_k_m', 'unsloth/Qwen3-4B-GGUF'), undefined);
+    await writeFile(join(modelsDir, 'Qwen3-4B-Q4_K_M.gguf'), 'GGUF');
+    assert.equal(await findModel(modelsDir, 'q4_k_m', 'unsloth/Qwen3-4B-GGUF'), join(modelsDir, 'Qwen3-4B-Q4_K_M.gguf'));
+    assert.equal(await findModel(modelsDir, 'q4_k_m', 'unsloth/Qwen3.5-4B-GGUF'), join(modelsDir, 'Qwen3.5-4B-Q4_K_M.gguf'));
+  });
+});
+
+describe('命令行の --quant', () => {
+  test('無ければ q4_k_m（node の場所を量子化の名前として読まない）', () => {
+    assert.equal(quantFrom(['/usr/bin/node', 'models.ts', '--get', 'a/b']), 'q4_k_m');
+    assert.equal(quantFrom(['node', 'models.ts', '--get', 'a/b', '--quant', 'q8_0']), 'q8_0');
+    assert.equal(quantFrom(['node', 'models.ts', '--quant', '--get', 'a/b']), 'q4_k_m');
   });
 });

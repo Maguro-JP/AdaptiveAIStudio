@@ -59,7 +59,10 @@ mkdir "%DEST%" 2>nul
 cd /d "%DEST%"
 if errorlevel 1 goto :badDest
 
-set "WORK=%DEST%\.setup"
+rem The work folder sits next to DEST, not inside it. bundle.mjs clears
+rem DEST before building, which used to delete the downloaded source
+rem and node.exe halfway through (and data\ on a reinstall).
+set "WORK=%DEST%.setup"
 rmdir /s /q "%WORK%" 2>nul
 mkdir "%WORK%"
 if errorlevel 1 goto :badDest

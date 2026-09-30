@@ -142,6 +142,14 @@ describe('用意する道具', () => {
     assert.ok(stopAt < fetchAt, '取ってきた後に検査している');
   });
 
+  test('用意用は、材料（取ってきた元と node.exe）を出力先の中に置かない', sourceOnly, async () => {
+    // bundle は組む前に出力先を片づけるので、中に置くと自分の材料を消す（入れ直しなら data まで消していた）
+    const raw = cmd(await readFile(join(installRoot(), 'installer', 'bootstrap.cmd')));
+    const work = /^set "WORK=([^"]*)"/m.exec(raw)?.[1];
+    assert.ok(work, 'WORK を決める行が無い');
+    assert.equal(/^%DEST%[\\/]/i.test(work!), false, `材料を出力先の中に置いている: ${work}`);
+  });
+
   test('用意用は、git も npm も要求しない', sourceOnly, async () => {
     const raw = cmd(await readFile(join(installRoot(), 'installer', 'bootstrap.cmd')));
     // 動く行だけを見る。案内文（echo）に「npm run bundle」と書くのは、
@@ -685,5 +693,32 @@ describe('インストール版（.portable 無し、中身が app\\）でも版
     await writeFile(join(root, 'VERSION'), '9.9.9-nope\r\n', 'utf8');
     const v = await currentVersion(join(root, 'work'));
     assert.notEqual(v.id, '9.9.9-nope');
+  });
+});
+
+describe('bundle を組み直すとき', () => {
+  test('data（portable ではモデル・設定・会話が入っている）は残し、前に組んだものは片づける', async () => {
+    const out = await tempDir('aas-rebundle-');
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(join(out, 'data', 'models'), { recursive: true });
+    await writeFile(join(out, 'data', 'models', 'keep.gguf'), 'GGUF');
+    await mkdir(join(out, 'app'), { recursive: true });
+    await writeFile(join(out, 'app', 'stale.txt'), '前に組んだ残り');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-rebundle' });
+    assert.equal(await readFile(join(out, 'data', 'models', 'keep.gguf'), 'utf8'), 'GGUF', '組み直したら data が消えた');
+    assert.equal(existsSync(join(out, 'app', 'stale.txt')), false, '前に組んだものが残っている');
+    assert.ok(existsSync(join(out, 'AdaptiveAIStudio.cmd')));
+  });
+
+  test('元が出力先の中にあれば組まずに止め、元を消さない', async () => {
+    const out = await tempDir('aas-rebundle-inside-');
+    const { mkdir } = await import('node:fs/promises');
+    const src = join(out, '.setup', 'src');
+    await mkdir(src, { recursive: true });
+    await writeFile(join(src, 'marker.txt'), 'x');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await assert.rejects(bundle({ out, srcRoot: src, version: 'test-inside' }), /中にあります/);
+    assert.ok(existsSync(join(src, 'marker.txt')), '止める前に元を消した');
   });
 });
