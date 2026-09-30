@@ -141,3 +141,19 @@ describe('道具も、リンク越しには出ない・書かない', () => {
     assert.notEqual(r.isError, true);
   });
 });
+
+describe('.. で始まる名前は、中のファイル', () => {
+  /** `rel.startsWith('..')` で見ていたので、作業場の中の `..foo` のような名前まで外として断っていた。 */
+  test('outsideRel は最初の区切りが .. のときだけ外', async () => {
+    const { outsideRel, safeResolve } = await import('../src/agent/tools/paths.ts');
+    const { sep, join } = await import('node:path');
+    assert.equal(outsideRel('..foo'), false);
+    assert.equal(outsideRel(`..env${sep}bak`), false);
+    assert.equal(outsideRel('..'), true);
+    assert.equal(outsideRel(`..${sep}x`), true);
+    const root = join(sep, 'work');
+    assert.equal(safeResolve(root, '..foo'), join(root, '..foo'));
+    assert.equal(safeResolve(root, '../foo'), undefined);
+    assert.equal(safeResolve(root, 'a/../../foo'), undefined);
+  });
+});

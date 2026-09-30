@@ -7,6 +7,7 @@
  */
 import { readdir, realpath } from 'node:fs/promises';
 import { join, resolve, relative, isAbsolute, sep } from 'node:path';
+import { outsideRel } from '../agent/tools/paths.ts';
 
 export interface Entry {
   name: string;
@@ -38,7 +39,7 @@ export async function insideRoot(root: string, asked: string): Promise<string | 
   if (real === realRoot) return real;
   const rel = relative(realRoot, real);
   // 上へ出る道と、絶対の道は受け取らない。
-  if (rel.startsWith('..') || isAbsolute(rel)) return undefined;
+  if (outsideRel(rel)) return undefined;
   return real;
 }
 

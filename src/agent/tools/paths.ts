@@ -4,11 +4,19 @@ import { resolve, relative, isAbsolute, sep } from 'node:path';
  * 作業ディレクトリの外へ出さない。
  * `..` やシンボリックリンク経由の脱出を防ぐ最初の関門。
  */
+/**
+ * `relative()` の答えが、根の外を指すか。**最初の区切りが `..` のときだけ外。**`rel.startsWith('..')` で見ていたので、作業場の中の
+ * `..foo` のような名前のファイル（`..env.bak` など）まで外として断っていた。
+ */
+export function outsideRel(rel: string): boolean {
+  return isAbsolute(rel) || rel.split(sep)[0] === '..';
+}
+
 export function safeResolve(root: string, candidate: string): string | undefined {
   const abs = isAbsolute(candidate) ? candidate : resolve(root, candidate);
   const rel = relative(root, abs);
   if (rel === '') return abs;
-  if (rel.startsWith('..') || isAbsolute(rel)) return undefined;
+  if (outsideRel(rel)) return undefined;
   if (rel.split(sep).includes('..')) return undefined;
   return abs;
 }
@@ -59,7 +67,7 @@ export async function realSafeResolve(root: string, candidate: string): Promise<
       const full = tail ? resolve(real, tail) : real;
       const rel = relative(realRoot, full);
       if (rel === '') return root;
-      if (rel.startsWith('..') || isAbsolute(rel)) return undefined;
+      if (outsideRel(rel)) return undefined;
       return resolve(root, rel);
     } catch {
       const up = dirOf(probe);
