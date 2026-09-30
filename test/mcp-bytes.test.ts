@@ -237,4 +237,25 @@ describe('立ち上げ直したとき、前の相手の終わりを今の相手�
     assert.equal(got.text, '返しました');
     assert.equal(c.running, true, '前の相手の終わりで、今の相手まで止まったことになった');
   });
+
+  test('立ち上げている途中で止めて立ち上げ直しても、前の立ち上げの失敗で今の相手を止めない', async () => {
+    // 名乗りに 0.5 秒かかる相手。名乗る前に止めて立ち上げ直す
+    const c = client(['-e', `
+      const { createInterface } = require('node:readline');
+      createInterface({ input: process.stdin }).on('line', (line) => {
+        const msg = JSON.parse(line);
+        const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+        if (msg.method === 'initialize') setTimeout(() => say({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18' } }), 500);
+        else if (msg.method === 'tools/list') say({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'x' }] } });
+      });
+      setInterval(() => {}, 1000);
+    `]);
+    const first = c.start();
+    await new Promise((r) => setTimeout(r, 100));
+    c.stop();
+    const second = c.start();
+    assert.equal(await first, false, '止めた立ち上げが済んだことになった');
+    assert.equal(await second, true, `前の立ち上げの失敗で、立ち上げ直した相手が落ちた: ${c.failure}`);
+    assert.equal(c.running, true);
+  });
 });

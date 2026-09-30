@@ -266,8 +266,11 @@ export class McpClient {
       this.#tools = (listed?.tools ?? []).filter((t) => typeof t?.name === 'string');
       return true;
     } catch (e) {
-      this.#failure = (e as Error).message;
-      this.stop();
+      // 立ち上げている間に止めて立ち上げ直されていたら、今の相手には触らない（止めて、失敗を上書きすると、立ち上げ直した方まで落ちる）
+      if (mine()) {
+        this.#failure = (e as Error).message;
+        this.stop();
+      }
       return false;
     }
   }
