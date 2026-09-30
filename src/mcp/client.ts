@@ -159,6 +159,11 @@ export class McpClient {
    */
   readonly #missingHeaders: string[] = [];
   #abort?: AbortSignal;
+  /**
+   * 遠くの相手へ出した問いごとの、繋ぎを切る口。止めた・時間切れの問いの返事の流れ（SSE）を、その場で閉じる。
+   * 閉じないと、相手が流れを開いたまま黙っている間、繋ぎが残り続けた（読み手は次の塊が来るまで待つ）。
+   */
+  readonly #streams = new Map<number, AbortController>();
 
   constructor(name: string, spec: McpServerSpec) {
     this.name = name;
@@ -292,6 +297,9 @@ export class McpClient {
         }).catch(() => undefined);
       }
       this.#http = undefined;
+      // 待っている呼び出しを終わらせ、返事の流れも閉じる（手元の相手が落ちたときの exit と同じ扱い。
+      // 落とさないと、切った後も呼び出しが時間切れまで返らなかった）
+      this.#fail('切りました');
       return;
     }
     if (this.#child) endChild(this.#child);
@@ -304,6 +312,9 @@ export class McpClient {
     this.#failure ??= reason;
     for (const p of this.#pending.values()) p.reject(new Error(reason));
     this.#pending.clear();
+    // 待ちが無くなった問いの流れも閉じる（開いたままだと、相手が次の塊を出すまで繋ぎが残る）
+    for (const own of this.#streams.values()) own.abort();
+    this.#streams.clear();
   }
 
   /**
@@ -345,13 +356,17 @@ export class McpClient {
   }
 
   /** `optional` の知らせ（取り消し）は、届かなくても失敗にしない。失敗にすると、同じ相手に出しているほかの呼び出しまで落ちる。 */
-  #send(payload: unknown, optional = false): void {
+  #send(payload: unknown, optional = false, id?: number): void {
     if (this.#http) {
+      const own = id === undefined ? undefined : new AbortController();
+      if (own && id !== undefined) this.#streams.set(id, own);
       // 送れなかったことは、待っている呼び出しの側で（上限で）分かる。
       // ここで投げっぱなしにすると、拾い手が居ないままプロセスが落ちる。
-      void this.#post(payload, optional).catch((e: unknown) => {
+      void this.#post(payload, optional, id, own?.signal).catch((e: unknown) => {
+        // 自分で切った繋ぎ（止めた・時間切れ）の失敗は、失敗ではない
+        if (own?.signal.aborted) return;
         if (!optional) this.#fail(`送れませんでした: ${e instanceof Error ? e.message : String(e)}`);
-      });
+      }).finally(() => { if (id !== undefined && this.#streams.get(id) === own) this.#streams.delete(id); });
       return;
     }
     // 行区切りなので、中に改行を入れない。
@@ -396,7 +411,8 @@ export class McpClient {
       return true;
     } catch (e) {
       this.#failure = (e as Error).message;
-      this.#http.open = false;
+      // 立ち上げの途中で stop() されると #http はもう無い。無いのに触ると、「投げない」はずの start() が TypeError を投げた
+      if (this.#http) this.#http.open = false;
       return false;
     }
   }
@@ -406,10 +422,12 @@ export class McpClient {
    *
    * 相手は JSON でも、流れ（SSE）でも返してくる。どちらも同じ形に均す。
    */
-  async #post(payload: unknown, optional = false): Promise<void> {
+  async #post(payload: unknown, optional = false, id?: number, own?: AbortSignal): Promise<void> {
     const http = this.#http;
     if (!http) return;
-    const fail = (reason: string) => { if (!optional) this.#fail(reason); };
+    // 自分で切った繋ぎ（止めた・時間切れ）の失敗は、失敗にしない
+    const fail = (reason: string) => { if (!optional && !own?.aborted) this.#fail(reason); };
+    const signals = [own, this.#abort].filter((s): s is AbortSignal => s !== undefined);
     let res: Response;
     try {
       res = await fetch(http.url, {
@@ -421,7 +439,7 @@ export class McpClient {
           ...(http.session ? { 'mcp-session-id': http.session } : {}),
         },
         body: JSON.stringify(payload),
-        ...(this.#abort ? { signal: this.#abort } : {}),
+        ...(signals.length > 0 ? { signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals) } : {}),
       });
     } catch (e) {
       fail(`繋がりません: ${(e as Error).message}`);
@@ -440,7 +458,7 @@ export class McpClient {
 
     const type = res.headers.get('content-type') ?? '';
     if (type.includes('text/event-stream')) {
-      await this.#readEvents(res);
+      await this.#readEvents(res, id);
       return;
     }
     const text = await res.text();
@@ -448,7 +466,7 @@ export class McpClient {
   }
 
   /** 流れ（SSE）を読む。`data:` の行だけを拾う。 */
-  async #readEvents(res: Response): Promise<void> {
+  async #readEvents(res: Response, id?: number): Promise<void> {
     const body = res.body;
     if (!body) return;
     const reader = body.getReader();
@@ -467,9 +485,10 @@ export class McpClient {
         if (!data || data === '[DONE]') continue;
         for (const one of splitMessages(data)) this.#onData(`${one}\n`);
       }
-      // 待っているものが無くなったら、そこで切り上げる。
+      // この問いの返事が済んだら（問いの無い流れなら、待っているものが無くなったら）、そこで切り上げる。
       // 相手は流れを開いたままにすることがあり、待つと止まって見える。
-      if (this.#pending.size === 0) { void reader.cancel().catch(() => undefined); break; }
+      const settled = id === undefined ? this.#pending.size === 0 : !this.#pending.has(id);
+      if (settled) { void reader.cancel().catch(() => undefined); break; }
     }
   }
 
@@ -490,11 +509,13 @@ export class McpClient {
         done();
         // reason は相手の記録に残る機械向けの文。日本語を置かない
         this.#notify('notifications/cancelled', { requestId: id, reason: 'cancelled by user' }, true);
+        this.#streams.get(id)?.abort(); // 返事の流れを閉じる（取り消しを送った後に切る）
         resolve(STOPPED);
       };
       const timer = setTimeout(() => {
         this.#pending.delete(id);
         done();
+        this.#streams.get(id)?.abort();
         reject(new Error(`${timeoutMs}ms で返事がありませんでした（${method}）`));
       }, timeoutMs);
       timer.unref?.();
@@ -504,7 +525,7 @@ export class McpClient {
         reject: (e) => { done(); reject(e); },
       });
       signal?.addEventListener('abort', onAbort, { once: true });
-      this.#send({ jsonrpc: '2.0', id, method, params });
+      this.#send({ jsonrpc: '2.0', id, method, params }, false, id);
     });
   }
 }
