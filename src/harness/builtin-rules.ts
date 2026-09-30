@@ -6,7 +6,7 @@
  */
 import { isWriteTool, isExternalTool, mayWriteFiles, plannedContent } from '../agent/tools/write-kind.ts';
 import { readFile, lstat } from 'node:fs/promises';
-import { relative, isAbsolute, dirname, join } from 'node:path';
+import { relative, isAbsolute, dirname, join, sep } from 'node:path';
 import { existsSync } from 'node:fs';
 import { minimatch } from './glob.ts';
 import { safeResolve } from '../agent/tools/paths.ts';
@@ -406,7 +406,8 @@ function normalize(root: string, path: string): string {
   const abs = safeResolve(root, path);
   if (!abs) return path;
   const rel = relative(root, abs);
-  return isAbsolute(rel) ? path : rel.split('\\').join('/');
+  // 区切りは、動いている機械のものだけを揃える（Linux・macOS では `\` は名前の一文字で、`sub\a.ts` は `sub/a.ts` とは別のファイル）
+  return isAbsolute(rel) ? path : rel.split(sep).join('/');
 }
 
 const TEST_FILE = /(\.|_|^)(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.go$|(^|\/)tests?\//i;
