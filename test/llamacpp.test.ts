@@ -10,6 +10,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LlamaCppRuntime } from '../src/runtime/llamacpp.ts';
 import { REFERENCE_MACHINE } from '../src/runtime/spec.ts';
+import { planExecution } from '../src/runtime/planner.ts';
+import { inferSpec } from '../src/runtime/infer.ts';
 
 const here = join(fileURLToPath(import.meta.url), '..');
 const FAKE = join(here, 'fixtures', 'fake-llama-server.mjs');
@@ -64,6 +66,25 @@ describe('実行計画', () => {
   test('規模が読めないファイルは計画を出せない', async () => {
     const dir = await modelsDir(['mystery.gguf']);
     assert.equal(runtime(dir).planFor('mystery.gguf'), undefined);
+  });
+});
+
+describe('計画', () => {
+  test('量子化を下げた計画にしない（読むのはファイルそのもので、下げたファイルは無い）', async () => {
+    const dir = await modelsDir(['a-70b.gguf']);
+    const plan = runtime(dir).planFor('a-70b.gguf')!;
+    assert.equal(plan.quant, 'Q4_K_M', plan.degradations.join(' / '));
+    assert.equal(plan.degradations.some((d) => d.startsWith('量子化を')), false);
+  });
+
+  test('会話の数（parallel）ぶんの KV を見込んだ計画にする', async () => {
+    const dir = await modelsDir(['a-7b.gguf']);
+    const one = runtime(dir, { desiredContext: 32768 }).planFor('a-7b.gguf')!;
+    const four = runtime(dir, { desiredContext: 32768, parallel: 4 }).planFor('a-7b.gguf')!;
+    assert.deepEqual(four, planExecution({
+      model: inferSpec('a-7b')!, machine: REFERENCE_MACHINE, desiredContext: 32768, sequences: 4, allowQuantDowngrade: false,
+    }));
+    assert.notDeepEqual(four, one, '会話が 4 つでも 1 つと同じ計画になっている');
   });
 });
 

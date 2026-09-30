@@ -80,6 +80,9 @@ export async function findRemovable(opts: {
     for (const name of await readdir(dir).catch(() => [])) {
       if (!/\.(part|partial|tmp)$/i.test(name)) continue;
       const path = join(dir, name);
+      // いま取っている最中のものは消さない（書き続けているので新しい）。1 時間より古いものだけ
+      const s = await stat(path).catch(() => undefined);
+      if (!s || now - s.mtimeMs < 60 * 60 * 1000) continue;
       found.push({
         path, bytes: await sizeOf(path),
         why: '取得の途中で切れたもの（消すと、続きからではなく最初から取り直しになります）',

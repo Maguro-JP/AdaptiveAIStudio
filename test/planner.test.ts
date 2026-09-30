@@ -5,7 +5,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { planExecution, estimateDuration } from '../src/runtime/planner.ts';
-import { REFERENCE_MACHINE, GB, QUANT_BITS, type MachineSpec } from '../src/runtime/spec.ts';
+import { REFERENCE_MACHINE, GB, MB, QUANT_BITS, type MachineSpec, type ModelSpec, weightBytes, bytesPerLayer, kvCacheBytes } from '../src/runtime/spec.ts';
 import { KNOWN_MODELS } from '../src/runtime/catalog.ts';
 
 const machine = REFERENCE_MACHINE;
@@ -120,5 +120,57 @@ describe('実行可能性プランナ', () => {
     const long = planExecution({
       model: KNOWN_MODELS['qwen2.5-coder:7b']!, machine, desiredContext: 16384 });
     assert.ok(long.vramUsedBytes > short.vramUsedBytes);
+  });
+});
+
+/*
+ * 計画が本当に載るかを、プランナの外で計算し直して見る。プランナが返す使用量は、プランナ自身の見積もりなので
+ * 見積もりを間違えていれば一緒に間違える。ここではファイルの本当の重さと、会話の数ぶんの KV で数える。
+ */
+const KV_BYTES = { f16: 2, q8_0: 1, q4_0: 0.55 } as const;
+function gpuBytesReally(file: ModelSpec, p: ReturnType<typeof planExecution>, sequences = 1): number {
+  if (p.gpuLayers === 0) return 0;
+  // 量子化を下げた計画なら、下げた先の重さで数える
+  const model = p.degradations.some((d) => d.startsWith('量子化を')) ? { ...file, bitsPerWeight: QUANT_BITS[p.quant] } : file;
+  return p.gpuLayers * bytesPerLayer(model) + kvCacheBytes(model, p.contextLength, KV_BYTES[p.kvCacheType]) * sequences;
+}
+
+describe('計画は、実際に読むファイルと実際に確保する量で載る', () => {
+  const f16: ModelSpec = { id: 'f16-7b', paramsB: 7.6, layers: 28, kvHeads: 4, headDim: 128, bitsPerWeight: 16 };
+
+  test('F16 のモデルを Q8_0 の重さで見積もらない（GPU に載せすぎて落ちる）', () => {
+    for (const allowQuantDowngrade of [true, false]) {
+      const p = planExecution({ model: f16, machine, allowQuantDowngrade });
+      assert.ok(gpuBytesReally(f16, p) <= machine.vramBytes - 900 * MB,
+        `${p.gpuLayers} 層を GPU に載せる計画だが、本当の重さでは ${(gpuBytesReally(f16, p) / GB).toFixed(1)}GB（allowQuantDowngrade=${allowQuantDowngrade}）`);
+    }
+  });
+
+  test('量子化を下げないなら、読むファイルの重さのまま見積もる', () => {
+    const p = planExecution({ model: f16, machine, allowQuantDowngrade: false });
+    assert.equal(p.degradations.some((d) => d.startsWith('量子化を')), false);
+    assert.ok(p.ramUsedBytes + p.vramUsedBytes >= weightBytes(f16), '重みの合計がファイルより軽い');
+  });
+
+  test('会話の数ぶんの KV を見込む（--ctx-size は context × 会話の数で渡る）', () => {
+    for (const model of Object.values(KNOWN_MODELS)) {
+      for (const sequences of [1, 2, 4]) {
+        const p = planExecution({ model, machine, sequences, desiredContext: 32768 });
+        assert.ok(gpuBytesReally(model, p, sequences) <= machine.vramBytes - 900 * MB,
+          `${model.id}: 会話 ${sequences} つで ${(gpuBytesReally(model, p, sequences) / GB).toFixed(1)}GB を GPU に置く計画になっている`);
+      }
+    }
+  });
+
+  test('context を縮める前に KV を量子化する（ほぼ落ちない方を先に使う）', () => {
+    const model = KNOWN_MODELS['qwen2.5-coder:7b']!;
+    const cpu: MachineSpec = {
+      vramBytes: 0, vramBandwidthBytesPerSec: 0, ramBandwidthBytesPerSec: 70 * GB,
+      // q8_0 の KV なら 8192 がちょうど入る広さ
+      ramBytes: 4 * GB + weightBytes(model) + kvCacheBytes(model, 8192, 1) + 1 * MB,
+    };
+    const p = planExecution({ model, machine: cpu, desiredContext: 8192 });
+    assert.equal(p.contextLength, 8192, `context を縮めた: ${p.degradations.join(' / ')}`);
+    assert.equal(p.kvCacheType, 'q8_0');
   });
 });

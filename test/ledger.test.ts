@@ -28,6 +28,16 @@ describe('変更の検出', () => {
     assert.equal(changes[0]!.kind, 'joined');
   });
 
+  test('formerly で改名したら、前の名前を「名簿から消えた」と言わない（起動のたびにも言わない）', () => {
+    const l = new RoleLedger();
+    l.sync([role({ id: 'scout', codename: 'SCOUT' })]);
+    const roster = [role({ id: 'pathfinder', codename: 'PATHFINDER', formerly: ['scout'] })];
+    const renamed = l.sync(roster);
+    assert.equal(renamed.some((c) => c.roleId === 'scout'), false, JSON.stringify(renamed));
+    assert.equal(renamed.some((c) => c.kind === 'renamed'), true);
+    assert.deepEqual(l.sync(roster), [], '同じ名簿で、また何か言っている');
+  });
+
   test('変わっていなければ何も記録しない', () => {
     const l = new RoleLedger();
     const roles = [role({ id: 'scout' })];
