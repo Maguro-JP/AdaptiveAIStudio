@@ -52,7 +52,7 @@ import { buildRuntime } from '../core/runtime-setup.ts';
 import { MachineCache } from '../runtime/machine.ts';
 import { usesGguf, type LocalRuntime } from '../runtime/local-runtime.ts';
 import { realSafeResolve, safeResolve, isSymlink } from '../agent/tools/paths.ts';
-import { searchText, OPAQUE_LINE } from '../agent/tools/fs.ts';
+import { searchText, OPAQUE_LINE, toLf, matchLineEndings } from '../agent/tools/fs.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout, DEFAULT_LAYOUT_ID } from './layout.ts';
 import { repairTheme, baseTheme, THEMES, TOKENS, toCssVars, type Theme } from './theme.ts';
@@ -1519,8 +1519,26 @@ export class UiServer {
       const id = String(body?.id ?? '');
       if (!id) return send(res, 400, { error: '名前がありません' });
 
+      /*
+       * **取っている間に二つ目を始めない。**断らずに始めていたので、二度押すと同じ `.part` へ二本が数GBずつ書き、先に終わった方が
+       * 名前を付け替えると、もう一本は「GGUF として読めませんでした」で失敗と言っていた（取れているのに）。見てから記すまでに
+       * 待ちを挟まない（挟むと、その間に来た二つ目も通る）
+       */
+      if (this.#fetching?.state === 'running') {
+        return send(res, 409, { error: `いま別のモデル（${this.#fetching.id}）を取ってきています。終わってからにしてください` });
+      }
+      const began = Date.now();
+      this.#fetching = { id, state: 'running', message: '始めます…', began };
+
       // 数GBかかるので、待たせずに始めて、進み具合は流し込む。
-      this.#bg(this.#fetchModel(session, id), 'モデルの取得が落ちました');
+      this.#bg(this.#fetchModel(session, id).catch((e: unknown) => {
+        // 取りかかる前に落ちたときも、「取っている」のまま残さない（残ると、以後の取得を全部断る）
+        if (this.#fetching?.id === id && this.#fetching.began === began && this.#fetching.state === 'running') {
+          this.#fetching = { id, state: 'failed', message: (e as Error).message, began };
+          this.#jobsChanged();
+        }
+        throw e;
+      }), 'モデルの取得が落ちました');
       return send(res, 202, { started: id });
     }
 
@@ -2028,7 +2046,16 @@ export class UiServer {
       if (typeof current !== 'string') {
         return send(res, 415, { error: `${currentBytes.includes(0) ? '文字のファイルではない' : 'utf8 ではない'}ので、行ごとには戻せません。「戻す」の一覧から丸ごと戻してください` });
       }
-      const after = revertLines(current, diff, picks);
+      /*
+       * **CRLF のファイルは LF に揃えて当て、元の改行に戻して書く。**AI の書き込みは差分を LF で作り、ファイルは CRLF のまま書く
+       * （`matchLineEndings`）。そのまま当てると行の末の `\r` で一致せず、Windows の普通のファイルでは塊ごとの「戻す」が必ず
+       * 「その後に中身が変わっている」で断られていた。そのまま当たるものは今までどおり（改行の混ざったファイルを揃え直さない）
+       */
+      let after = revertLines(current, diff, picks);
+      if (after === undefined && current.includes('\r\n')) {
+        const lf = revertLines(toLf(current), diff.replace(/\r(?=\n|$)/g, ''), picks);
+        if (lf !== undefined) after = lf === toLf(current) ? current : matchLineEndings(lf, current);
+      }
       if (after === undefined) {
         return send(res, 409, { error: 'その後に中身が変わっているので、この差分では戻せません（エディタで直してください）' });
       }

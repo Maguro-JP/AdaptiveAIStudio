@@ -13,16 +13,33 @@ export type GitState =
   | { kind: 'unavailable'; reason: string };
 
 export async function inspectGit(root: string): Promise<GitState> {
-  const status = await runGit(['status', '--porcelain', '--branch'], root);
+  /*
+   * **道は -z で受ける。**`--porcelain` だけでは、日本語の名前を `"\350\250\255..."` と引用し、名前の変更を `a -> b` と一行にする。
+   * その文字をそのまま道として使っていたので、段取りの受け入れで無い道を「計画に無いファイル」として挙げていた。
+   * 新しいフォルダは `sub/` のまま受ける（中を一つずつ出させると、node_modules を無視していない作業場では何千件も歩く）。
+   * フォルダの扱いは受け入れの側（`dropCoveredDirs`）でする
+   */
+  const status = await runGit(['status', '--porcelain=v1', '-z', '--branch'], root);
   if (status.code !== 0) {
     if (/not a git repository/i.test(status.out)) return { kind: 'notRepo' };
     return { kind: 'unavailable', reason: status.out.trim().split('\n')[0] ?? 'git を実行できません' };
   }
 
-  const lines = status.out.split('\n').filter((l) => l.length > 0);
-  const branchLine = lines.find((l) => l.startsWith('##')) ?? '## (不明)';
+  // 出力には警告（標準エラー）が混ざる。-z の欄は改行を含まないので、改行を含む欄は、最後の改行の後ろだけが本物の欄
+  const parts = status.out.split('\0').map((l) => (l.includes('\n') ? l.slice(l.lastIndexOf('\n') + 1) : l)).filter((l) => l.length > 0);
+  const branchLine = parts.find((l) => l.startsWith('##')) ?? '## (不明)';
   const branch = branchLine.replace(/^##\s*/, '').split(/\.{3}|\s/)[0] ?? '(不明)';
-  const changed = lines.filter((l) => !l.startsWith('##')).map((l) => l.slice(3));
+  const changed: string[] = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    const entry = parts[i]!;
+    if (entry.startsWith('##') || entry.length < 4) continue;
+    changed.push(entry.slice(3));
+    // 名前を変えた・写したものは、次の欄に元の名前が来る。元の道も変わったものとして数える
+    if (/[RC]/.test(entry.slice(0, 2)) && i + 1 < parts.length) {
+      changed.push(parts[i + 1]!);
+      i += 1;
+    }
+  }
 
   return changed.length === 0 ? { kind: 'clean', branch } : { kind: 'dirty', branch, changed };
 }

@@ -231,3 +231,57 @@ describe('取ってこられなかったときに、行き止まりにしない'
     } finally { await hf.close(); }
   });
 });
+
+describe('取っている間に、二つ目を始めない', () => {
+  /**
+   * 断らずに始めていたので、二度押すと同じ `.part` へ二本が書き、先に終わった方が名前を付け替えると、もう一本は
+   * 「GGUF として読めませんでした」で失敗と言っていた（取れているのに）。
+   */
+  test('取っている間の二つ目は 409 で断り、一本だけが置かれる', async () => {
+    const hf = await fakeHf();
+    // 一覧を返すのを遅らせて、取っている間を作る（遅れは決めた長さ）
+    const slow = (async (u: string | URL, init?: RequestInit) => {
+      await new Promise((r) => setTimeout(r, 800));
+      return hf.fetchImpl(u, init);
+    }) as typeof fetch;
+    const models = await tempDir('aas-getui-twice-models-');
+    const home = await tempDir('aas-getui-twice-home-');
+    const prev = { home: process.env.AAS_HOME, state: process.env.AAS_STATE_DIR, cfg: process.env.AAS_CONFIG };
+    process.env.AAS_HOME = home;
+    process.env.AAS_STATE_DIR = join(home, 'state');
+    process.env.AAS_CONFIG = join(home, 'aas.config.json');
+    const { UiServer } = await import('../src/ui/server.ts');
+    const { DEFAULT_CONFIG } = await import('../src/config.ts');
+    const server = new UiServer({
+      port: 0,
+      modelFetch: slow,
+      config: { ...DEFAULT_CONFIG, runtime: { kind: 'inproc', modelsDir: models }, agent: { root: home, approval: 'auto' }, initiative: { enabled: false } } as never,
+    });
+    const base = (await server.start()).replace(/\/$/, '');
+    try {
+      const post = () => fetch(`${base}/api/models/get`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'org/some-model-GGUF' }),
+      });
+      const first = await post();
+      assert.equal(first.status, 202, await first.text());
+      const second = await post();
+      assert.equal(second.status, 409, `取っている間に二つ目を始めた: ${second.status} ${await second.text()}`);
+      // 終わるまで待つ（取っている状態が外れる）
+      const until = Date.now() + 30_000;
+      for (;;) {
+        const st = await (await fetch(`${base}/api/models`)).json() as { fetching?: { state?: string } | null };
+        if (st.fetching?.state !== 'running') break;
+        if (Date.now() > until) throw new Error('終わらない');
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const placed = (await readdir(models)).filter((n) => n.endsWith('.gguf'));
+      assert.equal(placed.length, 1, `置かれたもの: ${JSON.stringify(await readdir(models))}`);
+    } finally {
+      await server.stop().catch(() => undefined);
+      await hf.close();
+      if (prev.home === undefined) delete process.env.AAS_HOME; else process.env.AAS_HOME = prev.home;
+      if (prev.state === undefined) delete process.env.AAS_STATE_DIR; else process.env.AAS_STATE_DIR = prev.state;
+      if (prev.cfg === undefined) delete process.env.AAS_CONFIG; else process.env.AAS_CONFIG = prev.cfg;
+    }
+  });
+});

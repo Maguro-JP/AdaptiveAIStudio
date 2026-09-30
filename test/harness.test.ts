@@ -316,6 +316,20 @@ describe('規則: その他', () => {
     assert.equal(kind(noRepeatedWrites.pre!(reordered as never, ctx([first]))), 'deny', 'キーの順だけ変えた同じ直しを通した');
   });
 
+  test('git の破壊的な操作は、選択肢の並び・全体の選択肢・長い名前に関わらず止める', () => {
+    const kind = (command: string) => (dangerousCommands.pre!({ id: 'x', name: 'run_command', args: { command } }, {} as never) as { kind: string }).kind;
+    for (const command of [
+      'git clean -x -d -f', 'git clean --force', 'git clean -fdx', 'git -C . push', 'git -c x=y push origin main',
+      'git reset -q --hard', 'git reset --hard=HEAD', 'git restore .', 'git checkout .', 'git checkout -f main',
+      'npm test && git clean -d -f', '"git" push', 'git restore --staged --worktree .',
+    ]) {
+      assert.equal(kind(command), 'deny', `止めなかった: ${command}`);
+    }
+    for (const command of ['git status', 'git diff', 'git log --oneline -5', 'git clean -n', 'git checkout -b feature', 'git restore --staged a.ts', 'git restore --staged .', 'git restore -S -- .']) {
+      assert.equal(kind(command), 'allow', `止めすぎた: ${command}`);
+    }
+  });
+
   test('作業ディレクトリの外を止める', async () => {
     const root = await project();
     const h = harness([workspaceBoundary]);
