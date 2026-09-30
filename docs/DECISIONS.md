@@ -10602,7 +10602,10 @@ SIGINT を受け流せないので、そこで落ちていた（次の依頼は�
   （`gitDanger`）。止めるのは push・reset --hard・clean -f/--force・checkout/restore の作業場全体（`.`）と checkout -f
 - 今までの正規表現も残す（`echo git push` のような形も今までどおり止める側）
 - 止めないもの: `git clean -n`・`git checkout -b`・`git restore --staged`（`.` でも。索引を戻すだけで作業ツリーには触らない。`--worktree` が付けば止める）など
-- まだ止められないもの: 別名（`git -c alias.x='reset --hard' x`）・長い名前の省略（`--har`）・`git switch -f`・括弧で包んだ形（`(git -C . push)`）
+- 別名（`git -c alias.x='reset --hard' x`）は中身も見る。長い名前の省略（`--har`・`--forc`、`--` の後ろ 3 字以上）も同じ名前とみなす。`git switch -f`・
+  `--discard-changes`・`./` の作業場全体・括弧や `$(` で包んだ形も止める（読み直しの担当の指摘。後から足した）
+- 別名の中身を見るのは二段まで（別名を何十も並べると、見るたびに残りをまた見るので長くなる）。`:(top)` は包みを外すと `:(top` になるので、それも作業場全体とみなす
+- まだ止められないもの: 設定ファイルに書いた別名（`git x` の `x` が何かは、ここでは分からない）
 - 試験: `test/harness.test.ts`（止める 12 通りと止めない 6 通り）。直す前の版で落ちることを見た
 触る場所: `src/harness/builtin-rules.ts` の `gitDanger`
 
