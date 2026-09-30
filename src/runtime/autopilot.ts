@@ -69,7 +69,9 @@ export class Autopilot {
       if (m.locality !== 'local') continue; // クラウドは別枠で扱う
       const spec = lookupModel(m.model) ?? inferSpec(m.model);
       if (!spec) continue;
-      const plan = planExecution({ model: spec, machine: this.#machine });
+      // 動かす側と同じ前提で見積もる。量子化を下げた計画は、下げたファイルが無いので動かない（その速さで並べると、
+      // RAM に入らないモデルを速いと見て選び、実際はディスクから読んで何時間もかかる）
+      const plan = planExecution({ model: spec, machine: this.#machine, allowQuantDowngrade: false });
       this.#known.set(m.id, { spec, plan });
     }
   }

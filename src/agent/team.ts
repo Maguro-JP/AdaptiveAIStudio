@@ -184,6 +184,8 @@ export class Team {
             (e) => push({ type: 'race', taskId: item.id, event: e }),
           );
           if (!outcome.winner) {
+            // 止めたのなら止めたと言う（race でない道と同じ言い方）
+            if (ctx.signal.aborted) throw new Error('aborted: 中断されました');
             throw new Error(`全てのモデルが完了できませんでした (${models.join(', ')})`);
           }
           return outcome.winner.result;

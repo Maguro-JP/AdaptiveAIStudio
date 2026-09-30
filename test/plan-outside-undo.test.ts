@@ -229,3 +229,28 @@ describe('段取りで確かめて落ちたら、この依頼の変更を全部�
   });
 });
 
+describe('段取りの受け入れの報告に、run_command が変えた分も載る', { timeout: 90_000 }, () => {
+  test('作業の前から手元で変えてあったファイルを run_command がさらに書き換えても、「変わったもの」に載る', async () => {
+    const root = await workspace();
+    // 作業の前から手元で変えてある（git の差分の名前だけで比べると、前にも後にも在るので載らない）
+    await writeFile(join(root, 'note.txt'), '手元で変えた\n');
+    const session = await open(root);
+    try {
+      fake.setBehavior({
+        kind: 'steps',
+        calls: [{ name: 'run_command', args: { command: `node -e "require('fs').writeFileSync('note.txt','上書き\\n')"` } }],
+        then: '書きました。',
+      });
+      let changed: string[] | undefined;
+      for await (const ev of session.plan('note.txt を書き換えて')) {
+        if (ev.type === 'accepted') changed = ev.report.changed;
+      }
+      assert.equal(await readFile(join(root, 'note.txt'), 'utf8'), '上書き\n', '前提: run_command が書いていない');
+      assert.ok(changed, '受け入れの報告が出ていない');
+      assert.ok(changed!.includes('note.txt'), `run_command が書き換えた分が載っていない: ${JSON.stringify(changed)}`);
+    } finally {
+      await session.close();
+    }
+  });
+});
+

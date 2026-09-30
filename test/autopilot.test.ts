@@ -47,6 +47,15 @@ describe('諸元の推定', () => {
 });
 
 describe('自動選択', () => {
+  test('RAM に入らないモデルを、量子化を下げた速さで見て選ばない（下げたファイルは無く、ディスクから読んで遅い）', () => {
+    const p = new Autopilot({
+      machine: { vramBytes: 0, ramBytes: 16 * 1024 ** 3, ramBandwidthBytesPerSec: 70 * 1024 ** 3, vramBandwidthBytesPerSec: 0, diskBandwidthBytesPerSec: 3 * 1024 ** 3 },
+      metrics: new MetricsStore('/dev/null'),
+    });
+    p.register([model('qwen2.5-coder:7b'), model('qwen2.5-coder:32b')]);
+    assert.equal(p.select()?.modelId, 'ollama:qwen2.5-coder:7b', JSON.stringify(p.select()));
+  });
+
   test('設定なしでも、入っているモデルから最良を選ぶ', () => {
     const p = pilot();
     p.register([model('qwen2.5-coder:7b'), model('qwen3:30b-a3b'), model('qwen2.5-coder:32b')]);

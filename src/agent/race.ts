@@ -43,6 +43,8 @@ export async function race<R>(
   onEvent?: (e: RaceEvent) => void,
 ): Promise<RaceOutcome<R>> {
   if (attempts.length === 0) return { others: [] };
+  // 始める前に止められていた（口が空くのを待っている間に止めた）。止めたのに全部を最後まで走らせない
+  if (signal.aborted) return { others: [] };
 
   const controllers = attempts.map(() => new AbortController());
   const abortAll = (reason: string, except?: number) => {

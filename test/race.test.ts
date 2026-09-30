@@ -27,6 +27,15 @@ const attempt = (
 const ok = (r: string) => r === 'good';
 
 describe('race（最初に通ったものを採る）', () => {
+  test('始める前に止められていたら、何も走らせない', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    let ran = 0;
+    const out = await race([{ label: 'a', run: async () => { ran += 1; return 'good'; } }], ok, ac.signal);
+    assert.equal(ran, 0, '止めたのに走らせた');
+    assert.equal(out.winner, undefined);
+  });
+
   test('最速の成功が採用される', async () => {
     const out = await race(
       [attempt('slow', 80, 'good'), attempt('fast', 10, 'good')],
