@@ -131,7 +131,8 @@ export class Harness {
         }
 
         const result = await tool.run(args, toolCtx);
-        history.push(call);
+        // 読めなかった read_file は「読んだ」に数えない（数えると、読めなかったファイルを丸ごと書き換えさせる。readBeforeWrite は結果を見られない）
+        if (!(result.isError && call.name === 'read_file')) history.push(call);
 
         // 実行後の判定
         let content = result.content;

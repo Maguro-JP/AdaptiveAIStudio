@@ -866,10 +866,17 @@ export class Session {
        */
       const outside = new OutsideChanges(root);
       await outside.before();
+      /*
+       * 書くツールを通らずに変わった道（run_command・外のツール）。受け入れの報告の「変わったもの」にも足す。
+       * git の差分だけで見ると、作業の前から手元で変えてあったファイルをさらに書き換えても、道の名前が同じなので載らず、
+       * 「何も変わっていません」と報告していた。
+       */
+      const outsideChanged = new Set<string>();
       outsideTaken = async () => {
         const found = await outside.after();
         for (const c of found.changes) this.undo.replace(c.path, c.previous);
         for (const path of found.unrecorded) this.undo.forget(path);
+        for (const path of [...found.changes.map((c) => c.path), ...found.unrecorded]) outsideChanged.add(path.replace(/\\/g, '/'));
       };
 
       /** 実際に書き換えられたファイル。宣言ではなく、起きたことを見る。 */
@@ -934,7 +941,7 @@ export class Session {
 
       const gitAfter = await inspectGit(root);
       const dirtyAfter = gitAfter.kind === 'dirty' ? gitAfter.changed : [];
-      const changed = [...new Set([...written, ...dropCoveredDirs(changedBetween(dirtyBefore, dirtyAfter), [...written])])].sort();
+      const changed = [...new Set([...written, ...outsideChanged, ...dropCoveredDirs(changedBetween(dirtyBefore, dirtyAfter), [...written, ...outsideChanged])])].sort();
 
       const report = accept({
         request, summary: plan.summary, members, changed,

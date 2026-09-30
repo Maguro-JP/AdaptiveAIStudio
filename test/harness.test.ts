@@ -196,6 +196,18 @@ describe('規則: 読んでから書く', () => {
     assert.equal(await readFile(join(root, 'a.ts'), 'utf8'), 'original');
   });
 
+  test('読めなかった read_file（大きすぎる）は、読んだに数えない', async () => {
+    const root = await project({ 'big.txt': 'x'.repeat(600_000) });
+    const h = harness([readBeforeWrite]);
+    const read = h.wrap(readFileTool, () => '');
+    const write = h.wrap(writeFileTool, () => '');
+    const got = await read.run({ path: 'big.txt' }, ctx(root));
+    assert.equal(got.isError, true, `前提: 読めてしまった: ${got.content.slice(0, 80)}`);
+    const r = await write.run({ path: 'big.txt', content: 'replaced' }, ctx(root));
+    assert.equal(r.isError, true, '読めなかったファイルを書き換えさせた');
+    assert.equal((await readFile(join(root, 'big.txt'), 'utf8')).length, 600_000);
+  });
+
   test('読んだ後なら通す', async () => {
     const root = await project({ 'a.ts': 'original' });
     const h = harness([readBeforeWrite]);
