@@ -13,6 +13,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { decodeForReading } from './tools/decode.ts';
 import { isAbsent } from '../harness/put-back.ts';
+import { outsideRel } from './tools/paths.ts';
 
 /**
  * 上限は、**窓から決める。**
@@ -128,7 +129,7 @@ export async function readMentions(
   for (const at of mentionsIn(text)) {
     const full = isAbsolute(at) ? resolve(at) : resolve(join(root, at));
     const rel = relative(resolve(root), full);
-    if (rel.startsWith('..') || isAbsolute(rel)) {
+    if (outsideRel(rel)) {
       out.push({ path: at, ok: false, body: '作業場の外なので読みません' });
       continue;
     }

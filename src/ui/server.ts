@@ -51,7 +51,7 @@ import { installModel, describeFetch, type FetchStatus } from '../runtime/model-
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { MachineCache } from '../runtime/machine.ts';
 import { usesGguf, type LocalRuntime } from '../runtime/local-runtime.ts';
-import { realSafeResolve, safeResolve, isSymlink } from '../agent/tools/paths.ts';
+import { realSafeResolve, safeResolve, isSymlink, outsideRel } from '../agent/tools/paths.ts';
 import { searchText, OPAQUE_LINE, toLf, matchLineEndings } from '../agent/tools/fs.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout, DEFAULT_LAYOUT_ID } from './layout.ts';
@@ -1869,7 +1869,7 @@ export class UiServer {
       if (!real) {
         // 中を指しているが無い（404）のと、外を指している（400）のは別のこと。
         const lexical = relative(this.#workRoot(), resolvePath(this.#workRoot(), asked));
-        const inside = asked !== '' && !isAbsolute(asked) && !lexical.startsWith('..') && !isAbsolute(lexical);
+        const inside = asked !== '' && !isAbsolute(asked) && !outsideRel(lexical);
         return inside
           ? send(res, 404, { error: 'そのファイルはありません' })
           : send(res, 400, { error: '作業場の外は開けません' });
@@ -2085,7 +2085,7 @@ export class UiServer {
       ].map((r) => realpath(r).catch(() => undefined)));
       const within = (root: string) => {
         const rel = relative(root, real);
-        return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+        return rel === '' || !outsideRel(rel);
       };
       if (!roots.some((r) => r !== undefined && within(r))) {
         return send(res, 403, { error: '開けるのは、このプログラムが使っている場所（作業場・モデル・記録・プログラム）の中だけです' });

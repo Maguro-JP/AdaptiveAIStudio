@@ -1742,11 +1742,21 @@ export class Session {
               events.push({ type: 'toolStart', name: ev.call.name, summary: summarize(ev.call.args) });
             } else if (ev.type === 'toolEnd') {
               if (!ev.isError && mayChangeFiles(ev.call.name)) this.#prefetch.invalidate();
+              /*
+               * 直させている間に書いたものも「この依頼で触ったもの」に載せる（本体の周と同じ）。載せていなかったので、巻き戻しで
+               * 前を読めなかった道の報告（`checkpoint.unrecorded(changedHere)`）からこの周の分が漏れ、戻せていないのに全部戻したと言っていた
+               */
+              if (!ev.isError && isWriteTool(ev.call.name)) {
+                wroteSomething = true;
+                const at = (ev.call.args as { path?: unknown }).path;
+                if (typeof at === 'string' && !changedHere.includes(at)) changedHere.push(at);
+              }
               if (outsideTool(ev.call.name)) {
                 const found = await outside.after();
                 for (const c of found.changes) {
                   if (harnessCfg.rollbackOnGiveUp) checkpoint.remember(c.path, c.previous);
                   this.undo.capture(c.path, c.previous);
+                  if (!changedHere.includes(c.path)) changedHere.push(c.path);
                 }
                 for (const path of found.unrecorded) { this.undo.skip(path); outsideUnrecorded.push(path); }
               }
