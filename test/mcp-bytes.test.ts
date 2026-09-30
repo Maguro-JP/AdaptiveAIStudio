@@ -163,3 +163,32 @@ describe('止めた相手を残さない', () => {
     }
   });
 });
+
+describe('相手から来た問いを、こちらの問いの返事と取り違えない', () => {
+  test('相手が同じ番号で ping を訊いてきても、こちらの呼び出しはその問いで済まず、ping には答える', async () => {
+    const c = client(['-e', `
+      const { createInterface } = require('node:readline');
+      let callId;
+      createInterface({ input: process.stdin }).on('line', (line) => {
+        const msg = JSON.parse(line);
+        const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+        if (msg.method === 'initialize') say({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18' } });
+        else if (msg.method === 'tools/list') say({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'x' }] } });
+        else if (msg.method === 'tools/call') {
+          callId = msg.id;
+          // こちらの問いと同じ番号で、相手から訊く（相手の番号は相手が振るので、重なることがある）
+          say({ jsonrpc: '2.0', id: callId, method: 'ping' });
+          say({ jsonrpc: '2.0', id: callId + 1000, method: 'roots/list' });
+        } else if (msg.id === callId && 'result' in msg) {
+          say({ jsonrpc: '2.0', id: callId, result: { content: [{ type: 'text', text: 'ping に答えてもらった' }] } });
+        } else if (msg.id === callId + 1000 && msg.error) {
+          process.stderr.write('roots/list は断られた\\n');
+        }
+      });
+    `]);
+    assert.equal(await c.start(), true, `立ち上がらなかった: ${c.failure}`);
+    const got = await c.call('x', {}, 10_000);
+    assert.equal(got.isError, false, got.text);
+    assert.equal(got.text, 'ping に答えてもらった');
+  });
+});
