@@ -152,8 +152,9 @@ export class UnfinishedWork {
     now: number,
   ): Promise<Unfinished | undefined> {
     // 読めないときは投げる（重なりを確かめられないまま足すと、同じ依頼を二重に記録する）
-    // 同じ依頼でも、別の作業場のものは別の作業
-    const already = (await this.list({ strict: true })).find((u) => u.request === item.request && u.root === item.root);
+    // 重なりは依頼の文だけで見る（作業場が違っても一つ）。段取り（goals）が依頼の文で結びつくので、同じ文が二つあると
+    // 別の作業場の段取りを拾って、途中の段から走らせる
+    const already = (await this.list({ strict: true })).find((u) => u.request === item.request);
     if (already) return undefined;
     const full: Unfinished = {
       ...item,
@@ -273,7 +274,7 @@ export class UnfinishedWork {
     // 戻せないもの（上限まで抱えている・同じ依頼をもう一度抱えている）は並べない。押しても戻らない口を出さない
     if (open.length >= MAX_OPEN) return [];
     return [...canceledAt.entries()]
-      .filter(([id, at]) => at >= since && canceled.has(id) && !open.some((u) => u.request === canceled.get(id)!.request && u.root === canceled.get(id)!.root))
+      .filter(([id, at]) => at >= since && canceled.has(id) && !open.some((u) => u.request === canceled.get(id)!.request))
       .reverse()
       .slice(0, limit)
       .map(([id, at]) => ({ id, request: canceled.get(id)!.request, at }));
@@ -301,7 +302,7 @@ export class UnfinishedWork {
       if (open.some((u) => u.id === id)) return 'open';
       const item = canceled.get(id);
       if (!item) return 'gone';
-      if (open.some((u) => u.request === item.request && u.root === item.root)) return 'duplicate';
+      if (open.some((u) => u.request === item.request)) return 'duplicate';
       if (open.length >= MAX_OPEN) return 'full';
       await this.#append({ t: 'reopen', id, nextAt: Math.max(item.nextAt, now + BACKOFF_MS[0]!) });
       return 'reopened';
@@ -360,8 +361,10 @@ function isLine(v: unknown): v is Line {
   if (l.t === 'add') {
     const i = l.item;
     // 並べ替えと「いま手を付けてよいか」で使う所まで見る。欠けていると一覧ごと止まる。
+    // 作業場は、あるなら文字（違う形だとどの作業場でも拾われず、諦めにも至らないまま枠を一つ占め続ける）
     return typeof i === 'object' && i !== null && typeof i.id === 'string' && typeof i.request === 'string'
-      && typeof i.createdAt === 'string' && typeof i.attempts === 'number' && typeof i.nextAt === 'number';
+      && typeof i.createdAt === 'string' && typeof i.attempts === 'number' && typeof i.nextAt === 'number'
+      && (i.root === undefined || typeof i.root === 'string');
   }
   if (l.t === 'bump') return typeof l.id === 'string' && typeof l.attempts === 'number' && typeof l.nextAt === 'number';
   // やめた時刻（`at`）の形は見ない。形の違う時刻で閉じた行ごと捨てると、やめたものが戻ってくる（時刻は読むところで数のときだけ使う）

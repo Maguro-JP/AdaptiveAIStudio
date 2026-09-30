@@ -237,10 +237,16 @@ describe('やり残しは、作業場ごと', () => {
     assert.equal((await w.due(past))?.request, 'A の依頼');
   });
 
-  test('同じ依頼でも、別の作業場のものは別に記録する', async () => {
+  test('同じ依頼は、作業場が違っても一つ（段取りが依頼の文で結びつくので、二つにしない）', async () => {
     const { w } = await store();
     assert.ok(await w.add({ ...item, root: '/a' }));
-    assert.ok(await w.add({ ...item, root: '/b' }), '別の作業場の同じ依頼を、重なりとして捨てた');
-    assert.equal(await w.add({ ...item, root: '/a' }), undefined);
+    assert.equal(await w.add({ ...item, root: '/b' }), undefined, '同じ文の依頼を二つ記録した');
+  });
+
+  test('作業場が文字でない行は読まない（どこでも拾われないまま枠を占め続けない）', async () => {
+    const { w, path } = await store();
+    const bad = { t: 'add', item: { id: 'x1', request: '壊れた行', why: 'maxTurns', note: '', attempts: 0, nextAt: 0, createdAt: new Date(0).toISOString(), root: 3 } };
+    await writeFile(path, JSON.stringify(bad) + '\n');
+    assert.deepEqual((await w.list()).map((u) => u.request), []);
   });
 });
