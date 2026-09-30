@@ -245,6 +245,8 @@
 - モデルの子プロセス（inproc-host）は、端末の Ctrl-C では止まらない
 - MCP の呼び出しを止めたら、相手にも取り消しを知らせる
 - 止めた MCP の相手が SIGTERM を無視しても残さない
+- 監査・測った数・名簿を残せなかったとき、続けて失敗している間に一度だけ言う
+- llama-server は、端末の Ctrl-C から外さない（別のプロセスグループにしない）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10226,3 +10228,31 @@ inproc-host は SIGINT で自分を止めていたので、CLI が Ctrl-C で生
 - 試験: `test/mcp-bytes.test.ts` に 1 件（SIGTERM を無視する相手が stop() の後に終わる）。直す前の版で落ちることを見た。Windows は
   kill が初めから強制なので飛ばす
 触る場所: `src/mcp/client.ts` の `endChild`・`KILL_GRACE_MS`
+
+## 2026-09-30  監査・測った数・名簿を残せなかったとき、続けて失敗している間に一度だけ言う
+
+どれも「記録に失敗しても本体は止めない」ために失敗を捨てていた。書けない場所を指していても誰も気づかず、監査が残らないと
+ハーネスがなぜ止めた・通したかを後から追えない。
+
+- 監査（`AuditLog.record`）と測った数（`HarnessMetrics.save`）: 失敗したら warn で言う。続けて失敗している間は一度だけで、書けたら戻し、
+  次に失敗したらまた言う（`src/core/warn-once.ts`）。毎回言うと、ツールを一回呼ぶたびに同じ警告が並ぶ
+- 名簿（`RoleLedger.save`）: 残せたかを返し、CLI が言う（起動のときに一度だけ書くので、一度だけの仕組みは要らない）
+- 本体は止めない（前と同じ）
+- 言う先は画面（`Session`）と CLI（`cli/agent.ts`）。Team（`team-setup.ts`）は言う先を持たないので繋いでいない
+- 試験: `test/record-save-warn.test.ts`（一度だけ・書けた後にまた言う・書き先を持たない記録は黙る・画面まで届く）。
+  画面まで届く試験は、session.ts の繋ぎを外した版で落ちることを見た
+触る場所: `src/core/warn-once.ts`、`src/harness/audit.ts`・`metrics.ts` の `warnTo`、`src/roles/ledger.ts` の `save`
+
+## 2026-09-30  llama-server は、端末の Ctrl-C から外さない（別のプロセスグループにしない）
+
+端末の Ctrl-C は llama-server にも届き、止まる（外の実行ファイルで、自分で SIGINT を受けて終わる）。止まっても、次に使うときに
+立ち上げ直すので、困るのは読み直しの待ちだけ。
+
+- 外すには `detached` で起こすしかない（Node の spawn に、プロセスグループだけを分ける指定は無い）。`detached` は POSIX で別の
+  セッションを作るので、端末から外れ、端末を閉じたときの SIGHUP も届かなくなる。親は SIGHUP の聞き手を持たず 'exit' も来ないまま
+  終わるので、片づけが走らず、VRAM を握ったまま残る。残る方が重いので変えない（親の pid だけに届く SIGTERM は、いまも子に届かない。
+  違いが出るのは SIGHUP と、グループ全体への合図だけ）
+- 選ばなかった案: `detached` にして、親の SIGHUP・SIGTERM・'exit' で子を止める。親のシグナルの扱いを runtime の中から変えることに
+  なり、ほかの聞き手（`cli/ui.ts` の SIGTERM 等）と順番を争う
+- inproc-host（既定の口）は Ctrl-C では止まらない（2026-09-29）
+触る場所: `src/runtime/llamacpp.ts` の `spawn`

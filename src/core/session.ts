@@ -530,6 +530,9 @@ export class Session {
       if (d.outcome === 'denied') log('error', `⛔ ${d.rule}: ${d.reason ?? ''}`);
       else if (d.outcome === 'warned') log('warn', `⚠ ${d.rule}: ${d.reason ?? ''}`);
     }, forum);
+    // 記録を残せなかったことを黙らない（続けて失敗している間は一度だけ）
+    harness.audit.warnTo((t) => log('warn', t));
+    harness.metrics?.warnTo((t) => log('warn', t));
 
     /*
      * 外のツール。**立ち上がるのを待たない。**
