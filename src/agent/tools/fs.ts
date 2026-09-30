@@ -23,6 +23,11 @@ export const OPAQUE_LINE = /^（utf8 で読めない中身 \d+ バイト）$/;
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'target', '.venv']);
 const MAX_READ_BYTES = 400_000;
+/**
+ * 範囲（offset・limit）を付けて読むときの上限。丸ごと読むときの上限を超えるファイルも、範囲を付ければここまでは読める。
+ * 付けても読めなかったので、大きいファイルは一部すら見られず、中身を知らずに書き換えるしかなかった。
+ */
+const MAX_RANGED_READ_BYTES = 20_000_000;
 
 export const readFileTool: Tool = {
   schema: {
@@ -47,8 +52,12 @@ export const readFileTool: Tool = {
     if (!abs) return fail(`作業ディレクトリの外です: ${p}`);
     try {
       const info = await stat(abs);
-      if (info.size > MAX_READ_BYTES) {
-        return fail(`ファイルが大きすぎます (${info.size} bytes)。search_text で絞り込んでください。`);
+      const ranged = args.offset !== undefined || args.limit !== undefined;
+      if (info.size > (ranged ? MAX_RANGED_READ_BYTES : MAX_READ_BYTES)) {
+        // 文の頭は変えない（ハーネスがこの文で「一部を読んだ」と数える）
+        return fail(ranged
+          ? `ファイルが大きすぎます (${info.size} bytes)。search_text で絞り込んでください。`
+          : `ファイルが大きすぎます (${info.size} bytes)。offset と limit で一部ずつ読むか、search_text で絞り込んでください。`);
       }
       /*
        * **utf8 で読めないものは、どう読んだかを添える。**黙って utf8 として読むと、二進や Shift_JIS は
