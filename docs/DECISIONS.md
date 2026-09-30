@@ -282,6 +282,7 @@
 - 読めない失敗の数の試験も、commit の手前で回す
 - bundle を組み直しても data を消さない・bootstrap の材料を出力先の外に置く
 - 答えの表示が止まる行・--quant の読み違い・取得の失敗の保存先・置いてあるモデルの取り違え
+- 続きから取るときに別の版を継がない・team が llama-server を残さない・タブ・SSE の分かれた行・Windows の大文字小文字
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10757,4 +10758,23 @@ llama-server に渡す計画（`planExecution`）が、実物と違う前提で�
 - 試験: `test/markdown.test.ts`（別の thread で読ませ、返らなければ止める）・`test/model-install.test.ts`・`test/model-get-ui.test.ts`。
   直す前の形で 5 本とも落ちることを見た
 触る場所: `src/ui/web/markdown.js`、`src/runtime/model-install.ts` の `quantFrom`・`findModel`、`src/ui/server.ts` のモデルの取得
+
+## 2026-09-30  続きから取るときに別の版を継がない・team が llama-server を残さない・タブ・SSE の分かれた行・Windows の大文字小文字
+
+- 続きから取る（`fetchInto`）: 最初に取るとき配布元の版（強い ETag、無ければ Last-Modified）を `.part.tag` に残し、続きを頼むときに
+  `If-Range` で添える。版が変わっていれば配布元が全体を返すので、最初から取り直す。続きの始まり（`content-range`）が手元の長さと違う、
+  416 の本当の長さが手元と違う、のときも途中の分を捨てて取り直す（一度だけ。二度目も合わなければ止める）。
+  前は古い頭に新しい続きを継いだものを「置きました」としていた（頭の 1MB しか確かめないので通る）。
+  `.part.tag` の無い途中の分（前の版が残したもの）は、確かめられないまま続きを取る（捨てると数GBを取り直させる）
+- `aas team`: 作業指示書は、モデルを起こす前に読んで確かめる（`parseTasks`）。起こした後で落ちると、Windows では llama-server が残る
+  （止める付き添いが無い）。JSON として読めない指示書で、スタックトレースを出して落ちていたのも一文で言う
+- タブ: 見ているタブより左を閉じたら、見ている位置を一つ左へずらす（ずらさないと右隣へ表示が飛んでいた）
+- MCP の SSE: 一つの出来事を複数の `data:` 行に分けて送る相手の返事を捨て、時間切れまで待っていた。行を繋ぎ、JSON として読めた時点・
+  空行・流れの終わりで渡す
+- 作業場の既定（`defaultWorkRoot`）: プログラムの中かを見る所を `insideDir` に分け、Windows では大文字と小文字を揃えて比べる
+- 試験: `test/model-install.test.ts`（If-Range・416・続きの始まり）・`test/team-cli.test.ts`・`test/team-tasks.test.ts`・
+  `test/layout-ops.test.ts`・`test/mcp-http.test.ts`・`test/home.test.ts`。直す前の形で落ちることを見た。ただし team の
+  「知らないレーン」は前も一文で止まっていたので、前の形でも通る。llama-server が残らないことは Windows で確かめていない
+触る場所: `src/runtime/model-install.ts` の `fetchInto`、`src/core/team-setup.ts` の `parseTasks` と `src/cli/team.ts`、
+`src/ui/web/layout-ops.js` の `pluck`、`src/mcp/client.ts` の `#readEvents`、`src/core/home.ts` の `insideDir`
 

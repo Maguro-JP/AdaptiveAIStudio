@@ -500,18 +500,36 @@ export class McpClient {
     const reader = body.getReader();
     const dec = new StringDecoder('utf8');
     let buf = '';
+    /*
+     * 一つの出来事の data 行。SSE では一つの出来事を複数の data: 行に分けてよい（空行で終わる）。
+     * 行ごとに JSON として読んでいたので、分けて送る相手の返事を捨て、問いが時間切れまで待っていた。
+     * 繋いで JSON として読めた時点で渡す（一行で送る相手には、今までどおりすぐ渡る）。空行か流れの終わりでも渡す。
+     */
+    let event: string[] = [];
+    const flush = (): void => {
+      const data = event.join('\n').trim();
+      event = [];
+      if (!data || data === '[DONE]') return;
+      let whole: unknown;
+      try { whole = JSON.parse(data); } catch { whole = undefined; }
+      if (whole !== undefined) { this.#onData(`${JSON.stringify(whole)}\n`); return; }
+      for (const one of splitMessages(data)) this.#onData(`${one}\n`);
+    };
+    const readsWhole = (): boolean => {
+      try { JSON.parse(event.join('\n')); return true; } catch { return false; }
+    };
     for (;;) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) { flush(); break; }
       buf += dec.write(Buffer.from(value));
       let at: number;
       while ((at = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, at).trimEnd();
+        const line = buf.slice(0, at).replace(/\r$/, '');
         buf = buf.slice(at + 1);
+        if (line.trim() === '') { flush(); continue; }
         if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (!data || data === '[DONE]') continue;
-        for (const one of splitMessages(data)) this.#onData(`${one}\n`);
+        event.push(line.slice(5).replace(/^ /, ''));
+        if (readsWhole()) flush();
       }
       // この問いの返事が済んだら（問いの無い流れなら、待っているものが無くなったら）、そこで切り上げる。
       // 相手は流れを開いたままにすることがあり、待つと止まって見える。

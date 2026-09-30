@@ -93,9 +93,21 @@ export function defaultWorkRoot(cwd = process.cwd(), root = installRoot()): stri
   if (!isDistributed(root)) return resolve(cwd);
   const here = resolve(cwd);
   const product = resolve(productRoot(root));
-  const inside = here === product || here.startsWith(product + sep);
-  if (!inside) return here;
+  if (!insideDir(here, product)) return here;
   return join(aasHome(root), 'work');
+}
+
+/**
+ * `here` が `dir` そのものか、その下か。Windows は道の大文字と小文字を区別しないので、揃えて比べる
+ * （区別していたので、`c:\program files\…` から起こすとプログラムの外と見なし、そこを作業場にしていた）。
+ * 走らせる所に関わらず確かめられるよう、どちらの決まりで比べるかを引数で受ける。
+ */
+export function insideDir(here: string, dir: string, platform: NodeJS.Platform = process.platform): boolean {
+  const win = platform === 'win32';
+  const s = win ? '\\' : sep;
+  const a = win ? here.toLowerCase() : here;
+  const b = win ? dir.toLowerCase() : dir;
+  return a === b || a.startsWith(b.endsWith(s) ? b : b + s);
 }
 
 /**

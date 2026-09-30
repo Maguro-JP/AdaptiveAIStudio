@@ -20,6 +20,30 @@ import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { RoleRegistry, toolsFor as toolsForRole } from '../roles/registry.ts';
 import { buildSystemPrompt } from '../roles/role.ts';
 
+/**
+ * 作業指示書を読んで確かめる。読めない・形が違う・知らないレーンを指すなら、理由を一文にして投げる。
+ * 入口はモデル（llama-server）を起こす前にこれを呼ぶ。起こした後で落ちると、Windows では llama-server が残る
+ * （止める付き添いが無いので、VRAM と口を抱えたまま）。
+ */
+export function parseTasks(text: string, laneIds: readonly string[]): WorkItem[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`作業指示書を JSON として読めません: ${(e as Error).message}`);
+  }
+  if (!Array.isArray(raw)) throw new Error('作業指示書は作業の並び（[ ... ]）にしてください');
+  for (const item of raw as Partial<WorkItem>[]) {
+    if (typeof item?.id !== 'string' || typeof item.instruction !== 'string' || typeof item.laneId !== 'string') {
+      throw new Error(`作業に id・instruction・laneId が揃っていません: ${JSON.stringify(item)}`);
+    }
+    if (!laneIds.includes(item.laneId)) {
+      throw new Error(`タスク "${item.id}" のレーン "${item.laneId}" が設定にありません。`);
+    }
+  }
+  return raw as WorkItem[];
+}
+
 export interface TeamWiring {
   /**
    * 依頼ごとのツール。規則を通ってから動く。

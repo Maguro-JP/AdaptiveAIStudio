@@ -70,3 +70,36 @@ describe('aas team の入口', { timeout: 120_000 }, () => {
     assert.ok(stored.some((p) => p.paths.includes('a.txt')), `run_command の分が戻り先に載っていない: ${JSON.stringify(stored)}`);
   });
 });
+
+describe('aas team の入口で、作業指示書が違うとき', { timeout: 120_000 }, () => {
+  for (const [what, body] of [
+    ['JSON として読めない', '[{ "id": "t1",'],
+    ['知らないレーンを指す', JSON.stringify([{ id: 't1', laneId: 'nope', instruction: 'x' }])],
+  ] as const) {
+    test(`${what}なら、モデルに触る前に理由を一文で言って止まる`, async () => {
+      const dir = await tempDir('aas-team-badtasks-');
+      const root = join(dir, 'work');
+      await mkdir(root, { recursive: true });
+      const config = join(dir, 'aas.config.json');
+      await writeFile(config, JSON.stringify({
+        providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
+        candidates: ['local:m'],
+        runtime: { kind: 'none' },
+        agent: { root, approval: 'auto', maxTurns: 4 },
+      }));
+      const tasks = join(dir, 'tasks.json');
+      await writeFile(tasks, body);
+      const before = fake.requests;
+      const flags = needsStripFlag(process.versions.node) ? ['--experimental-strip-types'] : [];
+      const at = join(installRoot(), 'src', 'cli', 'team.ts');
+      const out = await promisify(execFile)(process.execPath, [...flags, '--no-warnings', at, tasks], {
+        env: cleanAasEnv({ AAS_CONFIG: config, AAS_HOME: join(dir, 'home'), AAS_STATE_DIR: join(dir, 'state'), NO_COLOR: '1' }),
+        timeout: 60_000,
+      }).then(() => ({ code: 0, stderr: '' }), (e: { code?: number; stderr?: string }) => ({ code: e.code, stderr: e.stderr ?? '' }));
+      assert.equal(out.code, 1, out.stderr);
+      assert.match(out.stderr, /作業指示書|レーン/, out.stderr);
+      assert.doesNotMatch(out.stderr, /\n\s+at /, `スタックトレースで落ちている:\n${out.stderr}`);
+      assert.equal(fake.requests, before, 'モデルを起こした（問い合わせた）後で止まっている');
+    });
+  }
+});

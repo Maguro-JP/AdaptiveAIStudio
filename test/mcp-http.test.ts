@@ -19,7 +19,7 @@ interface Seen { headers: Record<string, string | undefined>[]; deleted: boolean
  * 相手役。名乗り・道具の一覧・呼び出しに答える。
  * `sse` を立てると、流れ（text/event-stream）で返す。
  */
-async function startServer(opts: { sse?: boolean; fail?: number; batch?: boolean; version?: string } = {}) {
+async function startServer(opts: { sse?: boolean; sseSplit?: boolean; fail?: number; batch?: boolean; version?: string } = {}) {
   const seen: Seen = { headers: [], deleted: false };
   const server: Server = createServer((req, res) => {
     if (req.method === 'DELETE') {
@@ -49,11 +49,14 @@ async function startServer(opts: { sse?: boolean; fail?: number; batch?: boolean
           : { content: [{ type: 'text', text: 'こんにちは' }] };
       const message = { jsonrpc: '2.0', id: body.id, result };
 
-      const head: Record<string, string> = { 'content-type': opts.sse ? 'text/event-stream' : 'application/json' };
+      const sse = opts.sse || opts.sseSplit;
+      const head: Record<string, string> = { 'content-type': sse ? 'text/event-stream' : 'application/json' };
       if (body.method === 'initialize') head['mcp-session-id'] = 'sess-1';
       res.writeHead(200, head);
       const payload = opts.batch ? JSON.stringify([message]) : JSON.stringify(message);
-      res.end(opts.sse ? `event: message\ndata: ${payload}\n\n` : payload);
+      // sseSplit: 一つの出来事を複数の data: 行に分ける（SSE の決まりで許されている。整形した JSON をそのまま流す相手）
+      const split = JSON.stringify(opts.batch ? [message] : message, null, 2).split('\n').map((l) => `data: ${l}`).join('\n');
+      res.end(opts.sseSplit ? `event: message\r\n${split}\n\n` : opts.sse ? `event: message\ndata: ${payload}\n\n` : payload);
     });
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -84,6 +87,17 @@ describe('遠くの相手に繋ぐ', () => {
       assert.equal(await c.start(), true, c.failure);
       const got = await c.call('echo', { text: 'やあ' });
       assert.equal(got.isError, false);
+      assert.equal(got.text, 'こんにちは');
+    } finally { c.stop(); await s.close(); }
+  });
+
+  test('一つの返事を複数の data: 行に分けて流されても、読める（時間切れまで待たない）', async () => {
+    const s = await startServer({ sseSplit: true });
+    const c = new McpClient('remote', { url: s.url });
+    try {
+      assert.equal(await c.start(), true, c.failure);
+      const got = await c.call('echo', { text: 'やあ' }, 5_000);
+      assert.equal(got.isError, false, got.text);
       assert.equal(got.text, 'こんにちは');
     } finally { c.stop(); await s.close(); }
   });
