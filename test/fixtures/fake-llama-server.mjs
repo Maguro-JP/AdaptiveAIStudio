@@ -25,6 +25,8 @@ const received = {
   parallel: get('--parallel'),
   cacheTypeK: get('--cache-type-k'),
   mmap: args.includes('--mmap'),
+  // 付き添い越しに起こしたとき、試験から本体の番号を知るため
+  pid: process.pid,
 };
 
 const server = createServer((req, res) => {

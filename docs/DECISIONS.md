@@ -255,6 +255,7 @@
 - 更新の確認と取り込みは、製品が入っている場所を見る（利用者の作業場を見ない）
 - 作業中に作業場を変えたら、作業が終わった所で本体を切り替える
 - やり残しは、走った作業場で続ける
+- llama-server は、端末の Ctrl-C では止めず、親が居なくなれば止める
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10392,3 +10393,20 @@ inproc-host は SIGINT で自分を止めていたので、CLI が Ctrl-C で生
 - 試験: `test/unfinished.test.ts` に 3 件、`test/resume.test.ts` に 1 件（記録に作業場が残り、別の作業場を開いているときは続けない）。
   直す前の版で落ちることと、拾う側の絞り込みだけを外しても落ちることを見た
 触る場所: `src/core/unfinished.ts` の `root` と `due`、`src/ui/server.ts` の `#resumeUnfinished` と `#recordUnfinished`
+
+## 2026-09-30  llama-server は、端末の Ctrl-C では止めず、親が居なくなれば止める
+
+端末の Ctrl-C は、同じプロセスグループの全員に届く。CLI は Ctrl-C で生成だけを止めて続ける（#127）が、llama-server は外の実行ファイルで
+SIGINT を受け流せないので、そこで落ちていた（次の依頼は、モデルを読み直すまで落ちる）。inproc-host は #128 で受け流すようにした。
+
+- Windows 以外は、llama-server を付き添い（`src/runtime/llama-guard.ts`、node で動く小さなプロセス）越しに、別のプロセスグループで
+  起こす（`detached`）。llama-server は付き添いのグループに入るので、端末の Ctrl-C は届かない
+- 別のグループにすると、端末を閉じたとき・親が落ちたときにも止まらなくなる。付き添いは親との管（標準入力）が閉じたら llama-server を
+  止めて終わる（5 秒で止まらなければ SIGKILL）。止めても止まらないときの親の SIGKILL は、付き添いのグループごと落とす
+- Windows は変えない。コンソールの Ctrl-C は別の仕組みで届き、`detached` は新しいコンソールを開くため。Windows で llama-server が
+  Ctrl-C で止まるかは確かめていない
+- 選ばなかった案: llama-server を直に別のグループで起こし、親の `exit` で止める（SIGKILL や端末を閉じたときの SIGHUP では `exit` が
+  来ず、数GBを抱えたまま残る）
+- 試験: `test/llama-guard.test.ts`（親のグループへ SIGINT を送っても llama-server が答え続け、親を SIGKILL すると止まる）。
+  直す前の版で落ち、付き添いの後始末だけを外しても落ちることを見た。Windows では飛ばす
+触る場所: `src/runtime/llama-guard.ts`、`src/runtime/llamacpp.ts` の `GUARDED` と `killHard`
