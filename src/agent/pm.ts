@@ -146,7 +146,7 @@ export function repairPlan(raw: unknown, request: string, ctx: PmContext): WorkP
 
     let id = asString(e.id) ?? `t${i + 1}`;
     if (seen.has(id)) {
-      const fixed = `${id}_${i + 1}`;
+      const fixed = freshId(`${id}_${i + 1}`, seen);
       repairs.push(`ID が重複していたため ${id} を ${fixed} に変えました。`);
       id = fixed;
     }
@@ -244,6 +244,15 @@ export function repairPlan(raw: unknown, request: string, ctx: PmContext): WorkP
  * モデルに「検査も入れてね」と頼むのではなく、構造として必ず入るようにする。
  * 頼むのは守られないことがあるが、構造は守られる。
  */
+/** 使われていない ID。`base` が空いていればそれ、埋まっていれば `_2`・`_3` … を足して探す。 */
+function freshId(base: string, taken: ReadonlySet<string>): string {
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n += 1) {
+    const next = `${base}_${n}`;
+    if (!taken.has(next)) return next;
+  }
+}
+
 export function ensureSecondPass(
   items: PlanItem[],
   ctx: PmContext,
@@ -253,6 +262,8 @@ export function ensureSecondPass(
   if (!access) return items;
 
   const known = new Set(ctx.roleIds);
+  // 足す工程の ID も、今ある ID と重ねない（重なると成果を同じ枠で数え、確かめる工程が黙って消える）
+  const taken = new Set(items.map((i) => i.id));
   const available = (list: string[]) => list.filter((r) => known.has(r));
   const checkers = available(CHECK_ROLES);
   const crosscheckers = available(CROSSCHECK_ROLES);
@@ -280,8 +291,10 @@ export function ensureSecondPass(
     const roleId = candidates[turn % candidates.length]!;
     turn += 1;
 
+    const addedId = freshId(`${item.id}_2`, taken);
+    taken.add(addedId);
     added.push({
-      id: `${item.id}_2`,
+      id: addedId,
       roleId,
       laneId: undefined,
       deps: [item.id],

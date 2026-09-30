@@ -329,3 +329,17 @@ describe('一人に任せない', () => {
     assert.equal(done, p.items.length, '未実施が出た');
   });
 });
+
+describe('ID が重なった計画に、確かめる工程を足すとき', () => {
+  test('足した工程の ID も重ならない（重なると確かめる工程が黙って消える）', () => {
+    const p = repairPlan({ items: [
+      { id: 't1', instruction: 'a を書く', roleId: 'coder', writes: ['a.ts'] },
+      { id: 't1', instruction: 'b を書く', roleId: 'coder' },
+    ] }, 'r', {
+      lanes: [{ id: 'main', candidates: ['a'], parallel: 1 }], roleIds: ['coder', 'tester'], fallbackRoleId: 'coder',
+      access: { coder: ['read', 'write'], tester: ['read', 'exec'] },
+    } as PmContext);
+    const ids = p.items.map((i) => i.id);
+    assert.equal(new Set(ids).size, ids.length, `ID が重なっている: ${ids.join(', ')}`);
+  });
+});

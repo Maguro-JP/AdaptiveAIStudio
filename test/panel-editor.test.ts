@@ -141,6 +141,18 @@ describe('エディタのパネル', () => {
     assert.equal(area().value, 'one\ntwo\nthree\n', `戻っていない: ${JSON.stringify(area().value)}`);
   });
 
+  test('行を丸ごと選ぶと終わりは次の行の頭に来るが、その行は字下げしない', async () => {
+    const disk = { 'a.ts': 'one\ntwo\nthree\n' };
+    const { area, ctx, key } = open(disk);
+    (ctx.openFile as (p: string) => void)('a.ts');
+    await until(() => area().value === 'one\ntwo\nthree\n', 'ファイルが開く');
+    area().setSelectionRange(0, 8); // one\ntwo\n まで（three の頭で終わる）
+    key('Tab', { ctrlKey: false });
+    assert.equal(area().value, '  one\n  two\nthree\n', `選んでいない行まで字下げした: ${JSON.stringify(area().value)}`);
+    key('Tab', { ctrlKey: false, shiftKey: true });
+    assert.equal(area().value, 'one\ntwo\nthree\n', `戻っていない: ${JSON.stringify(area().value)}`);
+  });
+
   /**
    * **Enter で、字下げが消える。**
    *

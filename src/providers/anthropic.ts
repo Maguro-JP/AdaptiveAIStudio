@@ -13,7 +13,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type {
   ChatProvider, HealthStatus, ModelDescriptor,
-  ProviderChunk, ProviderRequest,
+  ProviderChunk, ProviderMessage, ProviderRequest,
 } from './contract.ts';
 import { ProviderError, type ProviderErrorKind } from './errors.ts';
 
@@ -104,16 +104,16 @@ export class AnthropicProvider implements ChatProvider {
 
   async *chat(req: ProviderRequest, signal: AbortSignal): AsyncIterable<ProviderChunk> {
     // Claudeは system をトップレベルで受け取る(messagesに混ぜない)
-    const messages = req.messages
-      .filter((m) => m.role !== 'system')
-      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+    const messages = toAnthropicMessages(req.messages);
 
     const systemFromMessages = req.messages
       .filter((m) => m.role === 'system')
       .map((m) => m.content);
     const system = [req.system, ...systemFromMessages].filter(Boolean).join('\n\n');
 
-    let finishReason: 'stop' | 'length' | 'unknown' = 'unknown';
+    let finishReason: 'stop' | 'length' | 'toolCalls' | 'unknown' = 'unknown';
+    // 組み立て中のツールの呼び出し（ブロックの番号ごと）。引数は JSON の断片で届くので、ブロックが閉じるまで溜める
+    const building = new Map<number, { id: string; name: string; json: string }>();
 
     try {
       const stream = (await this.#api()).messages.stream(
@@ -121,7 +121,12 @@ export class AnthropicProvider implements ChatProvider {
           model: req.model,
           max_tokens: req.maxTokens ?? 16_000,
           ...(system ? { system } : {}),
-          messages,
+          messages: messages as never,
+          ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+          // ツールを渡す。渡していなかったので、Claude はツールを呼べず、ツールを使った後の会話は role: 'tool' のまま送って断られていた
+          ...(req.tools && req.tools.length > 0
+            ? { tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters as never })) }
+            : {}),
           // thinking は指定しない。Claude Opus 5 は既定で適応的思考が有効。
           // 明示指定は SDK のバージョンによって型が変わるため、ここでは触らない。
         },
@@ -129,11 +134,25 @@ export class AnthropicProvider implements ChatProvider {
       );
 
       for await (const ev of stream) {
-        if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
+        if (ev.type === 'content_block_start' && ev.content_block.type === 'tool_use') {
+          building.set(ev.index, { id: ev.content_block.id, name: ev.content_block.name, json: '' });
+        } else if (ev.type === 'content_block_delta' && ev.delta.type === 'input_json_delta') {
+          const b = building.get(ev.index);
+          if (b) b.json += ev.delta.partial_json;
+        } else if (ev.type === 'content_block_stop' && building.has(ev.index)) {
+          const b = building.get(ev.index)!;
+          building.delete(ev.index);
+          let args: unknown = {};
+          if (b.json.trim()) {
+            try { args = JSON.parse(b.json); } catch { args = b.json; } // 読めない引数も落とさず渡す（呼ぶ側が断る）
+          }
+          yield { type: 'toolCall', call: { id: b.id, name: b.name, args } };
+        } else if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
           yield { type: 'text', delta: ev.delta.text };
         } else if (ev.type === 'message_delta') {
           if (ev.delta.stop_reason === 'end_turn') finishReason = 'stop';
           else if (ev.delta.stop_reason === 'max_tokens') finishReason = 'length';
+          else if (ev.delta.stop_reason === 'tool_use') finishReason = 'toolCalls';
           if (ev.usage) {
             yield {
               type: 'usage',
@@ -198,6 +217,42 @@ export class AnthropicProvider implements ChatProvider {
       message: `${this.id}: ${e instanceof Error ? e.message : String(e)}`,
     });
   }
+}
+
+type Block =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'tool_result'; tool_use_id: string; content: string };
+
+/**
+ * 会話を Claude の形へ直す。
+ *
+ * - system は抜く（トップレベルで渡す）
+ * - ツールの呼び出し（assistant の toolCalls）は tool_use ブロック、ツールの結果（role: 'tool'）は user の tool_result ブロック
+ *   （role: 'tool' は Claude に無いので、そのまま送ると 400 で断られ、依頼ごと落ちていた）
+ * - 同じ役が続いたら一つにまとめる（ツールの結果が並ぶとき）。空の文は送らない（空の文は断られる）
+ */
+export function toAnthropicMessages(messages: readonly ProviderMessage[]): { role: 'user' | 'assistant'; content: Block[] }[] {
+  const out: { role: 'user' | 'assistant'; content: Block[] }[] = [];
+  for (const m of messages) {
+    if (m.role === 'system') continue;
+    const role: 'user' | 'assistant' = m.role === 'assistant' ? 'assistant' : 'user';
+    const blocks: Block[] = [];
+    if (m.role === 'tool') {
+      blocks.push({ type: 'tool_result', tool_use_id: m.toolCallId ?? '', content: m.content });
+    } else {
+      if (m.content.trim()) blocks.push({ type: 'text', text: m.content });
+      for (const c of m.toolCalls ?? []) {
+        const input = c.args !== null && typeof c.args === 'object' && !Array.isArray(c.args) ? c.args : {};
+        blocks.push({ type: 'tool_use', id: c.id, name: c.name, input });
+      }
+    }
+    if (blocks.length === 0) continue;
+    const last = out.at(-1);
+    if (last && last.role === role) last.content.push(...blocks);
+    else out.push({ role, content: blocks });
+  }
+  return out;
 }
 
 function describeForHealth(e: unknown): string {

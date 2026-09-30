@@ -3137,7 +3137,9 @@ export const PANELS = {
         }
         // 選んでいる行の、頭から終わりまでを取り直す（行の途中で切らない）。
         const from = area.value.lastIndexOf('\n', a - 1) + 1;
-        const tail = area.value.indexOf('\n', b);
+        // 行を丸ごと選ぶと、終わりは次の行の頭に来る。その行は選んでいないので、字下げしない
+        const endAt = b > a && area.value[b - 1] === '\n' ? b - 1 : b;
+        const tail = area.value.indexOf('\n', endAt);
         const to = tail < 0 ? area.value.length : tail;
         let head = 0;
         let moved = 0;

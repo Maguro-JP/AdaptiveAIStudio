@@ -86,6 +86,12 @@ export async function* runLoop<C extends LoopCheck>(
     yield { type: 'round', round };
     const result = await check(round, signal);
     last = result;
+    // 確かめの途中で止められた。止めたせいで落ちた結果を「落ちた」と言わない（確かめの失敗として記録し、巻き戻す側へ進んでいた）
+    if (signal.aborted && !result.passed) {
+      const detail = '中断されました。';
+      yield { type: 'stopped', reason: 'aborted', round, detail };
+      return { passed: false, rounds: round, reason: 'aborted', detail, last };
+    }
     yield { type: 'checked', round, check: result };
 
     if (result.passed) {

@@ -207,6 +207,11 @@ export class Agent {
       const declaredDone = tail.done;
 
       if (failure) { yield { type: 'finished', reason: 'failed', detail: failure }; return; }
+      /*
+       * 返事の途中で止められた。相手は止められると黙って終わるので、ここで見ないと、途中までの文を普通の返事として
+       * 「完了」にし、ツールを使った後なら「まだ TASK_DONE がありません」を記録に積んでいた。
+       */
+      if (signal.aborted) { yield { type: 'finished', reason: 'aborted' }; return; }
       yield { type: 'turn', index: turn, modelId };
 
       history.push({
