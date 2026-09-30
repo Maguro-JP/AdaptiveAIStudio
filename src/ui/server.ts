@@ -1307,8 +1307,13 @@ export class UiServer {
     }
 
     if (path === '/api/plan' && req.method === 'POST') {
-      const body = await readBody(req) as { text?: string };
+      const body = await readBody(req) as { text?: string; attachments?: unknown; editor?: unknown };
       const text = typeof body?.text === 'string' ? body.text.trim() : '';
+      // 添えたファイル・開いている所も読む。読まずにいたので、画面は「📎 名前」を出すのに、段取りは添付を見ないまま組まれていた
+      const attached = Array.isArray(body?.attachments)
+        ? body.attachments.filter((a): a is string => typeof a === 'string')
+        : [];
+      const editor = editorHere(body?.editor);
       if (!text) return send(res, 400, { error: '依頼が空です' });
 
       const session = await this.session();
@@ -1321,8 +1326,10 @@ export class UiServer {
         const missing = await this.#readyToThink();
         if (missing) return send(res, 503, { error: missing });
 
+        // 送り口と同じ組み立て（添付・開いている所・@ の指名）。返事の前に組む（返した後に投げると、受け手の無い失敗になる）
+        const full = await this.#compose(session, text, attached, editor);
         send(res, 202, { accepted: true });
-        this.#bg(this.#drivePlan(session, text), '段取りが落ちました');
+        this.#bg(this.#drivePlan(session, full, text), '段取りが落ちました');
       } finally {
         this.#preparing = false;
       }
@@ -3774,10 +3781,10 @@ export class UiServer {
       '順番待ちの実行が落ちました');
   }
 
-  async #drivePlan(session: Session, text: string): Promise<void> {
+  async #drivePlan(session: Session, text: string, said?: string): Promise<void> {
     this.broadcast({ type: 'busy', busy: true });
     try {
-      for await (const event of session.plan(text)) {
+      for await (const event of session.plan(text, said)) {
         this.broadcast({ type: 'planEvent', event });
       }
     } catch (e) {
