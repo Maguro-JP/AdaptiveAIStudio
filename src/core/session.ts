@@ -941,7 +941,10 @@ export class Session {
 
       const gitAfter = await inspectGit(root);
       const dirtyAfter = gitAfter.kind === 'dirty' ? gitAfter.changed : [];
-      const changed = [...new Set([...written, ...outsideChanged, ...dropCoveredDirs(changedBetween(dirtyBefore, dirtyAfter), [...written, ...outsideChanged])])].sort();
+      // git が一つのフォルダ（`coverage/`）にまとめて見せる新しいフォルダの下は、外の変化でも一つずつ並べない（何千件にふくらむ）
+      const folded = dirtyAfter.filter((p) => p.endsWith('/'));
+      const outsideShown = [...outsideChanged].filter((p) => !folded.some((d) => p.startsWith(d)));
+      const changed = [...new Set([...written, ...outsideShown, ...dropCoveredDirs(changedBetween(dirtyBefore, dirtyAfter), [...written, ...outsideShown])])].sort();
 
       const report = accept({
         request, summary: plan.summary, members, changed,

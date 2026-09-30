@@ -208,6 +208,28 @@ describe('規則: 読んでから書く', () => {
     assert.equal((await readFile(join(root, 'big.txt'), 'utf8')).length, 600_000);
   });
 
+  test('大きすぎて読めないファイルでも、edit_file では直せる（読み口は必ず断るので、止めると二度と直せない）', async () => {
+    const root = await project({ 'big.txt': `${'x'.repeat(600_000)}\nneedle\n` });
+    const h = harness([readBeforeWrite]);
+    const read = h.wrap(readFileTool, () => '');
+    const edit = h.wrap(editFileTool, () => '');
+    await read.run({ path: 'big.txt' }, ctx(root));
+    const r = await edit.run({ path: 'big.txt', find: 'needle', replace: 'found' }, ctx(root));
+    assert.notEqual(r.isError, true, r.content);
+    assert.ok((await readFile(join(root, 'big.txt'), 'utf8')).endsWith('found\n'));
+  });
+
+  test('読めないファイル（無い）は、edit_file でも読んだに数えない', async () => {
+    const root = await project({});
+    const h = harness([readBeforeWrite]);
+    const read = h.wrap(readFileTool, () => '');
+    const write = h.wrap(writeFileTool, () => '');
+    await read.run({ path: 'later.txt' }, ctx(root));
+    await writeFile(join(root, 'later.txt'), 'made by someone\n');
+    const r = await write.run({ path: 'later.txt', content: 'x' }, ctx(root));
+    assert.equal(r.isError, true, '無かったときの読みを、後からできたファイルの読みに数えた');
+  });
+
   test('読んだ後なら通す', async () => {
     const root = await project({ 'a.ts': 'original' });
     const h = harness([readBeforeWrite]);
