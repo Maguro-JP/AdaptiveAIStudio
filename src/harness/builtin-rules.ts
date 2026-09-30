@@ -320,9 +320,45 @@ export const dangerousCommands: Rule = {
         return deny(`${label}は実行できません: ${command}。必要なら利用者に依頼してください。`);
       }
     }
+    const git = gitDanger(command);
+    if (git) return deny(`git の破壊的操作（${git}）は実行できません: ${command}。必要なら利用者に依頼してください。`);
     return allow;
   },
 };
+
+/** git の全体の選択肢のうち、次の語を値として取るもの（`git -C dir push` の `dir`）。 */
+const GIT_OPTS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env']);
+
+/**
+ * git の破壊的な操作か。当たればその名前、当たらなければ undefined。
+ *
+ * 決まった並び（`git clean -f`・`git reset --hard`）を正規表現で見ていたので、並びを変える（`git clean -x -d -f`・`git reset -q --hard`）、
+ * 全体の選択肢を挟む（`git -C . push`・`git -c x=y push`）、長い名前にする（`git clean --force`）だけで素通りした。`git clean -x -d -f` は
+ * 無視している `.env` まで消し、外で変わった記録（OutsideChanges）にも載らないので「戻す」でも戻らない。
+ * 繋いだ命令は一つずつ、語に分けて、全体の選択肢を飛ばしてから、サブコマンドと選択肢を並びに関わらず見る。
+ */
+export function gitDanger(command: string): string | undefined {
+  for (const part of command.split(/\|\||&&|;|\n|\|(?!&)|(?<![>])&(?!&)/)) {
+    const words = part.trim().split(/\s+/).map((w) => w.replace(/^['"]|['"]$/g, '')).filter((w) => w.length > 0);
+    const at = words.findIndex((w) => /(^|[\\/])git(\.exe)?$/i.test(w));
+    if (at < 0) continue;
+    let i = at + 1;
+    while (i < words.length && words[i]!.startsWith('-')) {
+      const w = words[i]!;
+      i += GIT_OPTS_WITH_VALUE.has(w) ? 2 : 1;
+    }
+    const sub = words[i]?.toLowerCase();
+    const rest = words.slice(i + 1);
+    const shortFlag = (ch: string) => rest.some((w) => /^-[a-z]+$/i.test(w) && w.slice(1).includes(ch));
+    const long = (name: string) => rest.some((w) => w === name || w.startsWith(`${name}=`));
+    const wholeTree = rest.some((w) => w === '.' || w === '*' || w === ':/' || w === ':(top)');
+    if (sub === 'push') return 'push';
+    if (sub === 'reset' && long('--hard')) return 'reset --hard';
+    if (sub === 'clean' && (shortFlag('f') || long('--force'))) return 'clean -f';
+    if ((sub === 'checkout' || sub === 'restore') && (wholeTree || long('--force') || (sub === 'checkout' && shortFlag('f')))) return `${sub} .`;
+  }
+  return undefined;
+}
 
 /**
  * 自分を殺す命令を止める。

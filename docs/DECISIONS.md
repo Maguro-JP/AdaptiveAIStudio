@@ -269,6 +269,7 @@
 - 会話の一覧は、使った順（書いた時刻）で切る
 - 端末の承認の問いは、先に打ってある依頼を答えとして食べない
 - テストを消させない規則の見積もりも、edit_file と同じく LF に揃えて当てる
+- git の破壊的な操作は、選択肢の並び・全体の選択肢・長い名前に関わらず止める
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10583,3 +10584,17 @@ SIGINT を受け流せないので、そこで落ちていた（次の依頼は�
 - 見積もりも中身・`find`・`replace` を LF に揃えてから当てる。後の姿は LF で返す（規則はテストの数を比べるだけ）
 - 試験: `test/harness.test.ts`（CRLF のテストファイルで、行の途中から始まる塊でテストを消す直しを止める）。直す前の版で通ってしまうことを見た
 触る場所: `src/agent/tools/write-kind.ts` の `plannedContent`
+
+## 2026-09-30  git の破壊的な操作は、選択肢の並び・全体の選択肢・長い名前に関わらず止める
+
+危ないコマンドを止める規則（`dangerous-commands`）は、git を決まった並び（`git clean -f`・`git reset --hard`・`git checkout -- .`）の
+正規表現だけで見ていた。`git clean -x -d -f`（無視している `.env` まで消し、外で変わった記録にも載らないので「戻す」でも戻らない）・
+`git clean --force`・`git -C . push`・`git -c x=y push`・`git reset -q --hard`・`git restore .`・`git checkout .` は素通りした。
+承認が自動のときと team で走らせるときは、この規則が唯一の守り。
+
+- 繋いだ命令を一つずつ語に分け、git の全体の選択肢（`-C` `-c` など値を取るものは値ごと）を飛ばしてから、サブコマンドと選択肢を並びに関わらず見る
+  （`gitDanger`）。止めるのは push・reset --hard・clean -f/--force・checkout/restore の作業場全体（`.`）と checkout -f
+- 今までの正規表現も残す（`echo git push` のような形も今までどおり止める側）
+- 止めないもの: `git clean -n`・`git checkout -b`・`git restore --staged` など
+- 試験: `test/harness.test.ts`（止める 12 通りと止めない 6 通り）。直す前の版で落ちることを見た
+触る場所: `src/harness/builtin-rules.ts` の `gitDanger`
