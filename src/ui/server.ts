@@ -51,7 +51,7 @@ import { installModel, describeFetch, type FetchStatus } from '../runtime/model-
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { MachineCache } from '../runtime/machine.ts';
 import { usesGguf, type LocalRuntime } from '../runtime/local-runtime.ts';
-import { realSafeResolve } from '../agent/tools/paths.ts';
+import { realSafeResolve, safeResolve, isSymlink } from '../agent/tools/paths.ts';
 import { searchText, OPAQUE_LINE } from '../agent/tools/fs.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
 import { repairLayout, preset, PRESETS, PANEL_KINDS, type Layout, DEFAULT_LAYOUT_ID } from './layout.ts';
@@ -1839,6 +1839,7 @@ export class UiServer {
        */
       const real = await this.#writablePath(asked);
       if (!real) return send(res, 400, { error: '作業場の外には書けません' });
+      if (await this.#isLinkAt(asked)) return send(res, 400, { error: `リンク越しには書きません: ${asked}（実体を開いて直してください）` });
       const session = this.#session;
       if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから保存してください' });
@@ -1958,6 +1959,7 @@ export class UiServer {
       }
       const real = await resolveInside(this.#workRoot(), asked);
       if (!real) return send(res, 400, { error: '作業場の外には書けません' });
+      if (await this.#isLinkAt(asked)) return send(res, 400, { error: `リンク越しには書きません: ${asked}（実体の差分から戻してください）` });
       const session = this.#session;
       if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから戻してください' });
@@ -2040,6 +2042,7 @@ export class UiServer {
       }
       const real = await this.#writablePath(asked);
       if (!real) return send(res, 400, { error: '作業場の外には作れません' });
+      if (await this.#isLinkAt(asked)) return send(res, 400, { error: `そこにはリンクがあります: ${asked}` });
       const session = this.#session;
       if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから作ってください' });
@@ -2949,6 +2952,15 @@ export class UiServer {
     if (isAbsolute(asked) || foreignPath(asked)) return undefined;
     const root = this.#workRoot();
     return (await resolveInside(root, asked)) ?? await realSafeResolve(root, asked);
+  }
+
+  /**
+   * 書く先そのものがリンクか（AI の write_file・edit_file と同じ守り）。辿って書くと、戻り先はリンクの名前で残すので、
+   * 「戻す」でリンクが普通のファイルに変わり、実体は直したまま残る。切れたリンクなら、辿った先の作業場の外に作る。
+   */
+  async #isLinkAt(asked: string): Promise<boolean> {
+    const at = safeResolve(this.#workRoot(), asked);
+    return at !== undefined && await isSymlink(at);
   }
 
   /** 手書きの錠の持ち主の札。名前で作ると、同じ名前の手書きが二つ重なったとき両方が取れてしまう。 */

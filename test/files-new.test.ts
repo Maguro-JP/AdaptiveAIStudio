@@ -8,7 +8,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { stat, readFile, mkdir, writeFile } from 'node:fs/promises';
+import { stat, readFile, mkdir, writeFile, symlink, lstat } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 
 const state = await tempDir('aas-new-state-');
@@ -103,6 +103,48 @@ describe('横の一覧から作る', () => {
     const out = await post('/api/file', { path: '../escape.txt', content: 'x' }, 'PUT');
     assert.equal(out.status, 400);
     assert.equal(await exists(join(work, '..', 'escape.txt')), false);
+  });
+});
+
+/**
+ * 画面からは、リンク越しに書かない（AI の write_file・edit_file と同じ守り）。
+ *
+ * 保存はリンクを辿って実体に書き、戻り先にはリンクの名前で残していたので、「戻す」を押すとリンクが普通のファイルに変わり、
+ * 実体は直したまま残った。切れたリンクなら、辿った先の作業場の外にファイルを作っていた。
+ * Windows では git の既定でリンクが展開されず、リンクを作るのにも権限が要るので飛ばす。
+ */
+describe('リンク越しには書かない', { skip: process.platform === 'win32' }, () => {
+  test('作業場の中を指すリンクへの保存は断り、実体もリンクも変えない', async () => {
+    await writeFile(join(work, 'real.txt'), 'もとの中身\n');
+    await symlink('real.txt', join(work, 'alias.txt'));
+    const r = await post('/api/file', { path: 'alias.txt', content: '書き換え\n' }, 'PUT');
+    const body = await r.json() as { error?: string };
+    assert.equal(r.status, 400, JSON.stringify(body));
+    assert.match(body.error ?? '', /リンク/);
+    assert.equal(await readFile(join(work, 'real.txt'), 'utf8'), 'もとの中身\n');
+    assert.equal((await lstat(join(work, 'alias.txt'))).isSymbolicLink(), true);
+  });
+
+  test('差分の戻しも、リンクの名前では書かない', async () => {
+    await writeFile(join(work, 'real2.txt'), 'one\ntwo\nthree\n');
+    await symlink('real2.txt', join(work, 'alias2.txt'));
+    const { unifiedDiff } = await import('../src/agent/diff.ts');
+    const diff = unifiedDiff('alias2.txt', 'one\ntwo\n', 'one\ntwo\nthree\n');
+    const r = await post('/api/revert', { path: 'alias2.txt', diff, picks: [{ hunk: 0 }] });
+    assert.equal(r.status, 400, await r.text());
+    assert.equal(await readFile(join(work, 'real2.txt'), 'utf8'), 'one\ntwo\nthree\n');
+    assert.equal((await lstat(join(work, 'alias2.txt'))).isSymbolicLink(), true);
+  });
+
+  test('外を指す切れたリンクへの保存・作成は断り、外にファイルを作らない', async () => {
+    await symlink(join(outer, 'dangling-a.txt'), join(work, 'dangle-a'));
+    await symlink(join(outer, 'dangling-b.txt'), join(work, 'dangle-b'));
+    const saved = await post('/api/file', { path: 'dangle-a', content: 'x' }, 'PUT');
+    assert.equal(saved.status, 400, await saved.text());
+    const made = await post('/api/files/new', { path: 'dangle-b', kind: 'file' });
+    assert.equal(made.status, 400, await made.text());
+    assert.equal(await exists(join(outer, 'dangling-a.txt')), false, '保存で外に作った');
+    assert.equal(await exists(join(outer, 'dangling-b.txt')), false, '作成で外に作った');
   });
 });
 
