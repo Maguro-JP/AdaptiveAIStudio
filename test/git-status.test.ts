@@ -11,7 +11,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { inspectGit } from '../src/agent/git.ts';
-import { changedBetween } from '../src/agent/acceptance.ts';
+import { changedBetween, dropCoveredDirs } from '../src/agent/acceptance.ts';
 
 const GIT_OK = (() => { try { execFileSync('git', ['--version']); return true; } catch { return false; } })();
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'init.defaultBranch=main', ...args], {
@@ -19,7 +19,7 @@ const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'comm
   env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' },
 });
 
-test('新しいフォルダの中のファイル・日本語の名前・名前の変更を、本物の道で返す', { skip: GIT_OK ? false : 'この機械には git が無い' }, async () => {
+test('日本語の名前・名前の変更を本物の道で返し、新しいフォルダは書いたファイルで中身が分かれば計画に無いものとして挙げない', { skip: GIT_OK ? false : 'この機械には git が無い' }, async () => {
   const root = await tempDir('aas-git-status-');
   git(root, 'init', '-q');
   await writeFile(join(root, 'old.txt'), 'x\n');
@@ -35,9 +35,11 @@ test('新しいフォルダの中のファイル・日本語の名前・名前�
   const after = await inspectGit(root);
   assert.equal(after.kind, 'dirty');
   const changed = after.kind === 'dirty' ? after.changed : [];
-  for (const want of ['sub/a.ts', '設計.md', 'new.txt', 'old.txt']) {
+  for (const want of ['sub/', '設計.md', 'new.txt', 'old.txt']) {
     assert.ok(changed.includes(want), `${want} が無い: ${JSON.stringify(changed)}`);
   }
-  assert.ok(!changed.includes('sub/'), `フォルダを縮めた道が混ざった: ${JSON.stringify(changed)}`);
-  assert.deepEqual(changedBetween([], changed).sort(), [...changed].sort());
+  assert.ok(!changed.some((p) => p.startsWith('"') || p.includes(' -> ')), `引用や矢の付いた道が混ざった: ${JSON.stringify(changed)}`);
+  // 書いたファイルで中身が分かっているフォルダは外し、書いていないフォルダは残す
+  assert.deepEqual(dropCoveredDirs(changedBetween([], changed), ['sub/a.ts']).includes('sub/'), false);
+  assert.deepEqual(dropCoveredDirs(['other/'], ['sub/a.ts']), ['other/']);
 });

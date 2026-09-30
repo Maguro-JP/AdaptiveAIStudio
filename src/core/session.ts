@@ -61,7 +61,7 @@ import { decompose, toWorkItems, type WorkPlan } from '../agent/pm.ts';
 import { findNewerFor, describeNewer } from '../runtime/model-updates.ts';
 import { catalogFamilies } from '../runtime/model-catalog.ts';
 import { Team } from '../agent/team.ts';
-import { accept, changedBetween, type AcceptanceReport, type MemberReport } from '../agent/acceptance.ts';
+import { accept, changedBetween, dropCoveredDirs, type AcceptanceReport, type MemberReport } from '../agent/acceptance.ts';
 import { runVerification, verifyLoop, digestFailure, type VerifyEvent, type VerifyResult } from '../agent/verify.ts';
 import { snapshotTests, compareTests } from '../agent/test-integrity.ts';
 import { workspaceStamp, stampChanges } from '../agent/workspace-stamp.ts';
@@ -934,7 +934,7 @@ export class Session {
 
       const gitAfter = await inspectGit(root);
       const dirtyAfter = gitAfter.kind === 'dirty' ? gitAfter.changed : [];
-      const changed = [...new Set([...written, ...changedBetween(dirtyBefore, dirtyAfter)])].sort();
+      const changed = [...new Set([...written, ...dropCoveredDirs(changedBetween(dirtyBefore, dirtyAfter), [...written])])].sort();
 
       const report = accept({
         request, summary: plan.summary, members, changed,

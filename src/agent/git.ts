@@ -14,17 +14,19 @@ export type GitState =
 
 export async function inspectGit(root: string): Promise<GitState> {
   /*
-   * **道は -z で受け、新しいフォルダの中も一つずつ出させる。**`--porcelain` だけでは、新しいフォルダを `sub/` と縮め、日本語の名前を
-   * `"\350\250\255..."` と引用し、名前の変更を `a -> b` と一行にする。その文字をそのまま道として使っていたので、段取りの受け入れで
-   * `sub/a.ts` を作っても `sub/` という無いファイルを「計画に無いファイル」として挙げ、人の判断待ちにしていた
+   * **道は -z で受ける。**`--porcelain` だけでは、日本語の名前を `"\350\250\255..."` と引用し、名前の変更を `a -> b` と一行にする。
+   * その文字をそのまま道として使っていたので、段取りの受け入れで無い道を「計画に無いファイル」として挙げていた。
+   * 新しいフォルダは `sub/` のまま受ける（中を一つずつ出させると、node_modules を無視していない作業場では何千件も歩く）。
+   * フォルダの扱いは受け入れの側（`dropCoveredDirs`）でする
    */
-  const status = await runGit(['status', '--porcelain=v1', '-z', '--branch', '--untracked-files=all'], root);
+  const status = await runGit(['status', '--porcelain=v1', '-z', '--branch'], root);
   if (status.code !== 0) {
     if (/not a git repository/i.test(status.out)) return { kind: 'notRepo' };
     return { kind: 'unavailable', reason: status.out.trim().split('\n')[0] ?? 'git を実行できません' };
   }
 
-  const parts = status.out.split('\0').filter((l) => l.length > 0);
+  // 出力には警告（標準エラー）が混ざる。-z の欄は改行を含まないので、改行を含む欄は、最後の改行の後ろだけが本物の欄
+  const parts = status.out.split('\0').map((l) => (l.includes('\n') ? l.slice(l.lastIndexOf('\n') + 1) : l)).filter((l) => l.length > 0);
   const branchLine = parts.find((l) => l.startsWith('##')) ?? '## (不明)';
   const branch = branchLine.replace(/^##\s*/, '').split(/\.{3}|\s/)[0] ?? '(不明)';
   const changed: string[] = [];

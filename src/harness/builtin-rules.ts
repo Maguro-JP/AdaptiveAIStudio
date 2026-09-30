@@ -355,7 +355,9 @@ export function gitDanger(command: string): string | undefined {
     if (sub === 'push') return 'push';
     if (sub === 'reset' && long('--hard')) return 'reset --hard';
     if (sub === 'clean' && (shortFlag('f') || long('--force'))) return 'clean -f';
-    if ((sub === 'checkout' || sub === 'restore') && (wholeTree || long('--force') || (sub === 'checkout' && shortFlag('f')))) return `${sub} .`;
+    // restore は --staged（-S）だけなら索引を戻すだけで、作業ツリーには触らない（--worktree・-W が付けば触る）
+    const worktree = sub !== 'restore' || !(long('--staged') || shortFlag('S')) || long('--worktree') || shortFlag('W');
+    if ((sub === 'checkout' || sub === 'restore') && worktree && (wholeTree || long('--force') || (sub === 'checkout' && shortFlag('f')))) return `${sub} .`;
   }
   return undefined;
 }

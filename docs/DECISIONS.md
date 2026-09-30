@@ -10599,7 +10599,8 @@ SIGINT を受け流せないので、そこで落ちていた（次の依頼は�
 - 繋いだ命令を一つずつ語に分け、git の全体の選択肢（`-C` `-c` など値を取るものは値ごと）を飛ばしてから、サブコマンドと選択肢を並びに関わらず見る
   （`gitDanger`）。止めるのは push・reset --hard・clean -f/--force・checkout/restore の作業場全体（`.`）と checkout -f
 - 今までの正規表現も残す（`echo git push` のような形も今までどおり止める側）
-- 止めないもの: `git clean -n`・`git checkout -b`・`git restore --staged` など
+- 止めないもの: `git clean -n`・`git checkout -b`・`git restore --staged`（`.` でも。索引を戻すだけで作業ツリーには触らない。`--worktree` が付けば止める）など
+- まだ止められないもの: 別名（`git -c alias.x='reset --hard' x`）・長い名前の省略（`--har`）・`git switch -f`・括弧で包んだ形（`(git -C . push)`）
 - 試験: `test/harness.test.ts`（止める 12 通りと止めない 6 通り）。直す前の版で落ちることを見た
 触る場所: `src/harness/builtin-rules.ts` の `gitDanger`
 
@@ -10633,9 +10634,12 @@ git の状態（`inspectGit`）は `git status --porcelain --branch` の行を�
 日本語の名前は `"\350\250\255..."` と引用され、名前の変更は `a -> b` と一行になる。段取りの受け入れ（`changedBetween` → 判定）は、
 `sub/a.ts` を作っても `sub/` という無いファイルを「計画に無いファイル」として挙げ、人の判断待ちにしていた（日本語の名前も同じ）。
 
-- `--porcelain=v1 -z --untracked-files=all` で受ける（`workspace-stamp.ts` と同じ読み方）。名前の変更・写しは、元の道も変わったものとして数える
-- 試験: `test/git-status.test.ts`（新しいフォルダの中・日本語の名前・名前の変更を本物の道で返す）。直す前の版で落ちることを見た。git の無い機械では飛ばす
-触る場所: `src/agent/git.ts` の `inspectGit`
+- `--porcelain=v1 -z` で受ける。名前の変更・写しは、元の道も変わったものとして数える。出力に混ざる警告（標準エラー）は、改行を含む欄の
+  最後の改行より前として捨てる（-z の欄は改行を含まない）
+- 新しいフォルダは `sub/` のまま受け、受け入れの側で、書いたファイルで中身が分かっているフォルダを外す（`dropCoveredDirs`）。
+  選ばなかった案: `--untracked-files=all` で中を一つずつ出させる（node_modules を無視していない作業場では、一回の依頼で何度も何千件を歩く）
+- 試験: `test/git-status.test.ts`（日本語の名前・名前の変更を本物の道で返し、書いたファイルで分かるフォルダを外す）。直す前の版で落ちることを見た。git の無い機械では飛ばす
+触る場所: `src/agent/git.ts` の `inspectGit`、`src/agent/acceptance.ts` の `dropCoveredDirs`
 
 ## 2026-09-30  モデルを取っている間に、二つ目の取得を始めない
 

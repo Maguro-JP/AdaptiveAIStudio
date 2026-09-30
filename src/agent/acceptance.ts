@@ -197,3 +197,12 @@ export function changedBetween(before: string[], after: string[]): string[] {
   const b = new Set(before);
   return after.filter((f) => !b.has(f)).sort();
 }
+
+/**
+ * git が新しいフォルダとして縮めて出した道（`sub/`）のうち、書いたファイル（`sub/a.ts`）で中身が分かっているものを外す。
+ * 残すと、`sub/` という無いファイルを「計画に無いファイル」として挙げ、人の判断待ちにする。書いたファイルの無いフォルダは残す
+ * （計画の外で作られたもの）。
+ */
+export function dropCoveredDirs(changed: string[], written: string[]): string[] {
+  return changed.filter((p) => !(p.endsWith('/') && written.some((w) => w.startsWith(p))));
+}

@@ -321,11 +321,11 @@ describe('規則: その他', () => {
     for (const command of [
       'git clean -x -d -f', 'git clean --force', 'git clean -fdx', 'git -C . push', 'git -c x=y push origin main',
       'git reset -q --hard', 'git reset --hard=HEAD', 'git restore .', 'git checkout .', 'git checkout -f main',
-      'npm test && git clean -d -f', '"git" push',
+      'npm test && git clean -d -f', '"git" push', 'git restore --staged --worktree .',
     ]) {
       assert.equal(kind(command), 'deny', `止めなかった: ${command}`);
     }
-    for (const command of ['git status', 'git diff', 'git log --oneline -5', 'git clean -n', 'git checkout -b feature', 'git restore --staged a.ts']) {
+    for (const command of ['git status', 'git diff', 'git log --oneline -5', 'git clean -n', 'git checkout -b feature', 'git restore --staged a.ts', 'git restore --staged .', 'git restore -S -- .']) {
       assert.equal(kind(command), 'allow', `止めすぎた: ${command}`);
     }
   });
