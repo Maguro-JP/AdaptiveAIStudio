@@ -18,7 +18,8 @@ export const DEFAULT_ALLOWED_COMMANDS = [
 const DANGEROUS = [
   /\brm\s+-rf?\b/i,
   /\bdel\s+\/[sq]\b/i,
-  /\bformat\b/i,
+  // ドライブの初期化（format C:）だけ。語だけで見ていたので、git log --format や npm run format まで止めていた
+  /(^|[;&|]\s*)format\s+[a-z]:/i,
   /\bshutdown\b/i,
   /[;&|`$]\s*(curl|wget|iwr|invoke-webrequest)/i,
   />\s*\/dev\/sd/i,

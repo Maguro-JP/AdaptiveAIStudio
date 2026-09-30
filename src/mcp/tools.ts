@@ -12,7 +12,7 @@
  * 持っていても、ぶつからないようにするため。
  */
 import { type Tool, ok, fail } from '../agent/tools/types.ts';
-import { inspectInbound, describeVerdict } from '../harness/gate.ts';
+import { inspectInbound, inspectOutbound, describeVerdict } from '../harness/gate.ts';
 import { type Inspector, combine } from '../harness/inspector.ts';
 import { EXTERNAL_SEPARATOR } from '../agent/tools/write-kind.ts';
 import type { McpClient } from './client.ts';
@@ -49,6 +49,18 @@ export function wrapTool(
       parameters: spec.inputSchema ?? { type: 'object', properties: {}, additionalProperties: true },
     },
     async run(args, ctx) {
+      /*
+       * 渡す引数は、外へ出ていくもの。持ち出しの検問を通す（fetch_url と同じ）。
+       * 通していなかったので、読んだトークンや秘密鍵を引数に入れて外のツールへ渡せた。承認の画面は引数の頭 200 字しか
+       * 見せないので、後ろに入れれば人の目にも入らない
+       */
+      const carry = JSON.stringify(args ?? {});
+      let outbound = inspectOutbound(carry);
+      if (outbound.passed && opts.inspector) {
+        outbound = combine(outbound, await opts.inspector.inspect(carry, 'outbound', ctx.signal), 'outbound');
+      }
+      if (!outbound.passed) return fail(describeVerdict(outbound, 'outbound'));
+
       // 外部ツールを動かすのは、外へ出るのと同じ重さで扱う。
       // 相手が何をするかはこちらからは分からないので、黙って呼ばない。
       const approved = await ctx.approve({
