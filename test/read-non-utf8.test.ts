@@ -136,3 +136,18 @@ describe('Shift_JIS を読めるか（doctor が言う）', () => {
     assert.equal(shiftJisSupported(noIcu), false);
   });
 });
+
+describe('大きいファイルを一部ずつ読む', () => {
+  test('丸ごとは断るが、範囲を付ければ読める（行番号はファイルの中の本当の番号）', async () => {
+    const root = await tempDir('aas-read-big-');
+    const lines = Array.from({ length: 60_000 }, (_, i) => `line ${i + 1} ${'x'.repeat(10)}`);
+    await writeFile(join(root, 'big.log'), `${lines.join('\n')}\n`);
+    const whole = await readFileTool.run({ path: 'big.log' }, ctx(root));
+    assert.equal(whole.isError, true);
+    assert.match(whole.content, /ファイルが大きすぎます.*offset と limit/);
+    const part = await readFileTool.run({ path: 'big.log', offset: 50_000, limit: 2 }, ctx(root));
+    assert.equal(part.isError, undefined, part.content);
+    assert.match(part.content, /^50000\tline 50000 /m);
+    assert.match(part.content, /^50001\tline 50001 /m);
+  });
+});
