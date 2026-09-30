@@ -337,7 +337,9 @@ const GIT_OPTS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--
  * 無視している `.env` まで消し、外で変わった記録（OutsideChanges）にも載らないので「戻す」でも戻らない。
  * 繋いだ命令は一つずつ、語に分けて、全体の選択肢を飛ばしてから、サブコマンドと選択肢を並びに関わらず見る。
  */
-export function gitDanger(command: string): string | undefined {
+export function gitDanger(command: string, depth = 0): string | undefined {
+  // 別名の中身を見るのは二段まで（別名を何十も並べると、中身を見るたびに残りの別名をまた見るので、数が増えるほど長くなる）
+  if (depth > 2) return undefined;
   for (const part of command.split(/\|\||&&|;|\n|\|(?!&)|(?<![>])&(?!&)/)) {
     // 括弧・$( ・` で包んだ形（`(git -C . push)`）も、包みを外して語にする
     const words = part.trim().split(/\s+/).map((w) => w.replace(/^(\$?\(|`)+/, '').replace(/[)`]+$/, '').replace(/^['"]|['"]$/g, '')).filter((w) => w.length > 0);
@@ -353,18 +355,19 @@ export function gitDanger(command: string): string | undefined {
     }
     for (const a of aliases) {
       const body = a.replace(/^alias\.[^=]*=/i, '').replace(/^['"]/, '');
-      const inner = gitDanger(`git ${body}`);
+      const inner = gitDanger(`git ${body}`, depth + 1);
       if (inner) return `別名の ${inner}`;
     }
     const sub = words[i]?.toLowerCase();
     const rest = words.slice(i + 1);
     const shortFlag = (ch: string) => rest.some((w) => /^-[a-z]+$/i.test(w) && w.slice(1).includes(ch));
-    // git は長い名前の省略を受け付ける（`--har` は `--hard`）。4 字以上の頭が一致すれば同じとみなす
+    // git は長い名前の省略を受け付ける（`--har` は `--hard`）。`--` の後ろ 3 字以上の頭が一致すれば同じとみなす
     const long = (name: string) => rest.some((w) => {
       const key = w.split('=')[0]!;
       return key === name || (key.startsWith('--') && key.length >= 5 && name.startsWith(key));
     });
-    const wholeTree = rest.some((w) => w === '.' || w === './' || w === '*' || w === ':/' || w === ':(top)');
+    // `:(top)` は包みを外すときに閉じ括弧が落ちて `:(top` になる。どちらも作業場全体
+    const wholeTree = rest.some((w) => w === '.' || w === './' || w === '*' || w === ':/' || w === ':(top)' || w === ':(top');
     if (sub === 'push') return 'push';
     if (sub === 'switch' && (shortFlag('f') || long('--force') || long('--discard-changes'))) return 'switch -f';
     if (sub === 'reset' && long('--hard')) return 'reset --hard';
