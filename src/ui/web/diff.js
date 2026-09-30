@@ -23,20 +23,30 @@ export function parseDiff(text) {
   // 何番目の塊の、何行目か。戻すときに本体へ言うため。
   let hunk = -1;
   let at = 0;
+  /*
+   * 塊の中に残っている行の数（`@@ -a,b +c,d @@` の b と d）。**塊の中の `--- ` `+++ ` は見出しではない。**中身が `-- ` で始まる行
+   * （SQL の注釈など）を消すと `--- …` になる。見出しとして飛ばしていたので、承認の差分からその行が消え（消えることを見ずに許す）、
+   * 以後の行の番号がずれて、行を押して戻すと別の組を戻し、`++` で始まる行を足すと偽のファイルの札が出ていた。
+   */
+  let oldLeft = 0;
+  let newLeft = 0;
 
   for (const raw of String(text ?? '').split('\n')) {
-    if (raw.startsWith('--- ')) {
+    const inHunk = oldLeft > 0 || newLeft > 0;
+    if (!inHunk && raw.startsWith('--- ')) {
       continue;
     }
-    if (raw.startsWith('+++ ')) {
+    if (!inHunk && raw.startsWith('+++ ')) {
       file = { path: raw.slice(4).replace(/^b\//, '').trim(), lines: [], added: 0, removed: 0 };
       files.push(file);
       continue;
     }
     if (raw.startsWith('@@')) {
-      const m = raw.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      const m = raw.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
       oldNo = m ? Number(m[1]) : 1;
-      newNo = m ? Number(m[2]) : 1;
+      newNo = m ? Number(m[3]) : 1;
+      oldLeft = m ? (m[2] === undefined ? 1 : Number(m[2])) : 0;
+      newLeft = m ? (m[4] === undefined ? 1 : Number(m[4])) : 0;
       hunk += 1; at = 0;
       if (file && file.lines.length > 0) file.lines.push({ kind: 'gap' });
       if (file) file.lines.push({ kind: 'hunk', hunk });
@@ -47,13 +57,17 @@ export function parseDiff(text) {
     if (raw.startsWith('+')) {
       file.lines.push({ kind: 'add', newNo: newNo++, text: raw.slice(1), hunk, at: at++ });
       file.added += 1;
+      newLeft = Math.max(0, newLeft - 1);
     } else if (raw.startsWith('-')) {
       file.lines.push({ kind: 'del', oldNo: oldNo++, text: raw.slice(1), hunk, at: at++ });
       file.removed += 1;
+      oldLeft = Math.max(0, oldLeft - 1);
     } else if (raw.startsWith('\\')) {
       // 「改行が無い」の注記。行としては数えない。
     } else {
       file.lines.push({ kind: 'same', oldNo: oldNo++, newNo: newNo++, text: raw.replace(/^ /, ''), hunk, at: at++ });
+      oldLeft = Math.max(0, oldLeft - 1);
+      newLeft = Math.max(0, newLeft - 1);
     }
   }
   return files;
@@ -240,7 +254,9 @@ function split(file) {
  */
 export function splitHunkTexts(text) {
   const lines = String(text ?? '').split('\n');
-  const head = lines.filter((l) => l.startsWith('--- ') || l.startsWith('+++ '));
+  // 見出しは最初の塊の前だけ（塊の中の `--- ` `+++ ` は、中身が `-- ` `++ ` で始まる行の出入り）
+  const first = lines.findIndex((l) => l.startsWith('@@'));
+  const head = lines.slice(0, first < 0 ? lines.length : first).filter((l) => l.startsWith('--- ') || l.startsWith('+++ '));
   const out = [];
   let now = null;
   for (const line of lines) {

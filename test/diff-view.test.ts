@@ -112,3 +112,38 @@ describe('塊ごとに割る（採否を分けるため）', () => {
     assert.deepEqual(splitHunkTexts('ただの文'), []);
   });
 });
+
+describe('塊の中の --- と +++ は、見出しではなく中身', () => {
+  /**
+   * 中身が `-- `（SQL の注釈など）で始まる行を消すと `--- …` になる。見出しとして飛ばしていたので、承認の差分からその行が消え、
+   * 以後の行の番号がずれて、行を押して戻すと別の組を戻し、`++` で始まる行を足すと偽のファイルの札が出ていた。
+   */
+  test('消した -- の行と足した ++ の行を行として読み、番号を本体の割り方と揃える', async () => {
+    const { unifiedDiff } = await import('../src/agent/diff.ts');
+    const { splitHunks } = await import('../src/agent/hunks.ts');
+    const diff = unifiedDiff('q.sql', '-- old\nSELECT 1;\n', '++i;\nSELECT 1;\n');
+    const files = parseDiff(diff);
+    assert.equal(files.length, 1, `偽のファイルの札が出た: ${JSON.stringify(files.map((f) => f.path))}`);
+    const [file] = files;
+    const del = file.lines.find((l) => l.kind === 'del');
+    const add = file.lines.find((l) => l.kind === 'add');
+    assert.equal(del?.text, '-- old', '消した行が承認の差分から消えた');
+    assert.equal(add?.text, '++i;');
+    assert.equal(file.added, 1);
+    assert.equal(file.removed, 1);
+    // 番号（at）は本体の塊の行の並び（splitHunks）と同じ
+    const body = splitHunks(diff)[0].lines;
+    for (const l of file.lines.filter((x) => x.at !== undefined)) {
+      const want = l.kind === 'add' ? `+${l.text}` : l.kind === 'del' ? `-${l.text}` : ` ${l.text}`;
+      assert.equal(body[l.at], want, `番号がずれた: ${l.at}`);
+    }
+  });
+
+  test('塊に割っても、中身の --- を見出しとして前に積まない', async () => {
+    const { unifiedDiff } = await import('../src/agent/diff.ts');
+    const diff = unifiedDiff('q.sql', '-- old\nSELECT 1;\n', 'SELECT 1;\n');
+    const [one] = splitHunkTexts(diff);
+    assert.equal(one.text.split('\n').filter((l) => l.startsWith('--- ')).length, 2, '見出しの --- と中身の --- の二つだけのはず');
+    assert.equal(parseDiff(one.text)[0].removed, 1);
+  });
+});
