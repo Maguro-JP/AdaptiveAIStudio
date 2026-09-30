@@ -177,6 +177,14 @@ describe('片づけるもの・片づけないもの', () => {
     assert.deepEqual(found.map((f) => f.path), [join(models, 'm.gguf.part')]);
   });
 
+  test('途中の分の版の記録（.part.tag）も、途中の分と一緒に片づける', async () => {
+    const { models } = await scratch();
+    await writeFile(join(models, 'm.gguf.part'), 'x');
+    await writeFile(join(models, 'm.gguf.part.tag'), '"v1"');
+    const found = await findRemovable({ keepTag: 'b9999', now: Date.now() + 2 * 60 * 60 * 1000 });
+    assert.deepEqual(found.map((f) => f.path).sort(), [join(models, 'm.gguf.part'), join(models, 'm.gguf.part.tag')]);
+  });
+
   test('いま取っている最中の取得は消さない（書き続けているので新しい）', async () => {
     const { models, bin } = await scratch();
     await writeFile(join(models, 'm.gguf.part'), 'x');

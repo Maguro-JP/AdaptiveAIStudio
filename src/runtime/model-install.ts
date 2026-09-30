@@ -316,12 +316,20 @@ async function fetchInto(a: {
       void res.body?.cancel().catch(() => undefined);
       return startOver(`配布元が返した続きの始まり（${range[1]}）が、取れている長さ（${had}）と合いません`);
     }
+    // If-Range を無視して続きを返す相手も居る。返ってきた版が記録と違えば、継がない
+    const now = markOf(res);
+    if (tag && now && now !== tag) {
+      clearTimeout(timer);
+      void res.body?.cancel().catch(() => undefined);
+      return startOver('配布元のファイルが、途中まで取ったときと別の版になっています');
+    }
   }
   // 416 は「その位置から先は無い」。本当の長さが手元と同じときだけ「全部取れている」。違えば、配布元のファイルが変わっている
   if (res.status === 416) {
     const size = /\*\/(\d+)/.exec(res.headers.get('content-range') ?? '');
     if (size && Number(size[1]) !== had) {
       clearTimeout(timer);
+      void res.body?.cancel().catch(() => undefined);
       return startOver(`配布元のファイル（${human(Number(size[1]))}）と、取れている長さ（${human(had)}）が合いません`);
     }
   }
@@ -362,14 +370,19 @@ async function fetchInto(a: {
       // 分からないものは 0（＝分からない）。下の突き合わせは total > 0 のときだけ。
       ? 0
       : resuming ? had + part : part;
-  const handle = await open(tmp, resuming || done ? 'r+' : 'w');
-  // 最初から取るときに、どの版を取っているかを残す（弱い ETag は If-Range に使えないので、そのときは Last-Modified）
+  // 最初から取るときに、どの版を取っているかを残す。開く前に書く（書けずに落ちたとき、開いたものと見張りを残さない）
   if (!resuming && !done) {
-    const etag = res.headers.get('etag');
-    const mark = etag && !etag.startsWith('W/') ? etag : res.headers.get('last-modified');
-    if (mark) await writeFile(tagFile, mark, 'utf8');
-    else await rm(tagFile, { force: true });
+    const mark = markOf(res);
+    try {
+      if (mark) await writeFile(tagFile, mark, 'utf8');
+      else await rm(tagFile, { force: true });
+    } catch (e) {
+      clearTimeout(timer);
+      void res.body?.cancel().catch(() => undefined);
+      throw e;
+    }
   }
+  const handle = await open(tmp, resuming || done ? 'r+' : 'w');
   let written = resuming || done ? had : 0;
   let lastAt = 0;
   const began = Date.now();
@@ -439,6 +452,12 @@ async function fetchInto(a: {
   await rm(tagFile, { force: true });
   log(`置きました: ${dest}`);
   return { path: dest, file: dest.split(/[\\/]/).at(-1)!, bytes: written };
+}
+
+/** 配布元が返した版。強い ETag、無ければ Last-Modified（弱い ETag は If-Range に使えない）。 */
+function markOf(res: Response): string | undefined {
+  const etag = res.headers.get('etag');
+  return (etag && !etag.startsWith('W/') ? etag : res.headers.get('last-modified')) ?? undefined;
 }
 
 /**

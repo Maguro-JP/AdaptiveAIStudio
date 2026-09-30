@@ -552,7 +552,7 @@ describe('続きから取るとき、別の版を継がない', () => {
   const body = (fill: number) => Buffer.concat([tinyGguf(), Buffer.alloc(64 * 1024, fill)]);
 
   /** 今の版は `now`。Range と If-Range に、本物の配布元と同じ決まりで応じる。`answer` で続きの返し方を変えられる。 */
-  async function origin(now: Buffer, etag: string, answer?: 'wrongStart') {
+  async function origin(now: Buffer, etag: string, answer?: 'wrongStart' | 'ignoreIfRange') {
     const { createServer } = await import('node:http');
     const asked: { range?: string; ifRange?: string }[] = [];
     const srv = createServer((req, res) => {
@@ -565,7 +565,7 @@ describe('続きから取るとき、別の版を継がない', () => {
       asked.push({ range, ifRange });
       const from = Number(/bytes=(\d+)-/.exec(range ?? '')?.[1] ?? NaN);
       // If-Range が今の版と違えば、範囲を無視して全体を返す（RFC 9110）
-      if (range === undefined || (ifRange !== undefined && ifRange !== etag)) {
+      if (range === undefined || (answer !== 'ignoreIfRange' && ifRange !== undefined && ifRange !== etag)) {
         res.writeHead(200, { 'content-length': String(now.length), etag });
         return res.end(now);
       }
@@ -606,6 +606,20 @@ describe('続きから取るとき、別の版を継がない', () => {
       assert.ok((await readFile(got.path)).equals(newer), '古い頭に新しい続きを継いだ');
       assert.equal(srv.asked[0]?.ifRange, '"v1"', `続きを頼むときに版を添えていない: ${JSON.stringify(srv.asked)}`);
       await assert.rejects(stat(join(dir, 'model-Q4_K_M.gguf.part.tag')), '取り終えたのに版の記録が残っている');
+    } finally { await srv.close(); }
+  });
+
+  test('If-Range を無視して別の版の続きを返されても、継がずに取り直す', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const dir = await tempDir('aas-dl-ignore-');
+    const older = body(0x66);
+    const newer = body(0x67);
+    await writeFile(join(dir, 'model-Q4_K_M.gguf.part'), older.subarray(0, older.length / 2));
+    await writeFile(join(dir, 'model-Q4_K_M.gguf.part.tag'), '"v5"');
+    const srv = await origin(newer, '"v6"', 'ignoreIfRange');
+    try {
+      const got = await installModel({ entry, modelsDir: dir, fetchImpl: srv.fetchImpl });
+      assert.ok((await readFile(got.path)).equals(newer), '別の版の続きを継いだ');
     } finally { await srv.close(); }
   });
 

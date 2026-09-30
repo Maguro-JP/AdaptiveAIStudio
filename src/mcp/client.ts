@@ -503,20 +503,20 @@ export class McpClient {
     /*
      * 一つの出来事の data 行。SSE では一つの出来事を複数の data: 行に分けてよい（空行で終わる）。
      * 行ごとに JSON として読んでいたので、分けて送る相手の返事を捨て、問いが時間切れまで待っていた。
-     * 繋いで JSON として読めた時点で渡す（一行で送る相手には、今までどおりすぐ渡る）。空行か流れの終わりでも渡す。
+     * 行を繋いで、空行か流れの終わりで渡す。一行目だけで JSON として読めるなら、空行を待たずにすぐ渡す（一行で送る相手には、今までどおり）。
+     * 行が増えるたびに全体を読み直すと、長い返事で読み口が止まるので、読み直すのは一行目だけ。
+     * 渡すときは splitMessages を通す（まとめて返された配列を一つずつにする。通さないと配列の返事を捨てる）。
      */
     let event: string[] = [];
     const flush = (): void => {
       const data = event.join('\n').trim();
       event = [];
       if (!data || data === '[DONE]') return;
-      let whole: unknown;
-      try { whole = JSON.parse(data); } catch { whole = undefined; }
-      if (whole !== undefined) { this.#onData(`${JSON.stringify(whole)}\n`); return; }
       for (const one of splitMessages(data)) this.#onData(`${one}\n`);
     };
     const readsWhole = (): boolean => {
-      try { JSON.parse(event.join('\n')); return true; } catch { return false; }
+      if (event.length !== 1) return false;
+      try { JSON.parse(event[0]!); return true; } catch { return false; }
     };
     for (;;) {
       const { done, value } = await reader.read();

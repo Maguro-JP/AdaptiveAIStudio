@@ -102,6 +102,16 @@ describe('遠くの相手に繋ぐ', () => {
     } finally { c.stop(); await s.close(); }
   });
 
+  test('流れ（SSE）でまとめて（配列で）返されても、落とさない', async () => {
+    const s = await startServer({ sse: true, batch: true });
+    const c = new McpClient('remote', { url: s.url });
+    try {
+      assert.equal(await c.start(), true, c.failure);
+      const got = await c.call('echo', { text: 'やあ' }, 5_000);
+      assert.equal(got.text, 'こんにちは');
+    } finally { c.stop(); await s.close(); }
+  });
+
   test('まとめて返されても、落とさない', async () => {
     const s = await startServer({ batch: true });
     const c = new McpClient('remote', { url: s.url });
