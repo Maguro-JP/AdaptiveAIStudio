@@ -55,7 +55,8 @@ const call = (method: string, p: string, body?: unknown) => fetch(base + p, {
 
 describe('作業中に作業場を変えたとき', { timeout: 60_000 }, () => {
   test('作業が終われば、手で書いた分も「戻す」も、変えた作業場に当たる（前の作業場を書き換えない）', async () => {
-    const sent = await json(await call('POST', '/api/send', { text: '長い依頼' }));
+    // 答えは頼んだ文をそのまま流すので、長くして走っている間を延ばす（遅い機械でも、変える前に終わらない）
+    const sent = await json(await call('POST', '/api/send', { text: '長い依頼。'.repeat(20) }));
     assert.equal(sent.accepted, true, JSON.stringify(sent));
     const idA = sent.conversationId as string;
     // 走っている間（途中までが見える間）に作業場を変える。

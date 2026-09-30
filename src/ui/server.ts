@@ -913,7 +913,12 @@ export class UiServer {
     } finally {
       this.#preparing = was;
     }
-    if (this.#session === live) this.#session = undefined;
+    if (this.#session === live) {
+      this.#session = undefined;
+      // 見回りも止める（次に組む本体が自分の見回りを立てる。止めないと、畳んだ本体でやり残しを続け、前の作業場を触る）
+      if (this.#idleTimer) clearInterval(this.#idleTimer);
+      this.#idleTimer = undefined;
+    }
     await live.close().catch(() => undefined);
   }
 
@@ -980,6 +985,8 @@ export class UiServer {
    * 立たない。支度せずに考えに行くと、30秒ごとに「繋がりません」を作る。
    */
   async idleTick(session: Session): Promise<'BUSY' | 'HELD' | 'MISSING' | 'THOUGHT' | 'RESUMED'> {
+    // 畳んだ本体では動かない（前の作業場を触る）
+    if (session !== this.#session) return 'HELD';
     // 作業中は考えない。人の依頼が先。支度の最中も、人の依頼のうち。
     if (this.#busyNow(session)) return 'BUSY';
     // **順番待ちがあるなら、暇ではない。**ここで考え始めると、
@@ -1034,9 +1041,10 @@ export class UiServer {
   /** 手が空いていて、待っているものがあれば流す。 */
   async #maybeDrain(): Promise<void> {
     await this.#retireIfRootMoved();
-    const session = this.#session;
-    if (!session || this.#queue.length === 0) return;
-    if (this.#busyNow(session)) return;
+    if (this.#queue.length === 0) return;
+    // 畳んだ直後は本体が無い。待っている依頼があるなら組む（組まずに帰ると、次の送りが来るまで誰も流さない）
+    const session = this.#session ?? await this.session().catch(() => undefined);
+    if (!session || this.#busyNow(session)) return;
     await this.#drainQueue(session);
   }
 
@@ -3545,6 +3553,8 @@ export class UiServer {
    */
   async #continueStep(session: Session, item: { id: string; request: string; note: string }): Promise<void> {
     if (this.#busyNow(session) || this.#queue.length > 0) return;
+    // 置いている間に本体を畳んでいたら（作業場を変えた等）、畳んだ本体では進めない。やり残しは残っているので、見回りが拾う
+    if (session !== this.#session) return;
     // 前の段の終わりから少し置いて呼ばれる。その間に取り消されていたら、進めない（段取りを立て直さない）。
     if (!(await this.#stillUnfinished(item.id))) return;
     this.#resuming = item.id;
