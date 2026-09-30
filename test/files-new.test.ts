@@ -136,6 +136,22 @@ describe('リンク越しには書かない', { skip: process.platform === 'win3
     assert.equal((await lstat(join(work, 'alias2.txt'))).isSymbolicLink(), true);
   });
 
+  test('途中のフォルダがリンク（中を指す）なら、今までどおり保存でき、戻せば実体が戻る', async () => {
+    await mkdir(join(work, 'realdir'), { recursive: true });
+    await writeFile(join(work, 'realdir', 'f.txt'), 'まえ\n');
+    await symlink('realdir', join(work, 'dirlink'));
+    const r = await post('/api/file', { path: 'dirlink/f.txt', content: 'あと\n' }, 'PUT');
+    assert.equal(r.status, 200, await r.text());
+    assert.equal(await readFile(join(work, 'realdir', 'f.txt'), 'utf8'), 'あと\n');
+    const { list } = await (await fetch(`${base}/api/undo`)).json() as { list: { id: string; paths: string[] }[] };
+    const point = list.find((p) => p.paths.includes('dirlink/f.txt'));
+    assert.ok(point, `戻り先に無い: ${JSON.stringify(list)}`);
+    const u = await post('/api/undo', { id: point.id });
+    assert.equal(u.status, 200, await u.text());
+    assert.equal(await readFile(join(work, 'realdir', 'f.txt'), 'utf8'), 'まえ\n');
+    assert.equal((await lstat(join(work, 'dirlink'))).isSymbolicLink(), true);
+  });
+
   test('外を指す切れたリンクへの保存・作成は断り、外にファイルを作らない', async () => {
     await symlink(join(outer, 'dangling-a.txt'), join(work, 'dangle-a'));
     await symlink(join(outer, 'dangling-b.txt'), join(work, 'dangle-b'));
