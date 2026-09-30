@@ -3361,7 +3361,7 @@ export class UiServer {
   async #resumeUnfinished(session: Session): Promise<boolean> {
     let item;
     try {
-      item = await this.#unfinished.due();
+      item = await this.#unfinished.due(Date.now(), resolvePath(session.root));
     } catch { return false; }
     if (!item) return false;
 
@@ -3733,6 +3733,8 @@ export class UiServer {
         why,
         note: settled.reason,
         ...((opts.beside ?? this.#conversationId) ? { conversationId: opts.beside ?? this.#conversationId } : {}),
+        // 走った作業場（本体はまだ畳んでいない。作業中に作業場を変えていても、依頼が走ったのはこちら）
+        root: resolvePath(this.#session?.root ?? this.#workRoot()),
       });
       // 溜めすぎで古いものを落としたなら、その段取りも閉じる。
       await this.#settleGoals();

@@ -399,3 +399,38 @@ describe('思いつきを切っても、頼まれたことは放り出さない'
     } finally { await s.stop(); await fake.close(); }
   });
 });
+
+/**
+ * やり残しは、走った作業場で続ける。
+ *
+ * やり残しの記録は一つで、作業場ごとに分かれていなかった。作業場を変えたあとの見回りは、前の作業場の依頼を
+ * 新しい作業場で続けていた（別のプロジェクトのファイルを、その依頼のつもりで書き換える）。
+ */
+describe('やり残しは、走った作業場で続ける', () => {
+  test('記録に走った作業場が残り、別の作業場を開いているときは続けない', async () => {
+    const state = await ownState('root');
+    const root = await tempDir('aas-resume-rootA-');
+    const other = await tempDir('aas-resume-rootB-');
+    const fake = await startFakeServer({
+      kind: 'stalls', name: 'list_files', args: { path: '.' },
+      then: 'では、このあと直します。',
+    });
+    const s = new UiServer({ config: { ...config(fake, root), initiative: { enabled: false } }, port: 0 });
+    const base = (await s.start()).replace(/\/$/, '');
+    try {
+      const mine = await ask(base, 'README を直して');
+      const store = new UnfinishedWork(join(state, 'unfinished.jsonl'));
+      const kept = (await store.list()).find((u) => u.id === mine.id)!;
+      assert.equal(kept.root, root, '走った作業場を記録していない');
+
+      // 別の作業場の分だけにする（今のものは片づけ、別の作業場の記録を時が来た形で置く）
+      await store.cancel(mine.id);
+      const elsewhere = await store.add({ request: '別のプロジェクトの依頼', why: 'maxTurns', note: 'x', root: other });
+      assert.ok(elsewhere);
+      await store.bump(elsewhere.id, Date.now() - 60 * 60_000);
+      fake.setBehavior({ kind: 'stream', text: '直しました。' });
+      const session = await s.session();
+      assert.equal(await s.idleTick(session), 'HELD', '別の作業場の依頼を、この作業場で続けた');
+    } finally { await s.stop(); await fake.close(); }
+  });
+});

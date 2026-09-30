@@ -33,6 +33,11 @@ export interface Unfinished {
   note: string;
   /** どの会話の続きか。分かれば、そこへ戻して続ける。 */
   conversationId?: string;
+  /**
+   * どの作業場の作業か（絶対の道）。続けるのは、同じ作業場を開いているときだけ。
+   * 無い（前からある記録）なら、どこでも続ける。
+   */
+  root?: string;
   /** 何回やり直したか。 */
   attempts: number;
   /** 次に手を付けてよい時刻（ミリ秒）。 */
@@ -147,7 +152,8 @@ export class UnfinishedWork {
     now: number,
   ): Promise<Unfinished | undefined> {
     // 読めないときは投げる（重なりを確かめられないまま足すと、同じ依頼を二重に記録する）
-    const already = (await this.list({ strict: true })).find((u) => u.request === item.request);
+    // 同じ依頼でも、別の作業場のものは別の作業
+    const already = (await this.list({ strict: true })).find((u) => u.request === item.request && u.root === item.root);
     if (already) return undefined;
     const full: Unfinished = {
       ...item,
@@ -209,9 +215,13 @@ export class UnfinishedWork {
     }
   }
 
-  /** いま手を付けてよいもの。**一つだけ返す**（一度に一つずつ進める）。 */
-  async due(now = Date.now()): Promise<Unfinished | undefined> {
-    return (await this.list()).find((u) => u.nextAt <= now);
+  /**
+   * いま手を付けてよいもの。**一つだけ返す**（一度に一つずつ進める）。
+   * `root` を渡したら、その作業場の分（と、作業場の分からない前からの分）だけ。作業場を変えたあとに、前の作業場の依頼を
+   * 新しい作業場で続けない（別のプロジェクトのファイルを、その依頼のつもりで書き換える）。
+   */
+  async due(now = Date.now(), root?: string): Promise<Unfinished | undefined> {
+    return (await this.list()).find((u) => u.nextAt <= now && (root === undefined || u.root === undefined || u.root === root));
   }
 
   /**
@@ -263,7 +273,7 @@ export class UnfinishedWork {
     // 戻せないもの（上限まで抱えている・同じ依頼をもう一度抱えている）は並べない。押しても戻らない口を出さない
     if (open.length >= MAX_OPEN) return [];
     return [...canceledAt.entries()]
-      .filter(([id, at]) => at >= since && canceled.has(id) && !open.some((u) => u.request === canceled.get(id)!.request))
+      .filter(([id, at]) => at >= since && canceled.has(id) && !open.some((u) => u.request === canceled.get(id)!.request && u.root === canceled.get(id)!.root))
       .reverse()
       .slice(0, limit)
       .map(([id, at]) => ({ id, request: canceled.get(id)!.request, at }));
@@ -291,7 +301,7 @@ export class UnfinishedWork {
       if (open.some((u) => u.id === id)) return 'open';
       const item = canceled.get(id);
       if (!item) return 'gone';
-      if (open.some((u) => u.request === item.request)) return 'duplicate';
+      if (open.some((u) => u.request === item.request && u.root === item.root)) return 'duplicate';
       if (open.length >= MAX_OPEN) return 'full';
       await this.#append({ t: 'reopen', id, nextAt: Math.max(item.nextAt, now + BACKOFF_MS[0]!) });
       return 'reopened';

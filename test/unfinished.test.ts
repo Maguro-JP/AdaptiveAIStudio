@@ -222,3 +222,25 @@ describe('やり残しの記録の上がフォルダでなかったとき', () =
     assert.deepEqual(await w.list({ strict: true }), []);
   });
 });
+
+describe('やり残しは、作業場ごと', () => {
+  test('due に作業場を渡すと、その作業場の分と、作業場の分からない前からの分だけ', async () => {
+    const { w } = await store();
+    const past = Date.now() + 10 * 60_000;
+    await w.add({ ...item, request: 'A の依頼', root: '/a' });
+    await w.add({ ...item, request: 'B の依頼', root: '/b' });
+    assert.equal((await w.due(past, '/b'))?.request, 'B の依頼');
+    assert.equal(await w.due(past, '/c'), undefined, '別の作業場の依頼を返した');
+    await w.add({ ...item, request: '前からの依頼' });
+    assert.equal((await w.due(past, '/c'))?.request, '前からの依頼');
+    // 渡さなければ、今までどおり全部から
+    assert.equal((await w.due(past))?.request, 'A の依頼');
+  });
+
+  test('同じ依頼でも、別の作業場のものは別に記録する', async () => {
+    const { w } = await store();
+    assert.ok(await w.add({ ...item, root: '/a' }));
+    assert.ok(await w.add({ ...item, root: '/b' }), '別の作業場の同じ依頼を、重なりとして捨てた');
+    assert.equal(await w.add({ ...item, root: '/a' }), undefined);
+  });
+});
