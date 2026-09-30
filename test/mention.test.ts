@@ -113,3 +113,31 @@ describe('窓に合わせて切る', () => {
       '窓の広さで変わっていない');
   });
 });
+
+/**
+ * 在らないものは指名ではない。`@` の付いた言葉を全部指名として `@` を外していたので、`npm i -D @types/node` が `types/node`
+ * （別の包みの名前）としてモデルへ渡り、コードの `@pytest.fixture` も `@` を失っていた。
+ */
+test('在らない @ の言葉は、打ったとおりに残し、中身の塊にも載せない', async () => {
+  const root = await box();
+  const got = await expandMentions('npm i -D @types/node を入れて。@pytest.fixture も付けて', root);
+  assert.equal(got.text, 'npm i -D @types/node を入れて。@pytest.fixture も付けて');
+  assert.deepEqual(got.reads, []);
+});
+
+test('読めた指名だけ @ を外し、在らない方は残す', async () => {
+  const root = await box();
+  const got = await expandMentions('@src/a.ts を直して @types/node も入れて', root);
+  assert.match(got.text, /export const a = 1;/);
+  assert.match(got.text, /\nsrc\/a\.ts を直して @types\/node も入れて$/);
+  assert.doesNotMatch(got.text, /types\/node （読めません/);
+});
+
+test('メールの @ は指名ではない。道の後ろの英語の句読点は道に含めない', async () => {
+  assert.deepEqual(mentionsIn('m@guro.email に送って'), []);
+  assert.deepEqual(mentionsIn('@src/a.ts, @b.ts を見て'), ['src/a.ts', 'b.ts']);
+  const root = await box();
+  const got = await expandMentions('@src/a.ts, を直して', root);
+  assert.equal(got.reads[0]?.ok, true, `句読点ごと道として読もうとした: ${JSON.stringify(got.reads)}`);
+  assert.match(got.text, /\nsrc\/a\.ts, を直して$/);
+});
