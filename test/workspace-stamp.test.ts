@@ -143,6 +143,11 @@ describe('作業場の記録', () => {
     const stamp = await workspaceStamp(ws);
     assert.ok(stamp);
     assert.ok(stamp.has('a.txt'), `索引と大小が違うだけで、追跡しているファイルを数えていない: [${[...stamp.keys()].join(',')}]`);
+    // **「前」も HEAD から引ける。**cwd からの道（`./a.txt`）は cwd の分がディスクの大小（`Src/app`）で HEAD と照らされて
+    // 何も引けず、「前は無かった」と記録して、戻すときにこのファイルを消していた
+    const before = await headContent(ws, 'a.txt', 1024);
+    assert.equal(before.kind, 'content', `HEAD の中身を引けていない（${before.kind}）。戻すと消える`);
+    if (before.kind === 'content') assert.equal(String(before.content), 'a\n');
   });
 
   test('大小を区別しないリポジトリでも、名前の似た隣のフォルダは数えない', async () => {

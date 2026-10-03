@@ -1893,6 +1893,42 @@ describe('エディタの順番と作業場', () => {
     assert.equal(t.asked.filter((a) => a.method === 'PUT').length, 1, '同じ中身を二度送った');
   });
 
+  test('期限を過ぎた預かりは、どの鍵でも片づける（溜まると新しい直しを預けられなくなる）', () => {
+    const old = Date.now() - 15 * 24 * 60 * 60 * 1000;
+    // 名前だけの古い鍵（作業場と名前の組に変える前）と、二度と開かない作業場の鍵
+    localStorage.setItem('aas.draft:gone.txt', JSON.stringify({ text: 'x', base: 'y', at: old, by: 'p' }));
+    localStorage.setItem('aas.held:/w9\ngone.txt', JSON.stringify({ text: 'x', at: old }));
+    localStorage.setItem('aas.draft:/w9\nfresh.txt', JSON.stringify({ text: 'x', base: 'y', at: Date.now(), by: 'p' }));
+    // keep: 開く前に覚えておく所を空にしない（空にすると、片づけを見ずに通る）
+    open({}, true);
+    assert.equal(localStorage.getItem('aas.draft:gone.txt'), null, '名前だけの古い鍵が残っている');
+    assert.equal(localStorage.getItem('aas.held:/w9\ngone.txt'), null, '古い取り替えの預かりが残っている');
+    assert.notEqual(localStorage.getItem('aas.draft:/w9\nfresh.txt'), null, '期限の来ていない預かりまで消した');
+    localStorage.removeItem('aas.draft:/w9\nfresh.txt');
+  });
+
+  test('**前のファイルの保存の返事を待つ間に、移った先で押した Ctrl+S を捨てない**', async () => {
+    const disk: Record<string, string> = { 'a.txt': 'a\n', 'b.txt': 'b\n' };
+    const t = open(disk);
+    const openFile = t.ctx.openFile as (p: string) => void;
+    openFile('a.txt');
+    await until(() => t.area().value === 'a\n', 'a が開く');
+    t.area().value = 'a2\n';
+    t.area().fire('input');
+    // a の保存だけを門で止める（b の保存は通す）
+    const g = gateFetch((_u, init) => init?.method === 'PUT' && String((init as { body?: string }).body ?? '').includes('"a.txt"'));
+    t.key('s');
+    openFile('b.txt');
+    await until(() => t.area().value === 'b\n', 'b が開く');
+    t.area().value = 'b2\n';
+    t.area().fire('input');
+    t.key('s'); // a の返事を待っている間の、b の保存
+    g.release();
+    await until(() => disk['b.txt'] === 'b2\n', `移った先で押した保存を捨てた（b.txt: ${JSON.stringify(disk['b.txt'])}）`);
+    g.restore();
+    assert.equal(disk['a.txt'], 'a2\n');
+  });
+
   test('**作業場を変えたあと、前の作業場で直したものを新しい作業場へ保存しない・預かりも混ぜない**', async () => {
     // 同じリポジトリの二つの写し（同じ名前・同じ中身）。
     const disk: Record<string, string> = { 'README.md': 'same\n' };

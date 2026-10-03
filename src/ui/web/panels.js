@@ -2497,6 +2497,23 @@ export const PANELS = {
     const DRAFT_MAX = 512 * 1024;
     /** これより古い預かりは捨てる。 */
     const DRAFT_KEEP_MS = 14 * 24 * 60 * 60 * 1000;
+    /*
+     * 古い預かりを片づける。預かりは同じ鍵を読んだときにしか消えないので、二度と開かない作業場・ファイルの分（鍵を作業場と
+     * 名前の組に変える前の、名前だけの鍵の分も）が溜まり続け、覚えておく所が溢れると、新しい直しを黙って預けられなくなる。
+     * パネルを作るたびに、期限を過ぎたものだけを消す（時刻の無いものは読めないので触らない）
+     */
+    try {
+      const old = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const k = localStorage.key(i);
+        if (!k || !(k.startsWith('aas.draft:') || k.startsWith('aas.held:'))) continue;
+        try {
+          const got = JSON.parse(localStorage.getItem(k) ?? '');
+          if (typeof got?.at === 'number' && Date.now() - got.at > DRAFT_KEEP_MS) old.push(k);
+        } catch { /* 読めない形は触らない */ }
+      }
+      for (const k of old) localStorage.removeItem(k);
+    } catch { /* 覚えておく所が使えない環境もある */ }
     let toldTooBig = '';
     let toldBusy = '';
 
@@ -3011,6 +3028,16 @@ export const PANELS = {
     let savingNow = null;
     /** 保存の返事を待つ間に、もう一度保存を頼まれた。 */
     let storeAgain = false;
+    /*
+     * 前のファイルの返事を待つ間に、移った先で保存を頼まれていたら、いま続けて保存する。待つ間に頼まれた分は覚えるだけで
+     * 返していたので、返事が別のファイルのものだと誰も保存せず、「直しています」のまま黙っていた。`store` は
+     * いま開いているファイルの直しと stamp で送るので、移った先へ正しく書く
+     */
+    const againHere = () => {
+      if (!storeAgain) return;
+      storeAgain = false;
+      void store();
+    };
 
     const store = async () => {
       if (!path || !dirty()) return;
@@ -3066,6 +3093,7 @@ export const PANELS = {
           // **移った先の画面は書き換えないが、保存できなかったことは言う。**
           refresh();
           tell(`${at} を保存できませんでした（${e.message ?? e}）。開き直すと、保存していない直しを戻せます。`, []);
+          againHere();
           return;
         }
         // 繋がらなかったときに黙ると、書いたものが消えたように見える。欄は残す。
@@ -3095,6 +3123,7 @@ export const PANELS = {
           if (d && d.text === sent) drafts.delete(K(at, atRoot));
           else if (d) d.base = sent;
         }
+        againHere();
         return;
       }
       /*
@@ -3434,6 +3463,11 @@ export const PANELS = {
             if (path !== at || discarded()) return;
             // 断られたら、その理由を出す（utf8 でない形に書き換えられた等）。
             if (!r || !r.ok || !said) { state.textContent = said?.error ?? '読み直せませんでした'; return; }
+            // 作業場が変わっていたら、別の作業場の同じ名前のファイルを AI の版として出さない
+            if (typeof said.root === 'string' && rootAt && said.root !== rootAt) {
+              state.textContent = '作業場が変わったので、この直しの AI の版は出せません';
+              return;
+            }
             const got = said;
             takeOver(got.content, got.stamp);
           })();
