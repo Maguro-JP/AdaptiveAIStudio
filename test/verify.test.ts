@@ -68,6 +68,24 @@ describe('失敗の要約', () => {
     assert.equal(a, b, '同じ失敗が別物と判定される');
   });
 
+  test('node:test の所要時間（数字が後ろ）も落とす', () => {
+    // TAP（端末でないとき）と spec の形。数字が `duration_ms` の後ろに来る。
+    const tap = (n: string, m: string) => digestFailure(`not ok 1 - x\n  ---\n  duration_ms: ${n}\n  ...\n# fail 1\n# duration_ms ${m}`);
+    assert.equal(tap('1.371285', '125.619341'), tap('1.517393', '105.700819'));
+    const spec = (m: string) => digestFailure(`✖ x\nℹ fail 1\nℹ duration_ms ${m}`);
+    assert.equal(spec('101.25'), spec('98.7'));
+  });
+
+  test('Windows の一時フォルダも落とす', () => {
+    const at = (dir: string) => digestFailure(`Error: ENOENT\n    at C:\\Users\\me\\AppData\\Local\\Temp\\${dir}\\x.ts:3:9`);
+    assert.equal(at('aas-abc123'), at('aas-zzz999'));
+    // 利用者名に空白が入っても落とす
+    const spaced = (dir: string) => digestFailure(`    at C:\\Users\\John Smith\\AppData\\Local\\Temp\\${dir}\\x.ts:3:9`);
+    assert.equal(spaced('aas-abc123'), spaced('aas-zzz999'));
+    const doubled = (dir: string) => digestFailure(`path: 'C:\\\\Users\\\\me\\\\AppData\\\\Local\\\\Temp\\\\${dir}\\\\x.ts'`);
+    assert.equal(doubled('aas-abc123'), doubled('aas-zzz999'));
+  });
+
   test('指示文にテスト削除の禁止が含まれる', () => {
     const text = feedbackFor(
       { passed: false, output: 'boom', durationMs: 1, timedOut: false }, 'npm test', 1);
@@ -229,6 +247,36 @@ describe('作業前からの失敗の切り分け', () => {
 
     assert.equal(outcome.preexistingFailure, true);
     assert.equal(outcome.rounds, 1, '既存の失敗で無駄に回っている');
+    assert.equal(fixes, 0, '直せない失敗をモデルに投げている');
+    assert.ok(events.some((e) => e.type === 'preexisting'));
+  });
+
+  test('node:test の作業場でも、作業前と同じ失敗だと分かる', async () => {
+    // 本物の node:test を回す。所要時間は毎回変わるので、それで別の失敗と読まないこと。
+    const root = await project({
+      'a.test.mjs': "import { test } from 'node:test';\nimport assert from 'node:assert';\ntest('x', () => assert.equal(1, 2));\n",
+    });
+    const command = `"${process.execPath}" --test a.test.mjs`;
+    // 試験の中から node --test を起こすと、子は親へ報告する形（NODE_TEST_CONTEXT）になり、落ちても 0 で終わる。外して、利用者の作業場と同じ形で回す。
+    const inherited = process.env.NODE_TEST_CONTEXT;
+    delete process.env.NODE_TEST_CONTEXT;
+    let fixes = 0;
+    let run;
+    try {
+      const baseline = await runVerification({ command, root }, new AbortController().signal);
+      assert.equal(baseline.passed, false, `作業前の失敗が作れていない: ${baseline.output.slice(0, 300)}`);
+      run = await drain(verifyLoop(
+        { command, root, maxRounds: 3 },
+        async () => { fixes += 1; },
+        new AbortController().signal,
+        undefined,
+        baseline,
+      ));
+    } finally {
+      if (inherited !== undefined) process.env.NODE_TEST_CONTEXT = inherited;
+    }
+    const { events, outcome } = run;
+    assert.equal(outcome.preexistingFailure, true, '作業前と同じ失敗なのに、別の失敗と読んでいる');
     assert.equal(fixes, 0, '直せない失敗をモデルに投げている');
     assert.ok(events.some((e) => e.type === 'preexisting'));
   });

@@ -217,6 +217,27 @@ describe('外のツールが変えたファイルの、前の中身', () => {
     assert.deepEqual(r.unrecorded, []);
   });
 
+  test('呼ぶ前から在った（追跡していない）リンクを、「前は無い」とも、リンク先の中身とも読まない', async (t) => {
+    const root = await repo();
+    await mkdir(join(root, 'target-dir'), { recursive: true });
+    try {
+      await symlink('target-dir', join(root, 'linkdir'), 'dir');
+      await symlink('clean.txt', join(root, 'linkfile'));
+    } catch { t.skip('シンボリックリンクを作れない'); return; }
+    const outside = new OutsideChanges(root);
+    await outside.before();
+    // 外のツールがリンクを取り替えた。
+    await rm(join(root, 'linkdir'));
+    await symlink('sub', join(root, 'linkdir'), 'dir');
+    await rm(join(root, 'linkfile'));
+    await symlink('dirty.txt', join(root, 'linkfile'));
+    const r = await outside.after();
+    const prev = byPath(r);
+    assert.ok(!('linkdir' in prev), `フォルダを指すリンクを「前は無い」と読んでいる（戻すと消す）: ${JSON.stringify(r)}`);
+    assert.ok(!('linkfile' in prev), `リンク先の中身を前の中身にしている（戻すと普通のファイルになる）: ${JSON.stringify(r)}`);
+    assert.ok(r.unrecorded.includes('linkdir') && r.unrecorded.includes('linkfile'), JSON.stringify(r));
+  });
+
   test('HEAD ではリンクだったものを、リンク先の文字列のファイルとして戻さない', async (t) => {
     const root = await repo();
     try { await symlink('clean.txt', join(root, 'link')); } catch { t.skip('シンボリックリンクを作れない'); return; }

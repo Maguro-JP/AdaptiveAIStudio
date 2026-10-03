@@ -83,3 +83,66 @@ describe('数え直しで読めなかったもの', () => {
     assert.doesNotMatch(verdict.reason!, /a\.test\.ts/);
   });
 });
+
+describe('確かめのループで、テストを読めなかったとき', () => {
+  /*
+   * 試験は通ったが、テストを読めなかった。前は「テストを読めませんでした」をモデルに直させに戻し、
+   * 同じ要約が続いて打ち切られ、送り口では「失敗」として巻き戻しの対象にしていた。
+   */
+  test('モデルに直させず、読み直しても読めなければ「確かめられなかった」で終える', async () => {
+    const { verifyLoop } = await import('../src/agent/verify.ts');
+    const root = await project({ 'a.test.ts': 'test("x", () => {});' });
+    const before = await snapshotTests(root);
+    let fixes = 0;
+    const events: Array<{ type: string; reason?: string }> = [];
+    const outcome = await failing('readFile', join(root, 'a.test.ts'), async () => {
+      const gen = verifyLoop(
+        { command: `"${process.execPath}" -e "process.exit(0)"`, root, maxRounds: 5 },
+        async () => { fixes += 1; },
+        new AbortController().signal,
+        before,
+      );
+      let step = await gen.next();
+      while (!step.done) { events.push(step.value as { type: string; reason?: string }); step = await gen.next(); }
+      return step.value;
+    });
+    assert.equal(fixes, 0, '読めなかっただけなのに、モデルに直させている');
+    assert.ok(!events.some((e) => e.type === 'failed'), `失敗として数えている: ${JSON.stringify(events)}`);
+    assert.ok(events.some((e) => e.type === 'giveUp' && e.reason === 'unsure'), JSON.stringify(events));
+    assert.equal(outcome.passed, false, '確かめられなかったものを合格にしている');
+    assert.match(outcome.unsure ?? '', /a\.test\.ts/);
+  });
+
+  test('一度だけ読めなかったなら、読み直して合格にする', async () => {
+    const { verifyLoop } = await import('../src/agent/verify.ts');
+    const root = await project({ 'a.test.ts': 'test("x", () => {});' });
+    const before = await snapshotTests(root);
+    // 最初の読みだけ失敗させる
+    const real = fsp.readFile;
+    let failed = false;
+    (fsp as Record<string, unknown>).readFile = ((p: unknown, ...rest: unknown[]) => {
+      if (p === join(root, 'a.test.ts') && !failed) { failed = true; return Promise.reject(Object.assign(new Error('EBUSY'), { code: 'EBUSY' })); }
+      return (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest);
+    }) as never;
+    syncBuiltinESMExports();
+    let fixes = 0;
+    let passed = false;
+    try {
+      const gen = verifyLoop(
+        { command: `"${process.execPath}" -e "process.exit(0)"`, root, maxRounds: 5 },
+        async () => { fixes += 1; },
+        new AbortController().signal,
+        before,
+      );
+      let step = await gen.next();
+      while (!step.done) step = await gen.next();
+      passed = step.value.passed;
+    } finally {
+      (fsp as Record<string, unknown>).readFile = real;
+      syncBuiltinESMExports();
+    }
+    assert.equal(failed, true, '読めない場面が作れていない');
+    assert.equal(passed, true, '一瞬読めなかっただけで合格にしていない');
+    assert.equal(fixes, 0);
+  });
+});

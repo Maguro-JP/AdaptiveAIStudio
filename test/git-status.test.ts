@@ -43,3 +43,62 @@ test('日本語の名前・名前の変更を本物の道で返し、新しい�
   assert.deepEqual(dropCoveredDirs(changedBetween([], changed), ['sub/a.ts']).includes('sub/'), false);
   assert.deepEqual(dropCoveredDirs(['other/'], ['sub/a.ts']), ['other/']);
 });
+
+test('作業場がリポジトリのサブフォルダなら、道は作業場からで、作業場の外の変更は数えない', { skip: GIT_OK ? false : 'この機械には git が無い' }, async () => {
+  // porcelain の道は根からなので、作業場からの道と並べると同じファイルが二つの形で並び、「計画に無いファイル」になっていた
+  const root = await tempDir('aas-git-subdir-');
+  const work = join(root, 'packages', 'app');
+  await mkdir(join(work, 'src'), { recursive: true });
+  await writeFile(join(work, 'src', 'a.ts'), 'export {};\n');
+  await writeFile(join(root, 'other.txt'), 'x\n');
+  git(root, 'init', '-q');
+  git(root, 'add', '.');
+  git(root, 'commit', '-q', '-m', 'first');
+  assert.equal((await inspectGit(work)).kind, 'clean');
+
+  await writeFile(join(work, 'src', 'a.ts'), 'export const a = 1;\n');
+  await writeFile(join(root, 'other.txt'), 'changed outside\n');
+  const after = await inspectGit(work);
+  assert.equal(after.kind, 'dirty');
+  assert.deepEqual(after.kind === 'dirty' ? after.changed : [], ['src/a.ts']);
+  // 宣言・書いた道（作業場から）と合うので、計画に無いものは残らない
+  assert.deepEqual(dropCoveredDirs(changedBetween([], after.kind === 'dirty' ? after.changed : []), ['src/a.ts'])
+    .filter((p) => p !== 'src/a.ts'), []);
+
+  // 作業場の外だけが変わっていれば、作業場はきれい
+  git(root, 'checkout', '--', 'packages');
+  assert.equal((await inspectGit(work)).kind, 'clean');
+});
+
+test('作業場までのフォルダの大小が索引と違っても（core.ignorecase）、変わっていれば「クリーン」と言わない', { skip: GIT_OK ? false : 'この機械には git が無い' }, async () => {
+  // `-- .` と素の startsWith では一件も挙がらず「クリーン — いつでも巻き戻せます」と出していた（作業場の記録の側で一度直した形）
+  const root = await tempDir('aas-git-case-');
+  const work = join(root, 'Src', 'app');
+  await mkdir(work, { recursive: true });
+  await writeFile(join(work, 'a.txt'), 'a\n');
+  git(root, 'init', '-q');
+  git(root, 'config', 'core.ignorecase', 'true');
+  git(root, 'config', 'core.autocrlf', 'false');
+  // 索引には小文字で載せる（Windows でフォルダの大小だけを変えた後の姿）。大小を区別する所でも作れるよう、索引だけを書く
+  const blob = git(root, 'hash-object', '-w', join('Src', 'app', 'a.txt')).trim();
+  git(root, 'update-index', '--add', '--cacheinfo', `100644,${blob},src/app/a.txt`);
+  git(root, 'commit', '-q', '-m', 'init');
+  await writeFile(join(work, 'a.txt'), 'a\nb\n');
+  const now = await inspectGit(work);
+  assert.equal(now.kind, 'dirty', `変わっているのに ${now.kind} と言った`);
+  assert.ok(now.kind === 'dirty' && now.changed.includes('a.txt'), JSON.stringify(now));
+});
+
+test('作業場が丸ごと未追跡なら、「クリーン」と言わない', { skip: GIT_OK ? false : 'この機械には git が無い' }, async () => {
+  // git は作業場を `?? packages/` の一件で返す。作業場の外として捨てると何も残らず、戻せないのに「いつでも巻き戻せます」と出す
+  const root = await tempDir('aas-git-untracked-');
+  await writeFile(join(root, 'top.txt'), 'x\n');
+  git(root, 'init', '-q');
+  git(root, 'add', '.');
+  git(root, 'commit', '-q', '-m', 'first');
+  const work = join(root, 'packages', 'app');
+  await mkdir(join(work, 'src'), { recursive: true });
+  await writeFile(join(work, 'src', 'a.ts'), 'export {};\n');
+  const now = await inspectGit(work);
+  assert.equal(now.kind, 'dirty', `何もコミットされていないのに ${now.kind} と言った`);
+});

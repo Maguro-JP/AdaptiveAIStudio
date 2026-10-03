@@ -1860,6 +1860,8 @@ export class Session {
           // 元から落ちていたものは、この作業のせいにしない（巻き戻さない）。
           // ただし**通ったとも言わない**。落ちているものは落ちている。
           else if (ev.type === 'preexisting') { keep = true; checked = 'preexisting'; }
+          // 試験は通ったがテストを読めなかった。失敗にしない（巻き戻さない）。段取り・外のツールの道と同じ扱い
+          else if (ev.type === 'giveUp' && ev.reason === 'unsure') { keep = true; checked = 'unsure'; }
           else if (ev.type === 'failed') checked = 'failed';
           yield { type: 'verify', event: ev };
           // 直させている間に出たものも、そのまま見せる。黙って直させない。
@@ -2012,7 +2014,8 @@ export class Session {
             checked === 'passed' ? '確かめて通った'
               : checked === 'failed' ? '確かめたが通らなかった'
               : checked === 'preexisting' ? '元から落ちていた'
-              : checked === 'unsure' ? '通らなかったが、この回が原因かは分からない'
+              // unsure は二つある（通らなかったがこの回が原因か分からない／通ったがテストを読めなかった）。どちらとも言わない
+              : checked === 'unsure' ? '確かめきれなかった（通らなかったがこの回が原因か分からない、またはテストを読めなかった）'
               : '確かめていない',
           ].filter(Boolean).join(' — '),
           tags: changedHere.slice(0, 5),
@@ -2257,7 +2260,7 @@ export class Session {
       last.changed.length > 0 ? `触ったもの: ${last.changed.slice(0, 3).join(', ')}` : '作業場は変えていない',
       last.checked === 'passed' ? '確かめて通した'
         : last.checked === 'failed' ? '確かめたが通らなかった'
-        : last.checked === 'unsure' ? '確かめたが通らなかった（この回が原因かは分からない）'
+        : last.checked === 'unsure' ? '確かめきれなかった（通らなかったがこの回が原因か分からない、またはテストを読めなかった）'
         : '確かめていない',
     ].join(' / ');
   }

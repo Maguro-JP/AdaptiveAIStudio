@@ -12,13 +12,22 @@ export function inferSpec(name: string): ModelSpec | undefined {
 
   // "30b-a3b" のような MoE 表記（総params-活性params）
   const moe = /(\d+(?:\.\d+)?)b[-_]a(\d+(?:\.\d+)?)b/.exec(n);
+  /*
+   * "8x7b" のような専門家の数×一つの大きさ（Mixtral など）。下の規模表記が `7b` に当たって 7B と読み、
+   * 実際は 47B ほどあるものを小さいと見て選んでいた。共有の部分があるので掛け算は実際より大きめに出るが、
+   * 入らないものを入ると見るよりは安全な側に倒す。動くのは各 2 つ（Mixtral の既定）として数える。
+   */
+  const experts = moe ? null : /(\d+)x(\d+(?:\.\d+)?)b\b/.exec(n);
   // "7b" "14b" "32b" のような規模表記
   const dense = /(\d+(?:\.\d+)?)\s*b\b/.exec(n);
 
-  const paramsB = moe ? Number(moe[1]) : dense ? Number(dense[1]) : undefined;
+  const paramsB = moe ? Number(moe[1])
+    : experts ? Number(experts[1]) * Number(experts[2])
+      : dense ? Number(dense[1]) : undefined;
   if (paramsB === undefined || !Number.isFinite(paramsB) || paramsB <= 0) return undefined;
 
-  const activeParamsB = moe ? Number(moe[2]) : undefined;
+  const activeParamsB = moe ? Number(moe[2])
+    : experts ? Math.min(2, Number(experts[1])) * Number(experts[2]) : undefined;
 
   return {
     id: name,

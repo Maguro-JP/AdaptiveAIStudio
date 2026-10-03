@@ -66,9 +66,18 @@ export function digestFailure(output: string): string {
     .filter((l) => l.trim().length > 0)
     // 実行のたびに変わる部分は落とす。同じ失敗を同じと判定できるように。
     .map((l) => l
+      /*
+       * node:test は数字を後ろに書く（TAP の `duration_ms: 1.37` と `# duration_ms 125.6`、spec の `ℹ duration_ms 125.6`）。
+       * 前に書く形しか落としていなかったので、node:test の作業場では同じ失敗が毎回別物になり、「作業前から」と判定できず、
+       * 関係ない失敗を直させ続けていた（同じ失敗を 2 回回して測った）。
+       */
+      .replace(/duration_ms[:\s]+\d+(\.\d+)?/g, 'duration_ms N')
       .replace(/\d+(\.\d+)?\s*ms\b/g, 'Nms')
       .replace(/\d+(\.\d+)?\s*s\b/g, 'Ns')
-      .replace(/\/tmp\/[\w.-]+/g, '/tmp/X'));
+      .replace(/\/tmp\/[\w.-]+/g, '/tmp/X')
+      // Windows の一時フォルダ（`C:\Users\me\AppData\Local\Temp\aas-x1`。出力の中では `\\` に重なることもある）。
+      // 利用者名に空白が入る（`C:\Users\John Smith\...`）ので、間は空白も含めて取る（引用符と改行の手前まで）
+      .replace(/[A-Za-z]:(?:\\{1,2}|\/)(?:[^'"`\r\n]*?(?:\\{1,2}|\/))?Temp(?:\\{1,2}|\/)[\w.-]+/gi, 'TMP/X'));
   return lines.slice(-40).join('\n');
 }
 
@@ -91,6 +100,8 @@ export interface LoopOutcome {
   /** 作業前から失敗していたか */
   preexistingFailure: boolean;
   reason?: string;
+  /** 試験は通ったが、テストを読めず、減っていないかを確かめられなかった。失敗でも合格でもない */
+  unsure?: string;
 }
 
 /**
@@ -104,7 +115,13 @@ interface VerifyCheck extends LoopCheck {
   result?: VerifyResult;
   tampered?: string;
   preexisting?: boolean;
+  /** テストを読めなかった（読み直しても）。モデルに直させるものではない */
+  unsure?: string;
 }
+
+/** テストを読み直す回数と間。一瞬掴まれていた（ウイルス対策・同期）だけなら、これで読める */
+const UNSURE_RETRIES = 2;
+const UNSURE_WAIT_MS = 300;
 
 /**
  * 検証ループ。
@@ -129,16 +146,25 @@ export async function* verifyLoop(
 
     if (result.passed) {
       // 通ったように見えても、テストが減っていれば通過とみなさない
-      const verdict = compareTests(before, await snapshotTests(opts.root));
+      let verdict = compareTests(before, await snapshotTests(opts.root));
+      /*
+       * テストを読めなかった。合格にはしないが、**モデルに直させない**（直すものが無い）。少し待って読み直し、
+       * それでも読めなければ「確かめられなかった」で終える。前は直させに戻し、同じ要約が続いて打ち切られ、
+       * 送り口では「失敗」として巻き戻しの対象にしていた（段取りと外のツールの道は「確かめられなかった・戻さない」）
+       */
+      for (let i = 0; verdict.ok && verdict.unsure && i < UNSURE_RETRIES && !signal.aborted; i += 1) {
+        await new Promise((r) => setTimeout(r, UNSURE_WAIT_MS));
+        verdict = compareTests(before, await snapshotTests(opts.root));
+      }
       if (!verdict.ok) {
         return {
           passed: false, digest: `tampered:${verdict.reason}`,
           feedback: verdict.reason, tampered: verdict.reason, result,
         };
       }
-      // テストを読めなかった。合格にせず、もう一度確かめさせる（一瞬読めなかっただけなら次の回で通る）
+      // 読み直しの最中に止められたときは、ループが結果を見る前に「止めた」で終える（`harness/loop.ts`）。ここで分けなくてよい
       if (verdict.unsure) {
-        return { passed: false, digest: `unreadable:${verdict.unsure}`, feedback: verdict.unsure, result };
+        return { passed: false, digest: `unreadable:${verdict.unsure}`, unsure: verdict.unsure, result };
       }
       return { passed: true, digest: 'passed', result };
     }
@@ -184,6 +210,11 @@ export async function* verifyLoop(
           passed: false, rounds: ev.round, last, preexistingFailure: true,
           reason: '作業前から同じ失敗が出ています。この作業が原因ではありません。',
         };
+      }
+      if (c.unsure) {
+        yield { type: 'giveUp', reason: 'unsure', detail: c.unsure };
+        // 直させても直るものではないので、ここで終える
+        return { passed: false, rounds: ev.round, last, preexistingFailure, unsure: c.unsure, reason: c.unsure };
       }
       if (c.tampered) yield { type: 'tampered', reason: c.tampered };
       else if (c.passed) yield { type: 'passed', round: ev.round, durationMs: c.result?.durationMs ?? 0 };

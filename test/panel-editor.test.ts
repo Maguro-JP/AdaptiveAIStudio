@@ -29,7 +29,14 @@ const { PANELS } = await import('../src/ui/web/panels.js') as {
 /** この試験で作ったパネル。預かりを消して始めるときに、前の試験のパネルも閉じる（生きたまま残すと、同じ名前の
  * ファイルの預かりを後から書き、こちらの試験の預かりを「生きている別のパネルのもの」として断らせる）。 */
 const made: StubNode[] = [];
+/**
+ * 前のパネルの片づけ（本番の `ctx.onDiscard`）。**覚えておく所を消す前に呼ぶ。**預けは 400ms 遅れて走るので、
+ * 呼ばずに消すと、前の試験の預けが次の試験の途中に入り込み、読み直しで「預かった直し」の知らせを出していた
+ * （Windows のランナーでだけ落ちた。遅い機械では試験の途中に当たる）。
+ */
+const discards: Array<() => void> = [];
 function fresh(): void {
+  for (const run of discards.splice(0)) run();
   localStorage.clear();
   for (const b of made.splice(0)) (b as unknown as { isConnected: boolean }).isConnected = false;
 }
@@ -69,6 +76,7 @@ function open(disk: Record<string, string>, keep = false, extra: Record<string, 
   const body = createNode('div');
   made.push(body);
   const ctx: Record<string, unknown> = {
+    onDiscard: (fn: () => void) => { discards.push(fn); },
     ...extra,
     on: (type: string, fn: (e: unknown) => void) => {
       if (!handlers.has(type)) handlers.set(type, []);

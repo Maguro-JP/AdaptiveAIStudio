@@ -25,7 +25,7 @@
  * `.gitignore` の中は git が挙げないので見えない。`run_command` が `git commit` で HEAD を
  * 動かした回は、その後に「前」として引く HEAD が変わっている。
  */
-import { readFile, stat } from 'node:fs/promises';
+import { lstat, readFile } from 'node:fs/promises';
 import { workspaceStamp, stampChanges, headContent, type WorkspaceStamp } from './workspace-stamp.ts';
 import { contentOf, contentBytes, isAbsent, type FileContent } from '../harness/put-back.ts';
 import { safeResolve } from './tools/paths.ts';
@@ -87,11 +87,15 @@ export class OutsideChanges {
       if (!abs) continue;
       let s: import('node:fs').Stats | undefined;
       try {
-        s = await stat(abs);
+        // リンクを辿らない（作業場の記録も lstat で見ている）。辿ると、フォルダを指すリンクを「前は無い」と読んで戻すときに消し、
+        // ファイルを指すリンクは中身を記録して、戻すとリンクが普通のファイルの写しに変わっていた
+        s = await lstat(abs);
       } catch (e) {
         // 「無い」だけが「前は無い」。ほかの読めなさ（権限・掴まれている）は記録できなかった道にする（戻すときに消さない）
         if (!isAbsent(e)) { this.#unrecorded.add(path); continue; }
       }
+      // リンクは中身では戻せない。記録できなかった道にする（「前は無い」と読まない）
+      if (s?.isSymbolicLink()) { this.#unrecorded.add(path); continue; }
       if (!s || !s.isFile()) {
         // 消されている（` D`）か、ファイルでない。前は「無い」。
         if (!s || mark.endsWith(' -')) this.#kept.set(path, undefined);

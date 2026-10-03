@@ -5,6 +5,7 @@
  */
 import { spawn } from 'node:child_process';
 import { chunkReader } from '../core/text.ts';
+import { workspaceScope } from './workspace-stamp.ts';
 
 export type GitState =
   | { kind: 'clean'; branch: string }
@@ -19,7 +20,15 @@ export async function inspectGit(root: string): Promise<GitState> {
    * 新しいフォルダは `sub/` のまま受ける（中を一つずつ出させると、node_modules を無視していない作業場では何千件も歩く）。
    * フォルダの扱いは受け入れの側（`dropCoveredDirs`）でする
    */
-  const status = await runGit(['status', '--porcelain=v1', '-z', '--branch'], root);
+  /*
+   * **道は作業場から。**porcelain の道は、作業場がリポジトリのサブフォルダでもリポジトリの根からになる（git の決まり）。
+   * 作業場からの道（書いた・宣言した道）と並べて比べるので、同じファイルが二つの形で並び「計画に無いファイル」になり、
+   * 作業場の外の変更まで数えていた。作業場の中だけに絞り、根から作業場までの分を落とす。
+   * 絞り方と落とし方は作業場の記録と同じもの（`workspaceScope`）を使う。大小を区別しないリポジトリで作業場のフォルダの
+   * 大小がディスクと索引で違うとき、`-- .` と素の `startsWith` では一件も挙がらず「クリーン」になる（記録の側で一度直した）
+   */
+  const scope = await workspaceScope(root);
+  const status = await runGit(['status', '--porcelain=v1', '-z', '--branch', '--', scope?.spec ?? '.'], root);
   if (status.code !== 0) {
     if (/not a git repository/i.test(status.out)) return { kind: 'notRepo' };
     return { kind: 'unavailable', reason: status.out.trim().split('\n')[0] ?? 'git を実行できません' };
@@ -29,14 +38,26 @@ export async function inspectGit(root: string): Promise<GitState> {
   const parts = status.out.split('\0').map((l) => (l.includes('\n') ? l.slice(l.lastIndexOf('\n') + 1) : l)).filter((l) => l.length > 0);
   const branchLine = parts.find((l) => l.startsWith('##')) ?? '## (不明)';
   const branch = branchLine.replace(/^##\s*/, '').split(/\.{3}|\s/)[0] ?? '(不明)';
+  // status は通ったのに作業場までが取れない（打ち切りなど）。道を直せないまま「クリーン」と言わない
+  if (!scope) return { kind: 'unavailable', reason: '作業場がリポジトリのどこかを確かめられません' };
   const changed: string[] = [];
+  const add = (p: string) => {
+    const k = scope.key(p);
+    if (k !== undefined && k !== '') { changed.push(k); return; }
+    /*
+     * 作業場そのもの、またはその上のフォルダが丸ごと未追跡（`?? packages/app/`・`?? packages/`）。中のファイルは一つも挙がらないが、
+     * 何もコミットされていない＝git では戻せない。「クリーン」にしない。作業場全体を指す `./` で数える
+     */
+    if (k === '' || (p.endsWith('/') && scope.fold(scope.prefix).startsWith(scope.fold(p)))) changed.push('./');
+    // それ以外は作業場の外（名前を変えた元が外にある、など）。作業場からの道で比べる側に、外の道を混ぜない
+  };
   for (let i = 0; i < parts.length; i += 1) {
     const entry = parts[i]!;
     if (entry.startsWith('##') || entry.length < 4) continue;
-    changed.push(entry.slice(3));
+    add(entry.slice(3));
     // 名前を変えた・写したものは、次の欄に元の名前が来る。元の道も変わったものとして数える
     if (/[RC]/.test(entry.slice(0, 2)) && i + 1 < parts.length) {
-      changed.push(parts[i + 1]!);
+      add(parts[i + 1]!);
       i += 1;
     }
   }

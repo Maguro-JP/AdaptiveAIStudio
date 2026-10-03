@@ -46,6 +46,14 @@ describe('点検を回す係', () => {
     assert.match(r2.start('bundle') ?? '', /ありません/);
   });
 
+  test('継いだ名前（constructor など）は点検の名前ではない', () => {
+    for (const name of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      const { runner, calls } = make();
+      assert.match(runner.start(name) ?? '', /ありません/, `${name} を受け取っている`);
+      assert.equal(calls.length, 0, `${name} で起こしている`);
+    }
+  });
+
   test('検査だけは走らせ役を通す', () => {
     // 環境ごとの差（殻の glob 展開、型剥がしの要否）をそこへ閉じ込めてある。
     // 旗の有無で位置が動くので、何番目かでは見ない。並びの中に在るかで見る。
