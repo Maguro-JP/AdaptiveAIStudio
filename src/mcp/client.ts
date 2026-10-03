@@ -29,6 +29,9 @@ import { envForChild } from '../core/env.ts';
  */
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
 
+/** ツールの一覧を辿る頁の上限。 */
+const MCP_LIST_PAGES = 20;
+
 /** こちらが話せる版。相手が別の版を返してきたら、それに合わせる。 */
 export const PROTOCOL_VERSION = '2025-06-18';
 
@@ -285,8 +288,7 @@ export class McpClient {
 
       this.#notify('notifications/initialized', {});
 
-      const listed = await this.#call('tools/list', {}, timeout) as { tools?: McpToolSpec[] };
-      this.#tools = (listed?.tools ?? []).filter((t) => typeof t?.name === 'string');
+      this.#tools = await this.#listTools(timeout);
       return true;
     } catch (e) {
       // 立ち上げている間に止めて立ち上げ直されていたら、今の相手には触らない（止めて、失敗を上書きすると、立ち上げ直した方まで落ちる）
@@ -456,8 +458,7 @@ export class McpClient {
       }, timeout) as { protocolVersion?: string };
       this.#serverVersion = init?.protocolVersion;
       this.#notify('notifications/initialized', {});
-      const listed = await this.#call('tools/list', {}, timeout) as { tools?: McpToolSpec[] };
-      this.#tools = (listed?.tools ?? []).filter((t) => typeof t?.name === 'string');
+      this.#tools = await this.#listTools(timeout);
       return true;
     } catch (e) {
       this.#failure = (e as Error).message;
@@ -589,6 +590,38 @@ export class McpClient {
    * 一つ訊いて、返事を待つ。`signal` で止めたら、待ちを片づけて `STOPPED` で返し、相手へ `notifications/cancelled` を送る。
    * 知らせないと、相手は止めた仕事（外への書き込み・重い検索）を最後まで続ける。遅れて届いた返事は、待ちが無いので捨てられる。
    */
+  /**
+   * ツールの一覧を、頁を辿って全部訊く。一度しか訊いていなかったので、頁を分けて返す相手では 2 頁目以降のツールが黙って出てこなかった。
+   * 同じ栞が続く・頁が多すぎる相手で回り続けないよう、回数に上限を付ける。
+   */
+  async #listTools(timeoutMs: number): Promise<McpToolSpec[]> {
+    const all: McpToolSpec[] = [];
+    // 同じ名前は一つだけ（栞を無視して同じ頁を返す相手で二重に入ると、名前の重なりを受け付けない相手（Anthropic）への依頼ごと落ちる）
+    const names = new Set<string>();
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    for (let page = 0; page < MCP_LIST_PAGES; page += 1) {
+      let listed: { tools?: McpToolSpec[]; nextCursor?: unknown };
+      try {
+        listed = await this.#call('tools/list', cursor ? { cursor } : {}, timeoutMs) as typeof listed;
+      } catch (e) {
+        // 2 頁目以降で落ちたら、それまでの分で動く（1 頁目で動いていた相手を、丸ごと「立ち上がらない」にしない）
+        if (page === 0) throw e;
+        break;
+      }
+      for (const t of Array.isArray(listed?.tools) ? listed.tools : []) {
+        if (typeof t?.name !== 'string' || names.has(t.name)) continue;
+        names.add(t.name);
+        all.push(t);
+      }
+      const next = listed?.nextCursor;
+      if (typeof next !== 'string' || next === '' || seen.has(next)) break;
+      seen.add(next);
+      cursor = next;
+    }
+    return all;
+  }
+
   #call(method: string, params: unknown, timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
     const id = ++this.#seq;
     return new Promise<unknown>((resolve, reject) => {

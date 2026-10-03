@@ -156,6 +156,41 @@ describe('旧名での呼び出し', () => {
     assert.equal(r.get('old-scout')!.id, 'envoy', '引き継ぎ先に繋がっていない');
   });
 
+  test('引き継ぎが輪になっていても、立ち上げごと落ちない', () => {
+    const base = { name: '旧', responsibility: 'x', disposition: 'y', access: ['read'] as ('read')[], instructions: ['a', 'b', 'c'], retired: true };
+    const r = new RoleRegistry([
+      { id: 'a', ...base, succeededBy: ['b'] },
+      { id: 'b', ...base, succeededBy: ['a'] },
+      { id: 'self', ...base, succeededBy: ['self'] },
+    ]);
+    // 辿り続けて Maximum call stack size exceeded で落ちていた
+    assert.ok(r.get('a'), '引けない');
+    assert.equal(r.get('self')!.id, 'self');
+  });
+
+  test('輪の途中の引き継ぎ済みより、別の引き継ぎ先の現役を選ぶ', () => {
+    const base = { name: '旧', responsibility: 'x', disposition: 'y', access: ['read'] as ('read')[], instructions: ['a', 'b', 'c'] };
+    const r = new RoleRegistry([
+      { id: 'p', ...base, retired: true, succeededBy: ['q', 'live'] },
+      { id: 'q', ...base, retired: true, succeededBy: ['p'] },
+      { id: 'live', ...base },
+    ]);
+    assert.equal(r.get('p')!.id, 'live', '輪の途中の引き継ぎ済みの役職を返している');
+  });
+
+  test('access を並びで書いていない・知らない語があるときは、権限を足さずに外して言う', () => {
+    const said: string[] = [];
+    const r = new RoleRegistry([
+      // 文字列で書くと includes の部分一致で network が付き、some で投げて立ち上げごと落ちていた
+      { id: 'str', name: '文字列', responsibility: 'x', disposition: 'y', access: 'read,write,network' as never, instructions: ['a', 'b', 'c'] },
+      { id: 'odd', name: '知らない語', responsibility: 'x', disposition: 'y', access: ['read', 'admin'] as never, instructions: ['a', 'b', 'c'] },
+    ], (t) => said.push(t));
+    assert.deepEqual(r.get('str')!.access, ['read']);
+    assert.deepEqual(r.get('odd')!.access, ['read']);
+    assert.ok(said.some((t) => /str: access を並び/.test(t)), said.join('\n'));
+    assert.ok(said.some((t) => /odd: 知らない権限 admin/.test(t)), said.join('\n'));
+  });
+
   test('引き継ぎ済みでも名簿には残る', () => {
     const r = new RoleRegistry([
       { id: 'old-scout', name: '旧調査', responsibility: 'x', disposition: 'y',

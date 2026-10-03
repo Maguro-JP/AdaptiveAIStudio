@@ -389,3 +389,53 @@ describe('相手が返した版が見出しに使えない形でも、問いは�
     }
   });
 });
+
+describe('ツールの一覧を頁に分けて返す相手', () => {
+  /** `pages` の順に返す。最後の頁の後も栞を返し続ける相手（`loop`）も作れる。 */
+  async function paged(pages: string[][], loop = false) {
+    const asked: Array<string | undefined> = [];
+    const server: Server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { id?: number; method?: string; params?: { cursor?: string } };
+        if (body.id === undefined) { res.writeHead(202); res.end(); return; }
+        const say = (result: unknown) => {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: body.id, result }));
+        };
+        if (body.method === 'initialize') return say({ protocolVersion: '2025-06-18', capabilities: {} });
+        asked.push(body.params?.cursor);
+        const at = body.params?.cursor ? Number(body.params.cursor) : 0;
+        const next = at + 1 < pages.length ? String(at + 1) : loop ? '0' : undefined;
+        say({ tools: (pages[at] ?? []).map((name) => ({ name })), ...(next !== undefined ? { nextCursor: next } : {}) });
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    return { url: `http://127.0.0.1:${port}/mcp`, asked, close: () => new Promise<void>((r) => server.close(() => r())) };
+  }
+
+  test('2 頁目以降のツールも受け取る', async () => {
+    // 一度しか訊いていなかったので、頁を分けて返す相手では 2 頁目以降のツールが黙って出てこなかった
+    const s = await paged([['a', 'b'], ['c'], ['d']]);
+    const c = new McpClient('paged', { url: s.url });
+    try {
+      assert.equal(await c.start(), true, c.failure);
+      assert.deepEqual(c.tools.map((t) => t.name), ['a', 'b', 'c', 'd']);
+      assert.deepEqual(s.asked, [undefined, '1', '2']);
+    } finally { c.stop(); await s.close(); }
+  });
+
+  test('同じ栞を返し続ける相手で、回り続けない', async () => {
+    const s = await paged([['a'], ['b']], true);
+    const c = new McpClient('looping', { url: s.url });
+    try {
+      assert.equal(await c.start(), true, c.failure);
+      assert.ok(s.asked.length <= 3, `訊きすぎている: ${s.asked.length} 回`);
+      // 同じ頁をもう一度返されても、同じ名前を二つ入れない（名前の重なりを受け付けない相手への依頼ごと落ちる）
+      const names = c.tools.map((t) => t.name);
+      assert.deepEqual(names, [...new Set(names)], `同じ名前が二つある: ${names.join(', ')}`);
+    } finally { c.stop(); await s.close(); }
+  });
+});

@@ -137,6 +137,15 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
     } catch {
       throw new Error(`場所として読めません: ${directUrl}`);
     }
+    /*
+     * **名前に区切りを残さない。**URL の段階では `%2F` `%5C` は区切りでないので一つの名前として残り、decode した後で `../../x.gguf` になって、
+     * フォルダの外へ書いていた（配布元の一覧から選ぶ道は区切りで切ってから断っている）。区切り・ドライブの `:`・点と空白だけの名前は断る
+     */
+    // Windows で使えない字（`< > " | ? *`・制御文字）と予約名（`CON.gguf`・`NUL.gguf` など）も断る。通すと書く段で何のことか分からない失敗になる
+    if (/[\\/:<>"|?*\x00-\x1f]/.test(leaf) || /^[. ]+$/.test(leaf.replace(/\.gguf$/i, ''))
+      || /^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(leaf)) {
+      throw new Error(`ファイル名に区切りや使えない文字が入っています: ${leaf}`);
+    }
     if (!leaf.toLowerCase().endsWith('.gguf')) {
       throw new Error(
         `.gguf を指していません: ${leaf || directUrl}\n`
@@ -327,7 +336,17 @@ async function fetchInto(a: {
   // 416 は「その位置から先は無い」。本当の長さが手元と同じときだけ「全部取れている」。違えば、配布元のファイルが変わっている
   if (res.status === 416) {
     const size = /\*\/(\d+)/.exec(res.headers.get('content-range') ?? '');
-    if (size && Number(size[1]) !== had) {
+    /*
+     * 本当の長さを言わない 416（中継が見出しを落とす、など）は、「全部ある」とも「違う」とも言えない。前は「同じ」と同じに扱い、
+     * 途中までのファイルを正式な名前にして「置きました」と言っていた（頭の 1MB しか確かめないので通る）。途中の分は残したまま止めて、そう言う
+     */
+    if (!size) {
+      clearTimeout(timer);
+      void res.body?.cancel().catch(() => undefined);
+      // 途中の分を残して止めると、次も同じ 416 で止まり、利用者が手で消すまで抜けられない。全部あると確かめられないので、最初から取り直す
+      return startOver('配布元が、全部取れているかを確かめられる長さを返しませんでした（416・Content-Range が無い）');
+    }
+    if (Number(size[1]) !== had) {
       clearTimeout(timer);
       void res.body?.cancel().catch(() => undefined);
       return startOver(`配布元のファイル（${human(Number(size[1]))}）と、取れている長さ（${human(had)}）が合いません`);

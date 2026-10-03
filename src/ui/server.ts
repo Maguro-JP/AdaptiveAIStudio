@@ -67,7 +67,7 @@ import { saveReport } from '../cli/report-file.ts';
 import { PreviewServer } from './preview.ts';
 import { configPath, wireInProc, type AasConfig } from '../config.ts';
 import { TaskRunner } from './tasks.ts';
-import { describeServers } from '../mcp/tools.ts';
+import { describeServers, deliverableCount } from '../mcp/tools.ts';
 import { listenOrExplain } from '../core/listen.ts';
 import { crossSiteReason } from './origin.ts';
 import {
@@ -2587,7 +2587,8 @@ export class UiServer {
           // 遠くに繋ぐものは、立ち上げるものが要らない。
           canRun: spec.url !== undefined || (spec.command !== undefined && canRun(spec.command)),
           running: client?.running ?? false,
-          tools: client?.tools.length ?? 0,
+          // 配る数で数える（検問所で止めたツールは配らない。繋がり具合の表示と同じ数にする）
+          tools: client ? deliverableCount(client) : 0,
           failure: client?.failure ?? null,
           // **まだ試していない**のと、**試して駄目だった**のは違う。
           // 一緒にすると「つながりませんでした（理由は不明）」になる（実際になった）。
