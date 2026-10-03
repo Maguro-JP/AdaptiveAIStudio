@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
+import { until } from './until.ts';
 import { startFakeServer } from './fake-server.ts';
 import { execCommand } from '../src/agent/shell-exec.ts';
 
@@ -31,9 +32,9 @@ test('止めた段取りは、確かめのコマンドを起こさない', async
     const gen = session.plan('a.txt を作って');
     const draining = (async () => { for await (const ev of gen) seen.push(ev.type); })();
     // 分解の問い合わせが届くまで待つ（時刻ではなく、起きたことで待つ）
-    // 上限つきで待つ（分解の問い合わせまで届かない壊れ方で、試験全体を止めない）
-    for (let i = 0; i < 20_000 && fake.requests === 0; i += 1) await new Promise((r) => setImmediate(r));
-    assert.ok(fake.requests > 0, '分解の問い合わせが届かない');
+    // 上限つきで待つ（分解の問い合わせまで届かない壊れ方で、試験全体を止めない）。上限は時間で決める
+    // （setImmediate を 2 万回、で決めていたので、遅い機械（Windows の CI）では 0.2 秒で諦めて落ちていた）
+    await until(() => fake.requests > 0, '分解の問い合わせが届く', { timeoutMs: 15_000, everyMs: 5 });
     session.abort();
     await draining;
     assert.ok(!seen.includes('verifying'), `止めたのに確かめへ進んだ: ${seen.join(',')}`);
