@@ -33,6 +33,7 @@ import { readFile, open, mkdir, rename, unlink } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { jstDate } from '../core/clock.ts';
+import { redactSecrets } from '../core/redact.ts';
 import { BUILTIN_LESSONS, lessonLine } from './builtin-lessons.ts';
 
 export type MemoryKind =
@@ -300,6 +301,10 @@ export class Memory {
     this.#unreadable = undefined;
     try {
       const got = parseEntries(await this.#readRetrying(this.#path));
+      // 未来の時刻（時計が進んでいた間に覚えた）は、読んだ時点に丸める。丸めないと、時計を直した後もその一件が
+      // 「いちばん新しい」まま嫌がられたことの先頭に居座り、後から覚えた分が載らない
+      const loadedAt = Date.now();
+      for (const e of got.entries) if (e.seenAt > loadedAt) e.seenAt = loadedAt;
       this.#entries = got.entries;
       this.#kept = got.kept;
       this.#declined = new Set(got.declined);
@@ -375,7 +380,7 @@ export class Memory {
     for (const e of this.#entries) {
       const key = normalizeTitle(e.title);
       // 忘れた最初からの覚え（ファイルの declined）は、読めない間に入れ直していても足し戻さない
-      if (e.source === 'builtin' && this.#declined.has(e.title)) { renamed.set(e.id, e.id); continue; }
+      if (e.source === 'builtin' && this.#declined.has(key)) { renamed.set(e.id, e.id); continue; }
       const twin = e.supersededBy === undefined
         ? onDisk.find((d) => d.kind === e.kind && normalizeTitle(d.title) === key && !d.supersededBy && d.root === e.root)
         : undefined;
@@ -475,7 +480,9 @@ export class Memory {
     now?: number;
   }): RememberResult {
     const now = input.now ?? Date.now();
-    const title = input.title.trim();
+    // 秘密は伏せてから覚える（打った文や添付の中身に入っていた API キーが、題として残り、語が重なるたびに依頼へ差し込まれていた）
+    const title = redactSecrets(input.title.trim());
+    if (input.detail !== undefined) input = { ...input, detail: redactSecrets(input.detail) };
     const key = normalizeTitle(title);
     const root = input.root !== undefined ? placeKey(input.root) : undefined;
 
@@ -620,7 +627,8 @@ export class Memory {
         const sameGround = overlap >= 2 || e.tags.some((t) => q.has(t.toLowerCase()));
         if (transfersOnlyNearby(e) && q.size > 0 && !sameGround) return undefined;
 
-        const ageDays = (now - e.seenAt) / DAY;
+        // 未来の時刻（時計のずれ）は今として数える（負の年数で点が跳ね上がる・無限・負になり、並びが崩れていた）
+        const ageDays = Math.max(0, now - e.seenAt) / DAY;
         const recency = 1 / (1 + ageDays / 30);
         const trust = Math.log2(1 + e.confirms);
         // 決めたことと好みは、古くても効き続ける
@@ -867,7 +875,7 @@ export class Memory {
     // 「半年前から何度も効いている当たり」が消える。それは、使うほど
     // 手持ちが悪くなるということ。
     const worth = (e: MemoryEntry): number => {
-      const base = Math.log2(1 + e.confirms) + 1 / (1 + (now - e.seenAt) / DAY / 30);
+      const base = Math.log2(1 + e.confirms) + 1 / (1 + Math.max(0, now - e.seenAt) / DAY / 30);
       // **失敗は長く持つ。**他所でも効くものを、その場限りのものと同じ速さで
       // 捨てない。うまくいった手は、その場の事情ごと古くなる。
       const reach = carriesFar(e) ? 1.5 : 1;

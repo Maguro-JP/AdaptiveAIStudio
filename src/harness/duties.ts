@@ -133,6 +133,24 @@ function periodStart(cadence: Cadence, at: number): number {
   }
 }
 
+/** 前の期の中の一点（期の始まりから、期の大きさだけ戻る）。 */
+function previousPeriodAt(cadence: Cadence, started: number): number {
+  switch (cadence.kind) {
+    case 'daily': {
+      const d = new Date(started);
+      d.setDate(d.getDate() - 1);
+      return d.getTime();
+    }
+    case 'everyHours':
+      return started - cadence.hours * 3_600_000;
+    case 'weekly': {
+      const d = new Date(started);
+      d.setDate(d.getDate() - 7);
+      return d.getTime();
+    }
+  }
+}
+
 function nextPeriodStart(cadence: Cadence, at: number): number {
   switch (cadence.kind) {
     case 'daily':
@@ -196,7 +214,9 @@ export class DutyRoster {
       const dueNow = now >= started && !doneThisPeriod;
 
       // 逃した分の埋め合わせ: 前回が今期でも前期でもない = 抜けている
-      const previousPeriod = periodKey(duty.cadence, started - 1);
+      // 前の期は、期の大きさだけ戻って取る（期の始まりの 1 ミリ秒前は、atHour が 0 でなければ同じ日・同じ週の中で、
+      // 前の期を指さなかった。毎週の当番が、先週済ませていても毎週「前回分が残っています」になっていた）
+      const previousPeriod = periodKey(duty.cadence, previousPeriodAt(duty.cadence, started));
       const isCatchUp = duty.catchUp && !doneThisPeriod
         && record.lastPeriod !== undefined
         && record.lastPeriod !== previousPeriod

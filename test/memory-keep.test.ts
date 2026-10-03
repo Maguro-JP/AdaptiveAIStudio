@@ -106,14 +106,16 @@ describe('03 忘れた最初からの覚えを、立ち上げ直しで入れ直�
     assert.ok(!next.all().some((e) => e.title === target.title));
   });
 
-  test('**起動のときに読めなかった後の合わせ直しでも、忘れた最初からの覚えを足し戻さない**', async () => {
+  // 題に「、」・空白・英字を含むもの（正規化で形が変わる）でも見る。先頭の覚えは正規化しても形が変わらず、偶然通っていた
+  for (const pick of ['first', '断りなく CI を回す'] as const) test(`**起動のときに読めなかった後の合わせ直しでも、忘れた最初からの覚えを足し戻さない**（${pick}）`, async () => {
     const dir = await tempDir('aas-declined-rejoin-');
     const path = join(dir, 'memory.jsonl');
     const m = new Memory(path);
     await m.load();
     m.seedLessons();
     await m.save();
-    const target = m.all().find((e) => e.source === 'builtin')!;
+    const target = m.all().find((e) => e.source === 'builtin' && (pick === 'first' || e.title === pick))!;
+    assert.ok(target, `組み込みの覚えに ${pick} が無い`);
     assert.equal((await forgetAndSave(m, new ForgetShelf(), target.id)).ok, true);
     // 読めない起動（手元は空から seedLessons で全部入る）→ 読めて合わせる
     const busy = busyAtStart(path);
