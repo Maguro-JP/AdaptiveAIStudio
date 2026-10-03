@@ -1134,6 +1134,29 @@ await check('設定の欄が、行の幅まで伸びている', async () => {
 });
 
 /*
+ * **試すファイルを作る。作業中（409）の間は待ってから作る。**
+ *
+ * 一度書けるようになっても、手が空いた本体はやり残しの再開や手すきの見回りで、また作業中になる。試しの途中でそうなると、
+ * 試すファイルを作れずに落ちていた（走らせるたびに結果が変わる）。作るときだけ、書けるまで（最大 120 秒）待つ。待つ間の 409 は不具合に数えない
+ */
+async function createProbe(path, content) {
+  expectingBusy = true;
+  try {
+    const until = Date.now() + 120_000;
+    for (;;) {
+      const status = await p.evaluate(([at, body]) => fetch('/api/file', {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: at, content: body }),
+      }).then((r) => r.status), [path, content]);
+      if (status !== 409 || Date.now() > until) return status;
+      await p.waitForTimeout(500);
+    }
+  } finally {
+    expectingBusy = false;
+  }
+}
+
+/*
  * **ファイルを書く試しの前に、作業が終わって書けるまで待つ。**
  *
  * 本体は作業中（送った後の片づけ・記憶の判定・手すきの見回り・作業場の鍵）の保存を 409 で断る（意図した振る舞い）。前の段の smoke が送った依頼の
@@ -1178,7 +1201,7 @@ await check('直している最中に書き換えられたら、そう言う', a
     method: 'PUT', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path, content: body }),
   }).then((r) => r.status), [at, content]);
-  const made = await put('はじめ\n');
+  const made = await createProbe(at, 'はじめ\n');
   if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
   try {
     // 横の一覧から開く。出来事で一覧は読み直されるが、念のため少し待つ。
@@ -1228,10 +1251,7 @@ await check('直している最中に書き換えられたら、そう言う', a
  */
 await check('エディタの見出しが、長い文で潰れない', async () => {
   const at = 'sweep-head-probe.txt';
-  const made = await p.evaluate(([path]) => fetch('/api/file', {
-    method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path, content: 'const x = 1;\n' }),
-  }).then((r) => r.status), [at]);
+  const made = await createProbe(at, 'const x = 1;\n');
   if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
   const why = 'C:/どこか/長い/道/models に GGUF がありません。設定 → モデル に、いま見ている保存先が出ています。そこへ .gguf を1つ置いてください。';
   await p.route('**/api/complete', async (route) => {
@@ -1284,10 +1304,7 @@ await check('エディタの見出しが、長い文で潰れない', async () =
  */
 await check('続けて二度、保存できる', async () => {
   const at = 'sweep-twice-probe.txt';
-  const made = await p.evaluate(([path]) => fetch('/api/file', {
-    method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path, content: 'one\ntwo\n' }),
-  }).then((r) => r.status), [at]);
+  const made = await createProbe(at, 'one\ntwo\n');
   if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
   try {
     await p.waitForTimeout(900);
@@ -1330,10 +1347,7 @@ await check('続けて二度、保存できる', async () => {
 await check('全部置き換えたあと、Ctrl+Z で戻せる', async () => {
   const at = 'sweep-undo-probe.txt';
   const first = 'const a = 1;\nconst b = 2;\n';
-  const made = await p.evaluate(([path, content]) => fetch('/api/file', {
-    method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path, content }),
-  }).then((r) => r.status), [at, first]);
+  const made = await createProbe(at, first);
   if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
   try {
     await p.waitForTimeout(900);
@@ -1371,10 +1385,7 @@ await check('全部置き換えたあと、Ctrl+Z で戻せる', async () => {
 await check('数行の字下げを、Ctrl+Z で戻せる', async () => {
   const at = 'sweep-indent-probe.txt';
   const first = 'one\ntwo\nthree\n';
-  const made = await p.evaluate(([path, content]) => fetch('/api/file', {
-    method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path, content }),
-  }).then((r) => r.status), [at, first]);
+  const made = await createProbe(at, first);
   if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
   try {
     await p.waitForTimeout(900);
@@ -1446,10 +1457,7 @@ await check('多いフォルダでは、出していない分を言う', async (
  */
 await check('開いているファイルをもう一度押しても、書きかけが消えない', async () => {
   const at = 'sweep-reopen-probe.txt';
-  const made = await p.evaluate(([path]) => fetch('/api/file', {
-    method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path, content: 'one\ntwo\n' }),
-  }).then((r) => r.status), [at]);
+  const made = await createProbe(at, 'one\ntwo\n');
   if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
   try {
     await p.waitForTimeout(900);
@@ -1488,10 +1496,7 @@ await check('開いているファイルをもう一度押しても、書きか�
  */
 await check('保存したことが、補完の返事で消えない', async () => {
   const at = 'sweep-save-probe.txt';
-  const made = await p.evaluate(([path]) => fetch('/api/file', {
-    method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path, content: 'one\ntwo\n' }),
-  }).then((r) => r.status), [at]);
+  const made = await createProbe(at, 'one\ntwo\n');
   if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
   await p.route('**/api/complete', async (route) => {
     await route.fulfill({
@@ -1592,10 +1597,7 @@ await check('探した所を、依頼に添えられる', async () => {
  */
 await check('保存していない直しは、読み直しても残る', async () => {
   const at = 'sweep-draft-probe.txt';
-  const made = await p.evaluate(([path]) => fetch('/api/file', {
-    method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ path, content: 'はじめ\n' }),
-  }).then((r) => r.status), [at]);
+  const made = await createProbe(at, 'はじめ\n');
   if (made !== 200) throw new Error(`試すファイルを作れない（${made}）`);
   const openProbe = async () => {
     const row = p.locator('#sideFiles button').filter({ hasText: at }).first();
