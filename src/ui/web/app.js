@@ -688,6 +688,9 @@ const WAITING_REPLY = '入力を読んでいます';
 /** この依頼で、最初の一文字がもう来たか。 */
 let wroteYet = false;
 
+/** 出来事の流れが一度でも切れたか。繋ぎ直したときだけ取り直す（最初に繋がったときは、立ち上げで読んでいる）。 */
+let droppedOnce = false;
+
 function listen() {
   const src = new EventSource('/api/events');
   const status = $('status');
@@ -695,8 +698,26 @@ function listen() {
     status.textContent = 'つながっています';
     status.className = 'status live';
     if ($('run').dataset.state === 'down') run.set('idle', '待機中');
+    if (droppedOnce) void catchUp();
+  };
+  /*
+   * 切れてから繋ぎ直したら、切れている間に届かなかった分を取り直す。承認の問い合わせを取り逃すと押す口が無く、
+   * 本体は 10 分待ってから断る。終わった知らせを取り逃すと、本体が立ち直った後も「作業中」のまま残る。
+   * 一覧と状態もここで読む（切れている間に終わった会話・増えた会話が、古いまま残らない）
+   */
+  const catchUp = async () => {
+    void refreshState();
+    void loadConversations();
+    const id = conversations.current;
+    if (!id) return;
+    try {
+      const body = await getJson(`/api/conversations/messages?id=${encodeURIComponent(id)}`);
+      if (body.approvals?.length) ctx.showApprovals?.(body.approvals);
+      if (!body.inFlight && busyNow) src.onmessage({ data: JSON.stringify({ type: 'busy', busy: false, conversationId: id }) });
+    } catch { /* 取れなければ、これから来る分だけ */ }
   };
   src.onerror = () => {
+    droppedOnce = true;
     status.textContent = '本体が止まっています';
     status.className = 'status down';
     run.set('down', '本体が止まっています');

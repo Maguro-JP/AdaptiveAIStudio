@@ -674,9 +674,17 @@ export const PANELS = {
      * 出すのは後ろから。古い分は「前を出す」で足す（押さなければ描かない）。
      */
     const SHOWN = 200;
+    /** 会話の欄を描き直した回数。描き直すと出していた承認の箱も消えるので、出し直してよい。 */
+    let drawn = 0;
+    /**
+     * 出している承認の箱（id ごと）。開いたときの読み込みと、繋ぎ直したときの取り直しの両方から来るので、
+     * まだ押せる箱が出ているなら同じものを二つ出さない。押して送れなかった箱は、本体がまだ待っているので出し直す
+     */
+    const asking = new Map();
 
     ctx.showHistory = (messages) => {
       log.textContent = '';
+      drawn++;
       /*
        * **消したことを、案内の側にも知らせる。**`textContent = ''` は案内の節ごと
        * 消すが、`guided`（出したかどうか）は残る。残ったままだと、次に出そうとしても
@@ -985,6 +993,10 @@ export const PANELS = {
      * 10 分経つまでどの依頼も進まない。
      */
     const showApproval = (e) => {
+      const was = asking.get(e.id);
+      if (was && was.drawn === drawn && was.open) return;
+      const mark = { drawn, open: true };
+      asking.set(e.id, mark);
       const req = e.request;
       const what = req.kind === 'write' ? `${req.created ? '新規作成' : '変更'}: ${req.path}`
         : req.kind === 'command' ? `コマンド実行: ${req.command}`
@@ -1064,6 +1076,7 @@ export const PANELS = {
          * 押すと、本体は 404（その承認は既に終わっています）を返し、モデルには
          * 「拒否しました」が渡っているのに、**画面だけが「許可」になる。**
          */
+        mark.open = false;
         box.replaceChildren(el('div', 'dim', `${what} → 送っています…`));
         let ok = false;
         let why = '';
@@ -1098,6 +1111,7 @@ export const PANELS = {
       box.append(menu);
       add(box);
       ctx.on('approvalDone', (d) => {
+        if (d.id === e.id) mark.open = false;
         if (d.id === e.id && box.querySelector('button')) {
           box.replaceChildren(el('div', 'dim', `${what} → ${d.approved ? '許可' : '拒否'}`));
         }
