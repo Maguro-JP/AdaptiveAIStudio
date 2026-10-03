@@ -1763,13 +1763,8 @@ export interface ModelFunctionCall {
  * 持つので、id で結び直す。
  */
 export function toHistory(messages: ChatMessage[]): HistoryItem[] {
-  // 先に結果を引けるようにしておく。結果は呼び出しより後ろに来る。
-  const results = new Map<string, string>();
-  for (const m of messages) {
-    if (m.role === 'tool' && m.tool_call_id) results.set(m.tool_call_id, m.content);
-  }
   const out: HistoryItem[] = [];
-  for (const m of messages) {
+  for (const [at, m] of messages.entries()) {
     if (m.role === 'system') { out.push({ type: 'system', text: m.content }); continue; }
     if (m.role === 'user') { out.push({ type: 'user', text: m.content }); continue; }
     // 道具の返事は、呼び出しの側に畳んである。単独では置かない。
@@ -1777,6 +1772,15 @@ export function toHistory(messages: ChatMessage[]): HistoryItem[] {
     if (m.role !== 'assistant') continue;
     const response: (string | ModelFunctionCall)[] = [];
     if (m.content) response.push(m.content);
+    /*
+     * 結果は、この呼び出しの直後に続く tool の行からだけ引く。id は返事ごとに `call_0` から数え直すので、会話全体で引くと
+     * 後の回の `call_0` の結果が前の回の呼び出しに付き、「a を読んだら b の中身が返った」履歴になっていた
+     */
+    const results = new Map<string, string>();
+    for (const next of messages.slice(at + 1)) {
+      if (next.role !== 'tool') break;
+      if (next.tool_call_id && !results.has(next.tool_call_id)) results.set(next.tool_call_id, next.content);
+    }
     for (const call of m.tool_calls ?? []) {
       const name = call.function?.name;
       if (!name) continue;

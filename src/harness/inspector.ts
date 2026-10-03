@@ -296,6 +296,8 @@ export class Inspector {
         { system: systemPrompt(direction, fence), user: `${fence}\n${body}\n${fence}` },
         ac.signal,
       );
+      // 時間切れの後に返った答えは読まない（途中までを返す相手でも、切れた答えで通さない）
+      if (ac.signal.aborted) return { judgement: 'unknown', unavailable: `${this.#timeoutMs}ms で答えが無い` };
       return readJudgement(raw);
     } catch (e) {
       // 検査官が落ちていても、ここで例外は投げない。

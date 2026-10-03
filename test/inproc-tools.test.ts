@@ -292,6 +292,17 @@ describe('履歴の組み直し', () => {
     assert.equal(call.params.__parseError, true);
   });
 
+  test('返事ごとに数え直した同じ id でも、結果はその回の呼び出しに付く', () => {
+    // 同じプロセスで動くモデルは、返事のたびに `call_0` から数え直す。会話全体で引くと、後の回の結果が前の回に付いていた
+    const got = toHistory([
+      { role: 'assistant', content: '', tool_calls: [{ id: 'call_0', function: { name: 'read_file', arguments: '{"path":"x"}' } }] },
+      { role: 'tool', tool_call_id: 'call_0', content: 'X' },
+      { role: 'assistant', content: '', tool_calls: [{ id: 'call_0', function: { name: 'read_file', arguments: '{"path":"y"}' } }] },
+      { role: 'tool', tool_call_id: 'call_0', content: 'Y' },
+    ]) as { response: { result: string }[] }[];
+    assert.deepEqual(got.map((m) => m.response[0]!.result), ['X', 'Y']);
+  });
+
   test('何も言っていない行は置かない', () => {
     assert.deepEqual(toHistory([{ role: 'assistant', content: '' }]), []);
   });
