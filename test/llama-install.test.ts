@@ -267,6 +267,10 @@ describe('書庫の項目名を、置く名前にする', () => {
     assert.equal(entryFileName('../../evil.dll'), 'evil.dll');
     assert.equal(entryFileName('dir/..'), undefined);
     assert.equal(entryFileName('dir/'), undefined);
+    // Windows は末尾の点と空白を落とすので、これらは `..` になりうる
+    assert.equal(entryFileName('dir/...'), undefined);
+    assert.equal(entryFileName('dir\\.. '), undefined);
+    assert.equal(entryFileName('.hidden.dll'), '.hidden.dll');
   });
 });
 

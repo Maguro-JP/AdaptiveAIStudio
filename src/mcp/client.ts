@@ -107,7 +107,8 @@ export function spawnPlan(command: string, platform: NodeJS.Platform): { command
   }
   // `.cmd`・`.bat` は殻なしでは起こせない（Node 18.20.2 以降の Windows は spawn EINVAL を投げる）。道つきで書かれていても殻を通す
   if (platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
-    return { command: quoteForCmd(command), shell: true };
+    // 命令の側は常に囲む。cmd.exe は命令の位置の `/` をスイッチと読むので、`C:/tools/srv.cmd` が割れる
+    return { command: quoteForCmd(command, true), shell: true };
   }
   return { command, shell: false };
 }
@@ -116,8 +117,8 @@ export function spawnPlan(command: string, platform: NodeJS.Platform): { command
  * 殻（cmd.exe）へ渡す一語。殻を通すと Node は引数を空白で繋ぐだけで、囲まない。
  * `C:\Users\Taro Yamada\proj` が二つに割れ、`&` `|` は次の命令になる。空白や記号を含むものだけ `"` で囲む。
  */
-export function quoteForCmd(arg: string): string {
-  if (arg !== '' && /^[A-Za-z0-9_\-+=.,:\/\\@]+$/.test(arg)) return arg;
+export function quoteForCmd(arg: string, always = false): string {
+  if (!always && arg !== '' && /^[A-Za-z0-9_\-+=.,:\/\\@]+$/.test(arg)) return arg;
   /*
    * `"`・`%`・改行は囲んでも安全にならないので断る。cmd.exe は `\"` を引用符の逃がしと読まず、`a" & calc & "` は囲みを
    * 抜けて別の命令になる。`%名前%` は囲みの中でも環境変数に置き換わる。黙って別の命令を走らせるより、立ち上げずに言う

@@ -80,6 +80,9 @@ export async function realSafeResolve(root: string, candidate: string): Promise<
   }
 }
 
+/** 道の長さの上限（Windows の長い道でも 32767 字）。これより長い文字列は道ではない。 */
+const MAX_PATH_CHARS = 32767;
+
 /**
  * 書いたときに実際に当たるファイルの、作業場からの道（`/` 区切り）。外・解けないなら undefined。
  *
@@ -91,6 +94,8 @@ export async function realSafeResolve(root: string, candidate: string): Promise<
  * 規則は綴りと、この実体の両方で照らす。
  */
 export async function canonicalRel(root: string, candidate: string): Promise<string | undefined> {
+  // 道になりえない長さなら引かない。外のツールの長い文字列（base64 など）を区切りごとに realpath で遡ると重い
+  if (candidate.length > MAX_PATH_CHARS) return undefined;
   const real = await realSafeResolve(root, candidate);
   return real === undefined ? undefined : toDisplayPath(root, real);
 }

@@ -142,6 +142,17 @@ describe('道具も、リンク越しには出ない・書かない', () => {
   });
 });
 
+describe('道になりえない長さは、実体を引かない', () => {
+  // 外のツールの長い文字列（base64 など）を、区切りごとに realpath で遡ると重い
+  test('上限を超える文字列は undefined（綴りだけで照らす）', async () => {
+    const { canonicalRel } = await import('../src/agent/tools/paths.ts');
+    const root = await tempDir('aas-canonical-');
+    assert.equal(await canonicalRel(root, 'a/'.repeat(20000)), undefined);
+    // 上限より短ければ今までどおり（まだ無いファイルでも、作業場からの道を返す）
+    assert.equal(await canonicalRel(root, 'a/b.txt'), 'a/b.txt');
+  });
+});
+
 describe('.. で始まる名前は、中のファイル', () => {
   /** `rel.startsWith('..')` で見ていたので、作業場の中の `..foo` のような名前まで外として断っていた。 */
   test('outsideRel は最初の区切りが .. のときだけ外', async () => {

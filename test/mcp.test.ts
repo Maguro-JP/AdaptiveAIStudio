@@ -188,7 +188,9 @@ describe('Windows では npx を cmd 越しに起こす', () => {
 
   test('.cmd・.bat は殻を通す（殻なしでは Windows の spawn が EINVAL を投げる）', async () => {
     const { spawnPlan } = await import('../src/mcp/client.ts');
-    assert.deepEqual(spawnPlan('npx.cmd', 'win32'), { command: 'npx.cmd', shell: true });
+    // 命令の側は常に囲む（cmd.exe は命令の位置の `/` をスイッチと読む）
+    assert.deepEqual(spawnPlan('npx.cmd', 'win32'), { command: '"npx.cmd"', shell: true });
+    assert.deepEqual(spawnPlan('C:/tools/srv.cmd', 'win32'), { command: '"C:/tools/srv.cmd"', shell: true });
     assert.deepEqual(spawnPlan('C:\\Program Files\\nodejs\\npx.CMD', 'win32'),
       { command: '"C:\\Program Files\\nodejs\\npx.CMD"', shell: true });
     assert.deepEqual(spawnPlan('run.sh', 'linux'), { command: 'run.sh', shell: false });

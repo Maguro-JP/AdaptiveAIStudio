@@ -351,6 +351,7 @@ export function llamaByHand(tag: string, binDir: string): string {
  */
 export function entryFileName(entryPath: string): string | undefined {
   const name = entryPath.split(/[\\/]/).at(-1) ?? '';
-  if (!name || name === '.' || name === '..') return undefined;
+  // 点と空白だけの名前（`..` `...` `.. `）も置かない。Windows は名前の末尾の点と空白を落とすので、`...` は `..` になりうる
+  if (!name || /^[. ]+$/.test(name)) return undefined;
   return name;
 }
