@@ -1829,3 +1829,148 @@ describe('AI の版を出したあと', () => {
     await until(() => box.area().value === 'a\nb\n', '直しを黙って戻した');
   });
 });
+
+/*
+ * 開く要求の追い越し・作業場の取り違え・届かない書き換え・続けての保存（読み直しで見つけた）。
+ * 時刻では待たない（返事は門で止め、開けたら事象の一巡を数回回すだけ）。
+ */
+describe('エディタの順番と作業場', () => {
+  /** 事象の一巡を数回まわす（Response.json の読み終わりと、その後の続きを流し切る）。時刻は使わない。 */
+  const settle = async (): Promise<void> => { for (let i = 0; i < 10; i += 1) await new Promise((r) => setImmediate(r)); };
+
+  /** 門。url に want を含む頼みだけ、開けるまで止める。 */
+  function gateFetch(want: (url: string, init?: { method?: string }) => boolean) {
+    const real = globalThis.fetch;
+    let open!: () => void;
+    const gate = new Promise<void>((r) => { open = r; });
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (want(String(url), init as { method?: string })) await gate;
+      return real(url, init);
+    }) as typeof fetch;
+    return { release: () => open(), restore: () => { globalThis.fetch = real; } };
+  }
+
+  test('**AI の書き換えの静かな読み直しが、後から押したファイルを上書きしない**', async () => {
+    const disk: Record<string, string> = { 'a.txt': 'A1\n', 'b.txt': 'B\n' };
+    const t = open(disk);
+    const openFile = t.ctx.openFile as (p: string) => void;
+    openFile('a.txt');
+    await until(() => t.area().value === 'A1\n', 'a が開く');
+
+    const g = gateFetch((u) => u.includes('path=a.txt'));
+    disk['a.txt'] = 'A2\n';
+    t.emit('session', { type: 'diff', path: 'a.txt', diff: '', added: 1, removed: 1, created: false }); // 静かな読み直し（門で止まる）
+    openFile('b.txt');
+    await until(() => t.area().value === 'B\n', 'b が開く');
+    t.area().value = 'B typed\n';
+    t.area().fire('input');
+
+    g.release();
+    await settle();
+    g.restore();
+    assert.equal(t.area().value, 'B typed\n', `後から押した b を、a の読み直しで上書きした: ${JSON.stringify(t.area().value)}`);
+    assert.equal(t.at('editor-name').textContent, 'b.txt');
+  });
+
+  test('**Ctrl+S を続けて二度押しても、自分の保存を「別の所で変わりました」と断らない**', async () => {
+    const disk: Record<string, string> = { 'a.txt': 'one\n' };
+    const t = open(disk);
+    (t.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => t.area().value === 'one\n', 'a が開く');
+    t.area().value = 'two\n';
+    t.area().fire('input');
+
+    const g = gateFetch((_u, init) => init?.method === 'PUT');
+    t.key('s');
+    t.key('s'); // 一度目の返事を待っている間の二度目
+    g.release();
+    await until(() => /保存/.test(t.state().textContent) && !/保存しています/.test(t.state().textContent), '返事が来る');
+    await settle();
+    g.restore();
+    assert.equal(disk['a.txt'], 'two\n');
+    assert.doesNotMatch(t.state().textContent, /保存していません/, `自分の二度目の保存を、衝突として出した: ${t.state().textContent}`);
+    assert.equal(t.at('editor-notice').hidden, true, '身に覚えのない衝突の知らせが出ている');
+    assert.equal(t.asked.filter((a) => a.method === 'PUT').length, 1, '同じ中身を二度送った');
+  });
+
+  test('**作業場を変えたあと、前の作業場で直したものを新しい作業場へ保存しない・預かりも混ぜない**', async () => {
+    // 同じリポジトリの二つの写し（同じ名前・同じ中身）。
+    const disk: Record<string, string> = { 'README.md': 'same\n' };
+    let root = '/w1';
+    const t = open(disk);
+    const inner = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: { method?: string; body?: string }) => {
+      if ((init?.method ?? 'GET') === 'PUT') {
+        const b = JSON.parse(init!.body!) as { root?: string };
+        if (b.root !== undefined && b.root !== root) return Response.json({ error: '作業場が変わりました', moved: true }, { status: 409 });
+        return inner(url, init as RequestInit);
+      }
+      const r = await inner(url, init as RequestInit);
+      const j = await r.json() as Record<string, unknown>;
+      return Response.json(r.ok ? { ...j, root } : j, { status: r.status });
+    }) as typeof fetch;
+
+    (t.ctx.openFile as (p: string) => void)('README.md');
+    await until(() => t.area().value === 'same\n', '開く');
+    t.area().value = 'edited in w1\n';
+    t.area().fire('input');
+    await until(() => localStorage.getItem('aas.draft:/w1\nREADME.md') !== null, 'w1 の鍵で預ける');
+
+    root = '/w2'; // 📂 で作業場を変えた
+    t.key('s');
+    await until(() => !/保存しています/.test(t.state().textContent), '返事が来る');
+    assert.equal(disk['README.md'], 'same\n', '前の作業場の直しを、新しい作業場のファイルへ書いた');
+
+    // 新しいパネルで、w2 の同じ名前を開いても、w1 の預かりを「戻しました」と出さない。
+    t.close();
+    const u = open(disk, true);
+    const inner2 = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      const r = await inner2(url, init);
+      if ((init?.method ?? 'GET') === 'PUT') return r;
+      const j = await r.json() as Record<string, unknown>;
+      return Response.json(r.ok ? { ...j, root } : j, { status: r.status });
+    }) as typeof fetch;
+    (u.ctx.openFile as (p: string) => void)('README.md');
+    await until(() => u.at('editor-name').textContent === 'README.md' && !u.area().disabled, '開く');
+    await settle();
+    assert.equal(u.area().value, 'same\n', `w1 の直しを w2 のファイルに戻した: ${JSON.stringify(u.area().value)}`);
+    assert.notEqual(localStorage.getItem('aas.draft:/w1\nREADME.md'), null, 'w1 の預かりを w2 で片づけた');
+  });
+
+  test('**AI の書き換えの道が `./` や `\\` 付きでも、開いているファイルの読み直しが走る。`/plan` の書き換えも**', async () => {
+    const disk: Record<string, string> = { 'src/a.txt': 'one\n' };
+    const t = open(disk);
+    (t.ctx.openFile as (p: string) => void)('src/a.txt');
+    await until(() => t.area().value === 'one\n', '開く');
+
+    disk['src/a.txt'] = 'two\n';
+    t.emit('session', { type: 'diff', path: './src/a.txt', diff: '', added: 1, removed: 1, created: false });
+    await until(() => t.area().value === 'two\n', '`./` 付きの差分で読み直さない');
+
+    disk['src/a.txt'] = 'three\n';
+    t.emit('planEvent', { type: 'diff', path: 'src\\a.txt', diff: '', added: 1, removed: 1, created: false });
+    await until(() => t.area().value === 'three\n', '段取りの差分で読み直さない');
+  });
+
+  test('**「AI の版を出す」を押して読みに行っている間に別のファイルへ移っても、移った先へ前のファイルを入れない**', async () => {
+    const disk: Record<string, string> = { 'a.txt': 'A\n', 'b.txt': 'B\n' };
+    const t = open(disk);
+    const openFile = t.ctx.openFile as (p: string) => void;
+    openFile('a.txt');
+    await until(() => t.area().value === 'A\n', 'a が開く');
+    t.area().value = 'A mine\n';
+    t.area().fire('input');
+    disk['a.txt'] = 'A ai\n';
+    t.emit('session', { type: 'diff', path: 'a.txt', diff: '', added: 1, removed: 1, created: false });
+
+    const g = gateFetch((u) => u.includes('path=a.txt'));
+    t.press('AI の版を出す');
+    g.restore(); // b はそのまま通す（a の一回目だけ門の中）
+    openFile('b.txt');
+    await until(() => t.area().value === 'B\n', 'b が開く');
+    g.release();
+    await settle();
+    assert.equal(t.area().value, 'B\n', `b の欄に a の中身を入れた: ${JSON.stringify(t.area().value)}`);
+  });
+});

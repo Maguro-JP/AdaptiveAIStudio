@@ -1915,16 +1915,24 @@ export class UiServer {
       if (typeof text !== 'string') {
         return send(res, 415, { error: 'utf8 ではないので、画面では開けません（化けた字で保存すると壊れるため）。AI に読ませれば、その文字コードで読みます' });
       }
-      return send(res, 200, { path: asked, content: text, bytes: info.size, stamp: stampOf(text) });
+      // どの作業場から読んだか。画面は預かりの鍵と保存に使う（作業場を変えたあとで、前の作業場の直しを書かせない）。
+      return send(res, 200, { path: asked, content: text, bytes: info.size, stamp: stampOf(text), root: this.#workRoot() });
     }
 
     if (path === '/api/file' && req.method === 'PUT') {
-      const body = await readBody(req) as { path?: unknown; content?: unknown; stamp?: unknown };
+      const body = await readBody(req) as { path?: unknown; content?: unknown; stamp?: unknown; root?: unknown };
       const asked = typeof body?.path === 'string' ? body.path : '';
       const content = typeof body?.content === 'string' ? body.content : undefined;
       // 開いたときの stamp。送ってきたときだけ見る（持っていない相手は今までどおり）。
       const stamp = typeof body?.stamp === 'string' ? body.stamp : undefined;
       if (!asked || content === undefined) return send(res, 400, { error: 'path と content が要ります' });
+      /*
+       * **開いたあとで作業場が変わっていたら、書かない。**名前だけで書くと、前の作業場で直したものが
+       * 新しい作業場の同じ名前のファイルへ入る（同じ中身なら stamp も同じなので、stamp では止まらない）。
+       */
+      if (typeof body?.root === 'string' && body.root !== this.#workRoot()) {
+        return send(res, 409, { error: '開いたあとで作業場が変わりました。前の作業場のファイルの直しなので、保存しません（直しは預かっています。開き直してください）', moved: true });
+      }
       /*
        * **まだ無いファイルも書ける。**
        *
