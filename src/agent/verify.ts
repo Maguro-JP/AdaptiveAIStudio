@@ -76,7 +76,8 @@ export function digestFailure(output: string): string {
       .replace(/\d+(\.\d+)?\s*s\b/g, 'Ns')
       .replace(/\/tmp\/[\w.-]+/g, '/tmp/X')
       // Windows の一時フォルダ（`C:\Users\me\AppData\Local\Temp\aas-x1`。出力の中では `\\` に重なることもある）。
-      .replace(/[A-Za-z]:(?:\\{1,2}|\/)(?:[^\s'"`]*?(?:\\{1,2}|\/))?Temp(?:\\{1,2}|\/)[\w.-]+/gi, 'TMP/X'));
+      // 利用者名に空白が入る（`C:\Users\John Smith\...`）ので、間は空白も含めて取る（引用符と改行の手前まで）
+      .replace(/[A-Za-z]:(?:\\{1,2}|\/)(?:[^'"`\r\n]*?(?:\\{1,2}|\/))?Temp(?:\\{1,2}|\/)[\w.-]+/gi, 'TMP/X'));
   return lines.slice(-40).join('\n');
 }
 
@@ -161,6 +162,7 @@ export async function* verifyLoop(
           feedback: verdict.reason, tampered: verdict.reason, result,
         };
       }
+      // 読み直しの最中に止められたときは、ループが結果を見る前に「止めた」で終える（`harness/loop.ts`）。ここで分けなくてよい
       if (verdict.unsure) {
         return { passed: false, digest: `unreadable:${verdict.unsure}`, unsure: verdict.unsure, result };
       }

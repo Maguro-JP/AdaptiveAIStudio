@@ -85,7 +85,19 @@ export type WorkspaceStamp = Map<string, string>;
 /** 見られなかったものに振る番号。回をまたいで増やし、二つの記録で同じ値にならないようにする。 */
 let unseen = 0;
 
-export async function workspaceStamp(root: string): Promise<WorkspaceStamp | undefined> {
+/**
+ * 作業場が、リポジトリの根からどこか。git の道を作業場からの道に直すのに使う（`inspectGit` も使う）。
+ * `spec` は作業場の中に絞る pathspec、`key` は根からの道を作業場からの道に（外なら undefined、作業場そのものなら空）。
+ */
+export interface WorkspaceScope {
+  prefix: string;
+  icase: boolean;
+  spec: string;
+  fold: (s: string) => string;
+  key: (gitPath: string) => string | undefined;
+}
+
+export async function workspaceScope(root: string): Promise<WorkspaceScope | undefined> {
   const prefix = await prefixOf(root);
   if (prefix === undefined) return undefined;
   /*
@@ -100,16 +112,23 @@ export async function workspaceStamp(root: string): Promise<WorkspaceStamp | und
   const icase = prefix !== '' && await ignoresCase(root);
   // 見る範囲は作業場の中に絞る（外の変化をこの作業場の変化と数えない）。`literal` は、フォルダ名の `*` `?` を型として読ませないため。
   const spec = icase ? `:(top,icase,literal)${prefix}` : '.';
+  const fold = (s: string): string => (icase ? s.toLowerCase() : s);
+  const head = fold(prefix);
+  const key = (gitPath: string): string | undefined =>
+    fold(gitPath.slice(0, prefix.length)) === head ? gitPath.slice(prefix.length) : undefined;
+  return { prefix, icase, spec, fold, key };
+}
+
+export async function workspaceStamp(root: string): Promise<WorkspaceStamp | undefined> {
+  const scope = await workspaceScope(root);
+  if (!scope) return undefined;
+  const { spec, key } = scope;
   // -z: 名前に空白や全角が入っても切れ目を取り違えない。
   // 上限は大きめに取る。`.gitignore` の無い作業場で `node_modules` が丸ごと untracked だと 16MiB を超え、
   // 超えた回を「git の管理下でない」と読むと、了解された作業場では二度と比べなくなる。
   const out = await gitOut(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', spec], root, 256 * 1024 * 1024);
   if (out === undefined) return undefined;
-  // 根からの道を、作業場からの道に。作業場の外（絞っても、名前変更の元は外に在り得る）は捨てる。
-  const fold = (s: string): string => (icase ? s.toLowerCase() : s);
-  const head = fold(prefix);
-  const key = (gitPath: string): string | undefined =>
-    fold(gitPath.slice(0, prefix.length)) === head ? gitPath.slice(prefix.length) : undefined;
+  // 根からの道を、作業場からの道に（`key`）。作業場の外（絞っても、名前変更の元は外に在り得る）は捨てる。
 
   const stamp: WorkspaceStamp = new Map();
   const parts = out.split('\0');

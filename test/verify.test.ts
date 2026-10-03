@@ -79,6 +79,9 @@ describe('失敗の要約', () => {
   test('Windows の一時フォルダも落とす', () => {
     const at = (dir: string) => digestFailure(`Error: ENOENT\n    at C:\\Users\\me\\AppData\\Local\\Temp\\${dir}\\x.ts:3:9`);
     assert.equal(at('aas-abc123'), at('aas-zzz999'));
+    // 利用者名に空白が入っても落とす
+    const spaced = (dir: string) => digestFailure(`    at C:\\Users\\John Smith\\AppData\\Local\\Temp\\${dir}\\x.ts:3:9`);
+    assert.equal(spaced('aas-abc123'), spaced('aas-zzz999'));
     const doubled = (dir: string) => digestFailure(`path: 'C:\\\\Users\\\\me\\\\AppData\\\\Local\\\\Temp\\\\${dir}\\\\x.ts'`);
     assert.equal(doubled('aas-abc123'), doubled('aas-zzz999'));
   });

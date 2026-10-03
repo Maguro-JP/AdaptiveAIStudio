@@ -2014,7 +2014,8 @@ export class Session {
             checked === 'passed' ? '確かめて通った'
               : checked === 'failed' ? '確かめたが通らなかった'
               : checked === 'preexisting' ? '元から落ちていた'
-              : checked === 'unsure' ? '通らなかったが、この回が原因かは分からない'
+              // unsure は二つある（通らなかったがこの回が原因か分からない／通ったがテストを読めなかった）。どちらとも言わない
+              : checked === 'unsure' ? '確かめきれなかった（通らなかったがこの回が原因か分からない、またはテストを読めなかった）'
               : '確かめていない',
           ].filter(Boolean).join(' — '),
           tags: changedHere.slice(0, 5),
@@ -2259,7 +2260,7 @@ export class Session {
       last.changed.length > 0 ? `触ったもの: ${last.changed.slice(0, 3).join(', ')}` : '作業場は変えていない',
       last.checked === 'passed' ? '確かめて通した'
         : last.checked === 'failed' ? '確かめたが通らなかった'
-        : last.checked === 'unsure' ? '確かめたが通らなかった（この回が原因かは分からない）'
+        : last.checked === 'unsure' ? '確かめきれなかった（通らなかったがこの回が原因か分からない、またはテストを読めなかった）'
         : '確かめていない',
     ].join(' / ');
   }

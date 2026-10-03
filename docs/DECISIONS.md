@@ -11182,3 +11182,12 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
 - 調べて不具合が無かった所: workspace-lock・scheduler・journals・ui/files・update・test-integrity の数え方
 触る場所: `src/agent/verify.ts`（`digestFailure`・`UNSURE_RETRIES`）、`src/core/session.ts`（送り口の `giveUp unsure`）、
 `src/agent/outside-changes.ts`（`before`）、`src/agent/git.ts`（`inspectGit`）、`src/ui/tasks.ts`、`src/runtime/infer.ts`
+- 見直しで直したこと（同じ日）:
+  - `inspectGit` は作業場の記録と同じ絞り方（`workspaceScope`：標準出力だけで読む `--show-prefix`、`core.ignorecase` なら `:(top,icase,literal)` と大小を無視した先頭の比較）を使う。
+    素の `-- .` と `startsWith` では、作業場のフォルダの大小がディスクと索引で違うとき・警告が混ざったときに一件も挙がらず「クリーン — いつでも巻き戻せます」と出していた
+  - 作業場そのもの、またはその上のフォルダが丸ごと未追跡（`?? packages/`）なら `./` で数える。外として捨てると、何もコミットされていないのに「クリーン」になる
+  - 記録の文言は「確かめきれなかった（通らなかったがこの回が原因か分からない、またはテストを読めなかった）」。unsure が二つの意味を持つようになったので、どちらとも言わない
+  - Windows の一時フォルダは、利用者名に空白が入る形も落とす
+  - 選ばなかった案: 読めなかった理由（EACCES・EPERM）で「わざと隠した」と見て失敗・巻き戻しにする。Windows ではウイルス対策などに一瞬掴まれただけでも EPERM になり、
+    errno では見分けられない。unsure は完了とも合格とも扱わない（画面も完了と出さない）ので、作業を残しても完了と偽ることにはならない
+  - 読み直しの最中に止めたときは、ループ（`harness/loop.ts`）が結果を見る前に「止めた」で終えるので、unsure にはならない
