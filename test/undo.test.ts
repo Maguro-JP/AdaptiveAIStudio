@@ -7,10 +7,10 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, stat, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { UndoStore, MAX_POINTS, MAX_POINT_BYTES, RECENT_PATHS, rootKey } from '../src/core/undo.ts';
+import { UndoStore, MAX_POINTS, MAX_POINT_BYTES, RECENT_PATHS, rootKey, rootKeys } from '../src/core/undo.ts';
 
 async function store(): Promise<{ root: string; undo: UndoStore }> {
   const root = await tempDir('aas-undo-');
@@ -295,6 +295,41 @@ describe('二進のファイルを戻す', () => {
     assert.equal(rootKey('/Work/App', 'win32'), rootKey('/work/app', 'win32'));
     assert.equal(rootKey('/Work/App', 'darwin'), rootKey('/work/app', 'darwin'));
     assert.notEqual(rootKey('/Work/App', 'linux'), rootKey('/work/app', 'linux'));
+  });
+
+  test('同じ作業場を別の綴り（リンク越し）で開いても、戻り先は一つの一覧に並び、そちらから戻せる', async () => {
+    const real = await tempDir('aas-undo-real-');
+    // 別の綴りを作る。Windows は junction（管理者権限が要らない）。Linux と macOS は第三引数を見ずに symlink を作る
+    const via = join(await tempDir('aas-undo-via-'), 'via');
+    await symlink(real, via, 'junction');
+    const dir = join(await tempDir('aas-undo-state-'), 'undo');
+    await writeFile(join(real, 'a.txt'), 'もと\n', 'utf8');
+
+    const a = new UndoStore(real, dir);
+    await a.begin('直して');
+    await edit(real, a, 'a.txt', 'あと\n');
+    const point = await a.end();
+    assert.ok(point);
+
+    const b = new UndoStore(via, dir);
+    assert.deepEqual((await b.list()).map((p) => p.id), [point.id], '綴りが違うだけで、同じ作業場の戻り先が一覧から消えた');
+    await b.restore(point.id);
+    assert.equal(await readFile(join(real, 'a.txt'), 'utf8'), 'もと\n');
+  });
+
+  test('鍵を実体の綴りにする前に、字の上の鍵で残した戻り先も読める', async () => {
+    const real = await tempDir('aas-undo-real-');
+    const via = join(await tempDir('aas-undo-via-'), 'via');
+    await symlink(real, via, 'junction');
+    const dir = join(await tempDir('aas-undo-state-'), 'undo');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'u1.json'), JSON.stringify({
+      id: 'u1', at: 1, request: '前の版の記録', paths: ['a.txt'],
+      files: [{ path: 'a.txt', content: 'もと\n' }],
+      root: rootKey(via),
+    }), 'utf8');
+    assert.notEqual((await rootKeys(via)).key, rootKey(via), 'リンク越しなのに、実体の鍵と字の上の鍵が同じ（試験の前提が崩れている）');
+    assert.deepEqual((await new UndoStore(via, dir).list()).map((p) => p.id), ['u1']);
   });
 
   test('作業場の根を持たない記録は、どの作業場のものか分からないので出さず、消しもしない', async () => {

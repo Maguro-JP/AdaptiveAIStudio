@@ -14,7 +14,7 @@
  *   ・未コミットの直しは git でも戻せない
  * ので、git の有無に関わらず効くものを別に持つ。
  */
-import { readFile, writeFile, mkdir, unlink, stat, readdir, rename, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, unlink, stat, readdir, rename, rm, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { safeResolve } from '../agent/tools/paths.ts';
 import { putBack, putBackOrder, contentOf, contentBytes, isAbsent, type FileContent } from '../harness/put-back.ts';
@@ -67,6 +67,24 @@ interface Stored extends UndoPoint {
 export function rootKey(root: string, platform: NodeJS.Platform = process.platform): string {
   const r = resolve(root);
   return platform === 'linux' ? r : r.toLowerCase();
+}
+
+/**
+ * 作業場の根の鍵を、**実体の綴り**で作る。
+ *
+ * `rootKey` は字の上でしか揃えない。同じフォルダでも 8.3 の短い名前（`C:\Users\TANAKA~1\…`）・junction・symlink・
+ * 割り当てたドライブ（`Z:` と `\\server\share`）では鍵が割れ、片方の綴りで残した戻り先が、もう片方で開くと一覧から消える。
+ * 消えた側を残したままもう片方で「戻す」と、「選んだものより新しい戻り先を全部当てる」が、見えない側の分を飛ばして
+ * どこにも無かった姿にする。だから鍵は realpath の先で作る（Windows では libuv が GetFinalPathNameByHandle で引く）。
+ *
+ * `also` は、字の上の鍵。この直しより前に残した戻り先は、そちらで書いてあるので読む側だけで受ける。
+ * 実体が取れない（まだ無い・見られない）ときは、字の上の鍵だけにする。
+ */
+export async function rootKeys(root: string, platform: NodeJS.Platform = process.platform): Promise<{ key: string; also: string[] }> {
+  const lexical = rootKey(root, platform);
+  const real = await realpath(resolve(root)).catch(() => undefined);
+  const key = real === undefined ? lexical : rootKey(real, platform);
+  return { key, also: key === lexical ? [] : [lexical] };
 }
 
 let tmpSeq = 0;
@@ -308,7 +326,7 @@ export class UndoStore {
       paths: [...open.files.keys()],
       files: [...open.files.values()].map(toStored),
       ...(open.skipped.length > 0 ? { skipped: [...open.skipped] } : {}),
-      root: rootKey(this.#root),
+      root: (await rootKeys(this.#root)).key,
     };
     await mkdir(this.#dir, { recursive: true });
     await writeStored(join(this.#dir, `${point.id}.json`), point);
@@ -365,6 +383,8 @@ export class UndoStore {
       if (!isAbsent(e)) throw new Error(`戻り先のフォルダを読めません: ${(e as Error).message}`);
       names = [];
     }
+    const { key, also } = await rootKeys(this.#root);
+    const mine = new Set([key, ...also]);
     for (const name of names) {
       if (!name.endsWith('.json')) continue;
       let raw: string | undefined;
@@ -378,7 +398,7 @@ export class UndoStore {
       try {
         const p = JSON.parse(raw) as Stored;
         // 今の作業場の戻り先だけ。根の無い古い記録は、どの作業場のものか分からないので出さない（ここでは消さない。古くなったら `npm run clean` が挙げる）。
-        if (typeof p.id === 'string' && p.root === rootKey(this.#root)) {
+        if (typeof p.id === 'string' && typeof p.root === 'string' && mine.has(p.root)) {
           points.push({
             id: p.id, at: p.at, request: p.request, paths: p.paths ?? [],
             ...(p.skipped && p.skipped.length > 0 ? { skipped: p.skipped } : {}),

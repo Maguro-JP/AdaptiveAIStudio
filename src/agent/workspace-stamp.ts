@@ -69,6 +69,14 @@ async function prefixOf(root: string): Promise<string | undefined> {
 }
 
 /**
+ * 道の大小を区別しないリポジトリか（`core.ignorecase`。Windows・macOS の `git init` が true を書く）。
+ * 確かめられなかった・書いていないときは区別する側（git と同じ既定）。
+ */
+async function ignoresCase(root: string): Promise<boolean> {
+  return (await gitOut(['config', '--bool', 'core.ignorecase'], root))?.trim() === 'true';
+}
+
+/**
  * 変わっているファイルごとの記録。鍵は**作業場からの道**（`toDisplayPath` と同じ形）。
  * 値は `状態 大きさ 時刻`。消えたものは `状態 -`。
  */
@@ -80,15 +88,28 @@ let unseen = 0;
 export async function workspaceStamp(root: string): Promise<WorkspaceStamp | undefined> {
   const prefix = await prefixOf(root);
   if (prefix === undefined) return undefined;
-  // 見る範囲は `-- .` で作業場の中に絞る（外の変化をこの作業場の変化と数えない）。
+  /*
+   * 大小を区別しないリポジトリでは、作業場までの道も大小を区別せずに比べる。
+   *
+   * `--show-prefix` は cwd の**ディスク上の**大小で返す（Git for Windows の getcwd は GetFinalPathNameByHandleW で引く）。
+   * 索引の道は**索引の**大小。フォルダの大小だけを変えた後（エクスプローラーで `src` → `Src`、上流で大小だけ変えたのを
+   * 引いた後）は二つが食い違う。そのとき `-- .` は cwd の綴りで比べるので追跡しているファイルを一つも挙げず
+   * （`core.ignorecase` は pathspec を大小無視にしない）、挙がった道も `startsWith` で落ちる。外のツールが書いても
+   * 記録は空のまま「変わっていない」になる。`:(icase)` は cwd の分を区別したままなので、`top` で根から書く。
+   */
+  const icase = prefix !== '' && await ignoresCase(root);
+  // 見る範囲は作業場の中に絞る（外の変化をこの作業場の変化と数えない）。`literal` は、フォルダ名の `*` `?` を型として読ませないため。
+  const spec = icase ? `:(top,icase,literal)${prefix}` : '.';
   // -z: 名前に空白や全角が入っても切れ目を取り違えない。
   // 上限は大きめに取る。`.gitignore` の無い作業場で `node_modules` が丸ごと untracked だと 16MiB を超え、
   // 超えた回を「git の管理下でない」と読むと、了解された作業場では二度と比べなくなる。
-  const out = await gitOut(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], root, 256 * 1024 * 1024);
+  const out = await gitOut(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', spec], root, 256 * 1024 * 1024);
   if (out === undefined) return undefined;
-  // 根からの道を、作業場からの道に。作業場の外（`-- .` で絞っても、名前変更の元は外に在り得る）は捨てる。
+  // 根からの道を、作業場からの道に。作業場の外（絞っても、名前変更の元は外に在り得る）は捨てる。
+  const fold = (s: string): string => (icase ? s.toLowerCase() : s);
+  const head = fold(prefix);
   const key = (gitPath: string): string | undefined =>
-    gitPath.startsWith(prefix) ? gitPath.slice(prefix.length) : undefined;
+    fold(gitPath.slice(0, prefix.length)) === head ? gitPath.slice(prefix.length) : undefined;
 
   const stamp: WorkspaceStamp = new Map();
   const parts = out.split('\0');
@@ -181,6 +202,33 @@ export type HeadContent =
   | { kind: 'unavailable'; why: 'tooLarge' | 'symlink' | 'submodule' | 'unreadable' };
 
 /**
+ * cwd からの道（`./道`）で HEAD に何も無かったときに、引き直す道。`spec` は ls-tree に渡す pathspec、`object` は `HEAD:` の後ろ。
+ *
+ * 大小を区別しないリポジトリで、作業場までのフォルダの大小がディスクと HEAD で違うと（`workspaceStamp` が拾う形）、cwd の分は
+ * ディスクの大小で HEAD と照らされて何も引けない。作業場までのフォルダを HEAD の中で一段ずつ引き、HEAD の綴りで根からの道を作る
+ * （`ls-tree` は `icase` を受け付けない）。**綴りが完全に一致する名前を先に取る。**大小だけ違う二つのフォルダが HEAD に在るとき、
+ * 大小を無視した最初の一致を取ると、別のフォルダのファイルを「前」にして、戻すときにその中身を書いていた。
+ * 当てはまらない（区別する・作業場が根・HEAD に無い）なら undefined。git が落ちたら 'unreadable'（「無い」と読まない）。
+ */
+async function headPathAgain(root: string, relPath: string): Promise<{ spec: string; object: string } | 'unreadable' | undefined> {
+  const prefix = await prefixOf(root);
+  if (prefix === undefined) return 'unreadable';
+  if (prefix === '' || !(await ignoresCase(root))) return undefined;
+  let at = '';
+  // `--full-tree`: ls-tree は cwd の分で絞って並べるので、作業場の中から引くと根の tree が空に見える
+  for (const part of prefix.split('/').filter((x) => x !== '')) {
+    const listed = await gitOut(['ls-tree', '--full-tree', '-z', '--name-only', `HEAD:${at}`], root);
+    if (listed === undefined) return 'unreadable';
+    const names = listed.split('\0');
+    const want = part.toLowerCase();
+    const hit = names.find((name) => name === part) ?? names.find((name) => name.toLowerCase() === want);
+    if (hit === undefined) return undefined;
+    at += `${hit}/`;
+  }
+  return { spec: `:(top,literal)${at}${relPath}`, object: `${at}${relPath}` };
+}
+
+/**
  * 外のツールが触る前に**きれいだった**ファイルは、作業ツリー・索引・HEAD が同じ。
  * だから触った後でも HEAD から「前」の中身が取れる。
  *
@@ -190,8 +238,23 @@ export type HeadContent =
  * 道は cwd からの相対（`ls-tree` も `HEAD:./道` も）。
  */
 export async function headContent(root: string, relPath: string, maxBytes: number): Promise<HeadContent> {
+  /*
+   * 引く道。普通は cwd からの道（`./道`）。大小を区別しないリポジトリで、作業場までのフォルダの大小がディスクと HEAD で
+   * 違うと（`workspaceStamp` が拾う形）、cwd の分はディスクの大小で HEAD と照らされて**何も引けず**、「前は無かった」と
+   * 記録して、戻すときにそのファイルを消していた。そのときは HEAD の大小で作業場までの道を引き直す（`headPathAgain`）
+   */
+  let object = `./${relPath}`;
   // `ls-tree -l` は一度で、在るか・種類（mode）・大きさを返す。
-  const entry = await gitOut(['ls-tree', '-l', '-z', 'HEAD', '--', `./${relPath}`], root);
+  let entry = await gitOut(['ls-tree', '-l', '-z', 'HEAD', '--', object], root);
+  // 普通の形では git は一回で済む。cwd からの道で何も無かったときだけ、HEAD の綴りで引き直す
+  if (entry === '') {
+    const again = await headPathAgain(root, relPath);
+    if (again === 'unreadable') return { kind: 'unavailable', why: 'unreadable' };
+    if (again !== undefined) {
+      entry = await gitOut(['ls-tree', '-l', '-z', 'HEAD', '--', again.spec], root);
+      object = again.object;
+    }
+  }
   // **git が落ちたのを「無い」と読まない。**HEAD に無い道は、正常に終わって空を返す。落ちた（起動の失敗・壊れた ref・読めない object）
   // のを「無い」と読むと、HEAD に在るファイルを「前は無かった」と記録し、戻すときに消していた
   if (entry === undefined) {
@@ -207,7 +270,7 @@ export async function headContent(root: string, relPath: string, maxBytes: numbe
   if (mode === '120000') return { kind: 'unavailable', why: 'symlink' };
   if (type !== 'blob') return { kind: 'absent' };
   if (Number(size) > maxBytes) return { kind: 'unavailable', why: 'tooLarge' };
-  const bytes = await gitBytes(['cat-file', '--filters', `HEAD:./${relPath}`], root, maxBytes * 2 + 1024);
+  const bytes = await gitBytes(['cat-file', '--filters', `HEAD:${object}`], root, maxBytes * 2 + 1024);
   if (bytes === undefined) return { kind: 'unavailable', why: 'unreadable' };
   return { kind: 'content', content: contentOf(bytes) };
 }

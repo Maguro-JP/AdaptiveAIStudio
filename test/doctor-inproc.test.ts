@@ -10,11 +10,12 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, chmod } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { installRoot } from '../src/core/home.ts';
 import { needsStripFlag } from '../src/core/node-flags.ts';
 import { cleanAasEnv } from './env.ts';
+import { PINNED_TAG } from '../src/runtime/llama-release.ts';
 
 async function runDoctor(env: Record<string, string>): Promise<string> {
   const { execFile } = await import('node:child_process');
@@ -371,5 +372,27 @@ describe('doctor は、Shift_JIS を読めるかを言う', () => {
     const { home } = await scratch();
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: join(home, 'なし.json') });
     assert.match(text, /Shift_JIS[^\n]*読めます/, `Shift_JIS の行が無い:\n${text.slice(0, 1200)}`);
+  });
+});
+
+/**
+ * 起こせない llama-server を「動きません」と言う。**落ちない。**
+ *
+ * spawn は ENOENT・EACCES 等だけを 'error' で知らせ、それ以外はその場で投げる。0 バイトの実行ファイルは
+ * Windows で EFTYPE（ERROR_BAD_EXE_FORMAT）になり、投げる側。投げると一覧も締めの一行も出ずに、Node の積み上げだけを
+ * 残して終わっていた。Linux では glibc の execvp が中身の無いファイルを sh で走らせ直すので投げず、直す前の版でも
+ * 通る（直す前を捕まえるのは Windows の CI。Linux では「動きません」と言うことだけを見ている）
+ * 名前は `.bin` にする（拡張子が在れば Windows でも名前のまま起こしにいくので、同じ道を通る）。
+ */
+describe('置いてある llama-server を起こせないとき', () => {
+  test('落ちずに「在りますが、動きません」と言う', async () => {
+    const { home } = await scratch();
+    const bin = join(home, 'bin');
+    await mkdir(join(bin, PINNED_TAG), { recursive: true });
+    const exe = join(bin, PINNED_TAG, 'llama-server.bin');
+    await writeFile(exe, '');
+    await chmod(exe, 0o755);
+    const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: join(home, 'なし.json'), AAS_BIN_DIR: bin });
+    assert.match(text, /在りますが、動きません/, `起こせないことを言っていない:\n${text.slice(-800)}`);
   });
 });

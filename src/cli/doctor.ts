@@ -244,7 +244,15 @@ if (escaped) {
 function runOnce(command: string, args: string[]): Promise<string> {
   return new Promise((resolve) => {
     let text = '';
-    const child = spawn(command, args);
+    // 起こせなかった理由の一部（Windows の壊れた .exe の EFTYPE、EPERM、Linux の ENOEXEC 等）は 'error' でなく、その場で投げる。
+    // 投げさせると一覧も報告も出ずに落ちる。「在りますが、動きません」として言う。
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, args);
+    } catch (e) {
+      resolve((e as Error).message);
+      return;
+    }
     child.stdout?.on('data', (b: Buffer) => { text += b.toString(); });
     child.stderr?.on('data', (b: Buffer) => { text += b.toString(); });
     child.on('error', (e) => resolve(e.message));

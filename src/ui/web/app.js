@@ -850,6 +850,8 @@ function listen() {
     if ((e.type === 'session' || e.type === 'busy') && e.conversationId && conversations
       && (conversations.current ? e.conversationId !== conversations.current : !sendingFromTop)) {
       if (e.type === 'busy' && !e.busy) void loadConversations();
+      // 見ていない会話の書き換えも、ファイルは同じ。開いているエディタには届ける（会話の欄には描かない）。
+      if (e.type === 'session' && e.event?.type === 'diff') for (const fn of eventHandlers.get('elsewhereDiff') ?? []) fn(e);
       return;
     }
     if (e.type === 'busy' && !e.busy && e.conversationId) copiedUpTo.delete(e.conversationId);

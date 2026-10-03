@@ -2239,6 +2239,18 @@ export const PANELS = {
     let path = '';
     let loaded = '';
     /*
+     * **開いたファイルが、どの作業場のものか。**
+     *
+     * 作業場を変えても、欄は前の作業場のファイルを持ったままで、保存は名前だけで新しい作業場へ送っていた。
+     * 同じ名前・同じ中身のファイルが在れば（同じリポジトリの別の写し）、stamp も同じなので、**前の作業場の直しを
+     * 黙って新しい作業場へ書いた。**預かりの鍵も名前だけだったので、別の作業場の同じ名前のファイルを開くと、
+     * 前の作業場の直しを「保存していない直しを戻しました」と出した。開いたときに本体から作業場を受け取り、
+     * 預かりの鍵に入れ、保存にも添える（違えば本体が断る）。
+     */
+    let rootAt = '';
+    /** 預かり（このパネルの中・覚えておく所）の鍵。作業場ごとに分ける（作業場を言わない相手とは、今までどおり名前だけ）。 */
+    const K = (p, root = rootAt) => (root ? `${root}\n${p}` : p);
+    /*
      * **行末は、開いたファイルのものに戻して保存する。**
      *
      * ブラウザの欄は、入れた `\r\n` を `\n` に直して持つ（実測）。直したのは
@@ -2309,7 +2321,7 @@ export const PANELS = {
         && !String(raw ?? '').replace(/\r\n/g, '').includes('\n') ? '\r\n' : '\n';
       mine = area.value;
       if (path) {
-        held.set(path, mine);
+        held.set(K(path), mine);
         /*
          * 自分の直しを、覚えておく所にも預ける（ブラウザを閉じても失わない）。**保存していない直しの預かりとは鍵を分ける。**
          * 同じ鍵に置くと、AI の版を直した分の預かりが上書きし、片づけも止めることになり、移って戻ったときに途中の直しを
@@ -2326,7 +2338,7 @@ export const PANELS = {
       tell('AI の版を出しました。自分の直しは預かっています。', [
         ['自分の直しに戻す', () => {
           area.value = mine ?? area.value;
-          held.delete(path);
+          held.delete(K(path));
           dropHeld(path);
           refresh();
           tell('自分の直しに戻しました。保存すると AI の版を上書きします。', []);
@@ -2401,9 +2413,9 @@ export const PANELS = {
      * 一緒に**預けたときの中身**（`base`）も置く。開き直したときに中身が変わって
      * いたら、黙って戻さない（AI や別のブラウザが書いたものを、古い直しで上書きする）。
      */
-    const DRAFT_AT = (p) => `aas.draft:${p}`;
+    const DRAFT_AT = (p) => `aas.draft:${K(p)}`;
     /** 「AI の版を出す」で取り替えた自分の直しの預かり。保存していない直しの預かりとは分ける（片づけ・上書きの対象にしない）。 */
-    const HELD_AT = (p) => `aas.held:${p}`;
+    const HELD_AT = (p) => `aas.held:${K(p)}`;
     const dropHeld = (p) => { try { localStorage.removeItem(HELD_AT(p)); } catch { /* 覚えておく所が使えない環境もある */ } };
     /** 取り替えた自分の直しを読む。形が違うもの・古いものは捨てる。 */
     const readHeld = (p) => {
@@ -2485,6 +2497,23 @@ export const PANELS = {
     const DRAFT_MAX = 512 * 1024;
     /** これより古い預かりは捨てる。 */
     const DRAFT_KEEP_MS = 14 * 24 * 60 * 60 * 1000;
+    /*
+     * 古い預かりを片づける。預かりは同じ鍵を読んだときにしか消えないので、二度と開かない作業場・ファイルの分（鍵を作業場と
+     * 名前の組に変える前の、名前だけの鍵の分も）が溜まり続け、覚えておく所が溢れると、新しい直しを黙って預けられなくなる。
+     * パネルを作るたびに、期限を過ぎたものだけを消す（時刻の無いものは読めないので触らない）
+     */
+    try {
+      const old = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const k = localStorage.key(i);
+        if (!k || !(k.startsWith('aas.draft:') || k.startsWith('aas.held:'))) continue;
+        try {
+          const got = JSON.parse(localStorage.getItem(k) ?? '');
+          if (typeof got?.at === 'number' && Date.now() - got.at > DRAFT_KEEP_MS) old.push(k);
+        } catch { /* 読めない形は触らない */ }
+      }
+      for (const k of old) localStorage.removeItem(k);
+    } catch { /* 覚えておく所が使えない環境もある */ }
     let toldTooBig = '';
     let toldBusy = '';
 
@@ -2543,7 +2572,7 @@ export const PANELS = {
      */
     const releaseDraft = (p) => {
       // まだ選んでいないパネルの中の預かりが在る間は、覚えておく所の写しも残す（ブラウザを閉じても失わない）。
-      if (drafts.has(p)) return;
+      if (drafts.has(K(p))) return;
       try {
         const raw = localStorage.getItem(DRAFT_AT(p));
         if (!raw) return;
@@ -2749,22 +2778,41 @@ export const PANELS = {
       else state.textContent = '行番号は数字で入れてください';
     };
 
+    /*
+     * **後から押した方を、先に頼んだ読み直しで上書きしない。**
+     *
+     * 応答は頼んだ順に返るとは限らない（大きいファイルの読み直しは、小さいファイルより遅く返る）。
+     * AI の書き換えで A を静かに読み直している間に B を押すと、B が出たあとに A の応答が来て、
+     * **黙って A に戻していた。**B に打ち始めた字は、そのまま A の欄に入る。
+     * 人が押した開き方より前に頼んだもの、いま開いていないファイルの静かな読み直し、
+     * 同じファイルの古い読み直しは、返ってきても捨てる。
+     */
+    let opens = 0;
+    let userOpen = 0;
     const open = async (p, line, quiet) => {
+      const my = ++opens;
+      if (!quiet) userOpen = my;
+      // 捨てられたパネルも、返ってきた中身を受け取らない（受け取ると預かりの名札を、死んだパネルのものに書き換える）。
+      const stale = () => discarded() || my < userOpen || (quiet === true && (my !== opens || p !== path));
       /*
        * 離れる前に、保存していない分を預かる。預けたときの中身（base）も持つ（戻ったときに変わっていたら、黙って戻さない）。
        * **預けるのは、本当に離れるときだけ。**繋がらずに離れなかったのに預けると、その後の直しと保存の後で古い預かりが残り、
        * 戻ったときに「後から変わっています」と古い版を出させようとした。
        */
-      const leave = () => { if (path && p !== path && dirty()) drafts.set(path, { text: area.value, base: loaded }); };
+      // 作業場が変わっていたら、同じ名前でも別のファイル（`moved`）。
+      let moved = false;
+      const leave = () => { if (path && (p !== path || moved) && dirty()) drafts.set(K(path), { text: area.value, base: loaded }); };
       let r;
       try {
         r = await fetch(`/api/file?path=${encodeURIComponent(p)}`, { signal: AbortSignal.timeout(20000) });
       } catch (e) {
+        if (stale()) return;
         name.textContent = p;
         state.textContent = `開けませんでした（${e.message ?? e}）`;
         return;
       }
       const j = await r.json().catch(() => ({}));
+      if (stale()) return;
       if (!r.ok) {
         name.textContent = p;
         state.textContent = j.error ?? '開けませんでした';
@@ -2787,6 +2835,7 @@ export const PANELS = {
         save.disabled = true;
         return;
       }
+      moved = typeof j.root === 'string' && j.root !== rootAt && rootAt !== '';
       const raw = String(j.content ?? '');
       const text = raw.replace(/\r\n/g, '\n');
       /*
@@ -2817,7 +2866,7 @@ export const PANELS = {
        * 後から返ってくる読み直しが、当てた直しを消す（押して実測）。
        * ファイルの側が変わっていないなら、読み直す意味は無い。
        */
-      if (p === path && text === loaded) {
+      if (p === path && !moved && text === loaded) {
         name.textContent = p;
         goTo(line);
         return;
@@ -2829,7 +2878,7 @@ export const PANELS = {
        * （AI が書き換えたときと同じ扱い）。ここを素通りさせると、開き直した
        * 瞬間に書いていたものが消える。
        */
-      if (p === path && dirty()) {
+      if (p === path && !moved && dirty()) {
         /*
          * **行末をそろえる前のものを渡す。**
          *
@@ -2852,21 +2901,23 @@ export const PANELS = {
        * 読み直しなら、預かったままにする。
        */
       leave();
-      const same = p === path;
+      const same = p === path && !moved;
+      if (typeof j.root === 'string') rootAt = j.root;
+      const key = K(p);
       eol = nextEol;
-      path = p; loaded = text; stamp = j.stamp ?? ''; mine = same ? mine : (held.get(p) ?? null);
+      path = p; loaded = text; stamp = j.stamp ?? ''; mine = same ? mine : (held.get(key) ?? null);
       notice.hidden = true;
       name.textContent = p;
       // 預けた分が在れば、それを返す（消さずに戻す）。
       // このパネルの中に無ければ、覚えておく所を見る（ブラウザを閉じたあとでも戻せる）。
       let kept;
       let busyElsewhere = false;
-      const inPanel = drafts.get(p);
+      const inPanel = drafts.get(key);
       /*
        * このパネルの中で預けた分。**離れている間にファイルが変わっていたら、黙って戻さない。**
        * 黙って戻すと、開き直しで新しい stamp を取るので、次の保存が AI や別のパネルの書き換えを確かめずに消していた。
        */
-      if (inPanel !== undefined && inPanel.base === loaded) { kept = inPanel.text; drafts.delete(p); }
+      if (inPanel !== undefined && inPanel.base === loaded) { kept = inPanel.text; drafts.delete(key); }
       else {
         const stored = readDraft(p);
         /*
@@ -2898,20 +2949,20 @@ export const PANELS = {
               // 戻す先は、この知らせの中だけで持つ（保存を断られたあとの自分の版 `mine` を上書きしない）。
               before = area.value;
               area.value = saved.text;
-              drafts.delete(p);
+              drafts.delete(key);
               refresh();
               tell('預かっていた直しを出しました。保存すると、いまのファイルを上書きします。', [
                 ['やめる', () => {
                   area.value = before;
                   // やめても、直しは捨てない。預け直して、次に開いたときにまた選べるようにする。
-                  drafts.set(p, { text: saved.text, base: saved.base });
+                  drafts.set(key, { text: saved.text, base: saved.base });
                   refresh();
                   tell('戻しました。預かっていた直しは、このファイルを開き直すともう一度出せます。', [], 'info');
                 }],
               ]);
             }],
             ['捨てる', () => {
-              drafts.delete(p);
+              drafts.delete(key);
               if (ours) dropDraft(p);
               tell('預かっていた直しを捨てました。', [], 'info');
             }],
@@ -2930,7 +2981,7 @@ export const PANELS = {
         tell('前に預かった直しが残っています。', [
           ['自分の直しに戻す', () => {
             area.value = mine ?? area.value;
-            held.delete(p);
+            held.delete(key);
             dropHeld(p);
             refresh();
             tell('自分の直しに戻しました。保存すると、いまのファイルを上書きします。', []);
@@ -2975,9 +3026,34 @@ export const PANELS = {
      * だけなのに、身に覚えのない書き換えを知らされる）。
      */
     let savingNow = null;
+    /** 保存の返事を待つ間に、もう一度保存を頼まれた。 */
+    /** 保存の返事を待つ間に頼まれた保存（作業場と名前の組）。頼まれていなければ false。 */
+    let storeAgain = false;
+    /*
+     * 前のファイルの返事を待つ間に、移った先で保存を頼まれていたら、いま続けて保存する。待つ間に頼まれた分は覚えるだけで
+     * 返していたので、返事が別のファイルのものだと誰も保存せず、「直しています」のまま黙っていた。`store` は
+     * いま開いているファイルの直しと stamp で送るので、移った先へ正しく書く
+     */
+    const againHere = () => {
+      if (!storeAgain) return;
+      const asked = storeAgain;
+      storeAgain = false;
+      // 頼まれたのがいま開いているファイル（同じ作業場）のときだけ。前のファイルで二度押した分を、移った先で保存しない
+      if (asked === K(path)) void store();
+    };
 
     const store = async () => {
       if (!path || !dirty()) return;
+      /*
+       * **保存の返事を待っている間に、もう一度送らない。**
+       *
+       * 押し場所は灰色にしていたが、Ctrl+S は素通しだった。続けて二度押すと、二度目は開いたときの古い stamp の
+       * まま届き、一度目が書いた中身を「別の所で変わりました（AI の書き換えなど）」と断られる。自分の保存を
+       * 身に覚えのない書き換えとして知らされる。返事のあとに、まだ直しが在れば続けて保存する。
+       */
+      // どのファイル（作業場と名前の組）で頼まれたかを覚える
+      if (savingNow !== null) { storeAgain = K(path); return; }
+      storeAgain = false;
       save.disabled = true;
       state.textContent = '保存しています…';
       let r;
@@ -2991,6 +3067,7 @@ export const PANELS = {
        * 書きかけが、次の読み直しで消える。**どのファイルの保存かを、覚えておく。**
        */
       const at = path;
+      const atRoot = rootAt;
       /*
        * **送った中身を覚えておく。**
        *
@@ -3009,15 +3086,18 @@ export const PANELS = {
             path,
             content: eol === '\r\n' ? sent.replace(/\n/g, '\r\n') : sent,
             ...(stamp ? { stamp } : {}),
+            // どの作業場で開いたものか。変わっていたら本体が断る（前の作業場の直しを、新しい作業場へ書かない）。
+            ...(rootAt ? { root: rootAt } : {}),
           }),
           signal: AbortSignal.timeout(20000),
         });
       } catch (e) {
         savingNow = null;
-        if (path !== at) {
+        if (path !== at || rootAt !== atRoot) {
           // **移った先の画面は書き換えないが、保存できなかったことは言う。**
           refresh();
           tell(`${at} を保存できませんでした（${e.message ?? e}）。開き直すと、保存していない直しを戻せます。`, []);
+          againHere();
           return;
         }
         // 繋がらなかったときに黙ると、書いたものが消えたように見える。欄は残す。
@@ -3034,7 +3114,7 @@ export const PANELS = {
        * モデルが動いていれば普通に出る）や 500 を丸ごと捨てていた。Ctrl+S の
        * 直後に別のファイルを押すと、**保存できていないことに気づけない。**
        */
-      if (path !== at) {
+      if (path !== at || rootAt !== atRoot) {
         refresh();
         if (!r.ok) {
           tell(`${at} を保存できませんでした（${j.error ?? r.status}）。開き直すと、保存していない直しを戻せます。`, []);
@@ -3043,10 +3123,11 @@ export const PANELS = {
            * 返事の前に離れたので、預かりの base は保存する前の中身のまま。自分の保存を「後から変わっています」と
            * 言わないよう、保存した中身に合わせる（預けた分が保存した分と同じなら、預かりは要らない）。
            */
-          const d = drafts.get(at);
-          if (d && d.text === sent) drafts.delete(at);
+          const d = drafts.get(K(at, atRoot));
+          if (d && d.text === sent) drafts.delete(K(at, atRoot));
           else if (d) d.base = sent;
         }
+        againHere();
         return;
       }
       /*
@@ -3057,11 +3138,11 @@ export const PANELS = {
       if (r.status === 409 && j.conflict && (j.gone || j.binary)) {
         state.textContent = '保存していません（別の所で変わっています）';
         save.disabled = false;
+        // 文字でない中身・utf8 でない中身には、本体が書かない（415）。押しても必ず断られる押し場所は出さない。
         tell(j.gone
           ? '保存していません。開いたあとで、このファイルは別の所で消されました。'
-          : '保存していません。開いたあとで、このファイルは文字でない中身に書き換えられました。', [
-          ['自分の版で上書きする', () => { stamp = ''; notice.hidden = true; void store(); }],
-        ]);
+          : '保存していません。開いたあとで、このファイルは文字でない中身に書き換えられました（画面からは書けません）。直しは欄と預かりに残してあります。',
+        j.gone ? [['自分の版で上書きする', () => { stamp = ''; notice.hidden = true; void store(); }]] : []);
         return;
       }
       if (r.status === 409 && j.conflict) {
@@ -3097,6 +3178,8 @@ export const PANELS = {
       state.textContent = over
         ? `保存しました（+${j.added ?? 0} -${j.removed ?? 0}）。保存の間に打った分は、まだ保存していません`
         : `保存しました（+${j.added ?? 0} -${j.removed ?? 0}）`;
+      if (storeAgain && over) void store();
+      storeAgain = false;
     };
     save.onclick = () => { void store(); };
     // Ctrl+S はこの欄に手があるときだけ。ブラウザの「ページを保存」を出さない。
@@ -3283,7 +3366,16 @@ export const PANELS = {
     area.addEventListener('click', clearGhost);
     ctx.acceptGhost = acceptGhost;
 
-    ctx.openFile = (p, line) => { void open(p, line); };
+    /*
+     * **同じファイルを、同じ名前で持つ。**
+     *
+     * AI から来る道（`show_file`・書き換えの差分・`replace_selection`）は、モデルが書いたままの形で届く
+     * （`./src/a.ts`・`src\\a.ts`）。横の一覧は `src/a.ts`。比べる所（`v.path !== path`）で別のファイルと
+     * 見て、**直している最中のファイルを AI が書き換えても、読み直しも知らせも出なかった**。預かりの鍵も
+     * 二つに割れる。開く所と比べる所で、同じ形にそろえる。
+     */
+    const norm = (p) => String(p ?? '').replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+    ctx.openFile = (p, line) => { void open(norm(p), line); };
     /*
      * **AI が、選んでいた所を書き換えた（`replace_selection`）。**
      *
@@ -3292,7 +3384,7 @@ export const PANELS = {
      * 入れ替える前の中身は預かって、「元に戻す」で戻せるようにする。
      */
     ctx.applyPatch = (at) => {
-      if (!path || at.path !== path) return false;
+      if (!path || norm(at.path) !== path) return false;
       const head = lineStart(area.value, at.from);
       const tail = lineStart(area.value, at.to);
       const now = area.value.slice(head.at, tail.end);
@@ -3308,7 +3400,7 @@ export const PANELS = {
         return false;
       }
       mine = area.value;
-      held.set(path, mine);
+      held.set(K(path), mine);
       // 丸ごと代入すると Ctrl+Z の履歴が消える。置き換える所だけを入れ替える。
       if (typeof area.setRangeText === 'function') area.setRangeText(at.replacement, head.at, tail.end, 'end');
       else area.value = `${area.value.slice(0, head.at)}${at.replacement}${area.value.slice(tail.end)}`;
@@ -3317,7 +3409,7 @@ export const PANELS = {
       tell('AI が、選んでいた所を書き換えました（まだ保存していません）。', [
         ['元に戻す', () => {
           area.value = mine ?? area.value;
-          held.delete(path);
+          held.delete(K(path));
           refresh();
           tell('元に戻しました。', [], 'info');
         }],
@@ -3353,25 +3445,43 @@ export const PANELS = {
      * **直している最中でも、黙らない。**上書きしないのは正しいが、何も言わないと
      * ファイルと欄が割れていることに気づけず、保存した方が相手を消す。
      */
-    ctx.on('session', ({ event: v }) => {
-      if (v.type !== 'diff' || v.path !== path) return;
+    /*
+     * 書き換えは、会話の流れ（`session`）だけでなく、段取りで進める流れ（`planEvent`）からも、見ていない会話
+     * （`elsewhereDiff`。画面は見ている会話の出来事しか流さないので、差分だけを別に渡してもらう）からも来る。
+     * 会話の流れしか見ていなかったので、`/plan` や裏の会話が開いているファイルを書いても、欄は古いまま
+     * 「保存してあります」と出し、直している最中でも何も言わなかった。
+     */
+    const onDiff = ({ event: v }) => {
+      if (v?.type !== 'diff' || norm(v.path) !== path) return;
       // 自分がいま保存した分の写し。返事を読んだところで入れ替えるので、ここでは何もしない。
       if (savingNow === v.path) return;
       if (!dirty()) { void open(path, undefined, true); return; }
       tell('AI がこのファイルを書き換えました。あなたの直しは保存していません。', [
         ['AI の版を出す', () => {
           void (async () => {
-            const r = await fetch(`/api/file?path=${encodeURIComponent(path)}`, { signal: AbortSignal.timeout(20000) })
+            // 読みに行っている間に別のファイルへ移ったら、移った先へ前のファイルの中身を入れない。
+            const at = path;
+            const atRoot = rootAt;
+            const r = await fetch(`/api/file?path=${encodeURIComponent(at)}`, { signal: AbortSignal.timeout(20000) })
               .catch(() => null);
             const said = r ? await r.json().catch(() => null) : null;
+            if (path !== at || rootAt !== atRoot || discarded()) return;
             // 断られたら、その理由を出す（utf8 でない形に書き換えられた等）。
             if (!r || !r.ok || !said) { state.textContent = said?.error ?? '読み直せませんでした'; return; }
+            // 作業場が変わっていたら、別の作業場の同じ名前のファイルを AI の版として出さない
+            if (typeof said.root === 'string' && atRoot && said.root !== atRoot) {
+              state.textContent = '作業場が変わったので、この直しの AI の版は出せません';
+              return;
+            }
             const got = said;
             takeOver(got.content, got.stamp);
           })();
         }],
       ]);
-    });
+    };
+    ctx.on('session', onDiff);
+    ctx.on('planEvent', onDiff);
+    ctx.on('elsewhereDiff', onDiff);
   },
 };
 

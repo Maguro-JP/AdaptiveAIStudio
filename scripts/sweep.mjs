@@ -1585,7 +1585,17 @@ await check('保存していない直しは、読み直しても残る', async (
     const back = await p.locator('.editor-area').inputValue();
     if (back !== '書きかけ\n') throw new Error(`読み直したら消えている: ${JSON.stringify(back)}`);
   } finally {
-    await p.evaluate(([path]) => { try { localStorage.removeItem(`aas.draft:${path}`); } catch { /* 使えない環境もある */ } }, [at]);
+    // 預かりの鍵は作業場と名前の組（`aas.draft:<作業場>\n<名前>`）。名前で終わる鍵を全部消す
+    await p.evaluate(([path]) => {
+      try {
+        const keys = [];
+        for (let i = 0; i < localStorage.length; i += 1) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('aas.draft:') && (k === `aas.draft:${path}` || k.endsWith(`\n${path}`))) keys.push(k);
+        }
+        for (const k of keys) localStorage.removeItem(k);
+      } catch { /* 使えない環境もある */ }
+    }, [at]);
     const { rm } = await import('node:fs/promises');
     const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
     if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
