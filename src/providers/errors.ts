@@ -80,7 +80,9 @@ export function kindFromHttpStatus(status: number, body: string): ProviderErrorK
       : 'rate_limited';
   }
   if (status === 401 || status === 403) return 'auth';
-  if (status === 404) return 'model_missing';
+  // 404 のうち、本文がモデルの話をしているものだけ（Ollama の `model "x" not found`、OpenAI の `The model … does not exist`）。
+  // 道の打ち間違い（/v1 の抜け）まで次の候補へ回すと、打ち間違いが隠れるので、それは今までどおり止める
+  if (status === 404 && /model/i.test(body)) return 'model_missing';
   if (status === 408 || status === 504) return 'timeout';
   if (status >= 500) return 'unavailable';
   if (status === 400 && /context|too long|maximum.*token|token.*limit/i.test(body)) {

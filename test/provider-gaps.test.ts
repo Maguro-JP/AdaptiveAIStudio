@@ -57,6 +57,10 @@ describe('判じる・検める仕事の候補', () => {
   test('雲だけで使っているなら、そのまま（対）', () => {
     assert.deepEqual(quietCandidates(['claude:b'], registry), ['claude:b']);
   });
+  test('設定で固定した候補（強い順）は、軽い方から使う', () => {
+    assert.deepEqual(quietCandidates(['inproc:big', 'claude:b', 'inproc:small'], registry, { fixed: true }), ['inproc:small', 'inproc:big']);
+    assert.deepEqual(quietCandidates(['claude:opus', 'claude:haiku'], registry, { fixed: true }), ['claude:haiku', 'claude:opus']);
+  });
 });
 
 describe('言い終えていない検問所の答え', () => {
@@ -96,7 +100,8 @@ describe('次の候補へ回すか', () => {
     const backup = await startFakeServer({ kind: 'stream', text: '次で答えた' });
     try {
       const registry = new ProviderRegistry();
-      registry.register(new OpenAiCompatibleProvider({ id: 'a', baseUrl: missing.baseUrl, locality: 'local' }));
+      // 雲の相手で見る（手元の相手は、もともと冷やさない）
+      registry.register(new OpenAiCompatibleProvider({ id: 'a', baseUrl: missing.baseUrl, locality: 'cloud' }));
       registry.register(new OpenAiCompatibleProvider({ id: 'b', baseUrl: backup.baseUrl, locality: 'local' }));
       const events = await drain(new ChatOrchestrator(registry).run(
         { candidates: ['a:gone', 'b:m'], messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal));
@@ -104,6 +109,23 @@ describe('次の候補へ回すか', () => {
       assert.equal(registry.isAvailable('a'), true, '相手ごと冷やしている');
     } finally {
       await missing.close();
+      await backup.close();
+    }
+  });
+
+  test('モデルの話でない 404（道の打ち間違い）は、次の候補へ回さずに止める（対）', async () => {
+    const wrong = await startFakeServer({ kind: 'status', status: 404, body: 'Cannot POST /chat/completions' });
+    const backup = await startFakeServer({ kind: 'stream', text: '次で答えた' });
+    try {
+      const registry = new ProviderRegistry();
+      registry.register(new OpenAiCompatibleProvider({ id: 'a', baseUrl: wrong.baseUrl, locality: 'local' }));
+      registry.register(new OpenAiCompatibleProvider({ id: 'b', baseUrl: backup.baseUrl, locality: 'local' }));
+      const events = await drain(new ChatOrchestrator(registry).run(
+        { candidates: ['a:m', 'b:m'], messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal));
+      assert.ok(events.some((e) => e.type === 'failed'));
+      assert.ok(!events.some((e) => e.type === 'done'));
+    } finally {
+      await wrong.close();
       await backup.close();
     }
   });
@@ -142,12 +164,30 @@ describe('番号の無いツールの呼び出し', () => {
     }
     assert.deepEqual(calls.map((c) => c.name), ['f', 'g']);
   });
+  test('id が最初の欠片だけで、引数が後から欠片で来ても一つに繋ぐ。id 付きの欠片が交互に来ても混ぜない', async () => {
+    const url = await sse([
+      JSON.stringify({ choices: [{ delta: { tool_calls: [{ id: 'a', function: { name: 'f', arguments: '{"x"' } }] } }] }),
+      JSON.stringify({ choices: [{ delta: { tool_calls: [{ id: 'b', function: { name: 'g', arguments: '{"y"' } }] } }] }),
+      JSON.stringify({ choices: [{ delta: { tool_calls: [{ id: 'a', function: { arguments: ':1}' } }] } }] }),
+      JSON.stringify({ choices: [{ delta: { tool_calls: [{ id: 'b', function: { arguments: ':2' } }] } }] }),
+      JSON.stringify({ choices: [{ delta: { tool_calls: [{ function: { arguments: '}' } }] } }] }),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] }), '[DONE]',
+    ]);
+    const provider = new OpenAiCompatibleProvider({ id: 'p', baseUrl: url, locality: 'local' });
+    const calls: { name: string; args: unknown }[] = [];
+    for await (const ch of provider.chat({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal)) {
+      if (ch.type === 'toolCall') calls.push({ name: ch.call.name, args: ch.call.args });
+    }
+    assert.deepEqual(calls, [{ name: 'f', args: { x: 1 } }, { name: 'g', args: { y: 2 } }]);
+  });
 });
 
 describe('baseUrl の利用者名とパスワード', () => {
   test('失敗の文の URL から利用者名とパスワードを伏せる', () => {
     assert.equal(hideUrlCredentials('cannot: https://user:secret@host/v1 x'), 'cannot: https://***@host/v1 x');
     assert.equal(hideUrlCredentials('see https://host/v1'), 'see https://host/v1');
+    // 符号化していない @ をパスワードに含んでも、残りを見せない
+    assert.equal(hideUrlCredentials('https://user:p@ss@host/v1'), 'https://***@host/v1');
   });
   test('利用者名・パスワード付きの baseUrl は、設定で断る', async () => {
     const restore = hideAasEnv();

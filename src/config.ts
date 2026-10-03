@@ -566,7 +566,7 @@ function validate(c: AasConfig): void {
     if (p.kind === 'openai-compatible') {
       if (!p.baseUrl) throw new ConfigBroken(`baseUrl が未設定です: ${p.id}`);
       // 利用者名・パスワード付きの URL は受けない（fetch が断り、その URL ごと失敗の文として画面と記録に出る）。API キーは apiKeyEnv で渡す
-      if (/^[a-z][a-z0-9+.-]*:\/\/[^/]*@/i.test(p.baseUrl)) {
+      if (hasUrlCredentials(p.baseUrl)) {
         throw new ConfigBroken(`baseUrl に利用者名やパスワードを書けません: ${p.id}（API キーは apiKeyEnv に環境変数の名前を書いて渡してください）`);
       }
     } else if (p.kind !== 'anthropic') {
@@ -602,4 +602,14 @@ function validateLanes(c: AasConfig): void {
 /** 有効なProviderだけを返す。enabled を省略した場合は有効とみなす。 */
 export function enabledProviders(c: AasConfig): ProviderConfig[] {
   return c.providers.filter((p) => p.enabled !== false);
+}
+
+/** URL に利用者名かパスワードが入っているか（URL として読む。読めない文字列は、ここでは断らない）。 */
+function hasUrlCredentials(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.username !== '' || u.password !== '';
+  } catch {
+    return false;
+  }
 }

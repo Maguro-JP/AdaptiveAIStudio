@@ -55,5 +55,5 @@ export function describeNet(e: unknown): string {
 
 /** 文の中の URL の `user:pass@` を伏せる。 */
 export function hideUrlCredentials(text: string): string {
-  return text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1***@');
+  return text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/]+@/gi, '$1***@');
 }

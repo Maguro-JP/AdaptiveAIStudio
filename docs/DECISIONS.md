@@ -11347,16 +11347,22 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
   後の回の結果が前の回の呼び出しに付いた（「a を読んだら b の中身が返った」）。結果は、その呼び出しの直後に続く tool の行からだけ引く
 - 検問所と指摘の判じ手は、候補を逆順にして使っていた。雲を後ろに置いた設定では雲が先頭に来て、外へ出る前の荷物・外から入った文書・利用者の言葉を
   毎回雲へ送っていた。自動で選んだ候補は速い順なので、逆にすると一番遅いモデルが立っていた。手元のモデル（locality が local）があればそれだけを、
-  候補の順のまま使う。手元のモデルが無い（雲だけ）ときは候補をそのまま使う（`quietCandidates`）。並びを逆にしない（選ばなかった案: 逆順のまま local に絞る）
+  軽い方から使う。手元のモデルが無い（雲だけ）ときは候補を使う（`quietCandidates`）。軽い方からの並べ方は、自動で選んだ候補（速い順）はそのまま、
+  設定で固定した候補（強い順に書く）は逆にする（固定の候補をそのまま使うと、一番重いモデルが検問所の 8 秒に間に合わず、持ち出しが全部止まる）。
+  検問所と判じ手は、Session を立てるときに一度だけ組んだ同じ候補を使う（`session.quiet`）
 - 検問所のモデルの答えは、時間切れ（done が来ない）や上限（length）で途中まで書かれていても、そのまま判定として読んでいた。「PASS…? いや…」で切れた
   答えで外へ出していた。言い終えていない答えは「分からない」にする（持ち出しは止まる）。指摘の判じ手も同じ
-- そのモデルが相手に無い（404）を、こちらのバグ（invalid_request）として止めていた。`model_missing` に分け、相手ごと冷やさずに次の候補へ回す
+- そのモデルが相手に無い（404）を、こちらのバグ（invalid_request）として止めていた。`model_missing` に分け、相手ごと冷やさずに次の候補へ回す。
+  ただし本文がモデルの話をしている 404 だけ（Ollama の `model "x" not found` など）。道の打ち間違い（/v1 の抜け）の 404 は今までどおり止める
+  （次の候補へ回すと打ち間違いが隠れる）
 - OpenAI 互換で、番号（index）の無い呼び出しを全部 0 番に入れていたので、二件目が一件目に繋がった（`read_fileread_file`）。別の id が来たら別の
-  呼び出しとして分け、同じ名前を二度足さない
+  呼び出しとして分け（同じ id の枠が既にあればそこへ入れる）、同じ名前を二度足さない
 - 同じプロセスで動くモデルが落ちたとき、失敗の文を本文と finish_reason: error の一つの塊で送る。受け側が本文を先に流したので、上の層は「書き始めた」と
   数え、やり直しも次の候補への切り替えもしなかった。error は本文より先に見て、失敗の文は失敗の理由に入れる
 - baseUrl に利用者名とパスワードを書くと、fetch がその URL ごと失敗の文にし、画面と記録に出た。設定で断り（API キーは apiKeyEnv で渡す）、
-  そのまま返す失敗の文の URL からも伏せる（`hideUrlCredentials`）。Claude の待ち時間（Retry-After）は日時の形も読む
+  そのまま返す失敗の文の URL からも伏せる（`hideUrlCredentials`）。設定は URL として読んで利用者名・パスワードの有無を見る。
+  Claude の待ち時間（Retry-After）は日時の形も読む。検問所のモデルが言い終えた後も説明を続けて上限で切れた答えは、前は通していたが、
+  いまは「分からない」になる（持ち出しは止まる。切れた答えで判じないことを先にした）
 - provider の `enabled` の説明は「既定は false」だったが、実際は省くと有効（`enabledProviders`）。最初に書き出す設定はクラウドに false を明示している。
   振る舞いを変えると、enabled を省いた設定が立ち上がらなくなる（candidates が無効な provider を指す）ので、説明の方を直した
 - 残っているところ: Claude の流れにはヘッダの後の停滞の見張りが無い（SDK の時間切れはヘッダまで。ping だけが続くと■まで終わらない。推測）。
@@ -11365,4 +11371,5 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
 - 見て不具合が無かった所: 塊の境目と UTF-8 の割れ、終わりの合図の無い流れ、途中でやめたときの切断と中止の伝わり方、壊れた引数、Claude へ送る会話の形、
   やり直しの待ちの上限、子プロセスへの環境変数、自動選択が手元だけを選ぶこと、窓の刈り込み
 触る場所: `src/runtime/inproc.ts`（`toHistory`）、`src/core/session.ts`（`quietCandidates`・`#askJudge`）、`src/core/inspector-setup.ts`、
-`src/harness/inspector.ts`、`src/providers/errors.ts`・`openai-compatible.ts`・`anthropic.ts`、`src/runtime/net-why.ts`、`src/config.ts`、`test/provider-gaps.test.ts`
+`src/harness/inspector.ts`、`src/providers/errors.ts`・`openai-compatible.ts`・`anthropic.ts`、`src/runtime/net-why.ts`、`src/config.ts`、
+`test/provider-gaps.test.ts`・`quiet-session.test.ts`・`inproc-tools.test.ts`・`gate.test.ts`（検問所の偽物に done を足した）

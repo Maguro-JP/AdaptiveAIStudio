@@ -319,11 +319,13 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         for (const tc of choice?.delta?.tool_calls ?? []) {
           // 番号（index）を付けない相手もいる。そのときは、別の id が来たら新しい呼び出しとして分ける
           // （全部を 0 番に入れていたので、二件目が一件目に繋がり `read_fileread_file` や `{..}{..}` になっていた）
+          // 同じ id の枠が既にあればそこへ（id 付きの欠片が交互に来ても混ぜない）。id の無い欠片は最後の枠の続き
           let idx = tc.index;
           if (idx === undefined) {
+            const same = tc.id ? [...pending].find(([, v]) => v.id === tc.id)?.[0] : undefined;
             const last = pending.size > 0 ? Math.max(...pending.keys()) : -1;
             const open = pending.get(last);
-            idx = last < 0 ? 0 : (tc.id && open?.id && open.id !== tc.id ? last + 1 : last);
+            idx = same ?? (last < 0 ? 0 : (tc.id && open?.id && open.id !== tc.id ? last + 1 : last));
           }
           const slot = pending.get(idx) ?? { id: '', name: '', args: '' };
           if (tc.id) slot.id = tc.id;

@@ -55,9 +55,6 @@ export const MAX_LAST_RETRY_WAIT_MS = 5 * 60_000;
 export class ChatOrchestrator {
   readonly #registry: ProviderRegistry;
 
-  /** 相手の一覧（どの候補が手元のモデルかを引くのに使う）。 */
-  get registry(): ProviderRegistry { return this.#registry; }
-
   constructor(registry: ProviderRegistry) {
     this.#registry = registry;
   }
