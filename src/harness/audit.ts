@@ -60,21 +60,36 @@ export class AuditLog {
     try {
       await mkdir(dirname(this.#path), { recursive: true });
       // 上限を超えていたら一つ前へ回す（前の `.1` は捨てる）。回せなくても書き足しは続ける
-      if (this.#since++ % SIZE_CHECK_EVERY === 0) {
-        // 「まだ無い」だけを 0 とする。ほかの読めなさは投げて、下の「残せませんでした」で言う
-        const size = await stat(this.#path).then((st) => st.size, (e: unknown) => { if (isAbsent(e)) return 0; throw e; });
-        if (size > this.#maxBytes) {
-          // 回せなくても書き足しは続ける（記録を失うより、大きくなる方がまし）。ただし黙らない
-          try { await rename(this.#path, `${this.#path}.1`); } catch (e) {
-            this.#warn.fail(`監査の記録を一つ前へ回せませんでした（${failCode(e)}）。${this.#path} が ${Math.round(size / 1024 / 1024)}MB を超えて増えています`);
-          }
-        }
-      }
+      if (this.#since++ % SIZE_CHECK_EVERY === 0) await this.#rotate(this.#path);
       await appendFile(this.#path, JSON.stringify(full) + '\n', 'utf8');
       this.#warn.ok();
     } catch (e) {
       // 記録に失敗しても本体は止めない。ただし黙らない（続けて失敗している間は一度だけ言う）
       this.#warn.fail(`監査の記録を残せませんでした（${failCode(e)}）。ハーネスが止めた・通した理由が、このあと ${this.#path} に残りません`);
+    }
+  }
+
+  /**
+   * 上限を超えていたら一つ前（`.1`）へ回す。**回せなくても、大きさを見られなくても、書き足しは続ける**（記録を失うより、大きくなる方がまし）。
+   *
+   * 画面と端末の二つが同じファイルに書くと、両方が超えたのを見て続けて回し、後の方が前の方の作ったばかりの小さなファイルで `.1` を上書きして、
+   * 回した 8MB 分を失う。回す直前にもう一度見て、最初に見たものと同じファイル（ino と大きさ）のときだけ回す。
+   */
+  async #rotate(path: string): Promise<void> {
+    let first: import('node:fs').Stats;
+    try { first = await stat(path); } catch (e) {
+      // まだ無いのは普通。ほかの読めなさ（掴まれている）は、この回は見送るだけで、書き足しは止めない。ただし黙らない
+      if (!isAbsent(e)) this.#warn.fail(`監査の記録の大きさを見られませんでした（${failCode(e)}）。一つ前へ回すのを見送ります`);
+      return;
+    }
+    if (first.size <= this.#maxBytes) return;
+    try {
+      const again = await stat(path);
+      if (again.ino !== first.ino || again.size < first.size) return; // 別の本体がもう回した
+      await rename(path, `${path}.1`);
+    } catch (e) {
+      if (isAbsent(e)) return; // 別の本体が回した直後
+      this.#warn.fail(`監査の記録を一つ前へ回せませんでした（${failCode(e)}）。${path} が ${Math.round(first.size / 1024 / 1024)}MB を超えて増えています`);
     }
   }
 

@@ -103,7 +103,7 @@ test('作業場が丸ごと未追跡なら、「クリーン」と言わない',
   assert.equal(now.kind, 'dirty', `何もコミットされていないのに ${now.kind} と言った`);
 });
 
-test('作業場の設定の core.fsmonitor に書かれた命令を、製品の git が走らせない', { skip: GIT_OK ? false : 'この機械には git が無い' }, async () => {
+test('作業場の設定の core.fsmonitor に書かれた命令を、製品の git が走らせない', { skip: GIT_OK ? false : 'この機械には git が無い' }, async (t) => {
   // fsmonitor の命令は `git status` のたびに走る。作業場の `.git/config` は作業の中で書き換えられうるので、承認なしに命令を走らせる道になっていた
   const root = await tempDir('aas-git-fsmonitor-');
   await writeFile(join(root, 'a.txt'), 'x\n');
@@ -118,7 +118,8 @@ test('作業場の設定の core.fsmonitor に書かれた命令を、製品の 
   // 試験の場が本当に走らせる形になっているかを先に見る（走らないなら、この試験は何も確かめていない）
   try { git(root, 'status', '--porcelain'); } catch { /* 命令が 1 で終わっても status は続く */ }
   const { existsSync, rmSync } = await import('node:fs');
-  if (!existsSync(marker)) return; // この git は fsmonitor の命令を走らせない（古い版・Windows の形）。確かめる場が無い
+  // この git は fsmonitor の命令を走らせない（古い版・Windows の形）。確かめる場が無いので、通ったではなく skip にする
+  if (!existsSync(marker)) { t.skip('この git は fsmonitor の命令を走らせない'); return; }
   rmSync(marker);
 
   await inspectGit(root);

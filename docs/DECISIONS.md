@@ -11215,3 +11215,13 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
 - 考えごとの記録の時刻が未来（時計のずれ）だと、その時刻を過ぎるまで何も考えなかった。戻すとき・足すときに、いまに丸める
 触る場所: `src/core/harness-setup.ts`（`DEFAULT_PROTECTED`）、`src/agent/workspace-stamp.ts`（`SAFE_GIT_ARGS`）、`src/agent/team.ts`（`#mayChange`）、
 `src/core/team-setup.ts`、`src/cli/report.ts`（`redactSecrets`）、`src/harness/audit.ts`（`AUDIT_KEEP`・`AUDIT_MAX_BYTES`）、`src/harness/idle.ts`（`notAfter`）
+- 見直しで直したこと（同じ日）:
+  - 伏せ字は、引用符で囲まれた値（`.env` の `KEY="..."`・`--token="..."`）も囲みごと伏せる。引数の名前は単語の頭からに限る（`max-token`・`non-secret` を巻き込んでいた）
+  - 報告が設定を読むとき、先頭の BOM を取る（メモ帳で保存した設定は JSON として読めず、既定の場所へ戻っていた）。設定の auditLog が相対の道のときの基準（画面のプロセスの cwd）は合わせていない
+  - 監査の記録を回す直前にもう一度見て、最初に見たファイル（ino と大きさ）のときだけ回す（画面と端末の二つが続けて回すと、回した分を小さなファイルで上書きする）。
+    大きさを見られないときは、その回を見送るだけで書き足しは止めない。この競合を再現する試験は作れなかった（同時に書かせても push 済みの版で通るので、入れていない）
+  - fsmonitor は `core.fsmonitor=`（空）で切る。`false` は git 2.36 より前では命令として読まれる。手元の 2.43 で、空でも false でも命令が走らないことを測った
+  - fsmonitor の試験は、この git が命令を走らせない場合は通ったではなく skip にする
+  - 残したもの: `.gitattributes` の filter と `.git/config` の `filter.*.clean/smudge` の組み合わせは、製品の `git status`・`cat-file --filters` で命令を走らせうる。
+    filter の定義は run_command の `git config` で入れる必要があり、run_command は許可の一覧で絞っている。名前を集めて `-c filter.<名前>.clean=` を付ける案は今回入れていない
+  - `"raceWith": null` は読み込みで断る（deps・writes と同じ扱い）

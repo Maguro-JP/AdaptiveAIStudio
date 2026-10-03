@@ -41,7 +41,8 @@ export const STAMP_GIT_TIMEOUT_MS = 2 * 60_000;
  * 製品が自分で走らせる git には、作業場の設定の `core.fsmonitor` を効かせない。fsmonitor に書かれた命令は `git status` のたびに走るので、
  * 作業場の `.git/config`（作業の中で書き換えられうる）が、承認なしに命令を走らせる道になる。
  */
-export const SAFE_GIT_ARGS: readonly string[] = ['-c', 'core.fsmonitor=false'];
+// 値は空にする。`false` は git 2.36 より前では「false という命令」と読まれ、呼ぶたびに sh を起こす。空ならどの版でも「無し」（2.43 で、空でも命令が走らないことを測った）
+export const SAFE_GIT_ARGS: readonly string[] = ['-c', 'core.fsmonitor='];
 
 function gitOut(args: string[], cwd: string, maxBuffer = 16 * 1024 * 1024): Promise<string | undefined> {
   return new Promise((resolve) => {

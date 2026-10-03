@@ -57,12 +57,19 @@ describe('困ったときの報告', () => {
       'args: ["--token", "argvalue456"]',
       'cmd --api-key=flagvalue789',
       'PATH=/usr/bin のような名前でない行はそのまま',
+      'GITHUB_TOKEN="quotedvalue111"',
+      "DB_PASSWORD='quotedvalue222'",
+      'cmd --token="quotedvalue333"',
+      'the max-token count and a non-secret value stay',
     ];
     const out = redactSecrets(lines.join('\n'));
-    for (const leaked of ['github_pat_11ABCDEFG', 'AKIAABCDEFGHIJKLMNOP', 'hf_abcdefghijklmnop', 'plainvalue123', 'argvalue456', 'flagvalue789']) {
+    for (const leaked of ['github_pat_11ABCDEFG', 'AKIAABCDEFGHIJKLMNOP', 'hf_abcdefghijklmnop', 'plainvalue123', 'argvalue456', 'flagvalue789',
+      'quotedvalue111', 'quotedvalue222', 'quotedvalue333']) {
       assert.ok(!out.includes(leaked), `${leaked} が出ている:\n${out}`);
     }
     assert.ok(out.includes('PATH=/usr/bin'), out);
+    // 普通の言葉の一部（max-token・non-secret）は巻き込まない
+    assert.ok(out.includes('the max-token count and a non-secret value stay'), `普通の文を伏せている:\n${out}`);
     assert.ok(out.includes('ANTHROPIC_API_KEY=') && out.includes('--token'), `名前まで消している:\n${out}`);
   });
 
