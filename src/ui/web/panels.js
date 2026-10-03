@@ -562,6 +562,8 @@ export const PANELS = {
             attachments: ids,
             // いま開いている所（名前・行・選んでいる字）。開いていなければ付かない。
             ...(ctx.editorNow?.() ? { editor: ctx.editorNow() } : {}),
+            // どの会話へ送るか（null はトップ＝新しい会話）。本体の「見ている会話」は別のタブや見回りが書き換えるので、ここで言う
+            ...(!isPlan && ctx.conversationId ? { conversationId: ctx.conversationId() ?? null } : {}),
           }),
         });
       } catch (e) {

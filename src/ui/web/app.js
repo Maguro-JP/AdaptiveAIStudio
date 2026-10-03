@@ -1379,15 +1379,26 @@ async function goTop() {
   const r = await ask('/api/conversations', { method: 'POST' }, 'トップへ戻れませんでした');
   if (!r) return;
   if (!r.ok) return void showCrash('トップへ戻れません', r.body.error ?? '', 'warn');
+  conversations.current = null;
   ctx.showHistory([]);
   void showWaitingApprovals();
   await loadConversations();
 }
 
+/*
+ * このタブが見ている会話（`conversations.current`）は、最初の一回だけ本体から受け取り、後はこのタブが持つ。
+ * 本体の「見ている会話」は一つで、全部のタブと見回りの再開が書き換える。読み直すたびに受け取っていたので、
+ * 別のタブで選び直すと、こちらの欄は前の会話のまま「見ている会話」だけが替わり、その会話の答えが欄に描かれていた。
+ */
+let currentKnown = false;
 async function loadConversations() {
+  let got;
   try {
-    conversations = await getJson('/api/conversations');
+    got = await getJson('/api/conversations');
   } catch { return; }
+  if (currentKnown) got.current = conversations.current ?? null;
+  else currentKnown = true;
+  conversations = got;
   drawConversations();
 }
 
@@ -1501,12 +1512,12 @@ function drawConversations() {
       }, '開けませんでした');
       if (!r) return;
       if (!r.ok) return void alert(r.body.error ?? '開けませんでした');
+      conversations.current = head.id;
       ctx.showHistory(r.body.messages ?? []);
       // 欄を描き直すと承認の箱も消える。待っている承認は会話によらないので、出し直す
       if (r.body.approvals?.length) ctx.showApprovals?.(r.body.approvals);
       if (r.body.inFlight) {
         // 動いている会話へ戻った。途中までを写し、続きの出来事を通す。
-        conversations.current = head.id;
         copiedUpTo.set(head.id, r.body.inFlight.seq);
         ctx.showInFlight(r.body.inFlight);
       }
@@ -1546,7 +1557,7 @@ function drawConversations() {
         { method: 'DELETE' }, '消せませんでした');
       if (!r) return;
       if (!r.ok) return void alert(r.body.error ?? '消せませんでした');
-      if (head.id === conversations.current) { ctx.showHistory([]); void showWaitingApprovals(); }
+      if (head.id === conversations.current) { conversations.current = null; ctx.showHistory([]); void showWaitingApprovals(); }
       hideRemoved = false;
       await loadConversations();
     };
