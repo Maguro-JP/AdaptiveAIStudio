@@ -54,6 +54,8 @@ describe('外へ出す前の検問: 今の鍵の形', () => {
   });
   test('ただの文の sk- は止めない（対）', () => {
     assert.equal(inspectOutbound('see the sk-learn docs').passed, true);
+    // prefix の無い `-` 区切りの長い語（記事の URL）は鍵ではない
+    assert.equal(inspectOutbound('https://example.com/blog/sk-learn-pipeline-tutorial').passed, true);
   });
 });
 
@@ -75,6 +77,26 @@ describe('読んでから書く: 読んだ後の変化', () => {
     await read.run({ path: 'a.txt' }, ctx(root));
     const r = await write.run({ path: 'a.txt', content: 'A\nB\nC\nD\n' }, ctx(root));
     assert.ok(!r.isError, r.content);
+  });
+  test('読み直す代わりに一部だけ読んでも、他の変更は書き戻させない', async () => {
+    const root = await project({ 'a.txt': 'A\nB\n' });
+    const { read, write } = tools([readBeforeWrite]);
+    await read.run({ path: 'a.txt' }, ctx(root));
+    await writeFile(join(root, 'a.txt'), 'A\nB\nC\n');
+    assert.ok(!(await read.run({ path: 'a.txt', offset: 1, limit: 1 }, ctx(root))).isError);
+    const r = await write.run({ path: 'a.txt', content: 'A\nB2\n' }, ctx(root));
+    assert.match(r.content, /^BLOCKED by read-before-write/);
+    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'A\nB\nC\n');
+  });
+  test('他の変更の後に自分で一か所直しても、他の変更は書き戻させない', async () => {
+    const root = await project({ 'a.txt': 'A\nB\n' });
+    const { read, write, edit } = tools([readBeforeWrite]);
+    await read.run({ path: 'a.txt' }, ctx(root));
+    await writeFile(join(root, 'a.txt'), 'A\nB\nC\n');
+    assert.ok(!(await edit.run({ path: 'a.txt', find: 'A', replace: 'A2' }, ctx(root))).isError);
+    const r = await write.run({ path: 'a.txt', content: 'A2\nB\n' }, ctx(root));
+    assert.match(r.content, /^BLOCKED by read-before-write/);
+    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'A2\nB\nC\n');
   });
   test('自分の edit_file の後の全文の書き込みは止めない（対）', async () => {
     const root = await project({ 'a.txt': 'A\nB\n' });
@@ -106,6 +128,18 @@ describe('テストの守り: 数えていなかった形', () => {
     const r = await tryWrite("test('a', async () => {\n});\n", "test('a', async () => {\n  await db.find({ skip: 10 });\n});\n");
     assert.doesNotMatch(r, /BLOCKED/);
   });
+  test("一行のテストの中の find({ skip: 10 }) や expect(page({ only: true })) は止めない（対）", async () => {
+    const r = await tryWrite("test('a', () => {});\n", "test('a', () => {});\ntest('b', () => find({ skip: 10 }));\nit('p', () => expect(page({ only: true })).toBe(1));\n");
+    assert.doesNotMatch(r, /BLOCKED/);
+  });
+  test('Python の model.fit( はテストの絞り込みではない（対）', async () => {
+    const r = await tryWrite('def test_a():\n    pass\n', 'def test_a():\n    model.fit(X, y)\n', 'tests/test_model.py');
+    assert.doesNotMatch(r, /BLOCKED/);
+  });
+  test('新しい test.todo を足すのは止めない（対）、今あるテストを todo にするのは止める', async () => {
+    assert.doesNotMatch(await tryWrite("test('a', () => {});\n", "test('a', () => {});\ntest.todo('b');\n"), /BLOCKED/);
+    assert.match(await tryWrite("test('a', () => {});\n", "test.todo('a');\n"), /BLOCKED by test-protection/);
+  });
   test('jest の __tests__/ と pytest の *_test.py もテストのファイル', () => {
     assert.equal(isTestFile('src/__tests__/math.js'), true);
     assert.equal(isTestFile('pkg/foo_test.py'), true);
@@ -135,6 +169,8 @@ describe('Windows の綴り: 末尾の点・空白と流れの名前', () => {
     assert.equal(windowsName('keys/id.pem.'), 'keys/id.pem');
     assert.equal(windowsName('.env::$DATA'), '.env');
     assert.equal(windowsName('C:/x/../a.'), 'C:/x/../a');
+    // `\` 区切りの絶対の道を、一つの名前と読まない
+    assert.equal(windowsName('D:\\keys\\id.pem'), 'D:/keys/id.pem');
   });
   for (const path of ['.env ', '.env::$DATA', 'id.pem.']) {
     test(`無いファイルとして ${JSON.stringify(path)} を書くのを止める`, async () => {

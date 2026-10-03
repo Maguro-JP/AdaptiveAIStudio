@@ -25,20 +25,27 @@ const CASE_PATTERNS = [
 ];
 
 /**
- * skip・無効化・絞り込みの痕跡。数と別に見る。
+ * skip・無効化の痕跡。数と別に見る。
  *
- * `.only` は他のテストを全部走らせなくするので、skip と同じに数える。
- * node:test の `test('a', { skip: true }, …)` は、呼び出しと同じ行にある選択肢だけを見る
+ * node:test の `test('a', { skip: true }, …)` は、test() の二つ目の引数の頭にある選択肢だけを見る
  * （テストの中の `find({ skip: 10 })` のような、ただの値まで数えないため）。
+ * `xit(` などはメソッド呼び出しを外す（`model.fit(` や `fitAddon.fit()` に当てない）。
  */
 const SKIP_PATTERNS = [
-  /\b(?:test|it|describe)\s*\.\s*(?:skip|only|todo)\s*\(/g,
-  /\b(?:xit|xtest|xdescribe|fit|fdescribe)\s*\(/g,
-  /\b(?:test|it|describe|suite)\s*\([^{}\n]*?\{[^{}\n]*?\b(?:skip|todo|only)\s*:/g,
-  /\bt\.skip\s*\(/g,                     // node:test の中から
+  /\b(?:test|it|describe)\s*\.\s*(?:skip|todo)\s*\(/g,
+  /(?<![.\w$])(?:xit|xtest|xdescribe)\s*\(/g,
+  /\b(?:test|it|describe|suite)\s*\(\s*(['"`])(?:(?!\1)[^\n])*\1\s*,\s*\{[^{}\n]*?\b(?:skip|todo)\s*:/g,
+  /(?<![.\w$])t\.skip\s*\(/g,        // node:test の中から
   /@(?:pytest\.mark\.|unittest\.)?skip/g,
   /\bt\.Skip(?:f|Now)?\s*\(/g,           // Go
   /^\s*#\[ignore\b/gm,                   // Rust
+];
+
+/** 絞り込みの痕跡。一つ足すだけで他のテストが全部走らなくなるので、skip とは別に、増やすこと自体を止める。 */
+const FOCUS_PATTERNS = [
+  /\b(?:test|it|describe)\s*\.\s*only\s*\(/g,
+  /(?<![.\w$])(?:fit|fdescribe)\s*\(/g,
+  /\b(?:test|it|describe|suite)\s*\(\s*(['"`])(?:(?!\1)[^\n])*\1\s*,\s*\{[^{}\n]*?\bonly\s*:/g,
 ];
 
 export function countCases(text: string): number {
@@ -50,5 +57,11 @@ export function countCases(text: string): number {
 export function countSkips(text: string): number {
   let n = 0;
   for (const p of SKIP_PATTERNS) n += text.match(p)?.length ?? 0;
+  return n;
+}
+
+export function countFocus(text: string): number {
+  let n = 0;
+  for (const p of FOCUS_PATTERNS) n += text.match(p)?.length ?? 0;
   return n;
 }

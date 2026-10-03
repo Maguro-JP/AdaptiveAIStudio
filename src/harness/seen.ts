@@ -34,3 +34,17 @@ export function markSeen(call: ToolCall, print: string): void {
 export function seenPrint(call: ToolCall): string | undefined {
   return prints.get(call);
 }
+
+/** 同じファイルを指す呼び出しのうち、最後に指紋を結び付けたものの指紋。道は作業場の中で解いて比べる（`./a.ts` と `a.ts` を同じに見る）。 */
+export function lastPrint(history: readonly ToolCall[], root: string, path: string): string | undefined {
+  const target = safeResolve(root, path);
+  if (!target) return undefined;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const c = history[i]!;
+    const print = prints.get(c);
+    if (print === undefined) continue;
+    const p = (c.args as Record<string, unknown> | undefined)?.['path'];
+    if (typeof p === 'string' && safeResolve(root, p) === target) return print;
+  }
+  return undefined;
+}

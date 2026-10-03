@@ -11,8 +11,8 @@ import { existsSync } from 'node:fs';
 import { minimatch } from './glob.ts';
 import { safeResolve, canonicalRel } from '../agent/tools/paths.ts';
 import { isAbsent } from './put-back.ts';
-import { fingerprint, seenPrint } from './seen.ts';
-import { isTestFile, countCases, countSkips } from '../agent/test-patterns.ts';
+import { fingerprint, lastPrint } from './seen.ts';
+import { isTestFile, countCases, countSkips, countFocus } from '../agent/test-patterns.ts';
 import { type Rule, type RuleContext, allow, deny, ok, argString, hasArg } from './rules.ts';
 import type { ToolCall } from '../providers/contract.ts';
 
@@ -84,7 +84,8 @@ export function protectedPaths(patterns: string[], opts: { nocase?: boolean; win
 
 /** Windows が実際に作る名前に揃える（各名前の `:` から後ろと、末尾の点・空白を落とす。ドライブの `C:` と `.`・`..` はそのまま）。 */
 export function windowsName(path: string): string {
-  return path.split('/').map((seg, i) => {
+  // `\` 区切りも名前の区切りとして見る（外のツールに渡した `D:\keys\id.pem` を一つの名前と読んで `:` から後ろを落とし、守りを外していた）
+  return path.replace(/\\/g, '/').split('/').map((seg, i) => {
     if (i === 0 && /^[A-Za-z]:$/.test(seg)) return seg;
     const bare = seg.includes(':') ? seg.slice(0, seg.indexOf(':')) : seg;
     return bare === '.' || bare === '..' ? bare : bare.replace(/[. ]+$/, '');
@@ -160,11 +161,19 @@ export const testProtection: Rule = {
         'テストを消して通すことはできません。実装側を直してください。',
       );
     }
-    const skipsAdded = countSkips(content) - countSkips(before);
+    // 新しく足したテストの分までは skip・todo を許す（`test.todo('…')` を足すのは、今あるテストを無効にしない）
+    const skipsAdded = countSkips(content) - countSkips(before) - (now - was);
     if (skipsAdded > 0) {
       return deny(
         `${path} に skip が ${skipsAdded} 件増えています。` +
         'テストを無効化して通すことはできません。実装側を直してください。',
+      );
+    }
+    const focusAdded = countFocus(content) - countFocus(before);
+    if (focusAdded > 0) {
+      return deny(
+        `${path} に only（絞り込み）が ${focusAdded} 件増えています。他のテストが走らなくなります。` +
+        '絞り込みを外して、実装側を直してください。',
       );
     }
     return allow;
@@ -262,8 +271,7 @@ export const readBeforeWrite: Rule = {
     if (sawIt) {
       if (!wholeNeeded) return allow; // edit_file は当てる所が見つからなければ失敗するので、古い中身で消すことは無い
       // 最後に読んだ・書いたときから中身が替わっていれば、読み直させる（別の担当や run_command の変更を、古い中身で消さない）
-      const last = [...ctx.history].reverse().find((c) => (c.name === 'read_file' || isWriteTool(c.name)) && same(c) && seenPrint(c) !== undefined);
-      const was = last && seenPrint(last);
+      const was = lastPrint(ctx.history, ctx.root, path);
       if (was === undefined) return allow;
       const now = await fingerprint(ctx.root, path);
       if (now === was) return allow;
