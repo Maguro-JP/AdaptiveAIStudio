@@ -8,6 +8,7 @@
  * 実行するかは利用者が決める。自発性と暴走は紙一重なので、
  * 「気づくこと」と「やること」の間に必ず承認を挟む。
  */
+import { redactSecrets } from '../core/redact.ts';
 import { readFile, writeFile, mkdir, rename, rm, copyFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -187,7 +188,12 @@ export class ProposalQueue {
    * 番号は、**ファイルにある一番大きい番号の続き**から配る（画面と端末が別々に持つので、手元の続きだけだと同じ番号を
    * 二つの提案に配っていた）。ファイルが読めないときは足さない（残せない番号を配って表示すると、後で別の提案を指す）。
    */
-  add(p: Omit<Proposal, 'id' | 'status' | 'createdAt'>): Proposal | undefined {
+  add(given: Omit<Proposal, 'id' | 'status' | 'createdAt'>): Proposal | undefined {
+    // 秘密は伏せてから残す（モデルが .env を読んだ結果を理由や手順に書くと、proposals.json と画面に残っていた）
+    const p = {
+      ...given,
+      title: redactSecrets(given.title), rationale: redactSecrets(given.rationale), suggestedAction: redactSecrets(given.suggestedAction),
+    };
     const contentKey = normalizeTitle(p.title);
     const duplicate = this.#items.find(
       (x) => x.status !== 'rejected' &&

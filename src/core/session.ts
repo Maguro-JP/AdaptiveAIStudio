@@ -64,6 +64,7 @@ import { Team } from '../agent/team.ts';
 import { accept, changedBetween, dropCoveredDirs, type AcceptanceReport, type MemberReport } from '../agent/acceptance.ts';
 import { runVerification, verifyLoop, digestFailure, type VerifyEvent, type VerifyResult } from '../agent/verify.ts';
 import { snapshotTests, compareTests } from '../agent/test-integrity.ts';
+import { redactSecrets } from './redact.ts';
 import { workspaceStamp, stampChanges } from '../agent/workspace-stamp.ts';
 import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
@@ -1327,7 +1328,8 @@ export class Session {
     // 外から持ち帰ったことは覚えておく。同じことを何度も訊きに行かないため。
     if (mode.id === 'briefing') {
       this.memory.remember({
-        kind: 'fact', title: parsed.title, detail: parsed.rationale, source: '外部',
+        // 作業場を付ける（この場所の依存の話。付けずにいたので、別の作業場の依頼にも添えられていた）
+        kind: 'fact', title: parsed.title, detail: parsed.rationale, source: '外部', root: this.root,
       });
       await this.saveMemory();
     }
@@ -1504,8 +1506,9 @@ export class Session {
      * 使うと、横の一覧に「【いま開いているファイル】a.ts（3 行目）」と出て、
      * **どの依頼を戻すのか人が選べない**（押して実測）。
      */
-    // 打った分が空（添付だけを送った回）なら、差し込んだ方を使う。空の名前を残さない。
-    const undoName = opts.said || instruction;
+    // 打った分が空（添付だけを送った回）なら、添付の名前で呼ぶ（`saidOrAttached`）。差し込んだ全文を名前にすると、
+    // 添付の中身（.env など）が記憶の題として残り、思い出すたびに依頼へ差し込まれ、判じ手へも送られていた。空の名前は残さない
+    const undoName = saidOrAttached(opts.said, instruction);
 
     const verifyCfg = this.config.agent?.verify ?? {};
     const harnessCfg = this.config.harness ?? {};
@@ -1994,7 +1997,8 @@ export class Session {
       // 添えた覚えに、結果を書き戻す。ここが「使うほど賢く」の要。
       this.#gradeRecall(checked, conv);
       // 次に嫌がられたとき、「このとき何をしていたか」を言えるようにする。
-      conv.lastTurn = { instruction, tools: usedTools, changed: changedHere, checked };
+      // 指摘の判じ手へ送る「その回の依頼」も、打った分（添付の中身は送らない）
+      conv.lastTurn = { instruction: undoName, tools: usedTools, changed: changedHere, checked };
 
       /*
        * この回のことを覚える。
@@ -2248,7 +2252,9 @@ export class Session {
       tags: [code],
       source: 'user',
     });
-    if (betterDetail(detail, got.entry.detail)) got.entry.detail = detail;
+    // 伏せてから比べて入れ替える（伏せる前の文は「（伏せました）」より長いので、比べると元の秘密入りの文が勝って書き戻されていた）
+    const safe = redactSecrets(detail);
+    if (betterDetail(safe, got.entry.detail)) got.entry.detail = safe;
     this.memory.touch();
     // saveMemory は中で失敗を言い、投げない。受け手は、落ちてもプロセスごと消さないための念のため
     void this.saveMemory().catch(() => undefined);
@@ -2661,4 +2667,20 @@ export function quietCandidates(
   const ordered = opts.fixed ? [...candidates].reverse() : [...candidates];
   const local = ordered.filter((c) => registry.resolve(c)?.provider.locality === 'local');
   return local.length > 0 ? local : ordered;
+}
+
+/**
+ * 回の名前（戻り先・記憶の題・判じ手へ送る依頼）。打った分があればそれ。打たずに添付だけを送った回（`said` が空）は、
+ * 添付の名前だけで呼ぶ（中身は入れない）。`said` を渡さない呼び手（端末など、依頼がそのまま打った分）は依頼のまま。
+ */
+export function saidOrAttached(said: string | undefined, instruction: string): string {
+  if (said) return said;
+  if (said === '') {
+    // 見出しの形は `src/ui/attachments.ts`（画像・中身を読めない形式・読めなかった・読み方の注記・— 保存先。閉じの前の空白は無いこともある）
+    const names = [...instruction.matchAll(/^--- 添付(?:（(?:画像|中身を読めない形式)）)?: (.+?)(?:（(?:[^（）]|（[^）]*）)*として読みました[^）]*）|（[^（）]*バイト）|（保存先から消えていて読めません）|（読めません（[^）]*））)?(?: — .*)? ?---$/gm)].map((m) => m[1]!.trim());
+    if (names.length > 0) return `添付（${names.slice(0, 3).join('、')}${names.length > 3 ? ' ほか' : ''}）を送った回`;
+    // 添付の見出しも無い（開いている所だけ等）。差し込んだ中身を名前にしない（一行目の頭だけ）
+    return (instruction.split('\n')[0] ?? '').slice(0, 60) || '（打った文の無い回）';
+  }
+  return instruction;
 }
