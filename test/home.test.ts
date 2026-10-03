@@ -770,6 +770,61 @@ describe('bundle を組み直すとき', () => {
     assert.ok(existsSync(join(out, '.portable')));
   });
 
+  test('runtime 以外（app）が掴まれていても、先に移した分を戻して、何も消さずに止める', async () => {
+    // runtime だけを確かめていたので、ほかが掴まれていると途中まで消えた。全部を退避へ移し、移せなければ戻す
+    const { mkdir, readdir, rename } = await import('node:fs/promises');
+    const out = await tempDir('aas-rebundle-partial-');
+    await writeFile(join(out, '.portable'), 'x');
+    await mkdir(join(out, 'app'), { recursive: true });
+    await writeFile(join(out, 'app', 'kept.txt'), '動いている版');
+    await mkdir(join(out, 'runtime'), { recursive: true });
+    await writeFile(join(out, 'runtime', 'node.exe'), 'old');
+    // runtime は動かせるが、app の中の読み込み中のもの（.node）で app が動かせない
+    const lockedRuntime = async (from: string, to: string) => {
+      if (/[\\/]app$/.test(from)) throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+      return rename(from, to);
+    };
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await assert.rejects(bundle({ out, srcRoot: installRoot(), version: 'test-partial', renameImpl: lockedRuntime }), /何も消していません/);
+    assert.equal(await readFile(join(out, 'app', 'kept.txt'), 'utf8'), '動いている版', '移した分を戻していない');
+    assert.ok(existsSync(join(out, '.portable')) && existsSync(join(out, 'runtime', 'node.exe')));
+    assert.deepEqual((await readdir(out)).filter((n) => n.startsWith('.old-')), [], '退避フォルダが残っている');
+  });
+
+  test('改名が通るときは、古い runtime も退避フォルダも残さずに組み直す（対）', async () => {
+    const { mkdir, readdir } = await import('node:fs/promises');
+    const out = await tempDir('aas-rebundle-move-');
+    await writeFile(join(out, '.portable'), 'x');
+    await mkdir(join(out, 'runtime'), { recursive: true });
+    await writeFile(join(out, 'runtime', 'stale-node.exe'), 'old');
+    await mkdir(join(out, '.old-1-1'), { recursive: true }); // 前に途中で残った退避
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-move' });
+    assert.equal(existsSync(join(out, 'runtime', 'stale-node.exe')), false, '古い runtime が残っている');
+    assert.deepEqual((await readdir(out)).filter((n) => n.startsWith('.old-')), [], '退避フォルダが残っている');
+    assert.ok(existsSync(join(out, 'AdaptiveAIStudio.cmd')));
+  });
+
+  test('VERSION と app を持つ別のプロジェクトを、前に組んだものと見なさない', async () => {
+    const { mkdir } = await import('node:fs/promises');
+    const out = await tempDir('aas-rebundle-rails-');
+    await writeFile(join(out, 'VERSION'), '1.0.0');
+    await mkdir(join(out, 'app'), { recursive: true });
+    await writeFile(join(out, 'Gemfile'), 'source "x"');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await assert.rejects(bundle({ out, srcRoot: installRoot(), version: 'test-rails' }), /組んだものでない/);
+    assert.ok(existsSync(join(out, 'Gemfile')));
+  });
+
+  test('desktop.ini・Thumbs.db だけのフォルダは、断らずに組む（対）', async () => {
+    const out = await tempDir('aas-rebundle-ini-');
+    await writeFile(join(out, 'desktop.ini'), '[.ShellClassInfo]');
+    await writeFile(join(out, 'Thumbs.db'), 'x');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-ini' });
+    assert.ok(existsSync(join(out, 'AdaptiveAIStudio.cmd')));
+  });
+
   test('元が出力先の中にあれば組まずに止め、元を消さない', async () => {
     const out = await tempDir('aas-rebundle-inside-');
     const { mkdir } = await import('node:fs/promises');

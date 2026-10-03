@@ -11267,3 +11267,11 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
 - check:bundle は後片づけで落ちても（画面が止まらない等）「配る形のまま通りました」と出していた（終了コードは 1）。落ちたときはそう言う。この言葉の分岐には試験が無い
 - 見て不具合が無かった所: clean・cleanup、home.ts、run.mjs、is-main.mjs、launcher.cmd、NSI、cli/ui・stop
 触る場所: `scripts/bundle.mjs`（片づけの前の確かめ・`renameImpl`）、`start.cmd`、`src/cli/selftest.ts`・`tests-verdict.ts`、`scripts/check-bundle.mjs`
+- 見直しで直したこと（同じ日）:
+  - 入れ直しの片づけは、片づけるもの（残す data を除く）を、まず一つの退避フォルダ（`.old-<pid>-<時刻>`）へ改名で移す。一つでも移せなければ、移した分を戻して
+    何も消さずに止める。全部移せてから消す。runtime だけを確かめていたので、ほか（app の .node・data\bin の llama-server.exe）が掴まれていると途中まで消え、
+    確かめてから消すまでの間に起こされる隙もあった。改名は EPERM・EBUSY・EACCES のときだけ 200ms おきに 5 回までやり直す（一瞬掴まれただけで断らない）。
+    前に途中で残った退避フォルダは、次に組むときに消す
+  - 前に組んだものの見分けは、.portable か、VERSION・app・AdaptiveAIStudio.cmd が揃うこと（VERSION と app だけでは、別のプロジェクトを消しうる）。
+    desktop.ini・Thumbs.db は、断る理由にも消すものにも数えない
+  - 見直しは「goto の行き先のラベルを見ていない」と言ったが、既存の「飛び先の無い goto を残さない」が見ている（:updated を消すと落ちることを確かめた）
