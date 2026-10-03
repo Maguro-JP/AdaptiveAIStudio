@@ -53,7 +53,7 @@ import { DutyRoster, type DutyRecord } from '../harness/duties.ts';
 import { BUILTIN_DUTIES } from '../harness/builtin-duties.ts';
 import { readFile as readJson, mkdir } from 'node:fs/promises';
 import { RoleRegistry } from '../roles/registry.ts';
-import type { Tool, ApprovalRequest, ApprovalAnswer } from '../agent/tools/types.ts';
+import type { Tool, ApprovalRequest, ApprovalAnswer, RequestScope } from '../agent/tools/types.ts';
 import { toolsFor } from '../roles/registry.ts';
 import { buildSystemPrompt, type Role } from '../roles/role.ts';
 import { looksLikeChat } from './intent.ts';
@@ -78,7 +78,7 @@ import type { Harness } from '../harness/harness.ts';
 import { inspectGit } from '../agent/git.ts';
 import { diffStat, unifiedDiff } from '../agent/diff.ts';
 import { inspectDependencies, describeDependencies } from '../agent/dependencies.ts';
-import type { LaneConfig } from './scheduler.ts';
+import { ANY_PATH, type LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
 import { Conversation } from './conversation.ts';
 import { WorkspaceLock } from './workspace-lock.ts';
@@ -779,7 +779,8 @@ export class Session {
         : undefined;
       const baseline = probed?.result;
       // 「分からない」は失敗ではない。切り分けをやめるだけ。
-      const baselineFailed = probed?.status === 'failed';
+      // 測っている途中で止めた回は、落ちたのではない（止めると終わりの番号が無く、「落ちた」に見える）。
+      const baselineFailed = probed?.status === 'failed' && !ac.signal.aborted;
       if (baselineFailed) yield { type: 'baselineFailed' };
 
       const active = this.roles.active();
@@ -843,10 +844,16 @@ export class Session {
         beforeWrite: (path, previous) => this.undo.capture(path, previous),
         wrote: (path, diff, created) => this.#conv.diffs.set(path, { diff, created }),
         // 権限は役職から配る。調べるだけの担当は書き込む手段を持たない。
+        /*
+         * **規則の履歴は担当ごと。**ツールは共有の harness で包まれていて、入れ物を渡さないと全員が一つの履歴を見る。
+         * 読んでから書く規則が**別の担当が読んだこと**で通り、同じ中身の書き直しを止める規則は他人の書き込みで止まる
+         * （`Harness.forTask()` の注と同じ話）。依頼文と協議は依頼で一つ、数え（metrics）は既定の会話の札で数える。
+         */
         assign: (roleId) => {
           const role = this.roles.get(roleId);
           if (!role) return undefined;
-          return { system: systemFor(role), tools: toolsFor(role, this.toolPool) };
+          const scope: RequestScope = { instruction: () => request, history: [], forum: this.#forum, metricsKey: () => '' };
+          return { system: systemFor(role), tools: toolsFor(role, this.toolPool), request: scope };
         },
       });
 
@@ -879,9 +886,21 @@ export class Session {
         for (const path of [...found.changes.map((c) => c.path), ...found.unrecorded]) outsideChanged.add(path.replace(/\\/g, '/'));
       };
 
+      /*
+       * テストの数を担当が始まる前に記録する。`run_command` でテストを消して・skip して通した形を、
+       * 「通過」と言わない（送り口は比べていた。書くツールの分は規則が止めるが、コマンドの分は通る）。
+       */
+      const testsBefore = command ? await snapshotTests(root).catch(() => undefined) : undefined;
       /** 実際に書き換えられたファイル。宣言ではなく、起きたことを見る。 */
       const written = new Set<string>();
-      const gen = team.run(toWorkItems(plan), ac.signal);
+      /*
+       * 書けるのに書き込み先を挙げなかった担当は、誰とも同時に書かせない（`ANY_PATH`）。錠は宣言だけで掛かるので、
+       * 挙げなかった二人が同じファイルを読み・書き、後の全文書き込みが前の担当の仕事を黙って消していた（どちらも「完了」）。
+       */
+      const canWrite = (roleId: string): boolean => (this.roles.get(roleId)?.access ?? []).includes('write');
+      const items = toWorkItems(plan).map((w) =>
+        (w.writes ?? []).length === 0 && canWrite(w.roleId) ? { ...w, writes: [ANY_PATH] } : w);
+      const gen = team.run(items, ac.signal);
       let next = await gen.next();
       while (!next.done) {
         const ev = next.value;
@@ -915,18 +934,40 @@ export class Session {
       await takeOutside();
 
       // 検査。通らないものを人に見せない。
-      let verified: 'passed' | 'failed' | 'skipped' | 'preexisting' = 'skipped';
+      let verified: 'passed' | 'failed' | 'skipped' | 'preexisting' | 'unsure' = 'skipped';
       let verifyDetail: string | undefined;
-      if (command) {
+      /*
+       * **止めた回は確かめない。**`execCommand` は、渡す前に止められていた signal の abort を拾わない
+       * （聞き手を足した時点で、もう鳴り終わっている）。止めた後にここへ来ると、確かめのコマンドが
+       * 最後まで（既定 600 秒）走り、そのあいだ錠と「動いている」を抱えたままになる。
+       * 走らせても「落ちた」と出るだけで、止めた手を「駄目だった手」として覚える。
+       */
+      const stopped = (): boolean => ac.signal.aborted;
+      if (command && stopped()) verifyDetail = '止めたので、確かめていません';
+      if (command && !stopped()) {
         yield { type: 'verifying', command };
         const r = await runVerification(
           { command, root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal);
-        if (r.passed) verified = 'passed';
-        else if (baselineFailed) { verified = 'preexisting'; verifyDetail = firstLine(r.output); }
-        else {
+        const integrity: { ok: boolean; reason?: string; unsure?: string } = r.passed && testsBefore
+          ? await snapshotTests(root).then((after) => compareTests(testsBefore, after), () => ({ ok: true, unsure: 'テストを読めませんでした' }))
+          : { ok: true };
+        if (stopped()) verifyDetail = '止めたので、確かめを途中でやめました';
+        else if (!integrity.ok) { verified = 'failed'; verifyDetail = integrity.reason ?? 'テストが減っています'; }
+        else if (integrity.unsure) { verified = 'unsure'; verifyDetail = integrity.unsure; }
+        else if (r.passed) verified = 'passed';
+        // 時間切れは落ちたのではない（送り口と同じく「分からない」。全部を巻き戻す理由にしない）
+        else if (r.timedOut) { verified = 'unsure'; verifyDetail = '確かめが時間内に終わりませんでした'; }
+        // **作業前と同じ落ち方のときだけ「元から」。**落ち方を比べずに言うと、この回が増やした失敗まで
+        // 「今回の作業が原因ではありません」と言い、巻き戻しもしない（送り口は digest で比べている）。
+        else if (baselineFailed && baseline && digestFailure(baseline.output) === digestFailure(r.output)) {
+          verified = 'preexisting'; verifyDetail = firstLine(r.output);
+        } else {
           verified = 'failed';
           verifyDetail = r.output.split('\n').filter((l) => l.trim()).slice(-3).join(' / ');
         }
+        // 次の回の「前」を、この回の終わりの姿にする（送り口と同じ）。止めた・時間切れ・読めないなら忘れる。
+        if (!stopped() && !r.timedOut && verified !== 'unsure') this.baselineProbe.note(command, r);
+        else this.baselineProbe.invalidate(command);
       }
 
       const roleOf = new Map(plan.items.map((t) => [t.id, t.roleId]));
@@ -990,6 +1031,11 @@ export class Session {
         for (const text of done ? restoreWarnings(done) : []) yield { type: 'log', level: 'warn', text: `自動で戻しましたが、${text}` };
         const notRestored = [...new Set([...this.undo.peekSkipped(), ...(done?.failed ?? [])])].sort();
         rolledBack = done?.paths ?? [];
+        // 作業場は依頼の前に戻った。次の回の「前」も依頼の前のもの（戻せなかった分があれば分からないので忘れる）。
+        if (command) {
+          if (done && notRestored.length === 0 && baseline) this.baselineProbe.note(command, baseline);
+          else this.baselineProbe.invalidate(command);
+        }
         if (rolledBack.length > 0 || notRestored.length > 0) {
           yield { type: 'rolledBack', paths: rolledBack, ...(notRestored.length > 0 ? { notRestored } : {}) };
           // 開いている画面に、戻した中身を配る（「戻す」を押したときと同じ）。
@@ -1001,6 +1047,14 @@ export class Session {
         }
       }
       yield { type: 'accepted', report };
+
+      // 止めた回は覚えない・点を付けない。止めただけの手を「駄目だった手」として次の段取りに渡さない（送り口と同じ）。
+      if (stopped()) {
+        this.#harness.endTask('failed');
+        await this.#harness.metrics?.save();
+        this.markChanged();
+        return report;
+      }
 
       // 起きたことを覚える。同じ手を二度試さないため。
       this.memory.remember({
@@ -1020,7 +1074,7 @@ export class Session {
         outcome: verified === 'passed' ? 'worked' : 'failed',
         source: 'plan',
       });
-      this.#gradeRecall(verified === 'passed' ? 'passed' : verified === 'failed' ? 'failed' : 'notRun');
+      this.#gradeRecall(verified === 'passed' ? 'passed' : verified === 'failed' ? 'failed' : verified === 'unsure' ? 'unsure' : 'notRun');
       this.#compactMemory();
       // 止めた規則が、通り道になったのか邪魔になったのかは、結末で決まる。
       this.#harness.endTask(report.verdict === 'accepted' ? 'completed' : 'failed');

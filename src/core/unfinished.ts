@@ -248,6 +248,17 @@ export class UnfinishedWork {
     return { gaveUp: false, attempts };
   }
 
+  /**
+   * 回数を数えずに後ろへ回す。止めた回（■）のため。数えると、止めただけで諦める方へ進む。
+   */
+  postpone(id: string, now = Date.now()): Promise<void> {
+    return inOrder(this.#path, async () => {
+      const item = (await this.list({ strict: true })).find((u) => u.id === id);
+      if (!item) return;
+      await this.#append({ t: 'bump', id, attempts: item.attempts, nextAt: now + BACKOFF_MS[0]! });
+    });
+  }
+
   /** 片づいた。 */
   done(id: string): Promise<void> {
     return inOrder(this.#path, () => this.#append({ t: 'close', id, how: 'done' }));

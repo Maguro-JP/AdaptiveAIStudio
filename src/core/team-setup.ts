@@ -25,7 +25,11 @@ import { buildSystemPrompt } from '../roles/role.ts';
  * 入口はモデル（llama-server）を起こす前にこれを呼ぶ。起こした後で落ちると、Windows では llama-server が残る
  * （止める付き添いが無いので、VRAM と口を抱えたまま）。
  */
-export function parseTasks(text: string, laneIds: readonly string[]): WorkItem[] {
+export function parseTasks(
+  text: string, laneIds: readonly string[],
+  /** 役職を知っているか。渡せば、知らない roleId を断る（素通しにすると、全部のツールで働かせてしまう）。 */
+  knowsRole?: (roleId: string) => boolean,
+): WorkItem[] {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -33,12 +37,23 @@ export function parseTasks(text: string, laneIds: readonly string[]): WorkItem[]
     throw new Error(`作業指示書を JSON として読めません: ${(e as Error).message}`);
   }
   if (!Array.isArray(raw)) throw new Error('作業指示書は作業の並び（[ ... ]）にしてください');
+  const seen = new Set<string>();
+  const strings = (v: unknown): boolean => v === undefined || (Array.isArray(v) && v.every((x) => typeof x === 'string'));
   for (const item of raw as Partial<WorkItem>[]) {
     if (typeof item?.id !== 'string' || typeof item.instruction !== 'string' || typeof item.laneId !== 'string') {
       throw new Error(`作業に id・instruction・laneId が揃っていません: ${JSON.stringify(item)}`);
     }
+    // 同じ id が二つあると、後の方は一度も走らず、数にも出ない（「完了 1/1」と出る）
+    if (seen.has(item.id)) throw new Error(`タスクの id "${item.id}" が二つあります。別の id にしてください。`);
+    seen.add(item.id);
     if (!laneIds.includes(item.laneId)) {
       throw new Error(`タスク "${item.id}" のレーン "${item.laneId}" が設定にありません。`);
+    }
+    if (!strings(item.deps) || !strings(item.writes)) {
+      throw new Error(`タスク "${item.id}" の deps・writes は文字列の並びにしてください。`);
+    }
+    if (item.roleId !== undefined && (typeof item.roleId !== 'string' || (knowsRole && !knowsRole(item.roleId)))) {
+      throw new Error(`タスク "${item.id}" の役職 "${String(item.roleId)}" がありません。`);
     }
   }
   return raw as WorkItem[];
@@ -129,7 +144,9 @@ export async function wireTeam(
     // **別の担当が読んだこと**で通ってしまう（`Harness.forTask()`）。
     toolsFor: (item) => {
       const role = item.roleId ? roles.get(item.roleId) : undefined;
-      return harness.forTask().wrapAll(role ? toolsForRole(role, pool) : bare, () => item.instruction);
+      // 役職を名乗ったのに見つからない担当へ、全部のツールを渡さない（読むだけにする）。名乗っていない担当は今までどおり全部。
+      const tools = role ? toolsForRole(role, pool) : item.roleId ? pool.read : bare;
+      return harness.forTask().wrapAll(tools, () => item.instruction);
     },
     /*
      * 役職で絞ってから包む。**包みを外さない。**
