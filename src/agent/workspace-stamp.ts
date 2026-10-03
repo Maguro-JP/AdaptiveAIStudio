@@ -202,24 +202,27 @@ export type HeadContent =
   | { kind: 'unavailable'; why: 'tooLarge' | 'symlink' | 'submodule' | 'unreadable' };
 
 /**
- * HEAD を引くときの道。`spec` は ls-tree に渡す pathspec、`object` は `HEAD:` の後ろに付ける道。
+ * cwd からの道（`./道`）で HEAD に何も無かったときに、引き直す道。`spec` は ls-tree に渡す pathspec、`object` は `HEAD:` の後ろ。
  *
- * 大小を区別するリポジトリと、作業場が根のときは、cwd からの道（今までどおり）。大小を区別しないリポジトリで作業場が根の下に
- * あるときは、作業場までのフォルダを HEAD の中で一段ずつ大小を無視して引き、HEAD の綴りで根からの道を作る
- * （`ls-tree` は `icase` を受け付けない）。引けなければ cwd からの道に戻す（今までと同じ答えになる）。
+ * 大小を区別しないリポジトリで、作業場までのフォルダの大小がディスクと HEAD で違うと（`workspaceStamp` が拾う形）、cwd の分は
+ * ディスクの大小で HEAD と照らされて何も引けない。作業場までのフォルダを HEAD の中で一段ずつ引き、HEAD の綴りで根からの道を作る
+ * （`ls-tree` は `icase` を受け付けない）。**綴りが完全に一致する名前を先に取る。**大小だけ違う二つのフォルダが HEAD に在るとき、
+ * 大小を無視した最初の一致を取ると、別のフォルダのファイルを「前」にして、戻すときにその中身を書いていた。
+ * 当てはまらない（区別する・作業場が根・HEAD に無い）なら undefined。git が落ちたら 'unreadable'（「無い」と読まない）。
  */
-async function headPathOf(root: string, relPath: string): Promise<{ spec: string; object: string }> {
-  const plain = { spec: `./${relPath}`, object: `./${relPath}` };
+async function headPathAgain(root: string, relPath: string): Promise<{ spec: string; object: string } | 'unreadable' | undefined> {
   const prefix = await prefixOf(root);
-  if (!prefix || !(await ignoresCase(root))) return plain;
+  if (prefix === undefined) return 'unreadable';
+  if (prefix === '' || !(await ignoresCase(root))) return undefined;
   let at = '';
   // `--full-tree`: ls-tree は cwd の分で絞って並べるので、作業場の中から引くと根の tree が空に見える
   for (const part of prefix.split('/').filter((x) => x !== '')) {
     const listed = await gitOut(['ls-tree', '--full-tree', '-z', '--name-only', `HEAD:${at}`], root);
-    if (listed === undefined) return plain;
+    if (listed === undefined) return 'unreadable';
+    const names = listed.split('\0');
     const want = part.toLowerCase();
-    const hit = listed.split('\0').find((name) => name.toLowerCase() === want);
-    if (hit === undefined) return plain;
+    const hit = names.find((name) => name === part) ?? names.find((name) => name.toLowerCase() === want);
+    if (hit === undefined) return undefined;
     at += `${hit}/`;
   }
   return { spec: `:(top,literal)${at}${relPath}`, object: `${at}${relPath}` };
@@ -238,11 +241,20 @@ export async function headContent(root: string, relPath: string, maxBytes: numbe
   /*
    * 引く道。普通は cwd からの道（`./道`）。大小を区別しないリポジトリで、作業場までのフォルダの大小がディスクと HEAD で
    * 違うと（`workspaceStamp` が拾う形）、cwd の分はディスクの大小で HEAD と照らされて**何も引けず**、「前は無かった」と
-   * 記録して、戻すときにそのファイルを消していた。そのときは HEAD の大小で作業場までの道を引き、根からの道で引く
+   * 記録して、戻すときにそのファイルを消していた。そのときは HEAD の大小で作業場までの道を引き直す（`headPathAgain`）
    */
-  const at = await headPathOf(root, relPath);
+  let object = `./${relPath}`;
   // `ls-tree -l` は一度で、在るか・種類（mode）・大きさを返す。
-  const entry = await gitOut(['ls-tree', '-l', '-z', 'HEAD', '--', at.spec], root);
+  let entry = await gitOut(['ls-tree', '-l', '-z', 'HEAD', '--', object], root);
+  // 普通の形では git は一回で済む。cwd からの道で何も無かったときだけ、HEAD の綴りで引き直す
+  if (entry === '') {
+    const again = await headPathAgain(root, relPath);
+    if (again === 'unreadable') return { kind: 'unavailable', why: 'unreadable' };
+    if (again !== undefined) {
+      entry = await gitOut(['ls-tree', '-l', '-z', 'HEAD', '--', again.spec], root);
+      object = again.object;
+    }
+  }
   // **git が落ちたのを「無い」と読まない。**HEAD に無い道は、正常に終わって空を返す。落ちた（起動の失敗・壊れた ref・読めない object）
   // のを「無い」と読むと、HEAD に在るファイルを「前は無かった」と記録し、戻すときに消していた
   if (entry === undefined) {
@@ -258,7 +270,7 @@ export async function headContent(root: string, relPath: string, maxBytes: numbe
   if (mode === '120000') return { kind: 'unavailable', why: 'symlink' };
   if (type !== 'blob') return { kind: 'absent' };
   if (Number(size) > maxBytes) return { kind: 'unavailable', why: 'tooLarge' };
-  const bytes = await gitBytes(['cat-file', '--filters', `HEAD:${at.object}`], root, maxBytes * 2 + 1024);
+  const bytes = await gitBytes(['cat-file', '--filters', `HEAD:${object}`], root, maxBytes * 2 + 1024);
   if (bytes === undefined) return { kind: 'unavailable', why: 'unreadable' };
   return { kind: 'content', content: contentOf(bytes) };
 }

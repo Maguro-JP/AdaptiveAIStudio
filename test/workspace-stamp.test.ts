@@ -150,6 +150,25 @@ describe('作業場の記録', () => {
     if (before.kind === 'content') assert.equal(String(before.content), 'a\n');
   });
 
+  test('**大小だけ違う二つのフォルダが HEAD に在っても、作業場のフォルダのファイルを「前」にする**', async () => {
+    // 区別する機械で作ったリポジトリ。大小を無視した最初の一致（並びで先の `Src`）を取ると、別のフォルダの中身を「前」にして、
+    // 戻すときにその中身を書く
+    const home = await tempDir('aas-stamp-case-');
+    const root = join(home, 'repo');
+    await mkdir(join(root, 'Src', 'app'), { recursive: true });
+    await mkdir(join(root, 'src', 'app'), { recursive: true });
+    await writeFile(join(root, 'Src', 'app', 'a.txt'), 'upper\n');
+    await writeFile(join(root, 'src', 'app', 'a.txt'), 'lower\n');
+    git(root, 'init', '-q');
+    git(root, 'config', 'core.autocrlf', 'false');
+    git(root, 'add', '-A');
+    git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+    git(root, 'config', 'core.ignorecase', 'true');
+    const before = await headContent(join(root, 'src', 'app'), 'a.txt', 1024);
+    assert.equal(before.kind, 'content');
+    if (before.kind === 'content') assert.equal(String(before.content), 'lower\n', '別のフォルダ（Src）の中身を「前」にした');
+  });
+
   test('大小を区別しないリポジトリでも、名前の似た隣のフォルダは数えない', async () => {
     const home = await tempDir('aas-stamp-case-');
     const root = join(home, 'repo');

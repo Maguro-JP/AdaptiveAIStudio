@@ -3027,6 +3027,7 @@ export const PANELS = {
      */
     let savingNow = null;
     /** 保存の返事を待つ間に、もう一度保存を頼まれた。 */
+    /** 保存の返事を待つ間に頼まれた保存（作業場と名前の組）。頼まれていなければ false。 */
     let storeAgain = false;
     /*
      * 前のファイルの返事を待つ間に、移った先で保存を頼まれていたら、いま続けて保存する。待つ間に頼まれた分は覚えるだけで
@@ -3035,8 +3036,10 @@ export const PANELS = {
      */
     const againHere = () => {
       if (!storeAgain) return;
+      const asked = storeAgain;
       storeAgain = false;
-      void store();
+      // 頼まれたのがいま開いているファイル（同じ作業場）のときだけ。前のファイルで二度押した分を、移った先で保存しない
+      if (asked === K(path)) void store();
     };
 
     const store = async () => {
@@ -3048,7 +3051,8 @@ export const PANELS = {
        * まま届き、一度目が書いた中身を「別の所で変わりました（AI の書き換えなど）」と断られる。自分の保存を
        * 身に覚えのない書き換えとして知らされる。返事のあとに、まだ直しが在れば続けて保存する。
        */
-      if (savingNow !== null) { storeAgain = true; return; }
+      // どのファイル（作業場と名前の組）で頼まれたかを覚える
+      if (savingNow !== null) { storeAgain = K(path); return; }
       storeAgain = false;
       save.disabled = true;
       state.textContent = '保存しています…';
@@ -3457,14 +3461,15 @@ export const PANELS = {
           void (async () => {
             // 読みに行っている間に別のファイルへ移ったら、移った先へ前のファイルの中身を入れない。
             const at = path;
+            const atRoot = rootAt;
             const r = await fetch(`/api/file?path=${encodeURIComponent(at)}`, { signal: AbortSignal.timeout(20000) })
               .catch(() => null);
             const said = r ? await r.json().catch(() => null) : null;
-            if (path !== at || discarded()) return;
+            if (path !== at || rootAt !== atRoot || discarded()) return;
             // 断られたら、その理由を出す（utf8 でない形に書き換えられた等）。
             if (!r || !r.ok || !said) { state.textContent = said?.error ?? '読み直せませんでした'; return; }
             // 作業場が変わっていたら、別の作業場の同じ名前のファイルを AI の版として出さない
-            if (typeof said.root === 'string' && rootAt && said.root !== rootAt) {
+            if (typeof said.root === 'string' && atRoot && said.root !== atRoot) {
               state.textContent = '作業場が変わったので、この直しの AI の版は出せません';
               return;
             }

@@ -1929,6 +1929,28 @@ describe('エディタの順番と作業場', () => {
     assert.equal(disk['a.txt'], 'a2\n');
   });
 
+  test('前のファイルで二度押した保存を、移った先のファイルで勝手に保存しない（対）', async () => {
+    const disk: Record<string, string> = { 'a.txt': 'a\n', 'b.txt': 'b\n' };
+    const t = open(disk);
+    const openFile = t.ctx.openFile as (p: string) => void;
+    openFile('a.txt');
+    await until(() => t.area().value === 'a\n', 'a が開く');
+    t.area().value = 'a2\n';
+    t.area().fire('input');
+    const g = gateFetch((_u, init) => init?.method === 'PUT');
+    t.key('s');
+    t.key('s'); // a の返事を待つ間の、a での二度目
+    openFile('b.txt');
+    await until(() => t.area().value === 'b\n', 'b が開く');
+    t.area().value = 'b2\n';
+    t.area().fire('input'); // b は直しただけで、保存は押していない
+    g.release();
+    await until(() => disk['a.txt'] === 'a2\n', 'a の保存が通る');
+    await settle();
+    g.restore();
+    assert.equal(disk['b.txt'], 'b\n', '保存を押していない b を保存した');
+  });
+
   test('**作業場を変えたあと、前の作業場で直したものを新しい作業場へ保存しない・預かりも混ぜない**', async () => {
     // 同じリポジトリの二つの写し（同じ名前・同じ中身）。
     const disk: Record<string, string> = { 'README.md': 'same\n' };
