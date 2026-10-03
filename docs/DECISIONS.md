@@ -300,6 +300,7 @@
 - 出力の上限で切れた返事を、答え終えたことにしない
 - エディタで、CR だけの行末のファイルを開いただけで書き換えない
 - 古い本体の保存が終わってから、新しい本体を組む
+- 同じプロセスで動くモデルも、上限で切れたら length で終える
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -11127,7 +11128,7 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
 - 上限で引数の JSON が切れた呼び出しには、「小さく分けて呼び直して」と返す。同じ大きさで呼び直しても同じところで切れるため
 - 選ばなかった案: 切れても `completed` のまま detail に添える。記憶が「効いた」と数え、確かめの判定も完了として進むので採らない
 - 残したもの: 同じプロセスで動くモデル（inproc）は、上限に届いても `stop` を返す。ライブラリの `prompt()` が止まった理由を返さないため。
-  直すなら `promptWithMeta` の `stopReason` を見て `length` を返す
+  直すなら `promptWithMeta` の `stopReason` を見て `length` を返す（同じ日に直した。下の「同じプロセスで動くモデルも」）
 - 試験: `test/cut-off.test.ts`。orchestrator と loop のどちらの直しを外しても 5 件中 4 件が落ちることを見た
 触る場所: `src/core/orchestrator.ts`（done）、`src/agent/loop.ts`（cutOff）、`src/runtime/inproc.ts`（inproc の終わり方）
 
@@ -11148,3 +11149,12 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
 - 選ばなかった案: close を終えてから `#session` を空ける。その間に来た送りが、畳んでいる本体で走り出すので採らない
 - 試験: `test/retire-order.test.ts`。古い本体の close を止めたまま新しい本体を頼み、組まれないことを見る。直す前の版で落ちることを見た
 触る場所: `src/ui/server.ts`（`#closing`・`session()`・`#retireSession`）
+
+## 2026-10-03  同じプロセスで動くモデルも、上限で切れたら length で終える
+
+- ライブラリの `prompt()` は、中で `promptWithMeta()` を呼んで本文だけを返す（node-llama-cpp 3.21.1 の dist で読んだ）。止まった理由（`stopReason`）を捨てるので、
+  上限（`maxTokens`）に届いても `stop` で終えていた。`stop` は「言い終えた」なので、上の層の「切れたら続きを求める」が効かなかった
+- `promptWithMeta` が在ればそれで答えさせ、`stopReason === 'maxTokens'` なら流す道もまとめて返す道も `length` で終える。無ければ今までどおり `prompt`（試験のモックは持たないものが多い）
+- こちらが渡す選択肢は両方で同じ扱い（`prompt` が落とすのは `evaluationPriority` だけで、こちらは渡していない）
+- 試験: `test/inproc-cut-off.test.ts`。直す前の版で、上限で切れた 2 件が落ちることを見た
+触る場所: `src/runtime/inproc.ts`（`askLane`・`ChatLane.promptWithMeta`）

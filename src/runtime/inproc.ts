@@ -1275,6 +1275,7 @@ export class InProcRuntime implements LocalRuntime {
       // 道具を呼ぼうとして止めた道は、**投げて返ることがある**。
       // そのときも、呼ぼうとしたことは持ち帰る（例外に化けさせない）。
       let text = '';
+      let cutOff = false;
       /*
        * **まとめて返す道でも、暴走を切る。**
        *
@@ -1288,7 +1289,7 @@ export class InProcRuntime implements LocalRuntime {
       let saw = '';
       let cutAt = -1;
       try {
-        text = await lane.prompt(asked, {
+        ({ text, cutOff } = await askLane(lane, asked, {
           ...opts,
           onTextChunk: (t: string) => {
             if (cutAt >= 0) return;
@@ -1299,7 +1300,7 @@ export class InProcRuntime implements LocalRuntime {
             this.#opts.onLog?.(runawayNote(saw, at));
             stop.abort();
           },
-        });
+        }));
       } catch (e) {
         if (calls.length === 0) throw e;
       }
@@ -1321,7 +1322,7 @@ export class InProcRuntime implements LocalRuntime {
             content: text,
             ...(calls.length > 0 ? { tool_calls: calls.map(toWire) } : {}),
           },
-          finish_reason: calls.length > 0 ? 'tool_calls' : 'stop',
+          finish_reason: calls.length > 0 ? 'tool_calls' : cutOff ? 'length' : 'stop',
         }],
       }));
       return;
@@ -1344,8 +1345,10 @@ export class InProcRuntime implements LocalRuntime {
       })}\n\n`);
     };
     /** 呼ぼうとした道具を流して終える。呼んでいなければ、ただ終える。 */
+    /** 上限で切れたか。切れたものを `stop`（言い終えた）で終えない。 */
+    let cutOff = false;
     const finish = () => {
-      if (calls.length === 0) { chunk({}, 'stop'); return; }
+      if (calls.length === 0) { chunk({}, cutOff ? 'length' : 'stop'); return; }
       calls.forEach((c, index) => chunk({ tool_calls: [{ index, ...toWire(c) }] }));
       chunk({}, 'tool_calls');
     };
@@ -1395,7 +1398,7 @@ export class InProcRuntime implements LocalRuntime {
     try {
       chunk({ role: 'assistant' });
       let thought = 0;
-      await lane.prompt(asked, {
+      ({ cutOff } = await askLane(lane, asked, {
         ...opts,
         // 考えごとの分も含めて、最初の 1 トークンを測る。本文だけ見ていると、
         // 考えごとの間は「何も出ていない」としか分からない。
@@ -1427,7 +1430,7 @@ export class InProcRuntime implements LocalRuntime {
           this.#opts.onLog?.(runawayNote(all, at));
           stop.abort();
         },
-      });
+      }));
       if (filter) {
         const salvaged = filter.end();
         if (salvaged.text) chunk({ content: salvaged.text });
@@ -1519,6 +1522,11 @@ interface LibFunction {
  */
 export interface ChatLane {
   prompt: (text: string, opts?: PromptOptions) => Promise<string>;
+  /**
+   * 止まった理由も返す口（本物の `prompt` はこれの本文だけを返す）。`maxTokens` なら上限で切れた。
+   * 試験のモックには無いことがあるので、無ければ `prompt` を使う。
+   */
+  promptWithMeta?: (text: string, opts?: PromptOptions) => Promise<{ responseText: string; stopReason?: string }>;
   setChatHistory: (history: unknown[]) => void;
   /** ライブラリが選んだ型。試験の差し替えには無いので、あってもなくてもよい。 */
   chatWrapper?: { wrapperName?: string };
@@ -1872,4 +1880,14 @@ export function describeSpeed(t: {
     : `最初の 1 トークンまで ${sec((t.firstAt || t.ended) - t.started).toFixed(1)} 秒`;
   const outMs = t.firstAt ? t.ended - t.firstAt : 0;
   return `答えました: ${input}、出力 ${t.generated} トークン（${sec(outMs).toFixed(1)} 秒・${rate(t.generated, outMs)} tok/s）`;
+}
+
+/**
+ * 答えさせ、上限で切れたかも返す。**上限で切れたものを `stop`（言い終えた）で返さない。**
+ * 上の層は `stop` を「言い終えた」と読むので、切れた答えを完了にしていた。
+ */
+async function askLane(lane: ChatLane, text: string, opts: PromptOptions): Promise<{ text: string; cutOff: boolean }> {
+  if (!lane.promptWithMeta) return { text: await lane.prompt(text, opts), cutOff: false };
+  const r = await lane.promptWithMeta(text, opts);
+  return { text: r.responseText, cutOff: r.stopReason === 'maxTokens' };
 }
