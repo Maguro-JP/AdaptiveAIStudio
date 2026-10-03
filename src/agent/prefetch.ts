@@ -57,14 +57,16 @@ export class Prefetcher {
   /** 裏で走らせる。待たない。 */
   start(signal?: AbortSignal): void {
     if (this.#inFlight) return;
-    this.#inFlight = this.#build(signal).then(
-      (s) => { this.#snapshot = s; return s; },
+    // 作り直しが重なったら、一番新しい回の結果だけを覚える（前の回が後から終わって、古い一覧で上書きしていた）
+    const mine: Promise<ProjectSnapshot> = this.#build(signal).then(
+      (s) => { if (this.#inFlight === mine) this.#snapshot = s; return s; },
       // 先読みの失敗で本体を止めない。無いなら無いで作業は始められる。
       () => ({
         files: [], recentFiles: [], commands: {},
         builtAt: Date.now(), ready: [],
       } satisfies ProjectSnapshot),
     );
+    this.#inFlight = mine;
   }
 
   /** 完了していれば即座に、途中なら完了を待って返す。 */

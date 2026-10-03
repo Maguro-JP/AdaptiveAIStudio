@@ -51,3 +51,18 @@ describe('切り方', () => {
     assert.deepEqual(splitChain('a\nb'), ['a', 'b']);
   });
 });
+
+describe('format という語だけでは止めない', () => {
+  for (const command of ['git log --format=%h -1', 'git log --pretty=format:%s -1']) {
+    test(`通す: ${command}`, async () => {
+      const r = await tool.run({ command }, ctx);
+      assert.doesNotMatch(r.content, /危険/, r.content);
+    });
+  }
+  test('ドライブの初期化（format C:）は止める', async () => {
+    const t = createRunCommandTool({ allowed: ['echo', 'format'] });
+    const r = await t.run({ command: 'format C: /q' }, ctx);
+    assert.equal(r.isError, true);
+    assert.match(r.content, /危険/);
+  });
+});

@@ -32,7 +32,7 @@ import { saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises';
 import { readJournal, writeWhole, type JournalRead } from '../core/journal-file.ts';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { revealCommand } from '../core/opener.ts';
 import { join, dirname, extname, normalize, resolve as resolvePath, relative, isAbsolute } from 'node:path';
@@ -461,6 +461,14 @@ export class UiServer {
   /** いま配っている作業場。変わったら立て直す。 */
   #previewRoot?: string;
   #seq = 0;
+  /**
+   * 承認の名前に付ける、起動ごとのタグ。番号は起動のたびに 1 から数え直すので、タグが無いと、立ち上げ直す前の画面に
+   * 残った承認の箱（同じ番号）を押したとき、立ち上げ直した後の別の承認を通していた（見て許可した中身と、
+   * 通した中身が違う）。
+   */
+  readonly #approvalTag = randomBytes(4).toString('hex');
+  /** 計画を動かしている間。計画は会話の名前を付けずに「作業中」を流すので、繋ぎ直した画面はここを見る。 */
+  #planning = false;
 
   constructor(opts: UiServerOptions) {
     this.#opts = opts;
@@ -1092,7 +1100,7 @@ export class UiServer {
       return Promise.resolve(true);
     }
 
-    const id = `a${++this.#seq}`;
+    const id = `a${this.#approvalTag}-${++this.#seq}`;
     return new Promise<ApprovalAnswer>((resolve) => {
       let done = false;
       const finish = (ok: ApprovalAnswer) => {
@@ -1593,6 +1601,23 @@ export class UiServer {
       for (const ac of this.#background) ac.abort();
       this.#session?.abort();
       return send(res, 200, { ok: true });
+    }
+
+    /*
+     * 待っている承認と、本体が動いているか。承認は会話によらないので、画面がどこを見ていても、欄を空にした後や
+     * 出来事の流れを繋ぎ直した後に、ここから出し直す（出さないと押す口が無く、本体は 10 分待ってから断る）
+     */
+    if (path === '/api/approvals' && req.method === 'GET') {
+      const live = this.#session;
+      /*
+       * `planning` は名前の無い「作業中」（計画）。画面は、見ている会話が動いておらず計画も動いていなければ止まったと読む。
+       * 本体の動き全部（順番待ちの別の会話・考えごと）を返すと、見ている会話が終わっていても「作業中」から戻らなかった
+       */
+      return send(res, 200, {
+        approvals: this.#waitingApprovals(),
+        busy: live !== undefined && this.#mainBusy(live),
+        planning: this.#planning,
+      });
     }
 
     if (path === '/api/approve' && req.method === 'POST') {
@@ -3868,6 +3893,7 @@ export class UiServer {
   }
 
   async #drivePlan(session: Session, text: string, said?: string): Promise<void> {
+    this.#planning = true;
     this.broadcast({ type: 'busy', busy: true });
     try {
       for await (const event of session.plan(text, said)) {
@@ -3876,6 +3902,7 @@ export class UiServer {
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
     } finally {
+      this.#planning = false;
       this.broadcast({ type: 'busy', busy: false });
       this.broadcast({ type: 'stateChanged' });
     }

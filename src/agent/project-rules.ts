@@ -101,6 +101,8 @@ export function fitRulesWithDropped(
 }
 
 /** 行の切れ目で切る。文の途中で切ると、決まりが逆の意味になることがある。 */
+const CUT_NOTE = '\n…（長いので、ここまで）';
+
 function cut(text: string, budget: number, count: Count = estimateTokens): string {
   const lines = text.split('\n');
   const kept: string[] = [];
@@ -157,9 +159,10 @@ function fitSections(
    * ここを落としてしまい、元からあったテストが捕まえた。
    */
   if (parts.length <= 1) {
-    const keep = cut(text, budget, count);
+    // 切ったと言う一行の分も、先に取っておく（取っておかないと予算を超え、呼ぶ側が決まりを丸ごと落とす）
+    const keep = cut(text, budget - count(CUT_NOTE), count);
     return keep.length > 0
-      ? { text: `${keep}\n…（長いので、ここまで）`, missing: [] }
+      ? { text: `${keep}${CUT_NOTE}`, missing: [] }
       : { text: '', missing: parts.map((p) => p.head) };
   }
   const kept: string[] = [];
@@ -274,10 +277,20 @@ export class ProjectRules {
     const rules = await this.all(now);
     if (rules.length === 0 || budget <= 0) return { text: '', dropped: [] };
     const frame = c(rulesBlock([{ ...rules[0]!, text: '' }]));
-    const { kept, dropped } = fitRulesWithDropped(rules, Math.max(0, budget - frame), c);
-    const made = rulesBlock(kept);
-    if (c(made) > budget) return { text: '', dropped: rules.map((r) => r.path) };
-    return { text: made, dropped };
+    /*
+     * 組んだものが予算を超えたら、超えた分だけ詰めて組み直す（二つ目からの区切りの行や、繋いだときの数え方の差で超えることがある）。
+     * 超えたら丸ごと捨てていたので、少し超えただけで決まりが一つも渡らなかった
+     */
+    let room = Math.max(0, budget - frame);
+    for (let tries = 0; tries < 4; tries += 1) {
+      const { kept, dropped } = fitRulesWithDropped(rules, room, c);
+      const made = rulesBlock(kept);
+      const over = c(made) - budget;
+      if (over <= 0) return { text: made, dropped };
+      if (room <= 0) break;
+      room = Math.max(0, room - over - 1);
+    }
+    return { text: '', dropped: rules.map((r) => r.path) };
   }
 
   /** いま効いている決まりを、窓に収まる形で。 */
@@ -291,10 +304,7 @@ export class ProjectRules {
      * 渡した側は残りが在ると思って次を組むので、**後ろに置いたものが
      * 丸ごと落ちる**（作業場の地図が、どの窓でも 0 になった）。
      */
-    const frame = c(rulesBlock([{ ...rules[0]!, text: '' }]));
-    const made = rulesBlock(fitRules(rules, Math.max(0, budget - frame), c));
-    // 組み上げてから、もう一度測る。超えていたら載せない
-    // （途中で切れた決まりは、書いていないより悪いことがある）。
-    return c(made) <= budget ? made : '';
+    // 組み方は blockWithDropped と同じ（超えたら詰めて組み直す。それでも入らなければ載せない）
+    return (await this.blockWithDropped(budget, now, c)).text;
   }
 }

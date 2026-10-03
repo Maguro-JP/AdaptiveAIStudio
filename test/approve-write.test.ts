@@ -23,6 +23,10 @@ let fake: FakeServer;
 let srv: InstanceType<typeof UiServer>;
 let url = '';
 let work = '';
+/** 承認を待っている間に `/api/approvals` が、その承認と「動いている」を返したか。 */
+let listed = false;
+/** 届いた承認の名前。 */
+let approvalId = '';
 
 before(async () => {
   work = await tempDir('aas-approve-work-');
@@ -68,6 +72,8 @@ async function turn(approved: boolean): Promise<{ asked: boolean; types: string[
   const types: string[] = [];
   let asked = false;
   let ended = false;
+  listed = false;
+  approvalId = '';
 
   const pump = (async () => {
     let buf = '';
@@ -87,6 +93,13 @@ async function turn(approved: boolean): Promise<{ asked: boolean; types: string[
             types.push(ev.type === 'session' ? `s/${ev.event?.type}` : String(ev.type));
             if (ev.type === 'approval' && !asked) {
               asked = true;
+              // 待っている承認は、流れの外からも取れる（繋ぎ直した画面・開き直した画面が出し直す）
+              const waiting = await (await fetch(`${url}/api/approvals`)).json() as {
+                approvals: Array<{ id: string }>; busy: boolean; planning: boolean;
+              };
+              // 会話の依頼は計画ではない（計画と言うと、見ている会話が終わっても画面が「作業中」から戻らない）
+              listed = waiting.approvals.some((a) => a.id === ev.id) && waiting.busy && !waiting.planning;
+              approvalId = String(ev.id);
               await fetch(`${url}/api/approve`, {
                 method: 'POST', headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ id: ev.id, approved }),
@@ -115,6 +128,9 @@ describe('画面から書き換える', () => {
   test('拒否したら、ファイルは変わらない', async () => {
     const r = await turn(false);
     assert.ok(r.asked, `承認を求めてこない（黙って書き換えている）: ${r.types.join(',')}`);
+    assert.ok(listed, '待っている承認を /api/approvals が返さない');
+    // 起動ごとのタグが付く。番号だけだと、立ち上げ直す前の画面の箱が、立ち上げ直した後の別の承認を通す
+    assert.match(approvalId, /^a[0-9a-f]{8}-\d+$/, `承認の名前に起動ごとのタグが無い: ${approvalId}`);
     assert.equal(await readFile(join(work, 'src', 'a.txt'), 'utf8'), 'もとの中身\n',
       '拒否したのに書き換わっている');
   });

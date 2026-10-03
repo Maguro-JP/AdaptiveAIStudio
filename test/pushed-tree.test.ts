@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile, copyFile, readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join, dirname } from 'node:path';
+import { join, dirname, delimiter } from 'node:path';
 import { tempDir } from './tmp.ts';
 // @ts-expect-error 型定義を置かない開発用の script。ここだけ読む。
 import { pushedTree } from '../scripts/pushed-tree.mjs';
@@ -152,7 +152,10 @@ async function sandbox(check: string): Promise<{ work: string; remote: string; r
 /** 押してみる。止まったかどうかと、出てきた文を返す。 */
 function push(work: string, args: string[] = ['-u', 'origin', 'main']): { ok: boolean; text: string } {
   // `node` を PATH に載せる。フックは `node` と書いて呼ぶ。
-  const env = { ...process.env, PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ''}` };
+  // 区切りは `delimiter`（Windows は `;`）。名前も元の綴り（Windows は `Path`）に合わせる。
+  // `PATH` を別に足すと二つ並び、子へはどちらか一方しか渡らない。
+  const key = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
+  const env = { ...process.env, [key]: `${dirname(process.execPath)}${delimiter}${process.env[key] ?? ''}` };
   try {
     const out = execFileSync('git', ['push', ...args],
       { cwd: work, encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -180,7 +183,9 @@ describe('フックが、本当に止める', sourceOnly, () => {
       "import { execFileSync } from 'node:child_process';\n"
       + "const at = new URL('../src/b.ts', import.meta.url);\n"
       + "writeFileSync(at, 'export const b = 2;\\n');\n"
-      + "const cwd = new URL('..', import.meta.url).pathname;\n"
+      // `.pathname` は Windows で `/C:/Users/...` になり、cwd として無い道なので git を起こせない（ENOENT）
+      + "import { fileURLToPath } from 'node:url';\n"
+      + "const cwd = fileURLToPath(new URL('..', import.meta.url));\n"
       + "execFileSync('git', ['add', '-A'], { cwd });\n"
       + "execFileSync('git', ['commit', '-q', '-m', '確かめの裏で入れた'], { cwd });\n"
       + 'process.exit(0);\n');

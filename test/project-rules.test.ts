@@ -308,3 +308,17 @@ describe('決まりのファイルが読めないとき', () => {
     assert.match(hit.text, /読めませんでした/);
   });
 });
+
+describe('予算を少し超える決まりでも、丸ごと落とさない', () => {
+  test('見出しの無い長い決まりは、切って渡す（切ったと言う一行や、組み立ての分で超えても）', async () => {
+    const dir = await tempDir('aas-rules-over-');
+    await writeFile(join(dir, '.cursorrules'), Array(10).fill('a'.repeat(45)).join('\n'));
+    const rules = new ProjectRules(dir, 1_000);
+    const count = (s: string) => s.length;
+    const frame = count(rulesBlock([{ path: '.cursorrules', text: '' } as never]));
+    const got = await rules.blockWithDropped(frame + 100, 1_000_000, count);
+    assert.notEqual(got.text, '', `決まりを丸ごと落とした: ${JSON.stringify(got.dropped)}`);
+    assert.ok(count(got.text) <= frame + 100, `予算を超えた: ${count(got.text)}`);
+    assert.match(got.text, /長いので、ここまで/);
+  });
+});

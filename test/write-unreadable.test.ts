@@ -6,10 +6,14 @@
  *
  * 読めなさは fs/promises の readFile をその道だけ失敗させて作る（権限に頼らない。root でも同じ結果になる）。
  * 失敗させるのは読むときだけで、書き込みは通る（読めないが書ける、の形）。
+ *
+ * **道は、渡した綴りと実体の綴りの両方で止める。**画面の口は実体（realpath）で読むので、
+ * Windows の CI では `%TEMP%` が `C:\Users\RUNNER~1\...`（8.3 の短い名前）、読む側は
+ * `C:\Users\runneradmin\...` になり、渡した綴りだけを止めると読めてしまっていた（保存が 200 で通った）。
  */
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, readFile, mkdir } from 'node:fs/promises';
+import { writeFile, readFile, mkdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tempDir } from './tmp.ts';
@@ -25,9 +29,14 @@ const { DEFAULT_CONFIG } = await import('../src/config.ts');
 const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
 const realReadFile = fsp.readFile;
 
-/** `path` だけ EACCES で読めなくする。戻すのは `restoreRead`。 */
-function blockRead(path: string): void {
-  (fsp as { readFile: unknown }).readFile = ((file: unknown, ...rest: unknown[]) => file === path
+/** 止める綴り。渡した綴りと、実体の綴り（Windows の 8.3 の短い名前・junction はここで違う）。 */
+async function spellings(path: string): Promise<string[]> {
+  return [...new Set([path, await realpath(path)])];
+}
+
+/** `paths` だけ EACCES で読めなくする。戻すのは `restoreRead`。 */
+function blockRead(paths: readonly string[]): void {
+  (fsp as { readFile: unknown }).readFile = ((file: unknown, ...rest: unknown[]) => typeof file === 'string' && paths.includes(file)
     ? Promise.reject(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }))
     : (realReadFile as (...a: unknown[]) => Promise<unknown>)(file, ...rest)) as never;
   syncBuiltinESMExports();
@@ -39,7 +48,7 @@ function restoreRead(): void {
 
 /** `path` だけ EACCES で読めなくして `fn` を回す。 */
 async function unreadable<T>(path: string, fn: () => Promise<T>): Promise<T> {
-  blockRead(path);
+  blockRead(await spellings(path));
   try {
     return await fn();
   } finally {
@@ -122,7 +131,7 @@ describe('画面の手保存で、錠を取った後に読めなくなったと�
   const work2 = join(dir, 'work2');
   let base2 = '';
   let server2: InstanceType<typeof UiServer>;
-  let blockAfterLock: string | undefined;
+  let blockAfterLock: string[] | undefined;
   before(async () => {
     await mkdir(work2, { recursive: true });
     server2 = new UiServer({
@@ -138,7 +147,7 @@ describe('画面の手保存で、錠を取った後に読めなくなったと�
   test('保存せず、読めないと言う', async () => {
     const abs = join(work2, 'd.txt');
     await writeFile(abs, 'もとの中身\n');
-    blockAfterLock = abs;
+    blockAfterLock = await spellings(abs);
     let r: Response;
     try {
       r = await fetch(`${base2}/api/file`, {

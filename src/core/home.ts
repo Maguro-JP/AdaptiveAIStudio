@@ -16,7 +16,7 @@
  */
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
-import { join, dirname, resolve, sep, basename } from 'node:path';
+import { join, dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** この道具の中身が置かれている場所（配布版では app/）。 */
@@ -104,7 +104,9 @@ export function defaultWorkRoot(cwd = process.cwd(), root = installRoot()): stri
  */
 export function insideDir(here: string, dir: string, platform: NodeJS.Platform = process.platform): boolean {
   const win = platform === 'win32';
-  const s = win ? '\\' : sep;
+  // 区切りも引数の決まりで選ぶ。`sep` は走らせている機械の区切りなので、Windows で 'linux' を渡すと
+  // `/opt/aas` + `\` で比べてしまい、中を外と言っていた（Windows の CI でだけ落ちた）。
+  const s = win ? '\\' : '/';
   const a = win ? here.toLowerCase() : here;
   const b = win ? dir.toLowerCase() : dir;
   return a === b || a.startsWith(b.endsWith(s) ? b : b + s);

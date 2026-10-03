@@ -146,7 +146,7 @@ describe('.. で始まる名前は、中のファイル', () => {
   /** `rel.startsWith('..')` で見ていたので、作業場の中の `..foo` のような名前まで外として断っていた。 */
   test('outsideRel は最初の区切りが .. のときだけ外', async () => {
     const { outsideRel, safeResolve } = await import('../src/agent/tools/paths.ts');
-    const { sep, join } = await import('node:path');
+    const { sep, join, resolve } = await import('node:path');
     assert.equal(outsideRel('..foo'), false);
     assert.equal(outsideRel(`..env${sep}bak`), false);
     assert.equal(outsideRel('..'), true);
@@ -154,7 +154,9 @@ describe('.. で始まる名前は、中のファイル', () => {
     // Windows は区切りの末の点と空白を落とすので、`.. ` や `...` は `..` になりうる。断る側
     assert.equal(outsideRel('.. '), true);
     assert.equal(outsideRel(`...${sep}x`), true);
-    const root = join(sep, 'work');
+    // 根は絶対の道にする。`join(sep, 'work')` は Windows ではドライブの無い `\work` で、
+    // safeResolve が resolve で付けるドライブ（`D:\work\..foo`）と綴りが合わなかった。
+    const root = resolve(sep, 'work');
     assert.equal(safeResolve(root, '..foo'), join(root, '..foo'));
     assert.equal(safeResolve(root, '../foo'), undefined);
     assert.equal(safeResolve(root, 'a/../../foo'), undefined);

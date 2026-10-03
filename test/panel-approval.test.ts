@@ -69,7 +69,16 @@ function draw(reply: (url: string) => Promise<Response>) {
     return out;
   };
   emit('approval', { id: 'a1', request: { kind: 'write', path: 'a.txt', diff: DIFF, created: false } });
-  return { card, press, ticks, sent, body };
+  /** 出ている承認の箱の数。 */
+  const asks = () => {
+    let n = 0;
+    const walk = (x: StubNode) => { if (x.className === 'ask') n++; for (const c of x.children) walk(c); };
+    walk(body);
+    return n;
+  };
+  /** 承認の答えとして送ったもの（パネルは作り直しのときに待っている承認も読みに行くので、それは除く）。 */
+  const answers = () => sent.filter((x) => x.url.endsWith('/api/approve'));
+  return { card, press, ticks, sent, answers, body, emit, asks, ctx };
 }
 
 describe('承認の札', () => {
@@ -100,8 +109,8 @@ describe('承認の札', () => {
     assert.equal(ticks.length, 2, `塊のチェックが ${ticks.length} 個しか無い`);
     ticks[1]!.checked = false;
     t.press('この依頼は以降訊かない');
-    await until(() => t.sent.length > 0, '送られる');
-    const body = t.sent[0]!.body;
+    await until(() => t.answers().length > 0, '送られる');
+    const body = t.answers()[0]!.body;
     assert.deepEqual(body.hunks, [0], `外した塊まで通している: ${JSON.stringify(body)}`);
     assert.equal(body.all, true, '「以降訊かない」が伝わっていない');
     await until(() => t.card().text.includes('一部だけ許可'), '一部だけ通したと出る');
@@ -111,8 +120,50 @@ describe('承認の札', () => {
     const t = draw(async () => Response.json({ ok: true }));
     for (const tick of t.ticks()) tick.checked = false;
     t.press('この依頼は以降訊かない');
-    await until(() => t.sent.length > 0, '送られる');
-    assert.equal(t.sent[0]!.body.approved, false,
-      `何も通さないのに許可として送っている: ${JSON.stringify(t.sent[0]!.body)}`);
+    await until(() => t.answers().length > 0, '送られる');
+    assert.equal(t.answers()[0]!.body.approved, false,
+      `何も通さないのに許可として送っている: ${JSON.stringify(t.answers()[0]!.body)}`);
+  });
+});
+
+/*
+ * 同じ承認が二度届く道がある（開いたときの読み込みと、出来事の流れが切れて繋ぎ直したときの取り直し）。
+ * 押せる箱を二つ出すと、片方を押してももう片方が残り、押すと「既に終わっています」で断られる
+ */
+describe('同じ承認は、押せる箱を二つ出さない', () => {
+  const again = { id: 'a1', request: { kind: 'write', path: 'a.txt', diff: DIFF, created: false } };
+
+  test('**まだ押せる箱が出ているなら、出し直さない**', () => {
+    const t = draw(async () => Response.json({ ok: true }));
+    t.emit('approval', again);
+    (t.ctx.showApprovals as (w: unknown[]) => void)([again]);
+    assert.equal(t.asks(), 1, `同じ承認の箱が ${t.asks()} 個出ている`);
+  });
+
+  test('押して送れなかった箱は、本体がまだ待っているので出し直す（対）', async () => {
+    const t = draw(async () => Response.json({ error: '届きませんでした' }, { status: 500 }));
+    t.press('許可');
+    await until(() => t.card().text.includes('送れませんでした'), '送れなかったと出る');
+    t.emit('approval', again);
+    assert.equal(t.asks(), 2, '押せる箱が無いまま、本体を待たせている');
+  });
+
+  test('欄を描き直したら、待っている承認はまた出す（対）', () => {
+    const t = draw(async () => Response.json({ ok: true }));
+    (t.ctx.showHistory as (m: unknown[]) => void)([]);
+    assert.equal(t.asks(), 0);
+    t.emit('approval', again);
+    assert.equal(t.asks(), 1, '描き直した後に、待っている承認を出していない');
+  });
+});
+
+describe('会話を開いていなくても、待っている承認は出す', () => {
+  test('**パネルを作り直したとき、トップでも待っている承認を取り直す**', async () => {
+    const waiting = { id: 'b1', request: { kind: 'write', path: 'b.txt', diff: DIFF, created: false } };
+    const t = draw(async (url) => url.includes('/api/approvals')
+      ? Response.json({ approvals: [waiting], busy: true, planning: false })
+      : Response.json({ ok: true }));
+    // draw が出した a1 に加えて、取り直した b1 が出る
+    await until(() => t.asks() === 2, `待っている承認を出していない（${t.asks()} 個）`);
   });
 });

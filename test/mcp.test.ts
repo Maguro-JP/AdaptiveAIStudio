@@ -254,3 +254,23 @@ describe('見出しの名前が環境に無いとき', () => {
     assert.doesNotMatch(describeServers([live]), /見出しの名前/);
   });
 });
+
+describe('渡す引数は、外へ出ていくもの', () => {
+  test('トークンを入れた引数は、呼ぶ前に止める（承認の画面は頭 200 字しか見せない）', async () => {
+    let called = 0;
+    const client = {
+      name: 'github', running: true, tools: [{ name: 'create_issue' }], failure: undefined,
+      async call() { called += 1; return { text: 'ok', isError: false }; },
+    } as unknown as McpClient;
+    const tool = wrapTool(client, { name: 'create_issue' });
+    const r = await tool.run({ title: 'x'.repeat(300), body: `見つけました ghp_${'a'.repeat(36)}` }, ctx());
+    assert.equal(r.isError, true, r.content);
+    assert.equal(called, 0, '外のツールへ渡した');
+  });
+
+  test('普通の引数は、今までどおり通す', async () => {
+    const tool = wrapTool(fakeClient('github', { text: 'ok' }), { name: 'search' });
+    const r = await tool.run({ query: 'issue の探し方' }, ctx());
+    assert.notEqual(r.isError, true, r.content);
+  });
+});
