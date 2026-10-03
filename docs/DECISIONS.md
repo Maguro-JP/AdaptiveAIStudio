@@ -297,6 +297,7 @@
 - 段取りを止めたら確かめず、落ちたと数えない・段取りの確かめを送り口とそろえる・並べた担当の規則と書き込みを分ける・外へ出る役職から execute を外す
 - 記憶の題に依頼の全文を入れない・忘れた最初からの覚えを入れ直さない・別の作業場の手を思い出さない・記憶の保存を壊さない
 - 地元のモデルの読み込みを 10 秒で見切らない・終わりの合図の無い流れを完了にしない・埋まっている口に llama-server を起こさない
+- 出力の上限で切れた返事を、答え終えたことにしない
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -11114,3 +11115,16 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
 - 残したもの: 長さの上限（max_tokens）で切れた答えを「完了」と記録する。直すなら orchestrator の done に finishReason を載せて
   loop で言う（影響が広いので、今回は直していない）
 触る場所: `src/providers/openai-compatible.ts`・`anthropic.ts`、`src/runtime/llamacpp.ts`・`llama-guard.ts`・`inproc-host-client.ts`
+
+## 2026-10-03  出力の上限で切れた返事を、答え終えたことにしない
+
+- 相手が `length`（Anthropic は `max_tokens`）で終えた合図を、orchestrator の `done` に `finishReason` として載せる。
+  前は捨てていたので、ツールを使っていない返事は途中で切れていても「完了」になっていた
+- loop は、切れた返事（ツールの呼び出しも TASK_DONE も無い）を押し戻しの一回として数え、切れたところからの続きを求める。
+  押し戻しを使い切った・切ってあるときは `noProgress` で「上限で切れました」と言う。完了とは言わない
+- 上限で引数の JSON が切れた呼び出しには、「小さく分けて呼び直して」と返す。同じ大きさで呼び直しても同じところで切れるため
+- 選ばなかった案: 切れても `completed` のまま detail に添える。記憶が「効いた」と数え、確かめの判定も完了として進むので採らない
+- 残したもの: 同じプロセスで動くモデル（inproc）は、上限に届いても `stop` を返す。ライブラリの `prompt()` が止まった理由を返さないため。
+  直すなら `promptWithMeta` の `stopReason` を見て `length` を返す
+- 試験: `test/cut-off.test.ts`。orchestrator と loop のどちらの直しを外しても 5 件中 4 件が落ちることを見た
+触る場所: `src/core/orchestrator.ts`（done）、`src/agent/loop.ts`（cutOff）、`src/runtime/inproc.ts`（inproc の終わり方）

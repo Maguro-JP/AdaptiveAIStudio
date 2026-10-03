@@ -126,6 +126,8 @@ export class Agent {
       const calls: ToolCall[] = [];
       let modelId: string | undefined;
       let failure: string | undefined;
+      // 出力の上限で切れたか（言い終えていない）。切れた返事を「答え終えた」と読まない。
+      let cutOff = false;
       // 小さいモデルは、呼び出しを本文に書いてしまうことがある。
       // 生の JSON を画面へ流さないよう、疑わしいところで一旦せき止める。
       const filter = new ToolTextFilter();
@@ -183,7 +185,7 @@ export class Agent {
         else if (ev.type === 'attempt' && ev.attempt > 0) {
           yield { type: 'retry', attempt: ev.attempt, modelId: ev.modelId, elapsedMs: Date.now() - began };
         }
-        else if (ev.type === 'done') modelId = ev.modelId;
+        else if (ev.type === 'done') { modelId = ev.modelId; cutOff = ev.finishReason === 'length'; }
         else if (ev.type === 'failed') failure = `${ev.error.kind}: ${ev.error.message}（${elapsedSec()} 秒）`;
       }
 
@@ -235,6 +237,29 @@ export class Agent {
         if (text.trim() === '' && !declaredDone) {
           yield { type: 'finished', reason: 'noProgress', detail: '返事が空でした（モデルが本文を書かずに止まりました）' };
           return;
+        }
+        /*
+         * **出力の上限で切れた返事を、答え終えたことにしない。**ツールを使っていない返事は、ここで「完了」になる。
+         * 切れたまま完了と出すと、利用者は途中までの答えを答えだと思う。続きを求め、求められないなら切れたと言う。
+         */
+        if (cutOff && !declaredDone) {
+          if (nudges >= maxNudges) {
+            yield {
+              type: 'finished', reason: 'noProgress',
+              detail: maxNudges === 0
+                ? '返事が出力の上限で切れました（続きは求めていません。押し戻しは切ってあります）。'
+                : `返事が出力の上限で切れました（${nudges} 回続きを求めましたが、言い終えませんでした）。`,
+            };
+            return;
+          }
+          nudges += 1;
+          yield { type: 'nudged', left: maxNudges - nudges };
+          history.push({
+            role: 'user',
+            content: '返事が出力の上限で切れています。切れたところから続きを書いてください。'
+              + '書き直さず、続きだけを、短くまとめて書いてください。',
+          });
+          continue;
         }
         if (declaredDone || !usedTools || nudges >= maxNudges) {
           // 合図が出た / 一度も道具を使っていない（＝答えただけ） /
@@ -291,7 +316,10 @@ export class Agent {
           result = `ERROR: 未知のツールです: ${call.name}（利用可能: ${[...this.#tools.keys()].join(', ')}）`;
           isError = true;
         } else if (isRecord(call.args) && call.args.__parseError === true) {
-          result = 'ERROR: 引数のJSONが壊れています。正しいJSONで呼び直してください。';
+          // 上限で切れて壊れたなら、同じ大きさで呼び直しても同じところで切れる。
+          result = cutOff
+            ? 'ERROR: 出力の上限で、引数のJSONが途中で切れました。一度に書く量を減らし（小さく分けて）呼び直してください。'
+            : 'ERROR: 引数のJSONが壊れています。正しいJSONで呼び直してください。';
           isError = true;
         } else {
           const r = await tool.run(isRecord(call.args) ? call.args : {}, ctx);
