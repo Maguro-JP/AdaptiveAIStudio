@@ -596,11 +596,24 @@ export class McpClient {
    */
   async #listTools(timeoutMs: number): Promise<McpToolSpec[]> {
     const all: McpToolSpec[] = [];
+    // 同じ名前は一つだけ（栞を無視して同じ頁を返す相手で二重に入ると、名前の重なりを受け付けない相手（Anthropic）への依頼ごと落ちる）
+    const names = new Set<string>();
     let cursor: string | undefined;
     const seen = new Set<string>();
     for (let page = 0; page < MCP_LIST_PAGES; page += 1) {
-      const listed = await this.#call('tools/list', cursor ? { cursor } : {}, timeoutMs) as { tools?: McpToolSpec[]; nextCursor?: unknown };
-      all.push(...(Array.isArray(listed?.tools) ? listed.tools : []).filter((t) => typeof t?.name === 'string'));
+      let listed: { tools?: McpToolSpec[]; nextCursor?: unknown };
+      try {
+        listed = await this.#call('tools/list', cursor ? { cursor } : {}, timeoutMs) as typeof listed;
+      } catch (e) {
+        // 2 頁目以降で落ちたら、それまでの分で動く（1 頁目で動いていた相手を、丸ごと「立ち上がらない」にしない）
+        if (page === 0) throw e;
+        break;
+      }
+      for (const t of Array.isArray(listed?.tools) ? listed.tools : []) {
+        if (typeof t?.name !== 'string' || names.has(t.name)) continue;
+        names.add(t.name);
+        all.push(t);
+      }
       const next = listed?.nextCursor;
       if (typeof next !== 'string' || next === '' || seen.has(next)) break;
       seen.add(next);

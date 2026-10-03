@@ -425,8 +425,10 @@ describe('途中まで取れているものを、取り上げない', () => {
     const { createServer } = await import('node:http');
     const server = createServer((req, res) => {
       if (how === 'range-no-length') {
-        res.writeHead(416);
-        return res.end();
+        // 続きを頼まれたら長さを言わない 416。最初からなら全体を返す
+        if (req.headers.range) { res.writeHead(416); return res.end(); }
+        res.writeHead(200, { 'content-length': String(body.length) });
+        return res.end(body);
       }
       if (how === 'range-not-satisfiable') {
         res.writeHead(416, { 'content-range': `bytes */${body.length}` });
@@ -465,18 +467,17 @@ describe('途中まで取れているものを、取り上げない', () => {
     } finally { await s.close(); }
   });
 
-  test('**416 が本当の長さを言わないなら、途中までのものを置かない**', async () => {
-    // 見出しの無い 416 を「全部ある」と読み、途中までのファイルを正式な名前にしていた
+  test('**416 が本当の長さを言わないなら、途中までのものを置かず、最初から取り直す**', async () => {
+    // 見出しの無い 416 を「全部ある」と読み、途中までのファイルを正式な名前にしていた。
+    // 止めるだけでは、次も同じ 416 で止まり、手で .part を消すまで抜けられない
     const body = tinyGguf();
     const modelsDir = await tempDir('aas-dl416-nolen-');
-    const half = body.subarray(0, Math.floor(body.length / 2));
-    await writeFile(join(modelsDir, 'probe-model.gguf.part'), half);
+    await writeFile(join(modelsDir, 'probe-model.gguf.part'), body.subarray(0, Math.floor(body.length / 2)));
     const s = await serve(body, 'range-no-length');
     try {
-      await assert.rejects(installModel({ entry: direct(s.port), modelsDir }), /長さを返しませんでした/);
-      const names = await readdir(modelsDir);
-      assert.ok(!names.includes('probe-model.gguf'), `途中までのものを置いた: ${names.join(', ')}`);
-      assert.equal((await stat(join(modelsDir, 'probe-model.gguf.part'))).size, half.length, '途中の分を失っている');
+      const got = await installModel({ entry: direct(s.port), modelsDir });
+      assert.equal((await stat(got.path)).size, body.length, '途中までのものを置いた');
+      assert.deepEqual((await readdir(modelsDir)).sort(), ['probe-model.gguf']);
     } finally { await s.close(); }
   });
 
@@ -576,12 +577,23 @@ describe('URL を直に渡したとき', () => {
       'https://host.invalid/m/..%2F..%2Fx.gguf',
       'https://host.invalid/m/..%5C..%5Cx.gguf',
       'https://host.invalid/m/C%3Ax.gguf',
+      // Windows で使えない字と予約名
+      'https://host.invalid/m/a%3Fb.gguf',
+      'https://host.invalid/m/a%7Cb.gguf',
+      'https://host.invalid/m/NUL.gguf',
+      'https://host.invalid/m/con.gguf',
     ]) {
       await assert.rejects(
         installModel({ entry: { id: repo, repo, quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '' }, modelsDir, fetchImpl: impl }),
         /区切り/, repo);
     }
     assert.equal(asked, 0, '外を指す名前のまま取りに行った');
+    // 普通の名前（空白入り・console で始まる）は断らない（対）
+    for (const repo of ['https://host.invalid/m/My%20Model.gguf', 'https://host.invalid/m/console-1b.gguf']) {
+      await assert.rejects(
+        installModel({ entry: { id: repo, repo, quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '' }, modelsDir, fetchImpl: impl }),
+        /取りに行った/, `${repo} を名前で断っている`);
+    }
     // フォルダの外（二つ上まで）に何も作っていない
     assert.deepEqual((await readdir(outer)).sort(), ['a']);
     assert.deepEqual((await readdir(join(outer, 'a'))).sort(), ['models']);

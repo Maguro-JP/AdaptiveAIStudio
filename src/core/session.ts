@@ -37,7 +37,7 @@ import { buildInspector } from './inspector-setup.ts';
 import { startMcpServers } from './mcp-setup.ts';
 import { loadJournals, saveJournals, type Journals } from './journals.ts';
 import { McpClient, type McpServerSpec } from '../mcp/client.ts';
-import { collectTools } from '../mcp/tools.ts';
+import { collectTools, deliverableCount } from '../mcp/tools.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall, betterDetail } from '../memory/memory.ts';
 import {
@@ -567,7 +567,7 @@ export class Session {
           log('warn', `外のツールに繋がりませんでした: ${id} — ${client.failure ?? '理由は不明'}`);
           return false;
         }
-        log('info', `外のツールに繋がりました: ${id}（${client.tools.length} 件）`);
+        log('info', `外のツールに繋がりました: ${id}（${deliverableCount(client)} 件）`);
         refresh();
         return true;
       },

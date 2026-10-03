@@ -11,6 +11,7 @@
  */
 import type { AasConfig } from '../config.ts';
 import { McpClient } from '../mcp/client.ts';
+import { deliverableCount } from '../mcp/tools.ts';
 
 export async function startMcpServers(
   config: AasConfig,
@@ -29,7 +30,7 @@ export async function startMcpServers(
   for (const c of clients) {
     void c.start().then((okay) => {
       if (okay) {
-        log?.('info', `外のツールに繋がりました: ${c.name}（${c.tools.length} 件）`);
+        log?.('info', `外のツールに繋がりました: ${c.name}（${deliverableCount(c)} 件）`);
         onReady?.();
       } else {
         log?.('warn', `外のツールに繋がりませんでした: ${c.name} — ${c.failure ?? '理由は不明'}`);

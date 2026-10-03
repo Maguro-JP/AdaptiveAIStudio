@@ -11240,3 +11240,10 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
 - MCP のツールの一覧（tools/list）が 2 頁目以降を読んでいなかった。`nextCursor` を辿る（20 頁まで、同じ栞が続いたら止める）
 - 見て不具合が無かった所: ui/theme・layout・origin・state・editor-here・settings・attachments、mcp/catalog、roles/role・ledger、runtime/cleanup・llama-install
 触る場所: `src/runtime/model-install.ts`、`src/mcp/tools.ts`（`specBlocked`・`MCP_DESCRIPTION_MAX`）、`src/roles/registry.ts`（`get`・`KNOWN_ACCESS`）、`src/mcp/client.ts`（`#listTools`）
+- 見直しで直したこと（同じ日）:
+  - ツールの一覧は同じ名前を一つだけ入れる（栞を無視して同じ頁を返す相手で二重に入り、名前の重なりを受け付けない相手への依頼ごと落ちる）。
+    2 頁目以降で落ちたら、それまでの分で動く。重なりを見ていなかった試験は、名前が重ならないことも見る形にした（訊いた回数だけを見て、重なりを見逃して通っていた）
+  - 配るツールの数を `deliverableCount` 一つで数え、画面・記録・繋がり具合で同じ数を出す。止めたツールは何に当たったか（種類と抜き出し）も言う（誤って止めたときに判断できるように）
+  - 長さを言わない 416 は、途中の分を残して止めるのではなく、最初から取り直す（止めると次も同じ 416 で止まり、手で `.part` を消すまで抜けられない）
+  - 役職の引き継ぎは現役のものを探して辿る（輪の途中の引き継ぎ済みで止まっていた）。辿る関数は外に出さない。`KNOWN_ACCESS` が権限の語を全部並べていることを型で確かめる
+  - モデルの名前は、Windows で使えない字（`< > " | ? *`・制御文字）と予約名（`CON`・`NUL`・`COM1` など）も断る

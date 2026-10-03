@@ -39,7 +39,11 @@ export interface RoleOverride {
  * 落とすのは `write` の方。外へ出る道を取り上げると、その役職が何のために
  * 居るのか分からなくなる。**黙って落とさない。**何を落としたかを返す。
  */
+// 権限の語を足したら、ここにも足す（足し忘れると黙って捨てられる）。型で全部が並んでいることを確かめる
 const KNOWN_ACCESS = ['read', 'write', 'execute', 'network', 'mcp'] as const satisfies readonly ToolAccess[];
+type Missing = Exclude<ToolAccess, (typeof KNOWN_ACCESS)[number]>;
+const allListed: [Missing] extends [never] ? true : never = true;
+void allListed;
 
 export function dropWriteIfOutbound(access: readonly ToolAccess[]): {
   access: ToolAccess[]; dropped: boolean;
@@ -111,20 +115,32 @@ export class RoleRegistry {
    * **いなくなったのではなく、担当が分かれただけ**なので、
    * 呼べば誰かには繋がる。
    */
-  get(id: string, seen: Set<string> = new Set()): Role | undefined {
-    const direct = this.#roles.get(id) ?? this.#roles.get(this.#aliases.get(id) ?? '');
+  get(id: string): Role | undefined {
+    const direct = this.#find(id);
     if (!direct) return undefined;
-    if (!direct.retired) return direct;
-    // 引き継ぎが輪になっている（A→B→A・自分を指す）。辿り続けると、立ち上げごと落ちる。引き継ぎ済みの本人を返す
-    if (seen.has(direct.id)) return undefined;
-    seen.add(direct.id);
+    // 引き継ぎ先のうち現役のものを先に選ぶ。無ければ本人（引き継ぎ済みのまま）
+    return this.#active(direct, new Set()) ?? direct;
+  }
 
-    // 引き継ぎ先へ回す
-    for (const next of Array.isArray(direct.succeededBy) ? direct.succeededBy : []) {
-      const successor = this.get(next, seen);
-      if (successor) return successor;
+  #find(id: string): Role | undefined {
+    return this.#roles.get(id) ?? this.#roles.get(this.#aliases.get(id) ?? '');
+  }
+
+  /**
+   * 引き継ぎを辿って、現役の役職を探す。見つからなければ undefined。
+   * 輪（A→B→A・自分を指す）は通った所を覚えて止める（辿り続けると立ち上げごと落ちる）。
+   * 輪の途中の引き継ぎ済みの役職では止まらず、別の引き継ぎ先の現役を探し続ける。
+   */
+  #active(role: Role, seen: Set<string>): Role | undefined {
+    if (!role.retired) return role;
+    if (seen.has(role.id)) return undefined;
+    seen.add(role.id);
+    for (const next of Array.isArray(role.succeededBy) ? role.succeededBy : []) {
+      const r = this.#find(next);
+      const found = r ? this.#active(r, seen) : undefined;
+      if (found) return found;
     }
-    return direct;
+    return undefined;
   }
 
   /** 現役の役職だけ。引き継ぎ済みは新しい割り当てを受けない。 */

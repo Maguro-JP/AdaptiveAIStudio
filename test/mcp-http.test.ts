@@ -433,6 +433,9 @@ describe('ツールの一覧を頁に分けて返す相手', () => {
     try {
       assert.equal(await c.start(), true, c.failure);
       assert.ok(s.asked.length <= 3, `訊きすぎている: ${s.asked.length} 回`);
+      // 同じ頁をもう一度返されても、同じ名前を二つ入れない（名前の重なりを受け付けない相手への依頼ごと落ちる）
+      const names = c.tools.map((t) => t.name);
+      assert.deepEqual(names, [...new Set(names)], `同じ名前が二つある: ${names.join(', ')}`);
     } finally { c.stop(); await s.close(); }
   });
 });

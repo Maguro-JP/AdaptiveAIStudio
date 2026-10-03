@@ -168,6 +168,16 @@ describe('旧名での呼び出し', () => {
     assert.equal(r.get('self')!.id, 'self');
   });
 
+  test('輪の途中の引き継ぎ済みより、別の引き継ぎ先の現役を選ぶ', () => {
+    const base = { name: '旧', responsibility: 'x', disposition: 'y', access: ['read'] as ('read')[], instructions: ['a', 'b', 'c'] };
+    const r = new RoleRegistry([
+      { id: 'p', ...base, retired: true, succeededBy: ['q', 'live'] },
+      { id: 'q', ...base, retired: true, succeededBy: ['p'] },
+      { id: 'live', ...base },
+    ]);
+    assert.equal(r.get('p')!.id, 'live', '輪の途中の引き継ぎ済みの役職を返している');
+  });
+
   test('access を並びで書いていない・知らない語があるときは、権限を足さずに外して言う', () => {
     const said: string[] = [];
     const r = new RoleRegistry([
