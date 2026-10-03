@@ -1893,6 +1893,21 @@ describe('エディタの順番と作業場', () => {
     assert.equal(t.asked.filter((a) => a.method === 'PUT').length, 1, '同じ中身を二度送った');
   });
 
+  test('**作り直される手前の知らせで、待っている下書きをその場で預ける（最後の打鍵を落とさない）**', async () => {
+    const discard: Array<() => void> = [];
+    const t = open({ 'k.txt': 'one\n' }, false, { onDiscard: (fn: () => void) => { discard.push(fn); } });
+    (t.ctx.openFile as (p: string) => void)('k.txt');
+    await until(() => t.area().value === 'one\n', '開く');
+    t.area().value = 'one\nTYPED\n';
+    t.area().fire('input');
+    // 400ms の預けを待たずに、作り直しの知らせを出す
+    assert.ok(discard.length > 0, 'エディタが作り直しの知らせを受け取っていない');
+    for (const fn of discard) fn();
+    const kept = [...Array(localStorage.length).keys()].map((i) => localStorage.key(i)!).filter((k) => k.startsWith('aas.draft:') && k.endsWith('k.txt'));
+    assert.equal(kept.length, 1, `作り直しの手前で預けていない（最後の打鍵が消える）: [${kept.join(',')}]`);
+    assert.match(String(localStorage.getItem(kept[0]!)), /TYPED/);
+  });
+
   test('期限を過ぎた預かりは、どの鍵でも片づける（溜まると新しい直しを預けられなくなる）', () => {
     const old = Date.now() - 15 * 24 * 60 * 60 * 1000;
     // 名前だけの古い鍵（作業場と名前の組に変える前）と、二度と開かない作業場の鍵

@@ -33,6 +33,12 @@ export interface TaskRunContext {
   dependencies: Array<TaskOutcome<unknown>>;
 }
 
+/**
+ * 書き込み先を宣言できない（しなかった）書き手のタグ。誰の書き込み先とも重なるものとして扱う。
+ * 宣言だけを錠にすると、宣言しなかった二人が同じファイルを同時に書き、後に書いた方が前の仕事を黙って消す。
+ */
+export const ANY_PATH = '*';
+
 export type TaskState = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 
 export interface TaskOutcome<R = unknown> {
@@ -179,8 +185,8 @@ export class Scheduler {
         }
         const lane = this.#lanes.get(t.laneId);
         if (lane && lane.freeSlots === 0) continue;
-        // 書き込み先が誰かとぶつかるなら、その相手が終わるまで待つ
-        if ((t.writes ?? []).some((w) => lockedPaths.has(w))) continue;
+        // 書き込み先が誰かとぶつかるなら、その相手が終わるまで待つ（宣言の無い書き手 `ANY_PATH` は誰ともぶつかる）
+        if ((t.writes ?? []).some((w) => lockedPaths.has(w) || lockedPaths.has(ANY_PATH) || (w === ANY_PATH && lockedPaths.size > 0))) continue;
         launch(t);
         launched = true;
       }

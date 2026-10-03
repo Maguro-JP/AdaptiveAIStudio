@@ -107,6 +107,8 @@ export function execCommand(
   signal: AbortSignal,
   maxOutputBytes = 200_000,
 ): Promise<ExecResult> {
+  // 渡される前に止められていた。聞き手を足しても、もう鳴らない（abort は一度きり）。起こさずに返す。
+  if (signal.aborted) return Promise.resolve({ code: null, output: '', timedOut: false, aborted: true, durationMs: 0 });
   return new Promise((resolve) => {
     const startedAt = Date.now();
     const plan = spawnPlan(command, process.platform);

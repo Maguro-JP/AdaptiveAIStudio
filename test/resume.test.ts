@@ -324,6 +324,45 @@ describe('やり残しを、こちらから拾う', () => {
     } finally { await s.stop(); await fake.close(); }
   });
 
+  // 一段を ■ で止めても、その段を「落ちた」と数えない（回数を増やさない・割り直さない・塞がない）。止めた直後の見回りで同じ段を始め直さない
+  test('**一段を止めても、落ちた回に数えない**', async () => {
+    const state = await ownState('stop-step');
+    const root = await tempDir('aas-resume-stop-step-');
+    const fake = await startFakeServer({ kind: 'stalls', name: 'list_files', args: { path: '.' }, then: 'このあと直します。' });
+    const s = new UiServer({ config: config(fake, root), port: 0 });
+    let unfinishedEvents = 0;
+    const orig = s.broadcast.bind(s);
+    (s as { broadcast: unknown }).broadcast = (m: { type: string }) => {
+      if (m.type === 'unfinished') unfinishedEvents += 1;
+      return orig(m as Parameters<typeof orig>[0]);
+    };
+    const base = (await s.start()).replace(/\/$/, '');
+    try {
+      const { id } = await ask(base, 'lib を直して');
+      const work = new UnfinishedWork(join(state, 'unfinished.jsonl'));
+      await work.bump(id, Date.now() - 60 * 60_000);
+      const attemptsBefore = (await work.list()).find((u) => u.id === id)!.attempts;
+      fake.setBehavior({ kind: 'stream', text: 'ファイルを読んで確かめる\nテストを直して走らせる\n' });
+      const session = await s.session();
+      const asked = fake.requests;
+      assert.equal(await s.idleTick(session), 'RESUMED');
+      for (let i = 0; i < 2000 && fake.requests === asked; i += 1) await new Promise((r) => setTimeout(r, 5));
+      fake.setBehavior({ kind: 'hang' }); // 一段は返事を待ち続ける（その間に止める）
+      const goals = new Goals(join(state, 'goals.jsonl'));
+      for (let i = 0; i < 300 && (await goals.list()).length === 0; i += 1) await new Promise((r) => setTimeout(r, 10));
+      const at = unfinishedEvents;
+      await fetch(`${base}/api/abort`, { method: 'POST' });
+      for (let i = 0; i < 400 && unfinishedEvents === at; i += 1) await new Promise((r) => setTimeout(r, 25));
+      const [goal] = await goals.list();
+      assert.ok(goal, '止めただけで段取りが閉じた');
+      assert.deepEqual(goal.steps.map((st) => [st.state, st.attempts]), [['pending', 0], ['pending', 0]],
+        '止めた段を落ちた回に数えた');
+      const item = (await work.list()).find((u) => u.id === id);
+      assert.equal(item?.attempts, attemptsBefore, 'やり残しの回数が進んだ');
+      assert.ok((item?.nextAt ?? 0) > Date.now(), '止めた直後に、また拾える状態のまま');
+    } finally { await s.stop(); await fake.close(); }
+  });
+
   test('片づいた依頼は、控えない（対）', async () => {
     // 何でも控えると、終わったものまで蒸し返して回り続ける。
     await ownState('c');

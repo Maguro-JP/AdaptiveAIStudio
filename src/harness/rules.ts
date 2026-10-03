@@ -18,6 +18,8 @@ export interface RuleContext {
   root: string;
   /** これまでのツール呼び出し（この依頼の中で） */
   history: ToolCall[];
+  /** 依頼全体のツール呼び出し（並べた担当の分も含む）。数を数える規則が見る。無ければ `history` と同じ */
+  taskHistory?: ToolCall[];
   /** 依頼の本文 */
   instruction: string;
   signal: AbortSignal;

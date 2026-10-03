@@ -173,8 +173,9 @@ export function blastRadius(maxFiles: number): Rule {
       if (!path) return allow;
 
       // 道は揃えて数える（`./a.ts` と `a.ts` を二件と数えない）
+      // 依頼全体で数える（段取りで並べた担当の分も。担当ごとに数えると、担当の数だけ上限が増える）
       const written = new Set(
-        ctx.history
+        (ctx.taskHistory ?? ctx.history)
           .filter((c) => isWriteTool(c.name))
           .map((c) => argString(c, 'path'))
           .filter((p): p is string => !!p)

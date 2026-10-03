@@ -28,7 +28,8 @@ export interface MemberReport {
   error?: string;
 }
 
-export type VerifyState = 'passed' | 'failed' | 'skipped' | 'preexisting';
+/** `unsure` は確かめたが結果が分からない（時間切れ・テストを読めない）。通ったとも落ちたとも言わない。 */
+export type VerifyState = 'passed' | 'failed' | 'skipped' | 'preexisting' | 'unsure';
 
 export interface AcceptanceInput {
   request: string;
@@ -103,6 +104,12 @@ export function judge(input: AcceptanceInput): { verdict: Verdict; concerns: Con
       severity: 'warn',
       reason: '検査していません。変更が正しいかは確かめられていません。',
     });
+  } else if (input.verified === 'unsure') {
+    concerns.push({
+      severity: 'warn',
+      reason: '確かめの結果が分かりません。変更が正しいかは確かめられていません。',
+      where: input.verifyDetail ? [input.verifyDetail] : undefined,
+    });
   } else if (input.verified === 'preexisting') {
     concerns.push({
       severity: 'warn',
@@ -154,6 +161,7 @@ const VERIFY_LABEL: Record<VerifyState, string> = {
   failed: '失敗',
   skipped: '未実施',
   preexisting: '元から失敗',
+  unsure: '不明',
 };
 
 /** 一枚にまとめる。人が読む唯一の出力なので、ここだけ読めば済む形にする。 */

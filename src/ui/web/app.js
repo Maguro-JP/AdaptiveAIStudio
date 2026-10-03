@@ -33,6 +33,7 @@ let renderGen = 0;
 const ctx = {
   /** いまの並びの世代。パネルは作られたときの値と比べて、自分が捨てられたかを知る。 */
   gen: () => renderGen,
+  onDiscard: (fn) => { discardHandlers.push(fn); },
   /** 会話の入力欄へ寄せる。差し替えられる。 */
   focusInput: () => undefined,
   /** 入力欄の先頭に文字を置く（/plan など）。チャットのパネルが繋ぐ。 */
@@ -410,7 +411,18 @@ function grip(node, index, box) {
   return g;
 }
 
+/** 作り直す手前でパネルに知らせる先。パネルが `ctx.onDiscard` で足す。作り直すたびに空にする。 */
+const discardHandlers = [];
+
 function render() {
+  /*
+   * 捨てる前のパネルに知らせる（世代を進める前。まだ生きているうちに片づけさせる）。エディタは、遅れて走る下書きの預けを
+   * その場で一回だけ走らせてから止める。止めずにいると、捨てたパネルが後から預かりを書いて別のパネルに混ざり、
+   * 補完も訊きに行っていた。取り消すだけにすると、最後の打鍵（400ms の預けに間に合っていない分）が消える
+   */
+  for (const fn of discardHandlers.splice(0)) {
+    try { fn(); } catch { /* 一つのパネルの片づけの失敗で、作り直しを止めない */ }
+  }
   renderGen += 1;
   stateHandlers.length = 0;
   eventHandlers.clear();

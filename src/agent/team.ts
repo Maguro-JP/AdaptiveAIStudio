@@ -9,7 +9,7 @@ import type { ChatOrchestrator } from '../core/orchestrator.ts';
 import { Scheduler, type LaneConfig, type Task, type TaskOutcome } from '../core/scheduler.ts';
 import { Agent, type AgentEvent } from './loop.ts';
 import { race, type Attempt, type RaceEvent } from './race.ts';
-import type { Tool, ApprovalRequest, ApprovalAnswer } from './tools/types.ts';
+import type { Tool, ApprovalRequest, ApprovalAnswer, RequestScope } from './tools/types.ts';
 
 export interface WorkItem {
   id: string;
@@ -74,7 +74,7 @@ export interface TeamOptions {
    * 依頼の文が要るので `assign` を使えず、**役職を見ないまま全部のツールを
    * 配っていた**。役職で絞る側と、依頼ごとに包む側が、同時に成り立つようにする。
    */
-  assign?(roleId: string, item: WorkItem): { system: string; tools: Tool[] } | undefined;
+  assign?(roleId: string, item: WorkItem): { system: string; tools: Tool[]; request?: RequestScope } | undefined;
   /**
    * 依頼ごとにツールを組む。
    *
@@ -121,6 +121,8 @@ export class Team {
       temperature: this.#opts.temperature,
       maxTokens: this.#opts.maxTokens,
       approve: this.#opts.approve,
+      // 担当ごとの入れ物。共有のツールでも、規則の履歴を担当ごとに分ける（別の担当が読んだことで書けない）。
+      ...(assigned?.request ? { request: assigned.request } : {}),
       ...(this.#opts.beforeWrite ? { beforeWrite: this.#opts.beforeWrite } : {}),
       ...(this.#opts.wrote ? { wrote: this.#opts.wrote } : {}),
     });

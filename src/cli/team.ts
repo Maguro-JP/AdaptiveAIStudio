@@ -19,6 +19,7 @@ import { setupAutopilot, resolveCandidates } from '../core/autopilot-setup.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { wireTeam, parseTasks } from '../core/team-setup.ts';
 import { readyLocalModel } from '../core/local-ready.ts';
+import { RoleRegistry } from '../roles/registry.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -56,7 +57,9 @@ async function main(): Promise<void> {
   // 作業指示書は、モデルを起こす前に読んで確かめる（起こした後で落ちると、Windows では llama-server が残る）
   let items: WorkItem[];
   try {
-    items = parseTasks(await readFile(resolve(taskFile), 'utf8'), agentCfg.lanes?.map((l) => l.id) ?? ['default']);
+    const roles = new RoleRegistry(config.roles ?? []);
+    items = parseTasks(await readFile(resolve(taskFile), 'utf8'), agentCfg.lanes?.map((l) => l.id) ?? ['default'],
+      (id) => roles.get(id) !== undefined);
   } catch (e) {
     console.error((e as Error).message);
     process.exit(1);
@@ -108,10 +111,19 @@ async function main(): Promise<void> {
    */
   // 始めに作業場の記録を取る（大きい作業場では少しかかる。黙っていると止まって見える）。
   console.log(c.dim('作業場の記録を取っています…'));
-  const wired = await wireTeam(config, root, (d) => {
-    if (d.outcome === 'denied') console.log(c.red(`   ⛔ ${d.rule}: ${d.reason ?? ''}`));
-    else if (d.outcome === 'warned') console.log(c.yellow(`   ⚠ ${d.rule}: ${d.reason ?? ''}`));
-  }, Date.now(), SYSTEM);
+  // 組み立てで落ちても、起こした子（llama-server）を残さない。下の try はまだ始まっていない。
+  let wired: Awaited<ReturnType<typeof wireTeam>>;
+  try {
+    wired = await wireTeam(config, root, (d) => {
+      if (d.outcome === 'denied') console.log(c.red(`   ⛔ ${d.rule}: ${d.reason ?? ''}`));
+      else if (d.outcome === 'warned') console.log(c.yellow(`   ⚠ ${d.rule}: ${d.reason ?? ''}`));
+    }, Date.now(), SYSTEM);
+  } catch (e) {
+    console.error(c.red(`作業の支度ができませんでした: ${(e as Error).message}`));
+    await runtime.shutdown().catch(() => undefined);
+    rl.close();
+    process.exit(1);
+  }
 
   const team = new Team(new ChatOrchestrator(registry), {
     lanes,

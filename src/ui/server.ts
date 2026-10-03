@@ -3589,14 +3589,16 @@ export class UiServer {
     }
 
     const p = progressOf(goal);
+    // 何段目かは、段の並びの中の位置で数える。済んだ数 + 1 だと、手前に塞がった段があるとずれる（同じ番号が二度出る）。
+    const at = goal.steps.filter((st) => st.state !== 'split').findIndex((st) => st.id === step.id) + 1 || p.done + 1;
     this.broadcast({
       type: 'log', level: 'info',
-      text: `一歩ずつ進めます（${p.done + 1}/${p.total}）: ${step.instruction}`,
+      text: `一歩ずつ進めます（${at}/${p.total}）: ${step.instruction}`,
     });
     this.#step = { goalId: goal.id, stepId: step.id, model };
     this.#bg(
       this.#drive(
-        session, stepPrompt(item.request, step.instruction, p.done + 1, p.total), item.id,
+        session, stepPrompt(item.request, step.instruction, at, p.total), item.id,
         { fromUser: false },
       )
         .finally(() => { this.#resuming = undefined; this.#step = undefined; }),
@@ -3703,6 +3705,12 @@ export class UiServer {
     // 「確かめて通った」を条件にすると、試験の無い作業場で
     // 何をしても永久に済まない（実際にそうなった）。
     const done = settled?.reason === 'completed' && settled.checked !== 'failed' && settled.checked !== 'unsure';
+    /*
+     * **止めた回は、落ちた回に数えない。**■ で止めた段を「落ちた」と数えていたので、二度止めると割り直し、
+     * 割った先の段は一度で塞いで、依頼ごと「ここで止めます」とやり残しから外していた。歩幅も縮めていた。
+     * 割るのを止めたとき（`#stoppable`）は既にそう扱っている。そちらに揃える。
+     */
+    const stopped = settled?.reason === 'aborted';
     try {
       /*
        * 続きとして流している間に、そのやり残しが外で閉じられた（利用者が取り消した・溜めすぎで落とした）。
@@ -3722,7 +3730,7 @@ export class UiServer {
         // **一段は、道具が動いていなければ済んだことにしない。**
         // 段は「やること」を渡している。喋っただけの回を済みにすると、
         // 何もしていない段取りが、順調に進んだ顔で終わる。
-        if (session) await this.#settleStep(done && didSomething, session);
+        if (session && !stopped) await this.#settleStep(done && didSomething, session);
         // **段取りの途中は、やり残しを閉じない。**まだ段が残っている。
         const mine = (await this.#goals.list()).find((g) => g.id === stepping.goalId);
         /*
@@ -3736,6 +3744,8 @@ export class UiServer {
           return;
         }
         if (resuming && mine && !isSettled(mine)) {
+          // 止めた段は、すぐには拾い直さない（止めた直後の見回りが、同じ段をまた始めない）。回数は数えない。
+          if (stopped) await this.#unfinished.postpone(resuming);
           this.broadcast({ type: 'unfinished' });
           // 通った段の次は、**待たずに次へ**。一段ごとに見回りを待つと、
           // 10段の段取りで待ち時間だけ5分になる。
@@ -3766,6 +3776,13 @@ export class UiServer {
         await this.#unfinished.done(resuming);
         await this.#settleGoals();
         this.broadcast({ type: 'log', level: 'info', text: 'やり残しが片づきました' });
+        this.broadcast({ type: 'unfinished' });
+        return;
+      }
+      if (resuming && stopped) {
+        // 止めただけ。回数は数えず、すぐには拾い直さない（止めた直後に見回りがまた始めない）。
+        await this.#unfinished.postpone(resuming);
+        this.broadcast({ type: 'log', level: 'info', text: '止めたので、やり残しはしばらく置いてからまた試します（回数には数えません）' });
         this.broadcast({ type: 'unfinished' });
         return;
       }

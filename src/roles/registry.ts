@@ -43,8 +43,18 @@ export function dropWriteIfOutbound(access: readonly ToolAccess[]): {
   access: ToolAccess[]; dropped: boolean;
 } {
   const outbound = access.includes('network') || access.includes('mcp');
-  if (!outbound || !access.includes('write')) return { access: [...access], dropped: false };
-  return { access: access.filter((a) => a !== 'write'), dropped: true };
+  /*
+   * **`execute` も書く手。**`run_command` は `node -e` / `echo … >` / `git apply` でファイルを書ける（許可の先頭語に
+   * node・echo・git が在る）。write だけを落とすと、外から持ち帰ったものを run_command でそのままリポジトリへ書けた。
+   */
+  const writes = (a: ToolAccess): boolean => a === 'write' || a === 'execute';
+  if (!outbound || !access.some(writes)) return { access: [...access], dropped: false };
+  return { access: access.filter((a) => !writes(a)), dropped: true };
+}
+
+/** 落とした権限の名前（知らせの文に出す。実際に落としたものだけを言う）。 */
+function droppedNames(before: readonly ToolAccess[], after: readonly ToolAccess[]): string {
+  return before.filter((a) => !after.includes(a)).join(' と ');
 }
 
 export class RoleRegistry {
@@ -78,7 +88,7 @@ export class RoleRegistry {
       const { access, dropped } = dropWriteIfOutbound(r.access);
       if (dropped) {
         this.#dropped.push(
-          `${r.id}: 外へ出る道があるので write を外しました`
+          `${r.id}: 外へ出る道があるので ${droppedNames(r.access, access)} を外しました`
           + '（外から入ってきたものを、そのままリポジトリへ書けてしまうため）',
         );
       }
@@ -163,7 +173,7 @@ export class RoleRegistry {
     const { access, dropped } = dropWriteIfOutbound(want);
     if (dropped) {
       this.#dropped.push(
-        `${merged.id}: 外へ出る道があるので write を外しました`
+        `${merged.id}: 外へ出る道があるので ${droppedNames(want, access)} を外しました`
         + '（外から入ってきたものを、そのままリポジトリへ書けてしまうため）',
       );
     }
