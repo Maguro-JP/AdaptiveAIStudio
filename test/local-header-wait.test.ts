@@ -4,8 +4,9 @@
  * ヘッダまでを「繋がるまで」の 10 秒で見切っていたので、モデルの読み込みと入力の読み取りが 10 秒を
  * 超えると「接続に失敗」で落ちた（地元の時間切れはやり直さない）。繋がるかは短く見て、繋がったら長く待つ。
  *
- * 時刻の長さには頼らない。相手は、こちらの「繋がるまで」の時計（20ms）より**後に**仕掛けた時計で
- * ヘッダを返す。同じプロセスの時計は早く切れる方から順に鳴るので、直す前の版は必ず先に見切る。
+ * 相手は、こちらの「繋がるまで」の時計（500ms）より**後に**仕掛けた、より長い時計（1,500ms）でヘッダを返す。
+ * 同じプロセスの時計は早く切れる方から順に鳴るので、直す前の版は必ず先に見切る。「繋がるまで」を短くしすぎると、
+ * 直した版の TCP の確かめまで混んだ機械で見切られるので、余裕を持たせる。
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,7 +21,7 @@ async function lateHeaders(): Promise<{ url: string; close: () => Promise<void> 
       setTimeout(() => {
         res.writeHead(200, { 'content-type': 'text/event-stream' });
         res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: '2' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
-      }, 200);
+      }, 1_500);
     });
   });
   await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
@@ -40,7 +41,7 @@ describe('地元の口: ヘッダを待つ長さ', () => {
   test('繋がっていれば、ヘッダが「繋がるまで」の上限より遅くても待つ', async () => {
     const s = await lateHeaders();
     try {
-      const p = new OpenAiCompatibleProvider({ id: 'ollama', baseUrl: s.url, locality: 'local', connectTimeoutMs: 20 });
+      const p = new OpenAiCompatibleProvider({ id: 'ollama', baseUrl: s.url, locality: 'local', connectTimeoutMs: 500 });
       assert.equal(await collect(p), '2');
     } finally { await s.close(); }
   });
@@ -60,7 +61,7 @@ describe('地元の口: ヘッダを待つ長さ', () => {
   test('雲は、これまで通りヘッダを「繋がるまで」の上限で見切る（対）', async () => {
     const s = await lateHeaders();
     try {
-      const p = new OpenAiCompatibleProvider({ id: 'cloud', baseUrl: s.url, locality: 'cloud', connectTimeoutMs: 20 });
+      const p = new OpenAiCompatibleProvider({ id: 'cloud', baseUrl: s.url, locality: 'cloud', connectTimeoutMs: 500 });
       const err = await collect(p).then(() => undefined, (e: unknown) => e);
       assert.ok(err instanceof ProviderError);
       assert.equal(err.kind, 'timeout');

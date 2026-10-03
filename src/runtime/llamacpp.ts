@@ -24,32 +24,25 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 
 /**
- * llama-server は**どこでも**付き添い越しに起こす。
+ * llama-server を付き添い越しに起こすか（Windows 以外）。
  *
- * Windows を外していたので、(1) コンソールの Ctrl-C（生成だけを止める合図）が llama-server にも届いて落ち、
- * 以後の依頼は「繋ぐ先に断られました」になる。(2) 親が後始末をせずに消えると（落ちた・殺された）、llama-server が
- * 親無しで残り、次の起動で同じ口を塞ぐ。付き添いは別のグループ（Windows では別のコンソール）で動き、
- * 親が居なくなれば（標準入力が閉じれば）llama-server を止める。
+ * Windows でも付き添いを通し、止めるのを taskkill /T に頼る形を試したが戻した。taskkill が使えない・失敗したときに
+ * llama-server が親無しで残り、しかも止まったものとして次のモデルを起こす。付き添いを挟まなければ、`child.kill()` が
+ * llama-server そのものを TerminateProcess するので、外のツールに頼らず確実に止まる。代わりに、コンソールの Ctrl-C が
+ * llama-server にも届く・親が後始末をせずに消えると残る、の二つは Windows で残る（実機で確かめられる形ができてから直す）
  */
-const WINDOWS = process.platform === 'win32';
+const GUARDED = process.platform !== 'win32';
 const GUARD = fileURLToPath(new URL('./llama-guard.ts', import.meta.url));
 
 /**
- * 付き添いごと落とす。付き添いだけ落とすと、llama-server が親無しで残る。
- * Windows には負の番号（グループ）への kill が無く、`child.kill()` は付き添いだけを TerminateProcess する。
- * 子の子まで落とすには taskkill /T を使う（Windows に必ず在る。管理者権限は要らない）。
+ * 止める。付き添い越しなら、付き添いのグループごと落とす（付き添いだけ落とすと、llama-server が親無しで残る）。
+ * 付き添いを挟まない Windows では、子が llama-server そのものなので `child.kill()` で落ちる。
  */
 function killTree(child: ChildProcess, signal: 'SIGTERM' | 'SIGKILL'): void {
-  if (child.pid === undefined) { child.kill(signal); return; }
-  if (WINDOWS) {
-    try {
-      spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
-        .on('error', () => child.kill(signal));
-      return;
-    } catch { /* 下で落とす */ }
-    child.kill(signal);
-    return;
-  }
+  // 既に終わった子には何もしない（その番号が別のプロセスに振り直されていれば、無関係なものを落とす）
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  // 付き添いを挟まない（Windows）なら、子は llama-server そのもの
+  if (!GUARDED || child.pid === undefined) { child.kill(signal); return; }
   if (signal === 'SIGTERM') { child.kill('SIGTERM'); return; } // 付き添いが llama-server へ渡し、5 秒で落とす
   try { process.kill(-child.pid, 'SIGKILL'); return; } catch { /* 既に居ない */ }
   child.kill('SIGKILL');
@@ -228,13 +221,16 @@ export class LlamaCppRuntime implements LocalRuntime {
     // Windows 以外は付き添い（`llama-guard.ts`）を挟み、別のプロセスグループで起こす。端末の Ctrl-C（生成だけを止める合図）で
     // llama-server まで落ちない。親が居なくなったら付き添いが止める（標準入力を開けたままにしておくのは、そのため）。
     // Windows のコンソールの Ctrl-C は別の仕組みで届くので、ここでは変えない（確かめていない）
-    const child = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', GUARD, this.#opts.command, ...args], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: runtimeEnv(this.#opts.command),
-      detached: true,
-      // Windows で detached にすると、コンソールのウィンドウが一つ開く。開かせない
-      windowsHide: true,
-    });
+    const child = GUARDED
+      ? spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', GUARD, this.#opts.command, ...args], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: runtimeEnv(this.#opts.command),
+        detached: true,
+      })
+      : spawn(this.#opts.command, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: runtimeEnv(this.#opts.command),
+      });
     this.#starting.add(child);
     let exited: { code: number | null; detail: string } | undefined;
     let stderrTail = '';

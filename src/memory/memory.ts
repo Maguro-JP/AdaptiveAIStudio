@@ -30,6 +30,7 @@
  * 動く条件を増やさないことも、止まらないための設計のうち。
  */
 import { readFile, open, mkdir, rename, unlink } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { jstDate } from '../core/clock.ts';
 import { BUILTIN_LESSONS, lessonLine } from './builtin-lessons.ts';
@@ -206,6 +207,17 @@ export interface Forgotten {
   era: object;
 }
 
+/**
+ * 作業場を比べる鍵。実体の道（8.3 の短い名前・junction・割り当てたドライブを揃える）で、大小を区別しない機械では小文字にする
+ * （`src/core/undo.ts` の作業場の鍵と同じ考え）。字のまま比べると、CLI を `c:\\work` から、画面を `C:\\Work` で開いただけで
+ * 同じ作業場の「前に駄目だった手」を思い出さず、同じ題の覚えが二つにできた。実体が取れなければ字のまま
+ */
+export function placeKey(root: string): string {
+  let real = root;
+  try { real = realpathSync(root); } catch { /* 無い・読めない作業場は字のまま */ }
+  return process.platform === 'linux' ? real : real.toLowerCase();
+}
+
 /** `restore` が戻さなかった理由。 */
 export type RestoreRefusal = 'reloaded' | 'taken' | 'duplicate';
 
@@ -362,8 +374,10 @@ export class Memory {
     const folded: [MemoryEntry, MemoryEntry][] = [];
     for (const e of this.#entries) {
       const key = normalizeTitle(e.title);
+      // 忘れた最初からの覚え（ファイルの declined）は、読めない間に入れ直していても足し戻さない
+      if (e.source === 'builtin' && this.#declined.has(e.title)) { renamed.set(e.id, e.id); continue; }
       const twin = e.supersededBy === undefined
-        ? onDisk.find((d) => d.kind === e.kind && normalizeTitle(d.title) === key && !d.supersededBy)
+        ? onDisk.find((d) => d.kind === e.kind && normalizeTitle(d.title) === key && !d.supersededBy && d.root === e.root)
         : undefined;
       if (twin) {
         renamed.set(e.id, twin.id);
@@ -463,11 +477,14 @@ export class Memory {
     const now = input.now ?? Date.now();
     const title = input.title.trim();
     const key = normalizeTitle(title);
+    const root = input.root !== undefined ? placeKey(input.root) : undefined;
 
-    // 別の作業場で覚えた同じ題は、別の覚え（「テストを直して」は作業場ごとに別の話）
+    /*
+     * 別の作業場で覚えた同じ題は、別の覚え（「テストを直して」は作業場ごとに別の話）。作業場の無い古い覚えにも畳まない
+     * （畳むと作業場が付かないまま、別の作業場で起きたことが混ざり続ける）
+     */
     const existing = this.#entries.find(
-      (e) => e.kind === input.kind && normalizeTitle(e.title) === key && !e.supersededBy
-        && (!e.root || !input.root || e.root === input.root),
+      (e) => e.kind === input.kind && normalizeTitle(e.title) === key && !e.supersededBy && e.root === root,
     );
 
     if (existing) {
@@ -497,7 +514,7 @@ export class Memory {
       outcome: input.outcome,
       source: input.source,
       supersedes: input.supersedes,
-      ...(input.root ? { root: input.root } : {}),
+      ...(root !== undefined ? { root } : {}),
     };
 
     // 決め直しは消さずに繋ぐ。なぜ変えたのかを失わないため。
@@ -552,6 +569,8 @@ export class Memory {
   }
 
   recall(query: string, opts: RecallOptions = {}): MemoryEntry[] {
+    // 作業場は鍵に揃えて比べる（覚えるときと同じ `placeKey`）
+    const here = opts.root !== undefined ? placeKey(opts.root) : undefined;
     const now = Date.now();
     const q = new Set(tokenize(query));
     const limit = opts.limit ?? 8;
@@ -574,7 +593,7 @@ export class Memory {
     const scored = this.#entries
       .filter((e) => (opts.includeSuperseded ? true : !e.supersededBy))
       .filter((e) => (opts.kinds ? opts.kinds.includes(e.kind) : true))
-      .filter((e) => !opts.root || !e.root || e.root === opts.root || !boundToPlace(e))
+      .filter((e) => !here || !e.root || e.root === here || !boundToPlace(e))
       .map((e) => {
         // 触ったものも語に割る。`src/auth.ts` を丸ごと一語で持つと、
         // 「src/auth.ts を直す」と書いても重ならない（区切りで割れるため）。

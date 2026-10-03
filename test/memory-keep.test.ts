@@ -106,6 +106,26 @@ describe('03 忘れた最初からの覚えを、立ち上げ直しで入れ直�
     assert.ok(!next.all().some((e) => e.title === target.title));
   });
 
+  test('**起動のときに読めなかった後の合わせ直しでも、忘れた最初からの覚えを足し戻さない**', async () => {
+    const dir = await tempDir('aas-declined-rejoin-');
+    const path = join(dir, 'memory.jsonl');
+    const m = new Memory(path);
+    await m.load();
+    m.seedLessons();
+    await m.save();
+    const target = m.all().find((e) => e.source === 'builtin')!;
+    assert.equal((await forgetAndSave(m, new ForgetShelf(), target.id)).ok, true);
+    // 読めない起動（手元は空から seedLessons で全部入る）→ 読めて合わせる
+    const busy = busyAtStart(path);
+    await busy.m.load();
+    busy.m.seedLessons();
+    busy.open();
+    await busy.m.save();
+    const again = new Memory(path);
+    await again.load();
+    assert.ok(!again.all().some((e) => e.title === target.title), '読めない間に入れ直した、忘れた覚えを足し戻した');
+  });
+
   test('古い版が書いた行として読んでも壊れない（declined の行は退けた行として残る）', async () => {
     const dir = await tempDir('aas-declined-compat-');
     const path = join(dir, 'memory.jsonl');
@@ -127,6 +147,26 @@ describe('05 別の作業場で試した手を混ぜない', () => {
     const inB = m.recall('src/index.ts を直す', { root: '/work/b' }).map((e) => e.kind);
     assert.ok(inB.includes('decision'));
     assert.ok(!inB.includes('attempt'));
+  });
+
+  test('**作業場をリンク越しの名前で開いても、同じ作業場の手を思い出す**（字のまま比べない）', async () => {
+    const { symlink, mkdir } = await import('node:fs/promises');
+    const base = await tempDir('aas-place-');
+    const real = join(base, 'real');
+    await mkdir(real);
+    const alias = join(base, 'alias');
+    // 'junction' は Windows で管理者権限なしに作れる。Linux では種類は無視される
+    await symlink(real, alias, 'junction');
+    const m = new Memory();
+    m.remember({ kind: 'attempt', title: 'src/index.ts の読み込みを直す', tags: ['src/index.ts'], outcome: 'failed', root: real, now: 1 });
+    assert.equal(m.failedBefore('src/index.ts を直す', 3, alias).length, 1, 'リンク越しに開くと、同じ作業場の駄目だった手を思い出さない');
+  });
+
+  test('作業場の無い古い覚えに、新しい手を畳まない（畳むと作業場の付かないまま混ざり続ける）', () => {
+    const m = new Memory();
+    m.remember({ kind: 'attempt', title: 'テストを直して', outcome: 'worked', now: 1 }); // 作業場を持つ前の覚え
+    const r = m.remember({ kind: 'attempt', title: 'テストを直して', outcome: 'failed', root: '/work/a', now: 2 });
+    assert.equal(r.isNew, true, '作業場の無い古い覚えに畳んだ');
   });
 
   test('同じ題でも、作業場が違えば別の覚え（回数を混ぜない）', () => {

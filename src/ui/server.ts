@@ -774,7 +774,7 @@ export class UiServer {
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
     } finally {
-      await this.#recordUnfinished(text, settled, undefined, didSomething, { beside: conversationId });
+      await this.#recordUnfinished(text, settled, undefined, didSomething, { beside: conversationId, said: text });
       // **残してから、席を空ける。**空けてから残すと、その間に来た同じ会話への送りが古い履歴で走る。
       const fresh = conv.history.slice(run.saved);
       if (fresh.length > 0) {
@@ -3382,7 +3382,7 @@ export class UiServer {
     } finally {
       this.#inFlight = undefined;
       this.#editorNow = undefined;
-      await this.#recordUnfinished(text, settled, resuming, didSomething);
+      await this.#recordUnfinished(text, settled, resuming, didSomething, opts.said ? { said: opts.said } : {});
       // 戻り先が増えたことを画面へ。**触ったのに出ていないと、
       // 戻せることに気づけない。**
       this.broadcast({ type: 'undo' });
@@ -3463,7 +3463,8 @@ export class UiServer {
     }
     // 続きの文はこちらが組み立てたもの。利用者の言葉として判じない。
     this.#bg(
-      this.#drive(session, resumePrompt(item), item.id, { fromUser: false })
+      // 記憶の題は打った分（全文の一行目を代わりに）。続きの文は元の依頼の全文を含むので、題にすると添付の中身が記憶に残る
+      this.#drive(session, resumePrompt(item), item.id, { fromUser: false, said: saidOf(item) })
         .finally(() => { this.#resuming = undefined; }),
       'やり残しの続きが落ちました',
     );
@@ -3599,7 +3600,7 @@ export class UiServer {
     this.#bg(
       this.#drive(
         session, stepPrompt(item.request, step.instruction, at, p.total), item.id,
-        { fromUser: false },
+        { fromUser: false, said: saidOf(item) },
       )
         .finally(() => { this.#resuming = undefined; this.#step = undefined; }),
       '一歩ずつの実行が落ちました',
@@ -3699,7 +3700,7 @@ export class UiServer {
     text: string, settled: { reason: string; verified: boolean; checked: string } | undefined,
     resuming?: string, didSomething = true,
     /** 横で走らせた会話の分。段取り（本体の一段）には触らず、この会話のやり残しとして記録する。 */
-    opts: { beside?: string } = {},
+    opts: { beside?: string; said?: string } = {},
   ): Promise<void> {
     // **済んだかどうかは「確かめて落ちていないこと」で見る。**
     // 「確かめて通った」を条件にすると、試験の無い作業場で
@@ -3807,6 +3808,7 @@ export class UiServer {
         : 'failed';
       const added = await this.#unfinished.add({
         request: text,
+        ...(opts.said ? { said: opts.said } : {}),
         why,
         note: settled.reason,
         ...((opts.beside ?? this.#conversationId) ? { conversationId: opts.beside ?? this.#conversationId } : {}),
@@ -4153,6 +4155,11 @@ export async function saveLayout(layout: Layout): Promise<void> {
   const path = LAYOUT_PATH();
   await mkdir(dirname(path), { recursive: true });
   if (!await writeWhole(path, JSON.stringify(layout, null, 2) + '\n')) throw new Error(`画面の並びを保存できませんでした: ${path}`);
+}
+
+/** やり残しの続きの回で記憶の題にする文。打った分が無い前からの記録は、元の依頼の一行目を 160 字まで。 */
+function saidOf(item: { said?: string; request: string }): string {
+  return item.said ?? (item.request.split('\n').find((l) => l.trim() !== '') ?? '').slice(0, 160);
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
