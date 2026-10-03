@@ -42,3 +42,8 @@ test('知らない役職は断る（全部のツールで働かせない）', ()
  *   items: [{ id: 't1', roleId: 'worker', ... writes: ['a.txt'] }, { id: 't2', roleId: 'worker', ... writes: ['b.txt'] }]
  *   assert.equal(seen.get('a.txt'), scopes.get('t1')); assert.equal(seen.get('b.txt'), scopes.get('t2'));
  */
+
+test('raceWith を文字列で書いたら断る（一文字ずつをモデル名として走らせない）', () => {
+  const text = '[{"id":"t","instruction":"x","laneId":"default","raceWith":"local:x"}]';
+  assert.throws(() => parseTasks(text, ['default']), /raceWith/);
+});

@@ -5,7 +5,7 @@
  */
 import { spawn } from 'node:child_process';
 import { chunkReader } from '../core/text.ts';
-import { workspaceScope } from './workspace-stamp.ts';
+import { SAFE_GIT_ARGS, workspaceScope } from './workspace-stamp.ts';
 
 export type GitState =
   | { kind: 'clean'; branch: string }
@@ -84,7 +84,7 @@ export function describeGitState(state: GitState): { text: string; risky: boolea
 
 /** git を呼ぶ。更新の仕組みからも使う。 */
 export function runGit(args: string[], cwd: string): Promise<{ code: number; out: string }> {
-  return runWithin('git', args, cwd, GIT_TIMEOUT_MS, {
+  return runWithin('git', [...SAFE_GIT_ARGS, ...args], cwd, GIT_TIMEOUT_MS, {
     // 資格情報を訊かせない（端末の入力待ち・Windows の資格情報を訊く画面で、返らないまま止まる）。訊かれる場面は失敗として返る
     GIT_TERMINAL_PROMPT: '0',
     GCM_INTERACTIVE: 'never',

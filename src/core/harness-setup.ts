@@ -23,7 +23,9 @@ import { stateDir } from './autopilot-setup.ts';
 const DEFAULT_PROTECTED = [
   '**/.env', '**/.env.*',
   '**/*.lock', '**/package-lock.json', '**/pnpm-lock.yaml', '**/yarn.lock',
-  '.git/**',
+  // `.git` も、どの階層でも、ファイルとしても守る。直下の `.git/**` だけだったので、作業場の下に置いた別の clone の `.git/config`・hooks や、
+  // worktree・submodule の `.git`（`gitdir:` と書かれたファイル）を承認なしで書き換えられた（hook と core.fsmonitor は git を動かした所で命令を走らせる）
+  '**/.git', '**/.git/**',
   '**/id_rsa', '**/*.pem', '**/credentials*',
 ];
 

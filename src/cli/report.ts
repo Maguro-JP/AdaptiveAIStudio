@@ -39,7 +39,16 @@ export function redactSecrets(text: string): string {
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer （伏せました）')
     .replace(/\bgh[pousr]_[A-Za-z0-9]{16,}\b/g, '（伏せました）')
     .replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b/g, '（伏せました）')
-    .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, '（伏せました）');
+    .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, '（伏せました）')
+    // 検問所（`harness/gate.ts`）が秘密として知っている形のうち、ここに無かったもの。GitHub の fine-grained トークン、AWS の鍵、Hugging Face のトークン
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}/g, '（伏せました）')
+    .replace(/\bAKIA[0-9A-Z]{16}\b/g, '（伏せました）')
+    .replace(/\bhf_[A-Za-z0-9]{20,}\b/g, '（伏せました）')
+    // `.env` の形（`GITHUB_TOKEN=...`）と、命令の引数の形（`--token xxx`・`"--token", "xxx"`）。名前が JSON の項目でないと上で当たらない
+    // 値は引用符で囲まれていてもよい（`.env` の `KEY="..."`、`--token="..."`）。囲みごと伏せる
+    .replace(/\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)\s*=\s*)(?!（伏せました）)(?:"[^"\n]*"|'[^'\n]*'|[^\s"']+)/g, '$1（伏せました）')
+    // 引数の名前は単語の頭から（`max-token`・`non-secret` のような普通の言葉の一部には当てない）
+    .replace(/(?<![\w-])(--?(?:api[-_]?key|token|secret|password)\b)(\s*=\s*|["']?\s*,\s*|\s+)(?!（伏せました）)(?:"[^"\n]*"|'[^'\n]*'|[^\s"',\]]+)/gi, '$1$2（伏せました）');
 }
 
 async function tailOf(path: string, lines: number): Promise<string> {
@@ -172,7 +181,14 @@ export async function buildReport(opts: {
   section('doctor', doctorBody);
 
   section('直近の記録（logs/ui.log の末尾）', await tailOf(join(opts.state, 'logs', 'ui.log'), 400));
-  section('直近の操作（audit.jsonl の末尾）', await tailOf(join(opts.state, 'audit.jsonl'), 50));
+  // 設定で場所を変えていれば、そちらを読む（既定の場所だけを見ていたので、変えた人の報告は「無し」になっていた）
+  let auditAt = join(opts.state, 'audit.jsonl');
+  try {
+    // メモ帳で保存した設定は先頭に BOM が付く（本体の読み込みと同じく取ってから読む）
+    const set = (JSON.parse(cfg.replace(/^\uFEFF/, '')) as { harness?: { auditLog?: unknown } }).harness?.auditLog;
+    if (typeof set === 'string' && set !== '') auditAt = set;
+  } catch { /* 設定が無い・読めない。既定の場所 */ }
+  section(`直近の操作（${auditAt} の末尾）`, await tailOf(auditAt, 50));
 
   const reports = await latestReports(join(opts.state, 'reports'));
   for (const r of reports) {

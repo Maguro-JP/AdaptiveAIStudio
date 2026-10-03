@@ -48,6 +48,31 @@ describe('困ったときの報告', () => {
     assert.ok(out.includes('普通の行はそのまま'), out);
   });
 
+  test('**検問所が秘密として知っている形（fine-grained・AWS・HF）と、.env・引数の形も伏せる**', () => {
+    const lines = [
+      'x github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz',
+      'aws AKIAABCDEFGHIJKLMNOP',
+      'hf hf_abcdefghijklmnopqrstuvwxyz012345',
+      'ANTHROPIC_API_KEY=plainvalue123',
+      'args: ["--token", "argvalue456"]',
+      'cmd --api-key=flagvalue789',
+      'PATH=/usr/bin のような名前でない行はそのまま',
+      'GITHUB_TOKEN="quotedvalue111"',
+      "DB_PASSWORD='quotedvalue222'",
+      'cmd --token="quotedvalue333"',
+      'the max-token count and a non-secret value stay',
+    ];
+    const out = redactSecrets(lines.join('\n'));
+    for (const leaked of ['github_pat_11ABCDEFG', 'AKIAABCDEFGHIJKLMNOP', 'hf_abcdefghijklmnop', 'plainvalue123', 'argvalue456', 'flagvalue789',
+      'quotedvalue111', 'quotedvalue222', 'quotedvalue333']) {
+      assert.ok(!out.includes(leaked), `${leaked} が出ている:\n${out}`);
+    }
+    assert.ok(out.includes('PATH=/usr/bin'), out);
+    // 普通の言葉の一部（max-token・non-secret）は巻き込まない
+    assert.ok(out.includes('the max-token count and a non-secret value stay'), `普通の文を伏せている:\n${out}`);
+    assert.ok(out.includes('ANTHROPIC_API_KEY=') && out.includes('--token'), `名前まで消している:\n${out}`);
+  });
+
   test('**記録の節も伏せてから出す**', async () => {
     const state = join(home, 'redact-state');
     await mkdir(join(state, 'logs'), { recursive: true });

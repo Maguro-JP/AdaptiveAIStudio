@@ -37,9 +37,16 @@ export const STAMP_GIT_TIMEOUT_MS = 2 * 60_000;
  * （`core.autocrlf` の「LF will be replaced by CRLF」など）、それが NUL 区切りの欄に
  * 紛れ込むと、欄がずれて壊れた記録になる。ここでは二つを混ぜない。
  */
+/**
+ * 製品が自分で走らせる git には、作業場の設定の `core.fsmonitor` を効かせない。fsmonitor に書かれた命令は `git status` のたびに走るので、
+ * 作業場の `.git/config`（作業の中で書き換えられうる）が、承認なしに命令を走らせる道になる。
+ */
+// 値は空にする。`false` は git 2.36 より前では「false という命令」と読まれ、呼ぶたびに sh を起こす。空ならどの版でも「無し」（2.43 で、空でも命令が走らないことを測った）
+export const SAFE_GIT_ARGS: readonly string[] = ['-c', 'core.fsmonitor='];
+
 function gitOut(args: string[], cwd: string, maxBuffer = 16 * 1024 * 1024): Promise<string | undefined> {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, maxBuffer, encoding: 'utf8', timeout: STAMP_GIT_TIMEOUT_MS }, (err, stdout) => {
+    execFile('git', [...SAFE_GIT_ARGS, ...args], { cwd, maxBuffer, encoding: 'utf8', timeout: STAMP_GIT_TIMEOUT_MS }, (err, stdout) => {
       resolve(err ? undefined : stdout);
     });
   });
@@ -48,7 +55,7 @@ function gitOut(args: string[], cwd: string, maxBuffer = 16 * 1024 * 1024): Prom
 /** 同じく、バイト列のまま返す。中身は utf8 と限らない（二進・Shift_JIS）。 */
 function gitBytes(args: string[], cwd: string, maxBuffer: number): Promise<Buffer | undefined> {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, maxBuffer, encoding: 'buffer', timeout: STAMP_GIT_TIMEOUT_MS }, (err, stdout) => {
+    execFile('git', [...SAFE_GIT_ARGS, ...args], { cwd, maxBuffer, encoding: 'buffer', timeout: STAMP_GIT_TIMEOUT_MS }, (err, stdout) => {
       resolve(err ? undefined : stdout);
     });
   });

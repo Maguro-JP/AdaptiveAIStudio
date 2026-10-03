@@ -15,17 +15,20 @@ process.env.AAS_STATE_DIR = await tempDir('aas-protected-nested-state-');
 const { buildHarness } = await import('../src/core/harness-setup.ts');
 const { writeFileTool } = await import('../src/agent/tools/fs.ts');
 
+const PLACES = ['packages/api/.env', 'apps/web/.env.local', 'packages/api/package-lock.json', 'apps/web/pnpm-lock.yaml', '.env',
+  'vendor/lib/.git/config', 'vendor/lib/.git/hooks/pre-commit', '.git/config'];
 let root = '';
 before(async () => {
   root = await tempDir('aas-protected-nested-');
-  for (const at of ['packages/api/.env', 'apps/web/.env.local', 'packages/api/package-lock.json', 'apps/web/pnpm-lock.yaml', '.env']) {
+  for (const at of [...PLACES, 'sub/.git']) {
     await mkdir(join(root, at, '..'), { recursive: true });
     await writeFile(join(root, at), 'ORIGINAL');
   }
 });
 
 describe('既定で守るファイルは、どの階層でも守る', () => {
-  for (const at of ['packages/api/.env', 'apps/web/.env.local', 'packages/api/package-lock.json', 'apps/web/pnpm-lock.yaml', '.env']) {
+  // `.git` は下の階層の clone のもの・ファイルとしての `.git`（worktree・submodule は `gitdir:` と書かれたファイル）も守る
+  for (const at of [...PLACES, 'sub/.git']) {
     test(`${at} には書かない`, async () => {
       // 読んでから書く規則は外す（そちらでも止まるので、守る道の規則だけを見る）
       const harness = await buildHarness({ agent: { root }, harness: { readBeforeWrite: false } } as never, undefined, undefined, 'linux');

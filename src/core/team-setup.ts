@@ -49,8 +49,9 @@ export function parseTasks(
     if (!laneIds.includes(item.laneId)) {
       throw new Error(`タスク "${item.id}" のレーン "${item.laneId}" が設定にありません。`);
     }
-    if (!strings(item.deps) || !strings(item.writes)) {
-      throw new Error(`タスク "${item.id}" の deps・writes は文字列の並びにしてください。`);
+    // raceWith も確かめる。文字列で書くと一文字ずつに割れ、`l`・`o` をモデル名として走らせていた
+    if (!strings(item.deps) || !strings(item.writes) || !strings(item.raceWith)) {
+      throw new Error(`タスク "${item.id}" の deps・writes・raceWith は文字列の並びにしてください。`);
     }
     if (item.roleId !== undefined && (typeof item.roleId !== 'string' || (knowsRole && !knowsRole(item.roleId)))) {
       throw new Error(`タスク "${item.id}" の役職 "${String(item.roleId)}" がありません。`);

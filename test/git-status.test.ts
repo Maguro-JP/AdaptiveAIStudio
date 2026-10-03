@@ -102,3 +102,28 @@ test('作業場が丸ごと未追跡なら、「クリーン」と言わない',
   const now = await inspectGit(work);
   assert.equal(now.kind, 'dirty', `何もコミットされていないのに ${now.kind} と言った`);
 });
+
+test('作業場の設定の core.fsmonitor に書かれた命令を、製品の git が走らせない', { skip: GIT_OK ? false : 'この機械には git が無い' }, async (t) => {
+  // fsmonitor の命令は `git status` のたびに走る。作業場の `.git/config` は作業の中で書き換えられうるので、承認なしに命令を走らせる道になっていた
+  const root = await tempDir('aas-git-fsmonitor-');
+  await writeFile(join(root, 'a.txt'), 'x\n');
+  git(root, 'init', '-q');
+  git(root, 'add', '.');
+  git(root, 'commit', '-q', '-m', 'first');
+  // 走った合図のファイルは作業場の .git の中に置く（みんなで使う一時フォルダの直下に作らない。status にも挙がらない）
+  const marker = join(root, '.git', 'fsmonitor-ran');
+  const hook = join(root, 'hook.sh');
+  await writeFile(hook, `#!/bin/sh\ntouch "${marker}"\nexit 1\n`, { mode: 0o755 });
+  git(root, 'config', 'core.fsmonitor', hook);
+  // 試験の場が本当に走らせる形になっているかを先に見る（走らないなら、この試験は何も確かめていない）
+  try { git(root, 'status', '--porcelain'); } catch { /* 命令が 1 で終わっても status は続く */ }
+  const { existsSync, rmSync } = await import('node:fs');
+  // この git は fsmonitor の命令を走らせない（古い版・Windows の形）。確かめる場が無いので、通ったではなく skip にする
+  if (!existsSync(marker)) { t.skip('この git は fsmonitor の命令を走らせない'); return; }
+  rmSync(marker);
+
+  await inspectGit(root);
+  const { workspaceStamp } = await import('../src/agent/workspace-stamp.ts');
+  await workspaceStamp(root);
+  assert.equal(existsSync(marker), false, '作業場の設定の命令を、製品の git が走らせた');
+});
