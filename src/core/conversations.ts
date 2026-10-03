@@ -516,13 +516,21 @@ export class Conversations {
         await renameRetrying(from.path, path);
         return { id };
       }
-      // 別の名前で戻す。見出しの行の名前も書き換える（いま読む所は無いが、ファイルの名前と中の名前の食い違いを残さない）
-      const lines = (await readFile(from.path, 'utf8')).split('\n');
+      /*
+       * 別の名前で戻す。**先に名前ごと移してから、見出しの行を置き換える**（どちらも途中で落ちても丸ごと残る）。
+       * 前は新しい名前へ書き写してから消していた。書いている途中で落ちると半端な写しが残り、消した側は次に立ち上げたときに
+       * 片づけで本当に消えていた。見出しの行の名前も書き換える（ファイルの名前と中の名前の食い違いを残さない）
+       */
       const other = newId();
+      const to = this.#path(other);
+      if (await exists(to)) throw new Error(`戻す先の名前が既にあります: ${other}`);
+      await renameRetrying(from.path, to);
+      const lines = (await readFile(to, 'utf8')).split('\n');
       const first = parse(lines[0] ?? '');
-      if (first?.t === 'meta') lines[0] = JSON.stringify({ ...first, id: other } satisfies MetaLine);
-      await writeFile(this.#path(other), lines.join('\n'), { encoding: 'utf8', flag: 'wx' });
-      await rm(from.path, { force: true });
+      if (first?.t === 'meta') {
+        lines[0] = JSON.stringify({ ...first, id: other } satisfies MetaLine);
+        await replaceWhole(to, lines.join('\n')).catch(() => undefined); // 中の名前は読む所が無い。書けなくても戻してはいる
+      }
       return { id: other };
     }));
   }
