@@ -52,13 +52,11 @@ export function wrapTool(
       /*
        * 渡す引数は、外へ出ていくもの。持ち出しの検問を通す（fetch_url と同じ）。
        * 通していなかったので、読んだトークンや秘密鍵を引数に入れて外のツールへ渡せた。承認の画面は引数の頭 200 字しか
-       * 見せないので、後ろに入れれば人の目にも入らない
+       * 見せないので、後ろに入れれば人の目にも入らない。
+       * 見るのは当てはめだけ。モデルにまで見立てさせると、呼ぶたびにモデルを一回余分に回し、
+       * モデルに届かないときは外のツールが全部止まる
        */
-      const carry = JSON.stringify(args ?? {});
-      let outbound = inspectOutbound(carry);
-      if (outbound.passed && opts.inspector) {
-        outbound = combine(outbound, await opts.inspector.inspect(carry, 'outbound', ctx.signal), 'outbound');
-      }
+      const outbound = inspectOutbound(JSON.stringify(args ?? {}));
       if (!outbound.passed) return fail(describeVerdict(outbound, 'outbound'));
 
       // 外部ツールを動かすのは、外へ出るのと同じ重さで扱う。
