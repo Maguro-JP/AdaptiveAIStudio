@@ -46,13 +46,14 @@ describe('暴走（同じ並びの繰り返し）を見つける', () => {
   });
 
   test('長い入力でも、走査する量が増えない', () => {
-    // 末尾しか見ない。長さに比例して遅くならないこと（二乗にしない）。
-    const small = 'x'.repeat(2_000);
+    /*
+     * 末尾しか見ない（出来た端から呼ばれるので、全部を毎回見ると二乗になる）。前は時計で測っていたが、機械が混んでいると
+     * 一度だけ落ちた（走らせるたびに変わる試験は書かない）。答えで確かめる: 全部が同じ字でも、見つけた位置は末尾の見る範囲
+     * （minRun の 2 倍）の頭より前にならない。全体を走査していれば 0 と答える。
+     */
     const big = 'x'.repeat(200_000);
-    const t0 = process.hrtime.bigint(); findRunaway(small); const a = process.hrtime.bigint() - t0;
-    const t1 = process.hrtime.bigint(); findRunaway(big); const b = process.hrtime.bigint() - t1;
-    // 100 倍の長さで 20 倍を超えるなら、末尾だけを見ていない。
-    assert.ok(b < a * 20n + 1_000_000n, `長さに比例している: ${a} -> ${b}`);
+    assert.equal(findRunaway(big, { minRun: 200 }), 200_000 - 400, '末尾の見る範囲より前まで走査している');
+    assert.equal(findRunaway('x'.repeat(2_000), { minRun: 200 }), 2_000 - 400, '長さで答えが変わる');
   });
 
   test('止めた理由に、何を繰り返していたかが出る', () => {
