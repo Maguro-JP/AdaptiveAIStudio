@@ -290,6 +290,7 @@
 - 画面の出来事の流れが切れて繋ぎ直したら、承認待ちと作業中かを取り直す
 - Windows の CI で落ちていた 17 件を直す（プレビューが全部 403・フォルダを空の会話と読む・区切りの取り違え）
 - 守りの規則を実体の道でも照らす・ドライブの頭の作業場で名前を欠かない・.cmd の MCP を起こす・CUDA の DLL を名前で置く
+- 入口のスクリプトは、リンクを挟んだ道から起こしても動く
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10940,3 +10941,16 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
   長い名前を揃えない。いずれも確かめていない
 触る場所: `src/agent/tools/paths.ts` の `canonicalRel`・`realSafeResolve`、`src/harness/builtin-rules.ts`、`src/harness/deliberation.ts` の
 `isGuarded`、`src/mcp/client.ts` の `spawnPlan`・`quoteForCmd`、`src/runtime/llama-install.ts`
+
+## 2026-10-03  入口のスクリプトは、リンクを挟んだ道から起こしても動く
+
+- `scripts/run-tests.mjs`・`run.mjs`・`bundle.mjs` は、直に起こされたかを `import.meta.url === pathToFileURL(argv[1])` で見ていた。
+  Node は起こしたファイルを実体の道で読むので、道の途中にリンク・junction・subst のドライブ・Windows の短い名前があると
+  一致せず、何もせずに終了コード 0 で終わる。`npm test` なら試験を一つも走らせずに「通った」になる（手元で再現した）
+- 両方を実体の道にそろえて比べる（`scripts/is-main.mjs` の `isMain`）。三つとも同じ部品を使う
+- 試験: `test/home.test.ts` で、scripts をリンクで指した道から `run.mjs` を起こし、使い方を言って 2 で終わることを見る。
+  直す前の版で落ちることを見た。前からある「書き方を文字で見る」試験は、`argv[1]` が入口から消えたので何も見なくなる
+  （動きで見る試験に置き換わる）
+- あわせて: Windows の CI で `.ENV` の試験が落ちた。大小を区別しない機械では `.ENV` は `.env` そのもので、守りの規則が実体を
+  引くようになって止まるのが正しい。試験は、走らせている所が大小を区別するかをその場で聞き、両方の向きを見る形にした
+触る場所: `scripts/is-main.mjs`

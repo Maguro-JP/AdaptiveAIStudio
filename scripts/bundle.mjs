@@ -24,7 +24,8 @@
 import { cp, copyFile, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink } from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isMain } from './is-main.mjs';
 import { execFileSync } from 'node:child_process';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -567,7 +568,8 @@ export async function bundle({
 // argv[1] は Z:\...\run.mjs（円記号・ドライブ文字）、import.meta.url は
 // file:///Z:/.../run.mjs。**一致しないので、中身が丸ごと動かない。**
 // 何も言わずに終了コード0で終わるので、気づけない（実機でそうなった）。
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+// 実体の道どうしで比べる（`is-main.mjs`）
+if (isMain(import.meta.url)) {
   const out = resolve(root, arg('--out', 'dist/aas-portable'));
   console.log('持ち運び版を組み立てます');
   const r = await bundle({

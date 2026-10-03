@@ -448,6 +448,24 @@ describe('npm 無しの入口（scripts/run.mjs）', () => {
     }
   });
 
+  test('**リンクを挟んだ道から起こしても、入口の中身が動く**', async () => {
+    // Node は起こしたファイルを実体の道で読むので、import.meta.url は実体、argv[1] は打たれた道のまま。
+    // 道の途中にリンク・junction・subst のドライブ・Windows の短い名前があると一致せず、**何もせずに 0 で終わっていた**
+    // （run-tests.mjs なら、試験を一つも走らせずに「通った」になる）。名前を付けずに起こすと、使い方を言って 2 で終わるはず
+    const { symlink } = await import('node:fs/promises');
+    const dir = await tempDir('aas-is-main-');
+    const alias = join(dir, 'scripts-alias');
+    // 'junction' は Windows で管理者権限なしに作れる。Linux では種類は無視される
+    await symlink(join(installRoot(), 'scripts'), alias, 'junction');
+    const got = await new Promise<{ code: number | null; err: string }>((done) => {
+      const child = execFile(process.execPath, [join(alias, 'run.mjs')], { timeout: 30_000 }, (e, _out, err) =>
+        done({ code: e ? (e as { code?: number }).code ?? 1 : 0, err: String(err) }));
+      void child;
+    });
+    assert.equal(got.code, 2, `リンク越しに起こすと中身が動いていない（終了コード ${got.code}）: ${got.err.slice(0, 200)}`);
+    assert.match(got.err, /使い方/);
+  });
+
   test('組み立てたものを、通しで動かせる', async () => {
     // これが無かったのが根本。入口が死んでいても、部品の試験は全部通る。
     // 実機では「1 を選んでも何も起きない」という形で出た。
