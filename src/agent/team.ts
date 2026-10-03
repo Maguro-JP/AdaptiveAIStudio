@@ -10,6 +10,7 @@ import { Scheduler, type LaneConfig, type Task, type TaskOutcome } from '../core
 import { Agent, type AgentEvent } from './loop.ts';
 import { race, type Attempt, type RaceEvent } from './race.ts';
 import type { Tool, ApprovalRequest, ApprovalAnswer, RequestScope } from './tools/types.ts';
+import { mayChangeFiles } from './tools/write-kind.ts';
 
 export interface WorkItem {
   id: string;
@@ -47,6 +48,8 @@ export type TeamProgress =
   | { type: 'handoff'; taskId: string; from: string[] }
   | { type: 'running'; taskIds: string[] }
   | { type: 'race'; taskId: string; event: RaceEvent }
+  /** 冗長実行の指定を外して一本で走らせた（作業場を変えうるツールを持つ作業は、並べると負けた側の書き込みが残る） */
+  | { type: 'raceSkipped'; taskId: string; reason: string }
   | (TeamEvent & { type: 'agent' });
 
 export interface TeamOptions {
@@ -99,6 +102,13 @@ export class Team {
   constructor(orchestrator: ChatOrchestrator, opts: TeamOptions) {
     this.#orchestrator = orchestrator;
     this.#opts = opts;
+  }
+
+  /** その作業の担当が、作業場を変えうるツールを持つか（`#runOne` と同じ選び方で見る）。 */
+  #mayChange(item: WorkItem): boolean {
+    const assigned = item.roleId ? this.#opts.assign?.(item.roleId, item) : undefined;
+    const tools = assigned?.tools ?? this.#opts.toolsFor?.(item) ?? this.#opts.tools;
+    return tools.some((t) => mayChangeFiles(t.schema.name));
   }
 
   /** 1モデルで1件の作業を最後まで走らせる。冗長実行の1本ぶんでもある。 */
@@ -172,8 +182,15 @@ export class Team {
         // 前の担当の成果を知らないまま、同じ調査をやり直すことになる。
         const handoff = describeHandoff(ctx.dependencies, byId);
 
-        // 冗長実行の指定があれば、同じ作業を複数モデルへ同時に投げる
-        if (item.raceWith && item.raceWith.length > 0) {
+        /*
+         * **作業場を変えうるツールを持つ作業は、並べない。**試みはどれも同じ作業場へ書くので、勝ちが決まって残りを止めても、
+         * 負けた側が途中まで書いた分は戻らない（「勝者の分＋敗者の途中の分」の混ざった作業場を完了と言う）。一本で走らせ、そう言う
+         */
+        if (item.raceWith && item.raceWith.length > 0 && this.#mayChange(item)) {
+          push({ type: 'raceSkipped', taskId: item.id, reason: '作業場を変えうるツールを持つ作業なので、複数のモデルに同時に書かせず、一本で走らせます' });
+        }
+        // 冗長実行の指定があれば、同じ作業を複数モデルへ同時に投げる（読むだけの作業に限る）
+        else if (item.raceWith && item.raceWith.length > 0) {
           const models = [ctx.candidates[0]!, ...item.raceWith];
           const attempts: Attempt<WorkResult>[] = models.map((modelId) => ({
             label: modelId,

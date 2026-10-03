@@ -129,10 +129,10 @@ export class IdleScheduler {
     return this.#modes.map((m) => this.#stat(m.id));
   }
 
-  restore(stats: ModeStat[]): void {
+  restore(stats: ModeStat[], now = Date.now()): void {
     // 形の違う一件（`null` 等）は、その一件だけ除く。そのまま入れると、途中で投げて残りを読まず、次の保存で消していた。
     if (!Array.isArray(stats)) return;
-    const valid = stats.filter(isStat);
+    const valid = stats.filter(isStat).map((s) => notAfter(s, now));
     for (const s of valid) this.#stats.set(s.mode, s);
     // 再起動しても間合いは引き継ぐ。立ち上げ直せば喋り出す、では意味がない。
     const last = valid.map((s) => s.lastRunAt ?? 0).reduce((a, b) => Math.max(a, b), 0);
@@ -143,9 +143,9 @@ export class IdleScheduler {
    * 起動のときに読めなかった記録を、後から読めたときに足す。空で始めた間に数えた分は、その上に積む。
    * 置き換えると、その間の分か、それまでの実績のどちらかが消える。
    */
-  absorb(stats: unknown): void {
+  absorb(stats: unknown, nowMs = Date.now()): void {
     if (!Array.isArray(stats)) return;
-    for (const base of stats.filter(isStat)) {
+    for (const base of stats.filter(isStat).map((s) => notAfter(s, nowMs))) {
       const now = this.#stats.get(base.mode);
       if (!now) { this.#stats.set(base.mode, base); continue; }
       now.runs += base.runs; now.produced += base.produced; now.accepted += base.accepted;
@@ -330,4 +330,12 @@ export function formatIdleStats(modes: IdleMode[], stats: ModeStat[]): string {
     );
   }
   return lines.join('\n');
+}
+
+/**
+ * 記録の時刻が未来なら、いまに丸める。時計がずれていた間に書かれた記録（BIOS の時計を後で合わせた、など）が残ると、
+ * その時刻を過ぎるまで「まだ間を置く」が続き、日課も含めて何も考えなくなっていた（「あと約 N 分」の N が巨大に出る）。
+ */
+function notAfter(s: ModeStat, now: number): ModeStat {
+  return s.lastRunAt !== undefined && s.lastRunAt > now ? { ...s, lastRunAt: now } : s;
 }

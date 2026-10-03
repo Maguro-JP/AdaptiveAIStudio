@@ -11,6 +11,7 @@ import { ProviderRegistry } from '../src/core/registry.ts';
 import { ChatOrchestrator } from '../src/core/orchestrator.ts';
 import { Team, describeHandoff, type WorkItem, type TeamProgress } from '../src/agent/team.ts';
 import { readFileTool, writeFileTool } from '../src/agent/tools/fs.ts';
+import type { Tool } from '../src/agent/tools/types.ts';
 import { wireTeam } from '../src/core/team-setup.ts';
 import { DEFAULT_CONFIG } from '../src/config.ts';
 
@@ -77,6 +78,7 @@ async function workerServer(delayMs: number, opts: { perModelDelay?: Record<stri
 async function runTeam(
   items: WorkItem[], parallel: number,
   serverOpts: { perModelDelay?: Record<string, number>; failModels?: string[] } = {},
+  tools: Tool[] = [readFileTool, writeFileTool],
 ) {
   const server = await workerServer(60, serverOpts);
   const root = await tempDir('aas-team-');
@@ -87,7 +89,7 @@ async function runTeam(
     const team = new Team(new ChatOrchestrator(registry), {
       lanes: [{ id: 'coder', candidates: ['local:m'], parallel }],
       system: 'test',
-      tools: [readFileTool, writeFileTool],
+      tools,
       root,
       maxTurns: 6,
       approve: async () => true,
@@ -145,15 +147,17 @@ describe('チーム並列実行', () => {
 });
 
 describe('冗長実行（同じ作業を複数モデルへ同時に投げる）', () => {
+  // 冗長実行は読むだけの作業に限る（書く作業は下の describe）。偽の作業者は write_file を呼ぶが、持っていないので断られて終わる
+  const READ_ONLY = [readFileTool];
   test('速い方の結果が採用される', async () => {
-    const { outcomes, progress, root } = await runTeam(
+    const { outcomes, progress } = await runTeam(
       [{ id: 't1', laneId: 'coder', writes: ['a.txt'],
          instruction: 'a.txt を作成してください。', raceWith: ['local:fast'] }],
       2,
       { perModelDelay: { m: 300, fast: 20 } },
+      READ_ONLY,
     );
     assert.equal(outcomes.get('t1')?.state, 'done');
-    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'done:a.txt\n');
 
     const winner = progress.find(
       (p): p is Extract<TeamProgress, { type: 'race' }> =>
@@ -167,6 +171,7 @@ describe('冗長実行（同じ作業を複数モデルへ同時に投げる）'
          instruction: 'a.txt を作成してください。', raceWith: ['local:broken'] }],
       2,
       { perModelDelay: { m: 40, broken: 5 }, failModels: ['broken'] },
+      READ_ONLY,
     );
     assert.equal(outcomes.get('t1')?.state, 'done', '片方の故障で全体が落ちている');
   });
@@ -177,8 +182,29 @@ describe('冗長実行（同じ作業を複数モデルへ同時に投げる）'
          instruction: 'a.txt を作成してください。', raceWith: ['local:broken'] }],
       2,
       { failModels: ['m', 'broken'] },
+      READ_ONLY,
     );
     assert.equal(outcomes.get('t1')?.state, 'failed');
+  });
+});
+
+describe('作業場を変えうる作業は、冗長実行しない', () => {
+  /*
+   * 試みはどれも同じ作業場へ書くので、勝ちが決まって残りを止めても、負けた側が書いた分は戻らない
+   * （「勝者の分＋敗者の途中の分」の混ざった作業場を完了と言っていた）。一本で走らせ、そう言う。
+   */
+  test('書くツールを持つ作業は、一本で走らせて、そう言う', async () => {
+    const { outcomes, progress, root, asked } = await runTeam(
+      [{ id: 't1', laneId: 'coder', writes: ['a.txt'],
+         instruction: 'a.txt を作成してください。', raceWith: ['local:fast'] }],
+      2,
+      { perModelDelay: { m: 30, fast: 10 } },
+    );
+    assert.equal(outcomes.get('t1')?.state, 'done');
+    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'done:a.txt\n');
+    assert.ok(progress.some((p) => p.type === 'raceSkipped' && p.taskId === 't1'), '一本にしたと言っていない');
+    assert.ok(!progress.some((p) => p.type === 'race'), '書く作業を複数のモデルに同時に書かせている');
+    assert.equal(asked.length, 1, `依頼を ${asked.length} 回送っている（一本なら 1 回）`);
   });
 });
 

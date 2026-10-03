@@ -233,6 +233,25 @@ describe('間合い', () => {
     assert.equal(soon.mode, undefined, '立ち上げ直すと喋り出してしまう');
     assert.match(soon.reason, /さきほど考えた/);
   });
+
+  test('記録の時刻が未来でも（時計のずれ）、その時刻まで黙り続けない', async () => {
+    const s = scheduler([recon, patrol], 100);
+    const first = await s.choose(ctx());
+    s.begin(first.mode!, NOW);
+    const future = NOW + 365 * 24 * 60 * MINUTE;
+    const stats = s.stats().map((x) => (x.lastRunAt !== undefined ? { ...x, lastRunAt: future } : x));
+
+    const restarted = scheduler([recon, patrol], 100);
+    restarted.restore(stats, NOW);
+    const later = await restarted.choose(ctx({ now: NOW + 60 * MINUTE, lastChangeAt: NOW + 59 * MINUTE }));
+    assert.notEqual(later.mode, undefined, `未来の時刻まで考えないままになっている: ${later.reason}`);
+
+    // 後から読めた記録を足すときも同じ
+    const absorbed = scheduler([recon, patrol], 100);
+    absorbed.absorb(stats, NOW);
+    const also = await absorbed.choose(ctx({ now: NOW + 60 * MINUTE, lastChangeAt: NOW + 59 * MINUTE }));
+    assert.notEqual(also.mode, undefined, `足したときに未来の時刻を持ち込んでいる: ${also.reason}`);
+  });
 });
 
 /**

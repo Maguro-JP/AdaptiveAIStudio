@@ -178,6 +178,9 @@ async function main(): Promise<void> {
         case 'taskSkip':
           console.log(c.yellow(`− ${p.taskId} skip`) + c.dim(` (${p.reason})`));
           break;
+        case 'raceSkipped':
+          console.log(c.yellow(`   ${p.taskId}: ${p.reason}`));
+          break;
         case 'agent': {
           const ev = p.event;
           if (ev.type === 'toolStart') console.log(c.dim(`   ${p.taskId} · ${ev.call.name}`));
