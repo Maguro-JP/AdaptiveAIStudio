@@ -1259,22 +1259,27 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
    * AI がそのファイルを書くと、続きがファイルの欄に入る。
    */
   test('**AI の書き込みで読み直すときは、欄へ手を移さない**', async () => {
-    const disk = { 'a.txt': 'one\n' };
+    /*
+     * 名前を他の試験と分ける。前の試験（「AI の版を出したあと別のファイルへ移っても」）のパネルは、終わった 400ms 後に
+     * `a.txt` の直し（中身 MINE・base が AI の版）を預かる所へ書く。その時刻にこの試験が当たると、読み直しが
+     * それを「閉じたパネルの直し」として引き取り、AI の版の代わりに MINE を出す（Windows の CI で 30 秒待って落ちた）。
+     */
+    const disk = { 'ai-write-keeps-focus.txt': 'one\n' };
     const box = open(disk);
-    (box.ctx.openFile as (p: string) => void)('a.txt');
+    (box.ctx.openFile as (p: string) => void)('ai-write-keeps-focus.txt');
     await until(() => box.area().value === 'one\n', 'ファイルが開く');
 
     let moved = 0;
     box.area().focus = () => { moved += 1; };
-    disk['a.txt'] = 'one\nAI\n';
-    box.emit('session', { type: 'diff', path: 'a.txt', diff: '', added: 1, removed: 0 });
+    disk['ai-write-keeps-focus.txt'] = 'one\nAI\n';
+    box.emit('session', { type: 'diff', path: 'ai-write-keeps-focus.txt', diff: '', added: 1, removed: 0 });
     await until(() => box.area().value === 'one\nAI\n', 'AI の版が出る');
     assert.equal(moved, 0, 'AI の書き込みで、打っている手を奪っている');
 
     // 人が押して開いたときは、これまでどおり手を移す（対）。
-    (box.ctx.openFile as (p: string, line?: number) => void)('a.txt');
-    disk['a.txt'] = 'one\nAI2\n';
-    (box.ctx.openFile as (p: string, line?: number) => void)('a.txt');
+    (box.ctx.openFile as (p: string, line?: number) => void)('ai-write-keeps-focus.txt');
+    disk['ai-write-keeps-focus.txt'] = 'one\nAI2\n';
+    (box.ctx.openFile as (p: string, line?: number) => void)('ai-write-keeps-focus.txt');
     await until(() => box.area().value === 'one\nAI2\n', '押して開き直す');
     assert.ok(moved > 0, '人が押して開いても、手が移らない');
   });

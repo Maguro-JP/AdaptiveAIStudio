@@ -12,7 +12,7 @@
  * 出すのは作業場の中だけ。`..` で外へは出られない。
  */
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFile, stat, readdir, realpath } from 'node:fs/promises';
+import { readFile, stat, readdir } from 'node:fs/promises';
 import { watch, realpathSync, type FSWatcher } from 'node:fs';
 import { join, extname, relative, sep } from 'node:path';
 import { safeResolve, realSafeResolve } from '../agent/tools/paths.ts';
@@ -283,8 +283,16 @@ export class PreviewServer {
       res.end('作業場の外は見せません');
       return;
     }
-    // 実体の名前でも見る。Windows の短い名前（`GIT~1`・`ENV~1`）は点で始まらないので上を抜けるが、実体は `.git`・`.env`
-    if (wanted !== '' && hiddenRequest(relative(await realpath(this.#opts.root).catch(() => this.#opts.root), abs))) {
+    /*
+     * 実体の名前でも見る。Windows の短い名前（`GIT~1`・`ENV~1`）は点で始まらないので上を抜けるが、実体は `.git`・`.env`。
+     *
+     * **渡された root と比べる。realpath(root) と比べない。**`realSafeResolve` は、リンクを辿った実体の相対の道を
+     * **渡された root の綴りで**返す（`paths.ts`）。それを実体の root と比べていたので、root の綴りが実体と違うと
+     * （Windows の `%TEMP%` は `C:\Users\RUNNER~1\...`、realpath は `C:\Users\runneradmin\...`）答えが
+     * `..\..\RUNNER~1\...` になり、先頭の `..` を隠しファイルと読んで**全部の頁を 403 にしていた**（Windows の CI）。
+     * root の綴りどうしなら、辿った先の実体の名前（`.env`）がそのまま出る。
+     */
+    if (wanted !== '' && hiddenRequest(relative(this.#opts.root, abs))) {
       res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('点で始まるものは見せません');
       return;

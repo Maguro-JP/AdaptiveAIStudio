@@ -288,6 +288,7 @@
 - 大きいファイルも、範囲を付ければ read_file で読める
 - 外のツールへ渡す引数も持ち出しの検問を通す・format の語だけで止めない・決まりを丸ごと落とさない・下調べを古い回で上書きしない
 - 画面の出来事の流れが切れて繋ぎ直したら、承認待ちと作業中かを取り直す
+- Windows の CI で落ちていた 17 件を直す（プレビューが全部 403・フォルダを空の会話と読む・区切りの取り違え）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10879,3 +10880,30 @@ read_file は 400KB を超えるファイルを、offset・limit を付けても
   起きる窓が狭く害も小さいので、今は直さない
 触る場所: `src/ui/web/app.js` の `catchUp`・`showWaitingApprovals`・`droppedOnce`、`src/ui/web/panels.js` の `asking`・`drawn`、
 `src/ui/server.ts` の `#approvalTag`・`/api/approvals`
+
+## 2026-10-03  Windows の CI で落ちていた 17 件を直す（プレビューが全部 403・フォルダを空の会話と読む・区切りの取り違え）
+
+Actions の枠が戻り、Windows の CI が久しぶりに中まで走った。ubuntu は通り、Windows だけ 17 件落ちた。枠切れの間に溜まっていた。
+製品の不具合と、試験の前提の誤りに分けて直した。skip にしたものは無い。
+
+製品の不具合:
+- プレビュー（`src/ui/preview.ts`）: 点で始まるものかを `relative(realpath(root), abs)` で見ていた。`realSafeResolve` は渡された root の
+  綴りで返すので、root の綴りが実体と違うと（Windows の `%TEMP%` は 8.3 の短い名前）答えが `..\..\` で始まり、全部の頁を 403 に
+  していた。渡された root と比べる。Linux でもリンク越しの root で同じ形を作れるので、その試験を足した（直す前の版で落ちる）
+- 会話を後ろから読む（`src/core/conversations.ts` の `load` の `tailBytes`）と見出し（`head`）: Windows はフォルダも開けて大きさを 0 と
+  返し、0 バイトの読み込みは Node が呼ばずに返すので、会話の場所にフォルダがあると何も言わずに「空の会話」になっていた。ファイルで
+  なければ EISDIR で投げる。Linux はフォルダを読むと元から EISDIR で落ちるので、直す前の版でも試験は通る（直る確かめは Windows の CI）
+- `insideDir`（`src/core/home.ts`）: 比べる決まりを引数で受けているのに、区切りは走らせている機械のもの（`sep`）を使っていた。
+  引数の決まりで選ぶ（本番の呼び出しは既定のままなので、今の本番では食い違わない）
+
+試験の前提の誤り:
+- `test/paths.test.ts`: 根を `join(sep, 'work')` で作ると Windows ではドライブの無い道になる。`resolve` で作る
+- `test/pushed-tree.test.ts`: 代役の文が cwd を `URL.pathname`（Windows では `/C:/...`）で取っていた。`fileURLToPath` にする。
+  PATH の区切りも `delimiter` にし、名前を元の綴り（Windows は `Path`）に合わせる
+- `test/write-unreadable.test.ts`: 読めなくする差し替えを、渡した綴りだけに当てていた。画面の口は実体の綴りで読むので、両方に当てる
+- `test/panel-editor.test.ts`: 前の試験の閉じたパネルが 400ms 後に書く下書きの預かりが、同じファイル名の次の試験に混ざっていた
+  （Windows は遅いので時機が合った）。この試験のファイル名を分ける
+- `test/installed-env.test.ts` の 2 件は `home.test.ts` を子で回す試験で、`insideDir` の直しで通る見込み
+
+確かめていないこと: Windows では、この直しを当てた後はまだ走らせていない（次の PR の CI で見る）。Linux では全部通っている。
+触る場所: `src/ui/preview.ts` の `#serve`、`src/core/conversations.ts` の `load`・`head`、`src/core/home.ts` の `insideDir`

@@ -326,6 +326,24 @@ describe('鍵や記録は、見る窓から出さない', () => {
     assert.equal(r.status, 403, `別の名前から .env の中身を出した: ${r.status}`);
   });
 
+  /*
+   * **作業場を、実体と違う綴りで渡しても配る。**
+   *
+   * Windows の CI では `%TEMP%` が短い名前（`C:\Users\RUNNER~1\...`）で、realpath は長い名前を返す。
+   * 隠しファイルの判定が実体の root と比べていたため、**ふつうの頁まで全部 403 になっていた。**
+   * Linux でも同じ食い違いはリンクで作れる（Windows は権限の要らない junction）。ここで止める。
+   */
+  test('**作業場をリンク越しの名前で渡しても、ふつうの頁は出る**（Windows の短い名前と同じ形）', async () => {
+    const real = await site({ 'index.html': 'ここ', 'a.css': 'body{}' });
+    const alias = join(await tempDir('aas-preview-alias-'), 'via-link');
+    await symlink(real, alias, 'junction');
+    const url = await serve(alias);
+    const css = await fetch(`${url}a.css`);
+    assert.equal(css.status, 200, `綴りが違うだけで断っている: ${css.status}`);
+    assert.match(css.headers.get('content-type') ?? '', /text\/css/);
+    assert.equal((await fetch(`${url}nope.html`)).status, 404, '無いものが 404 にならない');
+  });
+
   test('ふつうの頁は出る（対）', async () => {
     const url = await serve(await site({ 'index.html': 'ここ', 'a.txt': 'b' }));
     assert.equal((await fetch(`${url}a.txt`)).status, 200);
