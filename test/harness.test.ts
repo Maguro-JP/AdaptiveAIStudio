@@ -4,7 +4,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, mkdir, readFile, symlink } from 'node:fs/promises';
+import { writeFile, mkdir, readFile, symlink, stat } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { Harness } from '../src/harness/harness.ts';
@@ -84,12 +84,19 @@ describe('規則: 保護対象', () => {
     assert.equal(r.isError, true, `リンク越しに試験を減らせた: ${r.content}`);
   });
 
-  test('区別する機械では、.ENV は別のファイル（対）', async () => {
+  test('.ENV は、区別する機械では別のファイル（対）、区別しない機械では .env として止める', async () => {
     const root = await project({ '.env': 'SECRET=1' });
+    // 大小を区別するかは、走らせている場所のファイルシステムで決まる（Windows・macOS の既定は区別しない）。その場で聞く
+    const sameFile = await stat(join(root, '.ENV')).then(() => true, () => false);
     const h = harness([protectedPaths(['.env'])]);
     const write = h.wrap(writeFileTool, () => '');
     const r = await write.run({ path: '.ENV', content: 'x' }, ctx(root));
-    assert.notEqual(r.isError, true);
+    if (sameFile) {
+      assert.equal(r.isError, true, `区別しない機械で、.ENV として .env を書けた: ${r.content}`);
+      assert.equal(await readFile(join(root, '.env'), 'utf8'), 'SECRET=1');
+    } else {
+      assert.notEqual(r.isError, true, `区別する機械で、別のファイルの .ENV を止めた: ${r.content}`);
+    }
   });
 
   test('保護対象でなければ通す', async () => {
