@@ -377,6 +377,8 @@ describe('読めない会話を、中身の無い会話と取り違えない', (
     await mkdir(join(dir, `${id}.jsonl`), { recursive: true });
     await assert.rejects(c.load(id), '読めない会話を空として返した');
     await assert.rejects(c.load(id, { tailBytes: 1024 }), '後ろから読む形で、読めない会話を空として返した');
+    // 見出しも同じ（Windows はフォルダの大きさを 0 と返すので、読まずに「新しい会話」になっていた）
+    await assert.rejects(c.head(id), { code: 'EISDIR' }, '読めない会話の見出しを空として返した');
   });
 });
 

@@ -295,6 +295,13 @@ export class Conversations {
   async head(id: string): Promise<ConversationHead> {
     const path = this.#path(id);
     const info = await stat(path);
+    // ファイルでなければ投げる（`load` の後ろから読む形と同じ。Windows はフォルダの大きさを 0 と返し、空の見出しになる）
+    if (!info.isFile()) {
+      throw Object.assign(
+        new Error(`${info.isDirectory() ? 'EISDIR' : 'EINVAL'}: not a regular file, read '${path}'`),
+        { code: info.isDirectory() ? 'EISDIR' : 'EINVAL', path },
+      );
+    }
 
     // **頭だけ読む。**見出しは1行目に在り、数えるのが要るのは小さいうちだけ。
     const fh = await open(path, 'r');
@@ -349,10 +356,22 @@ export class Conversations {
       if (opts.tailBytes === undefined) {
         raw = await readFile(path, 'utf8');
       } else {
-        const info = await stat(path);
-        const from = Math.max(0, info.size - opts.tailBytes);
         const fh = await open(path, 'r');
         try {
+          /*
+           * **ファイルでなければ投げる。**読む量を大きさから決めているので、大きさ 0 なら読みに行かない。
+           * Windows はフォルダも開けて、大きさは 0 と返す（libuv の stat）。0 バイトの読み込みは Node が
+           * 呼ばずに返すので、フォルダが何も言わずに「空の会話」になっていた（Linux は 4096 と返し、
+           * 読んで EISDIR で落ちるので気づかなかった）。開いた物そのものを見る（stat と open の間で入れ替わらない）。
+           */
+          const info = await fh.stat();
+          if (!info.isFile()) {
+            throw Object.assign(
+              new Error(`${info.isDirectory() ? 'EISDIR' : 'EINVAL'}: not a regular file, read '${path}'`),
+              { code: info.isDirectory() ? 'EISDIR' : 'EINVAL', path },
+            );
+          }
+          const from = Math.max(0, info.size - opts.tailBytes);
           // 一つ手前の字も読む。それが改行なら、読み始めは行の頭ちょうどなので捨てない。
           const start = Math.max(0, from - 1);
           const buf = Buffer.alloc(info.size - start);
