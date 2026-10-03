@@ -41,8 +41,9 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
 };
 
 // `[] as string[]` のような型の付け足しも同じ形として数える。`.then(() => true, () => false)` の二つ目の受け手も同じ
-// （一つ目の受け手は括弧も読点も含まない短い形に限る。`(t) => g(t, () => null)` の入れ子を二つ目と取り違えない）
-const LENIENT = /\b(readFile|stat|lstat|readdir|open)\([^)]*\)[^;]*(\.catch\(|\.then\(\([^()]*\) => [^(),;]*, )\(\) => (undefined|\[\]|''|0|false|null|\{\}|Buffer\.alloc\(0\))( as [\w<>[\]]+)?\)/g;
+// （一つ目の受け手は読点を含まず、括弧は引数の無い呼び出し `s.isFile()` だけの短い形に限る。`(t) => g(t, () => null)` の入れ子を
+// 二つ目と取り違えない。`s.isFile()` を数えずにいたので、同じ書き方の preview.ts の一か所が一覧から抜けて見えた）
+const LENIENT = /\b(readFile|stat|lstat|readdir|open)\([^)]*\)[^;]*(\.catch\(|\.then\(\([^()]*\) => (?:[^(),;]|\(\))*, )\(\) => (undefined|\[\]|''|0|false|null|\{\}|Buffer\.alloc\(0\))( as [\w<>[\]]+)?\)/g;
 
 async function sources(dir: string): Promise<string[]> {
   const out: string[] = [];

@@ -38,6 +38,18 @@ describe('よその頁からの要求を断る', () => {
   test('Origin が null（砂場の iframe など）', () => {
     assert.ok(crossSiteReason({ host: '127.0.0.1:4174', origin: 'null' }, 'POST'));
   });
+  test('同じ 127.0.0.1 でも、別の port の Origin は断る（preview・同じ機械の別の dev server）', () => {
+    assert.ok(crossSiteReason({ host: '127.0.0.1:4174', origin: 'http://127.0.0.1:5555' }, 'POST'));
+    assert.ok(crossSiteReason({ host: 'localhost:4174', origin: 'http://localhost:3000' }, 'POST'));
+  });
+  test('よその頁からの GET も断る（GET でも何かを起こす口がある）', () => {
+    assert.ok(crossSiteReason({ host: '127.0.0.1:4174', 'sec-fetch-site': 'cross-site' }, 'GET', { guardReads: true }));
+    assert.ok(crossSiteReason({ host: '127.0.0.1:4174', origin: 'https://evil.example' }, 'GET', { guardReads: true }));
+  });
+  test('guardReads を付けない口（preview）は、よそからの GET を通す（画面の iframe・別のタブから読まれる）', () => {
+    assert.equal(crossSiteReason({ host: '127.0.0.1:5555', 'sec-fetch-site': 'same-site' }, 'GET'), undefined);
+    assert.equal(crossSiteReason({ host: '127.0.0.1:5555', 'sec-fetch-site': 'cross-site', origin: 'null' }, 'GET'), undefined);
+  });
   test('Host が自分でない（DNS の付け替え）は GET でも断る', () => {
     assert.ok(crossSiteReason({ host: 'evil.example' }, 'GET'));
   });
@@ -48,6 +60,12 @@ describe('自分の頁と、ブラウザでないものは通す（対）', () =
     assert.equal(crossSiteReason({
       host: '127.0.0.1:4174', origin: 'http://127.0.0.1:4174', 'sec-fetch-site': 'same-origin',
     }, 'POST'), undefined);
+  });
+  test('自分の画面の GET は通す', () => {
+    assert.equal(crossSiteReason({ host: '127.0.0.1:4174', 'sec-fetch-site': 'same-origin' }, 'GET', { guardReads: true }), undefined);
+  });
+  test('同じ port なら、localhost と 127.0.0.1 の綴りの違いは通す', () => {
+    assert.equal(crossSiteReason({ host: 'localhost:4174', origin: 'http://127.0.0.1:4174' }, 'POST'), undefined);
   });
   test('localhost で開いていても通す', () => {
     assert.equal(crossSiteReason({ host: 'localhost:4174', origin: 'http://localhost:4174' }, 'POST'), undefined);

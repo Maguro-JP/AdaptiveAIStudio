@@ -1196,6 +1196,7 @@ export class UiServer {
     if (path.startsWith('/api/')) {
       const refused = crossSiteReason(req.headers, req.method ?? 'GET', {
         ownHosts: this.#opts.host ? [this.#opts.host] : [],
+        guardReads: true,
       });
       if (refused) return send(res, 403, { error: refused });
     }
@@ -1277,7 +1278,19 @@ export class UiServer {
     }
 
     if (path === '/api/send' && req.method === 'POST') {
-      const body = await readBody(req) as { text?: string; attachments?: unknown; editor?: unknown };
+      const body = await readBody(req) as { text?: string; attachments?: unknown; editor?: unknown; conversationId?: unknown };
+      /*
+       * どの会話へ送るかは、送った画面が言う（`conversationId`。null はトップ＝新しい会話）。本体の「見ている会話」は一つで、
+       * 別のタブで選び直す・見回りがやり残しを再開する・送ってすぐ別の会話を押す、のどれでも書き換わる。それを見て送り先を
+       * 決めていたので、打った会話ではない会話に入り、その答えが今の欄に描かれていた。言わない呼び手（curl・試験）は今までどおり
+       */
+      const named = body?.conversationId;
+      if (named !== undefined && named !== null && (typeof named !== 'string' || !ID_SHAPE.test(named))) {
+        return send(res, 400, { error: '会話の名前が正しくありません' });
+      }
+      if (typeof named === 'string' && await this.#conversations.head(named).then(() => false, () => true)) {
+        return send(res, 404, { error: 'その会話はありません（消されたか、読めません）' });
+      }
       const typed = typeof body?.text === 'string' ? body.text.trim() : '';
       const attached = Array.isArray(body?.attachments)
         ? body.attachments.filter((a): a is string => typeof a === 'string')
@@ -1326,7 +1339,9 @@ export class UiServer {
       // どの会話への依頼か。トップからなら、ここで新しい会話ができる。
       // 見出しは**送った時点で**最初の一言から付ける。答えが返るまで
       // 「新しい会話」のまま並ぶと、どれがどれか分からない。
-      const conversationId = await this.#currentConversation();
+      if (typeof named === 'string') this.#conversationId = named;
+      else if (named === null) this.#conversationId = undefined;
+      const conversationId = typeof named === 'string' ? named : await this.#currentConversation();
       if (typed) await this.#conversations.titleIfUnset(conversationId, typed).catch(() => undefined);
       this.broadcast({ type: 'conversations' });
       // **断らない。**書いたものを突き返されるのがいちばん不快で、
@@ -1449,14 +1464,31 @@ export class UiServer {
 
     if (path === '/api/proposal' && req.method === 'POST') {
       const body = await readBody(req) as { id?: string; verdict?: string };
-      const verdict = body?.verdict === 'rejected' ? 'rejected' as const : 'accepted' as const;
+      // 採否は決めた二つのどちらかだけ。それ以外（壊れた本文・綴りの違い）を「採用」と読むと、モデルが書いた文を走らせる側へ倒れる
+      if (body?.verdict !== 'accepted' && body?.verdict !== 'rejected') {
+        return send(res, 400, { error: 'verdict は accepted か rejected です' });
+      }
+      const verdict = body.verdict;
       const session = await this.session();
-      const target = await session.decide(String(body?.id ?? ''), verdict);
+      // 作業中は採用を受けない。先に採用済みにしてから走らせずにいたので、提案が一覧から消えたまま二度と走らなかった。
+      // 断れば提案は開いたまま残り、作業が終わってから押し直せる
+      if (verdict === 'accepted' && this.#busyNow(session)) {
+        return send(res, 409, { error: '作業中です。終わってから採用してください（提案はそのまま残っています）' });
+      }
+      // 採用を書き込む間も「手が塞がっている」ことにする（その間に来た送りに本体を取られ、採用済みのまま走らない、を作らない）
+      const holding = verdict === 'accepted';
+      if (holding) this.#preparing = true;
+      let target;
+      try {
+        target = await session.decide(String(body?.id ?? ''), verdict);
+      } finally {
+        if (holding) this.#preparing = false;
+      }
       if (!target) return send(res, 404, { error: 'その提案は見つからないか、もう決まっています' });
       this.broadcast({ type: 'stateChanged' });
-      // 採用したなら、その内容をそのまま依頼として流す。
+      // 採用したなら、その内容をそのまま依頼として流す（手を放してから、間に await を挟まずに）。
       // 提案の実行文は、モデルが書いたもの。利用者の言葉として判じない。
-      if (verdict === 'accepted' && !this.#busyNow(session)) {
+      if (verdict === 'accepted') {
         this.#bg(this.#drive(session, target.suggestedAction, undefined, { fromUser: false }), '提案の実行が落ちました');
       }
       return send(res, 200, { proposal: target });
@@ -3473,7 +3505,7 @@ export class UiServer {
         this.#resuming = undefined;
         return true;
       }
-      this.#conversationId = item.conversationId;
+      // 見ている会話（`#conversationId`）は替えない。替えていたので、画面が黙って再開した会話へ移り、次に打った分もそちらへ入った
       this.broadcast({ type: 'conversations' });
     }
     // 続きの文はこちらが組み立てたもの。利用者の言葉として判じない。
@@ -3826,7 +3858,8 @@ export class UiServer {
         ...(opts.said ? { said: opts.said } : {}),
         why,
         note: settled.reason,
-        ...((opts.beside ?? this.#conversationId) ? { conversationId: opts.beside ?? this.#conversationId } : {}),
+        // 走った会話（本体に載っている会話）。見ている会話は走っている間にも選び直せるので、それで記録すると別の会話の続きになる
+        ...((opts.beside ?? this.#loadedId) ? { conversationId: opts.beside ?? this.#loadedId } : {}),
         // 走った作業場（本体はまだ畳んでいない。作業中に作業場を変えていても、依頼が走ったのはこちら）
         root: resolvePath(this.#session?.root ?? this.#workRoot()),
       });

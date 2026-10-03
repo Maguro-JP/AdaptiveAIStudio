@@ -307,8 +307,10 @@ export class PreviewServer {
 
     if (info.isDirectory()) {
       // index.html があれば、それを見せる。無ければ一覧。
-      const index = join(abs, 'index.html');
-      if (await stat(index).then(() => true, () => false)) {
+      // index.html も、頁を頼まれたときと同じに、リンクを辿った実体で中か・点で始まらないかを見る（`site/index.html -> ../.env` で、
+      // フォルダを開くだけで .env や作業場の外の中身が頁として返っていた）。外や隠しファイルなら、index.html は無いものとして一覧を出す
+      const index = await realSafeResolve(this.#opts.root, relative(this.#opts.root, join(abs, 'index.html')));
+      if (index && !hiddenRequest(relative(this.#opts.root, index)) && await stat(index).then((s) => s.isFile(), () => false)) {
         return this.#sendFile(res, index);
       }
       const names = await readdir(abs, { withFileTypes: true }).catch(() => []);
