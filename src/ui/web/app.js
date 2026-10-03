@@ -688,6 +688,14 @@ const WAITING_REPLY = '入力を読んでいます';
 /** この依頼で、最初の一文字がもう来たか。 */
 let wroteYet = false;
 
+/** 待っている承認を出す。承認は会話によらないので、欄を空にした後や開いた時点で、見ている所によらず出し直す。 */
+async function showWaitingApprovals() {
+  try {
+    const waiting = await getJson('/api/approvals');
+    if (waiting.approvals?.length) ctx.showApprovals?.(waiting.approvals);
+  } catch { /* 取れなければ、これから来る分だけ */ }
+}
+
 /** 出来事の流れが一度でも切れたか。繋ぎ直したときだけ取り直す（最初に繋がったときは、立ち上げで読んでいる）。 */
 let droppedOnce = false;
 
@@ -697,7 +705,8 @@ function listen() {
   src.onopen = () => {
     status.textContent = 'つながっています';
     status.className = 'status live';
-    if ($('run').dataset.state === 'down') run.set('idle', '待機中');
+    // 切れる前に動いていたなら、取り直すまでは「作業中」のまま見せる（止めるボタンも残す）
+    if ($('run').dataset.state === 'down') run.set(busyNow ? 'busy' : 'idle', busyNow ? WAITING_REPLY : '待機中');
     if (droppedOnce) void catchUp();
   };
   /*
@@ -708,12 +717,21 @@ function listen() {
   const catchUp = async () => {
     void refreshState();
     void loadConversations();
-    const id = conversations.current;
-    if (!id) return;
     try {
-      const body = await getJson(`/api/conversations/messages?id=${encodeURIComponent(id)}`);
-      if (body.approvals?.length) ctx.showApprovals?.(body.approvals);
-      if (!body.inFlight && busyNow) src.onmessage({ data: JSON.stringify({ type: 'busy', busy: false, conversationId: id }) });
+      const waiting = await getJson('/api/approvals');
+      if (waiting.approvals?.length) ctx.showApprovals?.(waiting.approvals);
+      const id = conversations.current;
+      const body = id ? await getJson(`/api/conversations/messages?id=${encodeURIComponent(id)}`) : {};
+      /*
+       * 見ている会話が動いていれば「作業中」に戻す（繋ぎ直した時点では「待機中」と出している）。
+       * 動いていないと言えるのは、見ている会話も本体も動いていないときだけ（計画は会話の名前を付けずに動く。
+       * 別の会話が本体で動いている間も止まったとは言わない）
+       */
+      const live = Boolean(body.inFlight);
+      const quiet = !live && !waiting.busy;
+      if (live || (busyNow && quiet)) {
+        src.onmessage({ data: JSON.stringify({ type: 'busy', busy: live, ...(id ? { conversationId: id } : {}) }) });
+      }
     } catch { /* 取れなければ、これから来る分だけ */ }
   };
   src.onerror = () => {
@@ -1348,6 +1366,7 @@ async function goTop() {
   if (!r) return;
   if (!r.ok) return void showCrash('トップへ戻れません', r.body.error ?? '', 'warn');
   ctx.showHistory([]);
+  void showWaitingApprovals();
   await loadConversations();
 }
 
@@ -1469,6 +1488,8 @@ function drawConversations() {
       if (!r) return;
       if (!r.ok) return void alert(r.body.error ?? '開けませんでした');
       ctx.showHistory(r.body.messages ?? []);
+      // 欄を描き直すと承認の箱も消える。待っている承認は会話によらないので、出し直す
+      if (r.body.approvals?.length) ctx.showApprovals?.(r.body.approvals);
       if (r.body.inFlight) {
         // 動いている会話へ戻った。途中までを写し、続きの出来事を通す。
         conversations.current = head.id;
@@ -1511,7 +1532,7 @@ function drawConversations() {
         { method: 'DELETE' }, '消せませんでした');
       if (!r) return;
       if (!r.ok) return void alert(r.body.error ?? '消せませんでした');
-      if (head.id === conversations.current) ctx.showHistory([]);
+      if (head.id === conversations.current) { ctx.showHistory([]); void showWaitingApprovals(); }
       hideRemoved = false;
       await loadConversations();
     };
@@ -2437,6 +2458,8 @@ if (conversations.current) {
     }
   } catch { /* 出せなくても、新しく書き始められる */ }
 }
+// 開いた時点で待っている承認。見ている会話によらず出す（出さないと押す口が無い）
+void showWaitingApprovals();
 /*
  * **開いた時点で、使える状態かを言う。**
  *
