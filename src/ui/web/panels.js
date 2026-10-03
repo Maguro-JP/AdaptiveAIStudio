@@ -522,6 +522,8 @@ export const PANELS = {
       const text = input.value.trim();
       // 添えただけで送れる。「この画面を見て」だけで用が足りることがある。
       if (!text && attached.size === 0) return;
+      // 送った時点で見ている会話（null はトップ）。返事を待つ間に別の会話を選び直されても、送り先と受け取り方はこれで決める
+      const from = ctx.conversationId ? (ctx.conversationId() ?? null) : null;
       input.value = '';
       input.style.height = '';
       stream = null;
@@ -563,7 +565,7 @@ export const PANELS = {
             // いま開いている所（名前・行・選んでいる字）。開いていなければ付かない。
             ...(ctx.editorNow?.() ? { editor: ctx.editorNow() } : {}),
             // どの会話へ送るか（null はトップ＝新しい会話）。本体の「見ている会話」は別のタブや見回りが書き換えるので、ここで言う
-            ...(!isPlan && ctx.conversationId ? { conversationId: ctx.conversationId() ?? null } : {}),
+            ...(!isPlan && ctx.conversationId ? { conversationId: from } : {}),
           }),
         });
       } catch (e) {
@@ -576,7 +578,10 @@ export const PANELS = {
       }
       const body = await r.json().catch(() => ({}));
       // トップから送ったなら、ここで自分の会話の名前が決まる。以後はその会話を見る。
-      ctx.adopt?.(body.conversationId ?? null);
+      // 名前を付けて送ったときは受け取らない（返事を待つ間に別の会話を選んでいたら、前の会話へ引き戻すことになる）
+      ctx.adopt?.(from === null ? (body.conversationId ?? null) : null);
+      // 見ていた会話が、別のタブで消されていた。トップへ戻す（送るたびに断られ続けないため）
+      if (r.status === 404 && from !== null) ctx.conversationGone?.(from);
       if (!r.ok) note('bad', body.error ?? `送れませんでした（${r.status}）`);
     };
 

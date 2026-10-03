@@ -344,6 +344,16 @@ describe('鍵や記録は、見る窓から出さない', () => {
     assert.match(await (await fetch(`${url}site/`)).text(), /HELLO/);
   });
 
+  test('画面の iframe や別のタブから読まれても見せる（ブラウザは same-site・cross-site を付けてくる）', async () => {
+    const url = await serve(await site({ 'index.html': '<p>HELLO</p>', 'a.css': 'p{}' }));
+    // 画面（別の port）から開いたタブは same-site、sandbox の iframe の中の頁が読む物は Origin: null の cross-site
+    for (const headers of [{ 'sec-fetch-site': 'same-site' }, { 'sec-fetch-site': 'cross-site', origin: 'null' }] as Record<string, string>[]) {
+      const r = await fetch(url, { headers });
+      assert.equal(r.status, 200, `${JSON.stringify(headers)} で断った`);
+      assert.equal((await fetch(`${url}a.css`, { headers })).status, 200);
+    }
+  });
+
   /*
    * **作業場を、実体と違う綴りで渡しても配る。**
    *

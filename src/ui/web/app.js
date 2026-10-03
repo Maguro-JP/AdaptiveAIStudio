@@ -1105,7 +1105,19 @@ let sendingFromTop = false;
  */
 ctx.conversationId = () => conversations.current;
 ctx.sending = () => { sendingFromTop = !conversations.current; };
-ctx.adopt = (id) => { if (id) conversations.current = id; sendingFromTop = false; };
+// トップから送って決まった会話を見る。返事を待つ間に別の会話を選んでいたら、そちらを見たまま（引き戻さない）
+ctx.adopt = (id) => {
+  if (id && !conversations.current) { conversations.current = id; drawConversations(); }
+  sendingFromTop = false;
+};
+// 見ていた会話が無くなっていた（別のタブで消された）。まだその会話を見ていれば、トップへ戻す
+ctx.conversationGone = (id) => {
+  if (conversations.current !== id) return;
+  conversations.current = null;
+  ctx.showHistory([]);
+  void showWaitingApprovals();
+  void loadConversations();
+};
 let busyNow = false;
 
 /**

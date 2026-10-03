@@ -13,8 +13,13 @@
  * 仕向けられても、Host にはその名前が入る。
  */
 export interface OriginRule {
-  /** 自分の場所として認める host（port は見ない）。既定で localhost 系は入る。 */
+  /** 自分の場所として認める host。既定で localhost 系は入る。 */
   ownHosts?: string[];
+  /**
+   * GET・HEAD・OPTIONS も、よその頁からの要求なら断る。画面の口（`/api/`）は GET でも何かを起こすものがあるので入れる。
+   * preview は入れない（画面の iframe や別のタブから same-site・cross-site で読まれる口なので、断ると何も見られない）。
+   */
+  guardReads?: boolean;
 }
 
 const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
@@ -44,13 +49,13 @@ function portOf(value: string | undefined): string | undefined {
 /**
  * 断る理由。通してよければ undefined。
  *
- * 呼ぶ側は `/api/` の口だけに使う。**GET でも、よその頁からの要求は断る。**画面の口には、作業場を配り始める
+ * `guardReads` を付けると、**GET でも、よその頁からの要求は断る。**画面の口には、作業場を配り始める
  * `/api/preview` や外へ問い合わせる `/api/models/newer` のように、GET でも何かを起こすものがある。
  * よその頁の `<img src=…>` 一つで起こせていた。自分の画面の GET は same-origin で来るので止まらない。
  */
 export function crossSiteReason(
   headers: Record<string, string | string[] | undefined>,
-  _method: string,
+  method: string,
   rule: OriginRule = {},
 ): string | undefined {
   const own = new Set([...LOCAL, ...(rule.ownHosts ?? []).map((h) => h.toLowerCase())]);
@@ -64,6 +69,8 @@ export function crossSiteReason(
   if (host !== undefined && !own.has(host) && !own.has(`[${host}]`)) {
     return `Host が自分ではありません: ${host}`;
   }
+
+  if (!rule.guardReads && (method === 'GET' || method === 'HEAD' || method === 'OPTIONS')) return undefined;
 
   const site = one('sec-fetch-site')?.toLowerCase();
   if (site === 'cross-site' || site === 'same-site') {

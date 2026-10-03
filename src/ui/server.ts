@@ -1196,6 +1196,7 @@ export class UiServer {
     if (path.startsWith('/api/')) {
       const refused = crossSiteReason(req.headers, req.method ?? 'GET', {
         ownHosts: this.#opts.host ? [this.#opts.host] : [],
+        guardReads: true,
       });
       if (refused) return send(res, 403, { error: refused });
     }
@@ -1474,10 +1475,18 @@ export class UiServer {
       if (verdict === 'accepted' && this.#busyNow(session)) {
         return send(res, 409, { error: '作業中です。終わってから採用してください（提案はそのまま残っています）' });
       }
-      const target = await session.decide(String(body?.id ?? ''), verdict);
+      // 採用を書き込む間も「手が塞がっている」ことにする（その間に来た送りに本体を取られ、採用済みのまま走らない、を作らない）
+      const holding = verdict === 'accepted';
+      if (holding) this.#preparing = true;
+      let target;
+      try {
+        target = await session.decide(String(body?.id ?? ''), verdict);
+      } finally {
+        if (holding) this.#preparing = false;
+      }
       if (!target) return send(res, 404, { error: 'その提案は見つからないか、もう決まっています' });
       this.broadcast({ type: 'stateChanged' });
-      // 採用したなら、その内容をそのまま依頼として流す。
+      // 採用したなら、その内容をそのまま依頼として流す（手を放してから、間に await を挟まずに）。
       // 提案の実行文は、モデルが書いたもの。利用者の言葉として判じない。
       if (verdict === 'accepted') {
         this.#bg(this.#drive(session, target.suggestedAction, undefined, { fromUser: false }), '提案の実行が落ちました');
