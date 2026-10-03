@@ -12,6 +12,7 @@ import { Memory } from '../src/memory/memory.ts';
 import { ProposalQueue } from '../src/agent/proposals.ts';
 import { DutyRoster, type Duty } from '../src/harness/duties.ts';
 import { saidOrAttached } from '../src/core/session.ts';
+import { displeasureTitle } from '../src/memory/displeasure.ts';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 
@@ -38,9 +39,26 @@ describe('添付だけを送った回の名前', () => {
     const name = saidOrAttached('', `--- 添付: .env ---\nAPI_KEY=${KEY}\n--- ここまで ---`);
     assert.equal(name, '添付（.env）を送った回');
   });
+  test('読めなかった添付・中身を読めない形式・読み方の注記・名前の括弧も、名前だけを拾う', () => {
+    const text = [
+      '--- 添付: a.txt（読めません（EACCES））---',
+      '--- 添付（中身を読めない形式）: b.bin（12 バイト）---',
+      '--- 添付: c.txt（CP932 として読みました） ---', 'x', '--- ここまで ---',
+      '--- 添付: 報告（案）.md ---', 'y', '--- ここまで ---',
+    ].join('\n');
+    assert.equal(saidOrAttached('', text), '添付（a.txt、b.bin、c.txt ほか）を送った回');
+    assert.equal(saidOrAttached('', '--- 添付: 報告（案）.md ---\ny\n--- ここまで ---'), '添付（報告（案）.md）を送った回');
+  });
   test('打った分があればそれ、渡さない呼び手は依頼のまま（対）', () => {
     assert.equal(saidOrAttached('直して', '--- 添付: a ---\nx\n--- ここまで ---\n\n直して'), '直して');
     assert.equal(saidOrAttached(undefined, '直して'), '直して');
+  });
+});
+
+describe('嫌がられたことの題', () => {
+  test('場面の文に鍵があれば、切る前に伏せる（切ってから伏せると鍵の頭が残る）', () => {
+    const title = displeasureTitle('REPEATED', `このキー ${KEY} を .env に入れて`);
+    assert.ok(!title.includes('sk-ant'), title);
   });
 });
 

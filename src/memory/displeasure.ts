@@ -13,6 +13,7 @@
  * 判じさせると、モデルが替わるたびに拾えたり拾えなかったりする。
  * **符丁は ASCII で固定する**（語形が変わらないもので返す）。
  */
+import { redactSecrets } from '../core/redact.ts';
 
 /** 何が起きたか。表示のときに日本語へ引き直す。 */
 export type DispleasureCode =
@@ -210,7 +211,8 @@ export function judgeOutcome(text: string, fallbackWhen?: string): JudgeOutcome 
  */
 export function displeasureTitle(code: DispleasureCode, when?: string): string {
   const label = DISPLEASURE_LABEL[code];
-  const where = (when ?? '').trim().replace(/\s+/g, ' ').slice(0, 40);
+  // 伏せてから切る（切ってから伏せると、鍵の途中で切れて形に当たらず、鍵の頭が題に残る）
+  const where = redactSecrets((when ?? '').trim().replace(/\s+/g, ' ')).slice(0, 40);
   return where ? `${label}: ${where}` : `${label}（場面は未確認）`;
 }
 

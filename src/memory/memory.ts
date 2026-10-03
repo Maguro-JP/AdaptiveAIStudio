@@ -301,10 +301,6 @@ export class Memory {
     this.#unreadable = undefined;
     try {
       const got = parseEntries(await this.#readRetrying(this.#path));
-      // 未来の時刻（時計が進んでいた間に覚えた）は、読んだ時点に丸める。丸めないと、時計を直した後もその一件が
-      // 「いちばん新しい」まま嫌がられたことの先頭に居座り、後から覚えた分が載らない
-      const loadedAt = Date.now();
-      for (const e of got.entries) if (e.seenAt > loadedAt) e.seenAt = loadedAt;
       this.#entries = got.entries;
       this.#kept = got.kept;
       this.#declined = new Set(got.declined);
@@ -811,7 +807,9 @@ export class Memory {
    * 覚えた時点では場面が分からないことがある（会話の最初など）。
    * あとで場面が分かったときに、**同じ場面の覚えを二つに割らない**ために要る。
    */
-  relabel(id: string, title: string): MemoryEntry | undefined {
+  relabel(id: string, given: string): MemoryEntry | undefined {
+    // 覚えるときと同じく、秘密は伏せてから題にする
+    const title = redactSecrets(given);
     const entry = this.#entries.find((e) => e.id === id);
     if (!entry) return undefined;
     const key = normalizeTitle(title);
@@ -1029,7 +1027,20 @@ function isEntry(e: unknown): e is MemoryEntry {
  * 壊れた行・形の違う行は、思い出す側には渡さず（止まるため）、元の文のまま `kept` に分ける（保存で書き戻す）。
  * `keptSeq` は分けた行が持つ番号のいちばん大きいもの（直して戻されたときに、新しく配る番号とぶつけない）。
  */
+/**
+ * 記録ファイルを読む。読み方は一つ（起動・読めなかった後の合わせ直し・保存のときの取り込み）。
+ *
+ * 未来の時刻（時計が進んでいた間に覚えた）は、読んだ時点に丸める。丸めないと、時計を直した後もその一件が
+ * 「いちばん新しい」まま嫌がられたことの先頭に居座り、後から覚えた分が載らない。
+ */
 function parseEntries(raw: string): { entries: MemoryEntry[]; kept: string[]; keptSeq: number; declined: string[] } {
+  const got = parseEntriesRaw(raw);
+  const now = Date.now();
+  for (const e of got.entries) if (e.seenAt > now) e.seenAt = now;
+  return got;
+}
+
+function parseEntriesRaw(raw: string): { entries: MemoryEntry[]; kept: string[]; keptSeq: number; declined: string[] } {
   const entries: MemoryEntry[] = [];
   const kept: string[] = [];
   const declined: string[] = [];

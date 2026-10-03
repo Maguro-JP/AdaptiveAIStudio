@@ -64,6 +64,7 @@ import { Team } from '../agent/team.ts';
 import { accept, changedBetween, dropCoveredDirs, type AcceptanceReport, type MemberReport } from '../agent/acceptance.ts';
 import { runVerification, verifyLoop, digestFailure, type VerifyEvent, type VerifyResult } from '../agent/verify.ts';
 import { snapshotTests, compareTests } from '../agent/test-integrity.ts';
+import { redactSecrets } from './redact.ts';
 import { workspaceStamp, stampChanges } from '../agent/workspace-stamp.ts';
 import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
@@ -2251,7 +2252,9 @@ export class Session {
       tags: [code],
       source: 'user',
     });
-    if (betterDetail(detail, got.entry.detail)) got.entry.detail = detail;
+    // 伏せてから比べて入れ替える（伏せる前の文は「（伏せました）」より長いので、比べると元の秘密入りの文が勝って書き戻されていた）
+    const safe = redactSecrets(detail);
+    if (betterDetail(safe, got.entry.detail)) got.entry.detail = safe;
     this.memory.touch();
     // saveMemory は中で失敗を言い、投げない。受け手は、落ちてもプロセスごと消さないための念のため
     void this.saveMemory().catch(() => undefined);
@@ -2668,12 +2671,13 @@ export function quietCandidates(
 
 /**
  * 回の名前（戻り先・記憶の題・判じ手へ送る依頼）。打った分があればそれ。打たずに添付だけを送った回（`said` が空）は、
- * 添付の名前だけで呼ぶ（中身は入れない）。`said` を渡さない呼び手（端末など、依頼がそのまま打った分）は依頼の一行目まで。
+ * 添付の名前だけで呼ぶ（中身は入れない）。`said` を渡さない呼び手（端末など、依頼がそのまま打った分）は依頼のまま。
  */
 export function saidOrAttached(said: string | undefined, instruction: string): string {
   if (said) return said;
   if (said === '') {
-    const names = [...instruction.matchAll(/^--- 添付(?:（画像）)?: (.+?)(?:（[^）]*）)?(?: — .*)? ---$/gm)].map((m) => m[1]!.trim());
+    // 見出しの形は `src/ui/attachments.ts`（画像・中身を読めない形式・読めなかった・読み方の注記・— 保存先。閉じの前の空白は無いこともある）
+    const names = [...instruction.matchAll(/^--- 添付(?:（(?:画像|中身を読めない形式)）)?: (.+?)(?:（(?:[^（）]|（[^）]*）)*として読みました[^）]*）|（[^（）]*バイト）|（保存先から消えていて読めません）|（読めません（[^）]*））)?(?: — .*)? ?---$/gm)].map((m) => m[1]!.trim());
     if (names.length > 0) return `添付（${names.slice(0, 3).join('、')}${names.length > 3 ? ' ほか' : ''}）を送った回`;
     // 添付の見出しも無い（開いている所だけ等）。差し込んだ中身を名前にしない（一行目の頭だけ）
     return (instruction.split('\n')[0] ?? '').slice(0, 60) || '（打った文の無い回）';
