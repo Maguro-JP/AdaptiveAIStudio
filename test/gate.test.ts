@@ -155,6 +155,11 @@ describe('守りの仕掛けの見分け', () => {
   test('普通のファイルは違う', () => {
     assert.equal(isGuarded('src/ui/web/panels.js'), false);
   });
+
+  test('大小を変えても守りの仕掛け（Windows では同じファイル）', () => {
+    assert.equal(isGuarded('SRC/Harness/Gate.ts'), true);
+    assert.equal(isGuarded('src\\harness\\RULES.TS'), true);
+  });
 });
 
 describe('協議', () => {
@@ -206,6 +211,12 @@ describe('協議', () => {
       rollback: '追加分を消せば元に戻る',
       paths: ['src/harness/gate.ts'],
     }), undefined);
+  });
+
+  test('回り道の綴りでも、当たる実体が守りの仕掛けなら協議にかける', async () => {
+    // 綴りだけを見ていると `docs/../src/harness/gate.ts` は守りの外に見え、書く側は gate.ts に書く
+    const rule = requiresDeliberation({ forum: new Forum() });
+    assert.equal((await rule.pre!(write('docs/../src/harness/gate.ts'), rules())).kind, 'deny');
   });
 
   test('普通のファイルは協議なしで書ける', async () => {

@@ -179,12 +179,35 @@ describe('立ち上げ', () => {
 });
 
 describe('Windows では npx を cmd 越しに起こす', () => {
-  test('拡張子の無い名前は shell を通す。道や拡張子付きは通さない', async () => {
+  test('拡張子の無い名前は shell を通す。道や .exe は通さない', async () => {
     const { spawnPlan } = await import('../src/mcp/client.ts');
     assert.deepEqual(spawnPlan('npx', 'win32'), { command: 'npx', shell: true });
-    assert.deepEqual(spawnPlan('npx.cmd', 'win32'), { command: 'npx.cmd', shell: false });
     assert.deepEqual(spawnPlan('C:\\tools\\srv.exe', 'win32'), { command: 'C:\\tools\\srv.exe', shell: false });
     assert.deepEqual(spawnPlan('npx', 'linux'), { command: 'npx', shell: false });
+  });
+
+  test('.cmd・.bat は殻を通す（殻なしでは Windows の spawn が EINVAL を投げる）', async () => {
+    const { spawnPlan } = await import('../src/mcp/client.ts');
+    // 命令の側は常に囲む（cmd.exe は命令の位置の `/` をスイッチと読む）
+    assert.deepEqual(spawnPlan('npx.cmd', 'win32'), { command: '"npx.cmd"', shell: true });
+    assert.deepEqual(spawnPlan('C:/tools/srv.cmd', 'win32'), { command: '"C:/tools/srv.cmd"', shell: true });
+    assert.deepEqual(spawnPlan('C:\\Program Files\\nodejs\\npx.CMD', 'win32'),
+      { command: '"C:\\Program Files\\nodejs\\npx.CMD"', shell: true });
+    assert.deepEqual(spawnPlan('run.sh', 'linux'), { command: 'run.sh', shell: false });
+  });
+
+  test('殻へ渡す引数は、空白や記号を含むものだけ囲む', async () => {
+    const { quoteForCmd } = await import('../src/mcp/client.ts');
+    assert.equal(quoteForCmd('-y'), '-y');
+    assert.equal(quoteForCmd('@playwright/mcp@latest'), '@playwright/mcp@latest');
+    assert.equal(quoteForCmd('C:\\Users\\Taro Yamada\\proj'), '"C:\\Users\\Taro Yamada\\proj"');
+    assert.equal(quoteForCmd('a&b'), '"a&b"');
+    assert.equal(quoteForCmd(''), '""');
+    // 囲みを抜ける・置き換わる字は、囲まずに断る（cmd.exe は \" を逃がしと読まない）
+    assert.throws(() => quoteForCmd('a" & calc & "'), /渡せません/);
+    assert.throws(() => quoteForCmd('%PATH%'), /渡せません/);
+    assert.throws(() => quoteForCmd('a\nb'), /渡せません/);
+    assert.equal(quoteForCmd('C:\\dir with space\\'), '"C:\\dir with space\\\\"');
   });
 });
 

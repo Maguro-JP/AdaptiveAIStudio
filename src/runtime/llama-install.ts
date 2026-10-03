@@ -236,7 +236,9 @@ export async function install(opts: InstallOptions): Promise<Installed> {
     // 実行時ライブラリも同じ場所へ平らに置く。実行ファイルは隣しか見ない。
     if (cudartBuf) {
       for (const e of unzip(cudartBuf)) {
-        const name = e.path.split('/').at(-1)!;
+        // 本体と同じ切り方にする。`/` だけで切ると、`\` 区切りの名前（Windows で作られた zip）が丸ごと名前になり、
+        // Windows の join は `\` を区切りと読むので、`..\x.dll` が入れ先のフォルダの外へ出る
+        const name = entryFileName(e.path);
         if (!name) continue;
         await writeFile(join(dest, name), e.data);
       }
@@ -349,6 +351,7 @@ export function llamaByHand(tag: string, binDir: string): string {
  */
 export function entryFileName(entryPath: string): string | undefined {
   const name = entryPath.split(/[\\/]/).at(-1) ?? '';
-  if (!name || name === '.' || name === '..') return undefined;
+  // 点と空白だけの名前（`..` `...` `.. `）も置かない。Windows は名前の末尾の点と空白を落とすので、`...` は `..` になりうる
+  if (!name || /^[. ]+$/.test(name)) return undefined;
   return name;
 }

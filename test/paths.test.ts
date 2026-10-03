@@ -142,6 +142,17 @@ describe('道具も、リンク越しには出ない・書かない', () => {
   });
 });
 
+describe('道になりえない長さは、実体を引かない', () => {
+  // 外のツールの長い文字列（base64 など）を、区切りごとに realpath で遡ると重い
+  test('上限を超える文字列は undefined（綴りだけで照らす）', async () => {
+    const { canonicalRel } = await import('../src/agent/tools/paths.ts');
+    const root = await tempDir('aas-canonical-');
+    assert.equal(await canonicalRel(root, 'a/'.repeat(20000)), undefined);
+    // 上限より短ければ今までどおり（まだ無いファイルでも、作業場からの道を返す）
+    assert.equal(await canonicalRel(root, 'a/b.txt'), 'a/b.txt');
+  });
+});
+
 describe('.. で始まる名前は、中のファイル', () => {
   /** `rel.startsWith('..')` で見ていたので、作業場の中の `..foo` のような名前まで外として断っていた。 */
   test('outsideRel は最初の区切りが .. のときだけ外', async () => {
@@ -160,5 +171,14 @@ describe('.. で始まる名前は、中のファイル', () => {
     assert.equal(safeResolve(root, '..foo'), join(root, '..foo'));
     assert.equal(safeResolve(root, '../foo'), undefined);
     assert.equal(safeResolve(root, 'a/../../foo'), undefined);
+  });
+
+  test('根がドライブの頭（Z: の直下・/）でも、まだ無いフォルダの名前を欠かさない', async () => {
+    // 会社の PC はデータを Z: に置くので、作業場が `Z:\` そのものになりうる。在る所まで遡る途中で、
+    // 一つ上が区切りで終わる根だと、長さで切った名前の頭の一字が落ちて、別の場所に書いていた。
+    const { resolve, sep, join } = await import('node:path');
+    const root = resolve(sep);
+    const name = 'aas-no-such-dir-7f3c9e';
+    assert.equal(await realSafeResolve(root, `${name}/a.txt`), join(root, name, 'a.txt'));
   });
 });

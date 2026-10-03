@@ -87,7 +87,10 @@ describe('commit の手前のフック', () => {
     await mkdir(join(root, 'test'), { recursive: true });
     await copyFile(join(import.meta.dirname, '..', HOOKS_PATH, 'pre-commit'), join(root, HOOKS_PATH, 'pre-commit'));
     await mkdir(join(root, 'scripts'), { recursive: true });
-    await copyFile(join(import.meta.dirname, '..', 'scripts', 'run-tests.mjs'), join(root, 'scripts', 'run-tests.mjs'));
+    // run-tests.mjs が読み込む部品も写す（直に起こされたかを判じる is-main.mjs）
+    for (const name of ['run-tests.mjs', 'is-main.mjs']) {
+      await copyFile(join(import.meta.dirname, '..', 'scripts', name), join(root, 'scripts', name));
+    }
     await writeFile(join(root, 'test', 'wording.test.ts'), wording);
     await writeFile(join(root, 'test', 'decisions.test.ts'), "import { test } from 'node:test';\ntest('ok', () => {});\n");
     await writeFile(join(root, 'test', 'lenient-reads.test.ts'), lenient);

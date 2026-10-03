@@ -289,6 +289,8 @@
 - 外のツールへ渡す引数も持ち出しの検問を通す・format の語だけで止めない・決まりを丸ごと落とさない・下調べを古い回で上書きしない
 - 画面の出来事の流れが切れて繋ぎ直したら、承認待ちと作業中かを取り直す
 - Windows の CI で落ちていた 17 件を直す（プレビューが全部 403・フォルダを空の会話と読む・区切りの取り違え）
+- 守りの規則を実体の道でも照らす・ドライブの頭の作業場で名前を欠かない・.cmd の MCP を起こす・CUDA の DLL を名前で置く
+- 入口のスクリプトは、リンクを挟んだ道から起こしても動く
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -10910,3 +10912,45 @@ Actions の枠が戻り、Windows の CI が久しぶりに中まで走った。
 
 確かめていないこと: Windows では、この直しを当てた後はまだ走らせていない（次の PR の CI で見る）。Linux では全部通っている。
 触る場所: `src/ui/preview.ts` の `#serve`、`src/core/conversations.ts` の `load`・`head`、`src/core/home.ts` の `insideDir`
+
+## 2026-10-03  守りの規則を実体の道でも照らす・ドライブの頭の作業場で名前を欠かない・.cmd の MCP を起こす・CUDA の DLL を名前で置く
+
+Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直した。
+
+- 守りの規則（`src/harness/builtin-rules.ts` の保護・試験の守り、`src/harness/deliberation.ts` の協議）: 引数の綴りだけを見ていて、
+  書く側は `realSafeResolve` で実体へ解いてから書く。綴りと実体が食い違うと、規則は通し、書く側は守っているファイルに書いた
+  （Windows の 8.3 の短い名前 `ENV~1` は `.env`、フォルダへのリンク・junction の `g/config` は `.git/config`、
+  `docs/../src/harness/gate.ts` の回り道）。綴りと実体（`canonicalRel`）の両方で照らす。協議の守りは大小を区別しない
+  （区別しない機械でない所では、守る側に倒れるだけ）。規則の `pre` は async になる（ハーネスは前から待って呼んでいる）
+- `realSafeResolve`（`src/agent/tools/paths.ts`）: まだ無いフォルダを辿るとき、一つ上が根（`Z:\`・`/`）だと区切りで終わるので、
+  長さで切ると名前の頭の一字を落とし、別の場所に書いていた（作業場が `Z:\` そのもののとき）。名前は basename で取る
+- MCP（`src/mcp/client.ts`）: `.cmd`・`.bat` を殻なしで起こしていた（Node 18.20.2 以降の Windows は spawn EINVAL）。殻を通す。
+  殻を通すと Node は引数を空白で繋ぐだけなので、空白や記号を含む引数は囲む。`"`・`%`・改行を含む引数は、囲んでも安全に
+  ならない（cmd.exe は `\"` を逃がしと読まず、`%名前%` は囲みの中でも置き換わる）ので、立ち上げずに断る。
+  選ばなかった案: `^` で一字ずつ逃がす（読む側のプログラムの引数の切り方と二重になり、正しく渡る形を確かめられない）。
+  命令の側は常に囲む（cmd.exe は命令の位置の `/` をスイッチと読むので、`C:/tools/srv.cmd` が割れる）。拡張子の無い `npx` も
+  殻を通すので、`"`・`%` を含む引数は前は囲まずに渡して壊れていたものが、今は立ち上げずに断る形に変わる
+- 守りの規則が実体を引くのは、道になりえる長さ（32767 字）までにする。外のツールの長い文字列（base64 など）を区切りごとに
+  realpath で遡ると重い（読み直しで見つけた）。CUDA の DLL の名前は、点と空白だけの名前（`...`・`.. `）も断る
+- CUDA の実行時ライブラリの展開（`src/runtime/llama-install.ts`）: 名前を `/` でしか切らず、`\` 区切りの名前が別のフォルダや
+  入れ先のフォルダの外へ出ていた。本体と同じ `entryFileName` で切る
+- 試験: `test/harness.test.ts`・`test/gate.test.ts`・`test/paths.test.ts`・`test/mcp.test.ts`・`test/llama-install.test.ts`。
+  リンク・junction で Windows の綴りの違いを Linux でも作る。どれも直す前の版で落ちることを見た
+- 残したもの（本番に響かない・条件つき）: `scripts/installer.mjs` は Linux 専用（release は ubuntu で回す）。`run.mjs` などの
+  `import.meta.url === pathToFileURL(argv[1])` は、道の途中にリンクがあると何もせずに終わる。`undo.ts` の `rootKey` は 8.3 と
+  長い名前を揃えない。いずれも確かめていない
+触る場所: `src/agent/tools/paths.ts` の `canonicalRel`・`realSafeResolve`、`src/harness/builtin-rules.ts`、`src/harness/deliberation.ts` の
+`isGuarded`、`src/mcp/client.ts` の `spawnPlan`・`quoteForCmd`、`src/runtime/llama-install.ts`
+
+## 2026-10-03  入口のスクリプトは、リンクを挟んだ道から起こしても動く
+
+- `scripts/run-tests.mjs`・`run.mjs`・`bundle.mjs` は、直に起こされたかを `import.meta.url === pathToFileURL(argv[1])` で見ていた。
+  Node は起こしたファイルを実体の道で読むので、道の途中にリンク・junction・subst のドライブ・Windows の短い名前があると
+  一致せず、何もせずに終了コード 0 で終わる。`npm test` なら試験を一つも走らせずに「通った」になる（手元で再現した）
+- 両方を実体の道にそろえて比べる（`scripts/is-main.mjs` の `isMain`）。三つとも同じ部品を使う
+- 試験: `test/home.test.ts` で、scripts をリンクで指した道から `run.mjs` を起こし、使い方を言って 2 で終わることを見る。
+  直す前の版で落ちることを見た。前からある「書き方を文字で見る」試験は、`argv[1]` が入口から消えたので何も見なくなる
+  （動きで見る試験に置き換わる）
+- あわせて: Windows の CI で `.ENV` の試験が落ちた。大小を区別しない機械では `.ENV` は `.env` そのもので、守りの規則が実体を
+  引くようになって止まるのが正しい。試験は、走らせている所が大小を区別するかをその場で聞き、両方の向きを見る形にした
+触る場所: `scripts/is-main.mjs`

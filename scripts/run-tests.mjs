@@ -13,8 +13,9 @@
  */
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
+import { isMain } from './is-main.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const testDir = join(root, 'test');
@@ -154,4 +155,5 @@ function main() {
  * argv[1] は Z:\...\run-tests.mjs（円記号・ドライブ文字）、
  * import.meta.url は file:///... なので、URL にそろえてから比べる。
  */
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+// 実体の道どうしで比べる（`is-main.mjs`）。リンク越しに起こすと、試験を一つも走らせずに 0 で終わっていた
+if (isMain(import.meta.url)) main();

@@ -12,7 +12,8 @@
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { isMain } from './is-main.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -42,7 +43,8 @@ export function toCommand(script) {
 // argv[1] は Z:\...\run.mjs（円記号・ドライブ文字）、import.meta.url は
 // file:///Z:/.../run.mjs。**一致しないので、中身が丸ごと動かない。**
 // 何も言わずに終了コード0で終わるので、気づけない（実機でそうなった）。
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+// 実体の道どうしで比べる（`is-main.mjs`）。リンク越しに起こすと、何もせずに 0 で終わっていた
+if (isMain(import.meta.url)) {
   const [name, ...rest] = process.argv.slice(2);
   if (!name) {
     console.error('使い方: node scripts/run.mjs <仕事の名前>');

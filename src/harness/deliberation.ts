@@ -13,6 +13,7 @@
  */
 import { isWriteTool } from '../agent/tools/write-kind.ts';
 import { minimatch } from './glob.ts';
+import { canonicalRel } from '../agent/tools/paths.ts';
 import { type Rule, allow, deny, argString } from './rules.ts';
 import type { ToolCall } from '../providers/contract.ts';
 
@@ -35,7 +36,8 @@ export const GUARDED_PATHS = [
 
 export function isGuarded(rel: string): boolean {
   const path = rel.split('\\').join('/').replace(/^\.\//, '');
-  return GUARDED_PATHS.some((p) => minimatch(path, p));
+  // 大小は区別しない。Windows では `SRC/Harness/Gate.ts` も同じファイル。区別しない機械でない所では、守る側に倒れるだけ
+  return GUARDED_PATHS.some((p) => minimatch(path, p, { nocase: true }));
 }
 
 /** 協議の記録。言葉にさせるための項目で、飾りはない。 */
@@ -123,12 +125,14 @@ export function requiresDeliberation(opts: DeliberationOptions): Rule {
   return {
     name: 'requires-deliberation',
     description: '重大な変更は、協議の記録なしに実行させない',
-    pre(call, ctx) {
+    async pre(call, ctx) {
       if (!isWriteTool(call.name)) return allow;
       const path = argString(call, 'path');
       if (!path) return allow;
 
-      const guarded = isGuarded(path);
+      // 綴りと、書いたときに当たる実体の両方で見る（`../harness/gate.ts` の回り道・8.3 の短い名前・フォルダへのリンク）
+      const real = typeof ctx.root === 'string' ? await canonicalRel(ctx.root, path) : undefined;
+      const guarded = isGuarded(path) || (real !== undefined && isGuarded(real));
       const written = countWritten(ctx.history);
       const spreading = !written.has(path) && written.size >= wide;
       if (!guarded && !spreading) return allow;

@@ -9,7 +9,7 @@ import { readFile, lstat } from 'node:fs/promises';
 import { relative, isAbsolute, dirname, join, sep } from 'node:path';
 import { existsSync } from 'node:fs';
 import { minimatch } from './glob.ts';
-import { safeResolve } from '../agent/tools/paths.ts';
+import { safeResolve, canonicalRel } from '../agent/tools/paths.ts';
 import { isAbsent } from './put-back.ts';
 import { type Rule, type RuleContext, allow, deny, ok, argString, hasArg } from './rules.ts';
 import type { ToolCall } from '../providers/contract.ts';
@@ -38,7 +38,7 @@ export function protectedPaths(patterns: string[], opts: { nocase?: boolean } = 
   return {
     name: 'protected-paths',
     description: `保護対象への書き込みを禁じる: ${patterns.join(', ')}`,
-    pre(call, ctx) {
+    async pre(call, ctx) {
       // 外から来たツールも見る。何をするか分からないものを「書かない側」に
       // 置くと、ここが丸ごと素通りする（`mayWriteFiles`）。
       if (!mayWriteFiles(call.name)) return allow;
@@ -63,7 +63,9 @@ export function protectedPaths(patterns: string[], opts: { nocase?: boolean } = 
          */
         if (isExternalTool(call.name) && /\s/.test(path) && !existsSync(dirname(join(ctx.root, rel)))) continue;
         // 大小を区別しない機械では `.ENV` も `.env`。区別すると守りをすり抜ける。
-        const hit = patterns.find((p) => minimatch(rel, p, opts));
+        // 綴りだけでなく、書いたときに当たる実体でも照らす（Windows の `ENV~1` は `.env`、`g -> .git` の `g/config` は `.git/config`）
+        const real = await canonicalRel(ctx.root, path);
+        const hit = patterns.find((p) => minimatch(rel, p, opts) || (real !== undefined && minimatch(real, p, opts)));
         if (hit) {
           return deny(isExternalTool(call.name)
             ? `${rel} は保護されています（${hit}）。外のツールには渡せません。`
@@ -109,7 +111,12 @@ export const testProtection: Rule = {
   async pre(call, ctx) {
     if (!isWriteTool(call.name)) return allow;
     const path = argString(call, 'path');
-    if (!path || !isTestFile(path)) return allow;
+    if (!path) return allow;
+    // 綴りが試験に見えなくても、当たる実体が試験なら守る（Windows の 8.3 の名前 `FOOTES~1.TS` は `foo.test.ts`）
+    if (!isTestFile(path)) {
+      const real = await canonicalRel(ctx.root, path);
+      if (real === undefined || !isTestFile(real)) return allow;
+    }
     // **当ててから見る。**edit_file は引数に「後の姿」が入っていない。
     // 引数だけ見ていると、部分置換でテストを消すのを素通りさせる。
     const content = await plannedContent(call.name, call.args, ctx.root).catch((e: unknown) => e as Error);
