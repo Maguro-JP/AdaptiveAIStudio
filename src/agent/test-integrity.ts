@@ -11,6 +11,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { toDisplayPath } from './tools/paths.ts';
 import { isAbsent } from '../harness/put-back.ts';
+import { isTestFile, countCases, countSkips } from './test-patterns.ts';
 
 export interface TestSnapshot {
   /** テストファイルとその中のテスト件数 */
@@ -36,23 +37,6 @@ export interface IntegrityVerdict {
 }
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'target', '.venv']);
-const TEST_FILE = /(\.|_|^)(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.go$|(^|\/)tests?\//i;
-
-/** テスト定義の数え方。言語ごとの代表的な書き方だけを見る。 */
-const CASE_PATTERNS = [
-  /\b(?:test|it)\s*(?:\.\w+)?\s*\(/g,   // JS/TS: test(...) it(...)
-  /^\s*def\s+test_\w+/gm,                // Python
-  /\bfunc\s+Test\w+\s*\(/g,              // Go
-  /^\s*#\[test\]/gm,                     // Rust
-];
-
-/** skip / 無効化の痕跡。数と別に監視する。 */
-const SKIP_PATTERNS = [
-  /\b(?:test|it|describe)\s*\.\s*skip\s*\(/g,
-  /\b(?:xit|xdescribe)\s*\(/g,
-  /@(?:pytest\.mark\.)?skip/g,
-  /\bt\.Skip\s*\(/g,
-];
 
 export async function snapshotTests(root: string): Promise<TestSnapshot> {
   const files = new Map<string, number>();
@@ -77,7 +61,7 @@ export async function snapshotTests(root: string): Promise<TestSnapshot> {
       if (!e.isFile()) continue;
 
       const rel = toDisplayPath(root, abs);
-      if (!TEST_FILE.test(rel)) continue;
+      if (!isTestFile(rel)) continue;
 
       let text: string;
       try {
@@ -95,18 +79,6 @@ export async function snapshotTests(root: string): Promise<TestSnapshot> {
 
   await walk(root, 0);
   return { files, totalCases, totalFiles: files.size, ...(unreadable.size > 0 ? { unreadable } : {}) };
-}
-
-function countCases(text: string): number {
-  let n = 0;
-  for (const p of CASE_PATTERNS) n += text.match(p)?.length ?? 0;
-  return n;
-}
-
-function countSkips(text: string): number {
-  let n = 0;
-  for (const p of SKIP_PATTERNS) n += text.match(p)?.length ?? 0;
-  return n;
 }
 
 /**

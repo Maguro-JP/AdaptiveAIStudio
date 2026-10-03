@@ -11,6 +11,7 @@ import type { ToolCall } from '../providers/contract.ts';
 import type { Tool, ToolContext, ToolResult } from '../agent/tools/types.ts';
 import type { Rule, RuleContext } from './rules.ts';
 import { AuditLog } from './audit.ts';
+import { fingerprint, markSeen } from './seen.ts';
 import type { HarnessMetrics } from './metrics.ts';
 
 export interface HarnessOptions {
@@ -145,6 +146,12 @@ export class Harness {
         else if (result.content.includes('は二進のファイルなので読めません')) keep(call);
         else if (result.content.includes('ファイルが大きすぎます')) {
           keep({ ...call, args: { ...(args as Record<string, unknown>), limit: 0 } });
+        }
+        // 読めた・書けた直後の中身の指紋を記録する。全文を書く前に、読んだ後で誰かが替えていないかを比べる（`./seen.ts`）
+        if (!result.isError && (call.name === 'read_file' || call.name === 'write_file' || call.name === 'edit_file')) {
+          const path = (args as Record<string, unknown>)?.['path'];
+          const print = typeof path === 'string' ? await fingerprint(toolCtx.root, path) : undefined;
+          if (print !== undefined) markSeen(call, print);
         }
 
         // 実行後の判定

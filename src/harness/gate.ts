@@ -96,7 +96,9 @@ const OUTBOUND: Pattern[] = [
   {
     kind: '合言葉',
     // 見た目で分かる形のものだけを当てる。当てずっぽうで弾くと使えなくなる。
-    match: /\b(sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|gho_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})\b/,
+    // 今の Anthropic と OpenAI の鍵は `sk-ant-api03-…` `sk-proj-…` のように途中に `-` が入る。`sk-` の直後に英数字だけを
+    // 求めていたので、当たらずに外へ出ていた。末尾も `\b` ではなく、鍵の字が続かないことで見る（`-` で終わる鍵がある）。
+    match: /\b(sk-(?:ant-|proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{30,}|gho_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})(?![A-Za-z0-9_-])/,
     severity: 'block',
     detail: '合言葉（APIキー・トークン）と思われる文字列が含まれています。',
   },

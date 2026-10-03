@@ -14,6 +14,7 @@
 import { isWriteTool } from '../agent/tools/write-kind.ts';
 import { minimatch } from './glob.ts';
 import { canonicalRel } from '../agent/tools/paths.ts';
+import { normalize } from './builtin-rules.ts';
 import { type Rule, allow, deny, argString } from './rules.ts';
 import type { ToolCall } from '../providers/contract.ts';
 
@@ -133,8 +134,10 @@ export function requiresDeliberation(opts: DeliberationOptions): Rule {
       // 綴りと、書いたときに当たる実体の両方で見る（`../harness/gate.ts` の回り道・8.3 の短い名前・フォルダへのリンク）
       const real = typeof ctx.root === 'string' ? await canonicalRel(ctx.root, path) : undefined;
       const guarded = isGuarded(path) || (real !== undefined && isGuarded(real));
-      const written = countWritten(ctx.history);
-      const spreading = !written.has(path) && written.size >= wide;
+      // 依頼全体で、道を揃えて数える（担当ごとに数えると担当の数だけ広げられる。`./a.ts` と `a.ts` を二件と数えない）
+      const key = (p: string): string => (typeof ctx.root === 'string' ? normalize(ctx.root, p) : p);
+      const written = countWritten(ctx.taskHistory ?? ctx.history, key);
+      const spreading = !written.has(key(path)) && written.size >= wide;
       if (!guarded && !spreading) return allow;
 
       if ((ctx.forum ?? forum).covers(path)) return allow;
@@ -153,12 +156,12 @@ export function requiresDeliberation(opts: DeliberationOptions): Rule {
   };
 }
 
-function countWritten(history: readonly ToolCall[]): Set<string> {
+function countWritten(history: readonly ToolCall[], key: (path: string) => string): Set<string> {
   const s = new Set<string>();
   for (const c of history) {
     if (!isWriteTool(c.name)) continue;
     const p = argString(c, 'path');
-    if (p) s.add(p);
+    if (p) s.add(key(p));
   }
   return s;
 }

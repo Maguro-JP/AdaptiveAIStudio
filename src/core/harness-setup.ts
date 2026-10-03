@@ -60,7 +60,7 @@ export async function buildHarness(
     // Windows と macOS は大小を区別しない。そこでは `.ENV` も `.env` として守る。
     rules.push(protectedPaths(
       [...DEFAULT_PROTECTED, ...(hc.protectedPaths ?? [])],
-      { nocase: caseBlind(platform) },
+      { nocase: caseBlind(platform), windows: platform === 'win32' },
     ));
     rules.push(testProtection);
     rules.push(dangerousCommands);
