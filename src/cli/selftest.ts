@@ -228,7 +228,19 @@ process.exit(bad > 0 ? 1 : 0);
 function run(command: string, args: string[], cwd = process.cwd()): Promise<{ text: string }> {
   return new Promise((resolve) => {
     let text = '';
-    const child = spawn(command, args, { cwd });
+    /*
+     * **起こせなかったことを、投げさせない。**Node の spawn は ENOENT・EACCES 等だけを 'error' で知らせ、
+     * それ以外（Windows の壊れた .exe の EFTYPE、ERROR_ACCESS_DENIED の EPERM、方針で止められた UNKNOWN、
+     * .cmd/.bat の EINVAL、Linux の ENOEXEC）はその場で投げる。ここで投げると Promise ごと落ち、
+     * 一覧も報告のファイルも出ないまま Node の積み上げだけが残る。
+     */
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, args, { cwd });
+    } catch (e) {
+      resolve({ text: (e as Error).message });
+      return;
+    }
     const on = (read: (c: Buffer) => string) => (b: Buffer) => { text += read(b); };
     child.stdout?.on('data', on(chunkReader()));
     child.stderr?.on('data', on(chunkReader()));

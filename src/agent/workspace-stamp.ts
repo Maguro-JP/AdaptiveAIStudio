@@ -69,6 +69,14 @@ async function prefixOf(root: string): Promise<string | undefined> {
 }
 
 /**
+ * 道の大小を区別しないリポジトリか（`core.ignorecase`。Windows・macOS の `git init` が true を書く）。
+ * 確かめられなかった・書いていないときは区別する側（git と同じ既定）。
+ */
+async function ignoresCase(root: string): Promise<boolean> {
+  return (await gitOut(['config', '--bool', 'core.ignorecase'], root))?.trim() === 'true';
+}
+
+/**
  * 変わっているファイルごとの記録。鍵は**作業場からの道**（`toDisplayPath` と同じ形）。
  * 値は `状態 大きさ 時刻`。消えたものは `状態 -`。
  */
@@ -80,15 +88,28 @@ let unseen = 0;
 export async function workspaceStamp(root: string): Promise<WorkspaceStamp | undefined> {
   const prefix = await prefixOf(root);
   if (prefix === undefined) return undefined;
-  // 見る範囲は `-- .` で作業場の中に絞る（外の変化をこの作業場の変化と数えない）。
+  /*
+   * 大小を区別しないリポジトリでは、作業場までの道も大小を区別せずに比べる。
+   *
+   * `--show-prefix` は cwd の**ディスク上の**大小で返す（Git for Windows の getcwd は GetFinalPathNameByHandleW で引く）。
+   * 索引の道は**索引の**大小。フォルダの大小だけを変えた後（エクスプローラーで `src` → `Src`、上流で大小だけ変えたのを
+   * 引いた後）は二つが食い違う。そのとき `-- .` は cwd の綴りで比べるので追跡しているファイルを一つも挙げず
+   * （`core.ignorecase` は pathspec を大小無視にしない）、挙がった道も `startsWith` で落ちる。外のツールが書いても
+   * 記録は空のまま「変わっていない」になる。`:(icase)` は cwd の分を区別したままなので、`top` で根から書く。
+   */
+  const icase = prefix !== '' && await ignoresCase(root);
+  // 見る範囲は作業場の中に絞る（外の変化をこの作業場の変化と数えない）。`literal` は、フォルダ名の `*` `?` を型として読ませないため。
+  const spec = icase ? `:(top,icase,literal)${prefix}` : '.';
   // -z: 名前に空白や全角が入っても切れ目を取り違えない。
   // 上限は大きめに取る。`.gitignore` の無い作業場で `node_modules` が丸ごと untracked だと 16MiB を超え、
   // 超えた回を「git の管理下でない」と読むと、了解された作業場では二度と比べなくなる。
-  const out = await gitOut(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], root, 256 * 1024 * 1024);
+  const out = await gitOut(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', spec], root, 256 * 1024 * 1024);
   if (out === undefined) return undefined;
-  // 根からの道を、作業場からの道に。作業場の外（`-- .` で絞っても、名前変更の元は外に在り得る）は捨てる。
+  // 根からの道を、作業場からの道に。作業場の外（絞っても、名前変更の元は外に在り得る）は捨てる。
+  const fold = (s: string): string => (icase ? s.toLowerCase() : s);
+  const head = fold(prefix);
   const key = (gitPath: string): string | undefined =>
-    gitPath.startsWith(prefix) ? gitPath.slice(prefix.length) : undefined;
+    fold(gitPath.slice(0, prefix.length)) === head ? gitPath.slice(prefix.length) : undefined;
 
   const stamp: WorkspaceStamp = new Map();
   const parts = out.split('\0');

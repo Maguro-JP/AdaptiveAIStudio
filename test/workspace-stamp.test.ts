@@ -125,6 +125,42 @@ describe('作業場の記録', () => {
     assert.deepEqual([...stamp.keys()], ['g.txt'], `先頭の空白を落として鍵がずれている: ${[...stamp.keys()].join(',')}`);
   });
 
+  test('作業場までのフォルダの大小が索引と違っても（core.ignorecase）、追跡しているファイルの変化を見逃さない', async () => {
+    const home = await tempDir('aas-stamp-case-');
+    const root = join(home, 'repo');
+    const ws = join(root, 'Src', 'app');
+    await mkdir(ws, { recursive: true });
+    await writeFile(join(ws, 'a.txt'), 'a\n');
+    git(root, 'init', '-q');
+    git(root, 'config', 'core.ignorecase', 'true');
+    git(root, 'config', 'core.autocrlf', 'false');
+    // 索引には小文字で載せる（Windows でフォルダの大小だけを変えた後の姿）。大小を区別する所でも作れるよう、索引だけを書く
+    const blob = execFileSync('git', ['hash-object', '-w', join('Src', 'app', 'a.txt')], { cwd: root, encoding: 'utf8' }).trim();
+    git(root, 'update-index', '--add', '--cacheinfo', `100644,${blob},src/app/a.txt`);
+    git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+    // 大小を区別しない所では「書き換えた」、区別する所では「索引の道に無い」で挙がる。どちらでも挙がらなければいけない
+    await appendFile(join(ws, 'a.txt'), 'b\n');
+    const stamp = await workspaceStamp(ws);
+    assert.ok(stamp);
+    assert.ok(stamp.has('a.txt'), `索引と大小が違うだけで、追跡しているファイルを数えていない: [${[...stamp.keys()].join(',')}]`);
+  });
+
+  test('大小を区別しないリポジトリでも、名前の似た隣のフォルダは数えない', async () => {
+    const home = await tempDir('aas-stamp-case-');
+    const root = join(home, 'repo');
+    await mkdir(join(root, 'app'), { recursive: true });
+    await mkdir(join(root, 'apple'), { recursive: true });
+    await writeFile(join(root, 'app', 'a.txt'), 'a\n');
+    git(root, 'init', '-q');
+    git(root, 'config', 'core.ignorecase', 'true');
+    git(root, 'add', '-A');
+    git(root, '-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+    await writeFile(join(root, 'apple', 'x.txt'), 'x\n');
+    const stamp = await workspaceStamp(join(root, 'app'));
+    assert.ok(stamp);
+    assert.deepEqual([...stamp.keys()], [], `隣のフォルダの変化を数えた: [${[...stamp.keys()].join(',')}]`);
+  });
+
   test('HEAD がリンク・submodule のものは取れないと言い、二進はバイト列のまま返す', async (t) => {
     const root = await repo();
     await writeFile(join(root, 'bin.dat'), Buffer.from([0x00, 0xff, 0xfe]));
