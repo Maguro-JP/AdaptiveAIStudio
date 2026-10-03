@@ -2593,6 +2593,12 @@ export const PANELS = {
       clearTimeout(keeping);
       keeping = setTimeout(keepDraft, 400);
     };
+    // 作り直される手前で、預けを待っている分をその場で預けて止める。補完も止める（`render` の知らせ）
+    ctx.onDiscard?.(() => {
+      if (keeping !== undefined) { clearTimeout(keeping); keeping = undefined; keepDraft(); }
+      clearTimeout(pending);
+      asking?.abort();
+    });
 
     /**
      * 欄のここからここまでを選ぶ。
@@ -3299,7 +3305,8 @@ export const PANELS = {
       ghost.scrollTop = area.scrollTop; ghost.scrollLeft = area.scrollLeft;
     };
     const askCompletion = async () => {
-      if (!path || area.disabled) return;
+      // 捨てたパネルは訊かない（補完のモデルを無駄に叩く）
+      if (!path || area.disabled || discarded()) return;
       const at = area.selectionStart;
       if (at !== area.selectionEnd) return;
       const rest = area.value.slice(at, area.value.indexOf('\n', at) < 0 ? undefined : area.value.indexOf('\n', at));
