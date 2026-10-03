@@ -212,10 +212,10 @@ export interface Forgotten {
  * （`src/core/undo.ts` の作業場の鍵と同じ考え）。字のまま比べると、CLI を `c:\\work` から、画面を `C:\\Work` で開いただけで
  * 同じ作業場の「前に駄目だった手」を思い出さず、同じ題の覚えが二つにできた。実体が取れなければ字のまま
  */
-export function placeKey(root: string): string {
+export function placeKey(root: string, platform: NodeJS.Platform = process.platform): string {
   let real = root;
   try { real = realpathSync(root); } catch { /* 無い・読めない作業場は字のまま */ }
-  return process.platform === 'linux' ? real : real.toLowerCase();
+  return platform === 'linux' ? real : real.toLowerCase();
 }
 
 /** `restore` が戻さなかった理由。 */
