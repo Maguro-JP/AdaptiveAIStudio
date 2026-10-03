@@ -28,8 +28,8 @@ export interface ProviderConfig {
    */
   listTimeoutMs?: number;
   /**
-   * 既定は false。ローカルが主で、クラウドは「口だけ用意しておく」もの。
-   * 明示的に true にしない限り、登録も接続もしない。
+   * false なら登録も接続もしない。**省くと有効**（`enabledProviders`）。最初に書き出す設定では、クラウドの項目に
+   * `enabled: false` を明示して「口だけ用意しておく」。自分で項目を足すなら、使わない間は false を書く。
    */
   enabled?: boolean;
 }
@@ -565,6 +565,10 @@ function validate(c: AasConfig): void {
   for (const p of c.providers) {
     if (p.kind === 'openai-compatible') {
       if (!p.baseUrl) throw new ConfigBroken(`baseUrl が未設定です: ${p.id}`);
+      // 利用者名・パスワード付きの URL は受けない（fetch が断り、その URL ごと失敗の文として画面と記録に出る）。API キーは apiKeyEnv で渡す
+      if (/^[a-z][a-z0-9+.-]*:\/\/[^/]*@/i.test(p.baseUrl)) {
+        throw new ConfigBroken(`baseUrl に利用者名やパスワードを書けません: ${p.id}（API キーは apiKeyEnv に環境変数の名前を書いて渡してください）`);
+      }
     } else if (p.kind !== 'anthropic') {
       throw new ConfigBroken(`未対応の provider kind です: ${p.kind} (${p.id})`);
     }

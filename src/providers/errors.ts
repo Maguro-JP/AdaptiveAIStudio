@@ -15,6 +15,11 @@ export type ProviderErrorKind =
   | 'context_too_long'
   /** 認証不備。自動復旧しないのでフォールバックする。 */
   | 'auth'
+  /**
+   * そのモデルが相手に無い（404）。設定に書いてあるだけの名前・消されたモデル。相手ごと冷やさず、次の候補へ回す
+   * （こちらのバグとして止めていたので、候補に次のモデルが在っても使わずに落ちていた）。
+   */
+  | 'model_missing'
   /** こちらのバグ。フォールバックしても直らない。 */
   | 'invalid_request'
   | 'canceled';
@@ -37,6 +42,7 @@ export const FALLBACK_RULES: Record<ProviderErrorKind, FallbackRule> = {
   timeout:          { retries: 2, fallback: true,  cooldownMs: 5 * MINUTE },
   context_too_long: { retries: 0, fallback: true,  cooldownMs: 0 },
   auth:             { retries: 0, fallback: true,  cooldownMs: Infinity },
+  model_missing:    { retries: 0, fallback: true,  cooldownMs: 0 },
   invalid_request:  { retries: 0, fallback: false, cooldownMs: 0 },
   canceled:         { retries: 0, fallback: false, cooldownMs: 0 },
 };
@@ -74,6 +80,7 @@ export function kindFromHttpStatus(status: number, body: string): ProviderErrorK
       : 'rate_limited';
   }
   if (status === 401 || status === 403) return 'auth';
+  if (status === 404) return 'model_missing';
   if (status === 408 || status === 504) return 'timeout';
   if (status >= 500) return 'unavailable';
   if (status === 400 && /context|too long|maximum.*token|token.*limit/i.test(body)) {

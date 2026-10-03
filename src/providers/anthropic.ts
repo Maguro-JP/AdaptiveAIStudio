@@ -15,7 +15,7 @@ import type {
   ChatProvider, HealthStatus, ModelDescriptor,
   ProviderChunk, ProviderMessage, ProviderRequest,
 } from './contract.ts';
-import { ProviderError, type ProviderErrorKind } from './errors.ts';
+import { ProviderError, parseRetryAfter, type ProviderErrorKind } from './errors.ts';
 
 type Sdk = typeof import('@anthropic-ai/sdk')['default'];
 
@@ -204,9 +204,8 @@ export class AnthropicProvider implements ChatProvider {
     if (e instanceof sdk.RateLimitError) {
       const body = JSON.stringify(e.error ?? e.message);
       kind = /quota|credit|billing|insufficient/i.test(body) ? 'quota_exhausted' : 'rate_limited';
-      const header = e.headers?.get?.('retry-after');
-      const seconds = Number(header);
-      if (Number.isFinite(seconds)) retryAfterMs = seconds * 1000;
+      // 秒の形も日時の形も読む（日時の形を読まずに、既定の待ちにしていた）
+      retryAfterMs = parseRetryAfter(e.headers?.get?.('retry-after') ?? null);
     } else if (e instanceof sdk.AuthenticationError || e instanceof sdk.PermissionDeniedError) {
       kind = 'auth';
     } else if (e instanceof sdk.BadRequestError) {
@@ -214,7 +213,8 @@ export class AnthropicProvider implements ChatProvider {
         ? 'context_too_long'
         : 'invalid_request';
     } else if (e instanceof sdk.NotFoundError) {
-      kind = 'invalid_request';
+      // そのモデルが無い。次の候補へ回す（`errors.ts` の model_missing）
+      kind = 'model_missing';
     } else if (e instanceof sdk.InternalServerError) {
       kind = 'unavailable';
     } else if (e instanceof sdk.APIConnectionTimeoutError) {

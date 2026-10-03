@@ -307,6 +307,7 @@
 - 11 回目の不具合調査の 6 件（bundle の出力先・for /f の引用符・selftest の打ち切り・動いている版・update の続き・check:bundle の言葉）
 - 12 回目の不具合調査の 6 件（今の鍵の形・読んだ後の変化・skip と .only・テストのフォルダ・協議の数え方・Windows の末尾の点）
 - 13 回目の不具合調査の 5 件（送り先の会話・preview の index.html・作業中の採用・Origin の port・よそからの GET）
+- 14 回目の不具合調査の 8 件（inproc の呼び出しの id・検問所の候補・切れた判定・404・番号の無い呼び出し・失敗の塊・baseUrl の利用者名・enabled の説明）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -11337,3 +11338,31 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
   見た目の値、点検の一覧、画面の JS（HTML として差し込む所が無い）、出来事の流れ、添付の名前
 触る場所: `src/ui/server.ts`（`/api/send`・`/api/proposal`・`#resumeUnfinished`・`#recordUnfinished`）、`src/ui/web/app.js`（`loadConversations`）、
 `src/ui/web/panels.js`（送りの本文）、`src/ui/preview.ts`、`src/ui/origin.ts`
+
+## 2026-10-03  14 回目の不具合調査の 8 件（inproc の呼び出しの id・検問所の候補・切れた判定・404・番号の無い呼び出し・失敗の塊・baseUrl の利用者名・enabled の説明）
+
+読むだけの担当に、モデルとのやりとり（`src/providers/`、流れの読み方、呼び出しの組み立て）と、使うモデルの決め方を調べさせ、8 件を直した。
+
+- 同じプロセスで動くモデルは、返事のたびに呼び出しの id を `call_0` から数え直す。履歴を組み直すとき（`toHistory`）会話全体で結果を引いていたので、
+  後の回の結果が前の回の呼び出しに付いた（「a を読んだら b の中身が返った」）。結果は、その呼び出しの直後に続く tool の行からだけ引く
+- 検問所と指摘の判じ手は、候補を逆順にして使っていた。雲を後ろに置いた設定では雲が先頭に来て、外へ出る前の荷物・外から入った文書・利用者の言葉を
+  毎回雲へ送っていた。自動で選んだ候補は速い順なので、逆にすると一番遅いモデルが立っていた。手元のモデル（locality が local）があればそれだけを、
+  候補の順のまま使う。手元のモデルが無い（雲だけ）ときは候補をそのまま使う（`quietCandidates`）。並びを逆にしない（選ばなかった案: 逆順のまま local に絞る）
+- 検問所のモデルの答えは、時間切れ（done が来ない）や上限（length）で途中まで書かれていても、そのまま判定として読んでいた。「PASS…? いや…」で切れた
+  答えで外へ出していた。言い終えていない答えは「分からない」にする（持ち出しは止まる）。指摘の判じ手も同じ
+- そのモデルが相手に無い（404）を、こちらのバグ（invalid_request）として止めていた。`model_missing` に分け、相手ごと冷やさずに次の候補へ回す
+- OpenAI 互換で、番号（index）の無い呼び出しを全部 0 番に入れていたので、二件目が一件目に繋がった（`read_fileread_file`）。別の id が来たら別の
+  呼び出しとして分け、同じ名前を二度足さない
+- 同じプロセスで動くモデルが落ちたとき、失敗の文を本文と finish_reason: error の一つの塊で送る。受け側が本文を先に流したので、上の層は「書き始めた」と
+  数え、やり直しも次の候補への切り替えもしなかった。error は本文より先に見て、失敗の文は失敗の理由に入れる
+- baseUrl に利用者名とパスワードを書くと、fetch がその URL ごと失敗の文にし、画面と記録に出た。設定で断り（API キーは apiKeyEnv で渡す）、
+  そのまま返す失敗の文の URL からも伏せる（`hideUrlCredentials`）。Claude の待ち時間（Retry-After）は日時の形も読む
+- provider の `enabled` の説明は「既定は false」だったが、実際は省くと有効（`enabledProviders`）。最初に書き出す設定はクラウドに false を明示している。
+  振る舞いを変えると、enabled を省いた設定が立ち上がらなくなる（candidates が無効な provider を指す）ので、説明の方を直した
+- 残っているところ: Claude の流れにはヘッダの後の停滞の見張りが無い（SDK の時間切れはヘッダまで。ping だけが続くと■まで終わらない。推測）。
+  停滞の文はどの見張りで切れても 120 秒と言う。Claude の refusal と OpenAI の content_filter は途中までの文を完了として通す。一つの出来事の複数の
+  data: 行を繋がない。外の OpenAI の推論モデルは max_tokens・temperature を断ることがある（確かめていない）
+- 見て不具合が無かった所: 塊の境目と UTF-8 の割れ、終わりの合図の無い流れ、途中でやめたときの切断と中止の伝わり方、壊れた引数、Claude へ送る会話の形、
+  やり直しの待ちの上限、子プロセスへの環境変数、自動選択が手元だけを選ぶこと、窓の刈り込み
+触る場所: `src/runtime/inproc.ts`（`toHistory`）、`src/core/session.ts`（`quietCandidates`・`#askJudge`）、`src/core/inspector-setup.ts`、
+`src/harness/inspector.ts`、`src/providers/errors.ts`・`openai-compatible.ts`・`anthropic.ts`、`src/runtime/net-why.ts`、`src/config.ts`、`test/provider-gaps.test.ts`

@@ -354,6 +354,8 @@ export class Session {
   /** 前置きに入り切らなかったもの。**黙って落とさない**ために持つ。 */
   #lastDropped: string[] = [];
   readonly candidates: string[];
+  /** 判じる・検める仕事に使う候補（手元のモデルがあればそれだけ。`quietCandidates`）。 */
+  readonly #quiet: string[];
 
   /**
    * モデルが要る仕事の手前で、無いことを言う。無ければ `undefined`。
@@ -467,6 +469,7 @@ export class Session {
     this.acks = new AckStore(join(stateDir(), 'acks.json'));
     this.#projectRules = new ProjectRules(init.root);
     this.candidates = init.candidates;
+    this.#quiet = quietCandidates(init.candidates, init.orchestrator.registry);
     this.memory = init.memory;
     this.proposals = init.proposals;
     this.idle = init.idle;
@@ -588,9 +591,9 @@ export class Session {
     // 使えるモデルが無ければ置かれず、一段目（当てはめ）だけで動く。
     const inspector = buildInspector(
       orchestrator,
-      // 明示が無ければ候補を逆順にする。候補は強い順に並んでいるので、
-      // そのまま渡すと一番重いモデルが関所に立つ。ここは速さが要る。
-      netCfg.inspector?.candidates ?? [...candidates].reverse(),
+      // 明示が無ければ、手元のモデルだけ（`quietCandidates`）。候補を逆順にしていたので、雲を後ろに置いた設定では雲が先頭に来て、
+      // 外へ出る前の荷物と外から入った文書を毎回雲へ送っていた。自動で選んだ候補は速い順なので、逆にすると一番遅いモデルが立っていた
+      netCfg.inspector?.candidates ?? quietCandidates(candidates, registry),
       netCfg.inspector ?? {},
     );
     const wrap = (tools: Tool[]) => harness.wrapAll(tools, () => holder.instruction);
@@ -2213,16 +2216,19 @@ export class Session {
     timer.unref?.();
     try {
       let text = '';
+      let finished = false;
       for await (const ev of this.orchestrator.run({
-        // **安いほうから使う。**判じるのは短い仕事なので、いちばん高いモデルを
-        // 毎回起こす理由がない（検問所と同じ選び方に揃える）。
-        candidates: [...this.candidates].reverse(),
+        // 利用者の言葉とその場の文脈を渡すので、手元のモデルがあればそれだけで判じる（検問所と同じ選び方に揃える）
+        candidates: this.#quiet,
         system: '指摘を受けた側として、何が悪かったのかを考える。決まった形だけを返す。',
         messages: [{ role: 'user', content: judgePrompt(said, when, did) }],
         temperature: 0.2,
       }, ac.signal)) {
         if (ev.type === 'text') text += ev.delta;
+        else if (ev.type === 'done' && ev.finishReason !== 'length') finished = true;
       }
+      // 言い終えていない答え（時間切れ・上限で切れた）は読まない。読めなかったとして扱う
+      if (!finished || ac.signal.aborted) return undefined;
       return judgeOutcome(text, when);
     } catch {
       return undefined; // 判じ手が居ない・落ちた
@@ -2636,4 +2642,13 @@ export function speedOf(model: string, chars: number, seconds: number): { model:
   return usable
     ? { model, outputTokens, tps: Math.round((outputTokens / seconds) * 10) / 10 }
     : { model, outputTokens };
+}
+
+/**
+ * 判じる・検める仕事（検問所・指摘の判じ手）に使う候補。手元のモデル（locality が local）があればそれだけを、候補の順のまま使う。
+ * 手元のモデルが一つも無い（雲だけで使っている）ときは、候補をそのまま使う（会話そのものが既に雲へ行っている）。
+ */
+export function quietCandidates(candidates: readonly string[], registry: { resolve(id: string): { provider: { locality: string } } | undefined }): string[] {
+  const local = candidates.filter((c) => registry.resolve(c)?.provider.locality === 'local');
+  return local.length > 0 ? local : [...candidates];
 }

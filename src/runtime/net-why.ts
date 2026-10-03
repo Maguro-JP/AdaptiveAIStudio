@@ -49,5 +49,11 @@ export function describeNet(e: unknown): string {
    * 上のどれにも当たらなかったときの受け皿なので、いちばん後ろに置く。
    */
   if (hit(/fetch failed/i)) return '繋げませんでした（回線か、串（プロキシ）の設定かもしれません）';
-  return m;
+  // そのまま返す文の URL から、利用者名とパスワードを伏せる（fetch は `user:pass@` 付きの URL を断るとき、URL ごと文に入れる）
+  return hideUrlCredentials(m);
+}
+
+/** 文の中の URL の `user:pass@` を伏せる。 */
+export function hideUrlCredentials(text: string): string {
+  return text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1***@');
 }

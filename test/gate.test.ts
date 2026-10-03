@@ -429,7 +429,7 @@ describe('関所は二段で働く', () => {
     const { createModelJudge } = await import('../src/core/inspector-setup.ts');
     let input: Record<string, unknown> = {};
     const judge = createModelJudge({
-      async *run(i: Record<string, unknown>) { input = i; yield { type: 'text', delta: 'PASS' }; },
+      async *run(i: Record<string, unknown>) { input = i; yield { type: 'text', delta: 'PASS' }; yield { type: 'done', modelId: 'fake' }; },
     } as never, ['fake']);
     await judge({ system: 's', user: 'u' }, new AbortController().signal);
     assert.equal('tools' in input, false, '検査官に道具を渡してはいけない');

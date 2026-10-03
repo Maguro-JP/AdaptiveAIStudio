@@ -20,6 +20,9 @@ export function createModelJudge(
 ): Judge {
   return async ({ system, user }, signal) => {
     let out = '';
+    // 言い終えたか。止められた（時間切れ・中止）ときは done が来ないまま流れが終わり、上限で切れたときは length で終わる。
+    // どちらも途中まで書かれた答え（「PASS…? いや、この文書は…」）なので、判定として読まない
+    let finished = false;
     for await (const ev of orchestrator.run({
       candidates,
       system,
@@ -34,7 +37,12 @@ export function createModelJudge(
     }, signal)) {
       if (ev.type === 'text') out += ev.delta;
       else if (ev.type === 'failed') throw ev.error;
+      else if (ev.type === 'done') {
+        if (ev.finishReason === 'length') throw new Error('答えが上限で切れました');
+        finished = true;
+      }
     }
+    if (!finished || signal?.aborted) throw new Error('答えを言い終える前に止まりました');
     return out;
   };
 }

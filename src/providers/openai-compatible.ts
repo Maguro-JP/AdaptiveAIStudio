@@ -302,6 +302,14 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         }
         const choice = parsed.choices?.[0];
         const delta = choice?.delta?.content;
+        // **落ちたものを、成功として通さない。**中で読む口は、生成が落ちたときに 'error' で終える。同じ塊に失敗の文が本文として
+        // 載ってくるので、本文として流す前に見る（流すと上の層が「書き始めた」と数え、やり直しも次の候補への切り替えもしなかった）
+        if (choice?.finish_reason === 'error') {
+          throw new ProviderError({
+            kind: 'unavailable', providerId: this.id,
+            message: `${this.id} の生成が途中で落ちました${typeof delta === 'string' && delta.trim() ? `: ${truncate(delta.trim())}` : ''}`,
+          });
+        }
         if (typeof delta === 'string' && delta.length > 0) {
           firstToken = true;
           lastDeltaAt = Date.now();
@@ -309,10 +317,18 @@ export class OpenAiCompatibleProvider implements ChatProvider {
           yield { type: 'text', delta };
         }
         for (const tc of choice?.delta?.tool_calls ?? []) {
-          const idx = tc.index ?? 0;
+          // 番号（index）を付けない相手もいる。そのときは、別の id が来たら新しい呼び出しとして分ける
+          // （全部を 0 番に入れていたので、二件目が一件目に繋がり `read_fileread_file` や `{..}{..}` になっていた）
+          let idx = tc.index;
+          if (idx === undefined) {
+            const last = pending.size > 0 ? Math.max(...pending.keys()) : -1;
+            const open = pending.get(last);
+            idx = last < 0 ? 0 : (tc.id && open?.id && open.id !== tc.id ? last + 1 : last);
+          }
           const slot = pending.get(idx) ?? { id: '', name: '', args: '' };
           if (tc.id) slot.id = tc.id;
-          if (tc.function?.name) slot.name += tc.function.name;
+          // 名前を欠片ごとに丸ごと付けてくる相手もいる。同じ名前を二度足さない
+          if (tc.function?.name && slot.name !== tc.function.name) slot.name += tc.function.name;
           if (tc.function?.arguments) slot.args += tc.function.arguments;
           pending.set(idx, slot);
           firstToken = true;
@@ -320,15 +336,6 @@ export class OpenAiCompatibleProvider implements ChatProvider {
           arm(this.#stallTimeoutMs);
         }
 
-        // **落ちたものを、成功として通さない。**
-        // 中で読む口は、生成が落ちたときに 'error' で終える。
-        // ここで拾わないと「完了・検証済み」として画面に出る。
-        if (choice?.finish_reason === 'error') {
-          throw new ProviderError({
-            kind: 'unavailable', providerId: this.id,
-            message: `${this.id} の生成が途中で落ちました`,
-          });
-        }
         if (typeof choice?.finish_reason === 'string') ended = true;
         if (choice?.finish_reason === 'stop') finishReason = 'stop';
         else if (choice?.finish_reason === 'length') finishReason = 'length';
