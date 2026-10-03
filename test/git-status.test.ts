@@ -43,3 +43,29 @@ test('日本語の名前・名前の変更を本物の道で返し、新しい�
   assert.deepEqual(dropCoveredDirs(changedBetween([], changed), ['sub/a.ts']).includes('sub/'), false);
   assert.deepEqual(dropCoveredDirs(['other/'], ['sub/a.ts']), ['other/']);
 });
+
+test('作業場がリポジトリのサブフォルダなら、道は作業場からで、作業場の外の変更は数えない', { skip: GIT_OK ? false : 'この機械には git が無い' }, async () => {
+  // porcelain の道は根からなので、作業場からの道と並べると同じファイルが二つの形で並び、「計画に無いファイル」になっていた
+  const root = await tempDir('aas-git-subdir-');
+  const work = join(root, 'packages', 'app');
+  await mkdir(join(work, 'src'), { recursive: true });
+  await writeFile(join(work, 'src', 'a.ts'), 'export {};\n');
+  await writeFile(join(root, 'other.txt'), 'x\n');
+  git(root, 'init', '-q');
+  git(root, 'add', '.');
+  git(root, 'commit', '-q', '-m', 'first');
+  assert.equal((await inspectGit(work)).kind, 'clean');
+
+  await writeFile(join(work, 'src', 'a.ts'), 'export const a = 1;\n');
+  await writeFile(join(root, 'other.txt'), 'changed outside\n');
+  const after = await inspectGit(work);
+  assert.equal(after.kind, 'dirty');
+  assert.deepEqual(after.kind === 'dirty' ? after.changed : [], ['src/a.ts']);
+  // 宣言・書いた道（作業場から）と合うので、計画に無いものは残らない
+  assert.deepEqual(dropCoveredDirs(changedBetween([], after.kind === 'dirty' ? after.changed : []), ['src/a.ts'])
+    .filter((p) => p !== 'src/a.ts'), []);
+
+  // 作業場の外だけが変わっていれば、作業場はきれい
+  git(root, 'checkout', '--', 'packages');
+  assert.equal((await inspectGit(work)).kind, 'clean');
+});

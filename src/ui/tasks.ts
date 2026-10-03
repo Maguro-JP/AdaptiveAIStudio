@@ -139,7 +139,8 @@ export class TaskRunner {
    * 別の名前は、動いていても並べて始める。戻り値が undefined なら始まった。
    */
   start(name: string): string | undefined {
-    if (!(name in TASKS)) return 'そういう点検はありません';
+    // `in` は継いだ名前（constructor・toString・__proto__）も通すので、自分で持つ名前だけを見る
+    if (!Object.hasOwn(TASKS, name)) return 'そういう点検はありません';
     if (this.isRunning(name)) return `${name} は既に回しています`;
 
     // 決めた名前を、そのまま src/cli/<名前>.ts として起こす。

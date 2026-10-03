@@ -37,6 +37,15 @@ describe('諸元の推定', () => {
     assert.equal(s.activeParamsB, 3);
   });
 
+  test('専門家の数×大きさ（8x7b）を、一つの大きさと読まない', () => {
+    // 7b に当たって 7B と読み、実際は 47B ほどあるものを小さいと見て選んでいた。
+    const s = inferSpec('mixtral-8x7b-instruct-v0.1.Q4_K_M.gguf')!;
+    assert.ok(s.paramsB >= 40, `小さく読んでいる: ${s.paramsB}`);
+    assert.equal(s.activeParamsB, 14);
+    // 普通の名前は今までどおり（対）。
+    assert.equal(inferSpec('llama3:8b')!.activeParamsB, undefined);
+  });
+
   test('規模が読めない名前は候補にしない', () => {
     assert.equal(inferSpec('mystery-model'), undefined);
   });

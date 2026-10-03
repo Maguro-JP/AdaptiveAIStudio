@@ -19,7 +19,12 @@ export async function inspectGit(root: string): Promise<GitState> {
    * 新しいフォルダは `sub/` のまま受ける（中を一つずつ出させると、node_modules を無視していない作業場では何千件も歩く）。
    * フォルダの扱いは受け入れの側（`dropCoveredDirs`）でする
    */
-  const status = await runGit(['status', '--porcelain=v1', '-z', '--branch'], root);
+  /*
+   * **道は作業場から。**porcelain の道は、作業場がリポジトリのサブフォルダでもリポジトリの根からになる（git の決まり）。
+   * 作業場からの道（書いた・宣言した道）と並べて比べるので、同じファイルが二つの形で並び「計画に無いファイル」になり、
+   * 作業場の外の変更まで数えていた。作業場の中だけに絞り（`-- .`）、根から作業場までの分（`--show-prefix`）を落とす
+   */
+  const status = await runGit(['status', '--porcelain=v1', '-z', '--branch', '--', '.'], root);
   if (status.code !== 0) {
     if (/not a git repository/i.test(status.out)) return { kind: 'notRepo' };
     return { kind: 'unavailable', reason: status.out.trim().split('\n')[0] ?? 'git を実行できません' };
@@ -29,14 +34,20 @@ export async function inspectGit(root: string): Promise<GitState> {
   const parts = status.out.split('\0').map((l) => (l.includes('\n') ? l.slice(l.lastIndexOf('\n') + 1) : l)).filter((l) => l.length > 0);
   const branchLine = parts.find((l) => l.startsWith('##')) ?? '## (不明)';
   const branch = branchLine.replace(/^##\s*/, '').split(/\.{3}|\s/)[0] ?? '(不明)';
+  const prefixed = await runGit(['rev-parse', '--show-prefix'], root);
+  if (prefixed.code !== 0) return { kind: 'unavailable', reason: prefixed.out.trim().split('\n')[0] ?? 'git を実行できません' };
+  // 警告が混ざっても、最後の行が答え（根なら空）
+  const prefix = prefixed.out.replace(/\r?\n$/, '').split(/\r?\n/).pop() ?? '';
   const changed: string[] = [];
+  // 作業場の外（名前を変えた元が外にある、など）は捨てる。作業場からの道で比べる側に、外の道を混ぜない
+  const add = (p: string) => { if (p.startsWith(prefix) && p.length > prefix.length) changed.push(p.slice(prefix.length)); };
   for (let i = 0; i < parts.length; i += 1) {
     const entry = parts[i]!;
     if (entry.startsWith('##') || entry.length < 4) continue;
-    changed.push(entry.slice(3));
+    add(entry.slice(3));
     // 名前を変えた・写したものは、次の欄に元の名前が来る。元の道も変わったものとして数える
     if (/[RC]/.test(entry.slice(0, 2)) && i + 1 < parts.length) {
-      changed.push(parts[i + 1]!);
+      add(parts[i + 1]!);
       i += 1;
     }
   }

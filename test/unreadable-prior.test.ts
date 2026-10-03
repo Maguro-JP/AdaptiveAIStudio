@@ -22,7 +22,7 @@ const require = createRequire(import.meta.url);
 const fsp = require('node:fs/promises') as typeof import('node:fs/promises');
 
 /** fs/promises の `name` を、`path` のときだけ `code` で失敗させて `fn` を回す。 */
-async function failing<T>(name: 'readFile' | 'stat', path: string, code: string, fn: () => Promise<T>): Promise<T> {
+async function failing<T>(name: 'readFile' | 'stat' | 'lstat', path: string, code: string, fn: () => Promise<T>): Promise<T> {
   const real = fsp[name] as (...a: unknown[]) => Promise<unknown>;
   (fsp as Record<string, unknown>)[name] = ((file: unknown, ...rest: unknown[]) => file === path
     ? Promise.reject(Object.assign(new Error(`${code}: ${name} failed`), { code }))
@@ -106,7 +106,8 @@ describe('外のツールの前に、変わっていたファイルを stat で�
     // 呼ぶ前から変わっている（前の中身は呼ぶ前に読む道）
     await writeFile(join(root, 'dirty.txt'), 'edited before\n');
     const outside = new OutsideChanges(root);
-    await failing('stat', join(root, 'dirty.txt'), 'EACCES', () => outside.before());
+    // 前の中身を取る前の確かめはリンクを辿らない（lstat）。そこを失敗させる
+    await failing('lstat', join(root, 'dirty.txt'), 'EACCES', () => outside.before());
     // 外のツールが書き換えた
     await writeFile(join(root, 'dirty.txt'), 'edited by tool\n');
     const r = await outside.after();

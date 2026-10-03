@@ -1860,6 +1860,8 @@ export class Session {
           // 元から落ちていたものは、この作業のせいにしない（巻き戻さない）。
           // ただし**通ったとも言わない**。落ちているものは落ちている。
           else if (ev.type === 'preexisting') { keep = true; checked = 'preexisting'; }
+          // 試験は通ったがテストを読めなかった。失敗にしない（巻き戻さない）。段取り・外のツールの道と同じ扱い
+          else if (ev.type === 'giveUp' && ev.reason === 'unsure') { keep = true; checked = 'unsure'; }
           else if (ev.type === 'failed') checked = 'failed';
           yield { type: 'verify', event: ev };
           // 直させている間に出たものも、そのまま見せる。黙って直させない。
