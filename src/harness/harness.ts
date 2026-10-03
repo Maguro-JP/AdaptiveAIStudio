@@ -9,8 +9,9 @@
  */
 import type { ToolCall } from '../providers/contract.ts';
 import type { Tool, ToolContext, ToolResult } from '../agent/tools/types.ts';
-import type { Rule, RuleContext } from './rules.ts';
+import { type Rule, type RuleContext, hasArg } from './rules.ts';
 import { AuditLog } from './audit.ts';
+import { fingerprint, markSeen, lastPrint } from './seen.ts';
 import type { HarnessMetrics } from './metrics.ts';
 
 export interface HarnessOptions {
@@ -132,6 +133,10 @@ export class Harness {
           }
         }
 
+        // 中身を見る・替えるツールは、実行の前の指紋も取る（後の指紋を「見た中身」として記録してよいかを決める。下の記録の所）
+        const seenPath = (call.name === 'read_file' || call.name === 'write_file' || call.name === 'edit_file')
+          ? (args as Record<string, unknown>)?.['path'] : undefined;
+        const printBefore = typeof seenPath === 'string' && call.name !== 'write_file' ? await fingerprint(toolCtx.root, seenPath) : undefined;
         const result = await tool.run(args, toolCtx);
         /*
          * 読めなかった read_file は「読んだ」に数えない（数えると、無かったファイルや読めなかったファイルを丸ごと書き換えさせる。
@@ -145,6 +150,21 @@ export class Harness {
         else if (result.content.includes('は二進のファイルなので読めません')) keep(call);
         else if (result.content.includes('ファイルが大きすぎます')) {
           keep({ ...call, args: { ...(args as Record<string, unknown>), limit: 0 } });
+        }
+        /*
+         * 読めた・書けた直後の中身の指紋を記録する。全文を書く前に、読んだ後で誰かが替えていないかを比べる（`./seen.ts`）。
+         * 全文を見た・書いたのでなければ、新しい指紋は「見た中身」ではない。一部だけの読みと edit_file は、実行の前の中身が
+         * 最後に記録した指紋と同じとき（その間に誰も替えていないとき）だけ記録する。そうしないと、読み直す代わりに一部を読む・
+         * 自分で一か所を直すだけで、他の変更を含んだ指紋が「見た」ことになり、その変更を古い中身で書き戻せる。
+         * 全文の読みも、前と後が同じときだけ記録する（読んでいる間に替わったら、どちらの中身を見たか分からない）。
+         */
+        if (!result.isError && typeof seenPath === 'string') {
+          const printAfter = await fingerprint(toolCtx.root, seenPath);
+          const partial = call.name === 'read_file' && (hasArg(call, 'offset') || hasArg(call, 'limit'));
+          const trusted = call.name === 'write_file'
+            || (call.name === 'read_file' && !partial ? printBefore === printAfter
+              : printBefore !== undefined && printBefore === lastPrint(history.filter((c) => c !== call), toolCtx.root, seenPath));
+          if (printAfter !== undefined && trusted) markSeen(call, printAfter);
         }
 
         // 実行後の判定

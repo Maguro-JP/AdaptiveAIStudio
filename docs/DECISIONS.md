@@ -305,6 +305,7 @@
 - 9 回目の不具合調査の 5 件（下の階層の .git・冗長実行の書き込み・報告の伏せ字・監査の上限・未来の時刻）
 - 10 回目の不具合調査の 5 件（URL の名前の区切り・長さの無い 416・MCP のツールの説明・役職の形・ツールの一覧の頁）
 - 11 回目の不具合調査の 6 件（bundle の出力先・for /f の引用符・selftest の打ち切り・動いている版・update の続き・check:bundle の言葉）
+- 12 回目の不具合調査の 6 件（今の鍵の形・読んだ後の変化・skip と .only・テストのフォルダ・協議の数え方・Windows の末尾の点）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -11279,3 +11280,32 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
     手すきの見回り・作業場の鍵）の保存を 409 で断る（意図した振る舞い）。前の段の smoke の依頼の片づけが長引いた回（小さなモデルの返事が 105 文字・9 秒。
     通った回は 24 文字・1 秒）に、最初の試しが作業中に当たったと見ている（手元で同じ落ち方は再現できていない）。sweep のファイルの試しの前に、
     書けるまで待つ手順（最大 120 秒、待つ間の 409 は不具合に数えない）を置く。この変更は画面の本体に触っていない
+
+## 2026-10-03  12 回目の不具合調査の 6 件（今の鍵の形・読んだ後の変化・skip と .only・テストのフォルダ・協議の数え方・Windows の末尾の点）
+
+読むだけの担当に、守りの規則（`src/harness`）とファイルを読み書きするツールを調べさせ、6 件を直した。
+
+- 外へ出す前の検問は `sk-` の直後に英数字だけを求めていたので、途中に `-` の入る今の鍵（`sk-ant-api03-…` `sk-proj-…`）を通していた。
+  `-`・`_` を受けるのは決まった頭の字（prefix: `ant-…-`・`proj-`・`svcacct-`・`admin-`）の後だけにする（`sk-learn-pipeline-tutorial` のような語を止めない）。末尾は `\b` ではなく「鍵の字が続かない」で見る（`src/harness/gate.ts`）
+- 「読んでから書く」は読んだことだけを見ていたので、読んだ後で別の担当や run_command が替えた中身を、読んだ時点の中身で全文書き戻せた。
+  ハーネスが read_file・write_file・edit_file の成功の直後に中身の指紋（sha256）を記録し、全文の write_file の前に今の中身と比べて、違えば読み直させる
+  （`src/harness/seen.ts`）。時刻ではなく中身で見る（FAT や Z: では時刻が粗い）。edit_file は当てる所が無ければ失敗するので比べない。
+  一部だけの読みと edit_file の後の指紋は、実行の前の中身が最後に記録した指紋と同じときだけ記録する（読み直す代わりに一部を読む・自分で一か所直す、で
+  他の変更を含んだ指紋を「見た」ことにしない）。全文の読みも、読む前と後が同じときだけ記録する
+- テストの守りは node:test の `{ skip }`、`t.skip()`、`.todo`、`xtest`、`@unittest.skip`、Go の `t.Skipf`・`t.SkipNow`、Rust の `#[ignore]` を数えていなかった。
+  `{ skip: … }` は test() の二つ目の引数の頭にある選択肢だけを見る（`find({ skip: 10 })` のような値は、同じ行でも数えない）。
+  `xit(` などはメソッド呼び出しを外す（`model.fit(` を絞り込みと読まない）。新しく足したテストの分までは skip・todo を許す（`test.todo` を足すのは止めない）
+- `.only`・`fit`・`fdescribe`・`{ only: … }`（絞り込み）は、一つ足すだけで他のテストが走らなくなるので、skip とは別に、増やすこと自体を止める
+- テストのファイルの見分けに jest の `__tests__/` と pytest の `*_test.py` が無かった。足す。書く前の規則と作業の前後の比べで同じ表を使うよう、
+  `src/agent/test-patterns.ts` に寄せた（二つに持っていて、片方だけ直る形だった）
+- 協議の「広い書き換え」は担当ごとの履歴で数えていたので、担当を並べるとその数だけ広げられた。blastRadius と同じく依頼全体で、道を揃えて数える
+  （揃えていなかったので `./a.ts` と `a.ts` を二件と数え、早く止めすぎてもいた）
+- Windows は名前の末尾の点・空白を落とし、`:` から後ろを流れの名前として読むので、まだ無い `.env `・`id.pem.` から保護されたファイルを作れた。
+  Windows のときは照らす前に Windows が作る名前に揃える（`windowsName`。`\` 区切りも名前の区切りとして見る）。Windows の実機では確かめていない
+  （綴りの照合を Linux で見る。組み立てで win32 のときだけ入ることは `test/protected-windows-names.test.ts`）
+- 見て不具合が無かった所: paths.ts（outsideRel・safeResolve・realSafeResolve）、glob.ts、rules.ts、put-back.ts、find.ts、fs.ts の edit_file と plannedContent
+- 残っているところ: run_command の許可リストに node・python・echo があり、保護された道やテストの守りを通らずに書ける。承認を通る作りで、塞ぐなら設計の話として残す
+触る場所: `src/harness/gate.ts`、`src/harness/seen.ts`・`harness.ts`・`builtin-rules.ts`（readBeforeWrite・protectedPaths）、`src/agent/test-patterns.ts`、
+`src/harness/deliberation.ts`、`src/core/harness-setup.ts`、`test/guard-gaps.test.ts`・`protected-windows-names.test.ts`
+- 見直しで直したこと（同じ日）: `fit(` がメソッド呼び出しに当たる、一部の読み・自分の edit_file で指紋が新しくなる、`\` 区切りの道で `:` から後ろを
+  落とす、prefix の無い `sk-` の `-` 区切りの語を止める、一行のテストの中の値を数える、新しい `test.todo` を止める、の 6 件と、win32 のつなぎの試験

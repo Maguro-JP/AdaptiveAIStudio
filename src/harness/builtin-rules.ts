@@ -11,6 +11,8 @@ import { existsSync } from 'node:fs';
 import { minimatch } from './glob.ts';
 import { safeResolve, canonicalRel } from '../agent/tools/paths.ts';
 import { isAbsent } from './put-back.ts';
+import { fingerprint, lastPrint } from './seen.ts';
+import { isTestFile, countCases, countSkips, countFocus } from '../agent/test-patterns.ts';
 import { type Rule, type RuleContext, allow, deny, ok, argString, hasArg } from './rules.ts';
 import type { ToolCall } from '../providers/contract.ts';
 
@@ -34,7 +36,10 @@ export const workspaceBoundary: Rule = {
  * 触ってはいけないファイルを守る。
  * 「.env を読んで直す」のような、善意で始まる事故を止める。
  */
-export function protectedPaths(patterns: string[], opts: { nocase?: boolean } = {}): Rule {
+export function protectedPaths(patterns: string[], opts: { nocase?: boolean; windows?: boolean } = {}): Rule {
+  // Windows は名前の末尾の点・空白を落とし、`:` から後ろを流れ（ADS）の名前として読む。`.env `・`id.pem.`・`.env::$DATA` は
+  // `.env` や `id.pem` に書かれるのに、綴りのまま照らしていたので当たらなかった。照らす前に、Windows が読む名前に揃える
+  const name = opts.windows ? windowsName : (p: string): string => p;
   return {
     name: 'protected-paths',
     description: `保護対象への書き込みを禁じる: ${patterns.join(', ')}`,
@@ -65,7 +70,7 @@ export function protectedPaths(patterns: string[], opts: { nocase?: boolean } = 
         // 大小を区別しない機械では `.ENV` も `.env`。区別すると守りをすり抜ける。
         // 綴りだけでなく、書いたときに当たる実体でも照らす（Windows の `ENV~1` は `.env`、`g -> .git` の `g/config` は `.git/config`）
         const real = await canonicalRel(ctx.root, path);
-        const hit = patterns.find((p) => minimatch(rel, p, opts) || (real !== undefined && minimatch(real, p, opts)));
+        const hit = patterns.find((p) => minimatch(name(rel), p, opts) || (real !== undefined && minimatch(name(real), p, opts)));
         if (hit) {
           return deny(isExternalTool(call.name)
             ? `${rel} は保護されています（${hit}）。外のツールには渡せません。`
@@ -75,6 +80,16 @@ export function protectedPaths(patterns: string[], opts: { nocase?: boolean } = 
       return allow;
     },
   };
+}
+
+/** Windows が実際に作る名前に揃える（各名前の `:` から後ろと、末尾の点・空白を落とす。ドライブの `C:` と `.`・`..` はそのまま）。 */
+export function windowsName(path: string): string {
+  // `\` 区切りも名前の区切りとして見る（外のツールに渡した `D:\keys\id.pem` を一つの名前と読んで `:` から後ろを落とし、守りを外していた）
+  return path.replace(/\\/g, '/').split('/').map((seg, i) => {
+    if (i === 0 && /^[A-Za-z]:$/.test(seg)) return seg;
+    const bare = seg.includes(':') ? seg.slice(0, seg.indexOf(':')) : seg;
+    return bare === '.' || bare === '..' ? bare : bare.replace(/[. ]+$/, '');
+  }).join('/');
 }
 
 /**
@@ -146,11 +161,19 @@ export const testProtection: Rule = {
         'テストを消して通すことはできません。実装側を直してください。',
       );
     }
-    const skipsAdded = countSkips(content) - countSkips(before);
+    // 新しく足したテストの分までは skip・todo を許す（`test.todo('…')` を足すのは、今あるテストを無効にしない）
+    const skipsAdded = countSkips(content) - countSkips(before) - (now - was);
     if (skipsAdded > 0) {
       return deny(
         `${path} に skip が ${skipsAdded} 件増えています。` +
         'テストを無効化して通すことはできません。実装側を直してください。',
+      );
+    }
+    const focusAdded = countFocus(content) - countFocus(before);
+    if (focusAdded > 0) {
+      return deny(
+        `${path} に only（絞り込み）が ${focusAdded} 件増えています。他のテストが走らなくなります。` +
+        '絞り込みを外して、実装側を直してください。',
       );
     }
     return allow;
@@ -245,7 +268,21 @@ export const readBeforeWrite: Rule = {
       (c.name === 'read_file' && same(c)
         && !(wholeNeeded && partial(c)))
       || (isWriteTool(c.name) && same(c) && (!wholeNeeded || c.name === 'write_file')));
-    if (sawIt) return allow;
+    if (sawIt) {
+      if (!wholeNeeded) return allow; // edit_file は当てる所が見つからなければ失敗するので、古い中身で消すことは無い
+      // 最後に読んだ・書いたときから中身が替わっていれば、読み直させる（別の担当や run_command の変更を、古い中身で消さない）
+      const was = lastPrint(ctx.history, ctx.root, path);
+      if (was === undefined) return allow;
+      const now = await fingerprint(ctx.root, path);
+      if (now === was) return allow;
+      if (now === undefined) {
+        return deny(`${path} を読めないので、読んだ後で替わっていないかを確かめられません。少し待ってからやり直してください。`);
+      }
+      return deny(
+        `${path} は、最後に読んだ後で中身が替わっています（別の担当や run_command が替えた可能性があります）。` +
+        'このまま全文を書くと、その変更が消えます。read_file で読み直してから書いてください。',
+      );
+    }
 
     const partly = ctx.history.some((c) =>
       c.name === 'read_file' && same(c) && partial(c));
@@ -465,7 +502,8 @@ export function afterWriteHint(hint: (path: string) => string | undefined): Rule
   };
 }
 
-function normalize(root: string, path: string): string {
+/** 書いた道を、数えるために揃える（`./a.ts` と `a.ts` を一件にする）。範囲の外はそのまま返す。 */
+export function normalize(root: string, path: string): string {
   const abs = safeResolve(root, path);
   if (!abs) return path;
   const rel = relative(root, abs);
@@ -473,36 +511,6 @@ function normalize(root: string, path: string): string {
   return isAbsolute(rel) ? path : rel.split(sep).join('/');
 }
 
-const TEST_FILE = /(\.|_|^)(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.go$|(^|\/)tests?\//i;
-
-export function isTestFile(path: string): boolean {
-  // `tests\test_api.py` のような `\` 区切りの道も見る（`/` だけを見ていたので、試験を守る規則を素通りした）
-  return TEST_FILE.test(path.replace(/\\/g, '/'));
-}
-
-const CASE_PATTERNS = [
-  /\b(?:test|it)\s*(?:\.\w+)?\s*\(/g,
-  /^\s*def\s+test_\w+/gm,
-  /\bfunc\s+Test\w+\s*\(/g,
-  /^\s*#\[test\]/gm,
-];
-const SKIP_PATTERNS = [
-  /\b(?:test|it|describe)\s*\.\s*skip\s*\(/g,
-  /\b(?:xit|xdescribe)\s*\(/g,
-  /@(?:pytest\.mark\.)?skip/g,
-  /\bt\.Skip\s*\(/g,
-];
-
-function countCases(text: string): number {
-  let n = 0;
-  for (const p of CASE_PATTERNS) n += text.match(p)?.length ?? 0;
-  return n;
-}
-
-function countSkips(text: string): number {
-  let n = 0;
-  for (const p of SKIP_PATTERNS) n += text.match(p)?.length ?? 0;
-  return n;
-}
+export { isTestFile };
 
 export type { Rule, RuleContext, ToolCall };
