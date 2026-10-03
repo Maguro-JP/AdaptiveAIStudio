@@ -2260,6 +2260,21 @@ export const PANELS = {
      * 開いたときの形を覚えて、保存でその形に戻す。
      */
     let eol = '\n';
+    /*
+     * 行末を見る。欄は `\r\n` も `\r` だけの行末も `\n` に直して持つ（Chromium で実測）。
+     * 一種類だけならその形に戻せる。混ざっているものは戻せないので `\n` にそろえ、混ざっていると言う。
+     * 前は `\r` だけの行末を見ていなかったので、そういうファイルは開いただけで「直しています」のまま戻らず、保存で全行が変わった。
+     */
+    const eolOf = (raw) => {
+      const rest = raw.replace(/\r\n/g, '');
+      const kinds = [raw.length !== rest.length, rest.includes('\n'), rest.includes('\r')];
+      const only = kinds.filter(Boolean).length === 1;
+      return {
+        text: raw.replace(/\r\n?/g, '\n'),
+        eol: only && kinds[0] ? '\r\n' : only && kinds[2] ? '\r' : '\n',
+        mixed: kinds.filter(Boolean).length > 1,
+      };
+    };
     /** 開いたときの中身から作られた stamp。保存のときに送って、上書きを止めてもらう。 */
     let stamp = '';
     /** AI の版を読む前に預かった、自分の直し。**消さずに戻せるように持つ。** */
@@ -2317,9 +2332,9 @@ export const PANELS = {
        * 戻らなくなる（開くときは `open` でそろえているのに、ここだけ素通し
        * だった）。開いたときの行末も、取り込んだ方に合わせる。
        */
-      const text = String(raw ?? '').replace(/\r\n/g, '\n');
-      eol = String(raw ?? '').includes('\r\n')
-        && !String(raw ?? '').replace(/\r\n/g, '').includes('\n') ? '\r\n' : '\n';
+      const seen = eolOf(String(raw ?? ''));
+      const text = seen.text;
+      eol = seen.eol;
       mine = area.value;
       if (path) {
         held.set(K(path), mine);
@@ -2844,12 +2859,13 @@ export const PANELS = {
       }
       moved = typeof j.root === 'string' && j.root !== rootAt && rootAt !== '';
       const raw = String(j.content ?? '');
-      const text = raw.replace(/\r\n/g, '\n');
+      const seen = eolOf(raw);
+      const text = seen.text;
       /*
        * 全部 CRLF のファイルだけ、CRLF に戻す。混ざっているものは触らない
        * （直していない行まで書き換えることになる）。
        */
-      const nextEol = raw.includes('\r\n') && !raw.replace(/\r\n/g, '').includes('\n') ? '\r\n' : '\n';
+      const nextEol = seen.eol;
       /*
        * **行末が混ざっているなら、そう言う。**
        *
@@ -2857,7 +2873,7 @@ export const PANELS = {
        * だけで LF にそろう**（触っていない行も変わる）。全部 CRLF のものは元の形へ
        * 戻せるが、混ざったものは戻せない。黙って変えない。
        */
-      const mixedEol = raw.includes('\r\n') && raw.replace(/\r\n/g, '').includes('\n');
+      const mixedEol = seen.mixed;
       /*
        * **同じ中身を読み直しただけなら、欄にも、出ている言葉にも触らない。**
        *
@@ -3091,7 +3107,7 @@ export const PANELS = {
           // 行末は、開いたときの形に戻してから渡す。
           body: JSON.stringify({
             path,
-            content: eol === '\r\n' ? sent.replace(/\n/g, '\r\n') : sent,
+            content: eol === '\n' ? sent : sent.replace(/\n/g, eol),
             ...(stamp ? { stamp } : {}),
             // どの作業場で開いたものか。変わっていたら本体が断る（前の作業場の直しを、新しい作業場へ書かない）。
             ...(rootAt ? { root: rootAt } : {}),

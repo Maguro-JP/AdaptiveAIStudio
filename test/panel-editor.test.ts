@@ -760,6 +760,34 @@ describe('CRLF のファイルを、勝手に書き換えない', () => {
       `全部 CRLF なのに言っている: ${box.at('editor-notice').text}`);
   });
 
+  /*
+   * **`\r` だけの行末も、欄は `\n` に直して持つ**（Chromium で実測）。見ていなかったので、開いただけで
+   * 「直しています」のまま戻らず、保存すると全行が `\n` に変わっていた。
+   */
+  test('**CR だけの行末も、開いただけでは直したことにならず、保存でその形に戻す**', async () => {
+    const disk = { 'a.txt': 'one\rtwo\r' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value.includes('one'), 'ファイルが開く');
+    assert.match(box.state().textContent, /保存してあります/,
+      `触っていないのに直したことになっている: ${box.state().textContent}`);
+    assert.ok(!box.at('editor-notice').text.includes('行末が混ざっています'));
+    box.area().value = 'one\nTWO\n';
+    box.area().oninput!();
+    box.key('s');
+    await until(() => disk['a.txt'] !== 'one\rtwo\r', '保存できる');
+    assert.equal(disk['a.txt'], 'one\rTWO\r', `行末が変わっている: ${JSON.stringify(disk['a.txt'])}`);
+  });
+
+  test('**CR だけの行末と LF が混ざっていれば、そう言う**', async () => {
+    const disk = { 'a.txt': 'one\rtwo\nthree\n' };
+    const box = open(disk);
+    (box.ctx.openFile as (p: string) => void)('a.txt');
+    await until(() => box.area().value.includes('one'), 'ファイルが開く');
+    assert.match(box.at('editor-notice').text, /行末が混ざっています/,
+      `混ざっていることを言っていない: ${box.at('editor-notice').text}`);
+  });
+
   /**
    * **保存したことを、補完の返事で消さない。**
    *
