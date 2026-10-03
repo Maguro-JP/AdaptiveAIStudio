@@ -390,6 +390,14 @@ export class UiServer {
    * （テストの走りが終わらないことで見つけた）。
    */
   #stopped = false;
+  /**
+   * 畳んでいる最中の本体の close（記憶・自律の保存を含む）。
+   *
+   * 畳むときは `#session` を先に空けてから close を待つので、その間に `session()` が新しい本体を組むと、
+   * 新しい本体が記憶を読んだ後で古い本体の保存が上書きしていた（古い本体の最後の変更や、新しい本体で忘れたものが戻る）。
+   * 新しい本体は、これが終わってから組む。
+   */
+  readonly #closing = new Set<Promise<unknown>>();
 
   /**
    * 起動したときに始めた読み込み。
@@ -626,6 +634,10 @@ export class UiServer {
 
   async session(): Promise<Session> {
     if (this.#session) await this.#retireIfRootMoved();
+    if (this.#session) return this.#session;
+    if (this.#stopped) throw new Error('止めています');
+    // 畳んでいる本体の保存を待ってから読む（先に読むと、後から来た古い保存が新しい本体の変更を上書きする）
+    while (this.#closing.size > 0) await Promise.all([...this.#closing]);
     if (this.#session) return this.#session;
     if (this.#stopped) throw new Error('止めています');
     this.#session = await Session.create(await this.#configForSession(), {
@@ -927,7 +939,9 @@ export class UiServer {
       if (this.#idleTimer) clearInterval(this.#idleTimer);
       this.#idleTimer = undefined;
     }
-    await live.close().catch(() => undefined);
+    const closing = live.close().catch(() => undefined);
+    this.#closing.add(closing);
+    try { await closing; } finally { this.#closing.delete(closing); }
   }
 
   /**

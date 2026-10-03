@@ -7,7 +7,7 @@
  *     出力途中で別モデルに切り替えると、文章が二重・不整合になるため。
  *   - どのモデルが答えたかは必ず呼び出し側へ通知する(暗黙の劣化を防ぐ)。
  */
-import type { ModelId, Priority, ProviderMessage, ToolCall, ToolSchema } from '../providers/contract.ts';
+import type { FinishReason, ModelId, Priority, ProviderMessage, ToolCall, ToolSchema } from '../providers/contract.ts';
 import { ProviderError } from '../providers/errors.ts';
 import type { ProviderRegistry } from './registry.ts';
 
@@ -17,7 +17,8 @@ export type ChatEvent =
   | { type: 'text'; delta: string }
   | { type: 'toolCall'; call: ToolCall }
   | { type: 'usage'; inputTokens: number; outputTokens: number }
-  | { type: 'done'; modelId: ModelId; fallbackFrom?: ModelId }
+  /** finishReason: 相手が言った終わり方。`length` は出力の上限で切れた（言い終えていない）。 */
+  | { type: 'done'; modelId: ModelId; fallbackFrom?: ModelId; finishReason?: FinishReason }
   | { type: 'failed'; error: ProviderError };
 
 export interface ChatInput {
@@ -100,6 +101,7 @@ export class ChatOrchestrator {
         yield { type: 'attempt', modelId, attempt };
 
         let emitted = false;
+        let finishReason: FinishReason | undefined;
         try {
           for await (const chunk of provider.chat(
             { model, system: input.system, messages: input.messages,
@@ -118,10 +120,12 @@ export class ChatOrchestrator {
               yield { type: 'toolCall', call: chunk.call };
             } else if (chunk.type === 'usage') {
               yield { type: 'usage', inputTokens: chunk.inputTokens, outputTokens: chunk.outputTokens };
+            } else if (chunk.type === 'done') {
+              finishReason = chunk.finishReason;
             }
           }
           this.#registry.clearCooldown(provider.id);
-          yield { type: 'done', modelId, fallbackFrom: previousModelId };
+          yield { type: 'done', modelId, fallbackFrom: previousModelId, ...(finishReason ? { finishReason } : {}) };
           return;
         } catch (e) {
           const err = e instanceof ProviderError

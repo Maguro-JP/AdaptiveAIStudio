@@ -84,7 +84,7 @@ export function createNode(tagName: string): StubNode {
   /**
    * 欄の中身。
    *
-   * **本物の欄は、入れた `\r\n` を `\n` に直して持つ**（Chromium で実測）。
+   * **本物の欄は、入れた `\r\n` も `\r` だけの行末も `\n` に直して持つ**（Chromium で実測）。
    * ここを素の入れ物にしていると、CRLF のファイルを開いたときの振る舞いが
    * 本物と変わり、試験だけ通ってしまう。同じにそろえる。
    */
@@ -109,7 +109,7 @@ export function createNode(tagName: string): StubNode {
     dataset: {},
     children: [],
     get value() { return val; },
-    set value(v: string) { val = tagName === 'textarea' ? String(v).replace(/\r\n/g, '\n') : String(v); },
+    set value(v: string) { val = tagName === 'textarea' ? String(v).replace(/\r\n?/g, '\n') : String(v); },
     spellcheck: true,
     selectionStart: 0,
     selectionEnd: 0,
