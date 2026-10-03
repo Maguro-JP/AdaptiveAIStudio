@@ -236,7 +236,9 @@ export async function install(opts: InstallOptions): Promise<Installed> {
     // 実行時ライブラリも同じ場所へ平らに置く。実行ファイルは隣しか見ない。
     if (cudartBuf) {
       for (const e of unzip(cudartBuf)) {
-        const name = e.path.split('/').at(-1)!;
+        // 本体と同じ切り方にする。`/` だけで切ると、`\` 区切りの名前（Windows で作られた zip）が丸ごと名前になり、
+        // Windows の join は `\` を区切りと読むので、`..\x.dll` が入れ先のフォルダの外へ出る
+        const name = entryFileName(e.path);
         if (!name) continue;
         await writeFile(join(dest, name), e.data);
       }

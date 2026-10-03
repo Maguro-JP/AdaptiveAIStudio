@@ -171,6 +171,63 @@ describe('llama-server の用意', () => {
   });
 });
 
+/** 無圧縮の zip を組む（名前をそのまま入れる。`\` 区切りの名前を作るため）。CRC は読む側が見ないので 0。 */
+function storedZip(files: Record<string, string>): Buffer {
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const [name, text] of Object.entries(files)) {
+    const n = Buffer.from(name, 'utf8');
+    const data = Buffer.from(text, 'utf8');
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(n.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(n.length, 28);
+    central.writeUInt32LE(offset, 42);
+    locals.push(local, n, data);
+    centrals.push(central, n);
+    offset += 30 + n.length + data.length;
+  }
+  const dir = Buffer.concat(centrals);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(Object.keys(files).length, 8);
+  end.writeUInt16LE(Object.keys(files).length, 10);
+  end.writeUInt32LE(dir.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, dir, end]);
+}
+
+describe('CUDA の実行時ライブラリの置き方', () => {
+  test('`\\` 区切りの名前でも、入れ先のフォルダの直下に名前だけで置く', async () => {
+    // Windows の join は `\` を区切りと読むので、`/` だけで切ると `..\x.dll` が入れ先のフォルダの外へ出る。
+    // Linux では `\` は名前の一字なので、直下に `bin\cudart64_12.dll` という名前で置かれ、隣を見る exe からは見えない。
+    const binDir = await tempDir('aas-bin-');
+    const cudart = storedZip({ 'bin\\cudart64_12.dll': 'dll', '..\\..\\escaped.dll': 'bad' });
+    const impl = (async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes('/releases/tags/')) {
+        const names = ['llama-b4585-bin-win-cuda-cu12.4-x64.zip', 'cudart-llama-bin-win-cu12.4-x64.zip'];
+        return Response.json({ assets: names.map((name) => ({ name, browser_download_url: `https://example.invalid/${name}` })) });
+      }
+      return new Response(u.includes('cudart') ? cudart : sampleZip);
+    }) as unknown as typeof fetch;
+    const r = await install({
+      binDir, tag: 'b4585', fetchImpl: impl, verify: runs,
+      target: { platform: 'win32', arch: 'x64', hasNvidia: true },
+    });
+    const dest = dirname(r.command);
+    assert.ok(await stat(join(dest, 'cudart64_12.dll')).catch(() => undefined), '名前だけで直下に置いていない');
+    assert.ok(await stat(join(dest, 'escaped.dll')).catch(() => undefined), '`..\\` を外して直下に置いていない');
+  });
+});
+
 describe('黙って落ちたときの見分け', () => {
   test('DLL が見つからない番号を、そうと言う', () => {
     assert.match(explainExitCode(3221225781), /DLL/);

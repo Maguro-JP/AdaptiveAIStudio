@@ -105,7 +105,28 @@ export function spawnPlan(command: string, platform: NodeJS.Platform): { command
   if (platform === 'win32' && !/\.[a-z0-9]+$/i.test(command) && !/[\\/]/.test(command)) {
     return { command, shell: true };
   }
+  // `.cmd`・`.bat` は殻なしでは起こせない（Node 18.20.2 以降の Windows は spawn EINVAL を投げる）。道つきで書かれていても殻を通す
+  if (platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
+    return { command: quoteForCmd(command), shell: true };
+  }
   return { command, shell: false };
+}
+
+/**
+ * 殻（cmd.exe）へ渡す一語。殻を通すと Node は引数を空白で繋ぐだけで、囲まない。
+ * `C:\Users\Taro Yamada\proj` が二つに割れ、`&` `|` は次の命令になる。空白や記号を含むものだけ `"` で囲む。
+ */
+export function quoteForCmd(arg: string): string {
+  if (arg !== '' && /^[A-Za-z0-9_\-+=.,:\/\\@]+$/.test(arg)) return arg;
+  /*
+   * `"`・`%`・改行は囲んでも安全にならないので断る。cmd.exe は `\"` を引用符の逃がしと読まず、`a" & calc & "` は囲みを
+   * 抜けて別の命令になる。`%名前%` は囲みの中でも環境変数に置き換わる。黙って別の命令を走らせるより、立ち上げずに言う
+   */
+  if (/["%\r\n]/.test(arg)) {
+    throw new Error(`cmd.exe を通す引数に " % 改行は渡せません: ${arg}`);
+  }
+  // 末尾の \ は、閉じる " を逃がさないよう重ねる
+  return `"${arg.replace(/(\\+)$/, '$1$1')}"`;
 }
 
 /**
@@ -213,7 +234,8 @@ export class McpClient {
 
     try {
       const plan = spawnPlan(this.#spec.command, process.platform);
-      this.#child = spawn(plan.command, this.#spec.args ?? [], {
+      const args = this.#spec.args ?? [];
+      this.#child = spawn(plan.command, plan.shell ? args.map(quoteForCmd) : args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         env,
         signal,

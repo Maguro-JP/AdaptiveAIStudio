@@ -161,4 +161,13 @@ describe('.. で始まる名前は、中のファイル', () => {
     assert.equal(safeResolve(root, '../foo'), undefined);
     assert.equal(safeResolve(root, 'a/../../foo'), undefined);
   });
+
+  test('根がドライブの頭（Z: の直下・/）でも、まだ無いフォルダの名前を欠かさない', async () => {
+    // 会社の PC はデータを Z: に置くので、作業場が `Z:\` そのものになりうる。在る所まで遡る途中で、
+    // 一つ上が区切りで終わる根だと、長さで切った名前の頭の一字が落ちて、別の場所に書いていた。
+    const { resolve, sep, join } = await import('node:path');
+    const root = resolve(sep);
+    const name = 'aas-no-such-dir-7f3c9e';
+    assert.equal(await realSafeResolve(root, `${name}/a.txt`), join(root, name, 'a.txt'));
+  });
 });

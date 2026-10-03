@@ -4,7 +4,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, mkdir, readFile } from 'node:fs/promises';
+import { writeFile, mkdir, readFile, symlink } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { Harness } from '../src/harness/harness.ts';
@@ -58,6 +58,30 @@ describe('規則: 保護対象', () => {
     const write = h.wrap(writeFileTool, () => '');
     const blocked = await write.run({ path: '.ENV', content: 'SECRET=2' }, ctx(root));
     assert.equal(blocked.isError, true);
+  });
+
+  test('綴りが違っても、書く先の実体が守られていれば止める（フォルダへのリンク・junction）', async () => {
+    // Windows の 8.3 の短い名前（`GIT~1\config`）と同じ形を、どの機械でも作れるリンクで作る。
+    // 規則が綴り（`g/config`）だけを見ると通し、書く側は実体（`.git/config`）に書く。
+    const root = await project({ '.git/config': '[core]\n' });
+    // 'junction' は Windows で管理者権限なしに作れる。Linux では種類は無視される。
+    await symlink(join(root, '.git'), join(root, 'g'), 'junction');
+    const h = harness([protectedPaths(['.git/**'])]);
+    const write = h.wrap(writeFileTool, () => '');
+    const r = await write.run({ path: 'g/config', content: 'x' }, ctx(root));
+    assert.equal(r.isError, true, `リンク越しに .git/config を書けた: ${r.content}`);
+    assert.equal(await readFile(join(root, '.git', 'config'), 'utf8'), '[core]\n');
+  });
+
+  test('綴りが試験に見えなくても、書く先が試験なら試験の守りを通す', async () => {
+    // `test/` の中のものは試験として守る。`lane -> test` のリンク越しの `lane/helper.ts` は、綴りでは試験に見えない
+    // （Windows の 8.3 の短い名前 `FOOTES~1.TS` も同じ形）。
+    const root = await project({ 'test/helper.ts': "test('a', () => {});\ntest('b', () => {});\n" });
+    await symlink(join(root, 'test'), join(root, 'lane'), 'junction');
+    const h = harness([testProtection]);
+    const write = h.wrap(writeFileTool, () => '');
+    const r = await write.run({ path: 'lane/helper.ts', content: "test('a', () => {});\n" }, ctx(root));
+    assert.equal(r.isError, true, `リンク越しに試験を減らせた: ${r.content}`);
   });
 
   test('区別する機械では、.ENV は別のファイル（対）', async () => {

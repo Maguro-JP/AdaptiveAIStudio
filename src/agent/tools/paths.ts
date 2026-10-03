@@ -28,7 +28,7 @@ export function toDisplayPath(root: string, abs: string): string {
 }
 
 import { realpath, lstat } from 'node:fs/promises';
-import { dirname as dirOf } from 'node:path';
+import { dirname as dirOf, basename as baseOf } from 'node:path';
 
 /**
  * リンクを辿った先まで見て、作業場の中かを決める。
@@ -73,10 +73,26 @@ export async function realSafeResolve(root: string, candidate: string): Promise<
     } catch {
       const up = dirOf(probe);
       if (up === probe) return undefined;
-      tail = tail ? `${probe.slice(up.length + 1)}${sep}${tail}` : probe.slice(up.length + 1);
+      // 一つ上が根（`C:\`・`/`）だと区切りで終わるので、長さで切ると名前の頭の一字を落とす（`Z:\new\a.txt` が `Z:\ew\a.txt` になる）。名前は basename で取る
+      tail = tail ? `${baseOf(probe)}${sep}${tail}` : baseOf(probe);
       probe = up;
     }
   }
+}
+
+/**
+ * 書いたときに実際に当たるファイルの、作業場からの道（`/` 区切り）。外・解けないなら undefined。
+ *
+ * 規則（保護・試験・協議）は引数の綴りを見るが、書く側は `realSafeResolve` で実体へ解いてから書く。
+ * 綴りと実体が食い違うと、規則は「別のファイル」として通し、書く側は守っているファイルに書く。
+ *   - Windows の 8.3 の短い名前（`ENV~1` は `.env`、`GIT~1\config` は `.git\config`）
+ *   - 大小の違い（`SRC\Harness\Gate.ts`）は、在るものなら実体の綴りに揃う
+ *   - フォルダへのリンク・junction（`g -> .git` の `g/config`）
+ * 規則は綴りと、この実体の両方で照らす。
+ */
+export async function canonicalRel(root: string, candidate: string): Promise<string | undefined> {
+  const real = await realSafeResolve(root, candidate);
+  return real === undefined ? undefined : toDisplayPath(root, real);
 }
 
 /** それ自身がリンクか。書く先がリンクなら、書いた先は別の場所。 */
