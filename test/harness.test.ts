@@ -186,6 +186,20 @@ describe('規則: 影響範囲', () => {
     assert.notEqual(again.isError, true, `同じファイルを二件と数えた: ${again.content}`);
   });
 
+  test('**段取りで並べた担当は履歴を分けても、書ける数は依頼全体で数える**', async () => {
+    // 担当ごとに履歴（読んだ・書いた）を分けると、数える規則まで担当ごとになり、担当の数だけ上限が増えていた
+    const root = await project();
+    const h = harness([blastRadius(1)]);
+    const write = h.wrap(writeFileTool, () => '');
+    const { Forum } = await import('../src/harness/deliberation.ts');
+    const forum = new Forum();
+    const shared: never[] = [];
+    const worker = () => ({ ...ctx(root), request: { instruction: () => '', history: [], taskHistory: shared, forum, metricsKey: () => '' } });
+    assert.notEqual((await write.run({ path: 'a.ts', content: '1' }, worker())).isError, true);
+    const other = await write.run({ path: 'b.ts', content: '2' }, worker());
+    assert.equal(other.isError, true, `別の担当なら上限を超えて書けた: ${other.content}`);
+  });
+
   test('依頼が変われば数え直す', async () => {
     const root = await project();
     const h = harness([blastRadius(1)]);

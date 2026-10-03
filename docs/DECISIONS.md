@@ -11045,9 +11045,14 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
 - CLI の team の作業指示書: 同じ id が二つあると後の方が黙って走らず「完了 1/1」と出ていた。知らない役職は全部のツールで
   働いていた。どちらも断る
 - 一歩ずつの段の番号が、手前に塞がった段があるとずれていた。CLI の team で組み立てが落ちたときも llama-server を止める
+- 読み直しで見つけて直したもの: 送り口で担当の後の確かめの最中に止めても、担当の終わり方（completed）で返していたので、
+  一歩ずつの段では「済んだ」として次の段が勝手に始まっていた。止めたなら aborted で返す。段取りの記憶は、確かめて落ちたとき
+  だけ「駄目だった手」にする（分からない・確かめていないも「駄目だった」と覚えていた）。担当ごとに履歴を分けたことで書ける数の
+  上限が担当の数だけ増えていたので、数える規則は依頼全体の履歴（`taskHistory`）で数える。`execute` だけを持つ役職も書ける側に
+  数えて直列にする。権限を落とした知らせは実際に落としたものだけを言い、画面に `unsure` などの符丁を出さない
 - 試験: `test/plan-stop.test.ts`・`test/plan-preexisting.test.ts`・`test/scheduler-any-path.test.ts`・`test/plan-team-small.test.ts`・
-  `test/resume.test.ts`。どれも直す前の版で落ちることを見た。担当ごとの規則の履歴（`RequestScope`）とテストの数の比べには
-  試験が無い
+  `test/resume.test.ts`・`test/harness.test.ts`。どれも直す前の版で落ちることを見た。担当ごとの規則の履歴（`RequestScope`）と
+  テストの数の比べには試験が無い。`test/resume.test.ts` の止めた段の試験は、返事の切り替えの時機に頼る所が残る
 - 残したもの: 段取りの担当に `contextTokens` と `priority` を渡していない（窓を既定の 8192 で見積もる）。利用者が ■ で止めた
   送り口の依頼も「やり残し」として記録し、約 60 秒後に勝手に再開する（確かめていない）
 触る場所: `src/core/session.ts` の `plan`、`src/agent/shell-exec.ts`、`src/agent/acceptance.ts`、`src/ui/server.ts` の `#driveStep`、

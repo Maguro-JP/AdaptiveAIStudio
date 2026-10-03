@@ -831,6 +831,8 @@ export class Session {
       const shared = await this.#system();
       const systemFor = (role: Role): string => `${shared}\n\n${buildSystemPrompt(role)}`;
 
+      /** 段取り全体で呼んだツール（並べた担当の間で一つ）。書ける数の規則がこれで数える。 */
+      const planCalls: NonNullable<RequestScope['taskHistory']> = [];
       const team = new Team(this.orchestrator, {
         lanes: this.lanes,
         system: systemFor(this.roles.get(fallbackRoleId)!),
@@ -852,7 +854,8 @@ export class Session {
         assign: (roleId) => {
           const role = this.roles.get(roleId);
           if (!role) return undefined;
-          const scope: RequestScope = { instruction: () => request, history: [], forum: this.#forum, metricsKey: () => '' };
+          // 書ける数は依頼全体で数える（`taskHistory` は担当の間で一つ）
+          const scope: RequestScope = { instruction: () => request, history: [], taskHistory: planCalls, forum: this.#forum, metricsKey: () => '' };
           return { system: systemFor(role), tools: toolsFor(role, this.toolPool), request: scope };
         },
       });
@@ -897,7 +900,11 @@ export class Session {
        * 書けるのに書き込み先を挙げなかった担当は、誰とも同時に書かせない（`ANY_PATH`）。錠は宣言だけで掛かるので、
        * 挙げなかった二人が同じファイルを読み・書き、後の全文書き込みが前の担当の仕事を黙って消していた（どちらも「完了」）。
        */
-      const canWrite = (roleId: string): boolean => (this.roles.get(roleId)?.access ?? []).includes('write');
+      // `execute` も書ける側に数える（`run_command` で書けるので、書く担当と同時に走らせない）
+      const canWrite = (roleId: string): boolean => {
+        const access = this.roles.get(roleId)?.access ?? [];
+        return access.includes('write') || access.includes('execute');
+      };
       const items = toWorkItems(plan).map((w) =>
         (w.writes ?? []).length === 0 && canWrite(w.roleId) ? { ...w, writes: [ANY_PATH] } : w);
       const gen = team.run(items, ac.signal);
@@ -1071,7 +1078,10 @@ export class Session {
         // **確かめて通ったときだけ「うまくいった」。**
         // 受け取れたことと、動くことは別。ここを一緒にすると、
         // 動かない手を「うまくいった手」として覚え続ける。
-        outcome: verified === 'passed' ? 'worked' : 'failed',
+        // 確かめて落ちたときだけ「駄目だった手」。分からない（時間切れ・読めない）・確かめていない・元からは、良し悪しを付けない
+        // （送り口と同じ。「駄目だった」は遠くまで運ばれ、次の段取りに避ける手として渡る）
+        ...(verified === 'passed' ? { outcome: 'worked' as const } : {}),
+        ...(verified === 'failed' ? { outcome: 'failed' as const } : {}),
         source: 'plan',
       });
       this.#gradeRecall(verified === 'passed' ? 'passed' : verified === 'failed' ? 'failed' : verified === 'unsure' ? 'unsure' : 'notRun');
@@ -2019,7 +2029,8 @@ export class Session {
 
       yield {
         type: 'settled',
-        reason: finishedReason ?? 'failed',
+        // 確かめの最中（担当の後）に止めても、担当の終わり方は completed のまま。止めたなら止めたと言う（「済んだ」として次の段へ進ませない）
+        reason: ac.signal.aborted ? 'aborted' : (finishedReason ?? 'failed'),
         verified: checked === 'passed',
         checked,
         ...(chat ? { chat: true } : {}),

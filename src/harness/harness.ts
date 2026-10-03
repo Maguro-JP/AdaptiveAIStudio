@@ -99,9 +99,11 @@ export class Harness {
         // 規則の数え（metrics）は依頼の札で分ける。並行する会話の拒否を、別の依頼の結末に結び付けない。
         const metricsKey = toolCtx.request?.metricsKey() ?? '';
         const metrics = this.#metrics;
+        const taskHistory = toolCtx.request?.taskHistory;
         const ctx: RuleContext = {
           root: toolCtx.root,
           history,
+          ...(taskHistory ? { taskHistory } : {}),
           instruction: toolCtx.request ? toolCtx.request.instruction() : instruction(),
           ...(toolCtx.request ? { forum: toolCtx.request.forum } : {}),
           signal: toolCtx.signal,
@@ -138,10 +140,11 @@ export class Harness {
          * - 大きすぎて断られた: 「一部を読んだ」として残す。read_file は大きいファイルを必ず断るので、残さないと edit_file でも
          *   二度と直せない。一部の扱いなので、全文を置き換える write_file は止まる
          */
-        if (!(result.isError && call.name === 'read_file')) history.push(call);
-        else if (result.content.includes('は二進のファイルなので読めません')) history.push(call);
+        const keep = (c: ToolCall): void => { history.push(c); if (taskHistory && taskHistory !== history) taskHistory.push(c); };
+        if (!(result.isError && call.name === 'read_file')) keep(call);
+        else if (result.content.includes('は二進のファイルなので読めません')) keep(call);
         else if (result.content.includes('ファイルが大きすぎます')) {
-          history.push({ ...call, args: { ...(args as Record<string, unknown>), limit: 0 } });
+          keep({ ...call, args: { ...(args as Record<string, unknown>), limit: 0 } });
         }
 
         // 実行後の判定

@@ -12,6 +12,11 @@ export interface RequestScope {
   instruction(): string;
   /** この依頼で呼んだツール（規則が積み重ねを見る）。依頼ごとに空にする。 */
   readonly history: ToolCall[];
+  /**
+   * 依頼全体で呼んだツール。段取りで並べた担当は `history` を担当ごとに持つが、「一つの依頼で何件まで書くか」は依頼全体で
+   * 数える（担当ごとに数えると、担当の数だけ上限が増える）。無ければ `history` と同じ。
+   */
+  readonly taskHistory?: ToolCall[];
   /** 協議の場。依頼ごとに開き直す。 */
   readonly forum: Forum;
   /**

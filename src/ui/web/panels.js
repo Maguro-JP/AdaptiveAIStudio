@@ -937,7 +937,8 @@ export const PANELS = {
       const stats = el('div', 'acceptance-stats');
       stats.append(
         el('span', '', `作業 ${done}/${r.members.length}`),
-        el('span', '', `検査 ${r.verified}`),
+        // 機械の符丁を、人に見せる語に引き直す（`unsure` のまま出さない）
+        el('span', '', `検査 ${({ passed: '通過', failed: '失敗', skipped: '未実施', preexisting: '元から失敗', unsure: '不明' })[r.verified] ?? r.verified}`),
         el('span', '', `変更 ${r.changed.length}件`),
       );
       box.append(stats);
