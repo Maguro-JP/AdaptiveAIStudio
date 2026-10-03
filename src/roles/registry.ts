@@ -39,6 +39,8 @@ export interface RoleOverride {
  * 落とすのは `write` の方。外へ出る道を取り上げると、その役職が何のために
  * 居るのか分からなくなる。**黙って落とさない。**何を落としたかを返す。
  */
+const KNOWN_ACCESS = ['read', 'write', 'execute', 'network', 'mcp'] as const satisfies readonly ToolAccess[];
+
 export function dropWriteIfOutbound(access: readonly ToolAccess[]): {
   access: ToolAccess[]; dropped: boolean;
 } {
@@ -109,14 +111,17 @@ export class RoleRegistry {
    * **いなくなったのではなく、担当が分かれただけ**なので、
    * 呼べば誰かには繋がる。
    */
-  get(id: string): Role | undefined {
+  get(id: string, seen: Set<string> = new Set()): Role | undefined {
     const direct = this.#roles.get(id) ?? this.#roles.get(this.#aliases.get(id) ?? '');
     if (!direct) return undefined;
     if (!direct.retired) return direct;
+    // 引き継ぎが輪になっている（A→B→A・自分を指す）。辿り続けると、立ち上げごと落ちる。引き継ぎ済みの本人を返す
+    if (seen.has(direct.id)) return undefined;
+    seen.add(direct.id);
 
     // 引き継ぎ先へ回す
-    for (const next of direct.succeededBy ?? []) {
-      const successor = this.get(next);
+    for (const next of Array.isArray(direct.succeededBy) ? direct.succeededBy : []) {
+      const successor = this.get(next, seen);
       if (successor) return successor;
     }
     return direct;
@@ -169,7 +174,20 @@ export class RoleRegistry {
       succeededBy: o.succeededBy ?? base?.succeededBy,
       retired: o.retired ?? base?.retired,
     };
-    const want = o.access ?? base?.access ?? ['read'];
+    /*
+     * 権限は決まった語の並びだけを受ける。文字列（`"read,write,network"`）で書くと、`includes` の部分一致で権限が付き、
+     * `some` で投げて立ち上げごと落ちていた。並びでないもの・知らない語は捨てて、そう言う（足りない側に倒す）
+     */
+    const raw: unknown = o.access ?? base?.access ?? ['read'];
+    let want: ToolAccess[];
+    if (!Array.isArray(raw)) {
+      want = ['read'];
+      this.#dropped.push(`${merged.id}: access を並び（["read", "write"] の形）で書いていないので、read だけにしました`);
+    } else {
+      want = raw.filter((a): a is ToolAccess => (KNOWN_ACCESS as readonly unknown[]).includes(a));
+      const unknown = raw.filter((a) => !(KNOWN_ACCESS as readonly unknown[]).includes(a));
+      if (unknown.length > 0) this.#dropped.push(`${merged.id}: 知らない権限 ${unknown.map(String).join(', ')} を外しました`);
+    }
     const { access, dropped } = dropWriteIfOutbound(want);
     if (dropped) {
       this.#dropped.push(

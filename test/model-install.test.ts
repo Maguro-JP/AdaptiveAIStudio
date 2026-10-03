@@ -421,9 +421,13 @@ describe('こちらの見当が外れても、詰まないこと', () => {
  */
 describe('途中まで取れているものを、取り上げない', () => {
   /** 決めた形で返す相手を立てる。 */
-  async function serve(body: Buffer, how: 'range-not-satisfiable' | 'partial-no-length') {
+  async function serve(body: Buffer, how: 'range-not-satisfiable' | 'partial-no-length' | 'range-no-length') {
     const { createServer } = await import('node:http');
     const server = createServer((req, res) => {
+      if (how === 'range-no-length') {
+        res.writeHead(416);
+        return res.end();
+      }
       if (how === 'range-not-satisfiable') {
         res.writeHead(416, { 'content-range': `bytes */${body.length}` });
         return res.end();
@@ -458,6 +462,21 @@ describe('途中まで取れているものを、取り上げない', () => {
       assert.deepEqual((await readdir(modelsDir)).sort(), ['probe-model.gguf'],
         '取れていたものを失っている');
       assert.equal((await stat(got.path)).size, body.length);
+    } finally { await s.close(); }
+  });
+
+  test('**416 が本当の長さを言わないなら、途中までのものを置かない**', async () => {
+    // 見出しの無い 416 を「全部ある」と読み、途中までのファイルを正式な名前にしていた
+    const body = tinyGguf();
+    const modelsDir = await tempDir('aas-dl416-nolen-');
+    const half = body.subarray(0, Math.floor(body.length / 2));
+    await writeFile(join(modelsDir, 'probe-model.gguf.part'), half);
+    const s = await serve(body, 'range-no-length');
+    try {
+      await assert.rejects(installModel({ entry: direct(s.port), modelsDir }), /長さを返しませんでした/);
+      const names = await readdir(modelsDir);
+      assert.ok(!names.includes('probe-model.gguf'), `途中までのものを置いた: ${names.join(', ')}`);
+      assert.equal((await stat(join(modelsDir, 'probe-model.gguf.part'))).size, half.length, '途中の分を失っている');
     } finally { await s.close(); }
   });
 
@@ -544,6 +563,28 @@ describe('URL を直に渡したとき', () => {
       assert.equal(r.path, join(modelsDir, 'Qwen3-4B-Q4_K_M.gguf'));
     }
     assert.equal(asked, 0, '置いてあるのに取りに行った');
+  });
+
+  test('名前に %2F・%5C が入っていても、フォルダの外へ書かない', async () => {
+    // URL の段階では %2F は区切りでないので一つの名前として残り、decode した後で ../ になっていた
+    const outer = await tempDir('aas-direct-escape-');
+    const modelsDir = join(outer, 'a', 'models');
+    await (await import('node:fs/promises')).mkdir(modelsDir, { recursive: true });
+    let asked = 0;
+    const impl = (async () => { asked++; throw new Error('取りに行った'); }) as unknown as typeof fetch;
+    for (const repo of [
+      'https://host.invalid/m/..%2F..%2Fx.gguf',
+      'https://host.invalid/m/..%5C..%5Cx.gguf',
+      'https://host.invalid/m/C%3Ax.gguf',
+    ]) {
+      await assert.rejects(
+        installModel({ entry: { id: repo, repo, quant: 'q4_k_m', ollama: '', approxGB: 0, note: '', license: '' }, modelsDir, fetchImpl: impl }),
+        /区切り/, repo);
+    }
+    assert.equal(asked, 0, '外を指す名前のまま取りに行った');
+    // フォルダの外（二つ上まで）に何も作っていない
+    assert.deepEqual((await readdir(outer)).sort(), ['a']);
+    assert.deepEqual((await readdir(join(outer, 'a'))).sort(), ['models']);
   });
 });
 
