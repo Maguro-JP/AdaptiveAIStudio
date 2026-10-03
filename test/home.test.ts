@@ -737,6 +737,39 @@ describe('bundle を組み直すとき', () => {
     assert.equal(existsSync(join(out, 'data')), false, '頼まれていないのに data を残した');
   });
 
+  test('組んだものでないフォルダを出力先に渡されたら、組まずに止め、中身を消さない', async () => {
+    // 中に入れてくれるつもりで既存のフォルダ（デスクトップなど）を渡すと、data 以外の中身がすべて消えていた
+    const out = await tempDir('aas-rebundle-foreign-');
+    await writeFile(join(out, 'notes.txt'), '利用者のメモ');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await assert.rejects(bundle({ out, srcRoot: installRoot(), version: 'test-foreign', keepData: true }), /組んだものでない/);
+    assert.equal(await readFile(join(out, 'notes.txt'), 'utf8'), '利用者のメモ', '利用者のファイルを消した');
+  });
+
+  test('前に組んだもの（見分けの元あり）なら、前の版の形で残った名前も片づける（対）', async () => {
+    const out = await tempDir('aas-rebundle-old-');
+    await writeFile(join(out, '.portable'), 'x');
+    await writeFile(join(out, 'start-old.cmd'), '前の版の入口');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-old-layout' });
+    assert.equal(existsSync(join(out, 'start-old.cmd')), false, '前の版の残りを片づけていない');
+  });
+
+  test('いま入れてある版が動いていて runtime を動かせないなら、何も消さずに止める', async () => {
+    // Windows では読み込み中の node.exe が消せず、app を途中まで消したところで投げ、元の版にも戻れなかった
+    const out = await tempDir('aas-rebundle-busy-');
+    const { mkdir } = await import('node:fs/promises');
+    await writeFile(join(out, '.portable'), 'x');
+    await mkdir(join(out, 'app'), { recursive: true });
+    await writeFile(join(out, 'app', 'kept.txt'), '動いている版');
+    await mkdir(join(out, 'runtime'), { recursive: true });
+    const busy = async () => { throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }); };
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await assert.rejects(bundle({ out, srcRoot: installRoot(), version: 'test-busy', renameImpl: busy }), /閉じてから/);
+    assert.equal(await readFile(join(out, 'app', 'kept.txt'), 'utf8'), '動いている版', '止める前に消した');
+    assert.ok(existsSync(join(out, '.portable')));
+  });
+
   test('元が出力先の中にあれば組まずに止め、元を消さない', async () => {
     const out = await tempDir('aas-rebundle-inside-');
     const { mkdir } = await import('node:fs/promises');

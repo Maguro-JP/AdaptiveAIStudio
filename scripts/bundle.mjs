@@ -21,7 +21,7 @@
  * 取得は網の繋がる場所（CI）でやり、ここは置く仕事だけをする。
  * そうすると、この道具自体は網が無くても試せる。
  */
-import { cp, copyFile, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink } from 'node:fs/promises';
+import { cp, copyFile, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink, rename } from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -326,6 +326,8 @@ export async function bundle({
    * 入れてある所へ組み直す bootstrap.cmd だけが残す（portable ではここが AAS_HOME で、モデル・設定・会話が入っている）。
    */
   keepData = false,
+  // 改名（試験で、使われていて改名できない場面を作るため）
+  renameImpl = rename,
 }) {
   /*
    * 元が出力先の中にあると、前の分を片づけるときに元ごと消える（bootstrap.cmd が材料を出力先の中に置いていて、
@@ -335,8 +337,37 @@ export async function bundle({
   if (within === '' || (!/^\.\.([\\/]|$)/.test(within) && !isAbsolute(within))) {
     throw new Error(`組み立ての元（${resolve(srcRoot)}）が出力先（${resolve(out)}）の中にあります。出力先を片づけると元も消えるので、組めません`);
   }
+  /*
+   * **前に組んだものでないフォルダは片づけない。**出力先の中身を名前を問わず消していたので、中に入れてくれるつもりで既存のフォルダ
+   * （デスクトップ・Z:\tools）を渡すと、data 以外の中身がすべて消えた。空か、前に組んだもの（見分けの元の .portable、または VERSION と app）の
+   * ときだけ片づける。前に組んだものなら、前の版の形で残った名前も今までどおり片づける
+   */
+  const present = await readdir(out).catch(() => []);
+  const ours = present.includes('.portable') || (present.includes('VERSION') && present.includes('app'));
+  // 組むときに置く名前（と data）だけなら、前に組んだものの残り。それ以外の名前があれば、見分けの元が無い限り他人のフォルダ
+  const OWN = new Set(['data', 'app', 'runtime', 'AdaptiveAIStudio.cmd', 'README.txt', 'VERSION', '.portable', '.runtime-tmp']);
+  const strangers = present.filter((name) => !OWN.has(name));
+  if (strangers.length > 0 && !ours) {
+    throw new Error(
+      `出力先（${resolve(out)}）に、組んだものでないファイルがあります（${strangers.slice(0, 5).join(', ')}${strangers.length > 5 ? ' ほか' : ''}）。`
+      + '片づけると消えるので、組みません。空のフォルダか、新しいフォルダの名前を渡してください',
+    );
+  }
+  /*
+   * **動いている版を、半分消して壊さない。**画面を開いたまま入れ直すと、Windows では読み込み中の runtime\node.exe が消せず、
+   * その時点で app などは途中まで消えていて、元の版にも戻れなかった。消す前に runtime を一度改名して戻し、改名できなければ何も消さずに止める
+   */
+  if (present.includes('runtime')) {
+    const probe = join(out, '.runtime-busy-check');
+    try {
+      await renameImpl(join(out, 'runtime'), probe);
+    } catch (e) {
+      throw new Error(`いま入れてある版が動いているようです（${e?.code ?? e}）。画面と端末を閉じてから、もう一度入れ直してください（何も消していません）`);
+    }
+    await renameImpl(probe, join(out, 'runtime'));
+  }
   // 前に組んだ分を片づける。頼まれたら data は残す（出力先ごと消していたので、入れ直すたびに消えていた）
-  for (const name of await readdir(out).catch(() => [])) {
+  for (const name of present) {
     if (keepData && name === 'data') continue;
     await rm(join(out, name), { recursive: true, force: true });
   }
