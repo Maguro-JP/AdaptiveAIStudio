@@ -236,7 +236,7 @@ export class McpClient {
     try {
       const plan = spawnPlan(this.#spec.command, process.platform);
       const args = this.#spec.args ?? [];
-      this.#child = spawn(plan.command, plan.shell ? args.map(quoteForCmd) : args, {
+      this.#child = spawn(plan.command, plan.shell ? args.map((a) => quoteForCmd(a)) : args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         env,
         signal,
