@@ -21,7 +21,7 @@
  * 取得は網の繋がる場所（CI）でやり、ここは置く仕事だけをする。
  * そうすると、この道具自体は網が無くても試せる。
  */
-import { cp, copyFile, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink } from 'node:fs/promises';
+import { cp, copyFile, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink, rename } from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -287,6 +287,19 @@ function arg(name, fallback) {
 }
 
 /** 中身を並べる。試験から呼べるように、副作用を out だけに閉じる。 */
+/** 片づけるものを退避するフォルダの名前の頭（`.old-<pid>-<時刻>`）。 */
+const TRASH_PREFIX = '.old-';
+
+/** 一瞬掴まれた（EPERM・EBUSY・EACCES）ときだけ、少し待ってやり直す。 */
+async function retryBusy(act, tries = 5, waitMs = 200) {
+  for (let i = 0; ; i += 1) {
+    try { return await act(); } catch (e) {
+      if (i + 1 >= tries || !['EPERM', 'EBUSY', 'EACCES'].includes(e?.code)) throw e;
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+  }
+}
+
 /**
  * 製品の形に組み立てる。
  *
@@ -326,6 +339,8 @@ export async function bundle({
    * 入れてある所へ組み直す bootstrap.cmd だけが残す（portable ではここが AAS_HOME で、モデル・設定・会話が入っている）。
    */
   keepData = false,
+  // 改名（試験で、使われていて改名できない場面を作るため）
+  renameImpl = rename,
 }) {
   /*
    * 元が出力先の中にあると、前の分を片づけるときに元ごと消える（bootstrap.cmd が材料を出力先の中に置いていて、
@@ -335,11 +350,55 @@ export async function bundle({
   if (within === '' || (!/^\.\.([\\/]|$)/.test(within) && !isAbsolute(within))) {
     throw new Error(`組み立ての元（${resolve(srcRoot)}）が出力先（${resolve(out)}）の中にあります。出力先を片づけると元も消えるので、組めません`);
   }
-  // 前に組んだ分を片づける。頼まれたら data は残す（出力先ごと消していたので、入れ直すたびに消えていた）
-  for (const name of await readdir(out).catch(() => [])) {
-    if (keepData && name === 'data') continue;
-    await rm(join(out, name), { recursive: true, force: true });
+  /*
+   * **前に組んだものでないフォルダは片づけない。**出力先の中身を名前を問わず消していたので、中に入れてくれるつもりで既存のフォルダ
+   * （デスクトップ・Z:\tools）を渡すと、data 以外の中身がすべて消えた。空か、組むときに置く名前だけか、前に組んだもの
+   * （.portable、または VERSION・app・AdaptiveAIStudio.cmd が揃う）のときだけ片づける。前に組んだものなら、前の版の形で残った名前も片づける。
+   * エクスプローラや同期が置く desktop.ini・Thumbs.db は、断る理由にも消すものにも数えない
+   */
+  const SHELL_LITTER = new Set(['desktop.ini', 'thumbs.db']);
+  const present = (await readdir(out).catch(() => [])).filter((name) => !SHELL_LITTER.has(name.toLowerCase()));
+  const ours = present.includes('.portable')
+    || (present.includes('VERSION') && present.includes('app') && present.includes('AdaptiveAIStudio.cmd'));
+  const OWN = new Set(['data', 'app', 'runtime', 'AdaptiveAIStudio.cmd', 'README.txt', 'VERSION', '.portable', '.runtime-tmp']);
+  const strangers = present.filter((name) => !OWN.has(name) && !name.startsWith(TRASH_PREFIX));
+  if (strangers.length > 0 && !ours) {
+    throw new Error(
+      `出力先（${resolve(out)}）に、組んだものでないファイルがあります（${strangers.slice(0, 5).join(', ')}${strangers.length > 5 ? ' ほか' : ''}）。`
+      + '片づけると消えるので、組みません。空のフォルダか、新しいフォルダの名前を渡してください',
+    );
   }
+  /*
+   * **動いている版を、半分消して壊さない。**画面を開いたまま入れ直すと、Windows では読み込み中のもの（runtime\node.exe・app の .node・
+   * data\bin の llama-server.exe）が消せず、その時点で app などは途中まで消えていて、元の版にも戻れなかった。
+   * 片づけるものを、まず一つの退避フォルダへ改名で移す。一つでも移せなければ、移した分を戻して何も消さずに止める。全部移せてから消す
+   * （確かめてから消すまでの間に起こされる隙も、これで無くなる）。改名は一瞬掴まれた（ウイルス対策・索引）だけで断らないよう、数回やり直す
+   */
+  const leaving = present.filter((name) => !(keepData && name === 'data') && !name.startsWith(TRASH_PREFIX));
+  const trash = join(out, `${TRASH_PREFIX}${process.pid}-${Date.now()}`);
+  const moved = [];
+  if (leaving.length > 0) {
+    await mkdir(trash, { recursive: true });
+    for (const name of leaving) {
+      try {
+        await retryBusy(() => renameImpl(join(out, name), join(trash, name)));
+        moved.push(name);
+      } catch (e) {
+        const stuck = [];
+        for (const back of moved.reverse()) {
+          await retryBusy(() => renameImpl(join(trash, back), join(out, back))).catch(() => stuck.push(back));
+        }
+        if (stuck.length === 0) await rm(trash, { recursive: true, force: true }).catch(() => undefined);
+        throw new Error(
+          `いま入れてある版が使われているようです（${name}: ${e?.code ?? e}）。画面と端末を閉じてから、もう一度入れ直してください`
+          + (stuck.length === 0 ? '（何も消していません）' : `（${stuck.join(', ')} を ${trash} から戻せませんでした。手で戻してください）`),
+        );
+      }
+    }
+  }
+  // 退避した分と、前に途中で残った退避フォルダを消す
+  for (const name of present.filter((n) => n.startsWith(TRASH_PREFIX))) await rm(join(out, name), { recursive: true, force: true });
+  if (leaving.length > 0) await rm(trash, { recursive: true, force: true });
   const app = join(out, 'app');
   await mkdir(app, { recursive: true });
 

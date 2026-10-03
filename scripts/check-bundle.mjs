@@ -159,6 +159,11 @@ try {
   ui.stdout?.destroy();
 }
 
+// 後片づけで落ちた（画面が止まらない・止めたのに答える）なら、通ったと言わない（終了コードは 1 なのに、読むと逆の意味に見えていた）
+if (process.exitCode) {
+  console.error('\n== 配る形では通りませんでした（上の後片づけの失敗を見てください）');
+  process.exit();
+}
 console.log('\n== 配る形のまま通りました');
 console.log(`  組んだ場所: ${out}`);
 console.log('  ここで確かめたのは、この機械むけに組んだ中身までです。');

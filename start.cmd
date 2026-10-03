@@ -107,7 +107,7 @@ echo   Node は同梱のものを使います
 
 :haveNode
 set "NODEV="
-for /f "tokens=*" %%v in ('"%NODE%" -v 2^>nul') do set "NODEV=%%v"
+for /f "tokens=*" %%v in ('call "%NODE%" -v 2^>nul') do set "NODEV=%%v"
 rem 版が取れないのは、動かせていないということ。ここで止めないと
 rem 「この Node では動きません（）」という、何も分からない表示になる。
 if not defined NODEV goto :nodeSilent
@@ -179,8 +179,11 @@ echo.
 rem 更新は、取り込んだあと立ち上げ直すところまでが一続き。
 rem 動いているコードと置いてあるコードがズレたまま使わせない。
 if not "%TASK%"=="update" goto :normal
-if "%RUNNER%"=="direct" call "%NODE%" scripts\run.mjs update
-if not "%RUNNER%"=="direct" call "%NPM%" run update
+rem 取り込みは start.cmd 自身を書き換えうる。cmd.exe は続きをファイルの位置で読むので、書き換わると古い位置から
+rem ずれた断片を読む。呼ぶ行と同じ行で goto する（goto はラベルを名前で探し直すので、書き換わっても合う）。
+if "%RUNNER%"=="direct" call "%NODE%" scripts\run.mjs update & goto :updated
+if not "%RUNNER%"=="direct" call "%NPM%" run update & goto :updated
+:updated
 echo.
 set "AGAIN="
 set /p AGAIN="   立ち上げ直しますか？ [Y/n]: "

@@ -14,6 +14,8 @@ export function bundle(opts: {
   log?: (line: string) => void;
   /** 出力先の data を残すか（入れてある所へ組み直すとき）。既定は残さない */
   keepData?: boolean;
+  /** 改名（試験で、使われていて改名できない場面を作るため） */
+  renameImpl?: (from: string, to: string) => Promise<void>;
 }): Promise<{
   out: string;
   version: string;

@@ -11,6 +11,7 @@
  *
  * 直さない。**見て、そのまま貼れる形で出す**だけ。
  */
+import { testsPassed } from './tests-verdict.ts';
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -188,7 +189,7 @@ if (ggufs.length === 0) {
 const started = Date.now();
 const test = await run(process.execPath, [join(root, 'scripts', 'run-tests.mjs')], root);
 const seconds = ((Date.now() - started) / 1000).toFixed(1);
-const passed = /^# fail 0$/m.test(test.text);
+const passed = testsPassed(test.text, test.code);
 const counts = /^# pass (\d+)$/m.exec(test.text)?.[1] ?? '?';
 add('検査', passed, `${seconds}秒 / ${counts}件通過${passed ? '' : ' — 失敗あり'}`);
 
@@ -225,7 +226,7 @@ for (const line of tellWhereItWent(
 const bad = results.filter((r) => r.ok === false).length;
 process.exit(bad > 0 ? 1 : 0);
 
-function run(command: string, args: string[], cwd = process.cwd()): Promise<{ text: string }> {
+function run(command: string, args: string[], cwd = process.cwd()): Promise<{ text: string; code: number | null }> {
   return new Promise((resolve) => {
     let text = '';
     /*
@@ -238,13 +239,13 @@ function run(command: string, args: string[], cwd = process.cwd()): Promise<{ te
     try {
       child = spawn(command, args, { cwd });
     } catch (e) {
-      resolve({ text: (e as Error).message });
+      resolve({ text: (e as Error).message, code: null });
       return;
     }
     const on = (read: (c: Buffer) => string) => (b: Buffer) => { text += read(b); };
     child.stdout?.on('data', on(chunkReader()));
     child.stderr?.on('data', on(chunkReader()));
-    child.on('error', (e) => resolve({ text: e.message }));
-    child.on('close', () => resolve({ text }));
+    child.on('error', (e) => resolve({ text: e.message, code: null }));
+    child.on('close', (code) => resolve({ text, code }));
   });
 }

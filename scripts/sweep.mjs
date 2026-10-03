@@ -40,6 +40,8 @@ const bad = [];
  * 変わる**（一度通って、次に落ちた）。
  */
 let expectingRefusal = false;
+/** 作業が終わるのを待っている間（ファイルを書く口が「作業中」の 409 を返す）。その 409 は不具合として数えない。 */
+let expectingBusy = false;
 /** わざと保存を失敗させている間（500 を返させている口）。その 500 は不具合として数えない。 */
 let expectingSaveFailure = false;
 p.on('pageerror', (e) => bad.push(`落ちた: ${e.message}`));
@@ -47,6 +49,7 @@ p.on('console', (m) => {
   if (m.type() !== 'error') return;
   if (noModel && m.text().includes('503')) return;
   if (expectingRefusal && /\b(409|501)\b/.test(m.text())) return;
+  if (expectingBusy && /\b409\b/.test(m.text())) return;
   if (expectingSaveFailure && /\b500\b/.test(m.text())) return;
   bad.push(`画面のエラー: ${m.text()}`);
 });
@@ -58,6 +61,7 @@ p.on('response', (r) => {
   // **起こし直してもらえない入口では、断るのが正しい。**作業中の 409 も同じ。
   // ここで止めると誰も起こさず、二度と戻らない（実際にそうなっていた）。
   if (expectingRefusal && [409, 501].includes(r.status()) && at === '/api/restart') return;
+  if (expectingBusy && r.status() === 409 && at === '/api/file') return;
   if (expectingSaveFailure && r.status() === 500 && ['/api/theme/preset', '/api/layout/preset', '/api/theme', '/api/memory', '/api/unfinished', '/api/state'].includes(at)) return;
   bad.push(`${r.status()} ${at}`);
 });
@@ -1127,6 +1131,35 @@ await check('設定の欄が、行の幅まで伸びている', async () => {
   await p.keyboard.press('Escape');
   await p.waitForTimeout(300);
   if (bad.length > 0) throw new Error(bad.join(' / '));
+});
+
+/*
+ * **ファイルを書く試しの前に、作業が終わって書けるまで待つ。**
+ *
+ * 本体は作業中（送った後の片づけ・記憶の判定・手すきの見回り・作業場の鍵）の保存を 409 で断る（意図した振る舞い）。前の段の smoke が送った依頼の
+ * 片づけが長引くと（小さなモデルの返事が長かった回）、最初の試しのファイルが作れず落ちた。走らせるたびに結果が変わるので、書けるまで待ってから試す。
+ * 待つのは試しのためのファイル一つで、確かめてから消す
+ */
+await check('作業が終わって、ファイルを書ける', async () => {
+  const at = 'sweep-idle-probe.txt';
+  expectingBusy = true;
+  try {
+    const until = Date.now() + 120_000;
+    for (;;) {
+      const status = await p.evaluate(([path]) => fetch('/api/file', {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path, content: 'idle\n' }),
+      }).then((r) => r.status), [at]);
+      if (status === 200) break;
+      if (status !== 409 || Date.now() > until) throw new Error(`書けるようにならない（${status}）`);
+      await p.waitForTimeout(500);
+    }
+  } finally {
+    expectingBusy = false;
+    const { rm } = await import('node:fs/promises');
+    const root = await p.evaluate(() => fetch('/api/config').then((r) => r.json()).then((c) => c.workRootNow)).catch(() => '');
+    if (root) await rm(`${root}/${at}`, { force: true }).catch(() => undefined);
+  }
 });
 
 /*

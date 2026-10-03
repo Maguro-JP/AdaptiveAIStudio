@@ -151,6 +151,31 @@ describe('バッチファイル', () => {
     }
   });
 
+  test('for /f の中で、引用符で始まる命令を走らせない', async () => {
+    /*
+     * for /f の ('…') は cmd /c に渡る。引用符で始まり、間に `( ) & ^` などがあると、cmd は先頭と最後の引用符を剥がす。
+     * 入れる場所が `…\AdaptiveAIStudio-portable (1)\…`（同じ ZIP を二度落とした）だと、同梱の Node の道が空白で切れて動かず、
+     * 「会社の設定で止められている」と的外れに言って起動しなかった。`call "…"` か、外側をもう一重の引用符で包む
+     */
+    for (const path of await batchFiles()) {
+      const bad = (await read(path)).split(/\r?\n/)
+        .filter((l) => /^\s*for\s+\/f\b/i.test(l) && /\bin\s*\('\s*"/i.test(l));
+      assert.deepEqual(bad, [], `${path} の for /f が引用符で始まる命令を走らせている:\n  ${bad.join('\n  ')}`);
+    }
+  });
+
+  test('取り込み（update）を呼ぶ行は、同じ行で goto する', async () => {
+    /*
+     * 取り込みは start.cmd 自身を書き換えうる。cmd.exe はバッチの続きをファイルの位置で読むので、書き換わると古い位置から
+     * ずれた断片を実行する。呼ぶ行と同じ行で goto（ラベルを名前で探し直す）するか exit /b しておく
+     */
+    for (const path of await batchFiles()) {
+      const bad = (await read(path)).split(/\r?\n/)
+        .filter((l) => !/^\s*(rem|::)/i.test(l) && /(run\.mjs|run)\s+update\b/i.test(l) && !/&\s*(goto\s+:|exit\s+\/b)/i.test(l));
+      assert.deepEqual(bad, [], `${path} で、取り込みの後の行をファイルの位置で読んでいる:\n  ${bad.join('\n  ')}`);
+    }
+  });
+
   test('この検査自体が、1行の括弧を見落とさない', () => {
     // 前の検査は行をまたぐ塊しか見ておらず、実際に壊れた形を見逃した。
     assert.equal(insideParens('where node || (echo みつかりません & pause)').length, 1);
