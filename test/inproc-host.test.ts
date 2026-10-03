@@ -170,3 +170,27 @@ describe('端末の Ctrl-C（SIGINT）', () => {
     }
   });
 });
+
+describe('立ち上がらない子', () => {
+  test('上限で諦めたら、子を落として忘れる（以後ずっと「立ち上がりません」にしない）', async () => {
+    const dir = await tempDir('aas-host-never-');
+    // 口を開けたと言わないまま居続ける子（遅い機械の代わり。待つ長さには頼らない: 決して言わない）
+    const entry = join(dir, 'never-ready.mjs');
+    await writeFile(entry, 'process.stdin.resume();\nsetInterval(() => {}, 1 << 30);\n');
+    const host = new InProcHost({ modelsDir: dir, port: 0, entry, startWaitMs: 1 });
+    try {
+      const first = host.ensureLoaded('a.gguf');
+      const pid = host.pid()!;
+      await assert.rejects(first, /立ち上がりません/);
+      await until(() => !alive(pid), '諦めた子が残っている', { timeoutMs: 8000 });
+      assert.equal(host.pid(), undefined, '諦めた子を持ったまま');
+      // 二度目は、新しい子を起こす（前の断りを使い回さない）
+      const second = host.ensureLoaded('a.gguf');
+      const pid2 = host.pid();
+      assert.ok(pid2 !== undefined && pid2 !== pid, '前の断りを使い回して、子を起こし直していない');
+      await assert.rejects(second, /立ち上がりません/);
+    } finally {
+      await host.shutdown().catch(() => undefined);
+    }
+  });
+});

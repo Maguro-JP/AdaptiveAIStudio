@@ -160,7 +160,7 @@ describe('ChatOrchestrator', () => {
     const cloud = await startFakeServer({ kind: 'hang' });
     try {
       const registry = new ProviderRegistry();
-      registry.register(new OpenAiCompatibleProvider({ id: 'inproc', baseUrl: local.baseUrl, locality: 'local', connectTimeoutMs: 50 }));
+      registry.register(new OpenAiCompatibleProvider({ id: 'inproc', baseUrl: local.baseUrl, locality: 'local', connectTimeoutMs: 50, firstTokenTimeoutMs: 50 }));
       registry.register(new OpenAiCompatibleProvider({ id: 'cloud', baseUrl: cloud.baseUrl, locality: 'cloud', connectTimeoutMs: 50 }));
       const events = await drain(new ChatOrchestrator(registry).run(
         { candidates: ['inproc:m', 'cloud:m'], messages: [{ role: 'user', content: 'hi' }] },

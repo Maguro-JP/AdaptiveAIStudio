@@ -92,7 +92,16 @@ export class InProcHost implements LocalRuntime {
       this.#child = child;
       // 新しい子。前の止めは、この子には関係ない。
       this.#stopping = false;
-      const wait = setTimeout(() => ng(new Error('モデルのプロセスが立ち上がりません（上限で諦めました）')), this.#opts.startWaitMs ?? 30_000);
+      /*
+       * **諦めたら、子も落として忘れる。**断るだけだと、断った約束（#url）と動いている子が残り、
+       * 以後の読み込みは子が自分で終わるまで（終わらない）全部「立ち上がりません」で即座に落ちる。
+       */
+      const wait = setTimeout(() => {
+        this.#stopping = true; // こちらから止める。「落ちた」とは言わない
+        child.kill('SIGKILL');
+        if (this.#child === child) { this.#child = undefined; this.#url = undefined; }
+        ng(new Error('モデルのプロセスが立ち上がりません（上限で諦めました）'));
+      }, this.#opts.startWaitMs ?? 30_000);
       let buf = '';
       let got = false;
       child.stdout?.on('data', (b: Buffer) => {
@@ -110,6 +119,8 @@ export class InProcHost implements LocalRuntime {
       child.stderr?.on('data', (b: Buffer) => { err += b.toString('utf8'); if (err.length > 4000) err = err.slice(-4000); });
       child.on('exit', (code, signal) => {
         clearTimeout(wait);
+        // 諦めて落とした古い子の終わりが、後から起こした子の記録を消さないように
+        if (this.#child !== undefined && this.#child !== child) return;
         this.#child = undefined;
         this.#url = undefined;
         this.#loaded = [];

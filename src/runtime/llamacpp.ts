@@ -21,19 +21,47 @@ import type { MachineSpec, ModelSpec } from './spec.ts';
 import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.ts';
 import { lineReader } from '../core/text.ts';
 import { fileURLToPath } from 'node:url';
+import { createServer } from 'node:net';
 
-/** llama-server を付き添い越しに起こすか（Windows 以外）。 */
-const GUARDED = process.platform !== 'win32';
+/**
+ * llama-server は**どこでも**付き添い越しに起こす。
+ *
+ * Windows を外していたので、(1) コンソールの Ctrl-C（生成だけを止める合図）が llama-server にも届いて落ち、
+ * 以後の依頼は「繋ぐ先に断られました」になる。(2) 親が後始末をせずに消えると（落ちた・殺された）、llama-server が
+ * 親無しで残り、次の起動で同じ口を塞ぐ。付き添いは別のグループ（Windows では別のコンソール）で動き、
+ * 親が居なくなれば（標準入力が閉じれば）llama-server を止める。
+ */
+const WINDOWS = process.platform === 'win32';
 const GUARD = fileURLToPath(new URL('./llama-guard.ts', import.meta.url));
 
 /**
- * 止まらないものを落とす。付き添い越しなら、付き添いのグループごと落とす（付き添いだけ落とすと、llama-server が親無しで残る）。
+ * 付き添いごと落とす。付き添いだけ落とすと、llama-server が親無しで残る。
+ * Windows には負の番号（グループ）への kill が無く、`child.kill()` は付き添いだけを TerminateProcess する。
+ * 子の子まで落とすには taskkill /T を使う（Windows に必ず在る。管理者権限は要らない）。
  */
-function killHard(child: ChildProcess): void {
-  if (GUARDED && child.pid !== undefined) {
-    try { process.kill(-child.pid, 'SIGKILL'); return; } catch { /* 既に居ない */ }
+function killTree(child: ChildProcess, signal: 'SIGTERM' | 'SIGKILL'): void {
+  if (child.pid === undefined) { child.kill(signal); return; }
+  if (WINDOWS) {
+    try {
+      spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+        .on('error', () => child.kill(signal));
+      return;
+    } catch { /* 下で落とす */ }
+    child.kill(signal);
+    return;
   }
+  if (signal === 'SIGTERM') { child.kill('SIGTERM'); return; } // 付き添いが llama-server へ渡し、5 秒で落とす
+  try { process.kill(-child.pid, 'SIGKILL'); return; } catch { /* 既に居ない */ }
   child.kill('SIGKILL');
+}
+
+/** その口が空いているか（127.0.0.1 で開けてみて、閉じる）。 */
+function portFree(port: number): Promise<boolean> {
+  return new Promise((ok) => {
+    const s = createServer();
+    s.once('error', () => ok(false));
+    s.listen(port, '127.0.0.1', () => { s.close(() => ok(true)); });
+  });
 }
 
 export interface LlamaCppOptions {
@@ -76,6 +104,8 @@ export class LlamaCppRuntime implements LocalRuntime {
    * 名前からの推測より、書いてあるものの方が確か。
    */
   readonly #specs = new Map<string, ModelSpec>();
+  /** 起こしたが、まだ答えられるようになっていないもの。止めるときに、これも落とす。 */
+  readonly #starting = new Set<ChildProcess>();
   #nextPort: number;
 
   constructor(opts: LlamaCppOptions) {
@@ -178,6 +208,15 @@ export class LlamaCppRuntime implements LocalRuntime {
 
     const port = this.#nextPort++;
     const baseUrl = `http://127.0.0.1:${port}/v1`;
+    /*
+     * **埋まっている口に起こさない。**埋まっていると、起こした llama-server は口を取れずに落ちるが、
+     * 下の待ちは**先に居る誰か**（前に残った llama-server、もう一つの AAS）の返事を「準備できた」と読む。
+     * 違うモデルが答え、しかもそれは止める対象に入らない。
+     */
+    if (!(await portFree(port))) {
+      throw new Error(`口 ${port} は既に使われています。前の llama-server が残っているか、別のプログラムが使っています。`
+        + 'タスク マネージャーで llama-server を終わらせるか、設定の runtime.basePort を変えてください。');
+    }
     const args = this.#buildArgs(ref, plan, port);
 
     this.#opts.onLog?.(`起動: ${this.#opts.command} ${args.join(' ')}`);
@@ -189,16 +228,14 @@ export class LlamaCppRuntime implements LocalRuntime {
     // Windows 以外は付き添い（`llama-guard.ts`）を挟み、別のプロセスグループで起こす。端末の Ctrl-C（生成だけを止める合図）で
     // llama-server まで落ちない。親が居なくなったら付き添いが止める（標準入力を開けたままにしておくのは、そのため）。
     // Windows のコンソールの Ctrl-C は別の仕組みで届くので、ここでは変えない（確かめていない）
-    const child = GUARDED
-      ? spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', GUARD, this.#opts.command, ...args], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        env: runtimeEnv(this.#opts.command),
-        detached: true,
-      })
-      : spawn(this.#opts.command, args, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: runtimeEnv(this.#opts.command),
-      });
+    const child = spawn(process.execPath, ['--experimental-strip-types', '--no-warnings', GUARD, this.#opts.command, ...args], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: runtimeEnv(this.#opts.command),
+      detached: true,
+      // Windows で detached にすると、コンソールのウィンドウが一つ開く。開かせない
+      windowsHide: true,
+    });
+    this.#starting.add(child);
     let exited: { code: number | null; detail: string } | undefined;
     let stderrTail = '';
 
@@ -220,7 +257,9 @@ export class LlamaCppRuntime implements LocalRuntime {
       if (!exited) exited = { code, detail: stderrTail.split('\n').slice(-20).join('\n') };
     };
     child.on('exit', (code) => {
-      this.#running.delete(ref);
+      this.#starting.delete(child);
+      // **自分の記録だけを消す。**止めるのに 5 秒以上かかった古い子の終わりが、読み直した新しい子の記録を消していた
+      if (this.#running.get(ref)?.child === child) this.#running.delete(ref);
       // 出力は 'exit' の後に届くことがある（付き添いが書いた「起こせなかった理由」など）。管が閉じるのを待って見立てる。
       // 閉じなければ（付き添いだけが落ち、llama-server が管を握ったまま）、少し待って今ある分で見立てる
       setTimeout(() => settle(code), 1000).unref?.();
@@ -230,9 +269,11 @@ export class LlamaCppRuntime implements LocalRuntime {
     try {
       await this.#waitReady(baseUrl, () => exited, signal);
     } catch (e) {
-      child.kill();
+      this.#starting.delete(child);
+      killTree(child, 'SIGTERM');
       throw e;
     }
+    this.#starting.delete(child);
 
     const loadSeconds = Math.round(((Date.now() - startedAt) / 1000) * 10) / 10;
     this.#running.set(ref, { ref, child, baseUrl, port, plan, loadSeconds });
@@ -294,10 +335,10 @@ export class LlamaCppRuntime implements LocalRuntime {
     const running = this.#running.get(ref);
     if (!running) return;
     this.#running.delete(ref);
-    running.child.kill();
+    killTree(running.child, 'SIGTERM');
     // プロセスが消えるまで待つ。待たずに次を起動するとVRAMが足りなくなる。
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => { killHard(running.child); resolve(); }, 5000);
+      const timer = setTimeout(() => { killTree(running.child, 'SIGKILL'); resolve(); }, 5000);
       running.child.once('exit', () => { clearTimeout(timer); resolve(); });
       if (running.child.exitCode !== null) { clearTimeout(timer); resolve(); }
     });
@@ -305,6 +346,9 @@ export class LlamaCppRuntime implements LocalRuntime {
   }
 
   async shutdown(): Promise<void> {
+    // 読み込み中のもの（まだ #running に無い）も落とす。落とさないと、止めた後に llama-server が残る
+    for (const child of this.#starting) killTree(child, 'SIGTERM');
+    this.#starting.clear();
     await Promise.all(this.loaded().map((ref) => this.unload(ref)));
   }
 }

@@ -15,6 +15,7 @@ import {
 } from './errors.ts';
 import { readSseLines } from './sse.ts';
 import { describeNet } from '../runtime/net-why.ts';
+import { connect } from 'node:net';
 
 export interface OpenAiCompatibleOptions {
   id: string;
@@ -177,8 +178,17 @@ export class OpenAiCompatibleProvider implements ChatProvider {
       clearTimeout(timer);
       timer = setTimeout(() => { stalled = true; watchdog.abort(); }, ms);
     };
-    // **繋がるまでは短く待つ。**繋がってから、最初の1トークンまでを長く待つ。
-    arm(this.#connectTimeoutMs);
+    /*
+     * **繋がるまでは短く待つ。**繋がってから、最初の1トークンまでを長く待つ。
+     *
+     * 地元の口（Ollama・llama-server）は、**最初のトークンが出るまでヘッダを返さない。**
+     * ヘッダまでを 10 秒で見切ると、モデルの読み込みと入力の読み取りが 10 秒を超えた
+     * 時点で「接続に失敗」になる（地元の時間切れはやり直さないので、そのまま落ちる）。
+     * 地元は「繋がるか」だけを先に短く見て、繋がったらヘッダを長く待つ。
+     */
+    const local = this.locality === 'local';
+    if (local) await this.#reach(signal);
+    arm(local ? this.#firstTokenTimeoutMs : this.#connectTimeoutMs);
 
     const combined = AbortSignal.any([signal, watchdog.signal]);
 
@@ -241,6 +251,8 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     }
 
     let finishReason: 'stop' | 'length' | 'toolCalls' | 'unknown' = 'unknown';
+    // 終わりの合図（[DONE] か finish_reason）を受け取ったか。**受け取らずに流れが閉じたら、途中で切れた。**
+    let ended = false;
     // ツール呼び出しは複数チャンクに分割して届く。index ごとに組み立てる。
     const pending = new Map<number, { id: string; name: string; args: string }>();
     // **並んでいる間は停滞ではない。**inproc は口が空くのを待つ間 `: queued` を打ち続け、
@@ -271,7 +283,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     }));
     try {
       for await (const data of readSseLines(alive)) {
-        if (data === '[DONE]') break;
+        if (data === '[DONE]') { ended = true; break; }
         if (!data) continue;
 
         let parsed: OpenAiStreamChunk;
@@ -281,6 +293,13 @@ export class OpenAiCompatibleProvider implements ChatProvider {
           continue; // 壊れた1行でストリーム全体を落とさない
         }
 
+        // 流れの途中の失敗（`data: {"error": ...}`）を読み飛ばさない。読み飛ばすと、途中までの文が完了になる
+        if (parsed.error !== undefined && parsed.error !== null) {
+          throw new ProviderError({
+            kind: 'unavailable', providerId: this.id,
+            message: `${this.id} の生成が途中で落ちました: ${truncate(errorText(parsed.error))}`,
+          });
+        }
         const choice = parsed.choices?.[0];
         const delta = choice?.delta?.content;
         if (typeof delta === 'string' && delta.length > 0) {
@@ -310,6 +329,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
             message: `${this.id} の生成が途中で落ちました`,
           });
         }
+        if (typeof choice?.finish_reason === 'string') ended = true;
         if (choice?.finish_reason === 'stop') finishReason = 'stop';
         else if (choice?.finish_reason === 'length') finishReason = 'length';
         else if (choice?.finish_reason === 'tool_calls') finishReason = 'toolCalls';
@@ -322,7 +342,16 @@ export class OpenAiCompatibleProvider implements ChatProvider {
           };
         }
       }
+      // **終わりの合図が無いまま閉じたものを、言い終えたことにしない。**
+      // 止めたとき（signal）は下の done が canceled を言うので、ここでは見ない。
+      if (!ended && !signal.aborted) {
+        throw new ProviderError({
+          kind: 'unavailable', providerId: this.id,
+          message: `${this.id} の返事が、終わりの合図の無いまま切れました`,
+        });
+      }
     } catch (e) {
+      if (e instanceof ProviderError && !signal.aborted && !stalled) throw e;
       const kind = signal.aborted ? 'canceled' : stalled ? 'timeout' : kindFromThrown(e);
       throw new ProviderError({
         kind, providerId: this.id, cause: e,
@@ -348,6 +377,41 @@ export class OpenAiCompatibleProvider implements ChatProvider {
 
     yield { type: 'done', finishReason: signal.aborted ? 'canceled' : finishReason };
   }
+
+  /**
+   * 繋がるかだけを見る（何も送らない）。繋がらなければ、繋がらないと言って投げる。
+   * 待つのは `connectTimeoutMs` まで。応えない相手（塞がれた口）を長く待たない。
+   */
+  async #reach(signal: AbortSignal): Promise<void> {
+    const url = new URL(this.#baseUrl);
+    const port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+    const host = url.hostname.replace(/^\[|\]$/g, '');
+    const why = await new Promise<Error | 'timeout' | 'canceled' | undefined>((done) => {
+      const socket = connect({ host, port });
+      const finish = (v: Error | 'timeout' | 'canceled' | undefined) => {
+        clearTimeout(timer); signal.removeEventListener('abort', onAbort); socket.destroy(); done(v);
+      };
+      const onAbort = () => finish('canceled');
+      const timer = setTimeout(() => finish('timeout'), this.#connectTimeoutMs);
+      socket.once('connect', () => finish(undefined));
+      socket.once('error', (e) => finish(e));
+      if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true });
+    });
+    if (why === undefined) return;
+    throw new ProviderError({
+      kind: why === 'canceled' ? 'canceled' : why === 'timeout' ? 'timeout' : kindFromThrown(why),
+      providerId: this.id, ...(why instanceof Error ? { cause: why } : {}),
+      message: `${this.id} への接続に失敗しました: ${why === 'timeout'
+        ? `${this.#connectTimeoutMs / 1000}秒 待っても繋がりません` : why === 'canceled' ? '中断されました' : describe(why)}`,
+    });
+  }
+}
+
+/** 流れの途中で返ってきた失敗の中身を、文にする（`{message}` でも文字でも）。 */
+function errorText(error: unknown): string {
+  if (typeof error === 'string') return error;
+  const message = (error as { message?: unknown }).message;
+  return typeof message === 'string' ? message : JSON.stringify(error);
 }
 
 /** 中立形式から OpenAI 形式へ。ツール結果の表現だけが違う。 */
@@ -396,6 +460,8 @@ interface OpenAiStreamChunk {
     finish_reason?: string | null;
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number } | null;
+  /** 流れの途中の失敗（Ollama・llama-server などが data 行で返すことがある） */
+  error?: unknown;
 }
 
 /**
