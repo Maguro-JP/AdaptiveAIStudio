@@ -64,7 +64,9 @@ describe('外のツールで作業場が変わったことを言う', () => {
     const ok = t.body.buttons().find((b) => /了解/.test(b.textContent ?? ''));
     assert.ok(ok, '了解の口が無い');
     await ok.onclick!();
-    assert.deepEqual(t.sent.map((s) => [s.url, s.method, s.body]), [['/api/acks', 'POST', { id: 'outside-uncomparable' }]]);
+    // パネルは作り直しのときに待っている承認も読みに行く（`/api/approvals`）。送ったものだけを見る
+    assert.deepEqual(t.sent.filter((s) => s.url !== '/api/approvals').map((s) => [s.url, s.method, s.body]),
+      [['/api/acks', 'POST', { id: 'outside-uncomparable' }]]);
     assert.match(ok.textContent ?? '', /了解しました/);
     assert.match(ok.textContent ?? '', /また出せます/, '取り消せることを言っていない');
   });

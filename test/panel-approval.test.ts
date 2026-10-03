@@ -76,7 +76,9 @@ function draw(reply: (url: string) => Promise<Response>) {
     walk(body);
     return n;
   };
-  return { card, press, ticks, sent, body, emit, asks, ctx };
+  /** 承認の答えとして送ったもの（パネルは作り直しのときに待っている承認も読みに行くので、それは除く）。 */
+  const answers = () => sent.filter((x) => x.url.endsWith('/api/approve'));
+  return { card, press, ticks, sent, answers, body, emit, asks, ctx };
 }
 
 describe('承認の札', () => {
@@ -107,8 +109,8 @@ describe('承認の札', () => {
     assert.equal(ticks.length, 2, `塊のチェックが ${ticks.length} 個しか無い`);
     ticks[1]!.checked = false;
     t.press('この依頼は以降訊かない');
-    await until(() => t.sent.length > 0, '送られる');
-    const body = t.sent[0]!.body;
+    await until(() => t.answers().length > 0, '送られる');
+    const body = t.answers()[0]!.body;
     assert.deepEqual(body.hunks, [0], `外した塊まで通している: ${JSON.stringify(body)}`);
     assert.equal(body.all, true, '「以降訊かない」が伝わっていない');
     await until(() => t.card().text.includes('一部だけ許可'), '一部だけ通したと出る');
@@ -118,9 +120,9 @@ describe('承認の札', () => {
     const t = draw(async () => Response.json({ ok: true }));
     for (const tick of t.ticks()) tick.checked = false;
     t.press('この依頼は以降訊かない');
-    await until(() => t.sent.length > 0, '送られる');
-    assert.equal(t.sent[0]!.body.approved, false,
-      `何も通さないのに許可として送っている: ${JSON.stringify(t.sent[0]!.body)}`);
+    await until(() => t.answers().length > 0, '送られる');
+    assert.equal(t.answers()[0]!.body.approved, false,
+      `何も通さないのに許可として送っている: ${JSON.stringify(t.answers()[0]!.body)}`);
   });
 });
 
@@ -152,5 +154,16 @@ describe('同じ承認は、押せる箱を二つ出さない', () => {
     assert.equal(t.asks(), 0);
     t.emit('approval', again);
     assert.equal(t.asks(), 1, '描き直した後に、待っている承認を出していない');
+  });
+});
+
+describe('会話を開いていなくても、待っている承認は出す', () => {
+  test('**パネルを作り直したとき、トップでも待っている承認を取り直す**', async () => {
+    const waiting = { id: 'b1', request: { kind: 'write', path: 'b.txt', diff: DIFF, created: false } };
+    const t = draw(async (url) => url.includes('/api/approvals')
+      ? Response.json({ approvals: [waiting], busy: true, planning: false })
+      : Response.json({ ok: true }));
+    // draw が出した a1 に加えて、取り直した b1 が出る
+    await until(() => t.asks() === 2, `待っている承認を出していない（${t.asks()} 個）`);
   });
 });

@@ -94,8 +94,11 @@ async function turn(approved: boolean): Promise<{ asked: boolean; types: string[
             if (ev.type === 'approval' && !asked) {
               asked = true;
               // 待っている承認は、流れの外からも取れる（繋ぎ直した画面・開き直した画面が出し直す）
-              const waiting = await (await fetch(`${url}/api/approvals`)).json() as { approvals: Array<{ id: string }>; busy: boolean };
-              listed = waiting.approvals.some((a) => a.id === ev.id) && waiting.busy;
+              const waiting = await (await fetch(`${url}/api/approvals`)).json() as {
+                approvals: Array<{ id: string }>; busy: boolean; planning: boolean;
+              };
+              // 会話の依頼は計画ではない（計画と言うと、見ている会話が終わっても画面が「作業中」から戻らない）
+              listed = waiting.approvals.some((a) => a.id === ev.id) && waiting.busy && !waiting.planning;
               approvalId = String(ev.id);
               await fetch(`${url}/api/approve`, {
                 method: 'POST', headers: { 'content-type': 'application/json' },

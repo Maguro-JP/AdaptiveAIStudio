@@ -12,6 +12,7 @@
  * 全部を失う。行ごとなら、壊れた行を捨てるだけで残りは読める。
  */
 import { readdir, readFile, appendFile, writeFile, mkdir, rm, rename, stat, open } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
 import { join } from 'node:path';
 import type { ProviderMessage } from '../providers/contract.ts';
 import { isAbsent } from '../harness/put-back.ts';
@@ -294,20 +295,22 @@ export class Conversations {
   /** 見出しだけを読む。一覧では中身まで組み立てない。 */
   async head(id: string): Promise<ConversationHead> {
     const path = this.#path(id);
-    const info = await stat(path);
-    // ファイルでなければ投げる（`load` の後ろから読む形と同じ。Windows はフォルダの大きさを 0 と返し、空の見出しになる）
-    if (!info.isFile()) {
-      throw Object.assign(
-        new Error(`${info.isDirectory() ? 'EISDIR' : 'EINVAL'}: not a regular file, read '${path}'`),
-        { code: info.isDirectory() ? 'EISDIR' : 'EINVAL', path },
-      );
-    }
 
     // **頭だけ読む。**見出しは1行目に在り、数えるのが要るのは小さいうちだけ。
     const fh = await open(path, 'r');
     let raw: string;
     let more = false;
+    let info: Stats;
     try {
+      // ファイルでなければ投げる（`load` の後ろから読む形と同じ。Windows はフォルダの大きさを 0 と返し、空の見出しになる）。
+      // 開いた物そのものを見る（stat と open の間で入れ替わらない）
+      info = await fh.stat();
+      if (!info.isFile()) {
+        throw Object.assign(
+          new Error(`${info.isDirectory() ? 'EISDIR' : 'EINVAL'}: not a regular file, read '${path}'`),
+          { code: info.isDirectory() ? 'EISDIR' : 'EINVAL', path },
+        );
+      }
       const buf = Buffer.alloc(Math.min(HEAD_SCAN, info.size));
       const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
       more = info.size > bytesRead;

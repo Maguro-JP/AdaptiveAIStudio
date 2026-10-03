@@ -724,11 +724,11 @@ function listen() {
       const body = id ? await getJson(`/api/conversations/messages?id=${encodeURIComponent(id)}`) : {};
       /*
        * 見ている会話が動いていれば「作業中」に戻す（繋ぎ直した時点では「待機中」と出している）。
-       * 動いていないと言えるのは、見ている会話も本体も動いていないときだけ（計画は会話の名前を付けずに動く。
-       * 別の会話が本体で動いている間も止まったとは言わない）
+       * 動いていないと言えるのは、見ている会話も計画も動いていないときだけ（計画は会話の名前を付けずに動く）。
+       * 本体が別の会話・考えごとで動いていても、見ている会話が止まっていれば止まったと言う
        */
       const live = Boolean(body.inFlight);
-      const quiet = !live && !waiting.busy;
+      const quiet = !live && !waiting.planning;
       if (live || (busyNow && quiet)) {
         src.onmessage({ data: JSON.stringify({ type: 'busy', busy: live, ...(id ? { conversationId: id } : {}) }) });
       }

@@ -632,7 +632,14 @@ export const PANELS = {
      */
     const restore = async () => {
       const id = ctx.conversationId?.();
-      if (!id) return;
+      if (!id) {
+        // 会話を開いていなくても、待っている承認は出す（承認は会話によらない。出さないと押す口が無い）
+        try {
+          const waiting = await getJson('/api/approvals');
+          if (waiting.approvals?.length) ctx.showApprovals?.(waiting.approvals);
+        } catch { /* 取れなければ、これから来る分だけ */ }
+        return;
+      }
       try {
         const body = await getJson(`/api/conversations/messages?id=${encodeURIComponent(id)}`);
         if (body.messages?.length) ctx.showHistory(body.messages);

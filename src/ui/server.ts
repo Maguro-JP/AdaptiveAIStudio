@@ -467,6 +467,8 @@ export class UiServer {
    * 通した中身が違う）。
    */
   readonly #approvalTag = randomBytes(4).toString('hex');
+  /** 計画を動かしている間。計画は会話の名前を付けずに「作業中」を流すので、繋ぎ直した画面はここを見る。 */
+  #planning = false;
 
   constructor(opts: UiServerOptions) {
     this.#opts = opts;
@@ -1607,7 +1609,15 @@ export class UiServer {
      */
     if (path === '/api/approvals' && req.method === 'GET') {
       const live = this.#session;
-      return send(res, 200, { approvals: this.#waitingApprovals(), busy: live !== undefined && this.#mainBusy(live) });
+      /*
+       * `planning` は名前の無い「作業中」（計画）。画面は、見ている会話が動いておらず計画も動いていなければ止まったと読む。
+       * 本体の動き全部（順番待ちの別の会話・考えごと）を返すと、見ている会話が終わっていても「作業中」から戻らなかった
+       */
+      return send(res, 200, {
+        approvals: this.#waitingApprovals(),
+        busy: live !== undefined && this.#mainBusy(live),
+        planning: this.#planning,
+      });
     }
 
     if (path === '/api/approve' && req.method === 'POST') {
@@ -3883,6 +3893,7 @@ export class UiServer {
   }
 
   async #drivePlan(session: Session, text: string, said?: string): Promise<void> {
+    this.#planning = true;
     this.broadcast({ type: 'busy', busy: true });
     try {
       for await (const event of session.plan(text, said)) {
@@ -3891,6 +3902,7 @@ export class UiServer {
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
     } finally {
+      this.#planning = false;
       this.broadcast({ type: 'busy', busy: false });
       this.broadcast({ type: 'stateChanged' });
     }
