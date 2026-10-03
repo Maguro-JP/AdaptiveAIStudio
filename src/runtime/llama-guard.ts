@@ -20,7 +20,8 @@ if (!command) {
   process.exit(2);
 }
 
-const child = spawn(command, args, { stdio: ['ignore', 'inherit', 'inherit'] });
+// windowsHide: 付き添いはコンソールを持たない（detached）。そのまま起こすと、llama-server にコンソールのウィンドウが一つ開く
+const child = spawn(command, args, { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
 
 const alive = (): boolean => child.exitCode === null && child.signalCode === null;
 const stop = (): void => {

@@ -10,6 +10,9 @@ const get = (name) => {
   return i >= 0 ? args[i + 1] : undefined;
 };
 
+// 読み込み中に止めたときに残らないことを、試験が番号で見るため
+if (process.env.FAKE_LLAMA_SAY_PID === '1') process.stderr.write(`fake-llama pid ${process.pid}\n`);
+
 // 環境変数で異常系を再現する
 if (process.env.FAKE_LLAMA_FAIL === '1') {
   process.stderr.write('error: failed to load model\n');

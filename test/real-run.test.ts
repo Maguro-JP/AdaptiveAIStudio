@@ -317,6 +317,10 @@ describe('実走：使うほど賢くなるか（添えた覚えに、結果が�
     try {
       // 先に一つ覚えさせる。次の依頼で、これが思い出されるようにする。
       await drive(base, '足し算のことは src/math.js に書いてあります', 60_000);
+      // 偽のモデルは 1 回目でもう直してしまう。直すものが無いと 2 回目は確かめが走らないので、壊れた形へ戻す。
+      // （前は同じファイルの前の試験が残した、別の作業場の覚えが「効いた」側に付いて偶然通っていた）
+      const math = join(root, 'src', 'math.js');
+      await writeFile(math, (await readFile(math, 'utf8')).replace('a + b', 'a - b'));
 
       await drive(base, '足し算が引き算になっています。直してください。', 120_000);
 
@@ -325,8 +329,8 @@ describe('実走：使うほど賢くなるか（添えた覚えに、結果が�
       };
       const touched = state.memory.filter((m) => (m.used ?? 0) > 0);
       assert.ok(touched.length > 0, `添えた覚えが数えられていない: ${JSON.stringify(state.memory).slice(0, 300)}`);
-      // 通った回なので、「効いた」側に付いているはず。
-      assert.ok(touched.some((m) => (m.helped ?? 0) > 0),
+      // 通った回なので、この作業場で先に覚えたものが「効いた」側に付いているはず。
+      assert.ok(touched.some((m) => m.title.startsWith('足し算のことは') && (m.helped ?? 0) > 0),
         `通ったのに、効いた側に付いていない: ${JSON.stringify(touched).slice(0, 300)}`);
       assert.ok(touched.every((m) => (m.misled ?? 0) === 0),
         `通ったのに、外した側に付いている: ${JSON.stringify(touched).slice(0, 300)}`);

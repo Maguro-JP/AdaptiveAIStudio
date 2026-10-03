@@ -1083,6 +1083,7 @@ export class Session {
         ...(verified === 'passed' ? { outcome: 'worked' as const } : {}),
         ...(verified === 'failed' ? { outcome: 'failed' as const } : {}),
         source: 'plan',
+        root: this.root,
       });
       this.#gradeRecall(verified === 'passed' ? 'passed' : verified === 'failed' ? 'failed' : verified === 'unsure' ? 'unsure' : 'notRun');
       this.#compactMemory();
@@ -2003,7 +2004,9 @@ export class Session {
       if (wroteSomething) {
         this.memory.remember({
           kind: 'attempt',
-          title: instruction,
+          // **打った分だけを題にする**（戻り先の名前と同じ）。依頼には添付の中身・開いているファイル・指名で読んだ中身が
+          // 前に付く。そのまま題にすると、ファイルの中身が記憶に残り続け（会話を消しても残る）、思い出すたびに丸ごと依頼へ差し込まれていた
+          title: undoName,
           detail: [
             changedHere.length > 0 ? `触ったもの: ${changedHere.slice(0, 5).join(', ')}` : '',
             checked === 'passed' ? '確かめて通った'
@@ -2017,6 +2020,7 @@ export class Session {
           ...(checked === 'passed' ? { outcome: 'worked' as const } : {}),
           ...(checked === 'failed' ? { outcome: 'failed' as const } : {}),
           source: 'send',
+          root: this.root,
         });
         this.#compactMemory();
       }
@@ -2268,15 +2272,16 @@ export class Session {
     // **件数ではなく、長さで決める。**一件の長さは決まっていないので、
     // 「6件」では窓が狭いモデルで押し出し、広いモデルで余らせる。
     const related = fitByTokens(
-      this.memory.recall(text, { limit: 12, ...opts }),
+      this.memory.recall(text, { limit: 12, root: this.root, ...opts }),
       (e) => `${e.title}${e.detail}`,
       Math.floor(this.contextTokens * 0.10),
       2,
     );
-    const failed = this.memory.failedBefore(text, 2);
+    const failed = this.memory.failedBefore(text, 2, this.root);
     const merged = [...related];
     for (const f of failed) if (!merged.some((e) => e.id === f.id)) merged.push(f);
     conv.recalledIds = merged.map((e) => e.id);
+    conv.recalledEra = this.memory.era;
     this.memory.noteRecalled(conv.recalledIds);
     return formatRecall(merged);
   }
@@ -2290,7 +2295,8 @@ export class Session {
   #gradeRecall(checked: 'passed' | 'failed' | 'preexisting' | 'unsure' | 'notRun', conv: Conversation = this.#conv): void {
     const ids = conv.recalledIds;
     conv.recalledIds = [];
-    if (ids.length === 0) return;
+    // 添えた後に番号が振り直されていたら、別の覚えに点を付けることになる。付けない
+    if (ids.length === 0 || conv.recalledEra !== this.memory.era) return;
     if (checked === 'passed') this.memory.noteOutcome(ids, true);
     else if (checked === 'failed') this.memory.noteOutcome(ids, false);
     // preexisting と notRun は、こちらの手柄でも失点でもない。動かさない。

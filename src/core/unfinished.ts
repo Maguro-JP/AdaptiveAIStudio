@@ -28,6 +28,11 @@ export interface Unfinished {
   id: string;
   /** 元の依頼。**そのまま残す。**要約すると、続きが別の作業になる。 */
   request: string;
+  /**
+   * 利用者が打った分（添付・開いている所の中身を前に足す前）。続きの回の記憶の題にする（全文を題にすると、添付の中身が
+   * 記憶に残る）。無い（前からある記録）なら、元の依頼の一行目を使う
+   */
+  said?: string;
   why: UnfinishedWhy;
   /** 何が起きたか。人に見せる一行。 */
   note: string;

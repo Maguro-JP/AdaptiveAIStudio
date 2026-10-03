@@ -29,7 +29,8 @@
  * 埋め込みも外部データベースも使わない。語の重なりと新しさと確認回数で十分に効く。
  * 動く条件を増やさないことも、止まらないための設計のうち。
  */
-import { readFile, writeFile, mkdir, rename, unlink } from 'node:fs/promises';
+import { readFile, open, mkdir, rename, unlink } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { jstDate } from '../core/clock.ts';
 import { BUILTIN_LESSONS, lessonLine } from './builtin-lessons.ts';
@@ -73,6 +74,12 @@ export interface MemoryEntry {
   outcome?: 'worked' | 'failed';
   /** どこで知ったか */
   source?: string;
+  /**
+   * どの作業場で起きたか（作業場の根）。試したこと・分かったことに付ける。記憶は作業場をまたいで一つなので、
+   * 付けないと、別の作業場の同じ名前のファイル（`src/index.ts` など）で試した手が「前に駄目だった手」として出てくる。
+   * 古い覚え（付いていないもの）は、どの作業場でも思い出す。
+   */
+  root?: string;
   /** 思い出して添えた回数。 */
   used?: number;
   /** 添えたあと、確かめて通った回数。 */
@@ -90,6 +97,8 @@ export interface RecallOptions {
   kinds?: MemoryKind[];
   /** 置き換えられた古い決定も含める */
   includeSuperseded?: boolean;
+  /** いまの作業場の根。別の作業場で覚えた、場に依る覚え（試したこと・分かったこと・起きたこと）を混ぜない。 */
+  root?: string;
   /**
    * 「二度としないこと」を混ぜるか。既定は混ぜる。
    *
@@ -156,12 +165,34 @@ const DAY = 86_400_000;
 /** 記憶のファイルへ書く手。試験で途中に割り込むために、別の手を渡せる。 */
 export type MemoryWriter = (path: string, body: string) => Promise<void>;
 
-/** 一時ファイルに書いてから置き換える。途中で落ちても、半分だけ書かれたファイルを残さない。 */
+/**
+ * 一時ファイルに書いて、**ディスクまで書き切ってから**置き換える。途中で落ちても、半分だけ書かれたファイルを残さない。
+ *
+ * 書き切る（sync）前に置き換えると、電源が落ちたときに「置き換えた」だけが残り、中身が空か NUL のファイルになり得る
+ * （ファイルシステム次第。確かめていない）。読むと空として始まり、覚えていたものが全部消える。会話の書き戻し
+ * （`src/core/conversations.ts` の `replaceWhole`）と同じ順にそろえる。
+ * Windows では、ウイルス対策や同期が元のファイルを掴んでいると置き換えが一時的に断られる（EPERM・EACCES・EBUSY）。少し待ってやり直す。
+ */
 const writeWhole: MemoryWriter = async (path, body) => {
   const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2, 8)}.tmp`;
   try {
-    await writeFile(tmp, body, 'utf8');
-    await rename(tmp, path);
+    const fh = await open(tmp, 'w');
+    try {
+      await fh.writeFile(body, 'utf8');
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
+    for (let tries = 0; ; tries += 1) {
+      try {
+        await rename(tmp, path);
+        break;
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (tries >= 10 || !(code === 'EPERM' || code === 'EACCES' || code === 'EBUSY')) throw e;
+        await new Promise((r) => setTimeout(r, 100 + tries * 50));
+      }
+    }
   } catch (e) {
     await unlink(tmp).catch(() => undefined);
     throw e;
@@ -174,6 +205,17 @@ export interface Forgotten {
   links: { id: string; field: 'supersedes' | 'supersededBy' }[];
   /** 取ったときの読み直しの代（中は見ない）。 */
   era: object;
+}
+
+/**
+ * 作業場を比べる鍵。実体の道（8.3 の短い名前・junction・割り当てたドライブを揃える）で、大小を区別しない機械では小文字にする
+ * （`src/core/undo.ts` の作業場の鍵と同じ考え）。字のまま比べると、CLI を `c:\\work` から、画面を `C:\\Work` で開いただけで
+ * 同じ作業場の「前に駄目だった手」を思い出さず、同じ題の覚えが二つにできた。実体が取れなければ字のまま
+ */
+export function placeKey(root: string, platform: NodeJS.Platform = process.platform): string {
+  let real = root;
+  try { real = realpathSync(root); } catch { /* 無い・読めない作業場は字のまま */ }
+  return platform === 'linux' ? real : real.toLowerCase();
 }
 
 /** `restore` が戻さなかった理由。 */
@@ -212,6 +254,19 @@ export class Memory {
    * 退けたまま保存すると、手で直している途中の行や、別の版が書いた行が、次の保存でファイルから消えていた。
    */
   #kept: string[] = [];
+  /**
+   * 読み込んだ後に手元から外した番号（忘れた・刈った・畳んだ）。保存の直前にファイルを読み直したとき、手元に無い番号の覚えを
+   * 「外した」のか「手元が知らない」（動いている間に手で直して読めるようになった行・別のプロセスが足した覚え）のかを分ける。
+   */
+  #gone = new Set<string>();
+  /**
+   * 利用者が忘れた、最初からの覚え（`seedLessons` が入れる分）の題（`normalizeTitle` の形）。ファイルに一行ずつ
+   * `{"declined":"…"}` で残す。残さないと、立ち上げ直す・作業場やモデルを変えて本体を組み直すたびに `seedLessons` が入れ直し、
+   * 忘れたはずの覚えが毎回の依頼に戻っていた。
+   */
+  #declined = new Set<string>();
+  /** この起動の間に戻した、最初からの覚えの題。保存の直前に読み直したファイルの `declined` 行から、足し戻さない。 */
+  #undeclined = new Set<string>();
 
   constructor(path?: string, opts: { write?: MemoryWriter; read?: (path: string) => Promise<string> } = {}) {
     this.#path = path;
@@ -235,6 +290,7 @@ export class Memory {
   async load(): Promise<void> {
     this.#era = {};
     this.#waiting = [];
+    this.#gone = new Set();
     if (!this.#path) return;
     // 読めない間に覚えた分があれば、読み直しで捨てずに合わせる（読めなければそのまま持っておく）。
     if (this.#unreadable && this.#dirty) {
@@ -246,10 +302,12 @@ export class Memory {
       const got = parseEntries(await this.#readRetrying(this.#path));
       this.#entries = got.entries;
       this.#kept = got.kept;
+      this.#declined = new Set(got.declined);
       this.#seq = Math.max(maxSeq(got.entries), got.keptSeq);
     } catch (e) {
       this.#entries = [];
       this.#kept = [];
+      this.#declined = new Set();
       // 無いのは正常（はじめて）。それ以外は、読めなかったと覚えて保存を断る。
       const code = (e as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT') this.#unreadable = code ?? (e as Error).message;
@@ -303,10 +361,45 @@ export class Memory {
     const got = parseEntries(raw);
     const onDisk = got.entries;
     this.#kept = got.kept;
+    for (const d of got.declined) this.#declined.add(d);
     let seq = Math.max(maxSeq(onDisk), got.keptSeq);
     const renamed = new Map<string, string>();
-    for (const e of this.#entries) { seq += 1; renamed.set(e.id, `m${seq}`); }
-    const mine = this.#entries.map((e) => ({
+    /*
+     * **ファイルに同じ覚え（同じ種類・同じ題・決め直されていない）が在れば、二つにしない。**読めない間は空から始めるので、
+     * 立ち上げのときの最初からの覚え（`seedLessons`）は必ずファイルの分と重なる。そのまま後ろへ足すと、新しい時刻の写しが
+     * 「二度としないこと」の 12 件を占め、利用者が教えた分が依頼に載らなくなっていた。最初からの覚えは数えずに捨て、
+     * ほかは `relabel` と同じく数え直してファイルの側へ畳む。
+     */
+    const fresh: MemoryEntry[] = [];
+    const folded: [MemoryEntry, MemoryEntry][] = [];
+    for (const e of this.#entries) {
+      const key = normalizeTitle(e.title);
+      // 忘れた最初からの覚え（ファイルの declined）は、読めない間に入れ直していても足し戻さない
+      if (e.source === 'builtin' && this.#declined.has(e.title)) { renamed.set(e.id, e.id); continue; }
+      const twin = e.supersededBy === undefined
+        ? onDisk.find((d) => d.kind === e.kind && normalizeTitle(d.title) === key && !d.supersededBy && d.root === e.root)
+        : undefined;
+      if (twin) {
+        renamed.set(e.id, twin.id);
+        if (e.source !== 'builtin') folded.push([twin, e]);
+        continue;
+      }
+      seq += 1;
+      renamed.set(e.id, `m${seq}`);
+      fresh.push(e);
+    }
+    for (const [twin, e] of folded) {
+      twin.confirms += e.confirms;
+      twin.seenAt = Math.max(twin.seenAt, e.seenAt);
+      if (e.used) twin.used = (twin.used ?? 0) + e.used;
+      if (e.helped) twin.helped = (twin.helped ?? 0) + e.helped;
+      if (e.misled) twin.misled = (twin.misled ?? 0) + e.misled;
+      if (e.outcome) twin.outcome = e.outcome;
+      if (betterDetail(e.detail, twin.detail)) twin.detail = e.detail;
+      for (const t of e.tags) if (!twin.tags.includes(t)) twin.tags.push(t);
+      if (twin.supersedes === undefined && e.supersedes !== undefined) twin.supersedes = renamed.get(e.supersedes) ?? e.supersedes;
+    }
+    const mine = fresh.map((e) => ({
       ...e,
       id: renamed.get(e.id)!,
       ...(e.supersedes !== undefined ? { supersedes: renamed.get(e.supersedes) ?? e.supersedes } : {}),
@@ -317,6 +410,7 @@ export class Memory {
     this.#unreadable = undefined;
     this.#era = {};
     this.#waiting = [];
+    this.#gone = new Set();
     return true;
   }
 
@@ -333,12 +427,28 @@ export class Memory {
     try {
       const now = parseEntries(await this.#readRetrying(this.#path));
       this.#kept = now.kept;
+      // 戻した分（restore で外した題）は、手元に無いので足し戻さない。手元で忘れた分は手元の Set に在る
+      for (const d of now.declined) if (!this.#undeclined.has(d)) this.#declined.add(d);
       this.#seq = Math.max(this.#seq, now.keptSeq);
+      /*
+       * **手元が知らない覚えを、ファイルから消さない。**退けていた行を動いている間に手で直すと、その行は退けた行（kept）から
+       * 外れて覚えの側へ移る。手元の覚えだけを書いていたので、直した行が次の保存で消えていた。手元で外した番号は足し戻さない。
+       */
+      const mine = new Set(this.#entries.map((e) => e.id));
+      const foreign = now.entries.filter((e) => !mine.has(e.id) && !this.#gone.has(e.id));
+      if (foreign.length > 0) {
+        this.#entries = [...this.#entries, ...foreign].sort((a, b) => a.at - b.at);
+        this.#seq = Math.max(this.#seq, maxSeq(foreign));
+      }
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') this.#kept = [];
       // ほかの読み失敗は、読み込んだときの形のまま書く（読めないのを「退けた行が無い」と取り違えて消さない）。
     }
-    const body = [...this.#entries.map((e) => JSON.stringify(e)), ...this.#kept].join('\n') + '\n';
+    const body = [
+      ...this.#entries.map((e) => JSON.stringify(e)),
+      ...[...this.#declined].map((d) => JSON.stringify({ declined: d })),
+      ...this.#kept,
+    ].join('\n') + '\n';
     try {
       await mkdir(dirname(this.#path), { recursive: true });
       await this.#write(this.#path, body);
@@ -361,14 +471,20 @@ export class Memory {
     outcome?: 'worked' | 'failed';
     source?: string;
     supersedes?: string;
+    root?: string;
     now?: number;
   }): RememberResult {
     const now = input.now ?? Date.now();
     const title = input.title.trim();
     const key = normalizeTitle(title);
+    const root = input.root !== undefined ? placeKey(input.root) : undefined;
 
+    /*
+     * 別の作業場で覚えた同じ題は、別の覚え（「テストを直して」は作業場ごとに別の話）。作業場の無い古い覚えにも畳まない
+     * （畳むと作業場が付かないまま、別の作業場で起きたことが混ざり続ける）
+     */
     const existing = this.#entries.find(
-      (e) => e.kind === input.kind && normalizeTitle(e.title) === key && !e.supersededBy,
+      (e) => e.kind === input.kind && normalizeTitle(e.title) === key && !e.supersededBy && e.root === root,
     );
 
     if (existing) {
@@ -398,6 +514,7 @@ export class Memory {
       outcome: input.outcome,
       source: input.source,
       supersedes: input.supersedes,
+      ...(root !== undefined ? { root } : {}),
     };
 
     // 決め直しは消さずに繋ぐ。なぜ変えたのかを失わないため。
@@ -452,6 +569,8 @@ export class Memory {
   }
 
   recall(query: string, opts: RecallOptions = {}): MemoryEntry[] {
+    // 作業場は鍵に揃えて比べる（覚えるときと同じ `placeKey`）
+    const here = opts.root !== undefined ? placeKey(opts.root) : undefined;
     const now = Date.now();
     const q = new Set(tokenize(query));
     const limit = opts.limit ?? 8;
@@ -474,6 +593,7 @@ export class Memory {
     const scored = this.#entries
       .filter((e) => (opts.includeSuperseded ? true : !e.supersededBy))
       .filter((e) => (opts.kinds ? opts.kinds.includes(e.kind) : true))
+      .filter((e) => !here || !e.root || e.root === here || !boundToPlace(e))
       .map((e) => {
         // 触ったものも語に割る。`src/auth.ts` を丸ごと一語で持つと、
         // 「src/auth.ts を直す」と書いても重ならない（区切りで割れるため）。
@@ -558,8 +678,8 @@ export class Memory {
    * 同じことを前に試して駄目だったか。
    * これを見ずに始めるから、同じ失敗を繰り返す。
    */
-  failedBefore(approach: string, limit = 3): MemoryEntry[] {
-    return this.recall(approach, { kinds: ['attempt', 'incident'], limit: limit * 3 })
+  failedBefore(approach: string, limit = 3, root?: string): MemoryEntry[] {
+    return this.recall(approach, { kinds: ['attempt', 'incident'], limit: limit * 3, ...(root ? { root } : {}) })
       .filter((e) => e.outcome !== 'worked')
       .slice(0, limit);
   }
@@ -584,6 +704,12 @@ export class Memory {
     const entry = this.#entries.find((e) => e.id === id);
     if (!entry) return undefined;
     this.#entries = this.#entries.filter((e) => e !== entry);
+    this.#gone.add(id);
+    if (entry.source === 'builtin') {
+      const key = normalizeTitle(entry.title);
+      this.#declined.add(key);
+      this.#undeclined.delete(key);
+    }
     // 繋がりも切っておく。消した先を指したままにすると、履歴が辿れなくなる。
     const links: Forgotten['links'] = [];
     for (const e of this.#entries) {
@@ -632,6 +758,8 @@ export class Memory {
       if (!e) this.#waiting.push({ ...link, to: entry.id });
       else if (e[link.field] === undefined) e[link.field] = entry.id;
     }
+    if (entry.source === 'builtin' && this.#declined.delete(key)) this.#undeclined.add(key);
+    this.#gone.delete(entry.id);
     const at = this.#entries.findIndex((e) => e.at > entry.at);
     if (at < 0) this.#entries.push(entry); else this.#entries.splice(at, 0, entry);
     this.#dirty = true;
@@ -656,7 +784,7 @@ export class Memory {
       .map((e) => normalizeTitle(e.title)));
     let added = 0;
     for (const l of BUILTIN_LESSONS) {
-      if (have.has(normalizeTitle(l.title))) continue;
+      if (have.has(normalizeTitle(l.title)) || this.#declined.has(normalizeTitle(l.title))) continue;
       this.remember({
         kind: 'displeasure',
         title: l.title,
@@ -698,6 +826,7 @@ export class Memory {
     if (betterDetail(entry.detail, other.detail)) other.detail = entry.detail;
     for (const t of entry.tags) if (!other.tags.includes(t)) other.tags.push(t);
     this.#entries = this.#entries.filter((e) => e.id !== id);
+    this.#gone.add(id);
     this.#dirty = true;
     return other;
   }
@@ -762,6 +891,7 @@ export class Memory {
 
     const room = Math.max(0, max - keep.length);
     const dropped = rest.length - Math.min(rest.length, room);
+    for (const e of rest.slice(room)) this.#gone.add(e.id);
     this.#entries = [...keep, ...rest.slice(0, room)].sort((a, b) => a.at - b.at);
     this.#dirty = true;
     return dropped;
@@ -804,7 +934,8 @@ export function formatRecall(entries: MemoryEntry[]): string {
     // 確度を明示する。一度きりの話を事実として扱わせないため。
     const trust = e.confirms >= 3 ? '確か' : e.confirms === 2 ? 'おそらく' : '一度だけ';
     const mark = e.outcome === 'failed' ? '（失敗した）' : e.outcome === 'worked' ? '（うまくいった）' : '';
-    lines.push(`  [${KIND_LABEL[e.kind]}/${trust}] ${e.title}${mark}`);
+    // 題も一行に切る（前に長い題で覚えたもの・添付だけを送った回の題が、丸ごと依頼へ入らないように）
+    lines.push(`  [${KIND_LABEL[e.kind]}/${trust}] ${e.title.split('\n')[0]!.slice(0, 160)}${mark}`);
     if (e.detail) lines.push(`      ${e.detail.split('\n')[0]!.slice(0, 160)}`);
   }
   return lines.join('\n');
@@ -847,6 +978,11 @@ export function carriesFar(e: Pick<MemoryEntry, 'kind' | 'outcome'>): boolean {
   return e.kind === 'displeasure' || e.kind === 'incident' || e.outcome === 'failed';
 }
 
+/** 場に依る覚え（作業場をまたいで持ち出さない）。決めたこと・好み・嫌がられたことは、どの作業場でも効く。 */
+function boundToPlace(e: Pick<MemoryEntry, 'kind'>): boolean {
+  return e.kind === 'attempt' || e.kind === 'fact' || e.kind === 'incident';
+}
+
 /**
  * 近くでしか効かないもの。
  *
@@ -885,9 +1021,10 @@ function isEntry(e: unknown): e is MemoryEntry {
  * 壊れた行・形の違う行は、思い出す側には渡さず（止まるため）、元の文のまま `kept` に分ける（保存で書き戻す）。
  * `keptSeq` は分けた行が持つ番号のいちばん大きいもの（直して戻されたときに、新しく配る番号とぶつけない）。
  */
-function parseEntries(raw: string): { entries: MemoryEntry[]; kept: string[]; keptSeq: number } {
+function parseEntries(raw: string): { entries: MemoryEntry[]; kept: string[]; keptSeq: number; declined: string[] } {
   const entries: MemoryEntry[] = [];
   const kept: string[] = [];
+  const declined: string[] = [];
   let keptSeq = 0;
   // 先頭の BOM（古いメモ帳で直すと付く）を外す。付いたままだと一行目が読めず、退けた行として残り続ける。
   for (const line of raw.replace(/^\uFEFF/, '').split('\n')) {
@@ -896,11 +1033,17 @@ function parseEntries(raw: string): { entries: MemoryEntry[]; kept: string[]; ke
     let value: unknown;
     try { value = JSON.parse(line); } catch { value = undefined; }
     if (isEntry(value)) { entries.push(value); continue; }
+    if (isDeclined(value)) { declined.push(value.declined); continue; }
     kept.push(line.replace(/\r$/, ''));
     // 番号を拾う（読めない行・二件がくっついた行からも）。直されて戻ってきたときに、同じ番号を配らない。
     for (const n of line.matchAll(/"id"\s*:\s*"m(\d+)"/g)) keptSeq = Math.max(keptSeq, seqOf(n[1]!));
   }
-  return { entries, kept, keptSeq };
+  return { entries, kept, keptSeq, declined };
+}
+
+/** 忘れた最初からの覚えの記録（`{"declined":"…"}`）。番号を持たない。 */
+function isDeclined(v: unknown): v is { declined: string } {
+  return typeof v === 'object' && v !== null && !('id' in v) && typeof (v as { declined?: unknown }).declined === 'string';
 }
 
 /**

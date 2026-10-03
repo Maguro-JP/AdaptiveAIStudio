@@ -114,6 +114,8 @@ export class AnthropicProvider implements ChatProvider {
     let finishReason: 'stop' | 'length' | 'toolCalls' | 'unknown' = 'unknown';
     // 組み立て中のツールの呼び出し（ブロックの番号ごと）。引数は JSON の断片で届くので、ブロックが閉じるまで溜める
     const building = new Map<number, { id: string; name: string; json: string }>();
+    // 終わりの合図（message_stop）を受け取ったか。受け取らずに流れが閉じたら、途中で切れた
+    let stopped = false;
 
     try {
       const stream = (await this.#api()).messages.stream(
@@ -149,6 +151,8 @@ export class AnthropicProvider implements ChatProvider {
           yield { type: 'toolCall', call: { id: b.id, name: b.name, args } };
         } else if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
           yield { type: 'text', delta: ev.delta.text };
+        } else if (ev.type === 'message_stop') {
+          stopped = true;
         } else if (ev.type === 'message_delta') {
           if (ev.delta.stop_reason === 'end_turn') finishReason = 'stop';
           else if (ev.delta.stop_reason === 'max_tokens') finishReason = 'length';
@@ -164,6 +168,13 @@ export class AnthropicProvider implements ChatProvider {
       }
     } catch (e) {
       throw this.#normalize(e, signal);
+    }
+    // **終わりの合図が無いまま閉じたものを、言い終えたことにしない。**途中までの文が完了として残る
+    if (!stopped && !signal.aborted) {
+      throw new ProviderError({
+        kind: 'unavailable', providerId: this.id,
+        message: `${this.id}: 返事が、終わりの合図の無いまま切れました`,
+      });
     }
 
     yield { type: 'done', finishReason: signal.aborted ? 'canceled' : finishReason };
