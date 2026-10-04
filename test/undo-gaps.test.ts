@@ -188,3 +188,34 @@ describe('綴りの違いと巻き戻しの範囲', () => {
     void root;
   });
 });
+
+describe('大文字小文字を区別するかは、作業場ごとに確かめる', () => {
+  /** この機械の一時フォルダが大文字小文字を区別するか（実際に作って確かめる）。 */
+  async function sensitive(dir: string): Promise<boolean> {
+    const { existsSync } = await import('node:fs');
+    await writeFile(join(dir, 'Probe.txt'), 'x');
+    return !existsSync(join(dir, 'pROBE.txt'));
+  }
+
+  test('**foldsCase は、実際の作業場の振る舞いと一致する**', async () => {
+    const { foldsCase } = await import('../src/harness/put-back.ts');
+    const { root } = await setup();
+    assert.equal(foldsCase(root), !(await sensitive(root)));
+  });
+
+  test('**大文字小文字を区別する作業場では、綴りの大小だけ違う別のファイルを一つにまとめない**', async (t) => {
+    const { root, store } = await setup();
+    if (!(await sensitive(root))) { t.skip('この機械の一時フォルダは大文字小文字を区別しない'); return; }
+    await writeFile(join(root, 'X.h'), '大\n');
+    await writeFile(join(root, 'x.h'), '小\n');
+    await store.begin('両方書く');
+    store.capture('X.h', '大\n');
+    store.capture('x.h', '小\n');
+    await writeFile(join(root, 'X.h'), 'AI-大\n');
+    await writeFile(join(root, 'x.h'), 'AI-小\n');
+    const id = (await store.end())!.id;
+    await store.restore(id);
+    assert.equal(await readFile(join(root, 'X.h'), 'utf8'), '大\n');
+    assert.equal(await readFile(join(root, 'x.h'), 'utf8'), '小\n', '片方の中身でもう片方を書き戻した');
+  });
+});

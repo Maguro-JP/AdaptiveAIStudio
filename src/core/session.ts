@@ -917,7 +917,11 @@ export class Session {
         } else if (ev.type === 'taskSkip') yield { type: 'taskSkip', taskId: ev.taskId, reason: ev.reason };
         else if (ev.type === 'handoff') yield { type: 'handoff', taskId: ev.taskId, from: ev.from };
         else if (ev.type === 'running') yield { type: 'running', taskIds: ev.taskIds };
-        else if (ev.type === 'agent' && ev.event.type === 'toolEnd') {
+        // 走り始めた時点で数える（終わりの知らせが来ずに終わる回でも、走ったものは変えたかもしれない）
+        else if (ev.type === 'agent' && ev.event.type === 'toolStart' && (isExternalTool(ev.event.call.name) || ev.event.call.name === 'run_command')) {
+          ranOutside = true;
+        }
+        if (ev.type === 'agent' && ev.event.type === 'toolEnd') {
           if (isExternalTool(ev.event.call.name) || ev.event.call.name === 'run_command') ranOutside = true;
           if (!ev.event.isError && mayChangeFiles(ev.event.call.name)) {
             this.#prefetch.invalidate();
@@ -1979,7 +1983,10 @@ export class Session {
         // 書けた道・外のツールが変えた道だけを当てる（書く手前に記録したが書かなかった道まで書き戻し、その間に外で直した分を消していた）
         const r = await checkpoint.restoreAll(changedHere);
         const notRestored = [...new Set([...unrecorded, ...r.failed])].sort();
-        yield { type: 'rolledBack', paths: r.restored, ...(notRestored.length > 0 ? { notRestored } : {}) };
+        // 当てる先が無かった（書く手前に記録したが、どれも書かなかった）回は、空の「巻き戻しました」を出さない
+        if (r.restored.length > 0 || notRestored.length > 0) {
+          yield { type: 'rolledBack', paths: r.restored, ...(notRestored.length > 0 ? { notRestored } : {}) };
+        }
         /*
          * 作業場は回の前に戻った（戻せなかった分を除く）。次の回の「前」も、回の前のもの。
          * この場所で書く手前に測ったもの（`baseline`）か、外のツールだけの回で引いた覚え（`keptBefore`）。

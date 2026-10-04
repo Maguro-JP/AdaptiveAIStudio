@@ -9,7 +9,7 @@
  * 未コミット状態でも巻き戻せるようにする補助。
  */
 import { safeResolve, toDisplayPath } from '../agent/tools/paths.ts';
-import { putBack, putBackOrder, contentOf, readPrior, pathKey, type FileContent } from './put-back.ts';
+import { putBack, putBackOrder, contentOf, readPrior, pathKey, foldsCase, type FileContent } from './put-back.ts';
 
 interface Saved {
   path: string;
@@ -30,6 +30,13 @@ export class Checkpoint {
     this.#root = root;
   }
 
+  #fold: boolean | undefined;
+  /** 道の鍵。作業場が大文字小文字を区別しないかは、作業場ごとに確かめた値を使う（`foldsCase`）。 */
+  #key(shown: string): string {
+    this.#fold ??= foldsCase(this.#root);
+    return pathKey(shown, undefined, this.#fold);
+  }
+
   get size(): number {
     return this.#saved.size;
   }
@@ -45,7 +52,7 @@ export class Checkpoint {
     if (!abs) return;
     const shown = toDisplayPath(this.#root, abs);
     // 大文字小文字・末尾の点だけ違う綴りも同じファイルとして扱う（Windows・macOS。別に記録すると、二つ目は一つ目が書いた後の中身になる）
-    const key = pathKey(shown);
+    const key = this.#key(shown);
     if (this.#saved.has(key) || this.#unrecorded.has(key)) return;
     // バイト列で読む。二進を utf8 として読むと、戻すときに別の中身を書く。
     let bytes: Buffer | undefined;
@@ -72,7 +79,7 @@ export class Checkpoint {
   /** 記録に使う鍵（綴りをそろえた道）。作業場の外なら undefined。 */
   keyOf(relPath: string): string | undefined {
     const abs = safeResolve(this.#root, relPath);
-    return abs ? pathKey(toDisplayPath(this.#root, abs)) : undefined;
+    return abs ? this.#key(toDisplayPath(this.#root, abs)) : undefined;
   }
 
   /**
@@ -87,7 +94,7 @@ export class Checkpoint {
     const abs = safeResolve(this.#root, relPath);
     if (!abs) return;
     const shown = toDisplayPath(this.#root, abs);
-    const key = pathKey(shown);
+    const key = this.#key(shown);
     if (this.#saved.has(key) || this.#unrecorded.has(key)) return;
     this.#saved.set(key, { path: shown, content });
   }

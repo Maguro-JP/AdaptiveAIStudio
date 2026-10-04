@@ -19,7 +19,7 @@ import { statSync, createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { safeResolve } from '../agent/tools/paths.ts';
-import { putBack, putBackOrder, contentOf, contentBytes, isAbsent, pathKey, type FileContent } from '../harness/put-back.ts';
+import { putBack, putBackOrder, contentOf, contentBytes, isAbsent, pathKey, foldsCase, type FileContent } from '../harness/put-back.ts';
 
 export { pathKey };
 
@@ -281,6 +281,13 @@ export class UndoStore {
     this.#dir = dir;
   }
 
+  #fold: boolean | undefined;
+  /** 道の鍵。作業場が大文字小文字を区別しないかは、作業場ごとに確かめた値を使う（`foldsCase`）。 */
+  #key(relPath: string): string {
+    this.#fold ??= foldsCase(this.#root);
+    return pathKey(relPath, undefined, this.#fold);
+  }
+
   /**
    * 一往復を始める。
    *
@@ -319,7 +326,7 @@ export class UndoStore {
     const open = this.#open;
     // 記録できなかった道は、後の書き込みで記録し直さない（そのときの中身は途中の姿。「戻らない」と言ったのに、押すと途中の姿に書き換わった）
     // 鍵は綴りをそろえて使う（`src/Foo.ts` と `src/foo.ts` を別に記録すると、二つ目は一つ目が書いた後の中身になり、戻すと途中の姿になる）
-    if (!open || open.files.has(pathKey(relPath)) || this.#skippedHas(relPath)) return;
+    if (!open || open.files.has(this.#key(relPath)) || this.#skippedHas(relPath)) return;
     const size = contentBytes(previous);
     if (open.bytes + size > MAX_POINT_BYTES) {
       open.skipped.push(relPath);
@@ -327,18 +334,18 @@ export class UndoStore {
       return;
     }
     open.bytes += size;
-    open.files.set(pathKey(relPath), { path: relPath, content: previous, ...this.#modeOf(relPath, previous) });
+    open.files.set(this.#key(relPath), { path: relPath, content: previous, ...this.#modeOf(relPath, previous) });
     this.#note(relPath);
   }
 
   /** この回で前の中身を記録した道か。 */
   has(relPath: string): boolean {
-    return this.#open?.files.has(pathKey(relPath)) ?? false;
+    return this.#open?.files.has(this.#key(relPath)) ?? false;
   }
 
   #skippedHas(relPath: string): boolean {
-    const key = pathKey(relPath);
-    return this.#open?.skipped.some((p) => pathKey(p) === key) ?? false;
+    const key = this.#key(relPath);
+    return this.#open?.skipped.some((p) => this.#key(p) === key) ?? false;
   }
 
   /** 書く前の権限。在るファイルだけ。取れなければ持たない（戻すときに今の権限のまま）。 */
@@ -359,7 +366,7 @@ export class UndoStore {
   replace(relPath: string, previous: FileContent | undefined): void {
     const open = this.#open;
     if (!open) return;
-    const old = open.files.get(pathKey(relPath));
+    const old = open.files.get(this.#key(relPath));
     const size = contentBytes(previous);
     const freed = contentBytes(old?.content);
     if (open.bytes - freed + size > MAX_POINT_BYTES) {
@@ -368,7 +375,7 @@ export class UndoStore {
     }
     open.bytes += size - freed;
     // 書く手前に取った権限は残す（前後比べで中身だけ入れ替えると、消したファイルを作り直すときに権限が落ちた）
-    open.files.set(pathKey(relPath), { path: old?.path ?? relPath, content: previous, ...(old?.mode !== undefined && previous !== undefined ? { mode: old.mode } : {}) });
+    open.files.set(this.#key(relPath), { path: old?.path ?? relPath, content: previous, ...(old?.mode !== undefined && previous !== undefined ? { mode: old.mode } : {}) });
     this.#note(relPath);
   }
 
@@ -379,10 +386,10 @@ export class UndoStore {
   forget(relPath: string): void {
     const open = this.#open;
     if (!open) return;
-    const old = open.files.get(pathKey(relPath));
+    const old = open.files.get(this.#key(relPath));
     if (old) {
       open.bytes -= contentBytes(old.content);
-      open.files.delete(pathKey(relPath));
+      open.files.delete(this.#key(relPath));
     }
     if (!this.#skippedHas(relPath)) open.skipped.push(relPath);
     this.#note(relPath);
@@ -396,7 +403,7 @@ export class UndoStore {
    */
   skip(relPath: string): void {
     const open = this.#open;
-    if (!open || open.files.has(pathKey(relPath)) || this.#skippedHas(relPath)) return;
+    if (!open || open.files.has(this.#key(relPath)) || this.#skippedHas(relPath)) return;
     open.skipped.push(relPath);
     this.#note(relPath);
   }
@@ -600,7 +607,7 @@ export class UndoStore {
     if (!opts.force) {
       const seen = new Set<string>();
       // 大文字小文字を区別しない OS では、綴りの大小だけ違う道を同じものとして扱う（違うものとして古い回とも比べ、必ず断っていた）
-      const fold = (p: string) => pathKey(p);
+      const fold = (p: string) => this.#key(p);
       const changedOutside: string[] = [];
       for (const { stored } of read) {
         // 新しい回で記録できなかった道（大きすぎる・前後比べで捨てた）も、その回が触った道。古い回の書き終えた姿とは比べない
@@ -622,11 +629,19 @@ export class UndoStore {
       if (changedOutside.length > 0) throw new UndoConflict(changedOutside);
     }
     // 新しい方から当てる。古い控えが後に来るので、いちばん古い姿が残る。
+    /*
+     * 道ごとの持ち物は、綴りをそろえた鍵で持つ（戻り先ごとに綴りが違う同じファイル——AI が打った `src/Foo.ts` と git の `src/foo.ts`——を
+     * 別の道として数えると、戻せた道を縮めた戻り先に残し、もう一度押すと途中の姿で上書きした）。言うときは最初の綴り
+     */
+    const spelled = new Map<string, string>();
     for (const { id: pointId, stored } of read) {
       const point = { id: pointId };
-      for (const saved of putBackOrder((stored.files ?? []).map(fromStored))) {
-        const abs = safeResolve(this.#root, saved.path);
+      for (const raw of putBackOrder((stored.files ?? []).map(fromStored))) {
+        const abs = safeResolve(this.#root, raw.path);
         if (!abs) continue;
+        const key = this.#key(raw.path);
+        if (!spelled.has(key)) spelled.set(key, raw.path);
+        const saved = { ...raw, path: spelled.get(key)! };
         if (!was.has(saved.path)) was.set(saved.path, await readText(abs));
         // リンクは辿らず、フォルダには書かず、戻せなければ飛ばす（1件戻せなくても他は戻す）。
         const r = await putBack(this.#root, saved.path, saved.content);
@@ -649,7 +664,8 @@ export class UndoStore {
     const unshrunk: string[] = [];
     for (const { id: pointId, stored } of read) {
       const file = join(this.#dir, `${pointId}.json`);
-      const keep = (stored.files ?? []).filter((f) => last.get(f.path) === 'failed' && oldest.get(f.path) === pointId);
+      const same = (p: string) => spelled.get(this.#key(p)) ?? p;
+      const keep = (stored.files ?? []).filter((f) => last.get(same(f.path)) === 'failed' && oldest.get(same(f.path)) === pointId);
       // 片づけられなかったら、そう返す（もう無いなら片づいている）
       if (keep.length === 0) {
         if (!await unlink(file).then(() => true, (e: unknown) => isAbsent(e))) leftover.push(pointId);
