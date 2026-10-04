@@ -34,7 +34,7 @@ import { checkUpdate, applyUpdate, describeUpdate } from '../core/update.ts';
 import { formatReport as formatAcceptance } from '../agent/acceptance.ts';
 import { formatEntry } from '../memory/memory.ts';
 import { Session } from '../core/session.ts';
-import { runPanel, mergeFindings } from '../agent/panel.ts';
+import { runPanel, mergeFindings, panelVerdict } from '../agent/panel.ts';
 import { formatIdleStats } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES } from '../harness/idle-modes.ts';
 import { formatDuties } from '../harness/duties.ts';
@@ -213,17 +213,17 @@ async function main(): Promise<void> {
 
     try {
       let next = await gen.next();
+      let failed = 0;
       while (!next.done) {
         const ev = next.value;
         if (ev.type === 'assigned') console.log(c.dim(`  · ${ev.roleName} が確認中`));
         else if (ev.type === 'noFinding') console.log(c.dim(`    ${ev.roleName}: 問題なし`));
-        else if (ev.type === 'failed') console.log(c.red(`    ${ev.roleId}: ${ev.error}`));
+        else if (ev.type === 'failed') { failed += 1; console.log(c.red(`    ${ev.roleId}: ${ev.error}`)); }
         next = await gen.next();
       }
       const merged = mergeFindings(next.value);
-      if (merged.length === 0) {
-        console.log(c.green('  全員が問題なしと判断しました。\n'));
-      }
+      const verdict = panelVerdict(merged.length, failed, members.length);
+      if (verdict) console.log(failed > 0 ? c.yellow(`  ${verdict}\n`) : c.green(`  ${verdict}\n`));
       const registered: { roleName: string; title: string; id: () => string }[] = [];
       for (const f of merged) {
         const also = f.alsoBy.length > 0 ? c.dim(`（${f.alsoBy.join('・')}も同意）`) : '';

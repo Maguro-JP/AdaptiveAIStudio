@@ -57,6 +57,10 @@ export async function decompose(
       opts.signal,
     )) {
       if (ev.type === 'text') text += ev.delta;
+      // 途中で落ちた・上限で切れた返事は、最後の段が切れている（「src/b.ts の bar を」のまま段にしていた）。
+      // 投げずに出来事で知らせてくるので、ここで見る。割れないことは、進めない理由にならない
+      if (ev.type === 'failed') return [];
+      if (ev.type === 'done' && ev.finishReason === 'length') return [];
     }
   } catch {
     return []; // 割れないことは、進めない理由にならない
@@ -75,17 +79,27 @@ export function readSteps(text: string, max: number): string[] {
   for (const raw of text.split('\n')) {
     let line = raw.trim();
     if (line.length === 0) continue;
-    // 見出しや前置きは落とす。
-    if (/^(#|```|以下|まず以下|手順|段取り|計画)/.test(line)) continue;
-    // 番号・記号を落とす（付けるなと言っても付けてくる）。
-    line = line.replace(/^[-*・>]+\s*/, '').replace(/^\(?\d+[.)、）]\s*/, '').trim();
+    if (/^```/.test(line)) continue;
+    // 番号・記号と、行を囲む強調（`**手順:**`）を落とす（付けるなと言っても付けてくる）。
+    // 囲んでいない `**`・`__` は残す（`src/**/*.ts`・`__init__.py`・`__tests__/` は道の一部）
+    line = line.replace(/^[-*・>]+\s*/, '').replace(/^\(?\d+[.)、）]\s*/, '').replace(/^(\*\*|__)(.+)\1$/, '$2').trim();
+    // 見出し・導入・結びは落とす。記号を落とした後に見る（前に見ていたので、`- 以下の順で` や `**手順:**` を段にしていた）。
+    // 見出しらしい形だけを見る（「計画ファイルを読む」「これでビルドが通るか確かめる」「以上の値を弾く」は段）
+    const bare = line.replace(/\*\*|__/g, '').trim();
+    if (/^#/.test(bare)) continue;
+    if (/^(手順|段取り|計画)\s*[:：]?\s*$/.test(bare)) continue;
+    if (/^(まず)?以下の?(順|手順|とおり|通り|ように|段)/.test(bare)) continue;
+    if (/^(以上|これで(以上|終わり|完了))(です|になります|となります)?。?$/.test(bare)) continue;
     // 終わりの合図が混ざってくることがある。段ではない。
     if (line === 'TASK_DONE') continue;
     if (line.length < MIN_CHARS || line.length > MAX_CHARS) continue;
     if (out.includes(line)) continue; // 同じ段を二度出してくる
     out.push(line);
-    if (out.length >= max) break;
   }
+  // 決めた数は目安。倍を超えて返ってきたら、割らずに進ませる。頭から拾って残りを捨てると、捨てた段は一度も行われないまま
+  // 依頼を「済んだ」で閉じていた（段の頼み文は「ほかの段には手を出さない」なので、誰も拾わない）。
+  // 少し超えたぶんは全部受ける（3 段に「なお、…」の一行が付いただけで割らなくなると、割り直しの段を塞ぐことになる）
+  if (out.length > max * 2) return [];
   // 1段しか拾えないなら、割れていないのと同じ。**割らずに進ませる。**
   return out.length >= 2 ? out : [];
 }

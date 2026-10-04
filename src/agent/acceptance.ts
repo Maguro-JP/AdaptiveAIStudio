@@ -211,6 +211,10 @@ export function changedBetween(before: string[], after: string[]): string[] {
  * 残すと、`sub/` という無いファイルを「計画に無いファイル」として挙げ、人の判断待ちにする。書いたファイルの無いフォルダは残す
  * （計画の外で作られたもの）。
  */
-export function dropCoveredDirs(changed: string[], written: string[]): string[] {
-  return changed.filter((p) => !(p.endsWith('/') && written.some((w) => w.startsWith(p))));
+export function dropCoveredDirs(changed: string[], written: string[], outside: Iterable<string> = []): string[] {
+  // 書いたファイルの外にも、そのフォルダの下で変わったもの（scaffold が作ったもの）があれば、外さない。
+  // 外していたので、新しいフォルダの中の計画外のファイルが、受け入れの報告から消えていた
+  const wrote = new Set(written);
+  const others = [...outside].filter((o) => !wrote.has(o));
+  return changed.filter((p) => !(p.endsWith('/') && written.some((w) => w.startsWith(p)) && !others.some((o) => o.startsWith(p))));
 }

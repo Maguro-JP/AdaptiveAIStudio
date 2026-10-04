@@ -60,7 +60,7 @@ export async function findLeads(opts: LeadOptions): Promise<Lead[]> {
   // 読めなかったテストファイルも「在る」側に数える（中身が読めないだけで、無いのではない）
   const testedBasenames = new Set(
     [...(tests?.files.keys() ?? []), ...[...(tests?.unreadable ?? [])].filter((f) => !f.endsWith('/'))]
-      .map((f) => baseName(f).replace(/\.(test|spec)$/, '')),
+      .map((f) => baseName(f).replace(/[._](test|spec)$/, '').replace(/^test_/, '')),
   );
   // 数え直しそのものが落ちた・中を見られないフォルダがある: どのテストが在るか分からない。「見当たりません」と言わない
   // （言うと、在るテストの二つ目を書かせにいく）
@@ -178,6 +178,21 @@ export function investigationPrompt(lead: Lead): string {
 }
 
 /** モデルの出力から提案を取り出す。形式に従っていなければ採用しない。 */
+/**
+ * 見回り（recon）が調べ切らずに終わったか（理由を返す）。落ちた・止められた・空の回は、呼ぶ側が先に見ている。
+ *
+ * ターンの上限で終わった回は、調べ切っていない。手が止まった回（`noProgress`）でも、PROPOSAL を言い終えていれば採る
+ * （小さいモデルは終わりの合図を書かずに止まりがち。合議 `panel.ts` と同じ扱い）。出力の上限で切れた回の PROPOSAL は、
+ * 途中までなので採らない。
+ */
+export function reconCutShort(finishedWith: string | undefined, detail: string | undefined, text: string): string | undefined {
+  if (finishedWith === undefined || finishedWith === 'completed') return undefined;
+  if (finishedWith === 'maxTurns') return '調べ切れませんでした（ターンの上限）';
+  const cut = /上限で切れ/.test(detail ?? '');
+  if (!cut && parseProposal(text) !== undefined) return undefined;
+  return cut ? '調べ切れませんでした（出力の上限で切れました）' : '調べ切れませんでした（途中で止まりました）';
+}
+
 export function parseProposal(text: string): {
   title: string; rationale: string; action: string;
 } | undefined {
