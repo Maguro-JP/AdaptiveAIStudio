@@ -70,7 +70,7 @@ export function createRunCommandTool(opts: {
       const approved = await ctx.approve({ kind: 'command', command });
       if (!approved) return fail(`利用者がコマンド実行を拒否しました: ${command}`);
 
-      return runShell(command, ctx.root, timeoutMs, ctx.signal, ctx.contextTokens);
+      return runShell(command, ctx.root, timeoutMs, ctx.signal, ctx.contextTokens, ctx.historyTokens);
     },
   };
 }
@@ -91,11 +91,12 @@ export function splitChain(command: string): string[] {
 async function runShell(
   command: string, cwd: string, timeoutMs: number, signal: AbortSignal,
   contextTokens?: number,
+  historyTokens?: number,
 ) {
   const r = await execCommand(command, cwd, timeoutMs, signal);
   if (r.aborted) return fail('中断されました。');
   // **窓から決める。**8000 字の決め打ちだと、狭い窓では出力だけで溢れる。
-  const room = contextTokens ? toolOutputBudget(contextTokens) : 8000;
+  const room = contextTokens ? toolOutputBudget(contextTokens, undefined, historyTokens) : 8000;
   if (r.timedOut) return fail(`タイムアウト (${timeoutMs / 1000}秒): ${command}\n${tailOf(r.output, room)}`);
   const body = `終了コード: ${r.code}\n${tailOf(r.output, room) || '(出力なし)'}`;
   return r.code === 0 ? ok(body) : { content: body, isError: true };

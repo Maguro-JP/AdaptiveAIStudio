@@ -26,6 +26,11 @@ export interface ProviderMessage {
   toolCalls?: ToolCall[];
   /** role === 'tool' のとき、どの呼び出しへの結果か */
   toolCallId?: string;
+  /**
+   * 依頼を回す側が足した押し戻し（「続きを書いて」「次の一手を」）。人の依頼ではない。
+   * コンテキストウィンドウに収めるとき、今の依頼と見なさない（押し戻しを守って、本物の依頼を落とさない）。送る形には載せない。
+   */
+  nudge?: boolean;
 }
 
 /** ツールの定義。JSON Schema はモデル側へそのまま渡す。 */

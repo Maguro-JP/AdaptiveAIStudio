@@ -1819,7 +1819,8 @@ export class Session {
         keep = false;
         const events: SessionEvent[] = [];
         const fix = async (feedback: string, sig: AbortSignal): Promise<void> => {
-          conv.history.push({ role: 'user', content: feedback });
+          // 差し戻しはハーネスが足したもので、人の依頼ではない（コンテキストウィンドウに収めるとき、今の依頼として守らせない）
+          conv.history.push({ role: 'user', content: feedback, nudge: true });
           for await (const ev of (await this.#agent({ chat, conv })).run(conv.history, sig)) {
             if (ev.type === 'thinking') events.push({ type: 'text', delta: ev.delta });
             else if (ev.type === 'salvaged') events.push({ type: 'salvaged', name: ev.name });
