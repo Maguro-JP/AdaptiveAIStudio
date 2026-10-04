@@ -8,7 +8,7 @@
  * 時刻（mtime）ではなく中身で見る。FAT や Z: のようなドライブでは時刻が粗く、変わっても同じに見えることがある。
  */
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import type { ToolCall } from '../providers/contract.ts';
 import { safeResolve } from '../agent/tools/paths.ts';
 
@@ -19,10 +19,30 @@ export async function fingerprint(root: string, path: string): Promise<string | 
   const abs = safeResolve(root, path);
   if (!abs) return undefined;
   try {
+    /*
+     * 普通のファイルで、大きすぎないものだけ読む。ツールが断る前（作業場の外・大きすぎる）にここが丸読みしていたので、
+     * `/dev/zero` へのリンクで止まらず、FIFO では書き手を待って永久に止まり、1.5GB のモデルも読み込んでいた
+     */
+    const info = await stat(abs);
+    if (!info.isFile() || info.size > FINGERPRINT_MAX_BYTES) return undefined;
     return createHash('sha256').update(await readFile(abs)).digest('hex');
   } catch {
     return undefined;
   }
+}
+
+/** 指紋を取る大きさの上限。これより大きいファイルは比べる材料にしない（read_file も一度に全部は返さない）。 */
+const FINGERPRINT_MAX_BYTES = 64 * 1024 * 1024;
+
+/** 失敗した書き込み（何も書いていない）。同じ内容の繰り返しとして数えない（「読み直してもう一度書いて」と言った後の出し直しを止めていた）。 */
+const failedWrites = new WeakSet<ToolCall>();
+
+export function markFailedWrite(call: ToolCall): void {
+  failedWrites.add(call);
+}
+
+export function isFailedWrite(call: ToolCall): boolean {
+  return failedWrites.has(call);
 }
 
 /** 呼び出しが見た中身の指紋を結び付ける。 */

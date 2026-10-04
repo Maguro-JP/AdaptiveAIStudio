@@ -320,6 +320,7 @@
 - 21 回目の不具合調査の 7 件（今の依頼・システムプロンプトの分・番号の重なり・まとめ返し・見積もり・止めたときの種別・停滞の秒数）
 - 22 回目の不具合調査の 6 件（呼び戻しの問い・形の違う行・別の作業場の同じ題・英字と仮名・書き足しの二重・空の会話）
 - 記憶の別プロセスの同時書き（錠・番号の付け直し・よそで消された覚えを戻さない）
+- 23 回目の不具合調査の 7 件（監査のトークン・BOM・失敗した書き込みの出し直し・普通のファイルでないもの・殻が組み替える綴り・外のツールの引数の上限・協議の道）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -11773,3 +11774,31 @@ write を持たせない」（`dropWriteIfOutbound`）は役職にだけ効か�
   古い版が読めなくなる）
 - 残っているところ: よそで消された覚えに手元で付けた点（使った・助かった）は、その覚えと一緒に捨てる
 触る場所: `src/memory/memory.ts`（`save`・`#saveLocked`・`#onDisk`・`sameness`）、`test/memory-cross-process.test.ts`
+
+## 2026-10-04  23 回目の不具合調査の 7 件（監査のトークン・BOM・失敗した書き込みの出し直し・普通のファイルでないもの・殻が組み替える綴り・外のツールの引数の上限・協議の道）
+
+ハーネス（`src/harness/`）とツールの本体（`src/agent/tools/`）を読むだけで調べ、7 件を直した。
+
+1. 監査の記録（`audit.jsonl`）に残す要約と理由から、トークンを伏せる（URL の利用者名とパスワード・よく知られた鍵の形・`--token x`）。理由は 400 字で切る。
+   `git clone https://u:ghp_…@…` の要約と、止めた理由の文（命令の全文）にトークンがそのまま残っていた
+2. write_file で元の BOM を残す。モデルは見えない U+FEFF を写さないので、BOM 付きの `.cmd` を全文で書き戻すと BOM が落ち、cmd.exe が CP932 として
+   読んで日本語の行が壊れていた（差分には見えない）
+3. 失敗した書き込み（何も書いていない）を「同じ内容の繰り返し」に数えない（`markFailedWrite`）。「待っている間に変わりました。読み直してもう一度
+   書いて」や EBUSY の後の出し直しは同じ引数になるのが普通で、それを止めていた
+4. 規則とハーネスが中身を見るときは、普通のファイルで大きすぎないものだけを読む（指紋は 64MB まで、規則の読みは `readRegularText`）。read_file も
+   普通のファイルでないものは読まない。ツールが断る前に `/dev/zero` へのリンクを丸読みして止まらず、FIFO では書き手を待って永久に止まっていた
+5. 危ない命令は、殻が綴りを組み替えた後の形でも照らす（`unshell`。cmd の `^`、sh の `\`・空の引用符・語の中の引用符）。変数で組んだ git の
+   サブコマンド（`git %X%push`・`git ${x:-push}`）と、命令を走らせる git の設定（`alias.*`・`core.hooksPath`・`core.fsmonitor`・`core.pager`・
+   `filter.*` など）の書き換えも止める
+6. 外のツールの引数を集めるとき、上限（200 個・深さ 5）で見切れたら断る。名前に置いた道（`{"files":{".env":"…"}}`）も集める。
+   見切れた残りを見ずに通していた
+7. 守りを左右するファイル（`src/harness/**`・`src/agent/tools/shell.ts`・`write-kind.ts`・`src/core/redact.ts`）も協議が要る道にする
+
+- 残っているところ:
+  - edit_file・write_file は、改行の混ざったファイルで、直していない行の改行まで多い方へ揃える（差分は LF に揃えて見せるので見えない）
+  - 打ち切ったときの巻き戻し（Checkpoint）は、フォルダへのリンク越しの別の綴りを別のファイルとして記録する
+  - Windows で作業場に置いた `git.cmd` が、許可した `git` として走りうる（確かめていない）
+  - 殻の組み替えは、ここに挙げた形しか揃えない（すり抜けは承認と、走らせた後の記録で拾う）
+触る場所: `src/harness/audit.ts`（`hidden`）、`src/agent/tools/fs.ts`（`commit` の BOM・read_file）、`src/harness/seen.ts`（`fingerprint`・`markFailedWrite`）、
+`src/harness/put-back.ts`（`readRegularText`）、`src/harness/builtin-rules.ts`（`unshell`・`gitDanger`・`collectStrings`）、`src/harness/deliberation.ts`、
+`test/harness-tools-gaps.test.ts`

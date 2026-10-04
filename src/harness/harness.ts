@@ -11,7 +11,7 @@ import type { ToolCall } from '../providers/contract.ts';
 import type { Tool, ToolContext, ToolResult } from '../agent/tools/types.ts';
 import { type Rule, type RuleContext, hasArg } from './rules.ts';
 import { AuditLog } from './audit.ts';
-import { fingerprint, markSeen, lastPrint } from './seen.ts';
+import { fingerprint, markSeen, lastPrint, markFailedWrite } from './seen.ts';
 import type { HarnessMetrics } from './metrics.ts';
 
 export interface HarnessOptions {
@@ -155,6 +155,7 @@ export class Harness {
          */
         const keep = (c: ToolCall): void => { history.push(c); if (taskHistory && taskHistory !== history) taskHistory.push(c); };
         if (!(result.isError && call.name === 'read_file')) keep(call);
+        if (result.isError && call.name !== 'read_file') markFailedWrite(call);
         else if (result.content.includes('は二進のファイルなので読めません')) keep(call);
         else if (result.content.includes('ファイルが大きすぎます')) {
           keep({ ...call, args: { ...(args as Record<string, unknown>), limit: 0 } });

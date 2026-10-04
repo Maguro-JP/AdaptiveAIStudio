@@ -5,13 +5,13 @@
  * プロンプトで禁じるのではなく、実行の手前で止める。
  */
 import { isWriteTool, isExternalTool, mayWriteFiles, plannedContent } from '../agent/tools/write-kind.ts';
-import { readFile, lstat } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import { relative, isAbsolute, dirname, join, sep } from 'node:path';
 import { existsSync } from 'node:fs';
 import { minimatch } from './glob.ts';
 import { safeResolve, canonicalRel } from '../agent/tools/paths.ts';
-import { isAbsent } from './put-back.ts';
-import { fingerprint, lastPrint } from './seen.ts';
+import { isAbsent, readRegularText } from './put-back.ts';
+import { fingerprint, lastPrint, isFailedWrite } from './seen.ts';
 import { isTestFile, countCases, countSkips, countFocus } from '../agent/test-patterns.ts';
 import { type Rule, type RuleContext, allow, deny, ok, argString, hasArg } from './rules.ts';
 import type { ToolCall } from '../providers/contract.ts';
@@ -69,8 +69,13 @@ export function protectedPaths(patterns: string[], opts: { nocase?: boolean; win
        * 引数の名前は相手が決めるので、`file` にも `target` にもなるし、
        * 入れ子にも入る。`path` だけを見ていると、名前を変えるだけで通る。
        */
-      const named = isExternalTool(call.name)
-        ? stringsIn(call.args)
+      const collected = isExternalTool(call.name) ? collectStrings(call.args) : undefined;
+      // 上限まで集めても見切れないなら、断る側に倒す（残りを見ずに通していたので、無関係な値を 200 個並べた後ろの `.env` が通った）
+      if (collected?.truncated) {
+        return deny('外のツールへの引数が多すぎる（または深すぎる）ので、守っているファイルに触れないかを確かめられません。引数を分けて呼んでください。');
+      }
+      const named = collected
+        ? collected.out
         : [argString(call, 'path')].filter((p): p is string => p !== undefined);
 
       for (const path of named) {
@@ -114,17 +119,25 @@ export function windowsName(path: string): string {
  *
  * 深さと数に上限を置く。上限が無いと、大きな引数一つで規則の側が止まる。
  */
-function stringsIn(args: unknown, depth = 0, out: string[] = []): string[] {
-  if (depth > 5 || out.length >= 200) return out;
-  if (typeof args === 'string') { out.push(args); return out; }
-  if (Array.isArray(args)) {
-    for (const v of args) stringsIn(v, depth + 1, out);
-    return out;
-  }
-  if (typeof args === 'object' && args !== null) {
-    for (const v of Object.values(args as Record<string, unknown>)) stringsIn(v, depth + 1, out);
-  }
-  return out;
+function collectStrings(args: unknown): { out: string[]; truncated: boolean } {
+  const out: string[] = [];
+  let truncated = false;
+  const walk = (v: unknown, depth: number): void => {
+    if (truncated) return;
+    if (depth > 5 || out.length >= 200) { truncated = true; return; }
+    if (typeof v === 'string') { out.push(v); return; }
+    if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
+    if (typeof v === 'object' && v !== null) {
+      // 道を値ではなく名前に置く形（`{"files":{".env":"…"}}`）もあるので、名前も集める
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+        if (out.length >= 200) { truncated = true; return; }
+        out.push(k);
+        walk(x, depth + 1);
+      }
+    }
+  };
+  walk(args, 0);
+  return { out, truncated };
 }
 
 /**
@@ -159,7 +172,7 @@ export const testProtection: Rule = {
 
     let before: string;
     try {
-      before = await readFile(abs, 'utf8');
+      before = await readRegularText(abs);
     } catch (e) {
       if (isAbsent(e)) return allow; // 新規作成は歓迎
       // 読めないのを「新しいファイル」と読まない。書く時点で掴みが外れていると、テストを減らす書き込みが通る
@@ -339,8 +352,10 @@ export const noRepeatedWrites: Rule = {
     // edit_file は、中身が違っても二度目から「同じ内容」として止めていた（ツールの説明が勧める、いちばん普通の使い方）
     const sign = (c: ToolCall) => `${c.name}::${signArgs(c.args)}`;
     const signature = sign(call);
+    // 失敗した書き込み（何も書いていない）は数えない。「待っている間に変わりました。読み直してもう一度書いて」や EBUSY の後の
+    // 出し直しは、同じ引数になるのが普通で、それを止めていた
     const repeats = ctx.history.filter((c) =>
-      isWriteTool(c.name) && sign(c) === signature).length;
+      isWriteTool(c.name) && !isFailedWrite(c) && sign(c) === signature).length;
     return repeats >= 1
       ? deny('同じ内容を再度書こうとしています。別の方法を検討するか、行き詰まりを報告してください。')
       : allow;
@@ -373,12 +388,14 @@ export const dangerousCommands: Rule = {
       [/\bformat\s+[a-z]:/i, 'ドライブの初期化'],
       [/\b(diskpart|reg\s+delete|shutdown)\b/i, '機械そのものへの操作'],
     ];
+    // 殻が綴りを組み替える形（cmd の `pu^sh`、sh の `pu''sh`・`pu\sh`・`pu"sh"`）も、組み替えた後の綴りで照らす
+    const flat = unshell(command);
     for (const [re, label] of patterns) {
-      if (re.test(command)) {
+      if (re.test(command) || re.test(flat)) {
         return deny(`${label}は実行できません: ${command}。必要なら利用者に依頼してください。`);
       }
     }
-    const git = gitDanger(command);
+    const git = gitDanger(command) ?? gitDanger(flat);
     if (git) return deny(`git の破壊的操作（${git}）は実行できません: ${command}。必要なら利用者に依頼してください。`);
     return allow;
   },
@@ -395,6 +412,17 @@ const GIT_OPTS_WITH_VALUE = new Set(['-C', '-c', '--git-dir', '--work-tree', '--
  * 無視している `.env` まで消し、外で変わった記録（OutsideChanges）にも載らないので「戻す」でも戻らない。
  * 繋いだ命令は一つずつ、語に分けて、全体の選択肢を飛ばしてから、サブコマンドと選択肢を並びに関わらず見る。
  */
+/**
+ * 殻が組み替えた後の綴りに近づける（照らすためだけ。走らせる命令は変えない）。cmd の `^`、sh の `\` と空の引用符・語の中の引用符を外す。
+ */
+export function unshell(command: string): string {
+  return command
+    .replace(/\^(?=.)/g, '')
+    .replace(/\\(?=[A-Za-z])/g, '')
+    .replace(/''|""/g, '')
+    .replace(/(?<=[\w-])(['"])([^'"\s]*)\1/g, '$2');
+}
+
 export function gitDanger(command: string, depth = 0): string | undefined {
   // 別名の中身を見るのは二段まで（別名を何十も並べると、中身を見るたびに残りの別名をまた見るので、数が増えるほど長くなる）
   if (depth > 2) return undefined;
@@ -418,6 +446,13 @@ export function gitDanger(command: string, depth = 0): string | undefined {
     }
     const sub = words[i]?.toLowerCase();
     const rest = words.slice(i + 1);
+    // 変数で組んだサブコマンド（`git %X%push`・`git ${x:-push}`）は、殻が展開するまで何になるか分からない
+    if (sub && /[%$]/.test(sub)) return '変数で組んだサブコマンド';
+    // 命令を走らせる設定を書く（`git config alias.p push` の後の `git p`、hooksPath・fsmonitor・pager・filter は git を動かした所で命令を走らせる）
+    if (sub === 'config' && !rest.some((w) => /^(--get(-all|-regexp)?|--list|-l)$/i.test(w))
+      && rest.some((w) => /^(alias\.|core\.(hookspath|fsmonitor|pager|sshcommand|editor)\b|filter\.|diff\..*\.textconv|include\.path)/i.test(w))) {
+      return '命令を走らせる設定の書き換え';
+    }
     const shortFlag = (ch: string) => rest.some((w) => /^-[a-z]+$/i.test(w) && w.slice(1).includes(ch));
     // git は長い名前の省略を受け付ける（`--har` は `--hard`）。`--` の後ろ 3 字以上の頭が一致すれば同じとみなす
     const long = (name: string) => rest.some((w) => {

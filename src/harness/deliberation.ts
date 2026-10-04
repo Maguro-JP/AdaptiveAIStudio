@@ -33,6 +33,11 @@ export const GUARDED_PATHS = [
   'src/core/harness-setup.ts',
   'src/agent/tools/paths.ts',
   'src/agent/tools/network.ts',
+  // 守りを左右するのに漏れていた所（照らし方の glob・書くツールの見分け・許す命令の一覧・秘密の伏せ方・指紋・戻し方・検問所）
+  'src/harness/**',
+  'src/agent/tools/shell.ts',
+  'src/agent/tools/write-kind.ts',
+  'src/core/redact.ts',
 ];
 
 export function isGuarded(rel: string): boolean {

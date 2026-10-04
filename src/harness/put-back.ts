@@ -14,7 +14,7 @@
  * 前の中身は、utf8 で往復する文字なら文字列、往復しないもの（png、Shift_JIS の文書）はバイト列で持つ。
  * 二進を utf8 として読んで持つと U+FFFD に置き換わり、戻すと別の中身になる。
  */
-import { lstat, unlink, rmdir, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { lstat, unlink, rmdir, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { statSync } from 'node:fs';
 import { safeResolve, realSafeResolve } from '../agent/tools/paths.ts';
@@ -55,6 +55,17 @@ export async function readPrior(abs: string): Promise<Buffer | undefined> {
  * 読んだバイト列を、持つ形にする。utf8 で往復するなら文字列、しないならバイト列のまま。
  * NUL を含むものも文字列にしない（画面に文字として出す先が無い）。
  */
+/**
+ * 規則が中身を見るための読み。普通のファイルで、大きすぎないものだけを読む。それ以外は投げる（無いときは ENOENT のまま）。
+ * 規則はツールより先に走るので、ツールが断る形（`/dev/zero` へのリンク・FIFO・巨大なファイル）を丸読みして止まっていた。
+ */
+export async function readRegularText(abs: string, maxBytes = 20_000_000): Promise<string> {
+  const info = await stat(abs);
+  if (!info.isFile()) throw Object.assign(new Error('普通のファイルではありません'), { code: 'ENOTFILE' });
+  if (info.size > maxBytes) throw Object.assign(new Error(`大きすぎます（${info.size} バイト）`), { code: 'EFBIG' });
+  return readFile(abs, 'utf8');
+}
+
 export function contentOf(bytes: Buffer): FileContent {
   if (bytes.includes(0)) return bytes;
   try {

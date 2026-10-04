@@ -52,6 +52,8 @@ export const readFileTool: Tool = {
     if (!abs) return fail(`作業ディレクトリの外です: ${p}`);
     try {
       const info = await stat(abs);
+      // 普通のファイルだけ読む（FIFO は書き手を待って永久に止まり、止める合図も効かなかった）
+      if (!info.isFile()) return fail(`${p} は普通のファイルではないので読みません（フォルダ・FIFO・装置など）。`);
       const ranged = args.offset !== undefined || args.limit !== undefined;
       if (info.size > (ranged ? MAX_RANGED_READ_BYTES : MAX_READ_BYTES)) {
         // 文の頭は変えない（ハーネスがこの文で「一部を読んだ」と数える）
@@ -411,7 +413,10 @@ async function commit(
   // モデルは LF で書き戻す。そのまま書くと**1行も直していないのに
   // ファイル全体が変更扱い**になり、差分を見る意味がなくなる。
   // utf8 で読めないものは、仮の一行ではなく元のバイト列で改行を数える（latin1 は 1 バイト 1 文字で、改行を崩さない）。
-  const written = matchLineEndings(content, opaque ? priorBytes!.toString('latin1') : before);
+  const lined = matchLineEndings(content, opaque ? priorBytes!.toString('latin1') : before);
+  // 元の BOM も残す。モデルは見えない U+FEFF を写さないので、BOM 付きの `.cmd` を全文で書き戻すと BOM が落ち、cmd.exe が
+  // CP932 として読んで日本語の行が壊れていた（差分には見えない）。edit_file は当てる所で残している
+  const written = !opaque && before.startsWith('\uFEFF') && !lined.startsWith('\uFEFF') ? `\uFEFF${lined}` : lined;
 
   /*
    * **空のファイルを作る道を塞がない。**
