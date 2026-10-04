@@ -21,7 +21,7 @@ const root = join(import.meta.dirname, '..');
 /** 失敗を捨ててよいファイルと、その数・理由。 */
 const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/core/undo.ts': { count: 3, why: '一時ファイルの後始末、古い戻り先の片づけ（残るだけ）、縮めた戻り先の書き直し（失敗は unshrunk で言う）' },
-  'src/core/conversations.ts': { count: 2, why: '一時ファイルの後始末と、立ち上げたときの捨て場の片づけ（消せたものだけ数え、残りは次にまた消す）' },
+  'src/core/conversations.ts': { count: 3, why: '書き足しに失敗したときの切り詰め（元の失敗を投げ直す。切り詰められなければ、次の書き足しは改行から始める）。一時ファイルの後始末と、立ち上げたときの捨て場の片づけ（消せたものだけ数え、残りは次にまた消す）' },
   'src/runtime/machine.ts': { count: 2, why: '機械の検出結果の記録。書けなければ次に検出し直すだけ（二つ目は、外側の `.catch(() => rm(…))` の中の `rm(…).catch` に当たっている。中の方を外すと数が減って二つ目の試験が落ちる）' },
   'src/runtime/llama-install.ts': { count: 2, why: '取り出しに失敗したときの後始末（元の失敗を投げ直す）。付け替えた後に脇へ移した前の版を消す（新しい版は置けている。残った .prev は害が無い）' },
   'src/ui/server.ts': { count: 4, why: '作業場のフォルダを作っておくだけ。作れなければ一覧を読む所が言う。手書きの一時ファイルの後始末（元の失敗を投げ直すか、その場で書き直す。3 か所）' },
