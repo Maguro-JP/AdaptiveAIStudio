@@ -15,7 +15,8 @@
  * 二進を utf8 として読んで持つと U+FFFD に置き換わり、戻すと別の中身になる。
  */
 import { lstat, unlink, rmdir, mkdir, writeFile, readFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { statSync } from 'node:fs';
 import { safeResolve, realSafeResolve } from '../agent/tools/paths.ts';
 
 export type PutBack = 'restored' | 'unchanged' | 'failed';
@@ -103,4 +104,46 @@ export async function putBack(root: string, relPath: string, content: FileConten
 /** 消す道を先に、書く道を後に。ファイル → フォルダの入れ替えは、中を消してからでないと書けない。 */
 export function putBackOrder<T extends { content?: FileContent | undefined }>(items: readonly T[]): T[] {
   return [...items].sort((a, b) => Number(a.content !== undefined) - Number(b.content !== undefined));
+}
+
+/**
+ * 作業場の中の道を比べられる形にする。`fold` なら大文字小文字を区別しない。Windows は区切り（`\` と `/`）と、名前の末尾の
+ * 点・空白（`a.ts.` は `a.ts`。Win32 の道がそう扱う）も同じものとして扱う。名前は NFC にそろえる（macOS は NFD で返すことがあり、
+ * 日本語の名前で同じファイルを二つに数えた）。
+ * `fold` の既定は Linux 以外。作業場ごとに確かめた値（`foldsCase`）を渡すのが本筋（大文字小文字を区別するボリュームで、
+ * 別のファイルを一つにまとめないため）。
+ */
+export function pathKey(relPath: string, platform: NodeJS.Platform = process.platform, fold = platform !== 'linux'): string {
+  let p = relPath.normalize('NFC');
+  if (fold) p = p.toLowerCase();
+  if (platform !== 'win32') return p;
+  return p.split(/[\\/]+/).map((seg) => (seg === '.' || seg === '..' ? seg : seg.replace(/[. ]+$/, ''))).join('/');
+}
+
+const folds = new Map<string, boolean>();
+
+/**
+ * その作業場が大文字小文字を区別しないか。根の道の字を一つ大小入れ替えて開き、同じものに当たるかで見る。OS で決め打ちすると、
+ * 大文字小文字を区別する macOS のボリュームや、区別を有効にした Windows のフォルダ（WSL）で、綴りの大小だけ違う別のファイル
+ * （`X.h` と `x.h`）を一つにまとめ、片方の中身でもう片方を書き戻していた。確かめられなければ OS の既定。
+ */
+export function foldsCase(root: string, platform: NodeJS.Platform = process.platform): boolean {
+  const abs = resolve(root);
+  const known = folds.get(abs);
+  if (known !== undefined) return known;
+  let answer = platform !== 'linux';
+  for (let i = abs.length - 1; i >= 0; i--) {
+    const c = abs[i]!;
+    const flipped = c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase();
+    if (flipped === c) continue;
+    try {
+      const a = statSync(abs);
+      let b: ReturnType<typeof statSync> | undefined;
+      try { b = statSync(abs.slice(0, i) + flipped + abs.slice(i + 1)); } catch { b = undefined; }
+      answer = b !== undefined && a.ino === b.ino && a.dev === b.dev;
+    } catch { /* 根を見られない。OS の既定のまま */ }
+    break;
+  }
+  folds.set(abs, answer);
+  return answer;
 }

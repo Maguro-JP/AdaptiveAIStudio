@@ -149,3 +149,73 @@ describe('並び', () => {
     assert.deepEqual((await store.list()).map((p) => p.id), [newer, older]);
   });
 });
+
+describe('綴りの違いと巻き戻しの範囲', () => {
+  test('**大文字小文字・末尾の点だけ違う綴りは、Windows と macOS では同じ道の鍵になる**', async () => {
+    const { pathKey } = await import('../src/core/undo.ts');
+    assert.equal(pathKey('src/Foo.ts', 'win32'), pathKey('src/foo.ts', 'win32'));
+    assert.equal(pathKey('src\\foo.ts.', 'win32'), pathKey('src/foo.ts', 'win32'));
+    assert.equal(pathKey('src/foo.ts ', 'win32'), pathKey('src/foo.ts', 'win32'));
+    assert.equal(pathKey('README.md', 'darwin'), pathKey('readme.md', 'darwin'));
+    assert.notEqual(pathKey('README.md', 'linux'), pathKey('readme.md', 'linux'), 'Linux では別のファイル');
+    assert.equal(pathKey('../x', 'win32'), '../x', '上の階層を指す `..` は落とさない');
+  });
+
+  test('**打ち切ったときの巻き戻しは、書けた道だけを当てる**（書く手前に記録したが書かなかった道は触らない）', async () => {
+    const { Checkpoint } = await import('../src/harness/checkpoint.ts');
+    const { root } = await setup();
+    await writeFile(join(root, 'wrote.txt'), '元\n');
+    await writeFile(join(root, 'declined.txt'), '元\n');
+    const cp = new Checkpoint(root);
+    await cp.capture('wrote.txt');
+    await cp.capture('declined.txt'); // 書く手前に記録したが、断られて書かなかった
+    await writeFile(join(root, 'wrote.txt'), 'AI\n');
+    await writeFile(join(root, 'declined.txt'), '利用者が外で直した\n');
+    const r = await cp.restoreAll(['wrote.txt']);
+    assert.deepEqual(r.restored, ['wrote.txt']);
+    assert.equal(await readFile(join(root, 'wrote.txt'), 'utf8'), '元\n');
+    assert.equal(await readFile(join(root, 'declined.txt'), 'utf8'), '利用者が外で直した\n', '書かなかった道まで書き戻した');
+  });
+
+  test('UndoStore.has は、この回で前の中身を記録した道かを言う', async () => {
+    const { root, store } = await setup();
+    await store.begin('x');
+    store.capture('a.txt', undefined);
+    assert.equal(store.has('a.txt'), true);
+    assert.equal(store.has('b.txt'), false);
+    store.discard();
+    assert.equal(store.has('a.txt'), false);
+    void root;
+  });
+});
+
+describe('大文字小文字を区別するかは、作業場ごとに確かめる', () => {
+  /** この機械の一時フォルダが大文字小文字を区別するか（実際に作って確かめる）。 */
+  async function sensitive(dir: string): Promise<boolean> {
+    const { existsSync } = await import('node:fs');
+    await writeFile(join(dir, 'Probe.txt'), 'x');
+    return !existsSync(join(dir, 'pROBE.txt'));
+  }
+
+  test('**foldsCase は、実際の作業場の振る舞いと一致する**', async () => {
+    const { foldsCase } = await import('../src/harness/put-back.ts');
+    const { root } = await setup();
+    assert.equal(foldsCase(root), !(await sensitive(root)));
+  });
+
+  test('**大文字小文字を区別する作業場では、綴りの大小だけ違う別のファイルを一つにまとめない**', async (t) => {
+    const { root, store } = await setup();
+    if (!(await sensitive(root))) { t.skip('この機械の一時フォルダは大文字小文字を区別しない'); return; }
+    await writeFile(join(root, 'X.h'), '大\n');
+    await writeFile(join(root, 'x.h'), '小\n');
+    await store.begin('両方書く');
+    store.capture('X.h', '大\n');
+    store.capture('x.h', '小\n');
+    await writeFile(join(root, 'X.h'), 'AI-大\n');
+    await writeFile(join(root, 'x.h'), 'AI-小\n');
+    const id = (await store.end())!.id;
+    await store.restore(id);
+    assert.equal(await readFile(join(root, 'X.h'), 'utf8'), '大\n');
+    assert.equal(await readFile(join(root, 'x.h'), 'utf8'), '小\n', '片方の中身でもう片方を書き戻した');
+  });
+});
