@@ -37,6 +37,13 @@ export interface Proposal {
   createdAt: string;
   /** 同じ提案を何度も出さないための指紋 */
   fingerprint: string;
+  /**
+   * どの作業場の提案か（`placeKey` の形）。提案は全部の作業場で一つのファイルに溜まるので、これが無いと、別の作業場で
+   * 採用したときにその作業場で走っていた。無い（前からある記録）なら、どの作業場の提案か分からない（今までどおり扱う）
+   */
+  root?: string;
+  /** どの思考から出たか。採否をその思考の実績にする（手元だけに持っていたので、立ち上げ直すと実績に乗らなかった）。 */
+  origin?: string;
 }
 
 /**
@@ -458,4 +465,9 @@ export function formatProposal(p: Proposal, verbose = false): string {
   if (p.evidence.length > 0) lines.push(`  根拠: ${p.evidence.join(', ')}`);
   lines.push(`  やること: ${p.suggestedAction}`);
   return lines.join('\n');
+}
+
+/** その作業場で扱ってよい提案か。作業場の分からない古い提案は、どこでも今までどおり扱う。 */
+export function proposalHere(p: Pick<Proposal, 'root'>, rootKey: string): boolean {
+  return p.root === undefined || p.root === rootKey;
 }

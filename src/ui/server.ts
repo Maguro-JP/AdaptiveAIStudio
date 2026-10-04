@@ -10,6 +10,8 @@
  * 数年で作法が変わるものに画面を預けたくない。
  * 素の HTML と ES モジュールなら、組み立ての手順すら要らない。
  */
+import { placeKey } from '../memory/memory.ts';
+import { proposalHere } from '../agent/proposals.ts';
 import { listDir, resolveInside } from './files.ts';
 import { describeNet, withoutPlaces } from '../runtime/net-why.ts';
 import { UnfinishedWork, resumePrompt, whyText, MAX_OPEN } from '../core/unfinished.ts';
@@ -1451,7 +1453,8 @@ export class UiServer {
       // 中身はどれもファイルから読めるもの。モデルは要らない。
       const { proposals, duties, idle } = await this.journals();
       return send(res, 200, {
-        open: proposals.open(),
+        // いまの作業場の提案だけ（作業場の分からない古い提案は今までどおり出す）
+        open: proposals.open().filter((p) => proposalHere(p, placeKey(this.#session?.root ?? this.#workRoot()))),
         duties: duties.status(Date.now()),
         due: duties.due(Date.now()).map((d) => d.duty.codename),
         idle: idle.stats(),
@@ -1484,7 +1487,7 @@ export class UiServer {
       } finally {
         if (holding) this.#preparing = false;
       }
-      if (!target) return send(res, 404, { error: 'その提案は見つからないか、もう決まっています' });
+      if (!target) return send(res, 404, { error: 'その提案は見つからないか、もう決まっているか、別の作業場の提案です' });
       this.broadcast({ type: 'stateChanged' });
       // 採用したなら、その内容をそのまま依頼として流す（手を放してから、間に await を挟まずに）。
       // 提案の実行文は、モデルが書いたもの。利用者の言葉として判じない。
