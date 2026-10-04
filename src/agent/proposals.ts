@@ -13,6 +13,7 @@ import { readFile, writeFile, mkdir, rename, rm, copyFile } from 'node:fs/promis
 import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { inOrder } from '../core/in-order.ts';
+import { withFileLock, FileLockBusy } from '../core/file-lock.ts';
 
 export type ProposalKind =
   | 'bug'          // 壊れている可能性
@@ -295,7 +296,9 @@ export class ProposalQueue {
       if (!item || (opts.onlyOpen && item.status !== 'open')) return Promise.resolve(undefined);
       return Promise.resolve(this.setStatus(item.id, status));
     }
-    return inOrder(path, async () => {
+    // 読み直してから付け替えるまで、ほかのプロセス（画面と端末）とも一つずつにする。前は同じプロセスの中だけ並べていたので、
+    // ほぼ同時に読んだもう一方が、決めた採否を知らない古い中身で付け替え、却下した提案が開いたまま戻った
+    return inOrder(path, () => withFileLock(path, async () => {
       let disk: DiskState;
       // 読めないときは決めない。前は「見つからないか、もう決まっている」と同じ返事にしていた。
       try { disk = await this.#readDisk(); } catch (e) {
@@ -316,7 +319,10 @@ export class ProposalQueue {
         throw new Error(`提案の採否を保存できませんでした（${failed.message}）。採否は決めていません`);
       }
       return item;
-    });
+    }).catch((e: unknown) => {
+      if (e instanceof FileLockBusy) throw new Error(`${e.message}。採否は決めていません`);
+      throw e;
+    }));
   }
 
   /**
@@ -331,7 +337,7 @@ export class ProposalQueue {
   save(): Promise<Error | undefined> {
     const path = this.#path;
     if (!path) return Promise.resolve(undefined);
-    return inOrder(path, async () => {
+    return inOrder(path, () => withFileLock(path, async (): Promise<Error | undefined> => {
       let disk: DiskState;
       // 読めない間は書かない（空と取り違えて、溜めていた提案を上書きしない）。
       try { disk = await this.#readDisk(); } catch (e) { return new Error(`提案の記録を読めないので、残せませんでした（${(e as Error).message}）`); }
@@ -341,7 +347,7 @@ export class ProposalQueue {
       // 何を残せなかったかが分かる文にする（書き込みの失敗は、一時ファイルの道を含む生の英文になる）
       const failed = await this.#write(disk);
       return failed ? new Error(`提案を残せませんでした（${(failed as NodeJS.ErrnoException).code ?? failed.message}）`) : undefined;
-    });
+    }).catch((e: unknown) => new Error(`提案を残せませんでした（${(e as Error).message}）`)));
   }
 
   /** 書く。書けなかったときはその失敗を返す（投げない。保存できなくても本体は止めない）。 */

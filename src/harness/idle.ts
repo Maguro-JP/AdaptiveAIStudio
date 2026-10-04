@@ -144,13 +144,27 @@ export class IdleScheduler {
    * 置き換えると、その間の分か、それまでの実績のどちらかが消える。
    */
   absorb(stats: unknown, nowMs = Date.now()): void {
+    this.rebase(stats, undefined, nowMs);
+  }
+
+  /**
+   * ほかのプロセスが書いた記録を足す（`saveMerged`）。`seen` は、この実体が前に読んだ・書いた中身。
+   * 足すのは、ファイルと `seen` の差（ほかが数えた分）だけ。`seen` が無ければファイルの分を全部足す（`absorb`）。
+   * 丸ごと置き換えると、この実体が数えた分か、ほかが数えた分のどちらかが消える。
+   */
+  rebase(stats: unknown, seen: unknown, nowMs = Date.now()): void {
     if (!Array.isArray(stats)) return;
-    for (const base of stats.filter(isStat).map((s) => notAfter(s, nowMs))) {
-      const now = this.#stats.get(base.mode);
-      if (!now) { this.#stats.set(base.mode, base); continue; }
-      now.runs += base.runs; now.produced += base.produced; now.accepted += base.accepted;
-      now.rejected += base.rejected; now.spent += base.spent;
-      const last = Math.max(now.lastRunAt ?? 0, base.lastRunAt ?? 0);
+    const before = new Map((Array.isArray(seen) ? seen.filter(isStat) : []).map((s) => [s.mode, s]));
+    for (const theirs of stats.filter(isStat).map((s) => notAfter(s, nowMs))) {
+      const was = before.get(theirs.mode);
+      const now = this.#stats.get(theirs.mode);
+      if (!now) { this.#stats.set(theirs.mode, theirs); continue; }
+      // 差が負（ほかが記録を消した・古い版で書き戻した）でも、この実体の数は 0 より下にしない
+      const add = (k: 'runs' | 'produced' | 'accepted' | 'rejected' | 'spent') => {
+        now[k] = Math.max(0, now[k] + theirs[k] - (was?.[k] ?? 0));
+      };
+      add('runs'); add('produced'); add('accepted'); add('rejected'); add('spent');
+      const last = Math.max(now.lastRunAt ?? 0, theirs.lastRunAt ?? 0);
       if (last > 0) now.lastRunAt = last;
     }
     const last = [...this.#stats.values()].map((s) => s.lastRunAt ?? 0).reduce((a, b) => Math.max(a, b), 0);

@@ -20,7 +20,7 @@ import { BUILTIN_IDLE_MODES } from '../harness/idle-modes.ts';
 import { DutyRoster } from '../harness/duties.ts';
 import { BUILTIN_DUTIES } from '../harness/builtin-duties.ts';
 import { stateDir } from './home.ts';
-import { loadJournal, saveJournal } from './journal-file.ts';
+import { loadJournal, saveMerged } from './journal-file.ts';
 import type { AasConfig } from '../config.ts';
 
 export interface Journals {
@@ -61,14 +61,15 @@ export async function loadJournals(config: AasConfig): Promise<Journals> {
 
 /**
  * 暇の実績と当番の記録を書く。起動のときに読めなかったものは、読み直せるまで書かない
- * （空で始めた分で、それまでの記録を上書きしない）。
+ * （空で始めた分で、それまでの記録を上書きしない）。画面と端末が別々に持つので、書く前に読み直して、
+ * ほかが書いた分を足してから書く（`saveMerged`）。
  */
 export async function saveJournals(j: Pick<Journals, 'idle' | 'duties'>): Promise<string[]> {
   const { idle, duties } = j;
   const unsaved: string[] = [];
   const idlePath = join(stateDir(), 'idle.json');
-  if (!await saveJournal(idle, idlePath, () => JSON.stringify(idle.stats(), null, 2), (v) => idle.absorb(v))) unsaved.push(idlePath);
+  if (!await saveMerged(idle, idlePath, () => JSON.stringify(idle.stats(), null, 2), (v, seen) => idle.rebase(v, seen))) unsaved.push(idlePath);
   const dutiesPath = join(stateDir(), 'duties.json');
-  if (!await saveJournal(duties, dutiesPath, () => JSON.stringify(duties.records(), null, 2), (v) => duties.absorb(v))) unsaved.push(dutiesPath);
+  if (!await saveMerged(duties, dutiesPath, () => JSON.stringify(duties.records(), null, 2), (v, seen) => duties.rebase(v, seen))) unsaved.push(dutiesPath);
   return unsaved; // 書けなかったもの。黙って止め続けないよう、呼んだ側が言う
 }
