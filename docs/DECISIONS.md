@@ -310,6 +310,7 @@
 - 14 回目の不具合調査の 8 件（inproc の呼び出しの id・検問所の候補・切れた判定・404・番号の無い呼び出し・失敗の塊・baseUrl の利用者名・enabled の説明）
 - 15 回目の不具合調査の 6 件（記憶と提案の秘密・添付だけの回の名前・忘れた覚えの戻り・毎週の当番・未来の時刻・外の情報の作業場）
 - 16 回目の不具合調査の 8 件（レーンの並べる数・team の書き込み先・team の書ける数・段取りの「うまくいった」・塞がった段・担当の最終報告・合議の落ちた担当・役職の extends）
+- 提案に作業場と出どころを持たせる（15 回目の調査の 2・10）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -11438,3 +11439,20 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
 触る場所: `src/config.ts`（`validateLanes`・`maxTotalParallel`）、`src/core/lane.ts`・`scheduler.ts`、`src/agent/team.ts`、`src/core/team-setup.ts`・
 `src/harness/harness.ts`（`forTask` の依頼全体の呼び出し）、`src/core/session.ts`（段取りの記憶）、`src/ui/server.ts`（塞がった段）、`src/agent/panel.ts`、
 `src/roles/registry.ts`、`src/cli/team.ts`、`test/team-gaps.test.ts`・`team.test.ts`・`panel.test.ts`
+
+## 2026-10-04  提案に作業場と出どころを持たせる（15 回目の調査の 2・10）
+
+提案は全部の作業場で一つのファイル（`proposals.json`）に溜まるのに、どの作業場の提案かを持っていなかった。作業場 A の見回りの提案を、作業場 B に
+切り替えてから採用すると、B でその手順（「src/x.ts を直す」）が走った。どの思考から出たかも手元の Map にしか無く、立ち上げ直した後の採否は思考の実績に
+乗らなかった。
+
+- 提案に `root`（`placeKey` の形）と `origin`（思考の id）を持たせる。見回りが足すときに付ける
+- 画面の一覧（`/api/proposals`）は、いまの作業場の提案だけを出す。決める口（`Session.decide`）は、別の作業場の提案を決めない（開いたまま残す）。
+  手すきの配分が数える「開いた提案の数」も、いまの作業場の分だけ
+- 作業場の分からない古い提案（`root` の無い記録）は、どこでも今までどおり扱う（選ばなかった案: 断る。読み直すと一覧から急に消えるため）
+- 採否の実績は、提案に残した `origin` を先に見る（無ければ手元の Map）
+- やり残しの重なりと段取りの引き当てが作業場を見ない件（15 回目の 9）は直さない。同じ依頼を作業場が違っても一つにするのは試験（`test/unfinished.test.ts` の
+  「同じ依頼は、作業場が違っても一つ」）で決めてある振る舞いで、段取りが依頼の文で結びつくため。変えるなら段取りにも作業場を持たせる変更になる
+- 残っているところ: 同じ題の提案は、作業場が違っても重ねて一つにする（重複の判定は作業場を見ない）
+触る場所: `src/agent/proposals.ts`（`root`・`origin`・`proposalHere`）、`src/core/session.ts`（足すとき・`decide`）、`src/ui/server.ts`（`/api/proposals`）、
+`test/proposal-root.test.ts`

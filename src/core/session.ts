@@ -39,13 +39,13 @@ import { loadJournals, saveJournals, type Journals } from './journals.ts';
 import { McpClient, type McpServerSpec } from '../mcp/client.ts';
 import { collectTools, deliverableCount } from '../mcp/tools.ts';
 import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
-import { Memory, formatRecall, betterDetail } from '../memory/memory.ts';
+import { Memory, formatRecall, betterDetail, placeKey } from '../memory/memory.ts';
 import {
   senseDispleasure, DISPLEASURE_LABEL, lessonFrom, displeasureTitle,
   judgePrompt, judgeOutcome, lessonFromUnderstanding,
   type DispleasureCode, type JudgeOutcome,
 } from '../memory/displeasure.ts';
-import { ProposalQueue, type Proposal } from '../agent/proposals.ts';
+import { ProposalQueue, proposalHere, type Proposal } from '../agent/proposals.ts';
 import { findLeads, investigationPrompt, parseProposal } from '../agent/initiative.ts';
 import { IdleScheduler, type ModeStat } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES, MODE_ROLE, promptFor } from '../harness/idle-modes.ts';
@@ -1155,7 +1155,7 @@ export class Session {
     }));
 
     const decision = await this.idle.choose(
-      { lastChangeAt: this.#lastChangeAt, openProposals: this.proposals.open().length, now },
+      { lastChangeAt: this.#lastChangeAt, openProposals: this.proposals.open().filter((p) => proposalHere(p, placeKey(this.root))).length, now },
       due,
     );
     if (!decision.mode) {
@@ -1345,6 +1345,8 @@ export class Session {
       evidence: files,
       suggestedAction: parsed.action,
       fingerprint,
+      root: placeKey(this.root),
+      origin: mode.id,
     });
     await this.saveProposals();
 
@@ -1360,9 +1362,12 @@ export class Session {
   async decide(id: string, verdict: 'accepted' | 'rejected'): Promise<Proposal | undefined> {
     // 決まった提案は決め直さない（片づいた提案を開き直して、もう一度実行していた）。ファイルを読み直して、
     // もう一方（画面と端末）が決めた分も見てから決める。
+    // 別の作業場の提案は、ここでは決めない（採用すると、この作業場でその手順が走る）
+    const found = this.proposals.find(id);
+    if (found && !proposalHere(found, placeKey(this.root))) return undefined;
     const target = await this.proposals.settle(id, verdict, { onlyOpen: true });
     if (!target) return undefined;
-    const origin = this.#origin.get(target.id);
+    const origin = target.origin ?? this.#origin.get(target.id);
     if (origin) this.idle.recordVerdict(origin, verdict);
     await this.saveAutonomy();
     return target;
