@@ -1411,6 +1411,15 @@ export class Session {
 
   /** 何かが変わった。考え直す価値が生まれたということ。 */
   markChanged(at = Date.now()): void { this.#lastChangeAt = at; }
+
+  /**
+   * 人の手で作業場を変えた（「戻す」・画面での保存）。覚えている作業前の結果は、もう今の姿ではないので捨てる。
+   * 捨てずにいたので、戻した後に同じ落ち方をすると「元から落ちていた」と言い、人が落ちる形に変えた後は「前は通っていた」とこの回のせいにしていた
+   */
+  handChanged(at = Date.now()): void {
+    this.markChanged(at);
+    this.baselineProbe.invalidate();
+  }
   get lastChangeAt(): number { return this.#lastChangeAt; }
 
   /** 検査コマンド。設定 > 先読みが見つけたもの。 */
@@ -1886,6 +1895,8 @@ export class Session {
           // 試験は通ったがテストを読めなかった。失敗にしない（巻き戻さない）。段取り・外のツールの道と同じ扱い
           else if (ev.type === 'giveUp' && ev.reason === 'unsure') { keep = true; checked = 'unsure'; }
           else if (ev.type === 'failed') checked = 'failed';
+          // テストを消して通そうとした回で打ち切られたら、確かめていないのではなく、落ちた
+          else if (ev.type === 'tampered') checked = 'failed';
           yield { type: 'verify', event: ev };
           // 直させている間に出たものも、そのまま見せる。黙って直させない。
           while (events.length > 0) yield events.shift()!;

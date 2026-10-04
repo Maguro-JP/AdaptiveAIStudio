@@ -2506,12 +2506,13 @@ export class UiServer {
       } catch (e) {
         if (e instanceof UndoStale) return send(res, 409, { error: e.message, stale: true });
         if (e instanceof UndoConflict) return send(res, 409, { error: e.message, conflict: e.paths });
+        session.handChanged(); // 途中まで書き戻したかもしれない。作業前の結果は使えない
         throw e;
       } finally {
         session.lock.release(owner);
       }
       if (!done) return send(res, 404, { error: 'その戻り先はもうありません' });
-      session.markChanged();
+      session.handChanged();
       this.broadcast({
         type: 'log', level: 'info',
         text: done.points > 1
@@ -3275,7 +3276,7 @@ export class UiServer {
     } finally {
       session?.lock.release(owner);
     }
-    session?.markChanged();
+    session?.handChanged();
     const diff = unifiedDiff(asked, before ?? '', content);
     const { added, removed } = diffStat(diff);
     this.broadcast({ type: 'session', event: { type: 'diff', path: asked, diff, added, removed, created: before === undefined } }, this.#workRoot());
