@@ -3108,9 +3108,12 @@ export const PANELS = {
       if (asked === K(path)) void store();
     };
 
-    /** 次の保存で「無いはずだ」と添えるか（消されたあとで作り直すとき）。 */
-    let absentNext = false;
-    /** 守っているファイルだと確かめた道（その道の保存では確かめ直さない）。 */
+    /*
+     * 次の保存で「無いはずだ」と添えるファイル（作業場と名前の組。消されたあとで作り直すとき）。
+     * 一つの真偽で持っていたので、作り直しが断られたあとも残り、別のファイルの保存にまで「無いはずだ」と添えていた
+     */
+    let absentFor = '';
+    /** 守っているファイルだと確かめたファイル（作業場と名前の組。そのファイルの保存では確かめ直さない）。 */
     let protectedOk = '';
     const store = async () => {
       if (!path || !dirty()) return;
@@ -3159,9 +3162,9 @@ export const PANELS = {
             // どの作業場で開いたものか。変わっていたら本体が断る（前の作業場の直しを、新しい作業場へ書かない）。
             ...(rootAt ? { root: rootAt } : {}),
             // 消されたあとで作り直すときは「無いはずだ」と添える（その間に別の所で作られていたら本体が断る）
-            ...(absentNext ? { absent: true } : {}),
+            ...(absentFor === K(path) ? { absent: true } : {}),
             // 守っているファイルを、確かめたうえで書く
-            ...(protectedOk === path ? { confirmProtected: true } : {}),
+            ...(protectedOk === K(path) ? { confirmProtected: true } : {}),
           }),
           signal: AbortSignal.timeout(20000),
         });
@@ -3216,17 +3219,19 @@ export const PANELS = {
         tell(j.gone
           ? '保存していません。開いたあとで、このファイルは別の所で消されました。'
           : '保存していません。開いたあとで、このファイルは文字でない中身に書き換えられました（画面からは書けません）。直しは欄と預かりに残してあります。',
-        j.gone ? [['自分の版で作り直す', () => { stamp = ''; absentNext = true; notice.hidden = true; void store(); }]] : []);
+        j.gone ? [['自分の版で作り直す', () => { stamp = ''; absentFor = K(at, atRoot); notice.hidden = true; void store(); }]] : []);
         return;
       }
       // 守っているファイル（.env など）。確かめてから書く（.git の中は本体が断る）
       if (r.status === 409 && j.confirm && j.protected) {
         state.textContent = '保存していません（守っているファイル）';
         save.disabled = false;
-        if (confirm(j.error)) { protectedOk = at; void store(); }
+        if (confirm(j.error)) { protectedOk = K(at, atRoot); void store(); }
         return;
       }
       if (r.status === 409 && j.conflict) {
+        // 作り直そうとした間に別の所で作られていた。「無いはずだ」はもう当てはまらない（上書きを選べば、その stamp で送る）
+        absentFor = '';
         state.textContent = '保存していません（別の所で変わっています）';
         save.disabled = false;
         tell('保存していません。開いたあとで、このファイルは別の所で変わりました（AI の書き換えなど）。', [
@@ -3236,7 +3241,7 @@ export const PANELS = {
         return;
       }
       if (!r.ok) { state.textContent = j.error ?? '保存できませんでした'; save.disabled = false; return; }
-      absentNext = false;
+      absentFor = '';
       loaded = sent;
       stamp = j.stamp ?? stamp;
       // 保存の間に打った分が在れば、それは保存していない。預かりは残す。

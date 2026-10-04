@@ -131,3 +131,66 @@ describe('差分の作業場', () => {
     }
   });
 });
+
+describe('レビューで挙がった筋書き', () => {
+  test('**`.git/index.lock` は `**/*.lock` より先に `.git` として断る**（最初に当たった型だけを見ていた）', async () => {
+    const r = await send('PUT', '/api/file', { path: '.git/index.lock', content: 'x', confirmProtected: true });
+    assert.equal(r.status, 403, await r.text());
+  });
+
+  test('**守りを切っていても、`.git` の中は守る**（ほかの守りは切れる）', async () => {
+    const { protectedHit } = await import('../src/core/harness-setup.ts');
+    const off = { ...DEFAULT_CONFIG, harness: { enabled: false } } as typeof DEFAULT_CONFIG;
+    assert.ok(await protectedHit(work, '.git/hooks/pre-commit', off, 'linux'));
+    assert.equal(await protectedHit(work, '.env', off, 'linux'), undefined);
+  });
+
+  test('**読み取り専用のファイルは書き換えない**（付け替えだと、フォルダに書ければ置き換わる）', async () => {
+    const { chmod } = await import('node:fs/promises');
+    await writeFile(join(work, 'locked.txt'), 'もと\n');
+    await chmod(join(work, 'locked.txt'), 0o444);
+    try {
+      const r = await send('PUT', '/api/file', { path: 'locked.txt', content: 'あと\n' });
+      assert.notEqual(r.status, 200, await r.text());
+      assert.equal(await readFile(join(work, 'locked.txt'), 'utf8'), 'もと\n');
+    } finally {
+      await chmod(join(work, 'locked.txt'), 0o644);
+    }
+  });
+
+  test('**名前が長くて一時ファイルの名前が上限を超えるときは、その場で書く**', async () => {
+    const long = `${'n'.repeat(240)}.txt`;
+    await writeFile(join(work, long), 'もと\n');
+    const r = await send('PUT', '/api/file', { path: long, content: 'あと\n' });
+    assert.equal(r.status, 200, await r.text());
+    assert.equal(await readFile(join(work, long), 'utf8'), 'あと\n');
+  });
+
+  test('**差分は、それを出した本体の作業場で覚える**（配った時点の設定の作業場ではない）', async () => {
+    const { unifiedDiff } = await import('../src/agent/diff.ts');
+    const other = join(await tempDir('aas-hand-gaps-elsewhere-'), 'work');
+    await writeFile(join(work, 'here.txt'), 'one\nTWO\n');
+    const diff = unifiedDiff('here.txt', 'one\ntwo\n', 'one\nTWO\n');
+    // 前の作業場で走っていた本体が、作業場を変えたあとで出した差分
+    server.broadcast({ type: 'session', event: { type: 'diff', path: 'here.txt', diff, added: 1, removed: 1 } } as never, other);
+    const r = await send('POST', '/api/revert', { path: 'here.txt', diff, picks: [{ hunk: 0 }] });
+    const j = await r.json() as { moved?: boolean };
+    assert.equal(r.status, 409, JSON.stringify(j));
+    assert.equal(j.moved, true);
+    assert.equal(await readFile(join(work, 'here.txt'), 'utf8'), 'one\nTWO\n');
+  });
+
+  test('**片づけは、まだ依頼に添えていない添付を消さない**（添えたものは消す）', async () => {
+    const { Attachments } = await import('../src/ui/attachments.ts');
+    const box = new Attachments(await tempDir('aas-hand-gaps-attach-'));
+    const waiting = await box.add('waiting.txt', Buffer.from('まだ\n'));
+    const used = await box.add('used.txt', Buffer.from('添えた\n'));
+    await box.describe([used.id]);
+    const later = Date.now() + 2 * 24 * 60 * 60 * 1000;
+    await box.sweep(24 * 60 * 60 * 1000, later);
+    assert.ok(box.get(waiting.id), '受け皿に載っている添付を消した');
+    await stat(waiting.path);
+    assert.equal(box.get(used.id), undefined);
+    await assert.rejects(stat(used.path));
+  });
+});

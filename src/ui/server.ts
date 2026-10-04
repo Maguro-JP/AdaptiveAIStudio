@@ -506,7 +506,8 @@ export class UiServer {
   }
 
   /** 画面へ流す。誰も見ていなくても落ちない。 */
-  broadcast(event: UiEvent): void {
+  /** `root` は、差分を出した本体の作業場（渡さなければ、いまの本体の作業場）。差分から戻すとき、別の作業場へ当てないために覚える。 */
+  broadcast(event: UiEvent, root?: string): void {
     // 画面に流すものの一部を、ファイルにも残す（記録・会話の終わり・落ちた理由）。
     if (event.type === 'log') {
       void this.#logFile.append(`[${event.level}] ${event.text}`).catch(() => undefined);
@@ -520,8 +521,10 @@ export class UiServer {
       const ev = event.event as { type?: string };
       if (ev.type === 'diff') {
         const d = ev as unknown as { path: string; diff: string; added: number; removed: number; created?: boolean };
-        // どの作業場で出た差分かを覚える（差分から戻すとき、別の作業場へ当てない）。際限なく持たない
-        this.#diffRoots.set(diffKey(d.path, d.diff), this.#workRoot());
+        // どの作業場で出た差分かを覚える（差分から戻すとき、別の作業場へ当てない）。際限なく持たない。
+        // 配った時点の設定の作業場ではなく、差分を出した本体の作業場で覚える（作業場を変えても、走っている本体は前の作業場で書き続ける）
+        const from = root ?? (this.#session ? resolvePath(this.#session.root) : this.#workRoot());
+        this.#diffRoots.set(diffKey(d.path, d.diff), from);
         while (this.#diffRoots.size > 500) {
           const oldest = this.#diffRoots.keys().next().value;
           if (oldest === undefined) break;
@@ -797,7 +800,7 @@ export class UiServer {
           run.inFlight.text += event.delta;
           seq = ++run.inFlight.seq;
         }
-        this.broadcast({ type: 'session', event, conversationId, ...(seq !== undefined ? { seq } : {}) });
+        this.broadcast({ type: 'session', event, conversationId, ...(seq !== undefined ? { seq } : {}) }, resolvePath(session.root));
       }
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
@@ -3262,7 +3265,7 @@ export class UiServer {
     session?.markChanged();
     const diff = unifiedDiff(asked, before ?? '', content);
     const { added, removed } = diffStat(diff);
-    this.broadcast({ type: 'session', event: { type: 'diff', path: asked, diff, added, removed, created: before === undefined } });
+    this.broadcast({ type: 'session', event: { type: 'diff', path: asked, diff, added, removed, created: before === undefined } }, this.#workRoot());
     this.broadcast({ type: 'undo' });
     this.broadcast({ type: 'stateChanged' });
     return { added, removed };
@@ -3498,7 +3501,7 @@ export class UiServer {
           this.#inFlight.text += event.delta;
           seq = ++this.#inFlight.seq;
         }
-        this.broadcast({ type: 'session', event, conversationId, ...(seq !== undefined ? { seq } : {}) });
+        this.broadcast({ type: 'session', event, conversationId, ...(seq !== undefined ? { seq } : {}) }, resolvePath(session.root));
       }
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
@@ -4065,7 +4068,7 @@ export class UiServer {
     this.broadcast({ type: 'busy', busy: true });
     try {
       for await (const event of session.plan(text, said)) {
-        this.broadcast({ type: 'planEvent', event });
+        this.broadcast({ type: 'planEvent', event }, resolvePath(session.root));
       }
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
@@ -4483,18 +4486,43 @@ function diffKey(path: string, diff: string): string {
 let atomicSeq = 0;
 /**
  * 隣の一時ファイルに書き、元の権限を写してから名前を付け替える。付け替えは一瞬掴まれた（EPERM・EBUSY）ときだけ数回やり直す。
- * 失敗したら一時ファイルを消して投げる（元のファイルは触っていない）。
+ *
+ * - 読み取り専用のファイルは書かない（その場で書いていたときと同じく断る。付け替えだと、フォルダに書ければ読み取り専用でも置き換わる）
+ * - 一時ファイルを置けないとき（フォルダに書けない・名前が長すぎる）と、付け替えが掴まれたまま通らないときは、その場で書く
+ *   （置き換えの利点は落ちるが、書けていたものを書けなくはしない）
+ * - 付け替えは新しいファイルになるので、持ち主と ACL は引き継がない（権限の数字だけ写す）
+ * - 落ちても一時ファイルは消す。消す前にプロセスごと落ちた分は、`.名前.aas-番号.tmp` として隣に残る
  */
 async function replaceAtomically(real: string, content: string): Promise<void> {
-  const tmp = join(dirname(real), `.${basename(real)}.aas-${process.pid}-${++atomicSeq}.tmp`);
+  const mode = await stat(real).then((s) => s.mode & 0o777, () => undefined);
+  if (mode !== undefined && (mode & 0o200) === 0) {
+    throw Object.assign(new Error(`EACCES: 読み取り専用のファイルです: ${real}`), { code: 'EACCES' });
+  }
+  const name = `.${basename(real)}.aas-${process.pid}-${++atomicSeq}.tmp`;
+  // 名前の長さの上限はたいてい 255 バイト。元の名前が長いと、一時ファイルの名前だけが上限を超える
+  if (Buffer.byteLength(name) > 255) { await writeFile(real, content, 'utf8'); return; }
+  const tmp = join(dirname(real), name);
   try {
     await writeFile(tmp, content, 'utf8');
-    const mode = await stat(real).then((s) => s.mode & 0o777, () => undefined);
+  } catch (e) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    const code = (e as NodeJS.ErrnoException).code;
+    // フォルダには書けないがファイルには書ける、は在る（共有フォルダ・権限を絞ったフォルダ）
+    if (code === 'EACCES' || code === 'EPERM' || code === 'ENAMETOOLONG') { await writeFile(real, content, 'utf8'); return; }
+    throw e;
+  }
+  try {
     if (mode !== undefined) await chmod(tmp, mode).catch(() => undefined);
     for (let tries = 0; ; tries++) {
       try { await rename(tmp, real); return; } catch (e) {
         const code = (e as NodeJS.ErrnoException).code;
-        if (tries >= 4 || !(code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) throw e;
+        if (!(code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) throw e;
+        if (tries >= 4) {
+          // Windows で、消すことを許さずに開いている相手がいると付け替えは通らない。その場で書くことはできる
+          await rm(tmp, { force: true }).catch(() => undefined);
+          await writeFile(real, content, 'utf8');
+          return;
+        }
         await new Promise((r) => setTimeout(r, 100 * (tries + 1)));
       }
     }

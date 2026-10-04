@@ -24,7 +24,7 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/core/conversations.ts': { count: 2, why: '一時ファイルの後始末と、立ち上げたときの捨て場の片づけ（消せたものだけ数え、残りは次にまた消す）' },
   'src/runtime/machine.ts': { count: 2, why: '機械の検出結果の記録。書けなければ次に検出し直すだけ（二つ目は、外側の `.catch(() => rm(…))` の中の `rm(…).catch` に当たっている。中の方を外すと数が減って二つ目の試験が落ちる）' },
   'src/runtime/llama-install.ts': { count: 2, why: '取り出しに失敗したときの後始末（元の失敗を投げ直す）。付け替えた後に脇へ移した前の版を消す（新しい版は置けている。残った .prev は害が無い）' },
-  'src/ui/server.ts': { count: 2, why: '作業場のフォルダを作っておくだけ。作れなければ一覧を読む所が言う。手書きの一時ファイルの後始末（元の失敗を投げ直す）' },
+  'src/ui/server.ts': { count: 4, why: '作業場のフォルダを作っておくだけ。作れなければ一覧を読む所が言う。手書きの一時ファイルの後始末（元の失敗を投げ直すか、その場で書き直す。3 か所）' },
   'src/harness/metrics.ts': { count: 1, why: '書く前の mkdir。作れなければ続く保存が失敗し、それを一度だけ言う（記録に失敗しても本体は止めない）' },
   'src/agent/proposals.ts': { count: 1, why: '一時ファイルの後始末' },
   'src/roles/ledger.ts': { count: 1, why: '書く前の mkdir。作れなければ続く保存が false を返し、呼ぶ側が言う（記録に失敗しても本体は止めない）' },

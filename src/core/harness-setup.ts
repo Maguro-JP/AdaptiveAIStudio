@@ -35,9 +35,14 @@ const DEFAULT_PROTECTED = [
 export async function protectedHit(
   root: string, path: string, config: AasConfig, platform: NodeJS.Platform = process.platform,
 ): Promise<string | undefined> {
+  const all = [...DEFAULT_PROTECTED, ...(config.harness?.protectedPaths ?? [])];
+  const opts = { nocase: caseBlind(platform), windows: platform === 'win32' };
+  // `.git` の型を先に照らす。最初に当たった型だけを見ていたので、`.git/index.lock` が `**/*.lock` に当たって「確かめたら書く」になっていた。
+  // `.git` の中は守りを切っていても書かない（画面から hook を置けると、git を動かした所で命令が走る）
+  const git = await matchProtected(root, path, all.filter(isGitPattern), opts);
+  if (git) return git;
   if ((config.harness ?? {}).enabled === false) return undefined;
-  return matchProtected(root, path, [...DEFAULT_PROTECTED, ...(config.harness?.protectedPaths ?? [])],
-    { nocase: caseBlind(platform), windows: platform === 'win32' });
+  return matchProtected(root, path, all.filter((p) => !isGitPattern(p)), opts);
 }
 
 /** その型が `.git` の中を守るものか（画面からも書かせない。hook と core.fsmonitor は git を動かした所で命令を走らせる）。 */

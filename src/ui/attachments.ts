@@ -128,6 +128,8 @@ export function safeName(name: string): string {
 export class Attachments {
   readonly #dir: string;
   readonly #items = new Map<string, Attachment>();
+  /** 依頼に添えた預かり（id）。添えていないものは、まだ画面の受け皿に載っている。 */
+  readonly #sent = new Set<string>();
   readonly #id: () => string;
   readonly #remove: (path: string) => Promise<void>;
   readonly #read: (path: string) => Promise<Buffer>;
@@ -187,6 +189,7 @@ export class Attachments {
     const item = this.#items.get(id);
     if (!item) return { dropped: false };
     this.#items.delete(id);
+    this.#sent.delete(id);
     // もう無いなら、それでよい（force）
     // 画面に出すのは符丁（EBUSY 等）だけ。rm の文はフルパス入りの長い英文になる
     const failed = await rm(item.path, { force: true }).then(() => undefined, (e: unknown) => (e as NodeJS.ErrnoException).code ?? (e as Error).message);
@@ -212,6 +215,7 @@ export class Attachments {
     for (const id of ids) {
       const item = this.#items.get(id);
       if (!item) continue;
+      this.#sent.add(id);
       if (used >= total) { leftOut += 1; continue; }
 
       if (item.kind === 'text') {
@@ -263,11 +267,13 @@ export class Attachments {
       const s = await stat(path).catch(() => undefined);
       // 預かりはファイルだけ。フォルダ等は触らない（消せないのに数えていた）。
       if (!s || !s.isFile() || now - s.mtimeMs < olderThanMs) continue;
+      // まだ依頼に添えていない預かりは消さない（一時間ごとに片づけるので、受け皿に載せたまま一日経つと、送ったときに消えていた）
+      if ([...this.#items].some(([id, item]) => item.path === path && !this.#sent.has(id))) continue;
       // 消せた分だけ数える（「消した量を必ず言う」の量を嘘にしない）。使用中なら次回。
       const removed = await this.#remove(path).then(() => true, () => false);
       if (!removed) continue;
       freed += s.size;
-      for (const [id, item] of this.#items) if (item.path === path) this.#items.delete(id);
+      for (const [id, item] of this.#items) if (item.path === path) { this.#items.delete(id); this.#sent.delete(id); }
     }
     return freed;
   }
