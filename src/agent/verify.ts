@@ -75,7 +75,7 @@ export function digestFailure(output: string): string {
       .replace(/\d+(\.\d+)?\s*ms\b/g, 'Nms')
       .replace(/\d+(\.\d+)?\s*s\b/g, 'Ns')
       // 時刻（vitest の `Start at 10:21:33`、pytest の `(0:01:02)`）と、go の結果を使い回した表示（`(cached)`）も毎回変わる
-      .replace(/\b\d{1,2}:\d{2}:\d{2}(\.\d+)?\b/g, 'HH:MM:SS')
+      .replace(/\b(Start at\s+)\d{1,2}:\d{2}:\d{2}(?:\.\d+)?/g, '$1HH:MM:SS').replace(/\(\d+:\d{2}:\d{2}(?:\.\d+)?\)/g, '(H:MM:SS)')
       .replace(/\(cached\)/g, 'Ns')
       .replace(/\/tmp\/[\w.-]+/g, '/tmp/X')
       // Windows の一時フォルダ（`C:\Users\me\AppData\Local\Temp\aas-x1`。出力の中では `\\` に重なることもある）。
@@ -178,6 +178,14 @@ export async function* verifyLoop(
     // 何回目でも比べる（1 回目だけ比べていたので、新しい失敗を直して作業前と同じ失敗だけになった回を、作業前からと言えなかった）
     if (baseline && !baseline.passed
         && digestFailure(baseline.output) === digest) {
+      // 落ちたテストを消して作業前と同じ失敗に戻した回を、作業前からと言わない（減っていれば、消して通したのと同じ扱い）
+      const verdict = compareTests(before, await snapshotTests(opts.root));
+      if (!verdict.ok) {
+        return {
+          passed: false, digest: `tampered:${verdict.reason}`,
+          feedback: verdict.reason, tampered: verdict.reason, result,
+        };
+      }
       preexistingFailure = true;
       return { passed: false, digest, preexisting: true, result };
     }

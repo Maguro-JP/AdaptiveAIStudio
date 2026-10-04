@@ -2506,6 +2506,7 @@ export class UiServer {
       } catch (e) {
         if (e instanceof UndoStale) return send(res, 409, { error: e.message, stale: true });
         if (e instanceof UndoConflict) return send(res, 409, { error: e.message, conflict: e.paths });
+        session.handChanged(); // 途中まで書き戻したかもしれない。作業前の結果は使えない
         throw e;
       } finally {
         session.lock.release(owner);

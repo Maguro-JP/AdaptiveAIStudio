@@ -104,3 +104,52 @@ describe('作業前後の比べ', () => {
     assert.equal(compareTests(before, await snapshotTests(root)).ok, false);
   });
 });
+
+describe('レビューで挙がった筋書き', () => {
+  test('**文字列の中の `/*` から後ろを、コメントと見て消さない**', () => {
+    assert.equal(countCases("app.get('/api/*', h);\ntest('a', f);\n/** x */\n"), 1);
+    assert.equal(countCases("const g = glob('**/*.test.ts');\nit('b', f);\n// */\n"), 1);
+    assert.equal(countCases('const r = /https?:\\/\\//;\ntest("c", f);\n'), 1, '正規表現の \\/\\/ を // と読んだ');
+  });
+  test('**`Deno.test(`・`t.test(`・`QUnit.test(` は数える**（`/x/.test(` は今までどおり数えない）', () => {
+    assert.equal(countCases("Deno.test('a', () => {});\nawait t.test('b', () => {});\nQUnit.test('c', a => {});"), 3);
+    assert.equal(countCases('if (/a/.test(s)) {}'), 0);
+  });
+  test('**引数を取る Rust のテスト属性を、一つと数える**（JS の数え方が `::test(` を拾って二重に数えない）', () => {
+    assert.equal(countCases('#[tokio::test(flavor = "multi_thread")]\nasync fn a() {}'), 1);
+    assert.equal(countCases('#[test_case(1)]\nfn a() {}'), 0, 'test_case まで数えた');
+  });
+  test('**数え方を持たない言語のテストファイル（tests/FooTest.java）を消したら通さない**', async () => {
+    const root = await project({ 'tests/FooTest.java': 'class FooTest { @Test void a() {} }', 'test/a.test.ts': "test('a', () => {});" });
+    const before = await snapshotTests(root);
+    await rm(join(root, 'tests/FooTest.java'));
+    assert.equal(compareTests(before, await snapshotTests(root)).ok, false);
+  });
+  test('**作業前と同じ失敗に戻っても、テストを消して戻したのなら作業前からと言わない**', async () => {
+    // X は作業前から落ちるテスト。作業で Y を足して落とし、直す回で Y のテストファイルごと消す
+    const runner = `
+import { existsSync } from 'node:fs';
+console.error('FAIL X');
+if (existsSync(new URL('./test/y.test.ts', import.meta.url))) console.error('FAIL Y');
+process.exit(1);
+`;
+    const root = await project({ 'runner.mjs': runner, 'test/x.test.ts': "test('x', () => {});" });
+    const command = `"${process.execPath}" runner.mjs`;
+    const baseline = await runVerification({ command, root }, new AbortController().signal);
+    await writeFile(join(root, 'test/y.test.ts'), "test('y', () => {});");
+    const events: VerifyEvent[] = [];
+    // 作業前の数はこの回の始めに取られるので、y.test.ts がある状態から始まる
+    const gen = verifyLoop(
+      { command, root, maxRounds: 3 },
+      async () => { await rm(join(root, 'test/y.test.ts'), { force: true }); },
+      new AbortController().signal, undefined, baseline,
+    );
+    let step = await gen.next();
+    while (!step.done) { events.push(step.value); step = await gen.next(); }
+    assert.notEqual(step.value.preexistingFailure, true, `消して戻したのに作業前から: ${events.map((e) => e.type).join(',')}`);
+    assert.ok(events.some((e) => e.type === 'tampered'), `消したことを言っていない: ${events.map((e) => e.type).join(',')}`);
+  });
+  test('**値に時刻が入った失敗は、時刻が違えば別の失敗**（均すのは開始時刻と経過時間だけ）', () => {
+    assert.notEqual(digestFailure("expected '10:00:00' received '11:00:00'"), digestFailure("expected '10:00:00' received '12:00:00'"));
+  });
+});

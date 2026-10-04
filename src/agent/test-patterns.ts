@@ -18,11 +18,13 @@ export function isTestFile(path: string): boolean {
 
 /** テスト定義の数え方。言語ごとの代表的な書き方だけを見る。 */
 const CASE_PATTERNS = [
-  // JS/TS: test(...) it(...)。前が `.` のもの（`/x/.test(s)` の `.test(`）は数えない
-  /(?<![.\w$])(?:test|it)\s*(?:\.\w+)?\s*\(/g,
+  // JS/TS: test(...) it(...)。前が `.` のもの（`/x/.test(s)` の `.test(`）と `::`（Rust の `#[tokio::test(…)]`）は数えない
+  /(?<![.\w$:])(?:test|it)\s*(?:\.\w+)?\s*\(/g,
+  // `Deno.test(`・node:test と tap のサブテスト `t.test(`・`QUnit.test(` は前が `.` でもテスト
+  /\b(?:Deno|t|QUnit)\s*\.\s*test\s*\(/g,
   /^\s*(?:async\s+)?def\s+test_\w+/gm,   // Python（async def も）
   /\bfunc\s+Test\w+\s*\(/g,              // Go
-  /^\s*#\[(?:\w+::)*test\]/gm,           // Rust（#[tokio::test] なども）
+  /^\s*#\[(?:\w+::)*test\b/gm,           // Rust（#[tokio::test] や #[tokio::test(flavor = …)] も）
 ];
 
 /**
@@ -52,10 +54,42 @@ const FOCUS_PATTERNS = [
 
 /**
  * JS 系のコメントを落とす（コメントにしたテストを数えない。数えていたので、テストをコメントにして通しても数が減らなかった）。
- * `//` は URL（`http://`）や文字列の中のものは落とさないよう、`:` と引用符の直後は避ける。
+ *
+ * 一字ずつ読み、引用符（`'` `"` `` ` ``）の中はコメントと見ない。正規表現で落としていたときは、
+ * 文字列の `'/api/*'` や `'**\/*.ts'` の `/*` から次の `*\/` までを丸ごと消し、間のテストを数えなかった。
+ * 引用符の外の `\` は次の一字と組で読む（正規表現の `/https?:\/\//` の `\/` の後ろを `//` と読まない）。
  */
 function withoutComments(text: string): string {
-  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i]!;
+    if (c === '\\') { out += text.slice(i, i + 2); i += 2; continue; }
+    if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== c) {
+        if (text[j] === '\\') j += 1;
+        else if (c !== '`' && text[j] === '\n') break; // 閉じない引用符は行末まで
+        j += 1;
+      }
+      out += text.slice(i, j + 1);
+      i = j + 1;
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '/') {
+      const end = text.indexOf('\n', i);
+      i = end < 0 ? text.length : end;
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      i = end < 0 ? text.length : end + 2;
+      continue;
+    }
+    out += c;
+    i += 1;
+  }
+  return out;
 }
 
 export function countCases(text: string): number {

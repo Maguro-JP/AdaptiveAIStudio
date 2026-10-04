@@ -86,6 +86,13 @@ export async function snapshotTests(root: string): Promise<TestSnapshot> {
   return { files, totalCases, totalFiles: files.size, ...(unreadable.size > 0 ? { unreadable } : {}), ...(focused.size > 0 ? { focused } : {}) };
 }
 
+/** テストの置き物（読ませるデータ・スナップショット）。中身がテストでないと名前と場所で分かるもの。 */
+const TEST_ASSET = /(^|\/)(?:fixtures?|__fixtures__|__snapshots__|testdata)\/|\.(?:json|jsonl|snap|txt|md|csv|tsv|xml|html?|ya?ml|toml|ini|png|jpe?g|gif|svg|webp|bin|gguf|lock)$/i;
+
+function isTestAsset(path: string): boolean {
+  return TEST_ASSET.test(path.replace(/\\/g, '/'));
+}
+
 /**
  * 作業前後を比べる。テストが減っていれば通過とみなさない。
  * 増える分には問題ない（テストを足すのは良いこと）。
@@ -99,8 +106,10 @@ export function compareTests(before: TestSnapshot, after: TestSnapshot): Integri
     for (const d of u) if (d.endsWith('/') && (d === './' || `${f}`.startsWith(d))) return true;
     return false;
   };
-  // 作業前にテストが一つも無かったファイル（補助・置き物・スナップショット）は、消えても問わない
-  const removedFiles = [...before.files.keys()].filter((f) => !after.files.has(f) && !unknown(f) && (before.files.get(f) ?? 0) > 0);
+  // テストが一つも無く、置き物（fixtures・スナップショット・コードでない拡張子）と分かるファイルは、消えても問わない。
+  // 数だけで決めない: 数え方を持たない言語（Java・Ruby など）のテストも 0 と数えるので、それを消しても通していた
+  const removedFiles = [...before.files.keys()].filter((f) => !after.files.has(f) && !unknown(f)
+    && !((before.files.get(f) ?? 0) === 0 && isTestAsset(f)));
   if (removedFiles.length > 0) {
     return {
       ok: false,
