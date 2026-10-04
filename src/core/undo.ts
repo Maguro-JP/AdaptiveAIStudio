@@ -15,7 +15,7 @@
  * ので、git の有無に関わらず効くものを別に持つ。
  */
 import { readFile, writeFile, mkdir, unlink, stat, readdir, rename, rm, realpath, open as openFile, chmod } from 'node:fs/promises';
-import { statSync } from 'node:fs';
+import { statSync, createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { safeResolve } from '../agent/tools/paths.ts';
@@ -92,11 +92,31 @@ export class UndoConflict extends Error {
 
 /** 中身のハッシュ。無いファイルは null。 */
 async function digestOf(abs: string): Promise<string | null> {
-  const bytes = await readFile(abs).catch((e: unknown) => {
-    if (isAbsent(e)) return null;
-    throw e;
+  // 流しながら取る（丸ごと読むと、作業場に作られた大きなファイルで毎回メモリに載せ、2GiB を超えると読めなかった）
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    createReadStream(abs)
+      .on('error', (e) => (isAbsent(e) ? resolve(null) : reject(e)))
+      .on('data', (chunk) => hash.update(chunk))
+      .on('end', () => resolve(hash.digest('hex')));
   });
-  return bytes === null ? null : createHash('sha256').update(bytes).digest('hex');
+}
+
+/** ファイルの頭だけを読む（並びの番号は記録の頭にあるので、丸ごと読まない）。 */
+async function readHead(path: string, bytes = 512): Promise<string> {
+  const fh = await openFile(path, 'r');
+  try {
+    const buf = Buffer.alloc(bytes);
+    const { bytesRead } = await fh.read(buf, 0, bytes, 0);
+    return buf.subarray(0, bytesRead).toString('utf8');
+  } finally {
+    await fh.close();
+  }
+}
+
+/** 作業場の中の道を比べられる形にする（Windows と macOS は大文字小文字を区別しない）。 */
+export function pathKey(relPath: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === 'linux' ? relPath : relPath.toLowerCase();
 }
 
 /** 作業場の根を比べられる形にする（Windows と macOS は大文字小文字を区別しない）。 */
@@ -339,7 +359,8 @@ export class UndoStore {
       return;
     }
     open.bytes += size - freed;
-    open.files.set(relPath, { path: relPath, content: previous });
+    // 書く手前に取った権限は残す（前後比べで中身だけ入れ替えると、消したファイルを作り直すときに権限が落ちた）
+    open.files.set(relPath, { path: relPath, content: previous, ...(old?.mode !== undefined && previous !== undefined ? { mode: old.mode } : {}) });
     this.#note(relPath);
   }
 
@@ -415,7 +436,7 @@ export class UndoStore {
     let max = 0;
     for (const name of await readdir(this.#dir).catch(() => [] as string[])) {
       if (!name.endsWith('.json')) continue;
-      const raw = await readFile(join(this.#dir, name), 'utf8').catch(() => '');
+      const raw = await readHead(join(this.#dir, name)).catch(() => '');
       const m = /"seq":(\d+)/.exec(raw);
       if (m) max = Math.max(max, Number(m[1]));
     }
@@ -529,7 +550,8 @@ export class UndoStore {
       if (!s || s.mtimeMs >= since) inRange.push(name);
     }
     if (inRange.length > 0) {
-      throw new Error(`読めない戻り先があるので戻しません（${inRange.join(', ')}）。途中の回を飛ばして戻すと、どこにも無かった姿になります`);
+      throw new Error(`読めない戻り先があるので戻しません（${inRange.join(', ')}）。途中の回を飛ばして戻すと、どこにも無かった姿になります。`
+        + `壊れている・別の作業場のものと分かっているなら、${this.#dir} からそのファイルを消すと戻せます`);
     }
 
     const touched: string[] = [];
@@ -569,18 +591,25 @@ export class UndoStore {
      */
     if (!opts.force) {
       const seen = new Set<string>();
+      // 大文字小文字を区別しない OS では、綴りの大小だけ違う道を同じものとして扱う（違うものとして古い回とも比べ、必ず断っていた）
+      const fold = (p: string) => pathKey(p);
       const changedOutside: string[] = [];
       for (const { stored } of read) {
+        // 新しい回で記録できなかった道（大きすぎる・前後比べで捨てた）も、その回が触った道。古い回の書き終えた姿とは比べない
+        //（比べると、その回の AI 自身の変更を「後から変わった」と言っていた）
+        const skippedHere = (stored.skipped ?? []).map(fold);
         for (const f of stored.files) {
-          if (seen.has(f.path)) continue;
-          seen.add(f.path);
-          const expected = stored.after?.[f.path];
+          const key = fold(f.path);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const expected = stored.after && Object.hasOwn(stored.after, f.path) ? stored.after[f.path] : undefined;
           if (expected === undefined) continue; // 書き終えた姿を持たない前の記録は比べない
           const abs = safeResolve(this.#root, f.path);
           if (!abs) continue;
           const now = await digestOf(abs).catch(() => undefined);
           if (now !== undefined && now !== expected) changedOutside.push(f.path);
         }
+        for (const k of skippedHere) seen.add(k);
       }
       if (changedOutside.length > 0) throw new UndoConflict(changedOutside);
     }

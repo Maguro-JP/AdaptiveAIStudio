@@ -109,6 +109,37 @@ describe('権限', () => {
   });
 });
 
+describe('レビューで挙がった筋書き', () => {
+  test('**前後比べで中身を入れ替えても（段取り）、書く手前に取った権限は残る**', { skip: process.platform === 'win32' ? 'Windows には実行の権限が無い' : false }, async () => {
+    const { root, store } = await setup();
+    await writeFile(join(root, 'build.sh'), '#!/bin/sh\n');
+    await chmod(join(root, 'build.sh'), 0o755);
+    await store.begin('段取り');
+    store.capture('build.sh', '#!/bin/sh\n');
+    store.replace('build.sh', '#!/bin/sh\n'); // 依頼の前後比べで、依頼の前の姿を入れ直す
+    await rm(join(root, 'build.sh'));
+    const id = (await store.end())!.id;
+    await store.restore(id);
+    assert.equal((await stat(join(root, 'build.sh'))).mode & 0o777, 0o755);
+  });
+
+  test('**新しい回で記録できなかった道を、古い回の書き終えた姿と比べて「後から変わった」と言わない**', async () => {
+    const { root, store } = await setup();
+    await writeFile(join(root, 'a.txt'), '元\n');
+    const first = await turn(store, root, 'a.txt', '一\n');
+    // 次の回は a.txt を変えたが、前の中身を記録できなかった（外のツール）。別のファイルは記録できた
+    await store.begin('外のツールで変える');
+    store.skip('a.txt');
+    await writeFile(join(root, 'a.txt'), '二\n');
+    store.capture('b.txt', undefined);
+    await writeFile(join(root, 'b.txt'), 'B\n');
+    await store.end();
+    const done = await store.restore(first);
+    assert.ok(done, '戻せなかった');
+    assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), '元\n');
+  });
+});
+
 describe('並び', () => {
   test('**時計を戻しても、後に始めた回が上に並ぶ**', async () => {
     const { root, store } = await setup();
