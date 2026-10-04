@@ -149,7 +149,8 @@ export function tokenize(text: string): string[] {
     }
     // 日本語は2文字ずつずらして拾う。部分一致で引っかかるようにする。
     if (chunk.length <= 2) {
-      if (!STOP.has(chunk)) out.push(chunk);
+      // 一字の語は捨てる（英字に挟まれた助詞「の」「を」が一語になり、それだけで関係の無い覚えに当たっていた）
+      if (chunk.length === 2 && !STOP.has(chunk)) out.push(chunk);
       continue;
     }
     for (let i = 0; i + 2 <= chunk.length; i += 1) {
@@ -1025,7 +1026,8 @@ function isEntry(e: unknown): e is MemoryEntry {
   if (typeof e !== 'object' || e === null) return false;
   const m = e as Partial<MemoryEntry>;
   // 思い出す・並べる・日付を出す所で触る欄の形も見る（`tags:[1]`・`seenAt:"x"` を通すと、思い出すたびに落ちていた）
-  const optNum = (v: unknown): boolean => v === undefined || (typeof v === 'number' && Number.isFinite(v));
+  // null は無いのと同じに扱う（NaN を JSON にすると null になる。退けると棚から消え、最初からの覚えなら入れ直されて二重になる）
+  const optNum = (v: unknown): boolean => v === undefined || v === null || (typeof v === 'number' && Number.isFinite(v));
   return typeof m.id === 'string' && typeof m.kind === 'string' && typeof m.title === 'string'
     && Array.isArray(m.tags) && m.tags.every((t) => typeof t === 'string')
     && (m.detail === undefined || typeof m.detail === 'string')
@@ -1035,10 +1037,10 @@ function isEntry(e: unknown): e is MemoryEntry {
 /** 無い欄を埋める（`detail` の無い行を通して、思い出すときに `undefined` を割ろうとして落ちていた）。 */
 function filled(e: MemoryEntry): MemoryEntry {
   const m = e as Partial<MemoryEntry> & MemoryEntry;
-  if (m.detail === undefined) m.detail = '';
-  if (m.at === undefined) m.at = 0;
-  if (m.seenAt === undefined) m.seenAt = m.at;
-  if (m.confirms === undefined) m.confirms = 1;
+  if (m.detail == null) m.detail = '';
+  if (m.at == null) m.at = 0;
+  if (m.seenAt == null) m.seenAt = m.at;
+  if (m.confirms == null) m.confirms = 1;
   return m;
 }
 

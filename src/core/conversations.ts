@@ -422,15 +422,16 @@ export class Conversations {
          * 書く前の大きさを記録し、失敗したらそこまで切り詰めてから投げる（やり直す）。途中まで書けて失敗すると、呼ぶ側は次の回に
          * 同じ分を丸ごと書き直すので、書き切れた行が二重になり、同じツールの呼び出しの結果が二度並んでいた
          */
-        const size = await stat(to).then((s) => s.size, () => undefined);
+        // 無かったのか（ENOENT）、読めなかったのか（掴まれている等）を分ける。読めなかっただけで消すと、在る会話を丸ごと消す
+        const size = await stat(to).then((s) => s.size, (e: unknown) => ((e as NodeJS.ErrnoException).code === 'ENOENT' ? 'absent' as const : undefined));
         try {
           // 改行を足すかは、やり直すたびに見直す（途中まで書けていたら、その書きかけの行に繋げない）
           await this.#appendText(to, (await endsWithNewline(to)) ? body : `\n${body}`);
           return;
         } catch (e) {
           // 切り詰められなければ、今までどおり書きかけの行を残す（次の書き足しは改行から始めるので、次の行は読める）
-          if (size !== undefined) await truncate(to, size).catch(() => undefined);
-          else await rm(to, { force: true }).catch(() => undefined);
+          if (typeof size === 'number') await truncate(to, size).catch(() => undefined);
+          else if (size === 'absent') await rm(to, { force: true }).catch(() => undefined);
           const code = (e as NodeJS.ErrnoException).code;
           if (tries >= 3 || !(code === 'EBUSY' || code === 'EPERM')) throw e;
           await new Promise((r) => setTimeout(r, 100 * (tries + 1)));

@@ -1475,6 +1475,8 @@ export class Session {
        * いま開いている所）。それを「利用者の言葉」として判じると、**選んだ
        * コードを指摘として覚える**。判じるのは、打った分だけにする。
        */
+      /** 記憶を呼び戻すときの問い。渡らなければ打った分（`said`）で引く。 */
+      recall?: string;
       said?: string;
       /**
        * どの会話で送るか。省けば既定の会話。画面は会話ごとに渡して、二つの会話を同時に動かす
@@ -1610,7 +1612,10 @@ export class Session {
       // 両方に載せると、同じ文が一往復に二度入る（実際に八件ずつ二重に入っていた）。
       // 問いかけには、前の作業の覚えを足さない。話が混ざるだけで、答えは良くならない。
       // 問いは打った分だけ（差し込んだ添付の中身・開いているファイルの見出しを入れると、どの覚えにも当たっていた）
-      const recalled = chat ? '' : this.#recall(undoName, { lessons: false }, conv);
+      // 段取りの一段は段の中身と元の依頼で引く（`recall`）。添付だけの回（打った分が空）は呼び戻さない（題が「添付（…）を送った回」に
+      // なり、過去の添付だけの回がまとめて当たっていた）。打った分が渡らない道（端末など）は、今までどおり依頼の全文
+      const query = opts.recall ?? (opts.said !== undefined ? opts.said : instruction);
+      const recalled = chat || !query.trim() ? '' : this.#recall(query, { lessons: false }, conv);
       if (recalled) yield { type: 'recalled', text: recalled };
 
       conv.history.push({

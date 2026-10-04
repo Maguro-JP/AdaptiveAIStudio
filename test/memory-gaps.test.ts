@@ -1,163 +1,105 @@
 /**
- * 記憶と会話の保存の不具合（22 回目の調査）。
+ * 覚えて使い回す仕組みの抜け（15 回目の調査）。
  *
- * - 呼び戻しの問いは打った分だけ（差し込んだ添付の中身で、どの覚えにも当たっていた）
- * - 欄の形の違う行（detail が無い・tags が数・seenAt が文字）で、思い出すたびに落ちない
- * - 別の作業場に同じ題が在っても、忘れた覚えを戻せる
- * - 英字に仮名が続く語・全角英数で、呼び戻しが外れない
- * - 会話の書き足しが途中で失敗しても、書き直しで行が二重にならない
- * - トップのまま本体が組まれても、空の会話を作らない
+ * - 秘密（API キー）を記憶・提案に残さない
+ * - 添付だけを送った回は、添付の名前で呼ぶ（中身を記憶の題にしない）
+ * - 毎週の当番（atHour あり）を、先週済ませていれば「前回分が残っています」にしない
+ * - 記憶の時刻が未来（時計のずれ）でも、思い出す順・嫌がられたことの順を崩さない
  */
-import { test, describe, after } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, readFile, readdir, appendFile, mkdir } from 'node:fs/promises';
+import { Memory } from '../src/memory/memory.ts';
+import { ProposalQueue } from '../src/agent/proposals.ts';
+import { DutyRoster, type Duty } from '../src/harness/duties.ts';
+import { saidOrAttached } from '../src/core/session.ts';
+import { displeasureTitle } from '../src/memory/displeasure.ts';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 
-process.env.AAS_STATE_DIR = await tempDir('aas-memory-gaps-state-');
-process.env.AAS_CONFIG = join(await tempDir('aas-memory-gaps-config-'), 'aas.config.json');
-const { Memory, tokenize, normalizeTitle } = await import('../src/memory/memory.ts');
+const DAY = 86_400_000;
+// 鍵の形をした作り物（本物ではない）
+const KEY = `sk-ant-api03-${'Ab1'.repeat(10)}`;
 
-async function memoryWith(lines: string[]): Promise<InstanceType<typeof Memory>> {
-  const dir = await tempDir('aas-memory-gaps-');
-  const path = join(dir, 'memory.jsonl');
-  await writeFile(path, lines.join('\n') + '\n');
-  const m = new Memory(path);
-  await m.load();
-  return m;
-}
-
-describe('欄の形の違う行', () => {
-  test('**detail の無い行を読んでも、思い出すときに落ちない**', async () => {
-    const m = await memoryWith([JSON.stringify({ id: 'm1', kind: 'preference', title: 'テストの書き方', tags: [] })]);
-    assert.doesNotThrow(() => m.recall('テストの書き方'));
-    assert.equal(m.recall('テストの書き方').length, 1);
+describe('秘密を残さない', () => {
+  test('記憶の題と中身から API キーを伏せる', () => {
+    const m = new Memory();
+    m.remember({ kind: 'attempt', title: `このキー ${KEY} を .env に入れて`, detail: `API_KEY=${KEY}` });
+    const e = m.all()[0]!;
+    assert.ok(!e.title.includes(KEY) && !e.detail.includes(KEY), JSON.stringify(e));
   });
-
-  test('**tags に数・seenAt に文字が入った行は、思い出す側へ渡さない**（退けた行として残す）', async () => {
-    const m = await memoryWith([
-      JSON.stringify({ id: 'm1', kind: 'decision', title: 'テストの書き方', detail: 'x', tags: [1], at: 1, seenAt: 1, confirms: 1 }),
-      JSON.stringify({ id: 'm2', kind: 'decision', title: 'テストの名前', detail: 'x', tags: [], at: 1, seenAt: 'x', confirms: 1 }),
-      JSON.stringify({ id: 'm3', kind: 'decision', title: 'テストの並び', detail: 'x', tags: ['a'], at: 1, seenAt: 1, confirms: 1 }),
-    ]);
-    assert.doesNotThrow(() => m.recall('テスト'));
-    assert.deepEqual(m.recall('テスト').map((e) => e.id), ['m3']);
+  test('提案の題・理由・手順から API キーを伏せる', () => {
+    const q = new ProposalQueue();
+    const p = q.add({ kind: 'bug', title: `鍵 ${KEY}`, rationale: `.env に ${KEY}`, evidence: [], suggestedAction: `export KEY=${KEY}`, fingerprint: 'f' })!;
+    assert.ok(![p.title, p.rationale, p.suggestedAction].some((t) => t.includes(KEY)), JSON.stringify(p));
   });
 });
 
-describe('別の作業場の同じ題', () => {
-  test('**別の作業場に同じ題が在っても、忘れた覚えを戻せる**', async () => {
-    const m = await memoryWith([]);
-    const a = m.remember({ kind: 'attempt', title: 'テストを直して', detail: 'a', root: '/a' });
-    m.remember({ kind: 'attempt', title: 'テストを直して', detail: 'b', root: '/b' });
-    const gone = m.remove(a.entry.id);
-    assert.ok(gone);
-    assert.equal(m.restore(gone!), true);
+describe('添付だけを送った回の名前', () => {
+  test('添付の中身ではなく、名前で呼ぶ', () => {
+    const name = saidOrAttached('', `--- 添付: .env ---\nAPI_KEY=${KEY}\n--- ここまで ---`);
+    assert.equal(name, '添付（.env）を送った回');
   });
-
-  test('同じ作業場に同じ題が在れば、今までどおり二つにしない（対）', async () => {
-    const m = await memoryWith([]);
-    const a = m.remember({ kind: 'attempt', title: 'テストを直して', detail: 'a', root: '/a' });
-    const gone = m.remove(a.entry.id);
-    m.remember({ kind: 'attempt', title: 'テストを直して', detail: 'again', root: '/a' });
-    assert.equal(m.restore(gone!), 'duplicate');
+  test('読めなかった添付・中身を読めない形式・読み方の注記・名前の括弧も、名前だけを拾う', () => {
+    const text = [
+      '--- 添付: a.txt（読めません（EACCES））---',
+      '--- 添付（中身を読めない形式）: b.bin（12 バイト）---',
+      '--- 添付: c.txt（CP932 として読みました） ---', 'x', '--- ここまで ---',
+      '--- 添付: 報告（案）.md ---', 'y', '--- ここまで ---',
+    ].join('\n');
+    assert.equal(saidOrAttached('', text), '添付（a.txt、b.bin、c.txt ほか）を送った回');
+    assert.equal(saidOrAttached('', '--- 添付: 報告（案）.md ---\ny\n--- ここまで ---'), '添付（報告（案）.md）を送った回');
   });
-});
-
-describe('英字と仮名・全角', () => {
-  test('**英字に仮名が続く語から、英字の語を取る**', () => {
-    assert.ok(tokenize('READMEを直して').includes('readme'));
-    assert.ok(tokenize('npmで入れる').includes('npm'));
-    assert.deepEqual(tokenize('ＲＥＡＤＭＥ'), ['readme']);
-  });
-
-  test('**「READMEを直して」で「README の書き方を決めた」を思い出す**', async () => {
-    const m = await memoryWith([]);
-    m.remember({ kind: 'decision', title: 'README の書き方を決めた', detail: '見出しは日本語' });
-    assert.equal(m.recall('READMEを直して').length, 1);
-  });
-
-  test('**全角と半角の英数は、同じ題として畳む**', () => {
-    assert.equal(normalizeTitle('ＡＰＩキーを直す'), normalizeTitle('APIキーを直す'));
+  test('打った分があればそれ、渡さない呼び手は依頼のまま（対）', () => {
+    assert.equal(saidOrAttached('直して', '--- 添付: a ---\nx\n--- ここまで ---\n\n直して'), '直して');
+    assert.equal(saidOrAttached(undefined, '直して'), '直して');
   });
 });
 
-describe('会話の書き足し', () => {
-  test('**途中まで書けて失敗しても、書き直しで行が二重にならない**', async () => {
-    const { Conversations } = await import('../src/core/conversations.ts');
-    const dir = await tempDir('aas-memory-gaps-conv-');
-    let failOnce = true;
-    const store = new Conversations(dir, {
-      append: async (path, text) => {
-        if (failOnce) {
-          failOnce = false;
-          // 半分だけ本当に書いてから、ディスクが一杯になる
-          await appendFile(path, text.slice(0, Math.floor(text.length / 2)));
-          throw Object.assign(new Error('no space'), { code: 'ENOSPC' });
-        }
-        await appendFile(path, text);
-      },
-    });
-    const { id } = await store.create();
-    const msgs = [
-      { role: 'user' as const, content: '直して' },
-      { role: 'assistant' as const, content: '直しました' },
-    ];
-    await assert.rejects(store.append(id, msgs));
-    await store.append(id, msgs); // 呼ぶ側は、書けなかった分を丸ごと書き直す
-    const back = await store.load(id);
-    assert.deepEqual(back.map((m) => m.content), ['直して', '直しました']);
+describe('嫌がられたことの題', () => {
+  test('場面の文に鍵があれば、切る前に伏せる（切ってから伏せると鍵の頭が残る）', () => {
+    const title = displeasureTitle('REPEATED', `このキー ${KEY} を .env に入れて`);
+    assert.ok(!title.includes('sk-ant'), title);
   });
 });
 
-describe('呼び戻しの問いと空の会話', () => {
-  const servers: { close: () => Promise<void> }[] = [];
-  after(async () => { for (const s of servers) await s.close(); });
-
-  test('**添付の中身にだけ現れる語では、覚えを呼び戻さない**（打った分の語なら呼び戻す）', async () => {
-    const { startFakeServer } = await import('./fake-server.ts');
-    const { Session } = await import('../src/core/session.ts');
-    const { DEFAULT_CONFIG } = await import('../src/config.ts');
-    const fake = await startFakeServer({ kind: 'stream', text: '答えます。' });
-    servers.push(fake);
-    const root = await tempDir('aas-memory-gaps-root-');
-    const session = await Session.create({
-      ...DEFAULT_CONFIG,
-      providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
-      candidates: ['local:m'],
-      agent: { root, approval: 'auto' },
-    } as typeof DEFAULT_CONFIG, { approve: () => Promise.resolve(true) });
-    try {
-      session.memory.remember({ kind: 'decision', title: 'ガラパゴス諸島の旅程を決めた', detail: '三日目は休み' });
-      session.memory.remember({ kind: 'decision', title: '関数の名前を決めた', detail: '動詞から始める' });
-      const full = `--- 添付: memo.txt ---\nガラパゴス諸島の旅程について\n--- ここまで ---\n\n関数の名前を直して`;
-      const recalled: string[] = [];
-      for await (const ev of session.send(full, { said: '関数の名前を直して' })) {
-        if (ev.type === 'recalled') recalled.push(ev.text);
-      }
-      const text = recalled.join('\n');
-      assert.ok(!text.includes('ガラパゴス'), `添付の語で呼び戻した: ${text}`);
-      assert.ok(text.includes('関数の名前'), `打った分の語で呼び戻していない: ${text}`);
-    } finally { await session.close(); }
+describe('毎週の当番の前回分', () => {
+  const duty: Duty = {
+    id: 'w', codename: 'WEEKLY', name: '週', purpose: 'p', modeId: 'retrospect', importance: 1,
+    cadence: { kind: 'weekly', weekday: 1, atHour: 9 }, catchUp: true,
+  } as Duty;
+  test('先週の月曜 10 時に済ませていれば、今週の月曜 9:30 は前回分ではない', () => {
+    const roster = new DutyRoster([duty]);
+    roster.complete('w', new Date(2026, 8, 28, 10, 0).getTime());
+    const st = roster.status(new Date(2026, 9, 5, 9, 30).getTime())[0]!;
+    assert.equal(st.due, true);
+    assert.equal(st.isCatchUp, false);
   });
+  test('二週前に済ませたきりなら、前回分が残っている（対）', () => {
+    const roster = new DutyRoster([duty]);
+    roster.complete('w', new Date(2026, 8, 21, 10, 0).getTime());
+    assert.equal(roster.status(new Date(2026, 9, 5, 9, 30).getTime())[0]!.isCatchUp, true);
+  });
+});
 
-  test('**トップのまま本体が組まれても、空の会話を作らない**', async () => {
-    const { UiServer } = await import('../src/ui/server.ts');
-    const { DEFAULT_CONFIG } = await import('../src/config.ts');
-    const { stateDir } = await import('../src/core/home.ts');
-    const root = await tempDir('aas-memory-gaps-ui-');
-    await mkdir(root, { recursive: true });
-    const server = new UiServer({ config: { ...DEFAULT_CONFIG, agent: { root } } as typeof DEFAULT_CONFIG, port: 0 });
-    const base = (await server.start()).replace(/\/$/, '');
-    try {
-      const dir = join(stateDir(), 'conversations');
-      const before = (await readdir(dir).catch(() => [])).filter((n) => n.endsWith('.jsonl')).length;
-      // 「戻す」を押すと、本体が組まれる（戻し先が無いので戻しはしない）
-      const r = await fetch(`${base}/api/undo`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'u-none' }) });
-      assert.equal(r.status, 404, await r.text());
-      const after = (await readdir(dir).catch(() => [])).filter((n) => n.endsWith('.jsonl')).length;
-      assert.equal(after, before, '空の会話が増えた');
-    } finally { await server.stop(); }
-    void readFile;
+describe('未来の時刻の記憶', () => {
+  test('思い出す順で、未来の時刻の覚えが語の重なりの多い覚えを追い越さない', () => {
+    const m = new Memory();
+    const now = Date.now();
+    m.remember({ kind: 'fact', title: 'lodash の話', now: now + 29 * DAY });
+    m.remember({ kind: 'fact', title: 'lodash の版 4 の既知の不具合', now });
+    const got = m.recall('lodash の版 4 の既知の不具合', { limit: 2 });
+    assert.equal(got[0]?.title, 'lodash の版 4 の既知の不具合', JSON.stringify(got.map((e) => e.title)));
+  });
+  test('読み直すと未来の時刻は今に丸まり、その後に覚えた嫌がられたことが先頭に来る', async () => {
+    const path = join(await tempDir('aas-memory-future-'), 'memory.jsonl');
+    const m = new Memory(path);
+    await m.load();
+    m.remember({ kind: 'displeasure', title: '時計が進んでいた間の一件', now: Date.now() + 365 * DAY });
+    await m.save();
+    const next = new Memory(path);
+    await next.load();
+    await new Promise((r) => setTimeout(r, 5));
+    next.remember({ kind: 'displeasure', title: '後から覚えた一件' });
+    assert.equal(next.displeasures(1)[0]?.title, '後から覚えた一件');
   });
 });
