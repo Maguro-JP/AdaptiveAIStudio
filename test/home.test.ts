@@ -754,6 +754,20 @@ describe('bundle を組み直すとき', () => {
     assert.deepEqual((await readdir(out)).filter((n) => n.startsWith('.old-')), [], '退避フォルダが残っている');
   });
 
+  test('**前の回に戻しきれず残した版（退避フォルダ）は、組めるまで消さない**', async () => {
+    // 先に消していたので、「残してあります」と言った版を、もう一度押しただけで消していた
+    const out = await tempDir('aas-rebundle-stuck-');
+    const { mkdir, readdir } = await import('node:fs/promises');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-good' });
+    await mkdir(join(out, '.old-999-1'), { recursive: true });
+    await writeFile(join(out, '.old-999-1', 'VERSION'), '前の回に残した版');
+    await assert.rejects(bundle({ out, srcRoot: installRoot(), version: 'test-broken', nodeZip: join(out, 'no-such.zip') }));
+    assert.equal(await readFile(join(out, '.old-999-1', 'VERSION'), 'utf8'), '前の回に残した版', '組めなかった回で、残した版を消した');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-good-again' });
+    assert.deepEqual((await readdir(out)).filter((n) => n.startsWith('.old-')), [], '組めたのに退避フォルダが残っている');
+  });
+
   test('**組み立て元の node_modules がリンクでも、写すのは中身で、組み立て元の型定義と .map を消さない**', async () => {
     const { mkdir, readdir, symlink, copyFile, stat } = await import('node:fs/promises');
     const { lstatSync } = await import('node:fs');
@@ -836,6 +850,20 @@ describe('bundle を組み直すとき', () => {
     assert.equal(await readFile(join(out, 'app', 'kept.txt'), 'utf8'), '動いている版', '移した分を戻していない');
     assert.ok(existsSync(join(out, '.portable')) && existsSync(join(out, 'runtime', 'node.exe')));
     assert.deepEqual((await readdir(out)).filter((n) => n.startsWith('.old-')), [], '退避フォルダが残っている');
+  });
+
+  test('**前の回に戻しきれず残した版（退避フォルダ）は、組めるまで消さない**', async () => {
+    // 先に消していたので、「残してあります」と言った版を、もう一度押しただけで消していた
+    const out = await tempDir('aas-rebundle-stuck-');
+    const { mkdir, readdir } = await import('node:fs/promises');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-good' });
+    await mkdir(join(out, '.old-999-1'), { recursive: true });
+    await writeFile(join(out, '.old-999-1', 'VERSION'), '前の回に残した版');
+    await assert.rejects(bundle({ out, srcRoot: installRoot(), version: 'test-broken', nodeZip: join(out, 'no-such.zip') }));
+    assert.equal(await readFile(join(out, '.old-999-1', 'VERSION'), 'utf8'), '前の回に残した版', '組めなかった回で、残した版を消した');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-good-again' });
+    assert.deepEqual((await readdir(out)).filter((n) => n.startsWith('.old-')), [], '組めたのに退避フォルダが残っている');
   });
 
   test('改名が通るときは、古い runtime も退避フォルダも残さずに組み直す（対）', async () => {

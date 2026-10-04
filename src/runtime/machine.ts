@@ -112,6 +112,10 @@ function probe(cmd: string, args: string[], timeoutMs = 5000): Promise<{ out?: s
 
 let tmpSeq = 0;
 
+/** 調べ切れなかった結果を、このプロセスの中で使い回す長さ。 */
+const UNSURE_REUSE_MS = 10 * 60 * 1000;
+const unsureFor = new Map<string, { machine: DetectedMachine; at: number }>();
+
 /** 検出結果は毎回取らずキャッシュする。ハードは頻繁に変わらない。 */
 export class MachineCache {
   readonly #path: string;
@@ -133,9 +137,16 @@ export class MachineCache {
       if (isMachine(got) && got.ramBytes === totalmem() && got.detectedAt !== undefined
         && this.#now() - got.detectedAt < MACHINE_TTL_MS && this.#now() >= got.detectedAt) return got;
     } catch { /* 無い・壊れている。下で検出し直す */ }
+    // 調べ切れなかった結果は、このプロセスの中でしばらく使い回す（呼ばれるたびに 5 秒待たせない）
+    const recent = unsureFor.get(this.#path);
+    if (recent && this.#now() - recent.at < UNSURE_REUSE_MS && this.#now() >= recent.at) return recent.machine;
     const detected = await this.#detect();
-    // GPU を調べ切れなかった結果は残さない（「GPU なし」を次からも使い続けない）。次に呼ばれたときに調べ直す
-    if (detected.gpuUnsure) return detected;
+    // GPU を調べ切れなかった結果はファイルに残さない（「GPU なし」を次からも使い続けない）。しばらくしたら調べ直す
+    if (detected.gpuUnsure) {
+      unsureFor.set(this.#path, { machine: detected, at: this.#now() });
+      return detected;
+    }
+    unsureFor.delete(this.#path);
     await mkdir(dirname(this.#path), { recursive: true }).catch(() => undefined);
     // 一時ファイルに書いてから置き換える（書きかけで落ちると、壊れた検出結果が残る）。
     const tmp = `${this.#path}.${process.pid}.${++tmpSeq}.tmp`; // 同じプロセスで並んで呼ばれても名前をぶつけない

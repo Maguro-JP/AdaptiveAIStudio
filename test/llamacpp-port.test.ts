@@ -72,6 +72,55 @@ describe('llama-server の口', () => {
     }
   });
 
+  test('**中断は頼んだ人ごとに効く**（自分の ■ で自分の待ちはやめ、ほかの人の起動は落とさない）', async () => {
+    const rt = new LlamaCppRuntime({
+      command: process.execPath, commandArgs: [FAKE], modelsDir: await modelsDir(),
+      machine: REFERENCE_MACHINE, basePort: await freePort(), startupTimeoutMs: 15_000,
+    });
+    process.env.FAKE_LLAMA_DELAY_MS = '1500';
+    try {
+      const mine = new AbortController();
+      const first = rt.ensureLoaded('a-7b.gguf', mine.signal).then(() => 'loaded', (e: Error) => e.message);
+      const other = rt.ensureLoaded('a-7b.gguf', new AbortController().signal);
+      const quiet = rt.ensureLoaded('a-7b.gguf'); // 事前読み込み（中断を持たない）
+      mine.abort();
+      assert.match(await first, /中断/, '自分の ■ が効かない');
+      const [a, b] = await Promise.all([other, quiet]);
+      assert.equal(a.baseUrl, b.baseUrl, 'ほかの人の起動まで落とした');
+    } finally {
+      delete process.env.FAKE_LLAMA_DELAY_MS;
+      await rt.shutdown();
+    }
+  });
+
+  test('待っている全員が中断したら、起動そのものを止める', async () => {
+    const lines: string[] = [];
+    const rt = new LlamaCppRuntime({
+      command: process.execPath, commandArgs: [FAKE], modelsDir: await modelsDir(),
+      machine: REFERENCE_MACHINE, basePort: await freePort(), startupTimeoutMs: 600_000, onLog: (l) => lines.push(l),
+    });
+    process.env.FAKE_LLAMA_DELAY_MS = '600000';
+    process.env.FAKE_LLAMA_SAY_PID = '1';
+    let pid = 0;
+    try {
+      const a = new AbortController();
+      const b = new AbortController();
+      const one = rt.ensureLoaded('a-7b.gguf', a.signal).catch(() => 'rejected');
+      const two = rt.ensureLoaded('a-7b.gguf', b.signal).catch(() => 'rejected');
+      await until(() => lines.some((l) => /^fake-llama pid \d+$/.test(l)), '代役が起きた');
+      pid = Number(lines.find((l) => /^fake-llama pid \d+$/.test(l))!.split(' ').at(-1));
+      a.abort();
+      b.abort();
+      assert.deepEqual(await Promise.all([one, two]), ['rejected', 'rejected']);
+      await until(() => !alive(pid), '全員がやめたのに、起動中の llama-server が残っている', { timeoutMs: 15_000 });
+    } finally {
+      delete process.env.FAKE_LLAMA_DELAY_MS;
+      delete process.env.FAKE_LLAMA_SAY_PID;
+      if (pid && alive(pid)) process.kill(pid, 'SIGKILL');
+      await rt.shutdown();
+    }
+  });
+
   test('読み込み中に止めたら、llama-server を残さない', async () => {
     const lines: string[] = [];
     const rt = new LlamaCppRuntime({

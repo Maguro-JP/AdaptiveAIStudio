@@ -103,10 +103,15 @@ describe('マシンの検出結果', () => {
   test('**GPU を調べ切れなかった結果は残さず、次に調べ直す**（「GPU なし」を使い続けない）', async () => {
     const path = join(await tempDir('aas-machine-unsure-'), 'machine.json');
     let unsure = true;
-    const cache = new MachineCache(path, { now: () => NOW, detect: async () => (unsure ? detected({ gpuUnsure: true }) : detected({ vramBytes: 8 * 2 ** 30, gpuName: 'RTX' })) });
+    let calls = 0;
+    let now = NOW;
+    const cache = new MachineCache(path, { now: () => now, detect: async () => { calls++; return unsure ? detected({ gpuUnsure: true }) : detected({ vramBytes: 8 * 2 ** 30, gpuName: 'RTX' }); } });
     assert.equal((await cache.get()).gpuUnsure, true);
     await assert.rejects(stat(path), '調べ切れなかった結果を書いた');
+    assert.equal((await cache.get()).gpuUnsure, true);
+    assert.equal(calls, 1, '呼ばれるたびに調べ直して待たせた');
     unsure = false;
-    assert.equal((await cache.get()).gpuName, 'RTX');
+    now = NOW + 11 * 60 * 1000;
+    assert.equal((await cache.get()).gpuName, 'RTX', 'しばらくしたら調べ直す');
   });
 });

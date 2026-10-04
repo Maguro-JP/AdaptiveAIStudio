@@ -23,7 +23,7 @@
  */
 import { cp, copyFile, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink, rename, realpath } from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
-import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
+import { join, dirname, resolve, relative, isAbsolute, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMain } from './is-main.mjs';
 import { execFileSync } from 'node:child_process';
@@ -434,17 +434,20 @@ export async function bundle({
       }
     }
   }
-  // 前に途中で残った退避フォルダを消す。**いま退避した前の版は、組み終えて確かめるまで消さない**（組む途中で落ちると、
-  // 前の版は消えたまま、半分組んだ新しい版だけが残っていた。下で落ちたら、置いたものを消して前の版を戻す）
-  for (const name of present.filter((n) => n.startsWith(TRASH_PREFIX))) await rm(join(out, name), { recursive: true, force: true });
+  /*
+   * **いま退避した前の版は、組み終えて確かめるまで消さない**（組む途中で落ちると、前の版は消えたまま、半分組んだ新しい版だけが
+   * 残っていた。下で落ちたら、置いたものを消して前の版を戻す）。前に残った退避フォルダも、組めてから消す。先に消すと、
+   * 前の回で戻しきれずに残した版（「残してあります」と言ったもの）を、もう一度押しただけで消していた。
+   * 消すのは組めた後なので、消せなくても（Windows で一瞬掴まれる）組んだものは無事。残ったものは次に組めたときに消す
+   */
+  let built;
   try {
-    const built = await assemble();
-    if (leaving.length > 0) await rm(trash, { recursive: true, force: true }).catch(() => undefined);
-    return built;
+    built = await assemble();
   } catch (e) {
     const stuck = [];
     for (const name of await readdir(out).catch(() => [])) {
-      if (name.startsWith(TRASH_PREFIX) || (keepData && name === 'data')) continue;
+      // 退避フォルダ・残す data・移していないエクスプローラのファイルは触らない
+      if (name.startsWith(TRASH_PREFIX) || (keepData && name === 'data') || SHELL_LITTER.has(name.toLowerCase())) continue;
       await rm(join(out, name), { recursive: true, force: true }).catch(() => stuck.push(name));
     }
     for (const back of moved) {
@@ -455,6 +458,11 @@ export async function bundle({
     else if (moved.length > 0) log('  組めなかったので、前の版に戻しました');
     throw e;
   }
+  for (const name of [...present.filter((n) => n.startsWith(TRASH_PREFIX)), ...(leaving.length > 0 ? [basename(trash)] : [])]) {
+    await rm(join(out, name), { recursive: true, force: true, maxRetries: 3 })
+      .catch(() => log(`  前の版（${name}）を消せませんでした。次に組めたときに消します`));
+  }
+  return built;
 
   async function assemble() {
   const app = join(out, 'app');
@@ -515,7 +523,7 @@ export async function bundle({
 
   // 展開先に、あと何文字使えるか。**利用者が展開する前に読む所へ書く。**
   // Windows は道の全体が 260 文字を超えると開けない。
-  const deep = await deepest(out);
+  const deep = await deepest(out, (rel) => rel.startsWith(TRASH_PREFIX)); // 退避した前の版は配らないので測らない
   const roomForFolder = (260 - 1) - 1 - deep.length;
 
   // 名前は普通のプログラムの作法に合わせる（README / VERSION）。

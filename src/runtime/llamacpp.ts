@@ -57,6 +57,16 @@ function portFree(port: number): Promise<boolean> {
   });
 }
 
+/** 起こしている最中のモデル。待っている人の数と、中断の無い待ち手が居るかを持つ。 */
+interface Loading {
+  promise: Promise<LoadedModel>;
+  controller: AbortController;
+  /** 中断を持って待っている人の数 */
+  waiting: number;
+  /** 中断の無い待ち手が居る */
+  silent: boolean;
+}
+
 /** 埋まっている口を飛ばして試す数。 */
 const PORT_TRIES = 20;
 export interface LlamaCppOptions {
@@ -105,7 +115,9 @@ export class LlamaCppRuntime implements LocalRuntime {
    * 起こしている最中のモデル。同じモデルを二本同時に起こすと、後の記録が前を上書きし、前の子は止める対象から外れて
    * 残った（VRAM を二重に使い、Windows では残り続ける）。起こしている最中なら、その起動を待って同じものを返す。
    */
-  readonly #loading = new Map<string, Promise<LoadedModel>>();
+  readonly #loading = new Map<string, Loading>();
+  /** 止めた回数。起こす手前で変わっていたら起こさない（口を探している間に止められると、止めた後に子が起きて残った）。 */
+  #stops = 0;
   #nextPort: number;
 
   constructor(opts: LlamaCppOptions) {
@@ -194,14 +206,43 @@ export class LlamaCppRuntime implements LocalRuntime {
     });
   }
 
+  /**
+   * 起こす。同じモデルを起こしている最中なら、その起動を待つ。
+   *
+   * 中断は頼んだ人ごとに効く。自分の ■ で自分の待ちはすぐやめるが、起動そのものを止めるのは、待っている全員が
+   * やめたときだけ（中断の無い待ち手が居れば止めない）。最初の人の中断をそのまま起動に渡すと、後から来た人の ■ が効かず、
+   * 逆の順では、ほかの人の起動まで落としていた。
+   */
   ensureLoaded(ref: string, signal?: AbortSignal): Promise<LoadedModel> {
-    const pending = this.#loading.get(ref);
-    if (pending) return pending;
-    const loading = this.#load(ref, signal).finally(() => {
-      if (this.#loading.get(ref) === loading) this.#loading.delete(ref);
+    if (signal?.aborted) return Promise.reject(new Error('起動が中断されました。'));
+    let entry = this.#loading.get(ref);
+    if (!entry) {
+      const controller = new AbortController();
+      const created: Loading = {
+        controller, waiting: 0, silent: false,
+        promise: this.#load(ref, controller.signal).finally(() => {
+          if (this.#loading.get(ref) === created) this.#loading.delete(ref);
+        }),
+      };
+      entry = created;
+      this.#loading.set(ref, entry);
+    }
+    const shared = entry;
+    // 中断の無い待ち手（事前読み込み）が一人でも居れば、ほかの全員がやめても起動は続ける
+    if (!signal) { shared.silent = true; return shared.promise; }
+    shared.waiting += 1;
+    return new Promise<LoadedModel>((resolve, reject) => {
+      const onAbort = () => {
+        shared.waiting -= 1;
+        if (shared.waiting === 0 && !shared.silent) shared.controller.abort();
+        reject(new Error('起動が中断されました。'));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      shared.promise.then(
+        (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+        (e: unknown) => { signal.removeEventListener('abort', onAbort); reject(e); },
+      );
     });
-    this.#loading.set(ref, loading);
-    return loading;
   }
 
   async #load(ref: string, signal?: AbortSignal): Promise<LoadedModel> {
@@ -223,6 +264,7 @@ export class LlamaCppRuntime implements LocalRuntime {
      * 埋まっていたら次の番号を試す（前は投げていたので、前の llama-server が 18080 を握ったままだと、起動のたびに落ちた）。
      * 空いている口を選ぶので、違うモデルが答える心配は無い。
      */
+    const stops = this.#stops;
     const first = this.#nextPort;
     let port = this.#nextPort++;
     while (!(await portFree(port))) {
@@ -232,6 +274,8 @@ export class LlamaCppRuntime implements LocalRuntime {
       }
       port = this.#nextPort++;
     }
+    // 口を探している間に止められたら起こさない（起こすと、止めた後に llama-server が残る）
+    if (this.#stops !== stops || signal?.aborted) throw new Error('起動が中断されました。');
     const baseUrl = `http://127.0.0.1:${port}/v1`;
     const args = this.#buildArgs(ref, plan, port);
 
@@ -365,6 +409,7 @@ export class LlamaCppRuntime implements LocalRuntime {
   }
 
   async shutdown(): Promise<void> {
+    this.#stops += 1;
     // 読み込み中のもの（まだ #running に無い）も落とす。落とさないと、止めた後に llama-server が残る
     for (const child of this.#starting) killTree(child, 'SIGTERM');
     this.#starting.clear();

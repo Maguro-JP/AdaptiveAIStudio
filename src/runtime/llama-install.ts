@@ -210,7 +210,8 @@ export async function install(opts: InstallOptions): Promise<Installed> {
    */
   const work = `${tag}.${process.pid}.tmp`;
   const staging = join(binDir, work);
-  const retired = join(binDir, `${tag}.${process.pid}.old.tmp`);
+  // 脇へ移した前の版は `.tmp` にしない。戻せずに残ったとき、clean が「取得の途中で切れたもの」として消す候補にするため
+  const retired = join(binDir, `${tag}.${process.pid}.prev`);
   let moved = false;
   try {
     await rm(staging, { recursive: true, force: true, maxRetries: 3 });
@@ -277,7 +278,10 @@ export async function install(opts: InstallOptions): Promise<Installed> {
   } catch (e) {
     // 半分だけ置かれた状態を残さない。脇へ移した前の版は戻す
     await rm(staging, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
-    if (moved && !(await exists(dest))) await rename(retired, dest).catch(() => {});
+    if (moved && !(await exists(dest).catch(() => true))) {
+      const back = await renameRetry(retired, dest).then(() => true, () => false);
+      if (!back) throw new Error(`${(e as Error).message}\n前の版を ${retired} から戻せませんでした。フォルダの名前を ${tag} に戻してください`);
+    }
     throw e;
   }
 }
@@ -331,7 +335,7 @@ export async function tryRun(command: string, signal?: AbortSignal): Promise<{ o
 export async function listInstalled(binDir = defaultBinDir()): Promise<string[]> {
   try {
     return (await readdir(binDir, { withFileTypes: true }))
-      .filter((d) => d.isDirectory() && !d.name.endsWith('.tmp')) // 取得の途中・入れ替えの途中のものは版ではない
+      .filter((d) => d.isDirectory() && !/\.(tmp|prev)$/.test(d.name)) // 取得の途中・入れ替えの途中のものは版ではない
       .map((d) => d.name)
       .sort();
   } catch {

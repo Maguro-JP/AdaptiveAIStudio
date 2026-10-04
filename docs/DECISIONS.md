@@ -11513,11 +11513,18 @@ runtime と CLI を読むだけで調べ、10 件を直した。
    空いている口を選ぶので、違うモデルが答える心配は無い
 10. 同じモデルを同時に起こすと、起動中の Promise を共有して一つだけ起こす（二つ起こすと、前の子が止める対象から外れて残った）
 
+- 読むだけのレビューで直したもの: 前に残った退避フォルダは組めてから消す（先に消していたので、戻しきれず残した版をもう一度押しただけで
+  消し、その消す処理が落ちると今の版が退避フォルダに入ったまま戻らなかった）。戻しで desktop.ini・Thumbs.db に触らない。README の深さに
+  退避フォルダを数えない。同じモデルを待つ人の中断は人ごとに効かせ、起動そのものは全員がやめたときだけ止める（中断の無い待ち手が居れば
+  止めない）。口を探している間に止められたら起こさない。llama-server の前の版は `.prev` として脇へ移し（`.tmp` だと clean が消す候補にした）、
+  戻せなければそう言う。調べ切れなかった機械の検出結果は、プロセスの中で 10 分使い回す（呼ばれるたびに 5 秒待たせない）
 - 調べている途中で見つけた 1 件: 組み立て元の node_modules がリンク（git worktree・pnpm）だと、bundle は配る先にリンクのまま写し、片づけが
   リンクを辿って組み立て元の型定義と .map を消した。写すときはリンクを辿って中身を写し（`dereference`）、片づける前に辿った先でも
   組んだ先の中にあるかを見る（`mustBeInside`）。経緯は `docs/knowledge/problems.md`
 - 残っているところ: Windows で `runtime.command` に .cmd・.bat を渡すと、shell 無しの spawn が EINVAL で起動できない（調査の 10(b)。確かめていない）。
-  `models --get <カタログの名前> --quant` が効かない件（調査のおまけ）
+  `models --get <カタログの名前> --quant` が効かない件（調査のおまけ）。リンク先の無いリンクが組み立て元にあると、写すときに止まる。
+  `#nextPort` は戻らずに増える（4.7 万回の起動で上限に届く）。`start.sh` の update は、調べられなかったときに立ち上げ直しを訊かずに終わる
+  （調べられなかったのに立ち上げ直す意味は無いので、このまま）
 触る場所: `scripts/bundle.mjs`（`parseBundleArgs`・`assemble`）、`src/runtime/llama-install.ts`（`install`・`tryRun`）、`src/cli/llama.ts`、`src/cli/doctor.ts`・
 `src/cli/selftest.ts`、`src/core/update.ts`・`src/cli/update.ts`、`src/cli/clean.ts`、`src/runtime/machine.ts`（`MachineCache`）、`src/runtime/llamacpp.ts`
 （`ensureLoaded`）。試験は `test/bundle-target.test.ts`・`test/home.test.ts`・`test/llama-install.test.ts`・`test/update.test.ts`・`test/state-files.test.ts`・
