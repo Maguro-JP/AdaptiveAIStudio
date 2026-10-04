@@ -41,8 +41,8 @@ export function buildCompletionInput(path: string, prefix: string, suffix: strin
  */
 export function cleanCompletion(prefix: string, raw: string): string {
   let text = String(raw ?? '');
-  // 囲い
-  text = text.replace(/^\s*```[a-zA-Z0-9_-]*\s*\n?/, '').replace(/\n?\s*```\s*$/, '');
+  // 囲い（開きの後ろは同じ行の空白と改行だけを食べる。次の行の字下げまで食べると、Python では意味が変わる）
+  text = text.replace(/^\s*```[a-zA-Z0-9_-]*[ \t]*\r?\n?/, '').replace(/\n?\s*```\s*$/, '');
   text = text.replace(/<CURSOR>/g, '');
   // 直前の行の写し直し
   const lastLine = prefix.slice(prefix.lastIndexOf('\n') + 1);

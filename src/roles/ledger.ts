@@ -81,31 +81,40 @@ export class RoleLedger {
 
     for (const role of roles) {
       const snap = snapshotOf(role);
-      const before = this.#known.get(role.id);
+      let before = this.#known.get(role.id);
+      let renamed = false;
 
       if (!before) {
         // 改名なら、前の名前の記録を引き継ぐ
+        // 今も名簿に居る役職は前の名前ではない（名簿の別名も、居る役職の id は旧名にしない。ここだけ扱いがずれていた）
         const previous = (role.formerly ?? [])
+          .filter((id) => !current.has(id))
           .map((id) => this.#known.get(id))
           .find((s) => s !== undefined);
-        if (previous) {
-          changes.push({
-            at: now, kind: 'renamed', roleId: role.id, codename: role.codename,
-            detail: `${previous.codename} から ${role.codename} に改名しました。古い名前でも呼べます。`,
-          });
-        } else {
+        if (!previous) {
           changes.push({
             at: now, kind: 'joined', roleId: role.id, codename: role.codename,
             detail: `${role.codename}（${role.name}）が配属されました。${role.responsibility}`,
           });
+          if (!this.#blind) this.#known.set(role.id, snap);
+          continue;
         }
-        if (!this.#blind) this.#known.set(role.id, snap);
+        changes.push({
+          at: now, kind: 'renamed', roleId: role.id, codename: role.codename,
+          detail: `${previous.codename} から ${role.codename} に改名しました。古い名前でも呼べます。`,
+        });
+        // 改名と同時に変えた権限・担当・姿勢も、前の名前の記録と比べて知らせる（改名だけ言って先へ進んでいたので、
+        // 改名と一緒に足した network などが一度も知らされなかった）
+        before = previous;
+        renamed = true;
+      }
+
+      if (before.signature === snap.signature) {
+        if (renamed && !this.#blind) this.#known.set(role.id, snap); // 新しい名前で覚える（覚えないと、次も改名と言う）
         continue;
       }
 
-      if (before.signature === snap.signature) continue;
-
-      if (before.codename !== snap.codename) {
+      if (!renamed && before.codename !== snap.codename) {
         changes.push({
           at: now, kind: 'renamed', roleId: role.id, codename: role.codename,
           detail: `${before.codename} から ${role.codename} に改名しました。`,

@@ -68,7 +68,7 @@ export async function saveJournals(j: Pick<Journals, 'idle' | 'duties'>): Promis
   const { idle, duties } = j;
   const unsaved: string[] = [];
   const idlePath = join(stateDir(), 'idle.json');
-  if (!await saveMerged(idle, idlePath, () => JSON.stringify(idle.stats(), null, 2), (v, seen) => idle.rebase(v, seen))) unsaved.push(idlePath);
+  if (!await saveMerged(idle, idlePath, () => JSON.stringify(idle.records(), null, 2), (v, seen) => idle.rebase(v, seen))) unsaved.push(idlePath);
   const dutiesPath = join(stateDir(), 'duties.json');
   if (!await saveMerged(duties, dutiesPath, () => JSON.stringify(duties.records(), null, 2), (v, seen) => duties.rebase(v, seen))) unsaved.push(dutiesPath);
   return unsaved; // 書けなかったもの。黙って止め続けないよう、呼んだ側が言う

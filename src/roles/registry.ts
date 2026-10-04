@@ -63,6 +63,49 @@ function droppedNames(before: readonly ToolAccess[], after: readonly ToolAccess[
   return before.filter((a) => !after.includes(a)).join(' と ');
 }
 
+const OVERRIDE_TEXT = ['codename', 'name', 'responsibility', 'disposition', 'outputContract', 'extends', 'prefers'] as const;
+const OVERRIDE_LIST = ['formerly', 'succeededBy', 'instructions'] as const;
+
+/**
+ * 設定の役職一件の形を確かめる。id が文字列でない一件は捨てる（`undefined`）。
+ * 文字列であるべき項目が文字列でない・並びであるべき項目が文字列の並びでないときは、その項目だけを捨てる。
+ * 捨てた理由は `said` で言う（黙って捨てると、書いたのに効かない理由が分からない）。権限（access）は後で別に確かめる。
+ */
+function sanitizeOverride(raw: unknown, said: (text: string) => void): RoleOverride | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    said('roles: 形の違う一件（オブジェクトでないもの）を読みませんでした');
+    return undefined;
+  }
+  const o = { ...(raw as Record<string, unknown>) };
+  if (typeof o.id !== 'string' || o.id.trim() === '') {
+    said('roles: id の無い一件を読みませんでした');
+    return undefined;
+  }
+  for (const key of OVERRIDE_TEXT) {
+    if (o[key] !== undefined && typeof o[key] !== 'string') {
+      said(`${o.id}: ${key} が文字列ではないので外しました`);
+      delete o[key];
+    }
+  }
+  for (const key of OVERRIDE_LIST) {
+    const v = o[key];
+    if (v === undefined) continue;
+    if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) {
+      said(`${o.id}: ${key} が文字列の並びではないので外しました`);
+      delete o[key];
+    }
+  }
+  if (o.prefers !== undefined && !['strong', 'fast', 'any'].includes(o.prefers as string)) {
+    said(`${o.id}: prefers は strong / fast / any のどれかです。外しました`);
+    delete o.prefers;
+  }
+  if (o.retired !== undefined && typeof o.retired !== 'boolean') {
+    said(`${o.id}: retired が true / false ではないので外しました`);
+    delete o.retired;
+  }
+  return o as unknown as RoleOverride;
+}
+
 export class RoleRegistry {
   readonly #roles = new Map<string, Role>();
   /** 旧名 → 現在のID。改名しても設定と履歴の指し先を失わせない。 */
@@ -100,7 +143,13 @@ export class RoleRegistry {
       }
       this.#roles.set(r.id, dropped ? { ...r, access } : r);
     }
-    for (const o of extra) this.#apply(o);
+    // 設定から来る形は確かめていない（`roles` が並びでない・一件が null・instructions が文字列、で起動ごと落ちていた）。
+    // 足りない側に倒す: 並びでないものは無いものとし、形の違う一件・項目は捨てて理由を言う
+    if (!Array.isArray(extra)) this.#dropped.push('roles: 並びではないので読みませんでした');
+    for (const raw of Array.isArray(extra) ? extra : []) {
+      const o = sanitizeOverride(raw, (said) => this.#dropped.push(said));
+      if (o) this.#apply(o);
+    }
     this.#buildAliases();
     for (const said of this.#dropped) onLog?.(said);
   }
@@ -173,7 +222,8 @@ export class RoleRegistry {
     const base = this.#roles.get(o.extends ?? o.id);
     if (!base && (!o.name || !o.responsibility || !o.disposition || !o.access)) {
       // 土台も無く、必要な項目も揃っていないものは登録しない。
-      // 中途半端な役職は、いない方がまし。
+      // 中途半端な役職は、いない方がまし。黙って捨てると、書いたのに居ない理由が分からないので言う
+      this.#dropped.push(`${o.id}: extends が無く、name・responsibility・disposition・access も揃っていないので読みませんでした`);
       return;
     }
     const inherits = o.extends === undefined || o.extends === o.id;
