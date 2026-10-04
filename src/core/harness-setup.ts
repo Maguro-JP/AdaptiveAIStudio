@@ -9,7 +9,7 @@ import { AuditLog } from '../harness/audit.ts';
 import { HarnessMetrics } from '../harness/metrics.ts';
 import type { Rule } from '../harness/rules.ts';
 import {
-  workspaceBoundary, protectedPaths, testProtection, blastRadius,
+  workspaceBoundary, protectedPaths, matchProtected, testProtection, blastRadius,
   readBeforeWrite, noRepeatedWrites, dangerousCommands, noSelfKill, noCiSpend,
 } from '../harness/builtin-rules.ts';
 import { type Forum, requiresDeliberation } from '../harness/deliberation.ts';
@@ -28,6 +28,22 @@ const DEFAULT_PROTECTED = [
   '**/.git', '**/.git/**',
   '**/id_rsa', '**/*.pem', '**/credentials*',
 ];
+
+/**
+ * 画面の手書きの道が守る道に当たるか（AI の書き込みと同じ型・同じ照らし方）。当たった型を返す。
+ */
+export async function protectedHit(
+  root: string, path: string, config: AasConfig, platform: NodeJS.Platform = process.platform,
+): Promise<string | undefined> {
+  if ((config.harness ?? {}).enabled === false) return undefined;
+  return matchProtected(root, path, [...DEFAULT_PROTECTED, ...(config.harness?.protectedPaths ?? [])],
+    { nocase: caseBlind(platform), windows: platform === 'win32' });
+}
+
+/** その型が `.git` の中を守るものか（画面からも書かせない。hook と core.fsmonitor は git を動かした所で命令を走らせる）。 */
+export function isGitPattern(pattern: string): boolean {
+  return /(^|\/)\.git(\/|$)/.test(pattern.replace(/\*\*\//g, ''));
+}
 
 /**
  * 大小を区別しないファイルシステムか。

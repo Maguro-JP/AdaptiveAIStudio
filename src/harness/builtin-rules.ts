@@ -33,6 +33,20 @@ export const workspaceBoundary: Rule = {
 };
 
 /**
+ * 守る道に当たるか。当たった型を返す（当たらなければ undefined）。綴りだけでなく、書いたときに当たる実体でも照らす
+ * （Windows の `ENV~1` は `.env`、`g -> .git` の `g/config` は `.git/config`）。Windows は名前の末尾の点・空白と ADS を落としてから照らす。
+ * AI の書き込み（下の規則）と画面の手書きで同じものを使う（画面の手書きが守りを通っていなかった）。
+ */
+export async function matchProtected(
+  root: string, path: string, patterns: readonly string[], opts: { nocase?: boolean; windows?: boolean } = {},
+): Promise<string | undefined> {
+  const name = opts.windows ? windowsName : (p: string): string => p;
+  const rel = normalize(root, path);
+  const real = await canonicalRel(root, path);
+  return patterns.find((p) => minimatch(name(rel), p, opts) || (real !== undefined && minimatch(name(real), p, opts)));
+}
+
+/**
  * 触ってはいけないファイルを守る。
  * 「.env を読んで直す」のような、善意で始まる事故を止める。
  */
@@ -69,8 +83,7 @@ export function protectedPaths(patterns: string[], opts: { nocase?: boolean; win
         if (isExternalTool(call.name) && /\s/.test(path) && !existsSync(dirname(join(ctx.root, rel)))) continue;
         // 大小を区別しない機械では `.ENV` も `.env`。区別すると守りをすり抜ける。
         // 綴りだけでなく、書いたときに当たる実体でも照らす（Windows の `ENV~1` は `.env`、`g -> .git` の `g/config` は `.git/config`）
-        const real = await canonicalRel(ctx.root, path);
-        const hit = patterns.find((p) => minimatch(name(rel), p, opts) || (real !== undefined && minimatch(name(real), p, opts)));
+        const hit = await matchProtected(ctx.root, path, patterns, opts);
         if (hit) {
           return deny(isExternalTool(call.name)
             ? `${rel} は保護されています（${hit}）。外のツールには渡せません。`

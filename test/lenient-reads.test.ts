@@ -27,7 +27,7 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/core/undo.ts': { count: 3, why: '戻した差分を見せる文字と更新時刻。更新時刻が取れないものは「挟まっているかもしれない」として止める側（#115）。書き終えた姿のハッシュ（読めなければ比べないだけで、戻す処理は当てる側で失敗を言う）。並びの番号を振るときの読み（読めない記録は番号に数えないだけで、同じ番号なら始めた時刻で並べる）' },
   'src/agent/prefetch.ts': { count: 3, why: 'ファイル一覧と錠の在る無しの下調べ。読めないものは一覧に載らないだけ（動かし方は別に厳しく読む、#116）' },
   'src/agent/initiative.ts': { count: 3, why: '思いつきの手がかり集め。読めないものは手がかりにしない' },
-  'src/ui/server.ts': { count: 1, why: 'ファイルの情報を見せる所。読めなければ見せない（書く所は readPrior で守る）' },
+  'src/ui/server.ts': { count: 2, why: 'ファイルの情報を見せる所。読めなければ見せない（書く所は readPrior で守る）。手書きで置き換える前の権限（取れなければ新しいファイルの既定の権限になるだけ）' },
   'src/ui/attachments.ts': { count: 2, why: '添付の古い分の片づけの候補探し。読めないものは消さない' },
   'src/runtime/inproc.ts': { count: 3, why: 'モデルの一覧と大きさを見るだけ。取れなければ一覧に出さない・大きさを言わない' },
   'src/core/file-lock.ts': { count: 1, why: '錠の古さ。取れなければ消さずに待つ（消す側へは倒さない）' },
