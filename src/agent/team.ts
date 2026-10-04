@@ -6,7 +6,7 @@
  */
 import type { ProviderMessage } from '../providers/contract.ts';
 import type { ChatOrchestrator } from '../core/orchestrator.ts';
-import { Scheduler, type LaneConfig, type Task, type TaskOutcome } from '../core/scheduler.ts';
+import { Scheduler, ANY_PATH, type LaneConfig, type Task, type TaskOutcome } from '../core/scheduler.ts';
 import { Agent, type AgentEvent } from './loop.ts';
 import { race, type Attempt, type RaceEvent } from './race.ts';
 import type { Tool, ApprovalRequest, ApprovalAnswer, RequestScope } from './tools/types.ts';
@@ -145,10 +145,17 @@ export class Team {
     let turns = 0;
     let finished: (AgentEvent & { type: 'finished' }) | undefined;
 
+    // ツールを呼んだら、それまでの文は途中経過（「まず読みます」）。最終報告はツールを呼んだ後に書いた分だけにする
+    // （全ターンを繋いでいたので、申し送りの頭 1500 字と検収の一行目が途中経過の文になり、最後の結論が落ちていた）
+    let calledTool = false;
     for await (const ev of agent.run(history, signal)) {
       push({ type: 'agent', taskId: item.id, laneId: item.laneId, event: ev });
-      if (ev.type === 'thinking') report += ev.delta;
-      else if (ev.type === 'turn') turns += 1;
+      if (ev.type === 'toolStart') calledTool = true;
+      else if (ev.type === 'thinking') {
+        if (calledTool) { report = ''; calledTool = false; }
+        report += ev.delta;
+      }
+      if (ev.type === 'turn') turns += 1;
       else if (ev.type === 'finished') finished = ev;
     }
 
@@ -175,7 +182,9 @@ export class Team {
       id: item.id,
       laneId: item.laneId,
       deps: item.deps,
-      writes: item.writes,
+      // 書けるのに書き込み先を挙げなかった担当は、誰とも同時に書かせない（`ANY_PATH`）。段取りの入口だけで補っていたので、
+      // 端末の `aas team` では二人が同時に同じファイルを全文で書き、後の方が前の仕事を消していた。入口によらずここで補う
+      writes: (item.writes ?? []).length === 0 && this.#mayChange(item) ? [ANY_PATH] : item.writes,
       run: async (ctx): Promise<WorkResult> => {
         // 前の担当が何を見つけたかを引き継ぐ。
         // 依存を順番の制約としてしか使わないと、後の担当は

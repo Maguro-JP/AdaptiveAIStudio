@@ -20,7 +20,7 @@ import { DEFAULT_CONFIG } from '../src/config.ts';
  * 「そのファイルを書く → 報告する」を返す偽モデル。
  * 遅延を入れて並列性を観測できるようにする。
  */
-async function workerServer(delayMs: number, opts: { perModelDelay?: Record<string, number>; failModels?: string[] } = {}) {
+async function workerServer(delayMs: number, opts: { perModelDelay?: Record<string, number>; failModels?: string[]; preface?: string } = {}) {
   let peak = 0;
   let active = 0;
   /** 作業者が受け取った依頼文。申し送りが届いているかを見るため。 */
@@ -57,6 +57,8 @@ async function workerServer(delayMs: number, opts: { perModelDelay?: Record<stri
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
       } else {
         const args = JSON.stringify({ path: target, content: `done:${target}\n` });
+        // ツールを呼ぶ前の途中経過の文（「まず書きます」）。最終報告に混ぜないことを見るため
+        if (opts.preface) res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: opts.preface } }] })}\n\n`);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'write_file', arguments: args } }] } }] })}\n\n`);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
       }
@@ -77,7 +79,7 @@ async function workerServer(delayMs: number, opts: { perModelDelay?: Record<stri
 
 async function runTeam(
   items: WorkItem[], parallel: number,
-  serverOpts: { perModelDelay?: Record<string, number>; failModels?: string[] } = {},
+  serverOpts: { perModelDelay?: Record<string, number>; failModels?: string[]; preface?: string } = {},
   tools: Tool[] = [readFileTool, writeFileTool],
 ) {
   const server = await workerServer(60, serverOpts);
@@ -107,6 +109,29 @@ async function runTeam(
 const item = (id: string, file: string, deps?: string[]): WorkItem => ({
   id, laneId: 'coder', deps, writes: [file],
   instruction: `${file} を作成してください。`,
+});
+
+describe('書き込み先を挙げない書き手', () => {
+  test('書けるツールを持つのに書き込み先を挙げない作業どうしは、同時に走らない', async () => {
+    const bare = (id: string, file: string): WorkItem => ({ id, laneId: 'coder', instruction: `${file} を作成してください。` });
+    const { outcomes, peak } = await runTeam([bare('t1', 'a.txt'), bare('t2', 'b.txt'), bare('t3', 'c.txt')], 3);
+    assert.equal([...outcomes.values()].filter((o) => o.state === 'done').length, 3);
+    assert.equal(peak, 1, `書き込み先を挙げない書き手が同時に走った (peak=${peak})`);
+  });
+  test('読むだけの作業は、書き込み先が無くても並べて走る（対）', async () => {
+    const bare = (id: string, file: string): WorkItem => ({ id, laneId: 'coder', instruction: `${file} を作成してください。` });
+    const { peak } = await runTeam([bare('t1', 'a.txt'), bare('t2', 'b.txt')], 2, {}, [readFileTool]);
+    assert.ok(peak >= 2, `読むだけなのに並べていない (peak=${peak})`);
+  });
+});
+
+describe('担当の最終報告', () => {
+  test('ツールを呼ぶ前の途中経過の文を混ぜず、最後に書いた分だけにする', async () => {
+    const { outcomes } = await runTeam([item('t1', 'a.txt')], 1, { preface: 'まず a.txt を書きます。' });
+    const report = (outcomes.get('t1')?.result as { report: string } | undefined)?.report ?? '';
+    assert.doesNotMatch(report, /まず a\.txt を書きます/);
+    assert.match(report, /a\.txt を作成しました/);
+  });
 });
 
 describe('チーム並列実行', () => {

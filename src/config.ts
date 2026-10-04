@@ -573,6 +573,11 @@ function validate(c: AasConfig): void {
       throw new ConfigBroken(`未対応の provider kind です: ${p.kind} (${p.id})`);
     }
   }
+  // 同時に流す数の上限。0 や負の数は全部を「始められない」で飛ばし、数でないものは上限を外していた
+  const total = c.agent?.maxTotalParallel;
+  if (total !== undefined && (!Number.isInteger(total) || total < 1)) {
+    throw new ConfigBroken(`agent.maxTotalParallel は 1 以上の整数で書いてください（いま: ${JSON.stringify(total)}）。`);
+  }
   const ids = new Set(enabledProviders(c).map((p) => p.id));
   for (const cand of c.candidates ?? []) {
     const providerId = cand.slice(0, cand.indexOf(':'));
@@ -588,7 +593,10 @@ function validate(c: AasConfig): void {
 function validateLanes(c: AasConfig): void {
   const ids = new Set(enabledProviders(c).map((p) => p.id));
   for (const lane of c.agent?.lanes ?? []) {
-    if (lane.parallel < 1) throw new ConfigBroken(`lane "${lane.id}" の parallel は1以上にしてください。`);
+    // 書き忘れ（undefined）も断る。`undefined < 1` は false なので通り、段取りが永久に止まっていた
+    if (!Number.isInteger(lane.parallel) || lane.parallel < 1) {
+      throw new ConfigBroken(`lane "${lane.id}" の parallel は 1 以上の整数で書いてください（いま: ${JSON.stringify(lane.parallel)}）。`);
+    }
     if (lane.candidates.length === 0) throw new ConfigBroken(`lane "${lane.id}" に candidates がありません。`);
     for (const cand of lane.candidates) {
       const providerId = cand.slice(0, cand.indexOf(':'));

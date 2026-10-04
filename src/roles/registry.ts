@@ -176,6 +176,7 @@ export class RoleRegistry {
       // 中途半端な役職は、いない方がまし。
       return;
     }
+    const inherits = o.extends === undefined || o.extends === o.id;
     const merged: Role = {
       id: o.id,
       codename: o.codename ?? base?.codename ?? o.id.toUpperCase(),
@@ -186,9 +187,11 @@ export class RoleRegistry {
       instructions: o.instructions ?? base?.instructions ?? [],
       outputContract: o.outputContract ?? base?.outputContract,
       prefers: o.prefers ?? base?.prefers ?? 'any',
-      formerly: o.formerly ?? base?.formerly,
-      succeededBy: o.succeededBy ?? base?.succeededBy,
-      retired: o.retired ?? base?.retired,
+      // 名前の履歴と引き継ぎは、その役職そのもののこと。別の id で extends したときは受け継がない
+      // （受け継ぐと、元の旧名が新しい役職を指し、引き継ぎ済みの役職を extends して作った役職に一度も割り当てが行かなかった）
+      formerly: o.formerly ?? (inherits ? base?.formerly : undefined),
+      succeededBy: o.succeededBy ?? (inherits ? base?.succeededBy : undefined),
+      retired: o.retired ?? (inherits ? base?.retired : undefined),
     };
     /*
      * 権限は決まった語の並びだけを受ける。文字列（`"read,write,network"`）で書くと、`includes` の部分一致で権限が付き、

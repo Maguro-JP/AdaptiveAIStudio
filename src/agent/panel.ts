@@ -78,13 +78,21 @@ export async function* runPanel(
     });
 
     let text = '';
+    let ended: string | undefined;
     const history: ProviderMessage[] = [{ role: 'user', content: target }];
     try {
       for await (const ev of agent.run(history, signal)) {
         if (ev.type === 'thinking') text += ev.delta;
+        else if (ev.type === 'finished') ended = ev.detail ? `${ev.reason}: ${ev.detail}` : ev.reason;
       }
     } catch (e) {
       push({ type: 'failed', roleId: role.id, error: e instanceof Error ? e.message : String(e) });
+      return;
+    }
+    // 言い終えなかった担当（モデルが落ちた・止めた・上限）は、「問題なし」と数えない。Agent.run は落ちても投げないので、
+    // 終わり方を見ないと、全員が落ちた回に「全員が問題なしと判断しました」と出していた。途中までの文の PROPOSAL も採らない
+    if (ended !== 'completed') {
+      push({ type: 'failed', roleId: role.id, error: ended ?? '終わり方が分かりません' });
       return;
     }
 

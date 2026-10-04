@@ -20,6 +20,11 @@ export interface HarnessOptions {
   /** ハーネス自身の効き具合を測る。良い規則と邪魔な規則を見分けるため。 */
   metrics?: HarnessMetrics;
   onDecision?: (e: HarnessDecision) => void;
+  /**
+   * 依頼全体の呼び出し（担当ごとに分けた包みで共有する）。依頼の入れ物（`request`）を渡さない呼び手（端末の `aas team`）でも、
+   * 数を数える規則が依頼全体で数えられるようにする。無ければ担当ごとの履歴で数える。
+   */
+  taskHistory?: ToolCall[];
 }
 
 export interface HarnessDecision {
@@ -35,12 +40,14 @@ export class Harness {
   readonly #metrics?: HarnessMetrics;
   readonly #onDecision?: (e: HarnessDecision) => void;
   #history: ToolCall[] = [];
+  readonly #taskHistory?: ToolCall[];
 
   constructor(opts: HarnessOptions) {
     this.#rules = opts.rules;
     this.#audit = opts.audit ?? new AuditLog();
     this.#metrics = opts.metrics;
     this.#onDecision = opts.onDecision;
+    this.#taskHistory = opts.taskHistory;
   }
 
   get audit(): AuditLog {
@@ -62,10 +69,11 @@ export class Harness {
    *
    * 記録（audit）と測り（metrics）は分けない。そこは全体で一つ。
    */
-  forTask(): Harness {
+  forTask(taskHistory?: ToolCall[]): Harness {
     return new Harness({
       rules: this.#rules,
       audit: this.#audit,
+      ...(taskHistory ? { taskHistory } : {}),
       ...(this.#metrics ? { metrics: this.#metrics } : {}),
       ...(this.#onDecision ? { onDecision: this.#onDecision } : {}),
     });
@@ -100,7 +108,7 @@ export class Harness {
         // 規則の数え（metrics）は依頼の札で分ける。並行する会話の拒否を、別の依頼の結末に結び付けない。
         const metricsKey = toolCtx.request?.metricsKey() ?? '';
         const metrics = this.#metrics;
-        const taskHistory = toolCtx.request?.taskHistory;
+        const taskHistory = toolCtx.request?.taskHistory ?? this.#taskHistory;
         const ctx: RuleContext = {
           root: toolCtx.root,
           history,

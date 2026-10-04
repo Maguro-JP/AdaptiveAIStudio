@@ -194,6 +194,8 @@ async function main(): Promise<void> {
     const outcomes = next.value;
     const done = [...outcomes.values()].filter((o) => o.state === 'done').length;
     console.log(`\n完了 ${done}/${outcomes.size}`);
+    // 落ちた担当があれば 0 で終えない（呼んだ側の仕組みが「通った」と読まないため）
+    if (done < outcomes.size) process.exitCode = 1;
   } finally {
     // 控えを閉じる。閉じないと、次の一回ぶんと混ざって戻しすぎる。run_command の分もここで載せる。
     const closed = await wired.finish().catch((e: unknown) => {
