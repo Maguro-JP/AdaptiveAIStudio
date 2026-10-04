@@ -1287,9 +1287,10 @@ export class Session {
           }
         }
       }
-    } catch {
-      // 考えに失敗しても、この場所は止まらない。
-      return true;
+    } catch (e) {
+      // 考えに失敗しても、この場所は止まらない。ただし黙って終えない（「選びました」の後に何も出ず、数えた回も保存しなかった）。
+      // 落ちた回と同じ道（保存して `failed` を出す）を通す
+      broken = `考えの途中で止まりました: ${e instanceof Error ? e.message : String(e)}`;
     } finally {
       this.#conv.running = undefined;
     }
@@ -1323,7 +1324,7 @@ export class Session {
     // 日課として動いたなら、済んだことにする。
     // 報告が無くても「確認した」ことに変わりはない。
     if (decision.dutyId) {
-      this.duties.complete(decision.dutyId, Date.now());
+      this.duties.complete(decision.dutyId, now, Date.now()); // 期は選んだ時刻で決める
       await this.saveAutonomy();
     }
 

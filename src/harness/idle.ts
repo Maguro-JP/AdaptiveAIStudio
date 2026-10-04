@@ -129,6 +129,16 @@ export class IdleScheduler {
     return this.#modes.map((m) => this.#stat(m.id));
   }
 
+  /**
+   * 保存する実績。使っていないモードの分も含める（`stats()` は表示用で、設定で絞ったモードだけを並べる）。
+   * `stats()` を保存していたので、モードを絞って一度保存すると、ほかのモードの採用・却下の実績がファイルから消えていた。
+   */
+  records(): ModeStat[] {
+    const all = new Map(this.#stats);
+    for (const m of this.#modes) all.set(m.id, this.#stat(m.id));
+    return [...all.values()];
+  }
+
   restore(stats: ModeStat[], now = Date.now()): void {
     // 形の違う一件（`null` 等）は、その一件だけ除く。そのまま入れると、途中で投げて残りを読まず、次の保存で消していた。
     if (!Array.isArray(stats)) return;

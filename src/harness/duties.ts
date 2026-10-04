@@ -263,13 +263,17 @@ export class DutyRoster {
       });
   }
 
-  /** 完了を記録する。 */
-  complete(dutyId: string, now: number): void {
+  /**
+   * 完了を記録する。期は `now`（選んだ時刻）で決め、`doneAt` は終えた時刻。
+   * 終えた時刻で期を決めていたので、23:58 に始めて 0:03 に終えた回を「翌日の分を済ませた」と記録し、
+   * 前日の分は残らず、翌日の分は一度も走らなかった。
+   */
+  complete(dutyId: string, now: number, doneAt = now): void {
     const duty = this.#duties.find((d) => d.id === dutyId);
     if (!duty) return;
     const record = this.#record(dutyId);
     record.lastPeriod = periodKey(duty.cadence, now);
-    record.lastAt = now;
+    record.lastAt = doneAt;
     record.completions += 1;
   }
 
