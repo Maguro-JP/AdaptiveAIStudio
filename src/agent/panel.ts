@@ -144,8 +144,9 @@ export async function* runPanel(
  * （落ちた担当を `failed` で流すようにした後も、画面の側は所見の数だけを見て「全員が問題なし」と出していた）。
  * 所見があるときは、所見そのものを並べるので結びは要らない（`undefined`）。
  */
-export function panelVerdict(findings: number, failed: number): string | undefined {
+export function panelVerdict(findings: number, failed: number, members: number): string | undefined {
   if (findings > 0) return failed > 0 ? `${failed} 人は確かめられませんでした。` : undefined;
+  if (failed > 0 && failed >= members) return '誰も確かめられませんでした（問題が無いとは言えません）。';
   return failed > 0 ? `問題は挙がりませんでしたが、${failed} 人は確かめられませんでした。` : '全員が問題なしと判断しました。';
 }
 

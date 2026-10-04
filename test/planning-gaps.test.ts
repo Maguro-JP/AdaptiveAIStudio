@@ -23,14 +23,15 @@ import type { ChatOrchestrator } from '../src/core/orchestrator.ts';
 
 describe('合議の結び', () => {
   test('**所見が無くても、落ちた担当がいれば「全員が問題なし」と言わない**', () => {
-    const said = panelVerdict(0, 3);
+    const said = panelVerdict(0, 2, 3);
     assert.ok(said && !said.includes('全員が問題なし'), said);
-    assert.match(said!, /3 人は確かめられませんでした/);
-    assert.match(panelVerdict(2, 1) ?? '', /1 人は確かめられませんでした/);
+    assert.match(said!, /2 人は確かめられませんでした/);
+    assert.match(panelVerdict(0, 3, 3) ?? '', /誰も確かめられませんでした/, '全員が落ちたのに「問題は挙がりませんでした」と言った');
+    assert.match(panelVerdict(2, 1, 3) ?? '', /1 人は確かめられませんでした/);
   });
   test('全員が答えて所見が無ければ「全員が問題なし」（対）', () => {
-    assert.equal(panelVerdict(0, 0), '全員が問題なしと判断しました。');
-    assert.equal(panelVerdict(2, 0), undefined);
+    assert.equal(panelVerdict(0, 0, 3), '全員が問題なしと判断しました。');
+    assert.equal(panelVerdict(2, 0, 3), undefined);
   });
 });
 
@@ -39,8 +40,22 @@ function fakeOrchestrator(events: unknown[]): ChatOrchestrator {
 }
 
 describe('段に割る', () => {
-  test('**決めた数より多く返ってきたら、頭だけ拾わずに割らない**', () => {
-    assert.deepEqual(readSteps('src/a.ts を読む\nsrc/a.ts の型を直す\nsrc/b.ts を読む\nsrc/b.ts を直す', 3), []);
+  test('**決めた数より多く返ってきても、頭だけ拾って残りを捨てない**（少し超えたら全部、倍を超えたら割らない）', () => {
+    const four = 'src/a.ts を読む\nsrc/a.ts の型を直す\nsrc/b.ts を読む\nsrc/b.ts を直す';
+    assert.equal(readSteps(four, 3).length, 4);
+    assert.deepEqual(readSteps(`${four}\nsrc/c.ts を読む\nsrc/c.ts を直す\nsrc/d.ts を直す`, 3), []);
+  });
+  test('**行の中の `**`・`__` は消さない**（道の一部）', () => {
+    assert.deepEqual(
+      readSteps('src/**/*.test.ts を走らせる\npkg/__init__.py に export を足す\n__tests__/a.ts を直す', 6),
+      ['src/**/*.test.ts を走らせる', 'pkg/__init__.py に export を足す', '__tests__/a.ts を直す'],
+    );
+  });
+  test('**見出しや結びに似た本物の段は落とさない**', () => {
+    assert.deepEqual(
+      readSteps('1. 手順書（docs/HOWTO.md）を更新する\n- 計画ファイルを読む\nこれでビルドが通るか確かめる\n以上の値を弾く', 6),
+      ['手順書（docs/HOWTO.md）を更新する', '計画ファイルを読む', 'これでビルドが通るか確かめる', '以上の値を弾く'],
+    );
   });
   test('**途中で落ちた返事を段にしない**', async () => {
     const orch = fakeOrchestrator([
@@ -106,12 +121,17 @@ describe('新しいフォルダ', () => {
 });
 
 describe('見回りの終わり方', () => {
-  test('**ターンの上限・堂々巡り・上限で切れた回は、調べ切っていない**', () => {
-    assert.ok(reconCutShort('maxTurns'));
-    assert.ok(reconCutShort('noProgress'));
+  const proposal = 'PROPOSAL\ntitle: a.ts の例外\nrationale: 握り潰している\naction: 投げ直す';
+  test('**ターンの上限・言い終えずに止まった・出力の上限で切れた回は、調べ切っていない**', () => {
+    assert.ok(reconCutShort('maxTurns', undefined, proposal));
+    assert.ok(reconCutShort('noProgress', '同じ操作を3回繰り返しました: read_file', '読んでいます'));
+    assert.ok(reconCutShort('noProgress', '返事が出力の上限で切れました（2 回続きを求めましたが、言い終えませんでした）。', proposal), '切れた PROPOSAL を採った');
+  });
+  test('**終わりの合図を書かずに止まっても、PROPOSAL を言い終えていれば採る**', () => {
+    assert.equal(reconCutShort('noProgress', 'TASK_DONE が無いまま手を止めました（2 回押し戻しましたが、動きませんでした）。', proposal), undefined);
   });
   test('言い終えた回は、調べ切った（対）', () => {
-    assert.equal(reconCutShort('completed'), undefined);
+    assert.equal(reconCutShort('completed', undefined, ''), undefined);
   });
 });
 
@@ -133,5 +153,23 @@ describe('テストの対応', () => {
     const leads = await findLeads({ root, snapshot: (await p.snapshot())!, known: new Set(), max: 20 });
     const missing = leads.filter((l) => /対応するテストが見当たりません/.test(l.title)).map((l) => l.title);
     assert.deepEqual(missing, [], missing.join(' / '));
+  });
+});
+
+describe('git の錠', () => {
+  test('**製品が走らせる git に、GIT_OPTIONAL_LOCKS=0 が渡る**（引数ではなく環境で。古い git を落とさない）', { skip: process.platform === 'win32' ? '偽の git を sh で書くため' : false }, async () => {
+    const { runGit } = await import('../src/agent/git.ts');
+    const { chmod } = await import('node:fs/promises');
+    const bin = await tempDir('aas-plan-gaps-git-');
+    // 偽の git: 受け取った引数と、環境の GIT_OPTIONAL_LOCKS を返す
+    await writeFile(join(bin, 'git'), '#!/bin/sh\necho "locks=$GIT_OPTIONAL_LOCKS args=$*"\n');
+    await chmod(join(bin, 'git'), 0o755);
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      const r = await runGit(['status'], bin);
+      assert.match(r.out, /locks=0 /, r.out);
+      assert.doesNotMatch(r.out, /--no-optional-locks/, r.out);
+    } finally { process.env.PATH = path; }
   });
 });

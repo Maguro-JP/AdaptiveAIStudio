@@ -997,11 +997,14 @@ export class Session {
       // git が一つのフォルダ（`coverage/`）にまとめて見せる新しいフォルダの下は、外の変化でも一つずつ並べない（何千件にふくらむ）
       const folded = dirtyAfter.filter((p) => p.endsWith('/'));
       const outsideShown = [...outsideChanged].filter((p) => !folded.some((d) => p.startsWith(d)));
-      const changed = [...new Set([...written, ...outsideShown, ...dropCoveredDirs(changedBetween(dirtyBefore, dirtyAfter), [...written, ...outsideShown], outsideChanged)])].sort();
+      const declared = [...new Set(plan.items.flatMap((t) => t.writes ?? []))];
+      // 計画どおりのファイルを run_command で作った分は、外の変化でも「計画外」ではない（フォルダを残す理由にしない）
+      const outsideUnplanned = [...outsideChanged].filter((p) => !declared.includes(p));
+      const changed = [...new Set([...written, ...outsideShown, ...dropCoveredDirs(changedBetween(dirtyBefore, dirtyAfter), [...written, ...outsideShown], outsideUnplanned)])].sort();
 
       const report = accept({
         request, summary: plan.summary, members, changed,
-        declared: [...new Set(plan.items.flatMap((t) => t.writes ?? []))],
+        declared,
         verified, verifyDetail,
       });
 
@@ -1257,6 +1260,7 @@ export class Session {
     // モデルが落ちた・止められたか。`Agent.run` は投げずに `finished` で知らせる
     let broken: string | undefined;
     let finishedWith: string | undefined;
+    let finishedDetail: string | undefined;
     try {
       const thinker = new Agent(this.orchestrator, {
         candidates: this.candidates,
@@ -1277,6 +1281,7 @@ export class Session {
         if (ev.type === 'thinking') text += ev.delta;
         if (ev.type === 'finished') {
           finishedWith = ev.reason;
+          finishedDetail = ev.detail;
           if (ev.reason === 'failed' || ev.reason === 'aborted') {
             broken = ev.reason === 'aborted' ? '止められました' : (ev.detail ?? 'モデルが答えませんでした');
           }
@@ -1295,7 +1300,7 @@ export class Session {
     // 見回りで、上限まで回った・堂々巡りで止まった・上限で切れた回は、調べ切っていない。「所見なし」として手がかりを閉じない
     // （閉じていたので、小さいモデルが調べ切れなかった手がかりは、ファイルが変わるまで二度と調べられなかった）。
     // 途中まで書いた PROPOSAL も、言い終えていないので提案にしない。3 回で諦める数え方に載せる
-    if (broken === undefined && mode.id === 'recon') broken = reconCutShort(finishedWith);
+    if (broken === undefined && mode.id === 'recon') broken = reconCutShort(finishedWith, finishedDetail, text);
     if (broken !== undefined) {
       // 手がかりは、同じものが決まって落ちる（長すぎて断られる等）と、先へ進めなくなる。3 回落ちたら調べたことにして次へ進む
       if (mode.id === 'recon') {

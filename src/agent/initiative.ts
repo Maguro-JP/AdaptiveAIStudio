@@ -179,12 +179,18 @@ export function investigationPrompt(lead: Lead): string {
 
 /** モデルの出力から提案を取り出す。形式に従っていなければ採用しない。 */
 /**
- * 見回り（recon）が調べ切らずに終わったか。言い終えた回（`completed`）以外は、調べ切っていない（理由を返す）。
- * 落ちた・止められた・空の回は、呼ぶ側が先に見ている。
+ * 見回り（recon）が調べ切らずに終わったか（理由を返す）。落ちた・止められた・空の回は、呼ぶ側が先に見ている。
+ *
+ * ターンの上限で終わった回は、調べ切っていない。手が止まった回（`noProgress`）でも、PROPOSAL を言い終えていれば採る
+ * （小さいモデルは終わりの合図を書かずに止まりがち。合議 `panel.ts` と同じ扱い）。出力の上限で切れた回の PROPOSAL は、
+ * 途中までなので採らない。
  */
-export function reconCutShort(finishedWith: string | undefined): string | undefined {
+export function reconCutShort(finishedWith: string | undefined, detail: string | undefined, text: string): string | undefined {
   if (finishedWith === undefined || finishedWith === 'completed') return undefined;
-  return finishedWith === 'maxTurns' ? '調べ切れませんでした（ターンの上限）' : '調べ切れませんでした（途中で止まりました）';
+  if (finishedWith === 'maxTurns') return '調べ切れませんでした（ターンの上限）';
+  const cut = /上限で切れ/.test(detail ?? '');
+  if (!cut && parseProposal(text) !== undefined) return undefined;
+  return cut ? '調べ切れませんでした（出力の上限で切れました）' : '調べ切れませんでした（途中で止まりました）';
 }
 
 export function parseProposal(text: string): {

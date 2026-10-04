@@ -222,7 +222,7 @@ async function main(): Promise<void> {
         next = await gen.next();
       }
       const merged = mergeFindings(next.value);
-      const verdict = panelVerdict(merged.length, failed);
+      const verdict = panelVerdict(merged.length, failed, members.length);
       if (verdict) console.log(failed > 0 ? c.yellow(`  ${verdict}\n`) : c.green(`  ${verdict}\n`));
       const registered: { roleName: string; title: string; id: () => string }[] = [];
       for (const f of merged) {

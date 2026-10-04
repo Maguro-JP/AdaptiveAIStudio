@@ -11966,3 +11966,15 @@ write を持たせない」（`dropWriteIfOutbound`）は役職にだけ効か�
 触る場所: `src/agent/panel.ts`（`panelVerdict`）、`src/cli/agent.ts`（合議）、`src/agent/decompose.ts`、`src/agent/pm.ts`（`repairPlan`・`asStringArray`）、
 `src/agent/acceptance.ts`（`dropCoveredDirs`）、`src/core/session.ts`（受け入れ・見回り）、`src/agent/initiative.ts`（`reconCutShort`・テスト名）、
 `src/agent/workspace-stamp.ts`（`SAFE_GIT_ARGS`）、`test/planning-gaps.test.ts`
+
+レビューで挙がった 7 件も直した（6 件は、直す前の版で新しい試験が落ちることを確かめた）。
+- 見回り: 手が止まった回（`noProgress`）でも、PROPOSAL を言い終えていれば採る。終わりの合図を書かずに止まるのは小さいモデルでありがちで、
+  合議と同じ扱いにそろえた。出力の上限で切れた回とターンの上限の回は、今までどおり調べ切っていない扱い
+- 段の強調は、行を囲むものだけ外す（行の中の `**`・`__` まで消して、`src/**/*.ts`・`__init__.py`・`__tests__/` を別の道に変えていた）
+- 段の数は目安として扱う。倍までは全部受け、倍を超えたら割らない（3 段に一行添えただけで割らなくなり、割り直しの段を塞いでいた）
+- 見出し・導入・結びは、見出しらしい形だけを落とす（「計画ファイルを読む」「これでビルドが通るか確かめる」「以上の値を弾く」は段）
+- 受け入れの報告: 計画どおりのファイルを run_command で作った分は、新しいフォルダを「計画外」として残す理由にしない
+  （Session の配線は試験していない。`dropCoveredDirs` に渡す外の変化から、計画の書き込み先を除いている）
+- git の錠は、引数の `--no-optional-locks` ではなく環境変数 `GIT_OPTIONAL_LOCKS=0` で渡す（引数は git 2.15 より前ですべての呼び出しを落とす。
+  環境変数なら古い版は無視するだけ）。偽の git を置いて、渡っていることを確かめた（Windows では回していない）
+- 合議で全員が落ちたときは「誰も確かめられませんでした」と言う（「問題は挙がりませんでしたが」は、見た人がいたように読める）

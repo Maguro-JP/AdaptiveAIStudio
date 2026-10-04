@@ -42,13 +42,18 @@ export const STAMP_GIT_TIMEOUT_MS = 2 * 60_000;
  * 作業場の `.git/config`（作業の中で書き換えられうる）が、承認なしに命令を走らせる道になる。
  */
 // 値は空にする。`false` は git 2.36 より前では「false という命令」と読まれ、呼ぶたびに sh を起こす。空ならどの版でも「無し」（2.43 で、空でも命令が走らないことを測った）
-// `--no-optional-locks`: 裏で走らせる `git status` が index.lock を取りに行かない（同じ時に担当が打った `git add`・`git commit` を
-// 「index.lock exists」で落とさない。git 2.15 から）
-export const SAFE_GIT_ARGS: readonly string[] = ['--no-optional-locks', '-c', 'core.fsmonitor='];
+export const SAFE_GIT_ARGS: readonly string[] = ['-c', 'core.fsmonitor='];
+
+/**
+ * 製品が走らせる git の環境。`GIT_OPTIONAL_LOCKS=0`: 裏で走らせる `git status` が index.lock を取りに行かない
+ * （同じ時に担当が打った `git add`・`git commit` を「index.lock exists」で落とさない）。引数の `--no-optional-locks` は
+ * git 2.15 より前ではすべての呼び出しを落とすので、古い版が黙って無視する環境変数で渡す。
+ */
+export const SAFE_GIT_ENV: Readonly<Record<string, string>> = { GIT_OPTIONAL_LOCKS: '0' };
 
 function gitOut(args: string[], cwd: string, maxBuffer = 16 * 1024 * 1024): Promise<string | undefined> {
   return new Promise((resolve) => {
-    execFile('git', [...SAFE_GIT_ARGS, ...args], { cwd, maxBuffer, encoding: 'utf8', timeout: STAMP_GIT_TIMEOUT_MS }, (err, stdout) => {
+    execFile('git', [...SAFE_GIT_ARGS, ...args], { cwd, maxBuffer, encoding: 'utf8', timeout: STAMP_GIT_TIMEOUT_MS, env: { ...process.env, ...SAFE_GIT_ENV } }, (err, stdout) => {
       resolve(err ? undefined : stdout);
     });
   });
@@ -57,7 +62,7 @@ function gitOut(args: string[], cwd: string, maxBuffer = 16 * 1024 * 1024): Prom
 /** 同じく、バイト列のまま返す。中身は utf8 と限らない（二進・Shift_JIS）。 */
 function gitBytes(args: string[], cwd: string, maxBuffer: number): Promise<Buffer | undefined> {
   return new Promise((resolve) => {
-    execFile('git', [...SAFE_GIT_ARGS, ...args], { cwd, maxBuffer, encoding: 'buffer', timeout: STAMP_GIT_TIMEOUT_MS }, (err, stdout) => {
+    execFile('git', [...SAFE_GIT_ARGS, ...args], { cwd, maxBuffer, encoding: 'buffer', timeout: STAMP_GIT_TIMEOUT_MS, env: { ...process.env, ...SAFE_GIT_ENV } }, (err, stdout) => {
       resolve(err ? undefined : stdout);
     });
   });
