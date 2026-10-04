@@ -20,7 +20,7 @@ import { DEFAULT_CONFIG } from '../src/config.ts';
  * 「そのファイルを書く → 報告する」を返す偽モデル。
  * 遅延を入れて並列性を観測できるようにする。
  */
-async function workerServer(delayMs: number, opts: { perModelDelay?: Record<string, number>; failModels?: string[]; preface?: string } = {}) {
+async function workerServer(delayMs: number, opts: { perModelDelay?: Record<string, number>; failModels?: string[]; preface?: string; doneOnly?: boolean } = {}) {
   let peak = 0;
   let active = 0;
   /** 作業者が受け取った依頼文。申し送りが届いているかを見るため。 */
@@ -53,7 +53,7 @@ async function workerServer(delayMs: number, opts: { perModelDelay?: Record<stri
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       if (alreadyWrote) {
         // 決まりに従うモデルとして、終わりの合図まで書く。
-        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: `${target} を作成しました。\nTASK_DONE\n` } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: opts.doneOnly ? 'TASK_DONE\n' : `${target} を作成しました。\nTASK_DONE\n` } }] })}\n\n`);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
       } else {
         const args = JSON.stringify({ path: target, content: `done:${target}\n` });
@@ -79,7 +79,7 @@ async function workerServer(delayMs: number, opts: { perModelDelay?: Record<stri
 
 async function runTeam(
   items: WorkItem[], parallel: number,
-  serverOpts: { perModelDelay?: Record<string, number>; failModels?: string[]; preface?: string } = {},
+  serverOpts: { perModelDelay?: Record<string, number>; failModels?: string[]; preface?: string; doneOnly?: boolean } = {},
   tools: Tool[] = [readFileTool, writeFileTool],
 ) {
   const server = await workerServer(60, serverOpts);
@@ -131,6 +131,10 @@ describe('担当の最終報告', () => {
     const report = (outcomes.get('t1')?.result as { report: string } | undefined)?.report ?? '';
     assert.doesNotMatch(report, /まず a\.txt を書きます/);
     assert.match(report, /a\.txt を作成しました/);
+  });
+  test('ツールの後に終わりの合図だけを書いたなら、報告は空（途中経過の文を渡さない）', async () => {
+    const { outcomes } = await runTeam([item('t1', 'a.txt')], 1, { preface: 'まず a.txt を書きます。', doneOnly: true });
+    assert.equal((outcomes.get('t1')?.result as { report: string } | undefined)?.report, '');
   });
 });
 

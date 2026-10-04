@@ -146,15 +146,12 @@ export class Team {
     let finished: (AgentEvent & { type: 'finished' }) | undefined;
 
     // ツールを呼んだら、それまでの文は途中経過（「まず読みます」）。最終報告はツールを呼んだ後に書いた分だけにする
-    // （全ターンを繋いでいたので、申し送りの頭 1500 字と検収の一行目が途中経過の文になり、最後の結論が落ちていた）
-    let calledTool = false;
+    // （全ターンを繋いでいたので、申し送りの頭 1500 字と検収の一行目が途中経過の文になり、最後の結論が落ちていた）。
+    // 後に何も書かずに終えた（TASK_DONE だけ）なら、報告は空（申し送りは「言い残していない」として飛ばす）
     for await (const ev of agent.run(history, signal)) {
       push({ type: 'agent', taskId: item.id, laneId: item.laneId, event: ev });
-      if (ev.type === 'toolStart') calledTool = true;
-      else if (ev.type === 'thinking') {
-        if (calledTool) { report = ''; calledTool = false; }
-        report += ev.delta;
-      }
+      if (ev.type === 'toolStart') report = '';
+      else if (ev.type === 'thinking') report += ev.delta;
       if (ev.type === 'turn') turns += 1;
       else if (ev.type === 'finished') finished = ev;
     }

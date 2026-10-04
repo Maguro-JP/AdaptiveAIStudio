@@ -3821,8 +3821,9 @@ export class UiServer {
          * 段取りの最後の段が通っても、手前に塞がった段があれば「片づいた」と言わない（`#driveStep` の「段が残っていない」と同じ扱い）。
          * 塞がった段も済んだ側に数える（`isSettled`）ので、ここへ落ちて「やり残しが片づきました」と出し、やり残しも閉じていた
          */
-        const stuckSteps = resuming && mine ? mine.steps.filter((st) => st.state === 'blocked') : [];
-        if (resuming && done && stuckSteps.length > 0) {
+        // 最後の段が落ちて塞がれた回（done は偽）も、段取りが片づいていれば止めて並べる（次の見回りまで一周待たせない）
+        const stuckSteps = resuming && mine && isSettled(mine) ? mine.steps.filter((st) => st.state === 'blocked') : [];
+        if (resuming && stuckSteps.length > 0) {
           await this.#unfinished.cancel(resuming);
           await this.#settleGoals();
           this.broadcast({

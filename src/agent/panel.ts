@@ -56,7 +56,8 @@ export async function* runPanel(
   signal: AbortSignal,
 ): AsyncGenerator<PanelEvent, PanelFinding[]> {
   const findings: PanelFinding[] = [];
-  const parallel = Math.max(1, opts.parallel ?? 2);
+  // 数でない並べる数（設定の NaN）は既定に倒す（Math.max(1, NaN) は NaN で、誰も走らずに所見なしで終わっていた）
+  const parallel = Number.isFinite(opts.parallel) ? Math.max(1, Math.floor(opts.parallel!)) : 2;
 
   const inbox: PanelEvent[] = [];
   let wake: (() => void) | undefined;
@@ -90,13 +91,15 @@ export async function* runPanel(
       return;
     }
     // 言い終えなかった担当（モデルが落ちた・止めた・上限）は、「問題なし」と数えない。Agent.run は落ちても投げないので、
-    // 終わり方を見ないと、全員が落ちた回に「全員が問題なしと判断しました」と出していた。途中までの文の PROPOSAL も採らない
-    if (ended !== 'completed') {
+    // 終わり方を見ないと、全員が落ちた回に「全員が問題なしと判断しました」と出していた。途中までの文の PROPOSAL も採らない。
+    // ただし終わりの合図（TASK_DONE）を書かなかっただけ（noProgress）で、PROPOSAL を言い終えていれば採る（小さいモデルでありがち）
+    const parsed = parseProposal(text);
+    const usable = ended === 'completed' || (ended?.startsWith('noProgress') === true && parsed !== undefined);
+    if (!usable) {
       push({ type: 'failed', roleId: role.id, error: ended ?? '終わり方が分かりません' });
       return;
     }
 
-    const parsed = parseProposal(text);
     if (!parsed) {
       push({ type: 'noFinding', roleId: role.id, roleName: role.name });
       return;

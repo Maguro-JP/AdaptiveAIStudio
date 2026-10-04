@@ -45,13 +45,16 @@ describe('並べる数の書き忘れ', () => {
     const scheduler = new Scheduler([{ id: 'l', candidates: ['m'], parallel: undefined as never }]);
     const gen = scheduler.run([{ id: 't', laneId: 'l', run: async () => 'ok' }], new AbortController().signal);
     const done = (async () => { let n = await gen.next(); while (!n.done) n = await gen.next(); return n.value; })();
-    const got = await Promise.race([done, new Promise((r) => setTimeout(() => r('timeout'), 3000))]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const got = await Promise.race([done, new Promise((r) => { timer = setTimeout(() => r('timeout'), 3000); })]);
+    clearTimeout(timer);
     assert.notEqual(got, 'timeout', '待ったまま終わらない');
   });
 });
 
 describe('端末の team の書ける数の上限', () => {
   test('担当が違っても、依頼全体で数える', async () => {
+    const before = process.env.AAS_STATE_DIR;
     process.env.AAS_STATE_DIR = await tempDir('aas-team-gaps-state-');
     const root = await tempDir('aas-team-gaps-root-');
     try {
@@ -64,7 +67,8 @@ describe('端末の team の書ける数の上限', () => {
       assert.match((await w2.run({ path: 'b.txt', content: 'b' }, ctx)).content, /BLOCKED by blast-radius/);
       await wired.finish().catch(() => undefined);
     } finally {
-      delete process.env.AAS_STATE_DIR;
+      if (before === undefined) delete process.env.AAS_STATE_DIR;
+      else process.env.AAS_STATE_DIR = before;
     }
   });
 });
