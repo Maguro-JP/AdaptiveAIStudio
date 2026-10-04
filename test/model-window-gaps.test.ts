@@ -96,7 +96,10 @@ describe('システムプロンプトとツールの説明の分', () => {
     const { historyBudget } = await import('../src/agent/window.ts');
     assert.equal(historyBudget(8192, 0), 8192 - 2048);
     assert.equal(historyBudget(8192, 3000), 8192 - 2048 - 3000);
-    assert.equal(historyBudget(4096, 10_000), 512, '下限は残す');
+    // 下限に当たったら、返事の予約から削る（下限の 512 をそのまま返してコンテキストウィンドウを超えていた）
+    assert.equal(historyBudget(4096, 3000), 512);
+    assert.ok(3000 + historyBudget(4096, 3000) + 256 <= 4096, '返事に 256 を残す');
+    assert.equal(historyBudget(4096, 10_000), 256, 'それでも足りなければ 256');
   });
 
   test('**通しで、システムプロンプト・ツールの説明・履歴を足しても、返事の予約を残してコンテキストウィンドウに収まる**', async () => {
@@ -256,5 +259,95 @@ describe('見積もり', () => {
   test('**1 通ごとの包みも数える**（空の 10 通は 0 ではない）', () => {
     const empty: ProviderMessage[] = Array.from({ length: 10 }, () => ({ role: 'user', content: '' }));
     assert.ok(sizeOf(empty) >= 40);
+  });
+});
+
+describe('レビューで挙がった筋書き', () => {
+  test('**ツールの返しの上限は、履歴の取り分から決める**（コンテキストウィンドウから決めると取り分より大きくなる）', async () => {
+    const { toolOutputBudget } = await import('../src/agent/window.ts');
+    assert.ok(toolOutputBudget(8192, undefined, 2000) <= 1000);
+    assert.equal(toolOutputBudget(8192), toolOutputBudget(8192, undefined, undefined), '渡さなければ今までどおり');
+  });
+
+  test('**今の依頼そのものが大きくても、取り分を超えたまま返さない**（頭を残して縮める）', () => {
+    const h: ProviderMessage[] = [
+      { role: 'user', content: 'A を直して' },
+      ...round(0, 2000),
+      { role: 'user', content: `B を直して\n${'添'.repeat(9000)}` },
+      ...round(1, 2000), ...round(2, 2000),
+    ];
+    const got = fitToWindow(h, 6144);
+    assert.ok(sizeOf(got.messages) <= 6144, `超えている: ${sizeOf(got.messages)}`);
+    assert.ok(got.messages.some((m) => m.content.startsWith('B を直して')), '今の依頼の頭が残っていない');
+  });
+
+  test('**名札が JSON でも中身が流れなら、流れとして読む**', async () => {
+    const url = await serve((req, res) => {
+      req.resume();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'はい' } }] })}\n\n`);
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
+      res.end('data: [DONE]\n\n');
+    });
+    const provider = new OpenAiCompatibleProvider({ id: 'p', baseUrl: url, locality: 'cloud' });
+    let text = '';
+    for await (const ch of provider.chat({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal)) {
+      if (ch.type === 'text') text += ch.delta;
+    }
+    assert.equal(text, 'はい');
+  });
+
+  test('**まとめ返しの本文が部品の配列でも読む**', async () => {
+    const url = await serve((req, res) => {
+      req.resume();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { content: [{ type: 'text', text: 'は' }, { type: 'text', text: 'い' }] }, finish_reason: 'stop' }] }));
+    });
+    const provider = new OpenAiCompatibleProvider({ id: 'p', baseUrl: url, locality: 'cloud' });
+    let text = '';
+    for await (const ch of provider.chat({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal)) {
+      if (ch.type === 'text') text += ch.delta;
+    }
+    assert.equal(text, 'はい');
+  });
+
+  test('**番号を振り直した呼び出しの、id の無い続きの欠片は、振り直した先へ繋ぐ**', async () => {
+    const url = await serve((req, res) => {
+      req.resume();
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      for (const l of [
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'A', function: { name: 'read_file', arguments: '' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"path":"a"}' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'B', function: { name: 'read_file', arguments: '' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"path":"b"}' } }] } }] },
+        { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+      ]) res.write(`data: ${JSON.stringify(l)}\n\n`);
+      res.end('data: [DONE]\n\n');
+    });
+    const provider = new OpenAiCompatibleProvider({ id: 'p', baseUrl: url, locality: 'cloud' });
+    const calls: { id: string; args: unknown }[] = [];
+    for await (const ch of provider.chat({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal)) {
+      if (ch.type === 'toolCall') calls.push({ id: ch.call.id, args: ch.call.args });
+    }
+    assert.deepEqual(calls, [{ id: 'A', args: { path: 'a' } }, { id: 'B', args: { path: 'b' } }]);
+  });
+
+  test('欠片ごとに id を付け直してくる相手でも、名前の無い欠片で呼び出しを割らない（対）', async () => {
+    const url = await serve((req, res) => {
+      req.resume();
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      for (const l of [
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'x1', function: { name: 'read_file', arguments: '{"path"' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'x2', function: { arguments: ':"a"}' } }] } }] },
+        { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+      ]) res.write(`data: ${JSON.stringify(l)}\n\n`);
+      res.end('data: [DONE]\n\n');
+    });
+    const provider = new OpenAiCompatibleProvider({ id: 'p', baseUrl: url, locality: 'cloud' });
+    const calls: unknown[] = [];
+    for await (const ch of provider.chat({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal)) {
+      if (ch.type === 'toolCall') calls.push(ch.call.args);
+    }
+    assert.deepEqual(calls, [{ path: 'a' }]);
   });
 });

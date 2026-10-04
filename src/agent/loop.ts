@@ -136,6 +136,8 @@ export class Agent {
       // 道具の返しも窓に収める。読んだ時点で収めないと、刈る段では
       // 中身がほとんど残らない（直近の結果は 1200 字まで削られる）。
       ...(this.#opts.contextTokens !== undefined ? { contextTokens: this.#opts.contextTokens } : {}),
+      // 返す長さは、履歴の取り分から決める（コンテキストウィンドウから決めると、取り分より大きな結果を返していた）
+      ...(this.#opts.contextTokens !== undefined ? { historyTokens: budget } : {}),
       ...(this.#opts.count ? { count: this.#opts.count } : {}),
     };
 

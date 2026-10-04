@@ -259,6 +259,8 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     let ended = false;
     // ツール呼び出しは複数チャンクに分割して届く。index ごとに組み立てる。
     const pending = new Map<number, { id: string; name: string; args: string }>();
+    // 届いた番号 → 実際に入れている枠（同じ番号で別の呼び出しが来て、振り直したとき）
+    const moved = new Map<number, number>();
     // **並んでいる間は停滞ではない。**inproc は口が空くのを待つ間 `: queued` を打ち続け、
     // 借りたら `: started` を流す。注釈行は data ではないので下の読みには出ないが、
     // 最初のトークンが来るまでは、届いたバイトそのものを「生きている」合図として待ちを延ばす。
@@ -333,11 +335,17 @@ export class OpenAiCompatibleProvider implements ChatProvider {
           let idx = tc.index;
           // 番号が同じでも、その枠に別の id が既に入っていれば別の呼び出し（並べた呼び出しを全部 0 番・id だけ変えて送る相手がいる。
           // 一つの枠に繋いで、id は後のもの・引数は `{..}{..}` になり、両方とも失敗していた）
-          if (idx !== undefined && tc.id) {
-            const held = pending.get(idx);
-            if (held?.id && held.id !== tc.id) {
+          // 振り直した番号は覚えておき、id の無い続きの欠片も振り直した先へ送る（届いた番号のまま送ると、前の呼び出しに繋がっていた）。
+          // 新しい呼び出しと見なすのは、別の id で名前も付いているときだけ（欠片ごとに id を付け直してくる相手を割らない）
+          if (idx !== undefined) {
+            const mapped = moved.get(idx) ?? idx;
+            const held = pending.get(mapped);
+            if (tc.id && tc.function?.name && held?.id && held.id !== tc.id) {
               const same = [...pending].find(([, v]) => v.id === tc.id)?.[0];
               idx = same ?? Math.max(...pending.keys()) + 1;
+              moved.set(tc.index!, idx);
+            } else {
+              idx = mapped;
             }
           }
           if (idx === undefined) {
@@ -441,6 +449,11 @@ export class OpenAiCompatibleProvider implements ChatProvider {
  */
 async function* wholeAsChunks(body: ReadableStream<Uint8Array>): AsyncIterable<string> {
   const text = await new Response(body).text();
+  // 名札が JSON でも、中身が流れ（`data:` の行）の相手がいる。そのときは流れとして読む
+  if (/^data:/m.test(text) && !/^\s*\{/.test(text)) {
+    yield* readSseLines(new Response(text).body!);
+    return;
+  }
   let parsed: { choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: unknown } }> }; finish_reason?: string | null }>; usage?: unknown; error?: unknown };
   try { parsed = JSON.parse(text) as typeof parsed; } catch { yield text; return; }
   const choice = parsed.choices?.[0];
@@ -449,7 +462,7 @@ async function* wholeAsChunks(body: ReadableStream<Uint8Array>): AsyncIterable<s
     ...(parsed.usage ? { usage: parsed.usage } : {}),
     choices: choice ? [{
       delta: {
-        ...(typeof choice.message?.content === 'string' ? { content: choice.message.content } : {}),
+        ...(contentText(choice.message?.content) ? { content: contentText(choice.message?.content) } : {}),
         ...(choice.message?.tool_calls ? {
           tool_calls: choice.message.tool_calls.map((t, index) => ({
             index, ...(t.id ? { id: t.id } : {}),
@@ -466,6 +479,13 @@ async function* wholeAsChunks(body: ReadableStream<Uint8Array>): AsyncIterable<s
   };
   yield JSON.stringify(chunk);
   yield '[DONE]';
+}
+
+/** 本文を文字にする。部品の配列（`[{type:'text', text}]`）で来る相手もいる。 */
+function contentText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((p) => (typeof (p as { text?: unknown })?.text === 'string' ? (p as { text: string }).text : '')).join('');
 }
 
 /** 流れの途中で返ってきた失敗の中身を、文にする（`{message}` でも文字でも）。 */

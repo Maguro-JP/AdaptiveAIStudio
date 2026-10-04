@@ -109,7 +109,11 @@ export function tokenBudget(contextTokens: number, reserveTokens = 2200): number
  */
 export function historyBudget(contextTokens: number, fixedTokens: number, reserveTokens = 2200): number {
   const reserve = Math.max(256, Math.min(reserveTokens, Math.floor(contextTokens * 0.25)));
-  return Math.max(contextTokens - reserve - Math.max(0, fixedTokens), 512);
+  const fixed = Math.max(0, fixedTokens);
+  const room = contextTokens - reserve - fixed;
+  if (room >= 512) return room;
+  // 下限 512 をそのまま返すと、システムプロンプトとツールの説明が大きいときにコンテキストウィンドウを超えていた。返事の予約から削る（返事に 256 は残す）
+  return Math.max(256, Math.min(512, contextTokens - fixed - 256));
 }
 
 /**
@@ -123,8 +127,9 @@ export function historyBudget(contextTokens: number, fixedTokens: number, reserv
  * 文字で返すのは、切り出しが文字単位のため。日本語は1文字1トークンなので、
  * 文字数をそのままトークン数と見て安全側に倒す。
  */
-export function toolOutputBudget(contextTokens: number, share = 0.35): number {
-  const budget = tokenBudget(contextTokens);
+export function toolOutputBudget(contextTokens: number, share = 0.35, historyTokens?: number): number {
+  // 履歴の取り分が分かっていれば、そこから決める（システムプロンプトとツールの説明を引いた後の取り分）
+  const budget = historyTokens ?? tokenBudget(contextTokens);
   // **一つの結果が、会話ぜんぶより大きくならないようにする。**
   // 下限を 2000 の決め打ちにしていたので、窓 2048 では結果ひとつが
   // 履歴の取り分（1896）を超えていた。一度読んだ時点で溢れる。
@@ -393,6 +398,22 @@ function fitCore(
       });
       u.chars = sizeOf(u.messages, count);
     }
+  }
+
+  // それでも溢れるなら、守っている依頼（最初と今）の本文も頭だけ残して縮める。守ったまま予算を超えて返していた（添付を差し込んだ大きな依頼など）
+  for (const keep of [ask, units[keepFirst]]) {
+    const over = total(units) - budget;
+    if (over <= 0) break;
+    if (!keep) continue;
+    keep.messages = keep.messages.map((m) => {
+      if (m.role !== 'user') return m;
+      const room = Math.max(KEEP_HEAD, count(m.content) - over - 40);
+      const cut = cutToTokens(m.content, room, count);
+      if (cut.length >= m.content.length) return m;
+      shrunk = true;
+      return { ...m, content: `${cut}\n…（この先 ${m.content.length - cut.length} 字は、文脈に収まらないので省いています）` };
+    });
+    keep.chars = sizeOf(keep.messages, count);
   }
 
   const out: ProviderMessage[] = [];
