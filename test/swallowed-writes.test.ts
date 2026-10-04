@@ -32,7 +32,7 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/core/session.ts': { count: 1, why: '作業場のフォルダを作っておくだけ。作れなければ使う所が言う' },
   'src/core/unfinished.ts': { count: 1, why: '一時ファイルの後始末' },
   'src/core/journal-file.ts': { count: 1, why: '一時ファイルの後始末' },
-  'src/core/file-lock.ts': { count: 2, why: '錠を消す。古い錠を消せなければ取り直しを待って、取れなければ書かずに投げる。返すときに消せなければ、10 秒で古い錠として消される' },
+  'src/core/file-lock.ts': { count: 3, why: '錠を消す。持ち主を書けなかった錠の後始末（元の失敗を投げ直す）。古い錠を消せなければ待ちと期限の側へ回し、取れなければ書かずに投げる。返すときに消せなければ、5 秒で古い錠として消される' },
   'src/core/logfile.ts': { count: 1, why: '記録の回し。回せなければ同じファイルに書き続ける' },
   'src/memory/memory.ts': { count: 1, why: '一時ファイルの後始末' },
 };

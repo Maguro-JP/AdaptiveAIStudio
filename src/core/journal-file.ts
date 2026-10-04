@@ -65,6 +65,15 @@ const unread = new WeakMap<object, string>();
 /** 入れ物ごとの、最後に読んだ・書いたファイルの中身（`saveMerged` が、ほかが書いた分を見分けるため）。 */
 const lastSeen = new WeakMap<object, { path: string; text: string; value: unknown }>();
 
+/**
+ * 見た中身を覚える。**写しを持つ。**読んだ値をそのまま持つと、`restore` が同じ値を入れ物へ入れるので、手元で数えるたびに
+ * 「前に見た中身」も一緒に増え、ほかが書いた回の差から手元の分を引いて消していた。
+ */
+function remember(target: object, path: string, value: unknown): void {
+  const text = JSON.stringify(value);
+  lastSeen.set(target, { path, text, value: JSON.parse(text) as unknown });
+}
+
 /** 読んで渡す。読めなかったときは覚えておき、保存の前に読み直す。 */
 export async function loadJournal(
   target: object, path: string, apply: (value: unknown) => void, ops: JournalOps = {},
@@ -72,7 +81,7 @@ export async function loadJournal(
   const r = await readJournal(path, ops);
   if (r.kind === 'value') {
     apply(r.value);
-    lastSeen.set(target, { path, text: JSON.stringify(r.value), value: r.value });
+    remember(target, path, r.value);
   } else {
     lastSeen.delete(target);
   }
@@ -122,12 +131,15 @@ export function saveMerged(
     if (r.kind === 'unreadable') return false;
     const seen = lastSeen.get(target);
     const base = seen?.path === path ? seen : undefined;
-    if (r.kind === 'value' && JSON.stringify(r.value) !== base?.text) rebase(r.value, base?.value);
+    if (r.kind === 'value' && JSON.stringify(r.value) !== base?.text) {
+      rebase(r.value, base?.value);
+      // 足した分は、書けなくても手元に入っている。次の保存で同じ差をもう一度足さないよう、いまのファイルを見たことにする
+      remember(target, path, r.value);
+    }
     unread.delete(target);
     const out = text();
     if (!await replaceWhole(path, out, ops)) return false;
-    const value: unknown = JSON.parse(out);
-    lastSeen.set(target, { path, text: JSON.stringify(value), value });
+    remember(target, path, JSON.parse(out));
     return true;
   }).catch(() => false));
 }

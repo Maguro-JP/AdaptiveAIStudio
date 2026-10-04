@@ -195,7 +195,7 @@ export class DutyRoster {
   /**
    * ほかのプロセスが書いた記録を足す（`saveMerged`）。`seen` は、この実体が前に読んだ・書いた中身。
    * 回数は、ファイルと `seen` の差（ほかが数えた分）だけ足す。最後の期は、ほかだけが進めたならそちらを取り、
-   * 両方が進めたなら後に済ませた方を取る。`seen` が無ければ、前の `absorb` と同じ（手元で済ませていれば手元）。
+   * 両方が進めたなら後に済ませた方を取る。`seen` が無いときは、手元で済ませていなければファイル、両方で済ませていれば後に済ませた方。
    */
   rebase(records: unknown, seen: unknown): void {
     if (!Array.isArray(records)) return;
@@ -210,7 +210,9 @@ export class DutyRoster {
         const theyMoved = theirs.lastPeriod !== was.lastPeriod;
         const iMoved = now.lastPeriod !== was.lastPeriod;
         if (theyMoved && (!iMoved || (theirs.lastAt ?? 0) > (now.lastAt ?? 0))) now.lastPeriod = theirs.lastPeriod;
-      } else if (now.lastPeriod === undefined) {
+      } else if (now.lastPeriod === undefined || (now.lastAt !== undefined && (theirs.lastAt ?? 0) > now.lastAt)) {
+        // 前に見た中身が無い（起動のときに無かった・読めなかった）: 手元で済ませていても、ほかが後に済ませたならそちら。
+        // 流しただけ（`skip` は時刻を残さない）なら手元の期を取る（流した期を、それより前に済ませた期で戻さない）
         now.lastPeriod = theirs.lastPeriod;
       }
       const last = Math.max(now.lastAt ?? 0, theirs.lastAt ?? 0);

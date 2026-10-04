@@ -7,8 +7,8 @@
  *
  * - 取る: `<名前>.lock` を排他で作る（`wx`）。在れば少し待って取り直す。
  * - 古い錠: 作られてから `staleMs` を過ぎたものは、落ちたプロセスが残したものとして消して取り直す。
- *   中でするのは小さなファイルを読んで書くだけなので、既定の 10 秒を超えて持つことは無い。
- * - 取れない: `timeoutMs` 待っても取れなければ投げる。呼ぶ側は「書けなかった」として扱う（黙って上書きしない）。
+ *   中でするのは小さなファイルを読んで書くだけなので、既定の 5 秒を超えて持つことは無い。
+ * - 取れない: `timeoutMs`（既定 2 秒）待っても取れなければ投げる。画面の採否はこの間返らないので、長くしない。呼ぶ側は「書けなかった」として扱う（黙って上書きしない）。
  * - 返す: 自分が作った錠のときだけ消す（古いとして消された後に、ほかが取り直した錠を消さない）。
  */
 import { mkdir, open, readFile, stat, unlink } from 'node:fs/promises';
@@ -28,7 +28,7 @@ export interface FileLockOptions {
 export async function withFileLock<T>(path: string, run: () => Promise<T>, opts: FileLockOptions = {}): Promise<T> {
   const lock = `${path}.lock`;
   const token = `${process.pid} ${randomUUID()}`;
-  await acquire(lock, token, opts.staleMs ?? 10_000, opts.timeoutMs ?? 5_000);
+  await acquire(lock, token, opts.staleMs ?? 5_000, opts.timeoutMs ?? 2_000);
   try {
     return await run();
   } finally {
@@ -41,7 +41,13 @@ async function acquire(lock: string, token: string, staleMs: number, timeoutMs: 
   for (let tries = 0; ; tries++) {
     try {
       const fh = await open(lock, 'wx');
-      try { await fh.writeFile(token, 'utf8'); } finally { await fh.close(); }
+      try {
+        try { await fh.writeFile(token, 'utf8'); } finally { await fh.close(); }
+      } catch (e) {
+        // 持ち主の書けない錠を残すと、古くなるまで誰も書けない。作った錠を消してから投げる
+        await unlink(lock).catch(() => undefined);
+        throw e;
+      }
       return;
     } catch (e) {
       const code = (e as NodeJS.ErrnoException).code;
@@ -51,16 +57,21 @@ async function acquire(lock: string, token: string, staleMs: number, timeoutMs: 
       if (code !== 'EEXIST' && code !== 'EPERM') throw e;
     }
     const age = await stat(lock).then((s) => Date.now() - s.mtimeMs, () => undefined);
-    if (age !== undefined && age > staleMs) {
-      await unlink(lock).catch(() => undefined);
-      continue;
-    }
+    // 古い錠は消して取り直す。消せなければ（読み取り専用・掴まれている）、待ちと期限の側へ回す（前は待たずに回り続けた）
+    if (age !== undefined && age > staleMs && await unlink(lock).then(() => true, () => false)) continue;
     if (Date.now() >= deadline) throw new FileLockBusy(`ほかのプロセスが ${lock} を持ったままです`);
     await new Promise((r) => setTimeout(r, Math.min(20 * (tries + 1), 200)));
   }
 }
 
 async function release(lock: string, token: string): Promise<void> {
-  const now = await readFile(lock, 'utf8').catch(() => undefined);
-  if (now === token) await unlink(lock).catch(() => undefined);
+  // 一瞬掴まれて読めない（Windows の EBUSY）ときは、少し待って読み直す。読めないまま残した錠は、古くなるまで誰も書けない
+  for (let tries = 0; tries < 3; tries++) {
+    const now = await readFile(lock, 'utf8').catch((e: NodeJS.ErrnoException) => (e.code === 'ENOENT' ? '' : undefined));
+    if (now !== undefined) {
+      if (now === token) await unlink(lock).catch(() => undefined);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 50 * (tries + 1)));
+  }
 }

@@ -6,7 +6,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, readFile, utimes, access } from 'node:fs/promises';
+import { writeFile, readFile, utimes, access, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { loadJournal, saveMerged } from '../src/core/journal-file.ts';
@@ -57,6 +57,47 @@ describe('当番の記録（duties.json）', () => {
     await saveRoster(b, path);
     await saveRoster(a, path);
     assert.equal((await recordOf(path, D1!)).completions, 1);
+  });
+
+  test('**起動のときにファイルが在っても、手元で済ませた分を消さない**', async () => {
+    // 読んだ値と「前に見た中身」が同じものを指していると、手元で数えるたびに前に見た中身も増え、差から手元の分が引かれていた
+    const path = join(await tempDir('aas-xproc-'), 'duties.json');
+    await writeFile(path, JSON.stringify([{ dutyId: D1, completions: 3, missed: 0, lastPeriod: 'old', lastAt: NOW - 86_400_000 * 30 }]));
+    const a = await roster(path);
+    const b = await roster(path);
+    a.complete(D1!, NOW);
+    b.complete(D2!, NOW);
+    await saveRoster(b, path);
+    await saveRoster(a, path);
+    const r = await recordOf(path, D1!);
+    assert.equal(r.completions, 4);
+    assert.notEqual(r.lastPeriod, 'old', '済ませた期が古い期に戻らない');
+    assert.equal((await recordOf(path, D2!)).completions, 1);
+  });
+
+  test('**書けなかった後の保存で、ほかが数えた分を二重に足さない**', async () => {
+    const path = join(await tempDir('aas-xproc-'), 'duties.json');
+    const a = await roster(path);
+    const b = await roster(path);
+    b.complete(D1!, NOW);
+    await saveRoster(b, path);
+    const failRename = async () => { throw Object.assign(new Error('busy'), { code: 'EACCES' }); };
+    assert.equal(await saveMerged(a, path, () => JSON.stringify(a.records()), (v, seen) => a.rebase(v, seen), { rename: failRename }), false);
+    assert.equal(await saveRoster(a, path), true);
+    assert.equal((await recordOf(path, D1!)).completions, 1);
+  });
+
+  test('前に見た中身が無くても、ほかが後に済ませた期で古い期を残さない', async () => {
+    const path = join(await tempDir('aas-xproc-'), 'duties.json');
+    const b = await roster(path); // ファイルが無いうちに読む（前に見た中身が無い）
+    b.complete(D1!, NOW);
+    const a = await roster(path);
+    a.complete(D1!, NOW + 86_400_000);
+    await saveRoster(a, path);
+    await saveRoster(b, path);
+    assert.equal((await recordOf(path, D1!)).lastAt, NOW + 86_400_000);
+    const later = (await roster(path)).status(NOW + 86_400_000).find((s) => s.duty.id === D1)!;
+    assert.equal(later.doneThisPeriod, true, '後に済ませた期が残る');
   });
 
   test('両方が同じ当番を済ませたら、回数は両方の分、期は後に済ませた方', async () => {
@@ -115,6 +156,14 @@ describe('ほかのプロセスとの錠', () => {
     const old = new Date(Date.now() - 60_000);
     await utimes(`${path}.lock`, old, old);
     assert.equal(await withFileLock(path, async () => 'ok', { timeoutMs: 200 }), 'ok');
+  });
+
+  test('**古い錠を消せなくても回り続けず、期限で投げる**', async () => {
+    const path = join(await tempDir('aas-xproc-'), 'x.json');
+    await mkdir(`${path}.lock`); // フォルダは unlink で消せない
+    const old = new Date(Date.now() - 60_000);
+    await utimes(`${path}.lock`, old, old);
+    await assert.rejects(withFileLock(path, async () => undefined, { timeoutMs: 150 }), FileLockBusy);
   });
 
   test('**ほかが持っている間は待ち、取れなければ投げて中身に触らない**', async () => {
