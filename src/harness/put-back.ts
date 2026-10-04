@@ -104,3 +104,14 @@ export async function putBack(root: string, relPath: string, content: FileConten
 export function putBackOrder<T extends { content?: FileContent | undefined }>(items: readonly T[]): T[] {
   return [...items].sort((a, b) => Number(a.content !== undefined) - Number(b.content !== undefined));
 }
+
+/**
+ * 作業場の中の道を比べられる形にする。Windows と macOS は大文字小文字を区別しない。Windows は区切り（`\` と `/`）と、
+ * 名前の末尾の点・空白（`a.ts.` は `a.ts`）も同じものとして扱う。
+ */
+export function pathKey(relPath: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'linux') return relPath;
+  const lower = relPath.toLowerCase();
+  if (platform !== 'win32') return lower;
+  return lower.split(/[\\/]+/).map((seg) => (seg === '.' || seg === '..' ? seg : seg.replace(/[. ]+$/, ''))).join('/');
+}

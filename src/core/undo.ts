@@ -19,7 +19,9 @@ import { statSync, createReadStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { safeResolve } from '../agent/tools/paths.ts';
-import { putBack, putBackOrder, contentOf, contentBytes, isAbsent, type FileContent } from '../harness/put-back.ts';
+import { putBack, putBackOrder, contentOf, contentBytes, isAbsent, pathKey, type FileContent } from '../harness/put-back.ts';
+
+export { pathKey };
 
 /** 一つの戻り先。 */
 export interface UndoPoint {
@@ -112,11 +114,6 @@ async function readHead(path: string, bytes = 512): Promise<string> {
   } finally {
     await fh.close();
   }
-}
-
-/** 作業場の中の道を比べられる形にする（Windows と macOS は大文字小文字を区別しない）。 */
-export function pathKey(relPath: string, platform: NodeJS.Platform = process.platform): string {
-  return platform === 'linux' ? relPath : relPath.toLowerCase();
 }
 
 /** 作業場の根を比べられる形にする（Windows と macOS は大文字小文字を区別しない）。 */
@@ -321,7 +318,8 @@ export class UndoStore {
   capture(relPath: string, previous: FileContent | undefined): void {
     const open = this.#open;
     // 記録できなかった道は、後の書き込みで記録し直さない（そのときの中身は途中の姿。「戻らない」と言ったのに、押すと途中の姿に書き換わった）
-    if (!open || open.files.has(relPath) || open.skipped.includes(relPath)) return;
+    // 鍵は綴りをそろえて使う（`src/Foo.ts` と `src/foo.ts` を別に記録すると、二つ目は一つ目が書いた後の中身になり、戻すと途中の姿になる）
+    if (!open || open.files.has(pathKey(relPath)) || this.#skippedHas(relPath)) return;
     const size = contentBytes(previous);
     if (open.bytes + size > MAX_POINT_BYTES) {
       open.skipped.push(relPath);
@@ -329,8 +327,18 @@ export class UndoStore {
       return;
     }
     open.bytes += size;
-    open.files.set(relPath, { path: relPath, content: previous, ...this.#modeOf(relPath, previous) });
+    open.files.set(pathKey(relPath), { path: relPath, content: previous, ...this.#modeOf(relPath, previous) });
     this.#note(relPath);
+  }
+
+  /** この回で前の中身を記録した道か。 */
+  has(relPath: string): boolean {
+    return this.#open?.files.has(pathKey(relPath)) ?? false;
+  }
+
+  #skippedHas(relPath: string): boolean {
+    const key = pathKey(relPath);
+    return this.#open?.skipped.some((p) => pathKey(p) === key) ?? false;
   }
 
   /** 書く前の権限。在るファイルだけ。取れなければ持たない（戻すときに今の権限のまま）。 */
@@ -351,7 +359,7 @@ export class UndoStore {
   replace(relPath: string, previous: FileContent | undefined): void {
     const open = this.#open;
     if (!open) return;
-    const old = open.files.get(relPath);
+    const old = open.files.get(pathKey(relPath));
     const size = contentBytes(previous);
     const freed = contentBytes(old?.content);
     if (open.bytes - freed + size > MAX_POINT_BYTES) {
@@ -360,7 +368,7 @@ export class UndoStore {
     }
     open.bytes += size - freed;
     // 書く手前に取った権限は残す（前後比べで中身だけ入れ替えると、消したファイルを作り直すときに権限が落ちた）
-    open.files.set(relPath, { path: relPath, content: previous, ...(old?.mode !== undefined && previous !== undefined ? { mode: old.mode } : {}) });
+    open.files.set(pathKey(relPath), { path: old?.path ?? relPath, content: previous, ...(old?.mode !== undefined && previous !== undefined ? { mode: old.mode } : {}) });
     this.#note(relPath);
   }
 
@@ -371,12 +379,12 @@ export class UndoStore {
   forget(relPath: string): void {
     const open = this.#open;
     if (!open) return;
-    const old = open.files.get(relPath);
+    const old = open.files.get(pathKey(relPath));
     if (old) {
       open.bytes -= contentBytes(old.content);
-      open.files.delete(relPath);
+      open.files.delete(pathKey(relPath));
     }
-    if (!open.skipped.includes(relPath)) open.skipped.push(relPath);
+    if (!this.#skippedHas(relPath)) open.skipped.push(relPath);
     this.#note(relPath);
   }
 
@@ -388,7 +396,7 @@ export class UndoStore {
    */
   skip(relPath: string): void {
     const open = this.#open;
-    if (!open || open.files.has(relPath) || open.skipped.includes(relPath)) return;
+    if (!open || open.files.has(pathKey(relPath)) || this.#skippedHas(relPath)) return;
     open.skipped.push(relPath);
     this.#note(relPath);
   }
@@ -403,7 +411,7 @@ export class UndoStore {
 
     // その回が書き終えた姿を記録する（戻す前に、後から入った変化を見つけるため）。読めないものは比べない
     const after: Record<string, string | null> = {};
-    for (const relPath of open.files.keys()) {
+    for (const relPath of [...open.files.values()].map((f) => f.path)) {
       const abs = safeResolve(this.#root, relPath);
       if (!abs) continue;
       const d = await digestOf(abs).catch(() => undefined);
@@ -416,7 +424,7 @@ export class UndoStore {
       at: open.at,
       seq,
       request: open.request,
-      paths: [...open.files.keys()],
+      paths: [...open.files.values()].map((f) => f.path),
       files: [...open.files.values()].map(toStored),
       ...(open.skipped.length > 0 ? { skipped: [...open.skipped] } : {}),
       root: (await rootKeys(this.#root)).key,

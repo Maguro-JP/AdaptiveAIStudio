@@ -873,10 +873,19 @@ export class Session {
        * 「何も変わっていません」と報告していた。
        */
       const outsideChanged = new Set<string>();
+      /** 担当が run_command・外のツールを使ったか。使っていなければ、書く手前の記録は依頼の前の姿で正しい。 */
+      let ranOutside = false;
       outsideTaken = async () => {
         const found = await outside.after();
         for (const c of found.changes) this.undo.replace(c.path, c.previous);
-        for (const path of found.unrecorded) this.undo.forget(path);
+        /*
+         * 前後比べで前の中身を記録できなかった道（上限切れ等）。run_command・外のツールが走った回だけ、書く手前の記録も捨てる
+         * （そのときの記録は途中の姿かもしれない）。走っていなければ書く手前の記録が依頼の前の姿なので残す（捨てていたので、
+         * untracked が多い作業場で、正しく記録した中身まで「戻せない」になっていた）
+         */
+        for (const path of found.unrecorded) {
+          if (ranOutside || !this.undo.has(path)) this.undo.forget(path);
+        }
         for (const path of [...found.changes.map((c) => c.path), ...found.unrecorded]) outsideChanged.add(path.replace(/\\/g, '/'));
       };
 
@@ -909,6 +918,7 @@ export class Session {
         else if (ev.type === 'handoff') yield { type: 'handoff', taskId: ev.taskId, from: ev.from };
         else if (ev.type === 'running') yield { type: 'running', taskIds: ev.taskIds };
         else if (ev.type === 'agent' && ev.event.type === 'toolEnd') {
+          if (isExternalTool(ev.event.call.name) || ev.event.call.name === 'run_command') ranOutside = true;
           if (!ev.event.isError && mayChangeFiles(ev.event.call.name)) {
             this.#prefetch.invalidate();
             // 触った先が分かるのは、この場所の書くツールだけ。外のツールと
@@ -1966,7 +1976,8 @@ export class Session {
       if (!keep && !ac.signal.aborted && harnessCfg.rollbackOnGiveUp && (checkpoint.size > 0 || unrecorded.length > 0)) {
         // 戻せなかった道だけの回も黙らない。「打ち切ったら戻る」つもりの人に、戻っていないことを言う。
         // 前の中身を記録できなかった道と、置き戻しに失敗した道（掴まれている・フォルダに入れ替わった）の両方。
-        const r = await checkpoint.restoreAll();
+        // 書けた道・外のツールが変えた道だけを当てる（書く手前に記録したが書かなかった道まで書き戻し、その間に外で直した分を消していた）
+        const r = await checkpoint.restoreAll(changedHere);
         const notRestored = [...new Set([...unrecorded, ...r.failed])].sort();
         yield { type: 'rolledBack', paths: r.restored, ...(notRestored.length > 0 ? { notRestored } : {}) };
         /*

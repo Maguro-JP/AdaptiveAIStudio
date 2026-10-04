@@ -9,7 +9,7 @@
  * 未コミット状態でも巻き戻せるようにする補助。
  */
 import { safeResolve, toDisplayPath } from '../agent/tools/paths.ts';
-import { putBack, putBackOrder, contentOf, readPrior, type FileContent } from './put-back.ts';
+import { putBack, putBackOrder, contentOf, readPrior, pathKey, type FileContent } from './put-back.ts';
 
 interface Saved {
   path: string;
@@ -24,7 +24,7 @@ export class Checkpoint {
    * 前の中身を読めなかった道（権限・掴まれている）。「前は無かった」と取り違えない。取り違えると、
    * 巻き戻しで元から在ったファイルを消していた。戻せない道として、呼ぶ側に言わせる。
    */
-  readonly #unrecorded = new Set<string>();
+  readonly #unrecorded = new Map<string, string>();
 
   constructor(root: string) {
     this.#root = root;
@@ -43,7 +43,9 @@ export class Checkpoint {
   async capture(relPath: string): Promise<void> {
     const abs = safeResolve(this.#root, relPath);
     if (!abs) return;
-    const key = toDisplayPath(this.#root, abs);
+    const shown = toDisplayPath(this.#root, abs);
+    // 大文字小文字・末尾の点だけ違う綴りも同じファイルとして扱う（Windows・macOS。別に記録すると、二つ目は一つ目が書いた後の中身になる）
+    const key = pathKey(shown);
     if (this.#saved.has(key) || this.#unrecorded.has(key)) return;
     // バイト列で読む。二進を utf8 として読むと、戻すときに別の中身を書く。
     let bytes: Buffer | undefined;
@@ -52,10 +54,10 @@ export class Checkpoint {
       bytes = await readPrior(abs);
     } catch {
       // ほかの読めなさ（権限・掴まれている）は記録できなかったとして持つ
-      this.#unrecorded.add(key);
+      this.#unrecorded.set(key, shown);
       return;
     }
-    this.#saved.set(key, { path: key, content: bytes === undefined ? undefined : contentOf(bytes) });
+    this.#saved.set(key, { path: shown, content: bytes === undefined ? undefined : contentOf(bytes) });
   }
 
   /**
@@ -64,13 +66,13 @@ export class Checkpoint {
    */
   unrecorded(changed?: readonly string[]): string[] {
     const keys = changed ? new Set(changed.map((p) => this.keyOf(p)).filter((k): k is string => k !== undefined)) : undefined;
-    return [...this.#unrecorded].filter((k) => !keys || keys.has(k)).sort();
+    return [...this.#unrecorded].filter(([k]) => !keys || keys.has(k)).map(([, shown]) => shown).sort();
   }
 
   /** 記録に使う鍵（綴りをそろえた道）。作業場の外なら undefined。 */
   keyOf(relPath: string): string | undefined {
     const abs = safeResolve(this.#root, relPath);
-    return abs ? toDisplayPath(this.#root, abs) : undefined;
+    return abs ? pathKey(toDisplayPath(this.#root, abs)) : undefined;
   }
 
   /**
@@ -84,9 +86,10 @@ export class Checkpoint {
   remember(relPath: string, content: FileContent | undefined): void {
     const abs = safeResolve(this.#root, relPath);
     if (!abs) return;
-    const key = toDisplayPath(this.#root, abs);
+    const shown = toDisplayPath(this.#root, abs);
+    const key = pathKey(shown);
     if (this.#saved.has(key) || this.#unrecorded.has(key)) return;
-    this.#saved.set(key, { path: key, content });
+    this.#saved.set(key, { path: shown, content });
   }
 
   /** 記録した状態へ戻す。戻せた道を返す。 */
@@ -100,10 +103,13 @@ export class Checkpoint {
    * 1件戻せなくても他は戻す。ただし黙って落とさない。戻せなかった道が無いと、
    * 呼ぶ側は「作業場は回の前に戻った」と読んで、次の回の「前」を間違える。
    */
-  async restoreAll(): Promise<{ restored: string[]; failed: string[] }> {
+  async restoreAll(only?: readonly string[]): Promise<{ restored: string[]; failed: string[] }> {
     const restored: string[] = [];
     const failed: string[] = [];
-    for (const saved of putBackOrder([...this.#saved.values()])) {
+    // `only` を渡すと、その中の道だけを当てる（書く手前に記録したが書かなかった道まで書き戻さない）
+    const keys = only ? new Set(only.map((p) => this.keyOf(p)).filter((k): k is string => k !== undefined)) : undefined;
+    const targets = [...this.#saved].filter(([k]) => !keys || keys.has(k)).map(([, v]) => v);
+    for (const saved of putBackOrder(targets)) {
       const r = await putBack(this.#root, saved.path, saved.content);
       if (r === 'restored') restored.push(saved.path);
       else if (r === 'failed') failed.push(saved.path);
@@ -120,6 +126,6 @@ export class Checkpoint {
   }
 
   changedPaths(): string[] {
-    return [...this.#saved.keys()];
+    return [...this.#saved.values()].map((v) => v.path);
   }
 }

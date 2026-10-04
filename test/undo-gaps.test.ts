@@ -149,3 +149,42 @@ describe('並び', () => {
     assert.deepEqual((await store.list()).map((p) => p.id), [newer, older]);
   });
 });
+
+describe('綴りの違いと巻き戻しの範囲', () => {
+  test('**大文字小文字・末尾の点だけ違う綴りは、Windows と macOS では同じ道の鍵になる**', async () => {
+    const { pathKey } = await import('../src/core/undo.ts');
+    assert.equal(pathKey('src/Foo.ts', 'win32'), pathKey('src/foo.ts', 'win32'));
+    assert.equal(pathKey('src\\foo.ts.', 'win32'), pathKey('src/foo.ts', 'win32'));
+    assert.equal(pathKey('src/foo.ts ', 'win32'), pathKey('src/foo.ts', 'win32'));
+    assert.equal(pathKey('README.md', 'darwin'), pathKey('readme.md', 'darwin'));
+    assert.notEqual(pathKey('README.md', 'linux'), pathKey('readme.md', 'linux'), 'Linux では別のファイル');
+    assert.equal(pathKey('../x', 'win32'), '../x', '上の階層を指す `..` は落とさない');
+  });
+
+  test('**打ち切ったときの巻き戻しは、書けた道だけを当てる**（書く手前に記録したが書かなかった道は触らない）', async () => {
+    const { Checkpoint } = await import('../src/harness/checkpoint.ts');
+    const { root } = await setup();
+    await writeFile(join(root, 'wrote.txt'), '元\n');
+    await writeFile(join(root, 'declined.txt'), '元\n');
+    const cp = new Checkpoint(root);
+    await cp.capture('wrote.txt');
+    await cp.capture('declined.txt'); // 書く手前に記録したが、断られて書かなかった
+    await writeFile(join(root, 'wrote.txt'), 'AI\n');
+    await writeFile(join(root, 'declined.txt'), '利用者が外で直した\n');
+    const r = await cp.restoreAll(['wrote.txt']);
+    assert.deepEqual(r.restored, ['wrote.txt']);
+    assert.equal(await readFile(join(root, 'wrote.txt'), 'utf8'), '元\n');
+    assert.equal(await readFile(join(root, 'declined.txt'), 'utf8'), '利用者が外で直した\n', '書かなかった道まで書き戻した');
+  });
+
+  test('UndoStore.has は、この回で前の中身を記録した道かを言う', async () => {
+    const { root, store } = await setup();
+    await store.begin('x');
+    store.capture('a.txt', undefined);
+    assert.equal(store.has('a.txt'), true);
+    assert.equal(store.has('b.txt'), false);
+    store.discard();
+    assert.equal(store.has('a.txt'), false);
+    void root;
+  });
+});
