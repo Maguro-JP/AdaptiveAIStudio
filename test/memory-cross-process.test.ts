@@ -73,4 +73,53 @@ describe('別のプロセスの同時書き', () => {
     await assert.rejects(a.save());
     assert.ok(!(await readFile(path, 'utf8')).includes('錠の間に決めたこと'));
   });
+
+  test('**両方が空から最初の覚えを入れて保存しても、同じ題を二件にしない**', async () => {
+    const { BUILTIN_LESSONS } = await import('../src/memory/builtin-lessons.ts');
+    const path = join(await tempDir('aas-mem-cross-seed-'), 'memory.jsonl');
+    const a = new Memory(path);
+    const b = new Memory(path);
+    await a.load(); await b.load();
+    a.seedLessons();
+    await new Promise((r) => setTimeout(r, 5)); // 覚えた時刻をずらす
+    b.seedLessons();
+    await a.save();
+    await b.save();
+    const lines = (await readFile(path, 'utf8')).split('\n').filter((l) => l.startsWith('{"id"'));
+    assert.equal(lines.length, BUILTIN_LESSONS.length, `二重になった: ${lines.length}`);
+  });
+
+  test('**同じ題を別々に覚えても、一件に畳む**（確かめた数は足す）', async () => {
+    const { path, a, b } = await twoOnOneFile();
+    a.remember({ kind: 'decision', title: '名前は動詞から', detail: 'x', now: 2_000 });
+    b.remember({ kind: 'decision', title: '名前は動詞から', detail: 'x', now: 3_000 });
+    await a.save();
+    await b.save();
+    assert.deepEqual(await titlesOnDisk(path), ['名前は動詞から', '最初に決めたこと'].sort());
+  });
+
+  test('**忘れて空いた最大の番号をよそが使い回しても、よその新しい覚えを消さない**', async () => {
+    const { path, a, b } = await twoOnOneFile();
+    const r = a.remember({ kind: 'decision', title: 'すぐ忘れること', detail: 'x', now: 2_000 });
+    await a.save();
+    assert.ok(a.remove(r.entry.id));
+    await a.save();
+    // b は一度も保存していない（最大の番号を知らない）ので、同じ番号を配る
+    b.remember({ kind: 'decision', title: '端末で決めたこと', detail: 'B', now: 3_000 });
+    await b.save();
+    a.touch(); await a.save();
+    b.touch(); await b.save();
+    assert.deepEqual(await titlesOnDisk(path), ['最初に決めたこと', '端末で決めたこと'].sort());
+  });
+
+  test('**錠が外れた後の保存では、持っていた変更を書く**', async () => {
+    const { path, a } = await twoOnOneFile();
+    await writeFile(`${path}.lock`, `${process.pid} other`);
+    a.remember({ kind: 'decision', title: '錠の後に書くこと', detail: 'x', now: 4_000 });
+    await assert.rejects(a.save());
+    const { rm } = await import('node:fs/promises');
+    await rm(`${path}.lock`);
+    await a.save();
+    assert.ok((await titlesOnDisk(path)).includes('錠の後に書くこと'));
+  });
 });
