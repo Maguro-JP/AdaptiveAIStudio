@@ -46,10 +46,10 @@ function fakeLib(counts: Counts, opts: { failContext?: boolean; gate?: { name: s
   });
 }
 
-async function runtime(names: Record<string, string>, lib: ReturnType<typeof fakeLib>) {
+async function runtime(names: Record<string, string>, lib: ReturnType<typeof fakeLib>, extra: Record<string, unknown> = {}) {
   const dir = await tempDir('aas-model-life-');
   for (const [n, body] of Object.entries(names)) await writeFile(join(dir, n), body);
-  return new InProcRuntime({ modelsDir: dir, port: 0, load: lib } as ConstructorParameters<typeof InProcRuntime>[0]);
+  return new InProcRuntime({ modelsDir: dir, port: 0, load: lib, ...extra } as ConstructorParameters<typeof InProcRuntime>[0]);
 }
 
 async function chat(baseUrl: string, model: string, stream: boolean): Promise<{ status: number; finish?: string }> {
@@ -120,13 +120,13 @@ describe('重みを解く', () => {
 });
 
 describe('切り替え', () => {
-  test('**読めない切り替え先（GGUF でない）のために、今のモデルを降ろさない**（503 で断る）', async () => {
+  test('**読めない切り替え先（GGUF でない）のために、今のモデルを降ろさない**（404 と model の語で断る。次の候補へ回る）', async () => {
     const counts: Counts = { loads: [], modelDisposed: [], contextDisposed: [] };
     const rt = await runtime({ 'a.gguf': 'GGUF', 'b.gguf': 'not a model' }, fakeLib(counts));
     const { baseUrl } = await rt.ensureLoaded('a.gguf');
     try {
       const got = await chat(baseUrl, 'b.gguf', false);
-      assert.equal(got.status, 503);
+      assert.equal(got.status, 404);
       assert.deepEqual(rt.loaded(), ['a.gguf']);
       assert.deepEqual(counts.modelDisposed, []);
     } finally { await rt.shutdown(); }
@@ -177,5 +177,37 @@ describe('冷やし', () => {
       await new Promise((r) => setTimeout(r, 80));
       assert.equal(reg.isAvailable('p'), true, '時計が戻ったので冷えたまま');
     } finally { Date.now = realNow; }
+  });
+});
+
+describe('レビューで挙がった筋書き', () => {
+  test('**降ろすとき、上限まで待っても返らない生成は止めてから解く**（止めずに解かない）', async () => {
+    const counts: Counts = { loads: [], modelDisposed: [], contextDisposed: [] };
+    const order: string[] = [];
+    const hang = (o: { onTextChunk?: (t: string) => void; signal?: AbortSignal }) => new Promise<string>((resolve) => {
+      o.onTextChunk?.('書き始め');
+      o.signal?.addEventListener('abort', () => { order.push('aborted'); resolve('書き始め'); });
+    }) as unknown as string;
+    const lib = fakeLib(counts, { reply: hang });
+    const rt = await runtime({ 'a.gguf': 'GGUF' }, lib, { unloadWaitMs: 100 });
+    const { baseUrl } = await rt.ensureLoaded('a.gguf');
+    const req = chat(baseUrl, 'a.gguf', true);
+    await new Promise((r) => setTimeout(r, 100));
+    await rt.unload('a.gguf');
+    order.push(...counts.contextDisposed.map(() => 'disposed'));
+    await req;
+    assert.deepEqual(order, ['aborted', 'disposed'], '止める前に解いた');
+    await rt.shutdown();
+  });
+
+  test('**同時に二度降ろしても、二つ目は解き終わるまで返らない**', async () => {
+    const counts: Counts = { loads: [], modelDisposed: [], contextDisposed: [] };
+    const rt = await runtime({ 'a.gguf': 'GGUF' }, fakeLib(counts));
+    await rt.ensureLoaded('a.gguf');
+    const first = rt.unload('a.gguf');
+    await rt.unload('a.gguf');
+    assert.deepEqual(counts.modelDisposed, ['a.gguf'], '二つ目が解き終わる前に返った');
+    await first;
+    await rt.shutdown();
   });
 });

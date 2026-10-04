@@ -62,7 +62,8 @@ describe('読み込みの最中に止める', () => {
     assert.equal(r.status, 202);
     await s.stop();
     release();
-    await until(() => loaded, '読み終える');
+    // 止めた後は読み始めない作りなので、読み込みは始まらないこともある（始まっていれば、門を開けたのですぐ読み終える）
+    await until(() => loaded, '読み終える', { timeoutMs: 3000 }).catch(() => undefined);
     // 読み終えた側が何かするなら、この直後。起きるまで見るのではなく、
     // 「起きない」ことを、口の数が戻っているかで見る。
     await until(() => servers() === before, '口が閉じる', { timeoutMs: 5000 }).catch(() => undefined);
