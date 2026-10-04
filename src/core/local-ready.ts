@@ -32,9 +32,12 @@ export function withLocalCandidate(
   ref: string,
   window?: number,
 ): AasConfig {
-  const local = config.providers.find(
-    (p) => p.kind === 'openai-compatible' && p.locality === 'local',
+  // 有効な手元の口だけから選ぶ。この中で読む口（inproc）があれば、それを先に選ぶ（利用者が別に書いた手元の口に、
+  // こちらが読んだ GGUF の名前を付けない。無効にした口を候補に固定しない）
+  const locals = config.providers.filter(
+    (p) => p.kind === 'openai-compatible' && p.locality === 'local' && p.enabled !== false,
   );
+  const local = locals.find((p) => p.id === 'inproc') ?? locals[0];
   if (!local) return config;
   const providers = config.providers.map((p) => (p === local ? { ...p, models: [ref] } : p));
   // **実際に開いたコンテキストウィンドウを渡す。**設定から見積もらせない。
@@ -74,6 +77,8 @@ export async function readyLocalModel(
   if (config.candidates && config.candidates.length > 0) return { config };
   // 別に立てたもの（ollama / llama-server）は、相手が一覧を返す。ここは要らない。
   if (runtime.id !== 'inproc') return { config };
+  // 有効な手元の口が無い（クラウドだけで使う）なら、数 GB のモデルを読み込まない
+  if (!config.providers.some((p) => p.kind === 'openai-compatible' && p.locality === 'local' && p.enabled !== false)) return { config };
 
   const loaded = runtime.loaded();
   const ref0 = loaded[0];

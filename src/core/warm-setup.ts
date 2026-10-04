@@ -33,19 +33,32 @@ export async function startWarmPool(
 
   if (warmCfg.enabled === false) return { warmed: [], notes: ['常時ロードは無効です'] };
   if (!(runtime instanceof LlamaCppRuntime)) {
-    return { warmed: [], notes: ['Ollama はモデル保持を自前で行うため、常時ロードは適用しません'] };
+    // 動かし方ごとに言う（inproc でも Ollama の文を出していたので、Ollama を使っていない人に Ollama を疑わせた）
+    const who = config.runtime?.kind === 'inproc' ? 'この中で読む道（inproc）' : 'Ollama';
+    return { warmed: [], notes: [`${who}はモデル保持を自前で行うため、常時ロードは適用しません`] };
   }
 
+  // VRAM が無い（測れない）機械では、上限が 0 になって効かず、候補を全部システムの記憶へ温めていた。そのときは一つだけ温める
+  const fraction = Math.min(1, Math.max(0, warmCfg.vramFraction ?? 0.95));
+  const noVram = !(machine.vramBytes > 0);
+  if (noVram) notes.push('VRAM が見当たらないので、常時ロードは一つだけにします');
   const pool = new WarmPool({
     runtime,
-    vramBudgetBytes: machine.vramBytes * (warmCfg.vramFraction ?? 0.95),
-    maxResident: warmCfg.maxResident,
+    vramBudgetBytes: machine.vramBytes * fraction,
+    maxResident: noVram ? Math.min(1, warmCfg.maxResident ?? 1) : warmCfg.maxResident,
     planOf: (ref) => runtime.planFor(ref),
     onEvent,
   });
 
   // 温める対象: 明示指定 > 自動選択の候補順
-  const targets = warmCfg.preload ?? candidates.map(stripProvider).filter(Boolean);
+  // 明示指定も `provider:` を外して照らす（候補だけ外していたので、`llamacpp:x.gguf` と書くと必ず見つからなかった）。
+  // 外すのは、頭が設定にある provider の名前のときだけ（モデル名そのものに `:` が入ることがある）
+  const providerIds = new Set(config.providers.map((p) => p.id));
+  const fromPreload = (ref: string): string => {
+    const sep = ref.indexOf(':');
+    return sep > 0 && providerIds.has(ref.slice(0, sep)) ? ref.slice(sep + 1) : ref;
+  };
+  const targets = warmCfg.preload ? warmCfg.preload.map(fromPreload) : candidates.map(stripProvider).filter(Boolean);
   const available = new Set((await runtime.list()).map((m) => m.ref));
   const loadable = targets.filter((t) => available.has(t));
 

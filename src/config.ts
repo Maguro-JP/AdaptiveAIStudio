@@ -468,6 +468,7 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
   }
 
   const parsed = parseConfigText(raw, path);
+  checkShape(parsed, path);
   const config: AasConfig = {
     /*
      * **書いてある項目は全部渡す（下で既定を埋める項目だけ上書きする）。**項目を一つずつ拾っていたので、拾い忘れた
@@ -492,7 +493,7 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
     mcp: parsed.mcp ?? {},
   };
   if (config.agent?.lanes) validateLanes(config);
-  wireInProc(config);
+  wireInProc(config, (parsed.runtime as { kind?: unknown } | undefined)?.kind === undefined);
   validate(config);
   return { config, source: path };
 }
@@ -504,11 +505,31 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
  * 書かせると、番号を間違えたときに「繋がりません」とだけ出て終わる。
  * 決め打ちの番号（INPROC_PORT）を、ここで入れておく。
  */
-export function wireInProc(c: AasConfig): void {
+/** こちらが既定として置いた Ollama の口か（名前が ollama で、繋ぎ先を書いていないか既定の 11434 のまま）。 */
+function isDefaultOllama(p: ProviderConfig): boolean {
+  if (p.id !== 'ollama') return false;
+  if (!p.baseUrl) return true;
+  try {
+    const u = new URL(p.baseUrl);
+    return ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname) && (u.port === '11434');
+  } catch {
+    return false;
+  }
+}
+
+export function wireInProc(c: AasConfig, onlyDefault = false): void {
   if (c.runtime?.kind !== 'inproc') return;
   const url = `http://127.0.0.1:${c.runtime.basePort ?? INPROC_PORT}/v1`;
-  const at = c.providers.findIndex((p) => p.kind === 'openai-compatible' && p.locality === 'local');
+  // 無効にした手元の口は付け替えない（クラウドだけで使うつもりでも、手元のモデルを読み込んで候補を固定していた）。
+  // `runtime` を書いていない（既定で inproc になった）ときは、こちらが既定として置いた口だけを付け替える。
+  // 最初の手元の口を誰のものでも付け替えていたので、LM Studio などに書いた URL を黙って 4177 に書き換え、一度も繋がらなかった。
+  // `kind: 'inproc'` と書いたときは、最初の手元の口を繋ぎ先にする（今までどおり。書いた人がこの中で読むと決めている）
+  if (c.providers.some((p) => p.id === 'inproc' && p.kind === 'openai-compatible')) return;
+  const at = c.providers.findIndex((p) => p.kind === 'openai-compatible' && p.locality === 'local'
+    && p.enabled !== false && (!onlyDefault || isDefaultOllama(p)));
   if (at < 0) {
+    if (c.providers.some((p) => p.kind === 'openai-compatible' && p.locality === 'local' && p.enabled === false
+      && (!onlyDefault || p.id === 'ollama'))) return;
     c.providers.push({
       id: 'inproc', kind: 'openai-compatible', locality: 'local', baseUrl: url, enabled: true,
     });
@@ -557,6 +578,43 @@ export function wireInProc(c: AasConfig): void {
  * 書き間違い（JSON の形）は `ConfigBroken` として画面を開ける作りにしてあるのに、
  * 中身の食い違いだけ、直しに行く手段ごと塞いでいた。同じ形で投げる。
  */
+/**
+ * 形の食い違いを、直せる形で断る（`ConfigBroken`）。ここを見ずに使っていたので、`null` だけの設定・並びでない providers・
+ * candidates の無い lane などは素の TypeError になり、画面も doctor も開かなかった。
+ */
+function checkShape(parsed: unknown, path: string): asserts parsed is Partial<AasConfig> {
+  const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+  if (!isObj(parsed)) throw new ConfigBroken(`設定の中身が { } で囲んだ形ではありません: ${path}`);
+  const listOf = (v: unknown, name: string, item: 'object' | 'string'): void => {
+    if (v === undefined) return;
+    if (!Array.isArray(v)) throw new ConfigBroken(`${name} は [ ] で囲んだ並びで書いてください（いま: ${JSON.stringify(v)?.slice(0, 60)}）。`);
+    for (const x of v) {
+      if (item === 'object' ? !isObj(x) : typeof x !== 'string') {
+        throw new ConfigBroken(`${name} の中に形の違う項目があります（${item === 'object' ? '{ } で囲んだ形' : '文字列'}で書いてください。いま: ${JSON.stringify(x)?.slice(0, 60)}）。`);
+      }
+    }
+  };
+  listOf(parsed.providers, 'providers', 'object');
+  listOf(parsed.candidates, 'candidates', 'string');
+  for (const key of ['agent', 'runtime', 'harness', 'initiative', 'panel', 'mcp'] as const) {
+    if (parsed[key] !== undefined && !isObj(parsed[key])) throw new ConfigBroken(`${key} は { } で囲んだ形で書いてください。`);
+  }
+  const agent = parsed.agent as Record<string, unknown> | undefined;
+  listOf(agent?.lanes, 'agent.lanes', 'object');
+  for (const lane of (agent?.lanes as Record<string, unknown>[] | undefined) ?? []) {
+    listOf(lane.candidates ?? [], `lane "${String(lane.id)}" の candidates`, 'string');
+    if (lane.candidates === undefined) throw new ConfigBroken(`lane "${String(lane.id)}" に candidates がありません。`);
+  }
+  // 守りの一覧を文字列一つで書くと、一字ずつの型として入り、守ったつもりの道が守られなかった（黙って外れる）
+  listOf((parsed.harness as Record<string, unknown> | undefined)?.protectedPaths, 'harness.protectedPaths', 'string');
+  const kind = (parsed.runtime as Record<string, unknown> | undefined)?.kind;
+  // 綴りを間違えると、黙って Ollama の口へ繋ぎに行っていた（GGUF を置けば動く道に辿り着けない）。
+  // `none`（手元の口をこちらで動かさない。書いた繋ぎ先にそのまま繋ぐ）は、ollama と同じ道を通る値として受ける
+  if (kind !== undefined && !['ollama', 'llamacpp', 'inproc', 'none'].includes(kind as string)) {
+    throw new ConfigBroken(`runtime.kind は inproc / llamacpp / ollama / none のどれかです（いま: ${JSON.stringify(kind)}）。`);
+  }
+}
+
 function validate(c: AasConfig): void {
   if (c.providers.length === 0) throw new ConfigBroken('providers が空です。');
   if (c.candidates && c.candidates.length === 0) {
