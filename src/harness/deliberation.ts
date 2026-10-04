@@ -33,8 +33,13 @@ export const GUARDED_PATHS = [
   'src/core/harness-setup.ts',
   'src/agent/tools/paths.ts',
   'src/agent/tools/network.ts',
-  // 守りを左右するのに漏れていた所（照らし方の glob・書くツールの見分け・許す命令の一覧・秘密の伏せ方・指紋・戻し方・検問所）
-  'src/harness/**',
+  // 守りを左右するのに漏れていた所（照らし方の glob・書くツールの見分け・許す命令の一覧・秘密の伏せ方・指紋・戻し方・検問所）。
+  // フォルダごと（`src/harness/**`）にすると、守りでない所（待ち時間の使い方など）や、利用者の作業場の同じ名前のフォルダまで協議になる
+  'src/harness/glob.ts',
+  'src/harness/seen.ts',
+  'src/harness/put-back.ts',
+  'src/harness/inspector.ts',
+  'src/harness/checkpoint.ts',
   'src/agent/tools/shell.ts',
   'src/agent/tools/write-kind.ts',
   'src/core/redact.ts',

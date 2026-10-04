@@ -79,10 +79,41 @@ describe('失敗した書き込みの出し直し', () => {
     const w = h.wrap(flaky, () => '');
     const args = { path: 'a.txt', content: 'x' };
     assert.equal((await w.run(args, ctx(root))).isError, true);
+    // 一度目は掴まれて書けなかった（やり直しを求める失敗）
     const second = await w.run(args, ctx(root));
     assert.equal(second.isError, undefined, second.content);
     const third = await w.run(args, ctx(root));
     assert.match(third.content, /no-repeated-writes/);
+  });
+});
+
+describe('失敗した書き込みのうち、数え続けるもの', () => {
+  test('**断られた書き込みの出し直しは、今までどおり止める**（同じ承認を何度も求めない）', async () => {
+    const root = await tempDir('aas-htg-refused-');
+    const refused: Tool = {
+      schema: { name: 'write_file', description: 'x', parameters: { type: 'object', properties: {} } },
+      run: async () => ({ content: 'ERROR: 利用者が書き込みを拒否しました', isError: true }),
+    };
+    const w = new Harness({ rules: [noRepeatedWrites] }).wrap(refused, () => '');
+    const args = { path: 'a.txt', content: 'x' };
+    await w.run(args, ctx(root));
+    assert.match((await w.run(args, ctx(root))).content, /no-repeated-writes/);
+  });
+});
+
+describe('監査の切れ目', () => {
+  test('**長い命令の後ろにあるトークンも、切る前に伏せる**', async () => {
+    const root = await tempDir('aas-htg-audit2-');
+    const audit = new AuditLog();
+    const shell: Tool = {
+      schema: { name: 'run_command', description: 'x', parameters: { type: 'object', properties: {} } },
+      run: async () => ({ content: 'ok' }),
+    };
+    const w = new Harness({ rules: [], audit }).wrap(shell, () => '');
+    await w.run({ command: `git clone ${'-q '.repeat(40)}https://u:LONGSECRET@example.com/o/r` }, ctx(root));
+    const text = JSON.stringify(audit.entries());
+    assert.ok(!text.includes('LONGSECRET'), text);
+    assert.ok(audit.entries()[0]!.summary!.endsWith('…'), '切ったことが分からない');
   });
 });
 
@@ -105,12 +136,14 @@ describe('普通のファイルでないもの', () => {
 });
 
 describe('殻が組み替える綴り', () => {
-  for (const c of ['git pu^sh', 'npm pub^lish', "git pu''sh", 'git pu\\sh', 'git pu"sh"', 'git ${x:-push}', 'git %ComSpec:~0,0%push', 'git config alias.p push', 'git config core.hooksPath .h']) {
+  for (const c of ['git pu^sh', 'npm pub^lish', "git pu''sh", 'git pu\\sh', 'git pu"sh"', 'git ${x:-push}', 'git %ComSpec:~0,0%push', 'git config alias.p push', 'git config core.hooksPath .h',
+    'git "p"ush', "git 'pu'sh", 'git "re"set --hard', 'git config "alias".p push', 'git -c core.pager=x log', 'git config credential.helper x', 'git config --edit']) {
     test(`**${c} を止める**`, async () => {
       assert.equal((await dangerousCommands.pre!(run(c) as never, {} as never)).kind, 'deny');
     });
   }
-  for (const c of ['git status', 'git commit -m "push it"', 'git config --get alias.p', 'git config user.name x', 'npm test']) {
+  for (const c of ['git status', 'git commit -m "push it"', 'git config --get alias.p', 'git config user.name x', 'npm test',
+    'git config --unset alias.x', 'git config alias.x', 'git config get alias.x', 'git -c alias.s=status s', 'npm run publish-docs']) {
     test(`${c} は止めない（対）`, async () => {
       assert.equal((await dangerousCommands.pre!(run(c) as never, {} as never)).kind, 'allow');
     });
@@ -120,9 +153,9 @@ describe('殻が組み替える綴り', () => {
 describe('外のツールの引数', () => {
   const rule = protectedPaths(['**/.env']);
   const call = (args: unknown) => ({ name: 'mcp__fs__edit', args });
-  test('**無関係な値を 200 個並べた後ろの .env も通さない**（見切れないなら断る）', async () => {
+  test('**無関係な値を上限まで並べた後ろの .env も通さない**（見切れないなら断る）', async () => {
     const root = await tempDir('aas-htg-mcp-');
-    const args = { edits: Array.from({ length: 201 }, (_, i) => `x${i}`), path: '.env' };
+    const args = { edits: Array.from({ length: 2001 }, (_, i) => `x${i}`), path: '.env' };
     assert.equal((await rule.pre!(call(args) as never, { root, history: [] } as never)).kind, 'deny');
   });
   test('**道を名前に置いた形（`{"files":{".env":"…"}}`）も止める**', async () => {
@@ -133,6 +166,16 @@ describe('外のツールの引数', () => {
     const root = await tempDir('aas-htg-mcp3-');
     assert.equal((await rule.pre!(call({ path: 'src/a.ts', text: 'x' }) as never, { root, history: [] } as never)).kind, 'allow');
   });
+  test('**深い普通の JSON・50 ファイルの push・道でない項目名（credentials）は止めない**（対）', async () => {
+    const root = await tempDir('aas-htg-mcp4-');
+    const cred = protectedPaths(['**/.env', '**/credentials*']);
+    let deep: unknown = { text: { content: 'こんにちは' } };
+    for (let i = 0; i < 6; i++) deep = { children: [deep] };
+    const files = Array.from({ length: 50 }, (_, i) => ({ path: `src/f${i}.ts`, content: 'x' }));
+    for (const args of [deep, { files }, { credentials: { user: 'x' } }]) {
+      assert.equal((await cred.pre!(call(args) as never, { root, history: [] } as never)).kind, 'allow', JSON.stringify(args).slice(0, 80));
+    }
+  });
 });
 
 describe('協議の道', () => {
@@ -141,5 +184,6 @@ describe('協議の道', () => {
       assert.equal(isGuarded(p), true, p);
     }
     assert.equal(isGuarded('src/ui/web/app.js'), false);
+    assert.equal(isGuarded('src/harness/idle.ts'), false, '守りでない所まで協議にした');
   });
 });

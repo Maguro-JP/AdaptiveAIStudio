@@ -10,6 +10,11 @@ import { WarnOnce, failCode } from '../core/warn-once.ts';
 import { isAbsent } from './put-back.ts';
 import { redactSecrets } from '../core/redact.ts';
 
+/** 切ったら、切ったと分かるようにする。 */
+function cut(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 /** 記録に残す前に、トークンを伏せる（URL の利用者名とパスワード・よく知られた鍵の形・`--token x` など）。 */
 function hidden(text: string): string {
   return redactSecrets(text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1***@'));
@@ -60,8 +65,8 @@ export class AuditLog {
      */
     const full: AuditEntry = {
       at: new Date().toISOString(), ...entry,
-      ...(entry.reason !== undefined ? { reason: hidden(entry.reason).slice(0, 400) } : {}),
-      ...(entry.summary !== undefined ? { summary: hidden(entry.summary) } : {}),
+      ...(entry.reason !== undefined ? { reason: cut(hidden(entry.reason), 400) } : {}),
+      ...(entry.summary !== undefined ? { summary: cut(hidden(entry.summary), 120) } : {}),
     };
     this.#entries.push(full);
     if (this.#entries.length > this.#keep) this.#entries.splice(0, this.#entries.length - this.#keep);

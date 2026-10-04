@@ -119,25 +119,39 @@ export function windowsName(path: string): string {
  *
  * 深さと数に上限を置く。上限が無いと、大きな引数一つで規則の側が止まる。
  */
+/** 外のツールの引数を見る深さと数の上限（Notion のブロックや 50 ファイルの push でも収まる大きさ）。 */
+const MAX_ARG_DEPTH = 16;
+const MAX_ARG_STRINGS = 2000;
+
 function collectStrings(args: unknown): { out: string[]; truncated: boolean } {
   const out: string[] = [];
   let truncated = false;
   const walk = (v: unknown, depth: number): void => {
     if (truncated) return;
-    if (depth > 5 || out.length >= 200) { truncated = true; return; }
+    // 上限に当たって見切れるのは、文字やその入れ物が残っているときだけ（数や null の深い所は見なくてよい）
+    if (typeof v !== 'string' && (typeof v !== 'object' || v === null)) return;
+    if (depth > MAX_ARG_DEPTH || out.length >= MAX_ARG_STRINGS) { truncated = true; return; }
     if (typeof v === 'string') { out.push(v); return; }
     if (Array.isArray(v)) { for (const x of v) walk(x, depth + 1); return; }
-    if (typeof v === 'object' && v !== null) {
-      // 道を値ではなく名前に置く形（`{"files":{".env":"…"}}`）もあるので、名前も集める
-      for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
-        if (out.length >= 200) { truncated = true; return; }
+    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+      // 道を名前に置く形（`{"files":{".env":"…"}}`）も見る。ただし道の形をした名前だけ（`credentials` のような普通の項目名で止めない）
+      if (/[\\/]|^\./.test(k)) {
+        if (out.length >= MAX_ARG_STRINGS) { truncated = true; return; }
         out.push(k);
-        walk(x, depth + 1);
       }
+      walk(x, depth + 1);
     }
   };
   walk(args, 0);
   return { out, truncated };
+}
+
+/** テストの数を確かめられなかった理由の文。待っても直らないもの（大きすぎる・普通のファイルでない）に「待って」と言わない。 */
+function unreadableTest(path: string, e: NodeJS.ErrnoException): string {
+  if (e.code === 'EFBIG' || e.code === 'ENOTFILE') {
+    return `${path} は${e.code === 'EFBIG' ? '大きすぎて' : '普通のファイルではないので'}、テストが減らないかを確かめられません。書き換えは利用者に依頼してください。`;
+  }
+  return `${path} を読めないので、テストが減らないかを確かめられません（${e.code ?? e.message}）。少し待ってからやり直してください。`;
 }
 
 /**
@@ -163,7 +177,7 @@ export const testProtection: Rule = {
     const content = await plannedContent(call.name, call.args, ctx.root).catch((e: unknown) => e as Error);
     // 読めなくて当てられないのを「後の姿が分からない」と読んで通さない
     if (content instanceof Error) {
-      return deny(`${path} を読めないので、テストが減らないかを確かめられません（${(content as NodeJS.ErrnoException).code ?? content.message}）。少し待ってからやり直してください。`);
+      return deny(unreadableTest(path, content as NodeJS.ErrnoException));
     }
     if (content === undefined) return allow;
 
@@ -176,7 +190,7 @@ export const testProtection: Rule = {
     } catch (e) {
       if (isAbsent(e)) return allow; // 新規作成は歓迎
       // 読めないのを「新しいファイル」と読まない。書く時点で掴みが外れていると、テストを減らす書き込みが通る
-      return deny(`${path} を読めないので、テストが減らないかを確かめられません（${(e as Error).message}）。少し待ってからやり直してください。`);
+      return deny(unreadableTest(path, e as NodeJS.ErrnoException));
     }
 
     const was = countCases(before);
@@ -390,12 +404,14 @@ export const dangerousCommands: Rule = {
     ];
     // 殻が綴りを組み替える形（cmd の `pu^sh`、sh の `pu''sh`・`pu\sh`・`pu"sh"`）も、組み替えた後の綴りで照らす
     const flat = unshell(command);
+    // 語の頭の引用符（`git "p"ush`・`git 'pu'sh`）も組み替えた後は同じ語になる。引用符を全部外した形でも照らす
+    const bare = flat.replace(/['"]/g, '');
     for (const [re, label] of patterns) {
-      if (re.test(command) || re.test(flat)) {
+      if (re.test(command) || re.test(flat) || re.test(bare)) {
         return deny(`${label}は実行できません: ${command}。必要なら利用者に依頼してください。`);
       }
     }
-    const git = gitDanger(command) ?? gitDanger(flat);
+    const git = gitDanger(command) ?? gitDanger(flat) ?? gitDanger(bare);
     if (git) return deny(`git の破壊的操作（${git}）は実行できません: ${command}。必要なら利用者に依頼してください。`);
     return allow;
   },
@@ -423,6 +439,28 @@ export function unshell(command: string): string {
     .replace(/(?<=[\w-])(['"])([^'"\s]*)\1/g, '$2');
 }
 
+/** git を動かした所で命令を走らせる設定の鍵。 */
+const CONFIG_RUNS = /^(core\.(hookspath|fsmonitor|pager|sshcommand|editor|askpass|gitproxy)|filter\.|diff\.external|diff\.[^=\s]*\.(textconv|command)|merge\.[^=\s]*\.driver|include\.path|includeif\.[^=\s]*\.path|credential\.helper|credential\.[^=\s]*\.helper|sequence\.editor|gpg\.program|gpg\.[^=\s]*\.program|pager\.|alias\.)/i;
+
+/**
+ * `git config` の残りの語が、命令を走らせる設定を書くか。消す（`--unset`）・読む（`--get`・`get`・`list`・値の無い鍵だけ）は書かない。
+ * 書くのは、鍵の後ろに値があるとき、`--add`・`--replace-all`・`set` のとき、`--edit` のとき。
+ */
+function configWritesRunner(rest: readonly string[]): boolean {
+  const flags = rest.filter((w) => w.startsWith('-')).map((w) => w.toLowerCase());
+  const plain = rest.filter((w) => !w.startsWith('-'));
+  if (flags.some((f) => f === '--edit' || f === '-e') || plain[0]?.toLowerCase() === 'edit') return true;
+  if (flags.some((f) => /^(--unset(-all)?|--get(-all|-regexp|-urlmatch|-color|colorbool)?|--list|-l|--remove-section|--show-origin|--show-scope|--name-only)$/.test(f))) return false;
+  let words = plain;
+  const verb = words[0]?.toLowerCase();
+  if (verb === 'get' || verb === 'list' || verb === 'unset' || verb === 'remove-section') return false;
+  const setting = verb === 'set';
+  if (setting) words = words.slice(1);
+  const key = words[0];
+  if (!key || !CONFIG_RUNS.test(key.replace(/^['"]|['"]$/g, ''))) return false;
+  return setting || words.length >= 2 || flags.some((f) => f === '--add' || f === '--replace-all');
+}
+
 export function gitDanger(command: string, depth = 0): string | undefined {
   // 別名の中身を見るのは二段まで（別名を何十も並べると、中身を見るたびに残りの別名をまた見るので、数が増えるほど長くなる）
   if (depth > 2) return undefined;
@@ -437,6 +475,9 @@ export function gitDanger(command: string, depth = 0): string | undefined {
       const w = words[i]!;
       // `-c alias.x='reset --hard'` の別名は、中身も見る（別名にすると並びでは見えない）
       if (w === '-c' && /^alias\./i.test(words[i + 1] ?? '')) aliases.push(words.slice(i + 1).join(' '));
+      // 別名のほかに、命令を走らせる設定をその場で渡す形（`-c core.pager=…`・`-c core.hooksPath=…`・`--config-env`）
+      else if ((w === '-c' || w === '--config-env') && CONFIG_RUNS.test((words[i + 1] ?? '').replace(/^['"]/, ''))) return '命令を走らせる設定をその場で渡す';
+      else if (/^--config-env=/i.test(w) && CONFIG_RUNS.test(w.slice('--config-env='.length))) return '命令を走らせる設定をその場で渡す';
       i += GIT_OPTS_WITH_VALUE.has(w) ? 2 : 1;
     }
     for (const a of aliases) {
@@ -449,10 +490,7 @@ export function gitDanger(command: string, depth = 0): string | undefined {
     // 変数で組んだサブコマンド（`git %X%push`・`git ${x:-push}`）は、殻が展開するまで何になるか分からない
     if (sub && /[%$]/.test(sub)) return '変数で組んだサブコマンド';
     // 命令を走らせる設定を書く（`git config alias.p push` の後の `git p`、hooksPath・fsmonitor・pager・filter は git を動かした所で命令を走らせる）
-    if (sub === 'config' && !rest.some((w) => /^(--get(-all|-regexp)?|--list|-l)$/i.test(w))
-      && rest.some((w) => /^(alias\.|core\.(hookspath|fsmonitor|pager|sshcommand|editor)\b|filter\.|diff\..*\.textconv|include\.path)/i.test(w))) {
-      return '命令を走らせる設定の書き換え';
-    }
+    if (sub === 'config' && configWritesRunner(rest)) return '命令を走らせる設定の書き換え';
     const shortFlag = (ch: string) => rest.some((w) => /^-[a-z]+$/i.test(w) && w.slice(1).includes(ch));
     // git は長い名前の省略を受け付ける（`--har` は `--hard`）。`--` の後ろ 3 字以上の頭が一致すれば同じとみなす
     const long = (name: string) => rest.some((w) => {
