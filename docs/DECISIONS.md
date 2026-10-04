@@ -311,6 +311,7 @@
 - 15 回目の不具合調査の 6 件（記憶と提案の秘密・添付だけの回の名前・忘れた覚えの戻り・毎週の当番・未来の時刻・外の情報の作業場）
 - 16 回目の不具合調査の 8 件（レーンの並べる数・team の書き込み先・team の書ける数・段取りの「うまくいった」・塞がった段・担当の最終報告・合議の落ちた担当・役職の extends）
 - 提案に作業場と出どころを持たせる（15 回目の調査の 2・10）
+- 画面と端末が書いた記録を消し合わない（15 回目の調査の 11）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -11456,3 +11457,28 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
 - 残っているところ: 同じ題の提案は、作業場が違っても重ねて一つにする（重複の判定は作業場を見ない）
 触る場所: `src/agent/proposals.ts`（`root`・`origin`・`proposalHere`）、`src/core/session.ts`（足すとき・`decide`）、`src/ui/server.ts`（`/api/proposals`）、
 `test/proposal-root.test.ts`
+
+## 2026-10-04  画面と端末が書いた記録を消し合わない（15 回目の調査の 11）
+
+画面（server）と端末（CLI）は、暇の実績（`idle.json`）・当番の記録（`duties.json`）・提案（`proposals.json`）を別々に読み込んで持つ。
+同じプロセスの中は `inOrder` で一列に並ぶが、プロセスをまたぐと並ばない。
+
+- `idle.json`・`duties.json` は手元を丸ごと書いていたので、端末が済ませた当番を画面の保存が消し、その当番がもう一度「やるべき」に戻った。
+  数えた実績も、後から書いた方の数だけが残った
+- `proposals.json` は書く前に読み直して合わせていたが、読み直しから付け替えまでの間に、もう一方が付け替えると、決めた採否が消えた
+  （却下した提案が開いたまま戻り、もう一度決められた）
+
+決めたこと:
+
+- ほかのプロセスとの錠を足す（`src/core/file-lock.ts` の `withFileLock`）。`<名前>.lock` を排他で作り、在れば待つ。10 秒より古い錠は落ちたプロセスの
+  残骸として消して取り直す。5 秒待っても取れなければ書かない（黙って上書きしない。提案の採否は「決めていません」と言う）
+  選ばなかった案: OS のファイルロック（Node には標準の口が無く、依存を足すことになる）
+- `idle.json`・`duties.json` は、錠を持ったまま毎回読み直し、前に読んだ・書いた中身との差（ほかが数えた分）だけを手元へ足してから書く
+  （`saveMerged`、`IdleScheduler.rebase`・`DutyRoster.rebase`）。最後の期は、ほかだけが進めたならそちらを、両方が進めたなら後に済ませた方を取る。
+  選ばなかった案: 錠だけ付ける（読み直さずに丸ごと書くので、錠があっても後勝ちのまま）
+- `proposals.json` は、今の「読み直して合わせて書く」を錠で囲む
+- 残っているところ: ほかの丸ごと書く記録（`src/runtime/metrics.ts`・`src/harness/metrics.ts`・`src/agent/stride.ts`・`src/roles/ledger.ts`）は、
+  まだ `saveJournal`（起動のときに読めなかったときだけ読み直す）のまま。古い錠を消すところは、同時に二つのプロセスが「古い」と見ると、
+  後から消した方が先に取り直した錠を消し得る（落ちたプロセスの後だけに起きる）
+触る場所: `src/core/file-lock.ts`、`src/core/journal-file.ts`（`saveMerged`）、`src/core/journals.ts`、`src/harness/idle.ts`・`src/harness/duties.ts`（`rebase`）、
+`src/agent/proposals.ts`（`save`・`settle`）、`test/cross-process-journals.test.ts`

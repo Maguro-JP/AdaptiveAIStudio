@@ -13,6 +13,7 @@
  */
 import { readFile, writeFile, rename, copyFile, unlink } from 'node:fs/promises';
 import { inOrder } from './in-order.ts';
+import { withFileLock } from './file-lock.ts';
 
 export type JournalRead =
   | { kind: 'value'; value: unknown }
@@ -61,12 +62,20 @@ async function setAside(path: string): Promise<boolean> {
 /** 読み込んだ入れ物のうち、ファイルが読めなかったもの。値はそのファイル。 */
 const unread = new WeakMap<object, string>();
 
+/** 入れ物ごとの、最後に読んだ・書いたファイルの中身（`saveMerged` が、ほかが書いた分を見分けるため）。 */
+const lastSeen = new WeakMap<object, { path: string; text: string; value: unknown }>();
+
 /** 読んで渡す。読めなかったときは覚えておき、保存の前に読み直す。 */
 export async function loadJournal(
   target: object, path: string, apply: (value: unknown) => void, ops: JournalOps = {},
 ): Promise<JournalRead['kind']> {
   const r = await readJournal(path, ops);
-  if (r.kind === 'value') apply(r.value);
+  if (r.kind === 'value') {
+    apply(r.value);
+    lastSeen.set(target, { path, text: JSON.stringify(r.value), value: r.value });
+  } else {
+    lastSeen.delete(target);
+  }
   if (r.kind === 'unreadable') unread.set(target, path);
   else unread.delete(target); // 読み直して読めたなら、次の保存で読み直して二重に足さない
   return r.kind; // 読めなかったかを、呼んだ側が振る舞いに使えるように（前が分からないときに「変わった」と言わない等）
@@ -91,6 +100,36 @@ export function saveJournal(
     }
     return replaceWhole(path, text(), ops);
   });
+}
+
+/**
+ * 別のプロセスも書くファイルを書く（画面と端末が別々に持つ `idle.json`・`duties.json`）。
+ *
+ * `saveJournal` は手元を丸ごと書くので、もう一方が書いた分を後から書いた方が消した（済ませた当番がもう一度
+ * 「やるべき」に戻る、数えた実績が減る）。ここでは、ほかのプロセスとの錠を持ったまま、**毎回読み直す**。
+ * 中身が前に読んだ・書いたときと違えば、ほかが書いたものとして `rebase(ファイル, 前に見た中身)` に渡し、
+ * 手元へ足してから書く。前に見た中身が無い（無かった・読めなかった）ときは `undefined` を渡す
+ * （ファイルにある分を全部、ほかが書いた分として足す。起動のときに読めなかったときの扱いと同じ）。
+ *
+ * 読めなければ書かずに false。錠を取れないときも false（黙って上書きしない）。
+ */
+export function saveMerged(
+  target: object, path: string, text: () => string,
+  rebase: (value: unknown, base: unknown) => void, ops: JournalOps = {},
+): Promise<boolean> {
+  return inOrder(path, () => withFileLock(path, async () => {
+    const r = await readJournal(path, ops);
+    if (r.kind === 'unreadable') return false;
+    const seen = lastSeen.get(target);
+    const base = seen?.path === path ? seen : undefined;
+    if (r.kind === 'value' && JSON.stringify(r.value) !== base?.text) rebase(r.value, base?.value);
+    unread.delete(target);
+    const out = text();
+    if (!await replaceWhole(path, out, ops)) return false;
+    const value: unknown = JSON.parse(out);
+    lastSeen.set(target, { path, text: JSON.stringify(value), value });
+    return true;
+  }).catch(() => false));
 }
 
 /** 一時ファイルに書いてから名前を付け替える。並びは呼ぶ側が決める。 */

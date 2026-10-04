@@ -189,15 +189,31 @@ export class DutyRoster {
    * 最後の期は、その間に済ませた（または流した）ならそちらを取る。
    */
   absorb(records: unknown): void {
+    this.rebase(records, undefined);
+  }
+
+  /**
+   * ほかのプロセスが書いた記録を足す（`saveMerged`）。`seen` は、この実体が前に読んだ・書いた中身。
+   * 回数は、ファイルと `seen` の差（ほかが数えた分）だけ足す。最後の期は、ほかだけが進めたならそちらを取り、
+   * 両方が進めたなら後に済ませた方を取る。`seen` が無ければ、前の `absorb` と同じ（手元で済ませていれば手元）。
+   */
+  rebase(records: unknown, seen: unknown): void {
     if (!Array.isArray(records)) return;
-    for (const base of records.filter(isRecord)) {
-      const now = this.#records.get(base.dutyId);
-      if (!now) { this.#records.set(base.dutyId, base); continue; }
-      const touched = now.lastPeriod !== undefined;
-      now.completions += base.completions;
-      now.missed += base.missed;
-      if (!touched) now.lastPeriod = base.lastPeriod;
-      const last = Math.max(now.lastAt ?? 0, base.lastAt ?? 0);
+    const before = new Map((Array.isArray(seen) ? seen.filter(isRecord) : []).map((r) => [r.dutyId, r]));
+    for (const theirs of records.filter(isRecord)) {
+      const now = this.#records.get(theirs.dutyId);
+      if (!now) { this.#records.set(theirs.dutyId, theirs); continue; }
+      const was = before.get(theirs.dutyId);
+      now.completions = Math.max(0, now.completions + theirs.completions - (was?.completions ?? 0));
+      now.missed = Math.max(0, now.missed + theirs.missed - (was?.missed ?? 0));
+      if (was) {
+        const theyMoved = theirs.lastPeriod !== was.lastPeriod;
+        const iMoved = now.lastPeriod !== was.lastPeriod;
+        if (theyMoved && (!iMoved || (theirs.lastAt ?? 0) > (now.lastAt ?? 0))) now.lastPeriod = theirs.lastPeriod;
+      } else if (now.lastPeriod === undefined) {
+        now.lastPeriod = theirs.lastPeriod;
+      }
+      const last = Math.max(now.lastAt ?? 0, theirs.lastAt ?? 0);
       if (last > 0) now.lastAt = last;
     }
   }
