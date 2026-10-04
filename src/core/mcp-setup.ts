@@ -10,7 +10,7 @@
  * その1ターンだけツールが少ない。**待たせるよりよい。**
  */
 import type { AasConfig } from '../config.ts';
-import { McpClient } from '../mcp/client.ts';
+import { McpClient, type McpServerSpec } from '../mcp/client.ts';
 import { deliverableCount } from '../mcp/tools.ts';
 
 export async function startMcpServers(
@@ -39,4 +39,36 @@ export async function startMcpServers(
   }
 
   return clients;
+}
+
+/**
+ * 繋ぐ（画面・`connect_service`）。いま動いている相手の一覧にも効かせる。
+ *
+ * 同じ名前が在っても立ち上げ直す。名前が在るだけで「繋ぎました」と返していたので、立ち上げのときに繋がらなかった相手
+ * （API キーを入れる前に起こした等）は、キーを入れて繋ぎ直しても立ち上げ直すまでツールが 0 件のままだった。動いている相手も、
+ * キーは起こすとき（`envFrom`）・名乗るとき（`headersFrom`）に一度だけ読むので、入れ替えたキーが効かなかった。
+ * 立たなかったものは一覧に残さない（ツールは出ないが、外せなくなる）。
+ */
+export async function connectInto(
+  clients: McpClient[], id: string, spec: McpServerSpec,
+  log: (level: 'info' | 'warn', text: string) => void, refresh: () => void,
+): Promise<boolean> {
+  const before = clients.findIndex((c) => c.name === id);
+  if (before >= 0) {
+    clients[before]!.stop();
+    clients.splice(before, 1);
+    refresh();
+  }
+  const client = new McpClient(id, spec);
+  clients.push(client);
+  const up = await client.start().catch(() => false);
+  if (!up) {
+    const at = clients.indexOf(client);
+    if (at >= 0) clients.splice(at, 1);
+    log('warn', `外のツールに繋がりませんでした: ${id} — ${client.failure ?? '理由は不明'}`);
+    return false;
+  }
+  log('info', `外のツールに繋がりました: ${id}（${deliverableCount(client)} 件）`);
+  refresh();
+  return true;
 }

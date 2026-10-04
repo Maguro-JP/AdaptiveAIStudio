@@ -34,7 +34,7 @@ import { createRunCommandTool } from '../agent/tools/shell.ts';
 import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { createDeliberateTool } from '../agent/tools/deliberate.ts';
 import { buildInspector } from './inspector-setup.ts';
-import { startMcpServers } from './mcp-setup.ts';
+import { startMcpServers, connectInto } from './mcp-setup.ts';
 import { loadJournals, saveJournals, type Journals } from './journals.ts';
 import { McpClient, type McpServerSpec } from '../mcp/client.ts';
 import { collectTools, deliverableCount } from '../mcp/tools.ts';
@@ -559,22 +559,7 @@ export class Session {
      * 出てきません」と言っていた。動かして確かめた。
      */
     const serviceHooks: Required<ServiceHooks> = {
-      onConnected: async (id: string, spec: McpServerSpec): Promise<boolean> => {
-        if (mcpClients.some((c) => c.name === id)) return true;
-        const client = new McpClient(id, spec);
-        mcpClients.push(client);
-        const up = await client.start().catch(() => false);
-        if (!up) {
-          // 立たなかったものを一覧に残さない（ツールは出ないが、外せなくなる）。
-          const at = mcpClients.indexOf(client);
-          if (at >= 0) mcpClients.splice(at, 1);
-          log('warn', `外のツールに繋がりませんでした: ${id} — ${client.failure ?? '理由は不明'}`);
-          return false;
-        }
-        log('info', `外のツールに繋がりました: ${id}（${deliverableCount(client)} 件）`);
-        refresh();
-        return true;
-      },
+      onConnected: (id: string, spec: McpServerSpec): Promise<boolean> => connectInto(mcpClients, id, spec, log, () => refresh()),
       onDisconnected: (id: string): boolean => {
         const at = mcpClients.findIndex((c) => c.name === id);
         if (at < 0) return false;

@@ -46,7 +46,7 @@ export function wrapTool(
       description: spec.description
         ? `[${client.name}] ${spec.description}`
         : `[${client.name}] ${spec.name}`,
-      parameters: spec.inputSchema ?? { type: 'object', properties: {}, additionalProperties: true },
+      parameters: objectSchema(spec.inputSchema),
     },
     async run(args, ctx) {
       /*
@@ -95,10 +95,17 @@ export function wrapTool(
       const notes = verdict.findings.length > 0
         ? `${describeVerdict(verdict, 'inbound')}\n\n`
         : '';
-      return ok(`${notes}${r.text}`);
+      // 長さで切る（切らずに渡していたので、大きな返りが全文のまま履歴と会話の保存に入った。fetch_url と同じ扱い）
+      const text = r.text.length > MCP_RESULT_MAX
+        ? `${r.text.slice(0, MCP_RESULT_MAX)}\n…（以降 ${r.text.length - MCP_RESULT_MAX} 字は長いので省きました）`
+        : r.text;
+      return ok(`${notes}${text}`);
     },
   };
 }
+
+/** 外のツールの返りの長さの上限（字）。 */
+export const MCP_RESULT_MAX = 100_000;
 
 /** 相手が書いた説明の長さの上限。毎回の依頼に載るので、長い説明はそれだけで文脈を食う。 */
 export const MCP_DESCRIPTION_MAX = 2_000;
@@ -121,18 +128,37 @@ function specVerdict(spec: { description?: string; inputSchema?: Record<string, 
 }
 
 /** その相手のツールのうち、検問所で止まったもの（名前と、何に当たったか）。 */
-export function blockedTools(client: Pick<McpClient, 'tools'>): Array<{ name: string; why: string }> {
+export function blockedTools(client: Pick<McpClient, 'tools'> & { name?: string }): Array<{ name: string; why: string }> {
   const out: Array<{ name: string; why: string }> = [];
   for (const t of client.tools) {
-    const why = specVerdict(t);
+    // 名前の形が外れたものも配らない（黙って落とさず、ここで言う）
+    const why = client.name !== undefined && !deliverableName(client.name, t.name)
+      ? '名前の形（英数字・_・- で、サーバ名と合わせて 64 字まで）'
+      : specVerdict(t);
     if (why) out.push({ name: t.name, why });
   }
   return out;
 }
 
 /** 実際に配るツールの数。画面・記録・繋がり具合のどこでも、これで数える（止めた分を含めた数を出すと、場所ごとに数が食い違う）。 */
-export function deliverableCount(client: Pick<McpClient, 'tools'>): number {
+export function deliverableCount(client: Pick<McpClient, 'tools'> & { name?: string }): number {
   return client.tools.length - blockedTools(client).length;
+}
+
+/**
+ * 配れる名前か。雲側の API はツールの名前の形を決めていて（英数字・`_`・`-`、64 字まで）、外れた名前が一つあると
+ * 依頼ごと 400 で断られる。相手の名前（`.`・`/`・空白）やサーバ名（日本語・`.`）をそのまま繋いでいたので、
+ * そういう相手が一つ繋がっているだけで、会話が一切進まなかった。
+ */
+export function deliverableName(server: string, tool: string): boolean {
+  return /^[A-Za-z0-9_-]{1,64}$/.test(toolName(server, tool));
+}
+
+/** 引数の形。`type: "object"` でない形は既定の形に置き換える（雲側の API はツールの引数を object に限る）。 */
+function objectSchema(schema: Record<string, unknown> | undefined): Record<string, unknown> {
+  return schema && typeof schema === 'object' && !Array.isArray(schema) && schema.type === 'object'
+    ? schema
+    : { type: 'object', properties: {}, additionalProperties: true };
 }
 
 /** 立ち上がっているサーバのツールを、まとめて配れる形にする。検問所で止まったツールは配らない（`describeServers` が言う）。 */
@@ -144,7 +170,7 @@ export function collectTools(
   for (const client of clients) {
     if (!client.running) continue;
     for (const spec of client.tools) {
-      if (specBlocked(spec)) continue;
+      if (specBlocked(spec) || !deliverableName(client.name, spec.name)) continue;
       const description = spec.description && spec.description.length > MCP_DESCRIPTION_MAX
         ? `${spec.description.slice(0, MCP_DESCRIPTION_MAX)}…（長いので切りました）`
         : spec.description;
@@ -173,7 +199,7 @@ export function describeServers(clients: readonly McpClient[]): string {
         : '';
       const blocked = blockedTools(c);
       const stopped = blocked.length > 0
-        ? `  ⚠ 説明が検問所で止まったので配っていないツール ${blocked.length} 件: ${blocked.slice(0, 5).map((b) => `${b.name}（${b.why}）`).join(', ')}`
+        ? `  ⚠ 配っていないツール（説明が検問所で止まった・名前の形が合わない） ${blocked.length} 件: ${blocked.slice(0, 5).map((b) => `${b.name}（${b.why}）`).join(', ')}`
         : '';
       lines.push(`  ✓ ${c.name}  ツール ${c.tools.length - blocked.length} 件${missing}${stopped}`);
     } else {
