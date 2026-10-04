@@ -20,7 +20,15 @@ export class ProviderRegistry {
 
   cooldown(providerId: string, ms: number): void {
     if (ms <= 0) return;
-    this.#cooldownUntil.set(providerId, ms === Infinity ? Infinity : Date.now() + ms);
+    this.#cooldownUntil.set(providerId, ms === Infinity ? Infinity : this.#now() + ms);
+  }
+
+  /** 冷やしは単調な時計で数える（壁時計だと、時計が 1 時間戻ると 1 分の冷やしが 61 分になる）。試験で入れ替えられる。 */
+  #now: () => number = () => performance.now();
+
+  /** 試験用: 時計を入れ替える。 */
+  setClockForTest(now: () => number): void {
+    this.#now = now;
   }
 
   clearCooldown(providerId: string): void {
@@ -30,7 +38,7 @@ export class ProviderRegistry {
   isAvailable(providerId: string): boolean {
     const until = this.#cooldownUntil.get(providerId);
     if (until === undefined) return true;
-    if (Date.now() >= until) {
+    if (this.#now() >= until) {
       this.#cooldownUntil.delete(providerId);
       return true;
     }
@@ -40,7 +48,7 @@ export class ProviderRegistry {
   cooldownRemainingMs(providerId: string): number {
     const until = this.#cooldownUntil.get(providerId);
     if (until === undefined) return 0;
-    return until === Infinity ? Infinity : Math.max(0, until - Date.now());
+    return until === Infinity ? Infinity : Math.max(0, until - this.#now());
   }
 
   /** "provider:model" を分解する。model 側に ':' を含むケース(qwen2.5:7b)に対応。 */

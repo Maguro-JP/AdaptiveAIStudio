@@ -355,8 +355,8 @@ describe('優先度: 通しで（inproc の入口から）', () => {
     // 口 2 本・中 2 件（A が生成中、B は取り分待ち）のとき、別の GGUF を名指しした S が来る。
     // 「空くのを待つ」だけだと、A が返した口をその場で B へ渡し、その直後に解く。
     const dir = await tempDir('aas-prio-');
-    await writeFile(join(dir, 'a.gguf'), 'x');
-    await writeFile(join(dir, 'b.gguf'), 'x');
+    await writeFile(join(dir, 'a.gguf'), 'GGUF');
+    await writeFile(join(dir, 'b.gguf'), 'GGUF');
     const events: string[] = [];
     const gates = new Map<string, () => void>();
     const opened = new Map<string, Promise<void>>();

@@ -41,7 +41,8 @@ export const FALLBACK_RULES: Record<ProviderErrorKind, FallbackRule> = {
   unavailable:      { retries: 2, fallback: true,  cooldownMs: 5 * MINUTE },
   timeout:          { retries: 2, fallback: true,  cooldownMs: 5 * MINUTE },
   context_too_long: { retries: 0, fallback: true,  cooldownMs: 0 },
-  auth:             { retries: 0, fallback: true,  cooldownMs: Infinity },
+  // 鍵の誤りでも、いつかは試し直す。無期限にしていたので、プロキシが一度だけ返した 403 で、作り直すまで候補から外れたままだった
+  auth:             { retries: 0, fallback: true,  cooldownMs: 10 * MINUTE },
   model_missing:    { retries: 0, fallback: true,  cooldownMs: 0 },
   invalid_request:  { retries: 0, fallback: false, cooldownMs: 0 },
   canceled:         { retries: 0, fallback: false, cooldownMs: 0 },
