@@ -861,7 +861,8 @@ function listen() {
      */
     // 終わった会話の「写した所まで」は、見ている会話でなくても外す。外さずに残ると、選び直して送った次の答えは番号が 1 から
     // 振り直されるので、頭から写した数だけ捨てていた（答えが文の途中から始まって見えた）
-    if (e.type === 'busy' && !e.busy && e.conversationId) copiedUpTo.delete(e.conversationId);
+    // 新しい回の始まり（busy:true）でも外す。選ぶ返事が終わりの合図より後に届くと、終わった回の値が入り直すため
+    if (e.type === 'busy' && e.conversationId) copiedUpTo.delete(e.conversationId);
     if ((e.type === 'session' || e.type === 'busy') && e.conversationId && conversations
       && (conversations.current ? e.conversationId !== conversations.current : !sendingFromTop)) {
       if (e.type === 'busy' && !e.busy) void loadConversations();

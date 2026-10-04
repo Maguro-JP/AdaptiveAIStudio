@@ -80,15 +80,16 @@ async function tell(path, payload, what) {
  * 提案の採否を伝える。提案のパネルと会話の中のカードの両方から使う（片方だけ直して、もう片方に同じ不具合を残した）。
  * 送っている間は「伝えています…」。断られたら本体の文と押す口を戻し、受け取られてから「着手します」と言う。
  */
+/** 伝えられなければ、その理由の文を返す（伝えられたら undefined）。 */
 async function decideProposal(id, verdict, menu, buttons) {
   menu.replaceChildren(el('span', 'dim', '伝えています…'));
   const got = await tell('/api/proposal', { id, verdict }, '伝えられませんでした');
   if (!got.ok) {
     menu.replaceChildren(el('span', 'warn', got.error), ...buttons);
-    return false;
+    return got.error ?? '伝えられませんでした';
   }
   menu.replaceChildren(el('span', 'dim', verdict === 'accepted' ? '着手します…' : '却下しました'));
-  return true;
+  return undefined;
 }
 
 function rows(items, render, columns = 3) {
@@ -1419,12 +1420,18 @@ export const PANELS = {
      */
     const opened = new Set();
     const sending = new Set();
+    // 断られた理由と、その時刻。作業が終わった後も「作業中です」を出し続けないよう、少し経ったら外す
     const refused = new Map();
+    const REFUSED_SHOWN_MS = 15_000;
 
     const draw = async () => {
       const r = await getJson('/api/proposals').catch(() => null);
       body.replaceChildren();
       if (!r) return body.append(empty('提案を読めませんでした。'));
+      // もう出ていない提案の分は持たない（決まった・落とされた・作業場を変えた）
+      const live = new Set(r.open.map((p) => p.id));
+      for (const id of [...opened]) if (!live.has(id)) opened.delete(id);
+      for (const [id, v] of [...refused]) if (!live.has(id) || Date.now() - v.at > REFUSED_SHOWN_MS) refused.delete(id);
       if (r.open.length === 0) {
         body.append(empty('未処理の提案はありません。'));
       }
@@ -1449,15 +1456,19 @@ export const PANELS = {
           sending.add(p.id);
           refused.delete(p.id);
           // 断られても、通信が落ちても、少し置いて描き直す（押す口が消えたまま残らない）。断られた理由は描き直しても残す
-          const done = await decideProposal(p.id, verdict, menu, [yes, no]).finally(() => sending.delete(p.id));
-          if (!done) refused.set(p.id, menu.firstChild?.textContent ?? '伝えられませんでした');
+          try {
+            const why = await decideProposal(p.id, verdict, menu, [yes, no]);
+            if (why !== undefined) refused.set(p.id, { text: why, at: Date.now() });
+          } finally {
+            sending.delete(p.id);
+          }
           setTimeout(draw, 1500);
         };
         yes.onclick = () => decide('accepted');
         no.onclick = () => decide('rejected');
         if (sending.has(p.id)) menu.append(el('span', 'dim', '伝えています…'));
         else {
-          if (refused.has(p.id)) menu.append(el('span', 'warn', refused.get(p.id)));
+          if (refused.has(p.id)) menu.append(el('span', 'warn', refused.get(p.id).text));
           menu.append(yes, no);
         }
         inner.append(menu);
@@ -1843,9 +1854,11 @@ export const PANELS = {
         return;
       }
       if (ac.signal.aborted) return;
-      const j = await r.json().catch(() => ({}));
+      const j = await r.json().catch(() => undefined);
       // 本文を読む間に次の検索が始まっていたら、古い結果を足さない
       if (ac.signal.aborted || asking !== ac) return;
+      // 本文を読み切れなかった（打ち切り）のを「見つかりませんでした」と言わない
+      if (j === undefined) { state.textContent = '探せませんでした（返事を読み切れませんでした）'; return; }
       if (!r.ok) { state.textContent = j.error ?? '探せませんでした'; return; }
 
       const hits = j.hits ?? [];

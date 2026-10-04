@@ -98,3 +98,55 @@ describe('提案の札', () => {
     assert.ok(dump(t.body).includes('いま作業中です'), `理由が消えた: ${dump(t.body)}`);
   });
 });
+
+describe('レビューで挙がった筋書き', () => {
+  test('**伝えている最中に描き直しても、押し場所を戻さない**（二度押せない）', async () => {
+    let release: (() => void) | undefined;
+    (globalThis as { fetch?: unknown }).fetch = (async (url: string) => {
+      if (String(url).includes('/api/proposals')) {
+        return Response.json({ open: [{ id: 'p1', kind: 'bug', title: '直すこと', rationale: '理由' }], spent: '0', dropped: 0, due: [] });
+      }
+      await new Promise<void>((r) => { release = r; });
+      return Response.json({ ok: true });
+    }) as unknown as typeof fetch;
+    let onState: (() => void) | undefined;
+    const body = createNode('div');
+    PANELS.proposals!(body, { on: () => undefined, onState: (fn: () => void) => { onState = fn; } });
+    await until(() => dump(body).includes('やってもらう'), '押し場所が出る', { timeoutMs: 5000 });
+    const before = find(body, (n) => n.tagName === 'details');
+    find(body, (n) => n.textContent === 'やってもらう' && typeof n.onclick === 'function')!.onclick!();
+    onState?.();
+    // 描き直しが済む（札が作り直される）のを待ってから見る。済む前に見ると、古い版でも通ってしまう
+    await until(() => { const now = find(body, (n) => n.tagName === 'details'); return now !== undefined && now !== before; }, '描き直す', { timeoutMs: 5000 });
+    assert.ok(dump(body).includes('伝えています'), `伝えている最中と出ていない: ${dump(body)}`);
+    assert.ok(!find(body, (n) => n.textContent === 'やってもらう'), `伝えている最中に押し場所が戻った: ${dump(body)}`);
+    release?.();
+    // 伝え終えた後の描き直し（1.5 秒後）まで、この試験の偽の相手で待つ（次の試験の相手に当てない）
+    await new Promise((r) => setTimeout(r, 1700));
+  });
+
+  test('**本文を読んでいる間に次の検索を始めたら、古い結果を足さない**', async () => {
+    let n = 0;
+    (globalThis as { fetch?: unknown }).fetch = (async () => {
+      const mine = ++n;
+      // 一回目は頭だけすぐ返し、本文を遅らせる
+      const json = async () => {
+        if (mine === 1) await new Promise((r) => setTimeout(r, 120));
+        return { hits: [{ path: mine === 1 ? 'src/old.ts' : 'src/new.ts', line: 1, text: 'x' }] };
+      };
+      return { ok: true, status: 200, json } as unknown as Response;
+    }) as unknown as typeof fetch;
+    const body = createNode('div');
+    PANELS.search!(body, { on: () => undefined });
+    const q = find(body, (x) => (x.className ?? '').includes('search-q'))!;
+    const go = find(body, (x) => x.textContent === '探す' && typeof x.onclick === 'function')!;
+    q.value = 'old';
+    go.onclick!();
+    await new Promise((r) => setTimeout(r, 20));
+    q.value = 'new';
+    go.onclick!();
+    await until(() => dump(body).includes('src/new.ts'), '新しい結果が出る', { timeoutMs: 5000 });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(!dump(body).includes('src/old.ts'), `古い結果が混ざった: ${dump(body)}`);
+  });
+});
