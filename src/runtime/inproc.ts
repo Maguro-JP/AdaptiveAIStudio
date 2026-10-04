@@ -657,6 +657,8 @@ export class InProcRuntime implements LocalRuntime {
    * 二人目には、一人目の約束をそのまま渡す。
    */
   readonly #loading = new Map<string, Promise<Held>>();
+  /** 切り替え（降ろして読む）を一つずつ通す列。 */
+  #switching: Promise<void> = Promise.resolve();
   /**
    * ライブラリの本体（`getLlama` の結果）と、選ばれた backend。**一度だけ作る。**
    * モデルごとに作ると、backend の初期化（CUDA なら数秒）を毎回やり直す。
@@ -742,6 +744,7 @@ export class InProcRuntime implements LocalRuntime {
       // 立て直すと、止めたはずのプロセスが口を開いたまま生き続ける。
       if (this.#down) {
         await held.context.dispose?.().catch(() => undefined);
+        await held.model?.dispose?.().catch(() => undefined);
         throw new Error('止めています');
       }
       this.#sessions.set(ref, held);
@@ -794,7 +797,11 @@ export class InProcRuntime implements LocalRuntime {
         : `GPU に ${model.gpuLayers}${typeof total === 'number' ? `/${total}` : ''} 層を載せました`);
     }
     const { window: contextSize, sequences } = await this.#windowFor(ref, backend);
-    const context = await model.createContext({ contextSize, sequences });
+    // context を作れなかったら（KV が入らない等）、読んだ重みを解いてから投げる。解かないと、次に読むたびに重みが一つずつ増えていた
+    const context = await model.createContext({ contextSize, sequences }).catch(async (e: unknown) => {
+      await (model as { dispose?: () => Promise<void> }).dispose?.().catch(() => undefined);
+      throw e;
+    });
     /*
      * **直しは、渡した中身をそのまま書き戻すことが多い。**
      *
@@ -837,7 +844,7 @@ export class InProcRuntime implements LocalRuntime {
         + '守れないモデルもあるので、うまく呼べないときは道具呼び出しを学んだモデル（Qwen など）を置いてください。',
       );
     }
-    return { context, wrapper, window: contextSize, lanes: new LanePool(lanes) };
+    return { context, model: model as Held['model'], wrapper, window: contextSize, lanes: new LanePool(lanes) };
   }
 
   /** 並列に持ちたい本数。設定が無ければ既定。 */
@@ -931,7 +938,8 @@ export class InProcRuntime implements LocalRuntime {
       if (op === 'shutdown' && req.method === 'POST') {
         reply(200, { ok: true });
         // 返事を出し切ってから止める。
-        setTimeout(() => { void this.shutdown().then(() => this.#opts.onExit?.()); }, 50).unref?.();
+        // 止めるのに失敗しても、終わりは知らせる（受け手が無いと、失敗がプロセスごと落とす）
+        setTimeout(() => { void this.shutdown().catch(() => undefined).then(() => this.#opts.onExit?.()); }, 50).unref?.();
         return;
       }
       return reply(404, { error: 'そこはありません' });
@@ -941,8 +949,16 @@ export class InProcRuntime implements LocalRuntime {
   }
 
   async unload(ref: string): Promise<void> {
-    await this.#sessions.get(ref)?.context.dispose?.().catch(() => { /* すでに解けている */ });
+    const held = this.#sessions.get(ref);
+    if (!held) return;
+    // 先に外して新しい依頼を受けない。答えている最中の口が戻るのを待ち、並んでいる人は断ってから解く
+    // （待たずに解くと、生成中の口が解いた context の上で続いていた）
     this.#sessions.delete(ref);
+    // 待つのは上限まで（止まった生成のために、止める・切り替える操作まで止めない）
+    await Promise.race([held.lanes.close(), new Promise((r) => setTimeout(r, UNLOAD_WAIT_MS).unref())]);
+    await held.context.dispose?.().catch(() => { /* すでに解けている */ });
+    // 重みも解く（context を解いても重みは残り、切り替えるたびに数 GB ずつ溜まっていた）
+    await held.model?.dispose?.().catch(() => { /* すでに解けている */ });
   }
 
   async shutdown(): Promise<void> {
@@ -1067,8 +1083,26 @@ export class InProcRuntime implements LocalRuntime {
     // 二つ同時に持たない（数GBを二重に載せると足りない機械がある）。
     // 候補の決め方が名前で選んでいるのに、常に最初の一つで答えるのはおかしい。
     if (!held && ref && /\.gguf$/i.test(ref)) {
-      const have = (await this.list()).some((m) => m.ref === ref);
-      if (have) {
+      const listed = (await this.list()).find((m) => m.ref === ref);
+      // 読めないと分かっているもの（GGUF でない・記憶に載らない）のために、今のモデルを先に降ろさない
+      const unreadable = listed && (!(await looksLikeGguf(join(this.#opts.modelsDir, ref)))
+        || tooBigForRam(listed.sizeBytes, totalmem()) !== undefined);
+      if (listed && unreadable) {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: `${ref} は読めません（GGUF でないか、この機械の記憶に載りません）` } }));
+        return;
+      }
+      const have = listed !== undefined;
+      // 切り替えは一つずつ通す。別の読み込みが走っている間に切り替えると、二つのモデルが同時に記憶に載っていた
+      const turn = this.#switching;
+      let done!: () => void;
+      this.#switching = new Promise<void>((r) => { done = r; });
+      await turn;
+      try {
+      held = this.#sessions.get(ref);
+      // 待っている間に読み込み中だった別のモデルは、読み終えてから降ろす（読み込み中のものは #sessions に居ないので、閉じる相手から漏れていた）
+      if (!held) await Promise.all([...this.#loading].filter(([r]) => r !== ref).map(([, p]) => p.catch(() => undefined)));
+      if (!held && have) {
         // 答えている最中のものを解かない。**以後は貸さず、並んでいる人は断り**、
         // 出ている分が戻るのを待つ。「空くのを待つ」だけだと、返った口をその場で
         // 次の待ち手へ渡し、その口の上で context を解くことになる（敵対レビューで見つけた）。
@@ -1083,6 +1117,9 @@ export class InProcRuntime implements LocalRuntime {
         } catch (e) {
           this.#opts.onLog?.(`${ref} を読めませんでした: ${(e as Error).message}`);
         }
+      }
+      } finally {
+        done();
       }
     }
     if (!held && this.loaded().length === 1) {
@@ -1306,6 +1343,8 @@ export class InProcRuntime implements LocalRuntime {
       }
       // 切ったなら、こちらが見ていた分だけを返す（返り値は切った後を含みうる）。
       if (cutAt >= 0) text = saw.slice(0, cutAt);
+      // 繰り返しで切った答えは、言い終えていない（`length` で終える。`stop` で返すと上の層が完了と読んでいた）
+      if (cutAt >= 0) cutOff = true;
       // 本文で渡したときは、本文から拾う。
       if (asText) {
         const salvaged = extractToolCalls(text);
@@ -1431,6 +1470,8 @@ export class InProcRuntime implements LocalRuntime {
           stop.abort();
         },
       }));
+      // 返り値は上限で切れたかしか知らない。繰り返しで切ったことは、こちらで立て直す
+      if (runaway) cutOff = true;
       if (filter) {
         const salvaged = filter.end();
         if (salvaged.text) chunk({ content: salvaged.text });
@@ -1692,8 +1733,13 @@ export class LanePool {
   }
 }
 
+/** 降ろすとき、答えている最中の口が戻るのを待つ上限。 */
+const UNLOAD_WAIT_MS = 10_000;
+
 interface Held {
   context: { dispose?: () => Promise<void> };
+  /** 読んだモデル（重み）。context を解いても重みは解けないので、降ろすときはこちらも解く。 */
+  model?: { dispose?: () => Promise<void> };
   /**
    * ライブラリが選んだ「道具の呼び方」の型。
    *
