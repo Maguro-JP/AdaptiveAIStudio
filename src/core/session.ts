@@ -1609,7 +1609,8 @@ export class Session {
       // **「二度としないこと」はここでは足さない。**決まり（system）が載せる。
       // 両方に載せると、同じ文が一往復に二度入る（実際に八件ずつ二重に入っていた）。
       // 問いかけには、前の作業の覚えを足さない。話が混ざるだけで、答えは良くならない。
-      const recalled = chat ? '' : this.#recall(instruction, { lessons: false }, conv);
+      // 問いは打った分だけ（差し込んだ添付の中身・開いているファイルの見出しを入れると、どの覚えにも当たっていた）
+      const recalled = chat ? '' : this.#recall(undoName, { lessons: false }, conv);
       if (recalled) yield { type: 'recalled', text: recalled };
 
       conv.history.push({

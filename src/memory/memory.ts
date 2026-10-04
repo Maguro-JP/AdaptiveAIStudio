@@ -132,7 +132,11 @@ const STOP = new Set([
  */
 export function tokenize(text: string): string[] {
   const rough = text
+    // 全角の英数（ＲＥＡＤＭＥ）を半角に揃える。揃えないと 2 字ずつに割られ、半角で覚えた題と重ならなかった
+    .normalize('NFKC')
     .toLowerCase()
+    // 英数の塊と日本語の境目でも割る（「READMEを直して」から readme を取る。割らないと re・ea… に刻まれていた）
+    .replace(/([a-z0-9]+)/g, ' $1 ')
     .replace(/[「」『』（）()[\]{}、。,.:;!?？！\-_/\\'"`|+*=<>~@#$%^&\n\r\t]/g, ' ')
     .split(/\s+/)
     .filter((t) => t.length > 0);
@@ -158,7 +162,8 @@ export function tokenize(text: string): string[] {
 
 /** 同じことを言っているかの判定用。表記揺れを潰す。 */
 export function normalizeTitle(title: string): string {
-  return title.toLowerCase().replace(/\s+/g, '').replace(/[。、,.!?！？]/g, '');
+  // 全角と半角の英数を同じ題として畳む（「ＡＰＩキー」と「APIキー」を二件にしない）
+  return title.normalize('NFKC').toLowerCase().replace(/\s+/g, '').replace(/[。、,.!?！？]/g, '');
 }
 
 const DAY = 86_400_000;
@@ -739,7 +744,8 @@ export class Memory {
     if (f.era !== this.#era) return 'reloaded';
     if (this.#entries.some((e) => e.id === f.entry.id)) return 'taken';
     const key = normalizeTitle(f.entry.title);
-    if (this.#entries.some((e) => e.kind === f.entry.kind && normalizeTitle(e.title) === key && !e.supersededBy)) return 'duplicate';
+    // 同じ作業場の分だけを見る（覚えるときの畳みと同じ。別の作業場に同じ題が在ると戻せず、棚からも消えていた）
+    if (this.#entries.some((e) => e.kind === f.entry.kind && normalizeTitle(e.title) === key && !e.supersededBy && e.root === f.entry.root)) return 'duplicate';
     const entry = { ...f.entry };
     const find = (id: string): MemoryEntry | undefined => this.#entries.find((x) => x.id === id);
     // 自分が戻るのを待っていた繋がり（先に戻った相手から、自分へ。向こう側は下で揃える）
@@ -1018,8 +1024,22 @@ export function betterDetail(next: string, current: string): boolean {
 function isEntry(e: unknown): e is MemoryEntry {
   if (typeof e !== 'object' || e === null) return false;
   const m = e as Partial<MemoryEntry>;
+  // 思い出す・並べる・日付を出す所で触る欄の形も見る（`tags:[1]`・`seenAt:"x"` を通すと、思い出すたびに落ちていた）
+  const optNum = (v: unknown): boolean => v === undefined || (typeof v === 'number' && Number.isFinite(v));
   return typeof m.id === 'string' && typeof m.kind === 'string' && typeof m.title === 'string'
-    && Array.isArray(m.tags) && (m.detail === undefined || typeof m.detail === 'string');
+    && Array.isArray(m.tags) && m.tags.every((t) => typeof t === 'string')
+    && (m.detail === undefined || typeof m.detail === 'string')
+    && optNum(m.at) && optNum(m.seenAt) && optNum(m.confirms);
+}
+
+/** 無い欄を埋める（`detail` の無い行を通して、思い出すときに `undefined` を割ろうとして落ちていた）。 */
+function filled(e: MemoryEntry): MemoryEntry {
+  const m = e as Partial<MemoryEntry> & MemoryEntry;
+  if (m.detail === undefined) m.detail = '';
+  if (m.at === undefined) m.at = 0;
+  if (m.seenAt === undefined) m.seenAt = m.at;
+  if (m.confirms === undefined) m.confirms = 1;
+  return m;
 }
 
 /**
@@ -1051,7 +1071,7 @@ function parseEntriesRaw(raw: string): { entries: MemoryEntry[]; kept: string[];
     if (/^[\s\0]*$/.test(line)) continue;
     let value: unknown;
     try { value = JSON.parse(line); } catch { value = undefined; }
-    if (isEntry(value)) { entries.push(value); continue; }
+    if (isEntry(value)) { entries.push(filled(value)); continue; }
     if (isDeclined(value)) { declined.push(value.declined); continue; }
     kept.push(line.replace(/\r$/, ''));
     // 番号を拾う（読めない行・二件がくっついた行からも）。直されて戻ってきたときに、同じ番号を配らない。

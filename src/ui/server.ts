@@ -677,7 +677,16 @@ export class UiServer {
       onPatch: (at) => this.broadcast({ type: 'patch', ...at }),
     });
     // 続きから話す。**土台は作り直しても、話は続ける。**
-    const id = await this.#currentConversation();
+    // 会話を選んでいない（トップ）なら、ここでは作らない。作ると、補完・戻す・提案の採否などで本体が組まれるたびに
+    // 空の会話が一覧に増えていた。会話は送るときに作る
+    if (this.#conversationId === undefined) {
+      this.#session.restore([]);
+      this.#loadedId = undefined;
+      this.#saved = 0;
+      this.#startThinking(this.#session);
+      return this.#session;
+    }
+    const id = this.#conversationId;
     // 本体を組む所では投げない（投げると、読めない会話が一つあるだけで画面ごと使えなくなる）。読めなかったことは言う
     const past = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL }).catch((e: unknown) => {
       this.broadcast({ type: 'log', level: 'warn', text: `会話の記録を読めませんでした（${(e as Error).message}）。次に送るときに読み直します` });
@@ -973,9 +982,11 @@ export class UiServer {
   async #persist(session: Session): Promise<void> {
     // 残す先は、**本体に載っている会話**。画面が見ている会話ではない
     // （動いている間に別の会話を見に行けるので、二つは別）。
+    const fresh = session.history.slice(this.#saved);
+    // 残すものが無ければ、会話を作らない（作ると、トップのまま本体が組まれるたびに空の会話が一覧に増えていた）
+    if (fresh.length === 0 && this.#loadedId === undefined) return;
     const id = this.#loadedId ?? await this.#currentConversation();
     this.#loadedId = id;
-    const fresh = session.history.slice(this.#saved);
     if (fresh.length === 0) return;
     try {
       await this.#conversations.append(id, fresh);
