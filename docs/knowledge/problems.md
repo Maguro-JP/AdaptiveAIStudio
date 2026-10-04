@@ -204,3 +204,8 @@
 - 原因: 段取りを止める試験が、問い合わせが届くまで setImmediate を 2 万回回して待っていた。回数で決めた上限は機械の速さで長さが変わり、Windows の CI では 0.2 秒で諦めた
 - 解決: `until` で時間（15 秒）を上限にして待つ
 - 再発防止: 待ちの上限は時間で書く。回数で書いた待ち（`for (let i = 0; i < N`）を見つけたら、時間の待ちに直す
+
+## 2026-10-04 わざと壊して確かめる作業場に node_modules をリンクしたら、bundle の試験が手元の型定義を消した
+- 原因: 直す前の版で新しい試験が落ちるかを見るために git worktree を作り、node_modules を手元へのリンクにして試験を回した。その中に bundle を組む試験があった。bundle は node_modules を写すが、リンクはリンクのまま写したので、配る先の app/node_modules も手元を指した。片づけ（型定義と .map を落とす）がリンクを辿り、手元の node_modules から .d.ts と .map が全部消えた。`npm run typecheck` が lib が無いと言って止まった
+- 解決: lock の版のまま、npm の cache（`~/.npm/_cacache` の sha512）から欠けたファイルだけを戻した（在るファイルは上書きしない。npm install は使っていない）。製品の側も直した: 写すときはリンクを辿って中身を写し、片づける前に辿った先でも組んだ先の中にあるかを見る（`test/home.test.ts`・`test/bundle-target.test.ts` のリンクの試験）。`test/bundle-target.test.ts` に「手元の typescript・@types が消えた。どの道でそうなったか掴めていない」とあったのは、おそらくこれ
+- 再発防止: わざと壊して確かめる作業場には node_modules をリンクしない（この製品の試験は実行時の依存が無いので、node_modules 無しで回る）。型検査が要るときだけ、写しを置く

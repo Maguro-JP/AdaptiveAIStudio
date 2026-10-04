@@ -9,7 +9,7 @@
  * 取ってくる先は公式のリリースだけにして、置き場は ~/.aas/bin に固定する。
  * 一度取ってくれば、あとは手元だけで動く。
  */
-import { mkdir, writeFile, chmod, readdir, stat, rm } from 'node:fs/promises';
+import { mkdir, writeFile, chmod, readdir, stat, rm, rename } from 'node:fs/promises';
 import { join, dirname, basename } from 'node:path';
 import { spawn } from 'node:child_process';
 import { pickAsset, pickCudart, PINNED_TAG, RELEASES_API, type Target } from './llama-release.ts';
@@ -54,6 +54,8 @@ export interface InstallOptions {
    */
   verify?: (command: string, signal?: AbortSignal) => Promise<{ ok: boolean; detail: string }>;
   signal?: AbortSignal;
+  /** 同じ版が在っても取り直す（在るのに動かないとき）。動く版は、新しい版が動くと確かめてから入れ替える。 */
+  force?: boolean;
 }
 
 export interface Installed {
@@ -117,7 +119,7 @@ export async function install(opts: InstallOptions): Promise<Installed> {
   const dest = join(binDir, tag);
 
   const already = await findInstalled(binDir, tag, { strict: true });
-  if (already) {
+  if (already && !opts.force) {
     log(`すでにあります: ${already}`);
     return { command: already, tag, asset: '(取得済み)', why: '既に用意されています' };
   }
@@ -201,25 +203,35 @@ export async function install(opts: InstallOptions): Promise<Installed> {
     log(`取得しました: ${(cudartBuf.length / 1024 / 1024).toFixed(1)}MB`);
   }
 
+  /*
+   * 一時フォルダへ展開し、動くと確かめてから版の名前へ付け替える。正式な場所へ直接書いていたので、展開の途中で止める
+   * （Ctrl+C・強制終了）と、DLL の欠けた半端な版が「用意できています」になり、`--force` でも取り直せなかった。
+   * 名前の末尾を `.tmp` にしておくと、残っても `clean` が拾う（1 時間より古いもの）。
+   */
+  const work = `${tag}.${process.pid}.tmp`;
+  const staging = join(binDir, work);
+  const retired = join(binDir, `${tag}.${process.pid}.old.tmp`);
+  let moved = false;
   try {
+    await rm(staging, { recursive: true, force: true, maxRetries: 3 });
     log('展開します');
     const entries = unzip(buf);
     // bundle は build/bin/ の下に入っている。階層は捨てて平らに置く。
     // 実行ファイルは同じ場所にある共有ライブラリを見に行くため、
     // 散らかすと動かない。
-    await mkdir(dest, { recursive: true });
+    await mkdir(staging, { recursive: true });
     let found = false;
     for (const e of entries) {
       const name = entryFileName(e.path);
       if (!name) continue;
-      let out = join(dest, name);
+      let out = join(staging, name);
       await mkdir(dirname(out), { recursive: true });
       await writeFile(out, e.data);
       // 置いたのに無いことがある。会社のクラウドドライブは .exe を
       // **黙って落とす**（書けたように見えて、実際には残らない）。
       // 名前を変えて置き直す。中身は同じなので、これで動く。
       if (/\.exe$/i.test(name) && !(await stat(out).catch(() => undefined))) {
-        out = join(dest, name.replace(/\.exe$/i, '.bin'));
+        out = join(staging, name.replace(/\.exe$/i, '.bin'));
         await writeFile(out, e.data);
       }
       if (e.executable || /\.(exe|bin|sh)$/i.test(name) || !name.includes('.')) {
@@ -240,48 +252,72 @@ export async function install(opts: InstallOptions): Promise<Installed> {
         // Windows の join は `\` を区切りと読むので、`..\x.dll` が入れ先のフォルダの外へ出る
         const name = entryFileName(e.path);
         if (!name) continue;
-        await writeFile(join(dest, name), e.data);
+        await writeFile(join(staging, name), e.data);
       }
     }
 
-    const command = (await findInstalled(binDir, tag))!;
+    const trial = (await findInstalled(binDir, work))!;
 
     // 置けたことと動くことは別。実際に一度動かして確かめる。
     // 共有ライブラリを見つけられずに落ちる状態で「用意できました」と
     // 言ってしまうと、次に困るのは使う人になる。
     log('動くか確かめます');
-    const check = await (opts.verify ?? tryRun)(command, opts.signal);
+    const check = await (opts.verify ?? tryRun)(trial, opts.signal);
     if (!check.ok) {
       throw new Error(`置きましたが動きませんでした:\n${check.detail}`);
     }
 
+    // 取り直し（`force`）なら、前の版を脇へ移してから付け替える。付け替えに失敗したら戻す
+    if (await exists(dest)) { await renameRetry(dest, retired); moved = true; }
+    await renameRetry(staging, dest);
+    if (moved) await rm(retired, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
+    const command = (await findInstalled(binDir, tag))!;
     log(`置きました: ${command}`);
     return { command, tag, asset: choice.name, why: choice.why };
   } catch (e) {
-    // 半分だけ置かれた状態を残さない。
-    await rm(dest, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
+    // 半分だけ置かれた状態を残さない。脇へ移した前の版は戻す
+    await rm(staging, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
+    if (moved && !(await exists(dest))) await rename(retired, dest).catch(() => {});
     throw e;
   }
 }
 
+async function exists(path: string): Promise<boolean> {
+  return stat(path).then(() => true, (e: unknown) => {
+    if (isAbsent(e)) return false;
+    throw e;
+  });
+}
+
+/** Windows では、ウイルス対策や索引作りが一瞬掴むと EPERM・EBUSY になる。少し待って付け替え直す */
+async function renameRetry(from: string, to: string): Promise<void> {
+  for (let tries = 0; ; tries++) {
+    try { await rename(from, to); return; } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (tries >= 5 || !(code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) throw e;
+      await new Promise((r) => setTimeout(r, 200 * (tries + 1)));
+    }
+  }
+}
+
 /** 一度だけ起動して、動くかを見る。 */
-async function tryRun(command: string, signal?: AbortSignal): Promise<{ ok: boolean; detail: string }> {
+export async function tryRun(command: string, signal?: AbortSignal): Promise<{ ok: boolean; detail: string }> {
   return new Promise((resolve) => {
     let out = '';
-    const child = spawn(command, ['--version'], { env: runtimeEnv(command), signal });
+    // 返らない版に備えて時間を区切る（区切らないと `llama` が終わらない）
+    const child = spawn(command, ['--version'], { env: runtimeEnv(command), signal, timeout: 30_000 });
     // 流れごとに別の読み手。持ち越しを混ぜると、両方が化ける。
     const readOut = chunkReader();
     const readErr = chunkReader();
     child.stdout?.on('data', (b: Buffer) => { out += readOut(b); });
     child.stderr?.on('data', (b: Buffer) => { out += readErr(b); });
     child.on('error', (e) => resolve({ ok: false, detail: e.message }));
-    // --version は版によって終了コードが違う。番号ではなく、
-    // 「起動できて何か言えたか」で見る。
+    // --version は版によって終了コードが違う。番号ではなく、版を言えたかで見る（doctor・selftest と同じ `answeredVersion`）。
+    // 「何か言えたか」で見ていたので、`GLIBC_2.38' not found` のような起動の失敗も「動く」になっていた
     child.on('close', (code) => {
-      const failed = /error while loading shared libraries|cannot open shared object|not a valid|is not recognized/i.test(out);
       const text = out.trim();
       resolve({
-        ok: !failed && text.length > 0,
+        ok: answeredVersion(out),
         // 「何も出力しませんでした」だけでは、次に何をすればいいか分からない。
         // Windows は必要な DLL が無いと、何も言わずに特定の番号で落ちる。
         // 番号を添えて、そこまで見分けられるようにする。
@@ -295,7 +331,7 @@ async function tryRun(command: string, signal?: AbortSignal): Promise<{ ok: bool
 export async function listInstalled(binDir = defaultBinDir()): Promise<string[]> {
   try {
     return (await readdir(binDir, { withFileTypes: true }))
-      .filter((d) => d.isDirectory())
+      .filter((d) => d.isDirectory() && !d.name.endsWith('.tmp')) // 取得の途中・入れ替えの途中のものは版ではない
       .map((d) => d.name)
       .sort();
   } catch {

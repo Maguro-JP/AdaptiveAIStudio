@@ -5,6 +5,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile, readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { totalmem } from 'node:os';
 import { tempDir } from './tmp.ts';
 import { dutyBoard } from '../src/ui/state.ts';
 import { MachineCache, describeMachine } from '../src/runtime/machine.ts';
@@ -62,7 +63,7 @@ describe('マシンの検出結果', () => {
     assert.deepEqual(again, first);
     assert.equal((await stat(path)).ino, ino, '正しい検出結果を退けて書き直した');
     // 製品の GPU の無い形（gpuName が無く、ディスクの帯域が在る）もそのまま使う。
-    const noGpu = { vramBytes: 0, ramBytes: 8 * 2 ** 30, ramBandwidthBytesPerSec: 40 * 2 ** 30, vramBandwidthBytesPerSec: 0, diskBandwidthBytesPerSec: 2 ** 30, bandwidthEstimated: true };
+    const noGpu = { vramBytes: 0, ramBytes: totalmem(), ramBandwidthBytesPerSec: 40 * 2 ** 30, vramBandwidthBytesPerSec: 0, diskBandwidthBytesPerSec: 2 ** 30, bandwidthEstimated: true, detectedAt: Date.now() };
     await writeFile(path, JSON.stringify(noGpu));
     const ino2 = (await stat(path)).ino;
     assert.deepEqual(await new MachineCache(path).get(), noGpu);
@@ -72,8 +73,40 @@ describe('マシンの検出結果', () => {
   test('正しい検出結果は、検出し直さずにそのまま使う（対）', async () => {
     const dir = await tempDir('aas-machine-ok-');
     const path = join(dir, 'machine.json');
-    const spec = { vramBytes: 0, ramBytes: 8 * 2 ** 30, ramBandwidthBytesPerSec: 1, vramBandwidthBytesPerSec: 0, bandwidthEstimated: true, gpuName: 'テスト' };
+    const spec = { vramBytes: 0, ramBytes: totalmem(), ramBandwidthBytesPerSec: 1, vramBandwidthBytesPerSec: 0, bandwidthEstimated: true, gpuName: 'テスト', detectedAt: Date.now() };
     await writeFile(path, JSON.stringify(spec));
     assert.deepEqual(await new MachineCache(path).get(), spec);
+  });
+
+  const NOW = Date.UTC(2026, 9, 4);
+  const detected = (over: Record<string, unknown> = {}) => ({
+    vramBytes: 0, ramBytes: totalmem(), ramBandwidthBytesPerSec: 1, vramBandwidthBytesPerSec: 0, bandwidthEstimated: true, detectedAt: NOW, ...over,
+  });
+
+  test('**古い・RAM が違う・時刻の無い検出結果は取り直す**（後から入れた GPU のドライバ・足した RAM を拾う）', async () => {
+    const path = join(await tempDir('aas-machine-ttl-'), 'machine.json');
+    let calls = 0;
+    const cache = (now: number) => new MachineCache(path, { now: () => now, detect: async () => { calls++; return detected({ detectedAt: now, gpuName: 'new' }); } });
+    for (const old of [
+      detected({ detectedAt: NOW - 8 * 86_400_000 }),
+      detected({ ramBytes: totalmem() + 2 ** 30 }),
+      { ...detected(), detectedAt: undefined },
+    ]) {
+      await writeFile(path, JSON.stringify(old));
+      assert.equal((await cache(NOW).get()).gpuName, 'new', JSON.stringify(old));
+    }
+    assert.equal(calls, 3);
+    assert.equal((await cache(NOW + 86_400_000).get()).gpuName, 'new', '取り直した結果は、次から使う');
+    assert.equal(calls, 3);
+  });
+
+  test('**GPU を調べ切れなかった結果は残さず、次に調べ直す**（「GPU なし」を使い続けない）', async () => {
+    const path = join(await tempDir('aas-machine-unsure-'), 'machine.json');
+    let unsure = true;
+    const cache = new MachineCache(path, { now: () => NOW, detect: async () => (unsure ? detected({ gpuUnsure: true }) : detected({ vramBytes: 8 * 2 ** 30, gpuName: 'RTX' })) });
+    assert.equal((await cache.get()).gpuUnsure, true);
+    await assert.rejects(stat(path), '調べ切れなかった結果を書いた');
+    unsure = false;
+    assert.equal((await cache.get()).gpuName, 'RTX');
   });
 });

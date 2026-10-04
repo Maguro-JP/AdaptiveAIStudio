@@ -57,6 +57,8 @@ function portFree(port: number): Promise<boolean> {
   });
 }
 
+/** 埋まっている口を飛ばして試す数。 */
+const PORT_TRIES = 20;
 export interface LlamaCppOptions {
   /** llama-server の実行パス */
   command?: string;
@@ -99,6 +101,11 @@ export class LlamaCppRuntime implements LocalRuntime {
   readonly #specs = new Map<string, ModelSpec>();
   /** 起こしたが、まだ答えられるようになっていないもの。止めるときに、これも落とす。 */
   readonly #starting = new Set<ChildProcess>();
+  /**
+   * 起こしている最中のモデル。同じモデルを二本同時に起こすと、後の記録が前を上書きし、前の子は止める対象から外れて
+   * 残った（VRAM を二重に使い、Windows では残り続ける）。起こしている最中なら、その起動を待って同じものを返す。
+   */
+  readonly #loading = new Map<string, Promise<LoadedModel>>();
   #nextPort: number;
 
   constructor(opts: LlamaCppOptions) {
@@ -187,7 +194,17 @@ export class LlamaCppRuntime implements LocalRuntime {
     });
   }
 
-  async ensureLoaded(ref: string, signal?: AbortSignal): Promise<LoadedModel> {
+  ensureLoaded(ref: string, signal?: AbortSignal): Promise<LoadedModel> {
+    const pending = this.#loading.get(ref);
+    if (pending) return pending;
+    const loading = this.#load(ref, signal).finally(() => {
+      if (this.#loading.get(ref) === loading) this.#loading.delete(ref);
+    });
+    this.#loading.set(ref, loading);
+    return loading;
+  }
+
+  async #load(ref: string, signal?: AbortSignal): Promise<LoadedModel> {
     const already = this.#running.get(ref);
     if (already) {
       return {
@@ -199,17 +216,23 @@ export class LlamaCppRuntime implements LocalRuntime {
     const plan = this.planFor(ref);
     if (!plan) throw new Error(`モデルの規模を判定できません: ${ref}`);
 
-    const port = this.#nextPort++;
-    const baseUrl = `http://127.0.0.1:${port}/v1`;
     /*
      * **埋まっている口に起こさない。**埋まっていると、起こした llama-server は口を取れずに落ちるが、
      * 下の待ちは**先に居る誰か**（前に残った llama-server、もう一つの AAS）の返事を「準備できた」と読む。
      * 違うモデルが答え、しかもそれは止める対象に入らない。
+     * 埋まっていたら次の番号を試す（前は投げていたので、前の llama-server が 18080 を握ったままだと、起動のたびに落ちた）。
+     * 空いている口を選ぶので、違うモデルが答える心配は無い。
      */
-    if (!(await portFree(port))) {
-      throw new Error(`口 ${port} は既に使われています。前の llama-server が残っているか、別のプログラムが使っています。`
-        + 'タスク マネージャーで llama-server を終わらせるか、設定の runtime.basePort を変えてください。');
+    const first = this.#nextPort;
+    let port = this.#nextPort++;
+    while (!(await portFree(port))) {
+      if (port - first >= PORT_TRIES - 1) {
+        throw new Error(`口 ${first}〜${port} はどれも使われています。前の llama-server が残っているか、別のプログラムが使っています。`
+          + 'タスク マネージャーで llama-server を終わらせるか、設定の runtime.basePort を変えてください。');
+      }
+      port = this.#nextPort++;
     }
+    const baseUrl = `http://127.0.0.1:${port}/v1`;
     const args = this.#buildArgs(ref, plan, port);
 
     this.#opts.onLog?.(`起動: ${this.#opts.command} ${args.join(' ')}`);

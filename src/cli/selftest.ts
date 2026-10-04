@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { detectMachine, describeMachine } from '../runtime/machine.ts';
 import { findInstalled, defaultBinDir, answeredVersion } from '../runtime/llama-install.ts';
+import { runtimeEnv } from '../runtime/llama-env.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { pickAsset } from '../runtime/llama-release.ts';
 import { loadConfig } from '../config.ts';
@@ -118,7 +119,8 @@ try {
 const binDir = defaultBinDir();
 const llama = await findInstalled(binDir);
 if (llama) {
-  const out = await run(llama, ['--version']);
+  // 本番の起動と同じ env（隣の共有ライブラリを見つけさせる）で、時間を区切って起こす
+  const out = await run(llama, ['--version'], process.cwd(), { env: runtimeEnv(llama), timeout: 30_000 });
   const works = answeredVersion(out.text);
   add('llama-server', works, works ? out.text.trim().split('\n')[0]! : `動きません: ${out.text.trim().slice(0, 200)}`);
 } else {
@@ -226,7 +228,9 @@ for (const line of tellWhereItWent(
 const bad = results.filter((r) => r.ok === false).length;
 process.exit(bad > 0 ? 1 : 0);
 
-function run(command: string, args: string[], cwd = process.cwd()): Promise<{ text: string; code: number | null }> {
+function run(
+  command: string, args: string[], cwd = process.cwd(), extra: { env?: NodeJS.ProcessEnv; timeout?: number } = {},
+): Promise<{ text: string; code: number | null }> {
   return new Promise((resolve) => {
     let text = '';
     /*
@@ -237,7 +241,7 @@ function run(command: string, args: string[], cwd = process.cwd()): Promise<{ te
      */
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(command, args, { cwd });
+      child = spawn(command, args, { cwd, ...extra });
     } catch (e) {
       resolve({ text: (e as Error).message, code: null });
       return;

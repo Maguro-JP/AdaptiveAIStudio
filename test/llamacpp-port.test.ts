@@ -1,5 +1,5 @@
 /**
- * llama-server を、埋まっている口に起こさない。止めるときは、読み込み中のものも落とす。
+ * llama-server を、埋まっている口に起こさない（次の空いた口に起こす）。止めるときは、読み込み中のものも落とす。
  *
  * 埋まっている口に起こすと、起こした方は口を取れずに落ちるが、準備の待ちは先に居る誰か（前に残った
  * llama-server、もう一つの AAS）の返事を「準備できた」と読んでいた。違うモデルが答え、それは止める対象にも入らない。
@@ -33,7 +33,7 @@ async function modelsDir(): Promise<string> {
 }
 
 describe('llama-server の口', () => {
-  test('口が埋まっていたら、先に居る相手を「準備できた」と読まずに断る', async () => {
+  test('**口が埋まっていたら、先に居る相手を「準備できた」と読まずに、次の空いた口に起こす**', async () => {
     // 前に残った llama-server の代わり。/models に 200 で答える
     const squatter: Server = createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -46,11 +46,29 @@ describe('llama-server の口', () => {
       machine: REFERENCE_MACHINE, basePort: port, startupTimeoutMs: 15_000,
     });
     try {
-      await assert.rejects(() => rt.ensureLoaded('a-7b.gguf'), /既に使われています/);
-      assert.deepEqual(rt.loaded(), [], '先に居る相手を、自分が起こしたものとして数えた');
+      const got = await rt.ensureLoaded('a-7b.gguf');
+      assert.notEqual(new URL(got.baseUrl).port, String(port), '埋まっている口を自分のものとして使った');
+      assert.equal(rt.loaded().length, 1);
+      // 起こした相手が答える（先に居る相手は other-model と答える）
+      const res = await fetch(`${got.baseUrl}/models`);
+      assert.doesNotMatch(await res.text(), /other-model/);
     } finally {
       await rt.shutdown();
       await new Promise<void>((ok) => squatter.close(() => ok()));
+    }
+  });
+
+  test('**同じモデルを同時に頼んでも、起こすのは一つ**（二つ起こすと、前の子が止める対象から外れて残っていた）', async () => {
+    const rt = new LlamaCppRuntime({
+      command: process.execPath, commandArgs: [FAKE], modelsDir: await modelsDir(),
+      machine: REFERENCE_MACHINE, basePort: await freePort(), startupTimeoutMs: 15_000,
+    });
+    try {
+      const [a, b] = await Promise.all([rt.ensureLoaded('a-7b.gguf'), rt.ensureLoaded('a-7b.gguf')]);
+      assert.equal(a.baseUrl, b.baseUrl);
+      assert.equal(rt.loaded().length, 1);
+    } finally {
+      await rt.shutdown();
     }
   });
 

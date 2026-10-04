@@ -13,6 +13,7 @@ import { buildRuntime } from '../core/runtime-setup.ts';
 import { resolveCounting } from '../core/counting.ts';
 import { modelsDirNote, programDirNote } from './doctor-paths.ts';
 import { findInstalled, answeredVersion } from '../runtime/llama-install.ts';
+import { runtimeEnv } from '../runtime/llama-env.ts';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { join } from 'node:path';
 import { readdir } from 'node:fs/promises';
@@ -248,7 +249,9 @@ function runOnce(command: string, args: string[]): Promise<string> {
     // 投げさせると一覧も報告も出ずに落ちる。「在りますが、動きません」として言う。
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(command, args);
+      // 隣の共有ライブラリを見つけさせる（Linux・macOS）。本番の起動と同じ env で起こさないと、正常なものを「動きません」と言う。
+      // 返らない版に備えて時間を区切る（区切らないと doctor が終わらない）
+      child = spawn(command, args, { env: runtimeEnv(command), timeout: 30_000 });
     } catch (e) {
       resolve((e as Error).message);
       return;

@@ -737,6 +737,53 @@ describe('bundle を組み直すとき', () => {
     assert.equal(existsSync(join(out, 'data')), false, '頼まれていないのに data を残した');
   });
 
+  test('**組む途中で落ちたら、置いたものを消して前の版に戻す**（前の版を先に消していたので、動く版が一つも残らなかった）', async () => {
+    const out = await tempDir('aas-rebundle-fail-');
+    const { readdir } = await import('node:fs/promises');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-good' });
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(join(out, 'data'), { recursive: true });
+    await writeFile(join(out, 'data', 'keep.txt'), '利用者の data');
+    // 無い zip を渡すと、app を置き始めた後（Node を取り出すところ）で落ちる
+    await assert.rejects(bundle({ out, srcRoot: installRoot(), version: 'test-broken', keepData: true, nodeZip: join(out, 'no-such.zip') }));
+    assert.match(await readFile(join(out, 'VERSION'), 'utf8'), /test-good/, '前の版に戻っていない');
+    assert.ok(existsSync(join(out, 'AdaptiveAIStudio.cmd')));
+    assert.ok(existsSync(join(out, 'app', 'package.json')));
+    assert.equal(await readFile(join(out, 'data', 'keep.txt'), 'utf8'), '利用者の data');
+    assert.deepEqual((await readdir(out)).filter((n) => n.startsWith('.old-')), [], '退避フォルダが残っている');
+  });
+
+  test('**組み立て元の node_modules がリンクでも、写すのは中身で、組み立て元の型定義と .map を消さない**', async () => {
+    const { mkdir, readdir, symlink, copyFile, stat } = await import('node:fs/promises');
+    const { lstatSync } = await import('node:fs');
+    const { bundle, PAYLOAD } = await import('../scripts/bundle.mjs');
+    // 組み立て元: 製品の中身はフォルダごとリンクし（Windows では junction）、node_modules だけ作り物にする
+    const src = await tempDir('aas-linked-src-');
+    for (const item of PAYLOAD) {
+      if (item === 'node_modules') continue;
+      const from = join(installRoot(), item);
+      const s = await stat(from).catch(() => undefined);
+      if (!s) continue;
+      if (s.isDirectory()) await symlink(from, join(src, item), 'junction');
+      else await copyFile(from, join(src, item));
+    }
+    for (const extra of ['launcher.cmd', 'README.txt']) {
+      if (existsSync(join(installRoot(), extra)) && !existsSync(join(src, extra))) await copyFile(join(installRoot(), extra), join(src, extra));
+    }
+    const modules = await tempDir('aas-linked-modules-');
+    await mkdir(join(modules, 'pkg'), { recursive: true });
+    await writeFile(join(modules, 'pkg', 'index.d.ts'), 'export {};');
+    await writeFile(join(modules, 'pkg', 'index.js.map'), '{}');
+    await writeFile(join(modules, 'pkg', 'index.js'), '');
+    await symlink(modules, join(src, 'node_modules'), 'junction');
+    const out = await tempDir('aas-linked-out-');
+    await bundle({ out, srcRoot: src, version: 'test-linked' });
+    assert.deepEqual((await readdir(join(modules, 'pkg'))).sort(), ['index.d.ts', 'index.js', 'index.js.map'], '組み立て元の中身を消した');
+    assert.equal(lstatSync(join(out, 'app', 'node_modules')).isSymbolicLink(), false, '配る先にリンクを入れた');
+    assert.ok(existsSync(join(out, 'app', 'node_modules', 'pkg', 'index.js')));
+  });
+
   test('組んだものでないフォルダを出力先に渡されたら、組まずに止め、中身を消さない', async () => {
     // 中に入れてくれるつもりで既存のフォルダ（デスクトップなど）を渡すと、data 以外の中身がすべて消えていた
     const out = await tempDir('aas-rebundle-foreign-');

@@ -14,13 +14,19 @@ const c = {
   yellow: (s: string) => `\x1b[33m${s}\x1b[0m`,
 };
 
-const root = resolve(process.argv[2] ?? process.cwd());
+// 場所だけを受け取る。`--yes` のような引数を場所と読むと、別の場所を見て「git 管理下ではありません」と言っていた
+const given = process.argv[2];
+if (given?.startsWith('-')) {
+  console.error(`知らない引数です: ${given}（受け取るのは、新しくする場所だけです）`);
+  process.exit(2);
+}
+const root = resolve(given ?? process.cwd());
 console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — 更新'));
 
 const status = await checkUpdate(root);
 console.log(`\n${describeUpdate(status)}\n`);
 
-if (!status.can) process.exit(status.behind === 0 ? 0 : 1);
+if (!status.can) process.exit(status.failed || status.behind > 0 ? 1 : 0);
 
 // 対話できない場所（ダブルクリック以外、他の道具から呼ばれた等）では、
 // 黙って取り込まない。確認できないなら、確認できないと言って止まる。

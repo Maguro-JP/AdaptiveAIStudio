@@ -12,11 +12,11 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, readdir } from 'node:fs/promises';
+import { mkdir, writeFile, readdir, symlink, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 // @ts-expect-error 型を持たない script を、そのまま呼んで確かめる。
-import { pruneForTarget, targetFromNodeDir } from '../scripts/bundle.mjs';
+import { pruneForTarget, targetFromNodeDir, parseBundleArgs } from '../scripts/bundle.mjs';
 
 const PLATFORMS = [
   'linux-arm64', 'linux-armv7l', 'linux-x64', 'linux-x64-cuda',
@@ -160,9 +160,43 @@ describe('配る先を、渡された Node から決める', () => {
     assert.ok(left.includes('typescript'), '投げる前に消している');
   });
 
+  test('**組んだ先の中の名前でも、リンクを辿った先が外なら、消さずに投げる**', async () => {
+    // git worktree などで組み立て元の node_modules がリンクだと、写した app/node_modules もリンクになり、片づけが
+    // リンクを辿って組み立て元の中身を消していた（手元の typescript・@types が消えたのは、これだった）
+    const { dir: real } = await modules();
+    const out = await tempDir('aas-linked-out-');
+    await mkdir(join(out, 'app'), { recursive: true });
+    const linked = join(out, 'app', 'node_modules');
+    await symlink(real, linked, 'junction'); // Windows でも管理者権限なしで作れる形
+    await assert.rejects(() => pruneForTarget(linked, 'win-x64', () => {}, out), /組んだ先の外/);
+    assert.ok((await readdir(join(real, '@node-llama-cpp'))).length > 1, '辿った先を消している');
+    await rm(linked, { force: true, recursive: false }).catch(() => undefined);
+  });
+
   test('組んだ先そのものを渡されても、投げる（対）', async () => {
     // `out` と同じ場所を渡すのは、`app/node_modules` の組み立てを間違えた形。
     const { out } = await modules();
     await assert.rejects(() => pruneForTarget(out, 'win-x64', () => {}, out), /組んだ先の外/);
+  });
+});
+
+describe('bundle の引数', () => {
+  test('**同じ指定が二度来たら後のものを採り、`--x=v` の形も読む**（npm run bundle の既定の --out が、足した --out を隠していた）', () => {
+    assert.equal(parseBundleArgs(['--node-here', '--out', 'dist/a', '--out', 'D:\\x']).out, 'D:\\x');
+    assert.equal(parseBundleArgs(['--out=dist/b']).out, 'dist/b');
+  });
+
+  test('**--node-zip・--node-exe を渡したら、既定の --node-here より先に使う**', () => {
+    const a = parseBundleArgs(['--node-here', '--out', 'dist/a', '--node-zip', 'node-v22-win-x64.zip']);
+    assert.equal(a.nodeHere, false);
+    assert.equal(a.nodeZip, 'node-v22-win-x64.zip');
+    assert.equal(parseBundleArgs(['--node-here', '--node-exe=node.exe']).nodeHere, false);
+    assert.equal(parseBundleArgs(['--node-here']).nodeHere, true);
+  });
+
+  test('**知らない引数・値の無い指定は断る**（黙って捨てると、打ったつもりの指定が効かないまま「できました」になる）', () => {
+    assert.throws(() => parseBundleArgs(['--node-heer']), /知らない引数です: --node-heer/);
+    assert.throws(() => parseBundleArgs(['--out']), /--out に値がありません/);
+    assert.throws(() => parseBundleArgs(['--out', '--keep-data']), /--out に値がありません/);
   });
 });

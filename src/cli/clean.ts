@@ -30,3 +30,5 @@ console.log(c.green(`  ${mb(freed)} 空けました`));
 for (const f of failed) {
   console.log(c.yellow(`  消せませんでした（使用中かもしれません）: ${f}`));
 }
+// 消せなかったものがあれば、失敗として返す（呼んだ側が「片づいた」と受け取らないように）
+if (failed.length > 0) process.exitCode = 1;
