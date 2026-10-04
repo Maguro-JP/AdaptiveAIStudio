@@ -33,6 +33,8 @@ async function roleAwareServer(answers: Record<string, string>) {
       const roleId = Object.keys(answers).find((id) => system.includes(id)) ?? 'unknown';
       if (!seenRoles.includes(roleId)) seenRoles.push(roleId);
 
+      // 落ちるモデルの形（500）
+      if (answers[roleId] === '__500__') { res.writeHead(500, { 'content-type': 'text/plain' }); return res.end('broken'); }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       const text = answers[roleId] ?? '問題なし';
       res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
@@ -86,6 +88,16 @@ async function panel(answers: Record<string, string>, roleIds: string[]) {
     await server.close();
   }
 }
+
+describe('合議で落ちた担当', () => {
+  test('モデルが落ちた担当は「問題なし」ではなく失敗と数える', async () => {
+    // 偽の相手は、決まり文に入っている役職の名前で見分ける
+    const { events } = await panel({ WARDEN: '__500__' }, ['tester']);
+    const mine = events.filter((e) => 'roleId' in e && e.roleId === 'tester');
+    assert.ok(mine.some((e) => e.type === 'failed'), JSON.stringify(mine));
+    assert.ok(!mine.some((e) => e.type === 'noFinding'), JSON.stringify(mine));
+  });
+});
 
 describe('合議', () => {
   test('気質の違う担当が、それぞれ違うものを拾う', async () => {

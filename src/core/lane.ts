@@ -19,7 +19,9 @@ export class Semaphore {
   readonly #waiting: Array<() => void> = [];
 
   constructor(limit: number) {
-    this.#available = Math.max(1, limit);
+    // 数でないもの（設定で書き忘れた undefined・NaN）は 1 に倒す。Math.max(1, undefined) は NaN になり、枠が一つも空かずに
+    // 待ち続けていた（■ も届かない）
+    this.#available = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 1;
   }
 
   get available(): number {

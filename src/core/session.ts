@@ -1069,6 +1069,8 @@ export class Session {
         return report;
       }
 
+      const worked = verified === 'passed' && changed.length > 0 && report.verdict !== 'rejected'
+        && !members.some((m) => m.state === 'failed');
       // 起きたことを覚える。同じ手を二度試さないため。
       this.memory.remember({
         kind: 'attempt',
@@ -1086,12 +1088,14 @@ export class Session {
         // 動かない手を「うまくいった手」として覚え続ける。
         // 確かめて落ちたときだけ「駄目だった手」。分からない（時間切れ・読めない）・確かめていない・元からは、良し悪しを付けない
         // （送り口と同じ。「駄目だった」は遠くまで運ばれ、次の段取りに避ける手として渡る）
-        ...(verified === 'passed' ? { outcome: 'worked' as const } : {}),
+        // 「うまくいった」は、確かめて通ったうえで、何かを変え、落ちた担当が無く、検収も受け取ったときだけ。確かめのコマンドは
+        // 何も変わっていなくても走るので、担当が全員落ちて元から通るテストが通った回まで「うまくいった手」にしていた
+        ...(worked ? { outcome: 'worked' as const } : {}),
         ...(verified === 'failed' ? { outcome: 'failed' as const } : {}),
         source: 'plan',
         root: this.root,
       });
-      this.#gradeRecall(verified === 'passed' ? 'passed' : verified === 'failed' ? 'failed' : verified === 'unsure' ? 'unsure' : 'notRun');
+      this.#gradeRecall(worked ? 'passed' : verified === 'failed' ? 'failed' : verified === 'unsure' ? 'unsure' : 'notRun');
       this.#compactMemory();
       // 止めた規則が、通り道になったのか邪魔になったのかは、結末で決まる。
       this.#harness.endTask(report.verdict === 'accepted' ? 'completed' : 'failed');

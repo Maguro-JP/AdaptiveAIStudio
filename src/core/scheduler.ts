@@ -62,7 +62,9 @@ export class Scheduler {
 
   constructor(lanes: LaneConfig[], maxTotalParallel?: number) {
     for (const l of lanes) this.#lanes.set(l.id, new Lane(l));
-    this.#maxTotal = maxTotalParallel ?? Math.max(1, lanes.reduce((n, l) => n + l.parallel, 0));
+    // 数でない並べる数は 1 に倒す（NaN だと上限が効かないか、何も始まらない）
+    const slots = (n: unknown): number => (typeof n === 'number' && Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1);
+    this.#maxTotal = maxTotalParallel !== undefined ? slots(maxTotalParallel) : Math.max(1, lanes.reduce((n, l) => n + slots(l.parallel), 0));
   }
 
   lane(id: string): Lane | undefined {

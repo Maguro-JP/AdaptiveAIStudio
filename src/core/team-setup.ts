@@ -5,6 +5,7 @@
  * 入口（`src/cli/team.ts`）の中に書いていると、モデルを立てないと一度も
  * 通らない。組み立てだけを外に出せば、手元で押して確かめられる。
  */
+import type { ToolCall } from '../providers/contract.ts';
 import { join } from 'node:path';
 import type { AasConfig } from '../config.ts';
 import type { Tool } from '../agent/tools/types.ts';
@@ -140,6 +141,9 @@ export async function wireTeam(
    */
   const outside = new OutsideChanges(root, outsideLimits);
   await outside.before();
+  // 依頼全体の呼び出し。担当ごとの包みで共有し、「一つの依頼で何件まで書くか」を依頼全体で数える
+  // （担当ごとの履歴だけで数えていたので、担当の数だけ上限が増えていた。段取りの道と同じ形にする）
+  const taskHistory: ToolCall[] = [];
   return {
     // 履歴は依頼ごとに分ける。一つを使い回すと、読んでから書く規則が
     // **別の担当が読んだこと**で通ってしまう（`Harness.forTask()`）。
@@ -147,7 +151,7 @@ export async function wireTeam(
       const role = item.roleId ? roles.get(item.roleId) : undefined;
       // 役職を名乗ったのに見つからない担当へ、全部のツールを渡さない（読むだけにする）。名乗っていない担当は今までどおり全部。
       const tools = role ? toolsForRole(role, pool) : item.roleId ? pool.read : bare;
-      return harness.forTask().wrapAll(tools, () => item.instruction);
+      return harness.forTask(taskHistory).wrapAll(tools, () => item.instruction);
     },
     /*
      * 役職で絞ってから包む。**包みを外さない。**
@@ -159,7 +163,7 @@ export async function wireTeam(
       if (!role) return undefined;
       return {
         system: baseSystem ? `${baseSystem}\n\n${buildSystemPrompt(role)}` : buildSystemPrompt(role),
-        tools: harness.forTask().wrapAll(toolsForRole(role, pool), () => item.instruction),
+        tools: harness.forTask(taskHistory).wrapAll(toolsForRole(role, pool), () => item.instruction),
       };
     },
     beforeWrite: (path, previous) => undo.capture(path, previous),
