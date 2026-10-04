@@ -12000,3 +12000,11 @@ write を持たせない」（`dropWriteIfOutbound`）は役職にだけ効か�
   - 日課の期は機械の時間帯で決める（`clock.ts` の「機械の時間帯に寄らない」とはそろっていない。不具合とは判じていない）
 触る場所: `src/harness/duties.ts`（`complete`）、`src/core/session.ts`（日課・考えの例外）、`src/roles/registry.ts`（`sanitizeOverride`）、
 `src/roles/ledger.ts`（`sync`）、`src/harness/idle.ts`（`records`）、`src/core/journals.ts`、`src/core/completion.ts`、`test/roles-core-gaps.test.ts`
+
+レビューで挙がった細かい点も直した（2 件は、直す前の版で新しい試験が落ちることを確かめた）。
+- 名簿: `formerly` に今も名簿に居る役職の id を書いても、改名とは扱わない（名簿の別名と同じ扱い。居る役職との差分を変更として知らせていた）
+- `prefers` は strong / fast / any のどれかだけを受ける。extends も項目も無い一件は、捨てた理由を言う
+- 考えごとが投げた回で、止めた操作によるものなら「止められました」と言う（例外の文をそのまま出していた）
+- 日課の期の試験は、時計のモックと偽の相手を、作る途中で投げても必ず戻す
+- 直していないもの: 日課の記録の保存（`DutyRoster.records()`）も、設定に載っている日課の分しか書かない形かもしれない（動かして確かめていない）。
+  役職の記録の名前 `droppedWrite` は、今は形の違う設定の理由も入る（画面と CLI には出ていない）

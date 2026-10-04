@@ -95,6 +95,10 @@ function sanitizeOverride(raw: unknown, said: (text: string) => void): RoleOverr
       delete o[key];
     }
   }
+  if (o.prefers !== undefined && !['strong', 'fast', 'any'].includes(o.prefers as string)) {
+    said(`${o.id}: prefers は strong / fast / any のどれかです。外しました`);
+    delete o.prefers;
+  }
   if (o.retired !== undefined && typeof o.retired !== 'boolean') {
     said(`${o.id}: retired が true / false ではないので外しました`);
     delete o.retired;
@@ -218,7 +222,8 @@ export class RoleRegistry {
     const base = this.#roles.get(o.extends ?? o.id);
     if (!base && (!o.name || !o.responsibility || !o.disposition || !o.access)) {
       // 土台も無く、必要な項目も揃っていないものは登録しない。
-      // 中途半端な役職は、いない方がまし。
+      // 中途半端な役職は、いない方がまし。黙って捨てると、書いたのに居ない理由が分からないので言う
+      this.#dropped.push(`${o.id}: extends が無く、name・responsibility・disposition・access も揃っていないので読みませんでした`);
       return;
     }
     const inherits = o.extends === undefined || o.extends === o.id;

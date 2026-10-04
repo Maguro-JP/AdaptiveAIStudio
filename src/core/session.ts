@@ -1290,7 +1290,7 @@ export class Session {
     } catch (e) {
       // 考えに失敗しても、この場所は止まらない。ただし黙って終えない（「選びました」の後に何も出ず、数えた回も保存しなかった）。
       // 落ちた回と同じ道（保存して `failed` を出す）を通す
-      broken = `考えの途中で止まりました: ${e instanceof Error ? e.message : String(e)}`;
+      broken = ac.signal.aborted ? '止められました' : `考えの途中で止まりました: ${e instanceof Error ? e.message : String(e)}`;
     } finally {
       this.#conv.running = undefined;
     }

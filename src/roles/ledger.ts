@@ -86,7 +86,9 @@ export class RoleLedger {
 
       if (!before) {
         // 改名なら、前の名前の記録を引き継ぐ
+        // 今も名簿に居る役職は前の名前ではない（名簿の別名も、居る役職の id は旧名にしない。ここだけ扱いがずれていた）
         const previous = (role.formerly ?? [])
+          .filter((id) => !current.has(id))
           .map((id) => this.#known.get(id))
           .find((s) => s !== undefined);
         if (!previous) {
