@@ -1352,11 +1352,16 @@ async function loadUndo() {
       if (!confirm(`${willTouch.length} 件のファイルを戻します。${also}\n\n${willTouch.join('\n')}${wontSay}`)) return;
       back.disabled = true;
       try {
-        const r = await fetch('/api/undo', {
-          method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ id: p.id }),
-        });
-        const body = await r.json().catch(() => ({}));
+        // 見ていた一番新しい戻り先を添える（確かめている間に新しい回ができたら、名前を出していない回まで戻さない）
+        const ask = (force) => JSON.stringify({ id: p.id, latest: list[0]?.id, force });
+        let r = await fetch('/api/undo', { method: 'POST', headers: { 'content-type': 'application/json' }, body: ask(false) });
+        let body = await r.json().catch(() => ({}));
+        // 戻り先の後に変わったファイルがある。黙って消さず、それでも戻すかを訊く
+        if (r.status === 409 && Array.isArray(body.conflict)) {
+          if (!confirm(`戻り先の後に変わったファイルがあります。戻すと、その変更も消えます。\n\n${body.conflict.join('\n')}\n\nそれでも戻しますか？`)) return;
+          r = await fetch('/api/undo', { method: 'POST', headers: { 'content-type': 'application/json' }, body: ask(true) });
+          body = await r.json().catch(() => ({}));
+        }
         if (!r.ok) alert(body.error ?? '戻せませんでした');
         // 戻せたが、言わなければいけないことがある（戻せなかったファイル・片づけられなかった戻り先）
         else if (Array.isArray(body.warnings) && body.warnings.length > 0) alert(body.warnings.join('\n\n'));

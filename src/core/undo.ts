@@ -14,7 +14,9 @@
  *   ・未コミットの直しは git でも戻せない
  * ので、git の有無に関わらず効くものを別に持つ。
  */
-import { readFile, writeFile, mkdir, unlink, stat, readdir, rename, rm, realpath } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, unlink, stat, readdir, rename, rm, realpath, open as openFile, chmod } from 'node:fs/promises';
+import { statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { safeResolve } from '../agent/tools/paths.ts';
 import { putBack, putBackOrder, contentOf, contentBytes, isAbsent, type FileContent } from '../harness/put-back.ts';
@@ -36,12 +38,19 @@ export interface UndoPoint {
    * 選ぶ所に出せるように、戻り先そのものに書いておく。
    */
   skipped?: string[];
+  /**
+   * 始めた順の番号。並びは時計でなくこれで決める（時計を戻すと、新しい回が古い回より下に並び、「ここまで戻す」が
+   * 新しい回を飛ばして途中の姿にした）。この番号を持たない前の記録は 0 として、時計で並べる。
+   */
+  seq?: number;
 }
 
 interface Saved {
   path: string;
   /** 元々無かったファイルは undefined。戻すときは消す。utf8 で往復しないものはバイト列。 */
   content?: FileContent;
+  /** 書く前の権限（実行の権限など）。消されたファイルを作り直すときに戻す。 */
+  mode?: number;
 }
 
 /**
@@ -52,6 +61,7 @@ interface StoredFile {
   path: string;
   content?: string;
   base64?: string;
+  mode?: number;
 }
 
 interface Stored extends UndoPoint {
@@ -61,6 +71,32 @@ interface Stored extends UndoPoint {
    * 戻り先が今の作業場に当たり、別の作業場のファイルを上書きし、作ったものを消していた。
    */
   root?: string;
+  /**
+   * その回が書き終えた姿（道ごとの中身のハッシュ。無いなら null）。戻す前に、いまの中身と比べる。
+   * 比べずに戻していたので、戻り先の後に外のエディタ等で入れた直しを、黙って消していた。
+   */
+  after?: Record<string, string | null>;
+}
+
+/** 戻す前に、選んだ一覧が古くなっていた（その間に新しい戻り先ができた）。名前を出していない回まで戻さない。 */
+export class UndoStale extends Error {}
+
+/** 戻り先の後に、記録の外で変わったファイルがある。黙って消さない（`force` で、それでも戻す）。 */
+export class UndoConflict extends Error {
+  readonly paths: string[];
+  constructor(paths: string[]) {
+    super(`戻り先の後に変わったファイルがあります（${paths.join(', ')}）。戻すと、その変更も消えます`);
+    this.paths = paths;
+  }
+}
+
+/** 中身のハッシュ。無いファイルは null。 */
+async function digestOf(abs: string): Promise<string | null> {
+  const bytes = await readFile(abs).catch((e: unknown) => {
+    if (isAbsent(e)) return null;
+    throw e;
+  });
+  return bytes === null ? null : createHash('sha256').update(bytes).digest('hex');
 }
 
 /** 作業場の根を比べられる形にする（Windows と macOS は大文字小文字を区別しない）。 */
@@ -92,7 +128,10 @@ let tmpSeq = 0;
 async function writeStored(path: string, point: Stored): Promise<void> {
   const tmp = `${path}.${process.pid}.${++tmpSeq}.tmp`;
   try {
+    // 書いた中身をディスクに落としてから名前を付け替える（落とさずに付け替えると、直後に電源が落ちたとき、長さ 0 の戻り先が残る）
     await writeFile(tmp, JSON.stringify(point), 'utf8');
+    const fh = await openFile(tmp, 'r+');
+    try { await fh.sync(); } finally { await fh.close(); }
     await rename(tmp, path);
   } catch (e) {
     await rm(tmp, { force: true }).catch(() => undefined);
@@ -101,15 +140,25 @@ async function writeStored(path: string, point: Stored): Promise<void> {
 }
 
 function toStored(saved: Saved): StoredFile {
+  const mode = saved.mode === undefined ? {} : { mode: saved.mode };
   if (saved.content === undefined) return { path: saved.path };
   return typeof saved.content === 'string'
-    ? { path: saved.path, content: saved.content }
-    : { path: saved.path, base64: saved.content.toString('base64') };
+    ? { path: saved.path, content: saved.content, ...mode }
+    : { path: saved.path, base64: saved.content.toString('base64'), ...mode };
 }
 
 function fromStored(file: StoredFile): Saved {
-  if (typeof file.base64 === 'string') return { path: file.path, content: Buffer.from(file.base64, 'base64') };
-  return typeof file.content === 'string' ? { path: file.path, content: file.content } : { path: file.path };
+  const mode = typeof file.mode === 'number' && Number.isInteger(file.mode) ? { mode: file.mode & 0o777 } : {};
+  if (typeof file.base64 === 'string') return { path: file.path, content: Buffer.from(file.base64, 'base64'), ...mode };
+  return typeof file.content === 'string' ? { path: file.path, content: file.content, ...mode } : { path: file.path };
+}
+
+/** 戻り先の記録として読める形か（壊れた記録を、読めたことにしない）。 */
+function isStored(v: unknown): v is Stored {
+  if (v === null || typeof v !== 'object') return false;
+  const p = v as Partial<Stored>;
+  return typeof p.id === 'string' && typeof p.at === 'number' && Array.isArray(p.files)
+    && (p.paths === undefined || Array.isArray(p.paths));
 }
 
 /** 画面へ配るための中身。文字として読めないもの（二進）は配らない（`undefined` と区別するため `false`）。 */
@@ -197,7 +246,7 @@ export const RECENT_PATHS = 12;
 export class UndoStore {
   readonly #root: string;
   readonly #dir: string;
-  #open: { id: string; at: number; request: string; files: Map<string, Saved>; bytes: number; skipped: string[] } | undefined;
+  #open: { id: string; at: number; seq: number; request: string; files: Map<string, Saved>; bytes: number; skipped: string[] } | undefined;
   /** 大きすぎて控えられなかったもの。黙って落とさないために持つ。 */
   #skipped: string[] = [];
   /**
@@ -223,9 +272,12 @@ export class UndoStore {
    */
   async begin(request: string, now = Date.now()): Promise<void> {
     if (this.#open) await this.end();
+    // 番号は始めたときに振る（並びは「始めた順」。書き終えた順で振ると、後に始まった別の作業が先に閉じたとき、この回の方が新しく見えた）
+    const seq = await this.#nextSeq();
     this.#open = {
       id: `u${now.toString(36)}${Math.random().toString(36).slice(2, 6)}`,
       at: now,
+      seq,
       request: request.split('\n')[0]?.slice(0, 120) ?? '',
       files: new Map(),
       bytes: 0,
@@ -248,7 +300,8 @@ export class UndoStore {
    */
   capture(relPath: string, previous: FileContent | undefined): void {
     const open = this.#open;
-    if (!open || open.files.has(relPath)) return;
+    // 記録できなかった道は、後の書き込みで記録し直さない（そのときの中身は途中の姿。「戻らない」と言ったのに、押すと途中の姿に書き換わった）
+    if (!open || open.files.has(relPath) || open.skipped.includes(relPath)) return;
     const size = contentBytes(previous);
     if (open.bytes + size > MAX_POINT_BYTES) {
       open.skipped.push(relPath);
@@ -256,8 +309,16 @@ export class UndoStore {
       return;
     }
     open.bytes += size;
-    open.files.set(relPath, { path: relPath, content: previous });
+    open.files.set(relPath, { path: relPath, content: previous, ...this.#modeOf(relPath, previous) });
     this.#note(relPath);
+  }
+
+  /** 書く前の権限。在るファイルだけ。取れなければ持たない（戻すときに今の権限のまま）。 */
+  #modeOf(relPath: string, previous: FileContent | undefined, platform: NodeJS.Platform = process.platform): { mode?: number } {
+    if (previous === undefined || platform === 'win32') return {};
+    const abs = safeResolve(this.#root, relPath);
+    if (!abs) return {};
+    try { return { mode: statSync(abs).mode & 0o777 }; } catch { return {}; }
   }
 
   /**
@@ -319,23 +380,46 @@ export class UndoStore {
     this.#skipped = open.skipped;
     if (open.files.size === 0) return undefined;
 
+    // その回が書き終えた姿を記録する（戻す前に、後から入った変化を見つけるため）。読めないものは比べない
+    const after: Record<string, string | null> = {};
+    for (const relPath of open.files.keys()) {
+      const abs = safeResolve(this.#root, relPath);
+      if (!abs) continue;
+      const d = await digestOf(abs).catch(() => undefined);
+      if (d !== undefined) after[relPath] = d;
+    }
+    await mkdir(this.#dir, { recursive: true });
+    const seq = open.seq;
     const point: Stored = {
       id: open.id,
       at: open.at,
+      seq,
       request: open.request,
       paths: [...open.files.keys()],
       files: [...open.files.values()].map(toStored),
       ...(open.skipped.length > 0 ? { skipped: [...open.skipped] } : {}),
       root: (await rootKeys(this.#root)).key,
+      after,
     };
-    await mkdir(this.#dir, { recursive: true });
     await writeStored(join(this.#dir, `${point.id}.json`), point);
     // 古い戻り先の片づけに失敗しても、この戻り先は書けている。書けなかったことにしない（呼ぶ側が「戻せません」と言ってしまう）
     await this.#prune().catch(() => undefined);
     return {
-      id: point.id, at: point.at, request: point.request, paths: point.paths,
+      id: point.id, at: point.at, seq, request: point.request, paths: point.paths,
       ...(point.skipped ? { skipped: point.skipped } : {}),
     };
+  }
+
+  /** 次の番号。今ある戻り先（どの作業場のものでも）の最大の次。並んで始めた回が同じ番号になったときは、始めた時刻で並べる。 */
+  async #nextSeq(): Promise<number> {
+    let max = 0;
+    for (const name of await readdir(this.#dir).catch(() => [] as string[])) {
+      if (!name.endsWith('.json')) continue;
+      const raw = await readFile(join(this.#dir, name), 'utf8').catch(() => '');
+      const m = /"seq":(\d+)/.exec(raw);
+      if (m) max = Math.max(max, Number(m[1]));
+    }
+    return max + 1;
   }
 
   /** 最後に閉じた 1 ターンで、記録できなかったもの。空にしない（画面へ言う側が後で `takeSkipped` で取る）。 */
@@ -394,19 +478,23 @@ export class UndoStore {
         if (!isAbsent(e)) unreadable.push(name);
         continue;
       }
-      if (!raw) continue;
-      try {
-        const p = JSON.parse(raw) as Stored;
-        // 今の作業場の戻り先だけ。根の無い古い記録は、どの作業場のものか分からないので出さない（ここでは消さない。古くなったら `npm run clean` が挙げる）。
-        if (typeof p.id === 'string' && typeof p.root === 'string' && mine.has(p.root)) {
-          points.push({
-            id: p.id, at: p.at, request: p.request, paths: p.paths ?? [],
-            ...(p.skipped && p.skipped.length > 0 ? { skipped: p.skipped } : {}),
-          });
-        }
-      } catch { /* 1件壊れても全部は失わない */ }
+      /*
+       * 空・JSON でない・形が違う記録も「読めない」に入れる（黙って外すと、それを挟んだ古い戻り先まで戻すとき、その回の分だけ当てずに
+       * 「戻した」と返し、どこにも無かった姿にしていた）。1 件壊れても一覧は出す。
+       */
+      let p: unknown;
+      try { p = raw ? JSON.parse(raw) : undefined; } catch { p = undefined; }
+      if (!isStored(p)) { unreadable.push(name); continue; }
+      // 今の作業場の戻り先だけ。根の無い古い記録は、どの作業場のものか分からないので出さない（ここでは消さない。古くなったら `npm run clean` が挙げる）。
+      if (typeof p.root === 'string' && mine.has(p.root)) {
+        points.push({
+          id: p.id, at: p.at, request: p.request, paths: p.paths ?? [],
+          ...(typeof p.seq === 'number' ? { seq: p.seq } : {}),
+          ...(p.skipped && p.skipped.length > 0 ? { skipped: p.skipped } : {}),
+        });
+      }
     }
-    return { points: points.sort((a, b) => b.at - a.at), unreadable };
+    return { points: points.sort((a, b) => (b.seq ?? 0) - (a.seq ?? 0) || b.at - a.at), unreadable };
   }
 
   /**
@@ -416,8 +504,12 @@ export class UndoStore {
    * 一つだけ戻すと、途中だけ古い、どこにも無かった状態になる。
    * 選んだ戻り先を含めて、それより新しいものを新しい方から順に当てる。
    */
-  async restore(id: string): Promise<Restored | undefined> {
+  async restore(id: string, opts: { latest?: string; force?: boolean } = {}): Promise<Restored | undefined> {
     const { points: all, unreadable } = await this.#scan();
+    // 画面が見ていた一番新しい戻り先と違えば、その間に新しい回ができている。名前を出していない回まで戻さない
+    if (opts.latest !== undefined && all[0] && all[0].id !== opts.latest) {
+      throw new UndoStale('戻り先の一覧が変わりました（新しい回が増えています）。一覧を見直してから、もう一度押してください');
+    }
     const at = all.findIndex((p) => p.id === id);
     if (at === -1) {
       // 選んだ戻り先そのものが読めない。「もう無い」と言わない
@@ -465,9 +557,32 @@ export class UndoStore {
         if (isAbsent(e)) continue; // 並んで走る片づけが消した
         throw new Error(`戻り先 ${point.id} を読めないので戻しません（${(e as Error).message}）`);
       }
-      let stored: Stored;
-      try { stored = JSON.parse(raw) as Stored; } catch { continue; }
+      let stored: unknown;
+      try { stored = JSON.parse(raw); } catch { stored = undefined; }
+      // 一覧のときは読めたのに壊れていた（並んで書き換えられた等）。飛ばして当てると途中の姿になるので、何も当てずにやめる
+      if (!isStored(stored)) throw new Error(`戻り先 ${point.id} が壊れているので戻しません`);
       read.push({ id: point.id, stored });
+    }
+    /*
+     * 戻り先の後に、記録の外で変わったファイルを探す。道ごとに、いちばん新しくその道を書いた回が「書き終えた姿」を持っている。
+     * いまの中身がそれと違えば、その後に外のエディタ・ツールで変わっている。黙って消さない（`force` で、それでも戻す）
+     */
+    if (!opts.force) {
+      const seen = new Set<string>();
+      const changedOutside: string[] = [];
+      for (const { stored } of read) {
+        for (const f of stored.files) {
+          if (seen.has(f.path)) continue;
+          seen.add(f.path);
+          const expected = stored.after?.[f.path];
+          if (expected === undefined) continue; // 書き終えた姿を持たない前の記録は比べない
+          const abs = safeResolve(this.#root, f.path);
+          if (!abs) continue;
+          const now = await digestOf(abs).catch(() => undefined);
+          if (now !== undefined && now !== expected) changedOutside.push(f.path);
+        }
+      }
+      if (changedOutside.length > 0) throw new UndoConflict(changedOutside);
     }
     // 新しい方から当てる。古い控えが後に来るので、いちばん古い姿が残る。
     for (const { id: pointId, stored } of read) {
@@ -478,6 +593,8 @@ export class UndoStore {
         if (!was.has(saved.path)) was.set(saved.path, await readText(abs));
         // リンクは辿らず、フォルダには書かず、戻せなければ飛ばす（1件戻せなくても他は戻す）。
         const r = await putBack(this.#root, saved.path, saved.content);
+        // 書く前の権限に戻す（消されたファイルを作り直すと、実行の権限が落ちていた）
+        if (r === 'restored' && saved.mode !== undefined && saved.content !== undefined) await chmod(abs, saved.mode).catch(() => undefined);
         if (r === 'restored' && !touched.includes(saved.path)) touched.push(saved.path);
         last.set(saved.path, r);
         oldest.set(saved.path, point.id);
@@ -499,7 +616,12 @@ export class UndoStore {
       // 片づけられなかったら、そう返す（もう無いなら片づいている）
       if (keep.length === 0) {
         if (!await unlink(file).then(() => true, (e: unknown) => isAbsent(e))) leftover.push(pointId);
-      } else if (!await writeStored(file, { ...stored, paths: keep.map((f) => f.path), files: keep }).then(() => true, () => false)) {
+      } else if (!await writeStored(file, {
+        ...stored, paths: keep.map((f) => f.path), files: keep,
+        // 一度当てようとした道は、書き終えた姿と比べない（当てようとした後の中身は、もう書き終えた姿ではない。比べると、
+        // 原因を除いてもう一度押したときに「後から変わった」で断っていた）
+        after: Object.fromEntries(Object.entries(stored.after ?? {}).filter(([k]) => !keep.some((f) => f.path === k))),
+      }).then(() => true, () => false)) {
         unshrunk.push(pointId);
       }
     }

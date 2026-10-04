@@ -24,7 +24,7 @@ import { StrideBook, strideText } from '../agent/stride.ts';
 import { decompose, stepPrompt } from '../agent/decompose.ts';
 import { Conversations, ID_SHAPE } from '../core/conversations.ts';
 import { loadJournals, type Journals } from '../core/journals.ts';
-import { UndoStore, restoreWarnings } from '../core/undo.ts';
+import { UndoStore, UndoStale, UndoConflict, restoreWarnings } from '../core/undo.ts';
 import { unifiedDiff, diffStat } from '../agent/diff.ts';
 import { revertLines, type RevertPick } from '../agent/hunks.ts';
 import { buildCompletionInput, cleanCompletion } from '../core/completion.ts';
@@ -2424,9 +2424,12 @@ export class UiServer {
     }
 
     if (path === '/api/undo' && req.method === 'POST') {
-      const body = await readBody(req) as { id?: unknown };
+      const body = await readBody(req) as { id?: unknown; latest?: unknown; force?: unknown };
       const id = typeof body?.id === 'string' ? body.id : '';
       if (!id) return send(res, 400, { error: 'id がありません' });
+      // 画面が見ていた一番新しい戻り先（古い一覧のまま戻させない）と、後から変わったファイルがあっても戻すか
+      const latest = typeof body?.latest === 'string' ? body.latest : undefined;
+      const force = body?.force === true;
       const session = await this.session();
       // 動いている最中に戻すと、書いている途中のものと噛み合わない。
       if (this.#busyNow(session)) {
@@ -2440,7 +2443,11 @@ export class UiServer {
       }
       let done: Awaited<ReturnType<typeof session.undo.restore>>;
       try {
-        done = await session.undo.restore(id);
+        done = await session.undo.restore(id, { ...(latest !== undefined ? { latest } : {}), force });
+      } catch (e) {
+        if (e instanceof UndoStale) return send(res, 409, { error: e.message, stale: true });
+        if (e instanceof UndoConflict) return send(res, 409, { error: e.message, conflict: e.paths });
+        throw e;
       } finally {
         session.lock.release(owner);
       }
