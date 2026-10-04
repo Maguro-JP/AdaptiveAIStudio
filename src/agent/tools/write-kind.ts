@@ -9,8 +9,7 @@
  *
  * だから、増やす前にここへ集める。
  */
-import { readFile } from 'node:fs/promises';
-import { isAbsent } from '../../harness/put-back.ts';
+import { isAbsent, readRegularText } from '../../harness/put-back.ts';
 import { safeResolve } from './paths.ts';
 
 /** ファイルを書き換える道具。**増やすときは、必ずここに足す。** */
@@ -118,7 +117,7 @@ export async function plannedContent(
   try {
     // **ツールと同じ形で当てる**（edit_file は LF に揃えてから当てる。CRLF のまま当てると、ツールでは当たる直しがここでは当たらず、
     // 「後の姿は前と同じ」と見て、テストを消す直しを通していた）。後の姿は LF で返す（規則は数を比べるだけ）
-    before = lf(await readFile(abs, 'utf8'));
+    before = lf(await readRegularText(abs));
   } catch (e) {
     if (isAbsent(e)) return undefined;
     throw e;

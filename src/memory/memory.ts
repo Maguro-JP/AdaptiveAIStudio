@@ -35,6 +35,7 @@ import { dirname } from 'node:path';
 import { jstDate } from '../core/clock.ts';
 import { redactSecrets } from '../core/redact.ts';
 import { BUILTIN_LESSONS, lessonLine } from './builtin-lessons.ts';
+import { withFileLock } from '../core/file-lock.ts';
 
 export type MemoryKind =
   /** 決めたこと。方針・設計判断 */
@@ -239,6 +240,11 @@ export class Memory {
    */
   #era: object = {};
   /**
+   * 最後に読んだ・書いたときにディスクに在った覚え（番号 → 覚えた時刻と題）。別のプロセス（画面と端末）が同じファイルを書くとき、
+   * 「よそで消された」と「同じ番号をよそが別の覚えに配った」を見分けるのに使う。
+   */
+  #onDisk = new Map<string, string>();
+  /**
    * 戻したときに繋ぎ直せなかった繋がり（相手もまだ忘れられていた）。相手が戻ったときに繋ぐ。
    * B と C を続けて忘れると、C の写しは B を忘れた時点で切られている。B を先に戻すと、C への繋がりの行き先が無い。
    */
@@ -311,7 +317,9 @@ export class Memory {
       this.#kept = got.kept;
       this.#declined = new Set(got.declined);
       this.#seq = Math.max(maxSeq(got.entries), got.keptSeq);
+      this.#onDisk = new Map(got.entries.map((e) => [e.id, sameness(e)]));
     } catch (e) {
+      this.#onDisk = new Map();
       this.#entries = [];
       this.#kept = [];
       this.#declined = new Set();
@@ -414,6 +422,7 @@ export class Memory {
     }));
     this.#entries = [...onDisk, ...mine];
     this.#seq = seq;
+    this.#onDisk = new Map(onDisk.map((e) => [e.id, sameness(e)]));
     this.#unreadable = undefined;
     this.#era = {};
     this.#waiting = [];
@@ -422,6 +431,15 @@ export class Memory {
   }
 
   async #saveNow(): Promise<void> {
+    if (!this.#path || !this.#dirty) return;
+    // 別のプロセス（画面と端末）が同じファイルを書く。読んで合わせて書く間を錠で包む（包まないと、読んだ後によそが書いた分を消す）
+    const path = this.#path;
+    // 錠の中では読み直しと置き換えのやり直し（Windows で掴まれたとき、合わせて数秒）が走る。待つ側はそれより長く待ち、
+    // 古い錠と見るのはさらに長くする（持っている間に古いと見られて、二人が同時に書くことにしない）
+    await withFileLock(path, () => this.#saveLocked(), { timeoutMs: 8_000, staleMs: 30_000 });
+  }
+
+  async #saveLocked(): Promise<void> {
     if (!this.#path || !this.#dirty) return;
     if (this.#unreadable && !(await this.#rejoin())) {
       throw new Error(`記憶のファイルを読めなかった（${this.#unreadable}）ので、上書きしないよう保存を止めています: ${this.#path}`);
@@ -441,15 +459,88 @@ export class Memory {
        * **手元が知らない覚えを、ファイルから消さない。**退けていた行を動いている間に手で直すと、その行は退けた行（kept）から
        * 外れて覚えの側へ移る。手元の覚えだけを書いていたので、直した行が次の保存で消えていた。手元で外した番号は足し戻さない。
        */
+      const disk = new Map(now.entries.map((e) => [e.id, e]));
+      /*
+       * **よそで消された覚えを書き戻さない。**前に読んだときディスクに在り、いまは無い番号は、別のプロセスが忘れた（消した）もの。
+       * 手元は持ったままなので、そのまま書くと忘れた覚えが戻っていた。退けた行に回っただけ（手で読めなくした）なら消さない
+       */
+      const keptIds = new Set(now.kept.flatMap((l) => [...l.matchAll(/"id"\s*:\s*"(m\d+)"/g)].map((m) => m[1]!)));
+      // 前に見た覚えか（同じ番号で、覚えた時刻・種類・題も同じ）。番号だけで見ると、よそが消した番号を別の覚えに使い回したときに取り違える
+      const knew = (d: MemoryEntry): boolean => this.#onDisk.get(d.id) === sameness(d);
+      const goneElsewhere = new Set([...this.#onDisk].filter(([id, was]) => {
+        if (keptIds.has(id)) return false;
+        const there = disk.get(id);
+        return !there || sameness(there) !== was;
+      }).map(([id]) => id));
+      if (goneElsewhere.size > 0) {
+        // 手元の写し（前に見たときのまま）だけを外す。同じ番号で手元が新しく覚え直したもの（付け直しの対象）は残す
+        this.#entries = this.#entries.filter((e) => !(goneElsewhere.has(e.id) && this.#onDisk.get(e.id) === sameness(e)));
+        for (const e of this.#entries) {
+          if (e.supersedes !== undefined && goneElsewhere.has(e.supersedes) && !this.#entries.some((x) => x.id === e.supersedes)) delete e.supersedes;
+          if (e.supersededBy !== undefined && goneElsewhere.has(e.supersededBy) && !this.#entries.some((x) => x.id === e.supersededBy)) delete e.supersededBy;
+        }
+      }
+      /*
+       * 手元で新しく覚えた分（前に見たときディスクに無かった番号）を、ディスクと合わせる。
+       * - **よそが同じ題を覚えていれば、そちらへ畳む**（両方が空から最初の覚えを入れると、同じ題が二件になっていた）。最初からの覚えは捨てる
+       * - **同じ番号をよそが別の覚えに配っていたら、手元の側を付け直す。**両方が m40 まで読んでから別々に覚えると、どちらも m41 を配り、
+       *   番号が同じなので手元の側だけが書かれ、よその覚えが消えていた
+       */
+      let top = Math.max(this.#seq, maxSeq(now.entries), now.keptSeq);
+      const moved = new Map<string, string>();
+      const folded = new Set<MemoryEntry>();
+      for (const e of this.#entries) {
+        if (this.#onDisk.has(e.id) && knew(e)) continue;
+        const there = disk.get(e.id);
+        if (there && sameness(there) === sameness(e)) continue;
+        const key = normalizeTitle(e.title);
+        const twin = e.supersededBy === undefined
+          ? now.entries.find((d) => !knew(d) && d.kind === e.kind && normalizeTitle(d.title) === key && d.root === e.root && !d.supersededBy)
+          : undefined;
+        if (twin) {
+          if (e.source !== 'builtin') {
+            twin.confirms += e.confirms;
+            twin.seenAt = Math.max(twin.seenAt, e.seenAt);
+            if (e.used) twin.used = (twin.used ?? 0) + e.used;
+            if (e.helped) twin.helped = (twin.helped ?? 0) + e.helped;
+            if (e.misled) twin.misled = (twin.misled ?? 0) + e.misled;
+            for (const t of e.tags) if (!twin.tags.includes(t)) twin.tags.push(t);
+          }
+          moved.set(e.id, twin.id);
+          folded.add(e);
+          continue;
+        }
+        if (there) {
+          top += 1;
+          moved.set(e.id, `m${top}`);
+        }
+      }
+      if (moved.size > 0) {
+        this.#entries = this.#entries.filter((e) => !folded.has(e)).map((e) => ({
+          ...e,
+          id: folded.has(e) ? e.id : (moved.get(e.id) ?? e.id),
+          ...(e.supersedes !== undefined ? { supersedes: moved.get(e.supersedes) ?? e.supersedes } : {}),
+          ...(e.supersededBy !== undefined ? { supersededBy: moved.get(e.supersededBy) ?? e.supersededBy } : {}),
+        }));
+        this.#seq = Math.max(this.#seq, top);
+        // 番号が変わったので、番号で記録していたもの（忘れた棚・添えた覚えの点付け・戻るのを待つ繋がり）は使わせない
+        this.#era = {};
+        this.#waiting = [];
+      }
       const mine = new Set(this.#entries.map((e) => e.id));
-      const foreign = now.entries.filter((e) => !mine.has(e.id) && !this.#gone.has(e.id));
+      // 手元で忘れた番号でも、ディスクの中身が前に見たものと違えば、よそが新しく覚えた別の覚え（取り込む）
+      const foreign = now.entries.filter((e) => !mine.has(e.id) && !(this.#gone.has(e.id) && knew(e)));
       if (foreign.length > 0) {
         this.#entries = [...this.#entries, ...foreign].sort((a, b) => a.at - b.at);
         this.#seq = Math.max(this.#seq, maxSeq(foreign));
       }
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'ENOENT') this.#kept = [];
-      // ほかの読み失敗は、読み込んだときの形のまま書く（読めないのを「退けた行が無い」と取り違えて消さない）。
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+        // 錠の中で読めなければ書かない。合わせずに手元の分だけを書くと、よそが書いた分を消し、消えたことも残らなかった
+        this.#dirty = true;
+        throw e;
+      }
+      this.#kept = [];
     }
     const body = [
       ...this.#entries.map((e) => JSON.stringify(e)),
@@ -459,6 +550,9 @@ export class Memory {
     try {
       await mkdir(dirname(this.#path), { recursive: true });
       await this.#write(this.#path, body);
+      this.#onDisk = new Map(this.#entries.map((e) => [e.id, sameness(e)]));
+      // 書けたら、手元で忘れた番号はもう要らない（ディスクにも無い。残すと、よそが同じ番号を使い回した覚えを取り込まずに消していた）
+      this.#gone = new Set();
     } catch (e) {
       this.#dirty = true;
       throw e;
@@ -1019,6 +1113,11 @@ export function betterDetail(next: string, current: string): boolean {
   const rawCurrent = current.includes('未消化');
   if (rawNext !== rawCurrent) return rawCurrent; // 汲み取れたほうを採る
   return next.length > current.length;
+}
+
+/** 同じ番号が同じ覚えを指しているかを見る鍵（覚えた時刻と題）。 */
+function sameness(e: MemoryEntry): string {
+  return `${e.at}\n${e.kind}\n${e.title}`;
 }
 
 /** 記憶の一件の形を確かめる（思い出すときに使う所だけ）。 */

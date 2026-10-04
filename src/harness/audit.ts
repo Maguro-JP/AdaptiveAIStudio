@@ -8,6 +8,17 @@ import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { WarnOnce, failCode } from '../core/warn-once.ts';
 import { isAbsent } from './put-back.ts';
+import { redactSecrets } from '../core/redact.ts';
+
+/** 切ったら、切ったと分かるようにする。 */
+function cut(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+/** 記録に残す前に、トークンを伏せる（URL の利用者名とパスワード・よく知られた鍵の形・`--token x` など）。 */
+function hidden(text: string): string {
+  return redactSecrets(text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1***@'));
+}
 
 export interface AuditEntry {
   at: string;
@@ -48,7 +59,15 @@ export class AuditLog {
   }
 
   async record(entry: Omit<AuditEntry, 'at'>): Promise<void> {
-    const full: AuditEntry = { at: new Date().toISOString(), ...entry };
+    /*
+     * 理由と要約は伏せてから残す。命令の要約（先頭 120 字）と、止めた理由の文（命令の全文を含む）に、`git clone https://u:ghp_…@…`
+     * のトークンがそのまま残っていた。記録そのものを漏れ口にしない。理由は長さも切る（命令の全文を際限なく残さない）
+     */
+    const full: AuditEntry = {
+      at: new Date().toISOString(), ...entry,
+      ...(entry.reason !== undefined ? { reason: cut(hidden(entry.reason), 400) } : {}),
+      ...(entry.summary !== undefined ? { summary: cut(hidden(entry.summary), 120) } : {}),
+    };
     this.#entries.push(full);
     if (this.#entries.length > this.#keep) this.#entries.splice(0, this.#entries.length - this.#keep);
     if (full.outcome === 'allowed') this.#counts.allowed += 1;

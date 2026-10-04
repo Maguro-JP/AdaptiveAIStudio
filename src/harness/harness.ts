@@ -11,7 +11,7 @@ import type { ToolCall } from '../providers/contract.ts';
 import type { Tool, ToolContext, ToolResult } from '../agent/tools/types.ts';
 import { type Rule, type RuleContext, hasArg } from './rules.ts';
 import { AuditLog } from './audit.ts';
-import { fingerprint, markSeen, lastPrint } from './seen.ts';
+import { fingerprint, markSeen, lastPrint, markFailedWrite } from './seen.ts';
 import type { HarnessMetrics } from './metrics.ts';
 
 export interface HarnessOptions {
@@ -154,8 +154,11 @@ export class Harness {
          *   二度と直せない。一部の扱いなので、全文を置き換える write_file は止まる
          */
         const keep = (c: ToolCall): void => { history.push(c); if (taskHistory && taskHistory !== history) taskHistory.push(c); };
-        if (!(result.isError && call.name === 'read_file')) keep(call);
-        else if (result.content.includes('は二進のファイルなので読めません')) keep(call);
+        if (!(result.isError && call.name === 'read_file')) {
+          keep(call);
+          // やり直しを求めた失敗（待つ間に変わった・掴まれていた）は、同じ内容の繰り返しに数えない。断られた・当たらなかったは数え続ける
+          if (result.isError && RETRYABLE_WRITE.test(result.content)) markFailedWrite(call);
+        } else if (result.content.includes('は二進のファイルなので読めません')) keep(call);
         else if (result.content.includes('ファイルが大きすぎます')) {
           keep({ ...call, args: { ...(args as Record<string, unknown>), limit: 0 } });
         }
@@ -217,10 +220,14 @@ export class Harness {
  * 残すのは「どこへ」（宛先と道）だけで、問い合わせと合言葉は落とす。
  * 落としたことは書く（黙って削らない）。
  */
+/** 書き込みの失敗のうち、同じ引数で出し直すのが正しいもの（待つ間に変わった・読めなくなった・一時的に掴まれていた）。 */
+const RETRYABLE_WRITE = /待っているあいだに|EBUSY|EPERM|EAGAIN|ETXTBSY/;
+
 function summarize(args: Record<string, unknown>): string {
   if (typeof args.url === 'string') return whereTo(args.url);
   const key = ['path', 'command', 'query'].find((k) => typeof args[k] === 'string');
-  return key ? String(args[key]).slice(0, 120) : '';
+  // 切るのは記録の側で、伏せた後（ここで切ると、切れ目の後ろにある `@` やトークンの頭が切れ、伏せられずに残る）
+  return key ? String(args[key]).slice(0, 4000) : '';
 }
 
 /** 宛先と道だけにする。読めない形なら、印だけ残して中身は残さない。 */
