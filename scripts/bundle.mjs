@@ -21,9 +21,9 @@
  * 取得は網の繋がる場所（CI）でやり、ここは置く仕事だけをする。
  * そうすると、この道具自体は網が無くても試せる。
  */
-import { cp, copyFile, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink, rename } from 'node:fs/promises';
+import { cp, copyFile, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink, rename, lstat } from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
-import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
+import { join, dirname, resolve, relative, isAbsolute, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isMain } from './is-main.mjs';
 import { execFileSync } from 'node:child_process';
@@ -68,10 +68,11 @@ export const PAYLOAD = [
 export const DEPTH_BUDGET = 160;
 
 /** 中でいちばん深いもの（根からの相対）。 */
-export async function deepest(dir) {
+export async function deepest(dir, skip = () => false) {
   let best = { rel: '', length: 0 };
   for (const name of await readdir(dir, { recursive: true })) {
     const rel = String(name);
+    if (skip(rel)) continue;
     if (rel.length > best.length) best = { rel, length: rel.length };
   }
   return best;
@@ -149,6 +150,17 @@ export async function guessTarget({ nodeHere, nodeExe }) {
  *
  * @param {string} target 配る先。`win-x64` のような形。
  */
+/** `out` から `rel` を辿る途中（`rel` そのものを含む）に、リンク・junction があるか。 */
+async function linkOnTheWay(out, rel) {
+  let at = out;
+  for (const part of rel.split(/[\\/]+/).filter(Boolean)) {
+    at = join(at, part);
+    const s = await lstat(at).catch(() => undefined);
+    if (s?.isSymbolicLink()) return true;
+  }
+  return false;
+}
+
 /**
  * 消してよい場所か。**組んだ先の中だけ。**
  *
@@ -166,9 +178,12 @@ export async function guessTarget({ nodeHere, nodeExe }) {
  * ここの守りは、それでも残す。**原因が一つとは限らない。**
  * 渡された場所が組んだ先の中でなければ、消さずに投げる。
  */
-function mustBeInside(dir, out, what) {
+async function mustBeInside(dir, out, what) {
   const rel = relative(resolve(out), resolve(dir));
-  if (rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)) return;
+  // 名前だけでなく、**途中にリンクが無いこと**も見る。組み立て元の node_modules がリンク（git worktree・pnpm）だと、写した
+  // app/node_modules もリンクになり、片づけがリンクを辿って**組み立て元の**型定義と .map を消していた（実際に消えた）。
+  // 辿った先の道どうしを比べる形にすると、Windows の 8.3 の短い名前（RUNNER~1）で片方だけ綴りが変わり、中を外と読んだ
+  if (rel !== '' && !rel.startsWith('..') && !isAbsolute(rel) && !(await linkOnTheWay(resolve(out), rel))) return;
   throw new Error(
     `組んだ先の外を片づけようとしました（${what}）。`
     + `\n  片づけようとした場所: ${resolve(dir)}`
@@ -177,7 +192,7 @@ function mustBeInside(dir, out, what) {
 }
 
 export async function pruneForTarget(dir, target, log, out) {
-  mustBeInside(dir, out, 'pruneForTarget');
+  await mustBeInside(dir, out, 'pruneForTarget');
   let freed = 0;
   const size = async (at) => {
     let total = 0;
@@ -210,7 +225,7 @@ export async function pruneForTarget(dir, target, log, out) {
 }
 
 async function pruneExtras(dir, log, out) {
-  mustBeInside(dir, out, 'pruneExtras');
+  await mustBeInside(dir, out, 'pruneExtras');
   let maps = 0;
   let types = 0;
   for (const name of await readdir(dir, { recursive: true })) {
@@ -280,10 +295,44 @@ export function guessVersion(srcRoot) {
   }
 }
 
-function arg(name, fallback) {
-  const i = process.argv.indexOf(name);
-  return i >= 0 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--')
-    ? process.argv[i + 1] : fallback;
+const VALUE_FLAGS = ['--out', '--node-zip', '--node-exe', '--node-name', '--target', '--src', '--version'];
+const SWITCHES = ['--node-here', '--keep-data'];
+
+/**
+ * 引数を読む。`--x v` と `--x=v` の両方を読み、同じものが二度来たら**後のもの**を採る
+ * （`npm run bundle` は既定の `--out` を先に持つので、利用者が足した `--out` を最初の一つで隠していた）。
+ * 知らない引数は投げる（黙って捨てると、打ったつもりの指定が効かないまま「できました」になる）。
+ * `--node-zip`・`--node-exe` を渡したら `--node-here` より先に使う（既定の `--node-here` に負けて、
+ * Windows 向けに渡した zip を使わず、組んでいる機械の Node で組んでいた）。
+ */
+export function parseBundleArgs(argv) {
+  const got = {};
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    const eq = a.indexOf('=');
+    const name = eq > 0 ? a.slice(0, eq) : a;
+    if (SWITCHES.includes(name) && eq < 0) { got[name] = true; continue; }
+    if (VALUE_FLAGS.includes(name)) {
+      const value = eq > 0 ? a.slice(eq + 1) : argv[i + 1];
+      if (value === undefined || value === '' || (eq < 0 && value.startsWith('--'))) throw new Error(`${name} に値がありません`);
+      if (eq < 0) i += 1;
+      got[name] = value;
+      continue;
+    }
+    throw new Error(`知らない引数です: ${a}`);
+  }
+  const nodeGiven = got['--node-zip'] !== undefined || got['--node-exe'] !== undefined;
+  return {
+    out: got['--out'],
+    nodeZip: got['--node-zip'],
+    nodeExe: got['--node-exe'],
+    nodeHere: Boolean(got['--node-here']) && !nodeGiven,
+    keepData: Boolean(got['--keep-data']),
+    nodeName: got['--node-name'],
+    target: got['--target'],
+    src: got['--src'],
+    version: got['--version'],
+  };
 }
 
 /** 中身を並べる。試験から呼べるように、副作用を out だけに閉じる。 */
@@ -396,9 +445,37 @@ export async function bundle({
       }
     }
   }
-  // 退避した分と、前に途中で残った退避フォルダを消す
-  for (const name of present.filter((n) => n.startsWith(TRASH_PREFIX))) await rm(join(out, name), { recursive: true, force: true });
-  if (leaving.length > 0) await rm(trash, { recursive: true, force: true });
+  /*
+   * **いま退避した前の版は、組み終えて確かめるまで消さない**（組む途中で落ちると、前の版は消えたまま、半分組んだ新しい版だけが
+   * 残っていた。下で落ちたら、置いたものを消して前の版を戻す）。前に残った退避フォルダも、組めてから消す。先に消すと、
+   * 前の回で戻しきれずに残した版（「残してあります」と言ったもの）を、もう一度押しただけで消していた。
+   * 消すのは組めた後なので、消せなくても（Windows で一瞬掴まれる）組んだものは無事。残ったものは次に組めたときに消す
+   */
+  let built;
+  try {
+    built = await assemble();
+  } catch (e) {
+    const stuck = [];
+    for (const name of await readdir(out).catch(() => [])) {
+      // 退避フォルダ・残す data・移していないエクスプローラのファイルは触らない
+      if (name.startsWith(TRASH_PREFIX) || (keepData && name === 'data') || SHELL_LITTER.has(name.toLowerCase())) continue;
+      await rm(join(out, name), { recursive: true, force: true }).catch(() => stuck.push(name));
+    }
+    for (const back of moved) {
+      await retryBusy(() => renameImpl(join(trash, back), join(out, back))).catch(() => stuck.push(back));
+    }
+    if (stuck.length === 0 && leaving.length > 0) await rm(trash, { recursive: true, force: true }).catch(() => undefined);
+    if (stuck.length > 0) log(`  前の版を戻しきれませんでした（${stuck.join(', ')}）。${trash} に残してあります`);
+    else if (moved.length > 0) log('  組めなかったので、前の版に戻しました');
+    throw e;
+  }
+  for (const name of [...present.filter((n) => n.startsWith(TRASH_PREFIX)), ...(leaving.length > 0 ? [basename(trash)] : [])]) {
+    await rm(join(out, name), { recursive: true, force: true, maxRetries: 3 })
+      .catch(() => log(`  前の版（${name}）を消せませんでした。次に組めたときに消します`));
+  }
+  return built;
+
+  async function assemble() {
   const app = join(out, 'app');
   await mkdir(app, { recursive: true });
 
@@ -410,7 +487,8 @@ export async function bundle({
       log(`  ない: ${item}（飛ばします）`);
       continue;
     }
-    await cp(from, join(app, item), { recursive: true });
+    // リンクは辿って中身を写す（リンクのまま写すと、配る先にリンクが入り、片づけが組み立て元を消す。Windows ではリンクも動かない）
+    await cp(from, join(app, item), { recursive: true, dereference: true });
     log(`  入れた: app/${item}`);
   }
 
@@ -456,7 +534,7 @@ export async function bundle({
 
   // 展開先に、あと何文字使えるか。**利用者が展開する前に読む所へ書く。**
   // Windows は道の全体が 260 文字を超えると開けない。
-  const deep = await deepest(out);
+  const deep = await deepest(out, (rel) => rel.startsWith(TRASH_PREFIX)); // 退避した前の版は配らないので測らない
   const roomForFolder = (260 - 1) - 1 - deep.length;
 
   // 名前は普通のプログラムの作法に合わせる（README / VERSION）。
@@ -604,7 +682,7 @@ export async function bundle({
 
   // **組んだあとに測る。**深さが伸びたことに気づけるのは、ここだけ。
   // 落ちるのは利用者が展開するときで、そのときこちらは何も動いていない。
-  const final = await deepest(out);
+  const final = await deepest(out, (rel) => rel.startsWith(TRASH_PREFIX)); // 退避した前の版は配らないので測らない
   if (final.length > DEPTH_BUDGET) {
     throw new Error(
       `中の道が深すぎます: ${final.length} 文字（許すのは ${DEPTH_BUDGET} まで）\n`
@@ -621,6 +699,7 @@ export async function bundle({
     bundledNode: Boolean(nodeZip || exe),
     deepest: final.length,
   };
+  }
 }
 
 // Windows では `file://` + argv[1] にすると一致しない。
@@ -629,18 +708,23 @@ export async function bundle({
 // 何も言わずに終了コード0で終わるので、気づけない（実機でそうなった）。
 // 実体の道どうしで比べる（`is-main.mjs`）
 if (isMain(import.meta.url)) {
-  const out = resolve(root, arg('--out', 'dist/aas-portable'));
+  let a;
+  try { a = parseBundleArgs(process.argv.slice(2)); } catch (e) {
+    console.error(e.message);
+    process.exit(2);
+  }
+  const out = resolve(root, a.out ?? 'dist/aas-portable');
   console.log('持ち運び版を組み立てます');
   const r = await bundle({
     out,
-    nodeZip: arg('--node-zip'),
-    nodeExe: arg('--node-exe'),
-    nodeHere: process.argv.includes('--node-here'),
-    keepData: process.argv.includes('--keep-data'),
-    nodeName: arg('--node-name'),
-    target: arg('--target'),
-    ...(arg('--src') ? { srcRoot: resolve(arg('--src')) } : {}),
-    version: arg('--version'),
+    nodeZip: a.nodeZip,
+    nodeExe: a.nodeExe,
+    nodeHere: a.nodeHere,
+    keepData: a.keepData,
+    nodeName: a.nodeName,
+    target: a.target,
+    ...(a.src ? { srcRoot: resolve(a.src) } : {}),
+    version: a.version,
     log: (l) => console.log(l),
   });
   console.log(`\n  できました: ${r.out}`);

@@ -312,6 +312,7 @@
 - 16 回目の不具合調査の 8 件（レーンの並べる数・team の書き込み先・team の書ける数・段取りの「うまくいった」・塞がった段・担当の最終報告・合議の落ちた担当・役職の extends）
 - 提案に作業場と出どころを持たせる（15 回目の調査の 2・10）
 - 画面と端末が書いた記録を消し合わない（15 回目の調査の 11）
+- 17 回目の不具合調査の 10 件（bundle の引数・組み直しの戻し・llama-server の展開・取得後の確かめ・doctor の env・update と clean の終了コード・機械の記録・埋まった口・同時の起動）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -11486,3 +11487,47 @@ Windows の道の扱いを src 全体で洗い、本当に壊れる 4 件を直�
   （壊れたファイルが在るときだけ）
 触る場所: `src/core/file-lock.ts`、`src/core/journal-file.ts`（`saveMerged`）、`src/core/journals.ts`、`src/harness/idle.ts`・`src/harness/duties.ts`（`rebase`）、
 `src/agent/proposals.ts`（`save`・`settle`）、`test/cross-process-journals.test.ts`
+
+## 2026-10-04  17 回目の不具合調査の 10 件（bundle の引数・組み直しの戻し・llama-server の展開・取得後の確かめ・doctor の env・update と clean の終了コード・機械の記録・埋まった口・同時の起動）
+
+runtime と CLI を読むだけで調べ、10 件を直した。
+
+1. bundle の引数: 同じ指定は後のものを採り、`--x=v` も読む。知らない引数・値の無い指定は終了コード 2 で断る。`--node-zip`・`--node-exe` を渡したら
+   既定の `--node-here` より先に使う（`npm run bundle -- --node-zip <win の zip>` が zip を使わず、組んでいる機械の Node で組んで win-x64 を消していた。
+   `--out` も既定の一つ目に隠れていた）。選ばなかった案: package.json の既定から `--out`・`--node-here` を外す（打ち慣れた `npm run bundle` が変わる）
+2. bundle の組み直し: 前の版を退避したまま組み、組み終えて深さまで確かめてから消す。途中で落ちたら置いたものを消して前の版を戻す
+   （前は退避した直後に消したので、途中で落ちると動く版が一つも残らなかった）。深さは退避フォルダを数えない
+3. llama-server の取得: `<版>.<pid>.tmp` に展開し、動くと確かめてから版の名前へ付け替える（正式な場所へ直接書いていたので、Ctrl+C で
+   DLL の欠けた半端な版が「用意できています」になった）。`install({ force })` を足し、`llama --force` と「在るのに動かない」ときに取り直す。
+   前の版は、新しい版が動くと確かめてから入れ替える。残った `.tmp` は `clean` が拾う
+4. 取得後の確かめ（`tryRun`）を、版を言えたか（`answeredVersion`）で見る。30 秒で打ち切る（何か言っただけ、`GLIBC_2.38' not found` でも
+   「動く」になっていた）
+5. doctor・selftest の llama-server の確かめに、本番の起動と同じ env（`runtimeEnv`、隣の共有ライブラリ）と 30 秒の打ち切りを渡す
+   （Linux・macOS で、正常なものを「動きません」と言っていた）
+6. `update`: 調べられなかった（git 管理下でない・未コミットの変更・取りに行けない・向こう側が無い・差を数えられない）ときは `failed` を付け、
+   終了コード 1。`-` で始まる引数は場所と読まずに 2 で断る。portable の「手で入れ替える」案内は今までどおり 0
+7. `clean --yes`: 消せなかったものがあれば終了コード 1
+8. 機械の記録（`machine.json`）: 検出した時刻を持たせ、7 日を過ぎた・RAM が今と違う・時刻の無いものは取り直す。nvidia-smi が時間内に返らなかった
+   結果（`gpuUnsure`）は残さない（「GPU なし」を使い続けていた）
+9. llama-server の口: 埋まっていたら次の番号を 20 個まで試す（前は投げていたので、前の llama-server が 18080 を握ったままだと起動のたびに落ちた）。
+   空いている口を選ぶので、違うモデルが答える心配は無い
+10. 同じモデルを同時に起こすと、起動中の Promise を共有して一つだけ起こす（二つ起こすと、前の子が止める対象から外れて残った）
+
+- 読むだけのレビューで直したもの: 前に残った退避フォルダは組めてから消す（先に消していたので、戻しきれず残した版をもう一度押しただけで
+  消し、その消す処理が落ちると今の版が退避フォルダに入ったまま戻らなかった）。戻しで desktop.ini・Thumbs.db に触らない。README の深さに
+  退避フォルダを数えない。同じモデルを待つ人の中断は人ごとに効かせ、起動そのものは全員がやめたときだけ止める（中断の無い待ち手が居れば
+  止めない）。口を探している間に止められたら起こさない。llama-server の前の版は `.prev` として脇へ移し（`.tmp` だと clean が消す候補にした）、
+  戻せなければそう言う。調べ切れなかった機械の検出結果は、プロセスの中で 10 分使い回す（呼ばれるたびに 5 秒待たせない）
+- 調べている途中で見つけた 1 件: 組み立て元の node_modules がリンク（git worktree・pnpm）だと、bundle は配る先にリンクのまま写し、片づけが
+  リンクを辿って組み立て元の型定義と .map を消した。写すときはリンクを辿って中身を写し（`dereference`）、片づける前に辿った先でも
+  組んだ先の中にあるかを見る（`mustBeInside`）。経緯は `docs/knowledge/problems.md`。
+  辿った先の道どうしを比べる形は、Windows の 8.3 の短い名前（`RUNNER~1`）で片方だけ綴りが変わり、中を外と読んだ（CI で落ちた）。
+  組んだ先から片づける場所までの途中に、リンク・junction が一つも無いことで見る（`linkOnTheWay`）
+- 残っているところ: Windows で `runtime.command` に .cmd・.bat を渡すと、shell 無しの spawn が EINVAL で起動できない（調査の 10(b)。確かめていない）。
+  `models --get <カタログの名前> --quant` が効かない件（調査のおまけ）。リンク先の無いリンクが組み立て元にあると、写すときに止まる。
+  `#nextPort` は戻らずに増える（4.7 万回の起動で上限に届く）。`start.sh` の update は、調べられなかったときに立ち上げ直しを訊かずに終わる
+  （調べられなかったのに立ち上げ直す意味は無いので、このまま）
+触る場所: `scripts/bundle.mjs`（`parseBundleArgs`・`assemble`）、`src/runtime/llama-install.ts`（`install`・`tryRun`）、`src/cli/llama.ts`、`src/cli/doctor.ts`・
+`src/cli/selftest.ts`、`src/core/update.ts`・`src/cli/update.ts`、`src/cli/clean.ts`、`src/runtime/machine.ts`（`MachineCache`）、`src/runtime/llamacpp.ts`
+（`ensureLoaded`）。試験は `test/bundle-target.test.ts`・`test/home.test.ts`・`test/llama-install.test.ts`・`test/update.test.ts`・`test/state-files.test.ts`・
+`test/llamacpp-port.test.ts`

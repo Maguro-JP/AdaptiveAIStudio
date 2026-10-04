@@ -11,7 +11,7 @@ import { readFile, stat, writeFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { install, findInstalled, listInstalled } from '../src/runtime/llama-install.ts';
+import { install, findInstalled, listInstalled, tryRun } from '../src/runtime/llama-install.ts';
 import type { Target } from '../src/runtime/llama-release.ts';
 import { explainExitCode } from '../src/runtime/llama-diagnosis.ts';
 
@@ -49,6 +49,53 @@ function fakeFetch(opts: { assets?: string[]; zip?: Buffer; releaseStatus?: numb
   }) as unknown as typeof fetch;
   return { impl, calls };
 }
+
+describe('llama-server を付け替えるまで正式な場所に置かない', () => {
+  test('**確かめている間は、版の名前のフォルダはまだ無い**（途中で止めても、半端な版が「用意できています」にならない）', async () => {
+    const binDir = await tempDir('aas-bin-');
+    const { impl } = fakeFetch();
+    let seenDuring: string | undefined;
+    const r = await install({
+      binDir, tag: 'b4585', target: TARGET, fetchImpl: impl,
+      verify: async (command) => { seenDuring = await findInstalled(binDir, 'b4585'); assert.match(command, /\.tmp/); return runs(); },
+    });
+    assert.equal(seenDuring, undefined);
+    assert.equal(r.command, await findInstalled(binDir, 'b4585'));
+    assert.deepEqual(await listInstalled(binDir), ['b4585'], '一時フォルダが残らない');
+  });
+
+  test('**force は、新しい版が動くと確かめてから入れ替える。動かなければ前の版を残す**', async () => {
+    const binDir = await tempDir('aas-bin-');
+    const { impl } = fakeFetch();
+    await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl, verify: runs });
+    const before = await findInstalled(binDir, 'b4585');
+    await writeFile(before!, 'old-but-kept');
+    await assert.rejects(install({
+      binDir, tag: 'b4585', target: TARGET, fetchImpl: impl, force: true,
+      verify: async () => ({ ok: false, detail: 'broken' }),
+    }), /動きませんでした/);
+    assert.equal(await readFile(before!, 'utf8'), 'old-but-kept', '動かない版で前の版を消さない');
+    assert.deepEqual(await listInstalled(binDir), ['b4585']);
+
+    await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl, force: true, verify: runs });
+    assert.notEqual(await readFile((await findInstalled(binDir, 'b4585'))!, 'utf8'), 'old-but-kept', '動く版に入れ替わる');
+    assert.deepEqual(await listInstalled(binDir), ['b4585'], '脇へ移した前の版が残らない');
+  });
+
+  test('**取得後の確かめは、版を言えたかで見る**（何か言っただけ・起動の失敗の文を「動く」と読まない）', async () => {
+    // node --version は「v22.x」と言うが、llama-server の版の行（version: 1234）ではない
+    assert.equal((await tryRun(process.execPath)).ok, false);
+  });
+
+  test('force でなければ、在る版は取りに行かない', async () => {
+    const binDir = await tempDir('aas-bin-');
+    const { impl, calls } = fakeFetch();
+    await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl, verify: runs });
+    const n = calls.length;
+    await install({ binDir, tag: 'b4585', target: TARGET, fetchImpl: impl, verify: runs });
+    assert.equal(calls.length, n);
+  });
+});
 
 describe('llama-server の用意', () => {
   test('選んで、取ってきて、置くところまで通る', async () => {

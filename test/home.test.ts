@@ -737,6 +737,67 @@ describe('bundle を組み直すとき', () => {
     assert.equal(existsSync(join(out, 'data')), false, '頼まれていないのに data を残した');
   });
 
+  test('**組む途中で落ちたら、置いたものを消して前の版に戻す**（前の版を先に消していたので、動く版が一つも残らなかった）', async () => {
+    const out = await tempDir('aas-rebundle-fail-');
+    const { readdir } = await import('node:fs/promises');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-good' });
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(join(out, 'data'), { recursive: true });
+    await writeFile(join(out, 'data', 'keep.txt'), '利用者の data');
+    // 無い zip を渡すと、app を置き始めた後（Node を取り出すところ）で落ちる
+    await assert.rejects(bundle({ out, srcRoot: installRoot(), version: 'test-broken', keepData: true, nodeZip: join(out, 'no-such.zip') }));
+    assert.match(await readFile(join(out, 'VERSION'), 'utf8'), /test-good/, '前の版に戻っていない');
+    assert.ok(existsSync(join(out, 'AdaptiveAIStudio.cmd')));
+    assert.ok(existsSync(join(out, 'app', 'package.json')));
+    assert.equal(await readFile(join(out, 'data', 'keep.txt'), 'utf8'), '利用者の data');
+    assert.deepEqual((await readdir(out)).filter((n) => n.startsWith('.old-')), [], '退避フォルダが残っている');
+  });
+
+  test('**前の回に戻しきれず残した版（退避フォルダ）は、組めるまで消さない**', async () => {
+    // 先に消していたので、「残してあります」と言った版を、もう一度押しただけで消していた
+    const out = await tempDir('aas-rebundle-stuck-');
+    const { mkdir, readdir } = await import('node:fs/promises');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-good' });
+    await mkdir(join(out, '.old-999-1'), { recursive: true });
+    await writeFile(join(out, '.old-999-1', 'VERSION'), '前の回に残した版');
+    await assert.rejects(bundle({ out, srcRoot: installRoot(), version: 'test-broken', nodeZip: join(out, 'no-such.zip') }));
+    assert.equal(await readFile(join(out, '.old-999-1', 'VERSION'), 'utf8'), '前の回に残した版', '組めなかった回で、残した版を消した');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-good-again' });
+    assert.deepEqual((await readdir(out)).filter((n) => n.startsWith('.old-')), [], '組めたのに退避フォルダが残っている');
+  });
+
+  test('**組み立て元の node_modules がリンクでも、写すのは中身で、組み立て元の型定義と .map を消さない**', async () => {
+    const { mkdir, readdir, symlink, copyFile, stat } = await import('node:fs/promises');
+    const { lstatSync } = await import('node:fs');
+    const { bundle, PAYLOAD, launcherIn } = await import('../scripts/bundle.mjs');
+    // 組み立て元: 製品の中身はフォルダごとリンクし（Windows では junction）、node_modules だけ作り物にする
+    const src = await tempDir('aas-linked-src-');
+    for (const item of PAYLOAD) {
+      if (item === 'node_modules') continue;
+      const from = join(installRoot(), item);
+      const s = await stat(from).catch(() => undefined);
+      if (!s) continue;
+      if (s.isDirectory()) await symlink(from, join(src, item), 'junction');
+      else await copyFile(from, join(src, item));
+    }
+    // 入口は、リポジトリでは launcher.cmd、bundle の中では一つ上の AdaptiveAIStudio.cmd にある。どちらで走らせても同じになるよう、
+    // 見つけた方を launcher.cmd として置く
+    await copyFile(launcherIn(installRoot()), join(src, 'launcher.cmd'));
+    const modules = await tempDir('aas-linked-modules-');
+    await mkdir(join(modules, 'pkg'), { recursive: true });
+    await writeFile(join(modules, 'pkg', 'index.d.ts'), 'export {};');
+    await writeFile(join(modules, 'pkg', 'index.js.map'), '{}');
+    await writeFile(join(modules, 'pkg', 'index.js'), '');
+    await symlink(modules, join(src, 'node_modules'), 'junction');
+    const out = await tempDir('aas-linked-out-');
+    await bundle({ out, srcRoot: src, version: 'test-linked' });
+    assert.deepEqual((await readdir(join(modules, 'pkg'))).sort(), ['index.d.ts', 'index.js', 'index.js.map'], '組み立て元の中身を消した');
+    assert.equal(lstatSync(join(out, 'app', 'node_modules')).isSymbolicLink(), false, '配る先にリンクを入れた');
+    assert.ok(existsSync(join(out, 'app', 'node_modules', 'pkg', 'index.js')));
+  });
+
   test('組んだものでないフォルダを出力先に渡されたら、組まずに止め、中身を消さない', async () => {
     // 中に入れてくれるつもりで既存のフォルダ（デスクトップなど）を渡すと、data 以外の中身がすべて消えていた
     const out = await tempDir('aas-rebundle-foreign-');
@@ -789,6 +850,20 @@ describe('bundle を組み直すとき', () => {
     assert.equal(await readFile(join(out, 'app', 'kept.txt'), 'utf8'), '動いている版', '移した分を戻していない');
     assert.ok(existsSync(join(out, '.portable')) && existsSync(join(out, 'runtime', 'node.exe')));
     assert.deepEqual((await readdir(out)).filter((n) => n.startsWith('.old-')), [], '退避フォルダが残っている');
+  });
+
+  test('**前の回に戻しきれず残した版（退避フォルダ）は、組めるまで消さない**', async () => {
+    // 先に消していたので、「残してあります」と言った版を、もう一度押しただけで消していた
+    const out = await tempDir('aas-rebundle-stuck-');
+    const { mkdir, readdir } = await import('node:fs/promises');
+    const { bundle } = await import('../scripts/bundle.mjs');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-good' });
+    await mkdir(join(out, '.old-999-1'), { recursive: true });
+    await writeFile(join(out, '.old-999-1', 'VERSION'), '前の回に残した版');
+    await assert.rejects(bundle({ out, srcRoot: installRoot(), version: 'test-broken', nodeZip: join(out, 'no-such.zip') }));
+    assert.equal(await readFile(join(out, '.old-999-1', 'VERSION'), 'utf8'), '前の回に残した版', '組めなかった回で、残した版を消した');
+    await bundle({ out, srcRoot: installRoot(), version: 'test-good-again' });
+    assert.deepEqual((await readdir(out)).filter((n) => n.startsWith('.old-')), [], '組めたのに退避フォルダが残っている');
   });
 
   test('改名が通るときは、古い runtime も退避フォルダも残さずに組み直す（対）', async () => {

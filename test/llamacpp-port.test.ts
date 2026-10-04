@@ -1,5 +1,5 @@
 /**
- * llama-server を、埋まっている口に起こさない。止めるときは、読み込み中のものも落とす。
+ * llama-server を、埋まっている口に起こさない（次の空いた口に起こす）。止めるときは、読み込み中のものも落とす。
  *
  * 埋まっている口に起こすと、起こした方は口を取れずに落ちるが、準備の待ちは先に居る誰か（前に残った
  * llama-server、もう一つの AAS）の返事を「準備できた」と読んでいた。違うモデルが答え、それは止める対象にも入らない。
@@ -33,7 +33,7 @@ async function modelsDir(): Promise<string> {
 }
 
 describe('llama-server の口', () => {
-  test('口が埋まっていたら、先に居る相手を「準備できた」と読まずに断る', async () => {
+  test('**口が埋まっていたら、先に居る相手を「準備できた」と読まずに、次の空いた口に起こす**', async () => {
     // 前に残った llama-server の代わり。/models に 200 で答える
     const squatter: Server = createServer((_req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
@@ -46,11 +46,78 @@ describe('llama-server の口', () => {
       machine: REFERENCE_MACHINE, basePort: port, startupTimeoutMs: 15_000,
     });
     try {
-      await assert.rejects(() => rt.ensureLoaded('a-7b.gguf'), /既に使われています/);
-      assert.deepEqual(rt.loaded(), [], '先に居る相手を、自分が起こしたものとして数えた');
+      const got = await rt.ensureLoaded('a-7b.gguf');
+      assert.notEqual(new URL(got.baseUrl).port, String(port), '埋まっている口を自分のものとして使った');
+      assert.equal(rt.loaded().length, 1);
+      // 起こした相手が答える（先に居る相手は other-model と答える）
+      const res = await fetch(`${got.baseUrl}/models`);
+      assert.doesNotMatch(await res.text(), /other-model/);
     } finally {
       await rt.shutdown();
       await new Promise<void>((ok) => squatter.close(() => ok()));
+    }
+  });
+
+  test('**同じモデルを同時に頼んでも、起こすのは一つ**（二つ起こすと、前の子が止める対象から外れて残っていた）', async () => {
+    const rt = new LlamaCppRuntime({
+      command: process.execPath, commandArgs: [FAKE], modelsDir: await modelsDir(),
+      machine: REFERENCE_MACHINE, basePort: await freePort(), startupTimeoutMs: 15_000,
+    });
+    try {
+      const [a, b] = await Promise.all([rt.ensureLoaded('a-7b.gguf'), rt.ensureLoaded('a-7b.gguf')]);
+      assert.equal(a.baseUrl, b.baseUrl);
+      assert.equal(rt.loaded().length, 1);
+    } finally {
+      await rt.shutdown();
+    }
+  });
+
+  test('**中断は頼んだ人ごとに効く**（自分の ■ で自分の待ちはやめ、ほかの人の起動は落とさない）', async () => {
+    const rt = new LlamaCppRuntime({
+      command: process.execPath, commandArgs: [FAKE], modelsDir: await modelsDir(),
+      machine: REFERENCE_MACHINE, basePort: await freePort(), startupTimeoutMs: 15_000,
+    });
+    process.env.FAKE_LLAMA_DELAY_MS = '1500';
+    try {
+      const mine = new AbortController();
+      const first = rt.ensureLoaded('a-7b.gguf', mine.signal).then(() => 'loaded', (e: Error) => e.message);
+      const other = rt.ensureLoaded('a-7b.gguf', new AbortController().signal);
+      const quiet = rt.ensureLoaded('a-7b.gguf'); // 事前読み込み（中断を持たない）
+      mine.abort();
+      assert.match(await first, /中断/, '自分の ■ が効かない');
+      const [a, b] = await Promise.all([other, quiet]);
+      assert.equal(a.baseUrl, b.baseUrl, 'ほかの人の起動まで落とした');
+    } finally {
+      delete process.env.FAKE_LLAMA_DELAY_MS;
+      await rt.shutdown();
+    }
+  });
+
+  test('待っている全員が中断したら、起動そのものを止める', async () => {
+    const lines: string[] = [];
+    const rt = new LlamaCppRuntime({
+      command: process.execPath, commandArgs: [FAKE], modelsDir: await modelsDir(),
+      machine: REFERENCE_MACHINE, basePort: await freePort(), startupTimeoutMs: 600_000, onLog: (l) => lines.push(l),
+    });
+    process.env.FAKE_LLAMA_DELAY_MS = '600000';
+    process.env.FAKE_LLAMA_SAY_PID = '1';
+    let pid = 0;
+    try {
+      const a = new AbortController();
+      const b = new AbortController();
+      const one = rt.ensureLoaded('a-7b.gguf', a.signal).catch(() => 'rejected');
+      const two = rt.ensureLoaded('a-7b.gguf', b.signal).catch(() => 'rejected');
+      await until(() => lines.some((l) => /^fake-llama pid \d+$/.test(l)), '代役が起きた');
+      pid = Number(lines.find((l) => /^fake-llama pid \d+$/.test(l))!.split(' ').at(-1));
+      a.abort();
+      b.abort();
+      assert.deepEqual(await Promise.all([one, two]), ['rejected', 'rejected']);
+      await until(() => !alive(pid), '全員がやめたのに、起動中の llama-server が残っている', { timeoutMs: 15_000 });
+    } finally {
+      delete process.env.FAKE_LLAMA_DELAY_MS;
+      delete process.env.FAKE_LLAMA_SAY_PID;
+      if (pid && alive(pid)) process.kill(pid, 'SIGKILL');
+      await rt.shutdown();
     }
   });
 

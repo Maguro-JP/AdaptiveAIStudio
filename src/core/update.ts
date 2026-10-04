@@ -33,6 +33,11 @@ export interface UpdateStatus {
   reason?: string;
   /** 新しく入る変更の見出し（新しい順） */
   incoming: string[];
+  /**
+   * 調べられなかった（git 管理下でない・未コミットの変更・取りに行けない・向こう側が無い・数えられない）。
+   * `behind: 0` は「最新」と「分からない」の両方に使っていたので、終了コードが 0 になり、呼んだ側が「最新」と受け取った。
+   */
+  failed?: true;
 }
 
 export interface UpdateResult {
@@ -125,13 +130,13 @@ export async function checkUpdate(root: string): Promise<UpdateStatus> {
     const reason = isPortable(root)
       ? `${why}。\n${byHandUpdate(root, describeVersion(await currentVersion()))}`
       : `${why}。更新は git clone した場所でのみできます`;
-    return { can: false, behind: 0, ahead: 0, incoming: [], reason };
+    return { can: false, behind: 0, ahead: 0, incoming: [], reason, ...(isPortable(root) ? {} : { failed: true as const }) };
   }
   if (state.kind === 'dirty') {
     // 未コミットの変更を巻き込むわけにはいかない。
     return {
       can: false, behind: 0, ahead: 0, branch: state.branch, incoming: [],
-      reason: `未コミットの変更が ${state.changed.length} 件あります。先に片づけてください（失われる可能性があります）`,
+      reason: `未コミットの変更が ${state.changed.length} 件あります。先に片づけてください（失われる可能性があります）`, failed: true,
     };
   }
 
@@ -139,7 +144,7 @@ export async function checkUpdate(root: string): Promise<UpdateStatus> {
   if (fetched.code !== 0) {
     return {
       can: false, behind: 0, ahead: 0, branch: state.branch, incoming: [],
-      reason: `取りに行けませんでした（${firstLine(fetched.out)}）`,
+      reason: `取りに行けませんでした（${firstLine(fetched.out)}）`, failed: true,
     };
   }
 
@@ -147,14 +152,21 @@ export async function checkUpdate(root: string): Promise<UpdateStatus> {
   if (upstream.code !== 0) {
     return {
       can: false, behind: 0, ahead: 0, branch: state.branch, incoming: [],
-      reason: `${state.branch} に対応する向こう側がありません`,
+      reason: `${state.branch} に対応する向こう側がありません`, failed: true,
     };
   }
 
   const counts = await runGit(['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'], root);
-  const [aheadText = '0', behindText = '0'] = counts.out.trim().split(/\s+/);
-  const ahead = Number(aheadText) || 0;
-  const behind = Number(behindText) || 0;
+  const [aheadText = '', behindText = ''] = counts.out.trim().split(/\s+/);
+  const ahead = Number(aheadText);
+  const behind = Number(behindText);
+  // 数えられなかったのを 0/0（最新）と読まない
+  if (counts.code !== 0 || !Number.isInteger(ahead) || !Number.isInteger(behind) || aheadText === '' || behindText === '') {
+    return {
+      can: false, behind: 0, ahead: 0, branch: state.branch, incoming: [], failed: true,
+      reason: `向こう側との差を数えられませんでした（${firstLine(counts.out)}）`,
+    };
+  }
 
   const log = behind > 0
     ? await runGit(['log', '--oneline', '--no-decorate', '-10', 'HEAD..@{upstream}'], root)

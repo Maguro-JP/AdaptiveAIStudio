@@ -26,10 +26,15 @@ export function bundle(opts: {
 /** 中でいちばん深いものの、許す長さ。Windows の 260 文字に効く。 */
 export const DEPTH_BUDGET: number;
 /** 中でいちばん深いもの（根からの相対）。 */
-export function deepest(dir: string): Promise<{ rel: string; length: number }>;
+export function deepest(dir: string, skip?: (rel: string) => boolean): Promise<{ rel: string; length: number }>;
 /** 配る先を、分かる範囲で決める。分からなければ undefined（当て推量はしない）。 */
 export function guessTarget(how: { nodeHere?: boolean; nodeExe?: string }): Promise<string | undefined>;
 /** 押せばいい入口の元のファイル。開発中は launcher.cmd、組んだものの中では一つ上の AdaptiveAIStudio.cmd。 */
 export function launcherIn(srcRoot: string): string;
 /** --version が無いときの版。git に訊けるなら短い印まで足す。 */
 export function guessVersion(srcRoot: string): string;
+/** 引数を読む。同じ指定は後のものを採り、知らない引数は投げる。 */
+export function parseBundleArgs(argv: string[]): {
+  out?: string; nodeZip?: string; nodeExe?: string; nodeHere: boolean; keepData: boolean;
+  nodeName?: string; target?: string; src?: string; version?: string;
+};

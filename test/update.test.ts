@@ -59,6 +59,19 @@ async function pair() {
 }
 
 describe('更新', () => {
+  test('**調べられなかったときは、最新と取り違えないよう failed を付ける**', onlyWithGit, async () => {
+    const { root } = await pair();
+    assert.equal((await checkUpdate(root)).failed, undefined, '最新のときは付けない');
+    await writeFile(join(root, 'a.txt'), 'dirty\n');
+    const dirty = await checkUpdate(root);
+    assert.equal(dirty.failed, true, '未コミットの変更');
+    await git(['checkout', '--', 'a.txt'], root);
+    await git(['remote', 'set-url', 'origin', join(root, 'no-such-remote')], root);
+    assert.equal((await checkUpdate(root)).failed, true, '取りに行けない');
+    const plain = await tempDir('aas-plain-');
+    assert.equal((await checkUpdate(plain)).failed, true, 'git 管理下でない');
+  });
+
   test('新しいものが無ければ、最新だと言う', onlyWithGit, async () => {
     const { root } = await pair();
     const s = await checkUpdate(root);
@@ -251,5 +264,13 @@ describe('配った形では git を見ない', () => {
     assert.doesNotMatch(s.reason ?? '', /git clone/, `入れた形に git の案内を出した: ${s.reason}`);
     assert.match(s.reason ?? '', /setup\.exe/);
     assert.ok(s.reason?.includes(RELEASES_URL), `取ってくる先が無い: ${s.reason}`);
+  });
+});
+
+describe('aas update の引数', () => {
+  test('**`--` で始まる引数を場所と読まずに断る**（別の場所を見て「git 管理下ではありません」と 0 で返していた）', () => {
+    const r = __spawnSync(process.execPath, ['--experimental-strip-types', 'src/cli/update.ts', '--yes'], { encoding: 'utf8' });
+    assert.equal(r.status, 2, r.stderr);
+    assert.match(r.stderr, /知らない引数です: --yes/);
   });
 });
