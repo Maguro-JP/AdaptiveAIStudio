@@ -174,8 +174,11 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     const watchdog = new AbortController();
     let stalled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // 最後に掛けた見張りの長さ。停滞と言うときに、実際に待った秒数を言う（最初のトークンの前は 600 秒待つのに「120 秒」と言っていた）
+    let armedMs = 0;
     const arm = (ms: number) => {
       clearTimeout(timer);
+      armedMs = ms;
       timer = setTimeout(() => { stalled = true; watchdog.abort(); }, ms);
     };
     /*
@@ -243,7 +246,8 @@ export class OpenAiCompatibleProvider implements ChatProvider {
       const body = await res.text().catch(() => '');
       clearTimeout(timer);
       throw new ProviderError({
-        kind: kindFromHttpStatus(res.status, body),
+        // 本文を読む間に■を押したなら、止めただけ。状態番号で決めると、503 なら口が 5 分冷やされていた
+        kind: signal.aborted ? 'canceled' : kindFromHttpStatus(res.status, body),
         providerId: this.id,
         retryAfterMs: parseRetryAfter(res.headers.get('retry-after')),
         message: `${this.id} が HTTP ${res.status} を返しました: ${truncate(body)}`,
@@ -281,8 +285,14 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         controller.enqueue(bytes);
       },
     }));
+    /*
+     * `stream: true` を無視して、まとめた JSON を一度に返す相手がいる。`data:` の行が無いので何も読めず、
+     * 「終わりの合図の無いまま切れました」にして正しい答えを捨てていた。まとめ返しは、流れの一塊に直して同じ道で読む
+     */
+    const whole = /^application\/json\b/i.test(res.headers.get('content-type') ?? '');
+    const lines = whole ? wholeAsChunks(alive) : readSseLines(alive);
     try {
-      for await (const data of readSseLines(alive)) {
+      for await (const data of lines) {
         if (data === '[DONE]') { ended = true; break; }
         if (!data) continue;
 
@@ -321,6 +331,15 @@ export class OpenAiCompatibleProvider implements ChatProvider {
           // （全部を 0 番に入れていたので、二件目が一件目に繋がり `read_fileread_file` や `{..}{..}` になっていた）
           // 同じ id の枠が既にあればそこへ（id 付きの欠片が交互に来ても混ぜない）。id の無い欠片は最後の枠の続き
           let idx = tc.index;
+          // 番号が同じでも、その枠に別の id が既に入っていれば別の呼び出し（並べた呼び出しを全部 0 番・id だけ変えて送る相手がいる。
+          // 一つの枠に繋いで、id は後のもの・引数は `{..}{..}` になり、両方とも失敗していた）
+          if (idx !== undefined && tc.id) {
+            const held = pending.get(idx);
+            if (held?.id && held.id !== tc.id) {
+              const same = [...pending].find(([, v]) => v.id === tc.id)?.[0];
+              idx = same ?? Math.max(...pending.keys()) + 1;
+            }
+          }
           if (idx === undefined) {
             const same = tc.id ? [...pending].find(([, v]) => v.id === tc.id)?.[0] : undefined;
             const last = pending.size > 0 ? Math.max(...pending.keys()) : -1;
@@ -365,7 +384,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
       throw new ProviderError({
         kind, providerId: this.id, cause: e,
         message: stalled
-          ? `${this.id} が ${this.#stallTimeoutMs / 1000}秒 応答しませんでした（停滞）`
+          ? `${this.id} が ${Math.round(armedMs / 1000)}秒 応答しませんでした（停滞）`
           : `${this.id} のストリームが中断されました: ${describe(e)}`,
       });
     } finally {
@@ -414,6 +433,39 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         ? `${this.#connectTimeoutMs / 1000}秒 待っても繋がりません` : why === 'canceled' ? '中断されました' : describe(why)}`,
     });
   }
+}
+
+/**
+ * まとめて返された JSON（`choices[0].message`）を、流れの一塊（`choices[0].delta`）に直して返す。最後に `[DONE]` を足す。
+ * 読めない本文は、そのまま一行として渡す（流れの読みが壊れた行として飛ばし、終わりの合図が無いと言う）。
+ */
+async function* wholeAsChunks(body: ReadableStream<Uint8Array>): AsyncIterable<string> {
+  const text = await new Response(body).text();
+  let parsed: { choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: unknown } }> }; finish_reason?: string | null }>; usage?: unknown; error?: unknown };
+  try { parsed = JSON.parse(text) as typeof parsed; } catch { yield text; return; }
+  const choice = parsed.choices?.[0];
+  const chunk = {
+    ...(parsed.error !== undefined ? { error: parsed.error } : {}),
+    ...(parsed.usage ? { usage: parsed.usage } : {}),
+    choices: choice ? [{
+      delta: {
+        ...(typeof choice.message?.content === 'string' ? { content: choice.message.content } : {}),
+        ...(choice.message?.tool_calls ? {
+          tool_calls: choice.message.tool_calls.map((t, index) => ({
+            index, ...(t.id ? { id: t.id } : {}),
+            function: {
+              ...(t.function?.name ? { name: t.function.name } : {}),
+              // まとめ返しでは、引数が文字でなく物で来る相手もいる
+              arguments: typeof t.function?.arguments === 'string' ? t.function.arguments : JSON.stringify(t.function?.arguments ?? {}),
+            },
+          })),
+        } : {}),
+      },
+      finish_reason: choice.finish_reason ?? 'stop',
+    }] : [],
+  };
+  yield JSON.stringify(chunk);
+  yield '[DONE]';
 }
 
 /** 流れの途中で返ってきた失敗の中身を、文にする（`{message}` でも文字でも）。 */

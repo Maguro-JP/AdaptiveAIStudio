@@ -63,8 +63,10 @@ export function estimateTokens(text: string): number {
   let cjk = 0;
   let other = 0;
   for (const ch of text) {
-    // 漢字・かな・カナ・全角記号。ここは1文字＝1トークンで数える。
-    if (/[\u3000-\u30FF\u3400-\u9FFF\uFF00-\uFFEF]/.test(ch)) cjk += 1;
+    // 基本面の外（絵文字・拡張 B 以降の漢字）は 1 字で 2 トークン以上になる。4 字で 1 と数えて、多めに数える方針の逆に外れていた
+    if (ch.length > 1) cjk += 2;
+    // 漢字・かな・カナ・全角記号・ハングル・互換漢字。ここは1文字＝1トークンで数える。
+    else if (/[\u1100-\u11FF\u3000-\u30FF\u3130-\u318F\u3400-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF\uFF00-\uFFEF]/.test(ch)) cjk += 1;
     else other += 1;
   }
   return Math.ceil(cjk + other / 4);
@@ -95,6 +97,19 @@ export function tokenBudget(contextTokens: number, reserveTokens = 2200): number
   // 数字が、狭い窓では窓そのものを食う。**狭い窓ほど、この道具が要る場所。**
   const reserve = Math.max(256, Math.min(reserveTokens, Math.floor(contextTokens * 0.25)));
   return Math.max(contextTokens - reserve, 512);
+}
+
+/**
+ * 履歴に使ってよいトークン数を、実際に送るシステムプロンプト（system）とツールの説明のかさを引いて決める。
+ *
+ * `tokenBudget` は予約一つ（コンテキストウィンドウの 25% まで）でシステムプロンプト・ツールの説明・返事のすべてを賄うつもりだったが、
+ * システムプロンプト（最大 25%）とツールの説明（最大 25%）は別に足されるので、コンテキストウィンドウ 8192 では履歴 6144 にシステムプロンプトと説明を
+ * 足してコンテキストウィンドウを超えていた（超えた分は、ライブラリが古い方＝最初の依頼から黙って落とすか、溢れて落ちる）。
+ * 予約（`reserveTokens`）は返事の分だけにし、システムプロンプトとツールの説明は数えて引く。
+ */
+export function historyBudget(contextTokens: number, fixedTokens: number, reserveTokens = 2200): number {
+  const reserve = Math.max(256, Math.min(reserveTokens, Math.floor(contextTokens * 0.25)));
+  return Math.max(contextTokens - reserve - Math.max(0, fixedTokens), 512);
 }
 
 /**
@@ -243,11 +258,16 @@ export function cutToTokens(text: string, budget: number, count: Count = estimat
   return nl > 0 ? cut.slice(0, nl) : cut;
 }
 
+/** 1 通ごとの包み（チャットテンプレートの役割のタグと区切り）に見込むトークン数。 */
+const MESSAGE_OVERHEAD = 4;
+
 export function sizeOf(
   messages: readonly ProviderMessage[], count: Count = estimateTokens,
 ): number {
   let n = 0;
   for (const m of messages) {
+    // 1 通ごとの包み（役割のタグ・区切り）の分。数えていなかったので、ツールの往復が多いほど少なく見ていた
+    n += MESSAGE_OVERHEAD;
     n += count(m.content);
     for (const c of m.toolCalls ?? []) n += count(c.name + JSON.stringify(c.args ?? {}));
   }
@@ -319,6 +339,16 @@ function fitCore(
   const firstAt = units.findIndex((u) => u.messages[0]?.role === 'user');
   const keepFirst = firstAt >= 0 ? firstAt : 0;
   const recentFrom = Math.max(units.length - KEEP_RECENT, keepFirst + 1);
+  /*
+   * 今の依頼（最後の人の発言。押し戻しは除く）も落とさない。最初の依頼と直近 3 往復だけを守っていたので、同じ会話の
+   * 2 件目の依頼のあとにツールの往復が続くと、2 件目の依頼が落ち、モデルは最初の依頼の続きをしていた
+   */
+  let askAt = -1;
+  for (let i = units.length - 1; i > keepFirst; i -= 1) {
+    const head = units[i]!.messages[0];
+    if (head?.role === 'user' && head.nudge !== true) { askAt = i; break; }
+  }
+  const ask = askAt >= 0 ? units[askAt] : undefined;
 
   // まず、古い道具の結果を縮める。かさの大半はこれ。
   let shrunk = false;
@@ -341,6 +371,7 @@ function fitCore(
   const touched: string[] = [...alreadyPaths];
   let at = keepFirst + 1;
   while (total(units) > budget && at < recentFrom - dropped) {
+    if (units[at] === ask) { at += 1; continue; }
     for (const path of pathsIn(units[at]!.messages)) {
       if (!touched.includes(path)) touched.push(path);
     }
@@ -428,13 +459,18 @@ function tailWithin(
 ): ProviderMessage[] {
   const room = budget * 4;
   let used = 0;
-  let at = history.length;
+  // 切るのは人の依頼の手前（その依頼を含める）。依頼の後ろで切っていたので、並びが assistant から始まり、
+  // 今の依頼の往復が長いと今の依頼そのものが消えていた。押し戻しの手前では切らない（その前の本物の依頼まで含める）
+  let at = -1;
   for (let i = history.length - 1; i >= 0; i -= 1) {
     used += sizeOf([history[i]!], count);
-    if (used > room && history[i]!.role === 'user') break;
-    at = i;
+    const m = history[i]!;
+    if (m.role === 'user' && m.nudge !== true) {
+      at = i;
+      if (used > room) break;
+    }
   }
-  return history.slice(at);
+  return at < 0 ? [...history] : history.slice(at);
 }
 
 /** 最初の依頼（と、その一往復）。**何をしているのかが消えないように。** */

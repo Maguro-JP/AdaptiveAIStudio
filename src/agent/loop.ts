@@ -13,7 +13,7 @@ import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
 import type { Tool, ToolContext, ApprovalRequest, ApprovalAnswer, RequestScope } from './tools/types.ts';
 import { ToolTextFilter } from './tool-text.ts';
 import { DoneMark, DONE_MARK } from './done.ts';
-import { fitToWindow, tokenBudget, trimSchemas, TOOL_SHARE, type Count } from './window.ts';
+import { fitToWindow, historyBudget, estimateTokens, trimSchemas, TOOL_SHARE, type Count } from './window.ts';
 
 export type AgentEvent =
   | { type: 'thinking'; delta: string }
@@ -102,7 +102,30 @@ export class Agent {
      * 自律で回らなくなるのは、いつもそこ。
      */
     let usedTools = false;
-    const budget = tokenBudget(this.#opts.contextTokens ?? 8192);
+    /*
+     * **狭いコンテキストウィンドウでは、ツールの説明を一文に削る。**説明だけで 1400 トークン
+     * あり、4k のコンテキストウィンドウでは 34% を占める。決まりと学びを足すと、
+     * 肝心の依頼と履歴の場所が残らない。広いコンテキストウィンドウでは削らない。
+     *
+     * **取り分はここに書かない。**ここは 0.15 を明に渡していた。
+     * `window.ts` は「0.15 では一文に切っても入らず、説明が丸ごと落ちて
+     * 呼び分けができなくなる」と書いて `TOOL_SHARE` を 0.25 に直したのに、
+     * **本番で `trimSchemas` を呼ぶのはここ一箇所だけ**なので、直した側は
+     * 誰からも読まれていなかった。本番のツール13個・既定の
+     * コンテキストウィンドウ 8192 で測ると、0.15 では 13 個すべての説明が
+     * 落ちる（run_command の許可コマンドの一覧も、fetch_url の許可先も、
+     * edit_file の使い方も届かない）。
+     * 数は `window.ts` に一つだけ置く。
+     */
+    const tools = trimSchemas(
+      this.#opts.tools.map((t) => t.schema), this.#opts.contextTokens ?? 8192, TOOL_SHARE,
+      this.#opts.count,
+    );
+    // 履歴の取り分は、実際に送るシステムプロンプトとツールの説明のかさを引いて決める（引かずに足すとコンテキストウィンドウを超えていた）
+    const measure = this.#opts.count ?? estimateTokens;
+    const budget = historyBudget(
+      this.#opts.contextTokens ?? 8192, measure(this.#opts.system) + measure(JSON.stringify(tools)),
+    );
     const ctx: ToolContext = {
       root: this.#opts.root,
       signal,
@@ -151,25 +174,7 @@ export class Agent {
           temperature: this.#opts.temperature,
           maxTokens: this.#opts.maxTokens,
           ...(this.#opts.priority !== undefined ? { priority: this.#opts.priority } : {}),
-          /*
-           * **狭い窓では、道具の説明を一文に削る。**説明だけで 1400 トークン
-           * あり、4k の窓では 34% を占める。決まりと学びを足すと、
-           * 肝心の依頼と履歴の場所が残らない。広い窓では削らない。
-           *
-           * **取り分はここに書かない。**ここは 0.15 を明に渡していた。
-           * `window.ts` は「0.15 では一文に切っても入らず、説明が丸ごと落ちて
-           * 呼び分けができなくなる」と書いて `TOOL_SHARE` を 0.25 に直したのに、
-           * **本番で `trimSchemas` を呼ぶのはここ一箇所だけ**なので、直した側は
-           * 誰からも読まれていなかった。本番のツール13個・既定の
-           * コンテキストウィンドウ 8192 で測ると、0.15 では 13 個すべての説明が
-           * 落ちる（run_command の許可コマンドの一覧も、fetch_url の許可先も、
-           * edit_file の使い方も届かない）。
-           * 数は `window.ts` に一つだけ置く。
-           */
-          tools: trimSchemas(
-            this.#opts.tools.map((t) => t.schema), this.#opts.contextTokens ?? 8192, TOOL_SHARE,
-            this.#opts.count,
-          ),
+          tools,
         },
         signal,
       ) as AsyncGenerator<ChatEvent>) {
@@ -256,6 +261,7 @@ export class Agent {
           yield { type: 'nudged', left: maxNudges - nudges };
           history.push({
             role: 'user',
+            nudge: true,
             content: '返事が出力の上限で切れています。切れたところから続きを書いてください。'
               + '書き直さず、続きだけを、短くまとめて書いてください。',
           });
@@ -286,6 +292,7 @@ export class Agent {
         // 押し戻す。**次の一手を求める。**「続けて」だけでは、また同じ返事が来る。
         history.push({
           role: 'user',
+          nudge: true,
           content:
             `まだ ${DONE_MARK} がありません。\n`
             + `やり終えているなら、${DONE_MARK} だけの行を書いてください。\n`
