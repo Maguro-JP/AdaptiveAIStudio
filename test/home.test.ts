@@ -771,7 +771,7 @@ describe('bundle を組み直すとき', () => {
   test('**組み立て元の node_modules がリンクでも、写すのは中身で、組み立て元の型定義と .map を消さない**', async () => {
     const { mkdir, readdir, symlink, copyFile, stat } = await import('node:fs/promises');
     const { lstatSync } = await import('node:fs');
-    const { bundle, PAYLOAD } = await import('../scripts/bundle.mjs');
+    const { bundle, PAYLOAD, launcherIn } = await import('../scripts/bundle.mjs');
     // 組み立て元: 製品の中身はフォルダごとリンクし（Windows では junction）、node_modules だけ作り物にする
     const src = await tempDir('aas-linked-src-');
     for (const item of PAYLOAD) {
@@ -782,9 +782,9 @@ describe('bundle を組み直すとき', () => {
       if (s.isDirectory()) await symlink(from, join(src, item), 'junction');
       else await copyFile(from, join(src, item));
     }
-    for (const extra of ['launcher.cmd', 'README.txt']) {
-      if (existsSync(join(installRoot(), extra)) && !existsSync(join(src, extra))) await copyFile(join(installRoot(), extra), join(src, extra));
-    }
+    // 入口は、リポジトリでは launcher.cmd、bundle の中では一つ上の AdaptiveAIStudio.cmd にある。どちらで走らせても同じになるよう、
+    // 見つけた方を launcher.cmd として置く
+    await copyFile(launcherIn(installRoot()), join(src, 'launcher.cmd'));
     const modules = await tempDir('aas-linked-modules-');
     await mkdir(join(modules, 'pkg'), { recursive: true });
     await writeFile(join(modules, 'pkg', 'index.d.ts'), 'export {};');
