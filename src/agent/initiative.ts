@@ -60,7 +60,7 @@ export async function findLeads(opts: LeadOptions): Promise<Lead[]> {
   // 読めなかったテストファイルも「在る」側に数える（中身が読めないだけで、無いのではない）
   const testedBasenames = new Set(
     [...(tests?.files.keys() ?? []), ...[...(tests?.unreadable ?? [])].filter((f) => !f.endsWith('/'))]
-      .map((f) => baseName(f).replace(/\.(test|spec)$/, '')),
+      .map((f) => baseName(f).replace(/[._](test|spec)$/, '').replace(/^test_/, '')),
   );
   // 数え直しそのものが落ちた・中を見られないフォルダがある: どのテストが在るか分からない。「見当たりません」と言わない
   // （言うと、在るテストの二つ目を書かせにいく）
@@ -178,6 +178,15 @@ export function investigationPrompt(lead: Lead): string {
 }
 
 /** モデルの出力から提案を取り出す。形式に従っていなければ採用しない。 */
+/**
+ * 見回り（recon）が調べ切らずに終わったか。言い終えた回（`completed`）以外は、調べ切っていない（理由を返す）。
+ * 落ちた・止められた・空の回は、呼ぶ側が先に見ている。
+ */
+export function reconCutShort(finishedWith: string | undefined): string | undefined {
+  if (finishedWith === undefined || finishedWith === 'completed') return undefined;
+  return finishedWith === 'maxTurns' ? '調べ切れませんでした（ターンの上限）' : '調べ切れませんでした（途中で止まりました）';
+}
+
 export function parseProposal(text: string): {
   title: string; rationale: string; action: string;
 } | undefined {

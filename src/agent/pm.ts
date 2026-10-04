@@ -113,8 +113,10 @@ export function extractJson(text: string): unknown {
 const asString = (v: unknown): string | undefined =>
   typeof v === 'string' && v.trim().length > 0 ? v.trim() : undefined;
 
+/** 文字列一つ（`deps: "t1"`）も一つの配列として受ける（`[]` にしていたので、待つべき件が黙って並列に走った）。 */
 const asStringArray = (v: unknown): string[] =>
-  Array.isArray(v) ? v.map(asString).filter((s): s is string => !!s) : [];
+  typeof v === 'string' ? (asString(v) ? [asString(v)!] : [])
+    : Array.isArray(v) ? v.map(asString).filter((s): s is string => !!s) : [];
 
 /** 書き込み先を比較できる形に揃える。表記揺れで錠が効かないのが一番まずい。 */
 export function normalizeWrite(path: string): string {
@@ -145,7 +147,8 @@ export function repairPlan(raw: unknown, request: string, ctx: PmContext): WorkP
       continue;
     }
 
-    let id = asString(e.id) ?? `t${i + 1}`;
+    // ID の無い項目に振る ID も、後ろの項目が名乗る ID と重ねない（重ねると、後ろの項目が付け直され、それを deps で指す先が入れ替わる）
+    let id = asString(e.id) ?? freshId(`t${i + 1}`, new Set([...seen, ...rawIds]));
     if (seen.has(id)) {
       // 後ろの項目がこれから名乗る ID とも重ねない（重ねると、その ID を deps で指す先が入れ替わる）
       const fixed = freshId(`${id}_${i + 1}`, new Set([...seen, ...rawIds]));

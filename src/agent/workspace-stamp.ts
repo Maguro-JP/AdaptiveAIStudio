@@ -42,7 +42,9 @@ export const STAMP_GIT_TIMEOUT_MS = 2 * 60_000;
  * 作業場の `.git/config`（作業の中で書き換えられうる）が、承認なしに命令を走らせる道になる。
  */
 // 値は空にする。`false` は git 2.36 より前では「false という命令」と読まれ、呼ぶたびに sh を起こす。空ならどの版でも「無し」（2.43 で、空でも命令が走らないことを測った）
-export const SAFE_GIT_ARGS: readonly string[] = ['-c', 'core.fsmonitor='];
+// `--no-optional-locks`: 裏で走らせる `git status` が index.lock を取りに行かない（同じ時に担当が打った `git add`・`git commit` を
+// 「index.lock exists」で落とさない。git 2.15 から）
+export const SAFE_GIT_ARGS: readonly string[] = ['--no-optional-locks', '-c', 'core.fsmonitor='];
 
 function gitOut(args: string[], cwd: string, maxBuffer = 16 * 1024 * 1024): Promise<string | undefined> {
   return new Promise((resolve) => {

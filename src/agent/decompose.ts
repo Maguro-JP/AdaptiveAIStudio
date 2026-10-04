@@ -57,6 +57,10 @@ export async function decompose(
       opts.signal,
     )) {
       if (ev.type === 'text') text += ev.delta;
+      // 途中で落ちた・上限で切れた返事は、最後の段が切れている（「src/b.ts の bar を」のまま段にしていた）。
+      // 投げずに出来事で知らせてくるので、ここで見る。割れないことは、進めない理由にならない
+      if (ev.type === 'failed') return [];
+      if (ev.type === 'done' && ev.finishReason === 'length') return [];
     }
   } catch {
     return []; // 割れないことは、進めない理由にならない
@@ -75,17 +79,21 @@ export function readSteps(text: string, max: number): string[] {
   for (const raw of text.split('\n')) {
     let line = raw.trim();
     if (line.length === 0) continue;
-    // 見出しや前置きは落とす。
-    if (/^(#|```|以下|まず以下|手順|段取り|計画)/.test(line)) continue;
-    // 番号・記号を落とす（付けるなと言っても付けてくる）。
-    line = line.replace(/^[-*・>]+\s*/, '').replace(/^\(?\d+[.)、）]\s*/, '').trim();
+    if (/^```/.test(line)) continue;
+    // 番号・記号・強調（`**手順:**`）を落とす（付けるなと言っても付けてくる）。
+    line = line.replace(/^[-*・>]+\s*/, '').replace(/^\(?\d+[.)、）]\s*/, '').replace(/\*\*|__/g, '').trim();
+    // 見出し・導入・結びは落とす。記号を落とした後に見る（前に見ていたので、`- 以下の順で` や `**手順:**` を段にしていた）
+    if (/^(#|以下|まず以下|手順|段取り|計画)/.test(line)) continue;
+    if (/^(以上|これで)/.test(line)) continue;
     // 終わりの合図が混ざってくることがある。段ではない。
     if (line === 'TASK_DONE') continue;
     if (line.length < MIN_CHARS || line.length > MAX_CHARS) continue;
     if (out.includes(line)) continue; // 同じ段を二度出してくる
     out.push(line);
-    if (out.length >= max) break;
   }
+  // 決めた数より多く返ってきたら、割らずに進ませる。頭から拾って残りを捨てると、捨てた段は一度も行われないまま
+  // 依頼を「済んだ」で閉じていた（段の頼み文は「ほかの段には手を出さない」なので、誰も拾わない）
+  if (out.length > max) return [];
   // 1段しか拾えないなら、割れていないのと同じ。**割らずに進ませる。**
   return out.length >= 2 ? out : [];
 }
