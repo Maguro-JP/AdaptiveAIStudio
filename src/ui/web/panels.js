@@ -1413,6 +1413,13 @@ export const PANELS = {
    */
   proposals(body, ctx) {
     const KIND = { bug: '不具合', risk: '危うさ', question: '確認', idea: '思いつき' };
+    /*
+     * 描き直しをまたいで持つもの。5 秒ごとの描き直しで、開いて読んでいた札が閉じ、断られた理由の文が消え、
+     * 伝えている最中の札に押し場所が戻って二度押せた（memory パネルの `moreOpen` と同じ形）
+     */
+    const opened = new Set();
+    const sending = new Set();
+    const refused = new Map();
 
     const draw = async () => {
       const r = await getJson('/api/proposals').catch(() => null);
@@ -1423,6 +1430,8 @@ export const PANELS = {
       }
       for (const p of r.open) {
         const box = el('details', 'card proposal');
+        if (opened.has(p.id)) box.open = true;
+        box.ontoggle = () => { if (box.open) opened.add(p.id); else opened.delete(p.id); };
         const head = el('summary', 'card-head');
         head.append(
           el('span', 'chip', KIND[p.kind] ?? p.kind),
@@ -1437,13 +1446,20 @@ export const PANELS = {
         const yes = el('button', 'primary', 'やってもらう');
         const no = el('button', '', '却下');
         const decide = async (verdict) => {
-          // 断られても、通信が落ちても、少し置いて描き直す（押す口が消えたまま残らない）
-          await decideProposal(p.id, verdict, menu, [yes, no]);
+          sending.add(p.id);
+          refused.delete(p.id);
+          // 断られても、通信が落ちても、少し置いて描き直す（押す口が消えたまま残らない）。断られた理由は描き直しても残す
+          const done = await decideProposal(p.id, verdict, menu, [yes, no]).finally(() => sending.delete(p.id));
+          if (!done) refused.set(p.id, menu.firstChild?.textContent ?? '伝えられませんでした');
           setTimeout(draw, 1500);
         };
         yes.onclick = () => decide('accepted');
         no.onclick = () => decide('rejected');
-        menu.append(yes, no);
+        if (sending.has(p.id)) menu.append(el('span', 'dim', '伝えています…'));
+        else {
+          if (refused.has(p.id)) menu.append(el('span', 'warn', refused.get(p.id)));
+          menu.append(yes, no);
+        }
         inner.append(menu);
         box.append(inner);
         body.append(box);
@@ -1811,8 +1827,9 @@ export const PANELS = {
     const look = async () => {
       const text = q.value.trim();
       list.replaceChildren();
+      // 前の検索は、空で押したときも止める（止める前に返していたので、空にした後で前の結果が出た）
+      if (asking) { asking.abort(); asking = null; }
       if (!text) { state.textContent = '探す文字を入れてください。'; return; }
-      if (asking) asking.abort();
       const ac = new AbortController();
       asking = ac;
       state.textContent = '探しています…';
@@ -1827,6 +1844,8 @@ export const PANELS = {
       }
       if (ac.signal.aborted) return;
       const j = await r.json().catch(() => ({}));
+      // 本文を読む間に次の検索が始まっていたら、古い結果を足さない
+      if (ac.signal.aborted || asking !== ac) return;
       if (!r.ok) { state.textContent = j.error ?? '探せませんでした'; return; }
 
       const hits = j.hits ?? [];
