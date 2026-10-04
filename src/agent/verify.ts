@@ -74,6 +74,9 @@ export function digestFailure(output: string): string {
       .replace(/duration_ms[:\s]+\d+(\.\d+)?/g, 'duration_ms N')
       .replace(/\d+(\.\d+)?\s*ms\b/g, 'Nms')
       .replace(/\d+(\.\d+)?\s*s\b/g, 'Ns')
+      // 時刻（vitest の `Start at 10:21:33`、pytest の `(0:01:02)`）と、go の結果を使い回した表示（`(cached)`）も毎回変わる
+      .replace(/\b\d{1,2}:\d{2}:\d{2}(\.\d+)?\b/g, 'HH:MM:SS')
+      .replace(/\(cached\)/g, 'Ns')
       .replace(/\/tmp\/[\w.-]+/g, '/tmp/X')
       // Windows の一時フォルダ（`C:\Users\me\AppData\Local\Temp\aas-x1`。出力の中では `\\` に重なることもある）。
       // 利用者名に空白が入る（`C:\Users\John Smith\...`）ので、間は空白も含めて取る（引用符と改行の手前まで）
@@ -172,7 +175,8 @@ export async function* verifyLoop(
     const digest = digestFailure(result.output);
 
     // 作業前と同じ失敗なら、この作業が原因ではない
-    if (round === 1 && baseline && !baseline.passed
+    // 何回目でも比べる（1 回目だけ比べていたので、新しい失敗を直して作業前と同じ失敗だけになった回を、作業前からと言えなかった）
+    if (baseline && !baseline.passed
         && digestFailure(baseline.output) === digest) {
       preexistingFailure = true;
       return { passed: false, digest, preexisting: true, result };

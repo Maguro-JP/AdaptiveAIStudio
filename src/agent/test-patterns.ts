@@ -18,10 +18,11 @@ export function isTestFile(path: string): boolean {
 
 /** テスト定義の数え方。言語ごとの代表的な書き方だけを見る。 */
 const CASE_PATTERNS = [
-  /\b(?:test|it)\s*(?:\.\w+)?\s*\(/g,   // JS/TS: test(...) it(...)
-  /^\s*def\s+test_\w+/gm,                // Python
+  // JS/TS: test(...) it(...)。前が `.` のもの（`/x/.test(s)` の `.test(`）は数えない
+  /(?<![.\w$])(?:test|it)\s*(?:\.\w+)?\s*\(/g,
+  /^\s*(?:async\s+)?def\s+test_\w+/gm,   // Python（async def も）
   /\bfunc\s+Test\w+\s*\(/g,              // Go
-  /^\s*#\[test\]/gm,                     // Rust
+  /^\s*#\[(?:\w+::)*test\]/gm,           // Rust（#[tokio::test] なども）
 ];
 
 /**
@@ -39,6 +40,7 @@ const SKIP_PATTERNS = [
   /@(?:pytest\.mark\.|unittest\.)?skip/g,
   /\bt\.Skip(?:f|Now)?\s*\(/g,           // Go
   /^\s*#\[ignore\b/gm,                   // Rust
+  /\bpytest\.skip\s*\(|\bself\.skipTest\s*\(/g,   // Python の中から
 ];
 
 /** 絞り込みの痕跡。一つ足すだけで他のテストが全部走らなくなるので、skip とは別に、増やすこと自体を止める。 */
@@ -48,20 +50,31 @@ const FOCUS_PATTERNS = [
   /\b(?:test|it|describe|suite)\s*\(\s*(['"`])(?:(?!\1)[^\n])*\1\s*,\s*\{[^{}\n]*?\bonly\s*:/g,
 ];
 
+/**
+ * JS 系のコメントを落とす（コメントにしたテストを数えない。数えていたので、テストをコメントにして通しても数が減らなかった）。
+ * `//` は URL（`http://`）や文字列の中のものは落とさないよう、`:` と引用符の直後は避ける。
+ */
+function withoutComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+}
+
 export function countCases(text: string): number {
+  const code = withoutComments(text);
   let n = 0;
-  for (const p of CASE_PATTERNS) n += text.match(p)?.length ?? 0;
+  for (const p of CASE_PATTERNS) n += code.match(p)?.length ?? 0;
   return n;
 }
 
 export function countSkips(text: string): number {
+  const code = withoutComments(text);
   let n = 0;
-  for (const p of SKIP_PATTERNS) n += text.match(p)?.length ?? 0;
+  for (const p of SKIP_PATTERNS) n += code.match(p)?.length ?? 0;
   return n;
 }
 
 export function countFocus(text: string): number {
+  const code = withoutComments(text);
   let n = 0;
-  for (const p of FOCUS_PATTERNS) n += text.match(p)?.length ?? 0;
+  for (const p of FOCUS_PATTERNS) n += code.match(p)?.length ?? 0;
   return n;
 }

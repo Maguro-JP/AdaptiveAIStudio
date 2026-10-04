@@ -2511,7 +2511,7 @@ export class UiServer {
         session.lock.release(owner);
       }
       if (!done) return send(res, 404, { error: 'その戻り先はもうありません' });
-      session.markChanged();
+      session.handChanged();
       this.broadcast({
         type: 'log', level: 'info',
         text: done.points > 1
@@ -3275,7 +3275,7 @@ export class UiServer {
     } finally {
       session?.lock.release(owner);
     }
-    session?.markChanged();
+    session?.handChanged();
     const diff = unifiedDiff(asked, before ?? '', content);
     const { added, removed } = diffStat(diff);
     this.broadcast({ type: 'session', event: { type: 'diff', path: asked, diff, added, removed, created: before === undefined } }, this.#workRoot());

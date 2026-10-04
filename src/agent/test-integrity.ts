@@ -11,13 +11,15 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { toDisplayPath } from './tools/paths.ts';
 import { isAbsent } from '../harness/put-back.ts';
-import { isTestFile, countCases, countSkips } from './test-patterns.ts';
+import { isTestFile, countCases, countSkips, countFocus } from './test-patterns.ts';
 
 export interface TestSnapshot {
   /** テストファイルとその中のテスト件数 */
   files: Map<string, number>;
   totalCases: number;
   totalFiles: number;
+  /** `.only` などの指定があるファイルと、その数。**省略可**（古い記録・作り物）。 */
+  focused?: Map<string, number>;
   /**
    * 在るのに読めなかったテストファイルと、中を見られなかったフォルダ（末尾 `/`）。**省略可**（古い記録・作り物）。
    * 読めなかったものを「無い」と数えると、作業の後で一瞬読めなかっただけのテストを「消された」と読み、作業を丸ごと巻き戻していた。
@@ -41,6 +43,7 @@ const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'ta
 export async function snapshotTests(root: string): Promise<TestSnapshot> {
   const files = new Map<string, number>();
   const unreadable = new Set<string>();
+  const focused = new Map<string, number>();
   let totalCases = 0;
 
   const walk = async (dir: string, depth: number): Promise<void> => {
@@ -73,12 +76,14 @@ export async function snapshotTests(root: string): Promise<TestSnapshot> {
 
       const cases = countCases(text) - countSkips(text);
       files.set(rel, Math.max(0, cases));
+      const focus = countFocus(text);
+      if (focus > 0) focused.set(rel, focus);
       totalCases += Math.max(0, cases);
     }
   };
 
   await walk(root, 0);
-  return { files, totalCases, totalFiles: files.size, ...(unreadable.size > 0 ? { unreadable } : {}) };
+  return { files, totalCases, totalFiles: files.size, ...(unreadable.size > 0 ? { unreadable } : {}), ...(focused.size > 0 ? { focused } : {}) };
 }
 
 /**
@@ -94,7 +99,8 @@ export function compareTests(before: TestSnapshot, after: TestSnapshot): Integri
     for (const d of u) if (d.endsWith('/') && (d === './' || `${f}`.startsWith(d))) return true;
     return false;
   };
-  const removedFiles = [...before.files.keys()].filter((f) => !after.files.has(f) && !unknown(f));
+  // 作業前にテストが一つも無かったファイル（補助・置き物・スナップショット）は、消えても問わない
+  const removedFiles = [...before.files.keys()].filter((f) => !after.files.has(f) && !unknown(f) && (before.files.get(f) ?? 0) > 0);
   if (removedFiles.length > 0) {
     return {
       ok: false,
@@ -114,6 +120,15 @@ export function compareTests(before: TestSnapshot, after: TestSnapshot): Integri
       ok: false,
       reason: `テストが減っています: ${shrunk.join(', ')}。` +
         'テストの削除・skip で通すことは認められません。実装側を直してください。',
+    };
+  }
+
+  // `.only` を足すと、そのファイルの他のテストが走らなくなる（数は変わらないので、減ったとは数えない）。run_command で足した分は書く前の規則を通らない
+  const focusedNow = [...(after.focused ?? new Map<string, number>())].filter(([f, n]) => n > (before.focused?.get(f) ?? 0)).map(([f]) => f);
+  if (focusedNow.length > 0) {
+    return {
+      ok: false,
+      reason: `.only（他のテストを走らせない指定）が足されています: ${focusedNow.join(', ')}。外してから、実装側を直してください。`,
     };
   }
 
