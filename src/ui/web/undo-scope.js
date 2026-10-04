@@ -35,3 +35,19 @@ export function wontRestore(list, index) {
   }
   return out;
 }
+
+/**
+ * 戻り先の時刻の出し方（日本時間）。今日なら時刻だけ、今日でなければ月日も、年が違えば年も出す。
+ * 時刻だけを出していたので、三日前の 14:20 と今日の 14:20 が同じ「14:20」に並び、今日の分のつもりで押すと何日分も戻っていた。
+ */
+export function undoWhen(at, now = Date.now()) {
+  const parts = (t) => Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Tokyo', year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(t)).map((p) => [p.type, p.value]));
+  const a = parts(at);
+  const n = parts(now);
+  const time = `${a.hour}:${a.minute}`;
+  if (a.year !== n.year) return `${a.year}/${a.month}/${a.day} ${time}`;
+  if (a.month !== n.month || a.day !== n.day) return `${a.month}/${a.day} ${time}`;
+  return time;
+}

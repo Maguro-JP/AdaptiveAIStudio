@@ -11,7 +11,7 @@ import { pathActions } from './paths.js';
 import { closePanel, openPanel, movePanel, panelsInUse } from './layout-ops.js';
 import { doingText } from './doing.js';
 import { isPlainEnter } from './keys.js';
-import { willRestore, wontRestore } from './undo-scope.js';
+import { willRestore, wontRestore, undoWhen } from './undo-scope.js';
 import { sizeText } from './size.js';
 import { openPicker } from './color.js';
 
@@ -859,6 +859,10 @@ function listen() {
      * 見ている会話へ流れ込むと、話が混ざる。会話の名前が添えてある出来事は、
      * 見ている会話のものだけ通す。他の会話のものは、横の一覧の「動いています」で分かる。
      */
+    // 終わった会話の「写した所まで」は、見ている会話でなくても外す。外さずに残ると、選び直して送った次の答えは番号が 1 から
+    // 振り直されるので、頭から写した数だけ捨てていた（答えが文の途中から始まって見えた）
+    // 新しい回の始まり（busy:true）でも外す。選ぶ返事が終わりの合図より後に届くと、終わった回の値が入り直すため
+    if (e.type === 'busy' && e.conversationId) copiedUpTo.delete(e.conversationId);
     if ((e.type === 'session' || e.type === 'busy') && e.conversationId && conversations
       && (conversations.current ? e.conversationId !== conversations.current : !sendingFromTop)) {
       if (e.type === 'busy' && !e.busy) void loadConversations();
@@ -866,7 +870,6 @@ function listen() {
       if (e.type === 'session' && e.event?.type === 'diff') for (const fn of eventHandlers.get('elsewhereDiff') ?? []) fn(e);
       return;
     }
-    if (e.type === 'busy' && !e.busy && e.conversationId) copiedUpTo.delete(e.conversationId);
     // 戻ったときに写した分は、もう描いてある。
     if (e.type === 'session' && typeof e.seq === 'number' && e.conversationId) {
       const upTo = copiedUpTo.get(e.conversationId);
@@ -1323,7 +1326,7 @@ async function loadUndo() {
     const label = document.createElement('button');
     label.className = 'ghost row grow';
     label.disabled = true;
-    const when = new Date(p.at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+    const when = undoWhen(p.at);
     label.textContent = `${when} ${p.request}`;
     label.title = `${p.request}\n触ったファイル（${p.paths.length} 件）:\n${p.paths.join('\n')}`;
 
@@ -1349,7 +1352,7 @@ async function loadUndo() {
     back.textContent = '↶';
     back.addEventListener('click', async () => {
       const also = i === 0 ? '' : `\nこの後の ${i} 回ぶんの直しも一緒に戻ります。`;
-      if (!confirm(`${willTouch.length} 件のファイルを戻します。${also}\n\n${willTouch.join('\n')}${wontSay}`)) return;
+      if (!confirm(`「${when} ${p.request}」の前まで、${willTouch.length} 件のファイルを戻します。${also}\n\n${willTouch.join('\n')}${wontSay}`)) return;
       back.disabled = true;
       try {
         // 見ていた一番新しい戻り先を添える（確かめている間に新しい回ができたら、名前を出していない回まで戻さない）
@@ -1537,6 +1540,9 @@ function drawConversations() {
         // 動いている会話へ戻った。途中までを写し、続きの出来事を通す。
         copiedUpTo.set(head.id, r.body.inFlight.seq);
         ctx.showInFlight(r.body.inFlight);
+      } else {
+        // 動いていない。前に写した所までの記録が残っていても使わない（次の答えの番号は 1 から振り直される）
+        copiedUpTo.delete(head.id);
       }
       await loadConversations();
     };
