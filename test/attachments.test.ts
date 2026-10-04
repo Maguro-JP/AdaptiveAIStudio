@@ -147,6 +147,8 @@ describe('溜めない', () => {
   test('古いものは片づける。渡したものは、その依頼が終われば要らない', async () => {
     const s = new Attachments(join(await tempDir('aas-attach-'), 'files'));
     const item = await s.add('a.txt', Buffer.from('xxxx'));
+    // 依頼に添えたもの（まだ添えていないものは画面の受け皿に載っているので片づけない。`test/hand-write-gaps.test.ts`）
+    await s.describe([item.id]);
     /*
      * **時計に頼らない。**ここは「2ms 先の時計で見る」で古さを作っていた。
      * Windows の CI で落ちた（書いた時刻が 2ms 以内に収まらない、あるいは

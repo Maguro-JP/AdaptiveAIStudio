@@ -2477,14 +2477,26 @@ async function makeEntry(kind) {
   const trimmed = name.trim();
   if (!trimmed) return;
   const path = `${where}${trimmed}`;
-  const r = await ask('/api/files/new', {
+  let r = await ask('/api/files/new', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ path, kind }),
   }, '作れませんでした');
   if (!r) return;
-  if (!r.ok) { alert(r.body.error ?? '作れませんでした'); return; }
+  // 守っているファイル（.env など）は、確かめてから作る
+  const mustConfirm = !r.ok && r.status === 409 && r.body.confirm && r.body.protected;
+  if (!r.ok && !mustConfirm) { alert(r.body.error ?? '作れませんでした'); return; }
+  if (mustConfirm) {
+    if (!confirm(r.body.error)) return;
+    r = await ask('/api/files/new', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path, kind, confirmProtected: true }),
+    }, '作れませんでした');
+    if (!r) return;
+    if (!r.ok) { alert(r.body.error ?? '作れませんでした'); return; }
+  }
   await loadFiles(filesAt);
-  if (kind === 'file') await openInEditor(path);
+  // 本体が作った名前で開く（`\` を区切りに直して作るので、打った綴りのままでは見つからない）
+  if (kind === 'file') await openInEditor(r.body.created ?? path);
 }
 $('newFile').onclick = () => { void makeEntry('file'); };
 $('newDir').onclick = () => { void makeEntry('dir'); };

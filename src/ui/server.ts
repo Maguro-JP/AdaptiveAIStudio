@@ -32,12 +32,13 @@ import { writeEnvValue } from '../core/env.ts';
 import { canRun } from '../core/which.ts';
 import { saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFile, writeFile, mkdir, realpath } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, realpath, rename, rm, chmod } from 'node:fs/promises';
+import { protectedHit, isGitPattern } from '../core/harness-setup.ts';
 import { readJournal, writeWhole, type JournalRead } from '../core/journal-file.ts';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { revealCommand } from '../core/opener.ts';
-import { join, dirname, extname, normalize, resolve as resolvePath, relative, isAbsolute } from 'node:path';
+import { join, dirname, basename, extname, normalize, resolve as resolvePath, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { AckStore, ACK_TEXT, isAckId } from '../core/acks.ts';
@@ -505,7 +506,8 @@ export class UiServer {
   }
 
   /** 画面へ流す。誰も見ていなくても落ちない。 */
-  broadcast(event: UiEvent): void {
+  /** `root` は、差分を出した本体の作業場（渡さなければ、いまの本体の作業場）。差分から戻すとき、別の作業場へ当てないために覚える。 */
+  broadcast(event: UiEvent, root?: string): void {
     // 画面に流すものの一部を、ファイルにも残す（記録・会話の終わり・落ちた理由）。
     if (event.type === 'log') {
       void this.#logFile.append(`[${event.level}] ${event.text}`).catch(() => undefined);
@@ -519,6 +521,15 @@ export class UiServer {
       const ev = event.event as { type?: string };
       if (ev.type === 'diff') {
         const d = ev as unknown as { path: string; diff: string; added: number; removed: number; created?: boolean };
+        // どの作業場で出た差分かを覚える（差分から戻すとき、別の作業場へ当てない）。際限なく持たない。
+        // 配った時点の設定の作業場ではなく、差分を出した本体の作業場で覚える（作業場を変えても、走っている本体は前の作業場で書き続ける）
+        const from = root ?? (this.#session ? resolvePath(this.#session.root) : this.#workRoot());
+        this.#diffRoots.set(diffKey(d.path, d.diff), from);
+        while (this.#diffRoots.size > 500) {
+          const oldest = this.#diffRoots.keys().next().value;
+          if (oldest === undefined) break;
+          this.#diffRoots.delete(oldest);
+        }
         const before = this.#changes.get(d.path);
         this.#changes.set(d.path, {
           path: d.path, diff: d.diff, added: d.added, removed: d.removed,
@@ -575,9 +586,15 @@ export class UiServer {
     }, () => undefined);
     // 前に渡された添付を片づける。その依頼が終われば要らない。
     // 溜めない。消したら、消した量を言う（黙って消さない）。
-    void this.#attachments.sweep().then((freed) => {
-      if (freed > 0) this.broadcast({ type: 'log', level: 'info', text: `前の添付を片づけました（${Math.round(freed / 1024)} KB）` });
-    }).catch(() => undefined);
+    const sweepAttachments = (): void => {
+      void this.#attachments.sweep().then((freed) => {
+        if (freed > 0) this.broadcast({ type: 'log', level: 'info', text: `前の添付を片づけました（${Math.round(freed / 1024)} KB）` });
+      }).catch(() => undefined);
+    };
+    sweepAttachments();
+    // 立ち上げのときだけでなく、一時間ごとにも片づける（立ち上げたまま使い続けると、渡した添付が溜まる一方だった）
+    this.#sweepTimer = setInterval(sweepAttachments, 60 * 60 * 1000);
+    this.#sweepTimer.unref();
     return this.#url;
   }
 
@@ -783,7 +800,7 @@ export class UiServer {
           run.inFlight.text += event.delta;
           seq = ++run.inFlight.seq;
         }
-        this.broadcast({ type: 'session', event, conversationId, ...(seq !== undefined ? { seq } : {}) });
+        this.broadcast({ type: 'session', event, conversationId, ...(seq !== undefined ? { seq } : {}) }, resolvePath(session.root));
       }
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
@@ -1149,7 +1166,11 @@ export class UiServer {
    * 「Ctrl-C が効かない」としか見えない（check:bundle が最後で固まって、
    * 何を待っているのか分からなかった）。2 秒を超えた段だけ名前を出す。
    */
+  /** 添付を一時間ごとに片づける時計。 */
+  #sweepTimer: ReturnType<typeof setInterval> | undefined;
+
   async stop(say: (line: string) => void = () => undefined): Promise<void> {
+    if (this.#sweepTimer) clearInterval(this.#sweepTimer);
     this.#stopped = true;
     if (this.#idleTimer) clearInterval(this.#idleTimer);
     // 待っている承認は、答えが無いまま終わる。許可はしない。
@@ -1969,7 +1990,7 @@ export class UiServer {
     }
 
     if (path === '/api/file' && req.method === 'PUT') {
-      const body = await readBody(req) as { path?: unknown; content?: unknown; stamp?: unknown; root?: unknown };
+      const body = await readBody(req) as { path?: unknown; content?: unknown; stamp?: unknown; root?: unknown; absent?: unknown; confirmProtected?: unknown };
       const asked = typeof body?.path === 'string' ? body.path : '';
       const content = typeof body?.content === 'string' ? body.content : undefined;
       // 開いたときの stamp。送ってきたときだけ見る（持っていない相手は今までどおり）。
@@ -1992,6 +2013,10 @@ export class UiServer {
       const real = await this.#writablePath(asked);
       if (!real) return send(res, 400, { error: '作業場の外には書けません' });
       if (await this.#isLinkAt(asked)) return send(res, 400, { error: `リンク越しには書きません: ${asked}（実体を開いて直してください）` });
+      const reserved = windowsReserved(asked);
+      if (reserved) return send(res, 400, { error: reserved });
+      const guarded = await this.#guardProtected(asked, body?.confirmProtected === true);
+      if (guarded) return send(res, guarded.status, guarded.body);
       const session = this.#session;
       if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから保存してください' });
@@ -2024,6 +2049,16 @@ export class UiServer {
         return send(res, 409, {
           error: '開いたあとで、このファイルは別の所で消されました。画面で、作り直すか選んでください',
           conflict: true, path: asked, gone: true,
+        });
+      }
+      /*
+       * 「消されたので、自分の版で作り直す」は、無いはずだという前提で送る（`absent`）。stamp を外して送っていたので、その間に
+       * AI が同じ名前で作った中身を、確かめずに上書きしていた
+       */
+      if (body?.absent === true && before !== undefined) {
+        return send(res, 409, {
+          error: '消されたあとで、同じ名前のファイルが別の所で作られました。画面で、どちらを残すか選んでください',
+          conflict: true, path: asked, content: before, stamp: stampOf(before),
         });
       }
       if (stamp !== undefined && before !== undefined && stampOf(before) !== stamp) {
@@ -2098,7 +2133,7 @@ export class UiServer {
      * その塊・その行だけを戻す。
      */
     if (path === '/api/revert' && req.method === 'POST') {
-      const body = await readBody(req) as { path?: unknown; diff?: unknown; picks?: unknown };
+      const body = await readBody(req) as { path?: unknown; diff?: unknown; picks?: unknown; confirmProtected?: unknown };
       const asked = typeof body?.path === 'string' ? body.path : '';
       const diff = typeof body?.diff === 'string' ? body.diff : '';
       const picks = Array.isArray(body?.picks)
@@ -2109,9 +2144,16 @@ export class UiServer {
       if (diff.split('\n').some((l) => l.startsWith('-') && OPAQUE_LINE.test(l.slice(1)))) {
         return send(res, 409, { error: 'utf8 で読めない中身だったので、差分からは戻せません（履歴の「戻す」で戻してください）' });
       }
+      // 別の作業場で出た差分は当てない（作業場を変えたあとで、前の作業場の差分を同じ名前のファイルへ当てていた）
+      const from = this.#diffRoots.get(diffKey(asked, diff));
+      if (from !== undefined && from !== this.#workRoot()) {
+        return send(res, 409, { error: 'この差分は別の作業場で出たものなので、いまの作業場には当てません', moved: true });
+      }
       const real = await resolveInside(this.#workRoot(), asked);
       if (!real) return send(res, 400, { error: '作業場の外には書けません' });
       if (await this.#isLinkAt(asked)) return send(res, 400, { error: `リンク越しには書きません: ${asked}（実体の差分から戻してください）` });
+      const guardedRevert = await this.#guardProtected(asked, body?.confirmProtected === true);
+      if (guardedRevert) return send(res, guardedRevert.status, guardedRevert.body);
       const session = this.#session;
       if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから戻してください' });
@@ -2194,7 +2236,7 @@ export class UiServer {
      * （空のフォルダを消すだけなので、消し方は普通のファイル操作に任せる）。
      */
     if (path === '/api/files/new' && req.method === 'POST') {
-      const body = await readBody(req) as { path?: unknown; kind?: unknown };
+      const body = await readBody(req) as { path?: unknown; kind?: unknown; confirmProtected?: unknown };
       const asked = typeof body?.path === 'string' ? body.path.trim().replace(/\\/g, '/') : '';
       const kind = body?.kind === 'dir' ? 'dir' : body?.kind === 'file' ? 'file' : undefined;
       if (!asked || !kind) return send(res, 400, { error: 'path と kind（file か dir）が要ります' });
@@ -2204,6 +2246,10 @@ export class UiServer {
       const real = await this.#writablePath(asked);
       if (!real) return send(res, 400, { error: '作業場の外には作れません' });
       if (await this.#isLinkAt(asked)) return send(res, 400, { error: `そこにはリンクがあります: ${asked}` });
+      const reservedNew = windowsReserved(asked);
+      if (reservedNew) return send(res, 400, { error: reservedNew });
+      const guardedNew = await this.#guardProtected(asked, body?.confirmProtected === true);
+      if (guardedNew) return send(res, guardedNew.status, guardedNew.body);
       const session = this.#session;
       if (session && (this.#busyNow(session) || session.lock.held)) {
         return send(res, 409, { error: 'いま作業中です。終わってから作ってください' });
@@ -3115,6 +3161,22 @@ export class UiServer {
    * 会話へ流す。ここを通らずに書くと、戻せない直しができる。
    */
   /**
+   * 画面の手書きも守りを通す。守りは AI のツール呼び出しにだけ掛かっていたので、横の一覧の「新しいファイル」で
+   * `.git/hooks/pre-commit` を作れ、AI が開かせて欄を書き換えた `.git/config` を人の Ctrl+S が承認なしで書いていた。
+   * `.git` の中は画面からも書かない。ほかの守る道（`.env` など）は本人が直すのが正当な使い方なので、確かめてから書く
+   * （`confirmProtected` を付けて送り直す）。返すのは断りの返事（通すなら undefined）。
+   */
+  async #guardProtected(asked: string, confirmed: boolean): Promise<{ status: number; body: Record<string, unknown> } | undefined> {
+    const hit = await protectedHit(this.#workRoot(), asked, this.#opts.config);
+    if (!hit) return undefined;
+    if (isGitPattern(hit)) {
+      return { status: 403, body: { error: `${asked} は .git の中なので、画面からは書きません（${hit}）`, protected: hit } };
+    }
+    if (confirmed) return undefined;
+    return { status: 409, body: { error: `${asked} は守っているファイルです（${hit}）。本当に書きますか`, protected: hit, confirm: true } };
+  }
+
+  /**
    * 画面から書く先。在れば実体で、無ければ在る所まで遡った実体で、作業場の中かを見る。
    * 外・リンク越しの外・絶対の道は undefined。
    */
@@ -3135,6 +3197,8 @@ export class UiServer {
 
   /** 手書きの錠の持ち主の札。名前で作ると、同じ名前の手書きが二つ重なったとき両方が取れてしまう。 */
   #handSeq = 0;
+  /** 配った差分が、どの作業場で出たものか（鍵は道と差分のハッシュ）。 */
+  readonly #diffRoots = new Map<string, string>();
 
   async #writeByHand(
     asked: string, real: string, before: string | undefined, content: string, request: string,
@@ -3180,7 +3244,12 @@ export class UiServer {
       try {
         // 無い階層ごと作る（新しいファイルは、無いフォルダの中に置きたいことが多い）。
         await mkdir(dirname(real), { recursive: true });
-        await writeFile(real, content, 'utf8');
+        /*
+         * 隣の一時ファイルに書いてから名前を付け替える（原子的に置き換える）。その場で書いていたので、ディスクが一杯・同期ソフトが
+         * 掴む等で途中で落ちると、切り詰められた空のファイルが残り、戻す記録も捨てていた（元の中身がどこにも無かった）。
+         * 付け替えるので、作業場の中のハードリンクを通して外のファイルを書き換えることもない（リンクの名前だけが新しいファイルになる）
+         */
+        await replaceAtomically(real, content);
       } catch (e) {
         // 書けなかった分を戻り先に残さない（残すと、押したときに在るものを消しに行く）。
         undo.discard();
@@ -3196,7 +3265,7 @@ export class UiServer {
     session?.markChanged();
     const diff = unifiedDiff(asked, before ?? '', content);
     const { added, removed } = diffStat(diff);
-    this.broadcast({ type: 'session', event: { type: 'diff', path: asked, diff, added, removed, created: before === undefined } });
+    this.broadcast({ type: 'session', event: { type: 'diff', path: asked, diff, added, removed, created: before === undefined } }, this.#workRoot());
     this.broadcast({ type: 'undo' });
     this.broadcast({ type: 'stateChanged' });
     return { added, removed };
@@ -3432,7 +3501,7 @@ export class UiServer {
           this.#inFlight.text += event.delta;
           seq = ++this.#inFlight.seq;
         }
-        this.broadcast({ type: 'session', event, conversationId, ...(seq !== undefined ? { seq } : {}) });
+        this.broadcast({ type: 'session', event, conversationId, ...(seq !== undefined ? { seq } : {}) }, resolvePath(session.root));
       }
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
@@ -3999,7 +4068,7 @@ export class UiServer {
     this.broadcast({ type: 'busy', busy: true });
     try {
       for await (const event of session.plan(text, said)) {
-        this.broadcast({ type: 'planEvent', event });
+        this.broadcast({ type: 'planEvent', event }, resolvePath(session.root));
       }
     } catch (e) {
       this.broadcast({ type: 'log', level: 'error', text: (e as Error).message });
@@ -4407,4 +4476,71 @@ export function byHand(dir: string): string {
     `  ・保存先: ${dir}`,
     '  置いたら、設定の画面から選べます。',
   ].join('\n');
+}
+
+/** 差分を覚える鍵。 */
+function diffKey(path: string, diff: string): string {
+  return createHash('sha1').update(path).update('\0').update(diff).digest('hex');
+}
+
+let atomicSeq = 0;
+/**
+ * 隣の一時ファイルに書き、元の権限を写してから名前を付け替える。付け替えは一瞬掴まれた（EPERM・EBUSY）ときだけ数回やり直す。
+ *
+ * - 読み取り専用のファイルは書かない（その場で書いていたときと同じく断る。付け替えだと、フォルダに書ければ読み取り専用でも置き換わる）
+ * - 一時ファイルを置けないとき（フォルダに書けない・名前が長すぎる）と、付け替えが掴まれたまま通らないときは、その場で書く
+ *   （置き換えの利点は落ちるが、書けていたものを書けなくはしない）
+ * - 付け替えは新しいファイルになるので、持ち主と ACL は引き継がない（権限の数字だけ写す）
+ * - 落ちても一時ファイルは消す。消す前にプロセスごと落ちた分は、`.名前.aas-番号.tmp` として隣に残る
+ */
+async function replaceAtomically(real: string, content: string): Promise<void> {
+  const mode = await stat(real).then((s) => s.mode & 0o777, () => undefined);
+  if (mode !== undefined && (mode & 0o200) === 0) {
+    throw Object.assign(new Error(`EACCES: 読み取り専用のファイルです: ${real}`), { code: 'EACCES' });
+  }
+  const name = `.${basename(real)}.aas-${process.pid}-${++atomicSeq}.tmp`;
+  // 名前の長さの上限はたいてい 255 バイト。元の名前が長いと、一時ファイルの名前だけが上限を超える
+  if (Buffer.byteLength(name) > 255) { await writeFile(real, content, 'utf8'); return; }
+  const tmp = join(dirname(real), name);
+  try {
+    await writeFile(tmp, content, 'utf8');
+  } catch (e) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    const code = (e as NodeJS.ErrnoException).code;
+    // フォルダには書けないがファイルには書ける、は在る（共有フォルダ・権限を絞ったフォルダ）
+    if (code === 'EACCES' || code === 'EPERM' || code === 'ENAMETOOLONG') { await writeFile(real, content, 'utf8'); return; }
+    throw e;
+  }
+  try {
+    if (mode !== undefined) await chmod(tmp, mode).catch(() => undefined);
+    for (let tries = 0; ; tries++) {
+      try { await rename(tmp, real); return; } catch (e) {
+        const code = (e as NodeJS.ErrnoException).code;
+        if (!(code === 'EPERM' || code === 'EBUSY' || code === 'EACCES')) throw e;
+        if (tries >= 4) {
+          // Windows で、消すことを許さずに開いている相手がいると付け替えは通らない。その場で書くことはできる
+          await rm(tmp, { force: true }).catch(() => undefined);
+          await writeFile(real, content, 'utf8');
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 100 * (tries + 1)));
+      }
+    }
+  } catch (e) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw e;
+  }
+}
+
+/**
+ * Windows の予約された名前（`con`・`nul`・`aux.js` など）と、名前の末尾の点・空白。どれも Windows では別の物を指すので、
+ * 「既にあります」と嘘を言い、書くと装置へ流れて何も残らなかった。断りの文を返す（使える名前なら undefined）。
+ */
+export function windowsReserved(asked: string, platform: NodeJS.Platform = process.platform): string | undefined {
+  if (platform !== 'win32') return undefined;
+  for (const seg of asked.split(/[\\/]+/)) {
+    if (/^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(\..*)?$/i.test(seg)) return `${seg} は Windows で予約された名前なので使えません`;
+    if (/[. ]$/.test(seg) && seg !== '.' && seg !== '..') return `${seg} は名前の末尾が点か空白なので、Windows では別の名前になります`;
+  }
+  return undefined;
 }
