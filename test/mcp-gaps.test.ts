@@ -7,7 +7,7 @@
  * - 大きすぎる返事は溜め込まずに断る
  * - 渡した API キーを、失敗の文に出さない
  * - 時間切れも相手へ取り消しを知らせる
- * - 配れない名前・object でない引数の形は配らない／直す。返りは長さで切る
+ * - 雲側が受け付けない名前は受け付ける形に直して配り、object でない引数の形は既定に置き換える。返りは長さで切る
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,7 +15,7 @@ import { createServer, type Server } from 'node:http';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McpClient } from '../src/mcp/client.ts';
-import { collectTools, deliverableName, wrapTool, MCP_RESULT_MAX, blockedTools } from '../src/mcp/tools.ts';
+import { collectTools, toolName, wrapTool, MCP_RESULT_MAX } from '../src/mcp/tools.ts';
 import { connectInto } from '../src/core/mcp-setup.ts';
 import type { ToolContext } from '../src/agent/tools/types.ts';
 import { until } from './until.ts';
@@ -83,6 +83,20 @@ describe('繋ぎ直す', () => {
   });
 });
 
+describe('繋ぎ直しに失敗したとき', () => {
+  test('**動いていた相手は、繋ぎ直しに失敗しても残る**', async () => {
+    const live = new McpClient('dribble', { command: process.execPath, args: [DRIBBLE] });
+    assert.equal(await live.start(), true, live.failure);
+    const clients = [live];
+    try {
+      const up = await connectInto(clients, 'dribble', { command: process.execPath, args: [join(here, 'fixtures', 'no-such-server.mjs')], startupTimeoutMs: 5_000 }, () => undefined, () => undefined);
+      assert.equal(up, false);
+      assert.deepEqual(clients, [live], '動いていた相手を外した');
+      assert.equal(live.running, true, '動いていた相手を止めた');
+    } finally { live.stop(); }
+  });
+});
+
 describe('遠くの相手', () => {
   test('**問いが一つ断られても、同じ相手へのほかの呼び出しは落とさない**', async () => {
     const s = await startServer({ call: (name) => (name === 'bad' ? { status: 500 } : { delayMs: 300, text: 'ゆっくり' }) });
@@ -135,13 +149,14 @@ describe('遠くの相手', () => {
 });
 
 describe('渡した API キーを出さない', () => {
-  test('**相手が標準エラーに書いたキーを、失敗の文で伏せる**', async () => {
+  test('**相手の断りの文に入ったキーを、失敗の文で伏せる**', async () => {
     process.env.AAS_TEST_MCP_KEY = 'sk-test-supersecret-123456';
+    // 名乗りを、キーを書いた断りで返す相手（標準エラーと終わりの順に依らず、毎回同じに決まる形）
+    const script = 'process.stdin.once("data", (b) => { const m = JSON.parse(String(b).split("\\n")[0]);'
+      + ' process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, error: { message: "Invalid API key: " + process.env.KEY } }) + "\\n"); });';
     const leaky = new McpClient('leaky', {
-      command: process.execPath,
-      args: ['-e', 'console.error("Invalid API key: " + process.env.KEY); process.exit(1)'],
-      envFrom: { KEY: 'AAS_TEST_MCP_KEY' },
-      startupTimeoutMs: 5_000,
+      command: process.execPath, args: ['-e', script],
+      envFrom: { KEY: 'AAS_TEST_MCP_KEY' }, startupTimeoutMs: 5_000,
     });
     try {
       assert.equal(await leaky.start(), false);
@@ -151,17 +166,39 @@ describe('渡した API キーを出さない', () => {
       assert.doesNotMatch(r.text, /supersecret/, r.text);
     } finally { leaky.stop(); delete process.env.AAS_TEST_MCP_KEY; }
   });
+
+  test('**ツールの失敗の返り（isError）に入ったキーも伏せる**', async () => {
+    process.env.AAS_TEST_MCP_KEY2 = 'sk-test-anothersecret-654321';
+    const reply = JSON.stringify({ jsonrpc: '2.0', id: 3, result: { isError: true, content: [{ type: 'text', text: '401: invalid key sk-test-anothersecret-654321' }] } });
+    const s = await startServer({ call: () => ({ body: reply }) });
+    const c = new McpClient('remote', { url: s.url, headersFrom: { 'x-key': 'AAS_TEST_MCP_KEY2' } });
+    try {
+      assert.equal(await c.start(), true, c.failure);
+      const r = await c.call('echo', {}, 5_000);
+      assert.equal(r.isError, true);
+      assert.doesNotMatch(r.text, /anothersecret/, r.text);
+      assert.match(r.text, /伏せ字/);
+    } finally { c.stop(); await s.close(); delete process.env.AAS_TEST_MCP_KEY2; }
+  });
 });
 
 describe('配る形', () => {
-  test('**雲側の API が受け付けない名前は配らず、そう言う**', () => {
-    assert.equal(deliverableName('github', 'create_issue'), true);
-    assert.equal(deliverableName('github', 'repo.list'), false);
-    assert.equal(deliverableName('ギットハブ', 'x'), false);
-    assert.equal(deliverableName('s', 'x'.repeat(70)), false);
-    const fake = { name: 'srv', running: true, tools: [{ name: 'ok_tool' }, { name: 'bad.name' }] } as unknown as McpClient;
-    assert.deepEqual(collectTools([fake]).map((t) => t.schema.name), ['srv__ok_tool']);
-    assert.deepEqual(blockedTools(fake).map((b) => b.name), ['bad.name']);
+  test('**雲側の API が受け付けない名前は、受け付ける形に直して配る**（落とすと、手元のモデルで使えていたツールまで消える）', async () => {
+    const ok = /^[A-Za-z0-9_-]{1,64}$/;
+    assert.equal(toolName('github', 'create_issue'), 'github__create_issue', '受け付ける名前は変えない');
+    for (const [srv, tool] of [['github', 'repo.list'], ['ギットハブ', 'x'], ['s', 'x'.repeat(70)], ['a.b', 'c/d e']]) {
+      const name = toolName(srv!, tool!);
+      assert.match(name, ok, name);
+      assert.ok(name.includes('__'), '外から来たツールの見分け（__）が消えた');
+    }
+    assert.notEqual(toolName('github', 'repo.list'), toolName('github', 'repo_list'), '直した名前が重なる');
+    // 呼ぶときは元の名前で呼ぶ
+    let called = '';
+    const fake = { name: 'srv', running: true, tools: [{ name: 'repo.list' }], call: async (n: string) => { called = n; return { text: 'ok', isError: false }; } } as unknown as McpClient;
+    const [t] = collectTools([fake]);
+    assert.match(t!.schema.name, ok);
+    await t!.run({}, ctx);
+    assert.equal(called, 'repo.list');
   });
 
   test('**object でない引数の形は、既定の形に置き換える**', () => {

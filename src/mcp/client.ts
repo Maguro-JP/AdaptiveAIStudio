@@ -272,7 +272,8 @@ export class McpClient {
      */
     const mine = (): boolean => this.#child === child;
     child.stderr?.on('data', (b: Buffer) => {
-      stderr = (stderr + errDecoder.write(b)).slice(-2000);
+      // 伏せてから切る（切ってから伏せると、切る位置をまたいだキーの片方が残る）
+      stderr = this.#hide(stderr + errDecoder.write(b)).slice(-2000);
     });
     child.stdout?.on('data', (b: Buffer) => { if (mine()) this.#onData(this.#decoder.write(b)); });
     child.on('error', (e) => { if (mine()) this.#fail(`落ちました: ${e.message}`); });
@@ -327,7 +328,9 @@ export class McpClient {
     try {
       const result = await this.#call('tools/call', { name: tool, arguments: args }, timeoutMs, signal);
       if (result === STOPPED) return { text: `${this.name}/${tool} の返事を待たずに止めました`, isError: true };
-      return flatten(result);
+      // ツールの失敗は isError の返りで来る（上流の「401: invalid key sk-…」など）。返りも伏せる
+      const flat = flatten(result);
+      return { ...flat, text: this.#hide(flat.text) };
     } catch (e) {
       return { text: `${this.name}/${tool} を呼べませんでした: ${this.#hide((e as Error).message)}`, isError: true };
     }
@@ -527,7 +530,8 @@ export class McpClient {
 
     if (res.status === 202 || res.status === 204) return; // 知らせだけ。返事は無い
     if (!res.ok) {
-      const body = await readCapped(res, 4_096, true).catch(() => '');
+      // 伏せてから 300 字に切る（切ってから伏せると、端をまたいだキーの片方が残る）
+      const body = this.#hide(await readCapped(res, 4_096, true).catch(() => ''));
       fail(`${res.status} ${res.statusText}${body ? `: ${body.slice(0, 300)}` : ''}`);
       /*
        * 繋ぎの名前を付けた問いに 404 が返ったら、相手側の繋ぎは切れている（相手の再起動・期限切れ）。名乗り直しが要るので、
@@ -585,7 +589,13 @@ export class McpClient {
       try { JSON.parse(event[0]!); return true; } catch { return false; }
     };
     for (;;) {
-      const { done, value } = await reader.read();
+      let chunk: Awaited<ReturnType<typeof reader.read>>;
+      try { chunk = await reader.read(); } catch (e) {
+        // 読み途中で切れたら、この問いだけを落とす（外へ投げると、同じ相手へのほかの呼び出しまで全部落ちていた）
+        fail(`返事の途中で切れました: ${(e as Error).message}`);
+        return;
+      }
+      const { done, value } = chunk;
       if (done) { flush(); break; }
       buf += dec.write(Buffer.from(value));
       let at: number;

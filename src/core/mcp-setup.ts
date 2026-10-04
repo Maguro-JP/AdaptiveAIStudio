@@ -53,20 +53,22 @@ export async function connectInto(
   clients: McpClient[], id: string, spec: McpServerSpec,
   log: (level: 'info' | 'warn', text: string) => void, refresh: () => void,
 ): Promise<boolean> {
+  // 新しい相手を先に起こし、起きてから入れ替える。先に古い相手を止めると、入れたキーの綴り違い・一瞬の繋がらなさで
+  // 起こせなかったときに、それまで動いていたツールまで消えた
+  const client = new McpClient(id, spec);
+  const up = await client.start().catch(() => false);
+  if (!up) {
+    client.stop();
+    const kept = clients.some((c) => c.name === id && c.running);
+    log('warn', `外のツールに繋がりませんでした: ${id} — ${client.failure ?? '理由は不明'}${kept ? '（前の繋がりのまま使います）' : ''}`);
+    return false;
+  }
   const before = clients.findIndex((c) => c.name === id);
   if (before >= 0) {
     clients[before]!.stop();
-    clients.splice(before, 1);
-    refresh();
-  }
-  const client = new McpClient(id, spec);
-  clients.push(client);
-  const up = await client.start().catch(() => false);
-  if (!up) {
-    const at = clients.indexOf(client);
-    if (at >= 0) clients.splice(at, 1);
-    log('warn', `外のツールに繋がりませんでした: ${id} — ${client.failure ?? '理由は不明'}`);
-    return false;
+    clients.splice(before, 1, client);
+  } else {
+    clients.push(client);
   }
   log('info', `外のツールに繋がりました: ${id}（${deliverableCount(client)} 件）`);
   refresh();
