@@ -196,7 +196,20 @@ export class McpClient {
   }
 
   get tools(): readonly McpToolSpec[] { return this.#tools; }
-  get failure(): string | undefined { return this.#failure; }
+  get failure(): string | undefined { return this.#failure === undefined ? undefined : this.#hide(this.#failure); }
+
+  /**
+   * 渡した API キー（`envFrom`・`headersFrom` の値）を伏せる。鍵が通らないときに鍵を標準エラーに書く相手があり、
+   * 失敗の文（相手の標準エラー・遠くの相手の返事）を通じて、画面の記録・`/api/mcp`・モデルの履歴にそのまま出ていた。
+   */
+  #hide(text: string): string {
+    let out = text;
+    for (const from of [...Object.values(this.#spec.envFrom ?? {}), ...Object.values(this.#spec.headersFrom ?? {})]) {
+      const value = process.env[from];
+      if (value && value.length >= 4) out = out.split(value).join('[伏せ字]');
+    }
+    return out;
+  }
 
   /** `headersFrom` の名前が環境に無かったもの（値は持たない）。 */
   get missingHeaders(): readonly string[] { return this.#missingHeaders; }
@@ -259,7 +272,8 @@ export class McpClient {
      */
     const mine = (): boolean => this.#child === child;
     child.stderr?.on('data', (b: Buffer) => {
-      stderr = (stderr + errDecoder.write(b)).slice(-2000);
+      // 伏せてから切る（切ってから伏せると、切る位置をまたいだキーの片方が残る）
+      stderr = this.#hide(stderr + errDecoder.write(b)).slice(-2000);
     });
     child.stdout?.on('data', (b: Buffer) => { if (mine()) this.#onData(this.#decoder.write(b)); });
     child.on('error', (e) => { if (mine()) this.#fail(`落ちました: ${e.message}`); });
@@ -308,15 +322,17 @@ export class McpClient {
     text: string; isError: boolean;
   }> {
     if (!this.running) {
-      return { text: `${this.name} は動いていません: ${this.#failure ?? '理由は不明'}`, isError: true };
+      return { text: `${this.name} は動いていません: ${this.failure ?? '理由は不明'}`, isError: true };
     }
     if (signal?.aborted) return { text: `${this.name}/${tool} は止めたので呼んでいません`, isError: true };
     try {
       const result = await this.#call('tools/call', { name: tool, arguments: args }, timeoutMs, signal);
       if (result === STOPPED) return { text: `${this.name}/${tool} の返事を待たずに止めました`, isError: true };
-      return flatten(result);
+      // ツールの失敗は isError の返りで来る（上流の「401: invalid key sk-…」など）。返りも伏せる
+      const flat = flatten(result);
+      return { ...flat, text: this.#hide(flat.text) };
     } catch (e) {
-      return { text: `${this.name}/${tool} を呼べませんでした: ${(e as Error).message}`, isError: true };
+      return { text: `${this.name}/${tool} を呼べませんでした: ${this.#hide((e as Error).message)}`, isError: true };
     }
   }
 
@@ -476,8 +492,19 @@ export class McpClient {
   async #post(payload: unknown, optional = false, id?: number, own?: AbortSignal): Promise<void> {
     const http = this.#http;
     if (!http) return;
-    // 自分で切った繋ぎ（止めた・時間切れ）の失敗は、失敗にしない
-    const fail = (reason: string) => { if (!optional && !own?.aborted) this.#fail(reason); };
+    /*
+     * 自分で切った繋ぎ（止めた・時間切れ）の失敗は、失敗にしない。
+     * 問い（id あり）の失敗は**その問いだけ**を落とす。相手が死んだときの扱い（`#fail`）を使っていたので、同じ相手へ並べて出した
+     * 呼び出しが一つ 429・500 で断られただけで、ほかの正常な呼び出しまで全部落ちていた。全体を落とすのは知らせ（id なし）のときだけ
+     */
+    const fail = (reason: string) => {
+      if (optional || own?.aborted) return;
+      if (id === undefined) { this.#fail(reason); return; }
+      const pending = this.#pending.get(id);
+      this.#pending.delete(id);
+      pending?.reject(new Error(reason));
+    };
+    const sentSession = http.session;
     const signals = [own, this.#abort].filter((s): s is AbortSignal => s !== undefined);
     let res: Response;
     try {
@@ -503,22 +530,39 @@ export class McpClient {
 
     if (res.status === 202 || res.status === 204) return; // 知らせだけ。返事は無い
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
+      // 伏せてから 300 字に切る（切ってから伏せると、端をまたいだキーの片方が残る）
+      const body = this.#hide(await readCapped(res, 4_096, true).catch(() => ''));
       fail(`${res.status} ${res.statusText}${body ? `: ${body.slice(0, 300)}` : ''}`);
+      /*
+       * 繋ぎの名前を付けた問いに 404 が返ったら、相手側の繋ぎは切れている（相手の再起動・期限切れ）。名乗り直しが要るので、
+       * 動いていない扱いにする。そのままだと、以後の呼び出しが毎回 404 で失敗するのに、一覧では「動いている」と出ていた。
+       * 繋ぎ直す（画面・connect_service）と立ち上げ直す
+       */
+      if (res.status === 404 && sentSession && this.#http === http) {
+        http.open = false;
+        http.session = undefined;
+        this.#failure = `相手側の繋ぎが切れました（404）。繋ぎ直してください`;
+        this.#fail(this.#failure);
+      }
       return;
     }
 
     const type = res.headers.get('content-type') ?? '';
     if (type.includes('text/event-stream')) {
-      await this.#readEvents(res, id);
+      await this.#readEvents(res, id, fail);
       return;
     }
-    const text = await res.text();
+    // 上限を付けて読む（付けずに読むと、壊れた・悪意のある相手が数百 MB 返したときに溜め込んで落ちた）
+    let text: string;
+    try { text = await readCapped(res, MAX_LINE_BYTES); } catch (e) {
+      fail((e as Error).message);
+      return;
+    }
     for (const one of splitMessages(text)) this.#onData(`${one}\n`);
   }
 
   /** 流れ（SSE）を読む。`data:` の行だけを拾う。 */
-  async #readEvents(res: Response, id?: number): Promise<void> {
+  async #readEvents(res: Response, id: number | undefined, fail: (reason: string) => void): Promise<void> {
     const body = res.body;
     if (!body) return;
     const reader = body.getReader();
@@ -532,9 +576,11 @@ export class McpClient {
      * 渡すときは splitMessages を通す（まとめて返された配列を一つずつにする。通さないと配列の返事を捨てる）。
      */
     let event: string[] = [];
+    let eventBytes = 0;
     const flush = (): void => {
       const data = event.join('\n').trim();
       event = [];
+      eventBytes = 0;
       if (!data || data === '[DONE]') return;
       for (const one of splitMessages(data)) this.#onData(`${one}\n`);
     };
@@ -543,7 +589,13 @@ export class McpClient {
       try { JSON.parse(event[0]!); return true; } catch { return false; }
     };
     for (;;) {
-      const { done, value } = await reader.read();
+      let chunk: Awaited<ReturnType<typeof reader.read>>;
+      try { chunk = await reader.read(); } catch (e) {
+        // 読み途中で切れたら、この問いだけを落とす（外へ投げると、同じ相手へのほかの呼び出しまで全部落ちていた）
+        fail(`返事の途中で切れました: ${(e as Error).message}`);
+        return;
+      }
+      const { done, value } = chunk;
       if (done) { flush(); break; }
       buf += dec.write(Buffer.from(value));
       let at: number;
@@ -553,7 +605,14 @@ export class McpClient {
         if (line.trim() === '') { flush(); continue; }
         if (!line.startsWith('data:')) continue;
         event.push(line.slice(5).replace(/^ /, ''));
+        eventBytes += line.length;
         if (readsWhole()) flush();
+      }
+      // 一つの出来事にも、改行の無い行にも上限を付ける（付けないと、改行も空行も無く流し続ける相手で溜め込んで落ちた）
+      if (buf.length + eventBytes > MAX_LINE_BYTES) {
+        void reader.cancel().catch(() => undefined);
+        fail(`${this.name} の返事が大きすぎます（${MAX_LINE_BYTES} 字を超えたので切りました）`);
+        return;
       }
       // この問いの返事が済んだら（問いの無い流れなら、待っているものが無くなったら）、そこで切り上げる。
       // 相手は流れを開いたままにすることがあり、待つと止まって見える。
@@ -637,8 +696,10 @@ export class McpClient {
       const timer = setTimeout(() => {
         this.#pending.delete(id);
         done();
+        // 時間切れも相手へ知らせる（知らせないと相手は仕事を続け、外への書き込みが済むことがある。呼び直すと二重になる）
+        this.#notify('notifications/cancelled', { requestId: id, reason: 'timed out' }, true);
         this.#streams.get(id)?.abort();
-        reject(new Error(`${timeoutMs}ms で返事がありませんでした（${method}）`));
+        reject(new Error(`${timeoutMs}ms で返事がありませんでした（${method}）。相手の側では実行されたかもしれません`));
       }, timeoutMs);
       timer.unref?.();
 
@@ -686,5 +747,24 @@ function splitMessages(text: string): string[] {
   } catch {
     // 読めないものは、そのまま渡して読み口の側で捨てさせる。
     return [trimmed];
+  }
+}
+
+/** 返事の本文を、上限を付けて読む。越えたら読むのをやめて投げる（`cut` なら、そこまでを返す）。 */
+async function readCapped(res: Response, max: number, cut = false): Promise<string> {
+  const body = res.body;
+  if (!body) return '';
+  const reader = body.getReader();
+  const dec = new StringDecoder('utf8');
+  let out = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return out + dec.end();
+    out += dec.write(Buffer.from(value));
+    if (out.length > max) {
+      void reader.cancel().catch(() => undefined);
+      if (cut) return out.slice(0, max);
+      throw new Error(`返事が大きすぎます（${max} 字を超えたので切りました）`);
+    }
   }
 }

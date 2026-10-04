@@ -11,6 +11,7 @@
  * 名前は `<サーバ名>__<道具名>` にする。相手が同じ名前のツールを
  * 持っていても、ぶつからないようにするため。
  */
+import { createHash } from 'node:crypto';
 import { type Tool, ok, fail } from '../agent/tools/types.ts';
 import { inspectInbound, inspectOutbound, describeVerdict } from '../harness/gate.ts';
 import { type Inspector, combine } from '../harness/inspector.ts';
@@ -25,8 +26,20 @@ import type { McpClient } from './client.ts';
  */
 export const SEPARATOR = EXTERNAL_SEPARATOR;
 
+/**
+ * 配る名前。雲側の API はツールの名前の形を決めていて（英数字・`_`・`-`、64 字まで）、外れた名前が一つあると依頼ごと 400 で
+ * 断られる。相手の名前（`.`・`/`・空白）やサーバ名（日本語・`.`）をそのまま繋いでいたので、そういう相手が一つ繋がっているだけで
+ * 会話が進まなかった。外れた名前は、使えない字を `_` にし、長ければ縮めて、元の名前から作った短いハッシュを付ける（ハッシュがあるので重ならない）。
+ * 呼ぶときは元の名前で呼ぶ（`wrapTool`）。区切り（`__`）は残す（外から来たツールかの見分けに使う）
+ */
 export function toolName(server: string, tool: string): string {
-  return `${server}${SEPARATOR}${tool}`;
+  const plain = `${server}${SEPARATOR}${tool}`;
+  if (/^[A-Za-z0-9_-]{1,64}$/.test(plain)) return plain;
+  const clean = (x: string) => x.replace(/[^A-Za-z0-9_-]/g, '_');
+  const mark = createHash('sha1').update(`${server}\0${tool}`).digest('hex').slice(0, 8);
+  const srv = clean(server).slice(0, 20) || 'mcp';
+  const room = 64 - srv.length - SEPARATOR.length - mark.length - 1;
+  return `${srv}${SEPARATOR}${clean(tool).slice(0, room)}_${mark}`;
 }
 
 /**
@@ -46,7 +59,7 @@ export function wrapTool(
       description: spec.description
         ? `[${client.name}] ${spec.description}`
         : `[${client.name}] ${spec.name}`,
-      parameters: spec.inputSchema ?? { type: 'object', properties: {}, additionalProperties: true },
+      parameters: objectSchema(spec.inputSchema),
     },
     async run(args, ctx) {
       /*
@@ -90,15 +103,22 @@ export function wrapTool(
         // 渡した時点で読まれている。
         return fail(`${client.name}/${spec.name}\n${describeVerdict(verdict, 'inbound')}`);
       }
+      // 長さで切る（切らずに渡していたので、大きな返りが全文のまま履歴と会話の保存に入った。fetch_url と同じ扱い）。失敗の文も切る
+      const text = r.text.length > MCP_RESULT_MAX
+        ? `${r.text.slice(0, MCP_RESULT_MAX)}\n…（以降 ${r.text.length - MCP_RESULT_MAX} 字は長いので省きました）`
+        : r.text;
       // 検問所を通ってから、失敗として返す。
-      if (r.isError) return fail(r.text || `${client.name}/${spec.name} が失敗しました。`);
+      if (r.isError) return fail(text || `${client.name}/${spec.name} が失敗しました。`);
       const notes = verdict.findings.length > 0
         ? `${describeVerdict(verdict, 'inbound')}\n\n`
         : '';
-      return ok(`${notes}${r.text}`);
+      return ok(`${notes}${text}`);
     },
   };
 }
+
+/** 外のツールの返りの長さの上限（字）。 */
+export const MCP_RESULT_MAX = 100_000;
 
 /** 相手が書いた説明の長さの上限。毎回の依頼に載るので、長い説明はそれだけで文脈を食う。 */
 export const MCP_DESCRIPTION_MAX = 2_000;
@@ -133,6 +153,13 @@ export function blockedTools(client: Pick<McpClient, 'tools'>): Array<{ name: st
 /** 実際に配るツールの数。画面・記録・繋がり具合のどこでも、これで数える（止めた分を含めた数を出すと、場所ごとに数が食い違う）。 */
 export function deliverableCount(client: Pick<McpClient, 'tools'>): number {
   return client.tools.length - blockedTools(client).length;
+}
+
+/** 引数の形。`type: "object"` でない形は既定の形に置き換える（雲側の API はツールの引数を object に限る）。 */
+function objectSchema(schema: Record<string, unknown> | undefined): Record<string, unknown> {
+  return schema && typeof schema === 'object' && !Array.isArray(schema) && schema.type === 'object'
+    ? schema
+    : { type: 'object', properties: {}, additionalProperties: true };
 }
 
 /** 立ち上がっているサーバのツールを、まとめて配れる形にする。検問所で止まったツールは配らない（`describeServers` が言う）。 */
