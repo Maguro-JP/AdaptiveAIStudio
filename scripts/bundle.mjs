@@ -21,7 +21,7 @@
  * 取得は網の繋がる場所（CI）でやり、ここは置く仕事だけをする。
  * そうすると、この道具自体は網が無くても試せる。
  */
-import { cp, copyFile, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink, rename, realpath } from 'node:fs/promises';
+import { cp, copyFile, mkdir, writeFile, rm, readFile, stat, chmod, readdir, unlink, rename, lstat } from 'node:fs/promises';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, resolve, relative, isAbsolute, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -150,6 +150,17 @@ export async function guessTarget({ nodeHere, nodeExe }) {
  *
  * @param {string} target 配る先。`win-x64` のような形。
  */
+/** `out` から `rel` を辿る途中（`rel` そのものを含む）に、リンク・junction があるか。 */
+async function linkOnTheWay(out, rel) {
+  let at = out;
+  for (const part of rel.split(/[\\/]+/).filter(Boolean)) {
+    at = join(at, part);
+    const s = await lstat(at).catch(() => undefined);
+    if (s?.isSymbolicLink()) return true;
+  }
+  return false;
+}
+
 /**
  * 消してよい場所か。**組んだ先の中だけ。**
  *
@@ -168,11 +179,11 @@ export async function guessTarget({ nodeHere, nodeExe }) {
  * 渡された場所が組んだ先の中でなければ、消さずに投げる。
  */
 async function mustBeInside(dir, out, what) {
-  const inside = (d, o) => { const rel = relative(o, d); return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel); };
-  // 名前だけでなく、**辿った先**でも中にあるかを見る。組み立て元の node_modules がリンク（git worktree・pnpm）だと、写した
-  // app/node_modules もリンクになり、片づけがリンクを辿って**組み立て元の**型定義と .map を消していた（実際に消えた）
-  if (inside(resolve(dir), resolve(out))
-    && inside(await realpath(dir).catch(() => resolve(dir)), await realpath(out).catch(() => resolve(out)))) return;
+  const rel = relative(resolve(out), resolve(dir));
+  // 名前だけでなく、**途中にリンクが無いこと**も見る。組み立て元の node_modules がリンク（git worktree・pnpm）だと、写した
+  // app/node_modules もリンクになり、片づけがリンクを辿って**組み立て元の**型定義と .map を消していた（実際に消えた）。
+  // 辿った先の道どうしを比べる形にすると、Windows の 8.3 の短い名前（RUNNER~1）で片方だけ綴りが変わり、中を外と読んだ
+  if (rel !== '' && !rel.startsWith('..') && !isAbsolute(rel) && !(await linkOnTheWay(resolve(out), rel))) return;
   throw new Error(
     `組んだ先の外を片づけようとしました（${what}）。`
     + `\n  片づけようとした場所: ${resolve(dir)}`

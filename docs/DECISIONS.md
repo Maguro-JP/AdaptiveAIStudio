@@ -11520,7 +11520,9 @@ runtime と CLI を読むだけで調べ、10 件を直した。
   戻せなければそう言う。調べ切れなかった機械の検出結果は、プロセスの中で 10 分使い回す（呼ばれるたびに 5 秒待たせない）
 - 調べている途中で見つけた 1 件: 組み立て元の node_modules がリンク（git worktree・pnpm）だと、bundle は配る先にリンクのまま写し、片づけが
   リンクを辿って組み立て元の型定義と .map を消した。写すときはリンクを辿って中身を写し（`dereference`）、片づける前に辿った先でも
-  組んだ先の中にあるかを見る（`mustBeInside`）。経緯は `docs/knowledge/problems.md`
+  組んだ先の中にあるかを見る（`mustBeInside`）。経緯は `docs/knowledge/problems.md`。
+  辿った先の道どうしを比べる形は、Windows の 8.3 の短い名前（`RUNNER~1`）で片方だけ綴りが変わり、中を外と読んだ（CI で落ちた）。
+  組んだ先から片づける場所までの途中に、リンク・junction が一つも無いことで見る（`linkOnTheWay`）
 - 残っているところ: Windows で `runtime.command` に .cmd・.bat を渡すと、shell 無しの spawn が EINVAL で起動できない（調査の 10(b)。確かめていない）。
   `models --get <カタログの名前> --quant` が効かない件（調査のおまけ）。リンク先の無いリンクが組み立て元にあると、写すときに止まる。
   `#nextPort` は戻らずに増える（4.7 万回の起動で上限に届く）。`start.sh` の update は、調べられなかったときに立ち上げ直しを訊かずに終わる
