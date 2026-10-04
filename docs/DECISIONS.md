@@ -12034,3 +12034,14 @@ write を持たせない」（`dropWriteIfOutbound`）は役職にだけ効か�
   - `AAS_STATE_DIR=`（空）を、空でない値として扱う。`runtime.modelsDir` などの相対の道は、いま居る場所から読む
 触る場所: `src/config.ts`（`checkShape`・`wireInProc`・`isDefaultOllama`）、`src/core/local-ready.ts`、`src/core/warm-setup.ts`、
 `test/startup-config-gaps.test.ts`
+
+レビューで挙がった 6 件も直した（5 件は、直す前の版で新しい試験が落ちることを確かめた）。
+- inproc の口が既にあれば、繋ぎ先を今の番号にそろえる。番号を選び直して `wireInProc` を呼び直す道（画面の `#pickInProcPort`）で、
+  早く返していたので古い番号のまま残り、待つ側と繋ぐ側が別の番号を向いて繋がらなくなっていた（この回の直しで入れた不具合）。
+  繋ぎ先を書かずに置いた inproc の口も、ここで埋める
+- 設定の null は「書いていない」と同じに扱う（前から受けていた。画面の保存も null を書く）。lane の `candidates: null` も直せる形で断る
+- 候補を付けるのは、この中で読む口（名前が inproc か、繋ぎ先が inproc の番号）だけ。既定の口を無効にして LM Studio などだけを書いた設定で、
+  その口に読んだ GGUF の名前を付けていた。そのときはモデルを読み込まない
+- 「有効な手元の口が無ければ読み込まない」の試験は、読み込みに入ったかを数える形にした（候補だけを見ていたので、早く返す所を消しても通っていた）
+- 番号を空いているものに任せた（`basePort: 0`）ときは、番号で照らせないので、この機械（127.0.0.1・localhost）を向く有効な手元の口を、
+  この中で読む口とみなす（`test/one-turn.test.ts` の決めごと。別の機械を向く口には名前を付けない）

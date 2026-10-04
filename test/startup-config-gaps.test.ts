@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { loadConfig, ConfigBroken, DEFAULT_CONFIG, type AasConfig } from '../src/config.ts';
+import { loadConfig, ConfigBroken, DEFAULT_CONFIG, wireInProc, type AasConfig } from '../src/config.ts';
 import { withLocalCandidate, readyLocalModel } from '../src/core/local-ready.ts';
 import { startWarmPool } from '../src/core/warm-setup.ts';
 import { LlamaCppRuntime } from '../src/runtime/llamacpp.ts';
@@ -47,6 +47,13 @@ describe('設定の形', () => {
       await assert.rejects(load(body), (e) => e instanceof ConfigBroken, label);
     });
   }
+  test('**lane の candidates が null でも、直せる形で断る**', async () => {
+    await assert.rejects(load('{"agent":{"lanes":[{"id":"a","parallel":1,"candidates":null}]}}'), (e) => e instanceof ConfigBroken);
+  });
+  test('**null は「書いていない」と同じに扱う**（前から受けていた。画面の保存も null を書く）', async () => {
+    const { config } = await load('{"runtime":null,"mcp":null,"agent":null,"harness":null,"candidates":null}');
+    assert.equal(config.runtime?.kind, 'inproc');
+  });
   test('**守りの一覧を文字列一つで書いたら断る**（一字ずつの型として入り、守りが黙って外れていた）', async () => {
     await assert.rejects(load('{"harness":{"protectedPaths":"secrets/**"}}'), (e) => e instanceof ConfigBroken);
   });
@@ -85,10 +92,17 @@ describe('手元の口', () => {
     assert.ok(config.providers.some((p) => p.id === 'inproc' && /127\.0\.0\.1/.test(p.baseUrl ?? '')), JSON.stringify(config.providers));
   });
 
-  const fakeInproc = (): LocalRuntime => ({
-    id: 'inproc', loaded: () => ['a.gguf'], list: async () => [], windowOf: () => undefined,
+  // 読み込みに入ったかを数える（読み込んでいるモデルは無く、保存先に一つある）
+  const fakeInproc = (touched: string[] = []): LocalRuntime => ({
+    id: 'inproc',
+    loaded: () => [],
+    list: async () => { touched.push('list'); return [{ ref: 'a.gguf', sizeBytes: 1 }]; },
+    backend: async () => { touched.push('backend'); return { gpu: false }; },
+    ensureLoaded: async () => { touched.push('load'); return { baseUrl: 'http://x' }; },
+    windowOf: () => undefined,
   }) as unknown as LocalRuntime;
   test('**有効な手元の口が無ければ、モデルを読み込んで候補を固定しない**', async () => {
+    const touched: string[] = [];
     const config = {
       ...structuredClone(DEFAULT_CONFIG), runtime: { kind: 'inproc' },
       providers: [
@@ -96,8 +110,33 @@ describe('手元の口', () => {
         { id: 'claude', kind: 'anthropic', locality: 'cloud' },
       ],
     } as AasConfig;
-    const r = await readyLocalModel(config, fakeInproc());
+    const r = await readyLocalModel(config, fakeInproc(touched));
     assert.equal(r.config.candidates, undefined, `候補を固定した: ${JSON.stringify(r.config.candidates)}`);
+    assert.deepEqual(touched, [], `読み込みに入った: ${touched.join(',')}`);
+  });
+  test('**既定の口を無効にして別の手元の口だけを書いたら、その口に GGUF の名前を付けない**', async () => {
+    const touched: string[] = [];
+    const config = {
+      ...structuredClone(DEFAULT_CONFIG), runtime: { kind: 'inproc' },
+      providers: [
+        { id: 'ollama', kind: 'openai-compatible', baseUrl: 'http://localhost:11434/v1', locality: 'local', enabled: false },
+        { id: 'lmstudio', kind: 'openai-compatible', baseUrl: 'http://192.168.1.10:1234/v1', locality: 'local' },
+      ],
+    } as AasConfig;
+    const r = await readyLocalModel(config, fakeInproc(touched));
+    assert.equal(r.config.candidates, undefined, `別の口に名前を付けた: ${JSON.stringify(r.config.candidates)}`);
+    assert.deepEqual(touched, []);
+  });
+  test('**番号を選び直して呼び直したら、inproc の口の繋ぎ先もその番号になる**', async () => {
+    const { config } = await load('{}');
+    config.runtime!.basePort = 4999;
+    wireInProc(config);
+    const own = config.providers.find((p) => p.id === 'inproc');
+    assert.equal(own?.baseUrl, 'http://127.0.0.1:4999/v1', `古い番号のまま: ${own?.baseUrl}`);
+  });
+  test('**繋ぎ先を書かずに置いた inproc の口は、繋ぎ先を埋める**', async () => {
+    const { config } = await load('{"providers":[{"id":"inproc","kind":"openai-compatible","locality":"local"}]}');
+    assert.match(config.providers.find((p) => p.id === 'inproc')?.baseUrl ?? '', /127\.0\.0\.1/);
   });
   test('**inproc の口があれば、それに名前を付ける**（利用者が別に書いた手元の口に付けない）', () => {
     const config = {

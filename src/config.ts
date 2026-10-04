@@ -505,6 +505,11 @@ export function loadConfig(cwd = process.cwd()): { config: AasConfig; source: st
  * 書かせると、番号を間違えたときに「繋がりません」とだけ出て終わる。
  * 決め打ちの番号（INPROC_PORT）を、ここで入れておく。
  */
+/** この中で読む口（inproc）の繋ぎ先。待つ側（`runtime-setup.ts`）と同じ番号を向く。 */
+export function inprocUrl(c: AasConfig): string {
+  return `http://127.0.0.1:${c.runtime?.basePort ?? INPROC_PORT}/v1`;
+}
+
 /** こちらが既定として置いた Ollama の口か（名前が ollama で、繋ぎ先を書いていないか既定の 11434 のまま）。 */
 function isDefaultOllama(p: ProviderConfig): boolean {
   if (p.id !== 'ollama') return false;
@@ -519,12 +524,15 @@ function isDefaultOllama(p: ProviderConfig): boolean {
 
 export function wireInProc(c: AasConfig, onlyDefault = false): void {
   if (c.runtime?.kind !== 'inproc') return;
-  const url = `http://127.0.0.1:${c.runtime.basePort ?? INPROC_PORT}/v1`;
+  const url = inprocUrl(c);
   // 無効にした手元の口は付け替えない（クラウドだけで使うつもりでも、手元のモデルを読み込んで候補を固定していた）。
   // `runtime` を書いていない（既定で inproc になった）ときは、こちらが既定として置いた口だけを付け替える。
   // 最初の手元の口を誰のものでも付け替えていたので、LM Studio などに書いた URL を黙って 4177 に書き換え、一度も繋がらなかった。
   // `kind: 'inproc'` と書いたときは、最初の手元の口を繋ぎ先にする（今までどおり。書いた人がこの中で読むと決めている）
-  if (c.providers.some((p) => p.id === 'inproc' && p.kind === 'openai-compatible')) return;
+  // inproc の口が既にあれば、その繋ぎ先だけを今の番号にそろえる（番号を選び直して呼び直したとき、古い番号を向いたまま
+  // 残すと、待つ側と繋ぐ側が別の番号を向いて永久に繋がらない。繋ぎ先を書かずに置いた inproc の口もここで埋める）
+  const own = c.providers.find((p) => p.id === 'inproc' && p.kind === 'openai-compatible');
+  if (own) { own.baseUrl = url; return; }
   const at = c.providers.findIndex((p) => p.kind === 'openai-compatible' && p.locality === 'local'
     && p.enabled !== false && (!onlyDefault || isDefaultOllama(p)));
   if (at < 0) {
@@ -585,6 +593,8 @@ export function wireInProc(c: AasConfig, onlyDefault = false): void {
 function checkShape(parsed: unknown, path: string): asserts parsed is Partial<AasConfig> {
   const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
   if (!isObj(parsed)) throw new ConfigBroken(`設定の中身が { } で囲んだ形ではありません: ${path}`);
+  // null は「書いていない」と同じに扱う（前から `?? 既定` で受けていた。画面の保存も null を書く）。形の違う値だけを断る
+  for (const [k, v] of Object.entries(parsed)) if (v === null) delete parsed[k];
   const listOf = (v: unknown, name: string, item: 'object' | 'string'): void => {
     if (v === undefined) return;
     if (!Array.isArray(v)) throw new ConfigBroken(`${name} は [ ] で囲んだ並びで書いてください（いま: ${JSON.stringify(v)?.slice(0, 60)}）。`);
@@ -602,8 +612,8 @@ function checkShape(parsed: unknown, path: string): asserts parsed is Partial<Aa
   const agent = parsed.agent as Record<string, unknown> | undefined;
   listOf(agent?.lanes, 'agent.lanes', 'object');
   for (const lane of (agent?.lanes as Record<string, unknown>[] | undefined) ?? []) {
-    listOf(lane.candidates ?? [], `lane "${String(lane.id)}" の candidates`, 'string');
-    if (lane.candidates === undefined) throw new ConfigBroken(`lane "${String(lane.id)}" に candidates がありません。`);
+    if (lane.candidates == null) throw new ConfigBroken(`lane "${String(lane.id)}" に candidates がありません。`);
+    listOf(lane.candidates, `lane "${String(lane.id)}" の candidates`, 'string');
   }
   // 守りの一覧を文字列一つで書くと、一字ずつの型として入り、守ったつもりの道が守られなかった（黙って外れる）
   listOf((parsed.harness as Record<string, unknown> | undefined)?.protectedPaths, 'harness.protectedPaths', 'string');
