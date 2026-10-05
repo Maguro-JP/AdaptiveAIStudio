@@ -54,6 +54,14 @@ export class DoneMark {
     return shown;
   }
 
+  /**
+   * ここで行が切れたことにする。本文から呼び出しを抜いた後に使う（抜いた後の残りは前後を詰めてあり、
+   * 改行が消えている。続きを行の途中として読むと、次の行の合図を合図と読まずに見せていた）。
+   */
+  newLine(): void {
+    if (this.#tail === '') this.#midLine = false;
+  }
+
   /** 終わり。残りを吐き出し、合図があったかを言う。 */
   end(): { text: string; done: boolean } {
     const rest = this.#tail;

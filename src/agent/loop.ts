@@ -203,6 +203,7 @@ export class Agent {
         if (rest) { text += rest; yield { type: 'thinking', delta: rest }; }
       } else {
         const salvage = filter.end((name) => this.#tools.has(name));
+        if (salvage.calls.length > 0) mark.newLine();
         const passed = mark.push(salvage.text);
         if (passed) { text += passed; yield { type: 'thinking', delta: passed }; }
         salvage.calls.forEach((c, i) => {

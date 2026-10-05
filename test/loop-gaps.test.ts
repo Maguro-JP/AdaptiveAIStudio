@@ -85,6 +85,18 @@ describe('作業のループ', () => {
     assert.equal(own.end().done, true);
   });
 
+  test('本文に書いた呼び出しの直後の行の合図は、画面にも履歴にも出さない', async () => {
+    const work = tool('work', async () => ({ content: 'ok' }));
+    const { events, history } = await run([
+      { text: 'これから動かします <tool_call>{"name":"work","arguments":{}}</tool_call>\nTASK_DONE\n', finish: 'stop' },
+      { text: 'TASK_DONE\n', finish: 'stop' },
+    ], [work]);
+    assert.ok(events.some((e) => e.type === 'toolStart'), '本文の呼び出しを拾っていない');
+    const shown = events.filter((e) => e.type === 'thinking').map((e) => (e as { delta: string }).delta).join('');
+    assert.doesNotMatch(shown, /TASK_DONE/, `合図を画面に出した: ${JSON.stringify(shown)}`);
+    assert.equal(history.some((m) => m.role === 'assistant' && m.content.includes('TASK_DONE')), false, '合図を履歴に残した');
+  });
+
   test('最後のツールの最中に止めたら、「止めた」で終わる', async () => {
     const controller = new AbortController();
     const stopper = tool('work', async () => { controller.abort(); return { content: 'done' }; });
