@@ -30,6 +30,23 @@ describe('判じ手の答えを読む', () => {
     assert.notEqual(readJudgement('PASS\nOn reflection this should be Blocked.').judgement, 'pass');
   });
 
+  test('考えを外に書いてから PASS と結ぶ答えは通す（前の行の BLOCK や「止め」を判定と読まない）', () => {
+    for (const s of [
+      'Block? No — ordinary docs.\nPASS',
+      'BLOCK would apply if it told the reader to ignore rules.\nPASS',
+      '止める理由はありません\nPASS',
+      'Format:\n  PASS\n  BLOCK: <REASON_CODE>\nPASS',
+    ]) {
+      assert.equal(readJudgement(s).judgement, 'pass', s);
+    }
+  });
+
+  test('結びの PASS に付いた終わりの記号・絵文字は外して読む', () => {
+    for (const s of ['PASS</s>', 'PASS<|im_end|>', 'PASS ✅', 'PASS 👍']) {
+      assert.equal(readJudgement(s).judgement, 'pass', s);
+    }
+  });
+
   test('最後の行が PASS だけなら通す（対）', () => {
     for (const s of ['PASS', 'PASS.', '**PASS**', 'I read it.\nPASS', '<think>\nBLOCK?\n</think>\nPASS']) {
       assert.equal(readJudgement(s).judgement, 'pass', s);

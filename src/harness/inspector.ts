@@ -235,32 +235,39 @@ function undecorate(line: string): string {
  */
 export function readJudgement(raw: string): { judgement: Judgement; reason?: string } {
   const lines = stripThinking(raw).split(/\r?\n/).map(undecorate).filter((l) => l.length > 0);
+  const last = lines.at(-1);
+  if (last === undefined) return { judgement: 'unknown' };
 
-  /*
-   * **止める行が一つでもあれば止める。**後ろから見て最初に当たった行を採っていたので、
-   * 「BLOCK: ROLE_CHANGE」の後に「PASS」と書き足した答えを通していた。理由は最後の止める行から採る。
-   */
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i]!;
-    const block = /^BLOCK\b\s*[:：-]?\s*(.*)$/i.exec(line);
-    if (block) {
-      const reason = block[1]!.trim();
-      return { judgement: 'block', reason: reason.length > 0 ? reason : '理由の記載なし' };
-    }
-    // 日本語で答えたときは、止める側だけ拾う。通す側は拾わない。
-    if (/^止め/.test(line)) {
-      const reason = line.replace(/^止め\S*?\s*[:：]?\s*/, '').trim();
-      return { judgement: 'block', reason: reason.length > 0 ? reason : '理由の記載なし' };
-    }
+  // 結論は最後の行。前に説明を書いてから結論を書くモデルが多く、途中に迷いを書いていても、最後の行が答えになっている。
+  const block = /^BLOCK\b\s*[:：-]?\s*(.*)$/i.exec(last);
+  if (block) {
+    const reason = block[1]!.trim();
+    return { judgement: 'block', reason: reason.length > 0 ? reason : '理由の記載なし' };
+  }
+  // 日本語で答えたときは、止める側だけ拾う。通す側は拾わない。
+  if (/^止め/.test(last)) {
+    const reason = last.replace(/^止め\S*?\s*[:：]?\s*/, '').trim();
+    return { judgement: 'block', reason: reason.length > 0 ? reason : '理由の記載なし' };
   }
 
   /*
-   * **通すのは、最後の行が `PASS` だけのとき。**頭が PASS の行を採っていたので、「PASS/BLOCK: …」
-   * 「Pass? No — …」や、決まりの文の写し（「PASS ordinary technical writing.」）を通していた。
-   * PASS の後に続きを書いた答え（「PASS」の次の行で考え直す）も、通したことにしない。
+   * **前の行に、形の決まった止める答え（`BLOCK: ROLE_CHANGE` のように符丁だけを添えた行）があれば止める。**
+   * 最後の行だけを見ていたので、止める答えの後に「PASS」と書き足した答えを通していた。
+   * 形の決まった行に限るのは、考えを外に書くモデルの「BLOCK would apply if…」「止める理由はありません」や、
+   * 決まりの例の写し（`BLOCK: <REASON_CODE>`）まで止めると、普通の頁まで渡らなくなるため。
    */
-  const last = lines.at(-1);
-  if (last !== undefined && /^PASS[.!。]?$/i.test(last)) return { judgement: 'pass' };
+  for (let i = lines.length - 2; i >= 0; i--) {
+    const formal = /^BLOCK\s*[:：]\s*([A-Z][A-Z_]{2,})$/.exec(lines[i]!);
+    if (formal) return { judgement: 'block', reason: formal[1]! };
+  }
+
+  /*
+   * **通すのは、最後の行が PASS だけのとき。**頭が PASS の行を採っていたので、「PASS/BLOCK: …」「Pass? No — …」や、
+   * 決まりの文の写し（「PASS ordinary technical writing.」）を通していた。終わりの記号（`</s>`・`<|im_end|>`）と、
+   * 後ろの記号・絵文字は外して見る（手元のモデルがよく付けるので、外さないと持ち出しが「分からない」で止まる）。
+   */
+  const bare = last.replace(/<\|[^|>]*\|>|<\/s>/g, '').trim();
+  if (/^PASS[^\p{L}\p{N}]*$/iu.test(bare)) return { judgement: 'pass' };
 
   return { judgement: 'unknown' };
 }
