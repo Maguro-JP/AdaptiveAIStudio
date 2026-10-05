@@ -10,6 +10,7 @@ import { estimateDuration } from '../runtime/planner.ts';
 import { LlamaCppRuntime } from '../runtime/llamacpp.ts';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { join } from 'node:path';
+import { how, noModelsHint } from './how.ts';
 import { GB } from '../runtime/spec.ts';
 import { readGguf } from '../runtime/gguf.ts';
 import { toModelSpec, formatGguf } from '../runtime/gguf-spec.ts';
@@ -62,7 +63,7 @@ function localBaseUrl(): string {
 if (process.argv.includes('--new')) {
   const installed = (await runtime.list()).map((m) => m.ref);
   if (installed.length === 0) {
-    console.log(c.yellow('  手元にモデルがありません。まず npm run models -- --get\n'));
+    console.log(c.yellow(`  手元にモデルがありません。まず ${how('models', '--get')}\n`));
     process.exit(0);
   }
   console.log(c.dim(`  手元: ${installed.join(', ')}\n`));
@@ -85,7 +86,7 @@ if (process.argv.includes('--get') || process.argv.includes('--available')) {
     console.log(c.dim(usesGguf(runtime.id)
       ? `\n  置き場: ${modelsDir}`
       : '\n  置き場: Ollama が持っています'));
-    console.log(c.dim('  取ってくる: npm run models -- --get [名前]'));
+    console.log(c.dim(`  取ってくる: ${how('models', '--get [名前]')}`));
     if (!usesGguf(runtime.id)) {
       console.log(c.dim('  一覧に無いものは、Ollama の名前をそのまま渡せます（例: --get gemma3:4b）'));
     }
@@ -190,7 +191,7 @@ const inspectAt = process.argv.indexOf('--inspect');
 if (inspectAt !== -1) {
   const path = process.argv[inspectAt + 1];
   if (!path) {
-    console.error(c.yellow('使い方: npm run models -- --inspect <ファイル.gguf>'));
+    console.error(c.yellow(`使い方: ${how('models', '--inspect <ファイル.gguf>')}`));
     process.exit(1);
   }
   try {
@@ -210,9 +211,7 @@ const models = await runtime.list();
 if (models.length === 0) {
   console.log(c.yellow('モデルが見つかりません。'));
   console.log(c.dim(usesGguf(runtime.id)
-    ? '  `npm run models -- --get` で取ってきます（まず動く軽いものが入ります）。\n'
-      + '  一覧は `npm run models -- --available`。\n'
-      + '  手持ちがあるなら、同じ置き場に .gguf を入れるだけでも使えます。'
+    ? noModelsHint()
     : '  Ollama が起動しているか確認してください。'));
   process.exit(0);
 }

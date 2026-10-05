@@ -9,6 +9,7 @@
  *
  * 使い方: node src/cli/report.ts   （画面の 診断 → 「ここまでの記録を一つにまとめる」から）
  */
+import { StringDecoder } from 'node:string_decoder';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -85,11 +86,14 @@ function runDoctor(root: string, env: NodeJS.ProcessEnv, timeoutMs: number): Pro
       cwd: root, env: { ...env, NO_COLOR: '1' },
     });
     let out = '';
-    const take = (b: Buffer) => { out += b.toString('utf8'); process.stdout.write(b); };
-    child.stdout?.on('data', take);
-    child.stderr?.on('data', take);
+    // 塊の境目で割れた多バイト文字を壊さない（塊ごとに utf8 で読んでいたので、日本語が U+FFFD に化けることがあった）。出口ごとに一つずつ持つ
+    const take = (decoder: StringDecoder) => (b: Buffer) => { out += decoder.write(b); process.stdout.write(b); };
+    const outDec = new StringDecoder('utf8');
+    const errDec = new StringDecoder('utf8');
+    child.stdout?.on('data', take(outDec));
+    child.stderr?.on('data', take(errDec));
     const timer = setTimeout(() => { child.kill(); out += `\n（${Math.round(timeoutMs / 1000)} 秒で打ち切りました）\n`; }, timeoutMs);
-    child.on('close', () => { clearTimeout(timer); resolve(plain(out)); });
+    child.on('close', () => { clearTimeout(timer); out += outDec.end() + errDec.end(); resolve(plain(out)); });
     child.on('error', (e) => { clearTimeout(timer); resolve(`${out}\n（doctor を起こせませんでした: ${e.message}）`); });
   });
 }

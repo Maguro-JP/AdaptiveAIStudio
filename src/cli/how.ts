@@ -20,3 +20,12 @@ export function how(task: string, args = '', root: string = installRoot()): stri
   if (isDistributed(root)) return `AdaptiveAIStudio.cmd ${task}${args ? ` ${args}` : ''}`;
   return `npm run ${task}${args ? ` -- ${args}` : ''}`;
 }
+
+/**
+ * モデルが一つも無いときの案内（GGUF を読む道のとき）。打てる形で言う（配った形で `npm run models -- --get` と言っていた）。
+ */
+export function noModelsHint(root: string = installRoot()): string {
+  return `  \`${how('models', '--get', root)}\` で取ってきます（まず動く軽いものが入ります）。\n`
+    + `  一覧は \`${how('models', '--available', root)}\`。\n`
+    + '  手持ちがあるなら、同じ置き場に .gguf を入れるだけでも使えます。';
+}
