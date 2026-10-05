@@ -12410,4 +12410,8 @@ CLI の対話の入口（`src/cli/agent.ts`・`input.ts`・`report-file.ts` ほ�
 - BPE の数え方は一つの塊の中で二乗の手間がかかる（SPM は直してある）。前分けの規則は GPT-2 のものだけで、llama3・qwen2 の数字と記号の分け方とずれる。
   どちらも測っていない
 - 手掛かりの道を `trim` するので、空白で始まる名前のフォルダを指せない。決めた提案は、決めた時刻ではなく作った時刻で古い順に外す
+- 試験の走らせ役（`scripts/run-tests.mjs`）には一つの試験の上限が無い。Windows の CI で一つが返らなくなると、仕事の上限（20 分）まで待って取り消され、
+  どれだったかの記録も残らない（この回の CI で一度起きた。ログは 404 で読めず、返らなかったのか遅かっただけなのかも確かめていない）。
+  既定の上限（4 分）を足したところ、入れた機械の env で走らせる試験（`test/installed-env.test.ts`）の中の遅いまとまり（`bundle を組み直すとき`）が
+  それを超えて落ちたので、足すのをやめた。足すなら、遅いまとまりに自分の上限を付けてから
 触る場所: `src/agent/prefetch.ts`（`#buildIndex`）、`src/agent/code-index.ts`（`SKIP`）、`src/agent/rerank.ts`（`bodyOf`）、`src/agent/tokenizer.ts`（`counterForGguf`）、`src/agent/stride.ts`
