@@ -60,7 +60,9 @@ export function createReplaceSelectionTool(where?: SelectionSource, onPatch?: Pa
       const abs = await realSafeResolve(ctx.root, at.path);
       if (!abs) return fail(`作業ディレクトリの外です: ${at.path}`);
       onPatch({ ...at, replacement: text });
-      return ok(`画面で選んでいる ${at.path} の ${at.from}〜${at.to} 行目を書き換えました。`
+      // 画面へは送るだけで、当たったかの返事は無い（選んだ所が動いた・開いていない・画面が無いと当たらない）。書き換えたと言い切らない
+      return ok(`画面で選んでいる ${at.path} の ${at.from}〜${at.to} 行目へ、入れ替える文を送りました。`
+        + '選んだ所が動いていたり、画面で開いていなかったりすると当たりません。当たったかは、ここからは見えません。'
         + '**保存はしていません。**利用者が見て、良ければ保存します。');
     },
   };

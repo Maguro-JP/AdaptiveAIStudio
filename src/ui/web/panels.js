@@ -1862,16 +1862,19 @@ export const PANELS = {
       if (!r.ok) { state.textContent = j.error ?? '探せませんでした'; return; }
 
       const hits = j.hits ?? [];
-      if (hits.length === 0) {
-        state.textContent = `見つかりませんでした: ${text}`;
-        list.append(empty('別の言葉か、場所を変えて探してみてください。'));
-        return;
-      }
+      // 見なかった所の断りは、見つからなかったときにも出す（深い所・途中まで・. で始まる所に在りうる）
       const notes = [];
       if (j.capped) notes.push('打ち切りました（これで全部ではありません）');
       if (j.walkCapped) notes.push('ファイルが多いので、途中までしか見ていません');
+      if (j.walkDeep) notes.push('深い所は見ていません');
       if (j.tooBig > 0) notes.push(`大きすぎて開いていないファイルが ${j.tooBig} 個あります`);
       if (j.unreadable > 0) notes.push(`二進のため見ていないファイルが ${j.unreadable} 個あります`);
+      if (hits.length === 0) {
+        if (j.walkDots > 0) notes.push(`. で始まるもの ${j.walkDots} 個は見ていません`);
+        state.textContent = `見つかりませんでした: ${text}${notes.length ? ` — ${notes.join(' / ')}` : ''}`;
+        list.append(empty('別の言葉か、場所を変えて探してみてください。'));
+        return;
+      }
       state.textContent = `${hits.length} 件${notes.length ? ` — ${notes.join(' / ')}` : ''}`;
 
       for (const h of hits) {

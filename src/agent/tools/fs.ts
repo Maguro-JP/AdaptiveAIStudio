@@ -73,7 +73,9 @@ export const readFileTool: Tool = {
       }
       const text = decoded.text;
       const head = decoded.encoding === 'utf-8' ? '' : `${decoded.note}\n`;
-      const all = text.split('\n');
+      // 終わりの改行の後ろに行は無い（`a\nb\n` は 2 行）。数えると「全体は 3 行」と言い、空の 3 行目を見せていた。
+      // 空のファイルと改行だけのファイルは、空の一行として見せる
+      const all = (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n');
       /*
        * **続きから読めるようにする。**
        *
@@ -153,13 +155,18 @@ export const listFilesTool: Tool = {
     const abs = await realSafeResolve(ctx.root, p);
     if (!abs) return fail(`作業ディレクトリの外です: ${p}`);
     const found: string[] = [];
-    const walked = { capped: false };
+    const walked: Walked = { capped: false };
     try {
       await walk(abs, ctx.root, found, 0, await ignoresFor(ctx.root, p), walked);
     } catch (e) {
       return fail(`一覧できません: ${p} (${describe(e)})`);
     }
-    if (found.length === 0) return ok('(ファイルなし)');
+    // 見なかった所があるのに「ファイルなし」とだけ言わない（深い所や . で始まる所に在りうる）
+    const deep = walked.deep ? `\n${DEEP_NOTE}` : '';
+    if (found.length === 0) {
+      const dots = dotsNote(walked.dots);
+      return ok(`(ファイルなし)${deep}${dots ? `\n${dots}` : ''}`);
+    }
     const shown = found.slice(0, 300);
     const more = found.length > shown.length ? `\n... 他 ${found.length - shown.length} 件` : '';
     // **見て回るのを途中でやめたことも言う。**「他 N 件」だけだと、
@@ -167,7 +174,7 @@ export const listFilesTool: Tool = {
     const stopped = walked.capped
       ? `\n（ファイルが多いので ${WALK_FILES} 個までしか見ていません。path で絞ってください）`
       : '';
-    return ok(shown.join('\n') + more + stopped);
+    return ok(shown.join('\n') + more + stopped + deep);
   },
 };
 
@@ -188,6 +195,10 @@ export interface TextSearch {
   capped: boolean;
   /** ファイルが多すぎて、途中までしか見ていない */
   walkCapped: boolean;
+  /** 深すぎて降りていない所がある */
+  walkDeep?: boolean;
+  /** 飛ばした `.` で始まるもの（`.git` を除く）の数 */
+  walkDots?: number;
   /** 大きすぎて開いていないファイルの数 */
   tooBig: number;
   /** 二進（NUL を含む）なので中を見ていないファイルの数 */
@@ -216,7 +227,7 @@ export async function searchText(
   if (!abs) return { ...out, error: `作業ディレクトリの外です: ${base}` };
 
   const files: string[] = [];
-  const walked = { capped: false };
+  const walked: Walked = { capped: false };
   /*
    * **探せなかったことを、該当なしと言わない。**
    *
@@ -235,6 +246,8 @@ export async function searchText(
     return { ...out, error: `探せません: ${base} (${describe(e)})` };
   }
   out.walkCapped = walked.capped;
+  if (walked.deep) out.walkDeep = true;
+  if (walked.dots) out.walkDots = walked.dots;
 
   /*
    * **打ち切ったことを、必ず言う。**
@@ -260,7 +273,7 @@ export async function searchText(
       text.split('\n').forEach((line, i) => {
         if (!line.includes(query)) return;
         if (out.hits.length < SEARCH_HITS) {
-          out.hits.push({ path: rel, line: i + 1, text: line.trim().slice(0, 200) });
+          out.hits.push({ path: rel, line: i + 1, text: around(line.trim(), query) });
         } else {
           out.capped = true;
         }
@@ -268,6 +281,19 @@ export async function searchText(
     } catch { /* 読めない道（消えた・権限が無い）は読み飛ばす */ }
   }
   return out;
+}
+
+/**
+ * 見せる 200 字を、当たった所を含むように切る。頭から切っていたので、長い行（縮めた JS など）では当たりが外に落ち、
+ * 何に当たったのか見えなかった。切った側には … を付ける。
+ */
+function around(line: string, query: string, width = 200): string {
+  if (line.length <= width) return line;
+  const at = line.indexOf(query);
+  // 当たりが見せる幅より長いときは、当たりの頭から見せる（真ん中に寄せると頭が切れる）
+  const lead = query.length >= width ? 0 : Math.floor((width - query.length) / 2);
+  const from = Math.max(0, Math.min(at - lead, line.length - width));
+  return `${from > 0 ? '…' : ''}${line.slice(from, from + width)}${from + width < line.length ? '…' : ''}`;
 }
 
 export const searchTextTool: Tool = {
@@ -301,6 +327,7 @@ export const searchTextTool: Tool = {
     if (found.walkCapped) {
       notes.push(`（ファイルが多いので ${WALK_FILES} 個までしか見ていません。path で絞ってください）`);
     }
+    if (found.walkDeep) notes.push(DEEP_NOTE);
     if (found.tooBig > 0) {
       notes.push(`（大きすぎて見ていないファイルが ${found.tooBig} 個あります）`);
     }
@@ -309,7 +336,9 @@ export const searchTextTool: Tool = {
     }
     const tail = notes.length > 0 ? `\n${notes.join('\n')}` : '';
     const lines = found.hits.map((h) => `${h.path}:${h.line}: ${h.text}`);
-    return ok(lines.length > 0 ? lines.join('\n') + tail : `該当なし: ${query}${tail}`);
+    if (lines.length > 0) return ok(lines.join('\n') + tail);
+    const dots = dotsNote(found.walkDots);
+    return ok(`該当なし: ${query}${tail}${dots ? `\n${dots}` : ''}`);
   },
 };
 
@@ -416,7 +445,10 @@ async function commit(
   const lined = matchLineEndings(content, opaque ? priorBytes!.toString('latin1') : before);
   // 元の BOM も残す。モデルは見えない U+FEFF を写さないので、BOM 付きの `.cmd` を全文で書き戻すと BOM が落ち、cmd.exe が
   // CP932 として読んで日本語の行が壊れていた（差分には見えない）。edit_file は当てる所で残している
-  const written = !opaque && before.startsWith('\uFEFF') && !lined.startsWith('\uFEFF') ? `\uFEFF${lined}` : lined;
+  const written = !lined.startsWith('\uFEFF') && (
+    (!opaque && before.startsWith('\uFEFF'))
+    || needsBom(abs, lined, created || opaque)
+  ) ? `\uFEFF${lined}` : lined;
 
   /*
    * **空のファイルを作る道を塞がない。**
@@ -674,21 +706,58 @@ export const editFileTool: Tool = {
   },
 };
 
+/**
+ * cmd.exe と Windows PowerShell は、BOM の無いファイルを CP932 として読む。utf8 の日本語を BOM 無しで置くと、行が壊れて
+ * 断片を命令として走らせる。読めない文字コードのファイルは「utf8 の全文で書き直す」よう案内しているので、その書き直しと、
+ * 新しく作るときに付ける（元から BOM の無い utf8 のものは、そう置かれている形を変えない）。
+ */
+function needsBom(abs: string, text: string, fresh: boolean): boolean {
+  return fresh && /\.(bat|cmd|ps1)$/i.test(abs) && /[^\x00-\x7f]/.test(text);
+}
+
 /** 一度に見て回るファイル数の上限。**当たったら言う。** */
 const WALK_FILES = 3000;
+
+/** 見て回った結果のうち、見なかったもの。 */
+interface Walked {
+  /** ファイル数の上限で打ち切った */
+  capped: boolean;
+  /** 深さの上限で降りなかった所がある */
+  deep?: boolean;
+  /** 飛ばした `.` で始まるもの（`.git` を除く）の数 */
+  dots?: number;
+}
+
+/**
+ * `.` で始まる所を見なかったことの断り。何も見つからなかったときにだけ添える。説明に書くと、狭いコンテキストウィンドウでは
+ * ほかのツールの説明が一文に切られるので、要るときに結果の側で言う。
+ */
+function dotsNote(n: number | undefined): string {
+  return n ? `（. で始まるもの ${n} 個は見ていません。中を見るなら path で指してください）` : '';
+}
+
+/** 降りる深さの上限。**当たったら言う。** */
+const WALK_DEPTH = 12;
+
+/** 深さの上限で見るのをやめたときの断り。 */
+const DEEP_NOTE = `（${WALK_DEPTH} 階より深い所は見ていません。path で深い所を指してください）`;
 
 /** 検索で返す当たりの上限。**当たったら言う。** */
 const SEARCH_HITS = 100;
 
 async function walk(
   dir: string, root: string, out: string[], depth: number, ign?: Ignores,
-  capped?: { capped: boolean },
+  capped?: Walked,
 ): Promise<void> {
   if (out.length >= WALK_FILES) { if (capped) capped.capped = true; return; }
-  if (depth > 12) return;
+  // 深さで見るのをやめたことも言う。黙ってやめると、深い所に在るものを「該当なし」と返す
+  if (depth > WALK_DEPTH) { if (capped) capped.deep = true; return; }
   const entries = await readdir(dir, { withFileTypes: true });
   for (const e of entries) {
-    if (e.name.startsWith('.') && e.name !== '.github') continue;
+    if (e.name.startsWith('.') && e.name !== '.github') {
+      if (capped && e.name !== '.git') capped.dots = (capped.dots ?? 0) + 1;
+      continue;
+    }
     if (SKIP_DIRS.has(e.name)) continue;
     const abs = join(dir, e.name);
     // **その置き場が「見なくていい」と書いたものを見ない。**

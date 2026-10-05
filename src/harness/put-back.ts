@@ -43,7 +43,13 @@ export function isAbsent(e: unknown): boolean {
  * 巻き戻し・「戻す」でそのファイルを消していた。
  */
 export async function readPrior(abs: string): Promise<Buffer | undefined> {
+  /*
+   * 普通のファイルでないもの（FIFO・装置・フォルダ）は読まずに投げる。FIFO を readFile すると書き手が来るまで返らず、
+   * 止めても待ち続けていた（read_file は断っていたが、書くツールはここを通る）
+   */
   try {
+    const info = await stat(abs);
+    if (!info.isFile()) throw Object.assign(new Error('普通のファイルではありません'), { code: 'ENOTFILE' });
     return await readFile(abs);
   } catch (e) {
     if (isAbsent(e)) return undefined;
