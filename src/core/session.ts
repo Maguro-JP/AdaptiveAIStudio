@@ -1207,6 +1207,8 @@ export class Session {
         // 配布元への問い合わせも ■ で止められるようにし、上限で打ち切る。考えごとの間は人の送信が順番待ちになるので、
         // 返事が来ないと（最大で約 5 分）その間ずっと待たせていた
         const probe = new AbortController();
+        // 最初に空きを見てから、ここまで何度も待った。その間に来た送りの止め口を上書きしない
+        if (this.anyBusy) { yield { type: 'declined', reason: 'いま別の作業をしています' }; return false; }
         this.#conv.running = probe;
         const asked = AbortSignal.any([probe.signal, AbortSignal.timeout(UPDATE_PROBE_TIMEOUT_MS)]);
         const newer = await findNewerFor({
@@ -1248,20 +1250,24 @@ export class Session {
       files = lead.files;
     }
 
-    this.idle.begin(mode, Date.now());
-    yield {
-      type: 'chose', modeId: mode.id, codename: mode.codename, name: mode.name,
-      roleCodename: role.codename, reason: decision.reason, isDuty: !!decision.dutyId,
-    };
-
+    // 手を取ってから「選びました」と言う。最初に空きを見てから何度も待っているので、ここで見直す。取るのが知らせの後だったので、
+    // 知らせを流している間に来た送りが空いた手を取り、その止め口をここで上書きして、終わりに空にしていた（止めるボタンが送りに効かない）
+    if (this.anyBusy) { yield { type: 'declined', reason: 'いま別の作業をしています' }; return false; }
     const ac = new AbortController();
     this.#conv.running = ac;
+    this.idle.begin(mode, Date.now());
+
     let text = '';
     // モデルが落ちた・止められたか。`Agent.run` は投げずに `finished` で知らせる
     let broken: string | undefined;
     let finishedWith: string | undefined;
     let finishedDetail: string | undefined;
     try {
+      // 知らせは try の中で流す（受け手がここで読むのをやめても、取った手を下の finally で返す）
+      yield {
+        type: 'chose', modeId: mode.id, codename: mode.codename, name: mode.name,
+        roleCodename: role.codename, reason: decision.reason, isDuty: !!decision.dutyId,
+      };
       const thinker = new Agent(this.orchestrator, {
         candidates: this.candidates,
         system: buildSystemPrompt(role),
@@ -1292,7 +1298,8 @@ export class Session {
       // 落ちた回と同じ道（保存して `failed` を出す）を通す
       broken = ac.signal.aborted ? '止められました' : `考えの途中で止まりました: ${e instanceof Error ? e.message : String(e)}`;
     } finally {
-      this.#conv.running = undefined;
+      // 自分の止め口のときだけ空にする（ほかの依頼の止め口を空にすると、その依頼の途中で手が空いたことになる）
+      if (this.#conv.running === ac) this.#conv.running = undefined;
     }
     // 落ちた・止められた回は、手がかりを「調べた」とも、日課を「済ませた」とも記録しない（前は記録していたので、繋がらなかった
     // 回の手がかりは二度と調べられず、その日の日課は済んだことになった）。次の見回りでもう一度やる
@@ -1858,6 +1865,8 @@ export class Session {
               if (outsideTool(ev.call.name)) await outside.before();
               events.push({ type: 'toolStart', name: ev.call.name, summary: summarize(ev.call.args) });
             } else if (ev.type === 'toolEnd') {
+              // 使ったツールに載せる（本体の周と同じ。載せずにいたので、次の回の判じ手に「ツールは使っていない」と渡していた）
+              usedTools.push(ev.call.name);
               if (!ev.isError && mayChangeFiles(ev.call.name)) this.#prefetch.invalidate();
               /*
                * 直させている間に書いたものも「この依頼で触ったもの」に載せる（本体の周と同じ）。載せていなかったので、巻き戻しで
@@ -1876,6 +1885,8 @@ export class Session {
                   if (!changedHere.includes(c.path)) changedHere.push(c.path);
                 }
                 for (const path of found.unrecorded) { this.undo.skip(path); outsideUnrecorded.push(path); }
+                // 外のツールだけで変えた回も「書いた」に数える（本体の周と同じ。数えずにいたので、試した手の記憶を残さなかった）
+                if (found.changes.length > 0 || found.unrecorded.length > 0) wroteSomething = true;
               }
               events.push({
                 type: 'toolEnd', name: ev.call.name, ok: !ev.isError, summary: firstLine(ev.result),
@@ -2099,6 +2110,15 @@ export class Session {
        * 失敗として残すと、止めただけの手が「駄目だった手」として覚えられる。
        */
       const stopped = ac.signal.aborted;
+      // 書いた後に落ちたかもしれない。作業前の試験の結果と作業場の姿の覚えを捨てる（普通の終わり方と同じ。捨てずにいたので、
+      // この回で落ちるようにした試験を次の回が「前は通っていた」と読み、この回の失敗を次の回に着せていた）
+      if (locked) {
+        this.baselineProbe.invalidate();
+        this.#prefetch.invalidate();
+        this.markChanged();
+      }
+      // 呼び戻した記憶の記録も捨てる（残すと、呼び戻しをしない次の回の結果で、この回の記憶を採点していた）
+      conv.recalledIds = [];
       // 一度の失敗で対話ごと終わらせない。次の指示は受けられる。
       // 規則の数え（harness）は、通常の止めた回と同じく「完了しなかった」に数える。
       endMetrics('failed');
