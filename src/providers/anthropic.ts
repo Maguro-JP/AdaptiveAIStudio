@@ -15,7 +15,7 @@ import type {
   ChatProvider, HealthStatus, ModelDescriptor,
   ProviderChunk, ProviderMessage, ProviderRequest,
 } from './contract.ts';
-import { ProviderError, parseRetryAfter, type ProviderErrorKind } from './errors.ts';
+import { ProviderError, parseRetryAfter, sayQuotaExhausted, type ProviderErrorKind } from './errors.ts';
 
 type Sdk = typeof import('@anthropic-ai/sdk')['default'];
 
@@ -201,17 +201,20 @@ export class AnthropicProvider implements ChatProvider {
       });
     }
 
+    // 待ち時間は、429 に限らず全ての API の失敗から読む（529 の過負荷・503 にも付く。秒の形も日時の形も読む）
+    if (e instanceof sdk.APIError) {
+      retryAfterMs = parseRetryAfter((e.headers as { get?: (k: string) => string | null } | undefined)?.get?.('retry-after') ?? null);
+    }
     if (e instanceof sdk.RateLimitError) {
       const body = JSON.stringify(e.error ?? e.message);
-      kind = /quota|credit|billing|insufficient/i.test(body) ? 'quota_exhausted' : 'rate_limited';
-      // 秒の形も日時の形も読む（日時の形を読まずに、既定の待ちにしていた）
-      retryAfterMs = parseRetryAfter(e.headers?.get?.('retry-after') ?? null);
+      kind = sayQuotaExhausted(body) === true ? 'quota_exhausted' : 'rate_limited';
     } else if (e instanceof sdk.AuthenticationError || e instanceof sdk.PermissionDeniedError) {
       kind = 'auth';
     } else if (e instanceof sdk.BadRequestError) {
+      // 残高切れは 400 で返る（`credit balance is too low`）。「こちらの誤り」にすると次の候補へ回らず、依頼ごと落ちていた
       kind = /context|too long|maximum.*token|token.*limit|prompt is too long/i.test(e.message)
         ? 'context_too_long'
-        : 'invalid_request';
+        : sayQuotaExhausted(`${e.message} ${JSON.stringify(e.error ?? '')}`) === true ? 'quota_exhausted' : 'invalid_request';
     } else if (e instanceof sdk.NotFoundError) {
       // そのモデルが無い。次の候補へ回す（`errors.ts` の model_missing）
       kind = 'model_missing';
@@ -221,6 +224,11 @@ export class AnthropicProvider implements ChatProvider {
       kind = 'timeout';
     } else if (e instanceof sdk.APIConnectionError) {
       kind = 'unavailable';
+    } else if (e instanceof sdk.APIError && e.status === 413) {
+      // 依頼が大きすぎる（SDK は名前の付いた例外にしない）。やり直しても同じなので、冷やさずに次の候補へ
+      kind = 'context_too_long';
+    } else if (e instanceof sdk.APIError && (e.status === 422 || e.status === 409)) {
+      kind = 'invalid_request';
     }
 
     return new ProviderError({

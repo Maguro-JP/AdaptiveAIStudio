@@ -328,6 +328,7 @@
 - 28 回目の不具合調査の 6 件（日課の期・役職の設定の形・改名と同時の変更・実績の保存・補完の字下げ・考えの途中の例外）
 - 29 回目の不具合調査の 6 件（設定の形・守りの一覧・runtime.kind の綴り・手元の URL・無効の口・常時ロード）
 - 配った形を、名前が app なことだけで見分けない
+- 30 回目の不具合調査の 5 件（残高切れ・制限と切れの見分け・ツール非対応・大きすぎる依頼・閉じていない考えごと）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -12057,3 +12058,24 @@ write を持たせない」（`dropWriteIfOutbound`）は役職にだけ効か�
 試験: `app` フォルダだけを作っていた試験 3 本（`doctor-paths`・`update`・`work-root`）は、配った形と同じく入口を隣に置く形にそろえた。
 名前が app なだけのクローンを配った形と見ないこと（直す前の版で落ちる）と、VERSION だけでも配った形と見ること（対）を足した。
 触る場所: `src/core/home.ts`（`isDistributed`）、`test/work-root.test.ts`
+
+## 2026-10-05  30 回目の不具合調査の 5 件（残高切れ・制限と切れの見分け・ツール非対応・大きすぎる依頼・閉じていない考えごと）
+
+送り先（`src/providers/`）と CLI の残りを読んで見つけた分。`test/provider-errors-gaps.test.ts` の新しい試験は、直す前の版では対のテストを除いてすべて落ちる。
+
+- 402（残高切れ。OpenRouter・DeepSeek）と、400 で返る残高切れ（Claude の `credit balance is too low`）を `quota_exhausted` にする。
+  `invalid_request`（こちらの誤り）にしていたので次の候補へ回らず、手元の候補が後ろに並んでいても依頼ごと落ちていた。このプロジェクトの
+  主目的（切れたら別の口へ逃がす）が、いちばん起きやすい形で効いていなかった
+- 制限と切れの見分け（`sayQuotaExhausted`）は、先に JSON の `error.code`・`error.type` を見て、語で見るときは URL を除いた文で、切れを言う
+  言い回しに絞る。本文全体の `billing` で見ていたので、一時的な制限の本文に入った `…/account/billing` の URL に当たり、やり直さずに 30 分冷やしていた
+- ツールに対応していないモデル（400 の `does not support tools`）は `model_missing` にして、冷やさずに次の候補へ回す（Ollama の文面は確かめていない）
+- 413（大きすぎる依頼）は `context_too_long`。Claude では SDK が名前の付いた例外にしないので `unavailable` になり、同じ依頼をやり直して 5 分冷やしていた。
+  Claude の 409・422 は `invalid_request`。待ち時間（Retry-After）は 429 に限らず、全ての API の失敗から読む
+- `askOnce` の答えの判定は、閉じていない `<think>` の後ろも捨てる（上限で切れた考えごとの中の「2」を、答えとして通していた）
+- 直していないもの:
+  - 冷やす長さは規則の値だけで決まり、Retry-After を見ない（`orchestrator.ts`。3600 秒と言われても 1 分で候補に戻る）
+  - `aas models` の案内が、配った形で打てない `npm run …` のまま（`how()` を使っていない）
+  - `aas team` を承認 `ask` で動かすと、書き込みを黙って断る。報告の doctor の出力で、塊の境目の多バイト文字が欠けることがある
+  - Claude の使った量の入力の数を `message_delta` から取っている（版によっては `message_start` にしか無い。確かめていない）
+触る場所: `src/providers/errors.ts`（`kindFromHttpStatus`・`sayQuotaExhausted`）、`src/providers/anthropic.ts`（`#normalize`）、`src/cli/ask-once.ts`（`judgeAnswer`）、
+`test/provider-errors-gaps.test.ts`

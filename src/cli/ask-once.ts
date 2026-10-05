@@ -128,7 +128,9 @@ export async function askOnce(config: AasConfig, opts: AskOnceOptions = {}): Pro
  * 「22」「2.5」「2 + 2 = 4」「2 is wrong; the answer is 3」は通らない。
  */
 export function judgeAnswer(answer: string): string | undefined {
-  const body = answer.normalize('NFKC').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  // 閉じていない考えごと（上限で切れた `<think>Okay, 1+1 is 2, so`）も、その後ろを全部捨てる。閉じたものしか消して
+  // いなかったので、考えごとの中の「2」を答えとして通していた
+  const body = answer.normalize('NFKC').replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/g, '').replace(/<think(?:ing)?>[\s\S]*$/, '').trim();
   if (body.length === 0) return '本文が空です（考えごとだけで終わったか、何も返っていません）';
   if (/\uFFFD/.test(body)) return '壊れた文字（U+FFFD）を含みます';
   if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(body)) return '制御文字を含みます';
