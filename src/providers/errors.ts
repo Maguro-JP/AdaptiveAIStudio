@@ -11,7 +11,7 @@ export type ProviderErrorKind =
   /** 5xx・ネットワーク断。リトライ後フォールバック。 */
   | 'unavailable'
   | 'timeout'
-  /** context超過。圧縮して再試行。 */
+  /** context超過・依頼が大きすぎる。やり直さず、冷やさずに次の候補へ（縮めてやり直す仕組みは無い）。 */
   | 'context_too_long'
   /** 認証不備。自動復旧しないのでフォールバックする。 */
   | 'auth'
@@ -72,14 +72,44 @@ export class ProviderError extends Error {
   }
 }
 
+/**
+ * 本文が残高・クォータ切れを言っているか。
+ *
+ * 先に JSON の `error.code`・`error.type` を見る（`insufficient_quota` は切れ、`rate_limit_exceeded` は一時的な制限）。
+ * 語で見るときは URL を除いた文で、切れを言う言い回しに絞る。本文全体の `billing` で見ていたので、一時的な制限の
+ * 本文に入った `…/account/billing` の URL に当たり、やり直さずに 30 分冷やしていた。
+ */
+export function sayQuotaExhausted(body: string): boolean | undefined {
+  let code = '';
+  try {
+    const j = JSON.parse(body) as { error?: { code?: unknown; type?: unknown } };
+    code = `${String(j?.error?.code ?? '')} ${String(j?.error?.type ?? '')}`;
+  } catch { /* JSON でない本文は語で見る */ }
+  if (/insufficient_quota|billing_hard_limit/i.test(code)) return true;
+  if (/rate_limit/i.test(code)) return false;
+  const text = body.replace(/https?:\/\/\S+/g, '');
+  if (/exceeded your current quota|insufficient[_ ]quota|insufficient (balance|credits?|funds)|credit balance|out of credits/i.test(text)) return true;
+  // 1 日の上限（OpenRouter の free-models-per-day・Vertex の `quota metric '… per day'`）・使い切り（xAI の used all available credits）・
+  // 利用額の上限（monthly spending limit）も、その日・その月のうちは戻らない。分単位の上限（per minute）は一時的な制限のまま
+  if (/per[- ]?day|daily (limit|quota)|used all (available )?credits|spending limit/i.test(text)) return true;
+  return undefined;
+}
+
+/** ツールを渡したが、そのモデルがツールに対応していない（次の候補なら対応しているかもしれない）。 */
+function saysNoTools(body: string): boolean {
+  return /does not support tools|tools? (is|are) not supported|tool use is not supported/i.test(body);
+}
+
 /** HTTPステータスから kind を決める。全アダプタで共有する唯一の変換規則。 */
 export function kindFromHttpStatus(status: number, body: string): ProviderErrorKind {
+  // 402（Payment Required）は残高切れ（OpenRouter・DeepSeek）。次の候補へ回す。扱っていなかったので
+  // 「こちらの誤り」になり、手元の候補が後ろに並んでいても依頼ごと落ちていた
+  if (status === 402) return 'quota_exhausted';
   if (status === 429) {
     // 「制限」と「クォータ切れ」はステータスが同じなので本文で見分ける
-    return /quota|credit|billing|insufficient/i.test(body)
-      ? 'quota_exhausted'
-      : 'rate_limited';
+    return sayQuotaExhausted(body) === true ? 'quota_exhausted' : 'rate_limited';
   }
+  if (status === 413) return 'context_too_long';
   if (status === 401 || status === 403) return 'auth';
   // 404 のうち、本文がモデルの話をしているものだけ（Ollama の `model "x" not found`、OpenAI の `The model … does not exist`）。
   // 道の打ち間違い（/v1 の抜け）まで次の候補へ回すと、打ち間違いが隠れるので、それは今までどおり止める
@@ -89,6 +119,10 @@ export function kindFromHttpStatus(status: number, body: string): ProviderErrorK
   if (status === 400 && /context|too long|maximum.*token|token.*limit/i.test(body)) {
     return 'context_too_long';
   }
+  // 残高切れを 400 で返す相手がいる（Claude の `credit balance is too low`）
+  if (status === 400 && sayQuotaExhausted(body) === true) return 'quota_exhausted';
+  // ツールに対応していないモデル（Ollama の `does not support tools`）は、冷やさずに次の候補へ
+  if (status === 400 && saysNoTools(body)) return 'model_missing';
   return 'invalid_request';
 }
 
