@@ -236,25 +236,31 @@ function undecorate(line: string): string {
 export function readJudgement(raw: string): { judgement: Judgement; reason?: string } {
   const lines = stripThinking(raw).split(/\r?\n/).map(undecorate).filter((l) => l.length > 0);
 
-  // 後ろから見る。前置きしてから結論を書くモデルが多く、
-  // 途中に迷いを書いていても、最後の行が答えになっている。
+  /*
+   * **止める行が一つでもあれば止める。**後ろから見て最初に当たった行を採っていたので、
+   * 「BLOCK: ROLE_CHANGE」の後に「PASS」と書き足した答えを通していた。理由は最後の止める行から採る。
+   */
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]!;
-
     const block = /^BLOCK\b\s*[:：-]?\s*(.*)$/i.exec(line);
     if (block) {
       const reason = block[1]!.trim();
       return { judgement: 'block', reason: reason.length > 0 ? reason : '理由の記載なし' };
     }
-
-    if (/^PASS\b/i.test(line)) return { judgement: 'pass' };
-
     // 日本語で答えたときは、止める側だけ拾う。通す側は拾わない。
     if (/^止め/.test(line)) {
       const reason = line.replace(/^止め\S*?\s*[:：]?\s*/, '').trim();
       return { judgement: 'block', reason: reason.length > 0 ? reason : '理由の記載なし' };
     }
   }
+
+  /*
+   * **通すのは、最後の行が `PASS` だけのとき。**頭が PASS の行を採っていたので、「PASS/BLOCK: …」
+   * 「Pass? No — …」や、決まりの文の写し（「PASS ordinary technical writing.」）を通していた。
+   * PASS の後に続きを書いた答え（「PASS」の次の行で考え直す）も、通したことにしない。
+   */
+  const last = lines.at(-1);
+  if (last !== undefined && /^PASS[.!。]?$/i.test(last)) return { judgement: 'pass' };
 
   return { judgement: 'unknown' };
 }
@@ -272,6 +278,12 @@ export class Inspector {
     this.#maxChars = opts.maxChars ?? 12_000;
     this.#maxWindows = opts.maxWindows ?? 3;
   }
+
+  /**
+   * 隙間なく見られる長さ。これ以下なら、チャンク（頭・中ほど・尻）で全体を覆う。渡す側はこれで切ってから見せる
+   * （見せる分と渡す分が違うと、チャンクの間に置いた仕込みを見ずに渡す）。
+   */
+  get capacity(): number { return this.#maxChars * Math.min(this.#maxWindows, 3); }
 
   async inspect(text: string, direction: Direction, signal?: AbortSignal): Promise<Inspection> {
     const { parts, sampled } = windowsOf(text, this.#maxChars, this.#maxWindows);

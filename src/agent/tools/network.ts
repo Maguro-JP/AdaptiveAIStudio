@@ -192,10 +192,16 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
         // 持ち込み検査。ここを通る前の文字列は、誰が書いたものか分からない。
         // 止めた場合は中身を渡さない。「危ないので気をつけて読んでください」と
         // 添えて渡す形にすると、渡した時点で読まれてしまう。
+        // 渡すのは、判じ手が隙間なく見られる長さまで。見せる分と渡す分を同じにする（全体をチャンクで間引いて見せ、
+        // 頭の 6 万字を渡していたので、チャンクの間に置いた仕込みを見ずに渡していた）
+        const keep = inspector ? Math.min(maxBytes, inspector.capacity) : maxBytes;
+        const shown = text.slice(0, keep);
         let inbound = inspectInbound(text);
         if (inbound.passed && inspector) {
-          inbound = combine(inbound, await inspector.inspect(text, 'inbound', ctx.signal), 'inbound');
+          inbound = combine(inbound, await inspector.inspect(shown, 'inbound', ctx.signal), 'inbound');
         }
+        // 確かめの途中で止めたなら渡さない（止めると「分からない」になり、持ち込みは通っていた）
+        if (ctx.signal.aborted) return fail(`出典: ${target}\n中断されました（中身は確かめ終えていないので渡しません）`);
         if (!inbound.passed) {
           return fail(`出典: ${target}\n${describeVerdict(inbound, 'inbound')}`);
         }
@@ -203,8 +209,8 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
           ? `${describeVerdict(inbound, 'inbound')}\n\n`
           : '';
 
-        const clipped = text.length > maxBytes
-          ? text.slice(0, maxBytes) + `\n…（以降 ${text.length - maxBytes} 文字は省略）`
+        const clipped = text.length > keep
+          ? shown + `\n…（以降 ${text.length - keep} 文字は省略）`
           : text;
         if (!res.ok) {
           // 失敗も情報。握り潰すと同じ場所へ何度も行く。
