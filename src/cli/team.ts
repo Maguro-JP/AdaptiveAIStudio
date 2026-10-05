@@ -102,6 +102,9 @@ async function main(): Promise<void> {
       console.log(c.yellow(`  コマンド実行はチーム実行では自動承認されません: ${req.command}`));
       return false;
     }
+    // 書き込みも同じく断る。黙って断ると、作業者が書けないまま失敗し、利用者には理由が見えなかった
+    const what = req.kind === 'write' ? `書き込み: ${req.path}` : req.kind === 'network' ? `外への取得: ${req.url}` : req.kind;
+    console.log(c.yellow(`  ${what} はチーム実行では自動承認されません（承認を autoEdit か auto にすると通ります）`));
     return false;
   };
 
