@@ -13,7 +13,7 @@ import type {
 import {
   ProviderError, kindFromHttpStatus, kindFromThrown, parseRetryAfter,
 } from './errors.ts';
-import { readSseLines } from './sse.ts';
+import { readSseLines, readTextCapped } from './sse.ts';
 import { describeNet } from '../runtime/net-why.ts';
 import { connect } from 'node:net';
 
@@ -66,6 +66,12 @@ export interface OpenAiCompatibleOptions {
    */
   quietCeilingMs?: number;
   /**
+   * 終わりの合図（finish_reason）の後、流れが閉じるのを待つ長さ。既定5秒。
+   * 合図の後も繋ぎを開いたままにする相手（間に挟まる中継など）がいる。閉じるのを停滞の長さまで待って、
+   * 言い終えた答えを時間切れにしていた。合図の後は、使用量の塊が届くのを待つ程度にとどめる。
+   */
+  endGraceMs?: number;
+  /**
    * **モデル一覧と生存確認の上限。既定2秒。**
    *
    * 生成の上限と分ける。ここは相手が居るかを見るだけで、返るものは
@@ -86,6 +92,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
   readonly #connectTimeoutMs: number;
   readonly #stallTimeoutMs: number;
   readonly #quietCeilingMs: number;
+  readonly #endGraceMs: number;
   readonly #listTimeoutMs: number;
 
   constructor(opts: OpenAiCompatibleOptions) {
@@ -98,6 +105,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     this.#connectTimeoutMs = opts.connectTimeoutMs ?? 10_000;
     this.#stallTimeoutMs = opts.stallTimeoutMs ?? 120_000;
     this.#quietCeilingMs = opts.quietCeilingMs ?? 600_000;
+    this.#endGraceMs = opts.endGraceMs ?? 5_000;
     this.#listTimeoutMs = opts.listTimeoutMs ?? 2_000;
   }
 
@@ -243,7 +251,8 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     if (!res.ok || !res.body) {
       // 本文を読む間も見張る（つなぐときと同じ長さ）。相手が失敗の頭だけ返して本文を止めると、ここで何分も待っていた
       arm(this.#connectTimeoutMs);
-      const body = await res.text().catch(() => '');
+      // 上限で切って読む（失敗の本文は、文に添える頭だけあればよい。上限なしに読むと、巨大な本文で溜め込んで落ちる）
+      const body = await readTextCapped(res.body, 64 * 1024, true).catch(() => '');
       clearTimeout(timer);
       throw new ProviderError({
         // 本文を読む間に■を押したなら、止めただけ。状態番号で決めると、503 なら口が 5 分冷やされていた
@@ -279,10 +288,13 @@ export class OpenAiCompatibleProvider implements ChatProvider {
      */
     const stallTimeoutMs = this.#stallTimeoutMs;
     const quietCeilingMs = this.#quietCeilingMs;
+    const endGraceMs = this.#endGraceMs;
     let lastDeltaAt = Date.now();
     const alive = res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
       transform(bytes, controller) {
-        if (!firstToken) arm(firstTokenTimeoutMs);
+        // 終わりの合図の後に届くもの（使用量の塊・注釈）で、待ちを停滞の長さまで延ばさない
+        if (ended) arm(endGraceMs);
+        else if (!firstToken) arm(firstTokenTimeoutMs);
         else if (Date.now() - lastDeltaAt < quietCeilingMs) arm(stallTimeoutMs);
         controller.enqueue(bytes);
       },
@@ -345,7 +357,9 @@ export class OpenAiCompatibleProvider implements ChatProvider {
               idx = same ?? Math.max(...pending.keys()) + 1;
               moved.set(tc.index!, idx);
             } else {
-              idx = mapped;
+              // 振り直した後に元の id の続きが同じ番号で来たら、その id の枠へ（振り直した先へ送ると、別の呼び出しに繋がっていた）
+              const same = tc.id ? [...pending].find(([, v]) => v.id === tc.id)?.[0] : undefined;
+              idx = same ?? mapped;
             }
           }
           if (idx === undefined) {
@@ -358,14 +372,18 @@ export class OpenAiCompatibleProvider implements ChatProvider {
           if (tc.id) slot.id = tc.id;
           // 名前を欠片ごとに丸ごと付けてくる相手もいる。同じ名前を二度足さない
           if (tc.function?.name && slot.name !== tc.function.name) slot.name += tc.function.name;
-          if (tc.function?.arguments) slot.args += tc.function.arguments;
+          // 流れの中でも、引数を文字でなく物で送る相手がいる（文字として足すと `[object Object]` になり、呼び出しが失敗していた）
+          const piece: unknown = tc.function?.arguments;
+          if (typeof piece === 'string') slot.args += piece;
+          else if (piece !== undefined && piece !== null) slot.args += JSON.stringify(piece);
           pending.set(idx, slot);
           firstToken = true;
           lastDeltaAt = Date.now();
           arm(this.#stallTimeoutMs);
         }
 
-        if (typeof choice?.finish_reason === 'string') ended = true;
+        // 合図の後は、閉じるのを短く待つ（閉じない相手でも、言い終えた答えを時間切れにしない）
+        if (typeof choice?.finish_reason === 'string') { ended = true; arm(endGraceMs); }
         if (choice?.finish_reason === 'stop') finishReason = 'stop';
         else if (choice?.finish_reason === 'length') finishReason = 'length';
         else if (choice?.finish_reason === 'tool_calls') finishReason = 'toolCalls';
@@ -387,14 +405,19 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         });
       }
     } catch (e) {
-      if (e instanceof ProviderError && !signal.aborted && !stalled) throw e;
-      const kind = signal.aborted ? 'canceled' : stalled ? 'timeout' : kindFromThrown(e);
-      throw new ProviderError({
-        kind, providerId: this.id, cause: e,
-        message: stalled
-          ? `${this.id} が ${Math.round(armedMs / 1000)}秒 応答しませんでした（停滞）`
-          : `${this.id} のストリームが中断されました: ${describe(e)}`,
-      });
+      // 終わりの合図を受け取った後に黙ったのは、閉じない相手を待ち切っただけ。言い終えているので、投げずに下へ進む
+      // （組み立てたツール呼び出しと done を返す）
+      const finishedThenQuiet = stalled && ended && !signal.aborted;
+      if (!finishedThenQuiet) {
+        if (e instanceof ProviderError && !signal.aborted && !stalled) throw e;
+        const kind = signal.aborted ? 'canceled' : stalled ? 'timeout' : kindFromThrown(e);
+        throw new ProviderError({
+          kind, providerId: this.id, cause: e,
+          message: stalled
+            ? `${this.id} が ${Math.round(armedMs / 1000)}秒 応答しませんでした（停滞）`
+            : `${this.id} のストリームが中断されました: ${describe(e)}`,
+        });
+      }
     } finally {
       clearTimeout(timer);
     }
@@ -448,7 +471,8 @@ export class OpenAiCompatibleProvider implements ChatProvider {
  * 読めない本文は、そのまま一行として渡す（流れの読みが壊れた行として飛ばし、終わりの合図が無いと言う）。
  */
 async function* wholeAsChunks(body: ReadableStream<Uint8Array>): AsyncIterable<string> {
-  const text = await new Response(body).text();
+  // 上限つきで読む（まとめ返しを上限なしに読むと、巨大な本文で溜め込んで落ちる）
+  const text = await readTextCapped(body);
   // 名札が JSON でも、中身が流れ（`data:` の行）の相手がいる。そのときは流れとして読む
   if (/^data:/m.test(text) && !/^\s*\{/.test(text)) {
     yield* readSseLines(new Response(text).body!);
