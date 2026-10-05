@@ -115,12 +115,49 @@ describe('別々の会話へ同時に送る', { timeout: 120_000 }, () => {
         }
         return true;
       }, '同時に送った依頼の答えが、どこかの会話に載らない');
-      for (const [i, id] of ids.entries()) {
-        const users = (await messages(id)).filter((m) => m.role === 'user').map((m) => m.content);
-        const foreign = users.filter((c) => !c.includes(`-${i}`));
-        assert.deepEqual(foreign, [], `会話 ${i} に別の会話の依頼が混ざった`);
-      }
+      await assertOwnOnly(ids, '同時');
       assert.deepEqual(watch.logs.filter((t) => t.includes('いま別の作業をしています')), [], '同時の送りが本体を取り合って落ちた');
     } finally { watch.stop(); }
+    sharedIds = ids;
+  });
+
+  test('立ち上げた直後（本体がまだ無い）に同時に送っても、取り合わない', async () => {
+    assert.equal(sharedIds.length > 0, true, '前の試験で会話ができていない');
+    const ids = sharedIds;
+    // 同じ記録の場所を見る別の本体。まだ一度も送っていないので、本体のセッションが無い。
+    const again = new UiServer({ port: 0, config: server.config });
+    const prevBase = base;
+    base = (await again.start()).replace(/\/$/, '');
+    const watch = watchLogs();
+    await watch.opened;
+    try {
+      const results = await Promise.all(ids.map((id, i) => post(`直後-${i}`, id)));
+      for (const [i, r] of results.entries()) {
+        assert.equal(r.status, 202, `送り ${i} が受け取られていない: ${JSON.stringify(r.body)}`);
+        assert.equal(r.body.conversationId, ids[i], `送り ${i} が別の会話へ入った`);
+      }
+      await until(async () => {
+        for (const [i, id] of ids.entries()) {
+          const ms = await messages(id);
+          const asked = ms.findIndex((m) => m.role === 'user' && m.content.includes(`直後-${i}`));
+          if (asked < 0 || !ms.slice(asked + 1).some((m) => m.role === 'assistant')) return false;
+        }
+        return true;
+      }, '立ち上げ直後に同時に送った依頼の答えが、どこかの会話に載らない');
+      await assertOwnOnly(ids, '直後');
+      assert.deepEqual(watch.logs.filter((t) => t.includes('いま別の作業をしています')), [], '本体が無いところで同時の送りが取り合って落ちた');
+    } finally { watch.stop(); await again.stop(); base = prevBase; }
   });
 });
+
+let sharedIds: string[] = [];
+
+/** どの会話にも、自分の番号の依頼だけが載っている（ほかの番号の依頼が一つも無い）。 */
+async function assertOwnOnly(ids: string[], label: string): Promise<void> {
+  const marks = ['はじめ', '同時', '直後'];
+  for (const [i, id] of ids.entries()) {
+    const users = (await messages(id)).filter((m) => m.role === 'user').map((m) => m.content);
+    const foreign = users.filter((c) => ids.some((_, j) => j !== i && marks.some((k) => c.includes(`${k}-${j}`))));
+    assert.deepEqual(foreign, [], `会話 ${i} に別の会話の依頼が混ざった（${label}）`);
+  }
+}

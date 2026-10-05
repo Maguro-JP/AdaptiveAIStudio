@@ -657,10 +657,28 @@ export class UiServer {
     return this.#journals;
   }
 
+  /**
+   * 組んでいる途中の本体。同時に呼ばれたら、同じ約束を返す。まとめずにいたので、本体が無いところへ同時に来た呼び手の数だけ
+   * Session を組み、遅れて組み終えた分が、先に走り出した依頼の載せた会話（`#loadedId`・`#saved`）を上書きしていた
+   * （その依頼の行が会話に残らなかった。組んだ Session は閉じられずに残った）
+   */
+  #building: Promise<Session> | undefined;
+
   async session(): Promise<Session> {
     if (this.#session) await this.#retireIfRootMoved();
     if (this.#session) return this.#session;
     if (this.#stopped) throw new Error('止めています');
+    if (this.#building) return this.#building;
+    const building = this.#buildSession();
+    this.#building = building;
+    try {
+      return await building;
+    } finally {
+      if (this.#building === building) this.#building = undefined;
+    }
+  }
+
+  async #buildSession(): Promise<Session> {
     // 畳んでいる本体の保存を待ってから読む（先に読むと、後から来た古い保存が新しい本体の変更を上書きする）
     while (this.#closing.size > 0) await Promise.all([...this.#closing]);
     if (this.#session) return this.#session;
@@ -849,6 +867,8 @@ export class UiServer {
    */
   async #loadThenDrive(text: string, attached: string[], conversationId: string, editor?: EditorHere): Promise<void> {
     this.#prep += 1;
+    // 走り出せたら、その依頼の終わりが順番待ちを流す。走り出せなかったら、ここで流す（読み込みの間に積まれた分が残る）
+    let started = false;
     try {
       const notReady = await this.#readyToThink();
       if (notReady) {
@@ -869,8 +889,10 @@ export class UiServer {
       const full = await this.#compose(session, text, attached, editor);
       this.#bg(this.#drive(session, full, undefined, { said: text, ...(editor ? { editor } : {}) }),
         '依頼の実行が落ちました');
+      started = true;
     } finally {
       this.#prep -= 1;
+      if (!started && !this.#stopped) this.#bg(this.#maybeDrain(), '順番待ちの実行が落ちました');
     }
   }
 
@@ -1404,7 +1426,9 @@ export class UiServer {
         return;
       }
       // 横で走っている会話への二つ目も、本体が空いていても順番待ち（会話の中では一つずつ）。
-      if (live && (this.#mainBusy(live, 1) || this.#side.has(conversationId))) {
+      // 本体がまだ無い（立ち上げた直後・畳んだ直後）ときも、ほかの道が手を持っていれば積む。`live` があるときだけ
+      // 見ていたので、立ち上げ直後に同時に来た送りが互いの手を見ずに、同じ本体を取り合っていた
+      if (this.#prep > 1 || (live && (this.#mainBusy(live, 1) || this.#side.has(conversationId)))) {
         this.#queue.push({ text, attached, conversationId, ...(editor ? { editor } : {}) });
         this.broadcast({ type: 'queue', waiting: this.#queue.length });
         return send(res, 202, { queued: this.#queue.length, conversationId });
@@ -1435,6 +1459,8 @@ export class UiServer {
       return;
       } finally {
         release();
+        // 手を持っている間に積まれた分は、走り出した依頼の終わりが流す。走り出さずに離した（断った・落ちた）ときは、ここで流す
+        if (this.#queue.length > 0 && !this.#stopped) this.#bg(this.#maybeDrain(), '順番待ちの実行が落ちました');
       }
     }
 
@@ -2418,6 +2444,8 @@ export class UiServer {
         } finally {
           this.#prep -= 1;
         }
+        // 書き直しの間に積まれた送りを流す（流さないと、見回りが来るまで誰も拾わない）
+        if (this.#queue.length > 0) this.#bg(this.#maybeDrain(), '順番待ちの実行が落ちました');
       }
       this.broadcast({ type: 'conversations' });
       return send(res, 200, { current: null, messages: [], running: this.#runningId ?? null });
@@ -2619,6 +2647,7 @@ export class UiServer {
         } finally {
           this.#prep -= 1;
         }
+        if (this.#queue.length > 0) this.#bg(this.#maybeDrain(), '順番待ちの実行が落ちました');
       }
       this.broadcast({ type: 'conversations' });
       return send(res, 200, {
