@@ -410,6 +410,10 @@ export class Session {
   readonly services: ServiceHooks;
   readonly #opts: SessionOptions;
   readonly #prefetch: Prefetcher;
+  /** 走っている判じ手（指摘かどうか）。待たずに走らせるので、閉じるときに止める。 */
+  readonly #judging = new Set<AbortController>();
+  /** 閉じた後に、判じ手の二度目を訊きに行かない。 */
+  #closedForJudging = false;
   /** ハーネスの規則へ「いま何を頼まれているか」を渡すための箱。 */
   readonly #holder: { instruction: string };
   /**
@@ -2249,6 +2253,7 @@ export class Session {
   async #judge(said: string, when: string | undefined, did: string | undefined): Promise<void> {
     // 一度読めなくても、そこで捨てない。**読めないのと、指摘が無いのは違う。**
     for (let round = 1; round <= 2; round += 1) {
+      if (this.#closedForJudging) return;
       const got = await this.#askJudge(said, when, did);
       if (got?.kind === 'none') return; // 指摘ではない、と答えた
       if (got?.kind === 'complaint') {
@@ -2261,6 +2266,8 @@ export class Session {
       if (round === 1) continue; // 読めなかった。もう一度だけ訊く
     }
 
+    // 閉じたので訊けなかった。読めなかったのとは違うので、合図で拾う方にも回さない
+    if (this.#closedForJudging) return;
     // **二度読めなかった。**ここで黙ると、覚えるべき回を落とす。
     // 合図の網に落として、掴めていないことは印で残す。
     const sensed = senseDispleasure(said);
@@ -2280,6 +2287,7 @@ export class Session {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 90_000);
     timer.unref?.();
+    this.#judging.add(ac);
     try {
       let text = '';
       let finished = false;
@@ -2299,6 +2307,7 @@ export class Session {
     } catch {
       return undefined; // 判じ手が居ない・落ちた
     } finally {
+      this.#judging.delete(ac);
       clearTimeout(timer);
     }
   }
@@ -2674,6 +2683,12 @@ export class Session {
 
   async close(): Promise<void> {
     this.abort();
+    /*
+     * 待たずに走らせた判じ手も止める。止めないと、モデルが遅いとき（手元のモデルが他の仕事で詰まっている等）、判じ手の問い合わせが
+     * 上限（90 秒 × 2 回）まで残り、CLI は `/exit` の後もその間終わらなかった
+     */
+    this.#closedForJudging = true;
+    for (const ac of this.#judging) ac.abort();
     // 外の道具（子プロセス）を止める。止めないと、画面を閉じても
     // npx や相手のサーバが残る（検査が終わらないことで気づいた）。
     for (const c of this.mcpClients) c.stop();

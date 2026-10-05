@@ -27,8 +27,19 @@ import { binDir, modelsDir, stateDir } from '../core/home.ts';
  */
 export const KEEP_REPORTS = 10;
 
-/** 記録の名前の形。`<名前>-YYYYMMDD-HHMM.txt`（report-file.ts が付ける）。 */
-const REPORT_NAME = /^([a-z][a-z0-9-]*)-\d{8}-\d{4}\.txt$/;
+/**
+ * 記録の名前の形。`<名前>-YYYYMMDD-HHMM.txt`、同じ分に二つ目からは `-2` `-3` が付く（report-file.ts が付ける）。
+ * 読む側（最新の報告・点検の使い回し・片づけ）は、ここと `reportOrder` だけを使う。形を一か所に置く。
+ */
+export const REPORT_NAME = /^([a-z][a-z0-9-]*?)-(\d{8}-\d{4})(?:-(\d+))?\.txt$/;
+
+/** 古い順に並べる比べ方。時刻、同じ分なら付いた番号（無いものが 1 番目）を数として比べる（`-10` を `-2` より前にしない）。 */
+export function reportOrder(a: string, b: string): number {
+  const x = REPORT_NAME.exec(a), y = REPORT_NAME.exec(b);
+  if (!x || !y) return a < b ? -1 : a > b ? 1 : 0;
+  if (x[2] !== y[2]) return x[2]! < y[2]! ? -1 : 1;
+  return Number(x[3] ?? 1) - Number(y[3] ?? 1);
+}
 
 export interface Removable {
   path: string;
@@ -206,8 +217,8 @@ export async function findRemovable(opts: {
       byName.set(m[1]!, list);
     }
     for (const [prefix, names] of byName) {
-      // 名前は `-YYYYMMDD-HHMM` で終わるので、**名前の順が時刻の順**。
-      names.sort();
+      // 名前は `-YYYYMMDD-HHMM`（同じ分なら `-N`）で終わるので、時刻と番号の順に並べる
+      names.sort(reportOrder);
       for (const name of names.slice(0, Math.max(0, names.length - KEEP_REPORTS))) {
         const path = join(dir, name);
         const s = await stat(path).catch(() => undefined);

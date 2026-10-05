@@ -98,8 +98,11 @@ export class LineSource {
     line.then(() => { settled = true; });
 
     for (;;) {
-      const timer = new Promise<'idle'>((r) => setTimeout(() => r('idle'), idleMs));
+      // 時計は毎回片づける。行が先に来たとき残しておくと、`/exit` の後も時計が切れるまで（既定 30 秒）終わらなかった
+      let clock: ReturnType<typeof setTimeout> | undefined;
+      const timer = new Promise<'idle'>((r) => { clock = setTimeout(() => r('idle'), idleMs); });
       const winner = await Promise.race([line.then(() => 'line' as const), timer]);
+      clearTimeout(clock);
       if (winner === 'line') break;
       if (settled) break;
       const printed = await onIdle();

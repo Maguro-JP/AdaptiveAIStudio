@@ -20,6 +20,7 @@
  * **合わないものは「分からない」と返す。**推測で数えない。
  * 分からないときは、これまでの見積もり（`estimateTokens`）に戻る。
  */
+import { stat } from 'node:fs/promises';
 
 /** 数える人。**本物でも見積もりでも、呼ぶ側は同じ形で使う。** */
 export interface Counter {
@@ -286,7 +287,7 @@ export function tokenizerFor(spec: VocabSpec): Counter | undefined {
  * それだけで待たせる。**道で覚える。**同じファイルなら同じ数え方になるので、
  * 何本のモデルを同時に動かしていても混ざらない（勝手に変わる状態を持たない）。
  */
-const CACHED = new Map<string, Counter | undefined>();
+const CACHED = new Map<string, { stamp: string; counter: Counter | undefined }>();
 
 /**
  * GGUF から、そのモデルの数え方を作る。
@@ -298,15 +299,26 @@ export async function counterForGguf(
   path: string,
   read: (p: string) => Promise<{ metadata: Map<string, unknown> }>,
 ): Promise<Counter | undefined> {
+  /*
+   * 道だけで覚えていたので、同じ名前のまま別のモデルに替えても前の語彙で数え続け、一度読めなかった（他のものが掴んでいた）ことも
+   * 起動し直すまで覚えていた。大きさと更新時刻も合わせて見て、読めなかったときは覚えない
+   */
+  let stamp: string;
+  try {
+    const info = await stat(path);
+    stamp = `${info.size} ${info.mtimeMs}`;
+  } catch {
+    return undefined; // 見られない。覚えずに見積もりへ戻る（次はまた見に行く）
+  }
   const hit = CACHED.get(path);
-  if (hit !== undefined || CACHED.has(path)) return hit;
+  if (hit && hit.stamp === stamp) return hit.counter;
   let made: Counter | undefined;
   try {
     const spec = vocabFrom((await read(path)).metadata);
     made = spec ? tokenizerFor(spec) : undefined;
   } catch {
-    made = undefined; // 読めないファイル。異常として投げない
+    return undefined; // 読めないファイル。異常として投げない（覚えない。次はまた読みに行く）
   }
-  CACHED.set(path, made);
+  CACHED.set(path, { stamp, counter: made });
   return made;
 }

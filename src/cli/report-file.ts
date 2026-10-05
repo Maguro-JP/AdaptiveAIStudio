@@ -23,7 +23,7 @@ import { writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 // 残す数は片づけ側と同じものを使う。**二箇所に数を置かない**
 // （片方だけ変えると、出す側と片づける側で食い違う）。
-import { KEEP_REPORTS } from '../runtime/cleanup.ts';
+import { KEEP_REPORTS, REPORT_NAME, reportOrder } from '../runtime/cleanup.ts';
 
 /** 色を落とす。ファイルに ESC が入ると、開いた人には読めない。 */
 export function plain(text: string): string {
@@ -61,8 +61,8 @@ export interface Saved {
 async function sweepOld(dir: string, name: string, keep = KEEP_REPORTS): Promise<number> {
   try {
     const mine = (await readdir(dir))
-      .filter((f) => f.startsWith(`${name}-`) && f.endsWith('.txt'))
-      .sort();
+      .filter((f) => REPORT_NAME.exec(f)?.[1] === name)
+      .sort(reportOrder);
     const old = mine.slice(0, Math.max(0, mine.length - keep));
     let gone = 0;
     for (const f of old) {
@@ -83,16 +83,15 @@ async function sweepOld(dir: string, name: string, keep = KEEP_REPORTS): Promise
 export async function saveReport(
   name: string, body: string, dirs: readonly string[],
 ): Promise<Saved> {
-  const file = `${name}-${stamp()}.txt`;
+  const base = `${name}-${stamp()}`;
   let last = '';
   // 置く先を外から決められる。テストが doctor を回すと、プログラムの隣に
   // 報告が撒かれて利用者に送られてきた（実際にそうなった）。テストは temp を渡す。
   const ordered = process.env.AAS_REPORT_DIR ? [process.env.AAS_REPORT_DIR, ...dirs] : dirs;
   for (const dir of ordered) {
-    const at = join(dir, file);
     try {
       await mkdir(dir, { recursive: true });
-      await writeFile(at, plain(body), 'utf8');
+      const at = await writeFresh(dir, base, plain(body));
       const removed = await sweepOld(dir, name);
       return removed > 0 ? { path: at, removed } : { path: at };
     } catch (e) {
@@ -100,6 +99,22 @@ export async function saveReport(
     }
   }
   return { why: last || '書ける場所がありませんでした' };
+}
+
+/**
+ * 同じ名前が在れば `-2` `-3` と付けて書く（同じ分のうちに二度出した報告が、前のものを黙って上書きしていた）。
+ * 名前の並びは時刻の順のまま。
+ */
+async function writeFresh(dir: string, base: string, text: string): Promise<string> {
+  for (let n = 1; ; n += 1) {
+    const at = join(dir, n === 1 ? `${base}.txt` : `${base}-${n}.txt`);
+    try {
+      await writeFile(at, text, { encoding: 'utf8', flag: 'wx' });
+      return at;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST' || n >= 100) throw e;
+    }
+  }
 }
 
 /** 出したあとに言うこと。**次の一手まで書く。** */

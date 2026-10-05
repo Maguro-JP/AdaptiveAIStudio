@@ -16,6 +16,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { cpus, totalmem, platform, arch, release } from 'node:os';
 import { currentVersion, describeVersion } from '../core/version.ts';
+import { REPORT_NAME, reportOrder } from '../runtime/cleanup.ts';
 import { aasHome, stateDir, productRoot, modelsDir } from '../core/home.ts';
 import { configPath } from '../config.ts';
 import { listGguf } from '../runtime/inproc.ts';
@@ -52,8 +53,8 @@ async function recentDoctor(
   for (const dir of dirs) {
     const names = await readdir(dir).catch(() => [] as string[]);
     for (const f of names) {
-      // doctor-YYYYMMDD-HHMM.txt。自分（report-）や他の点検は見ない。
-      if (!/^doctor-\d{8}-\d{4}\.txt$/.test(f)) continue;
+      // doctor-YYYYMMDD-HHMM.txt（同じ分なら -N 付き）。自分（report-）や他の点検は見ない。
+      if (REPORT_NAME.exec(f)?.[1] !== 'doctor') continue;
       const at = join(dir, f);
       const st = await stat(at).catch(() => undefined);
       if (!st) continue;
@@ -71,9 +72,9 @@ async function recentDoctor(
 async function latestReports(dir: string): Promise<{ name: string; file: string }[]> {
   const names = await readdir(dir).catch(() => [] as string[]);
   const newest = new Map<string, string>();
-  for (const f of names.filter((n) => n.endsWith('.txt')).sort()) {
-    const name = f.replace(/-\d{8}-\d{4}\.txt$/, '');
-    newest.set(name, f); // 名前順＝時刻順なので、後のものが残る
+  for (const f of names.filter((n) => n.endsWith('.txt')).sort(reportOrder)) {
+    const name = REPORT_NAME.exec(f)?.[1] ?? f.replace(/\.txt$/, '');
+    newest.set(name, f); // 古い順に並べたので、後のものが残る
   }
   return [...newest.entries()].map(([name, file]) => ({ name, file: join(dir, file) }));
 }

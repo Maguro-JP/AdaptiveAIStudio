@@ -97,7 +97,10 @@ async function runShell(
   if (r.aborted) return fail('中断されました。');
   // **窓から決める。**8000 字の決め打ちだと、狭い窓では出力だけで溢れる。
   const room = contextTokens ? toolOutputBudget(contextTokens, undefined, historyTokens) : 8000;
-  if (r.timedOut) return fail(`タイムアウト (${timeoutMs / 1000}秒): ${command}\n${tailOf(r.output, room)}`);
-  const body = `終了コード: ${r.code}\n${tailOf(r.output, room) || '(出力なし)'}`;
+  // 実行の側で頭を落としていたら、ここで切らなくても記号を付ける（コンテキストウィンドウが広いと記号が付かず、全部だと読まれていた）
+  const shown = tailOf(r.output, room);
+  const marked = r.truncatedHead && !shown.startsWith('...(前略)') ? `...(前略)\n${shown}` : shown;
+  if (r.timedOut) return fail(`タイムアウト (${timeoutMs / 1000}秒): ${command}\n${marked}`);
+  const body = `終了コード: ${r.code}\n${marked || '(出力なし)'}`;
   return r.code === 0 ? ok(body) : { content: body, isError: true };
 }

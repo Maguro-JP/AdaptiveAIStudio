@@ -157,7 +157,7 @@ export async function checkUpdate(root: string): Promise<UpdateStatus> {
   }
 
   const counts = await runGit(['rev-list', '--left-right', '--count', 'HEAD...@{upstream}'], root);
-  const [aheadText = '', behindText = ''] = counts.out.trim().split(/\s+/);
+  const [aheadText = '', behindText = ''] = counts.stdout.trim().split(/\s+/);
   const ahead = Number(aheadText);
   const behind = Number(behindText);
   // 数えられなかったのを 0/0（最新）と読まない
@@ -170,8 +170,9 @@ export async function checkUpdate(root: string): Promise<UpdateStatus> {
 
   const log = behind > 0
     ? await runGit(['log', '--oneline', '--no-decorate', '-10', 'HEAD..@{upstream}'], root)
-    : { code: 0, out: '' };
-  const incoming = log.out.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+    : { code: 0, out: '', stdout: '' };
+  // 入ってくる変更は標準出力だけから数える（警告の行を変更として並べない）
+  const incoming = log.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
 
   if (ahead > 0) {
     return {

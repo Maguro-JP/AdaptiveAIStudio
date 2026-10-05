@@ -13,7 +13,7 @@ import { envForChild } from '../core/env.ts';
  * その下の `node --test` などは生き残って走り続ける。
  * 時間上限を設けても効かなくなるので、必ず一群として止める。
  */
-function killTree(child: ChildProcess, platform: NodeJS.Platform = process.platform): void {
+export function killTree(child: ChildProcess, platform: NodeJS.Platform = process.platform): void {
   const pid = child.pid;
   if (pid === undefined) return;
   if (platform === 'win32') {
@@ -98,7 +98,14 @@ export interface ExecResult {
   durationMs: number;
   timedOut: boolean;
   aborted: boolean;
+  /** 上限を超えて、出力の頭を落とした */
+  truncatedHead?: boolean;
 }
+
+/**
+ * 命令が終わってから、出力の口が閉じるのを待つ長さ。後ろへ回した子（`npm run dev &`）が口を掴んだままだと閉じない。
+ */
+const EXIT_GRACE_MS = 2000;
 
 export function execCommand(
   command: string,
@@ -106,12 +113,13 @@ export function execCommand(
   timeoutMs: number,
   signal: AbortSignal,
   maxOutputBytes = 200_000,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<ExecResult> {
   // 渡される前に止められていた。聞き手を足しても、もう鳴らない（abort は一度きり）。起こさずに返す。
   if (signal.aborted) return Promise.resolve({ code: null, output: '', timedOut: false, aborted: true, durationMs: 0 });
   return new Promise((resolve) => {
     const startedAt = Date.now();
-    const plan = spawnPlan(command, process.platform);
+    const plan = spawnPlan(command, platform);
     /*
      * **トークンを子へ渡さない。**
      *
@@ -130,18 +138,22 @@ export function execCommand(
     // UTF-8 か CP932 かを見る（src/core/text.ts の decodeText）。
     const chunks: Buffer[] = [];
     let held = 0;
+    // 頭を落としたか。落とした記号を付けるのは渡す側（run_command）なので、ここでは覚えるだけ
+    let dropped = false;
     const out = () => {
       let text = decodeOutput(Buffer.concat(chunks));
-      if (text.length > maxOutputBytes) text = text.slice(-maxOutputBytes);
+      if (text.length > maxOutputBytes) { text = text.slice(-maxOutputBytes); dropped = true; }
       return text;
     };
     let settled = false;
+    let grace: ReturnType<typeof setTimeout> | undefined;
     const finish = (r: Omit<ExecResult, 'durationMs'>) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(grace);
       signal.removeEventListener('abort', onAbort);
-      resolve({ ...r, durationMs: Date.now() - startedAt });
+      resolve({ ...r, ...(dropped ? { truncatedHead: true } : {}), durationMs: Date.now() - startedAt });
     };
 
     const timer = setTimeout(() => {
@@ -160,12 +172,36 @@ export function execCommand(
       held += b.length;
       // 出力が暴走しても壊れないよう、末尾だけ残す。塊ごと落とす
       // （途中で切ると文字の途中になる。頭の一文字は decodeOutput が拾う）。
-      while (held > maxOutputBytes * 2 && chunks.length > 1) held -= chunks.shift()!.length;
+      while (held > maxOutputBytes * 2 && chunks.length > 1) { held -= chunks.shift()!.length; dropped = true; }
     };
     child.stdout?.on('data', append);
     child.stderr?.on('data', append);
 
     child.on('error', (e) => finish({ code: null, output: `${out()}\n${e.message}`, timedOut: false, aborted: false }));
+    /*
+     * **命令が終わったら、口が閉じるのを長くは待たない。**`close` は出力の口を持つ者が全員いなくなるまで鳴らない。
+     * 後ろへ回した子（`npm run dev & echo started`）が口を掴むと、命令は終わっているのに上限（既定 600 秒）まで待ち、
+     * 「タイムアウト」と返していた。少し待っても閉じなければ、口を掴んでいる一群を止めて、命令の終了コードで返す
+     * （止めずに口だけ閉じると、子はポートを掴んだまま残り、次の回が使えない）
+     */
+    child.on('exit', (code) => {
+      // 打ち切り・止めるで返した後の終わりには何もしない（止めた子の番号を、2 秒後にもう一度止めにいかない）
+      if (settled) return;
+      grace = setTimeout(() => {
+        /*
+         * POSIX は一群ごと止める（殻が終わっても群は残る）。Windows は殻の番号からプロセスツリーをたどるが、殻はもう終わっていて、
+         * 番号が別のものに使い回されていると関係の無いプロセスツリーを止めかねない。Windows では口を閉じるだけにする
+         */
+        if (platform !== 'win32') killTree(child, platform);
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        finish({
+          code,
+          output: `${out()}\n（後ろで動いていた処理が出力を掴んだままだったので、止めました。動かし続けるものは run_command では起動できません）`,
+          timedOut: false, aborted: false,
+        });
+      }, EXIT_GRACE_MS);
+    });
     child.on('close', (code) => finish({ code, output: out(), timedOut: false, aborted: false }));
   });
 }

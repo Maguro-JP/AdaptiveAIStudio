@@ -14,6 +14,8 @@ import { inspectGit, type GitState } from './git.ts';
 import { toDisplayPath } from './tools/paths.ts';
 import { canRun } from '../core/which.ts';
 import { isAbsent } from '../harness/put-back.ts';
+import { SKIP } from './code-index.ts';
+import { Ignores } from './ignore.ts';
 
 export interface ProjectSnapshot {
   /** ファイル一覧（作業ディレクトリからの相対パス） */
@@ -35,7 +37,10 @@ export type PrefetchEvent =
   | { type: 'done'; task: string; ms: number }
   | { type: 'failed'; task: string; error: string };
 
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'target', '.venv']);
+/**
+ * 見に行かない場所は、索引（`code-index.ts`）と同じものを使う。ここだけ短い並びを持っていたので、venv・vendor・coverage の中身を
+ * 一覧に入れ、手掛かり（`initiative.ts`）が三者のコードの「空の catch」を挙げていた。`.gitignore` に書かれたものも見ない
+ */
 const MAX_FILES = 3000;
 
 export class Prefetcher {
@@ -211,16 +216,18 @@ export class Prefetcher {
     const files: string[] = [];
     const stamps: Array<{ path: string; modifiedAt: number }> = [];
 
-    const walk = async (dir: string, depth: number): Promise<void> => {
+    const walk = async (dir: string, depth: number, ign: Ignores): Promise<void> => {
       if (depth > 12 || files.length >= MAX_FILES || signal?.aborted) return;
       const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
       for (const e of entries) {
+        if (files.length >= MAX_FILES) return;
         if (e.name.startsWith('.') && e.name !== '.github') continue;
-        if (SKIP_DIRS.has(e.name)) continue;
+        if (SKIP.has(e.name)) continue;
         const abs = join(dir, e.name);
-        if (e.isDirectory()) await walk(abs, depth + 1);
+        const rel = toDisplayPath(this.#root, abs);
+        if (ign.ignores(rel, e.isDirectory())) continue;
+        if (e.isDirectory()) await walk(abs, depth + 1, await ign.enter(rel));
         else if (e.isFile()) {
-          const rel = toDisplayPath(this.#root, abs);
           files.push(rel);
           const info = await stat(abs).catch(() => undefined);
           if (info) stamps.push({ path: rel, modifiedAt: info.mtimeMs });
@@ -228,7 +235,7 @@ export class Prefetcher {
       }
     };
 
-    await walk(this.#root, 0);
+    await walk(this.#root, 0, await Ignores.load(this.#root));
     stamps.sort((a, b) => b.modifiedAt - a.modifiedAt);
     return { files, recent: stamps.slice(0, 15) };
   }

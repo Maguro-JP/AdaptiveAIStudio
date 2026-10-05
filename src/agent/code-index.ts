@@ -25,7 +25,7 @@ import { createHash } from 'node:crypto';
 import { Ignores } from './ignore.ts';
 
 /** 見に行かない場所。数が多く、開いても仕方がない。 */
-const SKIP = new Set([
+export const SKIP = new Set([
   'node_modules', '.git', 'dist', 'build', 'out', 'target', '.next',
   '.venv', 'venv', '__pycache__', '.cache', 'coverage', 'vendor', '.gradle',
 ]);
@@ -39,7 +39,7 @@ const SOURCE = new Set([
 ]);
 
 /** 一つのファイルが大きすぎるなら、索引には入れない。 */
-const MAX_FILE = 400_000;
+export const MAX_FILE = 400_000;
 
 /**
  * 索引に入れるファイル数の上限。大きな木で無限に時間を使わない。

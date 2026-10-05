@@ -121,7 +121,8 @@ export function splitCommand(text: string): { name: string; args: string } | und
 /** 指示に置き換える。 */
 export function fill(cmd: Command, args: string): string {
   return cmd.template.includes('$ARGUMENTS')
-    ? cmd.template.replace(/\$ARGUMENTS/g, args).trim()
+    // 置き換えを関数で渡す。文字で渡すと、利用者の文の `$&` `$$` `$'` を置き換えの記号として読む（`$&` は `$ARGUMENTS` に化ける）
+    ? cmd.template.replace(/\$ARGUMENTS/g, () => args).trim()
     : `${cmd.template}\n\n${args}`.trim();
 }
 
