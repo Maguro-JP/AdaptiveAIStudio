@@ -14,10 +14,26 @@
  */
 import { totalmem } from 'node:os';
 import { join } from 'node:path';
-import type { AasConfig } from '../config.ts';
+import { inprocUrl, type AasConfig, type ProviderConfig } from '../config.ts';
 import { modelsDir } from './home.ts';
 import type { LocalRuntime } from '../runtime/local-runtime.ts';
 import { chooseModel, tooBigForRam, looksLikeGguf, CHOICE_WHY } from '../runtime/inproc.ts';
+
+/**
+ * この中で読む口（inproc）。有効で、名前が inproc か、繋ぎ先が inproc の番号を向くものだけ。
+ * 有効な手元の口なら何でも選んでいたので、無効にした既定の口や、利用者が別に書いた LM Studio などの口に、
+ * こちらが読んだ GGUF の名前を付けて候補に固定し、存在しないモデルの名前で送り続けていた。
+ */
+function inprocProvider(config: AasConfig): ProviderConfig | undefined {
+  const url = inprocUrl(config);
+  const locals = config.providers.filter((p) => p.kind === 'openai-compatible' && p.locality === 'local' && p.enabled !== false);
+  const exact = locals.find((p) => p.id === 'inproc') ?? locals.find((p) => p.baseUrl === url);
+  if (exact || config.runtime?.basePort !== 0) return exact;
+  // 番号を空いているものに任せた（basePort: 0）ときは、番号では照らせない。この機械を向く口を、この中で読む口とみなす
+  return locals.find((p) => {
+    try { return ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(p.baseUrl ?? '').hostname); } catch { return false; }
+  });
+}
 
 /**
  * 読んでいる GGUF を候補にした設定を返す。
@@ -32,9 +48,7 @@ export function withLocalCandidate(
   ref: string,
   window?: number,
 ): AasConfig {
-  const local = config.providers.find(
-    (p) => p.kind === 'openai-compatible' && p.locality === 'local',
-  );
+  const local = inprocProvider(config);
   if (!local) return config;
   const providers = config.providers.map((p) => (p === local ? { ...p, models: [ref] } : p));
   // **実際に開いたコンテキストウィンドウを渡す。**設定から見積もらせない。
@@ -74,6 +88,8 @@ export async function readyLocalModel(
   if (config.candidates && config.candidates.length > 0) return { config };
   // 別に立てたもの（ollama / llama-server）は、相手が一覧を返す。ここは要らない。
   if (runtime.id !== 'inproc') return { config };
+  // この中で読む口が無い（クラウドだけで使う・手元の口を無効にした・別の手元の口だけを書いた）なら、数 GB のモデルを読み込まない
+  if (!inprocProvider(config)) return { config };
 
   const loaded = runtime.loaded();
   const ref0 = loaded[0];
