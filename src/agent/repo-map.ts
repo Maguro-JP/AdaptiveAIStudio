@@ -484,5 +484,8 @@ export function covers(map: string, index: CodeIndex, seed: Map<number, number>)
     .map(([i]) => index.files[i]?.path)
     .filter((p): p is string => !!p);
   if (wanted.length === 0) return true;
-  return wanted.every((p) => map.includes(p));
+  // 見出し（字下げの無い行。説明は `  — ` の後ろ）の道と、まるごと一致で比べる。文字の一部で見ていたので、`a.ts` が
+  // `data.ts` や `a.ts.bak` に当たり、依頼のファイルがrepo map に無いまま作り直さなかった
+  const heads = new Set(map.split('\n').filter((l) => l.length > 0 && !/^\s/.test(l)).map((l) => l.split('  — ')[0]!.trimEnd()));
+  return wanted.every((p) => heads.has(p));
 }

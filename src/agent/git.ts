@@ -5,6 +5,7 @@
  */
 import { spawn } from 'node:child_process';
 import { chunkReader } from '../core/text.ts';
+import { killTree } from './shell-exec.ts';
 import { SAFE_GIT_ARGS, SAFE_GIT_ENV, workspaceScope } from './workspace-stamp.ts';
 
 export type GitState =
@@ -34,8 +35,11 @@ export async function inspectGit(root: string): Promise<GitState> {
     return { kind: 'unavailable', reason: status.out.trim().split('\n')[0] ?? 'git を実行できません' };
   }
 
-  // 出力には警告（標準エラー）が混ざる。-z の欄は改行を含まないので、改行を含む欄は、最後の改行の後ろだけが本物の欄
-  const parts = status.out.split('\0').map((l) => (l.includes('\n') ? l.slice(l.lastIndexOf('\n') + 1) : l)).filter((l) => l.length > 0);
+  /*
+   * 欄は標準出力だけから読む。標準エラーの警告を混ぜて読んでいたので、出力が大きいと警告が欄の途中に割り込み（`?? a.` +
+   * 警告 + `ts`）、欄が崩れて読み飛ばされた。それが唯一の変更なら「クリーン」になり、巻き戻し先の無いまま自動の書き込みを始めていた
+   */
+  const parts = status.stdout.split('\0').filter((l) => l.length > 0);
   const branchLine = parts.find((l) => l.startsWith('##')) ?? '## (不明)';
   const branch = branchLine.replace(/^##\s*/, '').split(/\.{3}|\s/)[0] ?? '(不明)';
   // status は通ったのに作業場までが取れない（打ち切りなど）。道を直せないまま「クリーン」と言わない
@@ -83,12 +87,14 @@ export function describeGitState(state: GitState): { text: string; risky: boolea
 }
 
 /** git を呼ぶ。更新の仕組みからも使う。 */
-export function runGit(args: string[], cwd: string): Promise<{ code: number; out: string }> {
+export function runGit(args: string[], cwd: string): Promise<RunResult> {
   return runWithin('git', [...SAFE_GIT_ARGS, ...args], cwd, GIT_TIMEOUT_MS, {
     ...SAFE_GIT_ENV,
     // 資格情報を訊かせない（端末の入力待ち・Windows の資格情報を訊く画面で、返らないまま止まる）。訊かれる場面は失敗として返る
     GIT_TERMINAL_PROMPT: '0',
     GCM_INTERACTIVE: 'never',
+    // ssh の鍵の確認（初めての相手）は端末へ訊きに行き、GIT_TERMINAL_PROMPT では止まらない。持ち主が自分の ssh を決めていれば触らない
+    ...(process.env.GIT_SSH_COMMAND || process.env.GIT_SSH ? {} : { GIT_SSH_COMMAND: 'ssh -o BatchMode=yes' }),
   });
 }
 
@@ -98,23 +104,35 @@ export function runGit(args: string[], cwd: string): Promise<{ code: number; out
  */
 export const GIT_TIMEOUT_MS = 5 * 60_000;
 
+/** 走らせた結果。`out` は人に見せる文（標準出力と標準エラーを届いた順に）、`stdout` は読み取りに使う標準出力だけ。 */
+export interface RunResult { code: number; out: string; stdout: string }
+
 /** 命令を走らせ、`timeoutMs` を過ぎたら打ち切って `code: -1` で返す。 */
 export function runWithin(
   cmd: string, args: string[], cwd: string, timeoutMs: number, env: Record<string, string> = {},
-): Promise<{ code: number; out: string }> {
-  return new Promise<{ code: number; out: string }>((resolve) => {
-    const child = spawn(cmd, args, { cwd, env: { ...process.env, ...env } });
+): Promise<RunResult> {
+  return new Promise<RunResult>((resolve) => {
+    /*
+     * 打ち切るときは子のプロセスツリーごと止める（POSIX では一群にして群ごと、Windows ではプロセスツリーをたどる）。`child.kill()` は呼んだ一つしか止めず、
+     * 取得の下で動く `git-remote-https` などが残り、止まった `merge` は `index.lock` を掴んだままになりうる。
+     * 入力は渡さない（訊かれても答えられないので、待たずに失敗させる）
+     */
+    const child = spawn(cmd, args, {
+      cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32',
+    });
     let out = '';
+    let stdout = '';
     let settled = false;
-    const finish = (r: { code: number; out: string }) => { if (!settled) { settled = true; clearTimeout(timer); resolve(r); } };
+    const finish = (r: RunResult) => { if (!settled) { settled = true; clearTimeout(timer); resolve(r); } };
     const timer = setTimeout(() => {
-      child.kill();
-      finish({ code: -1, out: `${out}\n${Math.round(timeoutMs / 1000)} 秒たっても終わらないので打ち切りました` });
+      killTree(child);
+      finish({ code: -1, out: `${out}\n${Math.round(timeoutMs / 1000)} 秒たっても終わらないので打ち切りました`, stdout });
     }, timeoutMs);
-    const append = (read: (c: Buffer) => string) => (b: Buffer) => { out += read(b); };
-    child.stdout?.on('data', append(chunkReader()));
-    child.stderr?.on('data', append(chunkReader()));
-    child.on('error', (e) => finish({ code: -1, out: e.message }));
-    child.on('close', (code) => finish({ code: code ?? -1, out }));
+    const readOut = chunkReader();
+    const readErr = chunkReader();
+    child.stdout?.on('data', (b: Buffer) => { const t = readOut(b); stdout += t; out += t; });
+    child.stderr?.on('data', (b: Buffer) => { out += readErr(b); });
+    child.on('error', (e) => finish({ code: -1, out: e.message, stdout }));
+    child.on('close', (code) => finish({ code: code ?? -1, out, stdout }));
   });
 }

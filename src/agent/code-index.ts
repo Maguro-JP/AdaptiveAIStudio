@@ -39,7 +39,7 @@ const SOURCE = new Set([
 ]);
 
 /** 一つのファイルが大きすぎるなら、索引には入れない。 */
-const MAX_FILE = 400_000;
+export const MAX_FILE = 400_000;
 
 /**
  * 索引に入れるファイル数の上限。大きな木で無限に時間を使わない。

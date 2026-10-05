@@ -9,8 +9,10 @@
  * 当たった名前と行だけ**を返すのが要点。丸ごと返すと窓が埋まる。
  */
 import { join } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
+import { realSafeResolve } from './paths.ts';
 import { stateDir } from '../../core/home.ts';
-import { IndexStore, type CodeIndex } from '../code-index.ts';
+import { IndexStore, MAX_FILE, type CodeIndex } from '../code-index.ts';
 import { searchIndex, lookupSymbol } from '../code-index.ts';
 import { type Tool, ok, fail, requireString } from './types.ts';
 
@@ -22,6 +24,18 @@ import { type Tool, ok, fail, requireString } from './types.ts';
  */
 export const indexStore = new IndexStore(join(stateDir(), 'index'));
 const store = indexStore;
+
+/**
+ * 索引に載った道を読む。索引を作り直さない間（1.5 秒）にファイルが作業場の外を指すリンクへ替わっても、外を読まない。
+ * 索引に入れない大きさのものも読まない（作った後で大きくなったもの）。
+ */
+export async function readIndexed(root: string, p: string): Promise<string> {
+  const abs = await realSafeResolve(root, p);
+  if (!abs) throw new Error(`作業ディレクトリの外です: ${p}`);
+  const info = await stat(abs);
+  if (!info.isFile() || info.size > MAX_FILE) throw new Error(`読みません: ${p}`);
+  return readFile(abs, 'utf8');
+}
 
 export const findCodeTool: Tool = {
   schema: {
@@ -58,7 +72,7 @@ export const findCodeTool: Tool = {
 
     const hits = await searchIndex(index, query, {
       limit,
-      read: (p) => import('node:fs/promises').then((fs) => fs.readFile(join(ctx.root, p), 'utf8')),
+      read: (p) => readIndexed(ctx.root, p),
     });
     /*
      * **索引に入っていないものがあるなら、必ず言う。**
