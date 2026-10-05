@@ -29,6 +29,25 @@ async function sse(lines: string[], opts: { hold?: boolean; raw?: () => string }
   return `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`;
 }
 
+/** 行ごとに待ってから書く口（`wait` ミリ秒待ってから `line` を書く。`line` が ':' で始まれば注釈としてそのまま書く）。 */
+async function timed(steps: Array<{ wait: number; line: string }>, opts: { hold?: boolean } = {}): Promise<string> {
+  const server = createServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    void (async () => {
+      for (const st of steps) {
+        await new Promise((r) => setTimeout(r, st.wait));
+        if (res.destroyed) return;
+        res.write(st.line.startsWith(':') ? `${st.line}\n\n` : `data: ${st.line}\n\n`);
+      }
+      if (!opts.hold) res.end();
+    })();
+  });
+  servers.push(server);
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  return `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`;
+}
+
 type Out = { text: string; calls: Array<{ name: string; args: unknown }>; done?: string; error?: ProviderError };
 
 async function run(provider: OpenAiCompatibleProvider): Promise<Out> {
@@ -88,6 +107,39 @@ describe('流れの読み', () => {
       id: 'p', baseUrl: url, locality: 'local', stallTimeoutMs: 300, endGraceMs: 200,
     }));
     assert.equal(out.error?.kind, 'timeout');
+  });
+
+  test('空の finish_reason を毎回付けてくる相手でも、途中の間で言い終えたことにしない', async () => {
+    const url = await timed([
+      { wait: 0, line: JSON.stringify({ choices: [{ delta: { content: 'は' }, finish_reason: '' }] }) },
+      { wait: 600, line: JSON.stringify({ choices: [{ delta: { content: 'じめ' }, finish_reason: '' }] }) },
+      { wait: 0, line: JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] }) },
+      { wait: 0, line: '[DONE]' },
+    ]);
+    const out = await run(new OpenAiCompatibleProvider({ id: 'p', baseUrl: url, locality: 'local', endGraceMs: 200 }));
+    assert.equal(out.error, undefined, out.error?.message);
+    assert.equal(out.text, 'はじめ', '空の合図で途中までを言い終えたことにした');
+  });
+
+  test('終わりの合図の後に注釈を送り続けても、待ちを延ばし続けない', async () => {
+    const steps = [{ wait: 0, line: chunk({ content: '言い終えました' }, 'stop') }];
+    for (let i = 0; i < 40; i += 1) steps.push({ wait: 100, line: ': ping' });
+    const url = await timed(steps, { hold: true });
+    const started = Date.now();
+    const out = await run(new OpenAiCompatibleProvider({ id: 'p', baseUrl: url, locality: 'local', endGraceMs: 300 }));
+    assert.equal(out.error, undefined, out.error?.message);
+    assert.equal(out.text, '言い終えました');
+    assert.ok(Date.now() - started < 2_500, `注釈で待ちを延ばした: ${Date.now() - started}ms`);
+  });
+
+  test('番号が違えば、同じ id を使い回されても別の呼び出し（対）', async () => {
+    const url = await sse([
+      chunk({ tool_calls: [{ index: 0, id: 'X', function: { name: 'a', arguments: '{"n":1}' } }] }),
+      chunk({ tool_calls: [{ index: 1, id: 'X', function: { name: 'b', arguments: '{"n":2}' } }] }),
+      chunk({}, 'tool_calls'), '[DONE]',
+    ]);
+    const out = await run(new OpenAiCompatibleProvider({ id: 'p', baseUrl: url, locality: 'local' }));
+    assert.deepEqual(out.calls, [{ name: 'a', args: { n: 1 } }, { name: 'b', args: { n: 2 } }]);
   });
 
   test('改行の来ない流れを、上限なしに溜めない', async () => {

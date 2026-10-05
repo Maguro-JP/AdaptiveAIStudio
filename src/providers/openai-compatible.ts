@@ -266,6 +266,9 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     let finishReason: 'stop' | 'length' | 'toolCalls' | 'unknown' = 'unknown';
     // 終わりの合図（[DONE] か finish_reason）を受け取ったか。**受け取らずに流れが閉じたら、途中で切れた。**
     let ended = false;
+    // 中身のある終わりの合図（空でない finish_reason）を受け取ったか。ここからは閉じるのを短く待つ。
+    // 空の合図（`""`）を毎回付けてくる中継がいるので、`ended` とは分ける（分けずにいたら、途中の間で言い終えたことにしていた）
+    let finished = false;
     // ツール呼び出しは複数チャンクに分割して届く。index ごとに組み立てる。
     const pending = new Map<number, { id: string; name: string; args: string }>();
     // 届いた番号 → 実際に入れている枠（同じ番号で別の呼び出しが来て、振り直したとき）
@@ -292,8 +295,8 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     let lastDeltaAt = Date.now();
     const alive = res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
       transform(bytes, controller) {
-        // 終わりの合図の後に届くもの（使用量の塊・注釈）で、待ちを停滞の長さまで延ばさない
-        if (ended) arm(endGraceMs);
+        // 終わりの合図の後に届くもの（使用量の塊・注釈）では待ちを延ばさない（延ばすと、注釈を送り続ける相手で終わらない）
+        if (finished) { /* 合図のときに掛けた短い待ちのまま */ }
         else if (!firstToken) arm(firstTokenTimeoutMs);
         else if (Date.now() - lastDeltaAt < quietCeilingMs) arm(stallTimeoutMs);
         controller.enqueue(bytes);
@@ -357,8 +360,9 @@ export class OpenAiCompatibleProvider implements ChatProvider {
               idx = same ?? Math.max(...pending.keys()) + 1;
               moved.set(tc.index!, idx);
             } else {
-              // 振り直した後に元の id の続きが同じ番号で来たら、その id の枠へ（振り直した先へ送ると、別の呼び出しに繋がっていた）
-              const same = tc.id ? [...pending].find(([, v]) => v.id === tc.id)?.[0] : undefined;
+              // 振り直した番号に、元の id の続きが来たら、その id の枠へ（振り直した先へ送ると、別の呼び出しに繋がっていた）。
+              // 振り直していない番号では見ない（番号ごとに同じ id を使い回す相手の呼び出しを、一つに混ぜない）
+              const same = tc.id && moved.has(tc.index!) ? [...pending].find(([, v]) => v.id === tc.id)?.[0] : undefined;
               idx = same ?? mapped;
             }
           }
@@ -383,7 +387,8 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         }
 
         // 合図の後は、閉じるのを短く待つ（閉じない相手でも、言い終えた答えを時間切れにしない）
-        if (typeof choice?.finish_reason === 'string') { ended = true; arm(endGraceMs); }
+        if (typeof choice?.finish_reason === 'string') ended = true;
+        if (typeof choice?.finish_reason === 'string' && choice.finish_reason !== '' && !finished) { finished = true; arm(endGraceMs); }
         if (choice?.finish_reason === 'stop') finishReason = 'stop';
         else if (choice?.finish_reason === 'length') finishReason = 'length';
         else if (choice?.finish_reason === 'tool_calls') finishReason = 'toolCalls';
@@ -407,7 +412,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     } catch (e) {
       // 終わりの合図を受け取った後に黙ったのは、閉じない相手を待ち切っただけ。言い終えているので、投げずに下へ進む
       // （組み立てたツール呼び出しと done を返す）
-      const finishedThenQuiet = stalled && ended && !signal.aborted;
+      const finishedThenQuiet = stalled && finished && !signal.aborted;
       if (!finishedThenQuiet) {
         if (e instanceof ProviderError && !signal.aborted && !stalled) throw e;
         const kind = signal.aborted ? 'canceled' : stalled ? 'timeout' : kindFromThrown(e);
