@@ -134,7 +134,8 @@ export class StrideBook {
     if (this.#cache) return Promise.resolve(this.#cache);
     // 同時に呼ばれても一度だけ読む（二度読むと、後から読んだ分が先に数えた分を上書きする）
     this.#loading ??= (async () => {
-      const all: Record<string, StrideRecord> = {};
+      // 入れ物の型を持たない入れ物にする（`__proto__` という名前のモデルを、入れ物の作りの書き換えとして読まない）
+      const all: Record<string, StrideRecord> = Object.create(null) as Record<string, StrideRecord>;
       await loadJournal(this, this.#path, (v) => Object.assign(all, validStrides(v)));
       this.#cache = all;
       return all;
@@ -172,7 +173,7 @@ export class StrideBook {
 
 /** 歩幅の記録のうち、形の合う分だけ。入れ物でなければ空。 */
 function validStrides(v: unknown): Record<string, StrideRecord> {
-  const out: Record<string, StrideRecord> = {};
+  const out: Record<string, StrideRecord> = Object.create(null) as Record<string, StrideRecord>;
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return out;
   for (const [model, r] of Object.entries(v)) if (isStride(r)) out[model] = r;
   return out;

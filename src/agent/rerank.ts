@@ -63,16 +63,21 @@ export function rerankShare(chars: number): number {
 const NARROW = 2000;
 const WIDE = 8000;
 
-/** 読んだ本文。索引を組み直すまで使い回す。 */
+/**
+ * 読んだ本文。索引を組み直すまで使い回す。**作業場ごとに持つ。**組んだ時刻だけで見ていたので、同じ時刻に組んだ別の作業場の
+ * 同じ道（`src/index.ts`）の本文を使い、読み終わる前に入れ物が替わると、別の作業場の入れ物へ書いていた
+ */
 interface Cache {
   builtAt: string;
   text: Map<string, string>;
 }
-let cache: Cache | undefined;
+const caches = new Map<string, Cache>();
 
 async function bodyOf(index: CodeIndex, path: string): Promise<string> {
+  let cache = caches.get(index.root);
   if (!cache || cache.builtAt !== index.builtAt) {
     cache = { builtAt: index.builtAt, text: new Map() };
+    caches.set(index.root, cache);
   }
   const held = cache.text.get(path);
   if (held !== undefined) return held;
