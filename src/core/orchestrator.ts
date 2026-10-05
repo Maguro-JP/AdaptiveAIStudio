@@ -146,7 +146,7 @@ export class ChatOrchestrator {
            * ここで 5 分冷やすと、読み直せているのに「利用できるモデルがありません」で
            * 0.0 秒で終わり続ける（子を殺して確かめた）。逃がす先も、たいてい無い。
            */
-          if (provider.locality !== 'local') this.#registry.cooldown(provider.id, err.rule.cooldownMs);
+          if (provider.locality !== 'local') this.#registry.cooldown(provider.id, cooldownFor(err));
           lastError = err;
 
           // 出力開始後の切替は文章を壊すので、ここで打ち切る。
@@ -202,4 +202,18 @@ export class ChatOrchestrator {
       }),
     };
   }
+}
+
+/** 言われた待ちを冷やしの上限に使う長さ（これより長い Retry-After は一日で区切る。壊れた値で何日も口を塞がない）。 */
+const MAX_COOLDOWN_MS = 24 * 60 * 60_000;
+
+/**
+ * 外の口を冷やす長さ。種類ごとの長さと、相手が言った待ち（Retry-After）の長い方。
+ * 種類ごとの長さだけで決めていたので、1 時間待てと言われても 1 分後にまた送り、断られては切り替えていた。
+ * 冷やさない種類（長すぎる依頼・モデルが無い）は、言われても冷やさない。
+ */
+export function cooldownFor(err: ProviderError): number {
+  const base = err.rule.cooldownMs;
+  if (base <= 0 || err.retryAfterMs === undefined) return base;
+  return Math.max(base, Math.min(err.retryAfterMs, MAX_COOLDOWN_MS));
 }
