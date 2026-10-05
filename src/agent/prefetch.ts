@@ -47,6 +47,10 @@ export class Prefetcher {
   #snapshot?: ProjectSnapshot;
   /** 動かし方だけを調べ直している途中。重ねて走らせない。 */
   #commandsRetry?: Promise<void>;
+  /** 作り直しを走らせている途中か。走っている間の作り直しは重ねず、終わった後に一回だけやり直す。 */
+  #building = false;
+  /** 走っている間に作り直しを頼まれた（いま作っている一覧は古い）。 */
+  #dirty = false;
 
   constructor(root: string, onEvent?: (e: PrefetchEvent) => void, can: (command: string) => boolean = canRun) {
     this.#root = root;
@@ -58,7 +62,22 @@ export class Prefetcher {
   start(signal?: AbortSignal): void {
     if (this.#inFlight) return;
     // 作り直しが重なったら、一番新しい回の結果だけを覚える（前の回が後から終わって、古い一覧で上書きしていた）
-    const mine: Promise<ProjectSnapshot> = this.#build(signal).then(
+    // 走っている間に作り直しを頼まれたら、終わった後にもう一度だけ作る（書くたびに重ねて走らせていたので、
+    // 五人が五十回書けば五十本の一覧づくりと `git status` が同時に走っていた）。待っている人には最後の回の結果を返す
+    const run = async (): Promise<ProjectSnapshot> => {
+      this.#building = true;
+      try {
+        let s: ProjectSnapshot;
+        do {
+          this.#dirty = false;
+          s = await this.#build(signal);
+        } while (this.#dirty && !signal?.aborted);
+        return s;
+      } finally {
+        this.#building = false;
+      }
+    };
+    const mine: Promise<ProjectSnapshot> = run().then(
       (s) => { if (this.#inFlight === mine) this.#snapshot = s; return s; },
       // 先読みの失敗で本体を止めない。無いなら無いで作業は始められる。
       () => ({
@@ -129,6 +148,8 @@ export class Prefetcher {
   /** ファイルを書き換えた後など、作り直す。 */
   invalidate(signal?: AbortSignal): void {
     this.#snapshot = undefined;
+    // 走っている最中なら重ねない。いま走っている回が終わった後に、もう一度だけ作り直す（待っている人にはその結果が届く）
+    if (this.#building) { this.#dirty = true; return; }
     this.#inFlight = undefined;
     this.start(signal);
   }
