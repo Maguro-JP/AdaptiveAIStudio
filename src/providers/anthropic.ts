@@ -154,9 +154,8 @@ export class AnthropicProvider implements ChatProvider {
         } else if (ev.type === 'message_stop') {
           stopped = true;
         } else if (ev.type === 'message_delta') {
-          if (ev.delta.stop_reason === 'end_turn') finishReason = 'stop';
-          else if (ev.delta.stop_reason === 'max_tokens') finishReason = 'length';
-          else if (ev.delta.stop_reason === 'tool_use') finishReason = 'toolCalls';
+          const mapped = finishFromStop(ev.delta.stop_reason);
+          if (mapped) finishReason = mapped;
           if (ev.usage) {
             yield {
               type: 'usage',
@@ -252,6 +251,18 @@ type Block =
  *   （role: 'tool' は Claude に無いので、そのまま送ると 400 で断られ、依頼ごと落ちていた）
  * - 同じ役が続いたら一つにまとめる（ツールの結果が並ぶとき）。空の文は送らない（空の文は断られる）
  */
+/**
+ * Claude の終わり方を、こちらの終わり方に引き直す。知らないものは undefined（前の値のまま）。
+ * コンテキストウィンドウを使い切った終わり方（`model_context_window_exceeded`）は SDK の型に無いが、届く。読まずにいたので、
+ * 使い切って途中で切れた答えを、言い終えたものとして通していた。上限で切れたものと同じに扱う
+ */
+export function finishFromStop(reason: string | null | undefined): 'stop' | 'length' | 'toolCalls' | undefined {
+  if (reason === 'end_turn') return 'stop';
+  if (reason === 'max_tokens' || reason === 'model_context_window_exceeded') return 'length';
+  if (reason === 'tool_use') return 'toolCalls';
+  return undefined;
+}
+
 export function toAnthropicMessages(messages: readonly ProviderMessage[]): { role: 'user' | 'assistant'; content: Block[] }[] {
   const out: { role: 'user' | 'assistant'; content: Block[] }[] = [];
   const push = (role: 'user' | 'assistant', blocks: Block[]): void => {
@@ -285,13 +296,15 @@ export function toAnthropicMessages(messages: readonly ProviderMessage[]): { rol
     if (m.content.trim()) blocks.push({ type: 'text', text: m.content });
     if (m.role === 'assistant') renamed = new Map();
     for (const c of m.toolCalls ?? []) {
-      let id = c.id || 'call';
+      // Claude が受ける字（英数・`_`・`-`）に直す。ほかの口の id（`functions.read_file:0` など）をそのまま送ると、
+      // 候補を切り替えた後の依頼が毎回 400 で断られていた。空の id も名前を付け、結果の側を同じ名前へ引き直す
+      let id = (c.id || 'call').replace(/[^A-Za-z0-9_-]/g, '_');
       if (used.has(id)) {
         let n = 2;
         while (used.has(`${id}_${n}`)) n += 1;
-        renamed.set(c.id, `${id}_${n}`);
         id = `${id}_${n}`;
       }
+      if (id !== c.id) renamed.set(c.id, id);
       used.add(id);
       open.push(id);
       const input = c.args !== null && typeof c.args === 'object' && !Array.isArray(c.args) ? c.args : {};
