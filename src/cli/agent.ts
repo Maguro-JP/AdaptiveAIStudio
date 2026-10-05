@@ -34,6 +34,7 @@ import { checkUpdate, applyUpdate, describeUpdate } from '../core/update.ts';
 import { formatReport as formatAcceptance } from '../agent/acceptance.ts';
 import { formatEntry } from '../memory/memory.ts';
 import { Session } from '../core/session.ts';
+import { expandCommand } from '../agent/commands.ts';
 import { runPanel, mergeFindings, panelVerdict } from '../agent/panel.ts';
 import { formatIdleStats } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES } from '../harness/idle-modes.ts';
@@ -56,6 +57,17 @@ function renderDiff(diff: string): string {
     if (line.startsWith('-')) return c.red(line);
     return line;
   }).join('\n');
+}
+
+/** この入口が自分で受ける命令。知らない命令を言うときに並べる。 */
+const AGENT_COMMANDS = [
+  '/exit', '/new', '/models', '/metrics', '/duties', '/skip', '/idle', '/roles', '/memory', '/remember', '/plan', '/panel',
+  '/ack', '/acks', '/unack', '/proposals', '/update', '/think', '/do', '/reject', '/rules', '/harness', '/audit', '/context', '/warm',
+];
+
+/** `name` そのもの、または `name` の後に空白と引数が続く行か（`/planets` を `/plan` と読まない）。 */
+function isCommand(line: string, name: string): boolean {
+  return line === name || line.startsWith(`${name} `);
 }
 
 async function main(): Promise<void> {
@@ -273,6 +285,8 @@ async function main(): Promise<void> {
     const session = await getSession();
     const ac = new AbortController();
     generating = ac;
+    // 止める手を依頼の中まで届ける。plan と send は中で自分の止め手を作るので、ここの ac を止めても依頼は走り続けていた
+    ac.signal.addEventListener('abort', () => session.abort(), { once: true });
     try {
       for await (const ev of session.plan(request)) {
         switch (ev.type) {
@@ -496,7 +510,7 @@ async function main(): Promise<void> {
         console.log();
         continue;
       }
-      if (line.startsWith('/memory')) {
+      if (isCommand(line, '/memory')) {
         const q = line.slice('/memory'.length).trim();
         const memory = (await getSession()).memory;
         const found = q
@@ -510,7 +524,7 @@ async function main(): Promise<void> {
         }
         continue;
       }
-      if (line.startsWith('/remember')) {
+      if (isCommand(line, '/remember')) {
         const body = line.slice('/remember'.length).trim();
         if (!body) {
           console.log(c.dim('  使い方: /remember <覚えること>  /remember 決定: <決めたこと>\n'));
@@ -534,13 +548,13 @@ async function main(): Promise<void> {
         await memory.save().catch((e: unknown) => console.log(c.yellow(`  ${(e as Error).message}\n`)));
         continue;
       }
-      if (line.startsWith('/plan')) {
+      if (isCommand(line, '/plan')) {
         const target = line.slice('/plan'.length).trim();
         if (!target) { console.log(c.dim('  使い方: /plan <依頼>\n')); continue; }
         await runPlanOn(target);
         continue;
       }
-      if (line.startsWith('/panel')) {
+      if (isCommand(line, '/panel')) {
         const target = line.slice('/panel'.length).trim();
         await runPanelOn(target || '直近の変更を見て、問題があれば指摘してください。');
         continue;
@@ -655,12 +669,26 @@ async function main(): Promise<void> {
         continue;
       }
 
-      const request = pendingRequest ?? line;
+      /*
+       * `/` で始まる行は、作業場の指示（`.claude/commands` など）に置き換える。知らない名前は送らない。ここで見ていなかったので、
+       * 打ち間違い（`/exti`）や上に無い命令（`/help`）が、書けるツール付きの依頼としてモデルへ渡っていた。画面と同じ置き換え方を使う
+       */
+      let request = pendingRequest ?? line;
+      if (pendingRequest === undefined) {
+        const expanded = await expandCommand(line, root);
+        if (expanded.kind === 'unknown') {
+          const known = [...AGENT_COMMANDS, ...expanded.known.map((n) => `/${n}`)];
+          console.log(c.red(`  知らない命令です: /${expanded.name}`) + c.dim(`（使える命令: ${known.join(' ')}）\n`));
+          continue;
+        }
+        request = expanded.text;
+      }
       pendingRequest = undefined;
 
       // 手順は核が持つ。ここは出来事を端末に描くだけ。
       const session = await getSession();
       generating = new AbortController();
+      generating.signal.addEventListener('abort', () => session.abort(), { once: true });
       let printedText = false;
       const flush = () => { if (printedText) { stdout.write('\n'); printedText = false; } };
 
