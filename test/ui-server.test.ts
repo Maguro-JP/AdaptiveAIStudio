@@ -72,12 +72,16 @@ describe('配置の受け渡し', () => {
     assert.deepEqual(again.layout, r.layout);
   });
 
-  test('読めない中身でも既定に落ちる（例外にしない）', async () => {
-    const r = await fetch(base.replace(/\/$/, '') + '/api/layout', {
-      method: 'PUT', headers: { 'content-type': 'application/json' }, body: 'これはJSONではない',
-    });
-    assert.equal(r.status, 200);
-    assert.ok((await json(r)).layout.panels.length > 0);
+  test('**読めない中身・途中で切れた中身は 400 で断り、前の配置を既定で上書きしない**（例外にもしない）', async () => {
+    const before = (await json(await get('/api/layout'))).layout;
+    for (const body of ['これはJSONではない', '{"panels":']) {
+      const r = await fetch(base.replace(/\/$/, '') + '/api/layout', {
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body,
+      });
+      assert.equal(r.status, 400, body);
+      assert.match((await json(r)).error, /保存していません/);
+    }
+    assert.deepEqual((await json(await get('/api/layout'))).layout, before, '前の配置を既定で上書きした');
   });
 
   test('用意された配置に切り替えられる', async () => {
@@ -85,9 +89,11 @@ describe('配置の受け渡し', () => {
     assert.equal(r.layout.id, 'watch');
   });
 
-  test('知らない配置を頼まれても既定に落ちる', async () => {
-    const r = await json(await post('/api/layout/preset', { id: '無い配置' }));
-    assert.ok(r.layout.panels.length > 0);
+  test('**知らない配置を頼まれたら 400 で断り、今の配置を上書きしない**', async () => {
+    const before = (await json(await get('/api/layout'))).layout;
+    const r = await post('/api/layout/preset', { id: '無い配置' });
+    assert.equal(r.status, 400);
+    assert.deepEqual((await json(await get('/api/layout'))).layout, before);
   });
 });
 
@@ -122,9 +128,14 @@ describe('見た目の受け渡し', () => {
     assert.equal(r.theme.scheme, 'dark');
   });
 
-  test('知らない見た目を頼まれても既定に落ちる', async () => {
-    const r = await json(await post('/api/theme/preset', { id: '無い色' }));
-    assert.ok(r.theme.tokens.bg);
+  test('**知らない見た目・読めない中身は 400 で断り、今の見た目を上書きしない**', async () => {
+    const before = (await json(await get('/api/theme'))).theme;
+    assert.equal((await post('/api/theme/preset', { id: '無い色' })).status, 400);
+    const r = await fetch(base.replace(/\/$/, '') + '/api/theme', {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{"tokens":',
+    });
+    assert.equal(r.status, 400);
+    assert.deepEqual((await json(await get('/api/theme'))).theme, before, '前の見た目を既定で上書きした');
   });
 
   test('配置と見た目は別々に持つ（色を変えても配置は動かない）', async () => {

@@ -384,7 +384,13 @@ export class UiServer {
    * 依頼が**同じ関門を通り抜ける**。押しても何も起きないように見えて、
    * 実は二つ走っている。見てから走り出すまでを、ここで塞ぐ。
    */
-  #preparing = false;
+  /**
+   * 本体の手を、会話の外のこと（読み込み・組み直し・採用の書き込み）で塞いでいる数。真偽値で持っていたので、
+   * ある道の `finally` が、ほかの道の立てた「塞いでいる」まで倒し、同時に来た送りが同じ本体を取り合っていた
+   * （負けた側は「いま別の作業をしています」で消え、勝った側も別の会話の履歴で走ることがあった）。数で持ち、各道は自分の分だけ戻す。
+   */
+  #prep = 0;
+  get #preparing(): boolean { return this.#prep > 0; }
   /**
    * 止めたあとは、裏で動いていたものがセッションを作り直さない。
    *
@@ -769,8 +775,9 @@ export class UiServer {
    * 伴う送り（書き換える先は画面で一つなので、本体の依頼と取り合う）。横の数がモデルの口の
    * 本数を使い切っているとき（それ以上並べても、口が空くまで待つだけ）。
    */
-  #canRunBeside(session: Session, conversationId: string, editor: EditorHere | undefined): boolean {
-    if (editor || this.#thinking || this.#preparing) return false;
+  #canRunBeside(session: Session, conversationId: string, editor: EditorHere | undefined, mine = 0): boolean {
+    // `mine` は、呼ぶ側が自分で塞いでいる数（それは理由に断らない）
+    if (editor || this.#thinking || this.#prep > mine) return false;
     // 本体が空いていれば本体に載せる（横に並べるのは、本体が別の会話で塞がっているときだけ）。
     if (!session.busy) return false;
     if (this.#runningId === conversationId || this.#loadedId === conversationId) return false;
@@ -841,7 +848,7 @@ export class UiServer {
    * 読んでいる間は #preparing で「手が塞がっている」ことにする（次の送信は積まれる）。
    */
   async #loadThenDrive(text: string, attached: string[], conversationId: string, editor?: EditorHere): Promise<void> {
-    this.#preparing = true;
+    this.#prep += 1;
     try {
       const notReady = await this.#readyToThink();
       if (notReady) {
@@ -863,7 +870,7 @@ export class UiServer {
       this.#bg(this.#drive(session, full, undefined, { said: text, ...(editor ? { editor } : {}) }),
         '依頼の実行が落ちました');
     } finally {
-      this.#preparing = false;
+      this.#prep -= 1;
     }
   }
 
@@ -892,7 +899,7 @@ export class UiServer {
     const live = this.#session;
     if (!live || !this.#rootMoved(live)) return false;
     if (live.busy || live.anyBusy || live.lock.held || this.#side.size > 0 || this.#thinking) return false;
-    if (this.#preparing && !opts.mine) return false;
+    if (this.#prep > (opts.mine ? 1 : 0)) return false;
     await this.#retireSession(live);
     this.broadcast({ type: 'log', level: 'info', text: `前の作業が終わったので、変えた作業場に切り替えました: ${this.#workRoot()}` });
     this.broadcast({ type: 'undo' });
@@ -954,12 +961,11 @@ export class UiServer {
   async #retireSession(live: Session): Promise<void> {
     // 書き直しを待つ間も「手が塞がっている」ことにする（その隙に来た送りが、畳む本体で走り出す・同じ分を二重に書く）。
     // 送る道の中（既に塞いでいる）からも呼ばれるので、終わったら元の値に戻す
-    const was = this.#preparing;
-    this.#preparing = true;
+    this.#prep += 1;
     try {
       if (this.#session === live) await this.#flushBeforeLeaving(live);
     } finally {
-      this.#preparing = was;
+      this.#prep -= 1;
     }
     if (this.#session === live) {
       this.#session = undefined;
@@ -1059,7 +1065,7 @@ export class UiServer {
     if ((this.#opts.config.initiative ?? {}).enabled !== true) return 'HELD';
 
     if (Date.now() < this.#idleHoldUntil) return 'HELD';
-    this.#preparing = true;
+    this.#prep += 1;
     try {
       // **読み込みは始めない。**頼まれてもいないのに数GBを読むと、
       // 立ち上げて30秒後に機械が塞がる。
@@ -1084,7 +1090,7 @@ export class UiServer {
       return 'THOUGHT';
     } finally {
       this.#thinking = false;
-      this.#preparing = false;
+      this.#prep -= 1;
       this.broadcast({ type: 'musing', on: false });
       // **手が空いたら、待っているものを流す。**
       // ここを忘れると、考えごとの最中に来た依頼が、誰にも拾われない。
@@ -1184,6 +1190,8 @@ export class UiServer {
 
   async stop(say: (line: string) => void = () => undefined): Promise<void> {
     if (this.#sweepTimer) clearInterval(this.#sweepTimer);
+    // 点検（test・selftest・doctor）の子も止める。止めずに抜けると、Windows では子が残り、立ち上げ直した本体とぶつかる
+    this.#tasks.stop();
     this.#stopped = true;
     if (this.#idleTimer) clearInterval(this.#idleTimer);
     // 待っている承認は、答えが無いまま終わる。許可はしない。
@@ -1243,7 +1251,8 @@ export class UiServer {
     }
 
     if (path === '/api/layout' && req.method === 'PUT') {
-      const body = await readBody(req);
+      const body = await readBodyStrict(req);
+      if (body === UNREADABLE || body === null || typeof body !== 'object') return send(res, 400, { error: '本文を読めませんでした（途中で切れたか、JSON の形ではありません）。保存していません' });
       // 送られてきた配置も必ず直してから保存する。
       // 壊れたまま保存すると、次の起動で画面が出なくなる。
       const { layout, repairs } = repairLayout(body);
@@ -1253,7 +1262,11 @@ export class UiServer {
     }
 
     if (path === '/api/layout/preset' && req.method === 'POST') {
-      const body = await readBody(req) as { id?: string };
+      const raw = await readBodyStrict(req);
+      if (raw === UNREADABLE) return send(res, 400, { error: '本文を読めませんでした（途中で切れたか、JSON の形ではありません）。保存していません' });
+      const body = raw as { id?: string };
+      // 知らない名前で既定の配置に上書きしない
+      if (!PRESETS.some((p) => p.id === String(body?.id ?? ''))) return send(res, 400, { error: `その並びはありません: ${String(body?.id ?? '')}` });
       const layout = preset(String(body?.id ?? ''));
       await saveLayout(layout);
       this.broadcast({ type: 'stateChanged' });
@@ -1362,15 +1375,16 @@ export class UiServer {
        * 載らない、別物）だけは先に見て 503 で断り、読むこと自体は受け取ってから
        * 裏でやる。進み具合は流れに出て、読めなければ会話に理由が出る。
        */
-      this.#preparing = true;
-      let mustLoad = false;
+      // 手を確保したまま、会話を決めて渡すところまで離さない。読み込みの確かめの後に一度離していたので、会話を決める
+      // 間（await）に来た別の送りが空いた本体を見て素通りし、二つが同じ本体を取り合っていた
+      this.#prep += 1;
+      let held = true;
+      const release = (): void => { if (held) { held = false; this.#prep -= 1; } };
       try {
-        const notReady = await this.#readyToThink(false);
-        if (notReady && notReady !== NOT_LOADED_YET) return send(res, 503, { error: notReady });
-        mustLoad = notReady === NOT_LOADED_YET;
-      } finally {
-        this.#preparing = false;
-      }
+      let mustLoad = false;
+      const notReady = await this.#readyToThink(false);
+      if (notReady && notReady !== NOT_LOADED_YET) return send(res, 503, { error: notReady });
+      mustLoad = notReady === NOT_LOADED_YET;
 
       // どの会話への依頼か。トップからなら、ここで新しい会話ができる。
       // 見出しは**送った時点で**最初の一言から付ける。答えが返るまで
@@ -1384,13 +1398,13 @@ export class UiServer {
       // しかも書き直させることになる。動いている間は順番に積む。
       // 別の会話への依頼も積める（手が一つでも、口は会話ごと）。
       const live = this.#session;
-      if (live && this.#canRunBeside(live, conversationId, editor)) {
+      if (live && this.#canRunBeside(live, conversationId, editor, 1)) {
         send(res, 202, { accepted: true, conversationId, loading: false });
         this.#bg(this.#driveBeside(live, conversationId, text, attached), '依頼の実行が落ちました');
         return;
       }
       // 横で走っている会話への二つ目も、本体が空いていても順番待ち（会話の中では一つずつ）。
-      if (live && (this.#mainBusy(live) || this.#side.has(conversationId))) {
+      if (live && (this.#mainBusy(live, 1) || this.#side.has(conversationId))) {
         this.#queue.push({ text, attached, conversationId, ...(editor ? { editor } : {}) });
         this.broadcast({ type: 'queue', waiting: this.#queue.length });
         return send(res, 202, { queued: this.#queue.length, conversationId });
@@ -1403,7 +1417,6 @@ export class UiServer {
         return;
       }
 
-      this.#preparing = true;
       try {
         await this.#rebuildIfCandidatesMissing();
         const session = await this.session();
@@ -1417,9 +1430,12 @@ export class UiServer {
         this.#bg(this.#drive(session, full, undefined, { said: text, ...(editor ? { editor } : {}) }),
           '依頼の実行が落ちました');
       } finally {
-        this.#preparing = false;
+        release();
       }
       return;
+      } finally {
+        release();
+      }
     }
 
     if (path === '/api/plan' && req.method === 'POST') {
@@ -1435,7 +1451,7 @@ export class UiServer {
       const session = await this.session();
       if (this.#busyNow(session)) return send(res, 409, { error: 'いま別の作業をしています' });
 
-      this.#preparing = true;
+      this.#prep += 1;
       try {
         // **先に確かめる。**モデルが無いまま送ると、繋ぎ先を待ち続けて
         // 画面は「考え中」のまま止まる。利用者からは固まったようにしか見えない。
@@ -1447,7 +1463,7 @@ export class UiServer {
         send(res, 202, { accepted: true });
         this.#bg(this.#drivePlan(session, full, text), '段取りが落ちました');
       } finally {
-        this.#preparing = false;
+        this.#prep -= 1;
       }
       return;
     }
@@ -1514,12 +1530,12 @@ export class UiServer {
       }
       // 採用を書き込む間も「手が塞がっている」ことにする（その間に来た送りに本体を取られ、採用済みのまま走らない、を作らない）
       const holding = verdict === 'accepted';
-      if (holding) this.#preparing = true;
+      if (holding) this.#prep += 1;
       let target;
       try {
         target = await session.decide(String(body?.id ?? ''), verdict);
       } finally {
-        if (holding) this.#preparing = false;
+        if (holding) this.#prep -= 1;
       }
       if (!target) return send(res, 404, { error: 'その提案は見つからないか、もう決まっているか、別の作業場の提案です' });
       this.broadcast({ type: 'stateChanged' });
@@ -1710,7 +1726,7 @@ export class UiServer {
       const resolveIt = waiting.finish;
       // 一部だけ通すときは、通す塊の番号が来る。
       const picked = Array.isArray(body?.hunks)
-        ? body.hunks.filter((n): n is number => typeof n === 'number')
+        ? body.hunks.filter((n): n is number => Number.isInteger(n) && (n as number) >= 0)
         : undefined;
       // 「この依頼のあいだは訊かない」。書き込みだけに効く。
       const wantAll = body?.approved === true && (body as { all?: unknown }).all === true;
@@ -1737,14 +1753,19 @@ export class UiServer {
     }
 
     if (path === '/api/theme' && req.method === 'PUT') {
-      const { theme, repairs } = repairTheme(await readBody(req));
+      const body = await readBodyStrict(req);
+      if (body === UNREADABLE || body === null || typeof body !== 'object') return send(res, 400, { error: '本文を読めませんでした（途中で切れたか、JSON の形ではありません）。保存していません' });
+      const { theme, repairs } = repairTheme(body);
       await saveTheme(theme);
       this.broadcast({ type: 'themeChanged' });
       return send(res, 200, { theme, repairs, vars: toCssVars(theme) });
     }
 
     if (path === '/api/theme/preset' && req.method === 'POST') {
-      const body = await readBody(req) as { id?: string };
+      const raw = await readBodyStrict(req);
+      if (raw === UNREADABLE) return send(res, 400, { error: '本文を読めませんでした（途中で切れたか、JSON の形ではありません）。保存していません' });
+      const body = raw as { id?: string };
+      if (!THEMES.some((t) => t.id === String(body?.id ?? ''))) return send(res, 400, { error: `その見た目はありません: ${String(body?.id ?? '')}` });
       const theme = baseTheme(String(body?.id ?? ''));
       await saveTheme(theme);
       this.broadcast({ type: 'themeChanged' });
@@ -1924,7 +1945,9 @@ export class UiServer {
 
     if (path === '/api/logs' && req.method === 'GET') {
       // 最近の記録。画面のログのパネルが開いたときに取り直す。`after` より新しい分だけも取れる。
-      const after = Number(url.searchParams.get('after') ?? '0');
+      // 数でない値は 0 から（NaN だと何とも比べられず、黙って空の一覧を返していた）
+      const afterRaw = Number(url.searchParams.get('after') ?? '0');
+      const after = Number.isFinite(afterRaw) ? afterRaw : 0;
       return send(res, 200, { lines: this.#recentLogs.filter((l) => l.seq > after) });
     }
 
@@ -2386,14 +2409,14 @@ export class UiServer {
       // 動いている間は本体に触らない（見ている所だけトップへ）。横で走る会話は本体の履歴に触らないので数えない。
       if (session && !this.#mainBusy(session)) {
         // 書き直しを待つ間も「手が塞がっている」ことにする（その隙に来た送りが、同じ分を二重に書く・入れ替えた後の本体を走らせる）
-        this.#preparing = true;
+        this.#prep += 1;
         try {
           await this.#flushBeforeLeaving(session);
           session.reset();
           this.#loadedId = undefined;
           this.#saved = 0;
         } finally {
-          this.#preparing = false;
+          this.#prep -= 1;
         }
       }
       this.broadcast({ type: 'conversations' });
@@ -2567,7 +2590,7 @@ export class UiServer {
       // 横で走っている会話は本体に載せない（横の走者が自分の履歴を持っている。終われば残す）。
       if (session && !this.#mainBusy(session) && !this.#side.has(id)) {
         // 書き直しを待つ間も「手が塞がっている」ことにする（トップへ戻る所と同じ）
-        this.#preparing = true;
+        this.#prep += 1;
         try {
           if (this.#loadedId !== id) {
             await this.#flushBeforeLeaving(session);
@@ -2594,7 +2617,7 @@ export class UiServer {
             this.#saved = past.length;
           }
         } finally {
-          this.#preparing = false;
+          this.#prep -= 1;
         }
       }
       this.broadcast({ type: 'conversations' });
@@ -2795,7 +2818,8 @@ export class UiServer {
     if (path === '/api/mcp/connect' && req.method === 'DELETE') {
       const id = url.searchParams.get('id') ?? '';
       const servers = { ...this.#opts.config.mcp?.servers };
-      if (!servers[id]) return send(res, 404, { error: `繋いでいません: ${id}` });
+      // 自分の持ち物だけを見る（`constructor`・`toString` は継いだもので、在ると見ていた）
+      if (!Object.hasOwn(servers, id)) return send(res, 404, { error: `繋いでいません: ${id}` });
       delete servers[id];
       const got = await disconnectService(id);
       // 設定を書き換えられなかった（壊れている・読めない）なら、外したと言わない。動いている設定からも外さない
@@ -3153,8 +3177,8 @@ export class UiServer {
   }
 
   /** 本体（既定の会話）の手が塞がっているか。送りを本体に載せるか、横に並べるかを決めるのに使う。 */
-  #mainBusy(session: Session): boolean {
-    return session.busy || this.#thinking || this.#preparing;
+  #mainBusy(session: Session, mine = 0): boolean {
+    return session.busy || this.#thinking || this.#prep > mine;
   }
 
   /**
@@ -4049,7 +4073,7 @@ export class UiServer {
     const next = at >= 0 ? this.#queue.splice(at, 1)[0] : undefined;
     this.broadcast({ type: 'queue', waiting: this.#queue.length });
     if (!next) return;
-    this.#preparing = true;
+    this.#prep += 1;
     let full: string;
     try {
       // 前の作業場の本体なら畳んで組み直す（作業中に作業場を変えたあと、最初に空いた所がここのことがある）
@@ -4072,7 +4096,7 @@ export class UiServer {
       this.broadcast({ type: 'queue', waiting: this.#queue.length });
       return;
     } finally {
-      this.#preparing = false;
+      this.#prep -= 1;
     }
     this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
     this.#bg(this.#drive(session, full, undefined, { said: next.text, ...(next.editor ? { editor: next.editor } : {}) }),
@@ -4450,6 +4474,25 @@ export async function readWithin(req: IncomingMessage, limit: number): Promise<T
     req.once('close', () => finish(over ? 'tooLarge' : 'cut'));
     req.once('error', () => finish(over ? 'tooLarge' : 'cut'));
   });
+}
+
+/** 本文を読めなかった（途中で切れた・JSON の形でない）。 */
+const UNREADABLE = Symbol('unreadable');
+
+/**
+ * 本文を読む。途中で切れた・JSON の形でないときは `UNREADABLE` を返す（既定に落とさない）。
+ * 保存する口（配置・見た目）は、これで断る。既定に落とす `readBody` を使っていたので、途中で切れた本文で
+ * 利用者の配置や見た目を既定で上書きし、200 を返していた。
+ */
+async function readBodyStrict(req: IncomingMessage): Promise<unknown> {
+  const got = await readWithin(req, MAX_JSON_BODY);
+  if (got === 'tooLarge') throw new BodyTooLarge(MAX_JSON_BODY);
+  if (got === 'cut') return UNREADABLE;
+  try {
+    return JSON.parse(got.toString('utf8'));
+  } catch {
+    return UNREADABLE;
+  }
 }
 
 async function readBody(req: IncomingMessage): Promise<unknown> {
