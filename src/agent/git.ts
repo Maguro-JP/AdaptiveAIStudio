@@ -105,8 +105,8 @@ export const GIT_TIMEOUT_MS = 5 * 60_000;
 /** 走っている git の一群。こちらが終わるときに止める。 */
 const live = new Set<ChildProcess>();
 let exitWatched = false;
-function watchExit(): void {
-  if (exitWatched || process.platform === 'win32') return;
+function watchExit(platform: NodeJS.Platform): void {
+  if (exitWatched || platform === 'win32') return;
   exitWatched = true;
   process.on('exit', () => {
     for (const c of live) { if (c.pid !== undefined) { try { process.kill(-c.pid, 'SIGTERM'); } catch { /* 既に終わっている */ } } }
@@ -119,6 +119,7 @@ export interface RunResult { code: number; out: string; stdout: string }
 /** 命令を走らせ、`timeoutMs` を過ぎたら打ち切って `code: -1` で返す。 */
 export function runWithin(
   cmd: string, args: string[], cwd: string, timeoutMs: number, env: Record<string, string> = {},
+  platform: NodeJS.Platform = process.platform,
 ): Promise<RunResult> {
   return new Promise<RunResult>((resolve) => {
     /*
@@ -127,18 +128,18 @@ export function runWithin(
      * 入力は渡さない（訊かれても答えられないので、待たずに失敗させる）
      */
     const child = spawn(cmd, args, {
-      cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32',
+      cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: platform !== 'win32',
     });
     // 一群に分けたので、こちらが止められても（Ctrl+C）合図は届かない。こちらが終わるときに、走っている一群も止める
     live.add(child);
-    watchExit();
+    watchExit(platform);
     child.on('close', () => live.delete(child));
     let out = '';
     let stdout = '';
     let settled = false;
     const finish = (r: RunResult) => { if (!settled) { settled = true; clearTimeout(timer); resolve(r); } };
     const timer = setTimeout(() => {
-      killTree(child);
+      killTree(child, platform);
       finish({ code: -1, out: `${out}\n${Math.round(timeoutMs / 1000)} 秒たっても終わらないので打ち切りました`, stdout });
     }, timeoutMs);
     const readOut = chunkReader();

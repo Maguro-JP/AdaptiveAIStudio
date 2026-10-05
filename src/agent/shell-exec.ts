@@ -113,12 +113,13 @@ export function execCommand(
   timeoutMs: number,
   signal: AbortSignal,
   maxOutputBytes = 200_000,
+  platform: NodeJS.Platform = process.platform,
 ): Promise<ExecResult> {
   // 渡される前に止められていた。聞き手を足しても、もう鳴らない（abort は一度きり）。起こさずに返す。
   if (signal.aborted) return Promise.resolve({ code: null, output: '', timedOut: false, aborted: true, durationMs: 0 });
   return new Promise((resolve) => {
     const startedAt = Date.now();
-    const plan = spawnPlan(command, process.platform);
+    const plan = spawnPlan(command, platform);
     /*
      * **トークンを子へ渡さない。**
      *
@@ -191,7 +192,7 @@ export function execCommand(
          * POSIX は一群ごと止める（殻が終わっても群は残る）。Windows は殻の番号からプロセスツリーをたどるが、殻はもう終わっていて、
          * 番号が別のものに使い回されていると関係の無いプロセスツリーを止めかねない。Windows では口を閉じるだけにする
          */
-        if (process.platform !== 'win32') killTree(child);
+        if (platform !== 'win32') killTree(child, platform);
         child.stdout?.destroy();
         child.stderr?.destroy();
         finish({
