@@ -28,6 +28,8 @@ export class DoneMark {
   /** まだ見せていない、行の途中。 */
   #tail = '';
   #found = false;
+  /** いまの行の頭を、もう見せたか。見せた行の残りは、合図になりえない（行の途中に書いたもの）。 */
+  #midLine = false;
 
   /** 届いた分を入れて、**見せてよい分**を返す。 */
   push(delta: string): string {
@@ -38,11 +40,14 @@ export class DoneMark {
       if (at < 0) break;
       const line = this.#tail.slice(0, at + 1);
       this.#tail = this.#tail.slice(at + 1);
-      if (isMark(line)) this.#found = true;
+      if (!this.#midLine && isMark(line)) this.#found = true;
       else shown += line;
+      this.#midLine = false;
     }
-    // 行の途中。合図になりうるなら、まだ見せない。
-    if (!couldBeMark(this.#tail)) {
+    // 行の途中。合図になりうるなら、まだ見せない。頭を見せた行の残りは、合図ではないので待たない
+    // （待って空にした後で、残りを行の頭として読んでいたので、区切れ方で合図の判定が変わった）
+    if (this.#midLine || !couldBeMark(this.#tail)) {
+      if (this.#tail) this.#midLine = true;
       shown += this.#tail;
       this.#tail = '';
     }
@@ -53,7 +58,9 @@ export class DoneMark {
   end(): { text: string; done: boolean } {
     const rest = this.#tail;
     this.#tail = '';
-    if (isMark(rest)) return { text: '', done: true };
+    const midLine = this.#midLine;
+    this.#midLine = false;
+    if (!midLine && isMark(rest)) return { text: '', done: true };
     return { text: rest, done: this.#found };
   }
 

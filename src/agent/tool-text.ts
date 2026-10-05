@@ -136,7 +136,7 @@ export function sliceJsonObject(text: string, from: number): string | undefined 
  * 本文からツール呼び出しを抜き出す。
  * 抜き出せた分だけを本文から取り除き、残りは人に見せる。
  */
-export function extractToolCalls(text: string): Salvage {
+export function extractToolCalls(text: string, known?: (name: string) => boolean): Salvage {
   const calls: SalvagedCall[] = [];
   let out = '';
   let i = 0;
@@ -146,7 +146,9 @@ export function extractToolCalls(text: string): Salvage {
     if (start < 0) { out += text.slice(i); break; }
 
     const json = sliceJsonObject(text, start);
-    const call = json ? toCall(tryParse(json)) : undefined;
+    const parsed = json ? toCall(tryParse(json)) : undefined;
+    // ツールに無い名前は呼び出しと見ない（`{"name":"demo","version":"1.0.0"}` のような答えの中の JSON を、呼び出しとして拾って消していた）
+    const call = parsed && (!known || known(parsed.name)) ? parsed : undefined;
     if (!json || !call) {
       out += text.slice(i, start + 1);
       i = start + 1;
@@ -207,13 +209,13 @@ export class ToolTextFilter {
     return combined.slice(0, at);
   }
 
-  /** 終わり。溜めた分から呼び出しを拾い、残った本文を返す。 */
-  end(): Salvage {
+  /** 終わり。溜めた分から呼び出しを拾い、残った本文を返す。`known` を渡すと、ツールに在る名前だけを拾う。 */
+  end(known?: (name: string) => boolean): Salvage {
     const held = this.#held;
     this.#held = '';
     this.#holding = false;
     if (held === '') return { text: '', calls: [] };
-    return extractToolCalls(held);
+    return extractToolCalls(held, known);
   }
 
   /** 溜めている分をそのまま吐き出す。拾わずに見せると決めたとき用。 */

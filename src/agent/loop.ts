@@ -202,7 +202,7 @@ export class Agent {
         const rest = mark.push(filter.drain());
         if (rest) { text += rest; yield { type: 'thinking', delta: rest }; }
       } else {
-        const salvage = filter.end();
+        const salvage = filter.end((name) => this.#tools.has(name));
         const passed = mark.push(salvage.text);
         if (passed) { text += passed; yield { type: 'thinking', delta: passed }; }
         salvage.calls.forEach((c, i) => {
@@ -215,7 +215,11 @@ export class Agent {
       if (tail.text) { text += tail.text; yield { type: 'thinking', delta: tail.text }; }
       const declaredDone = tail.done;
 
-      if (failure) { yield { type: 'finished', reason: 'failed', detail: failure }; return; }
+      if (failure) {
+        // 利用者がもう見た文は残す（止めたときと同じ。残さないと、次の指示が落ちた指示と一つに繋がる）。呼び出しは載せない（結果が無い）
+        if (text.trim()) history.push({ role: 'assistant', content: text });
+        yield { type: 'finished', reason: 'failed', detail: failure }; return;
+      }
       /*
        * 返事の途中で止められた。相手は止められると黙って終わるので、ここで見ないと、途中までの文を普通の返事として
        * 「完了」にし、ツールを使った後なら「まだ TASK_DONE がありません」を記録に積んでいた。
@@ -330,15 +334,27 @@ export class Agent {
             ? 'ERROR: 出力の上限で、引数のJSONが途中で切れました。一度に書く量を減らし（小さく分けて）呼び直してください。'
             : 'ERROR: 引数のJSONが壊れています。正しいJSONで呼び直してください。';
           isError = true;
+        } else if (!isRecord(call.args)) {
+          // 物でない引数（文字列に二重に包んだ JSON など）で `{}` として動かすと、「path が必要です」になり、本当の誤りが届かなかった
+          result = 'ERROR: 引数はJSONのオブジェクト（{ ... }）で渡してください。文字列に包まず、そのまま渡して呼び直してください。';
+          isError = true;
         } else {
-          const r = await tool.run(isRecord(call.args) ? call.args : {}, ctx);
-          result = r.content;
-          isError = r.isError === true;
+          // ツールが投げても、結果の無い呼び出しを残さない（残すと、以後の依頼を相手が 400 で断る）
+          try {
+            const r = await tool.run(call.args, ctx);
+            result = r.content;
+            isError = r.isError === true;
+          } catch (e) {
+            result = `ERROR: ツールが落ちました: ${e instanceof Error ? e.message : String(e)}`;
+            isError = true;
+          }
         }
 
         yield { type: 'toolEnd', call, result, isError };
         history.push({ role: 'tool', toolCallId: call.id, content: result });
       }
+      // 最後のツールの最中に止めた。ここで見ないと、同じ手の繰り返しや回数切れで終わったことにしていた
+      if (signal.aborted) { yield { type: 'finished', reason: 'aborted' }; return; }
 
       // 進捗判定: 同じ手を繰り返していたら、堂々巡りとみなす。
       const signature = calls.map((c) => `${c.name}:${JSON.stringify(c.args)}`).join('|');
