@@ -21,6 +21,8 @@ async function installed(portable = false): Promise<{ product: string; app: stri
   const product = await tempDir('aas-work-');
   const app = join(product, 'app');
   await mkdir(app, { recursive: true });
+  // 配った形は app\ の隣に入口がある（名前が app なだけのクローンと見分ける）
+  await writeFile(join(product, 'AdaptiveAIStudio.cmd'), '@echo off\r\n');
   if (portable) await writeFile(join(product, '.portable'), '');
   return { product, app };
 }
@@ -73,6 +75,22 @@ describe('作業場の既定', () => {
     assert.equal(isDistributed(product), false);
     const { app: papp } = await installed(true);
     assert.equal(isDistributed(papp), true, '持ち運び版を見分けていない');
+  });
+
+  test('**名前が app なだけのクローン（Docker の /app など）は、配った形と見なさない**', async () => {
+    const base = await tempDir('aas-docker-');
+    const app = join(base, 'app');
+    await mkdir(join(app, 'src'), { recursive: true });
+    assert.equal(isDistributed(app), false, '名前だけで配った形と見た');
+    assert.equal(defaultWorkRoot(app, app), app, 'クローンの作業場をよそへ移した');
+  });
+
+  test('VERSION だけが隣にある形も、配った形と見る（対）', async () => {
+    const base = await tempDir('aas-version-only-');
+    const app = join(base, 'app');
+    await mkdir(app, { recursive: true });
+    await writeFile(join(base, 'VERSION'), '0.12.1\n');
+    assert.equal(isDistributed(app), true);
   });
 
   test('無ければ作る。作らないと、開いた瞬間に落ちる', async () => {

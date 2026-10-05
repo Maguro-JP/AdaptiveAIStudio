@@ -67,6 +67,7 @@ describe('案内する一手は、その形で打てる', () => {
     const app = join(base, 'app');
     await mkdir(app, { recursive: true });
     await writeFile(join(app, 'package.json'), '{}');
+    await writeFile(join(base, 'AdaptiveAIStudio.cmd'), '@echo off\r\n'); // 配った形は app/ の隣に入口がある
     assert.equal(isDistributed(app), true, 'app/ を配った形と見ていない');
     // **打てる形で言っているか**を、置かれ方ごとに見る。
     assert.equal(how('ui', '', app), 'AdaptiveAIStudio.cmd ui',
