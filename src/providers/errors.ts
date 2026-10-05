@@ -11,7 +11,7 @@ export type ProviderErrorKind =
   /** 5xx・ネットワーク断。リトライ後フォールバック。 */
   | 'unavailable'
   | 'timeout'
-  /** context超過。圧縮して再試行。 */
+  /** context超過・依頼が大きすぎる。やり直さず、冷やさずに次の候補へ（縮めてやり直す仕組みは無い）。 */
   | 'context_too_long'
   /** 認証不備。自動復旧しないのでフォールバックする。 */
   | 'auth'
@@ -89,6 +89,9 @@ export function sayQuotaExhausted(body: string): boolean | undefined {
   if (/rate_limit/i.test(code)) return false;
   const text = body.replace(/https?:\/\/\S+/g, '');
   if (/exceeded your current quota|insufficient[_ ]quota|insufficient (balance|credits?|funds)|credit balance|out of credits/i.test(text)) return true;
+  // 1 日の上限（OpenRouter の free-models-per-day・Vertex の `quota metric '… per day'`）・使い切り（xAI の used all available credits）・
+  // 利用額の上限（monthly spending limit）も、その日・その月のうちは戻らない。分単位の上限（per minute）は一時的な制限のまま
+  if (/per[- ]?day|daily (limit|quota)|used all (available )?credits|spending limit/i.test(text)) return true;
   return undefined;
 }
 

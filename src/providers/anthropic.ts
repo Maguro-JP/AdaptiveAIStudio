@@ -227,7 +227,8 @@ export class AnthropicProvider implements ChatProvider {
     } else if (e instanceof sdk.APIError && e.status === 413) {
       // 依頼が大きすぎる（SDK は名前の付いた例外にしない）。やり直しても同じなので、冷やさずに次の候補へ
       kind = 'context_too_long';
-    } else if (e instanceof sdk.APIError && (e.status === 422 || e.status === 409)) {
+    } else if (e instanceof sdk.APIError && e.status === 422) {
+      // 409（錠の待ち切れ）は SDK もやり直してよい失敗として扱うので、今までどおり unavailable のまま（やり直して次の候補へ）
       kind = 'invalid_request';
     }
 

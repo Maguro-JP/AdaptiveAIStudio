@@ -40,15 +40,17 @@ async function fallsBack(status: number, body: string): Promise<{ fell: boolean;
 }
 
 describe('次の候補へ回る失敗', () => {
-  for (const [label, status, body] of [
-    ['402 の残高切れ', 402, '{"error":{"message":"Insufficient credits"}}'],
-    ['400 で返る残高切れ', 400, '{"error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the API. Please go to Plans & Billing"}}'],
-    ['ツールに対応していないモデル', 400, '{"error":"registry.ollama.ai/library/gemma3:latest does not support tools"}'],
-    ['413 の大きすぎる依頼', 413, '{"error":{"message":"request_too_large"}}'],
+  for (const [label, status, body, expected] of [
+    ['402 の残高切れ', 402, '{"error":{"message":"Insufficient credits"}}', 'quota_exhausted'],
+    ['400 で返る残高切れ', 400, '{"error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the API. Please go to Plans & Billing"}}', 'quota_exhausted'],
+    ['ツールに対応していないモデル', 400, '{"error":"registry.ollama.ai/library/gemma3:latest does not support tools"}', 'model_missing'],
+    ['413 の大きすぎる依頼', 413, '{"error":{"message":"request_too_large"}}', 'context_too_long'],
   ] as const) {
     test(`**${label}なら、手元の候補へ回る**（依頼ごと落とさない）`, async () => {
       const r = await fallsBack(status, body);
       assert.ok(r.fell, `次の候補へ回っていない: ${label}`);
+      // 回った理由も見る（402 が一時的な制限として回っても、このテストは通ってしまうため）
+      assert.equal(kindFromHttpStatus(status, body), expected);
       assert.equal(r.text, '手元で続けます');
     });
   }
@@ -66,6 +68,16 @@ describe('制限と切れの見分け', () => {
   test('切れを言う本文は、今までどおり切れと読む（対）', () => {
     assert.equal(kindFromHttpStatus(429, '{"error":{"code":"insufficient_quota","message":"You exceeded your current quota"}}'), 'quota_exhausted');
     assert.equal(kindFromHttpStatus(429, 'You exceeded your current quota, please check your plan'), 'quota_exhausted');
+  });
+  test('**1 日の上限・使い切り・利用額の上限も、切れと読む**（その日のうちは戻らない）', () => {
+    for (const body of [
+      '{"error":{"code":429,"message":"Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day"}}',
+      'Quota exceeded for quota metric \'Generate requests\' and limit \'Generate requests per day per project\'',
+      'Your team has either used all available credits or reached its monthly spending limit.',
+    ]) assert.equal(kindFromHttpStatus(429, body), 'quota_exhausted', body);
+  });
+  test('分単位の上限は、一時的な制限のまま（対）', () => {
+    assert.equal(kindFromHttpStatus(429, 'Quota exceeded for quota metric \'requests\' and limit \'requests per minute\''), 'rate_limited');
   });
 });
 
@@ -95,6 +107,10 @@ describe('Claude の失敗の分け方', () => {
   test('**残高切れ（400 の credit balance）を quota_exhausted にする**', needsSdk, async () => {
     const e = await claudeError(400, '{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}');
     assert.equal(e.kind, 'quota_exhausted');
+  });
+  test('**409（錠の待ち切れ）は、やり直してよい失敗のまま**（一度で依頼ごと落とさない）', needsSdk, async () => {
+    const e = await claudeError(409, '{"type":"error","error":{"type":"conflict_error","message":"lock timeout"}}');
+    assert.equal(e.kind, 'unavailable');
   });
   test('**413 を context_too_long にする**（同じ依頼をやり直して冷やさない）', needsSdk, async () => {
     const e = await claudeError(413, '{"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum allowed number of bytes."}}');

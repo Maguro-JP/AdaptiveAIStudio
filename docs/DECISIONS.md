@@ -12079,3 +12079,12 @@ write を持たせない」（`dropWriteIfOutbound`）は役職にだけ効か�
   - Claude の使った量の入力の数を `message_delta` から取っている（版によっては `message_start` にしか無い。確かめていない）
 触る場所: `src/providers/errors.ts`（`kindFromHttpStatus`・`sayQuotaExhausted`）、`src/providers/anthropic.ts`（`#normalize`）、`src/cli/ask-once.ts`（`judgeAnswer`）、
 `test/provider-errors-gaps.test.ts`
+
+レビューで挙がった点も直した（新しい試験は、直す前の版で落ちることを確かめた。409 は手元の SDK で、直しだけを外して確かめた）。
+- Claude の 409（錠の待ち切れ）は `unavailable` のまま（やり直して次の候補へ）。SDK もやり直してよい失敗として扱う。一度 `invalid_request` にして、
+  一時的な 409 で依頼ごと落とす形を入れかけた。`invalid_request` にするのは 422 だけ
+- 切れの言い回しに、1 日の上限（OpenRouter の free-models-per-day・Vertex の `… per day`）・使い切り（`used all available credits`）・利用額の上限
+  （`spending limit`）を足した。絞った語だけでは拾えず、その日の残りずっと 1 分おきに叩き直すことになっていた。分単位の上限は一時的な制限のまま
+- 「次の候補へ回る」試験は、回った理由（分けた種類）も見る（402 が一時的な制限として回っても通ってしまうため）
+- `context_too_long` の注釈を実際の動き（やり直さず、冷やさずに次の候補へ）に合わせた
+- 直していないもの: 最後の候補が 5xx と長い Retry-After を返すと、上限（5 分）× やり直し 2 回で最長およそ 10 分待つ（■で止められる。openai-compatible も同じ）
