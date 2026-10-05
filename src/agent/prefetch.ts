@@ -51,6 +51,12 @@ export class Prefetcher {
   #building = false;
   /** 走っている間に作り直しを頼まれた（いま作っている一覧は古い）。 */
   #dirty = false;
+  /**
+   * 最後に作り終えた一覧（作り直しを頼まれた後も持っておく）。上限つきで待つ人が時間切れになったときに返す。
+   * 作り直しをまとめると待ちが延びるので、時間切れで何も返さないと、確かめのコマンドが無い扱いになり、確かめを飛ばしていた。
+   * 動かし方（commands）は書き換えではほぼ変わらないので、古くても何も無いよりずっと安全
+   */
+  #lastBuilt?: ProjectSnapshot;
 
   constructor(root: string, onEvent?: (e: PrefetchEvent) => void, can: (command: string) => boolean = canRun) {
     this.#root = root;
@@ -68,17 +74,26 @@ export class Prefetcher {
       this.#building = true;
       try {
         let s: ProjectSnapshot;
+        let rounds = 0;
         do {
           this.#dirty = false;
           s = await this.#build(signal);
-        } while (this.#dirty && !signal?.aborted);
+          this.#lastBuilt = s;
+          rounds += 1;
+          // 書き続けられても、待っている人を待たせ続けない。三周で一度返し、残りは後で作り直す（下の then）
+        } while (this.#dirty && !signal?.aborted && rounds < 3);
         return s;
       } finally {
         this.#building = false;
       }
     };
     const mine: Promise<ProjectSnapshot> = run().then(
-      (s) => { if (this.#inFlight === mine) this.#snapshot = s; return s; },
+      (s) => {
+        if (this.#inFlight === mine) this.#snapshot = s;
+        // 上限で抜けたときは、まだ頼まれた作り直しが残っている。古いと分かっている一覧を覚えたままにしない
+        if (this.#inFlight === mine && this.#dirty) { this.#dirty = false; this.invalidate(signal); }
+        return s;
+      },
       // 先読みの失敗で本体を止めない。無いなら無いで作業は始められる。
       () => ({
         files: [], recentFiles: [], commands: {},
@@ -121,7 +136,7 @@ export class Prefetcher {
       timer = setTimeout(() => resolve(undefined), ms);
     });
     try {
-      return await Promise.race([this.#inFlight, timeout]);
+      return (await Promise.race([this.#inFlight, timeout])) ?? this.#lastBuilt;
     } finally {
       clearTimeout(timer);
     }
@@ -147,6 +162,7 @@ export class Prefetcher {
 
   /** ファイルを書き換えた後など、作り直す。 */
   invalidate(signal?: AbortSignal): void {
+    // 走っている最中にまとめたときは、渡された signal は使わない（最初に始めた回の signal のまま）
     this.#snapshot = undefined;
     // 走っている最中なら重ねない。いま走っている回が終わった後に、もう一度だけ作り直す（待っている人にはその結果が届く）
     if (this.#building) { this.#dirty = true; return; }

@@ -30,7 +30,8 @@ test('**走っている間に何度作り直しを頼んでも、同時に走る
   p.invalidate();
   const snap = await p.snapshot();
   assert.equal(most, 1, `同時に ${most} 本走った`);
-  assert.ok(starts <= 2, `作り直しを ${starts} 回走らせた（最初の一回と、まとめた一回だけでよい）`);
+  // 待つ間に一周目が終わって二周目が始まっていれば、最後の頼みでもう一周走る（三回まで）。二十回ぶん走らせていないことを見る
+  assert.ok(starts <= 3, `作り直しを ${starts} 回走らせた（まとめていない）`);
   assert.ok(snap?.files.some((f) => f.endsWith('late.ts')), '最後に頼んだ作り直しの結果が届いていない（古い一覧のまま）');
 });
 
@@ -44,4 +45,16 @@ test('走り終えた後の作り直しは、今までどおり新しく作る�
   p.invalidate();
   const snap = await p.snapshot();
   assert.ok(snap?.files.some((f) => f.endsWith('b.ts')), JSON.stringify(snap?.files));
+});
+
+test('**作り直しを待っている間に時間切れになっても、最後に作り終えた一覧を返す**（何も返さず、確かめを飛ばさない）', async () => {
+  const root = await tempDir('aas-prefetch-within-');
+  await writeFile(join(root, 'package.json'), JSON.stringify({ scripts: { test: 'node --test' } }));
+  const p = new Prefetcher(root, undefined, () => true);
+  p.start();
+  await p.snapshot();
+  p.invalidate();
+  const snap = await p.snapshotWithin(0);
+  assert.ok(snap, '時間切れで何も返さなかった');
+  assert.ok(snap.commands.test, `動かし方が無い: ${JSON.stringify(snap.commands)}`);
 });
