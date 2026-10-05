@@ -84,8 +84,14 @@ export function flatten(result: unknown): { text: string; isError: boolean } {
   const content = Array.isArray(r?.content) ? r.content : [];
   const parts: string[] = [];
   for (const item of content) {
-    const c = item as { type?: string; text?: string; uri?: string; mimeType?: string };
+    const c = item as { type?: string; text?: string; uri?: string; mimeType?: string; resource?: { uri?: unknown; text?: unknown } };
     if (c?.type === 'text' && typeof c.text === 'string') parts.push(c.text);
+    // 埋め込みの資料は `resource: { uri, text }` に入る（決まりの形）。上の段の `uri` だけを見ていたので、本文を落として「（resource）」と出していた
+    else if (c?.type === 'resource' && c.resource && typeof c.resource === 'object') {
+      const uri = typeof c.resource.uri === 'string' ? c.resource.uri : '';
+      const text = typeof c.resource.text === 'string' ? c.resource.text : '';
+      parts.push(text ? `${uri ? `（資源: ${uri}）\n` : ''}${text}` : `（資源: ${uri || '中身なし'}）`);
+    }
     else if (c?.type === 'resource' && typeof c.uri === 'string') parts.push(`（資源: ${c.uri}）`);
     else if (c?.type === 'image') parts.push(`（画像: ${c.mimeType ?? '種類不明'}）`);
     else if (c?.type) parts.push(`（${c.type}）`);

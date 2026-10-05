@@ -67,7 +67,7 @@ const INSTEAD: Record<string, string> = {
  */
 const CEILING: Record<string, number> = {
   窓: 313,
-  前置き: 39,
+  前置き: 38,
   地図: 89,
   起点: 37,
   取り置き: 11,

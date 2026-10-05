@@ -90,22 +90,26 @@ export function wrapTool(
        * モデルの履歴へ入る**（`src/agent/loop.ts` がツールの返しを履歴へ積む）。
        * 同じ文字列が、成功として返ってきたときは止まる——という食い違いだった。
        */
+      // 渡すのは、判じ手が隙間なく見られる長さまで（見せる分と渡す分を同じにする。fetch_url と同じ）
+      const keep = opts.inspector ? Math.min(MCP_RESULT_MAX, opts.inspector.capacity) : MCP_RESULT_MAX;
       let verdict = inspectInbound(r.text);
       if (verdict.passed && opts.inspector) {
         verdict = combine(
           verdict,
-          await opts.inspector.inspect(r.text, 'inbound', ctx.signal),
+          await opts.inspector.inspect(r.text.slice(0, keep), 'inbound', ctx.signal),
           'inbound',
         );
       }
+      // 確かめの途中で止めたなら渡さない
+      if (ctx.signal.aborted) return fail(`${client.name}/${spec.name}\n中断されました（中身は確かめ終えていないので渡しません）`);
       if (!verdict.passed) {
         // 止めた中身は渡さない。「気をつけて読んで」と添えて渡すのは、
         // 渡した時点で読まれている。
         return fail(`${client.name}/${spec.name}\n${describeVerdict(verdict, 'inbound')}`);
       }
       // 長さで切る（切らずに渡していたので、大きな返りが全文のまま履歴と会話の保存に入った。fetch_url と同じ扱い）。失敗の文も切る
-      const text = r.text.length > MCP_RESULT_MAX
-        ? `${r.text.slice(0, MCP_RESULT_MAX)}\n…（以降 ${r.text.length - MCP_RESULT_MAX} 字は長いので省きました）`
+      const text = r.text.length > keep
+        ? `${r.text.slice(0, keep)}\n…（以降 ${r.text.length - keep} 字は長いので省きました）`
         : r.text;
       // 検問所を通ってから、失敗として返す。
       if (r.isError) return fail(text || `${client.name}/${spec.name} が失敗しました。`);
