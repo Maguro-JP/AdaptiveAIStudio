@@ -683,7 +683,7 @@ export class UiServer {
     while (this.#closing.size > 0) await Promise.all([...this.#closing]);
     if (this.#session) return this.#session;
     if (this.#stopped) throw new Error('止めています');
-    this.#session = await Session.create(await this.#configForSession(), {
+    const built = await Session.create(await this.#configForSession(), {
       journals: await this.journals(),
       approve: (req, meta) => this.#ask(req, meta),
       onLog: (level, text) => this.broadcast({ type: 'log', level, text }),
@@ -700,6 +700,12 @@ export class UiServer {
       },
       onPatch: (at) => this.broadcast({ type: 'patch', ...at }),
     });
+    // 組んでいる間に止めたら、組んだものを閉じて渡さない（渡すと、MCP の子や見回りの時計が止めた後も残る）
+    if (this.#stopped) {
+      await built.close().catch(() => undefined);
+      throw new Error('止めています');
+    }
+    this.#session = built;
     // 続きから話す。**土台は作り直しても、話は続ける。**
     // 会話を選んでいない（トップ）なら、ここでは作らない。作ると、補完・戻す・提案の採否などで本体が組まれるたびに
     // 空の会話が一覧に増えていた。会話は送るときに作る
@@ -1124,6 +1130,9 @@ export class UiServer {
   async #maybeDrain(): Promise<void> {
     await this.#retireIfRootMoved();
     if (this.#queue.length === 0) return;
+    // ほかの道が手を持っている間は流さない（その道の終わりが流す）。ここで本体を組むと、読み込みを終える前の候補の無い本体ができ、
+    // 読み終えた側がそれを受け取って「使えるモデルがありません」で落ちる
+    if (this.#prep > 0 || this.#thinking) return;
     // 畳んだ直後は本体が無い。待っている依頼があるなら組む（組まずに帰ると、次の送りが来るまで誰も流さない）
     const session = this.#session ?? await this.session().catch(() => undefined);
     if (!session || this.#busyNow(session)) return;
@@ -2445,7 +2454,7 @@ export class UiServer {
           this.#prep -= 1;
         }
         // 書き直しの間に積まれた送りを流す（流さないと、見回りが来るまで誰も拾わない）
-        if (this.#queue.length > 0) this.#bg(this.#maybeDrain(), '順番待ちの実行が落ちました');
+        if (this.#queue.length > 0 && !this.#stopped) this.#bg(this.#maybeDrain(), '順番待ちの実行が落ちました');
       }
       this.broadcast({ type: 'conversations' });
       return send(res, 200, { current: null, messages: [], running: this.#runningId ?? null });
@@ -2647,7 +2656,7 @@ export class UiServer {
         } finally {
           this.#prep -= 1;
         }
-        if (this.#queue.length > 0) this.#bg(this.#maybeDrain(), '順番待ちの実行が落ちました');
+        if (this.#queue.length > 0 && !this.#stopped) this.#bg(this.#maybeDrain(), '順番待ちの実行が落ちました');
       }
       this.broadcast({ type: 'conversations' });
       return send(res, 200, {
