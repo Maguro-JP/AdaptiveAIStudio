@@ -133,7 +133,7 @@ export const readFileTool: Tool = {
 export const listFilesTool: Tool = {
   schema: {
     name: 'list_files',
-    description: 'ディレクトリ配下のファイル一覧を返す。.gitignore に書かれたもの、node_modules、. で始まるもの（.github を除く）は除外される。',
+    description: 'ディレクトリ配下のファイル一覧を返す。.gitignore に書かれたものと node_modules や .git は除外される。',
     parameters: {
       type: 'object',
       properties: {
@@ -155,13 +155,18 @@ export const listFilesTool: Tool = {
     const abs = await realSafeResolve(ctx.root, p);
     if (!abs) return fail(`作業ディレクトリの外です: ${p}`);
     const found: string[] = [];
-    const walked: { capped: boolean; deep?: boolean } = { capped: false };
+    const walked: Walked = { capped: false };
     try {
       await walk(abs, ctx.root, found, 0, await ignoresFor(ctx.root, p), walked);
     } catch (e) {
       return fail(`一覧できません: ${p} (${describe(e)})`);
     }
-    if (found.length === 0) return ok('(ファイルなし)');
+    // 見なかった所があるのに「ファイルなし」とだけ言わない（深い所や . で始まる所に在りうる）
+    const deep = walked.deep ? `\n${DEEP_NOTE}` : '';
+    if (found.length === 0) {
+      const dots = dotsNote(walked.dots);
+      return ok(`(ファイルなし)${deep}${dots ? `\n${dots}` : ''}`);
+    }
     const shown = found.slice(0, 300);
     const more = found.length > shown.length ? `\n... 他 ${found.length - shown.length} 件` : '';
     // **見て回るのを途中でやめたことも言う。**「他 N 件」だけだと、
@@ -169,7 +174,6 @@ export const listFilesTool: Tool = {
     const stopped = walked.capped
       ? `\n（ファイルが多いので ${WALK_FILES} 個までしか見ていません。path で絞ってください）`
       : '';
-    const deep = walked.deep ? `\n${DEEP_NOTE}` : '';
     return ok(shown.join('\n') + more + stopped + deep);
   },
 };
@@ -193,6 +197,8 @@ export interface TextSearch {
   walkCapped: boolean;
   /** 深すぎて降りていない所がある */
   walkDeep?: boolean;
+  /** 飛ばした `.` で始まるもの（`.git` を除く）の数 */
+  walkDots?: number;
   /** 大きすぎて開いていないファイルの数 */
   tooBig: number;
   /** 二進（NUL を含む）なので中を見ていないファイルの数 */
@@ -221,7 +227,7 @@ export async function searchText(
   if (!abs) return { ...out, error: `作業ディレクトリの外です: ${base}` };
 
   const files: string[] = [];
-  const walked: { capped: boolean; deep?: boolean } = { capped: false };
+  const walked: Walked = { capped: false };
   /*
    * **探せなかったことを、該当なしと言わない。**
    *
@@ -241,6 +247,7 @@ export async function searchText(
   }
   out.walkCapped = walked.capped;
   if (walked.deep) out.walkDeep = true;
+  if (walked.dots) out.walkDots = walked.dots;
 
   /*
    * **打ち切ったことを、必ず言う。**
@@ -283,14 +290,16 @@ export async function searchText(
 function around(line: string, query: string, width = 200): string {
   if (line.length <= width) return line;
   const at = line.indexOf(query);
-  const from = Math.max(0, Math.min(at - Math.floor((width - query.length) / 2), line.length - width));
+  // 当たりが見せる幅より長いときは、当たりの頭から見せる（真ん中に寄せると頭が切れる）
+  const lead = query.length >= width ? 0 : Math.floor((width - query.length) / 2);
+  const from = Math.max(0, Math.min(at - lead, line.length - width));
   return `${from > 0 ? '…' : ''}${line.slice(from, from + width)}${from + width < line.length ? '…' : ''}`;
 }
 
 export const searchTextTool: Tool = {
   schema: {
     name: 'search_text',
-    description: 'ファイル内容を文字列で検索し、該当箇所をファイル名:行番号つきで返す。.gitignore に書かれたもの、. で始まるもの（.github を除く）は探さない。',
+    description: 'ファイル内容を文字列で検索し、該当箇所をファイル名:行番号つきで返す。.gitignore に書かれたものは探さない。',
     parameters: {
       type: 'object',
       properties: {
@@ -327,7 +336,9 @@ export const searchTextTool: Tool = {
     }
     const tail = notes.length > 0 ? `\n${notes.join('\n')}` : '';
     const lines = found.hits.map((h) => `${h.path}:${h.line}: ${h.text}`);
-    return ok(lines.length > 0 ? lines.join('\n') + tail : `該当なし: ${query}${tail}`);
+    if (lines.length > 0) return ok(lines.join('\n') + tail);
+    const dots = dotsNote(found.walkDots);
+    return ok(`該当なし: ${query}${tail}${dots ? `\n${dots}` : ''}`);
   },
 };
 
@@ -707,6 +718,24 @@ function needsBom(abs: string, text: string, fresh: boolean): boolean {
 /** 一度に見て回るファイル数の上限。**当たったら言う。** */
 const WALK_FILES = 3000;
 
+/** 見て回った結果のうち、見なかったもの。 */
+interface Walked {
+  /** ファイル数の上限で打ち切った */
+  capped: boolean;
+  /** 深さの上限で降りなかった所がある */
+  deep?: boolean;
+  /** 飛ばした `.` で始まるもの（`.git` を除く）の数 */
+  dots?: number;
+}
+
+/**
+ * `.` で始まる所を見なかったことの断り。何も見つからなかったときにだけ添える。説明に書くと、狭いコンテキストウィンドウでは
+ * ほかのツールの説明が一文に切られるので、要るときに結果の側で言う。
+ */
+function dotsNote(n: number | undefined): string {
+  return n ? `（. で始まるもの ${n} 個は見ていません。中を見るなら path で指してください）` : '';
+}
+
 /** 降りる深さの上限。**当たったら言う。** */
 const WALK_DEPTH = 12;
 
@@ -718,14 +747,17 @@ const SEARCH_HITS = 100;
 
 async function walk(
   dir: string, root: string, out: string[], depth: number, ign?: Ignores,
-  capped?: { capped: boolean; deep?: boolean },
+  capped?: Walked,
 ): Promise<void> {
   if (out.length >= WALK_FILES) { if (capped) capped.capped = true; return; }
   // 深さで見るのをやめたことも言う。黙ってやめると、深い所に在るものを「該当なし」と返す
   if (depth > WALK_DEPTH) { if (capped) capped.deep = true; return; }
   const entries = await readdir(dir, { withFileTypes: true });
   for (const e of entries) {
-    if (e.name.startsWith('.') && e.name !== '.github') continue;
+    if (e.name.startsWith('.') && e.name !== '.github') {
+      if (capped && e.name !== '.git') capped.dots = (capped.dots ?? 0) + 1;
+      continue;
+    }
     if (SKIP_DIRS.has(e.name)) continue;
     const abs = join(dir, e.name);
     // **その置き場が「見なくていい」と書いたものを見ない。**

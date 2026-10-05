@@ -12303,12 +12303,19 @@ AI が使うファイルのツール（`src/agent/tools/fs.ts`・`write-kind.ts`
   `all` のときは重なった当たりを飛ばす。`all` でないときは、これまでどおり数えて「何箇所にも当たる」を返す（どこを指したのか決めない）
 - `read_file` が終わりの改行の後ろに空の行を数え、「全体は 3 行」と言い `offset=3` を受けていた。差分の側は数えていなかったので食い違っていた
 - 検索の当たりは行の頭から 200 字で切っていたので、長い行（縮めた JS など）では当たりが外に落ちた。当たった所を含むように切る。
-  `.` で始まる所（`.github` を除く）を見ないことを、一覧と検索の説明に書いた
-試験は `test/file-tools-gaps.test.ts`（直す前の版では、差分・FIFO の 2 件・BOM の 2 件・言い方・深さの 2 件・重なりの 2 件・行の数え方・長い行・説明が落ちた。
+  `.` で始まる所（`.github` を除く）を見ないことは、何も見つからなかったときに数を添えて言う（`.git` は数えない）。
+  ツールの説明に書くと、狭いコンテキストウィンドウ（8192）で説明の予算を超え、`run_command` の説明が一文に切られて許可コマンドの一覧が届かなくなった
+  （`test/window.test.ts` が落ちた。前の版で余裕は 26 トークン未満だった）
+レビューで見つけた分（同じ日に直した）:
+- 一覧は、深い所にしか無いときに「(ファイルなし)」とだけ返し、深さの断りが付いていなかった（空のときは断りより前に返していた）
+- 画面の検索（`/api/search`）は深さの断りを渡しておらず、画面は見つからなかったときに断りを一つも出していなかった（ファイル数の打ち切りも同じ）
+- 200 字より長い当たりは、真ん中に寄せると頭が切れていた。当たりの頭から見せる
+- `read_file` の行の数え方の直しで、無い 3 行目を期待していた試験（`test/read-non-utf8.test.ts`）の期待を直した
+試験は `test/file-tools-gaps.test.ts`（直す前の版では、差分・FIFO の 2 件・BOM の 2 件・言い方・深さの 2 件・重なりの 2 件・行の数え方・長い行が落ちた。
 FIFO の `readPrior` の試験は直す前の版では返らないので、その版で回すときは外して回した）。
 直していないもの:
 - `edit_file` は大きさの上限なしに前の中身を丸ごと読む（`read_file` は 40 万バイトで断る）。上限を置くと大きなファイルの一部の直しも断ることになるので、どこで断るかを決めてから
 - `find_code` の索引から読む所（`src/agent/tools/find.ts`）は、作業場の外へ出るリンクを確かめずに読んでいる（索引に載る道だけ）
 - `find` の当てで、Unicode の正規化（NFC と NFD）の違いを揃えない
 触る場所: `src/agent/diff.ts`（`diffLines`）、`src/harness/put-back.ts`（`readPrior`）、`src/agent/tools/fs.ts`（`needsBom`・`walk`・`around`・`read_file`）、
-`src/agent/tools/write-kind.ts`（`looseEdit`・`anchorEdit`）、`src/agent/tools/patch.ts`
+`src/agent/tools/write-kind.ts`（`looseEdit`・`anchorEdit`）、`src/agent/tools/patch.ts`、`src/ui/server.ts`（`/api/search`）、`src/ui/web/panels.js`

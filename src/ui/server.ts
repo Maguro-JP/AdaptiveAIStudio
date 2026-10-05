@@ -2406,7 +2406,8 @@ export class UiServer {
       return send(res, 200, {
         query: q, path: at,
         hits: found.hits, capped: found.capped,
-        walkCapped: found.walkCapped, tooBig: found.tooBig, unreadable: found.unreadable,
+        walkCapped: found.walkCapped, walkDeep: found.walkDeep === true, walkDots: found.walkDots ?? 0,
+        tooBig: found.tooBig, unreadable: found.unreadable,
       });
     }
 

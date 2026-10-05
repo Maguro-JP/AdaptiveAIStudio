@@ -9,6 +9,7 @@
  * - 緩い当て・両端の当てで、重なった当たりを二度当てない
  * - 終わりの改行の後ろに、無い行を数えない
  * - 長い行の当たりを、見せる 200 字の外へ落とさない
+- 何も見つからなかったとき、. で始まる所を見ていないと言う
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -144,6 +145,16 @@ describe('深さの上限', () => {
     assert.match(r.content, /深い所/);
   });
 
+  test('**深い所にしか無いとき、「ファイルなし」とだけ言わない**', async () => {
+    const root = await tempDir('aas-ftg-deeponly-');
+    const dir = join(root, ...Array.from({ length: 15 }, (_, i) => `d${i}`));
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'bottom.txt'), 'x\n');
+    const r = await listFilesTool.run({}, ctx(root));
+    assert.match(r.content, /ファイルなし/);
+    assert.match(r.content, /深い所/);
+  });
+
   test('**search_text も深すぎて見ていない所があると言う**', async () => {
     const root = await deep();
     const r = await searchTextTool.run({ query: 'needle' }, ctx(root));
@@ -204,8 +215,33 @@ describe('search_text の見せ方', () => {
     assert.ok(found.hits[0]!.text.length <= 202, `長さ ${found.hits[0]!.text.length}`);
   });
 
-  test('**. で始まる所を見ないことを、説明に書いておく**', () => {
-    assert.match(searchTextTool.schema.description, /\. で始まる/);
-    assert.match(listFilesTool.schema.description, /\. で始まる/);
+  test('**200 字より長い当たりは、当たりの頭から見せる**', async () => {
+    const root = await tempDir('aas-ftg-longq-');
+    const query = `S${'q'.repeat(250)}E`;
+    await writeFile(join(root, 'a.txt'), `${'x'.repeat(100)}${query}${'y'.repeat(100)}\n`);
+    const found = await searchText(root, query, '.', new AbortController().signal);
+    assert.match(found.hits[0]!.text, /^…Sq/);
+  });
+
+  test('**何も見つからなかったとき、. で始まる所を見ていないと言う**（.git は数えない）', async () => {
+    const root = await tempDir('aas-ftg-dots-');
+    await mkdir(join(root, '.vscode'));
+    await mkdir(join(root, '.git'));
+    await writeFile(join(root, '.vscode', 'settings.json'), 'needle\n');
+    await writeFile(join(root, '.git', 'config'), 'needle\n');
+    const r = await searchTextTool.run({ query: 'needle' }, ctx(root));
+    assert.match(r.content, /該当なし/);
+    assert.match(r.content, /\. で始まるもの 1 個は見ていません/);
+    const l = await listFilesTool.run({}, ctx(root));
+    assert.match(l.content, /ファイルなし/);
+    assert.match(l.content, /\. で始まるもの 1 個は見ていません/);
+  });
+
+  test('当たりがあるときは、. で始まる所の断りを添えない（毎回の出力を増やさない）', async () => {
+    const root = await tempDir('aas-ftg-dots2-');
+    await mkdir(join(root, '.vscode'));
+    await writeFile(join(root, 'a.txt'), 'needle\n');
+    const r = await searchTextTool.run({ query: 'needle' }, ctx(root));
+    assert.doesNotMatch(r.content, /\. で始まる/);
   });
 });

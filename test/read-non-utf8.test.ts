@@ -86,7 +86,8 @@ describe('utf8 で読めないファイルを読む', () => {
     await writeFile(join(root, 'a.txt'), '\uFEFFあ\nい\n');
     const r = await readFileTool.run({ path: 'a.txt' }, ctx(root));
     assert.equal(r.isError, undefined, r.content);
-    assert.equal(r.content, '1\t\uFEFFあ\n2\tい\n3\t');
+    // 終わりの改行の後ろに行は無い（無い 3 行目を数えていた。DECISIONS 37 回目）
+    assert.equal(r.content, '1\t\uFEFFあ\n2\tい');
   });
 
   test('二進と言われたあとも、読んでから書く規則は全文の置き換えを止めない', async () => {
