@@ -316,7 +316,8 @@ function anchorEdit(
         best = { to: end, same, off };
       }
     }
-    if (best) found.push({ from: i, to: best.to });
+    // all のとき、当たった塊の中から次を探さない（重なった塊を両方当てると、後の置き換えが前の置き換えの行まで消す）
+    if (best) { found.push({ from: i, to: best.to }); if (all) i = best.to; }
   }
   if (found.length === 0) return { text: before, hits: 0 };
   if (!all && found.length > 1) return { text: before, hits: found.length, loose: true, how: 'anchor' };
@@ -363,7 +364,9 @@ function looseEdit(
     for (let j = 0; j < wantKeys.length; j += 1) {
       if (key(lines[i + j]!) !== wantKeys[j]) { same = false; break; }
     }
-    if (same) at.push(i);
+    // all のとき、重なった当たりは当てない（`}` が続く所で二度当てると、逆順に置き換えるときに余分な行まで消える）。
+    // all でないときは数える（どこを指したのか決まらないので、何箇所にも当たると返す）
+    if (same) { at.push(i); if (all) i += wantKeys.length - 1; }
   }
   if (at.length === 0) return { text: before, hits: 0 };
   if (!all && at.length > 1) return { text: before, hits: at.length, loose: true, how: 'loose' };

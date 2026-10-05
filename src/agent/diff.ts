@@ -59,8 +59,27 @@ export function unifiedDiff(
 
 type Op = { kind: 'same' | 'del' | 'add'; line: string };
 
-/** 素朴なLCS。個人用途のファイルサイズでは十分。 */
+/**
+ * 頭と尻の同じ行を外してから、残りを比べる。
+ *
+ * 外さずに行数の積で上限を見ていたので、2,000 行を超えるファイルは一行の直しでも「全部消して全部足す」になり、
+ * 承認の画面で何が変わったのか読めず、塊ごとに選ぶこともできなかった。
+ */
 function diffLines(a: string[], b: string[]): Op[] {
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head += 1;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail += 1;
+  const same = (lines: string[]): Op[] => lines.map((line) => ({ kind: 'same' as const, line }));
+  return [
+    ...same(a.slice(0, head)),
+    ...lcsLines(a.slice(head, a.length - tail), b.slice(head, b.length - tail)),
+    ...same(a.slice(a.length - tail)),
+  ];
+}
+
+/** 素朴なLCS。個人用途のファイルサイズでは十分。 */
+function lcsLines(a: string[], b: string[]): Op[] {
   const n = a.length, m = b.length;
   // 大きすぎる場合はLCSを諦め、全置換として表示する
   if (n * m > 4_000_000) {
