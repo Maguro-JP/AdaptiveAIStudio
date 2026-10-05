@@ -184,8 +184,14 @@ export function execCommand(
      * （止めずに口だけ閉じると、子はポートを掴んだまま残り、次の回が使えない）
      */
     child.on('exit', (code) => {
+      // 打ち切り・止めるで返した後の終わりには何もしない（止めた子の番号を、2 秒後にもう一度止めにいかない）
+      if (settled) return;
       grace = setTimeout(() => {
-        killTree(child);
+        /*
+         * POSIX は一群ごと止める（殻が終わっても群は残る）。Windows は殻の番号からプロセスツリーをたどるが、殻はもう終わっていて、
+         * 番号が別のものに使い回されていると関係の無いプロセスツリーを止めかねない。Windows では口を閉じるだけにする
+         */
+        if (process.platform !== 'win32') killTree(child);
         child.stdout?.destroy();
         child.stderr?.destroy();
         finish({

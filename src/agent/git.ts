@@ -3,7 +3,7 @@
  * 未コミットの変更がある状態で自動書き込みを始めると、
  * 巻き戻し先が無くなるため、開始前に必ず確認する。
  */
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { chunkReader } from '../core/text.ts';
 import { killTree } from './shell-exec.ts';
 import { SAFE_GIT_ARGS, SAFE_GIT_ENV, workspaceScope } from './workspace-stamp.ts';
@@ -93,8 +93,6 @@ export function runGit(args: string[], cwd: string): Promise<RunResult> {
     // 資格情報を訊かせない（端末の入力待ち・Windows の資格情報を訊く画面で、返らないまま止まる）。訊かれる場面は失敗として返る
     GIT_TERMINAL_PROMPT: '0',
     GCM_INTERACTIVE: 'never',
-    // ssh の鍵の確認（初めての相手）は端末へ訊きに行き、GIT_TERMINAL_PROMPT では止まらない。持ち主が自分の ssh を決めていれば触らない
-    ...(process.env.GIT_SSH_COMMAND || process.env.GIT_SSH ? {} : { GIT_SSH_COMMAND: 'ssh -o BatchMode=yes' }),
   });
 }
 
@@ -103,6 +101,17 @@ export function runGit(args: string[], cwd: string): Promise<RunResult> {
  * 固まっていた。遅い回線でも取り終わる長さにしておく。
  */
 export const GIT_TIMEOUT_MS = 5 * 60_000;
+
+/** 走っている git の一群。こちらが終わるときに止める。 */
+const live = new Set<ChildProcess>();
+let exitWatched = false;
+function watchExit(): void {
+  if (exitWatched || process.platform === 'win32') return;
+  exitWatched = true;
+  process.on('exit', () => {
+    for (const c of live) { if (c.pid !== undefined) { try { process.kill(-c.pid, 'SIGTERM'); } catch { /* 既に終わっている */ } } }
+  });
+}
 
 /** 走らせた結果。`out` は人に見せる文（標準出力と標準エラーを届いた順に）、`stdout` は読み取りに使う標準出力だけ。 */
 export interface RunResult { code: number; out: string; stdout: string }
@@ -120,6 +129,10 @@ export function runWithin(
     const child = spawn(cmd, args, {
       cwd, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32',
     });
+    // 一群に分けたので、こちらが止められても（Ctrl+C）合図は届かない。こちらが終わるときに、走っている一群も止める
+    live.add(child);
+    watchExit();
+    child.on('close', () => live.delete(child));
     let out = '';
     let stdout = '';
     let settled = false;
