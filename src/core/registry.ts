@@ -18,9 +18,19 @@ export class ProviderRegistry {
     return [...this.#providers.values()];
   }
 
-  cooldown(providerId: string, ms: number): void {
+  /** providerId -> 冷やした理由（全部が冷えているときに、何で冷えているかを言うため） */
+  readonly #cooldownReason = new Map<string, string>();
+
+  cooldown(providerId: string, ms: number, reason?: string): void {
     if (ms <= 0) return;
     this.#cooldownUntil.set(providerId, ms === Infinity ? Infinity : this.#now() + ms);
+    if (reason) this.#cooldownReason.set(providerId, reason);
+    else this.#cooldownReason.delete(providerId);
+  }
+
+  /** 冷やしている理由。冷やしていなければ undefined。 */
+  cooldownReason(providerId: string): string | undefined {
+    return this.isAvailable(providerId) ? undefined : this.#cooldownReason.get(providerId);
   }
 
   /** 冷やしは単調な時計で数える（壁時計だと、時計が 1 時間戻ると 1 分の冷やしが 61 分になる）。試験で入れ替えられる。 */
@@ -33,6 +43,7 @@ export class ProviderRegistry {
 
   clearCooldown(providerId: string): void {
     this.#cooldownUntil.delete(providerId);
+    this.#cooldownReason.delete(providerId);
   }
 
   isAvailable(providerId: string): boolean {

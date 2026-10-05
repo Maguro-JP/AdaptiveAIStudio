@@ -71,7 +71,7 @@ export class ChatOrchestrator {
         error: new ProviderError({
           kind: 'unavailable',
           providerId: '-',
-          message: '利用できるモデルがありません(全Providerが未登録または冷却中)。',
+          message: noUsableMessage(this.#registry, input.candidates),
         }),
       };
       return;
@@ -146,7 +146,7 @@ export class ChatOrchestrator {
            * ここで 5 分冷やすと、読み直せているのに「利用できるモデルがありません」で
            * 0.0 秒で終わり続ける（子を殺して確かめた）。逃がす先も、たいてい無い。
            */
-          if (provider.locality !== 'local') this.#registry.cooldown(provider.id, cooldownFor(err));
+          if (provider.locality !== 'local') this.#registry.cooldown(provider.id, cooldownFor(err), err.message);
           lastError = err;
 
           // 出力開始後の切替は文章を壊すので、ここで打ち切る。
@@ -216,4 +216,34 @@ export function cooldownFor(err: ProviderError): number {
   const base = err.rule.cooldownMs;
   if (base <= 0 || err.retryAfterMs === undefined) return base;
   return Math.max(base, Math.min(err.retryAfterMs, MAX_COOLDOWN_MS));
+}
+
+/**
+ * 使える候補が無いときの文。冷やしている候補があれば、どれが・あとどれだけ・何で、を言う。
+ * 「未登録または冷却中」とだけ言っていたので、Retry-After で長く冷やしている間は、送るたびに理由も残り時間も無く即座に終わっていた。
+ * 冷やしは手元の記憶にしか無いので、立ち上げ直せば解ける（鍵や上限を直したときの抜け道）。
+ */
+function noUsableMessage(registry: ProviderRegistry, candidates: readonly string[]): string {
+  const cooled: string[] = [];
+  const seen = new Set<string>();
+  for (const id of candidates) {
+    const r = registry.resolve(id);
+    if (!r || seen.has(r.provider.id) || registry.isAvailable(r.provider.id)) continue;
+    seen.add(r.provider.id);
+    const left = registry.cooldownRemainingMs(r.provider.id);
+    const reason = registry.cooldownReason(r.provider.id);
+    cooled.push(`${r.provider.id}: ${describeLeft(left)}${reason ? `（${reason.slice(0, 200)}）` : ''}`);
+  }
+  if (cooled.length === 0) return '利用できるモデルがありません（候補のどれも登録されていません）。';
+  return `利用できるモデルがありません。失敗のあと休ませている候補: ${cooled.join(' / ')}。`
+    + '鍵や上限を直したときは、立ち上げ直すと休ませているのが解けます。';
+}
+
+function describeLeft(ms: number): string {
+  if (ms === Infinity) return '手で解くまで';
+  const minutes = Math.ceil(ms / 60_000);
+  if (minutes < 60) return `あと ${minutes} 分`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `あと ${hours} 時間${rest > 0 ? ` ${rest} 分` : ''}`;
 }

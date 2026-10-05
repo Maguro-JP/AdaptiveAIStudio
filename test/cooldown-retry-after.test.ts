@@ -62,6 +62,26 @@ describe('Retry-After と冷やす時間', () => {
     assert.ok(left > 23 * 60 * MINUTE);
   });
 
+  test('候補が一つで冷えている間に送ると、残り時間と元の理由を言う（理由も言わずに即座に終わらない）', async () => {
+    const primary = await startFakeServer({ kind: 'status', status: 429, body: 'slow down', retryAfter: '3600' });
+    try {
+      const registry = new ProviderRegistry();
+      registry.register(new OpenAiCompatibleProvider({ id: 'cloud', baseUrl: primary.baseUrl, locality: 'cloud' }));
+      const orchestrator = new ChatOrchestrator(registry);
+      const ask = () => drain(orchestrator.run({ candidates: ['cloud:m'], messages: [{ role: 'user', content: 'hi' }] }, new AbortController().signal));
+      await ask();
+      const second = (await ask()).find((e) => e.type === 'failed');
+      assert.ok(second && second.type === 'failed');
+      const message = second.error.message;
+      assert.match(message, /cloud/, `どの候補か言っていない: ${message}`);
+      assert.match(message, /あと (59|60) 分|あと 1 時間/, `残り時間を言っていない: ${message}`);
+      assert.match(message, /429|slow down/, `元の理由を言っていない: ${message}`);
+      assert.match(message, /立ち上げ直す/, `解き方を言っていない: ${message}`);
+    } finally {
+      await primary.close();
+    }
+  });
+
   test('負の秒数や過去の日時は、待たない（0）として読む', () => {
     assert.equal(parseRetryAfter('-5'), 0);
     assert.equal(parseRetryAfter(new Date(Date.now() - 60_000).toUTCString()), 0);

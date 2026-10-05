@@ -12162,5 +12162,9 @@ write を持たせない」（`dropWriteIfOutbound`）は役職にだけ効か�
 - 冷やさない種類（長すぎる依頼・モデルが無い）は、言われても冷やさない。手元の口は今までどおり冷やさない
 - `parseRetryAfter` は負の秒数を 0 と読む（過去の日時はもともと 0）
 試験は `test/cooldown-retry-after.test.ts`（直す前の版では、1 時間・一日で区切る・負の秒数の 3 件が落ちた）。
+レビューで見つけた分（同じ日に直した）: 外の口が一つだけのとき、長く冷やしている間は、送るたびに「利用できるモデルがありません（全Providerが未登録または冷却中）」で
+即座に終わり、残り時間も元の理由も出なかった（前は 1 分で済んでいたので目立たなかった）。冷やすときに理由を控え（`ProviderRegistry.cooldownReason`）、
+使える候補が無いときは、休ませている候補ごとに残り時間と理由を言い、立ち上げ直せば解けることを添える（冷やしは手元の記憶にしか無い）。
+試験は同じファイルの「候補が一つで冷えている間に送る」（直す前の文では落ちた）。
 選ばなかった案: Retry-After をそのまま使う（短い値で冷やしが 1 分より縮み、すぐまた断られる）。
-触る場所: `src/core/orchestrator.ts`（`cooldownFor`・`MAX_COOLDOWN_MS`）、`src/providers/errors.ts`（`parseRetryAfter`）
+触る場所: `src/core/orchestrator.ts`（`cooldownFor`・`MAX_COOLDOWN_MS`・`noUsableMessage`）、`src/core/registry.ts`（`cooldownReason`）、`src/providers/errors.ts`（`parseRetryAfter`）
