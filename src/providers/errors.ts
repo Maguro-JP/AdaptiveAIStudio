@@ -139,7 +139,8 @@ export function kindFromThrown(e: unknown): ProviderErrorKind {
 export function parseRetryAfter(header: string | null): number | undefined {
   if (!header) return undefined;
   const seconds = Number(header);
-  if (Number.isFinite(seconds)) return seconds * 1000;
+  // 負の秒数は「待たない」と読む（そのまま返すと、待ちの長さの比べで負の数が混ざる）
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
   const at = Date.parse(header);
   return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now());
 }
