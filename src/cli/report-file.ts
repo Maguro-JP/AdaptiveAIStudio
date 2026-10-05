@@ -23,7 +23,7 @@ import { writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 // 残す数は片づけ側と同じものを使う。**二箇所に数を置かない**
 // （片方だけ変えると、出す側と片づける側で食い違う）。
-import { KEEP_REPORTS } from '../runtime/cleanup.ts';
+import { KEEP_REPORTS, REPORT_NAME, reportOrder } from '../runtime/cleanup.ts';
 
 /** 色を落とす。ファイルに ESC が入ると、開いた人には読めない。 */
 export function plain(text: string): string {
@@ -61,9 +61,8 @@ export interface Saved {
 async function sweepOld(dir: string, name: string, keep = KEEP_REPORTS): Promise<number> {
   try {
     const mine = (await readdir(dir))
-      .filter((f) => f.startsWith(`${name}-`) && f.endsWith('.txt'))
-      // `.txt` を外して並べる（`-0517.txt` と `-0517-2.txt` は、外すと前者が先に来る＝古い方から消える）
-      .sort((a, b) => { const x = a.slice(0, -4), y = b.slice(0, -4); return x < y ? -1 : x > y ? 1 : 0; });
+      .filter((f) => REPORT_NAME.exec(f)?.[1] === name)
+      .sort(reportOrder);
     const old = mine.slice(0, Math.max(0, mine.length - keep));
     let gone = 0;
     for (const f of old) {

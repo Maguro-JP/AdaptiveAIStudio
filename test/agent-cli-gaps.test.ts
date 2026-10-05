@@ -21,6 +21,7 @@ import { needsStripFlag } from '../src/core/node-flags.ts';
 import { cleanAasEnv } from './env.ts';
 import { testsPassed } from '../src/cli/tests-verdict.ts';
 import { saveReport } from '../src/cli/report-file.ts';
+import { REPORT_NAME, reportOrder } from '../src/runtime/cleanup.ts';
 
 let fake: FakeServer;
 before(async () => { fake = await startFakeServer({ kind: 'hang' }); });
@@ -97,6 +98,10 @@ describe('aas agent の入口', { timeout: 120_000, skip: process.platform === '
       agent.write('/exti\n');
       await until(() => /知らない命令/.test(agent.output()), `知らない命令と言わない:\n${agent.output().slice(-600)}`);
       assert.equal(fake.requests, before, '打ち間違いの命令をモデルへ送った');
+      // ここの命令を引数なしで打ったときは、「知らない」ではなく形が違うと言う
+      agent.write('/do\n');
+      await until(() => /\/do は、この形では受けられません/.test(agent.output()), `形が違うと言わない:\n${agent.output().slice(-600)}`);
+      assert.equal(fake.requests, before, '引数の無い /do をモデルへ送った');
       agent.write('/exit\n');
       assert.notEqual(await within(agent.exited, 15_000), 'timeout');
     } finally { agent.kill('SIGKILL'); }
@@ -109,6 +114,17 @@ describe('テストの出力の読み方', () => {
     assert.equal(testsPassed('# tests 3\r\n# pass 3\r\n# fail 0\r\n# cancelled 0\r\n', 0), true);
     assert.equal(testsPassed('# tests 3\r\n# pass 2\r\n# fail 1\r\n', 1), false);
     assert.equal(testsPassed('# tests 3\r\n# fail 0\r\n# cancelled 1\r\n', 1), false);
+  });
+});
+
+describe('報告の名前の並び', () => {
+  test('**同じ分の -2 -10 も、読む側が同じ名前として古い順に並べる**', () => {
+    const names = ['doctor-20261005-0517-10.txt', 'doctor-20261005-0518.txt', 'doctor-20261005-0517-2.txt', 'doctor-20261005-0517.txt'];
+    assert.deepEqual([...names].sort(reportOrder), [
+      'doctor-20261005-0517.txt', 'doctor-20261005-0517-2.txt', 'doctor-20261005-0517-10.txt', 'doctor-20261005-0518.txt',
+    ]);
+    assert.equal(REPORT_NAME.exec('doctor-20261005-0517-2.txt')?.[1], 'doctor');
+    assert.equal(REPORT_NAME.exec('self-test-20261005-0517.txt')?.[1], 'self-test');
   });
 });
 

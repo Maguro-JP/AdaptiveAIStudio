@@ -9,6 +9,7 @@ import { defaultWorkRoot, installRoot } from '../core/home.ts';
 import { stdin, stdout } from 'node:process';
 import { LineSource } from './input.ts';
 import { resolve, join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { loadConfig } from '../config.ts';
 import { buildRegistry } from '../core/build.ts';
 import { ChatOrchestrator } from '../core/orchestrator.ts';
@@ -61,8 +62,8 @@ function renderDiff(diff: string): string {
 
 /** この入口が自分で受ける命令。知らない命令を言うときに並べる。 */
 const AGENT_COMMANDS = [
-  '/exit', '/new', '/models', '/metrics', '/duties', '/skip', '/idle', '/roles', '/memory', '/remember', '/plan', '/panel',
-  '/ack', '/acks', '/unack', '/proposals', '/update', '/think', '/do', '/reject', '/rules', '/harness', '/audit', '/context', '/warm',
+  '/exit', '/quit', '/new', '/models', '/metrics', '/duties', '/skip', '/idle', '/roles', '/memory', '/remember', '/plan', '/panel',
+  '/ack', '/acks', '/unack', '/proposals', '/update', '/update!', '/think', '/do', '/reject', '/rules', '/harness', '/audit', '/context', '/warm',
 ];
 
 /** `name` そのもの、または `name` の後に空白と引数が続く行か（`/planets` を `/plan` と読まない）。 */
@@ -676,12 +677,21 @@ async function main(): Promise<void> {
       let request = pendingRequest ?? line;
       if (pendingRequest === undefined) {
         const expanded = await expandCommand(line, root);
-        if (expanded.kind === 'unknown') {
+        // ここの命令を、引数の形を違えて打った（`/do` だけ、`/exit now`）。「知らない」と言うと、並べた中に在るので食い違う
+        if (expanded.kind === 'unknown' && AGENT_COMMANDS.includes(`/${expanded.name}`)) {
+          console.log(c.red(`  /${expanded.name} は、この形では受けられません: ${line}`) + c.dim('（引数の要る命令は、後に空白を空けて続けます）\n'));
+          continue;
+        }
+        // `/tmp を見て` のような、根の直下の道を書いた行。命令ではないので、そのまま依頼として送る
+        if (expanded.kind === 'unknown' && existsSync(`/${expanded.name}`)) {
+          request = line;
+        } else if (expanded.kind === 'unknown') {
           const known = [...AGENT_COMMANDS, ...expanded.known.map((n) => `/${n}`)];
           console.log(c.red(`  知らない命令です: /${expanded.name}`) + c.dim(`（使える命令: ${known.join(' ')}）\n`));
           continue;
+        } else {
+          request = expanded.text;
         }
-        request = expanded.text;
       }
       pendingRequest = undefined;
 

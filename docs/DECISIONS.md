@@ -12370,6 +12370,12 @@ CLI の対話の入口（`src/cli/agent.ts`・`input.ts`・`report-file.ts` ほ�
   書けるツール付きの依頼としてモデルへ渡っていた。画面と同じ `expandCommand` で置き換え、知らない名前は送らずに使える命令を並べる。
   `/plan` `/panel` `/memory` `/remember` は前方一致だったので、`/planets` を `/plan` と読んでいた。名前そのものか、後に空白が続くときだけにする
 - 報告のファイル名は分までなので、同じ分のうちに二度出すと前のものを黙って上書きしていた。在れば `-2` `-3` と付ける（古いものを消す順も崩さない）
+レビューで見つけた分（同じ日に直した）:
+- 報告の名前に `-2` を付けたが、読む側（最新の報告・点検の使い回し・片づけ）は `-YYYYMMDD-HHMM.txt` の形だけを見ていた。二つ目を別の名前と読み、
+  並べると `-0517-2` が `-0517` より前に来て古い方を最新と読んでいた。形と並べ方を `runtime/cleanup.ts`（`REPORT_NAME`・`reportOrder`）の一か所に置き、
+  読む側は全部それを使う。番号は数として比べる（`-10` を `-2` より前にしない）
+- ここの命令を引数の形を違えて打つと（`/do` だけ、`/exit now`）、「知らない命令」と言いながら並べた中にその命令が在った。形が違うと言う。
+  `/quit` と `/update!` を並べに足した。根の直下の道（`/tmp を見て`）は命令ではないので、在る道ならそのまま依頼として送る
 - 調査では CRLF のテストの出力を「落ちた」と読み違えると挙がったが、JS の `m` の `$` は `\r` の前でも当たるので読めていた。試験で固定した
 試験は `test/agent-cli-gaps.test.ts`（`aas agent` を子として起こし、返事の来ないモデルに依頼して Ctrl-C を送る。直す前の版では、止める・`/exit`・
 知らない命令・報告の上書きが落ちた。判じ手を止める直しだけを外しても、止めた後の `/exit` が終わらずに落ちた）。
@@ -12381,4 +12387,4 @@ CLI の対話の入口（`src/cli/agent.ts`・`input.ts`・`report-file.ts` ほ�
 - 色は `NO_COLOR` と端末でない出力を見ていない（`aas agent > log.txt` に色の記号が入る）。報告の `plain` は色以外の記号を落とさない
 - 表示の幅（`width.ts`）は絵文字を 1、結合文字を 1 と数える。報告の時刻の一つ（`report.ts` の更新時刻）を UTC で見せている。`models` は `--get=x` の形を読まない
 触る場所: `src/cli/agent.ts`（`isCommand`・`AGENT_COMMANDS`・止める手）、`src/cli/input.ts`（`questionWhileIdle`）、`src/core/session.ts`（`#judging`・`close`）、
-`src/cli/report-file.ts`（`writeFresh`・`sweepOld`）
+`src/cli/report-file.ts`（`writeFresh`・`sweepOld`）、`src/runtime/cleanup.ts`（`REPORT_NAME`・`reportOrder`）、`src/cli/report.ts`
