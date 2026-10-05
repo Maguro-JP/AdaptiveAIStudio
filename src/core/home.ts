@@ -120,7 +120,12 @@ export function insideDir(here: string, dir: string, platform: NodeJS.Platform =
  * 環境変数で判じさせない（入れた側が決めて渡す、の裏返し）。
  */
 export function isDistributed(root = installRoot()): boolean {
-  return basename(resolve(root)) === 'app' || isPortable(root);
+  if (isPortable(root)) return true;
+  if (basename(resolve(root)) !== 'app') return false;
+  // 名前だけで見ない。クローンを `app` という名前のフォルダ（Docker の `/app` など）に置くと配った形と見なし、
+  // 更新を setup.exe の案内にすり替え、作業場を `~/.aas/work` へ移していた。bundle が `app\` の隣に必ず置くもので見分ける
+  const product = resolve(root, '..');
+  return existsSync(join(product, 'AdaptiveAIStudio.cmd')) || existsSync(join(product, 'VERSION'));
 }
 
 /** 記録の置き場。 */

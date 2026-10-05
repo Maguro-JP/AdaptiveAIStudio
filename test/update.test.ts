@@ -257,8 +257,11 @@ describe('配った形では git を見ない', () => {
 
   test('インストーラで入れた形（app の中、.portable なし）には、打てない git clone の案内を出さない', async () => {
     const { RELEASES_URL } = await import('../src/core/update.ts');
-    const app = join(await tempDir('aas-upd-installed-'), 'app');
+    const product = await tempDir('aas-upd-installed-');
+    const app = join(product, 'app');
     await mkdir(app, { recursive: true });
+    // インストーラも bundle の中身をそのまま置く（`app\` の隣に入口と VERSION がある）
+    await writeFile(join(product, 'AdaptiveAIStudio.cmd'), '@echo off\r\n');
     const s = await checkUpdate(app);
     assert.equal(s.can, false);
     assert.doesNotMatch(s.reason ?? '', /git clone/, `入れた形に git の案内を出した: ${s.reason}`);
