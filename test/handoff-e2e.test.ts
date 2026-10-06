@@ -13,7 +13,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { writeFile, mkdir, readFile, copyFile } from 'node:fs/promises';
+import { writeFile, mkdir, readFile, copyFile, readdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tempDir } from './tmp.ts';
@@ -73,9 +73,9 @@ const cloneVerbatim = (from: string, to: string, cwd: string): void => {
  * リポジトリを決めるので（`check.mjs` と同じ）、外から呼ぶとこちらの
  * リポジトリを触ってしまう。
  */
-const run = (cwd: string, name: string, args: string[] = []): { out: string; code: number } => {
+const run = (cwd: string, name: string, args: string[] = [], tmp?: string): { out: string; code: number } => {
   const r = spawnSync(process.execPath, [join(cwd, 'scripts', 'handoff.mjs'), ...args], {
-    cwd, encoding: 'utf8', env: { ...withoutGitEnv(), AAS_HANDOFF_NAME: name },
+    cwd, encoding: 'utf8', env: { ...withoutGitEnv(), AAS_HANDOFF_NAME: name, ...(tmp ? { TMPDIR: tmp, TMP: tmp, TEMP: tmp } : {}) },
   });
   return { out: `${r.stdout}${r.stderr}`, code: r.status ?? 1 };
 };
@@ -120,6 +120,16 @@ describe('片方で書いて、もう片方で受け取る', () => {
     const took = run(local, 'local', ['--take']);
     assert.equal(took.code, 0, took.out);
     assert.equal(await readFile(join(local, 'あたらしい.txt'), 'utf8'), 'クラウドで書いた\n');
+  });
+
+  test('**送るときに作る一時的な index を、temp に残さない**', onlyWithGit, async () => {
+    // 送るたびに `aas-handoff-*/index` が一つずつ残り、試験を回すたびに積もっていた
+    const { cloud } = await twoMachines();
+    await writeFile(join(cloud, 'y.txt'), 'y\n', 'utf8');
+    const tmp = await tempDir('aas-handoff-tmp-');
+    const sent = run(cloud, 'cloud', [], tmp);
+    assert.equal(sent.code, 0, sent.out);
+    assert.deepEqual(await readdir(tmp), [], '一時的な index のフォルダが残った');
   });
 
   test('**ブランチの名前を、二重にしない**', onlyWithGit, async () => {

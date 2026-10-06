@@ -342,6 +342,7 @@
 - 38 回目の不具合調査の 7 件（コマンドの実行と git: 後ろの子・頭を落とした記号・git の出力と警告・打ち切りのプロセスツリー・$ARGUMENTS・repo map の一致・索引から読む）
 - 39 回目の不具合調査の 5 件（CLI の対話: Ctrl-C が依頼に届く・閉じるときの判じ手・/exit の時計・知らない命令・報告の上書き）
 - 40 回目の不具合調査の 4 件（先読み: 見に行かない場所と .gitignore・作業場ごとの本文・GGUF の数え方の覚え方・__proto__ のモデル）
+- 試験の仮の作業場が積もってディスクが一杯になった（handoff の一時的な index・mention の直の mkdtemp）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -12415,3 +12416,17 @@ CLI の対話の入口（`src/cli/agent.ts`・`input.ts`・`report-file.ts` ほ�
   既定の上限（4 分）を足したところ、入れた機械の env で走らせる試験（`test/installed-env.test.ts`）の中の遅いまとまり（`bundle を組み直すとき`）が
   それを超えて落ちたので、足すのをやめた。足すなら、遅いまとまりに自分の上限を付けてから
 触る場所: `src/agent/prefetch.ts`（`#buildIndex`）、`src/agent/code-index.ts`（`SKIP`）、`src/agent/rerank.ts`（`bodyOf`）、`src/agent/tokenizer.ts`（`counterForGguf`）、`src/agent/stride.ts`
+
+## 2026-10-06  試験の仮の作業場が積もってディスクが一杯になった（handoff の一時的な index・mention の直の mkdtemp）
+
+10-05 の夜、押す前の確かめが ENOSPC で落ちた。`/tmp/aas-*` が 27,611 個・約 11 GB 積もっていた。
+- 試験の仮の作業場は `tempDir`（`test/tmp.ts`）が試験の終わりに消している。残っていた分の頭を数えると `aas-handoff-` と `aas-mention-` が多かった
+- `aas-handoff-` は試験ではなく製品の側だった。`scripts/handoff.mjs` は作業中のものを送るとき、一時的な index を temp のフォルダに作り、消していなかった。
+  利用者の機械でも、送るたびに一つずつ残る。使い終えたら消す
+- `aas-mention-` は試験（`test/mention.test.ts`）が `mkdtemp` で直に作り、片づけていなかった。`tempDir` に替え、試験が `mkdtemp` を直に呼ばないことを
+  `test/tmp-hygiene.test.ts` で止める（自分で消している `before-work.test.ts` だけ許す）
+- 最初は「試験が待たずに起こした後ろの git が、消した後に index を書き戻す」と見て、消えるまで消し直す形を `test/tmp.ts` に書いたが、中身を見て外れと分かったので戻した
+試験は `test/handoff-e2e.test.ts`（送る側の temp を仮の場所に向け、空のままかを見る。直す前の版では落ちた）と `test/tmp-hygiene.test.ts`。
+直していないもの:
+- 打ち切られた走行（時間切れ・止めた確かめ）の置き土産は消えない（`tmp.ts` の前からの断り）。溜まったら `find /tmp -maxdepth 1 -name 'aas-*' -mmin +60` で見て消す
+触る場所: `scripts/handoff.mjs`、`test/tmp.ts`、`test/tmp-hygiene.test.ts`
