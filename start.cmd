@@ -57,6 +57,13 @@ goto :bundled
 if exist "%HERE%runtime\node.exe" set "BUNDLED=%HERE%runtime"
 if exist "%HERE%node\node.exe" set "BUNDLED=%HERE%node"
 if defined BUNDLED goto :bundled
+rem Z: は .exe を受け取らないので、node.bin の名前で置かれる。それも探す（探さずに「見つかりません」と言っていた）
+if exist "%HERE%runtime\node.bin" set "BUNDLED=%HERE%runtime"
+if exist "%HERE%node\node.bin" set "BUNDLED=%HERE%node"
+if not defined BUNDLED goto :noBinHere
+set "NODEFILE=node.bin"
+goto :bundled
+:noBinHere
 
 rem 同梱版の目印はあるのに Node が無い、という形をここで覚えておく。
 rem クラウドドライブが .exe を落としたときに起きる。
@@ -184,6 +191,8 @@ rem ずれた断片を読む。呼ぶ行と同じ行で goto する（goto は�
 if "%RUNNER%"=="direct" call "%NODE%" scripts\run.mjs update & goto :updated
 if not "%RUNNER%"=="direct" call "%NPM%" run update & goto :updated
 :updated
+rem 取り込みが失敗したら、立ち上げ直さずに終了コードを言って終える（失敗を捨てて立ち上げ直していた）
+if not "%errorlevel%"=="0" goto :ran
 echo.
 set "AGAIN="
 set /p AGAIN="   立ち上げ直しますか？ [Y/n]: "

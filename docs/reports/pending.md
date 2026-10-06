@@ -118,3 +118,36 @@ long-dev が止まる条件（設計の分岐・人の判断が要る・範囲�
 マージされていない中身を持っているかもしれない。
 
 決まるまで止まっているもの: なし（残っていても動きは変わらない）。
+
+---
+
+## 6. bootstrap で入れた版に node_modules を入れる道（2026-10-07 から）
+
+何を決めてほしいか: `installer\bootstrap.cmd` で入れた版に、node_modules（node-llama-cpp・Claude の SDK・同梱の GitHub のツール）をどこから入れるか。
+
+いまの形: bootstrap は GitHub の archive zip から bundle を組む。archive には node_modules が無く、bundle は「ない: node_modules（飛ばします）」と出すだけで先へ進む。既定の inproc では送るとすぐ「node-llama-cpp がありません」で止まり、Claude の口も動かない。それでも bootstrap は「用意できました」で終わる。社用PC では npm も打てず、llama-server.exe も Z: に置けないので、モデルを読む道が一つも残らない（読んで判断した。cmd.exe では確かめていない）。
+
+選択肢:
+- A. Releases の `portable-noexe.zip` から `app\node_modules` だけを取り、bundle の前に置く。取れなければ止める
+- B. bootstrap をやめ、Releases の portable を落として展開する道だけにする
+- C. 今のまま。案内に「この道では、手元でモデルを読めません」と書く
+
+推す案: A。取ってくるのは、すでに配っている物と同じ中身になる。あわせて bundle に「要るもの」を渡す口を足し、無ければ組まずに止める（黙って欠けた版を作らない）。網の道（Releases に届くか）は社用PC では確かめていない。
+
+決まるまで止まっているもの: bootstrap の道で入れた版の、モデルを手元で読む使い方。
+
+---
+
+## 7. setup.exe で入れた版の保存先の権限（2026-10-07 から。伝えるだけ）
+
+何を決めてほしいか: 置き場所を `%ProgramData%\AdaptiveAIStudio` にするのは決めてあることなので変えない。そのうえで、`.env`（API キー・GITHUB_TOKEN）と `aas.config.json` をそこに置き続けるか。
+
+いまの形: インストーラが保存先に Users 群の「変更」を付けている（`installer/AdaptiveAIStudio.nsi`）。一台を複数の利用者で使う機械では、ほかの利用者が鍵を読め、`mcp.servers` に命令を書けば、開いた人の権限で動く。一人で使う機械では表に出ない。
+
+選択肢:
+- A. 今のまま（一人で使う機械が前提）
+- B. `.env` と `aas.config.json` だけ利用者ごとの場所（`%APPDATA%`）から読む。モデルは ProgramData で共有のまま
+
+推す案: 一人で使う機械が前提なら A。複数の利用者で使う機械に入れるなら B。
+
+決まるまで止まっているもの: なし。

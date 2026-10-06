@@ -378,6 +378,7 @@
 - 72 回目の不具合調査の 6 件（scripts と pre-push: 式で押す sha・二本以上の push・一時フォルダの後始末・自分のブランチの判定・shot の起動）
 - 73 回目の不具合調査の 7 件（src/cli: models --new の訊く先・runtime.command・壊れた設定の selftest・Ollama の selftest・agent の終了コード・npm の案内・--force）
 - 74 回目の不具合調査の 5 件（モデルを取ってくる・片づける所: Ollama の新しい世代の後退・続きの空き・clean の保存先・実行時ライブラリの接続の失敗・/blob/ の頁）
+- 75 回目の不具合調査の 3 件（入口: 隣の node.bin・sh start.sh の立ち上げ直しと引数・新しくするの失敗）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -13003,3 +13004,17 @@ OpenAI 互換の口（`src/providers/openai-compatible.ts`）と、候補の切�
 直していないもの: 入れ替えで脇へ移した前の版（`.prev`）を clean に挙げる件は、戻せなかったときに唯一動く版になりうるので消す候補にしない（17 回目の判断のまま）。llama.cpp の取得が黙り込んだときの打ち切りと、取り終えた GGUF の全体のハッシュの照合は、待ち時間とハッシュを渡す口を作ってからにする。
 試験は `test/runtime-fetch-gaps.test.ts`（/blob/・続きの空き・clean の保存先）と `test/llama-install.test.ts`（実行時ライブラリの接続の失敗）。直す前の版で 4 件とも落ちた。
 触る場所: `src/cli/models.ts`（`--new`）、`src/runtime/model-install.ts`（`hfFileUrl`・`roomNeeded`・`checkRoom`）、`src/runtime/cleanup.ts`（`modelsDirs`）、`src/cli/clean.ts`、`src/runtime/llama-install.ts`（実行時ライブラリ）
+
+## 2026-10-07  75 回目の不具合調査の 3 件（入口: 隣の node.bin・sh start.sh の立ち上げ直しと引数・新しくするの失敗）
+
+installer・入口（start.cmd・start.sh）・bundle の組み立てを、読むだけの調査で見た分。
+- start.cmd は、隣の `node\node.exe` と `runtime\node.exe` しか探さなかった。社用PC の Z: は .exe を受け取らないので node.bin の名前で置くことになるが、それを探さず、必ず「Node.js が見つかりません」と言った。`node.bin` も探し、見つかれば .bin として呼ぶ
+- start.sh は、`sh start.sh` で起こすと $0 に / が無く、新しくした後の立ち上げ直し（`exec "$0"`）が PATH を探して落ちた。2 つ目からの引数も落とし、`clean --yes` が見せるだけで終わった。居場所を絶対の道で持って立ち上げ直し、引数はそのまま渡す
+- start.cmd の「新しくする」は、取り込みが失敗しても終了コードを見ずに「立ち上げ直しますか」と訊いた（start.sh は止めている）。失敗したら終了コードを言って終える
+直していないもの:
+- bootstrap で入れた版に node_modules が一つも入らない件は、取ってくる先を決める必要があるので判断待ち（pending.md の 6）
+- setup.exe の保存先の権限は、保存先が決めてあることなので伝えるだけ（pending.md の 7）
+- start.cmd が引数の引用符を外す（`%~1`）ので空白入りの道が割れる件は、`%1` にすれば直る見込みだが、`%~1` にした経緯と cmd.exe での動きを確かめていないので触っていない
+- setup.exe で入れた版の README.txt が portable 向けの文のまま、の件は次に回す
+試験は `test/launcher-gaps.test.ts`（start.sh は Linux で起こして見る。start.cmd は書かれた行を見る。直す前の版で 4 件とも落ちた）。start.cmd は Windows の実機では確かめていない。
+触る場所: `start.cmd`（`:tryHere`・`:updated`）、`start.sh`

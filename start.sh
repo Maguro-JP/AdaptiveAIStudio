@@ -6,7 +6,9 @@
 #  引数を付ければ、選ぶところは飛ばせる:  ./start.sh ui
 # ============================================================
 set -u
-cd "$(dirname "$0")" || exit 1
+# 自分の居場所を絶対の道で持つ（`sh start.sh` では $0 に / が無く、立ち上げ直しの exec が PATH を探して落ちた）
+here=$(cd "$(dirname "$0")" && pwd) || exit 1
+cd "$here" || exit 1
 
 if ! command -v node >/dev/null 2>&1; then
   echo
@@ -22,6 +24,8 @@ echo "  Node $(node -v)"
 # （型検査 npm run typecheck を使うときだけ、手動で入れる）
 
 task="${1:-}"
+# 2 つ目からの引数は、そのまま渡す（落としていたので `clean --yes` が見せるだけで終わった）
+[ $# -gt 0 ] && shift
 
 if [ -z "$task" ]; then
   echo
@@ -66,8 +70,12 @@ if [ "$task" = "update" ]; then
   read -r again
   case "$again" in
     [nN]*) exit 0 ;;
-    *) exec "$0" ;;
+    *) exec sh "$here/start.sh" ;;
   esac
 fi
 
-npm run "$task"
+if [ $# -gt 0 ]; then
+  npm run "$task" -- "$@"
+else
+  npm run "$task"
+fi
