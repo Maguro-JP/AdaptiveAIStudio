@@ -96,8 +96,12 @@ unset GIT_REFLOG_ACTION GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 # 開いている PR も起きない。後に置くと、main に文書だけの更新（スキルの更新など）が入った後の
 # 合わせ直しを「文書だけの push」として止めていた（2026-09-25）。
 if [ -n "$AAS_PUSH_BRANCH_SHAS" ]; then
+  # 飛ばすのは決めた値（10）で終わったときだけ。0 や 1（読み込みで落ちた・何もせずに終わった）は確かめる側へ
+  # set -e の下なので、0 以外で終わっても止まらない形で終わり方を取る
+  same=0
   # shellcheck disable=SC2086
-  if reason=$(node scripts/same-as-main.mjs "${1:-origin}" "$AAS_PUSH_OTHER" $AAS_PUSH_BRANCH_SHAS); then
+  reason=$(node scripts/same-as-main.mjs "${1:-origin}" "$AAS_PUSH_OTHER" $AAS_PUSH_BRANCH_SHAS) || same=$?
+  if [ "$same" -eq 10 ]; then
     echo "$reason"
     exit 0
   fi

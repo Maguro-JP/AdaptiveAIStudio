@@ -67,13 +67,40 @@ if errorlevel 1 goto :badDest
 rem The work folder sits next to DEST, not inside it. bundle.mjs clears
 rem DEST before building, which used to delete the downloaded source
 rem and node.exe halfway through (and data\ on a reinstall).
+rem
+rem One run at a time. A second double-click used to rmdir the first
+rem run's folder halfway through. mkdir fails when the folder already
+rem exists, so exactly one run gets the lock. Every exit below removes it.
+set "LOCK=%DEST%.setup-lock"
+mkdir "%LOCK%" 2>nul
+if errorlevel 1 goto :busy
 set "WORK=%DEST%.setup"
 rmdir /s /q "%WORK%" 2>nul
 mkdir "%WORK%"
-if errorlevel 1 goto :badDest
+if errorlevel 1 goto :badDestLocked
 
 echo   [1/4] 中身を取ってきます
-curl -fL --retry 3 -o "%WORK%\src.zip" "%REPO%/archive/refs/heads/%BRANCH%.zip"
+rem Pin the commit first, then fetch that very commit. The version stamped
+rem below is the package version plus this commit, so "doctor" can tell
+rem two bootstrap installs apart (it used to say "main-bootstrap" always).
+rem If the API is unreachable, fall back to the branch; the version then
+rem says "+main" and does not claim a commit it did not check.
+set "SHA="
+set "REF=refs/heads/%BRANCH%"
+set "STAMP=+%BRANCH%-bootstrap"
+curl -fsSL --retry 2 -H "Accept: application/vnd.github.sha" -o "%WORK%\sha.txt" "https://api.github.com/repos/Maguro-JP/AdaptiveAIStudio/commits/%BRANCH%" 2>nul
+if errorlevel 1 goto :fetchSource
+set /p SHA=<"%WORK%\sha.txt"
+if not defined SHA goto :fetchSource
+if "%SHA:~39,1%"=="" goto :noSha
+if not "%SHA:~40,1%"=="" goto :noSha
+set "REF=%SHA%"
+set "STAMP=+%SHA:~0,7%-bootstrap"
+goto :fetchSource
+:noSha
+set "SHA="
+:fetchSource
+curl -fL --retry 3 -o "%WORK%\src.zip" "%REPO%/archive/%REF%.zip"
 if errorlevel 1 goto :netfail
 tar -xf "%WORK%\src.zip" -C "%WORK%"
 if errorlevel 1 goto :cannotUnpack
@@ -83,27 +110,43 @@ for /d %%d in ("%WORK%\AdaptiveAIStudio-*") do set "SRC=%%~fd"
 if not defined SRC goto :cannotUnpack
 
 echo   [2/4] Node を取ってきます（%NODEVER%）
-curl -fL --retry 3 -o "%WORK%\node.exe" "https://nodejs.org/dist/%NODEVER%/win-x64/node.exe"
+rem Fetch as node.bin. The work PC's cloud drive (Z:) drops files by
+rem their .exe name, and node.exe never arrived there. Then try to use it
+rem as node.exe: copy and run it. Only if that runs is the .exe kept;
+rem otherwise node.bin is what gets installed (start.cmd looks for both).
+rem cmd.exe runs a file whose extension is listed in PATHEXT, so .BIN is
+rem added for this window, the same as start.cmd does.
+curl -fL --retry 3 -o "%WORK%\node.bin" "https://nodejs.org/dist/%NODEVER%/win-x64/node.exe"
 if errorlevel 1 goto :netfail
+set "NODENAME=node.exe"
+copy /y "%WORK%\node.bin" "%WORK%\node.exe" >nul 2>nul
+"%WORK%\node.exe" -v >nul 2>nul
+if not errorlevel 1 goto :build
+set "NODENAME=node.bin"
+set "PATHEXT=.BIN;%PATHEXT%"
+goto :noteBin
 
+:build
 echo   [3/4] 組み立てます
-"%WORK%\node.exe" "%SRC%\scripts\bundle.mjs" --out "%DEST%" --src "%SRC%" --node-exe "%WORK%\node.exe" --keep-data --version "%BRANCH%-bootstrap"
+"%WORK%\%NODENAME%" "%SRC%\scripts\bundle.mjs" --out "%DEST%" --src "%SRC%" --node-exe "%WORK%\%NODENAME%" --node-name %NODENAME% --keep-data --version "%STAMP%"
 if errorlevel 1 goto :cannotBuild
 
 rmdir /s /q "%WORK%" 2>nul
 
 echo   [4/4] 確かめます
-"%DEST%\runtime\node.exe" -v
+"%DEST%\runtime\%NODENAME%" -v
 if errorlevel 1 goto :nodeBroken
-"%DEST%\runtime\node.exe" "%DEST%\app\scripts\run-tests.mjs" >nul 2>&1
+echo         試験を回します。数分かかります（画面はその間、止まって見えます）。
+"%DEST%\runtime\%NODENAME%" "%DEST%\app\scripts\run-tests.mjs" >nul 2>&1
 if errorlevel 1 goto :testsRed
-echo         検査を通りました
+echo         試験を通りました
 goto :checked
 
 :testsRed
-echo         検査に失敗がありました。入口の 6 番で中身を見られます。
+echo         試験に失敗がありました。入口の 4 番（動くか確かめる）で、どこが動かないかを見られます。
 
 :checked
+rmdir "%LOCK%" 2>nul
 echo.
 echo   用意できました: %DEST%
 echo   AdaptiveAIStudio.cmd をダブルクリックして始めてください。
@@ -127,6 +170,23 @@ echo   その場所を使えませんでした: %DEST%
 echo.
 pause
 exit /b 1
+
+:badDestLocked
+rmdir "%LOCK%" 2>nul
+goto :badDest
+
+:busy
+echo   もう一つの用意が動いています。終わってから、もう一度ダブルクリックしてください。
+echo   動いていないのにこう出るときは、前の回が途中で閉じられています。
+echo   次の空のフォルダを消してから、やり直してください（中身は無く、消しても何も失いません）:
+echo     %LOCK%
+echo.
+pause
+exit /b 1
+
+:noteBin
+echo         この場所には .exe を置けないので、Node を node.bin の名前で入れます。
+goto :build
 
 :cannotUnpack
 echo   取ってきたものを展開できませんでした。
@@ -152,5 +212,6 @@ goto :fail
 :fail
 echo.
 rmdir /s /q "%WORK%" 2>nul
+rmdir "%LOCK%" 2>nul
 pause
 exit /b 1

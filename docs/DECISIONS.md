@@ -347,6 +347,7 @@
 - 段取りと Team の「戻す」に、作業の間に利用者が書いた分を載せない（外のツールが走っている間に変わった道）
 - 42 回目の不具合調査の 6 件（画面の本体の口: 消した会話への切り替え・MCP を外す間の繋ぎ・.env の同時の書き込み・見出しの付け替えの 404・出来事の流れ・モデルの名前）
 - 43 回目の不具合調査の 5 件（記録まわりの src/core: 書き切る前の改名・伏せる形・時計が戻ったときの名前・読めない時刻・錠の古さと時計のずれ）
+- 44 回目の不具合調査の 5 件（用意と押す前の確かめ: Z: の node.bin・bootstrap の版・二重起動・無い番号の案内・smoke の記録・main と同じときの飛ばし方）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -12516,3 +12517,27 @@ MCP を外す間の繋ぎは、外す口が待つ所を差し替えられない�
 - 日課の記録の書き込みの道の揃え方（`scheduler`）、錠を返すときの EBUSY の後に残る錠、`unfinished` の詰め直しの別プロセスとの重なり、
   Windows の道の長さ（248 文字）の上限をフォルダ側で見ていないこと。どれも今の使い方で当たった記録が無く、直すなら形を決めてから
 触る場所: `src/core/journal-file.ts`（`replaceWhole`）、`src/core/unfinished.ts`（`#compact`）、`src/core/redact.ts`、`src/core/ordered-id.ts`、`src/core/clock.ts`、`src/core/file-lock.ts`（`skewOf`）
+
+## 2026-10-06  44 回目の不具合調査の 5 件（用意と押す前の確かめ: Z: の node.bin・bootstrap の版・二重起動・無い番号の案内・smoke の記録・main と同じときの飛ばし方）
+
+`installer/` と `scripts/` を、読むだけの調査で見た分。数えると 6 つの直しになるが、bootstrap の 3 つ（版・二重起動・案内）は同じファイルの直しなので一件と数えず、見出しは調査の件数で書いた。
+- 社用PCで Z: をインストール先に渡すと、bootstrap は Node を `node.exe` の名前で落として受け取られず、必ず失敗し、しかも「会社のネットワークで塞がれている」と言っていた。
+  `node.bin` の名前で取り、`node.exe` へ写して動かしてみる。動けば .exe を入れ、動かなければ `node.bin` のまま入れる（`--node-name` を bundle に渡す。入口の start.cmd は両方を探す）。
+  `.bin` を動かすために、その cmd.exe の中だけ `PATHEXT` に `.BIN` を足す（start.cmd と同じ）。選ばなかった形: インストール先が C: 以外なら必ず .bin にする（自宅の D: でも .bin になり、見分けの根拠が道の名前になる）
+- bootstrap で入れた版は、いつ入れても `main-bootstrap` で、package の版も取った commit も分からなかった。先に取る commit を API で訊いて、その commit の中身を取り、
+  版は `<package の版>+<commit の 7 字>-bootstrap` にする。API に届かなければ branch のまま取り、版は `+main-bootstrap` にする（訊けなかった commit を名乗らない）。
+  bundle は `+` で始まる `--version` を package の版に足す（`stampedVersion`）
+- 二度ダブルクリックすると、後の回が先の回の作業フォルダを途中で消していた。隣に錠のフォルダを `mkdir` で取り（在れば失敗する）、取れなければ何も消さずに止まる。
+  途中で窓を閉じると錠が残るので、そのときの案内に「中身の無いフォルダで、消しても何も失わない」と添えて道を出す
+- 試験が落ちたときに、入口に無い 6 番を案内していた。4 番（動くか確かめる）を案内し、試験の前に「数分かかります」と言う
+- 入口の 4 番（`smoke.mjs`）が、利用者の記録に「1+1=」の会話を足していた。記録のフォルダ（AAS_STATE_DIR）だけを仮のフォルダへ向け、終わったら消す（モデル・設定は本物を読む）。
+  設定が有料の相手なら、送る一回は前と同じく呼び出しになる（短く切ってある）
+- push の手前の「main と同じなら飛ばす」は、直に起こされたかを打たれた道で比べていて、リンク・junction・短い名前の道では一致せず、何もせずに 0 で終わった。
+  フックは 0 を「飛ばす」と読んでいたので、型チェックもテストも回さずに通りえた。判定を `isMain` に替え、飛ばす合図を 10 にした（0 や 1 は確かめる側へ）。`scripts/hooks.mjs` も `isMain` に替えた
+試験は `test/bootstrap-gaps.test.ts`・`test/smoke-isolated.test.ts`・`test/same-as-main.test.ts`（足した 2 件）・`test/home.test.ts`（「用意用が置く場所と、入口が探す場所が同じ」を node.bin も含む形に）。
+直す前の版では、bootstrap の 4 件・smoke・飛ばし方が落ちた。
+確かめていないもの: cmd.exe はここで動かせないので、bootstrap は書いた形を見ているだけで、Windows の実機（Z: を含む）では動かしていない。`.bin` の Node が PATHEXT で動くことも、ここでは確かめていない。
+直していないもの:
+- setup.exe での上書き更新は、前の版で消したファイルを残し、画面を開いたままだと途中まで上書きして止まる（`installer/AdaptiveAIStudio.nsi`）。setup.exe はタグを付けたときにだけ CI で組むので、ここで組んで確かめられない。直すなら、組める回にまとめて
+- Windows 同梱の curl は Windows の proxy 設定を読まない。ブラウザでは届くのに bootstrap だけ落ちる会社がありうる（確かめていない）。そのときの案内が「繋がる機械で組んで持ってくる」になっている。PowerShell で取り直す形にするかは、実機で確かめてから
+触る場所: `installer/bootstrap.cmd`、`scripts/bundle.mjs`（`stampedVersion`）、`scripts/smoke.mjs`、`scripts/same-as-main.mjs`（`SKIP_EXIT`）、`.githooks/pre-push`、`scripts/hooks.mjs`

@@ -578,7 +578,13 @@ describe('同梱した Node の置き場所', () => {
 
   test('用意用が置く場所と、入口が探す場所が同じ', sourceOnly, async () => {
     const boot = cmd(await readFile(join(installRoot(), 'installer', 'bootstrap.cmd')));
-    assert.match(boot, /%DEST%\\runtime\\node\.exe/, '確かめる場所がずれている');
+    const start = cmd(await readFile(join(installRoot(), 'start.cmd')));
+    assert.match(boot, /%DEST%\\runtime\\%NODENAME%/, '確かめる場所がずれている');
+    assert.match(boot, /--node-name %NODENAME%/, '入れる名前を bundle に渡していない');
+    // Z: は .exe を名前で落とすので、node.bin でも入れる。入れうる名前は、どれも入口が探す名前であること
+    const names = [...boot.matchAll(/set "NODENAME=([^"]+)"/g)].map((m) => m[1]!);
+    assert.deepEqual([...new Set(names)].sort(), ['node.bin', 'node.exe']);
+    for (const n of names) assert.ok(start.includes(`%UP%\\runtime\\${n}`), `入口が runtime\\${n} を探さない`);
     assert.match(boot, /%DEST%\\app\\scripts\\/, '中身の場所がずれている');
   });
 });

@@ -295,6 +295,12 @@ export function guessVersion(srcRoot) {
   }
 }
 
+/** 焼き込む版。渡さなければ推し量る。`+` で始まるものは package.json の版に足す（`+abc1234-bootstrap` → `0.12.1+abc1234-bootstrap`）。 */
+export function stampedVersion(given, srcRoot) {
+  if (given === undefined) return guessVersion(srcRoot);
+  return given.startsWith('+') ? `${pkgVersion(srcRoot)}${given}` : given;
+}
+
 const VALUE_FLAGS = ['--out', '--node-zip', '--node-exe', '--node-name', '--target', '--src', '--version'];
 const SWITCHES = ['--node-here', '--keep-data'];
 
@@ -576,7 +582,8 @@ export async function bundle({
 
   // 版は独立した1ファイルにする。目印の中に混ぜると、読む側が
   // 目印を解釈しないと版が分からない。VERSION なら誰でも読める。
-  const stamped = version ?? guessVersion(srcRoot);
+  // `+` で始まる版は、package.json の版の後ろに足す（bootstrap.cmd は取った commit だけを知っていて、package の版を読めない）
+  const stamped = stampedVersion(version, srcRoot);
   await writeFile(join(out, 'VERSION'), `${stamped}\r\n`, 'utf8');
   log(`  置いた: VERSION（${stamped}）`);
 

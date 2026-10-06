@@ -14,8 +14,7 @@
  *   ・手元に `<remote>/main` が無い（比べる相手が無い）
  */
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import { resolve } from 'node:path';
+import { isMain } from './is-main.mjs';
 
 /**
  * 飛ばす理由を返す。飛ばさないなら undefined。
@@ -43,9 +42,13 @@ function treeOf(rev) {
 
 /*
  * フックから: `node scripts/same-as-main.mjs <remote> <other:0|1> <sha>...`
- * 飛ばすなら理由を出して 0、飛ばさないなら 3 で終わる（1 は「止める」に見えるので使わない）。
+ * 飛ばすなら理由を出して 10、飛ばさないなら 3 で終わる（1 は「止める」に見えるので使わない）。
+ * 飛ばす合図を 0 にしない。読み込みで落ちる・直に起こされたと見分けられない、のどちらでも 0 や 1 で終わり、
+ * 0 を「飛ばす」と読むと、型チェックもテストも回さずに push が通る。決めた値のときだけ飛ばし、それ以外は確かめる側に倒す。
  */
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+export const SKIP_EXIT = 10;
+
+if (isMain(import.meta.url)) {
   const [remote = 'origin', other = '0', ...shas] = process.argv.slice(2);
   const trees = shas.map(treeOf);
   const why = trees.every(Boolean)
@@ -53,7 +56,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     : undefined;
   if (why) {
     process.stdout.write(`${why}\n`);
-    process.exit(0);
+    process.exit(SKIP_EXIT);
   }
   process.exit(3);
 }

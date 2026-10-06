@@ -15,8 +15,20 @@
  * 設定が返るか / 会話が作れるか / 送って断られ方が正しいか。
  * **モデルが無くても通る。**無いなら「無い」と言えることを見る。
  */
-import { UiServer } from '../src/ui/server.ts';
-import { loadConfig } from '../src/config.ts';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+/*
+ * **利用者の記録に書かない。**入口の「4 動くか確かめる」を押すたびに「1+1=」の会話が利用者の履歴に増え、
+ * 画面を開いたまま押すと、同じ記録に本体が二つ立っていた。記録のフォルダ（会話・記憶・提案）だけを仮のフォルダへ向け、
+ * 終わったら消す。モデル・llama-server・設定は本物を読む（読むだけ。どれも AAS_STATE_DIR に依らない）。
+ * 本体を読み込む前に向ける（読み込みの途中でフォルダを決めるものがあっても、仮のほうを見るように）。
+ */
+const scratch = await mkdtemp(join(tmpdir(), 'aas-smoke-'));
+process.env.AAS_STATE_DIR = scratch;
+const { UiServer } = await import('../src/ui/server.ts');
+const { loadConfig } = await import('../src/config.ts');
 
 /** 答えを待つ上限。モデルを読むところから始まるので、短くしない。 */
 // CPU で本物を読むと、読み込みだけで数分かかる。待っている間は進み具合を出す。
@@ -183,6 +195,7 @@ try {
   }
 } finally {
   await server.stop().catch(() => undefined);
+  try { await rm(scratch, { recursive: true, force: true }); } catch { /* 消せない仮のフォルダ。temp の中なので、OS の片づけに任せる */ }
 }
 
 console.log(results.join('\n'));
