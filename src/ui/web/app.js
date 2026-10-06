@@ -2342,11 +2342,11 @@ async function restartAndReload(note) {
    * 前は 2.5 秒待って答えがあれば読み直していたが、古い本体は後片づけ（書き出し・モデルを降ろす）に 2 秒を超えることがあり、
    * 止まる途中の古い本体から読み直して「接続できません」や空の画面になった
    */
-  const before = await fetch('/api/info', { cache: 'no-store' }).then((x) => x.json()).then((j) => j.pid).catch(() => undefined);
+  const before = await getJson('/api/info', { cache: 'no-store' }).then((j) => j.pid).catch(() => undefined);
   let wentDown = false;
   for (let i = 0; i < 90; i++) {
     await new Promise((res) => setTimeout(res, 1000));
-    const info = await fetch('/api/info', { cache: 'no-store' }).then((x) => (x.ok ? x.json() : undefined)).catch(() => undefined);
+    const info = await getJson('/api/info', { cache: 'no-store' }).catch(() => undefined);
     if (!info) { wentDown = true; continue; }
     if (wentDown || (before !== undefined && info.pid !== undefined && info.pid !== before)) { location.reload(); return; }
   }
