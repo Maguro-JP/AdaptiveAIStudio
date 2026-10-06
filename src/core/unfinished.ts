@@ -228,7 +228,10 @@ export class UnfinishedWork {
    * 新しい作業場で続けない（別のプロジェクトのファイルを、その依頼のつもりで書き換える）。
    */
   async due(now = Date.now(), root?: string): Promise<Unfinished | undefined> {
-    return (await this.list()).find((u) => u.nextAt <= now && (root === undefined || u.root === undefined || u.root === root));
+    // 待ちの上限より先の時刻は、進んでいた時計で書いたもの。今として見る（戻った時計の分だけ再開が遅れていた）
+    const latest = now + BACKOFF_MS.at(-1)!;
+    return (await this.list()).find((u) => (u.nextAt <= now || u.nextAt > latest)
+      && (root === undefined || u.root === undefined || u.root === root));
   }
 
   /**

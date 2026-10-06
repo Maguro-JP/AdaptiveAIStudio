@@ -389,7 +389,8 @@ async function main(): Promise<void> {
    * 待機中の思考。何を考えるかは核の中のスケジューラが決める。
    * ここは選ばれた結果を端末に描くだけ。
    */
-  const think = async (): Promise<boolean> => {
+  // `explicit`: `/think` と打たれた。断られたら理由を出す（待機中に自分から考えるときは黙る）
+  const think = async (explicit = false): Promise<boolean> => {
     const session = await getSession();
     session.markChanged(lastChangeAt);
     let acted = false;
@@ -405,6 +406,8 @@ async function main(): Promise<void> {
         if (ev.type === 'chose') {
           if (ev.isDuty) process.stderr.write(c.dim(`\n  ${ev.reason}\n`));
           process.stderr.write(c.dim(`\n  [${ev.codename}] ${ev.name} — ${ev.roleCodename}\n`));
+        } else if (ev.type === 'declined') {
+          if (explicit) process.stderr.write(c.yellow(`  考えませんでした: ${ev.reason}\n`));
         } else if (ev.type === 'noFinding') {
           process.stderr.write(c.dim('    → 報告することはありませんでした\n'));
         } else if (ev.type === 'failed') {
@@ -465,7 +468,8 @@ async function main(): Promise<void> {
       const answer = initCfg.enabled !== true
         ? await rl.question(c.cyan('依頼> '))
         : await rl.questionWhileIdle(
-            c.cyan('依頼> '), (initCfg.idleSeconds ?? 30) * 1000, think);
+            // 画面と同じ下限（0・負・数でない値で、待機中に空回りしていた）
+            c.cyan('依頼> '), Math.max(5, Number.isFinite(initCfg.idleSeconds) ? initCfg.idleSeconds! : 30) * 1000, () => think());
       if (answer === undefined) break;
       const line = answer.trim();
       if (!line) continue;
@@ -637,7 +641,7 @@ async function main(): Promise<void> {
         console.log(r.ok ? c.green(`  ${r.message}\n`) : c.red(`  ${r.message}\n`));
         continue;
       }
-      if (line === '/think') { await think(); continue; }
+      if (line === '/think') { await think(true); continue; }
       if (line.startsWith('/do ') || line.startsWith('/reject ')) {
         const [cmd, id] = line.split(/\s+/);
         const session = await getSession();

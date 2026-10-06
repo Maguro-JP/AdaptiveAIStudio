@@ -1278,7 +1278,13 @@ export class Session {
     }
 
     // ■で止めたなら、考えごとも続けない（問い合わせだけ止めて、モデルは呼び出す、にしない）
-    if (upkeepStopped) return false;
+    if (upkeepStopped) {
+      // 止めた回も「考えた」と数えて残す（数えずに抜けていたので、間合いが進まず、次の見回りでまた同じ問い合わせを始めた）
+      this.idle.begin(mode, Date.now());
+      await this.saveAutonomy();
+      yield { type: 'failed', codename: mode.codename, reason: '止められました' };
+      return true;
+    }
 
     // RECON だけは手がかりを機械で探してから渡す。
     // 事実の収集は機械の方が速く、確実で、無料。
@@ -1368,6 +1374,8 @@ export class Session {
     // （閉じていたので、小さいモデルが調べ切れなかった手がかりは、ファイルが変わるまで二度と調べられなかった）。
     // 途中まで書いた PROPOSAL も、言い終えていないので提案にしない。3 回で諦める数え方に載せる
     if (broken === undefined && mode.id === 'recon') broken = reconCutShort(finishedWith, finishedDetail, text);
+    // ほかの考えごとでも、出力の上限で切れた回の PROPOSAL は言い終えていない（途中で切れた action を採用で走る依頼にしていた）
+    if (broken === undefined && /上限で切れ/.test(finishedDetail ?? '')) broken = '言い終えませんでした（出力の上限で切れました）';
     if (broken !== undefined) {
       // 手がかりは、同じものが決まって落ちる（長すぎて断られる等）と、先へ進めなくなる。3 回落ちたら調べたことにして次へ進む
       if (mode.id === 'recon') {

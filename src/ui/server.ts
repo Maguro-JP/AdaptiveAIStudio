@@ -3785,6 +3785,8 @@ export class UiServer {
         // 回数は数えない（数えると、読めないだけで諦める方へ進む）。次の見回りでまた試す
         this.broadcast({ type: 'log', level: 'warn', text: `やり残しの会話の記録を読めないので、今回は続けません（${loaded.message}）` });
         this.#resuming = undefined;
+        // 後ろへ回す（回さないと、見回りのたびに同じ一件を選び、後ろのやり残しも考えごとも回らなかった）
+        await this.#unfinished.postpone(item.id).catch(() => undefined);
         return 'settled';
       }
       // 見ている会話（`#conversationId`）は替えない。替えていたので、画面が黙って再開した会話へ移り、次に打った分もそちらへ入った
@@ -3847,9 +3849,11 @@ export class UiServer {
 
     // 段取りの記録を読めないときは、今回は進めない。「無い」と取り違えると、立て直して二つ目を作る・
     // 残っている段を「無い」と読んで閉じ、やり残しを「済んだ」にする（下の next）。
-    const unreadable = (e: unknown): 'settled' => {
+    const unreadable = async (e: unknown): Promise<'settled'> => {
       this.broadcast({ type: 'log', level: 'warn', text: `段取りの記録を読めませんでした（${(e as Error).message}）。今回は進めません` });
       this.#resuming = undefined;
+      // 後ろへ回す（同じ一件で見回りが止まり続けないように。回数は数えない）
+      await this.#unfinished.postpone(item.id).catch(() => undefined);
       return 'settled';
     };
     let goal: Goal | undefined;
