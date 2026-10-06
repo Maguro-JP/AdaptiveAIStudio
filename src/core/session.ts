@@ -763,6 +763,8 @@ export class Session {
       await take?.().catch(() => undefined);
     };
 
+    // 確かめのコマンド。落ちた回の後始末（catch）でも使うので、外に置く
+    let planCommand: string | undefined;
     try {
       const root = this.root;
       const verifyCfg = this.config.agent?.verify ?? {};
@@ -772,6 +774,7 @@ export class Session {
       const dirtyBefore = gitBefore.kind === 'dirty' ? gitBefore.changed : [];
 
       const command = await this.verifyCommand();
+      planCommand = command;
       // ベースラインは切り分けのためだけのもの。切っても作業後の検査は残す。
       const probed = command && verifyCfg.baseline !== false
         ? await this.measureBaseline(command, ac.signal)
@@ -1088,6 +1091,10 @@ export class Session {
       if (stopped()) {
         this.#harness.endTask('failed');
         await this.#harness.metrics?.save();
+        // 止めた回の後始末: 覚えている作業前の姿は、書いた後の姿と違うかもしれないので忘れる（次の依頼が、この回の残した失敗を
+        // 「元から」として受け取った）。呼び戻した覚えの記録も捨てる（次の回の合否で点が付いた）
+        if (command) this.baselineProbe.invalidate(command);
+        this.#conv.recalledIds = [];
         this.markChanged();
         return report;
       }
@@ -1128,9 +1135,14 @@ export class Session {
     } catch (e) {
       this.#harness.endTask('failed');
       await this.#harness.metrics?.save();
+      // 落ちた回も、止めた回と同じ後始末をする
+      if (planCommand) this.baselineProbe.invalidate(planCommand);
+      this.#conv.recalledIds = [];
       yield { type: 'log', level: 'error', text: (e as Error).message };
       return undefined;
     } finally {
+      // 段取りが書き換えた・巻き戻した分を、次の依頼の作業場の様子に古いまま載せない（送り口は毎回捨てている）
+      this.#prefetch.invalidate();
       // 担当の途中で落ちた・止めた回も、そこまでに外のツールが変えた分を戻せるように。
       await takeOutside();
       await this.#closeUndo();
@@ -1432,9 +1444,12 @@ export class Session {
     // 決まった提案は決め直さない（片づいた提案を開き直して、もう一度実行していた）。ファイルを読み直して、
     // もう一方（画面と端末）が決めた分も見てから決める。
     // 別の作業場の提案は、ここでは決めない（採用すると、この作業場でその手順が走る）
+    // 作業場は、ファイルを読み直した**後**の中身で確かめる（手元に無い提案（もう一方が後から足した分）は確かめを素通りし、
+    // 別の作業場の提案を決めて、その手順をこの作業場で走らせた）
+    const key = placeKey(this.root);
     const found = this.proposals.find(id);
-    if (found && !proposalHere(found, placeKey(this.root))) return undefined;
-    const target = await this.proposals.settle(id, verdict, { onlyOpen: true });
+    if (found && !proposalHere(found, key)) return undefined;
+    const target = await this.proposals.settle(id, verdict, { onlyOpen: true, where: (p) => proposalHere(p, key) });
     if (!target) return undefined;
     const origin = target.origin ?? this.#origin.get(target.id);
     if (origin) this.idle.recordVerdict(origin, verdict);
@@ -2097,7 +2112,8 @@ export class Session {
           if (verifiedLast) this.baselineProbe.note(command, verifiedLast);
           // 打ち切ったのに終わりの姿が分からない（止めた・時間切れ）なら、測った時点の姿も忘れる。
           // 残したままだと、次の回の外のツールに、この回が残した失敗を着せる。
-          else if (!keep || lastTimedOut) this.baselineProbe.invalidate(command);
+          // 書いたのに確かめずに終わった回（止めた・上限・モデルの不調）も忘れる（確かめの分岐を通らないので、書く前の姿が残った）
+          else if (!keep || lastTimedOut || wroteSomething) this.baselineProbe.invalidate(command);
         }
       }
 

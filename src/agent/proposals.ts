@@ -289,11 +289,14 @@ export class ProposalQueue {
    * 手元だけを見て決めていたので、もう一方（画面と端末）が決めた提案を、古い手元がもう一度決められた
    * （却下された提案をそのまま実行した）。`onlyOpen` のときは、開いている提案だけを決める。
    */
-  settle(id: string, status: ProposalStatus, opts: { onlyOpen?: boolean } = {}): Promise<Proposal | undefined> {
+  settle(
+    id: string, status: ProposalStatus,
+    opts: { onlyOpen?: boolean; where?: (p: Proposal) => boolean } = {},
+  ): Promise<Proposal | undefined> {
     const path = this.#path;
     if (!path) {
       const item = this.find(id);
-      if (!item || (opts.onlyOpen && item.status !== 'open')) return Promise.resolve(undefined);
+      if (!item || (opts.onlyOpen && item.status !== 'open') || (opts.where && !opts.where(item))) return Promise.resolve(undefined);
       return Promise.resolve(this.setStatus(item.id, status));
     }
     // 読み直してから付け替えるまで、ほかのプロセス（画面と端末）とも一つずつにする。前は同じプロセスの中だけ並べていたので、
@@ -306,7 +309,8 @@ export class ProposalQueue {
       }
       this.#merge(disk);
       const item = this.find(id);
-      if (!item || (opts.onlyOpen && item.status !== 'open')) return undefined;
+      // 読み直した後の中身で条件を見る（呼ぶ側の手元に無かった提案にも効かせる）
+      if (!item || (opts.onlyOpen && item.status !== 'open') || (opts.where && !opts.where(item))) return undefined;
       const before = item.status;
       const wasChanged = this.#changed.has(item.id);
       this.setStatus(item.id, status);
