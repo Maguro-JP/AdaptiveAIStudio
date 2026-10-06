@@ -201,6 +201,12 @@ export class IdleScheduler {
    * 次に何を考えるかを選ぶ。
    * 選ばない判断も結果のうちなので、必ず理由を返す。
    */
+  #clampToNow(now: number): void {
+    if (this.#lastThoughtAt !== undefined && this.#lastThoughtAt > now) this.#lastThoughtAt = now;
+    for (const stat of this.#stats.values()) if (stat.lastRunAt !== undefined && stat.lastRunAt > now) stat.lastRunAt = now;
+    for (const s of this.#spending) if (s.at > now) s.at = now;
+  }
+
   async choose(
     ctx: Omit<IdleContext, 'lastRunAt'>,
     /**
@@ -210,6 +216,12 @@ export class IdleScheduler {
      */
     dueDuties: Array<{ dutyId: string; modeId: string; codename: string; isCatchUp: boolean }> = [],
   ): Promise<Decision> {
+    /*
+     * 時計が戻った（進んでいた時計を NTP が直した）とき、前の時刻が「今」より先に残る。差が負になると間合いも冷やしも明けず、
+     * 時計が追いつくまで（何時間でも）考えも日課も止まっていた。読み込むときだけ揃えていたので、動いている間は効かなかった。
+     * 「今」より先の時刻は、今に揃える
+     */
+    this.#clampToNow(ctx.now);
     const spent = this.spentThisHour(ctx.now);
     if (spent >= this.#budget.perHour) {
       return { reason: `この1時間の予算を使い切りました（${spent}/${this.#budget.perHour}）` };

@@ -11,7 +11,8 @@ import type { ToolCall } from '../providers/contract.ts';
 import type { Tool, ToolContext, ToolResult } from '../agent/tools/types.ts';
 import { type Rule, type RuleContext, hasArg } from './rules.ts';
 import { AuditLog } from './audit.ts';
-import { fingerprint, markSeen, lastPrint, markFailedWrite } from './seen.ts';
+import { fingerprint, markSeen, lastPrint, markFailedWrite, markNotWritten } from './seen.ts';
+import { isWriteTool } from '../agent/tools/write-kind.ts';
 import type { HarnessMetrics } from './metrics.ts';
 
 export interface HarnessOptions {
@@ -158,6 +159,7 @@ export class Harness {
           keep(call);
           // やり直しを求めた失敗（待つ間に変わった・掴まれていた）は、同じ内容の繰り返しに数えない。断られた・当たらなかったは数え続ける
           if (result.isError && RETRYABLE_WRITE.test(result.content)) markFailedWrite(call);
+          if (result.isError && isWriteTool(call.name)) markNotWritten(call);
         } else if (result.content.includes('は二進のファイルなので読めません')) keep(call);
         else if (result.content.includes('ファイルが大きすぎます')) {
           keep({ ...call, args: { ...(args as Record<string, unknown>), limit: 0 } });

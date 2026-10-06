@@ -343,6 +343,7 @@
 - 39 回目の不具合調査の 5 件（CLI の対話: Ctrl-C が依頼に届く・閉じるときの判じ手・/exit の時計・知らない命令・報告の上書き）
 - 40 回目の不具合調査の 4 件（先読み: 見に行かない場所と .gitignore・作業場ごとの本文・GGUF の数え方の覚え方・__proto__ のモデル）
 - 試験の仮の作業場が積もってディスクが一杯になった（handoff の一時的な index・mention の直の mkdtemp）
+- 41 回目の不具合調査の 5 件（ハーネス: 失敗した書き込みの数え方・持ち出しのチェックの形・守りの一覧の書き方・時計が戻ったとき）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -12430,3 +12431,28 @@ CLI の対話の入口（`src/cli/agent.ts`・`input.ts`・`report-file.ts` ほ�
 直していないもの:
 - 打ち切られた走行（時間切れ・止めた確かめ）の置き土産は消えない（`tmp.ts` の前からの断り）。溜まったら `find /tmp -maxdepth 1 -name 'aas-*' -mmin +60` で見て消す
 触る場所: `scripts/handoff.mjs`、`test/tmp.ts`、`test/tmp-hygiene.test.ts`
+
+## 2026-10-06  41 回目の不具合調査の 5 件（ハーネス: 失敗した書き込みの数え方・持ち出しのチェックの形・守りの一覧の書き方・時計が戻ったとき）
+
+ハーネス（`src/harness/`）の規則と見回りを、読むだけの調査で見た分。
+- 失敗した write_file（承認を待つ間に誰かが同じ名前で作った、断られた）も「前に書いた」と数えていたので、その後に作られたファイルを読まずに全文で
+  上書きさせていた。何も書かずに終わった書き込みに印を付け（`seen.ts` の `markNotWritten`）、「読んだ」にも数えない。見た中身の指紋が無いとき
+  （読んでいる間に替わった）は、通さずに読み直させる
+- 断られた・失敗した書き込みも、書き換えた件数（`blastRadius`）と協議の広さ（`requiresDeliberation`）に数えていた。同じ印で外す
+- 持ち出しのチェックが、`~/.aws/credentials` の小文字の書き方・`export` の付いた書き方・JSON の書き方、GitHub の `ghs_` `ghu_` `ghr_`、
+  暗号化した秘密鍵を通していた。広げた分（小文字・引用符・`:`）は、値が行末までの長い文字そのもののときだけ止める
+  （`github_token = os.environ[...]` や CI の `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` は止めない）
+- 守りの一覧に `secrets/`（フォルダのつもり）や `/config/**`（作業場の根のつもり）と書くと、照らす道に頭と末尾の `/` が付かないので何にも当たらず、
+  黙って何も守っていなかった。読むときに揃える（`protectedPattern`）。末尾の `/` は中身全部、頭の `/`・`./` は外す
+- 時計が戻ったとき（進んでいた時計を NTP が直した）、前の時刻が「今」より先に残り、時計が追いつくまで考えごとも日課も止まっていた。
+  選ぶたびに「今」より先の時刻を今に揃える
+試験は `test/harness-rules-gaps.test.ts`（直す前の版では 10 件落ちた。止めないことを見る 3 件は前から通る）。
+直していないもの:
+- 作業場全体を戻す git の命令は、`.`・`./`・`*`・`:/`・`:(top)` の綴りだけを見る。絶対の道や `src/..` で作業場の根を指す形、フォルダ一つを丸ごと戻す形、
+  `git stash drop`・`git branch -D` は通る。指す先を作業場の根から解いて比べる形と、フォルダ一つを止めるかを決めてから
+- Windows で名前の末尾の空白や `::$DATA` を付けた試験ファイル・守りの仕掛けの名前を、試験の守りと協議は Windows が読む名前に揃えずに見る（守りの一覧は揃える）。
+  Windows で確かめていない
+- 規則が投げたときの断りが、監査の記録と数に残らない。`recordDenial` を `beginTask` の無い鍵で呼ぶと、閉じない入れ物が残る
+- `everyHours` の区切りは UTC の 0 時から数える（JST の 0 時ではない）。一時間の予算は起動し直すと戻る
+触る場所: `src/harness/seen.ts`（`markNotWritten`・`wroteNothing`）、`src/harness/harness.ts`、`src/harness/builtin-rules.ts`（`readBeforeWrite`・`blastRadius`・`protectedPattern`）、
+`src/harness/deliberation.ts`（`countWritten`）、`src/harness/gate.ts`（`OUTBOUND`）、`src/harness/idle.ts`（`#clampToNow`）

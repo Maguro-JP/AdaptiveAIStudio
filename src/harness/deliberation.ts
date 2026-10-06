@@ -12,6 +12,7 @@
  * 出せたなら通す。判断を奪うのではなく、判断を残させるための関所。
  */
 import { isWriteTool } from '../agent/tools/write-kind.ts';
+import { wroteNothing } from './seen.ts';
 import { minimatch } from './glob.ts';
 import { canonicalRel } from '../agent/tools/paths.ts';
 import { normalize } from './builtin-rules.ts';
@@ -169,7 +170,8 @@ export function requiresDeliberation(opts: DeliberationOptions): Rule {
 function countWritten(history: readonly ToolCall[], key: (path: string) => string): Set<string> {
   const s = new Set<string>();
   for (const c of history) {
-    if (!isWriteTool(c.name)) continue;
+    // 何も書かずに終わったもの（断られた・失敗した）は数えない（断った書き込みで協議を求めるようになっていた）
+    if (!isWriteTool(c.name) || wroteNothing(c)) continue;
     const p = argString(c, 'path');
     if (p) s.add(key(p));
   }

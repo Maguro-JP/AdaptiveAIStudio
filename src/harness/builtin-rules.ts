@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import { minimatch } from './glob.ts';
 import { safeResolve, canonicalRel } from '../agent/tools/paths.ts';
 import { isAbsent, readRegularText } from './put-back.ts';
-import { fingerprint, lastPrint, isFailedWrite } from './seen.ts';
+import { fingerprint, lastPrint, isFailedWrite, wroteNothing } from './seen.ts';
 import { isTestFile, countCases, countSkips, countFocus } from '../agent/test-patterns.ts';
 import { type Rule, type RuleContext, allow, deny, ok, argString, hasArg } from './rules.ts';
 import type { ToolCall } from '../providers/contract.ts';
@@ -50,7 +50,20 @@ export async function matchProtected(
  * 触ってはいけないファイルを守る。
  * 「.env を読んで直す」のような、善意で始まる事故を止める。
  */
-export function protectedPaths(patterns: string[], opts: { nocase?: boolean; windows?: boolean } = {}): Rule {
+/**
+ * 書いた人の意図する形に揃える。照らす道は作業場からの相対で、頭にも末尾にも `/` が付かないので、`secrets/`（フォルダのつもり）や
+ * `/config/**`（作業場の根のつもり）は何にも当たらず、黙って何も守っていなかった。頭の `/`・`./` は外し、末尾の `/` は中身全部（`/**`）にする
+ */
+export function protectedPattern(pattern: string): string {
+  let p = pattern.trim().split('\\').join('/');
+  while (p.startsWith('./')) p = p.slice(2);
+  while (p.startsWith('/')) p = p.slice(1);
+  if (p.endsWith('/')) p = `${p}**`;
+  return p;
+}
+
+export function protectedPaths(given: string[], opts: { nocase?: boolean; windows?: boolean } = {}): Rule {
+  const patterns = given.map(protectedPattern).filter((p) => p.length > 0);
   // Windows は名前の末尾の点・空白を落とし、`:` から後ろを流れ（ADS）の名前として読む。`.env `・`id.pem.`・`.env::$DATA` は
   // `.env` や `id.pem` に書かれるのに、綴りのまま照らしていたので当たらなかった。照らす前に、Windows が読む名前に揃える
   const name = opts.windows ? windowsName : (p: string): string => p;
@@ -239,7 +252,8 @@ export function blastRadius(maxFiles: number): Rule {
       // 依頼全体で数える（段取りで並べた担当の分も。担当ごとに数えると、担当の数だけ上限が増える）
       const written = new Set(
         (ctx.taskHistory ?? ctx.history)
-          .filter((c) => isWriteTool(c.name))
+          // 何も書かずに終わったもの（断られた・失敗した）は、書き換えた件数に数えない
+          .filter((c) => isWriteTool(c.name) && !wroteNothing(c))
           .map((c) => argString(c, 'path'))
           .filter((p): p is string => !!p)
           .map((p) => normalize(ctx.root, p)),
@@ -307,12 +321,15 @@ export const readBeforeWrite: Rule = {
     const sawIt = ctx.history.some((c) =>
       (c.name === 'read_file' && same(c)
         && !(wholeNeeded && partial(c)))
-      || (isWriteTool(c.name) && same(c) && (!wholeNeeded || c.name === 'write_file')));
+      || (isWriteTool(c.name) && !wroteNothing(c) && same(c) && (!wholeNeeded || c.name === 'write_file')));
     if (sawIt) {
       if (!wholeNeeded) return allow; // edit_file は当てる所が見つからなければ失敗するので、古い中身で消すことは無い
       // 最後に読んだ・書いたときから中身が替わっていれば、読み直させる（別の担当や run_command の変更を、古い中身で消さない）
       const was = lastPrint(ctx.history, ctx.root, path);
-      if (was === undefined) return allow;
+      // 見た中身の指紋が無い（読んでいる間に替わった・大きすぎて指紋を取れなかった）。見た中身が分からないので、読み直させる
+      if (was === undefined) {
+        return deny(`${path} を読んだときの中身を確かめられません（読んでいる間に替わった可能性があります）。read_file で読み直してから書いてください。`);
+      }
       const now = await fingerprint(ctx.root, path);
       if (now === was) return allow;
       if (now === undefined) {
