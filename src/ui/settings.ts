@@ -8,9 +8,9 @@
 import { readFile, stat, mkdir } from 'node:fs/promises';
 import { writeWhole } from '../core/journal-file.ts';
 import { inOrder } from '../core/in-order.ts';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { configPath } from '../config.ts';
-import { modelsDir } from '../core/home.ts';
+import { modelsDir, modelsDir as defaultModelsDir } from '../core/home.ts';
 import { isAbsent } from '../harness/put-back.ts';
 
 /**
@@ -121,7 +121,9 @@ export async function saveRuntime(
 ): Promise<string> {
   return editConfig((current, at) => {
     const runtime: Record<string, unknown> = { ...objectOr(current.runtime), kind };
-    if (modelsDir) runtime.modelsDir = modelsDir;
+    // 既定の保存先と同じ道は書かない（消す）。画面は既定の道を絶対の道で見せてそのまま送り返すので、書くと既定が固定され、
+    // portable のフォルダを移す・名前を変えると、古い場所を指したまま「GGUF がありません」になっていた（AAS_MODELS_DIR で立てた値も同じ）
+    if (modelsDir && !sameDir(modelsDir, defaultModelsDir())) runtime.modelsDir = modelsDir;
     else delete runtime.modelsDir;
     if (model !== undefined) {
       if (model) runtime.model = model;
@@ -129,6 +131,25 @@ export async function saveRuntime(
     }
     return { next: { ...current, runtime }, result: at };
   });
+}
+
+/** 二つの道が同じ場所を指すか（区切りと末尾の区切りの違い、Windows では大小の違いを見ない）。中身は見ない。 */
+export function sameDir(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
+  const norm = (p: string) => {
+    const r = resolve(p.trim());
+    return platform === 'win32' ? r.toLowerCase() : r;
+  };
+  return norm(a) === norm(b);
+}
+
+/**
+ * 貼った道の前後の引用符を外す。Windows の「パスのコピー」は `"C:\Users\me\proj"` の形で取るので、そのまま保存すると
+ * 引用符ごと道になり、「そこは見つかりません」の原因が分からなかった（作業場の「無ければ作る」では、引用符で始まる名前のフォルダを作った）
+ */
+export function unquotePath(p: string): string {
+  const t = p.trim();
+  const m = /^(["'])(.*)\1$/s.exec(t);
+  return m ? m[2]!.trim() : t;
 }
 
 /** 置き場そのものの状態。語形の変わらない符丁で返し、表示のときに引き直す。 */

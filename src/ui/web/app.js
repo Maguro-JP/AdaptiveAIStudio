@@ -543,7 +543,8 @@ $('editTheme').onclick = () => {
     }
     const r = await askJson('/api/theme', {
       method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...draft, base: before.id, id: 'custom', name: '自分の色' }),
+      // 元の見た目は、自分の色を直すときも最初の見た目（`custom` を元にすると「知らない見た目」になる）
+      body: JSON.stringify({ ...draft, base: before.base ?? before.id, id: 'custom', name: '自分の色' }),
     }, '色を保存できませんでした');
     if (!saved(r, 'theme', '色を保存できませんでした')) return;
     applyTheme(r.theme, r.vars);

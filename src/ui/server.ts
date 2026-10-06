@@ -75,7 +75,7 @@ import { listenOrExplain } from '../core/listen.ts';
 import { crossSiteReason } from './origin.ts';
 import {
   RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
-  inspectModelsDir, ensureDefaultModelsDir, savedModelsDir,
+  inspectModelsDir, ensureDefaultModelsDir, savedModelsDir, unquotePath,
 } from './settings.ts';
 import {
   listGguf, chooseModel, tooBigForRam, looksLikeGguf, freePortFrom, INPROC_PORT, headsUp, CHOICE_WHY,
@@ -3113,7 +3113,7 @@ export class UiServer {
     if (!touchesRuntime && typeof body?.workRoot !== 'string') {
       return send(res, 400, { error: '何を変えるのか分かりません' });
     }
-    const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
+    const dir = typeof body?.modelsDir === 'string' ? unquotePath(body.modelsDir) : '';
     // 使う GGUF。名前に道を混ぜさせない（保存先の中の名前だけ）。
     const model = typeof body?.model === 'string' ? body.model.trim() : undefined;
     if (model && /[\\/]/.test(model)) return send(res, 400, { error: 'モデルは保存先の中の名前で指定してください' });
@@ -3132,7 +3132,7 @@ export class UiServer {
     let workNote: string | undefined;
     let workRestart = false;
     if (typeof body?.workRoot === 'string') {
-      const want = body.workRoot.trim();
+      const want = unquotePath(body.workRoot);
       const before = this.#workRoot();
       await saveWorkRoot(want);
       if (want) {

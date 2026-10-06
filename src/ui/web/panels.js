@@ -560,6 +560,12 @@ export const PANELS = {
       add(asked);
 
       const ids = [...attached.keys()];
+      // 断られたときに戻すための写し。前は送る前に空にしたまま戻さず、打った文だけが欄に残り、送り直すと添付なしで届いていた
+      const held = [...attached.entries()];
+      const putBack = () => {
+        for (const [id, item] of held) if (!attached.has(id)) attached.set(id, item);
+        drawTray();
+      };
       attached.clear();
       drawTray();
 
@@ -595,6 +601,7 @@ export const PANELS = {
         });
       } catch (e) {
         ctx.adopt?.(null);
+        putBack();
         note('bad', `送れませんでした（${e?.message ?? e}）。`
           + '本体が落ちているかもしれません。画面を開き直してください。');
         return;
@@ -607,7 +614,10 @@ export const PANELS = {
       ctx.adopt?.(from === null ? (body.conversationId ?? null) : null);
       // 見ていた会話が、別のタブで消されていた。トップへ戻す（送るたびに断られ続けないため）
       if (r.status === 404 && from !== null) ctx.conversationGone?.(from);
-      if (!r.ok) note('bad', body.error ?? `送れませんでした（${r.status}）`);
+      if (!r.ok) {
+        putBack();
+        note('bad', body.error ?? `送れませんでした（${r.status}）`);
+      }
     };
 
     form.onsubmit = (e) => { e.preventDefault(); void submit(); };
