@@ -214,6 +214,9 @@ async function main(): Promise<void> {
     if (closed && closed.unrecorded.length > 0) {
       console.log(c.yellow(`前の中身を記録できず、戻せないファイル: ${closed.unrecorded.join(', ')}`));
     }
+    if (closed?.elsewhere) {
+      console.log(c.yellow(`作業の間に、この作業ではないところで変わったファイル（「戻す」には載せていません）: ${closed.elsewhere.join(', ')}`));
+    }
     if (closed?.outsideLost) {
       console.log(c.yellow(`run_command で変わったファイルを調べられませんでした（${closed.outsideLost}）。その分は画面の「戻す」からは戻せません`));
     }

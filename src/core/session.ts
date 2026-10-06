@@ -69,7 +69,7 @@ import { workspaceStamp, stampChanges } from '../agent/workspace-stamp.ts';
 import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
 import { UndoStore, restoreWarnings } from './undo.ts';
-import { OutsideChanges } from '../agent/outside-changes.ts';
+import { OutsideChanges, ToolWindows } from '../agent/outside-changes.ts';
 import { AckStore, type AckId } from './acks.ts';
 import { fitParts } from './prompt-budget.ts';
 import { rerankByBody, rerankShare } from '../agent/rerank.ts';
@@ -828,10 +828,13 @@ export class Session {
 
       /** 段取り全体で呼んだツール（並べた担当の間で一つ）。書ける数の規則がこれで数える。 */
       const planCalls: NonNullable<RequestScope['taskHistory']> = [];
+      // 外のツールが走っている間に変わった道を覚える（終わりの前後比べで、利用者が書いた分を依頼の分と取り違えない。`ToolWindows`）
+      const windows = new ToolWindows(root);
+      const planPool = windows.pool(this.toolPool);
       const team = new Team(this.orchestrator, {
         lanes: this.lanes,
         system: systemFor(this.roles.get(fallbackRoleId)!),
-        tools: toolsFor(this.roles.get(fallbackRoleId)!, this.toolPool),
+        tools: toolsFor(this.roles.get(fallbackRoleId)!, planPool),
         root,
         maxTurns: this.config.agent?.maxTurns,
         temperature: this.config.temperature,
@@ -851,7 +854,7 @@ export class Session {
           if (!role) return undefined;
           // 書ける数は依頼全体で数える（`taskHistory` は担当の間で一つ）
           const scope: RequestScope = { instruction: () => request, history: [], taskHistory: planCalls, forum: this.#forum, metricsKey: () => '' };
-          return { system: systemFor(role), tools: toolsFor(role, this.toolPool), request: scope };
+          return { system: systemFor(role), tools: toolsFor(role, planPool), request: scope };
         },
       });
 
@@ -881,6 +884,14 @@ export class Session {
       let ranOutside = false;
       outsideTaken = async () => {
         const found = await outside.after();
+        // 書くツールが書いたのでも、外のツールが走っている間に変わったのでもない道は、依頼の分として載せない（戻すと利用者の分を消す）
+        const ours = (path: string): boolean => this.undo.has(path) || windows.mayHaveTouched(path);
+        const elsewhere = [...found.changes.map((c) => c.path), ...found.unrecorded].filter((p) => !ours(p));
+        if (elsewhere.length > 0) {
+          this.#opts.onLog?.('warn', `作業の間に、この作業ではないところで変わったファイル（「戻す」には載せていません）: ${elsewhere.sort().join(', ')}`);
+        }
+        found.changes = found.changes.filter((c) => ours(c.path));
+        found.unrecorded = found.unrecorded.filter((p) => ours(p));
         for (const c of found.changes) this.undo.replace(c.path, c.previous);
         /*
          * 前後比べで前の中身を記録できなかった道（上限切れ等）。run_command・外のツールが走った回だけ、書く手前の記録も捨てる

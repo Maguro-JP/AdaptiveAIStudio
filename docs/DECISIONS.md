@@ -344,6 +344,7 @@
 - 40 回目の不具合調査の 4 件（先読み: 見に行かない場所と .gitignore・作業場ごとの本文・GGUF の数え方の覚え方・__proto__ のモデル）
 - 試験の仮の作業場が積もってディスクが一杯になった（handoff の一時的な index・mention の直の mkdtemp）
 - 41 回目の不具合調査の 5 件（ハーネス: 失敗した書き込みの数え方・持ち出しのチェックの形・守りの一覧の書き方・時計が戻ったとき）
+- 段取りと Team の「戻す」に、作業の間に利用者が書いた分を載せない（外のツールが走っている間に変わった道）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -12457,3 +12458,20 @@ CLI の対話の入口（`src/cli/agent.ts`・`input.ts`・`report-file.ts` ほ�
 - `everyHours` の区切りは UTC の 0 時から数える（JST の 0 時ではない）。一時間の予算は起動し直すと戻る
 触る場所: `src/harness/seen.ts`（`markNotWritten`・`wroteNothing`）、`src/harness/harness.ts`、`src/harness/builtin-rules.ts`（`readBeforeWrite`・`blastRadius`・`protectedPattern`）、
 `src/harness/deliberation.ts`（`countWritten`）、`src/harness/gate.ts`（`OUTBOUND`）、`src/harness/idle.ts`（`#clampToNow`）
+
+## 2026-10-06  段取りと Team の「戻す」に、作業の間に利用者が書いた分を載せない（外のツールが走っている間に変わった道）
+
+段取り（`Session.plan`）と Team は、外のツール（`run_command`・MCP）が変えたファイルを、依頼の始めと終わりの前後比べで「戻す」に載せていた。
+その間に利用者が別の画面で保存したファイルも依頼が変えたものとして載り、戻すと利用者の書いた分が消えていた（40 回目の調査で挙がった）。
+- 外のツールを呼ぶたびに前後を比べ、そのツールが走っている間に変わった道を覚える（`ToolWindows`、`src/agent/outside-changes.ts`）。
+  段取りも Team も、外のツールだけを包んだツールの一式を担当に渡す
+- 終わりの前後比べで変わっていても、書くツールが書いた（戻り先に前の中身が在る）のでも、外のツールが走っている間に変わったのでもない道は、
+  依頼が変えたものとして載せない。「この作業ではないところで変わったファイル」として言う（段取りは警告の記録、Team は CLI の出力）
+- 選んだ形: ツールごとの前後比べ。選ばなかった形: 依頼の前後比べのまま、変わった道を全部「よそで変わった」と並べて利用者に選ばせる（毎回の手間が増え、
+  外のツールの分も選ばれないと戻せない）
+- 見分けられないもの: 外のツールが走っている間に利用者が保存した分は、依頼の分として載る。git の管理下でなく比べられないときは、前と同じく全部を依頼の分とみなす
+- 外のツールを呼ぶたびに git の状態を二度取るので、その分だけ遅くなる（送り口 `send` は前からツールごとに比べている）
+- Team の試験（`test/team-wired.test.ts`）で、run_command の代わりに試験の側でファイルを直に書いていた形は、利用者が書いたのと見分けられないので、
+  本物の run_command を通す形に直した
+試験は `test/elsewhere-edits.test.ts`（直す前の版では、Team と段取りの 2 件が落ちた）。
+触る場所: `src/agent/outside-changes.ts`（`ToolWindows`）、`src/core/team-setup.ts`（`finish`）、`src/core/session.ts`（`plan` の `outsideTaken`）、`src/cli/team.ts`
