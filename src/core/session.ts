@@ -2687,7 +2687,9 @@ export class Session {
       // （`covers` のコメント）。検索の点の付け方は、並べるには効くが、
       // 「そのファイルを直している」の判断には使えない。
       const strong = seedFrom(index, conv.instruction, [], this.undo.recent(), { search: false });
-      if (held && held.builtAt === index.builtAt && covers(held.text, index, strong)) return held.text;
+      // 今回の取り分に入るかも見る（ほかの部品が育つ・モデルが替わると、前に詰め切った repo map は超え、落とされたまま使い回し続けた）
+      if (held && held.builtAt === index.builtAt && covers(held.text, index, strong)
+        && (count ?? estimateTokens)(held.text) <= left) return held.text;
 
       // トークンではなく文字で切る（切り出しが文字単位のため）。**多めに数える。**
       const chars = count ? left : left * 2;

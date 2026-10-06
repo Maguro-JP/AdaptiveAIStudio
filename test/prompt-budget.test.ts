@@ -81,7 +81,8 @@ describe('予算は、優先の高い方から渡す', () => {
     // 並びは あ → い だが、優先は い の方が高い。
     await fitParts([spy('あ', 10, 3), spy('い', 90, 4)], 100, count);
     assert.equal(got['い'], 100, '優先の高い方に、まず全部の予算を渡していない');
-    assert.equal(got['あ'], 96, '先に取られた分が、次に渡っていない');
+    // 先に取られた 4 と、間に入る区切り（\n\n）の 2 を引く
+    assert.equal(got['あ'], 94, '先に取られた分が、次に渡っていない');
   });
 
   test('使い切ったら、次には 0 を渡す（切り詰めるのは部品の仕事）', async () => {
@@ -148,7 +149,8 @@ describe('取り過ぎさせない・取り置く', () => {
       { name: 'なか', priority: 50, atLeast: 30, render: () => '' },
       { name: 'あと', priority: 10, render: (l) => { last = l; return ''; } },
     ], 100, count);
-    assert.equal(last, 30, '使わなかった取り置きが、後ろへ回っていない');
+    // 100 - 70 - 区切り 2
+    assert.equal(last, 28, '使わなかった取り置きが、後ろへ回っていない');
   });
 
   test('取り置きは、優先の高い方から順に効く（対）', async () => {
@@ -158,7 +160,7 @@ describe('取り過ぎさせない・取り置く', () => {
       { name: 'に', priority: 50, atLeast: 20, render: (l) => { seen.push(l); return 'x'.repeat(10); } },
       { name: 'さん', priority: 10, atLeast: 30, render: (l) => { seen.push(l); return ''; } },
     ], 100, count);
-    // いち: 100 - (20+30) = 50 / に: 90 - 30 = 60 / さん: 80
-    assert.deepEqual(seen, [50, 60, 80]);
+    // いち: 100 - (20+30) = 50 / に: 90 - 区切り 2 - 30 = 58 / さん: 78 - 区切り 2 = 76
+    assert.deepEqual(seen, [50, 58, 76]);
   });
 });

@@ -12,6 +12,7 @@
  * 直さない。**見て、そのまま貼れる形で出す**だけ。
  */
 import { testsPassed } from './tests-verdict.ts';
+import { llamaLoadVerdict, modelsDirProblem } from './selftest-reasons.ts';
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -104,10 +105,9 @@ try {
       `この機械むけの binary がありません: ${(e as Error).message.slice(0, 160)}`);
   }
 } catch (e) {
-  const code = (e as NodeJS.ErrnoException).code;
   // 「入っていない」と「入っているのに壊れている」は別の話。
-  // 後者を前者の顔で言っていて、bundle の欠けに気づけなかった。
-  if (code === 'ERR_MODULE_NOT_FOUND') {
+  // 後者を前者の顔で言っていて、bundle の欠けに気づけなかった（依存が欠けた形も同じ符号になる。`llamaLoadVerdict`）。
+  if (llamaLoadVerdict(e) === undefined) {
     add('この中で読む', undefined, 'node-llama-cpp が入っていません（setup.exe や portable には入っています）');
   } else {
     add('この中で読む', false,
@@ -163,8 +163,8 @@ try {
     : named.length > 0
       ? `${named.length} 件ありますが、どれも GGUF として読めません（落とし直してください）`
       : `${modelsDir} は空です`);
-} catch {
-  add('モデル', false, `${modelsDir} がありません（npm run models -- --get で取ってきます）`);
+} catch (e) {
+  add('モデル', false, modelsDirProblem(e, modelsDir));
 }
 
 /* ---------- 本当に答えるか（送って返る） ---------- */

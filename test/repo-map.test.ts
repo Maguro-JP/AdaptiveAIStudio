@@ -176,7 +176,8 @@ describe('渡せる形にする', () => {
     const index = await buildIndex(await project());
     const entries = rankedEntries(index);
     const small = renderMap(entries, { chars: 120 });
-    assert.ok(small.length <= 120 + 80, `取り分を大きく超えている: ${small.length}`);
+    // 但し書きも取り分に入れる（後から足すと、システムプロンプトの組み立てで repo map が丸ごと落ちた）
+    assert.ok(small.length <= 120, `取り分を超えている: ${small.length}`);
     assert.match(small, /載せていません/);
   });
 
@@ -307,7 +308,7 @@ describe('前と同じで済むなら、地図を作り直さない', () => {
   test('**載っていない所を指したら、作り直す**', async () => {
     const index = await buildIndex(await project());
     // core.ts だけが載る、狭い地図。
-    const narrow = renderMap(rankedEntries(index, seedFrom(index, 'heartbeat')), { chars: 90 });
+    const narrow = renderMap(rankedEntries(index, seedFrom(index, 'heartbeat')), { chars: 140 });
     assert.doesNotMatch(narrow, /leaf\.ts/);
     assert.equal(covers(narrow, index, seedFrom(index, 'onlyHere を直したい')), false);
   });
@@ -359,7 +360,7 @@ describe('前と同じで済むなら、地図を作り直さない', () => {
     assert.ok((strong.get(at) ?? 0) < 3,
       '薄く当たっただけのものを、言い切れる印として数えている');
     // leaf.ts が載っていない地図でも、作り直しを求めない。
-    const narrow = renderMap(rankedEntries(index, seedFrom(index, 'heartbeat')), { chars: 90 });
+    const narrow = renderMap(rankedEntries(index, seedFrom(index, 'heartbeat')), { chars: 140 });
     assert.doesNotMatch(narrow, /leaf\.ts/);
     assert.equal(covers(narrow, index, strong), true,
       '薄く当たっただけのものを地図に要求している（毎往復かならず作り直す）');

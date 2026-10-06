@@ -107,12 +107,14 @@ export async function fitParts(
      */
     let reserved = 0;
     for (const j of order.slice(k + 1)) reserved += parts[j]!.atLeast ?? 0;
-    let give = Math.max(0, left - reserved);
+    // 既に取った部品があれば、間に入る区切りの分も引く（引いていなかったので、詰め切った回は全体が予算を超え、低い部品が丸ごと落ちた）
+    const glue = text.some(Boolean) ? count(JOIN) : 0;
+    let give = Math.max(0, left - reserved - glue);
     const cap = parts[i]!.atMost;
     if (cap !== undefined) give = Math.min(give, cap);
     const made = await parts[i]!.render(give);
     text[i] = made;
-    left = Math.max(0, left - count(made));
+    left = Math.max(0, left - count(made) - (made ? glue : 0));
   }
 
   // 2〜3. 並べる場所の順に組んで、超えていたら優先の低い方から落とす。
