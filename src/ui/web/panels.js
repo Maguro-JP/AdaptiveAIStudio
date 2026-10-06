@@ -331,10 +331,13 @@ export const PANELS = {
 
     // 落とす。画面のどこに落としても受ける。狙わせない。
     let dragDepth = 0;
-    wrap.ondragenter = (e) => { e.preventDefault(); dragDepth++; wrap.classList.add('dropping'); };
-    wrap.ondragover = (e) => { e.preventDefault(); };
-    wrap.ondragleave = () => { if (--dragDepth <= 0) wrap.classList.remove('dropping'); };
+    // ファイルのときだけ受ける（文字のドラッグまで既定を取り消し、選んだ文字を欄へ落とせなかった。パネルの並べ替えにも落とす見た目が付いた）
+    const carriesFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files') || (e.dataTransfer?.files?.length ?? 0) > 0;
+    wrap.ondragenter = (e) => { if (!carriesFiles(e)) return; e.preventDefault(); dragDepth++; wrap.classList.add('dropping'); };
+    wrap.ondragover = (e) => { if (carriesFiles(e)) e.preventDefault(); };
+    wrap.ondragleave = (e) => { if (carriesFiles(e) && --dragDepth <= 0) wrap.classList.remove('dropping'); };
     wrap.ondrop = (e) => {
+      if (!carriesFiles(e)) return;
       e.preventDefault();
       dragDepth = 0;
       wrap.classList.remove('dropping');
@@ -345,6 +348,8 @@ export const PANELS = {
     input.onpaste = (e) => {
       const files = [...(e.clipboardData?.files ?? [])];
       if (files.length === 0) return; // ただの文字。そのまま貼らせる
+      // 文字も一緒に来ていれば、文字として貼る（Excel や Word から写すと絵も付いてきて、表の文字が絵の添付になっていた。実機では確かめていない）
+      if (e.clipboardData?.getData?.('text/plain')) return;
       e.preventDefault();
       void take(files);
     };
@@ -569,7 +574,8 @@ export const PANELS = {
       attached.clear();
       drawTray();
 
-      const isPlan = text.startsWith('/plan');
+      // `/plan` そのものだけ（前方一致だと `/planner` の skill や打ち間違いの `/plans` まで段取りへ送り、頭を削っていた。端末の側と同じ）
+      const isPlan = /^\/plan(\s|$)/.test(text);
       /*
        * **送れなかったことを、画面に出す。**
        *
@@ -684,6 +690,8 @@ export const PANELS = {
       }
       try {
         const body = await getJson(`/api/conversations/messages?id=${encodeURIComponent(id)}`);
+        // 取っている間に別の会話を選んでいたら描かない（遅れて返った前の会話の中身で、選んだ会話の欄を上書きしていた）
+        if (ctx.conversationId?.() !== id) return;
         if (body.messages?.length) ctx.showHistory(body.messages);
         if (body.inFlight) ctx.showInFlight?.(body.inFlight);
         // 待っている承認。押す口が無いと、本体は 10 分待ち続ける。
@@ -1220,10 +1228,12 @@ export const PANELS = {
 
     draw();
     ctx.on('jobs', (e) => { jobs = Array.isArray(e.jobs) ? e.jobs : []; draw(); });
+    const myGen = ctx.gen?.();
     const tick = setInterval(() => {
-      // 外された（描き直しで捨てられた）パネルの時計を、回し続けない。
-      if (!body.isConnected) { clearInterval(tick); return; }
-      if (jobs.some((j) => j.state === 'running')) draw();
+      // 描き直しで捨てられたパネルの時計を、回し続けない。捨てられたかは世代で見る（タブの中に隠れた中身も DOM から外れるので、
+      // 外れたかで止めると、隠れていたパネルの「経過」はタブを開いても二度と動かなかった）
+      if (ctx.gen ? ctx.gen() !== myGen : !body.isConnected) { clearInterval(tick); return; }
+      if (body.isConnected && jobs.some((j) => j.state === 'running')) draw();
     }, 1000);
     (async () => {
       try {
@@ -1388,10 +1398,13 @@ export const PANELS = {
         const drop = el('button', 'ghost tiny', '忘れる');
         drop.title = 'この覚えを消す';
         drop.onclick = async () => {
+          // 返事が来るまで押させない（二本目は見つからずに断られ、忘れたのに「消せませんでした」と出た）
+          if (drop.disabled) return;
+          drop.disabled = true;
           try {
             const r = await fetch(`/api/memory?id=${encodeURIComponent(m.id)}`, { method: 'DELETE' });
             const got = await r.json().catch(() => ({}));
-            if (!r.ok) return alert(got.error ?? '消せませんでした');
+            if (!r.ok) { drop.disabled = false; return alert(got.error ?? '消せませんでした'); }
             // 題は本体が実際に忘れたものから取る（一覧は別に読み直したもので、ずれていることがある）
             forgotHere.set(m.id, m);
             hideForgotten = false;
@@ -1404,6 +1417,7 @@ export const PANELS = {
               ? { ...next, memory: next.memory.filter((x) => x.id !== m.id), memorySize: next.memorySize - 1 }
               : next);
           } catch (e) {
+            drop.disabled = false;
             alert(`消せませんでした（${e?.message ?? e}）`);
           }
         };
@@ -1434,6 +1448,8 @@ export const PANELS = {
     const refused = new Map();
     const REFUSED_SHOWN_MS = 15_000;
 
+    let thinking = false;
+    let thinkSaid = { text: '', at: 0 };
     const draw = async () => {
       const r = await getJson('/api/proposals').catch(() => null);
       body.replaceChildren();
@@ -1495,15 +1511,25 @@ export const PANELS = {
         foot.append(el('span', 'warn', `溜まりすぎたので、古い ${r.dropped} 件を落としました`));
       }
       if (r.due.length > 0) foot.append(el('span', 'warn', `未了の日課: ${r.due.join(', ')}`));
+      /*
+       * 送っている最中か・断られた理由は、パネルの側に持つ。描くたびにボタンを作り直すので、ボタンに持たせると、返事を待つ間の
+       * 描き直し（5 秒ごとの状態の読み直し）で押せるボタンに戻り、二本目が「いま別の作業をしています」で断られた。理由も次の描き直しで消えた
+       */
       const now = el('button', 'ghost tiny', 'いま考えさせる');
-      const said = el('span', 'dim', '');
+      now.disabled = thinking;
+      const sayNow = Date.now() - thinkSaid.at < REFUSED_SHOWN_MS ? thinkSaid.text : '';
+      const said = el('span', sayNow ? 'warn' : 'dim', sayNow);
       now.onclick = async () => {
-        now.disabled = true; // 二度押すと、二本目が「いま別の作業をしています」で断られ、失敗に見える
+        if (thinking) return;
+        thinking = true;
+        thinkSaid = { text: '', at: 0 };
+        now.disabled = true;
         const got = await tell('/api/think', undefined, '考えさせられませんでした');
-        now.disabled = false;
+        thinking = false;
         // 作業中は断られる（409）。黙って押せなかったことにしない
-        if (!got.ok) { said.className = 'warn'; said.textContent = got.error; return; }
-        setTimeout(draw, 800);
+        if (!got.ok) thinkSaid = { text: got.error, at: Date.now() };
+        void draw();
+        if (got.ok) setTimeout(draw, 800);
       };
       foot.append(now, said);
       body.append(foot);
