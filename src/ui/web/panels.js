@@ -1819,6 +1819,8 @@ export const PANELS = {
     let upTo = -1;
     const show = (e) => {
       if (typeof e.seq === 'number') {
+        // 1 が来たら、本体が立ち上げ直して数え直したとみなす（前の番号のまま比べ、新しい行を全部捨てていた）
+        if (e.seq === 1 && upTo > 1) upTo = 0;
         if (e.seq <= upTo) return;
         upTo = e.seq;
       }
@@ -1951,6 +1953,7 @@ export const PANELS = {
     const files = new Map();
     /** 塊・行を戻す。結果だけ言う（戻したあとの差分は本体が流す）。 */
     const revert = async (f, picks, into) => {
+      const drawnAt = draws;
       let r;
       try {
         r = await fetch('/api/revert', {
@@ -1975,12 +1978,23 @@ export const PANELS = {
         return;
       }
       const j = await r.json().catch(() => ({}));
-      into.append(el('div', r.ok ? 'note dim' : 'note warn',
-        r.ok ? (j.reverted ? `戻しました（+${j.added} -${j.removed}）` : '戻すものはありませんでした') : (j.error ?? '戻せませんでした')));
+      const tone = r.ok ? 'note dim' : 'note warn';
+      const text = r.ok ? (j.reverted ? `${f.path}: 戻しました（+${j.added} -${j.removed}）` : `${f.path}: 戻すものはありませんでした`) : (j.error ?? '戻せませんでした');
+      /*
+       * 一言はパネルの側に持ち、描くたびに頭に出す。戻すと本体は返事より先に差分を配り、それを受けた描き直しで
+       * 札ごと作り直すので、札の中に足した一言は外れた古い札に付いて見えなかった
+       */
+      lastSaid = { tone, text };
+      if (draws !== drawnAt) draw();
+      else into.append(el('div', tone, text));
     };
 
+    let lastSaid;
+    let draws = 0;
     const draw = () => {
+      draws += 1;
       body.replaceChildren();
+      if (lastSaid) body.append(el('div', lastSaid.tone, lastSaid.text));
       if (files.size === 0) {
         return body.append(empty('まだ何も書き換えていません。'));
       }
@@ -2183,7 +2197,7 @@ export const PANELS = {
         : `✗ 終了コード ${code}: ${displayOf.get(name) ?? name}（${sec} 秒）`;
     };
 
-    void getJson('/api/tasks').then(({ tasks }) => {
+    void getJson('/api/tasks').then(({ tasks, running: live }) => {
       for (const t of tasks ?? []) {
         displayOf.set(t.id, t.name);
         const b = el('button', '', t.name);
@@ -2218,8 +2232,15 @@ export const PANELS = {
         };
         buttonById.set(t.id, b);
         bar.append(b);
+        // 作り直したパネルでも、本体で回っているものは回っているとして出す（止めるボタンが隠れたまま、止める口が無くなった）
+        if ((live ?? []).includes(t.id)) {
+          running.add(t.id);
+          b.disabled = true;
+          startStatus(t.id);
+        }
       }
       bar.append(stop, stopNote);
+      syncStop();
     }, (e) => {
       // 読めなかったのを黙ると、押す口が一つも無い空のパネルに見える（受けるのは読むところの失敗だけ。組み立ての失敗は受けない）
       bar.append(el('span', 'warn', `作業の一覧を読めませんでした（${e?.message ?? e}）`), stop, stopNote);
@@ -2267,7 +2288,14 @@ export const PANELS = {
       state.textContent = '';
       clearTimeout(saving);
       // 打つたびに送らない。手が止まってから送る。
-      saving = setTimeout(() => { void keep(); }, 600);
+      saving = setTimeout(() => { saving = undefined; void keep(); }, 600);
+    });
+    // 作り直す前に、まだ送っていない分を送る（作り直した欄は古い中身で作られ、そこへ打つと最後に打った分が抜けた中身で上書きした）
+    ctx.onDiscard?.(() => {
+      if (saving === undefined) return;
+      clearTimeout(saving);
+      saving = undefined;
+      void keep();
     });
   },
 
@@ -2826,7 +2854,8 @@ export const PANELS = {
       const text = area.value;
       let at;
       if (back) {
-        at = text.lastIndexOf(q, Math.max(0, area.selectionStart - 1));
+        // 先頭（0）に居るときは前に何も無い。`lastIndexOf(q, 0)` は 0 を返して同じ当たりを選び直し、末尾へ回らなかった
+        at = area.selectionStart > 0 ? text.lastIndexOf(q, area.selectionStart - 1) : -1;
         if (at < 0) at = text.lastIndexOf(q);
       } else {
         at = text.indexOf(q, area.selectionEnd);
@@ -3543,7 +3572,8 @@ export const PANELS = {
      * 入れ替える前の中身は預かって、「元に戻す」で戻せるようにする。
      */
     ctx.applyPatch = (at) => {
-      if (!path || norm(at.path) !== path) return false;
+      // 捨てたエディタ（× で閉じた・作り直した）は、見えない欄を書き換えない
+      if (discarded() || !path || norm(at.path) !== path) return false;
       const head = lineStart(area.value, at.from);
       const tail = lineStart(area.value, at.to);
       const now = area.value.slice(head.at, tail.end);
@@ -3587,7 +3617,8 @@ export const PANELS = {
      * 上限は送る側（`src/ui/server.ts`）で決める。
      */
     ctx.editorNow = () => {
-      if (!path) return null;
+      // 閉じたエディタの場所と選択を、送るたびに付け続けない
+      if (discarded() || !path) return null;
       const before = area.value.slice(0, area.selectionStart);
       const line = before.split('\n').length;
       const picked = area.value.slice(area.selectionStart, area.selectionEnd);
