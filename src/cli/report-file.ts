@@ -105,7 +105,7 @@ export async function saveReport(
  * 同じ名前が在れば `-2` `-3` と付けて書く（同じ分のうちに二度出した報告が、前のものを黙って上書きしていた）。
  * 名前の並びは時刻の順のまま。
  */
-async function writeFresh(dir: string, base: string, text: string): Promise<string> {
+export async function writeFresh(dir: string, base: string, text: string): Promise<string> {
   for (let n = 1; ; n += 1) {
     const at = join(dir, n === 1 ? `${base}.txt` : `${base}-${n}.txt`);
     try {
