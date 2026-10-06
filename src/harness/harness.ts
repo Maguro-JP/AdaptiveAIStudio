@@ -154,13 +154,15 @@ export class Harness {
          * - 大きすぎて断られた: 「一部を読んだ」として残す。read_file は大きいファイルを必ず断るので、残さないと edit_file でも
          *   二度と直せない。一部の扱いなので、全文を置き換える write_file は止まる
          */
+        // 二進と言われた read_file は失敗として返るが、何のファイルかは分かっている。「読んだ」に数え、見た中身の指紋も取る
+        const binaryRead = result.isError === true && call.name === 'read_file' && result.content.includes('は二進のファイルなので読めません');
         const keep = (c: ToolCall): void => { history.push(c); if (taskHistory && taskHistory !== history) taskHistory.push(c); };
         if (!(result.isError && call.name === 'read_file')) {
           keep(call);
           // やり直しを求めた失敗（待つ間に変わった・掴まれていた）は、同じ内容の繰り返しに数えない。断られた・当たらなかったは数え続ける
           if (result.isError && RETRYABLE_WRITE.test(result.content)) markFailedWrite(call);
           if (result.isError && isWriteTool(call.name)) markNotWritten(call);
-        } else if (result.content.includes('は二進のファイルなので読めません')) keep(call);
+        } else if (binaryRead) keep(call);
         else if (result.content.includes('ファイルが大きすぎます')) {
           keep({ ...call, args: { ...(args as Record<string, unknown>), limit: 0 } });
         }
@@ -171,7 +173,7 @@ export class Harness {
          * 自分で一か所を直すだけで、他の変更を含んだ指紋が「見た」ことになり、その変更を古い中身で書き戻せる。
          * 全文の読みも、前と後が同じときだけ記録する（読んでいる間に替わったら、どちらの中身を見たか分からない）。
          */
-        if (!result.isError && typeof seenPath === 'string') {
+        if ((!result.isError || binaryRead) && typeof seenPath === 'string') {
           const printAfter = await fingerprint(toolCtx.root, seenPath);
           const partial = call.name === 'read_file' && (hasArg(call, 'offset') || hasArg(call, 'limit'));
           const trusted = call.name === 'write_file'
