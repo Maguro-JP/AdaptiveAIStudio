@@ -234,7 +234,11 @@ export class LlamaCppRuntime implements LocalRuntime {
     return new Promise<LoadedModel>((resolve, reject) => {
       const onAbort = () => {
         shared.waiting -= 1;
-        if (shared.waiting === 0 && !shared.silent) shared.controller.abort();
+        if (shared.waiting === 0 && !shared.silent) {
+          shared.controller.abort();
+          // 止める途中の起動に、後から来た人を相乗りさせない（止めていない人まで「中断されました」で落ちていた）。後の人は起こし直す
+          if (this.#loading.get(ref) === shared) this.#loading.delete(ref);
+        }
         reject(new Error('起動が中断されました。'));
       };
       signal.addEventListener('abort', onAbort, { once: true });
@@ -356,10 +360,11 @@ export class LlamaCppRuntime implements LocalRuntime {
       '--ctx-size', String(plan.contextLength * this.#opts.parallel),
       '--parallel', String(this.#opts.parallel),
     ];
-    if (plan.kvCacheType !== 'f16') {
-      args.push('--cache-type-k', plan.kvCacheType, '--cache-type-v', plan.kvCacheType);
-    }
-    if (plan.useMmap) args.push('--mmap');
+    // KV を下げるのは K だけ。V を下げると、flash attention を付けない限り context を作れずに落ちる版がある（固定の b4585 は既定で付けない）。
+    // flash attention の付け方は版で違う（素の `-fa` と `--flash-attn on`）ので、付けずに済む K だけにする
+    if (plan.kvCacheType !== 'f16') args.push('--cache-type-k', plan.kvCacheType);
+    // mmap は llama-server の既定で有効。`--mmap` を知らない版（固定の b4585 は `--no-mmap` だけ）に渡すと、引数の誤りで起動ごと落ちていた。
+    // 載せる計画（useMmap: true）は既定のままで叶うので、何も渡さない
     return args;
   }
 
@@ -386,7 +391,9 @@ export class LlamaCppRuntime implements LocalRuntime {
       }
 
       try {
-        const res = await fetch(`${baseUrl}/models`, { signal: AbortSignal.timeout(2000) });
+        // 準備は根の `/health` で見る（`/v1` の下には無い）。読み込み中は 503 で、読み終えて 200 になる。`/models` は新しい版では読み込み中も 200 を返し、
+        // 読み終える前に「起動完了」と言って、最初の依頼を 503 で落としていた
+        const res = await fetch(new URL('/health', baseUrl), { signal: AbortSignal.timeout(2000) });
         if (res.ok) return;
       } catch { /* まだ起動中 */ }
 

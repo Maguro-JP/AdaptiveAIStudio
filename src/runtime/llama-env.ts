@@ -9,7 +9,7 @@
  *
  * Windows は exe と同じ場所の DLL を見るので、何も要らない。
  */
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 /** 変数名。環境で違う。 */
 export function libPathVar(platform: NodeJS.Platform): string | undefined {
@@ -29,6 +29,9 @@ export function runtimeEnv(
   const key = libPathVar(platform);
   if (!key) return { ...base };
 
+  // 名前だけ（`llama-server`）で呼ぶときは、PATH から探される。その dirname は `.` で、先頭に足すと子の今のフォルダ（作業場）の
+  // `libllama.so` などを本物より先に読ませていた（取ってきたリポジトリの中のライブラリが走る道）。名前だけなら何も足さない
+  if (basename(command) === command) return { ...base };
   const dir = dirname(command);
   const existing = base[key];
   const sep = ':';

@@ -122,7 +122,8 @@ describe('起動と停止', () => {
     // context は 並列数ぶん確保される
     assert.equal(body.received.ctxSize, String(plan.contextLength * 2));
     assert.equal(body.received.parallel, '2');
-    assert.equal(body.received.mmap, plan.useMmap);
+    // mmap は既定のまま（`--mmap` を知らない版がある）。切ることもしない
+    assert.equal(body.received.noMmap, false);
     assert.ok(String(body.received.model).endsWith('qwen2.5-coder-32b.gguf'));
 
     assert.ok(loaded.loadSeconds! >= 0);
