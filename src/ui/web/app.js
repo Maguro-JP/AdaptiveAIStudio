@@ -1917,6 +1917,8 @@ try { if (localStorage.getItem('aas.side') === '0') showSide(false); } catch { /
 $('edit').onclick = () => {
   $('json').value = JSON.stringify(layout, null, 2);
   $('repairs').textContent = '';
+  // 前の答え（apply）を残さない。Esc で閉じても答えは変わらないので、前に適用した後だと Esc でも適用していた
+  $('editor').returnValue = '';
   $('editor').showModal();
 };
 
@@ -1928,6 +1930,8 @@ $('editor').addEventListener('close', async () => {
   } catch (e) {
     // 読めない JSON でも捨てない。直して開き直す。
     $('repairs').textContent = `読めませんでした: ${e.message}`;
+    // 開き直す前に答えを消す（残すと Esc でまた「適用」になり、Esc で抜けられなかった）
+    $('editor').returnValue = '';
     $('editor').showModal();
     return;
   }
@@ -1937,6 +1941,7 @@ $('editor').addEventListener('close', async () => {
   if (r.repairs?.length) {
     $('json').value = JSON.stringify(r.layout, null, 2);
     $('repairs').textContent = r.repairs.map((x) => `・${x.detail}`).join('\n');
+    $('editor').returnValue = '';
     $('editor').showModal();
   }
 });

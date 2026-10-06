@@ -296,8 +296,12 @@ export const PANELS = {
     /** 一つの大きさの上限（本体と同じ）と、一度に渡せる数。超えたものは送る前に断る（全部受け取ってから断ると、その間ずっと待たせる）。 */
     const ATTACH_MAX = 25 * 1024 * 1024;
     const ATTACH_AT_ONCE = 20;
+    // 渡している途中の数。途中で送ると添付なしで届き、渡し終えた分が次の依頼に付いていった
+    let handing = 0;
     const take = async (all) => {
       const files = [...all];
+      handing += 1;
+      try {
       if (files.length > ATTACH_AT_ONCE) {
         note('warn', `一度に渡せるのは ${ATTACH_AT_ONCE} 件までです（${files.length} 件のうち、残りは渡していません）`);
         files.length = ATTACH_AT_ONCE;
@@ -323,6 +327,9 @@ export const PANELS = {
         }
         pending.remove();
         drawTray();
+      }
+      } finally {
+        handing -= 1;
       }
     };
 
@@ -386,9 +393,14 @@ export const PANELS = {
     };
     const jump = el('button', 'jump', '新しい動きへ ↓');
     jump.hidden = true;
-    jump.onclick = () => { pinned = true; jump.hidden = true; log.scrollTop = log.scrollHeight; };
+    jump.onclick = () => { pinned = true; jump.hidden = true; toBottom(); };
     wrap.append(jump);
-    const follow = () => { if (pinned) log.scrollTop = log.scrollHeight; else jump.hidden = false; };
+    // 一度で下へ飛ぶ（滑らかに動かすと、動いている途中のスクロールの知らせで「下に居ない」と判じ、以後追いかけなくなった）
+    const toBottom = () => {
+      if (typeof log.scrollTo === 'function') log.scrollTo({ top: log.scrollHeight, behavior: 'instant' });
+      else log.scrollTop = log.scrollHeight;
+    };
+    const follow = () => { if (pinned) toBottom(); else jump.hidden = false; };
 
     /*
      * **まだ何も無いときに、何を書けばいいか分からない。**
@@ -552,6 +564,7 @@ export const PANELS = {
       const text = input.value.trim();
       // 添えただけで送れる。「この画面を見て」だけで用が足りることがある。
       if (!text && attached.size === 0) return;
+      if (handing > 0) { note('warn', '添付を渡し終えるまで待ってから送ってください（文はそのまま残してあります）'); return; }
       // 送った時点で見ている会話（null はトップ）。返事を待つ間に別の会話を選び直されても、送り先と受け取り方はこれで決める
       const from = ctx.conversationId ? (ctx.conversationId() ?? null) : null;
       input.value = '';
@@ -742,6 +755,9 @@ export const PANELS = {
     ctx.showHistory = (messages) => {
       log.textContent = '';
       drawn++;
+      // 別の会話は下から見せる（前の会話で読み戻した状態のまま判じ、途中の位置から開いていた）
+      pinned = true;
+      jump.hidden = true;
       /*
        * **消したことを、案内の側にも知らせる。**`textContent = ''` は案内の節ごと
        * 消すが、`guided`（出したかどうか）は残る。残ったままだと、次に出そうとしても
@@ -1159,7 +1175,11 @@ export const PANELS = {
         box.replaceChildren(ok
           ? el('div', approved ? 'good' : 'dim', `${what} → ${said}`)
           : el('div', 'dim', `${what} → 送れませんでした（${why}）`));
+        // 届かなかったときは押し直せるようにする（ボタンを消したままで、本体は 10 分待ってから断っていた）。
+        // 404 は承認がもう終わっている（押し直しても同じ）
+        if (!ok && !/^404$|終わ/.test(why)) { unsent = true; mark.open = true; box.append(menu); }
       };
+      let unsent = false;
       yes.onclick = () => { void answer(true); };
       no.onclick = () => { void answer(false); };
       if (all) all.onclick = () => { void answer(true, true); };
@@ -1170,7 +1190,8 @@ export const PANELS = {
       add(box);
       ctx.on('approvalDone', (d) => {
         if (d.id === e.id) mark.open = false;
-        if (d.id === e.id && box.querySelector('button')) {
+        // 送れなかったと出ている箱も書き換える（本体が実は受けていたとき、「送れませんでした」が残り続けた）
+        if (d.id === e.id && (box.querySelector('button') || unsent)) {
           box.replaceChildren(el('div', 'dim', `${what} → ${d.approved ? '許可' : '拒否'}`));
         }
       });
