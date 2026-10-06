@@ -213,7 +213,8 @@ export class UnfinishedWork {
     // 一時ファイルに書いてから置き換える（書き戻しの途中で落ちると、記録が丸ごと消えていた）。
     const tmp = `${this.#path}.${process.pid}.${++tmpSeq}.tmp`;
     try {
-      await writeFile(tmp, body, 'utf8');
+      // 名前を付け替える前に中身をディスクへ書き切る（`journal-file.ts` と同じ）
+      await writeFile(tmp, body, { encoding: 'utf8', flush: true });
       await rename(tmp, this.#path);
     } catch (e) {
       await rm(tmp, { force: true }).catch(() => undefined);

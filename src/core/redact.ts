@@ -9,7 +9,15 @@
 export function redactSecrets(text: string): string {
   return text
     // 項目の名前で判じる。
-    .replace(/("([^"\\]*(key|token|secret|password|passwd|credential|authorization|cookie)[^"\\]*)"\s*:\s*)"[^"]*"/gi, '$1"（伏せました）"')
+    // 値は、逃がした引用符（`\"`）を含む文字と、数も伏せる（`"password":"ab\"cd"` の後ろ半分・`"pin": 1234` を出していた）
+    .replace(/("([^"\\]*(key|token|secret|password|passwd|credential|authorization|cookie)[^"\\]*)"\s*:\s*)(?:"(?:[^"\\]|\\.)*"|-?\d[\d.]*)/gi, '$1"（伏せました）"')
+    // 道の中のログイン（`https://user:pass@host`）。監査の記録だけが伏せていた
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1（伏せました）@')
+    // 秘密鍵のかたまり（中身ごと）、JWT、Google の鍵、AWS の一時的な鍵
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g, '（伏せました）')
+    .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, '（伏せました）')
+    .replace(/\bAIza[0-9A-Za-z_-]{35}\b/g, '（伏せました）')
+    .replace(/\bASIA[0-9A-Z]{16}\b/g, '（伏せました）')
     // 値の形で判じる。`Bearer ` の後ろ、と、よく知られた頭の付いたもの。
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer （伏せました）')
     .replace(/\bgh[pousr]_[A-Za-z0-9]{16,}\b/g, '（伏せました）')
@@ -21,7 +29,11 @@ export function redactSecrets(text: string): string {
     .replace(/\bhf_[A-Za-z0-9]{20,}\b/g, '（伏せました）')
     // `.env` の形（`GITHUB_TOKEN=...`）と、命令の引数の形（`--token xxx`・`"--token", "xxx"`）。名前が JSON の項目でないと上で当たらない
     // 値は引用符で囲まれていてもよい（`.env` の `KEY="..."`、`--token="..."`）。囲みごと伏せる
+    // 名前の大小は問わない（`~/.aws/credentials` の `aws_secret_access_key = …`）。YAML や見出しの `password: …` も
     .replace(/\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)\s*=\s*)(?!（伏せました）)(?:"[^"\n]*"|'[^'\n]*'|[^\s"']+)/g, '$1（伏せました）')
+    // 小文字の名前と `:` の形は、値が鍵らしい（12 文字以上で、`.`・括弧・空白を含まない）ときだけ。コードの `apiKey: string`・`token = req.headers.x` は伏せない
+    .replace(/\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)\s*[=:]\s*)(?!（伏せました）)(["']?)[A-Za-z0-9+/_=-]{12,}\2(?=[\s,}]|$)/gim, '$1（伏せました）')
+    .replace(/\b(Authorization\s*:\s*(?:Basic|Token)\s+)[A-Za-z0-9+/=._-]{8,}/gi, '$1（伏せました）')
     // 引数の名前は単語の頭から（`max-token`・`non-secret` のような普通の言葉の一部には当てない）
     .replace(/(?<![\w-])(--?(?:api[-_]?key|token|secret|password)\b)(\s*=\s*|["']?\s*,\s*|\s+)(?!（伏せました）)(?:"[^"\n]*"|'[^'\n]*'|[^\s"',\]]+)/gi, '$1$2（伏せました）');
 }

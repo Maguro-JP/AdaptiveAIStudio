@@ -148,7 +148,8 @@ export function saveMerged(
 async function replaceWhole(path: string, text: string, ops: JournalOps): Promise<boolean> {
   const tmp = `${path}.${process.pid}.${++tmpSeq}.tmp`; // 同じプロセスで並んで呼ばれても名前をぶつけない
   try {
-    await (ops.write ?? ((t: string, x: string) => writeFile(t, x, 'utf8')))(tmp, text);
+    // 名前を付け替える前に、中身をディスクへ書き切る（付け替えだけが残り、電源が落ちた後に空や 0 で埋まったファイルになるのを避ける）
+    await (ops.write ?? ((t: string, x: string) => writeFile(t, x, { encoding: 'utf8', flush: true })))(tmp, text);
     // Windows では、ウイルス対策や索引作りが付け替え先を一瞬掴むと EPERM・EBUSY になる。少し待って付け替え直す
     for (let tries = 0; ; tries++) {
       try {

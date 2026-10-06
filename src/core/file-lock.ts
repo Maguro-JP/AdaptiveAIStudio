@@ -11,8 +11,8 @@
  * - 取れない: `timeoutMs`（既定 2 秒）待っても取れなければ投げる。画面の採否はこの間返らないので、長くしない。呼ぶ側は「書けなかった」として扱う（黙って上書きしない）。
  * - 返す: 自分が作った錠のときだけ消す（古いとして消された後に、ほかが取り直した錠を消さない）。
  */
-import { mkdir, open, readFile, stat, unlink } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdir, open, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 /** 待っても錠を取れなかった。中身は何も変えていない。 */
@@ -36,6 +36,29 @@ export async function withFileLock<T>(path: string, run: () => Promise<T>, opts:
   }
 }
 
+/**
+ * 錠の古さは、置いた機械の時計で付いた更新時刻と、この機械の時計を比べて出す。Z: の向こうの時計がずれていると、遅れていれば今できた錠を古いと見て消し
+ * （二つが同時に書き、後の書き込みが前を消す）、進んでいれば落ちた錠を長く古くないと見た。同じフォルダに仮のファイルを一つ書いて、向こうの時計との
+ * ずれを測り、その分を差し引く（フォルダごとに一度だけ）。測れないときは、ずれを 0 とみなす（前と同じ）
+ */
+const skews = new Map<string, number>();
+
+async function skewOf(dir: string): Promise<number> {
+  const known = skews.get(dir);
+  if (known !== undefined) return known;
+  const probe = join(dir, `.clock-${process.pid}-${randomUUID()}`);
+  let skew = 0;
+  try {
+    await writeFile(probe, '');
+    skew = Date.now() - (await stat(probe)).mtimeMs;
+    skews.set(dir, skew);
+  } catch {
+    // 書けない・測れないフォルダ。ずれは 0 とみなし、覚えない（次にまた測る）
+  }
+  try { await unlink(probe); } catch { /* 無い・消せない仮のファイル。中身は空で、錠としては使われない */ }
+  return skew;
+}
+
 async function acquire(lock: string, token: string, staleMs: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (let tries = 0; ; tries++) {
@@ -56,7 +79,8 @@ async function acquire(lock: string, token: string, staleMs: number, timeoutMs: 
       // Windows では、消している途中の錠を開こうとすると EPERM になる。在るのと同じく待って取り直す
       if (code !== 'EEXIST' && code !== 'EPERM') throw e;
     }
-    const age = await stat(lock).then((s) => Date.now() - s.mtimeMs, () => undefined);
+    const skew = await skewOf(dirname(lock));
+    const age = await stat(lock).then((s) => Date.now() - s.mtimeMs - skew, () => undefined);
     // 古い錠は消して取り直す。消せなければ（読み取り専用・掴まれている）、待ちと期限の側へ回す（前は待たずに回り続けた）
     if (age !== undefined && age > staleMs && await unlink(lock).then(() => true, () => false)) continue;
     if (Date.now() >= deadline) throw new FileLockBusy(`ほかのプロセスが ${lock} を持ったままです`);
