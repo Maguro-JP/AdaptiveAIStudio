@@ -165,7 +165,9 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
 
       // 持ち出し検査。行き先だけでなく、こちらから書いて渡す文字列も検める。
       // URL の問い合わせ部分に合言葉を貼り付けて外へ出す、という事故はこれで止まる。
-      const carry = `${target}\n${requireString(args, 'purpose') ?? ''}`;
+      // 符号を解いた形も見る（`%20` や `%0A` に符号化した秘密鍵の頭・設定の行が当たらなかった）
+      const decoded = (() => { try { return decodeURIComponent(String(target).replace(/\+/g, ' ')); } catch { return ''; } })();
+      const carry = `${target}\n${decoded}\n${requireString(args, 'purpose') ?? ''}`;
       let outbound = inspectOutbound(carry);
       if (outbound.passed && inspector) {
         outbound = combine(outbound, await inspector.inspect(carry, 'outbound', ctx.signal), 'outbound');

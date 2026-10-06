@@ -1846,8 +1846,13 @@ export class Session {
             case 'toolEnd': {
               usedTools.push(ev.call.name);
               // 何が効いて何が効かなかったかを数える。**言葉ではなく、結果で見る。**
-              if (ev.isError) failedTools.push(ev.call.name);
-              else if (isWriteTool(ev.call.name)) {
+              if (ev.isError) {
+                failedTools.push(ev.call.name);
+                // 書けなかった道は、書く手前の記録を捨てる（まだこの回で書いていなければ）。残すと、その後に人が直した分を、後で書いて
+                // 打ち切ったときの巻き戻しが、回の初めの中身で消した
+                const p = (ev.call.args as { path?: unknown }).path;
+                if (isWriteTool(ev.call.name) && typeof p === 'string' && !changedHere.includes(p)) checkpoint.forget(p);
+              } else if (isWriteTool(ev.call.name)) {
                 wroteSomething = true;
                 const at = (ev.call.args as { path?: unknown }).path;
                 if (typeof at === 'string' && !changedHere.includes(at)) changedHere.push(at);
@@ -1953,6 +1958,10 @@ export class Session {
                 wroteSomething = true;
                 const at = (ev.call.args as { path?: unknown }).path;
                 if (typeof at === 'string' && !changedHere.includes(at)) changedHere.push(at);
+              } else if (ev.isError && isWriteTool(ev.call.name)) {
+                // 書けなかった道の記録は捨てる（本体の周と同じ）
+                const at = (ev.call.args as { path?: unknown }).path;
+                if (typeof at === 'string' && !changedHere.includes(at)) checkpoint.forget(at);
               }
               if (outsideTool(ev.call.name)) {
                 const found = await outside.after();

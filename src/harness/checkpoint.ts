@@ -99,6 +99,14 @@ export class Checkpoint {
     this.#saved.set(key, { path: shown, content });
   }
 
+  /** その道の記録を捨てる（書く手前に記録したが書けなかった道。後で書いたときに、その時点の中身で記録し直すため） */
+  forget(relPath: string): void {
+    const key = this.keyOf(relPath);
+    if (key === undefined) return;
+    this.#saved.delete(key);
+    this.#unrecorded.delete(key);
+  }
+
   /** 記録した状態へ戻す。戻せた道を返す。 */
   async restore(): Promise<string[]> {
     return (await this.restoreAll()).restored;

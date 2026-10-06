@@ -44,6 +44,9 @@ export const GUARDED_PATHS = [
   'src/agent/tools/shell.ts',
   'src/agent/tools/write-kind.ts',
   'src/core/redact.ts',
+  // 外のツール（MCP）へ渡す・受ける所の検問所と、inspector の組み立て（fetch_url 側の network.ts は入れてあった）
+  'src/mcp/tools.ts',
+  'src/core/inspector-setup.ts',
 ];
 
 export function isGuarded(rel: string): boolean {

@@ -24,6 +24,16 @@ import type { McpClient } from './client.ts';
  * **決めているのは `write-kind.ts` の側。**守りが「外から来たものか」を
  * この形で見分けるので、二箇所に同じ文字を書くと片方だけ変わる。
  */
+
+/** 引数の中の文字列の値を全部（深さと数は抑える）。検問に行の形のまま渡すため */
+function stringsIn(v: unknown, depth = 0, out: string[] = []): string[] {
+  if (out.length >= 500 || depth > 20) return out;
+  if (typeof v === 'string') out.push(v);
+  else if (Array.isArray(v)) for (const x of v) stringsIn(x, depth + 1, out);
+  else if (v && typeof v === 'object') for (const x of Object.values(v)) stringsIn(x, depth + 1, out);
+  return out;
+}
+
 export const SEPARATOR = EXTERNAL_SEPARATOR;
 
 /**
@@ -69,7 +79,9 @@ export function wrapTool(
        * 見るのは当てはめだけ。モデルにまで見立てさせると、呼ぶたびにモデルを一回余分に回し、
        * モデルに届かないときは外のツールが全部止まる
        */
-      const outbound = inspectOutbound(JSON.stringify(args ?? {}));
+      // 文字列の値は、一つずつ取り出して行の形のまま見る（JSON にすると改行が `\n` の字になり、行の頭で当てる型（設定ファイルの
+      // 中身・秘密鍵の頭）が一度も当たらなかった）
+      const outbound = inspectOutbound([JSON.stringify(args ?? {}), ...stringsIn(args)].join('\n'));
       if (!outbound.passed) return fail(describeVerdict(outbound, 'outbound'));
 
       // 外部ツールを動かすのは、外へ出るのと同じ重さで扱う。
