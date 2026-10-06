@@ -280,7 +280,9 @@ step('llama-server を探します');
 
 // 借り物ではなく自前で持てているか。ここが空だと、
 // 誰かが入れたものに相乗りしている状態になる。
-const llamaPath = await findInstalled();
+// 設定で道を決めているなら、それを確かめる（本番の起こし方と同じ順。自前で入れたものだけを見ていたので、指定していても「まだ用意していません」と言った）
+const llamaCommand = config.runtime?.kind === 'llamacpp' ? config.runtime.command : undefined;
+const llamaPath = llamaCommand ?? await findInstalled();
 if (llamaPath) {
   /*
    * **在るかどうかでは決めない。一度起こして確かめる。**
@@ -292,7 +294,9 @@ if (llamaPath) {
    * 走らせて決めているのに、doctor だけが見ていなかった。
    */
   const said = await runOnce(llamaPath, ['--version']);
-  if (answeredVersion(said)) add('llama-server', 'ok', `${llamaPath}（${said.trim().split('\n')[0]}）`);
+  if (answeredVersion(said)) {
+    add('llama-server', 'ok', `${llamaPath}${llamaCommand ? '（runtime.command）' : ''}（${said.trim().split('\n')[0]}）`);
+  }
   else {
     add('llama-server', 'bad', `在りますが、動きません: ${llamaPath}`,
       `${said.trim().slice(0, 200)}\n\`${how('llama')}\` で取り直せます。`);

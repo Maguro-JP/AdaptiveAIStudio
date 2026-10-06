@@ -376,6 +376,7 @@
 - 70 回目の不具合調査の 3 件（src/core の起動まわり: 同梱の GitHub の注記・PATH の引用符・数え方のモデル）
 - 71 回目の不具合調査の 4 件（モデルとの通信と候補の切り替え: 空の終わりの合図・部品の配列の本文・冷やした口の次の候補・並んだ依頼の冷やしの解き方）
 - 72 回目の不具合調査の 6 件（scripts と pre-push: 式で押す sha・二本以上の push・一時フォルダの後始末・自分のブランチの判定・shot の起動）
+- 73 回目の不具合調査の 7 件（src/cli: models --new の訊く先・runtime.command・壊れた設定の selftest・Ollama の selftest・agent の終了コード・npm の案内・--force）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -12977,3 +12978,15 @@ OpenAI 互換の口（`src/providers/openai-compatible.ts`）と、候補の切�
 - `shot.mjs` は、ブラウザが立たなかったときに画面のプロセスを止めずに残した。立てるところから後始末の内側に入れる
 試験は `test/pushed-tree.test.ts`（式で押す・二本まとめて押す）と `test/handoff.test.ts`（自分のブランチ）。直す前の版で 3 件とも落ちた。一時フォルダの後始末・`real-answer-dry`・`shot.mjs` は試験を書いていない（確かめていない）。
 触る場所: `.githooks/pre-push`（`AAS_PUSH_SENDING`・`AAS_PUSH_RANGE`）、`scripts/pushed-tree-check.mjs`、`scripts/docs-only-check.mjs`、`scripts/handoff-plan.mjs`（`pickToTake`）、`scripts/tokenizer-conformance.mjs`、`scripts/check.mjs`、`scripts/real-answer-dry.mjs`、`scripts/shot.mjs`
+
+## 2026-10-07  73 回目の不具合調査の 7 件（src/cli: models --new の訊く先・runtime.command・壊れた設定の selftest・Ollama の selftest・agent の終了コード・npm の案内・--force）
+
+`src/cli/` を、読むだけの調査で見た分。
+- `models --new` は、いつも Ollama に訊いていた。既定の inproc では手元の名前が GGUF のファイル名なので、次の世代の名前が作れず、配布元へ一度も訊かずに「見つかりませんでした」と言った。画面と同じく、使っている道で訊く先を決める（`findNewerFor`）
+- `runtime.command` で llama-server の道を決めていても、doctor と selftest は自前で入れたものだけを見て「まだ用意していません」と言った（自前の版も在れば、使っていない方を確かめた）。本番の起こし方と同じ順で、指定があればそれを確かめる
+- 設定が壊れていると、selftest はそこまでの結果も報告のファイルも出さずに Node の積み上げで終わった。設定を NG と書き、そこまでの結果で報告を出して 1 で終える（テストまでは回さない）
+- Ollama など GGUF を読まない道でも、selftest は GGUF の保存先を数えて必ず NG・終了コード 1 にし、「送って返る」も確かめなかった。GGUF を数えるのは GGUF を読む道のときだけにする
+- `aas agent` に依頼を流し込んで使うと、依頼が失敗しても 0 で終えた。失敗した回があれば 1 で終える（止めた回は数えない。`aas team` は前から 1）。`aas chat`（`main.ts`）は対話が主なので、まだ変えていない
+- 配った形には npm が無いのに、selftest・team・「新しい世代」の案内が `npm run …` と言っていた。`how` で書く（「新しい世代」の案内は書き方を受け取る。画面の側（`session.ts`）は既定の書き方のまま）。`npm run llama --force` は `--force` を npm が受け取って取り直しにならないので、`-- --force` にする
+試験は `test/cli-gaps.test.ts`（agent の終了コード・壊れた設定の selftest・案内の書き方・doctor の `runtime.command`。直す前の版で 4 件とも落ちた）。`models --new` の訊く先・selftest の Ollama・selftest の `runtime.command` は試験を書いていない（確かめていない）。Ollama が動いていてモデルが 0 件のとき doctor が「runtime がまだありません」と言う件は、次に回す。
+触る場所: `src/cli/models.ts`、`src/cli/doctor.ts`（llama-server）、`src/cli/selftest.ts`（設定・llama-server・モデル・`finish`）、`src/cli/agent.ts`（`finished`）、`src/cli/team.ts`、`src/runtime/model-updates.ts`（`describeNewer` の `hint`）、`src/runtime/llama-diagnosis.ts`

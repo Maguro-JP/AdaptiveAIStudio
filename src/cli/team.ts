@@ -5,6 +5,7 @@
  * 形式はそのまま引き継ぐ。
  */
 import { defaultWorkRoot } from '../core/home.ts';
+import { how } from './how.ts';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -42,7 +43,7 @@ const SYSTEM = `あなたはソフトウェア開発チームの作業者です�
 async function main(): Promise<void> {
   const taskFile = process.argv[2];
   if (!taskFile) {
-    console.error('使い方: npm run team -- <tasks.json>');
+    console.error(`使い方: ${how('team', '<tasks.json>')}`);
     process.exit(1);
   }
 

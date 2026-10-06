@@ -784,6 +784,8 @@ async function main(): Promise<void> {
                 failed: c.red('失敗'),
               }[ev.reason] ?? ev.reason;
               console.log(`\n  ${label}${ev.detail ? c.dim(` — ${ev.detail}`) : ''}`);
+              // 流し込んで使う（`echo … | aas agent`）呼び手が「通った」と読まないよう、失敗した回があれば 1 で終える（止めた回は数えない）
+              if (ev.reason === 'failed') process.exitCode = 1;
               break;
             }
             case 'verify':

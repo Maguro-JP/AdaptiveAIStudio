@@ -18,7 +18,7 @@ import { installModel, defaultModelsDir, quantFrom } from '../runtime/model-inst
 import { usesGguf } from '../runtime/local-runtime.ts';
 import { lookupCatalog, formatCatalog, STARTER_ID } from '../runtime/model-catalog.ts';
 import { pullModel } from '../runtime/ollama-pull.ts';
-import { findNewerOllama, describeNewer } from '../runtime/model-updates.ts';
+import { findNewerFor, describeNewer } from '../runtime/model-updates.ts';
 
 const c = {
   dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
@@ -69,8 +69,9 @@ if (process.argv.includes('--new')) {
   console.log(c.dim(`  手元: ${installed.join(', ')}\n`));
   console.log(c.dim('  配布元に訊いています...'));
   try {
-    const found = await findNewerOllama({ installed });
-    console.log(`\n${describeNewer(found)}\n`);
+    // 訊く先は使っている道で決める（いつも Ollama に訊いていたので、GGUF の名前では一度も訊かずに「見つかりませんでした」と言った）
+    const found = await findNewerFor({ runtimeKind: runtime.id, installed });
+    console.log(`\n${describeNewer(found, how)}\n`);
   } catch (e) {
     console.error(c.yellow(`  訊けませんでした: ${e instanceof Error ? e.message : String(e)}\n`));
     process.exit(1);

@@ -211,17 +211,22 @@ export async function findNewerGguf(opts: {
   return orUnreachable(findings, failed);
 }
 
-/** 人に見せる形。 */
-export function describeNewer(findings: NewerFinding[]): string {
+/**
+ * 人に見せる形。`hint` は打つ一手の書き方（配った形には npm が無い。CLI は `how` を渡す）。
+ */
+export function describeNewer(
+  findings: NewerFinding[],
+  hint: (task: string, args?: string) => string = (task, args) => `npm run ${task}${args ? ` -- ${args}` : ''}`,
+): string {
   if (findings.length === 0) return '新しい世代は見つかりませんでした。';
   const lines = ['新しい世代が出ています', ''];
   for (const f of findings) {
     lines.push(`  ${f.current} → ${f.found.join(', ')}`);
   }
   lines.push('');
-  lines.push('  取ってくる: npm run models -- --get <名前>');
+  lines.push(`  取ってくる: ${hint('models', '--get <名前>')}`);
   lines.push('  ※ 新しい＝この機械で動く、ではありません。');
-  lines.push('    大きさと活性パラメータを見てから選んでください（npm run models）。');
+  lines.push(`    大きさと活性パラメータを見てから選んでください（${hint('models')}）。`);
   return lines.join('\n');
 }
 
