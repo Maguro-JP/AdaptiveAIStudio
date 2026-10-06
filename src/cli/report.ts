@@ -18,7 +18,7 @@ import { cpus, totalmem, platform, arch, release } from 'node:os';
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { REPORT_NAME, reportOrder } from '../runtime/cleanup.ts';
 import { aasHome, stateDir, productRoot, modelsDir } from '../core/home.ts';
-import { configPath } from '../config.ts';
+import { configPath, loadConfig } from '../config.ts';
 import { listGguf } from '../runtime/inproc.ts';
 import { saveReport, tellWhereItWent, plain } from './report-file.ts';
 import { needsStripFlag } from '../core/node-flags.ts';
@@ -188,7 +188,10 @@ if (process.argv[1] && (process.argv[1] === here || process.argv[1].endsWith('re
   const state = stateDir();
   say('AdaptiveAIStudio — 困ったときの報告をまとめます');
   say();
-  const body = await buildReport({ root: join(root, ...(await stat(join(root, 'app', 'src')).then(() => ['app']).catch(() => []))), state, home: aasHome(), models: modelsDir() });
+  // 保存先は設定で変えたものを見る（画面の報告と同じ。既定の場所を見て「GGUF はありません」と言い、同じ報告の doctor と食い違っていた）
+  let models = modelsDir();
+  try { models = loadConfig().config.runtime?.modelsDir ?? models; } catch { /* 設定が壊れているなら既定の場所を見る（壊れていることは doctor が言う） */ }
+  const body = await buildReport({ root: join(root, ...(await stat(join(root, 'app', 'src')).then(() => ['app']).catch(() => []))), state, home: aasHome(), models });
   say();
   for (const line of tellWhereItWent(await saveReport('report', body, [join(state, 'reports'), state, root]))) say(`  ${line}`);
   say();

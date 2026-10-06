@@ -31,8 +31,8 @@ export function redactSecrets(text: string): string {
     // 値は引用符で囲まれていてもよい（`.env` の `KEY="..."`、`--token="..."`）。囲みごと伏せる
     // 名前の大小は問わない（`~/.aws/credentials` の `aws_secret_access_key = …`）。YAML や見出しの `password: …` も
     .replace(/\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)\s*=\s*)(?!（伏せました）)(?:"[^"\n]*"|'[^'\n]*'|[^\s"']+)/g, '$1（伏せました）')
-    // 小文字の名前と `:` の形は、値が鍵らしい（12 文字以上で、`.`・括弧・空白を含まない）ときだけ。コードの `apiKey: string`・`token = req.headers.x` は伏せない
-    .replace(/\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)\s*[=:]\s*)(?!（伏せました）)(["']?)[A-Za-z0-9+/_=-]{12,}\2(?=[\s,}]|$)/gim, '$1（伏せました）')
+    // 小文字の名前と `:` の形は、値が鍵らしい（12 文字以上で、`.`・括弧・空白を含まない）ときだけ。道の問い合わせ（`?api_key=…&v=1`）の `&` の手前でも切る。コードの `apiKey: string`・`token = req.headers.x` は伏せない
+    .replace(/\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD)\s*[=:]\s*)(?!（伏せました）)(["']?)[A-Za-z0-9+/_=-]{12,}\2(?=[\s,}&#]|$)/gim, '$1（伏せました）')
     .replace(/\b(Authorization\s*:\s*(?:Basic|Token)\s+)[A-Za-z0-9+/=._-]{8,}/gi, '$1（伏せました）')
     // 引数の名前は単語の頭から（`max-token`・`non-secret` のような普通の言葉の一部には当てない）
     .replace(/(?<![\w-])(--?(?:api[-_]?key|token|secret|password)\b)(\s*=\s*|["']?\s*,\s*|\s+)(?!（伏せました）)(?:"[^"\n]*"|'[^'\n]*'|[^\s"',\]]+)/gi, '$1$2（伏せました）');
