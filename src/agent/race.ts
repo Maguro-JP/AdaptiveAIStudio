@@ -49,7 +49,7 @@ export async function race<R>(
   const controllers = attempts.map(() => new AbortController());
   const abortAll = (reason: string, except?: number) => {
     controllers.forEach((c, i) => {
-      if (i !== except && !c.signal.aborted) {
+      if (i !== except && !done.has(i) && !c.signal.aborted) {
         c.abort();
         onEvent?.({ type: 'cancel', label: attempts[i]!.label, reason });
       }
@@ -61,6 +61,10 @@ export async function race<R>(
   const started = Date.now();
   const settled: RaceOutcome<R>['others'] = [];
   let winner: RaceOutcome<R>['winner'];
+  // 勝った試みの番号と、もう終わった試み。取り消しの知らせは、まだ走っているものにだけ出す（前は終わった順の番号を除いていたので、
+  // 負けた試みと同じ一巡で終わった勝ちの試みにも「取り消し」と出し、画面と記録が食い違った）
+  let winnerIndex: number | undefined;
+  const done = new Set<number>();
 
   const running = new Map<number, Promise<number>>();
   attempts.forEach((a, i) => {
@@ -72,7 +76,8 @@ export async function race<R>(
         const ok = accept(result);
         settled.push({ label: a.label, result, ms, accepted: ok });
         onEvent?.({ type: 'settle', label: a.label, accepted: ok, ms });
-        if (ok && !winner) winner = { label: a.label, result, ms };
+        done.add(i);
+        if (ok && !winner) { winner = { label: a.label, result, ms }; winnerIndex = i; }
         return i;
       },
       (e: unknown) => {
@@ -80,6 +85,7 @@ export async function race<R>(
         const error = e instanceof Error ? e.message : String(e);
         settled.push({ label: a.label, error, ms, accepted: false });
         onEvent?.({ type: 'settle', label: a.label, accepted: false, ms, error });
+        done.add(i);
         return i;
       },
     ).finally(() => { running.delete(i); });
@@ -90,7 +96,7 @@ export async function race<R>(
     while (running.size > 0) {
       const finishedIndex = await Promise.race(running.values());
       if (winner) {
-        abortAll('先に成功した結果を採用', finishedIndex);
+        abortAll('先に成功した結果を採用', winnerIndex ?? finishedIndex);
         break;
       }
     }

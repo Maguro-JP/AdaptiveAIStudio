@@ -19,7 +19,7 @@ import {
 } from '../agent/tools/services.ts';
 import { defaultWorkRoot } from './home.ts';
 import { isWriteTool, mayChangeFiles, isExternalTool } from '../agent/tools/write-kind.ts';
-import { resolve, join } from 'node:path';
+import { resolve, join, isAbsolute, relative } from 'node:path';
 import type { AasConfig } from '../config.ts';
 import { buildRegistry } from './build.ts';
 import { ChatOrchestrator } from './orchestrator.ts';
@@ -947,7 +947,8 @@ export class Session {
             // run_command は path を持たない（持っていても意味が違う）。
             if (isWriteTool(ev.event.call.name)) {
               const path = (ev.event.call.args as { path?: string }).path;
-              if (path) written.add(path.replace(/\\/g, '/').replace(/^\.\//, ''));
+              // 作業場の中の絶対の道は、作業場からの道に直す（git の道と二重に並び、検収が「計画に無いファイル」と言っていた）
+              if (path) written.add((isAbsolute(path) && !relative(root, path).startsWith('..') ? relative(root, path) : path).replace(/\\/g, '/').replace(/^\.\//, ''));
             }
           }
           yield {
@@ -978,12 +979,13 @@ export class Session {
         yield { type: 'verifying', command };
         const r = await runVerification(
           { command, root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal);
-        const integrity: { ok: boolean; reason?: string; unsure?: string } = r.passed && testsBefore
+        // テストの数は、落ちた回でも比べる（落ちたテストを消して作業前と同じ落ち方に戻した回を「元から」と言わない。送り口と同じ）
+        const integrity: { ok: boolean; reason?: string; unsure?: string } = testsBefore && !r.timedOut
           ? await snapshotTests(root).then((after) => compareTests(testsBefore, after), () => ({ ok: true, unsure: 'テストを読めませんでした' }))
           : { ok: true };
         if (stopped()) verifyDetail = '止めたので、確かめを途中でやめました';
         else if (!integrity.ok) { verified = 'failed'; verifyDetail = integrity.reason ?? 'テストが減っています'; }
-        else if (integrity.unsure) { verified = 'unsure'; verifyDetail = integrity.unsure; }
+        else if (integrity.unsure && r.passed) { verified = 'unsure'; verifyDetail = integrity.unsure; }
         else if (r.passed) verified = 'passed';
         // 時間切れは落ちたのではない（送り口と同じく「分からない」。全部を巻き戻す理由にしない）
         else if (r.timedOut) { verified = 'unsure'; verifyDetail = '確かめが時間内に終わりませんでした'; }
