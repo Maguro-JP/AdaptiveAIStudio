@@ -1320,6 +1320,8 @@ export class Session {
         type: 'chose', modeId: mode.id, codename: mode.codename, name: mode.name,
         roleCodename: role.codename, reason: decision.reason, isDuty: !!decision.dutyId,
       };
+      // 実際のコンテキストウィンドウとその数え方を渡す（送り口と同じ。渡さないと既定の 8192 で見積もり、読んだファイルを刈りすぎる・溢れさせる）
+      const thinkCounter = await this.#count();
       const thinker = new Agent(this.orchestrator, {
         candidates: this.candidates,
         system: buildSystemPrompt(role),
@@ -1328,6 +1330,8 @@ export class Session {
         maxTurns: 8,
         temperature: this.config.temperature,
         maxTokens: this.config.maxTokens,
+        contextTokens: this.contextTokens,
+        ...(thinkCounter ? { count: (t: string) => thinkCounter.count(t) } : {}),
         // 考えるだけ。手は動かさない。
         // ただし外を**読む**ことは止めない。読むだけなら、この場所は変わらない。
         // 止めるのは書き込みとコマンド。手を出すことと、調べることは違う。

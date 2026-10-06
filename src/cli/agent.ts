@@ -230,10 +230,13 @@ async function main(): Promise<void> {
 
     const ac = new AbortController();
     generating = ac;
+    // 実際のコンテキストウィンドウを渡す（渡さないと既定の 8192 で見積もり、読んだファイルを刈りすぎる）
+    const panelWindow = (await getSession()).contextTokens;
     const gen = runPanel(orchestrator, target, {
       roles: members, candidates, root, toolPool,
       parallel: panelCfg.parallel ?? 2,
       temperature: config.temperature, maxTokens: config.maxTokens,
+      ...(panelWindow ? { contextTokens: panelWindow } : {}),
     }, ac.signal);
 
     try {

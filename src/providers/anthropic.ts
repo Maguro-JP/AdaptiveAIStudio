@@ -104,7 +104,8 @@ export class AnthropicProvider implements ChatProvider {
 
   async *chat(req: ProviderRequest, signal: AbortSignal): AsyncIterable<ProviderChunk> {
     // Claudeは system をトップレベルで受け取る(messagesに混ぜない)
-    const messages = toAnthropicMessages(req.messages);
+    // ツールを渡さない回（雑談と見た回）は、前の回のツールのやりとりを文に畳む（tools 無しで tool_use・tool_result を送ると断られる）
+    const messages = toAnthropicMessages(req.tools && req.tools.length > 0 ? req.messages : withoutToolBlocks(req.messages));
 
     const systemFromMessages = req.messages
       .filter((m) => m.role === 'system')
@@ -261,6 +262,27 @@ export function finishFromStop(reason: string | null | undefined): 'stop' | 'len
   if (reason === 'max_tokens' || reason === 'model_context_window_exceeded') return 'length';
   if (reason === 'tool_use') return 'toolCalls';
   return undefined;
+}
+
+/**
+ * ツールの呼び出しと結果を、文に畳む。ツールを渡さない依頼で使う（Claude は tools を定義しない依頼の tool_use・tool_result を断る）。
+ * 何を呼んで何が返ったかは文として残す（落とすと、前の回の話の筋が消える）。
+ */
+export function withoutToolBlocks(messages: readonly ProviderMessage[]): ProviderMessage[] {
+  const names = new Map<string, string>();
+  return messages.map((m): ProviderMessage => {
+    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+      const calls = m.toolCalls.map((c) => {
+        names.set(c.id, c.name);
+        return `（${c.name} を呼んだ: ${typeof c.args === 'string' ? c.args : JSON.stringify(c.args)}）`;
+      });
+      return { role: 'assistant', content: [m.content, ...calls].filter((t) => t.trim()).join('\n') };
+    }
+    if (m.role === 'tool') {
+      return { role: 'user', content: `（${names.get(m.toolCallId ?? '') ?? 'ツール'} の結果）\n${m.content}` };
+    }
+    return m;
+  });
 }
 
 export function toAnthropicMessages(messages: readonly ProviderMessage[]): { role: 'user' | 'assistant'; content: Block[] }[] {
