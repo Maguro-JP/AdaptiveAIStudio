@@ -83,7 +83,7 @@ import { ANY_PATH, type LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
 import { Conversation } from './conversation.ts';
 import { WorkspaceLock } from './workspace-lock.ts';
-import { fitByTokens, estimateTokens } from '../agent/window.ts';
+import { fitByTokens, estimateTokens, headOf } from '../agent/window.ts';
 import { ProjectRules } from '../agent/project-rules.ts';
 import type { Counter } from '../agent/tokenizer.ts';
 import { resolveCounting, type Counting } from './counting.ts';
@@ -1711,7 +1711,8 @@ export class Session {
      * 場面（直前の指示）は、この回の記録で上書きされる前に取る。
      */
     const situation = {
-      when: conv.lastTurn?.instruction.trim().slice(0, 120),
+      // 伏せてから切る（切ってから伏せると、120 字の境で切れた鍵の頭が伏せる形に当たらず残った）。字の対も割らない
+      when: conv.lastTurn ? headOf(redactSecrets(conv.lastTurn.instruction.trim()), 120) : undefined,
       did: this.#lastTurnSummary(conv),
     };
 
@@ -2452,15 +2453,16 @@ export class Session {
   #recall(text: string, opts: { lessons?: boolean } = {}, conv: Conversation = this.#conv): string {
     // **件数ではなく、長さで決める。**一件の長さは決まっていないので、
     // 「6件」では窓が狭いモデルで押し出し、広いモデルで余らせる。
-    const related = fitByTokens(
-      this.memory.recall(text, { limit: 12, root: this.root, ...opts }),
+    // 前に駄目だった手も、長さの上限の内で数える（上限で切った後に足していたので、狭いコンテキストウィンドウでは上限の数倍になった）。先に並べて落としにくくする
+    const failed = this.memory.failedBefore(text, 2, this.root);
+    const candidates = [...failed];
+    for (const e of this.memory.recall(text, { limit: 12, root: this.root, ...opts })) if (!candidates.some((c) => c.id === e.id)) candidates.push(e);
+    const merged = fitByTokens(
+      candidates,
       (e) => `${e.title}${e.detail}`,
       Math.floor(this.contextTokens * 0.10),
       2,
     );
-    const failed = this.memory.failedBefore(text, 2, this.root);
-    const merged = [...related];
-    for (const f of failed) if (!merged.some((e) => e.id === f.id)) merged.push(f);
     conv.recalledIds = merged.map((e) => e.id);
     conv.recalledEra = this.memory.era;
     this.memory.noteRecalled(conv.recalledIds);

@@ -34,6 +34,7 @@ import { realpathSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { jstDate } from '../core/clock.ts';
 import { redactSecrets } from '../core/redact.ts';
+import { headOf } from '../agent/window.ts';
 import { BUILTIN_LESSONS, lessonLine } from './builtin-lessons.ts';
 import { withFileLock } from '../core/file-lock.ts';
 
@@ -606,7 +607,8 @@ export class Memory {
       // **ただし、汲み取れた話は、長さに関係なく受け取る。**
       // 長さだけで決めていたので、決め文句（未消化）のほうが長いと、
       // 考えて掴んだ中身が捨てられていた。
-      if (input.detail && betterDetail(input.detail, existing.detail)) existing.detail = input.detail;
+      // 試したことの結果が来たら、中身もその回のものにする（結果だけ新しくなり、中身は前の「通らなかった」のまま食い違った）
+      if (input.detail && ((existing.kind === 'attempt' && input.outcome) || betterDetail(input.detail, existing.detail))) existing.detail = input.detail;
       for (const t of input.tags ?? []) if (!existing.tags.includes(t)) existing.tags.push(t);
       if (input.outcome) existing.outcome = input.outcome;
       this.#dirty = true;
@@ -1057,8 +1059,9 @@ export function formatRecall(entries: MemoryEntry[]): string {
     const trust = e.confirms >= 3 ? '確か' : e.confirms === 2 ? 'おそらく' : '一度だけ';
     const mark = e.outcome === 'failed' ? '（失敗した）' : e.outcome === 'worked' ? '（うまくいった）' : '';
     // 題も一行に切る（前に長い題で覚えたもの・添付だけを送った回の題が、丸ごと依頼へ入らないように）
-    lines.push(`  [${KIND_LABEL[e.kind]}/${trust}] ${e.title.split('\n')[0]!.slice(0, 160)}${mark}`);
-    if (e.detail) lines.push(`      ${e.detail.split('\n')[0]!.slice(0, 160)}`);
+    // 字の対（絵文字など）の片方だけを残さない（片方だけの字を相手が断ることがある）
+    lines.push(`  [${KIND_LABEL[e.kind]}/${trust}] ${headOf(e.title.split('\n')[0]!, 160)}${mark}`);
+    if (e.detail) lines.push(`      ${headOf(e.detail.split('\n')[0]!, 160)}`);
   }
   return lines.join('\n');
 }
