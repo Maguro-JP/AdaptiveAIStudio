@@ -1910,6 +1910,9 @@ export const PANELS = {
       if (j.walkDeep) notes.push('深い所は見ていません');
       if (j.tooBig > 0) notes.push(`大きすぎて開いていないファイルが ${j.tooBig} 個あります`);
       if (j.unreadable > 0) notes.push(`二進のため見ていないファイルが ${j.unreadable} 個あります`);
+      if (j.failed > 0) notes.push(`読めずに見ていないファイルが ${j.failed} 個あります`);
+      if (j.unreadableDirs > 0) notes.push(`中を見られないフォルダが ${j.unreadableDirs} 個あります`);
+      if (j.aborted) notes.push('時間内に終わらなかったので、途中までしか見ていません');
       if (hits.length === 0) {
         if (j.walkDots > 0) notes.push(`. で始まるもの ${j.walkDots} 個は見ていません`);
         state.textContent = `見つかりませんでした: ${text}${notes.length ? ` — ${notes.join(' / ')}` : ''}`;

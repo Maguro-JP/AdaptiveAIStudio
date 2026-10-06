@@ -7,7 +7,7 @@ import { safeResolve, realSafeResolve, isSymlink, toDisplayPath } from './paths.
 import { type Tool, type ToolContext, ok, fail, requireString, optionalPositiveInt } from './types.ts';
 import { applyEdit, nearestTo } from './write-kind.ts';
 import { Ignores } from '../ignore.ts';
-import { contentOf, readPrior, type FileContent } from '../../harness/put-back.ts';
+import { contentOf, readPrior, isAbsent, type FileContent } from '../../harness/put-back.ts';
 import { decodeForReading } from './decode.ts';
 
 /**
@@ -157,12 +157,14 @@ export const listFilesTool: Tool = {
     const found: string[] = [];
     const walked: Walked = { capped: false };
     try {
-      await walk(abs, ctx.root, found, 0, await ignoresFor(ctx.root, p), walked);
+      // 決まりは、解いた後の根からの道で降りる（渡された綴り（絶対の道・大文字小文字の違い）で降りると、途中の .gitignore が効かない）
+      await walk(abs, ctx.root, found, 0, await ignoresFor(ctx.root, toDisplayPath(ctx.root, abs)), walked);
     } catch (e) {
       return fail(`一覧できません: ${p} (${describe(e)})`);
     }
     // 見なかった所があるのに「ファイルなし」とだけ言わない（深い所や . で始まる所に在りうる）
-    const deep = walked.deep ? `\n${DEEP_NOTE}` : '';
+    const deep = (walked.deep ? `\n${DEEP_NOTE}` : '')
+      + (walked.unreadableDirs ? `\n（中を見られないフォルダが ${walked.unreadableDirs} 個あります）` : '');
     if (found.length === 0) {
       const dots = dotsNote(walked.dots);
       return ok(`(ファイルなし)${deep}${dots ? `\n${dots}` : ''}`);
@@ -203,6 +205,12 @@ export interface TextSearch {
   tooBig: number;
   /** 二進（NUL を含む）なので中を見ていないファイルの数 */
   unreadable: number;
+  /** 読めずに見ていないファイルの数（権限・掴まれている） */
+  failed?: number;
+  /** 中を見られなかったフォルダの数 */
+  unreadableDirs?: number;
+  /** 止めた・時間切れで、途中までしか見ていない */
+  aborted?: boolean;
   /** 探しにすら行けなかったときの理由 */
   error?: string;
 }
@@ -241,13 +249,14 @@ export async function searchText(
     // ここで readdir に落として ENOTDIR を返すと、使い方の間違いにしか見えない。
     const info = await stat(abs);
     if (info.isFile()) files.push(toDisplayPath(root, abs));
-    else await walk(abs, root, files, 0, await ignoresFor(root, base), walked);
+    else await walk(abs, root, files, 0, await ignoresFor(root, toDisplayPath(root, abs)), walked);
   } catch (e) {
     return { ...out, error: `探せません: ${base} (${describe(e)})` };
   }
   out.walkCapped = walked.capped;
   if (walked.deep) out.walkDeep = true;
   if (walked.dots) out.walkDots = walked.dots;
+  if (walked.unreadableDirs) out.unreadableDirs = walked.unreadableDirs;
 
   /*
    * **打ち切ったことを、必ず言う。**
@@ -258,7 +267,8 @@ export async function searchText(
    */
   for (const rel of files) {
     if (out.hits.length >= SEARCH_HITS) { out.capped = true; break; }
-    if (signal.aborted) break;
+    // 止めた・時間切れは、途中までだと記録する（全部見た結果として「該当なし」を返していた）
+    if (signal.aborted) { out.aborted = true; break; }
     const target = await realSafeResolve(root, rel);
     if (!target) continue;
     try {
@@ -278,7 +288,10 @@ export async function searchText(
           out.capped = true;
         }
       });
-    } catch { /* 読めない道（消えた・権限が無い）は読み飛ばす */ }
+    } catch (e) {
+      // 消えたものは数えない。読めなかったもの（権限・掴まれている）は数えて言う（黙って「該当なし」にしていた）
+      if (!isAbsent(e)) out.failed = (out.failed ?? 0) + 1;
+    }
   }
   return out;
 }
@@ -334,6 +347,9 @@ export const searchTextTool: Tool = {
     if (found.unreadable > 0) {
       notes.push(`（二進のため見ていないファイルが ${found.unreadable} 個あります）`);
     }
+    if (found.failed) notes.push(`（読めずに見ていないファイルが ${found.failed} 個あります）`);
+    if (found.unreadableDirs) notes.push(`（中を見られないフォルダが ${found.unreadableDirs} 個あります）`);
+    if (found.aborted) notes.push('（止めたので、途中までしか見ていません）');
     const tail = notes.length > 0 ? `\n${notes.join('\n')}` : '';
     const lines = found.hits.map((h) => `${h.path}:${h.line}: ${h.text}`);
     if (lines.length > 0) return ok(lines.join('\n') + tail);
@@ -442,7 +458,13 @@ async function commit(
   // モデルは LF で書き戻す。そのまま書くと**1行も直していないのに
   // ファイル全体が変更扱い**になり、差分を見る意味がなくなる。
   // utf8 で読めないものは、仮の一行ではなく元のバイト列で改行を数える（latin1 は 1 バイト 1 文字で、改行を崩さない）。
-  const lined = matchLineEndings(content, opaque ? priorBytes!.toString('latin1') : before);
+  // UTF-16（BOM 付き）は読める文字で数える（latin1 では CRLF が `\r\0\n\0` になって一つも当たらず、全部 LF で書いていた）
+  const utf16 = opaque && priorBytes!.length >= 2
+    && ((priorBytes![0] === 0xff && priorBytes![1] === 0xfe) || (priorBytes![0] === 0xfe && priorBytes![1] === 0xff));
+  const priorText = utf16 ? decodeForReading(priorBytes!) : undefined;
+  const lined = matchLineEndings(content, opaque
+    ? (priorText && priorText.kind !== 'binary' ? priorText.text : priorBytes!.toString('latin1'))
+    : before);
   // 元の BOM も残す。モデルは見えない U+FEFF を写さないので、BOM 付きの `.cmd` を全文で書き戻すと BOM が落ち、cmd.exe が
   // CP932 として読んで日本語の行が壊れていた（差分には見えない）。edit_file は当てる所で残している
   const written = !lined.startsWith('\uFEFF') && (
@@ -726,6 +748,8 @@ interface Walked {
   deep?: boolean;
   /** 飛ばした `.` で始まるもの（`.git` を除く）の数 */
   dots?: number;
+  /** 中を見られなかったフォルダの数（権限・掴まれている） */
+  unreadableDirs?: number;
 }
 
 /**
@@ -752,7 +776,15 @@ async function walk(
   if (out.length >= WALK_FILES) { if (capped) capped.capped = true; return; }
   // 深さで見るのをやめたことも言う。黙ってやめると、深い所に在るものを「該当なし」と返す
   if (depth > WALK_DEPTH) { if (capped) capped.deep = true; return; }
-  const entries = await readdir(dir, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (e) {
+    // 根は失敗として返す。下の階の読めないフォルダは数えて続ける（一つで一覧と検索が全部落ちていた）
+    if (depth === 0) throw e;
+    if (!isAbsent(e) && capped) capped.unreadableDirs = (capped.unreadableDirs ?? 0) + 1;
+    return;
+  }
   for (const e of entries) {
     if (e.name.startsWith('.') && e.name !== '.github') {
       if (capped && e.name !== '.git') capped.dots = (capped.dots ?? 0) + 1;

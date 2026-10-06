@@ -2459,6 +2459,7 @@ export class UiServer {
         hits: found.hits, capped: found.capped,
         walkCapped: found.walkCapped, walkDeep: found.walkDeep === true, walkDots: found.walkDots ?? 0,
         tooBig: found.tooBig, unreadable: found.unreadable,
+        failed: found.failed ?? 0, unreadableDirs: found.unreadableDirs ?? 0, aborted: found.aborted === true,
       });
     }
 
