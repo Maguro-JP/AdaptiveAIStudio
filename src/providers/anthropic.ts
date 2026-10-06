@@ -15,7 +15,7 @@ import type {
   ChatProvider, HealthStatus, ModelDescriptor,
   ProviderChunk, ProviderMessage, ProviderRequest,
 } from './contract.ts';
-import { ProviderError, parseRetryAfter, sayQuotaExhausted, type ProviderErrorKind } from './errors.ts';
+import { ProviderError, parseRetryAfter, sayQuotaExhausted, saysContextTooLong, type ProviderErrorKind } from './errors.ts';
 
 type Sdk = typeof import('@anthropic-ai/sdk')['default'];
 
@@ -211,7 +211,7 @@ export class AnthropicProvider implements ChatProvider {
       kind = 'auth';
     } else if (e instanceof sdk.BadRequestError) {
       // 残高切れは 400 で返る（`credit balance is too low`）。「こちらの誤り」にすると次の候補へ回らず、依頼ごと落ちていた
-      kind = /context|too long|maximum.*token|token.*limit|prompt is too long/i.test(e.message)
+      kind = saysContextTooLong(`${e.message} ${JSON.stringify(e.error ?? '')}`)
         ? 'context_too_long'
         : sayQuotaExhausted(`${e.message} ${JSON.stringify(e.error ?? '')}`) === true ? 'quota_exhausted' : 'invalid_request';
     } else if (e instanceof sdk.NotFoundError) {
