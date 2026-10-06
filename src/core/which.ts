@@ -52,7 +52,8 @@ export function findOnPath(command: string, env: WhichEnv): string | undefined {
     return candidates(command).find((c) => exists(c));
   }
 
-  const dirs = (env.path ?? '').split(path.delimiter).filter((d) => d.length > 0);
+  // 引用符で囲んだ項目（`"C:\Program Files\nodejs"`）は外して探す（cmd.exe と同じ。外さずにいたので、在る命令を「無い」と断った）
+  const dirs = (env.path ?? '').split(path.delimiter).map((d) => d.replace(/^"(.*)"$/, '$1')).filter((d) => d.length > 0);
   for (const dir of dirs) {
     const hit = candidates(path.join(dir, command)).find((c) => exists(c));
     if (hit) return hit;

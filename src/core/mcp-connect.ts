@@ -69,8 +69,9 @@ export async function connectService(id: string, opts: ConnectOptions = {}): Pro
       enabled: opts.enabled !== false,
     };
     // 同梱してあるなら、そちらで起こす（npx の無い機械でも動く）。
+    let launch: ReturnType<typeof githubLaunch> | undefined;
     if (entry.id === 'github-local') {
-      const launch = githubLaunch();
+      launch = githubLaunch();
       spec.command = launch.command;
       spec.args = launch.args;
     }
@@ -78,7 +79,7 @@ export async function connectService(id: string, opts: ConnectOptions = {}): Pro
     return {
       ok: true, id: entry.id, path, spec: spec as McpServerSpec,
       missing: missingSecrets(entry).map((m) => ({ env: m.env, about: m.about, ...(m.where ? { where: m.where } : {}) })),
-      notes: notesFor(entry, opts.prefer),
+      notes: notesFor(entry, opts.prefer, launch),
       };
   } catch (e) {
     return { ok: false, missing: [], notes: [], error: (e as Error).message };
@@ -101,7 +102,7 @@ export async function disconnectService(id: string): Promise<ConnectResult> {
   }
 }
 
-function notesFor(entry: CatalogEntry, prefer?: 'remote' | 'local'): string[] {
+function notesFor(entry: CatalogEntry, prefer?: 'remote' | 'local', launch?: { command: string; why?: string }): string[] {
   const notes: string[] = [];
   if (entry.retired) notes.push(entry.retired);
   // **確かめていないことは、確かめていないと言う。**
@@ -109,7 +110,9 @@ function notesFor(entry: CatalogEntry, prefer?: 'remote' | 'local'): string[] {
     notes.push('この繋ぎ先はこちらの見当です（確かめていません）。'
       + '繋がらなければ「手元で動かす」を試してください。');
   }
-  if (needsNpx(entry, prefer) && !canRun('npx')) {
+  // 実際の起こし方で言う（同梱のツールを node で直に起こすのに「npx が無いので動きません」と言い、動くものを動かないと読ませた）
+  if (launch?.why) notes.push(launch.why);
+  else if ((!launch || launch.command === 'npx') && needsNpx(entry, prefer) && !canRun('npx')) {
     notes.push('この道具は npx で立ち上げます。この機械には npm が入っていないので、動きません。');
   }
   return notes;

@@ -373,6 +373,7 @@
 - 67 回目の不具合調査の 3 件（往復とコンテキストウィンドウ: 合議と考えごとのコンテキストウィンドウ・対になる文字の切り方・ツールを渡さない回の Claude）
 - 68 回目の不具合調査の 7 件（ファイルのツールとコマンド: 頭を落とした出力・末尾の片割れ・UTF-16 の改行・止めた検索・読めないファイルとフォルダ・絶対の道の .gitignore）
 - 69 回目の不具合調査の 4 件（守りと戻し方: MCP の引数の検問・書けなかった道の記録・大文字小文字の見分け・協議の要る一覧）
+- 70 回目の不具合調査の 3 件（src/core の起動まわり: 同梱の GitHub の注記・PATH の引用符・数え方のモデル）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -12944,3 +12945,12 @@ repo map の使い回しの件は、試験を書いていない（確かめて�
 - 協議の要る一覧（`GUARDED_PATHS`）に、MCP の検問所（`src/mcp/tools.ts`）とinspector の組み立て（`src/core/inspector-setup.ts`）が無く、検問を外す書き換えが協議なしに通った（fetch_url 側は入れてあった）。足す
 試験は `test/harness-guard-gaps.test.ts`（直す前の版で 3 件とも落ちた。記録の件は捨てる口そのもので見ていて、本体がそれを呼ぶ所は試験を通していない）。大文字小文字の見分けは、Linux では見分けられないので試験を書いていない（確かめていない）。
 触る場所: `src/mcp/tools.ts`（`stringsIn`）、`src/agent/tools/network.ts`、`src/harness/checkpoint.ts`（`forget`）、`src/core/session.ts`（書けなかった道の記録の捨て方）、`src/harness/put-back.ts`（`foldsCase`・`innerProbe`）、`src/harness/deliberation.ts`（`GUARDED_PATHS`）
+
+## 2026-10-07  70 回目の不具合調査の 3 件（src/core の起動まわり: 同梱の GitHub の注記・PATH の引用符・数え方のモデル）
+
+`src/core/` のうち、これまで見た回数の少ないもの（build・listen・workspace-lock・github-mcp・counting・which・mcp-connect・conversations ほか約 2,300 行）を、読むだけの調査で見た分。
+- bundle（npm が無く、GitHub のツールを同梱している）で `github-local` を繋ぐと、同梱のツールを node で直に起こすのに「npx で立ち上げます。npm が入っていないので動きません」と返し、社用PC で動くものを動かないと読ませた。実際の起こし方で言う（起こせないときは、その理由を言う）
+- PATH に引用符で囲んだ項目（`"C:\Program Files\nodejs"`）があると、その中の npx・node を見つけられず、外のツールを起こす前に「その命令がありません」と断った（cmd.exe は外して探す）。外して探す。実機の PATH に引用符付きがどれくらいあるかは確かめていない
+- GGUF が二つ以上あって指定が無いと、数え方（doctor など）は名前の先頭のものを「本物」と見せ、runtime が実際に読むもの（`chooseModel` が大きさと機械で選ぶ）とずれた。同じ関数で選ぶ（GPU の有無はここでは分からないので、GPU 無しとして選ぶ。GPU の機械ではまだずれうる）
+試験は `test/core-setup-gaps.test.ts`（PATH と数え方。直す前の版で 2 件とも落ちた）。同梱の GitHub の注記は、同梱の有無を外から渡す口が要るので試験を書いていない（確かめていない）。
+触る場所: `src/core/mcp-connect.ts`（`notesFor`）、`src/core/which.ts`（`findOnPath`）、`src/core/counting.ts`（`resolveCounting`）
