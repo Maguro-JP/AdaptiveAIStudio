@@ -90,7 +90,8 @@ const OUTBOUND: Pattern[] = [
   {
     kind: '秘密鍵',
     // 暗号化した鍵（`ENCRYPTED PRIVATE KEY`）も止める。トークンで守られていても、外へ出せば破られうる
-    match: /-----BEGIN\s+(RSA|OPENSSH|EC|DSA|PGP|ENCRYPTED)?\s*PRIVATE KEY-----/,
+    // PGP は `PRIVATE KEY BLOCK-----` で終わる（`KEY-----` だけを見ていたので、一度も当たらなかった）
+    match: /-----BEGIN\s+(?:[A-Z0-9]+\s+)*PRIVATE KEY(?: BLOCK)?-----/,
     severity: 'block',
     detail: '秘密鍵が含まれています。',
   },
@@ -100,7 +101,8 @@ const OUTBOUND: Pattern[] = [
     // 今の Anthropic と OpenAI の鍵は `sk-ant-api03-…` `sk-proj-…` のように途中に `-` が入る。`sk-` の直後に英数字だけを
     // 求めていたので、当たらずに外へ出ていた。`-` を受けるのは決まった頭の字（prefix）の後だけ（`sk-learn-pipeline-tutorial` のような語を止めない）。
     // 末尾も `\b` ではなく、鍵の字が続かないことで見る（`-` で終わる鍵がある）。
-    match: /\b(sk-(?:ant-[a-z0-9]+-|proj-|svcacct-|admin-)[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})(?![A-Za-z0-9_-])/,
+    // 伏せる側（redact.ts）が知っている Google（`AIza`）・Hugging Face（`hf_`）・一時の AWS（`ASIA`）も当てる
+    match: /\b(sk-(?:ant-[a-z0-9]+-|proj-|svcacct-|admin-)[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|hf_[A-Za-z0-9]{20,})(?![A-Za-z0-9_-])/,
     severity: 'block',
     detail: '合言葉（APIキー・トークン）と思われる文字列が含まれています。',
   },
@@ -112,7 +114,8 @@ const OUTBOUND: Pattern[] = [
      * 広げた分は、値が行末までの長い文字そのもののときだけにする（`github_token = os.environ[...]` や
      * `GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}` のような、値を持たないコードと CI の設定は止めない）。大文字の `NAME=` は前のとおり値を問わない
      */
-    match: /^\s*(?:(?:export\s+)?(AWS_SECRET_ACCESS_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|GITHUB_TOKEN|GH_TOKEN)\s*=|(?:export\s+)?["']?(?:aws_secret_access_key|anthropic_api_key|openai_api_key|github_token|gh_token|AWS_SECRET_ACCESS_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|GITHUB_TOKEN|GH_TOKEN)["']?\s*[=:]\s*["']?[A-Za-z0-9/+=_-]{16,}["']?,?\s*$)/m,
+    // Windows の殻の書き方（`set NAME=…`・`setx NAME …`・`$env:NAME="…"`）も、頭に付く字として受ける
+    match: /^\s*(?:(?:export\s+|set\s+|\$env:)?(AWS_SECRET_ACCESS_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|GITHUB_TOKEN|GH_TOKEN)\s*=|setx\s+(AWS_SECRET_ACCESS_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|GITHUB_TOKEN|GH_TOKEN)\s+\S|(?:export\s+|set\s+|\$env:)?["']?(?:aws_secret_access_key|anthropic_api_key|openai_api_key|github_token|gh_token|AWS_SECRET_ACCESS_KEY|ANTHROPIC_API_KEY|OPENAI_API_KEY|GITHUB_TOKEN|GH_TOKEN)["']?\s*[=:]\s*["']?[A-Za-z0-9/+=_-]{16,}["']?,?\s*$)/m,
     severity: 'block',
     detail: '合言葉を含む設定が含まれています。',
   },

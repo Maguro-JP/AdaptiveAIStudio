@@ -98,7 +98,8 @@ export function protectedPaths(given: string[], opts: { nocase?: boolean; window
          * 「please check packages/api/.env」のような文（最初の区切りが「please check packages」）まで保護された道として止め、
          * issue やコメントに `.env` の話を書けなくしていた。空白を含む本当の道（`My Docs/.env`）は、親のフォルダが在るので今までどおり見る
          */
-        if (isExternalTool(call.name) && /\s/.test(path) && !existsSync(dirname(join(ctx.root, rel)))) continue;
+        // 作業場の外の絶対の道は、そのまま親を見る（作業場の根に繋いでいたので、いつも「無い」になり、空白を含む絶対の道を素通しした）
+        if (isExternalTool(call.name) && /\s/.test(path) && !existsSync(isAbsolute(rel) ? dirname(rel) : dirname(join(ctx.root, rel)))) continue;
         // 大小を区別しない機械では `.ENV` も `.env`。区別すると守りをすり抜ける。
         // 綴りだけでなく、書いたときに当たる実体でも照らす（Windows の `ENV~1` は `.env`、`g -> .git` の `g/config` は `.git/config`）
         const hit = await matchProtected(ctx.root, path, patterns, opts);
@@ -465,7 +466,9 @@ const CONFIG_RUNS = /^(core\.(hookspath|fsmonitor|pager|sshcommand|editor|askpas
  */
 function configWritesRunner(rest: readonly string[]): boolean {
   const flags = rest.filter((w) => w.startsWith('-')).map((w) => w.toLowerCase());
-  const plain = rest.filter((w) => !w.startsWith('-'));
+  // 値を後ろに取る選択肢（`-f .git/config`）の値は、鍵ではない（鍵として読んでいたので、`git config -f .git/config alias.p push` が通った）
+  const TAKES_VALUE = new Set(['-f', '--file', '--blob', '--type', '--default', '--comment']);
+  const plain = rest.filter((w, i) => !w.startsWith('-') && !TAKES_VALUE.has((rest[i - 1] ?? '').toLowerCase()));
   if (flags.some((f) => f === '--edit' || f === '-e') || plain[0]?.toLowerCase() === 'edit') return true;
   if (flags.some((f) => /^(--unset(-all)?|--get(-all|-regexp|-urlmatch|-color|colorbool)?|--list|-l|--remove-section|--show-origin|--show-scope|--name-only)$/.test(f))) return false;
   let words = plain;
@@ -517,6 +520,11 @@ export function gitDanger(command: string, depth = 0): string | undefined {
     // `:(top)` は包みを外すときに閉じ括弧が落ちて `:(top` になる。どちらも作業場全体
     const wholeTree = rest.some((w) => w === '.' || w === './' || w === '*' || w === ':/' || w === ':(top)' || w === ':(top');
     if (sub === 'push') return 'push';
+    // push と同じことをする別のサブコマンド（`send-pack`・`http-push`・`subtree push`）
+    if (sub === 'send-pack' || sub === 'http-push' || (sub === 'subtree' && rest[0]?.toLowerCase() === 'push')) return 'push';
+    // 作業ツリーを戻す別のサブコマンド（`checkout-index -f`・`read-tree --reset -u`）。reset --hard と同じく、まだ記録していない直しを消す
+    if (sub === 'checkout-index' && (shortFlag('f') || long('--force'))) return 'checkout-index -f';
+    if (sub === 'read-tree' && (shortFlag('u') || rest.includes('-u')) && (long('--reset') || shortFlag('m'))) return 'read-tree -u';
     if (sub === 'switch' && (shortFlag('f') || long('--force') || long('--discard-changes'))) return 'switch -f';
     if (sub === 'reset' && long('--hard')) return 'reset --hard';
     if (sub === 'clean' && (shortFlag('f') || long('--force'))) return 'clean -f';
