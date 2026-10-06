@@ -75,7 +75,7 @@ import { listenOrExplain } from '../core/listen.ts';
 import { crossSiteReason } from './origin.ts';
 import {
   RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
-  inspectModelsDir, ensureDefaultModelsDir, savedModelsDir, unquotePath,
+  inspectModelsDir, ensureDefaultModelsDir, savedModelsDir, unquotePath, readSavedMcpServers,
 } from './settings.ts';
 import {
   listGguf, chooseModel, tooBigForRam, looksLikeGguf, freePortFrom, INPROC_PORT, headsUp, CHOICE_WHY,
@@ -739,6 +739,15 @@ export class UiServer {
    * 読めている以上、使えるかどうかを名前で決め直す必要はない。
    */
   async #configForSession(): Promise<AasConfig> {
+    /*
+     * 外のツールの一覧は、組み直すたびに設定のファイルから取り直す。会話の `connect_service`・`disconnect_service` はファイルと
+     * いまの本体だけを変えるので、画面が持つ設定は古いまま残り、組み直すと外したものが戻り、繋いだものが消えていた。
+     * 読めないときは、持っている設定のまま
+     */
+    const saved = await readSavedMcpServers();
+    if (saved !== undefined) {
+      this.#opts.config = { ...this.#opts.config, mcp: { ...(this.#opts.config.mcp ?? {}), servers: saved as never } };
+    }
     const config = this.#opts.config;
     if (config.candidates && config.candidates.length > 0) return config;
     if ((config.runtime?.kind ?? 'inproc') !== 'inproc') return config;

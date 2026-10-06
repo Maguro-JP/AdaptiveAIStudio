@@ -131,7 +131,7 @@ export async function writeEnvValue(path: string, key: string, value: string): P
 
 async function writeEnvValueNow(path: string, key: string, value: string): Promise<string> {
 
-  const { writeFile, mkdir, chmod } = await import('node:fs/promises');
+  const { writeFile, mkdir, chmod, rename, unlink } = await import('node:fs/promises');
   const { dirname } = await import('node:path');
   await mkdir(dirname(path), { recursive: true });
   /*
@@ -168,7 +168,18 @@ async function writeEnvValueNow(path: string, key: string, value: string): Promi
   while (after.length > 0 && after[after.length - 1]!.trim() === '') after.pop();
   if (!replaced) after.push(line);
   // 作るときの権限。既に在るファイルには効かないので、下で付け直す。
-  await writeFile(path, `${bom}${after.join(eol)}${eol}`, { encoding: 'utf8', mode: 0o600 });
+  /*
+   * 仮のファイルに書き切ってから名前を付け替える（直に上書きすると、一度空にしてから書くので、途中で落ちると `.env` が空か途中までになり、
+   * ほかのトークンも全部消えた）。権限は仮のファイルに付けておく（付け替えたあとの名前は、その権限のまま）
+   */
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    await writeFile(tmp, `${bom}${after.join(eol)}${eol}`, { encoding: 'utf8', mode: 0o600, flush: true });
+    await rename(tmp, path);
+  } catch (e) {
+    try { await unlink(tmp); } catch { /* 作れなかった・もう無い仮のファイル */ }
+    throw e;
+  }
   await chmod(path, 0o600).catch(() => { /* Windows では効かない。落とさない */ });
   return key;
 }

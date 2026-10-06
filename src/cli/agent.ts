@@ -34,7 +34,8 @@ import { formatPlan } from '../agent/pm.ts';
 import { checkUpdate, applyUpdate, describeUpdate } from '../core/update.ts';
 import { formatReport as formatAcceptance } from '../agent/acceptance.ts';
 import { formatEntry } from '../memory/memory.ts';
-import { Session } from '../core/session.ts';
+import { Session, quietCandidates } from '../core/session.ts';
+import { buildInspector } from '../core/inspector-setup.ts';
 import { expandCommand } from '../agent/commands.ts';
 import { runPanel, mergeFindings, panelVerdict } from '../agent/panel.ts';
 import { formatIdleStats } from '../harness/idle.ts';
@@ -203,11 +204,17 @@ async function main(): Promise<void> {
     execute: harness.wrapAll(
       [createRunCommandTool({ allowed: agentCfg.allowedCommands })], () => currentInstruction),
     // 外へ出る口。閉じてもこの場所は動く。持っていない人は外に出られない。
+    // 取ってきた文書は、本体と同じく二段目のチェック（判じ手）にも通す（前は一段目の当てはめだけで、合議の network の役職に仕込みのある頁が渡った）
     network: netCfg.enabled === false ? [] : harness.wrapAll(
       [createFetchUrlTool({
         allowedHosts: netCfg.allowedHosts,
         maxBytes: netCfg.maxBytes,
         timeoutMs: netCfg.timeoutMs,
+        inspector: buildInspector(
+          orchestrator,
+          netCfg.inspector?.candidates ?? quietCandidates(candidates, registry, { fixed: (config.candidates?.length ?? 0) > 0 }),
+          netCfg.inspector ?? {},
+        ),
       })], () => currentInstruction),
   };
 

@@ -15,7 +15,7 @@
 import { Priority } from '../providers/contract.ts';
 import { findCodeTool, findSymbolTool } from '../agent/tools/find.ts';
 import {
-  listServicesTool, createConnectServiceTool, createDisconnectServiceTool, type ServiceHooks,
+  createListServicesTool, createConnectServiceTool, createDisconnectServiceTool, type ServiceHooks,
 } from '../agent/tools/services.ts';
 import { defaultWorkRoot } from './home.ts';
 import { isWriteTool, mayChangeFiles, isExternalTool } from '../agent/tools/write-kind.ts';
@@ -575,6 +575,7 @@ export class Session {
         refresh();
         return true;
       },
+      running: (): string[] => mcpClients.map((c) => c.name),
     };
 
     // 権限は「配らない」ことで守る。禁じる文言ではなく、手段の有無で決める。
@@ -610,7 +611,7 @@ export class Session {
       // 繋ぐ・外すも、ここに置く。**外の道具の話は、外の道具の側で完結させる。**
       // 繋ぐのは承認を通す（協議は自動では通らない）。
       mcp: wrap([
-        listServicesTool,
+        createListServicesTool(serviceHooks),
         createConnectServiceTool(serviceHooks), createDisconnectServiceTool(serviceHooks),
         ...collectTools(mcpClients, { inspector, timeoutMs: config.mcp?.timeoutMs }),
       ]),
@@ -619,7 +620,7 @@ export class Session {
     // 繋がったら、そのぶんを入れ直す。**次のターンから使える。**
     refresh = () => {
       toolPool.mcp = wrap([
-        listServicesTool,
+        createListServicesTool(serviceHooks),
         createConnectServiceTool(serviceHooks), createDisconnectServiceTool(serviceHooks),
         ...collectTools(mcpClients, { inspector, timeoutMs: config.mcp?.timeoutMs }),
       ]);

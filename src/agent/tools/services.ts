@@ -12,6 +12,7 @@ import { CATALOG, BUILTIN, findEntry, missingSecrets, needsNpx } from '../../mcp
 import { connectService, disconnectService } from '../../core/mcp-connect.ts';
 import { type Tool, ok, fail, requireString } from './types.ts';
 import type { McpServerSpec } from '../../mcp/client.ts';
+import { savedMcpServers } from '../../ui/settings.ts';
 
 /**
  * 繋ぎ先が変わったことを、**いま動いているセッションへ伝える口。**
@@ -27,6 +28,27 @@ export interface ServiceHooks {
   onConnected?(id: string, spec: McpServerSpec): Promise<boolean>;
   /** 外した相手を止めて、ツールから外す。外せたかを返す。 */
   onDisconnected?(id: string): boolean;
+  /** いま動いている相手の名前（一覧に「動いている」と出すため）。 */
+  running?(): string[];
+}
+
+export function createListServicesTool(hooks: ServiceHooks = {}): Tool {
+  return {
+  ...listServicesTool,
+  async run(args, ctx) {
+    const base = await listServicesTool.run(args, ctx);
+    // 設定に在るか・止めてあるか・動いているかを添える（言わないと、繋がっているものを繋ぎ直して、利用者が置いた形を上書きした）
+    const saved = await savedMcpServers();
+    const live = new Set(hooks.running?.() ?? []);
+    const rows = Object.entries(saved).map(([id, spec]) => {
+      const state = live.has(id) ? '動いている' : spec.enabled === false ? '止めてある' : '設定に在る（まだ起きていない）';
+      const how = typeof spec.url === 'string' ? '遠くの口' : typeof spec.command === 'string' ? '手元で動かす' : '形が不明';
+      return `- ${id}: ${state}（${how}）`;
+    });
+    if (rows.length === 0) return base;
+    return ok(`${base.content}\n\nいま設定に在るもの（繋ぎ直さない。止めてあるものは画面で入れてもらう）:\n${rows.join('\n')}`);
+  },
+  };
 }
 
 export const listServicesTool: Tool = {
@@ -82,6 +104,13 @@ export function createConnectServiceTool(hooks: ServiceHooks = {}): Tool {
       const entry = findEntry(id);
       if (!entry) {
         return fail(`そういう繋ぎ先はありません: ${id}（在るもの: ${CATALOG.map((e) => e.id).join(', ')}）`);
+      }
+      // もう設定に在るものは書き直さない（利用者が手元で動かす形にした・止めておいたものを、カタログの形と「入」で丸ごと上書きしていた）
+      const already = (await savedMcpServers())[entry.id];
+      if (already) {
+        return ok(already.enabled === false
+          ? `${entry.name}（${entry.id}）は設定に在りますが、止めてあります。入れるかどうかは、利用者に画面（設定 → 外のツール）で決めてもらってください。`
+          : `${entry.name}（${entry.id}）は、もう設定に在ります。繋ぎ直しはしません。`);
       }
 
       // **外と繋ぐのは、勝手にやらない。**利用者の合言葉が動く話なので、

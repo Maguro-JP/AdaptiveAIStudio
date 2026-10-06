@@ -285,6 +285,28 @@ export async function saveWorkRoot(root: string): Promise<string> {
   });
 }
 
+/**
+ * 設定に書いてある外のツール（MCP）。名前 → 書いてある形。
+ * ファイルが無い・読めない・一覧の項目が無いときは undefined（「一つも無い」とは分ける。書いていないものを空で上書きしない）。
+ */
+export async function readSavedMcpServers(): Promise<Record<string, Record<string, unknown>> | undefined> {
+  try {
+    const raw = JSON.parse((await readFile(configPath(), 'utf8')).replace(/^\uFEFF/, '')) as { mcp?: { servers?: unknown } };
+    if (raw.mcp?.servers === undefined) return undefined;
+    const servers = objectOr(raw.mcp.servers);
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const [k, v] of Object.entries(servers)) out[k] = objectOr(v);
+    return out;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 設定に書いてある外のツール（MCP）。読めなければ空。 */
+export async function savedMcpServers(): Promise<Record<string, Record<string, unknown>>> {
+  return (await readSavedMcpServers()) ?? {};
+}
+
 /** 書いてある作業場。無ければ空。 */
 export async function savedWorkRoot(): Promise<string> {
   try {
