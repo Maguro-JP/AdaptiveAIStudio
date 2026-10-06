@@ -120,9 +120,10 @@ export function toText(body: string, contentType: string): string {
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
+    // `&amp;` は最後に戻す（先に戻すと `&amp;lt;` が `<` まで二度解け、`&lt;` という字を見せている頁が別の中身になった）
+    .replace(/&amp;/g, '&')
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();

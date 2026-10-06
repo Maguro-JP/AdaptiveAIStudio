@@ -9,6 +9,7 @@
  * 何も返さない（読みたいなら `read_file` を呼ぶ）。画面が無い入口（端末）では
  * 受け手が居ないので、何もしないで「開く先がありません」と返す。
  */
+import { stat } from 'node:fs/promises';
 import { realSafeResolve } from './paths.ts';
 import { type Tool, ok, fail, requireString, optionalPositiveInt } from './types.ts';
 
@@ -38,6 +39,10 @@ export function createShowFileTool(onShow?: ShowHook): Tool {
       const abs = await realSafeResolve(ctx.root, path);
       if (!abs) return fail(`作業ディレクトリの外です: ${path}`);
       if (!onShow) return fail('開く先がありません（画面のない入口で動いています）。');
+      // 無いファイル・フォルダを「開きました」と言わない（道を作るための解き方なので、打ち間違えた名前でも道が返る）
+      const info = await stat(abs).catch((e: unknown) => e as NodeJS.ErrnoException);
+      if (info instanceof Error) return fail(`開けません: ${path}（${info.code ?? info.message}）`);
+      if (!info.isFile()) return fail(`ファイルではありません: ${path}`);
       const line = optionalPositiveInt(args, 'line');
       onShow({ path, ...(line === undefined ? {} : { line }) });
       return ok(line === undefined ? `画面で ${path} を開きました。` : `画面で ${path} の ${line} 行目を開きました。`);
