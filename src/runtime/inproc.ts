@@ -29,7 +29,7 @@ import { chunkReader } from '../core/text.ts';
 import { toolPrompt } from './tool-prompt.ts';
 import { extractToolCalls, ToolTextFilter } from '../agent/tool-text.ts';
 import { readGguf } from './gguf.ts';
-import { extractFacts } from './gguf-spec.ts';
+import { extractFacts, headDimOf } from './gguf-spec.ts';
 import { totalmem } from 'node:os';
 import { DEFAULT_PRIORITY, Priority, PRIORITY_HEADER, toPriority } from '../providers/contract.ts';
 import { findRunaway, runawayNote } from './runaway.ts';
@@ -516,6 +516,8 @@ export function fitWindow(opts: {
   embedding?: number;
   heads?: number;
   kvHeads?: number;
+  /** 一つのヘッドの K・V の次元（GGUF の `attention.key_length`・`value_length`）。無ければ embedding / heads で代える */
+  headDim?: number;
   /** 重みの大きさ（ファイルの大きさでよい） */
   weightBytes?: number;
   ramBytes: number;
@@ -539,7 +541,7 @@ export function fitWindow(opts: {
   // 「無い（undefined）」なら heads で代えられるが、「0 として書いてある」
   // （壊れた・読み違えた GGUF）なら代えない（`?? ` は 0 を素通しする）。
   // embedding < heads でも headDim が 0 になる。どれも perToken を 0 にする。
-  const headDim = (layers && embedding && heads) ? Math.floor(embedding / heads) : 0;
+  const headDim = !layers || !heads ? 0 : (opts.headDim && opts.headDim > 0 ? opts.headDim : (embedding ? Math.floor(embedding / heads) : 0));
   const kvDim = headDim * (opts.kvHeads || heads || 0);
   const perToken = 2 * (layers ?? 0) * kvDim * 2;
   if (perToken <= 0) {
@@ -900,6 +902,7 @@ export class InProcRuntime implements LocalRuntime {
           ...(facts.embeddingLength !== undefined ? { embedding: facts.embeddingLength } : {}),
           ...(facts.headCount !== undefined ? { heads: facts.headCount } : {}),
           ...(facts.headCountKv !== undefined ? { kvHeads: facts.headCountKv } : {}),
+          ...(headDimOf(facts) !== undefined ? { headDim: headDimOf(facts)! } : {}),
           ...(weightBytes !== undefined ? { weightBytes } : {}),
           ramBytes: onVram ? backend.vramBytes : totalmem(),
           sequences: wanted,

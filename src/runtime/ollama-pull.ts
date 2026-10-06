@@ -63,6 +63,8 @@ export async function pullModel(opts: PullOptions): Promise<void> {
   }
 
   let lastShown = -1;
+  // 層（digest）ごとに 0% から数え直す。前は最初の層が 100% になると、後の層（画像を読むモデルの projector など）の割合が一度も出ず、止まって見えた
+  let layer: unknown;
   let sawSuccess = false;
 
   for await (const line of ndjson(res, opts.signal)) {
@@ -77,6 +79,8 @@ export async function pullModel(opts: PullOptions): Promise<void> {
     }
 
     if (total > 0) {
+      const now = line.digest ?? total;
+      if (now !== layer) { layer = now; lastShown = -1; }
       const pct = Math.floor((done / total) * 100);
       if (pct >= lastShown + 10) {
         lastShown = pct;

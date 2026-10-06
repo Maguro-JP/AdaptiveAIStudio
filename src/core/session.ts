@@ -357,6 +357,8 @@ export class Session {
   readonly candidates: string[];
   /** 判じる・検める仕事に使う候補（手元のモデルがあればそれだけ。`quietCandidates`）。 */
   readonly quiet: string[];
+  /** 候補のうち、手元のモデル（locality が local）のもの。新しい世代を訊くのはこれだけ。 */
+  readonly localCandidates: string[];
 
   /**
    * モデルが要る仕事の手前で、無いことを言う。無ければ `undefined`。
@@ -455,7 +457,7 @@ export class Session {
   #counterAsked = false;
 
   private constructor(init: {
-    config: AasConfig; root: string; candidates: string[]; quiet: string[]; modelReason: string;
+    config: AasConfig; root: string; candidates: string[]; quiet: string[]; localCandidates: string[]; modelReason: string;
     memory: Memory; roles: RoleRegistry; orchestrator: ChatOrchestrator;
     proposals: ProposalQueue; idle: IdleScheduler; duties: DutyRoster;
     pilot: AutopilotBundle; prefetch: Prefetcher; opts: SessionOptions;
@@ -475,6 +477,7 @@ export class Session {
     this.#projectRules = new ProjectRules(init.root);
     this.candidates = init.candidates;
     this.quiet = init.quiet;
+    this.localCandidates = init.localCandidates;
     this.memory = init.memory;
     this.proposals = init.proposals;
     this.idle = init.idle;
@@ -643,7 +646,7 @@ export class Session {
     const { proposals, idle, duties } = opts.journals ?? await loadJournals(config);
 
     const session = new Session({
-      config, root, candidates, quiet, modelReason: note, memory,
+      config, root, candidates, quiet, localCandidates: localModelCandidates(candidates, registry), modelReason: note, memory,
       roles: new RoleRegistry(config.roles ?? [], (t) => log('warn', t)),
       orchestrator, pilot, prefetch, opts, holder, forum, toolPool, harness, mcpClients,
       services: serviceHooks,
@@ -1215,7 +1218,11 @@ export class Session {
          * 何も入っていないときは、カタログの家族から訊く。入れた直後は
          * 何も入っていないので、そこで黙ると最初の一つが古いまま固定される。
          */
-        const using = this.candidates.map((c) => {
+        // 手元のモデルだけを訊く。雲の名前（`anthropic:claude-…`）を混ぜると、その名前で配布元を探し、
+        // 入っているものが在ることになってカタログの家族からも訊かなかった。
+        // 頭（`ollama:`）は `findNewerFor` が一度だけ外す。ここでも外すと `qwen3.5:9b` が `9b` になり、一件も訊かなかった
+        const local = this.localCandidates;
+        const using = local.map((c) => {
           const at = c.indexOf(':');
           return at < 0 ? c : c.slice(at + 1);
         });
@@ -1228,7 +1235,7 @@ export class Session {
         const asked = AbortSignal.any([probe.signal, AbortSignal.timeout(UPDATE_PROBE_TIMEOUT_MS)]);
         const newer = await findNewerFor({
           runtimeKind: this.config.runtime?.kind ?? 'inproc',
-          installed: using,
+          installed: local,
           seed: catalogFamilies(),
           signal: asked,
         }).finally(() => { if (this.#conv.running === probe) this.#conv.running = undefined; });
@@ -2745,6 +2752,14 @@ export function speedOf(model: string, chars: number, seconds: number): { model:
  * 並びは、軽い方から。自動で選んだ候補は速い順なのでそのまま（`fixed: false`）。設定で固定した候補は、強い（重い・高い）順に
  * 書く決まりなので逆にする（そのままだと、一番重いモデルが検問所の待ち時間に間に合わず、持ち出しが全部止まる）。
  */
+/** 候補のうち、手元のモデル（locality が local）のものだけ。並びはそのまま。 */
+export function localModelCandidates(
+  candidates: readonly string[],
+  registry: { resolve(id: string): { provider: { locality: string } } | undefined },
+): string[] {
+  return candidates.filter((c) => registry.resolve(c)?.provider.locality === 'local');
+}
+
 export function quietCandidates(
   candidates: readonly string[],
   registry: { resolve(id: string): { provider: { locality: string } } | undefined },

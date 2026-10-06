@@ -31,6 +31,12 @@ export interface GgufFacts {
   headCount?: number;
   /** GQA のときヘッド数より少ない。KVキャッシュ量を決める。 */
   headCountKv?: number;
+  /**
+   * 一つのヘッドの K・V の次元。書いてあればこれが本当の値（Qwen3 は 128 で、embedding / heads とは違う。4B なら 2560/32 = 80）。
+   * 書いていないモデルだけ embedding / heads で代える。
+   */
+  keyLength?: number;
+  valueLength?: number;
   /** MoE のエキスパート数。1トークンあたりの活性パラメータが変わる。 */
   expertCount?: number;
   expertUsedCount?: number;
@@ -57,6 +63,8 @@ export function extractFacts(file: GgufFile): GgufFacts {
     contextLength: num(byArch('context_length')),
     headCount: num(byArch('attention.head_count')),
     headCountKv: num(byArch('attention.head_count_kv')),
+    keyLength: num(byArch('attention.key_length')),
+    valueLength: num(byArch('attention.value_length')),
     expertCount: num(byArch('expert_count')),
     expertUsedCount: num(byArch('expert_used_count')),
     vocabSize: Array.isArray(tokens) ? tokens.length : undefined,
@@ -118,6 +126,14 @@ export function bitsFor(quant: string | undefined): number | undefined {
  * 半端な諸元で「載る／載らない」を計算されるより、
  * 「分からない」と言われた方が安全なので。
  */
+/** 書いてある K・V の次元の平均（KV の一トークンあたりの大きさは K と V の和で決まる）。どちらも無ければ undefined。 */
+export function headDimOf(facts: Pick<GgufFacts, 'keyLength' | 'valueLength'>): number | undefined {
+  const k = facts.keyLength && facts.keyLength > 0 ? facts.keyLength : undefined;
+  const v = facts.valueLength && facts.valueLength > 0 ? facts.valueLength : undefined;
+  if (k === undefined && v === undefined) return undefined;
+  return ((k ?? v)! + (v ?? k)!) / 2;
+}
+
 export function toModelSpec(file: GgufFile, id?: string): SpecResult {
   const facts = extractFacts(file);
   const missing: string[] = [];
@@ -143,7 +159,8 @@ export function toModelSpec(file: GgufFile, id?: string): SpecResult {
   if (facts.headCountKv === undefined) {
     notes.push('head_count_kv がないので、KVヘッド数はヘッド数と同じとして扱います。');
   }
-  const headDim = Math.round(embedding / headCount);
+  // 書いてある K・V の次元を先に使う。embedding / heads で出すと、Qwen3 では半分ほどに見積もり、KV が載ると言って載らなかった
+  const headDim = headDimOf(facts) ?? Math.round(embedding / headCount);
 
   // 総パラメータ数は、重みの総バイト数と1重みあたりのビット数から逆算する。
   // 層構造から積み上げるより、実物の大きさを信じる方が確実。

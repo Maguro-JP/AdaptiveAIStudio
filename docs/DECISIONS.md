@@ -348,6 +348,7 @@
 - 42 回目の不具合調査の 6 件（画面の本体の口: 消した会話への切り替え・MCP を外す間の繋ぎ・.env の同時の書き込み・見出しの付け替えの 404・出来事の流れ・モデルの名前）
 - 43 回目の不具合調査の 5 件（記録まわりの src/core: 書き切る前の改名・伏せる形・時計が戻ったときの名前・読めない時刻・錠の古さと時計のずれ）
 - 44 回目の不具合調査の 5 件（用意と押す前の確かめ: Z: の node.bin・bootstrap の版・二重起動・無い番号の案内・smoke の記録・main と同じときの飛ばし方）
+- 45 回目の不具合調査の 6 件（モデルを選ぶ・調べる・取ってくる所: 新しい世代の訊き方・訊けなかったとき・KV の次元・取得の進み具合・GGUF の読みの切れ目）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -12541,3 +12542,24 @@ MCP を外す間の繋ぎは、外す口が待つ所を差し替えられない�
 - setup.exe での上書き更新は、前の版で消したファイルを残し、画面を開いたままだと途中まで上書きして止まる（`installer/AdaptiveAIStudio.nsi`）。setup.exe はタグを付けたときにだけ CI で組むので、ここで組んで確かめられない。直すなら、組める回にまとめて
 - Windows 同梱の curl は Windows の proxy 設定を読まない。ブラウザでは届くのに bootstrap だけ落ちる会社がありうる（確かめていない）。そのときの案内が「繋がる機械で組んで持ってくる」になっている。PowerShell で取り直す形にするかは、実機で確かめてから
 触る場所: `installer/bootstrap.cmd`、`scripts/bundle.mjs`（`stampedVersion`）、`scripts/smoke.mjs`、`scripts/same-as-main.mjs`（`SKIP_EXIT`）、`.githooks/pre-push`、`scripts/hooks.mjs`
+
+## 2026-10-06  45 回目の不具合調査の 6 件（モデルを選ぶ・調べる・取ってくる所: 新しい世代の訊き方・訊けなかったとき・KV の次元・取得の進み具合・GGUF の読みの切れ目）
+
+`src/runtime` のうち、これまでの調査の節に出てこなかった塊（`model-updates.ts`・`ollama-pull.ts`・`gguf.ts`・`gguf-spec.ts`・`planner.ts`・`llama-release.ts` など）を、読むだけの調査で見た分。
+- Ollama を使っていると、候補の頭（`ollama:`）を session と `findNewerFor` で二度外して `qwen3.5:9b` が `9b` になり、新しい世代を一件も訊かずに毎回「見つかりませんでした」と言っていた。
+  session では外さず、`findNewerFor` だけが一度外す
+- 候補に雲のモデル（`anthropic:claude-…`）があると、その名前で配布元を探し、入っているものが在ることになってカタログの家族からも訊かなかった。
+  手元のモデル（locality が local）の候補だけを渡す（`localModelCandidates`）
+- 配布元に繋がらない・404 以外で断られたのを、空として「新しい世代は見つかりませんでした」と言っていた（社用PCで外へ出られないときなど）。
+  一件も分からず、訊けなかった問い合わせがあったなら投げて、session の「訊けませんでした」へ回す。一件でも分かったなら、分かった分を返す
+- KV の見積もりで、GGUF に書いてある `attention.key_length`・`value_length` を読まず、`embedding / heads` で出していた。Qwen3-4B は 80 と数えるが本当は 128 で、
+  KV を 0.6 倍ほどに見積もり、載らないコンテキストウィンドウを開けえた。書いてあればそれを使い、無いモデルだけ前と同じく割り算で代える（`headDimOf`、`fitWindow` と `toModelSpec`）
+- Ollama の取得で、割合の出し方を層ごとに数え直していなかったので、最初の層が 100% になった後の層（画像を読むモデルの projector など）の割合が出ず、止まって見えた
+- GGUF の読みで、値の型の 4 バイトだけが打ち切りの外にあり、読む先頭の境目がちょうどそこに落ちると、取り終えた数 GB を「GGUF として読めない」として消しえた。名前・値と同じく、読めた所までで打ち切る
+試験は `test/model-runtime-gaps.test.ts`（ファイルを一つずつ直す前に戻すと、配布元の 4 件・進み具合・GGUF の読み・KV の見積もりが落ちた。頭を二度外す件は session の中の直しで、
+`localModelCandidates` と `findNewerFor` の組み合わせを見ている。session の見回りそのものを通す試験は書いていない）。
+直していないもの:
+- MoE の活性パラメータを `総パラメータ × 使うエキスパート / エキスパート数` で出していて、注意層と埋め込みの分を数えない。Qwen3-30B-A3B は 1.9B と数えるが本当は約 3.3B で、
+  速度を 1.7 倍ほど高く見積もる。直すならテンソル一覧からエキスパートの重みとそれ以外を分けて足す。見積もりの数字が変わり、選ぶモデルが変わるので、測った数字と並べてから
+- Windows の CPU 版の llama.cpp を選ぶとき、AVX2 の有無を見ない。AVX2 の無い CPU では、置いた後の確かめで動かず、avx 版・noavx 版で取り直さない。実機で確かめられないので、取り直す形にするかは保留
+触る場所: `src/core/session.ts`（`localModelCandidates`・新しい世代の見回り）、`src/runtime/model-updates.ts`（`orUnreachable`）、`src/runtime/gguf-spec.ts`（`headDimOf`）、`src/runtime/inproc.ts`（`fitWindow` の `headDim`）、`src/runtime/ollama-pull.ts`、`src/runtime/gguf.ts`
