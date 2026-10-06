@@ -197,8 +197,11 @@ export async function install(opts: InstallOptions): Promise<Installed> {
   if (cudartName) {
     const ca = assets.find((a) => a.name === cudartName)!;
     log(`CUDA の実行時ライブラリも取ってきます: ${cudartName}`);
-    const cd = await fetchImpl(ca.browser_download_url, { signal: opts.signal });
-    if (!cd.ok) throw new Error(`CUDA の実行時ライブラリを取ってこられませんでした (${cd.status})`);
+    // 本体と同じく、接続の失敗は理由と手で取る道を添えて言う（一語の `fetch failed` で終わっていた）
+    const cd = await fetchImpl(ca.browser_download_url, { signal: opts.signal }).catch((e: unknown) => {
+      throw new Error(`CUDA の実行時ライブラリを取ってこられませんでした（${describeNet(e)}）。\n${llamaByHand(tag, binDir)}`);
+    });
+    if (!cd.ok) throw new Error(`CUDA の実行時ライブラリを取ってこられませんでした (${cd.status})。\n${llamaByHand(tag, binDir)}`);
     cudartBuf = Buffer.from(await cd.arrayBuffer());
     log(`取得しました: ${(cudartBuf.length / 1024 / 1024).toFixed(1)}MB`);
   }

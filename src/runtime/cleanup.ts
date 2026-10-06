@@ -15,7 +15,7 @@
  * 消したことを隠すと、次に何かが無くなったときに疑う先が増える。
  */
 import { readdir, stat, rm, readFile, open } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { binDir, modelsDir, stateDir } from '../core/home.ts';
 import { INDEX_FORMAT } from '../agent/code-index.ts';
 
@@ -67,6 +67,8 @@ async function sizeOf(path: string): Promise<number> {
  */
 export async function findRemovable(opts: {
   keepTag: string;
+  /** ほかのモデルの保存先（設定の `runtime.modelsDir`・画面で選んだ所）。既定の保存先しか見ていなかったので、そこで切れた数 GB の途中の分が一度も挙がらなかった */
+  modelsDirs?: readonly string[];
   maxLogAgeMs?: number;
   maxAttachmentAgeMs?: number;
   now?: number;
@@ -88,7 +90,8 @@ export async function findRemovable(opts: {
   // 途中で切れた取得。**捨てると、続きから取れなくなる**（もう一度実行すれば
   // 続きから取る作りにしてある）。それでも要らないなら片づけられるよう、
   // 何を捨てることになるかを添える。
-  for (const dir of [modelsDir(), binDir()]) {
+  // 同じ場所は一度だけ見る（二度挙げると、消した量を二重に数える）
+  for (const dir of [...new Set([modelsDir(), ...(opts.modelsDirs ?? []), binDir()].map((d) => resolve(d)))]) {
     for (const name of await readdir(dir).catch(() => [])) {
       // .part.tag は途中の分がどの版かの記録。途中の分と一緒に片づける
       if (!/\.(part|partial|tmp)(\.tag)?$/i.test(name)) continue;

@@ -377,6 +377,7 @@
 - 71 回目の不具合調査の 4 件（モデルとの通信と候補の切り替え: 空の終わりの合図・部品の配列の本文・冷やした口の次の候補・並んだ依頼の冷やしの解き方）
 - 72 回目の不具合調査の 6 件（scripts と pre-push: 式で押す sha・二本以上の push・一時フォルダの後始末・自分のブランチの判定・shot の起動）
 - 73 回目の不具合調査の 7 件（src/cli: models --new の訊く先・runtime.command・壊れた設定の selftest・Ollama の selftest・agent の終了コード・npm の案内・--force）
+- 74 回目の不具合調査の 5 件（モデルを取ってくる・片づける所: Ollama の新しい世代の後退・続きの空き・clean の保存先・実行時ライブラリの接続の失敗・/blob/ の頁）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -12990,3 +12991,15 @@ OpenAI 互換の口（`src/providers/openai-compatible.ts`）と、候補の切�
 - 配った形には npm が無いのに、selftest・team・「新しい世代」の案内が `npm run …` と言っていた。`how` で書く（「新しい世代」の案内は書き方を受け取る。画面の側（`session.ts`）は既定の書き方のまま）。`npm run llama --force` は `--force` を npm が受け取って取り直しにならないので、`-- --force` にする
 試験は `test/cli-gaps.test.ts`（agent の終了コード・壊れた設定の selftest・案内の書き方・doctor の `runtime.command`。直す前の版で 4 件とも落ちた）。`models --new` の訊く先・selftest の Ollama・selftest の `runtime.command` は試験を書いていない（確かめていない）。Ollama が動いていてモデルが 0 件のとき doctor が「runtime がまだありません」と言う件は、次に回す。
 触る場所: `src/cli/models.ts`、`src/cli/doctor.ts`（llama-server）、`src/cli/selftest.ts`（設定・llama-server・モデル・`finish`）、`src/cli/agent.ts`（`finished`）、`src/cli/team.ts`、`src/runtime/model-updates.ts`（`describeNewer` の `hint`）、`src/runtime/llama-diagnosis.ts`
+
+## 2026-10-07  74 回目の不具合調査の 5 件（モデルを取ってくる・片づける所: Ollama の新しい世代の後退・続きの空き・clean の保存先・実行時ライブラリの接続の失敗・/blob/ の頁）
+
+`src/runtime/` のうち取ってくる・入れる・選ぶ所を、読むだけの調査で見た分。
+- 73 回目の直しで `models --new` が `findNewerFor` を呼ぶようにしたが、手元の名前を頭（`ollama:`）を付けずに渡していた。`findNewerFor` は最初の `:` までを頭として外すので、Ollama の `qwen3.5:9b` が `9b` になり、一件も訊かずに「見つかりませんでした」と言った（自分の直しで入れた後退）。頭を付けて渡す。CLI を子として起こす試験は配布元へ繋ぎに行くので書いていない（確かめていない）
+- 途中まで取れているモデルの続きを取るときも、保存先の空きを全体の大きさで見ていた。22GB のうち 20GB 取れていて空きが 5GB でも「足りません」で止まり続けた。取れている分を差し引く（`roomNeeded`）
+- `clean` は既定の保存先しか見ず、設定（`runtime.modelsDir`）や画面で選んだ保存先で切れた途中の分を一度も挙げなかった。両方も見る（同じ場所は一度だけ）
+- CUDA の実行時ライブラリの取得で接続が切れると、本体と違って理由も手で取る道も言わずに `fetch failed` の一語で終わった。本体と同じ形で言う
+- HuggingFace のファイルの頁（`…/blob/main/x.gguf`）を貼ると、HTML を落として「GGUF として読めません」とだけ言った。HuggingFace の `/blob/` は `/resolve/` に直して取る
+直していないもの: 入れ替えで脇へ移した前の版（`.prev`）を clean に挙げる件は、戻せなかったときに唯一動く版になりうるので消す候補にしない（17 回目の判断のまま）。llama.cpp の取得が黙り込んだときの打ち切りと、取り終えた GGUF の全体のハッシュの照合は、待ち時間とハッシュを渡す口を作ってからにする。
+試験は `test/runtime-fetch-gaps.test.ts`（/blob/・続きの空き・clean の保存先）と `test/llama-install.test.ts`（実行時ライブラリの接続の失敗）。直す前の版で 4 件とも落ちた。
+触る場所: `src/cli/models.ts`（`--new`）、`src/runtime/model-install.ts`（`hfFileUrl`・`roomNeeded`・`checkRoom`）、`src/runtime/cleanup.ts`（`modelsDirs`）、`src/cli/clean.ts`、`src/runtime/llama-install.ts`（実行時ライブラリ）

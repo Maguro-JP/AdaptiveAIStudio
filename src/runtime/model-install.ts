@@ -129,7 +129,8 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
   // **URL を直に渡せる。**配布元の名前の付け方は変わるし、こちらが書いた
   // 見当は外れる。外れた時点で利用者が詰むのがいちばん悪い。
   // ブラウザで見つけた .gguf の場所を、そのまま貼れるようにする。
-  const directUrl = /^https?:\/\//i.test(entry.repo) ? entry.repo : undefined;
+  // HuggingFace のファイルの頁（`/blob/`）は、ブラウザのアドレス欄からいちばん貼られる形。中身は HTML なので、ファイルそのもの（`/resolve/`）へ直して取る
+  const directUrl = /^https?:\/\//i.test(entry.repo) ? hfFileUrl(entry.repo) : undefined;
   if (directUrl) {
     let leaf = '';
     try {
@@ -283,7 +284,7 @@ async function fetchInto(a: {
   const tag = had > 0 ? (await readFile(tagFile, 'utf8').catch((e: unknown) => { if (isAbsent(e)) return ''; throw e; })).trim() : '';
 
   // 置き場に入るか、先に見る。数GB落とし切ってから「入りません」は遅い。
-  await checkRoom(modelsDir, entry.approxGB, log);
+  await checkRoom(modelsDir, entry.approxGB, log, had);
 
   log(`取ってきます（約${entry.approxGB}GB。回線によっては数十分かかります）`);
 
@@ -537,19 +538,26 @@ export function mmss(seconds: number): string {
 
 
 /**
+ * 続きから取るときに要る空き。取れている分（`had`）は保存先に在るので差し引く（全体の大きさで見ていたので、残り 2GB でも「足りません」と止まり続けた）。少し余裕を見る。
+ */
+export function roomNeeded(approxGB: number, had = 0): number {
+  return Math.max(0, approxGB * 1024 ** 3 - had) * 1.1;
+}
+
+/**
  * 置き場に入るか。
  *
  * 数GB を落とし切ってから「入りません」では遅い。**先に見る。**
  * 見られない機械（statfs が無い等）では、黙って通す。
  */
-async function checkRoom(dir: string, approxGB: number, log: (l: string) => void): Promise<void> {
+async function checkRoom(dir: string, approxGB: number, log: (l: string) => void, had = 0): Promise<void> {
   if (!approxGB) return;
   try {
     const { statfs } = await import('node:fs/promises');
     await mkdir(dir, { recursive: true });
     const fs = await statfs(dir);
     const free = fs.bavail * fs.bsize;
-    const need = approxGB * 1024 ** 3 * 1.1; // 少し余裕を見る
+    const need = roomNeeded(approxGB, had);
     if (free < need) {
       throw new Error(
         `置き場が足りません: ${dir}\n`
@@ -561,5 +569,22 @@ async function checkRoom(dir: string, approxGB: number, log: (l: string) => void
   } catch (e) {
     if (e instanceof Error && e.message.startsWith('置き場が足りません')) throw e;
     // 見られないなら、黙って通す。見られないことは、止める理由にならない。
+  }
+}
+
+/** HuggingFace のファイルの頁の場所（`…/blob/<版>/x.gguf`）を、ファイルそのものの場所（`…/resolve/<版>/x.gguf`）へ直す。ほかの場所はそのまま。 */
+export function hfFileUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    if (!/(^|\.)huggingface\.co$/i.test(u.hostname)) return url;
+    const parts = u.pathname.split('/');
+    // `/<owner>/<repo>/blob/...`（datasets などの頭が付いても、最初の blob だけ直す）
+    const at = parts.indexOf('blob');
+    if (at < 3) return url;
+    parts[at] = 'resolve';
+    u.pathname = parts.join('/');
+    return u.toString();
+  } catch {
+    return url;
   }
 }

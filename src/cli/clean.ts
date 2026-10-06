@@ -9,8 +9,17 @@ import { findRemovable, remove, describe, mb } from '../runtime/cleanup.ts';
 import { PINNED_TAG } from '../runtime/llama-release.ts';
 import { c } from './colors.ts';
 import { how } from './how.ts';
+import { loadConfig } from '../config.ts';
+import { savedModelsDir } from '../ui/settings.ts';
 
-const items = await findRemovable({ keepTag: PINNED_TAG });
+// 取ってくる側が落とす先も見る（設定の runtime.modelsDir と、画面で選んだ保存先）。設定が読めなくても、既定の保存先だけで片づけは進める
+const modelsDirs: string[] = [];
+try {
+  const dir = loadConfig().config.runtime?.modelsDir;
+  if (dir) modelsDirs.push(dir);
+} catch { /* 設定が壊れていても片づけは止めない（壊れていることは doctor が言う） */ }
+modelsDirs.push(await savedModelsDir().catch(() => ''));
+const items = await findRemovable({ keepTag: PINNED_TAG, modelsDirs: modelsDirs.filter(Boolean) });
 
 console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — clean\n'));
 console.log(describe(items));

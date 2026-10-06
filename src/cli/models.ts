@@ -70,7 +70,8 @@ if (process.argv.includes('--new')) {
   console.log(c.dim('  配布元に訊いています...'));
   try {
     // 訊く先は使っている道で決める（いつも Ollama に訊いていたので、GGUF の名前では一度も訊かずに「見つかりませんでした」と言った）
-    const found = await findNewerFor({ runtimeKind: runtime.id, installed });
+    // 頭（`ollama:` など）を付けて渡す。`findNewerFor` は頭を一度外すので、付けずに渡すと `qwen3.5:9b` が `9b` になり一件も訊かなかった
+    const found = await findNewerFor({ runtimeKind: runtime.id, installed: installed.map((ref) => `${runtime.id}:${ref}`) });
     console.log(`\n${describeNewer(found, how)}\n`);
   } catch (e) {
     console.error(c.yellow(`  訊けませんでした: ${e instanceof Error ? e.message : String(e)}\n`));
