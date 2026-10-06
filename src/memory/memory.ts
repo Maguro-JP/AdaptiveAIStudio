@@ -121,6 +121,9 @@ export interface RememberResult {
   conflicts: MemoryEntry[];
 }
 
+/** ひらがなだけの 2 字。語の手がかりにならない（助詞・語尾・丁寧語）。 */
+const HIRAGANA_ONLY = /^[ぁ-ん]{2}$/;
+
 const STOP = new Set([
   'する', 'した', 'して', 'ある', 'ない', 'こと', 'もの', 'ため', 'よう',
   'the', 'a', 'an', 'is', 'to', 'of', 'and', 'in', 'for', 'on', 'with', 'it',
@@ -151,12 +154,13 @@ export function tokenize(text: string): string[] {
     // 日本語は2文字ずつずらして拾う。部分一致で引っかかるようにする。
     if (chunk.length <= 2) {
       // 一字の語は捨てる（英字に挟まれた助詞「の」「を」が一語になり、それだけで関係の無い覚えに当たっていた）
-      if (chunk.length === 2 && !STOP.has(chunk)) out.push(chunk);
+      if (chunk.length === 2 && !STOP.has(chunk) && !HIRAGANA_ONLY.test(chunk)) out.push(chunk);
       continue;
     }
     for (let i = 0; i + 2 <= chunk.length; i += 1) {
       const gram = chunk.slice(i, i + 2);
-      if (!STOP.has(gram)) out.push(gram);
+      // ひらがなだけの 2 字（「くだ」「さい」「から」「とき」）は拾わない。丁寧語の依頼どうしがそれだけで重なり、関係の無い覚えが当たっていた
+      if (!STOP.has(gram) && !HIRAGANA_ONLY.test(gram)) out.push(gram);
     }
   }
   return out;
@@ -294,6 +298,11 @@ export class Memory {
   /** 読むときに退けた行（形の違う行・壊れた行）の数。ファイルの末尾に元の文のまま残している。 */
   get skipped(): number {
     return this.#kept.length;
+  }
+
+  /** ファイルを読めなかった理由（権限・フォルダだった・掴まれていた）。読めた・無かったなら undefined。 */
+  get unreadable(): string | undefined {
+    return this.#unreadable;
   }
 
   all(): MemoryEntry[] {
@@ -738,16 +747,20 @@ export class Memory {
       .filter((x): x is { e: MemoryEntry; score: number } => !!x);
 
     scored.sort((a, b) => b.score - a.score || b.e.seenAt - a.e.seenAt);
-    const hits = scored.slice(0, limit).map((x) => x.e);
 
     // **嫌がられたことは、話題に関係なく必ず混ぜる。**
     // 語が重ならないから外す、をやると、別の作業で同じ地雷を踏む。
     // 限度（limit）にも数えない。減らしてよい種類のものではない。
-    if (opts.lessons === false) return hits.filter((e) => e.kind !== 'displeasure');
-    if (opts.kinds && !opts.kinds.includes('displeasure')) return hits;
-    const must = this.displeasures();
-    const rest = hits.filter((e) => e.kind !== 'displeasure');
-    return [...must, ...rest];
+    // 必ず混ぜる分（と、混ぜないと言われた分）は、件数で切る**前に**外す。切った後で外していたので、枠を嫌がられたことが食い、
+    // ほかの覚えが 1 件も残らないことがあった。必ず混ぜる枠から押し出された古いものは、話題で当たれば残す
+    const takeLessons = opts.lessons !== false && !(opts.kinds && !opts.kinds.includes('displeasure'));
+    const must = takeLessons ? this.displeasures() : [];
+    const mustIds = new Set(must.map((e) => e.id));
+    const hits = scored
+      .filter((x) => (opts.lessons === false ? x.e.kind !== 'displeasure' : !mustIds.has(x.e.id)))
+      .slice(0, limit)
+      .map((x) => x.e);
+    return [...must, ...hits];
   }
 
   /**
@@ -783,8 +796,10 @@ export class Memory {
    * これを見ずに始めるから、同じ失敗を繰り返す。
    */
   failedBefore(approach: string, limit = 3, root?: string): MemoryEntry[] {
-    return this.recall(approach, { kinds: ['attempt', 'incident'], limit: limit * 3, ...(root ? { root } : {}) })
-      .filter((e) => e.outcome !== 'worked')
+    // 絞ってから件数で切る（先に limit×3 で切っていたので、重なりの多い「うまくいった」手が枠を埋め、本当に駄目だった手が落ちた）。
+    // 駄目だったと分かっている手（failed と、起きたこと）だけを返す。確かめていない回は「駄目だった」ではない
+    return this.recall(approach, { kinds: ['attempt', 'incident'], limit: Number.MAX_SAFE_INTEGER, ...(root ? { root } : {}) })
+      .filter((e) => e.outcome === 'failed' || e.kind === 'incident')
       .slice(0, limit);
   }
 

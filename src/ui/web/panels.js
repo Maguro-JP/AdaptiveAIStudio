@@ -1371,6 +1371,9 @@ export const PANELS = {
     const render = (s) => {
       lastState = s;
       body.replaceChildren();
+      // 読めなかったのを「まだ何も覚えていません」と言わない（無いのと読めないのは別の話）
+      if (s.memoryUnreadable) body.append(el('div', 'warn', `記憶のファイルを読めませんでした（${s.memoryUnreadable}）。覚えたものは消えていません。読めるようになれば戻ります`));
+      if (s.memory.length === 0 && s.memoryUnreadable) return body.append(...skippedNote(s), ...forgottenNote());
       if (s.memory.length === 0) return body.append(empty('まだ何も覚えていません。'), ...skippedNote(s), ...forgottenNote());
       body.append(...skippedNote(s), ...forgottenNote()); // 一覧の上に出す（下だと、60 件の一覧をたどらないと見えない）
       // **嫌がられたことを、いちばん上に。**これだけは話題に関係なく効く。
