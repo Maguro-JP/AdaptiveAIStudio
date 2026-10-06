@@ -99,8 +99,12 @@ export class Goals {
   }
 
   /** いま開いているもの。古い順。 */
-  async list(): Promise<Goal[]> {
-    return parseGoals(await this.#readText(this.#path).catch(() => '')).open;
+  async list(opts: { strict?: boolean } = {}): Promise<Goal[]> {
+    // strict のときは「無い」だけを空にし、ほか（掴まれている・権限）は投げる（画面が「段取りなし」と取り違えないように）
+    return parseGoals(await this.#readText(this.#path).catch((e: unknown) => {
+      if (opts.strict && !isAbsent(e)) throw e;
+      return '';
+    })).open;
   }
 
   /** 段取りを立てる。 */

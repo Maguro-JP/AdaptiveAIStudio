@@ -475,6 +475,8 @@ export class UiServer {
   readonly #attachments = new Attachments();
   /** 作っているものを見せる口。操作用とは**別の口**にする。 */
   #preview?: PreviewServer;
+  /** 支度中（モデルを読んでいる間）の送り先の会話。消させない */
+  readonly #preparingFor = new Set<string>();
   /** プレビューを立ち上げている間の約束。立ち上げ中に来た呼び手もこれを待つ */
   #previewStarting?: Promise<unknown>;
   /** いま配っている作業場。変わったら立て直す。 */
@@ -884,6 +886,8 @@ export class UiServer {
    */
   async #loadThenDrive(text: string, attached: string[], conversationId: string, editor?: EditorHere): Promise<void> {
     this.#prep += 1;
+    // 支度の間は、送り先の会話を消させない（本体がまだ無く走ってもいないので、消す口が通っていた）
+    this.#preparingFor.add(conversationId);
     // 走り出せたら、その依頼の終わりが順番待ちを流す。走り出せなかったら、ここで流す（読み込みの間に積まれた分が残る）
     let started = false;
     try {
@@ -909,6 +913,7 @@ export class UiServer {
       started = true;
     } finally {
       this.#prep -= 1;
+      this.#preparingFor.delete(conversationId);
       if (!started && !this.#stopped) this.#bg(this.#maybeDrain(), '順番待ちの実行が落ちました');
     }
   }
@@ -1795,7 +1800,8 @@ export class UiServer {
         ? body.hunks.filter((n): n is number => Number.isInteger(n) && (n as number) >= 0)
         : undefined;
       // 「この依頼のあいだは訊かない」。書き込みだけに効く。
-      const wantAll = body?.approved === true && (body as { all?: unknown }).all === true;
+      // 書き込みの承認のときだけ受ける（画面は書き込みにしかこの押しボタンを出さないが、本体は種類を見ずに受けていた）
+      const wantAll = body?.approved === true && (body as { all?: unknown }).all === true && waiting.request.kind === 'write';
       /*
        * **塊を選んでから「以降訊かない」を押せる。**
        *
@@ -1971,7 +1977,9 @@ export class UiServer {
 
     if (path === '/api/restart' && req.method === 'POST') {
       const session = this.#session;
-      if (session && this.#busyNow(session)) {
+      // 本体を組む前の支度（最初の送りでモデルを読んでいる間）と順番待ちも作業中に数える（本体が無いので塞がっていないと見て止め、
+      // 受け付けた依頼がやり残しにも残らずに消えた）
+      if ((session && this.#busyNow(session)) || this.#prep > 0 || this.#queue.length > 0) {
         return send(res, 409, { error: 'いま作業中です。終わってから立ち上げ直してください' });
       }
       // 起こし直してもらえない入口では、**止めない**。止めると誰も起こさない。
@@ -2409,6 +2417,12 @@ export class UiServer {
           got = await listDir(root, asked);
         } catch (e) {
           if (asked === '') throw e;
+          // 根へ戻すのは、作業場の外か、もう無いときだけ。読めない（権限・掴まれている）ものを黙って根の一覧にすり替えると、
+          // 押したフォルダが開かずに根が出て、なぜかが分からなかった
+          const outside = /作業場の外/.test((e as Error).message);
+          if (!outside && !isAbsent(e)) {
+            return send(res, 409, { error: `そのフォルダを読めません（${(e as NodeJS.ErrnoException).code ?? (e as Error).message}）`, unreadable: true });
+          }
           at = '';
           got = await listDir(root, '');
         }
@@ -2498,7 +2512,13 @@ export class UiServer {
     // 一段ずつ進むので、見えないと「止まっている」のか
     // 「一段ずつ進んでいる」のかが区別できない。
     if (path === '/api/goals' && req.method === 'GET') {
-      const list = await this.#goals.list();
+      // 読めないのを「段取りなし」と見せない（無いだけを空にする）
+      let list;
+      try {
+        list = await this.#goals.list({ strict: true });
+      } catch (e) {
+        return send(res, 200, { list: [], error: `段取りの記録を読めません（${(e as Error).message}）` });
+      }
       return send(res, 200, {
         list: list.map((g) => ({
           id: g.id,
@@ -2513,7 +2533,13 @@ export class UiServer {
     // やり残しの控え。**見えないところで動かさない。**
     // 知らないうちに作業場が変わるのが、いちばん怖い。見えて、やめられること。
     if (path === '/api/unfinished' && req.method === 'GET') {
-      const list = await this.#unfinished.list();
+      // 読めないのを「やり残しなし」と見せない（無いだけを空にする）
+      let list;
+      try {
+        list = await this.#unfinished.list({ strict: true });
+      } catch (e) {
+        return send(res, 200, { list: [], error: `やり残しの記録を読めません（${(e as Error).message}）` });
+      }
       return send(res, 200, {
         list: list.map((u) => ({
           id: u.id,
@@ -2731,10 +2757,17 @@ export class UiServer {
        */
       const busy = session !== undefined && this.#mainBusy(session);
       if ((busy && (id === this.#conversationId || id === this.#loadedId)) || id === this.#runningId
-        || this.#side.has(id) || this.#queue.some((q) => q.conversationId === id)) {
+        || this.#side.has(id) || this.#queue.some((q) => q.conversationId === id) || this.#preparingFor.has(id)) {
         return send(res, 409, { error: 'いま作業中です。消すのは、終わってからにしてください' });
       }
-      await this.#conversations.remove(id);
+      // 消している間は本体の手を押さえる（その間に来た送りが、まだ在る会話を見て通り、消し終えた会話へ走った）
+      this.#prep += 1;
+      try {
+        await this.#conversations.remove(id);
+      } finally {
+        this.#prep -= 1;
+        this.#bg(this.#maybeDrain(), '順番待ちの取り出しが落ちました');
+      }
       // 見ている会話を消したら、見ている所だけトップへ。本体を空にするのは、消した会話が本体に載っているときだけ（下）。
       // 前は本体に別の会話が載っていても空にし、その会話の書けていないやりとりまで黙って消した
       if (id === this.#conversationId) this.#conversationId = undefined;

@@ -1222,8 +1222,16 @@ async function loadUnfinished() {
   const list = data.list ?? [];
   // 戻せるものは本体が知っている（別のタブで戻した・畳んだものは、もう並ばない）
   const canceled = hideCanceled || !Array.isArray(data.canceled) ? [] : data.canceled;
-  sec.hidden = list.length === 0 && goals.list.length === 0 && canceled.length === 0;
+  // 読めなかったことは言う（空の一覧を「やり残しなし」と見せない）
+  const unreadable = [data.error, goals.error].filter((t) => typeof t === 'string' && t);
+  sec.hidden = list.length === 0 && goals.list.length === 0 && canceled.length === 0 && unreadable.length === 0;
   box.textContent = '';
+  for (const t of unreadable) {
+    const row = document.createElement('div');
+    row.className = 'side-row warn';
+    row.textContent = t;
+    box.append(row);
+  }
 
   // 段取り。**どこまで進んだかを出す。**一段ずつ進むので、見えないと
   // 「止まっている」のか「一段ずつ進んでいる」のかが区別できない。
@@ -1730,7 +1738,8 @@ async function loadFiles(at = '') {
      * 一覧は前のまま。**変えたのに変わっていないように見える。**
      * 一度だけ根で引き直す（それでも駄目なら、下の catch で理由を出す）。
      */
-    if (!r.ok && at !== '') {
+    // 読めないフォルダ（409）は根で引き直さず、理由を出す
+    if (!r.ok && r.status !== 409 && at !== '') {
       r = await fetch('/api/files?path=');
       body = await r.json();
     }
