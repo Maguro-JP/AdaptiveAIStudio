@@ -55,6 +55,8 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 /** JSON らしき塊を呼び出しとして読む。読めなければ undefined。 */
 export function toCall(value: unknown): SalvagedCall | undefined {
   if (!isRecord(value)) return undefined;
+  // OpenAI の形のまま書いたもの（`{"type":"function","function":{"name":…,"arguments":"…"}}`）は、中の `function` を読む
+  if (isRecord(value.function)) return toCall(value.function);
 
   const name = value.name ?? value.tool ?? value.tool_name ?? value.function;
   if (typeof name !== 'string' || !NAME.test(name)) return undefined;
