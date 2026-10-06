@@ -1679,6 +1679,16 @@ function drawConversations() {
       textContent: `ほかに ${conversations.hidden} 件（古いものは一覧に出していません。消えてはいません）`,
     }));
   }
+  // 読めなかった分と、保存先そのものが読めないことは、古いのと分けて言う
+  if (conversations.unreadable > 0) {
+    box.append(Object.assign(document.createElement('div'), {
+      className: 'dim',
+      textContent: `読めない会話が ${conversations.unreadable} 件あります（ほかのソフトが掴んでいる・権限が無い、など）。一覧には出していません`,
+    }));
+  }
+  if (conversations.listError) {
+    box.append(Object.assign(document.createElement('div'), { className: 'dim', textContent: conversations.listError }));
+  }
 }
 
 /**

@@ -2465,16 +2465,27 @@ export class UiServer {
 
     // 会話。**残してあるものを出して、開き直せるようにする。**
     if (path === '/api/conversations' && req.method === 'GET') {
-      const list = await this.#conversations.list();
-      // **一覧を見ただけでは作らないし、勝手に開きもしない。**
-      // どれも開いていない状態がトップで、そこから書けば新しい会話になる。
-      // **出していない分を、黙って隠さない。**古いものは消えていない。
-      const total = await this.#conversations.count();
+      // 会話の保存先が読めない（権限・掴まれている）のを、「一つも無い」と見せない。理由（符丁）を返して画面に出す
+      let list: Awaited<ReturnType<Conversations['list']>> = [];
+      let total = 0;
+      let listError: string | undefined;
+      try {
+        list = await this.#conversations.list();
+        // **一覧を見ただけでは作らないし、勝手に開きもしない。**
+        // どれも開いていない状態がトップで、そこから書けば新しい会話になる。
+        // **出していない分を、黙って隠さない。**古いものは消えていない。
+        total = await this.#conversations.count();
+      } catch (e) {
+        listError = `会話の保存先を読めません（${(e as NodeJS.ErrnoException).code ?? '理由不明'}）。少し置いてから開き直してください`;
+      }
+      // 在るのに読めなかった会話は、「古いので出していない」に混ぜない
+      const unreadable = listError ? 0 : this.#conversations.lastUnreadable;
       return send(res, 200, {
         current: this.#conversationId ?? null, running: this.#runningId ?? null,
         // 動いている会話の全部（本体と、横で並べて走らせているもの）。一覧の「動いています」はこちらで付ける。
         runningAll: [...(this.#runningId ? [this.#runningId] : []), ...this.#side.keys()],
-        list, total, hidden: Math.max(0, total - list.length),
+        list, total, hidden: Math.max(0, total - list.length - unreadable), unreadable,
+        ...(listError ? { listError } : {}),
         // 消して、まだ戻せるもの（立ち上げ直すと本当に消える）。新しい順。
         // 読めなくても、生きている会話の一覧まで道連れにしない（画面は一覧ごと出さなくなる）。読めないことは言う
         ...await this.#conversations.trashList().then(
@@ -2804,6 +2815,10 @@ export class UiServer {
       if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
       // **画面へ 16MB を投げない。**丸ごと返すと、開いた瞬間に固まる
       // （半年続けた会話で JSON が 5.5MB になった）。後ろから読む。
+      // 無い（消された）会話を空の会話として返さない。読めない会話の理由に、ファイルの道を入れない（`/select` と同じ答え方）
+      const lookup = await this.#conversations.head(id).then(() => undefined, (e: unknown) => e as NodeJS.ErrnoException);
+      if (lookup && isAbsent(lookup)) return send(res, 404, { error: 'この会話はありません（消されています。消した会話は「戻す」から戻せます）', gone: true });
+      if (lookup) return send(res, 503, { error: `この会話の記録を読めません（${lookup.code ?? '理由不明'}）。少し置いてからもう一度開いてください` });
       const shown = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
       return send(res, 200, { id, messages: shown, inFlight: this.#inFlightFor(id), approvals: this.#waitingApprovals() });
     }

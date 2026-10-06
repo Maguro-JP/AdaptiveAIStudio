@@ -11,7 +11,7 @@
  * **足すだけで書く。**丸ごと書き直すと、書いている最中に落ちたときに
  * 全部を失う。行ごとなら、壊れた行を捨てるだけで残りは読める。
  */
-import { readdir, readFile, appendFile, writeFile, mkdir, rm, rename, stat, open, truncate } from 'node:fs/promises';
+import { readdir, readFile, appendFile, writeFile, mkdir, rm, rename, stat, open, truncate, utimes } from 'node:fs/promises';
 import type { Stats } from 'node:fs';
 import { join } from 'node:path';
 import type { ProviderMessage } from '../providers/contract.ts';
@@ -251,12 +251,18 @@ export class Conversations {
    * 並べ替えの鍵は名前に入っている（`newId()` が時刻から作る）ので、
    * 中身を読む前に順は決められる。**読む数そのものを減らす。**
    */
+  /** 直前の `list` で、在るのに読めなかった会話の数。一覧に出ない理由を「古いから」と混ぜないために返す */
+  lastUnreadable = 0;
+
   async list(limit = LIST_LIMIT): Promise<ConversationHead[]> {
+    this.lastUnreadable = 0;
     let names: string[];
     try {
       names = await readdir(this.#dir);
-    } catch {
-      return []; // まだ一度も話していない。異常ではない。
+    } catch (e) {
+      // まだ一度も話していない（無い）なら空。読めない（権限・掴まれている）のを「一つも無い」と見せない
+      if (isAbsent(e)) return [];
+      throw e;
     }
     const byName = names
       .filter((n) => n.endsWith('.jsonl'))
@@ -279,6 +285,7 @@ export class Conversations {
       if (heads.length >= limit) break;
       const head = await this.head(id).catch(() => undefined);
       if (head) heads.push(head);
+      else this.lastUnreadable += 1;
     }
     heads.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return heads;
@@ -289,7 +296,10 @@ export class Conversations {
     try {
       const names = await readdir(this.#dir);
       return names.filter((n) => n.endsWith('.jsonl') && ID_SHAPE.test(n.slice(0, -6))).length;
-    } catch { return 0; }
+    } catch (e) {
+      if (isAbsent(e)) return 0;
+      throw e;
+    }
   }
 
   /** 見出しだけを読む。一覧では中身まで組み立てない。 */
@@ -478,7 +488,11 @@ export class Conversations {
       const trimmed = title.replace(/\s+/g, ' ').trim();
       const next = trimmed.length === 0 ? '新しい会話' : cutTitle(trimmed);
       lines[0] = JSON.stringify({ ...first, title: next } satisfies MetaLine);
+      // 名前を変えただけで「使った」ことにしない（一覧は書いた時刻で並べるので、古い会話が先頭に上がり、別の会話を押し出した）
+      // 直前に読めているので、時刻も取れる（取れなければ書く前に止める）。戻せなくても名前は変わっているので、そこは流す
+      const before = await stat(path);
       await replaceWhole(path, lines.join('\n'));
+      await utimes(path, before.atime, before.mtime).catch(() => undefined);
       return next;
     });
   }
