@@ -12,7 +12,7 @@
  * node-llama-cpp が無い場所では、飛ばして「飛ばした」と言う。
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -67,6 +67,8 @@ function randomText(rand, max) {
 const EDGES = ['', ' ', '\n', 'x', 'the', ' the', '   ', '日本語', 'a\nb'];
 
 const dir = mkdtempSync(join(tmpdir(), 'aas-tok-'));
+// 終わるときに消す（どの道で終わっても。消していなかったので、回すたびに aas-tok- が一つずつ溜まった）
+process.on('exit', () => { rmSync(dir, { recursive: true, force: true }); });
 let bad = 0;
 
 for (const [label, args] of [['SPM', []], ['BPE', ['--bpe']]]) {

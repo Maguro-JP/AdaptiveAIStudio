@@ -23,12 +23,20 @@ function stop(why) {
 }
 
 const mode = process.argv[2];
-const sending = process.argv[3] ?? '';
+// 押すブランチの sha は空白区切りで一つ以上（二本以上を押したとき）。一本ずつ見比べ、どれか一つでも違えば止める
+const sendings = (process.argv[3] ?? '').split(/\s+/).filter(Boolean);
+const whyOf = (before, after) => {
+  for (const sending of sendings.length > 0 ? sendings : ['']) {
+    const why = pushedTree({ sending, before, after });
+    if (why) return why;
+  }
+  return undefined;
+};
 try {
   if (mode === 'before') {
     const tree = look();
     // 前だけで分かることを、前に言う。動いたかどうかは after で見る。
-    const why = pushedTree({ sending, before: tree, after: tree });
+    const why = whyOf(tree, tree);
     if (why) stop(why);
     process.stdout.write(pack(tree));
     process.exit(0);
@@ -38,7 +46,7 @@ try {
   const before = unpack(process.argv[4] ?? '');
   // 前のワークツリーが読めていないなら、比べようがない。止めない。
   if (!before.head) process.exit(0);
-  const why = pushedTree({ sending, before, after: look() });
+  const why = whyOf(before, look());
   if (why) stop(why);
   process.exit(0);
 } catch {

@@ -375,6 +375,7 @@
 - 69 回目の不具合調査の 4 件（守りと戻し方: MCP の引数の検問・書けなかった道の記録・大文字小文字の見分け・協議の要る一覧）
 - 70 回目の不具合調査の 3 件（src/core の起動まわり: 同梱の GitHub の注記・PATH の引用符・数え方のモデル）
 - 71 回目の不具合調査の 4 件（モデルとの通信と候補の切り替え: 空の終わりの合図・部品の配列の本文・冷やした口の次の候補・並んだ依頼の冷やしの解き方）
+- 72 回目の不具合調査の 6 件（scripts と pre-push: 式で押す sha・二本以上の push・一時フォルダの後始末・自分のブランチの判定・shot の起動）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -12965,3 +12966,14 @@ OpenAI 互換の口（`src/providers/openai-compatible.ts`）と、候補の切�
 - 並んで走る依頼の一つが成功すると、別の依頼が後から付けた冷やし（残高切れの 30 分など）まで消した。冷やしを付けた時刻を持ち、成功で解くのは、その試しを始める前に付いた冷やしだけにする（同じ依頼のやり直しの前に付けた冷やしは、やり直しを始めた時刻より前なので解ける）
 試験は `test/stream-switch-gaps.test.ts`（直す前の版で 4 件とも落ちた）。
 触る場所: `src/providers/openai-compatible.ts`（`streamText`・終わりの合図）、`src/core/orchestrator.ts`（冷やした口の飛ばし方・`triedAt`）、`src/core/registry.ts`（`clock`・`clearCooldown` の `since`）
+
+## 2026-10-07  72 回目の不具合調査の 6 件（scripts と pre-push: 式で押す sha・二本以上の push・一時フォルダの後始末・自分のブランチの判定・shot の起動）
+
+開発用の scripts と pre-push のフックを、読むだけの調査で見た分。
+- フックは、押す sha を手元の ref が `refs/heads/*` のときだけ拾っていた。式で押す（`git push origin HEAD~1:main`、sha そのもの）と見比べる相手が無く、確かめていない commit がそのまま外のブランチへ出た。外の ref がブランチなら、手元の書き方によらず拾う
+- 二本以上を一度に押すと、押す sha と範囲を上書きしていたので、最後の一本しか見なかった。全部を溜めて一本ずつ見る（文書だけの push の判定も、範囲ごとに見る）
+- `tokenizer-conformance.mjs` と `check.mjs` が作る一時フォルダを、落ちた回に消していなかった（途中で `process.exit` を呼ぶので後始末が走らない）。終わるときに必ず消す。`real-answer-dry.mjs` も、落ちた回は exit で抜けて finally の後始末を飛ばしていた。終了コードだけ立てて流す
+- handoff で名指しした相手が自分のブランチのとき、自分のブランチを除いた一覧で見ていたので「見つかりません」と言った。全体の一覧で見て「自分のブランチです」と言う
+- `shot.mjs` は、ブラウザが立たなかったときに画面のプロセスを止めずに残した。立てるところから後始末の内側に入れる
+試験は `test/pushed-tree.test.ts`（式で押す・二本まとめて押す）と `test/handoff.test.ts`（自分のブランチ）。直す前の版で 3 件とも落ちた。一時フォルダの後始末・`real-answer-dry`・`shot.mjs` は試験を書いていない（確かめていない）。
+触る場所: `.githooks/pre-push`（`AAS_PUSH_SENDING`・`AAS_PUSH_RANGE`）、`scripts/pushed-tree-check.mjs`、`scripts/docs-only-check.mjs`、`scripts/handoff-plan.mjs`（`pickToTake`）、`scripts/tokenizer-conformance.mjs`、`scripts/check.mjs`、`scripts/real-answer-dry.mjs`、`scripts/shot.mjs`

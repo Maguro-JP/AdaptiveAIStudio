@@ -96,10 +96,12 @@ const ui = spawn(process.execPath, [join(root, 'src', 'cli', 'ui.ts')], {
 });
 await new Promise((r) => setTimeout(r, 7000));
 
-const b = await chromium.launch({ executablePath: picked.browser });
-const p = await b.newPage({ viewport: { width: 1400, height: 860 }, deviceScaleFactor: 2 });
+// ブラウザの起動も try の中で（起動に失敗すると画面のプロセスが口を握ったまま残り、次の回が古い画面を相手にした）
+let b;
 let failed = '';
 try {
+  b = await chromium.launch({ executablePath: picked.browser });
+  const p = await b.newPage({ viewport: { width: 1400, height: 860 }, deviceScaleFactor: 2 });
   // 通信が止むのを待たない（`/api/events` が開きっぱなしで止まない）。
   // 本体と繋がったのを待つ。理由は scripts/sweep.mjs の `opened`。
   await p.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'load' });
@@ -122,7 +124,7 @@ try {
 } catch (e) {
   failed = String(e?.message ?? e);
 } finally {
-  await b.close();
+  await b?.close();
   ui.kill();
   model.close();
   await rm(base, { recursive: true, force: true }).catch(() => undefined);

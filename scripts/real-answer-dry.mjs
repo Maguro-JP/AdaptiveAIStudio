@@ -95,9 +95,11 @@ try {
   if (why) {
     console.log(said.text);
     console.error(`\n  CI へ出す前の確かめが通りません: ${why}`);
-    process.exit(1);
+    // exit を呼ぶと finally の後始末が走らない（落ちた回だけ一時フォルダが残った）。終了コードだけ立てて流す
+    process.exitCode = 1;
+  } else {
+    console.log(`  配管は通りました（終了コード ${said.code}。答えの中身は乱数なので見ていません）`);
   }
-  console.log(`  配管は通りました（終了コード ${said.code}。答えの中身は乱数なので見ていません）`);
 } finally {
   await rm(base, { recursive: true, force: true }).catch(() => undefined);
 }
