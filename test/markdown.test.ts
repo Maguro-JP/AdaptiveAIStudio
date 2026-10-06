@@ -54,8 +54,8 @@ describe('答えを塊に切る', () => {
     const b = parseBlocks('## 手順\n1. 読む\n2. 直す\n- 補足');
     assert.deepEqual(b, [
       { type: 'heading', level: 2, text: '手順' },
-      { type: 'list', ordered: true, items: ['読む', '直す'] },
-      { type: 'list', ordered: false, items: ['補足'] },
+      { type: 'list', ordered: true, items: ['読む', '直す'], start: 1 },
+      { type: 'list', ordered: false, items: ['補足'], start: 1 },
     ]);
   });
 
@@ -107,5 +107,19 @@ describe('どんな行でも、読み進める（固まらない）', () => {
   test('CRLF でも、見出しは見出し、囲いの言語名は言語名になる', () => {
     assert.deepEqual(parseBlocks('# 題\r\n本文'), [{ type: 'heading', level: 1, text: '題' }, { type: 'para', text: '本文' }]);
     assert.deepEqual(parseBlocks('```python main.py\nx\n```'), [{ type: 'code', lang: 'python', text: 'x', closed: true }]);
+  });
+});
+
+describe('囲いと番号（55 回目の調査）', () => {
+  test('**4 つの ` で開いた囲いは、中の ``` では閉じない**', () => {
+    const got = parseBlocks('````md\n```js\nx\n```\n````\nafter') as { type: string; text?: string }[];
+    assert.equal(got[0]?.type, 'code');
+    assert.equal(got[0]?.text, '```js\nx\n```', '中の ``` で閉じた');
+    assert.equal(got[1]?.type, 'para');
+  });
+
+  test('**番号付きの箇条書きは、最初の項目の数から始める**', () => {
+    const got = parseBlocks('3. a\n4. b') as { type: string; start?: number }[];
+    assert.equal(got[0]?.start, 3, '続きの番号が 1 から振り直された');
   });
 });

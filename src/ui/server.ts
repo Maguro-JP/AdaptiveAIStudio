@@ -1905,6 +1905,8 @@ export class UiServer {
           ? { loading: { ref: this.#loading.ref, seconds: Math.round((Date.now() - this.#loading.began) / 1000) } }
           : {}),
         node: process.version,
+        // 立ち上げ直したかを画面が見分けるため（止まる途中の古い本体から頁を読み直さない）
+        pid: process.pid,
         platform: `${process.platform} ${process.arch}`,
         portable: isPortable(),
         productRoot: productRoot(),
