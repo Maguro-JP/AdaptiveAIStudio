@@ -360,6 +360,7 @@
 - 54 回目の不具合調査の 7 件（困ったときの入口: doctor の鍵の出し方・見出しのトークン・鍵を付けない接続の確かめ・報告の保存先・逃がした保存先の表示・書き込みの確かめ・口の番号）
 - 55 回目の不具合調査の 8 件（画面の JS: 作業場の欄の初めの値・見ている会話の作業中・仕切りの比率の保存・点検の受け手・更新の待ち時間・立ち上げ直しの読み直し・囲いと番号・消した注意の帯）
 - 56 回目の不具合調査の 5 件（repo map と selftest: 但し書きの取り分・部品の間の区切り・使い回しの取り分・ファイル名の当て方・依存の欠けと読めない保存先）
+- 57 回目の不具合調査の 5 件（作業場の記録とテストの数え方: 中の別のリポジトリ・skipIf と fixme と this.skip・Python の三重引用符・近い所探しの手間・大きな置き物の読み方）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -12777,3 +12778,16 @@ repo map を作って渡す所（`src/agent/repo-map.ts`・`src/core/prompt-budg
 試験は `test/map-budget-gaps.test.ts`（直す前の版で、取り分を超えた・区切りの分で落とした・別のファイルを強い seed にした、で落ちた）。
 repo map の使い回しの件は、試験を書いていない（確かめていない）。selftest の 2 件は、言い分けを `src/cli/selftest-reasons.ts` に分けてそこを確かめた（selftest を通しで走らせてはいない）。
 触る場所: `src/agent/repo-map.ts`（`renderMap`・`seedFrom`）、`src/core/prompt-budget.ts`（`fitParts`）、`src/core/session.ts`（`#repoMap`）、`src/cli/selftest-reasons.ts`
+
+## 2026-10-06  57 回目の不具合調査の 5 件（作業場の記録とテストの数え方: 中の別のリポジトリ・skipIf と fixme と this.skip・Python の三重引用符・近い所探しの手間・大きな置き物の読み方）
+
+作業場の記録（`src/agent/workspace-stamp.ts`）とテストの数え方（`src/agent/test-patterns.ts`・`test-integrity.ts`）、edit_file の近い所探し（`src/agent/tools/write-kind.ts`）を、読むだけの調査で見た分。
+- 作業場の中に別のリポジトリ（追跡していない clone・submodule）が在ると、git はフォルダ一つで挙げ、記録はそのフォルダの大きさと時刻だけだった。中のファイルを書き換えても「変わっていない」と読み、作業後の確かめを走らせずに済ませた。フォルダは中まで辿り（`.git` は見ない、20,000 項目まで）、数・大きさの和・いちばん新しい時刻で比べる。辿れなければ毎回「変わった」に倒す（毎回「変わった」にしなかったのは、外の変化の一覧が毎回騒がしくなるため）
+- `test.skipIf(…)(…)`（Vitest）・`test.fixme(…)`（Playwright）・テストの中の `test.skip()`・`this.skip()`（Mocha）で止めても、止めたと数えなかった。skip として数え、テストの中から止める `test.skip()` は定義に数えない（名前で始まらない）。`runIf` は正しく使う形が多いので数えていない
+- Python の三重引用符で囲んで止めたテストを、`""` と行末で切れる `"` に読み分けて数えていた。閉じまでを一つの文字列として飛ばす
+- edit_file が外れたときの近い所探しは、範囲ごとに作り直して手間が行数 × find の行数の 2 乗だった。範囲をずらして足し引きする（数え方は同じ）
+- test/ の下の置き物（数百 MB のモデルなど）を、作業の前と後のたびに丸ごと文字列にしていた。書く前の規則と同じ上限（20MB）で大きさを見てから読み、超えたものは定義 0 として載せる
+試験は `test/stamp-tests-gaps.test.ts`（直す前の版で 6 件とも落ちた）。近い所探しの手間と置き物の読み方は、結果が直す前と同じで試験では見分けられないので書いていない（確かめていない）。
+直していないもの:
+- reftable 形式のリポジトリで、`.git/refs/heads` を見る「まだコミットが無い」の判定が誤るかもしれない件。reftable で `refs/heads` がどう置かれるかを確かめていないので、確かめてから
+触る場所: `src/agent/workspace-stamp.ts`（`dirDigest`）、`src/agent/test-patterns.ts`（`SKIP_PATTERNS`・`RUNTIME_SKIP`・`withoutComments`）、`src/agent/test-integrity.ts`、`src/agent/tools/write-kind.ts`（`nearestTo`）

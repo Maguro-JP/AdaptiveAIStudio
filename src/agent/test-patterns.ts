@@ -36,6 +36,9 @@ const CASE_PATTERNS = [
  */
 const SKIP_PATTERNS = [
   /\b(?:test|it|describe)\s*\.\s*(?:skip|todo)\s*\(/g,
+  // Vitest の `test.skipIf(cond)(…)`・Playwright の `test.fixme(…)`・Mocha の `this.skip()`（数えずにいたので、書き換えて止めても通した）
+  /\b(?:test|it|describe|suite)\s*\.\s*(?:skipIf|fixme)\s*\(/g,
+  /\bthis\s*\.\s*skip\s*\(/g,
   /(?<![.\w$])(?:xit|xtest|xdescribe)\s*\(/g,
   /\b(?:test|it|describe|suite)\s*\(\s*(['"`])(?:(?!\1)[^\n])*\1\s*,\s*\{[^{}\n]*?\b(?:skip|todo)\s*:/g,
   /(?<![.\w$])t\.skip\s*\(/g,        // node:test の中から
@@ -65,6 +68,15 @@ function withoutComments(text: string): string {
   while (i < text.length) {
     const c = text[i]!;
     if (c === '\\') { out += text.slice(i, i + 2); i += 2; continue; }
+    // Python の三重引用符は、閉じまでを一つの文字列として飛ばす（中身は数えない）。塊で囲んで止めたテストを、`""` と行末で切れる `"` に
+    // 読み分け、間の `def test_` を数えていた。行の数は保つ（行頭で当てる型があるため）
+    if ((c === '"' || c === "'") && text.startsWith(c.repeat(3), i)) {
+      const end = text.indexOf(c.repeat(3), i + 3);
+      const stop = end < 0 ? text.length : end + 3;
+      out += text.slice(i, stop).replace(/[^\n]/g, '');
+      i = stop;
+      continue;
+    }
     if (c === "'" || c === '"' || c === '`') {
       let j = i + 1;
       while (j < text.length && text[j] !== c) {
@@ -92,11 +104,17 @@ function withoutComments(text: string): string {
   return out;
 }
 
+/**
+ * テストの中から止める書き方（Playwright の `test.skip()`・`test.skip(cond, '理由')`・`test.fixme()`）。名前（文字列）で始まらないので、
+ * テストの定義ではない。定義として数えていたので、本体に足すと定義が一つ・skip が一つ増え、差し引きで止めたことにならなかった
+ */
+const RUNTIME_SKIP = /(?<![.\w$:])(?:test|it)\s*\.\s*(?:skip|fixme)\s*\(\s*(?!['"`])/g;
+
 export function countCases(text: string): number {
   const code = withoutComments(text);
   let n = 0;
   for (const p of CASE_PATTERNS) n += code.match(p)?.length ?? 0;
-  return n;
+  return Math.max(0, n - (code.match(RUNTIME_SKIP)?.length ?? 0));
 }
 
 export function countSkips(text: string): number {
