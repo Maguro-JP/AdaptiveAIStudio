@@ -249,6 +249,10 @@ export interface Job {
   progress?: { pct: number };
 }
 
+
+/** 段・続きを進めた結果。走らせた（started）・走らせずに済ませた（取り消された・止めた・閉じた・読めない。settled） */
+type StepOutcome = 'started' | 'settled';
+
 export class UiServer {
   readonly #opts: UiServerOptions;
   readonly #clients = new Set<ServerResponse>();
@@ -3246,16 +3250,25 @@ export class UiServer {
     const sameRuntime = kind === (rcNow.kind ?? 'inproc') && (dir || modelsDir()) === (rcNow.modelsDir ?? modelsDir());
     if (model !== undefined && sameRuntime && (model || undefined) !== rcNow.model) {
       const live = this.#session;
-      if (live && this.#busyNow(live)) {
+      // 読み込みの最中（起動時の先読み・最初の送りの支度）も作業中に数える。読み終えるまで降ろす先に載らないので、降ろせないまま
+      // 前のモデルが載り、次の送信も前のモデルで答えた（画面は選んだモデルを名乗った）
+      if ((live && this.#busyNow(live)) || this.#prep > 0 || this.#preloading || this.#loading) {
         modelRestart = true;
       } else {
-        this.#opts.config.runtime = { ...rcNow, ...(model ? { model } : {}) };
-        if (!model) delete this.#opts.config.runtime.model;
-        const runtime = this.#runtime;
-        if (runtime?.id === 'inproc') {
-          for (const ref of runtime.loaded()) await runtime.unload(ref).catch(() => undefined);
+        // 降ろして畳むまで本体の手を押さえる（降ろす待ちの間に来た送りが、古い本体で走り出し、直後に畳まれて途中で切れた）
+        this.#prep += 1;
+        try {
+          this.#opts.config.runtime = { ...rcNow, ...(model ? { model } : {}) };
+          if (!model) delete this.#opts.config.runtime.model;
+          const runtime = this.#runtime;
+          if (runtime?.id === 'inproc') {
+            for (const ref of runtime.loaded()) await runtime.unload(ref).catch(() => undefined);
+          }
+          if (live) await this.#retireSession(live);
+        } finally {
+          this.#prep -= 1;
+          this.#bg(this.#maybeDrain(), '順番待ちの取り出しが落ちました');
         }
-        if (live) await this.#retireSession(live);
         this.broadcast({ type: 'log', level: 'info', text: model ? `モデルを ${model} にしました。次の送信で読みます` : 'モデルの指定を外しました。次の送信で選び直します' });
         this.broadcast({ type: 'stateChanged' });
       }
@@ -3716,20 +3729,23 @@ export class UiServer {
     this.#prep += 1;
     let began = false;
     try {
-      began = await this.#resumeHeld(session, item);
-      return began;
+      const how = await this.#resumeHeld(session, item);
+      began = how === 'started';
+      // 始めずに済ませた回（取り消された・止めた・閉じた・読めない）も、この見回りの仕事はした。考えごとへは進まない
+      return how !== 'none';
     } finally {
       this.#prep -= 1;
       if (!began) this.#bg(this.#maybeDrain(), '順番待ちの取り出しが落ちました');
     }
   }
 
-  async #resumeHeld(session: Session, item: Unfinished): Promise<boolean> {
+  /** やり残しの続き。走らせた（started）・走らせずに済ませた（settled）・手を付けなかった（none） */
+  async #resumeHeld(session: Session, item: Unfinished): Promise<StepOutcome | 'none'> {
     // モデルが無ければ（まだ読んでいない場合も含めて）、続けようがない。
     // **ここでも読み込みは始めない。**控えはそのまま残る。
     if (await this.#readyToThink(false)) {
       this.#idleHoldUntil = Date.now() + 10 * 60_000;
-      return false;
+      return 'none';
     }
 
     // **黙って動き出さない。**知らないうちに作業場が変わるのが、いちばん怖い。
@@ -3743,8 +3759,20 @@ export class UiServer {
     // 一度落ちたものを、もう一度そのまま渡しても通らない。歩ける大きさに
     // 割って、一段ずつ進む。割り方は、そのモデルが実際にこなせた歩幅から決める。
     if (item.attempts >= 1) {
-      const stepped = await this.#driveStep(session, item);
-      if (stepped) return true;
+      let stepped: StepOutcome | 'whole';
+      try {
+        stepped = await this.#driveStep(session, item);
+      } catch (e) {
+        // 段取りの記録を書けない（ディスクが一杯・掴まれている）。続きの状態を戻し、10 分は割り直さない（戻さずにいたので「続き」が
+        // 出たまま、見回りのたびに割る問い合わせを繰り返し、モデルを塞いだ）
+        this.#resuming = undefined;
+        this.#idleHoldUntil = Date.now() + 10 * 60_000;
+        this.broadcast({ type: 'log', level: 'warn', text: `段取りの記録を書けないので、やり残しの続きを止めます（${(e as Error).message}）` });
+        return 'settled';
+      }
+      // 割れなかった（whole）ときだけ丸ごと進める。取り消された・止めた・閉じた（settled）を「割れなかった」と読み、
+      // 取り消された依頼を丸ごと走らせていた
+      if (stepped !== 'whole') return stepped;
     }
     // 元の会話へ戻して続ける。別の会話で続けると、話が二つに割れる。
     // 比べるのは本体に載っている会話（`#loadedId`）。載せ替えは `#loadInto` を通す（前は履歴だけ入れ替えて載っている会話の名前を
@@ -3756,10 +3784,15 @@ export class UiServer {
         // 回数は数えない（数えると、読めないだけで諦める方へ進む）。次の見回りでまた試す
         this.broadcast({ type: 'log', level: 'warn', text: `やり残しの会話の記録を読めないので、今回は続けません（${loaded.message}）` });
         this.#resuming = undefined;
-        return true;
+        return 'settled';
       }
       // 見ている会話（`#conversationId`）は替えない。替えていたので、画面が黙って再開した会話へ移り、次に打った分もそちらへ入った
       this.broadcast({ type: 'conversations' });
+    }
+    // 載せ替えや割る問い合わせを待つ間に取り消されていたら、走らせない
+    if (!(await this.#stillUnfinished(item.id))) {
+      this.#resuming = undefined;
+      return 'settled';
     }
     // 続きの文はこちらが組み立てたもの。利用者の言葉として判じない。
     this.#bg(
@@ -3769,7 +3802,7 @@ export class UiServer {
         .finally(() => { this.#resuming = undefined; }),
       'やり残しの続きが落ちました',
     );
-    return true;
+    return 'started';
   }
 
   /**
@@ -3807,16 +3840,16 @@ export class UiServer {
    * 割れなかったら false を返す（**割れないことは、進めない理由にならない**。
    * 呼ぶ側が、これまでどおり丸ごと渡す道へ落ちる）。
    */
-  async #driveStep(session: Session, item: { id: string; request: string; note: string }): Promise<boolean> {
+  async #driveStep(session: Session, item: { id: string; request: string; note: string }): Promise<StepOutcome | 'whole'> {
     const model = session.candidates[0] ?? '(不明)';
     const stride = await this.#stride.get(model, session.contextTokens);
 
     // 段取りの記録を読めないときは、今回は進めない。「無い」と取り違えると、立て直して二つ目を作る・
     // 残っている段を「無い」と読んで閉じ、やり残しを「済んだ」にする（下の next）。
-    const unreadable = (e: unknown): true => {
+    const unreadable = (e: unknown): 'settled' => {
       this.broadcast({ type: 'log', level: 'warn', text: `段取りの記録を読めませんでした（${(e as Error).message}）。今回は進めません` });
       this.#resuming = undefined;
-      return true;
+      return 'settled';
     };
     let goal: Goal | undefined;
     try {
@@ -3841,14 +3874,18 @@ export class UiServer {
         this.broadcast({ type: 'log', level: 'info', text: '止めたので、段に割るのをやめました' });
         // 続きの状態も戻す（戻さないと、仕事の一覧に「やり残しの続き」が出たまま、やり直しの口も断り続ける）
         this.#resuming = undefined;
-        return true;
+        return 'settled';
       }
       if (steps.length === 0) {
         this.broadcast({ type: 'log', level: 'warn', text: '段に割れませんでした。丸ごと進めます。' });
-        return false;
+        return 'whole';
       }
       // 割っている間（モデルへの問い合わせ）に取り消されていたら、立てない。立てると、取り消した依頼の段取りが残る。
-      if (!(await this.#stillUnfinished(item.id))) return false;
+      // 丸ごとにも進めない（「割れなかった」と同じ値を返していたので、取り消した依頼を丸ごと走らせた）
+      if (!(await this.#stillUnfinished(item.id))) {
+        this.#resuming = undefined;
+        return 'settled';
+      }
       goal = await this.#goals.open(item.request, steps);
       this.broadcast({ type: 'unfinished' });
     }
@@ -3870,7 +3907,7 @@ export class UiServer {
         await this.#unfinished.done(item.id);
         this.broadcast({ type: 'unfinished' });
         this.#resuming = undefined;
-        return true;
+        return 'settled';
       }
 
       // **手が付かなかった段があるなら、丸ごと投げ直さない。**
@@ -3887,7 +3924,7 @@ export class UiServer {
       });
       this.broadcast({ type: 'unfinished' });
       this.#resuming = undefined;
-      return true;
+      return 'settled';
     }
 
     const p = progressOf(goal);
@@ -3907,7 +3944,7 @@ export class UiServer {
         .finally(() => { this.#resuming = undefined; this.#step = undefined; }),
       '一歩ずつの実行が落ちました',
     );
-    return true;
+    return 'started';
   }
 
   /**
@@ -3927,7 +3964,12 @@ export class UiServer {
     try {
       if (!(await this.#stillUnfinished(item.id))) return;
       this.#resuming = item.id;
-      started = await this.#driveStep(session, item).catch(() => false);
+      const how = await this.#driveStep(session, item).catch((e: unknown) => {
+        this.broadcast({ type: 'log', level: 'warn', text: `次の段を始められませんでした（${(e as Error).message}）` });
+        return 'settled' as const;
+      });
+      // 割れなかった（whole）は、続きの段では丸ごとに進めない（次の見回りが拾う）
+      started = how === 'started';
       if (!started) this.#resuming = undefined;
     } finally {
       this.#prep -= 1;
