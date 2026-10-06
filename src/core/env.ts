@@ -13,6 +13,7 @@
  * 依存は増やさない（dotenv は入れない）。形は一行 `KEY=VALUE` だけ。
  */
 import { readFileSync } from 'node:fs';
+import { inOrder } from './in-order.ts';
 
 /** 一行ずつ読む。壊れた行は飛ばす（そこで全部を止めない）。 */
 export function parseEnvFile(text: string): Record<string, string> {
@@ -121,6 +122,14 @@ export async function writeEnvValue(path: string, key: string, value: string): P
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`トークンの名前として使えません: ${key}`);
   // 改行を混ぜられると、一行で別のトークンを足せてしまう。
   if (/[\r\n]/.test(value)) throw new Error('トークンに改行は入れられません');
+  /*
+   * 同じファイルへの書き込みは一つずつ。読んで一行足して全部を書き戻すので、二つの口（GitHub を繋ぐ・MCP を繋ぐ）が同時に書くと、
+   * 後の書き込みが前の行を消していた（動いている間は環境に値が在るので気づかず、立ち上げ直すと消えている）
+   */
+  return inOrder(path, () => writeEnvValueNow(path, key, value));
+}
+
+async function writeEnvValueNow(path: string, key: string, value: string): Promise<string> {
 
   const { writeFile, mkdir, chmod } = await import('node:fs/promises');
   const { dirname } = await import('node:path');

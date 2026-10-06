@@ -2608,6 +2608,12 @@ export class UiServer {
       const body = await readBody(req) as { id?: unknown };
       const id = typeof body?.id === 'string' ? body.id : '';
       if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
+      /*
+       * 無い会話（別のタブで消した）へは切り替えない。無い会話の読みは空として返るので、切り替えて打った分が消した会話の行き先
+       * （`trash/`）へ書かれ、次に立ち上げたときに片づけで消えていた。読めないだけの会話は下で扱う
+       */
+      const missing = await this.#conversations.head(id).then(() => false, (e: unknown) => isAbsent(e));
+      if (missing) return send(res, 404, { error: 'この会話はありません（消されています。消した会話は「戻す」から戻せます）', gone: true });
       const session = this.#session;
       const loaded = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL })
         .then((m) => ({ m }), (e: unknown) => ({ error: e as Error }));
@@ -2673,8 +2679,10 @@ export class UiServer {
       if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
       if (typeof body?.title !== 'string') return send(res, 400, { error: '見出しがありません' });
       const renamed = await this.#conversations.rename(id, body.title)
-        .then((t) => ({ title: t }), (e: unknown) => ({ error: (e as Error).message }));
-      if ('error' in renamed) return send(res, 400, renamed);
+        .then((t) => ({ title: t }), (e: unknown) => ({ error: e as Error }));
+      // 無い会話は 404。読めなかった理由の文にはファイルの道が入るので、そのまま画面へ返さない
+      if ('error' in renamed && isAbsent(renamed.error)) return send(res, 404, { error: 'この会話はありません（消されています）' });
+      if ('error' in renamed) return send(res, 400, { error: '見出しを付け替えられませんでした' });
       this.broadcast({ type: 'conversations' });
       return send(res, 200, { id, title: renamed.title });
     }
@@ -2866,7 +2874,10 @@ export class UiServer {
       if (!got.ok && got.path === undefined) return send(res, 400, { error: got.error ?? '外せませんでした' });
       // 繋ぐ側と同じく、畳まずにその場で止める。作業中でも効く。
       this.#session?.services.onDisconnected?.(id);
-      this.#opts.config.mcp = { ...this.#opts.config.mcp, servers };
+      // 待つ間に別のタブが繋いだ分を消さないよう、今の設定から外す（待つ前に写した入れ物を書き戻していた）
+      const now = { ...this.#opts.config.mcp?.servers };
+      delete now[id];
+      this.#opts.config.mcp = { ...this.#opts.config.mcp, servers: now };
       return send(res, 200, { id, removed: true });
     }
 
@@ -2959,6 +2970,9 @@ export class UiServer {
     }
 
     if (path === '/api/events') {
+      // 流れを開くのは GET だけ。止めた後に来たものは開かない（止めるときに閉じる一覧から漏れ、閉じられずに残っていた）
+      if (req.method !== 'GET') return send(res, 405, { error: 'GET で開いてください' });
+      if (this.#stopped) return send(res, 503, { error: '止めています' });
       res.writeHead(200, {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
@@ -3101,6 +3115,8 @@ export class UiServer {
     // 使う GGUF。名前に道を混ぜさせない（保存先の中の名前だけ）。
     const model = typeof body?.model === 'string' ? body.model.trim() : undefined;
     if (model && /[\\/]/.test(model)) return send(res, 400, { error: 'モデルは保存先の中の名前で指定してください' });
+    // `..` や点だけの名前は、保存先の外（上のフォルダ）を指す
+    if (model && /^[.\s]+$/.test(model)) return send(res, 400, { error: 'モデルは保存先の中のファイルの名前で指定してください' });
     // 打った場所は見るだけ。既定の場所は、無ければ作る。
     // 「GGUF を置くだけ」と言っておいて保存先が無いのは、案内になっていない。
     const dirState = !touchesRuntime
