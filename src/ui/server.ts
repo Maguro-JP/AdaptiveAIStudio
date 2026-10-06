@@ -1716,6 +1716,8 @@ export class UiServer {
         } finally {
           this.#thinking = false;
           this.broadcast({ type: 'stateChanged' });
+          // 考えている間に順番待ちに積まれた送りを流す（見回りの考えごとと同じ。流さずにいたので、次の見回り（既定 30 秒）まで誰も拾わなかった）
+          if (this.#queue.length > 0 && !this.#stopped) this.#bg(this.#maybeDrain(), '順番待ちの実行が落ちました');
         }
       })();
       return;

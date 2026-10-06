@@ -85,8 +85,13 @@ async function main(): Promise<void> {
 
   const rl = new LineSource(stdin, stdout);
   let generating: AbortController | undefined;
-  // 止めるときは、待っている承認の問いも解く（解かないと、止めたのに Enter を押すまで進まない）
-  rl.onSigint(() => { if (generating) { generating.abort(); rl.cancelWaiting(); } else rl.close(); });
+  // 暇なときの考えごとの止め手。考えごとの間は入力欄（依頼> ）を待ったままなので、そちらは解かない（解くと対話ごと終わる）
+  let thinking: (() => void) | undefined;
+  // 止めるときは、待っている承認の問いも解く（解かないと、止めたのに Enter を押すまで進まない）。
+  // 考えごとの最中の Ctrl-C は考えごとだけを止める（前は対話を閉じ、考えごとは最後まで走ってから終わった）
+  rl.onSigint(() => {
+    if (generating) { generating.abort(); rl.cancelWaiting(); } else if (thinking) thinking(); else rl.close();
+  });
 
   const approve = async (req: ApprovalRequest): Promise<boolean> => {
     // 協議だけは自動承認から外す。人が読まない協議は、記録しか残らない。
@@ -378,25 +383,33 @@ async function main(): Promise<void> {
     const session = await getSession();
     session.markChanged(lastChangeAt);
     let acted = false;
-    const gen = session.think();
-    let step = await gen.next();
-    while (!step.done) {
-      const ev = step.value;
-      if (ev.type === 'chose') {
-        if (ev.isDuty) process.stderr.write(c.dim(`\n  ${ev.reason}\n`));
-        process.stderr.write(c.dim(`\n  [${ev.codename}] ${ev.name} — ${ev.roleCodename}\n`));
-      } else if (ev.type === 'noFinding') {
-        process.stderr.write(c.dim('    → 報告することはありませんでした\n'));
-      } else if (ev.type === 'failed') {
-        process.stderr.write(c.yellow(`    → 考えられませんでした: ${ev.reason}\n`));
-      } else if (ev.type === 'proposal') {
-        console.log(c.cyan(`\n  💡 [${ev.codename}] ${ev.proposal.title}`));
-        console.log(c.dim(`     ${ev.proposal.rationale}`));
-        console.log(c.dim(`     /do ${ev.proposal.id} で実行、/reject ${ev.proposal.id} で却下\n`));
+    thinking = () => {
+      session.abort();
+      process.stderr.write(c.dim('\n  考えごとを止めます\n'));
+    };
+    try {
+      const gen = session.think();
+      let step = await gen.next();
+      while (!step.done) {
+        const ev = step.value;
+        if (ev.type === 'chose') {
+          if (ev.isDuty) process.stderr.write(c.dim(`\n  ${ev.reason}\n`));
+          process.stderr.write(c.dim(`\n  [${ev.codename}] ${ev.name} — ${ev.roleCodename}\n`));
+        } else if (ev.type === 'noFinding') {
+          process.stderr.write(c.dim('    → 報告することはありませんでした\n'));
+        } else if (ev.type === 'failed') {
+          process.stderr.write(c.yellow(`    → 考えられませんでした: ${ev.reason}\n`));
+        } else if (ev.type === 'proposal') {
+          console.log(c.cyan(`\n  💡 [${ev.codename}] ${ev.proposal.title}`));
+          console.log(c.dim(`     ${ev.proposal.rationale}`));
+          console.log(c.dim(`     /do ${ev.proposal.id} で実行、/reject ${ev.proposal.id} で却下\n`));
+        }
+        step = await gen.next();
       }
-      step = await gen.next();
+      acted = step.value;
+    } finally {
+      thinking = undefined;
     }
-    acted = step.value;
     return acted;
   };
 
@@ -437,7 +450,9 @@ async function main(): Promise<void> {
 
   try {
     for (;;) {
-      const answer = initCfg.enabled === false
+      // 暇なときに自分から考えるのは、入れたときだけ（画面と同じ既定。ローカルの小さいモデルでは一回が数分機械を塞ぎ、
+      // その間に打った依頼が待たされる）。前は端末だけ既定で入っていた。`/think` で頼めば、入れていなくても考える
+      const answer = initCfg.enabled !== true
         ? await rl.question(c.cyan('依頼> '))
         : await rl.questionWhileIdle(
             c.cyan('依頼> '), (initCfg.idleSeconds ?? 30) * 1000, think);
@@ -483,9 +498,8 @@ async function main(): Promise<void> {
         console.log(formatIdleStats(idleModes, session.idle.stats()));
         console.log(c.dim(`\n  この1時間の消費: ${session.idle.spentThisHour(Date.now())}`
           + ` / ${initCfg.budgetPerHour ?? 12}`));
-        const d = await session.idle.choose({
-          lastChangeAt, openProposals: session.proposals.open().length, now: Date.now(),
-        });
+        session.markChanged(lastChangeAt);
+        const d = await session.nextThought();
         console.log(c.dim(`  次に考えること: ${d.mode ? d.mode.codename : `なし（${d.reason}）`}`));
         const next = session.idle.nextAllowedAt();
         if (next !== undefined && next > Date.now()) {

@@ -96,6 +96,8 @@ export interface IdleBudget {
    * 全部を走らせても、見ているものはほぼ同じ。既定2回。
    */
   maxPerChange?: number;
+  /** 未処理の提案がこの数に達したら、それ以上は考えない。既定 10（設定の `initiative.maxOpen`） */
+  maxOpen?: number;
 }
 
 export interface Decision {
@@ -242,7 +244,8 @@ export class IdleScheduler {
     const changeSpent = this.#thoughtsSinceChange >= (this.#budget.maxPerChange ?? 2);
 
     // 未処理が溜まっているのに考え続けるのは、利用者を置き去りにしている
-    if (ctx.openProposals >= 10) {
+    // 上限は設定から（前は 10 の決め打ちで、`initiative.maxOpen` を書いても効かなかった）
+    if (ctx.openProposals >= Math.max(1, this.#budget.maxOpen ?? 10)) {
       return { reason: '未処理の提案が溜まっています。先にそちらを見てください' };
     }
 

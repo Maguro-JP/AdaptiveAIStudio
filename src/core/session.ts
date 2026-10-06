@@ -47,7 +47,7 @@ import {
 } from '../memory/displeasure.ts';
 import { ProposalQueue, proposalHere, type Proposal } from '../agent/proposals.ts';
 import { findLeads, investigationPrompt, parseProposal, reconCutShort } from '../agent/initiative.ts';
-import { IdleScheduler, type ModeStat } from '../harness/idle.ts';
+import { IdleScheduler, type ModeStat, type Decision } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES, MODE_ROLE, promptFor } from '../harness/idle-modes.ts';
 import { DutyRoster, type DutyRecord } from '../harness/duties.ts';
 import { BUILTIN_DUTIES } from '../harness/builtin-duties.ts';
@@ -1153,6 +1153,21 @@ export class Session {
   /** 同じ手がかりで何回落ちたら、調べたことにして次へ進むか。 */
   static readonly #RECON_GIVE_UP = 3;
 
+  /**
+   * いま考えるなら何を考えるか。考えごとの本体と、端末の `/idle` の表示が同じ答えを出すように、組み立てをここ一つにする
+   * （`/idle` は日課を渡さず、別の作業場の提案まで数えていたので、「次に考えること」が実際と違った）。
+   */
+  nextThought(now = Date.now()): Promise<Decision> {
+    const due = this.duties.due(now).map((s) => ({
+      dutyId: s.duty.id, modeId: s.duty.modeId,
+      codename: s.duty.codename, isCatchUp: s.isCatchUp,
+    }));
+    return this.idle.choose(
+      { lastChangeAt: this.#lastChangeAt, openProposals: this.proposals.open().filter((p) => proposalHere(p, placeKey(this.root))).length, now },
+      due,
+    );
+  }
+
   async *think(): AsyncGenerator<ThinkEvent, boolean> {
     // **断る理由は必ず言う。**黙るかどうかは、呼ぶ側が決める（見回りは黙る）。
     if (this.noModel) {
@@ -1169,15 +1184,7 @@ export class Session {
     }
 
     const now = Date.now();
-    const due = this.duties.due(now).map((s) => ({
-      dutyId: s.duty.id, modeId: s.duty.modeId,
-      codename: s.duty.codename, isCatchUp: s.isCatchUp,
-    }));
-
-    const decision = await this.idle.choose(
-      { lastChangeAt: this.#lastChangeAt, openProposals: this.proposals.open().filter((p) => proposalHere(p, placeKey(this.root))).length, now },
-      due,
-    );
+    const decision = await this.nextThought(now);
     if (!decision.mode) {
       // 割り当ての側は理由を組み立てている。**ここで捨てない。**
       yield { type: 'declined', reason: decision.reason ?? '今回は見送りました' };
@@ -1261,11 +1268,17 @@ export class Session {
     // RECON だけは手がかりを機械で探してから渡す。
     // 事実の収集は機械の方が速く、確実で、無料。
     if (mode.id === 'recon') {
-      if (!snap) return false;
-      const leads = await findLeads({
+      // 手がかりが無い・作業場の様子が取れないときも、見回りを「見た」として数える（`idle.begin`）。数えずにいたので、次の変更まで
+      // 毎回の選びで見回りが一番上に来て空振りし、ほかの考えごと（新しいモデルの確かめ・振り返りなど）が一度も回らなかった
+      const leads = snap ? await findLeads({
         root: this.root, snapshot: snap, known: this.proposals.seen(), max: 1,
-      });
-      if (leads.length === 0) return false;
+      }) : [];
+      if (leads.length === 0) {
+        this.idle.begin(mode, Date.now());
+        await this.saveAutonomy();
+        yield { type: 'declined', reason: snap ? '調べる手がかりがありません' : '作業場の様子を取れませんでした' };
+        return false;
+      }
       const lead = leads[0]!;
       context = `${context}\n\n${investigationPrompt(lead)}`;
       fingerprint = lead.fingerprint;
@@ -1284,6 +1297,8 @@ export class Session {
     let broken: string | undefined;
     let finishedWith: string | undefined;
     let finishedDetail: string | undefined;
+    // 考えごとの間はコマンドを走らせない。PATROL がコマンドを頼んで断られたなら、テストは一度も回っていない
+    let refusedCommand = false;
     try {
       // 知らせは try の中で流す（受け手がここで読むのをやめても、取った手を下の finally で返す）
       yield {
@@ -1301,7 +1316,10 @@ export class Session {
         // 考えるだけ。手は動かさない。
         // ただし外を**読む**ことは止めない。読むだけなら、この場所は変わらない。
         // 止めるのは書き込みとコマンド。手を出すことと、調べることは違う。
-        approve: async (req) => req.kind === 'network' && this.#opts.approveThinking !== false,
+        approve: async (req) => {
+          if (req.kind === 'command') refusedCommand = true;
+          return req.kind === 'network' && this.#opts.approveThinking !== false;
+        },
       });
       for await (const ev of thinker.run(
         [{ role: 'user', content: promptFor(mode, context) }], ac.signal,
@@ -1349,6 +1367,16 @@ export class Session {
     }
 
     if (mode.id === 'recon') this.proposals.markExamined(fingerprint);
+
+    // PATROL でテストのコマンドを断った回は「済み」にしない（毎日「済み」と出ていたのに、テストは一度も回っていなかった）。
+    // 日課なら、その期は流したと記録する（済ませていないことが残り、同じ期に何度も頼み直さない）。提案にもしない（「テストできなかった」を不具合として上げない）
+    if (mode.id === 'patrol' && refusedCommand) {
+      if (decision.dutyId) this.duties.skip(decision.dutyId, now);
+      this.idle.recordOutcome(mode.id, false);
+      await this.saveAutonomy();
+      yield { type: 'failed', codename: mode.codename, reason: '考えごとの間はコマンドを走らせないので、テストは回していません。テストは依頼として頼んでください' };
+      return true;
+    }
 
     // 日課として動いたなら、済んだことにする。
     // 報告が無くても「確認した」ことに変わりはない。
