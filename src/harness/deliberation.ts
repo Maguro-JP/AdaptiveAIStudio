@@ -154,7 +154,9 @@ export function requiresDeliberation(opts: DeliberationOptions): Rule {
       const spreading = !written.has(key(path)) && written.size >= wide;
       if (!guarded && !spreading) return allow;
 
-      if ((ctx.forum ?? forum).covers(path)) return allow;
+      // 協議を通した綴りと書く綴りが違っても（絶対の道・大小・回り道）、当たる実体が同じなら通す
+      const open = ctx.forum ?? forum;
+      if (open.covers(path) || (real !== undefined && open.covers(real))) return allow;
 
       const why = guarded
         ? `${path} は守りの仕掛けそのものです。ここが緩むと、以後の検査はすべて素通りになります。`

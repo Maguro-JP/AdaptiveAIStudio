@@ -379,6 +379,7 @@
 - 73 回目の不具合調査の 7 件（src/cli: models --new の訊く先・runtime.command・壊れた設定の selftest・Ollama の selftest・agent の終了コード・npm の案内・--force）
 - 74 回目の不具合調査の 5 件（モデルを取ってくる・片づける所: Ollama の新しい世代の後退・続きの空き・clean の保存先・実行時ライブラリの接続の失敗・/blob/ の頁）
 - 75 回目の不具合調査の 3 件（入口: 隣の node.bin・sh start.sh の立ち上げ直しと引数・新しくするの失敗）
+- 76 回目の不具合調査の 6 件（作業ループと git: 抜けたときの結果の無い呼び出し・協議の綴り・未追跡を隠す設定・外された作業場・合図とツールの同じ回・find_code の件数）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -13018,3 +13019,15 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - setup.exe で入れた版の README.txt が portable 向けの文のまま、の件は次に回す
 試験は `test/launcher-gaps.test.ts`（start.sh は Linux で起こして見る。start.cmd は書かれた行を見る。直す前の版で 4 件とも落ちた）。start.cmd は Windows の実機では確かめていない。
 触る場所: `start.cmd`（`:tryHere`・`:updated`）、`start.sh`
+
+## 2026-10-07  76 回目の不具合調査の 6 件（作業ループと git: 抜けたときの結果の無い呼び出し・協議の綴り・未追跡を隠す設定・外された作業場・合図とツールの同じ回・find_code の件数）
+
+`src/agent/` の作業ループ・git・ツールの一部を、読むだけの調査で見た分。
+- 作業ループを使う側が途中で抜けると（toolStart の処理で作業場の錠を待つ間に止めた、など）、ツール呼び出し付きの返事だけが会話に残り、結果が無かった。OpenAI 互換の相手は、次の依頼を断りうる。結果を toolEnd より先に積み、抜けたときは結果の無い呼び出しに「中断されました」を埋める（generator の finally）
+- 協議を通した道と書く道の綴りが違う（絶対の道・大小・回り道）と、守りの判定は実体で当てるのに協議の照合は綴りの完全一致だったので、協議を通しても断られ続けて堂々巡りで終わった。実体の綴りでも照合し、協議を記録するときも実体の綴りを足す
+- `status.showUntrackedFiles=no` のリポジトリでは、未追跡の作業を見落として「クリーン（いつでも巻き戻せます）」と言った。status に `--untracked-files=normal` を付ける
+- 作業場が親の .gitignore で丸ごと外されていると、何もコミットされていないのに「クリーン」と言った。`--ignored=matching` を付け、作業場そのものかその上のフォルダが外されているときだけ数える（中の node_modules などは数えない）
+- 終わりの合図（TASK_DONE）をツール呼び出しと同じ回に出すと合図を捨てていたので、次の返事が空だと「動かなかった」で終わった。合図は次の回へ一度だけ持ち越す
+- find_code は件数（limit）を数のときしか読まず、文字列の `"2"` では既定の 8 件を返した。ほかのツールと同じく文字列の数も読む（0 は既定に戻る）
+試験は `test/agent-loop-gaps.test.ts`（直す前の版で 7 件とも落ちた）。ignore を見る status は、外されたフォルダの中までは辿らない（matching）が、大きなリポジトリでの所要時間は測っていない。
+触る場所: `src/agent/loop.ts`（`doneWithCalls`・`answered`）、`src/harness/deliberation.ts`、`src/agent/tools/deliberate.ts`、`src/agent/git.ts`（`inspectGit`）、`src/agent/tools/find.ts`

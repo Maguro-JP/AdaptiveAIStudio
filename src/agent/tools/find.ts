@@ -14,7 +14,7 @@ import { realSafeResolve } from './paths.ts';
 import { stateDir } from '../../core/home.ts';
 import { IndexStore, MAX_FILE, type CodeIndex } from '../code-index.ts';
 import { searchIndex, lookupSymbol } from '../code-index.ts';
-import { type Tool, ok, fail, requireString } from './types.ts';
+import { type Tool, ok, fail, requireString, optionalPositiveInt } from './types.ts';
 
 /**
  * 索引の置き場。作業場ごとに持つ。
@@ -58,7 +58,8 @@ export const findCodeTool: Tool = {
   async run(args, ctx) {
     const query = requireString(args, 'query');
     if (!query) return fail('query が必要です。');
-    const limit = typeof args.limit === 'number' ? Math.min(Math.max(1, args.limit), 20) : 8;
+    // 数を文字列で渡してくるモデルがある（`"2"`）。それも読む（数のときだけ読んでいたので、既定の 8 件を返していた）
+    const limit = Math.min(optionalPositiveInt(args, 'limit') ?? 8, 20);
 
     let index: CodeIndex;
     try {

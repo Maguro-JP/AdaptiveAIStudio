@@ -102,6 +102,8 @@ export class Agent {
      * 自律で回らなくなるのは、いつもそこ。
      */
     let usedTools = false;
+    // 前の回に終わりの合図をツール呼び出しと一緒に出したか（次の回へ一度だけ持ち越す）
+    let doneWithCalls = false;
     /*
      * **狭いコンテキストウィンドウでは、ツールの説明を一文に削る。**説明だけで 1400 トークン
      * あり、4k のコンテキストウィンドウでは 34% を占める。決まりと学びを足すと、
@@ -214,7 +216,9 @@ export class Agent {
       // 抱えている分を吐き出す。ここで合図が確定する。
       const tail = mark.end();
       if (tail.text) { text += tail.text; yield { type: 'thinking', delta: tail.text }; }
-      const declaredDone = tail.done;
+      // 前の回に合図とツール呼び出しを一緒に出したなら、この回の合図として数える（呼び出しがあると合図を捨てるので、次の返事が空だと「動かなかった」になっていた）
+      const declaredDone = tail.done || doneWithCalls;
+      doneWithCalls = tail.done && calls.length > 0;
 
       if (failure) {
         // 利用者がもう見た文は残す（止めたときと同じ。残さないと、次の指示が落ちた指示と一つに繋がる）。呼び出しは載せない（結果が無い）
@@ -313,10 +317,15 @@ export class Agent {
       nudges = 0;
       usedTools = true;
 
+      /*
+       * 呼んだのに結果の無いツールを残さない（残すと、以後の依頼を相手が 400 で断り、この会話が続けられなくなる）。
+       * 受け手が途中で抜けた（toolStart の処理で錠を待つ間に止められた、など）ときも、generator の finally で埋める
+       */
+      const answered = new Set<string>();
+      try {
       for (const [at, call] of calls.entries()) {
         if (signal.aborted) {
-          // 呼んだのに結果の無いツールを残さない（残すと、以後の依頼を相手が 400 で断り、この会話が続けられなくなる）
-          for (const left of calls.slice(at)) history.push({ role: 'tool', toolCallId: left.id, content: 'ERROR: 中断されました（実行していません）' });
+          for (const left of calls.slice(at)) { history.push({ role: 'tool', toolCallId: left.id, content: 'ERROR: 中断されました（実行していません）' }); answered.add(left.id); }
           yield { type: 'finished', reason: 'aborted' }; return;
         }
         if (call.id.startsWith('salvaged-')) yield { type: 'salvaged', name: call.name };
@@ -351,8 +360,15 @@ export class Agent {
           }
         }
 
-        yield { type: 'toolEnd', call, result, isError };
+        // 結果を先に積む（受け手が toolEnd で投げても、走ったツールの結果を落とさない）
         history.push({ role: 'tool', toolCallId: call.id, content: result });
+        answered.add(call.id);
+        yield { type: 'toolEnd', call, result, isError };
+      }
+      } finally {
+        for (const c of calls) {
+          if (!answered.has(c.id)) history.push({ role: 'tool', toolCallId: c.id, content: 'ERROR: 中断されました（実行していません）' });
+        }
       }
       // 最後のツールの最中に止めた。ここで見ないと、同じ手の繰り返しや回数切れで終わったことにしていた
       if (signal.aborted) { yield { type: 'finished', reason: 'aborted' }; return; }

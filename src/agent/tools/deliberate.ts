@@ -6,6 +6,7 @@
  * 「やらない方がよい」と分かることが、いちばん多い成果になる。
  */
 import { type Tool, ok, fail } from './types.ts';
+import { canonicalRel } from './paths.ts';
 import { type Forum, type Proposal, validateProposal } from '../../harness/deliberation.ts';
 
 export function createDeliberateTool(forum: Forum): Tool {
@@ -60,7 +61,10 @@ export function createDeliberateTool(forum: Forum): Tool {
       }
 
       // 会話ごとの協議の場が渡されていれば、そちらへ（別の会話の協議で、この会話の変更を通させない）。
-      (ctx.request?.forum ?? forum).add({ ...(draft as Proposal), at: Date.now() });
+      // 道は、書くときに当たる実体の綴りでも残す（絶対の道で協議して相対で書く、の逆向きでも協議が効くように）
+      const real = await Promise.all(draft.paths!.map((p) => canonicalRel(ctx.root, p).catch(() => undefined)));
+      const paths = [...new Set([...draft.paths!, ...real.filter((p): p is string => p !== undefined)])];
+      (ctx.request?.forum ?? forum).add({ ...(draft as Proposal), paths, at: Date.now() });
       return ok(`協議を記録しました。対象への変更を進められます。\n${summary}`);
     },
   };
