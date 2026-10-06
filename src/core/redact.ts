@@ -11,6 +11,8 @@ export function redactSecrets(text: string): string {
     // 項目の名前で判じる。
     // 値は、逃がした引用符（`\"`）を含む文字と、数も伏せる（`"password":"ab\"cd"` の後ろ半分・`"pin": 1234` を出していた）
     .replace(/("([^"\\]*(key|token|secret|password|passwd|credential|authorization|cookie)[^"\\]*)"\s*:\s*)(?:"(?:[^"\\]|\\.)*"|-?\d[\d.]*)/gi, '$1"（伏せました）"')
+    // 文字列の中に入った JSON（ツールの引数は JSON を文字列にした形で来る: `"{\"password\":\"…\"}"`）。項目名が逃がした引用符で囲まれるので、上では当たらなかった
+    .replace(/(\\"([^"\\]*(key|token|secret|password|passwd|credential|authorization|cookie)[^"\\]*)\\"\s*:\s*)(?:\\"(?:[^"\\]|\\(?!")[^"])*\\"|-?\d[\d.]*)/gi, '$1\\"（伏せました）\\"')
     // 道の中のログイン（`https://user:pass@host`）。監査の記録だけが伏せていた
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/gi, '$1（伏せました）@')
     // 秘密鍵のかたまり（中身ごと）、JWT、Google の鍵、AWS の一時的な鍵
