@@ -20,7 +20,8 @@
 
 /** 作業場のものを指していると分かる形。 */
 const POINTS_AT_CODE = [
-  /[./\\][a-z0-9_-]+\.[a-z0-9]{1,6}\b/i, // src/a.ts, ./x.json, foo.md
+  // 名前の前に区切りが無くても当てる（`README.md に何が書いてある？` を雑談と読み、ツールを外して推測で答えさせていた）。拡張子は字で始まるものだけ（3.14 は名前ではない）
+  /\b[a-z0-9_-]*[a-z_][a-z0-9_-]*\.[a-z][a-z0-9]{0,5}\b/i, // src/a.ts, ./x.json, foo.md, package.json
   /\b[a-z0-9_-]+\/[a-z0-9_-]+/i, // src/core, node_modules/…
   /```/, // 貼り付けたコード
   /\b(npm|node|git|pytest|cargo|docker|make)\b/i,
@@ -28,7 +29,7 @@ const POINTS_AT_CODE = [
 
 /** 手を動かせ、と言っている形。 */
 const ASKS_FOR_WORK = [
-  /直し|修正|なおして|直す/,
+  /直し|直せ|修正|なおして|直す|更新|変え|変更/,
   /使って|呼んで|試して|入れて|外して|切り替え/,
   /作っ|作成|作って|つくって|新規/,
   /書き換え|書いて|追記|足して|加えて/,
@@ -37,7 +38,7 @@ const ASKS_FOR_WORK = [
   /動かし|走らせ|実行|起動|ビルド|テストして/,
   /調べて|探して|見て|確認して|読んで/,
   /リファクタ|整理して|分けて|まとめて/,
-  /commit|push|pull|merge|refactor|implement|fix|add|remove|run|build|test/i,
+  /commit|push|pull|merge|refactor|implement|fix|add|remove|run|build|test|update|rename|change/i,
 ];
 
 /**
