@@ -7,8 +7,8 @@
  */
 import { join } from 'node:path';
 import { aasHome } from './home.ts';
-import { writeEnvValue } from './env.ts';
-import { saveMcpServer, removeMcpServer } from '../ui/settings.ts';
+import { writeEnvValue, setOutsideEnvFile } from './env.ts';
+import { saveMcpServer, removeMcpServer, savedMcpServer } from '../ui/settings.ts';
 import { findEntry, specFrom, missingSecrets, needsNpx, CATALOG, type CatalogEntry } from '../mcp/catalog.ts';
 import { githubLaunch } from './github-mcp.ts';
 import { canRun } from './which.ts';
@@ -57,15 +57,21 @@ export async function connectService(id: string, opts: ConnectOptions = {}): Pro
     };
   }
   try {
+    const shadowed: string[] = [];
     for (const sec of entry.secrets ?? []) {
       const value = opts.secrets?.[sec.env];
       if (typeof value !== 'string' || value.trim() === '') continue;
+      // 外の環境変数に同じ名前が立っていると、立ち上げ直したときにそちらが勝つ。値は出さずに、そう言う
+      if (setOutsideEnvFile(sec.env)) shadowed.push(sec.env);
       await writeEnvValue(join(aasHome(), '.env'), sec.env, value.trim());
       process.env[sec.env] = value.trim();
     }
 
+    // 選び方が来ていなければ、前に保存した形（手元か遠くか）を保つ（繋ぎ直すたびに遠くの形へ戻していた）
+    const before = opts.prefer ? undefined : await savedMcpServer(entry.id);
+    const prefer = opts.prefer ?? (before && typeof before.command === 'string' && entry.url ? 'local' as const : undefined);
     const spec: Record<string, unknown> = {
-      ...specFrom(entry, { ...(opts.root ? { root: opts.root } : {}), ...(opts.prefer ? { prefer: opts.prefer } : {}) }),
+      ...specFrom(entry, { ...(opts.root ? { root: opts.root } : {}), ...(prefer ? { prefer } : {}) }),
       enabled: opts.enabled !== false,
     };
     // 同梱してあるなら、そちらで起こす（npx の無い機械でも動く）。
@@ -79,7 +85,10 @@ export async function connectService(id: string, opts: ConnectOptions = {}): Pro
     return {
       ok: true, id: entry.id, path, spec: spec as McpServerSpec,
       missing: missingSecrets(entry).map((m) => ({ env: m.env, about: m.about, ...(m.where ? { where: m.where } : {}) })),
-      notes: notesFor(entry, opts.prefer, launch),
+      notes: [
+        ...notesFor(entry, prefer, launch),
+        ...shadowed.map((env) => `環境変数 ${env} が別に立っています。立ち上げ直すと、そちらの値が使われます（ここで入れた値は使われません）`),
+      ],
       };
   } catch (e) {
     return { ok: false, missing: [], notes: [], error: (e as Error).message };

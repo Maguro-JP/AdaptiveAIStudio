@@ -584,8 +584,9 @@ $('editTheme').onclick = () => {
 
   $('themeEditor').returnValue = '';
   $('themeEditor').showModal();
-  $('themeEditor').addEventListener('close', async function once() {
-    $('themeEditor').removeEventListener('close', once);
+  $('themeEditor').addEventListener('close', onClose);
+  async function onClose() {
+    $('themeEditor').removeEventListener('close', onClose);
     if ($('themeEditor').returnValue !== 'save') {
       // 戻す。触っただけで決まってしまわないように。
       const r = await askJson('/api/theme', undefined, '色を戻せませんでした');
@@ -602,9 +603,12 @@ $('editTheme').onclick = () => {
     if (r.repairs?.length) {
       // 受け取れなかった値は黙って捨てない。なぜ効かないのか分からなくなる。
       $('themeRepairs').textContent = r.repairs.map((x) => `・${x.detail}`).join('\n');
+      // 開き直すダイアログにも、閉じたときの受け手を付け直す（付けずに開いていたので、直して「保存」しても「戻す」でも何も起きなかった）
+      $('themeEditor').returnValue = '';
       $('themeEditor').showModal();
+      $('themeEditor').addEventListener('close', onClose);
     }
-  });
+  }
 };
 
 /* ---------- 出し入れ ---------- */
@@ -1084,7 +1088,8 @@ async function loadMcpCatalog() {
         `${e.name} を設定に書きました: ${body.path}`,
         ...(body.missing ?? []).map((m) => `まだ要ります: ${m.about}（${m.env}）`),
         ...(body.notes ?? []),
-        '次の依頼のときから使えます。',
+        // 起こせなかったと言われたら、そう出す（読んでいなかったので、繋がらないのに「使えます」と言っていた）
+        ...(body.note ? [body.note] : ['次の依頼のときから使えます。']),
       ].join('\n');
       await loadMcpCatalog();
       await loadMcp();
@@ -2378,6 +2383,8 @@ $('cfgSave').onclick = async () => {
   // 黙って効いた顔をしない。切り替えは立ち上げ直すまで効かない。
   // 置き場が無いまま保存できてしまう。保存できたことと、動くことは別。
   const saveNote = DIR_NOTES[body.dirState] ?? '';
+  // 先に読み直す。読み直しは同じ欄を書き換えるので、後に回すと保存の知らせ（打ち間違いの注意・立ち上げ直しの案内）が消えた
+  await loadCfg();
   $('cfgNote').style.whiteSpace = 'pre-line';
   $('cfgNote').textContent = (body.restartNeeded
     ? `保存しました。立ち上げ直すと効きます。 ${body.path}`
@@ -2385,7 +2392,6 @@ $('cfgSave').onclick = async () => {
     + (saveNote ? `\n${saveNote}` : '')
     // 打ち間違えても保存はできる。**保存したときに言う。**
     + (body.workNote ? `\n${body.workNote}` : '');
-  await loadCfg();
   await loadFiles();
 };
 

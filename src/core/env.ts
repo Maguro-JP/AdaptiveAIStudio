@@ -14,6 +14,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { inOrder } from './in-order.ts';
+import { withFileLock } from './file-lock.ts';
 
 /** 一行ずつ読む。壊れた行は飛ばす（そこで全部を止めない）。 */
 export function parseEnvFile(text: string): Record<string, string> {
@@ -47,6 +48,14 @@ export function parseEnvFile(text: string): Record<string, string> {
  * 名前が要るので、入れた時点で覚えておく。
  */
 const fromEnvFile = new Set<string>();
+
+/**
+ * その名前が `.env` の外（OS の環境変数など）で立っているか。立っていると、`.env` に書いた値は立ち上げ直したときに読まれない
+ * （`loadEnvFile` は既にある名前を上書きしない）。
+ */
+export function setOutsideEnvFile(key: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[key] !== undefined && !fromEnvFile.has(key);
+}
 
 /** `.env` から入れた名前（値は返さない）。 */
 export function secretNames(): string[] {
@@ -126,7 +135,8 @@ export async function writeEnvValue(path: string, key: string, value: string): P
    * 同じファイルへの書き込みは一つずつ。読んで一行足して全部を書き戻すので、二つの口（GitHub を繋ぐ・MCP を繋ぐ）が同時に書くと、
    * 後の書き込みが前の行を消していた（動いている間は環境に値が在るので気づかず、立ち上げ直すと消えている）
    */
-  return inOrder(path, () => writeEnvValueNow(path, key, value));
+  // 別のプロセス（端末の connect_service など）とも並ぶ
+  return inOrder(path, () => withFileLock(path, () => writeEnvValueNow(path, key, value)));
 }
 
 async function writeEnvValueNow(path: string, key: string, value: string): Promise<string> {

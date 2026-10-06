@@ -8,6 +8,7 @@
 import { readFile, stat, mkdir } from 'node:fs/promises';
 import { writeWhole } from '../core/journal-file.ts';
 import { inOrder } from '../core/in-order.ts';
+import { withFileLock } from '../core/file-lock.ts';
 import { dirname, resolve } from 'node:path';
 import { configPath } from '../config.ts';
 import { modelsDir, modelsDir as defaultModelsDir } from '../core/home.ts';
@@ -69,11 +70,12 @@ async function configForEdit(at: string): Promise<Record<string, unknown>> {
 function editConfig<T>(change: (current: Record<string, unknown>, at: string) => { next?: Record<string, unknown>; result: T }): Promise<T> {
   const at = configPath();
   // 書く側（writeWhole）も同じファイルの名前で並ぶので、別の名前で並べる（同じ名前だと、自分の書き込みを待ち続ける）
-  return inOrder(`${at}#edit`, async () => {
+  // 別のプロセス（端末の `aas agent` の connect_service など）とも並ぶ。並ばないと、後から書いた方が先の変更を知らずに上書きして消す
+  return inOrder(`${at}#edit`, () => withFileLock(at, async () => {
     const { next, result } = change(await configForEdit(at), at);
     if (next) await writeConfig(at, next);
     return result;
-  });
+  }));
 }
 
 /** 書く。一時ファイルから付け替える（途中で落ちても、前の設定が残る）。 */
@@ -240,7 +242,9 @@ export async function saveMcpServer(
 ): Promise<string> {
   return editConfig((current, at) => { // 無ければ、これが最初の一つ
     const mcp = objectOr(current.mcp) as { servers?: Record<string, unknown> };
-    const servers = { ...objectOr(mcp.servers), [name]: spec };
+    // 画面から触らない項目（startupTimeoutMs など、手で足したもの）は引き継ぐ。丸ごと置き換えて消していた
+    const { command: _c, args: _a, url: _u, envFrom: _e, headersFrom: _h, enabled: _n, ...kept } = objectOr(objectOr(mcp.servers)[name]);
+    const servers = { ...objectOr(mcp.servers), [name]: { ...kept, ...spec } };
     return { next: { ...current, mcp: { ...mcp, servers } }, result: at };
   });
 }
@@ -320,4 +324,16 @@ export async function savedWorkRoot(): Promise<string> {
 /** 入れ物ならそれ、違えば空（`null` の項目を広げて止まらない）。 */
 function objectOr(v: unknown): Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : {};
+}
+
+/** 保存してある繋ぎ先の形（無い・読めないなら undefined）。繋ぎ直すときに、前の形（手元か遠くか）を保つために見る。 */
+export async function savedMcpServer(name: string): Promise<Record<string, unknown> | undefined> {
+  try {
+    const current = await configForEdit(configPath());
+    const servers = objectOr(objectOr(current.mcp).servers);
+    const spec = servers[name];
+    return spec && typeof spec === 'object' && !Array.isArray(spec) ? spec as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
 }
