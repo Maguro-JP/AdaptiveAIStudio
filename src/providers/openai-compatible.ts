@@ -328,7 +328,9 @@ export class OpenAiCompatibleProvider implements ChatProvider {
           });
         }
         const choice = parsed.choices?.[0];
-        const delta = choice?.delta?.content;
+        // 本文が部品の配列で流れてくる相手もいる（まとめ返しの側は読んでいた。流れの側は文字だけを見て、本文を全部捨てていた）。
+        // 考えの部品（type: 'thinking'）は本文に混ぜない
+        const delta = streamText(choice?.delta?.content);
         // **落ちたものを、成功として通さない。**中で読む口は、生成が落ちたときに 'error' で終える。同じ塊に失敗の文が本文として
         // 載ってくるので、本文として流す前に見る（流すと上の層が「書き始めた」と数え、やり直しも次の候補への切り替えもしなかった）
         if (choice?.finish_reason === 'error') {
@@ -387,7 +389,8 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         }
 
         // 合図の後は、閉じるのを短く待つ（閉じない相手でも、言い終えた答えを時間切れにしない）
-        if (typeof choice?.finish_reason === 'string') ended = true;
+        // 空の合図（`""` を毎回付けてくる中継）は、終わりと数えない（途中で閉じた流れを「言い終えた」にしていた）
+        if (typeof choice?.finish_reason === 'string' && choice.finish_reason !== '') ended = true;
         if (typeof choice?.finish_reason === 'string' && choice.finish_reason !== '' && !finished) { finished = true; arm(endGraceMs); }
         if (choice?.finish_reason === 'stop') finishReason = 'stop';
         else if (choice?.finish_reason === 'length') finishReason = 'length';
@@ -511,6 +514,16 @@ async function* wholeAsChunks(body: ReadableStream<Uint8Array>): AsyncIterable<s
 }
 
 /** 本文を文字にする。部品の配列（`[{type:'text', text}]`）で来る相手もいる。 */
+/** 流れの本文。文字ならそのまま、部品の配列なら本文の部品（type が無いか text）だけをつなぐ */
+function streamText(content: unknown): string | undefined {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return undefined;
+  return content
+    .filter((p) => { const t = (p as { type?: unknown })?.type; return t === undefined || t === 'text'; })
+    .map((p) => (typeof (p as { text?: unknown })?.text === 'string' ? (p as { text: string }).text : ''))
+    .join('');
+}
+
 function contentText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';

@@ -20,10 +20,13 @@ export class ProviderRegistry {
 
   /** providerId -> 冷やした理由（全部が冷えているときに、何で冷えているかを言うため） */
   readonly #cooldownReason = new Map<string, string>();
+  /** 冷やしを付けた時刻（単調な時計）。成功で解くとき、試しを始めた後に付いた冷やしは残すため */
+  readonly #cooledAt = new Map<string, number>();
 
   cooldown(providerId: string, ms: number, reason?: string): void {
     if (ms <= 0) return;
     this.#cooldownUntil.set(providerId, ms === Infinity ? Infinity : this.#now() + ms);
+    this.#cooledAt.set(providerId, this.#now());
     if (reason) this.#cooldownReason.set(providerId, reason);
     else this.#cooldownReason.delete(providerId);
   }
@@ -41,7 +44,19 @@ export class ProviderRegistry {
     this.#now = now;
   }
 
-  clearCooldown(providerId: string): void {
+  /** いまの時刻（冷やしと同じ単調な時計）。試しを始めた時刻を記録するのに使う */
+  clock(): number {
+    return this.#now();
+  }
+
+  /**
+   * 冷やしを解く。`since` を渡すと、その時刻より後に付いた冷やしは残す（並んで走る別の依頼が付けた冷やしを、先に始めていた
+   * 依頼の成功が消していた）
+   */
+  clearCooldown(providerId: string, since?: number): void {
+    const at = this.#cooledAt.get(providerId);
+    if (since !== undefined && at !== undefined && at > since) return;
+    this.#cooledAt.delete(providerId);
     this.#cooldownUntil.delete(providerId);
     this.#cooldownReason.delete(providerId);
   }
