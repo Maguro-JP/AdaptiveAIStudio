@@ -95,6 +95,8 @@ export function sayQuotaExhausted(body: string): boolean | undefined {
   // 1 日の上限（OpenRouter の free-models-per-day・Vertex の `quota metric '… per day'`）・使い切り（xAI の used all available credits）・
   // 利用額の上限（monthly spending limit）も、その日・その月のうちは戻らない。分単位の上限（per minute）は一時的な制限のまま
   if (/per[- ]?day|daily (limit|quota)|used all (available )?credits|spending limit/i.test(text)) return true;
+  // Claude の利用額の上限（`You have reached your specified API usage limits. You will regain access on …`）。400 で来るので、拾わないとこちらの誤りとして依頼ごと落ちた
+  if (/reached your specified api usage limits|regain access on/i.test(text)) return true;
   return undefined;
 }
 
@@ -111,8 +113,12 @@ export function saysContextTooLong(body: string): boolean {
     code = `${String(j?.error?.code ?? '')} ${String(j?.error?.type ?? '')}`;
   } catch { /* JSON でない本文は語で見る */ }
   if (/context_length_exceeded|request_too_large/i.test(code)) return true;
-  if (/invalid_function_parameters|invalid_schema/i.test(code)) return false;
-  return /context[ _-]?(length|window|size)|maximum context|too long|too many tokens|maximum.*token|token.*limit/i.test(body);
+  if (/invalid_function_parameters|invalid_schema|string_above_max_length/i.test(code)) return false;
+  // 出力の上限（`max_tokens: 16000 > 8192, which is the maximum allowed number of output tokens`）は、こちらの頼み方の誤り。長すぎる依頼ではない
+  // （vLLM の「max_tokens is too large … maximum context length」は入力が長くて収まらない形なので、ここでは外さない）
+  if (/maximum allowed number of output tokens/i.test(body)) return false;
+  // 「too long」は依頼そのものが長いときだけ（ツールの説明の文字数の上限 `string too long` まで大きすぎるとして次の候補へ回し、こちらの誤りが隠れた）
+  return /context[ _-]?(length|window|size)|maximum context|(prompt|input|request|message)s? (is )?too long|too many tokens|maximum.*token|token.*limit/i.test(body);
 }
 
 /** ツールを渡したが、そのモデルがツールに対応していない（次の候補なら対応しているかもしれない）。 */

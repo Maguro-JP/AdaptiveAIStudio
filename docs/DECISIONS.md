@@ -383,6 +383,7 @@
 - 77 回目の不具合調査の 6 件（画面の設定: 起こせなかった知らせ・繋ぎ直しの形・色のダイアログの開き直し・保存の知らせの順・別プロセスとの並び・外の環境変数）
 - 78 回目の不具合調査の 6 件（人が押さずに動く所: 止めた UPKEEP の数え方・読めないやり残しの後回し・切れた PROPOSAL・端末の /think の断り・端末の idleSeconds の下限・戻った時計）
 - 79 回目の不具合調査の 4 件（会話の一覧と読み書き: 保存先が読めない・読めない会話の数え方・中身の口の 404 と 503・付け替えで上がる並び）
+- 80 回目の不具合調査の 3 件（モデルとの通信: too long の語・Claude の利用額の上限・同じ id の呼び出しの結果）
 - エディタに、行番号と探す・置き換える・行へ飛ぶ
 - 閉じたら開けない、を作らない
 - 画面は、自分で押して回る
@@ -13070,3 +13071,13 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 見出しを付け替えるとファイルを書き直すので更新時刻が今になり、古い会話が一覧の先頭に上がった（件数が上限を超えていると、別の会話を押し出した）。付け替えた後に元の時刻へ戻す
 試験は `test/conversations-gaps.test.ts`（読めない会話の数・付け替えの並び・中身の口。直す前の版で 3 件とも落ちた。並びの試験は、二つの会話の時刻が同じミリ秒に並んで名前の順で偶然通っていたので、時刻を離して作り直した）。保存先のフォルダそのものが読めないときは、root で走る環境では作れないので試験を書いていない（確かめていない）。
 触る場所: `src/core/conversations.ts`（`list`・`count`・`lastUnreadable`・`rename`）、`src/ui/server.ts`（`GET /api/conversations`・`/api/conversations/messages`）、`src/ui/web/app.js`（会話の一覧の下の文）
+
+## 2026-10-07  80 回目の不具合調査の 3 件（モデルとの通信: too long の語・Claude の利用額の上限・同じ id の呼び出しの結果）
+
+`src/providers/` のうち、これまで見ていなかった所（呼び出しの組み立てと読み戻し・失敗の分け方・終わり方）を、読むだけの調査で見た分。
+- 400 の本文に「too long」があるだけで大きすぎる依頼とし、黙って次の候補へ回していた。ツールの説明の文字数の上限（`string_above_max_length`）や、出力の上限を超えた `max_tokens`（Claude の `maximum allowed number of output tokens`）まで大きすぎる依頼になり、こちらの誤りが隠れた。符号で外し、「too long」は依頼そのもの（prompt・input・request・message）が長いと言っているときだけにする（vLLM の「max_tokens is too large … maximum context length」は入力が長くて収まらない形なので、大きすぎる依頼のまま）
+- Claude の利用額の上限（`You have reached your specified API usage limits`）は 400 で来て、上限切れの語に当たらず、こちらの誤りとして依頼ごと落ちた（後ろに手元の候補があっても回さなかった）。上限切れとして次の候補へ回す
+- 一つの返事に同じ id の呼び出しが二つあると（OpenAI 互換の口はそのまま出す）、Claude へ切り替えたときに付け直した名前を一対一で覚えていたので、二つの結果が両方とも後の呼び出しに付き、前の呼び出しは結果の無いものとして埋められた。付け直した名前を順に並べて、結果が来るたびに前から引く
+直していないもの: 拒否・内容の制限で途中で止まった答え（Claude の `refusal`・OpenAI 互換の `content_filter`）を、ツールを使っていない回では完了として通す件（終わり方の種類を一つ足して、作業ループで止まったと言う形にしてから）。終わりの合図の後に繋ぎが切れると失敗にする件（そういう相手が実際にいるかを確かめていない）。Claude の流れの途中の失敗の中身が SDK の作りで消える件（種類は同じで、文が変わるだけ）。
+試験は `test/providers-classify-gaps.test.ts`（直す前の版で 4 件とも落ちた）。
+触る場所: `src/providers/errors.ts`（`saysContextTooLong`・上限切れの語）、`src/providers/anthropic.ts`（`toAnthropicMessages` の `renamed`）

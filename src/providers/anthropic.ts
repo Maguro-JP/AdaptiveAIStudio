@@ -298,7 +298,8 @@ export function toAnthropicMessages(messages: readonly ProviderMessage[]): { rol
    * 依頼ごとに数え直すので重なる。重なった ID は付け直し、その結果も同じ名前へ引き直す。
    */
   const used = new Set<string>();
-  let renamed = new Map<string, string>();
+  // 元の id → 付けた名前の並び。一つの返事に同じ id が二つあると（OpenAI 互換の口はそのまま出す）、一対一では結果を取り違えた
+  let renamed = new Map<string, string[]>();
   // 結果の無い呼び出し（止めたときの残り）には結果を補う。無いと相手は 400 で断る
   let open: string[] = [];
   const closeOpen = (): void => {
@@ -308,7 +309,7 @@ export function toAnthropicMessages(messages: readonly ProviderMessage[]): { rol
   for (const m of messages) {
     if (m.role === 'system') continue;
     if (m.role === 'tool') {
-      const id = renamed.get(m.toolCallId ?? '') ?? m.toolCallId ?? '';
+      const id = renamed.get(m.toolCallId ?? '')?.shift() ?? m.toolCallId ?? '';
       open = open.filter((o) => o !== id);
       push('user', [{ type: 'tool_result', tool_use_id: id, content: m.content }]);
       continue;
@@ -326,7 +327,7 @@ export function toAnthropicMessages(messages: readonly ProviderMessage[]): { rol
         while (used.has(`${id}_${n}`)) n += 1;
         id = `${id}_${n}`;
       }
-      if (id !== c.id) renamed.set(c.id, id);
+      renamed.set(c.id, [...(renamed.get(c.id) ?? []), id]);
       used.add(id);
       open.push(id);
       const input = c.args !== null && typeof c.args === 'object' && !Array.isArray(c.args) ? c.args : {};
