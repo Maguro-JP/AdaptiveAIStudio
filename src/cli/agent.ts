@@ -696,6 +696,8 @@ async function main(): Promise<void> {
        * 打ち間違い（`/exti`）や上に無い命令（`/help`）が、書けるツール付きの依頼としてモデルへ渡っていた。画面と同じ置き換え方を使う
        */
       let request = pendingRequest ?? line;
+      // 提案（/do）から来た回か。モデルが書いた提案文を、利用者の言葉として判じない（画面の採用と同じ）
+      const fromProposal = pendingRequest !== undefined;
       if (pendingRequest === undefined) {
         const expanded = await expandCommand(line, root);
         // ここの命令を、引数の形を違えて打った（`/do` だけ、`/exit now`）。「知らない」と言うと、並べた中に在るので食い違う
@@ -724,7 +726,9 @@ async function main(): Promise<void> {
       const flush = () => { if (printedText) { stdout.write('\n'); printedText = false; } };
 
       try {
-        for await (const ev of session.send(request)) {
+        // 打った行（展開する前）を `said` として渡す（`.claude/commands` を展開した全文が、戻り先の名前と記憶の題になっていた）
+        const sendOpts = fromProposal ? { fromUser: false } : request !== line ? { said: line } : {};
+        for await (const ev of session.send(request, sendOpts)) {
           switch (ev.type) {
             case 'recalled':
               console.log(c.dim(ev.text.split('\n').map((l) => `  ${l}`).join('\n')));

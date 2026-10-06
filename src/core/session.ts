@@ -1528,7 +1528,10 @@ export class Session {
   async verifyCommand(): Promise<string | undefined> {
     const configured = this.config.agent?.verify?.command;
     if (configured) return configured;
-    const snap = await this.#prefetch.snapshotWithin(2000);
+    // 立ち上げ直後の最初の依頼は、まだ一度も作り終えていないので 2 秒では間に合わないことがある。間に合わなかったら、もう少し待ち、
+    // それでも無ければ言う（黙って確かめを飛ばし、書き換えた回が「確かめていない」で静かに終わっていた）
+    const snap = await this.#prefetch.snapshotWithin(2000) ?? await this.#prefetch.snapshotWithin(15_000);
+    if (!snap) this.#opts.onLog?.('warn', 'この作業場の下調べが間に合わなかったので、今回は確かめのコマンドを決められませんでした。次の依頼で決めます');
     // 動かし方（package.json など）を読めなかった。「確かめのコマンドが無い」と同じ顔をさせない（次の依頼で調べ直す）
     if (snap && !snap.ready.includes('commands')) {
       this.#opts.onLog?.('warn', 'この作業場の動かし方（package.json など）を読めなかったので、今回は確かめられません。次の依頼で読み直します');
@@ -1896,7 +1899,8 @@ export class Session {
        * モデルの成績**になっていた。選び方がその数字で決まるので、
        * 付け先を間違えると、以後ずっと間違った方を選び続ける。
        */
-      if (modelUsed) {
+      // 止めた回はモデルの成績に付けない（止めることの多いモデルほど、失敗が積もって選ばれにくくなった）
+      if (modelUsed && finishedReason !== 'aborted' && !ac.signal.aborted) {
         await this.pilot.autopilot.record({
           modelId: modelUsed,
           success: finishedReason === 'completed',
@@ -2412,6 +2416,8 @@ export class Session {
       last.checked === 'passed' ? '確かめて通した'
         : last.checked === 'failed' ? '確かめたが通らなかった'
         : last.checked === 'unsure' ? '確かめきれなかった（通らなかったがこの回が原因か分からない、またはテストを読めなかった）'
+        // 元から落ちていた回を「確かめていない」と写すと、判じ手と「二度としないこと」に、確かめなかったという誤った学びが残った
+        : last.checked === 'preexisting' ? '確かめたが、作業前から同じように落ちていた'
         : '確かめていない',
     ].join(' / ');
   }
