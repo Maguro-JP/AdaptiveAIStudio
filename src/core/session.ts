@@ -1665,6 +1665,7 @@ export class Session {
     let measuredFrom = started;
     // 巻き戻すかどうか（従来の意味）。確かめて落ちたときだけ倒す。
     let keep = true;
+    let lastTimedOut = false;
     // 実際に確かめたか、どうだったか。**確かめていないことを、通ったと言わない。**
     let checked: 'passed' | 'failed' | 'preexisting' | 'unsure' | 'notRun' = 'notRun';
 
@@ -1978,6 +1979,8 @@ export class Session {
         while (events.length > 0) yield events.shift()!;
         // 止めた・時間切れの途中の出力を「前」として覚えない（外のツールだけの分岐と同じ守り）。
         if (!ac.signal.aborted && step.value.last && !step.value.last.timedOut) verifiedLast = step.value.last;
+        // 時間切れで終えた回は残す（巻き戻さない）が、終わりの姿は分からない。前の記録は忘れる（下で使う）
+        if (step.value.last?.timedOut) lastTimedOut = true;
       }
 
       /*
@@ -2093,7 +2096,7 @@ export class Session {
           if (verifiedLast) this.baselineProbe.note(command, verifiedLast);
           // 打ち切ったのに終わりの姿が分からない（止めた・時間切れ）なら、測った時点の姿も忘れる。
           // 残したままだと、次の回の外のツールに、この回が残した失敗を着せる。
-          else if (!keep) this.baselineProbe.invalidate(command);
+          else if (!keep || lastTimedOut) this.baselineProbe.invalidate(command);
         }
       }
 
