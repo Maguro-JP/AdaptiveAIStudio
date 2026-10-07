@@ -8,6 +8,7 @@
  */
 import { after } from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -21,7 +22,19 @@ after(async () => {
     // Windows は掴んだままの相手がいると消せない。少し待って諦める。
     maxRetries: 5, retryDelay: 100,
   }).catch(() => { /* 諦める。置き土産は次回の mkdtemp を邪魔しない */ })));
-  created.length = 0;
+  // 一覧は空にしない。後の `after`（サーバーの止め際の保存）が同じ場所を作り直すので、終わるときにもう一度消す（下）
+});
+
+/*
+ * **終わるときにも消す。**`after` は、この部品が読み込まれた時点の試験に付く。試験の中で後から読み込む
+ * （`await import('./tmp.ts')`）と、もう走り出した試験の側に付いて一度も走らず、作った場所が残り続けた
+ * （一回の確かめで千個を超え、ディスクを埋めた）。プロセスの終わりなら、どこから読み込まれても必ず通る。
+ * ここは同期でしか書けない。掴まれていて消せないもの（Windows）は諦める
+ */
+process.on('exit', () => {
+  for (const d of created) {
+    try { rmSync(d, { recursive: true, force: true }); } catch { /* 掴まれたままなら諦める */ }
+  }
 });
 
 /**
