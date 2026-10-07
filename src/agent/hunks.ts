@@ -21,6 +21,11 @@ export interface Hunk {
   readonly newFrom: number;
   /** ` `／`-`／`+` の付いた行。 */
   readonly lines: readonly string[];
+  /**
+   * 後ろに `\ No newline at end of file` が付いていた行（`lines` の中の番号）。`-` なら元の側、`+` なら新しい側、
+   * ` ` なら両方の、終わりの改行が無い最後の行。`lines` には入れない（画面の行の番号と揃えるため。`src/ui/web/diff.js` も数えない）
+   */
+  readonly noEol: readonly number[];
   readonly added: number;
   readonly removed: number;
 }
@@ -28,11 +33,11 @@ export interface Hunk {
 /** 差分を塊へ割る。差分でなければ空。 */
 export function splitHunks(diff: string): Hunk[] {
   const out: Hunk[] = [];
-  let now: { header: string; from: number; count: number; newFrom: number; lines: string[] } | undefined;
+  let now: { header: string; from: number; count: number; newFrom: number; lines: string[]; noEol: number[] } | undefined;
   const close = () => {
     if (!now) return;
     out.push({
-      header: now.header, from: now.from, count: now.count, newFrom: now.newFrom, lines: now.lines,
+      header: now.header, from: now.from, count: now.count, newFrom: now.newFrom, lines: now.lines, noEol: now.noEol,
       added: now.lines.filter((l) => l.startsWith('+')).length,
       removed: now.lines.filter((l) => l.startsWith('-')).length,
     });
@@ -42,11 +47,13 @@ export function splitHunks(diff: string): Hunk[] {
     const head = /^@@ -(\d+),(\d+) \+(\d+),\d+ @@/.exec(line);
     if (head) {
       close();
-      now = { header: line, from: Number(head[1]), count: Number(head[2]), newFrom: Number(head[3]), lines: [] };
+      now = { header: line, from: Number(head[1]), count: Number(head[2]), newFrom: Number(head[3]), lines: [], noEol: [] };
       continue;
     }
     if (!now) continue; // `---` `+++` の見出し
     if (line.startsWith(' ') || line.startsWith('-') || line.startsWith('+')) now.lines.push(line);
+    // 終わりの改行が無いという行。捨てていたので、終わりの改行だけを変える塊を選んで通しても当たらなかった
+    else if (line.startsWith('\\') && now.lines.length > 0) now.noEol.push(now.lines.length - 1);
   }
   close();
   return out;
@@ -87,6 +94,14 @@ export function applyHunks(
       if (line.startsWith(' ')) out.push(body);
     }
     if (cur !== start + h.count) return undefined;
+    // 終わりの改行。`before.split('\n')` では、改行で終わる中身の最後に '' が一つ残る
+    const ends = eolEnds(h);
+    if (ends.oldNoEol && cur !== src.length) return undefined; // 元は改行で終わっている（食い違い）
+    if (ends.newNoEol && !ends.oldNoEol) {
+      if (cur !== src.length - 1 || src[cur] !== '') return undefined;
+      cur += 1; // 終わりの改行を消す
+    }
+    if (ends.oldNoEol && !ends.newNoEol) out.push(''); // 終わりの改行を足す
     at = cur;
   }
   out.push(...src.slice(at));
@@ -141,11 +156,17 @@ export function revertLines(
     const lines: string[] = [];
     h.lines.forEach((line, at) => {
       const pick = chosen === undefined || chosen.has(at);
-      if (line.startsWith('+')) lines.push(pick ? `-${line.slice(1)}` : ` ${line.slice(1)}`);
-      else if (line.startsWith('-')) { if (pick) lines.push(`+${line.slice(1)}`); }
-      else lines.push(line);
+      let put: string | undefined;
+      if (line.startsWith('+')) put = pick ? `-${line.slice(1)}` : ` ${line.slice(1)}`;
+      else if (line.startsWith('-')) put = pick ? `+${line.slice(1)}` : undefined;
+      else put = line;
+      if (put === undefined) return;
+      lines.push(put);
+      // 「改行なし」の行は、向きを変えた行に付け直す（戻さない `+(改行なし)` は文脈になり「両方とも改行なし」、落とした `-(改行なし)` は「改行なし」の行も落とす）
+      if (h.noEol.includes(at)) lines.push('\\ No newline at end of file');
     });
-    const count = lines.filter((l) => !l.startsWith('+')).length;
+    // 数えるのは元の側の行だけ（「改行なし」の行を数えると、塊の行数がずれて当たらない）
+    const count = lines.filter((l) => l.startsWith(' ') || l.startsWith('-')).length;
     reversed.push(`@@ -${h.newFrom},${count} +${h.newFrom},${count} @@`, ...lines);
   }
   return applyHunks(current, reversed.join('\n'), Array.from({ length: byHunk.size }, (_, k) => k));
@@ -167,3 +188,14 @@ function changeGroups(lines: readonly string[], picked: ReadonlySet<number>): Se
   return out;
 }
 
+/** 塊が、元の側・新しい側の終わりの改行について何を言っているか。 */
+function eolEnds(h: Hunk): { oldNoEol: boolean; newNoEol: boolean } {
+  let oldNoEol = false;
+  let newNoEol = false;
+  for (const at of h.noEol) {
+    const c = h.lines[at]![0];
+    if (c !== '+') oldNoEol = true;
+    if (c !== '-') newNoEol = true;
+  }
+  return { oldNoEol, newNoEol };
+}
