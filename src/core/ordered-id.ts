@@ -8,7 +8,11 @@
  */
 export function idMaker(prefix: string): (now: number, rand?: () => number) => string {
   let last = '';
-  return (now, rand = Math.random) => {
+  let lastNow = 0;
+  return (given, rand = Math.random) => {
+    // 時計が戻っても、前に配った名前より前にしない（戻った時刻で作ると、後に作ったものが前に並び、同じ名前を配りうる）
+    const now = Math.max(given, lastNow);
+    lastNow = now;
     const head = `${prefix}${now.toString(36)}`;
     let tail = Math.floor(rand() * 1296).toString(36).padStart(2, '0');
     if (last.startsWith(head)) {

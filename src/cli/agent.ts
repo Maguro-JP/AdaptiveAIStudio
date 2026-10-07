@@ -34,7 +34,8 @@ import { formatPlan } from '../agent/pm.ts';
 import { checkUpdate, applyUpdate, describeUpdate } from '../core/update.ts';
 import { formatReport as formatAcceptance } from '../agent/acceptance.ts';
 import { formatEntry } from '../memory/memory.ts';
-import { Session } from '../core/session.ts';
+import { Session, quietCandidates } from '../core/session.ts';
+import { buildInspector } from '../core/inspector-setup.ts';
 import { expandCommand } from '../agent/commands.ts';
 import { runPanel, mergeFindings, panelVerdict } from '../agent/panel.ts';
 import { formatIdleStats } from '../harness/idle.ts';
@@ -85,8 +86,13 @@ async function main(): Promise<void> {
 
   const rl = new LineSource(stdin, stdout);
   let generating: AbortController | undefined;
-  // 止めるときは、待っている承認の問いも解く（解かないと、止めたのに Enter を押すまで進まない）
-  rl.onSigint(() => { if (generating) { generating.abort(); rl.cancelWaiting(); } else rl.close(); });
+  // 暇なときの考えごとの止め手。考えごとの間は入力欄（依頼> ）を待ったままなので、そちらは解かない（解くと対話ごと終わる）
+  let thinking: (() => void) | undefined;
+  // 止めるときは、待っている承認の問いも解く（解かないと、止めたのに Enter を押すまで進まない）。
+  // 考えごとの最中の Ctrl-C は考えごとだけを止める（前は対話を閉じ、考えごとは最後まで走ってから終わった）
+  rl.onSigint(() => {
+    if (generating) { generating.abort(); rl.cancelWaiting(); } else if (thinking) thinking(); else rl.close();
+  });
 
   const approve = async (req: ApprovalRequest): Promise<boolean> => {
     // 協議だけは自動承認から外す。人が読まない協議は、記録しか残らない。
@@ -198,11 +204,17 @@ async function main(): Promise<void> {
     execute: harness.wrapAll(
       [createRunCommandTool({ allowed: agentCfg.allowedCommands })], () => currentInstruction),
     // 外へ出る口。閉じてもこの場所は動く。持っていない人は外に出られない。
+    // 取ってきた文書は、本体と同じく二段目のチェック（判じ手）にも通す（前は一段目の当てはめだけで、合議の network の役職に仕込みのある頁が渡った）
     network: netCfg.enabled === false ? [] : harness.wrapAll(
       [createFetchUrlTool({
         allowedHosts: netCfg.allowedHosts,
         maxBytes: netCfg.maxBytes,
         timeoutMs: netCfg.timeoutMs,
+        inspector: buildInspector(
+          orchestrator,
+          netCfg.inspector?.candidates ?? quietCandidates(candidates, registry, { fixed: (config.candidates?.length ?? 0) > 0 }),
+          netCfg.inspector ?? {},
+        ),
       })], () => currentInstruction),
   };
 
@@ -218,10 +230,13 @@ async function main(): Promise<void> {
 
     const ac = new AbortController();
     generating = ac;
+    // 実際のコンテキストウィンドウを渡す（渡さないと既定の 8192 で見積もり、読んだファイルを刈りすぎる）
+    const panelWindow = (await getSession()).contextTokens;
     const gen = runPanel(orchestrator, target, {
       roles: members, candidates, root, toolPool,
       parallel: panelCfg.parallel ?? 2,
       temperature: config.temperature, maxTokens: config.maxTokens,
+      ...(panelWindow ? { contextTokens: panelWindow } : {}),
     }, ac.signal);
 
     try {
@@ -374,29 +389,40 @@ async function main(): Promise<void> {
    * 待機中の思考。何を考えるかは核の中のスケジューラが決める。
    * ここは選ばれた結果を端末に描くだけ。
    */
-  const think = async (): Promise<boolean> => {
+  // `explicit`: `/think` と打たれた。断られたら理由を出す（待機中に自分から考えるときは黙る）
+  const think = async (explicit = false): Promise<boolean> => {
     const session = await getSession();
     session.markChanged(lastChangeAt);
     let acted = false;
-    const gen = session.think();
-    let step = await gen.next();
-    while (!step.done) {
-      const ev = step.value;
-      if (ev.type === 'chose') {
-        if (ev.isDuty) process.stderr.write(c.dim(`\n  ${ev.reason}\n`));
-        process.stderr.write(c.dim(`\n  [${ev.codename}] ${ev.name} — ${ev.roleCodename}\n`));
-      } else if (ev.type === 'noFinding') {
-        process.stderr.write(c.dim('    → 報告することはありませんでした\n'));
-      } else if (ev.type === 'failed') {
-        process.stderr.write(c.yellow(`    → 考えられませんでした: ${ev.reason}\n`));
-      } else if (ev.type === 'proposal') {
-        console.log(c.cyan(`\n  💡 [${ev.codename}] ${ev.proposal.title}`));
-        console.log(c.dim(`     ${ev.proposal.rationale}`));
-        console.log(c.dim(`     /do ${ev.proposal.id} で実行、/reject ${ev.proposal.id} で却下\n`));
+    thinking = () => {
+      session.abort();
+      process.stderr.write(c.dim('\n  考えごとを止めます\n'));
+    };
+    try {
+      const gen = session.think();
+      let step = await gen.next();
+      while (!step.done) {
+        const ev = step.value;
+        if (ev.type === 'chose') {
+          if (ev.isDuty) process.stderr.write(c.dim(`\n  ${ev.reason}\n`));
+          process.stderr.write(c.dim(`\n  [${ev.codename}] ${ev.name} — ${ev.roleCodename}\n`));
+        } else if (ev.type === 'declined') {
+          if (explicit) process.stderr.write(c.yellow(`  考えませんでした: ${ev.reason}\n`));
+        } else if (ev.type === 'noFinding') {
+          process.stderr.write(c.dim('    → 報告することはありませんでした\n'));
+        } else if (ev.type === 'failed') {
+          process.stderr.write(c.yellow(`    → 考えられませんでした: ${ev.reason}\n`));
+        } else if (ev.type === 'proposal') {
+          console.log(c.cyan(`\n  💡 [${ev.codename}] ${ev.proposal.title}`));
+          console.log(c.dim(`     ${ev.proposal.rationale}`));
+          console.log(c.dim(`     /do ${ev.proposal.id} で実行、/reject ${ev.proposal.id} で却下\n`));
+        }
+        step = await gen.next();
       }
-      step = await gen.next();
+      acted = step.value;
+    } finally {
+      thinking = undefined;
     }
-    acted = step.value;
     return acted;
   };
 
@@ -437,10 +463,13 @@ async function main(): Promise<void> {
 
   try {
     for (;;) {
-      const answer = initCfg.enabled === false
+      // 暇なときに自分から考えるのは、入れたときだけ（画面と同じ既定。ローカルの小さいモデルでは一回が数分機械を塞ぎ、
+      // その間に打った依頼が待たされる）。前は端末だけ既定で入っていた。`/think` で頼めば、入れていなくても考える
+      const answer = initCfg.enabled !== true
         ? await rl.question(c.cyan('依頼> '))
         : await rl.questionWhileIdle(
-            c.cyan('依頼> '), (initCfg.idleSeconds ?? 30) * 1000, think);
+            // 画面と同じ下限（0・負・数でない値で、待機中に空回りしていた）
+            c.cyan('依頼> '), Math.max(5, Number.isFinite(initCfg.idleSeconds) ? initCfg.idleSeconds! : 30) * 1000, () => think());
       if (answer === undefined) break;
       const line = answer.trim();
       if (!line) continue;
@@ -483,9 +512,8 @@ async function main(): Promise<void> {
         console.log(formatIdleStats(idleModes, session.idle.stats()));
         console.log(c.dim(`\n  この1時間の消費: ${session.idle.spentThisHour(Date.now())}`
           + ` / ${initCfg.budgetPerHour ?? 12}`));
-        const d = await session.idle.choose({
-          lastChangeAt, openProposals: session.proposals.open().length, now: Date.now(),
-        });
+        session.markChanged(lastChangeAt);
+        const d = await session.nextThought();
         console.log(c.dim(`  次に考えること: ${d.mode ? d.mode.codename : `なし（${d.reason}）`}`));
         const next = session.idle.nextAllowedAt();
         if (next !== undefined && next > Date.now()) {
@@ -613,7 +641,7 @@ async function main(): Promise<void> {
         console.log(r.ok ? c.green(`  ${r.message}\n`) : c.red(`  ${r.message}\n`));
         continue;
       }
-      if (line === '/think') { await think(); continue; }
+      if (line === '/think') { await think(true); continue; }
       if (line.startsWith('/do ') || line.startsWith('/reject ')) {
         const [cmd, id] = line.split(/\s+/);
         const session = await getSession();
@@ -675,6 +703,8 @@ async function main(): Promise<void> {
        * 打ち間違い（`/exti`）や上に無い命令（`/help`）が、書けるツール付きの依頼としてモデルへ渡っていた。画面と同じ置き換え方を使う
        */
       let request = pendingRequest ?? line;
+      // 提案（/do）から来た回か。モデルが書いた提案文を、利用者の言葉として判じない（画面の採用と同じ）
+      const fromProposal = pendingRequest !== undefined;
       if (pendingRequest === undefined) {
         const expanded = await expandCommand(line, root);
         // ここの命令を、引数の形を違えて打った（`/do` だけ、`/exit now`）。「知らない」と言うと、並べた中に在るので食い違う
@@ -703,7 +733,9 @@ async function main(): Promise<void> {
       const flush = () => { if (printedText) { stdout.write('\n'); printedText = false; } };
 
       try {
-        for await (const ev of session.send(request)) {
+        // 打った行（展開する前）を `said` として渡す（`.claude/commands` を展開した全文が、戻り先の名前と記憶の題になっていた）
+        const sendOpts = fromProposal ? { fromUser: false } : request !== line ? { said: line } : {};
+        for await (const ev of session.send(request, sendOpts)) {
           switch (ev.type) {
             case 'recalled':
               console.log(c.dim(ev.text.split('\n').map((l) => `  ${l}`).join('\n')));
@@ -756,6 +788,8 @@ async function main(): Promise<void> {
                 failed: c.red('失敗'),
               }[ev.reason] ?? ev.reason;
               console.log(`\n  ${label}${ev.detail ? c.dim(` — ${ev.detail}`) : ''}`);
+              // 流し込んで使う（`echo … | aas agent`）呼び手が「通った」と読まないよう、失敗した回があれば 1 で終える（止めた回は数えない）
+              if (ev.reason === 'failed') process.exitCode = 1;
               break;
             }
             case 'verify':

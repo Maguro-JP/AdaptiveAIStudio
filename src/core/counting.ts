@@ -10,7 +10,8 @@
 import { join } from 'node:path';
 import { counterForGguf, type Counter } from '../agent/tokenizer.ts';
 import { readGguf } from '../runtime/gguf.ts';
-import { listGguf } from '../runtime/inproc.ts';
+import { listGguf, chooseModel } from '../runtime/inproc.ts';
+import { totalmem } from 'node:os';
 import { modelsDir } from './home.ts';
 import type { AasConfig } from '../config.ts';
 
@@ -56,9 +57,9 @@ export async function resolveCounting(config: AasConfig): Promise<Counting> {
   if (!file) {
     if (found.length === 1) file = found[0]!.ref;
     else if (found.length > 1) {
-      // 土台は最初の一つを読む。**同じものを見る。**ここで諦めると、
-      // 二つ置いてあるだけで見積もりに落ちる。
-      file = found[0]!.ref;
+      // runtime と**同じものを見る。**runtime は大きさと機械で選ぶ（\`chooseModel\`）ので、名前の先頭を取ると別のモデルの数え方を
+      // 「本物」と見せていた。ここで諦めると、二つ置いてあるだけで見積もりに落ちる。GPU の有無はここでは分からない（GPU 無しとして選ぶ）
+      file = chooseModel(found, totalmem())?.chosen.ref ?? found[0]!.ref;
     }
   }
   if (!file) return { why: '見積もり（GGUF がありません）' };

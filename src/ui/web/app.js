@@ -23,6 +23,15 @@ let theme = null;
 let tokenNames = [];
 const stateHandlers = [];
 const eventHandlers = new Map();
+/**
+ * 描き直しで消えない受け手（設定の点検のように、パネルの外に一度だけ作る部品のもの）。`eventHandlers` は描き直すたびに
+ * 空にするので、そこに置いた点検の受け手は消え、パネルを出し入れした後の点検は出力が出ず、押しボタンも戻らなかった
+ */
+const lastingHandlers = new Map();
+function onLasting(type, fn) {
+  if (!lastingHandlers.has(type)) lastingHandlers.set(type, []);
+  lastingHandlers.get(type).push(fn);
+}
 
 /**
  * 並びを組み直した回数。組み直すと、それまでのパネルは捨てられる（新しいものが作られる）。
@@ -97,20 +106,37 @@ function removeCrashNote(box) {
  * 「色を読めませんでした」等を、すぐ後の「まだ話せません」が消していた（sweep で見つけた）。bad が出ている間は、
  * 案内をもう一本の帯に出す。
  */
+/**
+ * 押して消した注意の文。同じ文は出し直さない（配置を保存するたびに状態の見直しが走り、消した「先に一つ」「設定を読めませんでした」の帯が
+ * 打つたびに戻ってきた）。止まった・落ちた（bad）は消しても次に起きれば出す
+ */
+const dismissedNotes = new Set();
+
+/** 押して消す。止まった・落ちた以外は、同じ文を覚えておく */
+function dismissNote(box) {
+  if (box.dataset.tone !== 'bad' && box.dataset.key) dismissedNotes.add(box.dataset.key);
+  removeCrashNote(box);
+}
+
+// **被せない。**浮かせると、その下の押しボタン（パネルの ×、添えたものを外す ×）が
+// 押せなくなる（二度そうなった）。上の帯として流れの中に置き、中身を押し下げる。
 function showCrash(what, detail, tone = 'bad', action) {
+  const key = `${what}:${detail}`;
+  if (tone !== 'bad' && dismissedNotes.has(key)) return;
   const id = tone !== 'bad' && document.querySelector('#crashNote.bad') ? 'crashNoteMore' : 'crashNote';
   let box = document.getElementById(id);
   if (!box) {
     box = document.createElement('div');
     box.id = id;
     box.className = 'crash-note';
-    box.onclick = (e) => { if (e.target.tagName !== 'BUTTON') removeCrashNote(box); };
-    // **被せない。**浮かせると、その下の押しボタン（パネルの ×、添えたものを外す ×）が
-    // 押せなくなる（二度そうなった）。上の帯として流れの中に置き、中身を押し下げる。
+    box.onclick = (e) => { if (e.target.tagName !== 'BUTTON') dismissNote(box); };
+    // 被せない（上の注釈）
     const shell = document.querySelector('.shell');
     if (shell) shell.before(box); else document.body.append(box);
   }
   box.className = `crash-note ${tone}`;
+  box.dataset.key = key;
+  box.dataset.tone = tone;
   box.textContent = `${what}: ${detail}（押すと消えます）`;
   // 次の一手を、その場で押せるようにする（「設定で決めて」だけにしない）。
   if (action) {
@@ -376,11 +402,36 @@ function buildNode(node, panels) {
   return box;
 }
 
+/** 配置の中で target に至る子の番号の並び。見つからなければ undefined。 */
+function pathTo(from, target, trail = []) {
+  if (from === target) return trail;
+  for (const [i, child] of (Array.isArray(from?.children) ? from.children : []).entries()) {
+    const got = pathTo(child, target, [...trail, i]);
+    if (got) return got;
+  }
+  return undefined;
+}
+
+/** 番号の並びで辿った先。辿れなければ undefined。 */
+function atPath(from, path) {
+  let at = from;
+  for (const i of path) {
+    at = Array.isArray(at?.children) ? at.children[i] : undefined;
+    if (!at) return undefined;
+  }
+  return at;
+}
+
 /** 仕切り。掴んで動かすと、比率が配置に書き戻る。 */
-function grip(node, index, box) {
+function grip(built, index, box) {
   const g = document.createElement('div');
   g.className = 'grip';
+  // 作った時の配置での道筋。保存すると配置は向こうが返したものに替わる（描き直さない）ので、掴むたびに今の配置から同じ仕切りを引き直す
+  // （作った時の node を握ったままだと、二度目からは捨てた配置の比率を動かし、保存しても届かなかった）
+  const path = pathTo(layout.root, built);
   g.onpointerdown = (down) => {
+    const node = (path && atPath(layout.root, path)) ?? built;
+    if (!Array.isArray(node.sizes) || node.sizes.length <= index + 1) return;
     down.preventDefault();
     g.setPointerCapture(down.pointerId);
     const vertical = node.direction === 'column';
@@ -533,8 +584,9 @@ $('editTheme').onclick = () => {
 
   $('themeEditor').returnValue = '';
   $('themeEditor').showModal();
-  $('themeEditor').addEventListener('close', async function once() {
-    $('themeEditor').removeEventListener('close', once);
+  $('themeEditor').addEventListener('close', onClose);
+  async function onClose() {
+    $('themeEditor').removeEventListener('close', onClose);
     if ($('themeEditor').returnValue !== 'save') {
       // 戻す。触っただけで決まってしまわないように。
       const r = await askJson('/api/theme', undefined, '色を戻せませんでした');
@@ -543,16 +595,20 @@ $('editTheme').onclick = () => {
     }
     const r = await askJson('/api/theme', {
       method: 'PUT', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ ...draft, base: before.id, id: 'custom', name: '自分の色' }),
+      // 元の見た目は、自分の色を直すときも最初の見た目（`custom` を元にすると「知らない見た目」になる）
+      body: JSON.stringify({ ...draft, base: before.base ?? before.id, id: 'custom', name: '自分の色' }),
     }, '色を保存できませんでした');
     if (!saved(r, 'theme', '色を保存できませんでした')) return;
     applyTheme(r.theme, r.vars);
     if (r.repairs?.length) {
       // 受け取れなかった値は黙って捨てない。なぜ効かないのか分からなくなる。
       $('themeRepairs').textContent = r.repairs.map((x) => `・${x.detail}`).join('\n');
+      // 開き直すダイアログにも、閉じたときの受け手を付け直す（付けずに開いていたので、直して「保存」しても「戻す」でも何も起きなかった）
+      $('themeEditor').returnValue = '';
       $('themeEditor').showModal();
+      $('themeEditor').addEventListener('close', onClose);
     }
-  });
+  }
 };
 
 /* ---------- 出し入れ ---------- */
@@ -846,7 +902,10 @@ function listen() {
     }
     // いま触っているものを、上の帯に出す。終わったら「作業中」へ戻す
     // （**「読んでいます」のまま止まって見えるのが、いちばん困る**）。
-    if (e.type === 'session' && busyNow) {
+    // 見ていない会話の動きで、上の帯を書き換えない
+    const forOther = e.conversationId && conversations
+      && (conversations.current ? e.conversationId !== conversations.current : !sendingFromTop);
+    if (e.type === 'session' && busyNow && !forOther) {
       if (e.event.type === 'text' && !wroteYet) { wroteYet = true; run.set('busy', '答えています'); }
       if (e.event.type === 'toolStart') run.set('busy', doingText(e.event.name, e.event.summary));
       // ツールの結果を読んで、次の一言を待つ。
@@ -876,6 +935,7 @@ function listen() {
       if (upTo !== undefined && e.seq <= upTo) return;
     }
     for (const fn of eventHandlers.get(e.type) ?? []) fn(e);
+    for (const fn of lastingHandlers.get(e.type) ?? []) fn(e);
   };
 }
 
@@ -1028,7 +1088,8 @@ async function loadMcpCatalog() {
         `${e.name} を設定に書きました: ${body.path}`,
         ...(body.missing ?? []).map((m) => `まだ要ります: ${m.about}（${m.env}）`),
         ...(body.notes ?? []),
-        '次の依頼のときから使えます。',
+        // 起こせなかったと言われたら、そう出す（読んでいなかったので、繋がらないのに「使えます」と言っていた）
+        ...(body.note ? [body.note] : ['次の依頼のときから使えます。']),
       ].join('\n');
       await loadMcpCatalog();
       await loadMcp();
@@ -1124,6 +1185,18 @@ ctx.conversationGone = (id) => {
 let busyNow = false;
 
 /**
+ * 見ている会話が動いているかで、上の帯と止めるボタンを決め直す。会話を選ぶ・トップへ戻る・開き直すたびに呼ぶ。
+ * 前は見ている会話の busy の知らせでしか変えなかったので、走っている会話から別の会話へ移ると「作業中」が持ち越され
+ * （止めるボタンは前の会話を止めた）、走っている会話を開いたときは「待機中」のままで止めるボタンも出なかった
+ */
+function showBusyOfViewed(live) {
+  busyNow = live;
+  wroteYet = false;
+  run.set(live ? 'busy' : 'idle', live ? WAITING_REPLY : '待機中');
+  drawConversations();
+}
+
+/**
  * やり残しを出す。
  *
  * **見えて、やめられること。**控えるだけなら覚え書きだが、こちらから
@@ -1154,8 +1227,16 @@ async function loadUnfinished() {
   const list = data.list ?? [];
   // 戻せるものは本体が知っている（別のタブで戻した・畳んだものは、もう並ばない）
   const canceled = hideCanceled || !Array.isArray(data.canceled) ? [] : data.canceled;
-  sec.hidden = list.length === 0 && goals.list.length === 0 && canceled.length === 0;
+  // 読めなかったことは言う（空の一覧を「やり残しなし」と見せない）
+  const unreadable = [data.error, goals.error].filter((t) => typeof t === 'string' && t);
+  sec.hidden = list.length === 0 && goals.list.length === 0 && canceled.length === 0 && unreadable.length === 0;
   box.textContent = '';
+  for (const t of unreadable) {
+    const row = document.createElement('div');
+    row.className = 'side-row warn';
+    row.textContent = t;
+    box.append(row);
+  }
 
   // 段取り。**どこまで進んだかを出す。**一段ずつ進むので、見えないと
   // 「止まっている」のか「一段ずつ進んでいる」のかが区別できない。
@@ -1401,6 +1482,7 @@ async function goTop() {
   if (!r.ok) return void showCrash('トップへ戻れません', r.body.error ?? '', 'warn');
   conversations.current = null;
   ctx.showHistory([]);
+  showBusyOfViewed(false);
   void showWaitingApprovals();
   await loadConversations();
 }
@@ -1544,6 +1626,7 @@ function drawConversations() {
         // 動いていない。前に写した所までの記録が残っていても使わない（次の答えの番号は 1 から振り直される）
         copiedUpTo.delete(head.id);
       }
+      showBusyOfViewed(Boolean(r.body.inFlight));
       await loadConversations();
     };
     /*
@@ -1596,6 +1679,16 @@ function drawConversations() {
       textContent: `ほかに ${conversations.hidden} 件（古いものは一覧に出していません。消えてはいません）`,
     }));
   }
+  // 読めなかった分と、保存先そのものが読めないことは、古いのと分けて言う
+  if (conversations.unreadable > 0) {
+    box.append(Object.assign(document.createElement('div'), {
+      className: 'dim',
+      textContent: `読めない会話が ${conversations.unreadable} 件あります（ほかのソフトが掴んでいる・権限が無い、など）。一覧には出していません`,
+    }));
+  }
+  if (conversations.listError) {
+    box.append(Object.assign(document.createElement('div'), { className: 'dim', textContent: conversations.listError }));
+  }
 }
 
 /**
@@ -1605,7 +1698,9 @@ function drawConversations() {
  * 誰も辿り着けなかった。作業場を見ている、その場で変える。
  */
 async function pickWorkRoot() {
-  const nowAt = $('workNow').textContent ?? '';
+  // 初めの値は、省いていない道（title）から取る。表示の文字（省いた道と、隣の「開く」「コピー」）から取ると、
+  // そのまま OK を押しただけで偽の道が保存され、その名前のフォルダが作られて、そこで作業していた
+  const nowAt = $('workNow').title ?? '';
   const want = window.prompt('直してほしいコードのある場所を打ってください。\n（空にすると既定へ戻ります）', nowAt);
   if (want === null) return;
   /*
@@ -1658,7 +1753,8 @@ async function loadFiles(at = '') {
      * 一覧は前のまま。**変えたのに変わっていないように見える。**
      * 一度だけ根で引き直す（それでも駄目なら、下の catch で理由を出す）。
      */
-    if (!r.ok && at !== '') {
+    // 読めないフォルダ（409）は根で引き直さず、理由を出す
+    if (!r.ok && r.status !== 409 && at !== '') {
       r = await fetch('/api/files?path=');
       body = await r.json();
     }
@@ -1821,6 +1917,8 @@ try { if (localStorage.getItem('aas.side') === '0') showSide(false); } catch { /
 $('edit').onclick = () => {
   $('json').value = JSON.stringify(layout, null, 2);
   $('repairs').textContent = '';
+  // 前の答え（apply）を残さない。Esc で閉じても答えは変わらないので、前に適用した後だと Esc でも適用していた
+  $('editor').returnValue = '';
   $('editor').showModal();
 };
 
@@ -1832,6 +1930,8 @@ $('editor').addEventListener('close', async () => {
   } catch (e) {
     // 読めない JSON でも捨てない。直して開き直す。
     $('repairs').textContent = `読めませんでした: ${e.message}`;
+    // 開き直す前に答えを消す（残すと Esc でまた「適用」になり、Esc で抜けられなかった）
+    $('editor').returnValue = '';
     $('editor').showModal();
     return;
   }
@@ -1841,6 +1941,7 @@ $('editor').addEventListener('close', async () => {
   if (r.repairs?.length) {
     $('json').value = JSON.stringify(r.layout, null, 2);
     $('repairs').textContent = r.repairs.map((x) => `・${x.detail}`).join('\n');
+    $('editor').returnValue = '';
     $('editor').showModal();
   }
 });
@@ -1871,8 +1972,14 @@ async function checkForUpdate() {
   const list = status.incoming.map((c) => `  ${c}`).join('\n');
   if (!confirm(`${status.behind}件の変更があります。\n\n${list}\n\n取り込みますか？`)) return;
 
-  const r = await ask('/api/update', { method: 'POST' }, '更新できませんでした');
-  if (!r) return;
+  // 取り込みは本体の中でもう一度取りに行くので、遅い回線では 30 秒を超える。上限を長くし、それでも切れたら「分からない」と言う
+  // （前は 30 秒で切って「更新できませんでした」と出したが、本体は取り込みを済ませていて、動いているコードと置いてあるコードがずれたままになった）
+  const r = await ask('/api/update', { method: 'POST', signal: AbortSignal.timeout(10 * 60_000) }, '更新の返事が届きませんでした');
+  if (!r) {
+    alert('更新が終わったかどうか分かりません。取り込みが済んでいることがあるので、設定の「立ち上げ直す」から立ち上げ直してください。');
+    $('cfgRestart').hidden = false;
+    return;
+  }
   const result = r.body;
   // 取り込んだ後は、動いているコードと置いてあるコードがズレている。
   // 黙って立ち上げ直さず、訊いてから。断られたら、ズレたまま使わせる
@@ -2259,14 +2366,20 @@ async function restartAndReload(note) {
     return;
   }
   note.textContent = '立ち上げ直しています。戻ってきたら、この頁を読み直します。';
-  // 止まって、起き上がるまで待つ。起きたら読み直す。
-  await new Promise((res) => setTimeout(res, 1500));
-  for (let i = 0; i < 60; i++) {
+  /*
+   * 止まって、起き上がるまで待つ。読み直すのは、新しい本体が答えたとき（番号が変わったか、一度落ちてから戻ったとき）だけ。
+   * 前は 2.5 秒待って答えがあれば読み直していたが、古い本体は後片づけ（書き出し・モデルを降ろす）に 2 秒を超えることがあり、
+   * 止まる途中の古い本体から読み直して「接続できません」や空の画面になった
+   */
+  const before = await getJson('/api/info', { cache: 'no-store' }).then((j) => j.pid).catch(() => undefined);
+  let wentDown = false;
+  for (let i = 0; i < 90; i++) {
     await new Promise((res) => setTimeout(res, 1000));
-    const ok = await fetch('/api/info', { cache: 'no-store' }).then((x) => x.ok).catch(() => false);
-    if (ok) { location.reload(); return; }
+    const info = await getJson('/api/info', { cache: 'no-store' }).catch(() => undefined);
+    if (!info) { wentDown = true; continue; }
+    if (wentDown || (before !== undefined && info.pid !== undefined && info.pid !== before)) { location.reload(); return; }
   }
-  note.textContent = '1分待ちましたが戻ってきません。start.cmd の窓を見てください。';
+  note.textContent = '1分半待ちましたが戻ってきません。start.cmd の窓を見てください。';
 }
 
 $('cfgRestart').onclick = () => restartAndReload($('cfgNote'));
@@ -2285,6 +2398,8 @@ $('cfgSave').onclick = async () => {
   // 黙って効いた顔をしない。切り替えは立ち上げ直すまで効かない。
   // 置き場が無いまま保存できてしまう。保存できたことと、動くことは別。
   const saveNote = DIR_NOTES[body.dirState] ?? '';
+  // 先に読み直す。読み直しは同じ欄を書き換えるので、後に回すと保存の知らせ（打ち間違いの注意・立ち上げ直しの案内）が消えた
+  await loadCfg();
   $('cfgNote').style.whiteSpace = 'pre-line';
   $('cfgNote').textContent = (body.restartNeeded
     ? `保存しました。立ち上げ直すと効きます。 ${body.path}`
@@ -2292,7 +2407,6 @@ $('cfgSave').onclick = async () => {
     + (saveNote ? `\n${saveNote}` : '')
     // 打ち間違えても保存はできる。**保存したときに言う。**
     + (body.workNote ? `\n${body.workNote}` : '');
-  await loadCfg();
   await loadFiles();
 };
 
@@ -2302,7 +2416,14 @@ async function loadChecks() {
   checksReady = true;
   const bar = $('settingsChecks');
   const out = $('settingsCheckOut');
-  const { tasks } = await getJson('/api/tasks').catch(() => ({ tasks: [] }));
+  let tasks;
+  try {
+    ({ tasks } = await getJson('/api/tasks'));
+  } catch {
+    // 読めなければ、次に開いたときにもう一度読む（前は「読んだ」扱いのまま空にし、以後ボタンが出なかった）
+    checksReady = false;
+    return;
+  }
   const buttons = [];
   for (const t of tasks ?? []) {
     const b = document.createElement('button');
@@ -2323,11 +2444,11 @@ async function loadChecks() {
     buttons.push(b);
     bar.append(b);
   }
-  ctx.on('task', (e) => {
+  onLasting('task', (e) => {
     out.append(document.createTextNode(e.text));
     out.scrollTop = out.scrollHeight;
   });
-  ctx.on('taskDone', (e) => {
+  onLasting('taskDone', (e) => {
     for (const x of buttons) x.disabled = false;
     out.append(document.createTextNode(
       e.code === 0 ? '\n— 終わりました —\n' : `\n— 終了コード ${e.code} —\n`));
@@ -2515,6 +2636,7 @@ if (conversations.current) {
     if (body.inFlight) {
       copiedUpTo.set(conversations.current, body.inFlight.seq);
       ctx.showInFlight(body.inFlight);
+      showBusyOfViewed(true);
     }
   } catch { /* 出せなくても、新しく書き始められる */ }
 }

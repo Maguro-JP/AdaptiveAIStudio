@@ -216,6 +216,22 @@ describe('llama-server の用意', () => {
     assert.ok(calls.some((c) => c.includes('cudart-llama-bin-win-cu12.4-x64.zip')),
       `実行時ライブラリを取りに行っていない: ${calls.join(' / ')}`);
   });
+
+  test('実行時ライブラリの取得で接続が切れても、理由と手で取る道を言う', async () => {
+    // 本体は取れて実行時ライブラリで切れると、一語の `fetch failed` で終わり、手で取る案内も出なかった
+    const binDir = await tempDir('aas-bin-');
+    const { impl } = fakeFetch({
+      assets: ['llama-b4585-bin-win-cuda-cu12.4-x64.zip', 'cudart-llama-bin-win-cu12.4-x64.zip'],
+    });
+    const cut = ((url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes('cudart-')) return Promise.reject(new TypeError('fetch failed'));
+      return impl(url, init);
+    }) as typeof fetch;
+    await assert.rejects(
+      install({ binDir, tag: 'b4585', fetchImpl: cut, verify: runs, target: { platform: 'win32', arch: 'x64', hasNvidia: true } }),
+      (e: Error) => /実行時ライブラリ/.test(e.message) && /手で取るなら/.test(e.message),
+    );
+  });
 });
 
 /** 無圧縮の zip を組む（名前をそのまま入れる。`\` 区切りの名前を作るため）。CRC は読む側が見ないので 0。 */

@@ -205,8 +205,9 @@ export async function readGguf(path: string, opts: ReadOptions = {}): Promise<Gg
       warnings.push(`メタデータ ${i + 1} 件目の名前を読めませんでした: ${(e as Error).message}`);
       break;
     }
-    const type = r.u32();
     try {
+      // 値の型の 4 バイトも、名前・値と同じく読める所までで打ち切る（読む先頭の境目がここに落ちると、外へ投げて GGUF ごと読めない扱いになっていた）
+      const type = r.u32();
       metadata.set(key, readValue(r, type));
     } catch (e) {
       // 一つ読めないと、その先の位置が分からなくなる。ここで打ち切る。

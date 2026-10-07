@@ -14,7 +14,7 @@ import { placeKey } from '../memory/memory.ts';
 import { proposalHere } from '../agent/proposals.ts';
 import { listDir, resolveInside } from './files.ts';
 import { describeNet, withoutPlaces } from '../runtime/net-why.ts';
-import { UnfinishedWork, resumePrompt, whyText, MAX_OPEN } from '../core/unfinished.ts';
+import { UnfinishedWork, type Unfinished, resumePrompt, whyText, MAX_OPEN } from '../core/unfinished.ts';
 import { githubLaunch } from '../core/github-mcp.ts';
 import { CATALOG, BUILTIN, findEntry, specFrom, needsNpx } from '../mcp/catalog.ts';
 import { connectService, disconnectService } from '../core/mcp-connect.ts';
@@ -75,7 +75,7 @@ import { listenOrExplain } from '../core/listen.ts';
 import { crossSiteReason } from './origin.ts';
 import {
   RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
-  inspectModelsDir, ensureDefaultModelsDir, savedModelsDir,
+  inspectModelsDir, ensureDefaultModelsDir, savedModelsDir, unquotePath, readSavedMcpServers,
 } from './settings.ts';
 import {
   listGguf, chooseModel, tooBigForRam, looksLikeGguf, freePortFrom, INPROC_PORT, headsUp, CHOICE_WHY,
@@ -248,6 +248,10 @@ export interface Job {
   startedAt?: string;
   progress?: { pct: number };
 }
+
+
+/** 段・続きを進めた結果。走らせた（started）・走らせずに済ませた（取り消された・止めた・閉じた・読めない。settled） */
+type StepOutcome = 'started' | 'settled';
 
 export class UiServer {
   readonly #opts: UiServerOptions;
@@ -475,6 +479,10 @@ export class UiServer {
   readonly #attachments = new Attachments();
   /** 作っているものを見せる口。操作用とは**別の口**にする。 */
   #preview?: PreviewServer;
+  /** 支度中（モデルを読んでいる間）の送り先の会話。消させない */
+  readonly #preparingFor = new Set<string>();
+  /** プレビューを立ち上げている間の約束。立ち上げ中に来た呼び手もこれを待つ */
+  #previewStarting?: Promise<unknown>;
   /** いま配っている作業場。変わったら立て直す。 */
   #previewRoot?: string;
   #seq = 0;
@@ -739,6 +747,15 @@ export class UiServer {
    * 読めている以上、使えるかどうかを名前で決め直す必要はない。
    */
   async #configForSession(): Promise<AasConfig> {
+    /*
+     * 外のツールの一覧は、組み直すたびに設定のファイルから取り直す。会話の `connect_service`・`disconnect_service` はファイルと
+     * いまの本体だけを変えるので、画面が持つ設定は古いまま残り、組み直すと外したものが戻り、繋いだものが消えていた。
+     * 読めないときは、持っている設定のまま
+     */
+    const saved = await readSavedMcpServers();
+    if (saved !== undefined) {
+      this.#opts.config = { ...this.#opts.config, mcp: { ...(this.#opts.config.mcp ?? {}), servers: saved as never } };
+    }
     const config = this.#opts.config;
     if (config.candidates && config.candidates.length > 0) return config;
     if ((config.runtime?.kind ?? 'inproc') !== 'inproc') return config;
@@ -873,6 +890,8 @@ export class UiServer {
    */
   async #loadThenDrive(text: string, attached: string[], conversationId: string, editor?: EditorHere): Promise<void> {
     this.#prep += 1;
+    // 支度の間は、送り先の会話を消させない（本体がまだ無く走ってもいないので、消す口が通っていた）
+    this.#preparingFor.add(conversationId);
     // 走り出せたら、その依頼の終わりが順番待ちを流す。走り出せなかったら、ここで流す（読み込みの間に積まれた分が残る）
     let started = false;
     try {
@@ -898,6 +917,7 @@ export class UiServer {
       started = true;
     } finally {
       this.#prep -= 1;
+      this.#preparingFor.delete(conversationId);
       if (!started && !this.#stopped) this.#bg(this.#maybeDrain(), '順番待ちの実行が落ちました');
     }
   }
@@ -1325,10 +1345,17 @@ export class UiServer {
         this.#preview = undefined;
       }
       if (!this.#preview) {
-        this.#preview = new PreviewServer({ root });
+        const preview = new PreviewServer({ root });
+        this.#preview = preview;
         this.#previewRoot = root;
-        await this.#preview.start();
+        // 立ち上げ中の約束を持ち、同時に来た呼び手も同じものを待つ（在ると見て `127.0.0.1:0` を返していた）。立たなければ外す
+        this.#previewStarting = preview.start().catch((e: unknown) => {
+          if (this.#preview === preview) this.#preview = undefined;
+          throw e;
+        });
       }
+      await this.#previewStarting;
+      if (!this.#preview) return send(res, 503, { error: 'プレビューを立てられませんでした' });
       return send(res, 200, { url: this.#preview.url, root });
     }
 
@@ -1368,8 +1395,12 @@ export class UiServer {
       if (named !== undefined && named !== null && (typeof named !== 'string' || !ID_SHAPE.test(named))) {
         return send(res, 400, { error: '会話の名前が正しくありません' });
       }
-      if (typeof named === 'string' && await this.#conversations.head(named).then(() => false, () => true)) {
-        return send(res, 404, { error: 'その会話はありません（消されたか、読めません）' });
+      if (typeof named === 'string') {
+        // 「無い」と「読めない」を分ける（読めないだけ（掴まれている・権限）でも 404 にしていたので、画面は消されたと読んで会話から抜け、
+        // 送り直すと新しい会話ができて話が二つに割れた）。会話を選ぶ口と同じ
+        const gone = await this.#conversations.head(named).then(() => false, (e: unknown) => (isAbsent(e) ? true : e as Error));
+        if (gone === true) return send(res, 404, { error: 'その会話はありません（消されたようです）' });
+        if (gone) return send(res, 503, { error: `その会話の記録をいま読めません（${gone.message}）。少し置いてから送り直してください` });
       }
       const typed = typeof body?.text === 'string' ? body.text.trim() : '';
       const attached = Array.isArray(body?.attachments)
@@ -1483,22 +1514,29 @@ export class UiServer {
       const editor = editorHere(body?.editor);
       if (!text) return send(res, 400, { error: '依頼が空です' });
 
-      const session = await this.session();
-      if (this.#busyNow(session)) return send(res, 409, { error: 'いま別の作業をしています' });
+      const session0 = await this.session();
+      if (this.#busyNow(session0)) return send(res, 409, { error: 'いま別の作業をしています' });
 
       this.#prep += 1;
+      let planStarted = false;
       try {
         // **先に確かめる。**モデルが無いまま送ると、繋ぎ先を待ち続けて
         // 画面は「考え中」のまま止まる。利用者からは固まったようにしか見えない。
         const missing = await this.#readyToThink();
         if (missing) return send(res, 503, { error: missing });
+        // 読み終えた後に、候補の無いまま組んだ本体を組み直す（送る口と同じ。組み直さず「使えるモデルがありません」で止まっていた）
+        await this.#rebuildIfCandidatesMissing();
+        const session = await this.session();
 
         // 送り口と同じ組み立て（添付・開いている所・@ の指名）。返事の前に組む（返した後に投げると、受け手の無い失敗になる）
         const full = await this.#compose(session, text, attached, editor);
         send(res, 202, { accepted: true });
+        planStarted = true;
         this.#bg(this.#drivePlan(session, full, text), '段取りが落ちました');
       } finally {
         this.#prep -= 1;
+        // 始めずに抜けた（断った・組めなかった）なら、支度の間に積まれた送りを流す（始めた回は、段取りの終わりで流す）
+        if (!planStarted) this.#bg(this.#maybeDrain(), '順番待ちの取り出しが落ちました');
       }
       return;
     }
@@ -1716,6 +1754,8 @@ export class UiServer {
         } finally {
           this.#thinking = false;
           this.broadcast({ type: 'stateChanged' });
+          // 考えている間に順番待ちに積まれた送りを流す（見回りの考えごとと同じ。流さずにいたので、次の見回り（既定 30 秒）まで誰も拾わなかった）
+          if (this.#queue.length > 0 && !this.#stopped) this.#bg(this.#maybeDrain(), '順番待ちの実行が落ちました');
         }
       })();
       return;
@@ -1764,7 +1804,8 @@ export class UiServer {
         ? body.hunks.filter((n): n is number => Number.isInteger(n) && (n as number) >= 0)
         : undefined;
       // 「この依頼のあいだは訊かない」。書き込みだけに効く。
-      const wantAll = body?.approved === true && (body as { all?: unknown }).all === true;
+      // 書き込みの承認のときだけ受ける（画面は書き込みにしかこの押しボタンを出さないが、本体は種類を見ずに受けていた）
+      const wantAll = body?.approved === true && (body as { all?: unknown }).all === true && waiting.request.kind === 'write';
       /*
        * **塊を選んでから「以降訊かない」を押せる。**
        *
@@ -1894,6 +1935,8 @@ export class UiServer {
           ? { loading: { ref: this.#loading.ref, seconds: Math.round((Date.now() - this.#loading.began) / 1000) } }
           : {}),
         node: process.version,
+        // 立ち上げ直したかを画面が見分けるため（止まる途中の古い本体から頁を読み直さない）
+        pid: process.pid,
         platform: `${process.platform} ${process.arch}`,
         portable: isPortable(),
         productRoot: productRoot(),
@@ -1938,7 +1981,9 @@ export class UiServer {
 
     if (path === '/api/restart' && req.method === 'POST') {
       const session = this.#session;
-      if (session && this.#busyNow(session)) {
+      // 本体を組む前の支度（最初の送りでモデルを読んでいる間）と順番待ちも作業中に数える（本体が無いので塞がっていないと見て止め、
+      // 受け付けた依頼がやり残しにも残らずに消えた）
+      if ((session && this.#busyNow(session)) || this.#prep > 0 || this.#queue.length > 0) {
         return send(res, 409, { error: 'いま作業中です。終わってから立ち上げ直してください' });
       }
       // 起こし直してもらえない入口では、**止めない**。止めると誰も起こさない。
@@ -2376,6 +2421,12 @@ export class UiServer {
           got = await listDir(root, asked);
         } catch (e) {
           if (asked === '') throw e;
+          // 根へ戻すのは、作業場の外か、もう無いときだけ。読めない（権限・掴まれている）ものを黙って根の一覧にすり替えると、
+          // 押したフォルダが開かずに根が出て、なぜかが分からなかった
+          const outside = /作業場の外/.test((e as Error).message);
+          if (!outside && !isAbsent(e)) {
+            return send(res, 409, { error: `そのフォルダを読めません（${(e as NodeJS.ErrnoException).code ?? (e as Error).message}）`, unreadable: true });
+          }
           at = '';
           got = await listDir(root, '');
         }
@@ -2408,21 +2459,33 @@ export class UiServer {
         hits: found.hits, capped: found.capped,
         walkCapped: found.walkCapped, walkDeep: found.walkDeep === true, walkDots: found.walkDots ?? 0,
         tooBig: found.tooBig, unreadable: found.unreadable,
+        failed: found.failed ?? 0, unreadableDirs: found.unreadableDirs ?? 0, aborted: found.aborted === true,
       });
     }
 
     // 会話。**残してあるものを出して、開き直せるようにする。**
     if (path === '/api/conversations' && req.method === 'GET') {
-      const list = await this.#conversations.list();
-      // **一覧を見ただけでは作らないし、勝手に開きもしない。**
-      // どれも開いていない状態がトップで、そこから書けば新しい会話になる。
-      // **出していない分を、黙って隠さない。**古いものは消えていない。
-      const total = await this.#conversations.count();
+      // 会話の保存先が読めない（権限・掴まれている）のを、「一つも無い」と見せない。理由（符丁）を返して画面に出す
+      let list: Awaited<ReturnType<Conversations['list']>> = [];
+      let total = 0;
+      let listError: string | undefined;
+      try {
+        list = await this.#conversations.list();
+        // **一覧を見ただけでは作らないし、勝手に開きもしない。**
+        // どれも開いていない状態がトップで、そこから書けば新しい会話になる。
+        // **出していない分を、黙って隠さない。**古いものは消えていない。
+        total = await this.#conversations.count();
+      } catch (e) {
+        listError = `会話の保存先を読めません（${(e as NodeJS.ErrnoException).code ?? '理由不明'}）。少し置いてから開き直してください`;
+      }
+      // 在るのに読めなかった会話は、「古いので出していない」に混ぜない
+      const unreadable = listError ? 0 : this.#conversations.lastUnreadable;
       return send(res, 200, {
         current: this.#conversationId ?? null, running: this.#runningId ?? null,
         // 動いている会話の全部（本体と、横で並べて走らせているもの）。一覧の「動いています」はこちらで付ける。
         runningAll: [...(this.#runningId ? [this.#runningId] : []), ...this.#side.keys()],
-        list, total, hidden: Math.max(0, total - list.length),
+        list, total, hidden: Math.max(0, total - list.length - unreadable), unreadable,
+        ...(listError ? { listError } : {}),
         // 消して、まだ戻せるもの（立ち上げ直すと本当に消える）。新しい順。
         // 読めなくても、生きている会話の一覧まで道連れにしない（画面は一覧ごと出さなくなる）。読めないことは言う
         ...await this.#conversations.trashList().then(
@@ -2465,7 +2528,13 @@ export class UiServer {
     // 一段ずつ進むので、見えないと「止まっている」のか
     // 「一段ずつ進んでいる」のかが区別できない。
     if (path === '/api/goals' && req.method === 'GET') {
-      const list = await this.#goals.list();
+      // 読めないのを「段取りなし」と見せない（無いだけを空にする）
+      let list;
+      try {
+        list = await this.#goals.list({ strict: true });
+      } catch (e) {
+        return send(res, 200, { list: [], error: `段取りの記録を読めません（${(e as Error).message}）` });
+      }
       return send(res, 200, {
         list: list.map((g) => ({
           id: g.id,
@@ -2480,7 +2549,13 @@ export class UiServer {
     // やり残しの控え。**見えないところで動かさない。**
     // 知らないうちに作業場が変わるのが、いちばん怖い。見えて、やめられること。
     if (path === '/api/unfinished' && req.method === 'GET') {
-      const list = await this.#unfinished.list();
+      // 読めないのを「やり残しなし」と見せない（無いだけを空にする）
+      let list;
+      try {
+        list = await this.#unfinished.list({ strict: true });
+      } catch (e) {
+        return send(res, 200, { list: [], error: `やり残しの記録を読めません（${(e as Error).message}）` });
+      }
       return send(res, 200, {
         list: list.map((u) => ({
           id: u.id,
@@ -2608,6 +2683,12 @@ export class UiServer {
       const body = await readBody(req) as { id?: unknown };
       const id = typeof body?.id === 'string' ? body.id : '';
       if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
+      /*
+       * 無い会話（別のタブで消した）へは切り替えない。無い会話の読みは空として返るので、切り替えて打った分が消した会話の行き先
+       * （`trash/`）へ書かれ、次に立ち上げたときに片づけで消えていた。読めないだけの会話は下で扱う
+       */
+      const missing = await this.#conversations.head(id).then(() => false, (e: unknown) => isAbsent(e));
+      if (missing) return send(res, 404, { error: 'この会話はありません（消されています。消した会話は「戻す」から戻せます）', gone: true });
       const session = this.#session;
       const loaded = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL })
         .then((m) => ({ m }), (e: unknown) => ({ error: e as Error }));
@@ -2673,8 +2754,10 @@ export class UiServer {
       if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
       if (typeof body?.title !== 'string') return send(res, 400, { error: '見出しがありません' });
       const renamed = await this.#conversations.rename(id, body.title)
-        .then((t) => ({ title: t }), (e: unknown) => ({ error: (e as Error).message }));
-      if ('error' in renamed) return send(res, 400, renamed);
+        .then((t) => ({ title: t }), (e: unknown) => ({ error: e as Error }));
+      // 無い会話は 404。読めなかった理由の文にはファイルの道が入るので、そのまま画面へ返さない
+      if ('error' in renamed && isAbsent(renamed.error)) return send(res, 404, { error: 'この会話はありません（消されています）' });
+      if ('error' in renamed) return send(res, 400, { error: '見出しを付け替えられませんでした' });
       this.broadcast({ type: 'conversations' });
       return send(res, 200, { id, title: renamed.title });
     }
@@ -2690,10 +2773,17 @@ export class UiServer {
        */
       const busy = session !== undefined && this.#mainBusy(session);
       if ((busy && (id === this.#conversationId || id === this.#loadedId)) || id === this.#runningId
-        || this.#side.has(id) || this.#queue.some((q) => q.conversationId === id)) {
+        || this.#side.has(id) || this.#queue.some((q) => q.conversationId === id) || this.#preparingFor.has(id)) {
         return send(res, 409, { error: 'いま作業中です。消すのは、終わってからにしてください' });
       }
-      await this.#conversations.remove(id);
+      // 消している間は本体の手を押さえる（その間に来た送りが、まだ在る会話を見て通り、消し終えた会話へ走った）
+      this.#prep += 1;
+      try {
+        await this.#conversations.remove(id);
+      } finally {
+        this.#prep -= 1;
+        this.#bg(this.#maybeDrain(), '順番待ちの取り出しが落ちました');
+      }
       // 見ている会話を消したら、見ている所だけトップへ。本体を空にするのは、消した会話が本体に載っているときだけ（下）。
       // 前は本体に別の会話が載っていても空にし、その会話の書けていないやりとりまで黙って消した
       if (id === this.#conversationId) this.#conversationId = undefined;
@@ -2725,6 +2815,10 @@ export class UiServer {
       if (!ID_SHAPE.test(id)) return send(res, 400, { error: '会話の名前が正しくありません' });
       // **画面へ 16MB を投げない。**丸ごと返すと、開いた瞬間に固まる
       // （半年続けた会話で JSON が 5.5MB になった）。後ろから読む。
+      // 無い（消された）会話を空の会話として返さない。読めない会話の理由に、ファイルの道を入れない（`/select` と同じ答え方）
+      const lookup = await this.#conversations.head(id).then(() => undefined, (e: unknown) => e as NodeJS.ErrnoException);
+      if (lookup && isAbsent(lookup)) return send(res, 404, { error: 'この会話はありません（消されています。消した会話は「戻す」から戻せます）', gone: true });
+      if (lookup) return send(res, 503, { error: `この会話の記録を読めません（${lookup.code ?? '理由不明'}）。少し置いてからもう一度開いてください` });
       const shown = await this.#conversations.load(id, { tailBytes: UiServer.RESTORE_TAIL });
       return send(res, 200, { id, messages: shown, inFlight: this.#inFlightFor(id), approvals: this.#waitingApprovals() });
     }
@@ -2866,7 +2960,10 @@ export class UiServer {
       if (!got.ok && got.path === undefined) return send(res, 400, { error: got.error ?? '外せませんでした' });
       // 繋ぐ側と同じく、畳まずにその場で止める。作業中でも効く。
       this.#session?.services.onDisconnected?.(id);
-      this.#opts.config.mcp = { ...this.#opts.config.mcp, servers };
+      // 待つ間に別のタブが繋いだ分を消さないよう、今の設定から外す（待つ前に写した入れ物を書き戻していた）
+      const now = { ...this.#opts.config.mcp?.servers };
+      delete now[id];
+      this.#opts.config.mcp = { ...this.#opts.config.mcp, servers: now };
       return send(res, 200, { id, removed: true });
     }
 
@@ -2959,6 +3056,9 @@ export class UiServer {
     }
 
     if (path === '/api/events') {
+      // 流れを開くのは GET だけ。止めた後に来たものは開かない（止めるときに閉じる一覧から漏れ、閉じられずに残っていた）
+      if (req.method !== 'GET') return send(res, 405, { error: 'GET で開いてください' });
+      if (this.#stopped) return send(res, 503, { error: '止めています' });
       res.writeHead(200, {
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache',
@@ -3097,10 +3197,12 @@ export class UiServer {
     if (!touchesRuntime && typeof body?.workRoot !== 'string') {
       return send(res, 400, { error: '何を変えるのか分かりません' });
     }
-    const dir = typeof body?.modelsDir === 'string' ? body.modelsDir.trim() : '';
+    const dir = typeof body?.modelsDir === 'string' ? unquotePath(body.modelsDir) : '';
     // 使う GGUF。名前に道を混ぜさせない（保存先の中の名前だけ）。
     const model = typeof body?.model === 'string' ? body.model.trim() : undefined;
     if (model && /[\\/]/.test(model)) return send(res, 400, { error: 'モデルは保存先の中の名前で指定してください' });
+    // `..` や点だけの名前は、保存先の外（上のフォルダ）を指す
+    if (model && /^[.\s]+$/.test(model)) return send(res, 400, { error: 'モデルは保存先の中のファイルの名前で指定してください' });
     // 打った場所は見るだけ。既定の場所は、無ければ作る。
     // 「GGUF を置くだけ」と言っておいて保存先が無いのは、案内になっていない。
     const dirState = !touchesRuntime
@@ -3114,7 +3216,7 @@ export class UiServer {
     let workNote: string | undefined;
     let workRestart = false;
     if (typeof body?.workRoot === 'string') {
-      const want = body.workRoot.trim();
+      const want = unquotePath(body.workRoot);
       const before = this.#workRoot();
       await saveWorkRoot(want);
       if (want) {
@@ -3164,16 +3266,25 @@ export class UiServer {
     const sameRuntime = kind === (rcNow.kind ?? 'inproc') && (dir || modelsDir()) === (rcNow.modelsDir ?? modelsDir());
     if (model !== undefined && sameRuntime && (model || undefined) !== rcNow.model) {
       const live = this.#session;
-      if (live && this.#busyNow(live)) {
+      // 読み込みの最中（起動時の先読み・最初の送りの支度）も作業中に数える。読み終えるまで降ろす先に載らないので、降ろせないまま
+      // 前のモデルが載り、次の送信も前のモデルで答えた（画面は選んだモデルを名乗った）
+      if ((live && this.#busyNow(live)) || this.#prep > 0 || this.#preloading || this.#loading) {
         modelRestart = true;
       } else {
-        this.#opts.config.runtime = { ...rcNow, ...(model ? { model } : {}) };
-        if (!model) delete this.#opts.config.runtime.model;
-        const runtime = this.#runtime;
-        if (runtime?.id === 'inproc') {
-          for (const ref of runtime.loaded()) await runtime.unload(ref).catch(() => undefined);
+        // 降ろして畳むまで本体の手を押さえる（降ろす待ちの間に来た送りが、古い本体で走り出し、直後に畳まれて途中で切れた）
+        this.#prep += 1;
+        try {
+          this.#opts.config.runtime = { ...rcNow, ...(model ? { model } : {}) };
+          if (!model) delete this.#opts.config.runtime.model;
+          const runtime = this.#runtime;
+          if (runtime?.id === 'inproc') {
+            for (const ref of runtime.loaded()) await runtime.unload(ref).catch(() => undefined);
+          }
+          if (live) await this.#retireSession(live);
+        } finally {
+          this.#prep -= 1;
+          this.#bg(this.#maybeDrain(), '順番待ちの取り出しが落ちました');
         }
-        if (live) await this.#retireSession(live);
         this.broadcast({ type: 'log', level: 'info', text: model ? `モデルを ${model} にしました。次の送信で読みます` : 'モデルの指定を外しました。次の送信で選び直します' });
         this.broadcast({ type: 'stateChanged' });
       }
@@ -3627,12 +3738,30 @@ export class UiServer {
       item = await this.#unfinished.due(Date.now(), resolvePath(session.root));
     } catch { return false; }
     if (!item) return false;
+    /*
+     * 続きを始める（#drive を呼ぶ）まで、本体の手を押さえる。押さえずにいたので、割る問い合わせを待つ間に来た送りが空いた本体で
+     * 走り出し、その後でこちらが載っている会話を入れ替え、走っている依頼の残りが別の会話の文脈で進み、別のファイルへ書かれた
+     */
+    this.#prep += 1;
+    let began = false;
+    try {
+      const how = await this.#resumeHeld(session, item);
+      began = how === 'started';
+      // 始めずに済ませた回（取り消された・止めた・閉じた・読めない）も、この見回りの仕事はした。考えごとへは進まない
+      return how !== 'none';
+    } finally {
+      this.#prep -= 1;
+      if (!began) this.#bg(this.#maybeDrain(), '順番待ちの取り出しが落ちました');
+    }
+  }
 
+  /** やり残しの続き。走らせた（started）・走らせずに済ませた（settled）・手を付けなかった（none） */
+  async #resumeHeld(session: Session, item: Unfinished): Promise<StepOutcome | 'none'> {
     // モデルが無ければ（まだ読んでいない場合も含めて）、続けようがない。
     // **ここでも読み込みは始めない。**控えはそのまま残る。
     if (await this.#readyToThink(false)) {
       this.#idleHoldUntil = Date.now() + 10 * 60_000;
-      return false;
+      return 'none';
     }
 
     // **黙って動き出さない。**知らないうちに作業場が変わるのが、いちばん怖い。
@@ -3646,8 +3775,20 @@ export class UiServer {
     // 一度落ちたものを、もう一度そのまま渡しても通らない。歩ける大きさに
     // 割って、一段ずつ進む。割り方は、そのモデルが実際にこなせた歩幅から決める。
     if (item.attempts >= 1) {
-      const stepped = await this.#driveStep(session, item);
-      if (stepped) return true;
+      let stepped: StepOutcome | 'whole';
+      try {
+        stepped = await this.#driveStep(session, item);
+      } catch (e) {
+        // 段取りの記録を書けない（ディスクが一杯・掴まれている）。続きの状態を戻し、10 分は割り直さない（戻さずにいたので「続き」が
+        // 出たまま、見回りのたびに割る問い合わせを繰り返し、モデルを塞いだ）
+        this.#resuming = undefined;
+        this.#idleHoldUntil = Date.now() + 10 * 60_000;
+        this.broadcast({ type: 'log', level: 'warn', text: `段取りの記録を書けないので、やり残しの続きを止めます（${(e as Error).message}）` });
+        return 'settled';
+      }
+      // 割れなかった（whole）ときだけ丸ごと進める。取り消された・止めた・閉じた（settled）を「割れなかった」と読み、
+      // 取り消された依頼を丸ごと走らせていた
+      if (stepped !== 'whole') return stepped;
     }
     // 元の会話へ戻して続ける。別の会話で続けると、話が二つに割れる。
     // 比べるのは本体に載っている会話（`#loadedId`）。載せ替えは `#loadInto` を通す（前は履歴だけ入れ替えて載っている会話の名前を
@@ -3659,10 +3800,17 @@ export class UiServer {
         // 回数は数えない（数えると、読めないだけで諦める方へ進む）。次の見回りでまた試す
         this.broadcast({ type: 'log', level: 'warn', text: `やり残しの会話の記録を読めないので、今回は続けません（${loaded.message}）` });
         this.#resuming = undefined;
-        return true;
+        // 後ろへ回す（回さないと、見回りのたびに同じ一件を選び、後ろのやり残しも考えごとも回らなかった）
+        await this.#unfinished.postpone(item.id).catch(() => undefined);
+        return 'settled';
       }
       // 見ている会話（`#conversationId`）は替えない。替えていたので、画面が黙って再開した会話へ移り、次に打った分もそちらへ入った
       this.broadcast({ type: 'conversations' });
+    }
+    // 載せ替えや割る問い合わせを待つ間に取り消されていたら、走らせない
+    if (!(await this.#stillUnfinished(item.id))) {
+      this.#resuming = undefined;
+      return 'settled';
     }
     // 続きの文はこちらが組み立てたもの。利用者の言葉として判じない。
     this.#bg(
@@ -3672,7 +3820,7 @@ export class UiServer {
         .finally(() => { this.#resuming = undefined; }),
       'やり残しの続きが落ちました',
     );
-    return true;
+    return 'started';
   }
 
   /**
@@ -3710,16 +3858,18 @@ export class UiServer {
    * 割れなかったら false を返す（**割れないことは、進めない理由にならない**。
    * 呼ぶ側が、これまでどおり丸ごと渡す道へ落ちる）。
    */
-  async #driveStep(session: Session, item: { id: string; request: string; note: string }): Promise<boolean> {
+  async #driveStep(session: Session, item: { id: string; request: string; note: string }): Promise<StepOutcome | 'whole'> {
     const model = session.candidates[0] ?? '(不明)';
     const stride = await this.#stride.get(model, session.contextTokens);
 
     // 段取りの記録を読めないときは、今回は進めない。「無い」と取り違えると、立て直して二つ目を作る・
     // 残っている段を「無い」と読んで閉じ、やり残しを「済んだ」にする（下の next）。
-    const unreadable = (e: unknown): true => {
+    const unreadable = async (e: unknown): Promise<'settled'> => {
       this.broadcast({ type: 'log', level: 'warn', text: `段取りの記録を読めませんでした（${(e as Error).message}）。今回は進めません` });
       this.#resuming = undefined;
-      return true;
+      // 後ろへ回す（同じ一件で見回りが止まり続けないように。回数は数えない）
+      await this.#unfinished.postpone(item.id).catch(() => undefined);
+      return 'settled';
     };
     let goal: Goal | undefined;
     try {
@@ -3744,14 +3894,18 @@ export class UiServer {
         this.broadcast({ type: 'log', level: 'info', text: '止めたので、段に割るのをやめました' });
         // 続きの状態も戻す（戻さないと、仕事の一覧に「やり残しの続き」が出たまま、やり直しの口も断り続ける）
         this.#resuming = undefined;
-        return true;
+        return 'settled';
       }
       if (steps.length === 0) {
         this.broadcast({ type: 'log', level: 'warn', text: '段に割れませんでした。丸ごと進めます。' });
-        return false;
+        return 'whole';
       }
       // 割っている間（モデルへの問い合わせ）に取り消されていたら、立てない。立てると、取り消した依頼の段取りが残る。
-      if (!(await this.#stillUnfinished(item.id))) return false;
+      // 丸ごとにも進めない（「割れなかった」と同じ値を返していたので、取り消した依頼を丸ごと走らせた）
+      if (!(await this.#stillUnfinished(item.id))) {
+        this.#resuming = undefined;
+        return 'settled';
+      }
       goal = await this.#goals.open(item.request, steps);
       this.broadcast({ type: 'unfinished' });
     }
@@ -3773,7 +3927,7 @@ export class UiServer {
         await this.#unfinished.done(item.id);
         this.broadcast({ type: 'unfinished' });
         this.#resuming = undefined;
-        return true;
+        return 'settled';
       }
 
       // **手が付かなかった段があるなら、丸ごと投げ直さない。**
@@ -3790,7 +3944,7 @@ export class UiServer {
       });
       this.broadcast({ type: 'unfinished' });
       this.#resuming = undefined;
-      return true;
+      return 'settled';
     }
 
     const p = progressOf(goal);
@@ -3810,7 +3964,7 @@ export class UiServer {
         .finally(() => { this.#resuming = undefined; this.#step = undefined; }),
       '一歩ずつの実行が落ちました',
     );
-    return true;
+    return 'started';
   }
 
   /**
@@ -3824,10 +3978,23 @@ export class UiServer {
     // 置いている間に本体を畳んでいたら（作業場を変えた等）、畳んだ本体では進めない。やり残しは残っているので、見回りが拾う
     if (session !== this.#session) return;
     // 前の段の終わりから少し置いて呼ばれる。その間に取り消されていたら、進めない（段取りを立て直さない）。
-    if (!(await this.#stillUnfinished(item.id))) return;
-    this.#resuming = item.id;
-    const started = await this.#driveStep(session, item).catch(() => false);
-    if (!started) this.#resuming = undefined;
+    // 段を始めるまで本体の手を押さえる（やり残しの再開と同じ。割る問い合わせを待つ間に来た送りと、載っている会話を取り合った）
+    this.#prep += 1;
+    let started = false;
+    try {
+      if (!(await this.#stillUnfinished(item.id))) return;
+      this.#resuming = item.id;
+      const how = await this.#driveStep(session, item).catch((e: unknown) => {
+        this.broadcast({ type: 'log', level: 'warn', text: `次の段を始められませんでした（${(e as Error).message}）` });
+        return 'settled' as const;
+      });
+      // 割れなかった（whole）は、続きの段では丸ごとに進めない（次の見回りが拾う）
+      started = how === 'started';
+      if (!started) this.#resuming = undefined;
+    } finally {
+      this.#prep -= 1;
+      if (!started) this.#bg(this.#maybeDrain(), '順番待ちの取り出しが落ちました');
+    }
   }
 
   /**
@@ -4155,6 +4322,8 @@ export class UiServer {
       this.#planning = false;
       this.broadcast({ type: 'busy', busy: false });
       this.broadcast({ type: 'stateChanged' });
+      // 段取りの間に積まれた送りを流す（次の見回りまで「順番待ち」のまま止まって見えた。考えごとの側と同じ）
+      this.#bg(this.#maybeDrain(), '順番待ちの取り出しが落ちました');
     }
   }
 

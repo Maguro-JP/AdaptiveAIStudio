@@ -17,11 +17,15 @@ const timeFmt = new Intl.DateTimeFormat('sv-SE', {
 
 /** YYYY-MM-DD（JST）。 */
 export function jstDate(at: number | string | Date = Date.now()): string {
-  return dateFmt.format(new Date(at));
+  // 読めない時刻（記録の壊れた値）で投げない。投げると、その一件で一覧ごと出せなくなる
+  const d = new Date(at);
+  return Number.isNaN(d.getTime()) ? '（日付不明）' : dateFmt.format(d);
 }
 
 /** YYYY-MM-DD HH:MM:SS（JST）。 */
 export function jstDateTime(at: number | string | Date = Date.now()): string {
   // sv-SE は "2026-09-01 12:34:56" の形で出す。区切りを他の言語に依らせない。
-  return timeFmt.format(new Date(at)).replace('T', ' ');
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return '（日時不明）';
+  return timeFmt.format(d).replace('T', ' ');
 }

@@ -296,8 +296,12 @@ export const PANELS = {
     /** 一つの大きさの上限（本体と同じ）と、一度に渡せる数。超えたものは送る前に断る（全部受け取ってから断ると、その間ずっと待たせる）。 */
     const ATTACH_MAX = 25 * 1024 * 1024;
     const ATTACH_AT_ONCE = 20;
+    // 渡している途中の数。途中で送ると添付なしで届き、渡し終えた分が次の依頼に付いていった
+    let handing = 0;
     const take = async (all) => {
       const files = [...all];
+      handing += 1;
+      try {
       if (files.length > ATTACH_AT_ONCE) {
         note('warn', `一度に渡せるのは ${ATTACH_AT_ONCE} 件までです（${files.length} 件のうち、残りは渡していません）`);
         files.length = ATTACH_AT_ONCE;
@@ -324,6 +328,9 @@ export const PANELS = {
         pending.remove();
         drawTray();
       }
+      } finally {
+        handing -= 1;
+      }
     };
 
     clip.onclick = () => picker.click();
@@ -331,10 +338,13 @@ export const PANELS = {
 
     // 落とす。画面のどこに落としても受ける。狙わせない。
     let dragDepth = 0;
-    wrap.ondragenter = (e) => { e.preventDefault(); dragDepth++; wrap.classList.add('dropping'); };
-    wrap.ondragover = (e) => { e.preventDefault(); };
-    wrap.ondragleave = () => { if (--dragDepth <= 0) wrap.classList.remove('dropping'); };
+    // ファイルのときだけ受ける（文字のドラッグまで既定を取り消し、選んだ文字を欄へ落とせなかった。パネルの並べ替えにも落とす見た目が付いた）
+    const carriesFiles = (e) => [...(e.dataTransfer?.types ?? [])].includes('Files') || (e.dataTransfer?.files?.length ?? 0) > 0;
+    wrap.ondragenter = (e) => { if (!carriesFiles(e)) return; e.preventDefault(); dragDepth++; wrap.classList.add('dropping'); };
+    wrap.ondragover = (e) => { if (carriesFiles(e)) e.preventDefault(); };
+    wrap.ondragleave = (e) => { if (carriesFiles(e) && --dragDepth <= 0) wrap.classList.remove('dropping'); };
     wrap.ondrop = (e) => {
+      if (!carriesFiles(e)) return;
       e.preventDefault();
       dragDepth = 0;
       wrap.classList.remove('dropping');
@@ -345,6 +355,8 @@ export const PANELS = {
     input.onpaste = (e) => {
       const files = [...(e.clipboardData?.files ?? [])];
       if (files.length === 0) return; // ただの文字。そのまま貼らせる
+      // 文字も一緒に来ていれば、文字として貼る（Excel や Word から写すと絵も付いてきて、表の文字が絵の添付になっていた。実機では確かめていない）
+      if (e.clipboardData?.getData?.('text/plain')) return;
       e.preventDefault();
       void take(files);
     };
@@ -381,9 +393,14 @@ export const PANELS = {
     };
     const jump = el('button', 'jump', '新しい動きへ ↓');
     jump.hidden = true;
-    jump.onclick = () => { pinned = true; jump.hidden = true; log.scrollTop = log.scrollHeight; };
+    jump.onclick = () => { pinned = true; jump.hidden = true; toBottom(); };
     wrap.append(jump);
-    const follow = () => { if (pinned) log.scrollTop = log.scrollHeight; else jump.hidden = false; };
+    // 一度で下へ飛ぶ（滑らかに動かすと、動いている途中のスクロールの知らせで「下に居ない」と判じ、以後追いかけなくなった）
+    const toBottom = () => {
+      if (typeof log.scrollTo === 'function') log.scrollTo({ top: log.scrollHeight, behavior: 'instant' });
+      else log.scrollTop = log.scrollHeight;
+    };
+    const follow = () => { if (pinned) toBottom(); else jump.hidden = false; };
 
     /*
      * **まだ何も無いときに、何を書けばいいか分からない。**
@@ -547,6 +564,7 @@ export const PANELS = {
       const text = input.value.trim();
       // 添えただけで送れる。「この画面を見て」だけで用が足りることがある。
       if (!text && attached.size === 0) return;
+      if (handing > 0) { note('warn', '添付を渡し終えるまで待ってから送ってください（文はそのまま残してあります）'); return; }
       // 送った時点で見ている会話（null はトップ）。返事を待つ間に別の会話を選び直されても、送り先と受け取り方はこれで決める
       const from = ctx.conversationId ? (ctx.conversationId() ?? null) : null;
       input.value = '';
@@ -560,10 +578,17 @@ export const PANELS = {
       add(asked);
 
       const ids = [...attached.keys()];
+      // 断られたときに戻すための写し。前は送る前に空にしたまま戻さず、打った文だけが欄に残り、送り直すと添付なしで届いていた
+      const held = [...attached.entries()];
+      const putBack = () => {
+        for (const [id, item] of held) if (!attached.has(id)) attached.set(id, item);
+        drawTray();
+      };
       attached.clear();
       drawTray();
 
-      const isPlan = text.startsWith('/plan');
+      // `/plan` そのものだけ（前方一致だと `/planner` の skill や打ち間違いの `/plans` まで段取りへ送り、頭を削っていた。端末の側と同じ）
+      const isPlan = /^\/plan(\s|$)/.test(text);
       /*
        * **送れなかったことを、画面に出す。**
        *
@@ -595,6 +620,7 @@ export const PANELS = {
         });
       } catch (e) {
         ctx.adopt?.(null);
+        putBack();
         note('bad', `送れませんでした（${e?.message ?? e}）。`
           + '本体が落ちているかもしれません。画面を開き直してください。');
         return;
@@ -607,7 +633,10 @@ export const PANELS = {
       ctx.adopt?.(from === null ? (body.conversationId ?? null) : null);
       // 見ていた会話が、別のタブで消されていた。トップへ戻す（送るたびに断られ続けないため）
       if (r.status === 404 && from !== null) ctx.conversationGone?.(from);
-      if (!r.ok) note('bad', body.error ?? `送れませんでした（${r.status}）`);
+      if (!r.ok) {
+        putBack();
+        note('bad', body.error ?? `送れませんでした（${r.status}）`);
+      }
     };
 
     form.onsubmit = (e) => { e.preventDefault(); void submit(); };
@@ -674,6 +703,8 @@ export const PANELS = {
       }
       try {
         const body = await getJson(`/api/conversations/messages?id=${encodeURIComponent(id)}`);
+        // 取っている間に別の会話を選んでいたら描かない（遅れて返った前の会話の中身で、選んだ会話の欄を上書きしていた）
+        if (ctx.conversationId?.() !== id) return;
         if (body.messages?.length) ctx.showHistory(body.messages);
         if (body.inFlight) ctx.showInFlight?.(body.inFlight);
         // 待っている承認。押す口が無いと、本体は 10 分待ち続ける。
@@ -724,6 +755,9 @@ export const PANELS = {
     ctx.showHistory = (messages) => {
       log.textContent = '';
       drawn++;
+      // 別の会話は下から見せる（前の会話で読み戻した状態のまま判じ、途中の位置から開いていた）
+      pinned = true;
+      jump.hidden = true;
       /*
        * **消したことを、案内の側にも知らせる。**`textContent = ''` は案内の節ごと
        * 消すが、`guided`（出したかどうか）は残る。残ったままだと、次に出そうとしても
@@ -1141,7 +1175,11 @@ export const PANELS = {
         box.replaceChildren(ok
           ? el('div', approved ? 'good' : 'dim', `${what} → ${said}`)
           : el('div', 'dim', `${what} → 送れませんでした（${why}）`));
+        // 届かなかったときは押し直せるようにする（ボタンを消したままで、本体は 10 分待ってから断っていた）。
+        // 404 は承認がもう終わっている（押し直しても同じ）
+        if (!ok && !/^404$|終わ/.test(why)) { unsent = true; mark.open = true; box.append(menu); }
       };
+      let unsent = false;
       yes.onclick = () => { void answer(true); };
       no.onclick = () => { void answer(false); };
       if (all) all.onclick = () => { void answer(true, true); };
@@ -1152,7 +1190,8 @@ export const PANELS = {
       add(box);
       ctx.on('approvalDone', (d) => {
         if (d.id === e.id) mark.open = false;
-        if (d.id === e.id && box.querySelector('button')) {
+        // 送れなかったと出ている箱も書き換える（本体が実は受けていたとき、「送れませんでした」が残り続けた）
+        if (d.id === e.id && (box.querySelector('button') || unsent)) {
           box.replaceChildren(el('div', 'dim', `${what} → ${d.approved ? '許可' : '拒否'}`));
         }
       });
@@ -1210,10 +1249,12 @@ export const PANELS = {
 
     draw();
     ctx.on('jobs', (e) => { jobs = Array.isArray(e.jobs) ? e.jobs : []; draw(); });
+    const myGen = ctx.gen?.();
     const tick = setInterval(() => {
-      // 外された（描き直しで捨てられた）パネルの時計を、回し続けない。
-      if (!body.isConnected) { clearInterval(tick); return; }
-      if (jobs.some((j) => j.state === 'running')) draw();
+      // 描き直しで捨てられたパネルの時計を、回し続けない。捨てられたかは世代で見る（タブの中に隠れた中身も DOM から外れるので、
+      // 外れたかで止めると、隠れていたパネルの「経過」はタブを開いても二度と動かなかった）
+      if (ctx.gen ? ctx.gen() !== myGen : !body.isConnected) { clearInterval(tick); return; }
+      if (body.isConnected && jobs.some((j) => j.state === 'running')) draw();
     }, 1000);
     (async () => {
       try {
@@ -1351,6 +1392,9 @@ export const PANELS = {
     const render = (s) => {
       lastState = s;
       body.replaceChildren();
+      // 読めなかったのを「まだ何も覚えていません」と言わない（無いのと読めないのは別の話）
+      if (s.memoryUnreadable) body.append(el('div', 'warn', `記憶のファイルを読めませんでした（${s.memoryUnreadable}）。覚えたものは消えていません。読めるようになれば戻ります`));
+      if (s.memory.length === 0 && s.memoryUnreadable) return body.append(...skippedNote(s), ...forgottenNote());
       if (s.memory.length === 0) return body.append(empty('まだ何も覚えていません。'), ...skippedNote(s), ...forgottenNote());
       body.append(...skippedNote(s), ...forgottenNote()); // 一覧の上に出す（下だと、60 件の一覧をたどらないと見えない）
       // **嫌がられたことを、いちばん上に。**これだけは話題に関係なく効く。
@@ -1378,10 +1422,13 @@ export const PANELS = {
         const drop = el('button', 'ghost tiny', '忘れる');
         drop.title = 'この覚えを消す';
         drop.onclick = async () => {
+          // 返事が来るまで押させない（二本目は見つからずに断られ、忘れたのに「消せませんでした」と出た）
+          if (drop.disabled) return;
+          drop.disabled = true;
           try {
             const r = await fetch(`/api/memory?id=${encodeURIComponent(m.id)}`, { method: 'DELETE' });
             const got = await r.json().catch(() => ({}));
-            if (!r.ok) return alert(got.error ?? '消せませんでした');
+            if (!r.ok) { drop.disabled = false; return alert(got.error ?? '消せませんでした'); }
             // 題は本体が実際に忘れたものから取る（一覧は別に読み直したもので、ずれていることがある）
             forgotHere.set(m.id, m);
             hideForgotten = false;
@@ -1394,6 +1441,7 @@ export const PANELS = {
               ? { ...next, memory: next.memory.filter((x) => x.id !== m.id), memorySize: next.memorySize - 1 }
               : next);
           } catch (e) {
+            drop.disabled = false;
             alert(`消せませんでした（${e?.message ?? e}）`);
           }
         };
@@ -1424,6 +1472,8 @@ export const PANELS = {
     const refused = new Map();
     const REFUSED_SHOWN_MS = 15_000;
 
+    let thinking = false;
+    let thinkSaid = { text: '', at: 0 };
     const draw = async () => {
       const r = await getJson('/api/proposals').catch(() => null);
       body.replaceChildren();
@@ -1485,15 +1535,25 @@ export const PANELS = {
         foot.append(el('span', 'warn', `溜まりすぎたので、古い ${r.dropped} 件を落としました`));
       }
       if (r.due.length > 0) foot.append(el('span', 'warn', `未了の日課: ${r.due.join(', ')}`));
+      /*
+       * 送っている最中か・断られた理由は、パネルの側に持つ。描くたびにボタンを作り直すので、ボタンに持たせると、返事を待つ間の
+       * 描き直し（5 秒ごとの状態の読み直し）で押せるボタンに戻り、二本目が「いま別の作業をしています」で断られた。理由も次の描き直しで消えた
+       */
       const now = el('button', 'ghost tiny', 'いま考えさせる');
-      const said = el('span', 'dim', '');
+      now.disabled = thinking;
+      const sayNow = Date.now() - thinkSaid.at < REFUSED_SHOWN_MS ? thinkSaid.text : '';
+      const said = el('span', sayNow ? 'warn' : 'dim', sayNow);
       now.onclick = async () => {
-        now.disabled = true; // 二度押すと、二本目が「いま別の作業をしています」で断られ、失敗に見える
+        if (thinking) return;
+        thinking = true;
+        thinkSaid = { text: '', at: 0 };
+        now.disabled = true;
         const got = await tell('/api/think', undefined, '考えさせられませんでした');
-        now.disabled = false;
+        thinking = false;
         // 作業中は断られる（409）。黙って押せなかったことにしない
-        if (!got.ok) { said.className = 'warn'; said.textContent = got.error; return; }
-        setTimeout(draw, 800);
+        if (!got.ok) thinkSaid = { text: got.error, at: Date.now() };
+        void draw();
+        if (got.ok) setTimeout(draw, 800);
       };
       foot.append(now, said);
       body.append(foot);
@@ -1783,6 +1843,8 @@ export const PANELS = {
     let upTo = -1;
     const show = (e) => {
       if (typeof e.seq === 'number') {
+        // 1 が来たら、本体が立ち上げ直して数え直したとみなす（前の番号のまま比べ、新しい行を全部捨てていた）
+        if (e.seq === 1 && upTo > 1) upTo = 0;
         if (e.seq <= upTo) return;
         upTo = e.seq;
       }
@@ -1869,6 +1931,9 @@ export const PANELS = {
       if (j.walkDeep) notes.push('深い所は見ていません');
       if (j.tooBig > 0) notes.push(`大きすぎて開いていないファイルが ${j.tooBig} 個あります`);
       if (j.unreadable > 0) notes.push(`二進のため見ていないファイルが ${j.unreadable} 個あります`);
+      if (j.failed > 0) notes.push(`読めずに見ていないファイルが ${j.failed} 個あります`);
+      if (j.unreadableDirs > 0) notes.push(`中を見られないフォルダが ${j.unreadableDirs} 個あります`);
+      if (j.aborted) notes.push('時間内に終わらなかったので、途中までしか見ていません');
       if (hits.length === 0) {
         if (j.walkDots > 0) notes.push(`. で始まるもの ${j.walkDots} 個は見ていません`);
         state.textContent = `見つかりませんでした: ${text}${notes.length ? ` — ${notes.join(' / ')}` : ''}`;
@@ -1915,6 +1980,7 @@ export const PANELS = {
     const files = new Map();
     /** 塊・行を戻す。結果だけ言う（戻したあとの差分は本体が流す）。 */
     const revert = async (f, picks, into) => {
+      const drawnAt = draws;
       let r;
       try {
         r = await fetch('/api/revert', {
@@ -1939,12 +2005,23 @@ export const PANELS = {
         return;
       }
       const j = await r.json().catch(() => ({}));
-      into.append(el('div', r.ok ? 'note dim' : 'note warn',
-        r.ok ? (j.reverted ? `戻しました（+${j.added} -${j.removed}）` : '戻すものはありませんでした') : (j.error ?? '戻せませんでした')));
+      const tone = r.ok ? 'note dim' : 'note warn';
+      const text = r.ok ? (j.reverted ? `${f.path}: 戻しました（+${j.added} -${j.removed}）` : `${f.path}: 戻すものはありませんでした`) : (j.error ?? '戻せませんでした');
+      /*
+       * 一言はパネルの側に持ち、描くたびに頭に出す。戻すと本体は返事より先に差分を配り、それを受けた描き直しで
+       * 札ごと作り直すので、札の中に足した一言は外れた古い札に付いて見えなかった
+       */
+      lastSaid = { tone, text };
+      if (draws !== drawnAt) draw();
+      else into.append(el('div', tone, text));
     };
 
+    let lastSaid;
+    let draws = 0;
     const draw = () => {
+      draws += 1;
       body.replaceChildren();
+      if (lastSaid) body.append(el('div', lastSaid.tone, lastSaid.text));
       if (files.size === 0) {
         return body.append(empty('まだ何も書き換えていません。'));
       }
@@ -2147,7 +2224,7 @@ export const PANELS = {
         : `✗ 終了コード ${code}: ${displayOf.get(name) ?? name}（${sec} 秒）`;
     };
 
-    void getJson('/api/tasks').then(({ tasks }) => {
+    void getJson('/api/tasks').then(({ tasks, running: live }) => {
       for (const t of tasks ?? []) {
         displayOf.set(t.id, t.name);
         const b = el('button', '', t.name);
@@ -2182,8 +2259,15 @@ export const PANELS = {
         };
         buttonById.set(t.id, b);
         bar.append(b);
+        // 作り直したパネルでも、本体で回っているものは回っているとして出す（止めるボタンが隠れたまま、止める口が無くなった）
+        if ((live ?? []).includes(t.id)) {
+          running.add(t.id);
+          b.disabled = true;
+          startStatus(t.id);
+        }
       }
       bar.append(stop, stopNote);
+      syncStop();
     }, (e) => {
       // 読めなかったのを黙ると、押す口が一つも無い空のパネルに見える（受けるのは読むところの失敗だけ。組み立ての失敗は受けない）
       bar.append(el('span', 'warn', `作業の一覧を読めませんでした（${e?.message ?? e}）`), stop, stopNote);
@@ -2231,7 +2315,14 @@ export const PANELS = {
       state.textContent = '';
       clearTimeout(saving);
       // 打つたびに送らない。手が止まってから送る。
-      saving = setTimeout(() => { void keep(); }, 600);
+      saving = setTimeout(() => { saving = undefined; void keep(); }, 600);
+    });
+    // 作り直す前に、まだ送っていない分を送る（作り直した欄は古い中身で作られ、そこへ打つと最後に打った分が抜けた中身で上書きした）
+    ctx.onDiscard?.(() => {
+      if (saving === undefined) return;
+      clearTimeout(saving);
+      saving = undefined;
+      void keep();
     });
   },
 
@@ -2790,7 +2881,8 @@ export const PANELS = {
       const text = area.value;
       let at;
       if (back) {
-        at = text.lastIndexOf(q, Math.max(0, area.selectionStart - 1));
+        // 先頭（0）に居るときは前に何も無い。`lastIndexOf(q, 0)` は 0 を返して同じ当たりを選び直し、末尾へ回らなかった
+        at = area.selectionStart > 0 ? text.lastIndexOf(q, area.selectionStart - 1) : -1;
         if (at < 0) at = text.lastIndexOf(q);
       } else {
         at = text.indexOf(q, area.selectionEnd);
@@ -3507,7 +3599,8 @@ export const PANELS = {
      * 入れ替える前の中身は預かって、「元に戻す」で戻せるようにする。
      */
     ctx.applyPatch = (at) => {
-      if (!path || norm(at.path) !== path) return false;
+      // 捨てたエディタ（× で閉じた・作り直した）は、見えない欄を書き換えない
+      if (discarded() || !path || norm(at.path) !== path) return false;
       const head = lineStart(area.value, at.from);
       const tail = lineStart(area.value, at.to);
       const now = area.value.slice(head.at, tail.end);
@@ -3551,7 +3644,8 @@ export const PANELS = {
      * 上限は送る側（`src/ui/server.ts`）で決める。
      */
     ctx.editorNow = () => {
-      if (!path) return null;
+      // 閉じたエディタの場所と選択を、送るたびに付け続けない
+      if (discarded() || !path) return null;
       const before = area.value.slice(0, area.selectionStart);
       const line = before.split('\n').length;
       const picked = area.value.slice(area.selectionStart, area.selectionEnd);

@@ -214,14 +214,22 @@ export function execCommand(
  * 化ける前に少しずらして試す。
  */
 export function decodeOutput(raw: Buffer): string {
+  // 先に utf8 だけを、ずらしながら試す（頭を落とした出力は字の途中から始まる。ずらす前に CP932 として読めてしまうと、
+  // 罫線や棒の並ぶ出力（tree・npm ls）が丸ごと化けて、ASCII の部分まで食われた）
   for (let skip = 0; skip <= 3 && skip < raw.length; skip++) {
-    const r = decodeText(raw.subarray(skip), { utf16: false });
-    if (!r.lossy) return r.text;
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(raw.subarray(skip));
+    } catch { /* ずらして試す */ }
   }
   return decodeText(raw, { utf16: false }).text;
 }
 
 /** 出力の末尾だけを残す。失敗の原因は末尾にあることが多い。 */
 export function tailOf(s: string, max = 6000): string {
-  return s.length > max ? `...(前略)\n${s.slice(-max)}` : s;
+  if (s.length <= max) return s;
+  // 対になる文字の下半分から始まるなら、その一字を落とす（片割れを送らない）
+  let tail = s.slice(-max);
+  const first = tail.charCodeAt(0);
+  if (first >= 0xdc00 && first <= 0xdfff) tail = tail.slice(1);
+  return `...(前略)\n${tail}`;
 }

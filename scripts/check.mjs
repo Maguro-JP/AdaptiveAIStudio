@@ -16,7 +16,7 @@
 import { spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdtempSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
 import { reportEnd } from './not-checked.mjs';
@@ -75,6 +75,8 @@ async function sweep() {
   console.log('\n== 画面を押して回る');
 
   const home = mkdtempSync(join(tmpdir(), 'aas-check-'));
+  // 終わるときに消す（途中の抜け道が多いので、終わり際にまとめて。消していなかったので、回すたびに aas-check- が溜まった）
+  process.on('exit', () => { rmSync(home, { recursive: true, force: true }); });
   /*
    * **使い込んだ状態を作ってから押す。**
    *

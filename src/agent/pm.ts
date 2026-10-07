@@ -110,8 +110,10 @@ export function extractJson(text: string): unknown {
   }
 }
 
+/** 数で書いた id・deps（`"id": 1`・`"deps": [1]`）も文字として受ける（小さいモデルが返す形。捨てていたので、待つべき件が並んで走った） */
 const asString = (v: unknown): string | undefined =>
-  typeof v === 'string' && v.trim().length > 0 ? v.trim() : undefined;
+  typeof v === 'number' && Number.isFinite(v) ? String(v)
+    : typeof v === 'string' && v.trim().length > 0 ? v.trim() : undefined;
 
 /** 文字列一つ（`deps: "t1"`）も一つの配列として受ける（`[]` にしていたので、待つべき件が黙って並列に走った）。 */
 const asStringArray = (v: unknown): string[] =>
@@ -181,8 +183,23 @@ export function repairPlan(raw: unknown, request: string, ctx: PmContext): WorkP
   }
 
   if (items.length > maxItems) {
-    repairs.push(`${items.length} 件は分け過ぎのため、先頭 ${maxItems} 件に絞りました。`);
-    items = items.slice(0, maxItems);
+    /*
+     * 上限を超えた分は捨てずに、最後に残す件へ畳む（捨てていたので、一度も行われないまま「受け取りました」になった）。
+     * 畳んだ件を待っていた件は、畳んだ先を待つ
+     */
+    const kept = items.slice(0, maxItems);
+    const rest = items.slice(maxItems);
+    const last = kept[kept.length - 1]!;
+    const folded = new Set(rest.map((t) => t.id));
+    last.instruction = `${last.instruction}\n\nあわせて、次も引き受けてください:\n${rest.map((t) => `- ${t.instruction}`).join('\n')}`;
+    last.writes = [...new Set([...(last.writes ?? []), ...rest.flatMap((t) => t.writes ?? [])])];
+    last.deps = [...new Set([...(last.deps ?? []), ...rest.flatMap((t) => t.deps ?? [])])].filter((d) => d !== last.id && !folded.has(d));
+    for (const item of kept) {
+      if (item === last) continue;
+      item.deps = [...new Set((item.deps ?? []).map((d) => (folded.has(d) ? last.id : d)))];
+    }
+    repairs.push(`${items.length} 件は分け過ぎのため、${maxItems + 1} 件目から後ろを ${last.id} に畳みました。`);
+    items = kept;
   }
 
   // 依存先の掃除。自分自身・存在しない相手を指していたら外す。
@@ -270,8 +287,14 @@ export function ensureSecondPass(
   // 足す工程の ID も、今ある ID と重ねない（重なると成果を同じ枠で数え、確かめる工程が黙って消える）
   const taken = new Set(items.map((i) => i.id));
   const available = (list: string[]) => list.filter((r) => known.has(r));
-  const checkers = available(CHECK_ROLES);
-  const crosscheckers = available(CROSSCHECK_ROLES);
+  // 確かめる・裏を取る工程は、書けない役職から選ぶ（書ける librarian が先に選ばれ、書き手の錠で全員を止め、確かめるはずの工程が書き換えまでできた）。
+  // 書けない役職が一人もいなければ、前と同じ並びから選ぶ
+  const readOnly = (list: string[]) => {
+    const kept = list.filter((r) => !(access[r] ?? []).includes('write'));
+    return kept.length > 0 ? kept : list;
+  };
+  const checkers = readOnly(available(CHECK_ROLES));
+  const crosscheckers = readOnly(available(CROSSCHECK_ROLES));
 
   const added: PlanItem[] = [];
   const ceiling = (ctx.maxItems ?? 8) * 2;

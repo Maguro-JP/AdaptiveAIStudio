@@ -21,7 +21,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { hostname, tmpdir } from 'node:os';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { branchFor, pickToTake, whyNotSend, whyNotTake, jst } from './handoff-plan.mjs';
@@ -169,20 +169,26 @@ console.log(`${mine} へ送ります。`);
  */
 let send = 'HEAD';
 if (dirty) {
-  const tmpIndex = join(mkdtempSync(join(tmpdir(), 'aas-handoff-')), 'index');
+  // 一時的な index のフォルダは、使い終えたら消す（消していなかったので、送るたびに temp に一つずつ残っていた）
+  const tmpDir = mkdtempSync(join(tmpdir(), 'aas-handoff-'));
+  const tmpIndex = join(tmpDir, 'index');
   const withTmp = (...a) => execFileSync('git', a, {
     cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...cleanEnv(), GIT_INDEX_FILE: tmpIndex },
   }).trim();
-  withTmp('read-tree', 'HEAD');
-  withTmp('add', '-A', '.');
-  const tree = withTmp('write-tree');
-  const when = jst(new Date().toISOString());
-  // **確かめていないことを、コミットの文にも書く。**取り込む側が見る。
-  send = withTmp('commit-tree', tree, '-p', 'HEAD', '-m',
-    `作業中（${mine} / ${when}）\n\n`
-    + '渡すために作ったコミットです。確かめていません。\n'
-    + '取り込んだ側で npm run check を通してください。');
+  try {
+    withTmp('read-tree', 'HEAD');
+    withTmp('add', '-A', '.');
+    const tree = withTmp('write-tree');
+    const when = jst(new Date().toISOString());
+    // **確かめていないことを、コミットの文にも書く。**取り込む側が見る。
+    send = withTmp('commit-tree', tree, '-p', 'HEAD', '-m',
+      `作業中（${mine} / ${when}）\n\n`
+      + '渡すために作ったコミットです。確かめていません。\n'
+      + '取り込んだ側で npm run check を通してください。');
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
 }
 
 // 自分の作業を置くだけのブランチなので、上書きしてよい。ただし

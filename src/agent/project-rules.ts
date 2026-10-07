@@ -19,7 +19,9 @@
  * **決まりは決まりであって、権限ではない。**ここから読んだ文で検問所（harness）
  * が緩むことはない。置き場に何が書いてあっても、止める規則は止める。
  */
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, readdir, realpath, stat } from 'node:fs/promises';
+import { realSafeResolve } from './tools/paths.ts';
+import { redactSecrets } from '../core/redact.ts';
 import { join } from 'node:path';
 import { estimateTokens, type Count } from './window.ts';
 import { isAbsent } from '../harness/put-back.ts';
@@ -184,10 +186,18 @@ function fitSections(
  */
 export async function readProjectRules(root: string): Promise<ProjectRule[]> {
   const out: ProjectRule[] = [];
-  for (const name of RULE_FILES) {
-    const got = await readOne(root, name);
-    if (got) out.push(got);
-  }
+  // 同じ実体は一度だけ（`CLAUDE.md -> AGENTS.md` のリンクで、同じ決まりを二度載せ、予算を倍使っていた）
+  const seen = new Set<string>();
+  const push = (got: (ProjectRule & { real?: string }) | undefined): void => {
+    if (!got) return;
+    if (got.real !== undefined) {
+      if (seen.has(got.real)) return;
+      seen.add(got.real);
+    }
+    const { real: _real, ...rule } = got;
+    out.push(rule);
+  };
+  for (const name of RULE_FILES) push(await readOne(root, name));
   for (const dir of RULE_DIRS) {
     let names: string[];
     try {
@@ -197,10 +207,7 @@ export async function readProjectRules(root: string): Promise<ProjectRule[]> {
       if (!isAbsent(e)) out.push(unreadableRule(dir, e));
       continue;
     }
-    for (const name of names.filter(isRuleFile).sort()) {
-      const got = await readOne(root, `${dir}/${name}`);
-      if (got) out.push(got);
-    }
+    for (const name of names.filter(isRuleFile).sort()) push(await readOne(root, `${dir}/${name}`));
   }
   return out;
 }
@@ -209,12 +216,25 @@ function isRuleFile(name: string): boolean {
   return name.endsWith('.md') || name.endsWith('.mdc');
 }
 
-async function readOne(root: string, rel: string): Promise<ProjectRule | undefined> {
+/** 決まり書き一つの大きさの上限。これより大きいものは決まりとして読まない（read_file の一度の上限と同じ） */
+const MAX_RULE_BYTES = 400_000;
+
+async function readOne(root: string, rel: string): Promise<(ProjectRule & { real?: string }) | undefined> {
   const path = join(root, rel);
   try {
-    const [text, info] = await Promise.all([readFile(path, 'utf8'), stat(path)]);
+    const info = await stat(path);
+    /*
+     * 読むのは、作業場の中の普通のファイルだけ。取ってきたリポジトリの `AGENTS.md -> ~/.ssh/id_rsa` を辿って、鍵を毎回のシステムプロンプトへ
+     * 入れていた（雲のモデルへそのまま出る）。FIFO は読むところで止まり、それ以降の依頼が全部止まった
+     */
+    const inside = await realSafeResolve(root, rel);
+    if (!inside) return unreadableRule(rel, new Error('リンクの先が作業場の外です'));
+    if (!info.isFile()) return unreadableRule(rel, new Error(info.isDirectory() ? 'EISDIR' : '普通のファイルではありません（FIFO・装置など）'));
+    if (info.size > MAX_RULE_BYTES) return unreadableRule(rel, new Error(`大きすぎます（${info.size} バイト）`));
+    const text = await readFile(path, 'utf8');
     if (text.trim().length === 0) return undefined;
-    return { path: rel, text: text.trim(), at: info.mtimeMs };
+    // 書き込まれた秘密は伏せる（決まり書きに鍵を書いてしまうことはある。毎回の依頼に載るので、そのまま外へ出さない）
+    return { path: rel, text: redactSecrets(text.trim()), at: info.mtimeMs, real: await realpath(path).catch(() => path) };
   } catch (e) {
     // 無い。異常ではない。**在るのに読めないのは「無い」と読まない。**読むと、その作業場の決まりを知らないまま黙って反して書く
     return isAbsent(e) ? undefined : unreadableRule(rel, e);
@@ -254,6 +274,7 @@ export class ProjectRules {
   readonly #root: string;
   #cached: ProjectRule[] = [];
   #checkedAt = 0;
+  #reading: Promise<ProjectRule[]> | undefined;
   /** 見に行く間隔。これより短い間は、前に読んだものをそのまま使う。 */
   readonly #everyMs: number;
 
@@ -263,10 +284,17 @@ export class ProjectRules {
   }
 
   async all(now = Date.now()): Promise<ProjectRule[]> {
+    // 読んでいる最中に来た呼び出しは、読み終わりを待つ（前は読む前の空の決まりを返し、その回は作業場の決まりを知らずに書いた）
+    if (this.#reading) return this.#reading;
     if (now - this.#checkedAt < this.#everyMs) return this.#cached;
     this.#checkedAt = now;
-    this.#cached = await readProjectRules(this.#root);
-    return this.#cached;
+    const reading = readProjectRules(this.#root).then((rules) => { this.#cached = rules; return rules; });
+    this.#reading = reading;
+    try {
+      return await reading;
+    } finally {
+      if (this.#reading === reading) this.#reading = undefined;
+    }
   }
 
   /** いま効いている決まりを、コンテキストウィンドウに収まる形で。入らなかった見出しも返す。 */

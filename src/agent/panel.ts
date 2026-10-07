@@ -40,6 +40,12 @@ export interface PanelOptions {
   maxTokens?: number;
   /** 同時に走らせる人数。VRAMではなくレーンの並列度に合わせる。 */
   parallel?: number;
+  /**
+   * 実際のコンテキストウィンドウとその数え方。渡さないと既定の 8192 で見積もり、読んだファイルを丸ごと返した後でコンテキストウィンドウに収めるときに頭の 1200 字へ縮め、
+   * 「続きは offset で読めます」の案内まで消えて、担当は頭の 30 行ほどだけを見て所見を書いた
+   */
+  contextTokens?: number;
+  count?: (text: string) => number;
 }
 
 /**
@@ -74,6 +80,8 @@ export async function* runPanel(
       maxTurns: opts.maxTurns ?? 10,
       temperature: opts.temperature,
       maxTokens: opts.maxTokens,
+      ...(opts.contextTokens ? { contextTokens: opts.contextTokens } : {}),
+      ...(opts.count ? { count: opts.count } : {}),
       // 合議は調べるだけ。承認を求める場面が来たら断る。
       approve: async () => false,
     });

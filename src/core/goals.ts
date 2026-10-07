@@ -99,8 +99,12 @@ export class Goals {
   }
 
   /** いま開いているもの。古い順。 */
-  async list(): Promise<Goal[]> {
-    return parseGoals(await this.#readText(this.#path).catch(() => '')).open;
+  async list(opts: { strict?: boolean } = {}): Promise<Goal[]> {
+    // strict のときは「無い」だけを空にし、ほか（掴まれている・権限）は投げる（画面が「段取りなし」と取り違えないように）
+    return parseGoals(await this.#readText(this.#path).catch((e: unknown) => {
+      if (opts.strict && !isAbsent(e)) throw e;
+      return '';
+    })).open;
   }
 
   /** 段取りを立てる。 */
@@ -255,7 +259,8 @@ export class Goals {
     const body = live.map((goal) => `${JSON.stringify({ t: 'goal', goal })}\n`).join('') + keptOdd(odd).map((l) => `${l}\n`).join('');
     const tmp = `${this.#path}.${process.pid}.${++tmpSeq}.tmp`;
     try {
-      await writeFile(tmp, body, 'utf8');
+      // 書き切ってから付け替える（付け替えだけが残って電源が落ちると、空や 0 で埋まった記録になり、開いている段取りが全部消えうる）
+      await writeFile(tmp, body, { encoding: 'utf8', flush: true });
       await rename(tmp, this.#path);
     } catch (e) {
       await rm(tmp, { force: true }).catch(() => undefined);

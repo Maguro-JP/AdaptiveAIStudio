@@ -268,7 +268,8 @@ export function seedFrom(
     const fresh = edited.indexOf(f.path);
     if (fresh >= 0) w += 12 - fresh * (6 / Math.max(1, edited.length));
     for (const word of words) {
-      if (word.includes('/') ? low.includes(word) : low.includes(`/${word}`) || low.endsWith(word)) w += 3;
+      // 区切りの境目で当てる（`index.ts` が `code-index.ts` にも当たり、別のファイルまで強い seed にしていた）
+      if (word.includes('/') ? low.includes(word) : low === word || low.endsWith(`/${word}`) || low.includes(`/${word}/`)) w += 3;
     }
     for (const s of f.symbols) if (s.exported && words.has(s.name.toLowerCase())) w += 2;
     if (rare.length > 0) {
@@ -436,24 +437,28 @@ export function renderMap(
   }
 
   const head = '作業場の地図（呼ばれている数の多い順。行番号は定義の位置）:\n';
+  const tailOf = (n: number) => `（ほか ${n} 個のファイルは載せていません。search_text と find_code で探せます）\n`;
+  const blocks = [...byFile].map(([path, defs]) => {
+    // 名前を出していないファイルは、道と一言だけ。行番号を書く先が無い。
+    const first = defs[0]!;
+    return first.name === ''
+      ? `${path}${first.note ? `  — ${first.note}` : ''}\n`
+      : `${path}\n${defs.map((d) => `  ${d.line}: ${d.name}`).join('\n')}\n`;
+  });
+  const costs = blocks.map(count);
+  const whole = count(head) + costs.reduce((a, b) => a + b, 0);
+  // 入り切らないときは、但し書きの分を先に取っておく（後から足すと、詰めた分だけ取り分を超え、システムプロンプトの組み立てで repo map が丸ごと落ちた）
+  const room = whole <= budget.chars ? budget.chars : budget.chars - count(tailOf(blocks.length));
   const lines: string[] = [];
   let used = count(head);
   let left = 0;
-  for (const [path, defs] of byFile) {
-    // 名前を出していないファイルは、道と一言だけ。行番号を書く先が無い。
-    const first = defs[0]!;
-    const block = first.name === ''
-      ? `${path}${first.note ? `  — ${first.note}` : ''}\n`
-      : `${path}\n${defs.map((d) => `  ${d.line}: ${d.name}`).join('\n')}\n`;
-    const cost = count(block);
-    if (used + cost > budget.chars) { left += 1; continue; }
-    used += cost;
+  blocks.forEach((block, i) => {
+    if (used + costs[i]! > room) { left += 1; return; }
+    used += costs[i]!;
     lines.push(block);
-  }
+  });
   if (lines.length === 0) return '';
-  const tail = left > 0
-    ? `（ほか ${left} 個のファイルは載せていません。search_text と find_code で探せます）\n`
-    : '';
+  const tail = left > 0 ? tailOf(left) : '';
   return head + lines.join('') + tail;
 }
 

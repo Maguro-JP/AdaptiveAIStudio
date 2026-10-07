@@ -73,7 +73,7 @@ const PATTERNS: Pattern[] = [
     // 実測: error: invalid argument: --this-flag-does-not-exist
     match: /invalid argument:|unknown argument|unrecognized/i,
     cause: 'llama-server が、渡した指定を理解できていません。',
-    nextStep: 'llama.cpp の版が古い可能性があります。`npm run llama --force` で入れ直すか、'
+    nextStep: 'llama.cpp の版が古い可能性があります。`npm run llama -- --force` で入れ直すか、'
       + '設定の runtime.commandArgs を見直してください。',
     verified: true,
   },
@@ -88,7 +88,7 @@ const PATTERNS: Pattern[] = [
   {
     match: /unknown model architecture|unsupported model/i,
     cause: 'この llama.cpp が、そのモデルの形式に対応していません。',
-    nextStep: '`npm run llama --force` で新しくしてください。'
+    nextStep: '`npm run llama -- --force` で新しくしてください。'
       + '新しい形式のモデルは、古い llama.cpp では読めません。',
     verified: false,
   },

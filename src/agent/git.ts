@@ -29,7 +29,11 @@ export async function inspectGit(root: string): Promise<GitState> {
    * 大小がディスクと索引で違うとき、`-- .` と素の `startsWith` では一件も挙がらず「クリーン」になる（記録の側で一度直した）
    */
   const scope = await workspaceScope(root);
-  const status = await runGit(['status', '--porcelain=v1', '-z', '--branch', '--', scope?.spec ?? '.'], root);
+  /*
+   * 未追跡を挙げるかは利用者の設定（`status.showUntrackedFiles=no`）に任せない（任せると、未追跡の作業を見落として「クリーン」と言った）。
+   * 外されている（ignore）ものも、作業場そのものかその上のフォルダが外されているときだけ数える（親の .gitignore で作業場ごと外されていると、何もコミットされていないのに「クリーン」だった）
+   */
+  const status = await runGit(['status', '--porcelain=v1', '-z', '--branch', '--untracked-files=normal', '--ignored=matching', '--', scope?.spec ?? '.'], root);
   if (status.code !== 0) {
     if (/not a git repository/i.test(status.out)) return { kind: 'notRepo' };
     return { kind: 'unavailable', reason: status.out.trim().split('\n')[0] ?? 'git を実行できません' };
@@ -58,6 +62,13 @@ export async function inspectGit(root: string): Promise<GitState> {
   for (let i = 0; i < parts.length; i += 1) {
     const entry = parts[i]!;
     if (entry.startsWith('##') || entry.length < 4) continue;
+    if (entry.startsWith('!!')) {
+      // 外されているものは、作業場そのものかその上のフォルダのときだけ（中の node_modules などは数えない）
+      const p = entry.slice(3);
+      const k = scope.key(p);
+      if (k === '' || (p.endsWith('/') && scope.fold(scope.prefix).startsWith(scope.fold(p)))) changed.push('./');
+      continue;
+    }
     add(entry.slice(3));
     // 名前を変えた・写したものは、次の欄に元の名前が来る。元の道も変わったものとして数える
     if (/[RC]/.test(entry.slice(0, 2)) && i + 1 < parts.length) {

@@ -30,7 +30,13 @@ try {
   console.log(`\n${broken}\n`);
   console.log('  既定のまま開きます。上の案内に従ってください（名前を変えるときも、消さなければ中身は残ります）。\n');
 }
-const port = Number(process.env.AAS_UI_PORT ?? 4174);
+// 口の番号は 0〜65535 の整数だけ受ける（0 は空いている口に任せる）。数でないと Node の誤りで落ち、スタックだけが出ていた
+const askedPort = process.env.AAS_UI_PORT;
+const portOk = askedPort !== undefined && /^\d+$/.test(askedPort.trim()) && Number(askedPort) <= 65535;
+const port = portOk ? Number(askedPort) : 4174;
+if (askedPort !== undefined && !portOk) {
+  console.log(`  AAS_UI_PORT=${askedPort} は口の番号として読めないので、4174 で開きます（0〜65535 の整数で書いてください）。\n`);
+}
 // AAS_RELAUNCH は start.cmd が付ける。付いていれば、RESTART_EXIT で終わると
 // 起こし直してもらえる。
 //

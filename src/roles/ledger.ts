@@ -132,7 +132,8 @@ export class RoleLedger {
           detail: `${role.codename} の姿勢を調整しました。`,
         });
       }
-      if (before.access.join(',') !== snap.access.join(',')) {
+      // 並びの順は比べない（設定に書いた順のまま並ぶので、並べ替えただけで「権限が変わった」と知らせていた）
+      if ([...before.access].sort().join(',') !== snap.access.join(',')) {
         changes.push({
           at: now, kind: 'authorized', roleId: role.id, codename: role.codename,
           detail: `${role.codename} の権限が ${before.access.join('/')} から ${snap.access.join('/')} に変わりました。`,
@@ -145,6 +146,15 @@ export class RoleLedger {
         changes.push({
           at: now, kind: 'succeeded', roleId: role.id, codename: role.codename,
           detail: `${role.codename} の仕事は ${names.join(' と ')} が引き継ぎました。名簿には残ります。`,
+        });
+      }
+      // 外した引き継ぎ先も知らせる（増えた分しか見ず、外すと割り当ての向き先が変わるのに黙って記録だけを書き換えていた）
+      const dropped = (before.succeededBy ?? []).filter((id) => !(snap.succeededBy ?? []).includes(id));
+      if (dropped.length > 0) {
+        const names = dropped.map((id) => current.get(id)?.codename ?? id);
+        changes.push({
+          at: now, kind: 'succeeded', roleId: role.id, codename: role.codename,
+          detail: `${role.codename} の仕事を ${names.join(' と ')} が引き継ぐのをやめました。`,
         });
       }
 
@@ -242,7 +252,7 @@ function snapshotOf(role: Role): Snapshot {
     name: role.name,
     responsibility: role.responsibility,
     disposition: role.disposition,
-    access: [...role.access],
+    access: [...role.access].sort(),
     succeededBy: role.succeededBy,
   };
   return {

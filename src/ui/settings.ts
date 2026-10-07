@@ -8,9 +8,10 @@
 import { readFile, stat, mkdir } from 'node:fs/promises';
 import { writeWhole } from '../core/journal-file.ts';
 import { inOrder } from '../core/in-order.ts';
-import { dirname } from 'node:path';
+import { withFileLock } from '../core/file-lock.ts';
+import { dirname, resolve } from 'node:path';
 import { configPath } from '../config.ts';
-import { modelsDir } from '../core/home.ts';
+import { modelsDir, modelsDir as defaultModelsDir } from '../core/home.ts';
 import { isAbsent } from '../harness/put-back.ts';
 
 /**
@@ -69,11 +70,12 @@ async function configForEdit(at: string): Promise<Record<string, unknown>> {
 function editConfig<T>(change: (current: Record<string, unknown>, at: string) => { next?: Record<string, unknown>; result: T }): Promise<T> {
   const at = configPath();
   // 書く側（writeWhole）も同じファイルの名前で並ぶので、別の名前で並べる（同じ名前だと、自分の書き込みを待ち続ける）
-  return inOrder(`${at}#edit`, async () => {
+  // 別のプロセス（端末の `aas agent` の connect_service など）とも並ぶ。並ばないと、後から書いた方が先の変更を知らずに上書きして消す
+  return inOrder(`${at}#edit`, () => withFileLock(at, async () => {
     const { next, result } = change(await configForEdit(at), at);
     if (next) await writeConfig(at, next);
     return result;
-  });
+  }));
 }
 
 /** 書く。一時ファイルから付け替える（途中で落ちても、前の設定が残る）。 */
@@ -121,7 +123,9 @@ export async function saveRuntime(
 ): Promise<string> {
   return editConfig((current, at) => {
     const runtime: Record<string, unknown> = { ...objectOr(current.runtime), kind };
-    if (modelsDir) runtime.modelsDir = modelsDir;
+    // 既定の保存先と同じ道は書かない（消す）。画面は既定の道を絶対の道で見せてそのまま送り返すので、書くと既定が固定され、
+    // portable のフォルダを移す・名前を変えると、古い場所を指したまま「GGUF がありません」になっていた（AAS_MODELS_DIR で立てた値も同じ）
+    if (modelsDir && !sameDir(modelsDir, defaultModelsDir())) runtime.modelsDir = modelsDir;
     else delete runtime.modelsDir;
     if (model !== undefined) {
       if (model) runtime.model = model;
@@ -129,6 +133,25 @@ export async function saveRuntime(
     }
     return { next: { ...current, runtime }, result: at };
   });
+}
+
+/** 二つの道が同じ場所を指すか（区切りと末尾の区切りの違い、Windows では大小の違いを見ない）。中身は見ない。 */
+export function sameDir(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
+  const norm = (p: string) => {
+    const r = resolve(p.trim());
+    return platform === 'win32' ? r.toLowerCase() : r;
+  };
+  return norm(a) === norm(b);
+}
+
+/**
+ * 貼った道の前後の引用符を外す。Windows の「パスのコピー」は `"C:\Users\me\proj"` の形で取るので、そのまま保存すると
+ * 引用符ごと道になり、「そこは見つかりません」の原因が分からなかった（作業場の「無ければ作る」では、引用符で始まる名前のフォルダを作った）
+ */
+export function unquotePath(p: string): string {
+  const t = p.trim();
+  const m = /^(["'])(.*)\1$/s.exec(t);
+  return m ? m[2]!.trim() : t;
 }
 
 /** 置き場そのものの状態。語形の変わらない符丁で返し、表示のときに引き直す。 */
@@ -219,7 +242,9 @@ export async function saveMcpServer(
 ): Promise<string> {
   return editConfig((current, at) => { // 無ければ、これが最初の一つ
     const mcp = objectOr(current.mcp) as { servers?: Record<string, unknown> };
-    const servers = { ...objectOr(mcp.servers), [name]: spec };
+    // 画面から触らない項目（startupTimeoutMs など、手で足したもの）は引き継ぐ。丸ごと置き換えて消していた
+    const { command: _c, args: _a, url: _u, envFrom: _e, headersFrom: _h, enabled: _n, ...kept } = objectOr(objectOr(mcp.servers)[name]);
+    const servers = { ...objectOr(mcp.servers), [name]: { ...kept, ...spec } };
     return { next: { ...current, mcp: { ...mcp, servers } }, result: at };
   });
 }
@@ -264,6 +289,28 @@ export async function saveWorkRoot(root: string): Promise<string> {
   });
 }
 
+/**
+ * 設定に書いてある外のツール（MCP）。名前 → 書いてある形。
+ * ファイルが無い・読めない・一覧の項目が無いときは undefined（「一つも無い」とは分ける。書いていないものを空で上書きしない）。
+ */
+export async function readSavedMcpServers(): Promise<Record<string, Record<string, unknown>> | undefined> {
+  try {
+    const raw = JSON.parse((await readFile(configPath(), 'utf8')).replace(/^\uFEFF/, '')) as { mcp?: { servers?: unknown } };
+    if (raw.mcp?.servers === undefined) return undefined;
+    const servers = objectOr(raw.mcp.servers);
+    const out: Record<string, Record<string, unknown>> = {};
+    for (const [k, v] of Object.entries(servers)) out[k] = objectOr(v);
+    return out;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 設定に書いてある外のツール（MCP）。読めなければ空。 */
+export async function savedMcpServers(): Promise<Record<string, Record<string, unknown>>> {
+  return (await readSavedMcpServers()) ?? {};
+}
+
 /** 書いてある作業場。無ければ空。 */
 export async function savedWorkRoot(): Promise<string> {
   try {
@@ -277,4 +324,16 @@ export async function savedWorkRoot(): Promise<string> {
 /** 入れ物ならそれ、違えば空（`null` の項目を広げて止まらない）。 */
 function objectOr(v: unknown): Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : {};
+}
+
+/** 保存してある繋ぎ先の形（無い・読めないなら undefined）。繋ぎ直すときに、前の形（手元か遠くか）を保つために見る。 */
+export async function savedMcpServer(name: string): Promise<Record<string, unknown> | undefined> {
+  try {
+    const current = await configForEdit(configPath());
+    const servers = objectOr(objectOr(current.mcp).servers);
+    const spec = servers[name];
+    return spec && typeof spec === 'object' && !Array.isArray(spec) ? spec as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
 }

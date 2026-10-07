@@ -55,7 +55,8 @@ export function pickToTake(how) {
     if (named) return { ok: true, take: named.name };
     return {
       ok: false,
-      why: others.some((b) => b.name === how.mine)
+      // 自分のブランチは others から除いてあるので、全体（branches）で見る（others で見ていたので、いつも「見つかりません」と言った）
+      why: how.branches.some((b) => b.name === how.mine && (b.name === how.want || b.name === `wip/${how.want}`))
         ? `${how.want} は自分のブランチです`
         : `${how.want} が見つかりません`,
       choices,

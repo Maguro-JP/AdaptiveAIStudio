@@ -404,11 +404,32 @@ export function nearestTo(before: string, find: string, show = 8): string | unde
   const lines = before.split('\n');
   const span = Math.max(want.length, 1);
 
+  /*
+   * 範囲を一行ずつずらし、入った行と出た行の分だけ数を足し引きする（範囲ごとに作り直していたので、手間が行数 × find の行数の 2 乗になり、
+   * 長い find が外れると本体がしばらく止まった）。数え方は前と同じ: 範囲の中に在る want の行の数（want の重なりはその数だけ数える）
+   */
+  const trimmed = lines.map((l) => l.trim());
+  const wanted = new Map<string, number>();
+  for (const w of want) wanted.set(w, (wanted.get(w) ?? 0) + 1);
+  const inWindow = new Map<string, number>();
+  let hit = 0;
+  const enter = (l: string) => {
+    const n = inWindow.get(l) ?? 0;
+    inWindow.set(l, n + 1);
+    if (n === 0) hit += wanted.get(l) ?? 0;
+  };
+  const leave = (l: string) => {
+    const n = inWindow.get(l)!;
+    inWindow.set(l, n - 1);
+    if (n === 1) hit -= wanted.get(l) ?? 0;
+  };
+  for (let k = 0; k < Math.min(span, trimmed.length); k += 1) enter(trimmed[k]!);
   let best = { at: -1, hit: 0 };
   for (let i = 0; i + 1 <= lines.length; i += 1) {
-    const inside = lines.slice(i, i + span).map((l) => l.trim());
-    let hit = 0;
-    for (const w of want) if (inside.includes(w)) hit += 1;
+    if (i > 0) {
+      leave(trimmed[i - 1]!);
+      if (i + span - 1 < trimmed.length) enter(trimmed[i + span - 1]!);
+    }
     if (hit > best.hit) best = { at: i, hit };
   }
   // 半分も重なっていないなら、近いとは言わない。

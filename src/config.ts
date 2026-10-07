@@ -170,12 +170,13 @@ export interface HarnessConfig {
 export interface InitiativeConfig {
   /**
    * 自発的な思考。待機中に自分で考え、提案を溜める。
-   * 提案は溜めるだけで、実行はしない。既定は有効。
+   * 提案は溜めるだけで、実行はしない。既定は無効（画面も端末も、`true` にしたときだけ暇なときに考える）。
+   * `false` にすると、頼んだとき（画面の「考える」・端末の `/think`）も考えない。
    */
   enabled?: boolean;
   /** 入力が無いまま何秒経ったら考え始めるか。既定30秒 */
   idleSeconds?: number;
-  /** 1回の調査で扱う手がかりの数 */
+  /** 1回の調査で扱う手がかりの数。いまは読んでいない（見回りは一回に一つの手がかりだけを渡す） */
   leadsPerCycle?: number;
   /** 溜まった未処理の提案がこの数に達したら、それ以上は考えない */
   maxOpen?: number;

@@ -12,6 +12,7 @@
  * 出せたなら通す。判断を奪うのではなく、判断を残させるための関所。
  */
 import { isWriteTool } from '../agent/tools/write-kind.ts';
+import { wroteNothing } from './seen.ts';
 import { minimatch } from './glob.ts';
 import { canonicalRel } from '../agent/tools/paths.ts';
 import { normalize } from './builtin-rules.ts';
@@ -43,6 +44,9 @@ export const GUARDED_PATHS = [
   'src/agent/tools/shell.ts',
   'src/agent/tools/write-kind.ts',
   'src/core/redact.ts',
+  // 外のツール（MCP）へ渡す・受ける所の検問所と、inspector の組み立て（fetch_url 側の network.ts は入れてあった）
+  'src/mcp/tools.ts',
+  'src/core/inspector-setup.ts',
 ];
 
 export function isGuarded(rel: string): boolean {
@@ -150,7 +154,9 @@ export function requiresDeliberation(opts: DeliberationOptions): Rule {
       const spreading = !written.has(key(path)) && written.size >= wide;
       if (!guarded && !spreading) return allow;
 
-      if ((ctx.forum ?? forum).covers(path)) return allow;
+      // 協議を通した綴りと書く綴りが違っても（絶対の道・大小・回り道）、当たる実体が同じなら通す
+      const open = ctx.forum ?? forum;
+      if (open.covers(path) || (real !== undefined && open.covers(real))) return allow;
 
       const why = guarded
         ? `${path} は守りの仕掛けそのものです。ここが緩むと、以後の検査はすべて素通りになります。`
@@ -169,7 +175,8 @@ export function requiresDeliberation(opts: DeliberationOptions): Rule {
 function countWritten(history: readonly ToolCall[], key: (path: string) => string): Set<string> {
   const s = new Set<string>();
   for (const c of history) {
-    if (!isWriteTool(c.name)) continue;
+    // 何も書かずに終わったもの（断られた・失敗した）は数えない（断った書き込みで協議を求めるようになっていた）
+    if (!isWriteTool(c.name) || wroteNothing(c)) continue;
     const p = argString(c, 'path');
     if (p) s.add(key(p));
   }

@@ -13,6 +13,15 @@ export function unifiedDiff(
   // 終わりの改行の後ろに行は無い。
   const a = lines(before);
   const b = lines(after);
+  /*
+   * 終わりの改行の有無だけが違うときは、最後の行を違うものとして見せ、改行の無い側に知らせの行を付ける（git と同じ `\ No newline at end of file`）。
+   * 両方の終わりの改行を落としてから比べていたので、最後の改行を足す・消すだけの書き込みが空の差分で承認に出て、許すと黙って改行が変わった
+   */
+  const NO_EOL = '\n\\ No newline at end of file';
+  if (a.length > 0 && b.length > 0 && before.endsWith('\n') !== after.endsWith('\n')) {
+    if (!before.endsWith('\n')) a[a.length - 1] += NO_EOL;
+    else b[b.length - 1] += NO_EOL;
+  }
   const ops = diffLines(a, b);
 
   const hunks: string[] = [];

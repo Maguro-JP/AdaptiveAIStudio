@@ -64,10 +64,12 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 export function parseSkill(raw: string, fallbackName: string): { name: string; description: string; body: string } {
   let name = fallbackName;
   let description = '';
-  let body = raw;
-  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw);
+  // 頭の BOM は落とす（付いていると頭書きとして読まず、name: や description: の行まで指示の本文としてモデルへ送っていた）
+  const text = raw.replace(/^\uFEFF/, '');
+  let body = text;
+  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
   if (m) {
-    body = raw.slice(m[0].length);
+    body = text.slice(m[0].length);
     for (const line of m[1]!.split(/\r?\n/)) {
       const kv = /^([A-Za-z_-]+):\s*(.*)$/.exec(line);
       if (!kv) continue;

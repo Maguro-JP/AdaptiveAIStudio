@@ -29,6 +29,7 @@ import { lstat, readFile } from 'node:fs/promises';
 import { workspaceStamp, stampChanges, headContent, type WorkspaceStamp } from './workspace-stamp.ts';
 import { contentOf, contentBytes, isAbsent, type FileContent } from '../harness/put-back.ts';
 import { safeResolve } from './tools/paths.ts';
+import type { Tool } from './tools/types.ts';
 
 /** 一つの道につき、これより大きいものは記録しない（UndoStore と同じ 8MiB）。 */
 export const OUTSIDE_MAX_BYTES = 8 * 1024 * 1024;
@@ -146,5 +147,57 @@ export class OutsideChanges {
   /** この回に、外のツールが変えたと分かった道（名前順）。 */
   get paths(): string[] {
     return [...this.#reported].sort();
+  }
+}
+
+/**
+ * 外のツール（`run_command`・MCP）が走っている間に変わった道を集める。
+ *
+ * 段取りと Team は、依頼の始めと終わりの前後比べで「外で変わったもの」を「戻す」に載せる。それだけだと、その間に利用者が
+ * 別の画面で保存したファイルも依頼が変えたものとして載り、戻すと利用者の書いた分が消えた。外のツールを呼ぶたびに前後を比べて、
+ * そのツールが走っている間に変わった道を覚える。依頼の終わりの前後比べで変わっていても、書くツールが書いたのでも、
+ * ここに無いのでもない道は、依頼が変えたとは言えない（よそで変わった）。
+ *
+ * 外のツールが走っている間に利用者が保存した分は見分けられない（依頼が変えたものとして載る）。比べられない（git の管理下でない・
+ * git が動かない）ときは、前と同じく全部を依頼の分とみなす（`blind`）。
+ */
+export class ToolWindows {
+  readonly #root: string;
+  readonly #touched = new Set<string>();
+  #blind = false;
+
+  constructor(root: string) {
+    this.#root = root;
+  }
+
+  /** 呼ぶ前と後に作業場の記録を取って、その間に変わった道を覚える包み。 */
+  wrap(tool: Tool): Tool {
+    return {
+      ...tool,
+      run: async (args, ctx) => {
+        const before = await workspaceStamp(this.#root).catch(() => undefined);
+        try {
+          return await tool.run(args, ctx);
+        } finally {
+          const after = await workspaceStamp(this.#root).catch(() => undefined);
+          if (!before || !after) this.#blind = true;
+          else for (const p of stampChanges(before, after)) this.#touched.add(p);
+        }
+      },
+    };
+  }
+
+  /** 外のツール（`execute` と `mcp`）だけを包んだツールの一式。 */
+  pool<T extends { execute: Tool[]; mcp?: Tool[] }>(pool: T): T {
+    return {
+      ...pool,
+      execute: pool.execute.map((t) => this.wrap(t)),
+      ...(pool.mcp ? { mcp: pool.mcp.map((t) => this.wrap(t)) } : {}),
+    };
+  }
+
+  /** 外のツールが変えたかもしれない道か。比べられなかった回は、どれもそうとみなす。 */
+  mayHaveTouched(path: string): boolean {
+    return this.#blind || this.#touched.has(path);
   }
 }

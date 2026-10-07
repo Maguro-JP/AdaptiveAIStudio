@@ -20,7 +20,7 @@
 import { type Tool, ok, fail, requireString } from './types.ts';
 import { inspectInbound, inspectOutbound, describeVerdict } from '../../harness/gate.ts';
 import { type Inspector, combine } from '../../harness/inspector.ts';
-import { decodeText } from '../../core/text.ts';
+import { decodeText, trimPartialUtf8 } from '../../core/text.ts';
 
 /**
  * 既定の行き先。
@@ -86,6 +86,7 @@ export function charsetOf(contentType: string): string | undefined {
 export async function readBounded(res: Response, limitBytes: number, contentType: string): Promise<string> {
   const chunks: Uint8Array[] = [];
   let held = 0;
+  let cut = false;
   const reader = res.body?.getReader();
   if (reader) {
     try {
@@ -94,15 +95,19 @@ export async function readBounded(res: Response, limitBytes: number, contentType
         if (done) break;
         chunks.push(value);
         held += value.byteLength;
-        if (held >= limitBytes) { await reader.cancel().catch(() => undefined); break; }
+        if (held >= limitBytes) { cut = true; await reader.cancel().catch(() => undefined); break; }
       }
     } finally {
       reader.releaseLock();
     }
   }
-  const raw = Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
+  const whole = Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
+  // 上限で切ったなら、末尾の途中の字を落とす（字の途中で切ると、厳密な UTF-8 の読みが落ちて CP932 と取り違えていた）
+  const raw = cut ? Buffer.from(trimPartialUtf8(whole)) : whole;
   const charset = charsetOf(contentType);
-  if (charset && charset !== 'utf-8' && charset !== 'utf8') {
+  // 相手が UTF-8 と言っているなら、そのとおりに読む（言っていても推し量りに回していた）
+  if (charset === 'utf-8' || charset === 'utf8') return new TextDecoder('utf-8').decode(raw);
+  if (charset) {
     try { return new TextDecoder(charset).decode(raw); } catch { /* 知らない名前。下へ */ }
   }
   return decodeText(raw).text;
@@ -115,9 +120,10 @@ export function toText(body: string, contentType: string): string {
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
+    // `&amp;` は最後に戻す（先に戻すと `&amp;lt;` が `<` まで二度解け、`&lt;` という字を見せている頁が別の中身になった）
+    .replace(/&amp;/g, '&')
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -160,7 +166,9 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
 
       // 持ち出し検査。行き先だけでなく、こちらから書いて渡す文字列も検める。
       // URL の問い合わせ部分に合言葉を貼り付けて外へ出す、という事故はこれで止まる。
-      const carry = `${target}\n${requireString(args, 'purpose') ?? ''}`;
+      // 符号を解いた形も見る（`%20` や `%0A` に符号化した秘密鍵の頭・設定の行が当たらなかった）
+      const decoded = (() => { try { return decodeURIComponent(String(target).replace(/\+/g, ' ')); } catch { return ''; } })();
+      const carry = `${target}\n${decoded}\n${requireString(args, 'purpose') ?? ''}`;
       let outbound = inspectOutbound(carry);
       if (outbound.passed && inspector) {
         outbound = combine(outbound, await inspector.inspect(carry, 'outbound', ctx.signal), 'outbound');

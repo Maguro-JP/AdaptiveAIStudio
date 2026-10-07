@@ -178,8 +178,11 @@ describe('team は、run_command が変えた分も戻り先に載せる', () =>
   test('**書くツールを通らない書き換え（run_command）も、終わりの前後比べで戻せる**', async () => {
     const root = await repo({ 'a.txt': 'もと\n' });
     const wired = await wireTeam(DEFAULT_CONFIG, root);
-    // run_command が書き換えた形（書くツールを通らないので、書く手前の記録は取られない）。
-    await writeFile(join(root, 'a.txt'), 'コマンドが書いた\n');
+    // run_command で書き換える（書くツールを通らないので、書く手前の記録は取られない）。
+    // 試験の側で直に書くと、利用者が別の画面で保存したのと見分けられない（それは「戻す」に載せない。`test/elsewhere-edits.test.ts`）
+    const ran = await named(wired.toolsFor(item('t1')), 'run_command').run(
+      { command: `node -e "require('fs').writeFileSync('a.txt','コマンドが書いた\\n')"` }, ctx(root));
+    assert.notEqual(ran.isError, true, ran.content);
     const { point, unrecorded } = await wired.finish();
     assert.ok(point, 'run_command の分が戻り先に載っていない');
     assert.deepEqual(unrecorded, []);

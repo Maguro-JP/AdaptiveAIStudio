@@ -30,6 +30,8 @@ export interface DependencyReport {
   engines?: Record<string, string>;
   /** node 以外の宣言ファイル。数だけ見て、あることを伝える。 */
   others: string[];
+  /** package.json は在るのに読めなかった理由。「無い」と分けて言う */
+  unreadable?: string;
 }
 
 const OTHER_MANIFESTS = [
@@ -56,9 +58,18 @@ export async function inspectDependencies(root: string): Promise<DependencyRepor
     devDependencies?: Record<string, string>;
     engines?: Record<string, string>;
   };
+  let text: string;
   try {
-    pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+    text = await readFile(join(root, 'package.json'), 'utf8');
   } catch {
+    return report; // 無い
+  }
+  try {
+    // 頭の BOM は落とす（PowerShell 5 などが付ける。付いたままだと解けず、「依存の宣言は見つかりませんでした」と誤った事実を渡していた）
+    pkg = JSON.parse(text.replace(/^\uFEFF/, ''));
+  } catch (e) {
+    report.manifest = 'package.json';
+    report.unreadable = e instanceof Error ? e.message : String(e);
     return report;
   }
 
@@ -97,7 +108,9 @@ export function describeDependencies(report: DependencyReport, max = 12): string
     lines.push(`要求している環境: ${Object.entries(report.engines).map(([k, v]) => `${k} ${v}`).join(', ')}`);
   }
 
-  if (report.deps.length === 0) {
+  if (report.unreadable !== undefined) {
+    lines.push(`package.json は在りますが、読めませんでした（${report.unreadable}）。依存は数えていません。`);
+  } else if (report.deps.length === 0) {
     lines.push('依存の宣言は見つかりませんでした。');
   } else {
     lines.push('', `依存 ${report.deps.length} 件（宣言 / 実際に入っている版）:`);

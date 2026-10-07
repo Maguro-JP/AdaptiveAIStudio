@@ -1,8 +1,8 @@
 /** 依頼にファイルを指名する（`@道`）。 */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { tempDir } from './tmp.ts';
 import { join } from 'node:path';
 import { mentionsIn, stripMentions, readMentions, expandMentions, mentionBudget } from '../src/agent/mention.ts';
 
@@ -18,7 +18,7 @@ test('送る文からは印を外す', () => {
 });
 
 async function box() {
-  const root = await mkdtemp(join(tmpdir(), 'aas-mention-'));
+  const root = await tempDir('aas-mention-');
   await mkdir(join(root, 'src'), { recursive: true });
   await writeFile(join(root, 'src', 'a.ts'), 'export const a = 1;\n');
   return root;
@@ -104,7 +104,7 @@ describe('窓に合わせて切る', () => {
   });
 
   test('窓を渡すと、そのぶんで切られる', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'aas-mention-'));
+    const root = await tempDir('aas-mention-');
     await writeFile(join(root, 'big.txt'), 'あ'.repeat(20_000));
     const narrow = await readMentions('@big.txt', root, { contextTokens: 4096 });
     const wide = await readMentions('@big.txt', root, { contextTokens: 32768 });

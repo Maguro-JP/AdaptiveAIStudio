@@ -61,6 +61,12 @@ describe('どれを取り込むか', () => {
     assert.deepEqual(got.choices.sort(), ['wip/darwin-c', 'wip/linux-a']);
   });
 
+  test('名指しが自分のブランチなら、そう言う（「見つかりません」と言わない）', () => {
+    const got = pickToTake({ branches: [b('wip/linux-a'), b('wip/win32-b')], mine: 'wip/win32-b', want: 'win32-b' });
+    assert.equal(got.ok, false);
+    assert.match(got.why, /自分のブランチ/, `見つからないと言っている: ${got.why}`);
+  });
+
   test('名指しされたら、それ（対）', () => {
     const got = pickToTake({
       branches: [b('wip/linux-a'), b('wip/win32-b'), b('wip/darwin-c')],

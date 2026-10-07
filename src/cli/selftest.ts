@@ -12,6 +12,7 @@
  * 直さない。**見て、そのまま貼れる形で出す**だけ。
  */
 import { testsPassed } from './tests-verdict.ts';
+import { llamaLoadVerdict, modelsDirProblem } from './selftest-reasons.ts';
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -22,7 +23,9 @@ import { findInstalled, defaultBinDir, answeredVersion } from '../runtime/llama-
 import { runtimeEnv } from '../runtime/llama-env.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { pickAsset } from '../runtime/llama-release.ts';
-import { loadConfig } from '../config.ts';
+import { loadConfig, ConfigBroken } from '../config.ts';
+import { usesGguf } from '../runtime/local-runtime.ts';
+import { how } from './how.ts';
 import { askOnce, describeOneTurn } from './ask-once.ts';
 import { padTo, displayWidth } from './width.ts';
 import { chunkReader } from '../core/text.ts';
@@ -104,10 +107,9 @@ try {
       `この機械むけの binary がありません: ${(e as Error).message.slice(0, 160)}`);
   }
 } catch (e) {
-  const code = (e as NodeJS.ErrnoException).code;
   // 「入っていない」と「入っているのに壊れている」は別の話。
-  // 後者を前者の顔で言っていて、bundle の欠けに気づけなかった。
-  if (code === 'ERR_MODULE_NOT_FOUND') {
+  // 後者を前者の顔で言っていて、bundle の欠けに気づけなかった（依存が欠けた形も同じ符号になる。`llamaLoadVerdict`）。
+  if (llamaLoadVerdict(e) === undefined) {
     add('この中で読む', undefined, 'node-llama-cpp が入っていません（setup.exe や portable には入っています）');
   } else {
     add('この中で読む', false,
@@ -115,16 +117,33 @@ try {
   }
 }
 
+/* ---------- 設定 ---------- */
+// 壊れた設定は、ここで言って報告を出して終える（素通しすると Node の積み上げだけで、そこまでの結果も報告のファイルも出なかった）
+const loaded = (() => {
+  try {
+    return loadConfig().config;
+  } catch (e) {
+    if (!(e instanceof ConfigBroken)) throw e;
+    add('設定', false, e.message.slice(0, 300));
+    return undefined;
+  }
+})();
+if (!loaded) await finish(undefined);
+const config = loaded!;
+
 /* ---------- llama-server ---------- */
 const binDir = defaultBinDir();
-const llama = await findInstalled(binDir);
+// 設定で道を決めているなら、それを確かめる（本番の起こし方と同じ順。自前で入れたものだけを見ていたので、指定した方を一度も起こさなかった）
+const command = config.runtime?.kind === 'llamacpp' ? config.runtime.command : undefined;
+const llama = command ?? await findInstalled(binDir);
 if (llama) {
   // 本番の起動と同じ env（隣の共有ライブラリを見つけさせる）で、時間を区切って起こす
   const out = await run(llama, ['--version'], process.cwd(), { env: runtimeEnv(llama), timeout: 30_000 });
   const works = answeredVersion(out.text);
-  add('llama-server', works, works ? out.text.trim().split('\n')[0]! : `動きません: ${out.text.trim().slice(0, 200)}`);
+  const where = command ? `${command}（runtime.command）: ` : '';
+  add('llama-server', works, works ? `${where}${out.text.trim().split('\n')[0]!}` : `${where}動きません: ${out.text.trim().slice(0, 200)}`);
 } else {
-  add('llama-server', undefined, `まだ用意していません（npm run llama で取ってきます）。置き場: ${binDir}`);
+  add('llama-server', undefined, `まだ用意していません（${how('llama')} で取ってきます）。置き場: ${binDir}`);
 }
 
 // この機械で、どれが選ばれるはずかを見せる。取りに行く前に分かる。
@@ -139,10 +158,14 @@ add('どれを使うかの選択', choice !== undefined,
   choice ? `${choice.why} → ${choice.name}` : 'この環境に合うものが選べません');
 
 /* ---------- モデル ---------- */
-const { config } = loadConfig();
 const modelsDir = config.runtime?.modelsDir ?? defaultModelsDir();
+const kind = config.runtime?.kind ?? 'inproc';
+// GGUF を数えるのは GGUF を読む道のときだけ（Ollama などでは保存先が無くて当たり前で、いつも NG・終了コード 1 になっていた）
+const gguf = usesGguf(kind);
 let ggufs: string[] = [];
-try {
+if (!gguf) {
+  add('モデル', undefined, `runtime.kind が ${kind} なので、GGUF の保存先は数えません`);
+} else try {
   const { readdir } = await import('node:fs/promises');
   const { looksLikeGguf } = await import('../runtime/inproc.ts');
   const named = (await readdir(modelsDir)).filter((f) => f.toLowerCase().endsWith('.gguf'));
@@ -163,8 +186,8 @@ try {
     : named.length > 0
       ? `${named.length} 件ありますが、どれも GGUF として読めません（落とし直してください）`
       : `${modelsDir} は空です`);
-} catch {
-  add('モデル', false, `${modelsDir} がありません（npm run models -- --get で取ってきます）`);
+} catch (e) {
+  add('モデル', false, modelsDirProblem(e, modelsDir));
 }
 
 /* ---------- 本当に答えるか（送って返る） ---------- */
@@ -173,7 +196,7 @@ try {
  * `scripts/real-model.mjs`）在るので、中身は一つにする。**
  * 出す言葉もそちらに置く（人が読む一行と中身が割れると、片方だけ直す）。
  */
-if (ggufs.length === 0) {
+if (gguf && ggufs.length === 0) {
   add('送って返る', undefined, 'モデルが無いので確かめていません');
 } else {
   try {
@@ -195,38 +218,8 @@ const passed = testsPassed(test.text, test.code);
 const counts = /^# pass (\d+)$/m.exec(test.text)?.[1] ?? '?';
 add('検査', passed, `${seconds}秒 / ${counts}件通過${passed ? '' : ' — 失敗あり'}`);
 
-/* ---------- 出力 ---------- */
-const mark = (ok: boolean | undefined) => (ok === undefined ? '—' : ok ? 'ok' : 'NG');
-// 日本語は2つ分の幅を取る。文字数で揃えると、日本語の行だけずれる。
-const nameWidth = Math.max(...results.map((r) => displayWidth(r.name))) + 2;
-const body = ['AdaptiveAIStudio — selftest', ''];
-for (const r of results) {
-  body.push(`${padTo(mark(r.ok), 5)}${padTo(r.name, nameWidth)}${r.detail}`);
-}
-if (!passed) {
-  body.push('');
-  body.push('検査の失敗部分:');
-  for (const line of test.text.split('\n').filter((l) => l.startsWith('not ok')).slice(0, 10)) {
-    body.push(`  ${line}`);
-  }
-}
-console.log('```');
-for (const line of body) console.log(line);
-console.log('```');
-console.log('');
-/*
- * **貼らせない。ファイルを一つ出す。**
- *
- * ここは「この内容をそのまま貼ってください」で終わっていた。cmd の画面から
- * 文字を拾うのは Windows ではとても面倒で（右クリック→範囲選択→Enter、
- * 途中で切れる）、結局「試す係をやってください」と同じになる。
- */
-for (const line of tellWhereItWent(
-  await saveReport('selftest', body.join('\n'), [join(stateDir(), 'reports'), stateDir(), productRoot()]),
-)) console.log(line);
+await finish(test);
 
-const bad = results.filter((r) => r.ok === false).length;
-process.exit(bad > 0 ? 1 : 0);
 
 function run(
   command: string, args: string[], cwd = process.cwd(), extra: { env?: NodeJS.ProcessEnv; timeout?: number } = {},
@@ -252,4 +245,40 @@ function run(
     child.on('error', (e) => resolve({ text: e.message, code: null }));
     child.on('close', (code) => resolve({ text, code }));
   });
+}
+
+/* ---------- 出力 ---------- */
+/** 一覧を出し、報告のファイルを置いて終える。`test` が無いのは、テストまで回さずに終えるとき（設定が読めない）。 */
+async function finish(test: { text: string; code: number | null } | undefined): Promise<never> {
+  const mark = (ok: boolean | undefined) => (ok === undefined ? '—' : ok ? 'ok' : 'NG');
+  // 日本語は2つ分の幅を取る。文字数で揃えると、日本語の行だけずれる。
+  const nameWidth = Math.max(...results.map((r) => displayWidth(r.name))) + 2;
+  const body = ['AdaptiveAIStudio — selftest', ''];
+  for (const r of results) {
+    body.push(`${padTo(mark(r.ok), 5)}${padTo(r.name, nameWidth)}${r.detail}`);
+  }
+  if (test && !testsPassed(test.text, test.code)) {
+    body.push('');
+    body.push('検査の失敗部分:');
+    for (const line of test.text.split('\n').filter((l) => l.startsWith('not ok')).slice(0, 10)) {
+      body.push(`  ${line}`);
+    }
+  }
+  console.log('```');
+  for (const line of body) console.log(line);
+  console.log('```');
+  console.log('');
+  /*
+   * **貼らせない。ファイルを一つ出す。**
+   *
+   * ここは「この内容をそのまま貼ってください」で終わっていた。cmd の画面から
+   * 文字を拾うのは Windows ではとても面倒で（右クリック→範囲選択→Enter、
+   * 途中で切れる）、結局「試す係をやってください」と同じになる。
+   */
+  for (const line of tellWhereItWent(
+    await saveReport('selftest', body.join('\n'), [join(stateDir(), 'reports'), stateDir(), productRoot()]),
+  )) console.log(line);
+
+  const bad = results.filter((r) => r.ok === false).length;
+  process.exit(bad > 0 ? 1 : 0);
 }

@@ -27,6 +27,18 @@ import { installRoot, isPortable, productRoot, defaultWorkRoot, aasHome, asciiMo
 import { how } from './how.ts';
 import { canRun } from '../core/which.ts';
 import { saveReport, tellWhereItWent } from './report-file.ts';
+import { redactSecrets } from '../core/redact.ts';
+
+/** 見せる道。ログインと問い合わせ・断片を落とす（鍵を入れる場所になりやすい）。読めなければ伏せる処理だけを通す */
+function shownUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const dropped = u.search || u.hash ? '（? 以降は見せません）' : '';
+    return `${u.protocol}//${u.host}${u.pathname}${dropped}`;
+  } catch {
+    return redactSecrets(url);
+  }
+}
 import { deepestUnder, judgeRoom, WINDOWS_MAX_PATH } from '../core/pathroom.ts';
 import { resolve } from 'node:path';
 import { probeBackend, describeBackend, GPU_NEEDS, type Backend, type LlamaLib } from '../runtime/inproc.ts';
@@ -230,7 +242,8 @@ if (models.length > 0) {
  * **モデルだけ、置いたはずの場所と違う所に居る。**理由が分からないまま
  * 「なぜここに置かれるのか」を探すことになる。逃がしたなら、そう言う。
  */
-const escaped = asciiModelsDir(aasHome());
+// 逃がすのは、保存先を設定でも AAS_MODELS_DIR でも決めていないときだけ（決めている人にも「逃がしています」と出し、違う場所を探させていた）
+const escaped = config.runtime?.modelsDir || process.env.AAS_MODELS_DIR ? undefined : asciiModelsDir(aasHome());
 if (escaped) {
   add('モデルの保存先', 'ok', `${escaped}（逃がしています）`,
     `いまの根（${aasHome()}）に全角が混ざっています。`
@@ -267,7 +280,9 @@ step('llama-server を探します');
 
 // 借り物ではなく自前で持てているか。ここが空だと、
 // 誰かが入れたものに相乗りしている状態になる。
-const llamaPath = await findInstalled();
+// 設定で道を決めているなら、それを確かめる（本番の起こし方と同じ順。自前で入れたものだけを見ていたので、指定していても「まだ用意していません」と言った）
+const llamaCommand = config.runtime?.kind === 'llamacpp' ? config.runtime.command : undefined;
+const llamaPath = llamaCommand ?? await findInstalled();
 if (llamaPath) {
   /*
    * **在るかどうかでは決めない。一度起こして確かめる。**
@@ -279,7 +294,9 @@ if (llamaPath) {
    * 走らせて決めているのに、doctor だけが見ていなかった。
    */
   const said = await runOnce(llamaPath, ['--version']);
-  if (answeredVersion(said)) add('llama-server', 'ok', `${llamaPath}（${said.trim().split('\n')[0]}）`);
+  if (answeredVersion(said)) {
+    add('llama-server', 'ok', `${llamaPath}${llamaCommand ? '（runtime.command）' : ''}（${said.trim().split('\n')[0]}）`);
+  }
   else {
     add('llama-server', 'bad', `在りますが、動きません: ${llamaPath}`,
       `${said.trim().slice(0, 200)}\n\`${how('llama')}\` で取り直せます。`);
@@ -477,7 +494,15 @@ step('外のツールを見ます');
     }
     // 遠くに繋ぐものは、立ち上げるものが無い。ここで見るのは手元のものだけ。
     if (spec.url) {
-      add(`外の道具 (${name})`, 'ok', `遠くに繋ぎます: ${spec.url}`);
+      // 見出しに使うトークンも環境と照らす（見ずに ok と言い、実際は見出し無しで繋いで 401 になっていた）
+      const heads = Object.values(spec.headersFrom ?? {}).filter((from) => process.env[from] === undefined);
+      // 道は、ログインと問い合わせ（`?api_key=…`）を落として見せる（そのまま出し、送ってもらうファイルにも残していた）
+      if (heads.length > 0) {
+        add(`外のツール (${name})`, 'warn', `トークンが環境にありません: ${heads.join(', ')}`,
+          `AAS_HOME の .env に一行ずつ置いてください（例: ${heads[0]}=…）。値は設定ファイルに書きません。`);
+      } else {
+        add(`外のツール (${name})`, 'ok', `遠くに繋ぎます: ${shownUrl(spec.url)}`);
+      }
       continue;
     }
     if (!spec.command) {
@@ -501,7 +526,7 @@ step('外のツールを見ます');
       add(`外の道具 (${name})`, 'warn', `合言葉が環境にありません: ${missing.join(', ')}`,
         `置き場の .env に一行ずつ置いてください（例: ${missing[0]}=…）。値は設定ファイルに書きません。`);
     } else {
-      add(`外の道具 (${name})`, 'ok', `${spec.command} ${(spec.args ?? []).join(' ')}`.trim()
+      add(`外のツール (${name})`, 'ok', redactSecrets(`${spec.command} ${(spec.args ?? []).join(' ')}`.trim())
         + (wants.length > 0 ? `（合言葉 ${wants.map(([, f]) => f).join(', ')} あり）` : ''));
     }
   }
@@ -537,7 +562,16 @@ for (const p of enabledProviders(config)) {
     continue;
   }
   try {
-    const res = await fetch(`${p.baseUrl}/models`, { signal: AbortSignal.timeout(3000) });
+    // 本体と同じく鍵を付けて訊く（付けずに訊いていたので、鍵を正しく置いた OpenAI でも「HTTP 401」と出た）。名前だけ書いて値が無いなら、そう言う
+    const key = p.apiKeyEnv ? process.env[p.apiKeyEnv] : undefined;
+    if (p.apiKeyEnv && !key) {
+      add(label, 'warn', `${p.apiKeyEnv} が未設定`, 'AAS_HOME の .env に置いてください。ローカルだけで使うなら、このままで構いません。');
+      continue;
+    }
+    const res = await fetch(`${p.baseUrl}/models`, {
+      signal: AbortSignal.timeout(3000),
+      ...(key ? { headers: { authorization: `Bearer ${key}` } } : {}),
+    });
     add(label, res.ok ? 'ok' : 'warn', `${p.baseUrl} — HTTP ${res.status}`);
   } catch (e) {
     // **使っていないものが繋がらないのは、不足ではない。**
@@ -599,11 +633,12 @@ try {
  */
 {
   const { writeFile, unlink, mkdir: mkdirp } = await import('node:fs/promises');
-  const probe = join(stateDir(), '.write-probe');
+  // 名前は回ごとに分ける（画面の報告が起こす doctor と重なると、先に消した方の後で消そうとして「書けません」と出ていた）
+  const probe = join(stateDir(), `.write-probe-${process.pid}-${Math.random().toString(36).slice(2, 8)}`);
   try {
     await mkdirp(stateDir(), { recursive: true });
     await writeFile(probe, 'x');
-    await unlink(probe);
+    try { await unlink(probe); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
     add('書き込み', 'ok', `${stateDir()} へ書けます`);
   } catch (e) {
     add('書き込み', 'bad', `${stateDir()} へ書けません（${(e as Error).message}）`,

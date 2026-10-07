@@ -48,6 +48,7 @@ export async function loadJournals(config: AasConfig): Promise<Journals> {
       perHour: initCfg.budgetPerHour ?? 12,
       minGapMs: (initCfg.minGapMinutes ?? 10) * 60_000,
       maxPerChange: initCfg.maxPerChange ?? 2,
+      ...(initCfg.maxOpen !== undefined ? { maxOpen: initCfg.maxOpen } : {}),
     },
   );
   // 無いのは正常。在るのに読めないときは空で始め、保存の前に読み直す（`journal-file.ts`）。

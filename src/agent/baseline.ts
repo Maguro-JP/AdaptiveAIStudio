@@ -25,6 +25,8 @@ export interface BaselineOutcome {
   cached: boolean;
   /** unknown の理由。 */
   reason?: string;
+  /** 止められた回（■）。待っていた別の会話は、これを受け取らずに自分で測り直す */
+  aborted?: boolean;
 }
 
 export interface BaselineOptions {
@@ -65,16 +67,26 @@ export class BaselineProbe {
       return { ...remembered.outcome, cached: true };
     }
 
-    // 同時に来た依頼で二重に流さない。
+    // 同時に来た依頼で二重に流さない。待つのは自分の ■ でやめられる（前は相手が終わるまで、上限の 2 分まで待った）
     const running = this.#inFlight.get(command);
-    if (running) return { ...(await running), cached: true };
+    if (running) {
+      const got = await untilAborted(running, signal);
+      if (got === undefined) return { status: 'unknown', cached: false, aborted: true, reason: '止めたので、作業前の確かめは見ていません。' };
+      // 相手の会話が止めた回は受け取らない（止められた途中の結果を「作業前から落ちていた」として受け取っていた）。自分で測り直す
+      if (got.aborted) return this.#runShared(command, signal);
+      return { ...got, cached: true };
+    }
+    return this.#runShared(command, signal);
+  }
 
+  /** 自分で流す。流している間に来た同じ命令の依頼は、これを待つ。 */
+  async #runShared(command: string, signal: AbortSignal): Promise<BaselineOutcome> {
     const task = this.#run(command, signal);
     this.#inFlight.set(command, task);
     try {
       return await task;
     } finally {
-      this.#inFlight.delete(command);
+      if (this.#inFlight.get(command) === task) this.#inFlight.delete(command);
     }
   }
 
@@ -90,7 +102,10 @@ export class BaselineProbe {
             reason: `作業前の検査が${Math.round(this.#timeoutMs / 1000)}秒で終わらないため、切り上げました。`
               + '前からの失敗かどうかは切り分けません。',
           }
-        : { status: result.passed ? 'passed' : 'failed', result, cached: false };
+        : signal.aborted
+          // 止められた回は、落ちたのではない（途中で止めたテストは、通ったか分からない）
+          ? { status: 'unknown', cached: false, aborted: true, reason: '止めたので、作業前の確かめを途中でやめました。' }
+          : { status: result.passed ? 'passed' : 'failed', result, cached: false };
     } catch (e) {
       outcome = {
         status: 'unknown', cached: false,
@@ -129,4 +144,15 @@ export class BaselineProbe {
     if (!e || this.#now() - e.at >= this.#maxAgeMs) return undefined;
     return { ...e.outcome, cached: true };
   }
+}
+
+/** 約束が解けるか、合図が鳴るまで待つ。合図が先なら undefined。 */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+  if (signal.aborted) return Promise.resolve(undefined);
+  return new Promise<T | undefined>((resolve, reject) => {
+    const onAbort = () => resolve(undefined);
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then((v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+      (e: unknown) => { signal.removeEventListener('abort', onAbort); reject(e); });
+  });
 }

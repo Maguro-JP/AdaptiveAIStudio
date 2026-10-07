@@ -15,8 +15,8 @@
  * 二進を utf8 として読んで持つと U+FFFD に置き換わり、戻すと別の中身になる。
  */
 import { lstat, unlink, rmdir, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { statSync } from 'node:fs';
+import { dirname, resolve, join } from 'node:path';
+import { statSync, readdirSync } from 'node:fs';
 import { safeResolve, realSafeResolve } from '../agent/tools/paths.ts';
 
 export type PutBack = 'restored' | 'unchanged' | 'failed';
@@ -144,11 +144,34 @@ const folds = new Map<string, boolean>();
  * 大文字小文字を区別する macOS のボリュームや、区別を有効にした Windows のフォルダ（WSL）で、綴りの大小だけ違う別のファイル
  * （`X.h` と `x.h`）を一つにまとめ、片方の中身でもう片方を書き戻していた。確かめられなければ OS の既定。
  */
+/** 作業場の中の、英字を含む名前を一つ大小入れ替えて開き、同じものに当たるか。中に英字の名前が無い・見られないなら undefined */
+function innerProbe(abs: string): boolean | undefined {
+  let names: string[];
+  try { names = readdirSync(abs); } catch { return undefined; }
+  const name = names.find((n) => n.toLowerCase() !== n.toUpperCase());
+  if (!name) return undefined;
+  const flipped = [...name].map((c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase())).join('');
+  // 入れ替えた綴りの別のものが実際に在るなら、区別している
+  if (names.includes(flipped)) return false;
+  try {
+    const a = statSync(join(abs, name));
+    let b: ReturnType<typeof statSync> | undefined;
+    try { b = statSync(join(abs, flipped)); } catch { b = undefined; }
+    return b !== undefined && a.ino === b.ino && a.dev === b.dev;
+  } catch { return undefined; }
+}
+
 export function foldsCase(root: string, platform: NodeJS.Platform = process.platform): boolean {
   const abs = resolve(root);
   const known = folds.get(abs);
   if (known !== undefined) return known;
   let answer = platform !== 'linux';
+  // 作業場の中の名前で確かめる（根の名前を引くのは親のフォルダなので、根の名前で見ると親が区別するかを答えていた）
+  const inner = innerProbe(abs);
+  if (inner !== undefined) {
+    folds.set(abs, inner);
+    return inner;
+  }
   for (let i = abs.length - 1; i >= 0; i--) {
     const c = abs[i]!;
     const flipped = c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase();

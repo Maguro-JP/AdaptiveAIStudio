@@ -14,9 +14,10 @@
  * **黙って消さない。**消す物を決めるのはこちらだが、
  * 消したことを隠すと、次に何かが無くなったときに疑う先が増える。
  */
-import { readdir, stat, rm, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readdir, stat, rm, readFile, open } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { binDir, modelsDir, stateDir } from '../core/home.ts';
+import { INDEX_FORMAT } from '../agent/code-index.ts';
 
 /**
  * 同じ名前の記録を、これだけ残す。
@@ -66,6 +67,8 @@ async function sizeOf(path: string): Promise<number> {
  */
 export async function findRemovable(opts: {
   keepTag: string;
+  /** ほかのモデルの保存先（設定の `runtime.modelsDir`・画面で選んだ所）。既定の保存先しか見ていなかったので、そこで切れた数 GB の途中の分が一度も挙がらなかった */
+  modelsDirs?: readonly string[];
   maxLogAgeMs?: number;
   maxAttachmentAgeMs?: number;
   now?: number;
@@ -87,7 +90,8 @@ export async function findRemovable(opts: {
   // 途中で切れた取得。**捨てると、続きから取れなくなる**（もう一度実行すれば
   // 続きから取る作りにしてある）。それでも要らないなら片づけられるよう、
   // 何を捨てることになるかを添える。
-  for (const dir of [modelsDir(), binDir()]) {
+  // 同じ場所は一度だけ見る（二度挙げると、消した量を二重に数える）
+  for (const dir of [...new Set([modelsDir(), ...(opts.modelsDirs ?? []), binDir()].map((d) => resolve(d)))]) {
     for (const name of await readdir(dir).catch(() => [])) {
       // .part.tag は途中の分がどの版かの記録。途中の分と一緒に片づける
       if (!/\.(part|partial|tmp)(\.tag)?$/i.test(name)) continue;
@@ -173,6 +177,28 @@ export async function findRemovable(opts: {
     if (typeof point !== 'object' || point === null || typeof (point as { id?: unknown }).id !== 'string') continue;
     if ((point as { root?: unknown }).root !== undefined) continue;
     found.push({ path, bytes: s.size, why: `どの作業場のものか分からない ${Math.floor((now - s.mtimeMs) / 86_400_000)}日前の戻り先（どの作業場の「戻す」にも出ません。消すと、その前の姿には戻せません）` });
+  }
+
+  /*
+   * コードの索引（作業場ごとに一つ、`index/<道のハッシュ>.json`。大きい作業場では 10MB を超える）。ここに載せるまで誰も片づけず、
+   * 消えた作業場・一度だけ開いたフォルダの分も溜まっていた。使っている間も中身が変わらなければ書き直さないので、古さでは決めない。
+   * 作業場がもう無いものと、作り方の版が古くて使い回されないものだけを挙げる。頭だけ読む（根と版は先頭に書いてある）
+   */
+  const indexDir = join(stateDir(), 'index');
+  for (const name of await readdir(indexDir).catch(() => [])) {
+    if (!name.endsWith('.json')) continue;
+    const path = join(indexDir, name);
+    const s = await stat(path).catch(() => undefined);
+    if (!s || !s.isFile()) continue;
+    const head = await readHead(path, 4096);
+    const root = /"root":("(?:[^"\\]|\\.)*")/.exec(head)?.[1];
+    const format = /"format":(\d+)/.exec(head)?.[1];
+    let rootPath: string | undefined;
+    try { rootPath = root ? JSON.parse(root) as string : undefined; } catch { rootPath = undefined; }
+    if (rootPath === undefined) continue; // 読めない形は触らない
+    const gone = await stat(rootPath).then(() => false, (e: NodeJS.ErrnoException) => e.code === 'ENOENT');
+    if (gone) found.push({ path, bytes: s.size, why: `もう無い作業場（${rootPath}）のコードの索引` });
+    else if (format === undefined || Number(format) !== INDEX_FORMAT) found.push({ path, bytes: s.size, why: `作り方の古いコードの索引（${rootPath}。次に開いたときに作り直します）` });
   }
 
   // 古い記録。新しいものは残す（直近の様子は見たいことがある）。
@@ -264,4 +290,20 @@ export function describe(items: Removable[]): string {
   }
   if (items.length > 20) lines.push(`  …ほか ${items.length - 20} 件`);
   return lines.join('\n');
+}
+
+/** ファイルの頭だけを読む（大きな索引を全部読まない）。読めなければ空。 */
+async function readHead(path: string, bytes: number): Promise<string> {
+  try {
+    const fh = await open(path, 'r');
+    try {
+      const buf = Buffer.alloc(bytes);
+      const { bytesRead } = await fh.read(buf, 0, bytes, 0);
+      return buf.subarray(0, bytesRead).toString('utf8');
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return '';
+  }
 }

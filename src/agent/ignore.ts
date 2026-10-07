@@ -102,7 +102,8 @@ interface Layer {
 
 export function parseIgnore(text: string): Rule[] {
   const rules: Rule[] = [];
-  for (const line of text.split('\n')) {
+  // 頭の BOM は落とす（メモ帳の古い版や PowerShell 5.1 が付ける。付いたままだと 1 行目の規則がどこにも当たらず、git が無視するものを索引と一覧に拾っていた）
+  for (const line of text.replace(/^\uFEFF/, '').split('\n')) {
     const rule = ruleFrom(line.replace(/\r$/, ''));
     if (rule) rules.push(rule);
   }

@@ -84,6 +84,10 @@ export class ChatOrchestrator {
       const isLast = index === usable.length - 1;
       const resolved = this.#registry.resolve(modelId)!;
       const { provider, model } = resolved;
+      // この依頼の中で冷やした口の候補は飛ばす（同じ鍵・同じ残高・同じ制限でもう一度叩き、切り替えの知らせも二度出ていた）
+      if (index > 0 && !this.#registry.isAvailable(provider.id)) continue;
+      // 試しを始めた時刻。やり直しのたびに取り直す（自分の前の試しが付けた冷やしは、成功で解く）
+      let triedAt = this.#registry.clock();
 
       if (previousModelId && lastError) {
         yield {
@@ -98,6 +102,7 @@ export class ChatOrchestrator {
       // 同一モデル内のリトライ。retries は kind ごとの規則から決まる。
       for (;;) {
         if (signal.aborted) return;
+        triedAt = this.#registry.clock();
         yield { type: 'attempt', modelId, attempt };
 
         let emitted = false;
@@ -124,7 +129,7 @@ export class ChatOrchestrator {
               finishReason = chunk.finishReason;
             }
           }
-          this.#registry.clearCooldown(provider.id);
+          this.#registry.clearCooldown(provider.id, triedAt);
           yield { type: 'done', modelId, fallbackFrom: previousModelId, ...(finishReason ? { finishReason } : {}) };
           return;
         } catch (e) {

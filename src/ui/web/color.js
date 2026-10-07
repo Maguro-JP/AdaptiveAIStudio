@@ -160,8 +160,11 @@ export function openPicker(initial, opts = {}) {
   document.body.append(dlg);
 
   const before = toHex(parse(initial) ?? rgb);
-  cancel.onclick = () => { opts.onChange?.(before, parse(before)); dlg.close(); };
-  done.onclick = () => { remember(toHex(rgb)); opts.onDone?.(toHex(rgb), rgb); };
+  // 決めずに閉じた（やめる・Esc）なら、元の色に戻す。Esc では戻さずに閉じ、動かした色が下書きに残っていた
+  let decided = false;
+  cancel.onclick = () => { dlg.close(); };
+  done.onclick = () => { decided = true; remember(toHex(rgb)); opts.onDone?.(toHex(rgb), rgb); };
+  dlg.addEventListener('close', () => { if (!decided) opts.onChange?.(before, parse(before)); });
   dlg.addEventListener('close', () => dlg.remove());
 
   draw();

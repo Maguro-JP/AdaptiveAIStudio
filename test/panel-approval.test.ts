@@ -140,12 +140,26 @@ describe('同じ承認は、押せる箱を二つ出さない', () => {
     assert.equal(t.asks(), 1, `同じ承認の箱が ${t.asks()} 個出ている`);
   });
 
-  test('押して送れなかった箱は、本体がまだ待っているので出し直す（対）', async () => {
-    const t = draw(async () => Response.json({ error: '届きませんでした' }, { status: 500 }));
+  test('**押して送れなかった箱は、その場で押し直せる**（本体がまだ待っている。出し直しを待たない）', async () => {
+    let fail = true;
+    const t = draw(async () => (fail ? Response.json({ error: '届きませんでした' }, { status: 500 }) : Response.json({ ok: true })));
     t.press('許可');
     await until(() => t.card().text.includes('送れませんでした'), '送れなかったと出る');
+    // 出し直しが来ても、押せる箱を二つにしない
     t.emit('approval', again);
-    assert.equal(t.asks(), 2, '押せる箱が無いまま、本体を待たせている');
+    assert.equal(t.asks(), 1, `同じ承認の箱が ${t.asks()} 個出ている`);
+    fail = false;
+    t.press('許可');
+    await until(() => t.card().text.includes('→ 許可'), `押し直して届いていない: ${t.card().text}`);
+    assert.equal(t.answers().length, 2);
+  });
+
+  test('承認がもう終わっている（404）なら、押し直す口は出さない（対）', async () => {
+    const t = draw(async () => Response.json({ error: 'その承認は既に終わっています' }, { status: 404 }));
+    t.press('許可');
+    await until(() => t.card().text.includes('送れませんでした'), '送れなかったと出る');
+    assert.ok(!t.card().children.some(function has(n: StubNode): boolean { return n.tagName === 'button' || n.children.some(has); }),
+      '終わった承認に押す口を出した');
   });
 
   test('欄を描き直したら、待っている承認はまた出す（対）', () => {

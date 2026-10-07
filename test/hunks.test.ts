@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
-import { unifiedDiff } from '../src/agent/diff.ts';
+import { unifiedDiff, diffStat } from '../src/agent/diff.ts';
 import { splitHunks, applyHunks } from '../src/agent/hunks.ts';
 import * as hunksApi from '../src/agent/hunks.ts';
 import { writeFileTool } from '../src/agent/tools/fs.ts';
@@ -89,8 +89,11 @@ test('終わりの改行を、空の一行として数えない', () => {
   const d = unifiedDiff('hello.js', '', 'console.log(1);\n');
   const added = d.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++'));
   assert.deepEqual(added, ['+console.log(1);']);
-  // 終わりの改行の有無だけの違いは、行の違いとしては出ない（承認に出す用なので、それでよい）。
-  assert.equal(unifiedDiff('a.txt', 'x', 'x\n'), '');
+  // 終わりの改行の有無だけの違いは、改行の無い側に知らせの行を付けて出す（空の差分のまま承認に出すと、許したときに黙って改行が変わった）
+  const eol = unifiedDiff('a.txt', 'x', 'x\n');
+  assert.match(eol, /^-x\n\\ No newline at end of file\n\+x$/m, eol);
+  assert.match(unifiedDiff('a.txt', 'x\n', 'x'), /^\+x\n\\ No newline at end of file$/m);
+  assert.deepEqual(diffStat(eol), { added: 1, removed: 1 });
 });
 
 describe('当てたあとから、塊ごと・行ごとに戻す', () => {

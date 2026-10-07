@@ -61,6 +61,11 @@ export interface Theme {
   tokens: Tokens;
   /** 重ねる効果。名前で選ぶ。CSS そのものは書かせない。 */
   effects?: EffectName[];
+  /**
+   * 元にした見た目（自分で作った見た目のとき）。保存しておかないと、次に読むときに `custom` を元の見た目として探して
+   * 「知らない見た目」と言い、開くたびに直した知らせを出していた
+   */
+  base?: string;
 }
 
 const SANS = "'Inter', ui-sans-serif, system-ui, 'Hiragino Sans', 'Noto Sans JP', sans-serif";
@@ -285,13 +290,15 @@ export function repairTheme(raw: unknown, fallbackId = DEFAULT_THEME_ID): {
     }
   }
 
+  const id = typeof o.id === 'string' && o.id.trim() ? o.id.trim() : base.id;
   return {
     theme: {
-      id: typeof o.id === 'string' && o.id.trim() ? o.id.trim() : base.id,
+      id,
       name: typeof o.name === 'string' && o.name.trim() ? o.name.trim() : base.name,
       scheme,
       tokens,
       ...(effects.length > 0 ? { effects } : {}),
+      ...(id !== base.id ? { base: base.id } : {}),
     },
     repairs,
   };

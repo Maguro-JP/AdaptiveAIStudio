@@ -91,12 +91,15 @@ describe('計画の修理', () => {
     assert.ok(p.repairs.some((r) => r.includes('分け過ぎ')));
   });
 
-  test('絞ったあと、切られた件への依存も外れる', () => {
+  test('**絞った分は捨てずに最後の件へ畳み、畳んだ件を待っていた件は畳んだ先を待つ**（捨てた作業が一度も行われないまま「受け取りました」になっていた）', () => {
     const many = Array.from({ length: 9 }, (_, i) => ({
       id: `t${i}`, instruction: `x${i}`, deps: ['t8'],
     }));
     const p = plan(many);
-    for (const item of p.items) assert.deepEqual(item.deps, [], item.id);
+    const last = p.items.at(-1)!;
+    for (const n of [4, 5, 6, 7, 8]) assert.match(last.instruction, new RegExp(`x${n}`), `x${n} を捨てた`);
+    assert.deepEqual(last.deps, [], '畳んだ件が自分を待っている');
+    for (const item of p.items.slice(0, -1)) assert.deepEqual(item.deps, [last.id], item.id);
   });
 
   test('レーンは配って偏らせない', () => {

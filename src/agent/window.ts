@@ -59,6 +59,17 @@ interface Unit {
  */
 export type Count = (text: string) => number;
 
+
+/**
+ * 頭から n 字（UTF-16 の単位）。切る所が対になる文字（絵文字・拡張漢字）の上半分なら、その手前で切る（片割れを残すと、
+ * 送る JSON に対になっていない文字が入り、受ける側が断ることがある）
+ */
+export function headOf(text: string, n: number): string {
+  if (text.length <= n) return text;
+  const code = text.charCodeAt(n - 1);
+  return text.slice(0, code >= 0xd800 && code <= 0xdbff ? n - 1 : n);
+}
+
 export function estimateTokens(text: string): number {
   let cjk = 0;
   let other = 0;
@@ -363,7 +374,7 @@ function fitCore(
       if (m.role !== 'tool' || m.content.length <= KEEP_HEAD) return m;
       shrunk = true;
       const cut = m.content.length - KEEP_HEAD;
-      return { ...m, content: `${m.content.slice(0, KEEP_HEAD)}\n…（この先 ${cut} 字は、文脈に収まらないので省いています）` };
+      return { ...m, content: `${headOf(m.content, KEEP_HEAD)}\n…（この先 ${cut} 字は、文脈に収まらないので省いています）` };
     });
     u.chars = sizeOf(u.messages, count);
   }
@@ -394,7 +405,7 @@ function fitCore(
         if (m.role !== 'tool' || m.content.length <= KEEP_LAST_RESORT) return m;
         shrunk = true;
         const cut = m.content.length - KEEP_LAST_RESORT;
-        return { ...m, content: `${m.content.slice(0, KEEP_LAST_RESORT)}\n…（この先 ${cut} 字は、文脈に収まらないので省いています）` };
+        return { ...m, content: `${headOf(m.content, KEEP_LAST_RESORT)}\n…（この先 ${cut} 字は、文脈に収まらないので省いています）` };
       });
       u.chars = sizeOf(u.messages, count);
     }

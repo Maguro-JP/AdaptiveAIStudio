@@ -124,8 +124,16 @@ export interface FileEntry {
    */
   head: string;
 }
+/**
+ * 索引の作り方の版。拾い方（名前・参照・頭）を変えたら上げる。版の違う索引は使い回さない（大きさと mtime が同じファイルの記録を
+ * そのまま使うので、直す前の拾い方の中身が、触っていないファイルに残り続けた）
+ */
+export const INDEX_FORMAT = 2;
+
 export interface CodeIndex {
   root: string;
+  /** 作り方の版（`INDEX_FORMAT`）。無い・違うものは使い回さない */
+  format?: number;
   builtAt: string;
   files: FileEntry[];
   /** 大きすぎる等で入れなかった数。**黙って落とさない。** */
@@ -409,8 +417,11 @@ export async function buildIndex(root: string, max = MAX_FILES, prev?: CodeIndex
       try { text = await readFile(full, 'utf8'); } catch { skipped += 1; continue; }
       const symbols: Symbol[] = [];
       text.split('\n').forEach((line, i) => {
-        if (symbols.length >= 200) return;
+        // 上限で切るのは中だけの名前だけ。外から見える宣言（`top`）は切らない（前は 200 個目より後を全部落とし、大きなファイルの末尾の関数を
+        // find_symbol が黙って「無い」と言った）
         const top = isTopDecl(line);
+        if (symbols.length >= 200 && !top) return;
+        if (symbols.length >= 2000) return;
         const exported = top && isExportedDecl(line);
         for (const name of symbolsIn(line)) {
           symbols.push({
@@ -431,8 +442,11 @@ export async function buildIndex(root: string, max = MAX_FILES, prev?: CodeIndex
   files.sort((a, b) => a.path.localeCompare(b.path));
   // 上限で止めたなら、まだ残っている数を数えて言う（数えるだけなら安い）。
   const capped = files.length >= max ? await countSource(root) - files.length : 0;
+  // 何も読み直さず、並びも同じなら、前の作った時刻を引き継ぐ（毎回付け直していたので、repo map の使い回しが当たらず、依頼のたびに repo map が変わった）
+  const same = prev !== undefined && prev.format === INDEX_FORMAT && reparsed === 0 && prev.files.length === files.length
+    && prev.files.every((f, i) => files[i] === f);
   return {
-    root, builtAt: new Date().toISOString(), files, skipped,
+    root, format: INDEX_FORMAT, builtAt: same ? prev!.builtAt : new Date().toISOString(), files, skipped,
     ...(capped > 0 ? { capped } : {}),
     ...(prev ? { refresh: { reused, reparsed } } : {}),
   };
@@ -760,6 +774,7 @@ export class IndexStore {
    * 100ms 近く払う。**探すところで払うと、直すところまで辿り着けない。**
    */
   #held?: CodeIndex;
+  #walkedAt = Number.NEGATIVE_INFINITY;
 
   constructor(dir: string) { this.#dir = dir; }
 
@@ -771,7 +786,7 @@ export class IndexStore {
     try {
       const raw = await readFile(this.#path(root), 'utf8');
       const parsed = JSON.parse(raw) as CodeIndex;
-      return parsed.root === root ? parsed : undefined;
+      return parsed.root === root && parsed.format === INDEX_FORMAT ? parsed : undefined;
     } catch { return undefined; }
   }
 
@@ -791,10 +806,13 @@ export class IndexStore {
    */
   async fresh(root: string, minGapMs = 1500, now = Date.now()): Promise<CodeIndex> {
     const held = this.#held;
-    if (held && held.root === root && now - new Date(held.builtAt).getTime() < minGapMs) return held;
+    // 続けざまかは、最後に歩いた時刻で見る（作った時刻は変わらないことがある）。時計が戻って差が負なら、歩き直す（戻った分だけ古いまま返していた）
+    const since = now - this.#walkedAt;
+    if (held && held.root === root && since >= 0 && since < minGapMs) return held;
     const base = held && held.root === root ? held : await this.load(root);
     const made = await buildIndex(root, MAX_FILES, base);
     this.#held = made;
+    this.#walkedAt = now;
     // 何も変わっていなければ、書き直さない（4000 ファイルで 12MB になる）。
     if (!base || (made.refresh?.reparsed ?? 1) > 0 || made.files.length !== base.files.length) {
       await this.save(made).catch(() => undefined);

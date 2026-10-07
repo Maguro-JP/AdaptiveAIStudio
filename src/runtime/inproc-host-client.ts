@@ -81,6 +81,8 @@ export class InProcHost implements LocalRuntime {
   #windows = new Map<string, number>();
   /** こちらから止めている最中。そのときの終わりは「落ちた」ではない。 */
   #stopping = false;
+  /** いまの子が口（URL）を言ったか。言う前に止めるときは、頼まずに止める。 */
+  #answered = false;
 
   constructor(opts: InProcHostOptions) { this.#opts = opts; }
 
@@ -90,6 +92,7 @@ export class InProcHost implements LocalRuntime {
     this.#url = new Promise<string>((ok, ng) => {
       const child = spawn(process.execPath, hostArgs(this.#opts), { stdio: ['pipe', 'pipe', 'pipe'] });
       this.#child = child;
+      this.#answered = false;
       // 新しい子。前の止めは、この子には関係ない。
       this.#stopping = false;
       /*
@@ -111,7 +114,7 @@ export class InProcHost implements LocalRuntime {
           const line = buf.slice(0, at); buf = buf.slice(at + 1);
           let msg: { url?: string; log?: string } = {};
           try { msg = JSON.parse(line) as typeof msg; } catch { this.#opts.onLog?.(line); continue; }
-          if (msg.url && !got) { got = true; clearTimeout(wait); ok(msg.url.replace(/\/v1$/, '')); }
+          if (msg.url && !got) { got = true; if (this.#child === child) this.#answered = true; clearTimeout(wait); ok(msg.url.replace(/\/v1$/, '')); }
           if (msg.log) this.#opts.onLog?.(msg.log);
         }
       });
@@ -138,7 +141,12 @@ export class InProcHost implements LocalRuntime {
         if (this.#stopping) return;
         this.#opts.onLog?.(`モデルのプロセスが落ちました（${explainExit(code, signal)}）。次の送信で読み直します${err.trim() ? `:\n${err.trim()}` : ''}`);
       });
-      child.on('error', (e) => { clearTimeout(wait); ng(e); });
+      child.on('error', (e) => {
+        clearTimeout(wait);
+        // 起こせなかった（EAGAIN・EMFILE など）ときは 'exit' が来ない。断った約束を残すと、立ち上げ直すまで全部同じ失敗になっていた。忘れて、次で起こし直す
+        if (this.#child === child) { this.#child = undefined; this.#url = undefined; }
+        ng(e);
+      });
     });
     return this.#url;
   }
@@ -194,8 +202,10 @@ export class InProcHost implements LocalRuntime {
     if (!child) return;
     const gone = new Promise<void>((ok) => child.once('exit', () => ok()));
     this.#stopping = true;
+    // まだ口を言っていない子には頼めない（頼む前に口が開くのを待ち、最大で立ち上がりの上限の 30 秒止まっていた）。そのまま止める
+    if (!this.#answered) child.kill();
     // 頼むのは短く待つだけ（子の手が塞がって返事をしないと、殺すまでの 5 秒の前に何分も待っていた）
-    await this.#call('shutdown', {}, SHUTDOWN_ASK_MS).catch(() => undefined);
+    else await this.#call('shutdown', {}, SHUTDOWN_ASK_MS).catch(() => undefined);
     const wait = new Promise<'late'>((ok) => setTimeout(() => ok('late'), 5000).unref?.());
     if (await Promise.race([gone.then(() => 'gone' as const), wait]) === 'late') child.kill('SIGKILL');
     this.#child = undefined;

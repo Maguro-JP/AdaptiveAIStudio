@@ -13,7 +13,7 @@ import type { WorkItem } from '../agent/team.ts';
 import type { Harness, HarnessDecision } from '../harness/harness.ts';
 import { buildHarness } from './harness-setup.ts';
 import { UndoStore, type UndoPoint } from './undo.ts';
-import { OutsideChanges } from '../agent/outside-changes.ts';
+import { OutsideChanges, ToolWindows } from '../agent/outside-changes.ts';
 import { stateDir } from './home.ts';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool, editFileTool } from '../agent/tools/fs.ts';
 import { findCodeTool, findSymbolTool } from '../agent/tools/find.ts';
@@ -90,7 +90,11 @@ export interface TeamWiring {
    * `outsideLost` は、前後比べができなかったときの理由（落ちた・git で比べられなかった）。run_command で変わった分は
    * 一つも載っていない（戻せない）。
    */
-  finish(): Promise<{ point: UndoPoint | undefined; unrecorded: string[]; outsideLost?: string }>;
+  /**
+   * `elsewhere` は、依頼の間に変わっていたが、書くツールも run_command も変えていない道（利用者が別の画面で保存した、など）。
+   * 「戻す」には載せない（戻すと、その人が書いた分を消す）。
+   */
+  finish(): Promise<{ point: UndoPoint | undefined; unrecorded: string[]; outsideLost?: string; elsewhere?: string[] }>;
   harness: Harness;
   /** 素のツール。規則を通らない。画面に出す数え上げ用。 */
   bare: Tool[];
@@ -125,11 +129,13 @@ export async function wireTeam(
    * ここに `network` と `mcp` は無い。端末側では組んでいないので、
    * それらを持つ役職でも、その区分は空になる。
    */
-  const pool = {
+  // run_command が走っている間に変わった道を覚える（終わりの前後比べで、利用者が書いた分を依頼の分と取り違えない）
+  const windows = new ToolWindows(root);
+  const pool = windows.pool({
     read: [readFileTool, listFilesTool, searchTextTool, findCodeTool, findSymbolTool],
     write: [writeFileTool, editFileTool],
     execute: [createRunCommandTool({ allowed: config.agent?.allowedCommands })],
-  };
+  });
   const bare: Tool[] = [...pool.read, ...pool.write, ...pool.execute];
   const roles = new RoleRegistry(config.roles ?? []);
   const undo = new UndoStore(root, join(stateDir(), 'undo'));
@@ -172,16 +178,28 @@ export async function wireTeam(
       // 前後比べが落ちても、書くツールの分の戻り先は閉じる。ただし run_command の分が載っていないことを黙らない
       // （黙ると、戻したつもりで run_command の変更だけ残る）
       const found = await outside.after().catch((e: unknown) => e as Error);
+      const elsewhere: string[] = [];
       if (!(found instanceof Error)) {
-        for (const c of found.changes) undo.replace(c.path, c.previous);
-        for (const path of found.unrecorded) undo.forget(path);
+        // 書くツールが書いたのでも、run_command が走っている間に変わったのでもない道は、依頼の分として載せない
+        const ours = (path: string): boolean => undo.has(path) || windows.mayHaveTouched(path);
+        for (const c of found.changes) {
+          if (ours(c.path)) undo.replace(c.path, c.previous);
+          else elsewhere.push(c.path);
+        }
+        for (const path of found.unrecorded) {
+          if (ours(path)) undo.forget(path);
+          else elsewhere.push(path);
+        }
       }
       const point = await undo.end();
       // git が落ちた・git の管理下でないときは、after() は投げずに「比べられない」と返す。それも黙らない
       const lost = found instanceof Error ? found.message
         : found.comparable ? undefined : 'git で作業場の前後を比べられませんでした（git の管理下でない・git が動かない）';
       // 戻せないのは、前後比べで記録できなかった道だけではない。大きさで記録できなかった道も入れる。
-      return { point, unrecorded: [...undo.peekSkipped()], ...(lost ? { outsideLost: lost } : {}) };
+      return {
+        point, unrecorded: [...undo.peekSkipped()], ...(lost ? { outsideLost: lost } : {}),
+        ...(elsewhere.length > 0 ? { elsewhere: elsewhere.sort() } : {}),
+      };
     },
     harness,
     bare,

@@ -14,7 +14,8 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
+import { isMain } from './is-main.mjs';
 
 export const HOOKS_PATH = '.githooks';
 
@@ -65,7 +66,7 @@ export function installHooks(root) {
   return plan;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..');
   console.log(installHooks(root).text);
 }

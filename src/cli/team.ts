@@ -5,6 +5,7 @@
  * 形式はそのまま引き継ぐ。
  */
 import { defaultWorkRoot } from '../core/home.ts';
+import { how } from './how.ts';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -42,7 +43,7 @@ const SYSTEM = `あなたはソフトウェア開発チームの作業者です�
 async function main(): Promise<void> {
   const taskFile = process.argv[2];
   if (!taskFile) {
-    console.error('使い方: npm run team -- <tasks.json>');
+    console.error(`使い方: ${how('team', '<tasks.json>')}`);
     process.exit(1);
   }
 
@@ -213,6 +214,9 @@ async function main(): Promise<void> {
     }
     if (closed && closed.unrecorded.length > 0) {
       console.log(c.yellow(`前の中身を記録できず、戻せないファイル: ${closed.unrecorded.join(', ')}`));
+    }
+    if (closed?.elsewhere) {
+      console.log(c.yellow(`作業の間に、この作業ではないところで変わったファイル（「戻す」には載せていません）: ${closed.elsewhere.join(', ')}`));
     }
     if (closed?.outsideLost) {
       console.log(c.yellow(`run_command で変わったファイルを調べられませんでした（${closed.outsideLost}）。その分は画面の「戻す」からは戻せません`));

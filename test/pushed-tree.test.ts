@@ -305,6 +305,31 @@ describe('フックが、本当に止める', sourceOnly, () => {
     assert.equal(existsSync(ran), true, 'タグとして押すのに確かめを飛ばした');
   });
 
+  test('**式で押しても（`HEAD~1:main`）、いま出ている HEAD と見比べる**', async () => {
+    // 手元の ref が refs/heads/* のときだけ sha を拾っていたので、式で押すと見比べずに、確かめていない commit が出た
+    const { work } = await sandbox('process.exit(0);\n');
+    await writeFile(join(work, 'src', 'a.ts'), 'export const a = 2;\n');
+    execFileSync('git', ['commit', '-q', '-am', '二つ目'], { cwd: work });
+    const r = push(work, ['origin', 'HEAD~1:refs/heads/main']);
+    assert.equal(r.ok, false, `確かめていない commit を押せてしまった: ${r.text}`);
+    assert.match(r.text, /違います/, `理由を言っていない: ${r.text}`);
+  });
+
+  test('**二本まとめて押すときは、どちらの sha も見比べる**', async () => {
+    // 最後の一本しか見ていなかったので、先に並んだ方は確かめずに出た
+    const { work } = await sandbox('process.exit(0);\n');
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: work, encoding: 'utf8' });
+    git('branch', 'old');
+    await writeFile(join(work, 'src', 'a.ts'), 'export const a = 2;\n');
+    git('commit', '-q', '-am', '二つ目');
+    // 並びを両方試す（どちらが最後に来ても止まること）
+    for (const order of [['old', 'main'], ['main', 'old']]) {
+      const r = push(work, ['origin', ...order]);
+      assert.equal(r.ok, false, `${order.join(' ')} で押せてしまった: ${r.text}`);
+      assert.match(r.text, /違います/, `理由を言っていない: ${r.text}`);
+    }
+  });
+
   test('確かめが落ちたら、もちろん押さない（対）', async () => {
     const { work } = await sandbox('process.exit(1);\n');
     const r = push(work);

@@ -13,6 +13,8 @@
  * 依存は増やさない（dotenv は入れない）。形は一行 `KEY=VALUE` だけ。
  */
 import { readFileSync } from 'node:fs';
+import { inOrder } from './in-order.ts';
+import { withFileLock } from './file-lock.ts';
 
 /** 一行ずつ読む。壊れた行は飛ばす（そこで全部を止めない）。 */
 export function parseEnvFile(text: string): Record<string, string> {
@@ -46,6 +48,14 @@ export function parseEnvFile(text: string): Record<string, string> {
  * 名前が要るので、入れた時点で覚えておく。
  */
 const fromEnvFile = new Set<string>();
+
+/**
+ * その名前が `.env` の外（OS の環境変数など）で立っているか。立っていると、`.env` に書いた値は立ち上げ直したときに読まれない
+ * （`loadEnvFile` は既にある名前を上書きしない）。
+ */
+export function setOutsideEnvFile(key: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[key] !== undefined && !fromEnvFile.has(key);
+}
 
 /** `.env` から入れた名前（値は返さない）。 */
 export function secretNames(): string[] {
@@ -121,8 +131,17 @@ export async function writeEnvValue(path: string, key: string, value: string): P
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`トークンの名前として使えません: ${key}`);
   // 改行を混ぜられると、一行で別のトークンを足せてしまう。
   if (/[\r\n]/.test(value)) throw new Error('トークンに改行は入れられません');
+  /*
+   * 同じファイルへの書き込みは一つずつ。読んで一行足して全部を書き戻すので、二つの口（GitHub を繋ぐ・MCP を繋ぐ）が同時に書くと、
+   * 後の書き込みが前の行を消していた（動いている間は環境に値が在るので気づかず、立ち上げ直すと消えている）
+   */
+  // 別のプロセス（端末の connect_service など）とも並ぶ
+  return inOrder(path, () => withFileLock(path, () => writeEnvValueNow(path, key, value)));
+}
 
-  const { writeFile, mkdir, chmod } = await import('node:fs/promises');
+async function writeEnvValueNow(path: string, key: string, value: string): Promise<string> {
+
+  const { writeFile, mkdir, chmod, rename, unlink } = await import('node:fs/promises');
   const { dirname } = await import('node:path');
   await mkdir(dirname(path), { recursive: true });
   /*
@@ -159,7 +178,18 @@ export async function writeEnvValue(path: string, key: string, value: string): P
   while (after.length > 0 && after[after.length - 1]!.trim() === '') after.pop();
   if (!replaced) after.push(line);
   // 作るときの権限。既に在るファイルには効かないので、下で付け直す。
-  await writeFile(path, `${bom}${after.join(eol)}${eol}`, { encoding: 'utf8', mode: 0o600 });
+  /*
+   * 仮のファイルに書き切ってから名前を付け替える（直に上書きすると、一度空にしてから書くので、途中で落ちると `.env` が空か途中までになり、
+   * ほかのトークンも全部消えた）。権限は仮のファイルに付けておく（付け替えたあとの名前は、その権限のまま）
+   */
+  const tmp = `${path}.${process.pid}.tmp`;
+  try {
+    await writeFile(tmp, `${bom}${after.join(eol)}${eol}`, { encoding: 'utf8', mode: 0o600, flush: true });
+    await rename(tmp, path);
+  } catch (e) {
+    try { await unlink(tmp); } catch { /* 作れなかった・もう無い仮のファイル */ }
+    throw e;
+  }
   await chmod(path, 0o600).catch(() => { /* Windows では効かない。落とさない */ });
   return key;
 }

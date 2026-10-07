@@ -7,10 +7,10 @@
  *
  * そこで作業の前後でテストの規模を比べ、減っていたら通過とみなさない。
  */
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { toDisplayPath } from './tools/paths.ts';
-import { isAbsent } from '../harness/put-back.ts';
+import { isAbsent, readRegularText } from '../harness/put-back.ts';
 import { isTestFile, countCases, countSkips, countFocus } from './test-patterns.ts';
 
 export interface TestSnapshot {
@@ -68,8 +68,11 @@ export async function snapshotTests(root: string): Promise<TestSnapshot> {
 
       let text: string;
       try {
-        text = await readFile(abs, 'utf8');
+        // 大きさを見てから読む（test/ の下の置き物、数百 MB のモデルなどを、作業の前と後のたびに丸ごと文字列にしていた）。
+        // 大きすぎるものはテストの書かれたファイルではないので、定義 0 として載せる（書く前の規則と同じ上限）
+        text = await readRegularText(abs);
       } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'EFBIG') { files.set(rel, 0); continue; }
         if (!isAbsent(e)) unreadable.add(rel);
         continue;
       }

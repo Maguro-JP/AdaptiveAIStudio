@@ -15,11 +15,11 @@
 import { Priority } from '../providers/contract.ts';
 import { findCodeTool, findSymbolTool } from '../agent/tools/find.ts';
 import {
-  listServicesTool, createConnectServiceTool, createDisconnectServiceTool, type ServiceHooks,
+  createListServicesTool, createConnectServiceTool, createDisconnectServiceTool, type ServiceHooks,
 } from '../agent/tools/services.ts';
 import { defaultWorkRoot } from './home.ts';
 import { isWriteTool, mayChangeFiles, isExternalTool } from '../agent/tools/write-kind.ts';
-import { resolve, join } from 'node:path';
+import { resolve, join, isAbsolute, relative } from 'node:path';
 import type { AasConfig } from '../config.ts';
 import { buildRegistry } from './build.ts';
 import { ChatOrchestrator } from './orchestrator.ts';
@@ -47,7 +47,7 @@ import {
 } from '../memory/displeasure.ts';
 import { ProposalQueue, proposalHere, type Proposal } from '../agent/proposals.ts';
 import { findLeads, investigationPrompt, parseProposal, reconCutShort } from '../agent/initiative.ts';
-import { IdleScheduler, type ModeStat } from '../harness/idle.ts';
+import { IdleScheduler, type ModeStat, type Decision } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES, MODE_ROLE, promptFor } from '../harness/idle-modes.ts';
 import { DutyRoster, type DutyRecord } from '../harness/duties.ts';
 import { BUILTIN_DUTIES } from '../harness/builtin-duties.ts';
@@ -69,7 +69,7 @@ import { workspaceStamp, stampChanges } from '../agent/workspace-stamp.ts';
 import { BaselineProbe, type BaselineOutcome } from '../agent/baseline.ts';
 import { Checkpoint } from '../harness/checkpoint.ts';
 import { UndoStore, restoreWarnings } from './undo.ts';
-import { OutsideChanges } from '../agent/outside-changes.ts';
+import { OutsideChanges, ToolWindows } from '../agent/outside-changes.ts';
 import { AckStore, type AckId } from './acks.ts';
 import { fitParts } from './prompt-budget.ts';
 import { rerankByBody, rerankShare } from '../agent/rerank.ts';
@@ -83,7 +83,7 @@ import { ANY_PATH, type LaneConfig } from './scheduler.ts';
 import type { ProviderMessage } from '../providers/contract.ts';
 import { Conversation } from './conversation.ts';
 import { WorkspaceLock } from './workspace-lock.ts';
-import { fitByTokens, estimateTokens } from '../agent/window.ts';
+import { fitByTokens, estimateTokens, headOf } from '../agent/window.ts';
 import { ProjectRules } from '../agent/project-rules.ts';
 import type { Counter } from '../agent/tokenizer.ts';
 import { resolveCounting, type Counting } from './counting.ts';
@@ -357,6 +357,8 @@ export class Session {
   readonly candidates: string[];
   /** 判じる・検める仕事に使う候補（手元のモデルがあればそれだけ。`quietCandidates`）。 */
   readonly quiet: string[];
+  /** 候補のうち、手元のモデル（locality が local）のもの。新しい世代を訊くのはこれだけ。 */
+  readonly localCandidates: string[];
 
   /**
    * モデルが要る仕事の手前で、無いことを言う。無ければ `undefined`。
@@ -455,7 +457,7 @@ export class Session {
   #counterAsked = false;
 
   private constructor(init: {
-    config: AasConfig; root: string; candidates: string[]; quiet: string[]; modelReason: string;
+    config: AasConfig; root: string; candidates: string[]; quiet: string[]; localCandidates: string[]; modelReason: string;
     memory: Memory; roles: RoleRegistry; orchestrator: ChatOrchestrator;
     proposals: ProposalQueue; idle: IdleScheduler; duties: DutyRoster;
     pilot: AutopilotBundle; prefetch: Prefetcher; opts: SessionOptions;
@@ -475,6 +477,7 @@ export class Session {
     this.#projectRules = new ProjectRules(init.root);
     this.candidates = init.candidates;
     this.quiet = init.quiet;
+    this.localCandidates = init.localCandidates;
     this.memory = init.memory;
     this.proposals = init.proposals;
     this.idle = init.idle;
@@ -572,6 +575,7 @@ export class Session {
         refresh();
         return true;
       },
+      running: (): string[] => mcpClients.map((c) => c.name),
     };
 
     // 権限は「配らない」ことで守る。禁じる文言ではなく、手段の有無で決める。
@@ -607,7 +611,7 @@ export class Session {
       // 繋ぐ・外すも、ここに置く。**外の道具の話は、外の道具の側で完結させる。**
       // 繋ぐのは承認を通す（協議は自動では通らない）。
       mcp: wrap([
-        listServicesTool,
+        createListServicesTool(serviceHooks),
         createConnectServiceTool(serviceHooks), createDisconnectServiceTool(serviceHooks),
         ...collectTools(mcpClients, { inspector, timeoutMs: config.mcp?.timeoutMs }),
       ]),
@@ -616,7 +620,7 @@ export class Session {
     // 繋がったら、そのぶんを入れ直す。**次のターンから使える。**
     refresh = () => {
       toolPool.mcp = wrap([
-        listServicesTool,
+        createListServicesTool(serviceHooks),
         createConnectServiceTool(serviceHooks), createDisconnectServiceTool(serviceHooks),
         ...collectTools(mcpClients, { inspector, timeoutMs: config.mcp?.timeoutMs }),
       ]);
@@ -643,7 +647,7 @@ export class Session {
     const { proposals, idle, duties } = opts.journals ?? await loadJournals(config);
 
     const session = new Session({
-      config, root, candidates, quiet, modelReason: note, memory,
+      config, root, candidates, quiet, localCandidates: localModelCandidates(candidates, registry), modelReason: note, memory,
       roles: new RoleRegistry(config.roles ?? [], (t) => log('warn', t)),
       orchestrator, pilot, prefetch, opts, holder, forum, toolPool, harness, mcpClients,
       services: serviceHooks,
@@ -759,6 +763,8 @@ export class Session {
       await take?.().catch(() => undefined);
     };
 
+    // 確かめのコマンド。落ちた回の後始末（catch）でも使うので、外に置く
+    let planCommand: string | undefined;
     try {
       const root = this.root;
       const verifyCfg = this.config.agent?.verify ?? {};
@@ -768,6 +774,7 @@ export class Session {
       const dirtyBefore = gitBefore.kind === 'dirty' ? gitBefore.changed : [];
 
       const command = await this.verifyCommand();
+      planCommand = command;
       // ベースラインは切り分けのためだけのもの。切っても作業後の検査は残す。
       const probed = command && verifyCfg.baseline !== false
         ? await this.measureBaseline(command, ac.signal)
@@ -828,10 +835,13 @@ export class Session {
 
       /** 段取り全体で呼んだツール（並べた担当の間で一つ）。書ける数の規則がこれで数える。 */
       const planCalls: NonNullable<RequestScope['taskHistory']> = [];
+      // 外のツールが走っている間に変わった道を覚える（終わりの前後比べで、利用者が書いた分を依頼の分と取り違えない。`ToolWindows`）
+      const windows = new ToolWindows(root);
+      const planPool = windows.pool(this.toolPool);
       const team = new Team(this.orchestrator, {
         lanes: this.lanes,
         system: systemFor(this.roles.get(fallbackRoleId)!),
-        tools: toolsFor(this.roles.get(fallbackRoleId)!, this.toolPool),
+        tools: toolsFor(this.roles.get(fallbackRoleId)!, planPool),
         root,
         maxTurns: this.config.agent?.maxTurns,
         temperature: this.config.temperature,
@@ -851,7 +861,7 @@ export class Session {
           if (!role) return undefined;
           // 書ける数は依頼全体で数える（`taskHistory` は担当の間で一つ）
           const scope: RequestScope = { instruction: () => request, history: [], taskHistory: planCalls, forum: this.#forum, metricsKey: () => '' };
-          return { system: systemFor(role), tools: toolsFor(role, this.toolPool), request: scope };
+          return { system: systemFor(role), tools: toolsFor(role, planPool), request: scope };
         },
       });
 
@@ -881,6 +891,14 @@ export class Session {
       let ranOutside = false;
       outsideTaken = async () => {
         const found = await outside.after();
+        // 書くツールが書いたのでも、外のツールが走っている間に変わったのでもない道は、依頼の分として載せない（戻すと利用者の分を消す）
+        const ours = (path: string): boolean => this.undo.has(path) || windows.mayHaveTouched(path);
+        const elsewhere = [...found.changes.map((c) => c.path), ...found.unrecorded].filter((p) => !ours(p));
+        if (elsewhere.length > 0) {
+          this.#opts.onLog?.('warn', `作業の間に、この作業ではないところで変わったファイル（「戻す」には載せていません）: ${elsewhere.sort().join(', ')}`);
+        }
+        found.changes = found.changes.filter((c) => ours(c.path));
+        found.unrecorded = found.unrecorded.filter((p) => ours(p));
         for (const c of found.changes) this.undo.replace(c.path, c.previous);
         /*
          * 前後比べで前の中身を記録できなかった道（上限切れ等）。run_command・外のツールが走った回だけ、書く手前の記録も捨てる
@@ -933,7 +951,8 @@ export class Session {
             // run_command は path を持たない（持っていても意味が違う）。
             if (isWriteTool(ev.event.call.name)) {
               const path = (ev.event.call.args as { path?: string }).path;
-              if (path) written.add(path.replace(/\\/g, '/').replace(/^\.\//, ''));
+              // 作業場の中の絶対の道は、作業場からの道に直す（git の道と二重に並び、検収が「計画に無いファイル」と言っていた）
+              if (path) written.add((isAbsolute(path) && !relative(root, path).startsWith('..') ? relative(root, path) : path).replace(/\\/g, '/').replace(/^\.\//, ''));
             }
           }
           yield {
@@ -964,12 +983,13 @@ export class Session {
         yield { type: 'verifying', command };
         const r = await runVerification(
           { command, root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal);
-        const integrity: { ok: boolean; reason?: string; unsure?: string } = r.passed && testsBefore
+        // テストの数は、落ちた回でも比べる（落ちたテストを消して作業前と同じ落ち方に戻した回を「元から」と言わない。送り口と同じ）
+        const integrity: { ok: boolean; reason?: string; unsure?: string } = testsBefore && !r.timedOut
           ? await snapshotTests(root).then((after) => compareTests(testsBefore, after), () => ({ ok: true, unsure: 'テストを読めませんでした' }))
           : { ok: true };
         if (stopped()) verifyDetail = '止めたので、確かめを途中でやめました';
         else if (!integrity.ok) { verified = 'failed'; verifyDetail = integrity.reason ?? 'テストが減っています'; }
-        else if (integrity.unsure) { verified = 'unsure'; verifyDetail = integrity.unsure; }
+        else if (integrity.unsure && r.passed) { verified = 'unsure'; verifyDetail = integrity.unsure; }
         else if (r.passed) verified = 'passed';
         // 時間切れは落ちたのではない（送り口と同じく「分からない」。全部を巻き戻す理由にしない）
         else if (r.timedOut) { verified = 'unsure'; verifyDetail = '確かめが時間内に終わりませんでした'; }
@@ -1071,6 +1091,10 @@ export class Session {
       if (stopped()) {
         this.#harness.endTask('failed');
         await this.#harness.metrics?.save();
+        // 止めた回の後始末: 覚えている作業前の姿は、書いた後の姿と違うかもしれないので忘れる（次の依頼が、この回の残した失敗を
+        // 「元から」として受け取った）。呼び戻した覚えの記録も捨てる（次の回の合否で点が付いた）
+        if (command) this.baselineProbe.invalidate(command);
+        this.#conv.recalledIds = [];
         this.markChanged();
         return report;
       }
@@ -1111,9 +1135,14 @@ export class Session {
     } catch (e) {
       this.#harness.endTask('failed');
       await this.#harness.metrics?.save();
+      // 落ちた回も、止めた回と同じ後始末をする
+      if (planCommand) this.baselineProbe.invalidate(planCommand);
+      this.#conv.recalledIds = [];
       yield { type: 'log', level: 'error', text: (e as Error).message };
       return undefined;
     } finally {
+      // 段取りが書き換えた・巻き戻した分を、次の依頼の作業場の様子に古いまま載せない（送り口は毎回捨てている）
+      this.#prefetch.invalidate();
       // 担当の途中で落ちた・止めた回も、そこまでに外のツールが変えた分を戻せるように。
       await takeOutside();
       await this.#closeUndo();
@@ -1139,6 +1168,21 @@ export class Session {
   /** 同じ手がかりで何回落ちたら、調べたことにして次へ進むか。 */
   static readonly #RECON_GIVE_UP = 3;
 
+  /**
+   * いま考えるなら何を考えるか。考えごとの本体と、端末の `/idle` の表示が同じ答えを出すように、組み立てをここ一つにする
+   * （`/idle` は日課を渡さず、別の作業場の提案まで数えていたので、「次に考えること」が実際と違った）。
+   */
+  nextThought(now = Date.now()): Promise<Decision> {
+    const due = this.duties.due(now).map((s) => ({
+      dutyId: s.duty.id, modeId: s.duty.modeId,
+      codename: s.duty.codename, isCatchUp: s.isCatchUp,
+    }));
+    return this.idle.choose(
+      { lastChangeAt: this.#lastChangeAt, openProposals: this.proposals.open().filter((p) => proposalHere(p, placeKey(this.root))).length, now },
+      due,
+    );
+  }
+
   async *think(): AsyncGenerator<ThinkEvent, boolean> {
     // **断る理由は必ず言う。**黙るかどうかは、呼ぶ側が決める（見回りは黙る）。
     if (this.noModel) {
@@ -1155,15 +1199,7 @@ export class Session {
     }
 
     const now = Date.now();
-    const due = this.duties.due(now).map((s) => ({
-      dutyId: s.duty.id, modeId: s.duty.modeId,
-      codename: s.duty.codename, isCatchUp: s.isCatchUp,
-    }));
-
-    const decision = await this.idle.choose(
-      { lastChangeAt: this.#lastChangeAt, openProposals: this.proposals.open().filter((p) => proposalHere(p, placeKey(this.root))).length, now },
-      due,
-    );
+    const decision = await this.nextThought(now);
     if (!decision.mode) {
       // 割り当ての側は理由を組み立てている。**ここで捨てない。**
       yield { type: 'declined', reason: decision.reason ?? '今回は見送りました' };
@@ -1204,7 +1240,11 @@ export class Session {
          * 何も入っていないときは、カタログの家族から訊く。入れた直後は
          * 何も入っていないので、そこで黙ると最初の一つが古いまま固定される。
          */
-        const using = this.candidates.map((c) => {
+        // 手元のモデルだけを訊く。雲の名前（`anthropic:claude-…`）を混ぜると、その名前で配布元を探し、
+        // 入っているものが在ることになってカタログの家族からも訊かなかった。
+        // 頭（`ollama:`）は `findNewerFor` が一度だけ外す。ここでも外すと `qwen3.5:9b` が `9b` になり、一件も訊かなかった
+        const local = this.localCandidates;
+        const using = local.map((c) => {
           const at = c.indexOf(':');
           return at < 0 ? c : c.slice(at + 1);
         });
@@ -1217,7 +1257,7 @@ export class Session {
         const asked = AbortSignal.any([probe.signal, AbortSignal.timeout(UPDATE_PROBE_TIMEOUT_MS)]);
         const newer = await findNewerFor({
           runtimeKind: this.config.runtime?.kind ?? 'inproc',
-          installed: using,
+          installed: local,
           seed: catalogFamilies(),
           signal: asked,
         }).finally(() => { if (this.#conv.running === probe) this.#conv.running = undefined; });
@@ -1238,16 +1278,28 @@ export class Session {
     }
 
     // ■で止めたなら、考えごとも続けない（問い合わせだけ止めて、モデルは呼び出す、にしない）
-    if (upkeepStopped) return false;
+    if (upkeepStopped) {
+      // 止めた回も「考えた」と数えて残す（数えずに抜けていたので、間合いが進まず、次の見回りでまた同じ問い合わせを始めた）
+      this.idle.begin(mode, Date.now());
+      await this.saveAutonomy();
+      yield { type: 'failed', codename: mode.codename, reason: '止められました' };
+      return true;
+    }
 
     // RECON だけは手がかりを機械で探してから渡す。
     // 事実の収集は機械の方が速く、確実で、無料。
     if (mode.id === 'recon') {
-      if (!snap) return false;
-      const leads = await findLeads({
+      // 手がかりが無い・作業場の様子が取れないときも、見回りを「見た」として数える（`idle.begin`）。数えずにいたので、次の変更まで
+      // 毎回の選びで見回りが一番上に来て空振りし、ほかの考えごと（新しいモデルの確かめ・振り返りなど）が一度も回らなかった
+      const leads = snap ? await findLeads({
         root: this.root, snapshot: snap, known: this.proposals.seen(), max: 1,
-      });
-      if (leads.length === 0) return false;
+      }) : [];
+      if (leads.length === 0) {
+        this.idle.begin(mode, Date.now());
+        await this.saveAutonomy();
+        yield { type: 'declined', reason: snap ? '調べる手がかりがありません' : '作業場の様子を取れませんでした' };
+        return false;
+      }
       const lead = leads[0]!;
       context = `${context}\n\n${investigationPrompt(lead)}`;
       fingerprint = lead.fingerprint;
@@ -1266,12 +1318,16 @@ export class Session {
     let broken: string | undefined;
     let finishedWith: string | undefined;
     let finishedDetail: string | undefined;
+    // 考えごとの間はコマンドを走らせない。PATROL がコマンドを頼んで断られたなら、テストは一度も回っていない
+    let refusedCommand = false;
     try {
       // 知らせは try の中で流す（受け手がここで読むのをやめても、取った手を下の finally で返す）
       yield {
         type: 'chose', modeId: mode.id, codename: mode.codename, name: mode.name,
         roleCodename: role.codename, reason: decision.reason, isDuty: !!decision.dutyId,
       };
+      // 実際のコンテキストウィンドウとその数え方を渡す（送り口と同じ。渡さないと既定の 8192 で見積もり、読んだファイルを刈りすぎる・溢れさせる）
+      const thinkCounter = await this.#count();
       const thinker = new Agent(this.orchestrator, {
         candidates: this.candidates,
         system: buildSystemPrompt(role),
@@ -1280,10 +1336,15 @@ export class Session {
         maxTurns: 8,
         temperature: this.config.temperature,
         maxTokens: this.config.maxTokens,
+        contextTokens: this.contextTokens,
+        ...(thinkCounter ? { count: (t: string) => thinkCounter.count(t) } : {}),
         // 考えるだけ。手は動かさない。
         // ただし外を**読む**ことは止めない。読むだけなら、この場所は変わらない。
         // 止めるのは書き込みとコマンド。手を出すことと、調べることは違う。
-        approve: async (req) => req.kind === 'network' && this.#opts.approveThinking !== false,
+        approve: async (req) => {
+          if (req.kind === 'command') refusedCommand = true;
+          return req.kind === 'network' && this.#opts.approveThinking !== false;
+        },
       });
       for await (const ev of thinker.run(
         [{ role: 'user', content: promptFor(mode, context) }], ac.signal,
@@ -1313,6 +1374,8 @@ export class Session {
     // （閉じていたので、小さいモデルが調べ切れなかった手がかりは、ファイルが変わるまで二度と調べられなかった）。
     // 途中まで書いた PROPOSAL も、言い終えていないので提案にしない。3 回で諦める数え方に載せる
     if (broken === undefined && mode.id === 'recon') broken = reconCutShort(finishedWith, finishedDetail, text);
+    // ほかの考えごとでも、出力の上限で切れた回の PROPOSAL は言い終えていない（途中で切れた action を採用で走る依頼にしていた）
+    if (broken === undefined && /上限で切れ/.test(finishedDetail ?? '')) broken = '言い終えませんでした（出力の上限で切れました）';
     if (broken !== undefined) {
       // 手がかりは、同じものが決まって落ちる（長すぎて断られる等）と、先へ進めなくなる。3 回落ちたら調べたことにして次へ進む
       if (mode.id === 'recon') {
@@ -1331,6 +1394,16 @@ export class Session {
     }
 
     if (mode.id === 'recon') this.proposals.markExamined(fingerprint);
+
+    // PATROL でテストのコマンドを断った回は「済み」にしない（毎日「済み」と出ていたのに、テストは一度も回っていなかった）。
+    // 日課なら、その期は流したと記録する（済ませていないことが残り、同じ期に何度も頼み直さない）。提案にもしない（「テストできなかった」を不具合として上げない）
+    if (mode.id === 'patrol' && refusedCommand) {
+      if (decision.dutyId) this.duties.skip(decision.dutyId, now);
+      this.idle.recordOutcome(mode.id, false);
+      await this.saveAutonomy();
+      yield { type: 'failed', codename: mode.codename, reason: '考えごとの間はコマンドを走らせないので、テストは回していません。テストは依頼として頼んでください' };
+      return true;
+    }
 
     // 日課として動いたなら、済んだことにする。
     // 報告が無くても「確認した」ことに変わりはない。
@@ -1383,9 +1456,12 @@ export class Session {
     // 決まった提案は決め直さない（片づいた提案を開き直して、もう一度実行していた）。ファイルを読み直して、
     // もう一方（画面と端末）が決めた分も見てから決める。
     // 別の作業場の提案は、ここでは決めない（採用すると、この作業場でその手順が走る）
+    // 作業場は、ファイルを読み直した**後**の中身で確かめる（手元に無い提案（もう一方が後から足した分）は確かめを素通りし、
+    // 別の作業場の提案を決めて、その手順をこの作業場で走らせた）
+    const key = placeKey(this.root);
     const found = this.proposals.find(id);
-    if (found && !proposalHere(found, placeKey(this.root))) return undefined;
-    const target = await this.proposals.settle(id, verdict, { onlyOpen: true });
+    if (found && !proposalHere(found, key)) return undefined;
+    const target = await this.proposals.settle(id, verdict, { onlyOpen: true, where: (p) => proposalHere(p, key) });
     if (!target) return undefined;
     const origin = target.origin ?? this.#origin.get(target.id);
     if (origin) this.idle.recordVerdict(origin, verdict);
@@ -1464,7 +1540,10 @@ export class Session {
   async verifyCommand(): Promise<string | undefined> {
     const configured = this.config.agent?.verify?.command;
     if (configured) return configured;
-    const snap = await this.#prefetch.snapshotWithin(2000);
+    // 立ち上げ直後の最初の依頼は、まだ一度も作り終えていないので 2 秒では間に合わないことがある。間に合わなかったら、もう少し待ち、
+    // それでも無ければ言う（黙って確かめを飛ばし、書き換えた回が「確かめていない」で静かに終わっていた）
+    const snap = await this.#prefetch.snapshotWithin(2000) ?? await this.#prefetch.snapshotWithin(15_000);
+    if (!snap) this.#opts.onLog?.('warn', 'この作業場の下調べが間に合わなかったので、今回は確かめのコマンドを決められませんでした。次の依頼で決めます');
     // 動かし方（package.json など）を読めなかった。「確かめのコマンドが無い」と同じ顔をさせない（次の依頼で調べ直す）
     if (snap && !snap.ready.includes('commands')) {
       this.#opts.onLog?.('warn', 'この作業場の動かし方（package.json など）を読めなかったので、今回は確かめられません。次の依頼で読み直します');
@@ -1617,6 +1696,7 @@ export class Session {
     let measuredFrom = started;
     // 巻き戻すかどうか（従来の意味）。確かめて落ちたときだけ倒す。
     let keep = true;
+    let lastTimedOut = false;
     // 実際に確かめたか、どうだったか。**確かめていないことを、通ったと言わない。**
     let checked: 'passed' | 'failed' | 'preexisting' | 'unsure' | 'notRun' = 'notRun';
 
@@ -1631,7 +1711,8 @@ export class Session {
      * 場面（直前の指示）は、この回の記録で上書きされる前に取る。
      */
     const situation = {
-      when: conv.lastTurn?.instruction.trim().slice(0, 120),
+      // 伏せてから切る（切ってから伏せると、120 字の境で切れた鍵の頭が伏せる形に当たらず残った）。字の対も割らない
+      when: conv.lastTurn ? headOf(redactSecrets(conv.lastTurn.instruction.trim()), 120) : undefined,
       did: this.#lastTurnSummary(conv),
     };
 
@@ -1774,8 +1855,13 @@ export class Session {
             case 'toolEnd': {
               usedTools.push(ev.call.name);
               // 何が効いて何が効かなかったかを数える。**言葉ではなく、結果で見る。**
-              if (ev.isError) failedTools.push(ev.call.name);
-              else if (isWriteTool(ev.call.name)) {
+              if (ev.isError) {
+                failedTools.push(ev.call.name);
+                // 書けなかった道は、書く手前の記録を捨てる（まだこの回で書いていなければ）。残すと、その後に人が直した分を、後で書いて
+                // 打ち切ったときの巻き戻しが、回の初めの中身で消した
+                const p = (ev.call.args as { path?: unknown }).path;
+                if (isWriteTool(ev.call.name) && typeof p === 'string' && !changedHere.includes(p)) checkpoint.forget(p);
+              } else if (isWriteTool(ev.call.name)) {
                 wroteSomething = true;
                 const at = (ev.call.args as { path?: unknown }).path;
                 if (typeof at === 'string' && !changedHere.includes(at)) changedHere.push(at);
@@ -1831,7 +1917,8 @@ export class Session {
        * モデルの成績**になっていた。選び方がその数字で決まるので、
        * 付け先を間違えると、以後ずっと間違った方を選び続ける。
        */
-      if (modelUsed) {
+      // 止めた回はモデルの成績に付けない（止めることの多いモデルほど、失敗が積もって選ばれにくくなった）
+      if (modelUsed && finishedReason !== 'aborted' && !ac.signal.aborted) {
         await this.pilot.autopilot.record({
           modelId: modelUsed,
           success: finishedReason === 'completed',
@@ -1880,6 +1967,10 @@ export class Session {
                 wroteSomething = true;
                 const at = (ev.call.args as { path?: unknown }).path;
                 if (typeof at === 'string' && !changedHere.includes(at)) changedHere.push(at);
+              } else if (ev.isError && isWriteTool(ev.call.name)) {
+                // 書けなかった道の記録は捨てる（本体の周と同じ）
+                const at = (ev.call.args as { path?: unknown }).path;
+                if (typeof at === 'string' && !changedHere.includes(at)) checkpoint.forget(at);
               }
               if (outsideTool(ev.call.name)) {
                 const found = await outside.after();
@@ -1930,6 +2021,8 @@ export class Session {
         while (events.length > 0) yield events.shift()!;
         // 止めた・時間切れの途中の出力を「前」として覚えない（外のツールだけの分岐と同じ守り）。
         if (!ac.signal.aborted && step.value.last && !step.value.last.timedOut) verifiedLast = step.value.last;
+        // 時間切れで終えた回は残す（巻き戻さない）が、終わりの姿は分からない。前の記録は忘れる（下で使う）
+        if (step.value.last?.timedOut) lastTimedOut = true;
       }
 
       /*
@@ -2045,7 +2138,8 @@ export class Session {
           if (verifiedLast) this.baselineProbe.note(command, verifiedLast);
           // 打ち切ったのに終わりの姿が分からない（止めた・時間切れ）なら、測った時点の姿も忘れる。
           // 残したままだと、次の回の外のツールに、この回が残した失敗を着せる。
-          else if (!keep) this.baselineProbe.invalidate(command);
+          // 書いたのに確かめずに終わった回（止めた・上限・モデルの不調）も忘れる（確かめの分岐を通らないので、書く前の姿が残った）
+          else if (!keep || lastTimedOut || wroteSomething) this.baselineProbe.invalidate(command);
         }
       }
 
@@ -2344,6 +2438,8 @@ export class Session {
       last.checked === 'passed' ? '確かめて通した'
         : last.checked === 'failed' ? '確かめたが通らなかった'
         : last.checked === 'unsure' ? '確かめきれなかった（通らなかったがこの回が原因か分からない、またはテストを読めなかった）'
+        // 元から落ちていた回を「確かめていない」と写すと、判じ手と「二度としないこと」に、確かめなかったという誤った学びが残った
+        : last.checked === 'preexisting' ? '確かめたが、作業前から同じように落ちていた'
         : '確かめていない',
     ].join(' / ');
   }
@@ -2357,15 +2453,16 @@ export class Session {
   #recall(text: string, opts: { lessons?: boolean } = {}, conv: Conversation = this.#conv): string {
     // **件数ではなく、長さで決める。**一件の長さは決まっていないので、
     // 「6件」では窓が狭いモデルで押し出し、広いモデルで余らせる。
-    const related = fitByTokens(
-      this.memory.recall(text, { limit: 12, root: this.root, ...opts }),
+    // 前に駄目だった手も、長さの上限の内で数える（上限で切った後に足していたので、狭いコンテキストウィンドウでは上限の数倍になった）。先に並べて落としにくくする
+    const failed = this.memory.failedBefore(text, 2, this.root);
+    const candidates = [...failed];
+    for (const e of this.memory.recall(text, { limit: 12, root: this.root, ...opts })) if (!candidates.some((c) => c.id === e.id)) candidates.push(e);
+    const merged = fitByTokens(
+      candidates,
       (e) => `${e.title}${e.detail}`,
       Math.floor(this.contextTokens * 0.10),
       2,
     );
-    const failed = this.memory.failedBefore(text, 2, this.root);
-    const merged = [...related];
-    for (const f of failed) if (!merged.some((e) => e.id === f.id)) merged.push(f);
     conv.recalledIds = merged.map((e) => e.id);
     conv.recalledEra = this.memory.era;
     this.memory.noteRecalled(conv.recalledIds);
@@ -2635,7 +2732,9 @@ export class Session {
       // （`covers` のコメント）。検索の点の付け方は、並べるには効くが、
       // 「そのファイルを直している」の判断には使えない。
       const strong = seedFrom(index, conv.instruction, [], this.undo.recent(), { search: false });
-      if (held && held.builtAt === index.builtAt && covers(held.text, index, strong)) return held.text;
+      // 今回の取り分に入るかも見る（ほかの部品が育つ・モデルが替わると、前に詰め切った repo map は超え、落とされたまま使い回し続けた）
+      if (held && held.builtAt === index.builtAt && covers(held.text, index, strong)
+        && (count ?? estimateTokens)(held.text) <= left) return held.text;
 
       // トークンではなく文字で切る（切り出しが文字単位のため）。**多めに数える。**
       const chars = count ? left : left * 2;
@@ -2734,6 +2833,14 @@ export function speedOf(model: string, chars: number, seconds: number): { model:
  * 並びは、軽い方から。自動で選んだ候補は速い順なのでそのまま（`fixed: false`）。設定で固定した候補は、強い（重い・高い）順に
  * 書く決まりなので逆にする（そのままだと、一番重いモデルが検問所の待ち時間に間に合わず、持ち出しが全部止まる）。
  */
+/** 候補のうち、手元のモデル（locality が local）のものだけ。並びはそのまま。 */
+export function localModelCandidates(
+  candidates: readonly string[],
+  registry: { resolve(id: string): { provider: { locality: string } } | undefined },
+): string[] {
+  return candidates.filter((c) => registry.resolve(c)?.provider.locality === 'local');
+}
+
 export function quietCandidates(
   candidates: readonly string[],
   registry: { resolve(id: string): { provider: { locality: string } } | undefined },

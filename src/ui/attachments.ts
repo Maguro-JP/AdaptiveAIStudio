@@ -65,10 +65,19 @@ const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff]);
  * 拡張子だけでは足りない（拡張子の無いファイルは多い）ので、**中身も見る**。
  * 先頭に 0 バイトが混ざっていれば、それは文字ものではない。
  */
+/** 添付一つに、これより少なくしか入らないなら入れない（囲みだけの塊になる） */
+const MIN_ROOM = 200;
+
 export function detectKind(name: string, data: Buffer): AttachmentKind {
   const ext = extname(name).toLowerCase();
   if (IMAGE_EXT.has(ext)) return 'image';
-  if (TEXT_EXT.has(ext)) return 'text';
+  // 文字の拡張子でも、中身が二進なら文字ものにしない（`.ts` の動画・壊れた `.log` を、崩れた字のまま依頼の先頭へ差し込んでいた）。
+  // UTF-16 は NUL を含むので、BOM があれば下の見分けに回す
+  if (TEXT_EXT.has(ext)) {
+    const head = data.subarray(0, 4096);
+    const utf16 = data.length >= 2 && ((data[0] === 0xff && data[1] === 0xfe) || (data[0] === 0xfe && data[1] === 0xff));
+    if (utf16 || !head.includes(0)) return 'text';
+  }
 
   // 絵の合図は、拡張子ではなく中身で見る。
   if (data.subarray(0, PNG_MAGIC.length).equals(PNG_MAGIC)) return 'image';
@@ -235,6 +244,8 @@ export class Attachments {
         const frame = `--- 添付: ${item.name}${how} ---\n\n--- ここまで ---\n\n`.length;
         // **一つで全部を使い切らせない。**複数付けたときに、後ろが空になる。
         const room = Math.max(0, Math.min(each, total - used - frame));
+        // 中身が一字も入らないなら、入れなかったものとして数える（前は中身の無い塊を「添えた」形で入れ、「入れていません」とも言わなかった）
+        if (room < MIN_ROOM && raw.length > room) { leftOut += 1; continue; }
         const body = raw.length > room
           ? `${raw.slice(0, room)}\n…（以降 ${raw.length - room} 文字は省略。窓に収まらないので切りました）`
           : raw;

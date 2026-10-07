@@ -76,20 +76,32 @@ export async function findNewerOllama(opts: {
   const families = [...new Set(opts.installed.map((r) => splitRef(r).family))];
   const findings: NewerFinding[] = [];
 
+  let failed: string | undefined;
   for (const family of families) {
     const found: string[] = [];
     for (const candidate of nextFamilies(family)) {
       try {
         const res = await fetchImpl(`${OLLAMA_REGISTRY}/${candidate}/tags/list`, { signal: opts.signal });
         if (res.ok) found.push(candidate);
-      } catch {
-        // 繋がらないのは、新しいものが無いこととは違う。
-        // ここで止めて、分かった分だけ返す。
+        // 404 だけが「その名前は無い」。401・403・429・5xx は、訊けなかった
+        else if (res.status !== 404) { failed ??= `${res.status}`; break; }
+      } catch (e) {
+        // 繋がらないのは、新しいものが無いこととは違う。ここで止める
+        failed ??= e instanceof Error ? e.message : String(e);
         break;
       }
     }
     if (found.length > 0) findings.push({ current: family, found });
   }
+  return orUnreachable(findings, failed);
+}
+
+/**
+ * 分かった分を返す。一件も分からず、訊けなかった問い合わせがあったなら投げる。
+ * 空を返すと「新しい世代は見つかりませんでした」になり、繋がらなかったのか無かったのかを取り違えさせていた（社用PCで外へ出られないときなど）
+ */
+function orUnreachable(findings: NewerFinding[], failed: string | undefined): NewerFinding[] {
+  if (findings.length === 0 && failed !== undefined) throw new Error(`配布元に訊けませんでした（${failed}）`);
   return findings;
 }
 
@@ -178,31 +190,43 @@ export async function findNewerGguf(opts: {
     const fam = ggufFamily(file);
     if (fam && !families.has(fam)) families.set(fam, file);
   }
+  let failed: string | undefined;
   for (const [family, current] of families) {
     const found: string[] = [];
     for (const next of nextFamilies(family)) {
-      const hits = await findRecentGguf({ query: next, limit: 5, fetchImpl: opts.fetchImpl, signal: opts.signal })
-        .catch(() => [] as HfModel[]);
+      let hits: HfModel[];
+      try {
+        hits = await findRecentGguf({ query: next, limit: 5, fetchImpl: opts.fetchImpl, signal: opts.signal });
+      } catch (e) {
+        // 繋がらない・断られたのは、無いこととは違う（前は空として数え、「見つかりませんでした」と言っていた）
+        failed ??= e instanceof Error ? e.message : String(e);
+        break;
+      }
       // 名前に次の世代が入っているものだけ。検索は緩いので、こちらで締める。
       const real = hits.filter((h) => h.id.toLowerCase().includes(next.toLowerCase()));
       if (real.length > 0) found.push(real[0]!.id);
     }
     if (found.length > 0) findings.push({ current, found });
   }
-  return findings;
+  return orUnreachable(findings, failed);
 }
 
-/** 人に見せる形。 */
-export function describeNewer(findings: NewerFinding[]): string {
+/**
+ * 人に見せる形。`hint` は打つ一手の書き方（配った形には npm が無い。CLI は `how` を渡す）。
+ */
+export function describeNewer(
+  findings: NewerFinding[],
+  hint: (task: string, args?: string) => string = (task, args) => `npm run ${task}${args ? ` -- ${args}` : ''}`,
+): string {
   if (findings.length === 0) return '新しい世代は見つかりませんでした。';
   const lines = ['新しい世代が出ています', ''];
   for (const f of findings) {
     lines.push(`  ${f.current} → ${f.found.join(', ')}`);
   }
   lines.push('');
-  lines.push('  取ってくる: npm run models -- --get <名前>');
+  lines.push(`  取ってくる: ${hint('models', '--get <名前>')}`);
   lines.push('  ※ 新しい＝この機械で動く、ではありません。');
-  lines.push('    大きさと活性パラメータを見てから選んでください（npm run models）。');
+  lines.push(`    大きさと活性パラメータを見てから選んでください（${hint('models')}）。`);
   return lines.join('\n');
 }
 

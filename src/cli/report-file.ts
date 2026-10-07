@@ -21,6 +21,7 @@
  */
 import { writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { redactSecrets } from '../core/redact.ts';
 // 残す数は片づけ側と同じものを使う。**二箇所に数を置かない**
 // （片方だけ変えると、出す側と片づける側で食い違う）。
 import { KEEP_REPORTS, REPORT_NAME, reportOrder } from '../runtime/cleanup.ts';
@@ -91,7 +92,8 @@ export async function saveReport(
   for (const dir of ordered) {
     try {
       await mkdir(dir, { recursive: true });
-      const at = await writeFresh(dir, base, plain(body));
+      // 送ってもらう前提のファイルなので、秘密は伏せてから書く（doctor の行は伏せずに書いていた。url の問い合わせ・命令の引数に鍵を書いた人の鍵が残った）
+      const at = await writeFresh(dir, base, redactSecrets(plain(body)));
       const removed = await sweepOld(dir, name);
       return removed > 0 ? { path: at, removed } : { path: at };
     } catch (e) {
@@ -105,7 +107,7 @@ export async function saveReport(
  * 同じ名前が在れば `-2` `-3` と付けて書く（同じ分のうちに二度出した報告が、前のものを黙って上書きしていた）。
  * 名前の並びは時刻の順のまま。
  */
-async function writeFresh(dir: string, base: string, text: string): Promise<string> {
+export async function writeFresh(dir: string, base: string, text: string): Promise<string> {
   for (let n = 1; ; n += 1) {
     const at = join(dir, n === 1 ? `${base}.txt` : `${base}-${n}.txt`);
     try {

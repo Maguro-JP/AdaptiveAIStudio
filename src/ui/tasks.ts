@@ -9,12 +9,16 @@
  * 口になるため。殻にも渡さない。
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { join, dirname } from 'node:path';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
 import { chunkReader } from '../core/text.ts';
 import { needsStripFlag } from '../core/node-flags.ts';
-import { stamp } from '../cli/report-file.ts';
+import { stamp, writeFresh } from '../cli/report-file.ts';
 import { setPriority } from 'node:os';
+import { killTree } from '../agent/shell-exec.ts';
+
+/** 点検を一群として起こすか（POSIX だけ。Windows は taskkill /T で子孫を辿る） */
+const OWN_GROUP = process.platform !== 'win32';
 
 export const TASKS: Record<string, string> = {
   doctor: 'この環境を見てもらう',
@@ -156,6 +160,9 @@ export class TaskRunner {
       ? ['--experimental-strip-types'] : [];
     const child = start(process.execPath, [...flags, '--no-warnings', file], {
       cwd: this.#opts.root,
+      // POSIX では一群として起こし、止めるときに子孫ごと止める（`run-tests.mjs` の下の `node --test` が管を持ったまま残り、
+      // 止めても終わりの知らせが来ず、もう一度押すと「既に回しています」と断られ、孫は走り続けた）
+      detached: OWN_GROUP,
       // doctor / selftest は自分で報告を置く。置き先を state/reports に揃えると、
       // サポート用レポートが直近の doctor を使い回せる（毎回 1〜2 分回さない）。
       env: {
@@ -208,18 +215,19 @@ export class TaskRunner {
       const meat = kept.join('');
       const worth = (code ?? 1) !== 0 || meat.split('\n').filter((l) => l.trim()).length > REPORT_MIN_LINES;
       if (!worth) { finish(); return; }
-      const at = join(dir, `${name}-${stamp()}.txt`);
+      const base = `${name}-${stamp()}`;
       const body = `${meat}${keptBytes > KEEP_BYTES ? '\n（長すぎるので途中までです）\n' : ''}\n— 終了コード ${code ?? 1} —\n`;
-      void this.#save(name, at, body).catch(() => undefined).finally(finish);
+      void this.#save(name, dir, base, body).catch(() => undefined).finally(finish);
     });
     return undefined;
   }
 
   /** 出力を置く。置けたか置けなかったかを、流れに言う。 */
-  async #save(name: string, at: string, body: string): Promise<void> {
+  async #save(name: string, dir: string, base: string, body: string): Promise<void> {
     try {
-      await mkdir(dirname(at), { recursive: true });
-      await writeFile(at, body, 'utf8');
+      await mkdir(dir, { recursive: true });
+      // 同じ名前が在れば `-2` を足す（名前は分までなので、同じ分に二度回すと前の報告を黙って上書きしていた。端末の報告と同じ書き方）
+      const at = await writeFresh(dir, base, body);
       this.#opts.onEvent({ name, text: `\n残しました: ${at}\n` });
     } catch (e) {
       this.#opts.onEvent({ name, text: `\n（残せませんでした: ${(e as Error).message}）\n` });
@@ -236,11 +244,17 @@ export class TaskRunner {
       if (this.#finishing.has(name)) return [name];
       const child = this.#children.get(name);
       if (!child) return [];
-      child.kill();
+      this.#kill(child);
       return [name];
     }
     const was = this.running;
-    for (const child of this.#children.values()) child.kill();
+    for (const child of this.#children.values()) this.#kill(child);
     return was;
+  }
+
+  /** 子孫ごと止める（Windows では taskkill /T）。試験から渡した起こし方（偽物）は、その子だけを止める */
+  #kill(child: ChildProcess): void {
+    if (this.#opts.spawnFn) child.kill();
+    else killTree(child);
   }
 }

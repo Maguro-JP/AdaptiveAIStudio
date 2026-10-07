@@ -15,7 +15,7 @@ import type {
   ChatProvider, HealthStatus, ModelDescriptor,
   ProviderChunk, ProviderMessage, ProviderRequest,
 } from './contract.ts';
-import { ProviderError, parseRetryAfter, sayQuotaExhausted, type ProviderErrorKind } from './errors.ts';
+import { ProviderError, parseRetryAfter, sayQuotaExhausted, saysContextTooLong, type ProviderErrorKind } from './errors.ts';
 
 type Sdk = typeof import('@anthropic-ai/sdk')['default'];
 
@@ -104,7 +104,8 @@ export class AnthropicProvider implements ChatProvider {
 
   async *chat(req: ProviderRequest, signal: AbortSignal): AsyncIterable<ProviderChunk> {
     // Claudeは system をトップレベルで受け取る(messagesに混ぜない)
-    const messages = toAnthropicMessages(req.messages);
+    // ツールを渡さない回（雑談と見た回）は、前の回のツールのやりとりを文に畳む（tools 無しで tool_use・tool_result を送ると断られる）
+    const messages = toAnthropicMessages(req.tools && req.tools.length > 0 ? req.messages : withoutToolBlocks(req.messages));
 
     const systemFromMessages = req.messages
       .filter((m) => m.role === 'system')
@@ -211,7 +212,7 @@ export class AnthropicProvider implements ChatProvider {
       kind = 'auth';
     } else if (e instanceof sdk.BadRequestError) {
       // 残高切れは 400 で返る（`credit balance is too low`）。「こちらの誤り」にすると次の候補へ回らず、依頼ごと落ちていた
-      kind = /context|too long|maximum.*token|token.*limit|prompt is too long/i.test(e.message)
+      kind = saysContextTooLong(`${e.message} ${JSON.stringify(e.error ?? '')}`)
         ? 'context_too_long'
         : sayQuotaExhausted(`${e.message} ${JSON.stringify(e.error ?? '')}`) === true ? 'quota_exhausted' : 'invalid_request';
     } else if (e instanceof sdk.NotFoundError) {
@@ -263,6 +264,27 @@ export function finishFromStop(reason: string | null | undefined): 'stop' | 'len
   return undefined;
 }
 
+/**
+ * ツールの呼び出しと結果を、文に畳む。ツールを渡さない依頼で使う（Claude は tools を定義しない依頼の tool_use・tool_result を断る）。
+ * 何を呼んで何が返ったかは文として残す（落とすと、前の回の話の筋が消える）。
+ */
+export function withoutToolBlocks(messages: readonly ProviderMessage[]): ProviderMessage[] {
+  const names = new Map<string, string>();
+  return messages.map((m): ProviderMessage => {
+    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+      const calls = m.toolCalls.map((c) => {
+        names.set(c.id, c.name);
+        return `（${c.name} を呼んだ: ${typeof c.args === 'string' ? c.args : JSON.stringify(c.args)}）`;
+      });
+      return { role: 'assistant', content: [m.content, ...calls].filter((t) => t.trim()).join('\n') };
+    }
+    if (m.role === 'tool') {
+      return { role: 'user', content: `（${names.get(m.toolCallId ?? '') ?? 'ツール'} の結果）\n${m.content}` };
+    }
+    return m;
+  });
+}
+
 export function toAnthropicMessages(messages: readonly ProviderMessage[]): { role: 'user' | 'assistant'; content: Block[] }[] {
   const out: { role: 'user' | 'assistant'; content: Block[] }[] = [];
   const push = (role: 'user' | 'assistant', blocks: Block[]): void => {
@@ -276,7 +298,8 @@ export function toAnthropicMessages(messages: readonly ProviderMessage[]): { rol
    * 依頼ごとに数え直すので重なる。重なった ID は付け直し、その結果も同じ名前へ引き直す。
    */
   const used = new Set<string>();
-  let renamed = new Map<string, string>();
+  // 元の id → 付けた名前の並び。一つの返事に同じ id が二つあると（OpenAI 互換の口はそのまま出す）、一対一では結果を取り違えた
+  let renamed = new Map<string, string[]>();
   // 結果の無い呼び出し（止めたときの残り）には結果を補う。無いと相手は 400 で断る
   let open: string[] = [];
   const closeOpen = (): void => {
@@ -286,7 +309,7 @@ export function toAnthropicMessages(messages: readonly ProviderMessage[]): { rol
   for (const m of messages) {
     if (m.role === 'system') continue;
     if (m.role === 'tool') {
-      const id = renamed.get(m.toolCallId ?? '') ?? m.toolCallId ?? '';
+      const id = renamed.get(m.toolCallId ?? '')?.shift() ?? m.toolCallId ?? '';
       open = open.filter((o) => o !== id);
       push('user', [{ type: 'tool_result', tool_use_id: id, content: m.content }]);
       continue;
@@ -304,7 +327,7 @@ export function toAnthropicMessages(messages: readonly ProviderMessage[]): { rol
         while (used.has(`${id}_${n}`)) n += 1;
         id = `${id}_${n}`;
       }
-      if (id !== c.id) renamed.set(c.id, id);
+      renamed.set(c.id, [...(renamed.get(c.id) ?? []), id]);
       used.add(id);
       open.push(id);
       const input = c.args !== null && typeof c.args === 'object' && !Array.isArray(c.args) ? c.args : {};

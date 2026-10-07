@@ -11,7 +11,7 @@ import { existsSync } from 'node:fs';
 import { minimatch } from './glob.ts';
 import { safeResolve, canonicalRel } from '../agent/tools/paths.ts';
 import { isAbsent, readRegularText } from './put-back.ts';
-import { fingerprint, lastPrint, isFailedWrite } from './seen.ts';
+import { fingerprint, lastPrint, isFailedWrite, wroteNothing } from './seen.ts';
 import { isTestFile, countCases, countSkips, countFocus } from '../agent/test-patterns.ts';
 import { type Rule, type RuleContext, allow, deny, ok, argString, hasArg } from './rules.ts';
 import type { ToolCall } from '../providers/contract.ts';
@@ -50,7 +50,20 @@ export async function matchProtected(
  * 触ってはいけないファイルを守る。
  * 「.env を読んで直す」のような、善意で始まる事故を止める。
  */
-export function protectedPaths(patterns: string[], opts: { nocase?: boolean; windows?: boolean } = {}): Rule {
+/**
+ * 書いた人の意図する形に揃える。照らす道は作業場からの相対で、頭にも末尾にも `/` が付かないので、`secrets/`（フォルダのつもり）や
+ * `/config/**`（作業場の根のつもり）は何にも当たらず、黙って何も守っていなかった。頭の `/`・`./` は外し、末尾の `/` は中身全部（`/**`）にする
+ */
+export function protectedPattern(pattern: string): string {
+  let p = pattern.trim().split('\\').join('/');
+  while (p.startsWith('./')) p = p.slice(2);
+  while (p.startsWith('/')) p = p.slice(1);
+  if (p.endsWith('/')) p = `${p}**`;
+  return p;
+}
+
+export function protectedPaths(given: string[], opts: { nocase?: boolean; windows?: boolean } = {}): Rule {
+  const patterns = given.map(protectedPattern).filter((p) => p.length > 0);
   // Windows は名前の末尾の点・空白を落とし、`:` から後ろを流れ（ADS）の名前として読む。`.env `・`id.pem.`・`.env::$DATA` は
   // `.env` や `id.pem` に書かれるのに、綴りのまま照らしていたので当たらなかった。照らす前に、Windows が読む名前に揃える
   const name = opts.windows ? windowsName : (p: string): string => p;
@@ -85,7 +98,8 @@ export function protectedPaths(patterns: string[], opts: { nocase?: boolean; win
          * 「please check packages/api/.env」のような文（最初の区切りが「please check packages」）まで保護された道として止め、
          * issue やコメントに `.env` の話を書けなくしていた。空白を含む本当の道（`My Docs/.env`）は、親のフォルダが在るので今までどおり見る
          */
-        if (isExternalTool(call.name) && /\s/.test(path) && !existsSync(dirname(join(ctx.root, rel)))) continue;
+        // 作業場の外の絶対の道は、そのまま親を見る（作業場の根に繋いでいたので、いつも「無い」になり、空白を含む絶対の道を素通しした）
+        if (isExternalTool(call.name) && /\s/.test(path) && !existsSync(isAbsolute(rel) ? dirname(rel) : dirname(join(ctx.root, rel)))) continue;
         // 大小を区別しない機械では `.ENV` も `.env`。区別すると守りをすり抜ける。
         // 綴りだけでなく、書いたときに当たる実体でも照らす（Windows の `ENV~1` は `.env`、`g -> .git` の `g/config` は `.git/config`）
         const hit = await matchProtected(ctx.root, path, patterns, opts);
@@ -239,7 +253,8 @@ export function blastRadius(maxFiles: number): Rule {
       // 依頼全体で数える（段取りで並べた担当の分も。担当ごとに数えると、担当の数だけ上限が増える）
       const written = new Set(
         (ctx.taskHistory ?? ctx.history)
-          .filter((c) => isWriteTool(c.name))
+          // 何も書かずに終わったもの（断られた・失敗した）は、書き換えた件数に数えない
+          .filter((c) => isWriteTool(c.name) && !wroteNothing(c))
           .map((c) => argString(c, 'path'))
           .filter((p): p is string => !!p)
           .map((p) => normalize(ctx.root, p)),
@@ -307,12 +322,15 @@ export const readBeforeWrite: Rule = {
     const sawIt = ctx.history.some((c) =>
       (c.name === 'read_file' && same(c)
         && !(wholeNeeded && partial(c)))
-      || (isWriteTool(c.name) && same(c) && (!wholeNeeded || c.name === 'write_file')));
+      || (isWriteTool(c.name) && !wroteNothing(c) && same(c) && (!wholeNeeded || c.name === 'write_file')));
     if (sawIt) {
       if (!wholeNeeded) return allow; // edit_file は当てる所が見つからなければ失敗するので、古い中身で消すことは無い
       // 最後に読んだ・書いたときから中身が替わっていれば、読み直させる（別の担当や run_command の変更を、古い中身で消さない）
       const was = lastPrint(ctx.history, ctx.root, path);
-      if (was === undefined) return allow;
+      // 見た中身の指紋が無い（読んでいる間に替わった・大きすぎて指紋を取れなかった）。見た中身が分からないので、読み直させる
+      if (was === undefined) {
+        return deny(`${path} を読んだときの中身を確かめられません（読んでいる間に替わった可能性があります）。read_file で読み直してから書いてください。`);
+      }
       const now = await fingerprint(ctx.root, path);
       if (now === was) return allow;
       if (now === undefined) {
@@ -448,7 +466,9 @@ const CONFIG_RUNS = /^(core\.(hookspath|fsmonitor|pager|sshcommand|editor|askpas
  */
 function configWritesRunner(rest: readonly string[]): boolean {
   const flags = rest.filter((w) => w.startsWith('-')).map((w) => w.toLowerCase());
-  const plain = rest.filter((w) => !w.startsWith('-'));
+  // 値を後ろに取る選択肢（`-f .git/config`）の値は、鍵ではない（鍵として読んでいたので、`git config -f .git/config alias.p push` が通った）
+  const TAKES_VALUE = new Set(['-f', '--file', '--blob', '--type', '--default', '--comment']);
+  const plain = rest.filter((w, i) => !w.startsWith('-') && !TAKES_VALUE.has((rest[i - 1] ?? '').toLowerCase()));
   if (flags.some((f) => f === '--edit' || f === '-e') || plain[0]?.toLowerCase() === 'edit') return true;
   if (flags.some((f) => /^(--unset(-all)?|--get(-all|-regexp|-urlmatch|-color|colorbool)?|--list|-l|--remove-section|--show-origin|--show-scope|--name-only)$/.test(f))) return false;
   let words = plain;
@@ -500,6 +520,11 @@ export function gitDanger(command: string, depth = 0): string | undefined {
     // `:(top)` は包みを外すときに閉じ括弧が落ちて `:(top` になる。どちらも作業場全体
     const wholeTree = rest.some((w) => w === '.' || w === './' || w === '*' || w === ':/' || w === ':(top)' || w === ':(top');
     if (sub === 'push') return 'push';
+    // push と同じことをする別のサブコマンド（`send-pack`・`http-push`・`subtree push`）
+    if (sub === 'send-pack' || sub === 'http-push' || (sub === 'subtree' && rest[0]?.toLowerCase() === 'push')) return 'push';
+    // 作業ツリーを戻す別のサブコマンド（`checkout-index -f`・`read-tree --reset -u`）。reset --hard と同じく、まだ記録していない直しを消す
+    if (sub === 'checkout-index' && (shortFlag('f') || long('--force'))) return 'checkout-index -f';
+    if (sub === 'read-tree' && (shortFlag('u') || rest.includes('-u')) && (long('--reset') || shortFlag('m'))) return 'read-tree -u';
     if (sub === 'switch' && (shortFlag('f') || long('--force') || long('--discard-changes'))) return 'switch -f';
     if (sub === 'reset' && long('--hard')) return 'reset --hard';
     if (sub === 'clean' && (shortFlag('f') || long('--force'))) return 'clean -f';

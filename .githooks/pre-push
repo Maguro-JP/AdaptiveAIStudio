@@ -39,8 +39,14 @@ while read -r _local_ref local_sha remote_ref remote_sha; do
   esac
   # 突き合わせる相手は、ブランチを押すときの sha だけ。タグの sha は commit では
   # ないので、HEAD と比べると `v*` のタグで release を出す道が塞がる。
-  case "$_local_ref" in
-    refs/heads/*) AAS_PUSH_SENDING="$local_sha" ;;
+  # 外のブランチへ押す sha を拾う（手元の ref の書き方（`HEAD~1:main`・sha そのもの）によらない）。二本以上なら全部溜める
+  # （手元の ref が refs/heads/* のときだけ拾っていたので式で押すと見比べずに通り、上書きしていたので最後の一本しか見なかった）
+  case "$remote_ref" in
+    refs/heads/*)
+      case "$local_sha" in
+        *[!0]*) AAS_PUSH_SENDING="$AAS_PUSH_SENDING $local_sha" ;;
+      esac
+      ;;
   esac
   # ブランチかは**両側**で見る。`git push origin feature:refs/tags/v1` は手元ではブランチでも、
   # 外ではタグ（release の合図）になる。
@@ -60,7 +66,7 @@ while read -r _local_ref local_sha remote_ref remote_sha; do
   case "$local_sha$remote_sha" in
     *[!0]*)
       case "$remote_sha" in
-        *[!0]*) AAS_PUSH_RANGE="$remote_sha..$local_sha" ;;
+        *[!0]*) AAS_PUSH_RANGE="$AAS_PUSH_RANGE $remote_sha..$local_sha" ;;
       esac
       ;;
   esac
@@ -96,8 +102,12 @@ unset GIT_REFLOG_ACTION GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES
 # 開いている PR も起きない。後に置くと、main に文書だけの更新（スキルの更新など）が入った後の
 # 合わせ直しを「文書だけの push」として止めていた（2026-09-25）。
 if [ -n "$AAS_PUSH_BRANCH_SHAS" ]; then
+  # 飛ばすのは決めた値（10）で終わったときだけ。0 や 1（読み込みで落ちた・何もせずに終わった）は確かめる側へ
+  # set -e の下なので、0 以外で終わっても止まらない形で終わり方を取る
+  same=0
   # shellcheck disable=SC2086
-  if reason=$(node scripts/same-as-main.mjs "${1:-origin}" "$AAS_PUSH_OTHER" $AAS_PUSH_BRANCH_SHAS); then
+  reason=$(node scripts/same-as-main.mjs "${1:-origin}" "$AAS_PUSH_OTHER" $AAS_PUSH_BRANCH_SHAS) || same=$?
+  if [ "$same" -eq 10 ]; then
     echo "$reason"
     exit 0
   fi
@@ -113,7 +123,7 @@ fi
 # 押す範囲は、上で読んだ remote_ref/local_sha から出す。remote にまだ
 # ブランチが無い（_remote_sha が全部 0）ときは、範囲が決められないので見ない。
 if [ -n "$AAS_PUSH_RANGE" ]; then
-  reason=$(node scripts/docs-only-check.mjs "$AAS_PUSH_RANGE") || {
+  reason=$(node scripts/docs-only-check.mjs $AAS_PUSH_RANGE) || {
     echo "$reason"
     exit 1
   }

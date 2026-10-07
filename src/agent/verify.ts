@@ -172,6 +172,12 @@ export async function* verifyLoop(
       return { passed: true, digest: 'passed', result };
     }
 
+    // 時間切れは落ちたのではない。直させず「確かめられなかった」で終える（段取りの道と同じ。前は「無限ループを疑って」と直させ、
+    // 上限まで回してから落ちた扱いにし、長いテストの作業場では正しい変更まで巻き戻しえた）
+    if (result.timedOut) {
+      return { passed: false, digest: 'timeout', unsure: `確かめが時間内に終わりませんでした（${opts.command}）`, result };
+    }
+
     const digest = digestFailure(result.output);
 
     // 作業前と同じ失敗なら、この作業が原因ではない

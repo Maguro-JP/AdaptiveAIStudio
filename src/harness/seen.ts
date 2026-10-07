@@ -45,6 +45,20 @@ export function isFailedWrite(call: ToolCall): boolean {
   return failedWrites.has(call);
 }
 
+/**
+ * 何も書かずに終わった書き込み（断られた・当たらなかった・やり直しを求めた、のどれでも）。「読んだ」にも「書いた件数」にも数えない。
+ * 失敗した write_file を「前に書いた」と数えていたので、待つ間に誰かが作ったファイルを、読まずに全文で上書きさせていた
+ */
+const notWritten = new WeakSet<ToolCall>();
+
+export function markNotWritten(call: ToolCall): void {
+  notWritten.add(call);
+}
+
+export function wroteNothing(call: ToolCall): boolean {
+  return notWritten.has(call);
+}
+
 /** 呼び出しが見た中身の指紋を結び付ける。 */
 export function markSeen(call: ToolCall, print: string): void {
   prints.set(call, print);

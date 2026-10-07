@@ -57,6 +57,21 @@ export type TextEncodingName = 'utf-8' | 'shift_jis' | 'utf-16le' | 'utf-16be';
  * 順番: UTF-8（厳密） → CP932（厳密） → UTF-8（化けを許す）。
  * 当てずっぽうで CP932 にはしない。UTF-8 として通るものは UTF-8。
  */
+/**
+ * 上限で切った頭の、末尾で途中になった UTF-8 の字を落とす。字の途中で切ると、厳密な UTF-8 の読みが落ちて CP932 と取り違える
+ * （`@` の指名と `fetch_url` で同じ形を踏んだ）。末尾が字の途中でなければ、そのまま返す。
+ */
+export function trimPartialUtf8(buf: Uint8Array): Uint8Array {
+  const end = buf.length;
+  let i = end - 1;
+  // 続きの字（10xxxxxx）を遡って、字の頭を探す（長くて 4 バイト）
+  while (i >= 0 && i > end - 4 && (buf[i]! & 0xc0) === 0x80) i -= 1;
+  if (i < 0) return buf;
+  const lead = buf[i]!;
+  const need = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+  return end - i < need ? buf.subarray(0, i) : buf;
+}
+
 export function decodeText(
   data: Buffer,
   /**

@@ -8,7 +8,7 @@
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { ModelStats } from './efficiency.ts';
-import { loadJournal, saveJournal } from '../core/journal-file.ts';
+import { loadJournal, saveMerged } from '../core/journal-file.ts';
 
 export interface Attempt {
   modelId: string;
@@ -83,22 +83,38 @@ export class MetricsStore {
     return cur;
   }
 
-  /** 書く。一時ファイルから付け替える。起動のときに読めなかったなら、読めるまで書かない。 */
+  /**
+   * 書く。一時ファイルから付け替える。
+   *
+   * ほかのプロセスが書いた分を足してから書く（`saveMerged`）。前は起動のときに読めなかったときだけ読み直し、それ以外は手元の分で丸ごと
+   * 書いていたので、画面と端末が並んで動くと、後から書いた方が先の方の回数を消していた（自動で選ぶ材料の成功率・tok/s が黙って戻る）。
+   */
   async save(): Promise<void> {
     await mkdir(dirname(this.#path), { recursive: true });
-    await saveJournal(this, this.#path, () => JSON.stringify(this.all(), null, 2), (v) => {
-      // 読めなかった間に数えた分を、ファイルの分の上に足す。実測の値は、この間に測ったものがあればそちらを取る
-      for (const base of validStats(v)) {
-        const now = this.#stats.get(base.modelId);
-        if (!now) { this.#stats.set(base.modelId, base); continue; }
-        now.successes += base.successes;
-        now.failures += base.failures;
-        if (base.defects !== undefined) now.defects = (now.defects ?? 0) + base.defects;
-        now.measuredTps ??= base.measuredTps;
-        now.avgTokens ??= base.avgTokens;
-        now.loadSeconds ??= base.loadSeconds;
+    await saveMerged(this, this.#path, () => JSON.stringify(this.all(), null, 2), (v, seen) => this.rebase(v, seen));
+  }
+
+  /**
+   * ファイルの今の中身（`value`）と、この実体が前に読んだ・書いた中身（`seen`）の差を、手元に足す。
+   * 回数は差を足す。実測の値は、手元で測り直していなければ（前に見た値のままなら）ファイルの方を取る。
+   * `seen` が無い（読めなかった・初めて書く）ときは、ファイルの分を丸ごと足す（前の「読めなかった間の分を足す」と同じ）。
+   */
+  rebase(value: unknown, seen: unknown): void {
+    const before = new Map(validStats(seen).map((s) => [s.modelId, s]));
+    for (const file of validStats(value)) {
+      const was = before.get(file.modelId);
+      const now = this.#stats.get(file.modelId);
+      if (!now) { this.#stats.set(file.modelId, file); continue; }
+      const grow = (key: 'successes' | 'failures' | 'defects') =>
+        Math.max(0, (file[key] ?? 0) - (was?.[key] ?? 0));
+      now.successes += grow('successes');
+      now.failures += grow('failures');
+      const defects = grow('defects');
+      if (defects > 0) now.defects = (now.defects ?? 0) + defects;
+      for (const key of ['measuredTps', 'avgTokens', 'loadSeconds'] as const) {
+        if (file[key] !== undefined && now[key] === was?.[key]) now[key] = file[key];
       }
-    });
+    }
   }
 
   /** 利用者に見せる一覧。どの配置が実際に効いているかの判断材料。 */

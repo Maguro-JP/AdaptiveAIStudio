@@ -19,7 +19,7 @@
  * git が無い・git の管理下でない作業場では、比べられない（`undefined`）。
  * **比べられないことを「変わっていない」と読まない。**呼ぶ側がそう言う。
  */
-import { lstat, stat, readFile } from 'node:fs/promises';
+import { lstat, stat, readFile, readdir } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { execFile } from 'node:child_process';
 import { contentOf, isAbsent, type FileContent } from '../harness/put-back.ts';
@@ -99,6 +99,39 @@ export type WorkspaceStamp = Map<string, string>;
 /** 見られなかったものに振る番号。回をまたいで増やし、二つの記録で同じ値にならないようにする。 */
 let unseen = 0;
 
+/** フォルダの中を辿るときの上限（項目の数）。超えたら、見られないものとして毎回「変わった」に倒す */
+const DIGEST_LIMIT = 20_000;
+
+/**
+ * フォルダの中のファイルの数・大きさの和・いちばん新しい時刻。`.git` の中は見ない（作業のファイルではない）。
+ * 上限を超えた・途中で読めなかったときは undefined。
+ */
+async function dirDigest(dir: string): Promise<string | undefined> {
+  let count = 0;
+  let size = 0;
+  let newest = 0;
+  const pending = [dir];
+  while (pending.length > 0) {
+    const at = pending.pop()!;
+    let entries;
+    try { entries = await readdir(at, { withFileTypes: true }); } catch { return undefined; }
+    for (const e of entries) {
+      if (e.name === '.git') continue;
+      if (++count > DIGEST_LIMIT) return undefined;
+      const abs = join(at, e.name);
+      if (e.isDirectory()) { pending.push(abs); continue; }
+      try {
+        const s = await lstat(abs);
+        size += s.size;
+        newest = Math.max(newest, s.mtimeMs);
+      } catch (err) {
+        if (!isAbsent(err)) return undefined;
+      }
+    }
+  }
+  return `${count} ${size} ${newest}`;
+}
+
 /**
  * 作業場が、リポジトリの根からどこか。git の道を作業場からの道に直すのに使う（`inspectGit` も使う）。
  * `spec` は作業場の中に絞る pathspec、`key` は根からの道を作業場からの道に（外なら undefined、作業場そのものなら空）。
@@ -163,7 +196,12 @@ export async function workspaceStamp(root: string): Promise<WorkspaceStamp | und
     try {
       // リンクは辿らない。git が記録するのはリンクそのもので、辿れないリンク（自分を指す・読めない所を指す）を毎回「変わった」と数えない
       const s = await lstat(join(root, path));
-      stamp.set(path, `${code} ${s.size} ${s.mtimeMs}`);
+      // フォルダ一つで挙がるもの（中に別のリポジトリが在る・submodule）は、中まで辿る。フォルダの時刻は直下が増減したときしか
+      // 動かないので、中のファイルを書き換えても「変わっていない」と読み、作業後の確かめを走らせずに済ませていた
+      const inner = s.isDirectory() ? await dirDigest(join(root, path)) : undefined;
+      stamp.set(path, s.isDirectory()
+        ? (inner === undefined ? `${code} ? ${++unseen}` : `${code} d ${inner}`)
+        : `${code} ${s.size} ${s.mtimeMs}`);
     } catch (e) {
       // 見られないものは、前の回と同じ値にしない（前後とも見られないと「変わらない」と数え、確かめずに済ませていた）
       stamp.set(path, isAbsent(e) ? `${code} -` : `${code} ? ${++unseen}`);

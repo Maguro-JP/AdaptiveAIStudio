@@ -9,11 +9,12 @@
  * ここでは、押した時点で `@道` として印を付け、送るときに**中身を依頼へ
  * 差し込む**。指名したものは、必ず読まれた状態で渡る。
  */
-import { readFile, stat } from 'node:fs/promises';
+import { open, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { decodeForReading } from './tools/decode.ts';
+import { trimPartialUtf8 } from '../core/text.ts';
 import { isAbsent } from '../harness/put-back.ts';
-import { outsideRel } from './tools/paths.ts';
+import { outsideRel, realSafeResolve } from './tools/paths.ts';
 
 /**
  * 上限は、**窓から決める。**
@@ -100,7 +101,7 @@ export interface MentionRead {
 
 export interface MentionOpts {
   readonly readFileImpl?: (p: string) => Promise<string>;
-  readonly statImpl?: (p: string) => Promise<{ isDirectory(): boolean; size: number }>;
+  readonly statImpl?: (p: string) => Promise<{ isDirectory(): boolean; isFile?(): boolean; size: number }>;
   readonly maxBytes?: number;
   readonly totalBytes?: number;
   /** いまの窓（トークン）。渡されたら、上限はここから決める。 */
@@ -133,10 +134,20 @@ export async function readMentions(
       out.push({ path: at, ok: false, body: '作業場の外なので読みません' });
       continue;
     }
+    // リンクを辿った先まで見る（read_file と同じ）。文字の上で中でも、`home -> /home/user` のリンク越しに鍵を差し込めていた
+    if (!opts.statImpl && await realSafeResolve(root, rel) === undefined) {
+      out.push({ path: at, ok: false, body: 'リンクの先が作業場の外なので読みません' });
+      continue;
+    }
     try {
       const info = await st(full);
       if (info.isDirectory()) {
         out.push({ path: at, ok: false, body: 'フォルダです。中のファイルを指名してください' });
+        continue;
+      }
+      // 普通のファイルだけ（FIFO は書き手を待って戻らず、依頼の組み立てごと止まっていた）
+      if (info.isFile && !info.isFile()) {
+        out.push({ path: at, ok: false, body: '普通のファイルではないので読みません（FIFO・装置など）' });
         continue;
       }
       if (used >= total) {
@@ -161,10 +172,25 @@ export async function readMentions(
  * 食い違うと、指名では化けた中身が入り、「続きは read_file で」と案内した先では別の読み方になる。
  */
 async function readForMention(p: string): Promise<string> {
-  const decoded = decodeForReading(await readFile(p));
+  // 頭だけ読む（数百 MB のファイルを指名されても、使うのは頭の数万文字だけ。全部を読み込まない）
+  const fh = await open(p, 'r');
+  let bytes: Buffer;
+  try {
+    const buf = Buffer.alloc(MENTION_READ_CAP);
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    // 上限で切ったときは、末尾の途中の字を落とす（字の途中で切ると、読めない字として別の読み方（CP932）に取り違える）
+    const head = buf.subarray(0, bytesRead);
+    bytes = Buffer.from(bytesRead === buf.length ? trimPartialUtf8(head) : head);
+  } finally {
+    await fh.close();
+  }
+  const decoded = decodeForReading(bytes);
   if (decoded.kind === 'binary') throw new Error(`二進のファイルです（${decoded.bytes} バイト）`);
   return decoded.encoding === 'utf-8' ? decoded.text : `${decoded.note}\n${decoded.text}`;
 }
+
+/** 指名で読む頭の大きさ（read_file の一度に読む上限と同じ）。これより後ろは使わない */
+const MENTION_READ_CAP = 400_000;
 
 /** 読んだものを、依頼の前に置く形に組む。 */
 export function mentionBlock(reads: readonly MentionRead[]): string {

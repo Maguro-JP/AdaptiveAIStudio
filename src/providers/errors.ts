@@ -88,11 +88,37 @@ export function sayQuotaExhausted(body: string): boolean | undefined {
   if (/insufficient_quota|billing_hard_limit/i.test(code)) return true;
   if (/rate_limit/i.test(code)) return false;
   const text = body.replace(/https?:\/\/\S+/g, '');
+  // 分単位の制限（Gemini は `You exceeded your current quota … PerMinute … Please retry in 41s` と書く、と読んでいる。確かめていない）は、
+  // 語が同じでも一時的な制限。30 分冷やさない
+  if (/per[- ]?minute|retry in \d/i.test(text)) return false;
   if (/exceeded your current quota|insufficient[_ ]quota|insufficient (balance|credits?|funds)|credit balance|out of credits/i.test(text)) return true;
   // 1 日の上限（OpenRouter の free-models-per-day・Vertex の `quota metric '… per day'`）・使い切り（xAI の used all available credits）・
   // 利用額の上限（monthly spending limit）も、その日・その月のうちは戻らない。分単位の上限（per minute）は一時的な制限のまま
   if (/per[- ]?day|daily (limit|quota)|used all (available )?credits|spending limit/i.test(text)) return true;
+  // Claude の利用額の上限（`You have reached your specified API usage limits. You will regain access on …`）。400 で来るので、拾わないとこちらの誤りとして依頼ごと落ちた
+  if (/reached your specified api usage limits|regain access on/i.test(text)) return true;
   return undefined;
+}
+
+/**
+ * 依頼が大きすぎる（文脈の長さを超えた）と言っているか。
+ *
+ * 「context」という語だけで決めていたので、ツールの引数の形の誤り（OpenAI の `Invalid schema for function 'x': In context=(…)`）も
+ * 大きすぎるとして黙って次の候補へ回し、こちらの誤りが隠れた。符号を先に見て、語は文脈の長さを言う形に絞る。
+ */
+export function saysContextTooLong(body: string): boolean {
+  let code = '';
+  try {
+    const j = JSON.parse(body) as { error?: { code?: unknown; type?: unknown } };
+    code = `${String(j?.error?.code ?? '')} ${String(j?.error?.type ?? '')}`;
+  } catch { /* JSON でない本文は語で見る */ }
+  if (/context_length_exceeded|request_too_large/i.test(code)) return true;
+  if (/invalid_function_parameters|invalid_schema|string_above_max_length/i.test(code)) return false;
+  // 出力の上限（`max_tokens: 16000 > 8192, which is the maximum allowed number of output tokens`）は、こちらの頼み方の誤り。長すぎる依頼ではない
+  // （vLLM の「max_tokens is too large … maximum context length」は入力が長くて収まらない形なので、ここでは外さない）
+  if (/maximum allowed number of output tokens/i.test(body)) return false;
+  // 「too long」は依頼そのものが長いときだけ（ツールの説明の文字数の上限 `string too long` まで大きすぎるとして次の候補へ回し、こちらの誤りが隠れた）
+  return /context[ _-]?(length|window|size)|maximum context|(prompt|input|request|message)s? (is )?too long|too many tokens|maximum.*token|token.*limit/i.test(body);
 }
 
 /** ツールを渡したが、そのモデルがツールに対応していない（次の候補なら対応しているかもしれない）。 */
@@ -116,7 +142,7 @@ export function kindFromHttpStatus(status: number, body: string): ProviderErrorK
   if (status === 404 && /model/i.test(body)) return 'model_missing';
   if (status === 408 || status === 504) return 'timeout';
   if (status >= 500) return 'unavailable';
-  if (status === 400 && /context|too long|maximum.*token|token.*limit/i.test(body)) {
+  if (status === 400 && saysContextTooLong(body)) {
     return 'context_too_long';
   }
   // 残高切れを 400 で返す相手がいる（Claude の `credit balance is too low`）

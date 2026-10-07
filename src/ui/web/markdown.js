@@ -19,16 +19,19 @@ function parseBlocks(text) {
   while (i < lines.length) {
     const line = lines[i];
     // 言語名の後ろに何か書いてある囲い（```python main.py）も囲い。段落の側は ``` で始まる行を切れ目とみなすので、揃える
-    const fence = /^\s*````*\s*([^`\s]*)[^`]*$/.exec(line);
+    const fence = /^\s*(````*)\s*([^`\s]*)[^`]*$/.exec(line);
     if (fence) {
       const body = [];
       i++;
       let closed = false;
+      // 閉じるのは、開いたときの ` の数以上の囲いだけ（4 つで開いた中の ``` で閉じて、Markdown の例を含む答えが途中で崩れていた）
+      const opened = fence[1].length;
       while (i < lines.length) {
-        if (/^\s*````*\s*$/.test(lines[i])) { closed = true; i++; break; }
+        const end = /^\s*(````*)\s*$/.exec(lines[i]);
+        if (end && end[1].length >= opened) { closed = true; i++; break; }
         body.push(lines[i]); i++;
       }
-      blocks.push({ type: 'code', lang: fence[1] ?? '', text: body.join('\n'), closed });
+      blocks.push({ type: 'code', lang: fence[2] ?? '', text: body.join('\n'), closed });
       continue;
     }
     const head = /^(#{1,6})\s+(.*)$/.exec(line);
@@ -37,13 +40,15 @@ function parseBlocks(text) {
     if (item) {
       const items = [];
       const ordered = /^\s*\d/.test(line);
+      // 番号は、最初の項目の数から始める（空行や囲いで切れた続きの「2.」が「1.」と出ていた）
+      const start = ordered ? Number(/^\s*(\d+)/.exec(line)[1]) : 1;
       while (i < lines.length) {
         const m = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/.exec(lines[i]);
         // 番号付きと点の箇条書きは、別の塊にする。
         if (!m || /^\s*\d/.test(lines[i]) !== ordered) break;
         items.push(m[1]); i++;
       }
-      blocks.push({ type: 'list', ordered, items });
+      blocks.push({ type: 'list', ordered, items, start });
       continue;
     }
     if (line.trim() === '') { i++; continue; }
@@ -120,6 +125,7 @@ function renderMarkdown(text, doc, opts = {}) {
       frag.append(h);
     } else if (b.type === 'list') {
       const ul = doc.createElement(b.ordered ? 'ol' : 'ul');
+      if (b.ordered && b.start !== 1) ul.setAttribute('start', String(b.start));
       for (const it of b.items) { const li = doc.createElement('li'); inline(li, it); ul.append(li); }
       frag.append(ul);
     } else {
