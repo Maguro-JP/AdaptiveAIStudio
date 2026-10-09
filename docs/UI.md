@@ -379,7 +379,7 @@ CLI も画面も、出てくる出来事を見て描くだけ。
 ## 何も入っていないところから
 
 ```
-git clone -b claude/adaptive-ai-studio-architecture-y12imi https://github.com/Maguro-JP/AdaptiveAIStudio.git
+git clone https://github.com/Maguro-JP/AdaptiveAIStudio.git
 cd AdaptiveAIStudio
 npm run doctor      # 何が足りないかを見る
 npm run ui          # 開く（モデルが無くても開く）

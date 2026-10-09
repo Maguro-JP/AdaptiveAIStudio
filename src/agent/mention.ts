@@ -50,7 +50,7 @@ export function mentionBudget(contextTokens: number): { each: number; total: num
 }
 
 /**
- * `@道` の形。文の頭か、空白・句読点・括弧の後ろの `@` だけを見る（`m@guro.email` のようなメールの `@` は指名ではない）。
+ * `@道` の形。文の頭か、空白・句読点・括弧の後ろの `@` だけを見る（`user@example.com` のようなメールの `@` は指名ではない）。
  * 空白で終わるのが基本だが、日本語は空白を置かずに続けるので、句読点でも切る。
  */
 const MENTION = /(?<=^|[\s、。「」（）()])@([^\s、。「」（）()]+)/g;
