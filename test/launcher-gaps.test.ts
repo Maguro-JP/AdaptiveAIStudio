@@ -2,7 +2,7 @@
  * 75 回目の不具合調査（入口）の分。
  *
  * - start.sh: `sh start.sh` でも立ち上げ直せる。2 つ目からの引数も渡す
- * - start.cmd: 隣の `node\node.bin`（Z: は .exe を受け取らない）も探す。取り込みが失敗したら立ち上げ直さない
+ * - start.cmd: 取り込みが失敗したら立ち上げ直さない
  *
  * start.cmd は cmd.exe でしか動かないので、ここでは書かれた行を見る（Windows の実機では確かめていない）。
  */
@@ -56,16 +56,6 @@ describe('start.sh', { skip: process.platform === 'win32' ? 'sh で動かす入�
 
 describe('start.cmd', () => {
   const source = async (): Promise<string> => new TextDecoder('shift_jis').decode(await readFile(join(installRoot(), 'start.cmd')));
-
-  test('**隣の node.bin も探し、見つかれば .bin として呼ぶ**（Z: は .exe を受け取らない）', async () => {
-    const text = await source();
-    assert.match(text, /^if exist "%HERE%node\\node\.bin" set "BUNDLED=%HERE%node"\r?$/m, '隣の node\\node.bin を探していない');
-    assert.match(text, /^if exist "%HERE%runtime\\node\.bin" set "BUNDLED=%HERE%runtime"\r?$/m);
-    // .bin で見つけたときは NODEFILE を node.bin にしてから :bundled へ（node.exe のつもりで呼ぶと起こせない）
-    const at = text.indexOf('if exist "%HERE%node\\node.bin"');
-    const after = text.slice(at, at + 300);
-    assert.match(after, /set "NODEFILE=node\.bin"[\s\S]*goto :bundled/, after);
-  });
 
   test('**取り込みが失敗したら、立ち上げ直さない**', async () => {
     const text = await source();

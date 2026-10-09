@@ -203,7 +203,7 @@ if (models.length > 0) {
     + '     GGUF を1つ置いて、画面の 設定 → モデル で「この中で読む」を選ぶだけ。\n'
     + '     設定ファイルに直接書くなら:\n'
     + '       "runtime": { "kind": "inproc", "modelsDir": "GGUF を置いた場所" }\n'
-    + '     何も入れられない機械（会社の PC など）では、これだけが道になります。\n'
+    + '     ほかに何も入れずに済む道です。\n'
     + '\n'
     + '  B. Ollama（手早い。別に立てたものへ繋ぐ）\n'
     + '     https://ollama.com から入れて `ollama serve`\n'
@@ -465,12 +465,12 @@ if (process.platform === 'win32') {
   if (level === 'bad') {
     add('置き場所の深さ', 'bad', detail,
       `Windows の上限（${WINDOWS_MAX_PATH} 文字）を ${-room} 文字超えています。\n`
-      + 'このフォルダごと、短い所へ移してください（例: Z:\\AdaptiveAIStudio）。\n'
+      + 'このフォルダごと、短い所へ移してください（例: D:\\AdaptiveAIStudio）。\n'
       + `いちばん深いもの: ${deep.rel}`);
   } else if (level === 'warn') {
     add('置き場所の深さ', 'warn', detail,
       'モデル（.gguf）は名前が長いので、このままだと置けないことがあります。\n'
-      + 'このフォルダごと、短い所へ移すと直ります（例: Z:\\AdaptiveAIStudio）。');
+      + 'このフォルダごと、短い所へ移すと直ります（例: D:\\AdaptiveAIStudio）。');
   } else {
     add('置き場所の深さ', 'ok', detail);
   }
@@ -625,7 +625,7 @@ try {
  * **そこへ書けるかを、実際に書いて確かめる。**
  *
  * ここは「在るか」しか見ていなかった。読めるだけの場所（読み取り専用で
- * 配られたフォルダ、権限の足りない `%ProgramData%`、会社のクラウド
+ * 配られたフォルダ、権限の足りない `%ProgramData%`、同期
  * ドライブ）でも ok と出る。**会話も、戻り先も、設定も、何ひとつ残らない
  * のに、こちらは緑を出す。**気づくのは、閉じて開き直して全部消えたとき。
  *

@@ -66,7 +66,6 @@ describe('確かめていないことを、必ず言う', () => {
     for (const platform of ['linux', 'win32']) {
       const said = (notChecked({ ...ran, platform }) as string[]).join('\n');
       assert.match(said, /bundle と setup\.exe/, `${platform} で言っていない`);
-      assert.match(said, /社用PC/, `${platform} で言っていない`);
     }
   });
 

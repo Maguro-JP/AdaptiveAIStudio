@@ -305,23 +305,6 @@ describe('黙って落ちたときの見分け', () => {
   });
 });
 
-describe('.exe を置けない場所でも見つける', () => {
-  test('llama-server.bin も探す', async () => {
-    // 会社のクラウドドライブは名前を見て .exe を落とす（Z: で実測）。
-    // 中身は同じなので、名前で動かない道具にしない。
-    const { findInstalled, SERVER_NAMES } = await import('../src/runtime/llama-install.ts');
-    assert.ok(SERVER_NAMES.includes('llama-server.bin'), '.bin を探していない');
-
-    const bin = await tempDir('aas-bin-');
-    const { mkdir, writeFile } = await import('node:fs/promises');
-    const { join } = await import('node:path');
-    const { PINNED_TAG } = await import('../src/runtime/llama-release.ts');
-    await mkdir(join(bin, PINNED_TAG), { recursive: true });
-    await writeFile(join(bin, PINNED_TAG, 'llama-server.bin'), 'x');
-    assert.equal(await findInstalled(bin), join(bin, PINNED_TAG, 'llama-server.bin'));
-  });
-});
-
 describe('書庫の項目名を、置く名前にする', () => {
   test('区切りは / も \\ も見る。点だけの名前は置かない', async () => {
     const { entryFileName } = await import('../src/runtime/llama-install.ts');
@@ -402,7 +385,7 @@ describe('置いてある llama-server を見られないとき', () => {
     const fsp = createRequire(import.meta.url)('node:fs/promises') as typeof import('node:fs/promises');
     const bin = await tempDir('aas-llama-other-');
     await mkdir(join(bin, 'b1'), { recursive: true });
-    await writeFile(join(bin, 'b1', 'llama-server.bin'), 'x');
+    await writeFile(join(bin, 'b1', 'llama-server.exe'), 'x');
     const unseen = join(bin, 'b1', 'llama-server');
     const real = fsp.stat;
     (fsp as { stat: unknown }).stat = ((p: unknown, ...rest: unknown[]) => p === unseen
@@ -410,7 +393,7 @@ describe('置いてある llama-server を見られないとき', () => {
       : (real as (...a: unknown[]) => Promise<unknown>)(p, ...rest)) as never;
     syncBuiltinESMExports();
     try {
-      assert.equal(await findInstalled(bin, 'b1', { strict: true }), join(bin, 'b1', 'llama-server.bin'));
+      assert.equal(await findInstalled(bin, 'b1', { strict: true }), join(bin, 'b1', 'llama-server.exe'));
     } finally {
       (fsp as { stat: unknown }).stat = real;
       syncBuiltinESMExports();

@@ -124,7 +124,7 @@ describe('配る先を、渡された Node から決める', () => {
     const { guessTarget } = await import('../scripts/bundle.mjs');
     const { tempDir } = await import('./tmp.ts');
     const dir = await tempDir('aas-target2-');
-    const odd = join(dir, 'node.bin');
+    const odd = join(dir, 'not-node');
     await writeFile(odd, 'これは実行ファイルではありません');
     assert.equal(await guessTarget({ nodeExe: odd }), undefined);
     assert.equal(await guessTarget({ nodeExe: join(dir, '無い') }), undefined);

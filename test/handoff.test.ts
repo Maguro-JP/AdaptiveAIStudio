@@ -15,7 +15,7 @@ import { branchFor, pickToTake, whyNotSend, whyNotTake, jst } from '../scripts/h
 
 describe('機械ごとのブランチを決める', () => {
   test('走らせる場所と機械の名前から作る', () => {
-    assert.equal(branchFor({ platform: 'win32', hostname: 'MAGURO-PC' }), 'wip/win32-maguro-pc');
+    assert.equal(branchFor({ platform: 'win32', hostname: 'HOME-PC' }), 'wip/win32-home-pc');
     assert.equal(branchFor({ platform: 'linux', hostname: 'abc123' }), 'wip/linux-abc123');
   });
 

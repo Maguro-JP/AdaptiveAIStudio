@@ -7,8 +7,6 @@ export function bundle(opts: {
   nodeExe?: string;
   /** いま動かしている Node ごと固める */
   nodeHere?: boolean;
-  /** 同梱する Node をどの名前で置くか（node.exe / node.bin） */
-  nodeName?: string;
   srcRoot?: string;
   version?: string;
   log?: (line: string) => void;
@@ -36,5 +34,5 @@ export function guessVersion(srcRoot: string): string;
 /** 引数を読む。同じ指定は後のものを採り、知らない引数は投げる。 */
 export function parseBundleArgs(argv: string[]): {
   out?: string; nodeZip?: string; nodeExe?: string; nodeHere: boolean; keepData: boolean;
-  nodeName?: string; target?: string; src?: string; version?: string;
+  target?: string; src?: string; version?: string;
 };

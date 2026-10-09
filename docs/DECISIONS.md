@@ -13193,6 +13193,8 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 守り（ローカルのパスや利用者名を外へ出さない規則など）は今まで通り
 - 特殊な環境は、要るようになってから考える。普段から、置き場所を決め打ちしない・入れる側が `AAS_HOME` で渡す、の形は保つ
 選ばなかった案: 社用PC向けの処理を残したまま足す（試す人のいない道が増え、壊れても気付けない）。
+外したもの: `installer/bootstrap.cmd` とその試験、`start.cmd` が `node.bin`・隣の `node\node.exe` を探す行と手で置く案内、`bundle.mjs` の `--node-name`、`release.yml` の noexe の zip、llama-server を `.bin` で置き直す処理、更新の案内の noexe、確かめていない一覧の「社用PC の道」。コメントと試験の Z: や会社の言い回しは、一般的な言い方にした。
+確かめたこと: 手元の試験と `npm run check:bundle`（4,114 件 pass）。`start.cmd` は Windows の実機では確かめていない（土曜の Windows の CI で見る）。
 触る場所: `CLAUDE.md` の前提、`src/core/home.ts`、`installer/`、`scripts/bundle.mjs`、`.github/workflows/release.yml`
 
 ## 2026-10-10  公開する前提で書く

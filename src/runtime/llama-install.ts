@@ -73,12 +73,8 @@ export function defaultBinDir(): string {
 
 /**
  * 探す名前。
- *
- * `.bin` を入れてあるのは、会社のクラウドドライブが **名前を見て** .exe を
- * 落とすため（Z: で実測）。中身は同じで、名前だけが違う。
- * 名前で動かない道具にしない。
  */
-export const SERVER_NAMES = ['llama-server', 'llama-server.exe', 'llama-server.bin'] as const;
+export const SERVER_NAMES = ['llama-server', 'llama-server.exe'] as const;
 
 /**
  * すでに用意してあるか。あればその場所。
@@ -228,20 +224,13 @@ export async function install(opts: InstallOptions): Promise<Installed> {
     for (const e of entries) {
       const name = entryFileName(e.path);
       if (!name) continue;
-      let out = join(staging, name);
+      const out = join(staging, name);
       await mkdir(dirname(out), { recursive: true });
       await writeFile(out, e.data);
-      // 置いたのに無いことがある。会社のクラウドドライブは .exe を
-      // **黙って落とす**（書けたように見えて、実際には残らない）。
-      // 名前を変えて置き直す。中身は同じなので、これで動く。
-      if (/\.exe$/i.test(name) && !(await stat(out).catch(() => undefined))) {
-        out = join(staging, name.replace(/\.exe$/i, '.bin'));
-        await writeFile(out, e.data);
-      }
-      if (e.executable || /\.(exe|bin|sh)$/i.test(name) || !name.includes('.')) {
+      if (e.executable || /\.(exe|sh)$/i.test(name) || !name.includes('.')) {
         await chmod(out, 0o755).catch(() => { /* Windows では意味を持たない */ });
       }
-      if (/^llama-server(\.(exe|bin))?$/i.test(basename(out))) found = true;
+      if (/^llama-server(\.exe)?$/i.test(basename(out))) found = true;
     }
 
     if (!found) {
@@ -380,7 +369,6 @@ export function llamaByHand(tag: string, binDir: string): string {
     `  1. ブラウザで開く: https://github.com/ggml-org/llama.cpp/releases/tag/${tag}`,
     '  2. この機械に合う zip を落とす（Windows なら llama-bin-win-avx2-x64.zip、NVIDIA なら cuda 付き）',
     `  3. 展開した中身をここに置く: ${join(binDir, tag)}`,
-    '  （.exe が置けない場所では、llama-server.exe を llama-server.bin に名前を変えて置く）',
   ].join('\n');
 }
 

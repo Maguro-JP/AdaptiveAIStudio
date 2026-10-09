@@ -37,7 +37,6 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/cli/doctor.ts': { count: 1, why: '診断の表示。入っているかの下調べで、見られなければ入っていない側の案内が出るだけ' },
   'src/agent/commands.ts': { count: 2, why: '利用者が置いたコマンドの定義を読む。読めないものは一覧に出さない' },
   'src/ui/settings.ts': { count: 1, why: '保存先のフォルダの状態を見せるだけ' },
-  'src/runtime/llama-install.ts': { count: 1, why: '書き出した後の在る無し。取れなければ .bin の写しを一つ余分に書くだけ' },
   'src/agent/outside-changes.ts': { count: 1, why: '読めなければ記録できなかった道にする（「無い」とは読まない）' },
 };
 

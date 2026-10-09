@@ -274,7 +274,7 @@ describe('読めないモデルしか無いとき', () => {
  *
  * 記録の保存先は、在るかどうかしか見ていなかった。読めるだけの場所
  * （読み取り専用で配られたフォルダ、権限の足りない `%ProgramData%`、
- * 会社のクラウドドライブ）でも ok と出る。**会話も、戻り先も、設定も、
+ * 同期フォルダ）でも ok と出る。**会話も、戻り先も、設定も、
  * 何ひとつ残らないのに緑が出る。**気づくのは、閉じて開き直して
  * 全部消えたとき。一度書いて、消して、確かめる。
  */
@@ -382,14 +382,14 @@ describe('doctor は、Shift_JIS を読めるかを言う', () => {
  * Windows で EFTYPE（ERROR_BAD_EXE_FORMAT）になり、投げる側。投げると一覧も締めの一行も出ずに、Node の積み上げだけを
  * 残して終わっていた。Linux では glibc の execvp が中身の無いファイルを sh で走らせ直すので投げず、直す前の版でも
  * 通る（直す前を捕まえるのは Windows の CI。Linux では「動きません」と言うことだけを見ている）
- * 名前は `.bin` にする（拡張子が在れば Windows でも名前のまま起こしにいくので、同じ道を通る）。
+ * 名前は `.exe` にする（Windows でも Linux でも、名前のまま起こしにいく）。
  */
 describe('置いてある llama-server を起こせないとき', () => {
   test('落ちずに「在りますが、動きません」と言う', async () => {
     const { home } = await scratch();
     const bin = join(home, 'bin');
     await mkdir(join(bin, PINNED_TAG), { recursive: true });
-    const exe = join(bin, PINNED_TAG, 'llama-server.bin');
+    const exe = join(bin, PINNED_TAG, 'llama-server.exe');
     await writeFile(exe, '');
     await chmod(exe, 0o755);
     const text = await runDoctor({ AAS_HOME: home, AAS_CONFIG: join(home, 'なし.json'), AAS_BIN_DIR: bin });

@@ -9,8 +9,8 @@ import assert from 'node:assert/strict';
 import { insideOneDrive, modelsDirNote, programDirNote } from '../src/cli/doctor-paths.ts';
 
 describe('OneDrive の中か', () => {
-  test('Windows の道（会社の OneDrive の名前）', () => {
-    assert.equal(insideOneDrive('Z:\\maguro\\OneDrive - Business1\\Documents\\AdaptiveAIStudio\\data\\models'), true);
+  test('Windows の道（組織の OneDrive の名前）', () => {
+    assert.equal(insideOneDrive('C:\\Users\\user\\OneDrive - Business1\\Documents\\AdaptiveAIStudio\\data\\models'), true);
   });
   test('区切りが / でも、大文字小文字が違っても', () => {
     assert.equal(insideOneDrive('/home/x/onedrive/models'), true);
@@ -26,14 +26,14 @@ describe('OneDrive の中か', () => {
 
 describe('言うこと', () => {
   test('モデルのフォルダなら、常に保持する直し方を添える', () => {
-    const n = modelsDirNote('Z:\\maguro\\OneDrive - Business1\\models');
+    const n = modelsDirNote('C:\\Users\\user\\OneDrive - Business1\\models');
     assert.ok(n);
     assert.match(n.text, /OneDrive の中にあります/);
     assert.match(n.hint, /このデバイス上に常に保持する/);
     assert.match(n.hint, /ことがあります/, '実際に遅いと言い切っている');
   });
   test('プログラムのフォルダも同じ形で、理由は別', () => {
-    const n = programDirNote('Z:\\maguro\\OneDrive - Business1\\AdaptiveAIStudio');
+    const n = programDirNote('C:\\Users\\user\\OneDrive - Business1\\AdaptiveAIStudio');
     assert.ok(n);
     assert.match(n.hint, /小さいファイル/);
   });

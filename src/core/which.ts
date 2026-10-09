@@ -36,7 +36,6 @@ export function findOnPath(command: string, env: WhichEnv): string | undefined {
   // `C:\\nodejs/npx` になり、在るものを見落とす（試験で見つけた）。
   const path = win ? win32 : posix;
   // Windows は名前だけで呼べる拡張子が決まっている（PATHEXT）。
-  // .bin を足してあるのは、クラウドドライブが .exe を落とすため（start.cmd と同じ事情）。
   const exts = win
     ? (env.pathext ?? DEFAULT_PATHEXT).split(';').filter((e) => e.length > 0)
     : [];
