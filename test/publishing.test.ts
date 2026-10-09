@@ -22,7 +22,7 @@ const noGit = !existsSync(join(root, '.git'));
 
 function trackedTextFiles(): string[] {
   const out = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' });
-  return out.split('\0').filter((f) => f && !f.startsWith('.claude/'))
+  return out.split('\0').filter((f) => f && !f.startsWith('.claude/') && f !== 'test/publishing.test.ts')
     .filter((f) => /\.(ts|mts|mjs|js|json|md|txt|cmd|sh|nsi|yml|yaml|html|css)$/i.test(f) || !f.includes('.'));
 }
 
@@ -64,4 +64,18 @@ test('管理下のファイルが、このリポジトリ以外の Maguro-JP の
     for (const r of otherReposIn(readFileSync(join(root, f), 'utf8'))) hits.push(`${f}: ${r}`);
   }
   assert.deepEqual(hits, [], '「別のリポジトリ」のように一般化する');
+});
+
+/** 人の反応を書き留めた形。文書（*.md）でだけ見る（製品の機能の語と重なるため、コードは見ない）。 */
+const REACTION = /怒られ|言い直させ|理不尽|言い聞かせ/;
+
+test('文書に、人の反応を書き留めた言い方が無い', { skip: noGit }, () => {
+  const out = execFileSync('git', ['ls-files', '-z', '*.md'], { cwd: root, encoding: 'utf8' });
+  const hits: string[] = [];
+  for (const f of out.split('\0').filter(Boolean)) {
+    readFileSync(join(root, f), 'utf8').split('\n').forEach((line, i) => {
+      if (REACTION.test(line)) hits.push(`${f}:${i + 1}: ${line.trim().slice(0, 60)}`);
+    });
+  }
+  assert.deepEqual(hits, [], '自分がやったことと、その結果だけで書く（docs/PUBLISHING.md）');
 });
