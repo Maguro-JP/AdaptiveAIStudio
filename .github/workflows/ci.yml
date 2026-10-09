@@ -35,7 +35,7 @@ on:
   pull_request:
     # **Ready にした時点も合図にする。**既定（開いた・押した・開き直した）だけだと、
     # draft の間に止めておいた Windows が、Ready にしても回らない。
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     # `.claude/**` は Claude Code の作業の決まり（スキル・フック・権限）。製品のコードもテストも
     # ここを読まないので、ここだけの変更では `npm test` の結果が変わらない（スキルの更新の PR で起きていた）。
     # 並びは `scripts/docs-only-push.mjs` の DOCS と同じ（`test/docs-only-push.test.ts` が突き合わせる）。
@@ -76,6 +76,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.real && 'real' || 'ci' }}
   cancel-in-progress: true
 
+# 自律開発（claude/ の枝）の PR では回さない。検証は手元で済ませてからマージするので、
+# ここで同じものを回すと枠だけが減る。人が見てほしいときは PR に `ci` の札を付ける。
 jobs:
   # 安い方（Linux は1倍）。**ここは押すたびに回す。**
   #
@@ -89,6 +91,7 @@ jobs:
     if: >-
       (github.event_name != 'workflow_dispatch' || !inputs.real)
       && !(github.event.action == 'opened' && github.event.pull_request.draft == true)
+      && !(github.event_name == 'pull_request' && startsWith(github.head_ref, 'claude/') && !contains(github.event.pull_request.labels.*.name, 'ci'))
     runs-on: ubuntu-latest
     # 暴走した1本で枠を溶かさない。手元では3分ほど。
     timeout-minutes: 20
