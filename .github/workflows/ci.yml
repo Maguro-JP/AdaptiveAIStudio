@@ -41,7 +41,8 @@ on:
     # 並びは `scripts/docs-only-push.mjs` の DOCS と同じ（`test/docs-only-push.test.ts` が突き合わせる）。
     paths-ignore: ['**.md', 'docs/**', '.gitignore', '.gitattributes', '.claude/**']
   schedule:
-    # 毎週月曜 09:00 JST。UTC では月曜 00:00。
+    # 毎週土曜 09:00 JST。UTC では土曜 00:00。
+    # 利用者が確かめるのが土曜なので、Windows の確かめと bundle をその朝に寄せる。
     # （JST の何時かを先に決めてから UTC へ直す。逆をやると1日ずれる）
     # **1回あたり 46 分ぶん（課金）。月に 184 分ほど。**
     # 実測（run 35557577310、2026-09-21）:
@@ -51,7 +52,7 @@ on:
     # 前は「週1回 × 3分 なので、月に12分ほど」と書いてあった。
     # ubuntu の分しか数えていない。**15 倍ずれていた。**
     # 口座は 2,000 分／月で、全部のリポジトリが同じものを使う。
-    - cron: '0 0 * * 1'
+    - cron: '0 0 * * 6'
   workflow_dispatch:
     inputs:
       full:
@@ -113,23 +114,19 @@ jobs:
           npm ci --no-audit --no-fund
           npm run typecheck
 
-  # 配る先（Windows）。**2倍で数えられるので、draft のうちは回さない。**
+  # 配る先（Windows）。**2倍で数えられるので、PR では回さない。**
   #
-  # draft は「まだ見せていない」という合図で、そこへ押すたびに回すと、
-  # 直しを 3 回押しただけで Windows が 3 回（15 分 → 30 分ぶん）走る。
-  # 実際にこの PR で 3 回押した。**Ready にした時点で 1 回だけ回る。**
-  #
-  # 手で頼んだとき・週に一度は、draft でなくても回る（PR が無い回なので
-  # `github.event.pull_request` が空になり、下の条件は素通りする）。
+  # 回すのは週に一度（土曜）と、手で頼んだときだけ。毎日の PR で回すと
+  # 月に 300 分ほど払い、口座の枠（全部のリポジトリで共有）を毎月使い切っていた。
+  # Windows だけで起きる不具合に気付くのは、そのぶん土曜まで遅れる。
   #
   # 落ちるのはいつも Windows 側なので、**減らすのは回数だけ。**
   # 見る中身（`npm test` の全部）は減らさない。
   test-windows:
     name: windows-latest / Node 24.x
     if: >-
-      (github.event_name != 'workflow_dispatch' || !inputs.real)
-      && github.event.pull_request.draft != true
-      && !(github.event_name == 'pull_request' && startsWith(github.head_ref, 'claude/') && !contains(github.event.pull_request.labels.*.name, 'ci'))
+      github.event_name != 'pull_request'
+      && (github.event_name != 'workflow_dispatch' || !inputs.real)
     runs-on: windows-latest
     timeout-minutes: 20
     steps:

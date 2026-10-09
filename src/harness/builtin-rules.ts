@@ -395,6 +395,25 @@ export const noRepeatedWrites: Rule = {
 };
 
 /**
+ * 呼び出しが走らせる命令。run_command の `command` と、外のツール（MCP）の命令を走らせる口（Desktop Commander の
+ * `start_process` など）の引数の一段目の `command`・`cmd`・`script`。外のツールに当てていなかったので、
+ * `{"command":"git push --force"}` や `pkill -f node` を規則に掛けずに通した。一段目の鍵の名前で絞る
+ * （issue の本文などに命令の話を書いただけで止めない）。どちらでもなければ undefined
+ */
+export function commandOf(call: ToolCall): string | undefined {
+  if (call.name === 'run_command') return argString(call, 'command') ?? '';
+  if (!isExternalTool(call.name) || call.args === null || typeof call.args !== 'object' || Array.isArray(call.args)) return undefined;
+  const args = call.args as Record<string, unknown>;
+  for (const key of ['command', 'cmd', 'script']) {
+    const v = args[key];
+    if (typeof v === 'string' && v.trim() !== '') return v;
+    // 命令を語の並びで渡す口（`{"command":["git","push"]}`）も、つないだ形で見る
+    if (Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === 'string')) return v.join(' ');
+  }
+  return undefined;
+}
+
+/**
  * 危険なコマンドを止める。許可リストはツール側にあるが、
  * 「許可されたコマンドの危険な使い方」はここで見る。
  */
@@ -402,8 +421,8 @@ export const dangerousCommands: Rule = {
   name: 'dangerous-commands',
   description: '破壊的・不可逆なコマンドを止める',
   pre(call) {
-    if (call.name !== 'run_command') return allow;
-    const command = argString(call, 'command') ?? '';
+    const command = commandOf(call);
+    if (command === undefined) return allow;
     const patterns: Array<[RegExp, string]> = [
       [/\bgit\s+(push|reset\s+--hard|clean\s+-[a-z]*f|checkout\s+--\s+\.)/i, 'git の破壊的操作'],
       [/\brm\s+-[a-z]*r/i, '再帰削除'],
@@ -548,8 +567,8 @@ export const noSelfKill: Rule = {
   name: 'no-self-kill',
   description: '自分にも当たる止め方を防ぐ',
   pre(call) {
-    if (call.name !== 'run_command') return allow;
-    const command = argString(call, 'command') ?? '';
+    const command = commandOf(call);
+    if (command === undefined) return allow;
     // 文字列で相手を探して殺す形。ここに自分が入っていると、自分が死ぬ。
     const wide = /\b(pkill|pgrep)\s+(-[a-z]*f|--full)\b|\bkillall\b|\btaskkill\b[^|]*\/(f|im)\b/i;
     if (!wide.test(command)) return allow;
@@ -574,8 +593,8 @@ export const noCiSpend: Rule = {
   name: 'no-ci-spend',
   description: '断りのない CI 実行を止める',
   pre(call) {
-    if (call.name !== 'run_command') return allow;
-    const command = argString(call, 'command') ?? '';
+    const command = commandOf(call);
+    if (command === undefined) return allow;
     const patterns: Array<[RegExp, string]> = [
       [/\bgh\s+workflow\s+run\b/i, 'CI を手で回す'],
       [/\bgh\s+run\s+(rerun|watch)\b/i, 'CI を回し直す'],
