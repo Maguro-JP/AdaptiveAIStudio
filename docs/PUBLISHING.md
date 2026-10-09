@@ -30,7 +30,7 @@
 | 3 | 社内向けの記録（`docs/reports/`、`AdaptiveAIStudio-bug-report.md`）の扱いを決めて、片づけてある | 済（`docs/reports/` は開発の記録として公開に含め、上の決まりで書く。古い調査レポートは消した） |
 | 4 | `.claude/` の中の別のリポジトリの名前（配る元で直す）と、`.claude/` を公開に含めるか | 残り |
 | 5 | README を初めて読む人が読める（独自の言葉と `**` を直してある） | 済 |
-| 6 | CLAUDE.md と主な文書（HANDOFF・HARNESS・ROADMAP など）の言い回しを直してある | 残り（CLAUDE.md と全文書の `**` は済。主な文書の造語が残る） |
+| 6 | CLAUDE.md と主な文書（HANDOFF・HARNESS・ROADMAP など）の言い回しを直してある | 済（`docs/DECISIONS.md` は記録として残し、造語は残る。コードの造語は `test/wording.test.ts` の上限で減らしていく） |
 | 7 | 社用PC向けの特殊な処理を外し、普通の置き場所にしてある（`docs/DECISIONS.md` 2026-10-10） | 残り |
 | 8 | 過去の履歴の中身からメールアドレスを消してある（作成者の欄は残す。force push を 1 回） | 残り（1〜7 の後） |
 | 9 | 履歴全体を秘密の走査に掛けて、本物が 0 件 | 残り（8 の後） |
