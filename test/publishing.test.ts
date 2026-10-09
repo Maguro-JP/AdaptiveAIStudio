@@ -79,3 +79,13 @@ test('文書に、人の反応を書き留めた言い方が無い', { skip: noG
   }
   assert.deepEqual(hits, [], '自分がやったことと、その結果だけで書く（docs/PUBLISHING.md）');
 });
+
+test('コードとコメントにも、人の反応を書き留めた言い方が無い', { skip: noGit }, () => {
+  const hits: string[] = [];
+  for (const f of trackedTextFiles()) {
+    readFileSync(join(root, f), 'utf8').split('\n').forEach((line, i) => {
+      if (/怒られ|理不尽/.test(line)) hits.push(`${f}:${i + 1}`);
+    });
+  }
+  assert.deepEqual(hits, []);
+});

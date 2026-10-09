@@ -632,7 +632,7 @@ export class Session {
     const memory = new Memory(join(stateDir(), 'memory.jsonl'));
     await memory.load();
     // **入れた直後から、同じ地雷を踏まない。**
-    // ここまで指摘されてきたことを、最初から持たせておく。
+    // これまでの作業で分かった注意点を、最初から持たせておく。
     if (memory.seedLessons() > 0) await memory.save().catch(() => undefined);
 
     /*

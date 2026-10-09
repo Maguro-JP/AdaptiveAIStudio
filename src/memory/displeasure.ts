@@ -256,7 +256,7 @@ export function understandPrompt(said: string, when?: string, did?: string): str
 }
 
 export interface Understood {
-  /** どういう場面だったか。**これが無いと「何をしても怒られた」になる。** */
+  /** どういう場面だったか。これが無いと、次に手を変える助けにならない。 */
   when: string;
   what: string;
   why: string;
@@ -292,9 +292,8 @@ export function parseUnderstanding(text: string, fallbackWhen?: string): Underst
 /**
  * 考えたものを、覚えの一行にする。
  *
- * **必ず場面から書く。**場面が無いと「提案したら怒られた」「黙っていたら
- * 怒られた」が並ぶだけになる。それは学びではなく、
- * **相手が理不尽だという記録**にしかならない。
+ * 必ず場面から書く。場面が無いと「提案したら困らせた」「黙っていたら
+ * 困らせた」が並ぶだけになり、次に手を変える助けにならない。
  */
 export function lessonFromUnderstanding(u: Understood, did?: string): string {
   return [
