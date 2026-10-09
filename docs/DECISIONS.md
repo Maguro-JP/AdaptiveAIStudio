@@ -24,6 +24,7 @@
 - 根を散らかさない
 - Actions は、断ってから回す
 - push では CI を回さない
+- Windows の CI と bundle は土曜に寄せる
 - 日本時間で話す
 
 **社用PCで動かすための道**
@@ -13171,3 +13172,14 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 直していないもの: 空の中身から作る差分には「改行なし」の行が付かない（`unifiedDiff` の条件）。作るファイルの差分は塊が一つなので、一部だけ選ぶ道には届かないと見ている（確かめていない）。
 試験は `test/hunks-eol-gaps.test.ts`（直す前の版で 6 件落ちた。改行の変わらない形の 1 件は通る）。
 触る場所: `src/agent/hunks.ts`（`splitHunks`・`applyHunks`・`revertLines`・`eolEnds`）
+
+## 2026-10-10  Windows の CI と bundle は土曜に寄せる
+
+利用者が確かめるのは土曜。Actions の枠（口座で一つ、全部のリポジトリで共有）を毎月使い切っていたので、Windows で回すものをその朝に寄せる。
+- 毎日の PR では Windows の試験を回さない（1 回 14 分ぶん。月に 300 分ほど）。PR では ubuntu だけ
+- 週 1 回の確かめ（Windows の試験と配る形での 1 ターン）は、月曜から土曜 09:00 JST に移す
+- 土曜の long-dev は、マージ後の main から `release/vX.Y.Z` の枝を押して portable と setup.exe を組む（版は直前のタグの patch を 1 つ上げる）。ほかに組むのは、利用者が致命的なバグを指摘して直したときだけ
+変わる振る舞い: Windows だけで起きる不具合に気付くのが、最大で土曜まで遅れる。
+選ばなかった案: 週報の月曜に組む（確かめるのが土曜なので、古い版を渡すことになる）。
+試験は `test/home.test.ts`（PR を除く条件と土曜の cron を見る。直す前の ci.yml で 2 件落ちた）。
+触る場所: `.github/workflows/ci.yml`（`schedule`・`test-windows` の `if`）、long-dev の Routine の 2.5

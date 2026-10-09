@@ -380,9 +380,9 @@ describe('CI は押すたびに回さない', () => {
     const cron = /cron:\s*'([^']+)'/.exec(raw)?.[1];
     assert.ok(cron, 'cron が無い');
     const [, hourUtc, , , dowUtc] = cron!.split(' ');
-    // JST = UTC+9。月曜 09:00 JST → 月曜 00:00 UTC。
+    // JST = UTC+9。土曜 09:00 JST → 土曜 00:00 UTC。
     assert.equal(hourUtc, '0');
-    assert.equal(dowUtc, '1', 'JST の月曜にしたいなら UTC も月曜（0時なので日をまたがない）');
+    assert.equal(dowUtc, '6', 'JST の土曜にしたいなら UTC も土曜（0時なので日をまたがない）');
   });
 
   /**
@@ -400,8 +400,9 @@ describe('CI は押すたびに回さない', () => {
     const jobs = ciJobs(raw);
     const winTest = jobs.find((j) => /runs-on: windows-latest/.test(j) && /npm test/.test(j) && !/check:bundle/.test(j));
     assert.ok(winTest, 'Windows でテストを回す仕事が見つからない');
-    assert.match(winTest, /github\.event\.pull_request\.draft != true/,
-      `draft を除く条件が無い（押すたびに2倍で回る）:\n${winTest.slice(0, 400)}`);
+    // PR では一度も回さない（週に一度と手で頼んだときだけ）。
+    assert.match(winTest, /github\.event_name != 'pull_request'/,
+      `PR を除く条件が無い（毎日の PR で2倍で回る）:\n${winTest.slice(0, 400)}`);
     // Ready にした時点で回るように、合図に ready_for_review が入っていること。
     const on = raw.slice(raw.indexOf('\non:'), raw.indexOf('\njobs:'));
     assert.match(on, /types:\s*\[[^\]]*ready_for_review/,
