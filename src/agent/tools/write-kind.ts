@@ -385,7 +385,7 @@ function looseEdit(
   const out = [...lines];
   for (const start of [...at].reverse()) {
     const shifted = sameFrame(put, indentOf(want[0]!), indentOf(lines[start]!))
-      ? reindent(put, indentOf(want[0]!), indentOf(lines[start]!))
+      ? reindentByLine(put, want, lines.slice(start, start + want.length))
       : put;
     out.splice(start, wantKeys.length, ...shifted);
   }
@@ -503,6 +503,41 @@ function reindent(lines: string[], from: string, to: string): string[] {
   return lines.map((line) => {
     if (line.trim().length === 0) return line;
     return line.startsWith(from) ? to + line.slice(from.length) : line;
+  });
+}
+
+/**
+ * 字下げを、当たった行ごとの差で付け替える。
+ *
+ * 最初の行で測った差だけを全部の行に足していたので、`find` の字下げが揃っていてファイルの側が揃っていないとき
+ * （`foo()` は 2 字下げ、`bar()` は行の頭）、行の頭にあった行まで字下げしていた（Python や YAML では意味が変わる）。
+ * `find` の字下げごとにファイルの字下げを対にして付け替える。同じ字下げが別の字下げに当たっていて対が決まらなければ、
+ * 行の数が同じときだけ行ごとに当て、違えば付け替えない。
+ */
+function reindentByLine(put: string[], want: string[], got: string[]): string[] {
+  const pairs = new Map<string, string>();
+  let consistent = true;
+  want.forEach((w, j) => {
+    if (w.trim().length === 0) return;
+    const from = indentOf(w);
+    const to = indentOf(got[j] ?? '');
+    if (pairs.has(from) && pairs.get(from) !== to) consistent = false;
+    else pairs.set(from, to);
+  });
+  if (consistent) {
+    // 長い字下げから当てる（`    ` を `  ` より先に見る）
+    const order = [...pairs.keys()].sort((x, y) => y.length - x.length);
+    return put.map((line) => {
+      if (line.trim().length === 0) return line;
+      const from = order.find((f) => line.startsWith(f));
+      return from === undefined ? line : pairs.get(from)! + line.slice(from.length);
+    });
+  }
+  if (put.length !== want.length) return put;
+  return put.map((line, j) => {
+    if (line.trim().length === 0) return line;
+    const from = indentOf(want[j]!);
+    return line.startsWith(from) ? indentOf(got[j] ?? '') + line.slice(from.length) : line;
   });
 }
 

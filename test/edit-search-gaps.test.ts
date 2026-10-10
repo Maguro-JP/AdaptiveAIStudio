@@ -36,3 +36,15 @@ describe('search_text の改行を含む文字列', () => {
     assert.equal(r.hits[0]!.line, 2);
   });
 });
+
+describe('edit_file の緩い当ての字下げ', () => {
+  test('元で行の頭にあった行は、行の頭のまま（最初の行の差を全部に足さない）', () => {
+    const r = applyEdit('x = 1\n  foo()\nbar()\n', 'foo()\nbar()', 'foo2()\nbar2()', false);
+    assert.equal(r.text, 'x = 1\n  foo2()\nbar2()\n', JSON.stringify(r.text));
+  });
+
+  test('揃って字下げを落としたなら、全部の行を揃えて戻す（対）', () => {
+    const r = applyEdit('def f():\n    a()\n    b()\n', 'a()\nb()', 'a2()\nb2()', false);
+    assert.equal(r.text, 'def f():\n    a2()\n    b2()\n', JSON.stringify(r.text));
+  });
+});

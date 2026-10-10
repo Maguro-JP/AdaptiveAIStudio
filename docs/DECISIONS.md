@@ -13252,6 +13252,7 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 
 - `edit_file` は、一行の `find` なら行の途中の当たりも完全一致として数えていた。空白から始まる `find` が行の頭の空白の途中に当たり（字下げを落としただけ）、`replace` が複数行だと、二行目から後が浅い字下げのまま入り、しかも何も言わなかった。その当たりは行で見る道（字下げを合わせ、合わせたと言う）に回す。行の途中の名前の付け替えは、これまでどおり完全一致
 - `search_text` は、改行を含む文字列を行ごとに探していたので、ファイルに在っても「該当なし」と言った。改行を含むときは全体で探し、始まりの行を返す
-試験は `test/edit-search-gaps.test.ts`（直す前の版で 2 件落ちた。名前の付け替えの形は両方で通る）。
-直していないもの: 緩い当て（行で見る道）が、最初の行で測った字下げの差を `replace` の全部の行に足すので、元で行の頭にあった行まで字下げされる件（字下げの合わせ方を行ごとにする形にしてから）。
-触る場所: `src/agent/tools/write-kind.ts`（`applyEdit`）、`src/agent/tools/fs.ts`（`searchText`）
+試験は `test/edit-search-gaps.test.ts`（直す前の版で 3 件落ちた。名前の付け替えと揃って字下げを落とした形は両方で通る）。
+- 緩い当て（行で見る道）は、最初の行で測った字下げの差を `replace` の全部の行に足していたので、元で行の頭にあった行まで字下げした。`find` の字下げごとにファイルの字下げを対にして付け替える（`reindentByLine`）。対が決まらなければ、行の数が同じときだけ行ごとに当て、違えば付け替えない
+直していないもの: 目印で当てる道（`anchorEdit` の側の `reindent`）にも同じ形が残る（試験で形を作ってから）。
+触る場所: `src/agent/tools/write-kind.ts`（`applyEdit`・`looseEdit`・`reindentByLine`）、`src/agent/tools/fs.ts`（`searchText`）
