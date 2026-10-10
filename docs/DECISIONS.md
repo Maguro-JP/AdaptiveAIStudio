@@ -32,7 +32,7 @@
 - 93 回目の不具合調査（危ない命令と鍵の形のすり抜け）
 - 94 回目の不具合調査（外から入る中身の検問の言い回し）
 - 95 回目の不具合調査（頭が依頼でない会話・押し戻された回の報告・黙った打ち切り）
-- 96 回目の不具合調査（書き込み先の綴りの揺れ）
+- 96 回目の不具合調査（書き込み先の綴りの揺れ・作業場ごとの提案）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13323,10 +13323,11 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 試験は `test/window-lead-gaps.test.ts`・`test/team.test.ts`・`test/orchestrator-canceled-gaps.test.ts`（直す前の版でそれぞれ 1 件落ちた。利用者が止めた形は両方で通る）。
 触る場所: `src/agent/window.ts`（`fitToWindow`）、`src/agent/team.ts`、`src/core/orchestrator.ts`（`run`）
 
-## 2026-10-10  96 回目の不具合調査（書き込み先の綴りの揺れ）
+## 2026-10-10  96 回目の不具合調査（書き込み先の綴りの揺れ・作業場ごとの提案）
 
 - `normalizeWrite`（`src/agent/pm.ts`）は一つ目の `./` だけを外していた。`././src/a.ts`・`src//a.ts`・`src/./a.ts`・`src/x/../a.ts` が `src/a.ts` と別の書き込み先になり、錠が効かずに同じファイルを書く作業が同時に走りえた。`posix.normalize` で畳む（末尾の `/` はフォルダの指定として残す）
 - 検収（`judge`）は計画の書き込み先と変わったファイルを綴りで比べていたので、計画にある `./src/a.ts` を「計画に無いファイルが変わっています」と言い、人の判断に回していた。同じ揃え方で比べる
-試験は `test/pm-paths-gaps.test.ts`（直す前の版で 2 件とも落ちた）。
-直していないもの: 絶対の道（`/home/…/src/a.ts`）を作業場からの道に直す件（揃える所が作業場の根を知らない）。大小を区別しない機械での `src/A.ts` と `src/a.ts`。別の作業場の提案が、この作業場の同じ提案を止める件（記録済みの残り）。
-触る場所: `src/agent/pm.ts`（`normalizeWrite`）、`src/agent/acceptance.ts`（`judge`）
+- 提案の重なりを、作業場を見ずに見ていたので、別の作業場の同じ提案があると、この作業場の提案が出ず、一覧も空のままだった（記録済みの残り）。同じ作業場の中だけで見る（作業場を持たない提案は、どの作業場とも重なる）
+試験は `test/pm-paths-gaps.test.ts`（直す前の版で 2 件とも落ちた）、`test/proposals-safety.test.ts`（直す前の版で 1 件落ちた）。
+直していないもの: 絶対の道（`/home/…/src/a.ts`）を作業場からの道に直す件（揃える所が作業場の根を知らない）。大小を区別しない機械での `src/A.ts` と `src/a.ts`。
+触る場所: `src/agent/pm.ts`（`normalizeWrite`）、`src/agent/acceptance.ts`（`judge`）、`src/agent/proposals.ts`（`add`・`#merge`・`sameRoot`）
