@@ -84,6 +84,11 @@ export function charsetOf(contentType: string): string | undefined {
  * charset が言われていればそれで、無ければ UTF-8 → CP932 の順に試す。
  */
 export async function readBounded(res: Response, limitBytes: number, contentType: string): Promise<string> {
+  return (await readBoundedCut(res, limitBytes, contentType)).text;
+}
+
+/** `readBounded` と同じ読み方で、上限で切ったかも返す（切ったのに言わないと、頁の全部を読んだように見える）。 */
+export async function readBoundedCut(res: Response, limitBytes: number, contentType: string): Promise<{ text: string; cut: boolean }> {
   const chunks: Uint8Array[] = [];
   let held = 0;
   let cut = false;
@@ -106,11 +111,11 @@ export async function readBounded(res: Response, limitBytes: number, contentType
   const raw = cut ? Buffer.from(trimPartialText(whole)) : whole;
   const charset = charsetOf(contentType);
   // 相手が UTF-8 と言っているなら、そのとおりに読む（言っていても推し量りに回していた）
-  if (charset === 'utf-8' || charset === 'utf8') return new TextDecoder('utf-8').decode(raw);
+  if (charset === 'utf-8' || charset === 'utf8') return { text: new TextDecoder('utf-8').decode(raw), cut };
   if (charset) {
-    try { return new TextDecoder(charset).decode(raw); } catch { /* 知らない名前。下へ */ }
+    try { return { text: new TextDecoder(charset).decode(raw), cut }; } catch { /* 知らない名前。下へ */ }
   }
-  return decodeText(raw).text;
+  return { text: decodeText(raw).text, cut };
 }
 
 export function toText(body: string, contentType: string): string {
@@ -194,7 +199,8 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
         // 全部を読み切らない。上限の先は切ると決めているのに、切る前に
         // 何百MB も抱えると、それだけで動かなくなる機械がある。
         // 文字にするのは全部揃ってから。日本語の頁は Shift_JIS のことがある。
-        const body = await readBounded(res, maxBytes * 4, type);
+        const readCap = maxBytes * 4;
+        const { text: body, cut } = await readBoundedCut(res, readCap, type);
         const text = toText(body, type);
 
         // 持ち込み検査。ここを通る前の文字列は、誰が書いたものか分からない。
@@ -217,9 +223,8 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
           ? `${describeVerdict(inbound, 'inbound')}\n\n`
           : '';
 
-        const clipped = text.length > keep
-          ? shown + `\n…（以降 ${text.length - keep} 文字は省略）`
-          : text;
+        const clipped = (text.length > keep ? shown + `\n…（以降 ${text.length - keep} 文字は省略）` : text)
+          + (cut ? `\n…（頁が長いので、頭の ${readCap} バイトまでしか読んでいません。その先は読んでいません）` : '');
         if (!res.ok) {
           // 失敗も情報。握り潰すと同じ場所へ何度も行く。
           return ok(`出典: ${target}\n状態: ${res.status} ${res.statusText}\n\n${notes}${clipped}`);

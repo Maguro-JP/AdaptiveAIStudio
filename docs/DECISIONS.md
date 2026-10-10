@@ -22,6 +22,7 @@
 - どこでも動き、信用できるものを優先する（社用PCの前提を置き換える）
 - 公開する前提で書く
 - 上限で切った頭が CP932 の字の途中で終わる（85 回目の残り）
+- 長い頁を読む上限で切っても、切ったと言わない（84 回目の残り）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13216,3 +13217,10 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - `trimPartialSjis` は頭から字の区切りを数える（末尾から遡ると、2 バイト目にも先行バイトと同じ値が出るため見分けられない）
 試験は `test/cp932-cut-gaps.test.ts`（直す前の版で 2 件落ちた）。shift_jis を読めない Node では飛ばす。
 触る場所: `src/core/text.ts`（`trimPartialText`・`trimPartialSjis`）、`src/agent/tools/network.ts`（`readBounded`）、`src/agent/mention.ts`（`readForMention`）
+
+## 2026-10-10  長い頁を読む上限で切っても、切ったと言わない（84 回目の残り）
+
+`fetch_url` は頁を読む上限（`maxBytes` の 4 倍のバイト）で切ったあと、渡す上限（`maxBytes` 文字）を超えたときだけ「以降は省略」と書いていた。HTML の札を外して渡す上限に収まると何も書かず、頁の全部を読んだように見えた。超えたときも、省略した数は読んだ分の中だけの数だった。
+- 読む処理（`readBoundedCut`）から、上限で切ったかを返す。切ったときは「頭の N バイトまでしか読んでいません」を必ず足す
+試験は `test/fetch-cut-note.test.ts`（直す前の版で 1 件落ちた。短い頁で何も足さない形は両方で通る）。
+触る場所: `src/agent/tools/network.ts`（`readBoundedCut`・`createFetchUrlTool`）
