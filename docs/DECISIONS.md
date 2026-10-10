@@ -27,6 +27,7 @@
 - 87 回目の不具合調査（承認の「全部許す」の印・答えた後も残るタイマー・取りこぼした出来事の渡し直し）
 - 88 回目の不具合調査（edit_file の字下げを落とした一行の find・search_text の改行を含む文字列）
 - 90 回目の不具合調査（モデルの返事の知らせの区切り）
+- 91 回目の不具合調査（相手の失敗の見分け方）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13267,3 +13268,13 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 選ばなかった案: 決まりのとおり空行まで全部の `data:` 行を繋ぐ（空行を送らない相手で、返事が最後まで届かなくなる）。
 試験は `test/sse.test.ts`（直す前の版で 3 件落ちた）。
 触る場所: `src/providers/sse.ts`（`readSseLines`）
+
+## 2026-10-10  91 回目の不具合調査（相手の失敗の見分け方）
+
+`src/providers/errors.ts` の 3 件。
+- Gemini の 1 日の上限（`…PerDay… Please retry in 32.5s`）を、「retry in」の語で一時的な制限と読んでいた。使い切った相手に 1 分ごとに送り直した。1 日の上限を先に見る
+- 400 で「token … limit」と出るだけで（`Rate limit reached for tokens per min (TPM)`）、依頼が長すぎるとして黙って次の候補へ回していた。1 分あたりの制限は外す
+- 404 の本文に「model」の字が入るだけで（`/v1/models/chat` の道の打ち間違い）、モデルが無いとして黙って次の候補へ回していた。`model_not_found` の符号か、「model … not found / does not exist」の形で見る（`saysModelMissing`）
+試験は `test/errors-kind-gaps.test.ts`（直す前の版で 3 件落ちた。1 分の上限・文脈の長さの超過・本当にモデルが無い形は両方で通る）。
+直していないもの: Claude へ、対になる呼び出しの無いツールの結果を送る件と、読めなかったツールの引数を内部の形のまま見せる件（次の周）。
+触る場所: `src/providers/errors.ts`（`sayQuotaExhausted`・`saysContextTooLong`・`saysModelMissing`・`kindFromHttpStatus`）
