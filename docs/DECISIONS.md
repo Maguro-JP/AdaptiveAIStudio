@@ -13275,6 +13275,7 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - Gemini の 1 日の上限（`…PerDay… Please retry in 32.5s`）を、「retry in」の語で一時的な制限と読んでいた。使い切った相手に 1 分ごとに送り直した。1 日の上限を先に見る
 - 400 で「token … limit」と出るだけで（`Rate limit reached for tokens per min (TPM)`）、依頼が長すぎるとして黙って次の候補へ回していた。1 分あたりの制限は外す
 - 404 の本文に「model」の字が入るだけで（`/v1/models/chat` の道の打ち間違い）、モデルが無いとして黙って次の候補へ回していた。`model_not_found` の符号か、「model … not found / does not exist」の形で見る（`saysModelMissing`）
-試験は `test/errors-kind-gaps.test.ts`（直す前の版で 3 件落ちた。1 分の上限・文脈の長さの超過・本当にモデルが無い形は両方で通る）。
-直していないもの: Claude へ、対になる呼び出しの無いツールの結果を送る件と、読めなかったツールの引数を内部の形のまま見せる件（次の周）。
-触る場所: `src/providers/errors.ts`（`sayQuotaExhausted`・`saysContextTooLong`・`saysModelMissing`・`kindFromHttpStatus`）
+試験は `test/errors-kind-gaps.test.ts`（直す前の版で 3 件落ちた。1 分の上限・文脈の長さの超過・本当にモデルが無い形は両方で通る）、`test/anthropic-shape-gaps.test.ts`（直す前の版で 2 件落ちた）。
+- Claude へ、対になる呼び出しが直前に無いツールの結果も `tool_result` として送っていた（Claude が 400 で断り、こちらの誤りとして依頼ごと落ちる）。文として渡す
+- 読めなかったツールの引数（こちらの内側の形 `{ __raw, __parseError }`）を、モデルが出した呼び出しとして見せていた。Claude には空の引数、OpenAI 互換の口にはモデルが書いた元の文字列で送り返す
+触る場所: `src/providers/errors.ts`（`sayQuotaExhausted`・`saysContextTooLong`・`saysModelMissing`・`kindFromHttpStatus`）、`src/providers/anthropic.ts`（`toAnthropicMessages`）、`src/providers/openai-compatible.ts`（`toWireMessage`・`wireArgs`）
