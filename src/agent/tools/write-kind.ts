@@ -332,8 +332,18 @@ function anchorEdit(
   const put = fitReplace(replace.split('\n'), cut.head, cut.tail);
   const out = [...lines];
   for (const { from, to } of [...found].reverse()) {
+    // 行の数が違いうるので、中身が同じ行どうしを対にしてから、行ごとの差で付け替える
+    // （最初の行の差を全部に足すと、元で行の頭にあった行まで字下げしていた）
+    const block = lines.slice(from, to + 1);
+    let cursor = 0;
+    const got = want.map((w) => {
+      const k = block.findIndex((l, n) => n >= cursor && l.trim() === w.trim());
+      if (k < 0) return undefined;
+      cursor = k + 1;
+      return block[k];
+    });
     const shifted = sameFrame(put, indentOf(want[0]!), indentOf(lines[from]!))
-      ? reindent(put, indentOf(want[0]!), indentOf(lines[from]!))
+      ? reindentByLine(put, want, got)
       : put;
     out.splice(from, to - from + 1, ...shifted);
   }
@@ -514,13 +524,14 @@ function reindent(lines: string[], from: string, to: string): string[] {
  * `find` の字下げごとにファイルの字下げを対にして付け替える。同じ字下げが別の字下げに当たっていて対が決まらなければ、
  * 行の数が同じときだけ行ごとに当て、違えば付け替えない。
  */
-function reindentByLine(put: string[], want: string[], got: string[]): string[] {
+function reindentByLine(put: string[], want: string[], got: ReadonlyArray<string | undefined>): string[] {
   const pairs = new Map<string, string>();
   let consistent = true;
   want.forEach((w, j) => {
-    if (w.trim().length === 0) return;
+    // 対になるファイルの行が無い行（崩れた行）は、対を決める材料にしない
+    if (w.trim().length === 0 || got[j] === undefined) return;
     const from = indentOf(w);
-    const to = indentOf(got[j] ?? '');
+    const to = indentOf(got[j]!);
     if (pairs.has(from) && pairs.get(from) !== to) consistent = false;
     else pairs.set(from, to);
   });
@@ -533,11 +544,17 @@ function reindentByLine(put: string[], want: string[], got: string[]): string[] 
       return from === undefined ? line : pairs.get(from)! + line.slice(from.length);
     });
   }
-  if (put.length !== want.length) return put;
-  return put.map((line, j) => {
+  // 対が決まらないときは、行ごとに当てる。中身が `find` の行と同じなら、その行が当たったファイルの行の字下げ。
+  // 違えば（書き換えた行）、同じ位置の `find` の行のもの。どちらも無ければ、そのまま
+  let next = 0;
+  return put.map((line, i) => {
     if (line.trim().length === 0) return line;
+    let j = want.findIndex((w, n) => n >= next && w.trim() === line.trim() && got[n] !== undefined);
+    if (j >= 0) next = j + 1;
+    else j = i < want.length && got[i] !== undefined ? i : -1;
+    if (j < 0) return line;
     const from = indentOf(want[j]!);
-    return line.startsWith(from) ? indentOf(got[j] ?? '') + line.slice(from.length) : line;
+    return line.startsWith(from) ? indentOf(got[j]!) + line.slice(from.length) : line;
   });
 }
 

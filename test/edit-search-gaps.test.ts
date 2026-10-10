@@ -48,3 +48,12 @@ describe('edit_file の緩い当ての字下げ', () => {
     assert.equal(r.text, 'def f():\n    a2()\n    b2()\n', JSON.stringify(r.text));
   });
 });
+
+describe('edit_file の anchor（前後の行で当てる道）の字下げ', () => {
+  test('元で行の頭にあった行は、行の頭のまま（89 回目の調査）', () => {
+    const before = '  x = """\nTEXT\n  middle\n"""\n';
+    const r = applyEdit(before, 'x = """\nTEXT\nGARBLED\nmiddle\n"""', 'x = """\nTEXT2\nmiddle\n"""', false);
+    assert.equal(r.how, 'anchor', '前後の行で当てる道を通っていない（試験の作りが違う）');
+    assert.equal(r.text, '  x = """\nTEXT2\n  middle\n"""\n', JSON.stringify(r.text));
+  });
+});
