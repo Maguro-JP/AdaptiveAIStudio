@@ -4,6 +4,7 @@
  * 目的は「動くこと」ではなく「止まらないこと」なので、
  * 応答したモデルを毎回明示し、フォールバックが起きたら必ず知らせる。
  */
+import { splitSlash } from './slash.ts';
 import { Priority } from '../providers/contract.ts';
 import { stdin, stdout } from 'node:process';
 import { LineSource } from './input.ts';
@@ -93,8 +94,7 @@ async function main(): Promise<void> {
       if (line.length === 0) continue;
 
       if (line.startsWith('/')) {
-        const [cmd, ...rest] = line.split(/\s+/);
-        const arg = rest.join(' ');
+        const { cmd, arg } = splitSlash(line);
 
         if (cmd === '/exit' || cmd === '/quit') break;
         if (cmd === '/help') { console.log(HELP); continue; }

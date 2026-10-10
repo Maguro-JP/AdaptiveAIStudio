@@ -890,8 +890,8 @@ export class UiServer {
       this.broadcast({ type: 'undo' });
       this.broadcast({ type: 'busy', busy: false, conversationId });
       this.broadcast({ type: 'stateChanged' });
-      // 本体が空いていれば、順番待ちを流す（本体の依頼の終わりでも流れる）。
-      if (!this.#mainBusy(session)) await this.#drainQueue(session);
+      // 本体が空いていれば、順番待ちを流す（本体の依頼の終わりでも流れる）。考えごと・準備の最中は流さない（`#maybeDrain` と同じ。その道の終わりが流す）
+      if (!this.#mainBusy(session) && this.#prep === 0 && !this.#thinking) await this.#drainQueue(session);
     }
   }
 
@@ -1786,8 +1786,14 @@ export class UiServer {
       for (const { finish } of this.#pending.values()) finish(false);
       this.#pending.clear();
       for (const ac of this.#background) ac.abort();
+      // 順番待ちも取り消す。残すと、止めた依頼の終わりで次が「続けます」で走り出す（■ が効かないと見える）
+      const dropped = this.#queue.splice(0).length;
+      if (dropped > 0) {
+        this.broadcast({ type: 'queue', waiting: 0 });
+        this.broadcast({ type: 'log', level: 'warn', text: `順番待ちの依頼 ${dropped} 件も取り消しました` });
+      }
       this.#session?.abort();
-      return send(res, 200, { ok: true });
+      return send(res, 200, { ok: true, dropped });
     }
 
     /*
