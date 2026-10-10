@@ -29,6 +29,7 @@
 - 90 回目の不具合調査（モデルの返事の知らせの区切り）
 - 91 回目の不具合調査（相手の失敗の見分け方）
 - 92 回目の不具合調査（取得中の .part.tag・量子化の名前の当て方・持ち主が blob の場所）
+- 93 回目の不具合調査（危ない命令と鍵の形のすり抜け）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13289,3 +13290,13 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 試験は `test/cleanup.test.ts`・`test/model-install-gaps.test.ts`（直す前の版で 3 件落ちた。ふだんの名前と古い `.part` の形は両方で通る）。
 - `models --get <一覧の名前> --quant X` が `--quant` を見ず、一覧の既定の量子化だけを取っていた。渡されたら、それを取る（取得はネットワークに出るので試験は書いていない。読んで直した）
 触る場所: `src/runtime/cleanup.ts`（`findRemovable`）、`src/runtime/model-install.ts`（`pickModelFile`・`hasQuant`・`findModel`・`hfFileUrl`）、`src/cli/models.ts`
+
+## 2026-10-10  93 回目の不具合調査（危ない命令と鍵の形のすり抜け）
+
+- 落としてきたスクリプトを走らせる形は `curl … | sh`・`| bash` だけを止めていた。`| sudo bash`・`| zsh`、管を通さない `bash <(curl …)`・`sh -c "$(curl …)"` も止める
+- まとめて消す形は `rm -r` だけを止めていた。`rm --recursive`・`find -delete`・`find -exec rm`、`dd of=/dev/sda` のようなディスクへの書き込みも止める
+- 公開は `npm publish` だけを止めていた。ロックファイルから選ばれうる `yarn`・`pnpm`・`bun` の `publish` も止める
+- Stripe（`sk_live_`・`rk_test_` など）・GitLab（`glpat-`）・npm（`npm_`）の鍵を、外へ出す前の検問で止めず、記録でも伏せなかった。どちらにも足す
+試験は `test/harness-bypass-93.test.ts`（直す前の版で 4 件落ちた。ふだんの命令（`curl -o`・`find -name`・`rm a.txt`・`dd of=out.img`・`pnpm install`）は両方で通る）。
+直していないもの: 引用符の中の文字（`grep -r "rm -rf" src`）でも止める件。引用符の中を見ないと `sh -c "rm -rf /"` を通すので、守りを弱めない方を取った（命令を一つずつ切り分けて見る形にしてから）。値の無い CI の参照（`ANTHROPIC_API_KEY=${{ secrets.X }}`）を止める件は、書いてあるとおり意図したもの。
+触る場所: `src/harness/builtin-rules.ts`（`dangerousCommands`）、`src/harness/gate.ts`（鍵の形）、`src/core/redact.ts`（`redactSecrets`）

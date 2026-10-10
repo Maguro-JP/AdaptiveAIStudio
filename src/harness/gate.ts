@@ -102,7 +102,7 @@ const OUTBOUND: Pattern[] = [
     // 求めていたので、当たらずに外へ出ていた。`-` を受けるのは決まった頭の字（prefix）の後だけ（`sk-learn-pipeline-tutorial` のような語を止めない）。
     // 末尾も `\b` ではなく、鍵の字が続かないことで見る（`-` で終わる鍵がある）。
     // 伏せる側（redact.ts）が知っている Google（`AIza`）・Hugging Face（`hf_`）・一時の AWS（`ASIA`）も当てる
-    match: /\b(sk-(?:ant-[a-z0-9]+-|proj-|svcacct-|admin-)[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|hf_[A-Za-z0-9]{20,})(?![A-Za-z0-9_-])/,
+    match: /\b(sk-(?:ant-[a-z0-9]+-|proj-|svcacct-|admin-)[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|hf_[A-Za-z0-9]{20,}|(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,}|npm_[A-Za-z0-9]{36})(?![A-Za-z0-9_-])/,
     severity: 'block',
     detail: '合言葉（APIキー・トークン）と思われる文字列が含まれています。',
   },
