@@ -140,7 +140,13 @@ export class ChatOrchestrator {
                 message: e instanceof Error ? e.message : String(e),
               });
 
-          if (err.kind === 'canceled') return;
+          // 黙って終わってよいのは、利用者が止めたときだけ。中の時計などで打ち切られたのに黙ると、呼ぶ側は本文も失敗も
+          // 受け取らず「返事が空でした」とモデルのせいにしていた
+          if (err.kind === 'canceled') {
+            if (signal.aborted) return;
+            yield { type: 'failed', error: err };
+            return;
+          }
 
           /*
            * **地元の口は冷やさない。**
