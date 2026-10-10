@@ -175,8 +175,10 @@ if (process.argv.includes('--get') || process.argv.includes('--available')) {
   console.log(c.dim(`  置き場: ${modelsDir}\n`));
 
   try {
+    // 一覧の名前でも `--quant` を渡されたら、それを取る（一覧の既定の量子化だけを取っていた）
+    const chosen = process.argv.includes('--quant') ? { ...entry, quant: quantFrom(process.argv) } : entry;
     const r = await installModel({
-      entry, modelsDir, onProgress: (line) => console.log(c.dim(`  ${line}`)),
+      entry: chosen, modelsDir, onProgress: (line) => console.log(c.dim(`  ${line}`)),
     });
     console.log(c.green(`\n  用意できました: ${r.path}`));
     console.log(c.dim(`  ${(r.bytes / GB).toFixed(1)}GB\n`));
