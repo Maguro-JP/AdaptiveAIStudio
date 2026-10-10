@@ -199,9 +199,16 @@ export function applyEdit(
    *
    * 一行だけの `find` は、行の途中でよい（名前の付け替えなど）。
    */
+  const lineHead = (at: number) => at === 0 || before[at - 1] === '\n';
+  /*
+   * 一行の `find` でも、空白から始まって行の頭の空白の途中に当たったものは、字下げを落としただけ。複数行の `replace` を
+   * そこへ入れると二行目から後が浅いまま入り、しかも完全一致として何も言わなかった。行で見る道（字下げを合わせる）に回す
+   */
+  const droppedIndent = (at: number) => /^\s/.test(find) && replace.includes('\n')
+    && !/\S/.test(before.slice(before.lastIndexOf('\n', at - 1) + 1, at));
   const aligned = find.includes('\n')
-    ? found.filter((at) => at === 0 || before[at - 1] === '\n')
-    : found;
+    ? found.filter(lineHead)
+    : found.filter((at) => lineHead(at) || !droppedIndent(at));
   if (aligned.length > 0) {
     /*
      * 行の途中の当たりのうち、前に字下げ以外の字がある物（`x = f(a,\n  b)` の `f(a,…`）は本物の出現。捨てると、`all` では

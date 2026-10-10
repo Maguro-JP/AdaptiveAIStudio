@@ -280,6 +280,16 @@ export async function searchText(
       if (decoded.kind === 'binary') { out.unreadable += 1; continue; }
       const text = decoded.text;
       if (!text.includes(query)) continue;
+      // 改行を含む文字列は、行ごとには当たらない。全体で探し、始まりの行を返す（在るのに「該当なし」と言っていた）
+      if (query.includes('\n')) {
+        for (let at = text.indexOf(query); at >= 0; at = text.indexOf(query, at + query.length)) {
+          if (out.hits.length >= SEARCH_HITS) { out.capped = true; break; }
+          const start = text.lastIndexOf('\n', at - 1) + 1;
+          const end = text.indexOf('\n', at);
+          out.hits.push({ path: rel, line: text.slice(0, at).split('\n').length, text: text.slice(start, end < 0 ? undefined : end).trim() });
+        }
+        continue;
+      }
       text.split('\n').forEach((line, i) => {
         if (!line.includes(query)) return;
         if (out.hits.length < SEARCH_HITS) {
