@@ -33,6 +33,7 @@
 - 94 回目の不具合調査（外から入る中身の検問の言い回し）
 - 95 回目の不具合調査（頭が依頼でない会話・押し戻された回の報告・黙った打ち切り）
 - 96 回目の不具合調査（書き込み先の綴りの揺れ・作業場ごとの提案）
+- 97 回目の不具合調査（流した日課の表示）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13331,3 +13332,9 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 試験は `test/pm-paths-gaps.test.ts`（直す前の版で 2 件とも落ちた）、`test/proposals-safety.test.ts`（直す前の版で 1 件落ちた）。
 直していないもの: 絶対の道（`/home/…/src/a.ts`）を作業場からの道に直す件（揃える所が作業場の根を知らない）。大小を区別しない機械での `src/A.ts` と `src/a.ts`。
 触る場所: `src/agent/pm.ts`（`normalizeWrite`）、`src/agent/acceptance.ts`（`judge`）、`src/agent/proposals.ts`（`add`・`#merge`・`sameRoot`）
+
+## 2026-10-10  97 回目の不具合調査（流した日課の表示）
+
+- 日課を流す（`skip`）と、済ませたときと同じ欄（`lastPeriod`）に期を書くので、一覧が流した期を「済み」と出していた。流した期を別の欄（`skippedPeriod`）にも書き、一覧では「見送り」と出す。期が済んだ扱い（もう出てこない・前回分の埋め合わせの判定）は今のまま。済ませたらその欄を消す。別のプロセスの記録を取るときは、期とその欄を一緒に取る
+試験は `test/duties.test.ts`（直す前の版で 1 件落ちた）。
+触る場所: `src/harness/duties.ts`（`skip`・`complete`・`status`・`formatDuties`・`adoptPeriod`）
