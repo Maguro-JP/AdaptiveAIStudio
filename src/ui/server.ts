@@ -1206,13 +1206,15 @@ export class UiServer {
     const id = `a${this.#approvalTag}-${++this.#seq}`;
     return new Promise<ApprovalAnswer>((resolve) => {
       let done = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const finish = (ok: ApprovalAnswer) => {
         if (done) return;
         done = true;
+        if (timer) clearTimeout(timer);
         // 「残りも全部」を受け取ったら、ここで旗を立てる。返す答えは通常の許可。
+        // 旗は訊いた時点の本体に立てる（答える間に本体を組み直すと、新しい本体の同じ番号の依頼にまで漏れていた）
         const mark = () => {
-          const s = this.#session;
-          if (s) this.#allWritesFor = { session: s, key };
+          if (now) this.#allWritesFor = { session: now, key };
         };
         if (ok === 'all') { mark(); ok = true; }
         // 塊を選びつつ「以降訊かない」も選べる。選んだ塊はそのまま通す。
@@ -1224,7 +1226,7 @@ export class UiServer {
       this.#pending.set(id, { finish, request: req });
       this.broadcast({ type: 'approval', id, request: req });
       // 誰も答えないまま待ち続けない。返事が無いことは、許可ではない。
-      const timer = setTimeout(() => finish(false), 10 * 60_000);
+      timer = setTimeout(() => finish(false), 10 * 60_000);
       timer.unref?.();
     });
   }
