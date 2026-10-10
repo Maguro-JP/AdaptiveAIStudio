@@ -119,6 +119,8 @@ GitHub Actions の枠は口座で一つで、全部のリポジトリが同じ�
 - 残量はここから見えない。回すことを勧めるときは、何分ぶん使うかを先に言う
 - push では CI を回さない。claude/ の枝の PR でも回さない（`ci` のラベルを付けたときだけ）
 - Windows の試験と bundle は土曜に寄せる（`docs/DECISIONS.md` 2026-10-10）
+- 土曜の bundle は Actions を使わず `scripts/local-windows-portable.sh` で組んで、会話に送る
+- PR を開いたまま周ごとに push しない（push のたびに CI が走り、枠を使い切った）
 - 手で回す（workflow_dispatch）のは、断ってから。`mcp__github__actions_run_trigger` は
   `.claude/settings.json` の `permissions.deny` に入れてある
 - bundle は直し終えてから組む。`npm run bundle` で手元でも作れる。CI が要るのは `setup.exe` のときだけ
