@@ -50,19 +50,22 @@ interface Pattern {
 const INBOUND: Pattern[] = [
   {
     kind: '指示の上書き',
-    match: /ignore\s+(all\s+)?(previous|prior|above)\s+instructions?|前の指示は?(すべて)?無視|これまでの指示を忘れ/i,
+    // 言い換え（`disregard`・`forget`・`override`）と、間に挟まる語（`the`・`all of the`・`your`）も拾う
+    match: /\b(ignore|disregard|forget|override)\s+(?:(?:all|any|the|of|my|these)\s+){0,3}(?:previous|prior|above|earlier|preceding|system|your)\s+(?:(?:system\s+)?(?:instructions?|prompts?|rules|directions))|前の指示は?(すべて)?無視|これまでの指示を忘れ/i,
     severity: 'block',
     detail: 'こちらの指示を上書きしようとする文が含まれています。',
   },
   {
     kind: '役割の乗っ取り',
-    match: /you\s+are\s+now\s+|new\s+system\s+prompt|システムプロンプト(を|は)(無視|変更)|あなたは今から/i,
+    // 「you are now」は役割を名指しする形だけ（`You are now logged in.` のような普通の文で頁ごと断っていた）
+    match: /you\s+are\s+now\s+(?:DAN\b|an?\s+(?:AI|assistant|model|unrestricted|uncensored|jailbroken)\b|acting\s+as|in\s+(?:developer|god|admin)\s+mode|no\s+longer\s+bound)|new\s+system\s+prompt|システムプロンプト(を|は)(無視|変更)|あなたは今から/i,
     severity: 'block',
     detail: '役割を書き換えようとする文が含まれています。',
   },
   {
     kind: '秘密の要求',
-    match: /(reveal|print|show|output)\s+(your\s+)?(system\s+prompt|instructions|api[_\s-]?key)|環境変数を(出力|表示)/i,
+    // 「instructions」だけは「your」が付くときだけ（`show instructions for setup` のような案内で断っていた）
+    match: /(reveal|print|show|output|repeat)\s+(?:your\s+(?:system\s+prompt|instructions|api[_\s-]?key)|(?:the\s+)?system\s+prompt|api[_\s-]?key)|環境変数を(出力|表示)/i,
     severity: 'block',
     detail: '内部の情報を出させようとする文が含まれています。',
   },
@@ -138,10 +141,16 @@ function excerpt(text: string, at: number, len: number): string {
   return raw.replace(/[A-Za-z0-9_-]{20,}/g, (m) => `${m.slice(0, 4)}…（伏せました）`);
 }
 
+/** 見えない字を外し、全角を半角に揃えた形。挟んだり幅を変えたりして言い回しを隠すのを、照らす前に戻す。 */
+function normalized(text: string): string {
+  return text.normalize('NFKC').replace(/[\u200B-\u200F\u2060-\u2064\uFEFF]|\uDB40[\uDC00-\uDC7F]/g, '');
+}
+
 function inspect(text: string, patterns: Pattern[]): Verdict {
   const findings: Finding[] = [];
+  const plain = normalized(text);
   for (const p of patterns) {
-    const m = p.match.exec(text);
+    const m = p.match.exec(text) ?? (plain === text ? null : p.match.exec(plain));
     if (!m) continue;
     findings.push({
       severity: p.severity,

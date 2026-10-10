@@ -30,6 +30,7 @@
 - 91 回目の不具合調査（相手の失敗の見分け方）
 - 92 回目の不具合調査（取得中の .part.tag・量子化の名前の当て方・持ち主が blob の場所）
 - 93 回目の不具合調査（危ない命令と鍵の形のすり抜け）
+- 94 回目の不具合調査（外から入る中身の検問の言い回し）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13300,3 +13301,14 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 試験は `test/harness-bypass-93.test.ts`（直す前の版で 4 件落ちた。ふだんの命令（`curl -o`・`find -name`・`rm a.txt`・`dd of=out.img`・`pnpm install`）は両方で通る）。
 直していないもの: 引用符の中の文字（`grep -r "rm -rf" src`）でも止める件。引用符の中を見ないと `sh -c "rm -rf /"` を通すので、守りを弱めない方を取った（命令を一つずつ切り分けて見る形にしてから）。値の無い CI の参照（`ANTHROPIC_API_KEY=${{ secrets.X }}`）を止める件は、書いてあるとおり意図したもの。
 触る場所: `src/harness/builtin-rules.ts`（`dangerousCommands`）、`src/harness/gate.ts`（鍵の形）、`src/core/redact.ts`（`redactSecrets`）
+
+## 2026-10-10  94 回目の不具合調査（外から入る中身の検問の言い回し）
+
+`inspectInbound`（`src/harness/gate.ts`）の 4 件。
+- 指示の上書きは `ignore (all) previous instructions` の形だけを見ていた。`disregard`・`forget`・`override` と、間に挟まる語（`the`・`all of the`・`your`）も拾う
+- 「you are now」だけで役割の乗っ取りとして断っていたので、`You are now logged in.` のような README によくある文で頁ごと断った。役割を名指しする形（`DAN`・`an AI`・`acting as`・`in developer mode`・`no longer bound`）だけにする
+- 「show instructions」で秘密の要求として断っていたので、`Click Help to show instructions` のような案内で断った。`instructions` は `your` が付くときだけにする
+- 見えない字（U+200B など）を挟んだり、全角にしたりすると素通りした。見えない字を外し、全角を半角に揃えた形でも照らす
+試験は `test/inbound-94.test.ts`（直す前の版で 2 件とも落ちた）。
+直していないもの: 外のツールのエラー出力で、鍵の値が途中までや別の書き方（URL 用・base64）で出たときに伏せない件（`src/mcp/client.ts` の `#hide`。試験で形を作ってから）。
+触る場所: `src/harness/gate.ts`（`INBOUND`・`inspect`・`normalized`）
