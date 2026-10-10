@@ -23,6 +23,7 @@
 - 公開する前提で書く
 - 上限で切った頭が CP932 の字の途中で終わる（85 回目の残り）
 - 長い頁を読む上限で切っても、切ったと言わない（84 回目の残り）
+- 86 回目の不具合調査（置き場所の環境変数・手元にだけ変更があるときの更新）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13224,3 +13225,12 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 読む処理（`readBoundedCut`）から、上限で切ったかを返す。切ったときは「頭の N バイトまでしか読んでいません」を必ず足す
 試験は `test/fetch-cut-note.test.ts`（直す前の版で 1 件落ちた。短い頁で何も足さない形は両方で通る）。
 触る場所: `src/agent/tools/network.ts`（`readBoundedCut`・`createFetchUrlTool`）
+
+## 2026-10-10  86 回目の不具合調査（置き場所の環境変数・手元にだけ変更があるときの更新）
+
+- `AAS_STATE_DIR`・`AAS_BIN_DIR` が空や空白だけのとき、空の文字列（いまのフォルダ）を置き場所にしていた。`AAS_HOME` と同じく、無いものとして扱う
+- 相対の `AAS_HOME` は、いまのフォルダから解いていたので、起動した場所ごとに根が割れた。プログラムの置き場所（`installRoot`）から解く
+- 更新の確かめは、手元にだけ変更があると、取り込むものが無くても「手で取り込んでください」と言っていた。取り込むものが無ければ「最新です」
+試験は `test/home-env-gaps.test.ts`・`test/update.test.ts`（直す前の版で 3 件落ちた）。`test/home.test.ts` の `join('C:', 'AAS')` は Linux では相対になるので、どの OS でも絶対の道に替えた。
+直していないもの: `start.sh` が Node の版を見ない件と、画面からの立ち上げ直し（`AAS_RELAUNCH`・終わりの番号 75）を持たない件（次の周）。`start.cmd` が引用符つきの引数を割る件（Windows の実機で確かめてから）。
+触る場所: `src/core/home.ts`（`aasHome`・`stateDir`・`binDir`・`nonEmptyEnv`）、`src/core/update.ts`（`checkUpdate`）
