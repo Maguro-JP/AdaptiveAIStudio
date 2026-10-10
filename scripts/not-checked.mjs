@@ -30,7 +30,6 @@ export function notChecked(how) {
     ? '押して回ったのは、この機械の Chromium だけです。'
     : `画面。押して回っていません（${how.sweep}）。`);
   out.push('bundle と setup.exe。ここでは組んでも動かしてもいません。');
-  out.push('社用PC の道（Z: から取ってきて、フォルダの node.exe で動かす）。');
   return out;
 }
 

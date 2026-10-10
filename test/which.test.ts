@@ -37,13 +37,13 @@ describe('その命令が呼べるか', () => {
     // ここが本題。node は同梱、npm と npx は入っていない。
     const env = {
       platform: 'win32' as const,
-      path: 'Z:\\AdaptiveAIStudio\\runtime',
-      pathext: '.COM;.EXE;.BAT;.CMD;.BIN',
-      exists: having('Z:\\AdaptiveAIStudio\\runtime\\node.bin'),
+      path: 'D:\\AdaptiveAIStudio\\runtime',
+      pathext: '.COM;.EXE;.BAT;.CMD',
+      exists: having('D:\\AdaptiveAIStudio\\runtime\\node.exe'),
     };
     // 返るのは探した名前（PATHEXT の大小がそのまま乗る）。大小は区別せずに見る。
     assert.equal(findOnPath('node', env)?.toLowerCase(),
-      'z:\\adaptiveaistudio\\runtime\\node.bin', 'node は呼べるはず');
+      'd:\\adaptiveaistudio\\runtime\\node.exe', 'node は呼べるはず');
     assert.equal(findOnPath('npx', env), undefined, 'npx が呼べることになっている');
   });
 

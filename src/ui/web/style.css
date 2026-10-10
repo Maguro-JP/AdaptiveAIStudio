@@ -269,7 +269,7 @@ button, select { cursor: pointer; }
 /* ブラウザが自分で描く一覧（select を開いたときの中身）。
    ここは CSS の重ね合わせが効かないので、**透けない色を直に渡す**。
    glass のように地が半透明だと、ブラウザが色を解決できず真っ白になり、
-   白い文字と重なって何も見えなくなる（実機で見えないと言われた）。 */
+   白い文字と重なって何も見えなくなる（実機で見えなくなっていた）。 */
 select { background-color: var(--surface-solid, var(--surface2)); }
 select option,
 select optgroup {

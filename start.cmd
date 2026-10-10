@@ -30,43 +30,22 @@ cd /d "%~dp0"
 title AdaptiveAIStudio
 
 rem --- Node を探す -----------------------------------------
-rem `..` を含んだまま探さない。割り当てドライブ（Z: など）や
+rem `..` を含んだまま探さない。割り当てドライブや
 rem OneDrive の下だと、そのままでは見つけられないことがある。
 set "HERE=%~dp0"
 for %%i in ("%~dp0..") do set "UP=%%~fi"
 
 set "BUNDLED="
-set "NODEFILE=node.exe"
 
 rem 製品の形（app\ の隣の runtime\）を先に見る。
-if not exist "%UP%\runtime\node.exe" goto :tryBin
-set "BUNDLED=%UP%\runtime"
-goto :bundled
-
-:tryBin
-rem 会社のクラウドドライブは、中身ではなく **名前を見て** .exe を落とす。
-rem .bin なら置ける（Z: で実測。92,534,088 バイトそのまま書けた）。
-rem cmd.exe は PATHEXT に載っている拡張子をそのまま実行するので、
-rem 名前が違うだけで、呼び方は何も変わらない。
-if not exist "%UP%\runtime\node.bin" goto :tryHere
-set "BUNDLED=%UP%\runtime"
-set "NODEFILE=node.bin"
-goto :bundled
-
-:tryHere
-if exist "%HERE%runtime\node.exe" set "BUNDLED=%HERE%runtime"
-if exist "%HERE%node\node.exe" set "BUNDLED=%HERE%node"
+if exist "%UP%\runtime\node.exe" set "BUNDLED=%UP%\runtime"
 if defined BUNDLED goto :bundled
-rem Z: は .exe を受け取らないので、node.bin の名前で置かれる。それも探す（探さずに「見つかりません」と言っていた）
-if exist "%HERE%runtime\node.bin" set "BUNDLED=%HERE%runtime"
-if exist "%HERE%node\node.bin" set "BUNDLED=%HERE%node"
-if not defined BUNDLED goto :noBinHere
-set "NODEFILE=node.bin"
-goto :bundled
-:noBinHere
+rem 展開しただけの形（この隣の runtime\）も見る。
+if exist "%HERE%runtime\node.exe" set "BUNDLED=%HERE%runtime"
+if defined BUNDLED goto :bundled
 
 rem 同梱版の目印はあるのに Node が無い、という形をここで覚えておく。
-rem クラウドドライブが .exe を落としたときに起きる。
+rem 展開の途中で .exe だけが落ちたときに起きる。
 rem
 rem ただし、ここで止めない。**入っている Node を一度も探さずに諦めていた。**
 rem 実際に、Node を同梱していない版を渡したら、Node が入っている機械で
@@ -95,13 +74,8 @@ if defined STRIPPED goto :exeStripped
 goto :noNode
 
 :bundled
-set "NODE=%BUNDLED%\%NODEFILE%"
+set "NODE=%BUNDLED%\node.exe"
 set "PATH=%BUNDLED%;%PATH%"
-if "%NODEFILE%"=="node.exe" goto :extDone
-rem .bin をそのまま呼ぶための一手。子の cmd にも効かせたいので環境変数で渡す。
-set "PATHEXT=%PATHEXT%;.BIN"
-set "NODE=node"
-:extDone
 rem npm まで同梱していないことがある。無ければ package.json を
 rem 直接読んで動かす（scripts/run.mjs）。二重に書き写さないので、ずれない。
 set "NPM=npm"
@@ -238,24 +212,14 @@ rem ============================================================
 echo.
 echo   Node.js が見つかりません。
 echo.
-echo   この PC に入れられないときは、置くだけで動かせます。
-echo   ブラウザで次を落として、node.exe をここへ置いてください。
+echo   Node.js 22.6 以降（LTS 版）を入れてから、もう一度開いてください。
+echo     https://nodejs.org/
 echo.
-echo     https://nodejs.org/dist/v24.18.0/win-x64/node.exe
-echo.
-echo     置き場所:  %HERE%node\node.exe
-echo.
-echo   フォルダ node を作って、その中に入れるだけです。
-echo   インストールではないので、管理者権限も要りません。
-echo   要らなくなったら、このフォルダごと消せば跡形もなくなります。
-echo.
-echo   ふつうに入れられるなら、https://nodejs.org/ の LTS 版でも構いません。
+echo   Node を同梱した版（portable）を使えば、入れずに動かせます。
 echo.
 echo   ---- 探した場所 ----
 echo     %UP%\runtime\node.exe
-echo     %UP%\runtime\node.bin
 echo     %HERE%runtime\node.exe
-echo     %HERE%node\node.exe
 echo.
 pause
 exit /b 1
@@ -265,11 +229,8 @@ echo.
 echo   この Node では動きません（%NODEV%）。v22.6 以降が要ります。
 echo   型を剥がしながら実行する仕組みを使っているためです。
 echo.
-echo   入れ直せないときは、置くだけで差し替えられます。
-echo   ブラウザで次を落として、node.exe をここへ置いてください。
-echo     https://nodejs.org/dist/v24.18.0/win-x64/node.exe
-echo     置き場所:  %HERE%node\node.exe
-echo   こちらが先に使われます。入っている Node はそのままで構いません。
+echo   Node.js の LTS 版を入れ直すか、Node を同梱した版（portable）を使ってください。
+echo     https://nodejs.org/
 echo.
 pause
 exit /b 1
@@ -281,17 +242,11 @@ echo.
 echo   いまの置き場所:
 echo     %UP%
 echo.
-echo   会社のクラウドドライブ（OneDrive・PassageDrive など）へ展開すると、
-echo   .exe だけが黙って落ちることがあります。書き込みが拒まれても、
-echo   展開する側は何も言わずに進みます。
-echo.
-echo   この機械には Node も入っていません。どちらかで動きます。
+echo   展開の途中で .exe だけが落ちることがあります（ウイルス対策や
+echo   同期フォルダが止めた場合など）。この機械には Node も入っていません。
 echo.
 echo     1. Node 22.6 以降を入れる       https://nodejs.org
-echo     2. .exe を置ける場所へ展開し直す
-echo.
-echo   会社のクラウドドライブなら、.exe を含まない版も使えます。
-echo   Node の名前が node.bin になっているだけで、中身は同じです。
+echo     2. 別の場所へ展開し直す
 echo.
 pause
 exit /b 1
@@ -309,10 +264,8 @@ echo   where node では見つかりましたが、-v が返りません。
 echo   版を選んでいない nvm など、名前だけが残っている形で起きます。
 echo.
 echo   端末で node -v を試してください。同じように返らないはずです。
-echo   直せないときは、置くだけで差し替えられます。
-echo     https://nodejs.org/dist/v24.18.0/win-x64/node.exe
-echo     ここへ:  %HERE%node\node.exe
-echo   こちらが先に使われます。
+echo   直せないときは、Node.js の LTS 版を入れ直してください。
+echo     https://nodejs.org/
 echo.
 pause
 exit /b 1
@@ -320,9 +273,9 @@ exit /b 1
 :bundledSilent
 echo.
 echo   同梱の Node を動かせませんでした。
-echo     %BUNDLED%\%NODEFILE%
+echo     %BUNDLED%\node.exe
 echo.
-echo   会社の設定で実行が止められているか、ファイルが壊れています。
+echo   実行が止められているか、ファイルが壊れています。
 echo   大きさを見てください（90MB 前後が正しい）。
 echo.
 pause

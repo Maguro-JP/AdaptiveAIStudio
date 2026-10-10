@@ -134,7 +134,7 @@ test('読めた指名だけ @ を外し、在らない方は残す', async () =>
 });
 
 test('メールの @ は指名ではない。道の後ろの英語の句読点は道に含めない', async () => {
-  assert.deepEqual(mentionsIn('m@guro.email に送って'), []);
+  assert.deepEqual(mentionsIn('user@example.com に送って'), []);
   assert.deepEqual(mentionsIn('@src/a.ts, @b.ts を見て'), ['src/a.ts', 'b.ts']);
   const root = await box();
   const got = await expandMentions('@src/a.ts, を直して', root);

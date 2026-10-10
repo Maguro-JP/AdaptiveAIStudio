@@ -174,13 +174,6 @@ describe('bundle では、手で新しくする道を言う', () => {
     assert.match(RELEASES_URL, /\/releases\/latest$/);
   });
 
-  test('**.exe を置けない場所むけが、どれかを言う**', onlyWithGit, async () => {
-    // 会社のクラウドドライブは .exe を名前で落とす。noexe の方を取らないと、
-    // 展開した時点で Node が消える。取ってくる案内で言わないと気づけない。
-    const { byHandUpdate } = await import('../src/core/update.ts');
-    assert.match(byHandUpdate('/tmp/x'), /noexe/);
-  });
-
   /**
    * **その場で上書きさせない。**上書きすると、新しい方が動かなかったときに
    * 戻る先が無い。NetVision が同じところで「新しい ZIP は別のフォルダへ展開し、

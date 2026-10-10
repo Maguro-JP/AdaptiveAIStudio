@@ -133,41 +133,6 @@ describe('用意する道具', () => {
     assert.match(asked, /^start\.cmd: eol: crlf$/m, 'バッチが CRLF で取り出されない');
   });
 
-  test('用意用は、全角の混ざる置き場所を先に止める', sourceOnly, async () => {
-    // 後で分かると数GB落とし直しになるので、取ってくる前に止める。
-    const raw = cmd(await readFile(join(installRoot(), 'installer', 'bootstrap.cmd')));
-    assert.match(raw, /findstr \/R "\[\^ -~\]"/, '全角の検査が無い');
-    const stopAt = raw.indexOf('findstr /R "[^ -~]"');
-    const fetchAt = raw.indexOf('curl -fL');
-    assert.ok(stopAt < fetchAt, '取ってきた後に検査している');
-  });
-
-  test('用意用は、材料（取ってきた元と node.exe）を出力先の中に置かない', sourceOnly, async () => {
-    // bundle は組む前に出力先を片づけるので、中に置くと自分の材料を消す（入れ直しなら data まで消していた）
-    const raw = cmd(await readFile(join(installRoot(), 'installer', 'bootstrap.cmd')));
-    const work = /^set "WORK=([^"]*)"/m.exec(raw)?.[1];
-    assert.ok(work, 'WORK を決める行が無い');
-    assert.equal(/^%DEST%[\\/]/i.test(work!), false, `材料を出力先の中に置いている: ${work}`);
-    // 末尾に \\ を付けて渡されても、中に入らない（外す行が WORK より前にある）
-    const trim = raw.indexOf('set "DEST=%DEST:~0,-1%"');
-    assert.ok(trim >= 0 && trim < raw.indexOf('set "WORK='), '出力先の末尾の \\ を外していない');
-    // 入れ直しでは data を残すよう頼む
-    assert.match(raw, /bundle\.mjs"[^\r\n]*--keep-data/, 'bundle に data を残すよう頼んでいない');
-  });
-
-  test('用意用は、git も npm も要求しない', sourceOnly, async () => {
-    const raw = cmd(await readFile(join(installRoot(), 'installer', 'bootstrap.cmd')));
-    // 動く行だけを見る。案内文（echo）に「npm run bundle」と書くのは、
-    // 使う側への説明であって、この道具が npm を要ることにはならない。
-    const runs = raw.split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !l.startsWith('rem ') && !l.startsWith('::')
-        && !l.toLowerCase().startsWith('echo'));
-    for (const line of runs) {
-      assert.equal(/\bgit\b/.test(line), false, `git を使っている: ${line}`);
-      assert.equal(/\bnpm\b/.test(line), false, `npm を使っている: ${line}`);
-    }
-  });
 });
 
 describe('npm 無しで仕事を動かす', () => {
@@ -208,7 +173,7 @@ describe('npm 無しで仕事を動かす', () => {
  * **200MB を、試験ごとに組み直さない。**
  *
  * ここは bundle を 11 回組んでいた。この機械で 105 秒のうち大半がこれで、
- * 配る先（Windows・クラウドドライブの下）では 1 件で 233 秒かかって落ちた。
+ * 配る先（Windows・同期フォルダの下）では 1 件で 233 秒かかって落ちた。
  * **入口の 6 番を、押せない形にしていたのは、この作り。**
  *
  * 同じ組み方のものは一度だけ組んで、読む側で使い回す。
@@ -503,8 +468,7 @@ describe('npm 無しの入口（scripts/run.mjs）', () => {
 });
 
 describe('同梱した Node の置き場所', () => {
-  // 一度、三箇所で食い違った（start.cmd は app/node、bundle は runtime、
-  // bootstrap は node）。同梱したのに見つけられない状態だった。
+  // 一度、start.cmd と bundle で場所が食い違い、同梱したのに見つけられない状態だった。
 
   test('組み立てると runtime に入る', async () => {
     const { out, result: r } = await sharedBundle('exe', { nodeExe: await fakeNode(), version: 'x' });
@@ -513,49 +477,9 @@ describe('同梱した Node の置き場所', () => {
     assert.ok(await stat(join(out, 'runtime', 'node.exe')));
   });
 
-  test('名前を変えても入る（.exe を落とす場所むけ）', async () => {
-    // 会社のクラウドドライブは **名前を見て** .exe を落とす。
-    // 中身は同じで名前だけ違うものを置けるようにしてある。
-    const fake = await fakeNode();
-    const { out } = await sharedBundle('exe-bin', { nodeExe: fake, nodeName: 'node.bin', version: 'x' });
-    const { stat } = await import('node:fs/promises');
-    assert.ok(await stat(join(out, 'runtime', 'node.bin')));
-    // 既定は変えない。何も渡さなければ node.exe のまま。
-    const { out: plain } = await sharedBundle('exe', { nodeExe: fake, version: 'x' });
-    assert.ok(await stat(join(plain, 'runtime', 'node.exe')));
-  });
-
-  test('入口は、.exe が落とされた場所でも動く', sourceOnly, async () => {
+  test('入口は、展開しただけの形（隣の runtime）も探しに行く', sourceOnly, async () => {
     const raw = cmd(await readFile(join(installRoot(), 'start.cmd')));
-    assert.match(raw, /%UP%\\runtime\\node\.bin/, '.bin を探していない');
-    assert.match(raw, /PATHEXT=%PATHEXT%;\.BIN/, 'PATHEXT に足していない');
-  });
-
-  /**
-   * 社用PC で検証を続けるための道。**ここが誰にも見られていなかった。**
-   *
-   * 決まっている手順は「手で二つ落とす」（`docs/DECISIONS.md`）:
-   *   1. ブラウザで ZIP を落として展開する
-   *   2. `node.exe` を `start.cmd` の隣に `node\node.exe` として置く
-   *   3. `start.cmd` を叩く
-   *
-   * この 2 を支えているのが `%HERE%node\node.exe` の行。消しても全部のテストが
-   * 通っていたので、**消えても誰も気づかない。**気づくのは社用PC で叩いた人だけで、
-   * その人は「動かない」以上のことを言えない。
-   */
-  test('**入口は、隣に置かれた node\\node.exe を見る（社用PC の道）**', sourceOnly, async () => {
-    const raw = cmd(await readFile(join(installRoot(), 'start.cmd')));
-    /*
-     * **探しに行く行を見る。案内の文言では見ない。**
-     *
-     * はじめ `%HERE%node\node.exe` が在ることだけを見ていた。この道は
-     * 「ここへ置いてください」という案内の中にも 4 回出てくるので、
-     * **探しに行く行を消しても通ってしまった**（消して確かめて分かった）。
-     * 案内だけ残って探さない、がいちばん困る形なので、行そのものを見る。
-     */
-    assert.match(raw, /if exist "%HERE%node\\node\.exe" set "BUNDLED=%HERE%node"/,
-      '隣の node\\node.exe を探しに行く行が無い。手で二つ落とす道が通らなくなる');
-    // 展開しただけ（runtime を隣に置いた形）も探すこと。
+    // 案内の文言ではなく、探しに行く行そのものを見る。
     assert.match(raw, /if exist "%HERE%runtime\\node\.exe" set "BUNDLED=%HERE%runtime"/,
       '隣の runtime を探しに行く行が無い');
   });
@@ -569,25 +493,6 @@ describe('同梱した Node の置き場所', () => {
     assert.match(raw, /%UP%\\runtime\\node\.exe/, '製品の形を見ていない');
   });
 
-  test('用意用は、組み立て方を書き写さない', sourceOnly, async () => {
-    // 書き写すと、bundle と食い違う。実際に一度そうなった。
-    const raw = cmd(await readFile(join(installRoot(), 'installer', 'bootstrap.cmd')));
-    assert.match(raw, /scripts\\bundle\.mjs/, '組み立て器を使っていない');
-    assert.match(raw, /--node-exe/);
-    assert.match(raw, /--src/);
-  });
-
-  test('用意用が置く場所と、入口が探す場所が同じ', sourceOnly, async () => {
-    const boot = cmd(await readFile(join(installRoot(), 'installer', 'bootstrap.cmd')));
-    const start = cmd(await readFile(join(installRoot(), 'start.cmd')));
-    assert.match(boot, /%DEST%\\runtime\\%NODENAME%/, '確かめる場所がずれている');
-    assert.match(boot, /--node-name %NODENAME%/, '入れる名前を bundle に渡していない');
-    // Z: は .exe を名前で落とすので、node.bin でも入れる。入れうる名前は、どれも入口が探す名前であること
-    const names = [...boot.matchAll(/set "NODENAME=([^"]+)"/g)].map((m) => m[1]!);
-    assert.deepEqual([...new Set(names)].sort(), ['node.bin', 'node.exe']);
-    for (const n of names) assert.ok(start.includes(`%UP%\\runtime\\${n}`), `入口が runtime\\${n} を探さない`);
-    assert.match(boot, /%DEST%\\app\\scripts\\/, '中身の場所がずれている');
-  });
 });
 
 describe('落としてきたものでも、版が分かる', () => {
@@ -632,7 +537,7 @@ describe('全角の利用者名でも、モデルは開ける場所へ置く', (
   const env = { ProgramData: 'C:\\ProgramData' };
 
   test('半角だけの根は、そのまま使う', () => {
-    assert.equal(asciiModelsDir('C:\\Users\\maguro\\.aas', env), undefined);
+    assert.equal(asciiModelsDir('C:\\Users\\someone\\.aas', env), undefined);
   });
 
   test('全角が混ざる根は、モデルだけ ProgramData へ逃がす', () => {

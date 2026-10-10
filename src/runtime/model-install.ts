@@ -175,7 +175,7 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
     meta = await fetchImpl(`${HF_API}/${entry.repo}`, { signal: opts.signal });
   } catch (e) {
     if (opts.signal?.aborted) throw e;
-    // ここから先は届かない。**ブラウザなら届く**機械がある（会社の PC。
+    // ここから先は届かない。**ブラウザなら届く**機械がある（管理された PC など。
     // 中継を通すのはブラウザだけ）。取れないと言って終わらず、手で取る道を出す。
     /*
      * **人の言葉に直してから出す。**`describeNet` はそのために書いてあるのに、
@@ -199,7 +199,7 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
         + '  2. 見つけた置き場の名前（例 unsloth/Qwen2.5-7B-Instruct-GGUF）を\n'
         + '     「取ってくる先」に打つ。.gguf の URL をそのまま貼っても取れます。\n'
         // **いちばん確実な逃げ道を、必ず添える。**ブラウザで落として置くだけで動く。
-        // 会社の PC はこの道しかないうえ、名前が変わっているときも同じ道で済む。
+        // この道しか無い環境もあるうえ、名前が変わっているときも同じ道で済む。
         + `  3. それが面倒なら、.gguf をブラウザで落として ${modelsDir} に置き、\n`
         + '     「置いたものを読み直す」を押すだけでも使えます。',
       );

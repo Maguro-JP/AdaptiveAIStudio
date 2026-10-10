@@ -74,7 +74,7 @@ describe('置き場は一つ', () => {
 describe('既定は、この中で読む', () => {
   test('動かし方を書いていなければ inproc（Ollama ではない）', async () => {
     // 書いていない設定を Ollama 扱いにしていたので、何も入れていない機械で
-    // 「Ollama に繋がりません」と言われた。既定は何も入れずに動く道。
+    // 「Ollama に繋がりません」と出ていた。既定は何も入れずに動く道。
     const rt = await buildRuntime(
       { ...DEFAULT_CONFIG, runtime: {} },
       { gpuName: undefined, ramBytes: 0 } as never,

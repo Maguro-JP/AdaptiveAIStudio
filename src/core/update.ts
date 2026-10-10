@@ -66,7 +66,7 @@ export const RELEASES_URL = 'https://github.com/Maguro-JP/AdaptiveAIStudio/relea
 /**
  * git の無い場所での、新しくする道。
  *
- * 会社の PC には git が無い。「git 管理下ではありません」で終わると、
+ * git の無い環境もある。「git 管理下ではありません」で終わると、
  * そこで止まる。ブラウザなら届くので、取ってくる先と入れ替え方を言う。
  *
  * **その場で `app\` を上書きさせない。**上書きすると、新しい方が動かなかった
@@ -95,8 +95,6 @@ export function byHandUpdate(root: string, version?: string): string {
   return [
     '新しいbundle をブラウザで取ってきて、入れ替えてください。',
     `  1. 取ってくる: ${RELEASES_URL}`,
-    '     — 会社のクラウドドライブ（Z: など）へ置くなら、名前に noexe と',
-    '       付いている方を取ってください。.exe が一つも入っていません',
     '  2. いまとは別のフォルダに展開する。いまのフォルダは消さない',
     '     （新しい方で困ったら、古い方を押せば戻せます）',
     `  3. いまの data\\（設定・記録・モデル）を、新しいフォルダへ移す`,

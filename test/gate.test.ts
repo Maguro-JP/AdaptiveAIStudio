@@ -85,7 +85,7 @@ describe('持ち出し検査', () => {
   });
 
   test('手元の絶対パスは止めないが記録に残す', () => {
-    const v = inspectOutbound('/home/maguro/AdaptiveAIStudio/src');
+    const v = inspectOutbound('/home/someone/AdaptiveAIStudio/src');
     assert.equal(v.passed, true);
     assert.equal(v.findings[0]?.severity, 'warn');
   });
@@ -588,11 +588,11 @@ describe('手元の場所は、書き方を変えても見つける', () => {
   // 大小を問わないこと、ドライブが C: とは限らないことを確かめる。
   // 元は `[Cc]:\Users\` の一形だけを見ていて、`c:\users\…` は素通りしていた。
   const 漏れる = [
-    String.raw`C:\Users\maguro\Desktop\a.txt`,
-    String.raw`c:\users\maguro\a.txt`,
-    String.raw`Z:\Users\maguro\a.txt`,
+    String.raw`C:\Users\someone\Desktop\a.txt`,
+    String.raw`c:\users\someone\a.txt`,
+    String.raw`D:\Users\user\a.txt`,
     '/home/user/x',
-    '/Users/maguro/x',
+    '/Users/someone/x',
   ];
   for (const text of 漏れる) {
     test(`知らせる: ${text}`, () => {

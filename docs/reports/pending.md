@@ -123,6 +123,8 @@ long-dev が止まる条件（設計の分岐・人の判断が要る・範囲�
 
 ## 6. bootstrap で入れた版に node_modules を入れる道（2026-10-07 から）
 
+片づいた（2026-10-10）: `installer\bootstrap.cmd` を外したので、決めることが無くなった（`docs/DECISIONS.md` 2026-10-10）。以下は経緯。
+
 何を決めてほしいか: `installer\bootstrap.cmd` で入れた版に、node_modules（node-llama-cpp・Claude の SDK・同梱の GitHub のツール）をどこから入れるか。
 
 いまの形: bootstrap は GitHub の archive zip から bundle を組む。archive には node_modules が無く、bundle は「ない: node_modules（飛ばします）」と出すだけで先へ進む。既定の inproc では送るとすぐ「node-llama-cpp がありません」で止まり、Claude の口も動かない。それでも bootstrap は「用意できました」で終わる。社用PC では npm も打てず、llama-server.exe も Z: に置けないので、モデルを読む道が一つも残らない（読んで判断した。cmd.exe では確かめていない）。

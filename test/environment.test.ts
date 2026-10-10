@@ -17,7 +17,7 @@ describe('全角・日本語を含むパス', () => {
   });
 
   test('半角の記号は問題にしない', () => {
-    assert.equal(hasNonAscii('C:\\Users\\m@guro\\.ollama'), false);
+    assert.equal(hasNonAscii('C:\\Users\\user\\.ollama'), false);
   });
 });
 

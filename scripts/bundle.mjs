@@ -1,7 +1,7 @@
 /**
  * 持ち運び版を組み立てる。
  *
- * 何も入れられない機械（会社の PC など）で動かすための一式。
+ * 何もインストールせずに動かすための一式。
  * フォルダを置くだけで動き、外には何も残さない。
  *
  *   ・設定も記録もモデルも、このフォルダの中（.portable が目印）
@@ -11,7 +11,6 @@
  * 使い方:
  *   node scripts/bundle.mjs --out dist/aas-portable [--node-here]
  *                           [--node-zip x.zip | --node-exe node.exe]
- *                           [--node-name node.bin]
  *                           [--src <中身のある場所>] [--version <版>]
  *
  * **--node-here がいちばん手軽。**いま自分を動かしている Node を
@@ -82,7 +81,7 @@ export async function deepest(dir, skip = () => false) {
  * 要らないものを落とす。
  *
  * `.map` は、書いた側が元の行を辿るためのもの。動かすのには要らない。
- * 610 個・4MB あり、クラウドドライブへ置くときの数としても効く。
+ * 610 個・4MB あり、同期フォルダへ置くときの数としても効く。
  *
  * 型の定義（`.d.ts`）と、抱えている試験用のもの（vitest など）も落とす。
  * **動かすのに要らないうえ、道をいちばん深くしているのがこれ。**
@@ -295,13 +294,13 @@ export function guessVersion(srcRoot) {
   }
 }
 
-/** 焼き込む版。渡さなければ推し量る。`+` で始まるものは package.json の版に足す（`+abc1234-bootstrap` → `0.12.1+abc1234-bootstrap`）。 */
+/** 焼き込む版。渡さなければ推し量る。`+` で始まるものは package.json の版に足す（`+abc1234` → `0.12.1+abc1234`）。 */
 export function stampedVersion(given, srcRoot) {
   if (given === undefined) return guessVersion(srcRoot);
   return given.startsWith('+') ? `${pkgVersion(srcRoot)}${given}` : given;
 }
 
-const VALUE_FLAGS = ['--out', '--node-zip', '--node-exe', '--node-name', '--target', '--src', '--version'];
+const VALUE_FLAGS = ['--out', '--node-zip', '--node-exe', '--target', '--src', '--version'];
 const SWITCHES = ['--node-here', '--keep-data'];
 
 /**
@@ -334,7 +333,6 @@ export function parseBundleArgs(argv) {
     nodeExe: got['--node-exe'],
     nodeHere: Boolean(got['--node-here']) && !nodeGiven,
     keepData: Boolean(got['--keep-data']),
-    nodeName: got['--node-name'],
     target: got['--target'],
     src: got['--src'],
     version: got['--version'],
@@ -381,25 +379,17 @@ export async function bundle({
    * 渡した zip の名前から読み取れるなら、そこから決める。
    */
   target,
-  // 同梱する Node をどの名前で置くか。既定は node.exe（何も変わらない）。
-  //
-  // node.bin にできるようにしてあるのは、会社のクラウドドライブが
-  // **名前を見て** .exe を落とすため（Z: で実測。.bin なら 92,534,088
-  // バイトそのまま書けた）。中身は同じで、名前だけが違う。
-  // cmd.exe は PATHEXT に載っていれば拡張子を問わず実行するので、
-  // 呼ぶ側は何も変えなくてよい。
-  nodeName,
   /*
    * 出力先の data を残すか。既定は残さない（開発者の手元で組み直した bundle に、その人の会話やモデルを載せて配らない）。
-   * 入れてある所へ組み直す bootstrap.cmd だけが残す（portable ではここが AAS_HOME で、モデル・設定・会話が入っている）。
+   * 入れてある所へ組み直すときだけ残す（portable ではここが AAS_HOME で、モデル・設定・会話が入っている）。
    */
   keepData = false,
   // 改名（試験で、使われていて改名できない場面を作るため）
   renameImpl = rename,
 }) {
   /*
-   * 元が出力先の中にあると、前の分を片づけるときに元ごと消える（bootstrap.cmd が材料を出力先の中に置いていて、
-   * 組み立ての途中で自分の材料を消していた）。組まずに止める。
+   * 元が出力先の中にあると、前の分を片づけるときに元ごと消える（材料を出力先の中に置くと、
+   * 組み立ての途中で自分の材料を消す）。組まずに止める。
    */
   const within = relative(resolve(out), resolve(srcRoot));
   if (within === '' || (!/^\.\.([\\/]|$)/.test(within) && !isAbsolute(within))) {
@@ -407,7 +397,7 @@ export async function bundle({
   }
   /*
    * **前に組んだものでないフォルダは片づけない。**出力先の中身を名前を問わず消していたので、中に入れてくれるつもりで既存のフォルダ
-   * （デスクトップ・Z:\tools）を渡すと、data 以外の中身がすべて消えた。空か、組むときに置く名前だけか、前に組んだもの
+   * （デスクトップ・D:\tools）を渡すと、data 以外の中身がすべて消えた。空か、組むときに置く名前だけか、前に組んだもの
    * （.portable、または VERSION・app・AdaptiveAIStudio.cmd が揃う）のときだけ片づける。前に組んだものなら、前の版の形で残った名前も片づける。
    * エクスプローラや同期が置く desktop.ini・Thumbs.db は、断る理由にも消すものにも数えない
    */
@@ -557,8 +547,8 @@ export async function bundle({
       '  Windows は道（パス）が 260 文字を超えると開けません。',
       '  長い所へ展開すると、途中で警告が出て、途中までしか出てきません。',
       '',
-      '    よい例   Z:\\AdaptiveAIStudio                （19 文字）',
-      '    だめな例 Z:\\…\\AdaptiveAIStudio-portable-noexe\\AdaptiveAIStudio',
+      '    よい例   D:\\AdaptiveAIStudio                （19 文字）',
+      '    だめな例 D:\\…\\AdaptiveAIStudio-portable\\AdaptiveAIStudio',
       '',
       '  ZIP を右クリック→すべて展開 のとき、展開先の欄の後ろに',
       '  ZIP と同じ名前のフォルダが足されます。それを消してください。',
@@ -582,7 +572,7 @@ export async function bundle({
 
   // 版は独立した1ファイルにする。目印の中に混ぜると、読む側が
   // 目印を解釈しないと版が分からない。VERSION なら誰でも読める。
-  // `+` で始まる版は、package.json の版の後ろに足す（bootstrap.cmd は取った commit だけを知っていて、package の版を読めない）
+  // `+` で始まる版は、package.json の版の後ろに足す（commit だけを知っていて package の版を読めない呼び手のため）
   const stamped = stampedVersion(version, srcRoot);
   await writeFile(join(out, 'VERSION'), `${stamped}\r\n`, 'utf8');
   log(`  置いた: VERSION（${stamped}）`);
@@ -603,11 +593,10 @@ export async function bundle({
   /** 配る先。同梱した Node から決まる。決まらなければ undefined。 */
   let from;
   if (exe) {
-    // 用意用（bootstrap）は node.exe だけを落とす。npm は付いてこないが、
-    // scripts/run.mjs があるので困らない。
+    // npm は付いてこないが、scripts/run.mjs があるので困らない。
     await mkdir(join(out, 'runtime'), { recursive: true });
     // Windows は node.exe、それ以外は node。渡す先で押せる名前にする。
-    const name = nodeName ?? (exe.toLowerCase().endsWith('.exe') ? 'node.exe' : 'node');
+    const name = exe.toLowerCase().endsWith('.exe') ? 'node.exe' : 'node';
     const dest = join(out, 'runtime', name);
     await cp(exe, dest);
     // fs.cp の mode は「写し方」の指定で、権限ではない。権限は別に付ける。
@@ -728,7 +717,6 @@ if (isMain(import.meta.url)) {
     nodeExe: a.nodeExe,
     nodeHere: a.nodeHere,
     keepData: a.keepData,
-    nodeName: a.nodeName,
     target: a.target,
     ...(a.src ? { srcRoot: resolve(a.src) } : {}),
     version: a.version,

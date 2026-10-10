@@ -84,7 +84,7 @@ export async function startRealModel(
           'CODE: REPEATED',
           'WHEN: 覚えの書き方を直していたとき',
           'WHAT: 何に対しての話かを書かなかった',
-          'WHY: 何をしても怒られた、という記録にしかならない',
+          'WHY: どの手を選んでも同じ結果、という記録にしかならない',
           'NEXT: 場面から書く',
         ].join('\n'));
       }
