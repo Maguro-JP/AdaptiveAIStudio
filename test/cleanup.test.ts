@@ -281,3 +281,29 @@ describe('前に渡した添付', () => {
     assert.deepEqual(await findRemovable({ keepTag: 'b9999' }), [], '関係ないものを消そうとしている');
   });
 });
+
+describe('取得中の .part.tag（92 回目の調査）', () => {
+  test('.part が書き続けられているなら、古い .part.tag も消さない', async () => {
+    const { models } = await scratch();
+    const { utimes } = await import('node:fs/promises');
+    await writeFile(join(models, 'x.gguf.part'), 'a');
+    await writeFile(join(models, 'x.gguf.part.tag'), 'etag');
+    // .tag は取り始めに一度だけ書く。1 時間を超えて取り続けると、.tag だけが古くなる
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(join(models, 'x.gguf.part.tag'), old, old);
+    const listed = (await findRemovable({ keepTag: 'b1' })).map((f) => f.path);
+    assert.deepEqual(listed.filter((p) => p.includes('x.gguf')), [], listed.join('\n'));
+  });
+
+  test('.part も古ければ、.tag と一緒に挙げる（対）', async () => {
+    const { models } = await scratch();
+    const { utimes } = await import('node:fs/promises');
+    await writeFile(join(models, 'y.gguf.part'), 'a');
+    await writeFile(join(models, 'y.gguf.part.tag'), 'etag');
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(join(models, 'y.gguf.part'), old, old);
+    await utimes(join(models, 'y.gguf.part.tag'), old, old);
+    const listed = (await findRemovable({ keepTag: 'b1' })).map((f) => f.path);
+    assert.equal(listed.filter((p) => p.includes('y.gguf')).length, 2, listed.join('\n'));
+  });
+});

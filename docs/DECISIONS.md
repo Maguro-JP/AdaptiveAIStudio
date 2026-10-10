@@ -28,6 +28,7 @@
 - 88 回目の不具合調査（edit_file の字下げを落とした一行の find・search_text の改行を含む文字列）
 - 90 回目の不具合調査（モデルの返事の知らせの区切り）
 - 91 回目の不具合調査（相手の失敗の見分け方）
+- 92 回目の不具合調査（取得中の .part.tag・量子化の名前の当て方・持ち主が blob の場所）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13279,3 +13280,12 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - Claude へ、対になる呼び出しが直前に無いツールの結果も `tool_result` として送っていた（Claude が 400 で断り、こちらの誤りとして依頼ごと落ちる）。文として渡す
 - 読めなかったツールの引数（こちらの内側の形 `{ __raw, __parseError }`）を、モデルが出した呼び出しとして見せていた。Claude には空の引数、OpenAI 互換の口にはモデルが書いた元の文字列で送り返す
 触る場所: `src/providers/errors.ts`（`sayQuotaExhausted`・`saysContextTooLong`・`saysModelMissing`・`kindFromHttpStatus`）、`src/providers/anthropic.ts`（`toAnthropicMessages`）、`src/providers/openai-compatible.ts`（`toWireMessage`・`wireArgs`）
+
+## 2026-10-10  92 回目の不具合調査（取得中の .part.tag・量子化の名前の当て方・持ち主が blob の場所）
+
+- `clean --yes` は、途中の分（`.part`）と版の記録（`.part.tag`）を、それぞれの更新時刻で 1 時間より古いかを見ていた。`.tag` は取り始めに一度だけ書くので、1 時間を超えて取り続けると `.tag` だけが消え、続きを取るときに版を確かめられず、古い頭と新しい尻を繋いでしまう。隣の `.part` が新しければ `.tag` も残す
+- 量子化の名前を文字列として含むかで当てていたので、`--quant q4_k` が `q4_k_m` にも `q4_k_s` にも当たって短い方を黙って選び、`q4_0` が `iq4_0` に当たった。一語として当てる（`hasQuant`。前は頭か `-` `.` `_`、後ろは `-` `.` か終わり）
+- 持ち主の名前が `blob` の HuggingFace の頁の場所を、ファイルの場所へ直せなかった（最初の `blob` が持ち主の名前だった）。持ち主と名前の後ろから探す
+試験は `test/cleanup.test.ts`・`test/model-install-gaps.test.ts`（直す前の版で 3 件落ちた。ふだんの名前と古い `.part` の形は両方で通る）。
+直していないもの: `models --get <カタログの名前> --quant X` が `--quant` を見ない件（記録済みの残り）。
+触る場所: `src/runtime/cleanup.ts`（`findRemovable`）、`src/runtime/model-install.ts`（`pickModelFile`・`hasQuant`・`findModel`・`hfFileUrl`）
