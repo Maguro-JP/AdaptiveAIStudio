@@ -20,7 +20,7 @@
 import { type Tool, ok, fail, requireString } from './types.ts';
 import { inspectInbound, inspectOutbound, describeVerdict } from '../../harness/gate.ts';
 import { type Inspector, combine } from '../../harness/inspector.ts';
-import { decodeText, trimPartialUtf8 } from '../../core/text.ts';
+import { decodeText, trimPartialText } from '../../core/text.ts';
 
 /**
  * 既定の行き先。
@@ -103,7 +103,7 @@ export async function readBounded(res: Response, limitBytes: number, contentType
   }
   const whole = Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
   // 上限で切ったなら、末尾の途中の字を落とす（字の途中で切ると、厳密な UTF-8 の読みが落ちて CP932 と取り違えていた）
-  const raw = cut ? Buffer.from(trimPartialUtf8(whole)) : whole;
+  const raw = cut ? Buffer.from(trimPartialText(whole)) : whole;
   const charset = charsetOf(contentType);
   // 相手が UTF-8 と言っているなら、そのとおりに読む（言っていても推し量りに回していた）
   if (charset === 'utf-8' || charset === 'utf8') return new TextDecoder('utf-8').decode(raw);

@@ -21,6 +21,7 @@
 - 検証は社用PCでも続ける
 - どこでも動き、信用できるものを優先する（社用PCの前提を置き換える）
 - 公開する前提で書く
+- 上限で切った頭が CP932 の字の途中で終わる（85 回目の残り）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13207,3 +13208,11 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - `docs/reports/`（日報・週報・判断待ち）は開発の記録として公開に含める。同じ決まりで書く
 - ルートの `AdaptiveAIStudio-bug-report.md`（2026-09-18 時点の調査）は古く、中身は直してあるので消した（git の履歴には残る）
 触る場所: `docs/PUBLISHING.md`、`test/publishing.test.ts`
+
+## 2026-10-10  上限で切った頭が CP932 の字の途中で終わる（85 回目の残り）
+
+`fetch_url` と `@` の指名は、上限で切った頭の末尾から途中の UTF-8 の字を落としていたが、CP932 の 2 バイトの字の途中は落としていなかった。末尾に先行バイトだけが残ると、厳密な CP932 の読みも落ち、化けを許した UTF-8 で読んで中身が丸ごと化けた。
+- `trimPartialText`（`src/core/text.ts`）で、UTF-8 として読めるなら UTF-8 の途中の字を、読めず CP932 として読めるなら CP932 の途中の字を落とす。どちらでもなければ UTF-8 の分だけ落とす（これまでどおり）
+- `trimPartialSjis` は頭から字の区切りを数える（末尾から遡ると、2 バイト目にも先行バイトと同じ値が出るため見分けられない）
+試験は `test/cp932-cut-gaps.test.ts`（直す前の版で 2 件落ちた）。shift_jis を読めない Node では飛ばす。
+触る場所: `src/core/text.ts`（`trimPartialText`・`trimPartialSjis`）、`src/agent/tools/network.ts`（`readBounded`）、`src/agent/mention.ts`（`readForMention`）

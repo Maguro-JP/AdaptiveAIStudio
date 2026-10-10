@@ -12,7 +12,7 @@
 import { open, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { decodeForReading } from './tools/decode.ts';
-import { trimPartialUtf8 } from '../core/text.ts';
+import { trimPartialText } from '../core/text.ts';
 import { isAbsent } from '../harness/put-back.ts';
 import { outsideRel, realSafeResolve } from './tools/paths.ts';
 
@@ -180,7 +180,7 @@ async function readForMention(p: string): Promise<string> {
     const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
     // 上限で切ったときは、末尾の途中の字を落とす（字の途中で切ると、読めない字として別の読み方（CP932）に取り違える）
     const head = buf.subarray(0, bytesRead);
-    bytes = Buffer.from(bytesRead === buf.length ? trimPartialUtf8(head) : head);
+    bytes = Buffer.from(bytesRead === buf.length ? trimPartialText(head) : head);
   } finally {
     await fh.close();
   }
