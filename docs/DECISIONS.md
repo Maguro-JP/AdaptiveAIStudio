@@ -21,7 +21,6 @@
 - 検証は社用PCでも続ける
 - どこでも動き、信用できるものを優先する（社用PCの前提を置き換える）
 - 公開する前提で書く
-- 土曜の bundle は Actions を使わずに手元で組んで渡す
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13208,14 +13207,3 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - `docs/reports/`（日報・週報・判断待ち）は開発の記録として公開に含める。同じ決まりで書く
 - ルートの `AdaptiveAIStudio-bug-report.md`（2026-09-18 時点の調査）は古く、中身は直してあるので消した（git の履歴には残る）
 触る場所: `docs/PUBLISHING.md`、`test/publishing.test.ts`
-
-## 2026-10-10  土曜の bundle は Actions を使わずに手元で組んで渡す
-
-Actions の枠を使い切ると、bundle を組めず、何か月も確かめられないままになっていた。組むだけなら Actions は要らない。
-- 土曜は `scripts/local-windows-portable.sh` で Windows 向けの portable を組み、会話にファイルとして送る（30MB を超えるので 26MB ごとに分け、`copy /b` で戻す手順を添える）
-- 版は `<package の版>-<main の短い sha>-local`。`npm run doctor` の一行目に出る
-- 入れるのは CPU 版だけ（CUDA・Vulkan は大きい）。setup.exe は作れない（NSIS が要る。要るときだけ Actions）
-- 作業場はリポジトリの外。リポジトリの node_modules とロックファイルには触れない
-選ばなかった案: 枠が戻るのを待って release.yml で組む（枠が無い間は届けられない）。
-確かめたこと: 2026-10-10 に通しで組めた（52MB、`runtime/node.exe` の頭が MZ、`llama-addon.node` が入る）。Windows の実機では確かめていない。
-触る場所: `scripts/local-windows-portable.sh`、long-dev の Routine の 2.5
