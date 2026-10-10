@@ -16,6 +16,7 @@ import type { ProviderMessage } from '../providers/contract.ts';
 import type { ChatOrchestrator } from '../core/orchestrator.ts';
 import type { WorkItem } from './team.ts';
 import type { LaneConfig } from '../core/scheduler.ts';
+import { posix } from 'node:path';
 
 export interface PlanItem {
   id: string;
@@ -122,7 +123,12 @@ const asStringArray = (v: unknown): string[] =>
 
 /** 書き込み先を比較できる形に揃える。表記揺れで錠が効かないのが一番まずい。 */
 export function normalizeWrite(path: string): string {
-  return path.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  // `./` の繰り返し・途中の `./`・`//`・`a/../` も畳む（一つ目の `./` だけを外していたので、`././src/a.ts` と `src/a.ts` が
+  // 別の書き込み先として同時に走り、互いの書き換えを潰しえた）。末尾の `/` は外さない（フォルダの指定のため）
+  const flat = path.trim().replace(/\\/g, '/');
+  if (flat === '') return '';
+  const folded = posix.normalize(flat).replace(/^(\.\/)+/, '').replace(/^\/+/, '');
+  return folded === '.' ? '' : folded;
 }
 
 /**

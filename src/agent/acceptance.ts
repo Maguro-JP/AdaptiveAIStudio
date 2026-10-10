@@ -15,6 +15,7 @@
  * 3 が肝。全部を人に見せるなら間に人を置く意味が無い。
  * 見なくていいものを落とし、見るべきものを落とさないのが仕事になる。
  */
+import { normalizeWrite } from './pm.ts';
 
 export type MemberState = 'done' | 'failed' | 'skipped';
 
@@ -120,8 +121,9 @@ export function judge(input: AcceptanceInput): { verdict: Verdict; concerns: Con
   // 計画外の書き換え。宣言していない場所を触るのは、
   // 「ついでに直した」か「勘違いして触った」かのどちらかで、後者が危ない。
   if (input.declared.length > 0) {
-    const declared = new Set(input.declared);
-    const unexpected = input.changed.filter((f) => !declared.has(f));
+    // 綴りではなくファイルで比べる（`./src/a.ts` と `src/a.ts` を別のファイルとして「計画に無い」と言っていた）
+    const declared = new Set(input.declared.map(normalizeWrite));
+    const unexpected = input.changed.filter((f) => !declared.has(normalizeWrite(f)));
     if (unexpected.length > 0) {
       concerns.push({
         severity: 'warn',
