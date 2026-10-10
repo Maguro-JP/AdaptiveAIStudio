@@ -13231,6 +13231,8 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - `AAS_STATE_DIR`・`AAS_BIN_DIR` が空や空白だけのとき、空の文字列（いまのフォルダ）を置き場所にしていた。`AAS_HOME` と同じく、無いものとして扱う
 - 相対の `AAS_HOME` は、いまのフォルダから解いていたので、起動した場所ごとに根が割れた。プログラムの置き場所（`installRoot`）から解く
 - 更新の確かめは、手元にだけ変更があると、取り込むものが無くても「手で取り込んでください」と言っていた。取り込むものが無ければ「最新です」
-試験は `test/home-env-gaps.test.ts`・`test/update.test.ts`（直す前の版で 3 件落ちた）。`test/home.test.ts` の `join('C:', 'AAS')` は Linux では相対になるので、どの OS でも絶対の道に替えた。
-直していないもの: `start.sh` が Node の版を見ない件と、画面からの立ち上げ直し（`AAS_RELAUNCH`・終わりの番号 75）を持たない件（次の周）。`start.cmd` が引用符つきの引数を割る件（Windows の実機で確かめてから）。
-触る場所: `src/core/home.ts`（`aasHome`・`stateDir`・`binDir`・`nonEmptyEnv`）、`src/core/update.ts`（`checkUpdate`）
+試験は `test/home-env-gaps.test.ts`・`test/update.test.ts`（直す前の版で 3 件落ちた）、`test/start-sh-gaps.test.ts`（直す前の版で 2 件落ちた）。`test/home.test.ts` の `join('C:', 'AAS')` は Linux では相対になるので、どの OS でも絶対の道に替えた。
+- `start.sh` は Node の版を見ていなかった。22.6 より古ければ、そう言って止まる（`start.cmd` と同じ）
+- `start.sh` は画面からの立ち上げ直しの合図（`AAS_RELAUNCH`）を渡さず、終わりの番号 75 でもう一度起こしていなかった。Linux・macOS で画面の「立ち上げ直す」が効かなかった
+直していないもの: `start.cmd` が引用符つきの引数を割る件（Windows の実機で確かめてから）。
+触る場所: `src/core/home.ts`（`aasHome`・`stateDir`・`binDir`・`nonEmptyEnv`）、`src/core/update.ts`（`checkUpdate`）、`start.sh`
