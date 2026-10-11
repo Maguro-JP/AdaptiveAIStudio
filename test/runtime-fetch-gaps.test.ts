@@ -65,4 +65,15 @@ describe('clean が見る保存先', () => {
     const hits = items.filter((i) => i.path === part);
     assert.equal(hits.length, 1, `挙げていない（または二度挙げた）: ${items.map((i) => i.path).join(' / ')}`);
   });
+
+  test('選んだ保存先では、ほかのアプリの途中のファイルを挙げない（DECISIONS 10-11、106 回目）', async () => {
+    const other = await tempDir('aas-shared-dir-');
+    const old = (Date.now() - 2 * 60 * 60 * 1000) / 1000;
+    const theirs = ['video.mp4.part', 'setup.exe.partial', 'notes.tmp'].map((n) => join(other, n));
+    const ours = join(other, 'y.gguf.part');
+    for (const f of [...theirs, ours]) { await writeFile(f, 'x'); await utimes(f, old, old); }
+    const paths = (await findRemovable({ keepTag: 'b0', modelsDirs: [other] })).map((i) => i.path);
+    for (const f of theirs) assert.ok(!paths.includes(f), `ほかのアプリの途中のファイルを挙げた: ${f}`);
+    assert.ok(paths.includes(ours), 'このアプリが取りかけたものまで挙げなくなった');
+  });
 });
