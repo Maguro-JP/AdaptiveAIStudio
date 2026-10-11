@@ -114,6 +114,19 @@ describe('逃した分の扱い', () => {
     assert.equal(r.due(SAT_10 + HOUR).length, 0, '流したのにまだ出てくる');
     assert.equal(r.records()[0]!.missed, 1);
   });
+
+  test('流した期を「済み」と出さない。次に済ませたら「済み」に戻る', () => {
+    const r = new DutyRoster([daily]);
+    r.skip('sweep', SAT_10);
+    const text = formatDuties(r.status(SAT_10 + HOUR), SAT_10 + HOUR);
+    assert.doesNotMatch(text, /DAILY SWEEP\s+済み/);
+    assert.match(text, /DAILY SWEEP\s+見送り/);
+    r.complete('sweep', SAT_10 + DAY);
+    assert.match(formatDuties(r.status(SAT_10 + DAY), SAT_10 + DAY), /DAILY SWEEP\s+済み/);
+    const back = new DutyRoster([daily]);
+    back.restore(r.records().map((x) => ({ ...x, skippedPeriod: periodKey(daily.cadence, SAT_10) })));
+    assert.equal(back.status(SAT_10 + DAY)[0]!.skippedThisPeriod, false, '前の期の記録で今期を見送り扱いにしている');
+  });
 });
 
 describe('状態の一覧', () => {

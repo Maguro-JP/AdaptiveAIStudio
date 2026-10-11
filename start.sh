@@ -18,7 +18,19 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "  Node $(node -v)"
+nodev=$(node -v 2>/dev/null)
+echo "  Node $nodev"
+
+# 型を除きながら実行する仕組みを使うので、v22.6 以降が要る（古いと、意味の取れないエラーで落ちるだけになる）
+major=$(echo "$nodev" | sed -n 's/^v\([0-9]*\)\..*/\1/p')
+minor=$(echo "$nodev" | sed -n 's/^v[0-9]*\.\([0-9]*\).*/\1/p')
+if [ -z "$major" ] || [ "$major" -lt 22 ] || { [ "$major" -eq 22 ] && [ "${minor:-0}" -lt 6 ]; }; then
+  echo
+  echo "  この Node では動きません（${nodev:-版が分かりません}）。v22.6 以降が要ります。"
+  echo "  https://nodejs.org/ から LTS 版を入れて、やり直してください。"
+  echo
+  exit 1
+fi
 
 # 依存は入れない。実行時の依存はゼロで、npm install は要らない。
 # （型検査 npm run typecheck を使うときだけ、手動で入れる）
@@ -74,8 +86,14 @@ if [ "$task" = "update" ]; then
   esac
 fi
 
-if [ $# -gt 0 ]; then
-  npm run "$task" -- "$@"
-else
-  npm run "$task"
-fi
+# 画面の「立ち上げ直す」は 75 で終わる。そのときは同じものをもう一度起こす（start.cmd と同じ）
+export AAS_RELAUNCH=1
+while :; do
+  if [ $# -gt 0 ]; then
+    npm run "$task" -- "$@"
+  else
+    npm run "$task"
+  fi
+  code=$?
+  [ "$code" -eq 75 ] || exit "$code"
+done

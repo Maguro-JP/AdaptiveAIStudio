@@ -20,7 +20,7 @@ import { DEFAULT_CONFIG } from '../src/config.ts';
  * 「そのファイルを書く → 報告する」を返す偽モデル。
  * 遅延を入れて並列性を観測できるようにする。
  */
-async function workerServer(delayMs: number, opts: { perModelDelay?: Record<string, number>; failModels?: string[]; preface?: string; doneOnly?: boolean } = {}) {
+async function workerServer(delayMs: number, opts: { perModelDelay?: Record<string, number>; failModels?: string[]; preface?: string; doneOnly?: boolean; stallOnce?: boolean } = {}) {
   let peak = 0;
   let active = 0;
   /** 作業者が受け取った依頼文。申し送りが届いているかを見るため。 */
@@ -51,7 +51,11 @@ async function workerServer(delayMs: number, opts: { perModelDelay?: Record<stri
         return res.end('model broken');
       }
       res.writeHead(200, { 'content-type': 'text/event-stream' });
-      if (alreadyWrote) {
+      if (alreadyWrote && opts.stallOnce && parsed.messages.filter((m) => m.role === 'user').length < 2) {
+        // 書いた後、終わりの合図を書かずに途中経過の一言で止まる（押し戻される）。押し戻しの後は合図だけを書く
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '次に書き換えます。' } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
+      } else if (alreadyWrote) {
         // 決まりに従うモデルとして、終わりの合図まで書く。
         res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: opts.doneOnly ? 'TASK_DONE\n' : `${target} を作成しました。\nTASK_DONE\n` } }] })}\n\n`);
         res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
@@ -79,7 +83,7 @@ async function workerServer(delayMs: number, opts: { perModelDelay?: Record<stri
 
 async function runTeam(
   items: WorkItem[], parallel: number,
-  serverOpts: { perModelDelay?: Record<string, number>; failModels?: string[]; preface?: string; doneOnly?: boolean } = {},
+  serverOpts: { perModelDelay?: Record<string, number>; failModels?: string[]; preface?: string; doneOnly?: boolean; stallOnce?: boolean } = {},
   tools: Tool[] = [readFileTool, writeFileTool],
 ) {
   const server = await workerServer(60, serverOpts);
@@ -370,5 +374,14 @@ describe('team は素通りしない', () => {
     await undo.restore(point.id);
     // 新しく作ったものは、戻すと消える。
     await assert.rejects(readFile(join(root, 'a.txt'), 'utf8'));
+  });
+});
+
+describe('押し戻された回の文（95 回目の調査）', () => {
+  test('終わったと言わずに止まった途中経過の一言を、報告として次へ渡さない', async () => {
+    const { outcomes } = await runTeam([item('t1', 'a.txt')], 1, { stallOnce: true, doneOnly: true });
+    const o = outcomes.get('t1')!;
+    assert.equal(o.state, 'done', JSON.stringify(o));
+    assert.doesNotMatch(JSON.stringify(o), /次に書き換えます/, JSON.stringify(o));
   });
 });

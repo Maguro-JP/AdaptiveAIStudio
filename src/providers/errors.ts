@@ -90,6 +90,8 @@ export function sayQuotaExhausted(body: string): boolean | undefined {
   const text = body.replace(/https?:\/\/\S+/g, '');
   // 分単位の制限（Gemini は `You exceeded your current quota … PerMinute … Please retry in 41s` と書く、と読んでいる。確かめていない）は、
   // 語が同じでも一時的な制限。30 分冷やさない
+  // ただし 1 日の上限（`…PerDay… Please retry in 32.5s`）は「retry in」があっても使い切り。先に見る
+  if (/per[- ]?day/i.test(text)) return true;
   if (/per[- ]?minute|retry in \d/i.test(text)) return false;
   if (/exceeded your current quota|insufficient[_ ]quota|insufficient (balance|credits?|funds)|credit balance|out of credits/i.test(text)) return true;
   // 1 日の上限（OpenRouter の free-models-per-day・Vertex の `quota metric '… per day'`）・使い切り（xAI の used all available credits）・
@@ -118,7 +120,18 @@ export function saysContextTooLong(body: string): boolean {
   // （vLLM の「max_tokens is too large … maximum context length」は入力が長くて収まらない形なので、ここでは外さない）
   if (/maximum allowed number of output tokens/i.test(body)) return false;
   // 「too long」は依頼そのものが長いときだけ（ツールの説明の文字数の上限 `string too long` まで大きすぎるとして次の候補へ回し、こちらの誤りが隠れた）
+  // 1 分あたりの制限（`tokens per min (TPM)`）は、長すぎる依頼ではない
+  if (/per min|\bTPM\b|rate limit/i.test(body)) return false;
   return /context[ _-]?(length|window|size)|maximum context|(prompt|input|request|message)s? (is )?too long|too many tokens|maximum.*token|token.*limit/i.test(body);
+}
+
+/**
+ * 404 の本文が、モデルが無いと言っているか。「model」の字だけで決めていたので、道の打ち間違い（`/v1/models/chat`）まで
+ * モデルが無いとして黙って次の候補へ回していた。符号か「model … not found / does not exist」の形で見る。
+ */
+function saysModelMissing(body: string): boolean {
+  if (/model_not_found/i.test(body)) return true;
+  return /model\b[^\n]{0,80}?(not found|does not exist|not exist|is not available|unknown)|(unknown|no such) model/i.test(body);
 }
 
 /** ツールを渡したが、そのモデルがツールに対応していない（次の候補なら対応しているかもしれない）。 */
@@ -139,7 +152,7 @@ export function kindFromHttpStatus(status: number, body: string): ProviderErrorK
   if (status === 401 || status === 403) return 'auth';
   // 404 のうち、本文がモデルの話をしているものだけ（Ollama の `model "x" not found`、OpenAI の `The model … does not exist`）。
   // 道の打ち間違い（/v1 の抜け）まで次の候補へ回すと、打ち間違いが隠れるので、それは今までどおり止める
-  if (status === 404 && /model/i.test(body)) return 'model_missing';
+  if (status === 404 && saysModelMissing(body)) return 'model_missing';
   if (status === 408 || status === 504) return 'timeout';
   if (status >= 500) return 'unavailable';
   if (status === 400 && saysContextTooLong(body)) {

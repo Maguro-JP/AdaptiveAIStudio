@@ -426,10 +426,16 @@ export const dangerousCommands: Rule = {
     const patterns: Array<[RegExp, string]> = [
       [/\bgit\s+(push|reset\s+--hard|clean\s+-[a-z]*f|checkout\s+--\s+\.)/i, 'git の破壊的操作'],
       [/\brm\s+-[a-z]*r/i, '再帰削除'],
-      [/\bnpm\s+publish\b/i, '公開'],
+      [/\brm\b[^|;&\n]*\s--recursive\b/i, '再帰削除'],
+      [/\bfind\b[^|;&\n]*\s-(delete\b|exec(dir)?\s+rm\b)/i, '再帰削除'],
+      // npm だけでなく、ロックファイルから選ばれうる yarn・pnpm・bun の公開も
+      [/\b(npm|yarn|pnpm|bun)\s+publish\b/i, '公開'],
       [/>\s*\/dev\/(sd|nvme)/i, 'デバイスへの書き込み'],
+      [/\bdd\b[^|;&\n]*\bof=\/dev\/(sd|nvme|hd|disk|mmcblk)/i, 'デバイスへの書き込み'],
       [/\bchmod\s+-R\s+777/i, '権限の全開放'],
-      [/\b(curl|wget)[^|]*\|\s*(ba)?sh/i, 'ダウンロードしたスクリプトの実行'],
+      [/\b(curl|wget)[^|]*\|\s*(sudo\s+)?(ba|z|da|k|fi)?sh\b/i, 'ダウンロードしたスクリプトの実行'],
+      // 管を通さずに走らせる形（`bash <(curl …)`・`sh -c "$(curl …)"`）
+      [/\b(ba|z|da|k)?sh\s+(-c\s+)?["']?(<\(|\$\(|`)\s*(curl|wget)\b/i, 'ダウンロードしたスクリプトの実行'],
       // ここから Windows。この場所の利用者は Windows で使う。Unix の形だけ
       // 見ていると、同じことを cmd と PowerShell で素通りさせる。
       [/\b(rmdir|rd)\s+(\/s|-r)/i, '再帰削除'],

@@ -21,6 +21,20 @@
 - 検証は社用PCでも続ける
 - どこでも動き、信用できるものを優先する（社用PCの前提を置き換える）
 - 公開する前提で書く
+- 上限で切った頭が CP932 の字の途中で終わる（85 回目の残り）
+- 長い頁を読む上限で切っても、切ったと言わない（84 回目の残り）
+- 86 回目の不具合調査（置き場所の環境変数・手元にだけ変更があるときの更新）
+- 87 回目の不具合調査（承認の「全部許す」の印・答えた後も残るタイマー・取りこぼした出来事の渡し直し）
+- 88 回目の不具合調査（edit_file の字下げを落とした一行の find・search_text の改行を含む文字列）
+- 90 回目の不具合調査（モデルの返事の知らせの区切り）
+- 91 回目の不具合調査（相手の失敗の見分け方）
+- 92 回目の不具合調査（取得中の .part.tag・量子化の名前の当て方・持ち主が blob の場所）
+- 93 回目の不具合調査（危ない命令と鍵の形のすり抜け）
+- 94 回目の不具合調査（外から入る中身の検問の言い回し）
+- 95 回目の不具合調査（頭が依頼でない会話・押し戻された回の報告・黙った打ち切り）
+- 96 回目の不具合調査（書き込み先の綴りの揺れ・作業場ごとの提案）
+- 97 回目の不具合調査（流した日課の表示・考えごとの止め口）
+- 98 回目の不具合調査（止めたときの順番待ち・CLI の引数）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13207,3 +13221,132 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - `docs/reports/`（日報・週報・判断待ち）は開発の記録として公開に含める。同じ決まりで書く
 - ルートの `AdaptiveAIStudio-bug-report.md`（2026-09-18 時点の調査）は古く、中身は直してあるので消した（git の履歴には残る）
 触る場所: `docs/PUBLISHING.md`、`test/publishing.test.ts`
+
+## 2026-10-10  上限で切った頭が CP932 の字の途中で終わる（85 回目の残り）
+
+`fetch_url` と `@` の指名は、上限で切った頭の末尾から途中の UTF-8 の字を落としていたが、CP932 の 2 バイトの字の途中は落としていなかった。末尾に先行バイトだけが残ると、厳密な CP932 の読みも落ち、化けを許した UTF-8 で読んで中身が丸ごと化けた。
+- `trimPartialText`（`src/core/text.ts`）で、UTF-8 として読めるなら UTF-8 の途中の字を、読めず CP932 として読めるなら CP932 の途中の字を落とす。どちらでもなければ UTF-8 の分だけ落とす（これまでどおり）
+- `trimPartialSjis` は頭から字の区切りを数える（末尾から遡ると、2 バイト目にも先行バイトと同じ値が出るため見分けられない）
+試験は `test/cp932-cut-gaps.test.ts`（直す前の版で 2 件落ちた）。shift_jis を読めない Node では飛ばす。
+触る場所: `src/core/text.ts`（`trimPartialText`・`trimPartialSjis`）、`src/agent/tools/network.ts`（`readBounded`）、`src/agent/mention.ts`（`readForMention`）
+
+## 2026-10-10  長い頁を読む上限で切っても、切ったと言わない（84 回目の残り）
+
+`fetch_url` は頁を読む上限（`maxBytes` の 4 倍のバイト）で切ったあと、渡す上限（`maxBytes` 文字）を超えたときだけ「以降は省略」と書いていた。HTML の札を外して渡す上限に収まると何も書かず、頁の全部を読んだように見えた。超えたときも、省略した数は読んだ分の中だけの数だった。
+- 読む処理（`readBoundedCut`）から、上限で切ったかを返す。切ったときは「頭の N バイトまでしか読んでいません」を必ず足す
+試験は `test/fetch-cut-note.test.ts`（直す前の版で 1 件落ちた。短い頁で何も足さない形は両方で通る）。
+触る場所: `src/agent/tools/network.ts`（`readBoundedCut`・`createFetchUrlTool`）
+
+## 2026-10-10  86 回目の不具合調査（置き場所の環境変数・手元にだけ変更があるときの更新）
+
+- `AAS_STATE_DIR`・`AAS_BIN_DIR` が空や空白だけのとき、空の文字列（いまのフォルダ）を置き場所にしていた。`AAS_HOME` と同じく、無いものとして扱う
+- 相対の `AAS_HOME` は、いまのフォルダから解いていたので、起動した場所ごとに根が割れた。プログラムの置き場所（`installRoot`）から解く
+- 更新の確かめは、手元にだけ変更があると、取り込むものが無くても「手で取り込んでください」と言っていた。取り込むものが無ければ「最新です」
+試験は `test/home-env-gaps.test.ts`・`test/update.test.ts`（直す前の版で 3 件落ちた）、`test/start-sh-gaps.test.ts`（直す前の版で 2 件落ちた）。`test/home.test.ts` の `join('C:', 'AAS')` は Linux では相対になるので、どの OS でも絶対の道に替えた。
+- `start.sh` は Node の版を見ていなかった。22.6 より古ければ、そう言って止まる（`start.cmd` と同じ）
+- `start.sh` は画面からの立ち上げ直しの合図（`AAS_RELAUNCH`）を渡さず、終わりの番号 75 でもう一度起こしていなかった。Linux・macOS で画面の「立ち上げ直す」が効かなかった
+直していないもの: `start.cmd` が引用符つきの引数を割る件（Windows の実機で確かめてから）。
+触る場所: `src/core/home.ts`（`aasHome`・`stateDir`・`binDir`・`nonEmptyEnv`）、`src/core/update.ts`（`checkUpdate`）、`start.sh`
+
+## 2026-10-10  87 回目の不具合調査（承認の「全部許す」の印・答えた後も残るタイマー・取りこぼした出来事の渡し直し）
+
+- 承認で「この依頼の書き込みは全部許す」と答えると、印を答えた時点の本体に付けていた。待つ間に本体を組み直すと、新しい本体の同じ番号の依頼にまで「訊かない」が漏れた。訊いた時点の本体に付ける
+- 答えた後も、10 分で断るタイマーが残っていた（答え済みなので害は無いが、10 分間まとめて抱えていた）。答えたら止める
+承認の 2 件は試験を書いていない（待つ間に本体を組み直す場面を組む必要があり、今回は読んで直した。既存の承認の試験は通る）。渡し直しの試験は `test/events-replay.test.ts`（直す前の版で 2 件落ちた）。
+- 画面は立ち上げで色々読んでから流れ（`/api/events`）を開く。その間と、繋ぎ直す間に出た出来事は誰にも届かずに消えていた（承認の問い合わせが見えないまま 10 分後に断られる、「作業中」のまま残る）。出来事に番号（`id:`）を付けて直近 500 件を溜め、繋いだときに抜けた分を渡し直す。最初に開くときは、立ち上げの前に `/api/events/seq` で取った番号を `?since=` で渡す。繋ぎ直しはブラウザが送る `Last-Event-ID` を使う。溜めた分より前から抜けていれば、取り直すよう言う（`stateChanged` の `resync`）
+直していないもの: 会話を選ぶ間に届いた文字が抜ける件（渡し直しで、届く分は増えた。抜けを見分ける番号の照らし合わせは画面の側で、ブラウザで確かめてから）。
+触る場所: `src/ui/server.ts`（`#ask`・`broadcast`・`/api/events`・`/api/events/seq`）、`src/ui/web/app.js`（`listen`・立ち上げ）
+
+## 2026-10-10  88 回目の不具合調査（edit_file の字下げを落とした一行の find・search_text の改行を含む文字列）
+
+- `edit_file` は、一行の `find` なら行の途中の当たりも完全一致として数えていた。空白から始まる `find` が行の頭の空白の途中に当たり（字下げを落としただけ）、`replace` が複数行だと、二行目から後が浅い字下げのまま入り、しかも何も言わなかった。その当たりは行で見る道（字下げを合わせ、合わせたと言う）に回す。行の途中の名前の付け替えは、これまでどおり完全一致
+- `search_text` は、改行を含む文字列を行ごとに探していたので、ファイルに在っても「該当なし」と言った。改行を含むときは全体で探し、始まりの行を返す
+試験は `test/edit-search-gaps.test.ts`（直す前の版で 4 件落ちた。名前の付け替えと揃って字下げを落とした形は両方で通る）。
+- 緩い当て（行で見る道）は、最初の行で測った字下げの差を `replace` の全部の行に足していたので、元で行の頭にあった行まで字下げした。`find` の字下げごとにファイルの字下げを対にして付け替える（`reindentByLine`）。対が決まらなければ、行の数が同じときだけ行ごとに当て、違えば付け替えない
+- 前後の行で当てる道（`anchorEdit`）にも同じ形が残っていた（89 回目の調査）。行の数が違いうるので、中身が同じ行どうしを対にしてから行ごとの差で付け替える。対が決まらないときは、中身が同じ `find` の行、無ければ同じ位置の行の字下げに合わせる
+触る場所: `src/agent/tools/write-kind.ts`（`applyEdit`・`looseEdit`・`anchorEdit`・`reindentByLine`）、`src/agent/tools/fs.ts`（`searchText`）
+
+## 2026-10-10  90 回目の不具合調査（モデルの返事の知らせの区切り）
+
+`readSseLines`（`src/providers/sse.ts`）の 3 件。
+- 一つの知らせが複数の `data:` 行に分かれて届くと（長い JSON を折り返す中継など）、行ごとに渡していた。どちらも JSON として読めずに黙って捨てられ、返事の字が欠けた。前の行が JSON の途中（`{` か `[` で始まり、まだ読めない）なら、読めるようになるか空行が来るまで改行で繋ぐ。読める一行は、これまでどおり届いたそばから渡す（空行を送らない相手もいるので、空行を待たない）
+- 行の終わりを `\n` だけで見ていた。`\r` だけで区切る相手の流れは一つの塊になり、返事が空になった。`\r\n`・`\n`・`\r` のどれでも区切る（塊の境目で `\r\n` が分かれても空の行を挟まない）
+- `data:` の後ろの空白を全部削っていた。決まりのとおり一つだけ落とす
+選ばなかった案: 決まりのとおり空行まで全部の `data:` 行を繋ぐ（空行を送らない相手で、返事が最後まで届かなくなる）。
+試験は `test/sse.test.ts`（直す前の版で 3 件落ちた）。
+触る場所: `src/providers/sse.ts`（`readSseLines`）
+
+## 2026-10-10  91 回目の不具合調査（相手の失敗の見分け方）
+
+`src/providers/errors.ts` の 3 件。
+- Gemini の 1 日の上限（`…PerDay… Please retry in 32.5s`）を、「retry in」の語で一時的な制限と読んでいた。使い切った相手に 1 分ごとに送り直した。1 日の上限を先に見る
+- 400 で「token … limit」と出るだけで（`Rate limit reached for tokens per min (TPM)`）、依頼が長すぎるとして黙って次の候補へ回していた。1 分あたりの制限は外す
+- 404 の本文に「model」の字が入るだけで（`/v1/models/chat` の道の打ち間違い）、モデルが無いとして黙って次の候補へ回していた。`model_not_found` の符号か、「model … not found / does not exist」の形で見る（`saysModelMissing`）
+試験は `test/errors-kind-gaps.test.ts`（直す前の版で 3 件落ちた。1 分の上限・文脈の長さの超過・本当にモデルが無い形は両方で通る）、`test/anthropic-shape-gaps.test.ts`（直す前の版で 2 件落ちた）。
+- Claude へ、対になる呼び出しが直前に無いツールの結果も `tool_result` として送っていた（Claude が 400 で断り、こちらの誤りとして依頼ごと落ちる）。文として渡す
+- 読めなかったツールの引数（こちらの内側の形 `{ __raw, __parseError }`）を、モデルが出した呼び出しとして見せていた。Claude には空の引数、OpenAI 互換の口にはモデルが書いた元の文字列で送り返す
+触る場所: `src/providers/errors.ts`（`sayQuotaExhausted`・`saysContextTooLong`・`saysModelMissing`・`kindFromHttpStatus`）、`src/providers/anthropic.ts`（`toAnthropicMessages`）、`src/providers/openai-compatible.ts`（`toWireMessage`・`wireArgs`）
+
+## 2026-10-10  92 回目の不具合調査（取得中の .part.tag・量子化の名前の当て方・持ち主が blob の場所）
+
+- `clean --yes` は、途中の分（`.part`）と版の記録（`.part.tag`）を、それぞれの更新時刻で 1 時間より古いかを見ていた。`.tag` は取り始めに一度だけ書くので、1 時間を超えて取り続けると `.tag` だけが消え、続きを取るときに版を確かめられず、古い頭と新しい尻を繋いでしまう。隣の `.part` が新しければ `.tag` も残す
+- 量子化の名前を文字列として含むかで当てていたので、`--quant q4_k` が `q4_k_m` にも `q4_k_s` にも当たって短い方を黙って選び、`q4_0` が `iq4_0` に当たった。一語として当てる（`hasQuant`。前は頭か `-` `.` `_`、後ろは `-` `.` か終わり）
+- 持ち主の名前が `blob` の HuggingFace の頁の場所を、ファイルの場所へ直せなかった（最初の `blob` が持ち主の名前だった）。持ち主と名前の後ろから探す
+試験は `test/cleanup.test.ts`・`test/model-install-gaps.test.ts`（直す前の版で 3 件落ちた。ふだんの名前と古い `.part` の形は両方で通る）。
+- `models --get <一覧の名前> --quant X` が `--quant` を見ず、一覧の既定の量子化だけを取っていた。渡されたら、それを取る（取得はネットワークに出るので試験は書いていない。読んで直した）
+触る場所: `src/runtime/cleanup.ts`（`findRemovable`）、`src/runtime/model-install.ts`（`pickModelFile`・`hasQuant`・`findModel`・`hfFileUrl`）、`src/cli/models.ts`
+
+## 2026-10-10  93 回目の不具合調査（危ない命令と鍵の形のすり抜け）
+
+- 落としてきたスクリプトを走らせる形は `curl … | sh`・`| bash` だけを止めていた。`| sudo bash`・`| zsh`、管を通さない `bash <(curl …)`・`sh -c "$(curl …)"` も止める
+- まとめて消す形は `rm -r` だけを止めていた。`rm --recursive`・`find -delete`・`find -exec rm`、`dd of=/dev/sda` のようなディスクへの書き込みも止める
+- 公開は `npm publish` だけを止めていた。ロックファイルから選ばれうる `yarn`・`pnpm`・`bun` の `publish` も止める
+- Stripe（`sk_live_`・`rk_test_` など）・GitLab（`glpat-`）・npm（`npm_`）の鍵を、外へ出す前の検問で止めず、記録でも伏せなかった。どちらにも足す
+試験は `test/harness-bypass-93.test.ts`（直す前の版で 4 件落ちた。ふだんの命令（`curl -o`・`find -name`・`rm a.txt`・`dd of=out.img`・`pnpm install`）は両方で通る）。
+直していないもの: 引用符の中の文字（`grep -r "rm -rf" src`）でも止める件。引用符の中を見ないと `sh -c "rm -rf /"` を通すので、守りを弱めない方を取った（命令を一つずつ切り分けて見る形にしてから）。値の無い CI の参照（`ANTHROPIC_API_KEY=${{ secrets.X }}`）を止める件は、書いてあるとおり意図したもの。
+触る場所: `src/harness/builtin-rules.ts`（`dangerousCommands`）、`src/harness/gate.ts`（鍵の形）、`src/core/redact.ts`（`redactSecrets`）
+
+## 2026-10-10  94 回目の不具合調査（外から入る中身の検問の言い回し）
+
+`inspectInbound`（`src/harness/gate.ts`）の 4 件。
+- 指示の上書きは `ignore (all) previous instructions` の形だけを見ていた。`disregard`・`forget`・`override` と、間に挟まる語（`the`・`all of the`・`your`）も拾う
+- 「you are now」だけで役割の乗っ取りとして断っていたので、`You are now logged in.` のような README によくある文で頁ごと断った。役割を名指しする形（`DAN`・`an AI`・`acting as`・`in developer mode`・`no longer bound`）だけにする
+- 「show instructions」で秘密の要求として断っていたので、`Click Help to show instructions` のような案内で断った。`instructions` は `your` が付くときだけにする
+- 見えない字（U+200B など）を挟んだり、全角にしたりすると素通りした。見えない字を外し、全角を半角に揃えた形でも照らす
+試験は `test/inbound-94.test.ts`（直す前の版で 2 件とも落ちた）。
+直していないもの: 外のツールのエラー出力で、鍵の値が途中までや別の書き方（URL 用・base64）で出たときに伏せない件（`src/mcp/client.ts` の `#hide`。試験で形を作ってから）。
+触る場所: `src/harness/gate.ts`（`INBOUND`・`inspect`・`normalized`）
+
+## 2026-10-10  95 回目の不具合調査（頭が依頼でない会話・押し戻された回の報告・黙った打ち切り）
+
+- `fitToWindow` は、会話の頭に依頼以外（挨拶・要約など）があり全部が入るとき、最初の依頼を二度並べ、頭の発言を知らせも無く落としていた。直近の分が最初の依頼より後ろから始まるときだけ足切りする。落とした分の数え方も、頭の発言を含めて合わせた
+- Team の報告は、ツールを呼んだときにだけ捨てていたので、終わったと言わずに止まって押し戻された回の一言（「次に書き換えます。」）が、作業を終えた後も次の担当への報告として残った。押し戻されたときも捨てる
+- 候補を試す処理は、相手が「打ち切った」と返すと、利用者が止めていなくても黙って終わっていた。呼ぶ側は本文も失敗も受け取らず「返事が空でした」とモデルのせいにした。利用者が止めたときだけ黙り、それ以外は失敗として返す
+試験は `test/window-lead-gaps.test.ts`・`test/team.test.ts`・`test/orchestrator-canceled-gaps.test.ts`（直す前の版でそれぞれ 1 件落ちた。利用者が止めた形は両方で通る）。
+触る場所: `src/agent/window.ts`（`fitToWindow`）、`src/agent/team.ts`、`src/core/orchestrator.ts`（`run`）
+
+## 2026-10-10  96 回目の不具合調査（書き込み先の綴りの揺れ・作業場ごとの提案）
+
+- `normalizeWrite`（`src/agent/pm.ts`）は一つ目の `./` だけを外していた。`././src/a.ts`・`src//a.ts`・`src/./a.ts`・`src/x/../a.ts` が `src/a.ts` と別の書き込み先になり、錠が効かずに同じファイルを書く作業が同時に走りえた。`posix.normalize` で畳む（末尾の `/` はフォルダの指定として残す）
+- 検収（`judge`）は計画の書き込み先と変わったファイルを綴りで比べていたので、計画にある `./src/a.ts` を「計画に無いファイルが変わっています」と言い、人の判断に回していた。同じ揃え方で比べる
+- 提案の重なりを、作業場を見ずに見ていたので、別の作業場の同じ提案があると、この作業場の提案が出ず、一覧も空のままだった（記録済みの残り）。同じ作業場の中だけで見る（作業場を持たない提案は、どの作業場とも重なる）
+試験は `test/pm-paths-gaps.test.ts`（直す前の版で 2 件とも落ちた）、`test/proposals-safety.test.ts`（直す前の版で 1 件落ちた）。
+直していないもの: 絶対の道（`/home/…/src/a.ts`）を作業場からの道に直す件（揃える所が作業場の根を知らない）。大小を区別しない機械での `src/A.ts` と `src/a.ts`。
+触る場所: `src/agent/pm.ts`（`normalizeWrite`）、`src/agent/acceptance.ts`（`judge`）、`src/agent/proposals.ts`（`add`・`#merge`・`sameRoot`）
+
+## 2026-10-10  97 回目の不具合調査（流した日課の表示・考えごとの止め口）
+
+- 日課を流す（`skip`）と、済ませたときと同じ欄（`lastPeriod`）に期を書くので、一覧が流した期を「済み」と出していた。流した期を別の欄（`skippedPeriod`）にも書き、一覧では「見送り」と出す。期が済んだ扱い（もう出てこない・前回分の埋め合わせの判定）は今のまま。済ませたらその欄を消す。別のプロセスの記録を取るときは、期とその欄を一緒に取る
+試験は `test/duties.test.ts`（直す前の版で 1 件落ちた）。
+触る場所: `src/harness/duties.ts`（`skip`・`complete`・`status`・`formatDuties`・`adoptPeriod`）
+- 暇なときの考えごと（`think`）は、止め口を作るのが、選び・作業場の様子・手がかり探しを待った後だった。その間に ■ を押しても止める先が無く、そのままモデルを呼んでいた。空きを見た直後に止め口を作って持ち、待ちの後ごとに止められたかを見る。見回りの問い合わせも同じ止め口で止める（別に作っていた止め口は外した）
+試験は `test/think-stop.test.ts`（直す前の版で落ちた）。
+触る場所: `src/core/session.ts`（`think`・`#thinkHolding`）
+
+## 2026-10-10  98 回目の不具合調査（止めたときの順番待ち・CLI の引数）
+
+- 画面の ■（`/api/abort`）は、動いている依頼と承認待ちだけを止め、順番待ちを残していた。止めた依頼の終わりで次が「続けます」で走り出し、■ が効かないと見えた。順番待ちも取り消し、取り消した件数を言う
+- 横の会話の終わりで順番待ちを流す所は、本体が空いているかだけを見ていた。考えごと・準備の最中は流さない（`#maybeDrain` と同じ。その道の終わりが流す）。この件は試験で再現していない
+- CLI の `/system` などの引数を空白ごとに分けて繋ぎ直していたので、続いた空白・タブが詰まっていた。最初の空白だけで分ける（`src/cli/slash.ts`）
+試験は `test/abort-queue.test.ts`（直す前の版で落ちた）、`test/cli-slash.test.ts`。
+触る場所: `src/ui/server.ts`（`/api/abort`・横の会話の終わり）、`src/cli/main.ts`、`src/cli/slash.ts`

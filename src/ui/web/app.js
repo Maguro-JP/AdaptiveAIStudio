@@ -767,8 +767,11 @@ async function showWaitingApprovals() {
 /** 出来事の流れが一度でも切れたか。繋ぎ直したときだけ取り直す（最初に繋がったときは、立ち上げで読んでいる）。 */
 let droppedOnce = false;
 
+/** 立ち上げで読み始める前の出来事の番号。流れを開いたとき、そこから後を渡し直してもらう。 */
+let eventsSince;
+
 function listen() {
-  const src = new EventSource('/api/events');
+  const src = new EventSource(eventsSince === undefined ? '/api/events' : `/api/events?since=${eventsSince}`);
   const status = $('status');
   src.onopen = () => {
     status.textContent = 'つながっています';
@@ -895,7 +898,7 @@ function listen() {
     }
     // 裏の仕事の状態。設定 → モデル の一言と「まだ話せません」の押しボタンにも、最新を出す。
     if (e.type === 'jobs') noteJobs(e.jobs);
-    if (e.type === 'stateChanged') { void refreshState(); void loadFiles(filesAt); void tellIfNotReady(); ctx.forgetCommands?.(); return; }
+    if (e.type === 'stateChanged') { if (e.resync) void catchUp(); void refreshState(); void loadFiles(filesAt); void tellIfNotReady(); ctx.forgetCommands?.(); return; }
     if (e.type === 'themeChanged') return void loadTheme();
     if (e.type === 'thinkEvent') {
       if (e.event.type === 'chose') run.set('busy', `考え中: ${e.event.codename}`);
@@ -2582,6 +2585,8 @@ window.addEventListener('keydown', (e) => {
   else if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); void openSettings(); }
 });
 
+// 読み始める前の番号を取る（読んでいる間に出た出来事を、流れを開いたときに渡し直してもらう）
+try { eventsSince = (await getJson('/api/events/seq')).seq; } catch { /* 古い本体。これから来る分だけ */ }
 await loadTheme();
 await load();
 await refreshState();

@@ -270,3 +270,28 @@ describe('aas update の引数', () => {
     assert.match(r.stderr, /知らない引数です: --yes/);
   });
 });
+
+describe('手元にだけ変更があるとき（86 回目の調査）', () => {
+  test('取り込むものが無ければ「最新です」と言う（手で取り込めとは言わない）', onlyWithGit, async () => {
+    const { root } = await pair();
+    await writeFile(join(root, 'b.txt'), 'local\n');
+    await git(['add', '.'], root);
+    await git(['commit', '-m', '手元だけ'], root);
+    const r = await checkUpdate(root);
+    assert.equal(r.ahead, 1);
+    assert.equal(r.behind, 0);
+    assert.equal(r.can, false);
+    assert.equal(r.reason, '最新です');
+  });
+
+  test('取り込むものもあれば、手で取り込むよう言う（対）', onlyWithGit, async () => {
+    const { root, advance } = await pair();
+    await advance('向こう');
+    await writeFile(join(root, 'b.txt'), 'local\n');
+    await git(['add', '.'], root);
+    await git(['commit', '-m', '手元だけ'], root);
+    const r = await checkUpdate(root);
+    assert.equal(r.can, false);
+    assert.match(r.reason ?? '', /手で取り込んで/);
+  });
+});

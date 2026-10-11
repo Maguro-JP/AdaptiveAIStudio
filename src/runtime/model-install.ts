@@ -73,10 +73,20 @@ export interface InstalledModel {
  */
 export function pickModelFile(files: string[], quant: string): string | undefined {
   const ggufs = files.filter((f) => f.toLowerCase().endsWith('.gguf'));
-  const matched = ggufs.filter((f) => f.toLowerCase().includes(quant.toLowerCase()));
+  const matched = ggufs.filter((f) => hasQuant(f, quant));
   const single = matched.filter((f) => !/-\d{5}-of-\d{5}\./i.test(f));
   // 同じ量子化が複数あるなら、名前の短い方を採る（余計な派生を避ける）
   return single.sort((a, b) => a.length - b.length)[0];
+}
+
+/**
+ * ファイル名に、その量子化の名前が一語として入っているか。文字列として含むかで見ていたので、`q4_k` が `q4_k_m` にも
+ * `q4_k_s` にも当たって短い方を黙って選び、`q4_0` が `iq4_0` に当たった。前は名前の頭か `-` `.` `_`、後ろは `-` `.` か終わり
+ * （量子化の名前の中にも `_` があるので、後ろの `_` は続きとみなす）。
+ */
+export function hasQuant(file: string, quant: string): boolean {
+  const q = quant.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[-._])${q}([-.]|$)`).test(file.toLowerCase().replace(/\.gguf$/, ''));
 }
 
 /**
@@ -101,7 +111,7 @@ export async function findModel(modelsDir: string, quant: string, repo: string):
     const q = quant.toLowerCase();
     const hit = names.find((n) => {
       const lower = n.toLowerCase();
-      if (!lower.endsWith('.gguf') || !lower.includes(q)) return false;
+      if (!lower.endsWith('.gguf') || !hasQuant(lower, q)) return false;
       // 量子化の名前は先に外す（`mistral-7b-instruct-v0.2.q4_k_m` のように . で繋がると、`v0.2.q4` が一語になる）
       const words = new Set(lower.replace(/\.gguf$/, '').replace(q, '').replace(/[-_.]+$/, '').split(/[-_]/));
       return wanted.every((w) => words.has(w));
@@ -579,7 +589,8 @@ export function hfFileUrl(url: string): string {
     if (!/(^|\.)huggingface\.co$/i.test(u.hostname)) return url;
     const parts = u.pathname.split('/');
     // `/<owner>/<repo>/blob/...`（datasets などの頭が付いても、最初の blob だけ直す）
-    const at = parts.indexOf('blob');
+    // 持ち主の名前が `blob` のこともあるので、持ち主と名前の後ろから探す
+    const at = parts.indexOf('blob', 3);
     if (at < 3) return url;
     parts[at] = 'resolve';
     u.pathname = parts.join('/');

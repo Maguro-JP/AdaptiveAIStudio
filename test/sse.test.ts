@@ -84,3 +84,29 @@ describe('途中でやめたら、繋ぎを切る', () => {
     assert.equal(canceled, false, '読み切ったのに切っている');
   });
 });
+
+describe('知らせの区切り（90 回目の調査）', () => {
+  const all = async (text: string, size = 4): Promise<string[]> => {
+    const got: string[] = [];
+    for await (const d of readSseLines(chopped(text, size))) got.push(d);
+    return got;
+  };
+
+  test('複数の data: 行に分かれた JSON は、一つに繋いで渡す', async () => {
+    const got = await all('data: {"a":\ndata: 1}\n\ndata: {"b":2}\n\n');
+    assert.deepEqual(got, ['{"a":\n1}', '{"b":2}']);
+    assert.deepEqual(JSON.parse(got[0]!), { a: 1 });
+  });
+
+  test('\\r だけで区切る相手でも、行ごとに読む', async () => {
+    assert.deepEqual(await all('data: {"a":1}\rdata: {"b":2}\r\r'), ['{"a":1}', '{"b":2}']);
+  });
+
+  test('\\r\\n が塊の境目で分かれても、空の行を挟まない（対）', async () => {
+    assert.deepEqual(await all('data: {"a":1}\r\n\r\ndata: {"b":2}\r\n\r\n', 1), ['{"a":1}', '{"b":2}']);
+  });
+
+  test('data: の後ろの空白は一つだけ落とす', async () => {
+    assert.deepEqual(await all('data:  x \n\n'), [' x ']);
+  });
+});

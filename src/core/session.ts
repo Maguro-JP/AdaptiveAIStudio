@@ -1197,9 +1197,25 @@ export class Session {
       yield { type: 'declined', reason: 'いま別の作業をしています' };
       return false;
     }
+    /*
+     * 止め口は、空きを見た直後に作って持つ。選び・作業場の様子・手がかり探しを待ってから作っていたので、
+     * 待機中の考えごとが始まった直後に ■ を押しても止める先が無く、そのままモデルを呼んでいた
+     */
+    const ac = new AbortController();
+    this.#conv.running = ac;
+    try {
+      return yield* this.#thinkHolding(ac);
+    } finally {
+      if (this.#conv.running === ac) this.#conv.running = undefined;
+    }
+  }
 
+  /** `think` の本体。止め口（`ac`）を持った状態で呼ぶ。 */
+  async *#thinkHolding(ac: AbortController): AsyncGenerator<ThinkEvent, boolean> {
+    const stopped = () => ac.signal.aborted;
     const now = Date.now();
     const decision = await this.nextThought(now);
+    if (stopped()) { yield { type: 'declined', reason: '止められました' }; return false; }
     if (!decision.mode) {
       // 割り当ての側は理由を組み立てている。**ここで捨てない。**
       yield { type: 'declined', reason: decision.reason ?? '今回は見送りました' };
@@ -1250,20 +1266,16 @@ export class Session {
         });
         // 配布元への問い合わせも ■ で止められるようにし、上限で打ち切る。考えごとの間は人の送信が順番待ちになるので、
         // 返事が来ないと（最大で約 5 分）その間ずっと待たせていた
-        const probe = new AbortController();
-        // 最初に空きを見てから、ここまで何度も待った。その間に来た送りの止め口を上書きしない
-        if (this.anyBusy) { yield { type: 'declined', reason: 'いま別の作業をしています' }; return false; }
-        this.#conv.running = probe;
-        const asked = AbortSignal.any([probe.signal, AbortSignal.timeout(UPDATE_PROBE_TIMEOUT_MS)]);
+        const asked = AbortSignal.any([ac.signal, AbortSignal.timeout(UPDATE_PROBE_TIMEOUT_MS)]);
         const newer = await findNewerFor({
           runtimeKind: this.config.runtime?.kind ?? 'inproc',
           installed: local,
           seed: catalogFamilies(),
           signal: asked,
-        }).finally(() => { if (this.#conv.running === probe) this.#conv.running = undefined; });
+        });
         // 止めた・打ち切った問い合わせは、中で失敗を握って空を返す。空を「新しい世代は無かった」と読まない（下の catch で「訊けなかった」と書く）
-        if (probe.signal.aborted) upkeepStopped = true;
-        if (asked.aborted) throw new Error(probe.signal.aborted ? '止めました' : `${UPDATE_PROBE_TIMEOUT_MS / 1000} 秒で返事が揃いませんでした`);
+        if (stopped()) upkeepStopped = true;
+        if (asked.aborted) throw new Error(stopped() ? '止めました' : `${UPDATE_PROBE_TIMEOUT_MS / 1000} 秒で返事が揃いませんでした`);
         context = [
           `いま使っているモデル: ${using.join(', ') || '(ローカルの指定なし)'}`,
           '',
@@ -1306,11 +1318,8 @@ export class Session {
       files = lead.files;
     }
 
-    // 手を取ってから「選びました」と言う。最初に空きを見てから何度も待っているので、ここで見直す。取るのが知らせの後だったので、
-    // 知らせを流している間に来た送りが空いた手を取り、その止め口をここで上書きして、終わりに空にしていた（止めるボタンが送りに効かない）
-    if (this.anyBusy) { yield { type: 'declined', reason: 'いま別の作業をしています' }; return false; }
-    const ac = new AbortController();
-    this.#conv.running = ac;
+    // 手は `think` の頭で取ってある（ここまで待つ間に来た送りは手を取れない）。待っている間に止められたら、モデルを呼ばない
+    if (stopped()) { yield { type: 'declined', reason: '止められました' }; return false; }
     this.idle.begin(mode, Date.now());
 
     let text = '';

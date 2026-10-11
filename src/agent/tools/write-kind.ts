@@ -199,9 +199,16 @@ export function applyEdit(
    *
    * 一行だけの `find` は、行の途中でよい（名前の付け替えなど）。
    */
+  const lineHead = (at: number) => at === 0 || before[at - 1] === '\n';
+  /*
+   * 一行の `find` でも、空白から始まって行の頭の空白の途中に当たったものは、字下げを落としただけ。複数行の `replace` を
+   * そこへ入れると二行目から後が浅いまま入り、しかも完全一致として何も言わなかった。行で見る道（字下げを合わせる）に回す
+   */
+  const droppedIndent = (at: number) => /^\s/.test(find) && replace.includes('\n')
+    && !/\S/.test(before.slice(before.lastIndexOf('\n', at - 1) + 1, at));
   const aligned = find.includes('\n')
-    ? found.filter((at) => at === 0 || before[at - 1] === '\n')
-    : found;
+    ? found.filter(lineHead)
+    : found.filter((at) => lineHead(at) || !droppedIndent(at));
   if (aligned.length > 0) {
     /*
      * 行の途中の当たりのうち、前に字下げ以外の字がある物（`x = f(a,\n  b)` の `f(a,…`）は本物の出現。捨てると、`all` では
@@ -325,8 +332,18 @@ function anchorEdit(
   const put = fitReplace(replace.split('\n'), cut.head, cut.tail);
   const out = [...lines];
   for (const { from, to } of [...found].reverse()) {
+    // 行の数が違いうるので、中身が同じ行どうしを対にしてから、行ごとの差で付け替える
+    // （最初の行の差を全部に足すと、元で行の頭にあった行まで字下げしていた）
+    const block = lines.slice(from, to + 1);
+    let cursor = 0;
+    const got = want.map((w) => {
+      const k = block.findIndex((l, n) => n >= cursor && l.trim() === w.trim());
+      if (k < 0) return undefined;
+      cursor = k + 1;
+      return block[k];
+    });
     const shifted = sameFrame(put, indentOf(want[0]!), indentOf(lines[from]!))
-      ? reindent(put, indentOf(want[0]!), indentOf(lines[from]!))
+      ? reindentByLine(put, want, got)
       : put;
     out.splice(from, to - from + 1, ...shifted);
   }
@@ -378,7 +395,7 @@ function looseEdit(
   const out = [...lines];
   for (const start of [...at].reverse()) {
     const shifted = sameFrame(put, indentOf(want[0]!), indentOf(lines[start]!))
-      ? reindent(put, indentOf(want[0]!), indentOf(lines[start]!))
+      ? reindentByLine(put, want, lines.slice(start, start + want.length))
       : put;
     out.splice(start, wantKeys.length, ...shifted);
   }
@@ -496,6 +513,48 @@ function reindent(lines: string[], from: string, to: string): string[] {
   return lines.map((line) => {
     if (line.trim().length === 0) return line;
     return line.startsWith(from) ? to + line.slice(from.length) : line;
+  });
+}
+
+/**
+ * 字下げを、当たった行ごとの差で付け替える。
+ *
+ * 最初の行で測った差だけを全部の行に足していたので、`find` の字下げが揃っていてファイルの側が揃っていないとき
+ * （`foo()` は 2 字下げ、`bar()` は行の頭）、行の頭にあった行まで字下げしていた（Python や YAML では意味が変わる）。
+ * `find` の字下げごとにファイルの字下げを対にして付け替える。同じ字下げが別の字下げに当たっていて対が決まらなければ、
+ * 行の数が同じときだけ行ごとに当て、違えば付け替えない。
+ */
+function reindentByLine(put: string[], want: string[], got: ReadonlyArray<string | undefined>): string[] {
+  const pairs = new Map<string, string>();
+  let consistent = true;
+  want.forEach((w, j) => {
+    // 対になるファイルの行が無い行（崩れた行）は、対を決める材料にしない
+    if (w.trim().length === 0 || got[j] === undefined) return;
+    const from = indentOf(w);
+    const to = indentOf(got[j]!);
+    if (pairs.has(from) && pairs.get(from) !== to) consistent = false;
+    else pairs.set(from, to);
+  });
+  if (consistent) {
+    // 長い字下げから当てる（`    ` を `  ` より先に見る）
+    const order = [...pairs.keys()].sort((x, y) => y.length - x.length);
+    return put.map((line) => {
+      if (line.trim().length === 0) return line;
+      const from = order.find((f) => line.startsWith(f));
+      return from === undefined ? line : pairs.get(from)! + line.slice(from.length);
+    });
+  }
+  // 対が決まらないときは、行ごとに当てる。中身が `find` の行と同じなら、その行が当たったファイルの行の字下げ。
+  // 違えば（書き換えた行）、同じ位置の `find` の行のもの。どちらも無ければ、そのまま
+  let next = 0;
+  return put.map((line, i) => {
+    if (line.trim().length === 0) return line;
+    let j = want.findIndex((w, n) => n >= next && w.trim() === line.trim() && got[n] !== undefined);
+    if (j >= 0) next = j + 1;
+    else j = i < want.length && got[i] !== undefined ? i : -1;
+    if (j < 0) return line;
+    const from = indentOf(want[j]!);
+    return line.startsWith(from) ? indentOf(got[j]!) + line.slice(from.length) : line;
   });
 }
 

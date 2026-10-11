@@ -63,8 +63,9 @@ export function isPortable(from = installRoot()): boolean {
  *   3. ~/.aas（これまでどおり）
  */
 export function aasHome(root = installRoot()): string {
-  const explicit = process.env.AAS_HOME;
-  if (explicit && explicit.trim().length > 0) return explicit;
+  const explicit = process.env.AAS_HOME?.trim();
+  // 相対の道は、いまのフォルダではなくプログラムのフォルダから解く（起動した場所ごとに根が割れないように）
+  if (explicit) return resolve(root, explicit);
 
   if (isPortable(root)) return join(productRoot(root), 'data');
 
@@ -130,12 +131,18 @@ export function isDistributed(root = installRoot()): boolean {
 
 /** 記録の置き場。 */
 export function stateDir(root?: string): string {
-  return process.env.AAS_STATE_DIR ?? aasHome(root);
+  return nonEmptyEnv('AAS_STATE_DIR') ?? aasHome(root);
 }
 
 /** llama-server の置き場。 */
 export function binDir(root?: string): string {
-  return process.env.AAS_BIN_DIR ?? join(aasHome(root), 'bin');
+  return nonEmptyEnv('AAS_BIN_DIR') ?? join(aasHome(root), 'bin');
+}
+
+/** 空や空白だけの指定は、無いものとして扱う（空の道は、いまのフォルダになってしまう）。 */
+function nonEmptyEnv(name: string): string | undefined {
+  const v = process.env[name]?.trim();
+  return v ? v : undefined;
 }
 
 /**

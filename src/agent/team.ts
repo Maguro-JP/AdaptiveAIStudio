@@ -150,7 +150,8 @@ export class Team {
     // 後に何も書かずに終えた（TASK_DONE だけ）なら、報告は空（申し送りは「言い残していない」として飛ばす）
     for await (const ev of agent.run(history, signal)) {
       push({ type: 'agent', taskId: item.id, laneId: item.laneId, event: ev });
-      if (ev.type === 'toolStart') report = '';
+      // 押し戻された回の文（終わったと言わずに止まった途中経過）も、結論ではないので捨てる
+      if (ev.type === 'toolStart' || ev.type === 'nudged') report = '';
       else if (ev.type === 'thinking') report += ev.delta;
       if (ev.type === 'turn') turns += 1;
       else if (ev.type === 'finished') finished = ev;

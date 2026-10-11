@@ -119,7 +119,9 @@ const TYPES: Record<string, string> = {
 export const RESTART_EXIT = 75;
 
 /** 一つの画面に溜めてよい未送信の量。超えたら、その相手は読んでいない。 */
-export const MAX_CLIENT_BACKLOG = 4 * 1024 * 1024;
+export /** 繋ぎ直した画面に渡し直すために溜める出来事の数。 */
+const RECENT_EVENTS = 500;
+const MAX_CLIENT_BACKLOG = 4 * 1024 * 1024;
 
 /**
  * 本体が持っておく記録の行数。画面は開いたときにここから取り直す。
@@ -256,6 +258,12 @@ type StepOutcome = 'started' | 'settled';
 export class UiServer {
   readonly #opts: UiServerOptions;
   readonly #clients = new Set<ServerResponse>();
+  /**
+   * 直近の出来事。番号（`id:`）を付けて溜め、繋いだ画面に、抜けた分を渡し直す
+   * （流れを開く前・繋ぎ直す間の出来事を取りこぼしていた。承認の問い合わせが見えないまま 10 分後に断られた）。
+   */
+  #eventSeq = 0;
+  readonly #recent: Array<{ id: number; line: string }> = [];
   /** 最近の記録。画面が開き直したときに取り直す分。`RECENT_LOGS` 行まで。 */
   readonly #recentLogs: Array<{ seq: number; level: 'info' | 'warn' | 'error'; text: string; at: string }> = [];
   /**
@@ -560,7 +568,10 @@ export class UiServer {
         void this.#logFile.append(`[session ${ev.type}] ${JSON.stringify(event.event).slice(0, 2000)}`).catch(() => undefined);
       }
     }
-    const line = `data: ${JSON.stringify(event)}\n\n`;
+    const id = ++this.#eventSeq;
+    const line = `id: ${id}\ndata: ${JSON.stringify(event)}\n\n`;
+    this.#recent.push({ id, line });
+    if (this.#recent.length > RECENT_EVENTS) this.#recent.shift();
     for (const res of this.#clients) {
       // 読まない相手に溜め続けない。閉じたタブや固まった頁があると、
       // その分の出来事が本体の記憶に積み上がる。4MB 溜まったら切る。
@@ -879,8 +890,8 @@ export class UiServer {
       this.broadcast({ type: 'undo' });
       this.broadcast({ type: 'busy', busy: false, conversationId });
       this.broadcast({ type: 'stateChanged' });
-      // 本体が空いていれば、順番待ちを流す（本体の依頼の終わりでも流れる）。
-      if (!this.#mainBusy(session)) await this.#drainQueue(session);
+      // 本体が空いていれば、順番待ちを流す（本体の依頼の終わりでも流れる）。考えごと・準備の最中は流さない（`#maybeDrain` と同じ。その道の終わりが流す）
+      if (!this.#mainBusy(session) && this.#prep === 0 && !this.#thinking) await this.#drainQueue(session);
     }
   }
 
@@ -1206,13 +1217,15 @@ export class UiServer {
     const id = `a${this.#approvalTag}-${++this.#seq}`;
     return new Promise<ApprovalAnswer>((resolve) => {
       let done = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       const finish = (ok: ApprovalAnswer) => {
         if (done) return;
         done = true;
+        if (timer) clearTimeout(timer);
         // 「残りも全部」を受け取ったら、ここで旗を立てる。返す答えは通常の許可。
+        // 旗は訊いた時点の本体に立てる（答える間に本体を組み直すと、新しい本体の同じ番号の依頼にまで漏れていた）
         const mark = () => {
-          const s = this.#session;
-          if (s) this.#allWritesFor = { session: s, key };
+          if (now) this.#allWritesFor = { session: now, key };
         };
         if (ok === 'all') { mark(); ok = true; }
         // 塊を選びつつ「以降訊かない」も選べる。選んだ塊はそのまま通す。
@@ -1224,7 +1237,7 @@ export class UiServer {
       this.#pending.set(id, { finish, request: req });
       this.broadcast({ type: 'approval', id, request: req });
       // 誰も答えないまま待ち続けない。返事が無いことは、許可ではない。
-      const timer = setTimeout(() => finish(false), 10 * 60_000);
+      timer = setTimeout(() => finish(false), 10 * 60_000);
       timer.unref?.();
     });
   }
@@ -1773,8 +1786,14 @@ export class UiServer {
       for (const { finish } of this.#pending.values()) finish(false);
       this.#pending.clear();
       for (const ac of this.#background) ac.abort();
+      // 順番待ちも取り消す。残すと、止めた依頼の終わりで次が「続けます」で走り出す（■ が効かないと見える）
+      const dropped = this.#queue.splice(0).length;
+      if (dropped > 0) {
+        this.broadcast({ type: 'queue', waiting: 0 });
+        this.broadcast({ type: 'log', level: 'warn', text: `順番待ちの依頼 ${dropped} 件も取り消しました` });
+      }
       this.#session?.abort();
-      return send(res, 200, { ok: true });
+      return send(res, 200, { ok: true, dropped });
     }
 
     /*
@@ -3055,6 +3074,8 @@ export class UiServer {
       return send(res, 200, { id: r.id, title: r.title, restored: true });
     }
 
+    if (path === '/api/events/seq' && req.method === 'GET') return send(res, 200, { seq: this.#eventSeq });
+
     if (path === '/api/events') {
       // 流れを開くのは GET だけ。止めた後に来たものは開かない（止めるときに閉じる一覧から漏れ、閉じられずに残っていた）
       if (req.method !== 'GET') return send(res, 405, { error: 'GET で開いてください' });
@@ -3065,6 +3086,15 @@ export class UiServer {
         connection: 'keep-alive',
       });
       res.write(': つながりました\n\n');
+      // 抜けた分を渡し直してから一覧に入れる（同じ流れの中で続けて書くので、間に出来事が割り込まない）。
+      // 繋ぎ直しは Last-Event-ID、最初に開くときは ?since=（画面が立ち上げの前に取った番号）
+      const since = Number(req.headers['last-event-id'] ?? new URL(req.url ?? '/', 'http://x').searchParams.get('since') ?? NaN);
+      if (Number.isInteger(since) && since >= 0 && since < this.#eventSeq) {
+        const oldest = this.#recent[0]?.id ?? this.#eventSeq + 1;
+        // 溜めた分より前から抜けているなら、渡し直せない。全部を取り直すよう言う
+        if (since + 1 < oldest) res.write(`data: ${JSON.stringify({ type: 'stateChanged', resync: true })}\n\n`);
+        for (const e of this.#recent) if (e.id > since) res.write(e.line);
+      }
       this.#clients.add(res);
       req.on('close', () => this.#clients.delete(res));
       return;

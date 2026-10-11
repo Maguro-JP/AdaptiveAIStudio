@@ -99,6 +99,12 @@ export async function findRemovable(opts: {
       // いま取っている最中のものは消さない（書き続けているので新しい）。1 時間より古いものだけ
       const s = await stat(path).catch(() => undefined);
       if (!s || now - s.mtimeMs < 60 * 60 * 1000) continue;
+      // .tag は取り始めに一度だけ書くので、1 時間を超えて取り続けると .tag だけが古くなる。途中の分が新しければ残す
+      // （.tag を消すと、続きを取るときに版を確かめられず、古い頭と新しい尻を繋いでしまう）
+      if (/\.tag$/i.test(name)) {
+        const part = await stat(path.replace(/\.tag$/i, '')).catch(() => undefined);
+        if (part && now - part.mtimeMs < 60 * 60 * 1000) continue;
+      }
       found.push({
         path, bytes: await sizeOf(path),
         why: '取得の途中で切れたもの（消すと、続きからではなく最初から取り直しになります）',

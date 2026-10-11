@@ -281,3 +281,17 @@ describe('提案を残せないとき', () => {
     assert.equal(await q.save(), undefined);
   });
 });
+
+describe('作業場ごとの重なり（96 回目の調査）', () => {
+  test('別の作業場の同じ提案は、こちらの提案を止めない', async () => {
+    const q = new ProposalQueue(join(await tempDir('aas-prop-roots-'), 'proposals.json'));
+    assert.ok(q.add({ ...input('parse() に試験が無い'), root: 'A' }));
+    assert.ok(q.add({ ...input('parse() に試験が無い'), root: 'B', fingerprint: 'fp:B' }), '別の作業場の提案に止められた');
+  });
+
+  test('同じ作業場の同じ提案は、これまでどおり重ねない（対）', async () => {
+    const q = new ProposalQueue(join(await tempDir('aas-prop-roots2-'), 'proposals.json'));
+    assert.ok(q.add({ ...input('parse() に試験が無い'), root: 'A' }));
+    assert.equal(q.add({ ...input('parse() に試験が無い'), root: 'A', fingerprint: 'fp:x' }), undefined);
+  });
+});

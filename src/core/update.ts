@@ -172,7 +172,8 @@ export async function checkUpdate(root: string): Promise<UpdateStatus> {
   // 入ってくる変更は標準出力だけから数える（警告の行を変更として並べない）
   const incoming = log.stdout.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
 
-  if (ahead > 0) {
+  // 手元にだけ変更があっても、取り込むものが無ければ最新（手で取り込めとは言わない）
+  if (ahead > 0 && behind > 0) {
     return {
       can: false, behind, ahead, branch: state.branch, incoming,
       reason: `こちらにしか無い変更が ${ahead} 件あります。早送りできないので、手で取り込んでください`,

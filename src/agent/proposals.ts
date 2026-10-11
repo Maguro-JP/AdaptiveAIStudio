@@ -203,8 +203,9 @@ export class ProposalQueue {
       title: redactSecrets(given.title), rationale: redactSecrets(given.rationale), suggestedAction: redactSecrets(given.suggestedAction),
     };
     const contentKey = normalizeTitle(p.title);
+    // 重なりは同じ作業場の中だけで見る（別の作業場の提案があると、こちらの同じ提案が出ず、一覧も空のままだった）
     const duplicate = this.#items.find(
-      (x) => x.status !== 'rejected' &&
+      (x) => x.status !== 'rejected' && sameRoot(x.root, p.root) &&
         (x.fingerprint === p.fingerprint || normalizeTitle(x.title) === contentKey),
     );
     if (duplicate) return undefined;
@@ -212,7 +213,7 @@ export class ProposalQueue {
       try {
         const onDisk = parseDisk(readFileSync(this.#path, 'utf8'));
         for (const d of onDisk.items) this.#issued = Math.max(this.#issued, idNumber(d.id));
-        if (onDisk.items.some((x) => x.status !== 'rejected'
+        if (onDisk.items.some((x) => x.status !== 'rejected' && sameRoot(x.root, p.root)
           && (x.fingerprint === p.fingerprint || normalizeTitle(x.title) === contentKey))) return undefined;
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return undefined;
@@ -410,7 +411,7 @@ export class ProposalQueue {
     for (const m of this.#items) {
       if (taken.has(m)) continue;
       const key = normalizeTitle(m.title);
-      const same = merged.some((x) => x.status !== 'rejected'
+      const same = merged.some((x) => x.status !== 'rejected' && sameRoot(x.root, m.root)
         && (x.fingerprint === m.fingerprint || normalizeTitle(x.title) === key));
       if (same) continue;
       if (merged.some((x) => x.id === m.id)) m.id = this.#nextId(merged);
@@ -478,6 +479,11 @@ export function formatProposal(p: Proposal, verbose = false): string {
 }
 
 /** その作業場で扱ってよい提案か。作業場の分からない古い提案は、どこでも今までどおり扱う。 */
+/** 二つの提案が同じ作業場のものか。作業場を持たない提案は、どの作業場にも出るので、どれとも重なる。 */
+function sameRoot(a: string | undefined, b: string | undefined): boolean {
+  return a === undefined || b === undefined || a === b;
+}
+
 export function proposalHere(p: Pick<Proposal, 'root'>, rootKey: string): boolean {
   return p.root === undefined || p.root === rootKey;
 }

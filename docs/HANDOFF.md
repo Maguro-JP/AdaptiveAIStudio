@@ -8,7 +8,7 @@
 | | |
 |---|---|
 | 版 | 0.12.1（`package.json`）。v0.12.0 の後、#16〜#19 は全部「直し」なので最後の桁 |
-| release | v0.12.0 まで出ている（portable / portable-noexe / Setup.exe） |
+| release | v0.12.0 まで出ている（portable / portable-noexe / Setup.exe。noexe 版は 2026-10-10 に外した） |
 | main の先頭 | PR #37 を squash でマージした commit `f46738b`（2026-09-24）。#36 が `5fa019f` |
 | 次の作業 | main から枝を切り直す。マージ済みの PR の枝に積まない。読み直し（5 観点・反証つき）で出た 26 件の直しが次の PR |
 | 配る物（2026-09-23 に手元で組んだ） | `Setup.exe` 158MB（CPU・CUDA・Vulkan）／`portable-noexe-cpu.zip` 80MB（`.exe` 0 個・CPU のみ）。Releases には置けていない（下記） |

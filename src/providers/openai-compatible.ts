@@ -538,7 +538,7 @@ function errorText(error: unknown): string {
 }
 
 /** 中立形式から OpenAI 形式へ。ツール結果の表現だけが違う。 */
-function toWireMessage(m: ProviderMessage): Record<string, unknown> {
+export function toWireMessage(m: ProviderMessage): Record<string, unknown> {
   if (m.role === 'tool') {
     return { role: 'tool', tool_call_id: m.toolCallId, content: m.content };
   }
@@ -549,11 +549,21 @@ function toWireMessage(m: ProviderMessage): Record<string, unknown> {
       tool_calls: m.toolCalls.map((t: ToolCall) => ({
         id: t.id,
         type: 'function',
-        function: { name: t.name, arguments: JSON.stringify(t.args) },
+        function: { name: t.name, arguments: wireArgs(t.args) },
       })),
     };
   }
   return { role: m.role, content: m.content };
+}
+
+/**
+ * 送り返す引数。読めなかった引数（`{ __raw, __parseError }`）は、こちらの内側の形なので、モデルが書いた元の文字列に戻す
+ * （内側の形のまま見せると、モデルは出していない呼び出しを見せられ、手元のモデルはその形を真似る）。
+ */
+function wireArgs(args: unknown): string {
+  const a = args as { __raw?: unknown; __parseError?: unknown } | null;
+  if (a && typeof a === 'object' && a.__parseError === true && typeof a.__raw === 'string') return a.__raw;
+  return JSON.stringify(args);
 }
 
 /**

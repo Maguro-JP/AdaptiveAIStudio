@@ -29,6 +29,10 @@ export function redactSecrets(text: string): string {
     .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}/g, '（伏せました）')
     .replace(/\bAKIA[0-9A-Z]{16}\b/g, '（伏せました）')
     .replace(/\bhf_[A-Za-z0-9]{20,}\b/g, '（伏せました）')
+    // Stripe・GitLab・npm の鍵
+    .replace(/\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{20,}\b/g, '（伏せました）')
+    .replace(/\bglpat-[A-Za-z0-9_-]{20,}/g, '（伏せました）')
+    .replace(/\bnpm_[A-Za-z0-9]{36}\b/g, '（伏せました）')
     // `.env` の形（`GITHUB_TOKEN=...`）と、命令の引数の形（`--token xxx`・`"--token", "xxx"`）。名前が JSON の項目でないと上で当たらない
     // 値は引用符で囲まれていてもよい（`.env` の `KEY="..."`、`--token="..."`）。囲みごと伏せる
     // 名前の大小は問わない（`~/.aws/credentials` の `aws_secret_access_key = …`）。YAML や見出しの `password: …` も

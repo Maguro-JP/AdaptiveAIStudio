@@ -7,7 +7,7 @@
 import { test, describe, afterEach, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
@@ -50,6 +50,9 @@ const KEYS = ['AAS_HOME', 'AAS_STATE_DIR', 'AAS_BIN_DIR', 'AAS_MODELS_DIR'];
 for (const k of KEYS) delete process.env[k];
 afterEach(() => { for (const k of KEYS) delete process.env[k]; });
 
+// どの OS でも絶対の道（`join('C:', 'AAS')` は Linux では相対になり、プログラムのフォルダから解かれる）
+const ABS_HOME = resolve(sep, 'AAS');
+
 describe('根の決め方', () => {
   // 置かれ方で答えが変わる関数なので、**どこに置かれているか**を毎回渡す。
   // 渡さずに書くと、持ち運び版の中で走らせたときだけ落ちる試験になる
@@ -62,10 +65,10 @@ describe('根の決め方', () => {
   });
 
   test('AAS_HOME を書けば、記録も実行ファイルもモデルも一度に移る', () => {
-    process.env.AAS_HOME = join('C:', 'AAS');
-    assert.equal(stateDir(plain), join('C:', 'AAS'));
-    assert.equal(binDir(plain), join('C:', 'AAS', 'bin'));
-    assert.equal(modelsDir(plain), join('C:', 'AAS', 'models'));
+    process.env.AAS_HOME = join(ABS_HOME);
+    assert.equal(stateDir(plain), join(ABS_HOME));
+    assert.equal(binDir(plain), join(ABS_HOME, 'bin'));
+    assert.equal(modelsDir(plain), join(ABS_HOME, 'models'));
   });
 
   test('空の指定は無視する（消し忘れで ~/.aas を見失わない）', () => {
@@ -74,10 +77,10 @@ describe('根の決め方', () => {
   });
 
   test('個別の指定は今までどおり効く。設定済みの人を壊さない', () => {
-    process.env.AAS_HOME = join('C:', 'AAS');
+    process.env.AAS_HOME = join(ABS_HOME);
     process.env.AAS_MODELS_DIR = join('D:', 'gguf');
     assert.equal(modelsDir(plain), join('D:', 'gguf'), '個別の指定が根に負けている');
-    assert.equal(binDir(plain), join('C:', 'AAS', 'bin'), '指定していない方まで動いている');
+    assert.equal(binDir(plain), join(ABS_HOME, 'bin'), '指定していない方まで動いている');
   });
 });
 
@@ -96,8 +99,8 @@ describe('持ち運び版', () => {
   test('AAS_HOME があれば、持ち運びより明示が勝つ', async () => {
     const root = await tempDir('aas-portable-');
     await writeFile(join(root, '.portable'), '');
-    process.env.AAS_HOME = join('C:', 'AAS');
-    assert.equal(aasHome(root), join('C:', 'AAS'));
+    process.env.AAS_HOME = join(ABS_HOME);
+    assert.equal(aasHome(root), join(ABS_HOME));
   });
 });
 

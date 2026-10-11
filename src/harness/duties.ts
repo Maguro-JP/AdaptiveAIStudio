@@ -64,6 +64,8 @@ export interface DutyRecord {
   /** 最後に完了した期 */
   lastPeriod?: string;
   lastAt?: number;
+  /** lastPeriod が流しただけの期なら、その期（済ませた期と見分けるため） */
+  skippedPeriod?: string;
   /** 完了した回数 */
   completions: number;
   /** 逃したまま流した回数 */
@@ -74,6 +76,8 @@ export interface DutyStatus {
   duty: Duty;
   /** 今期の分が済んでいるか */
   doneThisPeriod: boolean;
+  /** 今期の分は済ませずに流したか（doneThisPeriod も true になる。表示で「済み」と言わないため） */
+  skippedThisPeriod: boolean;
   /** 今やるべきか */
   due: boolean;
   /** 逃した分の埋め合わせか */
@@ -209,11 +213,11 @@ export class DutyRoster {
       if (was) {
         const theyMoved = theirs.lastPeriod !== was.lastPeriod;
         const iMoved = now.lastPeriod !== was.lastPeriod;
-        if (theyMoved && (!iMoved || (theirs.lastAt ?? 0) > (now.lastAt ?? 0))) now.lastPeriod = theirs.lastPeriod;
+        if (theyMoved && (!iMoved || (theirs.lastAt ?? 0) > (now.lastAt ?? 0))) adoptPeriod(now, theirs);
       } else if (now.lastPeriod === undefined || (now.lastAt !== undefined && (theirs.lastAt ?? 0) > now.lastAt)) {
         // 前に見た中身が無い（起動のときに無かった・読めなかった）: 手元で済ませていても、ほかが後に済ませたならそちら。
         // 流しただけ（`skip` は時刻を残さない）なら手元の期を取る（流した期を、それより前に済ませた期で戻さない）
-        now.lastPeriod = theirs.lastPeriod;
+        adoptPeriod(now, theirs);
       }
       const last = Math.max(now.lastAt ?? 0, theirs.lastAt ?? 0);
       if (last > 0) now.lastAt = last;
@@ -242,6 +246,7 @@ export class DutyRoster {
 
       return {
         duty, record, period, doneThisPeriod,
+        skippedThisPeriod: doneThisPeriod && record.skippedPeriod === period,
         due: dueNow,
         isCatchUp,
         nextAt: doneThisPeriod ? nextPeriodStart(duty.cadence, now) : started,
@@ -274,6 +279,7 @@ export class DutyRoster {
     const record = this.#record(dutyId);
     record.lastPeriod = periodKey(duty.cadence, now);
     record.lastAt = doneAt;
+    delete record.skippedPeriod;
     record.completions += 1;
   }
 
@@ -286,6 +292,7 @@ export class DutyRoster {
     if (!duty) return;
     const record = this.#record(dutyId);
     record.lastPeriod = periodKey(duty.cadence, now);
+    record.skippedPeriod = record.lastPeriod;
     record.missed += 1;
   }
 
@@ -302,7 +309,8 @@ export class DutyRoster {
 export function formatDuties(statuses: DutyStatus[], now: number): string {
   const lines = ['日課                  状態        次回'];
   for (const s of statuses) {
-    const state = s.doneThisPeriod ? '済み'
+    const state = s.skippedThisPeriod ? '見送り'
+      : s.doneThisPeriod ? '済み'
       : s.isCatchUp ? '未了（前回分）'
       : s.due ? '未了'
       : '待機';
@@ -325,11 +333,19 @@ function formatWhen(at: number, now: number): string {
 }
 
 /** 当番の記録の形。回数は有限で 0 以上。 */
+/** ほかの記録の期を取る。流した期の欄も一緒に取る（二つがずれると、済ませた期を「見送り」と出す）。 */
+function adoptPeriod(into: DutyRecord, from: DutyRecord): void {
+  into.lastPeriod = from.lastPeriod;
+  if (from.skippedPeriod === undefined) delete into.skippedPeriod;
+  else into.skippedPeriod = from.skippedPeriod;
+}
+
 function isRecord(v: unknown): v is DutyRecord {
   if (typeof v !== 'object' || v === null) return false;
   const r = v as Record<string, unknown>;
   const count = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= 0;
   return typeof r.dutyId === 'string' && count(r.completions) && count(r.missed)
     && (r.lastPeriod === undefined || typeof r.lastPeriod === 'string')
+    && (r.skippedPeriod === undefined || typeof r.skippedPeriod === 'string')
     && (r.lastAt === undefined || (typeof r.lastAt === 'number' && Number.isFinite(r.lastAt)));
 }

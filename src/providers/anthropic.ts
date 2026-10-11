@@ -310,6 +310,11 @@ export function toAnthropicMessages(messages: readonly ProviderMessage[]): { rol
     if (m.role === 'system') continue;
     if (m.role === 'tool') {
       const id = renamed.get(m.toolCallId ?? '')?.shift() ?? m.toolCallId ?? '';
+      // 対になる呼び出しが直前に無い結果は、結果として送らない（Claude が 400 で断り、こちらの誤りとして依頼ごと落ちる）。文として渡す
+      if (!open.includes(id)) {
+        push('user', [{ type: 'text', text: `（ツールの結果）\n${m.content}` }]);
+        continue;
+      }
       open = open.filter((o) => o !== id);
       push('user', [{ type: 'tool_result', tool_use_id: id, content: m.content }]);
       continue;
@@ -330,7 +335,9 @@ export function toAnthropicMessages(messages: readonly ProviderMessage[]): { rol
       renamed.set(c.id, [...(renamed.get(c.id) ?? []), id]);
       used.add(id);
       open.push(id);
-      const input = c.args !== null && typeof c.args === 'object' && !Array.isArray(c.args) ? c.args : {};
+      // 読めなかった引数（`{ __raw, __parseError }`）は、こちらの内側の形。モデルが出した呼び出しのように見せない
+      const parsed = c.args !== null && typeof c.args === 'object' && !Array.isArray(c.args) ? c.args as Record<string, unknown> : {};
+      const input = parsed.__parseError === true ? {} : parsed;
       blocks.push({ type: 'tool_use', id, name: c.name, input });
     }
     push(m.role === 'assistant' ? 'assistant' : 'user', blocks);

@@ -72,6 +72,34 @@ export function trimPartialUtf8(buf: Uint8Array): Uint8Array {
   return end - i < need ? buf.subarray(0, i) : buf;
 }
 
+/** CP932 の 2 バイトの字の先行バイト（0x81–0x9F・0xE0–0xFC）。 */
+function isSjisLead(b: number): boolean {
+  return (b >= 0x81 && b <= 0x9f) || (b >= 0xe0 && b <= 0xfc);
+}
+
+/** 末尾で途中になった CP932 の字を落とす。頭から字の区切りを数えて、最後の字が 1 バイト足りなければ落とす。 */
+export function trimPartialSjis(buf: Uint8Array): Uint8Array {
+  let i = 0;
+  while (i < buf.length) i += isSjisLead(buf[i]!) ? 2 : 1;
+  return i > buf.length ? buf.subarray(0, buf.length - 1) : buf;
+}
+
+function decodesStrictly(label: string, buf: Uint8Array): boolean {
+  try { new TextDecoder(label, { fatal: true }).decode(buf); return true; } catch { return false; }
+}
+
+/**
+ * 上限で切った頭の、末尾で途中になった字を落とす。UTF-8 として読めるならその途中の字を、
+ * 読めず CP932 として読めるならその途中の字を落とす。どちらでもなければ UTF-8 の分だけ落とす。
+ */
+export function trimPartialText(buf: Uint8Array): Uint8Array {
+  const utf8 = trimPartialUtf8(buf);
+  if (decodesStrictly('utf-8', utf8)) return utf8;
+  const sjis = trimPartialSjis(buf);
+  try { if (decodesStrictly('shift_jis', sjis)) return sjis; } catch { /* shift_jis を読めない Node */ }
+  return utf8;
+}
+
 export function decodeText(
   data: Buffer,
   /**

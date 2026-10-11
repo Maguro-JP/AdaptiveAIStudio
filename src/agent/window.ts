@@ -317,7 +317,11 @@ export function fitToWindow(
   let cut = 0;
   let work = history;
   let cutPaths: string[] = [];
-  if (near.length < history.length) {
+  // 直近の分が最初の依頼より後ろから始まるときだけ、足切りする。最初の依頼から始まるなら（頭に挨拶や要約が置かれて
+  // いても全部入る形）、最初の依頼を二度並べ、頭の発言を知らせも無く落としていた
+  const start = history.length - near.length;
+  const firstAt = history.findIndex((m) => m.role === 'user');
+  if (near.length < history.length && start > firstAt) {
     const first = firstRequest(history, count, budget);
     work = [...first, ...near];
     cut = history.length - work.length;
@@ -332,7 +336,8 @@ export function fitToWindow(
      * 道を拾うのは、末尾に近い方から少しだけ（ここは「測らない」ための道で、
      * 全部を舐めると速さの意味が無くなる）。
      */
-    const gone = history.slice(first.length, history.length - near.length);
+    // 落とした分は、最初の依頼の後ろから直近の手前まで（頭に依頼以外があれば、それも落とした分に数える）
+    const gone = [...history.slice(0, Math.max(0, firstAt)), ...history.slice(first.length > 0 ? firstAt + 1 : Math.max(0, firstAt), start)];
     cutPaths = pathsIn(gone.slice(-SCAN_FOR_PATHS));
   }
   return fitCore(work, budget, count, cut, cutPaths);
