@@ -57,6 +57,7 @@
 - 公開の準備 9 の走査と、全角の利用者名
 - 116 回目の不具合調査（Windows の危ない命令の言い換え）
 - 117 回目の不具合調査（命令を通した守りの外し方・鍵ファイル）
+- 118 回目の不具合調査（命令を通した書き込みの拾い方）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13538,3 +13539,15 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - `.env` を読むこと（read_file・`cat .env`）は止めない作りのままにする。読んだ中身を外へ出すときは、外へ出す検問が鍵を伏せる。止めるかは方針の判断なので、判断待ちに置かずに今の作りを記録しておく
 試験は `test/guard-bypass-gaps.test.ts`・`test/hand-write-gaps.test.ts`（どちらも規則・判定に直接訊く形。直す前の版で落ちた）。
 触る場所: `src/harness/builtin-rules.ts`（`protectedPaths`・`commandWriteTargets`）、`src/core/harness-setup.ts`（`DEFAULT_PROTECTED`）
+
+## 2026-10-11  118 回目の不具合調査（命令を通した書き込みの拾い方）
+
+前の節で足した、命令から書き込み先を取り出す所（`commandWriteTargets`）を、作っていない担当に見させた（規則に直接訊いて確かめた）。
+- `cp -t .git/hooks x`（書き込み先が最後の語でない）・`cp x .git/`・`cp -r x .git`（フォルダへ写す）が通った。`-t`・`--target-directory=` を見て、フォルダならその中に書くものとして照らす
+- `echo a >| .env` が、`|` で割られて通った。`>|` を `>` と同じに扱う
+- `mv .env y`・`rm .env`（守っているファイルを動かす・消す）が通った。元の側も照らす
+- `echo "a > .env"`（引用符の中の `>`）を書き込みとして止めていた（誤検知）。引用符の中の `>`・`|` を伏せてから見る。`> ".env"` の行き先は残す
+- PowerShell の `Set-Content`・`Add-Content`・`Out-File` の行き先も拾う。直すときに、`dd` の行の `for` の中の `if` に次の `else` が付き、後ろの分岐に届かない誤りを入れたが、試験で見つけて直した
+- 変数（`F=.env; echo a > $F`）・`python -c`・`git apply`・`rsync` の中の書き込みは拾わない（分からない形。承認は今までどおり訊く）
+試験は `test/guard-bypass-gaps.test.ts`（直す前の版で落ちた）。
+触る場所: `src/harness/builtin-rules.ts`（`commandWriteTargets`）

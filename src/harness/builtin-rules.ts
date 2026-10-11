@@ -499,24 +499,46 @@ export function unshell(command: string): string {
 }
 
 /**
- * 命令が書き込む先の道（照らすためだけ。分からない形は拾わない）。リダイレクト（`>`・`>>`・`2>`）の行き先、`tee` の行き先、
- * `cp`・`mv`・`install`・`ln` の最後の引数、`sed -i`・`truncate` の対象、`dd of=` の行き先。
+ * 命令が書き込む先の道（照らすためだけ。分からない形は拾わない）。リダイレクト（`>`・`>>`・`>|`・`2>`）の行き先、`tee` の行き先、
+ * `cp`・`mv`・`install`・`ln` の行き先（`-t` を含む。フォルダならその中）、`mv`・`rm` の元、`sed -i`・`truncate` の対象、`dd of=` の行き先、
+ * PowerShell の `Set-Content`・`Add-Content`・`Out-File` の行き先。変数・`python -c` などの中の書き込みは拾わない。
  */
 export function commandWriteTargets(command: string): string[] {
   const out: string[] = [];
   const unq = (w: string) => w.replace(/^["']|["']$/g, '');
-  for (const part of unshell(command).split(/&&|\|\||;|\n|\|(?!&)/)) {
-    // リダイレクトの行き先（`>x`・`> x`・`2>>x`）。`>&2` のような向け先は道ではない
+  // フォルダへ写す形（`cp x .git/`・`cp -r x .git`）は、その中に書くものとして照らす（`.git/**` はフォルダの名前そのものに当たらない）
+  const into = (t: string) => [t, `${t.replace(/[\\/]+$/, '')}/_`];
+  // 引用符の中の `>`・`|` は区切りでもリダイレクトでもない（`echo "a > .env"` を書き込みとして止めていた）。`>` の直後の引用符（`> ".env"`）は行き先なので残す
+  const masked = unshell(command)
+    .replace(/>\|/g, '>') // `>|`（上書きを強いるリダイレクト）。`|` で割って、行き先を見落としていた
+    .replace(/(>\s*)?(["'])([^"']*)\2/g, (m, gt: string | undefined, q: string, body: string) => (gt ? m : `${q}${body.replace(/[>|&;]/g, ' ')}${q}`));
+  for (const part of masked.split(/&&|\|\||;|\n|\|(?!&)/)) {
+    // リダイレクトの行き先（`>x`・`> x`・`2>>x`・`&>x`）。`>&2` のような向け先は道ではない
     for (const m of part.matchAll(/\d*>>?\s*(?!&)("[^"]+"|'[^']+'|[^\s;|&<>]+)/g)) out.push(unq(m[1]!));
     const words = part.replace(/\d*>>?\s*(?!&)("[^"]+"|'[^']+'|[^\s;|&<>]+)/g, ' ').trim().split(/\s+/).filter(Boolean).map(unq);
     const head = (words[0] ?? '').toLowerCase().replace(/^.*[\\/]/, '');
     const args = words.slice(1);
     const plain = args.filter((w) => !w.startsWith('-'));
+    // `-t X`・`--target-directory=X`（書き込み先が最後の語でない形）
+    const targetDir = args.flatMap((w, i) => (w === '-t' ? [args[i + 1] ?? ''] : w.startsWith('--target-directory=') ? [w.slice(19)] : []));
     if (head === 'tee') out.push(...plain);
-    else if (['cp', 'mv', 'install', 'ln', 'copy', 'move', 'xcopy'].includes(head) && plain.length >= 2) out.push(plain.at(-1)!);
+    else if (['cp', 'install', 'ln', 'copy', 'xcopy'].includes(head)) {
+      if (targetDir.length > 0) for (const t of targetDir) out.push(...into(t));
+      else if (plain.length >= 2) out.push(...into(plain.at(-1)!));
+    } else if (['mv', 'move'].includes(head)) {
+      // 動かすと元は消える。元の側も書き込み先として照らす（`mv .env y` が通っていた）
+      out.push(...plain.filter((p) => !targetDir.includes(p)));
+      for (const t of targetDir.length > 0 ? targetDir : plain.slice(-1)) out.push(...into(t));
+    } else if (['rm', 'unlink', 'del', 'erase', 'remove-item', 'ri'].includes(head)) out.push(...plain);
     else if (head === 'sed' && args.some((w) => /^-i/.test(w) || w === '--in-place')) out.push(...plain.slice(1));
     else if (head === 'truncate') out.push(...plain);
-    else if (head === 'dd') for (const w of args) if (w.startsWith('of=')) out.push(w.slice(3));
+    else if (head === 'dd') {
+      for (const w of args) if (w.startsWith('of=')) out.push(w.slice(3));
+    } else if (['set-content', 'add-content', 'out-file', 'sc', 'ac'].includes(head)) {
+      // PowerShell の書き込み。`-Path X`・`-FilePath X`・`-LiteralPath X`、無ければ最初の語
+      const named = args.flatMap((w, i) => (/^-(path|filepath|literalpath)$/i.test(w) ? [args[i + 1] ?? ''] : []));
+      out.push(...(named.length > 0 ? named : plain.slice(0, 1)));
+    }
   }
   return out.filter((t) => t.length > 0);
 }
