@@ -35,6 +35,7 @@
 - 96 回目の不具合調査（書き込み先の綴りの揺れ・作業場ごとの提案）
 - 97 回目の不具合調査（流した日課の表示・考えごとの止め口）
 - 98 回目の不具合調査（止めたときの順番待ち・CLI の引数）
+- 履歴からアドレスを消す書き換えの用意（公開の準備の 8）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13350,3 +13351,11 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - CLI の `/system` などの引数を空白ごとに分けて繋ぎ直していたので、続いた空白・タブが詰まっていた。最初の空白だけで分ける（`src/cli/slash.ts`）
 試験は `test/abort-queue.test.ts`（直す前の版で落ちた）、`test/cli-slash.test.ts`。
 触る場所: `src/ui/server.ts`（`/api/abort`・横の会話の終わり）、`src/cli/main.ts`、`src/cli/slash.ts`
+
+## 2026-10-11  履歴からアドレスを消す書き換えの用意（公開の準備の 8）
+
+- 書き換えは `git filter-branch` で行う（`git filter-repo` は入っておらず、実行時の依存を足さない）。origin から新しく複製したフォルダの中だけで書き換え、元の複製と origin には触らない
+- 作成者の欄は名前を残し、アドレスだけ GitHub の noreply にする（作成者は残し、アドレスは消す）
+- 押す（全部のブランチとタグの force push）は、取り返しがつかないので人が判断する。手元で通した結果は `docs/PUBLISHING.md` の「8 の手順」
+選ばなかった案: 作業中の複製をその場で書き換える（失敗したときに戻す元が無くなる）
+触る場所: `scripts/scrub-history.mjs`、`docs/PUBLISHING.md`
