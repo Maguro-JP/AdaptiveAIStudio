@@ -7,7 +7,7 @@
  *     出力途中で別モデルに切り替えると、文章が二重・不整合になるため。
  *   - どのモデルが答えたかは必ず呼び出し側へ通知する(暗黙の劣化を防ぐ)。
  */
-import type { FinishReason, ModelId, Priority, ProviderMessage, ToolCall, ToolSchema } from '../providers/contract.ts';
+import type { ChatProvider, FinishReason, ModelId, Priority, ProviderMessage, ToolCall, ToolSchema } from '../providers/contract.ts';
 import { ProviderError } from '../providers/errors.ts';
 import type { ProviderRegistry } from './registry.ts';
 
@@ -59,6 +59,20 @@ export class ChatOrchestrator {
     this.#registry = registry;
   }
 
+  /** 画像を読めない相手へは、画像を外し、渡していないことを依頼の文に添える。画像が無ければそのまま。 */
+  async #forModel(
+    messages: readonly ProviderMessage[], provider: ChatProvider, model: string, signal: AbortSignal,
+  ): Promise<ProviderMessage[]> {
+    if (!messages.some((m) => m.images && m.images.length > 0)) return [...messages];
+    const sees = provider.canSeeImages ? await provider.canSeeImages(model, signal).catch(() => false) : false;
+    if (sees) return [...messages];
+    return messages.map((m) => {
+      if (!m.images || m.images.length === 0) return m;
+      const { images: _images, ...rest } = m;
+      return { ...rest, content: `${m.content}\n\n（添えた画像は、いまのモデルが読めないので渡していません）` };
+    });
+  }
+
   /** そのモデル（`送り口:モデル`）が画像を読めるか。分からなければ false。 */
   async canSeeImages(id: string | undefined, signal?: AbortSignal): Promise<boolean> {
     const r = id ? this.#registry.resolve(id) : undefined;
@@ -105,6 +119,10 @@ export class ChatOrchestrator {
         };
       }
 
+      // 画像を読めない相手には、画像を外して送る。依頼の文が「添えた画像」を指すので、渡していないことも添える
+      //（先頭の候補で読めると決めて載せた画像が、切り替えた先の読めないモデルにもそのまま渡り、断られるか黙って無視されていた）
+      const messages = await this.#forModel(input.messages, provider, model, signal);
+
       let attempt = 0;
       // 同一モデル内のリトライ。retries は kind ごとの規則から決まる。
       for (;;) {
@@ -116,7 +134,7 @@ export class ChatOrchestrator {
         let finishReason: FinishReason | undefined;
         try {
           for await (const chunk of provider.chat(
-            { model, system: input.system, messages: input.messages,
+            { model, system: input.system, messages,
               temperature: input.temperature, maxTokens: input.maxTokens,
               tools: input.tools,
               ...(input.priority !== undefined ? { priority: input.priority } : {}) },

@@ -1546,7 +1546,7 @@ export class UiServer {
         const session = await this.session();
 
         // 送り口と同じ組み立て（添付・開いている所・@ の指名）。返事の前に組む（返した後に投げると、受け手の無い失敗になる）
-        const full = await this.#compose(session, text, attached, editor);
+        const full = await this.#compose(session, text, attached, editor, { imagesWithheld: '段取りでは画像を渡しません' });
         send(res, 202, { accepted: true });
         planStarted = true;
         // 段取りは担当が並列に動くので、画像は渡さない（本文の「添付（画像）」の行と保存先は届く）
@@ -4278,14 +4278,22 @@ export class UiServer {
    * 窓から決める形に直したとき、送り口だけ直して順番待ちの方が
    * 取り残されていた。
    */
-  async #compose(session: Session, text: string, attached: string[], editor?: EditorHere): Promise<Composed> {
+  async #compose(
+    session: Session, text: string, attached: string[], editor?: EditorHere, opts: { imagesWithheld?: string } = {},
+  ): Promise<Composed> {
     const room = mentionBudget(session.contextTokens);
     // 画像を読めるモデルにだけ、画像そのものを渡す（読めないなら、添えたことと保存先だけを文で伝える）
-    const hasImage = attached.some((id) => this.#attachments.get(id)?.kind === 'image');
+    const hasImage = !opts.imagesWithheld && attached.some((id) => this.#attachments.get(id)?.kind === 'image');
     const canSeeImages = hasImage ? await session.canSeeImages() : false;
-    const images = canSeeImages ? await this.#attachments.images(attached).catch(() => []) : [];
+    const got = canSeeImages
+      ? await this.#attachments.images(attached).catch(() => ({ images: [], passed: new Set<string>() }))
+      : { images: [], passed: new Set<string>() };
+    const images = got.images;
     const extra = attached.length > 0
-      ? await this.#attachments.describe(attached, { chars: room, canSeeImages }).catch(() => '')
+      ? await this.#attachments.describe(attached, {
+        chars: room, canSeeImages, passedImages: got.passed,
+        ...(opts.imagesWithheld ? { imagesWithheld: opts.imagesWithheld } : {}),
+      }).catch(() => '')
       : '';
     // 開いている所は、依頼と同じ枠から取る（添付の後、指名の前）。
     const here = describeEditorHere(editor, Math.min(2000, Math.floor(room.total / 4)));

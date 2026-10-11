@@ -52,6 +52,7 @@
 - 111 回目の不具合調査（端末のパネルの提案の作業場・記録を読めないときの発見）
 - 112 回目の不具合調査（画像の添付の案内）
 - 画像を読めるモデルに、添えた画像を渡す
+- 113 回目の不具合調査（画像を渡す仕組みの穴）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13489,3 +13490,13 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 画像の分はコンテキストウィンドウの見積もりに入れていない（確かめていない。一枚あたり千トークン前後と見ている）
 試験は `test/provider-images.test.ts`（送る形。直す前の版で 3 件落ちた）、`test/attach-image-send.test.ts`（画面から送って届くか・記録に残さないか。直しを外すとそれぞれ落ちた）、`test/attachments.test.ts`。
 触る場所: `src/providers/contract.ts`（`images`・`canSeeImages`）、`src/providers/openai-compatible.ts`、`src/providers/anthropic.ts`、`src/core/orchestrator.ts`、`src/core/session.ts`（`send` の `images`・`canSeeImages`）、`src/core/conversations.ts`（`append`）、`src/ui/attachments.ts`（`images`・`describe`）、`src/ui/server.ts`（`#compose`）
+
+## 2026-10-11  113 回目の不具合調査（画像を渡す仕組みの穴）
+
+同じ日に作った画像を渡す仕組みを、作っていない担当に見させて、3 件を直した。
+- 読めるかを先頭の候補だけで決めていたので、先頭が落ちて次の候補へ切り替わると、画像を読めないモデルにも画像がそのまま渡った。切り替えの度にその候補へ読めるかを訊き、読めなければ画像を外し、依頼の文に「渡していません」と添える（`ChatOrchestrator` の `#forModel`）
+- 段取りの道では画像を渡さないのに、本文は「添付（画像）: 名前 — 保存先」と渡した形で書いていた。段取りでは「渡していません（段取りでは画像を渡しません）」と書く
+- 読み出せなかった画像（消えた・実体が上限を超えた）も、本文は渡した形で書いていた。実際に渡せた添付の集まりを受け取り、それに入ったものだけを渡した形で書く。ほかは「読み出せませんでした」と書く
+- Claude は常に読めるとしたままにする（いま提供されているモデルはどれも読める）
+試験は `test/provider-images.test.ts`・`test/attachments.test.ts`（3 件とも直す前の版で落ちた）。
+触る場所: `src/core/orchestrator.ts`（`#forModel`）、`src/ui/attachments.ts`（`images`・`describe`）、`src/ui/server.ts`（`#compose`・段取りの道）

@@ -219,16 +219,18 @@ export class Attachments {
    * モデルへ渡す画像（base64）。渡せる形（png・jpeg・gif・webp）で上限以下のものだけ。読めなかったものは入れない
    * （`describe` の文が「渡していない」と言う形とは別に、読み出しの失敗は文に出ない。渡す前に消えた画像は、渡せないだけ）。
    */
-  async images(ids: string[]): Promise<ProviderImage[]> {
-    const out: ProviderImage[] = [];
+  async images(ids: string[]): Promise<{ images: ProviderImage[]; passed: Set<string> }> {
+    const images: ProviderImage[] = [];
+    // 実際に渡せた添付。`describe` はこれに入ったものだけを「渡した」形で書く（読めなかったのに渡した形で書いていた）
+    const passed = new Set<string>();
     for (const id of ids) {
       const item = this.#items.get(id);
       const mime = item ? passableMime(item) : undefined;
       if (!item || !mime) continue;
       const data = await readFile(item.path).catch(() => undefined);
-      if (data && data.byteLength <= MAX_IMAGE_BYTES) out.push({ mime, data: data.toString('base64') });
+      if (data && data.byteLength <= MAX_IMAGE_BYTES) { images.push({ mime, data: data.toString('base64') }); passed.add(id); }
     }
-    return out;
+    return { images, passed };
   }
 
   /**
@@ -239,7 +241,14 @@ export class Attachments {
    */
   async describe(
     ids: string[],
-    opts: { canSeeImages?: boolean; chars?: { each: number; total: number } } = {},
+    opts: {
+      canSeeImages?: boolean;
+      /** 実際に渡せた画像の添付。渡れば、これに入ったものだけを「渡した」形で書く */
+      passedImages?: ReadonlySet<string>;
+      /** 画像を渡さない理由（段取りの道など）。渡れば、読めるモデルでもこの理由で「渡していません」と書く */
+      imagesWithheld?: string;
+      chars?: { each: number; total: number };
+    } = {},
   ): Promise<string> {
     const each = opts.chars?.each ?? MAX_INLINE_CHARS;
     const total = opts.chars?.total ?? Number.MAX_SAFE_INTEGER;
@@ -277,11 +286,14 @@ export class Attachments {
           : raw;
         parts.push(`--- 添付: ${item.name}${how} ---\n${body}\n--- ここまで ---`);
       } else if (item.kind === 'image') {
-        parts.push(opts.canSeeImages && passableMime(item)
+        const passed = opts.imagesWithheld ? false
+          : opts.passedImages ? opts.passedImages.has(id)
+          : Boolean(opts.canSeeImages && passableMime(item));
+        parts.push(passed
           ? `--- 添付（画像）: ${item.name} — ${item.path} ---`
           : `--- 添付（画像）: ${item.name} ---\n`
             // 読めないモデル・渡せない形（svg・bmp など）・大きすぎる画像は、添えたことと保存先だけを伝える
-            + `画像の中身はモデルに渡していません（${opts.canSeeImages ? '渡せない形か、大きすぎます' : 'いまのモデルは画像を読めません'}）。置き場所: ${item.path}\n`
+            + `画像の中身はモデルに渡していません（${opts.imagesWithheld ?? (!opts.canSeeImages ? 'いまのモデルは画像を読めません' : passableMime(item) ? '読み出せませんでした' : '渡せない形か、大きすぎます')}）。置き場所: ${item.path}\n`
             + '画像の中身が要るなら、文字で説明してください。');
       } else {
         parts.push(

@@ -124,6 +124,20 @@ describe('依頼に添える形', () => {
     assert.doesNotMatch(text, /切り替え/);
   });
 
+  test('読めるモデルでも、読み出せなかった画像は渡したと書かない（DECISIONS 10-11、113 回目）', async () => {
+    const s = await store();
+    const item = await s.add('shot.png', png);
+    const text = await s.describe([item.id], { canSeeImages: true, passedImages: new Set() });
+    assert.match(text, /渡していません（読み出せませんでした）/);
+  });
+
+  test('段取りの道では、読めるモデルでも渡していないと書く（DECISIONS 10-11、113 回目）', async () => {
+    const s = await store();
+    const item = await s.add('shot.png', png);
+    const text = await s.describe([item.id], { canSeeImages: true, passedImages: new Set([item.id]), imagesWithheld: '段取りでは画像を渡しません' });
+    assert.match(text, /渡していません（段取りでは画像を渡しません）/);
+  });
+
   test('画像を読めるモデルなら、場所だけ渡す', async () => {
     const s = await store();
     const item = await s.add('shot.png', png);
