@@ -60,6 +60,7 @@
 - 118 回目の不具合調査（命令を通した書き込みの拾い方）
 - 119 回目の不具合調査（README の手順とコードの食い違い）
 - 120 回目の不具合調査（docs の画面の文言）
+- 121 回目の不具合調査（Windows の道つきで拡張子の無い MCP の命令）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13569,3 +13570,10 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 社用PC向けに外した処理（bootstrap.cmd・node.bin・--node-name・noexe）の説明は、利用者向け文書には残っていない（開発の記録の `docs/DECISIONS.md`・`docs/HANDOFF.md` にだけある）
 - 囲まれていない語のボタン名と、キー操作の表の中身は一つずつは確かめていない
 触る場所: `docs/UI.md`
+
+## 2026-10-11  121 回目の不具合調査（Windows の道つきで拡張子の無い MCP の命令）
+
+- Windows で MCP の命令を道つきで拡張子なしに書く（`C:\Program Files\nodejs\npx`）と、点検（`canRun`・doctor・`/api/mcp`）は PATHEXT を足して `npx.cmd` を見つけて「起動できる」と言うのに、起こすときは綴りのまま spawn して ENOENT で落ちた。点検で見つけた実体を起こす側にも渡す（`.cmd` なら、今ある殻を通す道に乗る）
+- envFrom の名前が無いとき空で渡さないのは意図した動き（doctor と `/api/mcp` に出る）。殻を通した相手の孫が残る件は、前に「残り」として記録してある
+試験は `test/mcp.test.ts`（直す前の版で落ちた）。Windows の実機では確かめていない。
+触る場所: `src/mcp/client.ts`（`spawnPlan`・`start`）

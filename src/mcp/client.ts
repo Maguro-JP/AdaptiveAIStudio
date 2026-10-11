@@ -16,7 +16,7 @@
  *   ・立ち上がらない相手がいても、他は動く。全部を道連れにしない
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { canRun } from '../core/which.ts';
+import { findOnPath } from '../core/which.ts';
 import { StringDecoder } from 'node:string_decoder';
 import { envForChild } from '../core/env.ts';
 
@@ -110,7 +110,10 @@ export function flatten(result: unknown): { text: string; isError: boolean } {
  * ENOENT で立ち上がらない。拡張子の無い名前は cmd.exe 越しに起こす。
  * 設定に `npx.cmd` と書かせない（他の機械で動かなくなる）。
  */
-export function spawnPlan(command: string, platform: NodeJS.Platform): { command: string; shell: boolean } {
+export function spawnPlan(command: string, platform: NodeJS.Platform, found?: string): { command: string; shell: boolean } {
+  // 道つきで拡張子の無い名前（`C:\Program Files\nodejs\npx`）は、見つけた実体（`npx.cmd`）で起こす。点検は PATHEXT を足して見つけて
+  // 「起動できる」と言うのに、起こすときは綴りのまま spawn して ENOENT で落ちていた
+  if (platform === 'win32' && found && /[\\/]/.test(command) && !/\.[a-z0-9]+$/i.test(command)) command = found;
   if (platform === 'win32' && !/\.[a-z0-9]+$/i.test(command) && !/[\\/]/.test(command)) {
     return { command, shell: true };
   }
@@ -248,7 +251,9 @@ export class McpClient {
     // 立ち上げる前に、その命令が在るかを見る。
     // 殻（shell: true）に渡すと、無い命令でも spawn は成功し、
     // 「終了しました（コード 1）」だけが残る。**何が無いのかを言う。**
-    if (!canRun(this.#spec.command)) {
+    const where = { platform: process.platform, path: process.env.PATH, pathext: process.env.PATHEXT };
+    const found = findOnPath(this.#spec.command, where);
+    if (found === undefined) {
       this.#failure = `その命令がありません: ${this.#spec.command}`
         + (this.#spec.command === 'npx' || this.#spec.command === 'npm'
           ? '（bundle には node だけが入っています）' : '');
@@ -256,7 +261,7 @@ export class McpClient {
     }
 
     try {
-      const plan = spawnPlan(this.#spec.command, process.platform);
+      const plan = spawnPlan(this.#spec.command, where.platform, found);
       const args = this.#spec.args ?? [];
       this.#child = spawn(plan.command, plan.shell ? args.map((a) => quoteForCmd(a)) : args, {
         stdio: ['pipe', 'pipe', 'pipe'],
