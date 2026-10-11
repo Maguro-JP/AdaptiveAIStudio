@@ -33,7 +33,7 @@ import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { formatPlan } from '../agent/pm.ts';
 import { checkUpdate, applyUpdate, describeUpdate } from '../core/update.ts';
 import { formatReport as formatAcceptance } from '../agent/acceptance.ts';
-import { formatEntry } from '../memory/memory.ts';
+import { formatEntry, placeKey } from '../memory/memory.ts';
 import { Session, quietCandidates } from '../core/session.ts';
 import { buildInspector } from '../core/inspector-setup.ts';
 import { expandCommand } from '../agent/commands.ts';
@@ -260,6 +260,8 @@ async function main(): Promise<void> {
           title: f.title, rationale: `[${f.roleName}] ${f.rationale}`,
           evidence: [target], suggestedAction: f.action,
           fingerprint: `panel:${f.title}`,
+          // どの作業場の提案かを付ける（付けずにいたので、どの作業場の一覧にも出て、別の作業場で採用・実行されえた）
+          root: placeKey((await getSession()).root),
         });
         console.log(c.cyan(`  💡 [${f.roleName}] ${f.title}`) + also);
         console.log(c.dim(`     ${f.rationale}`));

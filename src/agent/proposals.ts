@@ -215,8 +215,9 @@ export class ProposalQueue {
         for (const d of onDisk.items) this.#issued = Math.max(this.#issued, idNumber(d.id));
         if (onDisk.items.some((x) => x.status !== 'rejected' && sameRoot(x.root, p.root)
           && (x.fingerprint === p.fingerprint || normalizeTitle(x.title) === contentKey))) return undefined;
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return undefined;
+      } catch {
+        // 無い・読めない（権限・掴まれている）ときは、手元の分で重なりを見て足す。読めないときに捨てていたので、考えごとの発見が黙って
+        // 消え、その手がかりは調べ済みのまま調べ直されなかった。残せなかったことは保存（`save`）が言う
       }
     }
 
