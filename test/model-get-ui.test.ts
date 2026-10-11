@@ -306,3 +306,58 @@ describe('取っている間に、二つ目を始めない', () => {
     }
   });
 });
+
+describe('■ で取得を止める（DECISIONS 10-11、123 回目の残り）', () => {
+  test('取得の途中で ■ を押すと止まり、止めたと言う', async () => {
+    const { UiServer } = await import('../src/ui/server.ts');
+    const { DEFAULT_CONFIG } = await import('../src/config.ts');
+    // ゆっくり返す配布元（大きさを申告して、少しずつ出し続ける）
+    const timers: NodeJS.Timeout[] = [];
+    const srv = createServer((req, res) => {
+      if (req.url?.startsWith('/api/models/')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ siblings: [{ rfilename: 'slow-Q4_K_M.gguf' }] }));
+      }
+      res.writeHead(200, { 'content-length': String(100 * 1024 * 1024) });
+      res.write(ggufBody(1024));
+      const t = setInterval(() => res.write(Buffer.alloc(1024)), 50);
+      timers.push(t);
+      res.on('close', () => clearInterval(t));
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const { port } = srv.address() as AddressInfo;
+    const home = await tempDir('aas-getui-stop-');
+    const prev = { home: process.env.AAS_HOME, state: process.env.AAS_STATE_DIR, cfg: process.env.AAS_CONFIG };
+    process.env.AAS_HOME = home;
+    process.env.AAS_STATE_DIR = join(home, 'state');
+    process.env.AAS_CONFIG = join(home, 'aas.config.json');
+    const server = new UiServer({
+      port: 0,
+      modelFetch: ((u: string | URL, init?: RequestInit) => fetch(String(u).replace('https://huggingface.co', `http://127.0.0.1:${port}`), init)) as typeof fetch,
+      config: { ...DEFAULT_CONFIG, runtime: { kind: 'inproc', modelsDir: join(home, 'models') }, agent: { root: home, approval: 'auto' }, initiative: { enabled: false } } as never,
+    });
+    const base = (await server.start()).replace(/\/$/, '');
+    try {
+      const r = await fetch(`${base}/api/models/get`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: 'だれかの/おそい-GGUF' }) });
+      assert.equal(r.status, 202);
+      const state = async () => (await (await fetch(`${base}/api/jobs`)).text());
+      const until = Date.now() + 15_000;
+      while (Date.now() < until && !/running/.test(await state())) await new Promise((x) => setTimeout(x, 100));
+      await fetch(`${base}/api/abort`, { method: 'POST' });
+      let after = '';
+      while (Date.now() < until) {
+        after = await state();
+        if (/取得を止めました/.test(after)) break;
+        await new Promise((x) => setTimeout(x, 100));
+      }
+      assert.match(after, /取得を止めました/, `■ で止まっていない: ${after.slice(0, 300)}`);
+    } finally {
+      await server.stop().catch(() => undefined);
+      for (const t of timers) clearInterval(t);
+      srv.closeAllConnections(); await new Promise<void>((r) => srv.close(() => r()));
+      if (prev.home === undefined) delete process.env.AAS_HOME; else process.env.AAS_HOME = prev.home;
+      if (prev.state === undefined) delete process.env.AAS_STATE_DIR; else process.env.AAS_STATE_DIR = prev.state;
+      if (prev.cfg === undefined) delete process.env.AAS_CONFIG; else process.env.AAS_CONFIG = prev.cfg;
+    }
+  });
+});

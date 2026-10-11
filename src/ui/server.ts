@@ -1791,6 +1791,8 @@ export class UiServer {
       for (const { finish } of this.#pending.values()) finish(false);
       this.#pending.clear();
       for (const ac of this.#background) ac.abort();
+      // モデルの取得も止める（取りかけた分は残るので、もう一度押せば続きから取る）
+      this.#fetchAbort?.abort();
       // 順番待ちも取り消す。残すと、止めた依頼の終わりで次が「続けます」で走り出す（■ が効かないと見える）
       const dropped = this.#queue.splice(0).length;
       if (dropped > 0) {
@@ -4402,6 +4404,8 @@ export class UiServer {
    * 見えない。**押しても永久に何も起きないように見える。**
    */
   #fetching: { id: string; state: 'running' | 'done' | 'failed'; message: string; began: number; progress?: FetchStatus } | undefined;
+  /** 取得を止める口。■（`/api/abort`）で止める（渡していなかったので、■ を押しても取り続け、その間は別の取得を断っていた） */
+  #fetchAbort: AbortController | undefined;
 
   /**
    * 困ったときの報告。**押した所に結果を出すために持つ。**
@@ -4488,6 +4492,8 @@ export class UiServer {
     this.#fetching = { id, state: 'running', message: '始めます…', began };
     this.broadcast({ type: 'stateChanged' });
     this.#jobsChanged();
+    const stop = new AbortController();
+    this.#fetchAbort = stop;
 
     // 落とす先。失敗の案内でも同じ場所を言う（既定の場所を言うと、設定で別の場所を選んだ人がそこへ置いて、一覧に出ない）
     let dir: string | undefined;
@@ -4507,6 +4513,7 @@ export class UiServer {
           modelsDir: dir,
           onProgress: log,
           onStatus: status,
+          signal: stop.signal,
           ...(this.#opts.modelFetch ? { fetchImpl: this.#opts.modelFetch } : {}),
         });
       } else {
@@ -4516,6 +4523,7 @@ export class UiServer {
           )?.baseUrl ?? 'http://localhost:11434/v1',
           ref: entry?.ollama ?? id,
           onProgress: log,
+          signal: stop.signal,
         });
       }
       this.#fetching = { id, state: 'done', message: `用意できました: ${id}`, began };
@@ -4525,6 +4533,16 @@ export class UiServer {
       const live = this.#session;
       if (live && live.candidates.length === 0 && !this.#busyNow(live)) await this.#retireSession(live).catch(() => undefined);
     } catch (e) {
+      if (stop.signal.aborted) {
+        // 止めた。取りかけた分は残す（もう一度押すと続きから取る）
+        const text = `取得を止めました: ${id}（取りかけた分は残っているので、もう一度押すと続きから取ります）`;
+        this.#fetching = { id, state: 'failed', message: text, began };
+        this.broadcast({ type: 'log', level: 'warn', text });
+        this.broadcast({ type: 'stateChanged' });
+        this.#jobsChanged();
+        if (this.#fetchAbort === stop) this.#fetchAbort = undefined;
+        return;
+      }
       /*
        * **行き止まりにしない。**
        *
@@ -4544,6 +4562,7 @@ export class UiServer {
       this.#fetching = { id, state: 'failed', message: text, began };
       this.broadcast({ type: 'log', level: 'error', text });
     }
+    if (this.#fetchAbort === stop) this.#fetchAbort = undefined;
     this.broadcast({ type: 'stateChanged' });
     this.#jobsChanged();
   }
