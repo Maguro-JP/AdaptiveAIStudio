@@ -336,6 +336,18 @@ describe('後ろから読む', () => {
     }
   });
 
+  test('最後の一行が上限より長くても、空にしない（DECISIONS 10-11、102 回目）', async () => {
+    const { c } = await store();
+    const { id } = await c.create();
+    await c.append(id, [
+      { role: 'user', content: 'ひとつめ' },
+      { role: 'assistant', content: 'x'.repeat(300 * 1024) },
+    ]);
+    const tail = await c.load(id, { tailBytes: 64 * 1024 });
+    assert.ok(tail.length > 0, '最後の長い一行が切れ端になり、会話が空として読まれた');
+    assert.equal(tail.at(-1)?.content.length, 300 * 1024);
+  });
+
   test('小さい会話は、そのまま全部返る', async () => {
     const { c } = await store();
     const { id } = await c.create();
