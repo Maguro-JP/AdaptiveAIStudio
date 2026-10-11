@@ -56,6 +56,7 @@
 - 114 回目の不具合調査（命令の実行中の Ctrl-C）
 - 公開の準備 9 の走査と、全角の利用者名
 - 116 回目の不具合調査（Windows の危ない命令の言い換え）
+- 117 回目の不具合調査（命令を通した守りの外し方・鍵ファイル）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13529,3 +13530,11 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - run_command は先頭の語の許可の一覧で先に止まるので、効くのは外のツール（MCP の command など）を通る道と、利用者が許可の一覧に語を足した場合
 試験は `test/harness.test.ts`（規則に直接訊く形。直す前の版で落ちた。最初は走らせる道で書いたが、手前の別の所で止まって直す前の版でも通ったので書き直した）。
 触る場所: `src/harness/builtin-rules.ts`（`dangerousCommands` の Windows の行）
+
+## 2026-10-11  117 回目の不具合調査（命令を通した守りの外し方・鍵ファイル）
+
+- 守るファイルの規則は、書くツール（write_file・edit_file・外のツール）の呼び出ししか見ていなかった。`echo x > .env`・`sed -i … .env`・`cp x .git/hooks/pre-commit` のように命令を通せば、守っているファイルを書き換えられた（hooks に置いたものは次に git を動かした所で走る）。run_command では命令から書き込み先（リダイレクト・`tee`・`cp`/`mv` の最後の引数・`sed -i`・`truncate`・`dd of=`）を取り出して照らす。分からない形は拾わない（承認は今までどおり訊く）
+- 既定の守りの鍵ファイルが `id_rsa` と `*.pem` だけだった。`id_ed25519`・`id_ecdsa`・`id_dsa`・`*.key`・`*.p12`・`*.pfx`・`.netrc` を足した。公開鍵（`*.pub`）と `.npmrc`（レジストリの設定など、普通の作業で書き換える）は入れない
+- `.env` を読むこと（read_file・`cat .env`）は止めない作りのままにする。読んだ中身を外へ出すときは、外へ出す検問が鍵を伏せる。止めるかは方針の判断なので、判断待ちに置かずに今の作りを記録しておく
+試験は `test/guard-bypass-gaps.test.ts`・`test/hand-write-gaps.test.ts`（どちらも規則・判定に直接訊く形。直す前の版で落ちた）。
+触る場所: `src/harness/builtin-rules.ts`（`protectedPaths`・`commandWriteTargets`）、`src/core/harness-setup.ts`（`DEFAULT_PROTECTED`）

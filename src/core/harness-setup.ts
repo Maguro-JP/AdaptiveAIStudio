@@ -26,7 +26,10 @@ const DEFAULT_PROTECTED = [
   // `.git` も、どの階層でも、ファイルとしても守る。直下の `.git/**` だけだったので、作業場の下に置いた別の clone の `.git/config`・hooks や、
   // worktree・submodule の `.git`（`gitdir:` と書かれたファイル）を承認なしで書き換えられた（hook と core.fsmonitor は git を動かした所で命令を走らせる）
   '**/.git', '**/.git/**',
-  '**/id_rsa', '**/*.pem', '**/credentials*',
+  // 鍵ファイル。`id_rsa` と `*.pem` だけだったので、`id_ed25519`・`server.key` を書き換えられた。公開鍵（`*.pub`）は守らない。
+  // `.npmrc` は入れない（レジストリの設定など、普通の作業で書き換える）。`.netrc` はパスワードしか書かないので入れる
+  '**/id_rsa', '**/id_ed25519', '**/id_ecdsa', '**/id_dsa', '**/*.pem', '**/*.key', '**/*.p12', '**/*.pfx',
+  '**/.netrc', '**/credentials*',
 ];
 
 /**

@@ -73,6 +73,16 @@ export function protectedPaths(given: string[], opts: { nocase?: boolean; window
     async pre(call, ctx) {
       // 外から来たツールも見る。何をするか分からないものを「書かない側」に
       // 置くと、ここが丸ごと素通りする（`mayWriteFiles`）。
+      // 命令を通した書き込み（`echo x > .env`・`cp x .git/hooks/pre-commit`・`sed -i … .env`）も、書き込み先を取り出して照らす。
+      // 書くツールの名前しか見ていなかったので、命令を通せば守っているファイルを書き換えられた（hooks に置いたものは次の git で走る）
+      if (call.name === 'run_command') {
+        const command = argString(call, 'command') ?? '';
+        for (const target of commandWriteTargets(command)) {
+          const hit = await matchProtected(ctx.root, target, patterns, opts);
+          if (hit) return deny(`${normalize(ctx.root, target)} は保護されています（${hit}）。命令を通しても書き換えられません。`);
+        }
+        return allow;
+      }
       if (!mayWriteFiles(call.name)) return allow;
 
       /*
@@ -486,6 +496,29 @@ export function unshell(command: string): string {
     .replace(/\\(?=[A-Za-z])/g, '')
     .replace(/''|""/g, '')
     .replace(/(?<=[\w-])(['"])([^'"\s]*)\1/g, '$2');
+}
+
+/**
+ * 命令が書き込む先の道（照らすためだけ。分からない形は拾わない）。リダイレクト（`>`・`>>`・`2>`）の行き先、`tee` の行き先、
+ * `cp`・`mv`・`install`・`ln` の最後の引数、`sed -i`・`truncate` の対象、`dd of=` の行き先。
+ */
+export function commandWriteTargets(command: string): string[] {
+  const out: string[] = [];
+  const unq = (w: string) => w.replace(/^["']|["']$/g, '');
+  for (const part of unshell(command).split(/&&|\|\||;|\n|\|(?!&)/)) {
+    // リダイレクトの行き先（`>x`・`> x`・`2>>x`）。`>&2` のような向け先は道ではない
+    for (const m of part.matchAll(/\d*>>?\s*(?!&)("[^"]+"|'[^']+'|[^\s;|&<>]+)/g)) out.push(unq(m[1]!));
+    const words = part.replace(/\d*>>?\s*(?!&)("[^"]+"|'[^']+'|[^\s;|&<>]+)/g, ' ').trim().split(/\s+/).filter(Boolean).map(unq);
+    const head = (words[0] ?? '').toLowerCase().replace(/^.*[\\/]/, '');
+    const args = words.slice(1);
+    const plain = args.filter((w) => !w.startsWith('-'));
+    if (head === 'tee') out.push(...plain);
+    else if (['cp', 'mv', 'install', 'ln', 'copy', 'move', 'xcopy'].includes(head) && plain.length >= 2) out.push(plain.at(-1)!);
+    else if (head === 'sed' && args.some((w) => /^-i/.test(w) || w === '--in-place')) out.push(...plain.slice(1));
+    else if (head === 'truncate') out.push(...plain);
+    else if (head === 'dd') for (const w of args) if (w.startsWith('of=')) out.push(w.slice(3));
+  }
+  return out.filter((t) => t.length > 0);
 }
 
 /** git を動かした所で命令を走らせる設定の鍵。 */
