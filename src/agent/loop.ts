@@ -127,6 +127,7 @@ export class Agent {
     const measure = this.#opts.count ?? estimateTokens;
     const budget = historyBudget(
       this.#opts.contextTokens ?? 8192, measure(this.#opts.system) + measure(JSON.stringify(tools)),
+      undefined, this.#opts.maxTokens,
     );
     const ctx: ToolContext = {
       root: this.#opts.root,

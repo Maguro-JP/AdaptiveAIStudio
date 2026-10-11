@@ -18,7 +18,7 @@ import { tempDir } from './tmp.ts';
 import { OpenAiCompatibleProvider } from '../src/providers/openai-compatible.ts';
 import type { ProviderMessage } from '../src/providers/contract.ts';
 import { ProviderError } from '../src/providers/errors.ts';
-import { fitToWindow, estimateTokens, sizeOf } from '../src/agent/window.ts';
+import { fitToWindow, estimateTokens, sizeOf, historyBudget, OUTPUT_SHARE } from '../src/agent/window.ts';
 
 const servers: Server[] = [];
 after(() => { for (const s of servers) { s.closeAllConnections(); s.close(); } });
@@ -350,4 +350,13 @@ describe('レビューで挙がった筋書き', () => {
     }
     assert.deepEqual(calls, [{ path: 'a' }]);
   });
+});
+
+test('出力の上限が渡れば、履歴と手元で許す出力の長さの合計がコンテキストウィンドウに収まる（DECISIONS 10-11、110 回目）', () => {
+  for (const [ctx, max] of [[8192, 4096], [4096, 4096], [32768, 4096], [8192, 512]] as const) {
+    const fixed = 600;
+    const history = historyBudget(ctx, fixed, undefined, max);
+    const output = Math.min(max, Math.max(256, Math.floor(ctx * OUTPUT_SHARE)));
+    assert.ok(history + fixed + output <= ctx, `${ctx}・上限 ${max}: 履歴 ${history} + 固定 ${fixed} + 出力 ${output} が超える`);
+  }
 });
