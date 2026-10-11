@@ -9,7 +9,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { homedir } from 'node:os';
-import { writeFile, stat, readdir } from 'node:fs/promises';
+import { writeFile, stat, readdir, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tempDir } from './tmp.ts';
 import { pickModelFile, installModel, findModel, defaultModelsDir, quantFrom } from '../src/runtime/model-install.ts';
@@ -128,6 +128,17 @@ describe('モデルの取得', () => {
       installModel({ entry: ENTRY, modelsDir, fetchImpl: fakeFetch({ body: html }).impl }),
       /GGUF として読めませんでした/);
     assert.deepEqual(await readdir(modelsDir), [], '読めないものを置いている');
+  });
+
+  test('保存先が満杯で書けないときは、途中で切れたとは言わず、空きが足りないと言う（DECISIONS 10-11、105 回目）', {
+    skip: process.platform !== 'linux' && '書くと必ず満杯になる /dev/full は Linux にしか無い',
+  }, async () => {
+    const modelsDir = await tempDir('aas-models-');
+    // 取得中の .part を、書くと必ず満杯（ENOSPC）になる所へ向ける
+    await symlink('/dev/full', join(modelsDir, 'test-q4_k_m.gguf.part'));
+    await assert.rejects(
+      installModel({ entry: ENTRY, modelsDir, fetchImpl: fakeFetch({ body: tinyGguf() }).impl }),
+      (e: Error) => /空きが足りません/.test(e.message) && !/途中で切れました/.test(e.message));
   });
 
   test('途中で切れたら、そう言って残す（続きから取るため）', async () => {
