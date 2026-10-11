@@ -31,7 +31,8 @@ const DUMMY_DOMAIN = /(^|\.)(example\.(com|net|org)|example|invalid|test|localho
 
 export function emailsIn(text: string): string[] {
   const found: string[] = [];
-  for (const m of text.matchAll(/[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})/g)) {
+  // 全角で書いたものも半角に揃えてから探す（全角の利用者名・アドレスを見落としていた）
+  for (const m of text.normalize('NFKC').matchAll(/[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})/g)) {
     if (!DUMMY_DOMAIN.test(m[1] ?? '')) found.push(m[0]);
   }
   return found;
@@ -46,6 +47,7 @@ export function otherReposIn(text: string): string[] {
 test('判定そのもの: ダミーは通し、本物らしいアドレスと別のリポジトリは拾う', () => {
   assert.deepEqual(emailsIn('user@example.com と t@x.invalid と noreply@anthropic.com'), []);
   assert.deepEqual(emailsIn('連絡は someone@mail.co.jp まで'), ['someone@mail.co.jp']);
+  assert.deepEqual(emailsIn('全角で ｓｏｍｅｏｎｅ＠ｍａｉｌ．ｃｏ．ｊｐ'), ['someone@mail.co.jp']);
   assert.deepEqual(otherReposIn('github.com/Maguro-JP/AdaptiveAIStudio'), []);
   assert.deepEqual(otherReposIn('Maguro-JP/Other.git を見る'), ['Other']);
 });
