@@ -11,6 +11,7 @@ import { Agent, type AgentEvent } from './loop.ts';
 import { race, type Attempt, type RaceEvent } from './race.ts';
 import type { Tool, ApprovalRequest, ApprovalAnswer, RequestScope } from './tools/types.ts';
 import { mayChangeFiles } from './tools/write-kind.ts';
+import { normalizeWrite } from './pm.ts';
 
 export interface WorkItem {
   id: string;
@@ -182,7 +183,10 @@ export class Team {
       deps: item.deps,
       // 書けるのに書き込み先を挙げなかった担当は、誰とも同時に書かせない（`ANY_PATH`）。段取りの入口だけで補っていたので、
       // 端末の `aas team` では二人が同時に同じファイルを全文で書き、後の方が前の仕事を消していた。入口によらずここで補う
-      writes: (item.writes ?? []).length === 0 && this.#mayChange(item) ? [ANY_PATH] : item.writes,
+      // 綴りも揃える（段取りの入口だけで揃えていたので、`aas team` の指示書の `./a.ts` と `a.ts` が別の錠になり、同時に走った）
+      writes: (item.writes ?? []).length === 0 && this.#mayChange(item)
+        ? [ANY_PATH]
+        : item.writes?.map((w) => normalizeWrite(w, this.#opts.root)),
       run: async (ctx): Promise<WorkResult> => {
         // 前の担当が何を見つけたかを引き継ぐ。
         // 依存を順番の制約としてしか使わないと、後の担当は
