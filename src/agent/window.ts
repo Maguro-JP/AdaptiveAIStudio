@@ -416,10 +416,26 @@ function fitCore(
       if (total(units) <= budget) break;
       const u = units[i]!;
       u.messages = u.messages.map((m) => {
+        // アシスタントの長い本文と、呼び出しの引数の長い文字列（`write_file` の全文など）も縮める。縮めずにいたので、
+        // 狭いコンテキストウィンドウでは予算を超えたまま送っていた。呼び出しの id と名前は残す（結果との対を崩さない）
+        if (m.role === 'assistant') {
+          const calls = m.toolCalls?.map((c) => {
+            const args = shrinkArgs(c.args);
+            return args === c.args ? c : { ...c, args };
+          });
+          const changedCalls = calls?.some((c, k) => c !== m.toolCalls![k]) ?? false;
+          const longBody = m.content.length > KEEP_LAST_RESORT;
+          if (!changedCalls && !longBody) return m;
+          shrunk = true;
+          return {
+            ...m,
+            ...(longBody ? { content: shrinkText(m.content) } : {}),
+            ...(changedCalls ? { toolCalls: calls } : {}),
+          };
+        }
         if (m.role !== 'tool' || m.content.length <= KEEP_LAST_RESORT) return m;
         shrunk = true;
-        const cut = m.content.length - KEEP_LAST_RESORT;
-        return { ...m, content: `${headOf(m.content, KEEP_LAST_RESORT)}\n…（この先 ${cut} 字は、文脈に収まらないので省いています）` };
+        return { ...m, content: shrinkText(m.content) };
       });
       u.chars = sizeOf(u.messages, count);
     }
@@ -548,4 +564,22 @@ function toUnits(history: readonly ProviderMessage[], count: Count = estimateTok
   }
   flush();
   return units;
+}
+
+/** 頭だけ残して、省いたと書く（最後の手段で縮めるときの形）。 */
+function shrinkText(text: string): string {
+  const cut = text.length - KEEP_LAST_RESORT;
+  return `${headOf(text, KEEP_LAST_RESORT)}\n…（この先 ${cut} 字は、文脈に収まらないので省いています）`;
+}
+
+/** 呼び出しの引数のうち、長い文字列の値だけを縮める。変えるものが無ければ、渡されたものをそのまま返す。 */
+function shrinkArgs(args: unknown): unknown {
+  if (typeof args === 'string') return args.length > KEEP_LAST_RESORT ? shrinkText(args) : args;
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
+  let changed = false;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
+    if (typeof v === 'string' && v.length > KEEP_LAST_RESORT) { out[k] = shrinkText(v); changed = true; } else out[k] = v;
+  }
+  return changed ? out : args;
 }

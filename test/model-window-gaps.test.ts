@@ -360,3 +360,21 @@ test('出力の上限が渡れば、履歴と手元で許す出力の長さの�
     assert.ok(history + fixed + output <= ctx, `${ctx}・上限 ${max}: 履歴 ${history} + 固定 ${fixed} + 出力 ${output} が超える`);
   }
 });
+
+test('直近の往復にある長いツールの呼び出しの引数も縮め、予算に収める。呼び出しと結果の対は崩さない（DECISIONS 10-11、110 回目の残り）', () => {
+  const big = 'あ'.repeat(20000);
+  const h: ProviderMessage[] = [
+    { role: 'user', content: 'a.txt を書いて' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'write_file', args: { path: 'a.txt', content: big } }] },
+    { role: 'tool', content: '書きました', toolCallId: 'c1' },
+    { role: 'assistant', content: '書きました。' },
+  ];
+  const budget = 2000;
+  const got = fitToWindow(h, budget);
+  assert.ok(sizeOf(got.messages) <= budget, `予算を超えたまま返した: ${sizeOf(got.messages)} > ${budget}`);
+  const call = got.messages.find((m) => m.role === 'assistant' && m.toolCalls?.length)?.toolCalls?.[0];
+  assert.equal(call?.id, 'c1');
+  assert.equal(call?.name, 'write_file');
+  assert.equal((call?.args as { path: string }).path, 'a.txt', '短い引数まで縮めた');
+  assert.ok(got.messages.some((m) => m.role === 'tool' && m.toolCallId === 'c1'), '呼び出しと結果の対が崩れた');
+});
