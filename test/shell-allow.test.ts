@@ -29,7 +29,7 @@ describe('繋いだ命令は、一つずつ見る', () => {
   }
 
   test('中で命令を組み立てる形は止める', async () => {
-    for (const command of ['echo $(whoami)', 'echo `whoami`']) {
+    for (const command of ['echo $(whoami)', 'echo `whoami`', 'echo <(whoami)', 'echo a > >(whoami)']) {
       const r = await tool.run({ command }, ctx);
       assert.equal(r.isError, true);
       assert.match(r.content, /組み立てる形/);
