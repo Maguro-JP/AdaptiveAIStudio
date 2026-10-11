@@ -219,3 +219,19 @@ describe('大文字小文字を区別するかは、作業場ごとに確かめ�
     assert.equal(await readFile(join(root, 'x.h'), 'utf8'), '小\n', '片方の中身でもう片方を書き戻した');
   });
 });
+
+describe('作業場の外を指す道（DECISIONS 10-11、103 回目）', () => {
+  test('戻せない道として失敗に数え、戻り先を消さない', async () => {
+    const { root, dir, store } = await setup();
+    await writeFile(join(root, 'a.txt'), '元\n');
+    const id = await turn(store, root, 'a.txt', 'AI\n');
+    const file = join(dir, `${id}.json`);
+    const stored = JSON.parse(await readFile(file, 'utf8'));
+    for (const f of stored.files) f.path = '../outside.txt';
+    if (stored.after) stored.after = {};
+    await writeFile(file, JSON.stringify(stored));
+    const done = await store.restore(id);
+    assert.ok(done?.failed?.includes('../outside.txt'), `失敗に数えていない: ${JSON.stringify(done)}`);
+    assert.ok(await stat(file).then(() => true, () => false), '戻せなかったのに戻り先を消した');
+  });
+});
