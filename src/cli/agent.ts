@@ -91,7 +91,10 @@ async function main(): Promise<void> {
   // 止めるときは、待っている承認の問いも解く（解かないと、止めたのに Enter を押すまで進まない）。
   // 考えごとの最中の Ctrl-C は考えごとだけを止める（前は対話を閉じ、考えごとは最後まで走ってから終わった）
   rl.onSigint(() => {
-    if (generating) { generating.abort(); rl.cancelWaiting(); } else if (thinking) thinking(); else rl.close();
+    if (generating) { generating.abort(); rl.cancelWaiting(); } else if (thinking) thinking();
+    // 入力を待っているときだけ閉じる。/ の命令を走らせている間に閉じると、命令は止まらずに最後まで走り、終わった所で対話ごと終わっていた
+    else if (rl.waiting) rl.close();
+    else console.log(c.dim('（いまの命令は途中で止められません。終わるまで待つか、2 秒以内にもう一度押すと終わります）'));
   });
 
   const approve = async (req: ApprovalRequest): Promise<boolean> => {

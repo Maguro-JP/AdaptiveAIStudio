@@ -169,3 +169,28 @@ describe('承認の問いは、先に打ってある依頼を食べない', () =
     assert.equal(await src.question('> '), '残る依頼');
   });
 });
+
+describe('入力を待っているか（DECISIONS 10-11、114 回目）', () => {
+  test('question で待っている間だけ waiting が立ち、行が届くと倒れる', async () => {
+    const input = new PassThrough();
+    const { w } = sink();
+    const src = new LineSource(input, w);
+    assert.equal(src.waiting, false, '待つ前から立っている（命令の実行中の Ctrl-C で対話を閉じてしまう）');
+    const asked = src.question('> ');
+    assert.equal(src.waiting, true, '待っているのに立っていない（入力待ちの Ctrl-C で終われない）');
+    input.write('hello\n');
+    assert.equal(await asked, 'hello');
+    assert.equal(src.waiting, false);
+    src.close();
+  });
+});
+
+test('端末の Ctrl-C は、入力を待っているときだけ対話を閉じる（書き方で止める）', async () => {
+  const { readFile } = await import('node:fs/promises');
+  for (const f of ['src/cli/agent.ts', 'src/cli/main.ts']) {
+    const text = (await readFile(new URL(`../${f}`, import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+    const at = text.indexOf('rl.onSigint(');
+    const body = text.slice(at, text.indexOf('});', at));
+    assert.match(body, /rl\.waiting\) rl\.close\(\)/, `${f}: 入力を待っているかを見ずに閉じている`);
+  }
+});

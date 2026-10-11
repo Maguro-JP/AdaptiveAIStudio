@@ -83,7 +83,9 @@ async function main(): Promise<void> {
       generating.abort();
       return;
     }
-    rl.close();
+    // 入力を待っているときだけ閉じる（/health・/models の間に閉じると、命令は最後まで走り、終わった所で対話ごと終わっていた）
+    if (rl.waiting) rl.close();
+    else console.log(c.dim('（いまの命令は途中で止められません。終わるまで待つか、2 秒以内にもう一度押すと終わります）'));
   });
 
   try {

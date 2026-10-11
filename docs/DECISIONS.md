@@ -53,6 +53,7 @@
 - 112 回目の不具合調査（画像の添付の案内）
 - 画像を読めるモデルに、添えた画像を渡す
 - 113 回目の不具合調査（画像を渡す仕組みの穴）
+- 114 回目の不具合調査（命令の実行中の Ctrl-C）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13500,3 +13501,10 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - Claude は常に読めるとしたままにする（いま提供されているモデルはどれも読める）
 試験は `test/provider-images.test.ts`・`test/attachments.test.ts`（3 件とも直す前の版で落ちた）。
 触る場所: `src/core/orchestrator.ts`（`#forModel`）、`src/ui/attachments.ts`（`images`・`describe`）、`src/ui/server.ts`（`#compose`・段取りの道）
+
+## 2026-10-11  114 回目の不具合調査（命令の実行中の Ctrl-C）
+
+- 端末で `/models`・`/health`・`/update!` のような時間のかかる命令を待っている間に Ctrl-C を押すと、読み手を閉じていた。命令は止まらずに最後まで走り、終わった所で対話ごと終わった。読み手を閉じると SIGINT の聞き手も外れるので、もう一度押すと片づけを飛ばしてプロセスごと落ちた（推測。動かしていない）。入力を待っているときだけ閉じ、命令の実行中は「途中で止められません。2 秒以内にもう一度押すと終わります」と言う（二度押しは今までどおり終わる）
+- 選ばなかった案: 命令ごとに止める仕組みを足す（命令が多く、どれも短いことが多い）
+試験は `test/input.test.ts`（直す前の版で落ちた。Ctrl-C の受け手は端末を動かさずには試せないので、書き方で止める）。
+触る場所: `src/cli/input.ts`（`waiting`）、`src/cli/agent.ts`・`src/cli/main.ts`（`onSigint`）
