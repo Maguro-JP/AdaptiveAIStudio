@@ -4472,7 +4472,16 @@ export class UiServer {
   }
 
   async #fetchModel(session: Session, id: string): Promise<void> {
-    const runtime = await this.#localRuntime();
+    // 止め口は待つ前に作る。受付の時点で「取得中」と見えるので、ここで待つ間に押された ■ が何も止めていなかった
+    const stop = new AbortController();
+    this.#fetchAbort = stop;
+    let runtime: LocalRuntime;
+    try {
+      runtime = await this.#localRuntime();
+    } catch (e) {
+      if (this.#fetchAbort === stop) this.#fetchAbort = undefined;
+      throw e;
+    }
     const entry = lookupCatalog(id);
     const began = Date.now();
     /*
@@ -4492,8 +4501,6 @@ export class UiServer {
     this.#fetching = { id, state: 'running', message: '始めます…', began };
     this.broadcast({ type: 'stateChanged' });
     this.#jobsChanged();
-    const stop = new AbortController();
-    this.#fetchAbort = stop;
 
     // 落とす先。失敗の案内でも同じ場所を言う（既定の場所を言うと、設定で別の場所を選んだ人がそこへ置いて、一覧に出ない）
     let dir: string | undefined;
