@@ -144,6 +144,8 @@ async function main(): Promise<void> {
   const note = ready.note ?? picked.note;
   if (candidates.length === 0) {
     console.error(c.red(`使えるモデルがありません: ${ready.why ?? note}`));
+    // 端末で打てる取り方を言う（「設定 → モデル」は画面にしか無く、端末の人は次に打つものが分からなかった）
+    console.error(c.dim('  取り方: npm run models -- --available で候補を見て、npm run models -- --get <名前> で取る。画面からなら npm run ui → モデル'));
     await runtime.shutdown().catch(() => undefined);
     process.exit(1);
   }

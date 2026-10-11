@@ -49,7 +49,7 @@ async function fakeHf(opts: { listStatus?: number; files?: string[] } = {}) {
 }
 
 /** 画面を立てて、出来事を集めながら押す。 */
-async function press(id: string, hf: Awaited<ReturnType<typeof fakeHf>>, models: string) {
+async function press(id: string, hf: Awaited<ReturnType<typeof fakeHf>>, models: string, opts: { sessions?: boolean } = {}) {
   const { UiServer } = await import('../src/ui/server.ts');
   const { DEFAULT_CONFIG } = await import('../src/config.ts');
   const home = await tempDir('aas-getui-home-');
@@ -63,6 +63,7 @@ async function press(id: string, hf: Awaited<ReturnType<typeof fakeHf>>, models:
     modelFetch: hf.fetchImpl,
     config: {
       ...DEFAULT_CONFIG,
+      ...(opts.sessions ? { providers: [] } : {}),
       runtime: { kind: 'inproc', modelsDir: models },
       agent: { root: home, approval: 'auto' },
       initiative: { enabled: false },
@@ -76,6 +77,8 @@ async function press(id: string, hf: Awaited<ReturnType<typeof fakeHf>>, models:
     const reader = events.body!.getReader();
     const dec = new TextDecoder();
     let buf = '';
+    // 取る前に本体を組んでおく（モデルが無いので候補は 0 件）
+    const before = opts.sessions ? await server.session() : undefined;
 
     const r = await fetch(`${base}/api/models/get`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -100,7 +103,8 @@ async function press(id: string, hf: Awaited<ReturnType<typeof fakeHf>>, models:
     const config = await fetch(`${base}/api/config`)
       .then((x) => x.json() as Promise<{ gguf?: Array<{ ref?: string }> }>)
       .catch(() => undefined);
-    return { status, said, done, config };
+    const after = opts.sessions ? await server.session() : undefined;
+    return { status, said, done, config, before, after };
   } finally {
     await server.stop().catch(() => undefined);
     if (prev.home === undefined) delete process.env.AAS_HOME; else process.env.AAS_HOME = prev.home;
@@ -117,6 +121,20 @@ async function press(id: string, hf: Awaited<ReturnType<typeof fakeHf>>, models:
  * いちばん悪い。**打ち込む道が本当に通るか**を、押して確かめる。
  * ここまで、入力欄が在ることしか見ていなかった。
  */
+describe('取り終えたら、使えるようになる（DECISIONS 10-11、123 回目）', () => {
+  test('候補が 0 件のまま組んだ本体は、取り終えたら組み直す', async () => {
+    const models = await tempDir('aas-getui-rebuild-');
+    const hf = await fakeHf();
+    try {
+      const got = await press('だれかの/しらない-GGUF', hf, models, { sessions: true });
+      assert.ok(got.done, `終わりの合図が来ない: ${got.said.join(' / ')}`);
+      assert.equal(got.before?.candidates.length, 0, 'この試験の前提（取る前は候補が 0 件）が崩れた');
+      assert.notEqual(got.after, got.before, '候補が 0 件の本体を使い続けている（立ち上げ直すまで使えない）');
+      // 取ったモデルが候補に入るかは、ここでは見られない（偽の配布元の中身は頭だけ GGUF で、モデルとしては読めない）
+    } finally { await hf.close(); }
+  });
+});
+
 describe('取ってくる先を、自分で打てる', () => {
   test('カタログに無い名前でも取れる', async () => {
     const models = await tempDir('aas-getui-repo-');

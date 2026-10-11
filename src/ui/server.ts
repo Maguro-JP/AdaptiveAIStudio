@@ -4520,6 +4520,10 @@ export class UiServer {
       }
       this.#fetching = { id, state: 'done', message: `用意できました: ${id}`, began };
       this.broadcast({ type: 'log', level: 'info', text: `用意できました: ${id}` });
+      // 使えるモデルが 0 件のまま組んだ本体は畳む。次に送るときに組み直し、取ったモデルを候補に入れる
+      // （候補は組むときに一度だけ決めるので、立ち上げ直すまで「使えるモデルがありません」が続いていた）
+      const live = this.#session;
+      if (live && live.candidates.length === 0 && !this.#busyNow(live)) await this.#retireSession(live).catch(() => undefined);
     } catch (e) {
       /*
        * **行き止まりにしない。**
