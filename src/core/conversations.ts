@@ -426,7 +426,11 @@ export class Conversations {
     if (messages.length === 0) return;
     await mkdir(this.#dir, { recursive: true });
     const at = new Date().toISOString();
-    const body = messages.map((m) => `${JSON.stringify({ t: 'msg', at, m } satisfies MsgLine)}\n`).join('');
+    // 添えた画像のデータは残さない（会話の記録が画像の分だけ膨らむ。本文の「添付（画像）」の行と保存先は残る）
+    const body = messages.map((full) => {
+      const { images: _images, ...m } = full;
+      return `${JSON.stringify({ t: 'msg', at, m } satisfies MsgLine)}\n`;
+    }).join('');
     // **前の行の途中に繋げない。**書いている最中に落ちると、改行の無い
     // 半端な行が残る。そこへ足すと、次の行まで巻き添えで読めなくなる。
     await inOrder(path, async () => {

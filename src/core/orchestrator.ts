@@ -59,6 +59,13 @@ export class ChatOrchestrator {
     this.#registry = registry;
   }
 
+  /** そのモデル（`送り口:モデル`）が画像を読めるか。分からなければ false。 */
+  async canSeeImages(id: string | undefined, signal?: AbortSignal): Promise<boolean> {
+    const r = id ? this.#registry.resolve(id) : undefined;
+    if (!r?.provider.canSeeImages) return false;
+    return r.provider.canSeeImages(r.model, signal).catch(() => false);
+  }
+
   async *run(input: ChatInput, signal: AbortSignal): AsyncGenerator<ChatEvent> {
     const usable = input.candidates.filter((id) => {
       const r = this.#registry.resolve(id);

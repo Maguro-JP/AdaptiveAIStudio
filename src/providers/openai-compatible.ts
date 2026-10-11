@@ -115,6 +115,25 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     return h;
   }
 
+  /**
+   * 画像を読めるか。Ollama なら `/api/show` の capabilities に `vision` があるかで決める。Ollama でない相手（llama-server・
+   * 雲の OpenAI 互換）は確かめる口が無いので false（画像を渡さず、添えたことだけを文で伝える）。
+   */
+  async canSeeImages(model: string, signal?: AbortSignal): Promise<boolean> {
+    const base = this.#baseUrl.replace(/\/v1$/, '');
+    try {
+      const res = await fetch(`${base}/api/show`, {
+        method: 'POST', headers: this.#headers(), body: JSON.stringify({ model }),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(this.#listTimeoutMs)]) : AbortSignal.timeout(this.#listTimeoutMs),
+      });
+      if (!res.ok) return false;
+      const body = await res.json() as { capabilities?: unknown };
+      return Array.isArray(body.capabilities) && body.capabilities.includes('vision');
+    } catch {
+      return false;
+    }
+  }
+
   async health(): Promise<HealthStatus> {
     try {
       const res = await fetch(`${this.#baseUrl}/models`, {

@@ -139,4 +139,10 @@ export interface ChatProvider {
   listModels(): Promise<ModelDescriptor[]>;
 
   chat(req: ProviderRequest, signal: AbortSignal): AsyncIterable<ProviderChunk>;
+
+  /**
+   * そのモデルが画像を読めるか。分からなければ false（画像を渡さず、添えたことだけを文で伝える）。
+   * 持たない送り口は、画像を渡さない。
+   */
+  canSeeImages?(model: string, signal?: AbortSignal): Promise<boolean>;
 }

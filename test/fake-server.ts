@@ -56,11 +56,19 @@ function withDone(text: string): string {
   return `${text}\nTASK_DONE\n`;
 }
 
-export async function startFakeServer(initial: Behavior): Promise<FakeServer> {
+export async function startFakeServer(initial: Behavior, opts: { vision?: boolean } = {}): Promise<FakeServer> {
   let behavior = initial;
   const state = { requests: 0, bodies: [] as unknown[], inFlight: 0, maxInFlight: 0 };
 
   const server: Server = createServer((req, res) => {
+    // Ollama の `/api/show`。画像を読めるモデルのふりをするときだけ `vision` を返す（ほかは無い口として 404）
+    if (req.url === '/api/show') {
+      req.resume();
+      if (!opts.vision) { res.writeHead(404); res.end(); return; }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ capabilities: ['completion', 'vision'] }));
+      return;
+    }
     if (req.url?.endsWith('/models')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ data: [{ id: 'fake-model' }] }));

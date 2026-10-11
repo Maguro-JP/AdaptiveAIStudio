@@ -51,6 +51,7 @@
 - 110 回目の不具合調査（返事に取っておく分と出力の上限・長い呼び出しの引数）
 - 111 回目の不具合調査（端末のパネルの提案の作業場・記録を読めないときの発見）
 - 112 回目の不具合調査（画像の添付の案内）
+- 画像を読めるモデルに、添えた画像を渡す
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13472,7 +13473,19 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 ## 2026-10-11  112 回目の不具合調査（画像の添付の案内）
 
 - 画像の添付には「いまのモデルは画像を読めません。見えるモデルに切り替えるか…」と添えていたが、画像そのものをモデルへ渡す道はどの送り口にもまだ無く、どのモデルに切り替えても読めなかった（画像を読めるかの判定もしていない）。抜け道の無い案内をやめ、「画像の中身はモデルに渡していません（仕組みはまだありません）」と言う
-- 残り: CLAUDE.md の「画像は読めるモデルのときだけ渡す」は、まだ作られていない。モデルが画像を読めるかの判定と、送り口ごと（OpenAI 互換・Anthropic・手元のモデル）に画像を渡す道が要る。次の作業として扱う
+- CLAUDE.md の「画像は読めるモデルのときだけ渡す」は作られていなかった。同じ日に作った（次の節）
 - 会話を切り替えても添付の受け皿が空にならず、次に送った会話へ付く件は変えない。打ちかけの文と同じく持ち越す作りとも読め、意図の記録が無い（確かめていない）
 試験は `test/attachments.test.ts`（直す前の版で落ちた）。
 触る場所: `src/ui/attachments.ts`（`describe`）
+
+## 2026-10-11  画像を読めるモデルに、添えた画像を渡す
+
+- 送る中身（`ProviderMessage`）に `images`（mime と base64）を足した。載せるのは利用者の依頼だけ。OpenAI 互換は content を文と `image_url`（data URL）の並びに、Claude は `image` ブロックを文の前に置いて送る
+- 読めるかは送り口が答える（`canSeeImages`）。Claude は常に読める。OpenAI 互換は Ollama の `/api/show` の capabilities に `vision` があるときだけ読める。確かめる口が無い相手（llama-server・雲の OpenAI 互換）と手元で動かすモデル（inproc）は読めないとする（画像を受ける口が無い）
+- 渡すのは png・jpeg・gif・webp で一枚 5MB まで（Claude の上限）。ほかの形・大きいもの・読めないモデルには、添えたことと保存先を文で伝える
+- 前の依頼に添えた画像は、次の依頼を積むときに外す（毎回送り直すと、送る量が画像の分だけ膨らみ続ける）。会話の記録には画像のデータを残さない（本文の「添付（画像）」の行と保存先は残る）
+- 段取り（`/api/plan`）には画像を渡さない（担当が並列に動き、誰に渡すかが決まらない）。本文の行と保存先は届く
+- 選ばなかった案: 画面で画像を読めるかを選ばせる（利用者がモデルの能力を知っている前提になる）
+- 画像の分はコンテキストウィンドウの見積もりに入れていない（確かめていない。一枚あたり千トークン前後と見ている）
+試験は `test/provider-images.test.ts`（送る形。直す前の版で 3 件落ちた）、`test/attach-image-send.test.ts`（画面から送って届くか・記録に残さないか。直しを外すとそれぞれ落ちた）、`test/attachments.test.ts`。
+触る場所: `src/providers/contract.ts`（`images`・`canSeeImages`）、`src/providers/openai-compatible.ts`、`src/providers/anthropic.ts`、`src/core/orchestrator.ts`、`src/core/session.ts`（`send` の `images`・`canSeeImages`）、`src/core/conversations.ts`（`append`）、`src/ui/attachments.ts`（`images`・`describe`）、`src/ui/server.ts`（`#compose`）

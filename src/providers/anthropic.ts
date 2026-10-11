@@ -74,6 +74,11 @@ export class AnthropicProvider implements ChatProvider {
     return this.#client;
   }
 
+  /** Claude は、いま提供されているどのモデルも画像を読める。 */
+  async canSeeImages(): Promise<boolean> {
+    return true;
+  }
+
   async health(): Promise<HealthStatus> {
     try {
       await (await this.#api()).models.list({ limit: 1 });

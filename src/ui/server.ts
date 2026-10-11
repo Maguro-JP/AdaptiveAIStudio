@@ -86,6 +86,10 @@ import { Session } from '../core/session.ts';
 import { Conversation } from '../core/conversation.ts';
 import type { ApprovalRequest, ApprovalAnswer } from '../agent/tools/types.ts';
 import { ForgetShelf, forgetAndSave, restoreAndSave } from '../memory/forget-shelf.ts';
+import type { ProviderImage } from '../providers/contract.ts';
+
+/** 送るものを組み立てた結果。画像は、画像を読めるモデルのときだけ入る。 */
+interface Composed { text: string; images: ProviderImage[] }
 
 /**
  * 画面から回せる点検。
@@ -857,7 +861,7 @@ export class UiServer {
       conv.restore(past);
       run.saved = past.length;
       const full = await this.#compose(session, text, attached, undefined);
-      for await (const event of session.send(full, { said: text, conversation: conv })) {
+      for await (const event of session.send(full.text, { said: text, conversation: conv, images: full.images })) {
         if (event.type === 'settled') {
           settled = { reason: event.reason, verified: event.verified, checked: event.checked };
           if (event.model) this.#lastAnswered = event.model;
@@ -923,7 +927,7 @@ export class UiServer {
       // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
       // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
       const full = await this.#compose(session, text, attached, editor);
-      this.#bg(this.#drive(session, full, undefined, { said: text, ...(editor ? { editor } : {}) }),
+      this.#bg(this.#drive(session, full.text, undefined, { said: text, images: full.images, ...(editor ? { editor } : {}) }),
         '依頼の実行が落ちました');
       started = true;
     } finally {
@@ -1504,7 +1508,7 @@ export class UiServer {
         // 受け取ったことだけ先に返し、続きは出来事として流す。
         send(res, 202, { accepted: true, conversationId, loading: false });
         // 判じるのは、利用者が打った分だけ（差し込んだ中身は利用者の言葉ではない）。
-        this.#bg(this.#drive(session, full, undefined, { said: text, ...(editor ? { editor } : {}) }),
+        this.#bg(this.#drive(session, full.text, undefined, { said: text, images: full.images, ...(editor ? { editor } : {}) }),
           '依頼の実行が落ちました');
       } finally {
         release();
@@ -1545,7 +1549,8 @@ export class UiServer {
         const full = await this.#compose(session, text, attached, editor);
         send(res, 202, { accepted: true });
         planStarted = true;
-        this.#bg(this.#drivePlan(session, full, text), '段取りが落ちました');
+        // 段取りは担当が並列に動くので、画像は渡さない（本文の「添付（画像）」の行と保存先は届く）
+        this.#bg(this.#drivePlan(session, full.text, text), '段取りが落ちました');
       } finally {
         this.#prep -= 1;
         // 始めずに抜けた（断った・組めなかった）なら、支度の間に積まれた送りを流す（始めた回は、段取りの終わりで流す）
@@ -3683,7 +3688,7 @@ export class UiServer {
 
   async #drive(
     session: Session, text: string, resuming?: string,
-    opts: { fromUser?: boolean; said?: string; recall?: string; editor?: EditorHere } = {},
+    opts: { fromUser?: boolean; said?: string; recall?: string; editor?: EditorHere; images?: ProviderImage[] } = {},
   ): Promise<void> {
     /*
      * 「この依頼のあいだは訊かない」は、その依頼のあいだだけ。
@@ -4273,10 +4278,14 @@ export class UiServer {
    * 窓から決める形に直したとき、送り口だけ直して順番待ちの方が
    * 取り残されていた。
    */
-  async #compose(session: Session, text: string, attached: string[], editor?: EditorHere): Promise<string> {
+  async #compose(session: Session, text: string, attached: string[], editor?: EditorHere): Promise<Composed> {
     const room = mentionBudget(session.contextTokens);
+    // 画像を読めるモデルにだけ、画像そのものを渡す（読めないなら、添えたことと保存先だけを文で伝える）
+    const hasImage = attached.some((id) => this.#attachments.get(id)?.kind === 'image');
+    const canSeeImages = hasImage ? await session.canSeeImages() : false;
+    const images = canSeeImages ? await this.#attachments.images(attached).catch(() => []) : [];
     const extra = attached.length > 0
-      ? await this.#attachments.describe(attached, { chars: room }).catch(() => '')
+      ? await this.#attachments.describe(attached, { chars: room, canSeeImages }).catch(() => '')
       : '';
     // 開いている所は、依頼と同じ枠から取る（添付の後、指名の前）。
     const here = describeEditorHere(editor, Math.min(2000, Math.floor(room.total / 4)));
@@ -4288,7 +4297,7 @@ export class UiServer {
       if (!r.ok) this.broadcast({ type: 'log', level: 'warn', text: `指名を読めません ${r.path}: ${r.body}` });
     }
     // **依頼を末尾に置く。**前に長い中身を積むので、指示が埋もれないようにする。
-    return [extra, here, named.text].filter((x) => x).join('\n\n');
+    return { text: [extra, here, named.text].filter((x) => x).join('\n\n'), images };
   }
 
   /**
@@ -4310,7 +4319,7 @@ export class UiServer {
     this.broadcast({ type: 'queue', waiting: this.#queue.length });
     if (!next) return;
     this.#prep += 1;
-    let full: string;
+    let full: Composed;
     try {
       // 前の作業場の本体なら畳んで組み直す（作業中に作業場を変えたあと、最初に空いた所がここのことがある）
       if (await this.#retireIfRootMoved({ mine: true }) || this.#session !== session) session = await this.session();
@@ -4335,7 +4344,7 @@ export class UiServer {
       this.#prep -= 1;
     }
     this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
-    this.#bg(this.#drive(session, full, undefined, { said: next.text, ...(next.editor ? { editor: next.editor } : {}) }),
+    this.#bg(this.#drive(session, full.text, undefined, { said: next.text, images: full.images, ...(next.editor ? { editor: next.editor } : {}) }),
       '順番待ちの実行が落ちました');
   }
 

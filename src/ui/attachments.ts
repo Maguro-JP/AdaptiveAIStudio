@@ -19,6 +19,7 @@ import { join, extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { stateDir } from '../core/home.ts';
 import { decodeText, type TextEncodingName } from '../core/text.ts';
+import type { ProviderImage } from '../providers/contract.ts';
 
 export type AttachmentKind = 'text' | 'image' | 'binary';
 
@@ -55,6 +56,15 @@ const TEXT_EXT = new Set([
   '.gitignore', '.gitattributes', '.editorconfig', '.dockerfile',
 ]);
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.avif']);
+
+/** モデルへそのまま渡せる画像の形と、一枚の上限（Claude の上限に合わせる）。ほかの形・大きいものは、添えたことだけを文で伝える。 */
+const PASSABLE_IMAGE: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+function passableMime(item: Attachment): string | undefined {
+  if (item.kind !== 'image' || item.bytes > MAX_IMAGE_BYTES) return undefined;
+  return PASSABLE_IMAGE[extname(item.name).toLowerCase()];
+}
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff]);
@@ -206,6 +216,22 @@ export class Attachments {
   }
 
   /**
+   * モデルへ渡す画像（base64）。渡せる形（png・jpeg・gif・webp）で上限以下のものだけ。読めなかったものは入れない
+   * （`describe` の文が「渡していない」と言う形とは別に、読み出しの失敗は文に出ない。渡す前に消えた画像は、渡せないだけ）。
+   */
+  async images(ids: string[]): Promise<ProviderImage[]> {
+    const out: ProviderImage[] = [];
+    for (const id of ids) {
+      const item = this.#items.get(id);
+      const mime = item ? passableMime(item) : undefined;
+      if (!item || !mime) continue;
+      const data = await readFile(item.path).catch(() => undefined);
+      if (data && data.byteLength <= MAX_IMAGE_BYTES) out.push({ mime, data: data.toString('base64') });
+    }
+    return out;
+  }
+
+  /**
    * 依頼に添える形にする。
    *
    * 文字ものは中身をそのまま。絵とその他は、在ることと場所だけ。
@@ -251,11 +277,11 @@ export class Attachments {
           : raw;
         parts.push(`--- 添付: ${item.name}${how} ---\n${body}\n--- ここまで ---`);
       } else if (item.kind === 'image') {
-        parts.push(opts.canSeeImages
+        parts.push(opts.canSeeImages && passableMime(item)
           ? `--- 添付（画像）: ${item.name} — ${item.path} ---`
           : `--- 添付（画像）: ${item.name} ---\n`
-            // 画像そのものをモデルへ渡す道はまだ無い（どのモデルでも同じ）。「見えるモデルに切り替える」と案内していたが、切り替えても読めなかった
-            + `画像の中身はモデルに渡していません（画像を渡す仕組みはまだありません）。置き場所: ${item.path}\n`
+            // 読めないモデル・渡せない形（svg・bmp など）・大きすぎる画像は、添えたことと保存先だけを伝える
+            + `画像の中身はモデルに渡していません（${opts.canSeeImages ? '渡せない形か、大きすぎます' : 'いまのモデルは画像を読めません'}）。置き場所: ${item.path}\n`
             + '画像の中身が要るなら、文字で説明してください。');
       } else {
         parts.push(
