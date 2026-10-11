@@ -34,9 +34,9 @@ npm run doctor
 
 ```
   ok   Node.js         v22.22.2
-  ok   設定            既定値 (aas.config.json なし。書くなら C:\ProgramData\AdaptiveAIStudio\aas.config.json)
+  ok   設定            既定値 (aas.config.json なし。書くなら <保存先>\aas.config.json)
   ok   この機械        NVIDIA GeForce RTX 4060 8GB / RAM 32GB
- 未了  モデル          C:\ProgramData\AdaptiveAIStudio\models に GGUF がありません
+ 未了  モデル          <保存先>\models に GGUF がありません
        → この置き場に .gguf を1つ入れるだけで動きます。
 ```
 
@@ -149,7 +149,7 @@ npm run models -- --get Qwen/Qwen3-8B-GGUF     # Hugging Face の置き場名
 ```
 
 `command` は書かなくて構いません。用意したものが自動で使われます。
-`modelsDir` も省略できます（既定は `~/.aas/models`）。
+`modelsDir` も省略できます（既定は保存先の `models`。場所は `npm run doctor` が出します）。
 
 B のとき、何層をGPUに載せるかは
 [GGUF を直接読んで](docs/GGUF.md)計算します。Ollama の申告に頼りません。
@@ -210,13 +210,14 @@ RTX 4060 (8GB) では MoE の `qwen3.6:35b-a3b-coding-nvfp4` が最適解
 （総30B・活性3.3B なので、VRAM に載りきらなくても実用速度が出る）。詳細は
 [モデル運用](docs/MODEL-EFFICIENCY.md) と [32B級を動かすには](docs/RUNNING-LARGE-MODELS.md)。
 
-Claude (任意):
+Claude (任意): 保存先（doctor の「設定」の行に出る場所）の `.env` に、鍵を一行書く。
 
 ```
-set ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-設定しなければローカルのみで動作する。
+`set` で入れた鍵は、そのウィンドウの中でしか効かない（別の窓や start.cmd から起動すると読めない）。
+書かなければローカルのみで動作する。
 
 ### 設定する（任意）
 
@@ -235,7 +236,7 @@ set ANTHROPIC_API_KEY=sk-ant-...
 `candidates` は書かなくてよい（書けば固定される）。
 
 クラウド（Claude）は 既定で無効。ローカルだけで完結する。
-使いたいときだけ `enabled: true` にする。
+使いたいときだけ、例の設定の claude の項目を `"enabled": true` にする。
 
 
 ```

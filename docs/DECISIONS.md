@@ -58,6 +58,7 @@
 - 116 回目の不具合調査（Windows の危ない命令の言い換え）
 - 117 回目の不具合調査（命令を通した守りの外し方・鍵ファイル）
 - 118 回目の不具合調査（命令を通した書き込みの拾い方）
+- 119 回目の不具合調査（README の手順とコードの食い違い）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13551,3 +13552,12 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 変数（`F=.env; echo a > $F`）・`python -c`・`git apply`・`rsync` の中の書き込みは拾わない（分からない形。承認は今までどおり訊く）
 試験は `test/guard-bypass-gaps.test.ts`（直す前の版で落ちた）。
 触る場所: `src/harness/builtin-rules.ts`（`commandWriteTargets`）
+
+## 2026-10-11  119 回目の不具合調査（README の手順とコードの食い違い）
+
+公開を見すえて、初めて使う人が README の手順どおりに進めて詰まる所を探した。
+- README は「Claude は既定で無効」と言うのに、写せと案内する見本の設定（`aas.config.example.json`）の claude の項目には `enabled` が無く、写すと有効になった（鍵が無いと doctor が警告を出す）。見本に `"enabled": false` を書く。見本のクラウドの項目が無効であることを試験で見る
+- Claude の鍵を `set ANTHROPIC_API_KEY=…` で案内していたが、`set` はその窓の中でしか効かず、doctor は保存先の `.env` に書けと言う。README も `.env` に書く形に揃える
+- doctor の出力例と modelsDir の既定に、特定の入れ方のときだけの場所（`C:\ProgramData\…`・`~/.aas/models`）を書いていた。「保存先（doctor が出す場所）」と書く
+試験は `test/config-example.test.ts`（直す前の版で落ちた）。README の文は目で見る。
+触る場所: `aas.config.example.json`、`README.md`

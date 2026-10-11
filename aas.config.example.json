@@ -3,6 +3,7 @@
     {
       "id": "claude",
       "kind": "anthropic",
+      "enabled": false,
       "locality": "cloud",
       "apiKeyEnv": "ANTHROPIC_API_KEY",
       "models": [

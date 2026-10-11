@@ -30,6 +30,10 @@ describe('見本の設定', () => {
       // 候補を決め打ちすると、inproc では Ollama の札（qwen3.5:9b）が GGUF と
       // 合わず、毎回「無いので別ので答えます」と言う。既定（未指定）に任せる。
       assert.equal(config.candidates, undefined, '見本に候補を決め打ちしない');
+      // README は「クラウドは既定で無効」と言う。写した見本でも無効でないと、鍵の無い警告が出る（DECISIONS 10-11、119 回目）
+      for (const p of config.providers ?? []) {
+        if ((p as { locality?: string }).locality === 'cloud') assert.equal((p as { enabled?: boolean }).enabled, false, `見本のクラウドの項目が有効: ${(p as { id: string }).id}`);
+      }
     });
   });
 
