@@ -438,10 +438,16 @@ export const dangerousCommands: Rule = {
       [/\b(ba|z|da|k)?sh\s+(-c\s+)?["']?(<\(|\$\(|`)\s*(curl|wget)\b/i, 'ダウンロードしたスクリプトの実行'],
       // ここから Windows。この場所の利用者は Windows で使う。Unix の形だけ
       // 見ていると、同じことを cmd と PowerShell で素通りさせる。
-      [/\b(rmdir|rd)\s+(\/s|-r)/i, '再帰削除'],
+      // `/s` は引数のどこにあってもよい（`rd /q /s C:\x`・`rmdir C:\x /s /q` が通っていた）
+      [/\b(rmdir|rd)\b[^|&;\n]*\s(\/s|-r(ecurse)?)\b/i, '再帰削除'],
       [/\bdel\s+(\/[a-z]\s+)*\/s\b/i, '再帰削除'],
-      [/\bRemove-Item\b[^|;]*-Recurse/i, '再帰削除'],
+      // PowerShell は引数名を頭だけに縮めて書け（`-r`・`-rec`）、Remove-Item には別名（`ri`・`del`・`erase`）がある。`-Recurse` の全部の綴りだけを見ていた
+      [/\b(Remove-Item|ri|del|erase)\b[^|;\n]*\s-r(e(c(u(r(s(e)?)?)?)?)?)?\b/i, '再帰削除'],
       [/\b(iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^|]*\|\s*(iex|Invoke-Expression)/i, 'ダウンロードしたスクリプトの実行'],
+      // 文字列をそのまま命令として走らせる形（`iex (irm …)`・`Invoke-Expression (New-Object Net.WebClient).DownloadString(…)`）。管を通る形しか見ていなかった
+      [/\b(iex|Invoke-Expression)\b/i, '文字列を命令として実行'],
+      // 中身を符号化して隠した命令（`-EncodedCommand`・縮めた `-enc`・`-e`）。読めないものは通さない（`-ExecutionPolicy` は当たらない）
+      [/\b(powershell|pwsh)(\.exe)?\b[^|;\n]*\s-e(nc(o(d(e(d(c(o(m(m(a(n(d)?)?)?)?)?)?)?)?)?)?)?)?\b/i, '中身の読めない命令'],
       [/\bformat\s+[a-z]:/i, 'ドライブの初期化'],
       [/\b(diskpart|reg\s+delete|shutdown)\b/i, '機械そのものへの操作'],
     ];

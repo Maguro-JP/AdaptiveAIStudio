@@ -55,6 +55,7 @@
 - 113 回目の不具合調査（画像を渡す仕組みの穴）
 - 114 回目の不具合調査（命令の実行中の Ctrl-C）
 - 公開の準備 9 の走査と、全角の利用者名
+- 116 回目の不具合調査（Windows の危ない命令の言い換え）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13517,3 +13518,14 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - いまのファイルは作り物の全角の名前（`ｕｓｅｒ`）に置き換えた。書き換えのスクリプトは `--also` で消す文字列を足せるようにし、渡した文字列とアドレスの全角の綴りも自動で消して数える。`test/publishing.test.ts` は全角を半角に揃えてからアドレスを探す
 - 利用者名そのものは試験で止められない（止めるには名前をリポジトリに書くことになる）。目で見る
 触る場所: `scripts/scrub-history.mjs`、`test/publishing.test.ts`、`docs/PUBLISHING.md`
+
+## 2026-10-11  116 回目の不具合調査（Windows の危ない命令の言い換え）
+
+危ない命令の規則が、Windows の書き方の言い換えを通していた（規則に直接渡して、直す前の版ではどれも通ることを確かめた）。
+- `rd`・`rmdir` は命令名の直後の `/s` しか見ておらず、`rd /q /s x`・`rmdir x /s /q` が通った。引数のどこにあっても止める
+- `Remove-Item` は `-Recurse` の全部の綴りしか見ておらず、縮めた引数名（`-r`・`-rec`）と別名（`ri`・`del`・`erase`）が通った。どちらも止める
+- 文字列を命令として走らせる `iex`・`Invoke-Expression` は、管（`|`）で渡す形しか見ておらず、括弧で渡す形（`iex (irm …)`）が通った。`iex`・`Invoke-Expression` そのものを止める
+- 中身を符号化した命令（`powershell -EncodedCommand`・縮めた `-enc`・`-e`）を見ていなかった。止める（`-ExecutionPolicy` は当たらない）
+- run_command は先頭の語の許可の一覧で先に止まるので、効くのは外のツール（MCP の command など）を通る道と、利用者が許可の一覧に語を足した場合
+試験は `test/harness.test.ts`（規則に直接訊く形。直す前の版で落ちた。最初は走らせる道で書いたが、手前の別の所で止まって直す前の版でも通ったので書き直した）。
+触る場所: `src/harness/builtin-rules.ts`（`dangerousCommands` の Windows の行）
