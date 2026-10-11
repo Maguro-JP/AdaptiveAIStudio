@@ -553,6 +553,16 @@ export function toWireMessage(m: ProviderMessage): Record<string, unknown> {
       })),
     };
   }
+  // 画像は、文と画像の並びとして送る（OpenAI 形式の content の配列）
+  if (m.role === 'user' && m.images && m.images.length > 0) {
+    return {
+      role: 'user',
+      content: [
+        ...(m.content ? [{ type: 'text', text: m.content }] : []),
+        ...m.images.map((img) => ({ type: 'image_url', image_url: { url: `data:${img.mime};base64,${img.data}` } })),
+      ],
+    };
+  }
   return { role: m.role, content: m.content };
 }
 
