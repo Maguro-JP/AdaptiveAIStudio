@@ -792,6 +792,7 @@ export class Session {
         roleIds: active.map((r) => r.id),
         fallbackRoleId,
         maxItems: 8,
+        root: this.root,
         // 誰が書き、誰が調べるだけかを渡す。二人目を付ける判断に要る。
         access: Object.fromEntries(active.map((r) => [r.id, r.access as string[]])),
       };

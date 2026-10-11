@@ -122,7 +122,7 @@ export function judge(input: AcceptanceInput): { verdict: Verdict; concerns: Con
   // 「ついでに直した」か「勘違いして触った」かのどちらかで、後者が危ない。
   if (input.declared.length > 0) {
     // 綴りではなくファイルで比べる（`./src/a.ts` と `src/a.ts` を別のファイルとして「計画に無い」と言っていた）
-    const declared = new Set(input.declared.map(normalizeWrite));
+    const declared = new Set(input.declared.map((d) => normalizeWrite(d)));
     const unexpected = input.changed.filter((f) => !declared.has(normalizeWrite(f)));
     if (unexpected.length > 0) {
       concerns.push({
