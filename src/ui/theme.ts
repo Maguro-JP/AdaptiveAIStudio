@@ -297,7 +297,8 @@ export function repairTheme(raw: unknown, fallbackId = DEFAULT_THEME_ID): {
       name: typeof o.name === 'string' && o.name.trim() ? o.name.trim() : base.name,
       scheme,
       tokens,
-      ...(effects.length > 0 ? { effects } : {}),
+      // 「効果なし」（空の配列）も書き残す。書かずにいたので、読み直すと「効果の指定が無い」として元のテーマの効果に戻っていた
+      ...(Array.isArray(o.effects) || effects.length > 0 ? { effects } : {}),
       ...(id !== base.id ? { base: base.id } : {}),
     },
     repairs,
