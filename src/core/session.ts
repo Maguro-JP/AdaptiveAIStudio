@@ -2074,10 +2074,11 @@ export class Session {
           const r = await runVerification(
             { command, root: this.root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal);
           if (!ac.signal.aborted && !r.timedOut) verifiedLast = r;
-          // テストを消して通す形は、通っていても通ったとは言わない（上と同じ判じ方）。
-          const verdict = r.passed && before.tests
-            ? compareTests(before.tests, await snapshotTests(this.root))
-            : { ok: true as const };
+          // テストを消して通す形は、通っていても通ったとは言わない（上と同じ判じ方）。数は落ちた回でも比べる（落ちたテストを消して
+          // 作業前と同じ落ち方に戻した回を「元から」と言っていた。直させるループと段取りの道は、落ちた回でも比べている）
+          const verdict: { ok: boolean; reason?: string; unsure?: string } = before.tests && !r.timedOut
+            ? await snapshotTests(this.root).then((after) => compareTests(before.tests!, after), () => ({ ok: true, unsure: 'テストを読めませんでした' }))
+            : { ok: true };
           if (ac.signal.aborted) {
             // **止められたものを「落ちた」と言わない。**直させるループの側と同じ言い方にする。
             yield { type: 'verify', event: { type: 'giveUp', reason: 'aborted', detail: '止めました' } };
@@ -2085,7 +2086,7 @@ export class Session {
             // テストが減ったのは、この回が呼んだ外のツールのせい。はっきり失敗。
             keep = false; checked = 'failed';
             yield { type: 'verify', event: { type: 'tampered', reason: verdict.reason ?? 'テストが減っています' } };
-          } else if ('unsure' in verdict && verdict.unsure) {
+          } else if (verdict.unsure && r.passed) {
             // 読めなかっただけ。通ったとは言わないが、巻き戻しもしない（確かめはこの一回きり）
             checked = 'unsure';
             yield { type: 'verify', event: { type: 'giveUp', reason: 'unsure', detail: verdict.unsure } };

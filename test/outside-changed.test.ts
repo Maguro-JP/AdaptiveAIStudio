@@ -356,6 +356,17 @@ describe('覚えている作業前を使う', { timeout: 90_000 }, () => {
     assert.ok(verifyTypes(second!).includes('preexisting'), `元からの失敗を、この回のせいにしている: ${verifyTypes(second!).join(',')}`);
   });
 
+  test('元から落ちている作業場で、外のツールがテストを消したら、元からとは言わずに失敗にする（DECISIONS 10-11、109 回目）', async () => {
+    const { root } = await workspace({ git: true, failing: true });
+    const [first, second] = await turns(root, [
+      writeHere,
+      { kind: 'toolcall', name: 'w__remove', args: { path: join(root, 'test', 'a.test.ts') }, then: '消しました。' },
+    ], { maxRounds: 1 });
+    assert.ok(verifyTypes(first!).includes('preexisting'), `一回目で作業前を測っていない: ${verifyTypes(first!).join(',')}`);
+    assert.ok(verifyTypes(second!).includes('tampered'), `テストを消したのに数を比べていない: ${verifyTypes(second!).join(',')}`);
+    assert.ok(!verifyTypes(second!).includes('preexisting'), 'テストを消した回を、作業前からの失敗と言った');
+  });
+
   test('前は通っていたのに外のツールだけの回で落ちたら、外のツールのせいとして巻き戻す', async () => {
     const { root } = await workspace({ git: true });
     const [first, second] = await turns(root, [
