@@ -21,3 +21,10 @@ test('会話を開く問い合わせは、一つの列に並べて順に流す',
   assert.doesNotMatch(app, /open\.onclick = async \(\) => \{\n\s*const r = await ask\('\/api\/conversations\/select'/,
     '列を通さずに選びを投げる形が残っている');
 });
+
+test('トップから送っている間も、送る前から動いていた会話の出来事は弾く', () => {
+  // 全部通していたので、返事を待つ数秒の間、横で走る別の会話の答えが新しい会話の欄に混ざった
+  assert.match(app, /function notViewed\(id\) \{\n\s*if \(conversations\.current\) return id !== conversations\.current;\n\s*return !sendingFromTop \|\| runningAtSend\.has\(id\);/);
+  assert.doesNotMatch(app, /conversations\.current \? e\.conversationId !== conversations\.current : !sendingFromTop/,
+    '送る前から動いていた会話を見ずに通す形が残っている');
+});
