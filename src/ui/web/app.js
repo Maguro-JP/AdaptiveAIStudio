@@ -38,6 +38,8 @@ function onLasting(type, fn) {
  * タブにまとめた中の隠れた中身も DOM から外れるので、「外れている」では捨てられたのか隠れているだけかが分からない。
  */
 let renderGen = 0;
+/** 会話を開く問い合わせの列。押した順に一つずつ流す。 */
+let selecting = Promise.resolve();
 
 const ctx = {
   /** いまの並びの世代。パネルは作られたときの値と比べて、自分が捨てられたかを知る。 */
@@ -1610,7 +1612,10 @@ function drawConversations() {
       open.textContent = `● ${head.title}`;
       open.title += '（動いています）';
     }
-    open.onclick = async () => {
+    // 押した順に一つずつ開く。素早く二つ押すと、返事の届く順で画面と本体の「見ている会話」がずれ、開いて見えている会話と
+    // 送り先が食い違いえた（先の返事が後に届くと、画面は先に押した方を出す）
+    open.onclick = () => { selecting = selecting.then(pick, pick); return selecting; };
+    const pick = async () => {
       const r = await ask('/api/conversations/select', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id: head.id }),
