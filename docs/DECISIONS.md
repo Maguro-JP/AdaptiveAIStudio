@@ -37,6 +37,7 @@
 - 98 回目の不具合調査（止めたときの順番待ち・CLI の引数）
 - 履歴からアドレスを消す書き換えの用意（公開の準備の 8）
 - 99 回目の不具合調査（絶対パスの書き込み先・MCP の stderr）
+- start.cmd の引数の引用符
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13367,3 +13368,9 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - MCP の標準エラーに出る鍵の一部（記録済みの残り）は、伏せてから切る形で、まとめて出た鍵も区切れて届いた鍵も伏せている。鍵の頭だけが見えるのは、相手が鍵を書きかけて終わったときだけなので、変えない
 試験は `test/pm-paths-gaps.test.ts`（直す前の版で落ちた）。
 触る場所: `src/agent/pm.ts`（`normalizeWrite`・`PmContext.root`）、`src/core/session.ts`（`plan` の `pmCtx`）
+
+## 2026-10-11  start.cmd の引数の引用符
+
+- `start.cmd` は 2 つ目からの引数を `%~1` で集めていたので、引用符が外れ、空白を含む道（`"C:\My Folder"`）が npm・`run.mjs` へ渡るときに 2 つの引数に割れていた（記録済みの残り）。引用符を残す `%1` で集める
+試験は `test/batch.test.ts`（書き方の確かめ。直す前の版で落ちた）。Windows の実機では確かめていない（土曜の CI で見る）。
+触る場所: `start.cmd`（`:collect`）

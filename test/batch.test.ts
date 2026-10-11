@@ -411,7 +411,8 @@ describe('入口は、渡された引数をそのまま渡す', () => {
   test('**2つ目からの引数を集めている**', async () => {
     const text = await source();
     assert.match(text, /^:collect$/m, '集める所が無い');
-    assert.match(text, /set "ARGS=%ARGS% %~1"/, '集めていない');
+    // `%~1` は引用符を外すので、`"C:\My Folder"` が渡るときに 2 つの引数に割れていた。引用符を残す `%1` で集める（DECISIONS 10-11）
+    assert.match(text, /^set "ARGS=%ARGS% %1"$/m, '集めていない（または引用符を外して集めている）');
     assert.match(text, /^shift$/m, 'ずらしていない（同じ引数を数え続ける）');
   });
 
