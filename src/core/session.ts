@@ -80,7 +80,7 @@ import { inspectGit } from '../agent/git.ts';
 import { diffStat, unifiedDiff } from '../agent/diff.ts';
 import { inspectDependencies, describeDependencies } from '../agent/dependencies.ts';
 import { ANY_PATH, type LaneConfig } from './scheduler.ts';
-import type { ProviderMessage } from '../providers/contract.ts';
+import type { ProviderMessage, ProviderImage } from '../providers/contract.ts';
 import { Conversation } from './conversation.ts';
 import { WorkspaceLock } from './workspace-lock.ts';
 import { fitByTokens, estimateTokens, headOf } from '../agent/window.ts';
@@ -792,6 +792,7 @@ export class Session {
         roleIds: active.map((r) => r.id),
         fallbackRoleId,
         maxItems: 8,
+        root: this.root,
         // 誰が書き、誰が調べるだけかを渡す。二人目を付ける判断に要る。
         access: Object.fromEntries(active.map((r) => [r.id, r.access as string[]])),
       };
@@ -1563,6 +1564,11 @@ export class Session {
   }
 
   /** いま動いているものを止める。既定の会話だけでなく、走っている会話を全部止める。止めても対話は続く。 */
+  /** いま送る先（候補の先頭）が画像を読めるか。分からなければ false。 */
+  canSeeImages(signal?: AbortSignal): Promise<boolean> {
+    return this.orchestrator.canSeeImages(this.candidates[0], signal);
+  }
+
   abort(): void {
     this.#conv.running?.abort();
     for (const conv of this.#active) conv.running?.abort();
@@ -1596,6 +1602,8 @@ export class Session {
       /** 記憶を呼び戻すときの問い。渡らなければ打った分（`said`）で引く。 */
       recall?: string;
       said?: string;
+      /** 利用者が添えた画像。画像を読めるモデルのときだけ渡る（読めるかは送る側が `canSeeImages` で決める） */
+      images?: ProviderImage[];
       /**
        * どの会話で送るか。省けば既定の会話。画面は会話ごとに渡して、二つの会話を同時に動かす
        * （履歴・差分・思い出した記憶・規則の積み重ね・協議が会話ごとに分かれる）。
@@ -1738,9 +1746,12 @@ export class Session {
       const recalled = chat || !query.trim() ? '' : this.#recall(query, { lessons: false }, conv);
       if (recalled) yield { type: 'recalled', text: recalled };
 
+      // 前の依頼に添えた画像は外す（毎回送り直すと、コンテキストウィンドウと送る量が画像の分だけ膨らみ続ける。本文の「添付（画像）」の行は残る）
+      for (const [i, m] of conv.history.entries()) if (m.images) { const { images: _drop, ...rest } = m; conv.history[i] = rest; }
       conv.history.push({
         role: 'user',
         content: recalled ? `${instruction}\n\n---\n${recalled}` : instruction,
+        ...(opts.images && opts.images.length > 0 ? { images: opts.images } : {}),
       });
 
       const verifyOn = verifyCfg.enabled !== false;
@@ -2073,10 +2084,11 @@ export class Session {
           const r = await runVerification(
             { command, root: this.root, commandTimeoutMs: verifyCfg.commandTimeoutMs }, ac.signal);
           if (!ac.signal.aborted && !r.timedOut) verifiedLast = r;
-          // テストを消して通す形は、通っていても通ったとは言わない（上と同じ判じ方）。
-          const verdict = r.passed && before.tests
-            ? compareTests(before.tests, await snapshotTests(this.root))
-            : { ok: true as const };
+          // テストを消して通す形は、通っていても通ったとは言わない（上と同じ判じ方）。数は落ちた回でも比べる（落ちたテストを消して
+          // 作業前と同じ落ち方に戻した回を「元から」と言っていた。直させるループと段取りの道は、落ちた回でも比べている）
+          const verdict: { ok: boolean; reason?: string; unsure?: string } = before.tests && !r.timedOut
+            ? await snapshotTests(this.root).then((after) => compareTests(before.tests!, after), () => ({ ok: true, unsure: 'テストを読めませんでした' }))
+            : { ok: true };
           if (ac.signal.aborted) {
             // **止められたものを「落ちた」と言わない。**直させるループの側と同じ言い方にする。
             yield { type: 'verify', event: { type: 'giveUp', reason: 'aborted', detail: '止めました' } };
@@ -2084,7 +2096,7 @@ export class Session {
             // テストが減ったのは、この回が呼んだ外のツールのせい。はっきり失敗。
             keep = false; checked = 'failed';
             yield { type: 'verify', event: { type: 'tampered', reason: verdict.reason ?? 'テストが減っています' } };
-          } else if ('unsure' in verdict && verdict.unsure) {
+          } else if (verdict.unsure && r.passed) {
             // 読めなかっただけ。通ったとは言わないが、巻き戻しもしない（確かめはこの一回きり）
             checked = 'unsure';
             yield { type: 'verify', event: { type: 'giveUp', reason: 'unsure', detail: verdict.unsure } };

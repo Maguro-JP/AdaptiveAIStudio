@@ -110,6 +110,9 @@ export function tokenBudget(contextTokens: number, reserveTokens = 2200): number
   return Math.max(contextTokens - reserve, 512);
 }
 
+/** 手元で動かすモデルが、コンテキストウィンドウのうち出力に使ってよい割合（`src/runtime/inproc.ts` も同じ値で出力を切る）。 */
+export const OUTPUT_SHARE = 0.4;
+
 /**
  * 履歴に使ってよいトークン数を、実際に送るシステムプロンプト（system）とツールの説明のかさを引いて決める。
  *
@@ -118,8 +121,14 @@ export function tokenBudget(contextTokens: number, reserveTokens = 2200): number
  * 足してコンテキストウィンドウを超えていた（超えた分は、ライブラリが古い方＝最初の依頼から黙って落とすか、溢れて落ちる）。
  * 予約（`reserveTokens`）は返事の分だけにし、システムプロンプトとツールの説明は数えて引く。
  */
-export function historyBudget(contextTokens: number, fixedTokens: number, reserveTokens = 2200): number {
-  const reserve = Math.max(256, Math.min(reserveTokens, Math.floor(contextTokens * 0.25)));
+export function historyBudget(contextTokens: number, fixedTokens: number, reserveTokens = 2200, outputTokens?: number): number {
+  /*
+   * 出力の上限（`maxTokens`）が渡れば、返事に取っておく分は、手元で実際に許す出力の長さ（コンテキストウィンドウの `OUTPUT_SHARE` まで）と同じにする。
+   * 25% だけ取っておき、出力は 40% まで許していたので、8192・上限 4096 で約 1200 溢れ、ライブラリが最初の依頼から黙って落とした
+   */
+  const reserve = outputTokens !== undefined && outputTokens > 0
+    ? Math.max(256, Math.min(outputTokens, Math.floor(contextTokens * OUTPUT_SHARE)))
+    : Math.max(256, Math.min(reserveTokens, Math.floor(contextTokens * 0.25)));
   const fixed = Math.max(0, fixedTokens);
   const room = contextTokens - reserve - fixed;
   if (room >= 512) return room;
@@ -407,10 +416,26 @@ function fitCore(
       if (total(units) <= budget) break;
       const u = units[i]!;
       u.messages = u.messages.map((m) => {
+        // アシスタントの長い本文と、呼び出しの引数の長い文字列（`write_file` の全文など）も縮める。縮めずにいたので、
+        // 狭いコンテキストウィンドウでは予算を超えたまま送っていた。呼び出しの id と名前は残す（結果との対を崩さない）
+        if (m.role === 'assistant') {
+          const calls = m.toolCalls?.map((c) => {
+            const args = shrinkArgs(c.args);
+            return args === c.args ? c : { ...c, args };
+          });
+          const changedCalls = calls?.some((c, k) => c !== m.toolCalls![k]) ?? false;
+          const longBody = m.content.length > KEEP_LAST_RESORT;
+          if (!changedCalls && !longBody) return m;
+          shrunk = true;
+          return {
+            ...m,
+            ...(longBody ? { content: shrinkText(m.content) } : {}),
+            ...(changedCalls ? { toolCalls: calls } : {}),
+          };
+        }
         if (m.role !== 'tool' || m.content.length <= KEEP_LAST_RESORT) return m;
         shrunk = true;
-        const cut = m.content.length - KEEP_LAST_RESORT;
-        return { ...m, content: `${headOf(m.content, KEEP_LAST_RESORT)}\n…（この先 ${cut} 字は、文脈に収まらないので省いています）` };
+        return { ...m, content: shrinkText(m.content) };
       });
       u.chars = sizeOf(u.messages, count);
     }
@@ -539,4 +564,22 @@ function toUnits(history: readonly ProviderMessage[], count: Count = estimateTok
   }
   flush();
   return units;
+}
+
+/** 頭だけ残して、省いたと書く（最後の手段で縮めるときの形）。 */
+function shrinkText(text: string): string {
+  const cut = text.length - KEEP_LAST_RESORT;
+  return `${headOf(text, KEEP_LAST_RESORT)}\n…（この先 ${cut} 字は、文脈に収まらないので省いています）`;
+}
+
+/** 呼び出しの引数のうち、長い文字列の値だけを縮める。変えるものが無ければ、渡されたものをそのまま返す。 */
+function shrinkArgs(args: unknown): unknown {
+  if (typeof args === 'string') return args.length > KEEP_LAST_RESORT ? shrinkText(args) : args;
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return args;
+  let changed = false;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
+    if (typeof v === 'string' && v.length > KEEP_LAST_RESORT) { out[k] = shrinkText(v); changed = true; } else out[k] = v;
+  }
+  return changed ? out : args;
 }

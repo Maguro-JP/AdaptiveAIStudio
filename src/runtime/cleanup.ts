@@ -15,7 +15,8 @@
  * 消したことを隠すと、次に何かが無くなったときに疑う先が増える。
  */
 import { readdir, stat, rm, readFile, open } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
+import { execFile } from 'node:child_process';
 import { binDir, modelsDir, stateDir } from '../core/home.ts';
 import { INDEX_FORMAT } from '../agent/code-index.ts';
 
@@ -61,6 +62,30 @@ async function sizeOf(path: string): Promise<number> {
 }
 
 /**
+ * いま動いているプロセスのうち、`bin/<版>` の下の実行ファイルを使っているものの版。
+ * Windows は動いている実行ファイルを消させない（消せなかったと言う）ので、見ずに空を返す。`ps` が使えなければ undefined
+ */
+export function runningBinTags(platform: NodeJS.Platform = process.platform): Promise<Set<string> | undefined> {
+  if (platform === 'win32') return Promise.resolve(new Set());
+  const base = resolve(binDir()) + sep;
+  return new Promise((done) => {
+    execFile('ps', ['-ax', '-o', 'args='], { maxBuffer: 16 * 1024 * 1024 }, (err, out) => {
+      if (err) return done(undefined);
+      const tags = new Set<string>();
+      for (const line of String(out).split('\n')) {
+        let at = line.indexOf(base);
+        while (at >= 0) {
+          const tag = /^b\d+/.exec(line.slice(at + base.length))?.[0];
+          if (tag) tags.add(tag);
+          at = line.indexOf(base, at + 1);
+        }
+      }
+      done(tags);
+    });
+  });
+}
+
+/**
  * 消せるものを挙げる。**消さない。**
  *
  * 挙げるのと消すのを分けておくと、「何が消えるのか」だけを先に見せられる。
@@ -72,15 +97,20 @@ export async function findRemovable(opts: {
   maxLogAgeMs?: number;
   maxAttachmentAgeMs?: number;
   now?: number;
+  /** いま動いている llama-server の版（試験では外から渡す）。分からなければ undefined */
+  runningTags?: () => Promise<Set<string> | undefined>;
 } ): Promise<Removable[]> {
   const found: Removable[] = [];
   const now = opts.now ?? Date.now();
   const maxLogAge = opts.maxLogAgeMs ?? 30 * 24 * 60 * 60 * 1000;
   const maxAttachmentAge = opts.maxAttachmentAgeMs ?? 24 * 60 * 60 * 1000;
 
-  // 古い llama-server。使っている版だけ残す。
+  // 古い llama-server。使っている版だけ残す。いま動いている版も残す（更新の後、立ち上げ直す前に片づけると、動いている古い版を
+  // 消していた。Linux と macOS は動いていても消せる）。何が動いているか分からなければ、古い版は挙げない
+  const running = opts.runningTags ? await opts.runningTags() : await runningBinTags();
   for (const name of await readdir(binDir()).catch(() => [])) {
     if (name === opts.keepTag) continue;
+    if (running === undefined || running.has(name)) continue;
     // b で始まる版の形だけを対象にする。知らない名前は触らない。
     if (!/^b\d+$/.test(name)) continue;
     const path = join(binDir(), name);
@@ -91,10 +121,14 @@ export async function findRemovable(opts: {
   // 続きから取る作りにしてある）。それでも要らないなら片づけられるよう、
   // 何を捨てることになるかを添える。
   // 同じ場所は一度だけ見る（二度挙げると、消した量を二重に数える）
+  const own = new Set([modelsDir(), binDir()].map((d) => resolve(d)));
   for (const dir of [...new Set([modelsDir(), ...(opts.modelsDirs ?? []), binDir()].map((d) => resolve(d)))]) {
     for (const name of await readdir(dir).catch(() => [])) {
       // .part.tag は途中の分がどの版かの記録。途中の分と一緒に片づける
       if (!/\.(part|partial|tmp)(\.tag)?$/i.test(name)) continue;
+      // 利用者が選んだ保存先はほかのアプリと共用のことがある（Downloads など）。そこでは、このアプリが取りかけたモデルの形
+      // （`*.gguf.part`）だけを挙げる。名前の形だけで挙げていたので、ほかのアプリの途中のファイルまで消しえた
+      if (!own.has(dir) && !/\.gguf\.part(\.tag)?$/i.test(name)) continue;
       const path = join(dir, name);
       // いま取っている最中のものは消さない（書き続けているので新しい）。1 時間より古いものだけ
       const s = await stat(path).catch(() => undefined);

@@ -68,6 +68,11 @@ export class LineSource {
     process.on('SIGINT', this.#onProcessSigint);
   }
 
+  /** 入力を待っているか。待っていない（命令を走らせている）間の Ctrl-C で、対話を閉じないために使う。 */
+  get waiting(): boolean {
+    return this.#waiting !== undefined;
+  }
+
   /** 溜まっている行があるか。待機中かどうかの判断に使う。 */
   get hasPending(): boolean {
     return this.#pending.length > 0;

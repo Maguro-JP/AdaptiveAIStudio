@@ -33,7 +33,7 @@ import { createFetchUrlTool } from '../agent/tools/network.ts';
 import { formatPlan } from '../agent/pm.ts';
 import { checkUpdate, applyUpdate, describeUpdate } from '../core/update.ts';
 import { formatReport as formatAcceptance } from '../agent/acceptance.ts';
-import { formatEntry } from '../memory/memory.ts';
+import { formatEntry, placeKey } from '../memory/memory.ts';
 import { Session, quietCandidates } from '../core/session.ts';
 import { buildInspector } from '../core/inspector-setup.ts';
 import { expandCommand } from '../agent/commands.ts';
@@ -91,7 +91,10 @@ async function main(): Promise<void> {
   // 止めるときは、待っている承認の問いも解く（解かないと、止めたのに Enter を押すまで進まない）。
   // 考えごとの最中の Ctrl-C は考えごとだけを止める（前は対話を閉じ、考えごとは最後まで走ってから終わった）
   rl.onSigint(() => {
-    if (generating) { generating.abort(); rl.cancelWaiting(); } else if (thinking) thinking(); else rl.close();
+    if (generating) { generating.abort(); rl.cancelWaiting(); } else if (thinking) thinking();
+    // 入力を待っているときだけ閉じる。/ の命令を走らせている間に閉じると、命令は止まらずに最後まで走り、終わった所で対話ごと終わっていた
+    else if (rl.waiting) rl.close();
+    else console.log(c.dim('（いまの命令は途中で止められません。終わるまで待つか、2 秒以内にもう一度押すと終わります）'));
   });
 
   const approve = async (req: ApprovalRequest): Promise<boolean> => {
@@ -141,6 +144,8 @@ async function main(): Promise<void> {
   const note = ready.note ?? picked.note;
   if (candidates.length === 0) {
     console.error(c.red(`使えるモデルがありません: ${ready.why ?? note}`));
+    // 端末で打てる取り方を言う（「設定 → モデル」は画面にしか無く、端末の人は次に打つものが分からなかった）
+    console.error(c.dim('  取り方: npm run models -- --available で候補を見て、npm run models -- --get <名前> で取る。画面からなら npm run ui → モデル'));
     await runtime.shutdown().catch(() => undefined);
     process.exit(1);
   }
@@ -260,6 +265,8 @@ async function main(): Promise<void> {
           title: f.title, rationale: `[${f.roleName}] ${f.rationale}`,
           evidence: [target], suggestedAction: f.action,
           fingerprint: `panel:${f.title}`,
+          // どの作業場の提案かを付ける（付けずにいたので、どの作業場の一覧にも出て、別の作業場で採用・実行されえた）
+          root: placeKey((await getSession()).root),
         });
         console.log(c.cyan(`  💡 [${f.roleName}] ${f.title}`) + also);
         console.log(c.dim(`     ${f.rationale}`));

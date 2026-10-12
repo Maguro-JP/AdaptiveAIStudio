@@ -31,6 +31,17 @@ export interface ProviderMessage {
    * コンテキストウィンドウに収めるとき、今の依頼と見なさない（押し戻しを守って、本物の依頼を落とさない）。送る形には載せない。
    */
   nudge?: boolean;
+  /**
+   * 利用者が添えた画像（role === 'user' のとき）。画像を読めるモデルへの送り口だけが載せる。読めない送り口は見ない
+   * （本文には、画像を添えたことと保存先が文で入っている）。
+   */
+  images?: ProviderImage[];
+}
+
+/** 送る画像。`data` は base64（`data:` の頭は付けない）。 */
+export interface ProviderImage {
+  mime: string;
+  data: string;
 }
 
 /** ツールの定義。JSON Schema はモデル側へそのまま渡す。 */
@@ -128,4 +139,10 @@ export interface ChatProvider {
   listModels(): Promise<ModelDescriptor[]>;
 
   chat(req: ProviderRequest, signal: AbortSignal): AsyncIterable<ProviderChunk>;
+
+  /**
+   * そのモデルが画像を読めるか。分からなければ false（画像を渡さず、添えたことだけを文で伝える）。
+   * 持たない送り口は、画像を渡さない。
+   */
+  canSeeImages?(model: string, signal?: AbortSignal): Promise<boolean>;
 }

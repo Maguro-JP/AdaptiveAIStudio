@@ -33,6 +33,7 @@ import { extractFacts, headDimOf } from './gguf-spec.ts';
 import { totalmem } from 'node:os';
 import { DEFAULT_PRIORITY, Priority, PRIORITY_HEADER, toPriority } from '../providers/contract.ts';
 import { findRunaway, runawayNote } from './runaway.ts';
+import { OUTPUT_SHARE } from '../agent/window.ts';
 
 /** 暴走を見るときに持っておく直近の長さ。 */
 const RUNAWAY_TAIL = 512;
@@ -1331,7 +1332,7 @@ export class InProcRuntime implements LocalRuntime {
     // 決まり（system）と履歴が入る場所を残す。残さないと、必ず溢れる。
     // **実際に開いた窓で数える。**設定の値で数えていたので、モデルの窓が
     // 広くても狭いつもりで刈っていた（逆に、狭いのに広いつもりで溢れる）。
-    const room = Math.max(256, Math.floor(held.window * 0.4));
+    const room = Math.max(256, Math.floor(held.window * OUTPUT_SHARE));
     const wanted = typeof body.max_tokens === 'number' ? body.max_tokens : room;
     const capped = Math.min(wanted, room);
 

@@ -73,3 +73,29 @@ describe('外のツールの道', () => {
     assert.equal(d.kind, 'deny', `空白を含む外の絶対の道を素通しした: ${JSON.stringify(d)}`);
   });
 });
+
+describe('命令を通した書き込み（DECISIONS 10-11、117 回目）', () => {
+  const ask = async (command: string) => {
+    const root = await tempDir('aas-guard-cmd-');
+    const rule = protectedPaths(['**/.env', '**/.git/**', '**/*.key']);
+    return (await rule.pre!({ id: 'c', name: 'run_command', args: { command } },
+      { root, history: [], instruction: '', signal: new AbortController().signal })).kind;
+  };
+  test('守っているファイルへの書き込みは、命令を通しても止める', async () => {
+    for (const command of [
+      'echo x > .env', 'echo x >> sub/.env', 'printf a 2> .env', 'cat a | tee .git/config', 'tee -a .env < a',
+      'cp /tmp/h .git/hooks/pre-commit', 'mv x server.key', "sed -i 's/a/b/' .env", 'dd if=a of=.env', 'echo x >".env"',
+      // 118 回目: `-t`・フォルダへ写す形・`>|`・動かす/消す元・PowerShell の書き込み
+      'cp -t .git/hooks x', 'cp x .git/', 'cp -r x .git', 'install -t .git/hooks x', 'echo a >| .env',
+      'mv .env y', 'rm .env', 'Set-Content .env x', 'Set-Content -Path .env -Value x', 'echo x | Out-File -FilePath .env',
+    ]) assert.equal(await ask(command), 'deny', `通ってしまった: ${command}`);
+  });
+  test('守っていないファイルへの書き込みと、読むだけの命令は止めない（対）', async () => {
+    for (const command of [
+      'echo x > out.txt', 'cat .env', 'cp .env backup.txt', 'npm test 2>&1', 'git status', 'echo x >&2',
+      'echo "a > .env"', "echo 'x | tee .env'", 'echo ">" a.env-notes', 'cp a src/', 'mv a b', 'rm out.txt',
+    ]) {
+      assert.equal(await ask(command), 'allow', `止めてしまった: ${command}`);
+    }
+  });
+});

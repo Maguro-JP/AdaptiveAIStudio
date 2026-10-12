@@ -73,6 +73,16 @@ export function protectedPaths(given: string[], opts: { nocase?: boolean; window
     async pre(call, ctx) {
       // 外から来たツールも見る。何をするか分からないものを「書かない側」に
       // 置くと、ここが丸ごと素通りする（`mayWriteFiles`）。
+      // 命令を通した書き込み（`echo x > .env`・`cp x .git/hooks/pre-commit`・`sed -i … .env`）も、書き込み先を取り出して照らす。
+      // 書くツールの名前しか見ていなかったので、命令を通せば守っているファイルを書き換えられた（hooks に置いたものは次の git で走る）
+      if (call.name === 'run_command') {
+        const command = argString(call, 'command') ?? '';
+        for (const target of commandWriteTargets(command)) {
+          const hit = await matchProtected(ctx.root, target, patterns, opts);
+          if (hit) return deny(`${normalize(ctx.root, target)} は保護されています（${hit}）。命令を通しても書き換えられません。`);
+        }
+        return allow;
+      }
       if (!mayWriteFiles(call.name)) return allow;
 
       /*
@@ -438,10 +448,16 @@ export const dangerousCommands: Rule = {
       [/\b(ba|z|da|k)?sh\s+(-c\s+)?["']?(<\(|\$\(|`)\s*(curl|wget)\b/i, 'ダウンロードしたスクリプトの実行'],
       // ここから Windows。この場所の利用者は Windows で使う。Unix の形だけ
       // 見ていると、同じことを cmd と PowerShell で素通りさせる。
-      [/\b(rmdir|rd)\s+(\/s|-r)/i, '再帰削除'],
+      // `/s` は引数のどこにあってもよい（`rd /q /s C:\x`・`rmdir C:\x /s /q` が通っていた）
+      [/\b(rmdir|rd)\b[^|&;\n]*\s(\/s|-r(ecurse)?)\b/i, '再帰削除'],
       [/\bdel\s+(\/[a-z]\s+)*\/s\b/i, '再帰削除'],
-      [/\bRemove-Item\b[^|;]*-Recurse/i, '再帰削除'],
+      // PowerShell は引数名を頭だけに縮めて書け（`-r`・`-rec`）、Remove-Item には別名（`ri`・`del`・`erase`）がある。`-Recurse` の全部の綴りだけを見ていた
+      [/\b(Remove-Item|ri|del|erase)\b[^|;\n]*\s-r(e(c(u(r(s(e)?)?)?)?)?)?\b/i, '再帰削除'],
       [/\b(iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^|]*\|\s*(iex|Invoke-Expression)/i, 'ダウンロードしたスクリプトの実行'],
+      // 文字列をそのまま命令として走らせる形（`iex (irm …)`・`Invoke-Expression (New-Object Net.WebClient).DownloadString(…)`）。管を通る形しか見ていなかった
+      [/\b(iex|Invoke-Expression)\b/i, '文字列を命令として実行'],
+      // 中身を符号化して隠した命令（`-EncodedCommand`・縮めた `-enc`・`-e`）。読めないものは通さない（`-ExecutionPolicy` は当たらない）
+      [/\b(powershell|pwsh)(\.exe)?\b[^|;\n]*\s-e(nc(o(d(e(d(c(o(m(m(a(n(d)?)?)?)?)?)?)?)?)?)?)?)?\b/i, '中身の読めない命令'],
       [/\bformat\s+[a-z]:/i, 'ドライブの初期化'],
       [/\b(diskpart|reg\s+delete|shutdown)\b/i, '機械そのものへの操作'],
     ];
@@ -480,6 +496,51 @@ export function unshell(command: string): string {
     .replace(/\\(?=[A-Za-z])/g, '')
     .replace(/''|""/g, '')
     .replace(/(?<=[\w-])(['"])([^'"\s]*)\1/g, '$2');
+}
+
+/**
+ * 命令が書き込む先の道（照らすためだけ。分からない形は拾わない）。リダイレクト（`>`・`>>`・`>|`・`2>`）の行き先、`tee` の行き先、
+ * `cp`・`mv`・`install`・`ln` の行き先（`-t` を含む。フォルダならその中）、`mv`・`rm` の元、`sed -i`・`truncate` の対象、`dd of=` の行き先、
+ * PowerShell の `Set-Content`・`Add-Content`・`Out-File` の行き先。変数・`python -c` などの中の書き込みは拾わない。
+ */
+export function commandWriteTargets(command: string): string[] {
+  const out: string[] = [];
+  const unq = (w: string) => w.replace(/^["']|["']$/g, '');
+  // フォルダへ写す形（`cp x .git/`・`cp -r x .git`）は、その中に書くものとして照らす（`.git/**` はフォルダの名前そのものに当たらない）
+  const into = (t: string) => [t, `${t.replace(/[\\/]+$/, '')}/_`];
+  // 引用符の中の `>`・`|` は区切りでもリダイレクトでもない（`echo "a > .env"` を書き込みとして止めていた）。`>` の直後の引用符（`> ".env"`）は行き先なので残す
+  const masked = unshell(command)
+    .replace(/>\|/g, '>') // `>|`（上書きを強いるリダイレクト）。`|` で割って、行き先を見落としていた
+    .replace(/(>\s*)?(["'])([^"']*)\2/g, (m, gt: string | undefined, q: string, body: string) => (gt ? m : `${q}${body.replace(/[>|&;]/g, ' ')}${q}`));
+  for (const part of masked.split(/&&|\|\||;|\n|\|(?!&)/)) {
+    // リダイレクトの行き先（`>x`・`> x`・`2>>x`・`&>x`）。`>&2` のような向け先は道ではない
+    for (const m of part.matchAll(/\d*>>?\s*(?!&)("[^"]+"|'[^']+'|[^\s;|&<>]+)/g)) out.push(unq(m[1]!));
+    const words = part.replace(/\d*>>?\s*(?!&)("[^"]+"|'[^']+'|[^\s;|&<>]+)/g, ' ').trim().split(/\s+/).filter(Boolean).map(unq);
+    const head = (words[0] ?? '').toLowerCase().replace(/^.*[\\/]/, '');
+    const args = words.slice(1);
+    const plain = args.filter((w) => !w.startsWith('-'));
+    // `-t X`・`--target-directory=X`（書き込み先が最後の語でない形）
+    const targetDir = args.flatMap((w, i) => (w === '-t' ? [args[i + 1] ?? ''] : w.startsWith('--target-directory=') ? [w.slice(19)] : []));
+    if (head === 'tee') out.push(...plain);
+    else if (['cp', 'install', 'ln', 'copy', 'xcopy'].includes(head)) {
+      if (targetDir.length > 0) for (const t of targetDir) out.push(...into(t));
+      else if (plain.length >= 2) out.push(...into(plain.at(-1)!));
+    } else if (['mv', 'move'].includes(head)) {
+      // 動かすと元は消える。元の側も書き込み先として照らす（`mv .env y` が通っていた）
+      out.push(...plain.filter((p) => !targetDir.includes(p)));
+      for (const t of targetDir.length > 0 ? targetDir : plain.slice(-1)) out.push(...into(t));
+    } else if (['rm', 'unlink', 'del', 'erase', 'remove-item', 'ri'].includes(head)) out.push(...plain);
+    else if (head === 'sed' && args.some((w) => /^-i/.test(w) || w === '--in-place')) out.push(...plain.slice(1));
+    else if (head === 'truncate') out.push(...plain);
+    else if (head === 'dd') {
+      for (const w of args) if (w.startsWith('of=')) out.push(w.slice(3));
+    } else if (['set-content', 'add-content', 'out-file', 'sc', 'ac'].includes(head)) {
+      // PowerShell の書き込み。`-Path X`・`-FilePath X`・`-LiteralPath X`、無ければ最初の語
+      const named = args.flatMap((w, i) => (/^-(path|filepath|literalpath)$/i.test(w) ? [args[i + 1] ?? ''] : []));
+      out.push(...(named.length > 0 ? named : plain.slice(0, 1)));
+    }
+  }
+  return out.filter((t) => t.length > 0);
 }
 
 /** git を動かした所で命令を走らせる設定の鍵。 */

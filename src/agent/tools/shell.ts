@@ -53,8 +53,9 @@ export function createRunCommandTool(opts: {
 
       // 先頭だけ見ると、`echo x && <何でも>` で防波堤が飾りになる。
       // 繋いだ命令は**一つずつ**先頭を見る。中で別の命令を組み立てる形
-      // （$( ) と ` `）は、何が走るか読めないので通さない。
-      if (/\$\(|`/.test(command)) {
+      // （$( ) と ` `）は、何が走るか読めないので通さない。`<( )` `>( )`（別の命令の出力をファイルとして渡す）も同じ
+      // （通していたので、許された `cat` の後ろの `<(npm publish)` が走りえた）
+      if (/\$\(|`|[<>]\(/.test(command)) {
         return fail(`中で別の命令を組み立てる形は実行しません: ${command}`);
       }
       for (const part of splitChain(command)) {

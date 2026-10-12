@@ -295,3 +295,17 @@ describe('作業場ごとの重なり（96 回目の調査）', () => {
     assert.equal(q.add({ ...input('parse() に試験が無い'), root: 'A', fingerprint: 'fp:x' }), undefined);
   });
 });
+
+describe('記録を読めないとき（DECISIONS 10-11、111 回目）', () => {
+  test('考えごとの発見を黙って捨てず、手元の一覧には足す。残せなかったことは保存が言う', async () => {
+    const dir = await tempDir('aas-proposals-unreadable-');
+    const path = join(dir, 'proposals.json');
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(path); // ファイルの場所にフォルダを置いて、読めなくする（権限に頼らない）
+    const q = new ProposalQueue(path);
+    const added = q.add({ kind: 'bug', title: '読めない間の発見', rationale: 'r', evidence: [], suggestedAction: 'a', fingerprint: 'f1', root: 'w' });
+    assert.ok(added, '読めない間の発見を捨てた');
+    assert.ok(q.open().some((p) => p.title === '読めない間の発見'));
+    assert.ok(await q.save(), '残せなかったことを言っていない');
+  });
+});

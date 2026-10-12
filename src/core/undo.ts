@@ -638,7 +638,12 @@ export class UndoStore {
       const point = { id: pointId };
       for (const raw of putBackOrder((stored.files ?? []).map(fromStored))) {
         const abs = safeResolve(this.#root, raw.path);
-        if (!abs) continue;
+        // 作業場の外を指す道（記録を手で直した等）は戻せない。黙って飛ばすと失敗に数えず、戻り先ごと消して戻す手が残らなかった
+        if (!abs) {
+          last.set(raw.path, 'failed');
+          oldest.set(raw.path, point.id);
+          continue;
+        }
         const key = this.#key(raw.path);
         if (!spelled.has(key)) spelled.set(key, raw.path);
         const saved = { ...raw, path: spelled.get(key)! };

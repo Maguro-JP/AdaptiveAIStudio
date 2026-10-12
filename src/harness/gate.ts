@@ -136,7 +136,8 @@ const OUTBOUND: Pattern[] = [
 /** 前後を少しだけ切り出す。全部を記録に残すと、そこから漏れる。 */
 function excerpt(text: string, at: number, len: number): string {
   const from = Math.max(0, at - 20);
-  const raw = text.slice(from, Math.min(text.length, at + len + 20));
+  // 見えない字を外してから伏せる（15 字ごとに幅の無い字を挟むと、どの塊も 20 字に届かず伏せなかった）
+  const raw = normalized(text.slice(from, Math.min(text.length, at + len + 20)));
   // 合言葉そのものは記録に残さない。伏せる。
   return raw.replace(/[A-Za-z0-9_-]{20,}/g, (m) => `${m.slice(0, 4)}…（伏せました）`);
 }
@@ -150,13 +151,17 @@ function inspect(text: string, patterns: Pattern[]): Verdict {
   const findings: Finding[] = [];
   const plain = normalized(text);
   for (const p of patterns) {
-    const m = p.match.exec(text) ?? (plain === text ? null : p.match.exec(plain));
+    // 揃えた形でだけ当たったなら、位置は揃えた形の中の位置。抜き出しも揃えた形から取る（元の文から取っていたので、
+    // 見えない字が前にあるほどずれ、当たった所と関係のない所を見せていた）
+    const inText = p.match.exec(text);
+    const m = inText ?? (plain === text ? null : p.match.exec(plain));
     if (!m) continue;
+    const from = inText ? text : plain;
     findings.push({
       severity: p.severity,
       kind: p.kind,
       detail: p.detail,
-      excerpt: excerpt(text, m.index, m[0].length),
+      excerpt: excerpt(from, m.index, m[0].length),
     });
   }
   return { passed: !findings.some((f) => f.severity === 'block'), findings };

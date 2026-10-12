@@ -30,7 +30,7 @@ npm run doctor
 ### 疑うのは、まずパスの文字
 
 ```
-C:\Users\ｍ＠ｇｕｒｏ\.ollama
+C:\Users\ｕｓｅｒ\.ollama
            ^^^^^^^^ 全角
 ```
 
@@ -44,7 +44,7 @@ llama.cpp 系は、モデルを開くときにワイド文字のAPIを通らな�
 
 ```
 未了  既定の Ollama 置き場に全角・日本語が入っています
-      C:\Users\ｍ＠ｇｕｒｏ\.ollama  ← ｍ＠ｇｕｒｏ
+      C:\Users\ｕｓｅｒ\.ollama  ← ｕｓｅｒ
       → ASCII だけの場所に移してください。例:
           set OLLAMA_MODELS=%ProgramData%\Ollama
 ```

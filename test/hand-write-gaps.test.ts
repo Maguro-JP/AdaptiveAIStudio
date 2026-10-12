@@ -194,3 +194,15 @@ describe('レビューで挙がった筋書き', () => {
     await assert.rejects(stat(used.path));
   });
 });
+
+test('既定の守りに、よくある鍵ファイルが入っている。公開鍵は入らない（DECISIONS 10-11、117 回目）', async () => {
+  const { protectedHit } = await import('../src/core/harness-setup.ts');
+  const { DEFAULT_CONFIG } = await import('../src/config.ts');
+  const work = await tempDir('aas-default-keys-');
+  for (const p of ['.ssh/id_ed25519', 'id_ecdsa', 'certs/server.key', 'a.p12', 'b.pfx', '.netrc']) {
+    assert.ok(await protectedHit(work, p, DEFAULT_CONFIG, 'linux'), `守っていない: ${p}`);
+  }
+  for (const p of ['.ssh/id_ed25519.pub', '.npmrc', 'src/key.ts']) {
+    assert.equal(await protectedHit(work, p, DEFAULT_CONFIG, 'linux'), undefined, `守りすぎ: ${p}`);
+  }
+});

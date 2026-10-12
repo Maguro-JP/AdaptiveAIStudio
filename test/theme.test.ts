@@ -188,7 +188,15 @@ describe('効果', () => {
 
   test('効果は無くてもよい', () => {
     const { theme } = repairTheme({ id: 'x', effects: [] });
-    assert.equal(theme.effects, undefined);
+    assert.deepEqual(theme.effects, []);
+  });
+
+  test('効果を全部外した形は、読み直しても元のテーマの効果に戻らない（DECISIONS 10-11、108 回目）', () => {
+    const { theme: saved } = repairTheme({ id: 'terminal', effects: [] });
+    const { theme: again } = repairTheme(JSON.parse(JSON.stringify(saved)));
+    assert.deepEqual(again.effects, [], '空の配列を書き残さず、読み直すと元のテーマの効果に戻った');
+    // 効果を指定しなければ、今までどおり元のテーマの効果を使う（対）
+    assert.ok((repairTheme({ id: 'terminal' }).theme.effects ?? []).length > 0);
   });
 
   test('用意した効果には、必ず見た目の指定がある', async () => {

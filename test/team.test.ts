@@ -122,6 +122,11 @@ describe('書き込み先を挙げない書き手', () => {
     assert.equal([...outcomes.values()].filter((o) => o.state === 'done').length, 3);
     assert.equal(peak, 1, `書き込み先を挙げない書き手が同時に走った (peak=${peak})`);
   });
+  test('書き込み先の綴りが違うだけの同じファイルは、同時に走らない（DECISIONS 10-11、107 回目）', async () => {
+    const spelled = (id: string, writes: string): WorkItem => ({ id, laneId: 'coder', writes: [writes], instruction: 'a.txt を作成してください。' });
+    const { peak } = await runTeam([spelled('t1', './a.txt'), spelled('t2', 'a.txt')], 2);
+    assert.equal(peak, 1, `./a.txt と a.txt を別のファイルとして同時に走らせた (peak=${peak})`);
+  });
   test('読むだけの作業は、書き込み先が無くても並べて走る（対）', async () => {
     const bare = (id: string, file: string): WorkItem => ({ id, laneId: 'coder', instruction: `${file} を作成してください。` });
     const { peak } = await runTeam([bare('t1', 'a.txt'), bare('t2', 'b.txt')], 2, {}, [readFileTool]);

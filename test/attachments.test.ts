@@ -118,8 +118,24 @@ describe('依頼に添える形', () => {
     const s = await store();
     const item = await s.add('shot.png', png);
     const text = await s.describe([item.id]);
-    assert.match(text, /画像を読めません/);
+    assert.match(text, /画像の中身はモデルに渡していません/);
     assert.match(text, /置き場所/);
+    // 画像を渡す道はまだ無いので、切り替えれば読めるとは案内しない（DECISIONS 10-11、112 回目）
+    assert.doesNotMatch(text, /切り替え/);
+  });
+
+  test('読めるモデルでも、読み出せなかった画像は渡したと書かない（DECISIONS 10-11、113 回目）', async () => {
+    const s = await store();
+    const item = await s.add('shot.png', png);
+    const text = await s.describe([item.id], { canSeeImages: true, passedImages: new Set() });
+    assert.match(text, /渡していません（読み出せませんでした）/);
+  });
+
+  test('段取りの道では、読めるモデルでも渡していないと書く（DECISIONS 10-11、113 回目）', async () => {
+    const s = await store();
+    const item = await s.add('shot.png', png);
+    const text = await s.describe([item.id], { canSeeImages: true, passedImages: new Set([item.id]), imagesWithheld: '段取りでは画像を渡しません' });
+    assert.match(text, /渡していません（段取りでは画像を渡しません）/);
   });
 
   test('画像を読めるモデルなら、場所だけ渡す', async () => {

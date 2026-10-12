@@ -5,14 +5,14 @@ import { hasNonAscii, nonAsciiPart, inspectEnvironment, parseCudaVersion,
 
 describe('全角・日本語を含むパス', () => {
   test('見つける', () => {
-    assert.equal(hasNonAscii('C:\\Users\\ｍ＠ｇｕｒｏ\\.ollama'), true);
+    assert.equal(hasNonAscii('C:\\Users\\ｕｓｅｒ\\.ollama'), true);
     assert.equal(hasNonAscii('C:\\Users\\山田\\models'), true);
     assert.equal(hasNonAscii('C:\\ai\\models'), false);
     assert.equal(hasNonAscii('/home/user/models'), false);
   });
 
   test('どの文字が悪いのかを指させる', () => {
-    assert.equal(nonAsciiPart('C:\\Users\\ｍ＠ｇｕｒｏ\\x'), 'ｍ＠ｇｕｒｏ');
+    assert.equal(nonAsciiPart('C:\\Users\\ｕｓｅｒ\\x'), 'ｕｓｅｒ');
     assert.equal(nonAsciiPart('C:\\ai'), '');
   });
 
@@ -32,12 +32,12 @@ describe('環境の見立て', () => {
 
   test('全角のユーザー名を、止まる原因として挙げる', async () => {
     const issues = await inspectEnvironment({
-      ...base, userProfile: 'C:\\Users\\ｍ＠ｇｕｒｏ',
+      ...base, userProfile: 'C:\\Users\\ｕｓｅｒ',
     });
     const found = issues.find((i) => i.title.includes('Ollama'));
     assert.ok(found, '既定の Ollama 置き場を見ていない');
     assert.equal(found!.level, 'bad');
-    assert.ok(found!.detail.includes('ｍ＠ｇｕｒｏ'));
+    assert.ok(found!.detail.includes('ｕｓｅｒ'));
     assert.ok(found!.fix.includes('OLLAMA_MODELS'), '次に打つ一手が無い');
     assert.ok(found!.fix.includes('LM Studio'), '同じ原因で困る場所に触れていない');
   });
@@ -50,7 +50,7 @@ describe('環境の見立て', () => {
   });
 
   test('作業ディレクトリは見ない。読むのは Node なので全角でも動く', async () => {
-    const issues = await inspectEnvironment({ ...base, root: 'C:\\Users\\ｍ＠ｇｕｒｏ\\work' });
+    const issues = await inspectEnvironment({ ...base, root: 'C:\\Users\\ｕｓｅｒ\\work' });
     assert.deepEqual(issues, [], '実機で正常動作している構成を「未了」にしてはいけない');
   });
 
@@ -73,7 +73,7 @@ describe('環境の見立て', () => {
 
   test('見つけたものには、必ず次の一手が付く', async () => {
     const issues = await inspectEnvironment({
-      ...base, root: 'C:\\作業', modelsDir: 'D:\\モデル', userProfile: 'C:\\Users\\ｍ＠ｇｕｒｏ',
+      ...base, root: 'C:\\作業', modelsDir: 'D:\\モデル', userProfile: 'C:\\Users\\ｕｓｅｒ',
     });
     assert.equal(issues.length, 2, 'モデルの置き場と Ollama の置き場だけ');
     for (const i of issues) assert.ok(i.fix.length > 0, `${i.title} に一手が無い`);

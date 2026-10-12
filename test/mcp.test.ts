@@ -219,6 +219,14 @@ describe('Windows では npx を cmd 越しに起こす', () => {
     // 命令の側は常に囲む（cmd.exe は命令の位置の `/` をスイッチと読む）
     assert.deepEqual(spawnPlan('npx.cmd', 'win32'), { command: '"npx.cmd"', shell: true });
     assert.deepEqual(spawnPlan('C:/tools/srv.cmd', 'win32'), { command: '"C:/tools/srv.cmd"', shell: true });
+    // 道つきで拡張子の無い名前は、見つけた実体（`npx.cmd`）で起こす。綴りのまま spawn して ENOENT で落ちていた（DECISIONS 10-11、121 回目）
+    assert.deepEqual(
+      spawnPlan('C:\\Program Files\\nodejs\\npx', 'win32', 'C:\\Program Files\\nodejs\\npx.cmd'),
+      { command: '"C:\\Program Files\\nodejs\\npx.cmd"', shell: true },
+    );
+    // 見つけた実体が無いとき・拡張子付きで書かれたとき・Windows でないときは、今までどおり
+    assert.deepEqual(spawnPlan('C:\\tools\\srv.exe', 'win32', 'C:\\tools\\srv.exe'), { command: 'C:\\tools\\srv.exe', shell: false });
+    assert.deepEqual(spawnPlan('/usr/bin/npx', 'linux', '/usr/bin/npx'), { command: '/usr/bin/npx', shell: false });
     assert.deepEqual(spawnPlan('C:\\Program Files\\nodejs\\npx.CMD', 'win32'),
       { command: '"C:\\Program Files\\nodejs\\npx.CMD"', shell: true });
     assert.deepEqual(spawnPlan('run.sh', 'linux'), { command: 'run.sh', shell: false });

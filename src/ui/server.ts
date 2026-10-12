@@ -86,6 +86,10 @@ import { Session } from '../core/session.ts';
 import { Conversation } from '../core/conversation.ts';
 import type { ApprovalRequest, ApprovalAnswer } from '../agent/tools/types.ts';
 import { ForgetShelf, forgetAndSave, restoreAndSave } from '../memory/forget-shelf.ts';
+import type { ProviderImage } from '../providers/contract.ts';
+
+/** 送るものを組み立てた結果。画像は、画像を読めるモデルのときだけ入る。 */
+interface Composed { text: string; images: ProviderImage[] }
 
 /**
  * 画面から回せる点検。
@@ -857,7 +861,7 @@ export class UiServer {
       conv.restore(past);
       run.saved = past.length;
       const full = await this.#compose(session, text, attached, undefined);
-      for await (const event of session.send(full, { said: text, conversation: conv })) {
+      for await (const event of session.send(full.text, { said: text, conversation: conv, images: full.images })) {
         if (event.type === 'settled') {
           settled = { reason: event.reason, verified: event.verified, checked: event.checked };
           if (event.model) this.#lastAnswered = event.model;
@@ -923,7 +927,7 @@ export class UiServer {
       // 添付は依頼の前に置く。後ろに置くと、長い中身のせいで
       // 肝心の指示が末尾に押しやられて、モデルが取りこぼす。
       const full = await this.#compose(session, text, attached, editor);
-      this.#bg(this.#drive(session, full, undefined, { said: text, ...(editor ? { editor } : {}) }),
+      this.#bg(this.#drive(session, full.text, undefined, { said: text, images: full.images, ...(editor ? { editor } : {}) }),
         '依頼の実行が落ちました');
       started = true;
     } finally {
@@ -1504,7 +1508,7 @@ export class UiServer {
         // 受け取ったことだけ先に返し、続きは出来事として流す。
         send(res, 202, { accepted: true, conversationId, loading: false });
         // 判じるのは、利用者が打った分だけ（差し込んだ中身は利用者の言葉ではない）。
-        this.#bg(this.#drive(session, full, undefined, { said: text, ...(editor ? { editor } : {}) }),
+        this.#bg(this.#drive(session, full.text, undefined, { said: text, images: full.images, ...(editor ? { editor } : {}) }),
           '依頼の実行が落ちました');
       } finally {
         release();
@@ -1542,10 +1546,11 @@ export class UiServer {
         const session = await this.session();
 
         // 送り口と同じ組み立て（添付・開いている所・@ の指名）。返事の前に組む（返した後に投げると、受け手の無い失敗になる）
-        const full = await this.#compose(session, text, attached, editor);
+        const full = await this.#compose(session, text, attached, editor, { imagesWithheld: '段取りでは画像を渡しません' });
         send(res, 202, { accepted: true });
         planStarted = true;
-        this.#bg(this.#drivePlan(session, full, text), '段取りが落ちました');
+        // 段取りは担当が並列に動くので、画像は渡さない（本文の「添付（画像）」の行と保存先は届く）
+        this.#bg(this.#drivePlan(session, full.text, text), '段取りが落ちました');
       } finally {
         this.#prep -= 1;
         // 始めずに抜けた（断った・組めなかった）なら、支度の間に積まれた送りを流す（始めた回は、段取りの終わりで流す）
@@ -1786,6 +1791,8 @@ export class UiServer {
       for (const { finish } of this.#pending.values()) finish(false);
       this.#pending.clear();
       for (const ac of this.#background) ac.abort();
+      // モデルの取得も止める（取りかけた分は残るので、もう一度押せば続きから取る）
+      this.#fetchAbort?.abort();
       // 順番待ちも取り消す。残すと、止めた依頼の終わりで次が「続けます」で走り出す（■ が効かないと見える）
       const dropped = this.#queue.splice(0).length;
       if (dropped > 0) {
@@ -3683,7 +3690,7 @@ export class UiServer {
 
   async #drive(
     session: Session, text: string, resuming?: string,
-    opts: { fromUser?: boolean; said?: string; recall?: string; editor?: EditorHere } = {},
+    opts: { fromUser?: boolean; said?: string; recall?: string; editor?: EditorHere; images?: ProviderImage[] } = {},
   ): Promise<void> {
     /*
      * 「この依頼のあいだは訊かない」は、その依頼のあいだだけ。
@@ -4273,10 +4280,22 @@ export class UiServer {
    * 窓から決める形に直したとき、送り口だけ直して順番待ちの方が
    * 取り残されていた。
    */
-  async #compose(session: Session, text: string, attached: string[], editor?: EditorHere): Promise<string> {
+  async #compose(
+    session: Session, text: string, attached: string[], editor?: EditorHere, opts: { imagesWithheld?: string } = {},
+  ): Promise<Composed> {
     const room = mentionBudget(session.contextTokens);
+    // 画像を読めるモデルにだけ、画像そのものを渡す（読めないなら、添えたことと保存先だけを文で伝える）
+    const hasImage = !opts.imagesWithheld && attached.some((id) => this.#attachments.get(id)?.kind === 'image');
+    const canSeeImages = hasImage ? await session.canSeeImages() : false;
+    const got = canSeeImages
+      ? await this.#attachments.images(attached).catch(() => ({ images: [], passed: new Set<string>() }))
+      : { images: [], passed: new Set<string>() };
+    const images = got.images;
     const extra = attached.length > 0
-      ? await this.#attachments.describe(attached, { chars: room }).catch(() => '')
+      ? await this.#attachments.describe(attached, {
+        chars: room, canSeeImages, passedImages: got.passed,
+        ...(opts.imagesWithheld ? { imagesWithheld: opts.imagesWithheld } : {}),
+      }).catch(() => '')
       : '';
     // 開いている所は、依頼と同じ枠から取る（添付の後、指名の前）。
     const here = describeEditorHere(editor, Math.min(2000, Math.floor(room.total / 4)));
@@ -4288,7 +4307,7 @@ export class UiServer {
       if (!r.ok) this.broadcast({ type: 'log', level: 'warn', text: `指名を読めません ${r.path}: ${r.body}` });
     }
     // **依頼を末尾に置く。**前に長い中身を積むので、指示が埋もれないようにする。
-    return [extra, here, named.text].filter((x) => x).join('\n\n');
+    return { text: [extra, here, named.text].filter((x) => x).join('\n\n'), images };
   }
 
   /**
@@ -4310,7 +4329,7 @@ export class UiServer {
     this.broadcast({ type: 'queue', waiting: this.#queue.length });
     if (!next) return;
     this.#prep += 1;
-    let full: string;
+    let full: Composed;
     try {
       // 前の作業場の本体なら畳んで組み直す（作業中に作業場を変えたあと、最初に空いた所がここのことがある）
       if (await this.#retireIfRootMoved({ mine: true }) || this.#session !== session) session = await this.session();
@@ -4335,7 +4354,7 @@ export class UiServer {
       this.#prep -= 1;
     }
     this.broadcast({ type: 'log', level: 'info', text: `順番待ちから続けます: ${next.text.split('\n')[0]?.slice(0, 60) ?? ''}` });
-    this.#bg(this.#drive(session, full, undefined, { said: next.text, ...(next.editor ? { editor: next.editor } : {}) }),
+    this.#bg(this.#drive(session, full.text, undefined, { said: next.text, images: full.images, ...(next.editor ? { editor: next.editor } : {}) }),
       '順番待ちの実行が落ちました');
   }
 
@@ -4385,6 +4404,8 @@ export class UiServer {
    * 見えない。**押しても永久に何も起きないように見える。**
    */
   #fetching: { id: string; state: 'running' | 'done' | 'failed'; message: string; began: number; progress?: FetchStatus } | undefined;
+  /** 取得を止める口。■（`/api/abort`）で止める（渡していなかったので、■ を押しても取り続け、その間は別の取得を断っていた） */
+  #fetchAbort: AbortController | undefined;
 
   /**
    * 困ったときの報告。**押した所に結果を出すために持つ。**
@@ -4451,7 +4472,16 @@ export class UiServer {
   }
 
   async #fetchModel(session: Session, id: string): Promise<void> {
-    const runtime = await this.#localRuntime();
+    // 止め口は待つ前に作る。受付の時点で「取得中」と見えるので、ここで待つ間に押された ■ が何も止めていなかった
+    const stop = new AbortController();
+    this.#fetchAbort = stop;
+    let runtime: LocalRuntime;
+    try {
+      runtime = await this.#localRuntime();
+    } catch (e) {
+      if (this.#fetchAbort === stop) this.#fetchAbort = undefined;
+      throw e;
+    }
     const entry = lookupCatalog(id);
     const began = Date.now();
     /*
@@ -4490,6 +4520,7 @@ export class UiServer {
           modelsDir: dir,
           onProgress: log,
           onStatus: status,
+          signal: stop.signal,
           ...(this.#opts.modelFetch ? { fetchImpl: this.#opts.modelFetch } : {}),
         });
       } else {
@@ -4499,11 +4530,26 @@ export class UiServer {
           )?.baseUrl ?? 'http://localhost:11434/v1',
           ref: entry?.ollama ?? id,
           onProgress: log,
+          signal: stop.signal,
         });
       }
       this.#fetching = { id, state: 'done', message: `用意できました: ${id}`, began };
       this.broadcast({ type: 'log', level: 'info', text: `用意できました: ${id}` });
+      // 使えるモデルが 0 件のまま組んだ本体は畳む。次に送るときに組み直し、取ったモデルを候補に入れる
+      // （候補は組むときに一度だけ決めるので、立ち上げ直すまで「使えるモデルがありません」が続いていた）
+      const live = this.#session;
+      if (live && live.candidates.length === 0 && !this.#busyNow(live)) await this.#retireSession(live).catch(() => undefined);
     } catch (e) {
+      if (stop.signal.aborted) {
+        // 止めた。取りかけた分は残す（もう一度押すと続きから取る）
+        const text = `取得を止めました: ${id}（取りかけた分は残っているので、もう一度押すと続きから取ります）`;
+        this.#fetching = { id, state: 'failed', message: text, began };
+        this.broadcast({ type: 'log', level: 'warn', text });
+        this.broadcast({ type: 'stateChanged' });
+        this.#jobsChanged();
+        if (this.#fetchAbort === stop) this.#fetchAbort = undefined;
+        return;
+      }
       /*
        * **行き止まりにしない。**
        *
@@ -4523,6 +4569,7 @@ export class UiServer {
       this.#fetching = { id, state: 'failed', message: text, began };
       this.broadcast({ type: 'log', level: 'error', text });
     }
+    if (this.#fetchAbort === stop) this.#fetchAbort = undefined;
     this.broadcast({ type: 'stateChanged' });
     this.#jobsChanged();
   }

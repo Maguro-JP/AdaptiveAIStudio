@@ -21,3 +21,13 @@ test('検収は綴りではなくファイルで比べる', () => {
   const v = judge({ members: [], changed: ['src/a.ts'], declared: ['./src/a.ts'], verified: 'passed' } as never) as { concerns?: Array<{ reason: string }> };
   assert.doesNotMatch(JSON.stringify(v), /計画に無いファイル/, JSON.stringify(v));
 });
+
+test('作業場の中を指す絶対パスは、作業場からの相対パスに揃える', () => {
+  assert.equal(normalizeWrite('/home/u/work/src/a.ts', '/home/u/work'), 'src/a.ts');
+  assert.equal(normalizeWrite('/home/u/work/src/a.ts', '/home/u/work/'), 'src/a.ts');
+  assert.equal(normalizeWrite('C:\\Users\\u\\work\\src\\a.ts', 'c:\\Users\\u\\work'), 'src/a.ts');
+  // 作業場の外・名前の頭が同じだけの別のフォルダは、相対にしない
+  assert.equal(normalizeWrite('/home/u/work2/src/a.ts', '/home/u/work'), 'home/u/work2/src/a.ts');
+  // 根を渡さなければ今までどおり
+  assert.equal(normalizeWrite('./src/a.ts'), 'src/a.ts');
+});

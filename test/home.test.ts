@@ -544,23 +544,23 @@ describe('全角の利用者名でも、モデルは開ける場所へ置く', (
   });
 
   test('全角が混ざる根は、モデルだけ ProgramData へ逃がす', () => {
-    const got = asciiModelsDir('C:\\Users\\ｍ＠ｇｕｒｏ\\.aas', env);
+    const got = asciiModelsDir('C:\\Users\\ｕｓｅｒ\\.aas', env);
     assert.equal(got, join('C:\\ProgramData', 'AdaptiveAIStudio', 'models'));
     assert.ok(isAsciiPath(got!), '逃がした先まで全角では意味がない');
   });
 
   test('逃がす先が無ければ、黙って動かさない', () => {
     // 見つからないのに勝手な場所を作らない。C: 直下に作るのがいちばん困る。
-    assert.equal(asciiModelsDir('C:\\Users\\ｍ＠ｇｕｒｏ\\.aas', {}), undefined);
+    assert.equal(asciiModelsDir('C:\\Users\\ｕｓｅｒ\\.aas', {}), undefined);
   });
 
   test('逃がす先自体が全角なら、逃がさない', () => {
-    assert.equal(asciiModelsDir('C:\\Users\\ｍ＠ｇｕｒｏ\\.aas', { ProgramData: 'D:\\データ' }), undefined);
+    assert.equal(asciiModelsDir('C:\\Users\\ｕｓｅｒ\\.aas', { ProgramData: 'D:\\データ' }), undefined);
   });
 
   test('プログラムと記録は逃がさない（割れるほうが分かりにくい）', () => {
     // モデルだけが困る。他は全角の道でも読み書きできる。
-    assert.equal(isAsciiPath('C:\\Users\\ｍ＠ｇｕｒｏ'), false);
+    assert.equal(isAsciiPath('C:\\Users\\ｕｓｅｒ'), false);
     assert.equal(isAsciiPath('C:\\ProgramData\\AdaptiveAIStudio'), true);
   });
 });

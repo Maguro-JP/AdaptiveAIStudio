@@ -50,6 +50,8 @@ export interface PmContext {
   fallbackRoleId: string;
   /** 分け過ぎを止める。細かすぎる分解は、一人でやるより遅い。 */
   maxItems?: number;
+  /** 作業場の根。計画の書き込み先が絶対パスなら、ここからの相対パスに直す */
+  root?: string;
   /**
    * 役職ごとの権限。誰が書き、誰が調べるだけかを知るために要る。
    * 省略すると二人目を付ける判断ができないので、その場合は付けない。
@@ -122,11 +124,23 @@ const asStringArray = (v: unknown): string[] =>
     : Array.isArray(v) ? v.map(asString).filter((s): s is string => !!s) : [];
 
 /** 書き込み先を比較できる形に揃える。表記揺れで錠が効かないのが一番まずい。 */
-export function normalizeWrite(path: string): string {
+export function normalizeWrite(path: string, root?: string): string {
   // `./` の繰り返し・途中の `./`・`//`・`a/../` も畳む（一つ目の `./` だけを外していたので、`././src/a.ts` と `src/a.ts` が
   // 別の書き込み先として同時に走り、互いの書き換えを潰しえた）。末尾の `/` は外さない（フォルダの指定のため）
-  const flat = path.trim().replace(/\\/g, '/');
+  let flat = path.trim().replace(/\\/g, '/');
   if (flat === '') return '';
+  /*
+   * 作業場の中を指す絶対パスは、作業場からの相対パスにする。頭の `/` を外すだけだったので、`/home/u/w/src/a.ts` が
+   * `home/u/w/src/a.ts` という別の書き込み先になり、`src/a.ts` と錠が効かず、検収では「計画に無いファイル」と言っていた。
+   * Windows のドライブの字は大小を区別しない
+   */
+  if (root) {
+    const base = posix.normalize(root.replace(/\\/g, '/')).replace(/\/+$/, '');
+    const abs = posix.normalize(flat);
+    const sameDrive = (a: string) => a.replace(/^([A-Za-z]):/, (_, d: string) => `${d.toLowerCase()}:`);
+    const head = `${sameDrive(base)}/`;
+    if (base !== '' && sameDrive(abs).startsWith(head)) flat = abs.slice(head.length);
+  }
   const folded = posix.normalize(flat).replace(/^(\.\/)+/, '').replace(/^\/+/, '');
   return folded === '.' ? '' : folded;
 }
@@ -183,7 +197,7 @@ export function repairPlan(raw: unknown, request: string, ctx: PmContext): WorkP
       roleId,
       laneId,
       deps: asStringArray(e.deps),
-      writes: asStringArray(e.writes).map(normalizeWrite),
+      writes: asStringArray(e.writes).map((w) => normalizeWrite(w, ctx.root)),
       why: asString(e.why),
     });
   }

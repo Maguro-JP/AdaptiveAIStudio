@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { mkdir, writeFile, rm, readdir } from 'node:fs/promises';
 import { tempDir } from './tmp.ts';
 import { findRemovable } from '../src/runtime/cleanup.ts';
+import { spawn } from 'node:child_process';
 
 /** 置き場を作って、その中に一式を並べる。 */
 async function scratch(): Promise<{ home: string; models: string; bin: string }> {
@@ -305,5 +306,29 @@ describe('取得中の .part.tag（92 回目の調査）', () => {
     await utimes(join(models, 'y.gguf.part.tag'), old, old);
     const listed = (await findRemovable({ keepTag: 'b1' })).map((f) => f.path);
     assert.equal(listed.filter((p) => p.includes('y.gguf')).length, 2, listed.join('\n'));
+  });
+});
+
+describe('動いている llama-server の版は挙げない（DECISIONS 10-11、106 回目）', () => {
+  test('動いている古い版は残し、動いていない古い版だけ挙げる', { skip: process.platform === 'win32' && 'Windows は動いている実行ファイルを OS が消させない' }, async () => {
+    const { bin } = await scratch();
+    for (const tag of ['b100', 'b200', 'b300']) await mkdir(join(bin, tag), { recursive: true });
+    // 引数に b100 の下の道を持つプロセスを一つ動かす（ps の args に出る）
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)', join(bin, 'b100', 'llama-server')], { stdio: 'ignore' });
+    try {
+      await new Promise((r) => setTimeout(r, 300));
+      const paths = (await findRemovable({ keepTag: 'b300' })).map((f) => f.path);
+      assert.ok(!paths.includes(join(bin, 'b100')), '動いている版を消す一覧に挙げた');
+      assert.ok(paths.includes(join(bin, 'b200')), '動いていない古い版を挙げなくなった');
+    } finally {
+      child.kill();
+    }
+  });
+
+  test('何が動いているか分からなければ、古い版は挙げない', async () => {
+    const { bin } = await scratch();
+    await mkdir(join(bin, 'b200'), { recursive: true });
+    const paths = (await findRemovable({ keepTag: 'b300', runningTags: async () => undefined })).map((f) => f.path);
+    assert.ok(!paths.includes(join(bin, 'b200')));
   });
 });

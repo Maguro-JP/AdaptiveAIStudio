@@ -391,7 +391,16 @@ export class Conversations {
           const { bytesRead } = await fh.read(buf, 0, buf.length, start);
           const text = buf.subarray(0, bytesRead).toString('utf8');
           // 頭は行の途中（字の途中のことも）から始まる。最初の改行まで捨てる。
-          raw = from > 0 ? text.slice(text.indexOf('\n') + 1) : text;
+          // 後ろの分に行の区切りが無い（改行が末尾の一つだけ＝最後の一行が上限より長い）ときは、全部を読む。切れ端だけを残して
+          // いたので、その行が読めず、会話が空として載った
+          const cut = text.indexOf('\n');
+          if (from > 0 && (cut < 0 || cut >= text.length - 1)) {
+            const whole = Buffer.alloc(info.size);
+            const all = await fh.read(whole, 0, whole.length, 0);
+            raw = whole.subarray(0, all.bytesRead).toString('utf8');
+          } else {
+            raw = from > 0 ? text.slice(cut + 1) : text;
+          }
         } finally {
           await fh.close();
         }
@@ -417,7 +426,11 @@ export class Conversations {
     if (messages.length === 0) return;
     await mkdir(this.#dir, { recursive: true });
     const at = new Date().toISOString();
-    const body = messages.map((m) => `${JSON.stringify({ t: 'msg', at, m } satisfies MsgLine)}\n`).join('');
+    // 添えた画像のデータは残さない（会話の記録が画像の分だけ膨らむ。本文の「添付（画像）」の行と保存先は残る）
+    const body = messages.map((full) => {
+      const { images: _images, ...m } = full;
+      return `${JSON.stringify({ t: 'msg', at, m } satisfies MsgLine)}\n`;
+    }).join('');
     // **前の行の途中に繋げない。**書いている最中に落ちると、改行の無い
     // 半端な行が残る。そこへ足すと、次の行まで巻き添えで読めなくなる。
     await inOrder(path, async () => {

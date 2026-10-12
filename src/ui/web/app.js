@@ -38,6 +38,8 @@ function onLasting(type, fn) {
  * タブにまとめた中の隠れた中身も DOM から外れるので、「外れている」では捨てられたのか隠れているだけかが分からない。
  */
 let renderGen = 0;
+/** 会話を開く問い合わせの列。押した順に一つずつ流す。 */
+let selecting = Promise.resolve();
 
 const ctx = {
   /** いまの並びの世代。パネルは作られたときの値と比べて、自分が捨てられたかを知る。 */
@@ -819,7 +821,7 @@ function listen() {
      * 見ている会話はまだ動いているのに止まったように見える。一覧の表示だけ取り直す。
      */
     const busyForOther = e.type === 'busy' && e.conversationId && conversations
-      && (conversations.current ? e.conversationId !== conversations.current : !sendingFromTop);
+      && notViewed(e.conversationId);
     if (e.type === 'busy' && busyForOther) void loadConversations();
     if (e.type === 'busy' && !busyForOther) {
       busyNow = e.busy;
@@ -907,7 +909,7 @@ function listen() {
     // （**「読んでいます」のまま止まって見えるのが、いちばん困る**）。
     // 見ていない会話の動きで、上の帯を書き換えない
     const forOther = e.conversationId && conversations
-      && (conversations.current ? e.conversationId !== conversations.current : !sendingFromTop);
+      && notViewed(e.conversationId);
     if (e.type === 'session' && busyNow && !forOther) {
       if (e.event.type === 'text' && !wroteYet) { wroteYet = true; run.set('busy', '答えています'); }
       if (e.event.type === 'toolStart') run.set('busy', doingText(e.event.name, e.event.summary));
@@ -926,7 +928,7 @@ function listen() {
     // 新しい回の始まり（busy:true）でも外す。選ぶ返事が終わりの合図より後に届くと、終わった回の値が入り直すため
     if (e.type === 'busy' && e.conversationId) copiedUpTo.delete(e.conversationId);
     if ((e.type === 'session' || e.type === 'busy') && e.conversationId && conversations
-      && (conversations.current ? e.conversationId !== conversations.current : !sendingFromTop)) {
+      && notViewed(e.conversationId)) {
       if (e.type === 'busy' && !e.busy) void loadConversations();
       // 見ていない会話の書き換えも、ファイルは同じ。開いているエディタには届ける（会話の欄には描かない）。
       if (e.type === 'session' && e.event?.type === 'diff') for (const fn of eventHandlers.get('elsewhereDiff') ?? []) fn(e);
@@ -1162,6 +1164,16 @@ const copiedUpTo = new Map();
  * 出来事はまだ名前を知らない自分の会話のもの。そこだけ通す。
  */
 let sendingFromTop = false;
+/** トップから送ったとき、すでに動いていた会話。送りの返事を待つ間も、その出来事は自分の会話のものではない */
+let runningAtSend = new Set();
+/**
+ * 出来事の会話が、いま見ている会話ではないか。トップから送っている間は、送る前から動いていた会話のものだけを弾く
+ * （全部通していたので、返事を待つ数秒の間、横で走る別の会話の答えが新しい会話の欄に混ざった）
+ */
+function notViewed(id) {
+  if (conversations.current) return id !== conversations.current;
+  return !sendingFromTop || runningAtSend.has(id);
+}
 /**
  * いま見ている会話の id。**パネルが自分で取り直すために要る。**
  *
@@ -1171,7 +1183,10 @@ let sendingFromTop = false;
  * 本体には残っているので、頁を読み直すまで戻らない（消えたと思われる）。
  */
 ctx.conversationId = () => conversations.current;
-ctx.sending = () => { sendingFromTop = !conversations.current; };
+ctx.sending = () => {
+  sendingFromTop = !conversations.current;
+  runningAtSend = new Set(sendingFromTop ? (conversations.runningAll ?? [conversations.running]).filter(Boolean) : []);
+};
 // トップから送って決まった会話を見る。返事を待つ間に別の会話を選んでいたら、そちらを見たまま（引き戻さない）
 ctx.adopt = (id) => {
   if (id && !conversations.current) { conversations.current = id; drawConversations(); }
@@ -1610,7 +1625,10 @@ function drawConversations() {
       open.textContent = `● ${head.title}`;
       open.title += '（動いています）';
     }
-    open.onclick = async () => {
+    // 押した順に一つずつ開く。素早く二つ押すと、返事の届く順で画面と本体の「見ている会話」がずれ、開いて見えている会話と
+    // 送り先が食い違いえた（先の返事が後に届くと、画面は先に押した方を出す）
+    open.onclick = () => { selecting = selecting.then(pick, pick); return selecting; };
+    const pick = async () => {
       const r = await ask('/api/conversations/select', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id: head.id }),

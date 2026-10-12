@@ -417,12 +417,19 @@ async function fetchInto(a: {
   let lastAt = 0;
   const began = Date.now();
   const from = written;
+  // 手元への書き込みの失敗（保存先が満杯など）。ネットワークの失敗と取り違えて「途中で切れました」と言うと、もう一度実行しても同じ所で落ち続ける
+  let writeFailed: NodeJS.ErrnoException | undefined;
 
   try {
     if (res.status !== 416) {
       if (resuming) await handle.truncate(had);
       for await (const chunk of streamOf(res)) {
-        await handle.write(chunk, 0, chunk.byteLength, written);
+        try {
+          await handle.write(chunk, 0, chunk.byteLength, written);
+        } catch (we) {
+          writeFailed = we as NodeJS.ErrnoException;
+          throw we;
+        }
         written += chunk.byteLength;
         arm(); // 進んでいる。待ち直す
         // **時計で出す。**10% ごとだと、5GB では 500MB ごと＝数十秒に一度しか
@@ -445,6 +452,11 @@ async function fetchInto(a: {
     }
   } catch (e) {
     if (opts.signal?.aborted) throw e;
+    if (writeFailed) {
+      throw new Error(writeFailed.code === 'ENOSPC'
+        ? `保存先の空きが足りません（${human(written)} まで取れています）: ${tmp}\n空きを作ってからもう一度実行すると、続きから取ります。`
+        : `書き込めません（${writeFailed.code ?? writeFailed.message}）: ${tmp}\n${human(written)} まで取れています。`);
+    }
     // **残しておく。**次は続きから取れる。消すと、また最初からになる。
     throw new Error(
       stalled

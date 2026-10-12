@@ -124,7 +124,7 @@ goto :collect
 rem 2つ目からの引数を集める。集めないと落ちる（clean --yes が効かなかった）。
 :collect
 if "%~1"=="" goto :run
-set "ARGS=%ARGS% %~1"
+set "ARGS=%ARGS% %1"
 shift
 goto :collect
 

@@ -106,7 +106,7 @@ export async function inspectEnvironment(ctx: EnvContext): Promise<EnvIssue[]> {
   if (windows) {
     // 置き場のうち、モデルを読む側（ネイティブ）が触るところだけを見る。
     // 作業ディレクトリは見ない。読むのは Node なので、全角でも問題なく動く
-    // （C:\Users\ｍ＠ｇｕｒｏ で正常動作を実機で確認済み）。
+    // （C:\Users\ｕｓｅｒ で正常動作を実機で確認済み）。
     const paths: Array<[string, string]> = [
       ['モデルの置き場', ctx.modelsDir ?? ''],
       ['既定の Ollama 置き場', `${ctx.userProfile ?? process.env.USERPROFILE ?? ''}\\.ollama`],

@@ -74,6 +74,11 @@ export class AnthropicProvider implements ChatProvider {
     return this.#client;
   }
 
+  /** Claude は、いま提供されているどのモデルも画像を読める。 */
+  async canSeeImages(): Promise<boolean> {
+    return true;
+  }
+
   async health(): Promise<HealthStatus> {
     try {
       await (await this.#api()).models.list({ limit: 1 });
@@ -242,7 +247,8 @@ export class AnthropicProvider implements ChatProvider {
 type Block =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
-  | { type: 'tool_result'; tool_use_id: string; content: string };
+  | { type: 'tool_result'; tool_use_id: string; content: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
 
 /**
  * 会話を Claude の形へ直す。
@@ -321,6 +327,8 @@ export function toAnthropicMessages(messages: readonly ProviderMessage[]): { rol
     }
     closeOpen();
     const blocks: Block[] = [];
+    // 利用者が添えた画像は、文の前に置く（Claude は画像の後に問いを置く形を勧めている）
+    if (m.role === 'user') for (const img of m.images ?? []) blocks.push({ type: 'image', source: { type: 'base64', media_type: img.mime, data: img.data } });
     if (m.content.trim()) blocks.push({ type: 'text', text: m.content });
     if (m.role === 'assistant') renamed = new Map();
     for (const c of m.toolCalls ?? []) {
