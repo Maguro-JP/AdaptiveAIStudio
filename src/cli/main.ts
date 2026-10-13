@@ -4,7 +4,7 @@
  * 目的は「動くこと」ではなく「止まらないこと」なので、
  * 応答したモデルを毎回明示し、フォールバックが起きたら必ず知らせる。
  */
-import { splitSlash } from './slash.ts';
+import { splitSlash, normalizeLine } from './slash.ts';
 import { Priority } from '../providers/contract.ts';
 import { stdin, stdout } from 'node:process';
 import { LineSource } from './input.ts';
@@ -92,7 +92,7 @@ async function main(): Promise<void> {
     for (;;) {
       const input = await rl.question(c.cyan('> '));
       if (input === undefined) break;
-      const line = input.trim();
+      const line = normalizeLine(input);
       if (line.length === 0) continue;
 
       if (line.startsWith('/')) {
