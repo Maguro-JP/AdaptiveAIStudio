@@ -76,6 +76,7 @@
 - 136 回目（connect_service: 承認の間の書き換え・同時に二度・壊れた項目）
 - 137 回目（画面の API に壊れた入力を送る）
 - 138 回目（画面に HTML を差し込める道を調べ、見張りを広げる）
+- 139 回目（見た目の値の検め: 大きさ・改行・注釈・効果の指定・名前の長さ）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13719,3 +13720,11 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 画面の JS で、外から来た文（答え・ツールの出力・ファイル名・題）を描く所を読んだ。innerHTML などで文字列を HTML として流し込む所は無く、リンクは `https?://` だけを href に代入し、プレビューの iframe は `allow-same-origin` 無しの sandbox だった。直すものは無い（実際に描かせての確かめはしていない）
 - 前の見張りは `markdown.js` の `innerHTML =` だけを見ていた。画面の JS 全部で、流し込む書き方（innerHTML・outerHTML・insertAdjacentHTML・document.write・eval・new Function・srcdoc・createContextualFragment）を止める試験にした
 - 触る場所: `test/web-no-html-sinks.test.ts`（一行足すと落ちることを確かめた）
+
+## 2026-10-13  139 回目（見た目の値の検め: 大きさ・改行・注釈・効果の指定・名前の長さ）
+
+- 決まりの外の CSS（別の宣言・規則・url・@import・expression）を効かせる道は無かった（画面は `setProperty` で一つの値として入れる）。破れていたのは値の検めで、画面を潰す値がそのまま保存され、開くたびに効いていた
+- 数は 2000 までにした（`99999px`・`1e9`・`100000px` の影を止める。16 進の色は数えない）。改行などの制御文字と `/*` を弾く
+- 効果の指定が配列でないとき、黙って元の見た目の効果に戻していた。そう言う。名前は 80 字まで
+- 変えなかったもの: `var(` は通す（`calc(var(--radius) - 3px)` のように寸法を他の寸法から決める使い方がある）。項目ごとの型（色か長さか）の検めは、今の検めを大きく作り替えることになるので見送った
+- 触る場所: `src/ui/theme.ts`（`FORBIDDEN`・`isSafeValue`・`repairTheme`）、試験は `test/theme-139.test.ts`（直しを外すと 3 件落ちることを確かめた）
