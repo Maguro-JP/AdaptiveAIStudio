@@ -2107,7 +2107,9 @@ export class UiServer {
         // 中を指しているが無い（404）のと、外を指している（400）のは別のこと。
         const lexical = relative(this.#workRoot(), resolvePath(this.#workRoot(), asked));
         const inside = asked !== '' && !isAbsolute(asked) && !outsideRel(lexical);
-        return inside
+        // 綴りは中でも、辿ると外へ出る（外を指すリンク越し）なら、外と言う（在るのに「ありません」と言っていた）
+        const viaLink = inside && await stat(resolvePath(this.#workRoot(), asked)).then(() => true, () => false);
+        return inside && !viaLink
           ? send(res, 404, { error: 'そのファイルはありません' })
           : send(res, 400, { error: '作業場の外は開けません' });
       }
