@@ -78,6 +78,7 @@
 - 138 回目（画面に HTML を差し込める道を調べ、見張りを広げる）
 - 139 回目（見た目の値の検め: 大きさ・改行・注釈・効果の指定・名前の長さ）
 - 140 回目（端末の入口: 全角の ／ の命令・/ だけの行）
+- 141 回目（OpenAI 互換の送り口: 考えの混入・content_filter・壊れた一行）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13736,3 +13737,13 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - `/` だけの行を、`aas agent` は依頼として送っていた（`chat` は不明なコマンドと言う）。知らない命令として、使える命令を並べる。名前が空のときに「根の直下の道」（`existsSync('/')`）として依頼に回す分かれ道も塞いだ
 - 見送ったもの: 複数行の貼り付けが一行ずつ別の依頼になる（端末の貼り付けの見分け（bracketed paste）が要り、作りを大きく変える）。`chat` が知らない旗を黙って無視する（`npm run chat` の開発用の入口で、旗を受ける作りではない）
 - 触る場所: `src/cli/slash.ts`・`src/cli/agent.ts`・`src/cli/main.ts`・`src/agent/commands.ts` の `expandCommand`、試験は `test/cli-input-140.test.ts`（直しを外すと落ちることを確かめた）
+
+## 2026-10-13  141 回目（OpenAI 互換の送り口: 考えの混入・content_filter・壊れた一行）
+
+手元の偽の相手で 3 件再現してから直した（`src/providers/openai-compatible.ts`・`sse.ts`）。Claude の送り口は SDK を通すので当てていない。
+
+- まとめて返す答えで、`type: thinking` の部品を本文に繋いでいた（流して返す側は外していた）。考えの部品は本文に入れない
+- `finish_reason: content_filter`（相手の決まりで止められた）を `unknown` として成功で通し、途中までの文を答えにしていた。止められたと言って失敗にする。`length` には読み替えない（続きを求めて同じ所で止められるだけ）
+- 空行で区切らない相手で壊れた `data:` 行が一つあると、後ろの本文と終わりの合図まで一つの読めない塊に繋ぎ、返事ごと失敗にしていた。新しい行がそれだけで読める知らせなら、前の溜めを捨てて新しい行を渡す
+- 見送ったもの: 毎回の塊に累計の usage を載せる相手で usage が塊の数だけ出る（足し合わせている所は無いので、取り違えにはなっていない）
+- 触る場所: `src/providers/openai-compatible.ts`（`contentText`・`finish_reason` の読み）、`src/providers/sse.ts` の `take`、試験は `test/provider-141.test.ts`（直しを外すと 3 件とも落ちることを確かめた）
