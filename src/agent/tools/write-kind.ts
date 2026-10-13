@@ -184,6 +184,16 @@ export function applyEdit(
     return inner.hits > 0 && inner.text !== before.slice(1) ? { ...inner, text: `\uFEFF${inner.text}` } : { ...inner, text: before };
   }
 
+  /*
+   * **CRLF のファイルは LF にそろえて当て、CRLF に戻す。**モデルは LF で書いてくる。緩い当て（trim は \r も落とす）で
+   * 通ったうえで LF の replace がそのまま入り、当てた行だけ改行の形が変わっていた（.bat では差分に出にくい壊れ方）。
+   * 全部の行が CRLF のときだけ。混ざったファイルは、どちらへ戻すか決められないので触らない
+   */
+  if (before.includes('\r\n') && !find.includes('\r') && !/(^|[^\r])\n/.test(before)) {
+    const inner = applyEdit(lf(before), find, lf(replace), all);
+    return inner.hits > 0 && inner.text !== lf(before) ? { ...inner, text: inner.text.replace(/\n/g, '\r\n') } : { ...inner, text: before };
+  }
+
   const found = positionsOf(before, find);
   /*
    * **行の途中から当てない。**
@@ -216,7 +226,7 @@ export function applyEdit(
      * 前が字下げだけの物は、字下げを落とした `find` が行の途中と一致しただけ（上の理由）なので数えない
      */
     const real = found.filter((at) => aligned.includes(at) || /\S/.test(before.slice(before.lastIndexOf('\n', at - 1) + 1, at)));
-    return spliceAt(before, real, find.length, replace, all);
+    return spliceAt(before, real, find.length, replace, all, !find.includes('\n'));
   }
 
   const loose = looseEdit(before, find, replace, all);
@@ -251,12 +261,18 @@ function positionsOf(before: string, find: string): number[] {
  * 混ざる）。位置が分かっているので、切って繋ぐ。
  */
 function spliceAt(
-  before: string, at: number[], width: number, replace: string, all: boolean,
+  before: string, at: number[], width: number, replace: string, all: boolean, carryIndent = false,
 ): { text: string; hits: number; how?: EditHow } {
   if (!all && at.length > 1) return { text: before, hits: at.length };
   let text = before;
   for (const pos of [...at].reverse()) {
-    text = text.slice(0, pos) + replace + text.slice(pos + width);
+    // 一行の find が字下げの後ろ（行の中身の頭）に当たり、replace が複数行なら、二行目から後にも同じ字下げを付ける。
+    // 付けずに入れていたので、`    call(x)` を二行にすると二行目が行の頭に出た（完全一致なので何も言わない）
+    const head = before.slice(before.lastIndexOf('\n', pos - 1) + 1, pos);
+    const put = carryIndent && replace.includes('\n') && head.length > 0 && !/\S/.test(head)
+      ? replace.split('\n').map((l, i) => (i === 0 || l.trim().length === 0 ? l : head + l)).join('\n')
+      : replace;
+    text = text.slice(0, pos) + put + text.slice(pos + width);
   }
   return { text, hits: at.length, how: 'exact' };
 }
@@ -353,7 +369,7 @@ function anchorEdit(
       cursor = k + 1;
       return block[k];
     });
-    const shifted = sameFrame(put, indentOf(want[0]!), indentOf(lines[from]!))
+    const shifted = sameFrame(put, indentOf(want[0]!), indentOf(lines[from]!), want, got)
       ? reindentByLine(put, want, got)
       : put;
     out.splice(from, to - from + 1, ...shifted);
@@ -405,7 +421,7 @@ function looseEdit(
   const put = fitReplace(replace.split('\n'), cut.head, cut.tail);
   const out = [...lines];
   for (const start of [...at].reverse()) {
-    const shifted = sameFrame(put, indentOf(want[0]!), indentOf(lines[start]!))
+    const shifted = sameFrame(put, indentOf(want[0]!), indentOf(lines[start]!), want, lines.slice(start, start + want.length))
       ? reindentByLine(put, want, lines.slice(start, start + want.length))
       : put;
     out.splice(start, wantKeys.length, ...shifted);
@@ -552,7 +568,17 @@ function reindentByLine(put: string[], want: string[], got: ReadonlyArray<string
     return put.map((line) => {
       if (line.trim().length === 0) return line;
       const from = order.find((f) => line.startsWith(f));
-      return from === undefined ? line : pairs.get(from)! + line.slice(from.length);
+      if (from === undefined) return line;
+      const to = pairs.get(from)!;
+      let rest = line.slice(from.length);
+      // 対に無いもう一段深い行は、残りの空白をファイルの字下げの字に直す（タブのファイルに空白が混ざっていた）。
+      // 空白 n 字がタブ 1 字に当たると対から読めて、残りが n の倍数のときだけ
+      const extra = indentOf(rest);
+      if (extra.length > 0 && /^ +$/.test(extra) && /^\t+$/.test(to) && /^ +$/.test(from) && from.length % to.length === 0) {
+        const unit = from.length / to.length;
+        if (extra.length % unit === 0) rest = '\t'.repeat(extra.length / unit) + rest.slice(extra.length);
+      }
+      return to + rest;
     });
   }
   // 対が決まらないときは、行ごとに当てる。中身が `find` の行と同じなら、その行が当たったファイルの行の字下げ。
@@ -585,9 +611,30 @@ function reindentByLine(put: string[], want: string[], got: ReadonlyArray<string
  * 見分け方は、`replace` の最初の中身の行が、どちらの字下げに揃っているか。
  * `find` と同じならモデルの枠。違うなら、既にファイルの側に合っている。
  */
-function sameFrame(replace: string[], findIndent: string, fileIndent: string): boolean {
-  if (findIndent === fileIndent) return false; // 寄せる先が同じ。何もしなくてよい
+function sameFrame(
+  replace: string[], findIndent: string, fileIndent: string,
+  want?: ReadonlyArray<string>, got?: ReadonlyArray<string | undefined>,
+): boolean {
   const first = replace.find((l) => l.trim().length > 0);
   if (first === undefined) return false;
-  return indentOf(first) === findIndent;
+  if (findIndent !== fileIndent) return indentOf(first) === findIndent;
+  /*
+   * 一行目の字下げが合っていても、二行目から後がずれていることがある（`def f():` は合い、本体だけ 2 字で書かれた形）。
+   * 一行目だけを見て「寄せる先が同じ」と打ち切っていたので、ずれた字下げのまま入れていた（Python では動かない）。
+   * 字下げのずれた行と同じ中身の行が `replace` にあり、それが `find` の側の字下げで書かれているときだけ寄せる。
+   * 字下げの集まりだけで決めると、注釈の一行だけ崩れた `find` の字下げが、`replace` の普通のコードの字下げと
+   * たまたま同じになり、全部の行を浅くした（履歴の `bench-edit` で 3 件）
+   */
+  if (!want || !got) return false;
+  let findSide = 0;
+  let fileSide = 0;
+  want.forEach((w, j) => {
+    if (w.trim().length === 0 || got[j] === undefined || indentOf(w) === indentOf(got[j]!)) return;
+    const same = replace.filter((l) => l.trim() === w.trim());
+    for (const l of same) {
+      if (indentOf(l) === indentOf(w)) findSide += 1;
+      else if (indentOf(l) === indentOf(got[j]!)) fileSide += 1;
+    }
+  });
+  return findSide > 0 && fileSide === 0;
 }
