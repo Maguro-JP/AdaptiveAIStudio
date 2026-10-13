@@ -75,6 +75,7 @@
 - 135 回目（fetch_url と show_file: meta の charset・二進・転送・注釈・文字の参照・無い行）
 - 136 回目（connect_service: 承認の間の書き換え・同時に二度・壊れた項目）
 - 137 回目（画面の API に壊れた入力を送る）
+- 138 回目（画面に HTML を差し込める道を調べ、見張りを広げる）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13712,3 +13713,9 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 約 35 の口に 8 種類の壊れた本文（JSON でない・null・配列・数・型の違う項目）を送り、外を指す道・リンク越しの読み書き・設定の同時書き換え 20 本を試した。落ちる・固まる・理由の無い 500・ファイルを壊す・外に触る、はどれも起きなかった
 - 一つだけ直した: 外を指すリンク越しのファイルを `GET /api/file` で開くと、在るのに 404「そのファイルはありません」と言っていた（中身は返していない）。辿ると在るなら 400「作業場の外は開けません」と言う
 - 触る場所: `src/ui/server.ts` の `/api/file`、試験は `test/ui-file-link-137.test.ts`（直しを外すと落ちることを確かめた）
+
+## 2026-10-13  138 回目（画面に HTML を差し込める道を調べ、見張りを広げる）
+
+- 画面の JS で、外から来た文（答え・ツールの出力・ファイル名・題）を描く所を読んだ。innerHTML などで文字列を HTML として流し込む所は無く、リンクは `https?://` だけを href に代入し、プレビューの iframe は `allow-same-origin` 無しの sandbox だった。直すものは無い（実際に描かせての確かめはしていない）
+- 前の見張りは `markdown.js` の `innerHTML =` だけを見ていた。画面の JS 全部で、流し込む書き方（innerHTML・outerHTML・insertAdjacentHTML・document.write・eval・new Function・srcdoc・createContextualFragment）を止める試験にした
+- 触る場所: `test/web-no-html-sinks.test.ts`（一行足すと落ちることを確かめた）
