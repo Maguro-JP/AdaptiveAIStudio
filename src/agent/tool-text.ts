@@ -149,6 +149,29 @@ export function extractToolCalls(text: string, known?: (name: string) => boolean
     const inner = extractToolCalls(text.replace(thinking, ''), known);
     return { text: inner.calls.length > 0 ? inner.text : text.replace(thinking, '').trim(), calls: inner.calls };
   }
+  /*
+   * Qwen の XML の形（`<tool_call><function=名前><parameter=鍵>値</parameter></function></tool_call>`）。JSON の形しか読まず、
+   * 呼び出しにならないまま生の記述が本文に出ていた。値は JSON として読めればその値、読めなければ文字のまま
+   */
+  const xml = /<tool[_▁]call>\s*<function=([A-Za-z][\w-]*)>([\s\S]*?)<\/function>\s*(?:<\/tool[_▁]call>|$)/g;
+  if (xml.test(text)) {
+    xml.lastIndex = 0;
+    const found: SalvagedCall[] = [];
+    const rest = text.replace(xml, (whole, name: string, body: string) => {
+      if (known && !known(name)) return whole;
+      const args: Record<string, unknown> = {};
+      for (const m of body.matchAll(/<parameter=([A-Za-z_][\w-]*)>\n?([\s\S]*?)\n?<\/parameter>/g)) {
+        const raw = m[2]!;
+        try { args[m[1]!] = JSON.parse(raw); } catch { args[m[1]!] = raw; }
+      }
+      found.push({ name, args });
+      return '';
+    });
+    if (found.length > 0) {
+      const tail = extractToolCalls(rest, known);
+      return { text: tail.calls.length > 0 ? tail.text : tidy(rest), calls: [...found, ...tail.calls] };
+    }
+  }
   const calls: SalvagedCall[] = [];
   let out = '';
   let i = 0;

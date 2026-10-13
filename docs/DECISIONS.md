@@ -80,6 +80,7 @@
 - 140 回目（端末の入口: 全角の ／ の命令・/ だけの行）
 - 141 回目（OpenAI 互換の送り口: 考えの混入・content_filter・壊れた一行）
 - 142 回目（手元のモデルの本文から拾う呼び出し: 考えの中・ツールに無い名前・配列の跡）
+- 143 回目（Qwen の XML の形の呼び出しを読む）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13758,3 +13759,9 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 配列で並べた呼び出しを抜いた跡の `[,]` を本文に残していた。カンマだけの跡と、本文が `[]` だけのときだけ落とす（答えの中の `arr = []` は残す）
 - 見送ったもの: Qwen の XML の形（`<function=…><parameter=…>`）・全角の括弧・途中で切れた JSON は呼び出しにならず、生のまま本文に出る（読める形を足す作業になるので、次に回す）
 - 触る場所: `src/agent/tool-text.ts`（`extractToolCalls`・`ToolTextFilter`・`tidy`）、`src/runtime/inproc.ts`（`knownTool`）、試験は `test/tool-text-142.test.ts`（直しを外すと 4 件落ちることを確かめた）
+
+## 2026-10-13  143 回目（Qwen の XML の形の呼び出しを読む）
+
+- 142 回目で見送った分。Qwen の XML の形（`<tool_call><function=名前><parameter=鍵>値</parameter></function></tool_call>`）は呼び出しにならず、生の記述が本文に出ていた。読んで呼び出しにする。値は JSON として読めればその値（`20` は数）、読めなければ文字のまま。渡したツールの名前だけを拾う
+- 全角の括弧と途中で切れた JSON は、今も呼び出しにしない（どこまでが引数か決められない。生のまま本文に出るので、モデルにも利用者にも見える）
+- 触る場所: `src/agent/tool-text.ts` の `extractToolCalls`、試験は `test/tool-text-142.test.ts` の後ろ 2 つ（直しを外すと読む方が落ちることを確かめた）

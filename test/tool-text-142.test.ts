@@ -34,3 +34,16 @@ test('流して返すときも、考えの中の呼び出しを拾わない', ()
   f.push('<think>例 {"name":"read_file","arguments":{"path":"x"}}</think>ok');
   assert.deepEqual(f.end(known).calls, []);
 });
+
+test('Qwen の XML の形の呼び出しを読む（値は JSON として読めればその値）', () => {
+  const r = extractToolCalls('見ます\n<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/a.ts\n</parameter>\n<parameter=limit>\n20\n</parameter>\n</function>\n</tool_call>', known);
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.calls[0]!.name, 'read_file');
+  assert.deepEqual(r.calls[0]!.args, { path: 'src/a.ts', limit: 20 });
+  assert.equal(r.text, '見ます');
+});
+
+test('XML の形でも、ツールに無い名前は拾わない', () => {
+  const r = extractToolCalls('<tool_call>\n<function=delete_file>\n<parameter=path>\nx\n</parameter>\n</function>\n</tool_call>', known);
+  assert.deepEqual(r.calls, []);
+});
