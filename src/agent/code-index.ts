@@ -235,6 +235,10 @@ export function isExportedDecl(line: string): boolean {
 /** 一行から名前を拾う。 */
 export function symbolsIn(line: string): string[] {
   const out: string[] = [];
+  // 注釈と文字列の中は宣言ではない（`// function parseConfig は b.ts に移した` や `"class Widget is deprecated"` を宣言として返していた）。
+  // 注釈の行は飛ばし、文字列の中身と行末の注釈を外してから当てる。`#name(` は TS の私的なメソッドなので、`#` の後ろが空白のときだけ注釈と見る
+  if (/^\s*(?:\/\/|\/\*|\*|#\s|#$)/.test(line)) return out;
+  line = line.replace(/(["'`])(?:\\.|(?!\1).)*\1/g, '""').replace(/\s\/\/.*$/, '');
   for (const re of DECLS) {
     const m = re.exec(line);
     if (!m) continue;
@@ -421,7 +425,9 @@ export async function buildIndex(root: string, max = MAX_FILES, prev?: CodeIndex
         // find_symbol が黙って「無い」と言った）
         const top = isTopDecl(line);
         if (symbols.length >= 200 && !top) return;
-        if (symbols.length >= 2000) return;
+        // 2000 個を超えても、外から見える宣言は残す（メソッドが多いファイルで、末尾の export を find_symbol が「無い」と言った）
+        if (symbols.length >= 2000 && !(top && isExportedDecl(line))) return;
+        if (symbols.length >= 20000) return;
         const exported = top && isExportedDecl(line);
         for (const name of symbolsIn(line)) {
           symbols.push({
@@ -699,7 +705,8 @@ export function scoreFiles(index: CodeIndex, query: string): Map<number, { score
  * 名前が当たったものを上に出す（「どこで定義されているか」がいちばん要る）。
  */
 export async function searchIndex(
-  index: CodeIndex, query: string, opts: { limit?: number; read?: (p: string) => Promise<string> } = {},
+  index: CodeIndex, query: string,
+  opts: { limit?: number; read?: (p: string) => Promise<string>; matched?: { files: number } } = {},
 ): Promise<Hit[]> {
   const words = terms(query);
   if (words.length === 0) return [];
@@ -715,6 +722,8 @@ export async function searchIndex(
   }
 
   scored.sort((a, b) => b.score - a.score);
+  // 当たったファイルの数を返す（上位だけを返すので、受け手が「当たったのはこれだけ」と読まないように）
+  if (opts.matched) opts.matched.files = scored.length;
   const limit = opts.limit ?? 8;
   // 上位だけ開いて、当たった行を切り取る。**丸ごとは返さない。**
   const out: Hit[] = [];

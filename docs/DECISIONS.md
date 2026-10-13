@@ -71,6 +71,7 @@
 - 131 回目（run_command: utf8 と CP932 の混ざった出力）
 - 132 回目（run_command を止めたときの出力）
 - 133 回目（.gitignore の読み方を git にそろえ、list_files が飛ばした分を言う）
+- 134 回目（find_symbol・find_code: 注釈と文字列の中・上限で落ちる export・当たった数）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13670,3 +13671,14 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 変えなかったもの: `.` で始まるものの断りは、何も見つからなかったときだけ（前に決めたとおり。コンテキストウィンドウを食わないため）
 - 索引のベンチ（`npm run bench`）は 61.3%（下がっていない）
 - 触る場所: `src/agent/ignore.ts`・`src/agent/tools/fs.ts`（`walk`・`listFilesTool`）、試験は `test/ignore-git-133.test.ts`・`test/list-files-133.test.ts`（直しを外すとそれぞれ 4 件・3 件落ちることを確かめた）
+
+## 2026-10-13  134 回目（find_symbol・find_code: 注釈と文字列の中・上限で落ちる export・当たった数）
+
+読むだけの調査で 4 件見つけ、再現してから直した（`src/agent/code-index.ts`・`src/agent/tools/find.ts`）。
+
+- 注釈の中の語（`// function parseConfig は b.ts に移した`）と文字列の中の語（`"class Widget is deprecated"`）を宣言として返していた。注釈の行は飛ばし、文字列の中身と行末の注釈を外してから当てる（`symbolsIn`）。TS の私的なメソッド（`#name(`）は注釈と見ない
+- メソッドが 2000 個を超えるファイルで、末尾の export を「宣言が見つかりません」と言っていた。上限を超えても外から見える宣言は残す
+- `find_code` は上位だけを返すのに「3 件」とだけ言い、当たったのが 3 ファイルだけと読まれた。ほかに当たったファイルの数を言う
+- 見送ったもの: 一つのファイルで当たった行を 4 行で切ることを言わない件（コードから読めるが試していない。ファイルの名前は返るので、開けば分かる）
+- 索引のベンチは 61.3% → 61.5%
+- 触る場所: `src/agent/code-index.ts`（`symbolsIn`・`buildIndex` の上限・`searchIndex`）、`src/agent/tools/find.ts`、試験は `test/find-134.test.ts`（直しを外すと 2 件落ちることを確かめた）
