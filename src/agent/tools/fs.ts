@@ -164,7 +164,9 @@ export const listFilesTool: Tool = {
     }
     // 見なかった所があるのに「ファイルなし」とだけ言わない（深い所や . で始まる所に在りうる）
     const deep = (walked.deep ? `\n${DEEP_NOTE}` : '')
-      + (walked.unreadableDirs ? `\n（中を見られないフォルダが ${walked.unreadableDirs} 個あります）` : '');
+      + (walked.unreadableDirs ? `\n（中を見られないフォルダが ${walked.unreadableDirs} 個あります）` : '')
+      + (walked.skipped?.length ? `\n（ビルドの出力先として中を見ていないフォルダ: ${walked.skipped.slice(0, 5).join(', ')}${walked.skipped.length > 5 ? ` 他 ${walked.skipped.length - 5} 個` : ''}。見るときは path に渡してください）` : '')
+      + (walked.links ? `\n（リンク ${walked.links} 個は辿っていません）` : '');
     if (found.length === 0) {
       const dots = dotsNote(walked.dots);
       return ok(`(ファイルなし)${deep}${dots ? `\n${dots}` : ''}`);
@@ -764,6 +766,10 @@ interface Walked {
   dots?: number;
   /** 中を見られなかったフォルダの数（権限・掴まれている） */
   unreadableDirs?: number;
+  /** .gitignore に無いのに、決め打ちの名前（`dist`・`build` など）で飛ばしたフォルダ */
+  skipped?: string[];
+  /** 辿らなかったリンクの数 */
+  links?: number;
 }
 
 /**
@@ -804,13 +810,20 @@ async function walk(
       if (capped && e.name !== '.git') capped.dots = (capped.dots ?? 0) + 1;
       continue;
     }
-    if (SKIP_DIRS.has(e.name)) continue;
     const abs = join(dir, e.name);
     // **その置き場が「見なくていい」と書いたものを見ない。**
     const rel = relative(root, abs).split(sep).join('/');
     if (ign?.ignores(rel, e.isDirectory())) continue;
+    // 決め打ちで飛ばす名前（`dist`・`build` など）は、.gitignore に無くても見ない（大きい）。ただし黙って落とさず、飛ばした所を数える
+    // （`node_modules` と `.git` は説明に書いてあるので数えない）
+    if (SKIP_DIRS.has(e.name)) {
+      if (capped && e.isDirectory() && e.name !== 'node_modules' && e.name !== '.git') (capped.skipped ??= []).push(rel);
+      continue;
+    }
     if (e.isDirectory()) await walk(abs, root, out, depth + 1, await ign?.enter(rel), capped);
     else if (e.isFile()) out.push(toDisplayPath(root, abs));
+    // リンクは外へ出ないよう辿らないが、在ることは数える（黙って消えていた）
+    else if (e.isSymbolicLink() && capped) capped.links = (capped.links ?? 0) + 1;
   }
 }
 
