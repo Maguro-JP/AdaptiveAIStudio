@@ -12,7 +12,7 @@ import { CATALOG, BUILTIN, findEntry, missingSecrets, needsNpx } from '../../mcp
 import { connectService, disconnectService } from '../../core/mcp-connect.ts';
 import { type Tool, ok, fail, requireString } from './types.ts';
 import type { McpServerSpec } from '../../mcp/client.ts';
-import { savedMcpServers } from '../../ui/settings.ts';
+import { savedMcpServers, isUsableMcp } from '../../ui/settings.ts';
 
 /**
  * 繋ぎ先が変わったことを、**いま動いているセッションへ伝える口。**
@@ -106,12 +106,12 @@ export function createConnectServiceTool(hooks: ServiceHooks = {}): Tool {
         return fail(`そういう繋ぎ先はありません: ${id}（在るもの: ${CATALOG.map((e) => e.id).join(', ')}）`);
       }
       // もう設定に在るものは書き直さない（利用者が手元で動かす形にした・止めておいたものを、カタログの形と「入」で丸ごと上書きしていた）
-      const already = (await savedMcpServers())[entry.id];
-      if (already) {
-        return ok(already.enabled === false
-          ? `${entry.name}（${entry.id}）は設定に在りますが、止めてあります。入れるかどうかは、利用者に画面（設定 → 外のツール）で決めてもらってください。`
-          : `${entry.name}（${entry.id}）は、もう設定に在ります。繋ぎ直しはしません。`);
-      }
+      const saidAlready = (already: Record<string, unknown>) => ok(already.enabled === false
+        ? `${entry.name}（${entry.id}）は設定に在りますが、止めてあります。入れるかどうかは、利用者に画面（設定 → 外のツール）で決めてもらってください。`
+        : `${entry.name}（${entry.id}）は、もう設定に在ります。繋ぎ直しはしません。`);
+      // 起こせる形で在るものだけを「在る」と言う（`null` や中身の無い項目は繋ぎ直せる）
+      const before = (await savedMcpServers())[entry.id];
+      if (isUsableMcp(before)) return saidAlready(before!);
 
       // **外と繋ぐのは、勝手にやらない。**利用者の合言葉が動く話なので、
       // 承認を通す（自動で通す設定でも、協議は必ず人に見せる）。
@@ -121,8 +121,10 @@ export function createConnectServiceTool(hooks: ServiceHooks = {}): Tool {
       });
       if (answer === false) return fail(`利用者が断りました: ${entry.name}`);
 
-      const got = await connectService(entry.id, { root: ctx.root });
+      // 承認を待つ間に書かれたもの・同時に繋いだものは、書く直前にもう一度見て上書きしない
+      const got = await connectService(entry.id, { root: ctx.root, onlyIfAbsent: true });
       if (!got.ok) return fail(got.error ?? '繋げませんでした');
+      if (got.already) return saidAlready(got.already);
 
       /*
        * **「次の依頼から使えます」を、本当にする。**

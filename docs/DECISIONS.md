@@ -73,6 +73,7 @@
 - 133 回目（.gitignore の読み方を git にそろえ、list_files が飛ばした分を言う）
 - 134 回目（find_symbol・find_code: 注釈と文字列の中・上限で落ちる export・当たった数）
 - 135 回目（fetch_url と show_file: meta の charset・二進・転送・注釈・文字の参照・無い行）
+- 136 回目（connect_service: 承認の間の書き換え・同時に二度・壊れた項目）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13695,3 +13696,12 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - `&quot;` と数字の参照（`&#26085;`）を戻していなかった
 - `show_file` が 3 行のファイルの 9999 行目を「開きました」と言っていた。行の数を数えて、無い行は無いと言う（20MB を超えるファイルは数えずに通す）
 - 触る場所: `src/agent/tools/network.ts`（`readBoundedCut`・`toText`・`createFetchUrlTool`）、`src/agent/tools/show.ts`、試験は `test/fetch-show-135.test.ts`（直しを外すと 5 件とも落ちることを確かめた）
+
+## 2026-10-13  136 回目（connect_service: 承認の間の書き換え・同時に二度・壊れた項目）
+
+読むだけの調査で 3 件見つけ、再現してから直した。deliberate では見つからなかった。
+
+- 「もう設定に在るか」は承認の前に一度見るだけで、承認の後は読み直さずに書いていた。承認を待つ間に利用者が止めた・手元で動かす形にした設定を、カタログの形と「入」で上書きした。同時に二度繋ぐと、二度とも書いて二度起こした。在るかを、書く直前に錠の中でもう一度見る（`saveMcpServer` の `onlyIfAbsent`、`connectService` の `onlyIfAbsent` と `already`）
+- `null` や `command`・`url` の無い項目を「もう設定に在ります」と言い、繋ぎ直せなかった。起こせる形（`command` か `url` が文字）だけを「在る」と数える（`isUsableMcp`）
+- 見送ったもの: 設定のキーが独自の大文字の名前（`Playwright`）のとき、`disconnect_service` が小文字の id に読み替えて「繋がっていません」と言う。黙ってはいないので残す
+- 触る場所: `src/ui/settings.ts`（`saveMcpServer`・`isUsableMcp`）、`src/core/mcp-connect.ts`、`src/agent/tools/services.ts`、試験は `test/services-136.test.ts`（直しを外すと 3 件とも落ちることを確かめた）

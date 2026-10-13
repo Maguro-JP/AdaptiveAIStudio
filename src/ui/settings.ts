@@ -239,9 +239,16 @@ export async function saveMcpServer(
     command?: string; args?: string[]; url?: string;
     envFrom?: Record<string, string>; headersFrom?: Record<string, string>; enabled?: boolean;
   },
+  opts: { onlyIfAbsent?: (existing: Record<string, unknown>) => void } = {},
 ): Promise<string> {
   return editConfig((current, at) => { // 無ければ、これが最初の一つ
     const mcp = objectOr(current.mcp) as { servers?: Record<string, unknown> };
+    // 書く直前に、起こせる形のものが在るかを見る（錠の中で見るので、承認を待つ間に利用者が書いたものも、同時に二度繋いだものも上書きしない）
+    const existing = objectOr(mcp.servers)[name];
+    if (opts.onlyIfAbsent && isUsableMcp(existing)) {
+      opts.onlyIfAbsent(existing as Record<string, unknown>);
+      return { result: at };
+    }
     // 画面から触らない項目（startupTimeoutMs など、手で足したもの）は引き継ぐ。丸ごと置き換えて消していた
     const { command: _c, args: _a, url: _u, envFrom: _e, headersFrom: _h, enabled: _n, ...kept } = objectOr(objectOr(mcp.servers)[name]);
     const servers = { ...objectOr(mcp.servers), [name]: { ...kept, ...spec } };
@@ -304,6 +311,13 @@ export async function readSavedMcpServers(): Promise<Record<string, Record<strin
   } catch {
     return undefined;
   }
+}
+
+/** 起こせる形か（`command` か `url` が文字）。`null` や中身の無い項目は「在る」と数えない（繋ぎ直せなくなっていた）。 */
+export function isUsableMcp(v: unknown): boolean {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  return (typeof o.command === 'string' && o.command.trim() !== '') || (typeof o.url === 'string' && o.url.trim() !== '');
 }
 
 /** 設定に書いてある外のツール（MCP）。読めなければ空。 */
