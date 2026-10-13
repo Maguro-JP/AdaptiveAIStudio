@@ -142,7 +142,8 @@ describe('fetch_url', () => {
       fetchImpl: ((_u: string, i: RequestInit) => { init = i; return good(); }) as unknown as typeof fetch,
     });
     await tool.run({ url: 'https://registry.npmjs.org/react' }, ctx());
-    assert.equal(init?.redirect, 'error');
+    // 転送を追わない形であること（指定なしは follow になる）。manual は 3xx を受け取って先を言うため（DECISIONS 135 回目）
+    assert.ok(init?.redirect === 'manual' || init?.redirect === 'error', String(init?.redirect));
     assert.equal(init?.method, 'GET');
   });
 });

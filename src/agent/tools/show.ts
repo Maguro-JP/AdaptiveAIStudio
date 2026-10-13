@@ -9,7 +9,7 @@
  * 何も返さない（読みたいなら `read_file` を呼ぶ）。画面が無い入口（端末）では
  * 受け手が居ないので、何もしないで「開く先がありません」と返す。
  */
-import { stat } from 'node:fs/promises';
+import { stat, readFile } from 'node:fs/promises';
 import { realSafeResolve } from './paths.ts';
 import { type Tool, ok, fail, requireString, optionalPositiveInt } from './types.ts';
 
@@ -44,6 +44,12 @@ export function createShowFileTool(onShow?: ShowHook): Tool {
       if (info instanceof Error) return fail(`開けません: ${path}（${info.code ?? info.message}）`);
       if (!info.isFile()) return fail(`ファイルではありません: ${path}`);
       const line = optionalPositiveInt(args, 'line');
+      // 無い行を「開きました」と言わない（3 行のファイルの 9999 行目を開いたと言っていた）。大きいファイルは数えずに通す
+      if (line !== undefined && info.size <= 20_000_000) {
+        const text = (await readFile(abs)).toString('latin1');
+        const lines = text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
+        if (line > lines) return fail(`${path} は ${lines} 行しかありません（${line} 行目はありません）。`);
+      }
       onShow({ path, ...(line === undefined ? {} : { line }) });
       return ok(line === undefined ? `画面で ${path} を開きました。` : `画面で ${path} の ${line} 行目を開きました。`);
     },

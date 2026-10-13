@@ -72,6 +72,7 @@
 - 132 回目（run_command を止めたときの出力）
 - 133 回目（.gitignore の読み方を git にそろえ、list_files が飛ばした分を言う）
 - 134 回目（find_symbol・find_code: 注釈と文字列の中・上限で落ちる export・当たった数）
+- 135 回目（fetch_url と show_file: meta の charset・二進・転送・注釈・文字の参照・無い行）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13682,3 +13683,15 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 見送ったもの: 一つのファイルで当たった行を 4 行で切ることを言わない件（コードから読めるが試していない。ファイルの名前は返るので、開けば分かる）
 - 索引のベンチは 61.3% → 61.5%
 - 触る場所: `src/agent/code-index.ts`（`symbolsIn`・`buildIndex` の上限・`searchIndex`）、`src/agent/tools/find.ts`、試験は `test/find-134.test.ts`（直しを外すと 2 件落ちることを確かめた）
+
+## 2026-10-13  135 回目（fetch_url と show_file: meta の charset・二進・転送・注釈・文字の参照・無い行）
+
+読むだけの調査で 6 件見つけ、手元のサーバーで再現してから直した（`src/agent/tools/network.ts`・`show.ts`）。
+
+- 見出しに charset の無い HTML を、頁の meta（`<meta charset="EUC-JP">`）を見ずに読み、化けたまま渡していた。頭の 4KB の meta を見る
+- `image/png` などの二進を本文として渡していた。文字の種類でない中身は渡さず、種類を言う
+- 転送（302）を `redirect: 'error'` の例外として受け、「外に出られませんでした」と言っていた。相手が落ちていると読み違える。`manual` にして、飛ばされたことと先を言う。先は辿らない（許可の外へ飛ばされないため、追わないことは変えない）。`test/network.test.ts` の「転送を追わない」は、`manual` も追わない形として認めるように直した
+- HTML の注釈の中の `>` でタグの消しが止まり、注釈に隠した文が本文として渡っていた。注釈は丸ごと落とす
+- `&quot;` と数字の参照（`&#26085;`）を戻していなかった
+- `show_file` が 3 行のファイルの 9999 行目を「開きました」と言っていた。行の数を数えて、無い行は無いと言う（20MB を超えるファイルは数えずに通す）
+- 触る場所: `src/agent/tools/network.ts`（`readBoundedCut`・`toText`・`createFetchUrlTool`）、`src/agent/tools/show.ts`、試験は `test/fetch-show-135.test.ts`（直しを外すと 5 件とも落ちることを確かめた）

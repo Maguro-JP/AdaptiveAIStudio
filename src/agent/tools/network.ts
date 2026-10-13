@@ -109,7 +109,9 @@ export async function readBoundedCut(res: Response, limitBytes: number, contentT
   const whole = Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
   // 上限で切ったなら、末尾の途中の字を落とす（字の途中で切ると、厳密な UTF-8 の読みが落ちて CP932 と取り違えていた）
   const raw = cut ? Buffer.from(trimPartialText(whole)) : whole;
-  const charset = charsetOf(contentType);
+  // 見出しに charset が無い HTML は、頁の頭の meta を見る（EUC-JP の頁を UTF-8 → CP932 の推し量りで読み、化けたまま渡していた）
+  const charset = charsetOf(contentType)
+    ?? (/html/i.test(contentType) || contentType === '' ? /<meta[^>]+charset\s*=\s*["']?([\w-]+)/i.exec(raw.subarray(0, 4096).toString('latin1'))?.[1]?.toLowerCase() : undefined);
   // 相手が UTF-8 と言っているなら、そのとおりに読む（言っていても推し量りに回していた）
   if (charset === 'utf-8' || charset === 'utf8') return { text: new TextDecoder('utf-8').decode(raw), cut };
   if (charset) {
@@ -121,12 +123,21 @@ export async function readBoundedCut(res: Response, limitBytes: number, contentT
 export function toText(body: string, contentType: string): string {
   if (!/html/i.test(contentType)) return body;
   return body
+    // 注釈は丸ごと落とす（中の `>` でタグの消しが止まり、隠した文が本文として渡っていた）
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, ' ')
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&(?:#39|apos);/g, "'")
+    // 数字の参照（`&#26085;` `&#x672C;`）も字に戻す。範囲の外は残す
+    .replace(/&#(?:x([0-9a-f]+)|(\d+));/gi, (m, hex: string | undefined, dec: string | undefined) => {
+      const n = hex ? parseInt(hex, 16) : Number(dec);
+      return n > 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : m;
+    })
     // `&amp;` は最後に戻す（先に戻すと `&amp;lt;` が `<` まで二度解け、`&lt;` という字を見せている頁が別の中身になった）
     .replace(/&amp;/g, '&')
     .replace(/[ \t]+/g, ' ')
@@ -191,11 +202,21 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
       try {
         const res = await doFetch(target.toString(), {
           method: 'GET',
-          redirect: 'error', // 許可リストの外へ飛ばされないため
+          redirect: 'manual', // 許可リストの外へ飛ばされないため。飛ばされたら、先を言って止める
           headers: { accept: 'text/plain, application/json, text/html;q=0.8', 'user-agent': 'AdaptiveAIStudio' },
           signal: timer.signal,
         });
+        // 飛ばされたことを「繋がらなかった」と言わない（相手が落ちていると読み違える）。先は言うが、辿らない
+        if (res.status >= 300 && res.status < 400) {
+          const to = res.headers.get('location');
+          return fail(`出典: ${target}\n${res.status} で別の場所へ飛ばされました${to ? `: ${to}` : ''}。飛ばされた先は辿りません。要るなら、その URL を直接 fetch_url に渡してください`);
+        }
         const type = res.headers.get('content-type') ?? '';
+        // 文字でない中身（画像・圧縮など）は渡さない（二進を本文として渡していた）
+        if (type && !/^text\/|json|xml|javascript|ecmascript|html|yaml|toml|csv|markdown/i.test(type)) {
+          await res.body?.cancel().catch(() => undefined);
+          return fail(`出典: ${target}\n文字ではない中身（${type.split(';')[0]}）なので渡しません。`);
+        }
         // 全部を読み切らない。上限の先は切ると決めているのに、切る前に
         // 何百MB も抱えると、それだけで動かなくなる機械がある。
         // 文字にするのは全部揃ってから。日本語の頁は Shift_JIS のことがある。
