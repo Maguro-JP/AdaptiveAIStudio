@@ -315,7 +315,16 @@ function anchorEdit(
       if (end <= i || end >= lines.length) continue;
       if (lines[end]!.trim() !== tail) continue;
       const inside = lines.slice(i + 1, end).map((l) => l.trim()).filter((l) => l.length > 0);
-      const same = middle.filter((m) => inside.includes(m)).length;
+      // 回数まで数える。`});` のように何度も出る行を「在る」だけで数えると、本当の終わりより手前の同じ形の行で止めても
+      // 同じ点になり、残りの行を置き去りにしていた
+      const pool = new Map<string, number>();
+      for (const l of inside) pool.set(l, (pool.get(l) ?? 0) + 1);
+      const same = middle.filter((m) => {
+        const n = pool.get(m) ?? 0;
+        if (n === 0) return false;
+        pool.set(m, n - 1);
+        return true;
+      }).length;
       // 真ん中が半分も合っていないなら、別の場所とみなす。
       if (middle.length > 0 && same * 2 < middle.length) continue;
       // 近さは空行を数えない行の数で比べる。空行を一つ足された find は行数が一つ多いので、行数で比べると
