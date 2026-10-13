@@ -307,7 +307,7 @@ function anchorEdit(
      *
      * 渡された行数（span）は、真ん中を崩された分だけずれている。だから
      * 行数は当てにせず、**真ん中がいちばん多く一致する終わり**を採る。
-     * 同じだけ合うなら、渡された行数に近い方。
+     * 同じだけ合うなら、中身の行（空行を除く）の数が渡されたものに近い方。
      */
     let best: { to: number; same: number; off: number } | undefined;
     for (let k = -2; k <= 2; k += 1) {
@@ -318,7 +318,9 @@ function anchorEdit(
       const same = middle.filter((m) => inside.includes(m)).length;
       // 真ん中が半分も合っていないなら、別の場所とみなす。
       if (middle.length > 0 && same * 2 < middle.length) continue;
-      const off = Math.abs(k);
+      // 近さは空行を数えない行の数で比べる。空行を一つ足された find は行数が一つ多いので、行数で比べると
+      // 塊のすぐ後ろの `}` や `});`（終わりの行と同じ形）まで延ばして選び、その行を消していた
+      const off = Math.abs(inside.length - middle.length) * 10 + Math.abs(k);
       if (!best || same > best.same || (same === best.same && off < best.off)) {
         best = { to: end, same, off };
       }
