@@ -1353,6 +1353,9 @@ export class Session {
         // 止めるのは書き込みとコマンド。手を出すことと、調べることは違う。
         approve: async (req) => {
           if (req.kind === 'command') refusedCommand = true;
+          // 利用者が「尋ねる」（`ask`）を選んだときは、外を読むことも尋ねずには通さない。考えごとは利用者がいないときに動くので、
+          // 尋ねられない。断る（`ask` でも考えごとの取得だけは尋ねずに外へ出ていた）
+          if (this.config.agent?.approval === 'ask') return false;
           return req.kind === 'network' && this.#opts.approveThinking !== false;
         },
       });
