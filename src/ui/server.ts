@@ -11,7 +11,7 @@
  * 素の HTML と ES モジュールなら、組み立ての手順すら要らない。
  */
 import { placeKey } from '../memory/memory.ts';
-import { proposalHere } from '../agent/proposals.ts';
+import { proposalHere, actionRequest } from '../agent/proposals.ts';
 import { listDir, resolveInside } from './files.ts';
 import { describeNet, withoutPlaces } from '../runtime/net-why.ts';
 import { UnfinishedWork, type Unfinished, resumePrompt, whyText, MAX_OPEN } from '../core/unfinished.ts';
@@ -1633,7 +1633,7 @@ export class UiServer {
       // 採用したなら、その内容をそのまま依頼として流す（手を放してから、間に await を挟まずに）。
       // 提案の実行文は、モデルが書いたもの。利用者の言葉として判じない。
       if (verdict === 'accepted') {
-        this.#bg(this.#drive(session, target.suggestedAction, undefined, { fromUser: false }), '提案の実行が落ちました');
+        this.#bg(this.#drive(session, actionRequest(target), undefined, { fromUser: false }), '提案の実行が落ちました');
       }
       return send(res, 200, { proposal: target });
     }

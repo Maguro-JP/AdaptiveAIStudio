@@ -25,7 +25,7 @@ import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import type { VerifyEvent } from '../agent/verify.ts';
 import { buildHarness } from '../core/harness-setup.ts';
 import { formatReport } from '../harness/metrics.ts';
-import { formatProposal } from '../agent/proposals.ts';
+import { formatProposal, actionRequest } from '../agent/proposals.ts';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { RoleRegistry } from '../roles/registry.ts';
 import { RoleLedger, formatChanges } from '../roles/ledger.ts';
@@ -668,7 +668,7 @@ async function main(): Promise<void> {
         }
         console.log(c.dim(`  ${target.id} を実行します: ${target.suggestedAction}\n`));
         // 提案の内容をそのまま依頼として流す
-        pendingRequest = target.suggestedAction;
+        pendingRequest = actionRequest(target);
         acceptedProposalId = target.id;
       }
       if (line === '/rules') {
