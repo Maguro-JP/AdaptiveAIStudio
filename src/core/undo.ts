@@ -78,6 +78,8 @@ interface Stored extends UndoPoint {
    * 比べずに戻していたので、戻り先の後に外のエディタ等で入れた直しを、黙って消していた。
    */
   after?: Record<string, string | null>;
+  /** その回が書き終えたときの権限（道 → mode）。前の記録には無い */
+  afterMode?: Record<string, number>;
 }
 
 /** 戻す前に、選んだ一覧が古くなっていた（その間に新しい戻り先ができた）。名前を出していない回まで戻さない。 */
@@ -264,7 +266,7 @@ export class UndoStore {
   readonly #root: string;
   readonly #dir: string;
   #open: { id: string; at: number; seq: number; request: string; files: Map<string, Saved>; bytes: number; skipped: string[] } | undefined;
-  /** 大きすぎて控えられなかったもの。黙って落とさないために持つ。 */
+  /** 大きすぎて記録できなかったもの。黙って落とさないために持つ。 */
   #skipped: string[] = [];
   /**
    * 直近で書き換えたファイル（新しい順）。
@@ -418,11 +420,17 @@ export class UndoStore {
 
     // その回が書き終えた姿を記録する（戻す前に、後から入った変化を見つけるため）。読めないものは比べない
     const after: Record<string, string | null> = {};
-    for (const relPath of [...open.files.values()].map((f) => f.path)) {
+    const afterMode: Record<string, number> = {};
+    // 記録できなかった道（大きすぎる・前後比べで捨てた）も、書き終えた姿の要約値だけは残す（中身は持たない）。残さずにいたので、
+    // その後に手で直しても確かめられず、古い戻り先まで戻すと手の直しが黙って消えた
+    for (const relPath of [...[...open.files.values()].map((f) => f.path), ...open.skipped]) {
       const abs = safeResolve(this.#root, relPath);
       if (!abs) continue;
       const d = await digestOf(abs).catch(() => undefined);
       if (d !== undefined) after[relPath] = d;
+      // 書き終えたときの権限も残す（戻すときは記録の権限を当て直すので、その後に手で付けた実行の権限が黙って落ちていた）
+      const m = await stat(abs).then((st) => st.mode & 0o777, () => undefined);
+      if (m !== undefined) afterMode[relPath] = m;
     }
     await mkdir(this.#dir, { recursive: true });
     const seq = open.seq;
@@ -436,6 +444,7 @@ export class UndoStore {
       ...(open.skipped.length > 0 ? { skipped: [...open.skipped] } : {}),
       root: (await rootKeys(this.#root)).key,
       after,
+      ...(Object.keys(afterMode).length > 0 ? { afterMode } : {}),
     };
     await writeStored(join(this.#dir, `${point.id}.json`), point);
     // 古い戻り先の片づけに失敗しても、この戻り先は書けている。書けなかったことにしない（呼ぶ側が「戻せません」と言ってしまう）
@@ -461,7 +470,7 @@ export class UndoStore {
   /** 最後に閉じた 1 ターンで、記録できなかったもの。空にしない（画面へ言う側が後で `takeSkipped` で取る）。 */
   peekSkipped(): readonly string[] { return this.#skipped; }
 
-  /** 大きすぎて控えられなかったもの。読んだら空にする。 */
+  /** 大きすぎて記録できなかったもの。読んだら空にする。 */
   takeSkipped(): string[] {
     const out = this.#skipped;
     this.#skipped = [];
@@ -471,7 +480,7 @@ export class UndoStore {
   /**
    * 直近で書き換えたファイル。新しい順、上限 `RECENT_PATHS` 件。
    *
-   * 控えられなかったもの（大きすぎたファイル）も、**触ったことは確か**なので
+   * 記録できなかったもの（大きすぎたファイル）も、**触ったことは確か**なので
    * ここには入れる。戻せるかどうかと、いま作業しているかどうかは別の話。
    */
   recent(): readonly string[] { return this.#recent; }
@@ -611,8 +620,7 @@ export class UndoStore {
       const changedOutside: string[] = [];
       for (const { stored } of read) {
         // 新しい回で記録できなかった道（大きすぎる・前後比べで捨てた）も、その回が触った道。古い回の書き終えた姿とは比べない
-        //（比べると、その回の AI 自身の変更を「後から変わった」と言っていた）
-        const skippedHere = (stored.skipped ?? []).map(fold);
+        //（比べると、その回の AI 自身の変更を「後から変わった」と言っていた）。比べるのは、その回の書き終えた姿（下）
         for (const f of stored.files) {
           const key = fold(f.path);
           if (seen.has(key)) continue;
@@ -622,9 +630,20 @@ export class UndoStore {
           const abs = safeResolve(this.#root, f.path);
           if (!abs) continue;
           const now = await digestOf(abs).catch(() => undefined);
-          if (now !== undefined && now !== expected) changedOutside.push(f.path);
+          if (now !== undefined && now !== expected) { changedOutside.push(f.path); continue; }
+          if (await modeMoved(abs, stored.afterMode?.[f.path])) changedOutside.push(f.path);
         }
-        for (const k of skippedHere) seen.add(k);
+        // 記録できなかった道も、書き終えた姿の要約値が残っていれば比べる（無い前の記録は、今までどおり比べずに通す）
+        for (const raw of stored.skipped ?? []) {
+          const key = fold(raw);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const expected = stored.after && Object.hasOwn(stored.after, raw) ? stored.after[raw] : undefined;
+          const abs = safeResolve(this.#root, raw);
+          if (expected === undefined || !abs) continue;
+          const now = await digestOf(abs).catch(() => undefined);
+          if ((now !== undefined && now !== expected) || await modeMoved(abs, stored.afterMode?.[raw])) changedOutside.push(raw);
+        }
       }
       if (changedOutside.length > 0) throw new UndoConflict(changedOutside);
     }
@@ -708,4 +727,15 @@ export class UndoStore {
     for (const p of drop) await unlink(join(this.#dir, `${p.id}.json`)).catch(() => undefined);
     return drop.length;
   }
+}
+
+/**
+ * 書き終えたときから、実行の権限が変わったか。記録が無い・読めないなら変わっていないとする。
+ * 見るのは実行の権限（`x`）だけ。手で付け外しして戻すと困るのはそこで、読み書きの権限を変えたもの（書けなくした等）は、
+ * 戻せなかった道として今までどおり返す
+ */
+async function modeMoved(abs: string, recorded: number | undefined): Promise<boolean> {
+  if (recorded === undefined) return false;
+  const now = await stat(abs).then((st) => (st.isFile() ? st.mode & 0o111 : undefined), () => undefined);
+  return now !== undefined && now !== (recorded & 0o111);
 }
