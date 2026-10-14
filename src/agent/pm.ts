@@ -209,7 +209,15 @@ export function repairPlan(raw: unknown, request: string, ctx: PmContext): WorkP
      */
     const kept = items.slice(0, maxItems);
     const rest = items.slice(maxItems);
-    const last = kept[kept.length - 1]!;
+    /*
+     * 畳む先は、書く仕事が含まれるなら書ける役職の件から選ぶ（いつも最後の件に畳んでいたので、調べるだけの役職に書く仕事が回り、
+     * その書き込み先はどの担当にも書かれなかった）。書ける件が無ければ最後の件のまま、そう言う
+     */
+    const canWrite = (it: PlanItem) => !ctx.access || (ctx.access[it.roleId] ?? []).includes('write');
+    const restWrites = rest.some((t) => (t.writes ?? []).length > 0 || canWrite(t));
+    const writer = restWrites ? [...kept].reverse().find(canWrite) : undefined;
+    const last = writer ?? kept[kept.length - 1]!;
+    if (restWrites && !writer) repairs.push(`畳んだ件に書く仕事がありますが、残した件に書ける役職がいないので、${last.id}（${last.roleId}）では書けません。`);
     const folded = new Set(rest.map((t) => t.id));
     last.instruction = `${last.instruction}\n\nあわせて、次も引き受けてください:\n${rest.map((t) => `- ${t.instruction}`).join('\n')}`;
     last.writes = [...new Set([...(last.writes ?? []), ...rest.flatMap((t) => t.writes ?? [])])];
