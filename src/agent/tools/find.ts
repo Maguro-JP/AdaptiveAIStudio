@@ -71,8 +71,10 @@ export const findCodeTool: Tool = {
       return ok(`作業場に読めるコードがありません: ${ctx.root}`);
     }
 
+    const matched = { files: 0 };
     const hits = await searchIndex(index, query, {
       limit,
+      matched,
       read: (p) => readIndexed(ctx.root, p),
     });
     /*
@@ -96,7 +98,9 @@ export const findCodeTool: Tool = {
       );
     }
 
-    const lines: string[] = [`${hits.length} 件（${index.files.length} ファイル中）${notAll}`];
+    // 上位だけを返したときは、ほかにも当たったと言う（3 件と言うと、当たったのが 3 ファイルだけだと読まれた）
+    const more = matched.files > hits.length ? `。ほかに ${matched.files - hits.length} ファイル当たっています（limit を上げるか、言葉を足して絞ってください）` : '';
+    const lines: string[] = [`${hits.length} 件（${index.files.length} ファイル中）${more}${notAll}`];
     for (const h of hits) {
       lines.push('');
       lines.push(h.path);

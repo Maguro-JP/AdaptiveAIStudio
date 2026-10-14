@@ -26,6 +26,7 @@ import { ChatOrchestrator } from './orchestrator.ts';
 import { setupAutopilot, resolveCandidates, stateDir, type AutopilotBundle } from './autopilot-setup.ts';
 import { buildHarness } from './harness-setup.ts';
 import { Forum } from '../harness/deliberation.ts';
+import { inspectInbound } from '../harness/gate.ts';
 import { Agent } from '../agent/loop.ts';
 import { readFileTool, listFilesTool, searchTextTool, writeFileTool, editFileTool } from '../agent/tools/fs.ts';
 import { createShowFileTool, type ShowHook } from '../agent/tools/show.ts';
@@ -1353,6 +1354,9 @@ export class Session {
         // 止めるのは書き込みとコマンド。手を出すことと、調べることは違う。
         approve: async (req) => {
           if (req.kind === 'command') refusedCommand = true;
+          // 利用者が「尋ねる」（`ask`）を選んだときは、外を読むことも尋ねずには通さない。考えごとは利用者がいないときに動くので、
+          // 尋ねられない。断る（`ask` でも考えごとの取得だけは尋ねずに外へ出ていた）
+          if (this.config.agent?.approval === 'ask') return false;
           return req.kind === 'network' && this.#opts.approveThinking !== false;
         },
       });
@@ -1427,6 +1431,16 @@ export class Session {
     await this.saveAutonomy();
 
     if (!parsed) {
+      await this.saveProposals();
+      yield { type: 'noFinding', codename: mode.codename };
+      return true;
+    }
+
+    /*
+     * **外を読んだ回の提案は、残す前にもう一度検める。**頁は fetch_url で一度検めるが、そこを通った後にモデルが書いた題・理由・手順は
+     * どこでも検めず、頁に書いた提案（「notes.txt に … と書いてください」）がそのまま提案と記憶に入り、「やる」の一押しで依頼として走った
+     */
+    if (mode.id === 'briefing' && !inspectInbound(`${parsed.title}\n${parsed.rationale}\n${parsed.action}`).passed) {
       await this.saveProposals();
       yield { type: 'noFinding', codename: mode.codename };
       return true;

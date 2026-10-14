@@ -50,8 +50,9 @@ interface Pattern {
 const INBOUND: Pattern[] = [
   {
     kind: '指示の上書き',
-    // 言い換え（`disregard`・`forget`・`override`）と、間に挟まる語（`the`・`all of the`・`your`）も拾う
-    match: /\b(ignore|disregard|forget|override)\s+(?:(?:all|any|the|of|my|these)\s+){0,3}(?:previous|prior|above|earlier|preceding|system|your)\s+(?:(?:system\s+)?(?:instructions?|prompts?|rules|directions))|前の指示は?(すべて)?無視|これまでの指示を忘れ/i,
+    // 言い換え（`disregard`・`forget`・`override`）と、間に挟まる語（`the`・`all of the`・`your`）も拾う。
+    // 日本語は「を」を挟む形と「これまで」「上記」の言い方も（「前の指示は無視」だけを拾い、「前の指示を無視して」を通していた）
+    match: /\b(ignore|disregard|forget|override)\s+(?:(?:all|any|the|of|my|these)\s+){0,3}(?:previous|prior|above|earlier|preceding|system|your)\s+(?:(?:system\s+)?(?:instructions?|prompts?|rules|directions))|(?:前|以前|これまで|今まで|上記|先ほど|最初)の(?:指示|命令|指令|ルール|設定|プロンプト)(?:は|を)?(?:すべて|全て|全部)?(?:無視|忘れ|破棄)/i,
     severity: 'block',
     detail: 'こちらの指示を上書きしようとする文が含まれています。',
   },

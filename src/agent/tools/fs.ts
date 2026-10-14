@@ -164,7 +164,9 @@ export const listFilesTool: Tool = {
     }
     // 見なかった所があるのに「ファイルなし」とだけ言わない（深い所や . で始まる所に在りうる）
     const deep = (walked.deep ? `\n${DEEP_NOTE}` : '')
-      + (walked.unreadableDirs ? `\n（中を見られないフォルダが ${walked.unreadableDirs} 個あります）` : '');
+      + (walked.unreadableDirs ? `\n（中を見られないフォルダが ${walked.unreadableDirs} 個あります）` : '')
+      + (walked.skipped?.length ? `\n（ビルドの出力先として中を見ていないフォルダ: ${walked.skipped.slice(0, 5).join(', ')}${walked.skipped.length > 5 ? ` 他 ${walked.skipped.length - 5} 個` : ''}。見るときは path に渡してください）` : '')
+      + (walked.links ? `\n（リンク ${walked.links} 個は辿っていません）` : '');
     if (found.length === 0) {
       const dots = dotsNote(walked.dots);
       return ok(`(ファイルなし)${deep}${dots ? `\n${dots}` : ''}`);
@@ -230,6 +232,7 @@ export async function searchText(
   signal: AbortSignal,
 ): Promise<TextSearch> {
   const out: TextSearch = { hits: [], capped: false, walkCapped: false, tooBig: 0, unreadable: 0 };
+  query = toLf(query).normalize('NFC');
   // list_files と同じ理由でリンクの先まで見る。片方だけ塞いでも漏れる。
   const abs = await realSafeResolve(root, base);
   if (!abs) return { ...out, error: `作業ディレクトリの外です: ${base}` };
@@ -278,7 +281,9 @@ export async function searchText(
       // 二進は中を探さない（化けた字の行を当たりとして返さない）。見ていない数は言う。Shift_JIS 等は読んで探す。
       const decoded = decodeForReading(await readFile(target));
       if (decoded.kind === 'binary') { out.unreadable += 1; continue; }
-      const text = decoded.text;
+      // 改行の形と、合成済み・分解済みの綴りをそろえてから比べる。CRLF のファイルを LF の改行入りの文字列で探すと、
+      // 在るのに「該当なし」だった。macOS で作った文書や貼り付けた字（分解済み）も、見た目が同じなのに当たらなかった
+      const text = toLf(decoded.text).normalize('NFC');
       if (!text.includes(query)) continue;
       // 改行を含む文字列は、行ごとには当たらない。全体で探し、始まりの行を返す（在るのに「該当なし」と言っていた）
       if (query.includes('\n')) {
@@ -312,7 +317,8 @@ export async function searchText(
  */
 function around(line: string, query: string, width = 200): string {
   if (line.length <= width) return line;
-  const at = line.indexOf(query);
+  // 行は端の空白を落として渡ってくるので、当たりも端の空白を落として探す（見つからず頭から切り、当たりが外に落ちていた）
+  const at = Math.max(0, line.indexOf(query) >= 0 ? line.indexOf(query) : line.indexOf(query.trim()));
   // 当たりが見せる幅より長いときは、当たりの頭から見せる（真ん中に寄せると頭が切れる）
   const lead = query.length >= width ? 0 : Math.floor((width - query.length) / 2);
   const from = Math.max(0, Math.min(at - lead, line.length - width));
@@ -760,6 +766,10 @@ interface Walked {
   dots?: number;
   /** 中を見られなかったフォルダの数（権限・掴まれている） */
   unreadableDirs?: number;
+  /** .gitignore に無いのに、決め打ちの名前（`dist`・`build` など）で飛ばしたフォルダ */
+  skipped?: string[];
+  /** 辿らなかったリンクの数 */
+  links?: number;
 }
 
 /**
@@ -800,13 +810,20 @@ async function walk(
       if (capped && e.name !== '.git') capped.dots = (capped.dots ?? 0) + 1;
       continue;
     }
-    if (SKIP_DIRS.has(e.name)) continue;
     const abs = join(dir, e.name);
     // **その置き場が「見なくていい」と書いたものを見ない。**
     const rel = relative(root, abs).split(sep).join('/');
     if (ign?.ignores(rel, e.isDirectory())) continue;
+    // 決め打ちで飛ばす名前（`dist`・`build` など）は、.gitignore に無くても見ない（大きい）。ただし黙って落とさず、飛ばした所を数える
+    // （`node_modules` と `.git` は説明に書いてあるので数えない）
+    if (SKIP_DIRS.has(e.name)) {
+      if (capped && e.isDirectory() && e.name !== 'node_modules' && e.name !== '.git') (capped.skipped ??= []).push(rel);
+      continue;
+    }
     if (e.isDirectory()) await walk(abs, root, out, depth + 1, await ign?.enter(rel), capped);
     else if (e.isFile()) out.push(toDisplayPath(root, abs));
+    // リンクは外へ出ないよう辿らないが、在ることは数える（黙って消えていた）
+    else if (e.isSymbolicLink() && capped) capped.links = (capped.links ?? 0) + 1;
   }
 }
 

@@ -25,7 +25,7 @@ import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
 import type { VerifyEvent } from '../agent/verify.ts';
 import { buildHarness } from '../core/harness-setup.ts';
 import { formatReport } from '../harness/metrics.ts';
-import { formatProposal } from '../agent/proposals.ts';
+import { formatProposal, actionRequest } from '../agent/proposals.ts';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { RoleRegistry } from '../roles/registry.ts';
 import { RoleLedger, formatChanges } from '../roles/ledger.ts';
@@ -37,6 +37,7 @@ import { formatEntry, placeKey } from '../memory/memory.ts';
 import { Session, quietCandidates } from '../core/session.ts';
 import { buildInspector } from '../core/inspector-setup.ts';
 import { expandCommand } from '../agent/commands.ts';
+import { normalizeLine } from './slash.ts';
 import { runPanel, mergeFindings, panelVerdict } from '../agent/panel.ts';
 import { formatIdleStats } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES } from '../harness/idle-modes.ts';
@@ -478,7 +479,7 @@ async function main(): Promise<void> {
             // 画面と同じ下限（0・負・数でない値で、待機中に空回りしていた）
             c.cyan('依頼> '), Math.max(5, Number.isFinite(initCfg.idleSeconds) ? initCfg.idleSeconds! : 30) * 1000, () => think());
       if (answer === undefined) break;
-      const line = answer.trim();
+      const line = normalizeLine(answer);
       if (!line) continue;
       if (line === '/exit' || line === '/quit') break;
       if (line === '/new') {
@@ -667,7 +668,7 @@ async function main(): Promise<void> {
         }
         console.log(c.dim(`  ${target.id} を実行します: ${target.suggestedAction}\n`));
         // 提案の内容をそのまま依頼として流す
-        pendingRequest = target.suggestedAction;
+        pendingRequest = actionRequest(target);
         acceptedProposalId = target.id;
       }
       if (line === '/rules') {
@@ -720,7 +721,7 @@ async function main(): Promise<void> {
           continue;
         }
         // `/tmp を見て` のような、根の直下の道を書いた行。命令ではないので、そのまま依頼として送る
-        if (expanded.kind === 'unknown' && existsSync(`/${expanded.name}`)) {
+        if (expanded.kind === 'unknown' && expanded.name && existsSync(`/${expanded.name}`)) {
           request = line;
         } else if (expanded.kind === 'unknown') {
           const known = [...AGENT_COMMANDS, ...expanded.known.map((n) => `/${n}`)];

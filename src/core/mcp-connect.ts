@@ -24,6 +24,8 @@ export interface ConnectResult {
   /** 言っておくこと（廃止、npm が要る、など）。 */
   notes: string[];
   error?: string;
+  /** `onlyIfAbsent` で、もう在ったので書かなかったときの、在ったもの */
+  already?: Record<string, unknown>;
   /**
    * 設定へ書いた、立ち上げ方そのもの。
    *
@@ -45,6 +47,8 @@ export interface ConnectOptions {
   /** 合言葉。名前 → 値。**渡された分だけ**置き場の .env に書く。 */
   secrets?: Record<string, string>;
   enabled?: boolean;
+  /** 起こせる形のものが設定に在れば書かない（書く直前に錠の中で見る）。在ったものは `ConnectResult.already` に入る */
+  onlyIfAbsent?: boolean;
 }
 
 /** 繋ぐ。書くところまでで、立ち上げるのは次に土台を組むとき。 */
@@ -81,7 +85,10 @@ export async function connectService(id: string, opts: ConnectOptions = {}): Pro
       spec.command = launch.command;
       spec.args = launch.args;
     }
-    const path = await saveMcpServer(entry.id, spec as Parameters<typeof saveMcpServer>[1]);
+    let already: Record<string, unknown> | undefined;
+    const path = await saveMcpServer(entry.id, spec as Parameters<typeof saveMcpServer>[1],
+      opts.onlyIfAbsent ? { onlyIfAbsent: (e) => { already = e; } } : {});
+    if (already) return { ok: true, id: entry.id, path, already, missing: [], notes: [] };
     return {
       ok: true, id: entry.id, path, spec: spec as McpServerSpec,
       missing: missingSecrets(entry).map((m) => ({ env: m.env, about: m.about, ...(m.where ? { where: m.where } : {}) })),

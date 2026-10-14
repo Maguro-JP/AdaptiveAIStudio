@@ -221,7 +221,21 @@ export function decodeOutput(raw: Buffer): string {
       return new TextDecoder('utf-8', { fatal: true }).decode(raw.subarray(skip));
     } catch { /* ずらして試す */ }
   }
-  return decodeText(raw, { utf16: false }).text;
+  /*
+   * **行ごとに読み分ける。**全体を一つの文字コードと決めていたので、utf8 の見出しの後に CP932 の出力（Windows の古い命令の
+   * エラーなど）が続くと、全体が utf8 として読めずに化けを許した utf8 で読み、CP932 の行を黙って化けさせていた。
+   * 行の中で文字コードが変わることはまず無いので、行ごとに utf8・CP932 の順で厳密に試す
+   */
+  const lines: string[] = [];
+  let from = 0;
+  while (from <= raw.length) {
+    const nl = raw.indexOf(0x0a, from);
+    const end = nl < 0 ? raw.length : nl;
+    lines.push(decodeText(raw.subarray(from, end), { utf16: false }).text);
+    if (nl < 0) break;
+    from = nl + 1;
+  }
+  return lines.join('\n');
 }
 
 /** 出力の末尾だけを残す。失敗の原因は末尾にあることが多い。 */

@@ -63,6 +63,12 @@ export async function* readSseLines(
     // `data:` の後ろの空白は一つだけ落とす（決まりのとおり。中身の空白まで削らない）
     const data = line.slice(line.startsWith('data: ') ? 6 : 5);
     if (pending !== undefined) {
+      // 新しい行がそれだけで読める知らせなら、前の溜めは壊れた行だった。溜めを吐き出して（読めないので受け手が捨てる）、新しい行を渡す。
+      // 繋ぎ続けると、空行を送らない相手では後ろの本文も終わりの合図も一つの読めない塊に飲まれ、返事ごと失敗になっていた
+      if (/^\s*[{[]/.test(data) && !incompleteJson(data)) {
+        const out = pending; pending = undefined; yield out; yield data;
+        return;
+      }
       pending += '\n' + data;
       if (!incompleteJson(pending)) { const out = pending; pending = undefined; yield out; }
       return;

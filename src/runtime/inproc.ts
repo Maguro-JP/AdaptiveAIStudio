@@ -1293,6 +1293,9 @@ export class InProcRuntime implements LocalRuntime {
     // ライブラリ経由で渡しても、その型ではモデルに何も届かない。
     // 届かないので一度も呼ばず、「動いているが何もしない」だけが残る。
     const asText = GUESSED_WRAPPERS.has(held.wrapper) && (body.tools?.length ?? 0) > 0;
+    // 本文から拾う呼び出しは、渡したツールの名前だけ（説明文の中の例や、ツールに無い名前を呼び出しとして拾い、実行に回していた）
+    const toolNames = new Set((body.tools ?? []).flatMap((t) => (t.function?.name ? [t.function.name] : [])));
+    const knownTool = (name: string): boolean => toolNames.has(name);
     if (asText) {
       const spec = (body.tools ?? []).flatMap((t) => (t.function?.name
         ? [{
@@ -1399,7 +1402,7 @@ export class InProcRuntime implements LocalRuntime {
       if (cutAt >= 0) cutOff = true;
       // 本文で渡したときは、本文から拾う。
       if (asText) {
-        const salvaged = extractToolCalls(text);
+        const salvaged = extractToolCalls(text, knownTool);
         text = salvaged.text;
         salvaged.calls.forEach((c, i) => calls.push({ id: `call_${i}`, name: c.name, args: c.args }));
       }
@@ -1525,7 +1528,7 @@ export class InProcRuntime implements LocalRuntime {
       // 返り値は上限で切れたかしか知らない。繰り返しで切ったことは、こちらで立て直す
       if (runaway) cutOff = true;
       if (filter) {
-        const salvaged = filter.end();
+        const salvaged = filter.end(knownTool);
         if (salvaged.text) chunk({ content: salvaged.text });
         salvaged.calls.forEach((c, i) => calls.push({ id: `call_${i}`, name: c.name, args: c.args }));
       }
@@ -1546,7 +1549,7 @@ export class InProcRuntime implements LocalRuntime {
       // 「止まりました」だけが出る。持っているなら、そちらを返す。
       if (filter) {
         // 途中で落ちても、溜めた分を握り潰さない。
-        const salvaged = filter.end();
+        const salvaged = filter.end(knownTool);
         if (salvaged.text) chunk({ content: salvaged.text });
         salvaged.calls.forEach((c, i) => calls.push({ id: `call_${i}`, name: c.name, args: c.args }));
       }

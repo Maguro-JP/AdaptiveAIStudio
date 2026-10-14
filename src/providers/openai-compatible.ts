@@ -285,6 +285,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     let finishReason: 'stop' | 'length' | 'toolCalls' | 'unknown' = 'unknown';
     // 終わりの合図（[DONE] か finish_reason）を受け取ったか。**受け取らずに流れが閉じたら、途中で切れた。**
     let ended = false;
+    let filtered = false;
     // 中身のある終わりの合図（空でない finish_reason）を受け取ったか。ここからは閉じるのを短く待つ。
     // 空の合図（`""`）を毎回付けてくる中継がいるので、`ended` とは分ける（分けずにいたら、途中の間で言い終えたことにしていた）
     let finished = false;
@@ -414,6 +415,8 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         if (choice?.finish_reason === 'stop') finishReason = 'stop';
         else if (choice?.finish_reason === 'length') finishReason = 'length';
         else if (choice?.finish_reason === 'tool_calls') finishReason = 'toolCalls';
+        // 相手の決まりで止められた。途中までの文を言い終えた答えとして通さない（終わりの形が `unknown` になり、成功として通っていた）
+        else if (choice?.finish_reason === 'content_filter') filtered = true;
 
         if (parsed.usage) {
           yield {
@@ -447,6 +450,13 @@ export class OpenAiCompatibleProvider implements ChatProvider {
       }
     } finally {
       clearTimeout(timer);
+    }
+    // 閉じない相手を待ち切った道（上の catch で投げずに抜ける）でも言うよう、ここで見る
+    if (filtered && !signal.aborted) {
+      throw new ProviderError({
+        kind: 'unavailable', providerId: this.id,
+        message: `${this.id} の返事は、相手の決まり（content_filter）で途中で止められました`,
+      });
     }
 
     for (const [idx, slot] of [...pending.entries()].sort((a, b) => a[0] - b[0])) {
@@ -546,7 +556,12 @@ function streamText(content: unknown): string | undefined {
 function contentText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
-  return content.map((p) => (typeof (p as { text?: unknown })?.text === 'string' ? (p as { text: string }).text : '')).join('');
+  // 考えの部分（`thinking`・`reasoning`）は本文に入れない（流して返す側は外していたのに、まとめて返す側は混ぜていた）
+  return content.map((p) => {
+    const part = p as { type?: unknown; text?: unknown };
+    if (typeof part?.type === 'string' && /thinking|reasoning/i.test(part.type)) return '';
+    return typeof part?.text === 'string' ? part.text : '';
+  }).join('');
 }
 
 /** 流れの途中で返ってきた失敗の中身を、文にする（`{message}` でも文字でも）。 */

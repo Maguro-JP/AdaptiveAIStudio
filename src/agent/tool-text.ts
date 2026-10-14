@@ -39,6 +39,7 @@ const OPENER = /<tool[_▁]call>|```json|```tool_call|<\|tool_calls_begin\|>|\{\
 
 /** 切れ端の末尾が、始まりの途中かどうかを見るための文字列。 */
 const OPENER_LITERALS = [
+  '<think>',
   '<tool_call>', '<tool▁call>', '```json', '```tool_call', '<|tool_calls_begin|>',
 ] as const;
 
@@ -139,6 +140,38 @@ export function sliceJsonObject(text: string, from: number): string | undefined 
  * 抜き出せた分だけを本文から取り除き、残りは人に見せる。
  */
 export function extractToolCalls(text: string, known?: (name: string) => boolean): Salvage {
+  /*
+   * **考えの中は呼び出しではない。**`<think>` の中で「例えば … と書ける」と書いた形を本物の呼び出しとして拾い、実行に回していた。
+   * 考えの部分（閉じないまま終わったものは終わりまで）は、呼び出しを探す前に外し、本文にも残さない
+   */
+  const thinking = /<think>[\s\S]*?(?:<\/think>|$)/g;
+  if (thinking.test(text)) {
+    const inner = extractToolCalls(text.replace(thinking, ''), known);
+    return { text: inner.calls.length > 0 ? inner.text : text.replace(thinking, '').trim(), calls: inner.calls };
+  }
+  /*
+   * Qwen の XML の形（`<tool_call><function=名前><parameter=鍵>値</parameter></function></tool_call>`）。JSON の形しか読まず、
+   * 呼び出しにならないまま生の記述が本文に出ていた。値は JSON として読めればその値、読めなければ文字のまま
+   */
+  const xml = /<tool[_▁]call>\s*<function=([A-Za-z][\w-]*)>([\s\S]*?)<\/function>\s*(?:<\/tool[_▁]call>|$)/g;
+  if (xml.test(text)) {
+    xml.lastIndex = 0;
+    const found: SalvagedCall[] = [];
+    const rest = text.replace(xml, (whole, name: string, body: string) => {
+      if (known && !known(name)) return whole;
+      const args: Record<string, unknown> = {};
+      for (const m of body.matchAll(/<parameter=([A-Za-z_][\w-]*)>\n?([\s\S]*?)\n?<\/parameter>/g)) {
+        const raw = m[2]!;
+        try { args[m[1]!] = JSON.parse(raw); } catch { args[m[1]!] = raw; }
+      }
+      found.push({ name, args });
+      return '';
+    });
+    if (found.length > 0) {
+      const tail = extractToolCalls(rest, known);
+      return { text: tail.calls.length > 0 ? tail.text : tidy(rest), calls: [...found, ...tail.calls] };
+    }
+  }
   const calls: SalvagedCall[] = [];
   let out = '';
   let i = 0;
@@ -180,7 +213,9 @@ function skipWrapperAfter(text: string, from: number): number {
 
 /** 呼び出しを抜いた跡の、余った空白と空行を整える。 */
 function tidy(s: string): string {
-  return s.replace(/\n{3,}/g, '\n\n').trim();
+  // 配列で並べた呼び出しを抜いた跡（`[,]`）も落とす
+  const t = s.replace(/\[\s*(?:,\s*)+\]/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  return t === '[]' ? '' : t;
 }
 
 /**
@@ -192,13 +227,30 @@ function tidy(s: string): string {
 export class ToolTextFilter {
   #held = '';
   #holding = false;
+  /** 考えの中（`<think>` の後、`</think>` の前）。中は表に出さず、呼び出しも探さない */
+  #thinking: string | undefined;
 
   /** いま表に出してよい分を返す。 */
   push(delta: string): string {
+    if (this.#thinking !== undefined) {
+      this.#thinking += delta;
+      const close = this.#thinking.indexOf('</think>');
+      if (close < 0) return '';
+      const rest = this.#thinking.slice(close + '</think>'.length);
+      this.#thinking = undefined;
+      return this.push(rest);
+    }
     if (this.#holding) { this.#held += delta; return ''; }
 
     const combined = this.#held + delta;
     const at = firstOpener(combined);
+    // 考えが呼び出しより先に始まったら、そこから先は考えとして溜めて捨てる（考えの中の呼び出しの形を拾っていた）
+    const think = combined.indexOf('<think>');
+    if (think >= 0 && (at < 0 || think < at)) {
+      this.#held = '';
+      this.#thinking = '';
+      return combined.slice(0, think) + this.push(combined.slice(think + '<think>'.length));
+    }
     if (at < 0) {
       // 記述の始まりが、次の切れ端にまたがっているかもしれない。
       const keep = danglingPrefixLength(combined);
@@ -216,6 +268,8 @@ export class ToolTextFilter {
     const held = this.#held;
     this.#held = '';
     this.#holding = false;
+    // 閉じないまま終わった考えは、捨てる
+    this.#thinking = undefined;
     if (held === '') return { text: '', calls: [] };
     return extractToolCalls(held, known);
   }

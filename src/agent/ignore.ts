@@ -38,8 +38,8 @@ interface Rule {
 /** 一行を規則に直す。注釈と空行は捨てる。 */
 function ruleFrom(raw: string): Rule | undefined {
   let line = raw;
-  // 行末の空白は無視される（`\ ` で守られているものを除く）。
-  line = line.replace(/(?<!\\)\s+$/, '');
+  // 行末の空白は無視される（`\ ` で守られているものを除く）。git が削るのは空白だけで、タブは名前の一部として残る
+  line = line.replace(/(?<!\\) +$/, '');
   if (line.length === 0 || line.startsWith('#')) return undefined;
 
   let negate = false;
@@ -85,12 +85,14 @@ function toRegex(pattern: string): string {
     }
     out += escape(c);
   }
-  // `dir` と書かれていれば、その下も全部。
-  return `${out}(?:/.*)?`;
+  // その下は、祖先のフォルダが当たるかで見る（`ignores`）。ここで「その下も全部」を足すと、`/*` が `src/a.ts` そのものにも当たり、
+  // `!/src/` で戻したフォルダの中身まで無視していた（「全部無視して src だけ戻す」書き方で一覧が空になった）
+  return out;
 }
 
 function escape(c: string): string {
-  return /[.+^${}()|\\]/.test(c) ? `\\${c}` : c;
+  // `\[` `\]` `\*` `\?` で書かれた字も、その字そのものとして当てる（`[` が文字の組の始まりとして残っていた）
+  return /[.+^${}()|\\[\]*?]/.test(c) ? `\\${c}` : c;
 }
 
 /** 一枚ぶんの決まり（一つの `.gitignore` とその効く範囲）。 */
@@ -153,6 +155,15 @@ export class Ignores {
    * `rel` は置き場の根からの相対（区切りは `/`）。
    */
   ignores(rel: string, isDir: boolean): boolean {
+    // git と同じく、祖先のフォルダが無視されていれば、その下は戻せない。祖先が無視されていなければ、道そのものに規則を当てる
+    const parts = rel.split('/');
+    for (let k = 1; k < parts.length; k += 1) {
+      if (this.#match(parts.slice(0, k).join('/'), true)) return true;
+    }
+    return this.#match(rel, isDir);
+  }
+
+  #match(rel: string, isDir: boolean): boolean {
     let hit: boolean | undefined;
     for (const layer of this.#layers) {
       const within = under(rel, layer.base);

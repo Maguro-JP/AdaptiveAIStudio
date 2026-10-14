@@ -215,11 +215,16 @@ export function baseTheme(id: string): Theme {
  * `}` や `;` や `url(` を含むものは、色の設定ではないので通さない。
  * 弾いたことは黙らない。黙って消すと、なぜ効かないのか分からなくなる。
  */
-const FORBIDDEN = /[;{}<>\\]|url\s*\(|@import|expression\s*\(|javascript:/i;
+// 改行などの制御文字と注釈の開きも弾く（CSS の外へは抜けないが、色や長さとして読める書き方ではない）
+const FORBIDDEN = /[;{}<>\\\u0000-\u001f\u007f]|\/\*|url\s*\(|@import|expression\s*\(|javascript:/i;
 
 export function isSafeValue(value: string): boolean {
   if (value.length === 0 || value.length > 200) return false;
   if (FORBIDDEN.test(value)) return false;
+  // 数は 2000 まで。`99999px` の字・`1e9` の行の高さ・`100000px` の影で、直す画面ごと潰していた（色の数は 360 まで、普通の寸法は数十）
+  for (const m of value.replace(/#[0-9a-f]{3,8}\b/gi, '').matchAll(/(\d*\.?\d+)(?:e[+-]?\d+)?/gi)) {
+    if (/e/i.test(m[0]) || Number(m[1]) > 2000) return false;
+  }
   // 関数は形の分かっているものだけ
   const calls = value.match(/[a-z-]+\s*\(/gi) ?? [];
   const allowed = new Set([
@@ -280,6 +285,8 @@ export function repairTheme(raw: unknown, fallbackId = DEFAULT_THEME_ID): {
   const scheme = o.scheme === 'light' || o.scheme === 'dark' ? o.scheme : base.scheme;
 
   // 効果は、知っているものだけを通す。知らない名前は捨てて、そう言う。
+  // 配列でない指定は、黙って元の見た目の効果に戻さず、そう言う
+  if (o.effects !== undefined && !Array.isArray(o.effects)) note('効果の指定が読めないので、元の見た目の効果にしました。');
   const wanted = Array.isArray(o.effects) ? o.effects : base.effects ?? [];
   const effects: EffectName[] = [];
   for (const name of wanted) {
@@ -290,7 +297,8 @@ export function repairTheme(raw: unknown, fallbackId = DEFAULT_THEME_ID): {
     }
   }
 
-  const id = typeof o.id === 'string' && o.id.trim() ? o.id.trim() : base.id;
+  // 名前は 80 字まで（5000 字の名前もそのまま保存していた）
+  const id = typeof o.id === 'string' && o.id.trim() ? o.id.trim().slice(0, 80) : base.id;
   return {
     theme: {
       id,

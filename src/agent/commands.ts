@@ -141,6 +141,8 @@ export type Expanded =
  * 打ち間違いが「コマンドは効いていない」に見える。
  */
 export async function expandCommand(text: string, root: string): Promise<Expanded> {
+  // `/` だけの行は、命令の名前を打ち忘れたもの。依頼として送らず、知らない命令として使えるものを並べる
+  if (text.trim() === '/') return { kind: 'unknown', name: '', known: (await listCommands(root)).map((c) => c.name) };
   const hit = splitCommand(text);
   if (!hit) return { kind: 'plain', text };
   const all = await listCommands(root);
