@@ -78,5 +78,8 @@ export function describeEditorHere(here: EditorHere | undefined, chars = 2000): 
     : '選んでいる所';
   const cut = here.selection.length > chars;
   const body = cut ? `${here.selection.slice(0, chars)}\n…（ここで切りました。続きは read_file で読めます）` : here.selection;
-  return `${head}\n【選んでいる所】${range}\n\`\`\`\n${body}\n\`\`\``;
+  // 選んだ字の中に ``` があると、そこで塊が閉じて残りが依頼の地の文になる。中の一番長い ` の連なりより長い囲みにする
+  const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(Math.max(3, longest + 1));
+  return `${head}\n【選んでいる所】${range}\n${fence}\n${body}\n${fence}`;
 }
