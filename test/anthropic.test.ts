@@ -165,6 +165,8 @@ describe('Claude でツールを使う', () => {
       assert.equal(sent.messages?.some((m) => m.role === 'tool'), false, 'role: tool のまま送った');
       assert.deepEqual(chunks.find((c) => c.type === 'toolCall'), { type: 'toolCall', call: { id: 'tu1', name: 'read_file', args: { path: 'a.txt' } } });
       assert.deepEqual(chunks.at(-1), { type: 'done', finishReason: 'toolCalls' });
+      // 入力の数は message_start から（message_delta は出力の数だけ。入力を 0 と数えていた）
+      assert.deepEqual(chunks.find((c) => c.type === 'usage'), { type: 'usage', inputTokens: 1, outputTokens: 5 });
     } finally {
       delete process.env.ANTHROPIC_BASE_URL;
       await new Promise<void>((r) => srv.close(() => r()));

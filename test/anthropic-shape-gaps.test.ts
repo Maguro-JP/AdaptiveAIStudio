@@ -42,3 +42,15 @@ test('OpenAI 互換の口でも、読めなかった引数はモデルが書い�
   const wire = toWireMessage({ role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'read_file', args: { __raw: '{bad', __parseError: true } }] } as never) as { tool_calls: Array<{ function: { arguments: string } }> };
   assert.equal(wire.tool_calls[0]!.function.arguments, '{bad');
 });
+
+test('対の無い結果の後に対のある結果が来ても、結果を user の中身の先頭に置く', () => {
+  const out = toAnthropicMessages([
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'read_file', args: {} }] },
+    { role: 'tool', toolCallId: 'x', content: 'stray' },
+    { role: 'tool', toolCallId: 'a', content: 'r' },
+  ] as never);
+  const last = out.at(-1)!;
+  assert.equal(last.role, 'user');
+  assert.deepEqual(last.content.map((b) => (b as { type: string }).type), ['tool_result', 'text']);
+});
