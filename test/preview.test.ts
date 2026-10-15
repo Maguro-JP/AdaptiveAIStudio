@@ -408,3 +408,19 @@ describe('リンク越しにも外を見せない', () => {
     assert.ok(r.status === 403 || r.status === 404, `出てしまった: ${r.status}`);
   });
 });
+
+describe('フォルダの道と壊れた道', () => {
+  test('末尾に / の無いフォルダは / 付きへ送る（相対のリンクが一つ上を指さない）', async () => {
+    const url = await serve(await site({ 'site/index.html': '<link href="style.css">', 'site/style.css': 'x' }));
+    const r = await fetch(new URL('/site', url), { redirect: 'manual' });
+    assert.equal(r.status, 301);
+    assert.equal(r.headers.get('location'), '/site/');
+    const ok = await fetch(new URL('/site/', url));
+    assert.equal(ok.status, 200);
+  });
+  test('壊れた百分率の符号は 400 で、中の失敗（500）にしない', async () => {
+    const url = await serve(await site({ 'a.html': 'x' }));
+    const r = await fetch(`${url}%E0%A4%A`);
+    assert.equal(r.status, 400);
+  });
+});

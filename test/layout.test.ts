@@ -148,6 +148,11 @@ describe('配置の直し方', () => {
     assert.equal((layout.root as { active: number }).active, 0);
   });
 
+  test('重ね置きの初期選択が整数でなければ先頭にする', () => {
+    const { layout } = base({ type: 'tabs', panels: ['a', 'b'], active: 0.5 });
+    assert.equal((layout.root as { active: number }).active, 0);
+  });
+
   test('名前の重複は一つにする', () => {
     const { layout, repairs } = repairLayout({
       panels: [{ id: 'a', kind: 'conversation' }, { id: 'a', kind: 'plan' }],
