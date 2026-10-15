@@ -18,7 +18,7 @@
  * それは外部に依存しているのと同じことになる。
  */
 import { type Tool, ok, fail, requireString } from './types.ts';
-import { inspectInbound, inspectOutbound, describeVerdict } from '../../harness/gate.ts';
+import { inspectInbound, inspectOutbound, describeVerdict, frameOutside } from '../../harness/gate.ts';
 import { type Inspector, combine } from '../../harness/inspector.ts';
 import { decodeText, trimPartialText } from '../../core/text.ts';
 
@@ -246,11 +246,16 @@ export function createFetchUrlTool(opts: NetworkOptions = {}): Tool {
 
         const clipped = (text.length > keep ? shown + `\n…（以降 ${text.length - keep} 文字は省略）` : text)
           + (cut ? `\n…（頁が長いので、頭の ${readCap} バイトまでしか読んでいません。その先は読んでいません）` : '');
+        /*
+         * **外の頁の中身は、囲んで渡す。**どこからどこまでが外の文かをモデルに見せ、中の指示に従わせない（検問は決まった言い方しか
+         * 拾えず、言い換えると通る）。囲みの区切りには呼ぶたびの乱数を入れる（頁の側が終わりの区切りを書いて、囲みの外へ抜けられないように）
+         */
+        const framed = frameOutside('外の頁', clipped);
         if (!res.ok) {
           // 失敗も情報。握り潰すと同じ場所へ何度も行く。
-          return ok(`出典: ${target}\n状態: ${res.status} ${res.statusText}\n\n${notes}${clipped}`);
+          return ok(`出典: ${target}\n状態: ${res.status} ${res.statusText}\n\n${notes}${framed}`);
         }
-        return ok(`出典: ${target}\n\n${notes}${clipped}`);
+        return ok(`出典: ${target}\n\n${notes}${framed}`);
       } catch (e) {
         // ここで例外を投げない。外が落ちていても手元の作業は続く。
         const reason = timer.signal.aborted ? `${timeoutMs}ms で応答が無い` : (e as Error).message;

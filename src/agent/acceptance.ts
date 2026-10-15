@@ -131,6 +131,18 @@ export function judge(input: AcceptanceInput): { verdict: Verdict; concerns: Con
         where: unexpected,
       });
     }
+    // 宣言したのに変わっていない書き込み先。担当が「済みました」と言っただけで書いていない（何も変わっていないときは下で言う）
+    const changed = new Set(input.changed.map((f) => normalizeWrite(f)));
+    // フォルダで宣言したもの（`src/`）は、その下のどれかが変わっていれば書いたと数える
+    const touched = (d: string) => changed.has(d) || [...changed].some((c) => c.startsWith(`${d.replace(/\/+$/, '')}/`));
+    const untouched = input.changed.length > 0 ? [...declared].filter((d) => !touched(d)) : [];
+    if (untouched.length > 0) {
+      concerns.push({
+        severity: 'warn',
+        reason: `書くと言ったファイルが変わっていません（${untouched.length}件）。`,
+        where: untouched,
+      });
+    }
   }
 
   // 何も変わっていない。成功に見えて何も起きていないのが一番たちが悪い。

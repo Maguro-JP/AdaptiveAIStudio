@@ -13,7 +13,7 @@
  */
 import { createHash } from 'node:crypto';
 import { type Tool, ok, fail } from '../agent/tools/types.ts';
-import { inspectInbound, inspectOutbound, describeVerdict } from '../harness/gate.ts';
+import { inspectInbound, inspectOutbound, describeVerdict, frameOutside } from '../harness/gate.ts';
 import { type Inspector, combine } from '../harness/inspector.ts';
 import { EXTERNAL_SEPARATOR } from '../agent/tools/write-kind.ts';
 import type { McpClient } from './client.ts';
@@ -120,9 +120,11 @@ export function wrapTool(
         return fail(`${client.name}/${spec.name}\n${describeVerdict(verdict, 'inbound')}`);
       }
       // 長さで切る（切らずに渡していたので、大きな返りが全文のまま履歴と会話の保存に入った。fetch_url と同じ扱い）。失敗の文も切る
-      const text = r.text.length > keep
+      const cut = r.text.length > keep
         ? `${r.text.slice(0, keep)}\n…（以降 ${r.text.length - keep} 字は長いので省きました）`
         : r.text;
+      // 外のツールの返りも囲んで渡す（fetch_url と同じ。中の指示に従わせない）
+      const text = cut ? frameOutside(`外のツール ${client.name}/${spec.name}`, cut) : cut;
       // 検問所を通ってから、失敗として返す。
       if (r.isError) return fail(text || `${client.name}/${spec.name} が失敗しました。`);
       const notes = verdict.findings.length > 0
