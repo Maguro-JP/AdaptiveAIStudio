@@ -45,6 +45,6 @@ if (answer !== 'y' && answer !== 'yes') {
   process.exit(0);
 }
 
-const result = await applyUpdate(root);
+const result = await applyUpdate(root, status);
 console.log(result.ok ? c.green(`\n  ${result.message}\n`) : c.yellow(`\n  ${result.message}\n`));
 process.exit(result.ok ? 0 : 1);

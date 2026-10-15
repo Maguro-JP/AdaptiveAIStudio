@@ -295,3 +295,16 @@ describe('手元にだけ変更があるとき（86 回目の調査）', () => {
     assert.match(r.reason ?? '', /手で取り込んで/);
   });
 });
+
+describe('見せた版までだけ取り込む', () => {
+  test('確かめている間に向こうが進んでも、見せていない変更は入れない', onlyWithGit, async () => {
+    const { root, advance } = await pair();
+    await advance('見せた中身');
+    const seen = await checkUpdate(root);
+    await advance('あとから来た中身');
+    const r = await applyUpdate(root, seen);
+    assert.equal(r.ok, true, r.message);
+    assert.equal(r.applied, 1, '見せた件数と食い違う');
+    assert.equal((await readFile(join(root, 'a.txt'), 'utf8')).replace(/\r\n/g, '\n'), '見せた中身\n', '見せていない変更を取り込んだ');
+  });
+});

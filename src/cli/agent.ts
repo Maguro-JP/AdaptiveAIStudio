@@ -645,7 +645,7 @@ async function main(): Promise<void> {
           console.log(c.dim('  取り込むなら /update! を実行してください。\n'));
           continue;
         }
-        const r = await applyUpdate(installRoot());
+        const r = await applyUpdate(installRoot(), status);
         console.log(r.ok ? c.green(`  ${r.message}\n`) : c.red(`  ${r.message}\n`));
         continue;
       }
