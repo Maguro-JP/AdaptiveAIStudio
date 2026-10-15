@@ -443,11 +443,15 @@ describe('npm 無しの入口（scripts/run.mjs）', () => {
     const { execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');
     const run = promisify(execFile);
+    // 未了（モデルが無いなど）があると doctor は 1 で終える。それも「動いた」うち。1 より大きい・信号で切れたものは落とす
     const { stdout } = await run(
       process.execPath,
       [join(out, 'app', 'scripts', 'run.mjs'), 'doctor'],
       { env: { ...process.env, AAS_HOME: join(out, 'data') }, timeout: 120_000 },
-    );
+    ).catch((e: { code?: number; stdout?: string }) => {
+      if (e.code !== 1) throw e;
+      return { stdout: e.stdout ?? '' };
+    });
     // 何か言っていること。黙って終わるのが、いちばん困る形。
     assert.ok(stdout.includes('doctor'), `通しで動いていない:\n${stdout.slice(0, 400)}`);
     assert.ok(stdout.includes('Node.js'), '中身が動いていない');
