@@ -180,7 +180,9 @@ export function asciiModelsDir(
 
 /** GGUF の置き場。 */
 export function modelsDir(root?: string): string {
-  if (process.env.AAS_MODELS_DIR) return process.env.AAS_MODELS_DIR;
+  // ほかの保存先と同じく、空白だけの指定は無いものとし、前後の空白は落とす（空白だけの名前のフォルダを保存先にしていた）
+  const given = nonEmptyEnv('AAS_MODELS_DIR');
+  if (given) return given;
   const home = aasHome(root);
   return asciiModelsDir(home) ?? join(home, 'models');
 }
