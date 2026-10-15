@@ -294,3 +294,22 @@ describe('窓に合わせて切る', () => {
     assert.ok(text.length > MAX_INLINE_CHARS, `受け皿まで縮んでいる: ${text.length}`);
   });
 });
+
+describe('切り方と大きさの言い方', () => {
+  test('25MB を少し超えたものを「25MB。25MB までです」と言わない', async () => {
+    const box = new Attachments(await tempDir('aas-att-size-'));
+    await assert.rejects(() => box.add('a.bin', Buffer.alloc(25 * 1024 * 1024 + 1)), (e: Error) => {
+      assert.match(e.message, /25\.1MB/);
+      return true;
+    });
+  });
+  test('切るとき、絵文字を半分に割らず、断り書きの分も取り分に入れる', async () => {
+    const box = new Attachments(await tempDir('aas-att-cut-'));
+    const item = await box.add('e.txt', Buffer.from('😀'.repeat(20000), 'utf8'));
+    const room = { each: 4001, total: 4001 };
+    const text = await box.describe([item.id], { chars: room });
+    assert.ok(!/[\ud800-\udbff](?![\udc00-\udfff])/.test(text), 'サロゲートの片割れが残った');
+    assert.match(text, /省略/);
+    assert.ok(text.length <= room.total, `取り分を超えた: ${text.length} > ${room.total}`);
+  });
+});
