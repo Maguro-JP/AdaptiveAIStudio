@@ -26,7 +26,9 @@ console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — 更新'));
 const status = await checkUpdate(root);
 console.log(`\n${describeUpdate(status)}\n`);
 
-if (!status.can) process.exit(status.failed || status.behind > 0 ? 1 : 0);
+// 取り込まなかったが失敗ではない（最新・配った形・やめた）は 10。0 を返すと、入口（start.sh・start.cmd）が立ち上げ直しを訊いていた
+const NOTHING_TAKEN = 10;
+if (!status.can) process.exit(status.failed || status.behind > 0 ? 1 : NOTHING_TAKEN);
 
 // 対話できない場所（ダブルクリック以外、他の道具から呼ばれた等）では、
 // 黙って取り込まない。確認できないなら、確認できないと言って止まる。
@@ -42,7 +44,7 @@ rl.close();
 
 if (answer !== 'y' && answer !== 'yes') {
   console.log(c.dim('\n  やめました。\n'));
-  process.exit(0);
+  process.exit(NOTHING_TAKEN);
 }
 
 const result = await applyUpdate(root, status);

@@ -76,7 +76,11 @@ echo
 # 更新は、取り込んだあと立ち上げ直すところまでが一続き。
 # 動いているコードと置いてあるコードがズレたまま使わせない。
 if [ "$task" = "update" ]; then
-  npm run update || exit $?
+  # 10 は「取り込まなかった（最新・やめた）」。立ち上げ直す理由が無いので、訊かずに終える
+  npm run update
+  code=$?
+  [ "$code" -eq 10 ] && exit 0
+  [ "$code" -ne 0 ] && exit "$code"
   echo
   printf "   立ち上げ直しますか？ [Y/n]: "
   read -r again

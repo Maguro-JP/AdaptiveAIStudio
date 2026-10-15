@@ -64,4 +64,11 @@ describe('start.cmd', () => {
     const next = text.slice(at).split(/\r?\n/).slice(1, 4).join('\n');
     assert.match(next, /errorlevel[\s\S]*goto :ran/, `失敗を見ていない:\n${next}`);
   });
+
+  test('取り込まなかった（10）ときは、立ち上げ直しを訊かずに終える', async () => {
+    const text = await source();
+    const after = text.slice(text.search(/^:updated\r?$/m)).split(/\r?\n/).slice(1, 2).join('\n');
+    // 失敗を見る行（0 以外は :ran）より前で、10 だけを抜く
+    assert.match(after, /^if "%errorlevel%"=="10" goto :quit$/, `10 を見ていない:\n${after}`);
+  });
 });

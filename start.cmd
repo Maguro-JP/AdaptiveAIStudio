@@ -165,6 +165,7 @@ rem ずれた断片を読む。呼ぶ行と同じ行で goto する（goto は�
 if "%RUNNER%"=="direct" call "%NODE%" scripts\run.mjs update & goto :updated
 if not "%RUNNER%"=="direct" call "%NPM%" run update & goto :updated
 :updated
+if "%errorlevel%"=="10" goto :quit
 rem 取り込みが失敗したら、立ち上げ直さずに終了コードを言って終える（失敗を捨てて立ち上げ直していた）
 if not "%errorlevel%"=="0" goto :ran
 echo.
