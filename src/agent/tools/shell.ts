@@ -16,7 +16,8 @@ export const DEFAULT_ALLOWED_COMMANDS = [
 
 /** 明らかに危険な形。許可リストを通っても弾く。 */
 const DANGEROUS = [
-  /\brm\s+-rf?\b/i,
+  // 旗を分けた形（`rm -f -r`）と、塊の後ろにある r（`rm -fr`）も
+  /\brm\b[^|;&\n]*\s-[a-z]*r/i,
   /\bdel\s+\/[sq]\b/i,
   // ドライブの初期化（format C:）だけ。語だけで見ていたので、git log --format や npm run format まで止めていた
   /(^|[;&|]\s*)format\s+[a-z]:/i,

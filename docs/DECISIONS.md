@@ -102,6 +102,7 @@
 - bundle は毎月 1 日に GitHub で組む（土曜の枝を置き換え）
 - 162 回目（更新: 見せた版までだけ取り込む）
 - 163 回目（更新: 取り込まなかったときに立ち上げ直しを訊かない）
+- 165 回目（危ない命令: 旗を分けた再帰削除）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13970,3 +13971,11 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 選ばなかった案: 取り込んだかどうかを出力の文字で見分ける（言い回しを変えると壊れる）
 - 確かめていないこと: `start.cmd` を cmd.exe で走らせていない（土曜の Windows の CI で見る）。中身の並びは試験で見ている
 - 触る場所: `src/cli/update.ts`、`start.sh`、`start.cmd`、試験は `test/start-sh-gaps.test.ts`・`test/launcher-gaps.test.ts`（入口の直しを外すと 2 件落ちることを確かめた）
+
+## 2026-10-15  165 回目（危ない命令: 旗を分けた再帰削除）
+
+164 回目は journal-file と clean を読み、直すものは無かった。165 回目は命令の検問を読み、1 件直した。
+- 再帰削除の判定が、最初の旗の塊に r がある形（`rm -rf`）しか見ていなかったので、旗を分けた `rm -f -r dir`・`rm -f -R dir` が通った。どの旗の塊に r があっても止める（`src/harness/builtin-rules.ts` の dangerousCommands、`src/agent/tools/shell.ts` の DANGEROUS）
+- 既定の許可リストに rm は無いので、表に出るのは利用者が設定で rm を足したとき
+- 残したもの: `node -e` や `npx rimraf` で消す形。命令の形で全部を止めるのは無理なので、守りは作業場の外へ書かせない規則と「戻す」に任せる（実際に通るかは確かめていない）
+- 触る場所: 上の 2 ファイル、試験は `test/harness-bypass-93.test.ts`（直しを外すと落ちることを確かめた）
