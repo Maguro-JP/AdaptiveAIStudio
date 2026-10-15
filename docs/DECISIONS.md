@@ -99,6 +99,7 @@
 - 159 回目（文脈の刈り込み: 省いた数を往復で言う）
 - 公開の準備 4（`.claude/` を公開に含める）
 - 160 回目（Claude の口: 入力の数・結果の並び）
+- bundle は毎月 1 日に GitHub で組む（土曜の枝を置き換え）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -13938,3 +13939,15 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 対になる呼び出しの無い結果は文として user に積む。その後に対のある結果が来ると、同じ user の後ろに足していたので、文が先・結果が後の並びになった。結果は user の中身の先頭側に入れる
 - 確かめていないこと: 本物の API で、message_delta に入力の数が載るかと、並びの決まりで実際に断られるか。偽の相手と送る形の試験で見た
 - 触る場所: `src/providers/anthropic.ts`、試験は `test/anthropic.test.ts`・`test/anthropic-shape-gaps.test.ts`（直しを外すと 2 件落ちることを確かめた）
+
+## 2026-10-15  bundle は毎月 1 日に GitHub で組む（土曜の枝を置き換え）
+
+2026-10-10 の「土曜の long-dev が `release/vX.Y.Z` の枝を押して組む」を置き換える。
+- `release.yml` の `schedule` で、毎月 1 日 09:00 JST（UTC 1 日 00:00）に main から portable と setup.exe を組み、Releases に置く
+- 版は、タグと `release/v*` の枝のうち一番新しいものの patch を 1 つ上げる（いまなら v0.12.3）。setup.exe は portable で決めた版をそのまま使う（二つの段で別々に決めると食い違う）
+- 土曜の Routine は枝を押さない。致命的な不具合を直したときに枝を押して組む道（`release/v*` の push）は残す
+- 土曜の Windows の試験（`ci.yml`）は bundle と別なので、そのまま残す
+- 変わる振る舞い: 配る版が新しくなるのは月に 1 回になる（これまでは週に 1 回）
+- 確かめたこと: 版を決める式を本物の origin に当てて v0.12.3 が出ること。試験（`test/home.test.ts`）は、cron が 1 日だけであること・setup.exe も毎月組むこと・版を portable から受け取ることを見る（直す前の release.yml で落ちた）
+- 確かめていないこと: 予定が実際に動くか（最初は 11-01 09:00 JST）。1 回の所要時間は測っていない。組むのはどちらも Linux なので枠は 1 倍
+- 触る場所: `.github/workflows/release.yml`、long-dev の Routine の 2.5

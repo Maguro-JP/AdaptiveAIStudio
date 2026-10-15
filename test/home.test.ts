@@ -273,6 +273,14 @@ describe('CI の使い方', () => {
     assert.match(raw, /tags:/, 'タグでしか回らない形になっていない');
   });
 
+  test('bundle は毎月 1 日 09:00 JST に組み、setup.exe も同じ版で組む', sourceOnly, async () => {
+    const raw = (await readFile(join(installRoot(), '.github', 'workflows', 'release.yml'), 'utf8')).replace(/\r\n/g, '\n');
+    // UTC の 1 日 00:00 が JST の 1 日 09:00。ほかの予定（毎週など）を足さない
+    assert.deepEqual([...raw.matchAll(/cron:\s*'([^']+)'/g)].map((m) => m[1]), ['0 0 1 * *']);
+    assert.match(raw, /installer:\n\s+if:[^\n]*github\.event_name == 'schedule'/, '毎月の分で setup.exe を組まない');
+    assert.match(raw, /needs\.portable\.outputs\.tag/, 'setup.exe の版を portable と別に決めている');
+  });
+
   test('続けて押したら、前のものは打ち切る', sourceOnly, async () => {
     for (const f of ['ci.yml', 'release.yml']) {
       const raw = await readFile(join(installRoot(), '.github', 'workflows', f), 'utf8');

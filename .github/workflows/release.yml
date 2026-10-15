@@ -17,6 +17,10 @@ on:
     # 実測）ので、release/v0.1.0 の枝を押すと、v0.1.0 の印を付けたのと同じに扱う。
     # 印そのものは公開のときに GitHub 側で付く。
     branches: ['release/v*']
+  # 毎月 1 日 09:00 JST（UTC では 1 日 00:00）に、main から組む。版は直前の版の patch を 1 つ上げる。
+  # 土曜ごとに枝を押して組んでいたのをやめ、月に 1 回にする（docs/DECISIONS.md 2026-10-15）
+  schedule:
+    - cron: '0 0 1 * *'
   workflow_dispatch:
 
 concurrency:
@@ -39,6 +43,10 @@ jobs:
   # ------------------------------------------------------------------
   portable:
     runs-on: ubuntu-latest
+    # setup.exe も同じ版で組む（二つの段で別々に決めると、毎月の分で食い違う）
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      id: ${{ steps.v.outputs.id }}
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +62,15 @@ jobs:
             TAG="${GITHUB_REF_NAME}"
           elif [ "${GITHUB_REF_NAME#release/}" != "${GITHUB_REF_NAME}" ]; then
             TAG="${GITHUB_REF_NAME#release/}"
+          elif [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then
+            # 毎月の分。タグと release/v* の枝のうち一番新しい版の patch を 1 つ上げる（どちらも無ければ v0.1.0）
+            LAST=$(git ls-remote --tags --heads origin 'v*' 'release/v*' \
+              | sed -E 's#.*refs/(tags|heads/release)/##; s#\^\{\}$##' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+            if [ -z "${LAST}" ]; then TAG="v0.1.0"; else
+              IFS=. read -r MA MI PA <<< "${LAST#v}"
+              TAG="v${MA}.${MI}.$((PA + 1))"
+            fi
           else
             TAG=""
           fi
@@ -196,7 +213,7 @@ jobs:
   # 枠は半分になる。手元では `npm run installer` で、枠を一度も払わずに組める。
   # ------------------------------------------------------------------
   installer:
-    if: github.ref_type == 'tag' || startsWith(github.ref_name, 'release/v')
+    if: github.ref_type == 'tag' || startsWith(github.ref_name, 'release/v') || github.event_name == 'schedule'
     needs: portable
     runs-on: ubuntu-latest
     steps:
@@ -213,9 +230,9 @@ jobs:
         id: v
         shell: bash
         run: |
-          TAG="${GITHUB_REF_NAME#release/}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "id=${TAG#v}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          # portable で決めた版をそのまま使う
+          echo "tag=${{ needs.portable.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          echo "id=${{ needs.portable.outputs.id }}" >> "$GITHUB_OUTPUT"
 
       - run: npm ci --no-audit --no-fund
 
