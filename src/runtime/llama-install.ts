@@ -32,6 +32,12 @@ export function answeredVersion(out: string): boolean {
   return /^version:\s*\d+/m.test(out);
 }
 
+/** 見せる版の行。CUDA 版は初期化の行（`ggml_cuda_init: ...`）を先に出すので、一行目ではなく版の行を拾う。無ければ一行目 */
+export function versionLine(out: string): string {
+  const text = out.trim();
+  return /^version:\s*\d+.*$/m.exec(text)?.[0].trim() ?? text.split('\n')[0]!.trim();
+}
+
 export interface InstallOptions {
   /** 置き場。既定は ~/.aas/bin */
   binDir?: string;
