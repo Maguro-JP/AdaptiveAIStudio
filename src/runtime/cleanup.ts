@@ -111,6 +111,14 @@ export async function findRemovable(opts: {
   for (const name of await readdir(binDir()).catch(() => [])) {
     if (name === opts.keepTag) continue;
     if (running === undefined || running.has(name)) continue;
+    // 取り直したときに脇へ移した前の版（`<tag>.<pid>.prev`）。消せず・戻せずに残ったもの。移している最中のものを消さないよう、1 時間より古いものだけ
+    if (/^b\d+\.\d+\.prev$/.test(name)) {
+      const path = join(binDir(), name);
+      const s = await stat(path).catch(() => undefined);
+      if (!s || now - s.mtimeMs < 60 * 60 * 1000) continue;
+      found.push({ path, bytes: await sizeOf(path), why: '取り直したときに脇へ移した前の llama-server' });
+      continue;
+    }
     // b で始まる版の形だけを対象にする。知らない名前は触らない。
     if (!/^b\d+$/.test(name)) continue;
     const path = join(binDir(), name);

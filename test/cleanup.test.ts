@@ -343,3 +343,20 @@ describe('消した量の言い方', () => {
     assert.equal(mb(2 * 1024 ** 3), '2.0GB');
   });
 });
+
+describe('取り直したときに脇へ移した前の版', () => {
+  test('戻せずに残った <tag>.<pid>.prev は挙げる。移している最中の新しいものと、似た名前は挙げない', async () => {
+    const { bin } = await scratch();
+    await mkdir(join(bin, 'b9999'), { recursive: true });
+    await mkdir(join(bin, 'b4585.1234.prev'), { recursive: true });
+    await writeFile(join(bin, 'b4585.1234.prev', 'llama-server'), 'x');
+    await mkdir(join(bin, 'notes.prev'), { recursive: true });
+    const later = Date.now() + 2 * 60 * 60 * 1000;
+    const none = async () => new Set<string>();
+    assert.deepEqual(
+      (await findRemovable({ keepTag: 'b9999', now: later, runningTags: none })).map((f) => f.path),
+      [join(bin, 'b4585.1234.prev')],
+    );
+    assert.deepEqual((await findRemovable({ keepTag: 'b9999', runningTags: none })).map((f) => f.path), [], '移している最中のものを挙げた');
+  });
+});

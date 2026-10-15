@@ -215,7 +215,7 @@ export async function install(opts: InstallOptions): Promise<Installed> {
    */
   const work = `${tag}.${process.pid}.tmp`;
   const staging = join(binDir, work);
-  // 脇へ移した前の版は `.tmp` にしない。戻せずに残ったとき、clean が「取得の途中で切れたもの」として消す候補にするため
+  // 脇へ移した前の版は `.tmp` にしない（途中の取得と取り違えない）。戻せずに残ったら、clean が「脇へ移した前の版」として挙げる
   const retired = join(binDir, `${tag}.${process.pid}.prev`);
   let moved = false;
   try {
