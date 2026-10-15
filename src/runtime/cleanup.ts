@@ -314,9 +314,10 @@ export async function remove(items: Removable[]): Promise<{ freed: number; faile
 }
 
 export function mb(bytes: number): string {
-  return bytes >= 1024 ** 3
-    ? `${(bytes / 1024 ** 3).toFixed(1)}GB`
-    : `${Math.round(bytes / 1024 / 1024)}MB`;
+  // 1MB に満たないものを「0MB」と言わない（古い記録・一時ファイル・添付は小さいので、消しても「0MB 空けました」と出ていた）
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)}GB`;
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 / 1024)}MB`;
+  return bytes > 0 ? `${Math.max(1, Math.round(bytes / 1024))}KB` : '0KB';
 }
 
 /** 人に見せる形。消す前に必ず出す。 */

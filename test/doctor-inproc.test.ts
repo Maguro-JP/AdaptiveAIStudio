@@ -297,7 +297,7 @@ describe('記録の保存先へ書けないとき', () => {
     const state = join(home, 'state');
     await writeFile(state, '');
 
-    const got = await new Promise<{ out: string }>((ok) => {
+    const got = await new Promise<{ out: string; code: number }>((ok) => {
       execFile(
         process.execPath,
         ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', 'doctor.ts')],
@@ -316,11 +316,40 @@ describe('記録の保存先へ書けないとき', () => {
           }),
           encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
         },
-        (_e, stdout, stderr) => ok({ out: `${stdout}${stderr}` }),
+        (e, stdout, stderr) => ok({ out: `${stdout}${stderr}`, code: (e as { code?: number } | null)?.code ?? 0 }),
       );
     });
     assert.match(got.out, /へ書けません/, `言っていない: ${got.out.slice(-600)}`);
     assert.ok(!/動かせます/.test(got.out), `動かせると言っている: ${got.out.slice(-600)}`);
+    // 保存先の見出しも ok と言わない（「まだ空。初回起動で作られます」と言い、下の書き込みと食い違っていた）
+    assert.match(got.out, /を開けません/, `保存先を ok と言っている: ${got.out.slice(-600)}`);
+    assert.ok(!/まだ空。初回起動で作られます/.test(got.out));
+    // 未了があるのに 0 で終えない（呼ぶ側は終了コードで通ったかを見る）
+    assert.equal(got.code, 1);
+  });
+
+  test('報告の逃がし先に、プログラムの保存先（リポジトリの根）を使わない', async () => {
+    const { writeFile, readdir } = await import('node:fs/promises');
+    const { join, dirname } = await import('node:path');
+    const { execFile } = await import('node:child_process');
+    const { fileURLToPath } = await import('node:url');
+    const { tempDir } = await import('./tmp.ts');
+    const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const home = await tempDir('aas-noroot-');
+    const state = join(home, 'state');
+    await writeFile(state, '');
+    const before = new Set((await readdir(root)).filter((f) => /^doctor-.*\.txt$/.test(f)));
+    const out = await new Promise<string>((ok) => {
+      execFile(
+        process.execPath,
+        ['--experimental-strip-types', '--no-warnings', join(root, 'src', 'cli', 'doctor.ts')],
+        // AAS_REPORT_DIR を渡さない。記録の保存先が塞がっているので、逃がし先が残っていればそこへ書く
+        { env: cleanAasEnv({ AAS_HOME: home, AAS_STATE_DIR: state }), cwd: home, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 },
+        (_e, stdout, stderr) => ok(`${stdout}${stderr}`),
+      );
+    });
+    const added = (await readdir(root)).filter((f) => /^doctor-.*\.txt$/.test(f) && !before.has(f));
+    assert.deepEqual(added, [], `リポジトリの根に書いた: ${out.slice(-400)}`);
   });
 });
 

@@ -332,3 +332,14 @@ describe('動いている llama-server の版は挙げない（DECISIONS 10-11�
     assert.ok(!paths.includes(join(bin, 'b200')));
   });
 });
+
+describe('消した量の言い方', () => {
+  test('1MB に満たないものを 0MB と言わない', async () => {
+    const { mb } = await import('../src/runtime/cleanup.ts');
+    assert.equal(mb(0), '0KB');
+    assert.equal(mb(1), '1KB');
+    assert.equal(mb(300 * 1024), '300KB');
+    assert.equal(mb(5 * 1024 * 1024), '5MB');
+    assert.equal(mb(2 * 1024 ** 3), '2.0GB');
+  });
+});

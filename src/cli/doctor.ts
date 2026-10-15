@@ -617,8 +617,12 @@ step('保存先を確かめます');
 try {
   const files = await readdir(stateDir());
   add('記録の置き場', 'ok', `${stateDir()}（${files.length} 件）`);
-} catch {
-  add('記録の置き場', 'ok', `${stateDir()}（まだ空。初回起動で作られます）`);
+} catch (e) {
+  // 無いのは初回なので ok。それ以外（親がファイル・権限が無い）は作れない場所なので、ok と言わない（下の「書き込み」と食い違っていた）
+  const code = (e as NodeJS.ErrnoException).code;
+  const label = '記録の置き場';
+  if (code === 'ENOENT') add(label, 'ok', `${stateDir()}（まだ空。初回起動で作られます）`);
+  else add(label, 'bad', `${stateDir()} を開けません（${code ?? (e as Error).message}）`, 'AAS_STATE_DIR か AAS_HOME を、書けるフォルダに向けてください');
 }
 
 /*
@@ -696,6 +700,10 @@ for (const line of tellWhereItWent(
    * リポジトリの根に doctor-*.txt が溜まった（実機の画面で 18 件、手元で 37 件）。
    * 押すたびに増えるものを、利用者が毎日見るフォルダに置かない。
    */
-  await saveReport('doctor', flat, [join(stateDir(), 'reports'), stateDir(), productRoot()]),
+  // 記録の保存先へ書けないときも、プログラムの保存先（git のクローンならリポジトリの根）へは逃がさない。書けなかったと言う
+  await saveReport('doctor', flat, [join(stateDir(), 'reports'), stateDir()]),
 )) console.log(`  ${line}`);
 console.log();
+
+// 未了があれば 0 以外で終える（「2 件かたづければ動きます」と言いながら 0 で終え、呼ぶ側は通ったと受け取っていた）
+if (checks.some((c) => c.level === 'bad')) process.exitCode = 1;
