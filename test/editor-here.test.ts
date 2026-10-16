@@ -60,3 +60,18 @@ describe('いま開いている所', () => {
     assert.match(said, /read_file/, '続きの読み方を書いていない');
   });
 });
+
+describe('選んだ字の中の囲み', () => {
+  test('中に ``` があっても、塊が途中で閉じない', () => {
+    const sel = '# 見出し\n```ts\nconst x = 1;\n```\n後ろの文';
+    const text = describeEditorHere(editorHere({ path: 'README.md', line: 1, selection: sel, selectionFrom: 1, selectionTo: 5 }));
+    const fence = /\n(`{4,})\n/.exec(text)?.[1];
+    assert.ok(fence, `外の囲みが中の \`\`\` より長くない:\n${text}`);
+    assert.ok(text.endsWith(`\n${fence}`), '同じ長さで閉じていない');
+    assert.ok(text.includes(sel), '選んだ字が欠けた');
+  });
+  test('中に ` が無ければ ``` のまま（対）', () => {
+    const text = describeEditorHere(editorHere({ path: 'a.ts', line: 1, selection: 'x', selectionFrom: 1, selectionTo: 1 }));
+    assert.match(text, /\n```\nx\n```$/);
+  });
+});

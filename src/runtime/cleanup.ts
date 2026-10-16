@@ -111,6 +111,14 @@ export async function findRemovable(opts: {
   for (const name of await readdir(binDir()).catch(() => [])) {
     if (name === opts.keepTag) continue;
     if (running === undefined || running.has(name)) continue;
+    // 取り直したときに脇へ移した前の版（`<tag>.<pid>.prev`）。消せず・戻せずに残ったもの。移している最中のものを消さないよう、1 時間より古いものだけ
+    if (/^b\d+\.\d+\.prev$/.test(name)) {
+      const path = join(binDir(), name);
+      const s = await stat(path).catch(() => undefined);
+      if (!s || now - s.mtimeMs < 60 * 60 * 1000) continue;
+      found.push({ path, bytes: await sizeOf(path), why: '取り直したときに脇へ移した前の llama-server' });
+      continue;
+    }
     // b で始まる版の形だけを対象にする。知らない名前は触らない。
     if (!/^b\d+$/.test(name)) continue;
     const path = join(binDir(), name);
@@ -314,9 +322,10 @@ export async function remove(items: Removable[]): Promise<{ freed: number; faile
 }
 
 export function mb(bytes: number): string {
-  return bytes >= 1024 ** 3
-    ? `${(bytes / 1024 ** 3).toFixed(1)}GB`
-    : `${Math.round(bytes / 1024 / 1024)}MB`;
+  // 1MB に満たないものを「0MB」と言わない（古い記録・一時ファイル・添付は小さいので、消しても「0MB 空けました」と出ていた）
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)}GB`;
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 / 1024)}MB`;
+  return bytes > 0 ? `${Math.max(1, Math.round(bytes / 1024))}KB` : '0KB';
 }
 
 /** 人に見せる形。消す前に必ず出す。 */

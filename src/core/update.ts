@@ -33,6 +33,8 @@ export interface UpdateStatus {
   reason?: string;
   /** 新しく入る変更の見出し（新しい順） */
   incoming: string[];
+  /** 見せた時点の向こう側のコミット。取り込むときはここまでにする（確かめている間に向こうが進んでも、見せていないものを入れない） */
+  target?: string;
   /**
    * 調べられなかった（git 管理下でない・未コミットの変更・取りに行けない・向こう側が無い・数えられない）。
    * `behind: 0` は「最新」と「分からない」の両方に使っていたので、終了コードが 0 になり、呼んだ側が「最新」と受け取った。
@@ -70,11 +72,11 @@ export const RELEASES_URL = 'https://github.com/Maguro-JP/AdaptiveAIStudio/relea
  * そこで止まる。ブラウザなら届くので、取ってくる先と入れ替え方を言う。
  *
  * **その場で `app\` を上書きさせない。**上書きすると、新しい方が動かなかった
- * ときに戻る先が無い。NetVision が同じところで「新しい ZIP は別のフォルダへ
+ * ときに戻る先が無い。別のリポジトリ が同じところで「新しい ZIP は別のフォルダへ
  * 展開する。古いフォルダは消さずに残す。問題がないことを確かめてから消す」と
  * 書いていて、そちらが正しい。
  *
- * ただし置き場の作りが違う。向こうはデータが `~/.netvision`（アプリの外）に
+ * ただし置き場の作りが違う。向こうはデータが ホームの下の隠しフォルダ（アプリの外）に
  * あるので、どちらのフォルダから起動しても同じものが見える。**こちらは
  * `data\` がフォルダの中**なので、そのまま真似ると新しい方が空で立ち上がる。
  * だから `data\` を移す一手を挟む。
@@ -180,15 +182,20 @@ export async function checkUpdate(root: string): Promise<UpdateStatus> {
     };
   }
 
+  const target = (await runGit(['rev-parse', '@{upstream}'], root)).stdout.trim() || undefined;
   return {
     can: behind > 0, behind, ahead, branch: state.branch, incoming,
     reason: behind === 0 ? '最新です' : undefined,
+    ...(target ? { target } : {}),
   };
 }
 
 /** 取ってくる。早送りできる場合だけ進める。 */
-export async function applyUpdate(root: string): Promise<UpdateResult> {
-  const status = await checkUpdate(root);
+export async function applyUpdate(root: string, seen?: UpdateStatus): Promise<UpdateResult> {
+  // 確かめ（未コミットの変更・早送りできるか）はやり直す。取り込む先は、見せた時点の版に留める
+  // （向こう側をそのまま取り込むと、確かめている間に入った見ていない変更まで入れ、件数も見せた数と食い違った）
+  const now = await checkUpdate(root);
+  const status = now.can && seen?.target ? { ...now, target: seen.target, behind: seen.behind } : now;
   if (!status.can) {
     return {
       ok: false, applied: 0, restartNeeded: false,
@@ -198,7 +205,7 @@ export async function applyUpdate(root: string): Promise<UpdateResult> {
 
   // --ff-only。混ぜたり書き換えたりはしない。
   // 更新ボタンが歴史を作り始めたら、直せる人がいなくなる。
-  const pulled = await runGit(['merge', '--ff-only', '@{upstream}'], root);
+  const pulled = await runGit(['merge', '--ff-only', status.target ?? '@{upstream}'], root);
   if (pulled.code !== 0) {
     return {
       ok: false, applied: 0, restartNeeded: false,

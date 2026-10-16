@@ -17,7 +17,7 @@ export interface DetectedMachine extends MachineSpec {
   bandwidthEstimated: boolean;
   /** 検出した時刻。古い検出結果は取り直す（後から入れた GPU のドライバ・足した RAM を拾う）。 */
   detectedAt?: number;
-  /** GPU を調べ切れなかった（nvidia-smi が時間内に返らなかった）。「GPU なし」と決まったわけではないので、記録に残さない。 */
+  /** GPU を調べ切れなかった（nvidia-smi が時間内に返らなかった、または量を答えなかった）。「GPU なし」と決まったわけではないので、記録に残さない。 */
   gpuUnsure?: true;
 }
 
@@ -60,12 +60,21 @@ async function detectNvidia(): Promise<{ name: string; vramBytes: number } | 'ti
     '--query-gpu=name,memory.total', '--format=csv,noheader,nounits',
   ]);
   if (timedOut) return 'timeout';
+  return parseNvidiaSmi(out);
+}
+
+/**
+ * nvidia-smi の一行目を読む。名前はあるのに量が数でない（統合メモリの機種の `[N/A]`・`Not Supported`）ときは、
+ * 「GPU なし」と決めつけない（決めつけると記録に残り、GPU があるのに 7 日間 CPU の見積もりを使い続けた）。調べ切れなかった扱いにする
+ */
+export function parseNvidiaSmi(out: string | undefined): { name: string; vramBytes: number } | 'timeout' | undefined {
   if (out === undefined) return undefined;
   const line = out.split('\n')[0]?.trim();
   if (!line) return undefined;
   const [name, mb] = line.split(',').map((s) => s.trim());
+  if (!name) return undefined;
   const megabytes = Number(mb);
-  if (!name || !Number.isFinite(megabytes)) return undefined;
+  if (!Number.isFinite(megabytes) || megabytes <= 0) return 'timeout';
   return { name, vramBytes: megabytes * 1024 * 1024 };
 }
 

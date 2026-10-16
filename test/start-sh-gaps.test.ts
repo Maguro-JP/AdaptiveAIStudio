@@ -44,6 +44,19 @@ describe('start.sh', { skip: process.platform === 'win32' ? 'sh で動かす入�
     assert.match(await readFile(log, 'utf8'), /^run doctor$/m);
   });
 
+  test('取り込まなかった（10）ときは、立ち上げ直しを訊かずに 0 で終える', async () => {
+    const { dir, env } = await sandbox('v24.1.0', 'exit 10');
+    const r = spawnSync('sh', [join(dir, 'start.sh'), 'update'], { env, encoding: 'utf8', input: '' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.doesNotMatch(r.stdout, /立ち上げ直しますか/, r.stdout);
+  });
+
+  test('取り込んだ（0）ときは、立ち上げ直しを訊く（対）', async () => {
+    const { dir, env } = await sandbox('v24.1.0', 'exit 0');
+    const r = spawnSync('sh', [join(dir, 'start.sh'), 'update'], { env, encoding: 'utf8', input: 'n\n' });
+    assert.match(r.stdout, /立ち上げ直しますか/, r.stdout);
+  });
+
   test('立ち上げ直しの合図を渡し、75 で終わったらもう一度起こす', async () => {
     // 1 回目は 75 で終わり、2 回目は 0 で終わる。受けた AAS_RELAUNCH も書き出す
     const body = 'echo "$AAS_RELAUNCH $*" >> "$LOG"\n[ "$(wc -l < "$LOG")" -lt 2 ] && exit 75\nexit 0';

@@ -176,11 +176,11 @@ describe('bundle では、手で新しくする道を言う', () => {
 
   /**
    * **その場で上書きさせない。**上書きすると、新しい方が動かなかったときに
-   * 戻る先が無い。NetVision が同じところで「新しい ZIP は別のフォルダへ展開し、
+   * 戻る先が無い。別のリポジトリ が同じところで「新しい ZIP は別のフォルダへ展開し、
    * 古いフォルダは消さずに残す。問題がないことを確かめてから消す」と書いていて、
    * そちらが正しい。
    *
-   * ただし置き場の作りが違う。向こうはデータがアプリの外（`~/.netvision`）に
+   * ただし置き場の作りが違う。向こうはデータがアプリの外（ホームの下の隠しフォルダ）に
    * あるので、どちらのフォルダから起動しても同じものが見える。**こちらは
    * `data\` がフォルダの中**なので、そのまま真似ると新しい方が空で立ち上がる。
    * だから `data\` を移す一手が要る。ここが抜けると、設定と記録が消えたように見える。
@@ -293,5 +293,18 @@ describe('手元にだけ変更があるとき（86 回目の調査）', () => {
     const r = await checkUpdate(root);
     assert.equal(r.can, false);
     assert.match(r.reason ?? '', /手で取り込んで/);
+  });
+});
+
+describe('見せた版までだけ取り込む', () => {
+  test('確かめている間に向こうが進んでも、見せていない変更は入れない', onlyWithGit, async () => {
+    const { root, advance } = await pair();
+    await advance('見せた中身');
+    const seen = await checkUpdate(root);
+    await advance('あとから来た中身');
+    const r = await applyUpdate(root, seen);
+    assert.equal(r.ok, true, r.message);
+    assert.equal(r.applied, 1, '見せた件数と食い違う');
+    assert.equal((await readFile(join(root, 'a.txt'), 'utf8')).replace(/\r\n/g, '\n'), '見せた中身\n', '見せていない変更を取り込んだ');
   });
 });

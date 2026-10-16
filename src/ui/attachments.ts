@@ -172,7 +172,8 @@ export class Attachments {
     if (data.length === 0) throw new Error('中身が空です');
     if (data.length > MAX_BYTES) {
       throw new Error(
-        `大きすぎます（${Math.round(data.length / 1024 / 1024)}MB）。`
+        // 切り上げて言う（丸めると 25MB を少し超えたものが「25MB。25MB までです」になった）
+        `大きすぎます（${(Math.ceil(data.length / 1024 / 1024 * 10) / 10).toFixed(1)}MB）。`
         + `${MAX_BYTES / 1024 / 1024}MB までです`,
       );
     }
@@ -281,9 +282,10 @@ export class Attachments {
         const room = Math.max(0, Math.min(each, total - used - frame));
         // 中身が一字も入らないなら、入れなかったものとして数える（前は中身の無い塊を「添えた」形で入れ、「入れていません」とも言わなかった）
         if (room < MIN_ROOM && raw.length > room) { leftOut += 1; continue; }
-        const body = raw.length > room
-          ? `${raw.slice(0, room)}\n…（以降 ${raw.length - room} 文字は省略。窓に収まらないので切りました）`
-          : raw;
+        // 切るときは、後ろに足す断り書きの分も取り分から引く。字の単位で切る（絵文字を半分に割らない）
+        const note = (n: number) => `\n…（以降 ${n} 文字は省略。窓に収まらないので切りました）`;
+        const keep = raw.length > room ? cutChars(raw, Math.max(0, room - note(raw.length).length)) : raw;
+        const body = keep === raw ? raw : `${keep}${note(raw.length - keep.length)}`;
         parts.push(`--- 添付: ${item.name}${how} ---\n${body}\n--- ここまで ---`);
       } else if (item.kind === 'image') {
         const passed = opts.imagesWithheld ? false
@@ -327,4 +329,12 @@ export class Attachments {
     }
     return freed;
   }
+}
+
+/** 先頭から UTF-16 で max 単位までに収まるよう、字の単位で切る。サロゲートの片割れを残さない */
+function cutChars(text: string, max: number): string {
+  let end = Math.min(max, text.length);
+  const code = text.charCodeAt(end - 1);
+  if (end > 0 && end < text.length && code >= 0xd800 && code <= 0xdbff) end -= 1;
+  return text.slice(0, end);
 }

@@ -468,6 +468,10 @@ describe('入り切らないものを、測らない', () => {
     assert.equal(many.messages.length, few.messages.length, `残る量が変わっている: ${many.messages.length} / ${few.messages.length}`);
     assert.ok(many.dropped > few.dropped, '落とした数を数えていない');
     assert.ok(many.trimmed, '刈ったと言っていない');
+    // 往復で数える（1 往復 4 通なので、通数で数えると 400 往復を超えて言う）
+    assert.ok(many.dropped < 400, `往復より多く言っている（通数で数えた）: ${many.dropped}`);
+    const said = many.messages.find((m) => m.role === 'user' && m.content.includes('往復ぶんは'))?.content ?? '';
+    assert.match(said, new RegExp(`${many.dropped} 往復ぶん`));
   });
 
   test('**量を増やしても、測る回数が比例して増えない**', () => {

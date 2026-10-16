@@ -273,6 +273,14 @@ describe('CI の使い方', () => {
     assert.match(raw, /tags:/, 'タグでしか回らない形になっていない');
   });
 
+  test('bundle は毎月 1 日 09:00 JST に組み、setup.exe も同じ版で組む', sourceOnly, async () => {
+    const raw = (await readFile(join(installRoot(), '.github', 'workflows', 'release.yml'), 'utf8')).replace(/\r\n/g, '\n');
+    // UTC の 1 日 00:00 が JST の 1 日 09:00。ほかの予定（毎週など）を足さない
+    assert.deepEqual([...raw.matchAll(/cron:\s*'([^']+)'/g)].map((m) => m[1]), ['0 0 1 * *']);
+    assert.match(raw, /installer:\n\s+if:[^\n]*github\.event_name == 'schedule'/, '毎月の分で setup.exe を組まない');
+    assert.match(raw, /needs\.portable\.outputs\.tag/, 'setup.exe の版を portable と別に決めている');
+  });
+
   test('続けて押したら、前のものは打ち切る', sourceOnly, async () => {
     for (const f of ['ci.yml', 'release.yml']) {
       const raw = await readFile(join(installRoot(), '.github', 'workflows', f), 'utf8');
@@ -443,11 +451,15 @@ describe('npm 無しの入口（scripts/run.mjs）', () => {
     const { execFile } = await import('node:child_process');
     const { promisify } = await import('node:util');
     const run = promisify(execFile);
+    // 未了（モデルが無いなど）があると doctor は 1 で終える。それも「動いた」うち。1 より大きい・信号で切れたものは落とす
     const { stdout } = await run(
       process.execPath,
       [join(out, 'app', 'scripts', 'run.mjs'), 'doctor'],
       { env: { ...process.env, AAS_HOME: join(out, 'data') }, timeout: 120_000 },
-    );
+    ).catch((e: { code?: number; stdout?: string }) => {
+      if (e.code !== 1) throw e;
+      return { stdout: e.stdout ?? '' };
+    });
     // 何か言っていること。黙って終わるのが、いちばん困る形。
     assert.ok(stdout.includes('doctor'), `通しで動いていない:\n${stdout.slice(0, 400)}`);
     assert.ok(stdout.includes('Node.js'), '中身が動いていない');

@@ -5,9 +5,9 @@
  * そのうち機械で判定できるものを、ここで止める。
  *
  * - メールアドレスは、ダミーのドメイン（example.com など）だけ
- * - `Maguro-JP/<名前>` で指すのは、このリポジトリだけ（公開していない別のリポジトリの名前を出さない）
+ * - `Maguro-JP/<名前>` で指すのは、このリポジトリと公開しているリポジトリだけ（公開していない別のリポジトリの名前を出さない）
  *
- * `.claude/` の中は別のリポジトリから配られてくるので、ここでは見ない（配る元で直す）。
+ * `.claude/` も見る（公開に含める。配られてくる中身だが、ここで直して載せる。配る元が戻してきたら、ここで止まる）。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -22,7 +22,7 @@ const noGit = !existsSync(join(root, '.git'));
 
 function trackedTextFiles(): string[] {
   const out = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' });
-  return out.split('\0').filter((f) => f && !f.startsWith('.claude/') && f !== 'test/publishing.test.ts')
+  return out.split('\0').filter((f) => f && f !== 'test/publishing.test.ts')
     .filter((f) => /\.(ts|mts|mjs|js|json|md|txt|cmd|sh|nsi|yml|yaml|html|css)$/i.test(f) || !f.includes('.'));
 }
 
@@ -38,10 +38,13 @@ export function emailsIn(text: string): string[] {
   return found;
 }
 
+const PUBLIC_REPOS = new Set(['AdaptiveAIStudio', 'Ciel']);
+
 export function otherReposIn(text: string): string[] {
   return [...text.matchAll(/Maguro-JP\/([A-Za-z0-9_.-]+)/g)]
     .map((m) => (m[1] ?? '').replace(/\.git$/, ''))
-    .filter((name) => name !== 'AdaptiveAIStudio');
+    // 公開しているリポジトリは名指ししてよい（スキルの配る元の Ciel）
+    .filter((name) => !PUBLIC_REPOS.has(name));
 }
 
 test('判定そのもの: ダミーは通し、本物らしいアドレスと別のリポジトリは拾う', () => {

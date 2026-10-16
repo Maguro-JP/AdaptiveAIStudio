@@ -304,14 +304,14 @@ describe('通った段の次は、待たずに次へ', () => {
        * 遅かっただけで、待たずに次へ進んでいないことの証拠ではない。
        * 起きるまで見る／上限で諦める、に直す。
        */
-      await until(async () => {
-        const g = await (await fetch(`${base}/api/goals`)).json() as {
-          list: { steps: { state: string }[] }[];
-        };
-        const mine = g.list.find((x) => x.steps.length === 3);
-        if (!mine) return true; // 全部済んで閉じた
-        return mine.steps.every((st) => st.state === 'done');
-      }, '三段とも済む', { timeoutMs: 180_000, everyMs: 50 });
+      /*
+       * **見たいこと（三段目まで頼んだ）そのものを待つ。**「一覧に段取りが無い＝全部済んで閉じた」で待ちを終えていたので、
+       * 書き直しの途中で一覧が空に見えた一瞬にも終わり、二段目までしか頼んでいない所で確かめて落ちた（全部を回す pre-push で一度）
+       */
+      await until(
+        () => asked.some((a) => a.includes('ほかの段には手を出さない') && a.includes('三段目')),
+        '三段目まで頼む', { timeoutMs: 180_000, everyMs: 50 },
+      );
       const asked3 = asked.filter((a) => a.includes('ほかの段には手を出さない'));
       assert.ok(
         asked3.some((a) => a.includes('三段目')),

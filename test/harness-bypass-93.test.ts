@@ -21,7 +21,7 @@ test('落としてきたスクリプトを走らせる形を止める', () => {
 });
 
 test('まとめて消す形と、ディスクへの書き込みを止める', () => {
-  for (const c of ['rm --recursive x', 'find . -delete', 'find . -name "*.log" -exec rm {} +', 'dd if=/dev/zero of=/dev/sda bs=1M']) {
+  for (const c of ['rm --recursive x', 'rm -f -r dir', 'rm -f -R dir', 'rm -v -fr dir', 'find . -delete', 'find . -name "*.log" -exec rm {} +', 'dd if=/dev/zero of=/dev/sda bs=1M']) {
     assert.equal(verdict(c).kind, 'deny', c);
   }
 });

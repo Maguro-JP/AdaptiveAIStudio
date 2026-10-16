@@ -7,7 +7,7 @@
  *
  * 例は実物の文を使う（llama-server の出力は `test/fixtures/llama/`、node-llama-cpp は投げる文そのもの）。
  */
-import { test } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -45,4 +45,16 @@ test('**動かなかったときの出力で、「動く」と言わない**', a
   assert.equal(answeredVersion('version: 4585 (f0d4b29e)\nbuilt with cc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0 for x86_64-linux-gnu'), true);
   // GPU 版は、版の行の前に部品を読んだ行を出す
   assert.equal(answeredVersion('ggml_cuda_init: found 1 CUDA devices:\nversion: 4585 (f0d4b29e)'), true);
+});
+
+describe('見せる版の行', () => {
+  test('CUDA 版の初期化の行が先に出ても、版の行を拾う', async () => {
+    const { versionLine } = await import('../src/runtime/llama-install.ts');
+    const out = 'ggml_cuda_init: found 1 CUDA devices:\n  Device 0: NVIDIA GeForce RTX 3060\nload_backend: loaded CUDA backend\nversion: 4585 (f0d4b29e)\nbuilt with MSVC\n';
+    assert.equal(versionLine(out), 'version: 4585 (f0d4b29e)');
+  });
+  test('版の行が無ければ一行目（対）', async () => {
+    const { versionLine } = await import('../src/runtime/llama-install.ts');
+    assert.equal(versionLine('\nsomething else\nmore'), 'something else');
+  });
 });

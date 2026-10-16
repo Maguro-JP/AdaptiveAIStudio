@@ -435,7 +435,8 @@ export const dangerousCommands: Rule = {
     if (command === undefined) return allow;
     const patterns: Array<[RegExp, string]> = [
       [/\bgit\s+(push|reset\s+--hard|clean\s+-[a-z]*f|checkout\s+--\s+\.)/i, 'git の破壊的操作'],
-      [/\brm\s+-[a-z]*r/i, '再帰削除'],
+      // 旗のどの塊に r があっても（`rm -f -r`・`rm -v -R x` も）。最初の塊だけを見ていたので、旗を分けるとすり抜けた
+      [/\brm\b[^|;&\n]*\s-[a-z]*r/i, '再帰削除'],
       [/\brm\b[^|;&\n]*\s--recursive\b/i, '再帰削除'],
       [/\bfind\b[^|;&\n]*\s-(delete\b|exec(dir)?\s+rm\b)/i, '再帰削除'],
       // npm だけでなく、ロックファイルから選ばれうる yarn・pnpm・bun の公開も

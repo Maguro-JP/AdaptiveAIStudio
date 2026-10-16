@@ -350,7 +350,8 @@ function repairNode(
         return true;
       });
     if (list.length === 0) return undefined;
-    const active = typeof n.active === 'number' && n.active >= 0 && n.active < list.length ? n.active : 0;
+    // 整数でない番号（0.5）は札を選べないので、0 に直す
+    const active = typeof n.active === 'number' && Number.isInteger(n.active) && n.active >= 0 && n.active < list.length ? n.active : 0;
     return { type: 'tabs', panels: list, active };
   }
 

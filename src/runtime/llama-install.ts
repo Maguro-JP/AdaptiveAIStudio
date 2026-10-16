@@ -32,6 +32,12 @@ export function answeredVersion(out: string): boolean {
   return /^version:\s*\d+/m.test(out);
 }
 
+/** 見せる版の行。CUDA 版は初期化の行（`ggml_cuda_init: ...`）を先に出すので、一行目ではなく版の行を拾う。無ければ一行目 */
+export function versionLine(out: string): string {
+  const text = out.trim();
+  return /^version:\s*\d+.*$/m.exec(text)?.[0].trim() ?? text.split('\n')[0]!.trim();
+}
+
 export interface InstallOptions {
   /** 置き場。既定は ~/.aas/bin */
   binDir?: string;
@@ -209,7 +215,7 @@ export async function install(opts: InstallOptions): Promise<Installed> {
    */
   const work = `${tag}.${process.pid}.tmp`;
   const staging = join(binDir, work);
-  // 脇へ移した前の版は `.tmp` にしない。戻せずに残ったとき、clean が「取得の途中で切れたもの」として消す候補にするため
+  // 脇へ移した前の版は `.tmp` にしない（途中の取得と取り違えない）。戻せずに残ったら、clean が「脇へ移した前の版」として挙げる
   const retired = join(binDir, `${tag}.${process.pid}.prev`);
   let moved = false;
   try {

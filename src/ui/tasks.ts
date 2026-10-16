@@ -65,7 +65,22 @@ const REPORT_MIN_LINES = 4;
  */
 export function stripAnsi(text: string): string {
   // eslint-disable-next-line no-control-regex
-  return text.replace(/\x1b\[[0-9;]*m/g, '');
+  return text.replace(/\x1b\[[0-9;?]*[@-~]/g, '');
+}
+
+/**
+ * 流れの途中で割れた指定も落とす。出力は塊で届くので、`\x1b[3` と `6m` に分かれると、塊ごとの stripAnsi では片割れが残った。
+ * 末尾に途中の指定があれば持ち越し、次の塊の頭に付けて落とす。色だけでなく、行を消す・カーソルを動かす指定も落とす。
+ */
+export function ansiStripper(): (chunk: string) => string {
+  let carry = '';
+  return (chunk) => {
+    const text = carry + chunk;
+    // eslint-disable-next-line no-control-regex
+    const tail = /\x1b(\[[0-9;?]*)?$/.exec(text);
+    carry = tail ? tail[0] : '';
+    return stripAnsi(tail ? text.slice(0, tail.index) : text);
+  };
 }
 
 export interface TaskEvent {
@@ -89,6 +104,8 @@ export interface TaskRunnerOptions {
    * 画面は古い行を捨てるし、閉じれば消える。困ったときに送るものは、ここから拾う。
    */
   reportsDir?: string;
+  /** 報告に残す出力の上限（バイト）。試験では小さく渡す。既定 8MB */
+  keepBytes?: number;
 }
 
 /**
@@ -180,19 +197,24 @@ export class TaskRunner {
     this.#opts.onEvent({ name, text: `— ${TASKS[name]} —\n` });
     const kept: string[] = [];
     let keptBytes = 0;
+    let cut = false;
+    const limit = this.#opts.keepBytes ?? KEEP_BYTES;
+    // 字数ではなくバイトで数える（日本語は 1 字 3 バイトなので、字数で数えると上限の数倍まで残した）。超える塊は残さない
     const keep = (text: string) => {
-      if (keptBytes > KEEP_BYTES) return;
+      const bytes = Buffer.byteLength(text);
+      if (cut || keptBytes + bytes > limit) { cut = true; return; }
       kept.push(text);
-      keptBytes += text.length;
+      keptBytes += bytes;
     };
-    // 二つの流れに一つの読み手を使い回さない。持ち越しが混ざって両方化ける。
-    const on = (read: (c: Buffer) => string) => (b: Buffer) => {
-      const text = stripAnsi(read(b));
+    // 二つの流れに一つの読み手を使い回さない。持ち越しが混ざって両方化ける。色の指定の持ち越しも流れごと
+    const on = (read: (c: Buffer) => string, strip: (t: string) => string) => (b: Buffer) => {
+      const text = strip(read(b));
+      if (text === '') return;
       keep(text);
       this.#opts.onEvent({ name, text });
     };
-    child.stdout?.on('data', on(chunkReader()));
-    child.stderr?.on('data', on(chunkReader()));
+    child.stdout?.on('data', on(chunkReader(), ansiStripper()));
+    child.stderr?.on('data', on(chunkReader(), ansiStripper()));
     child.on('error', (e) => this.#opts.onEvent({ name, text: `${e.message}\n` }));
     child.on('close', (code) => {
       this.#children.delete(name);
@@ -216,7 +238,7 @@ export class TaskRunner {
       const worth = (code ?? 1) !== 0 || meat.split('\n').filter((l) => l.trim()).length > REPORT_MIN_LINES;
       if (!worth) { finish(); return; }
       const base = `${name}-${stamp()}`;
-      const body = `${meat}${keptBytes > KEEP_BYTES ? '\n（長すぎるので途中までです）\n' : ''}\n— 終了コード ${code ?? 1} —\n`;
+      const body = `${meat}${cut ? '\n（長すぎるので途中までです）\n' : ''}\n— 終了コード ${code ?? 1} —\n`;
       void this.#save(name, dir, base, body).catch(() => undefined).finally(finish);
     });
     return undefined;

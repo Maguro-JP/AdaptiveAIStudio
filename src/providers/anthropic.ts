@@ -122,6 +122,7 @@ export class AnthropicProvider implements ChatProvider {
     const building = new Map<number, { id: string; name: string; json: string }>();
     // 終わりの合図（message_stop）を受け取ったか。受け取らずに流れが閉じたら、途中で切れた
     let stopped = false;
+    let startInput = 0;
 
     try {
       const stream = (await this.#api()).messages.stream(
@@ -157,6 +158,9 @@ export class AnthropicProvider implements ChatProvider {
           yield { type: 'toolCall', call: { id: b.id, name: b.name, args } };
         } else if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
           yield { type: 'text', delta: ev.delta.text };
+        } else if (ev.type === 'message_start') {
+          // 入力の数は最初の message_start で届く。message_delta は出力の数だけのことが多いので、ここで覚えておく
+          startInput = ev.message.usage?.input_tokens ?? 0;
         } else if (ev.type === 'message_stop') {
           stopped = true;
         } else if (ev.type === 'message_delta') {
@@ -165,7 +169,7 @@ export class AnthropicProvider implements ChatProvider {
           if (ev.usage) {
             yield {
               type: 'usage',
-              inputTokens: ev.usage.input_tokens ?? 0,
+              inputTokens: ev.usage.input_tokens ?? startInput,
               outputTokens: ev.usage.output_tokens ?? 0,
             };
           }
@@ -322,7 +326,13 @@ export function toAnthropicMessages(messages: readonly ProviderMessage[]): { rol
         continue;
       }
       open = open.filter((o) => o !== id);
-      push('user', [{ type: 'tool_result', tool_use_id: id, content: m.content }]);
+      const result: Block = { type: 'tool_result', tool_use_id: id, content: m.content };
+      // 結果は user の中身の先頭側に並べる（対の無い結果を文にした後ろへ足すと、文が先に来て Claude が 400 で断る）
+      const last = out.at(-1);
+      if (last?.role === 'user') {
+        const at = last.content.findIndex((b) => b.type !== 'tool_result');
+        last.content.splice(at < 0 ? last.content.length : at, 0, result);
+      } else push('user', [result]);
       continue;
     }
     closeOpen();

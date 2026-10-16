@@ -266,7 +266,14 @@ export class PreviewServer {
       return;
     }
 
-    const wanted = decodeURIComponent(url.pathname).replace(/^\/+/, '');
+    // 壊れた百分率の符号（`/%`）は依頼の誤り。投げさせると 500 と JSON で返していた
+    let decoded: string;
+    try { decoded = decodeURIComponent(url.pathname); } catch {
+      res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('道の書き方が壊れています');
+      return;
+    }
+    const wanted = decoded.replace(/^\/+/, '');
     // 点で始まるもの（.env / .git / .ssh）は見せない。見る窓が要るのは
     // 書いた頁であって、鍵や記録ではない。
     if (hiddenRequest(wanted)) {
@@ -306,6 +313,12 @@ export class PreviewServer {
     }
 
     if (info.isDirectory()) {
+      // 末尾に / の無いフォルダは / 付きへ送る。そのまま返すと、ブラウザは一つ上を基準にするので、一覧のリンクも index.html の中の相対の参照も外れた
+      if (wanted !== '' && !url.pathname.endsWith('/')) {
+        res.writeHead(301, { location: `${url.pathname}/${url.search}` });
+        res.end();
+        return;
+      }
       // index.html があれば、それを見せる。無ければ一覧。
       // index.html も、頁を頼まれたときと同じに、リンクを辿った実体で中か・点で始まらないかを見る（`site/index.html -> ../.env` で、
       // フォルダを開くだけで .env や作業場の外の中身が頁として返っていた）。外や隠しファイルなら、index.html は無いものとして一覧を出す

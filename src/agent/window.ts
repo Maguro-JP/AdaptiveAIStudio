@@ -333,7 +333,6 @@ export function fitToWindow(
   if (near.length < history.length && start > firstAt) {
     const first = firstRequest(history, count, budget);
     work = [...first, ...near];
-    cut = history.length - work.length;
     /*
      * **ここで落とした分にも、印を付ける。**
      *
@@ -348,6 +347,8 @@ export function fitToWindow(
     // 落とした分は、最初の依頼の後ろから直近の手前まで（頭に依頼以外があれば、それも落とした分に数える）
     const gone = [...history.slice(0, Math.max(0, firstAt)), ...history.slice(first.length > 0 ? firstAt + 1 : Math.max(0, firstAt), start)];
     cutPaths = pathsIn(gone.slice(-SCAN_FOR_PATHS));
+    // 往復で数える（下の fitCore と同じ単位。通数で数えると、ツールを使う往復は 3 通以上あるので、省いた往復を数倍に言った）
+    cut = Math.max(gone.length > 0 ? 1 : 0, gone.filter((m) => m.role === 'user').length);
   }
   return fitCore(work, budget, count, cut, cutPaths);
 }
@@ -398,6 +399,7 @@ function fitCore(
   // モデルは同じ所をもう一度読みに行く（Claude Code の compaction が
   // 「どのファイルで作業しているか」を残しているのと同じ理由）。
   let dropped = 0;
+  let droppedTurns = 0;
   const touched: string[] = [...alreadyPaths];
   let at = keepFirst + 1;
   while (total(units) > budget && at < recentFrom - dropped) {
@@ -405,9 +407,12 @@ function fitCore(
     for (const path of pathsIn(units[at]!.messages)) {
       if (!touched.includes(path)) touched.push(path);
     }
+    if (units[at]!.messages.some((m) => m.role === 'user')) droppedTurns += 1;
     units.splice(at, 1);
     dropped += 1;
   }
+  // 言う数は往復で（区切りはツールの一回ごとなので、区切りの数は往復より多い）。依頼を含まない区切りだけ落としたときも 1 と言う
+  const droppedRounds = dropped > 0 ? Math.max(1, droppedTurns) : 0;
 
   // それでも溢れるなら、直近も縮める。**落とすより縮める。**
   // 落とすと往復の筋そのものが消えるが、縮めれば「何をしたか」は残る。
@@ -461,16 +466,16 @@ function fitCore(
   for (const [i, u] of units.entries()) {
     out.push(...u.messages);
     // 落とした場所に、落としたと書く。**黙って落とさない。**
-    if (dropped + already > 0 && i === keepFirst) {
+    if (droppedRounds + already > 0 && i === keepFirst) {
       out.push({
         role: 'user',
-        content: `（このあと ${dropped + already} 往復ぶんは、文脈に収まらないので省いています。`
+        content: `（このあと ${droppedRounds + already} 往復ぶんは、文脈に収まらないので省いています。`
           + (touched.length > 0 ? `そこで触ったのは ${touched.slice(0, 5).join('、')} です。` : '')
           + '必要なら、もう一度読み直してください。）',
       });
     }
   }
-  return { messages: out, trimmed: shrunk || dropped + already > 0, dropped: dropped + already };
+  return { messages: out, trimmed: shrunk || droppedRounds + already > 0, dropped: droppedRounds + already };
 }
 
 /**

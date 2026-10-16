@@ -4810,7 +4810,7 @@ export function looksLikeBrokenModelFile(detail: string): boolean {
  * 手で置く道を案内する。
  *
  * 一覧の名前は版が上がると変わるので、**名前ではなく選び方**を渡す。
- * NetVision が同じ理由で個別のファイル名を書かず、選び方だけ書いている
+ * 別のリポジトリ が同じ理由で個別のファイル名を書かず、選び方だけ書いている
  * （「版が上がると名前が変わるので、個別のファイル名は書きません」）。
  */
 export function byHand(dir: string): string {

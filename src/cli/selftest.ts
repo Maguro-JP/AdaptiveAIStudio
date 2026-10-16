@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { detectMachine, describeMachine } from '../runtime/machine.ts';
-import { findInstalled, defaultBinDir, answeredVersion } from '../runtime/llama-install.ts';
+import { findInstalled, defaultBinDir, answeredVersion, versionLine } from '../runtime/llama-install.ts';
 import { runtimeEnv } from '../runtime/llama-env.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { pickAsset } from '../runtime/llama-release.ts';
@@ -141,7 +141,7 @@ if (llama) {
   const out = await run(llama, ['--version'], process.cwd(), { env: runtimeEnv(llama), timeout: 30_000 });
   const works = answeredVersion(out.text);
   const where = command ? `${command}（runtime.command）: ` : '';
-  add('llama-server', works, works ? `${where}${out.text.trim().split('\n')[0]!}` : `${where}動きません: ${out.text.trim().slice(0, 200)}`);
+  add('llama-server', works, works ? `${where}${versionLine(out.text)}` : `${where}動きません: ${out.text.trim().slice(0, 200)}`);
 } else {
   add('llama-server', undefined, `まだ用意していません（${how('llama')} で取ってきます）。置き場: ${binDir}`);
 }
@@ -212,11 +212,15 @@ if (gguf && ggufs.length === 0) {
 // 通るかどうかだけでなく、何秒かかるかを見る。
 // Windows では 242 秒かかっていた（4GB の仮ファイルを書いていたため）。
 const started = Date.now();
-const test = await run(process.execPath, [join(root, 'scripts', 'run-tests.mjs')], root);
-const seconds = ((Date.now() - started) / 1000).toFixed(1);
+// 一つでも止まったままだと、一覧も報告も出ないまま戻らない。区切って、打ち切ったと言う
+const TEST_LIMIT_MS = 30 * 60_000;
+const test = await run(process.execPath, [join(root, 'scripts', 'run-tests.mjs')], root, { timeout: TEST_LIMIT_MS });
+const elapsed = Date.now() - started;
+const seconds = (elapsed / 1000).toFixed(1);
 const passed = testsPassed(test.text, test.code);
 const counts = /^# pass (\d+)$/m.exec(test.text)?.[1] ?? '?';
-add('検査', passed, `${seconds}秒 / ${counts}件通過${passed ? '' : ' — 失敗あり'}`);
+const cut = test.code === null && elapsed >= TEST_LIMIT_MS ? `（${TEST_LIMIT_MS / 60_000} 分で打ち切りました）` : '';
+add('検査', passed, `${seconds}秒 / ${counts}件通過${passed ? '' : ' — 失敗あり'}${cut}`);
 
 await finish(test);
 

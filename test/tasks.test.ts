@@ -7,7 +7,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { TaskRunner, TASKS, stripAnsi } from '../src/ui/tasks.ts';
+import { TaskRunner, TASKS, stripAnsi, ansiStripper } from '../src/ui/tasks.ts';
 import type { TaskEvent } from '../src/ui/tasks.ts';
 
 /** 起こしたことにする。出す中身と終わり方を、試験から決められる。 */
@@ -272,5 +272,34 @@ describe('点検の子は CPU を譲る', () => {
   test('pid が無ければ、下げたと言わない（対）', async () => {
     const { lowerPriority } = await import('../src/ui/tasks.ts');
     assert.equal(lowerPriority(undefined), false);
+  });
+});
+
+describe('出力の色の指定と、残す量', () => {
+  test('塊の境目で割れた指定も落とす', () => {
+    const strip = ansiStripper();
+    assert.equal(strip('A\x1b[3') + strip('6mB\x1b') + strip('[0m C'), 'AB C');
+  });
+  test('色以外の指定（行を消す）も落とす', () => {
+    assert.equal(stripAnsi('\x1b[2Kした'), 'した');
+  });
+  test('上限はバイトで数え、超えたら途中までと書く', async () => {
+    const { readdir, readFile } = await import('node:fs/promises');
+    const { tempDir } = await import('./tmp.ts');
+    const { until } = await import('./until.ts');
+    const dir = await tempDir('aas-reports-bytes-');
+    const said: TaskEvent[] = [];
+    const { spawnFn, children } = fakeSpawn();
+    // 100 バイトまで。日本語 20 字（60 バイト）を 3 回。字数で数えると 60 字で上限に届かない
+    const runner = new TaskRunner({ root: '/app', onEvent: (e) => said.push(e), spawnFn, reportsDir: dir, keepBytes: 100 });
+    runner.start('test');
+    const line = 'あ'.repeat(19) + '\n';
+    for (let i = 0; i < 3; i++) children[0]!.stdout.emit('data', Buffer.from(line));
+    children[0]!.emit('close', 1);
+    await until(() => said.some((e) => e.code !== undefined), '終わる', { timeoutMs: 5000 });
+    const [file] = await readdir(dir);
+    const body = await readFile(`${dir}/${file}`, 'utf8');
+    assert.equal(body.split(line).length - 1, 1, `上限を超えて残した:\n${body}`);
+    assert.match(body, /途中までです/);
   });
 });
