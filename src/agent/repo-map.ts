@@ -267,9 +267,11 @@ export function seedFrom(
      */
     const fresh = edited.indexOf(f.path);
     if (fresh >= 0) w += 12 - fresh * (6 / Math.max(1, edited.length));
+    // 拡張子を除いた名前（「server を直して」の `server` で `src/ui/server.ts` に当てる。境目で当てる形にしたとき、この道が無くなっていた）
+    const stem = (low.split('/').pop() ?? low).replace(/\.[^.]+$/, '');
     for (const word of words) {
       // 区切りの境目で当てる（`index.ts` が `code-index.ts` にも当たり、別のファイルまで強い seed にしていた）
-      if (word.includes('/') ? low.includes(word) : low === word || low.endsWith(`/${word}`) || low.includes(`/${word}/`)) w += 3;
+      if (word.includes('/') ? low.includes(word) : low === word || stem === word || low.endsWith(`/${word}`) || low.includes(`/${word}/`)) w += 3;
     }
     for (const s of f.symbols) if (s.exported && words.has(s.name.toLowerCase())) w += 2;
     if (rare.length > 0) {
