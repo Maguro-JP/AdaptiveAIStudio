@@ -160,3 +160,15 @@ describe('bestOf（採点して最良を採る）', () => {
     assert.equal(out.best?.label, 'b'); // 'three' の方が長い
   });
 });
+
+describe('同じ名前の試み', () => {
+  test('同じモデルを二本走らせても、負けた方の結果を落とさない', async () => {
+    const out = await race(
+      [attempt('m1', 10, 'good'), attempt('m1', 30, 'bad', { fail: true })],
+      ok, new AbortController().signal,
+    );
+    assert.equal(out.winner?.label, 'm1');
+    assert.equal(out.others.length, 1, `負けた試みが消えた: ${JSON.stringify(out.others)}`);
+    assert.equal((out.others[0] as { index?: number }).index, undefined, '中の番号を外へ漏らした');
+  });
+});
