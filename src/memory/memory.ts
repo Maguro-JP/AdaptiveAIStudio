@@ -679,7 +679,8 @@ export class Memory {
     // 決まらないと、載る中身が回ごとに入れ替わって、追いかけられない。
     const order = (e: MemoryEntry): number => Number(e.id.replace(/^m/, '')) || 0;
     return this.#entries
-      .filter((e) => e.kind === 'displeasure')
+      // 置き換えられた古い覚えは出さない（必ず混ぜる枠を通ると、話題に関係なく新旧の二つが並んだ）
+      .filter((e) => e.kind === 'displeasure' && !e.supersededBy)
       .sort((a, b) => b.seenAt - a.seenAt || order(b) - order(a))
       .slice(0, limit);
   }

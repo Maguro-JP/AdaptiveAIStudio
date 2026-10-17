@@ -329,3 +329,14 @@ describe('記憶を忘れて、戻す', () => {
     assert.deepEqual(shelf.list(m.era), []);
   });
 });
+
+describe('置き換えた「嫌がられたこと」', () => {
+  test('置き換えた古い方は、必ず混ぜる枠にも出さない', () => {
+    const m = new Memory();
+    const old = m.remember({ kind: 'displeasure', title: '確かめずに完了と言う', now: 1000 }).entry.id;
+    const next = m.remember({ kind: 'displeasure', title: '動かしてから完了と言う', supersedes: old, now: 2000 }).entry.id;
+    const ids = m.recall('何でもよい依頼').map((e) => e.id);
+    assert.ok(ids.includes(next), '新しい方が出ていない');
+    assert.ok(!ids.includes(old), `置き換えた古い方が出た: ${ids.join(',')}`);
+  });
+});

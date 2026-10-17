@@ -447,7 +447,8 @@ export async function buildIndex(root: string, max = MAX_FILES, prev?: CodeIndex
   await walk(root, 0, await Ignores.load(root));
   files.sort((a, b) => a.path.localeCompare(b.path));
   // 上限で止めたなら、まだ残っている数を数えて言う（数えるだけなら安い）。
-  const capped = files.length >= max ? await countSource(root) - files.length : 0;
+  // 大きすぎて・読めずに外した分（skipped）は見終えているので、残りに数えない（数えていたので、全部見たのに「あと 1 ファイル」と言った）
+  const capped = files.length >= max ? Math.max(0, await countSource(root) - files.length - skipped) : 0;
   // 何も読み直さず、並びも同じなら、前の作った時刻を引き継ぐ（毎回付け直していたので、repo map の使い回しが当たらず、依頼のたびに repo map が変わった）
   const same = prev !== undefined && prev.format === INDEX_FORMAT && reparsed === 0 && prev.files.length === files.length
     && prev.files.every((f, i) => files[i] === f);

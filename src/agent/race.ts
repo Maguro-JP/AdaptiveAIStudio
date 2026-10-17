@@ -59,7 +59,8 @@ export async function race<R>(
   signal.addEventListener('abort', onOuterAbort, { once: true });
 
   const started = Date.now();
-  const settled: RaceOutcome<R>['others'] = [];
+  // どの試みの結果かを番号で持つ（名前で外すと、同じ名前の試み＝同じモデルを二本走らせたとき、負けた方まで消えた）
+  const settled: Array<RaceOutcome<R>['others'][number] & { index: number }> = [];
   let winner: RaceOutcome<R>['winner'];
   // 勝った試みの番号と、もう終わった試み。取り消しの知らせは、まだ走っているものにだけ出す（前は終わった順の番号を除いていたので、
   // 負けた試みと同じ一巡で終わった勝ちの試みにも「取り消し」と出し、画面と記録が食い違った）
@@ -74,7 +75,7 @@ export async function race<R>(
       (result) => {
         const ms = Date.now() - at;
         const ok = accept(result);
-        settled.push({ label: a.label, result, ms, accepted: ok });
+        settled.push({ index: i, label: a.label, result, ms, accepted: ok });
         onEvent?.({ type: 'settle', label: a.label, accepted: ok, ms });
         done.add(i);
         if (ok && !winner) { winner = { label: a.label, result, ms }; winnerIndex = i; }
@@ -83,7 +84,7 @@ export async function race<R>(
       (e: unknown) => {
         const ms = Date.now() - at;
         const error = e instanceof Error ? e.message : String(e);
-        settled.push({ label: a.label, error, ms, accepted: false });
+        settled.push({ index: i, label: a.label, error, ms, accepted: false });
         onEvent?.({ type: 'settle', label: a.label, accepted: false, ms, error });
         done.add(i);
         return i;
@@ -110,7 +111,7 @@ export async function race<R>(
 
   return {
     winner,
-    others: settled.filter((s) => s.label !== winner?.label),
+    others: settled.filter((s) => s.index !== winnerIndex).map(({ index: _index, ...rest }) => rest),
   };
 }
 
