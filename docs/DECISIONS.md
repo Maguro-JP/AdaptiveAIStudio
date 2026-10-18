@@ -108,6 +108,7 @@
 - 169 回目（記憶: 置き換えた「嫌がられたこと」を出さない）
 - 173 回目（索引: 外したファイルを「残り」に数えない）
 - 174 回目（地図: 拡張子を除いた名前で起点に当てる）
+- public にした後の Actions の使い方
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -14021,3 +14022,11 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 注釈は「server を直して」で `src/ui/server.ts` に当てると書いているのに、境目で当てる形にしたときに拡張子を除いた名前の道が無くなり、当たっていなかった。拡張子を除いた名前と語が同じときも当てる。`index` が `code-index.ts` に当たらないことは保つ
 - 確かめていないこと: 実際の依頼で地図の順がどれだけ変わるか
 - 触る場所: `seedFrom` の `stem`、試験は `test/repo-map-stem-174.test.ts`（直しを外すと落ちることを確かめた）
+
+## 2026-10-18  public にした後の Actions の使い方
+
+利用者がリポジトリを public にし、PR・CI・Actions・bundle を要るなら使ってよいと決めた。
+- claude/ の枝の PR でも Linux の CI を回す（`ci` の札で回す決まりは外した）。Windows は draft でない PR で回す
+- bundle の回数は数えない。枠を節約するための決まり（PR で回さない・手で回すのは断ってから）は外した
+- 手元で先に確かめる順は変えない。CI は Windows と配る形を見る所
+- 触る場所: `.github/workflows/ci.yml` の `test` と `test-windows` の `if`、`CLAUDE.md` の「お金」、試験は `test/home.test.ts`
