@@ -109,6 +109,7 @@
 - 173 回目（索引: 外したファイルを「残り」に数えない）
 - 174 回目（地図: 拡張子を除いた名前で起点に当てる）
 - public にした後の Actions の使い方
+- 176 回目（手がかり: test_foo.py と行数の数え方）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -14030,3 +14031,12 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - bundle の回数は数えない。枠を節約するための決まり（PR で回さない・手で回すのは断ってから）は外した
 - 手元で先に確かめる順は変えない。CI は Windows と配る形を見る所
 - 触る場所: `.github/workflows/ci.yml` の `test` と `test-windows` の `if`、`CLAUDE.md` の「お金」、試験は `test/home.test.ts`
+
+## 2026-10-18  176 回目（手がかり: test_foo.py と行数の数え方）
+
+175 回目は mention・hunks・ignore・stride・rerank を読み、直す所は無かった。
+自分から言い出す手がかり（`src/agent/initiative.ts` の `findLeads`）を読み、2 件直した。
+- `test_foo.py`（pytest の名付け）をテストと見ていなかったので、テストそのものを「対応するテストが見当たりません」と挙げていた。テストの判定に `test_` で始まる名前を足した
+- 行数を `split('\n').length` で数えていたので、末尾が改行のファイルを 1 行多く数え、ちょうど 600 行で「大きすぎる」と言っていた
+- 残した件: 変更一覧の道を `trim()` しているので、空白で始まるファイル名が別の道になる。起きるのはまれなので、今回は触っていない
+- 触る場所: `isTestPath` と `lines`、試験は `test/initiative-176.test.ts`（直しを外すと 2 件とも落ちることを確かめた）

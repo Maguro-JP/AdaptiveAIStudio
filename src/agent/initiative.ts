@@ -125,7 +125,8 @@ export async function findLeads(opts: LeadOptions): Promise<Lead[]> {
     }
 
     // 大きすぎるファイル。読めない＝直せない。
-    const lines = text.split('\n').length;
+    // 末尾の改行の後ろは行に数えない（600 行のファイルを 601 行と言い、上限に当てていた）
+    const lines = text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
     if (lines > 600) {
       leads.push(lead({
         kind: 'cleanup',
@@ -214,7 +215,8 @@ function isSource(path: string): boolean {
 }
 
 function isTestPath(path: string): boolean {
-  return /(\.|_|^)(test|spec)\.|(^|\/)tests?\//i.test(path);
+  // `test_foo.py`（pytest の名付け）もテスト。拾わないと、テストそのものを「テストが無い実装」と挙げていた
+  return /(\.|_|^)(test|spec)\.|(^|\/)tests?\/|(^|\/)test_[^/]+$/i.test(path);
 }
 
 function baseName(path: string): string {
