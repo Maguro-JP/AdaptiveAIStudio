@@ -204,8 +204,9 @@ npm run bundle        # 手元で bundle を作る（--node-here で今の Node 
 npm run shot          # README の画面の例を撮り直す（画面を変えたら）
 ```
 
-- CI は PR・手で頼んだとき・週に一度だけ。`bundle`（Windows で配る形を通す）は
-  PR では回らない。手で回すときは、先に断る。1 回 10 分ほど、Windows は 2 倍で数える
+- CI は PR・手で頼んだとき・週に一度に回る。Windows の試験は draft でない PR でも回る。
+  `bundle`（Windows で配る形を通す）は PR では回らないので、要るときは手で回すか `release/v*` の枝を押す。
+  2026-10-18 に public になり、標準のランナーは無料（それまでは Windows を 2 倍で数えていた）
 - 版を上げるときは `package.json` を直して同じコミットに入れ、`main` へ push。
   そのあと `git push origin main:release/vX.Y.Z` で release が組まれる
 - 作業の枝を PR にして squash で main へ。マージ済みの枝に積まない（main から切り直す）
