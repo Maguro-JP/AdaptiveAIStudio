@@ -64,7 +64,13 @@ describe('消した会話', () => {
     }, '一回目が終わらない');
     // トップへ戻ってから消す（見ている会話は消せないので）
     await call('POST', '/api/conversations');
-    const removed = await call('DELETE', `/api/conversations?id=${id}`);
+    // 答えが残ってから作業の終わり（#runningId が外れる）までに間がある。遅い機械（Windows の CI）ではその間に消しに行き、
+    // 「作業中」の 409 で落ちた。作業中のあいだは待ってから消す
+    let removed = { status: 0, body: {} as Record<string, unknown> };
+    await until(async () => {
+      removed = await call('DELETE', `/api/conversations?id=${id}`);
+      return removed.status !== 409;
+    }, '作業が終わらない');
     assert.equal(removed.status, 200, JSON.stringify(removed.body));
 
     const selected = await call('POST', '/api/conversations/select', { id });
