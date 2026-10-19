@@ -232,6 +232,11 @@ describe('bundle の形', () => {
     const readme = await readFile(join(out, 'README.txt'), 'utf8');
     const room = (260 - 1) - 1 - r.deepest;
     assert.match(readme, new RegExp(`${room} 文字までにしてください`), readme.slice(0, 400));
+    // はじめての人は、モデルが無いことと、その取り方を知らない。読む所に書いてあること
+    assert.match(readme, /はじめて動かすとき/);
+    assert.match(readme, /「これを取ってくる」/);
+    // 書いた釦の名前が、画面に本当に在ること（画面で名前を変えると、案内が嘘になる）
+    assert.match(await readFile(join(out, 'app', 'src', 'ui', 'web', 'index.html'), 'utf8'), />これを取ってくる</);
   });
 
   test('版は VERSION に、そのまま書いてある', async () => {
