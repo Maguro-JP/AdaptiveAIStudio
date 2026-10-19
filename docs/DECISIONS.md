@@ -111,6 +111,7 @@
 - public にした後の Actions の使い方
 - 176 回目（手がかり: test_foo.py と行数の数え方）
 - 179 回目（配った形で打てない npm run の案内を直す）
+- 180 回目（画面の llama-server の案内も置かれ方に合わせる）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -14048,3 +14049,8 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - モデルが無いときの端末の案内（`src/cli/agent.ts`）、llama.cpp の診断（`src/runtime/llama-diagnosis.ts`）、モデルの一覧（`src/runtime/model-catalog.ts`）、selftest の理由が、`npm run …` と決め打ちしていた。配った形には npm が無いので、Windows の利用者には打てない一手だった。`how()`（配った形なら `AdaptiveAIStudio.cmd …`）で組む
 - 同じ書き方を増やさないよう、人に見せる文に決め打ちの `npm run` を書くと落ちる試験（`test/no-npm-hint.test.ts`）を足した。注釈と、モデルへの指示（役職の決まり）は数えない。直しを外すと落ちることを確かめた
 - 確かめていないこと: Windows の実機で、出た一手をそのまま打って動くか
+
+## 2026-10-19  180 回目（画面の llama-server の案内も置かれ方に合わせる）
+
+- 画面のモデルの板で、llama-server が無いときに「未用意（npm run llama）」と決め打ちしていた。配った形では打てない。サーバーが `how('llama')` で組んだ一手（`llamaHint`）を返し、画面はそれを出す
+- 179 回目の試験（`test/no-npm-hint.test.ts`）を画面の JS（`src/ui/web/`）まで広げた。直しを外すと落ちることを確かめた

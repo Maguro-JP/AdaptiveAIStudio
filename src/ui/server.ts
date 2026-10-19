@@ -10,6 +10,7 @@
  * 数年で作法が変わるものに画面を預けたくない。
  * 素の HTML と ES モジュールなら、組み立ての手順すら要らない。
  */
+import { how } from '../cli/how.ts';
 import { placeKey } from '../memory/memory.ts';
 import { proposalHere, actionRequest } from '../agent/proposals.ts';
 import { listDir, resolveInside } from './files.ts';
@@ -1675,6 +1676,8 @@ export class UiServer {
         // GGUF を置く道では、絶対の道も返す。画面で開く・コピーするため（Ollama にはファイルが無い）。
         installed: installed.map((m) => ({ ref: m.ref, sizeBytes: m.sizeBytes, ...(usesGguf(runtime.id) ? { path: join(dir, m.ref) } : {}) })),
         llamaServer: llama ?? null,
+        // 用意する一手。配った形には npm が無いので、置かれ方に合う形で渡す（画面が `npm run llama` と決め打ちしていた）
+        llamaHint: how('llama'),
         // どこを見ているか。「置いたのに出ない」を、画面の上で切り分けられる。
         modelsDir: dir,
         // 取ってきている最中か、失敗したか。**押した板に出すために返す。**

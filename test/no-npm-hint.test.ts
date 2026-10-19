@@ -14,11 +14,11 @@ async function* tsFiles(dir: string): AsyncGenerator<string> {
   for (const e of await readdir(dir, { withFileTypes: true })) {
     const p = join(dir, e.name);
     if (e.isDirectory()) yield* tsFiles(p);
-    else if (e.name.endsWith('.ts') && !e.name.endsWith('.d.ts')) yield p;
+    else if ((e.name.endsWith('.ts') && !e.name.endsWith('.d.ts')) || (e.name.endsWith('.js') && p.includes('web'))) yield p;
   }
 }
 
-test('人に見せる案内に、決め打ちの npm run を書かない（how() で組む）', async () => {
+test('人に見せる案内に（画面の JS も）、決め打ちの npm run を書かない（how() で組む）', async () => {
   const root = join(import.meta.dirname, '..');
   const hits: string[] = [];
   for await (const file of tsFiles(join(root, 'src'))) {

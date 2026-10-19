@@ -1621,7 +1621,7 @@ export const PANELS = {
         row.append(
           el('span', 'key', 'llama-server'),
           el('span', `num mono ${data.llamaServer ? 'dim' : 'warn'}`,
-            data.llamaServer ? '用意済み' : '未用意（npm run llama）'),
+            data.llamaServer ? '用意済み' : (data.llamaHint ? `未用意（${data.llamaHint}）` : '未用意')),
         );
         status.append(row);
       }
