@@ -34,3 +34,21 @@ test('人に見せる案内に（画面の JS も）、決め打ちの npm run �
   }
   assert.deepEqual(hits, []);
 });
+
+// ツールの結果（モデルが読む文）は Markdown のままでよい。画面に出す src/ui だけを見る。
+test('画面に出す文に `**` を書かない（画面は Markdown を描かないので、そのまま見える）', async () => {
+  const root = join(import.meta.dirname, '..');
+  const hits: string[] = [];
+  for await (const file of tsFiles(join(root, 'src', 'ui'))) {
+    const rel = relative(root, file).split('\\').join('/');
+    const lines = (await readFile(file, 'utf8')).split('\n');
+    lines.forEach((line, i) => {
+      const code = line.trim();
+      if (code.startsWith('*') || code.startsWith('/*') || code.startsWith('//')) return;
+      const body = code.replace(/\/\/.*$/, '');
+      // 日本語を含む文字列の中の ** だけを見る（glob の ** や累乗は数えない）。
+      if (/['"`][^'"`]*[\u3040-\u30ff\u4e00-\u9fff][^'"`]*\*\*|['"`][^'"`]*\*\*[^'"`]*[\u3040-\u30ff\u4e00-\u9fff]/.test(body)) hits.push(`${rel}:${i + 1}: ${code.slice(0, 100)}`);
+    });
+  }
+  assert.deepEqual(hits, []);
+});

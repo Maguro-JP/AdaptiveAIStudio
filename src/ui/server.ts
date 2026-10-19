@@ -3572,14 +3572,16 @@ export class UiServer {
             const others = models.length > 1
               ? `\nこの保存先には ${models.length} 個ありますが、どれも載りません。`
               : '';
-            return `${ref}: ${big ?? '記憶に載りません。'}${others}`;
+            return `${ref}: ${big ?? '記憶に載りません。'}${others}\n`
+              + `保存先: ${this.#opts.config.runtime?.modelsDir ?? modelsDir()}`;
           }
           // 名前だけ .gguf で中身が別物（配布元の HTML の案内など）を、読みに行かない。
           // 一覧と同じ場所（動いている側の保存先）を見る。保存側を見ると、
           // 立ち上げ直す前の設定とずれて「読めない」と嘘をつく。
           if (!(await looksLikeGguf(join(this.#opts.config.runtime?.modelsDir ?? modelsDir(), ref)))) {
             return `${ref} は GGUF として読めません（先頭に GGUF の印がありません）。`
-              + '配布元の同意頁の HTML を落としてしまった形が多いです。ブラウザで開き直して、本物を置いてください。';
+              + '配布元の同意頁の HTML を落としてしまった形が多いです。ブラウザで開き直して、本物を置いてください。\n'
+              + `保存先: ${this.#opts.config.runtime?.modelsDir ?? modelsDir()}`;
           }
           // 読まずに分かることはここまで。読むのは頼まれたときだけ。
           if (!load) return NOT_LOADED_YET;
@@ -3639,9 +3641,9 @@ export class UiServer {
              */
             const looksLikeFile = looksLikeBrokenModelFile(detail);
             const hint = looksLikeFile
-              ? '**ファイルが途中までしか落ちていない**ことが多いです。'
+              ? 'ファイルが途中までしか落ちていないことが多いです。'
                 + '大きさを配布元と見比べて、違っていたら消して取り直してください。'
-              : 'モデルのファイルではなく、**読む側**で止まっています。'
+              : 'モデルのファイルではなく、読む側で止まっています。'
                 + '設定 → モデル で、動かし方を選び直すこともできます。';
             return `${ref} を読み込めませんでした。\n${detail.slice(0, 300)}\n${hint}\n`
               + `保存先: ${this.#opts.config.runtime?.modelsDir ?? modelsDir()}`;
