@@ -376,9 +376,9 @@ describe('CI は押すたびに回さない', () => {
     const jobs = ciJobs(raw);
     const winTest = jobs.find((j) => /runs-on: windows-latest/.test(j) && /npm test/.test(j) && !/check:bundle/.test(j));
     assert.ok(winTest, 'Windows でテストを回す仕事が見つからない');
-    // PR では一度も回さない（週に一度と手で頼んだときだけ）。
-    assert.match(winTest, /github\.event_name != 'pull_request'/,
-      `PR を除く条件が無い（毎日の PR で2倍で回る）:\n${winTest.slice(0, 400)}`);
+    // PR では draft の間だけ回さない（public になり無料なので、Ready の PR では回す）。
+    assert.match(winTest, /\(github\.event_name != 'pull_request' \|\| github\.event\.pull_request\.draft == false\)/,
+      `draft の PR を除く条件が無い:\n${winTest.slice(0, 400)}`);
     // Ready にした時点で回るように、合図に ready_for_review が入っていること。
     const on = raw.slice(raw.indexOf('\non:'), raw.indexOf('\njobs:'));
     assert.match(on, /types:\s*\[[^\]]*ready_for_review/,

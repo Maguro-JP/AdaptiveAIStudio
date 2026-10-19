@@ -308,10 +308,14 @@ describe('通った段の次は、待たずに次へ', () => {
        * **見たいこと（三段目まで頼んだ）そのものを待つ。**「一覧に段取りが無い＝全部済んで閉じた」で待ちを終えていたので、
        * 書き直しの途中で一覧が空に見えた一瞬にも終わり、二段目までしか頼んでいない所で確かめて落ちた（全部を回す pre-push で一度）
        */
+      // 待ち切れなかったときは、どこまで頼んだかを添えて落とす（Windows の CI でだけ 180 秒待っても届かず、どの段で止まったかが見えなかった）
       await until(
         () => asked.some((a) => a.includes('ほかの段には手を出さない') && a.includes('三段目')),
         '三段目まで頼む', { timeoutMs: 180_000, everyMs: 50 },
-      );
+      ).catch((e: Error) => {
+        const seen = asked.map((a) => a.replace(/\s+/g, ' ').slice(0, 60));
+        throw new Error(`${e.message}\n頼んだもの（${asked.length} 件）:\n${seen.join('\n')}`);
+      });
       const asked3 = asked.filter((a) => a.includes('ほかの段には手を出さない'));
       assert.ok(
         asked3.some((a) => a.includes('三段目')),

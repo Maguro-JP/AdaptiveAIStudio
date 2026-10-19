@@ -5,7 +5,7 @@
 # （殻の glob 展開、巨大な仮ファイル、パスの区切り、実行ビット）、
 # 手元が Windows でも、直す側が Linux なら気づけない。
 #
-# ただし **Windows の枠は2倍で数えられる**。前に使い切って
+# private の間は **Windows の枠は2倍で数えられた**（2026-10-18 に public になり、いまは無料）。前に使い切って
 # 1日まるごと確かめられなくなった。
 #
 # **push では回さない。** ここが一番効く。
@@ -76,8 +76,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.real && 'real' || 'ci' }}
   cancel-in-progress: true
 
-# 自律開発（claude/ の枝）の PR では回さない。検証は手元で済ませてからマージするので、
-# ここで同じものを回すと枠だけが減る。人が見てほしいときは PR に `ci` の札を付ける。
+# 2026-10-18 に public になり、標準のランナーは無料になった。claude/ の枝の PR でも回す
+# （前は枠を節約するために `ci` の札を付けたときだけ回していた）。Windows も draft でない PR で回す。
 jobs:
   # 安い方（Linux は1倍）。**ここは押すたびに回す。**
   #
@@ -91,7 +91,6 @@ jobs:
     if: >-
       (github.event_name != 'workflow_dispatch' || !inputs.real)
       && !(github.event.action == 'opened' && github.event.pull_request.draft == true)
-      && !(github.event_name == 'pull_request' && startsWith(github.head_ref, 'claude/') && !contains(github.event.pull_request.labels.*.name, 'ci'))
     runs-on: ubuntu-latest
     # 暴走した1本で枠を溶かさない。手元では3分ほど。
     timeout-minutes: 20
@@ -114,18 +113,17 @@ jobs:
           npm ci --no-audit --no-fund
           npm run typecheck
 
-  # 配る先（Windows）。**2倍で数えられるので、PR では回さない。**
+  # 配る先（Windows）。draft でない PR・週に一度（土曜）・手で頼んだときに回す。
   #
-  # 回すのは週に一度（土曜）と、手で頼んだときだけ。毎日の PR で回すと
-  # 月に 300 分ほど払い、口座の枠（全部のリポジトリで共有）を毎月使い切っていた。
-  # Windows だけで起きる不具合に気付くのは、そのぶん土曜まで遅れる。
+  # private の間は 2 倍で数えられたので PR では回さず、口座の枠を毎月使い切っていた。
+  # 2026-10-18 に public になり標準のランナーは無料になったので、PR でも回す。
   #
   # 落ちるのはいつも Windows 側なので、**減らすのは回数だけ。**
   # 見る中身（`npm test` の全部）は減らさない。
   test-windows:
     name: windows-latest / Node 24.x
     if: >-
-      github.event_name != 'pull_request'
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
       && (github.event_name != 'workflow_dispatch' || !inputs.real)
     runs-on: windows-latest
     timeout-minutes: 20

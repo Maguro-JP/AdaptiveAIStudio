@@ -25,7 +25,7 @@
 
 ## 公開
 
-このリポジトリは公開する前提で書く。コード、コメント、文書、コミットメッセージのどこにも、
+このリポジトリは公開している（2026-10-18 から public）。コード、コメント、文書、コミットメッセージのどこにも、
 本物のメールアドレス・氏名・鍵・公開していない別のリポジトリの名前・社内の情報を書かない。
 条件の全部は `docs/PUBLISHING.md`。機械で判定できるものは `test/publishing.test.ts` が止める。
 
@@ -114,15 +114,12 @@ AdaptiveAIStudio\
 
 ## お金
 
-GitHub Actions の枠は口座で一つで、全部のリポジトリが同じものを使う。Windows は 2 倍で数えられる。
+2026-10-18 に public になり、標準のランナーの GitHub Actions は無料になった（`docs/DECISIONS.md` 2026-10-18）。
 
-- 残量はここから見えない。回すことを勧めるときは、何分ぶん使うかを先に言う
-- push では CI を回さない。claude/ の枝の PR でも回さない（`ci` のラベルを付けたときだけ）
-- Windows の試験と bundle は土曜に寄せる（`docs/DECISIONS.md` 2026-10-10）
-- 手で回す（workflow_dispatch）のは、断ってから。`mcp__github__actions_run_trigger` は
-  `.claude/settings.json` の `permissions.deny` に入れてある
-- bundle は直し終えてから組む。`npm run bundle` で手元でも作れる。CI が要るのは `setup.exe` のときだけ
-- 細かい修正はまとめて 1 回で push する
+- 要るなら PR も CI も Actions も使う。claude/ の枝の PR でも CI は回る（draft の間は Windows を止める）
+- bundle も回数を気にせず組んでよい（`release/v*` の枝か、手で回す）。手元なら `npm run bundle`
+- それでも、手元で確かめられることは手元で先に確かめる。CI は手元に無い環境（Windows）と配る形を見る所
+- 毎月 1 日の bundle と土曜の Windows の CI は、そのまま残す
 
 ## 外と繋ぐ
 
