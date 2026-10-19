@@ -15,6 +15,7 @@
  * 採れていないものが1つだけある（VRAM 不足）。
  * こちらの環境に GPU が無いため再現できていない。印を付けてある。
  */
+import { how } from '../cli/how.ts';
 
 export interface Diagnosis {
   cause?: string;
@@ -42,7 +43,7 @@ const PATTERNS: Pattern[] = [
     // 実測: error while loading shared libraries: libllama.so: cannot open shared object file
     match: /error while loading shared libraries|cannot open shared object file/i,
     cause: '共有ライブラリを見つけられていません。',
-    nextStep: '`npm run llama` で入れ直してください。'
+    nextStep: '`' + how('llama') + '` で入れ直してください。'
       + '実行ファイルだけを別の場所へ移すと、隣にあるライブラリを見失います。',
     verified: true,
   },
@@ -51,7 +52,7 @@ const PATTERNS: Pattern[] = [
     match: /invalid magic characters|expected 'GGUF'/i,
     cause: 'そのファイルは GGUF ではありません。',
     nextStep: '途中で切れているか、別の形式です。取り直してください'
-      + '（`npm run models -- --get` なら、取ってきたものを GGUF として確かめてから置きます）。',
+      + '（`' + how('models', '--get') + '` なら、取ってきたものを GGUF として確かめてから置きます）。',
     verified: true,
   },
   {
@@ -59,7 +60,7 @@ const PATTERNS: Pattern[] = [
     match: /failed to open GGUF file/i,
     cause: 'モデルのファイルを開けません。',
     nextStep: 'その場所にファイルがあるか確認してください。'
-      + '`npm run models` で、いま見えている一覧を出せます。',
+      + '`' + how('models') + '` で、いま見えている一覧を出せます。',
     verified: true,
   },
   {
@@ -73,7 +74,7 @@ const PATTERNS: Pattern[] = [
     // 実測: error: invalid argument: --this-flag-does-not-exist
     match: /invalid argument:|unknown argument|unrecognized/i,
     cause: 'llama-server が、渡した指定を理解できていません。',
-    nextStep: 'llama.cpp の版が古い可能性があります。`npm run llama -- --force` で入れ直すか、'
+    nextStep: 'llama.cpp の版が古い可能性があります。`' + how('llama', '--force') + '` で入れ直すか、'
       + '設定の runtime.commandArgs を見直してください。',
     verified: true,
   },
@@ -82,13 +83,13 @@ const PATTERNS: Pattern[] = [
     match: /out of memory|cudaMalloc failed|ggml_backend_cuda_buffer_type_alloc/i,
     cause: 'GPU のメモリが足りません。',
     nextStep: '層の載せ方を減らすか、もっと小さい量子化のモデルにしてください。'
-      + '`npm run models` で、この機械に載る組み合わせを計算できます。',
+      + '`' + how('models') + '` で、この機械に載る組み合わせを計算できます。',
     verified: false,
   },
   {
     match: /unknown model architecture|unsupported model/i,
     cause: 'この llama.cpp が、そのモデルの形式に対応していません。',
-    nextStep: '`npm run llama -- --force` で新しくしてください。'
+    nextStep: '`' + how('llama', '--force') + '` で新しくしてください。'
       + '新しい形式のモデルは、古い llama.cpp では読めません。',
     verified: false,
   },
@@ -97,7 +98,7 @@ const PATTERNS: Pattern[] = [
     match: /failed to load model|exiting due to model loading error/i,
     cause: 'モデルを読み込めませんでした。',
     nextStep: '上の出力に、より詳しい行が出ているはずです。'
-      + 'ファイルの場所と中身（`npm run models -- --inspect <ファイル>`）を確かめてください。',
+      + 'ファイルの場所と中身（`' + how('models', '--inspect <ファイル>') + '`）を確かめてください。',
     verified: true,
   },
 ];
@@ -114,7 +115,7 @@ const PATTERNS: Pattern[] = [
 export function explainExitCode(code: number | null): string {
   if (code === 3221225781) {  // 0xC0000135 STATUS_DLL_NOT_FOUND
     return '必要な DLL が隣にありません。CUDA 版なら実行時ライブラリ（cudart）が要ります。'
-      + '\n  npm run llama で入れ直すと、実行時ライブラリも一緒に取ってきます。';
+      + '\n  ' + how('llama') + ' で入れ直すと、実行時ライブラリも一緒に取ってきます。';
   }
   if (code === 3221225785) {  // 0xC0000139 STATUS_ENTRYPOINT_NOT_FOUND
     return 'DLL はありますが、版が合っていません。'

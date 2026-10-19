@@ -20,6 +20,7 @@
  * 二度目は「知っている名前で検索して」確認した気になり、また古いままだった。
  * 探すのではなく、確かめに行ってしまうと、持っている思い込みが強化されるだけになる。
  */
+import { how } from '../cli/how.ts';
 
 export interface CatalogEntry {
   id: string;
@@ -98,8 +99,8 @@ export function formatCatalog(runtimeId: 'llamacpp' | 'ollama' = 'llamacpp'): st
   lines.push('');
   lines.push('  この一覧は古くなります。新しいものは名前を直接渡してください。');
   lines.push(runtimeId === 'llamacpp'
-    ? '    npm run models -- --get Qwen/Qwen3-8B-GGUF     （置き場の名前をそのまま）'
-    : '    npm run models -- --get qwen3-coder:30b        （Ollama の名前をそのまま）');
+    ? `    ${how('models', '--get Qwen/Qwen3-8B-GGUF')}     （置き場の名前をそのまま）`
+    : `    ${how('models', '--get qwen3-coder:30b')}        （Ollama の名前をそのまま）`);
   return lines.join('\n');
 }
 

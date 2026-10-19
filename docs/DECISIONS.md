@@ -110,6 +110,7 @@
 - 174 回目（地図: 拡張子を除いた名前で起点に当てる）
 - public にした後の Actions の使い方
 - 176 回目（手がかり: test_foo.py と行数の数え方）
+- 179 回目（配った形で打てない npm run の案内を直す）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -14040,3 +14041,10 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 行数を `split('\n').length` で数えていたので、末尾が改行のファイルを 1 行多く数え、ちょうど 600 行で「大きすぎる」と言っていた
 - 残した件: 変更一覧の道を `trim()` しているので、空白で始まるファイル名が別の道になる。起きるのはまれなので、今回は触っていない
 - 触る場所: `isTestPath` と `lines`、試験は `test/initiative-176.test.ts`（直しを外すと 2 件とも落ちることを確かめた）
+
+## 2026-10-19  179 回目（配った形で打てない npm run の案内を直す）
+
+0.12.3 を Releases に置いたので、使う人が最初に通る所（モデルが無い・llama.cpp が動かない）の案内を見直した。
+- モデルが無いときの端末の案内（`src/cli/agent.ts`）、llama.cpp の診断（`src/runtime/llama-diagnosis.ts`）、モデルの一覧（`src/runtime/model-catalog.ts`）、selftest の理由が、`npm run …` と決め打ちしていた。配った形には npm が無いので、Windows の利用者には打てない一手だった。`how()`（配った形なら `AdaptiveAIStudio.cmd …`）で組む
+- 同じ書き方を増やさないよう、人に見せる文に決め打ちの `npm run` を書くと落ちる試験（`test/no-npm-hint.test.ts`）を足した。注釈と、モデルへの指示（役職の決まり）は数えない。直しを外すと落ちることを確かめた
+- 確かめていないこと: Windows の実機で、出た一手をそのまま打って動くか

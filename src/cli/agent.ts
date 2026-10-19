@@ -4,6 +4,7 @@
  * ローカルモデルがファイルを読み、差分を出し、承認を経て書き込む。
  * 何時間かかってもよい。打ち切るのは「進捗が無いとき」だけ。
  */
+import { how } from './how.ts';
 import { findCodeTool, findSymbolTool } from '../agent/tools/find.ts';
 import { defaultWorkRoot, installRoot } from '../core/home.ts';
 import { stdin, stdout } from 'node:process';
@@ -146,7 +147,7 @@ async function main(): Promise<void> {
   if (candidates.length === 0) {
     console.error(c.red(`使えるモデルがありません: ${ready.why ?? note}`));
     // 端末で打てる取り方を言う（「設定 → モデル」は画面にしか無く、端末の人は次に打つものが分からなかった）
-    console.error(c.dim('  取り方: npm run models -- --available で候補を見て、npm run models -- --get <名前> で取る。画面からなら npm run ui → モデル'));
+    console.error(c.dim(`  取り方: ${how('models', '--available')} で候補を見て、${how('models', '--get <名前>')} で取る。画面からなら ${how('ui')} → モデル`));
     await runtime.shutdown().catch(() => undefined);
     process.exit(1);
   }
