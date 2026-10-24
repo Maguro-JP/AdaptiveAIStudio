@@ -49,7 +49,9 @@ describe('片づけるもの・片づけないもの', () => {
 
   test('**壊れていたので脇へ移した写しは、30 日より古いものだけ挙げる**（中身を手で拾う間は残す。似た名前は触らない）', async () => {
     const { home } = await scratch();
-    const journalAside = (name: string) => `${name}.broken-2026-09-27T10-52-04-123Z`;
+    // 名前の時刻は今に寄せる。日付を決め打ちにすると、その日から 30 日たった日に落ち始める（2026-10-24 に落ちた）
+    const movedAt = new Date().toISOString().replace(/[:.]/g, '-');
+    const journalAside = (name: string) => `${name}.broken-${movedAt}`;
     // 本物の読み込みに写しを作らせる（名前の形を試験の中で決め打ちにすると、作る側と食い違っても通る）
     const { readJournal } = await import('../src/core/journal-file.ts');
     await writeFile(join(home, 'stride.json'), '{"broken"');
@@ -59,7 +61,7 @@ describe('片づけるもの・片づけないもの', () => {
     const aside = [...made, join(home, journalAside('proposals.json'))];
     await writeFile(aside[1]!, '{"broken"');
     await writeFile(join(home, 'idle.json.broken-mine'), 'x');           // 時刻の形でない
-    await writeFile(join(home, 'idle.json.broken-2026-09-27T10-52-04-123Z.txt'), 'x'); // 後ろに何か付いている
+    await writeFile(join(home, `idle.json.broken-${movedAt}.txt`), 'x'); // 後ろに何か付いている
     await mkdir(join(home, journalAside('dir.json')));                  // フォルダは触らない
     const soon = Date.now() + 5 * 86_400_000;
     const later = Date.now() + 31 * 86_400_000;
