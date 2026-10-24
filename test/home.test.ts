@@ -235,6 +235,12 @@ describe('bundle の形', () => {
     // はじめての人は、モデルが無いことと、その取り方を知らない。読む所に書いてあること
     assert.match(readme, /はじめて動かすとき/);
     assert.match(readme, /「これを取ってくる」/);
+    // 帯のボタンの名前と README の言い方がそろっていること（画面の文を変えたら README も直す）
+    assert.match(readme, /小さいモデル（約[\d.]+GB）を取ってくる/);
+    assert.match(await readFile(join(out, 'app', 'src', 'ui', 'web', 'app.js'), 'utf8'), /小さいモデル（約\$\{f\.approxGB\}GB）を取ってくる/);
+    assert.doesNotMatch(readme, /画面右上の ⚙/, '⚙ は左上にある');
+    assert.match(readme, /アプリのウィンドウで画面が開きます/);
+    assert.doesNotMatch(readme, /ブラウザで画面が開きます/, '画面はアプリのウィンドウで開く');
     // 書いた釦の名前が、画面に本当に在ること（画面で名前を変えると、案内が嘘になる）
     assert.match(await readFile(join(out, 'app', 'src', 'ui', 'web', 'index.html'), 'utf8'), />これを取ってくる</);
   });

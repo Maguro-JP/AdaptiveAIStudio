@@ -151,4 +151,25 @@ describe('入口を、実際に押す', () => {
     assert.equal(got.code, 0, `${got.code}\n${got.out}`);
     assert.match(got.out, /HANDED doctor/, `仕事を渡していない:\n${got.out}`);
   });
+
+  test('**何も渡さずに押すと、画面（ui）を開く仕事を渡し、入口はすぐ戻る**', onlyWindows, async () => {
+    // 押すとアプリのウィンドウが開く形。入口は ui を別の（最小化した）コンソールへ渡して、自分は待たずに終わる。
+    const dir = await tempDir('aas-window-');
+    const from = launcherPath();
+    assert.ok(from, '押す入口（launcher.cmd / AdaptiveAIStudio.cmd）が見つかりません');
+    await copyFile(from, join(dir, 'AdaptiveAIStudio.cmd'));
+    const { mkdir, readFile } = await import('node:fs/promises');
+    await mkdir(join(dir, 'app'), { recursive: true });
+    const mark = join(dir, 'handed.txt');
+    await writeFile(join(dir, 'app', 'start.cmd'),
+      `@echo off\r\necho %1> "${mark}"\r\nexit /b 0\r\n`, 'latin1');
+    const got = await runBatch('AdaptiveAIStudio.cmd', [], dir, join(dir, 'home'));
+    assert.equal(got.code, 0, `${got.code}\n${got.out}`);
+    let handed = '';
+    for (let i = 0; i < 50 && !handed; i++) {
+      handed = await readFile(mark, 'utf8').catch(() => '');
+      if (!handed) await new Promise((r) => setTimeout(r, 200));
+    }
+    assert.match(handed, /^ui/, `画面を開く仕事を渡していない: ${JSON.stringify(handed)}`);
+  });
 });

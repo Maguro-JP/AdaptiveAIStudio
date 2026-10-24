@@ -79,14 +79,25 @@ Section "install"
   FileOpen $0 "$INSTDIR\${APP}.cmd" w
   FileWrite $0 "@echo off$\r$\n"
   FileWrite $0 'set "AAS_HOME=$COMMONPROGRAMDATA\${APP}"$\r$\n'
+  ; 何も渡さずに押されたら、画面をアプリのウィンドウで開く（黒いコンソールは最小化して下に置く）。
+  ; 番号で選ぶ一覧は  ${APP}.cmd menu  で出る。中身は launcher.cmd と同じ分かれ方。
+  FileWrite $0 'if "%~1"=="" goto :window$\r$\n'
+  FileWrite $0 'if /i "%~1"=="menu" goto :menu$\r$\n'
   FileWrite $0 'call "%~dp0app\start.cmd" %*$\r$\n'
+  FileWrite $0 'exit /b$\r$\n'
+  FileWrite $0 ':window$\r$\n'
+  FileWrite $0 'start "${APP}" /min cmd /c ""%~dp0app\start.cmd" ui"$\r$\n'
+  FileWrite $0 'exit /b$\r$\n'
+  FileWrite $0 ':menu$\r$\n'
+  FileWrite $0 'call "%~dp0app\start.cmd"$\r$\n'
   FileClose $0
 
   ; ショートカット。デスクトップとスタートメニューに1つずつ。
   ; 絵柄はまだ用意していない。無いものを指すと、既定の絵柄すら出ないことがある。
-  CreateShortcut "$DESKTOP\${APP}.lnk" "$INSTDIR\${APP}.cmd"
+  ; 押すとアプリのウィンドウが開く。入口の黒いコンソールは最小化して出す（一瞬映らないように）。
+  CreateShortcut "$DESKTOP\${APP}.lnk" "$INSTDIR\${APP}.cmd" "" "" "" SW_SHOWMINIMIZED
   CreateDirectory "$SMPROGRAMS\${APP}"
-  CreateShortcut "$SMPROGRAMS\${APP}\${APP}.lnk" "$INSTDIR\${APP}.cmd"
+  CreateShortcut "$SMPROGRAMS\${APP}\${APP}.lnk" "$INSTDIR\${APP}.cmd" "" "" "" SW_SHOWMINIMIZED
   CreateShortcut "$SMPROGRAMS\${APP}\アンインストール.lnk" "$INSTDIR\Uninstall.exe"
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"

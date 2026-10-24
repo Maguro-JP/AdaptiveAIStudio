@@ -10,6 +10,7 @@
  * 勝手に動く見回りは、これまでどおり黙る（30秒ごとに同じ一行で記録が埋まる）。
  * **押されたときだけ出す。**見せるかどうかは呼ぶ側が決める。
  */
+import { createServer, type AddressInfo } from 'node:net';
 import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
@@ -31,6 +32,14 @@ afterEach(async () => {
  * 設定へ書いてある名前で進む道に入り、**モデルが在ることになってしまう。**
  * 利用者が通るのは `loadConfig()` の側なので、そちらを通す。
  */
+async function freePort(): Promise<number> {
+  const srv = createServer();
+  await new Promise<void>((ok) => srv.listen(0, '127.0.0.1', ok));
+  const { port } = srv.address() as AddressInfo;
+  await new Promise((ok) => srv.close(ok));
+  return port;
+}
+
 async function bare(extra: Record<string, unknown> = {}): Promise<{ work: string; config: AasConfig }> {
   const home = await tempDir('aas-think-');
   process.env.AAS_HOME = home;
@@ -40,7 +49,9 @@ async function bare(extra: Record<string, unknown> = {}): Promise<{ work: string
   await mkdir(work, { recursive: true });
   await mkdir(join(home, 'models'), { recursive: true });
   await writeFile(process.env.AAS_CONFIG, JSON.stringify({
-    runtime: { kind: 'inproc' }, agent: { root: work, approval: 'auto' }, ...extra,
+    // 口は空いているものにする。既定の 4177 だと、同じ機械で開いている画面のモデルに繋ぎ、
+    // 「モデルが無い」はずの試験がモデルを見つける（画面を開いたまま回して落ちた）
+    runtime: { kind: 'inproc', basePort: await freePort() }, agent: { root: work, approval: 'auto' }, ...extra,
   }, null, 2));
   return { work, config: loadConfig().config };
 }

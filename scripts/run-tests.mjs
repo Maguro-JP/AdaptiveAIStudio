@@ -12,7 +12,7 @@
  *   node scripts/run-tests.mjs gguf env   名前に含むものだけ
  */
 import { readdirSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -138,6 +138,16 @@ function main() {
   const scratch = join(scratchRoot, `run-${process.pid}`);
   mkdirSync(scratch, { recursive: true });
   env.TMPDIR = scratch; env.TMP = scratch; env.TEMP = scratch;
+  /*
+   * 家（HOME）も回ごとの場所へ向ける。AAS_HOME を立て忘れた試験は `~/.aas` へ書く
+   * （記憶が `~/.aas/memory.jsonl` に溜まり、root が試験の一時フォルダの行が並んでいた）。
+   * 使う人の家に試験の跡を残さない。git の設定だけは元の家のものを読ませる。
+   */
+  const realHome = homedir();
+  const fakeHome = join(scratch, 'home');
+  mkdirSync(fakeHome, { recursive: true });
+  env.HOME = fakeHome; env.USERPROFILE = fakeHome;
+  if (!env.GIT_CONFIG_GLOBAL && existsSync(join(realHome, '.gitconfig'))) env.GIT_CONFIG_GLOBAL = join(realHome, '.gitconfig');
 
   const child = spawn(process.execPath, args, { cwd: root, env, stdio: ['inherit', 'pipe', 'inherit'] });
   // 出力はそのまま流す（見ている人の見え方は変えない）。溜めておいて、終わりに読む。

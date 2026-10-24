@@ -3,9 +3,13 @@
  * 起動は一手で済ませたいので、待つ・開く・止めるをここに閉じ込める。
  */
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { stateDir } from '../core/home.ts';
 import { loadConfig, ConfigBroken, DEFAULT_CONFIG } from '../config.ts';
 import { UiServer, RESTART_EXIT } from '../ui/server.ts';
 import { openerFor } from '../core/opener.ts';
+import { findAppBrowser, appWindowCommand, HANDED_OFF_MS } from '../core/app-window.ts';
 import { CannotListen } from '../core/listen.ts';
 import { createStopper } from './stop.ts';
 
@@ -76,12 +80,32 @@ console.log(`  AdaptiveAIStudio — ${url}`);
 console.log('  Ctrl-C で終了します。\n');
 
 // 起動はクリックだけで済ませたいので、開くところまでやる。
+// 開くのはアプリのウィンドウ（Edge か Chrome の --app）。閉じたら本体も止める。
+// どちらも無い機械だけ、ブラウザのタブで開く。
+let onWindowClosed: (() => void) | undefined;
 if (process.env.AAS_UI_NO_OPEN !== '1') {
-  const opener = openerFor(process.platform);
-  // 開けない環境（サーバ等）でも本体は動かす。
-  spawn(opener, [url], { stdio: 'ignore', detached: true }).on('error', () => {
-    console.log('  ブラウザを開けませんでした。上の場所を手で開いてください。');
-  }).unref();
+  const browser = findAppBrowser(process.platform, process.env, existsSync);
+  if (browser) {
+    const { command, args } = appWindowCommand(browser, url, join(stateDir(), 'window'));
+    const openedAt = Date.now();
+    const win = spawn(command, args, { stdio: 'ignore' });
+    win.on('error', () => console.log('  ウィンドウを開けませんでした。上の場所を手で開いてください。'));
+    win.on('exit', () => {
+      if (Date.now() - openedAt < HANDED_OFF_MS) {
+        console.log('  既に開いているウィンドウへ渡しました。閉じるときは、このウィンドウで Ctrl-C を押してください。');
+        return;
+      }
+      console.log('  ウィンドウを閉じたので終わります。');
+      onWindowClosed?.();
+    });
+  } else {
+    const opener = openerFor(process.platform);
+    console.log('  アプリのウィンドウを開く部品（Edge か Chrome）が見つからないので、ブラウザで開きます。');
+    // 開けない環境（サーバ等）でも本体は動かす。
+    spawn(opener, [url], { stdio: 'ignore', detached: true }).on('error', () => {
+      console.log('  ブラウザを開けませんでした。上の場所を手で開いてください。');
+    }).unref();
+  }
 }
 
 // 起動したら、裏でモデルを読んでおく。最初の送信で数分待たせない。
@@ -101,5 +125,6 @@ const stop = createStopper({
   log: (line) => console.log(line),
   waitMs: STOP_WAIT_MS,
 });
+onWindowClosed = stop;
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
