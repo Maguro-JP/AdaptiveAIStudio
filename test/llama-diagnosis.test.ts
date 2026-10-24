@@ -13,6 +13,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { diagnose, describeFailure, explainExitCode } from '../src/runtime/llama-diagnosis.ts';
+import { how } from '../src/cli/how.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const load = (name: string) => readFile(join(here, 'fixtures', 'llama', `${name}.txt`), 'utf8');
@@ -53,7 +54,7 @@ describe('本物の落ち方から見分ける', () => {
 
   test('共有ライブラリを見失っている', () => {
     assert.match(diagnose(missingLib).cause ?? '', /共有ライブラリ/);
-    assert.match(diagnose(missingLib).nextStep ?? '', /npm run llama/);
+    assert.ok((diagnose(missingLib).nextStep ?? '').includes(how('llama')));
   });
 
   test('見覚えが無ければ、見立てを付けない', () => {
@@ -113,7 +114,7 @@ describe('黙って落ちたとき', () => {
     const text = describeFailure(3221225781, '');
     assert.match(text, /DLL/);
     assert.match(text, /cudart/);
-    assert.match(text, /npm run llama/, '次の一手が無い');
+    assert.ok(text.includes(how('llama')), '次の一手が無い');
   });
 
   test('版違いも見分ける', () => {

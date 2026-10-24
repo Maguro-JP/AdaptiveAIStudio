@@ -117,6 +117,7 @@
 - 186 回目（selftest がテストを回す前に、回していることを言う）
 - 187 回目（日付を決め打ちにした cleanup のテストが、30 日たって落ちた）
 - 188 回目（テストの一時フォルダを回ごとにまとめ、止めた回の分を消す）
+- 189 回目（組んだ portable で、本物のモデルが答えを返すところまで通した）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -14086,3 +14087,9 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - テストを途中で止めると、after で消すはずの一時フォルダが `/tmp` の直下に残る。数百個たまり、pre-push が ENOSPC で 15 件落ちた
 - `scripts/run-tests.mjs` が回ごとに `<tmpdir>/aas-tests/run-<pid>` を作り、TMPDIR・TMP・TEMP をそこへ向ける。終わりに消す。前に止めた回の分は、その pid が居なければ次の回の始めに消す
 - テスト: `test/run-tests-scratch.test.ts`（居ない pid の分だけ消す、テストが回ごとの場所で走る）
+
+## 2026-10-24  189 回目（組んだ portable で、本物のモデルが答えを返すところまで通した）
+
+- このコンテナで portable を組み（node-llama-cpp は配る版と同じく `npm i --no-save` で入れた）、`start.sh llama`、`start.sh models --get`（Qwen3.5-4B-Q4_K_M、2.6GB）、`start.sh selftest` の順に回した。「送って返る」は OK（答え「2」）
+- 配る形の中の selftest では、テスト 2 件（`test/llama-diagnosis.test.ts`）が落ちた。案内を `how()` で組むようにした後も、テストが `npm run llama` に決め打ちで照らしていた。`how('llama')` で照らすようにした
+- `npm run bundle` を手元で回すと、node-llama-cpp を入れていない限り、組んだものにも入らない。そのときの selftest の「送って返る」は NG になる（配る版は release.yml が入れる）
