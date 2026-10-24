@@ -118,6 +118,7 @@
 - 187 回目（日付を決め打ちにした cleanup のテストが、30 日たって落ちた）
 - 188 回目（テストの一時フォルダを回ごとにまとめ、止めた回の分を消す）
 - 189 回目（組んだ portable で、本物のモデルが答えを返すところまで通した）
+- 190 回目（本物のモデルの確かめで、口の番号を決め打ちにしない）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -14093,3 +14094,9 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - このコンテナで portable を組み（node-llama-cpp は配る版と同じく `npm i --no-save` で入れた）、`start.sh llama`、`start.sh models --get`（Qwen3.5-4B-Q4_K_M、2.6GB）、`start.sh selftest` の順に回した。「送って返る」は OK（答え「2」）
 - 配る形の中の selftest では、テスト 2 件（`test/llama-diagnosis.test.ts`）が落ちた。案内を `how()` で組むようにした後も、テストが `npm run llama` に決め打ちで照らしていた。`how('llama')` で照らすようにした
 - `npm run bundle` を手元で回すと、node-llama-cpp を入れていない限り、組んだものにも入らない。そのときの selftest の「送って返る」は NG になる（配る版は release.yml が入れる）
+
+## 2026-10-24  190 回目（本物のモデルの確かめで、口の番号を決め打ちにしない）
+
+- node-llama-cpp を手元に入れると pre-push に「本物のモデルで通す」（`scripts/real-model.mjs`）が加わる。そこで agent.ts が「保存先に GGUF が在るのに落ちる」と出た
+- 原因は製品ではなく、確かめが口 41771 を決め打ちにしていたこと。このコンテナでは外側の何かが 41771 を使っていて、Node から listen すると EADDRINUSE になる（41772 は空き）
+- 口は、その場で空いているものを 3 つ取って渡す形にした。直した後、`node scripts/real-model.mjs` が最後まで通った

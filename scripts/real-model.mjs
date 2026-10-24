@@ -12,6 +12,7 @@
  */
 import { PRIORITY_HEADER, Priority } from '../src/providers/contract.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -454,7 +455,15 @@ async function cliReachesModel() {
     }));
     return at;
   };
-  const config = configFor(41771);
+  // 口は、その場で空いているものを取る。番号を決め打ちにすると、走らせる機械で
+  // 他のものがその口を使っているだけで「GGUF が在るのに落ちる」と出る（41771 で起きた）
+  const freePort = () => new Promise((ok, ng) => {
+    const srv = createServer();
+    srv.once('error', ng);
+    srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => ok(port)); });
+  });
+  const ports = [await freePort(), await freePort(), await freePort()];
+  const config = configFor(ports[0]);
   const work = join(home, 'work');
   mkdirSync(work, { recursive: true });
   writeFileSync(join(home, 'tasks.json'), JSON.stringify([
@@ -478,9 +487,9 @@ async function cliReachesModel() {
     // どれも「使えるモデルがありません」で落ちないこと。
     // 名前が出ることまで見る。**落ちなかっただけでは、辿り着いた証拠にならない。**
     for (const [entry, args, want, port] of [
-      ['agent.ts', [], /担当モデル: inproc:tiny\.gguf/, 41771],
-      ['main.ts', [], /モデル: inproc:tiny\.gguf/, 41772],
-      ['team.ts', [join(home, 'tasks.json')], /レーン default: inproc:tiny\.gguf/, 41773],
+      ['agent.ts', [], /担当モデル: inproc:tiny\.gguf/, ports[0]],
+      ['main.ts', [], /モデル: inproc:tiny\.gguf/, ports[1]],
+      ['team.ts', [join(home, 'tasks.json')], /レーン default: inproc:tiny\.gguf/, ports[2]],
     ]) {
       const text = await say(entry, args, configFor(port));
       if (/使えるモデルがありません/.test(text)) {
