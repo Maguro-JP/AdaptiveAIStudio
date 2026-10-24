@@ -73,11 +73,14 @@ test('管理下のファイルが、このリポジトリ以外の Maguro-JP の
 
 /** 人の反応を書き留めた形。文書（*.md）でだけ見る（製品の機能の語と重なるため、コードは見ない）。 */
 const REACTION = /怒られ|言い直させ|理不尽|言い聞かせ/;
+/** 見つける側の一覧。避ける言い方を例として並べているので数えない（配られたスキルで、ここでは書き換えない）。 */
+const LISTS_THE_PATTERNS = (f: string) => f.startsWith('.claude/skills/content-audit/');
 
 test('文書に、人の反応を書き留めた言い方が無い', { skip: noGit }, () => {
   const out = execFileSync('git', ['ls-files', '-z', '*.md'], { cwd: root, encoding: 'utf8' });
   const hits: string[] = [];
   for (const f of out.split('\0').filter(Boolean)) {
+    if (LISTS_THE_PATTERNS(f)) continue;
     readFileSync(join(root, f), 'utf8').split('\n').forEach((line, i) => {
       if (REACTION.test(line)) hits.push(`${f}:${i + 1}: ${line.trim().slice(0, 60)}`);
     });
@@ -88,6 +91,7 @@ test('文書に、人の反応を書き留めた言い方が無い', { skip: noG
 test('コードとコメントにも、人の反応を書き留めた言い方が無い', { skip: noGit }, () => {
   const hits: string[] = [];
   for (const f of trackedTextFiles()) {
+    if (LISTS_THE_PATTERNS(f)) continue;
     readFileSync(join(root, f), 'utf8').split('\n').forEach((line, i) => {
       if (/怒られ|理不尽/.test(line)) hits.push(`${f}:${i + 1}`);
     });
