@@ -1,6 +1,7 @@
 /**
  * selftest が、読めなかった理由を言い分ける所。試験から呼べるように、走らせる本体（`selftest.ts`）から分けてある。
  */
+import { how } from './how.ts';
 
 /**
  * node-llama-cpp が読み込めなかったとき、「入っていない」か（undefined）、「在るのに壊れている」か（false）。
@@ -20,6 +21,6 @@ export function llamaLoadVerdict(e: unknown): undefined | false {
 export function modelsDirProblem(e: unknown, dir: string): string {
   const code = (e as NodeJS.ErrnoException)?.code;
   return code === 'ENOENT'
-    ? `${dir} がありません（npm run models -- --get で取ってきます）`
+    ? `${dir} がありません（${how('models', '--get')} で取ってきます）`
     : `${dir} を読めません（${code ?? (e as Error)?.message ?? '理由不明'}）。権限か、フォルダかを確かめてください`;
 }

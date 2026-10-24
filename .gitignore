@@ -19,3 +19,7 @@ selftest-*.txt
 # 画面を押して回る確かめ（scripts/sweep.mjs）が作業場の根に作って消す試しファイル。
 # 確かめが走っている最中に git add -A すると拾う（実際に commit に入れた）。
 sweep-reopen-probe.txt
+
+# Python のフックが走るたびに書き直す。管理すると作業ツリーが毎回汚れ、pre-push が止まる
+__pycache__/
+*.pyc
