@@ -11,7 +11,8 @@
  *   node scripts/run-tests.mjs            すべて
  *   node scripts/run-tests.mjs gguf env   名前に含むものだけ
  */
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -124,12 +125,27 @@ function main() {
   const env = { ...process.env };
   for (const key of AAS_ENV) delete env[key];
 
+  /*
+   * 試験の一時フォルダを、回ごとの場所に寄せる。
+   *
+   * 試験は後片付けを after で行うので、途中で止める（時間切れ・Ctrl-C）と残る。
+   * /tmp の直下に数百個残り、ディスクが埋まって次の回の pre-push が ENOSPC で落ちた。
+   * 回ごとのフォルダにまとめ、終わりに消す。前に止めた回の分は、その回のプロセスが
+   * もう居なければ、ここで消す（動いている別の回の分には触らない）。
+   */
+  const scratchRoot = join(tmpdir(), 'aas-tests');
+  sweepStale(scratchRoot);
+  const scratch = join(scratchRoot, `run-${process.pid}`);
+  mkdirSync(scratch, { recursive: true });
+  env.TMPDIR = scratch; env.TMP = scratch; env.TEMP = scratch;
+
   const child = spawn(process.execPath, args, { cwd: root, env, stdio: ['inherit', 'pipe', 'inherit'] });
   // 出力はそのまま流す（見ている人の見え方は変えない）。溜めておいて、終わりに読む。
   let said = '';
   child.stdout.on('data', (c) => { process.stdout.write(c); said += c.toString('utf8'); });
   child.on('error', (e) => { console.error(e.message); process.exit(1); });
   child.on('close', (code, signal) => {
+    rmSync(scratch, { recursive: true, force: true });
     const names = failedNames(said);
     if (names.length > 0) {
       console.error(`\n落ちた試験 ${names.length} 件:`);
@@ -146,6 +162,24 @@ function main() {
     }
     process.exit(code ?? (signal ? 1 : 0));
   });
+}
+
+/** 止めた回が残した `run-<pid>` を消す。その pid が生きている間は触らない。 */
+export function sweepStale(dir, alive = pidAlive) {
+  let names = [];
+  try { names = readdirSync(dir); } catch { return []; }
+  const removed = [];
+  for (const name of names) {
+    const m = /^run-(\d+)$/.exec(name);
+    if (!m || alive(Number(m[1]))) continue;
+    rmSync(join(dir, name), { recursive: true, force: true });
+    removed.push(name);
+  }
+  return removed;
+}
+
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
 /*
