@@ -124,6 +124,7 @@
 - 193 回目（テストの家を回ごとの場所へ向け、使う人の ~/.aas に書かない）
 - 194 回目（配る形の README の「はじめて」を、実際の画面の場所と名前にそろえる）
 - 195 回目（画面をアプリのウィンドウで開き、押すとすぐ開く入口にする）
+- 196 回目（モデルの保存先を、共有の C:\LLM\gguf にそろえる）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -14141,3 +14142,12 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 選ばなかった案: Electron・Tauri（実行時の依存とビルドが増える）、VBScript で黒いコンソールを隠す（Windows 11 で VBScript が段階的に外される）
 - 確かめたこと: Linux で偽のブラウザ（5 秒待って終わる）を置き、`--app` と `--user-data-dir` で起こされ、閉じると ui が 0 で終わることを見た。Windows で押したときの形は `test/launcher-run.test.ts`（Windows の CI だけで走る）に足した。Windows の実機で Edge のウィンドウが開くのは、まだ見ていない
 - 置き場所（Program Files と ProgramData、利用者ごとは LocalAppData）は CLAUDE.md の表どおりで、変えていない
+
+## 2026-10-24  196 回目（モデルの保存先を、共有の C:\LLM\gguf にそろえる）
+
+- 新しく入った決まり（`.claude/skills/shared-models`）に合わせ、Windows のモデルの保存先を `C:\LLM\gguf` にした。`LLM_HOME` があれば、どの OS でもその下の `gguf`。Windows 以外で `LLM_HOME` が無ければ、これまでどおり（`src/core/home.ts` の `sharedModelsDir`）
+- 前の保存先（`<AAS_HOME>/models` か `%ProgramData%\AdaptiveAIStudio\models`）にだけモデルがある間は、前の保存先を使い続ける。入れ直した途端に「モデルがありません」にしないため。共有の保存先に 1 つでも入れば、そちらへ移る。前の保存先のものは消さない・動かさない
+- インストーラは `C:\LLM\gguf` と `C:\LLM\huggingface` を作り、`C:\LLM\README.txt` が無ければ書き、Users に書き込みを許す。アンインストールでは消さない（ほかのアプリも使う）
+- テストは共有の保存先を見ない（`scripts/run-tests.mjs` が `AAS_TESTING=1` を立て、`LLM_HOME` を外す）
+- CLAUDE.md の「`C:` の直下にフォルダを作らない」は、`C:\LLM` を除く形に直した
+- まだのこと: 前の保存先と共有の保存先を同時に一覧に出すこと（今はどちらか一方）。インストーラの書き換えは NSIS で組んでいないので、release で組むまで確かめていない

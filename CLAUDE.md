@@ -129,8 +129,10 @@
 | プログラム | フォルダの中 | `%LOCALAPPDATA%\Programs\AdaptiveAIStudio\` | `%ProgramFiles%\AdaptiveAIStudio\` |
 | データ | 隣の `data\` | 同じ場所の `data\` | `%ProgramData%\AdaptiveAIStudio\` |
 
-- `C:` の直下にフォルダを作らない。OS が用意している置き場所を使う
-- 利用者名が全角だとパスも全角になる。困るのはモデルだけなので、モデルだけ
+- モデルは自作アプリどうしで共有する `C:\LLM\gguf` に置く（`LLM_HOME` があればその下。利用者が決めたこと、
+  `.claude/skills/shared-models`）。前の保存先にだけモデルがある間は、前の保存先を使い続ける（`modelsDir`）
+- `C:` の直下には `C:\LLM` のほかにフォルダを作らない。ほかは OS が用意している保存先所を使う
+- 利用者名が全角だとパスも全角になる。`LLM_HOME` を外した Windows 以外の形でだけ、モデルを
   `%ProgramData%\AdaptiveAIStudio\models` へ逃がす（`asciiModelsDir`）
 
 ```

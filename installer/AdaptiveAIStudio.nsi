@@ -52,23 +52,27 @@ Section "install"
   ; 「ユーザー」になるので、**名前ではなく番号で指す**。
   CreateDirectory "$COMMONPROGRAMDATA\${APP}"
 
-  ; モデルの置き場は、**入れるときに作る。**
-  ; 「GGUF を1つ置くだけ」と案内しておいて置き場が無いのでは、案内にならない。
-  ; 何を置くのかも、その場に書いておく（設定画面まで辿り着けない人がいる）。
-  CreateDirectory "$COMMONPROGRAMDATA\${APP}\models"
-  FileOpen $0 "$COMMONPROGRAMDATA\${APP}\models\README.txt" w
+  ; モデルの保存先は、自作アプリどうしで共有する C:\LLM\gguf（.claude/skills/shared-models）。
+  ; 数 GB のモデルをアプリごとに持たない。入れるときに作り、何を置くのかもその場に書いておく。
+  ; ほかのアプリが先に作っていれば、説明は書き換えない。消すときも、ここは消さない（共有の保存先のため）。
+  StrCpy $1 $WINDIR 2
+  CreateDirectory "$1\LLM\gguf"
+  CreateDirectory "$1\LLM\huggingface"
+  IfFileExists "$1\LLM\README.txt" llmReadmeDone
+  FileOpen $0 "$1\LLM\README.txt" w
   ; メモ帳が CP932 として読まないよう、先頭に印を書く。
   FileWriteWord $0 65279
-  FileWriteUTF16LE $0 "このフォルダに .gguf のファイルを1つ置くと、${APP} がそれを読みます。$\r$\n"
+  FileWriteUTF16LE $0 "自作アプリどうしで共有する AI のモデルの保存先です。$\r$\n"
   FileWriteUTF16LE $0 "$\r$\n"
-  FileWriteUTF16LE $0 "取ってくる先の例:$\r$\n"
-  FileWriteUTF16LE $0 "  https://huggingface.co/Qwen （名前に GGUF が付いたもの）$\r$\n"
+  FileWriteUTF16LE $0 "  gguf\         言葉のモデル（.gguf）。${APP} はここを読みます$\r$\n"
+  FileWriteUTF16LE $0 "  huggingface\  Hugging Face の形のままのモデル$\r$\n"
   FileWriteUTF16LE $0 "$\r$\n"
+  FileWriteUTF16LE $0 "gguf に .gguf のファイルを1つ置くと読みます。${APP} の画面からも取ってこられます。$\r$\n"
   FileWriteUTF16LE $0 "大きさの目安: 8GB の機械なら 3B〜4B の Q4_K_M（2GB 前後）。$\r$\n"
-  FileWriteUTF16LE $0 "記憶より大きいものは読めません。読む前に止めて、そう言います。$\r$\n"
-  FileWriteUTF16LE $0 "$\r$\n"
-  FileWriteUTF16LE $0 "置いたあと、${APP} を開き直すか、設定 → モデル で選び直してください。$\r$\n"
+  FileWriteUTF16LE $0 "ほかのアプリも使うので、このフォルダはアンインストールしても消えません。$\r$\n"
   FileClose $0
+  llmReadmeDone:
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$1\LLM" /grant *S-1-5-32-545:(OI)(CI)M /T'
 
   ; 権限は、置き場を作ってから一度で付ける（/T で下まで）。
   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$COMMONPROGRAMDATA\${APP}" /grant *S-1-5-32-545:(OI)(CI)M /T'

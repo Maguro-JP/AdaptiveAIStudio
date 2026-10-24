@@ -8,7 +8,7 @@ import { test, describe, afterEach, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { homedir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
-import { writeFile, readFile } from 'node:fs/promises';
+import { writeFile, readFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { tempDir } from './tmp.ts';
@@ -864,5 +864,44 @@ describe('いま居る場所がプログラムの中か', () => {
   test('Windows 以外は、大文字と小文字を区別する', () => {
     assert.equal(insideDir('/opt/AAS/app', '/opt/aas', 'linux'), false);
     assert.equal(insideDir('/opt/aas/app', '/opt/aas', 'linux'), true);
+  });
+});
+
+describe('共有のモデルの保存先（C:\\LLM、LLM_HOME）', () => {
+  test('Windows は C:\\LLM\\gguf、LLM_HOME があればその下の gguf', async () => {
+    const { sharedModelsDir } = await import('../src/core/home.ts');
+    assert.equal(sharedModelsDir('win32', {}), 'C:\\LLM\\gguf');
+    assert.equal(sharedModelsDir('win32', { SystemDrive: 'D:' }), 'D:\\LLM\\gguf');
+    assert.equal(sharedModelsDir('win32', { LLM_HOME: '/x/llm' }), join('/x/llm', 'gguf'));
+    assert.equal(sharedModelsDir('linux', { LLM_HOME: '/x/llm' }), join('/x/llm', 'gguf'));
+  });
+
+  test('Windows 以外は LLM_HOME が無ければ使わない。テストの中では既定の C:\\LLM を見ない', async () => {
+    const { sharedModelsDir } = await import('../src/core/home.ts');
+    assert.equal(sharedModelsDir('linux', {}), undefined);
+    assert.equal(sharedModelsDir('win32', { AAS_TESTING: '1' }), undefined);
+  });
+
+  test('前の保存先にだけモデルがあれば前の保存先、共有の保存先に入ればそちら', async () => {
+    const llm = await tempDir('aas-llm-');
+    const home = await tempDir('aas-oldhome-');
+    const saved = { ...process.env };
+    try {
+      process.env.AAS_HOME = home;
+      delete process.env.AAS_MODELS_DIR;
+      process.env.LLM_HOME = llm;
+      await mkdir(join(home, 'models'), { recursive: true });
+      // どちらにも無い: 共有の保存先（新しく取るのはそこ）
+      assert.equal(modelsDir(), join(llm, 'gguf'));
+      await writeFile(join(home, 'models', 'old.gguf'), 'GGUF');
+      assert.equal(modelsDir(), join(home, 'models'), '前に取ったモデルを見失っている');
+      await mkdir(join(llm, 'gguf'), { recursive: true });
+      await writeFile(join(llm, 'gguf', 'new.gguf'), 'GGUF');
+      assert.equal(modelsDir(), join(llm, 'gguf'));
+    } finally {
+      for (const k of ['AAS_HOME', 'AAS_MODELS_DIR', 'LLM_HOME']) {
+        if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+      }
+    }
   });
 });
