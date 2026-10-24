@@ -147,6 +147,9 @@ function main() {
   const fakeHome = join(scratch, 'home');
   mkdirSync(fakeHome, { recursive: true });
   env.HOME = fakeHome; env.USERPROFILE = fakeHome;
+  // 共有のモデルの保存先（C:\\LLM、LLM_HOME）もテストからは見ない（src/core/home.ts の sharedModelsDir）
+  env.AAS_TESTING = '1';
+  delete env.LLM_HOME;
   if (!env.GIT_CONFIG_GLOBAL && existsSync(join(realHome, '.gitconfig'))) env.GIT_CONFIG_GLOBAL = join(realHome, '.gitconfig');
 
   const child = spawn(process.execPath, args, { cwd: root, env, stdio: ['inherit', 'pipe', 'inherit'] });

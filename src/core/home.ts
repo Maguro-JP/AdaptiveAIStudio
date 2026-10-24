@@ -15,7 +15,7 @@
  * 新しく触るのは AAS_HOME だけでよい。
  */
 import { homedir } from 'node:os';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join, dirname, resolve, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -178,11 +178,41 @@ export function asciiModelsDir(
   return join(programData, 'AdaptiveAIStudio', 'models');
 }
 
+/**
+ * 自作アプリどうしで共有するモデルの保存先（`C:\LLM\gguf`）。
+ *
+ * モデルは数 GB あるので、アプリごとに持たず 1 か所で共有する（利用者が決めたこと。
+ * `.claude/skills/shared-models`）。`LLM_HOME` があればそこ、Windows では無ければ `C:\LLM`。
+ * Windows 以外は `LLM_HOME` が無ければ使わない（これまでの保存先のまま）。
+ *
+ * テストの中（AAS_TESTING=1）では、既定の `C:\LLM` を見ない。使う人の共有の保存先を
+ * テストが読んだり書いたりしないため（`scripts/run-tests.mjs` が立てる）。
+ */
+export function sharedModelsDir(
+  platform: NodeJS.Platform = process.platform,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  const given = env.LLM_HOME?.trim();
+  if (given) return join(given, 'gguf');
+  if (platform !== 'win32' || env.AAS_TESTING === '1') return undefined;
+  return `${env.SystemDrive?.trim() || 'C:'}\\LLM\\gguf`;
+}
+
 /** GGUF の置き場。 */
 export function modelsDir(root?: string): string {
   // ほかの保存先と同じく、空白だけの指定は無いものとし、前後の空白は落とす（空白だけの名前のフォルダを保存先にしていた）
   const given = nonEmptyEnv('AAS_MODELS_DIR');
   if (given) return given;
   const home = aasHome(root);
-  return asciiModelsDir(home) ?? join(home, 'models');
+  const own = asciiModelsDir(home) ?? join(home, 'models');
+  const shared = sharedModelsDir();
+  if (!shared) return own;
+  // 前の保存先にだけモデルがある人は、そのまま前の保存先を使う（入れ直した途端に「モデルがありません」にしない）。
+  // 共有の保存先に 1 つでも入れば、そちらへ移る。前の保存先のものは消さない・動かさない。
+  if (!hasGguf(shared) && hasGguf(own)) return own;
+  return shared;
+}
+
+function hasGguf(dir: string): boolean {
+  try { return readdirSync(dir).some((n) => n.toLowerCase().endsWith('.gguf')); } catch { return false; }
 }
