@@ -688,7 +688,7 @@
 `C:\AAS` や `C:\ai` を作らない。消し忘れて残る場所であり、汚してよい場所ではない。
 Windows が用意している保存先を使う。
 
-| | 保存先所 |
+| | 置き場所 |
 |---|---|
 | 利用者ごと（管理者権限なし） | `%LOCALAPPDATA%\Programs\AdaptiveAIStudio\` |
 | 全体（インストーラ） | `%ProgramFiles%\AdaptiveAIStudio\` |
@@ -1535,7 +1535,7 @@ Linux で Windows の道を組むと `C:\nodejs/npx` になり、在るものを
 決めたこと
 
 bundle の中でいちばん深いものを 160 文字までに抑える（`scripts/bundle.mjs` の
-`DEPTH_BUDGET`）。超えたら組み立てを止める。README.txt には、保存先所に使える
+`DEPTH_BUDGET`）。超えたら組み立てを止める。README.txt には、置き場所に使える
 文字数を数字で書く（いまは 107 文字）。doctor は Windows のときだけ、
 いま何文字余っているかを言う。
 
@@ -1563,7 +1563,7 @@ README にそう書いた。
 
 確かめていないこと
 
-doctor の「保存先所の深さ」は Windows のときだけ出る。この場所は Linux なので、
+doctor の「置き場所の深さ」は Windows のときだけ出る。この場所は Linux なので、
 実機での見え方は未確認。数え方と線引きは `test/pathroom.test.ts` で留めてある。
 
 ---
