@@ -27,4 +27,14 @@ echo.
 pause
 exit /b 1
 :run
+rem 何も渡さずに押されたら、画面をアプリのウィンドウで開く（黒いコンソールは最小化して下に置く）。
+rem 番号で選ぶ一覧は  AdaptiveAIStudio.cmd menu  で出る。
+if "%~1"=="" goto :window
+if /i "%~1"=="menu" goto :menu
 call "%~dp0app\start.cmd" %*
+exit /b
+:window
+start "AdaptiveAIStudio" /min cmd /c ""%~dp0app\start.cmd" ui"
+exit /b
+:menu
+call "%~dp0app\start.cmd"

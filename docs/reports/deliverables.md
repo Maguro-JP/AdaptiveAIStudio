@@ -8,3 +8,4 @@
 |---|---|---|---|---|---|
 | 1 | 配る形（portable）で、はじめての人が答えを1回受け取れる | 組んだ portable を空の場所に置き、`AdaptiveAIStudio.cmd selftest`（Linux では同じ中身の起動）で「送って返る」が OK になる。モデルは画面の「これを取ってくる」で取った本物の小さい GGUF を使う。Linux はこのコンテナで、Windows は CI の bundle / Windows で確かめる（仮） | 進行中 | Linux は selftest と画面の両方で通った（2026-10-24、DECISIONS 189・191 回目）。Windows は CI の bundle / Windows（土曜の定期実行か手で起こす）で見る。次の定期は 10-31。v0.12.4 の配布物は出た（Linux 上で組み、ファイルの有無だけ確かめている） | 2026-10-24 |
 | 2 | 0.12.x の Windows の setup.exe が、入れて起動して答えを返す | CI の Windows で setup.exe を無人で入れ、入った先の selftest の「送って返る」が OK になる（仮） | 未着手 | 1 が終わってから | 2026-10-24 |
+| 3 | 画面をアプリのウィンドウで開く（ブラウザのタブにしない） | `AdaptiveAIStudio.cmd` とデスクトップのショートカットを押すと、アドレス欄の無いウィンドウで画面が開き、閉じると本体も止まる。Windows CI の `test/launcher-run.test.ts` が通り、Edge で開くのを Windows の実機か CI で見る（仮） | 進行中 | Linux で偽のブラウザを使い、`--app` で開いて閉じると止まるところまで見た。Windows の CI と実機はまだ | 2026-10-24 |
