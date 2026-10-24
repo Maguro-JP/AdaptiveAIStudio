@@ -214,6 +214,8 @@ if (gguf && ggufs.length === 0) {
 const started = Date.now();
 // 一つでも止まったままだと、一覧も報告も出ないまま戻らない。区切って、打ち切ったと言う
 const TEST_LIMIT_MS = 30 * 60_000;
+// 結果は最後にまとめて出すので、ここで言わないと何十分も黙ったまま止まって見える。
+console.log(`テストを回しています。数分から 20 分ほどかかります（${TEST_LIMIT_MS / 60_000} 分で打ち切り）。`);
 const test = await run(process.execPath, [join(root, 'scripts', 'run-tests.mjs')], root, { timeout: TEST_LIMIT_MS });
 const elapsed = Date.now() - started;
 const seconds = (elapsed / 1000).toFixed(1);
