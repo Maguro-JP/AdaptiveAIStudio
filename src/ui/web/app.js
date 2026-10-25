@@ -2064,6 +2064,13 @@ async function commands() {
     });
   }
   add('モデルを取ってくる・選ぶ', '設定 → モデル', () => openSettings('model'));
+  // ウィンドウを閉じても本体は裏で動き続けるので、止める道をここに置く（読み込んだモデルも降ろす）
+  add('AdaptiveAIStudio を終了する', '裏で動いている本体も止めます', async () => {
+    const r = await ask('/api/quit', { method: 'POST' }, '終了できませんでした');
+    if (!r) return;
+    if (!r.ok) return void showCrash('終了できません', r.body.error ?? '', 'warn');
+    showCrash('終了', '本体を止めました。このウィンドウは閉じてください。', 'warn');
+  });
 
   // 診断（点検のパネルの押しボタンと同じものを押す。出力はそのパネルに出る）
   const tasks = await json('/api/tasks');
