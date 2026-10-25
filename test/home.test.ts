@@ -898,6 +898,9 @@ describe('共有のモデルの保存先（C:\\LLM、LLM_HOME）', () => {
       await mkdir(join(llm, 'gguf'), { recursive: true });
       await writeFile(join(llm, 'gguf', 'new.gguf'), 'GGUF');
       assert.equal(modelsDir(), join(llm, 'gguf'));
+      // 移ったあと、前の保存先に残ったものは一覧に出ないので、残っていると言う（消さない）
+      const { strandedModels } = await import('../src/core/home.ts');
+      assert.deepEqual(strandedModels(), { dir: join(home, 'models'), names: ['old.gguf'] });
     } finally {
       for (const k of ['AAS_HOME', 'AAS_MODELS_DIR', 'LLM_HOME']) {
         if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];

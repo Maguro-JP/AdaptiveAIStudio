@@ -23,7 +23,7 @@ import { inspectEnvironment, describeDriver } from '../runtime/environment.ts';
 import { defaultModelsDir } from '../runtime/model-install.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { spawn } from 'node:child_process';
-import { installRoot, isPortable, productRoot, defaultWorkRoot, aasHome, asciiModelsDir } from '../core/home.ts';
+import { installRoot, isPortable, productRoot, defaultWorkRoot, aasHome, asciiModelsDir, strandedModels, modelsDir as modelsDirOf } from '../core/home.ts';
 import { how } from './how.ts';
 import { canRun } from '../core/which.ts';
 import { saveReport, tellWhereItWent } from './report-file.ts';
@@ -250,6 +250,13 @@ if (escaped) {
     + 'モデルを読むところが、全角の混ざった道からファイルを開けません。'
     + 'モデルだけ ProgramData へ逃がしています（半角で、管理者権限も要りません）。'
     + '設定と記録は根のままです。');
+}
+
+// 共有の保存先（C:\\LLM\\gguf）へ移ったあと、前の保存先に残ったモデルは一覧に出ない。消さずに、移す先を言う
+const stranded = config.runtime?.modelsDir ? undefined : strandedModels();
+if (stranded) {
+  add('前の保存先のモデル', 'warn', `${stranded.names.length} 個が一覧に出ていません（${stranded.dir}）`,
+    `${stranded.names.join('、')} を ${modelsDirOf()} へ移すと、また使えます。前の保存先のファイルは消していません。`);
 }
 
 /* ---------- llama-server ---------- */
