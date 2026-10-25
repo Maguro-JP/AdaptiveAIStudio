@@ -157,6 +157,11 @@ class HandWriteRefused extends Error {
 export interface UiServerOptions {
   /** 立ち上げ直しを頼まれたとき。止めて、RESTART_EXIT で終わる側が持つ。 */
   onRestart?: () => void;
+  /**
+   * 終わりを頼まれたとき（画面の「終了」）。ウィンドウを閉じても裏で動き続ける作りなので、
+   * 止める道を画面に置く。止めて終わる側が持つ。
+   */
+  onQuit?: () => void;
   /** 入口（start.cmd）が起こし直してくれるか。画面の案内が変わる。 */
   relaunches?: boolean;
   /**
@@ -1966,6 +1971,8 @@ export class UiServer {
         node: process.version,
         // 立ち上げ直したかを画面が見分けるため（止まる途中の古い本体から頁を読み直さない）
         pid: process.pid,
+        // 二つ目の起動が、動いている本体を見分けるための名前（同じ口に別のものが居るときに開き直さない）
+        app: 'AdaptiveAIStudio',
         platform: `${process.platform} ${process.arch}`,
         portable: isPortable(),
         productRoot: productRoot(),
@@ -2027,6 +2034,19 @@ export class UiServer {
       send(res, 200, { restarting: true, relaunches });
       // 返事を出し切ってから止める。先に止めると、押した側に何も返らない。
       setTimeout(() => this.#opts.onRestart?.(), 200).unref?.();
+      return;
+    }
+
+    if (path === '/api/quit' && req.method === 'POST') {
+      const session = this.#session;
+      if ((session && this.#busyNow(session)) || this.#prep > 0 || this.#queue.length > 0) {
+        return send(res, 409, { error: 'いま作業中です。終わってから終了してください' });
+      }
+      if (!this.#opts.onQuit) return send(res, 501, { error: 'この入口からは終了できません' });
+      this.broadcast({ type: 'log', level: 'info', text: '終了します' });
+      send(res, 200, { quitting: true });
+      // 返事を出し切ってから止める
+      setTimeout(() => this.#opts.onQuit?.(), 200).unref?.();
       return;
     }
 

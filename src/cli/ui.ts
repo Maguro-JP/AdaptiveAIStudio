@@ -49,6 +49,50 @@ if (askedPort !== undefined && !portOk) {
 // 「立ち上げ直す」を押すと、返事は `relaunches: false` なのに**プロセスは死ぬ**。
 // 誰も起こさないので二度と戻らず、画面には接続できない旨だけが残る。
 // 画面を押して回る仕掛けが、この形で実際に落ちた。
+/*
+ * 画面を開く。アプリのウィンドウ（Edge か Chrome の --app）。どちらも無い機械だけ、ブラウザのタブで開く。
+ * **閉じても本体は止めない。**裏で動き続け、次に開くとすぐ使える（読み込んだモデルもそのまま）。
+ * 止めるのは画面のコマンドの「終了」（/api/quit）か、このコンソールの Ctrl-C。
+ */
+function openWindow(url: string): void {
+  if (process.env.AAS_UI_NO_OPEN === '1') return;
+  const browser = findAppBrowser(process.platform, process.env, existsSync);
+  if (browser) {
+    const { command, args } = appWindowCommand(browser, url, join(stateDir(), 'window'));
+    const openedAt = Date.now();
+    const win = spawn(command, args, { stdio: 'ignore' });
+    win.on('error', () => console.log('  ウィンドウを開けませんでした。上の場所を手で開いてください。'));
+    win.on('exit', () => {
+      if (Date.now() - openedAt < HANDED_OFF_MS) return; // 既に開いているウィンドウへ渡した
+      console.log('  ウィンドウを閉じました。本体は裏で動き続けます（終わるときは画面のコマンドの「終了」か、ここで Ctrl-C）。');
+    });
+    return;
+  }
+  const opener = openerFor(process.platform);
+  console.log('  アプリのウィンドウを開く部品（Edge か Chrome）が見つからないので、ブラウザで開きます。');
+  // 開けない環境（サーバ等）でも本体は動かす。
+  spawn(opener, [url], { stdio: 'ignore', detached: true }).on('error', () => {
+    console.log('  ブラウザを開けませんでした。上の場所を手で開いてください。');
+  }).unref();
+}
+
+/*
+ * もう裏で動いているなら、新しく立てずにウィンドウだけ開き直す。
+ * 同じ口に別のものが居るときは開き直さない（/api/info の app で見分ける）。
+ */
+if (port !== 0) {
+  const running = `http://127.0.0.1:${port}/`;
+  const info = await fetch(`${running}api/info`, { signal: AbortSignal.timeout(1500) })
+    .then((r) => (r.ok ? r.json() as Promise<{ app?: string }> : undefined)).catch(() => undefined);
+  if (info?.app === 'AdaptiveAIStudio') {
+    console.log(`  裏で動いている AdaptiveAIStudio のウィンドウを開きます — ${running}`);
+    openWindow(running);
+    // 子（ウィンドウ）を手放してから終わる。待つと、ウィンドウを閉じるまでこのコンソールが残る
+    setTimeout(() => process.exit(0), 500);
+    await new Promise(() => undefined);
+  }
+}
+
 const relaunches = process.env.AAS_RELAUNCH === '1';
 const server = new UiServer({
   config, port, relaunches,
@@ -61,7 +105,9 @@ const server = new UiServer({
   ...(relaunches
     ? { onRestart: () => { void server.stop().catch(() => undefined).then(() => process.exit(RESTART_EXIT)); } }
     : {}),
+  onQuit: () => { onQuitAsked?.(); },
 });
+let onQuitAsked: (() => void) | undefined;
 /*
  * **口が開けないことは、壊れたことではない。**もう一つ立ち上がっている
  * だけ、ということが多い。ここで受け止めないと、二度押しただけで
@@ -80,33 +126,7 @@ console.log(`  AdaptiveAIStudio — ${url}`);
 console.log('  Ctrl-C で終了します。\n');
 
 // 起動はクリックだけで済ませたいので、開くところまでやる。
-// 開くのはアプリのウィンドウ（Edge か Chrome の --app）。閉じたら本体も止める。
-// どちらも無い機械だけ、ブラウザのタブで開く。
-let onWindowClosed: (() => void) | undefined;
-if (process.env.AAS_UI_NO_OPEN !== '1') {
-  const browser = findAppBrowser(process.platform, process.env, existsSync);
-  if (browser) {
-    const { command, args } = appWindowCommand(browser, url, join(stateDir(), 'window'));
-    const openedAt = Date.now();
-    const win = spawn(command, args, { stdio: 'ignore' });
-    win.on('error', () => console.log('  ウィンドウを開けませんでした。上の場所を手で開いてください。'));
-    win.on('exit', () => {
-      if (Date.now() - openedAt < HANDED_OFF_MS) {
-        console.log('  既に開いているウィンドウへ渡しました。閉じるときは、このウィンドウで Ctrl-C を押してください。');
-        return;
-      }
-      console.log('  ウィンドウを閉じたので終わります。');
-      onWindowClosed?.();
-    });
-  } else {
-    const opener = openerFor(process.platform);
-    console.log('  アプリのウィンドウを開く部品（Edge か Chrome）が見つからないので、ブラウザで開きます。');
-    // 開けない環境（サーバ等）でも本体は動かす。
-    spawn(opener, [url], { stdio: 'ignore', detached: true }).on('error', () => {
-      console.log('  ブラウザを開けませんでした。上の場所を手で開いてください。');
-    }).unref();
-  }
-}
+openWindow(url);
 
 // 起動したら、裏でモデルを読んでおく。最初の送信で数分待たせない。
 // 読んでいる間も画面は使える（送りは受け取って、読めたら答える）。
@@ -125,6 +145,6 @@ const stop = createStopper({
   log: (line) => console.log(line),
   waitMs: STOP_WAIT_MS,
 });
-onWindowClosed = stop;
+onQuitAsked = stop;
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);

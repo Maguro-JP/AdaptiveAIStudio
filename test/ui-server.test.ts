@@ -214,6 +214,28 @@ describe('画面から立ち上げ直す', () => {
   });
 });
 
+describe('画面から終了する（ウィンドウを閉じても裏で動き続けるので）', () => {
+  test('入口が止める道を渡していなければ、断る', async () => {
+    const r = await post('/api/quit', {});
+    assert.equal(r.status, 501);
+  });
+
+  test('頼まれたら返事をしてから止める側を呼ぶ。二つ目の起動が見分ける名前も出す', async () => {
+    let called = 0;
+    const s = new UiServer({ config: DEFAULT_CONFIG, port: 0, onQuit: () => { called++; } });
+    const b = await s.start();
+    try {
+      const info = await json(await fetch(`${b}api/info`));
+      assert.equal(info.app, 'AdaptiveAIStudio');
+      const r = await fetch(`${b}api/quit`, { method: 'POST' });
+      assert.equal(r.status, 200);
+      assert.equal(called, 0, '返事の前に止めている');
+      await new Promise((res) => setTimeout(res, 400));
+      assert.equal(called, 1, '止める側が呼ばれていない');
+    } finally { await s.stop(); }
+  });
+});
+
 describe('よその頁から口を叩かせない', () => {
   test('Origin がよそなら、中身を読む前に断る', async () => {
     const r = await fetch(base.replace(/\/$/, '') + '/api/send', {

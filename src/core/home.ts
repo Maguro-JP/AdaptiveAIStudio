@@ -213,6 +213,21 @@ export function modelsDir(root?: string): string {
   return shared;
 }
 
+/**
+ * 共有の保存先へ移ったあと、前の保存先に残っていて一覧に出ないモデル。
+ * 消さない・動かさない決まりなので、残っていることを言って、移す先を案内する（doctor）。
+ */
+export function strandedModels(root?: string): { dir: string; names: string[] } | undefined {
+  if (nonEmptyEnv('AAS_MODELS_DIR')) return undefined;
+  const shared = sharedModelsDir();
+  if (!shared || modelsDir(root) !== shared) return undefined;
+  const home = aasHome(root);
+  const own = asciiModelsDir(home) ?? join(home, 'models');
+  let names: string[] = [];
+  try { names = readdirSync(own).filter((n) => n.toLowerCase().endsWith('.gguf')); } catch { return undefined; }
+  return names.length > 0 ? { dir: own, names: names.sort() } : undefined;
+}
+
 function hasGguf(dir: string): boolean {
   try { return readdirSync(dir).some((n) => n.toLowerCase().endsWith('.gguf')); } catch { return false; }
 }
