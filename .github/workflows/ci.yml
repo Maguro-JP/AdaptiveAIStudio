@@ -63,6 +63,10 @@ on:
         description: '本物の重み（unsloth/Qwen3-0.6B-GGUF）を落として、答えの中身まで見る。これだけを回す'
         type: boolean
         default: false
+      user:
+        description: 'setup.exe を Windows に入れ、画面のボタンで既定のモデルを取り、ファイルを作る仕事を頼んで、出来たものを動かして見る。これだけを回す'
+        type: boolean
+        default: false
       real_os:
         description: 'real を回す機械（ubuntu は 1 倍、windows は 2 倍で数える）'
         type: choice
@@ -73,7 +77,7 @@ on:
 # 途中の版が通ったかどうかは、結局いらない。
 concurrency:
   # `real`（有料で長い）は別の組にする。同じ枝への push や週一の回で打ち切られないように。
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.real && 'real' || 'ci' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.real && 'real' || inputs.user && 'user' || 'ci' }}
   cancel-in-progress: true
 
 # 2026-10-18 に public になり、標準のランナーは無料になった。claude/ の枝の PR でも回す
@@ -89,7 +93,7 @@ jobs:
     name: ubuntu-latest / Node 22.x
     # 本物の重みだけを頼んだ回では回さない（枠を使わない）。
     if: >-
-      (github.event_name != 'workflow_dispatch' || !inputs.real)
+      (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user))
       && !(github.event.action == 'opened' && github.event.pull_request.draft == true)
     runs-on: ubuntu-latest
     # 暴走した1本で枠を溶かさない。手元では3分ほど。
@@ -124,7 +128,7 @@ jobs:
     name: windows-latest / Node 24.x
     if: >-
       (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-      && (github.event_name != 'workflow_dispatch' || !inputs.real)
+      && (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user))
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -156,7 +160,7 @@ jobs:
   # だから PR では回さない。**手で頼んだときと、週に一度だけ。**
   bundle:
     name: bundle / Windows
-    if: github.event_name != 'pull_request' && !inputs.real
+    if: github.event_name != 'pull_request' && !inputs.real && !inputs.user
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -221,6 +225,82 @@ jobs:
 
       - name: 本物の重みで1ターン
         run: node scripts/check-real.mjs
+
+  # 使う人と同じ道で見る（手で頼んだときだけ。`user`）。
+  #
+  # real は「1+1=」と read_file 1 回までで、入れた人が頼む仕事で動くかは見ていなかった。
+  # ここでは setup.exe を組んで（Linux の makensis。release と同じ）、Windows に黙って入れ、
+  # 入った入口から起こし、画面の帯のボタンで既定のモデルを取り、fizzbuzz.js を作らせる。
+  # 判定は出来たファイルを node で動かした出力（`scripts/check-user.mjs`）。
+  user-setup:
+    name: user / setup.exe を組む
+    if: github.event_name == 'workflow_dispatch' && inputs.user
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NODEVER: v24.18.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      - name: NSIS を入れる
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nsis
+      - run: npm ci --no-audit --no-fund
+      # release の installer と同じものを入れる（CPU・CUDA・Vulkan）
+      - name: モデルを読むライブラリを入れる
+        run: |
+          npm install --no-save --no-audit --no-fund \
+            --omit=optional --force --ignore-scripts \
+            node-llama-cpp @node-llama-cpp/win-x64 \
+            @node-llama-cpp/win-x64-cuda @node-llama-cpp/win-x64-vulkan
+          find node_modules/node-llama-cpp/llama -type f ! -name '*.json' -delete
+          find node_modules/node-llama-cpp/llama -type d -empty -delete
+      - name: Node を取ってくる（同梱用）
+        run: curl -fL --retry 3 -o node.exe "https://nodejs.org/dist/${NODEVER}/win-x64/node.exe"
+      - name: setup.exe を組む
+        run: |
+          V="$(node -p "require('./package.json').version")+${GITHUB_SHA::7}"
+          node scripts/bundle.mjs --out installer/payload --node-exe node.exe --version "$V"
+          rm -f installer/payload/.portable
+          makensis -DVERSION="$V" installer/AdaptiveAIStudio.nsi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: user-setup
+          path: installer/AdaptiveAIStudio-Setup.exe
+          retention-days: 1
+
+  user:
+    name: user / Windows
+    needs: user-setup
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      - uses: actions/download-artifact@v4
+        with:
+          name: user-setup
+      - name: setup.exe を黙って入れる
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath .\AdaptiveAIStudio-Setup.exe -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "setup.exe が $($p.ExitCode) で終わりました" }
+          Get-ChildItem "$env:ProgramFiles\AdaptiveAIStudio" | Select-Object -First 10
+      # 画面を押す側だけ。製品には入らない
+      - name: 画面を押す部品を入れる
+        run: npm i --no-save --no-audit --no-fund playwright-core
+      - name: 入れた形で、頼んだファイルが出来て動くか
+        shell: pwsh
+        run: node scripts/check-user.mjs --start "`"$env:ProgramFiles\AdaptiveAIStudio\AdaptiveAIStudio.cmd`"" --port 4174 --find "$env:ProgramData\AdaptiveAIStudio" --find "$env:USERPROFILE" --shots shots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: user-shots
+          path: shots
+          retention-days: 7
 
   # 手で頼んだときだけ、残りの組み合わせも見る。
   full:
