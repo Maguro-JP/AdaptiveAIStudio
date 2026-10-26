@@ -44,7 +44,7 @@ import { fileURLToPath } from 'node:url';
 import { stateDir } from '../core/autopilot-setup.ts';
 import { AckStore, ACK_TEXT, isAckId } from '../core/acks.ts';
 import { contentOf, readPrior, isAbsent } from '../harness/put-back.ts';
-import { aasHome, binDir, modelsDir, isPortable, productRoot, installRoot, defaultWorkRoot } from '../core/home.ts';
+import { aasHome, binDir, modelsDir, modelPath, isPortable, productRoot, installRoot, defaultWorkRoot } from '../core/home.ts';
 import { currentVersion, describeVersion } from '../core/version.ts';
 import { LogFile } from '../core/logfile.ts';
 import { checkUpdate, applyUpdate } from '../core/update.ts';
@@ -3598,7 +3598,7 @@ export class UiServer {
           // 名前だけ .gguf で中身が別物（配布元の HTML の案内など）を、読みに行かない。
           // 一覧と同じ場所（動いている側の保存先）を見る。保存側を見ると、
           // 立ち上げ直す前の設定とずれて「読めない」と嘘をつく。
-          if (!(await looksLikeGguf(join(this.#opts.config.runtime?.modelsDir ?? modelsDir(), ref)))) {
+          if (!(await looksLikeGguf(modelPath(this.#opts.config.runtime?.modelsDir ?? modelsDir(), ref)))) {
             return `${ref} は GGUF として読めません（先頭に GGUF の印がありません）。`
               + '配布元の同意頁の HTML を落としてしまった形が多いです。ブラウザで開き直して、本物を置いてください。\n'
               + `保存先: ${this.#opts.config.runtime?.modelsDir ?? modelsDir()}`;

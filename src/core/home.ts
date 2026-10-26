@@ -228,6 +228,26 @@ export function strandedModels(root?: string): { dir: string; names: string[] } 
   return names.length > 0 ? { dir: own, names: names.sort() } : undefined;
 }
 
+/**
+ * 保存先 `dir` と一緒に読む、前の保存先。共有の保存先を使っているときだけ、前の保存先を足す。
+ * 前の保存先のものは読むだけ（取ってきたものは `dir` へ入る）。
+ */
+export function alsoModelDirs(dir: string, root?: string): string[] {
+  const stranded = strandedModels(root);
+  return stranded && resolve(dir) === resolve(modelsDir(root)) ? [stranded.dir] : [];
+}
+
+/** 呼び名（ファイル名）からファイルの場所。`dir` に無ければ前の保存先を見る。どこにも無ければ `dir` の下。 */
+export function modelPath(dir: string, ref: string, root?: string): string {
+  const here = join(dir, ref);
+  if (existsSync(here)) return here;
+  for (const other of alsoModelDirs(dir, root)) {
+    const there = join(other, ref);
+    if (existsSync(there)) return there;
+  }
+  return here;
+}
+
 function hasGguf(dir: string): boolean {
   try { return readdirSync(dir).some((n) => n.toLowerCase().endsWith('.gguf')); } catch { return false; }
 }

@@ -24,6 +24,7 @@ import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.ts';
 import { listenOrExplain } from '../core/listen.ts';
+import { alsoModelDirs, modelPath } from '../core/home.ts';
 import { crossSiteReason } from '../ui/origin.ts';
 import { chunkReader } from '../core/text.ts';
 import { toolPrompt } from './tool-prompt.ts';
@@ -359,14 +360,17 @@ export interface InProcOptions {
   gpuSeen?: boolean;
 }
 
-/** 置き場にある GGUF。名前は問わない。 */
+/** 保存先にある GGUF。名前は問わない。共有の保存先なら、前の保存先に残ったものも同じ一覧に出す（同じ名前は渡された保存先の方）。 */
 export async function listGguf(dir: string): Promise<AvailableModel[]> {
-  const names = await readdir(dir).catch(() => [] as string[]);
   const out: AvailableModel[] = [];
-  for (const name of names) {
-    if (!name.toLowerCase().endsWith('.gguf')) continue;
-    const info = await stat(join(dir, name)).catch(() => undefined);
-    out.push({ ref: name, ...(info ? { sizeBytes: info.size } : {}) });
+  const seen = new Set<string>();
+  for (const from of [dir, ...alsoModelDirs(dir)]) {
+    for (const name of await readdir(from).catch(() => [] as string[])) {
+      if (!name.toLowerCase().endsWith('.gguf') || seen.has(name)) continue;
+      seen.add(name);
+      const info = await stat(join(from, name)).catch(() => undefined);
+      out.push({ ref: name, ...(info ? { sizeBytes: info.size } : {}) });
+    }
   }
   return out.sort((a, b) => a.ref.localeCompare(b.ref));
 }
@@ -783,7 +787,7 @@ export class InProcRuntime implements LocalRuntime {
     // 進み具合を出さないと、また「固まった」に見える。
     let last = -1;
     const model = await llama.loadModel({
-      modelPath: join(this.#opts.modelsDir, ref),
+      modelPath: modelPath(this.#opts.modelsDir, ref),
       onLoadProgress: (done: number) => {
         const pct = Math.floor(done * 100);
         // 1% ごとに言うと流れが埋まる。10% ごとに一度。
@@ -887,7 +891,7 @@ export class InProcRuntime implements LocalRuntime {
       return { window: this.#opts.contextSize, sequences: wanted };
     }
     try {
-      const at = join(this.#opts.modelsDir, ref);
+      const at = modelPath(this.#opts.modelsDir, ref);
       const file = await readGguf(at);
       const facts = extractFacts(file);
       const trained = facts.contextLength;
@@ -1117,7 +1121,7 @@ export class InProcRuntime implements LocalRuntime {
     if (!held && ref && /\.gguf$/i.test(ref)) {
       const listed = (await this.list()).find((m) => m.ref === ref);
       // 読めないと分かっているもの（GGUF でない・記憶に載らない）のために、今のモデルを先に降ろさない
-      const unreadable = listed && (!(await looksLikeGguf(join(this.#opts.modelsDir, ref)))
+      const unreadable = listed && (!(await looksLikeGguf(modelPath(this.#opts.modelsDir, ref)))
         || tooBigForRam(listed.sizeBytes, totalmem()) !== undefined);
       if (listed && unreadable) {
         // 404 と model の語で返す（上の層は「モデルが無い」と読み、やり直さずに次の候補へ回す。503 だと毎回 3 回打っていた）
