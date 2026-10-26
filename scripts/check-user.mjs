@@ -81,7 +81,15 @@ async function waitUp() {
   fail('画面の本体が 120 秒たっても立ち上がりませんでした');
 }
 
-const app = spawn(start, { shell: true, stdio: 'inherit', env: { ...process.env, AAS_UI_PORT: String(port) } });
+// 組ごと止められるように、Windows 以外は別の組で起こす（後で残った本体やモデルの口が、次の確かめに繋がっていた）
+const app = spawn(start, { shell: true, stdio: 'inherit', detached: process.platform !== 'win32', env: { ...process.env, AAS_UI_PORT: String(port) } });
+/** 起こしたものを、子ごと止める。/api/quit は作業中だと断られる（409）ので、それだけに頼らない。 */
+function stopAll() {
+  try {
+    if (process.platform === 'win32') execFileSync('taskkill', ['/T', '/F', '/PID', String(app.pid)], { stdio: 'ignore' });
+    else process.kill(-app.pid, 'SIGTERM');
+  } catch { /* 終わっている */ }
+}
 let browser;
 let page;
 try {
@@ -152,7 +160,8 @@ try {
 } finally {
   await browser?.close().catch(() => undefined);
   await fetch(`http://127.0.0.1:${port}/api/quit`, { method: 'POST' }).catch(() => undefined);
-  setTimeout(() => { try { app.kill(); } catch { /* 終わっている */ } }, 3000).unref();
+  await new Promise((r) => setTimeout(r, 3000));
+  stopAll();
 }
 
 if (failed) {
