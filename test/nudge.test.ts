@@ -63,7 +63,7 @@ async function scripted(script: Step[]) {
   };
 }
 
-async function run(script: Step[], maxNudges?: number) {
+async function run(script: Step[], maxNudges?: number, expectsWork?: boolean) {
   const root = await tempDir('aas-nudge-');
   await writeFile(join(root, 'a.txt'), 'もとの中身\n');
   const fake = await scripted(script);
@@ -75,6 +75,7 @@ async function run(script: Step[], maxNudges?: number) {
     candidates: ['p:m'], system: 'テスト', tools: [readFileTool, writeFileTool],
     root, approve: () => Promise.resolve(true),
     ...(maxNudges !== undefined ? { maxNudges } : {}),
+    ...(expectsWork !== undefined ? { expectsWork } : {}),
   });
   const events: AgentEvent[] = [];
   const history = [{ role: 'user' as const, content: 'a.txt を書き換えて' }];
@@ -83,6 +84,29 @@ async function run(script: Step[], maxNudges?: number) {
 }
 
 describe('途中で手を止めたら、押し戻す', () => {
+  test('作業の頼みで、コードを文で書いて止まったら押し戻し、ファイルを書かせる', async () => {
+    // 本物の重み（Qwen3.5-4B）で実際に起きた形。ツールを一度も呼ばず、コードの塊を返して「済んだ」になっていた
+    const r = await run([
+      { text: '```javascript\nconsole.log(1)\n```' },
+      { tool: 'write_file', args: { path: 'a.txt', content: '書きました\n' } },
+      { text: `${DONE_MARK}\n` },
+    ], undefined, true);
+    try {
+      assert.ok(r.events.some((e) => e.type === 'nudged'), '押し戻していない');
+      assert.ok(r.asked.some((a) => a.includes('ファイルを書くツール')), 'ツールで書くよう言っていない');
+      assert.equal(await readFile(join(r.root, 'a.txt'), 'utf8'), '書きました\n');
+    } finally { await r.close(); }
+  });
+
+  test('作業の頼みで、押し戻してもツールを使わないなら、済んだと言わない', async () => {
+    const r = await run([{ text: '```js\nx\n```' }], undefined, true);
+    try {
+      const last = r.events.at(-1);
+      assert.equal(last?.type, 'finished');
+      assert.equal(last.reason, 'noProgress');
+    } finally { await r.close(); }
+  });
+
   test('読んだだけで止まったら押し戻し、その先で書ける', async () => {
     // これが実際に起きる形。読んで、「では書き換えます」と言って止まる。
     const r = await run([

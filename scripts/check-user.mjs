@@ -118,7 +118,7 @@ try {
   if (shots) await page.screenshot({ path: join(shots, '1-ready.png') });
 
   const askedAt = Date.now() - 1000;
-  const box = page.locator('textarea:visible').first();
+  const box = page.locator('.chat textarea').first();
   await box.fill(ASK);
   await page.getByText('送る', { exact: true }).click();
   say('頼みを送りました');
