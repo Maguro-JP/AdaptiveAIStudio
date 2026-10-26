@@ -898,9 +898,19 @@ describe('共有のモデルの保存先（C:\\LLM、LLM_HOME）', () => {
       await mkdir(join(llm, 'gguf'), { recursive: true });
       await writeFile(join(llm, 'gguf', 'new.gguf'), 'GGUF');
       assert.equal(modelsDir(), join(llm, 'gguf'));
-      // 移ったあと、前の保存先に残ったものは一覧に出ないので、残っていると言う（消さない）
-      const { strandedModels } = await import('../src/core/home.ts');
+      // 移ったあと、前の保存先に残ったものは残っていると言う（消さない）
+      const { strandedModels, modelPath } = await import('../src/core/home.ts');
       assert.deepEqual(strandedModels(), { dir: join(home, 'models'), names: ['old.gguf'] });
+      // 両方を同じ一覧に出し、呼び名のままどちらからでも読める。同じ名前は共有の保存先の方
+      await writeFile(join(home, 'models', 'new.gguf'), 'GGUF');
+      const { listGguf } = await import('../src/runtime/inproc.ts');
+      assert.deepEqual((await listGguf(modelsDir())).map((m) => m.ref), ['new.gguf', 'old.gguf']);
+      assert.equal(modelPath(modelsDir(), 'old.gguf'), join(home, 'models', 'old.gguf'));
+      assert.equal(modelPath(modelsDir(), 'new.gguf'), join(llm, 'gguf', 'new.gguf'));
+      assert.equal(modelPath(modelsDir(), 'none.gguf'), join(llm, 'gguf', 'none.gguf'), '取る先は共有の保存先');
+      // 別の置き場を渡されたときは、前の保存先を混ぜない
+      const other = await tempDir('aas-other-');
+      assert.deepEqual(await listGguf(other), []);
     } finally {
       for (const k of ['AAS_HOME', 'AAS_MODELS_DIR', 'LLM_HOME']) {
         if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];

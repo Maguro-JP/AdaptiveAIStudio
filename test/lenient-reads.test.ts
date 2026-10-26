@@ -30,6 +30,7 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/ui/server.ts': { count: 3, why: 'ファイルの情報を見せる所。読めなければ見せない（書く所は readPrior で守る）。手書きで置き換える前の権限（取れなければ新しいファイルの既定の権限になるだけ）。外を指すリンク越しかを見る所（辿れなければ、無いと言う。中身は読まない）' },
   'src/ui/attachments.ts': { count: 3, why: '添付の古い分の片づけの候補探し（読めないものは消さない）と、画像の読み出し（読めなければ渡さない。保存先は文で伝える）' },
   'src/runtime/inproc.ts': { count: 3, why: 'モデルの一覧と大きさを見るだけ。取れなければ一覧に出さない・大きさを言わない' },
+  'src/runtime/llamacpp.ts': { count: 1, why: 'モデルの一覧を見るだけ。保存先が読めなければ、その保存先の分を一覧に出さない' },
   'src/core/file-lock.ts': { count: 1, why: '錠の古さ。取れなければ消さずに待つ（消す側へは倒さない）' },
   'src/core/version.ts': { count: 2, why: '版の表示。読めなければ次の候補（一つ上の VERSION・git）を出す。消す・書くことは無い' },
   'src/core/logfile.ts': { count: 2, why: '記録の大きさ（回すかどうか）と末尾の表示。読めなくても書き直さない' },

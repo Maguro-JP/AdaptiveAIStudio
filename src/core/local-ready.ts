@@ -15,7 +15,7 @@
 import { totalmem } from 'node:os';
 import { join } from 'node:path';
 import { inprocUrl, type AasConfig, type ProviderConfig } from '../config.ts';
-import { modelsDir } from './home.ts';
+import { modelsDir, modelPath } from './home.ts';
 import type { LocalRuntime } from '../runtime/local-runtime.ts';
 import { chooseModel, tooBigForRam, looksLikeGguf, CHOICE_WHY } from '../runtime/inproc.ts';
 
@@ -122,7 +122,7 @@ export async function readyLocalModel(
   }
   // 名前だけ .gguf で中身が別物（配布元の HTML の案内など）を、読みに行かない。
   const dir = config.runtime?.modelsDir ?? modelsDir();
-  if (!(await looksLikeGguf(join(dir, ref)))) {
+  if (!(await looksLikeGguf(modelPath(dir, ref)))) {
     return {
       config,
       why: `${ref} は GGUF として読めません（中身が GGUF ではありません）。`

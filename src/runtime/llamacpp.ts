@@ -20,6 +20,7 @@ import { toModelSpec } from './gguf-spec.ts';
 import type { MachineSpec, ModelSpec } from './spec.ts';
 import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.ts';
 import { lineReader } from '../core/text.ts';
+import { alsoModelDirs, modelPath } from '../core/home.ts';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 
@@ -136,18 +137,17 @@ export class LlamaCppRuntime implements LocalRuntime {
   }
 
   async list(): Promise<AvailableModel[]> {
-    let entries: string[];
-    try {
-      entries = await readdir(this.#opts.modelsDir);
-    } catch {
-      return []; // ディレクトリが無いのは異常ではない
+    // ディレクトリが無いのは異常ではない。共有の保存先なら、前の保存先に残ったものも出す（同じ名前は渡された保存先の方）
+    const entries = new Set<string>();
+    for (const from of [this.#opts.modelsDir, ...alsoModelDirs(this.#opts.modelsDir)]) {
+      for (const n of await readdir(from).catch(() => [] as string[])) entries.add(n);
     }
     const out: AvailableModel[] = [];
     for (const name of entries) {
       if (!name.toLowerCase().endsWith('.gguf')) continue;
       let sizeBytes: number | undefined;
       try {
-        sizeBytes = (await stat(join(this.#opts.modelsDir, name))).size;
+        sizeBytes = (await stat(modelPath(this.#opts.modelsDir, name))).size;
       } catch { /* 読めなくても一覧には出す */ }
       // ファイルの先頭を読んで、書いてある諸元を取る。
       // 読めなくても一覧からは落とさない。動かせるかどうかは別の話。
@@ -166,7 +166,7 @@ export class LlamaCppRuntime implements LocalRuntime {
     const cached = this.#specs.get(name);
     if (cached) return cached;
     try {
-      const file = await readGguf(join(this.#opts.modelsDir, name));
+      const file = await readGguf(modelPath(this.#opts.modelsDir, name));
       const { spec, missing } = toModelSpec(file, basename(name, '.gguf'));
       if (!spec) {
         this.#opts.onLog?.(`${name}: 諸元を読み切れませんでした（${missing.join(' / ')}）。名前からの推測に落ちます。`);
@@ -353,7 +353,7 @@ export class LlamaCppRuntime implements LocalRuntime {
   #buildArgs(ref: string, plan: Plan, port: number): string[] {
     const args = [
       ...this.#opts.commandArgs,
-      '--model', join(this.#opts.modelsDir, ref),
+      '--model', modelPath(this.#opts.modelsDir, ref),
       '--port', String(port),
       '--host', '127.0.0.1',
       '--n-gpu-layers', String(plan.gpuLayers),
