@@ -98,6 +98,16 @@ describe('途中で手を止めたら、押し戻す', () => {
     } finally { await r.close(); }
   });
 
+  test('作業の頼みでも、普通に答えただけなら押し戻さない（対）', async () => {
+    const r = await run([{ text: 'この作業場は src と test でできています。' }], undefined, true);
+    try {
+      assert.ok(!r.events.some((e) => e.type === 'nudged'), '答えただけの返事を押し戻している');
+      const last = r.events.at(-1);
+      assert.equal(last?.type, 'finished');
+      assert.equal(last.reason, 'completed');
+    } finally { await r.close(); }
+  });
+
   test('作業の頼みで、押し戻してもツールを使わないなら、済んだと言わない', async () => {
     const r = await run([{ text: '```js\nx\n```' }], undefined, true);
     try {
