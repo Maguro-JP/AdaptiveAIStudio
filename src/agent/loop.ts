@@ -57,6 +57,12 @@ export interface AgentOptions {
    * 押し戻しは只ではない（一往復ぶん余計に考えさせる）ので、
    * 何度も繰り返さない。**動かないものは、動かないと言う。**
    */
+  /**
+   * 作業の頼みとして送ったか（問いかけではない）。
+   * 立っていれば、ツールを一度も使わずにコードの塊（```）を本文で返したとき、「答えただけ」で済ませず押し戻す。
+   * コードを文で書いて終わる（ファイルは出来ていない）を、済んだと言わないため。普通の答えは押し戻さない。
+   */
+  expectsWork?: boolean;
   maxNudges?: number;
   temperature?: number;
   maxTokens?: number;
@@ -102,6 +108,8 @@ export class Agent {
      * 自律で回らなくなるのは、いつもそこ。
      */
     let usedTools = false;
+    // 作業の頼みでコードを本文に書いたので押し戻した（押し戻しても動かなければ、済んだとは言わない）
+    let pushedForCode = false;
     // 前の回に終わりの合図をツール呼び出しと一緒に出したか（次の回へ一度だけ持ち越す）
     let doneWithCalls = false;
     /*
@@ -279,10 +287,13 @@ export class Agent {
           });
           continue;
         }
-        if (declaredDone || !usedTools || nudges >= maxNudges) {
+        // 作業の頼みに、ツールを使わずコードの塊を本文で返した（ファイルは出来ていない）。答えただけとは読まない
+        const codeInsteadOfTool = Boolean(this.#opts.expectsWork) && !usedTools && /```/.test(text);
+        if (codeInsteadOfTool) pushedForCode = true;
+        if (declaredDone || (!usedTools && !codeInsteadOfTool) || nudges >= maxNudges) {
           // 合図が出た / 一度も道具を使っていない（＝答えただけ） /
           // 押し戻しを使い切った。**動かないものは、動かないと言う。**
-          const stalled = !declaredDone && usedTools;
+          const stalled = !declaredDone && (usedTools || pushedForCode);
           yield {
             type: 'finished',
             reason: stalled ? 'noProgress' : 'completed',
@@ -308,7 +319,8 @@ export class Agent {
           content:
             `まだ ${DONE_MARK} がありません。\n`
             + `やり終えているなら、${DONE_MARK} だけの行を書いてください。\n`
-            + '終わっていないなら、説明ではなく、次の一手を道具で実行してください。',
+            + '終わっていないなら、説明ではなく、次の一手を道具で実行してください。'
+            + (usedTools ? '' : '\nファイルを作る・直す頼みなら、コードを本文に書かず、ファイルを書くツールを呼んでください。'),
         });
         continue;
       }

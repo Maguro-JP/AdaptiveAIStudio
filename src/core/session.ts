@@ -2332,6 +2332,8 @@ export class Session {
       system: await this.#system({ ...opts, conv }),
       // 問いかけにはツールを渡さない。渡すと、答える前に作業場を読みに行く。
       tools: opts.chat ? [] : this.#tools,
+      // 作業の頼みは、ツールを使わずに止まっても済んだことにしない（コードを文で返して終わっていた）
+      expectsWork: !opts.chat,
       root: this.root,
       maxTurns: this.config.agent?.maxTurns ?? 40,
       temperature: this.config.temperature,
