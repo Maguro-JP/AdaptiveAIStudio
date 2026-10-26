@@ -782,7 +782,29 @@ export class InProcRuntime implements LocalRuntime {
      * いまは GPU 用の binary も同梱する（release.yml）。探すときの向こうの声は
      * probeBackend が拾って、こちらの一行（describeBackend）にする。
      */
-    const { llama, backend } = await this.#llamaInstance();
+    const first = await this.#llamaInstance();
+    try {
+      return await this.#loadOn(ref, lib, first);
+    } catch (e) {
+      /*
+       * GPU で読めなかったら、CPU で読み直す。
+       *
+       * GPU の部品が起きても、ドライバや VRAM の都合で、重みや KV を載せる所で落ちる機械がある。
+       * そこで止めると「動かない」になる（CPU だけで読む CharacterDesigner は動いていた）。
+       * 遅くても答える方を取る。以後この本体は CPU のまま使う（落ちた GPU を毎回試さない）。
+       */
+      if (!first.backend.gpu || this.#down) throw e;
+      this.#opts.onLog?.(`GPU で読めなかったので、CPU で読み直します（${e instanceof Error ? e.message : String(e)}）`);
+      const cpu = await probeBackend(lib, 'off');
+      const fallback = { llama: cpu.llama, backend: { ...cpu.backend, reason: 'load-failed' as const } };
+      this.#llama = Promise.resolve(fallback);
+      this.#opts.onLog?.(describeBackend(fallback.backend));
+      return this.#loadOn(ref, lib, fallback);
+    }
+  }
+
+  /** 選んだ本体（GPU か CPU）で読む。 */
+  async #loadOn(ref: string, lib: LlamaLib, { llama, backend }: { llama: LlamaLike; backend: Backend }): Promise<Held> {
     // 数GBを読むので、10〜60秒かかる。**黙って待たせない。**
     // 進み具合を出さないと、また「固まった」に見える。
     let last = -1;
