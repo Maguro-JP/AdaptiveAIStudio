@@ -87,6 +87,16 @@ async function approveShown(page) {
   return n;
 }
 
+/** 本体の手が空くまで待つ（確かめの帯が出れば押す）。上限 `deadline` を過ぎたら、そのまま進む。 */
+async function idle(page, deadline) {
+  while (Date.now() < deadline) {
+    await approveShown(page);
+    const s = await fetch(`http://127.0.0.1:${port}/api/approvals`).then((r) => r.json()).catch(() => ({}));
+    if (s.busy === false && !s.planning) return;
+    await page.waitForTimeout(5_000);
+  }
+}
+
 async function waitUp() {
   for (let i = 0; i < 120; i += 1) {
     const ok = await fetch(`http://127.0.0.1:${port}/api/info`, { signal: AbortSignal.timeout(2000) })
@@ -163,8 +173,8 @@ try {
   }
   if (shots) await page.screenshot({ path: join(shots, '2-after-ask.png') });
   if (!file) fail('20 分たっても fizzbuzz.js が出来ませんでした');
-  // 書き終わるのを少し待ってから動かす（途中の中身で判定しない）
-  await page.waitForTimeout(15_000);
+  // 頼みが終わるまで待ってから動かす。モデルは書いて、走らせて、直すことがある（最初に書いた版で判定しない）
+  await idle(page, until);
   say(`出来たファイル: ${file}`);
   let out;
   try {
@@ -184,14 +194,12 @@ try {
   say('2 つ目の頼み（calc.js を直す）を送りました');
   let fixed = '';
   const until2 = Date.now() + 20 * 60_000;
-  while (Date.now() < until2) {
+  while (Date.now() < until2 && statSync(calc).mtimeMs === before) {
     await page.waitForTimeout(10_000);
     await approveShown(page);
-    if (statSync(calc).mtimeMs === before) continue;
-    await page.waitForTimeout(5_000);
-    try { fixed = execFileSync(process.execPath, [calc], { encoding: 'utf8', timeout: 10_000 }).trim(); } catch { fixed = ''; }
-    if (fixed === '5') break;
   }
+  await idle(page, until2);
+  try { fixed = execFileSync(process.execPath, [calc], { encoding: 'utf8', timeout: 10_000 }).trim(); } catch { fixed = ''; }
   if (shots) await page.screenshot({ path: join(shots, '3-after-fix.png') });
   if (statSync(calc).mtimeMs === before) fail('20 分たっても calc.js が直されませんでした');
   if (fixed !== '5') fail(`calc.js を直しましたが、出力が 5 ではありません: 「${fixed}」`);
