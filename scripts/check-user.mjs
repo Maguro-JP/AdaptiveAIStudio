@@ -123,6 +123,21 @@ try {
   await waitUp();
   say('画面の本体が立ち上がりました');
 
+  // アプリのウィンドウで開いたか（ブラウザのタブにしない）。Windows では Edge が --app で起きているはず
+  if (process.platform === 'win32' && process.env.AAS_UI_NO_OPEN !== '1') {
+    let found = '';
+    for (let i = 0; i < 20 && !found; i += 1) {
+      await new Promise((r) => setTimeout(r, 1000));
+      try {
+        found = execFileSync('powershell', ['-NoProfile', '-Command',
+          "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*--app=http://127.0.0.1:*' } | Select-Object -First 1 -ExpandProperty Name"],
+        { encoding: 'utf8', timeout: 15_000 }).trim();
+      } catch { found = ''; }
+    }
+    if (!found) fail('アプリのウィンドウ（--app で開いたブラウザ）が見つかりません');
+    say(`アプリのウィンドウで開きました（${found} を --app で起こしています）`);
+  }
+
   const { chromium } = await import('playwright-core');
   const exe = process.env.AAS_CHECK_BROWSER || findAppBrowser(process.platform, process.env, existsSync);
   browser = await chromium.launch(exe ? { executablePath: exe } : {});
