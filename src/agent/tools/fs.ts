@@ -591,8 +591,14 @@ function parseEdits(
   args: Record<string, unknown>,
 ): { find: string; replace: string; all?: boolean }[] | string {
   const raw = args.edits;
-  if (Array.isArray(raw)) {
-    if (raw.length === 0) return 'edits が空です。直すところがありません。';
+  // **空の edits は、渡していないのと同じに扱う。**小さいモデルは find / replace と一緒に
+  // `edits: []` を付けてくる。空だと返すだけでは、同じ呼び出しを繰り返して止まった
+  // （Windows の check-user、Qwen3.5-4B）。find / replace があればそちらを使う。
+  if (Array.isArray(raw) && raw.length === 0 && typeof args.find !== 'string') {
+    return 'edits が空です。直す場所を 1 つ以上渡してください。'
+      + '例: {"path":"calc.js","find":"return a - b;","replace":"return a + b;"}';
+  }
+  if (Array.isArray(raw) && raw.length > 0) {
     const out: { find: string; replace: string; all?: boolean }[] = [];
     for (const [i, e] of raw.entries()) {
       const one = e as { find?: unknown; replace?: unknown; all?: unknown };
@@ -605,7 +611,7 @@ function parseEdits(
   }
   const find = typeof args.find === 'string' ? args.find : undefined;
   const replace = typeof args.replace === 'string' ? args.replace : undefined;
-  if (find === undefined) return 'find が必要です。';
+  if (find === undefined) return 'find が必要です。例: {"path":"calc.js","find":"return a - b;","replace":"return a + b;"}';
   if (replace === undefined) return 'replace が必要です。';
   if (find.length === 0) return 'find が空です。差し替える場所が決まりません。';
   return [{ find, replace, ...(args.all === true ? { all: true } : {}) }];
