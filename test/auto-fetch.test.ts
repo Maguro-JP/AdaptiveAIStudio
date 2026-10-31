@@ -65,7 +65,7 @@ test('モデルが一つも無ければ、起動したら推奨のモデルを�
   const server = await boot(models, {}, hf);
   try {
     await server.preload();
-    await until(async () => (await ggufs(models)).length > 0, 30_000);
+    await until(async () => (await ggufs(models)).length > 0, '推奨のモデルが置かれる');
     assert.equal((await ggufs(models)).length, 1);
   } finally { await server.stop(); await hf.close(); }
 });
