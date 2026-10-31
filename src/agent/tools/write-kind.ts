@@ -133,7 +133,8 @@ export async function plannedContent(
    * 効かなくなる。ツールを足すときに、いちばん起きやすい形。
    */
   const raw = (args as { edits?: unknown }).edits;
-  if (Array.isArray(raw)) {
+  // 空の edits は fs.ts と同じく、渡していないものとして find / replace を見る。
+  if (Array.isArray(raw) && raw.length > 0) {
     let text = before;
     for (const e of raw) {
       const one = e as { find?: unknown; replace?: unknown; all?: unknown };
