@@ -295,15 +295,22 @@ jobs:
       - name: 入れた形で、頼んだファイルが出来て動くか
         shell: pwsh
         run: node scripts/check-user.mjs --start "`"$env:ProgramFiles\AdaptiveAIStudio\AdaptiveAIStudio.cmd`"" --port 4174 --find "$env:ProgramData\AdaptiveAIStudio" --find "$env:USERPROFILE" --shots shots
+      # 落ちたときに中身を追えるよう、本体の記録（logs）と会話（conversations）も上げる。
+      # artifact は作業場の下しか上げられない（別のドライブを渡すと上げる所で落ちた）ので、写してから上げる
+      - name: 本体の記録を写す
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force shots | Out-Null
+          foreach ($d in 'logs', 'conversations') {
+            $src = Join-Path $env:ProgramData "AdaptiveAIStudio\$d"
+            if (Test-Path $src) { Copy-Item -Recurse -Force $src (Join-Path shots $d) }
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: user-shots
-          # 落ちたときに中身を追えるよう、本体の記録（logs）と会話（conversations）も上げる
-          path: |
-            shots
-            C:\ProgramData\AdaptiveAIStudio\logs
-            C:\ProgramData\AdaptiveAIStudio\conversations
+          path: shots
           retention-days: 7
 
   # 手で頼んだときだけ、残りの組み合わせも見る。
