@@ -455,6 +455,7 @@ export class UiServer {
       .then((notReady) => {
         if (notReady && notReady !== NOT_LOADED_YET) {
           this.broadcast({ type: 'log', level: 'warn', text: `先に読んでおけませんでした: ${notReady.split('\n')[0]}` });
+          return this.#fetchIfNothing();
         }
       })
       .catch((e: unknown) => {
@@ -1733,18 +1734,7 @@ export class UiServer {
       if (this.#fetching?.state === 'running') {
         return send(res, 409, { error: `いま別のモデル（${this.#fetching.id}）を取ってきています。終わってからにしてください` });
       }
-      const began = Date.now();
-      this.#fetching = { id, state: 'running', message: '始めます…', began };
-
-      // 数GBかかるので、待たせずに始めて、進み具合は流し込む。
-      this.#bg(this.#fetchModel(session, id).catch((e: unknown) => {
-        // 取りかかる前に落ちたときも、「取っている」のまま残さない（残ると、以後の取得を全部断る）
-        if (this.#fetching?.id === id && this.#fetching.began === began && this.#fetching.state === 'running') {
-          this.#fetching = { id, state: 'failed', message: (e as Error).message, began };
-          this.#jobsChanged();
-        }
-        throw e;
-      }), 'モデルの取得が落ちました');
+      this.#startFetch(session, id);
       return send(res, 202, { started: id });
     }
 
@@ -4496,6 +4486,40 @@ export class UiServer {
   /** 裏の仕事の状態が変わった。全部を流す（画面は差分を追わず、並べ直すだけ）。 */
   #jobsChanged(): void {
     this.broadcast({ type: 'jobs', jobs: this.#jobs() });
+  }
+
+  /** 取ってくるのを裏で始める（待たせない。進み具合は流し込む）。取っている最中かは呼ぶ側が見る。 */
+  #startFetch(session: Session, id: string): void {
+    const began = Date.now();
+    this.#fetching = { id, state: 'running', message: '始めます…', began };
+    this.#bg(this.#fetchModel(session, id).catch((e: unknown) => {
+      // 取りかかる前に落ちたときも、「取っている」のまま残さない（残ると、以後の取得を全部断る）
+      if (this.#fetching?.id === id && this.#fetching.began === began && this.#fetching.state === 'running') {
+        this.#fetching = { id, state: 'failed', message: (e as Error).message, began };
+        this.#jobsChanged();
+      }
+      throw e;
+    }), 'モデルの取得が落ちました');
+  }
+
+  /**
+   * 初めて起こしたとき、モデルが一つも無ければ、推奨のモデルを自分から取りに行く。
+   *
+   * 帯のボタンを押すまで何も起きなかったので、初めての人は「動かない」と受け取った。
+   * 取るのは GGUF が一つも無いときだけ（置いてあるなら触らない）。切れても .part から続ける。
+   * 止めたいときは設定 `runtime.autoFetch: false`。
+   */
+  async #fetchIfNothing(): Promise<void> {
+    if (this.#opts.config.runtime?.autoFetch === false) return;
+    if ((this.#opts.config.runtime?.kind ?? 'inproc') !== 'inproc') return;
+    if (this.#fetching?.state === 'running') return;
+    const starter = lookupCatalog(STARTER_ID);
+    if (!starter) return;
+    const dir = this.#opts.config.runtime?.modelsDir ?? modelsDir();
+    if ((await listGguf(dir).catch(() => [])).length > 0) return;
+    this.broadcast({ type: 'log', level: 'info', text: `モデルがまだ無いので、推奨のモデル（${starter.id}、約${starter.approxGB}GB）を取ってきます` });
+    this.#startFetch(await this.session(), starter.id);
+    this.#jobsChanged();
   }
 
   async #fetchModel(session: Session, id: string): Promise<void> {

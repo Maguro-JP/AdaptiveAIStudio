@@ -135,9 +135,16 @@ try {
     }
     say('モデルを取り終え、話せる状態になりました');
   } else {
-    const ready = await fetch(`http://127.0.0.1:${port}/api/ready`).then((r) => r.json()).catch(() => ({}));
-    if (!ready.ready) fail(`帯のボタンが出ず、話せる状態でもありません: ${JSON.stringify(ready).slice(0, 400)}`);
-    say('帯のボタンは出ませんでした（モデルは既にあります）');
+    // 初めて起こしたときは、押す前に本体が推奨のモデルを取りに行く（帯は「取ってきています…」になる）
+    const until = Date.now() + 30 * 60_000;
+    let ready = await fetch(`http://127.0.0.1:${port}/api/ready`).then((r) => r.json()).catch(() => ({}));
+    if (!ready.ready && ready.canFetch?.fetching) say('押す前に、本体が推奨のモデルを取りに行っています');
+    while (!ready.ready && ready.canFetch?.fetching && Date.now() < until) {
+      await page.waitForTimeout(10_000);
+      ready = await fetch(`http://127.0.0.1:${port}/api/ready`).then((r) => r.json()).catch(() => ({}));
+    }
+    if (!ready.ready) fail(`話せる状態になりません: ${JSON.stringify(ready).slice(0, 400)}`);
+    say('話せる状態です（押さずに済みました）');
   }
   if (shots) await page.screenshot({ path: join(shots, '1-ready.png') });
 
