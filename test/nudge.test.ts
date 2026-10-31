@@ -98,6 +98,20 @@ describe('途中で手を止めたら、押し戻す', () => {
     } finally { await r.close(); }
   });
 
+  test('終わりの合図をコマンドの形で呼んでも、終わりとして受け取る', async () => {
+    // Windows の確かめで実際に起きた形。run_command に TASK_DONE を渡し、「許されていないコマンド」で回り続けた
+    const r = await run([
+      { tool: 'write_file', args: { path: 'a.txt', content: '書きました\n' } },
+      { tool: 'run_command', args: { command: 'TASK_DONE' } },
+    ], undefined, true);
+    try {
+      assert.ok(!r.events.some((e) => e.type === 'toolStart' && e.call.name === 'run_command'), '合図をコマンドとして走らせた');
+      const last = r.events.at(-1);
+      assert.equal(last?.type, 'finished');
+      assert.equal(last.reason, 'completed');
+    } finally { await r.close(); }
+  });
+
   test('作業の頼みでも、普通に答えただけなら押し戻さない（対）', async () => {
     const r = await run([{ text: 'この作業場は src と test でできています。' }], undefined, true);
     try {
