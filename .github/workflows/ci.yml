@@ -299,7 +299,11 @@ jobs:
         if: always()
         with:
           name: user-shots
-          path: shots
+          # 落ちたときに中身を追えるよう、本体の記録（logs）と会話（conversations）も上げる
+          path: |
+            shots
+            C:\ProgramData\AdaptiveAIStudio\logs
+            C:\ProgramData\AdaptiveAIStudio\conversations
           retention-days: 7
 
   # 手で頼んだときだけ、残りの組み合わせも見る。
