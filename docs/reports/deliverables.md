@@ -6,8 +6,7 @@
 
 | # | 成果物 | 完成条件 | 状態 | 残り | 更新 |
 |---|---|---|---|---|---|
-| 1 | 配る形（portable）で、はじめての人が答えを1回受け取れる | 組んだ portable を空の場所に置き、`AdaptiveAIStudio.cmd selftest`（Linux では同じ中身の起動）で「送って返る」が OK になる。モデルは画面の「これを取ってくる」で取った本物の小さい GGUF を使う。Linux はこのコンテナで、Windows は CI の bundle / Windows で確かめる（仮） | 進行中 | Linux は selftest と画面の両方で通った（2026-10-24、DECISIONS 189・191 回目）。Windows は CI の bundle / Windows（土曜の定期実行か手で起こす）で見る。次の定期は 10-31。v0.12.4 の配布物は出た（Linux 上で組み、ファイルの有無だけ確かめている） | 2026-10-24 |
-| 2 | 0.12.x の Windows の setup.exe が、入れて起動して答えを返す | CI の Windows で setup.exe を無人で入れ、入った先の selftest の「送って返る」が OK になる（仮） | 未着手 | 1 が終わってから | 2026-10-24 |
+| 2 | 0.12.x の Windows の setup.exe が、入れて起動して答えを返す | CI の Windows で setup.exe を無人で入れ、入った入口から起こし、アプリのウィンドウ（Edge の --app）で開き、画面から既定のモデルを取って、fizzbuzz.js を作る・calc.js を直すの両方が通る（`scripts/check-user.mjs`、CI の `user`）。2 回続けて通る | 進行中 | 1 回通った（run 41207560067、522 秒）。2 回目は Windows の機械の空き待ち。Edge の確かめを足した版でもう 1 回 | 2026-10-31 |
 | 3 | 画面をアプリのウィンドウで開く（ブラウザのタブにしない） | `AdaptiveAIStudio.cmd` とデスクトップのショートカットを押すと、アドレス欄の無いウィンドウで画面が開く。閉じても本体は裏で動き続け、もう一度開くとそのウィンドウだけが開き、画面の「終了」で止まる。Windows CI の `test/launcher-run.test.ts` が通り、Edge で開くのを Windows の実機か CI で見る（仮） | 進行中 | Linux で偽のブラウザを使い、`--app` で開いて閉じると止まるところまで見た。Windows の CI と実機はまだ | 2026-10-24 |
 | 4 | モデルの保存先を、自作アプリどうしで共有する C:\LLM\gguf にそろえる | Windows で `C:\LLM\gguf` に取り、前の保存先にあるモデルも使える。`LLM_HOME` で変えられる。`test/home.test.ts` の「共有のモデルの保存先」が通り、setup.exe が `C:\LLM` を作る（仮） | 進行中 | 前の保存先に残ったモデルは doctor が言う（197 回目）。同時に一覧に出すのは未。setup.exe は v0.12.5 で組めた（入れた後の動きは未確認） | 2026-10-24 |
 | 5 | ネットワークモデル（このツールの根幹） | 中身を持たない `network` の送り口が既定の送り先になり、知識の蔵とネットワークから取った知識で、中のモデルが知らない新しいライブラリを使う頼みを `scripts/check-user.mjs` で通す。中のモデルだけだと落ちることも見る（docs/NETWORK-MODEL.md の段階 1〜5） | 未着手 | 設計は docs/NETWORK-MODEL.md。段階 0（Windows で作る・直すを2回続けて通す）の後に始める | 2026-10-31 |

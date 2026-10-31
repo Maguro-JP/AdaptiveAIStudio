@@ -29,6 +29,6 @@ test('proposals.add の呼び出しは、どれも root を渡す', () => {
       if (!/\broot:/.test(m[1]!)) missing.push(`${relative(root, file)}:${text.slice(0, m.index).split('\n').length}`);
     }
   }
-  assert.ok(seen >= 2, `呼び出しを見つけられていない（この試験の前提が崩れた）: ${seen}`);
+  assert.ok(seen >= 1, `呼び出しを見つけられていない（この試験の前提が崩れた）: ${seen}`);
   assert.deepEqual(missing, [], '作業場を付けずに提案を足している');
 });

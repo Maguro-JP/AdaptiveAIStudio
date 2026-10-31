@@ -289,7 +289,7 @@ describe('CI の使い方', () => {
     // UTC の 1 日 00:00 が JST の 1 日 09:00。ほかの予定（毎週など）を足さない
     assert.deepEqual([...raw.matchAll(/cron:\s*'([^']+)'/g)].map((m) => m[1]), ['0 0 1 * *']);
     assert.match(raw, /installer:\n\s+if:[^\n]*github\.event_name == 'schedule'/, '毎月の分で setup.exe を組まない');
-    assert.match(raw, /needs\.portable\.outputs\.tag/, 'setup.exe の版を portable と別に決めている');
+    assert.match(raw, /needs\.prepare\.outputs\.tag/, 'setup.exe の版を prepare と別に決めている');
   });
 
   test('続けて押したら、前のものは打ち切る', sourceOnly, async () => {
@@ -324,7 +324,7 @@ describe('CI の使い方', () => {
       assert.ok(raw.includes(`test -f node_modules/@node-llama-cpp/${dll}`), `${dll} が在ることを見ていない`);
     }
     // 組んだ後（zip・setup.exe の中）も見る。
-    assert.ok((raw.match(/win-x64-cuda\/bins\/win-x64-cuda\/llama-addon\.node/g) ?? []).length >= 3, '組んだ後の中身を見ていない');
+    assert.ok((raw.match(/win-x64-cuda\/bins\/win-x64-cuda\/llama-addon\.node/g) ?? []).length >= 2, '組んだ後の中身（setup.exe の中）を見ていない');
     const installer = await readFile(join(installRoot(), 'scripts', 'installer.mjs'), 'utf8');
     assert.ok(installer.includes('@node-llama-cpp/win-x64-cuda') && installer.includes('@node-llama-cpp/win-x64-vulkan'),
       '手元で組む installer.mjs が GPU 用を入れていない');

@@ -19,7 +19,7 @@
  * 画面を押すのは playwright-core。ブラウザは AAS_CHECK_BROWSER、無ければアプリのウィンドウと同じ探し方（Edge → Chrome）。
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { findAppBrowser } from '../src/core/app-window.ts';
@@ -214,10 +214,12 @@ try {
     await approveShown(page);
   }
   await idle(page, until2);
-  try { fixed = execFileSync(process.execPath, [calc], { encoding: 'utf8', timeout: 10_000 }).trim(); } catch { fixed = ''; }
+  let why = '';
+  try { fixed = execFileSync(process.execPath, [calc], { encoding: 'utf8', timeout: 10_000 }).trim(); }
+  catch (e) { fixed = ''; why = String(e.stderr || e.message || e).trim().split('\n').slice(0, 6).join(' / '); }
   if (shots) await page.screenshot({ path: join(shots, '3-after-fix.png') });
   if (statSync(calc).mtimeMs === before) fail('20 分たっても calc.js が直されませんでした');
-  if (fixed !== '5') fail(`calc.js を直しましたが、出力が 5 ではありません: 「${fixed}」`);
+  if (fixed !== '5') fail(`calc.js を直しましたが、出力が 5 ではありません: 「${fixed}」 実行のエラー: 「${why}」 中身: 「${readFileSync(calc, 'utf8').slice(0, 400)}」`);
   say('calc.js が直り、動かすと 5 が出ることを確かめました');
 } catch (e) {
   if (!failed) failed = e instanceof Error ? e.message : String(e);

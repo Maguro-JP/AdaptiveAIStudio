@@ -132,6 +132,7 @@
 - 201 回目（作業の頼みでツールを使わずに止まったら押し戻す。使う人と同じ道で確かめる）
 - 202 回目（先読みを使わない。初回起動で推奨のモデルを取る）
 - 203 回目（ネットワークモデルを根幹にする）
+- 204 回目（アプリケーション版に絞る。端末の入口と portable を片付ける）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -14207,3 +14208,11 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 理由: 利用者が決めたこと。学習済みのモデルは学習した中身でしか動けず、手元では重みを学習し直せない。知識を外に置けば、重みを変えずに新しい知識が身に付く
 - 選ばなかった案: 手元で重みを学習し直す（CPU では時間がかかりすぎる）、毎回全部取りに行く（遅く、オフラインで止まる）、呼ぶ側に知識の取り寄せを足す（呼ぶ側が全部それを知ることになる）
 - 触る場所: 新しく `src/providers/network.ts`（予定）、`src/core/registry.ts`、`src/agent/tools/network.ts`、`src/mcp/`。成果物は deliverables.md の 5
+
+## 2026-10-31  204 回目（アプリケーション版に絞る。端末の入口と portable を片付ける）
+
+- 決めたこと: 今後の開発はアプリケーション版（setup.exe で入れ、アプリのウィンドウで開く形）だけで行う。端末の入口（`chat`・`agent`・`team` と、それだけが使う `src/cli/main.ts`・`agent.ts`・`team.ts`・`slash.ts`・`input.ts`）を消した。release は portable.zip を作らず、setup.exe だけを公開する
+- 理由: 利用者が決めたこと。端末の入口はアプリの画面からは1つも呼ばれていなかった（棚卸しで確かめた）
+- 残したもの: Team の仕組みの本体（`src/agent/team.ts`、`src/core/team-setup.ts`。アプリでも使う）。bundle.mjs の `.portable` の目印は、手元の確かめ（check:bundle、check-user）で使うので残す。setup.exe は入れるときに外す
+- 判断待ち（利用者が決めるまで手を付けない）: モデルの CLI（`models`・`llama`。アプリの案内文がまだ指している）、測りの道具（`bench` など）、Ollama の対応、古い設計書
+- 触る場所: package.json の scripts、`.github/workflows/release.yml` の `prepare`、README の「起動する」
