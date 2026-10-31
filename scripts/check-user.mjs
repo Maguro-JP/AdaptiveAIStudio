@@ -74,6 +74,19 @@ function newestFizz(dirs, since) {
   return best?.path;
 }
 
+/**
+ * 画面に出た「許可」を押す。使う人は確かめの帯を見て押すので、押す（押さないと 10 分待って断ったことになる）。
+ * 押した数を返す。
+ */
+async function approveShown(page) {
+  let n = 0;
+  for (const btn of await page.getByRole('button', { name: '許可', exact: true }).all()) {
+    if (await btn.isVisible().catch(() => false)) { await btn.click().catch(() => undefined); n += 1; }
+  }
+  if (n > 0) say(`確かめの帯で「許可」を ${n} 回押しました`);
+  return n;
+}
+
 async function waitUp() {
   for (let i = 0; i < 120; i += 1) {
     const ok = await fetch(`http://127.0.0.1:${port}/api/info`, { signal: AbortSignal.timeout(2000) })
@@ -138,6 +151,7 @@ try {
   const until = Date.now() + 20 * 60_000;
   while (!file && Date.now() < until) {
     await page.waitForTimeout(10_000);
+    await approveShown(page);
     file = newestFizz(finds, askedAt);
   }
   if (shots) await page.screenshot({ path: join(shots, '2-after-ask.png') });
@@ -165,6 +179,7 @@ try {
   const until2 = Date.now() + 20 * 60_000;
   while (Date.now() < until2) {
     await page.waitForTimeout(10_000);
+    await approveShown(page);
     if (statSync(calc).mtimeMs === before) continue;
     await page.waitForTimeout(5_000);
     try { fixed = execFileSync(process.execPath, [calc], { encoding: 'utf8', timeout: 10_000 }).trim(); } catch { fixed = ''; }
