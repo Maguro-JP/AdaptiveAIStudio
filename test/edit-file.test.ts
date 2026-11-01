@@ -32,6 +32,24 @@ async function fixture(body: string, name = 'a.ts'): Promise<{ root: string; pat
 
 describe('一部だけ差し替える', () => {
 
+  test('**replace に引数の残り（edits と find）が混ざっていたら、当てずに例を返す**（4B が書いた形）', async () => {
+    const before = 'function add(a, b) {\n  return a - b;\n}\n';
+    const { root, path } = await fixture(before, 'calc.js');
+    const r = await editFileTool.run({
+      path, find: 'return a - b;',
+      replace: "return a + b; all: true, edits: [{'find': 'return a - b;', 'replace': 'return a + b;'}]}]},",
+    }, await ctxAt(root));
+    assert.equal(r.isError, true);
+    assert.match(r.content, /混ざっています/);
+    assert.equal(await readFile(join(root, path), 'utf8'), before, '壊れた置き換えを当てている');
+  });
+
+  test('普通のコードの { find: …, replace: … } は断らない', async () => {
+    const { root, path } = await fixture('const rule = 1;\n', 'r.js');
+    const r = await editFileTool.run({ path, find: 'const rule = 1;', replace: "const rule = { find: 'a', replace: 'b' };" }, await ctxAt(root));
+    assert.equal(r.isError, undefined, r.content);
+  });
+
   test('**空の edits と find / replace が一緒に来たら、find / replace で直す**（4B が付けてくる形）', async () => {
     const { root, path } = await fixture('function add(a, b) {\n  return a - b;\n}\n', 'calc.js');
     const args = { path, edits: [], find: 'return a - b;', replace: 'return a + b;' };

@@ -587,7 +587,30 @@ async function commit(
  * 受ける。**どちらも無いときは、そう言う。**片方だけ渡されたときも同じ。
  * 文字で理由を返し、通ったときだけ並びを返す。
  */
+/**
+ * 置き換えの中に、ツールの引数そのもの（`find:` と `edits:` など）が紛れていないか。
+ *
+ * 小さいモデルが引数の形を崩し、`replace` の値に `return a + b; all: true, edits: [{'find': …}]` と残りの引数まで書いた。
+ * そのまま当てると、ファイルが構文から壊れる（check-user、Qwen3.5-4B）。当てずに、渡し方の例を返す。
+ */
+function leakedArgs(replace: string): boolean {
+  // 普通のコードの `{ find: x, replace: y }` は断らない。引数の並び（edits）の中に、引用符つきの find があるときだけ
+  return /(^|[\s{,])edits['"]?\s*:\s*\[/.test(replace) && /['"]find['"]\s*:/.test(replace);
+}
+
 function parseEdits(
+  args: Record<string, unknown>,
+): { find: string; replace: string; all?: boolean }[] | string {
+  const got = parseEditsRaw(args);
+  if (typeof got === 'string') return got;
+  if (got.some((e) => leakedArgs(e.replace))) {
+    return 'replace の中にツールの引数（find・edits・all）が混ざっています。置き換えた後の文字だけを渡してください。'
+      + '例: {"path":"calc.js","find":"return a - b;","replace":"return a + b;"}';
+  }
+  return got;
+}
+
+function parseEditsRaw(
   args: Record<string, unknown>,
 ): { find: string; replace: string; all?: boolean }[] | string {
   const raw = args.edits;
