@@ -251,6 +251,8 @@ export interface RuntimeConfig {
    * 空いているVRAMは節約ではなく損失なので、既定で使い切る。
    */
   warm?: WarmConfig;
+  /** モデルが一つも無いとき、起動したら推奨のモデルを自分から取ってくるか。既定は取ってくる。 */
+  autoFetch?: boolean;
 }
 
 export interface WarmConfig {

@@ -675,7 +675,7 @@ console.log();
 // 締めの一手も、この場所で打てる形で言う。
 console.log(summaryLine(checks, style, isPortable()
   ? { ui: 'AdaptiveAIStudio.cmd' }
-  : { ui: how('ui'), agent: how('agent') }));
+  : { ui: how('ui') }));
 console.log();
 
 /*

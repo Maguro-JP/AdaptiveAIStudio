@@ -839,23 +839,13 @@ export class InProcRuntime implements LocalRuntime {
       throw e;
     });
     /*
-     * **直しは、渡した中身をそのまま書き戻すことが多い。**
+     * 先読み（token predictor、prompt lookup）は使わない。
      *
-     * `edit_file` は、ファイルの中身を渡して、その中の文字列を find/replace に
-     * 書かせる。出てくるトークンの多くは、**入力に既に在る**。
-     * そこを当てにいくのが token predictor（prompt lookup）で、当たった分は
-     * まとめて確かめられるので、その回数ぶん速くなる。
-     *
-     * ライブラリ自身が用途に「modifying code」を挙げていて、
-     * **出力そのものは変わらない**（当てが外れれば普通に生成し直す）と
-     * 書いてある。速さだけが変わる。
-     *
-     * 無い版のライブラリでも動くようにする。**速さの工夫なので、
-     * 無ければ無いで進む。**ただし黙らない（効いていないのに効いている
-     * と思われると、遅い理由を別の所に探すことになる）。
+     * ライブラリは「当てが外れれば生成し直すので出力は変わらない」と書いているが、本物の重みでは変わった。
+     * 「1 から 15 までの数を…」と頼むと、Qwen3.5 の 4B も 9B も `for (let i = 15; …)` と書いた（入力の 15 を採った）。
+     * 先読みを切ると、同じ 9B が `for (let i = 1; …)` と書き、作る・直すの両方が通った（2026-10-31、DECISIONS 202）。
+     * 速さより正しさを取る。CharacterDesigner（同じ機械で動いている）も先読みを使っていない。
      */
-    const hasPredictor = Boolean(lib.InputLookupTokenPredictor);
-    if (!hasPredictor) this.#opts.onLog?.('先読み（token predictor）が使えない版です。速さの工夫だけ効きません。');
     /*
      * **会話ごとに一本、sequence と LlamaChatSession を持つ。**
      *
@@ -863,13 +853,12 @@ export class InProcRuntime implements LocalRuntime {
      * 一つの context から sequences 本の sequence を取れて、llama.cpp が同じ
      * batch に載せて並列に評価する。LlamaChatSession は履歴を持つので、一本を
      * 二人で使うと混ざる。だから **本数ぶん別々に持ち**、依頼ごとに空いた一本を
-     * 貸す（LanePool）。先読みは一本ごとに一つ（sequence ごとに状態を持つ）。
+     * 貸す（LanePool）。
      */
     const lanes: ChatLane[] = [];
     try {
       for (let i = 0; i < sequences; i += 1) {
-        const predictor = lib.InputLookupTokenPredictor ? new lib.InputLookupTokenPredictor() : undefined;
-        const sequence = context.getSequence(predictor ? { tokenPredictor: predictor } : undefined);
+        const sequence = context.getSequence();
         lanes.push(new lib.LlamaChatSession({ contextSequence: sequence }) as ChatLane);
       }
     } catch (e) {

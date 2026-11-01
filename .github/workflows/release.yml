@@ -1,13 +1,9 @@
-# portable / setup.exe を組み立てる。
+# setup.exe を組み立てる（portable と Zip 版は配らない。DECISIONS 204）。
 #
-# **押すたびには回さない。**印（タグ）を付けたときと、手で頼んだときだけ。
+# **押すたびには回さない。**印（タグ）を付けたときと、release/v* の枝と、毎月の分だけ。
 #
-# 仕事を二つに割ってある。**portableに Windows は要らない。**
-# bundle.mjs は置くだけの仕事で、node.exe も落としてきて写すだけなので、
-# Linux で組める（枠は1倍）。Windows が要るのは NSIS で setup.exe を
-# 組むときだけなので、そちらはタグのときだけ回す。
-#
-# 前は全部を Windows で組んでいた。2倍の枠を、要らない仕事にも払っていた。
+# 仕事を二つに割ってある。prepare で中身を組んで確かめ（Linux）、installer で
+# NSIS の setup.exe にする（これも Linux の makensis で組める）。
 name: build
 
 on:
@@ -38,10 +34,10 @@ env:
 
 jobs:
   # ------------------------------------------------------------------
-  # portable。Node ごと入っているので、置くだけで動く。
+  # setup.exe の中身を組んで確かめる（版もここで決める）。
   # 何もインストールせずに使う。
   # ------------------------------------------------------------------
-  portable:
+  prepare:
     runs-on: ubuntu-latest
     # setup.exe も同じ版で組む（二つの段で別々に決めると、毎月の分で食い違う）
     outputs:
@@ -162,47 +158,7 @@ jobs:
           # バッチが CP932 のまま入っているか。UTF-8 だと cmd.exe が行を壊す。
           ! iconv -f UTF-8 -t UTF-8 dist/AdaptiveAIStudio/app/start.cmd > /dev/null 2>&1
 
-      - name: まとめたものを、開いて確かめる
-        run: |
-          cd dist && zip -qr ../AdaptiveAIStudio-portable.zip AdaptiveAIStudio && cd ..
-          # ZIP から取り出し直して見る。**まとめる前ではなく、後を見る。**
-          rm -rf verify && mkdir verify && unzip -q AdaptiveAIStudio-portable.zip -d verify
-          ls -l verify/AdaptiveAIStudio/runtime/
-          SIZE=$(stat -c%s verify/AdaptiveAIStudio/runtime/node.exe)
-          echo "ZIP の中の runtime/node.exe = ${SIZE} bytes"
-          test "$SIZE" -gt 40000000
-          test -f verify/AdaptiveAIStudio/app/node_modules/node-llama-cpp/dist/index.js
-          test -f verify/AdaptiveAIStudio/app/node_modules/@node-llama-cpp/win-x64/bins/win-x64/llama-addon.node
-          test -f verify/AdaptiveAIStudio/app/node_modules/@node-llama-cpp/win-x64-cuda/bins/win-x64-cuda/llama-addon.node
-          test -f verify/AdaptiveAIStudio/app/node_modules/@node-llama-cpp/win-x64-vulkan/bins/win-x64-vulkan/llama-addon.node
-          echo "ZIP の中のライブラリ: あり"
-          ls -l AdaptiveAIStudio-portable.zip
-
-      # **ここで「組んだものの中でテストを回す」ことはできない。**
-      #
-      # 手元で回して 17 件落ちたので、同じことを CI でもやろうとして
-      # `../runtime/node scripts/run-tests.mjs` を足した。**動かない。**
-      # ここで組んでいるのは Windows むけで、中に入っているのは
-      # `runtime/node.exe`。ubuntu の runner では、名前も違えば実行もできない。
-      # 足した本人が、その仕事が何を組んでいるかを見ていなかった。
-      #
-      # 手元で確かめるときは `--node-here` で組めば、その中で回せる
-      # （`npm run bundle -- --out ... --node-here`）。
-
-      # artifact には上げない。Releases に置くものと同じ写しを 30 日残していて、
-      # どの job も download していなかった。Actions の storage（0.5GB）を
-      # それだけで使い切った（39 個・2.8GB）。置く先は Releases の一つだけ。
-      - name: 公開する
-        uses: softprops/action-gh-release@v2
-        with:
-          # タグが無いときも、動く現物を置いておく。落とせないものを
-          # 「同梱してあります」と言わないための場所。
-          tag_name: ${{ steps.v.outputs.tag || 'portable' }}
-          name: ${{ steps.v.outputs.tag || 'portable (main)' }}
-          prerelease: ${{ steps.v.outputs.tag == '' }}
-          target_commitish: ${{ github.sha }}
-          files: |
-            AdaptiveAIStudio-portable.zip
+      # portable.zip は配らない（今後は setup.exe だけ。DECISIONS 204）。ここは setup.exe と同じ中身を組んで確かめる段。
 
   # ------------------------------------------------------------------
   # インストーラ。**Linux で組む。**
@@ -214,7 +170,7 @@ jobs:
   # ------------------------------------------------------------------
   installer:
     if: github.ref_type == 'tag' || startsWith(github.ref_name, 'release/v') || github.event_name == 'schedule'
-    needs: portable
+    needs: prepare
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -230,9 +186,9 @@ jobs:
         id: v
         shell: bash
         run: |
-          # portable で決めた版をそのまま使う
-          echo "tag=${{ needs.portable.outputs.tag }}" >> "$GITHUB_OUTPUT"
-          echo "id=${{ needs.portable.outputs.id }}" >> "$GITHUB_OUTPUT"
+          # prepare で決めた版をそのまま使う
+          echo "tag=${{ needs.prepare.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          echo "id=${{ needs.prepare.outputs.id }}" >> "$GITHUB_OUTPUT"
 
       - run: npm ci --no-audit --no-fund
 

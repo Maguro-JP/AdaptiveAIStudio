@@ -130,6 +130,9 @@
 - 199 回目（前の保存先と共有の保存先のモデルを同じ一覧に出す）
 - 200 回目（GPU で読めなかったら CPU で読み直す）
 - 201 回目（作業の頼みでツールを使わずに止まったら押し戻す。使う人と同じ道で確かめる）
+- 202 回目（先読みを使わない。初回起動で推奨のモデルを取る）
+- 203 回目（ネットワークモデルを根幹にする）
+- 204 回目（アプリケーション版に絞る。端末の入口と portable を片付ける）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -14191,3 +14194,25 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - 確かめ方も足した: `scripts/check-user.mjs` は、入れた形を利用者と同じ入口で起こし、画面のボタンでモデルを取り、ファイルを作る仕事を頼んで、出来たファイルを動かした出力で判定する。CI の `user`（手で起こす）で、Linux で組んだ setup.exe を Windows に黙って入れて同じことをする
 - 結果: このコンテナ（Linux、CPU 4 コア）の配る形で、直す前は 20 分たってもファイルが出来ず、直した後は 288 秒で fizzbuzz.js が出来て正しく動いた
 - 触る場所: `src/agent/loop.ts` の `expectsWork`、`src/core/session.ts` の `#agent`、`scripts/check-user.mjs`、`.github/workflows/ci.yml` の `user-setup` と `user`
+
+## 2026-10-31  202 回目（先読みを使わない。初回起動で推奨のモデルを取る）
+
+- 決めたこと: 先読み（node-llama-cpp の InputLookupTokenPredictor）を使わない。モデルが一つも無いまま起動したら、推奨のモデルを自分から取りに行く（設定 `runtime.autoFetch: false` で止まる）。終わりの合図を run_command に渡したときも、終わりとして受け取る
+- 理由: 「1 から 15 までの数を…」と頼むと、Qwen3.5-4B も 9B も `for (let i = 15; …)` と書いた。先読みを切ると 9B は `for (let i = 1; …)` と書き、作る・直すの両方が通った。ライブラリは出力が変わらないと書いているが、本物の重みでは変わった。CharacterDesigner（同じ機械で LLM が動いている）は先読みを使わず、温度 0 で動かしている
+- 選ばなかった案: 先読みを残して、頼みの文から数字を外す（使う人の頼みを選べない）
+- 触る場所: `src/runtime/inproc.ts` の `#loadOn`、`src/ui/server.ts` の `#fetchIfNothing`、`src/agent/loop.ts` の `isDoneCall`。試験は `test/inproc-no-predictor.test.ts`、`test/auto-fetch.test.ts`、`test/nudge.test.ts`。確かめは `scripts/check-user.mjs`
+
+## 2026-10-31  203 回目（ネットワークモデルを根幹にする）
+
+- 決めたこと: 重みを持たない「ネットワーク」という送り口を作り、既定の送り先にする。知識はネットワークから取って手元の蔵に貯め、考えて書く仕事は中で別のモデル（手元・LAN・外）に任せる。設計は docs/NETWORK-MODEL.md
+- 理由: 利用者が決めたこと。学習済みのモデルは学習した中身でしか動けず、手元では重みを学習し直せない。知識を外に置けば、重みを変えずに新しい知識が身に付く
+- 選ばなかった案: 手元で重みを学習し直す（CPU では時間がかかりすぎる）、毎回全部取りに行く（遅く、オフラインで止まる）、呼ぶ側に知識の取り寄せを足す（呼ぶ側が全部それを知ることになる）
+- 触る場所: 新しく `src/providers/network.ts`（予定）、`src/core/registry.ts`、`src/agent/tools/network.ts`、`src/mcp/`。成果物は deliverables.md の 5
+
+## 2026-10-31  204 回目（アプリケーション版に絞る。端末の入口と portable を片付ける）
+
+- 決めたこと: 今後の開発はアプリケーション版（setup.exe で入れ、アプリのウィンドウで開く形）だけで行う。端末の入口（`chat`・`agent`・`team` と、それだけが使う `src/cli/main.ts`・`agent.ts`・`team.ts`・`slash.ts`・`input.ts`）を消した。release は portable.zip を作らず、setup.exe だけを公開する
+- 理由: 利用者が決めたこと。端末の入口はアプリの画面からは1つも呼ばれていなかった（棚卸しで確かめた）
+- 残したもの: Team の仕組みの本体（`src/agent/team.ts`、`src/core/team-setup.ts`。アプリでも使う）。bundle.mjs の `.portable` の目印は、手元の確かめ（check:bundle、check-user）で使うので残す。setup.exe は入れるときに外す
+- 判断待ち（利用者が決めるまで手を付けない）: モデルの CLI（`models`・`llama`。アプリの案内文がまだ指している）、測りの道具（`bench` など）、Ollama の対応、古い設計書
+- 触る場所: package.json の scripts、`.github/workflows/release.yml` の `prepare`、README の「起動する」

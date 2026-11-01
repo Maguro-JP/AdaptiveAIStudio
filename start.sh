@@ -44,8 +44,6 @@ if [ -z "$task" ]; then
   echo "  AdaptiveAIStudio"
   echo "  ----------------------------------------"
   echo "   1  画面をひらく          （ふだんはこれ）"
-  echo "   2  端末で作業させる"
-  echo "   3  ただの相談"
   echo "   4  この環境を見てもらう"
   echo "   5  手元のモデルを見る"
   echo "   6  検査を回す"
@@ -58,8 +56,6 @@ if [ -z "$task" ]; then
   read -r choice
   case "$choice" in
     1) task=ui ;;
-    2) task=agent ;;
-    3) task=chat ;;
     4) task=doctor ;;
     5) task=models ;;
     6) task=test ;;

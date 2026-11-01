@@ -247,70 +247,16 @@ cp aas.config.example.json aas.config.json      # Windows なら copy
 
 省略した場合は、この中で読む（inproc）土台で、置き場の GGUF を使って起動する。
 設定ファイルの場所は `AAS_CONFIG` > 隣の `aas.config.json` > データの置き場（`AAS_HOME`）の順。
-製品の形（portable・インストーラ）ではデータの置き場に置く。画面からの保存もそこへ書く。
+製品の形（setup.exe で入れた形）ではデータの置き場に置く。画面からの保存もそこへ書く。
 `candidates` は先頭から順に試され、利用制限や障害で使えなければ次へ自動で切り替わる。
 
 ### 起動する
 
-エージェント（作業者に実装させる）:
+setup.exe で入れたあと、スタートメニューかデスクトップの「AdaptiveAIStudio」を押します。アプリのウィンドウが開き、頼みは画面の入力欄に書きます。ファイルを書き換える前と、コマンドを実行する前には、画面の帯で許可を求めます。応答の下には、実際に答えたモデルが出ます。
 
-```
-npm run agent
-```
+端末で動かす入口（`npm run agent`・`npm run team`・`npm run chat`）は、アプリケーション版に絞ったので無くしました（DECISIONS 204）。
 
-```
-依頼> add関数のバグを直して
-  · read_file app.ts
-    ✓ 1	export function add(a: number, b: number): number {
-  · write_file app.ts
-
-  変更: app.ts
-  @@ -1,4 +1,4 @@
-   export function add(a: number, b: number): number {
-  -  return a - b;
-  +  return a + b;
-   }
-  許可しますか？ [y/N] y
-    ✓ 更新: app.ts（+1 -1）
-
-  完了 (2.8s)
-```
-
-チーム（複数の作業者を並列で動かす）:
-
-```
-npm run team -- tasks.json
-```
-
-```
-▶ auth    [coder]
-▶ session [coder]
-▶ logger  [cpu]
-✓ auth    (1.5s)
-✓ session (1.5s)
-▶ index   [coder]        ← auth と session の完了を待って開始
-✓ logger  (1.5s)
-✓ index   (1.4s)
-完了 4/4
-```
-
-`tasks.json` は今は手書き。P3 で PM が自動生成するようになる。
-
-```jsonc
-[
-  { "id": "auth",  "laneId": "coder", "writes": ["auth.ts"],  "instruction": "..." },
-  { "id": "index", "laneId": "coder", "writes": ["index.ts"],
-    "deps": ["auth"], "instruction": "..." },
-
-  // 同じ作業を複数モデルへ同時に投げ、最初に完了したものを採用する。
-  // ローカルは計算が無料なので、遊ばせるより重ねて投げた方が速い。
-  { "id": "fix", "laneId": "coder", "writes": ["fix.ts"], "instruction": "...",
-    "raceWith": ["ollama:qwen3.5:9b"] }
-]
-```
-
-レーンは設定で決める。並列度は「同時ロードするモデル数」ではなく
-「同一モデルへ同時に流すタスク数」で稼ぐ。
+レーン（同じモデルへ同時に流す本数）は設定で決めます。
 
 ```jsonc
 { "agent": { "lanes": [
@@ -318,35 +264,6 @@ npm run team -- tasks.json
   { "id": "cpu",   "candidates": ["ollama:qwen3.5:4b"],       "parallel": 2 }
 ] } }
 ```
-
-モデルの一覧と実行計画を見る:
-
-```
-npm run models
-```
-
-```
-qwen3-32b-q4_k_m.gguf (19.8GB)
-  部分オフロード (GPU 16/64層) / context 8192 / 約 3 tok/s
-  VRAM 7.0GB / RAM 13.8GB
-  1000トークンの応答: 約 6分
-  劣化: GPU層数を 16/64 に減らした
-```
-
-チャットのみ:
-
-```
-npm run chat
-```
-
-```
-> このコードのバグを指摘して
-ローカルモデルが応答しました。
-  — ollama:qwen3.5:9b / 3.2s
-```
-
-応答の下に必ず「実際に答えたモデル」が出る。
-フォールバックが起きた場合は切替の理由も表示される。暗黙に劣化させないための仕様。
 
 ### 自己検証ループ
 
@@ -565,7 +482,7 @@ playwright-core と Chromium が要ります（配る物には入りません）
 | 戻す（一往復ごとの戻り先。押すとそこまで書き戻す） | 動作 |
 | 置き場の決まりを読む（`AGENTS.md` / `CLAUDE.md` / `.cursorrules` ほか） | 動作 |
 | 見ない場所を `.gitignore` の通りにする | 動作 |
-| portable（Node ごと同梱。何も入れられない機械で動く） | 動作 |
+| setup.exe で入れた形（Node ごと同梱。何も入れられない機械でも動く） | 動作 |
 | インストーラ（`setup.exe`） | 組めている。実機で入れるのはこれから |
 
 次に何を作るかは [docs/ROADMAP.md](docs/ROADMAP.md) を参照。
@@ -593,7 +510,7 @@ playwright-core と Chromium が要ります（配る物には入りません）
 | 何 | どこまで確かめたか |
 |---|---|
 | `setup.exe` | 組めている。Windows の実機で入れて動かしたことは無い |
-| 配る形（portable）を Windows で開くこと | Windows の CI で通した（2026-09-16、`.github/workflows/ci.yml` の `bundle`）。組んで、その中で全部のテストを回し、画面を起こして送って返り（乱数の重みの模型）、sweep して止まるところまで。回すのは手で頼んだときと週に一度。実機で人が開いたことは無い |
+| 配る中身を Windows で開くこと | Windows の CI で通した（2026-09-16、`.github/workflows/ci.yml` の `bundle`）。組んで、その中で全部のテストを回し、画面を起こして送って返り（乱数の重みの模型）、sweep して止まるところまで。回すのは手で頼んだときと週に一度。実機で人が開いたことは無い |
 | 一覧のモデル名（`unsloth/…` など） | 生きているか確かめていない。開発している場所から huggingface へ出られない。落とせなかったときは、手で置く道を案内する |
 | 先読み（token predictor） | 速くなることは測っていない。答えが変わらないことだけ、本物のモデルで確かめた |
 | 組み込みのモデル実行での KV 量子化 | 入れていない。ライブラリ自身が「experimental / 不安定 / crash しうる」と書いており、手元に本物の重みが無く確かめられないため |

@@ -226,7 +226,11 @@ export class Agent {
       const tail = mark.end();
       if (tail.text) { text += tail.text; yield { type: 'thinking', delta: tail.text }; }
       // 前の回に合図とツール呼び出しを一緒に出したなら、この回の合図として数える（呼び出しがあると合図を捨てるので、次の返事が空だと「動かなかった」になっていた）
-      const declaredDone = tail.done || doneWithCalls;
+      // 終わりの合図をコマンドとして呼ぶモデルがいる（run_command に TASK_DONE を渡し、「許されていないコマンド」で
+      // 押し戻されて回り続けた。Windows の確かめで実際に起きた）。合図として受け取り、呼び出しからは外す
+      const doneAsCall = calls.findIndex((c) => isDoneCall(c));
+      if (doneAsCall >= 0) calls.splice(doneAsCall, 1);
+      const declaredDone = tail.done || doneWithCalls || doneAsCall >= 0;
       doneWithCalls = tail.done && calls.length > 0;
 
       if (failure) {
@@ -441,4 +445,11 @@ export function cyclePeriod(recent: readonly string[]): number | undefined {
     if (block.every((sig, i) => sig === before[i])) return p;
   }
   return undefined;
+}
+
+/** 終わりの合図を、ツールの呼び出しの形で出したもの（run_command に TASK_DONE だけ、など）。 */
+export function isDoneCall(call: { name: string; args: unknown }): boolean {
+  if (call.name.trim().toUpperCase() === DONE_MARK) return true;
+  const args = call.args as { command?: unknown } | undefined;
+  return call.name === 'run_command' && typeof args?.command === 'string' && args.command.trim().toUpperCase() === DONE_MARK;
 }

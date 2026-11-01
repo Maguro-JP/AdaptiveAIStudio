@@ -35,30 +35,6 @@ function runCli(script: string, env: NodeJS.ProcessEnv, input = ''): Promise<{ c
   });
 }
 
-describe('aas agent の終了コード', { timeout: 120_000 }, () => {
-  let fake: FakeServer | undefined;
-  after(async () => { await fake?.close(); });
-
-  test('**依頼が失敗したら 1 で終える**（流し込んだ呼び手が「通った」と読まない）', async () => {
-    fake = await startFakeServer({ kind: 'status', status: 400, body: '{"error":{"message":"bad request"}}' });
-    const dir = await tempDir('aas-cli-gaps-');
-    const root = join(dir, 'work');
-    await mkdir(root, { recursive: true });
-    const config = join(dir, 'aas.config.json');
-    await writeFile(config, JSON.stringify({
-      providers: [{ id: 'local', kind: 'openai-compatible', baseUrl: fake.baseUrl, locality: 'local', models: ['m'] }],
-      candidates: ['local:m'],
-      runtime: { kind: 'none' },
-      agent: { root, approval: 'auto', maxTurns: 2 },
-    }));
-    const r = await runCli('agent.ts',
-      { AAS_CONFIG: config, AAS_HOME: join(dir, 'home'), AAS_STATE_DIR: join(dir, 'state') },
-      'a.txt を作って\n');
-    assert.match(r.out, /失敗/, `失敗まで行っていない:\n${r.out.slice(-800)}`);
-    assert.equal(r.code, 1, `失敗したのに ${r.code} で終えた:\n${r.out.slice(-800)}`);
-  });
-});
-
 describe('selftest', { timeout: 120_000 }, () => {
   test('**設定が壊れていても、報告のファイルを出して 1 で終える**', async () => {
     const dir = await tempDir('aas-cli-gaps-');

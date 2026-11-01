@@ -31,6 +31,23 @@ async function fixture(body: string, name = 'a.ts'): Promise<{ root: string; pat
 }
 
 describe('一部だけ差し替える', () => {
+
+  test('**空の edits と find / replace が一緒に来たら、find / replace で直す**（4B が付けてくる形）', async () => {
+    const { root, path } = await fixture('function add(a, b) {\n  return a - b;\n}\n', 'calc.js');
+    const args = { path, edits: [], find: 'return a - b;', replace: 'return a + b;' };
+    // 承認の前に後の姿を見る側（規則）も、同じ直しとして読む。
+    assert.equal(await plannedContent('edit_file', args, root), 'function add(a, b) {\n  return a + b;\n}\n');
+    const r = await editFileTool.run(args, await ctxAt(root));
+    assert.equal(r.isError, undefined, r.content);
+    assert.equal(await readFile(join(root, path), 'utf8'), 'function add(a, b) {\n  return a + b;\n}\n');
+  });
+
+  test('空の edits だけなら、渡し方の例を返す（例が無いと同じ呼び出しを繰り返す）', async () => {
+    const { root, path } = await fixture('x\n');
+    const r = await editFileTool.run({ path, edits: [] }, await ctxAt(root));
+    assert.equal(r.isError, true);
+    assert.match(r.content, /例: \{"path"/);
+  });
   test('当たった一箇所だけ変わる。ほかは触らない', async () => {
     const { root, path } = await fixture('const a = 1;\nconst b = 2;\nconst c = 3;\n');
     const r = await editFileTool.run(
