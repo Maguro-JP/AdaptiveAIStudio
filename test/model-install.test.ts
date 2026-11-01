@@ -270,7 +270,7 @@ describe('数GBを、家の回線で取る', () => {
   const SIZE = 4 * 1024 * 1024;
 
   /** 本物と同じ形の配布元。切る・黙る・続きに応じる、を作り分ける。 */
-  async function hf(plan: (round: number) => 'ok' | 'cut' | 'stall') {
+  async function hf(plan: (round: number) => 'ok' | 'cut' | 'stall' | 'busy') {
     const { createServer } = await import('node:http');
     let round = 0;
     const asked: (string | undefined)[] = [];
@@ -284,6 +284,7 @@ describe('数GBを、家の回線で取る', () => {
       const from = Number(/bytes=(\d+)-/.exec(req.headers.range ?? '')?.[1] ?? 0);
       const how = plan(round);
       const head = Buffer.alloc(4); head.write('GGUF');
+      if (how === 'busy') { res.writeHead(503); return res.end(); }
       if (how === 'stall') { res.writeHead(200, { 'content-length': String(SIZE) }); res.write(head); return; }
       res.writeHead(from > 0 ? 206 : 200, { 'content-length': String(SIZE - from) });
       if (how === 'cut') {
@@ -311,8 +312,9 @@ describe('数GBを、家の回線で取る', () => {
     const dir = await tempDir('aas-dl-');
     const srv = await hf((n) => (n === 1 ? 'cut' : 'ok'));
     try {
+      // 自分で取り直さない形（retries: 0）で、切れたときの残し方を見る
       await assert.rejects(
-        installModel({ entry, modelsDir: dir, fetchImpl: srv.fetchImpl }),
+        installModel({ entry, modelsDir: dir, fetchImpl: srv.fetchImpl, retries: 0 }),
         /続きから取ります/,
         '切れたことを人の言葉で言っていない',
       );
@@ -325,6 +327,61 @@ describe('数GBを、家の回線で取る', () => {
       // 二度目は Range で求めていること（＝最初から取り直していない）。
       assert.match(srv.asked.at(-1) ?? '', /^bytes=\d+-$/, `続きから求めていない: ${srv.asked.at(-1)}`);
     } finally { await srv.close(); }
+  });
+
+  test('**切れたら、人に返さずに自分で続きから取り直す**', async () => {
+    // 「もう一度実行してください」と返していたので、初回の自動取得が回線の一瞬の切れで止まっていた
+    const dir = await tempDir('aas-dl-retry-');
+    const srv = await hf((n) => (n === 1 ? 'cut' : 'ok'));
+    const lines: string[] = [];
+    const waits: number[] = [];
+    try {
+      const done = await installModel({
+        entry, modelsDir: dir, fetchImpl: srv.fetchImpl,
+        onProgress: (l) => lines.push(l), sleep: async (ms) => { waits.push(ms); },
+      });
+      assert.equal(done.bytes, SIZE, '取り直して、揃っていない');
+      assert.deepEqual(waits, [2000], `間の空け方が違う: ${waits.join(',')}`);
+      assert.ok(lines.some((l) => /続きから取り直します（1\/3）/.test(l)), `取り直したと言っていない:\n${lines.join('\n')}`);
+      assert.match(srv.asked.at(-1) ?? '', /^bytes=\d+-$/, `続きから求めていない: ${srv.asked.at(-1)}`);
+    } finally { await srv.close(); }
+  });
+
+  test('取り直しは決めた回数で止め、人に言う', async () => {
+    const dir = await tempDir('aas-dl-retry2-');
+    // 配布元がずっと不調（503）。間を空けて 3 回まで取り直し、それでも駄目なら止める
+    const srv = await hf(() => 'busy');
+    const waits: number[] = [];
+    try {
+      await assert.rejects(
+        installModel({ entry, modelsDir: dir, fetchImpl: srv.fetchImpl, sleep: async (ms) => { waits.push(ms); } }),
+        /取ってこられませんでした \(503\)/,
+      );
+      assert.equal(srv.asked.length, 4, `取りに行った回数が違う: ${srv.asked.length}`);
+      assert.deepEqual(waits, [2000, 4000, 8000]);
+    } finally { await srv.close(); }
+  });
+
+  test('配布元に無い（404）ものは、取り直さない', async () => {
+    const { createServer } = await import('node:http');
+    let calls = 0;
+    const srv = createServer((req, res) => {
+      if (req.url?.startsWith('/api/models/')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ siblings: [{ rfilename: 'model-Q4_K_M.gguf' }] }));
+      }
+      calls += 1; res.writeHead(404); res.end();
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+    const { port } = srv.address() as import('node:net').AddressInfo;
+    const dir = await tempDir('aas-dl-404-');
+    try {
+      await assert.rejects(installModel({
+        entry, modelsDir: dir, sleep: async () => {},
+        fetchImpl: ((u: string | URL, init?: RequestInit) => fetch(String(u).replace('https://huggingface.co', `http://127.0.0.1:${port}`), init)) as typeof fetch,
+      }), /\(404\)/);
+      assert.equal(calls, 1, `404 を取り直している: ${calls}`);
+    } finally { await new Promise<void>((r) => srv.close(() => r())); }
   });
 
   test('相手が黙り込んだら、打ち切る', async () => {

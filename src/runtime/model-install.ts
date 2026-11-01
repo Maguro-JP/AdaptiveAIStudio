@@ -55,6 +55,38 @@ export interface ModelInstallOptions {
   onStatus?: (status: FetchStatus) => void;
   fetchImpl?: typeof fetch;
   signal?: AbortSignal;
+  /**
+   * 切れたときに、自分で続きから取り直す回数（既定 3）。待ち時間は 2・4・8 秒と伸ばす。
+   * 人に「もう一度実行してください」と返していたので、回線が一瞬切れるだけで初回の自動取得が止まっていた。
+   */
+  retries?: number;
+  /** 待ち方を外から渡す（試験で待たないため）。 */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** 続きから取り直せば直る失敗（切れた、だまった、配布元の一時的な不調）。 */
+class ResumableFetchError extends Error {}
+
+/**
+ * 続きから取れる失敗だけを、間を空けて取り直す。
+ * 止められたとき、空きが足りないとき、配布元に無いときは取り直さない（何度やっても同じため）。
+ */
+async function withRetry(
+  opts: ModelInstallOptions, log: (l: string) => void, run: () => Promise<InstalledModel>,
+): Promise<InstalledModel> {
+  const tries = Math.max(0, opts.retries ?? 3);
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (let i = 0; ; i += 1) {
+    try {
+      return await run();
+    } catch (e) {
+      if (!(e instanceof ResumableFetchError) || i >= tries || opts.signal?.aborted) throw e;
+      const wait = 2000 * 2 ** i;
+      log(`${e.message.split('\n')[0]} ${wait / 1000} 秒おいて、続きから取り直します（${i + 1}/${tries}）。`);
+      await sleep(wait);
+      if (opts.signal?.aborted) throw e;
+    }
+  }
 }
 
 export interface InstalledModel {
@@ -172,11 +204,11 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
       log(`すでにあります: ${here}`);
       return { path: here, file: leaf, bytes: had.size };
     }
-    return await fetchInto({
+    return await withRetry(opts, log, () => fetchInto({
       url: directUrl, leaf, modelsDir, entry, fetchImpl, log,
       ...(opts.onStatus ? { status: opts.onStatus } : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
-    });
+    }));
   }
 
   log(`一覧を調べます: ${entry.repo}`);
@@ -245,12 +277,12 @@ export async function installModel(opts: ModelInstallOptions): Promise<Installed
   const leaf = file.split(/[\\/]/).at(-1) ?? '';
   if (!leaf || leaf === '.' || leaf === '..') throw new Error(`置ける名前ではありません: ${file}`);
 
-  return await fetchInto({
+  return await withRetry(opts, log, () => fetchInto({
     url: `${HF_FILES}/${entry.repo}/resolve/main/${file}`,
     leaf, modelsDir, entry, fetchImpl, log,
     ...(opts.onStatus ? { status: opts.onStatus } : {}),
     ...(opts.signal ? { signal: opts.signal } : {}),
-  });
+  }));
 }
 
 /** 落とす本体。一覧から選んだときも、URL を直に渡されたときも、ここを通す。 */
@@ -321,7 +353,7 @@ async function fetchInto(a: {
   } catch (e) {
     clearTimeout(timer);
     if (opts.signal?.aborted) throw e;
-    throw new Error(
+    throw new ResumableFetchError(
       stalled
         ? `配布元が ${stallMs / 1000} 秒だまったままです。回線を確かめて、もう一度実行してください。\n`
           + `（途中までは残してあります。続きから取ります）\n${byHand(entry, modelsDir, url)}`
@@ -371,7 +403,9 @@ async function fetchInto(a: {
     log('すでに全部取れていました。');
   } else if (!res.ok) {
     clearTimeout(timer);
-    throw new Error(`取ってこられませんでした (${res.status})\n${byHand(entry, modelsDir, url)}`);
+    // 配布元の一時的な不調（429、5xx）は、間を空ければ通る。404 などは何度やっても同じ
+    const transient = res.status === 429 || res.status >= 500;
+    throw new (transient ? ResumableFetchError : Error)(`取ってこられませんでした (${res.status})\n${byHand(entry, modelsDir, url)}`);
   }
 
   /*
@@ -458,7 +492,7 @@ async function fetchInto(a: {
         : `書き込めません（${writeFailed.code ?? writeFailed.message}）: ${tmp}\n${human(written)} まで取れています。`);
     }
     // **残しておく。**次は続きから取れる。消すと、また最初からになる。
-    throw new Error(
+    throw new ResumableFetchError(
       stalled
         ? `配布元が ${stallMs / 1000} 秒だまったままです（${human(written)} まで取れています）。\n`
           + 'もう一度実行すると、続きから取ります。'
@@ -472,7 +506,7 @@ async function fetchInto(a: {
 
   if (total > 0 && written !== total) {
     // **消さない。**続きから取れる。
-    throw new Error(
+    throw new ResumableFetchError(
       `途中で切れました（${human(written)} / ${human(total)}）。\n`
       + 'もう一度実行すると、続きから取ります。',
     );
