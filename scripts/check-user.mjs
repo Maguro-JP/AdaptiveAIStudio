@@ -221,6 +221,40 @@ try {
   if (statSync(calc).mtimeMs === before) fail('20 分たっても calc.js が直されませんでした');
   if (fixed !== '5') fail(`calc.js を直しましたが、出力が 5 ではありません: 「${fixed}」 実行のエラー: 「${why}」 中身: 「${readFileSync(calc, 'utf8').slice(0, 400)}」`);
   say('calc.js が直り、動かすと 5 が出ることを確かめました');
+
+  // 成果物 3: もう一度起こしても本体は 1 つのまま（ウィンドウだけ開き直す）、終了で止まる
+  const info = async () => fetch(`http://127.0.0.1:${port}/api/info`, { signal: AbortSignal.timeout(3000) })
+    .then((r) => (r.ok ? r.json() : undefined)).catch(() => undefined);
+  const first = await info();
+  if (!first?.pid) fail('本体の PID が /api/info に出ていません');
+  const again = await new Promise((resolve) => {
+    let out = '';
+    const c = spawn(start, { shell: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, AAS_UI_PORT: String(port) } });
+    c.stdout.on('data', (b) => { out += b; });
+    c.stderr.on('data', (b) => { out += b; });
+    const t = setTimeout(() => { try { c.kill(); } catch { /* */ } resolve({ code: -1, out }); }, 60_000);
+    c.on('exit', (code) => { clearTimeout(t); resolve({ code, out }); });
+  });
+  if (again.code !== 0) fail(`2 回目の起動が 0 で終わりません（${again.code}）: ${again.out.slice(-400)}`);
+  // 入口（AdaptiveAIStudio.cmd）はコンソールを最小化して渡し、すぐ戻る。本体が開き直すまで少し待つ
+  await new Promise((r) => setTimeout(r, 5000));
+  const second = await info();
+  if (second?.pid !== first.pid) fail(`2 回目の起動で本体が入れ替わりました（${first.pid} → ${second?.pid}）`);
+  say(`もう一度起こしても、本体は 1 つのまま（PID ${first.pid}）でした`);
+  const quit = await fetch(`http://127.0.0.1:${port}/api/quit`, { method: 'POST' }).catch(() => undefined);
+  if (quit?.status !== 200) fail(`終了が受け付けられません（${quit?.status ?? '繋がらない'}）`);
+  let gone = false;
+  for (let i = 0; i < 20 && !gone; i += 1) {
+    await new Promise((r) => setTimeout(r, 1000));
+    gone = !(await info());
+  }
+  if (!gone) fail('終了を押して 20 秒たっても、本体が止まりません');
+  if (process.platform === 'win32') {
+    const left = execFileSync('powershell', ['-NoProfile', '-Command',
+      `if (Get-Process -Id ${first.pid} -ErrorAction SilentlyContinue) { 'alive' } else { 'gone' }`], { encoding: 'utf8', timeout: 15_000 }).trim();
+    if (left !== 'gone') fail(`終了のあとも本体の PID ${first.pid} が残っています`);
+  }
+  say('終了で本体が止まりました');
 } catch (e) {
   if (!failed) failed = e instanceof Error ? e.message : String(e);
   if (page && shots) await page.screenshot({ path: join(shots, 'failed.png') }).catch(() => undefined);
@@ -239,5 +273,5 @@ if (failed) {
   console.log(`\n== 落ちました（${elapsed()}）: ${failed}`);
   process.exit(1);
 }
-console.log(`\n== 通りました（${elapsed()}）: 入れた形で、既定のモデルが頼んだファイルを作り、既にあるファイルも直し、どちらも正しく動きました`);
+console.log(`\n== 通りました（${elapsed()}）: 入れた形で、既定のモデルが頼んだファイルを作り、既にあるファイルも直し、どちらも正しく動きました。もう一度起こしても本体は 1 つのままで、終了で止まりました`);
 process.exit(0);
