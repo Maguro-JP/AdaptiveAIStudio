@@ -63,7 +63,7 @@ async function scripted(script: Step[]) {
   };
 }
 
-async function run(script: Step[], maxNudges?: number, expectsWork?: boolean) {
+async function run(script: Step[], maxNudges?: number, expectsWork?: boolean, ask = 'a.txt を書き換えて') {
   const root = await tempDir('aas-nudge-');
   await writeFile(join(root, 'a.txt'), 'もとの中身\n');
   const fake = await scripted(script);
@@ -78,7 +78,7 @@ async function run(script: Step[], maxNudges?: number, expectsWork?: boolean) {
     ...(expectsWork !== undefined ? { expectsWork } : {}),
   });
   const events: AgentEvent[] = [];
-  const history = [{ role: 'user' as const, content: 'a.txt を書き換えて' }];
+  const history = [{ role: 'user' as const, content: ask }];
   for await (const ev of agent.run(history, new AbortController().signal)) events.push(ev);
   return { events, root, asked: fake.asked, close: fake.close };
 }
@@ -90,12 +90,30 @@ describe('途中で手を止めたら、押し戻す', () => {
       { text: '```javascript\nconsole.log(1)\n```' },
       { tool: 'write_file', args: { path: 'a.txt', content: '書きました\n' } },
       { text: `${DONE_MARK}\n` },
-    ], undefined, true);
+    ], undefined, true, 'さっきのファイルを書き換えて');
     try {
       assert.ok(r.events.some((e) => e.type === 'nudged'), '押し戻していない');
       assert.ok(r.asked.some((a) => a.includes('ファイルを書くツール')), 'ツールで書くよう言っていない');
       assert.equal(await readFile(join(r.root, 'a.txt'), 'utf8'), '書きました\n');
     } finally { await r.close(); }
+  });
+
+  test('**頼みにファイル名が 1 つあり、答えのコードが 1 つなら、そのファイルを書く呼び出しに直す**（4B が本文に書いて「完了」と言った形）', async () => {
+    const r = await run([
+      { text: '```javascript\nconsole.log(15)\n```\n' + DONE_MARK + '\n' },
+      { text: `${DONE_MARK}\n` },
+    ], undefined, true, 'b.js というファイルを作ってください');
+    try {
+      assert.equal(await readFile(join(r.root, 'b.js'), 'utf8'), 'console.log(15)\n');
+      assert.ok(r.events.some((e) => e.type === 'salvaged'), '直したことを知らせていない');
+    } finally { await r.close(); }
+  });
+
+  test('ファイル名が 2 つある頼みでは、どこに書くかを推測しない', async () => {
+    const { fileFromCode } = await import('../src/agent/loop.ts');
+    assert.equal(fileFromCode('```js\nx\n```', 'a.js と b.js を作って'), undefined);
+    assert.equal(fileFromCode('```js\nx\n```\n```js\ny\n```', 'a.js を作って'), undefined);
+    assert.deepEqual(fileFromCode('```js\nx\n```', 'fizzbuzz.js というファイルを作ってください。'), { path: 'fizzbuzz.js', content: 'x\n' });
   });
 
   test('終わりの合図をコマンドの形で呼んでも、終わりとして受け取る', async () => {
