@@ -249,6 +249,17 @@ export class Agent {
       }
       yield { type: 'turn', index: turn, modelId };
 
+      /*
+       * 作るファイルの名前が頼みにあり、答えにコードの塊が 1 つだけあってツールを呼んでいないなら、そのファイルを書く呼び出しに直す。
+       * 小さいモデルは、促しても本文にコードを書いて「完了」と言うことがある（手元の check-user、Qwen3.5-4B）。
+       * 書き込みは普段どおり確かめの帯を通るので、利用者の許可なしには書かない
+       */
+      if (calls.length === 0 && this.#opts.expectsWork && !usedTools && this.#tools.has('write_file')) {
+        const ask = [...history].reverse().find((m) => m.role === 'user' && !m.nudge);
+        const file = fileFromCode(text, typeof ask?.content === 'string' ? ask.content : '');
+        if (file) calls.push({ id: `salvaged-code-${turn}`, name: 'write_file', args: file });
+      }
+
       history.push({
         role: 'assistant',
         content: text,
@@ -448,6 +459,17 @@ export function cyclePeriod(recent: readonly string[]): number | undefined {
 }
 
 /** 終わりの合図を、ツールの呼び出しの形で出したもの（run_command に TASK_DONE だけ、など）。 */
+/**
+ * 頼みに出てくるファイル名（1 つだけ）と、答えのコードの塊（1 つだけ）から、書き込みの引数を作る。
+ * どちらかが 1 つに決まらなければ作らない（どのファイルに何を書くかを推測で決めない）。
+ */
+export function fileFromCode(answer: string, ask: string): { path: string; content: string } | undefined {
+  const names = [...new Set([...ask.matchAll(/(?:^|[\s「『(（])([\w.-]+\.(?:js|mjs|cjs|ts|py|sh|json|html|css|md|txt))(?=$|[\s」』)）、。,.!?])/g)].map((m) => m[1]!))];
+  const blocks = [...answer.matchAll(/```[\w+-]*\n([\s\S]*?)```/g)].map((m) => m[1]!);
+  if (names.length !== 1 || blocks.length !== 1 || !blocks[0]!.trim()) return undefined;
+  return { path: names[0]!, content: blocks[0]!.endsWith('\n') ? blocks[0]! : `${blocks[0]!}\n` };
+}
+
 export function isDoneCall(call: { name: string; args: unknown }): boolean {
   if (call.name.trim().toUpperCase() === DONE_MARK) return true;
   const args = call.args as { command?: unknown } | undefined;
