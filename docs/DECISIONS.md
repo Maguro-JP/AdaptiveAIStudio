@@ -135,6 +135,7 @@
 - 204 回目（アプリケーション版に絞る。端末の入口と portable を片付ける）
 - 205 回目（取りに行く段と、使うほど賢くする仕組み）
 - 206 回目（アプリで取りに行く配線と、check-user の 3 つ目の頼み）
+- 207 回目（3 つ目の頼みを path.matchesGlob に変える）
 - C: 直下を汚さない
 - 根を散らかさない
 - Actions は、断ってから回す
@@ -14232,3 +14233,10 @@ installer・入口（start.cmd・start.sh）・bundle の組み立てを、読�
 - AI の判断（私の推測）: 中の 4B のモデルが知らない新しい API に、Node の `util.diff`（Node 22.15 / 24 で入った）を選んだ。npm の包みと違って入れる手間が無く、nodejs.org は許可した行き先にある。check-user の 3 つ目の頼みは diff.js を作らせ、node で動かして `util.diff` と同じ出力か、`node:util` の `diff` を呼んでいるかで判定する。中のモデルだけで落ちることは `--without-network` で見る。1 件の答えの上限は、例のコードが入るよう 400 から 700 文字に上げた
 - 理由: 成果物 5 の完成条件（新しいライブラリを使う頼みが、ネットワークだと通り、中のモデルだけだと落ちる）
 - 未了: 4B が本当に `util.diff` を知らないか、挙げる段が「node:util の diff」を問いにするかは、Windows の CI の check-user で確かめていない
+
+## 2026-11-08  207 回目（3 つ目の頼みを path.matchesGlob に変える）
+
+- 起きたこと: Windows の CI の check-user `--without-network` で、4B が `util.diff` を使う diff.js を正しく書いた（4B は `util.diff` を知っていた）
+- AI の判断（私の推測）: 3 つ目の頼みを `node:path` の `matchesGlob` を使う glob.js に変える。手元で 4B を直接動かした試しで、文書なしは 0 / 2、nodejs.org の文書ありは 2 / 2 だった（docs/knowledge/new-api-probe-2026-11-08.md）
+- 理由: 配る Node 22.22.2 にあり、文書なしの落ち方が API を知らないことによる
+- 未了: アプリの中の流れと Windows の CI の check-user では確かめていない

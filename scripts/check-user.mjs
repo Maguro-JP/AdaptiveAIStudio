@@ -10,7 +10,7 @@
  *   3. 画面の入力欄から、ファイルを作る仕事を頼む（fizzbuzz.js）
  *   4. 出来たファイルを node で動かし、15 行の出力が合っているかで判定する
  *   5. 引き算になっている calc.js を置いて直させ、動かして 5 が出るかで判定する
- *   6. 中のモデルが知らない新しい API（Node の `util.diff`）を使う diff.js を作らせ、動かして `util.diff` と同じ答えが出るかで
+ *   6. 中のモデルが知らない新しい API（Node の `path.matchesGlob`）を使う glob.js を作らせ、動かして `path.matchesGlob` と同じ答えが出るかで
  *      判定する（成果物 5。知識はネットワークの送り口が nodejs.org から取る）。`--without-network` を付けると、取りに行くのを
  *      止めて（AAS_KNOWLEDGE_FETCH=0）起こし、6 は「中のモデルだけでは落ちる」ことを見る
  *
@@ -50,11 +50,13 @@ const EXPECTED = Array.from({ length: 15 }, (_, i) => {
 const ASK = 'fizzbuzz.js というファイルを作ってください。1 から 15 までの数を順に 1 行ずつ console.log で出します。'
   + '3 の倍数は Fizz、5 の倍数は Buzz、3 と 5 の両方の倍数は FizzBuzz を、数の代わりに出します。';
 
-/* 成果物 5: 中のモデル（4B）が知らない API。Node 22.15 / 24 で入った `util.diff`。答えは、この確かめを動かす node で出す */
-const NEW_ASK = "diff.js というファイルを作ってください。node:util の diff を使って、配列 ['a', 'b', 'c'] と ['a', 'x', 'c'] の差分を求め、"
-  + '結果を JSON.stringify で 1 行に console.log で出します。差分は自分で計算せず、node:util の diff の戻り値をそのまま出します。';
-const { diff: utilDiff } = await import('node:util');
-const NEW_EXPECTED = typeof utilDiff === 'function' ? JSON.stringify(utilDiff(['a', 'b', 'c'], ['a', 'x', 'c'])) : undefined;
+/* 成果物 5: 中のモデル（4B）が知らない API。Node 22.5 で入った `path.matchesGlob`（`util.diff` は 4B が知っていた。
+ * 2026-11-08 の手元の試しで、文書なしは 2 回とも落ち、nodejs.org の文書ありは 2 回とも通った）。答えは、この確かめを動かす node で出す */
+const NEW_ASK = "glob.js というファイルを作ってください。node:path の matchesGlob を使って、'src/a/b.ts' が 'src/**/*.ts' に合うか、"
+  + "'x.js' が '*.ts' に合うかを調べ、2 つの結果を空白でつないで console.log で 1 行に出します。glob の包みは使わず、node:path の matchesGlob を呼びます。";
+const { matchesGlob } = await import('node:path');
+const NEW_EXPECTED = typeof matchesGlob === 'function'
+  ? `${matchesGlob('src/a/b.ts', 'src/**/*.ts')} ${matchesGlob('x.js', '*.ts')}` : undefined;
 
 const FIX_ASK = 'calc.js の add が、足し算ではなく引き算になっています。足し算になるように直してください。';
 
@@ -282,12 +284,12 @@ try {
   say('calc.js が直り、動かすと 5 が出ることを確かめました');
 
   // 3 つ目（成果物 5）: 中のモデルが知らない新しい API を使う。ネットワークの送り口が nodejs.org から知識を取って足す
-  if (!NEW_EXPECTED) fail('この node には util.diff がありません（Node 22.15 以降で確かめてください）');
-  const newFile = join(dirname(file), 'diff.js');
+  if (!NEW_EXPECTED) fail('この node には path.matchesGlob がありません（Node 22.5 以降で確かめてください）');
+  const newFile = join(dirname(file), 'glob.js');
   const newAt = Date.now() - 1000;
   await page.locator('.chat textarea').first().fill(NEW_ASK);
   await page.getByText('送る', { exact: true }).click();
-  say(`3 つ目の頼み（新しい API の util.diff を使う diff.js）を送りました${withoutNetwork ? '（取りに行くのを止めています）' : ''}`);
+  say(`3 つ目の頼み（新しい API の path.matchesGlob を使う glob.js）を送りました${withoutNetwork ? '（取りに行くのを止めています）' : ''}`);
   const until3 = Date.now() + 20 * 60_000;
   while (Date.now() < until3 && !(existsSync(newFile) && statSync(newFile).mtimeMs >= newAt)) {
     await page.waitForTimeout(10_000);
@@ -303,18 +305,18 @@ try {
     catch (e) { newWhy = String(e.stderr || e.message || e).trim().split('\n').slice(0, 6).join(' / '); }
   }
   const src = made ? readFileSync(newFile, 'utf8') : '';
-  // 自分で計算した差分を書き写したものは通さない（node:util の diff を呼んでいること）
-  const callsDiff = /node:util|require\(['"]util['"]\)|from ['"]util['"]/.test(src) && /\bdiff\s*\(/.test(src);
+  // 答えを書き写したものは通さない（node:path の matchesGlob を呼んでいること）
+  const callsDiff = /node:path|require\(['"]path['"]\)|from ['"]path['"]/.test(src) && /\bmatchesGlob\s*\(/.test(src);
   const passed = made && newOut === NEW_EXPECTED && callsDiff;
-  const newFail = !made ? '20 分たっても diff.js が出来ませんでした'
-    : !callsDiff ? `diff.js が node:util の diff を呼んでいません。中身: 「${src.slice(0, 400)}」`
-      : `diff.js の出力が違います: 「${newOut}」（正しくは ${NEW_EXPECTED}） 実行のエラー: 「${newWhy}」 中身: 「${src.slice(0, 400)}」`;
+  const newFail = !made ? '20 分たっても glob.js が出来ませんでした'
+    : !callsDiff ? `glob.js が node:path の matchesGlob を呼んでいません。中身: 「${src.slice(0, 400)}」`
+      : `glob.js の出力が違います: 「${newOut}」（正しくは ${NEW_EXPECTED}） 実行のエラー: 「${newWhy}」 中身: 「${src.slice(0, 400)}」`;
   if (withoutNetwork) {
-    if (passed) fail('取りに行くのを止めても diff.js が通りました（中のモデルが util.diff を知っている。頼みを変える）');
+    if (passed) fail('取りに行くのを止めても glob.js が通りました（中のモデルが path.matchesGlob を知っている。頼みを変える）');
     say(`取りに行くのを止めると、中のモデルだけでは落ちました: ${newFail.slice(0, 300)}`);
   } else {
     if (!passed) fail(newFail);
-    say(`diff.js が node:util の diff を使い、動かすと ${NEW_EXPECTED} が出ることを確かめました`);
+    say(`glob.js が node:path の matchesGlob を使い、動かすと ${NEW_EXPECTED} が出ることを確かめました`);
   }
 
   // 成果物 3: 終了で止まる（開き直しは、立ち上がった直後に確かめた）
