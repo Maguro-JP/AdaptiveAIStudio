@@ -8,12 +8,17 @@
  * 中のモデルに「答えるのに要る事実」を短い問いの並びで挙げさせ、蔵に当たった分を出どころつきで system に足す。
  * 蔵が空なら挙げさせない（段階 1 と同じ依頼のまま。毎回の頼みを遅くしない）。挙げる段が落ちても、問い無しで続ける。
  *
+ * 段階 3: 配布元（`source`）を渡したときだけ、蔵に無い問いを取りに行き、検問を通ったものを蔵に入れて使う。
+ * 使うほど賢くする: 文脈に入れた件は、頼みが最後まで通れば効いた回数、落ちれば外れた回数が増える（`recordOutcome`）。
+ *
  * 呼ぶ側（Session、Agent、ChatOrchestrator の呼び手）は何も変えない。候補の先頭に `network:network` が来るだけ。
  */
 import type { ChatProvider, HealthStatus, ModelDescriptor, ProviderChunk, ProviderRequest } from '../providers/contract.ts';
 import { ChatOrchestrator, type ChatEvent, type ChatInput } from './orchestrator.ts';
 import type { ProviderRegistry } from './registry.ts';
 import { KnowledgeShelf, knowledgeBlock, type KnowledgeEntry } from './knowledge.ts';
+import { gather, type KnowledgeSource } from './knowledge-source.ts';
+import type { Inspector } from '../harness/inspector.ts';
 
 export const NETWORK_PROVIDER_ID = 'network';
 export const NETWORK_MODEL_ID = 'network:network';
@@ -86,6 +91,9 @@ export class InnerNeedLister implements NeedLister {
 export interface NetworkOptions {
   shelf?: KnowledgeShelf;
   lister?: NeedLister;
+  /** 蔵に無い問いを取りに行く先。置かなければ取りに行かない（段階 2 のまま）。 */
+  source?: KnowledgeSource;
+  inspector?: Inspector;
 }
 
 export class NetworkProvider implements ChatProvider {
@@ -96,6 +104,8 @@ export class NetworkProvider implements ChatProvider {
   readonly #orchestrator: ChatOrchestrator;
   readonly #shelf: KnowledgeShelf;
   readonly #lister: NeedLister;
+  readonly #source: KnowledgeSource | undefined;
+  readonly #inspector: Inspector | undefined;
 
   /** `inner`: 依頼に中の候補が添えられていないときに使う候補（これが無かったときの候補）。 */
   constructor(registry: ProviderRegistry, inner: () => readonly string[], opts: NetworkOptions = {}) {
@@ -103,19 +113,27 @@ export class NetworkProvider implements ChatProvider {
     this.#orchestrator = new ChatOrchestrator(registry);
     this.#shelf = opts.shelf ?? new KnowledgeShelf();
     this.#lister = opts.lister ?? new InnerNeedLister(this.#orchestrator);
+    this.#source = opts.source;
+    this.#inspector = opts.inspector;
   }
 
   /** 蔵に当たった分を足した system。当たりが無ければ元のまま（undefined なら undefined のまま）。 */
-  async #withKnowledge(input: ChatInput, signal: AbortSignal): Promise<string | undefined> {
+  async #withKnowledge(input: ChatInput, signal: AbortSignal, used: KnowledgeEntry[]): Promise<string | undefined> {
     if (input.messages.at(-1)?.role !== 'user') return input.system;
-    if (await this.#shelf.isEmpty().catch(() => true)) return input.system;
+    if (!this.#source && await this.#shelf.isEmpty().catch(() => true)) return input.system;
     const needs = await this.#lister.list(input, signal).catch(() => [] as string[]);
     const found: KnowledgeEntry[] = [];
     for (const q of Array.isArray(needs) ? needs.slice(0, MAX_NEEDS) : []) {
       if (typeof q !== 'string') continue;
-      const e = await this.#shelf.find(q).catch(() => undefined);
+      let e = await this.#shelf.find(q).catch(() => undefined);
+      if (!e && this.#source) {
+        const got = await gather(q, this.#source, this.#shelf, signal, this.#inspector ? { inspector: this.#inspector } : {})
+          .catch(() => undefined);
+        if (got?.status === 'stored') e = got.entry;
+      }
       if (e && !found.includes(e)) found.push(e);
     }
+    used.push(...found);
     const block = knowledgeBlock(found);
     if (!block) return input.system;
     return input.system ? `${input.system}\n\n${block}` : block;
@@ -141,10 +159,21 @@ export class NetworkProvider implements ChatProvider {
   async *relay(input: ChatInput, signal: AbortSignal): AsyncGenerator<ChatEvent> {
     const given = innerCandidates(input.candidates);
     const candidates = given.length > 0 ? given : innerCandidates(this.#inner());
-    const system = await this.#withKnowledge({ ...input, candidates }, signal);
+    const used: KnowledgeEntry[] = [];
+    const system = await this.#withKnowledge({ ...input, candidates }, signal, used);
     const next: ChatInput = { ...input, candidates };
     if (system !== undefined) next.system = system;
-    yield* this.#orchestrator.run(next, signal);
+    let ok = false;
+    let failed = false;
+    for await (const ev of this.#orchestrator.run(next, signal)) {
+      if (ev.type === 'done') ok = true;
+      else if (ev.type === 'failed') failed = true;
+      yield ev;
+    }
+    // 文脈に入れた件の点を、通ったか落ちたかで動かす（途中で止めたときは動かさない）
+    if (used.length > 0 && (ok || failed)) {
+      await this.#shelf.recordOutcome(used.map((e) => e.question), ok && !failed).catch(() => undefined);
+    }
   }
 
   /** 送り口の契約の形。`ChatOrchestrator` を通さずに呼ばれたとき用。失敗は中の失敗をそのまま投げる。 */
