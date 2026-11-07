@@ -2700,6 +2700,8 @@ async function tellIfNotReady() {
   if (r.ready) {
     // 話せるようになったなら、「まだ話せません」は下げる（取ってき終わったとき）。
     dropCrashNote('まだ話せません');
+    // 足元の送り先も描き直す（取ってくる前に描いた「—」のままにしない。取り終えたら「ネットワーク」になる）
+    void refreshState();
     // 話せるが、待たされそうなら先に言う（GPU なしで大きいモデルのとき）。
     if (configNote) showCrash('設定', configNote.trim(), 'warn');
     else if (r.heads) showCrash('先に一つ', r.heads, 'warn');
