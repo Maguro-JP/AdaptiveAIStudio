@@ -43,6 +43,22 @@ function keywords(q: string): Set<string> {
 /** 言葉の重なりで当たりとみなす割合（問いの言葉のうち、この割合以上が蔵の問いにあれば当たり）。私の推測で決めた値。 */
 export const KEYWORD_OVERLAP = 0.6;
 
+/** 蔵に置く件数の上限。超えたら点の低いものから落とす。私の推測で決めた値（DECISIONS に書いた）。 */
+export const MAX_SHELF_ENTRIES = 200;
+
+/** 経験から書いた件の出どころ。 */
+export const EXPERIENCE_SOURCE = 'experience';
+
+/** 件の点。効いた回数から外れた回数を引く。同じ点なら新しい方を上にする（比べる側で取った日を見る）。 */
+export function entryScore(e: KnowledgeEntry): number {
+  return e.hits - e.misses;
+}
+
+/** 並べる順（上が先）。点が高い、同じなら取った日が新しい。 */
+export function compareEntries(a: KnowledgeEntry, b: KnowledgeEntry): number {
+  return entryScore(b) - entryScore(a) || (b.fetchedAt < a.fetchedAt ? -1 : b.fetchedAt > a.fetchedAt ? 1 : 0);
+}
+
 export function defaultKnowledgeDir(): string {
   return join(stateDir(), 'knowledge');
 }
@@ -92,8 +108,37 @@ export class KnowledgeShelf {
       hits: e.hits ?? old?.hits ?? 0, misses: e.misses ?? old?.misses ?? 0,
     };
     if (old) entries[entries.indexOf(old)] = next; else entries.push(next);
+    this.#prune(next);
     await this.#save();
     return next;
+  }
+
+  /** 上限を超えた分を、点の低い順（同じなら古い順）に落とす。今入れた件は落とさない。 */
+  #prune(keep: KnowledgeEntry): void {
+    const entries = this.#entries ?? [];
+    if (entries.length <= MAX_SHELF_ENTRIES) return;
+    const order = entries.filter((e) => e !== keep).sort(compareEntries);
+    const kept = new Set([keep, ...order.slice(0, MAX_SHELF_ENTRIES - 1)]);
+    this.#entries = entries.filter((e) => kept.has(e));
+  }
+
+  /** 頼みが通ったか落ちたかを、文脈に入れた件の回数に足す。 */
+  async recordOutcome(questions: readonly string[], ok: boolean): Promise<void> {
+    const entries = await this.#load();
+    const keys = new Set(questions.map(normalizeQuestion));
+    let changed = false;
+    for (const e of entries) {
+      if (!keys.has(normalizeQuestion(e.question))) continue;
+      if (ok) e.hits++; else e.misses++;
+      changed = true;
+    }
+    if (changed) await this.#save();
+  }
+
+  /** 通った頼みから、直し方の短い覚え書きを経験として置く。頼みが落ちたときは呼ばない（呼んでも置かない）。 */
+  async learn(kind: string, note: string, ok: boolean, now = new Date()): Promise<KnowledgeEntry | undefined> {
+    if (!ok || !kind.trim() || !note.trim()) return undefined;
+    return this.upsert({ question: kind.trim(), answer: note.trim().slice(0, 300), sourceUrl: EXPERIENCE_SOURCE, fetchedAt: now.toISOString() });
   }
 
   /** 問いに合う1件。揃えた形が同じものを先に、無ければ言葉の重なりが一番多いもの。 */
@@ -111,7 +156,9 @@ export class KnowledgeShelf {
       let n = 0;
       for (const w of want) if (have.has(w)) n++;
       const score = n / want.size;
-      if (score >= KEYWORD_OVERLAP && score > bestScore) { best = x; bestScore = score; }
+      if (score < KEYWORD_OVERLAP) continue;
+      // 重なりが同じなら、効いた回数の多い・新しい方を先に
+      if (score > bestScore || (score === bestScore && best && compareEntries(x, best) < 0)) { best = x; bestScore = score; }
     }
     return best;
   }
@@ -140,6 +187,7 @@ export const KNOWLEDGE_CHAR_BUDGET = 1500;
 /** 蔵から引いた分を、出どころつきで system に足す塊にする。何も無ければ空。上限を超える分は入れない。 */
 export function knowledgeBlock(found: readonly KnowledgeEntry[], budget = KNOWLEDGE_CHAR_BUDGET): string {
   if (found.length === 0) return '';
+  found = [...found].sort(compareEntries);
   const head = '## 知識の蔵から（出どころつき。答えに使うときは出どころを添える）\n';
   let out = head;
   for (const e of found) {
