@@ -13,6 +13,7 @@ import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
 import type { Tool, ToolContext, ApprovalRequest, ApprovalAnswer, RequestScope } from './tools/types.ts';
 import { ToolTextFilter } from './tool-text.ts';
 import { DoneMark, DONE_MARK } from './done.ts';
+import { claimsVerified, expandShortUtterance, RUN_TOOLS, UNBACKED_CLAIM_NUDGE } from './work-style.ts';
 import { fitToWindow, historyBudget, estimateTokens, trimSchemas, TOOL_SHARE, type Count } from './window.ts';
 
 export type AgentEvent =
@@ -112,6 +113,19 @@ export class Agent {
     let pushedForCode = false;
     // 前の回に終わりの合図をツール呼び出しと一緒に出したか（次の回へ一度だけ持ち越す）
     let doneWithCalls = false;
+    // この依頼で、コマンドが一度でも成功したか。「通りました」の根拠に数えるのはこれだけ（verify-before-done）
+    let ranOk = false;
+    // 根拠の無い言い切りを押し戻したか（一度だけ。二度目は押し戻さず、そのまま返す）
+    let claimNudged = false;
+    /*
+     * 「続けて」「それも」だけの一言は、前の依頼から読む形をシステムプロンプトの末尾に足す（prompt-from-context）。
+     * 履歴は書き換えない（利用者の見た一言はそのまま残す）
+     */
+    const asked = history.filter((m) => m.role === 'user' && !m.nudge && typeof m.content === 'string');
+    const reading = asked.length >= 2
+      ? expandShortUtterance(asked[asked.length - 1]!.content as string, asked[asked.length - 2]!.content as string)
+      : undefined;
+    const system = reading ? `${this.#opts.system}\n\n${reading}` : this.#opts.system;
     /*
      * **狭いコンテキストウィンドウでは、ツールの説明を一文に削る。**説明だけで 1400 トークン
      * あり、4k のコンテキストウィンドウでは 34% を占める。決まりと学びを足すと、
@@ -134,7 +148,7 @@ export class Agent {
     // 履歴の取り分は、実際に送るシステムプロンプトとツールの説明のかさを引いて決める（引かずに足すとコンテキストウィンドウを超えていた）
     const measure = this.#opts.count ?? estimateTokens;
     const budget = historyBudget(
-      this.#opts.contextTokens ?? 8192, measure(this.#opts.system) + measure(JSON.stringify(tools)),
+      this.#opts.contextTokens ?? 8192, measure(system) + measure(JSON.stringify(tools)),
       undefined, this.#opts.maxTokens,
     );
     const ctx: ToolContext = {
@@ -180,7 +194,7 @@ export class Agent {
       for await (const ev of this.#orchestrator.run(
         {
           candidates: this.#opts.candidates,
-          system: this.#opts.system,
+          system,
           // **窓に収まる分だけ送る。元は変えない。**
           // 元を刈ると、残してある会話まで欠ける。
           messages: fitted.messages,
@@ -305,6 +319,17 @@ export class Agent {
         // 作業の頼みに、ツールを使わずコードの塊を本文で返した（ファイルは出来ていない）。答えただけとは読まない
         const codeInsteadOfTool = Boolean(this.#opts.expectsWork) && !usedTools && /```/.test(text);
         if (codeInsteadOfTool) pushedForCode = true;
+        /*
+         * 「テストが通りました」と言うのに、この依頼でコマンドが一度も成功していない。
+         * ツールを使った作業のときだけ見る（答えただけの返事は見ない）。一度だけ押し戻す
+         */
+        if (declaredDone && usedTools && !ranOk && !claimNudged && nudges < maxNudges && claimsVerified(text)) {
+          claimNudged = true;
+          nudges += 1;
+          yield { type: 'nudged', left: maxNudges - nudges };
+          history.push({ role: 'user', nudge: true, content: UNBACKED_CLAIM_NUDGE });
+          continue;
+        }
         if (declaredDone || (!usedTools && !codeInsteadOfTool) || nudges >= maxNudges) {
           // 合図が出た / 一度も道具を使っていない（＝答えただけ） /
           // 押し戻しを使い切った。**動かないものは、動かないと言う。**
@@ -391,6 +416,7 @@ export class Agent {
         // 結果を先に積む（受け手が toolEnd で投げても、走ったツールの結果を落とさない）
         history.push({ role: 'tool', toolCallId: call.id, content: result });
         answered.add(call.id);
+        if (!isError && RUN_TOOLS.has(call.name)) ranOk = true;
         yield { type: 'toolEnd', call, result, isError };
       }
       } finally {

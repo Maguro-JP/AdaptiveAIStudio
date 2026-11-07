@@ -540,6 +540,7 @@ playwright-core と Chromium が要ります（配る物には入りません）
 - [IDLE](docs/IDLE.md) — 暇なら考える。ただし無駄には考えない（重要）
 - [自発性](docs/INITIATIVE.md) — AIが自分で考え、提案する仕組み（重要）
 - [ハーネス設計](docs/HARNESS.md) — モデルの誤りを実行前に止める仕組み（重要）
+- [働き方](docs/WORK-STYLE.md) — 利用者のスキルと決めたことを、製品のエージェントのどこで守らせるか
 - [パフォーマンスで戦う](docs/PERFORMANCE.md) — 計算が無料な利点をどう使うか（重要）
 - [最も効率の良いモデル運用](docs/MODEL-EFFICIENCY.md) — 何を基準にモデルを選ぶか（重要）
 - [GGUF を直接読む](docs/GGUF.md) — 名前からの推測をやめ、書いてある諸元を使う
