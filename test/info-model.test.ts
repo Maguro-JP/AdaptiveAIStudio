@@ -45,4 +45,21 @@ describe('足元に、いま動かしているモデルを出す', () => {
       assert.equal((await info()).model, 'local:m', '答えたモデルの名前になっていない');
     } finally { await s.stop(); await fake.close(); }
   });
+  test('**最初の頼みの前でも、モデルが決まっていれば送り先は network と言う**（足元に「ネットワーク」が出なかった）', async () => {
+    const root = await tempDir('aas-info-network-root-');
+    const s = new UiServer({
+      port: 0,
+      config: {
+        ...DEFAULT_CONFIG,
+        runtime: { kind: 'ollama', model: 'm' },
+        agent: { ...(DEFAULT_CONFIG as { agent?: object }).agent, approval: 'auto', root },
+        initiative: { enabled: false },
+      } as typeof DEFAULT_CONFIG,
+    });
+    const base = (await s.start()).replace(/\/$/, '');
+    try {
+      const info = (await (await fetch(`${base}/api/info`)).json()) as { network?: boolean };
+      assert.equal(info.network, true, '頼みの前は network と言っていない');
+    } finally { await s.stop(); }
+  });
 });
