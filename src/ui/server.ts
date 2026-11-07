@@ -10,6 +10,7 @@
  * 数年で作法が変わるものに画面を預けたくない。
  * 素の HTML と ES モジュールなら、組み立ての手順すら要らない。
  */
+import { innerCandidates, isNetworkModel } from '../core/network-provider.ts';
 import { how } from '../cli/how.ts';
 import { placeKey } from '../memory/memory.ts';
 import { proposalHere, actionRequest } from '../agent/proposals.ts';
@@ -2002,6 +2003,8 @@ export class UiServer {
         // **なぜそれなのかも出す。**速い方へ勝手に乗り換える作りなので、
         // 名前だけ出しても「いつのまにか変わっている」に見える。
         why: this.#session?.modelReason ?? '',
+        // ネットワークの送り口を通しているか。画面は「ネットワーク（動かし方 · 中のモデル）」と出す
+        network: isNetworkModel(this.#session?.candidates[0]),
       });
     }
 
@@ -3913,7 +3916,8 @@ export class UiServer {
    * 呼ぶ側が、これまでどおり丸ごと渡す道へ落ちる）。
    */
   async #driveStep(session: Session, item: { id: string; request: string; note: string }): Promise<StepOutcome | 'whole'> {
-    const model = session.candidates[0] ?? '(不明)';
+    // `network` は中へ渡すだけなので、歩幅は中の先頭のモデルで覚える（前に覚えた分をそのまま使う）
+    const model = innerCandidates(session.candidates)[0] ?? '(不明)';
     const stride = await this.#stride.get(model, session.contextTokens);
 
     // 段取りの記録を読めないときは、今回は進めない。「無い」と取り違えると、立て直して二つ目を作る・
