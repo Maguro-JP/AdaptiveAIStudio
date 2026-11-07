@@ -192,6 +192,14 @@ try {
   }
   if (shots) await page.screenshot({ path: join(shots, '1-ready.png') });
 
+  // 成果物 4: Windows で取ったモデルは、自作アプリどうしで共有する C:\LLM\gguf に入る（LLM_HOME があればその下）
+  if (process.platform === 'win32') {
+    const shared = join(process.env.LLM_HOME?.trim() || 'C:\\LLM', 'gguf');
+    const got = existsSync(shared) ? readdirSync(shared).filter((n) => n.toLowerCase().endsWith('.gguf')) : [];
+    if (got.length === 0) fail(`共有の保存先 ${shared} にモデルがありません`);
+    say(`モデルは共有の保存先 ${shared} にあります（${got.join(', ')}）`);
+  }
+
   const askedAt = Date.now() - 1000;
   const box = page.locator('.chat textarea').first();
   await box.fill(ASK);
