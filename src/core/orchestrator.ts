@@ -81,6 +81,18 @@ export class ChatOrchestrator {
   }
 
   async *run(input: ChatInput, signal: AbortSignal): AsyncGenerator<ChatEvent> {
+    /*
+     * 候補に、中へ渡す送り口（`network`、src/core/network-provider.ts）があれば、残りの候補ごとそちらへ渡す。
+     * 出来事（試し・切り替え・失敗・答えたモデル）は中のものをそのまま返す。外でもう一度やり直すと、やり直しが二重になる
+     */
+    for (const id of input.candidates) {
+      const r = this.#registry.resolve(id);
+      const relay = (r?.provider as { relay?: (i: ChatInput, s: AbortSignal) => AsyncGenerator<ChatEvent> } | undefined)?.relay;
+      if (r && typeof relay === 'function') {
+        yield* relay.call(r.provider, { ...input, candidates: input.candidates.filter((c) => c !== id) }, signal);
+        return;
+      }
+    }
     const usable = input.candidates.filter((id) => {
       const r = this.#registry.resolve(id);
       return r !== undefined && this.#registry.isAvailable(r.provider.id);

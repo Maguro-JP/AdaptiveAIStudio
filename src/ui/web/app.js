@@ -696,13 +696,15 @@ async function refreshState() {
     // **いま動かしているものを出す。**手元に入っているモデルの一覧の
     // 先頭を出していたので、使ってもいない名前が出ていた（実際に出ていた）。
     const info = await getJson('/api/info');
-    $('sbModel').textContent = `${info.runtime} · ${info.model}`;
+    // ネットワークを通しているときは、それを先に出し、実際に答える中のモデルを括弧に添える
+    const inner = `${info.runtime} · ${info.model}`;
+    $('sbModel').textContent = info.network ? `ネットワーク（${inner}）` : inner;
     // 起動時の読み込みの最中に画面を開いたとき。読み始めの合図は、繋ぐ前に流れている。
     if (info.loading && !busyNow) run.set('busy', `モデルを読み込んでいます: ${info.loading.ref}`);
     // **なぜそれなのかも出す。**名前だけだと「いつのまにか変わっている」に見える。
     $('sbModel').title = info.why
-      ? `動かし方: ${info.runtime} / モデル: ${info.model}\nなぜ: ${info.why}`
-      : `動かし方: ${info.runtime} / モデル: ${info.model}`;
+      ? `${info.network ? '送り先: ネットワーク / ' : ''}動かし方: ${info.runtime} / モデル: ${info.model}\nなぜ: ${info.why}`
+      : `${info.network ? '送り先: ネットワーク / ' : ''}動かし方: ${info.runtime} / モデル: ${info.model}`;
   } catch { /* 同上 */ }
 }
 
@@ -2698,6 +2700,8 @@ async function tellIfNotReady() {
   if (r.ready) {
     // 話せるようになったなら、「まだ話せません」は下げる（取ってき終わったとき）。
     dropCrashNote('まだ話せません');
+    // 足元の送り先も描き直す（取ってくる前に描いた「—」のままにしない。取り終えたら「ネットワーク」になる）
+    void refreshState();
     // 話せるが、待たされそうなら先に言う（GPU なしで大きいモデルのとき）。
     if (configNote) showCrash('設定', configNote.trim(), 'warn');
     else if (r.heads) showCrash('先に一つ', r.heads, 'warn');

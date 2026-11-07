@@ -23,6 +23,7 @@ import { resolve, join, isAbsolute, relative } from 'node:path';
 import type { AasConfig } from '../config.ts';
 import { buildRegistry } from './build.ts';
 import { ChatOrchestrator } from './orchestrator.ts';
+import { NetworkProvider, NETWORK_LABEL, innerCandidates, withNetwork } from './network-provider.ts';
 import { setupAutopilot, resolveCandidates, stateDir, type AutopilotBundle } from './autopilot-setup.ts';
 import { buildHarness } from './harness-setup.ts';
 import { Forum } from '../harness/deliberation.ts';
@@ -505,7 +506,15 @@ export class Session {
     const registry = buildRegistry(config);
     const orchestrator = new ChatOrchestrator(registry);
     const pilot = await setupAutopilot(config, registry);
-    const { candidates, note } = resolveCandidates(config, pilot);
+    const resolved = resolveCandidates(config, pilot);
+    const { note } = resolved;
+    /*
+     * ネットワークの送り口（docs/NETWORK-MODEL.md の段階 1）を先頭に置き、既定の送り先にする。中では、これが無かったときの
+     * 候補（`resolved.candidates`）へそのまま渡す。中で使うモデルが無ければ置かない（「モデルがありません」の道はそのまま）。
+     * 自動操縦がモデルを数えた後に登録する（`network` を一つのモデルとして順位に入れない）
+     */
+    registry.register(new NetworkProvider(registry, () => resolved.candidates));
+    const candidates = withNetwork(resolved.candidates);
     /*
      * **モデルが無いことを、ここで投げない。**
      *
@@ -530,7 +539,7 @@ export class Session {
      *
      * 「黙って切らない・黙って落とさない」と同じことで、**選ぶのも黙らない**。
      */
-    if (candidates.length > 0) opts.onLog?.('info', `モデルを ${candidates[0]} にしました（${note}）`);
+    if (candidates.length > 0) opts.onLog?.('info', `モデルを ${resolved.candidates[0]} にしました（${NETWORK_LABEL}から渡す先。${note}）`);
 
     const log = (level: 'info' | 'warn' | 'error', text: string) => opts.onLog?.(level, text);
 
@@ -585,7 +594,8 @@ export class Session {
     // 関所の二段目。外へ出るときも、外の道具から返るときも、同じ検査官を通す。
     // 使えるモデルが無ければ置かれず、一段目（当てはめ）だけで動く。
     // 検問所と判じ手が使う候補（同じものを渡す。別々に組むと片方だけ雲へ向く）
-    const quiet = quietCandidates(candidates, registry, { fixed: (config.candidates?.length ?? 0) > 0 });
+    // 検問所と判じ手、手元だけの候補は、`network` を挟まない前の候補で決める（`network` は手元の口に見えるので、雲だけの設定で雲へ向くのを手元と取り違える）
+    const quiet = quietCandidates(resolved.candidates, registry, { fixed: (config.candidates?.length ?? 0) > 0 });
     const inspector = buildInspector(
       orchestrator,
       // 明示が無ければ、手元のモデルだけ（`quietCandidates`）。候補を逆順にしていたので、雲を後ろに置いた設定では雲が先頭に来て、
@@ -648,7 +658,7 @@ export class Session {
     const { proposals, idle, duties } = opts.journals ?? await loadJournals(config);
 
     const session = new Session({
-      config, root, candidates, quiet, localCandidates: localModelCandidates(candidates, registry), modelReason: note, memory,
+      config, root, candidates, quiet, localCandidates: localModelCandidates(resolved.candidates, registry), modelReason: note, memory,
       roles: new RoleRegistry(config.roles ?? [], (t) => log('warn', t)),
       orchestrator, pilot, prefetch, opts, holder, forum, toolPool, harness, mcpClients,
       services: serviceHooks,
@@ -1715,7 +1725,8 @@ export class Session {
     let finishedReason: string | undefined;
     let answerChars = 0;
     /** 答えたモデル。途中で切り替わったら、その先を覚える。 */
-    let modelUsed = this.candidates[0] ?? '';
+    // `network` は中へ渡すだけなので、答えるのは中の先頭のモデル（速さの記録も中のモデルに付ける）
+    let modelUsed = innerCandidates(this.candidates)[0] ?? '';
     /*
      * **速さを測り始める時刻。途中でモデルが変わったら、そこから測り直す。**
      *
