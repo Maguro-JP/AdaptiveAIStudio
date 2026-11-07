@@ -2004,10 +2004,10 @@ export class UiServer {
         // 名前だけ出しても「いつのまにか変わっている」に見える。
         why: this.#session?.modelReason ?? '',
         // ネットワークの送り口を通しているか。画面は「ネットワーク（動かし方 · 中のモデル）」と出す
-        // 最初の頼みまでは会話の本体がまだ無い。中で使うモデルが分かっていれば、そのときも network を通す（Session が必ず先頭に置く）
+        // 最初の頼みまでは会話の本体がまだ無い。中で使うモデルがあれば（まだ読んでいなくても）、そのときも network を通す（Session が必ず先頭に置く）
         network: this.#session
           ? isNetworkModel(this.#session.candidates[0])
-          : Boolean(this.#opts.config.runtime?.model ?? (this.#runtime?.id === 'inproc' ? this.#runtime.loaded()[0] : undefined) ?? this.#lastAnswered),
+          : await this.#readyToThink(false).then((m) => m === undefined || m === NOT_LOADED_YET, () => false),
       });
     }
 
