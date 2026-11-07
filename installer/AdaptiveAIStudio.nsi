@@ -26,6 +26,9 @@ Unicode true
 
 Name "${APP}"
 OutFile "${APP}-Setup.exe"
+; 絵柄は scripts/make-icon.mjs が作る。setup.exe、ショートカット、アンインストールで同じものを使う
+Icon "${APP}.ico"
+UninstallIcon "${APP}.ico"
 InstallDir "$PROGRAMFILES64\${APP}"
 InstallDirRegKey HKLM "Software\${APP}" "InstallDir"
 RequestExecutionLevel admin
@@ -45,6 +48,7 @@ Section "install"
 
   ; 中身。payload\ は CI が組み立てたもの。
   File /r "payload\*.*"
+  File "${APP}.ico"
 
   ; データの置き場。ここだけは利用者が書ける必要がある。
   ; 差し込みで権限を付ける（外部プラグインに頼らない）。
@@ -97,7 +101,6 @@ Section "install"
   FileClose $0
 
   ; ショートカット。デスクトップとスタートメニューに1つずつ。
-  ; 絵柄はまだ用意していない。無いものを指すと、既定の絵柄すら出ないことがある。
   ; 押すとアプリのウィンドウだけが開く。コンソールは出さない（最小化でもタスクバーに残るため、隠して起こす）。
   ; 隠して起こす役は wscript の小さな台本。番号の一覧は  ${APP}.cmd menu  のまま。
   FileOpen $0 "$INSTDIR\${APP}.vbs" w
@@ -106,9 +109,9 @@ Section "install"
   FileWrite $0 'sh.Environment("Process")("AAS_HOME") = "$COMMONPROGRAMDATA\${APP}"$\r$\n'
   FileWrite $0 'sh.Run "cmd /c """"" & d & "\app\start.cmd"" ui""", 0, False$\r$\n'
   FileClose $0
-  CreateShortcut "$DESKTOP\${APP}.lnk" "$SYSDIR\wscript.exe" '"$INSTDIR\${APP}.vbs"'
+  CreateShortcut "$DESKTOP\${APP}.lnk" "$SYSDIR\wscript.exe" '"$INSTDIR\${APP}.vbs"' "$INSTDIR\${APP}.ico"
   CreateDirectory "$SMPROGRAMS\${APP}"
-  CreateShortcut "$SMPROGRAMS\${APP}\${APP}.lnk" "$SYSDIR\wscript.exe" '"$INSTDIR\${APP}.vbs"'
+  CreateShortcut "$SMPROGRAMS\${APP}\${APP}.lnk" "$SYSDIR\wscript.exe" '"$INSTDIR\${APP}.vbs"' "$INSTDIR\${APP}.ico"
   CreateShortcut "$SMPROGRAMS\${APP}\アンインストール.lnk" "$INSTDIR\Uninstall.exe"
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -116,6 +119,7 @@ Section "install"
   ; コントロールパネルに出す。
   !define UNINST "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP}"
   WriteRegStr   HKLM "${UNINST}" "DisplayName"     "${APP}"
+  WriteRegStr   HKLM "${UNINST}" "DisplayIcon"     "$INSTDIR\${APP}.ico"
   WriteRegStr   HKLM "${UNINST}" "DisplayVersion"  "${VERSION}"
   WriteRegStr   HKLM "${UNINST}" "Publisher"       "${PUB}"
   WriteRegStr   HKLM "${UNINST}" "InstallLocation" "$INSTDIR"
@@ -133,6 +137,7 @@ Section "uninstall"
   RMDir /r "$INSTDIR\runtime"
   Delete "$INSTDIR\${APP}.cmd"
   Delete "$INSTDIR\${APP}.vbs"
+  Delete "$INSTDIR\${APP}.ico"
   Delete "$INSTDIR\README.txt"
   Delete "$INSTDIR\VERSION"
   Delete "$INSTDIR\Uninstall.exe"
