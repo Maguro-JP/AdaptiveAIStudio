@@ -67,6 +67,10 @@ on:
         description: 'setup.exe を Windows に入れ、画面のボタンで既定のモデルを取り、ファイルを作る仕事を頼んで、出来たものを動かして見る。これだけを回す'
         type: boolean
         default: false
+      without_network:
+        description: 'user と一緒に使う。ネットワークから取りに行かずに起こし、新しい API の頼みが落ちることを見る（成果物 5 の対照）'
+        type: boolean
+        default: false
       real_os:
         description: 'real を回す機械（ubuntu は 1 倍、windows は 2 倍で数える）'
         type: choice
@@ -294,7 +298,7 @@ jobs:
         run: npm i --no-save --no-audit --no-fund playwright-core
       - name: 入れた形で、頼んだファイルが出来て動くか
         shell: pwsh
-        run: node scripts/check-user.mjs --start "wscript.exe `"$env:ProgramFiles\AdaptiveAIStudio\AdaptiveAIStudio.vbs`"" --port 4174 --find "$env:ProgramData\AdaptiveAIStudio" --find "$env:USERPROFILE" --shots shots
+        run: node scripts/check-user.mjs --start "wscript.exe `"$env:ProgramFiles\AdaptiveAIStudio\AdaptiveAIStudio.vbs`"" --port 4174 --find "$env:ProgramData\AdaptiveAIStudio" --find "$env:USERPROFILE" --shots shots $(if ('${{ inputs.without_network }}' -eq 'true') { '--without-network' })
       # 落ちたときに中身を追えるよう、本体の記録（logs）と会話（conversations）も上げる。
       # artifact は作業場の下しか上げられない（別のドライブを渡すと上げる所で落ちた）ので、写してから上げる
       - name: 本体の記録を写す
