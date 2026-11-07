@@ -192,6 +192,17 @@ try {
   }
   if (shots) await page.screenshot({ path: join(shots, '1-ready.png') });
 
+  // 成果物 5 の段 1: 送り先はネットワークモデル（画面の足元に「ネットワーク」と出る）
+  {
+    let shown = '';
+    for (let i = 0; i < 10 && !shown.includes('ネットワーク'); i += 1) {
+      shown = await page.innerText('body').catch(() => '');
+      if (!shown.includes('ネットワーク')) await page.waitForTimeout(1000);
+    }
+    if (!shown.includes('ネットワーク')) fail('画面に「ネットワーク」が出ていません（送り先がネットワークモデルになっていない）');
+    say('送り先はネットワークモデルです（画面に「ネットワーク」と出ています）');
+  }
+
   // 成果物 4: Windows で取ったモデルは、自作アプリどうしで共有する C:\LLM\gguf に入る（LLM_HOME があればその下）
   if (process.platform === 'win32') {
     const shared = join(process.env.LLM_HOME?.trim() || 'C:\\LLM', 'gguf');
