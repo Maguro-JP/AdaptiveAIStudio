@@ -2,13 +2,18 @@
  * ネットワークの送り口（docs/NETWORK-MODEL.md の段階 1）。
  *
  * id は `network`、モデルは `network` の1つだけ。重みは持たない。今は、受けた依頼を、これが無かったときに使っていた
- * 中の候補へそのまま渡す（候補選び・やり直し・切り替え・失敗の扱いは `ChatOrchestrator` のまま）。知識の蔵はまだ使わない。
+ * 中の候補へ渡す（候補選び・やり直し・切り替え・失敗の扱いは `ChatOrchestrator` のまま）。
+ *
+ * 段階 2: 知識の蔵（`knowledge.ts`）に何か入っていれば、頼みの最初の一手（最後の発言が利用者のとき）でだけ、
+ * 中のモデルに「答えるのに要る事実」を短い問いの並びで挙げさせ、蔵に当たった分を出どころつきで system に足す。
+ * 蔵が空なら挙げさせない（段階 1 と同じ依頼のまま。毎回の頼みを遅くしない）。挙げる段が落ちても、問い無しで続ける。
  *
  * 呼ぶ側（Session、Agent、ChatOrchestrator の呼び手）は何も変えない。候補の先頭に `network:network` が来るだけ。
  */
 import type { ChatProvider, HealthStatus, ModelDescriptor, ProviderChunk, ProviderRequest } from '../providers/contract.ts';
 import { ChatOrchestrator, type ChatEvent, type ChatInput } from './orchestrator.ts';
 import type { ProviderRegistry } from './registry.ts';
+import { KnowledgeShelf, knowledgeBlock, type KnowledgeEntry } from './knowledge.ts';
 
 export const NETWORK_PROVIDER_ID = 'network';
 export const NETWORK_MODEL_ID = 'network:network';
@@ -31,17 +36,89 @@ export function withNetwork(candidates: readonly string[]): string[] {
   return inner.length > 0 ? [NETWORK_MODEL_ID, ...inner] : inner;
 }
 
+/** 挙げる問いの数の上限と、1つの問いの長さの上限。 */
+export const MAX_NEEDS = 5;
+const MAX_NEED_CHARS = 80;
+
+/** 「知らないことを挙げる」段。試験では偽物を渡す。 */
+export interface NeedLister {
+  list(input: ChatInput, signal: AbortSignal): Promise<string[]>;
+}
+
+/** 中のモデルの返事から、問いの並び（文字列の配列）だけを取り出す。形が違えば空。 */
+export function parseNeeds(text: string): string[] {
+  const m = /\[[\s\S]*\]/.exec(text);
+  if (!m) return [];
+  let raw: unknown;
+  try { raw = JSON.parse(m[0]); } catch { return []; }
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((x): x is string => typeof x === 'string')
+    .map((x) => x.trim()).filter((x) => x.length > 0 && x.length <= MAX_NEED_CHARS).slice(0, MAX_NEEDS);
+}
+
+const NEEDS_SYSTEM = [
+  'あなたは、頼みに答えるのに要る事実を挙げる係です。答えそのものは書かない。',
+  `答えは JSON の文字列の配列だけ（最大 ${MAX_NEEDS} 個）。1つは事実の名前の短い問い（ライブラリ名、関数名、エラーの型、版）。`,
+  'コードや頼みの本文を写さない。要るものが無ければ [] を返す。',
+  '例: ["zod の最新の版", "node:test の mock.timers の使い方"]',
+].join('\n');
+
+/** 既定の挙げる段。同じ中の候補へ、温度 0・ツール無しで頼む。 */
+export class InnerNeedLister implements NeedLister {
+  readonly #orchestrator: ChatOrchestrator;
+  constructor(orchestrator: ChatOrchestrator) { this.#orchestrator = orchestrator; }
+
+  async list(input: ChatInput, signal: AbortSignal): Promise<string[]> {
+    const last = input.messages.at(-1);
+    if (!last || last.role !== 'user') return [];
+    let text = '';
+    for await (const ev of this.#orchestrator.run({
+      candidates: input.candidates, system: NEEDS_SYSTEM, temperature: 0, maxTokens: 200,
+      messages: [{ role: 'user', content: last.content }],
+    }, signal)) {
+      if (ev.type === 'text') text += ev.delta;
+      else if (ev.type === 'failed') return [];
+    }
+    return parseNeeds(text);
+  }
+}
+
+export interface NetworkOptions {
+  shelf?: KnowledgeShelf;
+  lister?: NeedLister;
+}
+
 export class NetworkProvider implements ChatProvider {
   readonly id = NETWORK_PROVIDER_ID;
   /** この機械の中で回す口として扱う（失敗で冷やさない。冷やすのは中の外の口）。 */
   readonly locality = 'local' as const;
   readonly #inner: () => readonly string[];
   readonly #orchestrator: ChatOrchestrator;
+  readonly #shelf: KnowledgeShelf;
+  readonly #lister: NeedLister;
 
   /** `inner`: 依頼に中の候補が添えられていないときに使う候補（これが無かったときの候補）。 */
-  constructor(registry: ProviderRegistry, inner: () => readonly string[]) {
+  constructor(registry: ProviderRegistry, inner: () => readonly string[], opts: NetworkOptions = {}) {
     this.#inner = inner;
     this.#orchestrator = new ChatOrchestrator(registry);
+    this.#shelf = opts.shelf ?? new KnowledgeShelf();
+    this.#lister = opts.lister ?? new InnerNeedLister(this.#orchestrator);
+  }
+
+  /** 蔵に当たった分を足した system。当たりが無ければ元のまま（undefined なら undefined のまま）。 */
+  async #withKnowledge(input: ChatInput, signal: AbortSignal): Promise<string | undefined> {
+    if (input.messages.at(-1)?.role !== 'user') return input.system;
+    if (await this.#shelf.isEmpty().catch(() => true)) return input.system;
+    const needs = await this.#lister.list(input, signal).catch(() => [] as string[]);
+    const found: KnowledgeEntry[] = [];
+    for (const q of Array.isArray(needs) ? needs.slice(0, MAX_NEEDS) : []) {
+      if (typeof q !== 'string') continue;
+      const e = await this.#shelf.find(q).catch(() => undefined);
+      if (e && !found.includes(e)) found.push(e);
+    }
+    const block = knowledgeBlock(found);
+    if (!block) return input.system;
+    return input.system ? `${input.system}\n\n${block}` : block;
   }
 
   async health(): Promise<HealthStatus> {
@@ -61,10 +138,13 @@ export class NetworkProvider implements ChatProvider {
    * 中の候補へ渡し、出来事をそのまま返す（試し・切り替え・本文・ツールの呼び出し・失敗・どのモデルが答えたか）。
    * `candidates` が空なら、作ったときに渡された候補を使う。
    */
-  relay(input: ChatInput, signal: AbortSignal): AsyncGenerator<ChatEvent> {
+  async *relay(input: ChatInput, signal: AbortSignal): AsyncGenerator<ChatEvent> {
     const given = innerCandidates(input.candidates);
     const candidates = given.length > 0 ? given : innerCandidates(this.#inner());
-    return this.#orchestrator.run({ ...input, candidates }, signal);
+    const system = await this.#withKnowledge({ ...input, candidates }, signal);
+    const next: ChatInput = { ...input, candidates };
+    if (system !== undefined) next.system = system;
+    yield* this.#orchestrator.run(next, signal);
   }
 
   /** 送り口の契約の形。`ChatOrchestrator` を通さずに呼ばれたとき用。失敗は中の失敗をそのまま投げる。 */
