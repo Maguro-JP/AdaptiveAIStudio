@@ -81,7 +81,7 @@ on:
 # 途中の版が通ったかどうかは、結局いらない。
 concurrency:
   # `real`（有料で長い）は別の組にする。同じ枝への push や週一の回で打ち切られないように。
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.real && 'real' || inputs.user && 'user' || 'ci' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.real && 'real' || inputs.user && (inputs.without_network && 'user-offline' || 'user') || 'ci' }}
   cancel-in-progress: true
 
 # 2026-10-18 に public になり、標準のランナーは無料になった。claude/ の枝の PR でも回す

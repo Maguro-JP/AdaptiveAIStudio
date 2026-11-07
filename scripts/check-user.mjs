@@ -53,7 +53,8 @@ const ASK = 'fizzbuzz.js というファイルを作ってください。1 か�
 /* 成果物 5: 中のモデル（4B）が知らない API。Node 22.5 で入った `path.matchesGlob`（`util.diff` は 4B が知っていた。
  * 2026-11-08 の手元の試しで、文書なしは 2 回とも落ち、nodejs.org の文書ありは 2 回とも通った）。答えは、この確かめを動かす node で出す */
 const NEW_ASK = "glob.js というファイルを作ってください。node:path の matchesGlob を使って、'src/a/b.ts' が 'src/**/*.ts' に合うか、"
-  + "'x.js' が '*.ts' に合うかを調べ、2 つの結果を空白でつないで console.log で 1 行に出します。glob の包みは使わず、node:path の matchesGlob を呼びます。";
+  + "'x.js' が '*.ts' に合うかを調べ、2 つの結果を空白でつないで console.log で 1 行に出します。glob の包みは使わず、node:path の matchesGlob を呼びます。"
+  + "書くだけにして、動かさないでください（コマンドは実行しません）。";
 const { matchesGlob } = await import('node:path');
 const NEW_EXPECTED = typeof matchesGlob === 'function'
   ? `${matchesGlob('src/a/b.ts', 'src/**/*.ts')} ${matchesGlob('x.js', '*.ts')}` : undefined;
@@ -87,16 +88,27 @@ function newestFizz(dirs, since) {
 }
 
 /**
- * 画面に出た「許可」を押す。使う人は確かめの帯を見て押すので、押す（押さないと 10 分待って断ったことになる）。
+ * 画面に出た確かめの帯を押す。使う人は確かめの帯を見て押すので、押す（押さないと 10 分待って断ったことになる）。
+ * `denyCommands` のときは、コマンド実行（`コマンド実行: …`）の帯だけ「拒否」を押す。3 つ目の頼みで、
+ * 本体に glob.js を動かして試し直させないため（試し直すと、知識が無くても通ってしまう。run 42419219884）。
  * 押した数を返す。
  */
+let denyCommands = false;
 async function approveShown(page) {
   let n = 0;
-  for (const btn of await page.getByRole('button', { name: '許可', exact: true }).all()) {
-    if (await btn.isVisible().catch(() => false)) { await btn.click().catch(() => undefined); n += 1; }
+  let d = 0;
+  for (const box of await page.locator('.ask').all()) {
+    if (!(await box.isVisible().catch(() => false))) continue;
+    const head = await box.locator('.ask-head').first().innerText().catch(() => '');
+    const deny = denyCommands && head.startsWith('コマンド実行');
+    const btn = box.getByRole('button', { name: deny ? '拒否' : '許可', exact: true }).first();
+    if (!(await btn.isVisible().catch(() => false))) continue;
+    await btn.click().catch(() => undefined);
+    if (deny) d += 1; else n += 1;
   }
   if (n > 0) say(`確かめの帯で「許可」を ${n} 回押しました`);
-  return n;
+  if (d > 0) say(`確かめの帯で、コマンド実行に「拒否」を ${d} 回押しました`);
+  return n + d;
 }
 
 /** 本体の手が空くまで待つ（確かめの帯が出れば押す）。上限 `deadline` を過ぎたら、そのまま進む。 */
@@ -287,6 +299,7 @@ try {
   if (!NEW_EXPECTED) fail('この node には path.matchesGlob がありません（Node 22.5 以降で確かめてください）');
   const newFile = join(dirname(file), 'glob.js');
   const newAt = Date.now() - 1000;
+  denyCommands = true; // 3 つ目は書いた 1 回目の正しさを見る。動かして試し直させない
   await page.locator('.chat textarea').first().fill(NEW_ASK);
   await page.getByText('送る', { exact: true }).click();
   say(`3 つ目の頼み（新しい API の path.matchesGlob を使う glob.js）を送りました${withoutNetwork ? '（取りに行くのを止めています）' : ''}`);
@@ -296,6 +309,7 @@ try {
     await approveShown(page);
   }
   await idle(page, until3);
+  denyCommands = false;
   if (shots) await page.screenshot({ path: join(shots, '4-after-new-api.png') });
   let newOut = '';
   let newWhy = '';
