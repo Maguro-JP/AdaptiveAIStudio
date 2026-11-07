@@ -465,7 +465,13 @@ export function cyclePeriod(recent: readonly string[]): number | undefined {
  */
 export function fileFromCode(answer: string, ask: string): { path: string; content: string } | undefined {
   const names = [...new Set([...ask.matchAll(/(?:^|[\s「『(（])([\w.-]+\.(?:js|mjs|cjs|ts|py|sh|json|html|css|md|txt))(?=$|[\s」』)）、。,.!?])/g)].map((m) => m[1]!))];
-  const blocks = [...answer.matchAll(/```[\w+-]*\n([\s\S]*?)```/g)].map((m) => m[1]!);
+  // 「実行するには node fizzbuzz.js」のような、端末で打つ命令の塊は数えない（4B が添えて 2 つになり、直せなかった。Windows の check-user）。
+  // ただし、作るファイル自体がシェルの台本（.sh）なら数える
+  const shellLang = /^(?:bash|sh|shell|zsh|console|cmd|bat|powershell|ps1?|pwsh)$/i;
+  const wantsShell = names.length === 1 && /\.sh$/i.test(names[0]!);
+  const blocks = [...answer.matchAll(/```([\w+-]*)\n([\s\S]*?)```/g)]
+    .filter((m) => wantsShell || !shellLang.test(m[1] ?? ''))
+    .map((m) => m[2]!);
   if (names.length !== 1 || blocks.length !== 1 || !blocks[0]!.trim()) return undefined;
   return { path: names[0]!, content: blocks[0]!.endsWith('\n') ? blocks[0]! : `${blocks[0]!}\n` };
 }

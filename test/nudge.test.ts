@@ -114,6 +114,9 @@ describe('途中で手を止めたら、押し戻す', () => {
     assert.equal(fileFromCode('```js\nx\n```', 'a.js と b.js を作って'), undefined);
     assert.equal(fileFromCode('```js\nx\n```\n```js\ny\n```', 'a.js を作って'), undefined);
     assert.deepEqual(fileFromCode('```js\nx\n```', 'fizzbuzz.js というファイルを作ってください。'), { path: 'fizzbuzz.js', content: 'x\n' });
+    // 実行の仕方を添えた塊（bash）は数えない（Windows の check-user で 4B が書いた形）
+    assert.deepEqual(fileFromCode('```javascript\nx\n```\n実行するには:\n```bash\nnode fizzbuzz.js\n```', 'fizzbuzz.js というファイルを作ってください。'), { path: 'fizzbuzz.js', content: 'x\n' });
+    assert.deepEqual(fileFromCode('```bash\necho hi\n```', 'run.sh を作って'), { path: 'run.sh', content: 'echo hi\n' });
   });
 
   test('終わりの合図をコマンドの形で呼んでも、終わりとして受け取る', async () => {
