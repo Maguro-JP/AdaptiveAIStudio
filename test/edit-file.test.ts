@@ -32,12 +32,33 @@ async function fixture(body: string, name = 'a.ts'): Promise<{ root: string; pat
 
 describe('一部だけ差し替える', () => {
 
-  test('**replace に引数の残り（edits と find）が混ざっていたら、当てずに例を返す**（4B が書いた形）', async () => {
+  test('**replace に引数の残り（edits と find）が混ざっていたら、混ざる前までを当てる**（4B が例を返しても 3 回繰り返した形）', async () => {
     const before = 'function add(a, b) {\n  return a - b;\n}\n';
     const { root, path } = await fixture(before, 'calc.js');
     const r = await editFileTool.run({
       path, find: 'return a - b;',
       replace: "return a + b; all: true, edits: [{'find': 'return a - b;', 'replace': 'return a + b;'}]}]},",
+    }, await ctxAt(root));
+    assert.equal(r.isError, undefined, r.content);
+    assert.equal(await readFile(join(root, path), 'utf8'), 'function add(a, b) {\n  return a + b;\n}\n');
+  });
+
+  test('引用符と読点で区切って混ざった形も、混ざる前までを当てる', async () => {
+    const { root, path } = await fixture('function add(a, b) {\n  return a - b;\n}\n', 'calc.js');
+    const r = await editFileTool.run({
+      path, find: 'return a - b;',
+      replace: "return a + b;', 'all': true, 'edits': [{'find': 'return a - b;', 'replace': 'return a + b;'}]",
+    }, await ctxAt(root));
+    assert.equal(r.isError, undefined, r.content);
+    assert.equal(await readFile(join(root, path), 'utf8'), 'function add(a, b) {\n  return a + b;\n}\n');
+  });
+
+  test('**混ざる前に何も無ければ、当てずに例を返す**', async () => {
+    const before = 'function add(a, b) {\n  return a - b;\n}\n';
+    const { root, path } = await fixture(before, 'calc.js');
+    const r = await editFileTool.run({
+      path, find: 'return a - b;',
+      replace: "edits: [{'find': 'return a - b;', 'replace': 'return a + b;'}]",
     }, await ctxAt(root));
     assert.equal(r.isError, true);
     assert.match(r.content, /混ざっています/);

@@ -156,6 +156,17 @@ try {
   const second = await info();
   if (second?.pid !== first.pid) fail(`2 回目の起動で本体が入れ替わりました（${first.pid} → ${second?.pid}）`);
   say(`もう一度起こしても、本体は 1 つのまま（PID ${first.pid}）でした`);
+  // 押して開くのはアプリのウィンドウだけ。コンソール（cmd、端末）のウィンドウが出ていたら落とす
+  if (process.platform === 'win32') {
+    const { execFileSync } = await import('node:child_process');
+    const shown = execFileSync('powershell', ['-NoProfile', '-Command',
+      "Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.ProcessName -in @('cmd','conhost','WindowsTerminal','OpenConsole','powershell','pwsh') } | ForEach-Object { $_.ProcessName + ':' + $_.MainWindowTitle }"],
+    { encoding: 'utf8' }).trim();
+    // CI の手順そのものを動かしている powershell は数えない（題名が空でないものだけを見る）
+    const consoles = shown.split(/\r?\n/).filter((l) => l && !/:$/.test(l) && /AdaptiveAIStudio|start\.cmd|node/i.test(l));
+    if (consoles.length) fail(`コンソールのウィンドウが開いています: ${consoles.join(', ')}`);
+    say('コンソールのウィンドウは開いていませんでした');
+  }
 
   const { chromium } = await import('playwright-core');
   const exe = process.env.AAS_CHECK_BROWSER || findAppBrowser(process.platform, process.env, existsSync);

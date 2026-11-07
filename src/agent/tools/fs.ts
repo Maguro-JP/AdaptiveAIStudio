@@ -595,7 +595,15 @@ async function commit(
  */
 function leakedArgs(replace: string): boolean {
   // 普通のコードの `{ find: x, replace: y }` は断らない。引数の並び（edits）の中に、引用符つきの find があるときだけ
-  return /(^|[\s{,])edits['"]?\s*:\s*\[/.test(replace) && /['"]find['"]\s*:/.test(replace);
+  return /(^|[\s{,'"])edits['"]?\s*:\s*\[/.test(replace) && /['"]find['"]\s*:/.test(replace);
+}
+
+/** 混ざった引数（`all:` `edits:` `find:`）が始まる手前までを返す。手前が空なら undefined。 */
+export function beforeLeak(replace: string): string | undefined {
+  const m = /[\s,]*['"]?\s*,?\s*(?:all|edits|find)['"]?\s*:/.exec(replace);
+  if (!m) return undefined;
+  const head = replace.slice(0, m.index).replace(/[\s'",]+$/, '');
+  return head.length > 0 ? head : undefined;
 }
 
 function parseEdits(
@@ -603,6 +611,12 @@ function parseEdits(
 ): { find: string; replace: string; all?: boolean }[] | string {
   const got = parseEditsRaw(args);
   if (typeof got === 'string') return got;
+  // 混ざった引数より前に、置き換えた後の文字があれば、それだけを使う。同じ崩れを繰り返して止まるより、
+  // 前の部分を当てて結果を確かめる方が進む（4B は例を返しても同じ形を 3 回繰り返した）
+  const fixed = got.map((e) => (leakedArgs(e.replace) ? { ...e, replace: beforeLeak(e.replace) } : e));
+  if (fixed.every((e) => e.replace !== undefined) && fixed.every((e) => !leakedArgs(e.replace ?? ""))) {
+    return fixed as { find: string; replace: string; all?: boolean }[];
+  }
   if (got.some((e) => leakedArgs(e.replace))) {
     return 'replace の中にツールの引数（find・edits・all）が混ざっています。置き換えた後の文字だけを渡してください。'
       + '例: {"path":"calc.js","find":"return a - b;","replace":"return a + b;"}';
