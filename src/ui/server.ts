@@ -32,7 +32,8 @@ import { revertLines, type RevertPick } from '../agent/hunks.ts';
 import { buildCompletionInput, cleanCompletion } from '../core/completion.ts';
 import { writeEnvValue } from '../core/env.ts';
 import { canRun } from '../core/which.ts';
-import { saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
+import { saveLocation, saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
+import { DEFAULT_LOCATION } from '../core/knowledge-source.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, writeFile, mkdir, realpath, rename, rm, chmod } from 'node:fs/promises';
 import { protectedHit, isGitPattern } from '../core/harness-setup.ts';
@@ -1941,6 +1942,19 @@ export class UiServer {
           error: `設定を読めませんでした: ${(e as Error).message}`,
         });
       }
+    }
+
+    // 天気の既定の場所。保存したら、いま動いている設定にも入れる（立ち上げ直さずに次の問いから効く）
+    if (path === '/api/location' && req.method === 'GET') {
+      return send(res, 200, { location: this.#opts.config.location ?? DEFAULT_LOCATION, default: DEFAULT_LOCATION });
+    }
+    if (path === '/api/location' && req.method === 'PUT') {
+      const body = (await readBody(req) ?? {}) as { location?: unknown };
+      const place = typeof body.location === 'string' ? body.location.trim().slice(0, 60) : '';
+      await saveLocation(place);
+      if (place) this.#opts.config.location = place;
+      else delete this.#opts.config.location;
+      return send(res, 200, { location: this.#opts.config.location ?? DEFAULT_LOCATION });
     }
 
     if (path === '/api/config' && req.method === 'PUT') {

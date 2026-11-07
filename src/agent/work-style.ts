@@ -62,3 +62,25 @@ export function expandShortUtterance(now: string, previous: string | undefined):
     '最初に、読んだ形（対象・やること）を ↩ で始まる1行で書いてから動いてください。',
   ].join('\n');
 }
+
+/** 分からないと言って終える言い回し。 */
+const GIVE_UP = /わかりません|分かりません|わからない|分からない|お答えできません|答えられません|知りません|情報がありません|情報を持っていません|I don'?t know|I'?m not sure|cannot (?:answer|know)|no information/i;
+
+/** 何を試したかを書いている（試してから分からないと言っている）。 */
+const TRIED = /試しました|調べましたが|取れませんでした|取得できませんでした|繋がりませんでした|足りません|見つかりませんでした/;
+
+/** 返事が、試さずに分からないと言って終えているか。長い答えの中の「分からない」は見ない。 */
+export function givesUp(text: string): boolean {
+  const t = String(text ?? '').trim();
+  if (!t || t.length > 300 || TRIED.test(t)) return false;
+  return GIVE_UP.test(t);
+}
+
+/** 試さずに分からないと言ったときの押し戻し。ツールがあれば使わせ、無ければ何が足りないかを書かせる。 */
+export function giveUpNudge(hasTools: boolean): string {
+  return hasTools
+    ? 'まだ何も試していません。使えるツール（ネットワークの取得、ファイルの読み、コマンド）で調べてから答えてください。'
+      + '調べられなかったら、何を試して何が足りないかを具体的に書いてください。'
+    : '「分かりません」だけで終えないでください。渡された知識（知識の蔵、今の日時）と計算で答えられないか考えてから答えてください。'
+      + 'それでも答えられなければ、何を試して何が足りないかを具体的に書いてください。';
+}

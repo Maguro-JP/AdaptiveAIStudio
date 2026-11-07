@@ -65,6 +65,8 @@ export interface AasConfig {
   panel?: PanelConfig;
   /** 外部情報の取得。 */
   network?: NetworkConfig;
+  /** 場所が書かれていない天気の問いに使う場所（「大阪」など）。省略時は 東京（私の推測）。設定の画面で変えられる。 */
+  location?: string;
   /** 外の道具（MCP）。GitHub もここに一つ足すだけで繋がる。 */
   mcp?: McpConfig;
 }

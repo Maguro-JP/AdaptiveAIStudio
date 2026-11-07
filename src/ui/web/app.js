@@ -2592,9 +2592,29 @@ async function makeReport() {
 }
 $('makeReport').onclick = () => void makeReport();
 
+// 天気の場所。開いたときに今の値を入れ、保存（Enter でも）で書いて、書けたかをその場で言う
+async function showLocation() {
+  const r = await json('/api/location');
+  if (r?.location !== undefined) $('locationInput').value = r.location;
+}
+async function saveLocationNow() {
+  const st = $('locationStatus');
+  st.textContent = '保存しています…';
+  const r = await ask('/api/location', {
+    method: 'PUT', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ location: $('locationInput').value }),
+  }, '場所を保存できませんでした');
+  if (!r || !r.ok) { st.textContent = '保存できませんでした'; return; }
+  $('locationInput').value = r.body.location;
+  st.textContent = `保存しました（${r.body.location}）。次の問いから使います`;
+}
+$('locationSave').onclick = () => void saveLocationNow();
+$('locationInput').addEventListener('keydown', (e) => { if (isPlainEnter(e)) { e.preventDefault(); void saveLocationNow(); } });
+
 async function openSettings(section = 'info') {
   showSection(section);
   $('settings').showModal();
+  void showLocation();
   fillSection(section);
 }
 

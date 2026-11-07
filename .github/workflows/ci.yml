@@ -67,6 +67,10 @@ on:
         description: 'setup.exe を Windows に入れ、画面のボタンで既定のモデルを取り、ファイルを作る仕事を頼んで、出来たものを動かして見る。これだけを回す'
         type: boolean
         default: false
+      work:
+        description: 'setup.exe を Windows に入れ、画面から本物のモデルに既定の質問と作業（checks/work.json の全部）を頼み、答えの中身で働くかを見る。これだけを回す'
+        type: boolean
+        default: false
       without_network:
         description: 'user と一緒に使う。ネットワークから取りに行かずに起こし、新しい API の頼みが落ちることを見る（成果物 5 の対照）'
         type: boolean
@@ -81,7 +85,7 @@ on:
 # 途中の版が通ったかどうかは、結局いらない。
 concurrency:
   # `real`（有料で長い）は別の組にする。同じ枝への push や週一の回で打ち切られないように。
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.real && 'real' || inputs.user && (inputs.without_network && 'user-offline' || 'user') || 'ci' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.real && 'real' || inputs.user && (inputs.without_network && 'user-offline' || 'user') || inputs.work && 'work' || 'ci' }}
   cancel-in-progress: true
 
 # 2026-10-18 に public になり、標準のランナーは無料になった。claude/ の枝の PR でも回す
@@ -97,7 +101,7 @@ jobs:
     name: ubuntu-latest / Node 22.x
     # 本物の重みだけを頼んだ回では回さない（枠を使わない）。
     if: >-
-      (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user))
+      (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user && !inputs.work))
       && !(github.event.action == 'opened' && github.event.pull_request.draft == true)
     runs-on: ubuntu-latest
     # 暴走した1本で枠を溶かさない。手元では3分ほど。
@@ -132,7 +136,7 @@ jobs:
     name: windows-latest / Node 24.x
     if: >-
       (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-      && (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user))
+      && (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user && !inputs.work))
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -164,7 +168,7 @@ jobs:
   # だから PR では回さない。**手で頼んだときと、週に一度だけ。**
   bundle:
     name: bundle / Windows
-    if: github.event_name != 'pull_request' && !inputs.real && !inputs.user
+    if: github.event_name != 'pull_request' && !inputs.real && !inputs.user && !inputs.work
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -238,7 +242,7 @@ jobs:
   # 判定は出来たファイルを node で動かした出力（`scripts/check-user.mjs`）。
   user-setup:
     name: user / setup.exe を組む
-    if: github.event_name == 'workflow_dispatch' && inputs.user
+    if: github.event_name == 'workflow_dispatch' && (inputs.user || inputs.work)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -276,6 +280,7 @@ jobs:
 
   user:
     name: user / Windows
+    if: inputs.user
     needs: user-setup
     runs-on: windows-latest
     timeout-minutes: 75
@@ -314,6 +319,47 @@ jobs:
         if: always()
         with:
           name: user-shots
+          path: shots
+          retention-days: 7
+
+  # 働くかの確かめ。user と同じ入れ方で入れ、checks/work.json を全部回す（足すだけ。絞らない）
+  work:
+    name: work / Windows
+    if: inputs.work
+    needs: user-setup
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      - uses: actions/download-artifact@v4
+        with:
+          name: user-setup
+      - name: setup.exe を黙って入れる
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath .\AdaptiveAIStudio-Setup.exe -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "setup.exe が $($p.ExitCode) で終わりました" }
+      - name: 画面を押す部品を入れる
+        run: npm i --no-save --no-audit --no-fund playwright-core
+      - name: 入れた形で、既定の質問と作業に働くか
+        shell: pwsh
+        run: node scripts/check-work.mjs --start "wscript.exe `"$env:ProgramFiles\AdaptiveAIStudio\AdaptiveAIStudio.vbs`"" --port 4176 --work "$env:RUNNER_TEMP\work" --shots shots --out shots/work.json
+      - name: 本体の記録を写す
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force shots | Out-Null
+          foreach ($d in 'logs', 'conversations') {
+            $src = Join-Path $env:ProgramData "AdaptiveAIStudio\$d"
+            if (Test-Path $src) { Copy-Item -Recurse -Force $src (Join-Path shots $d) }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: work-shots
           path: shots
           retention-days: 7
 

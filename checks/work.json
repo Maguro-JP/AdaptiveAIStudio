@@ -1,0 +1,13 @@
+{
+  "note": "働くかの確かめ（scripts/check-work.mjs）の既定の一覧。足すだけにする。消す・skip しない（test/work-checks.test.ts が checks/work.ids と突き合わせて止める）。",
+  "checks": [
+    { "id": "weather-tomorrow-place", "kind": "answer", "ask": "明日の東京の天気は?", "judge": { "type": "weather-matches-open-meteo", "place": "東京" } },
+    { "id": "weather-tomorrow-default", "kind": "answer", "ask": "明日の天気は?", "judge": { "type": "weather-matches-open-meteo", "place": "@default" } },
+    { "id": "weekday-today", "kind": "answer", "ask": "今日は何曜日?", "judge": { "type": "weekday-jst" } },
+    { "id": "arithmetic", "kind": "answer", "ask": "1234 × 5678 は?", "judge": { "type": "number-equals", "value": 7006652 } },
+    { "id": "node-lts", "kind": "answer", "ask": "Node.js の今の LTS の版は?", "judge": { "type": "node-lts-matches" } },
+    { "id": "summary-ja", "kind": "answer", "ask": "次の文を日本語で 1 文に要約して: 猫の小太郎は毎朝6時に起きる。起きるとすぐに庭へ出て、鳩を追いかける。疲れると縁側で昼まで眠る。", "judge": { "type": "contains-all", "values": ["小太郎"], "any": ["鳩", "庭", "眠"] } },
+    { "id": "task-hello", "kind": "task", "ask": "hello.js というファイルを作ってください。動かすと console.log で「こんにちは」とだけ 1 行出します。", "judge": { "type": "file-runs", "file": "hello.js", "stdout": "こんにちは" } },
+    { "id": "task-fix-calc", "kind": "task", "setup": { "file": "calc.js", "content": "function add(a, b) {\n  return a - b;\n}\nconsole.log(add(2, 3));\n" }, "ask": "calc.js の add が、足し算ではなく引き算になっています。足し算になるように直してください。", "judge": { "type": "file-runs", "file": "calc.js", "stdout": "5" } }
+  ]
+}

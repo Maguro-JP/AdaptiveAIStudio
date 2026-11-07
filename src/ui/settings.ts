@@ -296,6 +296,16 @@ export async function saveWorkRoot(root: string): Promise<string> {
   });
 }
 
+/** 天気の既定の場所を設定に書く。空なら消す（既定の 東京 に戻る）。 */
+export async function saveLocation(place: string): Promise<string> {
+  return editConfig((current, at) => {
+    const next: Record<string, unknown> = { ...current };
+    if (place) next.location = place;
+    else delete next.location;
+    return { next, result: at };
+  });
+}
+
 /**
  * 設定に書いてある外のツール（MCP）。名前 → 書いてある形。
  * ファイルが無い・読めない・一覧の項目が無いときは undefined（「一つも無い」とは分ける。書いていないものを空で上書きしない）。

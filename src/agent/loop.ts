@@ -13,7 +13,7 @@ import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
 import type { Tool, ToolContext, ApprovalRequest, ApprovalAnswer, RequestScope } from './tools/types.ts';
 import { ToolTextFilter } from './tool-text.ts';
 import { DoneMark, DONE_MARK } from './done.ts';
-import { claimsVerified, expandShortUtterance, RUN_TOOLS, UNBACKED_CLAIM_NUDGE } from './work-style.ts';
+import { claimsVerified, expandShortUtterance, giveUpNudge, givesUp, RUN_TOOLS, UNBACKED_CLAIM_NUDGE } from './work-style.ts';
 import { fitToWindow, historyBudget, estimateTokens, trimSchemas, TOOL_SHARE, type Count } from './window.ts';
 
 export type AgentEvent =
@@ -117,6 +117,7 @@ export class Agent {
     let ranOk = false;
     // 根拠の無い言い切りを押し戻したか（一度だけ。二度目は押し戻さず、そのまま返す）
     let claimNudged = false;
+    let giveUpNudged = false;
     /*
      * 「続けて」「それも」だけの一言は、前の依頼から読む形をシステムプロンプトの末尾に足す（prompt-from-context）。
      * 履歴は書き換えない（利用者の見た一言はそのまま残す）
@@ -328,6 +329,16 @@ export class Agent {
           nudges += 1;
           yield { type: 'nudged', left: maxNudges - nudges };
           history.push({ role: 'user', nudge: true, content: UNBACKED_CLAIM_NUDGE });
+          continue;
+        }
+        /*
+         * 試さずに「分かりません」で終えた。ツールを一度も使っていない回だけ見る。一度だけ押し戻す
+         */
+        if (!usedTools && !giveUpNudged && nudges < maxNudges && givesUp(text)) {
+          giveUpNudged = true;
+          nudges += 1;
+          yield { type: 'nudged', left: maxNudges - nudges };
+          history.push({ role: 'user', nudge: true, content: giveUpNudge((this.#opts.tools?.length ?? 0) > 0) });
           continue;
         }
         if (declaredDone || (!usedTools && !codeInsteadOfTool) || nudges >= maxNudges) {

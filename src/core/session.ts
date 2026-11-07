@@ -24,7 +24,7 @@ import type { AasConfig } from '../config.ts';
 import { buildRegistry } from './build.ts';
 import { ChatOrchestrator } from './orchestrator.ts';
 import { NetworkProvider, NETWORK_LABEL, innerCandidates, withNetwork } from './network-provider.ts';
-import { DefaultSource, fetchEnabled } from './knowledge-source.ts';
+import { DefaultSource, DEFAULT_LOCATION, fetchEnabled } from './knowledge-source.ts';
 import { setupAutopilot, resolveCandidates, stateDir, type AutopilotBundle } from './autopilot-setup.ts';
 import { buildHarness } from './harness-setup.ts';
 import { Forum } from '../harness/deliberation.ts';
@@ -139,8 +139,8 @@ export const DEFAULT_SYSTEM = `あなたはソフトウェア開発の作業者�
 - 作業が終わったら、何をしたかを簡潔に日本語で報告する。ツールは呼ばない。
 - 分からないことは推測せず、質問して止まる。
 - **訊かれただけのときは、ツールを使わずにそのまま答える。**作業として扱わない。
-- 知らないことは「分かりません」と言う。天気・ニュース・今日の日付など、
-  外で今起きていることは分かりません。調べに行かず、そう答える。
+- 分からないときは、調べてから答える。調べられなかったら、何を試して何が足りないかを書く。
+- 天気など今の事実は、下の「知識の蔵から」に載っていればそれを使い、出どころを添える。作り話をしない。
 
 働き方（利用者が決めたこと。docs/WORK-STYLE.md）:
 - 利用者の今の一言が一番上。言われた形でそのまま行う。言い返さない、先に代案を出さない。
@@ -164,10 +164,17 @@ export const DEFAULT_SYSTEM = `あなたはソフトウェア開発の作業者�
 export const DEFAULT_CHAT_SYSTEM = `あなたは、この場所に住んでいる相棒です。訊かれたことに日本語で短く答えてください。
 
 守ること:
-- 知らないことは「分かりません」と言う。**作り話をしない。**
-- 今日の日付、天気、ニュース、株価、外で今起きていることは分かりません。そう言ってください。
+- 分からないときは、調べてから答える。調べられなかったら、何を試して何が足りないかを書く。**作り話をしない。**
+- 天気など今の事実は、下の「知識の蔵から」に載っていればそれを使い、出どころを添える。今日の日付と曜日は下の「今」を使う。
+- 載っていないニュースや株価は分かりません。そう言い、取れなかったことを添えてください。
 - 計算や言葉の問いには、そのまま答える。よけいな説明も言い訳も要りません。
 - ファイルを直す・作る・調べるといった作業を頼まれたら、「作業として進めますか」と訊いてください。`;
+
+/** 今の日本時間の日付と曜日（問いの決まりの末尾に足す。モデルは今日を知らない）。 */
+export function nowLine(now: Date = new Date()): string {
+  const f = new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long', hour: '2-digit', minute: '2-digit' });
+  return `## 今\n日本時間で ${f.format(now)}。`;
+}
 
 export type SessionEvent =
   | { type: 'text'; delta: string }
@@ -533,7 +540,7 @@ export class Session {
      */
     const network = new NetworkProvider(registry, () => resolved.candidates, {
       settleAtEnd: true,
-      ...(fetchEnabled() ? { source: new DefaultSource() } : {}),
+      ...(fetchEnabled() ? { source: new DefaultSource({ location: () => config.location ?? DEFAULT_LOCATION }) } : {}),
     });
     registry.register(network);
     const candidates = withNetwork(resolved.candidates);
@@ -2614,7 +2621,7 @@ export class Session {
      * リポジトリの決まりも作業場の様子も載せない。問いに答えるのに要らないし、
      * 狭いコンテキストウィンドウの模型では、それだけで問いが押し出される。
      */
-    if (opts.chat) return this.config.chatSystem ?? DEFAULT_CHAT_SYSTEM;
+    if (opts.chat) return `${this.config.chatSystem ?? DEFAULT_CHAT_SYSTEM}\n\n${nowLine()}`;
     const base = this.config.system ?? DEFAULT_SYSTEM;
     const counter = await this.#count();
     const count = counter ? (t: string) => counter.count(t) : undefined;

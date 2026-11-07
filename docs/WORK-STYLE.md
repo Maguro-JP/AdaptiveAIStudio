@@ -15,6 +15,7 @@
 | スキル | 製品の中で守る所 | 守らせ方 |
 |---|---|---|
 | verify-before-done | 「テストが通りました」「動きました」と言うのに、この依頼で run_command が一度も成功していなければ一度押し戻す（`src/agent/work-style.ts` の `claimsVerified`、`src/agent/loop.ts`） | コード |
+| verify-before-done | ツールを一度も使わずに「わかりません」の類で終えたら一度押し戻す。ツールがあれば使わせ、無ければ何を試して何が足りないかを書かせる（`givesUp`、`giveUpNudge`）。問いの決まりにも「分からないときは、調べてから答える。調べられなかったら、何を試して何が足りないかを書く」を書く | コード＋プロンプト |
 | verify-before-done | 終わりは決めた一語（`TASK_DONE`）で受け、合図なしで手を止めたら押し戻す（`src/agent/done.ts`） | コード |
 | work-style | 作業のあとの確かめ（`src/agent/verify.ts`）、作業前のベースライン（`src/agent/baseline.ts`） | コード |
 | prompt-from-context | 「続けて」「それも」だけの一言は、前の依頼をシステムプロンプトの末尾に添え、聞き返させず、読んだ形を ↩ の1行で書かせる（`expandShortUtterance`） | コード＋プロンプト |

@@ -17,8 +17,9 @@ import type { ChatProvider, HealthStatus, ModelDescriptor, ProviderChunk, Provid
 import { ChatOrchestrator, type ChatEvent, type ChatInput } from './orchestrator.ts';
 import type { ProviderRegistry } from './registry.ts';
 import { KnowledgeShelf, knowledgeBlock, type KnowledgeEntry } from './knowledge.ts';
-import { gather, type KnowledgeSource } from './knowledge-source.ts';
+import { gather, isLiveQuestion, type KnowledgeSource } from './knowledge-source.ts';
 import type { Inspector } from '../harness/inspector.ts';
+import { arithmeticBlock } from './arithmetic.ts';
 
 export const NETWORK_PROVIDER_ID = 'network';
 export const NETWORK_MODEL_ID = 'network:network';
@@ -140,20 +141,39 @@ export class NetworkProvider implements ChatProvider {
   /** 蔵に当たった分を足した system。当たりが無ければ元のまま（undefined なら undefined のまま）。 */
   async #withKnowledge(input: ChatInput, signal: AbortSignal, used: KnowledgeEntry[]): Promise<string | undefined> {
     if (input.messages.at(-1)?.role !== 'user') return input.system;
+    // 問いの中の式は、この機械で計算した値を載せる（モデルに掛け算をさせない）
+    const calc = arithmeticBlock(String(input.messages.at(-1)?.content ?? ''));
+    const base = calc ? (input.system ? `${input.system}\n\n${calc}` : calc) : input.system;
+    const facts = await this.#facts({ ...input, ...(base !== undefined ? { system: base } : {}) }, signal, used);
+    return facts;
+  }
+
+  async #facts(input: ChatInput, signal: AbortSignal, used: KnowledgeEntry[]): Promise<string | undefined> {
     if (!this.#source && await this.#shelf.isEmpty().catch(() => true)) return input.system;
-    const needs = await this.#lister.list(input, signal).catch(() => [] as string[]);
+    const listed = await this.#lister.list(input, signal).catch(() => [] as string[]);
+    const needs = Array.isArray(listed) ? listed.slice(0, MAX_NEEDS) : [];
+    /*
+     * 天気・Node.js の版のような今の事実の問いは、挙げる段に頼らず、利用者の一言そのままで取りに行く（小さいモデルは [] を返して何も取らなかった）。
+     * 挙げた問いの中に天気があれば重ねない
+     */
+    const said = String(input.messages.at(-1)?.content ?? '');
+    if (this.#source && isLiveQuestion(said) && !needs.some((q) => typeof q === 'string' && isLiveQuestion(q))) {
+      needs.unshift(said.slice(0, 200));
+    }
     const found: KnowledgeEntry[] = [];
-    for (const q of Array.isArray(needs) ? needs.slice(0, MAX_NEEDS) : []) {
+    const ephemeral = new Set<KnowledgeEntry>();
+    for (const q of needs) {
       if (typeof q !== 'string') continue;
       let e = await this.#shelf.find(q).catch(() => undefined);
       if (!e && this.#source) {
         const got = await gather(q, this.#source, this.#shelf, signal, this.#inspector ? { inspector: this.#inspector } : {})
           .catch(() => undefined);
-        if (got?.status === 'stored') e = got.entry;
+        if (got?.status === 'stored') { e = got.entry; if (got.ephemeral) ephemeral.add(e); }
       }
       if (e && !found.includes(e)) found.push(e);
     }
-    used.push(...found);
+    // 蔵に無い件（今の事実）は、点を動かす相手にしない
+    used.push(...found.filter((e) => !ephemeral.has(e)));
     const block = knowledgeBlock(found);
     if (!block) return input.system;
     return input.system ? `${input.system}\n\n${block}` : block;

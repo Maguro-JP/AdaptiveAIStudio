@@ -534,6 +534,7 @@ playwright-core と Chromium が要ります（配る物には入りません）
 - [画面](docs/UI.md) — 配置をデータで持つ。AIに頼んで模様替えできる（重要）
 - [対話の核](docs/CORE.md) — 入口（CLI・画面）から切り離した本体（重要）
 - [手元のモデルを使う](docs/LOCAL-MODEL.md) — GGUF を置くだけ。実行ファイルを増やさない道（重要）
+- [働くかの確かめ](docs/USAGE-WORK-CHECK.md) — 本物のモデルに画面から質問と作業を頼んで、中身で判定する
 - [動かないとき](docs/TROUBLESHOOTING.md) — LM Studio でも動かない場合を含む
 - [記憶](docs/MEMORY.md) — 覚えていること。同じ失敗を繰り返さないための器（重要）
 - [人員](docs/ROLES.md) — 気質の違うAIを配属する仕組み（重要）
