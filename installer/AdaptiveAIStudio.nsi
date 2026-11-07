@@ -98,10 +98,17 @@ Section "install"
 
   ; ショートカット。デスクトップとスタートメニューに1つずつ。
   ; 絵柄はまだ用意していない。無いものを指すと、既定の絵柄すら出ないことがある。
-  ; 押すとアプリのウィンドウが開く。入口の黒いコンソールは最小化して出す（一瞬映らないように）。
-  CreateShortcut "$DESKTOP\${APP}.lnk" "$INSTDIR\${APP}.cmd" "" "" "" SW_SHOWMINIMIZED
+  ; 押すとアプリのウィンドウだけが開く。コンソールは出さない（最小化でもタスクバーに残るため、隠して起こす）。
+  ; 隠して起こす役は wscript の小さな台本。番号の一覧は  ${APP}.cmd menu  のまま。
+  FileOpen $0 "$INSTDIR\${APP}.vbs" w
+  FileWrite $0 'Set sh = CreateObject("WScript.Shell")$\r$\n'
+  FileWrite $0 'd = CreateObject("Scripting.FileSystemObject").GetParentFolderName(WScript.ScriptFullName)$\r$\n'
+  FileWrite $0 'sh.Environment("Process")("AAS_HOME") = "$COMMONPROGRAMDATA\${APP}"$\r$\n'
+  FileWrite $0 'sh.Run "cmd /c """"" & d & "\app\start.cmd"" ui""", 0, False$\r$\n'
+  FileClose $0
+  CreateShortcut "$DESKTOP\${APP}.lnk" "$SYSDIR\wscript.exe" '"$INSTDIR\${APP}.vbs"'
   CreateDirectory "$SMPROGRAMS\${APP}"
-  CreateShortcut "$SMPROGRAMS\${APP}\${APP}.lnk" "$INSTDIR\${APP}.cmd" "" "" "" SW_SHOWMINIMIZED
+  CreateShortcut "$SMPROGRAMS\${APP}\${APP}.lnk" "$SYSDIR\wscript.exe" '"$INSTDIR\${APP}.vbs"'
   CreateShortcut "$SMPROGRAMS\${APP}\アンインストール.lnk" "$INSTDIR\Uninstall.exe"
 
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -125,6 +132,7 @@ Section "uninstall"
   RMDir /r "$INSTDIR\app"
   RMDir /r "$INSTDIR\runtime"
   Delete "$INSTDIR\${APP}.cmd"
+  Delete "$INSTDIR\${APP}.vbs"
   Delete "$INSTDIR\README.txt"
   Delete "$INSTDIR\VERSION"
   Delete "$INSTDIR\Uninstall.exe"
