@@ -24,6 +24,7 @@ import type { AasConfig } from '../config.ts';
 import { buildRegistry } from './build.ts';
 import { ChatOrchestrator } from './orchestrator.ts';
 import { NetworkProvider, NETWORK_LABEL, innerCandidates, withNetwork } from './network-provider.ts';
+import { DefaultSource, fetchEnabled } from './knowledge-source.ts';
 import { setupAutopilot, resolveCandidates, stateDir, type AutopilotBundle } from './autopilot-setup.ts';
 import { buildHarness } from './harness-setup.ts';
 import { Forum } from '../harness/deliberation.ts';
@@ -457,6 +458,8 @@ export class Session {
    */
   #counter?: Counter;
   #counterAsked = false;
+  /** ネットワークの送り口（知識の蔵を持つ）。頼みの最後に、確かめた結果で点を動かし、経験を置く。 */
+  readonly #network: NetworkProvider | undefined;
 
   private constructor(init: {
     config: AasConfig; root: string; candidates: string[]; quiet: string[]; localCandidates: string[]; modelReason: string;
@@ -468,6 +471,7 @@ export class Session {
     harness: Harness;
     toolPool: { read: Tool[]; write: Tool[]; execute: Tool[]; network: Tool[]; mcp: Tool[] };
     mcpClients: McpClient[];
+    network?: NetworkProvider;
     services: ServiceHooks;
   }) {
     this.services = init.services;
@@ -494,6 +498,7 @@ export class Session {
     this.#holder = init.holder;
     this.#forum = init.forum;
     this.#harness = init.harness;
+    this.#network = init.network;
   }
 
   static async create(config: AasConfig, opts: SessionOptions): Promise<Session> {
@@ -513,7 +518,15 @@ export class Session {
      * 候補（`resolved.candidates`）へそのまま渡す。中で使うモデルが無ければ置かない（「モデルがありません」の道はそのまま）。
      * 自動操縦がモデルを数えた後に登録する（`network` を一つのモデルとして順位に入れない）
      */
-    registry.register(new NetworkProvider(registry, () => resolved.candidates));
+    /*
+     * 段階 3〜5: 蔵に無い問いは、許可した配布元（nodejs.org、npm の登録先）から取りに行く。`AAS_KNOWLEDGE_FETCH=0` で止める。
+     * 試験（node --test の中）では既定で止める（本物のネットワークに出ない）。点は頼みの最後に、確かめた結果で動かす（`settle`）
+     */
+    const network = new NetworkProvider(registry, () => resolved.candidates, {
+      settleAtEnd: true,
+      ...(fetchEnabled() ? { source: new DefaultSource() } : {}),
+    });
+    registry.register(network);
     const candidates = withNetwork(resolved.candidates);
     /*
      * **モデルが無いことを、ここで投げない。**
@@ -662,7 +675,7 @@ export class Session {
       roles: new RoleRegistry(config.roles ?? [], (t) => log('warn', t)),
       orchestrator, pilot, prefetch, opts, holder, forum, toolPool, harness, mcpClients,
       services: serviceHooks,
-      proposals, idle, duties,
+      proposals, idle, duties, network,
     });
     return session;
   }
@@ -2233,6 +2246,19 @@ export class Session {
       }
 
       const succeeded = finishedReason === 'completed' && keep;
+      /*
+       * 使うほど賢くする（docs/NETWORK-MODEL.md の段階 4）。言葉ではなく結果で付ける: 書けて、確かめが落ちず、
+       * ツールが弾かれずに済んだ回だけを「効いた」とし、経験として置く。止めた回は点を動かさない
+       */
+      if (this.#network) {
+        const worked = succeeded && wroteSomething && checked !== 'failed' && failedTools.length === 0;
+        await this.#network.settle(ac.signal.aborted ? undefined : worked);
+        // 試験（node --test の中）では蔵に経験を書かない（試験どうしで同じ家を使うので、ほかの試験の蔵を空でなくする）
+        if (worked && !ac.signal.aborted && fetchEnabled()) {
+          await this.#network.shelf.learn(undoName.slice(0, 80), `書いたもの: ${changedHere.slice(0, 5).join(', ')}。確かめ: ${checked}`, true)
+            .catch(() => undefined);
+        }
+      }
       endMetrics(succeeded ? 'completed' : 'failed');
       await this.#harness.metrics?.save();
       this.#prefetch.invalidate();
@@ -2254,6 +2280,8 @@ export class Session {
        * 失敗として残すと、止めただけの手が「駄目だった手」として覚えられる。
        */
       const stopped = ac.signal.aborted;
+      // 落ちた頼みで持っておいた件を、次の頼みへ持ち越さない（止めたなら点は動かさない）
+      await this.#network?.settle(stopped ? undefined : false);
       // 書いた後に落ちたかもしれない。作業前の試験の結果と作業場の姿の覚えを捨てる（普通の終わり方と同じ。捨てずにいたので、
       // この回で落ちるようにした試験を次の回が「前は通っていた」と読み、この回の失敗を次の回に着せていた）
       if (locked) {

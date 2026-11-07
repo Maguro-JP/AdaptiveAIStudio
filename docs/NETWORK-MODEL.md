@@ -62,9 +62,9 @@ flowchart TB
 | 0 | 今の成果物（Windows で作る・直す）を安定させる | Windows の `user` が 2 回続けて通る |
 | 1 | 中身を持たない `network` の送り口を足し、候補の先頭に置く。中では今の候補選びにそのまま渡す（知識はまだ使わない） | `check-user` が「ネットワーク」を選んだまま通る。画面のモデルの欄に「ネットワーク」と出る |
 | 2 | 知識の蔵と「知らないことを挙げる」段 | 蔵に入れた事実を、中のモデルの答えが使う試験（偽のモデルで）が通る |
-| 3 | 取りに行く段（公式文書と npm の登録先だけで始める）。`src/core/knowledge-source.ts` | 偽の配布元を立てた試験で、取って、検問を通って、蔵に入る（`test/knowledge-source.test.ts`） |
-| 4 | 効いたかを記す | `check-user` の後、使った知識に「効いた」が付く |
-| 5 | 本物で確かめる | 中のモデルが知らない新しいライブラリを使う頼みを `check-user` に足し、ネットワークだと通り、中のモデルだけだと落ちる |
+| 3 | 取りに行く段（公式文書と npm の登録先だけで始める）。`src/core/knowledge-source.ts`。Node の組み込みの話は nodejs.org の API の JSON（`NodeDocsSource`）、それ以外は npm の登録先（`NpmRegistrySource`）。アプリは既定で取りに行き、`AAS_KNOWLEDGE_FETCH=0` で止める。試験（node --test の中）では既定で止める | 偽の配布元を立てた試験で、取って、検問を通って、蔵に入る（`test/knowledge-source.test.ts`） |
+| 4 | 効いたかを記す。点は 1 回の返事ではなく頼みの最後に、書けて確かめが落ちなかったかで動かす（`NetworkProvider.settle`）。通った頼みは経験として置く | `check-user` の後、使った知識に「効いた」が付く |
+| 5 | 本物で確かめる | 中のモデルが知らない新しいライブラリを使う頼みを `check-user` に足し、ネットワークだと通り、中のモデルだけだと落ちる（3 つ目の頼み: `node:util` の `diff` を使う diff.js。中のモデルだけは `--without-network`） |
 
 ## 選ばなかった案
 

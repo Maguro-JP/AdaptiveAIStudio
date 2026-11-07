@@ -10,11 +10,14 @@
  *   3. 画面の入力欄から、ファイルを作る仕事を頼む（fizzbuzz.js）
  *   4. 出来たファイルを node で動かし、15 行の出力が合っているかで判定する
  *   5. 引き算になっている calc.js を置いて直させ、動かして 5 が出るかで判定する
+ *   6. 中のモデルが知らない新しい API（Node の `util.diff`）を使う diff.js を作らせ、動かして `util.diff` と同じ答えが出るかで
+ *      判定する（成果物 5。知識はネットワークの送り口が nodejs.org から取る）。`--without-network` を付けると、取りに行くのを
+ *      止めて（AAS_KNOWLEDGE_FETCH=0）起こし、6 は「中のモデルだけでは落ちる」ことを見る
  *
  * 答えの文面では判定しない（「作りました」と言っても、ファイルが無ければ落とす）。
  *
  * 使い方:
- *   node scripts/check-user.mjs --start "<起こす命令>" --port <口> --find <探す場所> [--find …] [--shots <置き先>]
+ *   node scripts/check-user.mjs --start "<起こす命令>" --port <口> --find <探す場所> [--find …] [--shots <置き先>] [--without-network]
  *
  * 画面を押すのは playwright-core。ブラウザは AAS_CHECK_BROWSER、無ければアプリのウィンドウと同じ探し方（Edge → Chrome）。
  */
@@ -33,6 +36,7 @@ const start = args('--start')[0];
 const port = Number(args('--port')[0] ?? 4174);
 const finds = args('--find');
 const shots = args('--shots')[0];
+const withoutNetwork = process.argv.includes('--without-network');
 if (!start || finds.length === 0) {
   console.error('使い方: node scripts/check-user.mjs --start "<起こす命令>" --port <口> --find <探す場所>');
   process.exit(2);
@@ -45,6 +49,12 @@ const EXPECTED = Array.from({ length: 15 }, (_, i) => {
 }).join('\n');
 const ASK = 'fizzbuzz.js というファイルを作ってください。1 から 15 までの数を順に 1 行ずつ console.log で出します。'
   + '3 の倍数は Fizz、5 の倍数は Buzz、3 と 5 の両方の倍数は FizzBuzz を、数の代わりに出します。';
+
+/* 成果物 5: 中のモデル（4B）が知らない API。Node 22.15 / 24 で入った `util.diff`。答えは、この確かめを動かす node で出す */
+const NEW_ASK = "diff.js というファイルを作ってください。node:util の diff を使って、配列 ['a', 'b', 'c'] と ['a', 'x', 'c'] の差分を求め、"
+  + '結果を JSON.stringify で 1 行に console.log で出します。差分は自分で計算せず、node:util の diff の戻り値をそのまま出します。';
+const { diff: utilDiff } = await import('node:util');
+const NEW_EXPECTED = typeof utilDiff === 'function' ? JSON.stringify(utilDiff(['a', 'b', 'c'], ['a', 'x', 'c'])) : undefined;
 
 const FIX_ASK = 'calc.js の add が、足し算ではなく引き算になっています。足し算になるように直してください。';
 
@@ -108,7 +118,7 @@ async function waitUp() {
 }
 
 // 組ごと止められるように、Windows 以外は別の組で起こす（後で残った本体やモデルの口が、次の確かめに繋がっていた）
-const app = spawn(start, { shell: true, stdio: 'inherit', detached: process.platform !== 'win32', env: { ...process.env, AAS_UI_PORT: String(port) } });
+const app = spawn(start, { shell: true, stdio: 'inherit', detached: process.platform !== 'win32', env: { ...process.env, AAS_UI_PORT: String(port), ...(withoutNetwork ? { AAS_KNOWLEDGE_FETCH: '0' } : {}) } });
 /** 起こしたものを、子ごと止める。/api/quit は作業中だと断られる（409）ので、それだけに頼らない。 */
 function stopAll() {
   try {
@@ -271,6 +281,42 @@ try {
   if (fixed !== '5') fail(`calc.js を直しましたが、出力が 5 ではありません: 「${fixed}」 実行のエラー: 「${why}」 中身: 「${readFileSync(calc, 'utf8').slice(0, 400)}」`);
   say('calc.js が直り、動かすと 5 が出ることを確かめました');
 
+  // 3 つ目（成果物 5）: 中のモデルが知らない新しい API を使う。ネットワークの送り口が nodejs.org から知識を取って足す
+  if (!NEW_EXPECTED) fail('この node には util.diff がありません（Node 22.15 以降で確かめてください）');
+  const newFile = join(dirname(file), 'diff.js');
+  const newAt = Date.now() - 1000;
+  await page.locator('.chat textarea').first().fill(NEW_ASK);
+  await page.getByText('送る', { exact: true }).click();
+  say(`3 つ目の頼み（新しい API の util.diff を使う diff.js）を送りました${withoutNetwork ? '（取りに行くのを止めています）' : ''}`);
+  const until3 = Date.now() + 20 * 60_000;
+  while (Date.now() < until3 && !(existsSync(newFile) && statSync(newFile).mtimeMs >= newAt)) {
+    await page.waitForTimeout(10_000);
+    await approveShown(page);
+  }
+  await idle(page, until3);
+  if (shots) await page.screenshot({ path: join(shots, '4-after-new-api.png') });
+  let newOut = '';
+  let newWhy = '';
+  const made = existsSync(newFile) && statSync(newFile).mtimeMs >= newAt;
+  if (made) {
+    try { newOut = execFileSync(process.execPath, [newFile], { encoding: 'utf8', timeout: 10_000 }).replace(/\r/g, '').trim(); }
+    catch (e) { newWhy = String(e.stderr || e.message || e).trim().split('\n').slice(0, 6).join(' / '); }
+  }
+  const src = made ? readFileSync(newFile, 'utf8') : '';
+  // 自分で計算した差分を書き写したものは通さない（node:util の diff を呼んでいること）
+  const callsDiff = /node:util|require\(['"]util['"]\)|from ['"]util['"]/.test(src) && /\bdiff\s*\(/.test(src);
+  const passed = made && newOut === NEW_EXPECTED && callsDiff;
+  const newFail = !made ? '20 分たっても diff.js が出来ませんでした'
+    : !callsDiff ? `diff.js が node:util の diff を呼んでいません。中身: 「${src.slice(0, 400)}」`
+      : `diff.js の出力が違います: 「${newOut}」（正しくは ${NEW_EXPECTED}） 実行のエラー: 「${newWhy}」 中身: 「${src.slice(0, 400)}」`;
+  if (withoutNetwork) {
+    if (passed) fail('取りに行くのを止めても diff.js が通りました（中のモデルが util.diff を知っている。頼みを変える）');
+    say(`取りに行くのを止めると、中のモデルだけでは落ちました: ${newFail.slice(0, 300)}`);
+  } else {
+    if (!passed) fail(newFail);
+    say(`diff.js が node:util の diff を使い、動かすと ${NEW_EXPECTED} が出ることを確かめました`);
+  }
+
   // 成果物 3: 終了で止まる（開き直しは、立ち上がった直後に確かめた）
   const quit = await fetch(`http://127.0.0.1:${port}/api/quit`, { method: 'POST' }).catch(() => undefined);
   if (quit?.status !== 200) fail(`終了が受け付けられません（${quit?.status ?? '繋がらない'}）`);
@@ -304,5 +350,5 @@ if (failed) {
   console.log(`\n== 落ちました（${elapsed()}）: ${failed}`);
   process.exit(1);
 }
-console.log(`\n== 通りました（${elapsed()}）: 入れた形で、既定のモデルが頼んだファイルを作り、既にあるファイルも直し、どちらも正しく動きました。もう一度起こしても本体は 1 つのままで、終了で止まりました`);
+console.log(`\n== 通りました（${elapsed()}）: 入れた形で、既定のモデルが頼んだファイルを作り、既にあるファイルも直し、どちらも正しく動きました。${withoutNetwork ? '取りに行くのを止めると、新しい API を使う頼みは中のモデルだけでは落ちました。' : 'ネットワークから取った知識で、新しい API を使う頼みも通りました。'}もう一度起こしても本体は 1 つのままで、終了で止まりました`);
 process.exit(0);

@@ -94,6 +94,11 @@ export interface NetworkOptions {
   /** 蔵に無い問いを取りに行く先。置かなければ取りに行かない（段階 2 のまま）。 */
   source?: KnowledgeSource;
   inspector?: Inspector;
+  /**
+   * 点を動かすのを、頼みの最後（`settle`）まで待つか。置くと、1 回の返事ごとではなく、呼ぶ側が確かめた結果
+   * （ファイルが書けて、確かめが通ったか）で動かす。置かなければ、返事が最後まで来たかで動かす（段階 3 のまま）。
+   */
+  settleAtEnd?: boolean;
 }
 
 export class NetworkProvider implements ChatProvider {
@@ -106,6 +111,9 @@ export class NetworkProvider implements ChatProvider {
   readonly #lister: NeedLister;
   readonly #source: KnowledgeSource | undefined;
   readonly #inspector: Inspector | undefined;
+  readonly #settleAtEnd: boolean;
+  /** `settleAtEnd` のとき、頼みの最後まで持っておく、文脈に入れた件の問い。 */
+  readonly #pending = new Set<string>();
 
   /** `inner`: 依頼に中の候補が添えられていないときに使う候補（これが無かったときの候補）。 */
   constructor(registry: ProviderRegistry, inner: () => readonly string[], opts: NetworkOptions = {}) {
@@ -115,6 +123,18 @@ export class NetworkProvider implements ChatProvider {
     this.#lister = opts.lister ?? new InnerNeedLister(this.#orchestrator);
     this.#source = opts.source;
     this.#inspector = opts.inspector;
+    this.#settleAtEnd = opts.settleAtEnd ?? false;
+  }
+
+  /** 知識の蔵（呼ぶ側が経験を置くのに使う）。 */
+  get shelf(): KnowledgeShelf { return this.#shelf; }
+
+  /** 頼みの最後に呼ぶ。持っておいた件の点を、確かめた結果で動かす。止めた頼みは `ok` を渡さず捨てる。 */
+  async settle(ok: boolean | undefined): Promise<void> {
+    const qs = [...this.#pending];
+    this.#pending.clear();
+    if (ok === undefined || qs.length === 0) return;
+    await this.#shelf.recordOutcome(qs, ok).catch(() => undefined);
   }
 
   /** 蔵に当たった分を足した system。当たりが無ければ元のまま（undefined なら undefined のまま）。 */
@@ -171,7 +191,9 @@ export class NetworkProvider implements ChatProvider {
       yield ev;
     }
     // 文脈に入れた件の点を、通ったか落ちたかで動かす（途中で止めたときは動かさない）
-    if (used.length > 0 && (ok || failed)) {
+    if (used.length > 0 && this.#settleAtEnd) {
+      for (const e of used) this.#pending.add(e.question);
+    } else if (used.length > 0 && (ok || failed)) {
       await this.#shelf.recordOutcome(used.map((e) => e.question), ok && !failed).catch(() => undefined);
     }
   }

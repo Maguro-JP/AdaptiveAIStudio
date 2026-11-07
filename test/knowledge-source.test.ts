@@ -8,7 +8,7 @@ import { ProviderRegistry } from '../src/core/registry.ts';
 import { ChatOrchestrator, type ChatEvent } from '../src/core/orchestrator.ts';
 import { NetworkProvider, NETWORK_MODEL_ID, type NeedLister } from '../src/core/network-provider.ts';
 import { KnowledgeShelf, MAX_SHELF_ENTRIES, EXPERIENCE_SOURCE, knowledgeBlock } from '../src/core/knowledge.ts';
-import { NpmRegistrySource, gather, packageNameOf, type KnowledgeSource } from '../src/core/knowledge-source.ts';
+import { NpmRegistrySource, NodeDocsSource, DefaultSource, gather, packageNameOf, nodeApiOf, fetchEnabled, type KnowledgeSource } from '../src/core/knowledge-source.ts';
 import type { ChatProvider, ProviderChunk, ProviderRequest } from '../src/providers/contract.ts';
 import { tempDir } from './tmp.ts';
 
@@ -160,5 +160,69 @@ describe('使うほど賢くする', () => {
     assert.equal(all.length, MAX_SHELF_ENTRIES);
     assert.ok(!all.some((e) => e.question === 'q0'));
     assert.ok(all.some((e) => e.question === 'new'));
+  });
+});
+
+describe('Node の公式文書から取る（段階 3）', () => {
+  const doc = { modules: [{ name: 'util', desc: '<p>u</p>', methods: [
+    { textRaw: '`util.diff(actual, expected)`', name: 'diff', desc: '<p>compares &amp; returns</p><pre><code>diff([1], [2])</code></pre>' },
+    { textRaw: '`util.format()`', name: 'format', desc: '<p>f</p>' },
+  ] }] };
+
+  test('問いから組み込みの名前と探す名前を拾う。組み込みでなければ拾わない', () => {
+    assert.deepEqual(nodeApiOf('node:util の diff の使い方'), { module: 'util', names: ['diff'] });
+    assert.deepEqual(nodeApiOf('util.diff'), { module: 'util', names: ['diff'] });
+    assert.equal(nodeApiOf('zod の最新の版'), undefined);
+  });
+
+  test('偽の nodejs.org から、名前の合う項目の説明と例を、タグを外して取る', async () => {
+    const f = fakeRegistry(doc);
+    const shelf = new KnowledgeShelf(join(await tempDir('ks-'), 'k'));
+    const r = await gather('node:util の diff の使い方', new NodeDocsSource({ fetchImpl: f }), shelf, sig(), { now: NOW });
+    assert.equal(r.status, 'stored');
+    assert.equal(f.calls[0]!.url, 'https://nodejs.org/api/util.json');
+    assert.equal(f.calls[0]!.init?.credentials, 'omit');
+    if (r.status !== 'stored') return;
+    assert.match(r.entry.answer, /util\.diff\(actual, expected\)/);
+    assert.match(r.entry.answer, /compares & returns/);
+    assert.match(r.entry.answer, /diff\(\[1\], \[2\]\)/);
+    assert.doesNotMatch(r.entry.answer, /<p>/);
+  });
+
+  test('既定の配布元は、組み込みの話を nodejs.org へ、それ以外を npm の登録先へ回す', async () => {
+    const f = fakeRegistry(doc);
+    const src = new DefaultSource({ fetchImpl: f });
+    await src.fetch('node:util の diff', sig());
+    await src.fetch('zod の最新の版', sig());
+    assert.deepEqual(f.calls.map((c) => new URL(c.url).host), ['nodejs.org', 'registry.npmjs.org']);
+  });
+
+  test('取りに行くかは環境で決まり、試験の中では既定で止める', () => {
+    assert.equal(fetchEnabled({}), true);
+    assert.equal(fetchEnabled({ NODE_TEST_CONTEXT: 'child' }), false);
+    assert.equal(fetchEnabled({ NODE_TEST_CONTEXT: 'child', AAS_KNOWLEDGE_FETCH: '1' }), true);
+    assert.equal(fetchEnabled({ AAS_KNOWLEDGE_FETCH: '0' }), false);
+  });
+});
+
+describe('頼みの最後に点を動かす（段階 4）', () => {
+  test('settleAtEnd のとき、返事では動かさず、settle の結果で動かす。止めた頼みは動かさない', async () => {
+    const shelf = new KnowledgeShelf(join(await tempDir('ks-'), 'k'));
+    await shelf.upsert({ answer: 'zod の最新は 1.0.0。', sourceUrl: 'https://registry.npmjs.org/zod/latest', fetchedAt: '2026-11-01T00:00:00Z', question: 'zod の最新の版' });
+    const reg = new ProviderRegistry();
+    reg.register(inner());
+    const net = new NetworkProvider(reg, () => ['fake:m'], { shelf, lister: lister(['zod の最新の版']), settleAtEnd: true });
+    reg.register(net);
+    const ask = () => drain(new ChatOrchestrator(reg).run({ candidates: [NETWORK_MODEL_ID], messages: [{ role: 'user', content: 'zod' }] }, sig()));
+    await ask();
+    assert.equal((await shelf.find('zod の最新の版'))?.hits, 0);
+    await net.settle(true);
+    assert.equal((await shelf.find('zod の最新の版'))?.hits, 1);
+    await ask();
+    await net.settle(undefined);
+    await net.settle(false);
+    const e = await shelf.find('zod の最新の版');
+    assert.equal(e?.hits, 1);
+    assert.equal(e?.misses, 0);
   });
 });
