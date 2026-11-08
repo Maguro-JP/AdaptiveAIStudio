@@ -153,6 +153,28 @@ describe('途中で手を止めたら、押し戻す', () => {
     assert.equal(isDoneCall({ name: 'write_file', args: { path: 'task_done_notes.js', content: 'x' } }), false);
   });
 
+  test('合図をファイルの中身に書いても、ファイルに入れず、終わりとして受け取る', async () => {
+    // Windows の work（run 42442577525）で実際に起きた形。hello.js の末尾に // TASK_DONE を書き足した
+    const r = await run([
+      { tool: 'write_file', args: { path: 'hello.js', content: "console.log('こんにちは');\n" } },
+      { text: 'hello.js を作成しました。' },
+      { tool: 'write_file', args: { path: 'hello.js', content: "console.log('こんにちは');\n\n// TASK_DONE" } },
+    ], undefined, true, 'hello.js というファイルを作ってください');
+    try {
+      const body = await readFile(join(r.root, 'hello.js'), 'utf8');
+      assert.ok(!body.includes(DONE_MARK), `ファイルに合図が入った: ${JSON.stringify(body)}`);
+      assert.equal(body.trim(), "console.log('こんにちは');");
+      const last = r.events.at(-1);
+      assert.equal(last?.type, 'finished');
+      assert.equal(last.reason, 'completed');
+    } finally { await r.close(); }
+    const { withoutDoneLines } = await import('../src/agent/loop.ts');
+    assert.deepEqual(withoutDoneLines({ name: 'write_file', args: { path: 'a.py', content: 'print(1)\n# TASK_DONE\n' } })?.args, { path: 'a.py', content: 'print(1)\n' });
+    assert.equal(withoutDoneLines({ name: 'edit_file', args: { path: 'a.js', find: 'a', replace: 'b' } }), undefined);
+    assert.equal(withoutDoneLines({ name: 'write_file', args: { path: 'a.js', content: 'const s = "TASK_DONE は合図";\n' } }), undefined);
+    assert.deepEqual((withoutDoneLines({ name: 'edit_file', args: { path: 'a.js', find: 'a', replace: 'b', edits: [{ find: 'x', replace: 'y\n<!-- TASK_DONE -->' }] } })?.args as { edits: unknown }).edits, [{ find: 'x', replace: 'y' }]);
+  });
+
   test('押し戻しの文は、合図がファイルではないと言う', async () => {
     const r = await run([
       { tool: 'read_file', args: { path: 'a.txt' } },

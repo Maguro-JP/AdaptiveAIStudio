@@ -156,8 +156,11 @@ export function dayOffsetOf(question: string): number {
 
 /** 問いから場所の名前を拾う（「大阪の天気」「札幌は雨?」の「大阪」「札幌」）。拾えなければ undefined。 */
 export function placeOf(question: string): string | undefined {
-  const q = question.normalize('NFKC').replace(/[?？!！。、\s]+/g, ' ');
-  const skip = /^(明々後日|明後日|明日|今日|本日|今週|週末|あした|あす|きょう|あさって|しあさって|この辺|ここ|今|現在|この先)$/;
+  // 日付と曜日（「11月9日の天気」「月曜日の天気」）を場所と読まない
+  const q = question.normalize('NFKC')
+    .replace(/\d+\s*(?:年|月|日)|[月火水\u6728金土日]曜日?/g, ' ')
+    .replace(/[?？!！。、()（）\s]+/g, ' ');
+  const skip = /^(明々後日|明後日|明日|今日|本日|今週|週末|あした|あす|きょう|あさって|しあさって|来週|今夜|今晩|今朝|午前|午後|朝|昼|夜|この辺|ここ|今|現在|この先)$/;
   const re = /([\p{Script=Han}\p{Script=Katakana}ー]{1,8}|[A-Za-z][A-Za-z .-]{1,30}?)(?:市|県|都|府)?\s*(?:の|は|って|で)\s*(?:明々後日|明後日|明日|今日|あした|あす|きょう)?\s*(?:の)?\s*(?:天気|気温|降水|雨|雪|晴れ|weather)/u;
   for (let rest = q; rest;) {
     const m = re.exec(rest);

@@ -28,6 +28,8 @@ function fakeOpenMeteo() {
     if (u.host === 'geocoding-api.open-meteo.com') {
       const name = u.searchParams.get('name');
       if (name === 'ナイマチ' || name === '大阪') return Response.json({ results: [] });
+      // 日付や曜日の切れ端（「日」「月曜日」）は、本物と同じく引けない
+      if (/^(?:日|月曜日?)(?:市|都|府|県)?$/.test(name ?? '')) return Response.json({ results: [] });
       return Response.json({ results: [{ name, latitude: 35.69, longitude: 139.69 }] });
     }
     if (u.host === 'api.open-meteo.com') {
@@ -131,11 +133,86 @@ describe('ネットワークの送り口で天気を足す', () => {
   });
 });
 
+/**
+ * Windows の work（run 42442577525）: 同じアプリで「明日の東京の天気は?」のあとの「明日の天気は?」に、
+ * 挙げる段が「2026年11月9日の天気」と言い換え、「日」を場所と読んで取れず、既定の場所の天気が載らなかった。
+ */
+describe('場所の無い天気の問いに既定の場所を使う（挙げる段が日付で言い換えても）', () => {
+  async function converse(asks: string[], location: { value: string }) {
+    const systems: string[] = [];
+    const inner: ChatProvider = {
+      id: 'fake', locality: 'local',
+      async health() { return { ok: true }; },
+      async listModels() { return [{ id: 'fake:m', providerId: 'fake', model: 'm', displayName: 'm', locality: 'local' }]; },
+      async *chat(req): AsyncIterable<ProviderChunk> {
+        systems.push(String(req.system ?? ''));
+        yield { type: 'text', delta: '答え' };
+        yield { type: 'done', finishReason: 'stop' };
+      },
+    };
+    const om = fakeOpenMeteo();
+    const registry = new ProviderRegistry();
+    registry.register(inner);
+    registry.register(new NetworkProvider(registry, () => ['fake:m'], {
+      shelf: new KnowledgeShelf(join(await tempDir('wx-'), 'k')),
+      // 小さいモデルの挙げ方を真似る（日付で言い換える）
+      lister: { list: async () => ['2026年11月9日の天気', '月曜日の天気'] },
+      source: new DefaultSource({ fetchImpl: om.impl, location: () => location.value }),
+    }));
+    const messages: Message[] = [];
+    const perAsk: string[][] = [];
+    for (const ask of asks) {
+      messages.push({ role: 'user', content: ask });
+      const before = systems.length;
+      const callsBefore = om.calls.length;
+      for await (const ev of new ChatOrchestrator(registry).run({ candidates: ['network:network'], messages: [...messages] } as never, new AbortController().signal)) void ev;
+      messages.push({ role: 'assistant', content: '答え' });
+      perAsk.push([systems.slice(before).join('|'), om.calls.slice(callsBefore).map((c) => new URL(c.url).searchParams.get('name') ?? '').filter(Boolean).join(',')]);
+    }
+    return perAsk;
+  }
+
+  test('placeOf は日付・曜日を場所にしない', () => {
+    assert.equal(placeOf('2026年11月9日の天気'), undefined);
+    assert.equal(placeOf('11月9日の天気予報'), undefined);
+    assert.equal(placeOf('月曜日の天気'), undefined);
+    assert.equal(placeOf('明日の東京の天気は?'), '東京');
+    assert.equal(placeOf('日本の天気'), '日本');
+  });
+
+  test('場所つきの問いのあとの、場所の無い問いに既定の東京を使う', async () => {
+    const [first, second] = await converse(['明日の東京の天気は?', '明日の天気は?'], { value: '東京' });
+    assert.match(first![0]!, /東京の2026-11-08.*雨/);
+    assert.match(second![0]!, /東京の2026-11-08.*雨/, `二つ目に天気が載っていない: ${second![0]}`);
+    assert.doesNotMatch(second![1]!, /(^|,)日(,|$)/, `「日」を場所として引いた: ${second![1]}`);
+  });
+
+  test('最初の問いが場所の無い問いでも既定の場所を使う', async () => {
+    const [only] = await converse(['明日の天気は?'], { value: '東京' });
+    assert.match(only![0]!, /東京の2026-11-08.*雨/, `天気が載っていない: ${only![0]}`);
+  });
+
+  test('設定の場所を変えたら、次の問いから変えた場所を使う', async () => {
+    const loc = { value: '東京' };
+    const om: string[][] = [];
+    const run = await converse(['明日の天気は?'], loc);
+    om.push(...run);
+    loc.value = '札幌';
+    const [after] = await converse(['明日の天気は?'], loc);
+    assert.match(om[0]![0]!, /東京の/);
+    assert.match(after![0]!, /札幌の2026-11-08.*雨/, `変えた場所が使われていない: ${after![0]}`);
+  });
+});
+
 describe('試さずに分からないと言って終えない', () => {
   test('言い回しを読む', () => {
     assert.equal(givesUp('わかりません'), true);
     assert.equal(givesUp('明日の天気は分かりません。'), true);
     assert.equal(givesUp("I don't know."), true);
+    // Windows の work で押し戻されなかった言い回し
+    assert.equal(givesUp('2026 年 11 月 9 日（月）の天気は、知識の蔵から確認できません。天気予報は、以下の情報が必要ですが、現在入手できていません。- 場所（都市名など）- 予報データ もし、場所や予報データがあれば、すぐに調べることができます。'), true);
+    assert.equal(givesUp('明日の天気は入手できていません。'), true);
+    assert.equal(givesUp('その情報は確認できません。'), true);
     assert.equal(givesUp('天気を取りに行きましたが、繋がりませんでした。足りないのはネットワークです。分かりません。'), false);
     assert.equal(givesUp('明日は晴れ、最高 18℃ です。'), false);
   });

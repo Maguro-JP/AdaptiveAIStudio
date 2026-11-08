@@ -154,10 +154,12 @@ export class NetworkProvider implements ChatProvider {
     const needs = Array.isArray(listed) ? listed.slice(0, MAX_NEEDS) : [];
     /*
      * 天気・Node.js の版のような今の事実の問いは、挙げる段に頼らず、利用者の一言そのままで取りに行く（小さいモデルは [] を返して何も取らなかった）。
-     * 挙げた問いの中に天気があれば重ねない
+     * 挙げた問いの中の天気は、利用者の一言に置き換える（重ねない）。挙げる段は「2026年11月9日の天気」のように言い換え、
+     * 場所でない「日」を場所と読んで取れなかった（Windows の work、場所の無い「明日の天気は?」）
      */
     const said = String(input.messages.at(-1)?.content ?? '');
-    if (this.#source && isLiveQuestion(said) && !needs.some((q) => typeof q === 'string' && isLiveQuestion(q))) {
+    if (this.#source && isLiveQuestion(said)) {
+      for (let i = needs.length - 1; i >= 0; i--) if (typeof needs[i] === 'string' && isLiveQuestion(needs[i]!)) needs.splice(i, 1);
       needs.unshift(said.slice(0, 200));
     }
     const found: KnowledgeEntry[] = [];

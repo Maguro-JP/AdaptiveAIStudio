@@ -113,6 +113,8 @@ export class Agent {
     let pushedForCode = false;
     // 前の回に終わりの合図をツール呼び出しと一緒に出したか（次の回へ一度だけ持ち越す）
     let doneWithCalls = false;
+    /** この頼みで実行した呼び出し（合図の行を外した書き込みが、前と同じなら実行し直さない）。 */
+    const executed = new Set<string>();
     // この依頼で、コマンドが一度でも成功したか。「通りました」の根拠に数えるのはこれだけ（verify-before-done）
     let ranOk = false;
     // 根拠の無い言い切りを押し戻したか（一度だけ。二度目は押し戻さず、そのまま返す）
@@ -247,8 +249,21 @@ export class Agent {
       // 押し戻されて回り続けた。Windows の確かめで実際に起きた）。合図として受け取り、呼び出しからは外す
       const doneAsCall = calls.findIndex((c) => isDoneCall(c));
       if (doneAsCall >= 0) calls.splice(doneAsCall, 1);
-      const declaredDone = tail.done || doneWithCalls || doneAsCall >= 0;
-      doneWithCalls = tail.done && calls.length > 0;
+      /*
+       * 合図をファイルの中身に書いたもの（write_file の中身に「// TASK_DONE」）。Windows の work（run 42442577525）で、
+       * Qwen3.5-4B が hello.js の末尾に // TASK_DONE を書き足した。合図の行はファイルに入れず、終わりとして受け取る。
+       * 外した結果が前に実行した書き込みと同じなら、書き直さない（同じ書き込みの禁止で回らせない）
+       */
+      let doneInWrite = false;
+      for (let i = calls.length - 1; i >= 0; i--) {
+        const cleaned = withoutDoneLines(calls[i]!);
+        if (!cleaned) continue;
+        doneInWrite = true;
+        if (executed.has(`${cleaned.name}:${JSON.stringify(cleaned.args)}`)) calls.splice(i, 1);
+        else calls[i] = cleaned;
+      }
+      const declaredDone = tail.done || doneWithCalls || doneAsCall >= 0 || doneInWrite;
+      doneWithCalls = (tail.done || doneInWrite) && calls.length > 0;
 
       if (failure) {
         // 利用者がもう見た文は残す（止めたときと同じ。残さないと、次の指示が落ちた指示と一つに繋がる）。呼び出しは載せない（結果が無い）
@@ -408,6 +423,7 @@ export class Agent {
           for (const left of calls.slice(at)) { history.push({ role: 'tool', toolCallId: left.id, content: 'ERROR: 中断されました（実行していません）' }); answered.add(left.id); }
           yield { type: 'finished', reason: 'aborted' }; return;
         }
+        executed.add(`${call.name}:${JSON.stringify(call.args)}`);
         if (call.id.startsWith('salvaged-')) yield { type: 'salvaged', name: call.name };
         yield { type: 'toolStart', call };
 
@@ -527,6 +543,38 @@ export function fileFromCode(answer: string, ask: string): { path: string; conte
     .map((m) => m[2]!);
   if (names.length !== 1 || blocks.length !== 1 || !blocks[0]!.trim()) return undefined;
   return { path: names[0]!, content: blocks[0]!.endsWith('\n') ? blocks[0]! : `${blocks[0]!}\n` };
+}
+
+/** 合図だけの行（注釈の記号つきも）。 */
+const DONE_LINE = new RegExp(`^[ \\t]*(?:\\/\\/|#|--|;|\\/\\*|<!--|REM\\b)?[ \\t]*${DONE_MARK}[ \\t]*(?:\\*\\/|-->)?[ \\t]*$`, 'i');
+
+/** 書き込みの中身から合図の行を外す。合図の行が無ければ undefined。末尾に残った空行も外す（元の改行の有無は保つ）。 */
+function stripDoneLines(text: string): string | undefined {
+  const lines = text.split('\n');
+  if (!lines.some((l) => DONE_LINE.test(l.replace(/\r$/, '')))) return undefined;
+  const kept = lines.filter((l) => !DONE_LINE.test(l.replace(/\r$/, '')));
+  while (kept.length > 0 && !kept.at(-1)!.trim()) kept.pop();
+  return kept.length === 0 ? '' : kept.join('\n') + (text.endsWith('\n') ? '\n' : '');
+}
+
+/** write_file の content、edit_file の replace（edits の中も）から合図の行を外した呼び出し。外すものが無ければ undefined。 */
+export function withoutDoneLines<C extends { name: string; args: unknown }>(call: C): C | undefined {
+  const args = call.args as Record<string, unknown> | undefined;
+  if (!args || typeof args !== 'object') return undefined;
+  let changed = false;
+  const fix = (v: unknown): unknown => {
+    if (typeof v !== 'string') return v;
+    const s = stripDoneLines(v);
+    if (s === undefined) return v;
+    changed = true; return s;
+  };
+  const next: Record<string, unknown> = { ...args };
+  if (call.name === 'write_file') next.content = fix(args.content);
+  else if (call.name === 'edit_file') {
+    next.replace = fix(args.replace);
+    if (Array.isArray(args.edits)) next.edits = args.edits.map((e) => e && typeof e === 'object' ? { ...e, replace: fix((e as Record<string, unknown>).replace) } : e);
+  } else return undefined;
+  return changed ? { ...call, args: next } : undefined;
 }
 
 export function isDoneCall(call: { name: string; args: unknown }): boolean {
