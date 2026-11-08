@@ -173,6 +173,9 @@ export class Agent {
 
     // 同じツールを同じ引数で繰り返すのは、モデルが行き詰まった兆候。
     const recentCalls: string[] = [];
+    // 利用者が断った命令。同じ依頼の中で同じ命令をもう一度求めたら、聞き直さずに終える
+    // （Windows の check-user で、断った `node glob.js` を 3 回求め、承認待ちのまま終われなかった）
+    const deniedCommands = new Set<string>();
 
     for (let turn = 0; turn < maxTurns; turn += 1) {
       if (signal.aborted) { yield { type: 'finished', reason: 'aborted' }; return; }
@@ -444,12 +447,23 @@ export class Agent {
           // 物でない引数（文字列に二重に包んだ JSON など）で `{}` として動かすと、「path が必要です」になり、本当の誤りが届かなかった
           result = 'ERROR: 引数はJSONのオブジェクト（{ ... }）で渡してください。文字列に包まず、そのまま渡して呼び直してください。';
           isError = true;
+        } else if (call.name === 'run_command' && typeof call.args.command === 'string' && deniedCommands.has(call.args.command.trim())) {
+          const command = call.args.command.trim();
+          history.push({ role: 'tool', toolCallId: call.id, content: `ERROR: 利用者が断った命令です（もう一度は聞きません）: ${command}` });
+          answered.add(call.id);
+          for (const left of calls.slice(at + 1)) { history.push({ role: 'tool', toolCallId: left.id, content: 'ERROR: 実行していません' }); answered.add(left.id); }
+          yield { type: 'toolEnd', call, result: `ERROR: 利用者が断った命令です: ${command}`, isError: true };
+          yield { type: 'finished', reason: 'completed', detail: `利用者が断った命令（${command}）をもう一度求めたので、ここで終えます。` };
+          return;
         } else {
           // ツールが投げても、結果の無い呼び出しを残さない（残すと、以後の依頼を相手が 400 で断る）
           try {
             const r = await tool.run(call.args, ctx);
             result = r.content;
             isError = r.isError === true;
+            if (call.name === 'run_command' && typeof call.args.command === 'string' && result.includes('利用者がコマンド実行を拒否しました')) {
+              deniedCommands.add(call.args.command.trim());
+            }
           } catch (e) {
             result = `ERROR: ツールが落ちました: ${e instanceof Error ? e.message : String(e)}`;
             isError = true;

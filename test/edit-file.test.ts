@@ -43,6 +43,22 @@ describe('一部だけ差し替える', () => {
     assert.equal(await readFile(join(root, path), 'utf8'), 'function add(a, b) {\n  return a + b;\n}\n');
   });
 
+  for (const tail of [' all: true', ' all: false', ' "all": true', ', "all": false', "', 'all': true"]) {
+    test(`末尾に all だけが混ざった形（return a + b;${tail}）も、混ざる前までを当てる（check-user の calc.js）`, async () => {
+      const { root, path } = await fixture('function add(a, b) {\n  return a - b;\n}\n', 'calc.js');
+      const r = await editFileTool.run({ path, find: 'return a - b;', replace: `return a + b;${tail}` }, await ctxAt(root));
+      assert.equal(r.isError, undefined, r.content);
+      assert.equal(await readFile(join(root, path), 'utf8'), 'function add(a, b) {\n  return a + b;\n}\n');
+    });
+  }
+
+  test('普通のコードの { all: true } は混ざりと読まない', async () => {
+    const { root, path } = await fixture('const o = { all: false };\n', 'o.js');
+    const r = await editFileTool.run({ path, find: 'const o = { all: false };', replace: 'const o = { all: true };' }, await ctxAt(root));
+    assert.equal(r.isError, undefined, r.content);
+    assert.equal(await readFile(join(root, path), 'utf8'), 'const o = { all: true };\n');
+  });
+
   test('引用符と読点で区切って混ざった形も、混ざる前までを当てる', async () => {
     const { root, path } = await fixture('function add(a, b) {\n  return a - b;\n}\n', 'calc.js');
     const r = await editFileTool.run({

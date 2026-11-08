@@ -1800,18 +1800,7 @@ export class UiServer {
        * 押した人には「■ が効かない」としか見えない。答えが無いのは許可ではない
        * ので、拒否として解く。
        */
-      for (const { finish } of this.#pending.values()) finish(false);
-      this.#pending.clear();
-      for (const ac of this.#background) ac.abort();
-      // モデルの取得も止める（取りかけた分は残るので、もう一度押せば続きから取る）
-      this.#fetchAbort?.abort();
-      // 順番待ちも取り消す。残すと、止めた依頼の終わりで次が「続けます」で走り出す（■ が効かないと見える）
-      const dropped = this.#queue.splice(0).length;
-      if (dropped > 0) {
-        this.broadcast({ type: 'queue', waiting: 0 });
-        this.broadcast({ type: 'log', level: 'warn', text: `順番待ちの依頼 ${dropped} 件も取り消しました` });
-      }
-      this.#session?.abort();
+      const dropped = this.#cancelAll();
       return send(res, 200, { ok: true, dropped });
     }
 
@@ -2116,11 +2105,14 @@ export class UiServer {
 
     if (path === '/api/quit' && req.method === 'POST') {
       const session = this.#session;
-      if ((session && this.#busyNow(session)) || this.#prep > 0 || this.#queue.length > 0) {
-        return send(res, 409, { error: 'いま作業中です。終わってから終了してください' });
-      }
       if (!this.#opts.onQuit) return send(res, 501, { error: 'この入口からは終了できません' });
-      this.broadcast({ type: 'log', level: 'info', text: '終了します' });
+      // 「終了」は必ず効く。作業中なら、承認待ちを拒否で解き、作業と子の処理を止めてから終わる
+      // （作業中に 409 で断ると、承認待ちのまま終われなかった。記録の書き出しは stop() が行う）
+      const busy = (session && this.#busyNow(session)) || this.#prep > 0 || this.#queue.length > 0;
+      if (busy) {
+        this.#cancelAll();
+        this.broadcast({ type: 'log', level: 'warn', text: '作業中の依頼を止めて終了します' });
+      } else this.broadcast({ type: 'log', level: 'info', text: '終了します' });
       send(res, 200, { quitting: true });
       // 返事を出し切ってから止める
       setTimeout(() => this.#opts.onQuit?.(), 200).unref?.();
@@ -3461,6 +3453,23 @@ export class UiServer {
    * 何かが動いているか（本体の依頼・考え中・読み込み中・横で走っている会話）。
    * 立ち上げ直し・モデルの切り替え・「戻す」・保存など、作業場や本体を止める口はこれで断る。
    */
+  /** 動いている作業を全部止める（承認待ちは拒否として解き、順番待ちも取り消す）。取り消した順番待ちの件数を返す。 */
+  #cancelAll(): number {
+    for (const { finish } of this.#pending.values()) finish(false);
+    this.#pending.clear();
+    for (const ac of this.#background) ac.abort();
+    // モデルの取得も止める（取りかけた分は残るので、もう一度押せば続きから取る）
+    this.#fetchAbort?.abort();
+    // 順番待ちも取り消す。残すと、止めた依頼の終わりで次が「続けます」で走り出す（■ が効かないと見える）
+    const dropped = this.#queue.splice(0).length;
+    if (dropped > 0) {
+      this.broadcast({ type: 'queue', waiting: 0 });
+      this.broadcast({ type: 'log', level: 'warn', text: `順番待ちの依頼 ${dropped} 件も取り消しました` });
+    }
+    this.#session?.abort();
+    return dropped;
+  }
+
   #busyNow(session: Session): boolean {
     return this.#mainBusy(session) || this.#side.size > 0 || session.anyBusy;
   }

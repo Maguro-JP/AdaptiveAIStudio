@@ -595,7 +595,12 @@ async function commit(
  */
 function leakedArgs(replace: string): boolean {
   // 普通のコードの `{ find: x, replace: y }` は断らない。引数の並び（edits）の中に、引用符つきの find があるときだけ
-  return /(^|[\s{,'"])edits['"]?\s*:\s*\[/.test(replace) && /['"]find['"]\s*:/.test(replace);
+  if (/(^|[\s{,'"])edits['"]?\s*:\s*\[/.test(replace) && /['"]find['"]\s*:/.test(replace)) return true;
+  // 末尾に `all: true` だけが残った形（`return a + b; all: true`）。文の終わり（; か }）の後ろか、引用符つきの "all" のときだけ
+  // （check-user で calc.js に `return a + b; all: true` がそのまま書かれた）
+  return /[;}]\s*,?\s*all\s*:\s*(?:true|false)\s*,?\s*$/.test(replace)
+    || /['"]\s*,?\s*['"]all['"]\s*:\s*(?:true|false)\s*,?\s*$/.test(replace)
+    || /(?:^|[;}\s,])['"]all['"]\s*:\s*(?:true|false)\s*,?\s*$/.test(replace);
 }
 
 /** 混ざった引数（`all:` `edits:` `find:`）が始まる手前までを返す。手前が空なら undefined。 */

@@ -15,6 +15,7 @@ import { ProviderRegistry } from '../src/core/registry.ts';
 import { ChatOrchestrator } from '../src/core/orchestrator.ts';
 import { Agent, type AgentEvent } from '../src/agent/loop.ts';
 import { readFileTool, writeFileTool } from '../src/agent/tools/fs.ts';
+import { createRunCommandTool } from '../src/agent/tools/shell.ts';
 import type { ProviderMessage } from '../src/providers/contract.ts';
 
 type Scripted =
@@ -87,7 +88,7 @@ async function runAgent(
     const agent = new Agent(new ChatOrchestrator(registry), {
       candidates: ['local:m'],
       system: 'test',
-      tools: [readFileTool, writeFileTool],
+      tools: [readFileTool, writeFileTool, createRunCommandTool({})],
       root,
       maxTurns: 10,
       approve: opts.approve ?? (async () => true),
@@ -167,6 +168,18 @@ describe('エージェントループ', () => {
     const end = events.find((e) => e.type === 'toolEnd');
     assert.equal(end?.isError, true);
     assert.match(end.result, /拒否/);
+  });
+
+  test('断った命令をもう一度求めたら、聞き直さずに短く書いて終える（check-user の node glob.js）', async () => {
+    let asked = 0;
+    const { events } = await runAgent([
+      { tool: 'run_command', args: { command: 'node glob.js' } }, // 以降ずっと同じ手を返す
+    ], { approve: async () => { asked += 1; return false; } });
+    assert.equal(asked, 1, `断った命令をもう一度聞いた: ${asked} 回`);
+    const last = events.at(-1);
+    assert.equal(last?.type, 'finished');
+    assert.equal(last.reason, 'completed');
+    assert.match(last.detail ?? '', /断った命令/);
   });
 
   test('未知のツールはエラーとして返し、ループは止まらない', async () => {
