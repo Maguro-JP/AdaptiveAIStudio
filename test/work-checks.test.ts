@@ -99,6 +99,24 @@ describe('正解（Open-Meteo）の取り方', () => {
     assert.equal(v.ok, true, v.why);
   });
 
+  test('投げられた失敗（fetch failed）が 2 回続いても取り直し、間を 2・4 秒と倍に延ばす', async () => {
+    // Windows の check-work（run 42450541553）。確かめの最初の取得だけが fetch failed で落ちた
+    const m = fakeMeteo(2);
+    const waits: number[] = [];
+    const t = await liveTruth({ type: 'weather-matches-open-meteo', place: '東京' }, '東京', { fetchImpl: m.impl, waitMs: 2000, sleep: async (ms: number) => { waits.push(ms); } });
+    assert.deepEqual(t.weather, { code: 61, max: 10.7, min: 7.8 });
+    assert.deepEqual(waits, [2000, 4000]);
+  });
+
+  test('既定は 5 回試し、間は 2・4・8・16 秒。原因の符丁を理由に添える', async () => {
+    const waits: number[] = [];
+    const impl = (async () => { throw new TypeError('fetch failed', { cause: Object.assign(new Error('read'), { code: 'ECONNRESET' }) }); }) as typeof fetch;
+    const t = await liveTruth({ type: 'weather-matches-open-meteo', place: '東京' }, '東京', { fetchImpl: impl, sleep: async (ms: number) => { waits.push(ms); } });
+    assert.equal(t.weather, undefined);
+    assert.deepEqual(waits, [2000, 4000, 8000, 16000]);
+    assert.match(String(t.weatherError), /ECONNRESET/);
+  });
+
   test('取り直しても取れなければ、理由を添えて落とす（対）', async () => {
     const m = fakeMeteo(99);
     const t = await liveTruth({ type: 'weather-matches-open-meteo', place: '東京' }, '東京', { fetchImpl: m.impl, waitMs: 1, tries: 3 });

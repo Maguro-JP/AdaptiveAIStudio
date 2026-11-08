@@ -88,35 +88,59 @@ export function judgeAnswer(judge, answer, truth = {}) {
  * 正解を外から取る（天気は Open-Meteo、LTS は nodejs.org）。取れなければその欄を空にし、理由を `weatherError` に残す。
  * 天気は本体と同じ `WeatherSource.forecast` で取る（場所の引き方を二か所に書かない）。一度の失敗で落とさず、間を空けて取り直す
  * （Windows のランナーで、本体は Open-Meteo を取れたのに、確かめだけが一度の失敗で「正解を取れませんでした」になった）。
- * `opts.fetchImpl` と `opts.waitMs` は試験のため。
+ * 投げられた失敗（`fetch failed`、ECONNRESET、ETIMEDOUT）も HTTP の失敗も同じく取り直す。間は 2・4・8・16 秒と倍に延ばす。
+ * Windows のランナーでは最初の接続が IPv6 で詰まることがあるので、確かめの側では IPv4 を先に引き、`autoSelectFamily` を入れる。
+ * `opts.fetchImpl`・`opts.waitMs`・`opts.tries`・`opts.sleep` は試験のため。
  */
 export async function liveTruth(judge, defaultPlace, opts = {}) {
+  await preferIpv4();
   const out = { weekday: weekdayJst() };
-  const tries = opts.tries ?? 4;
-  const waitMs = opts.waitMs ?? 3000;
+  const tries = opts.tries ?? 5;
+  const waitMs = opts.waitMs ?? 2000;
+  const sleep = opts.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+  const pause = (i) => (i + 1 < tries ? sleep(waitMs * 2 ** i) : undefined);
   if (judge.type === 'weather-matches-open-meteo') {
     const place = judge.place === '@default' ? defaultPlace : judge.place;
     const { WeatherSource } = await import('../src/core/knowledge-source.ts');
-    const source = new WeatherSource({ ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}), timeoutMs: 20_000 });
+    const source = new WeatherSource({ ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}), timeoutMs: 30_000 });
     for (let i = 0; i < tries; i += 1) {
       try {
-        const f = await source.forecast(place, 1, AbortSignal.timeout(60_000));
+        const f = await source.forecast(place, 1, AbortSignal.timeout(90_000));
         if (f) { out.weather = { code: f.code, max: f.max, min: f.min }; delete out.weatherError; break; }
         out.weatherError = '予報に明日の欄がありません';
       } catch (e) {
-        out.weatherError = e instanceof Error ? e.message : String(e);
+        out.weatherError = errorText(e);
       }
-      if (i + 1 < tries) await new Promise((r) => setTimeout(r, waitMs * (i + 1)));
+      await pause(i);
     }
   }
   if (judge.type === 'node-lts-matches') {
     for (let i = 0; i < tries && !out.lts; i += 1) {
       const list = await (opts.fetchImpl ?? fetch)('https://nodejs.org/dist/index.json', { signal: AbortSignal.timeout(30_000) }).then((r) => r.json()).catch(() => []);
       out.lts = list.find?.((r) => typeof r.lts === 'string')?.version;
-      if (!out.lts && i + 1 < tries) await new Promise((r) => setTimeout(r, waitMs * (i + 1)));
+      if (!out.lts) await pause(i);
     }
   }
   return out;
+}
+
+/** `fetch failed` だけでは分からないので、下の原因（ECONNRESET など）を添える。 */
+function errorText(e) {
+  if (!(e instanceof Error)) return String(e);
+  const cause = /** @type {{ code?: string, message?: string } | undefined} */ (e.cause);
+  const why = cause?.code ?? cause?.message;
+  return why && !e.message.includes(why) ? `${e.message}: ${why}` : e.message;
+}
+
+let ipv4Set = false;
+/** 確かめの処理の中だけで、名前を IPv4 から引き、IPv4 と IPv6 を並べて試す。 */
+function preferIpv4() {
+  if (ipv4Set) return;
+  ipv4Set = true;
+  return Promise.all([import('node:dns'), import('node:net')]).then(([dns, net]) => {
+    dns.setDefaultResultOrder('ipv4first');
+    net.setDefaultAutoSelectFamily?.(true);
+  }).catch(() => undefined);
 }
 
 /** --ask / --expect、--task / --file / --stdout から、その回だけの確かめを作る（既定の一覧に足す）。 */
