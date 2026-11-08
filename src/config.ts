@@ -67,6 +67,8 @@ export interface AasConfig {
   network?: NetworkConfig;
   /** 場所が書かれていない天気の問いに使う場所（「大阪」など）。省略時は 東京（私の推測）。設定の画面で変えられる。 */
   location?: string;
+  /** ブロックでつくる画面の向き（ltr 左から右・ttb 上から下・diag 左上から右下）。表示だけで、組んだ中身は変えない。 */
+  blocksDirection?: string;
   /** 外の道具（MCP）。GitHub もここに一つ足すだけで繋がる。 */
   mcp?: McpConfig;
 }

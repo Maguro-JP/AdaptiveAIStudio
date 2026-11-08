@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ブロックでつくる - AdaptiveAIStudio</title>
+<link rel="icon" type="image/png" href="icon.png">
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/blocks.css">
+</head>
+<body class="blocks-page">
+  <!-- 上の帯。よく使う順に左から。動かすは右端に大きく。 -->
+  <header class="bk-bar">
+    <a class="ghost bk-back" href="/" title="会話の画面へ戻る">← 会話へ</a>
+    <strong class="bk-title">ブロックでつくる</strong>
+    <div class="bk-seg" role="group" aria-label="見方">
+      <button type="button" id="viewGraph" data-view="graph" title="ブロックを線でつなぐ形">つなぐ形</button>
+      <button type="button" id="viewFlow" data-view="flow" title="上から順に手順を並べる形">手順の形</button>
+    </div>
+    <div class="bk-seg" role="group" aria-label="向き">
+      <button type="button" data-dir="ltr" title="左から右へ流れる">左から右</button>
+      <button type="button" data-dir="ttb" title="上から下へ流れる">上から下</button>
+      <button type="button" data-dir="diag" title="左上から右下へ流れる">左上から右下</button>
+    </div>
+    <select id="sample" title="見本から始める">
+      <option value="">見本から始める…</option>
+      <option value="fizz">1〜15 を数えて Fizz / Buzz</option>
+      <option value="umbrella">明日の天気で傘を持つか（手順の形）</option>
+      <option value="hello">こんにちは、を表示</option>
+    </select>
+    <button type="button" id="newOne" class="ghost" title="空から始める">新しく</button>
+    <button type="button" id="openOne" class="ghost" title="作業場の .blocks.json を開く">開く</button>
+    <button type="button" id="saveOne" class="ghost" title="作業場に .blocks.json で保存 (Ctrl+S)">保存</button>
+    <button type="button" id="undo" class="ghost icon" title="元に戻す (Ctrl+Z)">↶</button>
+    <button type="button" id="redo" class="ghost icon" title="やり直す (Ctrl+Shift+Z)">↷</button>
+    <button type="button" id="tidy" class="ghost" title="向きに沿って並べ直す（中身は変わりません）">整える</button>
+    <button type="button" id="aiBuild" class="ghost" title="やりたいことを書くと、AI がブロックを組みます">AI に組んでもらう</button>
+    <button type="button" id="runIt" class="primary bk-run" title="動かす (Ctrl+Enter)">▶ 動かす</button>
+  </header>
+
+  <div class="bk-main">
+    <!-- ブロックの一覧。引いて置くか、押すと真ん中に置く。 -->
+    <aside id="blockList" class="bk-palette" aria-label="ブロックの一覧"></aside>
+
+    <section class="bk-center">
+      <div id="stage" class="bk-stage" tabindex="0" aria-label="ブロックを置く所。何も無い所をダブルクリックすると探して足せます">
+        <div id="world" class="bk-world">
+          <svg id="wires" class="bk-wires" width="1" height="1"></svg>
+        </div>
+        <p id="emptyHint" class="bk-empty dim">左のブロックをここへ引いて置きます。何も無い所をダブルクリックすると、名前で探して足せます。</p>
+      </div>
+      <div id="flow" class="bk-flow" hidden></div>
+      <div id="note" class="bk-note" role="status" aria-live="polite"></div>
+      <section class="bk-result" aria-label="動かした結果">
+        <div class="bk-result-head"><h3>結果</h3><span id="runState" class="dim">まだ動かしていません</span></div>
+        <div id="out" class="bk-out"></div>
+      </section>
+    </section>
+
+    <aside class="bk-code" aria-label="同じ中身の JavaScript">
+      <div class="bk-code-head">
+        <h3>JavaScript</h3>
+        <button type="button" id="copyCode" class="ghost" title="Node でそのまま動く形で写す">写す</button>
+        <button type="button" id="exportCode" class="ghost" title="作業場に .mjs で書き出す">書き出す</button>
+      </div>
+      <pre id="code" class="bk-pre"></pre>
+    </aside>
+  </div>
+
+  <!-- 名前で探して足す -->
+  <div id="finder" class="bk-finder" hidden>
+    <input id="finderInput" placeholder="ブロックの名前（例: 計算、表示）" aria-label="ブロックの名前で探す">
+    <div id="finderList" class="bk-finder-list"></div>
+  </div>
+
+  <!-- 書く前に聞く（AI が書くときと同じく、許可してから書く） -->
+  <dialog id="approve">
+    <form method="dialog">
+      <h3>ファイルに書きます</h3>
+      <p id="approveText"></p>
+      <pre id="approvePreview" class="bk-pre small"></pre>
+      <div class="row end">
+        <button value="no" class="ghost">やめる</button>
+        <button value="yes" class="primary">許可</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 保存・開く・AI に組んでもらう、で名前や頼みを書く -->
+  <dialog id="ask">
+    <form method="dialog">
+      <h3 id="askTitle"></h3>
+      <p id="askHint" class="dim"></p>
+      <input id="askInput" aria-label="入力">
+      <div id="askList" class="bk-ask-list"></div>
+      <div class="row end">
+        <button value="no" class="ghost">やめる</button>
+        <button value="yes" class="primary" id="askOk">決める</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/blocks.js"></script>
+</body>
+</html>

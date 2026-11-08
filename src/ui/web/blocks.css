@@ -1,0 +1,96 @@
+/*
+ * ブロックでつくる画面。色はアプリの変数（style.css）から作る。生の色は型の色の 5 つだけ。
+ */
+:root {
+  --port-num: #7aa2f7;
+  --port-text: #9ece6a;
+  --port-bool: #e0af68;
+  --port-list: #bb9af7;
+  --port-any: #a9b1c6;
+}
+body.blocks-page { height: 100vh; overflow: hidden; }
+.bk-bar { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3); border-bottom: 1px solid var(--line); background: var(--surface); flex-wrap: wrap; }
+.bk-bar a.bk-back { color: var(--dim); text-decoration: none; padding: 4px 8px; border-radius: 6px; }
+.bk-bar a.bk-back:hover { color: var(--text); background: var(--surface2); }
+.bk-title { margin-right: var(--s2); }
+.bk-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.bk-seg button { border: 0; border-radius: 0; background: transparent; color: var(--dim); }
+.bk-seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+.bk-run { margin-left: auto; font-weight: 600; }
+.bk-main { flex: 1; min-height: 0; display: grid; grid-template-columns: 170px 1fr 330px; }
+.bk-palette { border-right: 1px solid var(--line); overflow: auto; padding: var(--s2); background: var(--surface); }
+.bk-palette h4 { margin: var(--s3) 0 var(--s1); font-size: 12px; color: var(--dim); font-weight: 500; }
+.bk-pal-item { display: block; width: 100%; text-align: left; margin: 2px 0; padding: 6px 8px; border-radius: 8px; background: var(--surface2); border: 1px solid var(--line); cursor: grab; user-select: none; touch-action: none; }
+.bk-pal-item:hover { border-color: var(--accent); }
+.bk-center { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.bk-stage { position: relative; flex: 1; overflow: hidden; background-color: var(--bg);
+  background-image: radial-gradient(circle, var(--line) 1px, transparent 1px); background-size: 22px 22px; outline: none; touch-action: none; }
+.bk-world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.bk-wires { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.bk-wires path { fill: none; stroke-width: 2.5; }
+.bk-wires path.temp { stroke-dasharray: 6 4; }
+.bk-empty { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); max-width: 420px; text-align: center; pointer-events: none; }
+.bk-node { position: absolute; min-width: 170px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); user-select: none; }
+.bk-node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.bk-node.failed { border-color: var(--bad); box-shadow: 0 0 0 2px color-mix(in srgb, var(--bad) 40%, transparent); }
+.bk-node-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid var(--line); cursor: move; font-weight: 600; border-radius: var(--radius) var(--radius) 0 0; background: var(--surface2); }
+.bk-node-head .bk-x { margin-left: auto; padding: 0 6px; }
+.bk-node-body { padding: 6px 10px 8px; display: grid; gap: 4px; }
+.bk-row { display: flex; align-items: center; gap: 6px; min-height: 24px; font-size: 13px; }
+.bk-row.out { justify-content: flex-end; color: var(--dim); }
+.bk-row input, .bk-row select { width: 90px; padding: 2px 6px; font-size: 13px; }
+.bk-row .bk-linked { color: var(--dim); font-size: 12px; }
+.bk-port { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 2px solid var(--surface); cursor: crosshair; touch-action: none; }
+.bk-port:hover { transform: scale(1.3); }
+.bk-port.drop-ok { outline: 3px solid var(--good); }
+.bk-port.drop-ng { outline: 3px solid var(--bad); }
+.bk-port[data-type="num"] { background: var(--port-num); }
+.bk-port[data-type="text"] { background: var(--port-text); }
+.bk-port[data-type="bool"] { background: var(--port-bool); }
+.bk-port[data-type="list"] { background: var(--port-list); }
+.bk-port[data-type="any"] { background: var(--port-any); }
+.bk-shown { font-family: var(--font-mono); font-size: 12px; color: var(--good); max-height: 64px; overflow: auto; white-space: pre-wrap; border-top: 1px dashed var(--line); padding-top: 4px; }
+.bk-fail { color: var(--bad); font-size: 12px; white-space: pre-wrap; }
+.bk-note { min-height: 0; padding: 0 var(--s3); color: var(--warn); font-size: 13px; }
+.bk-note:not(:empty) { padding: 6px var(--s3); border-top: 1px solid var(--line); background: var(--surface); }
+.bk-result { border-top: 1px solid var(--line); background: var(--surface); height: 170px; display: flex; flex-direction: column; }
+.bk-result-head { display: flex; align-items: baseline; gap: var(--s3); padding: 4px var(--s3); }
+.bk-result h3, .bk-code h3 { margin: 0; font-size: 13px; }
+.bk-out { flex: 1; overflow: auto; padding: 0 var(--s3) var(--s2); font-family: var(--font-mono); font-size: 13px; }
+.bk-out .line.err { color: var(--bad); }
+.bk-code { border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+.bk-code-head { display: flex; align-items: center; gap: 6px; padding: 6px var(--s3); border-bottom: 1px solid var(--line); }
+.bk-code-head h3 { margin-right: auto; }
+.bk-pre { margin: 0; padding: var(--s3); overflow: auto; flex: 1; font-family: var(--font-mono); font-size: 12px; white-space: pre; }
+.bk-pre.small { max-height: 160px; background: var(--surface2); border-radius: 8px; }
+.bk-finder { position: fixed; z-index: 20; width: 260px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0, 0, 0, .4); padding: 6px; }
+.bk-finder input { width: 100%; }
+.bk-finder-list button, .bk-ask-list button, .bk-menu button { display: block; width: 100%; text-align: left; margin-top: 2px; }
+.bk-ask-list { max-height: 240px; overflow: auto; margin: 6px 0; }
+#ask input { width: 100%; }
+dialog .row.end { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+
+/* 手順の形 */
+.bk-flow { flex: 1; overflow: auto; padding: var(--s4); background: var(--bg); }
+.bk-steps { display: flex; flex-direction: column; align-items: stretch; gap: 0; }
+.bk-flow.dir-ltr .bk-steps { flex-direction: row; align-items: flex-start; }
+.bk-step { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); min-width: 260px; max-width: 520px; box-shadow: var(--shadow); }
+.bk-step.trigger { border-color: var(--accent); }
+.bk-step.failed { border-color: var(--bad); }
+.bk-step-head { display: flex; align-items: center; gap: 6px; padding: 6px 10px; background: var(--surface2); border-radius: var(--radius) var(--radius) 0 0; font-weight: 600; }
+.bk-step-head .grow { flex: 1; }
+.bk-step-body { padding: 8px 10px; display: grid; gap: 6px; }
+.bk-field { display: grid; grid-template-columns: 90px 1fr auto; gap: 6px; align-items: center; font-size: 13px; }
+.bk-field input, .bk-field select { width: 100%; }
+.bk-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 22%, var(--surface2)); font-size: 12px; }
+.bk-chip button { padding: 0 4px; border: 0; background: transparent; color: var(--dim); }
+.bk-join { align-self: center; width: 2px; height: 18px; background: var(--line); }
+.bk-flow.dir-ltr .bk-join { width: 18px; height: 2px; margin-top: 30px; }
+.bk-add { align-self: flex-start; margin: 2px 0; font-size: 13px; }
+.bk-branches { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 10px 10px; }
+.bk-flow.dir-ltr .bk-branches { grid-template-columns: 1fr; }
+.bk-branch { border: 1px dashed var(--line); border-radius: var(--radius); padding: 8px; }
+.bk-branch h5 { margin: 0 0 6px; font-size: 12px; color: var(--dim); }
+.bk-body { margin: 0 10px 10px 26px; padding-left: 10px; border-left: 3px solid var(--line); }
+.bk-menu { position: fixed; z-index: 20; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px; box-shadow: 0 6px 24px rgba(0, 0, 0, .4); max-height: 320px; overflow: auto; min-width: 200px; }
+.bk-bar select { max-width: 210px; }

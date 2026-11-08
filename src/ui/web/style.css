@@ -1354,3 +1354,5 @@ dialog.wide { width: min(46rem, 92vw); }
 .search-at { font-size: .78rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .search-ask { flex: 0 0 auto; font-size: .78rem; padding: 0 4px; }
 .search-line { font-size: .78rem; color: var(--dim); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.side-top a.icon { color: var(--dim); text-decoration: none; padding: 0 5px; }
+.side-top a.icon:hover { color: var(--text); }

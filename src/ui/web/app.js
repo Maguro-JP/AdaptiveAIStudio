@@ -2770,3 +2770,15 @@ for (const b of document.querySelectorAll('.brand')) {
   b.title = 'トップへ（ここで書き始めると新しい会話）';
   b.onclick = () => { void goTop(); };
 }
+
+// ブロックでつくる画面の向き（設定の「配置」）。画面の帯からも一押しで変えられる。同じ設定に入る
+void (async () => {
+  const sel = $('blocksDirection');
+  if (!sel) return;
+  const r = await getJson('/api/blocks/direction').catch(() => undefined);
+  if (r?.direction) sel.value = r.direction;
+  sel.onchange = async () => {
+    const got = await getJson('/api/blocks/direction', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ direction: sel.value }) }).catch(() => undefined);
+    $('blocksDirectionStatus').textContent = got?.direction ? '保存しました。ブロックでつくる画面に効きます' : '保存できませんでした';
+  };
+})();

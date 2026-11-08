@@ -32,8 +32,8 @@ import { revertLines, type RevertPick } from '../agent/hunks.ts';
 import { buildCompletionInput, cleanCompletion } from '../core/completion.ts';
 import { writeEnvValue } from '../core/env.ts';
 import { canRun } from '../core/which.ts';
-import { saveLocation, saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
-import { DEFAULT_LOCATION } from '../core/knowledge-source.ts';
+import { saveLocation, saveBlocksDirection, saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
+import { DEFAULT_LOCATION, WeatherSource } from '../core/knowledge-source.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, writeFile, mkdir, realpath, rename, rm, chmod } from 'node:fs/promises';
 import { protectedHit, isGitPattern } from '../core/harness-setup.ts';
@@ -1959,6 +1959,57 @@ export class UiServer {
 
     if (path === '/api/config' && req.method === 'PUT') {
       return this.#saveConfig(req, res);
+    }
+
+    /*
+     * ブロックでつくる画面（docs/BLOCKS.md）。向き・天気・AI に頼む。ファイルは /api/file を使う（作業場の中だけ、戻すに残る）。
+     */
+    if (path === '/api/blocks/direction' && req.method === 'GET') {
+      return send(res, 200, { direction: this.#opts.config.blocksDirection ?? 'ltr' });
+    }
+    if (path === '/api/blocks/direction' && req.method === 'PUT') {
+      const body = (await readBody(req) ?? {}) as { direction?: unknown };
+      const dir = typeof body.direction === 'string' && ['ltr', 'ttb', 'diag'].includes(body.direction) ? body.direction : '';
+      if (!dir) return send(res, 400, { error: '向きは ltr・ttb・diag のどれかです' });
+      await saveBlocksDirection(dir);
+      this.#opts.config.blocksDirection = dir;
+      return send(res, 200, { direction: dir });
+    }
+    if (path === '/api/blocks/weather' && req.method === 'POST') {
+      const body = (await readBody(req) ?? {}) as { place?: unknown; day?: unknown };
+      const place = typeof body.place === 'string' && body.place.trim() ? body.place.trim().slice(0, 60) : (this.#opts.config.location ?? DEFAULT_LOCATION);
+      const day = body.day === 0 ? '今日' : body.day === 2 ? 'あさって' : '明日';
+      try {
+        const got = await new WeatherSource({ location: () => place }).fetch(`${day}の${place}の天気`, AbortSignal.timeout(15_000));
+        if (!got) return send(res, 200, { error: '天気を取れませんでした（予報が返りませんでした）' });
+        const word = /天気は([^、（]+)/.exec(got.answer)?.[1] ?? '';
+        return send(res, 200, { text: got.answer, rain: /雨|雪/.test(word) });
+      } catch (e) {
+        return send(res, 200, { error: `天気を取れませんでした: ${(e as Error).message}` });
+      }
+    }
+    if (path === '/api/blocks/ask' && req.method === 'POST') {
+      const body = (await readBody(req) ?? {}) as { prompt?: unknown; system?: unknown };
+      const prompt = typeof body.prompt === 'string' ? body.prompt.slice(0, 8000) : '';
+      if (!prompt.trim()) return send(res, 400, { error: '頼みが空です' });
+      const missing = await this.#readyToThink(false).catch((e: unknown) => `見に行けませんでした: ${(e as Error).message}`);
+      if (missing) return send(res, 200, { error: missing === NOT_LOADED_YET ? 'モデルをまだ読んでいません（会話で一度話しかけると読みます）' : missing });
+      const session = await this.session();
+      if (this.#busyNow(session)) return send(res, 200, { error: 'いま作業中です。終わってから動かしてください' });
+      let text = '';
+      try {
+        for await (const ev of session.orchestrator.run({
+          candidates: session.candidates,
+          system: typeof body.system === 'string' ? body.system.slice(0, 8000) : '短く日本語で答えてください。',
+          messages: [{ role: 'user', content: prompt }], temperature: 0, maxTokens: 1024,
+        }, AbortSignal.timeout(120_000))) {
+          if (ev.type === 'text') text += ev.delta;
+          else if (ev.type === 'failed') return send(res, 200, { error: ev.error.message });
+        }
+      } catch (e) {
+        return send(res, 200, { error: (e as Error).message });
+      }
+      return send(res, 200, { text: text.trim() });
     }
 
 
