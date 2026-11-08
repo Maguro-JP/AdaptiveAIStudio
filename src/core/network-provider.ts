@@ -100,7 +100,14 @@ export interface NetworkOptions {
    * （ファイルが書けて、確かめが通ったか）で動かす。置かなければ、返事が最後まで来たかで動かす（段階 3 のまま）。
    */
   settleAtEnd?: boolean;
+  /** 何を挙げ、何を取り、何を載せたかを書く先（画面の記録、ui.log）。置かなければ書かない。 */
+  log?: (level: 'info' | 'warn', message: string) => void;
+  /** 今の事実（天気など）を取り損ねたときの、取り直しまでの間（ミリ秒）。1・2 倍と延ばす。試験では 0。 */
+  liveRetryWaitMs?: number;
 }
+
+/** 今の事実を取りに行く回数（最初の 1 回を含む）。私の推測で決めた値。 */
+export const LIVE_FETCH_TRIES = 3;
 
 export class NetworkProvider implements ChatProvider {
   readonly id = NETWORK_PROVIDER_ID;
@@ -115,6 +122,8 @@ export class NetworkProvider implements ChatProvider {
   readonly #settleAtEnd: boolean;
   /** `settleAtEnd` のとき、頼みの最後まで持っておく、文脈に入れた件の問い。 */
   readonly #pending = new Set<string>();
+  readonly #log: (level: 'info' | 'warn', message: string) => void;
+  readonly #liveRetryWaitMs: number;
 
   /** `inner`: 依頼に中の候補が添えられていないときに使う候補（これが無かったときの候補）。 */
   constructor(registry: ProviderRegistry, inner: () => readonly string[], opts: NetworkOptions = {}) {
@@ -125,6 +134,8 @@ export class NetworkProvider implements ChatProvider {
     this.#source = opts.source;
     this.#inspector = opts.inspector;
     this.#settleAtEnd = opts.settleAtEnd ?? false;
+    this.#log = opts.log ?? (() => undefined);
+    this.#liveRetryWaitMs = opts.liveRetryWaitMs ?? 1000;
   }
 
   /** 知識の蔵（呼ぶ側が経験を置くのに使う）。 */
@@ -150,35 +161,65 @@ export class NetworkProvider implements ChatProvider {
 
   async #facts(input: ChatInput, signal: AbortSignal, used: KnowledgeEntry[]): Promise<string | undefined> {
     if (!this.#source && await this.#shelf.isEmpty().catch(() => true)) return input.system;
-    const listed = await this.#lister.list(input, signal).catch(() => [] as string[]);
-    const needs = Array.isArray(listed) ? listed.slice(0, MAX_NEEDS) : [];
     /*
-     * 天気・Node.js の版のような今の事実の問いは、挙げる段に頼らず、利用者の一言そのままで取りに行く（小さいモデルは [] を返して何も取らなかった）。
-     * 挙げた問いの中の天気は、利用者の一言に置き換える（重ねない）。挙げる段は「2026年11月9日の天気」のように言い換え、
-     * 場所でない「日」を場所と読んで取れなかった（Windows の work、場所の無い「明日の天気は?」）
+     * 天気・Node.js の版のような今の事実の問いは、挙げる段にも前の回にも頼らず、利用者の一言そのままで毎回取りに行く。
+     * 押し戻し（nudge）の回でも、押し戻しの文ではなく、その前の利用者の一言で決める（取り直しの機会にもなる）。
+     * 蔵の言葉の重なり（`find`）で、経験の件（「明日の天気を確認する依頼…」）に当てない。取り損ねたら間を置いて取り直す
+     * （Windows の work、run 42466889666: 二つ目の「明日の天気は?」で、取る段が 8 秒の時間切れで黙って落ち、何も載らなかった）
      */
-    const said = String(input.messages.at(-1)?.content ?? '');
-    if (this.#source && isLiveQuestion(said)) {
-      for (let i = needs.length - 1; i >= 0; i--) if (typeof needs[i] === 'string' && isLiveQuestion(needs[i]!)) needs.splice(i, 1);
-      needs.unshift(said.slice(0, 200));
-    }
+    const said = lastUserSaid(input.messages);
+    const live = Boolean(this.#source) && isLiveQuestion(said) ? said.slice(0, 200) : undefined;
+    const listed = await this.#lister.list(input, signal).catch((e: unknown) => {
+      this.#log('warn', `ネットワーク: 要る事実を挙げられませんでした: ${errorText(e)}`);
+      return [] as string[];
+    });
+    const needs = (Array.isArray(listed) ? listed.slice(0, MAX_NEEDS) : []).filter((q): q is string => typeof q === 'string');
+    // 挙げた問いの中の今の事実は、利用者の一言に置き換える（重ねない。挙げる段は「2026年11月9日の天気」と言い換える）
+    if (live) for (let i = needs.length - 1; i >= 0; i--) if (isLiveQuestion(needs[i]!)) needs.splice(i, 1);
+    this.#log('info', `ネットワーク: 要る事実 ${JSON.stringify(needs)}${live ? `、今の事実 ${JSON.stringify(live)}` : ''}`);
     const found: KnowledgeEntry[] = [];
     const ephemeral = new Set<KnowledgeEntry>();
+    if (live) {
+      const e = await this.#fetchLive(live, signal);
+      if (e) { found.push(e); ephemeral.add(e); }
+    }
     for (const q of needs) {
-      if (typeof q !== 'string') continue;
       let e = await this.#shelf.find(q).catch(() => undefined);
+      if (e) this.#log('info', `ネットワーク: 蔵に当たりました: ${JSON.stringify(q)} → ${JSON.stringify(e.question)}`);
       if (!e && this.#source) {
         const got = await gather(q, this.#source, this.#shelf, signal, this.#inspector ? { inspector: this.#inspector } : {})
-          .catch(() => undefined);
-        if (got?.status === 'stored') { e = got.entry; if (got.ephemeral) ephemeral.add(e); }
+          .catch((err: unknown) => ({ status: 'failed' as const, reason: errorText(err) }));
+        if (got.status === 'stored') { e = got.entry; if (got.ephemeral) ephemeral.add(e); }
+        this.#log(got.status === 'stored' ? 'info' : 'warn', `ネットワーク: 取りました ${JSON.stringify(q)}: ${got.status === 'stored' ? got.entry.sourceUrl : `${got.status}（${got.reason}）`}`);
       }
       if (e && !found.includes(e)) found.push(e);
     }
+    this.#log('info', `ネットワーク: 載せた事実 ${found.length} 件${found.length ? `: ${found.map((e) => JSON.stringify(e.question)).join(', ')}` : ''}`);
     // 蔵に無い件（今の事実）は、点を動かす相手にしない
     used.push(...found.filter((e) => !ephemeral.has(e)));
     const block = knowledgeBlock(found);
     if (!block) return input.system;
     return input.system ? `${input.system}\n\n${block}` : block;
+  }
+
+  /** 今の事実を、蔵を見ずに取りに行く。投げられた失敗も、取れなかったも、間を置いて取り直す。 */
+  async #fetchLive(question: string, signal: AbortSignal): Promise<KnowledgeEntry | undefined> {
+    for (let i = 0; i < LIVE_FETCH_TRIES; i++) {
+      if (signal.aborted) return undefined;
+      const got = await gather(question, this.#source!, this.#shelf, signal, this.#inspector ? { inspector: this.#inspector } : {})
+        .catch((err: unknown) => ({ status: 'failed' as const, reason: errorText(err) }));
+      if (got.status === 'stored') {
+        this.#log('info', `ネットワーク: 今の事実を取りました（${i + 1} 回目）: ${got.entry.sourceUrl}`);
+        return got.entry;
+      }
+      this.#log('warn', `ネットワーク: 今の事実を取れませんでした（${i + 1} 回目）: ${got.status}（${got.reason}）`);
+      // 検問で止めたものと、答えの無いもの（天気でない）は、取り直しても変わらない
+      if (got.status === 'blocked') return undefined;
+      if (i + 1 < LIVE_FETCH_TRIES && this.#liveRetryWaitMs > 0) {
+        await new Promise((r) => setTimeout(r, this.#liveRetryWaitMs * (i + 1)));
+      }
+    }
+    return undefined;
   }
 
   async health(): Promise<HealthStatus> {
@@ -235,4 +276,21 @@ export class NetworkProvider implements ChatProvider {
   async canSeeImages(_model: string, signal?: AbortSignal): Promise<boolean> {
     return this.#orchestrator.canSeeImages(innerCandidates(this.#inner())[0], signal);
   }
+}
+
+/** 最後の利用者の一言。押し戻し（`nudge`）の文は飛ばす。 */
+function lastUserSaid(messages: ChatInput['messages']): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role === 'user' && !m.nudge) return String(m.content ?? '');
+  }
+  return '';
+}
+
+/** `fetch failed` だけでは分からないので、下の原因（ECONNRESET など）を添える。 */
+function errorText(e: unknown): string {
+  if (!(e instanceof Error)) return String(e);
+  const cause = (e as { cause?: { code?: string; message?: string } }).cause;
+  const why = cause?.code ?? cause?.message;
+  return why && !e.message.includes(why) ? `${e.message}: ${why}` : e.message;
 }

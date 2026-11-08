@@ -540,6 +540,8 @@ export class Session {
      */
     const network = new NetworkProvider(registry, () => resolved.candidates, {
       settleAtEnd: true,
+      // 何を挙げ、何を取り、何を載せたかを ui.log に残す（推測で直さないため）
+      ...(opts.onLog ? { log: (level: 'info' | 'warn', message: string) => opts.onLog?.(level, message) } : {}),
       ...(fetchEnabled() ? { source: new DefaultSource({ location: () => config.location ?? DEFAULT_LOCATION }) } : {}),
     });
     registry.register(network);

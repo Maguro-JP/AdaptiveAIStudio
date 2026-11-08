@@ -295,3 +295,84 @@ describe('問いの中の式は、この機械で計算する', () => {
     assert.ok(systems.some((s) => s.includes('1234 × 5678 = 7006652')), systems.join('|'));
   });
 });
+
+/**
+ * Windows の work（run 42466889666）: 「明日の東京の天気は?」のあとの「明日の天気は?」で、挙げる段のあと約 8 秒（取る段の時間切れ）
+ * 空いてから答えに入り、天気が載らなかった（入力 215 トークン。一つ目は 394）。取る段の失敗は黙って捨てられ、記録にも何も無かった。
+ * 天気の一言は、挙げる段・前の回・蔵の経験の件に関わらず毎回取りに行き、落ちたら取り直し、何をしたかを記録に書く。
+ */
+describe('天気の一言は毎回取りに行き、この回に載せる', () => {
+  async function session(opts: { failFirst: number; shelfNote?: boolean }) {
+    const systems: string[] = [];
+    const logs: string[] = [];
+    const inner: ChatProvider = {
+      id: 'fake', locality: 'local',
+      async health() { return { ok: true }; },
+      async listModels() { return [{ id: 'fake:m', providerId: 'fake', model: 'm', displayName: 'm', locality: 'local' }]; },
+      async *chat(req): AsyncIterable<ProviderChunk> {
+        systems.push(String(req.system ?? ''));
+        yield { type: 'text', delta: '答え' };
+        yield { type: 'done', finishReason: 'stop' };
+      },
+    };
+    const om = fakeOpenMeteo();
+    let fails = 0;
+    const flaky = (async (input: string | URL, init?: RequestInit) => {
+      // 二つ目の問いの最初の取り方を、時間切れで落とす
+      if (fails < opts.failFirst && om.calls.length >= 2) { fails += 1; throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); }
+      return om.impl(input, init);
+    }) as typeof fetch;
+    const shelf = new KnowledgeShelf(join(await tempDir('wx-'), 'k'));
+    // 前の回の経験の件（言葉が重なる）。天気の代わりにこれを当ててはいけない
+    if (opts.shelfNote) await shelf.upsert({ question: '明日の天気を確認する依頼に対して', answer: 'ツールを使って確かめる', sourceUrl: 'aas:experience', fetchedAt: new Date().toISOString() });
+    const registry = new ProviderRegistry();
+    registry.register(inner);
+    registry.register(new NetworkProvider(registry, () => ['fake:m'], {
+      shelf,
+      // 小さいモデルの挙げ方（日付で言い換える・天気でない問いを混ぜる）
+      lister: { list: async () => ['2026年11月9日の天気', '明日の天気を確認する依頼'] },
+      source: new DefaultSource({ fetchImpl: flaky }),
+      log: (level, m) => logs.push(`${level} ${m}`),
+      liveRetryWaitMs: 0,
+    }));
+    const messages: Message[] = [];
+    async function ask(m: Message) {
+      messages.push(m);
+      const before = systems.length;
+      for await (const ev of new ChatOrchestrator(registry).run({ candidates: ['network:network'], messages: [...messages] } as never, new AbortController().signal)) void ev;
+      messages.push({ role: 'assistant', content: '答え' });
+      return systems.slice(before).join('|');
+    }
+    return { ask, logs, om };
+  }
+
+  test('場所つきのあとの場所の無い問いで、一度目の取得が時間切れでも取り直して載せる', async () => {
+    const s = await session({ failFirst: 1, shelfNote: true });
+    assert.match(await s.ask({ role: 'user', content: '明日の東京の天気は?' }), /東京の2026-11-08.*雨/);
+    const second = await s.ask({ role: 'user', content: '明日の天気は?' });
+    assert.match(second, /東京の2026-11-08.*雨/, `二つ目に天気が載っていない: ${second}`);
+    assert.ok(s.logs.some((l) => /^warn ネットワーク: 今の事実を取れませんでした（1 回目）: failed/.test(l)), s.logs.join('\n'));
+    assert.ok(s.logs.some((l) => /^info ネットワーク: 今の事実を取りました（2 回目）: https:\/\/api\.open-meteo\.com/.test(l)), s.logs.join('\n'));
+    assert.ok(s.logs.some((l) => /要る事実 \[\]、今の事実 "明日の天気は\?"/.test(l)), s.logs.join('\n'));
+    assert.ok(s.logs.some((l) => /載せた事実 \d+ 件: "明日の天気は\?"/.test(l)), s.logs.join("\n"));
+  });
+
+  test('取り直しても取れなければ、取れなかったと記録に書く（黙って捨てない）', async () => {
+    const s = await session({ failFirst: 99 });
+    await s.ask({ role: 'user', content: '明日の東京の天気は?' });
+    await s.ask({ role: 'user', content: '明日の天気は?' });
+    assert.equal(s.logs.filter((l) => /今の事実を取れませんでした/.test(l)).length, 3, s.logs.join('\n'));
+  });
+
+  test('押し戻しの回でも、押し戻しの文ではなく利用者の一言で天気を取って載せる', async () => {
+    const s = await session({ failFirst: 0 });
+    await s.ask({ role: 'user', content: '明日の天気は?' });
+    const nudged = await s.ask({ role: 'user', nudge: true, content: giveUpNudge(false) });
+    assert.match(nudged, /東京の2026-11-08.*雨/, `押し戻しの回に天気が載っていない: ${nudged}`);
+  });
+
+  test('Windows の work の諦めの答えを、試さずに分からないと言ったと読む', () => {
+    assert.equal(givesUp('知識の蔵に「明日の天気」のデータはありません。\n「今」の日付（2026 年 11 月 8 日）から明日（11 月 9 日）の気象情報を取得するには、外部の気象データや天気予報サービスにアクセスする必要があります。\n知識の蔵に気象データが載っていないため、その情報を取得することはできません。'), true);
+    assert.equal(givesUp('2026 年 11 月 9 日（月）の天気は、知識の蔵から確認できません。'), true);
+  });
+});
