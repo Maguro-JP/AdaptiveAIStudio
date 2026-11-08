@@ -268,6 +268,17 @@ export interface Job {
 /** 段・続きを進めた結果。走らせた（started）・走らせずに済ませた（取り消された・止めた・閉じた・読めない。settled） */
 type StepOutcome = 'started' | 'settled';
 
+/**
+ * 画面と確かめ（check-work）が読む「本体が動いているか」。
+ *
+ * 本体（Session）がまだ無い間も、支度（モデルの読み込み・本体の組み立て）をしていれば動いている。ここは本体がある
+ * ときだけ見ていたので、作業場を変えた直後（本体を畳んだ直後）に送った依頼が、モデルを読んでいる 1 分のあいだ
+ * 「空いている」と返していた。Windows の check-work で、最初の質問を送って 5 秒で空の答えを読み、落ちた（答えは 1 分後に出ていた）。
+ */
+export function screenBusy(session: { busy: boolean } | undefined, thinking: boolean, prep: number): boolean {
+  return Boolean(session?.busy) || thinking || prep > 0;
+}
+
 export class UiServer {
   readonly #opts: UiServerOptions;
   readonly #clients = new Set<ServerResponse>();
@@ -1816,7 +1827,7 @@ export class UiServer {
        */
       return send(res, 200, {
         approvals: this.#waitingApprovals(),
-        busy: live !== undefined && this.#mainBusy(live),
+        busy: screenBusy(live, this.#thinking, this.#prep),
         planning: this.#planning,
       });
     }

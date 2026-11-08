@@ -62,7 +62,7 @@ export function judgeAnswer(judge, answer, truth = {}) {
     }
     case 'weather-matches-open-meteo': {
       const w = truth.weather;
-      if (!w) return { ok: false, why: '正解（Open-Meteo）を取れませんでした' };
+      if (!w) return { ok: false, why: `正解（Open-Meteo）を取れませんでした${truth.weatherError ? `（${truth.weatherError}）` : ''}` };
       const said = Object.entries(GROUP_WORDS).filter(([, re]) => re.test(t)).map(([g]) => g);
       const temp = /(-?\d+(?:\.\d+)?)\s*(℃|度|°C)/.exec(t);
       if (said.length === 0) return { ok: false, why: '晴/曇/雨/雪 のどれも言っていません' };
@@ -84,23 +84,37 @@ export function judgeAnswer(judge, answer, truth = {}) {
   }
 }
 
-/** 正解を外から取る（天気は Open-Meteo、LTS は nodejs.org）。取れなければその欄を空にする。 */
-export async function liveTruth(judge, defaultPlace) {
+/**
+ * 正解を外から取る（天気は Open-Meteo、LTS は nodejs.org）。取れなければその欄を空にし、理由を `weatherError` に残す。
+ * 天気は本体と同じ `WeatherSource.forecast` で取る（場所の引き方を二か所に書かない）。一度の失敗で落とさず、間を空けて取り直す
+ * （Windows のランナーで、本体は Open-Meteo を取れたのに、確かめだけが一度の失敗で「正解を取れませんでした」になった）。
+ * `opts.fetchImpl` と `opts.waitMs` は試験のため。
+ */
+export async function liveTruth(judge, defaultPlace, opts = {}) {
   const out = { weekday: weekdayJst() };
+  const tries = opts.tries ?? 4;
+  const waitMs = opts.waitMs ?? 3000;
   if (judge.type === 'weather-matches-open-meteo') {
     const place = judge.place === '@default' ? defaultPlace : judge.place;
-    for (const name of [place, `${place}都`, `${place}市`, `${place}府`, `${place}県`]) {
-      const g = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(name)}&count=1&language=ja`).then((r) => r.json()).catch(() => ({}));
-      const hit = g.results?.[0];
-      if (!hit) continue;
-      const f = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${hit.latitude}&longitude=${hit.longitude}&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=Asia%2FTokyo&forecast_days=2`).then((r) => r.json()).catch(() => ({}));
-      if (f.daily) out.weather = { code: f.daily.weather_code[1], max: f.daily.temperature_2m_max[1], min: f.daily.temperature_2m_min[1] };
-      break;
+    const { WeatherSource } = await import('../src/core/knowledge-source.ts');
+    const source = new WeatherSource({ ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}), timeoutMs: 20_000 });
+    for (let i = 0; i < tries; i += 1) {
+      try {
+        const f = await source.forecast(place, 1, AbortSignal.timeout(60_000));
+        if (f) { out.weather = { code: f.code, max: f.max, min: f.min }; delete out.weatherError; break; }
+        out.weatherError = '予報に明日の欄がありません';
+      } catch (e) {
+        out.weatherError = e instanceof Error ? e.message : String(e);
+      }
+      if (i + 1 < tries) await new Promise((r) => setTimeout(r, waitMs * (i + 1)));
     }
   }
   if (judge.type === 'node-lts-matches') {
-    const list = await fetch('https://nodejs.org/dist/index.json').then((r) => r.json()).catch(() => []);
-    out.lts = list.find?.((r) => typeof r.lts === 'string')?.version;
+    for (let i = 0; i < tries && !out.lts; i += 1) {
+      const list = await (opts.fetchImpl ?? fetch)('https://nodejs.org/dist/index.json', { signal: AbortSignal.timeout(30_000) }).then((r) => r.json()).catch(() => []);
+      out.lts = list.find?.((r) => typeof r.lts === 'string')?.version;
+      if (!out.lts && i + 1 < tries) await new Promise((r) => setTimeout(r, waitMs * (i + 1)));
+    }
   }
   return out;
 }

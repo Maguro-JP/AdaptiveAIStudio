@@ -211,7 +211,20 @@ export class WeatherSource implements KnowledgeSource {
   async fetch(question: string, signal: AbortSignal): Promise<Fetched | undefined> {
     if (!isWeatherQuestion(question)) return undefined;
     const place = placeOf(question) ?? (this.#location().trim() || DEFAULT_LOCATION);
-    const offset = dayOffsetOf(question);
+    const f = await this.forecast(place, dayOffsetOf(question), signal);
+    if (!f) return undefined;
+    const parts = [`${f.name}の${f.day}（日本時間）の天気は${weatherWord(f.code)}`];
+    if (typeof f.max === 'number' && typeof f.min === 'number') parts.push(`最高 ${f.max}℃・最低 ${f.min}℃`);
+    if (typeof f.pop === 'number') parts.push(`降水確率 ${f.pop}%`);
+    return { answer: `${parts.join('、')}（Open-Meteo の予報）。`, sourceUrl: f.sourceUrl, ephemeral: true };
+  }
+
+  /**
+   * 場所の名前と、今日から何日先かで、その日の予報を取る（日本時間で日を切る）。予報が無ければ undefined、場所が無ければ投げる。
+   * 働くかの確かめ（scripts/work-judge.mjs）も、正解をここから取る（場所の引き方を二か所に書かない。書き分けると、
+   * 本体は引けるのに確かめだけ引けない、が起きる）。
+   */
+  async forecast(place: string, offset: number, signal: AbortSignal): Promise<Forecast | undefined> {
     type Geo = { results?: { name?: unknown; latitude?: unknown; longitude?: unknown }[] };
     // Open-Meteo は日本語の名前を「東京都」「大阪市」の形でしか引けない。書かれた形、市・都・府・県を足した形の順に引く
     const tries = /[\p{Script=Han}]$/u.test(place) && !/[市都府県町村区]$/.test(place)
@@ -236,13 +249,16 @@ export class WeatherSource implements KnowledgeSource {
     const lo = d.temperature_2m_min?.[offset];
     const pop = d.precipitation_probability_max?.[offset];
     if (typeof day !== 'string' || typeof code !== 'number') return undefined;
-    const name = typeof hit.name === 'string' ? hit.name : place;
-    const parts = [`${name}の${day}（日本時間）の天気は${weatherWord(code)}`];
-    if (typeof hi === 'number' && typeof lo === 'number') parts.push(`最高 ${hi}℃・最低 ${lo}℃`);
-    if (typeof pop === 'number') parts.push(`降水確率 ${pop}%`);
-    return { answer: `${parts.join('、')}（Open-Meteo の予報）。`, sourceUrl: url, ephemeral: true };
+    return {
+      name: typeof hit.name === 'string' ? hit.name : place, day, code,
+      ...(typeof hi === 'number' ? { max: hi } : {}), ...(typeof lo === 'number' ? { min: lo } : {}),
+      ...(typeof pop === 'number' ? { pop } : {}), sourceUrl: url,
+    };
   }
 }
+
+/** ある日の予報（`WeatherSource.forecast`）。 */
+export interface Forecast { name: string; day: string; code: number; max?: number; min?: number; pop?: number; sourceUrl: string }
 
 /** Node.js の LTS・最新の版を問うているか。 */
 export function isNodeReleaseQuestion(question: string): boolean {

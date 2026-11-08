@@ -13,7 +13,7 @@ import type { ChatOrchestrator, ChatEvent } from '../core/orchestrator.ts';
 import type { Tool, ToolContext, ApprovalRequest, ApprovalAnswer, RequestScope } from './tools/types.ts';
 import { ToolTextFilter } from './tool-text.ts';
 import { DoneMark, DONE_MARK } from './done.ts';
-import { claimsVerified, expandShortUtterance, giveUpNudge, givesUp, RUN_TOOLS, UNBACKED_CLAIM_NUDGE } from './work-style.ts';
+import { ANNOUNCE_NUDGE, announcesAction, claimsVerified, expandShortUtterance, giveUpNudge, givesUp, RUN_TOOLS, UNBACKED_CLAIM_NUDGE } from './work-style.ts';
 import { fitToWindow, historyBudget, estimateTokens, trimSchemas, TOOL_SHARE, type Count } from './window.ts';
 
 export type AgentEvent =
@@ -118,6 +118,8 @@ export class Agent {
     // 根拠の無い言い切りを押し戻したか（一度だけ。二度目は押し戻さず、そのまま返す）
     let claimNudged = false;
     let giveUpNudged = false;
+    // 「直します」と言っただけでツールを呼ばずに返したのを押し戻したか（一度だけ）
+    let announceNudged = false;
     /*
      * 「続けて」「それも」だけの一言は、前の依頼から読む形をシステムプロンプトの末尾に足す（prompt-from-context）。
      * 履歴は書き換えない（利用者の見た一言はそのまま残す）
@@ -341,6 +343,19 @@ export class Agent {
           history.push({ role: 'user', nudge: true, content: giveUpNudge((this.#opts.tools?.length ?? 0) > 0) });
           continue;
         }
+        /*
+         * 作業の頼みに、ツールを一度も呼ばず「修正します」と言っただけで返した。答えただけとは読まない（一度だけ押し戻す）。
+         * ツールを使った後の「〜します」は、下の押し戻し（次の一手を求める）が拾う
+         */
+        if (Boolean(this.#opts.expectsWork) && !usedTools && !declaredDone && !announceNudged && nudges < maxNudges
+          && announcesAction(text)) {
+          announceNudged = true;
+          pushedForCode = true;
+          nudges += 1;
+          yield { type: 'nudged', left: maxNudges - nudges };
+          history.push({ role: 'user', nudge: true, content: ANNOUNCE_NUDGE });
+          continue;
+        }
         if (declaredDone || (!usedTools && !codeInsteadOfTool) || nudges >= maxNudges) {
           // 合図が出た / 一度も道具を使っていない（＝答えただけ） /
           // 押し戻しを使い切った。**動かないものは、動かないと言う。**
@@ -369,7 +384,8 @@ export class Agent {
           nudge: true,
           content:
             `まだ ${DONE_MARK} がありません。\n`
-            + `やり終えているなら、${DONE_MARK} だけの行を書いてください。\n`
+            // 合図をファイルの名前と読んで、TASK_DONE というファイルを書き続けたモデルがいた（Windows の check-work、Qwen3.5-4B）
+            + `やり終えているなら、返事の本文に ${DONE_MARK} だけの行を書いてください（${DONE_MARK} は終わりの合図で、ファイルではありません。ツールで書かないでください）。\n`
             + '終わっていないなら、説明ではなく、次の一手を道具で実行してください。'
             + (usedTools ? '' : '\nファイルを作る・直す頼みなら、コードを本文に書かず、ファイルを書くツールを呼んでください。'),
         });
@@ -515,6 +531,16 @@ export function fileFromCode(answer: string, ask: string): { path: string; conte
 
 export function isDoneCall(call: { name: string; args: unknown }): boolean {
   if (call.name.trim().toUpperCase() === DONE_MARK) return true;
-  const args = call.args as { command?: unknown } | undefined;
-  return call.name === 'run_command' && typeof args?.command === 'string' && args.command.trim().toUpperCase() === DONE_MARK;
+  const args = call.args as { command?: unknown; path?: unknown } | undefined;
+  if (call.name === 'run_command' && typeof args?.command === 'string' && args.command.trim().toUpperCase() === DONE_MARK) return true;
+  /*
+   * 合図をファイルの名前にしたもの（write_file に path: TASK_DONE）。Windows の check-work で、Qwen3.5-4B が「TASK_DONE だけの行を」を
+   * ファイルを書けと読み、TASK_DONE というファイルを作り、同じ書き込みの禁止・読む前に書く禁止・rm の禁止で 15 分回り続けた。
+   * 合図はファイルではない。作業場に TASK_DONE を作らせず、読ませず、終わりとして受け取る
+   */
+  if (typeof args?.path === 'string') {
+    const base = args.path.trim().replace(/^.*[\\/]/, '').replace(/\.(?:txt|md)$/i, '');
+    if (base.toUpperCase() === DONE_MARK) return true;
+  }
+  return false;
 }

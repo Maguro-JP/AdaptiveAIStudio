@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 // @ts-expect-error 型の無い .mjs
-import { judgeAnswer, adHocChecks, weatherGroup } from '../scripts/work-judge.mjs';
+import { judgeAnswer, adHocChecks, weatherGroup, liveTruth } from '../scripts/work-judge.mjs';
 
 const root = join(import.meta.dirname, '..');
 const list = JSON.parse(readFileSync(join(root, 'checks', 'work.json'), 'utf8')) as { checks: Record<string, unknown>[] };
@@ -67,5 +67,44 @@ describe('答えの判定（中身で見る）', () => {
     const got = adHocChecks(['--ask', 'Q', '--expect', 'A', '--task', 'T', '--file', 'x.js', '--stdout', 'ok']);
     assert.equal(got.length, 2);
     assert.equal(got[1].judge.file, 'x.js');
+  });
+});
+
+describe('正解（Open-Meteo）の取り方', () => {
+  /** 偽の Open-Meteo。「東京」は引けず「東京都」で引ける（本物と同じ）。最初の `fail` 回は落ちる。 */
+  function fakeMeteo(fail: number) {
+    const seen: string[] = [];
+    let left = fail;
+    const impl = (async (input: string | URL) => {
+      const url = String(input);
+      seen.push(url);
+      if (left > 0) { left -= 1; throw new TypeError('fetch failed'); }
+      const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { 'content-type': 'application/json' } });
+      if (url.includes('geocoding-api')) {
+        const name = new URL(url).searchParams.get('name');
+        return json(name === '東京都' ? { results: [{ name: '東京都', latitude: 35.69, longitude: 139.69 }] } : {});
+      }
+      return json({ daily: { time: ['2026-11-08', '2026-11-09'], weather_code: [1, 61], temperature_2m_max: [15, 10.7], temperature_2m_min: [9, 7.8] } });
+    }) as typeof fetch;
+    return { impl, seen };
+  }
+
+  test('**一度落ちても取り直し、本体と同じ引き方（東京 → 東京都）で明日の予報を取る**', async () => {
+    // Windows の check-work（2026-11-08）。本体は Open-Meteo を取れて答えも合っていたのに、確かめだけが一度の失敗で落ちた
+    const m = fakeMeteo(1);
+    const t = await liveTruth({ type: 'weather-matches-open-meteo', place: '@default' }, '東京', { fetchImpl: m.impl, waitMs: 1 });
+    assert.deepEqual(t.weather, { code: 61, max: 10.7, min: 7.8 });
+    assert.ok(m.seen.some((u) => u.includes(encodeURIComponent('東京都'))), '東京都 で引いていない');
+    const v = judgeAnswer({ type: 'weather-matches-open-meteo' }, '明日の東京の天気は雨で、最高気温 10.7℃', t);
+    assert.equal(v.ok, true, v.why);
+  });
+
+  test('取り直しても取れなければ、理由を添えて落とす（対）', async () => {
+    const m = fakeMeteo(99);
+    const t = await liveTruth({ type: 'weather-matches-open-meteo', place: '東京' }, '東京', { fetchImpl: m.impl, waitMs: 1, tries: 3 });
+    assert.equal(t.weather, undefined);
+    const v = judgeAnswer({ type: 'weather-matches-open-meteo' }, '雨、10℃', t);
+    assert.equal(v.ok, false);
+    assert.match(v.why, /取れませんでした（.+）/);
   });
 });

@@ -133,6 +133,74 @@ describe('途中で手を止めたら、押し戻す', () => {
     } finally { await r.close(); }
   });
 
+  test('**終わりの合図をファイルとして書いても、終わりとして受け取る**（TASK_DONE というファイルを作らない）', async () => {
+    // Windows の check-work（Qwen3.5-4B）で実際に起きた形。write_file に path: TASK_DONE を渡し、同じ書き込みの禁止で 15 分回り続けた
+    const { existsSync } = await import('node:fs');
+    const r = await run([
+      { tool: 'write_file', args: { path: 'a.txt', content: '書きました\n' } },
+      { tool: 'write_file', args: { path: DONE_MARK, content: DONE_MARK } },
+    ], undefined, true);
+    try {
+      assert.ok(!existsSync(join(r.root, DONE_MARK)), '作業場に TASK_DONE というファイルを作った');
+      assert.ok(!r.events.some((e) => e.type === 'toolStart' && (e.call.args as { path?: string }).path === DONE_MARK), '合図をファイルの書き込みとして走らせた');
+      const last = r.events.at(-1);
+      assert.equal(last?.type, 'finished');
+      assert.equal(last.reason, 'completed');
+    } finally { await r.close(); }
+    const { isDoneCall } = await import('../src/agent/loop.ts');
+    assert.equal(isDoneCall({ name: 'read_file', args: { path: './TASK_DONE' } }), true);
+    assert.equal(isDoneCall({ name: 'write_file', args: { path: 'TASK_DONE.txt', content: 'x' } }), true);
+    assert.equal(isDoneCall({ name: 'write_file', args: { path: 'task_done_notes.js', content: 'x' } }), false);
+  });
+
+  test('押し戻しの文は、合図がファイルではないと言う', async () => {
+    const r = await run([
+      { tool: 'read_file', args: { path: 'a.txt' } },
+      { text: '読みました。' },
+      { text: `${DONE_MARK}\n` },
+    ], undefined, true);
+    try {
+      assert.ok(r.asked.some((a) => a.includes('ファイルではありません')), '合図がファイルではないと言っていない');
+    } finally { await r.close(); }
+  });
+
+  test('**作業の頼みに「修正します」と言っただけで返したら、一度押し戻して実行させる**', async () => {
+    // Windows の check-work（Qwen3.5-4B）の形。「足し算に修正します。」で終わり、calc.js は直っていなかった
+    const r = await run([
+      { text: 'a.txt の中身が違うので、修正します。' },
+      { tool: 'write_file', args: { path: 'a.txt', content: '直しました\n' } },
+      { text: `${DONE_MARK}\n` },
+    ], undefined, true);
+    try {
+      assert.ok(r.events.some((e) => e.type === 'nudged'), '押し戻していない');
+      assert.ok(r.asked.some((a) => a.includes('やると言っただけ')), '実行を求める押し戻しが届いていない');
+      assert.equal(await readFile(join(r.root, 'a.txt'), 'utf8'), '直しました\n');
+      const last = r.events.at(-1);
+      assert.equal(last?.type, 'finished');
+      assert.equal(last.reason, 'completed');
+    } finally { await r.close(); }
+  });
+
+  test('「修正します」と言うだけを繰り返したら、済んだと言わない', async () => {
+    const r = await run([{ text: '足し算に修正します。' }], undefined, true);
+    try {
+      const last = r.events.at(-1);
+      assert.equal(last?.type, 'finished');
+      assert.equal(last.reason, 'noProgress', 'やっていないのに完了と言っている');
+    } finally { await r.close(); }
+  });
+
+  test('会話（作業の頼みでない）の「〜します」は押し戻さない（対）', async () => {
+    const r = await run([{ text: 'それでは説明します。' }], undefined, false);
+    try {
+      assert.ok(!r.events.some((e) => e.type === 'nudged'), '会話の返事を押し戻している');
+    } finally { await r.close(); }
+    const { announcesAction } = await import('../src/agent/work-style.ts');
+    assert.equal(announcesAction('足し算に修正します。'), true);
+    assert.equal(announcesAction('hello.js を作成しました。'), false);
+    assert.equal(announcesAction('この作業場は src と test でできています。'), false);
+  });
+
   test('作業の頼みでも、普通に答えただけなら押し戻さない（対）', async () => {
     const r = await run([{ text: 'この作業場は src と test でできています。' }], undefined, true);
     try {
