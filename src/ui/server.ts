@@ -1965,12 +1965,16 @@ export class UiServer {
      * ブロックでつくる画面（docs/BLOCKS.md）。向き・天気・AI に頼む。ファイルは /api/file を使う（作業場の中だけ、戻すに残る）。
      */
     if (path === '/api/blocks/direction' && req.method === 'GET') {
-      return send(res, 200, { direction: this.#opts.config.blocksDirection ?? 'ltr' });
+      // 前の「左上から右下」（diag）は「左上から右（折り返し）」（wrap）として返す。覚えた設定は壊さない
+      const saved = this.#opts.config.blocksDirection;
+      return send(res, 200, { direction: saved === 'diag' ? 'wrap' : (saved ?? 'ltr') });
     }
     if (path === '/api/blocks/direction' && req.method === 'PUT') {
       const body = (await readBody(req) ?? {}) as { direction?: unknown };
-      const dir = typeof body.direction === 'string' && ['ltr', 'ttb', 'diag'].includes(body.direction) ? body.direction : '';
-      if (!dir) return send(res, 400, { error: '向きは ltr・ttb・diag のどれかです' });
+      // diag は前の名前。受けたら wrap として覚える
+      const asked = body.direction === 'diag' ? 'wrap' : body.direction;
+      const dir = typeof asked === 'string' && ['ltr', 'ttb', 'wrap'].includes(asked) ? asked : '';
+      if (!dir) return send(res, 400, { error: '向きは ltr・ttb・wrap のどれかです' });
       await saveBlocksDirection(dir);
       this.#opts.config.blocksDirection = dir;
       return send(res, 200, { direction: dir });
