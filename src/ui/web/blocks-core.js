@@ -16,7 +16,9 @@ export const TYPES = {
 };
 
 const CALC_OPS = { '+': '+', '−': '-', '×': '*', '÷': '/', '余り': '%' };
-const COMPARE_OPS = { '=': '===', '≠': '!==', '<': '<', '≦': '<=', '>': '>', '≧': '>=' };
+const COMPARE_OPS = { '=': '===', '≠': '!==', '<': '<', '≦': '<=', '>': '>', '≧': '>=', '割り切れる': '%' };
+/** 文章の形で読む言い方。「A が B ＿」の＿に入る。 */
+export const COMPARE_WORDS = { '=': 'と同じ', '≠': 'と違う', '<': 'より小さい', '≦': '以下', '>': 'より大きい', '≧': '以上', '割り切れる': 'で割り切れる' };
 const DAYS = { '今日': 0, '明日': 1, 'あさって': 2 };
 
 /**
@@ -40,7 +42,15 @@ export const BLOCKS = {
 };
 
 /** つないでよいか。理由は画面にそのまま出す。 */
+const connectMemo = new Map();
 export function canConnect(fromType, toType) {
+  // 線を引く間は口の上を通るたびに聞かれる。答えは型の組で決まるので覚えておく
+  const key = `${fromType}>${toType}`;
+  let got = connectMemo.get(key);
+  if (!got) { got = Object.freeze(judgeConnect(fromType, toType)); connectMemo.set(key, got); }
+  return got;
+}
+function judgeConnect(fromType, toType) {
   if (fromType === toType || toType === 'any' || fromType === 'any') return { ok: true };
   if (toType === 'text' && (fromType === 'num' || fromType === 'bool')) return { ok: true };
   return { ok: false, why: `${TYPES[fromType]?.label ?? fromType}は${TYPES[toType]?.label ?? toType}の口にはつなげません` };
@@ -179,11 +189,12 @@ function stepLines(n, ins, say) {
       say(`const ${out()} = ${ins.a} ${op} ${ins.b};`);
       break;
     }
-    case 'compare': say(`const ${out()} = ${ins.a} ${COMPARE_OPS[n.values.op] ?? '==='} ${ins.b};`); break;
+    case 'compare': say(`const ${out()} = ${compareExpr(ins.a, n.values.op, ins.b)};`); break;
     case 'if': say(`const ${out()} = ${ins.cond} ? ${ins.yes} : ${ins.no};`); break;
     case 'join': say(`const ${out()} = String(${ins.a}) + String(${ins.b});`); break;
     case 'list': {
-      const parts = def.inputs.filter((p) => incoming.has(`${n.id}:${p.name}`) || String(n.values[p.name] ?? '') !== '').map((p) => ins[p.name]);
+      // 空の欄（書いていない・つないでいない）は入れない
+      const parts = def.inputs.filter((p) => ins[p.name] !== '""').map((p) => ins[p.name]);
       say(`const ${out()} = [${parts.join(', ')}];`);
       break;
     }
@@ -199,6 +210,11 @@ function stepLines(n, ins, say) {
     case 'ask': say(`const ${out()} = await rt.ask(${ins.prompt});`); break;
     default: break;
   }
+}
+
+function compareExpr(a, op, b) {
+  if (op === '割り切れる') return `${a} % ${b} === 0`;
+  return `${a} ${COMPARE_OPS[op] ?? '==='} ${b}`;
 }
 
 const varName = (id, port) => `v_${String(id).replace(/[^A-Za-z0-9_]/g, '_')}_${port}`;
@@ -372,6 +388,7 @@ const isRef = (v) => !!v && typeof v === 'object' && typeof v.ref === 'string' &
 /** 手順を一つ作る。cond は「条件」、repeat は中身を持つ。 */
 export function makeStep(kind, id) {
   if (kind === 'cond') return { id, kind: 'cond', values: { cond: false }, yes: [], no: [] };
+  if (kind === 'when') return { id, kind: 'when', values: { a: 0, op: '割り切れる', b: 3 }, yes: [], no: [] };
   const n = makeNode(kind, id);
   const step = { id, kind, values: n.values };
   if (kind === 'repeat') step.body = [];
@@ -394,8 +411,17 @@ export function nextStepId(wf) {
   return `s${n}`;
 }
 
+/** 比べて分かれる手順（when）の欄。A と B は数、比べ方は選ぶ。 */
+export const WHEN_FIELDS = [
+  { name: 'a', label: 'A', type: 'num', default: 0 },
+  { name: 'b', label: 'B', type: 'num', default: 3 },
+];
+export const WHEN_OP = { name: 'op', label: '比べ方', kind: 'choice', choices: Object.keys(COMPARE_OPS), default: '割り切れる' };
+const isBranch = (kind) => kind === 'cond' || kind === 'when';
+export { isBranch };
+
 function outputsOf(step) {
-  if (step.kind === 'cond') return [];
+  if (isBranch(step.kind)) return [];
   return (BLOCKS[step.kind]?.outputs ?? []).map((p) => ({ node: step.id, port: p.name, label: `${BLOCKS[step.kind].title}の${p.label}`, type: p.type }));
 }
 
@@ -453,6 +479,18 @@ export function compileWorkflow(wf, opts = {}) {
         say('}');
         continue;
       }
+      if (s.kind === 'when') {
+        const [a, b] = WHEN_FIELDS.map((p) => value(s, p));
+        const c = varName(s.id, 'ok');
+        say(`const ${c} = ${compareExpr(a, s.values?.op, b)};`);
+        if (trace) say(`rt.seen?.(${JSON.stringify(s.id)}, ${c});`);
+        say(`if (${c}) {`);
+        emit(s.yes ?? [], `${pad}  `);
+        say('} else {');
+        emit(s.no ?? [], `${pad}  `);
+        say('}');
+        continue;
+      }
       const def = BLOCKS[s.kind];
       if (!def) { errors.push({ node: s.id, message: `知らない手順です: ${s.kind}` }); continue; }
       const ins = Object.fromEntries(def.inputs.map((p) => [p.name, value(s, p)]));
@@ -464,6 +502,8 @@ export function compileWorkflow(wf, opts = {}) {
         continue;
       }
       stepLines(s, ins, say);
+      // 文章の形で、行の横に「今いくつか」を出すため（動かすときだけ）
+      if (trace && def.outputs.length) say(`rt.seen?.(${JSON.stringify(s.id)}, ${varName(s.id, def.outputs[0].name)});`);
     }
   };
   emit(wf.steps, '');
@@ -529,7 +569,7 @@ export function graphToWorkflow(graph, trigger) {
 /** 手順の形をつなぐ形にする。条件の手順（はい/いいえ）は、つなぐ形では表せないので why を返す。 */
 export function workflowToGraph(wf) {
   let cond;
-  walkSteps(wf.steps, (s) => { if (s.kind === 'cond' && !cond) cond = s; });
+  walkSteps(wf.steps, (s) => { if (isBranch(s.kind) && !cond) cond = s; });
   if (cond) return { why: '条件の手順（はい・いいえに分かれる所）は、つなぐ形では表せません。もしブロック（値を選ぶ）に置き換えるか、手順の形のまま使ってください', node: cond.id };
   const graph = emptyGraph();
   let row = 0;
@@ -561,10 +601,13 @@ export function dailyDue(time, now = new Date()) {
   return hm === String(time ?? '').trim();
 }
 
+/** 見方。つなぐ形・手順の形・文章の形。手順の形と文章の形は同じ中身（workflow）を別の見せ方で出す。 */
+export const VIEWS = ['graph', 'flow', 'text'];
+
 /** 保存の形（両方の形を一つのファイルに）。 */
 export function serializeFile(graph, workflow, view) {
   const g = JSON.parse(serialize(graph));
-  return `${JSON.stringify({ ...g, view: view === 'flow' ? 'flow' : 'graph', ...(workflow ? { workflow } : {}) }, null, 2)}\n`;
+  return `${JSON.stringify({ ...g, view: VIEWS.includes(view) ? view : 'graph', ...(workflow ? { workflow } : {}) }, null, 2)}\n`;
 }
 
 /** ファイルを読む。手順の形は、在ればその形のまま（中の手順の種類だけ確かめる）。 */
@@ -577,14 +620,14 @@ export function parseFile(text) {
     workflow = { ...emptyWorkflow(), ...structuredClone(raw.workflow) };
     if (!TRIGGERS[workflow.trigger?.kind]) workflow.trigger = emptyWorkflow().trigger;
     const drop = (steps) => steps.filter((s) => {
-      const known = s && typeof s.id === 'string' && (s.kind === 'cond' || BLOCKS[s.kind]);
+      const known = s && typeof s.id === 'string' && (isBranch(s.kind) || BLOCKS[s.kind]);
       if (!known) { problems.push(`知らない手順を外しました: ${s?.kind}`); return false; }
       for (const key of ['body', 'yes', 'no']) if (Array.isArray(s[key])) s[key] = drop(s[key]);
       return true;
     });
     workflow.steps = drop(workflow.steps);
   }
-  return { graph, workflow, view: raw?.view === 'flow' ? 'flow' : 'graph', problems };
+  return { graph, workflow, view: VIEWS.includes(raw?.view) ? raw.view : 'graph', problems };
 }
 
 export { findStep };
@@ -595,18 +638,42 @@ export { findStep };
 export const DIRECTIONS = {
   ltr: { title: '左から右', out: 'right', in: 'left' },
   ttb: { title: '上から下', out: 'bottom', in: 'top' },
-  diag: { title: '左上から右下', out: 'bottom-right', in: 'top-left' },
+  // 左上から右へ、文字を読む順に並べ、幅に届いたら下の段の左へ折り返す
+  wrap: { title: '左上から右（折り返し）', out: 'right', in: 'left' },
 };
+
+/** 前に「左上から右下」として覚えた値（diag）。読んだら wrap にする（保存した設定を壊さない）。 */
+const OLD_DIRECTIONS = { diag: 'wrap' };
+
+/** 覚えた向きを今の名前にする。知らない値は undefined。 */
+export function normalizeDirection(d) {
+  const now = typeof d === 'string' ? (OLD_DIRECTIONS[d] ?? d) : d;
+  return isDirection(now) ? now : undefined;
+}
 
 export function isDirection(d) {
   return Object.prototype.hasOwnProperty.call(DIRECTIONS, d);
 }
 
+/** 折り返しの一段の間合い（ブロックの大きさ 幅 約 200、高さ 約 240 から） */
+export const WRAP_STEP = { x: 280, y: 300 };
+
 /**
  * 整える。つなぎの深さ（いちばん長い道）で段を決め、向きに沿って並べる。位置だけを変える（中身は変えない）。
- * 線は必ず、左から右なら x が、上から下なら y が、左上から右下なら両方が増える向きに走る。
+ * 線は必ず、左から右なら x が、上から下なら y が増える向きに走る。
+ * 左上から右（折り返し）は、つなぎの順（作る JavaScript と同じ順）に一つずつ左から右へ置き、
+ * opts.width に届いたら次の段の左へ折り返す。線は同じ段なら右へ、そうでなければ下の段へ進む。
  */
-export function autoLayout(graph, dir = 'ltr') {
+export function autoLayout(graph, dir = 'ltr', opts = {}) {
+  dir = normalizeDirection(dir) ?? 'ltr';
+  if (dir === 'wrap') {
+    const perRow = Math.max(1, Math.floor((Math.max(opts.width ?? 1600, WRAP_STEP.x) - 40) / WRAP_STEP.x));
+    readingOrder(graph).forEach((n, i) => {
+      n.x = 40 + (i % perRow) * WRAP_STEP.x;
+      n.y = 40 + Math.floor(i / perRow) * WRAP_STEP.y;
+    });
+    return graph;
+  }
   const depth = new Map();
   const ins = new Map(graph.nodes.map((n) => [n.id, []]));
   for (const l of graph.links) ins.get(l.to.node)?.push(l.from.node);
@@ -625,16 +692,32 @@ export function autoLayout(graph, dir = 'ltr') {
     if (!rows.has(d)) rows.set(d, []);
     rows.get(d).push(n);
   }
-  const widest = Math.max(1, ...[...rows.values()].map((r) => r.length));
   for (const [d, row] of rows) {
     row.forEach((n, i) => {
       // 間合いはブロックの大きさ（幅 約 200、高さ 約 240）から。重ならないように取る
       if (dir === 'ttb') { n.x = 40 + i * 260; n.y = 40 + d * 300; }
-      else if (dir === 'diag') { n.x = 40 + d * (240 + 40 * widest) + i * 40; n.y = 40 + d * (40 + 270 * widest) + i * 270; }
       else { n.x = 40 + d * 280; n.y = 40 + i * 260; }
     });
   }
   return graph;
+}
+
+/** 読む順。つなぎの順（前のブロックが必ず先）、同じなら名前の順。輪があっても全部を一度ずつ返す。 */
+export function readingOrder(graph) {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const ins = new Map(graph.nodes.map((n) => [n.id, []]));
+  for (const l of graph.links) if (byId.has(l.from.node)) ins.get(l.to.node)?.push(l.from.node);
+  const sorted = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id, 'en', { numeric: true }));
+  const out = [];
+  const state = new Map();
+  const visit = (n) => {
+    if (state.has(n.id)) return;
+    state.set(n.id, 1);
+    for (const id of ins.get(n.id) ?? []) visit(byId.get(id));
+    out.push(n);
+  };
+  for (const n of sorted) visit(n);
+  return out;
 }
 
 /* ---------- 見本 ---------- */

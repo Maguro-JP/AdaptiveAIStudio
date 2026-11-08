@@ -7,6 +7,7 @@ import {
   duplicateNodes, compile, wrapForNode, run, makeHistory, searchBlocks, graphFormatGuide, emptyWorkflow, makeStep,
   walkSteps, nextStepId, availableOutputs, compileWorkflow, runWorkflow, graphToWorkflow, workflowToGraph, dailyDue,
   serializeFile, parseFile, isDirection, autoLayout, sampleFizzBuzz, sampleHello, sampleUmbrella, parseGraph,
+  normalizeDirection, isBranch, WHEN_FIELDS, WHEN_OP, COMPARE_WORDS, VIEWS,
 } from './blocks-core.js';
 
 const $ = (id) => document.getElementById(id);
@@ -43,6 +44,8 @@ const S = {
   pan: { x: 0, y: 0 },
   zoom: 1,
   shown: new Map(),
+  /** 動かしたときに各手順が出した値（文章の形で行の横に出す）。id → { count, last, yes, no } */
+  seen: new Map(),
   failed: undefined,
 };
 const history = makeHistory();
@@ -64,7 +67,7 @@ function restore(text) {
   lastSnap = text;
   renderAll();
 }
-function changed() { renderCode(); }
+function changed() { renderCode(); if (S.view === 'text') liveSoon(); }
 
 const note = (text) => { $('note').textContent = text; };
 
@@ -103,7 +106,7 @@ function startPaletteDrag(e, kind) {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
     ghost?.remove();
-    if (S.view === 'flow') { addStepAtEnd(kind); return; }
+    if (S.view !== 'graph') { addStepAtEnd(kind); return; }
     const r = $('stage').getBoundingClientRect();
     const inside = ev.clientX >= r.left && ev.clientX <= r.right && ev.clientY >= r.top && ev.clientY <= r.bottom;
     if (ghost && inside) addNodeAt(kind, ev.clientX, ev.clientY);
@@ -133,10 +136,10 @@ function addNodeAt(kind, cx, cy) {
 function portPoint(nodeEl, side, index, count, rowEl) {
   const w = nodeEl.offsetWidth;
   const h = nodeEl.offsetHeight;
-  if (S.dir === 'ltr' && rowEl) return { x: side === 'out' ? w : 0, y: rowEl.offsetTop + rowEl.offsetHeight / 2 };
+  // 左上から右（折り返し）も、口は左から右と同じ（入るは左の辺、出るは右の辺）
+  if ((S.dir === 'ltr' || S.dir === 'wrap') && rowEl) return { x: side === 'out' ? w : 0, y: rowEl.offsetTop + rowEl.offsetHeight / 2 };
   if (S.dir === 'ttb') return { x: (w * (index + 1)) / (count + 1), y: side === 'out' ? h : 0 };
-  // 左上から右下: 入る口は上の左半分、出る口は下の右半分
-  return side === 'out' ? { x: w / 2 + (w / 2) * ((index + 1) / (count + 1)), y: h } : { x: (w / 2) * ((index + 1) / (count + 1)), y: 0 };
+  return { x: side === 'out' ? w : 0, y: (h * (index + 1)) / (count + 1) };
 }
 
 function linkInto(nodeId, port) {
@@ -195,50 +198,96 @@ function renderNode(n) {
     else if (!S.selected.has(n.id)) S.selected = new Set([n.id]);
     for (const x of document.querySelectorAll('.bk-node')) x.classList.toggle('selected', S.selected.has(x.dataset.id));
   });
-  $('world').append(box);
-  // 口は描いたあとに置く（大きさが要る）
-  const place = (side, list, rowsOf) => list.forEach((p, i) => {
-    const pt = portPoint(box, side, i, list.length, rowsOf[i]);
-    const dot = el('span', { class: `bk-port ${side}`, dataset: { port: p.name, type: p.type, node: n.id }, title: `${p.label}（${TYPES[p.type].label}）` });
-    dot.style.left = `${pt.x}px`;
-    dot.style.top = `${pt.y}px`;
-    dot.addEventListener('pointerdown', (e) => startWire(e, n, side, p));
-    box.append(dot);
+  return { n, box, rows };
+}
+
+/**
+ * 口を置く。大きさを読むのは全部のブロックを入れたあとに一度にまとめる（読む・書くを交互にすると、
+ * ブラウザが毎回並べ直して 200 個で目に見えて遅くなった。docs/knowledge/blocks-perf-2026-11-08.md）。
+ */
+function placePorts(built) {
+  const measured = built.map(({ n, box, rows }) => {
+    const def = BLOCKS[n.kind];
+    const pts = [];
+    for (const [side, list, rowsOf] of [['in', def.inputs, rows.in], ['out', def.outputs, rows.out]]) {
+      list.forEach((p, i) => pts.push({ side, p, pt: portPoint(box, side, i, list.length, rowsOf[i]) }));
+    }
+    return { n, box, pts };
   });
-  place('in', def.inputs, rows.in);
-  place('out', def.outputs, rows.out);
+  for (const { n, box, pts } of measured) {
+    const offs = new Map();
+    for (const { side, p, pt } of pts) {
+      const dot = el('span', { class: `bk-port ${side}`, dataset: { port: p.name, type: p.type, node: n.id }, title: `${p.label}（${TYPES[p.type].label}）` });
+      dot.style.left = `${pt.x}px`;
+      dot.style.top = `${pt.y}px`;
+      dot.addEventListener('pointerdown', (e) => startWire(e, n, side, p));
+      box.append(dot);
+      offs.set(`${side}:${p.name}`, pt);
+    }
+    portOffsets.set(n.id, offs);
+  }
 }
+/** ブロックの中での口の位置（ブロックの左上から）。動かしても変わらないので、描くときに一度だけ測る。 */
+const portOffsets = new Map();
 
+let nodeById = new Map();
 function portCenter(nodeId, side, port) {
-  const dot = document.querySelector(`.bk-node[data-id="${nodeId}"] .bk-port.${side}[data-port="${port}"]`);
-  const box = dot?.parentElement;
-  if (!dot || !box) return undefined;
-  return { x: box.offsetLeft + dot.offsetLeft, y: box.offsetTop + dot.offsetTop };
+  const n = nodeById.get(nodeId);
+  const off = portOffsets.get(nodeId)?.get(`${side}:${port}`);
+  if (!n || !off) return undefined;
+  return { x: n.x + off.x, y: n.y + off.y };
 }
 
-function wirePath(a, b) {
+/** 線の形。toTop は入る側のブロックの上の辺（折り返しで下の段へ回るときに使う）。 */
+function wirePath(a, b, toTop) {
+  if (S.dir === 'wrap' && toTop !== undefined && b.y - a.y > 60) {
+    // 下の段へ: 右へ少し出て、段の間まで下り、左へ戻って、入る口へ横から入る
+    const gap = toTop - 18;
+    const r = 8;
+    return `M${a.x},${a.y} H${a.x + 14} Q${a.x + 14 + r},${a.y} ${a.x + 14 + r},${a.y + r} V${gap - r} Q${a.x + 14 + r},${gap} ${a.x + 14},${gap} H${b.x - 22 + r} Q${b.x - 22},${gap} ${b.x - 22},${gap + r} V${b.y - r} Q${b.x - 22},${b.y} ${b.x - 22 + r},${b.y} H${b.x}`;
+  }
   const dx = Math.max(40, Math.abs(b.x - a.x) / 2);
   const dy = Math.max(40, Math.abs(b.y - a.y) / 2);
-  if (S.dir === 'ltr') return `M${a.x},${a.y} C${a.x + dx},${a.y} ${b.x - dx},${b.y} ${b.x},${b.y}`;
   if (S.dir === 'ttb') return `M${a.x},${a.y} C${a.x},${a.y + dy} ${b.x},${b.y - dy} ${b.x},${b.y}`;
-  return `M${a.x},${a.y} C${a.x + dx / 2},${a.y + dy} ${b.x - dx / 2},${b.y - dy} ${b.x},${b.y}`;
+  return `M${a.x},${a.y} C${a.x + dx},${a.y} ${b.x - dx},${b.y} ${b.x},${b.y}`;
 }
 
+/** 線の道。一本ずつ path を覚えておき、動かしたブロックの線だけを描き直す。 */
+const wirePaths = new Map();
+const linkKey = (l) => `${l.from.node}.${l.from.port}>${l.to.node}.${l.to.port}`;
+function drawWire(l, p) {
+  const a = portCenter(l.from.node, 'out', l.from.port);
+  const b = portCenter(l.to.node, 'in', l.to.port);
+  if (!a || !b) { p.removeAttribute('d'); return; }
+  p.setAttribute('d', wirePath(a, b, nodeById.get(l.to.node)?.y));
+}
 function renderWires() {
   const svg = $('wires');
   svg.textContent = '';
+  wirePaths.clear();
+  nodeById = new Map(S.graph.nodes.map((n) => [n.id, n]));
+  const frag = document.createDocumentFragment();
   for (const l of S.graph.links) {
-    const a = portCenter(l.from.node, 'out', l.from.port);
-    const b = portCenter(l.to.node, 'in', l.to.port);
-    if (!a || !b) continue;
-    const from = S.graph.nodes.find((n) => n.id === l.from.node);
-    const type = portOf(from.kind, 'out', l.from.port).type;
+    const from = nodeById.get(l.from.node);
+    if (!from) continue;
+    const type = portOf(from.kind, 'out', l.from.port)?.type ?? 'any';
     const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    p.setAttribute('d', wirePath(a, b));
     p.setAttribute('stroke', `var(--port-${type})`);
     p.dataset.from = `${l.from.node}.${l.from.port}`;
     p.dataset.to = `${l.to.node}.${l.to.port}`;
-    svg.append(p);
+    drawWire(l, p);
+    if (!p.hasAttribute('d')) continue;
+    wirePaths.set(linkKey(l), p);
+    frag.append(p);
+  }
+  svg.append(frag);
+}
+/** 動かしたブロックに付く線だけを描き直す。 */
+function updateWiresOf(ids) {
+  for (const l of S.graph.links) {
+    if (!ids.has(l.from.node) && !ids.has(l.to.node)) continue;
+    const p = wirePaths.get(linkKey(l));
+    if (p) drawWire(l, p);
   }
 }
 
@@ -262,7 +311,12 @@ function fitView() {
 
 function renderGraph() {
   for (const x of [...document.querySelectorAll('.bk-node')]) x.remove();
-  for (const n of S.graph.nodes) renderNode(n);
+  portOffsets.clear();
+  const built = S.graph.nodes.map((n) => renderNode(n));
+  const frag = document.createDocumentFragment();
+  for (const b of built) frag.append(b.box);
+  $('world').append(frag);
+  placePorts(built);
   renderWires();
   applyView();
   $('emptyHint').hidden = S.graph.nodes.length > 0;
@@ -277,21 +331,33 @@ function startNodeDrag(e, n) {
   const sx = e.clientX;
   const sy = e.clientY;
   let moved = false;
-  const move = (ev) => {
-    moved = true;
+  // 動かすのは画面を描く回（requestAnimationFrame）に一度だけ。線は動かしたブロックの分だけ描き直す
+  const ids = new Set(moving.map((m) => m.id));
+  const boxes = new Map(moving.map((m) => [m.id, document.querySelector(`.bk-node[data-id="${m.id}"]`)]));
+  let last;
+  let frame = 0;
+  const apply = () => {
+    frame = 0;
+    if (!last) return;
     for (const s of start) {
-      s.m.x = Math.round(s.x + (ev.clientX - sx) / S.zoom);
-      s.m.y = Math.round(s.y + (ev.clientY - sy) / S.zoom);
-      const box = document.querySelector(`.bk-node[data-id="${s.m.id}"]`);
+      s.m.x = Math.round(s.x + (last.clientX - sx) / S.zoom);
+      s.m.y = Math.round(s.y + (last.clientY - sy) / S.zoom);
+      const box = boxes.get(s.m.id);
       if (box) { box.style.left = `${s.m.x}px`; box.style.top = `${s.m.y}px`; }
     }
-    renderWires();
+    updateWiresOf(ids);
+  };
+  const move = (ev) => {
+    moved = true;
+    last = { clientX: ev.clientX, clientY: ev.clientY };
+    if (!frame) frame = requestAnimationFrame(apply);
   };
   const up = () => {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
+    if (frame) cancelAnimationFrame(frame);
+    apply();
     if (moved) remember();
-    renderGraph();
   };
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
@@ -393,7 +459,7 @@ function openFinder(cx, cy) {
     const box = $('finderList');
     box.textContent = '';
     for (const hit of searchBlocks(input.value)) {
-      box.append(el('button', { type: 'button', class: 'ghost', onclick: () => { f.hidden = true; if (S.view === 'flow') addStepAtEnd(hit.kind); else addNodeAt(hit.kind, cx, cy); } }, `${hit.title}`, el('span', { class: 'dim' }, `  ${hit.group}`)));
+      box.append(el('button', { type: 'button', class: 'ghost', onclick: () => { f.hidden = true; if (S.view !== 'graph') addStepAtEnd(hit.kind); else addNodeAt(hit.kind, cx, cy); } }, `${hit.title}`, el('span', { class: 'dim' }, `  ${hit.group}`)));
     }
   };
   input.oninput = list;
@@ -408,7 +474,11 @@ function openFinder(cx, cy) {
 document.addEventListener('pointerdown', (e) => { if (!e.target.closest('#finder')) $('finder').hidden = true; if (!e.target.closest('.bk-menu')) document.querySelector('.bk-menu')?.remove(); }, true);
 
 /* ---------- 手順の形 ---------- */
-function stepTitle(s) { return s.kind === 'cond' ? '条件' : BLOCKS[s.kind]?.title ?? s.kind; }
+function stepTitle(s) {
+  if (s.kind === 'cond') return '条件';
+  if (s.kind === 'when') return 'もし（比べて分かれる）';
+  return BLOCKS[s.kind]?.title ?? s.kind;
+}
 
 function menu(at, items) {
   document.querySelector('.bk-menu')?.remove();
@@ -420,7 +490,10 @@ function menu(at, items) {
 }
 
 function addMenu(at, list) {
-  const items = [['条件（はい・いいえに分かれる）', () => insertStep(list, 'cond')]];
+  const items = [
+    ['もし A が B で割り切れたら…（比べて分かれる）', () => insertStep(list, 'when')],
+    ['条件（はい・いいえに分かれる）', () => insertStep(list, 'cond')],
+  ];
   for (const [kind, d] of Object.entries(BLOCKS)) items.push([d.title, () => insertStep(list, kind)]);
   menu(at, items);
 }
@@ -428,8 +501,13 @@ function addMenu(at, list) {
 function insertStep(list, kind) {
   const s = makeStep(kind, nextStepId(S.workflow));
   list.push(s);
+  if (kind === 'when') {
+    // くり返しの中なら、A は「今の数」から始める（いちばん多い使い方。私の推測）。違えば × で外せる
+    const each = availableOutputs(S.workflow, s.id).filter((o) => o.port === 'each').pop();
+    if (each) s.values.a = { ref: each.node, port: each.port };
+  }
   remember();
-  renderFlow();
+  renderBody();
   changed();
 }
 function addStepAtEnd(kind) { insertStep(S.workflow.steps, kind); }
@@ -466,7 +544,9 @@ function renderSteps(list, host) {
       el('button', { type: 'button', class: 'ghost icon', title: 'この手順を消す', onclick: () => { list.splice(i, 1); remember(); renderFlow(); changed(); } }, '×'));
     const body = el('div', { class: 'bk-step-body' });
     if (s.kind === 'cond') body.append(fieldRow(s, { name: 'cond', label: 'もし', type: 'bool', default: false }));
-    else {
+    else if (s.kind === 'when') {
+      body.append(fieldRow(s, WHEN_FIELDS[0]), fieldRow(s, WHEN_FIELDS[1]), fieldRow(s, WHEN_OP));
+    } else {
       const def = BLOCKS[s.kind];
       for (const f of def.fields) body.append(fieldRow(s, { ...f, kind: f.kind }));
       for (const p of def.inputs) body.append(fieldRow(s, p));
@@ -474,7 +554,7 @@ function renderSteps(list, host) {
     if (S.shown.has(s.id)) body.append(el('div', { class: 'bk-shown' }, S.shown.get(s.id).join('\n')));
     if (S.failed?.node === s.id) body.append(el('div', { class: 'bk-fail' }, `ここで止まりました: ${S.failed.message}`));
     card.append(head, body);
-    if (s.kind === 'cond') {
+    if (isBranch(s.kind)) {
       const br = el('div', { class: 'bk-branches' });
       for (const [key, label] of [['yes', 'はいのとき'], ['no', 'いいえのとき']]) {
         const b = el('div', { class: 'bk-branch', dataset: { branch: key } }, el('h5', {}, label));
@@ -498,7 +578,7 @@ function renderSteps(list, host) {
 function renderFlow() {
   const f = $('flow');
   f.textContent = '';
-  f.className = `bk-flow dir-${S.dir === 'ltr' ? 'ltr' : 'ttb'}`;
+  f.className = `bk-flow dir-${S.dir}`;
   const t = S.workflow.trigger;
   const kindSel = editorFor('choice', TRIGGERS[t.kind] ? TRIGGERS[t.kind].title : TRIGGERS.manual.title, (v) => {
     t.kind = Object.entries(TRIGGERS).find(([, d]) => d.title === v)?.[0] ?? 'manual';
@@ -517,6 +597,139 @@ function renderFlow() {
   f.append(el('button', { type: 'button', class: 'ghost bk-add', id: 'addStep', onclick: (e) => addMenu(e.currentTarget, S.workflow.steps) }, '＋ 手順を足す'));
 }
 
+/* ---------- 文章の形（手順の形と同じ中身を、日本語の文で読む） ---------- */
+/** 文の型。文字はそのまま、{ f } は書き込む欄（チップ）。words は比べ方を「で割り切れる」などの言い方で出す。 */
+const SENTENCES = {
+  number: ['数', { f: 'value' }, 'を用意する'],
+  text: ['文字', { f: 'value' }, 'を用意する'],
+  show: [{ f: 'value' }, 'を表示する'],
+  calc: [{ f: 'a' }, { f: 'op' }, { f: 'b' }, 'を計算する'],
+  compare: [{ f: 'a' }, 'が', { f: 'b' }, { f: 'op', words: true }, 'か調べる'],
+  if: ['もし', { f: 'cond' }, 'なら', { f: 'yes' }, '、ちがえば', { f: 'no' }, 'を選ぶ'],
+  repeat: [{ f: 'from' }, 'から', { f: 'to' }, 'まで数えて、その数ごとに:'],
+  join: [{ f: 'a' }, 'と', { f: 'b' }, 'をつなぐ'],
+  list: [{ f: 'a' }, '・', { f: 'b' }, '・', { f: 'c' }, 'を一覧にする'],
+  writeFile: [{ f: 'content' }, 'を', { f: 'name' }, 'に書く'],
+  readFile: [{ f: 'name' }, 'を読む'],
+  weather: [{ f: 'place' }, 'の', { f: 'day' }, 'の天気を取る'],
+  ask: ['AI に', { f: 'prompt' }, 'と頼む'],
+  cond: ['もし', { f: 'cond' }, 'なら:'],
+  when: ['もし', { f: 'a' }, 'が', { f: 'b' }, { f: 'op', words: true }, 'なら:'],
+};
+
+function slotDef(s, name) {
+  if (s.kind === 'cond') return { name: 'cond', label: 'もし', type: 'bool', default: false };
+  if (s.kind === 'when') return name === 'op' ? WHEN_OP : WHEN_FIELDS.find((p) => p.name === name);
+  const def = BLOCKS[s.kind];
+  return def?.fields.find((f) => f.name === name) ?? def?.inputs.find((p) => p.name === name);
+}
+
+/** 書き込む欄（チップ）。選ぶもの・書く値・前の出力、のどれか。押せば変えられる。 */
+function slot(s, tok) {
+  const p = slotDef(s, tok.f);
+  if (!p) return el('span', {}, '?');
+  const v = s.values[p.name];
+  const done = (nv) => { s.values[p.name] = nv; remember(); renderText(); changed(); };
+  if (p.kind === 'choice') {
+    const sel = el('select', { class: 'bk-slot', dataset: { slot: p.name }, onchange: () => { s.values[p.name] = sel.value; remember(); changed(); } },
+      p.choices.map((c) => el('option', { value: c }, tok.words ? (COMPARE_WORDS[c] ?? c) : c)));
+    sel.value = v;
+    return sel;
+  }
+  const pick = (at) => {
+    const outs = availableOutputs(S.workflow, s.id).filter((o) => canConnect(o.type, p.type).ok);
+    const items = outs.map((o) => [o.port === 'each' ? `その数（${o.label}）` : o.label, () => done({ ref: o.node, port: o.port })]);
+    if (v && typeof v === 'object') items.push(['自分で書く', () => done(p.default ?? '')]);
+    if (!items.length) { note('使える前の出力がありません（前に手順を置くと選べます）'); return; }
+    menu(at, items);
+  };
+  if (v && typeof v === 'object' && v.ref) {
+    const src = availableOutputs(S.workflow, s.id).find((o) => o.node === v.ref && o.port === v.port);
+    const label = src ? (src.port === 'each' ? 'その数' : src.label) : `${v.ref} の ${v.port}（見つかりません）`;
+    return el('button', { type: 'button', class: `bk-slot ref${src ? '' : ' bad'}`, dataset: { slot: p.name }, title: '前の手順の出力。押すと変えられます', onclick: (e) => pick(e.currentTarget) }, label);
+  }
+  const kindLike = p.type === 'any' ? 'text' : p.type;
+  const box = editorFor(kindLike, v, (nv) => { s.values[p.name] = nv; remember(); changed(); });
+  box.classList.add('bk-slot');
+  box.dataset.slot = p.name;
+  if (box.tagName === 'INPUT' && box.type !== 'checkbox') {
+    // 中身の長さに合わせる（文の中で浮かないように）
+    const fit = () => { box.style.width = `${Math.max(3, String(box.value).length + 1.5)}em`; };
+    box.addEventListener('input', fit);
+    fit();
+  }
+  const wrap = el('span', { class: 'bk-slot-wrap' }, box,
+    el('button', { type: 'button', class: 'bk-pick', title: '前の手順の出力を使う', dataset: { pick: p.name }, onclick: (e) => pick(e.currentTarget) }, '▾'));
+  return wrap;
+}
+
+function liveText(s) {
+  const shown = S.shown.get(s.id);
+  if (shown) return shown.length > 20 ? `${shown.slice(0, 20).join('、')}…（${shown.length} 回）` : shown.join('、');
+  const seen = S.seen.get(s.id);
+  if (!seen) return '';
+  if (isBranch(s.kind)) return `はい ${seen.yes} 回・いいえ ${seen.no} 回`;
+  const last = typeof seen.last === 'string' ? seen.last : JSON.stringify(seen.last);
+  return seen.count > 1 ? `最後は ${last}（${seen.count} 回）` : `${last}`;
+}
+
+function textLines(list, host, depth) {
+  list.forEach((s, i) => {
+    const line = el('div', { class: `bk-line${S.failed?.node === s.id ? ' failed' : ''}`, dataset: { step: s.id, kind: s.kind } });
+    line.style.setProperty('--depth', String(depth));
+    const words = (SENTENCES[s.kind] ?? [stepTitle(s)]).map((tok) => (typeof tok === 'string' ? el('span', { class: 'bk-word' }, tok) : slot(s, tok)));
+    const tools = el('span', { class: 'bk-line-tools' },
+      el('button', { type: 'button', class: 'ghost icon', title: '前へ', onclick: () => { if (i > 0) { list.splice(i - 1, 0, list.splice(i, 1)[0]); remember(); renderText(); changed(); } } }, '↑'),
+      el('button', { type: 'button', class: 'ghost icon', title: '後ろへ', onclick: () => { if (i < list.length - 1) { list.splice(i + 1, 0, list.splice(i, 1)[0]); remember(); renderText(); changed(); } } }, '↓'),
+      el('button', { type: 'button', class: 'ghost icon', title: 'この文を消す（↶ で戻せます）', onclick: () => { list.splice(i, 1); remember(); renderText(); changed(); } }, '×'));
+    line.append(el('span', { class: 'bk-sentence' }, words), tools, el('span', { class: 'bk-live', title: '動かした結果（変えるとすぐ動かし直します）' }, liveText(s)));
+    if (S.failed?.node === s.id) line.append(el('span', { class: 'bk-fail' }, `ここで止まりました: ${S.failed.message}`));
+    host.append(line);
+    const addAt = (inner, d, branch) => {
+      host.append(el('button', { type: 'button', class: 'ghost bk-add bk-line-add', style: `--depth:${d}`, dataset: { addIn: s.id, branch }, onclick: (e) => addMenu(e.currentTarget, inner) }, '＋ ここに足す'));
+    };
+    if (s.kind === 'repeat') { textLines(s.body, host, depth + 1); addAt(s.body, depth + 1, 'body'); }
+    if (isBranch(s.kind)) {
+      textLines(s.yes, host, depth + 1); addAt(s.yes, depth + 1, 'yes');
+      const no = el('div', { class: 'bk-line else', dataset: { elseOf: s.id } }, el('span', { class: 'bk-sentence' }, el('span', { class: 'bk-word' }, 'そうでなければ:')));
+      no.style.setProperty('--depth', String(depth));
+      host.append(no);
+      textLines(s.no, host, depth + 1); addAt(s.no, depth + 1, 'no');
+    }
+  });
+}
+
+function renderText() {
+  const host = $('text');
+  host.textContent = '';
+  const t = S.workflow.trigger;
+  host.append(el('p', { class: 'dim bk-text-head' }, `${TRIGGERS[t.kind]?.title ?? TRIGGERS.manual.title}とき、上から順に読んで動きます。灰色の欄を押すと書き換えられ、変えるとすぐ右に結果が出ます。`));
+  textLines(S.workflow.steps, host, 0);
+  host.append(el('button', { type: 'button', class: 'ghost bk-add bk-line-add', id: 'addLine', style: '--depth:0', onclick: (e) => addMenu(e.currentTarget, S.workflow.steps) }, '＋ 文を足す'));
+}
+
+/** 行の横の結果だけを書き換える（書いている欄の手を止めない）。 */
+function updateLive() {
+  for (const line of document.querySelectorAll('#text .bk-line[data-step]')) {
+    let hit;
+    walkSteps(S.workflow.steps, (x) => { if (x.id === line.dataset.step) hit = x; });
+    const live = line.querySelector('.bk-live');
+    if (hit && live) live.textContent = liveText(hit);
+    line.classList.toggle('failed', S.failed?.node === line.dataset.step);
+  }
+}
+
+/** 外に触らない（ファイル・天気・AI を使わない）なら、変えるたびに動かし直す。 */
+const OUTSIDE = new Set(['writeFile', 'readFile', 'weather', 'ask']);
+let liveTimer;
+function liveSoon() {
+  clearTimeout(liveTimer);
+  let outside = false;
+  walkSteps(S.workflow.steps, (x) => { if (OUTSIDE.has(x.kind)) outside = true; });
+  if (outside || !S.workflow.steps.length) return;
+  liveTimer = setTimeout(() => void runNow('', { quiet: true }), 200);
+}
+
 /* ---------- きっかけの見張り（画面を開いている間だけ） ---------- */
 let timer;
 let lastDaily = '';
@@ -532,7 +745,7 @@ function armTrigger() {
   if (t.kind === 'manual') return;
   if (t.kind === 'newFile') void countFiles(t.folder).then((n) => { fileCount = n; });
   timer = setInterval(async () => {
-    if (S.view !== 'flow') return;
+    if (S.view === 'graph') return;
     if (t.kind === 'daily' && dailyDue(t.time)) {
       const key = new Date().toISOString().slice(0, 16);
       if (key !== lastDaily) { lastDaily = key; await runNow(`毎日 ${t.time} になったので`); }
@@ -547,7 +760,7 @@ function armTrigger() {
 
 /* ---------- JavaScript ---------- */
 function currentCode() {
-  if (S.view === 'flow') return compileWorkflow(S.workflow);
+  if (S.view !== 'graph') return compileWorkflow(S.workflow);
   return compile(S.graph);
 }
 function renderCode() {
@@ -575,6 +788,13 @@ const runtime = {
     if (!S.shown.has(id)) S.shown.set(id, []);
     S.shown.get(id).push(text);
   },
+  seen(id, v) {
+    const got = S.seen.get(id) ?? { count: 0, last: undefined, yes: 0, no: 0 };
+    got.count += 1;
+    got.last = v;
+    if (v === true) got.yes += 1; else if (v === false) got.no += 1;
+    S.seen.set(id, got);
+  },
   async readFile(name) {
     const r = await api(`/api/file?path=${encodeURIComponent(name)}`);
     if (r.status !== 200) throw new Error(r.body.error ?? `${name} を読めませんでした`);
@@ -598,22 +818,23 @@ const runtime = {
 };
 
 function nameOf(id) {
-  if (S.view === 'flow') { let hit; walkSteps(S.workflow.steps, (s) => { if (s.id === id) hit = s; }); return hit ? stepTitle(hit) : id; }
+  if (S.view !== 'graph') { let hit; walkSteps(S.workflow.steps, (s) => { if (s.id === id) hit = s; }); return hit ? stepTitle(hit) : id; }
   const n = S.graph.nodes.find((x) => x.id === id);
   return n ? BLOCKS[n.kind].title : id;
 }
 
 let running = false;
-async function runNow(why = '') {
-  if (running) return;
+async function runNow(why = '', opts = {}) {
+  if (running) { if (opts.quiet) liveSoon(); return; }
   running = true;
   $('runIt').disabled = true;
   $('out').textContent = '';
   S.shown.clear();
+  S.seen.clear();
   S.failed = undefined;
   $('runState').textContent = `${why ? `${why}、` : ''}動かしています…`;
   const t0 = performance.now();
-  const got = S.view === 'flow' ? await runWorkflow(S.workflow, runtime) : await run(S.graph, runtime);
+  const got = S.view !== 'graph' ? await runWorkflow(S.workflow, runtime) : await run(S.graph, runtime);
   const ms = Math.round(performance.now() - t0);
   if (got.ok) $('runState').textContent = `終わりました（${ms} ミリ秒）`;
   else {
@@ -623,7 +844,9 @@ async function runNow(why = '') {
   }
   running = false;
   $('runIt').disabled = false;
-  renderBody();
+  // 文章の形では、書いている欄を消さないよう、結果の所だけを書き換える
+  if (S.view === 'text') updateLive();
+  else renderBody();
 }
 
 /* ---------- 保存・開く ---------- */
@@ -672,27 +895,33 @@ async function open() {
 }
 
 /* ---------- 見方と向き ---------- */
+const VIEW_NOTES = { graph: 'つなぐ形にしました。中身は同じです', flow: '手順の形にしました。中身は同じです', text: '文章の形にしました。中身は同じです。上から順に読めます' };
 function setView(v) {
-  if (v === S.view) return;
-  if (v === 'flow') {
+  if (v === S.view || !VIEWS.includes(v)) return;
+  if (v !== 'graph' && S.view !== 'graph') {
+    // 手順の形と文章の形は、同じ中身の別の見せ方。そのまま切り替える
+  } else if (v !== 'graph') {
     const got = graphToWorkflow(S.graph, S.workflow.trigger);
     if (!got.workflow) { note(got.why); return; }
     S.workflow = got.workflow;
   } else {
     const got = workflowToGraph(S.workflow);
     if (!got.graph) { note(got.why); return; }
-    S.graph = autoLayout(got.graph, S.dir);
+    S.graph = autoLayout(got.graph, S.dir, { width: $('stage').clientWidth || 1600 });
   }
   S.view = v;
   S.shown.clear();
+  S.seen.clear();
   S.failed = undefined;
   remember();
   renderAll();
-  note(v === 'flow' ? '手順の形にしました。中身は同じです' : 'つなぐ形にしました。中身は同じです');
+  note(VIEW_NOTES[v]);
+  if (v === 'text') liveSoon();
 }
 
 async function setDir(d, save = true) {
-  if (!isDirection(d)) return;
+  d = normalizeDirection(d);
+  if (!d) return;
   S.dir = d;
   if (save) await api('/api/blocks/direction', { method: 'PUT', body: JSON.stringify({ direction: d }) }).catch(() => undefined);
   renderAll();
@@ -700,15 +929,20 @@ async function setDir(d, save = true) {
 
 function renderBody() {
   if (S.view === 'flow') renderFlow();
+  else if (S.view === 'text') renderText();
   else renderGraph();
 }
 
 function renderAll() {
   for (const b of document.querySelectorAll('[data-view]')) b.setAttribute('aria-pressed', String(b.dataset.view === S.view));
   for (const b of document.querySelectorAll('[data-dir]')) b.setAttribute('aria-pressed', String(b.dataset.dir === S.dir));
-  $('stage').hidden = S.view === 'flow';
+  $('stage').hidden = S.view !== 'graph';
   $('flow').hidden = S.view !== 'flow';
-  $('tidy').disabled = S.view === 'flow';
+  $('text').hidden = S.view !== 'text';
+  // 見えていない形の中身は空にする（同じ id が二つ出来ないように）
+  if (S.view !== 'flow') $('flow').textContent = '';
+  if (S.view !== 'text') $('text').textContent = '';
+  $('tidy').disabled = S.view !== 'graph';
   renderBody();
   renderCode();
   updateUndo();
@@ -732,7 +966,7 @@ async function aiBuild() {
   const json = /\{[\s\S]*\}/.exec(r.body.text ?? '')?.[0] ?? '';
   const got = parseGraph(json);
   if (!got.graph.nodes.length) { note(`組めませんでした（返ってきた形を読めません）: ${got.problems[0] ?? ''}`); return; }
-  S.graph = autoLayout(got.graph, S.dir);
+  S.graph = autoLayout(got.graph, S.dir, { width: $('stage').clientWidth });
   S.view = 'graph';
   remember();
   renderAll();
@@ -750,7 +984,7 @@ $('openOne').onclick = () => void open();
 $('newOne').onclick = () => { S.pan = { x: 0, y: 0 }; S.zoom = 1; S.graph = emptyGraph(); S.workflow = emptyWorkflow(); S.fileName = ''; S.shown.clear(); S.failed = undefined; remember(); renderAll(); armTrigger(); note('空にしました（↶ で戻せます）'); };
 $('undo').onclick = doUndo;
 $('redo').onclick = doRedo;
-$('tidy').onclick = () => { autoLayout(S.graph, S.dir); remember(); fitView(); renderGraph(); note(`${DIRECTIONS[S.dir].title}に並べ直しました（中身は同じです）`); };
+$('tidy').onclick = () => { autoLayout(S.graph, S.dir, { width: $('stage').clientWidth }); remember(); fitView(); renderGraph(); note(`${DIRECTIONS[S.dir].title}に並べ直しました（中身は同じです）`); };
 $('aiBuild').onclick = () => void aiBuild();
 $('copyCode').onclick = async () => {
   const text = wrapForNode(currentCode().code);
@@ -768,8 +1002,9 @@ $('sample').onchange = () => {
   $('sample').value = '';
   if (!v) return;
   S.shown.clear();
+  S.seen.clear();
   S.failed = undefined;
-  if (v === 'umbrella') { S.workflow = sampleUmbrella(); S.view = 'flow'; } else { S.graph = autoLayout(v === 'fizz' ? sampleFizzBuzz() : sampleHello(), S.dir); S.view = 'graph'; }
+  if (v === 'umbrella') { S.workflow = sampleUmbrella(); S.view = 'flow'; } else { S.graph = autoLayout(v === 'fizz' ? sampleFizzBuzz() : sampleHello(), S.dir, { width: $('stage').clientWidth || 1600 }); S.view = 'graph'; }
   remember();
   renderAll();
   if (S.view === 'graph') { fitView(); applyView(); }
@@ -792,7 +1027,7 @@ document.addEventListener('keydown', (e) => {
 
 (async () => {
   const r = await api('/api/blocks/direction').catch(() => ({ body: {} }));
-  if (isDirection(r.body.direction)) S.dir = r.body.direction;
+  S.dir = normalizeDirection(r.body.direction) ?? S.dir;
   remember();
   renderAll();
 })();

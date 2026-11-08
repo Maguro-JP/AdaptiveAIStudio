@@ -7,12 +7,20 @@ export interface Graph { version: number; nodes: Node[]; links: Link[] }
 export interface Step { id: string; kind: string; values: Record<string, any>; body?: Step[]; yes?: Step[]; no?: Step[] }
 export interface Workflow { version: number; trigger: { kind: string; time?: string; folder?: string }; steps: Step[] }
 export interface Problem { node: string; message: string }
-export interface Runtime { show: (v: unknown, id: string) => void; at?: (id: string) => void; readFile?: (n: string) => Promise<string>; writeFile?: (n: string, t: string) => Promise<void>; weather?: (p: string, d: number) => Promise<{ text: string; rain: boolean }>; ask?: (p: string) => Promise<string> }
+export interface Runtime { show: (v: unknown, id: string) => void; at?: (id: string) => void; readFile?: (n: string) => Promise<string>; writeFile?: (n: string, t: string) => Promise<void>; weather?: (p: string, d: number) => Promise<{ text: string; rain: boolean }>; ask?: (p: string) => Promise<string>; seen?: (id: string, v: unknown) => void }
 export interface RunResult { ok: boolean; node?: string; message?: string }
 export const TYPES: Record<PortType, { label: string }>;
 export const BLOCKS: Record<string, any>;
 export const TRIGGERS: Record<string, { title: string }>;
-export const DIRECTIONS: Record<'ltr' | 'ttb' | 'diag', { title: string; out: string; in: string }>;
+export const DIRECTIONS: Record<'ltr' | 'ttb' | 'wrap', { title: string; out: string; in: string }>;
+export const COMPARE_WORDS: Record<string, string>;
+export const WHEN_FIELDS: { name: string; label: string; type: PortType; default: unknown }[];
+export const WHEN_OP: { name: string; label: string; kind: string; choices: string[]; default: string };
+export const VIEWS: string[];
+export const WRAP_STEP: { x: number; y: number };
+export function isBranch(kind: string): boolean;
+export function normalizeDirection(d: unknown): 'ltr' | 'ttb' | 'wrap' | undefined;
+export function readingOrder(g: Graph): Node[];
 export function canConnect(from: string, to: string): { ok: boolean; why?: string };
 export function portOf(kind: string, side: 'in' | 'out', name: string): any;
 export function makeNode(kind: string, id: string, x?: number, y?: number): Node;
@@ -42,9 +50,9 @@ export function graphToWorkflow(g: Graph, trigger?: Workflow['trigger']): { work
 export function workflowToGraph(wf: Workflow): { graph?: Graph; why?: string; node?: string };
 export function dailyDue(time: string, now?: Date): boolean;
 export function serializeFile(g: Graph, wf: Workflow | undefined, view: string): string;
-export function parseFile(text: string): { graph: Graph; workflow?: Workflow; view: 'graph' | 'flow'; problems: string[] };
+export function parseFile(text: string): { graph: Graph; workflow?: Workflow; view: 'graph' | 'flow' | 'text'; problems: string[] };
 export function isDirection(d: unknown): boolean;
-export function autoLayout(g: Graph, dir?: string): Graph;
+export function autoLayout(g: Graph, dir?: string, opts?: { width?: number }): Graph;
 export function sampleFizzBuzz(): Graph;
 export function sampleHello(): Graph;
 export function sampleUmbrella(): Workflow;

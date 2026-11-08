@@ -137,21 +137,35 @@ const CHECKS = [
   },
   {
     id: 'blocks-direction-same-output',
-    what: '向きを 上から下・左上から右下・左から右 に変えて 整える。どの向きでも同じ JavaScript、同じ結果',
+    what: '向きを 上から下・左上から右（折り返し）・左から右 に変えて 整える。どの向きでも同じ JavaScript、同じ結果。折り返しは読む順に並び、前に覚えた diag は wrap として読む',
     async run() {
       const code0 = await page.locator('#code').innerText();
       const seen = [];
-      for (const [dir, file] of [['ttb', 'blocks-ttb.png'], ['diag', 'blocks-diag.png'], ['ltr', 'blocks-ltr.png']]) {
+      for (const [dir, file] of [['ttb', 'blocks-ttb.png'], ['wrap', 'blocks-wrap.png'], ['ltr', 'blocks-ltr.png']]) {
         await page.click(`[data-dir="${dir}"]`);
         await page.click('#tidy');
         const got = await runAndRead();
         await shot(file);
+        if (dir === 'wrap') {
+          // 読む順: 次のブロックは、同じ段なら右、そうでなければ下の段の左端
+          const boxes = await page.locator('.bk-node').evaluateAll((els) => els.map((e) => ({ id: e.dataset.id, x: e.offsetLeft, y: e.offsetTop })));
+          const at = new Map(boxes.map((b) => [b.id, b]));
+          const order = ['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8', 'n9', 'n10', 'n11'].map((id) => at.get(id));
+          const rows = new Set(order.map((b) => b.y)).size;
+          const bad = order.slice(1).find((b, i) => !((b.y === order[i].y && b.x > order[i].x) || (b.y > order[i].y && b.x === order[0].x)));
+          if (bad || rows < 2) return { ok: false, why: `折り返し: 段 ${rows}、読む順に逆らうブロック ${bad?.id ?? 'なし'}` };
+        }
         const code = await page.locator('#code').innerText();
         const saved = (await api('/api/blocks/direction')).direction;
         if (!same(got.lines, FIZZ) || code !== code0 || saved !== dir) return { ok: false, why: `${dir}: 出た ${got.lines.join(',')}、JavaScript ${code === code0 ? '同じ' : '違う'}、覚えた向き ${saved}` };
         seen.push(dir);
       }
-      return { ok: true, why: `${seen.join('・')} で同じ結果・同じ JavaScript。向きは設定に覚えた` };
+      // 前の名前（diag）で覚えた人の設定は、折り返しとして読む
+      await api('/api/blocks/direction', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ direction: 'diag' }) });
+      const migrated = (await api('/api/blocks/direction')).direction;
+      await api('/api/blocks/direction', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ direction: 'ltr' }) });
+      if (migrated !== 'wrap') return { ok: false, why: `diag を覚えさせると ${migrated} が返った（wrap のはず）` };
+      return { ok: true, why: `${seen.join('・')} で同じ結果・同じ JavaScript。向きは設定に覚えた。折り返しは読む順に並んだ。diag は wrap として読んだ` };
     },
   },
   {
@@ -210,6 +224,38 @@ const CHECKS = [
       const want = rain ? '傘を持って' : '傘はいらない';
       return same(got.lines, [want]) ? { ok: true, why: `予報は ${weatherGroup(truth.weather.code)}（code ${truth.weather.code}）、出た: ${got.lines.join(',')}` }
         : { ok: false, why: `予報は ${weatherGroup(truth.weather.code)}（code ${truth.weather.code}）なので「${want}」のはず。出た: ${got.lines.join(',')}（${got.state}）` };
+    },
+  },
+  {
+    id: 'text-fizzbuzz-by-hand',
+    what: '文章の形で、空から「1 から 15 まで数えて、その数が 15 で割り切れたら FizzBuzz…」を押して組み、行の横の結果と ▶ 動かす の結果が 1〜15 の FizzBuzz になる',
+    async run() {
+      await page.click('#newOne');
+      await page.click('#viewText');
+      const menuPick = async (text) => page.locator('.bk-menu button', { hasText: text }).first().click();
+      const addIn = async (id, branch, text) => { await page.locator(`[data-add-in="${id}"][data-branch="${branch}"]`).click(); await menuPick(text); };
+      const slotIn = (id, name) => `#text [data-step="${id}"] [data-slot="${name}"]`;
+      let clicks = 2;
+      await page.click('#addLine'); await menuPick('くり返す'); clicks += 2;
+      await typeIn(slotIn('s1', 'to'), 15); clicks += 1;
+      await addIn('s1', 'body', '割り切れたら'); clicks += 2;
+      await typeIn(slotIn('s2', 'b'), 15); clicks += 1;
+      await addIn('s2', 'yes', '表示'); await typeIn(slotIn('s3', 'value'), 'FizzBuzz'); clicks += 3;
+      await addIn('s2', 'no', '割り切れたら'); clicks += 2; // B は 3 のまま
+      await addIn('s4', 'yes', '表示'); await typeIn(slotIn('s5', 'value'), 'Fizz'); clicks += 3;
+      await addIn('s4', 'no', '割り切れたら'); await typeIn(slotIn('s6', 'b'), 5); clicks += 3;
+      await addIn('s6', 'yes', '表示'); await typeIn(slotIn('s7', 'value'), 'Buzz'); clicks += 3;
+      await addIn('s6', 'no', '表示'); clicks += 2;
+      await page.locator('#text [data-step="s8"] [data-pick="value"]').click(); await menuPick('その数'); clicks += 2;
+      // 変えるとすぐ動かし直す。行の横に結果が出るのを待つ
+      await page.waitForFunction(() => /はい 1 回/.test(document.querySelector('#text [data-step="s2"] .bk-live')?.textContent ?? ''), null, { timeout: 15_000 });
+      const live = await page.locator('#text [data-step="s2"] .bk-live').innerText();
+      await page.waitForTimeout(500);
+      const got = await runAndRead();
+      await shot('text-fizzbuzz.png');
+      const sentence = await page.locator('#text [data-step="s2"] .bk-sentence').innerText();
+      const ok = same(got.lines, FIZZ) && /もし/.test(sentence) && /割り切れる/.test(sentence);
+      return { ok, why: `出た: ${got.lines.join(',')}（${got.state}）。s2 の文「${sentence.replace(/\s+/g, ' ')}」、横の結果「${live}」。押した数 ${clicks}` };
     },
   },
 ];

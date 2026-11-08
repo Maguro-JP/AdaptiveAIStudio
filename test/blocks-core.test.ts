@@ -8,7 +8,7 @@ import {
   BLOCKS, canConnect, connect, makeNode, emptyGraph, compile, run, serialize, parseGraph, removeNodes, duplicateNodes,
   makeHistory, searchBlocks, exportScript, sampleFizzBuzz, sampleHello, sampleUmbrella, runWorkflow, compileWorkflow,
   graphToWorkflow, workflowToGraph, availableOutputs, makeStep, emptyWorkflow, serializeFile, parseFile, autoLayout,
-  dailyDue, graphFormatGuide, type Graph,
+  dailyDue, graphFormatGuide, normalizeDirection, readingOrder, COMPARE_WORDS, WRAP_STEP, type Graph, type Workflow,
 } from '../src/ui/web/blocks-core.js';
 
 const FIZZ = '1,2,Fizz,4,Buzz,Fizz,7,8,Fizz,Buzz,11,Fizz,13,14,FizzBuzz';
@@ -196,20 +196,126 @@ describe('手順の形', () => {
 
 describe('向き（表示だけ。中身は変えない）', () => {
   const pos = (g: Graph) => new Map(g.nodes.map((n) => [n.id, n]));
-  for (const dir of ['ltr', 'ttb', 'diag'] as const) {
+  for (const dir of ['ltr', 'ttb'] as const) {
     test(`${dir}: 整えると、線はすべて向きに沿って進む`, () => {
       const g = autoLayout(sampleFizzBuzz(), dir);
       const at = pos(g);
       for (const l of g.links) {
         const a = at.get(l.from.node)!;
         const b = at.get(l.to.node)!;
-        if (dir !== 'ttb') assert.ok(b.x > a.x, `${l.from.node}→${l.to.node} の x`);
-        if (dir !== 'ltr') assert.ok(b.y > a.y, `${l.from.node}→${l.to.node} の y`);
+        if (dir === 'ltr') assert.ok(b.x > a.x, `${l.from.node}→${l.to.node} の x`);
+        if (dir === 'ttb') assert.ok(b.y > a.y, `${l.from.node}→${l.to.node} の y`);
       }
     });
   }
+  // 左上から右（折り返し）: 文字を読む順。同じ段なら右へ、幅に届いたら次の段の左へ
+  for (const width of [1900, 900, 300]) {
+    test(`wrap（幅 ${width}）: 読む順に並び、線は同じ段なら右へ、そうでなければ下の段へ進む`, () => {
+      const g = autoLayout(sampleFizzBuzz(), 'wrap', { width });
+      const at = pos(g);
+      const order = readingOrder(g);
+      const perRow = Math.max(1, Math.floor((Math.max(width, WRAP_STEP.x) - 40) / WRAP_STEP.x));
+      order.forEach((n, i) => {
+        if (i === 0) { assert.equal(n.x, 40); assert.equal(n.y, 40); return; }
+        const prev = order[i - 1]!;
+        const sameRow = n.y === prev.y && n.x > prev.x;
+        const nextRow = n.y === prev.y + WRAP_STEP.y && n.x === 40;
+        assert.ok(sameRow || nextRow, `${prev.id}→${n.id}: (${prev.x},${prev.y})→(${n.x},${n.y})`);
+        assert.equal(sameRow, i % perRow !== 0, `${n.id} の折り返し`);
+        assert.ok(n.x + 200 <= Math.max(width, WRAP_STEP.x + 40), `${n.id} が幅からはみ出す`);
+      });
+      for (const l of g.links) {
+        const a = at.get(l.from.node)!;
+        const b = at.get(l.to.node)!;
+        assert.ok(b.y > a.y || (b.y === a.y && b.x > a.x), `${l.from.node}→${l.to.node} が読む順に逆らう`);
+      }
+    });
+  }
+  test('前の「左上から右下」（diag）は、左上から右（折り返し）として読む', () => {
+    assert.equal(normalizeDirection('diag'), 'wrap');
+    assert.equal(normalizeDirection('wrap'), 'wrap');
+    assert.equal(normalizeDirection('ltr'), 'ltr');
+    assert.equal(normalizeDirection('zigzag'), undefined);
+    const g = autoLayout(sampleFizzBuzz(), 'diag', { width: 900 });
+    const w = autoLayout(sampleFizzBuzz(), 'wrap', { width: 900 });
+    assert.deepEqual(g.nodes.map((n) => [n.x, n.y]), w.nodes.map((n) => [n.x, n.y]));
+  });
   test('向きを変えても、作る JavaScript は同じ', () => {
     const base = compile(sampleFizzBuzz()).code;
-    for (const dir of ['ltr', 'ttb', 'diag']) assert.equal(compile(autoLayout(sampleFizzBuzz(), dir)).code, base, dir);
+    for (const dir of ['ltr', 'ttb', 'wrap']) assert.equal(compile(autoLayout(sampleFizzBuzz(), dir)).code, base, dir);
+  });
+});
+
+/** 文章の形で押して組むのと同じ FizzBuzz（比べて分かれる手順 when を入れ子に） */
+function fizzWhen(): Workflow {
+  const wf = emptyWorkflow();
+  const r = makeStep('repeat', 's1');
+  r.values.to = 15;
+  const each = { ref: 's1', port: 'each' };
+  const when = (id: string, b: number, yes: string, no: ReturnType<typeof makeStep>[]) => {
+    const w = makeStep('when', id);
+    Object.assign(w.values, { a: each, op: '割り切れる', b });
+    const s = makeStep('show', `${id}y`);
+    s.values.value = yes;
+    w.yes!.push(s);
+    w.no!.push(...no);
+    return w;
+  };
+  const last = makeStep('show', 's8');
+  last.values.value = each;
+  r.body!.push(when('s2', 15, 'FizzBuzz', [when('s4', 3, 'Fizz', [when('s6', 5, 'Buzz', [last])])]));
+  wf.steps.push(r);
+  return wf;
+}
+
+describe('文章の形（手順の形と同じ中身）', () => {
+  test('比べて分かれる手順（when）を入れ子にした FizzBuzz が 1〜15 を正しく出す', async () => {
+    const out: unknown[] = [];
+    const got = await runWorkflow(fizzWhen(), { show: (v) => out.push(v) });
+    assert.equal(got.ok, true, got.message);
+    assert.equal(out.join(','), FIZZ);
+  });
+  test('「割り切れる」は A % B === 0 になる。読み方は「で割り切れる」', () => {
+    assert.match(compileWorkflow(fizzWhen()).code, /v_s1_each % 15 === 0/);
+    assert.equal(COMPARE_WORDS['割り切れる'], 'で割り切れる');
+    const g = emptyGraph();
+    const c = makeNode('compare', 'c');
+    Object.assign(c.values, { a: 9, op: '割り切れる', b: 3 });
+    g.nodes.push(c);
+    assert.match(compile(g).code, /9 % 3 === 0/);
+  });
+  test('動かすと、行ごとの値（はい・いいえの回数、最後の値）を rt.seen で受け取れる', async () => {
+    const seen = new Map<string, unknown[]>();
+    await runWorkflow(fizzWhen(), { show: () => undefined, seen: (id, v) => { seen.set(id, [...(seen.get(id) ?? []), v]); } });
+    const s2 = seen.get('s2')!;
+    assert.equal(s2.length, 15);
+    assert.equal(s2.filter((v) => v === true).length, 1);
+    assert.equal(seen.get('s4')!.filter((v) => v === true).length, 4);
+  });
+  test('保存して読み直しても文章の形のまま、同じ中身', async () => {
+    const text = serializeFile(emptyGraph(), fizzWhen(), 'text');
+    const got = parseFile(text);
+    assert.deepEqual(got.problems, []);
+    assert.equal(got.view, 'text');
+    assert.deepEqual(got.workflow, fizzWhen());
+    const out: unknown[] = [];
+    await runWorkflow(got.workflow!, { show: (v) => out.push(v) });
+    assert.equal(out.join(','), FIZZ);
+  });
+  test('比べて分かれる手順は、つなぐ形では表せないと言う（条件の手順と同じ）', () => {
+    const got = workflowToGraph(fizzWhen());
+    assert.equal(got.graph, undefined);
+    assert.equal(got.node, 's2');
+  });
+  test('一覧ブロックは、空の欄を入れずに並べる（前は名前の無い変数を見て落ちた）', async () => {
+    const g = emptyGraph();
+    const l = makeNode('list', 'l');
+    Object.assign(l.values, { a: 'りんご', b: '' , c: 'みかん' });
+    g.nodes.push(l, makeNode('show', 's'));
+    connect(g, { node: 'l', port: 'out' }, { node: 's', port: 'value' });
+    const out: unknown[] = [];
+    const got = await run(g, { show: (v) => out.push(v) });
+    assert.equal(got.ok, true, got.message);
+    assert.deepEqual(out, [['りんご', 'みかん']]);
   });
 });
