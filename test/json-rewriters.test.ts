@@ -17,6 +17,7 @@ const root = join(import.meta.dirname, '..');
 
 /** 自分で読み書きを持っているファイルと、その理由（どこで確かめたか）。 */
 const OWN_HANDLING: Record<string, string> = {
+  'src/ui/web/blocks-core.js': '画面の中の .blocks.json を読むだけで、ファイルへは書き戻さない（書くのは /api/file の手保存。読めない形は外して何を外したか言う。test/blocks-core.test.ts）',
   'src/agent/code-index.ts': '作り直せる索引。読めなければ作り直す（利用者のデータではない。書くのは一時ファイルを通さないが、壊れても作り直す）',
   'src/agent/proposals.ts': '一件の null で止まらない・読めないときは書かない・保存の直前に合わせる（#73、test/proposals-safety.test.ts）',
   'src/core/conversations.ts': '追記式。壊れた行は飛ばす。消すときは trash へ移す（#63・#91）',
