@@ -75,6 +75,10 @@ on:
         description: 'setup.exe を Windows に入れ、ブロックでつくる画面を押して FizzBuzz と傘の手順を組み、動かした結果を見る（scripts/check-blocks.mjs の全部）。これだけを回す'
         type: boolean
         default: false
+      phone:
+        description: '配る形を Linux で組み、本物の小さなモデルを置いて起こし、PC の画面で「スマホから使う」を入れ、スマホの見立て（iPhone）で合言葉を入れて繋ぎ、頼んだ答えが出るかを見る（scripts/check-phone.mjs の全部）。これだけを回す'
+        type: boolean
+        default: false
       without_network:
         description: 'user と一緒に使う。ネットワークから取りに行かずに起こし、新しい API の頼みが落ちることを見る（成果物 5 の対照）'
         type: boolean
@@ -89,7 +93,7 @@ on:
 # 途中の版が通ったかどうかは、結局いらない。
 concurrency:
   # `real`（有料で長い）は別の組にする。同じ枝への push や週一の回で打ち切られないように。
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.real && 'real' || inputs.user && (inputs.without_network && 'user-offline' || 'user') || inputs.work && 'work' || inputs.blocks && 'blocks' || 'ci' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.real && 'real' || inputs.user && (inputs.without_network && 'user-offline' || 'user') || inputs.work && 'work' || inputs.blocks && 'blocks' || inputs.phone && 'phone' || 'ci' }}
   cancel-in-progress: true
 
 # 2026-10-18 に public になり、標準のランナーは無料になった。claude/ の枝の PR でも回す
@@ -105,7 +109,7 @@ jobs:
     name: ubuntu-latest / Node 22.x
     # 本物の重みだけを頼んだ回では回さない（枠を使わない）。
     if: >-
-      (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user && !inputs.work && !inputs.blocks))
+      (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user && !inputs.work && !inputs.blocks && !inputs.phone))
       && !(github.event.action == 'opened' && github.event.pull_request.draft == true)
     runs-on: ubuntu-latest
     # 暴走した1本で枠を溶かさない。手元では3分ほど。
@@ -140,7 +144,7 @@ jobs:
     name: windows-latest / Node 24.x
     if: >-
       (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-      && (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user && !inputs.work && !inputs.blocks))
+      && (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user && !inputs.work && !inputs.blocks && !inputs.phone))
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -172,7 +176,7 @@ jobs:
   # だから PR では回さない。**手で頼んだときと、週に一度だけ。**
   bundle:
     name: bundle / Windows
-    if: github.event_name != 'pull_request' && !inputs.real && !inputs.user && !inputs.work && !inputs.blocks
+    if: github.event_name != 'pull_request' && !inputs.real && !inputs.user && !inputs.work && !inputs.blocks && !inputs.phone
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -396,6 +400,40 @@ jobs:
         if: always()
         with:
           name: blocks-shots
+          path: shots
+          retention-days: 7
+
+  # スマホから使う（docs/PHONE.md）の確かめ。配る形を組み、本物の小さなモデルで、PC の画面とスマホの見立てを押して見る（足すだけ。絞らない）。
+  # LAN の口は 127.0.0.2 に開ける（ランナーに私用の範囲の住所があるとは限らないため。関所の確かめとしては同じ）
+  phone:
+    name: phone / ubuntu-latest
+    if: inputs.phone
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      - run: npm ci --no-audit --no-fund
+      - name: モデルを読む側を入れる（Linux）
+        run: npm i --no-save --no-audit --no-fund node-llama-cpp @node-llama-cpp/linux-x64
+      - name: 配る形を組む
+        run: npm run bundle
+      - name: 本物の小さなモデルを置く
+        run: |
+          mkdir -p "$RUNNER_TEMP/llm/gguf"
+          curl -fL --retry 3 -o "$RUNNER_TEMP/llm/gguf/Qwen3-0.6B-Q4_K_M.gguf" "https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_K_M.gguf"
+      - name: 画面を押す部品を入れる
+        run: npm i --no-save --no-audit --no-fund playwright-core
+      - name: スマホから繋いで、頼んで、答えが出るか
+        env:
+          LLM_HOME: ${{ runner.temp }}/llm
+        run: node scripts/check-phone.mjs --start "sh dist/AdaptiveAIStudio/app/start.sh ui" --port 4177 --work "$RUNNER_TEMP/phone" --shots shots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phone-shots
           path: shots
           retention-days: 7
 
