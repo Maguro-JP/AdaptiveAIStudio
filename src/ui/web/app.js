@@ -2501,7 +2501,48 @@ function fillSection(name) {
   if (name === 'info') { void loadInfo(); void showReport(); return; }
   if (name === 'model') { void loadCfg(); void loadCatalog(); return; }
   if (name === 'mcp') { void loadMcpCatalog(); void loadMcp(); void loadAcks(); }
+  if (name === 'phone') void loadPhone();
 }
+
+/* ---------- スマホから使う（docs/PHONE.md） ---------- */
+
+/** 入れているか・どこに開いているか・パスフレーズと QR を出す。押した結果はすぐ下の行に出す。 */
+function drawPhone(d) {
+  $('phoneOn').checked = Boolean(d.enabled);
+  const status = $('phoneStatus');
+  status.className = d.problem ? 'repairs' : 'dim';
+  status.textContent = d.problem
+    || (d.enabled ? (d.listening ? 'LAN に開いています。スマホから繋げます' : '開けませんでした') : '入れていません（LAN には開いていません）');
+  $('phoneBox').hidden = !(d.enabled && d.listening);
+  if (d.urls?.length) $('phoneUrl').textContent = d.urls.join('\n');
+  if (d.passphrase !== undefined) $('phonePass').textContent = d.passphrase;
+  // 本体が組んだ SVG を、絵として出す（HTML として流し込まない）
+  if (d.qr) $('phoneQr').src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(d.qr)}`;
+}
+
+async function loadPhone() {
+  try { drawPhone(await getJson('/api/phone')); } catch (e) { $('phoneStatus').textContent = `読めませんでした: ${e.message}`; }
+}
+
+$('phoneOn').onchange = async () => {
+  const on = $('phoneOn').checked;
+  $('phoneStatus').textContent = on ? 'LAN に開いています…' : '閉じています…';
+  try {
+    await getJson('/api/phone', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: on }) });
+    await loadPhone();
+  } catch (e) {
+    $('phoneOn').checked = !on;
+    $('phoneStatus').textContent = `変えられませんでした: ${e.message}`;
+  }
+};
+
+$('phoneRegen').onclick = async () => {
+  try {
+    await getJson('/api/phone/regenerate', { method: 'POST' });
+    await loadPhone();
+    $('phoneStatus').textContent = 'パスフレーズを作り直しました。繋いでいたスマホは、新しいパスフレーズで繋ぎ直してください';
+  } catch (e) { $('phoneStatus').textContent = `作り直せませんでした: ${e.message}`; }
+};
 
 /**
  * この作業場で了解した警告。
@@ -2594,7 +2635,8 @@ $('makeReport').onclick = () => void makeReport();
 
 // 天気の場所。開いたときに今の値を入れ、保存（Enter でも）で書いて、書けたかをその場で言う
 async function showLocation() {
-  const r = await json('/api/location');
+  // ここは commands() の中だけにある json() を呼んでいて、設定を開くたびに落ちていた（check-phone の pageerror で見つけた）
+  const r = await getJson('/api/location').catch(() => null);
   if (r?.location !== undefined) $('locationInput').value = r.location;
 }
 async function saveLocationNow() {

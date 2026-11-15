@@ -76,6 +76,8 @@ import { TaskRunner } from './tasks.ts';
 import { describeServers, deliverableCount } from '../mcp/tools.ts';
 import { listenOrExplain } from '../core/listen.ts';
 import { crossSiteReason } from './origin.ts';
+import { PhoneAccess, isLoopback, isPrivateAddress, canListenOn, lanAddresses, openWithoutToken, cookieFor } from './phone.ts';
+import { qrSvg } from './qr.ts';
 import {
   RUNTIME_KINDS, KIND_LABELS, isRuntimeKind, readSavedRuntime, saveRuntime,
   inspectModelsDir, ensureDefaultModelsDir, savedModelsDir, unquotePath, readSavedMcpServers,
@@ -115,6 +117,7 @@ const TYPES: Record<string, string> = {
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
 
 /**
@@ -202,6 +205,13 @@ export interface UiServerOptions {
   config: AasConfig;
   port?: number;
   host?: string;
+  /**
+   * スマホから使うときに開ける LAN の住所（docs/PHONE.md）。既定はこの PC の私用の範囲の住所（`AAS_PHONE_ADDRESS` で名指しもできる）。
+   * 試験では 127.0.0.1 を渡す（ネットワークの形に頼らないため）。私用の範囲と自分の機械の中のほかは開けない。
+   */
+  phoneAddresses?: string[];
+  /** LAN の口の番号。既定は画面の口と同じ番号。試験では 0（空いているもの）。 */
+  phonePort?: number;
 }
 
 /** 画面へ流す出来事。CLI 側から呼んで、動いているものを見せる。 */
@@ -306,6 +316,13 @@ export class UiServer {
   /** 立ち上げた時刻。やめたやり残しのうち、これより後の分を「戻す」に並べる */
   readonly #bootAt = Date.now();
   #server?: ReturnType<typeof createServer>;
+  /** スマホから使うときのパスフレーズとトークン（docs/PHONE.md）。立ち上げで読む。 */
+  #phone?: PhoneAccess;
+  /** LAN に開けた口。閉じているときは空。 */
+  #phoneServers: Array<ReturnType<typeof createServer>> = [];
+  /** LAN に開けた住所と番号（スマホに見せる URL を組むため）。 */
+  #phoneWhere: Array<{ host: string; port: number }> = [];
+  #phoneProblem = '';
   /** 点検を回す係。状態（走っている子）はそちらが持つ。 */
   /** 記録をファイルにも残す。困ったときの報告に、ここから直近を入れる。 */
   readonly #logFile = new LogFile(join(stateDir(), 'logs', 'ui.log'));
@@ -615,20 +632,15 @@ export class UiServer {
   async start(): Promise<string> {
     const host = this.#opts.host ?? '127.0.0.1';
     const port = this.#opts.port ?? 4174;
-    const server = createServer((req, res) => {
-      this.#handle(req, res).catch((e: unknown) => {
-        // 画面の不具合で本体を落とさない。
-        if (e instanceof BodyTooLarge) return refuseTooLarge(res, e.message);
-        if (e instanceof HandWriteRefused) return send(res, e.status, { error: e.message, ...e.extra });
-        send(res, 500, { error: e instanceof Error ? e.message : String(e) });
-      });
-    });
+    const server = createServer((req, res) => this.#serve(req, res, false));
     this.#server = server;
 
     // 0 を渡すと空いている口を選ぶ。実際に決まった番号を使う。
     // 塞がっていたら、番号だけでなく**次の一手**まで言う。
     const actual = await listenOrExplain(server, { port, host, what: '画面' });
     this.#url = `http://${host}:${actual}/`;
+    this.#phone = await PhoneAccess.load(join(stateDir(), 'phone.json'));
+    if (this.#phone.enabled) await this.#openPhone();
     await this.#pickInProcPort();
     // 前に消した会話を本当に消す。消した直後は「戻す」で戻せるよう `trash/` に移してあるだけ（`Conversations.remove`）。
     void this.#conversations.purgeTrash().then((n) => {
@@ -1317,21 +1329,137 @@ export class UiServer {
     this.#clients.clear();
     // 開いたままの繋ぎ（keep-alive）も切る。close() は新しい繋ぎを断るだけで、
     // 残っている繋ぎが終わるまで返らない。
+    await timed('LAN の口を閉じるの', () => this.#closePhone());
     this.#server?.closeAllConnections?.();
     await timed('口を閉じるの', () => new Promise<void>((resolve) => this.#server?.close(() => resolve()) ?? resolve()));
   }
 
-  async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  /** 受けた要求を捌く。画面の不具合で本体を落とさない。`viaPhone` は LAN の口から来たもの。 */
+  #serve(req: IncomingMessage, res: ServerResponse, viaPhone: boolean): void {
+    this.#handle(req, res, viaPhone).catch((e: unknown) => {
+      if (e instanceof BodyTooLarge) return refuseTooLarge(res, e.message);
+      if (e instanceof HandWriteRefused) return send(res, e.status, { error: e.message, ...e.extra });
+      send(res, 500, { error: e instanceof Error ? e.message : String(e) });
+    });
+  }
+
+  /** スマホに見せる URL（パスフレーズは # の後ろに置く。# の後ろは送られないので、記録にも残らない）。 */
+  #phoneUrls(): string[] {
+    return this.#phoneWhere.map((w) => `http://${w.host.includes(':') ? `[${w.host}]` : w.host}:${w.port}/phone.html`);
+  }
+
+  /** LAN に口を開ける。私用の範囲の住所だけ。開けなかった理由は設定の画面に出す。 */
+  async #openPhone(): Promise<void> {
+    await this.#closePhone();
+    const named = process.env['AAS_PHONE_ADDRESS']?.split(',').map((s) => s.trim()).filter(Boolean);
+    const wanted = this.#opts.phoneAddresses ?? named ?? lanAddresses();
+    const refused = wanted.filter((a) => !canListenOn(a));
+    const usable = wanted.filter((a) => canListenOn(a));
+    this.#phoneProblem = refused.length ? `公の住所には開けません: ${refused.join(', ')}` : '';
+    if (usable.length === 0) {
+      this.#phoneProblem ||= 'この PC に LAN の住所が見つかりません（Wi-Fi か有線に繋がっているか見てください）';
+      return;
+    }
+    const mainPort = Number(new URL(this.#url).port);
+    for (const host of usable) {
+      const s = createServer((req, res) => this.#serve(req, res, true));
+      try {
+        const port = await listenOrExplain(s, { port: this.#opts.phonePort ?? mainPort, host, what: 'スマホ用' });
+        this.#phoneServers.push(s);
+        this.#phoneWhere.push({ host, port });
+      } catch (e) {
+        this.#phoneProblem = e instanceof Error ? e.message : String(e);
+      }
+    }
+  }
+
+  async #closePhone(): Promise<void> {
+    const all = this.#phoneServers;
+    this.#phoneServers = [];
+    this.#phoneWhere = [];
+    await Promise.all(all.map((s) => new Promise<void>((resolve) => { s.closeAllConnections?.(); s.close(() => resolve()); })));
+  }
+
+  /**
+   * LAN の口（か、自分の機械の外）から来た要求の関所。止めたら true。
+   * 開いていなければ断る。私用の範囲の外からは断る。トークンの無い要求は、画面の頁とパスフレーズの口のほかは 401。
+   */
+  async #phoneGate(req: IncomingMessage, res: ServerResponse, path: string): Promise<boolean> {
+    const from = req.socket.remoteAddress ?? '';
+    const phone = this.#phone;
+    if (!phone?.enabled) { send(res, 403, { error: 'スマホから使う設定が入っていません' }); return true; }
+    if (!isPrivateAddress(from) && !isLoopback(from)) { send(res, 403, { error: '家や会社の中（LAN）の外からの繋ぎは受けません' }); return true; }
+    const method = req.method ?? 'GET';
+    if (path === '/' || path === '/index.html') {
+      res.writeHead(302, { location: '/phone.html' });
+      res.end();
+      return true;
+    }
+    if (path === '/api/phone/pair' && method === 'POST') {
+      const body = await readBodyStrict(req);
+      const typed = body !== UNREADABLE && body && typeof body === 'object' ? (body as { passphrase?: unknown }).passphrase : undefined;
+      const got = await phone.pair(from, typed);
+      if (!got.ok) {
+        res.writeHead(got.status, { 'content-type': 'application/json; charset=utf-8', ...(got.retryAfterSec ? { 'retry-after': String(got.retryAfterSec) } : {}) });
+        res.end(JSON.stringify({ error: got.error }));
+        return true;
+      }
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'set-cookie': cookieFor(got.token), 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ paired: true }));
+      return true;
+    }
+    if (openWithoutToken(path, method)) return false;
+    if (!phone.allows(req.headers.cookie)) { send(res, 401, { error: 'パスフレーズで繋いでください', pair: '/phone.html' }); return true; }
+    // スマホの設定（パスフレーズを見る・作り直す・閉じる）は PC の画面からだけ
+    if (path === '/api/phone' || path.startsWith('/api/phone/')) { send(res, 403, { error: 'スマホの設定は PC の画面から変えてください' }); return true; }
+    return false;
+  }
+
+  async #handle(req: IncomingMessage, res: ServerResponse, viaPhone = false): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
 
     // よその頁から叩かれた要求は、口に入る前に断る。中身は読まない。
     if (path.startsWith('/api/')) {
       const refused = crossSiteReason(req.headers, req.method ?? 'GET', {
-        ownHosts: this.#opts.host ? [this.#opts.host] : [],
+        ownHosts: [...(this.#opts.host ? [this.#opts.host] : []), ...(viaPhone ? this.#phoneWhere.map((w) => w.host) : [])],
         guardReads: true,
       });
       if (refused) return send(res, 403, { error: refused });
+    }
+
+    // LAN の口から来たもの、自分の機械の外から来たものは、パスフレーズのトークンを見る（docs/PHONE.md）。127.0.0.1 の画面は今までどおり
+    if (viaPhone || !isLoopback(req.socket.remoteAddress)) {
+      if (await this.#phoneGate(req, res, path)) return;
+    }
+
+    if (path === '/api/phone' && req.method === 'GET') {
+      const phone = this.#phone;
+      const urls = this.#phoneUrls();
+      return send(res, 200, {
+        enabled: phone?.enabled ?? false,
+        listening: urls.length > 0,
+        urls,
+        passphrase: phone?.passphrase ?? '',
+        qr: urls[0] && phone ? qrSvg(`${urls[0]}#p=${phone.passphrase}`, 'スマホで読むと、繋ぎ先とパスフレーズが入ります') : '',
+        problem: this.#phoneProblem,
+      });
+    }
+
+    if (path === '/api/phone' && req.method === 'POST') {
+      const body = await readBodyStrict(req);
+      const on = body !== UNREADABLE && body && typeof body === 'object' ? (body as { enabled?: unknown }).enabled : undefined;
+      if (typeof on !== 'boolean' || !this.#phone) return send(res, 400, { error: 'enabled（true か false）を送ってください' });
+      await this.#phone.setEnabled(on);
+      if (on) await this.#openPhone();
+      else { await this.#closePhone(); this.#phoneProblem = ''; }
+      return send(res, 200, { enabled: on, listening: this.#phoneServers.length > 0, urls: this.#phoneUrls(), problem: this.#phoneProblem });
+    }
+
+    if (path === '/api/phone/regenerate' && req.method === 'POST') {
+      if (!this.#phone) return send(res, 503, { error: 'まだ立ち上げの途中です' });
+      const passphrase = await this.#phone.regenerate();
+      return send(res, 200, { passphrase });
     }
 
     if (path === '/api/layout' && req.method === 'GET') {

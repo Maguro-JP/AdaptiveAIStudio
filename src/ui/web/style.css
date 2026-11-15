@@ -1356,3 +1356,9 @@ dialog.wide { width: min(46rem, 92vw); }
 .search-line { font-size: .78rem; color: var(--dim); white-space: pre; overflow: hidden; text-overflow: ellipsis; }
 .side-top a.icon { color: var(--dim); text-decoration: none; padding: 0 5px; }
 .side-top a.icon:hover { color: var(--text); }
+
+/* 設定 → スマホ */
+.phone-pair { display: flex; gap: var(--s3); align-items: flex-start; flex-wrap: wrap; }
+.phone-qr { width: 200px; height: 200px; flex: none; background: #fff; border-radius: 8px; }
+.phone-pass { font-size: 1.15em; letter-spacing: .05em; user-select: all; }
+#phoneUrl { white-space: pre-line; user-select: all; }

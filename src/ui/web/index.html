@@ -144,6 +144,7 @@
         <button type="button" data-sec="place">配置</button>
         <button type="button" data-sec="model">モデル</button>
         <button type="button" data-sec="mcp">外の道具</button>
+        <button type="button" data-sec="phone">スマホ</button>
         <button type="button" data-sec="check">診断</button>
       </div>
 
@@ -267,6 +268,32 @@
         <div id="mcpRows" class="rows paths" data-cols="2"></div>
         <p class="hint">この作業場で了解した警告。「また出す」で取り消せます。</p>
         <div id="ackRows" class="rows paths" data-cols="2"></div>
+      </section>
+
+      <section data-sec="phone" hidden>
+        <p class="hint">
+          同じ Wi-Fi のスマホから、この PC の本体に頼めます。入れている間だけ、LAN（家や会社の中）に口を開けます。
+          繋ぐにはパスフレーズが要ります。使い方は docs/PHONE.md。
+        </p>
+        <label class="field-row">
+          <input id="phoneOn" type="checkbox">
+          <span>スマホから使う</span>
+        </label>
+        <p id="phoneStatus" class="dim" role="status"></p>
+        <div id="phoneBox" hidden>
+          <div class="phone-pair">
+            <img id="phoneQr" class="phone-qr" alt="スマホのカメラで読むと、繋ぎ先とパスフレーズが入る QR コード" width="200" height="200">
+            <div>
+              <p class="hint">スマホのカメラで QR を読むか、次の URL を開いてパスフレーズを入れてください。</p>
+              <div id="phoneUrl" class="mono"></div>
+              <p class="hint">パスフレーズ</p>
+              <div class="field-row">
+                <code id="phonePass" class="mono phone-pass"></code>
+                <button type="button" id="phoneRegen" class="ghost" title="作り直すと、繋いでいたスマホは繋ぎ直しになります">パスフレーズを作り直す</button>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section data-sec="check" hidden>
