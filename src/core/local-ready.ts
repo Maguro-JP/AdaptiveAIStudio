@@ -17,7 +17,9 @@ import { join } from 'node:path';
 import { inprocUrl, type AasConfig, type ProviderConfig } from '../config.ts';
 import { modelsDir, modelPath } from './home.ts';
 import type { LocalRuntime } from '../runtime/local-runtime.ts';
-import { chooseModel, tooBigForRam, looksLikeGguf, CHOICE_WHY } from '../runtime/inproc.ts';
+import { chooseModel, looksLikeGguf, CHOICE_WHY } from '../runtime/inproc.ts';
+import { describePlacement, reportedRam } from '../runtime/placement.ts';
+import { planHere, refusalText } from '../runtime/placement-machine.ts';
 
 /**
  * この中で読む口（inproc）。有効で、名前が inproc か、繋ぎ先が inproc の番号を向くものだけ。
@@ -105,20 +107,29 @@ export async function readyLocalModel(
   if (models.length === 0) return { config };
 
   const backend = await runtime.backend?.().catch(() => undefined);
-  const picked = chooseModel(models, totalmem(), config.runtime?.model, {
+  const picked = chooseModel(models, reportedRam(totalmem()), config.runtime?.model, {
     ...(backend ? { hasGpu: backend.gpu !== false } : {}),
     ...(backend?.vramBytes ? { vramBytes: backend.vramBytes } : {}),
   });
   if (!picked) return { config };
   const ref = picked.chosen.ref;
 
-  // 記憶に載らないものを読みに行かない。落ちるか、何十分も固まる。
+  // メモリより大きいだけでは断らない。GPU に載るだけ載せ、残りはメモリ、入り切らない分は SSD から読む（placement.ts）。
+  // 断るのは、どう置いても入らないときだけ。そのときは、何があれば動くかを言う
   if (!picked.fits) {
-    const big = tooBigForRam(picked.chosen.sizeBytes, totalmem());
-    const others = models.length > 1
-      ? `\nこの保存先には ${models.length} 個ありますが、どれも載りません。`
-      : '';
-    return { config, why: `${ref}: ${big ?? '記憶に載りません。'}${others}` };
+    const at = config.runtime?.modelsDir ?? modelsDir();
+    const { plan, model, machine } = await planHere({
+      modelsDir: at, ref, path: modelPath(at, ref),
+      ...(picked.chosen.sizeBytes !== undefined ? { sizeBytes: picked.chosen.sizeBytes } : {}),
+      ...(backend ? { backend } : {}),
+    });
+    if (!plan.possible) {
+      const others = models.length > 1
+        ? `\nこの保存先には ${models.length} 個ありますが、どれも入りません。`
+        : '';
+      return { config, why: `${refusalText(ref, plan, model, machine)}${others}` };
+    }
+    log?.(`${ref} はメモリより大きいので、分けて置きます。${describePlacement(plan)}`);
   }
   // 名前だけ .gguf で中身が別物（配布元の HTML の案内など）を、読みに行かない。
   const dir = config.runtime?.modelsDir ?? modelsDir();

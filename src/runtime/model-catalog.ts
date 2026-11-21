@@ -37,6 +37,20 @@ export interface CatalogEntry {
   approxGB: number;
   note: string;
   license: string;
+  /**
+   * 配置の計画（placement.ts）に渡す値。**取ってくる前に、この機械でどう置くかを言うため。**
+   * 配布元のファイルの大きさと、GGUF の先頭に書いてある値を読んで写した（2026-11-15）。
+   * 無いもの（名前を直に渡したもの）は、`approxGB` と見当で数える。
+   */
+  facts?: {
+    /** ファイルの大きさ（バイト）。 */
+    bytes: number;
+    layers: number;
+    /** 1 トークンあたりの KV（バイト、f16）。2 × 層 × KV のヘッド × ヘッドの次元 × 2。 */
+    kvBytesPerToken: number;
+    /** 1 トークンで使う重みの割合（MoE だけ）。 */
+    activeRatio?: number;
+  };
 }
 
 /**
@@ -56,6 +70,7 @@ export const AVAILABLE_MODELS: CatalogEntry[] = [
     approxGB: 2.5,
     note: 'まず動かすための最小構成。軽い読み書きなら通る。',
     license: 'Apache-2.0',
+    facts: { bytes: 2_740_937_888, layers: 32, kvBytesPerToken: 131_072 },
   },
   {
     id: 'qwen3.5-9b',
@@ -65,6 +80,7 @@ export const AVAILABLE_MODELS: CatalogEntry[] = [
     approxGB: 6.6,
     note: '8GB VRAM にそのまま載る。日常の作業はこれで足りる。',
     license: 'Apache-2.0',
+    facts: { bytes: 5_680_522_464, layers: 32, kvBytesPerToken: 131_072 },
   },
   {
     // 総35B・活性3B の MoE。VRAM には載りきらないが、
@@ -77,6 +93,44 @@ export const AVAILABLE_MODELS: CatalogEntry[] = [
     approxGB: 22,
     note: 'コード向けの本命。8GB VRAM + 32GB RAM なら、CPUへ逃がして動かせる。',
     license: 'Apache-2.0',
+    facts: { bytes: 22_134_528_992, layers: 40, kvBytesPerToken: 81_920, activeRatio: 0.18 },
+  },
+  /*
+   * ここから下は、大きいモデル（2026-11-15 に足した）。
+   *
+   * 「メモリより大きいものは読まない」をやめた（placement.ts）ので、大きいものも並べる。
+   * 配布元に在ること・ファイルの大きさ・層の数は、足す日に確かめた（Hugging Face の一覧と、GGUF の先頭 16MB を読んだ。
+   * Ollama の名前は ollama.com の一覧）。122B（A10B）は配布が 3 つに分割されていて、ここでは取ってこられないので載せていない。
+   */
+  {
+    id: 'qwen3.6-27b',
+    repo: 'unsloth/Qwen3.6-27B-GGUF',
+    quant: 'q4_k_m',
+    ollama: 'qwen3.6:27b',
+    approxGB: 15.7,
+    note: '27B。16GB 以上の VRAM なら全部載る。載らない機械では、載る分だけ GPU に置いて残りはメモリで動く（遅い）。',
+    license: 'Apache-2.0',
+    facts: { bytes: 16_817_244_384, layers: 64, kvBytesPerToken: 262_144 },
+  },
+  {
+    id: 'qwen3.5-27b',
+    repo: 'unsloth/Qwen3.5-27B-GGUF',
+    quant: 'q4_k_m',
+    ollama: 'qwen3.5:27b',
+    approxGB: 15.6,
+    note: '27B の一つ前の世代。3.6 が合わないときの比べ先。',
+    license: 'Apache-2.0',
+    facts: { bytes: 16_740_812_704, layers: 64, kvBytesPerToken: 262_144 },
+  },
+  {
+    id: 'qwen3.5-35b-a3b',
+    repo: 'unsloth/Qwen3.5-35B-A3B-GGUF',
+    quant: 'q4_k_m',
+    ollama: 'qwen3.5:35b-a3b',
+    approxGB: 20.5,
+    note: '総 35B・1 トークンに使うのは 3B の MoE。メモリに置いても、同じ大きさの普通のモデルより速い。',
+    license: 'Apache-2.0',
+    facts: { bytes: 22_016_023_168, layers: 40, kvBytesPerToken: 81_920, activeRatio: 0.18 },
   },
 ];
 

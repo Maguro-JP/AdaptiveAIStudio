@@ -56,8 +56,9 @@ function verdictText(v) {
 /** 遅かったときだけ、理由の一行。測れていないときは何も言わない。 */
 function slowNote(v) {
   if (typeof v.tps !== 'number' || v.tps >= SLOW_TPS) return '';
-  return `遅いです（約 ${v.tps} tok/s）。このモデルはこの機械には大きすぎるかもしれません。`
-    + '設定で小さいモデルを選ぶと速くなります。';
+  // 大きいモデルを選ぶのは本人の自由。止めずに、どこで見て・どう変えられるかを言う
+  return `遅いです（約 ${v.tps} tok/s）。このモデルは、この PC のメモリか VRAM に載り切っていないかもしれません。`
+    + '⚙ 設定 → モデル に、この PC でどう置いているか（計画）が出ています。小さいモデルを選ぶと速くなります。';
 }
 
 export { SLOW_TPS, howText, verdictText, slowNote };

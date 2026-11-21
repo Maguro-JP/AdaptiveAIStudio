@@ -35,6 +35,11 @@ import { totalmem } from 'node:os';
 import { DEFAULT_PRIORITY, Priority, PRIORITY_HEADER, toPriority } from '../providers/contract.ts';
 import { findRunaway, runawayNote } from './runaway.ts';
 import { OUTPUT_SHARE } from '../agent/window.ts';
+import {
+  describePlacement, planPlacement, reportedRam, retryLadder, runLadder,
+  type LadderStep, type PlacementPlan,
+} from './placement.ts';
+import { detectPlacementMachine, placementModelOf } from './placement-machine.ts';
 
 /** 暴走を見るときに持っておく直近の長さ。 */
 const RUNAWAY_TAIL = 512;
@@ -161,8 +166,13 @@ export function describeBackend(b: Backend): string {
 
 /** ライブラリの、こちらが使う分だけの形（`getLlama` が返すもの）。 */
 export interface LlamaLike {
-  loadModel: (o: { modelPath: string; onLoadProgress?: (done: number) => void }) => Promise<{
-    createContext: (o?: { contextSize?: number; sequences?: number }) => Promise<{
+  loadModel: (o: {
+    modelPath: string; onLoadProgress?: (done: number) => void;
+    /** GPU に載せる層。数か、「このコンテキストウィンドウが VRAM に入る範囲で、載るだけ」。渡さなければライブラリが決める。 */
+    gpuLayers?: number | { max?: number; fitContext?: { contextSize: number } };
+    useMmap?: boolean; useMlock?: boolean; ignoreMemorySafetyChecks?: boolean; loadSignal?: AbortSignal;
+  }) => Promise<{
+    createContext: (o?: { contextSize?: number; sequences?: number; batchSize?: number; ignoreMemorySafetyChecks?: boolean }) => Promise<{
       getSequence: (o?: { tokenPredictor?: unknown }) => unknown; dispose?: () => Promise<void>;
     }>;
     /** GPU に載せた層の数。試験のモックには無い。 */
@@ -352,6 +362,8 @@ export interface InProcOptions {
   onExit?: () => void;
   /** 列で待つ間の `: queued` の間隔。既定 `QUEUE_HEARTBEAT_MS`。テストで短くする。 */
   queueHeartbeatMs?: number;
+  /** 読み込みの進み具合を流す間隔。既定 `LOAD_BEAT_MS`。試験で短くする。 */
+  loadBeatMs?: number;
   /** 降ろすとき、答えている最中の口が戻るのを待つ上限（既定 10 秒）。試験で短くする。 */
   unloadWaitMs?: number;
   /** GPU を使うか。既定 'auto'。設定 `runtime.gpu`。 */
@@ -477,7 +489,7 @@ export const CHOICE_WHY: Record<ChoiceReason, string> = {
   'gpu-none-in-vram': 'VRAM に丸ごと載るものが無いので、載るもののうち小さい方（大きいほど CPU に溢れて遅くなります）',
   largest: 'GPU があるので、載るもののうち大きい方',
   'cpu-smallest': 'GPU が無いので、載るもののうち小さい方（大きいほど待ちます）',
-  'none-fits-ram': 'どれも記憶に載りません',
+  'none-fits-ram': 'どれもメモリには載り切らないので、いちばん小さいものを分けて置きます',
 };
 
 /**
@@ -647,6 +659,8 @@ export const DEFAULT_SEQUENCES = 2;
  * 打ち続ければ、上の層は待ちを延ばせる（`openai-compatible.ts`）。
  */
 export const QUEUE_HEARTBEAT_MS = 15_000;
+/** 読み込みの進み具合を流す間隔。 */
+export const LOAD_BEAT_MS = 2_000;
 
 export class InProcRuntime implements LocalRuntime {
   readonly id = 'inproc';
@@ -668,6 +682,8 @@ export class InProcRuntime implements LocalRuntime {
   readonly #loading = new Map<string, Promise<Held>>();
   /** 降ろしている最中のもの（降ろし終えるまで、同じものをもう一度読まない・二つ載せない）。 */
   readonly #unloading = new Map<string, Promise<void>>();
+  /** 読み込みの進み具合（%）。別のプロセスから訊かれたときに答える。 */
+  readonly #progress = new Map<string, number>();
   /** 切り替え（降ろして読む）を一つずつ通す列。 */
   #switching: Promise<void> = Promise.resolve();
   /**
@@ -723,6 +739,28 @@ export class InProcRuntime implements LocalRuntime {
     return (await this.#llamaInstance()).backend;
   }
 
+  /** どう置いても入らないものか（読まずに分かる範囲で）。計画を立てられないときは、断らない。 */
+  async #canPlace(ref: string): Promise<boolean> {
+    try {
+      const { backend } = await this.#llamaInstance();
+      const machine = await detectPlacementMachine({
+        modelsDir: this.#opts.modelsDir,
+        ...(backend.gpu && backend.vramBytes > 0 ? { gpu: { vramBytes: backend.vramBytes } } : {}),
+      });
+      return planPlacement(await placementModelOf(modelPath(this.#opts.modelsDir, ref), ref), machine).possible;
+    } catch { return true; }
+  }
+
+  /** 読んだモデルの、実際の配置。画面に出す。 */
+  placementOf(ref: string): PlacementPlan | undefined {
+    return this.#sessions.get(ref)?.placement;
+  }
+
+  /** 読み込みの進み具合（%）。読んでいなければ undefined。 */
+  progressOf(ref: string): number | undefined {
+    return this.#progress.get(ref);
+  }
+
   #llamaInstance(): Promise<{ llama: LlamaLike; backend: Backend }> {
     if (!this.#llama) {
       const made = (async () => {
@@ -765,7 +803,8 @@ export class InProcRuntime implements LocalRuntime {
     }
     if (this.#down) throw new Error('止めています');
     await this.#serve();
-    return { baseUrl: this.#url, model: ref, loadSeconds: (Date.now() - began) / 1000 };
+    const placement = this.#sessions.get(ref)?.placement;
+    return { baseUrl: this.#url, model: ref, loadSeconds: (Date.now() - began) / 1000, ...(placement ? { placement } : {}) };
   }
 
   /** 実際に読む。**必ず #loading 越しに呼ぶ。** */
@@ -803,41 +842,133 @@ export class InProcRuntime implements LocalRuntime {
     }
   }
 
-  /** 選んだ本体（GPU か CPU）で読む。 */
+  /**
+   * 選んだ本体（GPU か CPU）で読む。
+   *
+   * **先に配置の計画を立て、その計画で読む。**ここは、ライブラリの既定に任せて読み、そのあとで
+   * コンテキストウィンドウを決めていた。GPU の層とコンテキストウィンドウを別々に決めるので、層で VRAM を使い切ったあとに
+   * KV が入らず落ち、CPU で丸ごと読み直していた。メモリより大きいモデルは、読む前に断っていた。
+   * いまは、GPU に載るだけ・残りはメモリ・入り切らない分は SSD、を一つの計画で決め、落ちたら段を下げて読み直す。
+   */
   async #loadOn(ref: string, lib: LlamaLib, { llama, backend }: { llama: LlamaLike; backend: Backend }): Promise<Held> {
-    // 数GBを読むので、10〜60秒かかる。**黙って待たせない。**
-    // 進み具合を出さないと、また「固まった」に見える。
-    let last = -1;
-    const model = await llama.loadModel({
-      modelPath: modelPath(this.#opts.modelsDir, ref),
-      onLoadProgress: (done: number) => {
-        const pct = Math.floor(done * 100);
-        // 1% ごとに言うと流れが埋まる。10% ごとに一度。
-        if (pct < last + 10) return;
-        last = pct;
-        this.#opts.onLog?.(`読み込み中 ${pct}%: ${ref}`);
-      },
-    });
+    const at = modelPath(this.#opts.modelsDir, ref);
     // **窓は、モデルが持っているぶんを使う。**
     // 8192 の決め打ちだったので、32k 使えるモデルでも 8k しか使えなかった。
     // 覚えや決まりを載せると、それだけで埋まる。切り詰める前に、窓を広げる。
     //
     // **並列に持つ本数（sequences）も、ここで決まる。**KV は本数ぶん要るので、
     // コンテキストウィンドウ × 本数 が記憶に収まるよう #windowFor（fitWindow）が数えてある。
-    // GPU に何層載ったか。**載り切らなかったときは、それが遅い理由。**言わないと、
-    // 「GPU で読んでいるのに遅い」の原因を別の所に探すことになる。
-    if (backend.gpu && typeof model.gpuLayers === 'number') {
-      const total = model.fileInsights?.totalLayers;
-      this.#opts.onLog?.(typeof total === 'number' && model.gpuLayers < total
-        ? `GPU に ${model.gpuLayers}/${total} 層を載せました（載り切らない分は CPU で動くので、遅くなります）`
-        : `GPU に ${model.gpuLayers}${typeof total === 'number' ? `/${total}` : ''} 層を載せました`);
+    const wanted = await this.#windowFor(ref, backend);
+    const free = backend.gpu ? await llama.getVramState?.().then((v) => v.free).catch(() => undefined) : undefined;
+    const machine = await detectPlacementMachine({
+      modelsDir: this.#opts.modelsDir,
+      ...(backend.gpu && backend.vramBytes > 0
+        ? { gpu: { vramBytes: backend.vramBytes, ...(backend.devices[0] ? { name: backend.devices[0] } : {}), ...(typeof free === 'number' ? { freeVramBytes: free } : {}) } }
+        : {}),
+      ...(backend.cpu?.cores ? { cores: backend.cpu.cores } : {}),
+    });
+    const facts = await placementModelOf(at, ref);
+    // コンテキストウィンドウを利用者が決めたなら、縮めない（本人の選択）。モデルの長さでも切らない
+    const fixed = this.#opts.contextSize;
+    if (fixed) facts.trainedContext = Math.max(facts.trainedContext ?? 0, fixed);
+    const steps = retryLadder(facts, machine, {
+      context: wanted.window, sequences: wanted.sequences, ...(fixed ? { minContext: fixed } : {}),
+    });
+    const planned = steps[0]!.plan;
+    if (!planned.possible) {
+      throw new Error([`${ref}: ${describePlacement(planned)}`, ...planned.wouldHelp.slice(1).map((h) => `動かすには: ${h}`)].join('\n'));
     }
-    const { window: contextSize, sequences } = await this.#windowFor(ref, backend);
-    // context を作れなかったら（KV が入らない等）、読んだ重みを解いてから投げる。解かないと、次に読むたびに重みが一つずつ増えていた
-    const context = await model.createContext({ contextSize, sequences }).catch(async (e: unknown) => {
-      await (model as { dispose?: () => Promise<void> }).dispose?.().catch(() => undefined);
+    // 大きいモデルのときだけ言う（どれも載る小さいモデルで、毎回一行増やさない）
+    if (planned.fit !== 'comfortable' || planned.shrunk.length > 0 || planned.gpuLayers > 0) {
+      this.#opts.onLog?.(`配置の計画（${planned.fitLabel}）: ${describePlacement(planned)}`);
+      for (const line of planned.shrunk) this.#opts.onLog?.(`配置の計画: ${line}`);
+    }
+
+    // 数GBを読むので、10〜60秒かかる。**黙って待たせない。**
+    // 進み具合を出さないと、また「固まった」に見える。
+    let last = -1;
+    const onLoadProgress = (done: number): void => {
+      const pct = Math.floor(done * 100);
+      this.#progress.set(ref, pct);
+      // 1% ごとに言うと流れが埋まる。10% ごとに一度。
+      if (pct < last + 10) return;
+      last = pct;
+      this.#opts.onLog?.(`読み込み中 ${pct}%: ${ref}`);
+    };
+    type Loaded = Awaited<ReturnType<LlamaLike['loadModel']>>;
+    let kept: { model: Loaded; key: string } | undefined;
+    const drop = async (): Promise<void> => {
+      const model = kept?.model;
+      kept = undefined;
+      await (model as { dispose?: () => Promise<void> } | undefined)?.dispose?.().catch(() => undefined);
+    };
+    const loadStep = async (step: LadderStep): Promise<{ model: Loaded; context: Awaited<ReturnType<Loaded['createContext']>>; plan: PlacementPlan }> => {
+      const plan = step.plan;
+      // GPU の層: 計画どおりの段では「このコンテキストウィンドウが VRAM に入る範囲で、載るだけ」とライブラリに頼む
+      // （ライブラリはテンソルごとの本当の大きさと、今の空きで数える。こちらの層の数は見当）。段を下げたら、上限を付ける。
+      // GPU を使わない本体では渡さない（今までどおり）
+      const gpuLayers = !backend.gpu ? undefined
+        : step.id === 'cpu-only' ? 0
+          : {
+              ...(step.id === 'as-planned' ? {} : { max: plan.gpuLayers }),
+              fitContext: { contextSize: plan.contextSize * plan.sequences },
+            };
+      const key = JSON.stringify(gpuLayers ?? 'auto');
+      // 層の載せ方が変わらない段（コンテキストウィンドウだけ狭める）では、読んだ重みをそのまま使う（数GBを読み直さない）
+      if (kept && kept.key !== key) await drop();
+      if (!kept) {
+        last = -1;
+        const limit = AbortSignal.timeout(plan.timeouts.loadMs);
+        const model = await llama.loadModel({
+          modelPath: at,
+          onLoadProgress,
+          ...(gpuLayers !== undefined ? { gpuLayers } : {}),
+          // メモリに入り切らない計画では、ファイルの写しで読み、メモリには固定しない。ライブラリの見張り（足りないと断る）も外す
+          ...(plan.ignoreMemorySafetyChecks ? { useMmap: true, useMlock: false, ignoreMemorySafetyChecks: true } : {}),
+          loadSignal: limit,
+        }).catch((e: unknown) => {
+          if (limit.aborted) {
+            throw new Error(`${ref} の読み込みが ${Math.round(plan.timeouts.loadMs / 60000)} 分で終わりませんでした。`
+              + 'ディスクが遅いか、メモリが足りずに行き来しています。小さいモデルか、空きの多い機械で試してください。');
+          }
+          throw e;
+        });
+        kept = { model, key };
+      }
+      const model = kept.model;
+      // GPU に何層載ったか。**載り切らなかったときは、それが遅い理由。**言わないと、
+      // 「GPU で読んでいるのに遅い」の原因を別の所に探すことになる。
+      if (backend.gpu && typeof model.gpuLayers === 'number') {
+        const total = model.fileInsights?.totalLayers;
+        this.#opts.onLog?.(typeof total === 'number' && model.gpuLayers < total
+          ? `GPU に ${model.gpuLayers}/${total} 層を載せました（載り切らない分は CPU で動くので、遅くなります）`
+          : `GPU に ${model.gpuLayers}${typeof total === 'number' ? `/${total}` : ''} 層を載せました`);
+      }
+      // バッチは、ライブラリの既定（512 まで）と違うときだけ渡す
+      const usual = Math.min(plan.contextSize, 512);
+      const context = await model.createContext({
+        contextSize: plan.contextSize, sequences: plan.sequences,
+        ...(plan.batchSize !== usual ? { batchSize: plan.batchSize } : {}),
+        ...(plan.ignoreMemorySafetyChecks ? { ignoreMemorySafetyChecks: true } : {}),
+      });
+      return { model, context, plan };
+    };
+    // context を作れなかったら（KV が入らない等）、段を下げて読み直す。どの段でも駄目なら、読んだ重みを解いてから投げる
+    // （解かないと、次に読むたびに重みが一つずつ増えていた）
+    const got = await runLadder(steps, loadStep, (line) => this.#opts.onLog?.(`${ref}: ${line}`)).catch(async (e: unknown) => {
+      await drop();
       throw e;
     });
+    const { model, context } = got.value;
+    const placement: PlacementPlan = {
+      ...got.value.plan,
+      ...(backend.gpu && typeof model.gpuLayers === 'number' ? { gpuLayers: model.gpuLayers } : {}),
+    };
+    const contextSize = placement.contextSize;
+    const sequences = placement.sequences;
+    if (contextSize !== wanted.window || sequences !== wanted.sequences) {
+      this.#opts.onLog?.(`コンテキストウィンドウ: ${contextSize}・並列 ${sequences} 本で開きました（配置の計画に合わせました）`);
+    }
     /*
      * 先読み（token predictor、prompt lookup）は使わない。
      *
@@ -876,7 +1007,7 @@ export class InProcRuntime implements LocalRuntime {
         + '守れないモデルもあるので、うまく呼べないときは道具呼び出しを学んだモデル（Qwen など）を置いてください。',
       );
     }
-    return { context, model: model as Held['model'], wrapper, window: contextSize, lanes: new LanePool(lanes), active: new Set() };
+    return { context, model: model as Held['model'], wrapper, window: contextSize, lanes: new LanePool(lanes), active: new Set(), placement };
   }
 
   /** 並列に持ちたい本数。設定が無ければ既定。 */
@@ -920,7 +1051,7 @@ export class InProcRuntime implements LocalRuntime {
           ...(facts.headCountKv !== undefined ? { kvHeads: facts.headCountKv } : {}),
           ...(headDimOf(facts) !== undefined ? { headDim: headDimOf(facts)! } : {}),
           ...(weightBytes !== undefined ? { weightBytes } : {}),
-          ramBytes: onVram ? backend.vramBytes : totalmem(),
+          ramBytes: onVram ? backend.vramBytes : reportedRam(totalmem()),
           sequences: wanted,
         });
         const where = onVram ? `。KV は VRAM（${(backend.vramBytes / 1024 ** 3).toFixed(1)}GB）で数えました` : '';
@@ -959,8 +1090,30 @@ export class InProcRuntime implements LocalRuntime {
       if (op === 'load' && req.method === 'POST') {
         const { ref } = await readJson();
         if (typeof ref !== 'string') return reply(400, { error: 'ref が要ります' });
-        const got = await this.ensureLoaded(ref);
-        return reply(200, { ...got, window: this.windowOf(ref) ?? null });
+        /*
+         * **読んでいる間、返事を流し続ける。**
+         *
+         * ここは読み終えてから一度に返していた。Node の fetch は、返事の頭が 300 秒来ないと切る。
+         * 大きいモデルは読み込みに 5 分を超えるので、読めているのに「読み込めませんでした」で落ちる
+         * （遅い読み込みを 310 秒にして確かめた。docs/knowledge/large-models-2026-11-15.md）。
+         * 頭をすぐ返し、進み具合を一行ずつ流し、最後の一行で結果を言う。
+         */
+        res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+        const line = (o: unknown): void => { if (!res.writableEnded) res.write(`${JSON.stringify(o)}\n`); };
+        this.#progress.delete(ref);
+        line({ progress: 0 });
+        const beat = setInterval(() => line({ progress: this.#progress.get(ref) ?? 0 }), this.#opts.loadBeatMs ?? LOAD_BEAT_MS);
+        try {
+          const got = await this.ensureLoaded(ref);
+          line({ done: { ...got, window: this.windowOf(ref) ?? null } });
+        } catch (e) {
+          line({ error: (e as Error).message });
+        } finally {
+          clearInterval(beat);
+          this.#progress.delete(ref);
+          res.end();
+        }
+        return;
       }
       if (op === 'unload' && req.method === 'POST') {
         const { ref } = await readJson();
@@ -1131,9 +1284,10 @@ export class InProcRuntime implements LocalRuntime {
     // 候補の決め方が名前で選んでいるのに、常に最初の一つで答えるのはおかしい。
     if (!held && ref && /\.gguf$/i.test(ref)) {
       const listed = (await this.list()).find((m) => m.ref === ref);
-      // 読めないと分かっているもの（GGUF でない・記憶に載らない）のために、今のモデルを先に降ろさない
+      // 読めないと分かっているもの（GGUF でない・どう置いても入らない）のために、今のモデルを先に降ろさない。
+      // メモリより大きいだけでは断らない（入り切らない分は SSD から読む。placement.ts）
       const unreadable = listed && (!(await looksLikeGguf(modelPath(this.#opts.modelsDir, ref)))
-        || tooBigForRam(listed.sizeBytes, totalmem()) !== undefined);
+        || !(await this.#canPlace(ref)));
       if (listed && unreadable) {
         // 404 と model の語で返す（上の層は「モデルが無い」と読み、やり直さずに次の候補へ回す。503 だと毎回 3 回打っていた）
         res.writeHead(404, { 'content-type': 'application/json' });
@@ -1501,7 +1655,12 @@ export class InProcRuntime implements LocalRuntime {
     const working = setInterval(() => {
       if (res.writableEnded) return;
       if (Date.now() - wroteAt < beatMs) return;
-      res.write(': working\n\n');
+      // 進んだ数を添える（本文に出ない間も、数が増えていれば進んでいる。送り側はそれで「停滞ではない」と分かる）。
+      // 数が取れない間は、今までどおり数を付けない
+      // 数は、読み書きした位置（入力を読む間も、ツールの呼び出しを組む間も進む）。取れなければ、出したトークンの数
+      const at = lane.sequence?.nextTokenIndex;
+      const made = typeof at === 'number' && at > 0 ? at : generated;
+      res.write(made > 0 ? `: working ${made}\n\n` : ': working\n\n');
       wroteAt = Date.now();
     }, beatMs);
     try {
@@ -1825,6 +1984,8 @@ interface Held {
   lanes: LanePool;
   /** 答えている最中の依頼の止める合図（降ろすときに、待っても返らない生成を止める）。 */
   active: Set<AbortController>;
+  /** 実際に読めた配置の計画。 */
+  placement?: PlacementPlan;
 }
 
 /** OpenAI の形の、道具の呼び出し一つ。 */

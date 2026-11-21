@@ -168,14 +168,24 @@ if (models.length > 0) {
   // 送ってから 503 を見るより、貼る出力で先に分かるほうが早い。
   if (runtime.id === 'inproc') {
     const { looksLikeGguf, tooBigForRam } = await import('../runtime/inproc.ts');
+    const { describePlacement, reportedRam } = await import('../runtime/placement.ts');
+    const { planHere, refusalText } = await import('../runtime/placement-machine.ts');
     const { totalmem } = await import('node:os');
     const dir = config.runtime?.modelsDir ?? defaultModelsDir();
     let usable = 0;
     for (const m of models) {
       if (await looksLikeGguf(join(dir, m.ref))) usable += 1;
       else add('モデル', 'warn', `${m.ref} は GGUF ではありません（先頭に印が無い。配布元の HTML の案内かも）`);
-      const big = tooBigForRam(m.sizeBytes, totalmem());
-      if (big) add('モデル', 'warn', `${m.ref}: ${big}`);
+      // メモリより大きいだけでは「読めない」と言わない。どう置くかを言う（placement.ts）
+      if (tooBigForRam(m.sizeBytes, reportedRam(totalmem()))) {
+        const backend = await runtime.backend?.().catch(() => undefined);
+        const { plan, model: facts, machine } = await planHere({
+          modelsDir: dir, ref: m.ref, path: join(dir, m.ref),
+          ...(m.sizeBytes !== undefined ? { sizeBytes: m.sizeBytes } : {}), ...(backend ? { backend } : {}),
+        });
+        if (plan.possible) add('モデル', 'ok', `${m.ref}: メモリより大きいので、分けて置きます。${describePlacement(plan)}`);
+        else add('モデル', 'warn', refusalText(m.ref, plan, facts, machine));
+      }
     }
     /*
      * **一つも読めないなら「動かせます」と言わない。**

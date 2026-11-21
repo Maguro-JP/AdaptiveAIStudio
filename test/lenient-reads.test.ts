@@ -39,6 +39,7 @@ const ALLOWED: Record<string, { count: number; why: string }> = {
   'src/agent/commands.ts': { count: 2, why: '利用者が置いたコマンドの定義を読む。読めないものは一覧に出さない' },
   'src/ui/settings.ts': { count: 1, why: '保存先のフォルダの状態を見せるだけ' },
   'src/agent/outside-changes.ts': { count: 1, why: '読めなければ記録できなかった道にする（「無い」とは読まない）' },
+  'src/runtime/placement-machine.ts': { count: 2, why: '配置の計画に使う値を見るだけ（swap の空き・ファイルの大きさ）。読めなければ「分からない」として計画を立てる（分からないものを「無い」と決めて断らない）。消す・書くことは無い' },
 };
 
 // `[] as string[]` のような型の付け足しも同じ形として数える。`.then(() => true, () => false)` の二つ目の受け手も同じ

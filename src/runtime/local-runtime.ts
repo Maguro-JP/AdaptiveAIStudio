@@ -6,6 +6,7 @@
  */
 import type { Backend } from './inproc.ts';
 import type { Plan } from './planner.ts';
+import type { PlacementPlan } from './placement.ts';
 
 export interface LoadedModel {
   /** OpenAI互換APIのベースURL。Provider層はこれだけを見る。 */
@@ -16,6 +17,8 @@ export interface LoadedModel {
   plan?: Plan;
   /** 起動〜応答可能までの実測秒数 */
   loadSeconds?: number;
+  /** 実際に読めた配置（GPU の層・メモリ・SSD から読む分）。inproc だけ。 */
+  placement?: PlacementPlan;
 }
 
 export interface AvailableModel {
@@ -51,6 +54,10 @@ export interface LocalRuntime {
    * 読む側が CPU で回っているのに「GPU が在るから大きい方」を選ぶ（実機でそうなった）。
    */
   backend?(): Promise<Backend>;
+  /** 読み込みの進み具合（%）。読んでいる最中だけ。inproc だけ。 */
+  progressOf?(ref: string): number | undefined;
+  /** 読んだモデルの、実際の配置。inproc だけ。 */
+  placementOf?(ref: string): PlacementPlan | undefined;
 }
 
 /**

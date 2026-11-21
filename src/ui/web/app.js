@@ -2292,6 +2292,8 @@ async function loadCfg() {
     v.className = 'dim mono';
     v.textContent = sizeText(m.sizeBytes)
       + (m.tooBig ? '　⚠ この機械の記憶に載りません' : '')
+      // メモリより大きくても入るものは、どう動くかを言う（快適なものには何も足さない）
+      + (!m.tooBig && m.fitLabel && m.fit !== 'comfortable' ? `　${m.fitLabel}` : '')
       + (m.notGguf ? '　⚠ GGUF ではありません（中身が別物）' : '');
     // どれを使うかを、ここで決められる。決めなければ最初の一つ。
     const use = document.createElement('button');
@@ -2317,6 +2319,24 @@ async function loadCfg() {
     };
     row.append(k, v, use);
     box.append(row);
+    // この PC でどう置くか。「これを使う」を押す前に分かる。細かい数字は「計画を見る」に畳む
+    if (m.plan && (m.fit !== 'comfortable' || m.tooBig)) {
+      const note = document.createElement('div');
+      note.className = `note ${m.tooBig ? 'bad' : 'warn'}`;
+      note.textContent = m.plan;
+      box.append(note);
+      if (Array.isArray(m.detail) && m.detail.length > 0) {
+        const more = document.createElement('details');
+        more.className = 'placement-detail';
+        const head = document.createElement('summary');
+        head.textContent = '計画を見る';
+        const lines = document.createElement('div');
+        lines.className = 'note dim';
+        lines.textContent = m.detail.join('\n');
+        more.append(head, lines);
+        box.append(more);
+      }
+    }
   }
 }
 
@@ -2328,7 +2348,8 @@ async function loadCatalog() {
   for (const m of d?.catalog ?? []) {
     const o = document.createElement('option');
     o.value = m.ref ?? m.id;
-    o.textContent = `${m.id}（約${m.approxGB}GB・${m.note}）`;
+    // この PC での具合を先に言う（選んでから「入りません」にしない）
+    o.textContent = `${m.id}（約${m.approxGB}GB・${m.fitLabel ? `この PC では ${m.fitLabel}・` : ''}${m.note}）`;
     sel.append(o);
   }
   if (sel.children.length === 0) {

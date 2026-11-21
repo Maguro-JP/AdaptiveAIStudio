@@ -1649,6 +1649,32 @@ export const PANELS = {
        * （Ollama は保存先の .gguf を使わない）。押せるのに効かない口は、
        * 壊れていると読まれる。
        */
+      /*
+       * **この PC での具合**（快適・動く（遅い）・SSD から読む（とても遅い）・入らない）と、どう置くかの一行。
+       *
+       * 色だけで伝えない（言葉で言う）。細かい数字は「計画を見る」に畳む（開かなくても、一行で分かる）。
+       */
+      const fitChip = (m) => {
+        const chip = el('span', `chip fit-${m.fit}`, m.fitLabel);
+        chip.title = 'この PC での具合';
+        return chip;
+      };
+      const placementNote = (m) => {
+        if (!m.plan) return null;
+        const box = el('div', 'placement');
+        const line = el('div', `note ${m.possible === false ? 'bad' : m.fit === 'comfortable' ? 'dim' : 'warn'}`);
+        line.append(fitChip(m), document.createTextNode(` ${m.plan}`));
+        box.append(line);
+        if (Array.isArray(m.detail) && m.detail.length > 0) {
+          const more = el('details', 'placement-detail');
+          more.append(el('summary', '', '計画を見る'));
+          const lines = el('div', 'note dim');
+          lines.textContent = m.detail.join('\n');
+          more.append(lines);
+          box.append(more);
+        }
+        return box;
+      };
       const ollama = data.runtime === 'ollama';
       const again = el('button', 'ghost', ollama ? '⟳ 一覧を取り直す' : '⟳ 置いたものを読み直す');
       again.type = 'button';
@@ -1688,6 +1714,9 @@ export const PANELS = {
           if (m.path) name.append(pathActions(m.path));
           row.append(name, el('span', 'num dim', size));
           list.append(row);
+          // この PC でどう置くか。読む前に分かる（大きいモデルを、送ってから何分も待って知る、にしない）
+          const placed = placementNote(m);
+          if (placed) list.append(placed);
         }
       }
 
@@ -1714,10 +1743,14 @@ export const PANELS = {
         store.append(box);
       }
 
+      // どの部品で動かすか。計画の前提なので、取ってくる一覧の頭で言う
+      if (data.engine) store.append(el('div', 'note dim', `この PC のエンジン: ${data.engine}`));
       for (const m of data.catalog ?? []) {
         const row = el('div', 'row');
         const get = el('button', 'ghost', `${m.id}（約${m.approxGB}GB）`);
         get.title = `${m.note}\n${m.ref}`;
+        // 入らないものは、取ってこさせない（数十 GB を落としてから「入りません」にしない）。理由と、動かす手は下に出る
+        if (m.possible === false) get.disabled = true;
         get.onclick = async () => {
           get.disabled = true;
           get.textContent = `${m.id} を取得中…`;
@@ -1741,7 +1774,11 @@ export const PANELS = {
           }
         };
         row.append(get);
+        if (m.fitLabel) row.append(fitChip(m));
         store.append(row);
+        store.append(el('div', 'note dim', m.note));
+        const placed = placementNote(m);
+        if (placed) store.append(placed);
       }
 
       // 新しい世代が出ていないか

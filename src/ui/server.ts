@@ -53,6 +53,8 @@ import { checkUpdate, applyUpdate } from '../core/update.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
 import { findNewerOllama, findNewerGguf } from '../runtime/model-updates.ts';
 import { AVAILABLE_MODELS, lookupCatalog, STARTER_ID } from '../runtime/model-catalog.ts';
+import { describePlacement, placementDetail, planPlacement, reportedRam, type PlacementMachine, type PlacementPlan } from '../runtime/placement.ts';
+import { detectPlacementMachine, planFile, planHere, refusalText } from '../runtime/placement-machine.ts';
 import { installModel, describeFetch, type FetchStatus } from '../runtime/model-install.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { MachineCache } from '../runtime/machine.ts';
@@ -83,7 +85,7 @@ import {
   inspectModelsDir, ensureDefaultModelsDir, savedModelsDir, unquotePath, readSavedMcpServers,
 } from './settings.ts';
 import {
-  listGguf, chooseModel, tooBigForRam, looksLikeGguf, freePortFrom, INPROC_PORT, headsUp, CHOICE_WHY,
+  listGguf, chooseModel, looksLikeGguf, freePortFrom, INPROC_PORT, headsUp, CHOICE_WHY,
   type Backend,
 } from '../runtime/inproc.ts';
 import { totalmem } from 'node:os';
@@ -1818,11 +1820,22 @@ export class UiServer {
        * 数だけ返して、画面で「在るが、いまの動かし方では使わない」と言えるようにする。
        */
       const localGguf = usesGguf(runtime.id) ? 0 : (await listGguf(dir).catch(() => [])).length;
+      // この機械でどう置くか。**取ってくる前・読む前に見せる。**GGUF を読む道だけ（Ollama は自分で決める）
+      const placing = usesGguf(runtime.id);
+      const backend = placing && runtime.id === 'inproc' ? await this.#backendOf(runtime) : undefined;
+      const machine = placing ? await this.#placementMachine(dir, backend).catch(() => undefined) : undefined;
+      const have = new Set(installed.map((m) => m.ref.toLowerCase()));
       return send(res, 200, {
         runtime: runtime.id,
         localGguf,
         // GGUF を置く道では、絶対の道も返す。画面で開く・コピーするため（Ollama にはファイルが無い）。
-        installed: installed.map((m) => ({ ref: m.ref, sizeBytes: m.sizeBytes, ...(usesGguf(runtime.id) ? { path: join(dir, m.ref) } : {}) })),
+        installed: await Promise.all(installed.map(async (m) => ({
+          ref: m.ref, sizeBytes: m.sizeBytes,
+          ...(usesGguf(runtime.id) ? { path: join(dir, m.ref) } : {}),
+          ...(placing ? await this.#placementFor(dir, m.ref, m.sizeBytes, backend) : {}),
+        }))),
+        // どの部品で動かすか（CUDA・Vulkan・CPU）。計画の前提なので、同じ所に出す
+        engine: backend ? (backend.gpu === false ? 'CPU' : `${backend.gpu.toUpperCase()}${backend.devices[0] ? `（${backend.devices[0]}）` : ''}`) : null,
         llamaServer: llama ?? null,
         // 用意する一手。配った形には npm が無いので、置かれ方に合う形で渡す（画面が `npm run llama` と決め打ちしていた）
         llamaHint: how('llama'),
@@ -1832,6 +1845,17 @@ export class UiServer {
         fetching: this.#fetching ?? null,
         catalog: AVAILABLE_MODELS.map((m) => ({
           id: m.id, note: m.note, approxGB: m.approxGB,
+          ...(machine ? (() => {
+            const bytes = m.facts?.bytes ?? m.approxGB * 1024 ** 3;
+            // もう手元に在るものは、ディスクの空きを数えない
+            const plain = (x: string): string => x.replace(/[^a-z0-9.]/g, '');
+            const downloaded = [...have].some((ref) => plain(ref).includes(plain(m.id)));
+            const plan = planPlacement({
+              ref: m.id, fileBytes: bytes, downloaded,
+              ...(m.facts ? { layers: m.facts.layers, kvBytesPerToken: m.facts.kvBytesPerToken, ...(m.facts.activeRatio ? { activeRatio: m.facts.activeRatio } : {}) } : {}),
+            }, machine);
+            return { ...this.#placementView(plan, bytes), needDiskBytes: Math.round(bytes * 1.1) };
+          })() : {}),
           // GGUF を自分で置く道（llamacpp / inproc）では、保存先に入れる元を出す。
           // Ollama の名前を出しても、そちらでは使えない。
           ref: runtime.id === 'ollama' ? m.ollama : m.repo,
@@ -3360,7 +3384,8 @@ export class UiServer {
         ...m,
         // 絶対の道。画面で開く・コピーするため。
         path: join(liveDir, m.ref),
-        tooBig: tooBigForRam(m.sizeBytes, totalmem()) ?? null,
+        // どう置いても入らないときだけ付く（メモリより大きいだけなら、SSD から読む計画になる）。計画は `plan` に一行で
+        ...(await this.#placementFor(liveDir, m.ref, m.sizeBytes)),
         // 名前だけ .gguf の別物も、一覧で分かるように。
         notGguf: !(await looksLikeGguf(join(liveDir, m.ref))),
       }))),
@@ -3757,7 +3782,55 @@ export class UiServer {
    */
   async #backendOf(runtime: LocalRuntime): Promise<Backend | undefined> {
     if (!runtime.backend) return undefined;
-    return runtime.backend().catch(() => undefined);
+    const got = await runtime.backend().catch(() => undefined);
+    if (got) this.#lastBackend = got;
+    return got;
+  }
+
+  /** 最後に分かった backend。一覧を出すだけのときは、これを使う（一覧のために、モデルのプロセスを起こさない）。 */
+  #lastBackend?: Backend;
+  #placementMachineAt?: { at: number; dir: string; gpu: number; machine: PlacementMachine };
+
+  /**
+   * 配置の計画に使う、この機械。少しの間は使い回す（一覧の一行ごとに、ディスクとメモリを読み直さない）。
+   * GPU は、読む側が実際に使うもの（backend）で数える。nvidia-smi に見えるだけの GPU では数えない。
+   */
+  async #placementMachine(dir: string, backend?: Backend): Promise<PlacementMachine> {
+    const b = backend ?? this.#lastBackend;
+    const gpu = b && b.gpu !== false ? b.vramBytes : 0;
+    const kept = this.#placementMachineAt;
+    if (kept && kept.dir === dir && kept.gpu === gpu && Date.now() - kept.at < 15_000) return kept.machine;
+    const machine = await detectPlacementMachine({
+      modelsDir: dir,
+      ...(b && gpu > 0 ? { gpu: { vramBytes: gpu, ...(b.devices[0] ? { name: b.devices[0] } : {}) } } : {}),
+      ...(b?.cpu?.cores ? { cores: b.cpu.cores } : {}),
+    });
+    this.#placementMachineAt = { at: Date.now(), dir, gpu, machine };
+    return machine;
+  }
+
+  /** 画面に出す形の計画。 */
+  #placementView(plan: PlacementPlan, fileBytes: number): {
+    fit: string; fitLabel: string; plan: string; detail: string[]; possible: boolean;
+  } {
+    return {
+      fit: plan.fit, fitLabel: plan.fitLabel, possible: plan.possible,
+      plan: describePlacement(plan), detail: placementDetail(plan, { fileBytes }),
+    };
+  }
+
+  /** 手元の一つの .gguf を、この機械でどう置くか。計画を立てられないときは、何も付けない（一覧は出す）。 */
+  async #placementFor(dir: string, ref: string, sizeBytes?: number, backend?: Backend): Promise<{
+    tooBig: string | null; fit?: string; fitLabel?: string; plan?: string; detail?: string[];
+  }> {
+    try {
+      const machine = await this.#placementMachine(dir, backend);
+      const { plan, model } = await planFile(join(dir, ref), ref, machine, {}, sizeBytes);
+      const view = this.#placementView(plan, model.fileBytes);
+      return { tooBig: plan.possible ? null : refusalText(ref, plan, model, machine), fit: view.fit, fitLabel: view.fitLabel, plan: view.plan, detail: view.detail };
+    } catch {
+      return { tooBig: null };
+    }
   }
 
   async #readyToThink(load = true): Promise<string | undefined> {
@@ -3795,19 +3868,28 @@ export class UiServer {
           // GPU で読むとは限らず、VRAM を数えないと載り切らないものを選ぶ。
           const backend = await this.#backendOf(runtime);
           const hasGpu = backend ? backend.gpu !== false : machine.gpuName !== undefined;
-          const picked = chooseModel(models, totalmem(), wanted, {
+          const picked = chooseModel(models, reportedRam(totalmem()), wanted, {
             hasGpu, ...(backend?.vramBytes ? { vramBytes: backend.vramBytes } : {}),
           });
           if (!picked) return undefined;
           const ref = picked.chosen.ref;
-          // 記憶に載らないものを読みに行かない。落ちるか、何十分も固まる。
+          // メモリより大きいだけでは断らない。GPU に載るだけ載せ、残りはメモリ、入り切らない分は SSD から読む（placement.ts）。
+          // 断るのは、どう置いても入らないときだけ。そのときは、何があれば動くかを言う
+          let placedLine = '';
           if (!picked.fits) {
-            const big = tooBigForRam(picked.chosen.sizeBytes, totalmem());
-            const others = models.length > 1
-              ? `\nこの保存先には ${models.length} 個ありますが、どれも載りません。`
-              : '';
-            return `${ref}: ${big ?? '記憶に載りません。'}${others}\n`
-              + `保存先: ${this.#opts.config.runtime?.modelsDir ?? modelsDir()}`;
+            const at = this.#opts.config.runtime?.modelsDir ?? modelsDir();
+            const { plan, model: facts, machine: here } = await planHere({
+              modelsDir: at, ref, path: modelPath(at, ref),
+              ...(picked.chosen.sizeBytes !== undefined ? { sizeBytes: picked.chosen.sizeBytes } : {}),
+              ...(backend ? { backend } : {}),
+            });
+            if (!plan.possible) {
+              const others = models.length > 1
+                ? `\nこの保存先には ${models.length} 個ありますが、どれも入りません。`
+                : '';
+              return `${refusalText(ref, plan, facts, here)}${others}\n保存先: ${at}`;
+            }
+            placedLine = describePlacement(plan);
           }
           // 名前だけ .gguf で中身が別物（配布元の HTML の案内など）を、読みに行かない。
           // 一覧と同じ場所（動いている側の保存先）を見る。保存側を見ると、
@@ -3825,6 +3907,8 @@ export class UiServer {
             text: `モデルを読み込んでいます: ${ref}（${gb}GB・${CHOICE_WHY[picked.why]}`
               + `${hasGpu ? '' : '・GPU を使わないので、初回は時間がかかります'}）`,
           });
+          // メモリより大きいモデルは、どう置くかを先に一行で言う（黙って何分も待たせない）
+          if (placedLine) this.broadcast({ type: 'log', level: 'info', text: `${ref} はメモリより大きいので、分けて置きます。${placedLine}` });
           const began = Date.now();
           /*
            * **読んでいる間、黙らない。**
@@ -3837,7 +3921,7 @@ export class UiServer {
           const ticking = setInterval(() => {
             this.broadcast({
               type: 'log', level: 'info',
-              text: `まだ読み込んでいます: ${ref}（${Math.round((Date.now() - began) / 1000)} 秒）`,
+              text: `まだ読み込んでいます: ${ref}（${(() => { const pct = runtime.progressOf?.(ref); return typeof pct === 'number' && pct > 0 ? `${pct}%・` : ''; })()}${Math.round((Date.now() - began) / 1000)} 秒）`,
             });
           }, 10_000);
           ticking.unref?.();

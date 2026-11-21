@@ -313,8 +313,23 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     const quietCeilingMs = this.#quietCeilingMs;
     const endGraceMs = this.#endGraceMs;
     let lastDeltaAt = Date.now();
+    /*
+     * **本文に出ない間も、トークンが作られていれば進んでいる。**
+     *
+     * 中で読む口は、黙っている間の合図に、作ったトークンの数を添える（`: working 123`）。
+     * 遅いモデルがツールの呼び出しを組んでいると、本文が一文字も出ないまま 10 分を超える
+     * （0.5 tok/s で 300 トークン）。合図だけを数えていたときは、そこで停滞と言って落としていた。
+     * 数が増えていれば、進んだものとして数え直す。数が増えない合図は、今までどおり上限までしか延ばさない。
+     */
+    let beatTokens = 0;
+    const beatText = new TextDecoder();
     const alive = res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
       transform(bytes, controller) {
+        if (firstToken && !finished && bytes.length < 64) {
+          const m = /^: working (\d+)\s*$/.exec(beatText.decode(bytes));
+          const n = m ? Number(m[1]) : 0;
+          if (n > beatTokens) { beatTokens = n; lastDeltaAt = Date.now(); }
+        }
         // 終わりの合図の後に届くもの（使用量の塊・注釈）では待ちを延ばさない（延ばすと、注釈を送り続ける相手で終わらない）
         if (finished) { /* 合図のときに掛けた短い待ちのまま */ }
         else if (!firstToken) arm(firstTokenTimeoutMs);

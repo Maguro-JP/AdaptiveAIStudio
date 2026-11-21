@@ -9,6 +9,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { AvailableModel, LoadedModel, LocalRuntime } from './local-runtime.ts';
 import { listGguf, INPROC_PORT, type Backend, type GpuMode } from './inproc.ts';
+import type { PlacementPlan } from './placement.ts';
 
 export interface InProcHostOptions {
   modelsDir: string;
@@ -79,6 +80,8 @@ export class InProcHost implements LocalRuntime {
   #url?: Promise<string>;
   #loaded: string[] = [];
   #windows = new Map<string, number>();
+  #progress = new Map<string, number>();
+  #placements = new Map<string, PlacementPlan>();
   /** こちらから止めている最中。そのときの終わりは「落ちた」ではない。 */
   #stopping = false;
   /** いまの子が口（URL）を言ったか。言う前に止めるときは、頼まずに止める。 */
@@ -183,13 +186,58 @@ export class InProcHost implements LocalRuntime {
    */
   backend(): Promise<Backend> { return this.#call('backend'); }
 
+  /**
+   * 読ませる。**返事は流れで来る**（一行ずつの進み具合と、最後の一行の結果）。
+   *
+   * 読み終えるまで一度に待つ形だと、返事の頭が 300 秒来ないところで fetch が切り、5 分を超える読み込みが
+   * 全部「読み込めませんでした」になっていた。流れなら、読んでいる間は切れない。進み具合もそこから取る。
+   */
   async ensureLoaded(ref: string): Promise<LoadedModel> {
-    const got = await this.#call<LoadedModel & { window?: number | null }>('load', { ref });
+    const base = await this.#up();
+    const r = await fetch(`${base}/control/load`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ref }),
+    });
+    type Line = { progress?: number; done?: LoadedModel & { window?: number | null }; error?: string };
+    let got: Line['done'];
+    let failed: string | undefined;
+    const take = (text: string): void => {
+      if (!text.trim()) return;
+      let msg: Line;
+      try { msg = JSON.parse(text) as Line; } catch { return; }
+      if (typeof msg.progress === 'number') this.#progress.set(ref, msg.progress);
+      if (msg.done) got = msg.done;
+      if (typeof msg.error === 'string') failed = msg.error;
+    };
+    try {
+      if (!r.ok || !r.body) {
+        // 流さずに断ってきた（400・500）。今までどおり、中の理由を出す
+        const j = await r.json().catch(() => ({})) as { error?: string };
+        throw new Error(j.error ?? `load が ${r.status} で終わりました`);
+      }
+      const decoder = new TextDecoder();
+      let buf = '';
+      for await (const bytes of r.body as unknown as AsyncIterable<Uint8Array>) {
+        buf += decoder.decode(bytes, { stream: true });
+        let at: number;
+        while ((at = buf.indexOf('\n')) >= 0) { take(buf.slice(0, at)); buf = buf.slice(at + 1); }
+      }
+      take(buf);
+    } finally {
+      this.#progress.delete(ref);
+    }
+    if (failed !== undefined) throw new Error(failed);
+    if (!got) throw new Error('読み込みの返事が途中で切れました（モデルのプロセスが落ちた形が多いです）');
     if (!this.#loaded.includes(ref)) this.#loaded.push(ref);
     if (typeof got.window === 'number') this.#windows.set(ref, got.window);
+    if (got.placement) this.#placements.set(ref, got.placement);
     const { window: _w, ...rest } = got;
     return rest;
   }
+
+  /** 読み込みの進み具合（%）。読んでいる最中だけ。 */
+  progressOf(ref: string): number | undefined { return this.#progress.get(ref); }
+  /** 読んだモデルの、実際の配置。 */
+  placementOf(ref: string): PlacementPlan | undefined { return this.#placements.get(ref); }
 
   async unload(ref: string): Promise<void> {
     await this.#call('unload', { ref });
