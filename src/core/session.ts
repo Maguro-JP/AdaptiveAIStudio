@@ -40,7 +40,7 @@ import { startMcpServers, connectInto } from './mcp-setup.ts';
 import { loadJournals, saveJournals, type Journals } from './journals.ts';
 import { McpClient, type McpServerSpec } from '../mcp/client.ts';
 import { collectTools, deliverableCount } from '../mcp/tools.ts';
-import { Prefetcher, describeSnapshot } from '../agent/prefetch.ts';
+import { Prefetcher, describeSnapshot, type ProjectSnapshot } from '../agent/prefetch.ts';
 import { Memory, formatRecall, betterDetail, placeKey } from '../memory/memory.ts';
 import {
   senseDispleasure, DISPLEASURE_LABEL, lessonFrom, displeasureTitle,
@@ -49,7 +49,8 @@ import {
 } from '../memory/displeasure.ts';
 import { ProposalQueue, proposalHere, type Proposal } from '../agent/proposals.ts';
 import { findLeads, investigationPrompt, parseProposal, reconCutShort } from '../agent/initiative.ts';
-import { IdleScheduler, type ModeStat, type Decision } from '../harness/idle.ts';
+import { proposeIdea, ideaProposal, materialsFromContext, type IdeaComplete } from '../agent/ideas.ts';
+import { IdleScheduler, type ModeStat, type Decision, type IdleMode } from '../harness/idle.ts';
 import { BUILTIN_IDLE_MODES, MODE_ROLE, promptFor } from '../harness/idle-modes.ts';
 import { DutyRoster, type DutyRecord } from '../harness/duties.ts';
 import { BUILTIN_DUTIES } from '../harness/builtin-duties.ts';
@@ -1330,6 +1331,12 @@ export class Session {
       files = lead.files;
     }
 
+    // IDEA（発想）だけは、調べる思考ではない。材料と語彙を機械で衝突させて作り、
+    // 磨きだけ送り口に通す。エージェントのターンは回さない（`#thinkIdea`）。
+    if (mode.id === 'idea') {
+      return yield* this.#thinkIdea(ac, mode, role, decision, snap);
+    }
+
     // 手は `think` の頭で取ってある（ここまで待つ間に来た送りは手を取れない）。待っている間に止められたら、モデルを呼ばない
     if (stopped()) { yield { type: 'declined', reason: '止められました' }; return false; }
     this.idle.begin(mode, Date.now());
@@ -1479,6 +1486,83 @@ export class Session {
 
     if (added) {
       // どの思考から出た提案かを覚える。採否がその思考の実績になる。
+      this.#origin.set(added.id, mode.id);
+      yield { type: 'proposal', proposal: added, codename: mode.codename };
+    }
+    return true;
+  }
+
+  /**
+   * 発想（IDEA）の回。調べるのではなく、作る。
+   *
+   * 材料（未コミットの変更・最近触ったファイル・記憶の題）と語彙を機械で衝突させ、
+   * 文章にして、磨きだけ送り口に一度通す。出たアイデアは、ほかの思考と同じ
+   * 提案キューに積む。実行するかは利用者が決める（承認の流れも同じ）。
+   */
+  async *#thinkIdea(
+    ac: AbortController, mode: IdleMode, role: Role, decision: Decision, snap: ProjectSnapshot | undefined,
+  ): AsyncGenerator<ThinkEvent, boolean> {
+    const stopped = () => ac.signal.aborted;
+    if (stopped()) { yield { type: 'declined', reason: '止められました' }; return false; }
+    this.idle.begin(mode, Date.now());
+    yield {
+      type: 'chose', modeId: mode.id, codename: mode.codename, name: mode.name,
+      roleCodename: role.codename, reason: decision.reason, isDuty: !!decision.dutyId,
+    };
+
+    const changed = snap?.git?.kind === 'dirty' ? snap.git.changed.map((e) => e.trim()) : [];
+    const materials = materialsFromContext({
+      changedFiles: changed,
+      recentFiles: (snap?.recentFiles ?? []).map((f) => f.path),
+      memoryTitles: this.memory.all().slice(-24).map((e) => e.title),
+    });
+
+    // 磨きは、この送り口で一番小さい依頼として出す。取れなければ undefined
+    // （生成側は素の文章に倒れる）。考えごとの邪魔をしないよう優先度は低に置く。
+    const complete: IdeaComplete = async (system, prompt) => {
+      let out = '';
+      let failed = false;
+      try {
+        for await (const ev of this.orchestrator.run({
+          candidates: this.candidates,
+          system,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: this.config.temperature,
+          maxTokens: 256,
+          priority: Priority.low,
+        }, ac.signal)) {
+          if (ev.type === 'text') out += ev.delta;
+          else if (ev.type === 'failed') failed = true;
+        }
+      } catch {
+        return undefined;
+      }
+      if (failed || ac.signal.aborted) return undefined;
+      const text = out.trim();
+      return text === '' ? undefined : text;
+    };
+
+    const idea = await proposeIdea({
+      materials, seen: this.proposals.seen(), complete,
+    }).catch(() => undefined);
+
+    if (stopped()) {
+      await this.saveAutonomy();
+      yield { type: 'failed', codename: mode.codename, reason: '止められました' };
+      return true;
+    }
+
+    this.idle.recordOutcome(mode.id, idea !== undefined);
+    await this.saveAutonomy();
+    if (idea === undefined) {
+      // 既出の組み合わせしか引けなかった。同じ発想を繰り返し提案にしない。
+      yield { type: 'noFinding', codename: mode.codename };
+      return true;
+    }
+
+    const added = this.proposals.add(ideaProposal(idea, changed.slice(0, 5), placeKey(this.root)));
+    await this.saveProposals();
+    if (added) {
       this.#origin.set(added.id, mode.id);
       yield { type: 'proposal', proposal: added, codename: mode.codename };
     }

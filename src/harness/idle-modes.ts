@@ -149,8 +149,28 @@ export const upkeep: IdleMode = {
   basePriority: 4,
 };
 
+/**
+ * IDEA — 発想。いまの材料と、普段結びつかない語を衝突させてアイデアを出す。
+ *
+ * IDEAMAN の生成エンジンを持ってきたもの。手元のコードを調べる他の思考と違い、
+ * 材料は「いま取り組んでいること」の語で、答えはモデルに考えさせるのではなく
+ * 機械の抽選で作る（磨きだけモデルに通す）。提案キューに積むところは他と同じ。
+ * 手元が変わらなくても新しい組み合わせは尽きないが、騒がしくならないよう間隔は長く取る。
+ */
+export const idea: IdleMode = {
+  id: 'idea',
+  triggeredBy: 'time',
+  codename: 'IDEA',
+  name: '発想',
+  purpose: 'いま取り組んでいる材料と、普段結びつかない語を衝突させて、アイデアを提案する。',
+  precondition: (ctx) => ctx.lastRunAt === undefined || ctx.now - ctx.lastRunAt > 3 * 60 * MINUTE,
+  cooldownMs: 3 * 60 * MINUTE,
+  cost: 1,
+  basePriority: 2,
+};
+
 export const BUILTIN_IDLE_MODES: IdleMode[] = [
-  patrol, recon, retrospect, forecast, briefing, whatif, digest, agenda, upkeep,
+  patrol, recon, retrospect, forecast, briefing, whatif, digest, agenda, upkeep, idea,
 ];
 
 /** モードごとの依頼文。誰に何を考えさせるかがここで決まる。 */
@@ -164,6 +184,7 @@ export const MODE_ROLE: Record<string, string> = {
   whatif: 'planner',
   digest: 'reviewer',
   agenda: 'planner',
+  idea: 'planner',
 };
 
 export function promptFor(mode: IdleMode, context: string): string {
@@ -180,6 +201,7 @@ export function promptFor(mode: IdleMode, context: string): string {
     whatif: '今の作りとは別のやり方を1つ考え、利点と欠点を比べてください。',
     digest: '前回の確認以降に入った変更を通しで見て、見落としがあれば1つ挙げてください。',
     agenda: '未処理の提案と残作業を見て、次に何から手を付けるべきかを理由とともに1つ示してください。',
+    idea: 'いまの材料と普段結びつかない語を衝突させ、試す価値のあるアイデアを1つ示してください。',
     upkeep:
       'いま使っているモデルより良いものが出ていれば、1つだけ報告してください。'
       + '大きさと活性パラメータから、この機械で動くかどうかを必ず併せて述べてください。'
