@@ -32,7 +32,7 @@ import { extractToolCalls, ToolTextFilter } from '../agent/tool-text.ts';
 import { readGguf } from './gguf.ts';
 import { extractFacts, headDimOf } from './gguf-spec.ts';
 import { totalmem } from 'node:os';
-import { DEFAULT_PRIORITY, Priority, PRIORITY_HEADER, toPriority } from '../providers/contract.ts';
+import { AUX_HEADER, DEFAULT_PRIORITY, isAux, Priority, PRIORITY_HEADER, toPriority } from '../providers/contract.ts';
 import { findRunaway, runawayNote } from './runaway.ts';
 import { OUTPUT_SHARE } from '../agent/window.ts';
 import {
@@ -357,6 +357,15 @@ export interface InProcOptions {
    */
   sequences?: number;
   /**
+   * 補助の口のコンテキストウィンドウ（トークン）。既定 `AUX_WINDOW`。0 なら補助の口を作らない。
+   *
+   * 補助の呼び出し（`x-aas-aux: 1`。要る事実を挙げる・指摘かどうかを判じる・検問）は、会話とは別の
+   * 小さな context の口で回す。会話の口で回すと、前の頼みの続き（KV）を毎回上書きし、続けて頼んだ会話を
+   * 頭から読み直すことになる。KV はこの長さの分だけ余計に要る（開いたときの記録に目安を出す）。
+   * 開くのは最初の補助の呼び出しのとき（補助を使わない間は、メモリを使わない）。
+   */
+  auxWindow?: number;
+  /**
    * 別のプロセス（inproc-host）で動かすときの、操作の口を開けるか。
    * `/control/*` で一覧・読み込み・降ろす・止めるを受ける。
    * 画面のプロセスは、これ越しにしかモデルに触らない。
@@ -657,6 +666,17 @@ export const SAFE_WINDOW = 8192;
  * **速さのための数ではない。**CPU は分け合うので、増やすと一人あたりは遅くなる。
  */
 export const DEFAULT_SEQUENCES = 2;
+/**
+ * 補助の口のコンテキストウィンドウの既定（トークン）。開いた会話のコンテキストウィンドウより広くはしない。
+ *
+ * 補助の呼び出しは短い（決まりと 1 つの問いで、数百トークン）。広くすると KV の分だけメモリが要るので、小さく持つ。
+ * これより長い補助の呼び出しは、会話の口へ回す（切り詰めて答えを変えるより、読み直すほうを取る）。
+ */
+export const AUX_WINDOW = 1024;
+/** 補助の呼び出しが補助の口に入るかの見当。日本語は 1 文字がおよそ 1 トークンなので、文字数で見て半分までを入るとする。 */
+export function fitsAux(chars: number, auxWindow: number): boolean {
+  return auxWindow > 0 && chars <= auxWindow / 2;
+}
 /**
  * 列で待っている間、何 ms ごとに `: queued` を打つか。
  * 上の層は最初のトークンまでの上限（10 分）を数えているが、**並んでいる時間は停滞ではない**。
@@ -1075,8 +1095,41 @@ export class InProcRuntime implements LocalRuntime {
     }
     return {
       context, model: model as Held['model'], wrapper, window: contextSize, lanes: new LanePool(lanes), active: new Set(), placement,
+      // 補助の口は、最初の補助の呼び出しで開く（補助を使わない間は、KV の分のメモリを使わない）
+      openAux: () => this.#openAux(ref, lib, model, contextSize, facts.kvBytesPerToken),
       measure: { model: facts, machine, plan: asPlanned.get(got.step) ?? got.step.plan },
     };
+  }
+
+  /** 補助の口。最初に要るときに 1 度だけ開く。開けなかったら、以後は開き直さない（毎回の呼び出しを遅くしない）。 */
+  #auxOf(held: Held): Promise<AuxLanes | undefined> {
+    held.aux ??= held.openAux ? held.openAux() : Promise.resolve(undefined);
+    return held.aux;
+  }
+
+  /**
+   * 補助の口を開く。会話の context とは別の、小さな context に 1 本。
+   *
+   * 開けなければ（メモリが足りない等）、補助の口は無しで続ける。補助の呼び出しは会話の口で回り、
+   * 続けて頼むと読み直しになるが、答えは変わらない。読み込みは落とさない。
+   */
+  async #openAux(
+    ref: string, lib: LlamaLib, model: Awaited<ReturnType<LlamaLike['loadModel']>>, window: number, kvBytesPerToken: number | undefined,
+  ): Promise<AuxLanes | undefined> {
+    const size = Math.min(window, Math.max(0, Math.floor(this.#opts.auxWindow ?? AUX_WINDOW)));
+    if (size <= 0) return undefined;
+    let context: Awaited<ReturnType<typeof model.createContext>> | undefined;
+    try {
+      context = await model.createContext({ contextSize: size, sequences: 1 });
+      const lane = new lib.LlamaChatSession({ contextSequence: context.getSequence() }) as ChatLane;
+      const kv = kvBytesPerToken && kvBytesPerToken > 0 ? `・KV の目安 ${Math.max(1, Math.round((kvBytesPerToken * size) / 1024 ** 2))}MB` : '';
+      this.#opts.onLog?.(`${ref}: 補助の口を開きました（コンテキストウィンドウ ${size}${kv}）。補助の呼び出しは、会話の続きを上書きしません`);
+      return { context, lanes: new LanePool([lane]), window: size };
+    } catch (e) {
+      await context?.dispose?.().catch(() => undefined);
+      this.#opts.onLog?.(`${ref}: 補助の口を開けませんでした（${e instanceof Error ? e.message : String(e)}）。補助の呼び出しは会話の口で回します`);
+      return undefined;
+    }
   }
 
   /** 並列に持ちたい本数。設定が無ければ既定。 */
@@ -1218,13 +1271,17 @@ export class InProcRuntime implements LocalRuntime {
     // 先に外して新しい依頼を受けない。答えている最中の口が戻るのを待ち、並んでいる人は断ってから解く
     // （待たずに解くと、生成中の口が解いた context の上で続いていた）
     this.#sessions.delete(ref);
-    const closed = held.lanes.close();
+    // 補助の口は、もう開かない（開いている最中なら、開き終わるのを待ってから閉じる）
+    delete held.openAux;
+    const aux = await held.aux;
+    const closed = Promise.all([held.lanes.close(), aux?.lanes.close()]);
     const waited = await Promise.race([closed.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), this.#opts.unloadWaitMs ?? UNLOAD_WAIT_MS).unref())]);
     if (!waited) {
       // 上限まで待っても返らない生成は、止めてから解く（止めずに解くと、次の一歩で落ちて「止まりました」の答えになる）
       for (const ac of held.active) ac.abort();
       await Promise.race([closed, new Promise((r) => setTimeout(r, this.#opts.unloadWaitMs ?? UNLOAD_WAIT_MS).unref())]);
     }
+    await aux?.context.dispose?.().catch(() => { /* すでに解けている */ });
     await held.context.dispose?.().catch(() => { /* すでに解けている */ });
     // 重みも解く（context を解いても重みは残り、切り替えるたびに数 GB ずつ溜まっていた）
     await held.model?.dispose?.().catch(() => { /* すでに解けている */ });
@@ -1465,9 +1522,16 @@ export class InProcRuntime implements LocalRuntime {
       ? setInterval(() => { if (!res.writableEnded) res.write(': queued\n\n'); },
         this.#opts.queueHeartbeatMs ?? QUEUE_HEARTBEAT_MS)
       : undefined;
+    // 補助の呼び出し（`x-aas-aux: 1`）は、補助の口で回す。会話の口の続き（KV）を上書きしないため。
+    // 補助の口が無い・入り切らない長さのときは、会話の口で回す（答えは変わらない。読み直しになるだけ）
+    const chars = (body.messages ?? []).reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : 0), 0);
+    const aux = isAux(req.headers[AUX_HEADER]) && (body.tools?.length ?? 0) === 0 ? await this.#auxOf(held) : undefined;
+    const viaAux = aux !== undefined && fitsAux(chars, aux.window);
+    const pool = viaAux ? aux.lanes : held.lanes;
+    const window = viaAux ? aux.window : held.window;
     let lane: ChatLane | undefined;
     try {
-      lane = await held.lanes.acquire({ signal: gone.signal, priority });
+      lane = await pool.acquire({ signal: gone.signal, priority });
     } finally {
       if (beat) clearInterval(beat);
     }
@@ -1489,11 +1553,11 @@ export class InProcRuntime implements LocalRuntime {
         res.write(`: waits ${held.placement.timeouts.firstTokenMs} ${held.placement.timeouts.stallMs}\n\n`);
       }
       held.active.add(gone);
-      await this.#respond(held, lane, ref, body, res, gone.signal);
+      await this.#respond(held, lane, ref, body, res, gone.signal, window);
     } finally {
       held.active.delete(gone);
       res.off('close', onClose);
-      if (lane) held.lanes.release(lane);
+      if (lane) pool.release(lane);
     }
   }
 
@@ -1513,7 +1577,7 @@ export class InProcRuntime implements LocalRuntime {
 
   async #respond(
     held: Held, lane: ChatLane, ref: string, body: ChatRequest,
-    res: ServerResponse, signal: AbortSignal,
+    res: ServerResponse, signal: AbortSignal, window: number = held.window,
   ): Promise<void> {
     // 上の層は毎回すべての履歴を送ってくる。こちらは持ち越さず、
     // **渡されたものだけ**で組み直す。持ち越すと二重になる。
@@ -1580,7 +1644,7 @@ export class InProcRuntime implements LocalRuntime {
     // 決まり（system）と履歴が入る場所を残す。残さないと、必ず溢れる。
     // **実際に開いた窓で数える。**設定の値で数えていたので、モデルの窓が
     // 広くても狭いつもりで刈っていた（逆に、狭いのに広いつもりで溢れる）。
-    const room = Math.max(256, Math.floor(held.window * OUTPUT_SHARE));
+    const room = Math.max(256, Math.floor(window * OUTPUT_SHARE));
     const wanted = typeof body.max_tokens === 'number' ? body.max_tokens : room;
     const capped = Math.min(wanted, room);
 
@@ -2046,6 +2110,9 @@ export class LanePool {
   }
 }
 
+/** 補助の呼び出しに貸す口（会話とは別の小さな context に 1 本）。 */
+interface AuxLanes { context: { dispose?: () => Promise<void> }; lanes: LanePool; window: number }
+
 /** 降ろすとき、答えている最中の口が戻るのを待つ上限。 */
 const UNLOAD_WAIT_MS = 10_000;
 
@@ -2068,6 +2135,10 @@ interface Held {
   window: number;
   /** 会話ごとに貸す口。ここが「同時に何人に答えられるか」を決める。 */
   lanes: LanePool;
+  /** 補助の口を開く手。降ろし始めたら外す（降ろしている最中に開かない）。 */
+  openAux?: () => Promise<AuxLanes | undefined>;
+  /** 補助の呼び出しに貸す口。最初の補助の呼び出しで開く。開けなかった・切ってあるときは undefined に解ける。 */
+  aux?: Promise<AuxLanes | undefined>;
   /** 答えている最中の依頼の止める合図（降ろすときに、待っても返らない生成を止める）。 */
   active: Set<AbortController>;
   /** 実際に読めた配置の計画。 */

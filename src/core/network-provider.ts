@@ -80,6 +80,8 @@ export class InnerNeedLister implements NeedLister {
     let text = '';
     for await (const ev of this.#orchestrator.run({
       candidates: input.candidates, system: NEEDS_SYSTEM, temperature: 0, maxTokens: 200,
+      // 会話の続きではない。会話の口の続き（KV）を上書きしないよう、補助の口で回す
+      aux: true,
       messages: [{ role: 'user', content: last.content }],
     }, signal)) {
       if (ev.type === 'text') text += ev.delta;

@@ -5,7 +5,7 @@
  * および将来のOpenAI互換サービスへ接続できる。
  * 「特定サービスの終了に依存しない」ことの実体的な担保がこれ。
  */
-import { PRIORITY_HEADER } from './contract.ts';
+import { AUX_HEADER, PRIORITY_HEADER } from './contract.ts';
 import type {
   ChatProvider, HealthStatus, ModelDescriptor,
   ProviderChunk, ProviderMessage, ProviderRequest, ToolCall,
@@ -230,6 +230,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         headers: {
           ...this.#headers(),
           ...(req.priority !== undefined ? { [PRIORITY_HEADER]: String(req.priority) } : {}),
+          ...(req.aux ? { [AUX_HEADER]: '1' } : {}),
         },
         signal: combined,
         body: JSON.stringify({

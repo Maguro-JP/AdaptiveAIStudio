@@ -2500,6 +2500,8 @@ export class Session {
         system: '指摘を受けた側として、何が悪かったのかを考える。決まった形だけを返す。',
         messages: [{ role: 'user', content: judgePrompt(said, when, did) }],
         temperature: 0.2,
+        // 会話の続きではない。会話の口の続き（KV）を上書きしないよう、補助の口で回す
+        aux: true,
       }, ac.signal)) {
         if (ev.type === 'text') text += ev.delta;
         else if (ev.type === 'done' && ev.finishReason !== 'length') finished = true;

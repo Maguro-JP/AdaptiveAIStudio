@@ -79,6 +79,19 @@ export const DEFAULT_PRIORITY: Priority = Priority.normal;
  * **確かめたのは inproc だけ**（Ollama / llama-server / 雲の中継では試していない）。
  */
 export const PRIORITY_HEADER = 'x-aas-priority';
+/**
+ * 補助の呼び出し（要る事実を挙げる・指摘かどうかを判じる・検問）の合図を運ぶ HTTP ヘッダ。値は `1`。
+ *
+ * 補助の呼び出しは、会話の続きではない。会話と同じ口（sequence）で回すと、前の頼みの続き（KV）を
+ * 毎回上書きし、続けて頼んだ会話を頭から読み直すことになる。inproc は、この合図の付いた呼び出しを
+ * 補助用の口で回す（`InProcRuntime` の `auxWindow`）。合図を知らない相手は読み飛ばす（確かめたのは inproc だけ）。
+ */
+export const AUX_HEADER = 'x-aas-aux';
+/** ヘッダから読む。`1` だけが補助。 */
+export function isAux(value: unknown): boolean {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === 'string' && raw.trim() === '1';
+}
 /** ヘッダから読む。無い・読めない・範囲外は既定（中）。 */
 export function toPriority(value: unknown): Priority {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -99,6 +112,8 @@ export interface ProviderRequest {
   tools?: ToolSchema[];
   /** 優先度。無ければ既定（中）。inproc の口の貸し出し順に効く。外の相手（雲）は見ない。 */
   priority?: Priority;
+  /** 補助の呼び出し（会話の続きではない）。inproc は補助用の口で回し、会話の続きを壊さない。外の相手は見ない。 */
+  aux?: boolean;
 }
 
 export type ProviderChunk =

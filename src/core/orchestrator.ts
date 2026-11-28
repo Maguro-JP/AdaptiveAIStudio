@@ -32,6 +32,8 @@ export interface ChatInput {
   tools?: ToolSchema[];
   /** 優先度。無ければ provider へ渡さない（既定は受ける側が決める）。 */
   priority?: Priority;
+  /** 補助の呼び出し（会話の続きではない）。provider へそのまま渡す。 */
+  aux?: boolean;
 }
 
 /** 待つ。止めるボタン（signal）で抜ける。抜けた後は、呼ぶ側が `signal.aborted` を見て終わる。 */
@@ -151,7 +153,8 @@ export class ChatOrchestrator {
             { model, system: input.system, messages,
               temperature: input.temperature, maxTokens: input.maxTokens,
               tools: input.tools,
-              ...(input.priority !== undefined ? { priority: input.priority } : {}) },
+              ...(input.priority !== undefined ? { priority: input.priority } : {}),
+              ...(input.aux ? { aux: true } : {}) },
             signal,
           )) {
             if (chunk.type === 'text') {

@@ -33,6 +33,8 @@ export function createModelJudge(
       maxTokens: 200,
       // 会話の途中で呼ばれる（答えを出す道の上に居る）。本番の次、裏の仕事より先。
       priority: Priority.preferred,
+      // 会話の続きではない。会話の口の続き（KV）を上書きしないよう、補助の口で回す
+      aux: true,
       // tools は渡さない。検査官は道具を持たない。
     }, signal)) {
       if (ev.type === 'text') out += ev.delta;
