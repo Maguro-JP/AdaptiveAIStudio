@@ -306,6 +306,19 @@ export async function saveLocation(place: string): Promise<string> {
   });
 }
 
+/** 確かめで押し戻された頼みを大きいモデルに回すか、を設定に書く。入り（既定）なら、書いてある切り替えを消す。 */
+export async function saveEscalate(enabled: boolean): Promise<string> {
+  return editConfig((current, at) => {
+    const escalate: Record<string, unknown> = { ...objectOr(current.escalate) };
+    if (enabled) delete escalate.enabled;
+    else escalate.enabled = false;
+    const next: Record<string, unknown> = { ...current };
+    if (Object.keys(escalate).length > 0) next.escalate = escalate;
+    else delete next.escalate;
+    return { next, result: at };
+  });
+}
+
 /** ブロックでつくる画面の向きを設定に書く。 */
 export async function saveBlocksDirection(dir: string): Promise<string> {
   return editConfig((current, at) => ({ next: { ...current, blocksDirection: dir }, result: at }));

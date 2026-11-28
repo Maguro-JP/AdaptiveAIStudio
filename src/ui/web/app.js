@@ -2207,6 +2207,8 @@ const DIR_NOTES = {
 
 /** いまの設定を読み出して、画面へ映す。 */
 async function loadCfg() {
+  // 回す先は、選んであるモデルで変わる。一覧を読み直すたびに、こちらも読み直す
+  void loadEscalate();
   // 返ってくるまでの間、空欄のまま黙らない。**読んでいることを出す。**
   $('cfgNote').style.whiteSpace = 'pre-line';
   $('cfgNote').textContent = '読んでいます…';
@@ -2680,6 +2682,36 @@ async function saveLocationNow() {
   $('locationInput').value = r.body.location;
   st.textContent = `保存しました（${r.body.location}）。次の問いから使います`;
 }
+/**
+ * 大きいモデルは要るときだけ。入り切りと、いま回すとしたらどこへ回るか（回せないなら理由）を出す。
+ * チェックを押すと、その場で保存して結果を言う。もう一度押せば戻る。
+ */
+function showEscalate(r) {
+  $('escalateOn').checked = r.enabled;
+  const to = r.target?.ready ? r.target.label : '';
+  $('escalateStatus').textContent = r.enabled
+    ? (to ? `入っています。回す先: ${to}` : `入っていますが、いまは回せません（${r.target?.why ?? '回す先が分かりません'}）`)
+    : `切ってあります（押し戻されても、今のモデルで続けます）${to ? `。入れると ${to} に回します` : ''}`;
+}
+async function loadEscalate() {
+  const r = await getJson('/api/escalate').catch(() => null);
+  if (r) showEscalate(r);
+}
+$('escalateOn').onchange = async () => {
+  const want = $('escalateOn').checked;
+  $('escalateOn').disabled = true;
+  const r = await ask('/api/escalate', {
+    method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: want }),
+  }, '保存できませんでした');
+  $('escalateOn').disabled = false;
+  if (!r || !r.ok) {
+    // 保存できなかったら、押す前に戻す
+    $('escalateOn').checked = !want;
+    $('escalateStatus').textContent = r?.body?.error ?? '保存できませんでした';
+    return;
+  }
+  showEscalate(r.body);
+};
 $('locationSave').onclick = () => void saveLocationNow();
 $('locationInput').addEventListener('keydown', (e) => { if (isPlainEnter(e)) { e.preventDefault(); void saveLocationNow(); } });
 

@@ -10,7 +10,8 @@
  * 数年で作法が変わるものに画面を預けたくない。
  * 素の HTML と ES モジュールなら、組み立ての手順すら要らない。
  */
-import { innerCandidates, isNetworkModel } from '../core/network-provider.ts';
+import { innerCandidates, isNetworkModel, type EscalateAnswer } from '../core/network-provider.ts';
+import { pickLargeModel } from '../runtime/large-model.ts';
 import { how } from '../cli/how.ts';
 import { placeKey } from '../memory/memory.ts';
 import { proposalHere, actionRequest } from '../agent/proposals.ts';
@@ -32,7 +33,7 @@ import { revertLines, type RevertPick } from '../agent/hunks.ts';
 import { buildCompletionInput, cleanCompletion } from '../core/completion.ts';
 import { writeEnvValue } from '../core/env.ts';
 import { canRun } from '../core/which.ts';
-import { saveLocation, saveBlocksDirection, saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
+import { saveEscalate, saveLocation, saveBlocksDirection, saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
 import { DEFAULT_LOCATION, WeatherSource } from '../core/knowledge-source.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, writeFile, mkdir, realpath, rename, rm, chmod } from 'node:fs/promises';
@@ -750,6 +751,8 @@ export class UiServer {
       journals: await this.journals(),
       approve: (req, meta) => this.#ask(req, meta),
       onLog: (level, text) => this.broadcast({ type: 'log', level, text }),
+      // 確かめで押し戻された頼みを回す、大きいモデル。訊かれるたびに、いまの設定と手元のモデルで答える（切り替えが次の頼みから効く）
+      escalate: (inner) => this.#escalateTarget(inner),
       // AI が「ここを見てください」と言ったら、画面のエディタで開く。
       // 画面が無い入口（端末）では置かない（`show_file` はそこでは使えない）。
       onShow: ({ path, line }) => this.broadcast({ type: 'show', path, ...(line === undefined ? {} : { line }) }),
@@ -2143,6 +2146,29 @@ export class UiServer {
           error: `設定を読めませんでした: ${(e as Error).message}`,
         });
       }
+    }
+
+    /*
+     * 確かめで押し戻された頼みを、大きいモデルに回すか。保存したら、いま動いている設定にも入れる（次の頼みから効く）。
+     * `target` は、いま回すとしたらどこへ回るか（回せないなら、その理由）。切り替える前に見える。
+     */
+    if (path === '/api/escalate' && (req.method === 'GET' || req.method === 'PUT')) {
+      if (req.method === 'PUT') {
+        const body = (await readBody(req) ?? {}) as { enabled?: unknown };
+        if (typeof body.enabled !== 'boolean') return send(res, 400, { error: 'enabled（true か false）が要ります' });
+        await saveEscalate(body.enabled);
+        const next = { ...this.#opts.config.escalate };
+        if (body.enabled) delete next.enabled; else next.enabled = false;
+        if (Object.keys(next).length > 0) this.#opts.config.escalate = next; else delete this.#opts.config.escalate;
+      }
+      const enabled = this.#opts.config.escalate?.enabled !== false;
+      const target = await this.#escalateTarget(innerCandidates(this.#session?.candidates ?? []), true).catch((e: unknown): EscalateAnswer => ({
+        state: 'none', why: `調べられませんでした（${e instanceof Error ? e.message : String(e)}）`,
+      }));
+      return send(res, 200, {
+        enabled,
+        target: target.state === 'ready' ? { ready: true, label: target.label } : { ready: false, why: target.state === 'none' ? target.why : '' },
+      });
     }
 
     // 天気の既定の場所。保存したら、いま動いている設定にも入れる（立ち上げ直さずに次の問いから効く）
@@ -3834,6 +3860,40 @@ export class UiServer {
     const got = await runtime.backend().catch(() => undefined);
     if (got) this.#lastBackend = got;
     return got;
+  }
+
+  /**
+   * 確かめで押し戻された頼みを回す先（`Session` に渡す。訊かれるのは、押し戻しが続いたときだけ）。
+   * 取ってある中で、今のモデルより大きく、この機械の計画で動くもののうち、いちばん大きいもの。`evenIfOff` は、切ってあっても回す先を調べる（設定の画面に見せるため）。
+   */
+  async #escalateTarget(inner: readonly string[], evenIfOff = false): Promise<EscalateAnswer> {
+    const cfg = this.#opts.config.escalate;
+    if (cfg?.enabled === false && !evenIfOff) return { state: 'off' };
+    const runtime = await this.#localRuntime();
+    if (runtime.id !== 'inproc') return { state: 'none', why: 'この中で読む動かし方（inproc）のときだけ回せます' };
+    // 今のモデル: 候補の先頭（`口の名前:モデル`）。まだ読んでいなければ、読んであるもの・設定で選んだもの
+    const head = inner[0];
+    const cut = head ? head.indexOf(':') : -1;
+    const provider = cut > 0 ? head!.slice(0, cut) : 'inproc';
+    // 候補がまだ無いとき（選び直した直後・設定の画面）は、選んであるもの。それも無ければ、読んであるもの
+    const current = (cut > 0 ? head!.slice(cut + 1) : undefined) ?? this.#opts.config.runtime?.model ?? runtime.loaded()[0];
+    const dir = this.#opts.config.runtime?.modelsDir ?? modelsDir();
+    const backend = this.#lastBackend;
+    const picked = await pickLargeModel({
+      models: await runtime.list(),
+      ...(current ? { current } : {}),
+      ...(cfg?.model ? { wanted: cfg.model } : {}),
+      canRun: async (m) => {
+        if (!(await looksLikeGguf(modelPath(dir, m.ref)))) return false;
+        const { plan } = await planHere({
+          modelsDir: dir, ref: m.ref, path: modelPath(dir, m.ref),
+          ...(m.sizeBytes !== undefined ? { sizeBytes: m.sizeBytes } : {}), ...(backend ? { backend } : {}),
+        });
+        return plan.possible;
+      },
+    });
+    if (picked.ref === undefined) return { state: 'none', why: picked.why };
+    return { state: 'ready', candidate: `${provider}:${picked.ref}`, label: picked.ref };
   }
 
   /** 最後に分かった backend。一覧を出すだけのときは、これを使う（一覧のために、モデルのプロセスを起こさない）。 */

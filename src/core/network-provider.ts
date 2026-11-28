@@ -104,6 +104,47 @@ export interface NetworkOptions {
   log?: (level: 'info' | 'warn', message: string) => void;
   /** 今の事実（天気など）を取り損ねたときの、取り直しまでの間（ミリ秒）。1・2 倍と延ばす。試験では 0。 */
   liveRetryWaitMs?: number;
+  /**
+   * 確かめで押し戻された頼みを回す、大きいモデル。置かなければ回さない（今までどおり）。
+   * 押し戻しが続いたときに訊く。今の中の候補を渡し、回す先（候補の名前）か、回せない理由を返させる。
+   */
+  escalate?: EscalateSource;
+}
+
+/** 大きいモデルに回せるか。合図は英語、見せる言葉は `label` と `why`。 */
+export type EscalateAnswer =
+  /** 設定で切ってある。何も言わない。 */
+  | { state: 'off' }
+  /** 回す先が在る。`candidate` は `provider:モデル` の名前。 */
+  | { state: 'ready'; candidate: string; label: string }
+  /** 回す先が無い（置いて無い・計画で動かない）。理由を 1 行で言う。 */
+  | { state: 'none'; why: string };
+
+export type EscalateSource = (inner: readonly string[]) => Promise<EscalateAnswer>;
+
+/** 押し戻しが、これだけ続いたら大きいモデルに回す（私の推測で決めた値。1 回の押し戻しは、小さいモデルでも直ることが多い）。 */
+export const ESCALATE_AFTER_NUDGES = 2;
+
+/**
+ * この頼みを、大きいモデルに回すか。最後の利用者の一言のあとの押し戻しを見る。
+ *
+ *   ・押し戻し（確かめていない言い切り・やると言っただけ・合図なしで手を止めた、など）が `ESCALATE_AFTER_NUDGES` 回続いた
+ *   ・確かめ（試験）が通らなかった差し戻しが 1 回でも在る（通らないまま終わりそうな頼み）
+ * 試験の口 `AAS_TEST_PUSHBACKS=<回数>` は、押し戻しがその回数あったものとして扱う（本物の小さいモデルで、回す道を確かめるため）。
+ */
+export function pushedBack(messages: ChatInput['messages'], env: Record<string, string | undefined> = process.env): { nudges: number; verifyFailed: boolean; escalate: boolean } {
+  let nudges = 0;
+  let verifyFailed = false;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role !== 'user') continue;
+    if (!m.nudge) break;
+    nudges += 1;
+    if (m.verifyFailed) verifyFailed = true;
+  }
+  const forced = Number(env.AAS_TEST_PUSHBACKS);
+  if (Number.isFinite(forced) && forced > 0) nudges = Math.max(nudges, Math.floor(forced));
+  return { nudges, verifyFailed, escalate: verifyFailed || nudges >= ESCALATE_AFTER_NUDGES };
 }
 
 /** 今の事実を取りに行く回数（最初の 1 回を含む）。私の推測で決めた値。 */
@@ -124,6 +165,9 @@ export class NetworkProvider implements ChatProvider {
   readonly #pending = new Set<string>();
   readonly #log: (level: 'info' | 'warn', message: string) => void;
   readonly #liveRetryWaitMs: number;
+  readonly #escalate: EscalateSource | undefined;
+  /** 回した・回さなかった、を言った頼み（最後の利用者の一言の位置と中身）。同じ頼みの中で、同じ一行を繰り返さない。 */
+  #saidFor = '';
 
   /** `inner`: 依頼に中の候補が添えられていないときに使う候補（これが無かったときの候補）。 */
   constructor(registry: ProviderRegistry, inner: () => readonly string[], opts: NetworkOptions = {}) {
@@ -136,6 +180,43 @@ export class NetworkProvider implements ChatProvider {
     this.#settleAtEnd = opts.settleAtEnd ?? false;
     this.#log = opts.log ?? (() => undefined);
     this.#liveRetryWaitMs = opts.liveRetryWaitMs ?? 1000;
+    this.#escalate = opts.escalate;
+  }
+
+  /**
+   * 確かめで押し戻された頼みなら、大きいモデルを先頭にした候補を返す。回さないときは、渡された候補のまま。
+   * 回したこと・回せなかった理由は、頼みごとに一度だけ言う（記録と、画面の会話に出る出来事）。
+   */
+  async #routeUp(input: ChatInput, candidates: string[]): Promise<{ candidates: string[]; events: ChatEvent[] }> {
+    if (!this.#escalate) return { candidates, events: [] };
+    const pushed = pushedBack(input.messages);
+    if (!pushed.escalate) return { candidates, events: [] };
+    const answer = await this.#escalate(candidates).catch((e: unknown): EscalateAnswer => ({ state: 'none', why: `回す先を調べられませんでした（${errorText(e)}）` }));
+    if (answer.state === 'off') return { candidates, events: [] };
+    // 頼みの見分け: 最後の利用者の一言（押し戻しでないもの）の位置と中身
+    let at = input.messages.length;
+    for (let i = input.messages.length - 1; i >= 0; i--) {
+      if (input.messages[i]!.role === 'user' && !input.messages[i]!.nudge) { at = i; break; }
+    }
+    const key = `${at}:${lastUserSaid(input.messages).slice(0, 80)}:${answer.state === 'ready' ? answer.candidate : answer.why}`;
+    const first = this.#saidFor !== key;
+    this.#saidFor = key;
+    const why = pushed.verifyFailed ? '確かめ（試験）が通らなかった' : `押し戻しが ${pushed.nudges} 回続いた`;
+    if (answer.state === 'none') {
+      if (!first) return { candidates, events: [] };
+      const text = `大きいモデルに回しませんでした（${answer.why}）。今のモデルで続けます`;
+      this.#log('info', `ネットワーク: ${why}頼みですが、${text}`);
+      return { candidates, events: [{ type: 'notice', text }] };
+    }
+    // もう先頭なら、回す必要が無い（何も言わない）
+    if (candidates[0] === answer.candidate) return { candidates, events: [] };
+    const next = [answer.candidate, ...candidates.filter((c) => c !== answer.candidate)];
+    if (!first) return { candidates: next, events: [] };
+    this.#log('info', `ネットワーク: ${why}ので、大きいモデル（${answer.label}）に回します`);
+    return {
+      candidates: next,
+      events: [{ type: 'fallback', from: candidates[0] ?? '', to: answer.candidate, reason: `${why}ので、大きいモデルに回します` }],
+    };
   }
 
   /** 知識の蔵（呼ぶ側が経験を置くのに使う）。 */
@@ -243,8 +324,12 @@ export class NetworkProvider implements ChatProvider {
     const given = innerCandidates(input.candidates);
     const candidates = given.length > 0 ? given : innerCandidates(this.#inner());
     const used: KnowledgeEntry[] = [];
+    // 要る事実を挙げる段は、今までどおり普段のモデルで（大きいモデルは、答える所にだけ使う）
     const system = await this.#withKnowledge({ ...input, candidates }, signal, used);
-    const next: ChatInput = { ...input, candidates };
+    // 確かめで押し戻された頼みだけ、大きいモデルを先頭にする。行き先を選ぶ所は、ここ一つ（専用の別経路は作らない）
+    const routed = await this.#routeUp(input, candidates);
+    for (const ev of routed.events) yield ev;
+    const next: ChatInput = { ...input, candidates: routed.candidates };
     if (system !== undefined) next.system = system;
     let ok = false;
     let failed = false;

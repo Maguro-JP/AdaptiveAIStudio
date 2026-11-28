@@ -28,6 +28,8 @@ export type AgentEvent =
   | { type: 'toolEnd'; call: ToolCall; result: string; isError: boolean }
   | { type: 'turn'; index: number; modelId?: string }
   | { type: 'fallback'; from: string; to: string; reason: string }
+  /** 送り口からの一行の知らせ（大きいモデルに回さなかった理由など）。 */
+  | { type: 'notice'; text: string }
   /** 同じモデルにやり直した。黙ってやり直すと、落ちるまでの秒数の内訳が追えない。 */
   | { type: 'retry'; attempt: number; modelId: string; elapsedMs: number }
   | { type: 'finished'; reason: 'completed' | 'maxTurns' | 'noProgress' | 'aborted' | 'failed'; detail?: string };
@@ -222,6 +224,7 @@ export class Agent {
         }
         else if (ev.type === 'toolCall') calls.push(ev.call);
         else if (ev.type === 'fallback') yield { type: 'fallback', from: ev.from, to: ev.to, reason: ev.reason };
+        else if (ev.type === 'notice') yield { type: 'notice', text: ev.text };
         else if (ev.type === 'attempt' && ev.attempt > 0) {
           yield { type: 'retry', attempt: ev.attempt, modelId: ev.modelId, elapsedMs: Date.now() - began };
         }

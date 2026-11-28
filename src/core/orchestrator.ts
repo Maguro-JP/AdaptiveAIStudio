@@ -14,6 +14,8 @@ import type { ProviderRegistry } from './registry.ts';
 export type ChatEvent =
   | { type: 'attempt'; modelId: ModelId; attempt: number }
   | { type: 'fallback'; from: ModelId; to: ModelId; reason: string }
+  /** 利用者に一行で知らせること（大きいモデルに回さなかった理由など）。答えの本文ではない。 */
+  | { type: 'notice'; text: string }
   | { type: 'text'; delta: string }
   | { type: 'toolCall'; call: ToolCall }
   | { type: 'usage'; inputTokens: number; outputTokens: number }

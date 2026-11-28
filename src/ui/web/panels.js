@@ -827,6 +827,7 @@ export const PANELS = {
       else if (v.type === 'toolEnd') toolEnd(v.name, v.ok, v.summary);
       else if (v.type === 'diff') showDiff(v);
       else if (v.type === 'fallback') note('warn', `${v.from} → ${v.to} に切替（${v.reason}）`);
+      else if (v.type === 'notice') note('info', v.text);
       else if (v.type === 'recalled') {
         const c = card('◔', '前の作業から引き継いだこと', '', 'recall');
         c.body.append(el('pre', 'tool-out', v.text));

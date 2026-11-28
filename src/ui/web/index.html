@@ -219,6 +219,16 @@
           <button type="button" id="cfgRestart" class="ghost" hidden>立ち上げ直す</button>
         </div>
         <p id="cfgNote" class="repairs"></p>
+        <h3>大きいモデルは要るときだけ</h3>
+        <p class="hint">
+          普段は、選んだモデルで答えます。確かめで押し戻された頼み（確かめていない言い切りなどの押し戻しが続いた・試験が通らない）だけを、
+          置いてある大きいモデルに回します。回したときは、会話と記録に出ます。
+        </p>
+        <label class="field-row">
+          <input id="escalateOn" type="checkbox">
+          <span>確かめで押し戻された頼みを、大きいモデルに回す</span>
+        </label>
+        <p id="escalateStatus" class="dim" role="status"></p>
         <p class="hint">置き場にある GGUF</p>
         <!--
           列は 3 つ（名前と道／大きさ／これを使う）。

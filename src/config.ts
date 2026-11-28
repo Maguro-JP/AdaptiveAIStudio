@@ -65,6 +65,12 @@ export interface AasConfig {
   panel?: PanelConfig;
   /** 外部情報の取得。 */
   network?: NetworkConfig;
+  /**
+   * 確かめで押し戻された頼みを、大きいモデルに回すか（docs/NETWORK-MODEL.md の「大きいモデルは要るときだけ」）。
+   * 既定は入り（動く大きいモデルが置いてあるときだけ回る）。`enabled: false` で切る。設定の画面で変えられる。
+   * `model` を書くと、そのモデルを「大きい」とする。書かなければ、取ってある中で、今のモデルより大きく動くもののうち一番大きいもの。
+   */
+  escalate?: { enabled?: boolean; model?: string };
   /** 場所が書かれていない天気の問いに使う場所（「大阪」など）。省略時は 東京（私の推測）。設定の画面で変えられる。 */
   location?: string;
   /** ブロックでつくる画面の向き（ltr 左から右・ttb 上から下・wrap 左上から右（折り返し）。前の diag は wrap として読む）。表示だけで、組んだ中身は変えない。 */

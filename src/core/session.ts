@@ -23,7 +23,7 @@ import { resolve, join, isAbsolute, relative } from 'node:path';
 import type { AasConfig } from '../config.ts';
 import { buildRegistry } from './build.ts';
 import { ChatOrchestrator } from './orchestrator.ts';
-import { NetworkProvider, NETWORK_LABEL, innerCandidates, withNetwork } from './network-provider.ts';
+import { NetworkProvider, NETWORK_LABEL, innerCandidates, withNetwork, type EscalateSource } from './network-provider.ts';
 import { DefaultSource, DEFAULT_LOCATION, fetchEnabled } from './knowledge-source.ts';
 import { setupAutopilot, resolveCandidates, stateDir, type AutopilotBundle } from './autopilot-setup.ts';
 import { buildHarness } from './harness-setup.ts';
@@ -183,6 +183,8 @@ export type SessionEvent =
   | { type: 'salvaged'; name: string }
   /** 合図が無いまま手を止めたので、押し戻した。**黙って押し戻さない。** */
   | { type: 'nudged'; left: number }
+  /** 送り口からの一行の知らせ（大きいモデルに回さなかった理由など）。 */
+  | { type: 'notice'; text: string }
   /** 文脈に収まらないので、古い分を減らした。**黙って落とさない。** */
   | { type: 'trimmed'; dropped: number }
   | { type: 'toolEnd'; name: string; ok: boolean; summary: string }
@@ -312,6 +314,11 @@ export interface SessionOptions {
   approve(req: ApprovalRequest, meta?: { requestKey: string }): Promise<ApprovalAnswer>;
   /** 画面や端末へ流したいもの。省略可。 */
   onLog?(level: 'info' | 'warn' | 'error', text: string): void;
+  /**
+   * 確かめで押し戻された頼みを回す、大きいモデル（docs/NETWORK-MODEL.md の「大きいモデルは要るときだけ」）。
+   * 置かなければ回さない。手元のモデルの一覧と置き方の計画を知っている入口（画面）が渡す。
+   */
+  escalate?: EscalateSource;
   /**
    * 「ここを見てください」を画面で開く受け手。省略可。
    *
@@ -543,6 +550,7 @@ export class Session {
       // 何を挙げ、何を取り、何を載せたかを ui.log に残す（推測で直さないため）
       ...(opts.onLog ? { log: (level: 'info' | 'warn', message: string) => opts.onLog?.(level, message) } : {}),
       ...(fetchEnabled() ? { source: new DefaultSource({ location: () => config.location ?? DEFAULT_LOCATION }) } : {}),
+      ...(opts.escalate ? { escalate: opts.escalate } : {}),
     });
     registry.register(network);
     const candidates = withNetwork(resolved.candidates);
@@ -1912,6 +1920,9 @@ export class Session {
             case 'nudged':
               yield { type: 'nudged', left: ev.left };
               break;
+            case 'notice':
+              yield { type: 'notice', text: ev.text };
+              break;
             case 'trimmed':
               yield { type: 'trimmed', dropped: ev.dropped };
               break;
@@ -2019,9 +2030,13 @@ export class Session {
         const events: SessionEvent[] = [];
         const fix = async (feedback: string, sig: AbortSignal): Promise<void> => {
           // 差し戻しはハーネスが足したもので、人の依頼ではない（コンテキストウィンドウに収めるとき、今の依頼として守らせない）
-          conv.history.push({ role: 'user', content: feedback, nudge: true });
+          // 確かめが通らなかった差し戻しには、その合図を付ける（大きいモデルに回すかを、送り口がこれで決める）
+          conv.history.push({ role: 'user', content: feedback, nudge: true, verifyFailed: true });
           for await (const ev of (await this.#agent({ chat, conv })).run(conv.history, sig)) {
             if (ev.type === 'thinking') events.push({ type: 'text', delta: ev.delta });
+            // 大きいモデルに回した・回さなかった、を画面に出す
+            else if (ev.type === 'fallback') events.push({ type: 'fallback', from: ev.from, to: ev.to, reason: ev.reason });
+            else if (ev.type === 'notice') events.push({ type: 'notice', text: ev.text });
             else if (ev.type === 'salvaged') events.push({ type: 'salvaged', name: ev.name });
             else if (ev.type === 'toolStart') {
               await takeLock(ev.call.name);

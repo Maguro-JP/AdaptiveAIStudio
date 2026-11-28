@@ -11,13 +11,15 @@
  * 読み込みを待つ上限を 1 ミリ秒にして、時間切れの理由が画面に出るのを見る（AAS_TEST_LOAD_TIMEOUT_MS）。使い方は docs/PLACEMENT.md。
  * 最後に、メモリの小さい機械としてもう一度起こし、置き方を画面で選んで・その置き方で読んで・既定に戻すのを見る（docs/PLACEMENT.md の「置き方を選ぶ」）。
  * 読めなかった段を次は避けること、頼んだあとは速さが「実測」になり、記録を消すと「目安」に戻ることも見る（「使うほど計画が当たる」）。
+ * 押し戻しが続いた頼み（試験の口 AAS_TEST_PUSHBACKS）が、置いてある大きいモデルに回ること、置いて無ければ回さずに 1 行で言うこと、
+ * 設定で切れることも見る（docs/NETWORK-MODEL.md の「大きいモデルは要るときだけ」）。小さいモデルは scripts/tiny-gguf.mjs（種を固定）で保存先に置き、終わったら消す。
  * 始める前に、本体のデータの下の実測の記録と選んだ置き方を消す（前の回の覚えで、結果が変わらないように）。
  * 確かめは足すだけ。一度載せた id（checks/large.ids）は消さない・飛ばさない（test/large-checks.test.ts が止める）。
  * 1 行ずつ「== PASS <id>: …」「== FAIL <id>: …」を出し、最後に「== 結果: n/m」。1 つでも落ちたら 1 で終わる。
  */
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { findAppBrowser } from '../src/core/app-window.ts';
 
@@ -137,6 +139,12 @@ const digits = (s) => s.replace(/[,，\s]/g, '');
 /** 記録の「最初の 1 トークンまで N 秒」を、出た順に。 */
 const firstTokenSeconds = () => logs.flatMap((l) => { const m = /最初の 1 トークンまで ([\d.]+) 秒/.exec(l); return m ? [Number(m[1])] : []; });
 
+/**
+ * 記録の「新しく読んだのは N トークン」を、出た順に（最初の 1 トークンまでに、入力として実際に読んだ数。ライブラリの数え）。
+ * 待ちの秒数は機械の具合で揺れ、小さいモデルでは 0.1 秒の差で通ったり落ちたりした。読んだ数は、同じ頼みなら回によって変わらない。
+ */
+const freshTokens = () => logs.flatMap((l) => { const m = /最初の 1 トークンまで [\d.]+ 秒（入力 \d+ トークン・新しく読んだのは (\d+) トークン）/.exec(l); return m ? [Number(m[1])] : []; });
+
 const measured = { ref, modelBytes, shownRamBytes: shownRam };
 let turnOneFirsts = 0;
 
@@ -240,8 +248,15 @@ const CHECKS = [
       measured.firstTokenFirstTurn = first;
       measured.firstTokenFollowTurn = second;
       await shot('large-followup.png');
-      const ok = digits(answer).includes(FOLLOW_ANSWER) && all.length > before.length && second < first;
-      return { ok, why: `答え: ${answer.replace(/\s+/g, ' ').slice(0, 100)} ／ 最初の 1 トークンまで: 1 回目 ${first} 秒、2 回目 ${second} 秒` };
+      // 「読むのは新しい分だけ」は、読んだトークンの数で見る。答える呼び出し（その回の最後の呼び出し）で、2 回目に新しく読んだ数が 1 回目より少ないこと
+      const fresh = freshTokens();
+      const freshFirst = fresh.slice(0, turnOneFirsts || before.length).at(-1);
+      const freshSecond = fresh.slice(before.length).at(-1);
+      measured.freshTokensFirstTurn = freshFirst;
+      measured.freshTokensFollowTurn = freshSecond;
+      const ok = digits(answer).includes(FOLLOW_ANSWER) && all.length > before.length
+        && freshFirst !== undefined && freshSecond !== undefined && freshSecond < freshFirst;
+      return { ok, why: `答え: ${answer.replace(/\s+/g, ' ').slice(0, 100)} ／ 答える呼び出しが新しく読んだトークン: 1 回目 ${freshFirst ?? '?'}、2 回目 ${freshSecond ?? '?'}（最初の 1 トークンまで: 1 回目 ${first} 秒、2 回目 ${second} 秒）` };
     },
   },
   {
@@ -357,6 +372,82 @@ const CHECKS = [
       await page.keyboard.press('Escape');
       const ok = /この PC では: .*実測 [\d.]+ tok\/s/.test(note) && Boolean(speed) && Number(speed[2]) >= 1 && had && /目安 [\d.]+ tok\/s/.test(back) && !back.includes('実測');
       return { ok, why: `一行: ${note.slice(-60)} ／ 計画を見る: ${speed ? speed[0] : '（実測の行が無い）'} ／ 記録のファイル: ${had ? '在った' : '無かった'} ／ 消したあと: ${back.slice(-50)}` };
+    },
+  },
+  {
+    id: 'large-no-larger-model-says-so',
+    what: `押し戻しが続いた頼みとして起こし直す（試験の口 AAS_TEST_PUSHBACKS=2）。今のモデルより大きいモデルが置いて無いので回さず、会話に「大きいモデルに回しませんでした（…）」が 1 行出て、今のモデルで「${ASK}」に答え（${ANSWER} を含む）が出る。設定の画面にも、回せない理由が出る`,
+    async run() {
+      await restartApp({ AAS_TEST_PUSHBACKS: '2' });
+      await openModelSettings();
+      const status = page.locator('#escalateStatus');
+      await page.waitForFunction(() => document.querySelector('#escalateStatus')?.textContent?.length > 0, null, { timeout: 30_000 });
+      const shown = await status.innerText();
+      await shot('large-escalate-none.png');
+      await page.keyboard.press('Escape');
+      const from = logs.length;
+      const answer = await ask(ASK, 60, true);
+      const seen = await page.locator('body').innerText().catch(() => '');
+      const said = '大きいモデルに回しませんでした（今のモデルより大きいモデルが置いてありません）。今のモデルで続けます';
+      const lines = logs.slice(from).filter((l) => l.includes('大きいモデルに回しませんでした'));
+      const routed = logs.slice(from).some((l) => l.includes('に回します'));
+      const ok = shown.includes('いまは回せません（今のモデルより大きいモデルが置いてありません）') && seen.includes(said) && lines.length === 1 && !routed && digits(answer).includes(ANSWER);
+      return { ok, why: `設定の画面: ${shown.slice(0, 70)} ／ 会話: ${seen.includes(said) ? '1 行出た' : '出ていない'} ／ 記録 ${lines.length} 行: ${(lines[0] ?? '').slice(0, 90)} ／ 答え: ${answer.replace(/\s+/g, ' ').slice(0, 60)}` };
+    },
+  },
+  {
+    id: 'large-escalates-when-pushed-back',
+    what: `小さいモデル（種を固定した scripts/tiny-gguf.mjs）を置いて選び、押し戻しが続いた頼みとして「${ASK}」を送ると、置いてある大きいモデルに回り、会話に「切替（…大きいモデルに回します）」が出て、記録に「回します」が残り、答え（${ANSWER} を含む）が出る。設定で切ると、次の頼みは回らない`,
+    async run() {
+      const tiny = 'aas-check-small.gguf';
+      const tinyAt = join(dirname(modelFile), tiny);
+      execFileSync(process.execPath, [join(import.meta.dirname, 'tiny-gguf.mjs'), tinyAt, '--seed', '7'], { stdio: 'ignore' });
+      const use = async (name) => {
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await openModelSettings();
+        const row = page.locator('#cfgGguf .row', { hasText: name }).first();
+        await row.waitFor({ state: 'visible', timeout: 60_000 });
+        const button = row.getByRole('button').last();
+        if (await button.isEnabled()) await button.click();
+        await page.waitForFunction((r) => [...document.querySelectorAll('#cfgGguf .row')].some((x) => x.textContent.includes(r) && x.textContent.includes('いまこれ')), name, { timeout: 30_000 });
+      };
+      const escalateText = async (want) => {
+        await page.waitForFunction((w) => (document.querySelector('#escalateStatus')?.textContent ?? '').includes(w), want, { timeout: 30_000 }).catch(() => undefined);
+        return page.locator('#escalateStatus').innerText();
+      };
+      try {
+        await use(tiny);
+        const target = await escalateText('回す先');
+        await shot('large-escalate-ready.png');
+        await page.keyboard.press('Escape');
+        let from = logs.length;
+        const answer = await ask(ASK, 60, true);
+        const seen = await page.locator('body').innerText().catch(() => '');
+        await shot('large-escalated.png');
+        const line = logs.slice(from).find((l) => l.includes(`ので、大きいモデル（${ref}）に回します`)) ?? '';
+        const onScreen = seen.includes(`${ref} に切替（押し戻しが 2 回続いたので、大きいモデルに回します）`);
+        // 設定で切る。次の頼みは回らない（小さいモデルの答えの中身は見ない。乱数の重みなので意味を成さない）
+        await openModelSettings();
+        await page.locator('#escalateOn').click();
+        const off = await escalateText('切ってあります');
+        await page.keyboard.press('Escape');
+        from = logs.length;
+        await ask(ASK, 10, true);
+        const routedWhenOff = logs.slice(from).some((l) => l.includes('に回します') || l.includes('回しませんでした'));
+        // 戻す（入れ直す）
+        await openModelSettings();
+        await page.locator('#escalateOn').click();
+        const back = await escalateText('入っています');
+        measured.escalateLine = line;
+        const ok = target.includes(`回す先: ${ref}`) && Boolean(line) && onScreen && digits(answer).includes(ANSWER)
+          && off.includes('切ってあります') && !routedWhenOff && back.includes(`回す先: ${ref}`);
+        return { ok, why: `設定の画面: ${target.slice(0, 60)} ／ 記録: ${line.slice(0, 100) || '（無い）'} ／ 会話の「切替」: ${onScreen ? '出た' : '出ていない'} ／ 答え: ${answer.replace(/\s+/g, ' ').slice(0, 60)} ／ 切ったあと: ${off.slice(0, 30)}・${routedWhenOff ? '回った' : '回らない'} ／ 戻したあと: ${back.slice(0, 40)}` };
+      } finally {
+        // 元のモデルに戻し、置いた小さいモデルを消す
+        await use(ref).catch(() => undefined);
+        await page.keyboard.press('Escape').catch(() => undefined);
+        rmSync(tinyAt, { force: true });
+      }
     },
   },
 ];
