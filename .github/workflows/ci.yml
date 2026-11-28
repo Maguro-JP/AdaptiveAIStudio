@@ -441,7 +441,7 @@ jobs:
           path: shots
           retention-days: 7
 
-  # 大きいモデルの確かめ（docs/knowledge/large-models-2026-11-15.md）。user と同じ入れ方で入れ、本物の 9B を置き、
+  # 大きいモデルの確かめ（docs/PLACEMENT.md）。user と同じ入れ方で入れ、本物の 9B を置き、
   # メモリをモデルより小さく見せて（試験の口）、画面で計画を見て・選んで・頼んで、答えを見る（足すだけ。絞らない）
   large:
     name: large / Windows

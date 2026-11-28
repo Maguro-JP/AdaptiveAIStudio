@@ -1,5 +1,5 @@
 /**
- * 大きいモデルの確かめ（docs/knowledge/large-models-2026-11-15.md）。入れた形（配る形）の本体を、
+ * 大きいモデルの確かめ（docs/PLACEMENT.md）。入れた形（配る形）の本体を、
  * 「メモリがモデルより小さい機械」として起こし、画面で計画を見て、そのモデルを選び、頼んで、答えを見る。
  *
  *   node scripts/check-large.mjs --start "<起こす命令>" --port <口> --model-file <.gguf の場所> [--shots <dir>] [--out <json>]
@@ -7,6 +7,8 @@
  * メモリは、試験の口（AAS_TEST_RAM_BYTES）でモデルの 6 割に見せる。本物のメモリは変わらないので、モデルは実際には読める。
  * 見るのは「大きすぎます」で断らず、SSD から読む計画を見せ、その計画で読んで答えること。ページングの空きは 64GB、
  * ディスクの空きは 18GB に見せる（22GB のモデルが「入らない」と出て、理由と動かす手が出ることも見る）。
+ * そのあと、試験の口を変えて本体を 2 回起こし直す。読み込みの最初の段を落として、段を下げて読み直すのを見る（AAS_TEST_LOAD_FAILS）。
+ * 読み込みを待つ上限を 1 ミリ秒にして、時間切れの理由が画面に出るのを見る（AAS_TEST_LOAD_TIMEOUT_MS）。使い方は docs/PLACEMENT.md。
  * 確かめは足すだけ。一度載せた id（checks/large.ids）は消さない・飛ばさない（test/large-checks.test.ts が止める）。
  * 1 行ずつ「== PASS <id>: …」「== FAIL <id>: …」を出し、最後に「== 結果: n/m」。1 つでも落ちたら 1 で終わる。
  */
@@ -43,18 +45,43 @@ const FITS = ['快適', '動く（遅い）', 'SSD から読む（とても遅�
 const say = (s) => console.log(`[${new Date().toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo' })}] ${s}`);
 const api = (p, init) => fetch(`http://127.0.0.1:${port}${p}`, { signal: AbortSignal.timeout(60_000), ...init }).then((r) => r.json()).catch(() => ({}));
 
-const app = spawn(start, {
-  shell: true, stdio: 'inherit', detached: process.platform !== 'win32',
-  env: {
-    ...process.env, AAS_UI_PORT: String(port), AAS_UI_NO_OPEN: '1',
-    AAS_TEST_RAM_BYTES: String(shownRam), AAS_TEST_PAGING_BYTES: String(64 * GIB), AAS_TEST_DISK_BYTES: String(18 * GIB),
-  },
-});
+/** 大きいモデルの機械に見せる口（メモリはモデルの 6 割、ページングの空きは 64GB、ディスクの空きは 18GB）。 */
+const SMALL_MACHINE = {
+  AAS_TEST_RAM_BYTES: String(shownRam), AAS_TEST_PAGING_BYTES: String(64 * GIB), AAS_TEST_DISK_BYTES: String(18 * GIB),
+};
+let app;
+/** 本体を起こす。`hooks` は試験の口（AAS_TEST_*）。立ち上がるまで待つ。 */
+async function startApp(hooks) {
+  app = spawn(start, {
+    shell: true, stdio: 'inherit', detached: process.platform !== 'win32',
+    env: { ...process.env, AAS_UI_PORT: String(port), AAS_UI_NO_OPEN: '1', ...hooks },
+  });
+  for (let i = 0; ; i += 1) {
+    if ((await api('/api/info')).pid) break;
+    if (i > 120) throw new Error('本体が 120 秒たっても立ち上がりませんでした');
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+}
 function stopAll() {
   try {
     if (process.platform === 'win32') execFileSync('taskkill', ['/T', '/F', '/PID', String(app.pid)], { stdio: 'ignore' });
     else process.kill(-app.pid, 'SIGTERM');
   } catch { /* 終わっている */ }
+}
+/** 本体を止めて、別の試験の口で起こし直す（読み込みの段と時間切れは、起こすときの口で決まる）。記録は取り切ってから止める。 */
+async function restartApp(hooks) {
+  await pullLogs();
+  await fetch(`http://127.0.0.1:${port}/api/quit`, { method: 'POST' }).catch(() => undefined);
+  for (let i = 0; i < 60; i += 1) {
+    if (!(await api('/api/info')).pid) break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  stopAll();
+  await new Promise((r) => setTimeout(r, 2000));
+  logSeq = 0;
+  await startApp(hooks);
+  await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'domcontentloaded' });
+  await page.locator('#openSettings').waitFor({ state: 'visible', timeout: 30_000 });
 }
 
 let page;
@@ -212,6 +239,41 @@ const CHECKS = [
       return { ok, why: `答え: ${answer.replace(/\s+/g, ' ').slice(0, 100)} ／ 最初の 1 トークンまで: 1 回目 ${first} 秒、2 回目 ${second} 秒` };
     },
   },
+  {
+    id: 'large-retry-steps-down',
+    what: `読み込みの最初の段がメモリの不足で落ちる機械（試験の口 AAS_TEST_LOAD_FAILS=1）として起こし直すと、段を下げて読み直し、記録に「やり直し」が残り、「${ASK}」に答え（${ANSWER} を含む）が出る`,
+    async run() {
+      // メモリは小さく見せない（小さく見せると、コンテキストウィンドウが初めから下限で、下げる段が無い）
+      await restartApp({ AAS_TEST_LOAD_FAILS: '1' });
+      const from = logs.length;
+      const answer = await ask(ASK, 60, true);
+      await shot('large-retry.png');
+      const mine = logs.slice(from);
+      const fell = mine.find((l) => l.includes('読み込めませんでした（メモリが足りません（試験の口 AAS_TEST_LOAD_FAILS')) ?? '';
+      const retry = mine.find((l) => /やり直し 1\/\d+: /.test(l)) ?? '';
+      measured.retryLine = retry;
+      const ok = Boolean(fell) && Boolean(retry) && digits(answer).includes(ANSWER);
+      return { ok, why: `落ちた段: ${fell.slice(0, 90) || '（無い）'} ／ ${retry.slice(0, 110) || '（やり直しの行が無い）'} ／ 答え: ${answer.replace(/\s+/g, ' ').slice(0, 80)}` };
+    },
+  },
+  {
+    id: 'large-load-timeout-says-why',
+    what: '読み込みを待つ上限を 1 ミリ秒にして起こし直す（試験の口 AAS_TEST_LOAD_TIMEOUT_MS=1）と、いつまでも待たずに止まり、読み込みが終わらなかったことと、どうすればよいかが画面に出る',
+    async run() {
+      await restartApp({ AAS_TEST_LOAD_TIMEOUT_MS: '1' });
+      const from = logs.length;
+      const t0 = Date.now();
+      await ask(ASK, 10, true);
+      const seconds = Math.round((Date.now() - t0) / 1000);
+      await shot('large-timeout.png');
+      const seen = await page.locator('body').innerText().catch(() => '');
+      const line = logs.slice(from).find((l) => l.includes('の読み込みが 0.001 秒で終わりませんでした')) ?? '';
+      const shown = seen.includes('の読み込みが 0.001 秒で終わりませんでした') && seen.includes('小さいモデルか、空きの多い機械で試してください');
+      measured.timeoutSeconds = seconds;
+      const ok = shown && seconds < 300;
+      return { ok, why: `画面: ${shown ? '理由と手が出た' : '出ていない'} ／ 記録: ${line.slice(0, 100) || '（無い）'} ／ 止まるまで ${seconds} 秒` };
+    },
+  },
 ];
 
 const results = [];
@@ -219,11 +281,7 @@ let browser;
 let failed = 0;
 try {
   say(`起こします: ${start}（${ref} ${(modelBytes / GIB).toFixed(1)}GB を、メモリ ${(shownRam / GIB).toFixed(1)}GB の機械として）`);
-  for (let i = 0; ; i += 1) {
-    if ((await api('/api/info')).pid) break;
-    if (i > 120) throw new Error('本体が 120 秒たっても立ち上がりませんでした');
-    await new Promise((r) => setTimeout(r, 1000));
-  }
+  await startApp(SMALL_MACHINE);
   await api('/api/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workRoot: work }) });
   const { chromium } = await import('playwright-core');
   const exe = process.env.AAS_CHECK_BROWSER || findAppBrowser(process.platform, process.env, existsSync);
