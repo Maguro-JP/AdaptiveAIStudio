@@ -298,7 +298,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     // 最初のトークンが来るまでは、届いたバイトそのものを「生きている」合図として待ちを延ばす。
     // 来なければ、これまでどおり 10 分で落とす。
     let firstToken = false;
-    const firstTokenTimeoutMs = this.#firstTokenTimeoutMs;
+    let firstTokenTimeoutMs = this.#firstTokenTimeoutMs;
     /*
      * **最初のトークンの後も、届いたバイトを生きている合図として数える。**
      *
@@ -309,8 +309,8 @@ export class OpenAiCompatibleProvider implements ChatProvider {
      * ただし**合図だけで永久には延ばさない。**本文かツールの欠片が最後に来てから
      * `quietCeilingMs` を超えたら、合図が来ていても停滞にする。
      */
-    const stallTimeoutMs = this.#stallTimeoutMs;
-    const quietCeilingMs = this.#quietCeilingMs;
+    let stallTimeoutMs = this.#stallTimeoutMs;
+    let quietCeilingMs = this.#quietCeilingMs;
     const endGraceMs = this.#endGraceMs;
     let lastDeltaAt = Date.now();
     /*
@@ -325,10 +325,24 @@ export class OpenAiCompatibleProvider implements ChatProvider {
     const beatText = new TextDecoder();
     const alive = res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
       transform(bytes, controller) {
-        if (firstToken && !finished && bytes.length < 64) {
-          const m = /^: working (\d+)\s*$/.exec(beatText.decode(bytes));
+        const note = !finished && bytes.length < 128 ? beatText.decode(bytes) : '';
+        if (firstToken && note && bytes.length < 64) {
+          const m = /^: working (\d+)\s*$/.exec(note);
           const n = m ? Number(m[1]) : 0;
           if (n > beatTokens) { beatTokens = n; lastDeltaAt = Date.now(); }
+        }
+        /*
+         * **待つ長さを、相手の計画に合わせて延ばす。**
+         *
+         * 中で読む口は、借りた直後に計画の待つ長さを言う（`: waits <最初の 1 トークンまで> <無音>`、ミリ秒）。
+         * SSD から読む計画は 1 トークンに何十秒もかかり、こちらの決め打ち（無音 120 秒・上限 600 秒）では、
+         * 動いているものを停滞で落とす。**延ばすだけ。**短い値が来ても、こちらの長さは縮めない。
+         */
+        const waits = note ? /(?:^|\n): waits (\d+) (\d+)[ \t]*(?:\n|$)/.exec(note) : null;
+        if (waits) {
+          firstTokenTimeoutMs = Math.max(firstTokenTimeoutMs, Number(waits[1]));
+          stallTimeoutMs = Math.max(stallTimeoutMs, Number(waits[2]));
+          quietCeilingMs = Math.max(quietCeilingMs, Number(waits[2]));
         }
         // 終わりの合図の後に届くもの（使用量の塊・注釈）では待ちを延ばさない（延ばすと、注釈を送り続ける相手で終わらない）
         if (finished) { /* 合図のときに掛けた短い待ちのまま */ }
@@ -377,7 +391,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
         if (typeof delta === 'string' && delta.length > 0) {
           firstToken = true;
           lastDeltaAt = Date.now();
-          arm(this.#stallTimeoutMs); // 生成が進んでいるので待ち直す
+          arm(stallTimeoutMs); // 生成が進んでいるので待ち直す
           yield { type: 'text', delta };
         }
         for (const tc of choice?.delta?.tool_calls ?? []) {
@@ -420,7 +434,7 @@ export class OpenAiCompatibleProvider implements ChatProvider {
           pending.set(idx, slot);
           firstToken = true;
           lastDeltaAt = Date.now();
-          arm(this.#stallTimeoutMs);
+          arm(stallTimeoutMs);
         }
 
         // 合図の後は、閉じるのを短く待つ（閉じない相手でも、言い終えた答えを時間切れにしない）

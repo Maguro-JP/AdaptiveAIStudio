@@ -39,7 +39,7 @@ import {
   describePlacement, planPlacement, reportedRam, retryLadder, runLadder,
   type LadderStep, type PlacementPlan,
 } from './placement.ts';
-import { detectPlacementMachine, placementModelOf } from './placement-machine.ts';
+import { detectPlacementMachine, injectedLoadFailure, loadLimitMs, LoadTimeoutError, placementModelOf } from './placement-machine.ts';
 
 /** 暴走を見るときに持っておく直近の長さ。 */
 const RUNAWAY_TAIL = 512;
@@ -682,6 +682,8 @@ export class InProcRuntime implements LocalRuntime {
   readonly #loading = new Map<string, Promise<Held>>();
   /** 降ろしている最中のもの（降ろし終えるまで、同じものをもう一度読まない・二つ載せない）。 */
   readonly #unloading = new Map<string, Promise<void>>();
+  /** 試験の口（AAS_TEST_LOAD_FAILS）で、何段落としたか。 */
+  readonly #injected = { used: 0 };
   /** 読み込みの進み具合（%）。別のプロセスから訊かれたときに答える。 */
   readonly #progress = new Map<string, number>();
   /** 切り替え（降ろして読む）を一つずつ通す列。 */
@@ -832,7 +834,8 @@ export class InProcRuntime implements LocalRuntime {
        * そこで止めると「動かない」になる（CPU だけで読む CharacterDesigner は動いていた）。
        * 遅くても答える方を取る。以後この本体は CPU のまま使う（落ちた GPU を毎回試さない）。
        */
-      if (!first.backend.gpu || this.#down) throw e;
+      // 時間切れは GPU のせいとは限らない。同じ長さをもう一度待たせない
+      if (!first.backend.gpu || this.#down || e instanceof LoadTimeoutError) throw e;
       this.#opts.onLog?.(`GPU で読めなかったので、CPU で読み直します（${e instanceof Error ? e.message : String(e)}）`);
       const cpu = await probeBackend(lib, 'off');
       const fallback = { llama: cpu.llama, backend: { ...cpu.backend, reason: 'load-failed' as const } };
@@ -890,8 +893,9 @@ export class InProcRuntime implements LocalRuntime {
     const onLoadProgress = (done: number): void => {
       const pct = Math.floor(done * 100);
       this.#progress.set(ref, pct);
-      // 1% ごとに言うと流れが埋まる。10% ごとに一度。
-      if (pct < last + 10) return;
+      // 1% ごとに言うと流れが埋まる。10% ごとに一度。**読み終えた 100% は必ず言う**
+      // （99% で止まった記録は、読み終えたのか固まったのかが分からない。本物のライブラリで 74% → 99% で終わっていた）
+      if (pct < last + 10 && !(pct >= 100 && last < 100)) return;
       last = pct;
       this.#opts.onLog?.(`読み込み中 ${pct}%: ${ref}`);
     };
@@ -904,6 +908,9 @@ export class InProcRuntime implements LocalRuntime {
     };
     const loadStep = async (step: LadderStep): Promise<{ model: Loaded; context: Awaited<ReturnType<Loaded['createContext']>>; plan: PlacementPlan }> => {
       const plan = step.plan;
+      // 試験の口: 最初の N 段を、メモリが足りない形で落とす（立てなければ何もしない）
+      const injected = injectedLoadFailure(this.#injected);
+      if (injected) throw new Error(injected);
       // GPU の層: 計画どおりの段では「このコンテキストウィンドウが VRAM に入る範囲で、載るだけ」とライブラリに頼む
       // （ライブラリはテンソルごとの本当の大きさと、今の空きで数える。こちらの層の数は見当）。段を下げたら、上限を付ける。
       // GPU を使わない本体では渡さない（今までどおり）
@@ -918,22 +925,34 @@ export class InProcRuntime implements LocalRuntime {
       if (kept && kept.key !== key) await drop();
       if (!kept) {
         last = -1;
-        const limit = AbortSignal.timeout(plan.timeouts.loadMs);
-        const model = await llama.loadModel({
+        /*
+         * **待つ上限は、こちらの時計で切る。**
+         *
+         * 合図（loadSignal）を渡すだけだと、ライブラリが合図を見ない所（ファイルを読む呼び出しの中）で固まったときに、
+         * いつまでも返らない。こちらで競わせ、上限で必ず返す。遅れて読み終えた重みは、届いたときに解く（置きっぱなしにしない）。
+         */
+        const limitMs = loadLimitMs(plan.timeouts.loadMs);
+        const stop = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const late = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => { stop.abort(); reject(new LoadTimeoutError(ref, limitMs)); }, limitMs);
+        });
+        const loading = llama.loadModel({
           modelPath: at,
           onLoadProgress,
           ...(gpuLayers !== undefined ? { gpuLayers } : {}),
           // メモリに入り切らない計画では、ファイルの写しで読み、メモリには固定しない。ライブラリの見張り（足りないと断る）も外す
           ...(plan.ignoreMemorySafetyChecks ? { useMmap: true, useMlock: false, ignoreMemorySafetyChecks: true } : {}),
-          loadSignal: limit,
-        }).catch((e: unknown) => {
-          if (limit.aborted) {
-            throw new Error(`${ref} の読み込みが ${Math.round(plan.timeouts.loadMs / 60000)} 分で終わりませんでした。`
-              + 'ディスクが遅いか、メモリが足りずに行き来しています。小さいモデルか、空きの多い機械で試してください。');
-          }
-          throw e;
+          loadSignal: stop.signal,
         });
+        const model = await Promise.race([loading, late]).catch((e: unknown) => {
+          if (!stop.signal.aborted) throw e;
+          void loading.then((m) => (m as { dispose?: () => Promise<void> }).dispose?.()).catch(() => undefined);
+          throw new LoadTimeoutError(ref, limitMs);
+        }).finally(() => clearTimeout(timer));
         kept = { model, key };
+        // 読み終えた。ライブラリが最後の 100% を言わなくても、記録には残す
+        onLoadProgress(1);
       }
       const model = kept.model;
       // GPU に何層載ったか。**載り切らなかったときは、それが遅い理由。**言わないと、
@@ -1095,7 +1114,7 @@ export class InProcRuntime implements LocalRuntime {
          *
          * ここは読み終えてから一度に返していた。Node の fetch は、返事の頭が 300 秒来ないと切る。
          * 大きいモデルは読み込みに 5 分を超えるので、読めているのに「読み込めませんでした」で落ちる
-         * （遅い読み込みを 310 秒にして確かめた。docs/knowledge/large-models-2026-11-15.md）。
+         * （docs/PLACEMENT.md の「待つ長さ」）。
          * 頭をすぐ返し、進み具合を一行ずつ流し、最後の一行で結果を言う。
          */
         res.writeHead(200, { 'content-type': 'application/x-ndjson' });
@@ -1412,6 +1431,11 @@ export class InProcRuntime implements LocalRuntime {
         return;
       }
       if (streaming) res.write(': started\n\n');
+      // 計画の待つ長さを、送り側に言う。遅い計画（SSD から読む）では、送り側の決め打ちの長さでは足りない。
+      // 送り側は、自分の長さより長いときだけ延ばす（短くはしない。openai-compatible.ts）
+      if (streaming && held.placement) {
+        res.write(`: waits ${held.placement.timeouts.firstTokenMs} ${held.placement.timeouts.stallMs}\n\n`);
+      }
       held.active.add(gone);
       await this.#respond(held, lane, ref, body, res, gone.signal);
     } finally {

@@ -7,7 +7,7 @@
  *
  * **ここは計算だけ。**ファイルも機械も読まない（読むのは呼ぶ側）。だから、機械を並べて試験できる。
  *
- * 分かっていること（2026-11-15 に本物の 9B で確かめた。docs/knowledge/large-models-2026-11-15.md）:
+ * 前提（前の作業から引き継いだ。測った記録はリポジトリに無く、確かめ直していない。docs/PLACEMENT.md の「分かっていること・確かめていないこと」）:
  *   同梱の llama.cpp は、CPU で動かす重みを読み込むときに並べ直す（repack）。並べ直した重みはファイルの写し（mmap）ではなく
  *   普通のメモリに置かれる。だから「mmap なら SSD から読める」は、CPU の分には当てはまらない。メモリを超えた分は
  *   OS のページング（Windows のページ ファイル、Linux の swap）が SSD へ出し入れする。ページングの空きが無い機械では、
@@ -475,7 +475,10 @@ export function retryLadder(model: PlacementModel, machine: PlacementMachine, wa
       planPlacement(model, machine, { ...want, maxGpuLayers: half }));
   }
   const fewer = steps.at(-1)!.plan;
-  add('smaller-context', (p) => `コンテキストウィンドウを ${p.contextSize} に狭めて、読み直します`,
+  // コンテキストウィンドウがもう下限なら、変わるのは並列だけ。変わらないものを「狭めて」と言わない
+  add('smaller-context', (p) => (p.contextSize < fewer.contextSize
+    ? `コンテキストウィンドウを ${p.contextSize} に狭めて、読み直します`
+    : `並列を ${fewer.sequences} 本から ${p.sequences} 本に減らして、読み直します`),
     planPlacement(model, machine, { ...want, lowRam: true, maxGpuLayers: fewer.gpuLayers }));
   add('cpu-only', () => 'GPU を使わず、メモリと SSD で読み直します',
     planPlacement(model, { ...machine, gpus: [] }, { ...want, lowRam: true }));

@@ -1822,7 +1822,12 @@ export class UiServer {
       const localGguf = usesGguf(runtime.id) ? 0 : (await listGguf(dir).catch(() => [])).length;
       // この機械でどう置くか。**取ってくる前・読む前に見せる。**GGUF を読む道だけ（Ollama は自分で決める）
       const placing = usesGguf(runtime.id);
-      const backend = placing && runtime.id === 'inproc' ? await this.#backendOf(runtime) : undefined;
+      // backend は、少しだけ待つ。初めて訊くと読む側を起こすので、秒の単位で掛かる（設定を開いた直後の一覧が空のまま出ていた）。
+      // 間に合わなければ、最後に分かったもので数えて返す。訊いた答えは次の一覧から効く
+      const asked = placing && runtime.id === 'inproc' ? this.#backendOf(runtime) : undefined;
+      const backend = asked
+        ? await Promise.race([asked, new Promise<undefined>((r) => setTimeout(() => r(undefined), 300).unref())]) ?? this.#lastBackend
+        : undefined;
       const machine = placing ? await this.#placementMachine(dir, backend).catch(() => undefined) : undefined;
       const have = new Set(installed.map((m) => m.ref.toLowerCase()));
       return send(res, 200, {

@@ -167,25 +167,12 @@ if (models.length > 0) {
   // 名前だけ .gguf の別物と、記憶に載らないものは、ここで言う。
   // 送ってから 503 を見るより、貼る出力で先に分かるほうが早い。
   if (runtime.id === 'inproc') {
-    const { looksLikeGguf, tooBigForRam } = await import('../runtime/inproc.ts');
-    const { describePlacement, reportedRam } = await import('../runtime/placement.ts');
-    const { planHere, refusalText } = await import('../runtime/placement-machine.ts');
-    const { totalmem } = await import('node:os');
+    const { looksLikeGguf } = await import('../runtime/inproc.ts');
     const dir = config.runtime?.modelsDir ?? defaultModelsDir();
     let usable = 0;
     for (const m of models) {
       if (await looksLikeGguf(join(dir, m.ref))) usable += 1;
       else add('モデル', 'warn', `${m.ref} は GGUF ではありません（先頭に印が無い。配布元の HTML の案内かも）`);
-      // メモリより大きいだけでは「読めない」と言わない。どう置くかを言う（placement.ts）
-      if (tooBigForRam(m.sizeBytes, reportedRam(totalmem()))) {
-        const backend = await runtime.backend?.().catch(() => undefined);
-        const { plan, model: facts, machine } = await planHere({
-          modelsDir: dir, ref: m.ref, path: join(dir, m.ref),
-          ...(m.sizeBytes !== undefined ? { sizeBytes: m.sizeBytes } : {}), ...(backend ? { backend } : {}),
-        });
-        if (plan.possible) add('モデル', 'ok', `${m.ref}: メモリより大きいので、分けて置きます。${describePlacement(plan)}`);
-        else add('モデル', 'warn', refusalText(m.ref, plan, facts, machine));
-      }
     }
     /*
      * **一つも読めないなら「動かせます」と言わない。**
@@ -370,12 +357,39 @@ let backend: Backend | undefined;
  * どれを読むか。**backend が分かってから**言う。分からなければ nvidia-smi の結果で代える
  * （そのときは、画面と同じ選び方）。
  */
+/**
+ * メモリより大きいモデルを、どう置くか。**backend が分かってから**言う（GPU に載る分を数えるため）。
+ *
+ * メモリより大きいだけでは「読めない」と言わない。どう置くかを言う。どう置いても入らないときは、何があれば動くかを言う
+ * （docs/PLACEMENT.md）。backend は、下で調べたものを使う。ここで読む側に訊くと、訊くためだけにモデルのプロセスを起こし、
+ * 起こしたまま doctor が終わらないことがあった（子として起こして出力を待つ形で、止まった）。
+ */
+const placementNotes = async () => {
+  if (runtime.id !== 'inproc') return;
+  const { tooBigForRam } = await import('../runtime/inproc.ts');
+  const { describePlacement, reportedRam } = await import('../runtime/placement.ts');
+  const { planHere, refusalText } = await import('../runtime/placement-machine.ts');
+  const { totalmem } = await import('node:os');
+  const dir = config.runtime?.modelsDir ?? defaultModelsDir();
+  for (const m of models) {
+    if (!tooBigForRam(m.sizeBytes, reportedRam(totalmem()))) continue;
+    const { plan, model: facts, machine: here } = await planHere({
+      modelsDir: dir, ref: m.ref, path: join(dir, m.ref),
+      ...(m.sizeBytes !== undefined ? { sizeBytes: m.sizeBytes } : {}), ...(backend ? { backend } : {}),
+    });
+    if (plan.possible) add('モデル', 'ok', `${m.ref}: メモリより大きいので、分けて置きます。${describePlacement(plan)}`);
+    else add('モデル', 'warn', refusalText(m.ref, plan, facts, here));
+  }
+};
+
 const whichModel = async () => {
   if (runtime.id !== 'inproc' || models.length <= 1) return;
   const { chooseModel, CHOICE_WHY } = await import('../runtime/inproc.ts');
   const { totalmem: ram } = await import('node:os');
+  const { reportedRam } = await import('../runtime/placement.ts');
   const hasGpu = backend ? backend.gpu !== false : machine.gpuName !== undefined;
-  const picked = chooseModel(models, ram(), config.runtime?.model, {
+  // 画面（local-ready.ts）と同じメモリで選ぶ
+  const picked = chooseModel(models, reportedRam(ram()), config.runtime?.model, {
     hasGpu, ...(backend?.vramBytes ? { vramBytes: backend.vramBytes } : {}),
   });
   if (!picked) return;
@@ -464,6 +478,7 @@ if (runtime.id === 'inproc') {
     }
   }
 }
+await placementNotes();
 await whichModel();
 
 /* ---------- 置き場所の深さ ---------- */

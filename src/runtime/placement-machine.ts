@@ -7,6 +7,10 @@
  *   AAS_TEST_RAM_BYTES     メモリを、この量として扱う（本物より大きくはしない）
  *   AAS_TEST_PAGING_BYTES  ページングの空きを、この量の決まった大きさとして扱う（広がらない）
  *   AAS_TEST_DISK_BYTES    ディスクの空きを、この量として扱う
+ *   AAS_TEST_VRAM_BYTES    読む側が使う GPU の VRAM を、この量として扱う（本物より大きくはしない。GPU の無い機械に GPU は生えない）
+ *   AAS_TEST_LOAD_TIMEOUT_MS  読み込みを待つ上限を、この長さにする（時間切れの文と後片づけを、小さいモデルで見るため）
+ *   AAS_TEST_LOAD_FAILS    読み込みの最初の N 段を、メモリが足りない形で落とす（段を下げて読み直すのを、小さいモデルで見るため）
+ * どれも、立てなければ何も変わらない。使い方は docs/PLACEMENT.md。
  */
 import { availableParallelism, totalmem } from 'node:os';
 import { readFile, stat, statfs } from 'node:fs/promises';
@@ -88,8 +92,12 @@ export async function detectPlacementMachine(src: MachineSource = {}): Promise<P
     systemDiskFreeBytes = disk ?? await freeOn(sys);
   }
   const modelsDiskFreeBytes = disk ?? (src.modelsDir ? await freeNear(src.modelsDir) : undefined);
-  const gpus: PlacementGpu[] = src.gpu && src.gpu.vramBytes > 0
-    ? [{ vramBytes: src.gpu.vramBytes, ...(src.gpu.name ? { name: src.gpu.name } : {}), ...(src.gpu.freeVramBytes !== undefined ? { freeVramBytes: src.gpu.freeVramBytes } : {}) }]
+  // 試験の口: VRAM を小さく見せる（空きも同じ量までに抑える）。0 なら GPU なしとして数える
+  const vramCap = forced('AAS_TEST_VRAM_BYTES', env);
+  const vramBytes = src.gpu ? Math.min(src.gpu.vramBytes, vramCap ?? src.gpu.vramBytes) : 0;
+  const freeVram = src.gpu?.freeVramBytes !== undefined ? Math.min(src.gpu.freeVramBytes, vramBytes) : undefined;
+  const gpus: PlacementGpu[] = src.gpu && vramBytes > 0
+    ? [{ vramBytes, ...(src.gpu.name ? { name: src.gpu.name } : {}), ...(freeVram !== undefined ? { freeVramBytes: freeVram } : {}) }]
     : [];
   return {
     ramBytes,
@@ -162,6 +170,35 @@ export async function planHere(o: {
   });
   const { model, plan } = await planFile(o.path, o.ref, machine, o.want ?? {}, o.sizeBytes);
   return { model, plan, machine };
+}
+
+/**
+ * 読み込みを待つ上限。計画の長さをそのまま使う。試験の口（AAS_TEST_LOAD_TIMEOUT_MS）が在れば、その長さ。
+ */
+export function loadLimitMs(planned: number, env: Record<string, string | undefined> = process.env): number {
+  const short = forced('AAS_TEST_LOAD_TIMEOUT_MS', env);
+  return short !== undefined && short > 0 ? short : planned;
+}
+
+/** 読み込みが上限までに終わらなかった。メモリの失敗ではないので、段を下げて読み直さない。 */
+export class LoadTimeoutError extends Error {
+  constructor(ref: string, limitMs: number) {
+    const waited = limitMs >= 60_000 ? `${Math.round(limitMs / 60_000)} 分` : `${limitMs / 1000} 秒`;
+    super(`${ref} の読み込みが ${waited}で終わりませんでした。`
+      + 'ディスクが遅いか、メモリが足りずに行き来しています。小さいモデルか、空きの多い機械で試してください。');
+    this.name = 'LoadTimeoutError';
+  }
+}
+
+/**
+ * 試験の口（AAS_TEST_LOAD_FAILS）: 読み込みの最初の N 段を、メモリが足りない形で落とす。
+ * 落とす段なら文を返す。`state` は読む側が一つ持つ（何段落としたかを数える）。
+ */
+export function injectedLoadFailure(state: { used: number }, env: Record<string, string | undefined> = process.env): string | undefined {
+  const n = forced('AAS_TEST_LOAD_FAILS', env);
+  if (n === undefined || state.used >= n) return undefined;
+  state.used += 1;
+  return `メモリが足りません（試験の口 AAS_TEST_LOAD_FAILS の ${state.used}/${n} 段目）`;
 }
 
 /** 入らないときの文。今までの「大きすぎます」に、何があれば動くかを足す。 */
