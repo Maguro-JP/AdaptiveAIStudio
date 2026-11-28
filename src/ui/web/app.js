@@ -20,6 +20,8 @@ const root = document.getElementById('editor');
 const $ = (id) => document.getElementById(id);
 
 let layout = null;
+/** 切ってある拡張機能のパネルの種類（docs/EXTENSIONS.md）。表示の一覧に出さず、並びに在れば閉じる。 */
+let offKinds = new Set();
 let theme = null;
 let tokenNames = [];
 const stateHandlers = [];
@@ -366,9 +368,12 @@ function renderViewList() {
   const idsOf = (kind) => layout.panels.filter((p) => p.kind === kind && shown.has(p.id)).map((p) => p.id);
 
   for (const [kind, name] of Object.entries(TITLES)) {
+    // 切ってある拡張機能のパネルは、一覧に出さない（押しても出せないものを並べない）
+    if (offKinds.has(kind)) continue;
     const ids = idsOf(kind);
     const row = document.createElement('label');
     row.className = 'view-row';
+    row.dataset.kind = kind;
     const tick = document.createElement('input');
     tick.type = 'checkbox';
     tick.checked = ids.length > 0;
@@ -620,6 +625,7 @@ async function load() {
   const r = await askJson('/api/layout', undefined, '配置を読めませんでした');
   if (!saved(r, 'layout', '配置を読めませんでした')) return;
   layout = r.layout;
+  offKinds = new Set(r.off ?? []);
   showRepairs(r.repairs, '画面の並び');
   const sel = $('presets');
   sel.replaceChildren();
@@ -630,6 +636,15 @@ async function load() {
   }
   sel.value = layout.id;
   render();
+  // 切ってある拡張機能のパネルが並びに残っていたら、閉じる（設定のファイルを手で直して切ったとき）
+  await closeOffPanels();
+}
+
+/** 切ってある拡張機能のパネルを、並びから外す。 */
+async function closeOffPanels() {
+  let next = layout;
+  for (const p of layout.panels) if (offKinds.has(p.kind)) next = closePanel(next, p.id);
+  if (next !== layout) await apply(next);
 }
 
 async function save(next) {
@@ -2534,6 +2549,66 @@ function fillSection(name) {
   if (name === 'model') { void loadCfg(); void loadCatalog(); return; }
   if (name === 'mcp') { void loadMcpCatalog(); void loadMcp(); void loadAcks(); }
   if (name === 'phone') void loadPhone();
+  if (name === 'ext') void loadExtensions();
+}
+
+/* ---------- 拡張機能（docs/EXTENSIONS.md） ---------- */
+
+/**
+ * 同梱の拡張機能の一覧と入り切り。チェックを押すと、その場で保存して結果を言う。もう一度押せば戻る。
+ * 切ると、そのパネルを閉じて表示の一覧から外す。入れると、そのパネルを出す（データは切っても残っている）。
+ */
+function drawExtensions(list) {
+  const box = $('extList');
+  box.replaceChildren();
+  for (const e of list) {
+    const row = document.createElement('div');
+    row.className = 'ext-row';
+    const tick = document.createElement('input');
+    tick.type = 'checkbox';
+    tick.id = `ext-${e.id}`;
+    tick.checked = e.enabled;
+    const name = Object.assign(document.createElement('label'), { textContent: e.name });
+    name.htmlFor = tick.id;
+    const desc = Object.assign(document.createElement('div'), { className: 'hint ext-desc', textContent: e.description });
+    const status = Object.assign(document.createElement('div'), {
+      className: 'dim ext-status', id: `extStatus-${e.id}`,
+      textContent: e.enabled ? '入っています（表示 の一覧から出せます）' : '切ってあります（データは残っています）',
+    });
+    tick.onchange = () => void toggleExtension(e, tick);
+    row.append(tick, name, desc, status);
+    box.append(row);
+  }
+}
+async function loadExtensions() {
+  const r = await getJson('/api/extensions').catch(() => null);
+  if (r) drawExtensions(r.extensions ?? []);
+}
+async function toggleExtension(e, tick) {
+  const want = tick.checked;
+  tick.disabled = true;
+  const r = await ask('/api/extensions', {
+    method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: e.id, enabled: want }),
+  }, '保存できませんでした');
+  tick.disabled = false;
+  if (!r || !r.ok) {
+    // 保存できなかったら、押す前に戻す
+    tick.checked = !want;
+    $('extNote').textContent = r?.body?.error ?? '保存できませんでした';
+    return;
+  }
+  const list = r.body.extensions ?? [];
+  offKinds = new Set(list.filter((x) => !x.enabled).map((x) => x.panel));
+  drawExtensions(list);
+  if (want) {
+    // 入れたら、そのパネルを出す（どこから開くかを探させない）。もう出ていれば、そのまま
+    const shown = new Set(panelsInUse(layout.root));
+    if (!layout.panels.some((p) => p.kind === e.panel && shown.has(p.id))) await apply(openPanel(layout, e.panel));
+    $('extNote').textContent = `「${e.name}」を入れました。パネルを出しました。`;
+  } else {
+    await closeOffPanels();
+    $('extNote').textContent = `「${e.name}」を切りました。パネルを閉じました（データは残っています。入れ直すと戻ります）。`;
+  }
 }
 
 /* ---------- スマホから使う（docs/PHONE.md） ---------- */

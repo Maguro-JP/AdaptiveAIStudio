@@ -145,6 +145,7 @@
         <button type="button" data-sec="model">モデル</button>
         <button type="button" data-sec="mcp">外の道具</button>
         <button type="button" data-sec="phone">スマホ</button>
+        <button type="button" data-sec="ext">拡張機能</button>
         <button type="button" data-sec="check">診断</button>
       </div>
 
@@ -304,6 +305,15 @@
             </div>
           </div>
         </div>
+      </section>
+
+      <section data-sec="ext" hidden>
+        <p class="hint">
+          本体に同梱の機能を、入れたり切ったりできます。切ると、そのパネルは画面から消えます。データは消えません（入れ直すと戻ります）。
+          決まりは docs/EXTENSIONS.md。
+        </p>
+        <div id="extList"></div>
+        <p id="extNote" class="dim" role="status"></p>
       </section>
 
       <section data-sec="check" hidden>

@@ -101,6 +101,11 @@ export async function findRemovable(opts: {
   now?: number;
   /** いま動いている llama-server の版（試験では外から渡す）。分からなければ undefined */
   runningTags?: () => Promise<Set<string> | undefined>;
+  /**
+   * 切ってある拡張機能のデータのフォルダ（docs/EXTENSIONS.md）。入っている拡張機能のデータは、使っているものなので挙げない。
+   * 呼ぶ側が、設定を読んで渡す（ここは設定を読まない）。
+   */
+  offExtensions?: ReadonlyArray<{ name: string; dir: string }>;
 } ): Promise<Removable[]> {
   const found: Removable[] = [];
   const now = opts.now ?? Date.now();
@@ -309,6 +314,12 @@ export async function findRemovable(opts: {
   if (existsSync(history)) {
     const count = (await readHistory()).length;
     found.push({ path: history, bytes: await sizeOf(history), why: `置き方の実測の記録 ${count} 件（消すと、計画の速さは目安に戻り、読めなかった置き方ももう一度試します）` });
+  }
+
+  // 切ってある拡張機能のデータ。切っただけでは消さない（入れ直すと戻る）ので、消す道はここ
+  for (const ext of opts.offExtensions ?? []) {
+    if (!existsSync(ext.dir)) continue;
+    found.push({ path: ext.dir, bytes: await sizeOf(ext.dir), why: `切ってある拡張機能「${ext.name}」のデータ（消すと、入れ直しても戻りません）` });
   }
 
   return found.sort((a, b) => b.bytes - a.bytes);

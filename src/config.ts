@@ -71,6 +71,11 @@ export interface AasConfig {
    * `model` を書くと、そのモデルを「大きい」とする。書かなければ、取ってある中で、今のモデルより大きく動くもののうち一番大きいもの。
    */
   escalate?: { enabled?: boolean; model?: string };
+  /**
+   * 同梱の拡張機能の入り切り（docs/EXTENSIONS.md）。鍵は拡張機能の id（`ideas` など）。
+   * 書いていなければ、その拡張機能の既定（アイデアは入り）。設定の画面で変えられる。切ってもデータは消さない。
+   */
+  extensions?: Record<string, { enabled?: boolean }>;
   /** 場所が書かれていない天気の問いに使う場所（「大阪」など）。省略時は 東京（私の推測）。設定の画面で変えられる。 */
   location?: string;
   /** ブロックでつくる画面の向き（ltr 左から右・ttb 上から下・wrap 左上から右（折り返し）。前の diag は wrap として読む）。表示だけで、組んだ中身は変えない。 */

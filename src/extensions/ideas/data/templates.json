@@ -1,0 +1,23 @@
+{
+  "source": "https://github.com/Maguro-JP/IDEAMAN (ideaman/data/templates.yaml)",
+  "templates": [
+    {"id": "swap_aspect", "tone": "proposal", "needs": ["material", "aspect", "operation_v", "probe"], "text": "{material}の{aspect}を{operation_v}。まず{probe}。"},
+    {"id": "borrow_from", "tone": "proposal", "needs": ["material", "concept_a", "aspect", "probe"], "text": "{concept_a}のやり方を{material}に持ち込む。見るのは{aspect}。まず{probe}。"},
+    {"id": "mechanism_transfer", "tone": "proposal", "needs": ["material", "mechanism"], "text": "{mechanism_how}（{mechanism}）。{material}の{mechanism_aspect}で同じことをするなら、何が要るか。"},
+    {"id": "constrained_rebuild", "tone": "proposal", "needs": ["material", "constraint", "aspect", "probe"], "text": "{constraint}{material}を作り直すとしたら、{aspect}はどうなるか。まず{probe}。"},
+    {"id": "remove_and_see", "tone": "proposal", "needs": ["material", "aspect"], "text": "{material}から{aspect}を丸ごと取り除く。困る人がいれば、そこが本体。"},
+    {"id": "exaggerate", "tone": "proposal", "needs": ["material", "aspect", "operation"], "text": "{material}の{aspect}だけを極端にする。{operation}くらいまで。"},
+    {"id": "two_materials", "tone": "proposal", "needs": ["material", "concept_a", "aspect"], "text": "{material}と{concept_a}は、{aspect}だけ見れば同じではないか。"},
+    {"id": "for_one_person", "tone": "proposal", "needs": ["material", "aspect"], "text": "いちばんヘビーに使う一人のためだけに{material}を作り直す。まず{aspect}が変わるはず。"},
+    {"id": "question_aspect", "tone": "question", "needs": ["material", "aspect", "provocation"], "text": "{material}の{aspect}について——{provocation}。"},
+    {"id": "question_assumption", "tone": "question", "needs": ["material", "aspect"], "text": "{material}の{aspect}は、なぜ今の形なのか。"},
+    {"id": "question_clause", "tone": "question", "needs": ["material", "aspect_q"], "text": "{material}について、{aspect_q}。いま答えられるか。"},
+    {"id": "question_clause_probe", "tone": "question", "needs": ["material", "aspect_q", "probe"], "text": "{material}で{aspect_q}。まず{probe}。"},
+    {"id": "question_absence", "tone": "question", "needs": ["material", "concept_a", "aspect"], "text": "{material}の{aspect}を、{concept_a}のそれと並べてみる。無いものは何か。"},
+    {"id": "question_constrained", "tone": "question", "needs": ["material", "constraint", "provocation"], "text": "{constraint}{material}を扱うとする。{provocation}。"},
+    {"id": "bare_collision", "tone": "proposal", "needs": ["concept_a", "concept_b", "aspect", "probe"], "text": "{concept_a}のやり方を{concept_b}に持ち込む。見るのは{aspect}。まず{probe}。"},
+    {"id": "bare_swap", "tone": "proposal", "needs": ["concept_a", "aspect", "operation_v", "probe"], "text": "{concept_a}の{aspect}を{operation_v}。何が変わるか。まず{probe}。"},
+    {"id": "bare_constrained", "tone": "question", "needs": ["concept_a", "constraint", "aspect"], "text": "{constraint}{concept_a}を作り直すとしたら、{aspect}はどうなるか。"},
+    {"id": "bare_question", "tone": "question", "needs": ["concept_a", "aspect", "provocation"], "text": "{concept_a}の{aspect}について——{provocation}。"}
+  ]
+}

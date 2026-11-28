@@ -1385,3 +1385,37 @@ dialog.wide { width: min(46rem, 92vw); }
 .placement-option-name { font-weight: 600; }
 .placement-option-line { color: var(--dim); font-size: .82rem; }
 .placement-alternative { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+
+/* ---------- アイデア（拡張機能。docs/IDEAS.md） ---------- */
+.ideas { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s2); min-width: 0; }
+.ideas-themes, .ideas-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.ideas-themes-label { font-size: .8rem; }
+.idea-chip { display: inline-flex; align-items: center; gap: 2px; font-family: var(--font); font-size: .8rem; padding: 2px 4px 2px 9px; }
+.idea-chip-x { background: none; border: 0; color: inherit; cursor: pointer; padding: 0 5px; min-height: 22px; border-radius: 99px; }
+.idea-chip-x:hover, .idea-chip-x:focus-visible { background: color-mix(in oklab, var(--accent) 22%, transparent); }
+.ideas-add-row { display: inline-flex; align-items: center; gap: var(--s1); flex: 1 1 12rem; min-width: 0; }
+.ideas-add-input { flex: 1 1 7rem; min-width: 5rem; max-width: 14rem; }
+.ideas-polish { display: inline-flex; align-items: center; gap: var(--s1); margin-left: auto; color: var(--dim); font-size: .82rem; }
+.ideas-state { min-height: 1.4em; font-size: .84rem; }
+.ideas-undo { color: var(--accent); text-decoration: underline; }
+.ideas-board { display: flex; flex-direction: column; gap: var(--s2); }
+.idea-card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface2); padding: var(--s2) var(--s3); display: flex; flex-direction: column; gap: var(--s2); }
+.idea-card.starred { border-color: color-mix(in oklab, var(--accent) 55%, var(--line)); }
+.idea-card.branch { margin-left: var(--s3); background: var(--surface); border-left: 3px solid color-mix(in oklab, var(--accent) 45%, var(--line)); }
+.idea-head { display: flex; align-items: center; gap: var(--s2); }
+.idea-from { font-size: .76rem; }
+.idea-tone { font-family: var(--font); }
+.idea-tone.question { background: color-mix(in oklab, var(--warn) 18%, transparent); color: var(--warn); }
+.idea-best { background: color-mix(in oklab, var(--good) 16%, transparent); color: var(--good); font-family: var(--font); }
+.idea-text { line-height: 1.65; overflow-wrap: anywhere; }
+.idea-acts { display: flex; flex-wrap: wrap; gap: var(--s1); }
+.idea-acts button { font-size: .82rem; }
+.idea-why-box { border-top: 1px dashed var(--line); padding-top: var(--s2); font-size: .84rem; line-height: 1.6; display: flex; flex-direction: column; gap: var(--s1); overflow-wrap: anywhere; }
+.ext-row { display: grid; grid-template-columns: auto 1fr; column-gap: var(--s3); row-gap: 2px; align-items: baseline; margin-bottom: var(--s3); }
+.ext-row .ext-desc, .ext-row .ext-status { grid-column: 2; font-size: .84rem; }
+.ideas-plant-row { display: flex; gap: var(--s2); align-items: center; }
+.ideas-thought-input { flex: 1 1 auto; min-width: 0; }
+.ideas-thread { border: 1px solid color-mix(in oklab, var(--accent) 45%, var(--line)); border-radius: var(--radius); padding: var(--s2) var(--s3); display: flex; flex-direction: column; gap: var(--s2); }
+.ideas-thread-head { display: flex; align-items: baseline; gap: var(--s2); }
+.ideas-thread-thought { font-weight: 560; overflow-wrap: anywhere; }
+.ideas-thread-steps { margin: 0; padding-left: 1.6em; display: flex; flex-direction: column; gap: var(--s1); line-height: 1.6; overflow-wrap: anywhere; }

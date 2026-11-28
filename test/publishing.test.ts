@@ -38,7 +38,8 @@ export function emailsIn(text: string): string[] {
   return found;
 }
 
-const PUBLIC_REPOS = new Set(['AdaptiveAIStudio', 'Ciel']);
+// IDEAMAN は、アイデアの拡張機能に移したデータの元（docs/IDEAS.md）。公開のリポジトリなので、出典として名指しする
+const PUBLIC_REPOS = new Set(['AdaptiveAIStudio', 'Ciel', 'IDEAMAN']);
 
 export function otherReposIn(text: string): string[] {
   return [...text.matchAll(/Maguro-JP\/([A-Za-z0-9_.-]+)/g)]

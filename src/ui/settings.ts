@@ -319,6 +319,15 @@ export async function saveEscalate(enabled: boolean): Promise<string> {
   });
 }
 
+/** 拡張機能の入り切りを設定に書く（`extensions.<id>.enabled`）。その拡張機能のほかの設定と、ほかの拡張機能の設定は残す。 */
+export async function saveExtensionEnabled(id: string, enabled: boolean): Promise<string> {
+  return editConfig((current, at) => {
+    const extensions: Record<string, unknown> = { ...objectOr(current.extensions) };
+    extensions[id] = { ...objectOr(extensions[id]), enabled };
+    return { next: { ...current, extensions }, result: at };
+  });
+}
+
 /** ブロックでつくる画面の向きを設定に書く。 */
 export async function saveBlocksDirection(dir: string): Promise<string> {
   return editConfig((current, at) => ({ next: { ...current, blocksDirection: dir }, result: at }));

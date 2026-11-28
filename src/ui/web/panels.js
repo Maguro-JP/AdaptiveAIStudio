@@ -3753,6 +3753,487 @@ export const PANELS = {
     ctx.on('planEvent', onDiff);
     ctx.on('elsewhereDiff', onDiff);
   },
+
+  /**
+   * アイデア（拡張機能。docs/IDEAS.md）。
+   *
+   * 開いただけで、今の作業の語と外の世界の仕組みを掛け合わせた札が並ぶ。札は語の掛け合わせで作るので、
+   * モデルもネットワークも要らない。札ごとに「もっと」（連鎖の次を、札の下に伸ばす）・「なぜ」（掛け合わせた語と、
+   * 元の仕組みの文と出典）・星（残す）・「依頼に入れる」を 1 回押すだけ。2 枚選んで「組み合わせる」。
+   * 押したら、その場で結果を言う。語を外したら、その場で取り消せる。札を出し直したら、前の札に戻せる。
+   *
+   * いちばん上の欄に思いつきを 1 行で置くと、その思いつきを掛け合わせで広げた札が返る。札の「育てる」を押すと、
+   * その札が筋（置いた思いつきと、育てた札の流れ）に足され、その札を種にした次の札が出る。
+   * 筋は残り、「筋の一覧」から開き直して続きを育てられる。筋ごと、依頼に入れられる。
+   */
+  ideas(body, ctx) {
+    const wrap = el('div', 'ideas');
+    const themes = el('div', 'ideas-themes');
+    const bar = el('div', 'ideas-bar');
+    const state = el('div', 'dim ideas-state', '');
+    state.setAttribute('role', 'status');
+    const board = el('div', 'ideas-board');
+    const plantRow = el('div', 'ideas-plant-row');
+    const thoughtInput = document.createElement('input');
+    thoughtInput.className = 'ideas-thought-input';
+    thoughtInput.placeholder = '思いつきを 1 行で置く（例: 通知が多すぎて読まれない）';
+    thoughtInput.maxLength = 200;
+    thoughtInput.setAttribute('aria-label', '思いつきを 1 行で置く');
+    const plantBtn = el('button', 'primary ideas-plant', '広げる');
+    plantBtn.type = 'button';
+    plantBtn.title = '置いた思いつきを、語の掛け合わせで広げた札を出します（思いつきは、筋として残ります）';
+    plantRow.append(thoughtInput, plantBtn);
+    const threadBox = el('div', 'ideas-thread');
+    threadBox.hidden = true;
+    wrap.append(plantRow, themes, bar, state, threadBox, board);
+    body.append(wrap);
+
+    const post = (name, data) => getJson(`/api/ideas/${name}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data ?? {}),
+      signal: AbortSignal.timeout(name === 'polish' ? 130000 : 20000),
+    });
+    const alive = () => body.isConnected;
+    const say = (text, undo) => {
+      state.replaceChildren(document.createTextNode(text));
+      if (undo) {
+        const b = el('button', 'as-link ideas-undo', undo.label);
+        b.type = 'button';
+        b.onclick = undo.run;
+        state.append(' ', b);
+      }
+    };
+    const failed = (what, e) => say(`${what}（${e?.message ?? e}）`);
+
+    /** いま並べている札（上の段）。`children` は、その札の下に伸びた札。 */
+    let cards = [];
+    /** 前に並べていた札（戻せるように、直近の 10 回分）。 */
+    const before = [];
+    let picked = [];
+    let showSaved = false;
+    let polishOn = true;
+    /** いま開いている筋（置いた思いつきと、育てた札の流れ）。開いていなければ null。 */
+    let thread = null;
+    /** 筋の一覧を見ているか。 */
+    let showThreads = false;
+    let threadList = [];
+
+    const more = el('button', 'ideas-refresh', '別の札を出す');
+    more.type = 'button';
+    more.title = '今の語で、別の札を出します（前の札には戻せます）';
+    const back = el('button', 'ghost ideas-back', '前の札に戻す');
+    back.type = 'button';
+    back.disabled = true;
+    const join = el('button', 'ideas-combine', '組み合わせる');
+    join.type = 'button';
+    join.disabled = true;
+    join.title = '札を 2 枚選ぶと、両方の材料から新しい札を出します';
+    const savedBtn = el('button', 'ghost ideas-saved-toggle', '残した札');
+    savedBtn.type = 'button';
+    const polishRow = el('label', 'ideas-polish');
+    const polish = document.createElement('input');
+    polish.type = 'checkbox';
+    polish.className = 'ideas-polish-on';
+    polishRow.title = '手元のモデルを読んであるときだけ、札の文を整えます（元の文には戻せます）';
+    polishRow.append(polish, el('span', '', 'モデルで磨く'));
+    const threadsBtn = el('button', 'ghost ideas-threads-toggle', '筋の一覧');
+    threadsBtn.type = 'button';
+    threadsBtn.title = '前に置いた思いつきと、育てた札の流れを開き直します';
+    bar.append(more, back, join, savedBtn, threadsBtn, polishRow);
+
+    const syncBar = () => {
+      back.disabled = before.length === 0 || showSaved || showThreads || Boolean(thread);
+      more.disabled = showSaved || showThreads || Boolean(thread);
+      savedBtn.disabled = showThreads;
+      threadsBtn.textContent = showThreads ? '札に戻る' : '筋の一覧';
+      threadsBtn.setAttribute('aria-pressed', String(showThreads));
+      join.disabled = picked.length !== 2;
+      join.textContent = picked.length === 2 ? '組み合わせる' : `組み合わせる（${picked.length}/2 枚）`;
+      savedBtn.textContent = showSaved ? '札に戻る' : '残した札';
+      savedBtn.setAttribute('aria-pressed', String(showSaved));
+    };
+
+    const drawThemes = (list) => {
+      themes.replaceChildren(el('span', 'dim ideas-themes-label', 'テーマの語'));
+      for (const t of list.themes ?? []) {
+        const chip = el('span', 'chip idea-chip', t.term);
+        chip.dataset.term = t.term;
+        chip.title = t.from === 'auto' ? '今の作業場と直近の依頼から採った語' : '足した語';
+        const x = el('button', 'idea-chip-x', '×');
+        x.type = 'button';
+        x.title = `「${t.term}」を外す（取り消せます）`;
+        x.setAttribute('aria-label', `${t.term} を外す`);
+        x.onclick = () => void dropTheme(t.term);
+        chip.append(x);
+        themes.append(chip);
+      }
+      if ((list.themes ?? []).length === 0) themes.append(el('span', 'dim', '（まだ有りません。語を足すと、その語の札が出ます）'));
+      const input = document.createElement('input');
+      input.className = 'ideas-add-input';
+      input.placeholder = '語を足す（例: 通知）';
+      input.maxLength = 24;
+      input.spellcheck = false;
+      input.setAttribute('aria-label', 'テーマの語を足す');
+      const add = el('button', 'ideas-add', '足す');
+      add.type = 'button';
+      const go = () => { if (input.value.trim()) void addTheme(input.value.trim()); };
+      add.onclick = go;
+      input.addEventListener('keydown', (e) => { if (isPlainEnter(e)) { e.preventDefault(); go(); } });
+      const addRow = el('span', 'ideas-add-row');
+      addRow.append(input, add);
+      themes.append(addRow);
+      for (const term of list.removed ?? []) {
+        const b = el('button', 'as-link dim ideas-restore', `「${term}」を戻す`);
+        b.type = 'button';
+        b.dataset.term = term;
+        b.onclick = () => void restoreTheme(term, false);
+        themes.append(b);
+      }
+    };
+
+    const whyBox = (card) => {
+      const box = el('div', 'idea-why-box');
+      const parts = (card.why?.parts ?? []).map((p) => `${p.label}「${p.term}」`).join(' × ');
+      box.append(el('div', '', `掛け合わせ: ${parts || '（語の記録が有りません）'}`));
+      const m = card.why?.mechanism;
+      if (m) {
+        box.append(el('div', 'idea-why-how', `${m.direct ? '元の仕組み' : '同じ側面の、外の世界の仕組み'}（${m.subject}）: ${m.how}。`));
+        const src = el('div', 'dim idea-why-source');
+        src.append(document.createTextNode('出典: '), linkify(m.source), document.createTextNode(`（ウィキペディア、${m.license}）`));
+        box.append(src);
+      } else {
+        box.append(el('div', 'dim', 'この札は、語の掛け合わせだけで出来ています（外の仕組みの文は使っていません）。'));
+      }
+      return box;
+    };
+
+    const cardNode = (card, depth) => {
+      const node = el('div', `idea-card${card.starred ? ' starred' : ''}${depth > 0 ? ' branch' : ''}`);
+      node.dataset.id = card.id;
+      node.dataset.template = card.templateId;
+      const head = el('div', 'idea-head');
+      const pick = document.createElement('input');
+      pick.type = 'checkbox';
+      pick.className = 'idea-pick';
+      pick.checked = picked.includes(card.id);
+      pick.title = '組み合わせる札として選ぶ（2 枚まで）';
+      pick.setAttribute('aria-label', '組み合わせる札として選ぶ');
+      pick.onchange = () => {
+        picked = picked.filter((id) => id !== card.id);
+        // 3 枚目を選んだら、いちばん前に選んだ 1 枚を外す（選び直すのに、外す手を挟ませない）
+        if (pick.checked) picked = [...picked, card.id].slice(-2);
+        draw();
+      };
+      head.append(pick, el('span', `chip idea-tone ${card.tone}`, card.toneLabel));
+      if (card.parents?.length === 2) head.append(el('span', 'dim idea-from', '2 枚を組み合わせた札'));
+      else if (card.parents?.length === 1) head.append(el('span', 'dim idea-from', '「もっと」で伸びた札'));
+      if (card.best) head.append(el('span', 'chip idea-best', 'モデルのおすすめ'));
+      const text = el('div', 'idea-text', card.showOriginal ? card.original : card.text);
+      const acts = el('div', 'idea-acts');
+      const btn = (cls, label, title, run) => {
+        const b = el('button', cls, label);
+        b.type = 'button';
+        b.title = title;
+        b.onclick = run;
+        acts.append(b);
+        return b;
+      };
+      if (thread && !showSaved) {
+        const g = btn('primary idea-grow', '育てる', 'この札を筋に足して、この札を種にした次の札を出します', () => void growThread(card));
+        g.setAttribute('aria-label', 'この札を育てる');
+      }
+      btn('idea-more', 'もっと', 'この札の続きを 1 枚出します', () => void grow(card));
+      const why = btn('idea-why', 'なぜ', '掛け合わせた語と、元の仕組みの文と出典を見ます', () => { card.whyOpen = !card.whyOpen; draw(); });
+      why.setAttribute('aria-expanded', String(Boolean(card.whyOpen)));
+      const star = btn('idea-star', card.starred ? '★ 残した' : '☆ 残す',
+        card.starred ? '残すのをやめます' : '残します（この札の語が、次から出やすくなります）', () => void rate(card));
+      star.setAttribute('aria-pressed', String(Boolean(card.starred)));
+      btn('idea-ask', '依頼に入れる', 'チャットの入力欄に、この札の文を入れます', () => {
+        say(ctx.insertText?.(card.showOriginal ? card.original : card.text) ? '依頼に入れました（チャットの入力欄）。' : 'チャットのパネルが出ていません（表示 から出せます）。');
+      });
+      if (card.polished) {
+        btn('ghost idea-original', card.showOriginal ? '磨いた文' : '元の文', '磨く前の文と、磨いた文を切り替えます', () => { card.showOriginal = !card.showOriginal; draw(); });
+      }
+      node.append(head, text, acts);
+      if (card.whyOpen) node.append(whyBox(card));
+      for (const child of card.children ?? []) node.append(cardNode(child, depth + 1));
+      return node;
+    };
+
+    /** 開いている筋。置いた思いつきと、育てた札を順に出す。 */
+    const drawThread = () => {
+      threadBox.hidden = !thread || showThreads || showSaved;
+      threadBox.replaceChildren();
+      if (threadBox.hidden) return;
+      const head = el('div', 'ideas-thread-head');
+      head.append(el('span', 'chip', '筋'), el('span', 'ideas-thread-thought', thread.thought));
+      const steps = el('ol', 'ideas-thread-steps');
+      for (const c of thread.steps) steps.append(el('li', 'ideas-thread-step', c.text));
+      const acts = el('div', 'idea-acts');
+      const ask = el('button', 'ideas-thread-ask', '筋を依頼に入れる');
+      ask.type = 'button';
+      ask.title = '思いつきと、育てた札を順に、チャットの入力欄に入れます';
+      ask.onclick = () => say(ctx.insertText?.(thread.asText) ? '筋を依頼に入れました（チャットの入力欄）。' : 'チャットのパネルが出ていません（表示 から出せます）。');
+      const close = el('button', 'ghost ideas-thread-close', '筋を閉じる');
+      close.type = 'button';
+      close.title = '筋は残ります（筋の一覧から開き直せます）';
+      close.onclick = () => closeThread();
+      acts.append(ask, close);
+      threadBox.append(head);
+      if (thread.steps.length > 0) threadBox.append(steps);
+      else threadBox.append(el('div', 'dim', '下の札から、育てたい札の「育てる」を押してください。'));
+      threadBox.append(acts);
+    };
+
+    const drawThreadList = () => {
+      board.replaceChildren();
+      if (threadList.length === 0) {
+        board.append(empty('筋は、まだ有りません。\nいちばん上の欄に思いつきを 1 行で置いて「広げる」を押すと、ここに残ります。'));
+        return;
+      }
+      for (const t of threadList) {
+        const row = el('div', 'idea-card ideas-thread-row');
+        row.dataset.thread = t.id;
+        row.append(el('div', 'idea-text', t.thought), el('div', 'dim idea-from', t.steps.length > 0 ? `育てた札 ${t.steps.length} 枚。最後: ${t.steps.at(-1).text}` : 'まだ育てていません'));
+        const acts = el('div', 'idea-acts');
+        const open = el('button', 'ideas-thread-open', '開く');
+        open.type = 'button';
+        open.title = 'この筋を開いて、続きを育てます';
+        open.onclick = () => void openThread(t.id);
+        const ask = el('button', 'ideas-thread-row-ask', '依頼に入れる');
+        ask.type = 'button';
+        ask.onclick = () => say(ctx.insertText?.(t.asText) ? '筋を依頼に入れました（チャットの入力欄）。' : 'チャットのパネルが出ていません（表示 から出せます）。');
+        acts.append(open, ask);
+        row.append(acts);
+        board.append(row);
+      }
+    };
+
+    const draw = () => {
+      if (!alive()) return;
+      syncBar();
+      drawThread();
+      if (showThreads) { drawThreadList(); return; }
+      board.replaceChildren();
+      if (cards.length === 0) {
+        board.append(empty(showSaved ? '残した札は、まだ有りません。\n札の「☆ 残す」を押すと、ここに並びます。' : '札が有りません。「別の札を出す」を押してください。'));
+        return;
+      }
+      for (const card of cards) board.append(cardNode(card, 0));
+    };
+
+    const all = (list = cards, out = []) => {
+      for (const c of list) { out.push(c); all(c.children ?? [], out); }
+      return out;
+    };
+
+    /** 並べた札を、手元のモデルで磨く（読んであるときだけ）。返事が来たら、文を入れ替える。 */
+    const polishShown = async () => {
+      if (!polishOn || showSaved) return;
+      const ids = cards.filter((c) => !c.polished).map((c) => c.id).slice(0, 5);
+      if (ids.length === 0) return;
+      const shownFor = cards;
+      let r;
+      try { r = await post('polish', { ids }); } catch { return; }
+      if (!alive() || shownFor !== cards) return;
+      if (r.skipped) { polishRow.title = `いまは磨いていません: ${r.skipped}`; return; }
+      for (const got of r.cards ?? []) {
+        const card = cards.find((c) => c.id === got.id);
+        if (card) Object.assign(card, { text: got.text, original: got.original, polished: got.polished });
+      }
+      // おすすめのしるしは、文が変わらなかった札にも付ける
+      if (r.best) for (const card of cards) card.best = card.id === r.best;
+      draw();
+    };
+
+    const show = (r, note) => {
+      cards = (r.cards ?? []).map((c) => ({ ...c, children: [] }));
+      picked = [];
+      polishOn = r.polish !== false;
+      polish.checked = polishOn;
+      drawThemes(r);
+      draw();
+      if (note) say(note.text, note.undo);
+      void polishShown();
+    };
+
+    const receive = async (extra, note) => {
+      say('札を出しています…');
+      let r;
+      try { r = await post('receive', extra); } catch (e) { if (alive()) failed('札を出せませんでした', e); return; }
+      if (!alive()) return;
+      if (cards.length > 0 && !showSaved) { before.push(cards); if (before.length > 10) before.shift(); }
+      showSaved = false;
+      show(r, note ?? { text: `${(r.cards ?? []).length} 枚出しました。` });
+    };
+
+    const addTheme = async (raw) => {
+      let r;
+      try { r = await post('register_theme', { term: raw }); } catch (e) { failed('足せませんでした', e); return; }
+      if (!alive()) return;
+      await receive({ focus: r.term }, {
+        text: `「${r.term}」を足しました。この語の札を出しています。`,
+        undo: { label: '取り消す', run: () => void dropTheme(r.term) },
+      });
+    };
+
+    const dropTheme = async (term) => {
+      try { await post('remove_theme', { term }); } catch (e) { failed('外せませんでした', e); return; }
+      if (!alive()) return;
+      await receive({}, {
+        text: `「${term}」を外しました。この語の札は、もう出しません。`,
+        undo: { label: '取り消す', run: () => void restoreTheme(term, true) },
+      });
+    };
+
+    /** 外した語を戻す。外した直後の取り消しなら、外す前に並んでいた札に戻す。 */
+    const restoreTheme = async (term, goBack) => {
+      let r;
+      try { r = await post('restore_theme', { term }); } catch (e) { failed('戻せませんでした', e); return; }
+      if (!alive()) return;
+      drawThemes(r);
+      if (goBack && before.length > 0) { cards = before.pop(); picked = []; draw(); }
+      say(`「${term}」を戻しました。`);
+    };
+
+    const grow = async (card) => {
+      let r;
+      try { r = await post('follow_chain', { id: card.id }); } catch (e) { failed('続きを出せませんでした', e); return; }
+      if (!alive()) return;
+      card.children = [...(card.children ?? []), { ...r.card, children: [] }];
+      draw();
+      say('続きを 1 枚出しました（元の札の下）。');
+    };
+
+    const rate = async (card) => {
+      let r;
+      try { r = await post('rate', { id: card.id, value: card.starred ? 0 : 1 }); } catch (e) { failed('残せませんでした', e); return; }
+      if (!alive()) return;
+      card.starred = r.card.starred;
+      const grown = (r.weights ?? []).map((w) => `${w.term} ${w.weight}`).join('・');
+      if (showSaved && !card.starred) cards = cards.filter((c) => c.id !== card.id);
+      draw();
+      say(card.starred ? `残しました。次から出やすくなる語（重み）: ${grown}` : `残すのをやめました。語の重みを戻しました: ${grown}`,
+        showSaved && !card.starred ? { label: '取り消す', run: async () => { await post('rate', { id: card.id, value: 1 }).catch(() => undefined); void openSaved(); } } : undefined);
+    };
+
+    const combine = async () => {
+      if (picked.length !== 2) return;
+      let r;
+      try { r = await post('combine', { a: picked[0], b: picked[1] }); } catch (e) { failed('組み合わせられませんでした', e); return; }
+      if (!alive()) return;
+      picked = [];
+      if (showSaved) { showSaved = false; cards = before.pop() ?? []; }
+      cards = [{ ...r.card, children: [] }, ...cards];
+      draw();
+      say('2 枚を組み合わせた札を、いちばん上に出しました。');
+    };
+
+    const openSaved = async () => {
+      let r;
+      try { r = await getJson('/api/ideas/browse'); } catch (e) { failed('残した札を読めませんでした', e); return; }
+      if (!alive()) return;
+      if (!showSaved) before.push(cards);
+      showSaved = true;
+      cards = (r.saved ?? []).map((c) => ({ ...c, children: [] }));
+      picked = [];
+      draw();
+      say(`残した札: ${cards.length} 枚`);
+    };
+
+    /** 思いつきを置く。広げた札が返り、思いつきは筋の頭として残る。 */
+    const plant = async () => {
+      const text = thoughtInput.value.trim();
+      if (!text) { say('思いつきを 1 行で書いてから「広げる」を押してください。'); thoughtInput.focus(); return; }
+      let r;
+      try { r = await post('plant', { text }); } catch (e) { failed('広げられませんでした', e); return; }
+      if (!alive()) return;
+      if (!thread && !showSaved && !showThreads && cards.length > 0) { before.push(cards); if (before.length > 10) before.shift(); }
+      showSaved = false;
+      showThreads = false;
+      thread = r.thread;
+      cards = (r.cards ?? []).map((c) => ({ ...c, children: [] }));
+      picked = [];
+      thoughtInput.value = '';
+      draw();
+      say(r.thread.words.length > 0
+        ? `思いつきを置きました。「${r.thread.words.join('・')}」で広げた札 ${cards.length} 枚です。育てたい札の「育てる」を押してください。`
+        : `思いつきを置きました。語を採れなかったので、今のテーマの語で広げた札 ${cards.length} 枚です。`);
+      void polishShown();
+    };
+
+    /** 札を育てる。札が筋に足され、その札を種にした次の札が出る。 */
+    const growThread = async (card) => {
+      if (!thread) return;
+      let r;
+      try { r = await post('grow', { thread: thread.id, id: card.id }); } catch (e) { failed('育てられませんでした', e); return; }
+      if (!alive()) return;
+      thread = r.thread;
+      cards = (r.cards ?? []).map((c) => ({ ...c, children: [] }));
+      picked = [];
+      draw();
+      say(`筋に足しました（${thread.steps.length} 枚目）。その札を種にした次の札を ${cards.length} 枚出しました。`);
+      void polishShown();
+    };
+
+    /** 筋を開き直す。筋の最後の札（無ければ思いつき）を種にした札を出す。 */
+    const openThread = async (id) => {
+      let r;
+      try { r = await post('grow', { thread: id }); } catch (e) { failed('筋を開けませんでした', e); return; }
+      if (!alive()) return;
+      showThreads = false;
+      thread = r.thread;
+      cards = (r.cards ?? []).map((c) => ({ ...c, children: [] }));
+      picked = [];
+      draw();
+      say(`筋を開きました（育てた札 ${thread.steps.length} 枚）。続きを育てられます。`);
+    };
+
+    const closeThread = () => {
+      thread = null;
+      cards = before.pop() ?? [];
+      picked = [];
+      draw();
+      say('筋を閉じました（筋の一覧から開き直せます）。');
+      if (cards.length === 0) void receive({});
+    };
+
+    const toggleThreads = async () => {
+      if (showThreads) { showThreads = false; draw(); say(thread ? '筋に戻りました。' : '札に戻りました。'); return; }
+      let r;
+      try { r = await getJson('/api/ideas/threads'); } catch (e) { failed('筋の一覧を読めませんでした', e); return; }
+      if (!alive()) return;
+      if (showSaved) { showSaved = false; cards = before.pop() ?? []; }
+      threadList = r.threads ?? [];
+      showThreads = true;
+      draw();
+      say(`筋: ${threadList.length} 本`);
+    };
+
+    plantBtn.onclick = () => void plant();
+    thoughtInput.addEventListener('keydown', (e) => { if (isPlainEnter(e)) { e.preventDefault(); void plant(); } });
+    threadsBtn.onclick = () => void toggleThreads();
+    more.onclick = () => void receive({});
+    back.onclick = () => { if (before.length > 0) { cards = before.pop(); picked = []; draw(); say('前の札に戻しました。'); } };
+    join.onclick = () => void combine();
+    savedBtn.onclick = () => {
+      if (!showSaved) { void openSaved(); return; }
+      showSaved = false;
+      cards = before.pop() ?? [];
+      picked = [];
+      draw();
+      say('札に戻りました。');
+      if (cards.length === 0) void receive({});
+    };
+    polish.onchange = async () => {
+      const want = polish.checked;
+      try { polishOn = (await post('polish_enabled', { enabled: want })).polish; } catch (e) { polish.checked = !want; failed('切り替えられませんでした', e); return; }
+      say(polishOn ? '手元のモデルを読んであるときは、札の文を磨きます。' : '札の文は磨きません（掛け合わせた文のまま出します）。');
+      if (polishOn) void polishShown();
+    };
+
+    syncBar();
+    void receive({});
+  },
 };
 
 /*
@@ -3779,4 +4260,5 @@ export const TITLES = {
   checks: '診断',
   preview: 'プレビュー',
   editor: 'エディタ',
+  ideas: 'アイデア',
 };

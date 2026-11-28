@@ -33,7 +33,11 @@ import { revertLines, type RevertPick } from '../agent/hunks.ts';
 import { buildCompletionInput, cleanCompletion } from '../core/completion.ts';
 import { writeEnvValue } from '../core/env.ts';
 import { canRun } from '../core/which.ts';
-import { saveEscalate, saveLocation, saveBlocksDirection, saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
+import { saveEscalate, saveExtensionEnabled, saveLocation, saveBlocksDirection, saveMcpServer, saveWorkRoot, savedWorkRoot } from './settings.ts';
+import { extensionById, extensionDataDir, extensionEnabled, extensionForPath, listExtensions, offPanelKinds } from '../extensions/registry.ts';
+import { IdeaService, IdeasError } from '../extensions/ideas/service.ts';
+import { autoThemes } from '../extensions/ideas/themes.ts';
+import { POLISH_SYSTEM, parsePolish, polishPrompt } from '../extensions/ideas/polish.ts';
 import { DEFAULT_LOCATION, WeatherSource } from '../core/knowledge-source.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFile, writeFile, mkdir, realpath, rename, rm, chmod } from 'node:fs/promises';
@@ -1474,7 +1478,12 @@ export class UiServer {
 
     if (path === '/api/layout' && req.method === 'GET') {
       const { layout, repairs } = await loadLayout();
-      return send(res, 200, { layout, repairs, presets: PRESETS.map((p) => ({ id: p.id, name: p.name })), kinds: PANEL_KINDS });
+      // 切ってある拡張機能のパネルは、種類の一覧から外す。画面は `off` の種類を表示の一覧に出さず、並びに在れば閉じる
+      const off = offPanelKinds(this.#opts.config);
+      return send(res, 200, {
+        layout, repairs, presets: PRESETS.map((p) => ({ id: p.id, name: p.name })),
+        kinds: PANEL_KINDS.filter((k) => !off.includes(k)), off,
+      });
     }
 
     if (path === '/api/layout' && req.method === 'PUT') {
@@ -2146,6 +2155,35 @@ export class UiServer {
           error: `設定を読めませんでした: ${(e as Error).message}`,
         });
       }
+    }
+
+    /*
+     * 拡張機能（docs/EXTENSIONS.md）。一覧と入り切り。保存したら、いま動いている設定にも入れる（その場で効く）。
+     * 切ってある拡張機能の API は、ここより下へ行く前に 404 で返す。LAN の口（スマホ）には、拡張機能の API を出さない。
+     */
+    if (path === '/api/extensions' && (req.method === 'GET' || req.method === 'PUT')) {
+      if (req.method === 'PUT') {
+        const body = (await readBody(req) ?? {}) as { id?: unknown; enabled?: unknown };
+        const spec = typeof body.id === 'string' ? extensionById(body.id) : undefined;
+        if (!spec) return send(res, 400, { error: 'id（拡張機能の名前）が要ります' });
+        if (typeof body.enabled !== 'boolean') return send(res, 400, { error: 'enabled（true か false）が要ります' });
+        await saveExtensionEnabled(spec.id, body.enabled);
+        this.#opts.config.extensions = {
+          ...this.#opts.config.extensions,
+          [spec.id]: { ...this.#opts.config.extensions?.[spec.id], enabled: body.enabled },
+        };
+      }
+      return send(res, 200, {
+        extensions: listExtensions(this.#opts.config).map((e) => ({ id: e.id, name: e.name, description: e.description, panel: e.panel, enabled: e.enabled })),
+      });
+    }
+    const extension = extensionForPath(path);
+    if (extension) {
+      if (viaPhone) return send(res, 404, { error: 'この口には、拡張機能はありません' });
+      if (!extensionEnabled(this.#opts.config, extension.id)) {
+        return send(res, 404, { error: `拡張機能「${extension.name}」は切ってあります（設定 → 拡張機能 で入れられます）` });
+      }
+      if (extension.id === 'ideas') return this.#ideasApi(path, req, res);
     }
 
     /*
@@ -3866,6 +3904,127 @@ export class UiServer {
    * 確かめで押し戻された頼みを回す先（`Session` に渡す。訊かれるのは、押し戻しが続いたときだけ）。
    * 取ってある中で、今のモデルより大きく、この機械の計画で動くもののうち、いちばん大きいもの。`evenIfOff` は、切ってあっても回す先を調べる（設定の画面に見せるため）。
    */
+  /** アイデアの拡張機能の本体。最初に呼ばれたときに作る（切ってある間は作らない）。 */
+  #ideas: IdeaService | undefined;
+  #ideasService(): IdeaService {
+    this.#ideas ??= new IdeaService(extensionDataDir('ideas'));
+    return this.#ideas;
+  }
+
+  /** 自動で採るテーマの語。今の作業場のフォルダの名前と、見ている会話の直近の依頼（新しいものが先）から採る。 */
+  #ideaThemes(): string[] {
+    const asked: string[] = [];
+    for (const m of this.#session?.history ?? []) {
+      if (m.role === 'user' && !m.nudge && typeof m.content === 'string') asked.push(m.content.slice(0, 2000));
+    }
+    return autoThemes({ workRoot: this.#workRoot(), recentRequests: asked.slice(-6).reverse() });
+  }
+
+  /**
+   * アイデアの拡張機能の API（docs/IDEAS.md）。口の名前は IDEAMAN のツールの名前に寄せてある
+   * （receive・browse・follow_chain・rate・register_theme・list_themes・stock_status）。
+   * 札は語の掛け合わせで作るので、モデルもネットワークも要らない。磨き（polish）だけが、手元のモデルを使う。
+   */
+  async #ideasApi(path: string, req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const ideas = this.#ideasService();
+    const name = path.slice('/api/ideas/'.length);
+    const seedOf = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : undefined);
+    try {
+      if (req.method === 'GET') {
+        if (name === 'list_themes') return send(res, 200, await ideas.listThemes(this.#ideaThemes()));
+        if (name === 'browse') return send(res, 200, { saved: await ideas.browse() });
+        if (name === 'threads') return send(res, 200, { threads: await ideas.threads() });
+        if (name === 'stock_status') return send(res, 200, { ...(await ideas.status()), polish: await ideas.polishEnabled() });
+        return send(res, 404, { error: 'その口はありません' });
+      }
+      if (req.method !== 'POST') return send(res, 405, { error: 'GET か POST で呼んでください' });
+      const body = (await readBody(req) ?? {}) as Record<string, unknown>;
+      const auto = this.#ideaThemes();
+      const text = (v: unknown): string => (typeof v === 'string' ? v.slice(0, 200) : '');
+      if (name === 'receive') {
+        const seed = seedOf(body.seed);
+        const count = seedOf(body.count);
+        const focus = text(body.focus);
+        const cards = await ideas.receive({ auto, ...(seed !== undefined ? { seed } : {}), ...(count !== undefined ? { count } : {}), ...(focus ? { focus } : {}) });
+        return send(res, 200, { cards, ...(await ideas.listThemes(auto)), polish: await ideas.polishEnabled() });
+      }
+      // 思いつきを 1 行で置いて広げる・札を育てて筋に残す（筋は threads で開き直せる）
+      if (name === 'plant') {
+        const seed = seedOf(body.seed);
+        return send(res, 200, await ideas.plant(typeof body.text === 'string' ? body.text.slice(0, 2000) : '', { auto, ...(seed !== undefined ? { seed } : {}) }));
+      }
+      if (name === 'grow') {
+        const seed = seedOf(body.seed);
+        return send(res, 200, await ideas.grow(text(body.thread), text(body.id) || undefined, { auto, ...(seed !== undefined ? { seed } : {}) }));
+      }
+      if (name === 'follow_chain') {
+        const seed = seedOf(body.seed);
+        return send(res, 200, { card: await ideas.followChain(text(body.id), { auto, ...(seed !== undefined ? { seed } : {}) }) });
+      }
+      if (name === 'combine') {
+        const seed = seedOf(body.seed);
+        return send(res, 200, { card: await ideas.combineTwo(text(body.a), text(body.b), seed !== undefined ? { seed } : {}) });
+      }
+      if (name === 'rate') {
+        if (typeof body.value !== 'number') return send(res, 400, { error: 'value（1 で残す、0 でやめる）が要ります' });
+        return send(res, 200, await ideas.rate(text(body.id), body.value));
+      }
+      if (name === 'register_theme' || name === 'remove_theme' || name === 'restore_theme') {
+        const term = name === 'register_theme' ? await ideas.registerTheme(text(body.term))
+          : name === 'remove_theme' ? await ideas.removeTheme(text(body.term)) : await ideas.restoreTheme(text(body.term));
+        return send(res, 200, { term, ...(await ideas.listThemes(auto)) });
+      }
+      if (name === 'polish_enabled') {
+        if (typeof body.enabled !== 'boolean') return send(res, 400, { error: 'enabled（true か false）が要ります' });
+        return send(res, 200, { polish: await ideas.setPolishEnabled(body.enabled) });
+      }
+      if (name === 'polish') return send(res, 200, await this.#polishIdeas(ideas, Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === 'string').slice(0, 5) : []));
+      if (name === 'unpolish') {
+        const id = text(body.id);
+        await ideas.setPolished({ [id]: '' });
+        return send(res, 200, { cards: await ideas.cards([id]) });
+      }
+      return send(res, 404, { error: 'その口はありません' });
+    } catch (e) {
+      // 利用者に言える断り（語でない・札を覚えていない・上限）は、理由をそのまま返す
+      if (e instanceof IdeasError) return send(res, 400, { error: e.message });
+      throw e;
+    }
+  }
+
+  /**
+   * 手元のモデルで、札の文を磨き、いちばん試す値打ちのある 1 枚を選ばせる。
+   * モデルが無い・まだ読んでいない・作業中・切ってあるときは、何もせずに理由を返す（札は元の文のまま使える）。
+   * 磨くためにモデルを読みには行かない（札を見るだけの人の機械を、読み込みで塞がない）。
+   */
+  async #polishIdeas(ideas: IdeaService, ids: string[]): Promise<{ cards?: unknown[]; best?: string; skipped?: string }> {
+    if (!(await ideas.polishEnabled())) return { skipped: '磨きは切ってあります' };
+    const cards = (await ideas.cards(ids)).filter((c) => !c.polished);
+    if (cards.length === 0) return { cards: [] };
+    const missing = await this.#readyToThink(false).catch((e: unknown) => `見に行けませんでした: ${(e as Error).message}`);
+    if (missing) return { skipped: missing === NOT_LOADED_YET ? 'モデルをまだ読んでいません（会話で一度話しかけると、次から磨きます）' : missing };
+    const session = await this.session();
+    if (this.#busyNow(session)) return { skipped: 'いま作業中です（終わってから磨きます）' };
+    const asked = cards.map((c) => ({ id: c.id, text: c.original, ...(c.material ? { material: c.material } : {}) }));
+    let out = '';
+    try {
+      for await (const ev of session.orchestrator.run({
+        candidates: session.quiet, system: POLISH_SYSTEM,
+        messages: [{ role: 'user', content: polishPrompt(asked) }], temperature: 0.3, maxTokens: 700,
+        // 会話の続きではない。会話の口の続き（KV）を上書きしないよう、補助の口で回す
+        aux: true,
+      }, AbortSignal.timeout(120_000))) {
+        if (ev.type === 'text') out += ev.delta;
+        else if (ev.type === 'failed') return { skipped: ev.error.message };
+      }
+    } catch (e) {
+      return { skipped: (e as Error).message };
+    }
+    const read = parsePolish(out, asked);
+    await ideas.setPolished(read.texts);
+    return { cards: await ideas.cards(Object.keys(read.texts)), ...(read.best ? { best: read.best } : {}) };
+  }
+
   async #escalateTarget(inner: readonly string[], evenIfOff = false): Promise<EscalateAnswer> {
     const cfg = this.#opts.config.escalate;
     if (cfg?.enabled === false && !evenIfOff) return { state: 'off' };

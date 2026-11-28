@@ -11,15 +11,20 @@ import { c } from './colors.ts';
 import { how } from './how.ts';
 import { loadConfig } from '../config.ts';
 import { savedModelsDir } from '../ui/settings.ts';
+import { extensionDataDir, listExtensions } from '../extensions/registry.ts';
 
 // 取ってくる側が落とす先も見る（設定の runtime.modelsDir と、画面で選んだ保存先）。設定が読めなくても、既定の保存先だけで片づけは進める
 const modelsDirs: string[] = [];
+// 切ってある拡張機能のデータも挙げる。設定が読めなければ挙げない（入っているかが分からないものを、消す一覧に出さない）
+let offExtensions: Array<{ name: string; dir: string }> = [];
 try {
-  const dir = loadConfig().config.runtime?.modelsDir;
+  const config = loadConfig().config;
+  const dir = config.runtime?.modelsDir;
   if (dir) modelsDirs.push(dir);
+  offExtensions = listExtensions(config).filter((e) => !e.enabled).map((e) => ({ name: e.name, dir: extensionDataDir(e.id) }));
 } catch { /* 設定が壊れていても片づけは止めない（壊れていることは doctor が言う） */ }
 modelsDirs.push(await savedModelsDir().catch(() => ''));
-const items = await findRemovable({ keepTag: PINNED_TAG, modelsDirs: modelsDirs.filter(Boolean) });
+const items = await findRemovable({ keepTag: PINNED_TAG, modelsDirs: modelsDirs.filter(Boolean), offExtensions });
 
 console.log(c.cyan('AdaptiveAIStudio') + c.dim(' — clean\n'));
 console.log(describe(items));

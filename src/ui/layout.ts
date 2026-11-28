@@ -32,6 +32,7 @@ export const PANEL_KINDS = [
   'checks',        // 点検（doctor・検査・片づけ）。cmd の窓でしかできなかったもの
   'note',          // 自由記述。壊れた配置の受け皿でもある
   'editor',        // ファイルを開いて、その場で直して保存する
+  'ideas',         // アイデア（拡張機能。src/extensions/registry.ts。切ってある間は、画面が出さない）
 ] as const;
 
 export type PanelKind = typeof PANEL_KINDS[number];

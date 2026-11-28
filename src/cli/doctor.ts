@@ -42,6 +42,8 @@ function shownUrl(url: string): string {
 import { deepestUnder, judgeRoom, WINDOWS_MAX_PATH } from '../core/pathroom.ts';
 import { resolve } from 'node:path';
 import { probeBackend, describeBackend, GPU_NEEDS, type Backend, type LlamaLib } from '../runtime/inproc.ts';
+import { extensionDataDir, listExtensions } from '../extensions/registry.ts';
+import { IdeaService } from '../extensions/ideas/service.ts';
 const LLAMA_LIB = 'node-llama-cpp'; // 型検査に解決させない（src/runtime/inproc.ts 参照）
 
 const c = {
@@ -542,6 +544,20 @@ if (process.platform === 'win32') {
 /* ---------- 外の道具（MCP） ---------- */
 
 step('外のツールを見ます');
+
+// 同梱の拡張機能（docs/EXTENSIONS.md）。入っているか、同梱のデータが読めるか、残したものの数を 1 行で出す
+for (const ext of listExtensions(config)) {
+  if (ext.id !== 'ideas') { add(`拡張機能 (${ext.name})`, 'ok', ext.enabled ? '入っています' : '切ってあります'); continue; }
+  try {
+    const s = await new IdeaService(extensionDataDir(ext.id)).status();
+    const data = `語 ${s.terms}・型 ${s.templates}・仕組み ${s.mechanisms}（出典つき。同梱は ${s.mechanismsTotal} 文、CC BY-SA 4.0）`;
+    const kept = `残した札 ${s.saved} 枚・筋 ${s.threads} 本・重みの育った語 ${s.grown} 個`;
+    if (s.unreadable) add(`拡張機能 (${ext.name})`, 'warn', `${data}。蔵を読めません: ${s.path}`, 'ほかのプログラムが開いていないか見てください。読めるようになるまで、残した札は保存されません');
+    else add(`拡張機能 (${ext.name})`, 'ok', `${ext.enabled ? '入っています' : '切ってあります（設定 → 拡張機能 で入れられます。データは残っています）'}。${data}。${kept}`);
+  } catch (e) {
+    add(`拡張機能 (${ext.name})`, 'bad', `同梱のデータを読めません: ${(e as Error).message}`, '入れ直してください（src/extensions/ideas/data が欠けています）');
+  }
+}
 
 // 繋がらない理由でいちばん多いのは、合言葉が無いこと。**値は出さない。**
 // 名前が環境にあるか（data/.env から読めたか）だけを言う。
