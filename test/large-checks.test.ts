@@ -25,3 +25,10 @@ test('CI の large が check-large を回す', () => {
   const ci = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
   assert.match(ci, /scripts\/check-large\.mjs/);
 });
+
+test('ジョブの env で runner の文脈を使わない（使うとワークフロー全体が起こせなくなる）', () => {
+  const ci = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+  // ジョブの env は 4 文字の字下げ、その中身は 6 文字。ステップの env（8 文字より深い）では使える
+  const bad = [...ci.matchAll(/^ {4}env:\n((?: {6}\S.*\n)+)/gm)].flatMap((m) => m[1]!.split('\n').filter((l) => /\$\{\{\s*runner\./.test(l)));
+  assert.deepEqual(bad, []);
+});

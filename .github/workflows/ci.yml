@@ -449,9 +449,11 @@ jobs:
     needs: user-setup
     runs-on: windows-latest
     timeout-minutes: 150
-    env:
-      LLM_HOME: ${{ runner.temp }}\llm
     steps:
+      # runner の文脈はジョブの env では使えない（ワークフロー全体が読めなくなる）。ステップで渡す
+      - name: モデルの置き場を決める
+        shell: pwsh
+        run: Add-Content $env:GITHUB_ENV "LLM_HOME=$env:RUNNER_TEMP\llm"
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
