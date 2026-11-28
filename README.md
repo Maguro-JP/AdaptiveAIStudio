@@ -216,6 +216,7 @@ npm run models -- --get qwen3.6:35b-a3b-coding-nvfp4
 RTX 4060 (8GB) では MoE の `qwen3.6:35b-a3b-coding-nvfp4` が最適解
 （総30B・活性3.3B なので、VRAM に載りきらなくても実用速度が出る）。詳細は
 [モデル運用](docs/MODEL-EFFICIENCY.md) と [32B級を動かすには](docs/RUNNING-LARGE-MODELS.md)。
+メモリより大きいモデルも、分けて置いて動かします。どう置くかは、設定 → モデル に読む前に出ます（[大きいモデルを分けて置く](docs/PLACEMENT.md)）。
 
 Claude (任意): 保存先（doctor の「設定」の行に出る場所）の `.env` に、鍵を一行書く。
 
@@ -553,6 +554,7 @@ playwright-core と Chromium が要ります（配る物には入りません）
 - [最も効率の良いモデル運用](docs/MODEL-EFFICIENCY.md) — 何を基準にモデルを選ぶか（重要）
 - [GGUF を直接読む](docs/GGUF.md) — 名前からの推測をやめ、書いてある諸元を使う
 - [32B級を動かすには](docs/RUNNING-LARGE-MODELS.md) — メモリ計算・速度の根拠・MoE・並列と直列
+- [大きいモデルを分けて置く](docs/PLACEMENT.md) — メモリより大きいモデルを VRAM・メモリ・SSD に分けて動かす。置き方の計画と、入らないときの理由・動かす手
 - [自前化とクラウド解禁の条件](docs/INDEPENDENCE.md) — 脱Ollama依存の段階計画と、クラウドを有効化する基準
 - [段階的劣化](docs/DEGRADATION.md) — 遅くても動かすための設計（実行可能性プランナ・編成スタイル）
 - [アーキテクチャ設計](docs/ARCHITECTURE.md) — 全体設計・Provider設計・保存データ設計・リスク

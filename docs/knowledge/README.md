@@ -15,7 +15,7 @@ long-dev が周ごとに書く。新しく分かったことを、将来読み�
 |---|---|
 | いま何が在って、何が無いか・未解決のもの | `docs/HANDOFF.md` |
 | 作りの地図 | `docs/ARCHITECTURE.md`、`docs/UI.md` |
-| モデル・実行の知見 | `docs/LOCAL-MODEL.md`、`docs/GGUF.md`、`docs/RUNNING-LARGE-MODELS.md`、`docs/MODEL-EFFICIENCY.md` |
+| モデル・実行の知見 | `docs/LOCAL-MODEL.md`、`docs/GGUF.md`、`docs/RUNNING-LARGE-MODELS.md`、`docs/PLACEMENT.md`、`docs/MODEL-EFFICIENCY.md` |
 | まだ無いもの・完成の定義 | `docs/ROADMAP.md`、`docs/RETHINK.md` |
 | 不具合の直し方 | `docs/TROUBLESHOOTING.md` |
 
