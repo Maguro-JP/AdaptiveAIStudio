@@ -17,6 +17,7 @@ AI が読んだファイル・書いたファイルは、その場でカード�
 
 コードを書かずに、ブロックをつないでプログラムを組むこともできます（左上の ▦。[ブロックでつくる](docs/BLOCKS.md)）。
 同じ Wi-Fi のスマホからも頼めます（設定 → スマホ。[スマホから使う](docs/PHONE.md)）。
+行き詰まったら、パネル「アイデア」が、今の作業の語と外の世界の仕組みを掛け合わせた札を出します（⊞ 表示 → アイデア。[アイデア](docs/IDEAS.md)）。
 
 ## はじめに（ここから）
 
@@ -543,6 +544,8 @@ playwright-core と Chromium が要ります（配る物には入りません）
 - [手元のモデルを使う](docs/LOCAL-MODEL.md) — GGUF を置くだけ。実行ファイルを増やさない道（重要）
 - [ブロックでつくる](docs/BLOCKS.md) — 積み木のようにブロックをつないでプログラムを組む画面。手順を上から並べる形も選べる
 - [スマホから使う](docs/PHONE.md) — 同じ Wi-Fi のスマホから、合言葉で PC の本体に繋いで頼む
+- [アイデア](docs/IDEAS.md) — 今の作業の語と外の世界の仕組みを掛け合わせて、アイデアの札を出すパネル（IDEAMAN から移したもの。同梱のデータのライセンスもここ）
+- [拡張機能](docs/EXTENSIONS.md) — 同梱の機能を設定で入れたり切ったりする入れ物の決まり
 - [働くかの確かめ](docs/USAGE-WORK-CHECK.md) — 本物のモデルに画面から質問と作業を頼んで、中身で判定する
 - [動かないとき](docs/TROUBLESHOOTING.md) — LM Studio でも動かない場合を含む
 - [記憶](docs/MEMORY.md) — 覚えていること。同じ失敗を繰り返さないための器（重要）
@@ -559,6 +562,12 @@ playwright-core と Chromium が要ります（配る物には入りません）
 - [自前化とクラウド解禁の条件](docs/INDEPENDENCE.md) — 脱Ollama依存の段階計画と、クラウドを有効化する基準
 - [段階的劣化](docs/DEGRADATION.md) — 遅くても動かすための設計（実行可能性プランナ・編成スタイル）
 - [アーキテクチャ設計](docs/ARCHITECTURE.md) — 全体設計・Provider設計・保存データ設計・リスク
+
+## 同梱しているデータのライセンス
+
+拡張機能「アイデア」に同梱している、外の世界の仕組みの文は、日本語版ウィキペディアの記事の文です（CC BY-SA 4.0）。
+出典の記事の一覧と、変えた所は [src/extensions/ideas/data/NOTICE.md](src/extensions/ideas/data/NOTICE.md) に在ります（配る形にも入ります）。
+語のプールと文の型は、公開のリポジトリ [IDEAMAN](https://github.com/Maguro-JP/IDEAMAN) から移したものです（[アイデア](docs/IDEAS.md)）。
 
 ## 動作想定環境
 
