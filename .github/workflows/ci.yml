@@ -83,6 +83,10 @@ on:
         description: 'setup.exe を Windows に入れ、本物の 9B のモデルを置き、メモリをモデルより小さく見せて起こし、画面で配置の計画を見て、選んで、頼んだ答えが出るかを見る（scripts/check-large.mjs の全部）。これだけを回す'
         type: boolean
         default: false
+      ideas:
+        description: '配る形を Linux で組み、モデルを 1 つも置かずに起こし、画面でパネル「アイデア」を出して、札を出す・語を足す・外す・もっと・なぜ・組み合わせる・残す・拡張機能を切って入れ直す、を押して見る（scripts/check-ideas.mjs の全部）。これだけを回す'
+        type: boolean
+        default: false
       without_network:
         description: 'user と一緒に使う。ネットワークから取りに行かずに起こし、新しい API の頼みが落ちることを見る（成果物 5 の対照）'
         type: boolean
@@ -97,7 +101,7 @@ on:
 # 途中の版が通ったかどうかは、結局いらない。
 concurrency:
   # `real`（有料で長い）は別の組にする。同じ枝への push や週一の回で打ち切られないように。
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.real && 'real' || inputs.user && (inputs.without_network && 'user-offline' || 'user') || inputs.work && 'work' || inputs.blocks && 'blocks' || inputs.phone && 'phone' || inputs.large && 'large' || 'ci' }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.real && 'real' || inputs.user && (inputs.without_network && 'user-offline' || 'user') || inputs.work && 'work' || inputs.blocks && 'blocks' || inputs.phone && 'phone' || inputs.large && 'large' || inputs.ideas && 'ideas' || 'ci' }}
   cancel-in-progress: true
 
 # 2026-10-18 に public になり、標準のランナーは無料になった。claude/ の枝の PR でも回す
@@ -113,7 +117,7 @@ jobs:
     name: ubuntu-latest / Node 22.x
     # 本物の重みだけを頼んだ回では回さない（枠を使わない）。
     if: >-
-      (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user && !inputs.work && !inputs.blocks && !inputs.phone && !inputs.large))
+      (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user && !inputs.work && !inputs.blocks && !inputs.phone && !inputs.large && !inputs.ideas))
       && !(github.event.action == 'opened' && github.event.pull_request.draft == true)
     runs-on: ubuntu-latest
     # 暴走した1本で枠を溶かさない。手元では3分ほど。
@@ -148,7 +152,7 @@ jobs:
     name: windows-latest / Node 24.x
     if: >-
       (github.event_name != 'pull_request' || github.event.pull_request.draft == false)
-      && (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user && !inputs.work && !inputs.blocks && !inputs.phone && !inputs.large))
+      && (github.event_name != 'workflow_dispatch' || (!inputs.real && !inputs.user && !inputs.work && !inputs.blocks && !inputs.phone && !inputs.large && !inputs.ideas))
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -180,7 +184,7 @@ jobs:
   # だから PR では回さない。**手で頼んだときと、週に一度だけ。**
   bundle:
     name: bundle / Windows
-    if: github.event_name != 'pull_request' && !inputs.real && !inputs.user && !inputs.work && !inputs.blocks && !inputs.phone && !inputs.large
+    if: github.event_name != 'pull_request' && !inputs.real && !inputs.user && !inputs.work && !inputs.blocks && !inputs.phone && !inputs.large && !inputs.ideas
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
@@ -438,6 +442,32 @@ jobs:
         if: always()
         with:
           name: phone-shots
+          path: shots
+          retention-days: 7
+
+  # アイデアの拡張機能（docs/IDEAS.md）と、拡張機能の入れ物（docs/EXTENSIONS.md）の確かめ。配る形を組み、モデルを置かずに起こし、
+  # 画面でパネル「アイデア」を押して見る（足すだけ。絞らない）。モデルを読む側は入れない（札は語の掛け合わせで作る）
+  ideas:
+    name: ideas / ubuntu-latest
+    if: inputs.ideas
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+      - run: npm ci --no-audit --no-fund
+      - name: 配る形を組む
+        run: npm run bundle
+      - name: 画面を押す部品を入れる
+        run: npm i --no-save --no-audit --no-fund playwright-core
+      - name: モデルを置かずに、札を出して押せるか
+        run: node scripts/check-ideas.mjs --start "sh dist/AdaptiveAIStudio/app/start.sh ui" --port 4179 --work "$RUNNER_TEMP/ideas" --shots shots --out shots/ideas.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ideas-shots
           path: shots
           retention-days: 7
 
