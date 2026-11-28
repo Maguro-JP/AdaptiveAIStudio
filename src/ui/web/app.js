@@ -13,6 +13,7 @@ import { doingText } from './doing.js';
 import { isPlainEnter } from './keys.js';
 import { willRestore, wontRestore, undoWhen } from './undo-scope.js';
 import { sizeText } from './size.js';
+import { placementAlternatives, placementChoices } from './placement.js';
 import { openPicker } from './color.js';
 
 const root = document.getElementById('editor');
@@ -2319,6 +2320,11 @@ async function loadCfg() {
     };
     row.append(k, v, use);
     box.append(row);
+    // 置き方を選んだ結果は、一覧を読み直してから言う（先に言うと、読み直しが消す）
+    const said = (text) => { $('cfgNote').textContent = text; };
+    // 入らない・とても遅いものには、動く形（一覧に在る別の版）を先に出す。「入りません」で終わらせない
+    const works = placementAlternatives(m, { say: said });
+    if (works) box.append(works);
     // この PC でどう置くか。「これを使う」を押す前に分かる。細かい数字は「計画を見る」に畳む
     if (m.plan && (m.fit !== 'comfortable' || m.tooBig)) {
       const note = document.createElement('div');
@@ -2337,6 +2343,9 @@ async function loadCfg() {
         box.append(more);
       }
     }
+    // 置き方を 1 回押して選ぶ。「おまかせ」で既定に戻る
+    const choices = placementChoices(m, { onChange: loadCfg, say: said });
+    if (choices) box.append(choices);
   }
 }
 

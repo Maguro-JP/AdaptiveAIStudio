@@ -9,6 +9,7 @@
  * ディスクの空きは 18GB に見せる（22GB のモデルが「入らない」と出て、理由と動かす手が出ることも見る）。
  * そのあと、試験の口を変えて本体を 2 回起こし直す。読み込みの最初の段を落として、段を下げて読み直すのを見る（AAS_TEST_LOAD_FAILS）。
  * 読み込みを待つ上限を 1 ミリ秒にして、時間切れの理由が画面に出るのを見る（AAS_TEST_LOAD_TIMEOUT_MS）。使い方は docs/PLACEMENT.md。
+ * 最後に、メモリの小さい機械としてもう一度起こし、置き方を画面で選んで・その置き方で読んで・既定に戻すのを見る（docs/PLACEMENT.md の「置き方を選ぶ」）。
  * 確かめは足すだけ。一度載せた id（checks/large.ids）は消さない・飛ばさない（test/large-checks.test.ts が止める）。
  * 1 行ずつ「== PASS <id>: …」「== FAIL <id>: …」を出し、最後に「== 結果: n/m」。1 つでも落ちたら 1 で終わる。
  */
@@ -272,6 +273,44 @@ const CHECKS = [
       measured.timeoutSeconds = seconds;
       const ok = shown && seconds < 300;
       return { ok, why: `画面: ${shown ? '理由と手が出た' : '出ていない'} ／ 記録: ${line.slice(0, 100) || '（無い）'} ／ 止まるまで ${seconds} 秒` };
+    },
+  },
+  {
+    id: 'large-options-pick-and-reset',
+    what: `設定 → モデル に、同じモデルの置き方が 2 つ以上（1 つに「既定」）並び、1 回押すと選べて、開き直しても覚えていて、その置き方で読んで「${ASK}」に答え（${ANSWER} を含む）、「おまかせ」を押すと既定に戻る`,
+    async run() {
+      await restartApp(SMALL_MACHINE);
+      await openModelSettings();
+      const mine = `#cfgGguf .placement-options[data-ref="${ref}"]`;
+      await page.locator(`${mine} .placement-option`).first().waitFor({ state: 'visible', timeout: 60_000 });
+      const texts = await page.locator(`${mine} .placement-option`).allInnerTexts();
+      const defaults = texts.filter((t) => t.includes('（既定）')).length;
+      const other = page.locator(`${mine} .placement-option:not(.chosen)`).first();
+      const name = (await other.locator('.placement-option-name').innerText()).replace(/^[○●]\s*/, '').trim();
+      await other.click();
+      await page.locator(`${mine} .placement-option.chosen`, { hasText: name }).waitFor({ state: 'visible', timeout: 30_000 });
+      const note = await page.locator('#cfgNote').innerText();
+      await shot('large-options-picked.png');
+      // 開き直しても、選んだものが残っている
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await openModelSettings();
+      const kept = await page.locator(`${mine} .placement-option.chosen`).first().innerText();
+      await page.keyboard.press('Escape');
+      const from = logs.length;
+      const answer = await ask(ASK, 60, true);
+      const used = logs.slice(from).find((l) => l.includes(`選んである置き方（${name}）で読みます`)) ?? '';
+      // 「おまかせ」（既定）を押して戻す
+      await openModelSettings();
+      await page.locator(`${mine} .placement-option`, { hasText: '（既定）' }).first().click();
+      await page.locator(`${mine} .placement-option.chosen`, { hasText: '（既定）' }).waitFor({ state: 'visible', timeout: 30_000 });
+      const back = ((await api('/api/models')).installed ?? []).find((m) => m.ref === ref)?.chosen;
+      await shot('large-options-back.png');
+      await page.keyboard.press('Escape');
+      measured.optionPicked = name;
+      measured.optionLines = texts.map((t) => t.replace(/\s+/g, ' '));
+      const ok = texts.length >= 2 && defaults === 1 && note.includes(`「${name}」で置きます`) && kept.includes(name) && kept.includes('（選択中）')
+        && Boolean(used) && digits(answer).includes(ANSWER) && back === 'auto';
+      return { ok, why: `置き方 ${texts.length} 通り（既定 ${defaults}）。押したもの: ${name} ／ ${note.slice(0, 80)} ／ 開き直したあと: ${kept.replace(/\s+/g, ' ').slice(0, 60)} ／ 記録: ${used.slice(0, 80) || '（無い）'} ／ 答え: ${answer.replace(/\s+/g, ' ').slice(0, 60)} ／ 戻したあと: ${back}` };
     },
   },
 ];

@@ -36,9 +36,10 @@ import { DEFAULT_PRIORITY, Priority, PRIORITY_HEADER, toPriority } from '../prov
 import { findRunaway, runawayNote } from './runaway.ts';
 import { OUTPUT_SHARE } from '../agent/window.ts';
 import {
-  describePlacement, planPlacement, reportedRam, retryLadder, runLadder,
+  describePlacement, optionWant, pickOption, placementOptions, planPlacement, reportedRam, retryLadder, runLadder,
   type LadderStep, type PlacementPlan,
 } from './placement.ts';
+import { chosenOption } from './placement-choice.ts';
 import { detectPlacementMachine, injectedLoadFailure, loadLimitMs, LoadTimeoutError, placementModelOf } from './placement-machine.ts';
 
 /** 暴走を見るときに持っておく直近の長さ。 */
@@ -324,6 +325,8 @@ async function probe(port: number): Promise<boolean> {
 export interface InProcOptions {
   /** GGUF の置き場 */
   modelsDir: string;
+  /** 選んだ置き方と、読み込みの実測を置く場所。無ければ AAS_HOME のデータの下（試験では仮のフォルダを渡す）。 */
+  stateDir?: string;
   /** 待つ口。0 なら空いているものを使う。 */
   port?: number;
   onLog?: (line: string) => void;
@@ -874,9 +877,11 @@ export class InProcRuntime implements LocalRuntime {
     // コンテキストウィンドウを利用者が決めたなら、縮めない（本人の選択）。モデルの長さでも切らない
     const fixed = this.#opts.contextSize;
     if (fixed) facts.trainedContext = Math.max(facts.trainedContext ?? 0, fixed);
-    const steps = retryLadder(facts, machine, {
-      context: wanted.window, sequences: wanted.sequences, ...(fixed ? { minContext: fixed } : {}),
-    });
+    // 選んである置き方（docs/PLACEMENT.md の「置き方を選ぶ」）。コンテキストウィンドウを設定で決めてあるなら、そちらが先（本人が数で決めた）
+    const base = { context: wanted.window, sequences: wanted.sequences, ...(fixed ? { minContext: fixed } : {}) };
+    const picked = pickOption(placementOptions(facts, machine, base), fixed ? 'auto' : await chosenOption(ref, this.#opts.stateDir));
+    if (picked.id !== 'auto') this.#opts.onLog?.(`${ref}: 選んである置き方（${picked.label}）で読みます`);
+    const steps = retryLadder(facts, machine, optionWant(picked.id, facts, base));
     const planned = steps[0]!.plan;
     if (!planned.possible) {
       throw new Error([`${ref}: ${describePlacement(planned)}`, ...planned.wouldHelp.slice(1).map((h) => `動かすには: ${h}`)].join('\n'));
@@ -1646,6 +1651,9 @@ export class InProcRuntime implements LocalRuntime {
     // CPU では、入力を読む（prompt evaluation）だけで分単位かかる。
     // その間、画面には何も出ない。「遅い」のがどこかを、記録で分かるようにする。
     const started = Date.now();
+    // 入力として読んだトークンの数（ライブラリの数え）。最初の 1 トークンまでに増えた分が、この回に新しく読んだ分。
+    // 前の続きを使えた回は、入力の全部より少ない（待ちの秒数は機械の具合で揺れるので、数で言う）
+    const readBefore = lane.sequence?.tokenMeter?.usedInputTokens;
     /** 暴走を見るための直近の文字。全部は持たない。 */
     let tail = '';
     let runaway = false;
@@ -1698,8 +1706,10 @@ export class InProcRuntime implements LocalRuntime {
           if (!firstAt) {
             firstAt = Date.now();
             seen = lane.sequence?.nextTokenIndex;
+            const readNow = lane.sequence?.tokenMeter?.usedInputTokens;
+            const fresh = typeof readBefore === 'number' && typeof readNow === 'number' ? Math.max(0, readNow - readBefore) : undefined;
             this.#opts.onLog?.(`最初の 1 トークンまで ${((firstAt - started) / 1000).toFixed(1)} 秒`
-              + (typeof seen === 'number' ? `（入力 ${seen} トークン）` : ''));
+              + (typeof seen === 'number' ? `（入力 ${seen} トークン${fresh !== undefined ? `・新しく読んだのは ${fresh} トークン` : ''}）` : ''));
           }
           generated += c.tokens?.length ?? 0;
           if (c.type === 'segment' && c.segmentType === 'thought') thought += c.text.length;
@@ -1825,7 +1835,7 @@ export interface ChatLane {
   /** ライブラリが選んだ型。試験の差し替えには無いので、あってもなくてもよい。 */
   chatWrapper?: { wrapperName?: string };
   /** 読み終えた入力の数。試験のモックには無い。 */
-  sequence?: { nextTokenIndex?: number };
+  sequence?: { nextTokenIndex?: number; tokenMeter?: { usedInputTokens?: number } };
 }
 
 /** ここから下（高・中・低）は取り分 0。上に待ち手が居ないときだけ借りる。 */

@@ -367,18 +367,45 @@ let backend: Backend | undefined;
 const placementNotes = async () => {
   if (runtime.id !== 'inproc') return;
   const { tooBigForRam } = await import('../runtime/inproc.ts');
-  const { describePlacement, reportedRam } = await import('../runtime/placement.ts');
-  const { planHere, refusalText } = await import('../runtime/placement-machine.ts');
+  const { describePlacement, optionLines, pickOption, placementAlternatives, placementOptions, reportedRam } = await import('../runtime/placement.ts');
+  const { detectPlacementMachine, placementModelOf, refusalText } = await import('../runtime/placement-machine.ts');
+  const { chosenOption } = await import('../runtime/placement-choice.ts');
+  const { catalogMatch, catalogVersions } = await import('../runtime/model-catalog.ts');
   const { totalmem } = await import('node:os');
   const dir = config.runtime?.modelsDir ?? defaultModelsDir();
+  const here = await detectPlacementMachine({
+    modelsDir: dir,
+    ...(backend && backend.gpu !== false && backend.vramBytes > 0
+      ? { gpu: { vramBytes: backend.vramBytes, ...(backend.devices?.[0] ? { name: backend.devices[0] } : {}) } }
+      : {}),
+    ...(backend?.cpu?.cores ? { cores: backend.cpu.cores } : {}),
+  });
+  // 別の版の候補は、取ってくる一覧に在るものだけ（画面と同じ）
+  const candidates = catalogVersions().map((v) => ({
+    id: v.id, family: v.family, quant: v.quant,
+    model: {
+      ref: v.id, fileBytes: v.bytes,
+      downloaded: models.some((m) => { const hit = catalogMatch(m.ref); return hit?.family === v.family && hit.quant === v.quant; }),
+      ...(v.facts ? { layers: v.facts.layers, kvBytesPerToken: v.facts.kvBytesPerToken, ...(v.facts.activeRatio ? { activeRatio: v.facts.activeRatio } : {}) } : {}),
+    },
+  }));
   for (const m of models) {
-    if (!tooBigForRam(m.sizeBytes, reportedRam(totalmem()))) continue;
-    const { plan, model: facts, machine: here } = await planHere({
-      modelsDir: dir, ref: m.ref, path: join(dir, m.ref),
-      ...(m.sizeBytes !== undefined ? { sizeBytes: m.sizeBytes } : {}), ...(backend ? { backend } : {}),
-    });
-    if (plan.possible) add('モデル', 'ok', `${m.ref}: メモリより大きいので、分けて置きます。${describePlacement(plan)}`);
-    else add('モデル', 'warn', refusalText(m.ref, plan, facts, here));
+    const chosen = await chosenOption(m.ref);
+    // メモリに載る小さいモデルで、何も選んでいないものは言わない（今までどおり）
+    if (!tooBigForRam(m.sizeBytes, reportedRam(totalmem())) && chosen === 'auto') continue;
+    const facts = await placementModelOf(join(dir, m.ref), m.ref, m.sizeBytes);
+    const options = placementOptions(facts, here);
+    const plan = pickOption(options, chosen).plan;
+    const alternatives = placementAlternatives({ ...catalogMatch(m.ref), fileBytes: facts.fileBytes, plan }, candidates, here);
+    // 入らないときは、動く形を先に言う（「入りません」で終わらせない）
+    const works = alternatives.map((a) => `動く形: ${a.line}`);
+    if (plan.possible) {
+      add('モデル', 'ok', [
+        `${m.ref}: ${tooBigForRam(m.sizeBytes, reportedRam(totalmem())) ? 'メモリより大きいので、分けて置きます。' : ''}${describePlacement(plan)}`,
+        ...(options.length > 1 ? optionLines(options, chosen).map((l) => `置き方: ${l}`) : []),
+        ...works,
+      ].join('\n'));
+    } else add('モデル', 'warn', [...works, refusalText(m.ref, plan, facts, here)].join('\n'));
   }
 };
 

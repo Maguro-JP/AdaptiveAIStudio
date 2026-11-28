@@ -52,9 +52,13 @@ import { LogFile } from '../core/logfile.ts';
 import { checkUpdate, applyUpdate } from '../core/update.ts';
 import { findInstalled } from '../runtime/llama-install.ts';
 import { findNewerOllama, findNewerGguf } from '../runtime/model-updates.ts';
-import { AVAILABLE_MODELS, lookupCatalog, STARTER_ID } from '../runtime/model-catalog.ts';
-import { describePlacement, placementDetail, planPlacement, reportedRam, type PlacementMachine, type PlacementPlan } from '../runtime/placement.ts';
-import { detectPlacementMachine, planFile, planHere, refusalText } from '../runtime/placement-machine.ts';
+import { AVAILABLE_MODELS, catalogMatch, catalogVersions, lookupCatalog, lookupVariant, STARTER_ID } from '../runtime/model-catalog.ts';
+import {
+  describePlacement, isOptionId, pickOption, placementAlternatives, placementDetail, placementOptions, planPlacement, reportedRam,
+  type OptionId, type PlacementAlternative, type PlacementCandidate, type PlacementMachine, type PlacementOption, type PlacementPlan,
+} from '../runtime/placement.ts';
+import { chosenOption, setChoice } from '../runtime/placement-choice.ts';
+import { detectPlacementMachine, placementModelOf, planHere, refusalText } from '../runtime/placement-machine.ts';
 import { installModel, describeFetch, type FetchStatus } from '../runtime/model-install.ts';
 import { buildRuntime } from '../core/runtime-setup.ts';
 import { MachineCache } from '../runtime/machine.ts';
@@ -1837,7 +1841,7 @@ export class UiServer {
         installed: await Promise.all(installed.map(async (m) => ({
           ref: m.ref, sizeBytes: m.sizeBytes,
           ...(usesGguf(runtime.id) ? { path: join(dir, m.ref) } : {}),
-          ...(placing ? await this.#placementFor(dir, m.ref, m.sizeBytes, backend) : {}),
+          ...(placing ? await this.#placementFor(dir, m.ref, m.sizeBytes, backend, installed.map((x) => x.ref)) : {}),
         }))),
         // どの部品で動かすか（CUDA・Vulkan・CPU）。計画の前提なので、同じ所に出す
         engine: backend ? (backend.gpu === false ? 'CPU' : `${backend.gpu.toUpperCase()}${backend.devices[0] ? `（${backend.devices[0]}）` : ''}`) : null,
@@ -1859,12 +1863,51 @@ export class UiServer {
               ref: m.id, fileBytes: bytes, downloaded,
               ...(m.facts ? { layers: m.facts.layers, kvBytesPerToken: m.facts.kvBytesPerToken, ...(m.facts.activeRatio ? { activeRatio: m.facts.activeRatio } : {}) } : {}),
             }, machine);
-            return { ...this.#placementView(plan, bytes), needDiskBytes: Math.round(bytes * 1.1) };
+            // 入らない・SSD から読むものには、動く形（一覧に在る別の版）を付ける。「入りません」で終わらせない
+            const alternatives = placementAlternatives(
+              { family: m.repo, quant: m.quant, fileBytes: bytes, plan }, this.#placementCandidates(installed.map((x) => x.ref)), machine,
+            );
+            return {
+              ...this.#placementView(plan, bytes), needDiskBytes: Math.round(bytes * 1.1),
+              alternatives: alternatives.map((a) => ({ id: a.id, kind: a.kind, line: a.line, downloaded: a.downloaded })),
+            };
           })() : {}),
           // GGUF を自分で置く道（llamacpp / inproc）では、保存先に入れる元を出す。
           // Ollama の名前を出しても、そちらでは使えない。
           ref: runtime.id === 'ollama' ? m.ollama : m.repo,
         })),
+      });
+    }
+
+    /*
+     * 置き方を選ぶ（docs/PLACEMENT.md の「置き方を選ぶ」）。選んだものは覚えて、次に読むときから使う。
+     * `auto`（おまかせ）を選ぶと、覚えを消して既定に戻る。読んであるモデルなら解いて、次の送信で選んだ置き方で読み直す。
+     */
+    if (path === '/api/models/placement' && req.method === 'PUT') {
+      const body = await readBody(req) as { ref?: unknown; option?: unknown };
+      if (typeof body.ref !== 'string' || !isOptionId(body.option)) return send(res, 400, { error: 'ref と option（auto・short・long）が要ります' });
+      const runtime = await this.#localRuntime();
+      if (!usesGguf(runtime.id)) return send(res, 400, { error: '置き方を選べるのは、GGUF を読む動かし方のときだけです' });
+      const dir = this.#opts.config.runtime?.modelsDir ?? modelsDir();
+      const found = (await runtime.list()).find((m) => m.ref === body.ref);
+      if (!found) return send(res, 404, { error: `${body.ref} は手元にありません` });
+      const machine = await this.#placementMachine(dir);
+      const options = placementOptions(await placementModelOf(join(dir, found.ref), found.ref, found.sizeBytes), machine);
+      const picked = options.find((o) => o.id === body.option);
+      if (!picked) return send(res, 409, { error: 'この PC では、その置き方は選べません（動かないか、おまかせと変わりません）' });
+      await setChoice(found.ref, picked.id);
+      // 起動時の読み込みが走っているなら、済むのを待つ（待たないと、前の置き方で読み終えたものが残り、選んだ置き方が次の送信に効かない）
+      if (this.#preloading) await this.#preloading.catch(() => undefined);
+      const wasLoaded = runtime.id === 'inproc' && runtime.loaded().includes(found.ref);
+      // 答えている最中のものは解かない（終わってから効く）
+      const working = screenBusy(this.#session, this.#thinking, this.#prep);
+      if (wasLoaded && !working) await runtime.unload(found.ref).catch(() => undefined);
+      this.broadcast({ type: 'log', level: 'info', text: `${found.ref} の置き方を「${picked.label}」にしました（${picked.line}）` });
+      this.broadcast({ type: 'stateChanged' });
+      return send(res, 200, {
+        ok: true, chosen: picked.id, label: picked.label,
+        note: picked.isDefault ? '既定の置き方に戻しました。' : `「${picked.label}」で置きます。`,
+        when: wasLoaded && working ? '作業中なので、立ち上げ直すか、モデルを選び直すと効きます。' : '次の送信で、この置き方で読みます。',
       });
     }
 
@@ -3385,12 +3428,12 @@ export class UiServer {
     gguf: unknown[]; dirState: string; slow: boolean;
   }> {
     const read = (async () => ({
-      gguf: await Promise.all((await listGguf(liveDir)).map(async (m) => ({
+      gguf: await Promise.all((await listGguf(liveDir)).map(async (m, _i, all) => ({
         ...m,
         // 絶対の道。画面で開く・コピーするため。
         path: join(liveDir, m.ref),
         // どう置いても入らないときだけ付く（メモリより大きいだけなら、SSD から読む計画になる）。計画は `plan` に一行で
-        ...(await this.#placementFor(liveDir, m.ref, m.sizeBytes)),
+        ...(await this.#placementFor(liveDir, m.ref, m.sizeBytes, undefined, all.map((x) => x.ref))),
         // 名前だけ .gguf の別物も、一覧で分かるように。
         notGguf: !(await looksLikeGguf(join(liveDir, m.ref))),
       }))),
@@ -3824,15 +3867,62 @@ export class UiServer {
     };
   }
 
-  /** 手元の一つの .gguf を、この機械でどう置くか。計画を立てられないときは、何も付けない（一覧は出す）。 */
-  async #placementFor(dir: string, ref: string, sizeBytes?: number, backend?: Backend): Promise<{
+  /** 別の版の候補: 取ってくる一覧と、量子化の違う版。手元に在るものは、ディスクの空きを数えない。 */
+  #placementCandidates(have: readonly string[]): PlacementCandidate[] {
+    return catalogVersions().map((v) => {
+      const downloaded = have.some((ref) => {
+        const hit = catalogMatch(ref);
+        return hit?.family === v.family && hit.quant === v.quant;
+      });
+      return {
+        id: v.id, family: v.family, quant: v.quant,
+        model: {
+          ref: v.id, fileBytes: v.bytes, downloaded,
+          ...(v.facts ? { layers: v.facts.layers, kvBytesPerToken: v.facts.kvBytesPerToken, ...(v.facts.activeRatio ? { activeRatio: v.facts.activeRatio } : {}) } : {}),
+        },
+      };
+    });
+  }
+
+  /** 画面に出す形の、選べる置き方と別の版。 */
+  #choicesView(options: readonly PlacementOption[], chosen: OptionId, alternatives: readonly PlacementAlternative[], fileBytes: number): {
+    chosen: OptionId;
+    options: Array<{ id: OptionId; label: string; line: string; isDefault: boolean; chosen: boolean; fitLabel: string; detail: string[] }>;
+    alternatives: Array<{ id: string; kind: string; line: string; downloaded: boolean }>;
+  } {
+    const now = pickOption(options, chosen).id;
+    return {
+      chosen: now,
+      options: options.map((o) => ({
+        id: o.id, label: o.label, line: o.line, isDefault: o.isDefault, chosen: o.id === now,
+        fitLabel: o.plan.fitLabel, detail: placementDetail(o.plan, { fileBytes }),
+      })),
+      alternatives: alternatives.map((a) => ({ id: a.id, kind: a.kind, line: a.line, downloaded: a.downloaded })),
+    };
+  }
+
+  /**
+   * 手元の一つの .gguf を、この機械でどう置くか。計画を立てられないときは、何も付けない（一覧は出す）。
+   * 一行と「計画を見る」は、選んである置き方のもの。選べる置き方（`options`）と、別の版（`alternatives`）も付ける。
+   */
+  async #placementFor(dir: string, ref: string, sizeBytes?: number, backend?: Backend, have: readonly string[] = [ref]): Promise<{
     tooBig: string | null; fit?: string; fitLabel?: string; plan?: string; detail?: string[];
+    chosen?: OptionId; options?: unknown[]; alternatives?: unknown[];
   }> {
     try {
       const machine = await this.#placementMachine(dir, backend);
-      const { plan, model } = await planFile(join(dir, ref), ref, machine, {}, sizeBytes);
+      const model = await placementModelOf(join(dir, ref), ref, sizeBytes);
+      const options = placementOptions(model, machine);
+      const chosen = pickOption(options, await chosenOption(ref));
+      const plan = chosen.plan;
       const view = this.#placementView(plan, model.fileBytes);
-      return { tooBig: plan.possible ? null : refusalText(ref, plan, model, machine), fit: view.fit, fitLabel: view.fitLabel, plan: view.plan, detail: view.detail };
+      const alternatives = placementAlternatives(
+        { ...catalogMatch(ref), fileBytes: model.fileBytes, plan }, this.#placementCandidates(have), machine,
+      );
+      return {
+        tooBig: plan.possible ? null : refusalText(ref, plan, model, machine), fit: view.fit, fitLabel: view.fitLabel, plan: view.plan, detail: view.detail,
+        ...this.#choicesView(options, chosen.id, alternatives, model.fileBytes),
+      };
     } catch {
       return { tooBig: null };
     }
@@ -4847,7 +4937,8 @@ export class UiServer {
       if (this.#fetchAbort === stop) this.#fetchAbort = undefined;
       throw e;
     }
-    const entry = lookupCatalog(id);
+    // 量子化の違う版（`qwen3.6-27b@q3_k_m`）は、GGUF を置く道でだけ取ってこられる（Ollama での名前は持っていない）
+    const entry = lookupCatalog(id) ?? (usesGguf(runtime.id) ? lookupVariant(id) : undefined);
     const began = Date.now();
     /*
      * **節目だけを記録に流す。**進み具合は状態（#fetching）として持ち、裏の仕事の

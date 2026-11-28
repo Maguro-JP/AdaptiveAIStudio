@@ -122,6 +122,8 @@ export interface PlacementPlan {
   /** ライブラリのメモリの見張りを外すか。SSD から読む計画は、見張りが「足りない」と断るので外す。 */
   ignoreMemorySafetyChecks: boolean;
   estimatedTps: number;
+  /** 速さが実測か（`estimatedTps` を実測で置き換えた）。無ければ目安。 */
+  measured?: { tokensPerSecond: number; loadSeconds?: number; samples: number };
   /** 何を縮めたか。見せる言葉。 */
   shrunk: string[];
   timeouts: PlacementTimeouts;
@@ -411,7 +413,7 @@ export function describePlacement(plan: PlacementPlan): string {
   else if (plan.gpuLayers > 0) parts.push(`GPU に ${plan.gpuLayers}/${plan.totalLayers} 層、残りはメモリ`);
   else parts.push('GPU は使わず、メモリに載せて CPU で動かします');
   if (plan.ssdBytes > 0) parts.push(`足りない分（${gb(plan.ssdBytes)}）は SSD から読みます`);
-  const speed = plan.estimatedTps > 0 ? `目安 ${plan.estimatedTps} tok/s` : '';
+  const speed = plan.estimatedTps > 0 ? speedText(plan) : '';
   const slow = plan.fit === 'ssd' ? '。とても遅いですが、動きます' : plan.fit === 'slow' ? '。遅いですが、動きます' : '';
   return `この PC では: ${parts.join('、')}。${speed}${slow}`;
 }
@@ -433,7 +435,9 @@ export function placementDetail(plan: PlacementPlan, model: Pick<PlacementModel,
     `SSD から読む分: ${plan.ssdBytes > 0 ? gb(plan.ssdBytes) : 'なし'}`,
     `コンテキストウィンドウ: ${plan.contextSize} × 並列 ${plan.sequences} 本（KV は${plan.kv === 'gpu' ? ' GPU' : plan.kv === 'ram' ? 'メモリ' : ' GPU とメモリに分けて'}）`,
     `バッチ: ${plan.batchSize}・スレッド: ${plan.threads}`,
-    `速さの目安: ${plan.estimatedTps} tok/s`,
+    plan.measured
+      ? `速さの実測: ${plan.estimatedTps} tok/s（${plan.measured.samples} 回の平均${plan.measured.loadSeconds !== undefined ? `・読み込み ${plan.measured.loadSeconds} 秒` : ''}）`
+      : `速さの目安: ${plan.estimatedTps} tok/s`,
     `待つ上限: 読み込み ${Math.round(plan.timeouts.loadMs / 60000)} 分・最初の 1 トークン ${Math.round(plan.timeouts.firstTokenMs / 60000)} 分・無音 ${Math.round(plan.timeouts.stallMs / 1000)} 秒`,
   );
   for (const s of plan.shrunk) lines.push(`縮めたもの: ${s}`);
@@ -522,4 +526,167 @@ export async function runLadder<T>(
 export function reportedRam(real: number, env: Record<string, string | undefined> = process.env): number {
   const forced = Number(env.AAS_TEST_RAM_BYTES);
   return Number.isFinite(forced) && forced > 0 ? Math.min(real, forced) : real;
+}
+
+/* ---------- 置き方を選ぶ ---------- */
+
+/** 置き方の合図。見せる言葉は `OPTION_LABEL`。 */
+export type OptionId = 'auto' | 'short' | 'long';
+export const OPTION_IDS: readonly OptionId[] = ['auto', 'short', 'long'];
+export const OPTION_LABEL: Record<OptionId, string> = {
+  auto: 'おまかせ',
+  short: '速さを取る',
+  long: '長く覚える',
+};
+/** 「長く覚える」で開くコンテキストウィンドウの上限（私の推測で決めた値。モデルが学習した長さより長くはしない）。 */
+export const LONG_CONTEXT_CAP = 32768;
+
+export function isOptionId(x: unknown): x is OptionId {
+  return typeof x === 'string' && (OPTION_IDS as readonly string[]).includes(x);
+}
+
+/** 置き方を、計画に渡す望みに直す。`auto` は何も変えない。 */
+export function optionWant(id: OptionId, model: Pick<PlacementModel, 'trainedContext'>, want: PlacementWant = {}): PlacementWant {
+  if (id === 'short') return { ...want, lowRam: true };
+  if (id === 'long') {
+    const trained = model.trainedContext && model.trainedContext > 0 ? Math.floor(model.trainedContext) : 8192;
+    const long = Math.max(Math.floor(want.context ?? 8192), Math.min(trained, LONG_CONTEXT_CAP));
+    return { ...want, context: long, minContext: long, lowRam: false };
+  }
+  return want;
+}
+
+/** 選べる置き方の一つ。 */
+export interface PlacementOption {
+  id: OptionId;
+  label: string;
+  /** 既定（選んでいないときに使うもの）。 */
+  isDefault: boolean;
+  plan: PlacementPlan;
+  /** 速さ・使うメモリ・短所を 1 行で。 */
+  line: string;
+}
+
+/** 速さの言い方。実測が在れば「実測」、無ければ「目安」。 */
+export function speedText(plan: Pick<PlacementPlan, 'estimatedTps' | 'measured'>): string {
+  return `${plan.measured ? '実測' : '目安'} ${plan.estimatedTps} tok/s`;
+}
+
+function memoryText(plan: PlacementPlan): string {
+  const parts: string[] = [];
+  if (plan.vramBytes > 0) parts.push(`VRAM ${gb(plan.vramBytes)}`);
+  if (plan.ramBytes > 0 || parts.length === 0) parts.push(`メモリ ${gb(plan.ramBytes)}`);
+  if (plan.ssdBytes > 0) parts.push(`SSD ${gb(plan.ssdBytes)}`);
+  return parts.join('・');
+}
+
+function optionLine(id: OptionId, plan: PlacementPlan, auto: PlacementPlan): string {
+  if (!plan.possible) return describePlacement(plan);
+  let bad: string;
+  if (id === 'short') bad = `長い会話やファイルは ${plan.contextSize} トークンで切れます`;
+  else if (id === 'long') {
+    bad = plan.ssdBytes > auto.ssdBytes ? 'SSD から読む分が増えて、とても遅くなります'
+      : plan.estimatedTps < auto.estimatedTps ? 'おまかせより遅くなります'
+        : 'メモリを多く使います';
+  } else {
+    bad = plan.fit === 'ssd' ? 'SSD から読むので、とても遅いです'
+      : plan.fit === 'slow' ? '遅いです'
+        : 'ありません';
+  }
+  return `${speedText(plan)}・${memoryText(plan)}・コンテキストウィンドウ ${plan.contextSize}。短所: ${bad}`;
+}
+
+/**
+ * 同じモデルの、動く置き方を並べる。先頭が既定（おまかせ）。
+ *
+ * 動かない置き方と、おまかせと変わらない置き方は並べない（選んでも何も変わらないものを見せない）。
+ * おまかせが入らないときは、おまかせだけを返す（別の版は `placementAlternatives`）。
+ */
+export function placementOptions(model: PlacementModel, machine: PlacementMachine, want: PlacementWant = {}): PlacementOption[] {
+  const auto = planPlacement(model, machine, want);
+  const out: PlacementOption[] = [{ id: 'auto', label: OPTION_LABEL.auto, isDefault: true, plan: auto, line: optionLine('auto', auto, auto) }];
+  if (!auto.possible) return out;
+  const short = planPlacement(model, machine, optionWant('short', model, want));
+  if (short.possible && short.contextSize < auto.contextSize) {
+    // 速くならない機械（狭めても GPU に載る層も SSD から読む分も変わらない）では、「速さを取る」と言わない
+    const label = short.estimatedTps > auto.estimatedTps ? OPTION_LABEL.short : 'メモリを少なめに';
+    out.push({ id: 'short', label, isDefault: false, plan: short, line: optionLine('short', short, auto) });
+  }
+  const long = planPlacement(model, machine, optionWant('long', model, want));
+  if (long.possible && long.contextSize > auto.contextSize) {
+    out.push({ id: 'long', label: OPTION_LABEL.long, isDefault: false, plan: long, line: optionLine('long', long, auto) });
+  }
+  return out;
+}
+
+/** 選んだ置き方。並びに無いもの（その機械では動かない・変わらない）は、おまかせに戻す。 */
+export function pickOption(options: readonly PlacementOption[], chosen: OptionId | undefined): PlacementOption {
+  return options.find((o) => o.id === chosen) ?? options[0]!;
+}
+
+/** doctor と記録に出す形。一つ一行。選んであるものに「選択中」、既定に「既定」を付ける。 */
+export function optionLines(options: readonly PlacementOption[], chosen: OptionId | undefined): string[] {
+  const now = pickOption(options, chosen).id;
+  return options.map((o) => `${o.label}${o.isDefault ? '（既定）' : ''}${o.id === now ? '（選択中）' : ''}: ${o.line}`);
+}
+
+/** 別の版の候補（取ってくる一覧に在るもの）。 */
+export interface PlacementCandidate {
+  /** 取ってくるときの id。 */
+  id: string;
+  /** 同じモデルかを見る名前（配布元）。 */
+  family: string;
+  quant: string;
+  model: PlacementModel;
+}
+
+export interface PlacementAlternative {
+  id: string;
+  /** 合図。同じモデルの小さい量子化か、別の小さいモデルか。 */
+  kind: 'smaller-quant' | 'smaller-model';
+  quant: string;
+  fileBytes: number;
+  downloaded: boolean;
+  plan: PlacementPlan;
+  line: string;
+}
+
+const FIT_RANK: Record<Fit, number> = { no: 0, ssd: 1, slow: 2, comfortable: 3 };
+
+/**
+ * 今の版より具合の良い、別の版。**候補に在るものだけ**を返す（無いものは出さない）。
+ *
+ *   1. 同じモデルの、1 つ小さい量子化（具合が上がるもののうち、いちばん大きいもの）
+ *   2. それが無く、今の版が入らないときは、動くもののうち、いちばん大きい別のモデル
+ * 今の版が快適なら、何も返さない。
+ */
+export function placementAlternatives(
+  current: { family?: string; quant?: string; fileBytes: number; plan: PlacementPlan },
+  candidates: readonly PlacementCandidate[], machine: PlacementMachine, want: PlacementWant = {},
+): PlacementAlternative[] {
+  if (current.plan.fit === 'comfortable') return [];
+  const smaller = candidates
+    .filter((c) => c.model.fileBytes < current.fileBytes)
+    .map((c) => ({ c, plan: planPlacement(c.model, machine, want) }))
+    .filter((x) => x.plan.possible && FIT_RANK[x.plan.fit] > FIT_RANK[current.plan.fit])
+    .sort((a, b) => b.c.model.fileBytes - a.c.model.fileBytes);
+  const make = (x: { c: PlacementCandidate; plan: PlacementPlan }, kind: PlacementAlternative['kind']): PlacementAlternative => {
+    const where = x.plan.gpuLayers >= x.plan.totalLayers ? '全部 GPU に載ります'
+      : x.plan.ssdBytes === 0 ? '全部メモリに入ります' : '動きます';
+    const head = kind === 'smaller-quant'
+      ? `1 つ小さい量子化（${x.c.quant}・${gb(x.c.model.fileBytes)}）なら、${where}`
+      : `小さいモデル（${x.c.id}・${gb(x.c.model.fileBytes)}）なら、${where}`;
+    const bad = kind === 'smaller-quant' ? '量子化が粗い分、答えの質が落ちることがあります' : '別のモデルなので、答えの質が変わります';
+    return {
+      id: x.c.id, kind, quant: x.c.quant, fileBytes: x.c.model.fileBytes, downloaded: Boolean(x.c.model.downloaded), plan: x.plan,
+      line: `${head}。${speedText(x.plan)}・${memoryText(x.plan)}。短所: ${bad}`,
+    };
+  };
+  const quant = current.family
+    ? smaller.find((x) => x.c.family === current.family && x.c.quant !== current.quant)
+    : undefined;
+  if (quant) return [make(quant, 'smaller-quant')];
+  if (current.plan.possible) return [];
+  const other = smaller.find((x) => x.c.family !== current.family);
+  return other ? [make(other, 'smaller-model')] : [];
 }

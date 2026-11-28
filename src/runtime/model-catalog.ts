@@ -134,6 +134,85 @@ export const AVAILABLE_MODELS: CatalogEntry[] = [
   },
 ];
 
+/**
+ * 同じモデルの、量子化の違う版。**配布元に在るものだけ**を書く（2026-11-28 に、Hugging Face の一覧でファイルの名前と大きさを見た）。
+ *
+ * 置き方の計画（placement.ts）が「1 つ小さい量子化なら全部メモリに入る」と言うために使う。ここに無い版は、言わない。
+ * 層の数と KV は、元の版と同じ（量子化で変わらない）。GGUF を置く道でだけ取ってこられる（Ollama での名前は確かめていないので、持たない）。
+ */
+export interface CatalogVariant {
+  /** 元の版の id。 */
+  of: string;
+  quant: string;
+  /** ファイルの大きさ（バイト）。 */
+  bytes: number;
+}
+
+export const QUANT_VARIANTS: CatalogVariant[] = [
+  { of: 'qwen3.6-27b', quant: 'q3_k_m', bytes: 13_586_217_184 },
+  { of: 'qwen3.5-27b', quant: 'q3_k_m', bytes: 13_505_116_064 },
+  { of: 'qwen3.5-35b-a3b', quant: 'q3_k_m', bytes: 16_356_375_168 },
+  { of: 'qwen3.6-coding-35b', quant: 'q3_k_m', bytes: 16_600_710_112 },
+];
+
+/** 量子化の違う版の id（`qwen3.6-27b@q3_k_m`）。 */
+export function variantId(of: string, quant: string): string {
+  return `${of}@${quant}`;
+}
+
+/** 量子化の違う版を、取ってくるときの形にする。一覧に無ければ undefined。 */
+export function lookupVariant(id: string, variants: readonly CatalogVariant[] = QUANT_VARIANTS): CatalogEntry | undefined {
+  const v = variants.find((x) => variantId(x.of, x.quant) === id);
+  const base = v ? lookupCatalog(v.of) : undefined;
+  if (!v || !base) return undefined;
+  return {
+    ...base, id, quant: v.quant, approxGB: Math.round((v.bytes / 1024 ** 3) * 10) / 10,
+    note: `${base.id} の小さい量子化（${v.quant}）。`,
+    ...(base.facts ? { facts: { ...base.facts, bytes: v.bytes } } : {}),
+  };
+}
+
+/** 名前の比べ方。大文字・小文字と区切りを見ない。 */
+function plainName(x: string): string {
+  return x.toLowerCase().replace(/[^a-z0-9.]/g, '');
+}
+
+/** 配布元の名前から、モデルの名前の部分（`unsloth/Qwen3.6-27B-GGUF` → `qwen3.627b`）。 */
+function familyKey(repo: string): string {
+  return plainName(repo.slice(repo.lastIndexOf('/') + 1).replace(/-gguf$/i, ''));
+}
+
+/** ファイルの名前から量子化（`Qwen3.6-27B-UD-Q4_K_M.gguf` → `q4_k_m`）。読めなければ undefined。 */
+export function quantOf(ref: string): string | undefined {
+  const m = /(?:^|[-_.])(q\d(?:_[a-z0-9]+)*|bf16|f16|f32)(?=\.gguf$|[-.]|$)/i.exec(ref);
+  return m ? m[1]!.toLowerCase() : undefined;
+}
+
+/** 手元のファイルが、一覧のどのモデルか（配布元と量子化）。一覧に無ければ undefined。 */
+export function catalogMatch(ref: string): { family: string; quant?: string } | undefined {
+  const name = plainName(ref);
+  const hit = AVAILABLE_MODELS
+    .filter((m) => name.includes(familyKey(m.repo)))
+    .sort((a, b) => familyKey(b.repo).length - familyKey(a.repo).length)[0];
+  if (!hit) return undefined;
+  const quant = quantOf(ref);
+  return { family: hit.repo, ...(quant ? { quant } : {}) };
+}
+
+/** 一覧と、量子化の違う版を、一つの並びにする（別の版を探すときの候補）。 */
+export function catalogVersions(variants: readonly CatalogVariant[] = QUANT_VARIANTS): Array<{
+  id: string; family: string; quant: string; bytes: number; facts?: CatalogEntry['facts'];
+}> {
+  const out = AVAILABLE_MODELS.map((m) => ({
+    id: m.id, family: m.repo, quant: m.quant, bytes: m.facts?.bytes ?? m.approxGB * 1024 ** 3, ...(m.facts ? { facts: m.facts } : {}),
+  }));
+  for (const v of variants) {
+    const e = lookupVariant(variantId(v.of, v.quant), variants);
+    if (e) out.push({ id: e.id, family: e.repo, quant: e.quant, bytes: v.bytes, ...(e.facts ? { facts: e.facts } : {}) });
+  }
+  return out;
+}
+
 export function lookupCatalog(id: string): CatalogEntry | undefined {
   return AVAILABLE_MODELS.find((m) => m.id === id);
 }

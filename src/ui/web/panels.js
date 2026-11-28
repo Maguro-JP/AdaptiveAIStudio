@@ -13,6 +13,7 @@ import { renderMarkdown } from './markdown.js';
 import { isSendKey, isPlainEnter } from './keys.js';
 import { pathActions } from './paths.js';
 import { sizeText } from './size.js';
+import { placementAlternatives, placementChoices } from './placement.js';
 
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
@@ -1601,7 +1602,11 @@ export const PANELS = {
     const status = el('div', 'stack');
     const list = el('div', 'stack');
     const store = el('div', 'stack');
-    body.append(status, list, store);
+    // 置き方を選んだ・別の版を取ってくる、の結果の一行。一覧を描き直しても消えないよう、一覧の外（すぐ上）に置く
+    const placedNote = el('div', 'note placement-said');
+    placedNote.role = 'status';
+    placedNote.hidden = true;
+    body.append(status, placedNote, list, store);
 
     const draw = async () => {
       let data;
@@ -1659,12 +1664,22 @@ export const PANELS = {
         chip.title = 'この PC での具合';
         return chip;
       };
+      const said = (text, ok) => {
+        placedNote.textContent = text;
+        placedNote.className = `note placement-said${ok ? '' : ' bad'}`;
+        placedNote.hidden = false;
+      };
       const placementNote = (m) => {
         if (!m.plan) return null;
         const box = el('div', 'placement');
+        // 入らない・とても遅いものには、動く形（一覧に在る別の版）を先に出す。「入りません」で終わらせない
+        const works = placementAlternatives(m, { say: said });
+        if (works) box.append(works);
         const line = el('div', `note ${m.possible === false ? 'bad' : m.fit === 'comfortable' ? 'dim' : 'warn'}`);
         line.append(fitChip(m), document.createTextNode(` ${m.plan}`));
         box.append(line);
+        const choices = placementChoices(m, { onChange: draw, say: said });
+        if (choices) box.append(choices);
         if (Array.isArray(m.detail) && m.detail.length > 0) {
           const more = el('details', 'placement-detail');
           more.append(el('summary', '', '計画を見る'));

@@ -1372,3 +1372,16 @@ dialog.wide { width: min(46rem, 92vw); }
 .phone-qr { width: 200px; height: 200px; flex: none; background: #fff; border-radius: 8px; }
 .phone-pass { font-size: 1.15em; letter-spacing: .05em; user-select: all; }
 #phoneUrl { white-space: pre-line; user-select: all; }
+
+/* 置き方を選ぶ（placement.js）。押せる行は幅いっぱい、名前と一行を縦に並べる */
+.rows > .placement-options, .rows > .placement-alternatives { grid-column: 1 / -1; }
+.rows > .placement-choose { grid-column: 1 / -1; }
+.placement-choose { padding-bottom: var(--s2); }
+.placement-choose > summary { cursor: pointer; color: var(--dim); font-size: .82rem; }
+.placement-choose > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.placement-options { display: grid; gap: var(--s1); padding-bottom: var(--s2); }
+.placement-option { display: grid; gap: 2px; text-align: left; width: 100%; white-space: normal; }
+.placement-option.chosen { border-color: var(--accent); }
+.placement-option-name { font-weight: 600; }
+.placement-option-line { color: var(--dim); font-size: .82rem; }
+.placement-alternative { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
