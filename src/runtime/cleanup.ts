@@ -14,11 +14,13 @@
  * **黙って消さない。**消す物を決めるのはこちらだが、
  * 消したことを隠すと、次に何かが無くなったときに疑う先が増える。
  */
+import { existsSync } from 'node:fs';
 import { readdir, stat, rm, readFile, open } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { execFile } from 'node:child_process';
 import { binDir, modelsDir, stateDir } from '../core/home.ts';
 import { INDEX_FORMAT } from '../agent/code-index.ts';
+import { historyFile, readHistory } from './placement-history.ts';
 
 /**
  * 同じ名前の記録を、これだけ残す。
@@ -300,6 +302,13 @@ export async function findRemovable(opts: {
         found.push({ path, bytes: s.size, why: `古い ${prefix} の記録（新しい ${KEEP_REPORTS} 件は残します）` });
       }
     }
+  }
+
+  // 置き方の実測の記録（placement-history.ts）。消すと、計画の速さは見当に戻り、読めなかった置き方ももう一度上から試す
+  const history = historyFile();
+  if (existsSync(history)) {
+    const count = (await readHistory()).length;
+    found.push({ path: history, bytes: await sizeOf(history), why: `置き方の実測の記録 ${count} 件（消すと、計画の速さは目安に戻り、読めなかった置き方ももう一度試します）` });
   }
 
   return found.sort((a, b) => b.bytes - a.bytes);

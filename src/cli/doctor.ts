@@ -370,6 +370,7 @@ const placementNotes = async () => {
   const { describePlacement, optionLines, pickOption, placementAlternatives, placementOptions, reportedRam } = await import('../runtime/placement.ts');
   const { detectPlacementMachine, placementModelOf, refusalText } = await import('../runtime/placement-machine.ts');
   const { chosenOption } = await import('../runtime/placement-choice.ts');
+  const { applyHistory, readHistory } = await import('../runtime/placement-history.ts');
   const { catalogMatch, catalogVersions } = await import('../runtime/model-catalog.ts');
   const { totalmem } = await import('node:os');
   const dir = config.runtime?.modelsDir ?? defaultModelsDir();
@@ -389,14 +390,17 @@ const placementNotes = async () => {
       ...(v.facts ? { layers: v.facts.layers, kvBytesPerToken: v.facts.kvBytesPerToken, ...(v.facts.activeRatio ? { activeRatio: v.facts.activeRatio } : {}) } : {}),
     },
   }));
+  // 実測が在れば、速さの目安を実測で置き換える（画面と同じ。「実測」か「目安」かは一行に出る）
+  const past = await readHistory();
+  const tune = (p: Parameters<typeof applyHistory>[0], of: Parameters<typeof applyHistory>[1]) => applyHistory(p, of, here, past);
   for (const m of models) {
     const chosen = await chosenOption(m.ref);
     // メモリに載る小さいモデルで、何も選んでいないものは言わない（今までどおり）
     if (!tooBigForRam(m.sizeBytes, reportedRam(totalmem())) && chosen === 'auto') continue;
     const facts = await placementModelOf(join(dir, m.ref), m.ref, m.sizeBytes);
-    const options = placementOptions(facts, here);
+    const options = placementOptions(facts, here, {}, tune);
     const plan = pickOption(options, chosen).plan;
-    const alternatives = placementAlternatives({ ...catalogMatch(m.ref), fileBytes: facts.fileBytes, plan }, candidates, here);
+    const alternatives = placementAlternatives({ ...catalogMatch(m.ref), fileBytes: facts.fileBytes, plan }, candidates, here, {}, tune);
     // 入らないときは、動く形を先に言う（「入りません」で終わらせない）
     const works = alternatives.map((a) => `動く形: ${a.line}`);
     if (plan.possible) {

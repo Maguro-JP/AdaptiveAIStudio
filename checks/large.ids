@@ -7,3 +7,5 @@ large-followup-reads-only-new
 large-retry-steps-down
 large-load-timeout-says-why
 large-options-pick-and-reset
+large-avoids-failed-step
+large-measured-replaces-estimate

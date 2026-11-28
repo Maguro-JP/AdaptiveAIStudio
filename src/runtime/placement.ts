@@ -124,6 +124,8 @@ export interface PlacementPlan {
   estimatedTps: number;
   /** 速さが実測か（`estimatedTps` を実測で置き換えた）。無ければ目安。 */
   measured?: { tokensPerSecond: number; loadSeconds?: number; samples: number };
+  /** この置き方で、前に読めなかった（実測の覚えから）。次に読むときは、この段を避けて下の段から読む。 */
+  failedBefore?: 'memory' | 'timeout';
   /** 何を縮めたか。見せる言葉。 */
   shrunk: string[];
   timeouts: PlacementTimeouts;
@@ -441,6 +443,7 @@ export function placementDetail(plan: PlacementPlan, model: Pick<PlacementModel,
     `待つ上限: 読み込み ${Math.round(plan.timeouts.loadMs / 60000)} 分・最初の 1 トークン ${Math.round(plan.timeouts.firstTokenMs / 60000)} 分・無音 ${Math.round(plan.timeouts.stallMs / 1000)} 秒`,
   );
   for (const s of plan.shrunk) lines.push(`縮めたもの: ${s}`);
+  if (plan.failedBefore) lines.push(`前の読み込み: ${plan.failedBefore === 'timeout' ? '時間切れになりました' : 'メモリが足りずに落ちました'}。次は、この段を避けて下の段から読みます`);
   return lines;
 }
 
@@ -593,8 +596,17 @@ function optionLine(id: OptionId, plan: PlacementPlan, auto: PlacementPlan): str
       : plan.fit === 'slow' ? '遅いです'
         : 'ありません';
   }
-  return `${speedText(plan)}・${memoryText(plan)}・コンテキストウィンドウ ${plan.contextSize}。短所: ${bad}`;
+  return `${speedText(plan)}・${memoryText(plan)}・コンテキストウィンドウ ${plan.contextSize}。短所: ${bad}${failedNote(plan)}`;
 }
+
+/** 前に読めなかった置き方に添える一言。 */
+function failedNote(plan: Pick<PlacementPlan, 'failedBefore'>): string {
+  if (!plan.failedBefore) return '';
+  return `。前に${plan.failedBefore === 'timeout' ? '時間切れになった' : 'メモリが足りずに落ちた'}置き方なので、次は段を下げて読みます`;
+}
+
+/** 計画を、実測で直す口（placement-history.ts の `applyHistory`）。渡さなければ、見当のまま。 */
+export type PlanTune = (plan: PlacementPlan, model: PlacementModel) => PlacementPlan;
 
 /**
  * 同じモデルの、動く置き方を並べる。先頭が既定（おまかせ）。
@@ -602,17 +614,18 @@ function optionLine(id: OptionId, plan: PlacementPlan, auto: PlacementPlan): str
  * 動かない置き方と、おまかせと変わらない置き方は並べない（選んでも何も変わらないものを見せない）。
  * おまかせが入らないときは、おまかせだけを返す（別の版は `placementAlternatives`）。
  */
-export function placementOptions(model: PlacementModel, machine: PlacementMachine, want: PlacementWant = {}): PlacementOption[] {
-  const auto = planPlacement(model, machine, want);
+export function placementOptions(model: PlacementModel, machine: PlacementMachine, want: PlacementWant = {}, tune?: PlanTune): PlacementOption[] {
+  const plan = (w: PlacementWant): PlacementPlan => { const p = planPlacement(model, machine, w); return tune ? tune(p, model) : p; };
+  const auto = plan(want);
   const out: PlacementOption[] = [{ id: 'auto', label: OPTION_LABEL.auto, isDefault: true, plan: auto, line: optionLine('auto', auto, auto) }];
   if (!auto.possible) return out;
-  const short = planPlacement(model, machine, optionWant('short', model, want));
+  const short = plan(optionWant('short', model, want));
   if (short.possible && short.contextSize < auto.contextSize) {
     // 速くならない機械（狭めても GPU に載る層も SSD から読む分も変わらない）では、「速さを取る」と言わない
     const label = short.estimatedTps > auto.estimatedTps ? OPTION_LABEL.short : 'メモリを少なめに';
     out.push({ id: 'short', label, isDefault: false, plan: short, line: optionLine('short', short, auto) });
   }
-  const long = planPlacement(model, machine, optionWant('long', model, want));
+  const long = plan(optionWant('long', model, want));
   if (long.possible && long.contextSize > auto.contextSize) {
     out.push({ id: 'long', label: OPTION_LABEL.long, isDefault: false, plan: long, line: optionLine('long', long, auto) });
   }
@@ -662,12 +675,12 @@ const FIT_RANK: Record<Fit, number> = { no: 0, ssd: 1, slow: 2, comfortable: 3 }
  */
 export function placementAlternatives(
   current: { family?: string; quant?: string; fileBytes: number; plan: PlacementPlan },
-  candidates: readonly PlacementCandidate[], machine: PlacementMachine, want: PlacementWant = {},
+  candidates: readonly PlacementCandidate[], machine: PlacementMachine, want: PlacementWant = {}, tune?: PlanTune,
 ): PlacementAlternative[] {
   if (current.plan.fit === 'comfortable') return [];
   const smaller = candidates
     .filter((c) => c.model.fileBytes < current.fileBytes)
-    .map((c) => ({ c, plan: planPlacement(c.model, machine, want) }))
+    .map((c) => { const p = planPlacement(c.model, machine, want); return { c, plan: tune ? tune(p, c.model) : p }; })
     .filter((x) => x.plan.possible && FIT_RANK[x.plan.fit] > FIT_RANK[current.plan.fit])
     .sort((a, b) => b.c.model.fileBytes - a.c.model.fileBytes);
   const make = (x: { c: PlacementCandidate; plan: PlacementPlan }, kind: PlacementAlternative['kind']): PlacementAlternative => {

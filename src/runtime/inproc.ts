@@ -36,10 +36,11 @@ import { DEFAULT_PRIORITY, Priority, PRIORITY_HEADER, toPriority } from '../prov
 import { findRunaway, runawayNote } from './runaway.ts';
 import { OUTPUT_SHARE } from '../agent/window.ts';
 import {
-  describePlacement, optionWant, pickOption, placementOptions, planPlacement, reportedRam, retryLadder, runLadder,
-  type LadderStep, type PlacementPlan,
+  describePlacement, isMemoryFailure, optionWant, pickOption, placementOptions, planPlacement, reportedRam, retryLadder, runLadder,
+  type LadderStep, type PlacementMachine, type PlacementModel, type PlacementPlan,
 } from './placement.ts';
 import { chosenOption } from './placement-choice.ts';
+import { applyHistory, avoidFailed, FAILURE_LABEL, PlacementHistory } from './placement-history.ts';
 import { detectPlacementMachine, injectedLoadFailure, loadLimitMs, LoadTimeoutError, placementModelOf } from './placement-machine.ts';
 
 /** 暴走を見るときに持っておく直近の長さ。 */
@@ -687,6 +688,18 @@ export class InProcRuntime implements LocalRuntime {
   readonly #unloading = new Map<string, Promise<void>>();
   /** 試験の口（AAS_TEST_LOAD_FAILS）で、何段落としたか。 */
   readonly #injected = { used: 0 };
+  /**
+   * 読み込みと生成の実測を覚える口（docs/PLACEMENT.md の「使うほど計画が当たる」）。
+   * 試験（node --test の中）では、置く所を渡されたときだけ覚える（試験どうしが、前の試験の「読めなかった」を引きずらない）。
+   */
+  #historyStore?: PlacementHistory | null;
+  get #history(): PlacementHistory | undefined {
+    if (this.#historyStore === undefined) {
+      this.#historyStore = this.#opts.stateDir !== undefined ? new PlacementHistory(this.#opts.stateDir)
+        : process.env.NODE_TEST_CONTEXT === undefined ? new PlacementHistory() : null;
+    }
+    return this.#historyStore ?? undefined;
+  }
   /** 読み込みの進み具合（%）。別のプロセスから訊かれたときに答える。 */
   readonly #progress = new Map<string, number>();
   /** 切り替え（降ろして読む）を一つずつ通す列。 */
@@ -881,11 +894,26 @@ export class InProcRuntime implements LocalRuntime {
     const base = { context: wanted.window, sequences: wanted.sequences, ...(fixed ? { minContext: fixed } : {}) };
     const picked = pickOption(placementOptions(facts, machine, base), fixed ? 'auto' : await chosenOption(ref, this.#opts.stateDir));
     if (picked.id !== 'auto') this.#opts.onLog?.(`${ref}: 選んである置き方（${picked.label}）で読みます`);
-    const steps = retryLadder(facts, machine, optionWant(picked.id, facts, base));
-    const planned = steps[0]!.plan;
-    if (!planned.possible) {
-      throw new Error([`${ref}: ${describePlacement(planned)}`, ...planned.wouldHelp.slice(1).map((h) => `動かすには: ${h}`)].join('\n'));
+    const ladder = retryLadder(facts, machine, optionWant(picked.id, facts, base));
+    if (!ladder[0]!.plan.possible) {
+      const no = ladder[0]!.plan;
+      throw new Error([`${ref}: ${describePlacement(no)}`, ...no.wouldHelp.slice(1).map((h) => `動かすには: ${h}`)].join('\n'));
     }
+    // 使うほど当てる: 前に読めなかった段は最初から避け、速さの目安と待つ長さは実測で置き換える（実測が無ければ見当のまま）
+    const history = this.#history;
+    const past = history ? await history.read() : [];
+    const avoided = avoidFailed(ladder, facts, machine, past);
+    for (const { step, why } of avoided.skipped) {
+      this.#opts.onLog?.(`${ref}: 前に${FAILURE_LABEL[why]}置き方（コンテキストウィンドウ ${step.plan.contextSize} × ${step.plan.sequences} 本・GPU ${step.plan.gpuLayers} 層）を避けて、次の段から読みます`);
+    }
+    // 覚えるときの鍵は、見当のままの計画（実測で置き換えた後の値では引かない）
+    const asPlanned = new Map<LadderStep, PlacementPlan>();
+    const steps = avoided.steps.map((s) => {
+      const next = { ...s, plan: applyHistory(s.plan, facts, machine, past) };
+      asPlanned.set(next, s.plan);
+      return next;
+    });
+    const planned = steps[0]!.plan;
     // 大きいモデルのときだけ言う（どれも載る小さいモデルで、毎回一行増やさない）
     if (planned.fit !== 'comfortable' || planned.shrunk.length > 0 || planned.gpuLayers > 0) {
       this.#opts.onLog?.(`配置の計画（${planned.fitLabel}）: ${describePlacement(planned)}`);
@@ -979,7 +1007,21 @@ export class InProcRuntime implements LocalRuntime {
     };
     // context を作れなかったら（KV が入らない等）、段を下げて読み直す。どの段でも駄目なら、読んだ重みを解いてから投げる
     // （解かないと、次に読むたびに重みが一つずつ増えていた）
-    const got = await runLadder(steps, loadStep, (line) => this.#opts.onLog?.(`${ref}: ${line}`)).catch(async (e: unknown) => {
+    // 一段ごとに、読めた秒数か、読めなかった理由（メモリの不足・時間切れ）を覚える。壊れたファイルのような失敗は覚えない
+    const tracked = async (step: LadderStep): ReturnType<typeof loadStep> => {
+      const began = Date.now();
+      const key = asPlanned.get(step) ?? step.plan;
+      try {
+        const loaded = await loadStep(step);
+        await history?.recordLoad(facts, machine, key, (Date.now() - began) / 1000);
+        return loaded;
+      } catch (e) {
+        const why = e instanceof LoadTimeoutError ? 'timeout' : isMemoryFailure(e) ? 'memory' : undefined;
+        if (why) await history?.recordFailure(facts, machine, key, why);
+        throw e;
+      }
+    };
+    const got = await runLadder(steps, tracked, (line) => this.#opts.onLog?.(`${ref}: ${line}`)).catch(async (e: unknown) => {
       await drop();
       throw e;
     });
@@ -1031,7 +1073,10 @@ export class InProcRuntime implements LocalRuntime {
         + '守れないモデルもあるので、うまく呼べないときは道具呼び出しを学んだモデル（Qwen など）を置いてください。',
       );
     }
-    return { context, model: model as Held['model'], wrapper, window: contextSize, lanes: new LanePool(lanes), active: new Set(), placement };
+    return {
+      context, model: model as Held['model'], wrapper, window: contextSize, lanes: new LanePool(lanes), active: new Set(), placement,
+      measure: { model: facts, machine, plan: asPlanned.get(got.step) ?? got.step.plan },
+    };
   }
 
   /** 並列に持ちたい本数。設定が無ければ既定。 */
@@ -1188,6 +1233,8 @@ export class InProcRuntime implements LocalRuntime {
   async shutdown(): Promise<void> {
     this.#down = true;
     for (const ref of this.loaded()) await this.unload(ref);
+    // 書きかけの実測を、書き終えてから止める
+    await this.#history?.settled();
     this.#server?.close();
     this.#server = undefined;
     this.#url = '';
@@ -1747,7 +1794,10 @@ export class InProcRuntime implements LocalRuntime {
       if (thought > 0) this.#opts.onLog?.(`考えごとに ${thought} 文字使いました（答えには出しません）`);
       // **速さを数字で残す。**「遅い」が、読む側（入力）なのか書く側（出力）なのか、
       // GPU が効いているのか、記録だけで分かるようにする。
-      this.#opts.onLog?.(describeSpeed({ started, firstAt, ended: Date.now(), seen, generated }));
+      const ended = Date.now();
+      this.#opts.onLog?.(describeSpeed({ started, firstAt, ended, seen, generated }));
+      // 生成の速さを覚える（次の計画の目安を、実測で置き換える）。数トークンの生成は入れない
+      if (held.measure && firstAt) void this.#history?.recordSpeed(held.measure.model, held.measure.machine, held.measure.plan, generated, (ended - firstAt) / 1000);
       finish();
     } catch (e) {
       if (signal.aborted) { res.end(); return; }
@@ -2000,6 +2050,8 @@ export class LanePool {
 const UNLOAD_WAIT_MS = 10_000;
 
 interface Held {
+  /** 実測を覚えるときの鍵（モデル・機械・読んだ段の計画）。 */
+  measure?: { model: PlacementModel; machine: PlacementMachine; plan: PlacementPlan };
   context: { dispose?: () => Promise<void> };
   /** 読んだモデル（重み）。context を解いても重みは解けないので、降ろすときはこちらも解く。 */
   model?: { dispose?: () => Promise<void> };

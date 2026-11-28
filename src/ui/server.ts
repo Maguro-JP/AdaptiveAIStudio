@@ -55,8 +55,9 @@ import { findNewerOllama, findNewerGguf } from '../runtime/model-updates.ts';
 import { AVAILABLE_MODELS, catalogMatch, catalogVersions, lookupCatalog, lookupVariant, STARTER_ID } from '../runtime/model-catalog.ts';
 import {
   describePlacement, isOptionId, pickOption, placementAlternatives, placementDetail, placementOptions, planPlacement, reportedRam,
-  type OptionId, type PlacementAlternative, type PlacementCandidate, type PlacementMachine, type PlacementOption, type PlacementPlan,
+  type OptionId, type PlacementAlternative, type PlacementCandidate, type PlacementMachine, type PlacementOption, type PlacementPlan, type PlanTune,
 } from '../runtime/placement.ts';
+import { applyHistory, readHistory } from '../runtime/placement-history.ts';
 import { chosenOption, setChoice } from '../runtime/placement-choice.ts';
 import { detectPlacementMachine, placementModelOf, planHere, refusalText } from '../runtime/placement-machine.ts';
 import { installModel, describeFetch, type FetchStatus } from '../runtime/model-install.ts';
@@ -3912,12 +3913,15 @@ export class UiServer {
     try {
       const machine = await this.#placementMachine(dir, backend);
       const model = await placementModelOf(join(dir, ref), ref, sizeBytes);
-      const options = placementOptions(model, machine);
+      // 実測が在れば、速さの目安を実測で置き換える（一行には「実測」か「目安」かが出る）。読めなかった置き方には、そう添える
+      const past = await readHistory();
+      const tune: PlanTune = (p, of) => applyHistory(p, of, machine, past);
+      const options = placementOptions(model, machine, {}, tune);
       const chosen = pickOption(options, await chosenOption(ref));
       const plan = chosen.plan;
       const view = this.#placementView(plan, model.fileBytes);
       const alternatives = placementAlternatives(
-        { ...catalogMatch(ref), fileBytes: model.fileBytes, plan }, this.#placementCandidates(have), machine,
+        { ...catalogMatch(ref), fileBytes: model.fileBytes, plan }, this.#placementCandidates(have), machine, {}, tune,
       );
       return {
         tooBig: plan.possible ? null : refusalText(ref, plan, model, machine), fit: view.fit, fitLabel: view.fitLabel, plan: view.plan, detail: view.detail,

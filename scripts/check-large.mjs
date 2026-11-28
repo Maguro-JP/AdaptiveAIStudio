@@ -10,11 +10,13 @@
  * そのあと、試験の口を変えて本体を 2 回起こし直す。読み込みの最初の段を落として、段を下げて読み直すのを見る（AAS_TEST_LOAD_FAILS）。
  * 読み込みを待つ上限を 1 ミリ秒にして、時間切れの理由が画面に出るのを見る（AAS_TEST_LOAD_TIMEOUT_MS）。使い方は docs/PLACEMENT.md。
  * 最後に、メモリの小さい機械としてもう一度起こし、置き方を画面で選んで・その置き方で読んで・既定に戻すのを見る（docs/PLACEMENT.md の「置き方を選ぶ」）。
+ * 読めなかった段を次は避けること、頼んだあとは速さが「実測」になり、記録を消すと「目安」に戻ることも見る（「使うほど計画が当たる」）。
+ * 始める前に、本体のデータの下の実測の記録と選んだ置き方を消す（前の回の覚えで、結果が変わらないように）。
  * 確かめは足すだけ。一度載せた id（checks/large.ids）は消さない・飛ばさない（test/large-checks.test.ts が止める）。
  * 1 行ずつ「== PASS <id>: …」「== FAIL <id>: …」を出し、最後に「== 結果: n/m」。1 つでも落ちたら 1 で終わる。
  */
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { findAppBrowser } from '../src/core/app-window.ts';
@@ -50,6 +52,8 @@ const api = (p, init) => fetch(`http://127.0.0.1:${port}${p}`, { signal: AbortSi
 const SMALL_MACHINE = {
   AAS_TEST_RAM_BYTES: String(shownRam), AAS_TEST_PAGING_BYTES: String(64 * GIB), AAS_TEST_DISK_BYTES: String(18 * GIB),
 };
+/** 本体のデータの場所（AAS_HOME のデータの下）。実測の記録を消すのに使う。 */
+let stateDir = '';
 let app;
 /** 本体を起こす。`hooks` は試験の口（AAS_TEST_*）。立ち上がるまで待つ。 */
 async function startApp(hooks) {
@@ -258,6 +262,22 @@ const CHECKS = [
     },
   },
   {
+    id: 'large-avoids-failed-step',
+    what: `前の確かめで読み込みが落ちた段を覚えていて、口を立てずに起こし直すと、その段を最初から避けて読み（記録に「避けて、次の段から読みます」が残り、「読み込めませんでした」は出ない）、「${ASK}」に答え（${ANSWER} を含む）が出る`,
+    async run() {
+      await restartApp({});
+      const from = logs.length;
+      const answer = await ask(ASK, 60, true);
+      await shot('large-avoid.png');
+      const mine = logs.slice(from);
+      const avoided = mine.find((l) => /前にメモリが足りずに落ちた置き方（.+）を避けて、次の段から読みます/.test(l)) ?? '';
+      const fell = mine.some((l) => l.includes('読み込めませんでした'));
+      measured.avoidLine = avoided;
+      const ok = Boolean(avoided) && !fell && digits(answer).includes(ANSWER);
+      return { ok, why: `${avoided.slice(0, 130) || '（避けた行が無い）'} ／ 落ちた段: ${fell ? '在る' : '無い'} ／ 答え: ${answer.replace(/\s+/g, ' ').slice(0, 80)}` };
+    },
+  },
+  {
     id: 'large-load-timeout-says-why',
     what: '読み込みを待つ上限を 1 ミリ秒にして起こし直す（試験の口 AAS_TEST_LOAD_TIMEOUT_MS=1）と、いつまでも待たずに止まり、読み込みが終わらなかったことと、どうすればよいかが画面に出る',
     async run() {
@@ -313,6 +333,32 @@ const CHECKS = [
       return { ok, why: `置き方 ${texts.length} 通り（既定 ${defaults}）。押したもの: ${name} ／ ${note.slice(0, 80)} ／ 開き直したあと: ${kept.replace(/\s+/g, ' ').slice(0, 60)} ／ 記録: ${used.slice(0, 80) || '（無い）'} ／ 答え: ${answer.replace(/\s+/g, ' ').slice(0, 60)} ／ 戻したあと: ${back}` };
     },
   },
+  {
+    id: 'large-measured-replaces-estimate',
+    what: '頼んだあとは、設定 → モデル の一行と「計画を見る」の速さが「目安」から「実測」に変わる。実測の記録を消す（clean が消すファイルを消す）と「目安」に戻る',
+    async run() {
+      const row = async () => ((await api('/api/models')).installed ?? []).find((m) => m.ref === ref) ?? {};
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await openModelSettings();
+      const note = await page.locator('#cfgGguf .note', { hasText: 'この PC では:' }).first().innerText().catch(() => '');
+      const more = page.locator('#cfgGguf details.placement-detail').first();
+      await more.locator('summary').click();
+      const detail = await more.innerText();
+      await shot('large-measured.png');
+      const speed = /速さの実測: ([\d.]+) tok\/s（(\d+) 回の平均/.exec(detail);
+      measured.measuredLine = note;
+      measured.measuredTps = speed ? Number(speed[1]) : undefined;
+      measured.measuredSamples = speed ? Number(speed[2]) : undefined;
+      // 記録を消すと、見当に戻る（clean が消すのと同じファイル）
+      const file = join(stateDir, 'placement-history.json');
+      const had = existsSync(file);
+      rmSync(file, { force: true });
+      const back = (await row()).plan ?? '';
+      await page.keyboard.press('Escape');
+      const ok = /この PC では: .*実測 [\d.]+ tok\/s/.test(note) && Boolean(speed) && Number(speed[2]) >= 1 && had && /目安 [\d.]+ tok\/s/.test(back) && !back.includes('実測');
+      return { ok, why: `一行: ${note.slice(-60)} ／ 計画を見る: ${speed ? speed[0] : '（実測の行が無い）'} ／ 記録のファイル: ${had ? '在った' : '無かった'} ／ 消したあと: ${back.slice(-50)}` };
+    },
+  },
 ];
 
 const results = [];
@@ -322,6 +368,10 @@ try {
   say(`起こします: ${start}（${ref} ${(modelBytes / GIB).toFixed(1)}GB を、メモリ ${(shownRam / GIB).toFixed(1)}GB の機械として）`);
   await startApp(SMALL_MACHINE);
   await api('/api/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workRoot: work }) });
+  // 前の回の覚え（実測・読めなかった段・選んだ置き方）を消してから始める。残っていると、回によって「目安」が「実測」になり、落とす段が変わる
+  stateDir = (await api('/api/info')).stateDir ?? '';
+  if (!stateDir) throw new Error('本体のデータの場所（/api/info の stateDir）が分かりません');
+  for (const name of ['placement-history.json', 'placement-choices.json']) rmSync(join(stateDir, name), { force: true });
   const { chromium } = await import('playwright-core');
   const exe = process.env.AAS_CHECK_BROWSER || findAppBrowser(process.platform, process.env, existsSync);
   browser = await chromium.launch(exe ? { executablePath: exe } : {});
