@@ -248,15 +248,18 @@ const CHECKS = [
       measured.firstTokenFirstTurn = first;
       measured.firstTokenFollowTurn = second;
       await shot('large-followup.png');
-      // 「読むのは新しい分だけ」は、読んだトークンの数で見る。答える呼び出し（その回の最後の呼び出し）で、2 回目に新しく読んだ数が 1 回目より少ないこと
+      // 「読むのは新しい分だけ」は、読んだトークンの数で見る。その回の呼び出し全部（要る事実を挙げる・答える、など）が新しく読んだ数の合計が、
+      // 2 回目は 1 回目より少ないこと。同じ入力の呼び直しは 0 トークンなので、呼び出しの数が回によって変わっても合計は変わらない
       const fresh = freshTokens();
-      const freshFirst = fresh.slice(0, turnOneFirsts || before.length).at(-1);
-      const freshSecond = fresh.slice(before.length).at(-1);
+      const sum = (xs) => xs.reduce((n, x) => n + x, 0);
+      const cut = turnOneFirsts || before.length;
+      const freshFirst = fresh.length >= cut && cut > 0 ? sum(fresh.slice(0, cut)) : undefined;
+      const freshSecond = fresh.length > before.length ? sum(fresh.slice(before.length)) : undefined;
       measured.freshTokensFirstTurn = freshFirst;
       measured.freshTokensFollowTurn = freshSecond;
       const ok = digits(answer).includes(FOLLOW_ANSWER) && all.length > before.length
         && freshFirst !== undefined && freshSecond !== undefined && freshSecond < freshFirst;
-      return { ok, why: `答え: ${answer.replace(/\s+/g, ' ').slice(0, 100)} ／ 答える呼び出しが新しく読んだトークン: 1 回目 ${freshFirst ?? '?'}、2 回目 ${freshSecond ?? '?'}（最初の 1 トークンまで: 1 回目 ${first} 秒、2 回目 ${second} 秒）` };
+      return { ok, why: `答え: ${answer.replace(/\s+/g, ' ').slice(0, 100)} ／ 新しく読んだトークンの合計: 1 回目 ${freshFirst ?? '?'}、2 回目 ${freshSecond ?? '?'}（最初の 1 トークンまで: 1 回目 ${first} 秒、2 回目 ${second} 秒）` };
     },
   },
   {

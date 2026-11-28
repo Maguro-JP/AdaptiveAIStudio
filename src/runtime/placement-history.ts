@@ -5,12 +5,14 @@
  * 読めなかった置き方（メモリの不足で落ちた・時間切れ）も覚え、次は最初からその段を避ける。
  *
  * 置く所は AAS_HOME のデータの下の `placement-history.json`。件数に上限を付け、古いものから落とす。
- * 消すのは `clean`（既定は一覧を見せるだけ）。壊れていたら、何も覚えていないものとして読む（読み込みを止めない）。
+ * 消すのは `clean`（既定は一覧を見せるだけ）。壊れていたら脇へ移し、何も覚えていないものとして読む（読み込みを止めない）。
+ * 在るのに読めないときは、上書きしない（`journal-file.ts`）。
  * 書くのはモデルを読むプロセスだけ。画面のプロセスは読むだけなので、読むたびにファイルを見る（持ち回らない）。
  */
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { stateDir } from '../core/home.ts';
+import { readJournal, writeWhole } from '../core/journal-file.ts';
 import {
   COMFORTABLE_TPS, FIT_LABEL, GIB, timeoutsFor,
   type Fit, type LadderStep, type PlacementMachine, type PlacementModel, type PlacementPlan,
@@ -84,11 +86,13 @@ function isEntry(x: unknown): x is HistoryEntry {
 }
 
 export async function readHistory(dir?: string): Promise<HistoryEntry[]> {
-  try {
-    const raw: unknown = JSON.parse(await readFile(historyFile(dir), 'utf8'));
-    const entries = (raw as { entries?: unknown } | null)?.entries;
-    return Array.isArray(entries) ? entries.filter(isEntry) : [];
-  } catch { return []; }
+  const r = await readJournal(historyFile(dir));
+  return r.kind === 'value' ? entriesOf(r.value) : [];
+}
+
+function entriesOf(raw: unknown): HistoryEntry[] {
+  const entries = (raw as { entries?: unknown } | null)?.entries;
+  return Array.isArray(entries) ? entries.filter(isEntry) : [];
 }
 
 /** 上限を超えたら、古いものから落とす。 */
@@ -194,7 +198,11 @@ export class PlacementHistory {
     change: (e: HistoryEntry) => void,
   ): Promise<void> {
     const run = this.#queue.catch(() => undefined).then(async () => {
-      const entries = await readHistory(this.#dir);
+      const file = historyFile(this.#dir);
+      const r = await readJournal(file);
+      // 在るのに読めないときは、それまでの覚えを消さないよう、この回は書かない
+      if (r.kind === 'unreadable') return;
+      const entries = r.kind === 'value' ? entriesOf(r.value) : [];
       const key = machineKey(machine);
       let entry = entries.find((e) => sameModelAndMachine(e, model, key) && sameStep(e, plan));
       if (!entry) {
@@ -206,11 +214,8 @@ export class PlacementHistory {
       }
       change(entry);
       entry.at = new Date().toISOString();
-      const file = historyFile(this.#dir);
       await mkdir(dirname(file), { recursive: true });
-      const tmp = `${file}.${process.pid}.tmp`;
-      await writeFile(tmp, `${JSON.stringify({ version: 1, entries: trimHistory(entries) }, null, 2)}\n`);
-      await rename(tmp, file);
+      await writeWhole(file, `${JSON.stringify({ version: 1, entries: trimHistory(entries) }, null, 2)}\n`);
     });
     this.#queue = run;
     // 覚えを書けなくても、読み込みと答えは止めない
